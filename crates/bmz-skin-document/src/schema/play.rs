@@ -167,6 +167,21 @@ pub struct SkinPmCharaFrameDef {
     pub angle: i32,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SkinAmbientMode {
+    #[default]
+    Full,
+    Spread,
+}
+
+fn default_ambient_spread() -> f32 {
+    20.0
+}
+fn default_ambient_blur() -> f32 {
+    50.0
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SkinDestinationDef {
     #[serde(default, deserialize_with = "deserialize_skin_id")]
@@ -176,8 +191,14 @@ pub struct SkinDestinationDef {
     #[serde(default)]
     pub filter: i32,
     /// BMZ extension: composite an image/BGA destination into a blurred ambient background.
-    #[serde(default, rename = "bmzAmbient")]
-    pub bmz_ambient: bool,
+    #[serde(default, alias = "bmzAmbient")]
+    pub ambient: bool,
+    #[serde(default, rename = "ambientMode")]
+    pub ambient_mode: SkinAmbientMode,
+    #[serde(default = "default_ambient_spread", rename = "ambientSpread")]
+    pub ambient_spread: f32,
+    #[serde(default = "default_ambient_blur", rename = "ambientBlur")]
+    pub ambient_blur: f32,
     #[serde(default)]
     pub timer: Option<i32>,
     /// BMZ限定のruntime timer式。PeacefulPlay key loggerの反復event timerに使う。

@@ -2,7 +2,8 @@ use super::*;
 
 pub(super) const AMBIENT_MAX_DESTINATIONS: usize = 8;
 const MAX_LAYERS: usize = 64;
-const LONG_EDGE: f32 = 128.0;
+const BASE_LONG_EDGE: f32 = 128.0;
+const MAX_LONG_EDGE: f32 = 1024.0;
 
 pub(super) fn ambient_texture_id(index: usize) -> TextureId {
     TextureId(0xE000_0000 + index as u32)
@@ -10,6 +11,7 @@ pub(super) fn ambient_texture_id(index: usize) -> TextureId {
 
 pub(super) struct AmbientResources {
     pipeline: wgpu::RenderPipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
     targets: Vec<AmbientTarget>,
 }
 
@@ -20,23 +22,83 @@ struct AmbientTarget {
     source_bind: wgpu::BindGroup,
     intermediate_bind: wgpu::BindGroup,
     blur_buffer: wgpu::Buffer,
+    kernel_buffer: wgpu::Buffer,
+    kernel_sigma: f32,
     rect_buffer: Option<wgpu::Buffer>,
     image_buffer: Option<wgpu::Buffer>,
     geometry: PlanGeometry,
     bindings: Vec<wgpu::BindGroup>,
 }
 
-fn target_size(bounds: Rect, canvas: SurfaceSize) -> SurfaceSize {
+fn blur_percent(blur: f32) -> f32 {
+    if blur.is_finite() { blur.clamp(0.0, 100.0) } else { 50.0 }
+}
+
+fn target_long_edge(blur: f32) -> f32 {
+    (BASE_LONG_EDGE * 50.0 / blur_percent(blur).max(1.0)).clamp(BASE_LONG_EDGE, MAX_LONG_EDGE)
+}
+
+/// Keep the full-screen mode's edge clamping, but give Spread a transparent
+/// border wider than the Gaussian support so its output fades before clipping.
+pub(super) fn ambient_output_rect(
+    rect: Rect,
+    blur: f32,
+    fade_edges: bool,
+    canvas: SurfaceSize,
+) -> Rect {
+    let blur = blur_percent(blur);
+    if !fade_edges || blur == 0.0 || !visible_rect(rect) {
+        return rect;
+    }
+    let long_edge =
+        (rect.width.abs() * canvas.width as f32).max(rect.height.abs() * canvas.height as f32);
+    let padding = long_edge * (3.0 * blur / 1600.0 + 2.0 / target_long_edge(blur));
+    let px = padding / canvas.width.max(1) as f32;
+    let py = padding / canvas.height.max(1) as f32;
+    Rect {
+        x: rect.x - px,
+        y: rect.y - py,
+        width: rect.width + px * 2.0,
+        height: rect.height + py * 2.0,
+    }
+}
+
+fn target_size(bounds: Rect, canvas: SurfaceSize, blur: f32) -> SurfaceSize {
     if !visible_rect(bounds) {
         return SurfaceSize { width: 1, height: 1 };
     }
     let width = bounds.width.abs() * canvas.width as f32;
     let height = bounds.height.abs() * canvas.height as f32;
-    let scale = LONG_EDGE / width.max(height).max(1.0);
+    let long_edge = target_long_edge(blur);
+    let scale = long_edge / width.max(height).max(1.0);
     SurfaceSize {
-        width: (width * scale).round().clamp(1.0, LONG_EDGE) as u32,
-        height: (height * scale).round().clamp(1.0, LONG_EDGE) as u32,
+        width: (width * scale).round().clamp(1.0, long_edge) as u32,
+        height: (height * scale).round().clamp(1.0, long_edge) as u32,
     }
+}
+
+/// Header = center weight / pair count; remaining vec4s = offset / pair weight.
+/// Pair adjacent Gaussian taps for bilinear sampling (at most radius 24).
+fn gaussian_kernel(sigma: f32) -> [[f32; 4]; 13] {
+    let mut kernel = [[0.0; 4]; 13];
+    kernel[0][0] = 1.0;
+    if sigma < 0.001 {
+        return kernel;
+    }
+    let radius = (sigma * 3.0).ceil().clamp(1.0, 24.0) as usize;
+    let weight = |x: usize| (-((x * x) as f32) / (2.0 * sigma * sigma)).exp();
+    let total = 1.0 + 2.0 * (1..=radius).map(weight).sum::<f32>();
+    kernel[0][0] = 1.0 / total;
+    for (pair, x) in (1..=radius).step_by(2).enumerate() {
+        let a = weight(x);
+        let b = if x < radius { weight(x + 1) } else { 0.0 };
+        if a + b <= f32::MIN_POSITIVE {
+            break;
+        }
+        kernel[pair + 1] = [x as f32 + b / (a + b), (a + b) / total, 0.0, 0.0];
+        kernel[0][1] += 1.0;
+    }
+    kernel
 }
 
 /// Only image/rect leaves are accepted: no nested effects or unbounded render targets.
@@ -119,10 +181,15 @@ impl WgpuRenderer {
         PreparedTexture { texture, view, width: size.width, height: size.height }
     }
 
-    fn ambient_binding(&self, texture: &PreparedTexture) -> wgpu::BindGroup {
+    fn ambient_binding(
+        &self,
+        texture: &PreparedTexture,
+        kernel: &wgpu::Buffer,
+        layout: &wgpu::BindGroupLayout,
+    ) -> wgpu::BindGroup {
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("bmz-render ambient binding"),
-            layout: &self.image_bind_group_layout,
+            layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -132,15 +199,27 @@ impl WgpuRenderer {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&self.image_sampler_linear),
                 },
+                wgpu::BindGroupEntry { binding: 2, resource: kernel.as_entire_binding() },
             ],
         })
     }
 
-    fn new_ambient_target(&mut self, index: usize, size: SurfaceSize) -> AmbientTarget {
+    fn new_ambient_target(
+        &mut self,
+        index: usize,
+        size: SurfaceSize,
+        layout: &wgpu::BindGroupLayout,
+    ) -> AmbientTarget {
         let source = self.ambient_target_texture(size);
         let intermediate = self.ambient_target_texture(size);
-        let source_bind = self.ambient_binding(&source);
-        let intermediate_bind = self.ambient_binding(&intermediate);
+        let kernel_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bmz-render ambient kernel"),
+            size: 13 * 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let source_bind = self.ambient_binding(&source, &kernel_buffer, layout);
+        let intermediate_bind = self.ambient_binding(&intermediate, &kernel_buffer, layout);
         let id = ambient_texture_id(index);
         let output = self.ambient_target_texture(size);
         self.image_textures.insert(id, output);
@@ -167,6 +246,8 @@ impl WgpuRenderer {
             source_bind,
             intermediate_bind,
             blur_buffer: blur_buffer.unwrap(),
+            kernel_buffer,
+            kernel_sigma: -1.0,
             rect_buffer: None,
             image_buffer: None,
             geometry: PlanGeometry::default(),
@@ -179,7 +260,9 @@ impl WgpuRenderer {
             .commands
             .iter()
             .filter_map(|command| match command {
-                DrawCommand::Ambient { rect, layers } => Some((*rect, layers)),
+                DrawCommand::Ambient { rect, blur, fade_edges, layers } => {
+                    Some((*rect, *blur, *fade_edges, layers))
+                }
                 _ => None,
             })
             .take(AMBIENT_MAX_DESTINATIONS)
@@ -194,27 +277,83 @@ impl WgpuRenderer {
             }
             return;
         }
-        let mut resources = self.ambient.take().unwrap_or_else(|| AmbientResources {
-            pipeline: create_image_quad_pipeline(
+        let mut resources = self.ambient.take().unwrap_or_else(|| {
+            let bind_group_layout =
+                self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("bmz-render ambient layout"),
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 2,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                    ],
+                });
+            let pipeline = create_image_quad_pipeline(
                 &self.device,
                 self.config.format,
-                &self.image_bind_group_layout,
+                &bind_group_layout,
                 include_str!("ambient.wgsl"),
                 "bmz-render ambient blur",
                 None,
-            ),
-            targets: Vec::new(),
+            );
+            AmbientResources { pipeline, bind_group_layout, targets: Vec::new() }
         });
         let mut count = 0;
-        for (index, (bounds, layers)) in groups.enumerate() {
+        for (index, (content, blur, fade_edges, layers)) in groups.enumerate() {
             count += 1;
-            let size = target_size(bounds, canvas);
+            let bounds = ambient_output_rect(content, blur, fade_edges, canvas);
+            let size = target_size(bounds, canvas, blur);
             if index == resources.targets.len() {
-                resources.targets.push(self.new_ambient_target(index, size));
+                resources.targets.push(self.new_ambient_target(
+                    index,
+                    size,
+                    &resources.bind_group_layout,
+                ));
             } else if resources.targets[index].size != size {
-                resources.targets[index] = self.new_ambient_target(index, size);
+                resources.targets[index] =
+                    self.new_ambient_target(index, size, &resources.bind_group_layout);
             }
             let target = &mut resources.targets[index];
+            let content_long = (content.width.abs() * canvas.width as f32)
+                .max(content.height.abs() * canvas.height as f32);
+            let output_long = (bounds.width.abs() * canvas.width as f32)
+                .max(bounds.height.abs() * canvas.height as f32)
+                .max(1.0);
+            let sigma = (content_long / output_long
+                * size.width.max(size.height) as f32
+                * blur_percent(blur)
+                / 1600.0)
+                .clamp(0.0, 8.0);
+            if target.kernel_sigma != sigma {
+                self.queue.write_buffer(
+                    &target.kernel_buffer,
+                    0,
+                    bytemuck::cast_slice(&gaussian_kernel(sigma)),
+                );
+                target.kernel_sigma = sigma;
+            }
             let plan = local_layers(bounds, layers);
             encode_plan_geometry_into(
                 &plan,

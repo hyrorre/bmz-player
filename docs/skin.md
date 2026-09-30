@@ -8,31 +8,60 @@ JSON / Lua / LR2 skinの対応範囲と残課題は [skin-compatibility.md](skin
 
 ## Ambient背景（BMZ拡張）
 
-JSON / LuaのimageまたはBGAのdestinationに `bmzAmbient: true` を指定すると、
+JSON / LuaのimageまたはBGAのdestinationに `ambient: true` を指定すると、
 そのdestinationの表示内容を低解像度に合成し、GPUで縦横にぼかして描画する。
-既定はfalse。`filter`（拡大縮小時の補間）とは別の指定で、beatoraja互換仕様には含めない。
+`filter`（拡大縮小時の補間）とは別の指定で、beatoraja互換仕様には含めない。
+
+| destinationのキー | 値・既定値 | 動作 |
+| --- | --- | --- |
+| `ambient` | bool、既定 `false` | Ambientを有効にする |
+| `ambientMode` | `"full"` / `"spread"`、既定 `"full"` | 指定したdestination全体／実際の映像範囲から拡大 |
+| `ambientSpread` | 0～200、既定20 | Spreadで幅・高さを拡大する割合（％） |
+| `ambientBlur` | 0～100、既定50 | ぼかしの強さ（％）。0は縮小・ぼかしを省略 |
+
+旧 `bmzAmbient` は `ambient` の読み込み用aliasとして受け付ける。数値の範囲外は上限・下限へ丸める。
 
 ```lua
-{id = "bga", bmzAmbient = true, stretch = 3,
+-- Full: 全画面のdestinationを用意する
+{id = "bga", ambient = true, ambientMode = "full", ambientBlur = 50, stretch = 3,
  dst = {{x = 0, y = 0, w = 1920, h = 1080, a = 210}}}
+
+-- Spread: 通常のBGAと同じ矩形・stretchを指定する
+{id = "bga", ambient = true, ambientMode = "spread",
+ ambientSpread = 20, ambientBlur = 50, stretch = 1,
+ dst = {{x = 1100, y = 284, w = 512, h = 512, a = 210}}}
 ```
 
+- Fullはdestinationの範囲をぼかす。全画面表示には全画面の矩形を指定する。
+- Spreadはstretch適用後の映像範囲を基準に、中心を維持して幅・高さを `1 + ambientSpread / 100` 倍する。
+  20％なら各辺に元サイズの10％ずつ広がり、letterboxの余白は含まない。
+  複数のBGAレイヤーは表示矩形の和集合を基準に、同じ中心・倍率で拡大する。
+  拡大後の外周にもぼかしの余白を設けて透明へ減衰させ、画面外はクリップする。
+- ぼかし50％は従来の強さ、100％は約2倍のぼかし幅。0％でもSpreadによる拡大は適用する。
+  ぼかし幅は拡大後の映像範囲（Fullではdestination）の長辺に比例し、縦横とも同じ画素幅になる。
 - 配置・透明度・timer・optionは通常のdestinationと同じ。BGA無効時はBGA由来のAmbientも非表示。
 - BGAのBase / Layer / Layer2（静止画の黒透過を含む）を合成してからぼかす。
   POOR表示中はPOORへ切り替える。通常のBGA destinationは引き続き鮮明に描画する。
 - 通常のimageでも利用でき、汎用画像・動画をBGAなしの曲の背景に使える。
 - 画面全体を読み戻す背景ぼかしではない。文字・ノーツ・その他のdestinationは処理対象外。
-- 中間画像は長辺128px、同時に最大8 destination、各64画像・矩形まで。
+- 中間画像は既定のぼかしで長辺128px。弱いぼかしでは縮小による劣化を抑えるため最大1024pxまで増やす。
+  ぼかし0％では通常の画像描画を使い、中間画像を作らない。
+  同時に最大8 destination、各64画像・矩形まで。
   GPU内で処理し、動画textureの更新後に合成・ぼかし・通常描画を同じsubmissionで実行する。
   対象がないときは専用pipeline・中間画像を確保せず、使用済みのものも解放する。
 
-同梱antiqueの「Ambientモード (BMZ)」は既定OFF。
+同梱antiqueの「Ambient」は既定OFF。旧名称の保存設定・スキン履歴は読み込み時に移行する。
+「Ambient表示方式」は「全体」（既定）／「Spread」、
+「Spread範囲 (%)」は0～200％（10％刻み、既定20％）、
+「Ambientぼかし度 (%)」は0～100％（10％刻み、既定50％）。
 ON時は画面の背面へAmbientを描き、「Ambientパネル透明度」でフレーム・グラフ背景の
 透明度を0～100％の10％刻みで設定する（既定40％、OFF時は適用しない）。
 レーン背景は対象外とし、不透明度100％を維持する。
 数値・テキスト、ノーツ、判定、グラフ本体の透明度は変えない。
 フレーム画像に含まれる装飾やラベルはフレームと一緒に透過する。
-「BGAサイズ＝背景(1920x1080)」では全面Ambientを背景とし、鮮明な全面BGAを重ねない。
+Ambient ONでは従来の暗いcover-fit BGA背景を描かず、鮮明なfit-inside BGAを重ねる。
+「BGAサイズ＝背景(1920x1080)」では鮮明なBGAも描かず、選択したFull／SpreadのAmbientだけを表示する。
+Ambient OFFでは従来のBGA描画を維持する。
 曲BGAと汎用BGA/BGIの選択条件は既存の設定に従う。
 
 ## LR2 Play 表示参照

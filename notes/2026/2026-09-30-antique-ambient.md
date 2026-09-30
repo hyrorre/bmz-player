@@ -63,3 +63,39 @@ Ambientパネル透明度の対象から外した。レーン背景は不透明�
   Ambient OFF/ON・透明度40/80％・全面背景・汎用背景でレーン内の画素が一致することを確認。
   `.local/performance/antique-ambient/opaque-lane/` の80％画像も目視確認済み。
 - スキン側commit: `mz-select:e0142eb`。本体の実行コードは変更せず、再ビルドは不要。
+
+## 2026-09-30 追記: Full / Spreadとぼかし設定
+
+ユーザーが確定した「実際の映像範囲を基準に幅・高さをn％拡大する」仕様を実装した。
+
+- destination名を `ambient` に変更し、`ambientMode` / `ambientSpread` / `ambientBlur` を追加。
+  旧 `bmzAmbient` は読み込みaliasとして残す。
+- Fullはdestination全体、Spreadはstretch適用後のBGAレイヤー矩形の和集合を基準にする。
+  中心を維持して幅・高さを `1 + n / 100` 倍し、余白を除く。POOR時はPOORの寸法へ追従する。
+- Spreadの中間画像にはGaussianの裾まで透明な余白を用意する。拡大率に含めるのはぼかす前の映像範囲。
+- ぼかし50％は従来相当、100％は約2倍の幅。弱いぼかしでは中間画像を長辺128～1024pxに調整し、
+  0％では中間画像を経由しない。Gaussianの隣接tapをまとめた最大25 sampleの縦横2passを使う。
+- antiqueの名称は「Ambient」（既定OFF）、「Ambient表示方式」（全体／Spread、既定全体）、
+  「Spread範囲 (%)」（0～200、10刻み、既定20）、「Ambientぼかし度 (%)」（0～100、10刻み、既定50）。
+  パネル透明度は引き続き既定40％で、レーン背景は不透明度100％を維持する。
+- Ambient ONでは旧暗いcover-fit BGAを省く。BGAサイズが背景以外では鮮明なfit-inside BGAを残し、
+  背景サイズでは選択したFull／Spread Ambientのみを表示する。
+- 旧UI名の保存値をprofileの各slotとスキン履歴から移行する。新UI名の保存値があれば優先し、
+  再読み込みでも値が変わらないことを確認した。
+
+検証:
+
+- `cargo fmt --check`: 成功。
+- `cargo check --workspace --all-targets --locked`: 成功。
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`: 成功。
+- `cargo test -p bmz-player -p bmz-render --locked ambient -- --include-ignored --nocapture`:
+  12件成功（うちGPUテスト3件を明示実行）。antique素材を実際に読み込み、設定18通りとGPU画像13通りを確認。
+  横長・縦長・正方形、Spread 0/20/200％、blur 0/10/50/100％、背景サイズ、汎用背景を含む。
+  合成・POOR・texture更新・透明な外周・blur変更時の再利用・レーン不透明化も確認した。
+- `cargo test --workspace --locked --no-fail-fast`: 全対象成功（通常ignoredのAmbient GPUテストは上記で別途実行）。
+- `cargo build -p bmz-player --release --locked`: 成功。`target/release/bmz-player.exe` を更新。
+- `.local/performance/antique-ambient/spread/` に画像と検証ログを保存（Git管理外）。
+  Full、Spreadの横長・縦長、最大範囲、ぼかし0％の画像を目視確認済み。
+- スキン側commit: `mz-select:6d41438`（`codex/antique-ambient`）。
+
+実プレイ操作・実動画再生・FPS比較・macOS/LinuxでのGPU確認は未実施。

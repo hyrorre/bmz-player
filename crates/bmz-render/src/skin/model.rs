@@ -388,6 +388,8 @@ pub enum SkinRenderItem {
     /// Image/BGA layers composited before blurring. Coordinates remain in skin space.
     Ambient {
         rect: Rect,
+        blur: f32,
+        fade_edges: bool,
         layers: Vec<SkinRenderItem>,
     },
     Image {

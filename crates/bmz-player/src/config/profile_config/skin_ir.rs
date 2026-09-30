@@ -192,6 +192,36 @@ pub struct SkinConfig {
 }
 
 impl SkinConfig {
+    /// Preserve the first antique Ambient option when its UI label is shortened.
+    pub fn migrate_legacy_ambient_option(&mut self) {
+        fn migrate(options: &mut BTreeMap<String, String>) {
+            if let Some(value) = options.remove("Ambientモード (BMZ)") {
+                options.entry("Ambient".into()).or_insert(value);
+            }
+        }
+        for options in [
+            &mut self.select_options,
+            &mut self.decide_options,
+            &mut self.play4_options,
+            &mut self.play5_options,
+            &mut self.play6_options,
+            &mut self.play7_options,
+            &mut self.play8_options,
+            &mut self.play9_options,
+            &mut self.play10_options,
+            &mut self.play14_options,
+            &mut self.battle5_options,
+            &mut self.battle7_options,
+            &mut self.result_options,
+            &mut self.course_result_options,
+        ] {
+            migrate(options);
+        }
+        for entry in self.history.values_mut() {
+            migrate(&mut entry.options);
+        }
+    }
+
     /// 旧形式の共通オフセットを、まだ個別設定がない全スロットへ引き継ぐ。
     pub fn migrate_legacy_offsets(&mut self) {
         let legacy_offsets = std::mem::take(&mut self.legacy_offsets);

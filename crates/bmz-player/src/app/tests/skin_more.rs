@@ -390,7 +390,12 @@ fn ambient_only_video_is_visible_to_the_decoder() {
     for (alpha, visible) in [(1.0, true), (0.0, false)] {
         let plan = DrawPlan {
             clear: Color::rgb(0.0, 0.0, 0.0),
-            commands: vec![DrawCommand::Ambient { rect, layers: vec![image(alpha)] }],
+            commands: vec![DrawCommand::Ambient {
+                rect,
+                blur: 50.0,
+                fade_edges: false,
+                layers: vec![image(alpha)],
+            }],
         };
         assert_eq!(skin_video_texture_visible_in_plan(&plan, SkinTextureId(800)), visible);
         assert!(!skin_video_texture_visible_in_plan(&plan, SkinTextureId(801)));

@@ -5,16 +5,70 @@ pub(super) fn wrap_ambient_destination(
     frame: ResolvedSkinFrame,
     width: u32,
     height: u32,
-    items: Vec<SkinRenderItem>,
+    mut items: Vec<SkinRenderItem>,
 ) -> Vec<SkinRenderItem> {
-    if destination.bmz_ambient && !items.is_empty() {
-        vec![SkinRenderItem::Ambient {
-            rect: normalize_skin_frame_rect(frame, width, height),
-            layers: items,
-        }]
-    } else {
-        items
+    if !destination.ambient || items.is_empty() {
+        return items;
     }
+    let percent = |value: f32, default: f32, maximum: f32| {
+        if value.is_finite() { value.clamp(0.0, maximum) } else { default }
+    };
+    let blur = percent(destination.ambient_blur, 50.0, 100.0);
+    let fade_edges = destination.ambient_mode == SkinAmbientMode::Spread;
+    let mut bounds = normalize_skin_frame_rect(frame, width, height);
+    if fade_edges {
+        // Fit has already been applied to each BGA layer: omit letterbox space,
+        // but retain the relative placement of differently shaped layers.
+        let layer_rect = |item: &SkinRenderItem| match item {
+            SkinRenderItem::Image { rect, .. }
+            | SkinRenderItem::RotatedImage { rect, .. }
+            | SkinRenderItem::Rect { rect, .. } => Some(*rect),
+            _ => None,
+        };
+        let mut rects = items.iter().filter_map(layer_rect).filter(|rect| {
+            rect.x.is_finite()
+                && rect.y.is_finite()
+                && rect.width.is_finite()
+                && rect.height.is_finite()
+                && rect.width > 0.0
+                && rect.height > 0.0
+        });
+        if let Some(first) = rects.next() {
+            bounds = rects.fold(first, |bounds, rect| {
+                let x = bounds.x.min(rect.x);
+                let y = bounds.y.min(rect.y);
+                Rect {
+                    x,
+                    y,
+                    width: (bounds.x + bounds.width).max(rect.x + rect.width) - x,
+                    height: (bounds.y + bounds.height).max(rect.y + rect.height) - y,
+                }
+            });
+        }
+        let scale = 1.0 + percent(destination.ambient_spread, 20.0, 200.0) / 100.0;
+        let cx = bounds.x + bounds.width / 2.0;
+        let cy = bounds.y + bounds.height / 2.0;
+        let expand = |rect: &mut Rect| {
+            rect.x = cx + (rect.x - cx) * scale;
+            rect.y = cy + (rect.y - cy) * scale;
+            rect.width *= scale;
+            rect.height *= scale;
+        };
+        expand(&mut bounds);
+        for item in &mut items {
+            match item {
+                SkinRenderItem::Image { rect, .. }
+                | SkinRenderItem::RotatedImage { rect, .. }
+                | SkinRenderItem::Rect { rect, .. } => expand(rect),
+                _ => {}
+            }
+        }
+    }
+    // Zero means no blur, including no low-resolution intermediate image.
+    if blur == 0.0 {
+        return items;
+    }
+    vec![SkinRenderItem::Ambient { rect: bounds, blur, fade_edges, layers: items }]
 }
 
 /// beatoraja `SkinObjectRenderer.setBlend` と同じ destination blend 対応。

@@ -99,7 +99,7 @@ fn skin_video_texture_visible_in_command(
     texture: SkinTextureId,
 ) -> bool {
     match command {
-        bmz_render::plan::DrawCommand::Ambient { rect, layers } => {
+        bmz_render::plan::DrawCommand::Ambient { rect, layers, .. } => {
             rect.width != 0.0
                 && rect.height != 0.0
                 && layers.iter().any(|layer| skin_video_texture_visible_in_command(layer, texture))

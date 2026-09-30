@@ -44,6 +44,7 @@ fn parse_profile_config(text: &str) -> Result<ProfileConfig> {
     config.migrate_legacy_key_mode_conversion();
     config.normalize_play_mode_configs();
     config.skin.migrate_legacy_offsets();
+    config.skin.migrate_legacy_ambient_option();
     config.ir.normalize_builtin_providers();
     normalize_profile_input(&mut config.input);
     validate_play_inherit_config(&config.input).map_err(|error| anyhow::anyhow!("{error}"))?;
@@ -54,6 +55,27 @@ fn parse_profile_config(text: &str) -> Result<ProfileConfig> {
 mod tests {
     use super::*;
     use crate::config::app_config::PathEntry;
+
+    #[test]
+    fn parse_profile_config_migrates_antique_ambient_and_history_without_overwriting_new_choice() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.skin.play7_options.insert("Ambientモード (BMZ)".into(), "ON".into());
+        profile.skin.play5_options.insert("Ambientモード (BMZ)".into(), "ON".into());
+        profile.skin.play5_options.insert("Ambient".into(), "OFF".into());
+        let mut history = crate::config::profile_config::SkinHistoryEntryConfig::default();
+        history.options.insert("Ambientモード (BMZ)".into(), "ON".into());
+        profile.skin.history.insert("antique".into(), history);
+        let loaded = parse_profile_config(&toml::to_string(&profile).unwrap()).unwrap();
+        assert_eq!(loaded.skin.play7_options["Ambient"], "ON");
+        assert_eq!(loaded.skin.play5_options["Ambient"], "OFF");
+        assert_eq!(loaded.skin.history["antique"].options["Ambient"], "ON");
+        assert!(!loaded.skin.play7_options.contains_key("Ambientモード (BMZ)"));
+        let reloaded = parse_profile_config(&toml::to_string(&loaded).unwrap()).unwrap();
+        assert_eq!(
+            toml::to_string(&loaded.skin).unwrap(),
+            toml::to_string(&reloaded.skin).unwrap()
+        );
+    }
 
     #[test]
     fn parse_app_config_normalizes_and_deduplicates_song_roots() {

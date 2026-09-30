@@ -63,6 +63,8 @@ pub enum DrawCommand {
     /// A bounded image/rectangle group composited and blurred on the GPU.
     Ambient {
         rect: Rect,
+        blur: f32,
+        fade_edges: bool,
         layers: Vec<DrawCommand>,
     },
     Rect {

@@ -284,10 +284,15 @@ pub(super) fn encode_plan_geometry_into(
 
     for command in &plan.commands {
         match command {
-            DrawCommand::Ambient { rect, .. } => {
+            DrawCommand::Ambient { rect, blur, fade_edges, .. } => {
                 let index = ambient_index;
                 ambient_index += 1;
-                let rect = canvas_viewport.transform_rect(*rect);
+                let rect = canvas_viewport.transform_rect(ambient_output_rect(
+                    *rect,
+                    *blur,
+                    *fade_edges,
+                    canvas_viewport.content_size(),
+                ));
                 if index >= AMBIENT_MAX_DESTINATIONS || !visible_rect(rect) {
                     continue;
                 }

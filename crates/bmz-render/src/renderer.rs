@@ -63,7 +63,9 @@ use text_raster_builder::*;
 
 mod ambient;
 mod api;
-use ambient::{AMBIENT_MAX_DESTINATIONS, AmbientResources, ambient_texture_id};
+use ambient::{
+    AMBIENT_MAX_DESTINATIONS, AmbientResources, ambient_output_rect, ambient_texture_id,
+};
 mod backend_config;
 mod canvas;
 mod state;

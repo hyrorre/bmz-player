@@ -2,6 +2,41 @@ use super::*;
 
 #[test]
 #[ignore = "requires a GPU; run explicitly for ambient rendering changes"]
+fn ambient_gpu_spread_fades_outside_content_and_updates_blur_strength() {
+    let mut renderer = Renderer::default();
+    renderer.attach_offscreen(SurfaceSize { width: 256, height: 256 }).unwrap();
+    let rect = Rect { x: 0.25, y: 0.25, width: 0.5, height: 0.5 };
+    let mut previous_tail = 0;
+    for blur in [10.0, 50.0, 100.0, 50.0] {
+        renderer.last_plan = Some(DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 1.0),
+            commands: vec![DrawCommand::Ambient {
+                rect,
+                blur,
+                fade_edges: true,
+                layers: vec![DrawCommand::Rect { rect, color: Color::rgb(1.0, 0.0, 0.0) }],
+            }],
+        });
+        renderer.render_last_plan().unwrap();
+        let pixels = renderer.read_offscreen_rgba().unwrap();
+        let pixel = |x: usize| &pixels[(128 * 256 + x) * 4..(128 * 256 + x + 1) * 4];
+        assert_eq!(pixel(0), &[0, 0, 255, 255], "outside remains transparent");
+        assert_eq!(pixel(128), &[255, 0, 0, 255], "center remains opaque");
+        assert!(pixel(63)[0] > 10 && pixel(63)[2] > 10, "soft edge: {blur}");
+        let tail = pixel(58)[0];
+        if blur == 50.0 && previous_tail == 0 {
+            assert!(tail > 0, "blur extends beyond the content rectangle");
+            previous_tail = tail;
+        } else if blur == 100.0 {
+            assert!(tail > previous_tail + 10, "stronger blur has a wider tail");
+        } else if blur == 50.0 {
+            assert_eq!(tail, previous_tail, "cached target must use the updated kernel");
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU; run explicitly for ambient rendering changes"]
 fn ambient_gpu_blurs_composited_layers_updates_video_and_releases_targets() {
     let mut renderer = Renderer::default();
     renderer.attach_offscreen(SurfaceSize { width: 256, height: 144 }).unwrap();
@@ -29,7 +64,7 @@ fn ambient_gpu_blurs_composited_layers_updates_video_and_releases_targets() {
     renderer.last_plan = Some(DrawPlan {
         clear: Color::rgb(0.0, 0.0, 0.0),
         commands: vec![
-            DrawCommand::Ambient { rect: full, layers },
+            DrawCommand::Ambient { rect: full, blur: 50.0, fade_edges: false, layers },
             DrawCommand::Rect {
                 rect: Rect { x: 0.1, y: 0.1, width: 0.1, height: 0.1 },
                 color: Color::rgb(0.0, 1.0, 0.0),
@@ -56,6 +91,8 @@ fn ambient_gpu_blurs_composited_layers_updates_video_and_releases_targets() {
     renderer.upsert_rgba_texture_ref(TextureId(900), 1, 1, &[255, 0, 0, 255]).unwrap();
     renderer.last_plan.as_mut().unwrap().commands = vec![DrawCommand::Ambient {
         rect: full,
+        blur: 50.0,
+        fade_edges: false,
         layers: vec![source(900, Color::rgba(1.0, 1.0, 1.0, 0.5), BlendMode::Normal)],
     }];
     renderer.render_last_plan().unwrap();
