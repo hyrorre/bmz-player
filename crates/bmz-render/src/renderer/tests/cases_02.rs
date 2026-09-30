@@ -376,3 +376,78 @@ fn cached_text_frame_reuses_static_text_layouts() {
     assert_eq!(second.instances, first.instances);
     assert!(second.dirty_regions.is_empty());
 }
+
+#[test]
+fn cached_decorated_skin_text_tracks_alpha_for_vector_and_bitmap_fonts() {
+    use crate::skin::{SkinDocumentRenderExt, SkinDrawState, SkinRenderItem, SkinTextState};
+    let font = load_default_font().expect("font required for vector regression test");
+    let bitmap = test_bitmap_font();
+    let surface = SurfaceSize { width: 320, height: 240 };
+    for bitmap_mode in [false, true] {
+        let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+        let mut document: bmz_skin_document::SkinDocument = serde_json::from_str(
+            r#"{
+            "w":100,"h":100,
+            "text":[{"id":"label","constantText":"A","outlineWidth":1,
+                "outlineColor":"ff000080","shadowColor":"00ff0040"}],
+            "destination":[{"id":"label","dst":[{"h":10,"a":255}]}]
+        }"#,
+        )
+        .unwrap();
+        if bitmap_mode {
+            document.text[0].font = "bitmap".into();
+        }
+        let mut original = None;
+        for a in [255, 128, 0, 255] {
+            let bmz_skin_document::DestinationListEntry::Single(destination) =
+                &mut document.destination[0]
+            else {
+                panic!("destination")
+            };
+            destination.dst[0] = serde_json::from_value(serde_json::json!({"h":10,"a":a})).unwrap();
+            let items = document.static_render_items(
+                &HashMap::new(),
+                &SkinDrawState::default(),
+                &SkinTextState::default(),
+            );
+            let SkinRenderItem::Text { origin, text, style, .. } = &items[0] else {
+                panic!("text")
+            };
+            atlas.begin_frame();
+            let mut builder = CachedTextFrameBuilder::new(&mut atlas);
+            if bitmap_mode {
+                builder.push_bitmap_text(origin, text, style.clone(), "bitmap", &bitmap, surface);
+            } else {
+                builder.push_text(
+                    origin,
+                    text,
+                    style.clone(),
+                    VectorFontSet::Single { cache_id: "vector", font: &font },
+                    surface,
+                );
+            }
+            let quads = builder.quads.clone();
+            let alpha = a as f32 / 255.0;
+            assert_eq!(quads.len(), if a == 0 { 1 } else { 10 });
+            assert_approx(quads.last().unwrap().color.a, alpha);
+            if a != 0 {
+                assert_approx(quads[0].color.a, 64.0 / 255.0 * alpha);
+                for quad in &quads[1..9] {
+                    assert_eq!((quad.color.r, quad.color.g, quad.color.b), (1.0, 0.0, 0.0));
+                    assert_approx(quad.color.a, 128.0 / 255.0 * alpha);
+                }
+            }
+            if a == 255 {
+                let values = quads
+                    .iter()
+                    .map(|quad| (quad.x, quad.y, quad.width, quad.height, quad.color))
+                    .collect::<Vec<_>>();
+                if let Some(first) = &original {
+                    assert_eq!(&values, first);
+                } else {
+                    original = Some(values);
+                }
+            }
+        }
+    }
+}

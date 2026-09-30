@@ -320,6 +320,45 @@ pub(super) fn judge_line_y(board: Rect, lift: f32) -> f32 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn text_global_fade_multiplies_each_resolved_alpha_once() {
+        let a = 128.0 / 255.0;
+        let mut commands = vec![DrawCommand::Text {
+            origin: crate::plan::Point { x: 0.0, y: 0.0 },
+            text: "TEXT".into(),
+            style: crate::plan::TextStyle {
+                color: Color::rgba(1.0, 1.0, 1.0, a),
+                outline: Some(crate::plan::TextOutline {
+                    color: Color::rgba(1.0, 0.0, 0.0, 0.5 * a),
+                    width: 0.01,
+                }),
+                shadow: Some(crate::plan::TextShadow {
+                    color: Color::rgba(0.0, 1.0, 0.0, 0.25 * a),
+                    offset: crate::plan::Point { x: 0.01, y: 0.02 },
+                }),
+                font_id: None,
+                size: 0.1,
+                bitmap_size: None,
+                layer: crate::plan::TextLayer::Skin,
+                align: crate::plan::TextAlign::Left,
+                max_width: 0.0,
+                overflow: crate::plan::TextOverflow::Overflow,
+                wrapping: false,
+            },
+            caret: Some(crate::plan::TextCaret {
+                byte_index: 1,
+                color: Color::rgba(1.0, 1.0, 1.0, a),
+            }),
+            post_scale: crate::plan::Point { x: 1.0, y: 1.0 },
+        }];
+        apply_draw_command_alpha(&mut commands, 0.4);
+        let DrawCommand::Text { style, caret, .. } = &commands[0] else { panic!("text") };
+        assert_eq!(style.color.a, a * 0.4);
+        assert_eq!(style.outline.unwrap().color.a, 0.5 * a * 0.4);
+        assert_eq!(style.shadow.unwrap().color.a, 0.25 * a * 0.4);
+        assert_eq!(caret.unwrap().color.a, a * 0.4);
+    }
+
     fn bpm_snapshot(
         practice_mode: bool,
         practice_preview: bool,

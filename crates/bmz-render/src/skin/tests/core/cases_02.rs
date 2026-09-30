@@ -1,6 +1,113 @@
 use super::*;
 
 #[test]
+fn decorated_text_destination_alpha_is_shared_without_accumulation() {
+    let mut document: SkinDocument = serde_json::from_str(
+        r#"{
+        "w":100,"h":100,
+        "text":[{"id":"label","constantText":"FAVORITE","outlineWidth":2,
+            "outlineColor":"12345680","shadowColor":"abcdef40",
+            "shadowOffsetX":3,"shadowOffsetY":4}],
+        "destination":[{"id":"label","offset":42,"loop":-1,"dst":[
+            {"time":0,"w":50,"h":10,"r":100,"g":150,"b":200,"a":255},
+            {"time":100,"a":0}]}]
+    }"#,
+    )
+    .unwrap();
+    for (elapsed_ms, offset, search, expected) in [
+        (0, 0, 1.0, 1.0),
+        (50, 0, 1.0, 128.0 / 255.0),
+        (100, 0, 1.0, 0.0),
+        (0, 0, 1.0, 1.0),
+        (0, -127, 1.0, 128.0 / 255.0),
+        (0, 0, 0.5, 0.5),
+    ] {
+        document.text[0].ref_id = if search < 1.0 { 30 } else { 0 };
+        let mut state = SkinDrawState { elapsed_ms, ..Default::default() };
+        state.skin_offsets.set(42, SkinOffsetValue { a: offset, ..Default::default() });
+        let items = document.static_render_items(
+            &HashMap::new(),
+            &state,
+            &SkinTextState {
+                search_word: "FAVORITE",
+                search_word_alpha: search,
+                search_caret_byte_index: Some(3),
+                ..Default::default()
+            },
+        );
+        let SkinRenderItem::Text { text, style, caret, .. } = &items[0] else { panic!("text") };
+        assert_eq!(text, "FAVORITE");
+        assert!(
+            approx_eq(style.color.a, expected),
+            "time={elapsed_ms} offset={offset}: {} != {expected}",
+            style.color.a
+        );
+        assert!(approx_eq(style.color.r, 100.0 / 255.0));
+        let outline = style.outline.unwrap();
+        let shadow = style.shadow.unwrap();
+        assert!(approx_eq(outline.color.a, 128.0 / 255.0 * expected));
+        assert!(approx_eq(shadow.color.a, 64.0 / 255.0 * expected));
+        assert!(approx_eq(outline.color.r, 18.0 / 255.0));
+        assert!(approx_eq(shadow.color.r, 171.0 / 255.0));
+        assert!(approx_eq(outline.width, 0.02));
+        assert_eq!(shadow.offset, Point { x: 0.03, y: 0.04 });
+        if search < 1.0 {
+            assert!(approx_eq(caret.unwrap().color.a, expected));
+        }
+        let faded = style.clone().with_alpha(0.25);
+        assert!(approx_eq(faded.color.a, expected * 0.25));
+        assert!(approx_eq(faded.outline.unwrap().color.a, outline.color.a * 0.25));
+        assert!(approx_eq(faded.shadow.unwrap().color.a, shadow.color.a * 0.25));
+    }
+}
+
+#[test]
+fn decorated_text_defaults_and_transparent_decoration_colors() {
+    let document: SkinDocument = serde_json::from_str(
+        r#"{
+        "text":[{"id":"label","constantText":"TEXT","outlineWidth":2,
+            "outlineColor":"ff000000","shadowColor":"00ff0000"}],
+        "destination":[{"id":"label","dst":[{"h":10}]}]
+    }"#,
+    )
+    .unwrap();
+    let items = document.static_render_items(
+        &HashMap::new(),
+        &SkinDrawState::default(),
+        &SkinTextState::default(),
+    );
+    let SkinRenderItem::Text { style, .. } = &items[0] else { panic!("text") };
+    assert_eq!(style.color.a, 1.0);
+    assert!(style.outline.is_none());
+    assert!(style.shadow.is_none());
+}
+
+#[test]
+fn fully_transparent_destination_hides_opaque_decorations_and_clamps_alpha() {
+    let document: SkinDocument = serde_json::from_str(r#"{"w":100,"h":100}"#).unwrap();
+    let text = SkinTextDef {
+        constant_text: "FAVORITE".into(),
+        outline_width: 2.0,
+        outline_color: "ff0000ff".into(),
+        shadow_color: "00ff00ff".into(),
+        ..Default::default()
+    };
+    for (a, expected) in [(-10, 0.0), (0, 0.0), (255, 1.0), (300, 1.0)] {
+        let item = document
+            .text_render_item(
+                &text,
+                ResolvedSkinFrame { a, h: 10, ..Default::default() },
+                &SkinTextState::default(),
+            )
+            .unwrap();
+        let SkinRenderItem::Text { style, .. } = item else { panic!("text") };
+        assert_eq!(style.color.a, expected);
+        assert_eq!(style.outline.unwrap().color.a, expected);
+        assert_eq!(style.shadow.unwrap().color.a, expected);
+    }
+}
+
+#[test]
 fn static_image_destination_maps_lr2_multiply_blend() {
     let document: SkinDocument = serde_json::from_str(
         r#"

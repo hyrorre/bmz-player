@@ -1,4 +1,38 @@
 use super::*;
+
+#[test]
+fn lua_decorated_text_preserves_destination_and_intrinsic_alpha() {
+    let root = unique_test_dir("bmz-text-opacity");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("text.lua");
+    fs::write(
+        &path,
+        r#"return {type=5, w=100, h=100,
+        text={{id='label',constantText='FAVORITE',outlineWidth=2,
+            outlineColor='12345680',shadowColor='abcdef40',shadowOffsetX=3,shadowOffsetY=4}},
+        destination={{id='label',dst={{h=10,a=128}}}}}"#,
+    )
+    .unwrap();
+    let loaded = load_lua_skin_with_runtime_state(
+        &path,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &LuaLoadRuntimeState::default(),
+    )
+    .unwrap();
+    let document = loaded.document;
+    assert_eq!(document.text[0].outline_color, "12345680");
+    assert_eq!(document.text[0].shadow_color, "abcdef40");
+    let bmz_skin_document::DestinationListEntry::Single(destination) = &document.destination[0]
+    else {
+        panic!("destination")
+    };
+    let bmz_skin_document::SkinDstEntry::Frame(frame) = &destination.dst[0] else {
+        panic!("frame")
+    };
+    assert_eq!(frame.a, Some(128));
+    fs::remove_dir_all(&root).unwrap();
+}
 use crate::path_context::canonicalize_skin_path;
 
 fn copy_tree(source: &Path, destination: &Path) {

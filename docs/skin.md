@@ -250,6 +250,13 @@ type 0 は通常・判定・曲終了状態からモーションを選び、type
 現状は PMchara の `--` 座標補間と、画像右下色を透過色にする chroma-key 処理には未対応。
 PNG 等が持つ alpha は通常どおり反映する。
 
+## Text opacity
+
+BMZでは、解決済みdestinationの`a`を文字本体・縁取り・影に共通して適用する。
+`outlineColor` / `shadowColor`自身のαには、この共通透明度を乗算する。
+`a: 0`ではすべて透明になり、アニメーションやoffset、後段の画面フェードにも追従する。
+これはBMZの統一方針であり、beatorajaの距離フィールド描画と厳密に同一の挙動ではない。
+
 ## Text Overflow
 
 beatoraja互換のtext `overflow` は次の値を使用する。

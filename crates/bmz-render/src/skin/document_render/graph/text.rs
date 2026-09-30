@@ -31,7 +31,7 @@ macro_rules! skin_document_render_graph_text_methods {
             // beatoraja `STRING_SEARCHWORD` (ref=30) は placeholder 状態で
             // messageFontColor=GRAY (半透明) になる。bmz では state から渡される
             // multiplier を skin 由来の alpha に掛け合わせて同様の見た目を再現する。
-            let mut alpha = frame.a as f32 / 255.0;
+            let mut alpha = frame.a.clamp(0, 255) as f32 / 255.0;
             if text.ref_id == 30 {
                 alpha *= state.search_word_alpha.clamp(0.0, 1.0);
             }
@@ -76,8 +76,16 @@ macro_rules! skin_document_render_graph_text_methods {
                     max_width: frame.w.abs() as f32 / self.w.max(1) as f32,
                     overflow: skin_text_overflow(text.overflow, text.shrink_mode),
                     wrapping: text.wrapping,
-                    outline: skin_text_outline(text, self.h),
-                    shadow: skin_text_shadow(text, self.w, self.h),
+                    // The resolved destination opacity also fades decorations, while
+                    // preserving their own RGB and alpha. Body/caret already use alpha.
+                    outline: skin_text_outline(text, self.h).map(|mut outline| {
+                        outline.color.a *= alpha;
+                        outline
+                    }),
+                    shadow: skin_text_shadow(text, self.w, self.h).map(|mut shadow| {
+                        shadow.color.a *= alpha;
+                        shadow
+                    }),
                 },
                 caret,
                 blend: BlendMode::Normal,
