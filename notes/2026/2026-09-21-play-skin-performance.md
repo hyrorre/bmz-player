@@ -1,5 +1,7 @@
 # 他のプレイスキンの性能調査（2026-09-21）
 
+これは当時の作業記録です。現在のスキン対応状況は [skin-compatibility.md](../../docs/skin-compatibility.md) を参照してください。
+
 ## 条件
 
 Rmz / ECFN向けの共通最適化3件を含む `8e1ae3ae` を基準とする。

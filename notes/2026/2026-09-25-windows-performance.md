@@ -1,5 +1,7 @@
 # WindowsでのFPS最適化レビューと追加調査（2026-09-25）
 
+これは当時の作業記録です。現在の描画・計測仕様は [frame-pacing.md](../../docs/frame-pacing.md) を参照してください。
+
 v0.4.1 (`24992795`) から `0608b186` までのFPS最適化をWindowsで確認した。
 Rmz / ECFNのPlay、ECFNのSelect、StarseekerのResultで平均FPSが上がった。
 一方、`97d595eb` の動画の可視性によるdecoder破棄には再生位置をリセットする回帰があり、

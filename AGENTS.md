@@ -36,6 +36,8 @@ BMZ Player の継続開発で常に参照する作業方針です。機能の詳
 | [bmz-player](crates/bmz-player/src/lib.rs) | winit app、画面遷移、config、SQLite、CLI、skin install、egui状態 |
 | [bmz-updater](crates/bmz-updater/src/lib.rs) | Windows更新パッケージ検証・署名・helper・復旧 |
 | [bmz-ir-web](bmz-ir-web/) | Nuxtのapp/server/shared/public。ルートのpackage.jsonから操作 |
+| [docs](docs/) | 継続更新する現在の仕様・操作・開発手順・対応状況 |
+| [notes](notes/README.md) | Git管理する日付付きの調査・実装・計測記録 |
 | [data](data/) | 同梱アセットとローカルruntime data。Git管理対象は次節を参照 |
 
 `bmz-player/src/app/` がapp側の連携、`screens/` が画面・プレイ状態、
@@ -111,6 +113,11 @@ BMZ Player の継続開発で常に参照する作業方針です。機能の詳
 操作やキー割り当てを変更するときは `docs/controls.md` を確認・更新します。
 新しいCLI/debug optionは `crates/bmz-player/src/cli.rs` の既存構成に集約します。
 仕様や対応範囲を変更したら、その仕様を管理しているdocも更新します。
+
+作業経緯・過去の計測や検証結果は `notes/YYYY/YYYY-MM-DD-topic.md` に記録します。
+確定した仕様・再利用する手順は `docs/` に反映し、必要に応じて記録へリンクします。
+一時的な下書きは `.local/notes/`、生ログや個別環境の計測素材は `.local/performance/` 等へ置き、コミットしません。
+命名・追記・索引のルールは [notes/README.md](notes/README.md) を確認します。
 
 ## 5. 検証
 
