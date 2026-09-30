@@ -194,5 +194,10 @@ fix(bmz-player): discard obsolete result skin refreshes
 Co-Authored-By: Codex <実際のモデル名> <noreply@openai.com>
 ```
 
-Windows / PowerShell 7ではメッセージをBOMなしUTF-8の一時ファイルへ保存し、
-`git commit -F <file>` で渡します。例: `Set-Content -Encoding utf8NoBOM .local/commit-message.txt`。
+- 本文やFooterを含む複数行のcommit messageは、OSやshellを問わずBOMなしUTF-8の一時ファイルへ保存し、
+  `git commit -F <file>` で渡します。shell引数内の `\n` による改行表現は、literalな `\n` の混入を防ぐため使いません。
+  一時ファイルは `.local/commit-message.txt` 等のGit管理外の場所へ作成し、commit後に削除します。
+- macOS / Linuxでは `apply_patch` 等の通常のファイル編集で一時ファイルを作成します。
+  Windows / PowerShell 7では、例として `Set-Content -Encoding utf8NoBOM .local/commit-message.txt` を使えます。
+- commit後は `git show -s --format=fuller HEAD` で本文とFooterを確認し、literalな `\n` が混入していれば、
+  正しいメッセージファイルを使って直ちに `git commit --amend -F <file>` で修正します。
