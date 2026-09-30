@@ -90,6 +90,8 @@ where
     };
     let sample_rate = config.sample_rate;
     let mut playback_timeline = OutputPlaybackTimeline::default();
+    let timing_enabled = bmz_core::latency::diagnostics_enabled();
+    let mut previous_callback = None;
     let error_diagnostics = Arc::clone(&diagnostics);
     device
         .build_output_stream(
@@ -104,6 +106,15 @@ where
                 }
 
                 let frames = data.len() / channels;
+                if timing_enabled {
+                    diagnostics.timing.observe(
+                        frames,
+                        callback_start,
+                        previous_callback,
+                        info.timestamp(),
+                    );
+                    previous_callback = Some(callback_start);
+                }
                 let catch_up_frames = playback_timeline.catch_up_frames(
                     info.timestamp().playback,
                     frames,
@@ -130,6 +141,12 @@ where
                 diagnostics.rendered_frames.fetch_add(frames as u64, Ordering::Relaxed);
                 current_frame.store(start_frame.saturating_add(frames as u64), Ordering::Relaxed);
                 diagnostics.observe_callback_duration(callback_start);
+                if timing_enabled {
+                    diagnostics
+                        .timing
+                        .duration_ns
+                        .record(callback_start.elapsed().as_nanos().min(u64::MAX as u128) as u64);
+                }
             },
             move |error| {
                 error_diagnostics.stream_error_count.fetch_add(1, Ordering::Relaxed);
@@ -481,6 +498,7 @@ pub(super) fn observe_output_sample(value: f32, clipped: &mut u64, peak_abs: &mu
 impl CpalOutputDiagnosticsCounters {
     pub(super) fn take_snapshot(&self) -> CpalOutputDiagnostics {
         CpalOutputDiagnostics {
+            timing: self.timing.summary(),
             callback_count: self.callback_count.load(Ordering::Relaxed),
             rendered_frames: self.rendered_frames.load(Ordering::Relaxed),
             timeline_catch_up_count: self.timeline_catch_up_count.load(Ordering::Relaxed),

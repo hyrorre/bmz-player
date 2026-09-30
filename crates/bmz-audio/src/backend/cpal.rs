@@ -20,6 +20,8 @@ pub(crate) mod callback;
 mod coreaudio_compat;
 mod device;
 mod source;
+mod telemetry;
+pub use telemetry::OutputTimingSummary;
 
 use callback::*;
 pub use device::{is_host_supported, list_output_device_names};
@@ -99,6 +101,7 @@ pub struct CpalOutput {
 /// are interval maxima since the previous snapshot.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct CpalOutputDiagnostics {
+    pub timing: OutputTimingSummary,
     pub callback_count: u64,
     pub rendered_frames: u64,
     pub timeline_catch_up_count: u64,
@@ -118,6 +121,7 @@ pub struct CpalOutputDiagnostics {
 
 #[derive(Debug, Default)]
 struct CpalOutputDiagnosticsCounters {
+    timing: telemetry::OutputTiming,
     callback_count: AtomicU64,
     rendered_frames: AtomicU64,
     timeline_catch_up_count: AtomicU64,

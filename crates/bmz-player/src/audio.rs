@@ -27,6 +27,7 @@ use crate::video_bga::ActiveVideoBgaDecoder;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct AudioOutputDiagnostics {
+    pub timing: bmz_audio::backend::cpal::OutputTimingSummary,
     pub callback_count: u64,
     pub rendered_frames: u64,
     pub timeline_catch_up_count: u64,
@@ -54,6 +55,7 @@ pub struct AudioOutputDiagnostics {
 impl AudioOutputDiagnostics {
     pub fn from_cpal(snapshot: CpalOutputDiagnostics) -> Self {
         Self {
+            timing: snapshot.timing,
             callback_count: snapshot.callback_count,
             rendered_frames: snapshot.rendered_frames,
             timeline_catch_up_count: snapshot.timeline_catch_up_count,

@@ -44,6 +44,25 @@ impl WinitApp {
             return;
         };
         let snapshot = self.collect_audio_diagnostics();
+        if bmz_core::latency::diagnostics_enabled() {
+            let timing = snapshot.timing;
+            let summary = serde_json::json!({
+                "kind": "audio", "schema": 1,
+                "frames": timing.frames, "interval_ns": timing.interval_ns,
+                "duration_ns": timing.duration_ns, "prediction_ns": timing.prediction_ns,
+                "invalid_predictions": timing.invalid_predictions,
+                "stream_errors": snapshot.stream_error_count,
+                "lock_misses": snapshot.engine_lock_miss_count,
+                "queue_drops": snapshot.command_dropped_count,
+                "timeline_catch_ups": snapshot.timeline_catch_up_count,
+            });
+            tracing::info!("BMZ_LATENCY_JSON {summary}");
+            if let Some(input) = self.play_input_backend() {
+                let summary = serde_json::json!({"schema": 1, "kind": "input_queue",
+                    "enqueue_to_drain_ns": input.delivery_summary(), "drops": input.overflow_count()});
+                tracing::info!("BMZ_LATENCY_JSON {summary}");
+            }
+        }
         let Some(previous) = self.audio.audio_diagnostics_last.replace(snapshot) else {
             return;
         };
