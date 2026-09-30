@@ -6,6 +6,13 @@ mod windows_modal_redraw;
 
 impl WinitApp {
     pub(super) fn sync_input_capture_target(&self) {
+        #[cfg(target_os = "macos")]
+        if let Some(capture) = &self.gamepad {
+            capture.configure_mac_keyboard(
+                self.boot.app_config.input.keyboard_enabled
+                    && self.boot.app_config.input.backend == InputBackendKind::MacOsHid,
+            );
+        }
         let route = if self.raw_input_gameplay_blocked() {
             None
         } else {
@@ -21,7 +28,9 @@ impl WinitApp {
                     }),
                 focused: self.ui.focused,
                 keyboard_enabled: self.keyboard_input_backend()
-                    == Some(KeyboardInputBackend::RawInput),
+                    == Some(KeyboardInputBackend::RawInput)
+                    || (cfg!(target_os = "macos")
+                        && self.boot.app_config.input.backend == InputBackendKind::MacOsHid),
             })
         };
         if let Some(capture) = &self.gamepad {
@@ -60,6 +69,11 @@ impl WinitApp {
 
     pub(super) fn window_keyboard_gameplay_enabled(&self) -> bool {
         self.keyboard_input_backend() == Some(KeyboardInputBackend::Window)
+            && !(cfg!(target_os = "macos")
+                && self
+                    .gamepad
+                    .as_ref()
+                    .is_some_and(crate::input::capture::InputCapture::native_keyboard_enabled))
     }
 
     /// WM_KEYUP can omit the first released Shift when both were held.

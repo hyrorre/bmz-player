@@ -531,6 +531,7 @@ main() {
       "${target_triple}"
   fi
   copy_file "${root}/assets/app-icon/bmz-player.icns" "${resources_dir}/bmz-player.icns"
+  copy_file "${root}/assets/PrivacyInfo.xcprivacy" "${resources_dir}/PrivacyInfo.xcprivacy"
   if [[ -n "${BMZ_SPARKLE_DIR:-}" ]]; then
     [[ -d "${BMZ_SPARKLE_DIR}/Sparkle.framework" ]] || die "Sparkle.framework missing"
     mkdir -p "${frameworks_dir}"

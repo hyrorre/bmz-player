@@ -414,6 +414,8 @@ pub enum InputBackendKind {
     Auto,
     Winit,
     RawInput,
+    /// Opt-in macOS IOHID capture; other platforms keep winit.
+    MacOsHid,
     /// 旧configの読み込み互換用。load時にAutoへ移行する。
     Hid,
     /// 旧configの読み込み互換用。load時にAutoへ移行する。

@@ -365,3 +365,11 @@ fn app_config_loads_missing_obs_section() {
 
     assert_eq!(config.obs, ObsConfig::default());
 }
+#[test]
+fn macos_keyboard_backend_round_trip_preserves_opt_in() {
+    let mut config = AppConfig::default();
+    assert_eq!(config.input.backend, InputBackendKind::Auto);
+    config.input.backend = InputBackendKind::MacOsHid;
+    let loaded: AppConfig = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+    assert_eq!(loaded.input.backend, InputBackendKind::MacOsHid);
+}

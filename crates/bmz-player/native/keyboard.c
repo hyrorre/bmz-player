@@ -45,7 +45,11 @@ static void value(void *ctx, IOReturn result, void *sender, IOHIDValueRef value)
         return;
     }
     IOHIDElementRef element = IOHIDValueGetElement(value);
-    if (IOHIDElementGetUsagePage(element) != 7) return;
+    if (IOHIDElementGetUsagePage(element) != 7) {
+        if (IOHIDValueGetIntegerValue(value) != 0)
+            keyboard->callback(keyboard->context, 0, 0xffff, 0, 1);
+        return;
+    }
     keyboard->callback(keyboard->context, (uintptr_t)IOHIDElementGetDevice(element),
         IOHIDElementGetUsage(element), IOHIDValueGetTimeStamp(value),
         IOHIDValueGetIntegerValue(value) != 0);

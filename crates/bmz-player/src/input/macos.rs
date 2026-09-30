@@ -86,7 +86,12 @@ impl MacKeyboard {
                     "invalid_timestamps":context.invalid,"unsupported_usages":context.unsupported});
                 tracing::info!("BMZ_LATENCY_JSON {summary}");
             }
-            if context.failed && status() == 1 { STATUS.store(3, Ordering::Release); }
+            if context.failed && status() == 1 {
+                let permission_denied = unsafe { bmz_keyboard_access() } != 0;
+                STATUS.store(if permission_denied {2} else {3}, Ordering::Release);
+                tracing::warn!(permission_denied, unsupported_usages = context.unsupported,
+                    "IOHID capture stopped; falling back to winit after held-key cleanup");
+            }
         }).ok()?;
         if !rx.recv().unwrap_or(false) {
             let _ = worker.join();

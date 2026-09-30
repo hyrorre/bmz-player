@@ -108,7 +108,27 @@ pub(super) fn build_integration_settings_sections(
                         InputBackendKind::RawInput,
                         input_backend_label(&InputBackendKind::RawInput, text),
                     );
+                    #[cfg(target_os = "macos")]
+                    ui.selectable_value(
+                        &mut config.input.backend,
+                        InputBackendKind::MacOsHid,
+                        "macOS IOHID",
+                    );
                 });
+            #[cfg(target_os = "macos")]
+            if config.input.backend == InputBackendKind::MacOsHid {
+                let key = match crate::input::macos::status() {
+                    1 => "settings-input-macos-active",
+                    2 => "settings-input-macos-permission",
+                    3 => "settings-input-macos-failed",
+                    _ => "settings-input-macos-inactive",
+                };
+                ui.label(text.text(key));
+                if ui.button(tr!(text, "settings-input-macos-request")).clicked() {
+                    crate::input::macos::request_permission();
+                }
+                ui.label(tr!(text, "settings-input-macos-retry"));
+            }
             egui::ComboBox::new("gamepad_backend", tr!(text, "settings-input-gamepad-backend"))
                 .selected_text(gamepad_backend_label(&config.input.gamepad_backend, text))
                 .show_ui(ui, |ui| {

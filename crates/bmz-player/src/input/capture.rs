@@ -31,10 +31,13 @@ struct State {
 }
 
 pub struct InputCapture {
+    #[cfg(target_os = "macos")]
+    mac_keyboard: Mutex<(bool, Option<super::macos::MacKeyboard>)>,
     state: Arc<Mutex<State>>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     name: &'static str,
+    #[cfg(not(target_os = "macos"))]
     native_keyboard: Arc<AtomicBool>,
 }
 
@@ -150,10 +153,23 @@ impl InputCapture {
         })?;
         let name = ready_rx.recv_timeout(Duration::from_secs(5))?;
         tracing::info!(backend = name, "input backend: dedicated capture thread");
-        Ok(Self { state, stop, thread: Some(thread), name, native_keyboard })
+        Ok(Self {
+            #[cfg(target_os = "macos")]
+            mac_keyboard: Mutex::new((false, None)),
+            state,
+            stop,
+            thread: Some(thread),
+            name,
+            #[cfg(not(target_os = "macos"))]
+            native_keyboard,
+        })
     }
 
     pub fn set_route(&self, route: Option<InputRoute>) {
+        #[cfg(target_os = "macos")]
+        if let Some(keyboard) = &self.mac_keyboard.lock().unwrap_or_else(|e| e.into_inner()).1 {
+            keyboard.set_route(route.clone());
+        }
         let route = route.map(Arc::new);
         let old = {
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -165,7 +181,28 @@ impl InputCapture {
         }
     }
     pub fn native_keyboard_enabled(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        return self
+            .mac_keyboard
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .1
+            .as_ref()
+            .is_some_and(super::macos::MacKeyboard::active);
+        #[cfg(not(target_os = "macos"))]
         self.native_keyboard.load(Ordering::Acquire)
+    }
+    #[cfg(target_os = "macos")]
+    pub fn configure_mac_keyboard(&self, requested: bool) {
+        let mut keyboard = self.mac_keyboard.lock().unwrap_or_else(|e| e.into_inner());
+        if keyboard.0 == requested {
+            return;
+        }
+        keyboard.0 = requested;
+        keyboard.1 = None;
+        if requested {
+            keyboard.1 = super::macos::MacKeyboard::start();
+        }
     }
     pub fn set_analog_config(&mut self, configs: [GamepadScratchConfig; 2], slots: GamepadSlotMap) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
