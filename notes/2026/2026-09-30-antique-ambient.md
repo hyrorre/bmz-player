@@ -51,3 +51,15 @@ entryディレクトリだけを許可した初期テストでは兄弟ディレ
 
 実プレイ操作による手動確認、実動画ファイルの再生、FPS比較、macOS/LinuxでのGPU確認は未実施。
 描画成功は性能改善の主張ではない。
+
+## 2026-09-30 追記: レーン背景の不透明化
+
+ユーザー指定により、左右・Sixtarのレーン背景とレーン明度用の黒オーバーレイを
+Ambientパネル透明度の対象から外した。レーン背景は不透明度100％を維持し、
+既存のレーン明度設定をそのまま使う。その他のパネルは引き続き透明度を変更できる。
+
+- `cargo fmt --check` と `bmz-player` のcheck / all-targets Clippy / testは成功。
+- `antique_ambient` の設定・GPUテスト2件を明示実行し、成功。
+  Ambient OFF/ON・透明度40/80％・全面背景・汎用背景でレーン内の画素が一致することを確認。
+  `.local/performance/antique-ambient/opaque-lane/` の80％画像も目視確認済み。
+- スキン側commit: `mz-select:e0142eb`。本体の実行コードは変更せず、再ビルドは不要。

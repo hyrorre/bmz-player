@@ -55,9 +55,14 @@ fn antique_ambient_defaults_off_and_changes_only_panel_opacity_when_available() 
             destinations.iter().filter(|d| d.bmz_ambient).count(),
             if mode == "ON" { 3 } else { 0 }
         );
-        for id in ["img_frame_play1p", "img_frame_graph1p", "img_frame_lane1p"] {
+        for id in ["img_frame_play1p", "img_frame_graph1p"] {
             assert_eq!(first_alpha(&document, id), expected, "{mode} {transparency} {id}");
         }
+        assert_eq!(
+            first_alpha(&document, "img_frame_lane1p"),
+            255,
+            "opaque lane {mode} {transparency}"
+        );
         for id in ["num_gauge", "img_judgeline", "sld_progress_song"] {
             assert_eq!(first_alpha(&document, id), first_alpha(&defaults, id), "foreground {id}");
         }
@@ -90,6 +95,7 @@ fn antique_ambient_gpu_preview() {
         })
         .collect();
     renderer.upsert_rgba_texture_ref(TextureId(700_000), 256, 256, &pixels).unwrap();
+    let mut opaque_lane_pixel = None;
     for (name, mode, alpha, size) in [
         ("off", "OFF", "40%", "FULL(1080x1080)"),
         ("on-40", "ON", "40%", "FULL(1080x1080)"),
@@ -154,6 +160,12 @@ fn antique_ambient_gpu_preview() {
         assert_eq!(count, if mode == "ON" { 1 } else { 0 }, "{name}");
         renderer.render_last_plan().unwrap();
         let pixels = renderer.read_offscreen_rgba().unwrap();
+        let lane_pixel = &pixels[(100 * 1920 + 100) * 4..(100 * 1920 + 100) * 4 + 4];
+        if let Some(expected) = &opaque_lane_pixel {
+            assert_eq!(lane_pixel, expected, "Ambient must not show through the lane: {name}");
+        } else {
+            opaque_lane_pixel = Some(lane_pixel.to_vec());
+        }
         if let Some(directory) = std::env::var_os("BMZ_AMBIENT_PREVIEW_DIR") {
             let directory = PathBuf::from(directory);
             std::fs::create_dir_all(&directory).unwrap();
