@@ -247,6 +247,13 @@ pub(super) fn apply_all_offset_to_render_item(
     let translate_x = offset.x as f32 / 100.0;
     let translate_y = offset.y as f32 / 100.0;
     match item {
+        SkinRenderItem::Ambient { rect, layers } => SkinRenderItem::Ambient {
+            rect: apply_all_offset_to_rect(rect, scale_x, scale_y, translate_x, translate_y),
+            layers: layers
+                .into_iter()
+                .map(|item| apply_all_offset_to_render_item(item, state))
+                .collect(),
+        },
         SkinRenderItem::Image {
             texture,
             rect,

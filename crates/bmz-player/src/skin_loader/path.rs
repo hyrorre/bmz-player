@@ -95,11 +95,13 @@ pub(super) fn resolve_json_skin_asset_path_with_context(
     //         ソース `custom/laser/*/main.png` を `custom/laser/veryshort/main.png` へ)。
     if let Some(substituted) = substitute_filepath_choice(&normalized, &document.filepath, files) {
         let candidate = if let Some(path_context) = path_context {
-            path_context.resolve_file(&substituted).ok()?
+            path_context.resolve_file(&substituted).ok()
         } else {
-            resolve_case_insensitive_path(&skin_root.join(&substituted))
+            Some(resolve_case_insensitive_path(&skin_root.join(&substituted)))
         };
-        if candidate.is_file() {
+        // A default such as "default" may identify the stem of default.png.
+        // If direct substitution misses, retain the sandboxed wildcard fallback.
+        if let Some(candidate) = candidate.filter(|candidate| candidate.is_file()) {
             return Some(candidate);
         }
     }

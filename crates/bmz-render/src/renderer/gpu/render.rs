@@ -41,6 +41,7 @@ impl WgpuRenderer {
         }
         timings.text_us = text_start.elapsed().as_micros();
         let geometry_start = Instant::now();
+        self.prepare_ambient(plan, canvas_viewport.content_size());
         let mut geometry = std::mem::take(&mut self.geometry_scratch);
         encode_plan_geometry_into(
             plan,
@@ -139,6 +140,7 @@ impl WgpuRenderer {
             label: Some("bmz-render clear encoder"),
         });
         self.texture_uploads.encode(&mut encoder);
+        self.encode_ambient(&mut encoder);
         let draw_resources = PlanGeometryDrawResources {
             rect_pipeline: &self.rect_pipeline,
             rect_buffer: self.rect_buffer.as_ref(),

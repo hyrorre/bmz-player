@@ -24,6 +24,7 @@ pub(super) struct WgpuRenderer {
     pub(super) image_bind_group_cache: HashMap<(TextureId, bool), wgpu::BindGroup>,
     pub(super) image_bind_group_scratch: Vec<wgpu::BindGroup>,
     pub(super) geometry_scratch: PlanGeometry,
+    pub(super) ambient: Option<AmbientResources>,
     pub(super) offscreen_rect_batches: HashMap<OffscreenRectBatchTextureKey, TextureId>,
     pub(super) next_offscreen_rect_batch_texture_id: u32,
     pub(super) image_buffer: Option<wgpu::Buffer>,

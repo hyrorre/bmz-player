@@ -375,6 +375,29 @@ fn skin_video_visibility_uses_prepared_plan_without_repeating_lua() {
 }
 
 #[test]
+fn ambient_only_video_is_visible_to_the_decoder() {
+    use bmz_render::plan::{Color, DrawCommand, DrawPlan, Rect, TextureId, UvRect};
+    let rect = Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 };
+    let image = |alpha| DrawCommand::Image {
+        rect,
+        texture: TextureId(800),
+        source_size: None,
+        uv: UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+        tint: Color::rgba(1.0, 1.0, 1.0, alpha),
+        blend: bmz_render::skin::BlendMode::Normal,
+        linear_filter: true,
+    };
+    for (alpha, visible) in [(1.0, true), (0.0, false)] {
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![DrawCommand::Ambient { rect, layers: vec![image(alpha)] }],
+        };
+        assert_eq!(skin_video_texture_visible_in_plan(&plan, SkinTextureId(800)), visible);
+        assert!(!skin_video_texture_visible_in_plan(&plan, SkinTextureId(801)));
+    }
+}
+
+#[test]
 fn skin_video_source_respects_static_property_ops() {
     let mut document: SkinDocument = serde_json::from_str(
             r#"

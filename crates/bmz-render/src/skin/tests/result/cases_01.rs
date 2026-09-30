@@ -147,6 +147,7 @@ fn grade_diff_destinations_use_the_fixed_next_rank_in_select_and_result() {
             id: id.to_string(),
             blend: 0,
             filter: 0,
+            bmz_ambient: false,
             timer: None,
             timer_expr: String::new(),
             loop_time: None,

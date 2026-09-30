@@ -1,5 +1,22 @@
 use super::*;
 
+pub(super) fn wrap_ambient_destination(
+    destination: &SkinDestinationDef,
+    frame: ResolvedSkinFrame,
+    width: u32,
+    height: u32,
+    items: Vec<SkinRenderItem>,
+) -> Vec<SkinRenderItem> {
+    if destination.bmz_ambient && !items.is_empty() {
+        vec![SkinRenderItem::Ambient {
+            rect: normalize_skin_frame_rect(frame, width, height),
+            layers: items,
+        }]
+    } else {
+        items
+    }
+}
+
 /// beatoraja `SkinObjectRenderer.setBlend` と同じ destination blend 対応。
 pub(super) fn skin_blend_mode(blend: i32) -> BlendMode {
     match blend {

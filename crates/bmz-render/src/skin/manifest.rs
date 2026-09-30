@@ -271,6 +271,11 @@ pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRe
 
 pub fn append_skin_render_item(commands: &mut Vec<DrawCommand>, item: &SkinRenderItem) {
     match item {
+        SkinRenderItem::Ambient { rect, layers } => {
+            let mut layer_commands = Vec::new();
+            append_skin_render_items(&mut layer_commands, layers);
+            commands.push(DrawCommand::Ambient { rect: *rect, layers: layer_commands });
+        }
         SkinRenderItem::Rect { rect, color, .. } => {
             commands.push(DrawCommand::Rect { rect: *rect, color: *color });
         }

@@ -152,16 +152,26 @@ macro_rules! skin_document_render_core_resolve_methods {
                 ));
             }
             if let Some(item) = self.direct_source_image_render_item(destination, frame, sources) {
-                return Some(vec![item]);
+                return Some(wrap_ambient_destination(
+                    destination,
+                    frame,
+                    self.w,
+                    self.h,
+                    vec![item],
+                ));
             }
             if let Some(items) =
                 self.resolve_image_destination_items(destination, frame, images, state, sources)
             {
-                return items;
+                return items.map(|items| {
+                    wrap_ambient_destination(destination, frame, self.w, self.h, items)
+                });
             }
 
             if let Some(items) = self.resolve_bga_destination_items(destination, frame, state) {
-                return items;
+                return items.map(|items| {
+                    wrap_ambient_destination(destination, frame, self.w, self.h, items)
+                });
             }
 
             // imageset (キービーム・ボム等) を destination 自身のタイマー駆動で描画する。

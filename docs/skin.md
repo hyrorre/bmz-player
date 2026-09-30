@@ -6,6 +6,34 @@ BMZ は beatoraja JSON / Lua skin の互換を基本にする。既存 beatoraja
 JSON / Lua / LR2 skinの対応範囲と残課題は [skin-compatibility.md](skin-compatibility.md) を参照。
 この文書ではIDや各機能の動作契約を管理する。
 
+## Ambient背景（BMZ拡張）
+
+JSON / LuaのimageまたはBGAのdestinationに `bmzAmbient: true` を指定すると、
+そのdestinationの表示内容を低解像度に合成し、GPUで縦横にぼかして描画する。
+既定はfalse。`filter`（拡大縮小時の補間）とは別の指定で、beatoraja互換仕様には含めない。
+
+```lua
+{id = "bga", bmzAmbient = true, stretch = 3,
+ dst = {{x = 0, y = 0, w = 1920, h = 1080, a = 210}}}
+```
+
+- 配置・透明度・timer・optionは通常のdestinationと同じ。BGA無効時はBGA由来のAmbientも非表示。
+- BGAのBase / Layer / Layer2（静止画の黒透過を含む）を合成してからぼかす。
+  POOR表示中はPOORへ切り替える。通常のBGA destinationは引き続き鮮明に描画する。
+- 通常のimageでも利用でき、汎用画像・動画をBGAなしの曲の背景に使える。
+- 画面全体を読み戻す背景ぼかしではない。文字・ノーツ・その他のdestinationは処理対象外。
+- 中間画像は長辺128px、同時に最大8 destination、各64画像・矩形まで。
+  GPU内で処理し、動画textureの更新後に合成・ぼかし・通常描画を同じsubmissionで実行する。
+  対象がないときは専用pipeline・中間画像を確保せず、使用済みのものも解放する。
+
+同梱antiqueの「Ambientモード (BMZ)」は既定OFF。
+ON時は画面の背面へAmbientを描き、「Ambientパネル透明度」でフレーム・レーン・グラフ背景の
+透明度を0～100％の10％刻みで設定する（既定40％、OFF時は適用しない）。
+数値・テキスト、ノーツ、判定、グラフ本体の透明度は変えない。
+フレーム画像に含まれる装飾やラベルはフレームと一緒に透過する。
+「BGAサイズ＝背景(1920x1080)」では全面Ambientを背景とし、鮮明な全面BGAを重ねない。
+曲BGAと汎用BGA/BGIの選択条件は既存の設定に従う。
+
 ## LR2 Play 表示参照
 
 LR2 play skin の `SRC_BUTTON 40/41` は、1P/2P の実際に有効なゲージ種類を

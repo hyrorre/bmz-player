@@ -175,6 +175,9 @@ pub struct SkinDestinationDef {
     pub blend: i32,
     #[serde(default)]
     pub filter: i32,
+    /// BMZ extension: composite an image/BGA destination into a blurred ambient background.
+    #[serde(default, rename = "bmzAmbient")]
+    pub bmz_ambient: bool,
     #[serde(default)]
     pub timer: Option<i32>,
     /// BMZ限定のruntime timer式。PeacefulPlay key loggerの反復event timerに使う。

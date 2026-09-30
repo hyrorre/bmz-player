@@ -385,6 +385,11 @@ pub struct Keyframe {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SkinRenderItem {
+    /// Image/BGA layers composited before blurring. Coordinates remain in skin space.
+    Ambient {
+        rect: Rect,
+        layers: Vec<SkinRenderItem>,
+    },
     Image {
         texture: SkinTextureId,
         rect: Rect,

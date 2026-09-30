@@ -238,6 +238,7 @@ impl WgpuRenderer {
             image_bind_group_cache: HashMap::new(),
             image_bind_group_scratch: Vec::new(),
             geometry_scratch: PlanGeometry::default(),
+            ambient: None,
             offscreen_rect_batches: HashMap::new(),
             next_offscreen_rect_batch_texture_id: OFFSCREEN_RECT_BATCH_TEXTURE_BASE,
             image_buffer: None,

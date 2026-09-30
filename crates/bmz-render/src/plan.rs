@@ -60,6 +60,11 @@ pub struct DrawPlan {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DrawCommand {
+    /// A bounded image/rectangle group composited and blurred on the GPU.
+    Ambient {
+        rect: Rect,
+        layers: Vec<DrawCommand>,
+    },
     Rect {
         rect: Rect,
         color: Color,

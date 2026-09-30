@@ -91,13 +91,25 @@ pub(super) fn skin_video_texture_visible_in_plan(
     plan: &bmz_render::plan::DrawPlan,
     texture: SkinTextureId,
 ) -> bool {
-    plan.commands.iter().any(|command| match command {
+    plan.commands.iter().any(|command| skin_video_texture_visible_in_command(command, texture))
+}
+
+fn skin_video_texture_visible_in_command(
+    command: &bmz_render::plan::DrawCommand,
+    texture: SkinTextureId,
+) -> bool {
+    match command {
+        bmz_render::plan::DrawCommand::Ambient { rect, layers } => {
+            rect.width != 0.0
+                && rect.height != 0.0
+                && layers.iter().any(|layer| skin_video_texture_visible_in_command(layer, texture))
+        }
         bmz_render::plan::DrawCommand::Image { texture: used, tint, rect, .. }
         | bmz_render::plan::DrawCommand::RotatedImage { texture: used, tint, rect, .. } => {
             used.0 == texture.0 && tint.a > 0.0 && rect.width != 0.0 && rect.height != 0.0
         }
         _ => false,
-    })
+    }
 }
 
 pub(super) fn skin_video_sources_from_decoded(decoded: &DecodedSkin) -> Vec<ActiveSkinVideoSource> {

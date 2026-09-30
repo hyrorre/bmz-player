@@ -96,6 +96,8 @@ fn sample_text() -> DrawCommand {
     }
 }
 
+#[path = "tests/ambient.rs"]
+mod ambient;
 #[path = "tests/cases_01.rs"]
 mod cases_01;
 #[path = "tests/cases_02.rs"]

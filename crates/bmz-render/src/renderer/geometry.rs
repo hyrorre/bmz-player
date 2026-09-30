@@ -280,9 +280,36 @@ pub(super) fn encode_plan_geometry_into(
     // text instance buffer 上での現在位置 (quad 単位) と、次に参照する Text コマンド番号。
     let mut text_quad_cursor = 0_usize;
     let mut text_command_index = 0_usize;
+    let mut ambient_index = 0_usize;
 
     for command in &plan.commands {
         match command {
+            DrawCommand::Ambient { rect, .. } => {
+                let index = ambient_index;
+                ambient_index += 1;
+                let rect = canvas_viewport.transform_rect(*rect);
+                if index >= AMBIENT_MAX_DESTINATIONS || !visible_rect(rect) {
+                    continue;
+                }
+                let start = images.len();
+                encode_image_instance(
+                    images,
+                    &rect,
+                    &UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+                    &Color::rgb(1.0, 1.0, 1.0),
+                    0.0,
+                    Point { x: 0.5, y: 0.5 },
+                    image_rotation_aspect,
+                    Point { x: 1.0, y: 1.0 },
+                );
+                push_or_extend_image(
+                    steps,
+                    ambient_texture_id(index),
+                    BlendMode::Premultiplied,
+                    true,
+                    start..images.len(),
+                );
+            }
             DrawCommand::Rect { rect, color } => {
                 let start = rects.len();
                 let rect = canvas_viewport.transform_rect(*rect);

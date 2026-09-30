@@ -233,6 +233,7 @@ pub(super) fn apply_draw_command_alpha(commands: &mut [DrawCommand], alpha: f32)
     let alpha = alpha.clamp(0.0, 1.0);
     for command in commands {
         match command {
+            DrawCommand::Ambient { layers, .. } => apply_draw_command_alpha(layers, alpha),
             DrawCommand::Image { tint, .. } | DrawCommand::RotatedImage { tint, .. } => {
                 tint.a *= alpha;
             }
@@ -274,6 +275,9 @@ pub(super) fn apply_draw_command_alpha_offset(commands: &mut [DrawCommand], alph
     let alpha_delta = alpha_offset as f32 / 255.0;
     for command in commands {
         match command {
+            DrawCommand::Ambient { layers, .. } => {
+                apply_draw_command_alpha_offset(layers, alpha_offset)
+            }
             DrawCommand::Image { tint, .. } | DrawCommand::RotatedImage { tint, .. } => {
                 tint.a = (tint.a + alpha_delta).clamp(0.0, 1.0);
             }

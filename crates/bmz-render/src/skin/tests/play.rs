@@ -1,5 +1,7 @@
 use super::*;
 
+#[path = "play/ambient.rs"]
+mod ambient;
 #[path = "play/cases_01.rs"]
 mod cases_01;
 #[path = "play/cases_02.rs"]

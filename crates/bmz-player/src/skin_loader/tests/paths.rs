@@ -69,6 +69,35 @@ fn resolve_skin_source_accepts_beatoraja_filename_selection() {
 }
 
 #[test]
+fn wildcard_source_with_context_falls_back_to_default_file_stem() {
+    let root = unique_test_dir("bmz-skin-wildcard-default-stem");
+    fs::create_dir_all(root.join("system")).unwrap();
+    fs::create_dir_all(root.join("customize")).unwrap();
+    let entry = root.join("system/main.luaskin");
+    fs::write(&entry, []).unwrap();
+    fs::write(root.join("customize/default.png"), []).unwrap();
+    fs::write(root.join("customize/blue.png"), []).unwrap();
+    let context = SkinPathContext::new(&entry, [root.clone()]).unwrap();
+    let document: SkinDocument = serde_json::from_str(
+        r#"{"filepath":[{"name":"Background","path":"../customize/*","def":"default"}]}"#,
+    )
+    .unwrap();
+    for (choice, expected) in [("default", "default.png"), ("blue.png", "blue.png")] {
+        let files = BTreeMap::from([("Background".to_string(), choice.to_string())]);
+        let resolved = resolve_json_skin_source_path_with_context(
+            entry.parent().unwrap(),
+            Some(&context),
+            "../customize/*",
+            &document,
+            &files,
+        )
+        .unwrap();
+        assert_eq!(resolved, root.join("customize").join(expected));
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn resolve_skin_source_still_accepts_legacy_relative_selection() {
     let root = unique_test_dir("bmz-json-source-relative");
     std::fs::create_dir_all(root.join("parts")).unwrap();

@@ -1,5 +1,7 @@
 use super::*;
 
+#[path = "lua/antique_ambient.rs"]
+mod antique_ambient;
 #[path = "lua/best_score_options.rs"]
 mod best_score_options;
 #[path = "lua/cases_01.rs"]
