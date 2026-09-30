@@ -46,8 +46,10 @@ impl WinitApp {
         let snapshot = self.collect_audio_diagnostics();
         if bmz_core::latency::diagnostics_enabled() {
             let timing = snapshot.timing;
+            let info = self.audio.audio_runtime.as_ref().map(AudioRuntime::stream_info);
             let summary = serde_json::json!({
                 "kind": "audio", "schema": 1,
+                "epoch": timing.epoch, "warmup_seconds": 2,
                 "frames": timing.frames, "interval_ns": timing.interval_ns,
                 "duration_ns": timing.duration_ns, "prediction_ns": timing.prediction_ns,
                 "invalid_predictions": timing.invalid_predictions,
@@ -55,8 +57,21 @@ impl WinitApp {
                 "lock_misses": snapshot.engine_lock_miss_count,
                 "queue_drops": snapshot.command_dropped_count,
                 "timeline_catch_ups": snapshot.timeline_catch_up_count,
+                "stream": info.map(|i| serde_json::json!({
+                    "id":i.stream_id,
+                    "requested_host":format!("{:?}",i.requested_host),"requested_device":i.requested_device,
+                    "actual_host":i.actual_host,"actual_device":i.actual_device,
+                    "requested_rate":i.requested_rate,"actual_rate":i.actual_rate,
+                    "requested_frames":i.requested_frames,"supported_frames":i.supported_frames,
+                    "cpal_buffer":i.cpal_buffer,
+                })),
             });
             tracing::info!("BMZ_LATENCY_JSON {summary}");
+            if let Some(play) = &self.play.active_play {
+                let summary = serde_json::json!({"schema":1,"kind":"play_audio_commands",
+                    "all_commands_enqueue_to_apply_ns":play.running.audio.command_diagnostics().enqueue_to_apply_ns});
+                tracing::info!("BMZ_LATENCY_JSON {summary}");
+            }
             if let Some(input) = self.play_input_backend() {
                 let summary = serde_json::json!({"schema": 1, "kind": "input_queue",
                     "enqueue_to_drain_ns": input.delivery_summary(), "drops": input.overflow_count()});

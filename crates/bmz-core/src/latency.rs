@@ -87,6 +87,15 @@ impl Default for AtomicLatencyHistogram {
 }
 
 impl AtomicLatencyHistogram {
+    /// Producer-only epoch boundary. Concurrent snapshots can straddle this
+    /// boundary; consumers must discard snapshots whose epoch changes.
+    pub fn reset(&self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        for bucket in &self.buckets {
+            bucket.store(0, Relaxed);
+        }
+        self.max.store(0, Relaxed);
+    }
     pub fn record(&self, value: u64) {
         use std::sync::atomic::Ordering::Relaxed;
         let exponent = 63 - value.max(1).leading_zeros() as usize;

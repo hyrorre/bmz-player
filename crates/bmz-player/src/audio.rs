@@ -366,6 +366,9 @@ impl AudioRuntime {
     pub fn take_diagnostics(&self) -> AudioOutputDiagnostics {
         AudioOutputDiagnostics::from_cpal(self.output.take_diagnostics())
     }
+    pub fn stream_info(&self) -> &bmz_audio::backend::cpal::CpalStreamInfo {
+        self.output.stream_info()
+    }
 
     /// 音声 callback から退避した source を app thread で破棄する。
     pub fn reap_retired_sources(&self) {

@@ -4,6 +4,7 @@ use std::time::Instant;
 
 #[derive(Debug, Default)]
 pub(super) struct OutputTiming {
+    epoch: AtomicU64,
     frames: AtomicLatencyHistogram,
     interval_ns: AtomicLatencyHistogram,
     pub(super) duration_ns: AtomicLatencyHistogram,
@@ -13,6 +14,7 @@ pub(super) struct OutputTiming {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct OutputTimingSummary {
+    pub epoch: u64,
     pub frames: DistributionSummary,
     pub interval_ns: DistributionSummary,
     pub duration_ns: DistributionSummary,
@@ -21,6 +23,14 @@ pub struct OutputTimingSummary {
 }
 
 impl OutputTiming {
+    pub(super) fn reset(&self) {
+        self.frames.reset();
+        self.interval_ns.reset();
+        self.duration_ns.reset();
+        self.prediction_ns.reset();
+        self.invalid_predictions.store(0, Ordering::Relaxed);
+        self.epoch.fetch_add(1, Ordering::Release);
+    }
     pub(super) fn observe(
         &self,
         frames: usize,
@@ -48,6 +58,7 @@ impl OutputTiming {
 
     pub(super) fn summary(&self) -> OutputTimingSummary {
         OutputTimingSummary {
+            epoch: self.epoch.load(Ordering::Acquire),
             frames: self.frames.summary(),
             interval_ns: self.interval_ns.summary(),
             duration_ns: self.duration_ns.summary(),
@@ -81,5 +92,9 @@ mod tests {
         assert_eq!(summary.prediction_ns.count, 1);
         assert_eq!(summary.prediction_ns.max, 2_000_000);
         assert_eq!(summary.invalid_predictions, 2);
+        timing.reset();
+        assert_eq!(timing.summary().epoch, 1);
+        assert_eq!(timing.summary().frames.count, 0);
+        assert_eq!(timing.summary().invalid_predictions, 0);
     }
 }

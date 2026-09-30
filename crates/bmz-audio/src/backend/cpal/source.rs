@@ -17,6 +17,9 @@ impl CpalOutput {
 }
 
 impl CpalSharedOutput {
+    pub fn stream_info(&self) -> &CpalStreamInfo {
+        &self.inner.info
+    }
     pub fn play(&self) -> Result<(), CpalBackendError> {
         match &self.inner.stream {
             CpalOutputStream::Cpal(stream) => {

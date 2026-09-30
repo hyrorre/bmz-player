@@ -92,6 +92,8 @@ where
     let mut playback_timeline = OutputPlaybackTimeline::default();
     let timing_enabled = bmz_core::latency::diagnostics_enabled();
     let mut previous_callback = None;
+    let mut previous_stream_callback: Option<::cpal::StreamInstant> = None;
+    let mut warmup_until = Instant::now() + Duration::from_secs(2);
     let error_diagnostics = Arc::clone(&diagnostics);
     device
         .build_output_stream(
@@ -106,14 +108,29 @@ where
                 }
 
                 let frames = data.len() / channels;
-                if timing_enabled {
+                if timing_enabled
+                    && (previous_callback.is_some_and(|previous| {
+                        callback_start.duration_since(previous) > Duration::from_secs(1)
+                    }) || previous_stream_callback.is_some_and(|previous| {
+                        info.timestamp().callback.checked_duration_since(previous).is_none()
+                    }))
+                {
+                    diagnostics.timing.reset();
+                    warmup_until = callback_start + Duration::from_secs(2);
+                    previous_callback = None;
+                }
+                let measure = timing_enabled && callback_start >= warmup_until;
+                if measure {
                     diagnostics.timing.observe(
                         frames,
                         callback_start,
                         previous_callback,
                         info.timestamp(),
                     );
+                }
+                if timing_enabled {
                     previous_callback = Some(callback_start);
+                    previous_stream_callback = Some(info.timestamp().callback);
                 }
                 let catch_up_frames = playback_timeline.catch_up_frames(
                     info.timestamp().playback,
@@ -141,7 +158,7 @@ where
                 diagnostics.rendered_frames.fetch_add(frames as u64, Ordering::Relaxed);
                 current_frame.store(start_frame.saturating_add(frames as u64), Ordering::Relaxed);
                 diagnostics.observe_callback_duration(callback_start);
-                if timing_enabled {
+                if measure {
                     diagnostics
                         .timing
                         .duration_ns

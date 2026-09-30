@@ -144,7 +144,22 @@ pub struct CpalSharedOutput {
     inner: Rc<CpalSharedOutputInner>,
 }
 
+#[derive(Debug, Clone)]
+pub struct CpalStreamInfo {
+    pub stream_id: u64,
+    pub requested_host: Option<CpalHostId>,
+    pub requested_device: Option<String>,
+    pub actual_host: String,
+    pub actual_device: String,
+    pub requested_rate: Option<u32>,
+    pub actual_rate: u32,
+    pub requested_frames: Option<u32>,
+    pub supported_frames: String,
+    pub cpal_buffer: String,
+}
+
 struct CpalSharedOutputInner {
+    info: CpalStreamInfo,
     stream: CpalOutputStream,
     // Audible CPAL stream must be dropped before releasing the shared engine-period request.
     #[cfg(windows)]
