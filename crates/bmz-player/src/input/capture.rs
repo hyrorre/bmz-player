@@ -226,6 +226,7 @@ impl InputCapture {
         keyboard.0 = requested.clone();
         keyboard.1 = None;
         keyboard.1 = match requested {
+            #[cfg(feature = "macos-iohid")]
             Some(crate::config::app_config::InputBackendKind::MacOsHid) => {
                 super::macos::MacKeyboard::start().map(MacKeyboard::Hid)
             }
@@ -285,6 +286,7 @@ impl InputCapture {
 
 #[cfg(target_os = "macos")]
 enum MacKeyboard {
+    #[cfg(feature = "macos-iohid")]
     Hid(super::macos::MacKeyboard),
     GameController(super::gamecontroller::Keyboard),
 }
@@ -293,12 +295,14 @@ enum MacKeyboard {
 impl MacKeyboard {
     fn active(&self) -> bool {
         match self {
+            #[cfg(feature = "macos-iohid")]
             Self::Hid(keyboard) => keyboard.active(),
             Self::GameController(keyboard) => keyboard.active(),
         }
     }
     fn set_route(&self, route: Option<InputRoute>) {
         match self {
+            #[cfg(feature = "macos-iohid")]
             Self::Hid(keyboard) => keyboard.set_route(route),
             Self::GameController(keyboard) => keyboard.set_route(route),
         }

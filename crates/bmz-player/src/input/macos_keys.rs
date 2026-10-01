@@ -1,3 +1,4 @@
+#[cfg(any(feature = "macos-iohid", test))]
 use std::collections::BTreeSet;
 use winit::keyboard::KeyCode;
 
@@ -117,7 +118,9 @@ pub(super) fn key(usage: u32) -> Option<KeyCode> {
 }
 
 #[derive(Default)]
+#[cfg(any(feature = "macos-iohid", test))]
 pub(super) struct Holds(BTreeSet<(usize, u32)>);
+#[cfg(any(feature = "macos-iohid", test))]
 impl Holds {
     /// Return a logical edge only when the aggregate changes. Duplicate reports
     /// and releasing one of two keyboards cannot release the logical key.

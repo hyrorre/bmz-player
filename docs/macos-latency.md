@@ -6,6 +6,10 @@
 
 ## 入力の切り替え
 
+IOHIDは`bmz-player`の`macos-iohid` featureでのみコンパイルし、default featureには含めない。
+利用する場合は`cargo run -p bmz-player --features macos-iohid`で起動する。
+通常ビルドの選択肢にはIOHIDを表示しない。GCKeyboard/GameControllerはこのfeatureに依存しない。
+
 設定 → 入力デバイス → キーボードバックエンドで `winit` / `macOS IOHID` を選ぶ。
 保存先はapp configの `[input] backend = "Winit"` / `"MacOsHid"`。
 ゲームパッドを無効にしてもIOHIDを利用できる。UIの文字入力とIMEはwinitに残る。
@@ -19,7 +23,8 @@ gameplayのwakerを起こし、ウィンドウ側のイベント消費や描画�
 
 要求バックエンドと動作状態は別。IOHIDManagerが開いている表示は、実キーの受信確認や
 遅延改善の証明ではない。無操作だけでは故障と判断しない。
-macOS以外でMacOsHidを読んだ場合はAutoへ移行する（WindowsではRaw Input、それ以外ではwinit）。
+macOS以外、または`macos-iohid`が無効なビルドでMacOsHidを読んだ場合はAutoへ移行する
+（WindowsではRaw Input、それ以外ではwinit）。IOHIDを再利用する場合はfeatureを有効にして選び直す。
 
 ### 権限・失敗・復帰
 
@@ -181,7 +186,7 @@ stream.idごとに別集計。1秒超のcallback停止、CPAL時計逆行、macO
 resourceは同じcheckoutのdataを指定できる。既存DBを動作中にコピーしない。
 
 ```sh
-cargo build -p bmz-player --release --locked
+cargo build -p bmz-player --release --locked --features macos-iohid
 BMZ_DATA_DIR=/absolute/path/to/latency-test-data \
 BMZ_RESOURCE_DIR=/absolute/path/to/bmz-player/data \
 BMZ_LATENCY_DIAGNOSTICS=1 RUST_LOG=info \
@@ -193,7 +198,7 @@ python3 scripts/compare-latency.py /tmp/winit-256.log /tmp/iohid-256.log
 ローカルdebug `.app` の検証例（正式配布物の署名・notarization検証とは別）:
 
 ```sh
-cargo build -p bmz-player --locked
+cargo build -p bmz-player --locked --features macos-iohid
 bash scripts/package-macos-app.sh --debug --skip-build \
   --out-dir /tmp/bmz-latency-package --skip-rust-license-report
 open -n -W '/tmp/bmz-latency-package/BMZ Player.app' \

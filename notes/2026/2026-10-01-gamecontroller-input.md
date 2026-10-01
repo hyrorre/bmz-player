@@ -87,6 +87,32 @@ GCKeyboardとGCControllerを段階的に追加する。
 - ローカルログ: `.local/performance/input-settings-tests.log`、
   `.local/performance/input-settings.zcl5iD/`。一時アプリ・設定・DBはGit管理外。
 
+## 第4段階: IOHIDのfeature化
+
+- `bmz-player`に`macos-iohid` featureを追加し、default featureには含めない。
+  Rust backend・native IOHID bridge・許可要求UIはmacOSかつfeature有効時だけコンパイルする。
+- GameControllerとIOHIDが共有する前面確認・Mach時計取得を`native/input_common.c`へ分離する。
+  GCKeyboard/GameControllerは通常ビルドでも引き続き利用できる。
+- feature無効時はIOHIDを設定候補から隠し、保存済みの`MacOsHid`は読み込み時にAutoへ戻す。
+  他の入力設定を維持し、有効ビルドではIOHID選択を保持する。
+- 有効化・検証用パッケージの手順をdocsへ反映する。
+
+### 検証
+
+- macOS 26.6.2 aarch64でfmt成功。通常ビルドと`--features macos-iohid`の両方で
+  check、all-targets Clippy、debug build成功。
+- 全体直列テストは通常ビルド2096件、feature有効ビルド2098件成功。両方とも6件ignore。
+  featureによる候補表示と保存済み設定の移行・保持を確認するテストを追加した。
+- 実行ファイルのsymbolを確認。通常ビルドではIOHIDのopen/close/許可要求が含まれず、
+  有効ビルドでは含まれる。共通の前面確認・時計取得とGC bridgeは両方に残る。
+- 共通C helperとIOHID bridgeはIntel macOS 10.13指定のSDK構文検査でwarning/errorなし。
+- 一時設定/DBで通常ビルドの同梱sample譜面をautoplayし、正常終了を確認。
+  `MacOsHid`の保存済み選択はAutoへ移行し、GCKeyboard/GameControllerの同時初期化も確認した。
+- IOHIDの許可付与・実キー入力、macOS 10.x/Intel・他OSの実機確認は未実施。
+- ローカルログ: `.local/performance/iohid-feature-default-tests.log`、
+  `.local/performance/iohid-feature-enabled-tests.log`、
+  `.local/performance/iohid-feature.NTd9OT/`。設定・DB・ログはGit管理外。
+
 ## 参照
 
 - [Apple: modern physical input](https://github.com/apple/game-porting-toolkit/blob/main/game-porting-skills/skills/using-game-controller/reference/modern-input.md)

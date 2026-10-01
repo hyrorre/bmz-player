@@ -6,7 +6,7 @@ pub mod gamecontroller;
 pub mod gameinput;
 pub mod gamepad;
 pub mod gilrs;
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "macos-iohid"))]
 pub mod macos;
 #[cfg(any(target_os = "macos", test))]
 mod macos_clock;

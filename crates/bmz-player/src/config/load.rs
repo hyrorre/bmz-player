@@ -67,6 +67,26 @@ mod tests {
     }
 
     #[test]
+    fn parse_app_config_respects_iohid_feature() {
+        let mut config = AppConfig::default();
+        config.input.backend = InputBackendKind::MacOsHid;
+        let loaded = parse_app_config(&toml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(
+            loaded.input.backend,
+            if cfg!(all(target_os = "macos", feature = "macos-iohid")) {
+                InputBackendKind::MacOsHid
+            } else {
+                InputBackendKind::Auto
+            }
+        );
+        config.input.backend = loaded.input.backend.clone();
+        assert_eq!(
+            toml::to_string(&loaded.input).unwrap(),
+            toml::to_string(&config.input).unwrap()
+        );
+    }
+
+    #[test]
     fn parse_profile_config_migrates_only_antique_bga_brightness_and_preserves_new_choice() {
         use crate::config::profile_config::{SkinHistoryEntryConfig, SkinOffsetConfig};
         let antique = "data/skins/mz-select/play/antique/system/play7main.luaskin";

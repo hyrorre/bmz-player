@@ -436,7 +436,7 @@ pub enum InputBackendKind {
     Auto,
     Winit,
     RawInput,
-    /// Opt-in macOS IOHID capture; other platforms keep winit.
+    /// Opt-in macOS IOHID capture, compiled only with the `macos-iohid` feature.
     MacOsHid,
     /// Permission-free foreground keyboard capture on macOS 11+.
     MacOsGameController,

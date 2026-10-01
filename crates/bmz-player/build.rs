@@ -15,13 +15,18 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
     }
-    println!("cargo:rerun-if-changed=native/keyboard.c");
+    println!("cargo:rerun-if-changed=native/input_common.c");
     cc::Build::new()
-        .file("native/keyboard.c")
+        .file("native/input_common.c")
         .flag("-Wno-deprecated-declarations")
-        .compile("bmz_keyboard");
-    for framework in ["IOKit", "CoreFoundation", "Carbon"] {
+        .compile("bmz_input_common");
+    for framework in ["CoreFoundation", "Carbon"] {
         println!("cargo:rustc-link-lib=framework={framework}");
+    }
+    if std::env::var_os("CARGO_FEATURE_MACOS_IOHID").is_some() {
+        println!("cargo:rerun-if-changed=native/keyboard.c");
+        cc::Build::new().file("native/keyboard.c").compile("bmz_keyboard");
+        println!("cargo:rustc-link-lib=framework=IOKit");
     }
     println!("cargo:rerun-if-changed=native/gamecontroller.m");
     cc::Build::new()

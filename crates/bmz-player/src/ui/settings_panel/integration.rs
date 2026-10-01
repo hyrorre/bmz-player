@@ -110,7 +110,7 @@ pub(super) fn build_integration_settings_sections(
                 };
                 ui.label(text.text(key));
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "macos-iohid"))]
             if config.input.backend == InputBackendKind::MacOsHid {
                 let status = crate::input::macos::status();
                 let key = match status {

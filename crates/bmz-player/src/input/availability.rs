@@ -13,7 +13,7 @@ impl BackendAvailability {
     pub(crate) fn current() -> Self {
         Self {
             raw_input: cfg!(windows),
-            macos_hid: cfg!(target_os = "macos"),
+            macos_hid: cfg!(all(target_os = "macos", feature = "macos-iohid")),
             gamecontroller: {
                 #[cfg(target_os = "macos")]
                 {
@@ -73,7 +73,7 @@ impl BackendAvailability {
 
     pub(crate) fn normalize_config(self, config: &mut GlobalInputConfig) {
         if !self.supports_keyboard(&config.backend) {
-            tracing::warn!(backend = ?config.backend, "input backend unavailable on this platform; using auto");
+            tracing::warn!(backend = ?config.backend, "input backend unavailable in this build or on this platform; using auto");
             config.backend = InputBackendKind::Auto;
         }
         if !self.supports_gamepad(config.gamepad_backend) {
@@ -89,6 +89,15 @@ mod tests {
 
     fn platform(raw_input: bool, macos_hid: bool, gamecontroller: bool) -> BackendAvailability {
         BackendAvailability { raw_input, macos_hid, gamecontroller, gameinput: false }
+    }
+
+    #[test]
+    fn iohid_choice_requires_macos_and_opt_in_feature() {
+        let available = BackendAvailability::current();
+        assert_eq!(
+            available.keyboards().any(|backend| backend == InputBackendKind::MacOsHid),
+            cfg!(all(target_os = "macos", feature = "macos-iohid"))
+        );
     }
 
     #[test]

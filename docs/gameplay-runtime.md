@@ -34,7 +34,7 @@ skin、egui、surface acquire / submit / present を担当する。
   scratch停止は同じqueueの1ms timerで確認する。履歴の軸処理は入力サンプル時刻で進める。
 - Gameplay に送る入力と、メニュー・キー設定用の UI コピーは別キューにする。
   UI のコピーが滞留しても gameplay の配送には影響しない。
-- macOS / Linux のゲームパッドも独立取得する。macOSキーボードは任意選択のIOHID専用run loop、
+- macOS / Linux のゲームパッドも独立取得する。macOSキーボードは`macos-iohid` featureで有効化したIOHID専用run loop、
   またはmacOS 11以降のGCKeyboard専用dispatch queueで独立取得できる。
   winitを選んだ場合とLinuxではwindow/event-loop停止中のキーボード取得遅延が残る。
 - 判定時刻の変換は既存の `AudioClock`、`InputTimestampAnchor`、input offset を使う。
