@@ -144,6 +144,18 @@ pub(super) fn result_lua_runtime_number_values_for_summary(
     let difference = |current: u32, previous: u32| value(current).saturating_sub(value(previous));
     number_values.insert(71, value(summary.ex_score));
     number_values.insert(74, value(summary.total_notes));
+    // Lua skins choose number sheets while loading; use the same next-rank
+    // calculation as rendering rather than letting ref 154 fall back to zero.
+    let grade_state = bmz_render::skin::SkinDrawState {
+        ex_score: summary.ex_score,
+        total_notes: summary.total_notes,
+        ..Default::default()
+    };
+    number_values.insert(
+        154,
+        bmz_render::skin::lua_main_state_number(154, &grade_state)
+            .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+    );
     number_values.insert(101, value(summary.ex_score));
     number_values.insert(171, value(summary.ex_score));
     number_values.insert(107, summary.gauge_value.floor().clamp(0.0, i32::MAX as f32) as i32);

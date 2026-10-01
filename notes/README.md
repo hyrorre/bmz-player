@@ -33,6 +33,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-01 | [Starseeker ResultのMAX符号とLuaロード値](2026/2026-10-01-starseeker-result-next-rank.md) |
 | 2026-10-01 | [リプレイ視聴速度による採点差の修正](2026/2026-10-01-replay-speed-scoring.md) |
 | 2026-09-30 | [テキスト装飾の透明度修正](2026/2026-09-30-text-decoration-opacity.md) |
 | 2026-09-30 | [antique Ambient背景の実装・検証](2026/2026-09-30-antique-ambient.md) |
