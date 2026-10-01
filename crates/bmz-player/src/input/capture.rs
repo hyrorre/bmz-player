@@ -215,6 +215,23 @@ impl InputCapture {
         self.native_keyboard.load(Ordering::Acquire)
     }
     #[cfg(target_os = "macos")]
+    pub fn route_gc_window_event(
+        &self,
+        event: &bmz_gameplay::input::backend::DeviceInputEvent,
+        input: &SharedInputBackend,
+    ) -> Option<bool> {
+        if event.device != super::winit::W_KEYBOARD_DEVICE_ID {
+            return None;
+        }
+        let keyboard = self.mac_keyboard.lock().unwrap_or_else(|e| e.into_inner());
+        match &keyboard.1 {
+            Some(MacKeyboard::GameController(keyboard)) => {
+                Some(keyboard.window_event(event.clone(), input))
+            }
+            _ => None,
+        }
+    }
+    #[cfg(target_os = "macos")]
     pub fn configure_mac_keyboard(
         &self,
         requested: Option<crate::config::app_config::InputBackendKind>,

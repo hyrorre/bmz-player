@@ -76,6 +76,8 @@ impl WinitApp {
     pub(super) fn window_keyboard_gameplay_enabled(&self) -> bool {
         self.keyboard_input_backend() == Some(KeyboardInputBackend::Window)
             && !(cfg!(target_os = "macos")
+                // GCKeyboard arbitrates each winit event under its routing lock.
+                && self.boot.app_config.input.backend != InputBackendKind::MacOsGameController
                 && self
                     .gamepad
                     .as_ref()
@@ -241,7 +243,16 @@ impl WinitApp {
         let Some(input) = self.play_input_backend() else {
             return;
         };
-        input.push_shared_event(event.clone());
+        #[cfg(target_os = "macos")]
+        let gc_delivery =
+            self.gamepad.as_ref().and_then(|capture| capture.route_gc_window_event(&event, &input));
+        #[cfg(not(target_os = "macos"))]
+        let gc_delivery: Option<bool> = None;
+        match gc_delivery {
+            Some(false) => return,
+            Some(true) => {}
+            None => input.push_shared_event(event.clone()),
+        }
         if self.play.active_play.is_some() {
             return;
         }

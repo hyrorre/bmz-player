@@ -69,6 +69,9 @@ impl Keyboard {
     pub fn active(&self) -> bool {
         keyboard_status() == 1
     }
+    pub fn window_event(&self, event: DeviceInputEvent, input: &SharedInputBackend) -> bool {
+        self.context.lock().unwrap_or_else(|e| e.into_inner()).window_event(event, input)
+    }
     pub fn set_route(&self, route: Option<InputRoute>) {
         let generation = {
             let mut state = self.context.lock().unwrap_or_else(|e| e.into_inner());
@@ -124,6 +127,7 @@ struct KeyboardState {
     connected: bool,
     failed: bool,
     events: u64,
+    fallback: super::capture::ButtonDelivery,
 }
 impl KeyboardState {
     fn status(&self) -> u8 {
@@ -149,11 +153,30 @@ impl KeyboardState {
         self.route = route;
     }
     fn release(&mut self) {
+        self.fallback.set_route(None);
         let held = std::mem::take(&mut self.held);
         for usage in held {
             self.deliver(usage, false, monotonic_timestamp_ns());
         }
         self.sink = None;
+    }
+    fn window_event(&mut self, event: DeviceInputEvent, input: &SharedInputBackend) -> bool {
+        // Window admission and native admission share this state's mutex. Never
+        // decide on an atomic status and enqueue later across a backend change.
+        if self.status() == 1 {
+            self.fallback.set_route(None);
+            return false;
+        }
+        let route = self
+            .route
+            .as_ref()
+            .filter(|r| r.focused && r.keyboard_enabled && r.input.same_source(input));
+        self.fallback.set_route(route);
+        if !self.fallback.active() {
+            return false;
+        }
+        self.fallback.push(event);
+        true
     }
     fn deliver(&self, usage: u32, pressed: bool, timestamp: u128) {
         if let (Some(sink), Some(key)) = (&self.sink, macos_keys::physical_key(usage))
@@ -203,9 +226,15 @@ impl KeyboardState {
             && foreground
             && self.route.as_ref().is_some_and(|r| r.focused && r.keyboard_enabled);
         if !eligible {
-            self.release();
+            // An unavailable native device must not clear a still-active winit
+            // fallback on every heartbeat. Focus/route loss releases both.
+            if !foreground || !self.route.as_ref().is_some_and(|r| r.focused && r.keyboard_enabled)
+            {
+                self.release();
+            }
             return;
         }
+        self.fallback.set_route(None);
         if self.sink.is_none() {
             self.sink = self.route.as_ref().map(|r| r.input.clone());
         }
@@ -248,6 +277,44 @@ mod tests {
             focused: true,
             keyboard_enabled: true,
         }
+    }
+    fn window_key(pressed: bool) -> DeviceInputEvent {
+        super::super::winit::physical_key_to_device_input(
+            macos_keys::physical_key(4).unwrap(),
+            if pressed {
+                winit::event::ElementState::Pressed
+            } else {
+                winit::event::ElementState::Released
+            },
+            false,
+        )
+        .unwrap()
+    }
+    #[test]
+    fn fallback_hold_is_released_before_native_reconnect_and_never_duplicated() {
+        let mut input = SharedInputBackend::default();
+        let mut state = KeyboardState { route: Some(route(input.clone())), ..Default::default() };
+        assert!(state.window_event(window_key(true), &input));
+        state.receive(0, 0, -3, 101, true);
+        assert_eq!(input.drain_events().len(), 1); // Waiting heartbeat preserves fallback hold.
+        state.receive(0, 0, -12, 102, true);
+        let releases = input.drain_events();
+        assert_eq!(releases.len(), 1);
+        assert_eq!(releases[0].kind, bmz_core::input::InputKind::Release);
+        assert!(!state.window_event(window_key(false), &input));
+        state.receive(0, 4, 0, 103, true); // Held-at-install key was not a native press.
+        assert!(input.drain_events().is_empty());
+        state.receive(0, 4, 1, 104, true);
+        assert!(!state.window_event(window_key(true), &input));
+        state.receive(0, 4, 0, 105, true);
+        assert!(!state.window_event(window_key(false), &input));
+        assert_eq!(input.drain_events().len(), 2);
+        state.receive(0, 0, -1, 106, true);
+        assert!(state.window_event(window_key(true), &input));
+        state.replace_route(None);
+        let events = input.drain_events();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1].kind, bmz_core::input::InputKind::Release);
     }
     #[test]
     fn short_press_release_preserves_edges_and_receipt_timestamps() {

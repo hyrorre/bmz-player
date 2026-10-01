@@ -113,7 +113,16 @@ GCKeyboardとGCControllerを段階的に追加する。
   `.local/performance/iohid-feature-enabled-tests.log`、
   `.local/performance/iohid-feature.NTd9OT/`。設定・DB・ログはGit管理外。
 
-## 参照
+## レビュー修正: キーボード復帰時の保持
+
+GCKeyboardとwinitの受理・配送をKeyboardStateの同じロックで排他化した。
+winitで受理した保持を専用のButtonDeliveryで追跡し、GC復帰前に旧sinkへ解放する。
+未接続時のheartbeatでwinit保持を解除しないこと、再接続・再押下・route終了を回帰テストで確認。
+player check / all-targets Clippy成功。実キーボードの抜き差し操作は未実施。
+player全体はsandbox内で2083件成功・6件ignored・ローカルsocket制限17件失敗。
+制限による失敗は関連モジュールをsandbox外で再実行し、すべて成功した。
+
+## 参照資料
 
 - [Apple: modern physical input](https://github.com/apple/game-porting-toolkit/blob/main/game-porting-skills/skills/using-game-controller/reference/modern-input.md)
 - [Apple: profile-based input](https://github.com/apple/game-porting-toolkit/blob/main/game-porting-skills/skills/using-game-controller/reference/profile-based-input.md)
