@@ -29,10 +29,14 @@ skin、egui、surface acquire / submit / present を担当する。
 - Windows HID Raw Input は同じ message thread が取得する。
 - gilrs / experimental GameInput と analog scratch の polling・停止検知も入力スレッドで行う。
   GameInput の構築、COM 使用、破棄は同じ owner thread 上に保つ。
+- macOS GameControllerは専用の直列dispatch queueから直接SharedInputBackendへ配送する。
+  macOS 14以降は入力履歴を通知時に全件drainし、11〜13は要素別callbackを使う。
+  scratch停止は同じqueueの1ms timerで確認する。履歴の軸処理は入力サンプル時刻で進める。
 - Gameplay に送る入力と、メニュー・キー設定用の UI コピーは別キューにする。
   UI のコピーが滞留しても gameplay の配送には影響しない。
-- macOS / Linux のゲームパッドも独立取得する。キーボードは従来の winit イベント取得を使うため、
-  これらの OS では window/event-loop 停止中のキーボード取得遅延が残る。
+- macOS / Linux のゲームパッドも独立取得する。macOSキーボードは`macos-iohid` featureで有効化したIOHID専用run loop、
+  またはmacOS 11以降のGCKeyboard専用dispatch queueで独立取得できる。
+  winitを選んだ場合とLinuxではwindow/event-loop停止中のキーボード取得遅延が残る。
 - 判定時刻の変換は既存の `AudioClock`、`InputTimestampAnchor`、input offset を使う。
   wall clock の時刻補正に依存しない。GameInput 等の既存 backend timestamp 変換は維持する。
 
@@ -51,6 +55,12 @@ replay recording、autoplay、終了判定を処理する。keysound と BGM は
 callback には判定・入力処理を移していない。command scratch と通常再生用 queue / voice 領域は
 callback 接続前に事前確保し、callback は
 queue と engine の `try_lock` に失敗した場合も待機しない。
+
+macOSの実験用Core Audio IOProcも同じNativeOutputRenderer・source command queue・
+AudioEngineを使う。HALの出力バッファへfloat PCMを書き、出力時刻の大きな欠落は既存の
+frame座標を前進させて処理する。取得・判定・音声コマンドの所有権と旧playの取消を維持する。
+IOProcの登録・開始・停止・解除とcontext破棄はapp側で行い、停止・解除後にcontextを解放する。
+出力形式やレートが変わった場合は無音化し、設定再適用による再生成を必要とする。
 
 ## Snapshot とイベント
 
@@ -125,3 +135,8 @@ stall harness は実際の専用 worker と 240fps 相当 consumer を使い、c
 旧 advance との score / gauge / LN state / replay / result 一致、autoplay / replay の一致、
 callback 到着遅延が render stall によって増えないこと、snapshot 時計の非逆行を検証する。
 物理デバイス、driver、DWM、実 GPU の遅延はこの harness の測定対象ではない。
+## macOS入力・音声診断への案内
+
+macOSの独立IOHID入力、時計変換、診断の測定境界と100ms停滞試験は
+[macOS遅延検証](macos-latency.md) を参照。winit経路のOSイベント時刻は測定不可として扱い、
+入力キューの観測時刻と判定用タイムスタンプを分離する。

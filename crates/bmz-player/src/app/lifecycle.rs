@@ -303,6 +303,26 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 let drain_us = instant_elapsed_us_u64(drain_start);
                 let input_start = Instant::now();
                 self.sync_input_capture_target();
+                if crate::cli::latency_stall_test_enabled() {
+                    thread_local! { static LAST_STALL: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) }; }
+                    let due = LAST_STALL.with(|last| {
+                        let now = Instant::now();
+                        if last
+                            .get()
+                            .is_none_or(|at| now.duration_since(at) >= Duration::from_secs(2))
+                        {
+                            last.set(Some(now));
+                            true
+                        } else {
+                            false
+                        }
+                    });
+                    if due {
+                        // Only winit's window thread sleeps; capture, gameplay and
+                        // audio keep their own clocks and wake sources.
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                }
                 self.reconcile_keyboard_modifier_releases();
                 self.consume_captured_gamepad_events();
                 if !self.viewer_waiting {

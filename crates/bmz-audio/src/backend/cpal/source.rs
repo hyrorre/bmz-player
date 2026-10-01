@@ -17,10 +17,19 @@ impl CpalOutput {
 }
 
 impl CpalSharedOutput {
+    pub fn stream_info(&self) -> &CpalStreamInfo {
+        &self.inner.info
+    }
     pub fn play(&self) -> Result<(), CpalBackendError> {
         match &self.inner.stream {
             CpalOutputStream::Cpal(stream) => {
                 stream.play().map_err(CpalBackendError::PlayStream)?;
+            }
+            #[cfg(all(target_os = "macos", feature = "experimental-coreaudio-ioproc"))]
+            CpalOutputStream::CoreAudioIoProc(stream) => {
+                stream
+                    .play()
+                    .map_err(|error| CpalBackendError::CoreAudioIoProc(error.to_string()))?;
             }
             #[cfg(windows)]
             CpalOutputStream::WasapiExclusive(stream) => {

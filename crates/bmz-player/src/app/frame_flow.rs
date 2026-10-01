@@ -271,6 +271,7 @@ impl WinitApp {
                 update_dialog,
                 obs_connection_status: &obs_connection_status,
                 connected_gamepads: &connected_gamepads,
+                audio_stream_info: self.audio.audio_runtime.as_ref().map(AudioRuntime::stream_info),
             },
         );
         self.ui.egui = Some(egui);
@@ -283,6 +284,9 @@ impl WinitApp {
         scene_kind: AppSceneKind,
         scene: &'static str,
     ) -> bool {
+        if crate::cli::latency_stall_test_enabled() {
+            return false;
+        }
         let practice_overlay = self
             .play
             .practice_session

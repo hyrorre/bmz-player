@@ -13,6 +13,14 @@ impl CpalBackend {
     }
 
     pub fn open_shared(config: CpalOutputConfig) -> Result<CpalSharedOutput, CpalBackendError> {
+        static NEXT_STREAM: AtomicU64 = AtomicU64::new(1);
+        let stream_id = NEXT_STREAM.fetch_add(1, Ordering::Relaxed);
+        let requested_host = config.host;
+        let requested_device = config.output_device_name.clone();
+        #[cfg(all(target_os = "macos", feature = "experimental-coreaudio-ioproc"))]
+        if requested_host == Some(CpalHostId::CoreAudioIoProc) {
+            return ioproc::open_shared(config, stream_id);
+        }
         let host = match config.host {
             Some(host_id) => {
                 let Some(cpal_host_id) = cpal_host_id(host_id) else {
@@ -80,6 +88,18 @@ impl CpalBackend {
             );
             return Ok(CpalSharedOutput {
                 inner: Rc::new(CpalSharedOutputInner {
+                    info: CpalStreamInfo {
+                        stream_id,
+                        requested_host,
+                        requested_device,
+                        actual_host: format!("{:?}", host.id()),
+                        actual_device: device_name(&device),
+                        requested_rate: requested_sample_rate,
+                        actual_rate: info.sample_rate,
+                        requested_frames: requested_buffer_size,
+                        supported_frames: "native WASAPI".into(),
+                        cpal_buffer: format!("native {}", info.buffer_frames),
+                    },
                     stream: CpalOutputStream::WasapiExclusive(stream),
                     _low_latency_guard: None,
                     host_id: host.id(),
@@ -229,6 +249,18 @@ impl CpalBackend {
 
         Ok(CpalSharedOutput {
             inner: Rc::new(CpalSharedOutputInner {
+                info: CpalStreamInfo {
+                    stream_id,
+                    requested_host,
+                    requested_device,
+                    actual_host: format!("{:?}", host.id()),
+                    actual_device: device_name,
+                    requested_rate: requested_sample_rate,
+                    actual_rate: sample_rate,
+                    requested_frames: requested_buffer_size,
+                    supported_frames: format!("{supported_buffer_size:?}"),
+                    cpal_buffer: format!("{:?}", config.buffer_size),
+                },
                 stream: CpalOutputStream::Cpal(stream),
                 #[cfg(windows)]
                 _low_latency_guard: low_latency_guard,
@@ -316,6 +348,11 @@ pub(super) fn cpal_host_id(host: CpalHostId) -> Option<::cpal::HostId> {
         CpalHostId::CoreAudio => Some(::cpal::HostId::CoreAudio),
         #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         CpalHostId::CoreAudio => None,
+
+        #[cfg(all(target_os = "macos", feature = "experimental-coreaudio-ioproc"))]
+        CpalHostId::CoreAudioIoProc => Some(::cpal::HostId::CoreAudio),
+        #[cfg(not(all(target_os = "macos", feature = "experimental-coreaudio-ioproc")))]
+        CpalHostId::CoreAudioIoProc => None,
 
         #[cfg(target_os = "linux")]
         CpalHostId::Alsa => Some(::cpal::HostId::Alsa),

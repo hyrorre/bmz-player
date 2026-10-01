@@ -128,6 +128,7 @@ impl AudioEngineCommand {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AudioCommandQueueDiagnostics {
+    pub enqueue_to_apply_ns: bmz_core::latency::DistributionSummary,
     pub scheduled_sound_count: u64,
     pub scheduling_late_frames: u64,
     pub scheduling_max_late_frames: u64,
@@ -142,6 +143,7 @@ pub struct AudioCommandQueueDiagnostics {
 
 #[derive(Debug)]
 struct AudioCommandQueueCounters {
+    enqueue_to_apply_ns: bmz_core::latency::AtomicLatencyHistogram,
     scheduled_sound_count: AtomicU64,
     scheduling_late_frames: AtomicU64,
     scheduling_max_late_frames: AtomicU64,
@@ -157,6 +159,7 @@ struct AudioCommandQueueCounters {
 impl Default for AudioCommandQueueCounters {
     fn default() -> Self {
         Self {
+            enqueue_to_apply_ns: Default::default(),
             scheduled_sound_count: AtomicU64::new(0),
             scheduling_late_frames: AtomicU64::new(0),
             scheduling_max_late_frames: AtomicU64::new(0),
@@ -173,8 +176,28 @@ impl Default for AudioCommandQueueCounters {
 
 #[derive(Debug)]
 struct QueuedCommand {
+    enqueued: Option<std::time::Instant>,
     command: AudioEngineCommand,
     cancelled: Option<Arc<AtomicBool>>,
+}
+
+#[cfg(test)]
+mod delivery_timing_tests {
+    use super::*;
+    #[test]
+    fn command_age_is_observed_at_apply_without_changing_command() {
+        let handle = AudioEngineHandle::new(AudioEngine::new(48_000));
+        handle.inner.queue.lock().unwrap().push_back(QueuedCommand {
+            enqueued: Some(std::time::Instant::now() - std::time::Duration::from_millis(1)),
+            command: AudioEngineCommand::SetMasterGain { gain: 0.5 },
+            cancelled: None,
+        });
+        handle.processor().apply_pending_commands_for_tests();
+        let summary = handle.diagnostics().enqueue_to_apply_ns;
+        assert_eq!(summary.count, 1);
+        assert!(summary.max >= 1_000_000);
+        assert_eq!(handle.diagnostics().drained, 1);
+    }
 }
 impl QueuedCommand {
     fn is_cancelled(&self) -> bool {
@@ -348,12 +371,12 @@ impl AudioEngineHandle {
                     self.inner.counters.coalesced.fetch_add(coalesced as u64, Ordering::Relaxed);
                 }
                 let command_count = commands.len() as u64;
-                queue.extend(
-                    commands.into_iter().map(|command| QueuedCommand {
-                        command,
-                        cancelled: self.cancelled.clone(),
-                    }),
-                );
+                queue.extend(commands.into_iter().map(|command| QueuedCommand {
+                    enqueued:
+                        bmz_core::latency::diagnostics_enabled().then(std::time::Instant::now),
+                    command,
+                    cancelled: self.cancelled.clone(),
+                }));
                 self.inner.counters.submitted.fetch_add(command_count, Ordering::Relaxed);
                 update_atomic_max(&self.inner.counters.max_depth, queue.len() as u64);
                 true
@@ -496,7 +519,12 @@ impl AudioEngineHandle {
                 if coalesced != 0 {
                     self.inner.counters.coalesced.fetch_add(coalesced as u64, Ordering::Relaxed);
                 }
-                queue.push_back(QueuedCommand { command, cancelled: self.cancelled.clone() });
+                queue.push_back(QueuedCommand {
+                    enqueued: bmz_core::latency::diagnostics_enabled()
+                        .then(std::time::Instant::now),
+                    command,
+                    cancelled: self.cancelled.clone(),
+                });
                 self.inner.counters.submitted.fetch_add(1, Ordering::Relaxed);
                 update_atomic_max(&self.inner.counters.max_depth, queue.len() as u64);
                 Ok(())
@@ -572,6 +600,12 @@ impl CommandedAudioEngine {
             if queued.is_cancelled() {
                 continue;
             }
+            if let Some(enqueued) = queued.enqueued {
+                self.inner
+                    .counters
+                    .enqueue_to_apply_ns
+                    .record(enqueued.elapsed().as_nanos().min(u64::MAX as u128) as u64);
+            }
             let command = queued.command;
             // Only atomic counters here: the audio callback must never log,
             // allocate a diagnostic buffer, or wait for the diagnostics reader.
@@ -597,6 +631,7 @@ impl CommandedAudioEngine {
 impl AudioCommandQueueInner {
     fn diagnostics(&self) -> AudioCommandQueueDiagnostics {
         AudioCommandQueueDiagnostics {
+            enqueue_to_apply_ns: self.counters.enqueue_to_apply_ns.summary(),
             scheduled_sound_count: self.counters.scheduled_sound_count.load(Ordering::Relaxed),
             scheduling_late_frames: self.counters.scheduling_late_frames.load(Ordering::Relaxed),
             scheduling_max_late_frames: self

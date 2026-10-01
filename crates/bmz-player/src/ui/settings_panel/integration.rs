@@ -90,54 +90,64 @@ pub(super) fn build_integration_settings_sections(
         .scope(tr!(text, "settings-scope-app"))
         .id_salt("settings_input")
         .show(ui, |ui| {
+            let available = crate::input::availability::BackendAvailability::current();
             egui::ComboBox::new("input_backend", tr!(text, "settings-input-keyboard-backend"))
                 .selected_text(input_backend_label(&config.input.backend, text))
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut config.input.backend,
-                        InputBackendKind::Auto,
-                        input_backend_label(&InputBackendKind::Auto, text),
-                    );
-                    ui.selectable_value(
-                        &mut config.input.backend,
-                        InputBackendKind::Winit,
-                        input_backend_label(&InputBackendKind::Winit, text),
-                    );
-                    ui.selectable_value(
-                        &mut config.input.backend,
-                        InputBackendKind::RawInput,
-                        input_backend_label(&InputBackendKind::RawInput, text),
-                    );
+                    for backend in available.keyboards() {
+                        let label = input_backend_label(&backend, text);
+                        ui.selectable_value(&mut config.input.backend, backend, label);
+                    }
                 });
+            #[cfg(target_os = "macos")]
+            if config.input.backend == InputBackendKind::MacOsGameController {
+                let key = match crate::input::gamecontroller::keyboard_status() {
+                    1 => "settings-input-gc-keyboard-active",
+                    2 => "settings-input-gc-keyboard-waiting",
+                    4 => "settings-input-gc-keyboard-unsupported",
+                    3 => "settings-input-gc-failed",
+                    _ => "settings-input-gc-unavailable",
+                };
+                ui.label(text.text(key));
+            }
+            #[cfg(all(target_os = "macos", feature = "macos-iohid"))]
+            if config.input.backend == InputBackendKind::MacOsHid {
+                let status = crate::input::macos::status();
+                let key = match status {
+                    1 => "settings-input-macos-active",
+                    2 => "settings-input-macos-permission",
+                    3 => "settings-input-macos-failed",
+                    4 => "settings-input-macos-exclusive",
+                    _ => "settings-input-macos-inactive",
+                };
+                ui.label(text.text(key));
+                if status == 2 && ui.button(tr!(text, "settings-input-macos-request")).clicked() {
+                    crate::input::macos::request_permission();
+                }
+                if matches!(status, 2..=4) {
+                    ui.label(tr!(text, "settings-input-macos-retry"));
+                }
+            }
             egui::ComboBox::new("gamepad_backend", tr!(text, "settings-input-gamepad-backend"))
                 .selected_text(gamepad_backend_label(&config.input.gamepad_backend, text))
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut config.input.gamepad_backend,
-                        GamepadBackendKind::Auto,
-                        gamepad_backend_label(&GamepadBackendKind::Auto, text),
-                    );
-                    ui.selectable_value(
-                        &mut config.input.gamepad_backend,
-                        GamepadBackendKind::Gilrs,
-                        gamepad_backend_label(&GamepadBackendKind::Gilrs, text),
-                    );
-                    #[cfg(windows)]
-                    ui.selectable_value(
-                        &mut config.input.gamepad_backend,
-                        GamepadBackendKind::RawInput,
-                        gamepad_backend_label(&GamepadBackendKind::RawInput, text),
-                    );
-                    #[cfg(all(windows, feature = "experimental-gameinput"))]
-                    ui.selectable_value(
-                        &mut config.input.gamepad_backend,
-                        GamepadBackendKind::GameInput,
-                        gamepad_backend_label(&GamepadBackendKind::GameInput, text),
-                    );
+                    for backend in available.gamepads() {
+                        let label = gamepad_backend_label(&backend, text);
+                        ui.selectable_value(&mut config.input.gamepad_backend, backend, label);
+                    }
                 });
+            #[cfg(target_os = "macos")]
+            if config.input.gamepad_backend == GamepadBackendKind::GameController {
+                ui.label(text.text(match crate::input::gamecontroller::pad_status() {
+                    1 | 2 => "settings-input-gc-pad-active",
+                    3 => "settings-input-gc-pad-waiting",
+                    4 => "settings-input-gc-failed",
+                    _ => "settings-input-gc-unavailable",
+                }));
+                ui.label(tr!(text, "settings-input-gc-pad-help"));
+            }
             ui.checkbox(&mut config.input.keyboard_enabled, tr!(text, "settings-input-keyboard"));
             ui.checkbox(&mut config.input.gamepad_enabled, tr!(text, "settings-input-gamepad"));
-            ui.label(tr!(text, "settings-input-backend-help"));
             ui.separator();
             ui.label(tr!(text, "settings-input-controller-assignment"));
             ui.label(tr!(
@@ -236,7 +246,11 @@ pub(super) fn build_integration_settings_sections(
                     config.input.gamepad_slot_gilrs_ids = [None, None];
                 }
             });
-            ui.label(tr!(text, "settings-input-assignment-help"));
+            if config.input.gamepad_backend == GamepadBackendKind::GameController {
+                ui.label(tr!(text, "settings-input-gc-assignment-help"));
+            } else {
+                ui.label(tr!(text, "settings-input-assignment-help"));
+            }
         });
 
     SettingsSection::new(SettingsPage::General, tr!(text, "settings-logging-title"))

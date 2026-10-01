@@ -152,6 +152,7 @@ pub enum AudioBackend {
     Wasapi,
     Asio,
     CoreAudio,
+    CoreAudioIoProc,
     Alsa,
     Pulse,
     PipeWire,
@@ -372,7 +373,12 @@ pub struct GlobalInputConfig {
     pub keyboard_enabled: bool,
     pub gamepad_enabled: bool,
     /// 論理スロット `gamepad1` / `gamepad2` に割り当てるbackend非依存のデバイスID。
-    #[serde(default, skip_serializing_if = "gamepad_stable_slots_unassigned")]
+    #[serde(
+        default,
+        skip_serializing_if = "gamepad_stable_slots_unassigned",
+        serialize_with = "serialize_gamepad_stable_slots",
+        deserialize_with = "deserialize_gamepad_stable_slots"
+    )]
     pub gamepad_slot_device_ids: [Option<String>; 2],
     /// 旧設定との互換用gilrs `GamepadId`。stable IDへ移行後は保存しない。
     #[serde(
@@ -397,6 +403,21 @@ fn gamepad_stable_slots_unassigned(slots: &[Option<String>; 2]) -> bool {
     slots.iter().all(|slot| slot.is_none())
 }
 
+// TOML has no null array element. An empty string represents an unassigned
+// slot while preserving a saved assignment in the other slot.
+fn serialize_gamepad_stable_slots<S: serde::Serializer>(
+    slots: &[Option<String>; 2],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    slots.each_ref().map(|id| id.as_deref().unwrap_or("")).serialize(serializer)
+}
+fn deserialize_gamepad_stable_slots<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<[Option<String>; 2], D::Error> {
+    let slots = <[Option<String>; 2]>::deserialize(deserializer)?;
+    Ok(slots.map(|id| id.filter(|id| !id.is_empty())))
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "PascalCase")]
 pub enum GamepadBackendKind {
@@ -406,6 +427,8 @@ pub enum GamepadBackendKind {
     RawInput,
     /// 既存configの読み込み互換と実験ビルド用にのみ保持する。
     GameInput,
+    /// Foreground GameController capture on macOS 11+.
+    GameController,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -414,6 +437,10 @@ pub enum InputBackendKind {
     Auto,
     Winit,
     RawInput,
+    /// Opt-in macOS IOHID capture, compiled only with the `macos-iohid` feature.
+    MacOsHid,
+    /// Permission-free foreground keyboard capture on macOS 11+.
+    MacOsGameController,
     /// 旧configの読み込み互換用。load時にAutoへ移行する。
     Hid,
     /// 旧configの読み込み互換用。load時にAutoへ移行する。

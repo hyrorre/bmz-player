@@ -45,6 +45,84 @@ use crate::storage::common::configure_connection;
 use crate::storage::migration::{NETWORK_MIGRATIONS, SCORE_MIGRATIONS, run_migrations};
 
 #[test]
+fn latency_stall_test_never_persists_manual_result() {
+    // The process-wide launch flag must not leak into concurrently running tests.
+    if std::env::var_os("BMZ_TEST_LATENCY_CHILD").is_none() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "screens::play_finish::tests::latency_stall_test_never_persists_manual_result",
+            ])
+            .env("BMZ_TEST_LATENCY_CHILD", "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
+    crate::cli::configure_latency_stall_test(true);
+    let root = make_temp_dir("latency-no-save");
+    let paths = ProfilePaths {
+        root_dir: root.clone(),
+        profile_toml: root.join("profile.toml"),
+        collection_db: root.join("collection.db"),
+        score_db: root.join("score.db"),
+        network_db: root.join("network.db"),
+        replay_dir: root.join("replay"),
+    };
+    let mut conn = Connection::open_in_memory().unwrap();
+    configure_connection(&conn).unwrap();
+    run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+    let mut score_db = ScoreDatabase::from_connection(conn);
+    let mut network_db = open_network_db();
+    let replay = ReplayConfig {
+        auto_save: true,
+        compress: false,
+        slot_rules: crate::config::profile_config::default_slot_rules(),
+    };
+    let ir = IrConfig {
+        providers: vec![IrProviderConfig {
+            provider: "bms-ir".into(),
+            provider_key: "bms-ir".into(),
+            base_url: crate::ir::bms_ir::BMS_IR_DEFAULT_BASE_URL.into(),
+            enabled: true,
+            account_display_name: "Player".into(),
+            account_id: "account-1".into(),
+            send_policy: Default::default(),
+            role: Default::default(),
+            last_login_at: None,
+            last_success_at: None,
+        }],
+        ..Default::default()
+    };
+    let session = session();
+    let finished = finish_session_result(
+        &mut score_db,
+        &mut network_db,
+        FinishSessionResultRequest {
+            profile_paths: &paths,
+            replay_config: &replay,
+            ir_config: &ir,
+            session: &session,
+            source_ln_profile: ChartLnProfile::from_chart(&session.chart),
+            chart_length_ms: None,
+            play_duration_ms: None,
+            played_at: 1_700_000_102,
+            applied_arrange: &AppliedArrange::default(),
+            target_ex_score: None,
+            score_key: score_key(&session),
+            practice_mode: false,
+            finish_mode: FinishResultMode::Normal,
+        },
+    )
+    .unwrap();
+    assert!(score_db.best_scores_for_charts(&[score_key(&session)]).unwrap().is_empty());
+    assert_eq!(finished.summary.saved_replay_slots, [false; 4]);
+    assert_eq!(finished.summary.ir_queued_jobs, 0);
+    assert!(!paths.replay_dir.exists());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn should_send_ir_score_follows_policy() {
     use crate::config::profile_config::IrSendPolicyConfig;
     use crate::storage::score_db::BestScoreSummary;

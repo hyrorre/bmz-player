@@ -8,7 +8,8 @@ use bmz_gameplay::input::backend::{DeviceInputEvent, InputBackend, InputEventSin
 
 #[derive(Debug, Clone, Default)]
 pub struct SharedInputBackend {
-    buffer: Arc<Mutex<VecDeque<DeviceInputEvent>>>,
+    buffer: Arc<Mutex<VecDeque<(DeviceInputEvent, Option<std::time::Instant>)>>>,
+    delivery: Arc<bmz_core::latency::AtomicLatencyHistogram>,
     waker: Arc<Mutex<Option<std::thread::Thread>>>,
     overflow: Arc<AtomicU64>,
 }
@@ -22,6 +23,7 @@ impl SharedInputBackend {
         self.overflow.load(Ordering::Relaxed)
     }
     pub fn push_shared_event(&self, event: DeviceInputEvent) {
+        let enqueued = bmz_core::latency::diagnostics_enabled().then(std::time::Instant::now);
         if let Ok(mut buffer) = self.buffer.lock() {
             if buffer.len() == Self::CAPACITY {
                 if self.overflow.fetch_add(1, Ordering::Relaxed) == 0 {
@@ -31,7 +33,7 @@ impl SharedInputBackend {
                     );
                 }
             } else {
-                buffer.push_back(event);
+                buffer.push_back((event, enqueued));
             }
         }
         if let Ok(waker) = self.waker.lock()
@@ -39,6 +41,9 @@ impl SharedInputBackend {
         {
             waker.unpark();
         }
+    }
+    pub fn delivery_summary(&self) -> bmz_core::latency::DistributionSummary {
+        self.delivery.summary()
     }
 }
 
@@ -49,7 +54,21 @@ impl InputBackend for SharedInputBackend {
         }
     }
     fn drain_events(&mut self) -> Vec<DeviceInputEvent> {
-        self.buffer.lock().map(|mut buffer| buffer.drain(..).collect()).unwrap_or_default()
+        self.buffer
+            .lock()
+            .map(|mut buffer| {
+                buffer
+                    .drain(..)
+                    .map(|(event, enqueued)| {
+                        if let Some(enqueued) = enqueued {
+                            self.delivery
+                                .record(enqueued.elapsed().as_nanos().min(u64::MAX as u128) as u64);
+                        }
+                        event
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -65,6 +84,24 @@ mod tests {
     use bmz_gameplay::input::backend::{DeviceId, DeviceTimestamp, PhysicalControl};
 
     use super::*;
+
+    #[test]
+    fn diagnostic_receipt_time_does_not_replace_judgement_timestamp() {
+        let mut input = SharedInputBackend::default();
+        input.buffer.lock().unwrap().push_back((
+            DeviceInputEvent {
+                device: DeviceId(0),
+                control: PhysicalControl::KeyboardKey("Z".into()),
+                kind: InputKind::Press,
+                timestamp: DeviceTimestamp::MonotonicNs(123),
+                bounce_policy: Default::default(),
+            },
+            Some(std::time::Instant::now() - std::time::Duration::from_millis(10)),
+        ));
+        assert_eq!(input.drain_events()[0].timestamp, DeviceTimestamp::MonotonicNs(123));
+        assert_eq!(input.delivery_summary().count, 1);
+        assert!(input.delivery_summary().max >= 10_000_000);
+    }
 
     #[test]
     fn input_generations_have_independent_bounded_queues() {

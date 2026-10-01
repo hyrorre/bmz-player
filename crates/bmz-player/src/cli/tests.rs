@@ -819,3 +819,9 @@ fn help_text_lists_course_attempt() {
     let help = app_help_text();
     assert!(help.contains("course attempt"));
 }
+#[test]
+fn latency_stall_test_is_explicit_and_defaults_off() {
+    assert!(!AppOptions::default().latency_stall_test);
+    assert!(AppOptions::parse_args(["--latency-stall-test"]).unwrap().latency_stall_test);
+    assert!(app_help_text().contains("--latency-stall-test"));
+}

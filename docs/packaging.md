@@ -647,3 +647,18 @@ Flathub 提出前に `flatpak-cargo-generator.py` などで Cargo source を固�
 workflow は FFmpeg の package/version provenance を artifact と一緒に残し、
 `ffmpeg -version` に `--enable-nonfree` が含まれる場合は失敗する。FFmpeg library を
 bundle した artifact を公開する前に `docs/licenses.md` を確認する。
+## macOSの入力・時計API
+
+Core Audio IOProc音声は`experimental-coreaudio-ioproc` featureで有効にする実験用backendです。
+default featureに含まれ、通常のmacOSビルド・配布で選択できます。
+`Auto`と`Core Audio`は従来のCPAL / Audio Unit経路を維持し、設定でIOProcを明示選択した場合だけ使います。
+IOProc経路は入力streamのない機器だけにHAL IOProcを登録し、入力取得やprocess tapは使いません。
+非macOSまたはfeature無効のビルドでは候補を非表示にし、保存済みIOProc設定をAutoへ戻します。
+
+macOSのIOHID入力は`macos-iohid` featureでのみコンパイルし、default featureと通常配布には含めません。
+検証用に含める場合は`cargo build -p bmz-player --release --features macos-iohid`を先に実行し、
+`scripts/package-macos-app.sh --skip-build`でその実行ファイルをパッケージします。
+IOHIDを含めた場合も、権限要求は設定画面の明示操作だけで行います。
+package scriptはMach時計の経過時間計算に対応する `assets/PrivacyInfo.xcprivacy` を
+Resourcesへ含めます。最低対応macOS版は変更していません。
+CLI/.app別の権限・署名と実機検証は [macOS遅延検証](macos-latency.md) を参照してください。

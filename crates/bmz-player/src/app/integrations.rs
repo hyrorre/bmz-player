@@ -21,7 +21,16 @@ impl WinitApp {
         }
         self.fire_scene_transition_sounds(scene_kind);
         if let Some(window) = &self.window {
-            window.set_title(window_title_for_scene(scene_kind));
+            if crate::cli::latency_stall_test_enabled() {
+                let text = Localizer::new(self.boot.profile_config.ui.locale());
+                window.set_title(&format!(
+                    "{} — {}",
+                    window_title_for_scene(scene_kind),
+                    text.text("latency-test-no-save")
+                ));
+            } else {
+                window.set_title(window_title_for_scene(scene_kind));
+            }
         }
         self.publish_discord_presence_for_scene(scene_kind);
         tracing::info!(scene = ?scene_kind, title = window_title_for_scene(scene_kind), "app scene active");

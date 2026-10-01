@@ -26,6 +26,13 @@ fn serialize_app_config(config: &AppConfig) -> Result<String> {
         }
     }
     normalize_song_root_paths(&mut config.songs.roots);
+    // GCController exposes no public persistent hardware identifier. Runtime
+    // selections must not silently match a different pad in the next process.
+    for slot in &mut config.input.gamepad_slot_device_ids {
+        if slot.as_deref().is_some_and(|id| id.starts_with("gc-session:")) {
+            *slot = None;
+        }
+    }
     Ok(toml::to_string_pretty(&config)?)
 }
 
@@ -58,6 +65,19 @@ fn atomic_write(path: &Path, content: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::app_config::PathEntry;
+    #[test]
+    fn gamecontroller_runtime_assignment_is_not_persisted_or_confused_with_gilrs() {
+        let mut config = AppConfig::default();
+        config.input.gamepad_slot_device_ids =
+            [Some("gc-session:123:456:1".into()), Some("gilrs:1".into())];
+        let text = serialize_app_config(&config).unwrap();
+        let saved: AppConfig = toml::from_str(&text).unwrap();
+        assert_eq!(saved.input.gamepad_slot_device_ids, [None, Some("gilrs:1".into())]);
+        assert!(config.input.gamepad_slot_device_ids[0].is_some());
+        config.input.gamepad_slot_device_ids = [Some("gc-session:123:456:1".into()), None];
+        let saved: AppConfig = toml::from_str(&serialize_app_config(&config).unwrap()).unwrap();
+        assert_eq!(saved.input.gamepad_slot_device_ids, [None, None]);
+    }
 
     #[test]
     fn serialize_app_config_normalizes_and_deduplicates_song_roots() {

@@ -27,6 +27,7 @@ pub(in crate::ui) fn audio_backend_label(backend: &AudioBackend, text: Localizer
         AudioBackend::Wasapi => "WASAPI".to_owned(),
         AudioBackend::Asio => "ASIO".to_owned(),
         AudioBackend::CoreAudio => "Core Audio".to_owned(),
+        AudioBackend::CoreAudioIoProc => "Core Audio IOProc".to_owned(),
         AudioBackend::Alsa => "ALSA".to_owned(),
         AudioBackend::Pulse => "PulseAudio".to_owned(),
         AudioBackend::PipeWire => "PipeWire".to_owned(),
@@ -146,6 +147,8 @@ pub(in crate::ui) fn input_backend_label(backend: &InputBackendKind, text: Local
     match backend {
         InputBackendKind::Auto => tr!(text, "common-auto-select"),
         InputBackendKind::Winit => "winit".to_owned(),
+        InputBackendKind::MacOsHid => "macOS IOHID".to_owned(),
+        InputBackendKind::MacOsGameController => "GCKeyboard".to_owned(),
         InputBackendKind::RawInput => tr!(text, "settings-input-raw-input"),
         // load時にAutoへ移行する旧config互換variant。
         InputBackendKind::Hid | InputBackendKind::Midi => tr!(text, "common-auto-select"),
@@ -161,6 +164,7 @@ pub(in crate::ui) fn gamepad_backend_label(
         GamepadBackendKind::Gilrs => "gilrs".to_owned(),
         GamepadBackendKind::RawInput => tr!(text, "settings-input-raw-input"),
         GamepadBackendKind::GameInput => tr!(text, "settings-input-gameinput"),
+        GamepadBackendKind::GameController => "GameController".to_owned(),
     }
 }
 

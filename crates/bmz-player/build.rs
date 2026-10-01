@@ -15,6 +15,28 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
     }
+    println!("cargo:rerun-if-changed=native/input_common.c");
+    cc::Build::new()
+        .file("native/input_common.c")
+        .flag("-Wno-deprecated-declarations")
+        .compile("bmz_input_common");
+    for framework in ["CoreFoundation", "Carbon"] {
+        println!("cargo:rustc-link-lib=framework={framework}");
+    }
+    if std::env::var_os("CARGO_FEATURE_MACOS_IOHID").is_some() {
+        println!("cargo:rerun-if-changed=native/keyboard.c");
+        cc::Build::new().file("native/keyboard.c").compile("bmz_keyboard");
+        println!("cargo:rustc-link-lib=framework=IOKit");
+    }
+    println!("cargo:rerun-if-changed=native/gamecontroller.m");
+    cc::Build::new()
+        .file("native/gamecontroller.m")
+        .flag("-fobjc-arc")
+        .flag("-fblocks")
+        .compile("bmz_gamecontroller");
+    for framework in ["GameController", "Foundation"] {
+        println!("cargo:rustc-link-lib=framework={framework}");
+    }
     let Some(directory) = std::env::var_os("BMZ_SPARKLE_DIR") else {
         return;
     };

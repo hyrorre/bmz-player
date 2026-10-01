@@ -36,6 +36,7 @@ pub(super) struct SettingsPanelState<'a> {
     pub(super) obs_scene_picker: &'a mut ObsScenePickerState,
     pub(super) obs_connection_status: &'a crate::obs::ObsConnectionStatus,
     pub(super) connected_gamepads: &'a [crate::input::gamepad::ConnectedGamepad],
+    pub(super) audio_stream_info: Option<&'a bmz_audio::backend::cpal::CpalStreamInfo>,
 }
 
 #[derive(Default)]

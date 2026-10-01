@@ -35,7 +35,10 @@
 |---|---|
 | 2026-10-01 | [Starseeker ResultのMAX符号とLuaロード値](2026/2026-10-01-starseeker-result-next-rank.md) |
 | 2026-10-01 | [リプレイ視聴速度による採点差の修正](2026/2026-10-01-replay-speed-scoring.md) |
+| 2026-10-01 | [Core Audio IOProc音声と16 frames設定](2026/2026-10-01-coreaudio-ioproc.md) |
+| 2026-10-01 | [macOS GameController入力](2026/2026-10-01-gamecontroller-input.md) |
 | 2026-09-30 | [テキスト装飾の透明度修正](2026/2026-09-30-text-decoration-opacity.md) |
+| 2026-09-30 | [macOS入力・音声診断と停滞試験](2026/2026-09-30-macos-latency.md) |
 | 2026-09-30 | [antique Ambient背景の実装・検証](2026/2026-09-30-antique-ambient.md) |
 | 2026-09-30 | [F3で譜面ファイルを選択表示](2026/2026-09-30-select-reveal-chart.md) |
 | 2026-09-26 | [起動時間の調査と最適化](2026/2026-09-26-startup-performance.md) |

@@ -31,10 +31,15 @@ struct State {
 }
 
 pub struct InputCapture {
+    #[cfg(target_os = "macos")]
+    gc_pads: Option<super::gamecontroller::Pads>,
+    #[cfg(target_os = "macos")]
+    mac_keyboard: Mutex<(Option<crate::config::app_config::InputBackendKind>, Option<MacKeyboard>)>,
     state: Arc<Mutex<State>>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     name: &'static str,
+    #[cfg(not(target_os = "macos"))]
     native_keyboard: Arc<AtomicBool>,
 }
 
@@ -44,6 +49,12 @@ impl InputCapture {
         configs: [GamepadScratchConfig; 2],
         bridge: Option<RawInputBridge>,
     ) -> anyhow::Result<Self> {
+        #[cfg(target_os = "macos")]
+        let gc_pads = (kind == Some(GamepadBackendKind::GameController))
+            .then(|| super::gamecontroller::Pads::start(configs))
+            .flatten();
+        #[cfg(target_os = "macos")]
+        let kind = if gc_pads.is_some() { None } else { kind };
         let state = Arc::new(Mutex::new(State {
             #[cfg(all(windows, feature = "experimental-gameinput"))]
             gameinput_diagnostics: None,
@@ -144,16 +155,43 @@ impl InputCapture {
                 }
                 #[cfg(windows)]
                 super::native_capture::wait_for_input();
-                #[cfg(not(windows))]
+                #[cfg(target_os = "macos")]
+                thread::park_timeout(if backend.is_some() {
+                    Duration::from_millis(1)
+                } else {
+                    Duration::from_millis(250)
+                });
+                #[cfg(not(any(windows, target_os = "macos")))]
                 thread::park_timeout(Duration::from_millis(1));
             }
         })?;
         let name = ready_rx.recv_timeout(Duration::from_secs(5))?;
+        #[cfg(target_os = "macos")]
+        let name = if gc_pads.is_some() { "GameController" } else { name };
         tracing::info!(backend = name, "input backend: dedicated capture thread");
-        Ok(Self { state, stop, thread: Some(thread), name, native_keyboard })
+        Ok(Self {
+            #[cfg(target_os = "macos")]
+            gc_pads,
+            #[cfg(target_os = "macos")]
+            mac_keyboard: Mutex::new((None, None)),
+            state,
+            stop,
+            thread: Some(thread),
+            name,
+            #[cfg(not(target_os = "macos"))]
+            native_keyboard,
+        })
     }
 
     pub fn set_route(&self, route: Option<InputRoute>) {
+        #[cfg(target_os = "macos")]
+        if let Some(pads) = &self.gc_pads {
+            pads.set_route(route.clone());
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(keyboard) = &self.mac_keyboard.lock().unwrap_or_else(|e| e.into_inner()).1 {
+            keyboard.set_route(route.clone());
+        }
         let route = route.map(Arc::new);
         let old = {
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -165,17 +203,77 @@ impl InputCapture {
         }
     }
     pub fn native_keyboard_enabled(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        return self
+            .mac_keyboard
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .1
+            .as_ref()
+            .is_some_and(MacKeyboard::active);
+        #[cfg(not(target_os = "macos"))]
         self.native_keyboard.load(Ordering::Acquire)
     }
+    #[cfg(target_os = "macos")]
+    pub fn route_gc_window_event(
+        &self,
+        event: &bmz_gameplay::input::backend::DeviceInputEvent,
+        input: &SharedInputBackend,
+    ) -> Option<bool> {
+        if event.device != super::winit::W_KEYBOARD_DEVICE_ID {
+            return None;
+        }
+        let keyboard = self.mac_keyboard.lock().unwrap_or_else(|e| e.into_inner());
+        match &keyboard.1 {
+            Some(MacKeyboard::GameController(keyboard)) => {
+                Some(keyboard.window_event(event.clone(), input))
+            }
+            _ => None,
+        }
+    }
+    #[cfg(target_os = "macos")]
+    pub fn configure_mac_keyboard(
+        &self,
+        requested: Option<crate::config::app_config::InputBackendKind>,
+    ) {
+        let mut keyboard = self.mac_keyboard.lock().unwrap_or_else(|e| e.into_inner());
+        if keyboard.0 == requested {
+            return;
+        }
+        keyboard.0 = requested.clone();
+        keyboard.1 = None;
+        keyboard.1 = match requested {
+            #[cfg(feature = "macos-iohid")]
+            Some(crate::config::app_config::InputBackendKind::MacOsHid) => {
+                super::macos::MacKeyboard::start().map(MacKeyboard::Hid)
+            }
+            Some(crate::config::app_config::InputBackendKind::MacOsGameController) => {
+                super::gamecontroller::Keyboard::start().map(MacKeyboard::GameController)
+            }
+            _ => None,
+        };
+    }
     pub fn set_analog_config(&mut self, configs: [GamepadScratchConfig; 2], slots: GamepadSlotMap) {
+        #[cfg(target_os = "macos")]
+        if let Some(pads) = &self.gc_pads {
+            pads.set_analog_config(configs, slots);
+        }
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.configs = configs;
         state.slots = slots;
     }
     pub fn poll(&mut self) -> GamepadPollOutput {
+        #[cfg(target_os = "macos")]
+        if let Some(pads) = &self.gc_pads {
+            return pads.poll();
+        }
         self.state.try_lock().map(|mut state| std::mem::take(&mut state.output)).unwrap_or_default()
     }
     pub fn connected_gamepads(&self) -> Vec<ConnectedGamepad> {
+        #[cfg(target_os = "macos")]
+        if let Some(pads) = &self.gc_pads {
+            return pads.connected_gamepads();
+        }
         self.state.lock().unwrap_or_else(|e| e.into_inner()).connected.clone()
     }
     pub fn name(&self) -> &'static str {
@@ -203,8 +301,33 @@ impl InputCapture {
     }
 }
 
+#[cfg(target_os = "macos")]
+enum MacKeyboard {
+    #[cfg(feature = "macos-iohid")]
+    Hid(super::macos::MacKeyboard),
+    GameController(super::gamecontroller::Keyboard),
+}
+
+#[cfg(target_os = "macos")]
+impl MacKeyboard {
+    fn active(&self) -> bool {
+        match self {
+            #[cfg(feature = "macos-iohid")]
+            Self::Hid(keyboard) => keyboard.active(),
+            Self::GameController(keyboard) => keyboard.active(),
+        }
+    }
+    fn set_route(&self, route: Option<InputRoute>) {
+        match self {
+            #[cfg(feature = "macos-iohid")]
+            Self::Hid(keyboard) => keyboard.set_route(route),
+            Self::GameController(keyboard) => keyboard.set_route(route),
+        }
+    }
+}
+
 #[derive(Default)]
-struct ButtonDelivery {
+pub(super) struct ButtonDelivery {
     input: Option<SharedInputBackend>,
     pressed: std::collections::HashMap<
         (bmz_gameplay::input::backend::DeviceId, bmz_gameplay::input::backend::PhysicalControl),
@@ -213,7 +336,11 @@ struct ButtonDelivery {
 }
 
 impl ButtonDelivery {
-    fn set_route(&mut self, route: Option<&InputRoute>) {
+    #[cfg(target_os = "macos")]
+    pub(super) fn active(&self) -> bool {
+        self.input.is_some()
+    }
+    pub(super) fn set_route(&mut self, route: Option<&InputRoute>) {
         let same = match (&self.input, route) {
             (Some(input), Some(route)) => input.same_source(&route.input),
             (None, None) => true,
@@ -233,7 +360,7 @@ impl ButtonDelivery {
         }
         self.input = route.map(|route| route.input.clone());
     }
-    fn push(&mut self, event: bmz_gameplay::input::backend::DeviceInputEvent) {
+    pub(super) fn push(&mut self, event: bmz_gameplay::input::backend::DeviceInputEvent) {
         let key = (event.device, event.control.clone());
         match event.kind {
             bmz_core::input::InputKind::Press => {

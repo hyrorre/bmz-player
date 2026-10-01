@@ -44,6 +44,49 @@ impl WinitApp {
             return;
         };
         let snapshot = self.collect_audio_diagnostics();
+        if bmz_core::latency::diagnostics_enabled() {
+            let timing = snapshot.timing;
+            let info = self.audio.audio_runtime.as_ref().map(AudioRuntime::stream_info);
+            let summary = serde_json::json!({
+                "kind": "audio", "schema": 1,
+                "epoch": timing.epoch, "warmup_seconds": 2,
+                "frames": timing.frames, "interval_ns": timing.interval_ns,
+                "duration_ns": timing.duration_ns, "prediction_ns": timing.prediction_ns,
+                "invalid_predictions": timing.invalid_predictions,
+                "stream_errors": snapshot.stream_error_count,
+                "processor_overloads": snapshot.processor_overload_count,
+                "lock_misses": snapshot.engine_lock_miss_count,
+                "queue_drops": snapshot.command_dropped_count,
+                "timeline_catch_ups": snapshot.timeline_catch_up_count,
+                "stream": info.map(|i| serde_json::json!({
+                    "id":i.stream_id,
+                    "requested_host":format!("{:?}",i.requested_host),"requested_device":i.requested_device,
+                    "actual_host":i.actual_host,"actual_device":i.actual_device,
+                    "requested_rate":i.requested_rate,"actual_rate":i.actual_rate,
+                    "requested_frames":i.requested_frames,"supported_frames":i.supported_frames,
+                    "cpal_buffer":i.cpal_buffer,
+                    "prediction_source": if i.requested_host == Some(bmz_audio::backend::cpal::CpalHostId::CoreAudioIoProc) {
+                        "hal_output_time_minus_now"
+                    } else if self.audio.audio_runtime.as_ref().is_some_and(|r| r.config().output_mode == crate::config::app_config::AudioOutputMode::Exclusive) {
+                        "unmeasured"
+                    } else { "cpal_playback_minus_callback" },
+                })),
+            });
+            tracing::info!("BMZ_LATENCY_JSON {summary}");
+            if let Some(play) = &self.play.active_play {
+                let summary = serde_json::json!({"schema":1,"kind":"play_audio_commands",
+                    "all_commands_enqueue_to_apply_ns":play.running.audio.command_diagnostics().enqueue_to_apply_ns});
+                tracing::info!("BMZ_LATENCY_JSON {summary}");
+            }
+            if let Some(input) = self.play_input_backend() {
+                let summary = serde_json::json!({"schema": 1, "kind": "input_queue",
+                    "requested_keyboard":format!("{:?}",self.boot.app_config.input.backend),
+                    "keyboard_enabled":self.boot.app_config.input.keyboard_enabled,
+                    "native_keyboard_active":self.gamepad.as_ref().is_some_and(crate::input::capture::InputCapture::native_keyboard_enabled),
+                    "enqueue_to_drain_ns": input.delivery_summary(), "drops": input.overflow_count()});
+                tracing::info!("BMZ_LATENCY_JSON {summary}");
+            }
+        }
         let Some(previous) = self.audio.audio_diagnostics_last.replace(snapshot) else {
             return;
         };
@@ -61,6 +104,8 @@ impl WinitApp {
         let timeline_catch_up_frames =
             snapshot.timeline_catch_up_frames.saturating_sub(previous.timeline_catch_up_frames);
         let stream_errors = snapshot.stream_error_count.saturating_sub(previous.stream_error_count);
+        let processor_overloads =
+            snapshot.processor_overload_count.saturating_sub(previous.processor_overload_count);
         let source_lock_misses =
             snapshot.source_lock_miss_count.saturating_sub(previous.source_lock_miss_count);
         let engine_lock_misses =
@@ -110,12 +155,13 @@ impl WinitApp {
             engine_lock_misses,
             command_drops,
             command_engine_lock_misses,
-            callback_over_budget,
+            callback_over_budget: callback_over_budget || processor_overloads != 0,
             clipped_samples,
             generated_preview_loading: self.select.select_assets.generated_preview_loading(),
         });
 
         if stream_errors == 0
+            && processor_overloads == 0
             && timeline_catch_ups == 0
             && source_lock_misses == 0
             && engine_lock_misses == 0
@@ -135,6 +181,7 @@ impl WinitApp {
             timeline_catch_ups,
             timeline_catch_up_frames,
             stream_errors,
+            processor_overloads,
             source_lock_misses,
             engine_lock_misses,
             engine_lock_miss_callbacks,

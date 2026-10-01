@@ -27,11 +27,13 @@ use crate::video_bga::ActiveVideoBgaDecoder;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct AudioOutputDiagnostics {
+    pub timing: bmz_audio::backend::cpal::OutputTimingSummary,
     pub callback_count: u64,
     pub rendered_frames: u64,
     pub timeline_catch_up_count: u64,
     pub timeline_catch_up_frames: u64,
     pub stream_error_count: u64,
+    pub processor_overload_count: u64,
     pub source_lock_miss_count: u64,
     pub engine_lock_miss_count: u64,
     pub engine_lock_miss_callback_count: u64,
@@ -54,11 +56,13 @@ pub struct AudioOutputDiagnostics {
 impl AudioOutputDiagnostics {
     pub fn from_cpal(snapshot: CpalOutputDiagnostics) -> Self {
         Self {
+            timing: snapshot.timing,
             callback_count: snapshot.callback_count,
             rendered_frames: snapshot.rendered_frames,
             timeline_catch_up_count: snapshot.timeline_catch_up_count,
             timeline_catch_up_frames: snapshot.timeline_catch_up_frames,
             stream_error_count: snapshot.stream_error_count,
+            processor_overload_count: snapshot.processor_overload_count,
             source_lock_miss_count: snapshot.source_lock_miss_count,
             engine_lock_miss_count: snapshot.engine_lock_miss_count,
             engine_lock_miss_callback_count: snapshot.engine_lock_miss_callback_count,
@@ -364,6 +368,9 @@ impl AudioRuntime {
     pub fn take_diagnostics(&self) -> AudioOutputDiagnostics {
         AudioOutputDiagnostics::from_cpal(self.output.take_diagnostics())
     }
+    pub fn stream_info(&self) -> &bmz_audio::backend::cpal::CpalStreamInfo {
+        self.output.stream_info()
+    }
 
     /// 音声 callback から退避した source を app thread で破棄する。
     pub fn reap_retired_sources(&self) {
@@ -554,6 +561,7 @@ pub fn available_audio_backends() -> Vec<AudioBackend> {
         AudioBackend::Wasapi,
         AudioBackend::Asio,
         AudioBackend::CoreAudio,
+        AudioBackend::CoreAudioIoProc,
         AudioBackend::Alsa,
         AudioBackend::Pulse,
         AudioBackend::PipeWire,
@@ -569,6 +577,9 @@ fn cpal_host_for_backend(backend: &AudioBackend) -> Result<Option<CpalHostId>> {
         AudioBackend::Wasapi => cpal_host_for_platform(CpalHostId::Wasapi, "WASAPI"),
         AudioBackend::Asio => cpal_asio_host(),
         AudioBackend::CoreAudio => cpal_host_for_platform(CpalHostId::CoreAudio, "Core Audio"),
+        AudioBackend::CoreAudioIoProc => {
+            cpal_host_for_platform(CpalHostId::CoreAudioIoProc, "Core Audio IOProc")
+        }
         AudioBackend::Alsa => cpal_host_for_platform(CpalHostId::Alsa, "ALSA"),
         AudioBackend::Pulse => cpal_host_for_platform(CpalHostId::Pulse, "PulseAudio"),
         AudioBackend::PipeWire => cpal_host_for_platform(CpalHostId::PipeWire, "PipeWire"),
@@ -676,11 +687,20 @@ mod tests {
     fn fixed_buffer_size_mode_passes_frame_count() {
         let mut config = AppConfig::default().audio;
         config.buffer_size_mode = AudioBufferSizeMode::Fixed;
-        config.buffer_size = 96;
+        for frames in [16, 32, 96] {
+            config.buffer_size = frames;
+            let output = cpal_output_config(&config).unwrap();
+            assert_eq!(output.buffer_size, Some(frames));
+        }
+    }
 
-        let output = cpal_output_config(&config).unwrap();
-
-        assert_eq!(output.buffer_size, Some(96));
+    #[test]
+    fn ioproc_choice_requires_macos_and_its_feature() {
+        let available = cfg!(all(target_os = "macos", feature = "experimental-coreaudio-ioproc"));
+        assert_eq!(available_audio_backends().contains(&AudioBackend::CoreAudioIoProc), available);
+        let mut config = AppConfig::default().audio;
+        config.backend = AudioBackend::CoreAudioIoProc;
+        assert_eq!(cpal_output_config(&config).is_ok(), available);
     }
 
     #[test]

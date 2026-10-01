@@ -2,10 +2,8 @@ use std::path::Path;
 
 use anyhow::Result;
 
-#[cfg(not(all(windows, feature = "experimental-gameinput")))]
-use super::app_config::GamepadBackendKind;
 use super::app_config::{
-    AppConfig, InputBackendKind, ensure_default_difficulty_table_sources, normalize_song_root_paths,
+    AppConfig, ensure_default_difficulty_table_sources, normalize_song_root_paths,
 };
 use super::play_input::{normalize_profile_input, validate_play_inherit_config};
 use super::profile_config::ProfileConfig;
@@ -19,17 +17,18 @@ fn parse_app_config(text: &str) -> Result<AppConfig> {
     let mut config: AppConfig = toml::from_str(text)?;
     normalize_song_root_paths(&mut config.songs.roots);
     ensure_default_difficulty_table_sources(&mut config);
-    if matches!(config.input.backend, InputBackendKind::Hid | InputBackendKind::Midi) {
-        tracing::warn!(
-            backend = ?config.input.backend,
-            "unsupported input backend removed; migrating configuration to auto"
-        );
-        config.input.backend = InputBackendKind::Auto;
+    for slot in &mut config.input.gamepad_slot_device_ids {
+        if slot.as_deref().is_some_and(|id| id.starts_with("gc-session:")) {
+            *slot = None;
+        }
     }
-    #[cfg(not(all(windows, feature = "experimental-gameinput")))]
-    if config.input.gamepad_backend == GamepadBackendKind::GameInput {
-        tracing::warn!("GameInput backend is disabled; migrating configuration to gilrs");
-        config.input.gamepad_backend = GamepadBackendKind::Gilrs;
+    crate::input::availability::BackendAvailability::current().normalize_config(&mut config.input);
+    if config.audio.backend == super::app_config::AudioBackend::CoreAudioIoProc
+        && !bmz_audio::backend::cpal::is_host_supported(
+            bmz_audio::backend::cpal::CpalHostId::CoreAudioIoProc,
+        )
+    {
+        config.audio.backend = super::app_config::AudioBackend::Auto;
     }
     Ok(config)
 }
@@ -55,7 +54,67 @@ fn parse_profile_config(text: &str) -> Result<ProfileConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::app_config::PathEntry;
+    use crate::config::app_config::{GamepadBackendKind, InputBackendKind, PathEntry};
+
+    #[test]
+    fn ioproc_config_respects_feature_and_preserves_audio_settings() {
+        use crate::config::app_config::{AudioBackend, AudioBufferSizeMode};
+        let mut config = AppConfig::default();
+        config.audio.backend = AudioBackend::CoreAudioIoProc;
+        config.audio.buffer_size_mode = AudioBufferSizeMode::Fixed;
+        config.audio.buffer_size = 16;
+        let loaded = parse_app_config(&toml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(
+            loaded.audio.backend,
+            if cfg!(all(target_os = "macos", feature = "experimental-coreaudio-ioproc")) {
+                AudioBackend::CoreAudioIoProc
+            } else {
+                AudioBackend::Auto
+            }
+        );
+        config.audio.backend = loaded.audio.backend.clone();
+        assert_eq!(
+            toml::to_string(&loaded.audio).unwrap(),
+            toml::to_string(&config.audio).unwrap()
+        );
+    }
+
+    #[test]
+    fn loaded_input_choices_are_available_on_the_current_platform() {
+        let available = crate::input::availability::BackendAvailability::current();
+        for backend in [
+            InputBackendKind::RawInput,
+            InputBackendKind::MacOsHid,
+            InputBackendKind::MacOsGameController,
+        ] {
+            let mut config = AppConfig::default();
+            config.input.backend = backend;
+            config.input.gamepad_backend = GamepadBackendKind::GameController;
+            let loaded = parse_app_config(&toml::to_string(&config).unwrap()).unwrap();
+            assert!(available.keyboards().any(|choice| choice == loaded.input.backend));
+            assert!(available.gamepads().any(|choice| choice == loaded.input.gamepad_backend));
+        }
+    }
+
+    #[test]
+    fn parse_app_config_respects_iohid_feature() {
+        let mut config = AppConfig::default();
+        config.input.backend = InputBackendKind::MacOsHid;
+        let loaded = parse_app_config(&toml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(
+            loaded.input.backend,
+            if cfg!(all(target_os = "macos", feature = "macos-iohid")) {
+                InputBackendKind::MacOsHid
+            } else {
+                InputBackendKind::Auto
+            }
+        );
+        config.input.backend = loaded.input.backend.clone();
+        assert_eq!(
+            toml::to_string(&loaded.input).unwrap(),
+            toml::to_string(&config.input).unwrap()
+        );
+    }
 
     #[test]
     fn parse_profile_config_migrates_only_antique_bga_brightness_and_preserves_new_choice() {

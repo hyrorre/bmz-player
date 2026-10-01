@@ -6,6 +6,16 @@ mod windows_modal_redraw;
 
 impl WinitApp {
     pub(super) fn sync_input_capture_target(&self) {
+        #[cfg(target_os = "macos")]
+        if let Some(capture) = &self.gamepad {
+            capture.configure_mac_keyboard(
+                self.boot
+                    .app_config
+                    .input
+                    .keyboard_enabled
+                    .then(|| self.boot.app_config.input.backend.clone()),
+            );
+        }
         let route = if self.raw_input_gameplay_blocked() {
             None
         } else {
@@ -21,7 +31,12 @@ impl WinitApp {
                     }),
                 focused: self.ui.focused,
                 keyboard_enabled: self.keyboard_input_backend()
-                    == Some(KeyboardInputBackend::RawInput),
+                    == Some(KeyboardInputBackend::RawInput)
+                    || (cfg!(target_os = "macos")
+                        && matches!(
+                            self.boot.app_config.input.backend,
+                            InputBackendKind::MacOsHid | InputBackendKind::MacOsGameController
+                        )),
             })
         };
         if let Some(capture) = &self.gamepad {
@@ -60,6 +75,13 @@ impl WinitApp {
 
     pub(super) fn window_keyboard_gameplay_enabled(&self) -> bool {
         self.keyboard_input_backend() == Some(KeyboardInputBackend::Window)
+            && !(cfg!(target_os = "macos")
+                // GCKeyboard arbitrates each winit event under its routing lock.
+                && self.boot.app_config.input.backend != InputBackendKind::MacOsGameController
+                && self
+                    .gamepad
+                    .as_ref()
+                    .is_some_and(crate::input::capture::InputCapture::native_keyboard_enabled))
     }
 
     /// WM_KEYUP can omit the first released Shift when both were held.
@@ -221,7 +243,16 @@ impl WinitApp {
         let Some(input) = self.play_input_backend() else {
             return;
         };
-        input.push_shared_event(event.clone());
+        #[cfg(target_os = "macos")]
+        let gc_delivery =
+            self.gamepad.as_ref().and_then(|capture| capture.route_gc_window_event(&event, &input));
+        #[cfg(not(target_os = "macos"))]
+        let gc_delivery: Option<bool> = None;
+        match gc_delivery {
+            Some(false) => return,
+            Some(true) => {}
+            None => input.push_shared_event(event.clone()),
+        }
         if self.play.active_play.is_some() {
             return;
         }

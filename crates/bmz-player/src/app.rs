@@ -606,6 +606,9 @@ fn spawn_ir_sync_worker(
     boot: &bootstrap::BootstrappedApp,
     mut select_rx: tokio::sync::watch::Receiver<bool>,
 ) -> Option<IrSyncWorker> {
+    if crate::cli::latency_stall_test_enabled() {
+        return None;
+    }
     let ir_config = boot.profile_config.ir.clone();
     if !ir_config.providers.iter().any(|provider| provider.enabled && !provider.base_url.is_empty())
     {

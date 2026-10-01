@@ -227,7 +227,7 @@ pub fn adjust_app_settings_value(
         ),
         AppSettingsEntryId::AudioBufferSize => {
             config.audio.buffer_size =
-                adjust_bounded(config.audio.buffer_size, direction, 16, 32, 4096);
+                adjust_bounded(config.audio.buffer_size, direction, 16, 16, 4096);
         }
         AppSettingsEntryId::AudioOutputDevice => {
             if let AppSettingsChoices::Text(values) = choices {
@@ -341,6 +341,7 @@ fn audio_backend_label(backend: &AudioBackend, text: Localizer) -> String {
         AudioBackend::Wasapi => "WASAPI".to_string(),
         AudioBackend::Asio => "ASIO".to_string(),
         AudioBackend::CoreAudio => "Core Audio".to_string(),
+        AudioBackend::CoreAudioIoProc => "Core Audio IOProc".to_string(),
         AudioBackend::Alsa => "ALSA".to_string(),
         AudioBackend::Pulse => "PulseAudio".to_string(),
         AudioBackend::PipeWire => "PipeWire".to_string(),
@@ -406,6 +407,25 @@ fn renderer_label(backend: &RendererBackend, text: Localizer) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_buffer_adjustment_reaches_and_stops_at_16_frames() {
+        let mut config = AppConfig::default();
+        config.audio.buffer_size = 32;
+        assert!(adjust_app_settings_value(
+            &mut config,
+            AppSettingsEntryId::AudioBufferSize,
+            &AppSettingsChoices::None,
+            -1
+        ));
+        assert_eq!(config.audio.buffer_size, 16);
+        assert!(!adjust_app_settings_value(
+            &mut config,
+            AppSettingsEntryId::AudioBufferSize,
+            &AppSettingsChoices::None,
+            -1
+        ));
+    }
 
     #[test]
     fn sample_rate_cycles_between_auto_and_fixed_presets() {

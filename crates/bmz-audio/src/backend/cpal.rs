@@ -19,7 +19,11 @@ pub(crate) mod callback;
 #[cfg(target_os = "macos")]
 mod coreaudio_compat;
 mod device;
+#[cfg(all(target_os = "macos", feature = "experimental-coreaudio-ioproc"))]
+mod ioproc;
 mod source;
+mod telemetry;
+pub use telemetry::OutputTimingSummary;
 
 use callback::*;
 pub use device::{is_host_supported, list_output_device_names};
@@ -83,6 +87,7 @@ pub enum CpalHostId {
     Wasapi,
     Asio,
     CoreAudio,
+    CoreAudioIoProc,
     Alsa,
     Pulse,
     PipeWire,
@@ -99,11 +104,13 @@ pub struct CpalOutput {
 /// are interval maxima since the previous snapshot.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct CpalOutputDiagnostics {
+    pub timing: OutputTimingSummary,
     pub callback_count: u64,
     pub rendered_frames: u64,
     pub timeline_catch_up_count: u64,
     pub timeline_catch_up_frames: u64,
     pub stream_error_count: u64,
+    pub processor_overload_count: u64,
     pub source_lock_miss_count: u64,
     pub engine_lock_miss_count: u64,
     pub engine_lock_miss_callback_count: u64,
@@ -118,11 +125,13 @@ pub struct CpalOutputDiagnostics {
 
 #[derive(Debug, Default)]
 struct CpalOutputDiagnosticsCounters {
+    timing: telemetry::OutputTiming,
     callback_count: AtomicU64,
     rendered_frames: AtomicU64,
     timeline_catch_up_count: AtomicU64,
     timeline_catch_up_frames: AtomicU64,
     stream_error_count: AtomicU64,
+    processor_overload_count: AtomicU64,
     source_lock_miss_count: AtomicU64,
     engine_lock_miss_count: AtomicU64,
     engine_lock_miss_callback_count: AtomicU64,
@@ -140,7 +149,22 @@ pub struct CpalSharedOutput {
     inner: Rc<CpalSharedOutputInner>,
 }
 
+#[derive(Debug, Clone)]
+pub struct CpalStreamInfo {
+    pub stream_id: u64,
+    pub requested_host: Option<CpalHostId>,
+    pub requested_device: Option<String>,
+    pub actual_host: String,
+    pub actual_device: String,
+    pub requested_rate: Option<u32>,
+    pub actual_rate: u32,
+    pub requested_frames: Option<u32>,
+    pub supported_frames: String,
+    pub cpal_buffer: String,
+}
+
 struct CpalSharedOutputInner {
+    info: CpalStreamInfo,
     stream: CpalOutputStream,
     // Audible CPAL stream must be dropped before releasing the shared engine-period request.
     #[cfg(windows)]
@@ -156,6 +180,8 @@ struct CpalSharedOutputInner {
 
 enum CpalOutputStream {
     Cpal(::cpal::Stream),
+    #[cfg(all(target_os = "macos", feature = "experimental-coreaudio-ioproc"))]
+    CoreAudioIoProc(ioproc::IoProcOutput),
     #[cfg(windows)]
     WasapiExclusive(WasapiExclusiveOutput),
 }
@@ -226,6 +252,9 @@ pub enum CpalBackendError {
 
     #[error("failed to open WASAPI exclusive output: {0}")]
     WasapiExclusive(String),
+
+    #[error("Core Audio IOProc output failed: {0}")]
+    CoreAudioIoProc(String),
 }
 
 #[cfg(test)]

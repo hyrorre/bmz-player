@@ -17,6 +17,12 @@ bmz-ffmpeg = { path = "../bmz-ffmpeg" }
 [target.'cfg(not(windows))'.dependencies]
 cpal.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "AudioHardware", "objc2-core-audio-types"], optional = true }
+objc2-core-audio-types = { version = "0.3", default-features = false, features = ["std", "CoreAudioBaseTypes"], optional = true }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFString"], optional = true }
+mach2 = { version = "0.6", optional = true }
+
 [target.'cfg(windows)'.dependencies]
 cpal = { workspace = true, features = ["realtime"] }
 windows = { workspace = true, features = [
@@ -36,3 +42,4 @@ default = []
 asio = ["cpal/asio"]
 pulseaudio = ["cpal/pulseaudio"]
 pipewire = ["cpal/pipewire"]
+experimental-coreaudio-ioproc = ["dep:objc2-core-audio", "dep:objc2-core-audio-types", "dep:objc2-core-foundation", "dep:mach2"]

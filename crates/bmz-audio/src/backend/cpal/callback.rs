@@ -90,6 +90,16 @@ where
     };
     let sample_rate = config.sample_rate;
     let mut playback_timeline = OutputPlaybackTimeline::default();
+    let timing_enabled = bmz_core::latency::diagnostics_enabled();
+    let mut previous_callback = None;
+    let mut previous_stream_callback: Option<::cpal::StreamInstant> = None;
+    let mut warmup_until = Instant::now() + Duration::from_secs(2);
+    #[cfg(target_os = "macos")]
+    let mut suspend = bmz_core::suspend::SuspendMonitor::default();
+    #[cfg(target_os = "macos")]
+    if timing_enabled {
+        suspend.poll();
+    }
     let error_diagnostics = Arc::clone(&diagnostics);
     device
         .build_output_stream(
@@ -104,6 +114,36 @@ where
                 }
 
                 let frames = data.len() / channels;
+                #[cfg(target_os = "macos")]
+                let resumed = timing_enabled && suspend.poll();
+                #[cfg(not(target_os = "macos"))]
+                let resumed = false;
+                if timing_enabled
+                    && (resumed
+                        || previous_callback.is_some_and(|previous| {
+                            callback_start.duration_since(previous) > Duration::from_secs(1)
+                        })
+                        || previous_stream_callback.is_some_and(|previous| {
+                            info.timestamp().callback.checked_duration_since(previous).is_none()
+                        }))
+                {
+                    diagnostics.timing.reset();
+                    warmup_until = callback_start + Duration::from_secs(2);
+                    previous_callback = None;
+                }
+                let measure = timing_enabled && callback_start >= warmup_until;
+                if measure {
+                    diagnostics.timing.observe(
+                        frames,
+                        callback_start,
+                        previous_callback,
+                        info.timestamp(),
+                    );
+                }
+                if timing_enabled {
+                    previous_callback = Some(callback_start);
+                    previous_stream_callback = Some(info.timestamp().callback);
+                }
                 let catch_up_frames = playback_timeline.catch_up_frames(
                     info.timestamp().playback,
                     frames,
@@ -130,6 +170,12 @@ where
                 diagnostics.rendered_frames.fetch_add(frames as u64, Ordering::Relaxed);
                 current_frame.store(start_frame.saturating_add(frames as u64), Ordering::Relaxed);
                 diagnostics.observe_callback_duration(callback_start);
+                if measure {
+                    diagnostics
+                        .timing
+                        .duration_ns
+                        .record(callback_start.elapsed().as_nanos().min(u64::MAX as u128) as u64);
+                }
             },
             move |error| {
                 error_diagnostics.stream_error_count.fetch_add(1, Ordering::Relaxed);
@@ -144,17 +190,17 @@ where
 ///
 /// CPAL normally owns this state inside its data callback. WASAPI exclusive mode has to service
 /// endpoint buffers itself, so it moves the same state onto its dedicated worker thread.
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "macos", feature = "experimental-coreaudio-ioproc")))]
 pub(crate) struct NativeOutputRenderer {
     channel_offset: usize,
     output_commands: SharedOutputCommands,
     retired_sources: RetiredOutputSources,
     current_frame: Arc<AtomicU64>,
-    diagnostics: Arc<CpalOutputDiagnosticsCounters>,
+    pub(super) diagnostics: Arc<CpalOutputDiagnosticsCounters>,
     buffers: OutputRenderBuffers,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "macos", feature = "experimental-coreaudio-ioproc")))]
 impl NativeOutputRenderer {
     pub(super) fn new(
         channel_offset: usize,
@@ -204,6 +250,7 @@ impl NativeOutputRenderer {
         self.diagnostics.observe_callback_duration(callback_start);
     }
 
+    #[cfg(windows)]
     pub(crate) fn record_stream_error(&self) {
         self.diagnostics.stream_error_count.fetch_add(1, Ordering::Relaxed);
     }
@@ -481,11 +528,13 @@ pub(super) fn observe_output_sample(value: f32, clipped: &mut u64, peak_abs: &mu
 impl CpalOutputDiagnosticsCounters {
     pub(super) fn take_snapshot(&self) -> CpalOutputDiagnostics {
         CpalOutputDiagnostics {
+            timing: self.timing.summary(),
             callback_count: self.callback_count.load(Ordering::Relaxed),
             rendered_frames: self.rendered_frames.load(Ordering::Relaxed),
             timeline_catch_up_count: self.timeline_catch_up_count.load(Ordering::Relaxed),
             timeline_catch_up_frames: self.timeline_catch_up_frames.load(Ordering::Relaxed),
             stream_error_count: self.stream_error_count.load(Ordering::Relaxed),
+            processor_overload_count: self.processor_overload_count.load(Ordering::Relaxed),
             source_lock_miss_count: self.source_lock_miss_count.load(Ordering::Relaxed),
             engine_lock_miss_count: self.engine_lock_miss_count.load(Ordering::Relaxed),
             engine_lock_miss_callback_count: self
@@ -505,7 +554,7 @@ impl CpalOutputDiagnosticsCounters {
         }
     }
 
-    fn observe_callback_duration(&self, callback_start: Instant) {
+    pub(super) fn observe_callback_duration(&self, callback_start: Instant) {
         let elapsed_ns = callback_start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
         update_atomic_max(&self.max_callback_ns, elapsed_ns);
     }

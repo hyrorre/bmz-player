@@ -555,7 +555,9 @@ pub(super) fn load_transformed_chart_for_play(
         applied_arrange,
         score_key,
         assist_runtime,
-        score_save_disabled: options.score_save_disabled || conversion_persistence_disabled,
+        score_save_disabled: options.score_save_disabled
+            || conversion_persistence_disabled
+            || crate::cli::latency_stall_test_enabled(),
         source_key_mode,
     })
 }
