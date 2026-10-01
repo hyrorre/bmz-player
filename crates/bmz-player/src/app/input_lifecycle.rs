@@ -9,8 +9,11 @@ impl WinitApp {
         #[cfg(target_os = "macos")]
         if let Some(capture) = &self.gamepad {
             capture.configure_mac_keyboard(
-                self.boot.app_config.input.keyboard_enabled
-                    && self.boot.app_config.input.backend == InputBackendKind::MacOsHid,
+                self.boot
+                    .app_config
+                    .input
+                    .keyboard_enabled
+                    .then(|| self.boot.app_config.input.backend.clone()),
             );
         }
         let route = if self.raw_input_gameplay_blocked() {
@@ -30,7 +33,10 @@ impl WinitApp {
                 keyboard_enabled: self.keyboard_input_backend()
                     == Some(KeyboardInputBackend::RawInput)
                     || (cfg!(target_os = "macos")
-                        && self.boot.app_config.input.backend == InputBackendKind::MacOsHid),
+                        && matches!(
+                            self.boot.app_config.input.backend,
+                            InputBackendKind::MacOsHid | InputBackendKind::MacOsGameController
+                        )),
             })
         };
         if let Some(capture) = &self.gamepad {

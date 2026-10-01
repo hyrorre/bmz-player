@@ -23,6 +23,15 @@ fn main() {
     for framework in ["IOKit", "CoreFoundation", "Carbon"] {
         println!("cargo:rustc-link-lib=framework={framework}");
     }
+    println!("cargo:rerun-if-changed=native/gamecontroller.m");
+    cc::Build::new()
+        .file("native/gamecontroller.m")
+        .flag("-fobjc-arc")
+        .flag("-fblocks")
+        .compile("bmz_gamecontroller");
+    for framework in ["GameController", "Foundation"] {
+        println!("cargo:rustc-link-lib=framework={framework}");
+    }
     let Some(directory) = std::env::var_os("BMZ_SPARKLE_DIR") else {
         return;
     };

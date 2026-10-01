@@ -23,6 +23,17 @@ macOS以外でMacOsHidを読んだ場合はwinitで動く。
 
 ### 権限・失敗・復帰
 
+`macOS GameController` はmacOS 11以降のGCKeyboardを専用の直列dispatch queueで取得する。
+入力監視の許可要求は行わない。キー別pressedChangedHandlerの引数から押下・解放を配送し、
+判定用timestampはコールバック受信時の単調時計とする。プロフィールの最新イベント時刻を
+個別キーの発生時刻として使わないため、OS取得→受信遅延は測定不可。
+複数のキーボードはOSが統合する。物理キー変換とJIS Native:MacOS表現はIOHIDと共通。
+macOS 11未満、キーボード未接続、またはプレイに割り当てたキーがAPIから得られない場合は
+winitへ戻る。接続済み表示は実キーの受信・性能確認の証拠ではない。
+フォーカス喪失・切断・route変更・停止時には保持を解放する。route変更時は世代を進め、
+古い世代のコールバックを拒否し、キーを離すまで新たな押下を受け付けない。
+終了時はハンドラーと通知を解除し、専用キュー上の処理終了後にRust callback storageを解放する。
+
 macOS 10.15以降はIOHIDCheckAccess(ListenEvent)を先に呼ぶ。未許可・拒否時には
 managerを開かずwinitへ戻る。起動時のIOHIDRequestAccess呼び出しは行わない。
 設定の「入力監視の許可を要求」ボタンだけが許可要求を行う。

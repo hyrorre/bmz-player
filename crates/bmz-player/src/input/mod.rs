@@ -1,4 +1,6 @@
 pub mod capture;
+#[cfg(target_os = "macos")]
+pub mod gamecontroller;
 #[cfg(all(windows, feature = "experimental-gameinput"))]
 pub mod gameinput;
 pub mod gamepad;

@@ -114,7 +114,24 @@ pub(super) fn build_integration_settings_sections(
                         InputBackendKind::MacOsHid,
                         "macOS IOHID",
                     );
+                    #[cfg(target_os = "macos")]
+                    ui.selectable_value(
+                        &mut config.input.backend,
+                        InputBackendKind::MacOsGameController,
+                        "macOS GameController",
+                    );
                 });
+            #[cfg(target_os = "macos")]
+            if config.input.backend == InputBackendKind::MacOsGameController {
+                let key = match crate::input::gamecontroller::keyboard_status() {
+                    1 => "settings-input-gc-keyboard-active",
+                    2 => "settings-input-gc-keyboard-waiting",
+                    4 => "settings-input-gc-keyboard-unsupported",
+                    _ => "settings-input-gc-unavailable",
+                };
+                ui.label(text.text(key));
+                ui.label(tr!(text, "settings-input-gc-keyboard-help"));
+            }
             #[cfg(target_os = "macos")]
             if config.input.backend == InputBackendKind::MacOsHid {
                 let key = match crate::input::macos::status() {

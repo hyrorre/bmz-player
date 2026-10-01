@@ -372,4 +372,7 @@ fn macos_keyboard_backend_round_trip_preserves_opt_in() {
     config.input.backend = InputBackendKind::MacOsHid;
     let loaded: AppConfig = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
     assert_eq!(loaded.input.backend, InputBackendKind::MacOsHid);
+    config.input.backend = InputBackendKind::MacOsGameController;
+    let loaded: AppConfig = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+    assert_eq!(loaded.input.backend, InputBackendKind::MacOsGameController);
 }

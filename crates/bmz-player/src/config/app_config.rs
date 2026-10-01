@@ -416,6 +416,8 @@ pub enum InputBackendKind {
     RawInput,
     /// Opt-in macOS IOHID capture; other platforms keep winit.
     MacOsHid,
+    /// Permission-free foreground keyboard capture on macOS 11+.
+    MacOsGameController,
     /// 旧configの読み込み互換用。load時にAutoへ移行する。
     Hid,
     /// 旧configの読み込み互換用。load時にAutoへ移行する。
