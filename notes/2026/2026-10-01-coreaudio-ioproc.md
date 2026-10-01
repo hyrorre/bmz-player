@@ -60,7 +60,25 @@ duplex機器は従来のCore Audioを使う。登録後のstream usage設定で�
 feature有効のaudio/player check・all-targets Clippy、audioテスト120件（実機2件ignored）、
 playerのIOProc設定テスト2件が成功。
 
-## 参照資料
+## レビュー修正: スリープ前後の診断区間
+
+通常CPAL経路と同じSuspendMonitorをIOProcへ追加した。診断有効時だけ観測し、
+host timeが進まないスリープでも分布をリセットして2秒のウォームアップをやり直す。
+host timeが欠けた場合にもcallback到着の1秒超の停止で区間を分ける。
+復帰検出を注入し、旧分布の除外・ウォームアップ・再集計・音声frame進行の不変を確認した。
+これは時刻状態遷移の回帰テストであり、実機のスリープ操作は未実施。
+IOProcとIOHIDを有効にしたworkspace check / all-targets Clippy（`-D warnings`）/ testが成功。
+全テストはローカルsocket制限外で`--test-threads=1`を使用。
+bmz-playerは2103件成功・6件ignored、bmz-audioは122件成功・実機2件ignored。
+fmt検査も成功。実機の抜き差し・スリープ・duplex機器拒否画面は未検証。
+
+```sh
+cargo check --workspace --locked --features bmz-player/experimental-coreaudio-ioproc,bmz-player/macos-iohid
+cargo clippy --workspace --all-targets --locked --features bmz-player/experimental-coreaudio-ioproc,bmz-player/macos-iohid -- -D warnings
+cargo test --workspace --locked --features bmz-player/experimental-coreaudio-ioproc,bmz-player/macos-iohid --no-fail-fast -- --test-threads=1
+```
+
+## 根拠資料
 
 - Apple SDK `AudioHardware.h` / `AudioHardwareBase.h` / `CoreAudioTypes.h`。
 - [AudioDeviceIOProc](https://developer.apple.com/documentation/coreaudio/audiodeviceioproc)

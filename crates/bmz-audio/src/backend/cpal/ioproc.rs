@@ -420,6 +420,7 @@ struct CallbackState {
     previous_callback: Option<Instant>,
     warmup_until: Instant,
     timing_enabled: bool,
+    suspend: bmz_core::suspend::SuspendMonitor,
 }
 
 struct CallbackContext {
@@ -477,6 +478,27 @@ unsafe extern "C-unwind" fn output_callback(
 }
 
 impl CallbackState {
+    fn update_timing_epoch(
+        &mut self,
+        start: Instant,
+        host: Option<u64>,
+        gap: Option<Duration>,
+        resumed: bool,
+    ) {
+        if self.timing_enabled
+            && (resumed
+                || self.previous_host.zip(host).is_some_and(|(previous, host)| host < previous)
+                || gap.is_some_and(|gap| gap > Duration::from_secs(1))
+                || self.previous_callback.is_some_and(|previous| {
+                    start.saturating_duration_since(previous) > Duration::from_secs(1)
+                }))
+        {
+            self.renderer.diagnostics.timing.reset();
+            self.warmup_until = start + Duration::from_secs(2);
+            self.previous_callback = None;
+        }
+    }
+
     fn render(
         &mut self,
         buffers: &[AudioBuffer],
@@ -527,13 +549,10 @@ impl CallbackState {
             }
         }
         if self.timing_enabled {
-            if (previous.is_some() && host.is_some_and(|host| host < previous.unwrap()))
-                || gap.is_some_and(|gap| gap > Duration::from_secs(1))
-            {
-                self.renderer.diagnostics.timing.reset();
-                self.warmup_until = start + Duration::from_secs(2);
-                self.previous_callback = None;
-            }
+            // Host time and Instant can both pause during sleep. Compare Mach
+            // continuous/absolute clocks as in the CPAL callback, not wall time.
+            let resumed = self.suspend.poll();
+            self.update_timing_epoch(start, host, gap, resumed);
             if start >= self.warmup_until {
                 let now_host = (now.mFlags.0 & AudioTimeStampFlags::HostTimeValid.0 != 0)
                     .then_some(now.mHostTime);
@@ -762,6 +781,11 @@ fn open(config: CpalOutputConfig, stream_id: u64) -> Result<CpalSharedOutput> {
         Arc::clone(&current_frame),
         Arc::clone(&diagnostics),
     );
+    let timing_enabled = bmz_core::latency::diagnostics_enabled();
+    let mut suspend = bmz_core::suspend::SuspendMonitor::default();
+    if timing_enabled {
+        suspend.poll();
+    }
     let mut context = Box::new(CallbackContext {
         state: UnsafeCell::new(CallbackState {
             renderer,
@@ -774,7 +798,8 @@ fn open(config: CpalOutputConfig, stream_id: u64) -> Result<CpalSharedOutput> {
             previous_frames: 0,
             previous_callback: None,
             warmup_until: Instant::now() + Duration::from_secs(2),
-            timing_enabled: bmz_core::latency::diagnostics_enabled(),
+            timing_enabled,
+            suspend,
         }),
         busy: AtomicBool::new(false),
         watch,
@@ -909,6 +934,7 @@ mod tests {
             previous_callback: None,
             warmup_until: Instant::now(),
             timing_enabled: true,
+            suspend: Default::default(),
         }
     }
 
@@ -918,6 +944,47 @@ mod tests {
         timestamp.mFlags = AudioTimeStampFlags::HostTimeValid;
         timestamp.mHostTime = host;
         timestamp
+    }
+
+    #[test]
+    fn suspend_splits_histograms_even_when_host_time_did_not_jump() {
+        let mut state = callback_state();
+        let mut pcm = [0.0f32; 32];
+        let buffer =
+            AudioBuffer { mNumberChannels: 2, mDataByteSize: 128, mData: pcm.as_mut_ptr().cast() };
+        assert!(state.render(&[buffer], &timestamp(1_000_000), &timestamp(2_000_000)));
+        assert_eq!(state.renderer.diagnostics.timing.summary().frames.count, 1);
+        let resumed_at = Instant::now();
+        state.update_timing_epoch(
+            resumed_at,
+            Some(2_333_333),
+            Some(Duration::from_nanos(333_333)),
+            true,
+        );
+        let summary = state.renderer.diagnostics.timing.summary();
+        assert_eq!(summary.epoch, 1);
+        assert_eq!(summary.frames.count, 0);
+        assert_eq!(summary.prediction_ns.count, 0);
+        assert_eq!(summary.duration_ns.count, 0);
+        assert!(state.previous_callback.is_none());
+        assert_eq!(state.warmup_until, resumed_at + Duration::from_secs(2));
+        assert!(state.render(&[buffer], &timestamp(1_333_333), &timestamp(2_333_333)));
+        assert_eq!(state.renderer.diagnostics.timing.summary().frames.count, 0);
+        // Advance only the diagnostic deadline; no real sleep or device access.
+        state.warmup_until = Instant::now();
+        assert!(state.render(&[buffer], &timestamp(1_666_666), &timestamp(2_666_666)));
+        assert_eq!(state.renderer.diagnostics.timing.summary().frames.count, 1);
+        assert_eq!(state.renderer.diagnostics.timing.summary().epoch, 1);
+        assert_eq!(state.renderer.diagnostics.take_snapshot().rendered_frames, 48);
+        assert_eq!(state.renderer.diagnostics.take_snapshot().timeline_catch_up_count, 0);
+    }
+
+    #[test]
+    fn diagnostics_disabled_does_not_reset_epoch_on_resume() {
+        let mut state = callback_state();
+        state.timing_enabled = false;
+        state.update_timing_epoch(Instant::now(), None, None, true);
+        assert_eq!(state.renderer.diagnostics.timing.summary().epoch, 0);
     }
 
     #[test]

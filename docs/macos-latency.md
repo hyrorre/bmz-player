@@ -210,7 +210,8 @@ CPALではこの通知を監視しないため0を「超過なし」と解釈し
 （実測maxで制限）。maxは実測値、count=0は未測定であり0nsの測定結果ではない。
 live atomic snapshotは厳密に同時刻の値ではない。音声分布は最初の2秒を除外する。
 stream.idごとに別集計。CPALでは1秒超のcallback停止・時計逆行・macOSのMach時計から検出した復帰後、
-IOProcでは出力host timeの1秒超の欠落・逆行後にepochを増やし、
+IOProcでは出力host timeの1秒超の欠落・逆行、callback到着の1秒超の停止、
+Mach continuous/absolute時計の差で検出したスリープ復帰後にepochを増やし、
 分布をリセットして2秒のwarm-upをやり直す。エラーカウンターはstream累積。
 スリープ復帰前後は別の実行として測るのが比較上確実。
 入力キューはplayごと、IOHIDは取得経路の開始から停止まで（時計再基準化でepochを分ける）、音声コマンドはengineごとの累積。
