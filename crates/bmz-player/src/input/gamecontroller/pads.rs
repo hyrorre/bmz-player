@@ -189,7 +189,7 @@ impl PadState {
                 &mut output.buttons,
             );
             for (&(pad, code), &pressed) in &self.buttons {
-                if pad == id && pressed {
+                if pad == id && pressed && !self.suppressed.contains(&(pad, code)) {
                     output.buttons.push(button_event(
                         device.info.device_id,
                         code,
@@ -206,7 +206,9 @@ impl PadState {
     fn pressed_buttons(&self) -> Vec<GamepadPressedButton> {
         let mut buttons = self.analog.pressed_buttons();
         buttons.extend(self.buttons.iter().filter_map(|(&(pad, code), &pressed)| {
-            pressed
+            // reset_device has already emitted Releases. A retained physical
+            // baseline is only for re-arming; UI resync must not revive it.
+            (pressed && !self.suppressed.contains(&(pad, code)))
                 .then(|| {
                     self.devices.get(&pad).map(|device| GamepadPressedButton {
                         name: button_name(code).to_owned(),

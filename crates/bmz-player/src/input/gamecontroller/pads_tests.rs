@@ -124,9 +124,34 @@ fn invalid_release_releases_the_last_valid_gameplay_hold() {
     assert_eq!(events[1].kind, bmz_core::input::InputKind::Release);
     assert_eq!(state.invalid, 1);
     assert!(state.suppressed.contains(&(1, 0)));
+    assert!(state.pressed_buttons().is_empty());
+    assert!(!state.output.buttons.last().unwrap().pressed);
     send(&mut state, 3, 0, 0.0, 1.003, true);
+    assert!(state.pressed_buttons().is_empty());
     send(&mut state, 3, 0, 1.0, 1.004, true);
     assert_eq!(input.drain_events().len(), 1);
+    assert_eq!(state.pressed_buttons().len(), 1);
+}
+
+#[test]
+fn history_gap_baseline_and_route_reset_cannot_revive_ui_holds() {
+    let (mut state, mut input) = state(true);
+    send(&mut state, 3, 0, 1.0, 1.001, true);
+    send(&mut state, 3, 1, 1.0, 1.002, true);
+    assert_eq!(state.pressed_buttons().len(), 2);
+    send(&mut state, 5, 0, 0.0, 1.003, true);
+    send(&mut state, 8, 0, 1.0, 1.003, true);
+    send(&mut state, 8, 1, 1.0, 1.003, true);
+    assert!(state.pressed_buttons().is_empty());
+    assert_eq!(input.drain_events().len(), 4);
+    send(&mut state, 3, 0, 0.0, 1.004, true);
+    send(&mut state, 3, 0, 1.0, 1.005, true);
+    assert_eq!(state.pressed_buttons().len(), 1);
+    state.reset_all();
+    assert!(state.pressed_buttons().is_empty());
+    let events = input.drain_events();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[1].kind, bmz_core::input::InputKind::Release);
 }
 #[test]
 fn hotplug_between_route_generation_and_native_fence_is_not_lost() {

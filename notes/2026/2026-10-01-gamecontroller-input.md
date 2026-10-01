@@ -122,7 +122,14 @@ player check / all-targets Clippy成功。実キーボードの抜き差し操�
 player全体はsandbox内で2083件成功・6件ignored・ローカルsocket制限17件失敗。
 制限による失敗は関連モジュールをsandbox外で再実行し、すべて成功した。
 
-## 参照資料
+## レビュー修正: UI保持の再同期
+
+不正時刻・履歴欠落・routeリセットで解放済みのボタンをUI保持一覧から除外した。
+物理状態のbaselineと再押下抑止は維持し、解放後の新しいPressでのみ再び一覧へ戻す。
+gameplayへのReleaseに加え、UI一覧・複数ボタン・baseline・再押下・routeリセットを回帰確認。
+GameController関連16テスト成功。繰り返しresetで同じReleaseを重複配送しないことも確認。
+
+## 参考資料
 
 - [Apple: modern physical input](https://github.com/apple/game-porting-toolkit/blob/main/game-porting-skills/skills/using-game-controller/reference/modern-input.md)
 - [Apple: profile-based input](https://github.com/apple/game-porting-toolkit/blob/main/game-porting-skills/skills/using-game-controller/reference/profile-based-input.md)
