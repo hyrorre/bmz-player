@@ -35,7 +35,12 @@ impl WinitApp {
     }
 
     pub(super) fn sync_selected_play_mode(&mut self) {
-        let Some(key_mode) = self.selected_play_mode() else {
+        let mode = if self.select.select_option_panel == 2 {
+            Some(self.detail_options_mode())
+        } else {
+            self.selected_play_mode()
+        };
+        let Some(key_mode) = mode else {
             return;
         };
         if self.boot.profile_config.active_play_mode == key_mode {

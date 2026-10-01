@@ -411,6 +411,7 @@ macro_rules! skin_document_render_select_render_methods {
                 ),
                 select_option_panel: snapshot.option_panel,
                 detail_options: snapshot.detail_options.clone(),
+                detail_options_scroll: snapshot.detail_options_scroll,
                 skin_attempt,
                 select_arrange_index: select_arrange_index(&snapshot.arrange),
                 select_arrange_2p_index: select_arrange_index(&snapshot.arrange_2p),

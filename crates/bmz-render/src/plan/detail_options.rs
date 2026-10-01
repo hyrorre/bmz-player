@@ -1,5 +1,7 @@
 use super::*;
-use crate::scene::detail_options::{DETAIL_OPTION_ROWS, DetailOptionsSnapshot};
+use crate::scene::detail_options::{
+    DETAIL_OPTION_CENTER, DETAIL_OPTION_DRAW_SLOTS, DetailOptionsSnapshot, detail_options_column,
+};
 use crate::skin::{SkinClickHit, SkinClickTarget};
 use bmz_skin_document::*;
 
@@ -33,7 +35,11 @@ fn label(
     });
 }
 
-pub(super) fn push_detail_options(commands: &mut Vec<DrawCommand>, panel: &DetailOptionsSnapshot) {
+pub(super) fn push_detail_options(
+    commands: &mut Vec<DrawCommand>,
+    panel: &DetailOptionsSnapshot,
+    scroll: f32,
+) {
     // Opaque full-canvas modal: old skins retain their timers and API state,
     // while no old panel or underlying song list is visible through this one.
     commands.push(DrawCommand::Rect {
@@ -49,12 +55,12 @@ pub(super) fn push_detail_options(commands: &mut Vec<DrawCommand>, panel: &Detai
     if let Some(selected) = panel.selected() {
         label(commands, &selected.category, 0.46, 0.10, 0.48, 0.025, muted);
     }
-    for slot in 0..DETAIL_OPTION_ROWS {
+    for slot in 0..DETAIL_OPTION_DRAW_SLOTS {
         let Some(row) = panel.row(slot) else {
             continue;
         };
-        let rect = column_rect(slot);
-        let selected = panel.viewport_start + slot == panel.cursor;
+        let rect = column_rect(slot, scroll);
+        let selected = slot == DETAIL_OPTION_CENTER;
         commands.push(DrawCommand::Rect {
             rect,
             color: if selected {
@@ -66,7 +72,7 @@ pub(super) fn push_detail_options(commands: &mut Vec<DrawCommand>, panel: &Detai
         label(
             commands,
             if selected { "▼" } else { "" },
-            rect.x + 0.054,
+            column_rect(slot, 0.0).x + 0.054,
             0.145,
             0.025,
             0.024,
@@ -77,7 +83,7 @@ pub(super) fn push_detail_options(commands: &mut Vec<DrawCommand>, panel: &Detai
             label(commands, &row.value_label, rect.x + 0.007, 0.244, 0.11, 0.021, accent);
         }
         for (index, choice) in row.choices.iter().enumerate() {
-            let cell = choice_rect(slot, index);
+            let cell = choice_rect(slot, index, scroll);
             let current = row.value_index >= 0 && row.value == choice.value;
             commands.push(DrawCommand::Rect {
                 rect: cell,
@@ -108,6 +114,14 @@ pub(super) fn push_detail_options(commands: &mut Vec<DrawCommand>, panel: &Detai
         }
         label(commands, &row.status, rect.x + 0.007, 0.61, 0.11, 0.019, muted);
     }
+    // The same fixed viewport masks are used by the bundled skin. Keep the
+    // center marker stationary while the item bodies move underneath it.
+    for x in [0.0, 0.95] {
+        commands.push(DrawCommand::Rect {
+            rect: Rect { x, y: 0.14, width: 0.05, height: 0.51 },
+            color: Color::rgb(0.035, 0.055, 0.075),
+        });
+    }
     if let Some(row) = panel.selected() {
         label(commands, &row.auxiliary, 0.06, 0.66, 0.88, 0.023, accent);
         label(commands, &row.description, 0.06, 0.715, 0.88, 0.024, white);
@@ -126,13 +140,18 @@ pub(super) fn push_detail_options(commands: &mut Vec<DrawCommand>, panel: &Detai
     label(commands, &panel.guide, 0.06, 0.94, 0.88, 0.020, muted);
 }
 
-fn column_rect(slot: usize) -> Rect {
-    Rect { x: 0.05 + slot as f32 * 0.129, y: 0.18, width: 0.124, height: 0.46 }
+fn column_rect(slot: usize, scroll: f32) -> Rect {
+    Rect {
+        x: 0.05 + (detail_options_column(slot) as f32 + scroll.clamp(-1.0, 1.0)) * 0.129,
+        y: 0.18,
+        width: 0.124,
+        height: 0.46,
+    }
 }
 
-fn choice_rect(slot: usize, index: usize) -> Rect {
+fn choice_rect(slot: usize, index: usize, scroll: f32) -> Rect {
     Rect {
-        x: column_rect(slot).x + 0.006,
+        x: column_rect(slot, scroll).x + 0.006,
         y: 0.28 + index as f32 * 0.041,
         width: 0.112,
         height: 0.033,
@@ -152,6 +171,7 @@ fn button_rect(id: i32) -> Option<Rect> {
 
 pub(crate) fn detail_options_click_hit(
     panel: &DetailOptionsSnapshot,
+    scroll: f32,
     x: f32,
     y: f32,
 ) -> Option<SkinClickHit> {
@@ -164,13 +184,16 @@ pub(crate) fn detail_options_click_hit(
             });
         }
     }
-    for slot in 0..DETAIL_OPTION_ROWS {
+    if !(0.05..=0.95).contains(&x) {
+        return None;
+    }
+    for slot in 0..DETAIL_OPTION_DRAW_SLOTS {
         let Some(row) = panel.row(slot) else {
             continue;
         };
         if row.editable {
             for index in 0..row.choices.len().min(SKIN_DETAIL_OPTIONS_CHOICES) {
-                let rect = choice_rect(slot, index);
+                let rect = choice_rect(slot, index, scroll);
                 if contains(rect, x, y) {
                     return Some(SkinClickHit {
                         target: SkinClickTarget::Event {
@@ -184,7 +207,7 @@ pub(crate) fn detail_options_click_hit(
                 }
             }
         }
-        let rect = column_rect(slot);
+        let rect = column_rect(slot, scroll);
         if contains(rect, x, y) {
             return Some(SkinClickHit {
                 target: SkinClickTarget::Event {

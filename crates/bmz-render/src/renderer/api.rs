@@ -316,7 +316,12 @@ impl Renderer {
         let (x, y) = self.select_skin_canvas_point(x, y)?;
         if let Some(panel) = snapshot.detail_options.as_deref() {
             if !self.select_skin_context.document().is_some_and(|doc| doc.bmz_detail_options == 1) {
-                return crate::plan::detail_options_click_hit(panel, x, y);
+                return crate::plan::detail_options_click_hit(
+                    panel,
+                    snapshot.detail_options_scroll,
+                    x,
+                    y,
+                );
             }
             return self.select_skin_context.select_click_hit(snapshot, x, y).filter(|hit| {
                 matches!(hit.target, SkinClickTarget::Event { event_id, .. } if bmz_skin_document::is_detail_options_event(event_id))

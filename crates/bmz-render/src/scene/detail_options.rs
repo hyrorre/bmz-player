@@ -2,6 +2,17 @@
 use std::sync::Arc;
 
 pub const DETAIL_OPTION_ROWS: usize = 7;
+pub const DETAIL_OPTION_CENTER: usize = DETAIL_OPTION_ROWS / 2;
+/// Two extra, offscreen slots preserve the departing columns during movement.
+pub const DETAIL_OPTION_DRAW_SLOTS: usize = DETAIL_OPTION_ROWS + 2;
+
+pub fn detail_options_column(slot: usize) -> i32 {
+    match slot {
+        7 => -1,
+        8 => 7,
+        _ => slot as i32,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetailValueKind {
@@ -54,12 +65,32 @@ impl DetailOptionsSnapshot {
     }
 
     pub fn row(&self, slot: usize) -> Option<&DetailOptionRow> {
-        (slot < DETAIL_OPTION_ROWS).then(|| self.items.get(self.viewport_start + slot)).flatten()
+        detail_options_row_index(self.cursor, self.items.len(), slot)
+            .and_then(|index| self.items.get(index))
     }
 }
 
 pub fn detail_options_viewport(cursor: usize, count: usize) -> usize {
-    cursor.saturating_sub(DETAIL_OPTION_ROWS / 2).min(count.saturating_sub(DETAIL_OPTION_ROWS))
+    if count == 0 { 0 } else { (cursor % count + count - DETAIL_OPTION_CENTER % count) % count }
+}
+
+/// Circular viewport with a unique selection at the center. Small catalogues
+/// leave empty slots around their centered window rather than repeat items.
+pub fn detail_options_row_index(cursor: usize, count: usize, slot: usize) -> Option<usize> {
+    if count == 0 || cursor >= count || slot >= DETAIL_OPTION_DRAW_SLOTS {
+        return None;
+    }
+    if slot >= DETAIL_OPTION_ROWS {
+        return (count > DETAIL_OPTION_ROWS).then(|| {
+            (cursor as i64 + i64::from(detail_options_column(slot)) - DETAIL_OPTION_CENTER as i64)
+                .rem_euclid(count as i64) as usize
+        });
+    }
+    let visible = count.min(DETAIL_OPTION_ROWS);
+    let first = DETAIL_OPTION_CENTER - (visible - 1) / 2;
+    (first..first + visible)
+        .contains(&slot)
+        .then(|| (detail_options_viewport(cursor, count) + slot) % count)
 }
 
 fn slot(id: i32) -> Option<(usize, i32)> {
@@ -189,7 +220,7 @@ pub fn option(id: i32, panel: Option<&DetailOptionsSnapshot>) -> Option<bool> {
         return Some(panel.is_some_and(|p| {
             p.row(slot).is_some_and(|r| match field {
                 0 => true,
-                1 => p.viewport_start + slot == p.cursor,
+                1 => slot == DETAIL_OPTION_CENTER,
                 2 => r.editable,
                 3 => r.effective,
                 4 => r.value_index < 0,
@@ -253,7 +284,7 @@ mod tests {
 
     #[test]
     fn detail_rows_have_one_selection_and_keep_cursor_visible() {
-        for count in [0, 1, 3, 7, 8, 15, 80] {
+        for count in [0, 1, 2, 3, 4, 5, 6, 7, 8, 15, 80] {
             for cursor in 0..count.max(1) {
                 let p = panel(count, cursor);
                 let valid =
@@ -264,14 +295,38 @@ mod tests {
                 assert_eq!(selected, usize::from(count > 0));
                 assert_eq!(number(19300, Some(&p)), Some(cursor as i64));
                 assert_eq!(number(19301, Some(&p)), Some(count as i64));
-                assert!(p.row(7).is_none());
+                assert!(p.row(9).is_none());
+                assert_eq!(p.row(7).is_some(), count > 7);
+                assert_eq!(p.row(8).is_some(), count > 7);
                 if count > 0 {
-                    let slot = cursor - p.viewport_start;
+                    let slot = DETAIL_OPTION_CENTER;
                     assert_eq!(number(19302, Some(&p)), number(19400 + slot as i32 * 10, Some(&p)));
                     assert_eq!(text(19300, Some(&p)), text(19400 + slot as i32 * 10, Some(&p)));
                 }
+                let indices: std::collections::HashSet<_> = (0..7)
+                    .filter_map(|slot| detail_options_row_index(cursor, count, slot))
+                    .collect();
+                assert_eq!(indices.len(), count.min(7));
             }
         }
+    }
+
+    #[test]
+    fn detail_viewport_wraps_both_ends_without_moving_the_center() {
+        for (cursor, expected) in [(0, [12, 13, 14, 0, 1, 2, 3]), (14, [11, 12, 13, 14, 0, 1, 2])] {
+            assert_eq!(
+                std::array::from_fn::<_, 7, _>(
+                    |slot| detail_options_row_index(cursor, 15, slot).unwrap()
+                ),
+                expected
+            );
+        }
+        assert_eq!(detail_options_row_index(0, 15, 7), Some(11));
+        assert_eq!(detail_options_row_index(14, 15, 8), Some(3));
+        let p = panel(15, 0);
+        assert_eq!(number(19470, Some(&p)), Some(211));
+        assert_eq!(option(19471, Some(&p)), Some(false));
+        assert_eq!(option(19481, Some(&p)), Some(false));
     }
 
     #[test]

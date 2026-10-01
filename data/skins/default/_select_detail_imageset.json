@@ -534,5 +534,149 @@
     "images": [
       "panel_inactive_img"
     ]
+  },
+  {
+    "id": "detail_hit_7",
+    "act": 19317,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_choice_hit_7_0",
+    "act": 19948,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_choice_hit_7_1",
+    "act": 19952,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_choice_hit_7_2",
+    "act": 19956,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_choice_hit_7_3",
+    "act": 19960,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_choice_hit_7_4",
+    "act": 19964,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_choice_hit_7_5",
+    "act": 19968,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_choice_hit_7_6",
+    "act": 19972,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_choice_hit_7_7",
+    "act": 19976,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_hit_8",
+    "act": 19318,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_choice_hit_8_0",
+    "act": 20012,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_choice_hit_8_1",
+    "act": 20016,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_choice_hit_8_2",
+    "act": 20020,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_choice_hit_8_3",
+    "act": 20024,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_choice_hit_8_4",
+    "act": 20028,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_choice_hit_8_5",
+    "act": 20032,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_choice_hit_8_6",
+    "act": 20036,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_choice_hit_8_7",
+    "act": 20040,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
   }
 ]

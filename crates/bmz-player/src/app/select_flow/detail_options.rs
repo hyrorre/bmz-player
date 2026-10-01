@@ -1,6 +1,8 @@
 use super::*;
 use crate::select_detail_options::{CATALOG, DetailContext, DetailEffects, DetailOptionDef};
-use bmz_render::scene::detail_options::{DetailOptionsSnapshot, detail_options_viewport};
+use bmz_render::scene::detail_options::{
+    DetailOptionsSnapshot, detail_options_row_index, detail_options_viewport,
+};
 use std::cell::RefCell;
 use std::sync::Arc;
 
@@ -10,6 +12,9 @@ pub(super) struct DetailOptionsState {
     pub value_latched: bool,
     pub blocked_controls: std::collections::HashSet<(DeviceId, String)>,
     pub dirty: bool,
+    scroll_started: Option<Instant>,
+    scroll_duration: Duration,
+    scroll_from: f32,
     cache: RefCell<Option<(DetailOptionsCacheKey, Arc<DetailOptionsSnapshot>)>>,
 }
 
@@ -35,6 +40,28 @@ enum DetailValueEdit {
 }
 
 impl DetailOptionsState {
+    fn scroll_offset(&self, now: Instant) -> f32 {
+        let Some(started) = self.scroll_started else { return 0.0 };
+        if self.scroll_duration.is_zero() {
+            return 0.0;
+        }
+        let elapsed = now.saturating_duration_since(started);
+        self.scroll_from
+            * (1.0 - elapsed.as_secs_f32() / self.scroll_duration.as_secs_f32()).clamp(0.0, 1.0)
+    }
+
+    fn move_cursor(&mut self, direction: i32, now: Instant, low: Duration, high: Duration) {
+        if direction == 0 {
+            return;
+        }
+        let remaining = self.scroll_offset(now);
+        self.cursor =
+            (self.cursor as i64 + i64::from(direction)).rem_euclid(CATALOG.len() as i64) as usize;
+        self.scroll_duration = if remaining == 0.0 { low } else { high };
+        self.scroll_from = (remaining + direction as f32).clamp(-1.0, 1.0);
+        self.scroll_started = Some(now);
+    }
+
     fn input_edge(
         &mut self,
         action: Option<DetailInput>,
@@ -73,17 +100,15 @@ impl WinitApp {
             return;
         }
         if let Some((slot, choice, field)) = detail_options_choice_slot(id) {
-            if field == 0 && choice < SKIN_DETAIL_OPTIONS_CHOICES {
-                let index =
-                    detail_options_viewport(self.select.detail_options.cursor, CATALOG.len())
-                        + slot;
-                if let Some(item) = CATALOG.get(index).copied()
-                    && (choice as i64) < item.choices
-                {
-                    self.select.detail_options.cursor = index;
-                    self.select.detail_options.value_latched = self.detail_value_keys_held();
-                    self.apply_detail_setting(item, DetailValueEdit::Choice(choice));
-                }
+            if field == 0
+                && choice < SKIN_DETAIL_OPTIONS_CHOICES
+                && let Some(index) =
+                    detail_options_row_index(self.select.detail_options.cursor, CATALOG.len(), slot)
+                && let Some(item) = CATALOG.get(index).copied()
+                && (choice as i64) < item.choices
+            {
+                self.select_detail_options_index(index);
+                self.apply_detail_setting(item, DetailValueEdit::Choice(choice));
             }
             return;
         }
@@ -98,16 +123,16 @@ impl WinitApp {
                 } else if (SKIN_EVENT_DETAIL_OPTIONS_ROW_BASE..=SKIN_EVENT_DETAIL_OPTIONS_ROW_LAST)
                     .contains(&id)
                 {
-                    let start =
-                        detail_options_viewport(self.select.detail_options.cursor, CATALOG.len());
-                    let index = start + (id - SKIN_EVENT_DETAIL_OPTIONS_ROW_BASE) as usize;
-                    (index < CATALOG.len()).then_some(index)
+                    detail_options_row_index(
+                        self.select.detail_options.cursor,
+                        CATALOG.len(),
+                        (id - SKIN_EVENT_DETAIL_OPTIONS_ROW_BASE) as usize,
+                    )
                 } else {
                     None
                 };
                 if let Some(index) = position {
-                    self.select.detail_options.cursor = index;
-                    self.select.detail_options.value_latched = self.detail_value_keys_held();
+                    self.select_detail_options_index(index);
                 }
             }
         }
@@ -122,18 +147,19 @@ impl WinitApp {
             && !self.ui.egui.as_ref().is_some_and(|ui| ui.blocks_game_input(false))
     }
 
-    fn detail_options_mode(&self) -> Option<KeyMode> {
+    pub(super) fn detail_options_mode(&self) -> KeyMode {
         let source = match self.select.select_items.get(self.select.selected_index) {
             Some(SelectItem::Chart(row)) => {
                 row.chart.as_ref().and_then(|chart| KeyMode::from_str_opt(&chart.mode))
             }
             Some(SelectItem::Course(row)) => row.common_key_mode,
             _ => self.select.select_mode_filter.key_mode(),
-        }?;
-        Some(effective_play_key_mode(source, self.boot.profile_config.play.key_mode_conversion))
+        };
+        detail_edit_mode(source, self.boot.profile_config.play.key_mode_conversion)
     }
 
     pub(super) fn reset_detail_options_input(&mut self) {
+        self.select.detail_options.scroll_started = None;
         self.select.detail_options.value_latched = self.detail_value_keys_held();
         self.select.detail_options.blocked_controls = self
             .input
@@ -189,17 +215,7 @@ impl WinitApp {
         if self.select.select_keys.is_select_scratch_down(control) {
             return Some(DetailInput::Move(1));
         }
-        if device == W_KEYBOARD_DEVICE_ID {
-            match control {
-                "ArrowUp" => Some(DetailInput::Move(-1)),
-                "ArrowDown" => Some(DetailInput::Move(1)),
-                "ArrowLeft" => Some(DetailInput::Value(-1)),
-                "ArrowRight" => Some(DetailInput::Value(1)),
-                _ => None,
-            }
-        } else {
-            None
-        }
+        if device == W_KEYBOARD_DEVICE_ID { detail_arrow_input(control) } else { None }
     }
 
     fn detail_value_keys_held(&self) -> bool {
@@ -236,10 +252,26 @@ impl WinitApp {
         if !self.detail_options_active() || direction == 0 {
             return;
         }
-        self.select.detail_options.cursor = (self.select.detail_options.cursor as i32 + direction)
-            .rem_euclid(CATALOG.len() as i32) as usize;
+        let low = self.select_scroll_duration_low();
+        let high = self.select_scroll_duration_high();
+        self.select.detail_options.move_cursor(direction, Instant::now(), low, high);
         self.select.detail_options.value_latched = self.detail_value_keys_held();
         self.play_system_sound(crate::system_sound::SoundType::Scratch);
+    }
+
+    fn select_detail_options_index(&mut self, index: usize) {
+        let count = CATALOG.len() as i32;
+        let forward = (index as i32 - self.select.detail_options.cursor as i32).rem_euclid(count);
+        self.move_detail_options(if forward > count / 2 { forward - count } else { forward });
+        self.select.detail_options.value_latched = self.detail_value_keys_held();
+    }
+
+    pub(super) fn detail_options_scroll(&self) -> f32 {
+        if self.detail_options_active() {
+            self.select.detail_options.scroll_offset(Instant::now())
+        } else {
+            0.0
+        }
     }
 
     pub(super) fn change_detail_options_value(&mut self, direction: i32) {
@@ -255,7 +287,7 @@ impl WinitApp {
     }
 
     fn apply_detail_setting(&mut self, item: DetailOptionDef, edit: DetailValueEdit) -> bool {
-        let mode = self.detail_options_mode();
+        let mode = Some(self.detail_options_mode());
         let before = SelectScoreContext::from_profile(&self.boot.profile_config);
         let changed = match edit {
             DetailValueEdit::Step(direction) => {
@@ -291,22 +323,13 @@ impl WinitApp {
         if !self.select.detail_options.dirty {
             return;
         }
-        if self.detail_options_mode().is_none() {
-            // A common setting is still editable on an unresolved course/folder.
-            // The normal save path falls back to 7K and merges HS-FIX; avoid
-            // writing that unrelated mode merely to persist this common value.
-            match save_profile_config(
-                &self.boot.profile_paths.profile_toml,
-                &self.boot.profile_config,
-            ) {
-                Ok(()) => self.select.detail_options.dirty = false,
-                Err(error) => tracing::error!(%error, "failed to save detail options"),
-            }
-            return;
-        }
         // Existing save merges current E1/GAS state and syncs the active mode.
-        self.save_current_play_options(None, "detail options closed");
-        self.select.detail_options.dirty = false;
+        // Pass the E2 edit target explicitly even after the panel has closed.
+        self.select.detail_options.dirty = !self.save_play_options_for_mode(
+            self.detail_options_mode(),
+            None,
+            "detail options closed",
+        );
     }
 
     pub(super) fn detail_options_snapshot(&self) -> Option<Arc<DetailOptionsSnapshot>> {
@@ -314,7 +337,7 @@ impl WinitApp {
             return None;
         }
         let p = &self.boot.profile_config;
-        let mode = self.detail_options_mode();
+        let mode = Some(self.detail_options_mode());
         let course = matches!(
             self.select.select_items.get(self.select.selected_index),
             Some(SelectItem::Course(_))
@@ -363,6 +386,23 @@ impl WinitApp {
     }
 }
 
+fn detail_edit_mode(
+    source: Option<KeyMode>,
+    conversion: crate::config::profile_config::KeyModeConversionConfig,
+) -> KeyMode {
+    source.map(|mode| effective_play_key_mode(mode, conversion)).unwrap_or(KeyMode::K7)
+}
+
+fn detail_arrow_input(control: &str) -> Option<DetailInput> {
+    match control {
+        "ArrowLeft" => Some(DetailInput::Move(-1)),
+        "ArrowRight" => Some(DetailInput::Move(1)),
+        "ArrowUp" => Some(DetailInput::Value(-1)),
+        "ArrowDown" => Some(DetailInput::Value(1)),
+        _ => None,
+    }
+}
+
 fn detail_gamepad_lane(
     input: &ProfileInputConfig,
     slots: crate::input::gamepad::GamepadSlotMap,
@@ -403,6 +443,77 @@ fn detail_lane_direction(lane: Lane, nine_key: bool) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detail_arrows_follow_column_and_choice_axes() {
+        for (key, action) in [
+            ("ArrowLeft", DetailInput::Move(-1)),
+            ("ArrowRight", DetailInput::Move(1)),
+            ("ArrowUp", DetailInput::Value(-1)),
+            ("ArrowDown", DetailInput::Value(1)),
+        ] {
+            assert_eq!(detail_arrow_input(key), Some(action));
+        }
+        assert_eq!(detail_arrow_input("Enter"), None);
+    }
+
+    #[test]
+    fn detail_unresolved_mode_edits_and_persists_7k_without_converting_the_fallback() {
+        use crate::config::profile_config::KeyModeConversionConfig;
+        let conversion = KeyModeConversionConfig::SevenToNine;
+        assert_eq!(detail_edit_mode(Some(KeyMode::K7), conversion), KeyMode::K9);
+        assert_eq!(detail_edit_mode(Some(KeyMode::K14), conversion), KeyMode::K14);
+        let target = detail_edit_mode(None, conversion);
+        assert_eq!(target, KeyMode::K7);
+        let mut p = ProfileConfig::new_default("test", "Test", 0);
+        p.activate_play_mode(KeyMode::K9);
+        let original = toml::to_string(&p.lane).unwrap();
+        assert!(CATALOG[0].select_choice(&mut p, Some(target), 1));
+        let edited = toml::to_string(&p.lane).unwrap();
+        p.activate_play_mode(KeyMode::K9);
+        assert_eq!(toml::to_string(&p.lane).unwrap(), original);
+        let mut loaded: ProfileConfig = toml::from_str(&toml::to_string(&p).unwrap()).unwrap();
+        loaded.activate_play_mode(KeyMode::K7);
+        assert_eq!(toml::to_string(&loaded.lane).unwrap(), edited);
+        let row = CATALOG[0].row(
+            &loaded,
+            DetailContext {
+                mode: Some(target),
+                gas: GaugeAutoShiftConfig::Off,
+                practice: false,
+                course: true,
+            },
+            &Localizer::new(crate::i18n::AppLocale::En),
+        );
+        assert_eq!(row.scope, 7);
+        assert!(row.editable);
+    }
+
+    #[test]
+    fn detail_scroll_wraps_and_uses_select_timing_without_changing_values() {
+        let mut state = DetailOptionsState { cursor: CATALOG.len() - 1, ..Default::default() };
+        let now = Instant::now();
+        let low = Duration::from_millis(120);
+        let high = Duration::from_millis(40);
+        state.move_cursor(1, now, low, high);
+        assert_eq!(state.cursor, 0);
+        assert_eq!(state.scroll_offset(now), 1.0);
+        assert_eq!(state.scroll_offset(now + low / 2), 0.5);
+        assert_eq!(state.scroll_offset(now + low), 0.0);
+        // Reversing mid-animation preserves the visual position instead of
+        // snapping a whole column in the opposite direction.
+        state.move_cursor(-1, now + low / 2, low, high);
+        assert_eq!(state.cursor, CATALOG.len() - 1);
+        assert_eq!(state.scroll_duration, high);
+        assert_eq!(state.scroll_offset(now + low / 2), -0.5);
+        assert_eq!(state.scroll_offset(now + low / 2 + high), 0.0);
+        state.scroll_started = None; // closing, E1+E2, focus loss
+        assert_eq!(state.scroll_offset(now), 0.0);
+        state.move_cursor(1, now, Duration::ZERO, Duration::ZERO);
+        assert_eq!(state.cursor, 0);
+        assert_eq!(state.scroll_offset(now), 0.0);
+        assert!(!state.dirty);
+    }
 
     #[test]
     fn detail_value_chords_repeats_and_opposite_keys_use_first_edge() {

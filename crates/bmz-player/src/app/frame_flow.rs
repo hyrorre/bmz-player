@@ -1063,8 +1063,23 @@ impl WinitApp {
             .or_else(|| {
                 self.play.pending_play_start.as_ref().map(|pending| pending.play_config_key_mode)
             })
-            .or_else(|| self.selected_play_mode())
+            .or_else(|| {
+                if self.select.select_option_panel == 2 {
+                    Some(self.detail_options_mode())
+                } else {
+                    self.selected_play_mode()
+                }
+            })
             .unwrap_or(KeyMode::K7);
+        self.save_play_options_for_mode(key_mode, hispeed, reason);
+    }
+
+    pub(super) fn save_play_options_for_mode(
+        &mut self,
+        key_mode: KeyMode,
+        hispeed: Option<f32>,
+        reason: &'static str,
+    ) -> bool {
         self.boot.profile_config.activate_play_mode(key_mode);
         let (hispeed, lane_state) = lane_state_for_profile_save(
             active_course_speed_locked(self.play.active_course.as_ref()),
@@ -1085,8 +1100,10 @@ impl WinitApp {
             save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
         {
             tracing::error!(%error, reason, "failed to save profile play options");
+            false
         } else {
             tracing::info!(reason, "saved profile play options");
+            true
         }
     }
 

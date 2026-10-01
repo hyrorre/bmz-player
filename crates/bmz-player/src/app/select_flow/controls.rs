@@ -179,7 +179,7 @@ impl WinitApp {
             if previous_panel == 2 {
                 self.save_detail_options_if_dirty();
             }
-            if panel == 2 {
+            if panel == 2 || previous_panel == 2 {
                 self.sync_selected_play_mode();
             }
             if let Some(sound_type) = select_option_panel_sound_for_scene_transition(

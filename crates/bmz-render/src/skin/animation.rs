@@ -137,6 +137,11 @@ pub(super) fn apply_skin_offset_to_frame_inner(
     }
 
     apply_skin_offset_ids_to_frame(&ids, frame, state, relative);
+    if state.detail_options.is_some() && !relative {
+        let scroll = state.detail_options_scroll.clamp(-1.0, 1.0);
+        frame.x += (destination.bmz_detail_scroll[0] as f32 * scroll).round() as i32;
+        frame.y += (destination.bmz_detail_scroll[1] as f32 * scroll).round() as i32;
+    }
 }
 
 pub(super) fn apply_skin_offset_ids_to_frame(

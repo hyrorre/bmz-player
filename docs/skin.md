@@ -630,7 +630,7 @@ E2表示中は新eventだけをクリック対象とし、背後の行・旧even
 | 19306 | VALUE_INDEX。bool/enumの0-based選択肢index。number、未取得、候補外値は-1 |
 | 19307 | CHOICE_COUNT。boolは2、enumは候補数、numberは0 |
 | 19308 / 19309 / 19310 | numberのMIN / MAX / STEP。他の型は-1 |
-| 19311 | VIEWPORT_START。可視行0に対応する表示順の0-based位置 |
+| 19311 | VIEWPORT_START。環状配置の仮想slot 0に対応する0-based位置。`(CURSOR + ITEM_COUNT - 3 % ITEM_COUNT) % ITEM_COUNT`（0項目時は0） |
 | 19312 | ROW_SLOTS。v1は7（項目数の上限ではない） |
 
 enumのVALUEは、GAS下限: `0=ASSIST EASY,1=EASY,2=NORMAL`、HS CONFIG:
@@ -641,7 +641,8 @@ SCROLL `2=ADD`、LN `2=ADD LN,3=ADD CN,4=ADD HCN,5=ADD ALL`、MINE
 `2=ADD RANDOM,3=ADD NEAR,4=ADD BLANK`として読み取れる。変更するまで値を保持し、
 VALUE_INDEXは-1、CHOICE_COUNTは2、textの値と理由で候補外設定を知らせる。
 
-値未取得はVALUE=-1。モード未解決の項目も値を推測しない。
+値未取得はVALUE=-1。E2はキーモード未解決時に7Kを編集対象として解決し、SCOPE=7を返す。
+低水準snapshotで対象を未取得として渡す場合はSCOPE/VALUE=-1の契約を維持する。
 非表示時はITEM_COUNT / CHOICE_COUNT / ROW_SLOTS=0、他のnumber=-1、
 textは空文字、正のoptionはfalse。数値が0の設定と未取得を区別する。
 
@@ -675,6 +676,7 @@ OFF値、非適用、編集不可は独立する。effectiveは譜面に変換�
 | 19302 / 19303 | 値の前 / 次。bool/enumは循環、numberは範囲内に制限 |
 | 19304 | 引数argの安定ITEM_IDを選択。不明なIDは無視 |
 | 19310..19316 | 可視行0..6を選択。空き行は無視 |
+| 19317 / 19318 | スクロール用の枠外slot 7 / 8を選択 |
 
 19304は引数を渡せるイベント経路用。通常のdestinationクリックは可視行eventを使う。
 event引数の符号で19300..19303の方向は変わらない。
@@ -694,13 +696,35 @@ slot `s=0..6` の基底は `19400 + 10*s`。各名前空間で次を解決する
 | 5..9 | -1 | 空文字 | false（予約） |
 
 空き行・非表示行はnumber=-1、text空、全option=false。
-viewportは常にカーソルを含み、項目がある場合にselectedは一行だけtrueになる。
-19400..19469は行用の予約領域で、新timerは追加しない。
+viewportは環状で、項目がある場合に中央slot 3だけselected=trueになる。
+7項目以上ではslot 0..6が選択項目の前後3項目を含み、indexは`(VIEWPORT_START+s)%ITEM_COUNT`。
+7項目未満では重複表示せず、`3-floor((ITEM_COUNT-1)/2)`からITEM_COUNT個のslotだけvalidにする。
+例えば1項目ならslot 3、2項目ならslot 3と4、3項目ならslot 2..4が有効。
+配列の末尾で打ち切らず、validと各slotのrefを使うこと。
+枠外の補助slot 7 / 8も同じ形式で公開する（19470..19489）。7項目を超える場合のみvalidで、
+slot 7は選択項目の4つ前（描画位置はslot -1）、slot 8は4つ後（描画位置はslot 7）。
+常にselected=false。移動途中の端を途切れさせないため、各側1列を枠外に描画してマスクする。
+ROW_SLOTSは可視枠の数なので7のまま。8項目だけの時は両補助slotが同じ項目を指すが、
+見えるのは移動方向側だけ。7項目以下の補助slotは未取得値を返す。
+19400..19489は行用の予約領域で、新timerは追加しない。
+
+#### 項目切替アニメーション
+
+destinationの`"bmzDetailScroll": [dx, dy]`に1項目分の移動量（skin canvasのpixel単位、
+左下原点）を指定すると、本体のE2移動補間を描画とクリック判定の両方へ適用する。
+デフォルト横並びは`[165,0]`、縦並びでは適切なyの間隔を指定できる。
+未指定は`[0,0]`。E2非表示時は変位0。既存offset IDやtimerの意味は変更しない。
+列の背景・文字・候補・クリック領域には同じ指定を付け、中央カーソルには付けない。
+列が枠外へ出る部分はスキン側で不透明なマスクを置き、`act:0, clickable:true`等で
+マスクの背後のクリックも消費する（E2のeventフィルターが0を除外する）。
+時間は選曲と同じ低速/高速スクロール設定を使用し、移動中の再入力では高速設定を使う。
+表示位置だけを補間し、ref/option/eventが参照する項目・設定値は入力直後のsnapshotに一致する。
 
 #### 全選択肢セル（横並び表示用の追加API）
 
-可視項目slot `s=0..6`、選択肢index `c=0..7` の基底IDは `19500 + 64*s + 4*c`。
-19500..19947を予約する。各項目ブロック後半32 IDは将来用で未取得値を返す。
+可視項目slot `s=0..6`と枠外補助slot `s=7,8`、選択肢index `c=0..7` の基底IDは `19500 + 64*s + 4*c`。
+19500..20075を予約する（旧可視枠19500..19947に、補助枠19948..20075を追加）。
+各項目ブロック後半32 IDは将来用で未取得値を返す。
 現在の全項目は2〜6選択肢のため、全候補を同時表示できる。
 
 | offset | number | text | option | event |
@@ -710,8 +734,9 @@ viewportは常にカーソルを含み、項目がある場合にselectedは一�
 | 2 | -1 | 空文字 | 編集可能 | なし |
 | 3 | -1 | 空文字 | false（予約） | なし |
 
-例: 最初の項目の2番目の選択肢は19504、現在値との一致はoption 19505。
-空きセル・非表示時のnumberは-1、text空、option false。候補外ADDや未解決modeでは
+例: slot 0の2番目の選択肢は19504、現在値との一致はoption 19505。
+中央の選択項目はslot 3なので、同じ選択肢のIDは19696、一致はoption 19697。
+空きセル・非表示時のnumberは-1、text空、option false。候補外ADDや値未取得のsnapshotでは
 どの選択肢も「現在値と一致」しない。number型は列挙せず、既存の現在値/range参照を使う。
 編集不可項目は候補を表示できるが設定eventはno-op。非適用でもeditableなら変更可能。
 eventはE2が有効な間だけ受け付け、argは無視する。同じ値のクリックでは副作用を実行しない。

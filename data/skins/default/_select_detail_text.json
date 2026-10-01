@@ -580,5 +580,137 @@
     "ref": 19912,
     "size": 16,
     "overflow": 1
+  },
+  {
+    "id": "detail_label_7",
+    "ref": 19470,
+    "size": 16,
+    "overflow": 1
+  },
+  {
+    "id": "detail_value_7",
+    "ref": 19471,
+    "size": 15,
+    "overflow": 1
+  },
+  {
+    "id": "detail_status_7",
+    "ref": 19472,
+    "size": 14,
+    "overflow": 1
+  },
+  {
+    "id": "detail_choice_7_0",
+    "ref": 19948,
+    "size": 16,
+    "overflow": 1
+  },
+  {
+    "id": "detail_choice_7_1",
+    "ref": 19952,
+    "size": 16,
+    "overflow": 1
+  },
+  {
+    "id": "detail_choice_7_2",
+    "ref": 19956,
+    "size": 16,
+    "overflow": 1
+  },
+  {
+    "id": "detail_choice_7_3",
+    "ref": 19960,
+    "size": 16,
+    "overflow": 1
+  },
+  {
+    "id": "detail_choice_7_4",
+    "ref": 19964,
+    "size": 16,
+    "overflow": 1
+  },
+  {
+    "id": "detail_choice_7_5",
+    "ref": 19968,
+    "size": 16,
+    "overflow": 1
+  },
+  {
+    "id": "detail_choice_7_6",
+    "ref": 19972,
+    "size": 16,
+    "overflow": 1
+  },
+  {
+    "id": "detail_choice_7_7",
+    "ref": 19976,
+    "size": 16,
+    "overflow": 1
+  },
+  {
+    "id": "detail_label_8",
+    "ref": 19480,
+    "size": 16,
+    "overflow": 1
+  },
+  {
+    "id": "detail_value_8",
+    "ref": 19481,
+    "size": 15,
+    "overflow": 1
+  },
+  {
+    "id": "detail_status_8",
+    "ref": 19482,
+    "size": 14,
+    "overflow": 1
+  },
+  {
+    "id": "detail_choice_8_0",
+    "ref": 20012,
+    "size": 16,
+    "overflow": 1
+  },
+  {
+    "id": "detail_choice_8_1",
+    "ref": 20016,
+    "size": 16,
+    "overflow": 1
+  },
+  {
+    "id": "detail_choice_8_2",
+    "ref": 20020,
+    "size": 16,
+    "overflow": 1
+  },
+  {
+    "id": "detail_choice_8_3",
+    "ref": 20024,
+    "size": 16,
+    "overflow": 1
+  },
+  {
+    "id": "detail_choice_8_4",
+    "ref": 20028,
+    "size": 16,
+    "overflow": 1
+  },
+  {
+    "id": "detail_choice_8_5",
+    "ref": 20032,
+    "size": 16,
+    "overflow": 1
+  },
+  {
+    "id": "detail_choice_8_6",
+    "ref": 20036,
+    "size": 16,
+    "overflow": 1
+  },
+  {
+    "id": "detail_choice_8_7",
+    "ref": 20040,
+    "size": 16,
+    "overflow": 1
   }
 ]

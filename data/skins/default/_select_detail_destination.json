@@ -82,7 +82,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_row",
@@ -97,7 +98,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_selected",
@@ -112,7 +114,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_marker_0",
@@ -142,7 +145,8 @@
         "w": 141,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_value_0",
@@ -158,7 +162,8 @@
         "w": 141,
         "h": 15
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_status_0",
@@ -173,7 +178,8 @@
         "w": 141,
         "h": 14
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_0_0",
@@ -189,7 +195,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -204,7 +211,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -219,7 +227,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -237,7 +246,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_0_0",
@@ -252,7 +262,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_0_1",
@@ -268,7 +279,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -283,7 +295,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -298,7 +311,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -316,7 +330,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_0_1",
@@ -331,7 +346,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_0_2",
@@ -347,7 +363,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -362,7 +379,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -377,7 +395,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -395,7 +414,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_0_2",
@@ -410,7 +430,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_0_3",
@@ -426,7 +447,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -441,7 +463,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -456,7 +479,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -474,7 +498,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_0_3",
@@ -489,7 +514,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_0_4",
@@ -505,7 +531,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -520,7 +547,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -535,7 +563,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -553,7 +582,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_0_4",
@@ -568,7 +598,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_0_5",
@@ -584,7 +615,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -599,7 +631,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -614,7 +647,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -632,7 +666,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_0_5",
@@ -647,7 +682,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_0_6",
@@ -663,7 +699,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -678,7 +715,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -693,7 +731,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -711,7 +750,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_0_6",
@@ -726,7 +766,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_0_7",
@@ -742,7 +783,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -757,7 +799,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -772,7 +815,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -790,7 +834,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_0_7",
@@ -805,7 +850,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_hit_1",
@@ -820,7 +866,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_row",
@@ -835,7 +882,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_selected",
@@ -850,7 +898,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_marker_1",
@@ -880,7 +929,8 @@
         "w": 141,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_value_1",
@@ -896,7 +946,8 @@
         "w": 141,
         "h": 15
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_status_1",
@@ -911,7 +962,8 @@
         "w": 141,
         "h": 14
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_1_0",
@@ -927,7 +979,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -942,7 +995,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -957,7 +1011,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -975,7 +1030,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_1_0",
@@ -990,7 +1046,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_1_1",
@@ -1006,7 +1063,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -1021,7 +1079,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -1036,7 +1095,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -1054,7 +1114,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_1_1",
@@ -1069,7 +1130,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_1_2",
@@ -1085,7 +1147,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -1100,7 +1163,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -1115,7 +1179,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -1133,7 +1198,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_1_2",
@@ -1148,7 +1214,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_1_3",
@@ -1164,7 +1231,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -1179,7 +1247,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -1194,7 +1263,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -1212,7 +1282,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_1_3",
@@ -1227,7 +1298,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_1_4",
@@ -1243,7 +1315,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -1258,7 +1331,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -1273,7 +1347,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -1291,7 +1366,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_1_4",
@@ -1306,7 +1382,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_1_5",
@@ -1322,7 +1399,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -1337,7 +1415,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -1352,7 +1431,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -1370,7 +1450,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_1_5",
@@ -1385,7 +1466,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_1_6",
@@ -1401,7 +1483,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -1416,7 +1499,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -1431,7 +1515,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -1449,7 +1534,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_1_6",
@@ -1464,7 +1550,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_1_7",
@@ -1480,7 +1567,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -1495,7 +1583,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -1510,7 +1599,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -1528,7 +1618,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_1_7",
@@ -1543,7 +1634,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_hit_2",
@@ -1558,7 +1650,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_row",
@@ -1573,7 +1666,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_selected",
@@ -1588,7 +1682,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_marker_2",
@@ -1618,7 +1713,8 @@
         "w": 141,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_value_2",
@@ -1634,7 +1730,8 @@
         "w": 141,
         "h": 15
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_status_2",
@@ -1649,7 +1746,8 @@
         "w": 141,
         "h": 14
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_2_0",
@@ -1665,7 +1763,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -1680,7 +1779,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -1695,7 +1795,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -1713,7 +1814,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_2_0",
@@ -1728,7 +1830,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_2_1",
@@ -1744,7 +1847,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -1759,7 +1863,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -1774,7 +1879,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -1792,7 +1898,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_2_1",
@@ -1807,7 +1914,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_2_2",
@@ -1823,7 +1931,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -1838,7 +1947,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -1853,7 +1963,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -1871,7 +1982,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_2_2",
@@ -1886,7 +1998,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_2_3",
@@ -1902,7 +2015,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -1917,7 +2031,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -1932,7 +2047,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -1950,7 +2066,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_2_3",
@@ -1965,7 +2082,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_2_4",
@@ -1981,7 +2099,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -1996,7 +2115,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -2011,7 +2131,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -2029,7 +2150,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_2_4",
@@ -2044,7 +2166,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_2_5",
@@ -2060,7 +2183,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -2075,7 +2199,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -2090,7 +2215,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -2108,7 +2234,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_2_5",
@@ -2123,7 +2250,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_2_6",
@@ -2139,7 +2267,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -2154,7 +2283,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -2169,7 +2299,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -2187,7 +2318,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_2_6",
@@ -2202,7 +2334,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_2_7",
@@ -2218,7 +2351,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -2233,7 +2367,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -2248,7 +2383,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -2266,7 +2402,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_2_7",
@@ -2281,7 +2418,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_hit_3",
@@ -2296,7 +2434,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_row",
@@ -2311,7 +2450,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_selected",
@@ -2326,7 +2466,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_marker_3",
@@ -2356,7 +2497,8 @@
         "w": 141,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_value_3",
@@ -2372,7 +2514,8 @@
         "w": 141,
         "h": 15
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_status_3",
@@ -2387,7 +2530,8 @@
         "w": 141,
         "h": 14
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_3_0",
@@ -2403,7 +2547,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -2418,7 +2563,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -2433,7 +2579,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -2451,7 +2598,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_3_0",
@@ -2466,7 +2614,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_3_1",
@@ -2482,7 +2631,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -2497,7 +2647,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -2512,7 +2663,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -2530,7 +2682,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_3_1",
@@ -2545,7 +2698,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_3_2",
@@ -2561,7 +2715,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -2576,7 +2731,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -2591,7 +2747,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -2609,7 +2766,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_3_2",
@@ -2624,7 +2782,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_3_3",
@@ -2640,7 +2799,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -2655,7 +2815,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -2670,7 +2831,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -2688,7 +2850,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_3_3",
@@ -2703,7 +2866,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_3_4",
@@ -2719,7 +2883,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -2734,7 +2899,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -2749,7 +2915,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -2767,7 +2934,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_3_4",
@@ -2782,7 +2950,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_3_5",
@@ -2798,7 +2967,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -2813,7 +2983,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -2828,7 +2999,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -2846,7 +3018,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_3_5",
@@ -2861,7 +3034,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_3_6",
@@ -2877,7 +3051,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -2892,7 +3067,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -2907,7 +3083,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -2925,7 +3102,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_3_6",
@@ -2940,7 +3118,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_3_7",
@@ -2956,7 +3135,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -2971,7 +3151,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -2986,7 +3167,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -3004,7 +3186,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_3_7",
@@ -3019,7 +3202,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_hit_4",
@@ -3034,7 +3218,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_row",
@@ -3049,7 +3234,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_selected",
@@ -3064,7 +3250,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_marker_4",
@@ -3094,7 +3281,8 @@
         "w": 141,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_value_4",
@@ -3110,7 +3298,8 @@
         "w": 141,
         "h": 15
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_status_4",
@@ -3125,7 +3314,8 @@
         "w": 141,
         "h": 14
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_4_0",
@@ -3141,7 +3331,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -3156,7 +3347,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -3171,7 +3363,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -3189,7 +3382,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_4_0",
@@ -3204,7 +3398,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_4_1",
@@ -3220,7 +3415,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -3235,7 +3431,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -3250,7 +3447,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -3268,7 +3466,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_4_1",
@@ -3283,7 +3482,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_4_2",
@@ -3299,7 +3499,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -3314,7 +3515,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -3329,7 +3531,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -3347,7 +3550,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_4_2",
@@ -3362,7 +3566,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_4_3",
@@ -3378,7 +3583,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -3393,7 +3599,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -3408,7 +3615,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -3426,7 +3634,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_4_3",
@@ -3441,7 +3650,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_4_4",
@@ -3457,7 +3667,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -3472,7 +3683,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -3487,7 +3699,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -3505,7 +3718,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_4_4",
@@ -3520,7 +3734,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_4_5",
@@ -3536,7 +3751,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -3551,7 +3767,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -3566,7 +3783,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -3584,7 +3802,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_4_5",
@@ -3599,7 +3818,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_4_6",
@@ -3615,7 +3835,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -3630,7 +3851,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -3645,7 +3867,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -3663,7 +3886,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_4_6",
@@ -3678,7 +3902,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_4_7",
@@ -3694,7 +3919,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -3709,7 +3935,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -3724,7 +3951,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -3742,7 +3970,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_4_7",
@@ -3757,7 +3986,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_hit_5",
@@ -3772,7 +4002,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_row",
@@ -3787,7 +4018,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_selected",
@@ -3802,7 +4034,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_marker_5",
@@ -3832,7 +4065,8 @@
         "w": 141,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_value_5",
@@ -3848,7 +4082,8 @@
         "w": 141,
         "h": 15
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_status_5",
@@ -3863,7 +4098,8 @@
         "w": 141,
         "h": 14
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_5_0",
@@ -3879,7 +4115,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -3894,7 +4131,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -3909,7 +4147,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -3927,7 +4166,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_5_0",
@@ -3942,7 +4182,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_5_1",
@@ -3958,7 +4199,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -3973,7 +4215,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -3988,7 +4231,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -4006,7 +4250,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_5_1",
@@ -4021,7 +4266,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_5_2",
@@ -4037,7 +4283,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -4052,7 +4299,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -4067,7 +4315,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -4085,7 +4334,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_5_2",
@@ -4100,7 +4350,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_5_3",
@@ -4116,7 +4367,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -4131,7 +4383,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -4146,7 +4399,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -4164,7 +4418,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_5_3",
@@ -4179,7 +4434,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_5_4",
@@ -4195,7 +4451,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -4210,7 +4467,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -4225,7 +4483,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -4243,7 +4502,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_5_4",
@@ -4258,7 +4518,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_5_5",
@@ -4274,7 +4535,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -4289,7 +4551,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -4304,7 +4567,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -4322,7 +4586,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_5_5",
@@ -4337,7 +4602,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_5_6",
@@ -4353,7 +4619,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -4368,7 +4635,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -4383,7 +4651,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -4401,7 +4670,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_5_6",
@@ -4416,7 +4686,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_5_7",
@@ -4432,7 +4703,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -4447,7 +4719,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -4462,7 +4735,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -4480,7 +4754,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_5_7",
@@ -4495,7 +4770,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_hit_6",
@@ -4510,7 +4786,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_row",
@@ -4525,7 +4802,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_selected",
@@ -4540,7 +4818,8 @@
         "w": 159,
         "h": 331
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_marker_6",
@@ -4570,7 +4849,8 @@
         "w": 141,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_value_6",
@@ -4586,7 +4866,8 @@
         "w": 141,
         "h": 15
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_status_6",
@@ -4601,7 +4882,8 @@
         "w": 141,
         "h": 14
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_6_0",
@@ -4617,7 +4899,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -4632,7 +4915,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -4647,7 +4931,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -4665,7 +4950,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_6_0",
@@ -4680,7 +4966,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_6_1",
@@ -4696,7 +4983,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -4711,7 +4999,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -4726,7 +5015,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -4744,7 +5034,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_6_1",
@@ -4759,7 +5050,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_6_2",
@@ -4775,7 +5067,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -4790,7 +5083,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -4805,7 +5099,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -4823,7 +5118,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_6_2",
@@ -4838,7 +5134,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_6_3",
@@ -4854,7 +5151,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -4869,7 +5167,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -4884,7 +5183,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -4902,7 +5202,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_6_3",
@@ -4917,7 +5218,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_6_4",
@@ -4933,7 +5235,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -4948,7 +5251,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -4963,7 +5267,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -4981,7 +5286,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_6_4",
@@ -4996,7 +5302,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_6_5",
@@ -5012,7 +5319,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -5027,7 +5335,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -5042,7 +5351,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -5060,7 +5370,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_6_5",
@@ -5075,7 +5386,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_6_6",
@@ -5091,7 +5403,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -5106,7 +5419,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -5121,7 +5435,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -5139,7 +5454,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_6_6",
@@ -5154,7 +5470,8 @@
         "w": 119,
         "h": 16
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_hit_6_7",
@@ -5170,7 +5487,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_base",
@@ -5185,7 +5503,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_current",
@@ -5200,7 +5519,8 @@
         "w": 143,
         "h": 24
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_marker",
@@ -5218,7 +5538,8 @@
         "g": 232,
         "b": 201
       }
-    ]
+    ],
+    "bmzDetailScroll": [165, 0]
   },
   {
     "id": "detail_choice_6_7",
@@ -5232,6 +5553,1545 @@
         "y": 292,
         "w": 119,
         "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_hit_7",
+    "op": [
+      19300,
+      19470
+    ],
+    "dst": [
+      {
+        "x": -101,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_row",
+    "op": [
+      19300,
+      19470
+    ],
+    "dst": [
+      {
+        "x": -101,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_label_7",
+    "op": [
+      19300,
+      19470
+    ],
+    "dst": [
+      {
+        "x": -92,
+        "y": 557,
+        "w": 141,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_value_7",
+    "op": [
+      19300,
+      19470,
+      19474
+    ],
+    "dst": [
+      {
+        "x": -92,
+        "y": 529,
+        "w": 141,
+        "h": 15
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_status_7",
+    "op": [
+      19300,
+      19470
+    ],
+    "dst": [
+      {
+        "x": -92,
+        "y": 267,
+        "w": 141,
+        "h": 14
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_hit_8",
+    "op": [
+      19300,
+      19480
+    ],
+    "dst": [
+      {
+        "x": 1219,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_row",
+    "op": [
+      19300,
+      19480
+    ],
+    "dst": [
+      {
+        "x": 1219,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_label_8",
+    "op": [
+      19300,
+      19480
+    ],
+    "dst": [
+      {
+        "x": 1228,
+        "y": 557,
+        "w": 141,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_value_8",
+    "op": [
+      19300,
+      19480,
+      19484
+    ],
+    "dst": [
+      {
+        "x": 1228,
+        "y": 529,
+        "w": 141,
+        "h": 15
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_status_8",
+    "op": [
+      19300,
+      19480
+    ],
+    "dst": [
+      {
+        "x": 1228,
+        "y": 267,
+        "w": 141,
+        "h": 14
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_7_0",
+    "op": [
+      19300,
+      19948,
+      19950
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19948
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19949
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19949
+    ],
+    "dst": [
+      {
+        "x": -89,
+        "y": 500,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_7_0",
+    "op": [
+      19300,
+      19948
+    ],
+    "dst": [
+      {
+        "x": -73,
+        "y": 498,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_7_1",
+    "op": [
+      19300,
+      19952,
+      19954
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19952
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19953
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19953
+    ],
+    "dst": [
+      {
+        "x": -89,
+        "y": 471,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_7_1",
+    "op": [
+      19300,
+      19952
+    ],
+    "dst": [
+      {
+        "x": -73,
+        "y": 469,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_7_2",
+    "op": [
+      19300,
+      19956,
+      19958
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19956
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19957
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19957
+    ],
+    "dst": [
+      {
+        "x": -89,
+        "y": 441,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_7_2",
+    "op": [
+      19300,
+      19956
+    ],
+    "dst": [
+      {
+        "x": -73,
+        "y": 439,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_7_3",
+    "op": [
+      19300,
+      19960,
+      19962
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19960
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19961
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19961
+    ],
+    "dst": [
+      {
+        "x": -89,
+        "y": 412,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_7_3",
+    "op": [
+      19300,
+      19960
+    ],
+    "dst": [
+      {
+        "x": -73,
+        "y": 410,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_7_4",
+    "op": [
+      19300,
+      19964,
+      19966
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19964
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19965
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19965
+    ],
+    "dst": [
+      {
+        "x": -89,
+        "y": 382,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_7_4",
+    "op": [
+      19300,
+      19964
+    ],
+    "dst": [
+      {
+        "x": -73,
+        "y": 380,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_7_5",
+    "op": [
+      19300,
+      19968,
+      19970
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19968
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19969
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19969
+    ],
+    "dst": [
+      {
+        "x": -89,
+        "y": 353,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_7_5",
+    "op": [
+      19300,
+      19968
+    ],
+    "dst": [
+      {
+        "x": -73,
+        "y": 351,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_7_6",
+    "op": [
+      19300,
+      19972,
+      19974
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19972
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19973
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19973
+    ],
+    "dst": [
+      {
+        "x": -89,
+        "y": 323,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_7_6",
+    "op": [
+      19300,
+      19972
+    ],
+    "dst": [
+      {
+        "x": -73,
+        "y": 321,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_7_7",
+    "op": [
+      19300,
+      19976,
+      19978
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19976
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19977
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19977
+    ],
+    "dst": [
+      {
+        "x": -89,
+        "y": 294,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_7_7",
+    "op": [
+      19300,
+      19976
+    ],
+    "dst": [
+      {
+        "x": -73,
+        "y": 292,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_8_0",
+    "op": [
+      19300,
+      20012,
+      20014
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      20012
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      20013
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      20013
+    ],
+    "dst": [
+      {
+        "x": 1231,
+        "y": 500,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_8_0",
+    "op": [
+      19300,
+      20012
+    ],
+    "dst": [
+      {
+        "x": 1247,
+        "y": 498,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_8_1",
+    "op": [
+      19300,
+      20016,
+      20018
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      20016
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      20017
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      20017
+    ],
+    "dst": [
+      {
+        "x": 1231,
+        "y": 471,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_8_1",
+    "op": [
+      19300,
+      20016
+    ],
+    "dst": [
+      {
+        "x": 1247,
+        "y": 469,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_8_2",
+    "op": [
+      19300,
+      20020,
+      20022
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      20020
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      20021
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      20021
+    ],
+    "dst": [
+      {
+        "x": 1231,
+        "y": 441,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_8_2",
+    "op": [
+      19300,
+      20020
+    ],
+    "dst": [
+      {
+        "x": 1247,
+        "y": 439,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_8_3",
+    "op": [
+      19300,
+      20024,
+      20026
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      20024
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      20025
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      20025
+    ],
+    "dst": [
+      {
+        "x": 1231,
+        "y": 412,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_8_3",
+    "op": [
+      19300,
+      20024
+    ],
+    "dst": [
+      {
+        "x": 1247,
+        "y": 410,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_8_4",
+    "op": [
+      19300,
+      20028,
+      20030
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      20028
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      20029
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      20029
+    ],
+    "dst": [
+      {
+        "x": 1231,
+        "y": 382,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_8_4",
+    "op": [
+      19300,
+      20028
+    ],
+    "dst": [
+      {
+        "x": 1247,
+        "y": 380,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_8_5",
+    "op": [
+      19300,
+      20032,
+      20034
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      20032
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      20033
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      20033
+    ],
+    "dst": [
+      {
+        "x": 1231,
+        "y": 353,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_8_5",
+    "op": [
+      19300,
+      20032
+    ],
+    "dst": [
+      {
+        "x": 1247,
+        "y": 351,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_8_6",
+    "op": [
+      19300,
+      20036,
+      20038
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      20036
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      20037
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      20037
+    ],
+    "dst": [
+      {
+        "x": 1231,
+        "y": 323,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_8_6",
+    "op": [
+      19300,
+      20036
+    ],
+    "dst": [
+      {
+        "x": 1247,
+        "y": 321,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_8_7",
+    "op": [
+      19300,
+      20040,
+      20042
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      20040
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      20041
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      20041
+    ],
+    "dst": [
+      {
+        "x": 1231,
+        "y": 294,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_8_7",
+    "op": [
+      19300,
+      20040
+    ],
+    "dst": [
+      {
+        "x": 1247,
+        "y": 292,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_background",
+    "op": [
+      19300
+    ],
+    "act": 0,
+    "clickable": true,
+    "dst": [
+      {
+        "x": 1216,
+        "y": 252,
+        "w": 64,
+        "h": 367
+      }
+    ]
+  },
+  {
+    "id": "detail_background",
+    "op": [
+      19300
+    ],
+    "act": 0,
+    "clickable": true,
+    "dst": [
+      {
+        "x": 0,
+        "y": 252,
+        "w": 64,
+        "h": 367
       }
     ]
   },

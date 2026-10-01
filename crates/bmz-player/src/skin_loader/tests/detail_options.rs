@@ -172,6 +172,70 @@ fn assert_native(renderer: &mut Renderer) {
     }
 }
 
+#[test]
+fn detail_carousel_draw_and_click_positions_follow_the_same_animation() {
+    for native in [false, true] {
+        let mut renderer = Renderer::default();
+        if !native {
+            let path = default_skin_document_path_from_paths(&test_app_paths(), SkinKind::Select);
+            let decoded = decode_beatoraja_skin(&path, SkinKind::Select).unwrap();
+            install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
+                .unwrap();
+        }
+        for cursor in [0, 14] {
+            let mut s = snapshot(AppLocale::En, cursor);
+            let selected_label =
+                s.detail_options.as_ref().unwrap().selected().unwrap().label.clone();
+            let mut rest_x = 0.0;
+            let mut marker_x = 0.0;
+            for scroll in [0.0, 1.0, 0.5, -1.0, -0.5, 0.0] {
+                s.detail_options_scroll = scroll;
+                renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
+                let commands = &renderer.last_plan().unwrap().commands;
+                let text_x = |label: &str| {
+                    commands
+                        .iter()
+                        .find_map(|cmd| match cmd {
+                            DrawCommand::Text { text, origin, .. } if text == label => {
+                                Some(origin.x)
+                            }
+                            _ => None,
+                        })
+                        .unwrap()
+                };
+                if scroll == 0.0 {
+                    rest_x = text_x(&selected_label);
+                    marker_x = text_x("▼");
+                } else {
+                    let pitch = if native { 0.129 } else { 165.0 / 1280.0 };
+                    assert!((text_x(&selected_label) - rest_x - scroll * pitch).abs() < 0.001);
+                    assert_eq!(text_x("▼"), marker_x);
+                }
+                for slot in 1..6 {
+                    let x = 0.10 + (slot as f32 + scroll) * 0.129;
+                    let hit = renderer.select_skin_click_hit(&s, x, 0.29).unwrap();
+                    assert!(
+                        matches!(hit.target, bmz_render::skin::SkinClickTarget::Event { event_id, .. } if event_id == 19500 + slot * 64)
+                    );
+                }
+                // Departing columns remain present and clickable in the
+                // visible edge strip, then disappear behind its fixed mask.
+                if scroll != 0.0 {
+                    let (slot, x) = if scroll > 0.0 { (7, 0.075) } else { (8, 0.925) };
+                    let hit = renderer.select_skin_click_hit(&s, x, 0.29).unwrap();
+                    assert!(
+                        matches!(hit.target, bmz_render::skin::SkinClickTarget::Event { event_id, .. } if event_id == 19500 + slot * 64)
+                    );
+                }
+                // The fixed edge masks consume clicks, including during movement.
+                assert!(renderer.select_skin_click_hit(&s, 0.025, 0.29).is_none());
+                assert!(renderer.select_skin_click_hit(&s, 0.975, 0.29).is_none());
+                assert!(renderer.select_skin_slider_hit(&s, 0.5, 0.3).is_none());
+            }
+        }
+    }
+}
+
 /// Explicit opt-in visual QA; no window, profile, DB, audio, or input device.
 #[test]
 #[ignore = "requires an available GPU adapter; writes preview PNGs to a temporary directory"]
@@ -194,13 +258,20 @@ fn detail_options_gpu_previews() {
             renderer
                 .set_default_font_search_paths(vec![test_app_paths().resource_dir.join("fonts")]);
             renderer.attach_offscreen(bmz_render::renderer::SurfaceSize { width, height }).unwrap();
-            for (locale, cursor) in [(AppLocale::Ja, 3), (AppLocale::En, 8)] {
-                renderer.render_scene(AppSceneSnapshot::Select(snapshot(locale, cursor))).unwrap();
+            for (locale, cursor, scroll) in [
+                (AppLocale::Ja, 0, 0.0),
+                (AppLocale::En, 14, 0.0),
+                (AppLocale::Ja, 0, 0.5),
+                (AppLocale::En, 14, -0.5),
+            ] {
+                let mut s = snapshot(locale, cursor);
+                s.detail_options_scroll = scroll;
+                renderer.render_scene(AppSceneSnapshot::Select(s)).unwrap();
                 let rgba = renderer.read_offscreen_rgba().unwrap();
                 let image = image::RgbaImage::from_raw(width, height, rgba).unwrap();
                 image
                     .save(output.join(format!(
-                        "{}-{}-{width}x{height}.png",
+                        "{}-{}-{cursor}-{scroll}-{width}x{height}.png",
                         if native { "native" } else { "default" },
                         locale.code()
                     )))

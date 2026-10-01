@@ -861,6 +861,6 @@ detail-options-status-locked = [LOCKED]
 detail-options-status-inactive = [INACTIVE]
 detail-options-scope-global = PROFILE
 detail-options-scope-unknown = UNRESOLVED
-detail-options-guide = Scratch / Up Down: item   Odd / Right: +   Even / Left: −   Release E2: close
+detail-options-guide = Scratch / Left Right: item   Odd / Down: +   Even / Up: −   Release E2: close
 detail-options-previous = PREVIOUS ITEM
 detail-options-next = NEXT ITEM

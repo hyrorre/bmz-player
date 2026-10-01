@@ -212,8 +212,9 @@ pub const SKIN_TEXT_DETAIL_OPTIONS_BASE: i32 = 19_300;
 pub const SKIN_TEXT_DETAIL_OPTIONS_LAST: i32 = 19_309;
 pub const SKIN_OPTION_DETAIL_OPTIONS_BASE: i32 = 19_300;
 pub const SKIN_OPTION_DETAIL_OPTIONS_LAST: i32 = 19_305;
+/// Slots 0..6 are visible, 7/8 are the left/right offscreen animation buffers.
 pub const SKIN_DETAIL_OPTIONS_ROW_BASE: i32 = 19_400;
-pub const SKIN_DETAIL_OPTIONS_ROW_LAST: i32 = 19_469;
+pub const SKIN_DETAIL_OPTIONS_ROW_LAST: i32 = 19_489;
 pub const SKIN_DETAIL_OPTIONS_ROW_STRIDE: i32 = 10;
 pub const SKIN_EVENT_DETAIL_OPTIONS_PREVIOUS: i32 = 19_300;
 pub const SKIN_EVENT_DETAIL_OPTIONS_NEXT: i32 = 19_301;
@@ -221,12 +222,12 @@ pub const SKIN_EVENT_DETAIL_OPTIONS_DECREASE: i32 = 19_302;
 pub const SKIN_EVENT_DETAIL_OPTIONS_INCREASE: i32 = 19_303;
 pub const SKIN_EVENT_DETAIL_OPTIONS_SELECT_ID: i32 = 19_304;
 pub const SKIN_EVENT_DETAIL_OPTIONS_ROW_BASE: i32 = 19_310;
-pub const SKIN_EVENT_DETAIL_OPTIONS_ROW_LAST: i32 = 19_316;
+pub const SKIN_EVENT_DETAIL_OPTIONS_ROW_LAST: i32 = 19_318;
 
 /// Eight choice cells per visible item; number/text/option/event namespaces
 /// remain independent. Half of each 64-ID item block is reserved.
 pub const SKIN_DETAIL_OPTIONS_CHOICE_BASE: i32 = 19_500;
-pub const SKIN_DETAIL_OPTIONS_CHOICE_LAST: i32 = 19_947;
+pub const SKIN_DETAIL_OPTIONS_CHOICE_LAST: i32 = 20_075;
 pub const SKIN_DETAIL_OPTIONS_CHOICE_ITEM_STRIDE: i32 = 64;
 pub const SKIN_DETAIL_OPTIONS_CHOICE_STRIDE: i32 = 4;
 pub const SKIN_DETAIL_OPTIONS_CHOICES: usize = 8;

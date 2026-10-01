@@ -14,7 +14,11 @@ pub(super) fn plan_select(
         if skin.document().is_some_and(|doc| doc.bmz_detail_options != 1)
             && let Some(panel) = snapshot.detail_options.as_deref()
         {
-            super::detail_options::push_detail_options(&mut commands, panel);
+            super::detail_options::push_detail_options(
+                &mut commands,
+                panel,
+                snapshot.detail_options_scroll,
+            );
         }
         // timer/op条件で空になるフレームもスキンの演出として扱う。
         push_exit_hold_indicator(&mut commands, snapshot.exit_hold_progress);
@@ -141,7 +145,11 @@ pub(super) fn plan_select(
     );
 
     if let Some(panel) = snapshot.detail_options.as_deref() {
-        super::detail_options::push_detail_options(&mut commands, panel);
+        super::detail_options::push_detail_options(
+            &mut commands,
+            panel,
+            snapshot.detail_options_scroll,
+        );
     }
     push_exit_hold_indicator(&mut commands, snapshot.exit_hold_progress);
     push_scene_overlays(&mut commands, &snapshot.overlay);

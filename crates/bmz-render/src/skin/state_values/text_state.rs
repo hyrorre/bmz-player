@@ -310,7 +310,7 @@ pub(super) fn lua_main_state_text_values(
     refs.extend(SKIN_TEXT_BMZ_DAILY_RECENT_BASE..=SKIN_TEXT_BMZ_DAILY_RECENT_LAST);
     if draw_state.detail_options.is_some() {
         refs.extend(SKIN_TEXT_DETAIL_OPTIONS_BASE..=SKIN_TEXT_DETAIL_OPTIONS_LAST);
-        for slot in 0..crate::scene::detail_options::DETAIL_OPTION_ROWS as i32 {
+        for slot in 0..crate::scene::detail_options::DETAIL_OPTION_DRAW_SLOTS as i32 {
             let base = SKIN_DETAIL_OPTIONS_ROW_BASE + slot * SKIN_DETAIL_OPTIONS_ROW_STRIDE;
             refs.extend(base..=base + 2);
             let base =

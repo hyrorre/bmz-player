@@ -860,6 +860,6 @@ detail-options-status-locked = [編集不可]
 detail-options-status-inactive = [非適用]
 detail-options-scope-global = プロファイル共通
 detail-options-scope-unknown = 対象未解決
-detail-options-guide = スクラッチ・上下: 項目選択　奇数鍵・右: ＋　偶数鍵・左: −　E2解放: 閉じる
+detail-options-guide = スクラッチ・左右: 項目選択　奇数鍵・下: ＋　偶数鍵・上: −　E2解放: 閉じる
 detail-options-previous = 前の項目
 detail-options-next = 次の項目

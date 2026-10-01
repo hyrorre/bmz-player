@@ -43,7 +43,7 @@ fn detail_options_resolvers_and_lua_text_share_the_snapshot() {
         select_option_panel: 2,
         ..Default::default()
     };
-    for id in (19300..=19312).chain(19400..=19469).chain(19500..=19947) {
+    for id in (19300..=19312).chain(19400..=19489).chain(19500..=20075) {
         assert_eq!(
             skin_state_number(id, &state),
             crate::scene::detail_options::number(id, Some(&panel))
@@ -51,14 +51,14 @@ fn detail_options_resolvers_and_lua_text_share_the_snapshot() {
     }
     let texts = lua_main_state_text_values(&state, &SkinTextState::default());
     for id in (19300..=19309)
-        .chain((0..7).flat_map(|slot| (0..3).map(move |field| 19400 + slot * 10 + field)))
+        .chain((0..9).flat_map(|slot| (0..3).map(move |field| 19400 + slot * 10 + field)))
     {
         assert_eq!(
             texts.get(&id).map(String::as_str),
             crate::scene::detail_options::text(id, Some(&panel))
         );
     }
-    for id in (19300..=19305).chain(19400..=19469).chain(19500..=19947) {
+    for id in (19300..=19305).chain(19400..=19489).chain(19500..=20075) {
         let expected = crate::scene::detail_options::option(id, Some(&panel)).unwrap();
         assert_eq!(test_skin_op(id, &[], &state), expected);
         assert_eq!(test_skin_op(-id, &[], &state), !expected);
@@ -69,12 +69,14 @@ fn detail_options_resolvers_and_lua_text_share_the_snapshot() {
     let closed = SkinDrawState::default();
     assert_eq!(skin_state_number(19305, &closed), Some(-1));
     assert!(!test_skin_op(19300, &[], &closed));
-    assert_eq!(texts[&19500], "ASSIST EASY");
-    assert_eq!(texts[&19504], "EASY");
-    assert_eq!(texts[&19508], "NORMAL");
-    assert_eq!(texts[&19512], "");
-    assert!(test_skin_op(19505, &[], &state));
-    assert!(!test_skin_op(19501, &[], &state));
+    // A single item occupies the center slot (3), leaving both edges empty.
+    let choice_base = 19500 + 3 * 64;
+    assert_eq!(texts[&choice_base], "ASSIST EASY");
+    assert_eq!(texts[&(choice_base + 4)], "EASY");
+    assert_eq!(texts[&(choice_base + 8)], "NORMAL");
+    assert_eq!(texts[&(choice_base + 12)], "");
+    assert!(test_skin_op(choice_base + 5, &[], &state));
+    assert!(!test_skin_op(choice_base + 1, &[], &state));
     assert_eq!(skin_state_number(19500, &closed), Some(-1));
     assert!(!test_skin_op(19500, &[], &closed));
 }
