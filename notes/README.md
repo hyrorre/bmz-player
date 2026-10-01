@@ -33,6 +33,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-01 | [Core Audio IOProc音声と16 frames設定](2026/2026-10-01-coreaudio-ioproc.md) |
 | 2026-10-01 | [macOS GameController入力](2026/2026-10-01-gamecontroller-input.md) |
 | 2026-09-30 | [macOS入力・音声診断と停滞試験](2026/2026-09-30-macos-latency.md) |
 | 2026-09-30 | [antique Ambient背景の実装・検証](2026/2026-09-30-antique-ambient.md) |

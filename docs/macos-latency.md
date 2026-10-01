@@ -129,8 +129,9 @@ callback到着順でキューへ入れる。複数機器の時刻を並べ替え
 
 ## 音声設定
 
-設定 → 音声のバッファモードでAutoまたはFixedを選ぶ。Fixedのプリセットには256/128/64がある。
-サンプルレートも既存項目で指定する。対応しないレートはデバイス既定へ戻り、実際の値を記録する。
+設定 → 音声のバッファモードでAutoまたはFixedを選ぶ。Fixedは16〜4096 frames、
+プリセットは16/32/48/64/96/128/256。サンプルレートも既存項目で指定する。
+CPALで対応しないレートはデバイス既定へ戻り、実際の値を記録する。
 動作中のデバイス・レート・CPAL設定・対応範囲を設定画面で確認できる。
 CPALのFixed値は実コールバックサイズの保証ではない。実値は診断のframesを見る。
 範囲外要求は既存処理で範囲内へclampする。要求値とCPALへ渡した値の違いをログで確認する。
@@ -143,6 +144,36 @@ CPALはcallbackのmHostTimeからplayback予測を生成し、device buffer fram
 callback frames）とdevice latency + safety offsetを加算する。後二者の問い合わせ失敗を
 CPAL内部で0にするため、BMZから予測の完全性を検証できない点に注意する。
 デバイス変更後の内部推定値更新、外部機器、DAC、スピーカーの物理出力は別途検証が必要。
+
+### Core Audio IOProc（実験用）
+
+```sh
+cargo build -p bmz-player --release --locked --features experimental-coreaudio-ioproc
+```
+
+設定のバックエンドで`Core Audio IOProc`を選び、Fixed 16等を設定する。
+default featureには含めず、非対応ビルドは候補を隠し保存済みIOProc設定をAutoへ戻す。
+16が機器の最小値より小さければ対応範囲内へclampする。要求値・採用値・実callback framesを
+区別する。サンプルレートはHALのnominal rateへ適用し、非対応レートや変更が完了しない場合は
+明確なエラーにする。レート・バッファはデバイス共有の設定なので他アプリにも影響し得る。
+
+出力専用の`AudioDeviceCreateIOProcID`を使い、既存ミキサーと有界command queueを共用する。
+HALのvirtual formatがpacked native float32/float64 PCMである機器に対応する。
+interleaved / non-interleavedと、機器チャンネル順に連続する複数output streamを扱う。
+HALのstream configurationとvirtual formatのbuffer/channel構成を開始前に照合し、非対応構成はエラーにする。
+既定機器も開始時に解決したUIDを固定し、OS既定出力の変更には自動追従しない。
+デバイス切断・レートやvirtual formatの変更はcallbackで無音化し、設定再適用で再生成する。
+動作中にバッファが変わっても4096 frames以下は実bufferで処理し、それを超える場合は無音化する。
+
+`audio.prediction_ns`はIOProcの`inOutputTime.mHostTime − inNow.mHostTime`をMach timebaseで
+nsへ換算した差。ハードウェアへバッファ先頭が渡される予定時刻までのAPI値であり、
+CPALのAudioUnit推定と定義が異なる。device/stream latencyやDAC・アナログ出力は含めず、
+この値の差だけで物理遅延の改善を断定しない。ゼロ・逆行・1秒以上の差は無効扱い。
+IOProcの`processor_overloads`はHALの処理超過通知の累積で、stream errorやlock missとは別に記録する。
+CPALではこの通知を監視しないため0を「超過なし」と解釈しない。
+同じ機器・レート・バッファ・譜面・ビルド条件で比較し、16 framesでの長時間負荷と
+電気的入力→アナログ出力の実測を別途行う。
+実装・短時間検証は [IOProc作業記録](../notes/2026/2026-10-01-coreaudio-ioproc.md) を参照。
 
 ## 診断の読み方
 
@@ -159,7 +190,7 @@ CPAL内部で0にするため、BMZから予測の完全性を検証できない
 | audio.frames | data.len()/実channel数、frames | 要求値との同一視 |
 | audio.interval_ns | Instantで測ったcallback到着間隔、ns | underrunの確定診断 |
 | audio.duration_ns | callback入口→render完了付近、ns | ハードウェア再生までの待ち |
-| audio.prediction_ns | CPAL playback−callback、同一stream時計の差、ns | Dの対象音別測定、アナログ出力実測 |
+| audio.prediction_ns | CPAL playback−callback、IOProc outputTime−now、各backend内の時計差、ns | Dの対象音別測定、アナログ出力実測。backend間で定義が異なる |
 
 **対象音を一意に追跡した手動キー音C/DとA〜D合計は未実装・未測定。**
 この実装は既存の音声バッチ配送を保った部分計測であり、手動キー音・BGM・自動キー音の
@@ -170,7 +201,8 @@ CPAL内部で0にするため、BMZから予測の完全性を検証できない
 分布はcount / p50 / p95 / p99 / max。quantileは既存LatencyHistogram同様、対数bucketの上端
 （実測maxで制限）。maxは実測値、count=0は未測定であり0nsの測定結果ではない。
 live atomic snapshotは厳密に同時刻の値ではない。音声分布は最初の2秒を除外する。
-stream.idごとに別集計。1秒超のcallback停止、CPAL時計逆行、macOSのMach時計から検出した復帰後はepochを増やし、
+stream.idごとに別集計。CPALでは1秒超のcallback停止・時計逆行・macOSのMach時計から検出した復帰後、
+IOProcでは出力host timeの1秒超の欠落・逆行後にepochを増やし、
 分布をリセットして2秒のwarm-upをやり直す。エラーカウンターはstream累積。
 スリープ復帰前後は別の実行として測るのが比較上確実。
 入力キューはplayごと、IOHIDは取得経路の開始から停止まで（時計再基準化でepochを分ける）、音声コマンドはengineごとの累積。
@@ -178,7 +210,7 @@ stream.idごとに別集計。1秒超のcallback停止、CPAL時計逆行、macO
 
 負の/ゼロ/1秒以上のCPAL予測差はinvalid_predictionsへ数え、0nsへ変換しない。
 長いcallback間隔、timeline catch-up、stream error、lock miss、queue dropは別の事象。
-今回、OSのprocessor-overload property監視は追加していない。間隔だけから音切れ確定とは判断しない。
+IOProcのみOSのprocessor-overload propertyを監視する。間隔だけから音切れ確定とは判断しない。
 
 ## A/B手順
 

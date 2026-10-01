@@ -27,6 +27,7 @@ pub(in crate::ui) fn audio_backend_label(backend: &AudioBackend, text: Localizer
         AudioBackend::Wasapi => "WASAPI".to_owned(),
         AudioBackend::Asio => "ASIO".to_owned(),
         AudioBackend::CoreAudio => "Core Audio".to_owned(),
+        AudioBackend::CoreAudioIoProc => "Core Audio IOProc".to_owned(),
         AudioBackend::Alsa => "ALSA".to_owned(),
         AudioBackend::Pulse => "PulseAudio".to_owned(),
         AudioBackend::PipeWire => "PipeWire".to_owned(),

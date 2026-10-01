@@ -54,6 +54,7 @@ impl WinitApp {
                 "duration_ns": timing.duration_ns, "prediction_ns": timing.prediction_ns,
                 "invalid_predictions": timing.invalid_predictions,
                 "stream_errors": snapshot.stream_error_count,
+                "processor_overloads": snapshot.processor_overload_count,
                 "lock_misses": snapshot.engine_lock_miss_count,
                 "queue_drops": snapshot.command_dropped_count,
                 "timeline_catch_ups": snapshot.timeline_catch_up_count,
@@ -64,6 +65,11 @@ impl WinitApp {
                     "requested_rate":i.requested_rate,"actual_rate":i.actual_rate,
                     "requested_frames":i.requested_frames,"supported_frames":i.supported_frames,
                     "cpal_buffer":i.cpal_buffer,
+                    "prediction_source": if i.requested_host == Some(bmz_audio::backend::cpal::CpalHostId::CoreAudioIoProc) {
+                        "hal_output_time_minus_now"
+                    } else if self.audio.audio_runtime.as_ref().is_some_and(|r| r.config().output_mode == crate::config::app_config::AudioOutputMode::Exclusive) {
+                        "unmeasured"
+                    } else { "cpal_playback_minus_callback" },
                 })),
             });
             tracing::info!("BMZ_LATENCY_JSON {summary}");
@@ -98,6 +104,8 @@ impl WinitApp {
         let timeline_catch_up_frames =
             snapshot.timeline_catch_up_frames.saturating_sub(previous.timeline_catch_up_frames);
         let stream_errors = snapshot.stream_error_count.saturating_sub(previous.stream_error_count);
+        let processor_overloads =
+            snapshot.processor_overload_count.saturating_sub(previous.processor_overload_count);
         let source_lock_misses =
             snapshot.source_lock_miss_count.saturating_sub(previous.source_lock_miss_count);
         let engine_lock_misses =
@@ -147,12 +155,13 @@ impl WinitApp {
             engine_lock_misses,
             command_drops,
             command_engine_lock_misses,
-            callback_over_budget,
+            callback_over_budget: callback_over_budget || processor_overloads != 0,
             clipped_samples,
             generated_preview_loading: self.select.select_assets.generated_preview_loading(),
         });
 
         if stream_errors == 0
+            && processor_overloads == 0
             && timeline_catch_ups == 0
             && source_lock_misses == 0
             && engine_lock_misses == 0
@@ -172,6 +181,7 @@ impl WinitApp {
             timeline_catch_ups,
             timeline_catch_up_frames,
             stream_errors,
+            processor_overloads,
             source_lock_misses,
             engine_lock_misses,
             engine_lock_miss_callbacks,

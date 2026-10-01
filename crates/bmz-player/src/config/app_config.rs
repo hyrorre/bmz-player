@@ -152,6 +152,7 @@ pub enum AudioBackend {
     Wasapi,
     Asio,
     CoreAudio,
+    CoreAudioIoProc,
     Alsa,
     Pulse,
     PipeWire,

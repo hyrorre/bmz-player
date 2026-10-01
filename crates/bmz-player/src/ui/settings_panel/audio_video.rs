@@ -117,12 +117,12 @@ pub(super) fn build_audio_video_settings_sections(
                 });
             if config.audio.buffer_size_mode == AudioBufferSizeMode::Fixed {
                 ui.add(
-                    egui::Slider::new(&mut config.audio.buffer_size, 32..=4096)
+                    egui::Slider::new(&mut config.audio.buffer_size, 16..=4096)
                         .text(tr!(text, "settings-audio-buffer-frames")),
                 );
                 ui.horizontal(|ui| {
                     ui.label(tr!(text, "settings-audio-presets"));
-                    for frames in [32u32, 48, 64, 96, 128, 256] {
+                    for frames in [16u32, 32, 48, 64, 96, 128, 256] {
                         if ui.button(frames.to_string()).clicked() {
                             config.audio.buffer_size = frames;
                             config.audio.buffer_size_mode = AudioBufferSizeMode::Fixed;

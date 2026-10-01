@@ -17,6 +17,10 @@ impl CpalBackend {
         let stream_id = NEXT_STREAM.fetch_add(1, Ordering::Relaxed);
         let requested_host = config.host;
         let requested_device = config.output_device_name.clone();
+        #[cfg(all(target_os = "macos", feature = "experimental-coreaudio-ioproc"))]
+        if requested_host == Some(CpalHostId::CoreAudioIoProc) {
+            return ioproc::open_shared(config, stream_id);
+        }
         let host = match config.host {
             Some(host_id) => {
                 let Some(cpal_host_id) = cpal_host_id(host_id) else {
@@ -344,6 +348,11 @@ pub(super) fn cpal_host_id(host: CpalHostId) -> Option<::cpal::HostId> {
         CpalHostId::CoreAudio => Some(::cpal::HostId::CoreAudio),
         #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         CpalHostId::CoreAudio => None,
+
+        #[cfg(all(target_os = "macos", feature = "experimental-coreaudio-ioproc"))]
+        CpalHostId::CoreAudioIoProc => Some(::cpal::HostId::CoreAudio),
+        #[cfg(not(all(target_os = "macos", feature = "experimental-coreaudio-ioproc")))]
+        CpalHostId::CoreAudioIoProc => None,
 
         #[cfg(target_os = "linux")]
         CpalHostId::Alsa => Some(::cpal::HostId::Alsa),

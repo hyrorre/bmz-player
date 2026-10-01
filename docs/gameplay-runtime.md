@@ -56,6 +56,12 @@ callback には判定・入力処理を移していない。command scratch と�
 callback 接続前に事前確保し、callback は
 queue と engine の `try_lock` に失敗した場合も待機しない。
 
+macOSの実験用Core Audio IOProcも同じNativeOutputRenderer・source command queue・
+AudioEngineを使う。HALの出力バッファへfloat PCMを書き、出力時刻の大きな欠落は既存の
+frame座標を前進させて処理する。取得・判定・音声コマンドの所有権と旧playの取消を維持する。
+IOProcの登録・開始・停止・解除とcontext破棄はapp側で行い、停止・解除後にcontextを解放する。
+出力形式やレートが変わった場合は無音化し、設定再適用による再生成を必要とする。
+
 ## Snapshot とイベント
 
 window thread は live GameSession を参照せず、detached `PlaySessionObservation` と

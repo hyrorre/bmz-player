@@ -25,6 +25,12 @@ impl CpalSharedOutput {
             CpalOutputStream::Cpal(stream) => {
                 stream.play().map_err(CpalBackendError::PlayStream)?;
             }
+            #[cfg(all(target_os = "macos", feature = "experimental-coreaudio-ioproc"))]
+            CpalOutputStream::CoreAudioIoProc(stream) => {
+                stream
+                    .play()
+                    .map_err(|error| CpalBackendError::CoreAudioIoProc(error.to_string()))?;
+            }
             #[cfg(windows)]
             CpalOutputStream::WasapiExclusive(stream) => {
                 stream

@@ -38,17 +38,28 @@ impl OutputTiming {
         previous: Option<Instant>,
         timestamp: cpal::OutputStreamTimestamp,
     ) {
+        self.observe_delay(
+            frames,
+            now,
+            previous,
+            timestamp.playback.checked_duration_since(timestamp.callback),
+        );
+    }
+
+    /// The caller subtracts timestamps in the backend's own clock domain.
+    pub(super) fn observe_delay(
+        &self,
+        frames: usize,
+        now: Instant,
+        previous: Option<Instant>,
+        delay: Option<std::time::Duration>,
+    ) {
         self.frames.record(frames as u64);
         if let Some(previous) = previous {
             self.interval_ns
                 .record(now.duration_since(previous).as_nanos().min(u64::MAX as u128) as u64);
         }
-        // Both values belong to CPAL's stream clock, never subtract Instant/BMZ time.
-        match timestamp
-            .playback
-            .checked_duration_since(timestamp.callback)
-            .filter(|d| !d.is_zero() && d.as_secs() < 1)
-        {
+        match delay.filter(|d| !d.is_zero() && d.as_secs() < 1) {
             Some(delay) => self.prediction_ns.record(delay.as_nanos() as u64),
             None => {
                 self.invalid_predictions.fetch_add(1, Ordering::Relaxed);

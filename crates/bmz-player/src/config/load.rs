@@ -23,6 +23,13 @@ fn parse_app_config(text: &str) -> Result<AppConfig> {
         }
     }
     crate::input::availability::BackendAvailability::current().normalize_config(&mut config.input);
+    if config.audio.backend == super::app_config::AudioBackend::CoreAudioIoProc
+        && !bmz_audio::backend::cpal::is_host_supported(
+            bmz_audio::backend::cpal::CpalHostId::CoreAudioIoProc,
+        )
+    {
+        config.audio.backend = super::app_config::AudioBackend::Auto;
+    }
     Ok(config)
 }
 
@@ -48,6 +55,29 @@ fn parse_profile_config(text: &str) -> Result<ProfileConfig> {
 mod tests {
     use super::*;
     use crate::config::app_config::{GamepadBackendKind, InputBackendKind, PathEntry};
+
+    #[test]
+    fn ioproc_config_respects_feature_and_preserves_audio_settings() {
+        use crate::config::app_config::{AudioBackend, AudioBufferSizeMode};
+        let mut config = AppConfig::default();
+        config.audio.backend = AudioBackend::CoreAudioIoProc;
+        config.audio.buffer_size_mode = AudioBufferSizeMode::Fixed;
+        config.audio.buffer_size = 16;
+        let loaded = parse_app_config(&toml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(
+            loaded.audio.backend,
+            if cfg!(all(target_os = "macos", feature = "experimental-coreaudio-ioproc")) {
+                AudioBackend::CoreAudioIoProc
+            } else {
+                AudioBackend::Auto
+            }
+        );
+        config.audio.backend = loaded.audio.backend.clone();
+        assert_eq!(
+            toml::to_string(&loaded.audio).unwrap(),
+            toml::to_string(&config.audio).unwrap()
+        );
+    }
 
     #[test]
     fn loaded_input_choices_are_available_on_the_current_platform() {

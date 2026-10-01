@@ -190,17 +190,17 @@ where
 ///
 /// CPAL normally owns this state inside its data callback. WASAPI exclusive mode has to service
 /// endpoint buffers itself, so it moves the same state onto its dedicated worker thread.
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "macos", feature = "experimental-coreaudio-ioproc")))]
 pub(crate) struct NativeOutputRenderer {
     channel_offset: usize,
     output_commands: SharedOutputCommands,
     retired_sources: RetiredOutputSources,
     current_frame: Arc<AtomicU64>,
-    diagnostics: Arc<CpalOutputDiagnosticsCounters>,
+    pub(super) diagnostics: Arc<CpalOutputDiagnosticsCounters>,
     buffers: OutputRenderBuffers,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "macos", feature = "experimental-coreaudio-ioproc")))]
 impl NativeOutputRenderer {
     pub(super) fn new(
         channel_offset: usize,
@@ -250,6 +250,7 @@ impl NativeOutputRenderer {
         self.diagnostics.observe_callback_duration(callback_start);
     }
 
+    #[cfg(windows)]
     pub(crate) fn record_stream_error(&self) {
         self.diagnostics.stream_error_count.fetch_add(1, Ordering::Relaxed);
     }
@@ -533,6 +534,7 @@ impl CpalOutputDiagnosticsCounters {
             timeline_catch_up_count: self.timeline_catch_up_count.load(Ordering::Relaxed),
             timeline_catch_up_frames: self.timeline_catch_up_frames.load(Ordering::Relaxed),
             stream_error_count: self.stream_error_count.load(Ordering::Relaxed),
+            processor_overload_count: self.processor_overload_count.load(Ordering::Relaxed),
             source_lock_miss_count: self.source_lock_miss_count.load(Ordering::Relaxed),
             engine_lock_miss_count: self.engine_lock_miss_count.load(Ordering::Relaxed),
             engine_lock_miss_callback_count: self
@@ -552,7 +554,7 @@ impl CpalOutputDiagnosticsCounters {
         }
     }
 
-    fn observe_callback_duration(&self, callback_start: Instant) {
+    pub(super) fn observe_callback_duration(&self, callback_start: Instant) {
         let elapsed_ns = callback_start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
         update_atomic_max(&self.max_callback_ns, elapsed_ns);
     }

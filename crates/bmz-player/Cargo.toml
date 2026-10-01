@@ -17,6 +17,7 @@ default = ["asio", "pulseaudio"]
 asio = ["bmz-audio/asio"]
 pulseaudio = ["bmz-audio/pulseaudio"]
 pipewire = ["bmz-audio/pipewire"]
+experimental-coreaudio-ioproc = ["bmz-audio/experimental-coreaudio-ioproc"]
 # IOHID は入力監視の許可が必要な macOS 向けの任意入力経路。
 # 通常ビルドから除外し、利用する場合だけ `--features macos-iohid` で有効化する。
 macos-iohid = []
