@@ -1,3 +1,4 @@
+pub(crate) mod availability;
 pub mod capture;
 #[cfg(target_os = "macos")]
 pub mod gamecontroller;

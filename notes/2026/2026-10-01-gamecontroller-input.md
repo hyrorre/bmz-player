@@ -64,6 +64,29 @@ GCKeyboardとGCControllerを段階的に追加する。
   `.local/performance/gc-smoke.KwHTs1/diagnostics.log`。
 - 実キー/実パッドのA/B p95/p99、複数機器・同名機器・JIS・スリープ復帰の実機確認は未実施。
 
+## 第3段階: 入力設定の表示整理
+
+- GCKeyboard/GameControllerの時計方式・文字入力・遅延測定の説明を設定欄から削除。
+  接続状態を短く表示し、キー再登録の案内を残す。1P/2Pと再起動時の解除は割り当て欄で案内する。
+- キーボードの表示名を`GCKeyboard`に変更。configの`MacOsGameController`は維持する。
+- IOHIDも診断用の補足・エラーコードを表示せず、許可ボタンは未許可時、
+  再試行案内は許可不足・エラー時のみ表示する。開発者向けの詳細はdocs/ログに保持する。
+- OS/backendの利用可否を設定読み込みとUIで共用する。Raw InputはWindowsのみ、
+  GCKeyboard/GameControllerはmacOS 11以降のみ表示する。版の確認だけでは入力を初期化しない。
+  未接続や権限未許可を理由に選択肢を隠すことはしない。
+- 非対応の保存済み選択はキーボードAuto/ゲームパッドgilrsへ戻す。他の入力設定は維持する。
+
+### 検証
+
+- macOS 26.6.2 aarch64でfmt、check、all-targets Clippy、debug build成功。
+- 全体直列テスト2096件成功、6件ignore。OS別候補、非対応設定移行、全6言語の整合性を確認。
+- Objective-C bridgeのIntel macOS 10.13指定のSDK構文検査もwarning/errorなし。
+- 一時設定/DB・専用bundle IDのdebugアプリでF1 → 入力デバイスを実際に開き、
+  短い接続表示、長い説明の削除、キーボード4候補・ゲームパッド3候補、Raw Input非表示を確認。
+- macOS 10.x・Windows・Linuxの候補は模擬条件の自動テストで確認。各OS実機では未確認。
+- ローカルログ: `.local/performance/input-settings-tests.log`、
+  `.local/performance/input-settings.zcl5iD/`。一時アプリ・設定・DBはGit管理外。
+
 ## 参照
 
 - [Apple: modern physical input](https://github.com/apple/game-porting-toolkit/blob/main/game-porting-skills/skills/using-game-controller/reference/modern-input.md)

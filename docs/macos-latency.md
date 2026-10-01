@@ -19,11 +19,11 @@ gameplayのwakerを起こし、ウィンドウ側のイベント消費や描画�
 
 要求バックエンドと動作状態は別。IOHIDManagerが開いている表示は、実キーの受信確認や
 遅延改善の証明ではない。無操作だけでは故障と判断しない。
-macOS以外でMacOsHidを読んだ場合はwinitで動く。
+macOS以外でMacOsHidを読んだ場合はAutoへ移行する（WindowsではRaw Input、それ以外ではwinit）。
 
 ### 権限・失敗・復帰
 
-`macOS GameController` はmacOS 11以降のGCKeyboardを専用の直列dispatch queueで取得する。
+設定の`GCKeyboard`はmacOS 11以降のGCKeyboardを専用の直列dispatch queueで取得する。
 入力監視の許可要求は行わない。キー別pressedChangedHandlerの引数から押下・解放を配送し、
 判定用timestampはコールバック受信時の単調時計とする。プロフィールの最新イベント時刻を
 個別キーの発生時刻として使わないため、OS取得→受信遅延は測定不可。
@@ -33,6 +33,9 @@ winitへ戻る。接続済み表示は実キーの受信・性能確認の証拠
 フォーカス喪失・切断・route変更・停止時には保持を解放する。route変更時は世代を進め、
 古い世代のコールバックを拒否し、キーを離すまで新たな押下を受け付けない。
 終了時はハンドラーと通知を解除し、専用キュー上の処理終了後にRust callback storageを解放する。
+非対応OSではGCKeyboard/GameControllerを設定の選択肢に出さない。
+APIの利用可否だけを確認し、未接続や入力監視の未許可を理由に選択肢を隠すことはしない。
+保存済みの非対応バックエンドは読み込み時にキーボードAuto/ゲームパッドgilrsへ移行する。
 
 ### GameControllerゲームパッド
 

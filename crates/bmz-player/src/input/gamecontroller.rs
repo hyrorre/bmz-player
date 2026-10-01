@@ -16,6 +16,7 @@ use std::{
 };
 
 unsafe extern "C" {
+    fn bmz_gc_available() -> i32;
     fn bmz_gc_keyboard_open(
         context: *mut c_void,
         callback: extern "C" fn(*mut c_void, u64, u32, i32),
@@ -25,6 +26,10 @@ unsafe extern "C" {
     fn bmz_gc_keyboard_generation(handle: *mut c_void, generation: u64);
     fn bmz_gc_keyboard_close(handle: *mut c_void);
     fn bmz_keyboard_foreground() -> i32;
+}
+
+pub(crate) fn is_available() -> bool {
+    unsafe { bmz_gc_available() != 0 }
 }
 
 // 0=off/unavailable, 1=connected and bound keys supported, 2=waiting,

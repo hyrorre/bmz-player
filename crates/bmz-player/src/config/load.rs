@@ -2,10 +2,8 @@ use std::path::Path;
 
 use anyhow::Result;
 
-#[cfg(not(all(windows, feature = "experimental-gameinput")))]
-use super::app_config::GamepadBackendKind;
 use super::app_config::{
-    AppConfig, InputBackendKind, ensure_default_difficulty_table_sources, normalize_song_root_paths,
+    AppConfig, ensure_default_difficulty_table_sources, normalize_song_root_paths,
 };
 use super::play_input::{normalize_profile_input, validate_play_inherit_config};
 use super::profile_config::ProfileConfig;
@@ -24,18 +22,7 @@ fn parse_app_config(text: &str) -> Result<AppConfig> {
             *slot = None;
         }
     }
-    if matches!(config.input.backend, InputBackendKind::Hid | InputBackendKind::Midi) {
-        tracing::warn!(
-            backend = ?config.input.backend,
-            "unsupported input backend removed; migrating configuration to auto"
-        );
-        config.input.backend = InputBackendKind::Auto;
-    }
-    #[cfg(not(all(windows, feature = "experimental-gameinput")))]
-    if config.input.gamepad_backend == GamepadBackendKind::GameInput {
-        tracing::warn!("GameInput backend is disabled; migrating configuration to gilrs");
-        config.input.gamepad_backend = GamepadBackendKind::Gilrs;
-    }
+    crate::input::availability::BackendAvailability::current().normalize_config(&mut config.input);
     Ok(config)
 }
 
@@ -60,7 +47,24 @@ fn parse_profile_config(text: &str) -> Result<ProfileConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::app_config::PathEntry;
+    use crate::config::app_config::{GamepadBackendKind, InputBackendKind, PathEntry};
+
+    #[test]
+    fn loaded_input_choices_are_available_on_the_current_platform() {
+        let available = crate::input::availability::BackendAvailability::current();
+        for backend in [
+            InputBackendKind::RawInput,
+            InputBackendKind::MacOsHid,
+            InputBackendKind::MacOsGameController,
+        ] {
+            let mut config = AppConfig::default();
+            config.input.backend = backend;
+            config.input.gamepad_backend = GamepadBackendKind::GameController;
+            let loaded = parse_app_config(&toml::to_string(&config).unwrap()).unwrap();
+            assert!(available.keyboards().any(|choice| choice == loaded.input.backend));
+            assert!(available.gamepads().any(|choice| choice == loaded.input.gamepad_backend));
+        }
+    }
 
     #[test]
     fn parse_profile_config_migrates_only_antique_bga_brightness_and_preserves_new_choice() {

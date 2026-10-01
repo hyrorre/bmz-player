@@ -4,6 +4,12 @@
 #import <GameController/GameController.h>
 #include <stdint.h>
 
+// Availability only: do not initialize input or request any permission.
+int bmz_gc_available(void) {
+    if (@available(macOS 11.0, *)) return 1;
+    return 0;
+}
+
 typedef void (*BMZGCKeyEvent)(void *, uint64_t, uint32_t, int32_t);
 
 API_AVAILABLE(macos(11.0))
