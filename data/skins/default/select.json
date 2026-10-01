@@ -2,6 +2,8 @@
   "type": 5,
   "name": "BMZ Default Select",
   "author": "BMZ Player",
+  "bmzDetailOptions": 1,
+  "panel": { "include": "_select_detail_panel.json" },
   "w": 1280,
   "h": 720,
   "source": {
@@ -11,6 +13,7 @@
     "include": "_images.json"
   },
   "imageset": [
+    { "include": "_select_detail_imageset.json" },
     {
       "id": "song_bar",
       "images": [
@@ -89,6 +92,7 @@
     }
   ],
   "text": [
+    { "include": "_select_detail_text.json" },
     {
       "id": "select_title_label",
       "constantText": "BMZ SELECT",
@@ -403,7 +407,7 @@
     },
     {
       "id": "keycap_assist",
-      "constantText": "ASSIST",
+      "constantText": "DETAIL",
       "size": 12
     },
     {
@@ -6978,6 +6982,7 @@
           "b": 234
         }
       ]
-    }
+    },
+    { "include": "_select_detail_destination.json" }
   ]
 }

@@ -50,6 +50,8 @@ fn unique_test_dir(name: &str) -> PathBuf {
 
 #[path = "tests/cache.rs"]
 mod cache;
+#[path = "tests/detail_options.rs"]
+mod detail_options;
 #[path = "tests/document.rs"]
 mod document;
 #[path = "tests/lr2.rs"]

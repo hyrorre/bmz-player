@@ -1,0 +1,235 @@
+[
+  {
+    "id": "detail_title",
+    "ref": 19306,
+    "size": 24,
+    "overflow": 1
+  },
+  {
+    "id": "detail_count",
+    "ref": 19309,
+    "size": 17,
+    "overflow": 1
+  },
+  {
+    "id": "detail_scope",
+    "ref": 19307,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_category",
+    "ref": 19302,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_marker_0",
+    "constantText": ">",
+    "size": 19
+  },
+  {
+    "id": "detail_label_0",
+    "ref": 19400,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_value_0",
+    "ref": 19401,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_status_0",
+    "ref": 19402,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_marker_1",
+    "constantText": ">",
+    "size": 19
+  },
+  {
+    "id": "detail_label_1",
+    "ref": 19410,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_value_1",
+    "ref": 19411,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_status_1",
+    "ref": 19412,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_marker_2",
+    "constantText": ">",
+    "size": 19
+  },
+  {
+    "id": "detail_label_2",
+    "ref": 19420,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_value_2",
+    "ref": 19421,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_status_2",
+    "ref": 19422,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_marker_3",
+    "constantText": ">",
+    "size": 19
+  },
+  {
+    "id": "detail_label_3",
+    "ref": 19430,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_value_3",
+    "ref": 19431,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_status_3",
+    "ref": 19432,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_marker_4",
+    "constantText": ">",
+    "size": 19
+  },
+  {
+    "id": "detail_label_4",
+    "ref": 19440,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_value_4",
+    "ref": 19441,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_status_4",
+    "ref": 19442,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_marker_5",
+    "constantText": ">",
+    "size": 19
+  },
+  {
+    "id": "detail_label_5",
+    "ref": 19450,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_value_5",
+    "ref": 19451,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_status_5",
+    "ref": 19452,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_marker_6",
+    "constantText": ">",
+    "size": 19
+  },
+  {
+    "id": "detail_label_6",
+    "ref": 19460,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_value_6",
+    "ref": 19461,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_status_6",
+    "ref": 19462,
+    "size": 18,
+    "overflow": 1
+  },
+  {
+    "id": "detail_auxiliary",
+    "ref": 19305,
+    "size": 17,
+    "overflow": 1
+  },
+  {
+    "id": "detail_description",
+    "ref": 19303,
+    "size": 17,
+    "overflow": 1
+  },
+  {
+    "id": "detail_reason",
+    "ref": 19304,
+    "size": 16,
+    "overflow": 1
+  },
+  {
+    "id": "detail_caption_previous",
+    "constantText": "↑",
+    "size": 22,
+    "overflow": 1
+  },
+  {
+    "id": "detail_caption_next",
+    "constantText": "↓",
+    "size": 22,
+    "overflow": 1
+  },
+  {
+    "id": "detail_caption_decrease",
+    "constantText": "−",
+    "size": 22,
+    "overflow": 1
+  },
+  {
+    "id": "detail_caption_increase",
+    "constantText": "+",
+    "size": 22,
+    "overflow": 1
+  },
+  {
+    "id": "detail_guide",
+    "ref": 19308,
+    "size": 14,
+    "overflow": 1
+  }
+]

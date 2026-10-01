@@ -1,0 +1,90 @@
+[
+  {
+    "id": "detail_hit_0",
+    "act": 19310,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_hit_1",
+    "act": 19311,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_hit_2",
+    "act": 19312,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_hit_3",
+    "act": 19313,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_hit_4",
+    "act": 19314,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_hit_5",
+    "act": 19315,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_hit_6",
+    "act": 19316,
+    "click": 0,
+    "images": [
+      "panel_inactive_img"
+    ]
+  },
+  {
+    "id": "detail_button_previous",
+    "act": 19300,
+    "click": 0,
+    "images": [
+      "panel_img"
+    ]
+  },
+  {
+    "id": "detail_button_next",
+    "act": 19301,
+    "click": 0,
+    "images": [
+      "panel_img"
+    ]
+  },
+  {
+    "id": "detail_button_decrease",
+    "act": 19302,
+    "click": 0,
+    "images": [
+      "panel_img"
+    ]
+  },
+  {
+    "id": "detail_button_increase",
+    "act": 19303,
+    "click": 0,
+    "images": [
+      "panel_img"
+    ]
+  }
+]
