@@ -353,40 +353,55 @@ G-BATTLEは2K / 4K / 5K / 6K / 7K / 8K / 9K / 10K / 14Kで使用できます。
 
 ### 選曲画面 7K/14K
 
+E2 holdは「詳細プレイオプション / DETAIL OPTIONS」を開きます。
+Scratch Up/Downまたは独立したUI Up/Downで項目を選び、各サイド内の奇数鍵で値を次へ、
+偶数鍵で前へ変更します。UI Right/Leftも値変更に使えます。
+鍵盤に重複割当されたUIキーは鍵盤操作を優先します。9Kなどスクラッチのない構成では、
+鍵盤と重複しない矢印キーかマウスの上下ボタンで項目を移動できます。
+マウスは行をクリックして選択、ホイールで移動、＋／−で変更します。
+
+値は押下ごとに1回だけ変更します。同時押しは最初の値変更を採用し、すべての値変更鍵を
+離すまで追加変更しません。項目移動やE2とE1+E2の切替時に保持していた鍵も押し直します。
+E2を離すと閉じて変更を保存します。カーソルは選曲セッション中維持します。
+SUDDEN+ / HIDDEN+ / LIFTのON/OFFは独立し、OFFでも保存量は保持します。
+GAS下限はGAS OFFでも編集でき、現在は作用しない場合に「非適用」を表示します。
+解決できないキーモードの項目は「編集不可」、共通項目は引き続き編集可能です。
+全15項目、対象設定、適用条件は[詳細仕様](select-detail-options.md)を参照してください。
+
 | Key | 通常 | E1 hold | E2 hold | E1+E2 hold |
 | --- | --- | --- | --- | --- |
-| KEY1 | 決定 / 開く / 曲開始 | 1P RANDOM 次 | EXPAND JUDGE 切替 | BGA 切替 |
-| KEY2 | 戻る / 閉じる | 1P RANDOM 前 | CONSTANT 切替 | GAUGE AUTO SHIFT 切替 |
-| KEY3 | 決定 / 開く / 曲開始 | GAUGE 次 | JUDGE AREA 切替 | JUDGE AUTO ADJUST 切替 |
-| KEY4 | 戻る / 閉じる（120ms長押しでG-BATTLE相手選択） | GAUGE 前 | LEGACY NOTE 切替 | GREEN NUMBER -1 |
-| KEY5 | 決定 / 開く / 曲開始 | HS-FIX 次 | MARK NOTE 切替 | VISUAL OFFSET -1 ms |
-| KEY6 | 戻る / 閉じる | DP OPTION 次 | BPM GUIDE 切替 | GREEN NUMBER +1 |
-| KEY7 | 決定 / 開く / 曲開始 | SESSION MODE 次（NORMAL → PRACTICE → AUTOPLAY → AUTOPLAY BATTLE → G-BATTLE） | NO MINE 切替 | VISUAL OFFSET +1 ms |
-| 2P KEY1 | 決定 / 開く / 曲開始 | 2P RANDOM 次 | - | BGA 切替 |
-| 2P KEY2 | 戻る / 閉じる | 2P RANDOM 前 | - | GAUGE AUTO SHIFT 切替 |
-| 2P KEY3 | 決定 / 開く / 曲開始 | GAUGE 次 | - | JUDGE AUTO ADJUST 切替 |
-| 2P KEY4 | 戻る / 閉じる | GAUGE 前 | - | GREEN NUMBER -1 |
-| 2P KEY5 | 決定 / 開く / 曲開始 | HS-FIX 次 | - | VISUAL OFFSET -1 ms |
-| 2P KEY6 | 戻る / 閉じる | DP OPTION 次 | - | GREEN NUMBER +1 |
-| 2P KEY7 | 決定 / 開く / 曲開始 | SESSION MODE 次 | - | VISUAL OFFSET +1 ms |
-| Scratch Up | カーソル上 | TARGET 前 | - | - |
-| Scratch Down | カーソル下 | TARGET 次 | - | - |
-| Up / Down | カーソル移動 | TARGET 前 / 次 | - | - |
+| KEY1 | 決定 / 開く / 曲開始 | 1P RANDOM 次 | 値を次へ / 増加 | BGA 切替 |
+| KEY2 | 戻る / 閉じる | 1P RANDOM 前 | 値を前へ / 減少 | GAUGE AUTO SHIFT 切替 |
+| KEY3 | 決定 / 開く / 曲開始 | GAUGE 次 | 値を次へ / 増加 | JUDGE AUTO ADJUST 切替 |
+| KEY4 | 戻る / 閉じる（120ms長押しでG-BATTLE相手選択） | GAUGE 前 | 値を前へ / 減少 | GREEN NUMBER -1 |
+| KEY5 | 決定 / 開く / 曲開始 | HS-FIX 次 | 値を次へ / 増加 | VISUAL OFFSET -1 ms |
+| KEY6 | 戻る / 閉じる | DP OPTION 次 | 値を前へ / 減少 | GREEN NUMBER +1 |
+| KEY7 | 決定 / 開く / 曲開始 | SESSION MODE 次（NORMAL → PRACTICE → AUTOPLAY → AUTOPLAY BATTLE → G-BATTLE） | 値を次へ / 増加 | VISUAL OFFSET +1 ms |
+| 2P KEY1 | 決定 / 開く / 曲開始 | 2P RANDOM 次 | 値を次へ / 増加 | BGA 切替 |
+| 2P KEY2 | 戻る / 閉じる | 2P RANDOM 前 | 値を前へ / 減少 | GAUGE AUTO SHIFT 切替 |
+| 2P KEY3 | 決定 / 開く / 曲開始 | GAUGE 次 | 値を次へ / 増加 | JUDGE AUTO ADJUST 切替 |
+| 2P KEY4 | 戻る / 閉じる | GAUGE 前 | 値を前へ / 減少 | GREEN NUMBER -1 |
+| 2P KEY5 | 決定 / 開く / 曲開始 | HS-FIX 次 | 値を次へ / 増加 | VISUAL OFFSET -1 ms |
+| 2P KEY6 | 戻る / 閉じる | DP OPTION 次 | 値を前へ / 減少 | GREEN NUMBER +1 |
+| 2P KEY7 | 決定 / 開く / 曲開始 | SESSION MODE 次 | 値を次へ / 増加 | VISUAL OFFSET +1 ms |
+| Scratch Up | カーソル上 | TARGET 前 | 前の項目 | - |
+| Scratch Down | カーソル下 | TARGET 次 | 次の項目 | - |
+| Up / Down | カーソル移動 | TARGET 前 / 次 | 前 / 次の項目 | - |
 
 ### 選曲画面 9K
 
 | Key | 通常 | E1 hold | E2 hold | E1+E2 hold |
 | --- | --- | --- | --- | --- |
-| KEY1 | - | 1P RANDOM 次 | EXPAND JUDGE 切替 | BGA 切替 |
-| KEY2 | - | 1P RANDOM 前 | CONSTANT 切替 | GAUGE AUTO SHIFT 切替 |
-| KEY3 | 戻る / 閉じる | GAUGE 次 | JUDGE AREA 切替 | JUDGE AUTO ADJUST 切替 |
-| KEY4 | カーソル下（120ms長押しでG-BATTLE相手選択） | GAUGE 前 | LEGACY NOTE 切替 | GREEN NUMBER -1 |
-| KEY5 | 決定 / 開く / 曲開始 | HS-FIX 次 | MARK NOTE 切替 | VISUAL OFFSET -1 ms |
-| KEY6 | カーソル上 | DP OPTION 次 | BPM GUIDE 切替 | GREEN NUMBER +1 |
-| KEY7 | 決定 / 開く / 曲開始 | SESSION MODE 次 | NO MINE 切替 | VISUAL OFFSET +1 ms |
-| KEY8 | - | TARGET 前 | - | - |
-| KEY9 | - | TARGET 次 | - | - |
-| Up / Down | カーソル移動 | TARGET 前 / 次 | - | - |
+| KEY1 | - | 1P RANDOM 次 | 値を次へ / 増加 | BGA 切替 |
+| KEY2 | - | 1P RANDOM 前 | 値を前へ / 減少 | GAUGE AUTO SHIFT 切替 |
+| KEY3 | 戻る / 閉じる | GAUGE 次 | 値を次へ / 増加 | JUDGE AUTO ADJUST 切替 |
+| KEY4 | カーソル下（120ms長押しでG-BATTLE相手選択） | GAUGE 前 | 値を前へ / 減少 | GREEN NUMBER -1 |
+| KEY5 | 決定 / 開く / 曲開始 | HS-FIX 次 | 値を次へ / 増加 | VISUAL OFFSET -1 ms |
+| KEY6 | カーソル上 | DP OPTION 次 | 値を前へ / 減少 | GREEN NUMBER +1 |
+| KEY7 | 決定 / 開く / 曲開始 | SESSION MODE 次 | 値を次へ / 増加 | VISUAL OFFSET +1 ms |
+| KEY8 | - | TARGET 前 | 値を前へ / 減少 | - |
+| KEY9 | - | TARGET 次 | 値を次へ / 増加 | - |
+| Up / Down | カーソル移動 | TARGET 前 / 次 | 前 / 次の項目 | - |
 
 9K では、プレイ鍵盤とデフォルト UI 操作が同じキーに割り当てられている場合、選曲操作は 9K 側の意味を優先します。
 

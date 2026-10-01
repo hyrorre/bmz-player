@@ -598,6 +598,103 @@ destination に `act` / `click` を置くと、text や panel も image / images
 }
 ```
 
+### BMZ Select DETAIL OPTIONS v1
+
+E2 holdのパネル操作状態を公開する。設定そのものの既存ref/eventと独立した名前空間で、
+既存event 301..307をカーソル操作に読み替えない。event 302は従来通りSCROLL REMOVEの
+トグルであり、表示時間制御のCONSTANTはevent 400のまま。
+項目・適用条件・操作設計は[DETAIL OPTIONS仕様](select-detail-options.md)を参照する。
+
+JSON documentのルート（Luaでは返却するskin table）で `"bmzDetailOptions": 1` を
+明示するとスキンが表示を担当する。宣言なし、0、未知のversionでは本体の不透明な
+全画面オーバーレイを使う。一つのrefの使用だけでは対応を推定しない。
+旧スキンのE2表示は覆うが、互換option 22、panel 2、開閉timerは変更しない。
+スキンなしも同じsnapshotと本体表示を使う。
+
+対応スキンはoption 19300でパネルを出し、7可視行をvalidで条件付け、選択行を
+selectedで区別する。状態文字列と説明・理由・操作ガイドを表示し、背景を覆うこと。
+E2表示中は新eventだけをクリック対象とし、背後の行・旧event・sliderへの透過を遮断する。
+非表示または別モーダル中は新eventを無視する。物理操作は宣言の有無によらず共通。
+
+#### 選択項目のnumber ref
+
+| ID | 意味 |
+|---|---|
+| 19300 | CURSOR。表示順の0-based位置 |
+| 19301 | ITEM_COUNT。全項目数 |
+| 19302 | ITEM_ID。表示順と独立した安定ID |
+| 19303 | CATEGORY_ID。1=LANE、2=GAUGE、3=HI-SPEED、4=LONG NOTE、5=ASSIST / MODIFIER |
+| 19304 | SCOPE。0=profile共通、4/5/6/7/8/9/10/14=編集対象キーモード、-1=未解決 |
+| 19305 | VALUE。保存設定の値。boolは0/1、enumは下記の明示コード、numberは数値そのもの |
+| 19306 | VALUE_INDEX。bool/enumの0-based選択肢index。number、未取得、候補外値は-1 |
+| 19307 | CHOICE_COUNT。boolは2、enumは候補数、numberは0 |
+| 19308 / 19309 / 19310 | numberのMIN / MAX / STEP。他の型は-1 |
+| 19311 | VIEWPORT_START。可視行0に対応する表示順の0-based位置 |
+| 19312 | ROW_SLOTS。v1は7（項目数の上限ではない） |
+
+enumのVALUEは、GAS下限: `0=ASSIST EASY,1=EASY,2=NORMAL`、HS CONFIG:
+`0=NORMAL,1=CLASSIC,2=FLOATING,3=NORMAL+FLOATING,4=CLASSIC+FLOATING`、LN MODE:
+`0=AUTO LN,1=AUTO CN,2=AUTO HCN,3=FORCE LN,4=FORCE CN,5=FORCE HCN`。
+Modifierは`0=OFF,1=REMOVE`を新E2の候補とする。既存経路で保存された候補外値は
+SCROLL `2=ADD`、LN `2=ADD LN,3=ADD CN,4=ADD HCN,5=ADD ALL`、MINE
+`2=ADD RANDOM,3=ADD NEAR,4=ADD BLANK`として読み取れる。変更するまで値を保持し、
+VALUE_INDEXは-1、CHOICE_COUNTは2、textの値と理由で候補外設定を知らせる。
+
+値未取得はVALUE=-1。モード未解決の項目も値を推測しない。
+非表示時はITEM_COUNT / CHOICE_COUNT / ROW_SLOTS=0、他のnumber=-1、
+textは空文字、正のoptionはfalse。数値が0の設定と未取得を区別する。
+
+#### 選択項目のtext ref
+
+| ID | 意味 |
+|---|---|
+| 19300 / 19301 / 19302 | 項目名 / 値ラベル / カテゴリ名 |
+| 19303 / 19304 / 19305 | 説明 / 編集不可・非適用・候補外値の理由 / 補助情報（保存量、GAS方式） |
+| 19306 / 19307 | ローカライズされたタイトル / 編集対象スコープの表示 |
+| 19308 / 19309 | 操作ガイド / 1-based位置と件数の表示 |
+
+これらはJSONのtext.refとLuaの`main_state.text(id)`で同じ内容になる。
+ラベルやenum値の翻訳対応表をスキンに持たせず、本体i18n文字列を使う。
+
+#### option / event
+
+| option ID | 意味 |
+|---|---|
+| 19300 | 新パネル表示中 |
+| 19301 / 19302 | 選択項目のeditable / effective |
+| 19303 / 19304 / 19305 | 値型bool / enum / number |
+
+editableは変更可能、effectiveは現在のモード・方式で利用する設定かを表す。
+OFF値、非適用、編集不可は独立する。effectiveは譜面に変換対象ノーツがあることや
+最終Assist判定、スコア送信資格を保証しない。負のoptionは通常の否定規則に従う。
+
+| event ID | 意味 |
+|---|---|
+| 19300 / 19301 | 項目の前 / 次。端で循環 |
+| 19302 / 19303 | 値の前 / 次。bool/enumは循環、numberは範囲内に制限 |
+| 19304 | 引数argの安定ITEM_IDを選択。不明なIDは無視 |
+| 19310..19316 | 可視行0..6を選択。空き行は無視 |
+
+19304は引数を渡せるイベント経路用。通常のdestinationクリックは可視行eventを使う。
+event引数の符号で19300..19303の方向は変わらない。
+number / text / option / eventは別名前空間で、同じ番号でも意味が異なる。
+
+#### 可視行スロット
+
+slot `s=0..6` の基底は `19400 + 10*s`。各名前空間で次を解決する。
+
+| offset | number | text | option |
+|---|---|---|---|
+| 0 | item_id | label | valid |
+| 1 | category_id | value_label | selected |
+| 2 | value | 状態ラベル（編集不可 / 非適用 / 空文字） | editable |
+| 3 | scope | 空文字 | effective |
+| 4..9 | -1 | 空文字 | false（予約） |
+
+空き行・非表示行はnumber=-1、text空、全option=false。
+viewportは常にカーソルを含み、項目がある場合にselectedは一行だけtrueになる。
+19400..19469は行用の予約領域で、新timerは追加しない。
+
 ### BMZ Select Settings Rows
 
 設定入口、設定カテゴリ、`戻る`、`閉じる` は、通常の検索フォルダや曲フォルダとは

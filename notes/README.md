@@ -33,6 +33,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-01 | [Select E2 DETAIL OPTIONSの再設計](2026/2026-10-01-select-detail-options.md) |
 | 2026-10-01 | [並列テストの一時ディレクトリ衝突対策](2026/2026-10-01-parallel-test-directories.md) |
 | 2026-10-01 | [Starseeker ResultのMAX符号とLuaロード値](2026/2026-10-01-starseeker-result-next-rank.md) |
 | 2026-10-01 | [リプレイ視聴速度による採点差の修正](2026/2026-10-01-replay-speed-scoring.md) |
