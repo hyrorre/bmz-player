@@ -50,7 +50,17 @@ HAL overloadが1件だった。並行ビルドだけを原因と断定しない�
 IOProcのoutputTime−nowとCPALのplayback−callbackは同じ測定量ではない。
 device/stream latencyとアナログ出力を含む測定は別途必要。
 
-## 根拠
+## レビュー修正: 入力のない機器に限定
+
+IOProc登録APIは出力専用ではないため、入力streamがある機器を登録前に拒否する。
+共有設定変更前・登録直前・開始前に確認し、取得失敗も許容しない。入力構成変更も監視する。
+duplex機器は従来のCore Audioを使う。登録後のstream usage設定では登録時の権限要求を防げないため、
+対応範囲を明示的に限定した。実機の権限要求・マイク取得を伴う検証は行わない。
+入力streamあり/なし・取得失敗と、入力構成変更通知の回帰テストを追加。
+feature有効のaudio/player check・all-targets Clippy、audioテスト120件（実機2件ignored）、
+playerのIOProc設定テスト2件が成功。
+
+## 参照資料
 
 - Apple SDK `AudioHardware.h` / `AudioHardwareBase.h` / `CoreAudioTypes.h`。
 - [AudioDeviceIOProc](https://developer.apple.com/documentation/coreaudio/audiodeviceioproc)

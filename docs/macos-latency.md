@@ -159,7 +159,12 @@ default featureには含めず、非対応ビルドは候補を隠し保存済�
 区別する。サンプルレートはHALのnominal rateへ適用し、非対応レートや変更が完了しない場合は
 明確なエラーにする。レート・バッファはデバイス共有の設定なので他アプリにも影響し得る。
 
-出力専用の`AudioDeviceCreateIOProcID`を使い、既存ミキサーと有界command queueを共用する。
+入力streamがない機器だけで`AudioDeviceCreateIOProcID`を使い、既存ミキサーと有界command queueを共用する。
+このAPI自体は出力専用ではない。入出力一体のUSB機器等は、共有レート/バッファの変更や
+IOProc登録より前にエラーとして拒否する。入力構成の取得失敗も拒否し、登録直前・開始前にも再確認する。
+該当機器では設定の`Core Audio`を選ぶ。設定適用に失敗した場合は既存の前設定復旧処理を使う。
+登録時点で権限要求が発生し得るため、IOProcを一度登録してから入力streamを無効化する方法は使わない。
+入力構成の変更通知でもstreamを無効化する。権限付与やentitlementの追加は行わない。
 HALのvirtual formatがpacked native float32/float64 PCMである機器に対応する。
 interleaved / non-interleavedと、機器チャンネル順に連続する複数output streamを扱う。
 HALのstream configurationとvirtual formatのbuffer/channel構成を開始前に照合し、非対応構成はエラーにする。

@@ -112,6 +112,24 @@ fn device_for_uid(requested_uid: &str) -> Result<u32> {
         .ok_or_else(|| anyhow::anyhow!("output device disappeared"))
 }
 
+fn require_output_only(device: u32) -> Result<()> {
+    validate_input_streams(property_list::<u32>(
+        device,
+        address(kAudioDevicePropertyStreams, kAudioObjectPropertyScopeInput),
+    ))
+}
+
+fn validate_input_streams(streams: Result<Vec<u32>>) -> Result<()> {
+    // Creating an IOProc on a duplex device can itself trigger microphone
+    // authorization (before its per-proc stream usage can be configured).
+    // Fail closed, including failed queries; never create it to probe access.
+    ensure!(
+        streams?.is_empty(),
+        "IOProc requires an output-only device; select Core Audio for devices with input streams"
+    );
+    Ok(())
+}
+
 fn configure(device: u32, config: &CpalOutputConfig) -> Result<(u32, u32, AudioValueRange)> {
     let rate_address =
         address(kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal);
@@ -615,6 +633,7 @@ impl IoProcOutput {
             "device configuration changed; reopen the IOProc output"
         );
         if !self.started.get() {
+            require_output_only(self.device)?;
             check(unsafe { AudioDeviceStart(self.device, self.proc_id) })?;
             self.started.set(true);
         }
@@ -654,6 +673,8 @@ fn open(config: CpalOutputConfig, stream_id: u64) -> Result<CpalSharedOutput> {
     let cpal_device = super::device::output_device(&host, config.output_device_name.as_deref())?;
     let device_uid = cpal_device.id()?.id().to_owned();
     let device = device_for_uid(&device_uid)?;
+    // Reject before changing shared rate/buffer properties or registering an IOProc.
+    require_output_only(device)?;
     let (sample_rate, frames, range) = configure(device, &config)?;
     let streams = property_list::<u32>(
         device,
@@ -689,6 +710,11 @@ fn open(config: CpalOutputConfig, stream_id: u64) -> Result<CpalSharedOutput> {
             &watch,
         )?);
     }
+    listeners.push(Listener::new(
+        device,
+        address(kAudioDevicePropertyStreams, kAudioObjectPropertyScopeInput),
+        &watch,
+    )?);
     listeners.push(Listener::new(
         device,
         address(kAudioDevicePropertyStreams, kAudioObjectPropertyScopeOutput),
@@ -754,6 +780,7 @@ fn open(config: CpalOutputConfig, stream_id: u64) -> Result<CpalSharedOutput> {
         watch,
     });
     let mut proc_id = None;
+    require_output_only(device)?;
     check(unsafe {
         AudioDeviceCreateIOProcID(
             device,
@@ -799,6 +826,28 @@ fn open(config: CpalOutputConfig, stream_id: u64) -> Result<CpalSharedOutput> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn input_capable_and_unknown_devices_are_rejected_before_registration() {
+        assert!(validate_input_streams(Ok(vec![])).is_ok());
+        let error = validate_input_streams(Ok(vec![42])).unwrap_err();
+        assert!(error.to_string().contains("select Core Audio"));
+        assert!(validate_input_streams(Err(anyhow::anyhow!("device disappeared"))).is_err());
+        let state = WatchState {
+            invalid: AtomicBool::new(false),
+            diagnostics: Arc::new(CpalOutputDiagnosticsCounters::default()),
+        };
+        let changed = address(kAudioDevicePropertyStreams, kAudioObjectPropertyScopeInput);
+        unsafe {
+            property_changed(
+                0,
+                1,
+                NonNull::from(&changed),
+                (&state as *const WatchState).cast_mut().cast(),
+            );
+        }
+        assert!(state.invalid.load(Ordering::Acquire));
+    }
 
     fn float_format() -> AudioStreamBasicDescription {
         AudioStreamBasicDescription {
