@@ -136,6 +136,13 @@ pub fn resolve_gamepad_slot_assignments(
                     .map(gamepad_device_id_from_backend_index)
             })
     });
+    // GCController has no public persistent per-device ID. Multiple devices
+    // require explicit runtime assignment, rather than guessing by name/order.
+    if connected.iter().any(|pad| pad.stable_id.starts_with("gc-session:"))
+        && connected.iter().filter(|pad| pad.is_connected).count() > 1
+    {
+        return configured;
+    }
     resolve_gamepad_slot_device_ids(
         configured,
         connected
@@ -387,6 +394,43 @@ impl AnalogGamepadProcessor {
         timestamp: DeviceTimestamp,
         output: &mut GamepadPollOutput,
     ) {
+        self.process_axis_at(
+            device_id,
+            axis_key,
+            axis_name,
+            logical,
+            raw_code,
+            value,
+            timestamp,
+            Instant::now(),
+            output,
+        );
+    }
+
+    /// Route baseline without synthesizing a press for an already held axis.
+    #[cfg(target_os = "macos")]
+    pub(super) fn analog_scratch_enabled(&self, device: DeviceId) -> bool {
+        config_for_device(self.configs, self.slots, device).analog_scratch
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn seed_axis(&mut self, device: DeviceId, axis: u32, name: &str, value: f32) {
+        self.axis_prev.insert((device, axis), value);
+        self.axis_names.insert((device, axis), name.to_owned());
+    }
+
+    pub(super) fn process_axis_at(
+        &mut self,
+        device_id: DeviceId,
+        axis_key: u32,
+        axis_name: &str,
+        logical: String,
+        raw_code: RawControlCode,
+        value: f32,
+        timestamp: DeviceTimestamp,
+        now: Instant,
+        output: &mut GamepadPollOutput,
+    ) {
         let key = (device_id, axis_key);
         let config = config_for_device(self.configs, self.slots, device_id);
         let tick_max_size = BASE_TICK_MAX_SIZE / config.sensitivity.max(0.01);
@@ -421,9 +465,8 @@ impl AnalogGamepadProcessor {
             });
 
             let threshold = clamp_analog_scratch_threshold(config.threshold);
-            let now = Instant::now();
             let state = self.scratch_state.entry(key).or_default();
-            state.advance_to(now, threshold, device_id, &mut output.buttons);
+            state.advance_to_at(now, threshold, device_id, timestamp, &mut output.buttons);
             state.apply_movement(
                 ticks,
                 axis_name,
@@ -543,6 +586,17 @@ impl ScratchState {
         device_id: DeviceId,
         events: &mut Vec<GamepadButtonEvent>,
     ) {
+        self.advance_to_at(now, threshold, device_id, current_device_timestamp(), events);
+    }
+
+    fn advance_to_at(
+        &mut self,
+        now: Instant,
+        threshold: u32,
+        device_id: DeviceId,
+        timestamp: DeviceTimestamp,
+        events: &mut Vec<GamepadButtonEvent>,
+    ) {
         let elapsed = self
             .last_counter_update
             .map(|last| now.saturating_duration_since(last))
@@ -559,7 +613,7 @@ impl ScratchState {
         }
 
         if self.counter > threshold.saturating_mul(2) {
-            self.release_if_active_at(device_id, current_device_timestamp(), events);
+            self.release_if_active_at(device_id, timestamp, events);
             self.tick_counter = 0;
             self.counter = 0;
             self.counter_elapsed_remainder = Duration::ZERO;
@@ -769,6 +823,53 @@ mod tests {
             ),
             [Some(DeviceId(16)), Some(DeviceId(18))]
         );
+    }
+    #[test]
+    fn multiple_gamecontroller_devices_require_explicit_runtime_assignment() {
+        let pads: Vec<_> = (1..=2)
+            .map(|i| ConnectedGamepad {
+                stable_id: format!("gc-session:test:{i}"),
+                backend_id: i,
+                device_id: DeviceId(0x4000_0000 + i),
+                name: "Identical pad".into(),
+                is_connected: true,
+            })
+            .collect();
+        assert_eq!(
+            resolve_gamepad_slot_assignments([None, None], [None, None], false, false, &pads),
+            [None, None]
+        );
+        assert_eq!(
+            resolve_gamepad_slot_assignments(
+                [Some(&pads[1].stable_id), None],
+                [None, None],
+                false,
+                false,
+                &pads
+            ),
+            [Some(pads[1].device_id), None]
+        );
+    }
+    #[test]
+    fn buffered_axis_timeout_uses_sample_time_instead_of_drain_time() {
+        let mut state = ScratchState::default();
+        let mut events = Vec::new();
+        let device = DeviceId(16);
+        let sample = Instant::now() - Duration::from_secs(1);
+        state.advance_to_at(sample, 100, device, event_timestamp(1), &mut events);
+        state.apply_movement(2, "GCAxisLeftX", device, event_timestamp(2), 100, &mut events);
+        state.advance_to_at(
+            sample + Duration::from_millis(101),
+            100,
+            device,
+            event_timestamp(3),
+            &mut events,
+        );
+        assert_eq!(
+            button_events(&events),
+            vec![("GCAxisLeftX+".into(), true), ("GCAxisLeftX+".into(), false)]
+        );
+        assert_eq!(events[1].timestamp, event_timestamp(3));
     }
 
     #[test]

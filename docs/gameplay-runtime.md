@@ -29,6 +29,9 @@ skin、egui、surface acquire / submit / present を担当する。
 - Windows HID Raw Input は同じ message thread が取得する。
 - gilrs / experimental GameInput と analog scratch の polling・停止検知も入力スレッドで行う。
   GameInput の構築、COM 使用、破棄は同じ owner thread 上に保つ。
+- macOS GameControllerは専用の直列dispatch queueから直接SharedInputBackendへ配送する。
+  macOS 14以降は入力履歴を通知時に全件drainし、11〜13は要素別callbackを使う。
+  scratch停止は同じqueueの1ms timerで確認する。履歴の軸処理は入力サンプル時刻で進める。
 - Gameplay に送る入力と、メニュー・キー設定用の UI コピーは別キューにする。
   UI のコピーが滞留しても gameplay の配送には影響しない。
 - macOS / Linux のゲームパッドも独立取得する。macOSキーボードは任意選択のIOHID専用run loop、

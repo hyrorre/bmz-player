@@ -1,9 +1,11 @@
 //! Permission-free, foreground GameController input. The native serial queue
 //! never owns gameplay or UI state; it only delivers into the shared input sink.
+mod pads;
 use super::{capture::InputRoute, macos_keys, shared::SharedInputBackend};
 use bmz_gameplay::input::backend::{
     DeviceInputEvent, DeviceTimestamp, PhysicalControl, monotonic_timestamp_ns,
 };
+pub use pads::{Pads, pad_status};
 use std::{
     collections::HashSet,
     ffi::c_void,
@@ -88,7 +90,7 @@ impl Drop for Keyboard {
     }
 }
 
-fn same_route(a: Option<&InputRoute>, b: Option<&InputRoute>) -> bool {
+pub(super) fn same_route(a: Option<&InputRoute>, b: Option<&InputRoute>) -> bool {
     match (a, b) {
         (Some(a), Some(b)) => {
             a.input.same_source(&b.input)
@@ -303,8 +305,9 @@ mod tests {
     }
     #[test]
     fn native_keyboard_open_close_fences_callback_storage() {
-        let keyboard = Keyboard::start().expect("test host requires macOS 11+");
-        drop(keyboard);
+        if let Some(keyboard) = Keyboard::start() {
+            drop(keyboard);
+        }
         assert_eq!(keyboard_status(), 0);
     }
 }

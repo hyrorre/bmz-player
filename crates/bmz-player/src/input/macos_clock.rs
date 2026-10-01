@@ -11,6 +11,23 @@ pub(super) struct MachClock {
 }
 
 impl MachClock {
+    /// GameController reports Mach host time in seconds, not raw ticks.
+    #[cfg(target_os = "macos")]
+    pub(super) fn convert_seconds(
+        &mut self,
+        seconds: f64,
+        now_ticks: u64,
+        now_ns: u128,
+    ) -> Option<u128> {
+        if !seconds.is_finite() || seconds <= 0.0 || self.numer == 0 || self.denom == 0 {
+            return None;
+        }
+        let ticks = seconds * 1_000_000_000.0 * f64::from(self.denom) / f64::from(self.numer);
+        if ticks >= u64::MAX as f64 {
+            return None;
+        }
+        self.convert(ticks.round() as u64, now_ticks, now_ns)
+    }
     pub(super) fn rebase(&mut self, ticks: u64, ns: u128) {
         self.anchor_ticks = ticks;
         self.anchor_ns = ns;
@@ -58,6 +75,16 @@ impl MachClock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn gamecontroller_seconds_are_not_raw_ticks_and_rebase_rejects_old_history() {
+        let mut clock = MachClock::new(24_000_000, 1_000_000_000, 125, 3);
+        assert_eq!(clock.convert_seconds(1.001, 24_048_000, 1_002_000_000), Some(1_001_000_000));
+        assert_eq!(clock.convert_seconds(f64::NAN, 24_048_000, 1_002_000_000), None);
+        assert_eq!(clock.convert_seconds(1.003, 24_048_000, 1_002_000_000), None);
+        clock.rebase(24_048_000, 1_002_000_000);
+        assert_eq!(clock.convert_seconds(1.001, 24_048_000, 1_002_000_000), None);
+    }
     #[test]
     fn ticks_rounding_old_events_and_invalid_values() {
         let mut clock = MachClock::new(100, 1_000, 125, 3);

@@ -32,6 +32,8 @@ struct State {
 
 pub struct InputCapture {
     #[cfg(target_os = "macos")]
+    gc_pads: Option<super::gamecontroller::Pads>,
+    #[cfg(target_os = "macos")]
     mac_keyboard: Mutex<(Option<crate::config::app_config::InputBackendKind>, Option<MacKeyboard>)>,
     state: Arc<Mutex<State>>,
     stop: Arc<AtomicBool>,
@@ -47,6 +49,12 @@ impl InputCapture {
         configs: [GamepadScratchConfig; 2],
         bridge: Option<RawInputBridge>,
     ) -> anyhow::Result<Self> {
+        #[cfg(target_os = "macos")]
+        let gc_pads = (kind == Some(GamepadBackendKind::GameController))
+            .then(|| super::gamecontroller::Pads::start(configs))
+            .flatten();
+        #[cfg(target_os = "macos")]
+        let kind = if gc_pads.is_some() { None } else { kind };
         let state = Arc::new(Mutex::new(State {
             #[cfg(all(windows, feature = "experimental-gameinput"))]
             gameinput_diagnostics: None,
@@ -158,8 +166,12 @@ impl InputCapture {
             }
         })?;
         let name = ready_rx.recv_timeout(Duration::from_secs(5))?;
+        #[cfg(target_os = "macos")]
+        let name = if gc_pads.is_some() { "GameController" } else { name };
         tracing::info!(backend = name, "input backend: dedicated capture thread");
         Ok(Self {
+            #[cfg(target_os = "macos")]
+            gc_pads,
             #[cfg(target_os = "macos")]
             mac_keyboard: Mutex::new((None, None)),
             state,
@@ -172,6 +184,10 @@ impl InputCapture {
     }
 
     pub fn set_route(&self, route: Option<InputRoute>) {
+        #[cfg(target_os = "macos")]
+        if let Some(pads) = &self.gc_pads {
+            pads.set_route(route.clone());
+        }
         #[cfg(target_os = "macos")]
         if let Some(keyboard) = &self.mac_keyboard.lock().unwrap_or_else(|e| e.into_inner()).1 {
             keyboard.set_route(route.clone());
@@ -220,14 +236,26 @@ impl InputCapture {
         };
     }
     pub fn set_analog_config(&mut self, configs: [GamepadScratchConfig; 2], slots: GamepadSlotMap) {
+        #[cfg(target_os = "macos")]
+        if let Some(pads) = &self.gc_pads {
+            pads.set_analog_config(configs, slots);
+        }
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.configs = configs;
         state.slots = slots;
     }
     pub fn poll(&mut self) -> GamepadPollOutput {
+        #[cfg(target_os = "macos")]
+        if let Some(pads) = &self.gc_pads {
+            return pads.poll();
+        }
         self.state.try_lock().map(|mut state| std::mem::take(&mut state.output)).unwrap_or_default()
     }
     pub fn connected_gamepads(&self) -> Vec<ConnectedGamepad> {
+        #[cfg(target_os = "macos")]
+        if let Some(pads) = &self.gc_pads {
+            return pads.connected_gamepads();
+        }
         self.state.lock().unwrap_or_else(|e| e.into_inner()).connected.clone()
     }
     pub fn name(&self) -> &'static str {
@@ -278,7 +306,7 @@ impl MacKeyboard {
 }
 
 #[derive(Default)]
-struct ButtonDelivery {
+pub(super) struct ButtonDelivery {
     input: Option<SharedInputBackend>,
     pressed: std::collections::HashMap<
         (bmz_gameplay::input::backend::DeviceId, bmz_gameplay::input::backend::PhysicalControl),
@@ -287,7 +315,11 @@ struct ButtonDelivery {
 }
 
 impl ButtonDelivery {
-    fn set_route(&mut self, route: Option<&InputRoute>) {
+    #[cfg(target_os = "macos")]
+    pub(super) fn active(&self) -> bool {
+        self.input.is_some()
+    }
+    pub(super) fn set_route(&mut self, route: Option<&InputRoute>) {
         let same = match (&self.input, route) {
             (Some(input), Some(route)) => input.same_source(&route.input),
             (None, None) => true,
@@ -307,7 +339,7 @@ impl ButtonDelivery {
         }
         self.input = route.map(|route| route.input.clone());
     }
-    fn push(&mut self, event: bmz_gameplay::input::backend::DeviceInputEvent) {
+    pub(super) fn push(&mut self, event: bmz_gameplay::input::backend::DeviceInputEvent) {
         let key = (event.device, event.control.clone());
         match event.kind {
             bmz_core::input::InputKind::Press => {

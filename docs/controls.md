@@ -31,6 +31,11 @@ macOSの設定 → 入力デバイス → キーボードバックエンドで�
 独立取得の`macOS IOHID`と`macOS GameController`を切り替えられます。
 GameControllerのキーボード入力はmacOS 11以降で利用でき、入力監視の許可要求は行いません。
 文字入力・IMEはwinitを使います。既定のAutoは従来動作のままです。
+ゲームパッドバックエンドの`GameController`はmacOS 11以降で利用できます。
+macOS 14以降は入力履歴とOS時刻、11〜13はコールバック受信時刻を使います。
+gilrsのButton/Axis番号は自動移行しないため、切り替え後はキーを再登録してください。
+GameControllerの機器選択は実行中のみ有効で、再起動時には解除されます。
+複数台のときは入力デバイス画面で1P/2Pを明示選択してください。非対応機器はgilrsを利用します。
 権限・対応キー・フォールバックとA/B試験は [macOS遅延検証](macos-latency.md) を参照してください。
 
 antiqueプレイスキンは、F1設定のスキン画面でantiqueを選び、以下のオプションを変更できます。

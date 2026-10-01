@@ -34,6 +34,54 @@ winitへ戻る。接続済み表示は実キーの受信・性能確認の証拠
 古い世代のコールバックを拒否し、キーを離すまで新たな押下を受け付けない。
 終了時はハンドラーと通知を解除し、専用キュー上の処理終了後にRust callback storageを解放する。
 
+### GameControllerゲームパッド
+
+設定 → 入力デバイス → ゲームパッドバックエンドで`GameController`を選ぶ。
+macOS 11以降で使用し、それ以前とmacOS以外ではgilrsへ戻る。Auto/Gilrsの既定動作は維持する。
+任意のHID/BMSコントローラーの認識を保証しない。認識されない機器はgilrsを選ぶ。
+ゲームパッド未接続でもGameControllerで接続を待ち、台数0だけで自動切り替えは行わない。
+
+- macOS 14以降: `GCController.input`の`unmappedInput`が得られればそれを使用し、
+  `inputStateQueueDepth=128`、専用queueの`inputStateAvailableHandler`から
+  `nextInputState`をnilまで処理する。128件を待ってから配送する方式ではない。
+- macOS 11〜13: `physicalInputProfile`のキー/軸別callback引数を使う。
+  判定用timestampは受信時刻。プロフィール全体の最新時刻は使わない。
+- 新APIの`lastPressedStateTimestamp` / `lastValueTimestamp`はMach host timeの秒。
+  IOHIDのticksとは区別してBMZの単調時計へ変換する。古いrouteの時刻・非数・未来・
+  スリープ前の履歴は拒否し、現在時刻の新たな押下へ置き換えない。
+- 履歴差分が得られない場合は欠落として記録し、保持を解放してsnapshotを基準に再同期する。
+  基準時点の押下は解放まで抑制する。完全な履歴を復元したとは扱わない。
+- gameplayへ直接配送し、UIコピーは4096件まで。UIコピーの欠落数とOS履歴欠落数は区別する。
+- スクラッチ停止timerは1ms。実入力は毎回前面状態を確認し、idle timerの前面照会は10msごと。
+  frameworkのdeadzoneをbackendで再適用しない。既存のscratch閾値・軸のデジタル化契約は維持する。
+
+入力名は列挙順やgilrsのraw番号ではなく次の固定名を使う。既存ButtonN/AxisNは移行しない。
+
+| 入力 | 名前 |
+|---|---|
+| A/B/X/Y | GCButtonA / GCButtonB / GCButtonX / GCButtonY |
+| L/R shoulder | GCLeftShoulder / GCRightShoulder |
+| L/R trigger押下 | GCLeftTrigger / GCRightTrigger |
+| L/R stick押下 | GCLeftStickButton / GCRightStickButton |
+| Menu/Options/Home | GCMenu / GCOptions / GCHome |
+| 十字キー | GCDpadUp / GCDpadDown / GCDpadLeft / GCDpadRight |
+| L/R stick軸 | GCAxisLeftX / GCAxisLeftY / GCAxisRightX / GCAxisRightY |
+| L/R trigger値 | GCAxisLeftTrigger / GCAxisRightTrigger |
+
+軸方向のbinding名は上記軸名に`+`/`-`を付ける。十字キーは4方向のpressedを個別に扱う。
+標準プロフィールの入力が対象であり、追加paddleや独自の相対軸はこの実装の対象外。
+公開APIに永続的な個体IDがないため、機器名をstable IDにせず`gc-session:*`の実行時IDを使う。
+これらのslotはapp config保存・読み込み時に除去する。他backendの保存済み割り当ては維持する。
+複数台では未指定slotを接続順から推測しない。切断・再接続時も新しい個体として明示選択する。
+1台だけなら未指定slotを自動解決できる。
+
+診断JSONの`kind=gamecontroller`は新APIで変換できたhost入力時刻→受信の分布と、
+`invalid_timestamps`、`history_gaps`、`ui_overflow`、時計epochを出す。
+旧APIのhost→受信は測定不可であり、空の分布を低遅延の証拠にしない。
+起動・接続表示・APIのopen/closeテストだけでは実キー/実パッドの性能を確認したことにならない。
+
+### IOHID
+
 macOS 10.15以降はIOHIDCheckAccess(ListenEvent)を先に呼ぶ。未許可・拒否時には
 managerを開かずwinitへ戻る。起動時のIOHIDRequestAccess呼び出しは行わない。
 設定の「入力監視の許可を要求」ボタンだけが許可要求を行う。

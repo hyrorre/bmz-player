@@ -127,6 +127,7 @@ pub(super) fn build_integration_settings_sections(
                     1 => "settings-input-gc-keyboard-active",
                     2 => "settings-input-gc-keyboard-waiting",
                     4 => "settings-input-gc-keyboard-unsupported",
+                    3 => "settings-input-gc-failed",
                     _ => "settings-input-gc-unavailable",
                 };
                 ui.label(text.text(key));
@@ -160,6 +161,12 @@ pub(super) fn build_integration_settings_sections(
                         GamepadBackendKind::Gilrs,
                         gamepad_backend_label(&GamepadBackendKind::Gilrs, text),
                     );
+                    #[cfg(target_os = "macos")]
+                    ui.selectable_value(
+                        &mut config.input.gamepad_backend,
+                        GamepadBackendKind::GameController,
+                        "GameController",
+                    );
                     #[cfg(windows)]
                     ui.selectable_value(
                         &mut config.input.gamepad_backend,
@@ -173,6 +180,17 @@ pub(super) fn build_integration_settings_sections(
                         gamepad_backend_label(&GamepadBackendKind::GameInput, text),
                     );
                 });
+            #[cfg(target_os = "macos")]
+            if config.input.gamepad_backend == GamepadBackendKind::GameController {
+                ui.label(text.text(match crate::input::gamecontroller::pad_status() {
+                    1 => "settings-input-gc-pad-buffered",
+                    2 => "settings-input-gc-pad-callback",
+                    3 => "settings-input-gc-pad-waiting",
+                    4 => "settings-input-gc-failed",
+                    _ => "settings-input-gc-unavailable",
+                }));
+                ui.label(tr!(text, "settings-input-gc-pad-help"));
+            }
             ui.checkbox(&mut config.input.keyboard_enabled, tr!(text, "settings-input-keyboard"));
             ui.checkbox(&mut config.input.gamepad_enabled, tr!(text, "settings-input-gamepad"));
             ui.label(tr!(text, "settings-input-backend-help"));
