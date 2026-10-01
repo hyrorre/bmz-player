@@ -76,6 +76,7 @@ pub(super) struct SelectRuntimeState {
     pub(super) option_panel_started_at: Instant,
     pub(super) option_panel_off_started_at: [Option<Instant>; 6],
     pub(super) select_option_panel: u8,
+    pub(super) detail_options: super::select_flow_detail_options::DetailOptionsState,
     /// 選曲画面でESCを長押し中の開始時刻。離されたり画面を抜けると None になる。
     pub(super) select_exit_hold_started_at: Option<Instant>,
     /// 選曲画面のメタ画像・試聴音源のキャッシュと非同期ロード状態。

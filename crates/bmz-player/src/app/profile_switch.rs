@@ -373,6 +373,7 @@ impl WinitApp {
         self.select.select_folder_summaries = prepared.folder_summaries;
         self.invalidate_select_distributions();
         self.select.select_option_panel = 0;
+        self.select.detail_options = Default::default();
         self.select.select_mode_filter =
             SelectModeFilter::from_str_or_default(&self.boot.profile_config.select.mode_filter);
         self.select.select_difficulty_filter = SelectDifficultyFilter::from_str_or_default(

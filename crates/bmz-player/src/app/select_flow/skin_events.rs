@@ -3,6 +3,10 @@ use crate::config::profile_config::SevenToNinePattern;
 
 impl WinitApp {
     pub(super) fn execute_select_skin_event(&mut self, event_id: i32, arg: i32) {
+        if bmz_render::skin::is_detail_options_event(event_id) {
+            self.execute_detail_options_event(event_id, arg);
+            return;
+        }
         match event_id {
             // beatoraja EventFactory: difficulty / skin config / documents.
             10 => self.cycle_select_difficulty_filter(arg),
@@ -85,9 +89,7 @@ impl WinitApp {
             260..=266 => self.adjust_random_mix_skin_option(event_id, arg),
             301..=307 => {
                 if self.boot.profile_config.play.assist.toggle_beatoraja_button(event_id) {
-                    self.boot.profile_config.updated_at = now_unix_seconds();
-                    self.invalidate_play_preload();
-                    self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                    self.finish_global_assist_event();
                 }
             }
             312 => {
@@ -397,16 +399,15 @@ impl WinitApp {
     }
 
     pub(super) fn cycle_select_bottom_shiftable_gauge(&mut self, arg: i32) {
-        self.select.bottom_shiftable_gauge_option = cycle_bottom_shiftable_gauge_with_direction(
-            self.select.bottom_shiftable_gauge_option,
-            arg,
+        self.boot.profile_config.play.bottom_shiftable_gauge =
+            self.select.bottom_shiftable_gauge_option;
+        self.adjust_detail_setting(
+            crate::select_detail_options::DetailOptionDef::for_setting(
+                SettingsEntryId::BottomShiftableGauge,
+            )
+            .expect("catalog setting"),
+            if arg >= 0 { 1 } else { -1 },
         );
-        tracing::info!(
-            bottom_shiftable_gauge =
-                bottom_shiftable_gauge_as_str(self.select.bottom_shiftable_gauge_option),
-            "bottom shiftable gauge changed"
-        );
-        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
     }
 
     pub(super) fn cycle_select_judge_algorithm(&mut self, arg: i32) {
@@ -439,18 +440,17 @@ impl WinitApp {
     }
 
     pub(super) fn cycle_select_ln_mode(&mut self, arg: i32) {
-        let score_context_before = SelectScoreContext::from_profile(&self.boot.profile_config);
-        self.boot.profile_config.play.ln_mode_policy = if arg >= 0 {
-            self.boot.profile_config.play.ln_mode_policy.next()
-        } else {
-            self.boot.profile_config.play.ln_mode_policy.previous()
-        };
-        self.sync_changed_select_score_context(score_context_before);
+        self.adjust_detail_setting(
+            crate::select_detail_options::DetailOptionDef::for_setting(
+                SettingsEntryId::LnModePolicy,
+            )
+            .expect("LN MODE catalog entry"),
+            if arg >= 0 { 1 } else { -1 },
+        );
         tracing::info!(
             ln_mode = self.boot.profile_config.play.ln_mode_policy.display_label(),
             "select LN mode policy changed"
         );
-        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
     }
 
     pub(super) fn cycle_replay_slot_rule(&mut self, event_id: i32, arg: i32) {
@@ -563,6 +563,7 @@ impl WinitApp {
     fn finish_global_assist_event(&mut self) {
         self.boot.profile_config.updated_at = now_unix_seconds();
         self.invalidate_play_preload();
+        self.play.play_media_cache = None;
         self.play_system_sound(crate::system_sound::SoundType::OptionChange);
     }
 

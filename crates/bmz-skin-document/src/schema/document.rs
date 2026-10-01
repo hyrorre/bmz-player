@@ -15,6 +15,9 @@ pub struct SkinDocument {
     pub name: String,
     #[serde(default)]
     pub author: String,
+    /// Explicit support version; only 1 opts out of the native E2 overlay.
+    #[serde(default, rename = "bmzDetailOptions")]
+    pub bmz_detail_options: u32,
     #[serde(default = "default_skin_canvas_width")]
     pub w: u32,
     #[serde(default = "default_skin_canvas_height")]

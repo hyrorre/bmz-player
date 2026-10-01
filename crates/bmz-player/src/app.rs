@@ -266,6 +266,8 @@ mod select_course_builder;
 mod select_distribution;
 #[path = "app/select_flow/controls.rs"]
 mod select_flow_controls;
+#[path = "app/select_flow/detail_options.rs"]
+mod select_flow_detail_options;
 #[path = "app/select_flow/gamepad.rs"]
 mod select_flow_gamepad;
 #[path = "app/select_flow/keyboard.rs"]

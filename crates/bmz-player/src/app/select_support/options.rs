@@ -83,6 +83,7 @@ pub(in crate::app) fn gauge_auto_shift_as_str(mode: GaugeAutoShiftConfig) -> &'s
     }
 }
 
+#[cfg(test)]
 pub(in crate::app) fn cycle_bottom_shiftable_gauge_with_direction(
     current: BottomShiftableGaugeConfig,
     direction: i32,

@@ -279,6 +279,7 @@ impl WinitApp {
                 .option_panel_off_started_at
                 .map(|started_at| started_at.map(elapsed_since)),
             option_panel: self.select.select_option_panel,
+            detail_options: self.detail_options_snapshot(),
             chart_count: if self.select.ir_battle.active {
                 battle_choices.len()
             } else {

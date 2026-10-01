@@ -326,6 +326,7 @@ impl WinitApp {
                 option_panel_started_at: now,
                 option_panel_off_started_at: [None; 6],
                 select_option_panel: 0,
+                detail_options: Default::default(),
                 select_exit_hold_started_at: None,
                 select_assets,
                 settings_edit: None,

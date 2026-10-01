@@ -46,6 +46,9 @@ pub(in crate::skin) fn test_skin_op(
             .checked_neg()
             .is_some_and(|positive| !test_skin_op(positive, enabled_options, state));
     }
+    if let Some(value) = crate::scene::detail_options::option(op, state.detail_options.as_deref()) {
+        return value;
+    }
     match op {
         40 => !state.bga_enabled,
         SKIN_OPTION_BMZ_BEST_SCORE_OPTIONS_AVAILABLE => {

@@ -13,6 +13,9 @@ impl WinitApp {
         // Repeat suppression only applies to actions, never physical holds.
         self.sync_select_holds_from_pressed_controls();
         self.sync_play_control_holds_from_pressed_controls();
+        if self.detail_options_blocks_held_input(&control_event) {
+            return;
+        }
         if self.viewer_waiting {
             if self.route_waiting_viewer_keyboard(event) {
                 return;
@@ -379,6 +382,13 @@ impl WinitApp {
         event: &winit::event::KeyEvent,
         control_event: &ControlInputEvent,
     ) {
+        if self.ui.egui.as_ref().is_some_and(|ui| ui.blocks_game_input(false)) {
+            self.reset_detail_options_input();
+            return;
+        }
+        if self.route_detail_options_input(control_event) {
+            return;
+        }
         if self.viewer_waiting {
             // 待機中はエディタからのIPCだけを再生入口にする。Escape長押しによる
             // 通常終了だけはSelectと同じ操作として残す。
@@ -666,13 +676,7 @@ impl WinitApp {
                             self.play_system_sound(crate::system_sound::SoundType::OptionChange);
                         }
                     }
-                    2 => {
-                        if let Some(control) = physical_key_name(event.physical_key)
-                            && self.apply_assist_option_control(&control)
-                        {
-                            self.play_system_sound(crate::system_sound::SoundType::OptionChange);
-                        }
-                    }
+                    2 => {}
                     3 => {
                         if let Some(control) = physical_key_name(event.physical_key)
                             && self.apply_detail_option_control(&control)

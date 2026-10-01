@@ -520,6 +520,53 @@ fn build_game_session_clamps_lane_cover_to_remaining_lift_range() {
 }
 
 #[test]
+fn detail_options_survive_save_reload_and_next_play() {
+    use crate::config::settings_registry::SettingsEntryId;
+    use crate::select_detail_options::DetailOptionDef;
+    let mut profile = ProfileConfig::new_default("detail", "Detail", 0);
+    profile.play.lane_effect = LaneEffectConfig::Off;
+    profile.lane.sudden = 280;
+    profile.lane.hidden = 140;
+    profile.lane.lift = 120;
+    profile.lane.lift_enabled = false;
+    profile.normalize_play_mode_configs();
+    for setting in [
+        SettingsEntryId::SuddenEnabled,
+        SettingsEntryId::HiddenEnabled,
+        SettingsEntryId::LiftEnabled,
+        SettingsEntryId::Constant,
+        SettingsEntryId::BottomShiftableGauge,
+    ] {
+        assert!(DetailOptionDef::for_setting(setting).unwrap().adjust(
+            &mut profile,
+            Some(KeyMode::K7),
+            1
+        ));
+    }
+    let saved = toml::to_string(&profile).unwrap();
+    let loaded: ProfileConfig = toml::from_str(&saved).unwrap();
+    for p in [&profile, &loaded] {
+        let session = build_game_session(Arc::new(chart()), p, PlaySessionOptions::default());
+        assert!(session.lanecover_enabled);
+        assert!(session.lift_enabled);
+        assert!((session.lane_cover - 0.28).abs() < 0.00001);
+        assert!((session.hidden_cover - 0.14).abs() < 0.00001);
+        assert!((session.lift - 0.12).abs() < 0.00001);
+        assert_eq!(session.gauge.auto_shift_mode, GaugeAutoShiftMode::Off);
+        assert_eq!(
+            p.play.bottom_shiftable_gauge,
+            crate::config::profile_config::BottomShiftableGaugeConfig::Easy
+        );
+        let mut enabled = p.clone();
+        enabled.play.gauge_auto_shift =
+            crate::config::profile_config::GaugeAutoShiftConfig::BestClear;
+        let enabled =
+            build_game_session(Arc::new(chart()), &enabled, PlaySessionOptions::default());
+        assert_eq!(enabled.gauge.bottom_shiftable_gauge, GaugeType::Easy);
+    }
+}
+
+#[test]
 fn build_game_session_clamps_profile_misslayer_duration() {
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
     profile.play.misslayer_duration_ms = 12_000;

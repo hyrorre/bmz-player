@@ -156,7 +156,12 @@ impl WinitApp {
     }
 
     pub(super) fn update_select_option_panel(&mut self) {
-        let panel = if in_settings_stack(&self.select.folder_stack) {
+        let panel = if in_settings_stack(&self.select.folder_stack)
+            || !self.ui.focused
+            || self.select.search.is_active()
+            || self.select.ir_battle.active
+            || self.ui.egui.as_ref().is_some_and(|ui| ui.blocks_game_input(false))
+        {
             0
         } else {
             select_option_panel_for_holds(self.input.start_held, self.input.select_held)
@@ -170,7 +175,13 @@ impl WinitApp {
             panel,
             now,
         ) {
-            self.reset_select_analog_scroll();
+            self.reset_detail_options_input();
+            if previous_panel == 2 {
+                self.save_detail_options_if_dirty();
+            }
+            if panel == 2 {
+                self.sync_selected_play_mode();
+            }
             if let Some(sound_type) = select_option_panel_sound_for_scene_transition(
                 self.current_scene_kind(),
                 previous_panel,
@@ -864,69 +875,6 @@ impl WinitApp {
                 true
             }
             _ => self.apply_play_option_control(control),
-        }
-    }
-
-    pub(super) fn apply_assist_option_control(&mut self, control: &str) -> bool {
-        let button_id = if self.select.select_keys.is_key1(control) {
-            301
-        } else if self.select.select_keys.is_key2(control) {
-            302
-        } else if self.select.select_keys.is_key3(control) {
-            303
-        } else if self.select.select_keys.is_key4(control) {
-            304
-        } else if self.select.select_keys.is_key5(control) {
-            305
-        } else if self.select.select_keys.is_key6(control) {
-            306
-        } else if self.select.select_keys.is_key7(control) {
-            307
-        } else {
-            return false;
-        };
-        let changed = self.boot.profile_config.play.assist.toggle_beatoraja_button(button_id);
-        if changed {
-            self.boot.profile_config.updated_at = now_unix_seconds();
-            self.invalidate_play_preload();
-        }
-        changed
-    }
-
-    pub(super) fn apply_gamepad_assist_option_control(
-        &mut self,
-        device: DeviceId,
-        control: &str,
-    ) -> bool {
-        let app_config = self.play_session_app_config();
-        let slots = crate::input::gamepad::GamepadSlotMap::from_runtime_or_legacy(
-            app_config.input.gamepad_slot_runtime_device_ids,
-            app_config.input.gamepad_slot_gilrs_ids,
-        );
-        let button_id = match select_option_lane_for_gamepad(
-            &self.boot.profile_config.input,
-            slots,
-            device,
-            control,
-        ) {
-            Some(Lane::Key1) => Some(301),
-            Some(Lane::Key2) => Some(302),
-            Some(Lane::Key3) => Some(303),
-            Some(Lane::Key4) => Some(304),
-            Some(Lane::Key5) => Some(305),
-            Some(Lane::Key6) => Some(306),
-            Some(Lane::Key7) => Some(307),
-            _ => None,
-        };
-        if let Some(button_id) = button_id {
-            let changed = self.boot.profile_config.play.assist.toggle_beatoraja_button(button_id);
-            if changed {
-                self.boot.profile_config.updated_at = now_unix_seconds();
-                self.invalidate_play_preload();
-            }
-            changed
-        } else {
-            self.apply_assist_option_control(control)
         }
     }
 

@@ -77,6 +77,9 @@ pub(super) struct InputReleaseBatch {
 }
 
 impl AppInputRuntime {
+    pub(super) fn pressed_control_sources(&self) -> impl Iterator<Item = &(DeviceId, String)> {
+        self.pressed_control_sources.iter()
+    }
     /// Windows may mark the other Shift's first Press as a repeat because
     /// both keys share VK_SHIFT. Only an already held physical key can repeat.
     pub(super) fn keyboard_repeat(&self, key: PhysicalKey, repeat: bool) -> bool {

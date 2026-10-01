@@ -24,8 +24,8 @@ use crate::plan::{
 };
 use crate::scene::AppSceneSnapshot;
 use crate::skin::{
-    BlendMode, DynamicTimerRuntime, SkinClickHit, SkinContext, SkinDocument, SkinImageSize,
-    SkinSliderHit,
+    BlendMode, DynamicTimerRuntime, SkinClickHit, SkinClickTarget, SkinContext, SkinDocument,
+    SkinImageSize, SkinSliderHit,
 };
 use crate::ui::{EguiFrame, EguiPainter};
 

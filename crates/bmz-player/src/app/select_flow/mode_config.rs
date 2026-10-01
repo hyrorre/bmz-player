@@ -29,6 +29,9 @@ impl WinitApp {
             self.select.select_items.get(self.select.selected_index),
             self.select.select_mode_filter,
         )
+        .map(|mode| {
+            effective_play_key_mode(mode, self.boot.profile_config.play.key_mode_conversion)
+        })
     }
 
     pub(super) fn sync_selected_play_mode(&mut self) {
