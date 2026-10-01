@@ -29,7 +29,8 @@ F1の設定 → 選曲、またはゲーム内の選曲設定で、次の項目�
 
 設定 → 音声のFixedバッファは16〜4096 framesで指定できます。
 プリセットは16 / 32 / 48 / 64 / 96 / 128 / 256です。機器の対応範囲外なら範囲内へ調整されます。
-macOSの`Core Audio IOProc`は`experimental-coreaudio-ioproc` featureを有効にしたビルドで選べます。
+macOSの`Core Audio IOProc`は通常ビルドで選べます（`experimental-coreaudio-ioproc` featureは既定で有効）。
+`Auto`と`Core Audio`は従来のCPAL / Audio Unit経路を使い、IOProcは明示選択した場合だけ使います。
 出力デバイス・サンプルレート・バッファ・出力チャンネルは従来と同じ設定を使います。
 IOProcは入力streamのない機器専用です。入出力一体のUSB機器等では`Core Audio`を選んでください。
 機器の抜き差しや出力形式の変更後に無音になった場合は、音声設定を再適用してください。

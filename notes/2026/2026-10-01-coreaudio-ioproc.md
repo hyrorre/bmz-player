@@ -78,6 +78,19 @@ cargo clippy --workspace --all-targets --locked --features bmz-player/experiment
 cargo test --workspace --locked --features bmz-player/experimental-coreaudio-ioproc,bmz-player/macos-iohid --no-fail-fast -- --test-threads=1
 ```
 
+## 2026-10-01 通常ビルドでの選択を有効化
+
+ユーザー指定により、bmz-playerのdefault featureへ`experimental-coreaudio-ioproc`を追加。
+通常のmacOSビルド・配布でも音声設定の`Core Audio IOProc`を選べるようにした。
+Auto / Core AudioのAudio Unit経路と、既定256 framesは維持する。
+feature名は互換性のため保持し、`--no-default-features`で除外できる。
+macOS以外ではIOProcの実装・依存は対象OS条件によりコンパイルされない。
+
+Apple Silicon macOSで追加feature指定なしのfmt、workspace check / all-targets Clippy
+（`-D warnings`）/ test、bmz-playerのdev buildに成功。
+`cargo test -p bmz-player --locked --no-default-features ioproc`も2件成功。
+実機の音声再生・.app・Intel / Windows / Linuxは今回未検証。
+
 ## 根拠資料
 
 - Apple SDK `AudioHardware.h` / `AudioHardwareBase.h` / `CoreAudioTypes.h`。

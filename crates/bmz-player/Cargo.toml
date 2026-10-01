@@ -13,10 +13,11 @@ license.workspace = true
 # PipeWire は Linux / BSD 系の cpal host を有効化する。環境の system
 # PipeWire / SPA headers に依存するため、必要な環境で `--features pipewire` を使う。
 [features]
-default = ["asio", "pulseaudio"]
+default = ["asio", "pulseaudio", "experimental-coreaudio-ioproc"]
 asio = ["bmz-audio/asio"]
 pulseaudio = ["bmz-audio/pulseaudio"]
 pipewire = ["bmz-audio/pipewire"]
+# macOSの通常ビルドでIOProcを選択可能にする。AutoはCPALのAudio Unit経路を維持する。
 experimental-coreaudio-ioproc = ["bmz-audio/experimental-coreaudio-ioproc"]
 # IOHID は入力監視の許可が必要な macOS 向けの任意入力経路。
 # 通常ビルドから除外し、利用する場合だけ `--features macos-iohid` で有効化する。

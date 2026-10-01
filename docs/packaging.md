@@ -650,10 +650,9 @@ bundle した artifact を公開する前に `docs/licenses.md` を確認する�
 ## macOSの入力・時計API
 
 Core Audio IOProc音声は`experimental-coreaudio-ioproc` featureで有効にする実験用backendです。
-default featureと通常配布には含めません。検証用は
-`cargo build -p bmz-player --release --locked --features experimental-coreaudio-ioproc`でビルドし、
-`scripts/package-macos-app.sh --skip-build`でその実行ファイルをパッケージします。
-AudioUnit・process tap・入力取得は使わず、出力専用のHAL IOProcを登録します。
+default featureに含まれ、通常のmacOSビルド・配布で選択できます。
+`Auto`と`Core Audio`は従来のCPAL / Audio Unit経路を維持し、設定でIOProcを明示選択した場合だけ使います。
+IOProc経路は入力streamのない機器だけにHAL IOProcを登録し、入力取得やprocess tapは使いません。
 非macOSまたはfeature無効のビルドでは候補を非表示にし、保存済みIOProc設定をAutoへ戻します。
 
 macOSのIOHID入力は`macos-iohid` featureでのみコンパイルし、default featureと通常配布には含めません。

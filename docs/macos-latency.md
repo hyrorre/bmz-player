@@ -151,11 +151,13 @@ CPAL内部で0にするため、BMZから予測の完全性を検証できない
 ### Core Audio IOProc（実験用）
 
 ```sh
-cargo build -p bmz-player --release --locked --features experimental-coreaudio-ioproc
+cargo build -p bmz-player --release --locked
 ```
 
 設定のバックエンドで`Core Audio IOProc`を選び、Fixed 16等を設定する。
-default featureには含めず、非対応ビルドは候補を隠し保存済みIOProc設定をAutoへ戻す。
+`experimental-coreaudio-ioproc`はdefault featureに含まれるため、通常ビルドで選択できる。
+`Auto`と`Core Audio`は従来のCPAL / Audio Unit経路を維持し、IOProcは明示選択時だけ使う。
+`--no-default-features`でIOProcを除外したビルドは候補を隠し、保存済みIOProc設定をAutoへ戻す。
 16が機器の最小値より小さければ対応範囲内へclampする。要求値・採用値・実callback framesを
 区別する。サンプルレートはHALのnominal rateへ適用し、非対応レートや変更が完了しない場合は
 明確なエラーにする。レート・バッファはデバイス共有の設定なので他アプリにも影響し得る。
