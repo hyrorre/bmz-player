@@ -313,6 +313,12 @@ pub(super) fn lua_main_state_text_values(
         for slot in 0..crate::scene::detail_options::DETAIL_OPTION_ROWS as i32 {
             let base = SKIN_DETAIL_OPTIONS_ROW_BASE + slot * SKIN_DETAIL_OPTIONS_ROW_STRIDE;
             refs.extend(base..=base + 2);
+            let base =
+                SKIN_DETAIL_OPTIONS_CHOICE_BASE + slot * SKIN_DETAIL_OPTIONS_CHOICE_ITEM_STRIDE;
+            refs.extend(
+                (0..SKIN_DETAIL_OPTIONS_CHOICES as i32)
+                    .map(|choice| base + choice * SKIN_DETAIL_OPTIONS_CHOICE_STRIDE),
+            );
         }
     }
     refs.into_iter()

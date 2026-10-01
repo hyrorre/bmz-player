@@ -119,7 +119,7 @@ pub(super) fn format_gauge_auto_shift(value: GaugeAutoShiftConfig) -> String {
     }
 }
 
-pub(super) fn format_bottom_shiftable_gauge(value: BottomShiftableGaugeConfig) -> String {
+pub(crate) fn format_bottom_shiftable_gauge(value: BottomShiftableGaugeConfig) -> String {
     match value {
         BottomShiftableGaugeConfig::AssistEasy => "ASSIST EASY".to_string(),
         BottomShiftableGaugeConfig::Easy => "EASY".to_string(),
@@ -224,7 +224,7 @@ pub(super) fn format_judge_algorithm(value: JudgeAlgorithmConfig) -> String {
     }
 }
 
-pub(super) fn format_hispeed_mode(value: HispeedConfigPreset) -> String {
+pub(crate) fn format_hispeed_mode(value: HispeedConfigPreset) -> String {
     match value {
         HispeedConfigPreset::Normal => "NORMAL".to_string(),
         HispeedConfigPreset::Classic => "CLASSIC".to_string(),

@@ -53,20 +53,60 @@ pub(super) fn push_detail_options(commands: &mut Vec<DrawCommand>, panel: &Detai
         let Some(row) = panel.row(slot) else {
             continue;
         };
-        let y = 0.18 + slot as f32 * 0.066;
+        let rect = column_rect(slot);
         let selected = panel.viewport_start + slot == panel.cursor;
         commands.push(DrawCommand::Rect {
-            rect: Rect { x: 0.055, y, width: 0.89, height: 0.057 },
+            rect,
             color: if selected {
                 Color::rgb(0.11, 0.27, 0.29)
             } else {
                 Color::rgb(0.07, 0.10, 0.13)
             },
         });
-        label(commands, if selected { ">" } else { "" }, 0.066, y + 0.014, 0.02, 0.027, accent);
-        label(commands, &row.label, 0.09, y + 0.014, 0.37, 0.025, white);
-        label(commands, &row.value_label, 0.47, y + 0.014, 0.28, 0.025, accent);
-        label(commands, &row.status, 0.76, y + 0.014, 0.17, 0.022, muted);
+        label(
+            commands,
+            if selected { "▼" } else { "" },
+            rect.x + 0.054,
+            0.145,
+            0.025,
+            0.024,
+            accent,
+        );
+        label(commands, &row.label, rect.x + 0.007, 0.204, 0.11, 0.022, white);
+        if row.value_index < 0 {
+            label(commands, &row.value_label, rect.x + 0.007, 0.244, 0.11, 0.021, accent);
+        }
+        for (index, choice) in row.choices.iter().enumerate() {
+            let cell = choice_rect(slot, index);
+            let current = row.value_index >= 0 && row.value == choice.value;
+            commands.push(DrawCommand::Rect {
+                rect: cell,
+                color: if current {
+                    Color::rgb(0.16, 0.38, 0.37)
+                } else {
+                    Color::rgb(0.075, 0.12, 0.145)
+                },
+            });
+            label(
+                commands,
+                if current { "●" } else { "" },
+                cell.x + 0.003,
+                cell.y + 0.006,
+                0.012,
+                0.019,
+                accent,
+            );
+            label(
+                commands,
+                &choice.label,
+                cell.x + 0.016,
+                cell.y + 0.006,
+                cell.width - 0.019,
+                0.022,
+                if current { white } else { muted },
+            );
+        }
+        label(commands, &row.status, rect.x + 0.007, 0.61, 0.11, 0.019, muted);
     }
     if let Some(row) = panel.selected() {
         label(commands, &row.auxiliary, 0.06, 0.66, 0.88, 0.023, accent);
@@ -74,8 +114,8 @@ pub(super) fn push_detail_options(commands: &mut Vec<DrawCommand>, panel: &Detai
         label(commands, &row.reason, 0.06, 0.77, 0.88, 0.022, muted);
     }
     for (id, caption, x) in [
-        (SKIN_EVENT_DETAIL_OPTIONS_PREVIOUS, "↑", 0.06),
-        (SKIN_EVENT_DETAIL_OPTIONS_NEXT, "↓", 0.19),
+        (SKIN_EVENT_DETAIL_OPTIONS_PREVIOUS, "←", 0.06),
+        (SKIN_EVENT_DETAIL_OPTIONS_NEXT, "→", 0.19),
         (SKIN_EVENT_DETAIL_OPTIONS_DECREASE, "−", 0.68),
         (SKIN_EVENT_DETAIL_OPTIONS_INCREASE, "+", 0.81),
     ] {
@@ -84,6 +124,19 @@ pub(super) fn push_detail_options(commands: &mut Vec<DrawCommand>, panel: &Detai
         label(commands, caption, x + 0.044, 0.856, 0.06, 0.030, white);
     }
     label(commands, &panel.guide, 0.06, 0.94, 0.88, 0.020, muted);
+}
+
+fn column_rect(slot: usize) -> Rect {
+    Rect { x: 0.05 + slot as f32 * 0.129, y: 0.18, width: 0.124, height: 0.46 }
+}
+
+fn choice_rect(slot: usize, index: usize) -> Rect {
+    Rect {
+        x: column_rect(slot).x + 0.006,
+        y: 0.28 + index as f32 * 0.041,
+        width: 0.112,
+        height: 0.033,
+    }
 }
 
 fn button_rect(id: i32) -> Option<Rect> {
@@ -112,10 +165,26 @@ pub(crate) fn detail_options_click_hit(
         }
     }
     for slot in 0..DETAIL_OPTION_ROWS {
-        if panel.row(slot).is_none() {
+        let Some(row) = panel.row(slot) else {
             continue;
+        };
+        if row.editable {
+            for index in 0..row.choices.len().min(SKIN_DETAIL_OPTIONS_CHOICES) {
+                let rect = choice_rect(slot, index);
+                if contains(rect, x, y) {
+                    return Some(SkinClickHit {
+                        target: SkinClickTarget::Event {
+                            event_id: SKIN_DETAIL_OPTIONS_CHOICE_BASE
+                                + slot as i32 * SKIN_DETAIL_OPTIONS_CHOICE_ITEM_STRIDE
+                                + index as i32 * SKIN_DETAIL_OPTIONS_CHOICE_STRIDE,
+                            click: 0,
+                        },
+                        rect,
+                    });
+                }
+            }
         }
-        let rect = Rect { x: 0.055, y: 0.18 + slot as f32 * 0.066, width: 0.89, height: 0.057 };
+        let rect = column_rect(slot);
         if contains(rect, x, y) {
             return Some(SkinClickHit {
                 target: SkinClickTarget::Event {

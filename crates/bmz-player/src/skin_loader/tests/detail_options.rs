@@ -64,6 +64,19 @@ fn detail_default_skin_decodes_all_rows_and_routes_only_panel_clicks() {
                     "missing row {}",
                     row.item_id
                 );
+                for (choice, value) in row.choices.iter().enumerate() {
+                    assert!(plan.commands.iter().any(|cmd| matches!(cmd, DrawCommand::Text { text, .. } if text == &value.label)), "missing choice {} for {}", choice, row.item_id);
+                    let hit = renderer
+                        .select_skin_click_hit(
+                            &s,
+                            0.10 + slot as f32 * 0.129,
+                            0.29 + choice as f32 * 0.041,
+                        )
+                        .unwrap();
+                    assert!(
+                        matches!(hit.target, bmz_render::skin::SkinClickTarget::Event { event_id, .. } if event_id == 19500 + slot as i32 * 64 + choice as i32 * 4)
+                    );
+                }
             }
             assert!(
                 plan.commands.iter().any(
@@ -75,7 +88,7 @@ fn detail_default_skin_decodes_all_rows_and_routes_only_panel_clicks() {
                     |cmd| matches!(cmd,DrawCommand::Text { text, .. } if text == &panel.guide)
                 )
             );
-            let hit = renderer.select_skin_click_hit(&s, 0.50, 0.20).unwrap();
+            let hit = renderer.select_skin_click_hit(&s, 0.10, 0.20).unwrap();
             assert!(matches!(
                 hit.target,
                 bmz_render::skin::SkinClickTarget::Event { event_id: 19310, .. }
@@ -141,6 +154,22 @@ fn assert_native(renderer: &mut Renderer) {
         renderer.select_skin_click_hit(&s, 0.85, 0.87).unwrap().target,
         bmz_render::skin::SkinClickTarget::Event { event_id: 19303, .. }
     ));
+    for slot in 0..7 {
+        let row = s.detail_options.as_ref().unwrap().row(slot).unwrap();
+        for (choice, value) in row.choices.iter().enumerate() {
+            assert!(
+                commands.iter().any(
+                    |cmd| matches!(cmd, DrawCommand::Text { text, .. } if text == &value.label)
+                )
+            );
+            let hit = renderer
+                .select_skin_click_hit(&s, 0.10 + slot as f32 * 0.129, 0.29 + choice as f32 * 0.041)
+                .unwrap();
+            assert!(
+                matches!(hit.target, bmz_render::skin::SkinClickTarget::Event { event_id, .. } if event_id == 19500 + slot as i32 * 64 + choice as i32 * 4)
+            );
+        }
+    }
 }
 
 /// Explicit opt-in visual QA; no window, profile, DB, audio, or input device.

@@ -223,9 +223,31 @@ pub const SKIN_EVENT_DETAIL_OPTIONS_SELECT_ID: i32 = 19_304;
 pub const SKIN_EVENT_DETAIL_OPTIONS_ROW_BASE: i32 = 19_310;
 pub const SKIN_EVENT_DETAIL_OPTIONS_ROW_LAST: i32 = 19_316;
 
+/// Eight choice cells per visible item; number/text/option/event namespaces
+/// remain independent. Half of each 64-ID item block is reserved.
+pub const SKIN_DETAIL_OPTIONS_CHOICE_BASE: i32 = 19_500;
+pub const SKIN_DETAIL_OPTIONS_CHOICE_LAST: i32 = 19_947;
+pub const SKIN_DETAIL_OPTIONS_CHOICE_ITEM_STRIDE: i32 = 64;
+pub const SKIN_DETAIL_OPTIONS_CHOICE_STRIDE: i32 = 4;
+pub const SKIN_DETAIL_OPTIONS_CHOICES: usize = 8;
+
+pub fn detail_options_choice_slot(id: i32) -> Option<(usize, usize, i32)> {
+    (SKIN_DETAIL_OPTIONS_CHOICE_BASE..=SKIN_DETAIL_OPTIONS_CHOICE_LAST).contains(&id).then(|| {
+        let index = id - SKIN_DETAIL_OPTIONS_CHOICE_BASE;
+        let within = index % SKIN_DETAIL_OPTIONS_CHOICE_ITEM_STRIDE;
+        (
+            (index / SKIN_DETAIL_OPTIONS_CHOICE_ITEM_STRIDE) as usize,
+            (within / SKIN_DETAIL_OPTIONS_CHOICE_STRIDE) as usize,
+            within % SKIN_DETAIL_OPTIONS_CHOICE_STRIDE,
+        )
+    })
+}
+
 pub fn is_detail_options_event(id: i32) -> bool {
     (SKIN_EVENT_DETAIL_OPTIONS_PREVIOUS..=SKIN_EVENT_DETAIL_OPTIONS_SELECT_ID).contains(&id)
         || (SKIN_EVENT_DETAIL_OPTIONS_ROW_BASE..=SKIN_EVENT_DETAIL_OPTIONS_ROW_LAST).contains(&id)
+        || detail_options_choice_slot(id)
+            .is_some_and(|(_, choice, field)| choice < SKIN_DETAIL_OPTIONS_CHOICES && field == 0)
 }
 /// Lua result skin の定数 `Expand_op` 代入を宣言的クリックイベントへ変換する ID。
 /// beatoraja の正数イベント ID と衝突しない BMZ 内部予約値を使う。

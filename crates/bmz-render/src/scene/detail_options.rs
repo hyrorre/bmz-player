@@ -11,6 +11,12 @@ pub enum DetailValueKind {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct DetailOptionChoice {
+    pub value: i64,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct DetailOptionRow {
     pub item_id: i64,
     pub category_id: i64,
@@ -18,6 +24,7 @@ pub struct DetailOptionRow {
     pub value: i64,
     pub value_index: i64,
     pub choice_count: i64,
+    pub choices: Arc<[DetailOptionChoice]>,
     pub kind: DetailValueKind,
     pub label: String,
     pub value_label: String,
@@ -67,6 +74,15 @@ fn slot(id: i32) -> Option<(usize, i32)> {
 
 pub fn number(id: i32, panel: Option<&DetailOptionsSnapshot>) -> Option<i64> {
     use bmz_skin_document::*;
+    if let Some((slot, choice, field)) = detail_options_choice_slot(id) {
+        return Some(
+            panel
+                .and_then(|p| p.row(slot))
+                .and_then(|r| r.choices.get(choice))
+                .filter(|_| choice < SKIN_DETAIL_OPTIONS_CHOICES && field == 0)
+                .map_or(-1, |c| c.value),
+        );
+    }
     if let Some((slot, field)) = slot(id) {
         return Some(
             panel
@@ -112,6 +128,15 @@ pub fn number(id: i32, panel: Option<&DetailOptionsSnapshot>) -> Option<i64> {
 
 pub fn text(id: i32, panel: Option<&DetailOptionsSnapshot>) -> Option<&str> {
     use bmz_skin_document::*;
+    if let Some((slot, choice, field)) = detail_options_choice_slot(id) {
+        return Some(
+            panel
+                .and_then(|p| p.row(slot))
+                .and_then(|r| r.choices.get(choice))
+                .filter(|_| choice < SKIN_DETAIL_OPTIONS_CHOICES && field == 0)
+                .map_or("", |c| c.label.as_str()),
+        );
+    }
     if let Some((slot, field)) = slot(id) {
         return Some(
             panel
@@ -149,6 +174,17 @@ pub fn text(id: i32, panel: Option<&DetailOptionsSnapshot>) -> Option<&str> {
 
 pub fn option(id: i32, panel: Option<&DetailOptionsSnapshot>) -> Option<bool> {
     use bmz_skin_document::*;
+    if let Some((slot, choice, field)) = detail_options_choice_slot(id) {
+        return Some(panel.and_then(|p| p.row(slot)).is_some_and(|r| {
+            choice < SKIN_DETAIL_OPTIONS_CHOICES
+                && r.choices.get(choice).is_some_and(|c| match field {
+                    0 => true,
+                    1 => r.value_index >= 0 && r.value == c.value,
+                    2 => r.editable,
+                    _ => false,
+                })
+        }));
+    }
     if let Some((slot, field)) = slot(id) {
         return Some(panel.is_some_and(|p| {
             p.row(slot).is_some_and(|r| match field {
@@ -156,6 +192,7 @@ pub fn option(id: i32, panel: Option<&DetailOptionsSnapshot>) -> Option<bool> {
                 1 => p.viewport_start + slot == p.cursor,
                 2 => r.editable,
                 3 => r.effective,
+                4 => r.value_index < 0,
                 _ => false,
             })
         }));
@@ -190,6 +227,11 @@ mod tests {
                     value: 1,
                     value_index: 1,
                     choice_count: 2,
+                    choices: vec![
+                        DetailOptionChoice { value: 0, label: "OFF".into() },
+                        DetailOptionChoice { value: 1, label: "ON".into() },
+                    ]
+                    .into(),
                     kind: DetailValueKind::Bool,
                     label: format!("item {i}"),
                     value_label: "ON".into(),

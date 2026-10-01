@@ -12,7 +12,11 @@
     "color": "1C454A"
   },
   {
-    "id": "detail_button",
-    "color": "1F3340"
+    "id": "detail_choice_base",
+    "color": "131F25"
+  },
+  {
+    "id": "detail_choice_current",
+    "color": "29615E"
   }
 ]

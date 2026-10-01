@@ -1,6 +1,6 @@
 //! E2 catalog and registry adapter. No input or rendering code owns settings.
 use bmz_core::lane::KeyMode;
-use bmz_render::scene::detail_options::{DetailOptionRow, DetailValueKind};
+use bmz_render::scene::detail_options::{DetailOptionChoice, DetailOptionRow, DetailValueKind};
 
 use crate::config::profile_config::*;
 use crate::config::settings_registry::{
@@ -157,7 +157,24 @@ impl DetailOptionDef {
         }
         let current = self.value(p);
         let next = stepped_value(self.kind, current, self.choices, direction);
-        if current == next {
+        self.set_value(p, next, direction)
+    }
+
+    pub fn select_choice(self, p: &mut ProfileConfig, mode: Option<KeyMode>, index: usize) -> bool {
+        if index >= self.choices as usize
+            || matches!(self.kind, DetailValueKind::Number { .. })
+            || (self.mode_scoped && mode.is_none())
+        {
+            return false;
+        }
+        if self.mode_scoped {
+            p.activate_play_mode(mode.expect("checked mode"));
+        }
+        self.set_value(p, index as i64, 1)
+    }
+
+    fn set_value(self, p: &mut ProfileConfig, next: i64, direction: i32) -> bool {
+        if self.value(p) == next {
             return false;
         }
         // Use the same registry mutation as the settings screen; skip ADD values
@@ -174,6 +191,34 @@ impl DetailOptionDef {
             }
         }
         unreachable!("registry cycle must contain the catalog choice")
+    }
+
+    fn choice_label(self, index: usize, text: &Localizer) -> String {
+        use crate::config::settings_registry::{
+            format_bottom_shiftable_gauge, format_hispeed_mode,
+        };
+        if self.kind == DetailValueKind::Bool {
+            return text.text(if index == 0 { "detail-options-off" } else { "detail-options-on" });
+        }
+        match self.setting {
+            SettingsEntryId::BottomShiftableGauge => format_bottom_shiftable_gauge(
+                [
+                    BottomShiftableGaugeConfig::AssistEasy,
+                    BottomShiftableGaugeConfig::Easy,
+                    BottomShiftableGaugeConfig::Normal,
+                ][index],
+            ),
+            SettingsEntryId::HispeedMode => format_hispeed_mode(HispeedConfigPreset::ORDER[index]),
+            SettingsEntryId::LnModePolicy => {
+                crate::ln_policy::LnPolicySetting::ORDER[index].display_label().to_string()
+            }
+            SettingsEntryId::AssistScrollMode
+            | SettingsEntryId::AssistLongNoteMode
+            | SettingsEntryId::AssistMineMode => {
+                text.text(if index == 0 { "detail-options-off" } else { "detail-options-remove" })
+            }
+            _ => unreachable!("catalog enum needs choice labels"),
+        }
     }
 
     pub fn row(
@@ -258,6 +303,12 @@ impl DetailOptionDef {
             value,
             value_index: if (0..self.choices).contains(&value) { value } else { -1 },
             choice_count: self.choices,
+            choices: (0..self.choices as usize)
+                .map(|index| DetailOptionChoice {
+                    value: index as i64,
+                    label: self.choice_label(index, text),
+                })
+                .collect(),
             kind: self.kind,
             label: text.text(&format!("detail-options-item-{}", self.key)),
             value_label,
@@ -461,6 +512,37 @@ mod tests {
             assert_eq!(item.value(&panel), item.value(&settings), "{}", item.key);
             assert_eq!(panel.play_mode_config(KeyMode::K7), settings.play_mode_config(KeyMode::K7));
         }
+    }
+
+    #[test]
+    fn detail_choice_labels_and_direct_selection_match_current_values() {
+        let text = Localizer::new(AppLocale::Ja);
+        let context = DetailContext {
+            mode: Some(KeyMode::K7),
+            gas: GaugeAutoShiftConfig::Off,
+            practice: false,
+            course: false,
+        };
+        for item in CATALOG {
+            assert!(item.choices as usize <= bmz_render::skin::SKIN_DETAIL_OPTIONS_CHOICES);
+            let mut p = profile();
+            for index in 0..item.choices as usize {
+                item.select_choice(&mut p, context.mode, index);
+                let row = item.row(&p, context, &text);
+                assert_eq!(row.choices.len(), item.choices as usize);
+                assert_eq!(row.value_index, index as i64);
+                assert_eq!(row.value, row.choices[index].value);
+                assert_eq!(row.value_label, row.choices[index].label);
+                assert!(!item.select_choice(&mut p, context.mode, index));
+            }
+            assert!(!item.select_choice(&mut p, context.mode, item.choices as usize));
+            assert!(!item.select_choice(&mut p, context.mode, usize::MAX));
+        }
+        let mut p = profile();
+        assert!(!CATALOG[0].select_choice(&mut p, None, 1));
+        p.play.assist.scroll_mode = AssistScrollMode::Add;
+        assert!(CATALOG[8].select_choice(&mut p, None, 1));
+        assert_eq!(p.play.assist.scroll_mode, AssistScrollMode::Remove);
     }
 
     #[test]

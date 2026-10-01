@@ -570,6 +570,7 @@ mod support;
 mod value;
 
 pub use adjust::{adjust_settings_value, eight_key_hispeed_lane};
+pub(crate) use support::{format_bottom_shiftable_gauge, format_hispeed_mode};
 pub use value::{format_settings_value, settings_adjust_step};
 
 use support::*;

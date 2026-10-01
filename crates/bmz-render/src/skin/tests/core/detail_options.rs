@@ -1,5 +1,7 @@
 use super::*;
-use crate::scene::detail_options::{DetailOptionRow, DetailOptionsSnapshot, DetailValueKind};
+use crate::scene::detail_options::{
+    DetailOptionChoice, DetailOptionRow, DetailOptionsSnapshot, DetailValueKind,
+};
 
 #[test]
 fn detail_options_resolvers_and_lua_text_share_the_snapshot() {
@@ -13,6 +15,12 @@ fn detail_options_resolvers_and_lua_text_share_the_snapshot() {
             value: 1,
             value_index: 1,
             choice_count: 3,
+            choices: vec![
+                DetailOptionChoice { value: 0, label: "ASSIST EASY".into() },
+                DetailOptionChoice { value: 1, label: "EASY".into() },
+                DetailOptionChoice { value: 2, label: "NORMAL".into() },
+            ]
+            .into(),
             kind: DetailValueKind::Enum,
             label: "GAS下限".into(),
             value_label: "EASY".into(),
@@ -35,7 +43,7 @@ fn detail_options_resolvers_and_lua_text_share_the_snapshot() {
         select_option_panel: 2,
         ..Default::default()
     };
-    for id in (19300..=19312).chain(19400..=19469) {
+    for id in (19300..=19312).chain(19400..=19469).chain(19500..=19947) {
         assert_eq!(
             skin_state_number(id, &state),
             crate::scene::detail_options::number(id, Some(&panel))
@@ -50,7 +58,7 @@ fn detail_options_resolvers_and_lua_text_share_the_snapshot() {
             crate::scene::detail_options::text(id, Some(&panel))
         );
     }
-    for id in (19300..=19305).chain(19400..=19469) {
+    for id in (19300..=19305).chain(19400..=19469).chain(19500..=19947) {
         let expected = crate::scene::detail_options::option(id, Some(&panel)).unwrap();
         assert_eq!(test_skin_op(id, &[], &state), expected);
         assert_eq!(test_skin_op(-id, &[], &state), !expected);
@@ -61,4 +69,12 @@ fn detail_options_resolvers_and_lua_text_share_the_snapshot() {
     let closed = SkinDrawState::default();
     assert_eq!(skin_state_number(19305, &closed), Some(-1));
     assert!(!test_skin_op(19300, &[], &closed));
+    assert_eq!(texts[&19500], "ASSIST EASY");
+    assert_eq!(texts[&19504], "EASY");
+    assert_eq!(texts[&19508], "NORMAL");
+    assert_eq!(texts[&19512], "");
+    assert!(test_skin_op(19505, &[], &state));
+    assert!(!test_skin_op(19501, &[], &state));
+    assert_eq!(skin_state_number(19500, &closed), Some(-1));
+    assert!(!test_skin_op(19500, &[], &closed));
 }

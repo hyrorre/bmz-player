@@ -29,6 +29,11 @@ enum DetailInput {
     Value(i32),
 }
 
+enum DetailValueEdit {
+    Step(i32),
+    Choice(usize),
+}
+
 impl DetailOptionsState {
     fn input_edge(
         &mut self,
@@ -65,6 +70,21 @@ impl WinitApp {
     pub(super) fn execute_detail_options_event(&mut self, id: i32, arg: i32) {
         use bmz_render::skin::*;
         if !self.detail_options_active() {
+            return;
+        }
+        if let Some((slot, choice, field)) = detail_options_choice_slot(id) {
+            if field == 0 && choice < SKIN_DETAIL_OPTIONS_CHOICES {
+                let index =
+                    detail_options_viewport(self.select.detail_options.cursor, CATALOG.len())
+                        + slot;
+                if let Some(item) = CATALOG.get(index).copied()
+                    && (choice as i64) < item.choices
+                {
+                    self.select.detail_options.cursor = index;
+                    self.select.detail_options.value_latched = self.detail_value_keys_held();
+                    self.apply_detail_setting(item, DetailValueEdit::Choice(choice));
+                }
+            }
             return;
         }
         match id {
@@ -231,9 +251,21 @@ impl WinitApp {
     }
 
     pub(super) fn adjust_detail_setting(&mut self, item: DetailOptionDef, direction: i32) -> bool {
+        self.apply_detail_setting(item, DetailValueEdit::Step(direction))
+    }
+
+    fn apply_detail_setting(&mut self, item: DetailOptionDef, edit: DetailValueEdit) -> bool {
         let mode = self.detail_options_mode();
         let before = SelectScoreContext::from_profile(&self.boot.profile_config);
-        if !item.adjust(&mut self.boot.profile_config, mode, direction) {
+        let changed = match edit {
+            DetailValueEdit::Step(direction) => {
+                item.adjust(&mut self.boot.profile_config, mode, direction)
+            }
+            DetailValueEdit::Choice(index) => {
+                item.select_choice(&mut self.boot.profile_config, mode, index)
+            }
+        };
+        if !changed {
             return false;
         }
         // Only synchronize the setting that changed; E1 options may have newer
