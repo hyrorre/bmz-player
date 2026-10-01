@@ -8,11 +8,20 @@ pub(crate) struct ProfileTestDir {
 
 impl ProfileTestDir {
     pub(crate) fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "bmz-profile-switch-{}-{}",
-            std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos(),
-        ));
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = loop {
+            let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+            let root = std::env::temp_dir()
+                .join(format!("bmz-profile-switch-{}-{stamp}-{id}", std::process::id()));
+            // Reserve ownership before any test writes files or installs Drop cleanup.
+            match std::fs::create_dir(&root) {
+                Ok(()) => break root,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("failed to create test directory {}: {error}", root.display()),
+            }
+        };
         let paths = AppPaths::from_dirs(
             root.join("resources"),
             root.join("data"),
@@ -30,6 +39,28 @@ impl ProfileTestDir {
 impl Drop for ProfileTestDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+#[test]
+fn parallel_profile_directories_keep_files_and_cleanup_isolated() {
+    let directories: Vec<_> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..16)
+            .map(|index| {
+                scope.spawn(move || {
+                    let data = ProfileTestDir::new();
+                    std::fs::write(data.root.join("owner"), index.to_string()).unwrap();
+                    data
+                })
+            })
+            .collect();
+        workers.into_iter().map(|worker| worker.join().unwrap()).collect()
+    });
+    for (index, data) in directories.into_iter().enumerate() {
+        assert_eq!(std::fs::read_to_string(data.root.join("owner")).unwrap(), index.to_string());
+        let root = data.root.clone();
+        drop(data);
+        assert!(!root.exists());
     }
 }
 

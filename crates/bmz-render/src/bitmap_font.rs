@@ -550,9 +550,21 @@ char id=65 x=0 y=0 width=1 height=1 xoffset=1 yoffset=2 xadvance=9 page=0 chnl=0
     }
 
     fn temp_dir() -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
         let stamp =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        std::env::temp_dir().join(format!("bmz-bitmap-font-test-{stamp}"))
+        loop {
+            let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+            let root = std::env::temp_dir()
+                .join(format!("bmz-bitmap-font-test-{}-{stamp}-{id}", std::process::id()));
+            // Never share fixtures or cleanup with another test, even if the clock repeats.
+            match std::fs::create_dir(&root) {
+                Ok(()) => return root,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("failed to create test directory {}: {error}", root.display()),
+            }
+        }
     }
 
     fn write_test_png(path: &Path) {
