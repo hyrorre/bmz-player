@@ -69,6 +69,83 @@ fn get_path_randomizes_when_selection_is_random_sentinel() {
 }
 
 #[test]
+fn get_path_replays_random_selections_in_call_order() {
+    let root = unique_skin_test_dir("pinned-random-getpath");
+    fs::create_dir_all(root.join("bg")).unwrap();
+    fs::write(root.join("bg/only.png"), []).unwrap();
+    fs::write(root.join("first.png"), []).unwrap();
+    fs::write(root.join("second.png"), []).unwrap();
+    let entry = root.join("result.lua");
+    fs::write(
+        &entry,
+        r#"
+        if not skin_config then
+            return {type = 7, filepath = {{name = "Background", path = "bg/*.png"}}}
+        end
+        return {first = skin_config.get_path("bg/*.png"),
+                second = skin_config.get_path("bg\\*.png"),
+                added = skin_config.get_path("bg/*.png")}
+        "#,
+    )
+    .unwrap();
+    let files = BTreeMap::from([("Background".into(), "Random".into())]);
+    let state = LuaLoadRuntimeState {
+        pinned_random_file_paths: BTreeMap::from([(
+            "bg/*.png".into(),
+            vec!["first.png".into(), "second.png".into()],
+        )]),
+        ..Default::default()
+    };
+    let loaded =
+        load_lua_skin_value(&entry, &BTreeMap::new(), &files, &state, &BTreeMap::new()).unwrap();
+    let context = SkinPathContext::for_entry(&entry).unwrap();
+    let expected = ["first.png", "second.png", "bg/only.png"]
+        .map(|path| context.resolve_path(path).unwrap().to_string_lossy().into_owned());
+    for (field, path) in ["first", "second", "added"].iter().zip(&expected) {
+        assert_eq!(loaded.value[field], *path);
+    }
+    assert_eq!(loaded.dependencies.random_file_paths["bg/*.png"], expected);
+    assert!(loaded.dependencies.opaque);
+
+    // An explicit file selection must win over pins left over from a Random load.
+    let files = BTreeMap::from([("Background".into(), "only.png".into())]);
+    let fixed =
+        load_lua_skin_value(&entry, &BTreeMap::new(), &files, &state, &BTreeMap::new()).unwrap();
+    assert_eq!(fixed.value["first"], expected[2]);
+    assert!(fixed.dependencies.random_file_paths.is_empty());
+}
+
+#[test]
+fn get_path_rejects_pinned_random_selection_outside_skin_root() {
+    let root = unique_skin_test_dir("pinned-random-sandbox");
+    fs::create_dir_all(root.join("skin/bg")).unwrap();
+    fs::write(root.join("skin/bg/only.png"), []).unwrap();
+    fs::write(root.join("outside.png"), []).unwrap();
+    let entry = root.join("skin/result.lua");
+    fs::write(
+        &entry,
+        r#"
+        if not skin_config then
+            return {type = 7, filepath = {{name = "Background", path = "bg/*.png"}}}
+        end
+        return {path = skin_config.get_path("bg/*.png")}
+        "#,
+    )
+    .unwrap();
+    let state = LuaLoadRuntimeState {
+        pinned_random_file_paths: BTreeMap::from([(
+            "bg/*.png".into(),
+            vec![root.join("outside.png").to_string_lossy().into_owned()],
+        )]),
+        ..Default::default()
+    };
+    let files = BTreeMap::from([("Background".into(), "Random".into())]);
+    let error = load_lua_skin_value(&entry, &BTreeMap::new(), &files, &state, &BTreeMap::new())
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("escapes skin root"), "{error:#}");
+}
+
+#[test]
 fn get_path_returns_sandboxed_path_before_file_exists() {
     let root = unique_skin_test_dir("missing-getpath");
     let entry = root.join("select.luaskin");

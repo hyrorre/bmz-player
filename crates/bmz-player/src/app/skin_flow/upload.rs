@@ -117,6 +117,7 @@ impl WinitApp {
         self.skin.skin_pipeline.result_refresh_generation = None;
         self.skin.skin_pipeline.result_load_dependencies = None;
         self.skin.skin_pipeline.result_source_selections.clear();
+        self.skin.skin_pipeline.result_random_file_selections.clear();
         self.skin.last_result_skin_signature = None;
         self.ensure_result_skin_ready(slot);
     }
@@ -161,7 +162,7 @@ impl WinitApp {
             return;
         }
 
-        let (_, trimmed, options, files, runtime_state) = signature.clone();
+        let (_, trimmed, options, files, mut runtime_state) = signature.clone();
         self.skin.last_result_skin_signature = Some(signature);
         let generation = self.skin.skin_pipeline.begin_result_load(refresh);
 
@@ -198,6 +199,11 @@ impl WinitApp {
             return;
         }
 
+        if refresh {
+            runtime_state
+                .pinned_random_file_paths
+                .clone_from(&self.skin.skin_pipeline.result_random_file_selections);
+        }
         let mut request = SkinDecodeRequest::new(
             generation,
             path,
@@ -441,11 +447,13 @@ impl WinitApp {
             decode_stats,
             upload_stats,
         } = uploaded;
-        if kind == SkinKind::Result {
-            self.skin.skin_pipeline.result_load_dependencies = Some(load_dependencies);
-        }
         let result_refresh = kind == SkinKind::Result
             && self.skin.skin_pipeline.result_refresh_generation == Some(generation);
+        if kind == SkinKind::Result {
+            self.skin
+                .skin_pipeline
+                .install_result_load_dependencies(load_dependencies, result_refresh);
+        }
         if kind == SkinKind::Result && !result_refresh {
             self.skin.skin_pipeline.result_source_selections = document
                 .source

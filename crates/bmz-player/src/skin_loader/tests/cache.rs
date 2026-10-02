@@ -46,6 +46,83 @@ fn result_refresh_pins_resolved_wildcard_source() {
 }
 
 #[test]
+fn result_refresh_preserves_lua_random_file_selection_before_document_construction() {
+    let root = unique_test_dir("result-pinned-lua-background");
+    std::fs::create_dir_all(root.join("bg")).unwrap();
+    let root = std::fs::canonicalize(root).unwrap();
+    for name in ["one.png", "two.png"] {
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255]))
+            .save(root.join("bg").join(name))
+            .unwrap();
+    }
+    let entry = root.join("result.lua");
+    std::fs::write(
+        &entry,
+        r#"
+        if not skin_config then
+            return {type = 7, filepath = {{name = "Background", path = "bg/*.png"}}}
+        end
+        local state = require("main_state")
+        local path = skin_config.get_path("bg/*.png")
+        return {type = 7, source = {{id = "bg", path = path}},
+            image = {{id = "background", src = "bg", w = 1, h = 1}},
+            destination = {{id = "background", dst = {{w = 1920, h = 1080}}}},
+            graph = {{id = "rank", x = path:match("one%.png$") and 1 or 2,
+                      y = state.number(380)}}}
+        "#,
+    )
+    .unwrap();
+    let cache = Arc::new(Mutex::new(SkinDocumentCache::default()));
+    let files = BTreeMap::from([("Background".into(), "Random".into())]);
+    let decode = |state: &LuaLoadRuntimeState, pins: Option<&BTreeMap<String, String>>| {
+        decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+            pinned_sources: pins,
+            skin_path: &entry,
+            kind: SkinKind::Result,
+            options: &BTreeMap::new(),
+            files: &files,
+            runtime_state: state,
+            document_cache: Some(cache.clone()),
+            source_cache: None,
+            texture_cache: None,
+            font_cache: None,
+            installed_fonts: None,
+            library_roots: &[],
+        })
+        .unwrap()
+    };
+    let mut state =
+        LuaLoadRuntimeState { number_values: BTreeMap::from([(380, 100)]), ..Default::default() };
+    let initial = decode(&state, None);
+    let initial_path = &initial.sources[0].path;
+    let pins = BTreeMap::from([(
+        initial.document.source[0].path.clone(),
+        initial_path.to_string_lossy().into_owned(),
+    )]);
+    state.pinned_random_file_paths = initial.load_dependencies.random_file_paths.clone();
+    assert_eq!(
+        state.pinned_random_file_paths["bg/*.png"],
+        vec![pins.values().next().unwrap().clone()]
+    );
+    for value in 200..216 {
+        state.number_values.insert(380, value);
+        assert!(initial.load_dependencies.numbers_changed(&state.number_values));
+        let refreshed = decode(&state, Some(&pins));
+        assert_eq!(&refreshed.sources[0].path, initial_path);
+        assert_eq!(refreshed.document.graph[0].x, initial.document.graph[0].x);
+        assert_eq!(refreshed.document.graph[0].y, value);
+        assert_eq!(refreshed.load_dependencies.random_file_paths, state.pinned_random_file_paths);
+    }
+    assert!(cache.lock().unwrap().entries.is_empty());
+
+    // Entering a new result starts a new selection, even with the same document cache.
+    std::fs::remove_file(initial_path).unwrap();
+    state.pinned_random_file_paths.clear();
+    let next_result = decode(&state, None);
+    assert_ne!(&next_result.sources[0].path, initial_path);
+}
+
+#[test]
 fn opaque_result_retains_load_dependencies_without_callback_reads() {
     let root = unique_test_dir("opaque-result-dependencies");
     std::fs::create_dir_all(&root).unwrap();
