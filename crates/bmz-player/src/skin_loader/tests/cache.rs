@@ -20,8 +20,10 @@ fn result_refresh_pins_resolved_wildcard_source() {
     "#,
     )
     .unwrap();
-    let pinned =
-        BTreeMap::from([("bg/*".into(), root.join("bg/two.png").to_string_lossy().into_owned())]);
+    // Pins use the decoder's canonical paths, without Windows verbatim prefixes.
+    let context = SkinPathContext::for_entry(&entry).unwrap();
+    let pinned_path = context.resolve_file("bg/two.png").unwrap();
+    let pinned = BTreeMap::from([("bg/*".into(), pinned_path.to_string_lossy().into_owned())]);
     for _ in 0..3 {
         let decoded = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
             pinned_sources: Some(&pinned),
@@ -38,6 +40,7 @@ fn result_refresh_pins_resolved_wildcard_source() {
             library_roots: &[],
         })
         .unwrap();
+        assert_eq!(decoded.sources.len(), 1, "pinned background must resolve");
         assert_eq!(
             std::fs::canonicalize(&decoded.sources[0].path).unwrap(),
             std::fs::canonicalize(root.join("bg/two.png")).unwrap()

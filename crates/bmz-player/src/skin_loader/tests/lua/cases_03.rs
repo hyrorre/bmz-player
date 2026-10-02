@@ -320,6 +320,94 @@ fn milliondollar_result_rank_diff_uses_load_time_result_scores_when_available() 
 }
 
 #[test]
+fn starseeker_result_rank_diff_uses_library_scope_and_runtime_values_when_available() {
+    let library_roots = test_app_paths().skin_library_roots();
+    let skin_path = library_roots[0].join("ADFX02/Starseeker/result/result.luaskin");
+    if !skin_path.is_file() {
+        eprintln!("skipping: Starseeker assets not present at {}", skin_path.display());
+        return;
+    }
+    let files = BTreeMap::from([
+        ("使用テーマ".to_string(), "Theme/starseeker".to_string()),
+        ("フォント".to_string(), "_font/starseeker".to_string()),
+        ("シャッター".to_string(), "Shutter/TYPE-M".to_string()),
+    ]);
+    for (mode, score, expected_diff, expected_y) in [
+        ("NEXT RANK", 2969, 135, 292),
+        ("NEXT RANK", 3104, 0, 165),
+        ("NEXT RANK", 2800, 304, 292),
+        ("NEAREST RANK", 2800, -40, 292),
+    ] {
+        let state = SkinDrawState { ex_score: score, total_notes: 1552, ..Default::default() };
+        let runtime_state = LuaLoadRuntimeState {
+            number_values: [71, 74, 154]
+                .map(|id| (id, bmz_render::skin::lua_main_state_number(id, &state) as i32))
+                .into(),
+            ..Default::default()
+        };
+        let options = BTreeMap::from([("ランク差分表示".to_string(), mode.to_string())]);
+        let decoded = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+            skin_path: &skin_path,
+            kind: SkinKind::Result,
+            options: &options,
+            files: &files,
+            runtime_state: &runtime_state,
+            document_cache: None,
+            source_cache: None,
+            texture_cache: None,
+            font_cache: None,
+            installed_fonts: None,
+            // Match app loading: rank_diff.lua lives above the Result entry directory.
+            library_roots: &library_roots,
+            pinned_sources: None,
+        })
+        .expect("decode Starseeker Result within the skin library");
+        let has_rank_modes = decoded.document.property.iter().any(|p| p.name == "ランク差分表示");
+        if !has_rank_modes && mode == "NEAREST RANK" {
+            // Older installations only support NEXT RANK through ref 154.
+            continue;
+        }
+        let value = decoded
+            .document
+            .value
+            .iter()
+            .find(|value| value.id == "RANK_Diff_Exscore")
+            .expect("Starseeker rank-difference number");
+        assert_eq!(value.y, expected_y, "{mode}, EX SCORE {score}");
+        if !has_rank_modes {
+            assert_eq!(value.ref_id, 154);
+            assert_eq!(runtime_state.number_values[&154], expected_diff);
+            continue;
+        }
+        let callback_id = value
+            .value_expr
+            .strip_prefix("bmz:lua_value_callback:")
+            .expect("rank-difference number should retain a Lua callback")
+            .parse::<usize>()
+            .expect("valid Lua callback ID");
+        let mut lua_runtime = decoded.lua_runtime.expect("Starseeker value callback runtime");
+        let text_values = BTreeMap::new();
+        let provider =
+            RenderLuaMainState { state: &state, enabled_options: &[], text_values: &text_values };
+        lua_runtime.begin_frame();
+        assert_eq!(
+            lua_runtime.evaluate_number(callback_id, &provider),
+            Some(f64::from(expected_diff)),
+            "{mode}, EX SCORE {score}"
+        );
+        // A retained callback must read current scores, not a value baked at load time.
+        let max_state = SkinDrawState { ex_score: 3104, ..state };
+        let max_provider = RenderLuaMainState {
+            state: &max_state,
+            enabled_options: &[],
+            text_values: &text_values,
+        };
+        lua_runtime.begin_frame();
+        assert_eq!(lua_runtime.evaluate_number(callback_id, &max_provider), Some(0.0));
+    }
+}
+
+#[test]
 fn starseeker_result_misscount_diff_uses_runtime_number_color_block() {
     let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../data/skins/Starseeker/result/result.luaskin");

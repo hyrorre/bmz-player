@@ -93,7 +93,9 @@ fn wildcard_source_with_context_falls_back_to_default_file_stem() {
             &files,
         )
         .unwrap();
-        assert_eq!(resolved, root.join("customize").join(expected));
+        // Compare in the same canonical form, including macOS temporary directories
+        // and Windows verbatim prefixes.
+        assert_eq!(fs::canonicalize(resolved).unwrap(), root.join("customize").join(expected));
     }
     fs::remove_dir_all(root).unwrap();
 }

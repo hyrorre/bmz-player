@@ -33,3 +33,23 @@ Windows上で以下を実施した。
 - `app::tests::result::starseeker_result_selects_next_rank_sheet_from_summary_when_available`: ローカルのStarseeker素材で `RANK_Diff_Exscore` が生成されず失敗。手元の該当定義はテストが期待する `ref = 154` ではなく `get_rank_info()` を呼ぶvalue callback。上の修正前binaryにはこのテストが存在せず、変更前binaryでの再実行による確認はできていない。
 
 外部スキンでのIR通信・動画連続再生の実機確認は未実施。
+
+## 2026-10-02追記: 残った3件のテスト修正
+
+上記の3件を `b23e4867` 時点のコードで詳しく調査し、テストの入力・前提を修正した。
+
+- パス2件は、macOSの `/var` と `/private/var` の相違を解消した `0b968135` の `fs::canonicalize` 追加がWindowsで `\\?\` prefixを付けることが原因だった。
+  BMZの `SkinPathContext` はcanonicalize後にこのprefixを外すため、固定情報に渡すパスと、期待値を比較するパス表現が揃っていなかった。
+  固定情報は `SkinPathContext::resolve_file` の結果を使い、wildcardの比較は解決結果もcanonicalizeする。macOS向けの正規化は維持した。
+- StarseekerはローカルのADFX02 `8cc5bb1` で確認した。ランク差分の共通化後はResultより上の `rank_diff.lua` を読み、`main_state.number(71/74)` を使うcallbackで差分を返す。
+  以前のテストは許可rootをResultディレクトリに限定しており、この読み込みが拒否され、`pcall` 内のスコアフレーム構築が中断していた。加えて `ref=154` 固定という期待も現在の定義と一致していなかった。
+- Starseekerの実素材テストをskin loader側へ移し、アプリと同じ `AppPaths::skin_library_roots()` を渡す。
+  描画時のproviderでcallbackを評価し、NEXT / NEARESTの差分、MAX用の数値画像位置、読み込み後のスコア変化への追従を確認する。旧版の `ref=154` 定義にも対応する。
+- アプリ側の `ref=154` 回帰確認は最小Lua fixtureに分離した。外部素材なしでも、実際のResult summaryからロード時に正しい数値画像を選ぶことを検証する。
+  既存のgrade diff本体の修正は維持し、本番コードと第三者製スキンへの変更は行っていない。
+
+Windowsで対象3件と `ref=154` のテスト計4件、fmt、`bmz-player` のcheck / all-targets Clippyは成功。
+`cargo test --workspace --locked --offline --no-fail-fast` も成功し、全targetで失敗0件。
+`bmz-player --lib` は2103成功・6ignore、`bmz-skin` は230成功、`bmz-render` は655成功・3ignoreとなった。
+Starseekerは素材ありで実行し、1552 notes・EX SCORE 2800のNEXT=304 / NEAREST=-40、MAXの0を確認した。
+macOS / Linuxでの再実行と画面の目視確認は未実施。

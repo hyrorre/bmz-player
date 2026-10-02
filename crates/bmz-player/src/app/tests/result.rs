@@ -239,9 +239,21 @@ fn result_lua_runtime_values_cover_load_time_result_decisions() {
 
 #[test]
 fn result_lua_next_rank_matches_rendering_before_skin_load() {
+    let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+    std::fs::create_dir_all(&data.paths.data_dir).unwrap();
+    let skin_path = data.paths.data_dir.join("result.luaskin");
+    std::fs::write(
+        &skin_path,
+        r#"
+        local state = require("main_state")
+        return {type = 7, value = {{id = "rank_diff", ref = 154,
+            y = state.number(154) == 0 and 165 or 292}}}
+        "#,
+    )
+    .unwrap();
     let mut summary = debug_boot_result_summary();
     summary.total_notes = 1552;
-    // Starseeker uses ref 154 == 0 to choose its MAX number sheet at load time.
+    // Legacy Result skins use ref 154 == 0 to choose their MAX sheet at load time.
     for (score, expected) in [(2969, 135), (3104, 0), (2759, 1), (2760, 344)] {
         summary.ex_score = score;
         let values = result_lua_runtime_number_values_for_summary(&summary);
@@ -262,50 +274,21 @@ fn result_lua_next_rank_matches_rendering_before_skin_load() {
             "test",
         );
         assert_eq!(runtime.number_values.get(&154), Some(&expected));
-    }
-}
-
-#[test]
-fn starseeker_result_selects_next_rank_sheet_from_summary_when_available() {
-    let skin_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../data/skins/ADFX02/Starseeker/result/result.luaskin");
-    if !skin_path.is_file() {
-        eprintln!("skipping: Starseeker assets not present at {}", skin_path.display());
-        return;
-    }
-    let files = BTreeMap::from([
-        ("使用テーマ".to_string(), "Theme/starseeker".to_string()),
-        ("フォント".to_string(), "_font/starseeker".to_string()),
-        ("シャッター".to_string(), "Shutter/TYPE-M".to_string()),
-    ]);
-    let mut summary = debug_boot_result_summary();
-    summary.total_notes = 1552;
-    for (score, expected_y) in [(2969, 292), (3104, 165)] {
-        summary.ex_score = score;
-        let runtime = lua_runtime_state_for_result(
-            false,
-            None,
-            true,
-            false,
-            summary.key_mode,
-            result_lua_runtime_number_values_for_summary(&summary),
-            "test",
-        );
         let decoded = crate::skin_loader::decode_beatoraja_skin_with_options_and_runtime_state(
             &skin_path,
             SkinKind::Result,
             &BTreeMap::new(),
-            &files,
+            &BTreeMap::new(),
             &runtime,
         )
-        .expect("decode Starseeker Result with summary");
+        .expect("decode ref 154 Result fixture with summary");
         let value = decoded
             .document
             .value
             .iter()
-            .find(|value| value.id == "RANK_Diff_Exscore")
-            .expect("Starseeker next-rank number");
-        assert_eq!(value.y, expected_y, "EX SCORE {score}");
+            .find(|value| value.id == "rank_diff")
+            .expect("next-rank number");
+        assert_eq!(value.y, if expected == 0 { 165 } else { 292 }, "EX SCORE {score}");
         assert_eq!(value.ref_id, 154);
     }
 }
