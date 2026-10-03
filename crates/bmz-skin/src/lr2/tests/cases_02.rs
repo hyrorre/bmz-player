@@ -1,6 +1,36 @@
 use super::*;
 
 #[test]
+fn system_font_slots_are_independent_of_bitmap_font_slots() {
+    let files = BTreeMap::new();
+    let mut builder = CsvBuilder::new(Path::new("skin.lr2skin"), Header::default(), &files);
+    for fields in [["#FONT", "20", "4", "2"], ["#FONT", "60", "5", "3"]] {
+        builder.add_system_font(&CsvLine {
+            command: "FONT".into(),
+            fields: fields.into_iter().map(String::from).collect(),
+        });
+    }
+    builder.add_lr2_font("bitmap.lr2font");
+    for index in [0, 1] {
+        builder.add_text(&CsvLine {
+            command: "SRC_TEXT".into(),
+            fields: vec![
+                "#SRC_TEXT".into(),
+                "0".into(),
+                index.to_string(),
+                "10".into(),
+                "1".into(),
+            ],
+        });
+    }
+    assert_eq!(builder.texts[0]["font"], "lr2font-0");
+    assert!(builder.texts[0]["lr2SystemFont"].is_null());
+    assert_eq!(builder.texts[1]["font"], "");
+    assert_eq!(builder.texts[1]["size"], 0);
+    assert_eq!(builder.texts[1]["lr2SystemFont"], json!({"size":60, "thickness":5, "type":3}));
+}
+
+#[test]
 fn image_transparency_is_captured_at_each_load() {
     let files = BTreeMap::new();
     let mut builder = CsvBuilder::new(Path::new("skin.lr2skin"), Header::default(), &files);

@@ -60,3 +60,11 @@ LR2_skinload.cppのSetTransColorに合わせ、既定緑とTRANSCOLOR/TRANSCLOLR
 同一パスで別の透過色を指定しても混ざらないようCPU/GPUキャッシュのキーに加える。
 RGB BMP/PNG・RGBA維持と、LR2ファイルから同一画像を二重ロードする回帰テストを追加。
 検証: workspaceのcheck / all-targets Clippy / test、fmtを通過。実機確認は未実施。
+
+## system font
+
+読み捨てていたFONTを独立の番号表に保持し、LRDrawTextに合わせたDST高さ・幅上限と
+縁取りに接続する。同番号のLR2FONTを優先する。字形は既存のbmz-font経路を使う。
+DxLibのthickness・AA方式は未対応として残し、宣言値だけ保持する。
+検証: workspaceのcheck / all-targets Clippy / testを通過。変更したファイルはfmt済み。
+実機での文字の目視確認は未実施。

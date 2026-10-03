@@ -105,6 +105,12 @@ OpenLR2の `SetDSTdrawByTime` に合わせて時刻を評価する。JSON/Luaの
 
 ## LR2のPlay描画
 
+`#FONT`は`#LR2FONT`と別の番号表を使う。同番号のbitmap font宣言を優先し、
+system fontは`text.lr2SystemFont`に宣言サイズ・thickness・typeを保持する。
+描画高はDSTの高さ、幅上限はDST幅×DST高/FONTサイズで、中央・右揃えもこの幅を使う。
+typeのedge bitは黒の縁取りへ変換する。字形はBMZの既定フォントを使い、
+DxLib固有のthicknessとアンチエイリアス方式の再現は未対応。
+
 LR2の`#IMAGE`は既定の緑（0,255,0）を透過色とし、`#TRANSCOLOR`と互換綴り
 `#TRANSCLOLR` / `#TRANSCLOLOR`で以後の画像の透過色を変更できる。
 RGB画像だけに適用し、alphaを持つ画像は元のalphaを維持する。

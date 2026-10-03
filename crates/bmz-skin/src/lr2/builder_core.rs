@@ -21,6 +21,7 @@ impl<'a> CsvBuilder<'a> {
             source_paths: Vec::new(),
             transparent_color: [0, 255, 0],
             fonts: Vec::new(),
+            system_fonts: Vec::new(),
             lr2font_ids: Vec::new(),
             images: Vec::new(),
             imagesets: Vec::new(),

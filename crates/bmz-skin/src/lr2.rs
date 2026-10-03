@@ -162,6 +162,7 @@ struct CsvBuilder<'a> {
     source_paths: Vec<Option<String>>,
     transparent_color: [u8; 3],
     fonts: Vec<JsonValue>,
+    system_fonts: Vec<JsonValue>,
     lr2font_ids: Vec<Option<String>>,
     images: Vec<JsonValue>,
     imagesets: Vec<JsonValue>,

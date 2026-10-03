@@ -19,13 +19,22 @@ macro_rules! skin_document_render_graph_text_methods {
         ) -> Option<SkinRenderItem> {
             let content = skin_state_text_with_draw_state(text, draw_state, state);
             let rect = normalize_skin_frame_rect(frame, self.w, self.h);
+            if text.lr2_system_font.is_some() && (frame.w == 0 || frame.h == 0) {
+                return None;
+            }
+            // LR2 limits width at the declared font size, then scales both axes
+            // by DST height / FONT size. Alignment uses the scaled width.
+            let lr2_scale = text
+                .lr2_system_font
+                .map_or(1.0, |font| frame.h.abs() as f32 / font.size.max(1) as f32);
+            let max_width = rect.width * lr2_scale;
             // beatoraja は dst.x を align 基準点として扱う（align=1=center なら
             // dst.x がテキストの中央, align=2=right なら dst.x がテキストの右端）。
             // bmz の renderer は origin を「テキストボックスの左端」として扱うので、
             // align に応じて origin.x を平行移動してから渡す。
             let origin_x = match text.align {
-                1 => rect.x - rect.width / 2.0,
-                2 => rect.x - rect.width,
+                1 => rect.x - max_width / 2.0,
+                2 => rect.x - max_width,
                 _ => rect.x,
             };
             // beatoraja `STRING_SEARCHWORD` (ref=30) は placeholder 状態で
@@ -73,15 +82,23 @@ macro_rules! skin_document_render_graph_text_methods {
                     color,
                     layer: TextLayer::Ui,
                     align: skin_text_align(text.align),
-                    max_width: frame.w.abs() as f32 / self.w.max(1) as f32,
+                    max_width,
                     overflow: skin_text_overflow(text.overflow, text.shrink_mode),
                     wrapping: text.wrapping,
                     // The resolved destination opacity also fades decorations, while
                     // preserving their own RGB and alpha. Body/caret already use alpha.
-                    outline: skin_text_outline(text, self.h).map(|mut outline| {
-                        outline.color.a *= alpha;
-                        outline
-                    }),
+                    outline: text
+                        .lr2_system_font
+                        .filter(|font| font.font_type & 1 != 0)
+                        .map(|_| TextOutline {
+                            color: Color::rgb(0.0, 0.0, 0.0),
+                            width: lr2_scale / self.h.max(1) as f32,
+                        })
+                        .or_else(|| skin_text_outline(text, self.h))
+                        .map(|mut outline| {
+                            outline.color.a *= alpha;
+                            outline
+                        }),
                     shadow: skin_text_shadow(text, self.w, self.h).map(|mut shadow| {
                         shadow.color.a *= alpha;
                         shadow

@@ -25,7 +25,12 @@ impl<'a> CsvBuilder<'a> {
     }
 
     pub(super) fn add_system_font(&mut self, line: &CsvLine) {
-        let _ = line;
+        let values = parse_values(line);
+        self.system_fonts.push(json!({
+            "size": if values[1] > 0 { values[1] } else { 16 },
+            "thickness": values[2],
+            "type": values[3],
+        }));
     }
 
     pub(super) fn add_lr2_font(&mut self, raw_path: &str) {
@@ -182,13 +187,16 @@ impl<'a> CsvBuilder<'a> {
             .get(values[2].max(0) as usize)
             .and_then(|id| id.clone())
             .unwrap_or_default();
+        let system_font =
+            font.is_empty().then(|| self.system_fonts.get(values[2].max(0) as usize)).flatten();
         self.texts.push(json!({
             "id": id,
             "font": font,
             "ref": values[3],
             "align": values[4],
             "overflow": 1,
-            "size": self.lr2_text_size(values[2]),
+            "size": if system_font.is_some() { 0 } else { self.lr2_text_size(values[2]) },
+            "lr2SystemFont": system_font,
         }));
         self.set_current(id);
     }

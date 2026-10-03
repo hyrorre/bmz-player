@@ -397,8 +397,19 @@ pub struct SkinValueDef {
     pub offset: Vec<SkinValueDef>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct SkinLr2SystemFontDef {
+    pub size: i32,
+    #[serde(default)]
+    pub thickness: i32,
+    #[serde(default, rename = "type")]
+    pub font_type: i32,
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 pub struct SkinTextDef {
+    #[serde(default, rename = "lr2SystemFont")]
+    pub lr2_system_font: Option<SkinLr2SystemFontDef>,
     #[serde(default, deserialize_with = "deserialize_skin_id")]
     pub id: String,
     #[serde(default, deserialize_with = "deserialize_skin_id")]
