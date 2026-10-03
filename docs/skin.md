@@ -639,6 +639,12 @@ E1/E1+E2への切り替えでも保持し、退出側timer 32と登場側timer 2
 対応宣言を伝播し、旧optionpanel3/4のE2表示（閉じるtimer 32を含む）だけを除去する。
 選択列と現在値は枠で示す。構成・フォールバックは[実装仕様](select-detail-options.md#mz-select)を参照。
 
+Luxez-FlatのBMZ拡張版も同じAPIを利用する。`select_skinparts/default_detailoptions/parts.lua`の
+正常ロード時だけ対応宣言し、旧`default_optionpanel`内のE2開閉destinationとtimerなしのE2 hover領域を置換する。
+E1/E1+E2は同じ画像IDを共用する場合もあるため、ID全体で除去しない。
+部品の無効・欠落・失敗時とBMZ以外では従来のAssistへ戻る。新規APIの採番はない。
+[表示・互換仕様](select-detail-options.md#luxez-flat)を参照。
+
 #### 選択項目のnumber ref
 
 | ID | 意味 |

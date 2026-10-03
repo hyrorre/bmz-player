@@ -132,6 +132,13 @@ mz-select's readme permits use, modification, and redistribution of the skin and
 
 Luxez-Flat also includes third-party BGM, sound, image, and font materials. Keep the upstream readme and bundled font license directory together with the skin assets.
 
+The BMZ DETAIL OPTIONS part additionally bundles the unmodified Noto Sans CJK JP
+Medium font (weight 500), under SIL Open Font License 1.1. Preserve
+`select_skinparts/default_detailoptions/font/` including its `LICENSE` and
+`README.md`. The README records the source path, pinned commit, and SHA-256.
+The upstream file is `Sans/OTF/Japanese/NotoSansCJKjp-Medium.otf` at the same
+Noto commit listed above.
+
 Third-party skins copied under `data/skins/` for manual compatibility testing remain gitignored and must not be committed unless they are intentionally added as a documented bundled asset.
 
 ## Third-party Notices

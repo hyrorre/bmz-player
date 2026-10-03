@@ -113,3 +113,8 @@ data/skins/Luxez-Flat:
   the font_license/ directory in release packages. The skin includes third-party
   BGM, sound, image, and font materials whose terms and credits are documented
   by the bundled readme and license files.
+  The BMZ DETAIL OPTIONS part includes the unmodified Noto Sans CJK JP Medium
+  font under SIL Open Font License 1.1. Preserve its font, LICENSE and README.md
+  in select_skinparts/default_detailoptions/font/. The source is
+  Sans/OTF/Japanese/NotoSansCJKjp-Medium.otf in notofonts/noto-cjk at commit
+  f8d157532fbfaeda587e826d4cd5b21a49186f7c.
