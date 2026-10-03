@@ -46,6 +46,7 @@ closure/module stateを維持し、frameごとのmain_stateを参照します。
 | destination `draw` | ロード時推論とruntime callback |
 | Resultのパネル状態 | `Expand_op` / callbackが直接保持する `result_mode` を現在のパネルへ同期。Luxe FlatのGRAPHとIRの混在を防止。通常／compat、左右配置、WMIIの回帰確認は [作業記録](../notes/2026/2026-10-03-result-panel-lua-state.md) |
 | value / text / graph / sliderの `value` | ロード時推論とruntime callback |
+| Lua数字の状態更新 | 数字のruntime valueをdestinationごとにdraw / timer判定前に1回評価。cache hitでも実行を維持。Luxe FlatのResult / Course ResultでMAX+0とランク境界を確認。[回帰テスト](../crates/bmz-player/src/skin_loader/tests/lua/result_grade.rs) |
 | `customTimers[].timer` | ID `10000..19999`。推論とruntime callback。宣言順で1フレーム1回更新 |
 | `main_state.set_timer` | 受動custom timerのON/OFF。組み込みtimerや能動timerへの書き込みには制約がある |
 | `timer_util` | timer_function / timer_observe_boolean / new_passive_timer等をcustom timer内で利用可能 |

@@ -2,6 +2,65 @@ use super::*;
 use std::panic;
 
 #[test]
+fn rank_value_inference_preserves_shared_state_even_when_the_return_matches_a_ref() {
+    let root = unique_test_dir("bmz-shared-rank-value");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("skin.luaskin");
+    fs::write(
+        &path,
+        r#"
+        local main_state = require('main_state')
+        local rank_plus = false
+        local scorerate = 0
+        return {
+            type = 7,
+            value = {{id = 'rank_diff_count', value = function()
+                rank_plus = true
+                scorerate = main_state.number(71) / (main_state.number(74) * 2)
+                return main_state.number(71)
+            end}},
+            text = {{id = 'state', value = function()
+                return tostring(rank_plus) .. ':' .. tostring(scorerate)
+            end}},
+            destination = {{id = 'rank_diff_max_plus', draw = function()
+                return rank_plus and scorerate == 1
+            end}}
+        }
+    "#,
+    )
+    .unwrap();
+    for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
+        let mut loaded = load_lua_skin_with_runtime_state(
+            &path,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState { runtime_mode: mode, ..Default::default() },
+        )
+        .unwrap();
+        let draw = only_destination_draw(&loaded);
+        assert!(draw.starts_with("bmz:lua_draw_callback:"), "{mode:?}: {draw}");
+        let draw_id = draw.rsplit(':').next().unwrap().parse().unwrap();
+        let value = &loaded.document.value[0].value_expr;
+        assert!(value.starts_with("bmz:lua_value_callback:"), "{mode:?}: {value}");
+        let number = value.rsplit(':').next().unwrap().parse().unwrap();
+        let text = loaded.document.text[0].value_expr.rsplit(':').next().unwrap().parse().unwrap();
+        let runtime = loaded.lua_runtime.as_mut().unwrap();
+        for (score, expected) in [(200, "true:1.0"), (100, "true:0.5"), (200, "true:1.0")] {
+            let state = TestLuaMainState {
+                numbers: BTreeMap::from([(71, score), (74, 100)]),
+                ..Default::default()
+            };
+            runtime.begin_frame();
+            assert_eq!(runtime.evaluate_number(number, &state), Some(score as f64));
+            assert_eq!(runtime.evaluate_text(text, &state).as_deref(), Some(expected));
+            assert_eq!(runtime.evaluate_draw(draw_id, &state), score == 200);
+        }
+        assert_eq!(runtime.failure_log_count(), 0);
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn result_panel_runtime_preserves_closures_and_restores_nested_scopes() {
     let mut loaded = load_runtime_value_fixture(
         "bmz-result-panel-runtime",

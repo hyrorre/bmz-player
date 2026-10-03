@@ -625,6 +625,8 @@ pub(in crate::skin) struct DestinationResolveContext<'a, 'text> {
     pub(in crate::skin) cache: Option<&'a mut ResultRenderCache>,
     /// Select has its own frame cache; other scenes use `cache.numbers`.
     pub(in crate::skin) number_cache: Option<&'a mut NumberRenderCache>,
+    /// Lua IntegerProperty already evaluated before this destination's draw.
+    pub(in crate::skin) prepared_number: Option<i64>,
 }
 
 /// beatoraja `PlaySkin.judgeregion` 上限 (TIMER_JUDGE_1P/2P/3P = 46/47/247)。

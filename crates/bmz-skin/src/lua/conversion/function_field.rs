@@ -80,7 +80,12 @@ pub(super) fn handle_function_field(
                 .map_err(|_| anyhow!("main_state probe lock poisoned"))?
                 .runtime_mode
                 == LuaSkinRuntimeMode::Compat;
-            let inferred = if compat && runtime_supported {
+            // Luxe Flat updates rank_plus/scorerate (and panel state) inside
+            // its numeric callback. Matching only its return value would drop
+            // those writes from the clean runtime VM used by draw callbacks.
+            let shared_rank_state =
+                has_shared_result_rank_state(lua, function, metadata.object_id.as_deref());
+            let inferred = if runtime_supported && (compat || shared_rank_state) {
                 false
             } else {
                 infer_value_field(
@@ -239,6 +244,14 @@ fn runtime_value_field_supported(path: &str) -> bool {
     [".value[", ".text[", ".graph[", ".slider["].into_iter().any(|segment| path.contains(segment))
 }
 
+fn has_shared_result_rank_state(lua: &Lua, function: &Function, object_id: Option<&str>) -> bool {
+    // Scope this exception to the existing Result rank recognizer. Select has
+    // separate score-availability/layout inference that must remain unchanged.
+    object_id.is_some_and(|id| {
+        id == "rank_diff_count" || luxe_flat_nearest_rank_destination(id).is_some()
+    }) && lua_rank_plus_upvalue(lua, function).is_some()
+}
+
 fn infer_non_graph_value_field(
     function: &Function,
     object_id: Option<&str>,
@@ -325,7 +338,9 @@ fn infer_draw_field(
     if compat && let Some((_, mode)) = lua_result_mode_upvalue(lua, function) {
         record_local_result_panel_default(main_state_probe, mode);
     }
-    let draw = if compat {
+    // Keep readers of the same rank state in Lua too: ID-based nearest-rank
+    // inference cannot preserve rank_plus on/off branches or Lua boundaries.
+    let draw = if compat || has_shared_result_rank_state(lua, function, object_id) {
         None
     } else {
         infer_result_panel_draw_condition(lua, function, object_id, main_state_probe)

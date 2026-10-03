@@ -207,6 +207,23 @@ pub(in crate::skin) fn skin_value_number_for_destination(
     skin_value_number(value, state)
 }
 
+/// SkinNumber.prepare evaluates its IntegerProperty before draw/timer checks.
+/// The outer None leaves ordinary refs/expressions on their existing path;
+/// Some(None) is a failed/hidden Lua number and must not be evaluated again.
+pub(in crate::skin) fn prepare_lua_number_for_destination(
+    value: Option<&SkinValueDef>,
+    state: &SkinDrawState,
+) -> Option<Option<i64>> {
+    let value = value?;
+    if !value.expr.trim().is_empty() || lua_value_callback_id(&value.value_expr).is_none() {
+        return None;
+    }
+    Some(
+        skin_value_number_for_destination(value, state)
+            .filter(|number| *number != i64::from(i32::MIN) && *number != i64::from(i32::MAX)),
+    )
+}
+
 pub(in crate::skin) fn skin_state_number_expr(expr: &str, state: &SkinDrawState) -> Option<i64> {
     let normalized = expr.replace('+', " + ").replace('-', " - ");
     let mut sign = 1_i64;

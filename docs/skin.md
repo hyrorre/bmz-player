@@ -207,6 +207,15 @@ Selectのnumber `350/351` は鍵盤の通常ノーツ/LN数で、スクラッチ
 - `value[]`, `text[]`, `graph[]`, `slider[]` の `value`
 - `customTimers[].timer`（ID `10000..19999`）
 
+数字のruntime `value` はbeatorajaの `SkinNumber.prepare` と同様、destination順に、
+その数字の `draw` / timer判定より先に評価する。同じvalueを複数destinationで使う場合も
+destinationごとに1回評価し、その結果を描画・数値画像cacheへ渡す。非表示やcache hitでも
+Luaの状態更新を省略せず、同じdestination内で二重実行しない。失敗・非有限値・整数の
+非表示sentinelでは数字を描画しない。
+Luxe Flat Result型の `rank_diff_count` / `rank_diff_*` が共有 `rank_plus` を捕捉する場合、
+value / drawは `auto` でもLua実行を維持し、
+ランク差分の戻り値だけを組み込み式へ置き換えて `scorerate` 等の更新を失わないようにする。
+
 custom timer は描画前に宣言順で1フレーム1回更新する。`auto` では固定遅延・別名の
 推論を維持し、推論できないtimerを永続VMへ残す。VMを使うスキンでは推論済みの
 custom timerも同じVMで更新し、先行するtimerの変更を同じフレームで参照できる。
