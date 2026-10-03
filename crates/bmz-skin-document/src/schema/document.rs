@@ -280,6 +280,8 @@ pub struct SkinOffsetDef {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SkinSourceDef {
+    #[serde(default, rename = "lr2ColorKey")]
+    pub lr2_color_key: Option<[u8; 3]>,
     #[serde(default, deserialize_with = "deserialize_skin_id")]
     pub id: String,
     #[serde(default)]

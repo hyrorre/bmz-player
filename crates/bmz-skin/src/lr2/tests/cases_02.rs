@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn image_transparency_is_captured_at_each_load() {
+    let files = BTreeMap::new();
+    let mut builder = CsvBuilder::new(Path::new("skin.lr2skin"), Header::default(), &files);
+    builder.add_source("image.bmp");
+    assert_eq!(builder.sources[0]["lr2ColorKey"], json!([0, 255, 0]));
+    for (index, command) in ["TRANSCOLOR", "TRANSCLOLR", "TRANSCLOLOR"].iter().enumerate() {
+        builder
+            .execute(&CsvLine {
+                command: (*command).into(),
+                fields: vec![format!("#{command}"), "255".into(), "0".into(), index.to_string()],
+            })
+            .unwrap();
+        builder.add_source("image.bmp");
+        assert_eq!(builder.sources[index + 1]["lr2ColorKey"], json!([255, 0, index]));
+    }
+    assert_eq!(builder.sources[0]["lr2ColorKey"], json!([0, 255, 0]));
+}
+
+#[test]
 fn processor_selects_default_custom_option_branch() {
     let mut ops = HashMap::new();
     ops.insert(900, true);

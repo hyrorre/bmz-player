@@ -52,3 +52,11 @@ OpponentRenderSnapshotを描画状態へ保持し、実コンボ・判定数・E
 120は確定値のみ対応し、参照実装のscore_printの時間補間は含めない。
 検証: workspaceのcheck / all-targets Clippy / test、fmtを通過。
 実機での対戦表示確認は未実施。
+
+## 画像の透過色
+
+LR2_skinload.cppのSetTransColorに合わせ、既定緑とTRANSCOLOR/TRANSCLOLR/TRANSCLOLORを
+画像ごとに保持する。alphaのない画像だけを透過し、元のalphaは維持する。
+同一パスで別の透過色を指定しても混ざらないようCPU/GPUキャッシュのキーに加える。
+RGB BMP/PNG・RGBA維持と、LR2ファイルから同一画像を二重ロードする回帰テストを追加。
+検証: workspaceのcheck / all-targets Clippy / test、fmtを通過。実機確認は未実施。

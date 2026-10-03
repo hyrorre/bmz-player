@@ -68,7 +68,12 @@ fn collect_source_tasks(
                 .map(str::to_ascii_lowercase)
                 .unwrap_or_default();
             if is_skin_static_source_extension(&extension) {
-                Some(SourceDecodeTask::File { index, source_id: source.id.clone(), path })
+                Some(SourceDecodeTask::File {
+                    index,
+                    source_id: source.id.clone(),
+                    path,
+                    color_key: source.lr2_color_key,
+                })
             } else if is_skin_video_source_extension(&extension) {
                 Some(SourceDecodeTask::Video { index, source_id: source.id.clone(), path })
             } else {
@@ -107,10 +112,11 @@ fn decode_source_task(
                 texture_status: None,
             })
         }
-        SourceDecodeTask::File { index, source_id, path } => decode_file_source(
+        SourceDecodeTask::File { index, source_id, path, color_key } => decode_file_source(
             index,
             source_id,
             path,
+            color_key,
             required_sources,
             warn_missing_required,
             source_cache,
@@ -126,13 +132,18 @@ fn decode_file_source(
     index: usize,
     source_id: String,
     path: PathBuf,
+    color_key: Option<[u8; 3]>,
     required_sources: &HashSet<String>,
     warn_missing_required: bool,
     source_cache: Option<&SharedSkinSourceAssetCache>,
     texture_cache: Option<&SharedSkinGpuTextureCache>,
 ) -> Option<DecodedSourceResult> {
+    let key = skin_source_asset_cache_key(&path, false).map(|mut key| {
+        key.color_key = color_key;
+        key
+    });
     let (cached_texture, cache_key, texture_status) =
-        lookup_source_texture_cache(texture_cache, &path, false);
+        lookup_source_texture_cache_key(texture_cache, key);
     if let Some(cached_texture) = cached_texture {
         return Some(cached_source_result(
             index,
@@ -144,8 +155,9 @@ fn decode_file_source(
             texture_status,
         ));
     }
-    match load_source_asset_with_cache(&path, false, source_cache, || load_static_rgba_image(&path))
-    {
+    match load_source_asset_with_cache_key(cache_key.clone(), source_cache, || {
+        bmz_render::assets::load_static_rgba_image_with_color_key(&path, color_key)
+    }) {
         Ok((asset, source_status)) => Some(asset_source_result(
             index,
             source_id,

@@ -160,6 +160,7 @@ struct CsvBuilder<'a> {
     warnings: Vec<SkinLoadWarning>,
     sources: Vec<JsonValue>,
     source_paths: Vec<Option<String>>,
+    transparent_color: [u8; 3],
     fonts: Vec<JsonValue>,
     lr2font_ids: Vec<Option<String>>,
     images: Vec<JsonValue>,

@@ -21,6 +21,7 @@ BMZ固有のIDや詳細な動作契約は [skin.md](skin.md)、互換修正の�
 | LR2減算合成 | `blend=3` はsource alphaを掛けたRGBを描画先から減算し、描画先alphaを保持する。通常描画とAmbient内の描画に対応 |
 | LR2 DST / SRC animation | 区間ごとの三次accとblend/filter/center、SRC/DSTが同じ時計の場合の画像cycle原点を保持。数字はSRC時計で更新 |
 | LR2ノーツ | `DST_NOTE`の全行・時計・条件・座標・大きさを評価し、`SRC_AUTO_*`を部分AUTO入力レーンへ適用。全体AUTOPLAYは通常画像 |
+| LR2画像透過色 | RGB画像の既定緑と`#TRANSCOLOR`（互換綴り2種を含む）を適用。元からalphaを持つ画像は維持。DXA内の画像も対象 |
 | LR2 2P数値 | Play ref=120..136を2Pの実スコア・コンボ・判定数・達成率・スコア差へ接続。ref=120は確定値で、カウントアップ補間は未対応 |
 | BGAの色・透明度 | destinationのRGBAをBase / Layer / Layer2 / POORのtintと乗算する。Ambientにも合成前に適用。[core/resolve](../crates/bmz-render/src/skin/document_render/core/resolve.rs)、[回帰テスト](../crates/bmz-render/src/skin/tests/play/ambient.rs) |
 | destination変換 | `center`、`offset` / `offsets`、`filter` の処理がある。[geometry](../crates/bmz-render/src/skin/geometry.rs)、[animation](../crates/bmz-render/src/skin/animation.rs)、[core評価](../crates/bmz-render/src/skin/document_render/core/)。オブジェクトごとの適用経路は個別に確認する |

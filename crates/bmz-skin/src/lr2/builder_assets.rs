@@ -4,7 +4,7 @@ impl<'a> CsvBuilder<'a> {
     pub(super) fn add_source(&mut self, raw_path: &str) {
         let path = self.resolve_source_path(raw_path);
         let id = format!("{}", self.source_paths.len());
-        self.sources.push(json!({ "id": id, "path": path }));
+        self.sources.push(json!({ "id": id, "path": path, "lr2ColorKey": self.transparent_color }));
         self.source_paths.push(Some(path));
     }
 

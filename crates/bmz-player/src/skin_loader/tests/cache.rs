@@ -1,6 +1,52 @@
 use super::*;
 
 #[test]
+fn lr2_transparency_separates_source_and_texture_caches() {
+    let root = unique_test_dir("lr2-color-key-cache");
+    std::fs::create_dir_all(&root).unwrap();
+    image::RgbImage::from_pixel(1, 1, image::Rgb([0, 255, 0]))
+        .save(root.join("source.bmp"))
+        .unwrap();
+    let skin_path = root.join("skin.lr2skin");
+    std::fs::write(&skin_path, "#INFORMATION,0,test,test\n#ENDOFHEADER\n#IMAGE,source.bmp\n#TRANSCOLOR,255,0,255\n#IMAGE,source.bmp\n").unwrap();
+    let source_cache = Arc::new(Mutex::new(SkinSourceAssetCache::default()));
+    let texture_cache = Arc::new(Mutex::new(SkinGpuTextureCache::default()));
+    let decode = || {
+        decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            None,
+            Some(source_cache.clone()),
+            Some(texture_cache.clone()),
+            None,
+            None,
+        )
+        .unwrap()
+    };
+    let first = decode();
+    assert_eq!(first.sources.len(), 2);
+    assert_eq!(first.sources[0].asset.as_ref().unwrap().pixels[3], 0);
+    assert_eq!(first.sources[1].asset.as_ref().unwrap().pixels[3], 255);
+    assert_ne!(first.sources[0].cache_key, first.sources[1].cache_key);
+    let second = decode();
+    assert_eq!(second.stats.source_cache_hits, 2);
+    assert_eq!(second.sources[0].asset.as_ref().unwrap().pixels[3], 0);
+    assert_eq!(second.sources[1].asset.as_ref().unwrap().pixels[3], 255);
+    texture_cache.lock().unwrap().insert(
+        first.sources[0].cache_key.clone().unwrap(),
+        SkinTextureId(900),
+        first.sources[0].size,
+    );
+    let third = decode();
+    assert_eq!(third.stats.source_texture_cache_hits, 1);
+    assert_eq!(third.sources[0].texture, SkinTextureId(900));
+    assert_eq!(third.sources[1].asset.as_ref().unwrap().pixels[3], 255);
+}
+
+#[test]
 fn result_refresh_pins_resolved_wildcard_source() {
     let root = unique_test_dir("result-pinned-background");
     std::fs::create_dir_all(root.join("bg")).unwrap();
@@ -1141,6 +1187,7 @@ fn skin_gpu_cache_evicts_lru_but_pins_active_and_pending_textures() {
     cache.limit_bytes = 8;
     let keys: Vec<_> = (0..3)
         .map(|i| SkinSourceAssetCacheKey {
+            color_key: None,
             path: PathBuf::from(format!("image-{i}.png")),
             modified: None,
             len: 4,

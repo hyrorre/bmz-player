@@ -105,6 +105,11 @@ OpenLR2の `SetDSTdrawByTime` に合わせて時刻を評価する。JSON/Luaの
 
 ## LR2のPlay描画
 
+LR2の`#IMAGE`は既定の緑（0,255,0）を透過色とし、`#TRANSCOLOR`と互換綴り
+`#TRANSCLOLR` / `#TRANSCLOLOR`で以後の画像の透過色を変更できる。
+RGB画像だけに適用し、alphaを持つ画像は元のalphaを維持する。
+画像ごとの`source.lr2ColorKey`をCPU/GPUキャッシュにも含める。DXA内の画像にも適用する。
+
 LR2 Playのnumber ref=120..136は2Pの実プレイ状態へ接続する（127は既存のゲージ変換）。
 内部ref=19220..19236を予約し、beatorajaのtarget関連refと分離する。
 122/123は判定済みノート基準の率、135/136は全ノート基準の率、128は2P EX−1P EX。
