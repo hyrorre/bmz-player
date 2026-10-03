@@ -3,6 +3,7 @@ use super::*;
 #[test]
 fn lr2_resolution_accepts_presets_and_explicit_dimensions() {
     for (source, expected, has_explicit_dimensions) in [
+        ("#RESOLUTION,0", (640, 480), false),
         ("#RESOLUTION,1", (1280, 720), false),
         ("#RESOLUTION,2,", (1920, 1080), false),
         ("#RESOLUTION,3", (3840, 2160), false),
@@ -17,6 +18,42 @@ fn lr2_resolution_accepts_presets_and_explicit_dimensions() {
             "source: {source}"
         );
     }
+}
+
+#[test]
+fn lr2_omitted_resolution_uses_sd_for_included_destinations() {
+    let root = unique_test_dir("bmz-lr2-default-resolution");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("play.csv"),
+        "#SRC_IMAGE,0,111,0,0,1,1,1,1,0,0\n\
+         #DST_IMAGE,0,0,0,0,640,480,0,255,255,255,255,1,0,0,0,0,0,0,0,0\n\
+         #SRC_NOTE,1,111,0,0,1,1,1,1,0,0\n\
+         #DST_NOTE,1,0,100,422,30,15,0,255,255,255,255,0,0,0,0,0,0,0,0,0\n",
+    )
+    .unwrap();
+    let path = root.join("play.lr2skin");
+    for resolution in ["", "#RESOLUTION,0\n"] {
+        fs::write(&path, format!("#INFORMATION,0,SD test,BMZ\n{resolution}#INCLUDE,play.csv\n"))
+            .unwrap();
+        let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        let document = loaded.value;
+        assert_eq!(document["w"], 640, "resolution: {resolution:?}");
+        assert_eq!(document["h"], 480, "resolution: {resolution:?}");
+        let background = &document["destination"][0]["dst"][0];
+        assert_eq!(background["x"], 0);
+        assert_eq!(background["y"], 0);
+        assert_eq!(background["w"], 640);
+        assert_eq!(background["h"], 480);
+        let lane = &document["note"]["dst"][0];
+        assert_eq!(lane["x"], 100);
+        assert_eq!(lane["y"], 43);
+        assert_eq!(lane["w"], 30);
+        assert_eq!(lane["h"], 437);
+        assert_eq!(document["note"]["size"][0], 15);
+    }
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -481,7 +518,7 @@ fn lr2_play_chart_sources_keep_beatoraja_fields_and_destination_size() {
     assert_eq!(graph["noGapX"], json!(1));
     let frame = builder.destinations[0]["dst"].as_array().unwrap().first().unwrap();
     assert_eq!(frame["x"], json!(50));
-    assert_eq!(frame["y"], json!(520));
+    assert_eq!(frame["y"], json!(280));
     assert_eq!(frame["w"], json!(300));
     assert_eq!(frame["h"], json!(120));
 }
