@@ -19,28 +19,27 @@ pub struct SkinDocumentTexture {
     pub source_size: SkinImageSize,
 }
 
-/// Position-independent material for a note image. Ordinary taps use animation
-/// time zero, so a lane can reuse this within a frame for every visible tap.
+/// Position-independent material for a note image, reused within one frame.
 #[derive(Clone, Copy)]
 pub(in crate::skin) struct NoteSprite {
     pub texture: SkinTextureId,
     pub uv: TextureRegion,
     pub source_size: SkinImageSize,
+    pub frame: ResolvedSkinFrame,
 }
 
 impl NoteSprite {
     pub(in crate::skin) fn render_item(self, rect: Rect) -> SkinRenderItem {
-        SkinRenderItem::Image {
-            texture: self.texture,
+        skin_image_item_for_frame(
+            self.texture,
             rect,
-            uv: self.uv,
-            tint: Color::rgb(1.0, 1.0, 1.0),
-            blend: BlendMode::Normal,
-            scale: SkinImageScale::Stretch,
-            border: None,
-            source_size: Some(self.source_size),
-            linear_filter: false,
-        }
+            self.uv,
+            self.frame,
+            0,
+            BlendMode::Normal,
+            Some(self.source_size),
+            false,
+        )
     }
 }
 

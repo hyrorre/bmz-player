@@ -374,6 +374,8 @@ pub struct RenderSnapshot {
     pub bpm_graph_segments: Arc<[BpmGraphSegment]>,
     /// OPTION_AUTOPLAYON (33) / OPTION_AUTOPLAYOFF (32) 用。
     pub autoplay: bool,
+    /// Partial autoplay lanes use LR2 AUTO sprites; full autoplay keeps normal sprites.
+    pub auto_note_lanes: [bool; LANE_COUNT],
     /// リプレイ再生中かどうか。プレイ中 FAST/SLOW 表示など、入力由来の表示制御に使う。
     pub replay_playback: bool,
     /// BMZ extension: frozen scoring rule mode index for Decide/Play.

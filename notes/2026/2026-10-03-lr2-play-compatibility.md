@@ -32,3 +32,14 @@ LR2の各区間のacc（三次加速・減速）、blend/filter/centerを保持�
 数字はAddDrawingBuffer_Numbersに従い、SRC時計をそのまま使う。
 境界時刻・区間属性・加減速・異なるタイマーの回帰テストを追加。
 検証: workspaceのcheck / all-targets Clippy / test、fmtを通過。
+
+## ノーツのレーン状態
+
+SRC_AUTO_*を通常画像から分離し、sessionの部分AUTO入力レーンをsnapshot経由で渡す。
+全体AUTOおよび表示専用の対戦側は除外する。DST_NOTEを全行保持し、表示時計・条件と
+毎フレームの座標・幅・高さを評価する。スクロール距離は初期レーン高を維持する。
+SRC時計はDST開始時刻を考慮し、LNの非押下画像は先頭フレームを維持する。
+参照実装のAddDrawingBuffer_PlayArea/LNに合わせ、通常合成とゲーム側alphaを使用する。
+検証: workspace check / all-targets Clippyを通過。workspace testで従来のAUTO画像共用を
+期待するテストが失敗したため分離後の格納先へ修正し、bmz-skin / bmz-renderを再実行して通過。
+その他のworkspaceテスト（appのAUTOレーンsnapshotテストを含む）は通過。fmtも通過。

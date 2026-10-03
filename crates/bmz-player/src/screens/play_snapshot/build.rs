@@ -438,6 +438,13 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         judge_graph_density: Arc::clone(&cache.judge_graph_density),
         bpm_graph_segments: Arc::clone(&cache.bpm_graph_segments),
         autoplay: session.autoplay.as_ref().is_some_and(|autoplay| autoplay.is_full()),
+        auto_note_lanes: std::array::from_fn(|index| {
+            session.autoplay.as_ref().is_some_and(|autoplay| {
+                !autoplay.is_full()
+                    && autoplay.is_lane_enabled(Lane::ALL[index])
+                    && !session.display_only_lane_mask[index]
+            })
+        }),
         replay_playback: session.replay_player.is_some() && session.replay_lane_mask.is_none(),
         rule_mode_index: crate::skin_extension::rule_mode_index(session.rule_mode),
         ln_score_policy_index: None,

@@ -386,3 +386,49 @@ impl ResolvedSkinFrame {
         self.lr2_style.map_or(fallback, |style| style.center)
     }
 }
+
+pub(super) fn lr2_note_destination(
+    document: &SkinDocument,
+    lane: Lane,
+    key_mode: KeyMode,
+) -> Option<&SkinDestinationDef> {
+    document.note.as_ref()?.lr2_dst.get(beatoraja_note_index(lane, key_mode))?.as_ref()
+}
+
+pub(super) fn lr2_note_frame(
+    document: &SkinDocument,
+    lane: Lane,
+    key_mode: KeyMode,
+    options: &[i32],
+    state: &SkinDrawState,
+) -> Option<ResolvedSkinFrame> {
+    let destination = lr2_note_destination(document, lane, key_mode)?;
+    if !destination_ops_match(destination, options, state) {
+        return None;
+    }
+    resolve_destination_frame(
+        destination,
+        destination_timer_elapsed_ms(destination, state)?,
+        options,
+        state,
+    )
+}
+
+pub(super) fn note_lane_area_for_state(
+    document: &SkinDocument,
+    lane: Lane,
+    key_mode: KeyMode,
+    options: &[i32],
+    state: &SkinDrawState,
+) -> Option<Rect> {
+    let mut area = document.note_lane_area(lane, key_mode, options)?;
+    if lr2_note_destination(document, lane, key_mode).is_some() {
+        let frame = lr2_note_frame(document, lane, key_mode, options, state)?;
+        area.x = frame.x as f32 / document.w.max(1) as f32;
+        area.width = frame.w as f32 / document.w.max(1) as f32;
+        // Scroll distance remains relative to the initial lane height. Animating
+        // the judgement position moves notes without changing their speed.
+        area.y = 1.0 - frame.y as f32 / document.h.max(1) as f32 - area.height;
+    }
+    Some(area)
+}

@@ -404,6 +404,7 @@ pub struct SkinDrawState {
     pub stddev_timing_ms: Option<f32>,
     /// OPTION_AUTOPLAYON (33) / OPTION_AUTOPLAYOFF (32) 用。
     pub autoplay: bool,
+    pub auto_note_lanes: [bool; LANE_COUNT],
     /// BMSPlayer のプレイ画面か。プレイ専用 op が他 scene で true にならないために使う。
     pub play_screen: bool,
     /// BMSPlayer が replay モードか。
@@ -682,6 +683,7 @@ impl Default for SkinDrawState {
             average_duration_us: None,
             stddev_timing_ms: None,
             autoplay: false,
+            auto_note_lanes: [false; LANE_COUNT],
             play_screen: false,
             replay_playback: false,
             practice_mode: false,

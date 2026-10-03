@@ -1,6 +1,16 @@
 use super::*;
 use std::cell::OnceCell;
 
+#[derive(Clone, Copy)]
+enum NotePart {
+    Tap,
+    Processed,
+    Start(LongNoteMode),
+    End(LongNoteMode),
+    Body(LongNoteMode, LongBodyState),
+    Mine,
+}
+
 /// Geometry and lazily resolved tap sprites shared within one draw plan. Rebuilt
 /// each frame so skin/source, option, LIFT and user-offset changes take effect.
 pub(crate) struct PreparedNoteLayout<'a> {
@@ -10,6 +20,7 @@ pub(crate) struct PreparedNoteLayout<'a> {
     processed_sprites: [OnceCell<Option<NoteSprite>>; LANE_COUNT],
     areas: [Option<Rect>; LANE_COUNT],
     heights: [Option<f32>; LANE_COUNT],
+    frames: [Option<ResolvedSkinFrame>; LANE_COUNT],
     offset: SkinOffsetValue,
     canvas_w: f32,
     canvas_h: f32,
@@ -30,6 +41,7 @@ impl SkinContext {
             processed_sprites: std::array::from_fn(|_| OnceCell::new()),
             areas: [None; LANE_COUNT],
             heights: [None; LANE_COUNT],
+            frames: [None; LANE_COUNT],
             offset: SkinOffsetValue::default(),
             canvas_w: 1.0,
             canvas_h: 1.0,
@@ -39,8 +51,15 @@ impl SkinContext {
         if let Some(document) = &self.document {
             let options = document.enabled_options();
             for lane in Lane::ALL {
-                layout.areas[lane.index()] = document.note_lane_area(lane, key_mode, &options);
+                layout.areas[lane.index()] =
+                    note_lane_area_for_state(document, lane, key_mode, &options, state);
                 layout.heights[lane.index()] = document.note_height_for_lane(lane, key_mode);
+                layout.frames[lane.index()] =
+                    lr2_note_frame(document, lane, key_mode, &options, state);
+                if let Some(frame) = layout.frames[lane.index()] {
+                    layout.heights[lane.index()] =
+                        Some(frame.h.abs() as f32 / document.h.max(1) as f32);
+                }
             }
             layout.offset = document.notes_destination_offset(state);
             layout.canvas_w = document.w.max(1) as f32;
@@ -60,13 +79,100 @@ impl PreparedNoteLayout<'_> {
     ) -> Option<SkinRenderItem> {
         let slots = if processed { &self.processed_sprites } else { &self.tap_sprites };
         let sprite = slots[lane.index()].get_or_init(|| {
-            let document = self.skin.document.as_ref()?;
-            let note = document.note.as_ref()?;
-            let ids = if processed { &note.processed } else { &note.note };
-            let id = ids.get(beatoraja_note_index(lane, self.key_mode))?;
-            document.note_part_sprite(id, 0, &self.skin.document_sources)
+            self.part_sprite(lane, if processed { NotePart::Processed } else { NotePart::Tap })
         });
         sprite.map(|sprite| sprite.render_item(rect))
+    }
+
+    pub(crate) fn cap_item(
+        &self,
+        lane: Lane,
+        rect: Rect,
+        mode: LongNoteMode,
+        end: bool,
+    ) -> Option<SkinRenderItem> {
+        self.part_sprite(lane, if end { NotePart::End(mode) } else { NotePart::Start(mode) })
+            .map(|sprite| sprite.render_item(rect))
+    }
+
+    pub(crate) fn body_item(
+        &self,
+        lane: Lane,
+        rect: Rect,
+        mode: LongNoteMode,
+        state: LongBodyState,
+    ) -> Option<SkinRenderItem> {
+        self.part_sprite(lane, NotePart::Body(mode, state)).map(|sprite| sprite.render_item(rect))
+    }
+
+    pub(crate) fn mine_item(&self, lane: Lane, rect: Rect) -> Option<SkinRenderItem> {
+        self.part_sprite(lane, NotePart::Mine).map(|sprite| sprite.render_item(rect))
+    }
+
+    fn part_sprite(&self, lane: Lane, part: NotePart) -> Option<NoteSprite> {
+        let document = self.skin.document.as_ref()?;
+        let note = document.note.as_ref()?;
+        let index = beatoraja_note_index(lane, self.key_mode);
+        fn select<'a>(
+            document: &SkinDocument,
+            note: &'a SkinNoteSetDef,
+            index: usize,
+            part: NotePart,
+        ) -> Option<&'a str> {
+            let id = match part {
+                NotePart::Tap => note.note.get(index),
+                NotePart::Processed => note.processed.get(index),
+                NotePart::Start(mode) => (mode == LongNoteMode::Hcn)
+                    .then(|| note.hcnstart.get(index))
+                    .flatten()
+                    .or_else(|| note.lnstart.get(index))
+                    .or_else(|| note.note.get(index)),
+                NotePart::End(mode) => (mode == LongNoteMode::Hcn)
+                    .then(|| note.hcnend.get(index))
+                    .flatten()
+                    .or_else(|| note.lnend.get(index))
+                    .or_else(|| note.note.get(index)),
+                NotePart::Body(mode, state) => if mode == LongNoteMode::Hcn {
+                    document.hcn_body_image_id(note, index, state)
+                } else {
+                    document.ln_body_image_id(note, index, state.is_processing())
+                }
+                .or_else(|| note.note.get(index)),
+                NotePart::Mine => note.mine.get(index),
+            };
+            id.filter(|id| !id.is_empty()).map(String::as_str)
+        }
+        let auto =
+            self.state.auto_note_lanes[lane.index()].then_some(note.lr2_auto.as_deref()).flatten();
+        let id = auto
+            .and_then(|auto| select(document, auto, index, part))
+            .or_else(|| select(document, note, index, part))?;
+        let image = document.image.iter().find(|image| image.id == id)?;
+        // Cache lasts only this frame, so advancing the source timer cannot freeze tap sprites.
+        let destination = lr2_note_destination(document, lane, self.key_mode);
+        let elapsed = if let Some(destination) = destination {
+            let inactive_cap = matches!(part, NotePart::Start(_) | NotePart::End(_))
+                && self.state.hold_ms[lane.index()].is_none();
+            if inactive_cap { 0 } else { lr2_source_elapsed(image.timer, destination, self.state) }
+        } else if matches!(part, NotePart::Body(..)) {
+            skin_timer_elapsed_ms(image.timer, self.state).unwrap_or(0)
+        } else {
+            0
+        };
+        let mut sprite = document.note_part_sprite(id, elapsed, &self.skin.document_sources)?;
+        if destination.is_some() {
+            let mut frame = self.frames[lane.index()]?;
+            // LR2 play-area drawing forces normal blending and gameplay alpha.
+            frame.a = 255;
+            if let Some(style) = &mut frame.lr2_style {
+                style.blend = 1;
+                if matches!(part, NotePart::Tap | NotePart::Processed | NotePart::Mine) {
+                    style.filter = 0;
+                }
+            }
+            sprite.frame = frame;
+        }
+        Some(sprite)
     }
 
     pub(crate) fn alpha_offset(&self) -> i32 {

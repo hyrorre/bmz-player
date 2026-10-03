@@ -1,6 +1,55 @@
 use super::*;
 
 #[test]
+fn lr2_auto_note_sources_are_separate_regardless_of_declaration_order() {
+    let files = BTreeMap::new();
+    for reverse in [false, true] {
+        let mut builder = CsvBuilder::new(Path::new("play.lr2skin"), Header::default(), &files);
+        builder.add_source("notes.png");
+        for part in ["NOTE", "LN_START", "LN_END", "LN_BODY", "MINE"] {
+            for auto in if reverse { [true, false] } else { [false, true] } {
+                let prefix = if auto { "AUTO_" } else { "" };
+                let x = if auto { 100 } else { 0 };
+                builder
+                    .execute(
+                        &parse_csv_line(&format!("#SRC_{prefix}{part},1,0,{x},0,10,10,1,1,0,0"))
+                            .unwrap(),
+                    )
+                    .unwrap();
+            }
+        }
+        let auto = builder.note.auto.as_ref().unwrap();
+        for (normal, auto) in [
+            (&builder.note.note, &auto.note),
+            (&builder.note.lnstart, &auto.lnstart),
+            (&builder.note.lnend, &auto.lnend),
+            (&builder.note.lnbody, &auto.lnbody),
+            (&builder.note.mine, &auto.mine),
+        ] {
+            assert_ne!(normal[0], auto[0]);
+            assert_eq!(
+                builder.images.iter().find(|image| image["id"] == normal[0]).unwrap()["x"],
+                0
+            );
+            assert_eq!(
+                builder.images.iter().find(|image| image["id"] == auto[0]).unwrap()["x"],
+                100
+            );
+        }
+        for line in [
+            "#DST_NOTE,1,100,10,300,20,10,0,255,255,255,255,1,0,0,0,200,41,0,0,0",
+            "#DST_NOTE,1,200,40,300,30,20,0,255,255,255,255,1,0,0,0,200,41,0,0,0",
+        ] {
+            builder.execute(&parse_csv_line(line).unwrap()).unwrap();
+        }
+        let dst = builder.note.destinations[0].as_ref().unwrap();
+        assert_eq!(dst["timer"], 41);
+        assert_eq!(dst["dst"].as_array().unwrap().len(), 2);
+        assert_eq!(dst["dst"][1]["w"], 30);
+    }
+}
+
+#[test]
 fn lr2_destination_builders_preserve_timing_mode_and_first_row_loop() {
     let mut values = [0; 22];
     values[2] = 1000;
@@ -632,8 +681,13 @@ fn lr2_ln_body_keeps_animation_only_while_held() {
 
         let inactive = &builder.images[0];
         let active = &builder.images[1];
-        assert_eq!(inactive["id"], json!(builder.note.lnbody[7]));
-        assert_eq!(active["id"], json!(builder.note.lnbody_active[7]));
+        let note = if command == "SRC_AUTO_LN_BODY" {
+            builder.note.auto.as_deref().unwrap()
+        } else {
+            &builder.note
+        };
+        assert_eq!(inactive["id"], json!(note.lnbody[7]));
+        assert_eq!(active["id"], json!(note.lnbody_active[7]));
         assert_eq!(inactive["cycle"], json!(0), "{command} inactive body");
         assert!(inactive["timer"].is_null(), "{command} inactive body");
         assert_eq!(active["cycle"], json!(266), "{command} active body");

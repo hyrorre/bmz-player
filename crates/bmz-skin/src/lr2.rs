@@ -196,6 +196,8 @@ struct CsvBuilder<'a> {
 
 #[derive(Default)]
 struct NoteState {
+    auto: Option<Box<NoteState>>,
+    destinations: Vec<Option<JsonValue>>,
     note: Vec<String>,
     lnstart: Vec<String>,
     lnend: Vec<String>,

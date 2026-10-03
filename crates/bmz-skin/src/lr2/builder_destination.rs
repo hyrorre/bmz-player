@@ -415,6 +415,10 @@ impl<'a> CsvBuilder<'a> {
             });
             json!({
                 "id": "notes",
+                "lr2Auto": self.note.auto.as_ref().map(|auto| json!({
+                    "note": auto.note, "lnstart": auto.lnstart, "lnend": auto.lnend,
+                    "lnbody": auto.lnbody, "lnbodyActive": auto.lnbody_active, "mine": auto.mine,
+                })),
                 "note": self.note.note,
                 "lnstart": self.note.lnstart,
                 "lnend": self.note.lnend,
@@ -431,6 +435,7 @@ impl<'a> CsvBuilder<'a> {
                 "dst2": dst2.unwrap_or(i32::MIN),
                 "expansionrate": self.note.expansion_rate.unwrap_or([100, 100]),
                 "dst": self.note.dst,
+                "lr2Dst": self.note.destinations,
                 "group": self.note.group,
                 "bpm": self.note.bpm,
                 "stop": self.note.stop,

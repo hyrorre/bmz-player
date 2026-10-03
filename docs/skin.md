@@ -103,7 +103,13 @@ OpenLR2の `SetDSTdrawByTime` に合わせて時刻を評価する。JSON/Luaの
 例えば `time=1000, loop=0` のDSTが1つだけなら、1000ms以降の表示を保持する。
 タイマーがOFFなら通常どおり非表示。ループ・タイマー等のdestination属性は最初のDST行から取得する。
 
-## LR2の画像合成
+## LR2のPlay描画
+
+LR2の`SRC_AUTO_*`は`note.lr2Auto`へ分離し、部分AUTO入力の対象レーンだけに使う。
+全体AUTOPLAYとG-BATTLEの表示専用側は通常画像を使う。AUTO画像がない箇所は通常画像へ戻る。
+`DST_NOTE`は`note.lr2Dst`に全行を保持し、時計・条件・座標・大きさを毎フレーム評価する。
+初期レーン高をスクロール距離の基準に保ち、判定位置の移動による速度変化を避ける。
+ノーツRGB/角度を反映し、blendとalphaはLR2のplay-area描画と同様に通常合成・ゲーム側alphaを使う。
 
 LR2 CSVから変換したdestinationは、各dst行の`lr2Style`にblend/filter/centerを保持し、
 その区間の開始行を使用する。accも区間ごとに評価し、1は三次加速、2は三次減速、

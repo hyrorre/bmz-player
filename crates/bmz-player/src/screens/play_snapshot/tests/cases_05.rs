@@ -1,6 +1,26 @@
 use super::*;
 
 #[test]
+fn snapshot_auto_note_lanes_exclude_full_autoplay_and_display_only_opponent() {
+    use bmz_gameplay::autoplay::AutoplayController;
+    let profile = ProfileConfig::new_default("default", "Default", 1);
+    let mut session =
+        build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+    for full in [false, true] {
+        session.autoplay = Some(if full {
+            AutoplayController::default()
+        } else {
+            AutoplayController::for_lanes(&[Lane::Scratch, Lane::Key8])
+        });
+        session.display_only_lane_mask[Lane::Key8.index()] = true;
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+        assert_eq!(snapshot.auto_note_lanes[Lane::Scratch.index()], !full);
+        assert!(!snapshot.auto_note_lanes[Lane::Key8.index()]);
+        assert!(!snapshot.auto_note_lanes[Lane::Key1.index()]);
+    }
+}
+
+#[test]
 fn prepared_chart_populates_play_skin_data_without_marking_media_ready() {
     use bmz_chart::model::{TimingEvent, TimingEventKind};
 

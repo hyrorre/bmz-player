@@ -53,7 +53,12 @@ impl<'a> CsvBuilder<'a> {
             "cycle": if animate { region.cycle } else { 0 },
             "timer": if animate { region.timer } else { None },
         }));
-        set_lane_note_value_if_empty(note_vec_mut(&mut self.note, slot), lane, id);
+        let note = if line.command.starts_with("SRC_AUTO_") {
+            self.note.auto.get_or_insert_default().as_mut()
+        } else {
+            &mut self.note
+        };
+        set_lane_note_value_if_empty(note_vec_mut(note, slot), lane, id);
     }
 
     pub(super) fn add_note_destination(&mut self, line: &CsvLine) {
@@ -61,6 +66,15 @@ impl<'a> CsvBuilder<'a> {
         let Some(lane) = self.lr2_lane_to_beatoraja_index(values[1]) else {
             return;
         };
+        let destination = self.destination_def_with_ops("notes", &values, &self.conditional_ops);
+        self.note
+            .destinations
+            .resize_with(self.note.destinations.len().max(lane as usize + 1), || None);
+        if let Some(previous) = &mut self.note.destinations[lane as usize] {
+            merge_destination_entry(previous, destination);
+        } else {
+            self.note.destinations[lane as usize] = Some(destination);
+        }
         if !self.note_marker_inserted {
             self.destinations.push(json!({ "id": "notes" }));
             self.note_marker_inserted = true;

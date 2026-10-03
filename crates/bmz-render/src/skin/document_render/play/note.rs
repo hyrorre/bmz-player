@@ -220,6 +220,7 @@ macro_rules! skin_document_render_play_note_methods {
             let image = self.image.iter().find(|image| image.id == image_id)?;
             let source = resolve_document_source(sources, &image.src)?;
             Some(NoteSprite {
+                frame: ResolvedSkinFrame::default(),
                 texture: source.texture,
                 uv: skin_image_texture_region(image, source.source_size, elapsed_ms),
                 source_size: source.source_size,

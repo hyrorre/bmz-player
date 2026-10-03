@@ -1,6 +1,59 @@
 use super::*;
 
 #[test]
+fn lr2_prepared_notes_animate_and_use_auto_sprites_only_for_assisted_lanes() {
+    let document: SkinDocument = serde_json::from_value(serde_json::json!({
+        "w":100,"h":100,
+        "image":[{"id":"normal","src":"1","x":0,"w":20,"h":10,"divx":2,"cycle":100},
+            {"id":"auto","src":"1","x":20,"w":20,"h":10,"divx":2,"cycle":100}],
+        "note":{"note":["normal"],"lnstart":["normal"],"lnend":["normal"],"lnbody":["normal"],"mine":["normal"],
+            "lr2Auto":{"note":["auto"],"lnstart":["auto"],"lnend":["auto"],"lnbody":["auto"],"mine":["auto"]},
+            "dst":[{"x":10,"y":20,"w":10,"h":80}],
+            "lr2Dst":[{"lr2Timing":true,"loop":200,"dst":[
+                {"time":100,"x":10,"y":20,"w":10,"h":10,"r":128},
+                {"time":200,"x":30,"y":10,"w":20,"h":20}]}]}
+    })).unwrap();
+    let skin = SkinContext::from_manifest_and_document(
+        default_skin_manifest(),
+        document,
+        mock_source("1", 40.0, 10.0).into_values(),
+    );
+    let rect = Rect { x: 0.0, y: 0.0, width: 0.1, height: 0.1 };
+    for (time, assisted, autoplay, uv_x) in
+        [(100, false, false, 0.0), (150, false, true, 0.25), (150, true, false, 0.75)]
+    {
+        let mut state = SkinDrawState { elapsed_ms: time, autoplay, ..Default::default() };
+        state.auto_note_lanes[Lane::Key1.index()] = assisted;
+        state.hold_ms[Lane::Key1.index()] = Some(50);
+        let prepared = skin.prepare_note_layout(KeyMode::K7, &state);
+        for item in [
+            prepared.tap_item(Lane::Key1, rect, false),
+            prepared.cap_item(Lane::Key1, rect, LongNoteMode::Ln, false),
+            prepared.cap_item(Lane::Key1, rect, LongNoteMode::Ln, true),
+            prepared.body_item(Lane::Key1, rect, LongNoteMode::Ln, LongBodyState::Processing),
+            prepared.mine_item(Lane::Key1, rect),
+        ] {
+            let Some(SkinRenderItem::Image { uv, tint, .. }) = item else { panic!("note") };
+            assert_eq!(uv.x, uv_x);
+            assert!(approx_eq(tint.r, 128.0 / 255.0));
+        }
+        if time == 150 {
+            let rect = prepared
+                .note_rect(Lane::Key1, 0.0, prepared.note_height(Lane::Key1).unwrap())
+                .unwrap();
+            assert!(approx_eq(rect.x, 0.2));
+            assert!(approx_eq(rect.y, 0.7));
+            assert!(approx_eq(rect.width, 0.15));
+            assert!(approx_eq(rect.height, 0.15));
+        }
+    }
+    let state = SkinDrawState { elapsed_ms: 99, ..Default::default() };
+    assert!(
+        skin.prepare_note_layout(KeyMode::K7, &state).note_rect(Lane::Key1, 0.0, 0.1).is_none()
+    );
+}
+
+#[test]
 fn prepared_layout_matches_uncached_geometry_across_modes_and_frame_changes() {
     let frames: Vec<_> = (0..16)
         .map(|i| serde_json::json!({"x": i * 40, "y": 100 + i, "w": 38, "h": 500}))

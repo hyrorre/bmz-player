@@ -2,6 +2,12 @@ use super::*;
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SkinNoteSetDef {
+    /// LR2 sprites for lanes played automatically by an assist.
+    #[serde(default, rename = "lr2Auto")]
+    pub lr2_auto: Option<Box<SkinNoteSetDef>>,
+    /// Full LR2 DST_NOTE animation per lane. `dst` remains the initial lane geometry.
+    #[serde(default, rename = "lr2Dst")]
+    pub lr2_dst: Vec<Option<SkinDestinationDef>>,
     #[serde(default, deserialize_with = "deserialize_skin_id")]
     pub id: String,
     #[serde(default, deserialize_with = "deserialize_skin_id_vec")]

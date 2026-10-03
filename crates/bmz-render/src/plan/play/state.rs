@@ -175,6 +175,7 @@ pub(in crate::plan) fn build_play_skin_state(
         adjusted_rate: snapshot.adjusted_rate,
         adjusted_rate_adot: snapshot.adjusted_rate_adot,
         autoplay: snapshot.autoplay,
+        auto_note_lanes: snapshot.auto_note_lanes,
         play_screen: true,
         replay_playback: snapshot.replay_playback,
         practice_mode: snapshot.practice_mode,
