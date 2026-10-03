@@ -180,6 +180,12 @@ impl WgpuRenderer {
         );
         let image_add_pipeline =
             create_image_pipeline(&device, config.format, &image_bind_group_layout, BlendMode::Add);
+        let image_subtract_pipeline = create_image_pipeline(
+            &device,
+            config.format,
+            &image_bind_group_layout,
+            BlendMode::Subtract,
+        );
         let image_multiply_pipeline = create_image_pipeline(
             &device,
             config.format,
@@ -224,6 +230,7 @@ impl WgpuRenderer {
             image_pipeline,
             image_add_pipeline,
             image_multiply_pipeline,
+            image_subtract_pipeline,
             image_premultiplied_pipeline,
             image_layer_pipeline,
             image_bind_group_layout,

@@ -112,3 +112,43 @@ fn kcool_decodes_all_archived_fonts_when_available() {
         assert!(skin_font_cache_key(&font.path).is_some());
     }
 }
+
+#[test]
+fn kcool_all_judge_sprites_reach_rendering_when_available() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../data/skins/KCOOL SKIN (Ver 1.72)/Play/7key.lr2skin");
+    if !path.is_file() {
+        return;
+    }
+    let files = BTreeMap::from([("Combo".to_owned(), "Combo-1.png".to_owned())]);
+    let decoded =
+        decode_beatoraja_skin_with_options(&path, SkinKind::Play, &BTreeMap::new(), &files)
+            .unwrap();
+    let sources = decoded
+        .sources
+        .iter()
+        .map(|source| {
+            (
+                source.source_id.clone(),
+                SkinDocumentTexture {
+                    source_id: source.source_id.clone(),
+                    texture: source.texture,
+                    source_size: SkinImageSize {
+                        width: source.size.width,
+                        height: source.size.height,
+                    },
+                },
+            )
+        })
+        .collect();
+    for name in ["PGREAT", "GREAT", "GOOD", "BAD", "POOR"] {
+        for time in [0, 40, 100, 499, 500] {
+            let items = decoded.document.judge_render_items(name, 123, time, &sources).unwrap();
+            assert!(
+                matches!(items.first(), Some(SkinRenderItem::Image { rect, tint, uv, .. })
+                if rect.width > 0.0 && rect.height > 0.0 && tint.a > 0.0 && uv.width > 0.0 && uv.height > 0.0),
+                "{name} at {time}: {items:?}"
+            );
+        }
+    }
+}

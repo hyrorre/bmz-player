@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+#[ignore = "requires a GPU; run explicitly for LR2 blending changes"]
+fn subtractive_skin_image_darkens_pixels_and_preserves_alpha_on_gpu() {
+    let mut renderer = Renderer::default();
+    renderer.attach_offscreen(SurfaceSize { width: 4, height: 4 }).unwrap();
+    let id = TextureId(901);
+    renderer.upsert_rgba_texture_ref(id, 1, 1, &[255, 0, 0, 128]).unwrap();
+    renderer.last_plan = Some(DrawPlan {
+        clear: Color::rgb(1.0, 1.0, 1.0),
+        commands: vec![DrawCommand::Image {
+            rect: Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+            uv: UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+            source_size: None,
+            tint: Color::rgba(1.0, 1.0, 1.0, 1.0),
+            texture: id,
+            blend: BlendMode::Subtract,
+            linear_filter: false,
+        }],
+    });
+    renderer.render_last_plan().unwrap();
+    let pixels = renderer.read_offscreen_rgba().unwrap();
+    assert!(
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| { (126..=128).contains(&pixel[0]) && pixel[1..] == [255, 255, 255] }),
+        "{pixels:?}"
+    );
+}
+
+#[test]
 #[ignore = "requires a GPU; run explicitly for texture upload changes"]
 fn reusable_texture_uploads_preserve_pixels_order_and_resize() {
     let mut renderer = Renderer::default();

@@ -108,7 +108,7 @@ fn fully_transparent_destination_hides_opaque_decorations_and_clamps_alpha() {
 }
 
 #[test]
-fn static_image_destination_maps_lr2_multiply_blend() {
+fn static_image_destination_maps_lr2_multiply_and_subtract_blends() {
     let document: SkinDocument = serde_json::from_str(
         r#"
         {
@@ -127,9 +127,17 @@ fn static_image_destination_maps_lr2_multiply_blend() {
     .unwrap();
     let sources = mock_source("1", 6.0, 1.0);
 
-    let items = document.static_image_render_items(&sources, &SkinDrawState::default());
-
-    assert!(matches!(items.as_slice(), [SkinRenderItem::Image { blend: BlendMode::Multiply, .. }]));
+    for (mode, expected) in [(4, BlendMode::Multiply), (3, BlendMode::Subtract)] {
+        let mut document = document.clone();
+        let DestinationListEntry::Single(destination) = &mut document.destination[0] else {
+            panic!("destination")
+        };
+        destination.blend = mode;
+        let items = document.static_image_render_items(&sources, &SkinDrawState::default());
+        assert!(
+            matches!(items.as_slice(), [SkinRenderItem::Image { blend, .. }] if *blend == expected)
+        );
+    }
 }
 
 #[test]

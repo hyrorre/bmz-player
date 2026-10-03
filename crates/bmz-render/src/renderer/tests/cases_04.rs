@@ -266,6 +266,24 @@ fn multiply_image_blend_modulates_destination_with_source_color() {
 }
 
 #[test]
+fn subtractive_image_blend_darkens_rgb_without_erasing_destination_alpha() {
+    let blend = image_blend_state(BlendMode::Subtract);
+    assert_eq!(blend.color.src_factor, wgpu::BlendFactor::SrcAlpha);
+    assert_eq!(blend.color.dst_factor, wgpu::BlendFactor::One);
+    assert_eq!(blend.color.operation, wgpu::BlendOperation::ReverseSubtract);
+    assert_eq!(blend.alpha.src_factor, wgpu::BlendFactor::Zero);
+    assert_eq!(blend.alpha.dst_factor, wgpu::BlendFactor::One);
+    assert_eq!(blend.alpha.operation, wgpu::BlendOperation::Add);
+    let plan = DrawPlan {
+        clear: Color::rgb(0.0, 0.0, 0.0),
+        commands: vec![sample_image(0, BlendMode::Normal), sample_image(0, BlendMode::Subtract)],
+    };
+    let geometry = encode_plan_geometry(&plan, &TextFrame::default(), test_surface_size());
+    assert_eq!(geometry.steps.len(), 2);
+    assert!(matches!(geometry.steps[1], DrawStep::Image { blend: BlendMode::Subtract, .. }));
+}
+
+#[test]
 fn premultiplied_image_blend_does_not_apply_source_alpha_twice() {
     let blend = image_blend_state(BlendMode::Premultiplied);
 

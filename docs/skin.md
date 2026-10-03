@@ -103,6 +103,11 @@ OpenLR2の `SetDSTdrawByTime` に合わせて時刻を評価する。JSON/Luaの
 例えば `time=1000, loop=0` のDSTが1つだけなら、1000ms以降の表示を保持する。
 タイマーがOFFなら通常どおり非表示。ループ・タイマー等のdestination属性は最初のDST行から取得する。
 
+## LR2の画像合成
+
+LR2の画像合成 `blend=3` は減算を使う。描画先RGBからsource RGB×alphaを引き、
+描画先alphaは保持する。`blend=2` の加算、`blend=4` の乗算と区別する。
+
 ## LR2のDXAアセット
 
 旧DXArchiveのファイル形式バージョン1〜4を直接読み込む。KCOOL 1.72の

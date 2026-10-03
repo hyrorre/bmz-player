@@ -147,6 +147,7 @@ impl WgpuRenderer {
             image_pipeline: &self.image_pipeline,
             image_add_pipeline: &self.image_add_pipeline,
             image_multiply_pipeline: &self.image_multiply_pipeline,
+            image_subtract_pipeline: &self.image_subtract_pipeline,
             image_premultiplied_pipeline: &self.image_premultiplied_pipeline,
             image_layer_pipeline: &self.image_layer_pipeline,
             image_bind_groups: &image_bind_groups,

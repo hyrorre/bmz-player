@@ -34,6 +34,7 @@
 | 日付 | 記録 |
 |---|---|
 | 2026-10-03 | [LR2のDXAアセット直接読込](2026/2026-10-03-lr2-dxa-assets.md) |
+| 2026-10-03 | [LR2 Play skin互換修正](2026/2026-10-03-lr2-play-compatibility.md) |
 | 2026-10-03 | [LR2 DST時刻の互換修正](2026/2026-10-03-lr2-destination-timing.md) |
 | 2026-10-03 | [LR2スキンの既定解像度修正](2026/2026-10-03-lr2-default-resolution.md) |
 | 2026-10-03 | [ResultパネルとLua状態の同期](2026/2026-10-03-result-panel-lua-state.md) |

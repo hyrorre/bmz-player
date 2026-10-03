@@ -75,6 +75,7 @@ pub(super) fn wrap_ambient_destination(
 pub(super) fn skin_blend_mode(blend: i32) -> BlendMode {
     match blend {
         2 => BlendMode::Add,
+        3 => BlendMode::Subtract,
         4 => BlendMode::Multiply,
         _ => BlendMode::Normal,
     }

@@ -367,12 +367,15 @@ macro_rules! skin_document_render_core_resolve_methods {
 
             if state.bga_poor.is_none() {
                 for bga in [state.bga_layer, state.bga_layer2].into_iter().flatten() {
-                    let layer_blend =
-                        if matches!(blend, BlendMode::Add | BlendMode::Multiply) || bga.is_video {
-                            blend
-                        } else {
-                            BlendMode::LayerMask
-                        };
+                    let layer_blend = if matches!(
+                        blend,
+                        BlendMode::Add | BlendMode::Subtract | BlendMode::Multiply
+                    ) || bga.is_video
+                    {
+                        blend
+                    } else {
+                        BlendMode::LayerMask
+                    };
                     items.push(bga_image_item(
                         bga,
                         stretch,
