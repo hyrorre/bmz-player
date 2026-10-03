@@ -24,6 +24,10 @@ pub(in crate::plan) fn build_play_skin_state(
     let skin_lane_h = skin_lane_height_px(skin, snapshot.key_mode, skin_canvas_h);
 
     crate::skin::SkinDrawState {
+        lr2_horizontal: skin
+            .document()
+            .and_then(|document| document.note.as_ref())
+            .is_some_and(|note| note.lr2_horizontal),
         elapsed_ms: play_elapsed_ms,
         start_input_ms: crate::skin::skin_start_input_elapsed_ms(
             play_elapsed_ms,

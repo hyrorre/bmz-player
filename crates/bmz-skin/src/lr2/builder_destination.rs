@@ -410,11 +410,17 @@ impl<'a> CsvBuilder<'a> {
             .collect::<Vec<_>>();
         let note = (!self.note.note.is_empty() || !self.note.dst.is_empty()).then(|| {
             let dst2 = self.note.dst2.map(|y| {
-                (self.header.h as i32)
-                    .saturating_sub(y.saturating_add(self.note.size.first().copied().unwrap_or(0)))
+                if self.note.horizontal {
+                    y
+                } else {
+                    (self.header.h as i32).saturating_sub(
+                        y.saturating_add(self.note.size.first().copied().unwrap_or(0)),
+                    )
+                }
             });
             json!({
                 "id": "notes",
+                "lr2Horizontal": self.note.horizontal,
                 "lr2Auto": self.note.auto.as_ref().map(|auto| json!({
                     "note": auto.note, "lnstart": auto.lnstart, "lnend": auto.lnend,
                     "lnbody": auto.lnbody, "lnbodyActive": auto.lnbody_active, "mine": auto.mine,

@@ -198,6 +198,10 @@ pub(super) fn effective_skin_offset(id: i32, state: &SkinDrawState) -> Option<Sk
         }
         _ => {}
     }
+    if state.lr2_horizontal && matches!(id, 3..=5) {
+        offset.x = offset.x.saturating_add(offset.y);
+        offset.y = 0;
+    }
     Some(offset)
 }
 

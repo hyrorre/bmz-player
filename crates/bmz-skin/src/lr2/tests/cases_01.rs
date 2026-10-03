@@ -1,6 +1,24 @@
 use super::*;
 
 #[test]
+fn horizontal_mode_preserves_missed_note_x_coordinate() {
+    let files = BTreeMap::new();
+    for horizontal in [false, true] {
+        let mut builder = CsvBuilder::new(Path::new("play.lr2skin"), Header::default(), &files);
+        for line in ["#DST_NOTE,1,0,100,300,20,10,0,255,255,255,255,1,0,0,0,0,0", "#DST_NOTE2,-20"]
+        {
+            builder.execute(&parse_csv_line(line).unwrap()).unwrap();
+        }
+        if horizontal {
+            builder.execute(&parse_csv_line("#HORIZONTAL").unwrap()).unwrap();
+        }
+        let value = builder.finish();
+        assert_eq!(value["note"]["lr2Horizontal"], horizontal);
+        assert_eq!(value["note"]["dst2"], if horizontal { -20 } else { 490 });
+    }
+}
+
+#[test]
 fn lr2_auto_note_sources_are_separate_regardless_of_declaration_order() {
     let files = BTreeMap::new();
     for reverse in [false, true] {

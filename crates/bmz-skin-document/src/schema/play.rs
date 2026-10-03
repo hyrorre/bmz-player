@@ -2,6 +2,8 @@ use super::*;
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SkinNoteSetDef {
+    #[serde(default, rename = "lr2Horizontal")]
+    pub lr2_horizontal: bool,
     /// LR2 sprites for lanes played automatically by an assist.
     #[serde(default, rename = "lr2Auto")]
     pub lr2_auto: Option<Box<SkinNoteSetDef>>,

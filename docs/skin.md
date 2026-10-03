@@ -105,6 +105,14 @@ OpenLR2の `SetDSTdrawByTime` に合わせて時刻を評価する。JSON/Luaの
 
 ## LR2のPlay描画
 
+`#HORIZONTAL`は`note.lr2Horizontal`へ変換し、右から左へスクロールする。
+画像の向き・レーンのY座標は維持し、移動距離は初期DST_NOTEのXからキャンバス右端まで。
+LNは両キャップ間に横長の胴体を描画し、小節線・補助線も同方向へ動かす。
+LIFT・lane cover・hidden coverのoffset（3..5）はX軸へ適用し、通常UIの座標は維持する。
+`DST_NOTE2`は横スクロール時には落下先Xとして扱う。
+参照実装で縦計算が残るLN/小節線も一貫して横へ流す点はBMZの補完動作。
+カバーの`disapearLine`による横向きcropは未対応で、従来の縦定義を使う。
+
 `#FONT`は`#LR2FONT`と別の番号表を使う。同番号のbitmap font宣言を優先し、
 system fontは`text.lr2SystemFont`に宣言サイズ・thickness・typeを保持する。
 描画高はDSTの高さ、幅上限はDST幅×DST高/FONTサイズで、中央・右揃えもこの幅を使う。

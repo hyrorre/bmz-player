@@ -1,6 +1,60 @@
 use super::*;
 
 #[test]
+fn lr2_horizontal_scroll_aligns_notes_long_bodies_lines_and_lift() {
+    let document: SkinDocument = serde_json::from_value(serde_json::json!({
+        "w":1000,"h":500,
+        "image":[{"id":"beam","src":"1","w":2,"h":500}],
+        "note":{"lr2Horizontal":true,"dst2":-20,
+            "dst":[{"x":100,"y":200,"w":20,"h":300}, {"x":100,"y":300,"w":20,"h":200}],
+            "lr2Dst":[
+                {"lr2Timing":true,"dst":[{"x":100,"y":200,"w":20,"h":10}]},
+                {"lr2Timing":true,"dst":[{"x":100,"y":300,"w":20,"h":10}]}],
+            "group":[{"id":"beam","offset":3,"dst":[{"x":100,"y":0,"w":2,"h":500}]}]
+        }
+    }))
+    .unwrap();
+    assert_eq!(document.primary_note_lane_height_px(), Some(900));
+    let skin = SkinContext::from_manifest_and_document(
+        default_skin_manifest(),
+        document,
+        mock_source("1", 2.0, 500.0).into_values(),
+    );
+    for lift in [0, 90] {
+        let state =
+            SkinDrawState { lr2_horizontal: true, offset_lift_px: lift, ..Default::default() };
+        let notes = skin.prepare_note_layout(KeyMode::K7, &state);
+        for lane in [Lane::Key1, Lane::Key2] {
+            let height = notes.note_height(lane).unwrap();
+            let head = notes.note_rect(lane, 0.0, height).unwrap();
+            let tail = notes.note_rect(lane, 0.5, height).unwrap();
+            let body = notes.body_rect(lane, 0.0, 0.5).unwrap();
+            assert!(approx_eq(head.x, (100 + lift) as f32 / 1000.0));
+            assert!(approx_eq(tail.x, (550.0 + lift as f32 / 2.0) / 1000.0));
+            assert!(approx_eq(head.y, if lane == Lane::Key1 { 0.58 } else { 0.38 }));
+            assert_eq!(head.y, tail.y);
+            assert!(approx_eq(body.x, head.x + head.width));
+            assert!(approx_eq(body.x + body.width, tail.x));
+            assert_eq!(body.height, head.height);
+            assert!(approx_eq(notes.note_rect(lane, 1.0, height).unwrap().x, 1.0));
+            assert!(approx_eq(notes.missed_rect(lane, 1.0, height).unwrap().x, -0.02));
+            assert_eq!(
+                Some(tail),
+                skin.note_rect_for_progress(lane, KeyMode::K7, 0.5, height, &state)
+            );
+        }
+        let lines = skin.document_bar_line_items(0.5, KeyMode::K7, &state);
+        let SkinRenderItem::Image { rect, .. } = lines[0] else { panic!("line") };
+        assert!(approx_eq(rect.x, (550.0 + lift as f32 / 2.0) / 1000.0));
+        assert!(approx_eq(rect.y, 0.0));
+        assert!(approx_eq(rect.height, 1.0));
+        let offset = effective_skin_offset(3, &state).unwrap();
+        assert_eq!(offset.x, lift);
+        assert_eq!(offset.y, 0);
+    }
+}
+
+#[test]
 fn lr2_prepared_notes_animate_and_use_auto_sprites_only_for_assisted_lanes() {
     let document: SkinDocument = serde_json::from_value(serde_json::json!({
         "w":100,"h":100,

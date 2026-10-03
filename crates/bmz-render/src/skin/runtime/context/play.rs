@@ -279,6 +279,9 @@ impl SkinContext {
         state: &SkinDrawState,
     ) -> Option<Rect> {
         let document = self.document.as_ref()?;
+        if document.note.as_ref().is_some_and(|note| note.lr2_horizontal) {
+            return self.prepare_note_layout(key_mode, state).note_rect(lane, note_y, note_height);
+        }
         let enabled_options = document.enabled_options();
         let area = note_lane_area_for_state(document, lane, key_mode, &enabled_options, state)?;
         let canvas_h = document.h.max(1) as f32;
@@ -298,6 +301,9 @@ impl SkinContext {
     ) -> Option<Rect> {
         let document = self.document.as_ref()?;
         let note = document.note.as_ref()?;
+        if note.lr2_horizontal {
+            return self.prepare_note_layout(key_mode, state).missed_rect(lane, fall, note_height);
+        }
         if note.dst2 == i32::MIN {
             return None;
         }
@@ -323,6 +329,9 @@ impl SkinContext {
         state: &SkinDrawState,
     ) -> Option<Rect> {
         let document = self.document.as_ref()?;
+        if document.note.as_ref().is_some_and(|note| note.lr2_horizontal) {
+            return self.prepare_note_layout(key_mode, state).body_rect(lane, head_y, tail_y);
+        }
         let enabled_options = document.enabled_options();
         let area = note_lane_area_for_state(document, lane, key_mode, &enabled_options, state)?;
         let canvas_h = document.h.max(1) as f32;

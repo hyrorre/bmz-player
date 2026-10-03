@@ -21,6 +21,8 @@ pub(crate) struct PreparedNoteLayout<'a> {
     areas: [Option<Rect>; LANE_COUNT],
     heights: [Option<f32>; LANE_COUNT],
     frames: [Option<ResolvedSkinFrame>; LANE_COUNT],
+    horizontal: bool,
+    scroll_distances_px: [f32; LANE_COUNT],
     offset: SkinOffsetValue,
     canvas_w: f32,
     canvas_h: f32,
@@ -42,6 +44,8 @@ impl SkinContext {
             areas: [None; LANE_COUNT],
             heights: [None; LANE_COUNT],
             frames: [None; LANE_COUNT],
+            horizontal: false,
+            scroll_distances_px: [0.0; LANE_COUNT],
             offset: SkinOffsetValue::default(),
             canvas_w: 1.0,
             canvas_h: 1.0,
@@ -49,8 +53,14 @@ impl SkinContext {
             state,
         };
         if let Some(document) = &self.document {
+            layout.horizontal = document.note.as_ref().is_some_and(|note| note.lr2_horizontal);
             let options = document.enabled_options();
             for lane in Lane::ALL {
+                if layout.horizontal {
+                    layout.scroll_distances_px[lane.index()] = document
+                        .note_lane_area(lane, key_mode, &options)
+                        .map_or(0.0, |area| (1.0 - area.x).max(0.0) * document.w.max(1) as f32);
+                }
                 layout.areas[lane.index()] =
                     note_lane_area_for_state(document, lane, key_mode, &options, state);
                 layout.heights[lane.index()] = document.note_height_for_lane(lane, key_mode);
@@ -185,6 +195,11 @@ impl PreparedNoteLayout<'_> {
 
     pub(crate) fn note_rect(&self, lane: Lane, progress: f32, height: f32) -> Option<Rect> {
         let area = self.areas[lane.index()]?;
+        if self.horizontal {
+            let mut rect = self.rect_at_bottom(area, area.y + area.height, height);
+            rect.x += self.horizontal_scroll_px(lane, progress) / self.canvas_w;
+            return Some(rect);
+        }
         let bottom = note_progress_to_y(area, progress, self.state, self.canvas_h);
         Some(self.rect_at_bottom(area, bottom, height))
     }
@@ -194,6 +209,12 @@ impl PreparedNoteLayout<'_> {
             return None;
         }
         let area = self.areas[lane.index()]?;
+        if self.horizontal {
+            let mut rect = self.note_rect(lane, 0.0, height)?;
+            let target = self.dst2 as f32 / self.canvas_w;
+            rect.x += (target - rect.x) * fall.clamp(0.0, 1.0);
+            return Some(rect);
+        }
         let judge = note_judge_bottom_y(area, self.state, self.canvas_h);
         let target = (self.canvas_h - self.dst2 as f32) / self.canvas_h;
         Some(self.rect_at_bottom(area, judge + (target - judge) * fall.clamp(0.0, 1.0), height))
@@ -209,9 +230,25 @@ impl PreparedNoteLayout<'_> {
         }
     }
 
+    fn horizontal_scroll_px(&self, lane: Lane, progress: f32) -> f32 {
+        let distance = self.scroll_distances_px[lane.index()];
+        let lift = (self.state.offset_lift_px as f32).clamp(0.0, distance);
+        lift + progress.clamp(0.0, 1.0) * (distance - lift)
+    }
+
     pub(crate) fn body_rect(&self, lane: Lane, head: f32, tail: f32) -> Option<Rect> {
         let area = self.areas[lane.index()]?;
         let height = self.heights[lane.index()]?;
+        if self.horizontal {
+            let head = self.note_rect(lane, head, height)?;
+            let tail = self.note_rect(lane, tail, height)?;
+            return Some(Rect {
+                x: head.x.min(tail.x) + head.width,
+                y: head.y,
+                width: (tail.x - head.x).abs() - head.width,
+                height: head.height,
+            });
+        }
         let head = note_progress_to_y(area, head, self.state, self.canvas_h);
         let tail = note_progress_to_y(area, tail, self.state, self.canvas_h);
         let top = head.min(tail);

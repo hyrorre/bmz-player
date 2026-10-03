@@ -8,9 +8,11 @@
 手元のKCOOL Ver 1.72のCombo-1.pngは、PGREAT/GREAT/GOOD/BADの文字領域
 （x=0..97、y=0..287）が空で、コンボ数字とPOORの文字だけを持つ。
 123.pngにもPGREAT/GREAT/GOODの文字がない。画像を直接確認した。
+画素も確認し、これらの領域は全てRGBA=(255,255,255,0)の単色だった。
+alphaの裏に文字のRGBが残っているケースでもない。
 スキンが参照する領域そのものに文字がないため、BMZ側で文字を補う変更は行わない。
 画像は第三者素材として変更・コミットしない。
-実素材がある場合に各判定・複数の経過時刻で描画命令へ到達するテストを追加する。
+実素材がある場合に各判定・複数の経過時刻で描画命令へ到達するテストを追加した。
 
 ## 減算合成
 
@@ -68,3 +70,15 @@ RGB BMP/PNG・RGBA維持と、LR2ファイルから同一画像を二重ロー�
 DxLibのthickness・AA方式は未対応として残し、宣言値だけ保持する。
 検証: workspaceのcheck / all-targets Clippy / testを通過。変更したファイルはfmt済み。
 実機での文字の目視確認は未実施。
+
+## 横スクロール
+
+HORIZONTALを保持し、Scene04_Play.cppの移動方向に合わせて右から左へ進める。
+参照実装はLNのlongYと小節線に縦計算が残るため、その不整合は再現せず、
+BMZの補完としてLN両端・胴体・各線を横へ流す。初期Xから右端までを移動距離とし、
+レーンYやUIは回転しない。LIFT/cover offsetをXへ変換し、DST_NOTE2を落下先Xにする。
+横長キャンバス・異なるレーンY・LIFT有無・LN接続・小節線・実snapshot連携のテストを追加。
+カバーのdisapearLineによるcropは既存の縦定義のままで、横向きcropは未対応。
+検証: workspace check / all-targets Clippy / test、fmtを通過。縦スクロール時の不要な
+距離計算を省いた後、bmz-renderのcheck / all-targets Clippy / testを再実行して通過。
+最終状態でWindowsのbmz-player debug buildも通過。実機の目視確認は未実施。

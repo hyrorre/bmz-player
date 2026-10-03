@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn lr2_horizontal_plan_uses_scroll_width_for_lift() {
+    let document = serde_json::from_str(
+        r#"{"w":1000,"h":500,"note":{
+        "lr2Horizontal":true,"dst":[{"x":100,"y":200,"w":20,"h":300}]}}"#,
+    )
+    .unwrap();
+    let skin = SkinContext::from_manifest_and_document(SkinManifest::default(), document, []);
+    let snapshot = RenderSnapshot { lift: 0.1, ..Default::default() };
+    let state = build_play_skin_state(&snapshot, &skin, 0);
+    assert!(state.lr2_horizontal);
+    assert_eq!(state.offset_lift_px, 90);
+}
+
+#[test]
 fn lr2_battle_state_projects_live_opponent_without_a_target_score() {
     let skin = SkinContext::from_manifest_and_document(
         SkinManifest::default(),

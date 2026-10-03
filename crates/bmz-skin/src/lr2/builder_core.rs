@@ -155,6 +155,7 @@ impl<'a> CsvBuilder<'a> {
             "SRC_HCN_REACTIVE" => self.add_note_source(line, NoteSlot::HcnReactive),
             "SRC_MINE" | "SRC_AUTO_MINE" => self.add_note_source(line, NoteSlot::Mine),
             "DST_NOTE" => self.add_note_destination(line),
+            "HORIZONTAL" => self.note.horizontal = true,
             "DST_NOTE2" => self.note.dst2 = Some(parse_i32(line.fields.get(1))),
             "DST_NOTE_EXPANSION_RATE" => {
                 self.note.expansion_rate =
