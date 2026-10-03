@@ -322,6 +322,9 @@ fn infer_draw_field(
         .map_err(|_| anyhow!("main_state probe lock poisoned"))?
         .runtime_mode
         == LuaSkinRuntimeMode::Compat;
+    if compat && let Some((_, mode)) = lua_result_mode_upvalue(lua, function) {
+        record_local_result_panel_default(main_state_probe, mode);
+    }
     let draw = if compat {
         None
     } else {

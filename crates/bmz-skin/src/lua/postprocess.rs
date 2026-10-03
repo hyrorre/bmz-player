@@ -65,7 +65,7 @@ pub(super) fn record_local_result_panel_default(
     Some(())
 }
 
-/// Returns the index and integer value of a closure upvalue named `result_mode`.
+/// Returns the index, integer value and identity of an upvalue named `result_mode`.
 ///
 /// Lua 5.4 does not expose arbitrary upvalues through mlua's safe API. This
 /// private C callback only inspects the function passed as argument 1 and never
@@ -89,7 +89,8 @@ unsafe extern "C-unwind" fn find_result_mode_upvalue(state: *mut mlua::lua_State
                 mlua::ffi::lua_pop(state, 1);
                 mlua::ffi::lua_pushinteger(state, i64::from(index));
                 mlua::ffi::lua_pushinteger(state, value);
-                return 2;
+                mlua::ffi::lua_pushlightuserdata(state, mlua::ffi::lua_upvalueid(state, 1, index));
+                return 3;
             }
             mlua::ffi::lua_pop(state, 1);
         }
@@ -258,11 +259,16 @@ unsafe extern "C-unwind" fn set_number_upvalue(state: *mut mlua::lua_State) -> c
 }
 
 pub(super) fn lua_result_mode_upvalue(lua: &Lua, function: &Function) -> Option<(i32, i32)> {
+    lua_result_mode_binding(lua, function).map(|(index, value, _)| (index, value))
+}
+
+pub(super) fn lua_result_mode_binding(lua: &Lua, function: &Function) -> Option<(i32, i32, usize)> {
     // SAFETY: both callbacks obey Lua's C function ABI and access only their
     // call frame. They are retained by mlua for the duration of `call`.
     let helper = unsafe { lua.create_c_function(find_result_mode_upvalue).ok()? };
-    let (index, value) = helper.call::<(i64, i64)>(function.clone()).ok()?;
-    Some((i32::try_from(index).ok()?, i32::try_from(value).ok()?))
+    let (index, value, identity) =
+        helper.call::<(i64, i64, mlua::LightUserData)>(function.clone()).ok()?;
+    Some((i32::try_from(index).ok()?, i32::try_from(value).ok()?, identity.0 as usize))
 }
 
 pub(super) fn set_lua_integer_upvalue(

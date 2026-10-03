@@ -16,3 +16,5 @@ mod cases_04;
 mod custom_timers;
 #[path = "lua/ir_missing_scores.rs"]
 mod ir_missing_scores;
+#[path = "lua/result_panels.rs"]
+mod result_panels;

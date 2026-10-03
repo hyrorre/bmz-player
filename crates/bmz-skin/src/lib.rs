@@ -171,6 +171,11 @@ impl LuaLoadRuntimeState {
 /// 実装側は renderer の snapshot などを借用してよい。Lua へ Rust オブジェクト
 /// 自体を渡さず、callback 実行中にこの accessor を同期的に読むだけにする。
 pub trait LuaMainState {
+    /// BMZ Result panel: 0=inactive, 1=IR, 2=graph; None outside Result.
+    fn result_panel(&self) -> Option<i32> {
+        None
+    }
+
     fn option(&self, id: i32) -> bool;
     fn number(&self, id: i32) -> i64;
     /// Returns the current EX score used by Lua skins.

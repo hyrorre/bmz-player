@@ -440,6 +440,7 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
             }
         }
     }
+    let result_panel_bindings = Arc::new(LuaResultPanelBindings::new(&lua, &callbacks));
     Ok(LuaSkinRuntime {
         lua,
         main_state_dispatch,
@@ -452,6 +453,7 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
         pending_timer_frame_start: true,
         custom_timers: Arc::new(Mutex::new(timers)),
         custom_timer_callbacks,
+        result_panel_bindings,
     })
 }
 

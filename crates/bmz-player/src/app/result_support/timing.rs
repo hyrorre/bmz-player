@@ -10,11 +10,10 @@ pub(super) fn result_input_duration_for_document(document: Option<&SkinDocument>
 
 pub(super) fn result_panel_supported(document: &SkinDocument) -> bool {
     document.result_panel_default.is_some()
-        && document
-            .destination
-            .iter()
-            .flat_map(destination_entry_values)
-            .any(|destination| destination.draw.contains("result_panel("))
+        && document.destination.iter().flat_map(destination_entry_values).any(|destination| {
+            destination.draw.contains("result_panel(")
+                || destination.draw.starts_with("bmz:lua_draw_callback:")
+        })
 }
 
 /// Result IR の行スクロールを現在の skin 表示で受け付けるか。

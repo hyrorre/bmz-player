@@ -136,6 +136,15 @@ module stateを保持する。callbackからは現在フレームの `main_state
 draw=false、数値/文字列は未取得として扱う。runtime callbackを含むdocumentはVMをclone
 できないためdocument cacheとLua-to-JSON変換の対象外になる。
 
+Resultのパネル切替は、推論済みの `result_panel(...)` とLua runtime callbackで同じ
+現在状態を参照する。既存のパネル互換処理が認識するグローバル `Expand_op`
+（0=非表示、1=IR、2=GRAPH）と、callbackが直接保持するローカル `result_mode`
+（0=GRAPH、1=IR）を評価中に同期する。GRAPH/IRを表示しない状態では後者に2を渡す。
+`auto` / `compat` の両方で、配置設定や別のローカル変数を含む複合条件を維持する。
+Lua評価が入れ子になった場合や例外時には元のパネル値を復元し、他のclosure stateは
+リセットしない。これは既存パネル切替の互換処理であり、任意の `act` / `customEvents`
+を実行する汎用イベントruntimeではない。
+
 Lua sandboxはロード時の互換APIとして`os.clock` / `os.date` / `os.time`を提供する。
 `os.time`の日付tableは標準Luaと同様にローカル時刻として正規化し、正規化後の値を
 tableへ書き戻す。引数なしでは現在時刻を返し、`os.date`は`!` prefixでUTCを選べる。libGDXの

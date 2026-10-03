@@ -680,7 +680,7 @@ fn result_panel_arrow_keys_match_luxe_flat_direction() {
 }
 
 #[test]
-fn result_panel_support_requires_default_and_runtime_draw_gate() {
+fn result_panel_support_requires_default_and_compiled_or_lua_draw_gate() {
     let document: SkinDocument = serde_json::from_value(serde_json::json!({
         "type": 7,
         "resultPanelDefault": 2,
@@ -692,6 +692,15 @@ fn result_panel_support_requires_default_and_runtime_draw_gate() {
     }))
     .unwrap();
     assert!(result_panel_supported(&document));
+
+    let mut compat = document.clone();
+    let DestinationListEntry::Single(destination) = &mut compat.destination[0] else {
+        panic!("single destination");
+    };
+    destination.draw = "bmz:lua_draw_callback:0".into();
+    assert!(result_panel_supported(&compat));
+    compat.result_panel_default = None;
+    assert!(!result_panel_supported(&compat));
 
     let without_gate: SkinDocument = serde_json::from_value(serde_json::json!({
         "type": 7,

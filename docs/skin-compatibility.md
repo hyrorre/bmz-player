@@ -1,6 +1,6 @@
 # スキン互換の対応状況
 
-この文書は、互換修正や次の作業を選ぶための索引です。最終確認日は2026-09-30です。
+この文書は、互換修正や次の作業を選ぶための索引です。最終確認日は2026-10-03です。
 「対応済み」は記載した範囲の実装・テストがあることを意味し、全スキンでの見た目の完全一致を保証しません。
 BMZ固有のIDや詳細な動作契約は [skin.md](skin.md)、互換修正の方針は [AGENTS.md](../AGENTS.md) を参照します。
 
@@ -34,6 +34,7 @@ closure/module stateを維持し、frameごとのmain_stateを参照します。
 | field / API | 対応範囲 |
 |---|---|
 | destination `draw` | ロード時推論とruntime callback |
+| Resultのパネル状態 | `Expand_op` / callbackが直接保持する `result_mode` を現在のパネルへ同期。Luxe FlatのGRAPHとIRの混在を防止。通常／compat、左右配置、WMIIの回帰確認は [作業記録](../notes/2026/2026-10-03-result-panel-lua-state.md) |
 | value / text / graph / sliderの `value` | ロード時推論とruntime callback |
 | `customTimers[].timer` | ID `10000..19999`。推論とruntime callback。宣言順で1フレーム1回更新 |
 | `main_state.set_timer` | 受動custom timerのON/OFF。組み込みtimerや能動timerへの書き込みには制約がある |

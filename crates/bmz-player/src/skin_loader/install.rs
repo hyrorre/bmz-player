@@ -113,6 +113,10 @@ pub(super) struct RenderLuaMainState<'a> {
 }
 
 impl LuaMainState for RenderLuaMainState<'_> {
+    fn result_panel(&self) -> Option<i32> {
+        self.state.result_panel
+    }
+
     fn option(&self, id: i32) -> bool {
         lua_main_state_option(id, self.enabled_options, self.state)
     }

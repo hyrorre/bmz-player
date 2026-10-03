@@ -119,7 +119,7 @@ pub struct SkinDocument {
     pub custom_events: Vec<SkinCustomEventDef>,
     /// Lua Result スキンがロード時に選んだ展開パネル。
     ///
-    /// WMII の `Expand_op` をロード時宣言へ変換した場合だけ設定され、
+    /// Lua の `Expand_op` / `result_mode` を認識した場合に設定され、
     /// 0=非表示、1=IR、2=グラフとして Result 入力と描画状態を同期する。
     #[serde(default, rename = "resultPanelDefault")]
     pub result_panel_default: Option<i32>,
