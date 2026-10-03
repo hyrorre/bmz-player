@@ -94,6 +94,7 @@ mod tests {
     #[test]
     fn result_snapshot_detects_full_combo() {
         let snapshot = ResultSnapshot {
+            lr2_progress: Default::default(),
             operating_time_ms: 0,
             player_name: String::new(),
             target_name: String::new(),
@@ -187,6 +188,7 @@ mod tests {
     #[test]
     fn zero_note_result_is_not_full_combo() {
         let snapshot = ResultSnapshot {
+            lr2_progress: Default::default(),
             operating_time_ms: 0,
             player_name: String::new(),
             target_name: String::new(),

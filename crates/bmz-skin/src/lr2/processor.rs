@@ -55,6 +55,13 @@ impl Processor {
                 continue;
             }
             builder.conditional_ops = self.active_runtime_ops();
+            if matches!(builder.header.skin_type, 7 | 15)
+                && matches!(line.command.as_str(), "FLIPRESULT" | "DISABLEFLIP")
+            {
+                let flip = line.command == "FLIPRESULT";
+                self.ops.insert(350, !flip);
+                self.ops.insert(351, flip);
+            }
             builder.apply_play_header_command(line);
             if line.command == "INCLUDE" {
                 let include = resolve_include_path(builder, current_path, field(line, 1));
@@ -191,6 +198,8 @@ impl Processor {
                     } else {
                         false
                     }
+                } else if matches!(option_id, 350 | 351) && ops.contains_key(&option_id) {
+                    ops[&option_id] == (option >= 0)
                 } else if is_runtime_lr2_option(option_id) {
                     runtime_ops.push(option);
                     true

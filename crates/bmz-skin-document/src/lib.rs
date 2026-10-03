@@ -13,6 +13,8 @@ use serde::{Deserialize, Deserializer};
 use serde_json::Value as JsonValue;
 
 mod load;
+mod lr2;
+pub use lr2::*;
 mod runtime;
 #[cfg(test)]
 mod tests;

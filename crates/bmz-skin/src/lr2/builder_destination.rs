@@ -69,6 +69,9 @@ impl<'a> CsvBuilder<'a> {
                 dst["stretch"] = json!(self.stretch);
             }
             self.expand_destination_option_aliases(&mut dst);
+            if let Some(rect) = self.mouse_rects.get(&variant.id) {
+                dst["mouseRect"] = rect.clone();
+            }
             if self.current_has_destination {
                 merge_or_push_current_destination(&mut self.destinations, dst);
             } else {
@@ -136,6 +139,19 @@ impl<'a> CsvBuilder<'a> {
                 }
             } else {
                 ops.push(json!(op));
+            }
+        }
+        if matches!(self.header.skin_type, 7 | 15) {
+            for op in ops.iter_mut() {
+                if let Some(value) = op.as_i64()
+                    && matches!(value.abs(), 300..=308 | 310..=318)
+                {
+                    *op = json!(
+                        value.signum()
+                            * (i64::from(bmz_skin_document::LR2_RESULT_RANK_BASE) + value.abs()
+                                - 300)
+                    );
+                }
             }
         }
         let mut seen = BTreeSet::new();
@@ -305,29 +321,31 @@ impl<'a> CsvBuilder<'a> {
         definition: &str,
         selected: &str,
     ) -> Option<String> {
-        let selected = normalize_selected_skin_file(selected)?;
+        let definition = definition.replace('\\', "/");
+        let selected = selected.replace('\\', "/");
+        // The theme may define a sibling directory. Strip only that exact
+        // directory from a saved selection, then validate the selected suffix.
+        let selected = if definition.starts_with("../") {
+            let directory = definition.rsplit_once('/').map(|(dir, _)| format!("{dir}/"))?;
+            normalize_selected_skin_file(selected.strip_prefix(&directory).unwrap_or(&selected))?
+        } else {
+            normalize_selected_skin_file(&selected)?
+        };
         if self.skin_file_dir.join(&selected).is_file() {
             return Some(selected);
         }
         if selected.contains('/') {
             return None;
         }
-        let definition = definition.replace('\\', "/");
         let star = definition.find('*')?;
         let prefix = &definition[..star];
         let slash = prefix.rfind('/').map(|index| index + 1).unwrap_or(0);
         let candidate = format!("{}{selected}", &prefix[..slash]);
-        let candidate = normalize_selected_skin_file(&candidate)?;
         self.skin_file_dir.join(&candidate).is_file().then_some(candidate)
     }
 
     pub(super) fn relative_source_path(&self, normalized: &str) -> String {
-        if let Some(dir_name) = &self.skin_file_dir_name
-            && let Some(stripped) = normalized.strip_prefix(&format!("{dir_name}/"))
-        {
-            return stripped.to_string();
-        }
-        normalized.to_string()
+        relative_to_skin_directory(&self.skin_file_dir, normalized)
     }
 
     pub(super) fn alloc_id(&mut self, prefix: &str) -> String {
@@ -341,6 +359,8 @@ impl<'a> CsvBuilder<'a> {
     }
 
     pub(super) fn finish(mut self) -> JsonValue {
+        let songlist = self.finish_songlist();
+        let result = self.finish_lr2_result();
         self.complete_open_lr2_note_adjustment_effects();
         self.complete_play_lines();
         let category = json!([{ "name": "LR2", "item": ["property", "filepath", "offset"] }]);
@@ -464,6 +484,10 @@ impl<'a> CsvBuilder<'a> {
             .collect::<Vec<_>>();
         json!({
             "type": self.header.skin_type,
+            "lr2": true,
+            "lr2Result": result,
+            "lr2Charts": self.result_charts,
+            "songlist": songlist,
             "name": self.header.name,
             "author": self.header.author,
             "w": self.header.w,

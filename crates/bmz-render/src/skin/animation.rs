@@ -1,5 +1,30 @@
 use super::*;
 
+pub(super) fn songlist_destination_at<'a>(
+    entries: &'a [DestinationListEntry],
+    index: usize,
+    enabled_options: &[i32],
+    state: &SkinDrawState,
+    lr2: bool,
+) -> Option<&'a SkinDestinationDef> {
+    if !lr2 {
+        return destination_entry_at(entries, index, enabled_options);
+    }
+    // LR2 indexes slots before evaluating variants; an inactive part must not
+    // shift later bars or lamp types into its slot.
+    match entries.get(index)? {
+        DestinationListEntry::Single(destination) => {
+            destination_ops_match(destination, enabled_options, state).then_some(destination)
+        }
+        DestinationListEntry::Conditional { if_ops, destinations } => {
+            if !test_skin_dst_if(if_ops, enabled_options) {
+                return None;
+            }
+            destinations.iter().find(|d| destination_ops_match(d, enabled_options, state))
+        }
+    }
+}
+
 pub(super) fn destination_entry_at<'a>(
     entries: &'a [DestinationListEntry],
     mut index: usize,
@@ -484,7 +509,13 @@ pub(super) fn skin_image_item_for_frame(
         frame.r as f32 / 255.0,
         frame.g as f32 / 255.0,
         frame.b as f32 / 255.0,
-        frame.a as f32 / 255.0,
+        // LR2 blend 0 disables destination-alpha blending. WMIX charts use
+        // a=0 with this mode; texture transparency still applies normally.
+        if frame.lr2_style.is_some_and(|style| style.blend == 0) {
+            1.0
+        } else {
+            frame.a as f32 / 255.0
+        },
     );
     if frame.angle == 0 {
         return SkinRenderItem::Image {

@@ -419,9 +419,22 @@ macro_rules! skin_document_render_select_render_methods {
                         })
                     },
                 ),
-                select_option_panel: snapshot.option_panel,
+                select_option_panel: if self.lr2 && snapshot.option_panel > 1 {
+                    0
+                } else {
+                    snapshot.option_panel
+                },
                 skin_attempt,
                 select_arrange_index: select_arrange_index(&snapshot.arrange),
+                lr2_select_mode_index: match snapshot.select_mode.as_str() {
+                    "ALL" => 0,
+                    "7K" => 2,
+                    "5K" => 3,
+                    "14K" => 5,
+                    "10K" => 6,
+                    "9K" => 7,
+                    _ => -1,
+                },
                 select_arrange_2p_index: select_arrange_index(&snapshot.arrange_2p),
                 select_extended_arrange_index: extended_arrange_index(&snapshot.arrange),
                 select_extended_arrange_2p_index: extended_arrange_index(&snapshot.arrange_2p),

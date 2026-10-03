@@ -247,6 +247,12 @@ impl WinitApp {
             &self.boot.profile_config.display_name,
         );
         if let Some(summary) = summary {
+            let raw_clear_type = self
+                .is_course_intermediate_result()
+                .then(|| self.result.finished_play.as_ref().map(|play| play.result.clear_type))
+                .flatten();
+            let failed = result_failed_for_skin_ops(summary.clear_type, raw_clear_type);
+            runtime_state.option_values.extend([(90, !failed), (91, failed)]);
             apply_skin_attempt_lua_load_state(&mut runtime_state, summary.skin_attempt);
             apply_result_summary_lua_load_state(
                 &mut runtime_state,

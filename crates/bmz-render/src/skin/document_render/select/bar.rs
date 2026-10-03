@@ -6,6 +6,7 @@ macro_rules! skin_document_render_select_bar_methods {
             destination: &SkinDestinationDef,
             frame: ResolvedSkinFrame,
             sources: &HashMap<String, SkinDocumentTexture>,
+            state: &SkinDrawState,
         ) -> Option<SkinRenderItem> {
             let imageset = self.imageset.iter().find(|set| set.id == destination.id)?;
             let image_index = select_row_bar_image_index(row);
@@ -16,9 +17,7 @@ macro_rules! skin_document_render_select_bar_methods {
             )?;
             let image = self.image.iter().find(|image| image.id == *image_id)?;
             let source = resolve_document_source(sources, &image.src)?;
-            // Bar sprites have always used the default state's timer (zero,
-            // or an inactive timer falling back to zero), not the row timer.
-            let elapsed = 0;
+            let elapsed = if self.lr2 { skin_timer_elapsed_ms(image.timer, state)? } else { 0 };
             let (rect, uv) = stretch_skin_image_geometry(
                 destination.stretch,
                 normalize_skin_frame_rect(frame, self.w, self.h),

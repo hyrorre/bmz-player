@@ -189,6 +189,7 @@ fn skin_value_evaluates_default_chart_total_count_expr() {
 #[test]
 fn skin_image_act_uses_event_index_for_button_frame_row() {
     let image = SkinImageDef {
+        lr2_panel: None,
         id: "auto-judge".to_string(),
         src: "1".to_string(),
         x: 0,

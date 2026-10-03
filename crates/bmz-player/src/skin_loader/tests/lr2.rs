@@ -12,3 +12,5 @@ mod cases_04;
 mod cases_05;
 #[path = "lr2/cases_06.rs"]
 mod cases_06;
+#[path = "lr2/scenes.rs"]
+mod scenes;

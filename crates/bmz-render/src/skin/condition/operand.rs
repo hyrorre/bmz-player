@@ -132,6 +132,9 @@ pub(in crate::skin) fn keybeam_lane_for_keyoff_timer(timer: i32) -> Option<usize
 }
 
 pub(in crate::skin) fn skin_state_event_index(event_id: i32, state: &SkinDrawState) -> i32 {
+    if (LR2_BUTTON_BASE..=LR2_BUTTON_LAST).contains(&event_id) {
+        return lr2_scene::button_index(event_id - LR2_BUTTON_BASE, state);
+    }
     match event_id {
         SKIN_REF_BMZ_BEST_SCORE_ARRANGE_1P..=SKIN_REF_BMZ_BEST_SCORE_DOUBLE_OPTION => {
             best_score_option_index(event_id, state) as i32

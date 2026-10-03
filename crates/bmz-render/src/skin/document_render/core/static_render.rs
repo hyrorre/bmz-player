@@ -17,7 +17,8 @@ pub(in crate::skin::document_render) fn fixed_image_destination_cacheable(
     destination: &SkinDestinationDef,
     images: &SkinImageLookup<'_>,
 ) -> bool {
-    if !destination.op.is_empty()
+    if document.lr2_charts.iter().any(|chart| chart.id == destination.id)
+        || !destination.op.is_empty()
         || !destination.draw.trim().is_empty()
         || destination.timer.is_some()
         || !destination.timer_expr.is_empty()

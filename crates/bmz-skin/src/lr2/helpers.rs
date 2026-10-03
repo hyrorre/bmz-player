@@ -419,11 +419,20 @@ pub(super) fn lr2_lane_to_beatoraja_index(lane: i32) -> Option<i32> {
 }
 
 pub(super) fn resolve_include_path(
-    builder: &CsvBuilder<'_>,
+    builder: &mut CsvBuilder<'_>,
     current_path: &Path,
     raw: &str,
 ) -> PathBuf {
     let normalized = normalize_lr2_asset_path(raw);
+    if normalized.contains('*') {
+        let selected = builder.resolve_source_path(raw);
+        for candidate in [builder.skin_root.join(&selected), builder.skin_file_dir.join(&selected)]
+        {
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
     let root_candidate = builder.skin_root.join(&normalized);
     if root_candidate.is_file() {
         return root_candidate;
@@ -433,6 +442,15 @@ pub(super) fn resolve_include_path(
 
 pub(super) fn infer_skin_root(path: &Path) -> PathBuf {
     let mut current = path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    if current.file_name().and_then(|name| name.to_str()).is_some_and(|name| {
+        matches!(
+            name.to_ascii_lowercase().as_str(),
+            "select" | "result" | "courseresult" | "decide" | "play" | "play_half"
+        )
+    }) && let Some(parent) = current.parent()
+    {
+        return parent.to_path_buf();
+    }
     loop {
         let Some(name) = current.file_name().and_then(|name| name.to_str()) else {
             return path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
@@ -467,11 +485,31 @@ pub(super) fn normalize_lr2_asset_path(path: &str) -> String {
 }
 
 pub(super) fn relative_to_skin_file_parent(skin_path: &Path, normalized: &str) -> String {
-    if let Some(dir_name) =
-        skin_path.parent().and_then(|parent| parent.file_name()).and_then(|name| name.to_str())
-        && let Some(stripped) = normalized.strip_prefix(&format!("{dir_name}/"))
+    relative_to_skin_directory(skin_path.parent().unwrap_or_else(|| Path::new(".")), normalized)
+}
+
+pub(super) fn relative_to_skin_directory(directory: &Path, normalized: &str) -> String {
+    if let Some(dir_name) = directory.file_name().and_then(|name| name.to_str())
+        && let Some((first, rest)) = normalized.split_once('/')
+        && first.eq_ignore_ascii_case(dir_name)
     {
-        return stripped.to_string();
+        return rest.to_string();
+    }
+    // Theme-root paths can reference a sibling scene, including CUSTOMFILE globs.
+    let exists = |base: &Path| {
+        if let Some((prefix, _)) = normalized.split_once('*') {
+            let prefix = if let Some(directory) = prefix.strip_suffix('/') {
+                Path::new(directory)
+            } else {
+                Path::new(prefix).parent().unwrap_or_else(|| Path::new("."))
+            };
+            !prefix.as_os_str().is_empty() && base.join(prefix).is_dir()
+        } else {
+            bmz_skin_assets::is_file(&base.join(normalized))
+        }
+    };
+    if !exists(directory) && directory.parent().is_some_and(exists) {
+        return format!("../{normalized}");
     }
     normalized.to_string()
 }
@@ -548,7 +586,9 @@ pub(super) fn parse_i32(value: Option<&String>) -> i32 {
 
 pub(super) fn parse_i32_str(value: &str) -> i32 {
     let value = value.trim().replace('!', "-").replace(' ', "");
-    value.parse::<i32>().unwrap_or(0)
+    value.parse::<i32>().unwrap_or_else(|_| {
+        value.parse::<f64>().ok().filter(|v| v.is_finite()).map(|v| v as i32).unwrap_or(0)
+    })
 }
 
 pub(super) fn parse_option_token(value: &str) -> i32 {

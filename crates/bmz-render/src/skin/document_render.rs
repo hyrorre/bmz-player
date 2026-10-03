@@ -231,6 +231,7 @@ pub trait SkinDocumentRenderExt {
         &self,
         destination: &SkinDestinationDef,
         images: &SkinImageLookup<'_>,
+        state: &SkinDrawState,
     ) -> Option<SkinClickTarget>;
 
     fn destination_click_rect(
@@ -330,6 +331,7 @@ pub trait SkinDocumentRenderExt {
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
         sources: &HashMap<String, SkinDocumentTexture>,
+        state: &SkinDrawState,
     ) -> Option<SkinRenderItem>;
 
     fn note_image_render_item(

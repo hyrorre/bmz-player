@@ -18,6 +18,8 @@ mod builder_assets;
 mod builder_core;
 mod builder_destination;
 mod builder_play;
+mod builder_result;
+mod builder_select;
 mod helpers;
 mod processor;
 
@@ -57,6 +59,8 @@ struct CustomOffset {
 
 #[derive(Debug, Clone)]
 struct Header {
+    rank_wait: i32,
+    update_wait: i32,
     skin_type: i32,
     name: String,
     author: String,
@@ -87,6 +91,8 @@ struct LoadedHeader {
 impl Default for Header {
     fn default() -> Self {
         Self {
+            rank_wait: 0,
+            update_wait: 0,
             skin_type: 0,
             name: String::new(),
             author: String::new(),
@@ -152,9 +158,11 @@ enum NoteSlot {
 }
 
 struct CsvBuilder<'a> {
+    result_charts: Vec<JsonValue>,
+    result_flip: bool,
+    select: builder_select::SelectState,
     skin_root: PathBuf,
     skin_file_dir: PathBuf,
-    skin_file_dir_name: Option<String>,
     header: Header,
     files: &'a BTreeMap<String, String>,
     warnings: Vec<SkinLoadWarning>,
@@ -175,6 +183,7 @@ struct CsvBuilder<'a> {
     bpm_graphs: Vec<JsonValue>,
     timing_visualizers: Vec<JsonValue>,
     special_destination_sizes: HashMap<String, (i32, i32)>,
+    mouse_rects: HashMap<String, JsonValue>,
     hidden_covers: Vec<JsonValue>,
     gauge: Option<JsonValue>,
     gauges: Vec<JsonValue>,
@@ -240,12 +249,33 @@ pub fn load_lr2_csv_skin_value(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
 ) -> Result<LoadedLuaSkinValue> {
+    load_lr2_csv_skin_value_with_runtime_options(
+        path,
+        options,
+        files,
+        &BTreeMap::from([(90, true)]),
+    )
+}
+
+pub(super) fn load_lr2_csv_skin_value_with_runtime_options(
+    path: &Path,
+    options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
+    runtime_options: &BTreeMap<i32, bool>,
+) -> Result<LoadedLuaSkinValue> {
     let LoadedHeader { mut header, mut dependencies } = load_header(path, options)?;
     apply_default_play_header_items(&mut header);
     apply_selected_header_options(&mut header, options);
     let mut builder = CsvBuilder::new(path, header, files);
     let lines = read_csv_lines(path)?;
-    let mut processor = Processor::new(builder.header.selected_ops.clone());
+    let mut ops =
+        runtime_options.iter().map(|(&id, &value)| (id, value)).collect::<HashMap<_, _>>();
+    ops.extend(builder.header.selected_ops.clone());
+    if matches!(builder.header.skin_type, 7 | 15) {
+        ops.insert(350, true);
+        ops.insert(351, false);
+    }
+    let mut processor = Processor::new(ops);
     processor.process_lines(&lines, path, &mut builder)?;
     dependencies.option_values.extend(processor.option_dependencies);
     dependencies.option_values.extend(builder.load_time_option_dependencies());
@@ -358,7 +388,22 @@ fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<Loaded
         }
     }
 
+    if matches!(header.skin_type, 5 | 7 | 15) {
+        header.options.push(CustomOption {
+            name: "LR2 Resolution (BMZ)".into(),
+            base: 99_000,
+            items: ["Skin default", "640x480", "1280x720", "1920x1080"]
+                .map(str::to_string)
+                .to_vec(),
+        });
+    }
     apply_selected_header_options(&mut header, options);
+    for (id, dimensions) in [(99_001, (640, 480)), (99_002, (1280, 720)), (99_003, (1920, 1080))] {
+        if header.selected_ops.get(&id) == Some(&true) {
+            (header.w, header.h) = dimensions;
+            header.explicit_resolution_dimensions = true;
+        }
+    }
     apply_derived_play_options(&mut header);
     let dependencies = SkinLoadDependencies {
         number_values: BTreeMap::new(),

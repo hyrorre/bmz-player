@@ -52,12 +52,20 @@ pub(in crate::skin_loader) fn lr2_document_dependency_fingerprint(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
     dependencies: &SkinLoadDependencies,
+    runtime_state: &LuaLoadRuntimeState,
 ) -> Result<SkinDocumentDependencyFingerprint> {
-    let option_values = bmz_skin::load_lr2_csv_skin_dependency_option_values(
+    let mut option_values = bmz_skin::load_lr2_csv_skin_dependency_option_values(
         skin_path,
         options,
         dependencies.option_values.keys().copied(),
     )?;
+    for (id, value) in &mut option_values {
+        if *id < 900
+            && let Some(runtime) = runtime_state.option_values.get(id)
+        {
+            *value = *runtime;
+        }
+    }
     let file_values = dependencies
         .files
         .iter()
@@ -229,7 +237,7 @@ pub(in crate::skin_loader) fn load_skin_document_with_path_context(
     {
         if let Ok(mut cache) = document_cache.lock()
             && let Some((mut document, mut resolved_files)) =
-                cache.get_lr2(&key, skin_path, options, files)
+                cache.get_lr2(&key, skin_path, options, files, runtime_state)
         {
             for (name, selected) in files {
                 resolved_files.insert(name.clone(), selected.clone());
@@ -258,8 +266,13 @@ pub(in crate::skin_loader) fn load_skin_document_with_path_context(
         )?;
         loaded.cache_status = DocumentCacheStatus::Miss;
         if let Ok(mut cache) = document_cache.lock()
-            && let Ok(fingerprint) =
-                lr2_document_dependency_fingerprint(skin_path, options, files, &loaded.dependencies)
+            && let Ok(fingerprint) = lr2_document_dependency_fingerprint(
+                skin_path,
+                options,
+                files,
+                &loaded.dependencies,
+                runtime_state,
+            )
         {
             cache.insert_lr2(
                 key,
@@ -425,11 +438,14 @@ pub(in crate::skin_loader) fn load_skin_document_uncached_with_path_context(
             }
             (loaded.document, loaded.lua_runtime, loaded.files, loaded.dependencies)
         } else if is_lr2_skin_path(skin_path) {
-            let loaded =
-                bmz_skin::load_lr2_csv_skin(skin_path, decode_skin_kind(kind), options, files)
-                    .with_context(|| {
-                        format!("failed to load lr2 csv skin: {}", skin_path.display())
-                    })?;
+            let loaded = bmz_skin::load_lr2_csv_skin_with_runtime_state(
+                skin_path,
+                decode_skin_kind(kind),
+                options,
+                files,
+                runtime_state,
+            )
+            .with_context(|| format!("failed to load lr2 csv skin: {}", skin_path.display()))?;
             for warning in loaded.warnings {
                 tracing::warn!(
                     path = %skin_path.display(),

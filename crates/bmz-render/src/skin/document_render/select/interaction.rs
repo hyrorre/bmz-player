@@ -26,7 +26,7 @@ macro_rules! skin_document_render_select_interaction_methods {
                 })
                 .filter_map(|destination| {
                     Some(SkinClickHit {
-                        target: self.click_target_for_destination(destination, &images)?,
+                        target: self.click_target_for_destination(destination, &images, state)?,
                         rect: self.destination_click_rect(destination, &enabled_options, state)?,
                     })
                 })
@@ -119,7 +119,8 @@ macro_rules! skin_document_render_select_interaction_methods {
                 ) {
                     continue;
                 }
-                let Some(target) = self.click_target_for_destination(destination, &images) else {
+                let Some(target) = self.click_target_for_destination(destination, &images, &state)
+                else {
                     continue;
                 };
                 let Some(rect) = self.destination_click_rect(destination, &enabled_options, &state)
@@ -153,16 +154,20 @@ macro_rules! skin_document_render_select_interaction_methods {
                 }
                 let selected = row_position as i32 == selected_row_position;
                 let row_destinations = if selected { &songlist.liston } else { &songlist.listoff };
-                let Some(row_destination) =
-                    destination_entry_at(row_destinations, slot as usize, enabled_options)
-                else {
-                    continue;
-                };
                 Self::apply_select_songlist_click_row_state(
                     &mut row_state,
                     row,
                     snapshot.selected_replay_slot,
                 );
+                let Some(row_destination) = songlist_destination_at(
+                    row_destinations,
+                    slot as usize,
+                    enabled_options,
+                    &row_state,
+                    self.lr2,
+                ) else {
+                    continue;
+                };
                 let elapsed = skin_timer_elapsed_ms(row_destination.timer, state).unwrap_or(0);
                 let Some(mut frame) = resolve_destination_frame(
                     row_destination,
@@ -264,6 +269,7 @@ macro_rules! skin_document_render_select_interaction_methods {
             &self,
             destination: &SkinDestinationDef,
             images: &SkinImageLookup<'_>,
+            state: &SkinDrawState,
         ) -> Option<SkinClickTarget> {
             if destination.clickable == Some(false) {
                 return None;
@@ -272,6 +278,11 @@ macro_rules! skin_document_render_select_interaction_methods {
                 return Some(SkinClickTarget::Event { event_id, click: destination.click });
             }
             if let Some(image) = images.get(destination.id.as_str())
+                && image.lr2_panel.is_none_or(|panel| {
+                    panel == 0
+                        || (panel == -1 && state.select_option_panel == 0)
+                        || panel == i32::from(state.select_option_panel)
+                })
                 && destination.clickable.or(image.clickable).unwrap_or(image.act.is_some())
                 && let Some(event_id) = image.act
             {

@@ -349,6 +349,7 @@ fn skin_gauge_flickering_draws_normal_tip_overlay() {
     document.gauge.as_mut().unwrap().nodes = (0..36).map(|index| format!("node-{index}")).collect();
     document.image = (0..36)
         .map(|index| SkinImageDef {
+            lr2_panel: None,
             id: format!("node-{index}"),
             src: "1".to_string(),
             x: index,
@@ -508,6 +509,7 @@ fn skin_gauge_omitted_type_has_no_flickering_overlay() {
     document.gauge.as_mut().unwrap().nodes = (0..36).map(|index| format!("node-{index}")).collect();
     document.image = (0..36)
         .map(|index| SkinImageDef {
+            lr2_panel: None,
             id: format!("node-{index}"),
             src: "1".to_string(),
             x: index,

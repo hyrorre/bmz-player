@@ -6,6 +6,17 @@ macro_rules! skin_document_render_core_resolve_methods {
             destination: &SkinDestinationDef,
             context: DestinationResolveContext<'_, '_>,
         ) -> Option<Vec<SkinRenderItem>> {
+            if let Some(chart) = self.lr2_charts.iter().find(|chart| chart.id == destination.id) {
+                let elapsed = destination_timer_elapsed_ms(destination, context.state)?;
+                let mut frame = resolve_destination_frame(
+                    destination,
+                    elapsed,
+                    context.enabled_options,
+                    context.state,
+                )?;
+                apply_skin_offset_to_frame(destination, &mut frame, context.state, false);
+                return Some(lr2_scene::chart_items(self, chart, destination, frame, &context));
+            }
             let DestinationResolveContext {
                 images,
                 values,
@@ -271,6 +282,12 @@ macro_rules! skin_document_render_core_resolve_methods {
             sources: &HashMap<String, SkinDocumentTexture>,
         ) -> Option<Option<Vec<SkinRenderItem>>> {
             let image = skin_image_for_destination_id(destination.id.as_str(), images)?;
+            if image.act.is_some_and(|id| {
+                (LR2_BUTTON_BASE..=LR2_BUTTON_LAST).contains(&id)
+                    && skin_state_event_index(id, state) < 0
+            }) {
+                return Some(None);
+            }
             if self.should_skip_lift_lane_cover_render(destination, image)
                 && state.offset_lift_px == 0
             {

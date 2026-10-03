@@ -24,16 +24,20 @@ macro_rules! skin_document_render_select_songlist_methods {
                 }
                 let selected = row_position as i32 == selected_row_position;
                 let row_destinations = if selected { &songlist.liston } else { &songlist.listoff };
-                let Some(row_destination) =
-                    destination_entry_at(row_destinations, slot as usize, enabled_options)
-                else {
-                    continue;
-                };
                 Self::apply_select_songlist_render_row_state(
                     &mut row_state,
                     row,
                     snapshot.selected_replay_slot,
                 );
+                let Some(row_destination) = songlist_destination_at(
+                    row_destinations,
+                    slot as usize,
+                    enabled_options,
+                    &row_state,
+                    self.lr2,
+                ) else {
+                    continue;
+                };
                 let elapsed = skin_timer_elapsed_ms(row_destination.timer, state).unwrap_or(0);
                 let Some(mut row_frame) = resolve_destination_frame(
                     row_destination,
@@ -52,10 +56,26 @@ macro_rules! skin_document_render_select_songlist_methods {
                     snapshot.bar_scroll_direction,
                     snapshot.bar_scroll_progress,
                 );
-                let row_origin = (row_frame.x, row_frame.y);
+                let row_origin = (
+                    row_frame.x,
+                    row_frame.y + if songlist.lr2_bottom_origin { row_frame.h } else { 0 },
+                );
                 apply_skin_offset_to_frame(row_destination, &mut row_frame, state, false);
-                if let Some(item) = self.select_bar_item(row, row_destination, row_frame, sources) {
+                if let Some(item) =
+                    self.select_bar_item(row, row_destination, row_frame, sources, state)
+                {
                     items.push(item);
+                }
+                if selected {
+                    items.extend(self.select_songlist_child_items_by_index(
+                        &songlist.flash,
+                        0,
+                        row_origin,
+                        images,
+                        enabled_options,
+                        &row_state,
+                        sources,
+                    ));
                 }
                 if select_row_shows_lamp(row) {
                     let clear_index = select_row_clear_index(row);
@@ -190,9 +210,13 @@ macro_rules! skin_document_render_select_songlist_methods {
             let next_selected = next_slot == songlist.center;
             let next_destinations =
                 if next_selected { &songlist.liston } else { &songlist.listoff };
-            let Some(next_destination) =
-                destination_entry_at(next_destinations, next_slot as usize, enabled_options)
-            else {
+            let Some(next_destination) = songlist_destination_at(
+                next_destinations,
+                next_slot as usize,
+                enabled_options,
+                state,
+                self.lr2,
+            ) else {
                 return;
             };
             let elapsed = skin_timer_elapsed_ms(next_destination.timer, state).unwrap_or(0);

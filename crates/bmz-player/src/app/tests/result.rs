@@ -340,6 +340,8 @@ fn result_lua_runtime_state_exposes_scene_options() {
     assert_eq!(online.option_values.get(&61), Some(&true));
     assert_eq!(online.option_values.get(&32), Some(&false));
     assert_eq!(online.option_values.get(&33), Some(&true));
+    assert_eq!(online.option_values.get(&90), Some(&true));
+    assert_eq!(online.option_values.get(&91), Some(&false));
     assert_eq!(online.option_values.get(&160), Some(&true));
     assert_eq!(online.option_values.get(&161), Some(&false));
     assert_eq!(online.text_values.get(&1020).map(String::as_str), Some("BMZ IR"));

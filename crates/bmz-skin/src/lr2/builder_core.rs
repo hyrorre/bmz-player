@@ -7,13 +7,11 @@ impl<'a> CsvBuilder<'a> {
         let remap_single_play_2p_lanes = matches!(header.skin_type, 0 | 1 | 3 | 4 | 12 | 13)
             && header.selected_ops.get(&901).copied().unwrap_or(false);
         Self {
+            result_charts: Vec::new(),
+            result_flip: false,
+            select: builder_select::SelectState::default(),
             skin_root,
             skin_file_dir,
-            skin_file_dir_name: path
-                .parent()
-                .and_then(|parent| parent.file_name())
-                .and_then(|name| name.to_str())
-                .map(str::to_string),
             header,
             files,
             warnings: Vec::new(),
@@ -34,6 +32,7 @@ impl<'a> CsvBuilder<'a> {
             bpm_graphs: Vec::new(),
             timing_visualizers: Vec::new(),
             special_destination_sizes: HashMap::new(),
+            mouse_rects: HashMap::new(),
             hidden_covers: Vec::new(),
             gauge: None,
             gauges: Vec::new(),
@@ -60,6 +59,11 @@ impl<'a> CsvBuilder<'a> {
 
     pub(super) fn load_time_option_dependencies(&self) -> BTreeMap<i32, bool> {
         let mut dependencies = BTreeMap::new();
+        for id in 99_000..=99_003 {
+            if let Some(value) = self.header.selected_ops.get(&id) {
+                dependencies.insert(id, *value);
+            }
+        }
         if matches!(self.header.skin_type, 0 | 1 | 3 | 4 | 12 | 13) {
             dependencies.insert(901, self.header.selected_ops.get(&901).copied().unwrap_or(false));
         }
@@ -100,14 +104,20 @@ impl<'a> CsvBuilder<'a> {
     }
 
     pub(super) fn execute(&mut self, line: &CsvLine) -> Result<()> {
+        if self.execute_result_command(line) {
+            return Ok(());
+        }
+        if self.execute_select_command(line) {
+            return Ok(());
+        }
         match line.command.as_str() {
             "IMAGE" => self.add_source(field(line, 1)),
             "FONT" => self.add_system_font(line),
             "LR2FONT" => self.add_lr2_font(field(line, 1)),
-            "SRC_IMAGE" | "SRC_BUTTON" => self.add_image(line),
+            "SRC_IMAGE" | "SRC_BUTTON" | "SRC_ONMOUSE" => self.add_image(line),
             "IMAGESET" => self.add_imageset_source(line),
             "SRC_IMAGESET" => self.add_imageset(line),
-            "DST_IMAGE" | "DST_BUTTON" => self.add_destination(line),
+            "DST_IMAGE" | "DST_BUTTON" | "DST_ONMOUSE" => self.add_destination(line),
             "SRC_NUMBER" => self.add_number(line),
             "DST_NUMBER" => self.add_destination(line),
             "SRC_TEXT" => self.add_text(line),
@@ -197,7 +207,11 @@ impl<'a> CsvBuilder<'a> {
     pub(super) fn apply_play_header_command(&mut self, line: &CsvLine) {
         match line.command.as_str() {
             "FADEOUT" => self.header.fadeout = parse_i32(line.fields.get(1)),
-            "STARTINPUT" => self.header.input = parse_i32(line.fields.get(1)),
+            "STARTINPUT" => {
+                self.header.input = parse_i32(line.fields.get(1));
+                self.header.rank_wait = parse_i32(line.fields.get(2));
+                self.header.update_wait = parse_i32(line.fields.get(3));
+            }
             "SCENETIME" => self.header.scene = parse_i32(line.fields.get(1)),
             "CLOSE" => self.header.close = parse_i32(line.fields.get(1)),
             "LOADSTART" => self.header.loadstart = parse_i32(line.fields.get(1)),

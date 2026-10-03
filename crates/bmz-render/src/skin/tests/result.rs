@@ -8,3 +8,5 @@ mod cases_02;
 mod cases_03;
 #[path = "result/cases_04.rs"]
 mod cases_04;
+#[path = "result/lr2.rs"]
+mod lr2;

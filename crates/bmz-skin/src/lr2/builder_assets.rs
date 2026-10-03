@@ -61,6 +61,10 @@ impl<'a> CsvBuilder<'a> {
         });
         if line.command == "SRC_BUTTON" {
             image["act"] = json!(values[11]);
+            if matches!(self.header.skin_type, 5 | 7 | 15) {
+                image["act"] = json!(bmz_skin_document::LR2_BUTTON_BASE + values[11].clamp(0, 999));
+                image["lr2Panel"] = json!(values[13]);
+            }
             if matches!(self.header.skin_type, 0 | 1 | 2 | 3 | 4 | 12 | 13) {
                 match values[11] {
                     40 => image["ref"] = json!(SKIN_REF_BMZ_LR2_GAUGE_TYPE_1P),
@@ -69,14 +73,23 @@ impl<'a> CsvBuilder<'a> {
                 }
             }
             image["clickable"] = json!(values[12] == 1);
-            image["click"] = json!(if values[14] > 0 {
+            image["click"] = json!(if values[14] == 1 {
                 0
-            } else if values[14] < 0 {
+            } else if values[14] == 2 || values[14] < 0 {
                 1
             } else {
                 2
             });
             image["len"] = json!(values[15]);
+        }
+        if line.command == "SRC_ONMOUSE" {
+            self.mouse_rects.insert(
+                id.clone(),
+                json!({
+                    "x": values[12], "y": values[6] - values[13] - values[15],
+                    "w": values[14], "h": values[15],
+                }),
+            );
         }
         self.images.push(image);
         self.set_current(id);
@@ -156,7 +169,14 @@ impl<'a> CsvBuilder<'a> {
                 ref_id => ref_id,
             }
         } else {
-            values[11]
+            match values[11] {
+                100..=116 | 120..=136 if matches!(self.header.skin_type, 7 | 15) => {
+                    bmz_skin_document::LR2_RESULT_NUMBER_BASE + values[11] - 100
+                }
+                10 | 11 => SKIN_REF_BMZ_LR2_HISPEED,
+                42 => 96,
+                ref_id => ref_id,
+            }
         };
         let id = self.alloc_id("lr2-number");
         self.values.push(json!({

@@ -325,6 +325,26 @@ pub fn load_lr2_csv_skin(
     files: &BTreeMap<String, String>,
 ) -> Result<LoadedSkinDocument> {
     let loaded = lr2::load_lr2_csv_skin_value(path, options, files)?;
+    decode_lr2_skin_value(path, loaded)
+}
+
+pub fn load_lr2_csv_skin_with_runtime_state(
+    path: &Path,
+    _kind: SkinKind,
+    options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
+    runtime_state: &LuaLoadRuntimeState,
+) -> Result<LoadedSkinDocument> {
+    let loaded = lr2::load_lr2_csv_skin_value_with_runtime_options(
+        path,
+        options,
+        files,
+        &runtime_state.option_values,
+    )?;
+    decode_lr2_skin_value(path, loaded)
+}
+
+fn decode_lr2_skin_value(path: &Path, loaded: LoadedLuaSkinValue) -> Result<LoadedSkinDocument> {
     let value = bmz_skin_document::normalize_lua_json_skin_integer_numbers(loaded.value);
     let mut document: SkinDocument = serde_path_to_error::deserialize(value)
         .with_context(|| format!("failed to parse lr2 csv skin as document: {}", path.display()))?;
