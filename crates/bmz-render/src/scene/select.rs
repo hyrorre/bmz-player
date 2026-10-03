@@ -22,6 +22,7 @@ pub struct SelectSnapshot {
     pub detail_options: Option<std::sync::Arc<super::detail_options::DetailOptionsSnapshot>>,
     /// Remaining E2 movement in column units (-1..=1); separate from cached labels.
     pub detail_options_scroll: f32,
+    pub detail_options_closing: Option<super::detail_options::DetailOptionsClosingSnapshot>,
     pub chart_count: u32,
     pub selected_index: u32,
     /// beatoraja-style song bar movement direction. `1` means the new bars start
@@ -174,6 +175,21 @@ pub struct SelectRivalJudgeCounts {
     pub poor: u32,
 }
 
+impl SelectSnapshot {
+    pub fn closing_detail_options(
+        &self,
+    ) -> Option<&super::detail_options::DetailOptionsClosingSnapshot> {
+        if self.option_panel == 2 || self.detail_options.is_some() || self.in_settings {
+            return None;
+        }
+        let elapsed = self.option_panel_off_times[1]?.0;
+        if !(0..super::detail_options::DETAIL_OPTIONS_CLOSE_MS * 1000).contains(&elapsed) {
+            return None;
+        }
+        self.detail_options_closing.as_ref()
+    }
+}
+
 impl Default for SelectSnapshot {
     fn default() -> Self {
         Self {
@@ -190,6 +206,7 @@ impl Default for SelectSnapshot {
             option_panel: 0,
             detail_options: None,
             detail_options_scroll: 0.0,
+            detail_options_closing: None,
             chart_count: 0,
             selected_index: 0,
             bar_scroll_direction: 0,

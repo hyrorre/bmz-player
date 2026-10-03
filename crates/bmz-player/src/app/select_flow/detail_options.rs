@@ -1,7 +1,8 @@
 use super::*;
 use crate::select_detail_options::{CATALOG, DetailContext, DetailEffects, DetailOptionDef};
 use bmz_render::scene::detail_options::{
-    DetailOptionsSnapshot, detail_options_row_index, detail_options_viewport,
+    DETAIL_OPTIONS_CLOSE_MS, DetailOptionsClosingSnapshot, DetailOptionsSnapshot,
+    detail_options_row_index, detail_options_viewport,
 };
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -12,6 +13,7 @@ pub(super) struct DetailOptionsState {
     pub value_latched: bool,
     pub blocked_controls: std::collections::HashSet<(DeviceId, String)>,
     pub dirty: bool,
+    pub closing: Option<DetailOptionsClosingSnapshot>,
     scroll_started: Option<Instant>,
     scroll_duration: Duration,
     scroll_from: f32,
@@ -139,12 +141,50 @@ impl WinitApp {
     }
     pub(super) fn detail_options_active(&self) -> bool {
         self.select.select_option_panel == 2
-            && matches!(self.view_state(), AppViewState::Select)
+            && self.detail_options_available()
+            && self.detail_options_enabled()
+    }
+
+    pub(super) fn detail_options_enabled(&self) -> bool {
+        self.renderer.select_skin_document().is_some_and(|doc| doc.uses_detail_options())
+    }
+
+    pub(super) fn detail_options_available(&self) -> bool {
+        matches!(self.view_state(), AppViewState::Select)
             && self.ui.focused
             && !in_settings_stack(&self.select.folder_stack)
             && !self.select.search.is_active()
             && !self.select.ir_battle.active
             && !self.ui.egui.as_ref().is_some_and(|ui| ui.blocks_game_input(false))
+    }
+
+    pub(super) fn detail_options_closing_snapshot(&self) -> Option<DetailOptionsClosingSnapshot> {
+        if self.select.select_option_panel == 2
+            || !self.detail_options_available()
+            || !self
+                .renderer
+                .select_skin_document()
+                .is_some_and(|doc| doc.uses_detail_options() && doc.bmz_detail_options_close)
+            || self.select.option_panel_off_started_at[1]?.elapsed()
+                >= Duration::from_millis(DETAIL_OPTIONS_CLOSE_MS as u64)
+        {
+            return None;
+        }
+        self.select.detail_options.closing.clone()
+    }
+
+    pub(super) fn capture_detail_options_close(&self) -> Option<DetailOptionsClosingSnapshot> {
+        if !self
+            .renderer
+            .select_skin_document()
+            .is_some_and(|doc| doc.uses_detail_options() && doc.bmz_detail_options_close)
+        {
+            return None;
+        }
+        Some(DetailOptionsClosingSnapshot {
+            panel: self.detail_options_snapshot()?,
+            scroll: self.detail_options_scroll(),
+        })
     }
 
     pub(super) fn detail_options_mode(&self) -> KeyMode {
@@ -159,6 +199,7 @@ impl WinitApp {
     }
 
     pub(super) fn reset_detail_options_input(&mut self) {
+        self.select.detail_options.closing = None;
         self.select.detail_options.scroll_started = None;
         self.select.detail_options.value_latched = self.detail_value_keys_held();
         self.select.detail_options.blocked_controls = self
@@ -443,6 +484,48 @@ fn detail_lane_direction(lane: Lane, nine_key: bool) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_assist_keyboard_and_gamepad_keep_fixed_seven_key_events() {
+        use crate::config::profile_config::LaneConfig;
+        let profile = ProfileConfig::new_default("test", "Test", 0);
+        let keys = SelectKeyBindings::from_profile(&profile.input);
+        let bindings =
+            crate::config::play_input::resolve_play_bindings(&profile.input, KeyMode::K7).unwrap();
+        for (key, lane, event_id) in [
+            (LaneConfig::Key1, Lane::Key1, 301),
+            (LaneConfig::Key2, Lane::Key2, 302),
+            (LaneConfig::Key3, Lane::Key3, 303),
+            (LaneConfig::Key4, Lane::Key4, 304),
+            (LaneConfig::Key5, Lane::Key5, 305),
+            (LaneConfig::Key6, Lane::Key6, 306),
+            (LaneConfig::Key7, Lane::Key7, 307),
+        ] {
+            let binding =
+                bindings.iter().find(|b| b.device == "keyboard" && b.lane == Some(key)).unwrap();
+            assert_eq!(keys.legacy_assist_event(&binding.control), Some(event_id));
+            assert_eq!(legacy_assist_event_for_lane(lane), Some(event_id));
+            let mut assist = profile.play.assist;
+            assert!(assist.toggle_beatoraja_button(event_id));
+            let mut flags = [false; 7];
+            flags[(event_id - 301) as usize] = true;
+            assert_eq!(assist.flags(), flags);
+            assert!(assist.toggle_beatoraja_button(event_id));
+            assert_eq!(assist, profile.play.assist);
+        }
+        // Scratch/arrows never become a detail carousel in the legacy panel.
+        for control in ["ScratchUp", "ScratchDown", "ArrowLeft", "ArrowRight"] {
+            assert_eq!(keys.legacy_assist_event(control), None);
+        }
+        assert_eq!(legacy_assist_event_for_lane(Lane::Scratch), None);
+        assert_eq!(legacy_assist_event_for_lane(Lane::Key8), None);
+        let slots = crate::input::gamepad::GamepadSlotMap::from_slot_ids([Some(0), Some(1)]);
+        assert_eq!(
+            select_option_lane_for_gamepad(&profile.input, slots, DeviceId(16), "Button1")
+                .and_then(legacy_assist_event_for_lane),
+            Some(301)
+        );
+    }
 
     #[test]
     fn detail_arrows_follow_column_and_choice_axes() {

@@ -36,6 +36,10 @@ impl WinitApp {
         if !matches!(self.view_state(), AppViewState::Select) {
             return;
         }
+        if self.select.select_option_panel == 0 && self.detail_options_closing_snapshot().is_some()
+        {
+            return;
+        }
         if self.detail_options_active() {
             if let Some(movement) = select_wheel_move(delta) {
                 self.move_detail_options(if movement == SelectMove::Previous { -1 } else { 1 });
@@ -93,6 +97,10 @@ impl WinitApp {
         }
         if !matches!(self.view_state(), AppViewState::Select) {
             self.select.select_slider_dragging_type = None;
+            return;
+        }
+        if self.select.select_option_panel == 0 && self.detail_options_closing_snapshot().is_some()
+        {
             return;
         }
         if self.detail_options_active() {

@@ -254,6 +254,36 @@ fn shift_detail_panel_survives_other_keys_and_closes_after_reconciliation() {
 }
 
 #[test]
+fn select_option_panel_switch_starts_exit_and_entrance_together_for_e2_and_both_release_orders() {
+    let base = Instant::now();
+    let mut current = 2;
+    let mut on = base;
+    let mut off = [None; 6];
+    for (step, start, select, expected) in [
+        (1, true, true, 3),
+        (2, false, true, 2),
+        (3, true, true, 3),
+        (4, true, false, 1),
+        (5, false, false, 0),
+    ] {
+        let previous = current;
+        let now = base + Duration::from_millis(step * 50);
+        let next = select_option_panel_for_holds(start, select);
+        assert_eq!(next, expected);
+        assert!(transition_select_option_panel(&mut current, &mut on, &mut off, next, now));
+        assert_eq!(on, now);
+        assert_eq!(off[usize::from(previous - 1)], Some(now));
+        if next != 0 {
+            assert_eq!(off[usize::from(next - 1)], None);
+        }
+        if step >= 4 {
+            // Releasing E2 first, then E1, must not restart E2's previous exit.
+            assert_eq!(off[1], Some(base + Duration::from_millis(150)));
+        }
+    }
+}
+
+#[test]
 fn select_hold_state_rebuilds_from_pressed_controls() {
     let keys = default_select_keys();
     let pressed = HashSet::from(["Q".to_string(), "W".to_string()]);

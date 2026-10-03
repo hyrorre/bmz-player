@@ -11,15 +11,6 @@ pub(super) fn plan_select(
             &mut commands,
             &skin.select_document_items_with_dynamic_timers(snapshot, Some(dynamic_timers)),
         );
-        if skin.document().is_some_and(|doc| doc.bmz_detail_options != 1)
-            && let Some(panel) = snapshot.detail_options.as_deref()
-        {
-            super::detail_options::push_detail_options(
-                &mut commands,
-                panel,
-                snapshot.detail_options_scroll,
-            );
-        }
         // timer/op条件で空になるフレームもスキンの演出として扱う。
         push_exit_hold_indicator(&mut commands, snapshot.exit_hold_progress);
         push_scene_overlays(&mut commands, &snapshot.overlay);
@@ -144,13 +135,6 @@ pub(super) fn plan_select(
         BitmapTextStyle { x: 0.08, y: 0.895, cell: 0.005, color: Color::rgb(0.58, 0.67, 0.7) },
     );
 
-    if let Some(panel) = snapshot.detail_options.as_deref() {
-        super::detail_options::push_detail_options(
-            &mut commands,
-            panel,
-            snapshot.detail_options_scroll,
-        );
-    }
     push_exit_hold_indicator(&mut commands, snapshot.exit_hold_progress);
     push_scene_overlays(&mut commands, &snapshot.overlay);
 

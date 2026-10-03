@@ -676,7 +676,14 @@ impl WinitApp {
                             self.play_system_sound(crate::system_sound::SoundType::OptionChange);
                         }
                     }
-                    2 => {}
+                    2 => {
+                        if let Some(control) = physical_key_name(event.physical_key)
+                            && let Some(event_id) =
+                                self.select.select_keys.legacy_assist_event(&control)
+                        {
+                            self.execute_select_skin_event(event_id, 1);
+                        }
+                    }
                     3 => {
                         if let Some(control) = physical_key_name(event.physical_key)
                             && self.apply_detail_option_control(&control)

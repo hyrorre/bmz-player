@@ -313,16 +313,11 @@ impl Renderer {
         x: f32,
         y: f32,
     ) -> Option<SkinClickHit> {
+        if snapshot.option_panel == 0 && self.select_detail_options_closing(snapshot) {
+            return None;
+        }
         let (x, y) = self.select_skin_canvas_point(x, y)?;
-        if let Some(panel) = snapshot.detail_options.as_deref() {
-            if !self.select_skin_context.document().is_some_and(|doc| doc.bmz_detail_options == 1) {
-                return crate::plan::detail_options_click_hit(
-                    panel,
-                    snapshot.detail_options_scroll,
-                    x,
-                    y,
-                );
-            }
+        if snapshot.detail_options.is_some() && self.select_uses_detail_options() {
             return self.select_skin_context.select_click_hit(snapshot, x, y).filter(|hit| {
                 matches!(hit.target, SkinClickTarget::Event { event_id, .. } if bmz_skin_document::is_detail_options_event(event_id))
             });
@@ -379,11 +374,23 @@ impl Renderer {
         x: f32,
         y: f32,
     ) -> Option<SkinSliderHit> {
-        if snapshot.detail_options.is_some() {
+        if (snapshot.detail_options.is_some() && self.select_uses_detail_options())
+            || (snapshot.option_panel == 0 && self.select_detail_options_closing(snapshot))
+        {
             return None;
         }
         let (x, y) = self.select_skin_canvas_point(x, y)?;
         self.select_skin_context.select_slider_hit(snapshot, x, y)
+    }
+
+    fn select_detail_options_closing(&self, snapshot: &crate::scene::SelectSnapshot) -> bool {
+        self.select_skin_document()
+            .is_some_and(|doc| doc.uses_detail_options() && doc.bmz_detail_options_close)
+            && snapshot.closing_detail_options().is_some()
+    }
+
+    fn select_uses_detail_options(&self) -> bool {
+        self.select_skin_document().is_some_and(SkinDocument::uses_detail_options)
     }
 
     /// プレイスキンの document。

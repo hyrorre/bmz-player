@@ -15,9 +15,12 @@ pub struct SkinDocument {
     pub name: String,
     #[serde(default)]
     pub author: String,
-    /// Explicit support version; only 1 opts out of the native E2 overlay.
+    /// Explicit support version; only 1 enables the new E2 UI and input scheme.
     #[serde(default, rename = "bmzDetailOptions")]
     pub bmz_detail_options: u32,
+    /// Opt in to a read-only 300 ms E2 exit snapshot, animated with timer 32.
+    #[serde(default, rename = "bmzDetailOptionsClose")]
+    pub bmz_detail_options_close: bool,
     #[serde(default = "default_skin_canvas_width")]
     pub w: u32,
     #[serde(default = "default_skin_canvas_height")]

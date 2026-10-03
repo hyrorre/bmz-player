@@ -35,7 +35,7 @@ impl WinitApp {
     }
 
     pub(super) fn sync_selected_play_mode(&mut self) {
-        let mode = if self.select.select_option_panel == 2 {
+        let mode = if self.select.select_option_panel == 2 && self.detail_options_enabled() {
             Some(self.detail_options_mode())
         } else {
             self.selected_play_mode()

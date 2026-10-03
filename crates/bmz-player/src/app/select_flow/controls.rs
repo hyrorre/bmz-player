@@ -168,6 +168,14 @@ impl WinitApp {
         };
         let previous_panel = self.select.select_option_panel;
         let now = Instant::now();
+        let closing = if panel == 2 || !self.detail_options_available() {
+            None
+        } else if previous_panel == 2 {
+            self.capture_detail_options_close()
+        } else {
+            // Keep the outgoing E2 across 3 -> 1/0 until its original timer expires.
+            self.detail_options_closing_snapshot()
+        };
         if transition_select_option_panel(
             &mut self.select.select_option_panel,
             &mut self.select.option_panel_started_at,
@@ -190,6 +198,7 @@ impl WinitApp {
                 self.play_system_sound(sound_type);
             }
         }
+        self.select.detail_options.closing = closing;
     }
 
     pub(super) fn begin_settings_edit(&mut self, entry_id: SettingsEntryId) {
@@ -875,6 +884,21 @@ impl WinitApp {
                 true
             }
             _ => self.apply_play_option_control(control),
+        }
+    }
+
+    pub(super) fn apply_gamepad_legacy_assist_control(&mut self, device: DeviceId, control: &str) {
+        let config = self.play_session_app_config();
+        let slots = crate::input::gamepad::GamepadSlotMap::from_runtime_or_legacy(
+            config.input.gamepad_slot_runtime_device_ids,
+            config.input.gamepad_slot_gilrs_ids,
+        );
+        let event_id =
+            select_option_lane_for_gamepad(&self.boot.profile_config.input, slots, device, control)
+                .and_then(legacy_assist_event_for_lane)
+                .or_else(|| self.select.select_keys.legacy_assist_event(control));
+        if let Some(event_id) = event_id {
+            self.execute_select_skin_event(event_id, 1);
         }
     }
 

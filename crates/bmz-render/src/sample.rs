@@ -49,6 +49,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         option_panel: 0,
         detail_options: None,
         detail_options_scroll: 0.0,
+        detail_options_closing: None,
         chart_count: 7,
         selected_index: 0,
         bar_scroll_direction: 0,

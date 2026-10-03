@@ -5,6 +5,14 @@ pub const DETAIL_OPTION_ROWS: usize = 7;
 pub const DETAIL_OPTION_CENTER: usize = DETAIL_OPTION_ROWS / 2;
 /// Two extra, offscreen slots preserve the departing columns during movement.
 pub const DETAIL_OPTION_DRAW_SLOTS: usize = DETAIL_OPTION_ROWS + 2;
+pub const DETAIL_OPTIONS_CLOSE_MS: i64 = 300;
+
+/// Frozen display data; never used as an editable panel.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DetailOptionsClosingSnapshot {
+    pub panel: Arc<DetailOptionsSnapshot>,
+    pub scroll: f32,
+}
 
 pub fn detail_options_column(slot: usize) -> i32 {
     match slot {

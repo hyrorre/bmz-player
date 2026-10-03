@@ -390,6 +390,10 @@ macro_rules! skin_document_render_select_render_methods {
                 || skin_start_input_elapsed_ms(elapsed_ms, self.input),
                 |runtime| runtime.start_input_elapsed_ms(elapsed_ms, self.input),
             );
+            let detail_enabled = self.uses_detail_options();
+            let closing = (detail_enabled && self.bmz_detail_options_close)
+                .then(|| snapshot.closing_detail_options())
+                .flatten();
             let mut state = SkinDrawState {
                 elapsed_ms,
                 start_input_ms,
@@ -410,8 +414,15 @@ macro_rules! skin_document_render_select_render_methods {
                     },
                 ),
                 select_option_panel: snapshot.option_panel,
-                detail_options: snapshot.detail_options.clone(),
-                detail_options_scroll: snapshot.detail_options_scroll,
+                detail_options: detail_enabled
+                    .then(|| snapshot.detail_options.clone())
+                    .flatten()
+                    .or_else(|| closing.map(|closed| closed.panel.clone())),
+                detail_options_scroll: if detail_enabled {
+                    closing.map_or(snapshot.detail_options_scroll, |closed| closed.scroll)
+                } else {
+                    0.0
+                },
                 skin_attempt,
                 select_arrange_index: select_arrange_index(&snapshot.arrange),
                 select_arrange_2p_index: select_arrange_index(&snapshot.arrange_2p),

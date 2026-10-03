@@ -289,6 +289,11 @@ impl<'de> Visitor<'de> for SkinIdVisitor {
 }
 
 impl SkinDocument {
+    /// DETAIL OPTIONS is opt-in; absent/unknown versions keep the legacy E2 UI.
+    pub fn uses_detail_options(&self) -> bool {
+        self.skin_type == 5 && self.bmz_detail_options == 1
+    }
+
     pub fn load_beatoraja_json(path: &Path) -> Result<Self> {
         let raw = load_json_value(path)?;
         let options = default_enabled_options(&raw);

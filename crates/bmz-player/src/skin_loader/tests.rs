@@ -58,6 +58,8 @@ mod document;
 mod lr2;
 #[path = "tests/lua.rs"]
 mod lua;
+#[path = "tests/mz_detail_options.rs"]
+mod mz_detail_options;
 #[path = "tests/paths.rs"]
 mod paths;
 #[path = "tests/pm_chara.rs"]

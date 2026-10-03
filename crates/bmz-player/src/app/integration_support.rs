@@ -161,6 +161,19 @@ pub(super) fn target_cycle_from_control(
     }
 }
 
+pub(super) fn legacy_assist_event_for_lane(lane: Lane) -> Option<i32> {
+    match lane {
+        Lane::Key1 => Some(301),
+        Lane::Key2 => Some(302),
+        Lane::Key3 => Some(303),
+        Lane::Key4 => Some(304),
+        Lane::Key5 => Some(305),
+        Lane::Key6 => Some(306),
+        Lane::Key7 => Some(307),
+        _ => None,
+    }
+}
+
 pub(super) fn select_option_lane_for_gamepad(
     input: &ProfileInputConfig,
     slots: crate::input::gamepad::GamepadSlotMap,

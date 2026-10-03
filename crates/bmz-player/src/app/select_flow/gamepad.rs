@@ -707,7 +707,10 @@ impl WinitApp {
             }
             let option_changed = match self.select.select_option_panel {
                 1 => self.apply_gamepad_play_option_control(device, button),
-                2 => false,
+                2 => {
+                    self.apply_gamepad_legacy_assist_control(device, button);
+                    return;
+                }
                 3 => self.apply_detail_option_control(button),
                 _ => false,
             };

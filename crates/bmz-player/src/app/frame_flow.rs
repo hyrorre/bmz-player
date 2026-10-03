@@ -1064,7 +1064,7 @@ impl WinitApp {
                 self.play.pending_play_start.as_ref().map(|pending| pending.play_config_key_mode)
             })
             .or_else(|| {
-                if self.select.select_option_panel == 2 {
+                if self.select.select_option_panel == 2 && self.detail_options_enabled() {
                     Some(self.detail_options_mode())
                 } else {
                     self.selected_play_mode()

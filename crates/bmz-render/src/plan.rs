@@ -408,7 +408,6 @@ fn push_select_banner_image(commands: &mut Vec<DrawCommand>) {
 }
 
 mod decide;
-mod detail_options;
 mod play;
 #[path = "plan/play_helpers/format.rs"]
 mod play_helper_format;
@@ -420,7 +419,6 @@ mod play_helper_overlay;
 mod play_helper_skin;
 mod result;
 mod select;
-pub(crate) use detail_options::detail_options_click_hit;
 
 use decide::*;
 use play::*;
