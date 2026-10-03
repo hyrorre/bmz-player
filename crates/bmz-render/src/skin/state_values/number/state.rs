@@ -38,6 +38,9 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
         }
     }
     match ref_id {
+        SKIN_REF_BMZ_LR2_2P_BASE..=SKIN_REF_BMZ_LR2_2P_LAST => {
+            Some(lr2_opponent_number(ref_id, state))
+        }
         SKIN_REF_BMZ_BEST_SCORE_ARRANGE_1P..=SKIN_REF_BMZ_BEST_SCORE_DOUBLE_OPTION => {
             Some(best_score_option_index(ref_id, state))
         }
@@ -450,5 +453,58 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
             skin_random_lane_ref_number(ref_id, state)
         }
         _ => None,
+    }
+}
+
+fn lr2_opponent_number(ref_id: i32, state: &SkinDrawState) -> i64 {
+    let empty = crate::snapshot::OpponentRenderSnapshot::default();
+    let opponent = state.lr2_opponent.as_ref().unwrap_or(&empty);
+    let ex = i64::from(opponent.ex_score);
+    let total = i64::from(opponent.total_notes) * 2;
+    let current = i64::from(opponent.past_notes) * 2;
+    let current_rate = if current > 0 { ex * 10_000 / current } else { 0 };
+    let final_rate = if total > 0 { ex * 10_000 / total } else { 0 };
+    let counts = opponent.judge_counts;
+    match ref_id - SKIN_REF_BMZ_LR2_2P_BASE + 120 {
+        120 => {
+            let points = if opponent.total_notes > 0 {
+                (i64::from(counts.pgreat) * 4
+                    + i64::from(counts.great) * 2
+                    + i64::from(counts.good))
+                    * 50_000
+                    / i64::from(opponent.total_notes)
+            } else {
+                0
+            };
+            if matches!(state.key_mode, KeyMode::K7 | KeyMode::K14) {
+                points
+            } else {
+                points / 20 * 10
+            }
+        }
+        121 => ex,
+        122 => current_rate / 100,
+        123 => current_rate % 100,
+        124 => i64::from(opponent.combo),
+        125 => i64::from(opponent.max_combo),
+        126 => i64::from(opponent.total_notes),
+        127 => (opponent.gauge as i64 / 2) * 2,
+        128 => ex - i64::from(state.ex_score),
+        129 => {
+            if total == 0 || ex == total {
+                0
+            } else {
+                let rank = (ex * 9 / total).clamp(1, 8);
+                ex - total * (rank + 1) / 9
+            }
+        }
+        130 => i64::from(counts.pgreat),
+        131 => i64::from(counts.great),
+        132 => i64::from(counts.good),
+        133 => i64::from(counts.bad),
+        134 => i64::from(counts.poor) + i64::from(counts.empty_poor),
+        135 => final_rate / 100,
+        136 => final_rate % 100,
+        _ => 0,
     }
 }

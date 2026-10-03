@@ -43,3 +43,12 @@ SRC時計はDST開始時刻を考慮し、LNの非押下画像は先頭フレー
 検証: workspace check / all-targets Clippyを通過。workspace testで従来のAUTO画像共用を
 期待するテストが失敗したため分離後の格納先へ修正し、bmz-skin / bmz-renderを再実行して通過。
 その他のworkspaceテスト（appのAUTOレーンsnapshotテストを含む）は通過。fmtも通過。
+
+## 2P数値
+
+LR2 play ref=120..136を内部ref=19220..19236へ変換する（127は従来の変換を維持）。
+OpponentRenderSnapshotを描画状態へ保持し、実コンボ・判定数・EX・現在率・最終率・
+スコア差・次ランク差を算出する。LR2_skinobject.cppの各refとScene04_Play.cppの配点を参照。
+120は確定値のみ対応し、参照実装のscore_printの時間補間は含めない。
+検証: workspaceのcheck / all-targets Clippy / test、fmtを通過。
+実機での対戦表示確認は未実施。

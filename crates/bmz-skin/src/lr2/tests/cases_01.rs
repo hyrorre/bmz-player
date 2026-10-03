@@ -440,7 +440,7 @@ fn lr2_play_bridges_keep_battle_values_and_gauge_display_separate() {
             [
                 SKIN_REF_BMZ_LR2_HISPEED,
                 SKIN_REF_BMZ_LR2_HISPEED,
-                if skin_type >= 12 { 271 } else { 121 },
+                SKIN_REF_BMZ_LR2_2P_BASE + 1,
                 SKIN_REF_BMZ_LR2_GAUGE_2P,
             ]
         };

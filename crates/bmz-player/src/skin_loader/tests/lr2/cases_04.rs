@@ -73,13 +73,17 @@ fn wmii_lr2_battle_renders_live_gauges_hispeed_and_opponent_score_when_available
         opponent_gauge_type: Some(1),
         opponent_gauge: Some(38.0),
         rival_ex_score: Some(789),
+        lr2_opponent: Some(bmz_render::snapshot::OpponentRenderSnapshot {
+            ex_score: 789,
+            ..Default::default()
+        }),
         target_ex_score: None,
         ..Default::default()
     };
     for (ref_id, expected_digits, expected_objects) in [
         (SKIN_REF_BMZ_LR2_HISPEED, 3, 2),
         (SKIN_REF_BMZ_LR2_GAUGE_2P, 2, 1),
-        (271, 4, 1), // EX SCORE uses an eleven-cell font with blank padding.
+        (bmz_render::skin::SKIN_REF_BMZ_LR2_2P_BASE + 1, 4, 1), // EX SCORE uses an eleven-cell font with blank padding.
     ] {
         let values = decoded
             .document

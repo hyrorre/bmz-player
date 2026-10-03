@@ -105,6 +105,11 @@ OpenLR2の `SetDSTdrawByTime` に合わせて時刻を評価する。JSON/Luaの
 
 ## LR2のPlay描画
 
+LR2 Playのnumber ref=120..136は2Pの実プレイ状態へ接続する（127は既存のゲージ変換）。
+内部ref=19220..19236を予約し、beatorajaのtarget関連refと分離する。
+122/123は判定済みノート基準の率、135/136は全ノート基準の率、128は2P EX−1P EX。
+120はLR2判定配点からのスコア確定値を表示する（LR2の数値カウントアップ補間は含まない）。
+
 LR2の`SRC_AUTO_*`は`note.lr2Auto`へ分離し、部分AUTO入力の対象レーンだけに使う。
 全体AUTOPLAYとG-BATTLEの表示専用側は通常画像を使う。AUTO画像がない箇所は通常画像へ戻る。
 `DST_NOTE`は`note.lr2Dst`に全行を保持し、時計・条件・座標・大きさを毎フレーム評価する。

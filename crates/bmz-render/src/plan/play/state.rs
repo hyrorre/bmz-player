@@ -72,6 +72,7 @@ pub(in crate::plan) fn build_play_skin_state(
         gauge_type: snapshot.gauge_type,
         opponent_gauge: snapshot.opponent.as_ref().map(|opponent| opponent.gauge),
         opponent_gauge_type: snapshot.opponent.as_ref().map(|opponent| opponent.gauge_type),
+        lr2_opponent: snapshot.opponent.clone(),
         gauge_auto_shift: snapshot.gauge_auto_shift,
         gauge_max: snapshot.gauge_max,
         gauge_border: snapshot.gauge_border,
