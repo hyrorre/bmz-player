@@ -15,6 +15,7 @@ BMZ固有のIDや詳細な動作契約は [skin.md](skin.md)、互換修正の�
 | JSON / Lua / LR2読込 | JSON、`.luaskin` / `.lua`、LR2 CSV skinを読み込む。[decode API](../crates/bmz-skin/src/lib.rs)、[app側decode](../crates/bmz-player/src/skin_loader/decode/document.rs)。LR2全命令の完全互換を意味しない |
 | LR2の基準解像度 | `#RESOLUTION` 省略時は640×480。プリセットと幅・高さの明示指定も対応。[仕様](skin.md#lr2の基準解像度)、[回帰テスト](../crates/bmz-skin/src/lr2/tests/cases_01.rs) |
 | LR2のDST時刻 | 単一時刻の表示保持、終端を過ぎてからのloop、開始前と負loopの非表示をOpenLR2に合わせる。[仕様](skin.md#lr2のdst時刻)、[回帰テスト](../crates/bmz-render/src/skin/tests/core/cases_05.rs) |
+| 旧DXA内のfont / image | 形式v1〜4の直接読込、既定キー・LZ圧縮に対応。KCOOLの3種類の専用フォントを実アーカイブでdecode検証。[仕様と制約](skin.md#lr2のdxaアセット)、[読込](../crates/bmz-skin-assets/src/lib.rs) |
 | JSON document | numeric/string IDの正規化、include、property条件等。[schema / loader](../crates/bmz-skin-document/src/lib.rs) |
 | 基本描画 | source、image/imageset、value/text、note/gauge/judge、slider、hiddenCover、destinationのtimer/op/draw、keyframe、UV animation等。[描画評価](../crates/bmz-render/src/skin/document_render/) |
 | BGAの色・透明度 | destinationのRGBAをBase / Layer / Layer2 / POORのtintと乗算する。Ambientにも合成前に適用。[core/resolve](../crates/bmz-render/src/skin/document_render/core/resolve.rs)、[回帰テスト](../crates/bmz-render/src/skin/tests/play/ambient.rs) |
@@ -53,6 +54,7 @@ timerの単位・OFF値・書き込み制約・失敗時の値は [skin.md](skin
 
 | 項目 | 残っている範囲 |
 |---|---|
+| DXA | v5以降、独自キー、アーカイブ内wildcard列挙、動画・音声・Lua/CSV includeは未対応 |
 | 任意のdestination timer function | custom timerのruntime対応とは別。destinationへ直接渡す任意functionの汎用runtime評価は未対応 |
 | `act` / `customEvents` | 一部functionのロード時推論はあるが、任意のaction / conditionを永続VMで実行する汎用イベントruntimeは未対応 |
 | その他のLua function field | 汎用float writer等は上記callbackの対象外。対応追加時はfieldと呼び出し契約を個別に定義する |

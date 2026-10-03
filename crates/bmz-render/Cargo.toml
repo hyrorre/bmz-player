@@ -23,6 +23,7 @@ libc.workspace = true
 bmz-core = { path = "../bmz-core" }
 bmz-chart = { path = "../bmz-chart" }
 bmz-skin-document = { path = "../bmz-skin-document" }
+bmz-skin-assets = { path = "../bmz-skin-assets" }
 bmz-gameplay = { path = "../bmz-gameplay" }
 bmz-font = { path = "../bmz-font" }
 

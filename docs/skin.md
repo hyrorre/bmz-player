@@ -103,6 +103,31 @@ OpenLR2の `SetDSTdrawByTime` に合わせて時刻を評価する。JSON/Luaの
 例えば `time=1000, loop=0` のDSTが1つだけなら、1000ms以降の表示を保持する。
 タイマーがOFFなら通常どおり非表示。ループ・タイマー等のdestination属性は最初のDST行から取得する。
 
+## LR2のDXAアセット
+
+旧DXArchiveのファイル形式バージョン1〜4を直接読み込む。KCOOL 1.72の
+`barfont.dxa` / `SystemFont.dxa` / `title.dxa` はバージョン3。
+例えば `Font/barfont/font.lr2font` を `Font/barfont.dxa` 内の `font.lr2font` として解決する。
+CSVやアーカイブを書き換えず、展開フォルダーも作成しない。
+
+- フォント定義（`.lr2font` / `.fnt`）と参照画像、スキンの静止画像を対象とする。
+  ベクターフォントも既存の対応拡張子で読み込める。動画・音声・LuaモジュールやCSV includeの
+  アーカイブ内読込、アーカイブ内wildcard列挙は対象外。
+- 通常ファイルを優先し、存在しない場合に同名フォルダーの `.dxa` を探索する。
+  ASCIIの大文字小文字を区別せず、旧形式のShift_JISファイル名に対応する。
+  v4のコードページは932 / 65001に対応する。
+- v1/v2の反転、v3/v4の既定キー、LZ圧縮に対応する。独自キー付きアーカイブとv5以降は未対応。
+  形式バージョンはDxaEncode.exeの製品バージョンとは異なる。
+- font/sourceキャッシュは仮想ファイル名を区別し、背後の `.dxa` の更新日時・サイズを追跡する。
+  フォントの参照画像もキャッシュ依存に含める。
+- Luaの既存 `SkinPathContext` 制約を維持し、アーカイブ実体の正規化パスが許可root外なら拒否する。
+  フォントの参照画像にも同じroot制約を適用する。JSON/CSVの従来のパス解決方針は維持する。
+- 索引16MiB、1ファイルの格納・展開サイズ256MiB、10万entry、ディレクトリ深さ64に制限する。
+  不正なoffset・循環参照・展開範囲外のLZ参照をエラーにする。
+
+読込はOS固有ライブラリに依存しない `bmz-skin-assets` で行い、画像decodeとGPU uploadは
+既存のrenderer / app側経路を使う。
+
 ## LR2 Play 表示参照
 
 LR2 play skin の `SRC_BUTTON 40/41` は、1P/2P の実際に有効なゲージ種類を

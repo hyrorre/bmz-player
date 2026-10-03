@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::Read;
+use std::io::{Cursor, Read};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -54,8 +54,23 @@ pub fn load_chart_bga_image(path: &Path) -> Result<RgbaImageAsset> {
 }
 
 fn load_image_rgba(path: &Path) -> Result<RgbaImageAsset> {
+    if !path.is_file() {
+        let bytes = bmz_skin_assets::read(path)?;
+        // TGA has no reliable magic. Keep the extension hint, as ImageReader::open does.
+        let reader =
+            ImageReader::with_format(Cursor::new(bytes), image::ImageFormat::from_path(path)?);
+        return decode_image_rgba(reader, path);
+    }
     let reader = ImageReader::open(path)
-        .with_context(|| format!("failed to open image: {}", path.display()))?
+        .with_context(|| format!("failed to open image: {}", path.display()))?;
+    decode_image_rgba(reader, path)
+}
+
+fn decode_image_rgba(
+    reader: ImageReader<impl std::io::BufRead + std::io::Seek>,
+    path: &Path,
+) -> Result<RgbaImageAsset> {
+    let reader = reader
         .with_guessed_format()
         .with_context(|| format!("failed to guess image format: {}", path.display()))?;
     let image =
@@ -74,8 +89,14 @@ fn load_image_rgba(path: &Path) -> Result<RgbaImageAsset> {
 /// Pixmap の生 pixel buffer を順に格納する。beatoraja は画像キャッシュだけでなく
 /// スキン配布物の source としてもこの形式を読み込む。
 fn load_cim_rgba(path: &Path) -> Result<RgbaImageAsset> {
-    let file = File::open(path)
-        .with_context(|| format!("failed to open CIM image: {}", path.display()))?;
+    let file: Box<dyn Read> = if path.is_file() {
+        Box::new(
+            File::open(path)
+                .with_context(|| format!("failed to open CIM image: {}", path.display()))?,
+        )
+    } else {
+        Box::new(Cursor::new(bmz_skin_assets::read(path)?))
+    };
     let mut decoder = ZlibDecoder::new(file);
     let mut header = [0_u8; CIM_HEADER_LEN];
     decoder

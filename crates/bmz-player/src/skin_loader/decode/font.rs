@@ -4,7 +4,7 @@ pub(in crate::skin_loader) fn decode_font(path: &Path) -> Result<DecodedFontData
     if is_bitmap_font_path(path) {
         Ok(DecodedFontData::Bitmap(load_bitmap_font(path)?))
     } else {
-        let bytes = std::fs::read(path)
+        let bytes = bmz_skin_assets::read(path)
             .with_context(|| format!("failed to read font: {}", path.display()))?;
         Ok(DecodedFontData::Vector(bytes))
     }
@@ -42,15 +42,17 @@ pub(in crate::skin_loader) fn decode_font_with_cache_key(
 }
 
 pub(in crate::skin_loader) fn skin_font_cache_key(path: &Path) -> Option<SkinFontCacheKey> {
-    let metadata = fs::metadata(path).ok()?;
-    let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let asset = bmz_skin_assets::SkinAsset::resolve(path).ok()?;
+    let metadata = fs::metadata(asset.backing_path()).ok()?;
+    let path = asset.logical_path().to_path_buf();
     let is_bitmap = is_bitmap_font_path(&path);
     let mut pages = Vec::new();
     if is_bitmap {
         for page in bmz_render::bitmap_font::bitmap_font_page_paths(&path).ok()? {
-            let metadata = fs::metadata(&page).ok()?;
+            let asset = bmz_skin_assets::SkinAsset::resolve(&page).ok()?;
+            let metadata = fs::metadata(asset.backing_path()).ok()?;
             pages.push((
-                fs::canonicalize(&page).unwrap_or(page),
+                asset.logical_path().to_path_buf(),
                 metadata.modified().ok(),
                 metadata.len(),
             ));

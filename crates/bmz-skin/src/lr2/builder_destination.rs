@@ -269,11 +269,11 @@ impl<'a> CsvBuilder<'a> {
     }
 
     pub(super) fn relative_font_path_for_skin_file(&self, path: &str) -> String {
-        if self.skin_file_dir.join(path).is_file() {
+        if bmz_skin_assets::is_file(&self.skin_file_dir.join(path)) {
             return path.to_string();
         }
         let parent_relative = format!("../{path}");
-        if self.skin_file_dir.join(&parent_relative).is_file() {
+        if bmz_skin_assets::is_file(&self.skin_file_dir.join(&parent_relative)) {
             return parent_relative;
         }
         path.to_string()

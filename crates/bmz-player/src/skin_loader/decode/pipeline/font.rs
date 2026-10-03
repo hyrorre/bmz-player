@@ -42,6 +42,13 @@ pub(super) fn decode_skin_fonts(
                 );
                 return None;
             }
+            if is_bitmap_font_path(&font_path)
+                && let Some(context) = path_context
+                && let Err(error) = validate_bitmap_font_pages(context, &font_path)
+            {
+                tracing::warn!(path = %font_path.display(), %error, "invalid skin bitmap font pages");
+                return None;
+            }
             Some((format!("{font_namespace}:{}", font.id), font_path))
         })
         .collect();
@@ -77,6 +84,13 @@ pub(super) fn decode_skin_fonts(
         outcome.fonts.push(font);
     }
     outcome
+}
+
+fn validate_bitmap_font_pages(context: &SkinPathContext, path: &Path) -> Result<()> {
+    for page in bmz_render::bitmap_font::bitmap_font_page_paths(path)? {
+        context.resolve_asset(&page.to_string_lossy())?;
+    }
+    Ok(())
 }
 
 fn decode_skin_font(

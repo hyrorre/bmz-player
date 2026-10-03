@@ -71,6 +71,7 @@ bmz-audio = { path = "../bmz-audio" }
 bmz-gameplay = { path = "../bmz-gameplay" }
 bmz-render = { path = "../bmz-render" }
 bmz-skin = { path = "../bmz-skin" }
+bmz-skin-assets = { path = "../bmz-skin-assets" }
 bmz-video = { path = "../bmz-video" }
 bmz-updater = { path = "../bmz-updater" }
 semver = "1"

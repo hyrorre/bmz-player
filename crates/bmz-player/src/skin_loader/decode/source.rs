@@ -63,8 +63,9 @@ pub(in crate::skin_loader) fn skin_source_asset_cache_key(
     path: &Path,
     is_video: bool,
 ) -> Option<SkinSourceAssetCacheKey> {
-    let metadata = fs::metadata(path).ok()?;
-    let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let asset = bmz_skin_assets::SkinAsset::resolve(path).ok()?;
+    let metadata = fs::metadata(asset.backing_path()).ok()?;
+    let path = asset.logical_path().to_path_buf();
     Some(SkinSourceAssetCacheKey {
         path,
         modified: metadata.modified().ok(),
