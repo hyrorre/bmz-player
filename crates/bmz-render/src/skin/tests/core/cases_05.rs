@@ -1,6 +1,110 @@
 use super::*;
 
 #[test]
+fn lr2_single_timestamp_starts_then_holds_including_judge_destinations() {
+    for time in [0, 30, 1000] {
+        for loop_time in [-1, 0, time, time + 1] {
+            // Multiple frames at one timestamp must select the last one too.
+            for frames in [
+                serde_json::json!([{"time": time, "x": 20}]),
+                serde_json::json!([{"time": time, "x": 10}, {"time": time, "x": 20}]),
+            ] {
+                let destination: SkinDestinationDef = serde_json::from_value(serde_json::json!({
+                    "lr2Timing": true, "loop": loop_time, "dst": frames
+                }))
+                .unwrap();
+                for elapsed in [time - 1, time, time + 1, time + 10000] {
+                    let expected =
+                        (elapsed >= time && (loop_time >= 0 || elapsed == time)).then_some(20);
+                    for actual in [
+                        resolve_destination_frame(
+                            &destination,
+                            elapsed,
+                            &[],
+                            &SkinDrawState::default(),
+                        ),
+                        resolve_destination_frame_until_end(
+                            &destination,
+                            elapsed,
+                            &[],
+                            &SkinDrawState::default(),
+                        ),
+                    ] {
+                        assert_eq!(
+                            actual.map(|frame| frame.x),
+                            expected,
+                            "time={time}, loop={loop_time}, elapsed={elapsed}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn lr2_loop_boundaries_and_activation_match_openlr2() {
+    for (loop_time, elapsed, expected) in [
+        (0, 99, None),
+        (0, 100, Some(100)),
+        (0, 999, Some(999)),
+        (0, 1000, Some(1000)),
+        (0, 1001, Some(100)),
+        (0, 1100, Some(100)),
+        (500, 1000, Some(1000)),
+        (500, 1001, Some(501)),
+        (500, 1500, Some(500)),
+        (1000, 500, Some(500)),
+        (1000, 1001, Some(1000)),
+        (1001, 99, None),
+        (1001, 100, Some(100)),
+        (1001, 1000, Some(100)),
+        (-1, 99, None),
+        (-1, 1000, Some(1000)),
+        (-1, 1001, None),
+    ] {
+        let destination: SkinDestinationDef = serde_json::from_value(serde_json::json!({
+            "lr2Timing": true, "loop": loop_time, "dst": [
+                {"time": 100, "x": 100}, {"time": 1000, "x": 1000}
+            ]
+        }))
+        .unwrap();
+        let frame =
+            resolve_destination_frame(&destination, elapsed, &[], &SkinDrawState::default());
+        assert_eq!(frame.map(|frame| frame.x), expected, "loop={loop_time}, elapsed={elapsed}");
+    }
+}
+
+#[test]
+fn lr2_loop_uses_active_conditional_frames_and_rejects_reversed_range() {
+    let destination: SkinDestinationDef = serde_json::from_value(serde_json::json!({
+        "lr2Timing": true, "dst": [
+            {"if": [1], "value": {"time": 30, "x": 10}},
+            {"if": [2], "value": {"time": 1000, "x": 20}}
+        ]
+    }))
+    .unwrap();
+    for (ops, elapsed, expected) in [
+        (&[][..], 1000, None),
+        (&[1], 30, Some(10)),
+        (&[2], 999, None),
+        (&[2], 1000, Some(20)),
+        (&[1, 2], 1000, Some(20)),
+    ] {
+        assert_eq!(
+            resolve_destination_frame(&destination, elapsed, ops, &SkinDrawState::default())
+                .map(|frame| frame.x),
+            expected
+        );
+    }
+    let reversed: SkinDestinationDef = serde_json::from_value(serde_json::json!({
+        "lr2Timing": true, "dst": [{"time": 1000}, {"time": 30}]
+    }))
+    .unwrap();
+    assert!(resolve_destination_frame(&reversed, 1000, &[], &SkinDrawState::default()).is_none());
+}
+
+#[test]
 fn negative_loop_destination_disappears_after_end() {
     // loop:-1 の destination はアニメーション終端を過ぎると描画されない（READY/ボム）。
     let destination: SkinDestinationDef = serde_json::from_str(

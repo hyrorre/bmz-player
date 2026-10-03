@@ -154,6 +154,7 @@ fn grade_diff_destinations_use_the_fixed_next_rank_in_select_and_result() {
             timer: None,
             timer_expr: String::new(),
             loop_time: None,
+            lr2_timing: false,
             center: 0,
             offset: 0,
             offsets: Vec::new(),

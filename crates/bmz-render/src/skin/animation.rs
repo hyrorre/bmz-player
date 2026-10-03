@@ -71,6 +71,8 @@ pub(super) fn destination_animation_frames<'a>(
 }
 
 struct DestinationAnimationMetadata {
+    first_time: Option<i32>,
+    last_time: i32,
     cycle: Option<i32>,
     acc: i32,
     fixed_color: bool,
@@ -78,11 +80,14 @@ struct DestinationAnimationMetadata {
 
 impl DestinationAnimationMetadata {
     fn from_frames<'a>(frames: impl Iterator<Item = &'a SkinAnimationDef>) -> Self {
-        let mut result = Self { cycle: None, acc: 0, fixed_color: true };
+        let mut result =
+            Self { first_time: None, last_time: 0, cycle: None, acc: 0, fixed_color: true };
         let defaults = ResolvedSkinFrame::default();
         let mut color = (defaults.r, defaults.g, defaults.b, defaults.a);
         let mut previous = None;
         for frame in frames {
+            result.last_time = frame.time.unwrap_or(result.last_time);
+            result.first_time.get_or_insert(result.last_time);
             if let Some(time) = frame.time {
                 result.cycle = Some(result.cycle.map_or(time, |cycle| cycle.max(time)));
             }
@@ -526,16 +531,20 @@ pub(super) fn resolve_destination_frame(
     // `cycle` はアニメーション終端（最後のキーフレーム時刻）。
     let cycle = metadata.cycle.unwrap_or(0);
     let loop_point = destination.loop_time.unwrap_or(0);
-    let elapsed_ms = match loop_point {
-        // loop:負値 → ループせず、終端を過ぎたら描画しない（READY やボム等の単発演出）。
-        loop_point if loop_point < 0 => {
-            if elapsed_ms > cycle {
-                return None;
+    let elapsed_ms = if destination.lr2_timing {
+        resolve_lr2_loop_elapsed(loop_point, elapsed_ms, metadata.first_time?, metadata.last_time)?
+    } else {
+        match loop_point {
+            // loop:負値 → ループせず、終端を過ぎたら描画しない（READY やボム等の単発演出）。
+            loop_point if loop_point < 0 => {
+                if elapsed_ms > cycle {
+                    return None;
+                }
+                elapsed_ms
             }
-            elapsed_ms
+            // loop未指定または0以上 → 終端到達後 loop_point 時刻へループバック。
+            loop_point => resolve_loop_elapsed(loop_point, elapsed_ms, cycle),
         }
-        // loop未指定または0以上 → 終端到達後 loop_point 時刻へループバック。
-        loop_point => resolve_loop_elapsed(loop_point, elapsed_ms, cycle),
     };
     let has_frames = animations.clone().next().is_some();
     let mut frame = ResolvedSkinFrame::default();
@@ -548,6 +557,11 @@ pub(super) fn resolve_destination_frame(
         }
         // previous=None は最初のキーフレーム時刻より前 → destination はまだ表示開始
         // していない。beatoraja 同様、開始時刻前のオブジェクトは描画しない。
+        if previous.is_none() && destination.lr2_timing {
+            // LR2 checks activation before looping. A loop-back before the
+            // first frame clamps to that frame instead of hiding the object.
+            return Some(frame);
+        }
         return previous.map(|previous| {
             let mut interpolated =
                 interpolate_skin_frame(previous, frame, elapsed_ms, metadata.acc);
@@ -566,14 +580,18 @@ pub(super) fn resolve_single_destination_frame(
 ) -> Option<ResolvedSkinFrame> {
     let cycle = animation.time.unwrap_or(0);
     let loop_point = destination.loop_time.unwrap_or(0);
-    let elapsed_ms = match loop_point {
-        loop_point if loop_point < 0 => {
-            if elapsed_ms > cycle {
-                return None;
+    let elapsed_ms = if destination.lr2_timing {
+        resolve_lr2_loop_elapsed(loop_point, elapsed_ms, cycle, cycle)?
+    } else {
+        match loop_point {
+            loop_point if loop_point < 0 => {
+                if elapsed_ms > cycle {
+                    return None;
+                }
+                elapsed_ms
             }
-            elapsed_ms
+            loop_point => resolve_loop_elapsed(loop_point, elapsed_ms, cycle),
         }
-        loop_point => resolve_loop_elapsed(loop_point, elapsed_ms, cycle),
     };
     let mut frame = ResolvedSkinFrame::default();
     apply_skin_animation(&mut frame, &animation, state);
@@ -606,7 +624,8 @@ pub(super) fn resolve_destination_frame_until_end(
     enabled_options: &[i32],
     state: &SkinDrawState,
 ) -> Option<ResolvedSkinFrame> {
-    if matches!(destination.loop_time, Some(loop_point) if loop_point > 0) {
+    if destination.lr2_timing || matches!(destination.loop_time, Some(loop_point) if loop_point > 0)
+    {
         return resolve_destination_frame(destination, elapsed_ms, enabled_options, state);
     }
     let last_time = destination_animation_frames(&destination.dst, enabled_options)
@@ -632,6 +651,27 @@ pub(super) fn resolve_loop_elapsed(loop_point: i32, elapsed_ms: i32, cycle: i32)
     } else {
         elapsed_ms
     }
+}
+
+/// OpenLR2 `SetDSTdrawByTime`: gate using the original clock, then map it.
+/// A single timestamp holds after activation; the terminal timestamp is shown
+/// before wrapping. Use wide arithmetic for the full signed skin time range.
+fn resolve_lr2_loop_elapsed(loop_point: i32, elapsed: i32, start: i32, end: i32) -> Option<i32> {
+    if start > end || elapsed < start || (loop_point < 0 && elapsed > end) {
+        return None;
+    }
+    Some(if start == end || loop_point == end {
+        elapsed.min(end)
+    } else if loop_point < end {
+        if elapsed > end {
+            let loop_point = i64::from(loop_point);
+            ((i64::from(elapsed) - loop_point) % (i64::from(end) - loop_point) + loop_point) as i32
+        } else {
+            elapsed
+        }
+    } else {
+        0
+    })
 }
 
 pub(super) fn interpolate_skin_frame(

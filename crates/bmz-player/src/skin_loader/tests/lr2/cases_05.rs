@@ -1,6 +1,47 @@
 use super::*;
 
 #[test]
+fn lr2_delayed_single_frame_survives_decode_and_render() {
+    let root = unique_test_dir("bmz-lr2-delayed-destination");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("play.lr2skin");
+    std::fs::write(
+        &path,
+        "#INFORMATION,0,Delayed LR2,Test\n\
+        #SRC_IMAGE,0,111,0,0,1,1,1,1,0,0\n\
+        #DST_IMAGE,0,30,44,422,272,10,0,255,255,255,255,1,0,0,0,0,0,0,0,0\n",
+    )
+    .unwrap();
+    let decoded = decode_beatoraja_skin(&path, SkinKind::Play).unwrap();
+    let sources = decoded
+        .sources
+        .iter()
+        .map(|source| {
+            (
+                source.source_id.clone(),
+                SkinDocumentTexture {
+                    source_id: source.source_id.clone(),
+                    texture: source.texture,
+                    source_size: SkinImageSize {
+                        width: source.size.width,
+                        height: source.size.height,
+                    },
+                },
+            )
+        })
+        .collect();
+    for elapsed in [29, 30, 31, 1000] {
+        let items = decoded.document.static_render_items(
+            &sources,
+            &bmz_render::skin::SkinDrawState { elapsed_ms: elapsed, ..Default::default() },
+            &bmz_render::skin::SkinTextState::default(),
+        );
+        assert_eq!(items.len(), usize::from(elapsed >= 30), "elapsed={elapsed}");
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn lr2skin_decodes_native_lr2_bitmap_font() {
     let root = unique_test_dir("bmz-native-lr2-font");
     std::fs::create_dir_all(&root).unwrap();

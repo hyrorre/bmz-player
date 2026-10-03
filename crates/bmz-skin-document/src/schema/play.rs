@@ -204,10 +204,13 @@ pub struct SkinDestinationDef {
     /// BMZ限定のruntime timer式。PeacefulPlay key loggerの反復event timerに使う。
     #[serde(default)]
     pub timer_expr: String,
-    /// `loop` フィールド。未指定(None)はLR2互換評価で0時刻へループバックする。
+    /// `loop` フィールド。未指定(None)は0時刻へループバックする。
     /// `Some(n>=0)`＝終端到達後 n 時刻へループバック。`Some(n<0)`＝終端後に非表示。
     #[serde(default, rename = "loop")]
     pub loop_time: Option<i32>,
+    /// LR2 CSV decoder marker: retain LR2 start/end and loop boundary semantics.
+    #[serde(default, rename = "lr2Timing")]
+    pub lr2_timing: bool,
     #[serde(default)]
     pub center: i32,
     #[serde(default)]

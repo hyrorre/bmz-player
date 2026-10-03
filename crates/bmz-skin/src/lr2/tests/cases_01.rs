@@ -1,6 +1,28 @@
 use super::*;
 
 #[test]
+fn lr2_destination_builders_preserve_timing_mode_and_first_row_loop() {
+    let mut values = [0; 22];
+    values[2] = 1000;
+    let normal = destination_def_with_default_offsets("line", &values, 480, &[], &[]);
+    let gauge = gauge_destination_def("gauge", &values, 480, 6, 0, &[]);
+    let combo = judge_combo_destination_def("combo", &values, &[], &[]);
+    for mut destination in [normal, gauge, combo] {
+        assert_eq!(destination["lr2Timing"], true);
+        assert_eq!(destination["loop"], 0);
+        let mut next = destination.clone();
+        next["loop"] = json!(-1);
+        next["dst"][0]["time"] = json!(2000);
+        assert!(merge_destination_entry(&mut destination, next));
+        assert_eq!(destination["loop"], 0);
+        assert_eq!(destination["dst"].as_array().unwrap().len(), 2);
+        let decoded: bmz_skin_document::SkinDestinationDef =
+            serde_json::from_value(destination).unwrap();
+        assert!(decoded.lr2_timing);
+    }
+}
+
+#[test]
 fn lr2_resolution_accepts_presets_and_explicit_dimensions() {
     for (source, expected, has_explicit_dimensions) in [
         ("#RESOLUTION,0", (640, 480), false),
