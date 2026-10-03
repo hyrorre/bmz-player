@@ -57,8 +57,9 @@ macro_rules! skin_document_render_play_lane_methods {
                 let (rect, uv) = stretch_skin_image_geometry(
                     destination.stretch,
                     normalize_skin_frame_rect(frame, self.w, self.h),
-                    skin_image_texture_region_for_state(
+                    skin_image_texture_region_for_destination(
                         image,
+                        destination,
                         source.source_size,
                         state,
                         pixel_rect,

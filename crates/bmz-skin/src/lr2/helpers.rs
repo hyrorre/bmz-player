@@ -129,6 +129,7 @@ pub(super) fn gauge_destination_def(
 
 pub(super) fn gauge_destination_frame(values: &[i32; 22], canvas_h: i32) -> JsonValue {
     json!({
+        "lr2Style": { "blend": values[12], "filter": values[13], "center": values[15] },
         "time": values[2],
         "x": values[3],
         "y": canvas_h - (values[4] + values[6]),
@@ -162,6 +163,7 @@ pub(super) fn judge_combo_destination_def(
         "offset": values[21],
         "op": op,
         "dst": [{
+            "lr2Style": { "blend": values[12], "filter": values[13], "center": values[15] },
             "time": values[2],
             "x": values[3],
             "y": -values[4],
@@ -331,6 +333,7 @@ pub(super) fn destination_frame(values: &[i32; 22], canvas_h: i32) -> JsonValue 
         "time": values[2],
         "x": x,
         "y": canvas_h - (y + h),
+        "lr2Style": { "blend": values[12], "filter": values[13], "center": values[15] },
         "w": w,
         "h": h,
         "acc": values[7],

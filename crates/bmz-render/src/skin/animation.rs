@@ -461,6 +461,9 @@ pub(super) fn skin_image_item_for_frame(
     source_size: Option<SkinImageSize>,
     linear_filter: bool,
 ) -> SkinRenderItem {
+    let blend = frame.blend(blend);
+    let linear_filter = frame.linear_filter(linear_filter);
+    let center = frame.center(center);
     // beatoraja forwards signed destination sizes to SpriteBatch. BMZ keeps
     // rectangles normalized for hit testing and clipping, so preserve the sign
     // as a reversed UV extent instead. This reproduces `w = -101`/`h < 0`
@@ -563,8 +566,11 @@ pub(super) fn resolve_destination_frame(
             return Some(frame);
         }
         return previous.map(|previous| {
-            let mut interpolated =
-                interpolate_skin_frame(previous, frame, elapsed_ms, metadata.acc);
+            let mut interpolated = if destination.lr2_timing {
+                interpolate_lr2_frame(previous, frame, elapsed_ms)
+            } else {
+                interpolate_skin_frame(previous, frame, elapsed_ms, metadata.acc)
+            };
             interpolated.apply_offset_alpha = metadata.fixed_color || elapsed_ms == previous.time;
             interpolated
         });
@@ -688,7 +694,36 @@ pub(super) fn interpolate_skin_frame(
         ((elapsed_ms - start.time) as f32 / duration as f32).clamp(0.0, 1.0),
         acc,
     );
+    interpolate_skin_frame_at_rate(start, end, elapsed_ms, t)
+}
+
+fn interpolate_lr2_frame(
+    start: ResolvedSkinFrame,
+    end: ResolvedSkinFrame,
+    elapsed_ms: i32,
+) -> ResolvedSkinFrame {
+    let span = i64::from(end.time) - i64::from(start.time);
+    if span <= 0 {
+        return end;
+    }
+    let t = ((i64::from(elapsed_ms) - i64::from(start.time)) as f32 / span as f32).clamp(0.0, 1.0);
+    let t = match start.acc {
+        0 => t,
+        1 => t * t * t,
+        2 => 1.0 - (1.0 - t).powi(3),
+        _ => 0.0,
+    };
+    interpolate_skin_frame_at_rate(start, end, elapsed_ms, t)
+}
+
+fn interpolate_skin_frame_at_rate(
+    start: ResolvedSkinFrame,
+    end: ResolvedSkinFrame,
+    elapsed_ms: i32,
+    t: f32,
+) -> ResolvedSkinFrame {
     ResolvedSkinFrame {
+        lr2_style: start.lr2_style,
         time: elapsed_ms,
         x: interpolate_i32(start.x, end.x, t),
         y: interpolate_i32(start.y, end.y, t),
@@ -749,6 +784,9 @@ pub(super) fn apply_skin_animation(
     animation: &SkinAnimationDef,
     state: &SkinDrawState,
 ) {
+    if let Some(style) = animation.lr2_style {
+        frame.lr2_style = Some(style);
+    }
     if let Some(time) = animation.time {
         frame.time = time;
     }

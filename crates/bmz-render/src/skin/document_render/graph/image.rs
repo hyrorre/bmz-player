@@ -88,11 +88,11 @@ macro_rules! skin_document_render_graph_image_methods {
                     frame.b as f32 / 255.0,
                     frame.a as f32 / 255.0,
                 ),
-                blend: skin_blend_mode(destination.blend),
+                blend: frame.blend(skin_blend_mode(destination.blend)),
                 scale: SkinImageScale::Stretch,
                 border: None,
                 source_size: Some(source.source_size),
-                linear_filter: destination.filter != 0,
+                linear_filter: frame.linear_filter(destination.filter != 0),
             })
         }
 
@@ -142,11 +142,11 @@ macro_rules! skin_document_render_graph_image_methods {
                     frame.b as f32 / 255.0,
                     frame.a as f32 / 255.0,
                 ),
-                blend: skin_blend_mode(destination.blend),
+                blend: frame.blend(skin_blend_mode(destination.blend)),
                 scale: SkinImageScale::Stretch,
                 border: None,
                 source_size: Some(source.source_size),
-                linear_filter: destination.filter != 0,
+                linear_filter: frame.linear_filter(destination.filter != 0),
             })
         }
 
@@ -208,11 +208,11 @@ macro_rules! skin_document_render_graph_image_methods {
                     frame.b as f32 / 255.0,
                     frame.a as f32 / 255.0,
                 ),
-                blend: BlendMode::Normal,
+                blend: frame.blend(BlendMode::Normal),
                 scale: SkinImageScale::Stretch,
                 border: None,
                 source_size: Some(source.source_size),
-                linear_filter: false,
+                linear_filter: frame.linear_filter(false),
             })
         }
     };

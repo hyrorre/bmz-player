@@ -105,6 +105,12 @@ OpenLR2の `SetDSTdrawByTime` に合わせて時刻を評価する。JSON/Luaの
 
 ## LR2の画像合成
 
+LR2 CSVから変換したdestinationは、各dst行の`lr2Style`にblend/filter/centerを保持し、
+その区間の開始行を使用する。accも区間ごとに評価し、1は三次加速、2は三次減速、
+0は線形、その他は区間開始値を維持する。JSON/Luaのacc規則は変更しない。
+画像のSRC/DSTタイマーが一致する場合、SRC cycleは最初のDST時刻を原点にする。
+数字のcycleはSRCタイマーを使い、DST開始時刻は差し引かない。
+
 LR2の画像合成 `blend=3` は減算を使う。描画先RGBからsource RGB×alphaを引き、
 描画先alphaは保持する。`blend=2` の加算、`blend=4` の乗算と区別する。
 

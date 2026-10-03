@@ -252,6 +252,9 @@ pub struct SkinRectDef {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct SkinAnimationDef {
+    /// LR2 keeps draw attributes on each keyframe, rather than the destination.
+    #[serde(default, rename = "lr2Style")]
+    pub lr2_style: Option<SkinLr2FrameStyle>,
     pub time: Option<i32>,
     pub x: Option<i32>,
     pub y: Option<i32>,
@@ -265,6 +268,13 @@ pub struct SkinAnimationDef {
     pub g: Option<i32>,
     pub b: Option<i32>,
     pub angle: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+pub struct SkinLr2FrameStyle {
+    pub blend: i32,
+    pub filter: i32,
+    pub center: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

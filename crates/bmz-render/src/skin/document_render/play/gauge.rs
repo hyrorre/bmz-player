@@ -64,7 +64,7 @@ macro_rules! skin_document_render_play_gauge_methods {
             let exgauge = skin_gauge_node_base(state.gauge_type);
             let anim_type = gauge_def.gauge_type;
             let base_color = skin_gauge_frame_color(frame);
-            let blend = skin_gauge_destination_blend(destination);
+            let blend = frame.blend(skin_gauge_destination_blend(destination));
             let mut items = Vec::new();
             for part in 1..=parts {
                 let part_border = part as f32 * max / parts as f32;
@@ -87,7 +87,7 @@ macro_rules! skin_document_render_play_gauge_methods {
                     sources,
                     base_color,
                     blend,
-                    destination.filter != 0,
+                    frame.linear_filter(destination.filter != 0),
                 ) {
                     items.push(item);
                 }
@@ -116,7 +116,7 @@ macro_rules! skin_document_render_play_gauge_methods {
                         sources,
                         flicker_color,
                         blend,
-                        destination.filter != 0,
+                        frame.linear_filter(destination.filter != 0),
                     ) {
                         items.push(item);
                     }

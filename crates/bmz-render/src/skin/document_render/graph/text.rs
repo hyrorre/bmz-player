@@ -88,7 +88,7 @@ macro_rules! skin_document_render_graph_text_methods {
                     }),
                 },
                 caret,
-                blend: BlendMode::Normal,
+                blend: frame.blend(BlendMode::Normal),
                 post_scale: Point { x: 1.0, y: 1.0 },
             })
         }

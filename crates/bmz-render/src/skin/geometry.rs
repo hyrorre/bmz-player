@@ -337,6 +337,7 @@ pub(super) fn resize_about_center(rect: SkinPixelRect, width: f32, height: f32) 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct ResolvedSkinFrame {
+    pub(super) lr2_style: Option<SkinLr2FrameStyle>,
     pub(super) time: i32,
     pub(super) x: i32,
     pub(super) y: i32,
@@ -355,6 +356,7 @@ pub(super) struct ResolvedSkinFrame {
 impl Default for ResolvedSkinFrame {
     fn default() -> Self {
         Self {
+            lr2_style: None,
             time: 0,
             x: 0,
             y: 0,
@@ -368,5 +370,19 @@ impl Default for ResolvedSkinFrame {
             angle: 0,
             apply_offset_alpha: true,
         }
+    }
+}
+
+impl ResolvedSkinFrame {
+    pub(super) fn blend(self, fallback: BlendMode) -> BlendMode {
+        self.lr2_style.map_or(fallback, |style| skin_blend_mode(style.blend))
+    }
+
+    pub(super) fn linear_filter(self, fallback: bool) -> bool {
+        self.lr2_style.map_or(fallback, |style| style.filter != 0)
+    }
+
+    pub(super) fn center(self, fallback: i32) -> i32 {
+        self.lr2_style.map_or(fallback, |style| style.center)
     }
 }
