@@ -599,6 +599,7 @@ pub struct DisplayJudgement {
     pub text: String,
     pub combo: u32,
     pub delta_us: i64,
+    /// 判定表示・コンボ・ボムの開始時刻。実入力の判定用オフセットを含まない。
     pub time: TimeUs,
     /// ノートを押さずに通過した見逃し判定（Poor）。
     /// このとき「打鍵」は発生していないのでキービームやボム演出は不要。

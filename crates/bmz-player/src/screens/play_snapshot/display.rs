@@ -50,7 +50,11 @@ pub(super) fn display_fast_slow_counts(
     }
 }
 
-pub(super) fn display_judgement(event: &JudgementEvent, combo: u32) -> DisplayJudgement {
+pub(super) fn display_judgement(
+    event: &JudgementEvent,
+    combo: u32,
+    display_time: TimeUs,
+) -> DisplayJudgement {
     DisplayJudgement {
         lane: event.lane,
         judge: event.judge,
@@ -58,7 +62,7 @@ pub(super) fn display_judgement(event: &JudgementEvent, combo: u32) -> DisplayJu
         text: format!("{}{}", judge_text(event.judge), side_suffix(event.side)),
         combo: if event.judge == Judge::EmptyPoor { 0 } else { combo },
         delta_us: event.delta.0,
-        time: event.time,
+        time: display_time,
         is_miss: event.judge == Judge::Poor,
         timing_ms_suppressed: false,
     }

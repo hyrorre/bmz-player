@@ -344,5 +344,7 @@ mod cases_02;
 mod cases_03;
 #[path = "tests/cases_04.rs"]
 mod cases_04;
+#[path = "tests/judgement_display_time.rs"]
+mod judgement_display_time;
 #[path = "tests/replay_speed.rs"]
 mod replay_speed;

@@ -1,6 +1,14 @@
 pub fn apply_judge_outcome(
     session: &mut GameSession,
+    outcome: JudgeOutcome,
+) -> Vec<JudgementEvent> {
+    apply_judge_outcome_with_display_time(session, outcome, None)
+}
+
+pub(super) fn apply_judge_outcome_with_display_time(
+    session: &mut GameSession,
     mut outcome: JudgeOutcome,
+    display_time: Option<TimeUs>,
 ) -> Vec<JudgementEvent> {
     if session.battle_opponent.is_some() {
         // An independent battle opponent is the sole authority for 2P score
@@ -91,9 +99,11 @@ pub fn apply_judge_outcome(
             session.display_combo()
         };
         if event.affects_score || session.display_only_lane_mask[event.lane.index()] {
-            session
-                .recent_display_judgements
-                .push(DisplayJudgementEvent { judgement: event.clone(), combo });
+            session.recent_display_judgements.push(DisplayJudgementEvent {
+                judgement: event.clone(),
+                combo,
+                display_time: display_time.unwrap_or(event.time),
+            });
         }
         push_skin_runtime_event(session, SkinRuntimeEventKind::Judgement(event.clone()));
         events.push(event);

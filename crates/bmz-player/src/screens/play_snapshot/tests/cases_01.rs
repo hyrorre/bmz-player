@@ -212,6 +212,7 @@ fn fast_slow_filter_applies_threshold_only_to_pgreat() {
                 affects_score: true,
             },
             1,
+            TimeUs(1_000),
         )
     };
 
@@ -391,9 +392,18 @@ fn build_render_snapshot_preserves_dp_combo_at_each_judgement() {
         },
     ];
     session.recent_display_judgements = vec![
-        bmz_gameplay::session::DisplayJudgementEvent { judgement: judgements[0].clone(), combo: 5 },
-        bmz_gameplay::session::DisplayJudgementEvent { judgement: judgements[1].clone(), combo: 6 },
+        bmz_gameplay::session::DisplayJudgementEvent {
+            judgement: judgements[0].clone(),
+            combo: 5,
+            display_time: judgements[0].time,
+        },
+        bmz_gameplay::session::DisplayJudgementEvent {
+            judgement: judgements[1].clone(),
+            combo: 6,
+            display_time: judgements[1].time,
+        },
     ];
+    session.recent_judgements = judgements.to_vec();
 
     let snapshot = build_render_snapshot(&session, TimeUs(3_000), &judgements, None);
 

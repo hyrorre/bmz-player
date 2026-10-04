@@ -479,13 +479,7 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
             .iter()
             .map(|input| DisplayInput { lane: input.lane, time: input.time })
             .collect(),
-        recent_judgements: if session.recent_display_judgements.len() != recent_judgements.len()
-            || !session
-                .recent_display_judgements
-                .iter()
-                .zip(recent_judgements)
-                .all(|(display, judgement)| display.judgement == *judgement)
-        {
+        recent_judgements: if recent_judgements != session.recent_judgements {
             // Snapshot 単体テストなど、session を経由せず判定列を渡す呼び出しの
             // 互換経路。通常プレイでは下の判定時点コンボを使う。
             recent_judgements
@@ -496,14 +490,15 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
                     } else {
                         session.display_combo()
                     };
-                    display_judgement(event, combo)
+                    display_judgement(event, combo, event.time)
                 })
                 .collect()
         } else {
             session
                 .recent_display_judgements
                 .iter()
-                .map(|event| display_judgement(&event.judgement, event.combo))
+                // 表示履歴は補正前の時刻で期限切れになるため、採点履歴とは件数が異なる。
+                .map(|event| display_judgement(&event.judgement, event.combo, event.display_time))
                 .collect()
         },
         skin_events: Vec::new(),

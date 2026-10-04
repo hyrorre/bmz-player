@@ -91,6 +91,14 @@ skin runtime は既読 sequence を再処理せず、timer はイベントの元
 極端に長い描画停止へのメモリ上限は 8,192 events。上限を超える演出履歴は古いものから捨てる。
 判定、replay、結果、発音にはこの破棄を適用しない。
 
+判定画像・コンボ・ボムに渡す `DisplayJudgementEvent.display_time` は、実入力では
+入力オフセット補正前の譜面時刻を使う。正のオフセットでも打鍵直後から表示を開始し、
+負のオフセットでもアニメーションを途中から始めない。入力配送・描画が遅れた場合は
+打鍵からの経過時間を維持し、受領時刻から再生し直さない。見逃し・autoplay・replay・
+対戦相手は元の判定時刻を使い、現在のprofileの入力オフセットを差し引かない。
+表示履歴の800ms保持期間もこの表示時刻で計算する。採点用の `JudgementEvent`、
+FAST/SLOW、保存する結果・replay、キー音、順序付き `SkinRuntimeEvent` の時刻は変更しない。
+
 自動 timing 調整で負方向へ visual offset が変わる場合は、描画投影の時刻だけを前回値以上に
 抑える。判定用 offset、保存値、FAST/SLOW、replay の時刻は変更しない。
 seek / retry は新しい generation なので、この visual floor もリセットする。
