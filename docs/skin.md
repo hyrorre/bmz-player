@@ -414,6 +414,23 @@ BMZ default JSON では、digit atlas を同梱せずに既存フォントで数
 `judgeTimingRegion` は同じ判定領域の FAST / SLOW だけを文字列化し、`judgeTimingColor` で
 FAST を青、SLOW を赤に切り替える。
 
+### Play Target Score Refs
+
+beatoraja互換のターゲット数値とグラフは、最終値と進行値を区別する。
+
+| 種類 | ID | 値 |
+| --- | --- | --- |
+| 数値 | `121` / `151` | 曲全体の最終ターゲットEX SCORE |
+| 数値 | `153` | 現在EX SCORE − 現在のノート位置に対応するターゲット |
+| グラフ | `114` | 現在のノート位置に対応するターゲット / 曲全体の最大EX SCORE |
+| グラフ | `115` | 最終ターゲット / 曲全体の最大EX SCORE |
+
+`121` / `151` は `value.ref`、`text.numberRef`、Luaの `main_state.number()` で同じ値を参照する。
+ノート進行では変化しないが、IR取得等でターゲット自体が更新されれば新しい値を返す。
+0点は有効な値。未設定時は数値画像を非表示、`text.numberRef` を空文字、Luaを `0` とする。
+総ノーツ0でも設定済みの最終ターゲットを返す。デフォルトスキンのTARGET表示は `numberRef: 121` を使う。
+LR2 CSVのPlay ref `120..136` は読込時に2P専用内部refへ変換されるため、その `121` は2Pの現在EX SCOREを維持する。
+
 ### BMZ Arrange Refs
 
 beatoraja 互換の `ref` / `event_index` / `number` `42` (1P RANDOM) と `43` (2P RANDOM)

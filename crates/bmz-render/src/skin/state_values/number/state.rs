@@ -387,7 +387,8 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
         // NUMBER_HIGHSCORE / NUMBER_HIGHSCORE2。Playでは保存済み最終値、
         // Resultでは保存前ベストを返し、未プレイはいずれも0。
         150 | 170 => best_score_number(state).map(i64::from),
-        121 | 151 => state.target_ex_score.map(|s| projected_score_at_progress(s, state) as i64),
+        // NUMBER_TARGET_SCORE / NUMBER_TARGET_SCORE2は進行度に関係なく最終ターゲットを返す。
+        121 | 151 => state.target_ex_score.map(i64::from),
         122 | 123 | 135 | 136 | 157 | 158 => {
             state.target_ex_score.map(|target| score_rate_parts(target, state.total_notes)).map(
                 |parts| (if matches!(ref_id, 122 | 135 | 157) { parts.0 } else { parts.1 }) as i64,
@@ -404,7 +405,7 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
         152 | 172 => {
             projected_best_score_at_progress(state).map(|best| state.ex_score as i64 - best as i64)
         }
-        // NUMBER_DIFF_TARGETSCORE=153 (符号付き、ex_score - target)
+        // NUMBER_DIFF_TARGETSCORE=153 (符号付き、ex_score - 現在ノート位置までのtarget)
         153 => state.target_ex_score.map(|target| {
             state.ex_score as i64 - projected_score_at_progress(target, state) as i64
         }),
