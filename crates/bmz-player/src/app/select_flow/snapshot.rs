@@ -129,15 +129,8 @@ impl WinitApp {
         };
         let source_key_mode = self.selected_source_key_mode();
         let conversion = source_key_mode
-            .filter(|_| {
-                !session_mode.is_battle()
-                    && !matches!(
-                        self.select.double_option,
-                        DoubleOption::Battle | DoubleOption::BattleAutoScratch
-                    )
-            })
-            .filter(|mode| self.boot.profile_config.play.key_mode_conversion.applies_to(*mode))
-            .map(|_| self.boot.profile_config.play.key_mode_conversion)
+            .filter(|mode| self.selected_key_mode_conversion().applies_to(*mode))
+            .map(|_| self.selected_key_mode_conversion())
             .unwrap_or(KeyModeConversionConfig::Off);
         let applied_double_option = if conversion == KeyModeConversionConfig::Off {
             self.select.double_option

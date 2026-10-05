@@ -67,9 +67,10 @@ RANDOM MIXの候補抽出とSkin APIのsource modeは変換前の譜面モード
 E2の編集対象を明示的に7Kとする。初期案の「未解決なら編集不可」を置き換える。
 未解決時の7Kは直接の編集先なので7K→9K等の譜面変換を重ねない。
 解決できた譜面・フィルターには従来通り変換を適用する。スコープ表示も編集先の7Kを示す。
-`effective_play_key_mode`を共用し、Select側の既存モード同期にも同じ変換を適用する。
-これにより7K→9K等でE2だけが別モードを編集する不整合を避ける。BATTLEはこの
-変換関数に含まれないため、設定対象は元のサイドのモードを維持する。
+`key_mode_conversion_for_session`でプレイ開始・選曲の変換可否を共通化し、
+`effective_play_key_mode`で設定対象を解決する。AUTOPLAY BATTLE / G-BATTLE、
+DOUBLE OPTIONのBATTLE系、対戦対象がある場合は保存済み変換を適用しない。
+描画用のDP化とは独立し、例えば7K→9Kを保存したまま対戦へ切り替えても7K設定を編集・使用する。
 
 GAS下限はOFFでも編集できる。runtimeの`BestClear` / `SelectToUnder`の下限として
 利用する。`Off` / `Continue` / `HardToGroove`では非適用。方式も新詳細で編集する。OFF時の旧3パネルではE1+E2操作を維持する。

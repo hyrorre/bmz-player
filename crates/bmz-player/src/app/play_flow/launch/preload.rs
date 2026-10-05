@@ -618,16 +618,12 @@ impl WinitApp {
             options.seven_to_nine_rule_mode,
             options.replay_player.is_some(),
         );
-        if options.session_mode.is_battle()
-            || options.battle_target.is_some()
-            || matches!(
-                options.double_option,
-                DoubleOption::Battle | DoubleOption::BattleAutoScratch
-            )
-        {
-            options.key_mode_conversion = KeyModeConversionConfig::Off;
-            return;
-        }
+        options.key_mode_conversion = key_mode_conversion_for_session(
+            options.key_mode_conversion,
+            options.session_mode,
+            options.double_option,
+            options.battle_target.is_some(),
+        );
         if !options.key_mode_conversion.applies_to(source_key_mode) {
             return;
         }

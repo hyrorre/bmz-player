@@ -98,6 +98,23 @@ pub(in crate::app) fn effective_play_key_mode(
     key_mode_conversion.effective_key_mode(chart_key_mode)
 }
 
+/// Battle duplicates lanes for presentation, but uses the source mode's profile slot.
+pub(in crate::app) fn key_mode_conversion_for_session(
+    conversion: KeyModeConversionConfig,
+    session: SessionMode,
+    double: DoubleOption,
+    has_battle_target: bool,
+) -> KeyModeConversionConfig {
+    if session.is_battle()
+        || has_battle_target
+        || matches!(double, DoubleOption::Battle | DoubleOption::BattleAutoScratch)
+    {
+        KeyModeConversionConfig::Off
+    } else {
+        conversion
+    }
+}
+
 pub(in crate::app) fn skin_reload_request_includes_key_mode(
     request: SkinReloadRequest,
     key_mode: KeyMode,

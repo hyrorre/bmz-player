@@ -227,7 +227,7 @@ impl WinitApp {
             Some(SelectItem::Course(row)) => row.common_key_mode,
             _ => self.select.select_mode_filter.key_mode(),
         };
-        detail_edit_mode(source, self.boot.profile_config.play.key_mode_conversion)
+        detail_edit_mode(source, self.selected_key_mode_conversion())
     }
 
     pub(super) fn reset_detail_options_input(&mut self) {
@@ -680,6 +680,51 @@ mod tests {
             }
             assert_eq!(detail_arrow_input("ArrowLeft", item.kind), Some(DetailInput::Move(-1)));
             assert_eq!(detail_arrow_input("ArrowRight", item.kind), Some(DetailInput::Move(1)));
+        }
+    }
+
+    #[test]
+    fn detail_battle_uses_launch_profile_slot_and_preserves_converted_mode_settings() {
+        use crate::config::profile_config::KeyModeConversionConfig as Conversion;
+        for conversion in [Conversion::SevenToNine, Conversion::SpToDp, Conversion::SevenToSix] {
+            for (session, double, target) in [
+                (SessionMode::AutoplayBattle, DoubleOption::Off, false),
+                (SessionMode::GBattle, DoubleOption::Off, false),
+                (SessionMode::Normal, DoubleOption::Battle, false),
+                (SessionMode::Normal, DoubleOption::BattleAutoScratch, false),
+                (SessionMode::Normal, DoubleOption::Off, true),
+            ] {
+                let normalized =
+                    key_mode_conversion_for_session(conversion, session, double, target);
+                let mode = detail_edit_mode(Some(KeyMode::K7), normalized);
+                assert_eq!(mode, KeyMode::K7);
+                assert_eq!(mode, effective_play_key_mode(KeyMode::K7, normalized));
+                let mut profile = ProfileConfig::new_default("test", "Test", 0);
+                let converted_mode = effective_play_key_mode(KeyMode::K7, conversion);
+                profile.activate_play_mode(converted_mode);
+                profile.sync_active_play_mode();
+                profile.activate_play_mode(mode);
+                let original = profile.play_mode_config(converted_mode);
+                for id in [101, 304, 702] {
+                    let item = CATALOG.iter().find(|item| item.id == id).unwrap();
+                    let before = item.value(&profile);
+                    assert!(item.adjust(&mut profile, Some(mode), 1));
+                    assert_ne!(item.value(&profile), before);
+                }
+                let serialized = toml::to_string(&profile).unwrap();
+                let loaded: ProfileConfig = toml::from_str(&serialized).unwrap();
+                assert_eq!(loaded.play_mode_config(mode), profile.play_mode_config(mode));
+                assert_eq!(loaded.play_mode_config(converted_mode), original);
+            }
+            assert_eq!(
+                key_mode_conversion_for_session(
+                    conversion,
+                    SessionMode::Normal,
+                    DoubleOption::Off,
+                    false
+                ),
+                conversion
+            );
         }
     }
 

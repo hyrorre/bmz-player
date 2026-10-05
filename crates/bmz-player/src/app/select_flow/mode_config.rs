@@ -34,9 +34,17 @@ impl WinitApp {
 
     /// The profile slot used for editing and starting the selected chart.
     pub(super) fn selected_play_config_key_mode(&self) -> Option<KeyMode> {
-        self.selected_source_key_mode().map(|mode| {
-            effective_play_key_mode(mode, self.boot.profile_config.play.key_mode_conversion)
-        })
+        self.selected_source_key_mode()
+            .map(|mode| effective_play_key_mode(mode, self.selected_key_mode_conversion()))
+    }
+
+    pub(super) fn selected_key_mode_conversion(&self) -> KeyModeConversionConfig {
+        key_mode_conversion_for_session(
+            self.boot.profile_config.play.key_mode_conversion,
+            self.select.session_mode,
+            self.select.double_option,
+            self.select.ir_battle.active,
+        )
     }
 
     pub(super) fn sync_selected_play_mode(&mut self) {
