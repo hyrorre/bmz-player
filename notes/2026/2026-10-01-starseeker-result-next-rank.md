@@ -27,3 +27,48 @@ ADFX02のローカルdevelop（b2b2693）とbmz（b1b0f1f）のStarseeker Result
   追加した実素材decodeテストも単独実行で成功し、追加後のClippyも成功。
   全テストの初回はsandboxのローカルbind拒否で17件失敗したが、制限外の再実行で解消。
 - 実機でのResult表示確認は未実施。
+
+## 2026-10-05追補: 現行Starseekerに合わせたテスト修正
+
+本体の基点は`feat/select-detail-options` / `364c4d75795951712074e162e1b59b59f6e3648c`。
+導入済みADFX02は`c74f7f9ea737d71f2586f066446b5a3e8bc410be`。開始時は両repoとも差分なし。
+ECFN作業中に継続していたStarseekerテスト1件の失敗を調査・修正した。
+
+当初の確認対象と異なり、現行Starseekerは`3b8417a`と`b9a120d`で
+`rank_diff.lua`を共有するNEXT／NEAREST切り替えへ変更されている。
+スコア枠は`../../rank_diff.lua`を読み込み、ref 71/74から差分を求めるruntime callbackを持つ。
+旧テストには2つの問題があった。
+
+1. `library_roots: &[]`になる互換decode helperを使い、スキンのentryディレクトリだけを
+   許可していた。共通Luaがroot外として拒否され、スキン内の`pcall`が例外を捕捉した結果、
+   `SCORE_FRAME`と`RANK_Diff_Exscore`が欠落した。通常アプリは設定済みスキンrootを渡している。
+2. 現行の数値定義は`value_expr`でcallbackを参照するため、`ref_id == 154`という期待値も古かった。
+   読込rootだけを直してもこちらで失敗する。
+
+調査ではrootあり／なしで同じスキンを比較した。rootありではEX SCORE 2969で135・画像行292、
+満点3104で0・画像行165となり、NEARESTのAAA到達時0とAAA+40の符号付き差分-40も確認した。
+調査用コード・ログはGit管理外の`.local/starseeker*`に保存した。
+
+旧ref 154の保証は、[app側テスト](../../crates/bmz-player/src/app/tests/result.rs)に
+外部アセット不要の最小Lua fixtureとして残す。実際のResultSummaryから渡した値で、
+MAX・未到達・AAA境界前後の画像行選択を確認する。
+
+実スキンの検証は[skin loader側](../../crates/bmz-player/src/skin_loader/tests/starseeker_result.rs)へ移し、
+通常アプリの共通document loaderと`AppPaths::skin_library_roots()`を使う。
+Auto／Compat、NEXT／NEARESTについて、ロード時の数字画像と、同一VMでスコアを更新したときの
+callback出力を確認する。単に古いassertionを削除するのではなく、定数化による退行も検出する。
+この検証では数値定義とcallbackが対象のため、画像そのものの繰り返しdecodeを省く。
+外部スキン未導入時の明示的なskipは維持するが、今回の検証では実アセットを読み込む。
+
+本体のruntime・sandbox境界・スキンのLuaや画像は変更しない。
+
+最終状態で`cargo fmt --check`、`cargo check -p bmz-player --locked`、
+`cargo clippy -p bmz-player --all-targets --locked -- -D warnings`、`git diff --check`が成功。
+旧ref 154関連2件と、現行Starseekerの実アセットを使う1件が単独実行で成功した。
+実スキンは`starseeker`テーマのAuto／Compat × NEXT／NEAREST × 4種類のロード値、
+各ロード後の4種類のスコア更新を検証した。素材欠落によるskipではない。
+
+`cargo test -p bmz-player --locked`は**2,151成功・0失敗・19 ignored**。
+ローカル通信を使う既存テストの待受制限を避け、全体テストはsandbox外で実行した。
+ログは`.local/starseeker-fix-*.log`。実ウィンドウ・GPU描画・Windows/Linuxの確認は未実施で、
+今回の変更はテストと記録のみ。

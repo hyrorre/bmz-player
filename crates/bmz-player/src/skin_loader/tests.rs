@@ -70,3 +70,5 @@ mod mz_detail_options;
 mod paths;
 #[path = "tests/pm_chara.rs"]
 mod pm_chara;
+#[path = "tests/starseeker_result.rs"]
+mod starseeker_result;

@@ -241,7 +241,7 @@ fn result_lua_runtime_values_cover_load_time_result_decisions() {
 fn result_lua_next_rank_matches_rendering_before_skin_load() {
     let mut summary = debug_boot_result_summary();
     summary.total_notes = 1552;
-    // Starseeker uses ref 154 == 0 to choose its MAX number sheet at load time.
+    // Legacy skins use ref 154 == 0 to choose their MAX number sheet at load time.
     for (score, expected) in [(2969, 135), (3104, 0), (2759, 1), (2760, 344)] {
         summary.ex_score = score;
         let values = result_lua_runtime_number_values_for_summary(&summary);
@@ -266,21 +266,30 @@ fn result_lua_next_rank_matches_rendering_before_skin_load() {
 }
 
 #[test]
-fn starseeker_result_selects_next_rank_sheet_from_summary_when_available() {
-    let skin_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../data/skins/ADFX02/Starseeker/result/result.luaskin");
-    if !skin_path.is_file() {
-        eprintln!("skipping: Starseeker assets not present at {}", skin_path.display());
-        return;
-    }
-    let files = BTreeMap::from([
-        ("使用テーマ".to_string(), "Theme/starseeker".to_string()),
-        ("フォント".to_string(), "_font/starseeker".to_string()),
-        ("シャッター".to_string(), "Shutter/TYPE-M".to_string()),
-    ]);
+fn result_lua_next_rank_selects_number_sheet_from_summary() {
+    let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let root =
+        std::env::temp_dir().join(format!("bmz-result-next-rank-{}-{unique}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("result.lua");
+    std::fs::write(
+        &path,
+        r#"
+        local state = require("main_state")
+        return {
+            type = 7,
+            value = {{
+                id = "next_rank", src = "numbers", ref = 154,
+                x = 0, y = state.number(154) == 0 and 165 or 292,
+                w = 228, h = 36, divx = 12, divy = 2, digit = 5
+            }}
+        }
+        "#,
+    )
+    .unwrap();
     let mut summary = debug_boot_result_summary();
     summary.total_notes = 1552;
-    for (score, expected_y) in [(2969, 292), (3104, 165)] {
+    for (score, expected_y) in [(2969, 292), (3104, 165), (2759, 292), (2760, 292)] {
         summary.ex_score = score;
         let runtime = lua_runtime_state_for_result(
             false,
@@ -291,23 +300,23 @@ fn starseeker_result_selects_next_rank_sheet_from_summary_when_available() {
             result_lua_runtime_number_values_for_summary(&summary),
             "test",
         );
-        let decoded = crate::skin_loader::decode_beatoraja_skin_with_options_and_runtime_state(
-            &skin_path,
-            SkinKind::Result,
+        let loaded = bmz_skin::load_lua_skin_with_runtime_state(
+            &path,
             &BTreeMap::new(),
-            &files,
+            &BTreeMap::new(),
             &runtime,
         )
-        .expect("decode Starseeker Result with summary");
-        let value = decoded
+        .expect("load number sheet selected from ResultSummary");
+        let value = loaded
             .document
             .value
             .iter()
-            .find(|value| value.id == "RANK_Diff_Exscore")
-            .expect("Starseeker next-rank number");
+            .find(|value| value.id == "next_rank")
+            .expect("next-rank fixture number");
         assert_eq!(value.y, expected_y, "EX SCORE {score}");
         assert_eq!(value.ref_id, 154);
     }
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
