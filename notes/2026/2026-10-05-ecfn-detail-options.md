@@ -71,3 +71,30 @@ cargo test -p bmz-player --locked ecfn_detail_options_gpu_previews -- --ignored 
 
 通常ウィンドウでの実入力・プレイ開始・再起動、実コントローラー、Windows/Linux、OS表示スケールは未実施。
 自動snapshotテストとGPU offscreenの確認を実機操作済みとは扱わない。
+
+## 追補: 既存パネルに合わせた枠・発光・文字サイズ
+
+ユーザーの比較画像を受け、通常パネルの2P「譜面の配置」を基準に表示を調整した。
+開始時は本体`ccea81d4fe3a1d74576480fe1ccbac187dd2a579`、スキン`7bf8a51`で、両repoとも差分なし。
+スキンの修正commitは`710d67a57dc87fa1fb5dc5698f6aa8018f398602`。
+
+- `option-detail4`の209×496の枠から、四隅・辺・上部グラデーションを分割して再利用。
+  縁の太さを拡大せず、中央列だけ明るくする。上端17px以降には焼き込み文字があるため、
+  上部の切り出しは16pxで止める。元の文字や別の素材の背景色が残らないことをGPU画像で確認した。
+- 値欄の灰色枠も2P側から流用。選択時のオレンジは`option-selector101`の先頭175×37とし、
+  通常の`option-random2`と同じ加算合成・255→170→255の2秒周期を使う。
+  以前の内側に小さく重ねる表示をやめ、灰色枠と同じ範囲へ描画する。
+- 候補と数値の実効文字サイズを28pxから16px、項目名を30pxから20pxへ縮小。
+  rendererは文字定義のsizeとdestinationの高さの大きい方を使うため、両方を変更して中央へ配置する。
+  説明・補助情報のサイズも調整し、同梱フォントと縁取りなしの設定は維持した。
+- Lua表示と説明文書のみを変更。本体の入力・設定保存・APIは変更していない。
+
+最終状態で`cargo test -p bmz-player --locked ecfn_detail_options -- --ignored --nocapture --test-threads=1`
+を実行し、5成功・0失敗。Metal offscreenで日英・5サイズ・開閉途中を含む53画像を生成し、
+代表画像の枠・発光位置・文字サイズ・長い候補名・数値・非適用表示・並行フェードを確認した。
+ログは`.local/ecfn-detail-style-tests.log`、最終画像は一時ディレクトリ
+`bmz-ecfn-detail-preview-14220-1791170278038583000`に保存。
+両repoの`git diff --check`も成功。Rustの変更はないためworkspace全体のcheck／Clippy／testは再実行していない。
+
+実機ではスキンを再読み込みし、E1で通常・E2で詳細へ切り替えて、文字サイズと2秒周期の発光を比較する。
+通常ウィンドウ・実コントローラー・Windows/Linuxでの確認は今回も未実施。
