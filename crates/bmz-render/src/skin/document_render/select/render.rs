@@ -1,4 +1,4 @@
-macro_rules! skin_document_render_select_render_methods {
+macro_rules! skin_document_render_select_render_public_methods {
     () => {
         fn select_render_items(
             &self,
@@ -32,6 +32,32 @@ macro_rules! skin_document_render_select_render_methods {
             )
         }
 
+        fn select_search_input_rect(
+            &self,
+            snapshot: &SelectSnapshot,
+            settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+        ) -> Option<Rect> {
+            let (state, selected_row) = self.select_draw_state(snapshot, None);
+            let enabled_options = self.enabled_options();
+            let anchor = select::select_search_input_anchors(
+                self,
+                snapshot,
+                settings_dest_index,
+                &state,
+                selected_row,
+                &enabled_options,
+            )
+            .into_iter()
+            .next_back()?;
+            Some(normalize_skin_frame_rect(anchor.frame, self.w, self.h))
+        }
+    };
+}
+
+pub(in crate::skin::document_render) use skin_document_render_select_render_public_methods;
+
+macro_rules! skin_document_render_select_render_methods {
+    () => {
         fn select_render_items_with_dynamic_timers_cached(
             &self,
             sources: &HashMap<String, SkinDocumentTexture>,
@@ -335,26 +361,6 @@ macro_rules! skin_document_render_select_render_methods {
                 }
                 items
             })
-        }
-
-        fn select_search_input_rect(
-            &self,
-            snapshot: &SelectSnapshot,
-            settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
-        ) -> Option<Rect> {
-            let (state, selected_row) = self.select_draw_state(snapshot, None);
-            let enabled_options = self.enabled_options();
-            let anchor = select::select_search_input_anchors(
-                self,
-                snapshot,
-                settings_dest_index,
-                &state,
-                selected_row,
-                &enabled_options,
-            )
-            .into_iter()
-            .next_back()?;
-            Some(normalize_skin_frame_rect(anchor.frame, self.w, self.h))
         }
 
         fn select_draw_state<'a>(

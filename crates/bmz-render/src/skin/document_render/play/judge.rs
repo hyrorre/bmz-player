@@ -1,4 +1,4 @@
-macro_rules! skin_document_render_play_judge_methods {
+macro_rules! skin_document_render_play_judge_public_methods {
     () => {
         fn judge_render_items(
             &self,
@@ -13,32 +13,6 @@ macro_rules! skin_document_render_play_judge_methods {
                 elapsed_ms,
                 &SkinOffsetValues::default(),
                 sources,
-            )
-        }
-
-        fn judge_render_items_with_offsets(
-            &self,
-            judge: &str,
-            combo: u32,
-            elapsed_ms: i32,
-            skin_offsets: &SkinOffsetValues,
-            sources: &HashMap<String, SkinDocumentTexture>,
-        ) -> Option<Vec<SkinRenderItem>> {
-            let judge_image_index = judge_image_index(judge)?;
-            let judge_def = self.judge.first()?;
-            let region = judge_def.index.clamp(0, MAX_JUDGE_REGIONS as i32 - 1) as usize;
-            let mut state =
-                SkinDrawState { skin_offsets: *skin_offsets, ..SkinDrawState::default() };
-            state.judge_ms[region] = Some(elapsed_ms);
-            state.judge_index[region] = Some(judge_image_index);
-            state.judge_combo[region] = combo;
-            self.judge_render_items_for_def(
-                judge_def,
-                judge_image_index,
-                combo,
-                elapsed_ms,
-                sources,
-                &state,
             )
         }
 
@@ -219,6 +193,38 @@ macro_rules! skin_document_render_play_judge_methods {
             }
             Some(items)
         }
+    };
+}
+
+pub(in crate::skin::document_render) use skin_document_render_play_judge_public_methods;
+
+macro_rules! skin_document_render_play_judge_methods {
+    () => {
+        fn judge_render_items_with_offsets(
+            &self,
+            judge: &str,
+            combo: u32,
+            elapsed_ms: i32,
+            skin_offsets: &SkinOffsetValues,
+            sources: &HashMap<String, SkinDocumentTexture>,
+        ) -> Option<Vec<SkinRenderItem>> {
+            let judge_image_index = judge_image_index(judge)?;
+            let judge_def = self.judge.first()?;
+            let region = judge_def.index.clamp(0, MAX_JUDGE_REGIONS as i32 - 1) as usize;
+            let mut state =
+                SkinDrawState { skin_offsets: *skin_offsets, ..SkinDrawState::default() };
+            state.judge_ms[region] = Some(elapsed_ms);
+            state.judge_index[region] = Some(judge_image_index);
+            state.judge_combo[region] = combo;
+            self.judge_render_items_for_def(
+                judge_def,
+                judge_image_index,
+                combo,
+                elapsed_ms,
+                sources,
+                &state,
+            )
+        }
 
         /// beatoraja `JsonPlaySkinObjectLoader` が judge number の各 dst に適用する X 補正。
         fn beatoraja_judge_number_dst_x(dst_w: i32, digit: i32) -> i32 {
@@ -253,6 +259,7 @@ macro_rules! skin_document_render_play_judge_methods {
             if digits.is_empty() { 0 } else { digits.len() as i32 * (frame.w + value.space) }
         }
 
+        #[cfg(test)]
         fn judge_image_render_item(
             &self,
             judge: &str,

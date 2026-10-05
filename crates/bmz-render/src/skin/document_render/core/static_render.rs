@@ -1,5 +1,5 @@
 use crate::skin::{
-    SkinDestinationDef, SkinDocument, SkinDocumentRenderExt, SkinDstEntry, SkinImageLookup,
+    SkinDestinationDef, SkinDocument, SkinDocumentRenderInternal, SkinDstEntry, SkinImageLookup,
     skin_image_for_destination_id,
 };
 
@@ -46,7 +46,7 @@ pub(in crate::skin::document_render) fn fixed_image_destination_cacheable(
         && !document.should_skip_lift_lane_cover_render(destination, image)
 }
 
-macro_rules! skin_document_render_core_static_methods {
+macro_rules! skin_document_render_core_static_public_methods {
     () => {
         fn static_image_render_items(
             &self,
@@ -70,6 +70,29 @@ macro_rules! skin_document_render_core_static_methods {
             )
         }
 
+        /// 静的 destination を `{"id":"notes"}` マーカーと `timer: 3` で3分割して描画アイテムを返す。
+        /// 戻り値 `.0` はノーツより背面、`.1` はノーツより前面、`.2` は FAILED オーバーレイ。
+        fn static_render_items_split(
+            &self,
+            sources: &HashMap<String, SkinDocumentTexture>,
+            state: &SkinDrawState,
+            text_state: &SkinTextState<'_>,
+        ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
+            self.static_render_items_split_with_graphs(
+                sources,
+                state,
+                text_state,
+                SkinRuntimeGraphs::from_document(self),
+                None,
+            )
+        }
+    };
+}
+
+pub(in crate::skin::document_render) use skin_document_render_core_static_public_methods;
+
+macro_rules! skin_document_render_core_static_methods {
+    () => {
         fn static_render_items_with_graphs(
             &self,
             sources: &HashMap<String, SkinDocumentTexture>,
@@ -104,23 +127,6 @@ macro_rules! skin_document_render_core_static_methods {
             behind.extend(front);
             behind.extend(failed_overlay);
             behind
-        }
-
-        /// 静的 destination を `{"id":"notes"}` マーカーと `timer: 3` で3分割して描画アイテムを返す。
-        /// 戻り値 `.0` はノーツより背面、`.1` はノーツより前面、`.2` は FAILED オーバーレイ。
-        fn static_render_items_split(
-            &self,
-            sources: &HashMap<String, SkinDocumentTexture>,
-            state: &SkinDrawState,
-            text_state: &SkinTextState<'_>,
-        ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
-            self.static_render_items_split_with_graphs(
-                sources,
-                state,
-                text_state,
-                SkinRuntimeGraphs::from_document(self),
-                None,
-            )
         }
 
         fn static_render_items_split_with_graphs(

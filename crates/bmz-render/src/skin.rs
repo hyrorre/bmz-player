@@ -63,6 +63,7 @@ mod state_value_timing_graph;
 pub use condition::test_skin_ops;
 use condition::*;
 pub use document_render::SkinDocumentRenderExt;
+use document_render::SkinDocumentRenderInternal;
 use pm_chara::*;
 pub(crate) use runtime::PreparedNoteLayout;
 use runtime::*;

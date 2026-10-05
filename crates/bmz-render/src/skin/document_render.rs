@@ -1,16 +1,7 @@
 use super::*;
 
-/// `SkinDocument` (bmz-skin-document) に対する描画評価の拡張 trait。
-///
-/// document スキーマ本体は `bmz-skin-document` crate へ移動したため、
-/// `SkinDrawState` / `SkinRenderItem` 等の描画型に依存する評価メソッドは
-/// foreign type への inherent impl ができず、この拡張 trait で提供する。
-/// 実装は `impl SkinDocumentRenderExt for SkinDocument` の 1 つだけを想定する。
-///
-/// 旧 inherent impl の private ヘルパーメソッドも trait へ機械的に移した
-/// ため、`SkinRuntimeGraphs` 等の crate 内 private 型がシグネチャに現れる。
-/// これらは外部から呼べない (引数型を名指しできない) ので lint を許可する。
-#[allow(private_interfaces)]
+/// SkinDocumentの描画・hit test・レーン寸法を利用する公開API。
+/// destination解決やcache構築の詳細はskinモジュール内の評価traitに置く。
 pub trait SkinDocumentRenderExt {
     fn static_image_render_items(
         &self,
@@ -25,6 +16,85 @@ pub trait SkinDocumentRenderExt {
         text_state: &SkinTextState<'_>,
     ) -> Vec<SkinRenderItem>;
 
+    fn static_render_items_split(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        state: &SkinDrawState,
+        text_state: &SkinTextState<'_>,
+    ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>);
+
+    fn select_render_items(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        snapshot: &SelectSnapshot,
+    ) -> Vec<SkinRenderItem>;
+
+    fn select_render_items_with_dynamic_timers(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        snapshot: &SelectSnapshot,
+        dynamic_timers: Option<&mut DynamicTimerRuntime>,
+        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+        lua_draw_runtime: Option<Arc<dyn SkinLuaDrawRuntime>>,
+    ) -> Vec<SkinRenderItem>;
+
+    fn select_search_input_rect(
+        &self,
+        snapshot: &SelectSnapshot,
+        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+    ) -> Option<Rect>;
+
+    fn select_click_hit(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        snapshot: &SelectSnapshot,
+        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinClickHit>;
+
+    fn result_click_hit(&self, state: &SkinDrawState, x: f32, y: f32) -> Option<SkinClickHit>;
+
+    fn result_slider_hit(&self, state: &SkinDrawState, x: f32, y: f32) -> Option<SkinSliderHit>;
+
+    fn select_slider_hit(
+        &self,
+        snapshot: &SelectSnapshot,
+        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinSliderHit>;
+
+    fn note_lane_area(
+        &self,
+        lane: Lane,
+        key_mode: KeyMode,
+        enabled_options: &[i32],
+    ) -> Option<Rect>;
+
+    fn primary_note_lane_height_px(&self) -> Option<i32>;
+
+    fn judge_render_items(
+        &self,
+        judge: &str,
+        combo: u32,
+        elapsed_ms: i32,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<Vec<SkinRenderItem>>;
+
+    fn judge_render_items_for_def(
+        &self,
+        judge: &SkinJudgeDef,
+        judge_index: usize,
+        combo: u32,
+        elapsed_ms: i32,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        state: &SkinDrawState,
+    ) -> Option<Vec<SkinRenderItem>>;
+}
+
+/// 描画評価の内部処理。runtime cacheやlookup型を公開APIへ露出させない。
+pub(super) trait SkinDocumentRenderInternal {
     fn static_render_items_with_graphs(
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
@@ -41,13 +111,6 @@ pub trait SkinDocumentRenderExt {
         runtime_graphs: SkinRuntimeGraphs<'_>,
         cache: Option<&mut ResultRenderCache>,
     ) -> Vec<SkinRenderItem>;
-
-    fn static_render_items_split(
-        &self,
-        sources: &HashMap<String, SkinDocumentTexture>,
-        state: &SkinDrawState,
-        text_state: &SkinTextState<'_>,
-    ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>);
 
     fn static_render_items_split_with_graphs(
         &self,
@@ -104,7 +167,6 @@ pub trait SkinDocumentRenderExt {
         context: DestinationResolveContext<'_, '_>,
     ) -> Option<Vec<SkinRenderItem>>;
 
-    #[doc(hidden)]
     fn resolve_image_destination_items(
         &self,
         destination: &SkinDestinationDef,
@@ -114,7 +176,6 @@ pub trait SkinDocumentRenderExt {
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Option<Vec<SkinRenderItem>>>;
 
-    #[doc(hidden)]
     fn resolve_bga_destination_items(
         &self,
         destination: &SkinDestinationDef,
@@ -122,7 +183,6 @@ pub trait SkinDocumentRenderExt {
         state: &SkinDrawState,
     ) -> Option<Option<Vec<SkinRenderItem>>>;
 
-    #[doc(hidden)]
     fn resolve_imageset_destination_items(
         &self,
         destination: &SkinDestinationDef,
@@ -143,21 +203,6 @@ pub trait SkinDocumentRenderExt {
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Vec<SkinRenderItem>>;
 
-    fn select_render_items(
-        &self,
-        sources: &HashMap<String, SkinDocumentTexture>,
-        snapshot: &SelectSnapshot,
-    ) -> Vec<SkinRenderItem>;
-
-    fn select_render_items_with_dynamic_timers(
-        &self,
-        sources: &HashMap<String, SkinDocumentTexture>,
-        snapshot: &SelectSnapshot,
-        dynamic_timers: Option<&mut DynamicTimerRuntime>,
-        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
-        lua_draw_runtime: Option<Arc<dyn SkinLuaDrawRuntime>>,
-    ) -> Vec<SkinRenderItem>;
-
     fn select_render_items_with_dynamic_timers_cached(
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
@@ -173,33 +218,6 @@ pub trait SkinDocumentRenderExt {
         snapshot: &'a SelectSnapshot,
         dynamic_timers: Option<&mut DynamicTimerRuntime>,
     ) -> (SkinDrawState, Option<&'a SelectRowSnapshot>);
-
-    fn select_search_input_rect(
-        &self,
-        snapshot: &SelectSnapshot,
-        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
-    ) -> Option<Rect>;
-
-    fn select_click_hit(
-        &self,
-        sources: &HashMap<String, SkinDocumentTexture>,
-        snapshot: &SelectSnapshot,
-        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
-        x: f32,
-        y: f32,
-    ) -> Option<SkinClickHit>;
-
-    fn result_click_hit(&self, state: &SkinDrawState, x: f32, y: f32) -> Option<SkinClickHit>;
-
-    fn result_slider_hit(&self, state: &SkinDrawState, x: f32, y: f32) -> Option<SkinSliderHit>;
-
-    fn select_slider_hit(
-        &self,
-        snapshot: &SelectSnapshot,
-        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
-        x: f32,
-        y: f32,
-    ) -> Option<SkinSliderHit>;
 
     fn select_click_hits(
         &self,
@@ -435,15 +453,6 @@ pub trait SkinDocumentRenderExt {
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Vec<SkinRenderItem>;
 
-    fn note_lane_area(
-        &self,
-        lane: Lane,
-        key_mode: KeyMode,
-        enabled_options: &[i32],
-    ) -> Option<Rect>;
-
-    fn primary_note_lane_height_px(&self) -> Option<i32>;
-
     fn notes_destination_offset(&self, state: &SkinDrawState) -> SkinOffsetValue;
 
     fn apply_notes_offset_to_rect(&self, rect: Rect, state: &SkinDrawState) -> Rect;
@@ -472,14 +481,6 @@ pub trait SkinDocumentRenderExt {
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Vec<SkinRenderItem>>;
 
-    fn judge_render_items(
-        &self,
-        judge: &str,
-        combo: u32,
-        elapsed_ms: i32,
-        sources: &HashMap<String, SkinDocumentTexture>,
-    ) -> Option<Vec<SkinRenderItem>>;
-
     fn judge_render_items_with_offsets(
         &self,
         judge: &str,
@@ -489,22 +490,13 @@ pub trait SkinDocumentRenderExt {
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Vec<SkinRenderItem>>;
 
-    fn judge_render_items_for_def(
-        &self,
-        judge: &SkinJudgeDef,
-        judge_index: usize,
-        combo: u32,
-        elapsed_ms: i32,
-        sources: &HashMap<String, SkinDocumentTexture>,
-        state: &SkinDrawState,
-    ) -> Option<Vec<SkinRenderItem>>;
-
     fn beatoraja_judge_number_dst_x(dst_w: i32, digit: i32) -> i32;
 
     fn apply_beatoraja_judge_number_dst_x(frame: &mut ResolvedSkinFrame, digit: i32);
 
     fn value_number_length(&self, value_id: &str, number: i64, frame: ResolvedSkinFrame) -> i32;
 
+    #[cfg(test)]
     fn judge_image_render_item(
         &self,
         judge: &str,
@@ -689,11 +681,15 @@ mod graph;
 mod play;
 mod select;
 
-// Rust requires one coherent impl block for a trait. The method groups live in
-// scene-oriented macros so the public extension trait and its implementation
-// remain behaviorally identical while the source is physically separated.
-#[allow(private_interfaces)]
 impl SkinDocumentRenderExt for SkinDocument {
+    core::skin_document_render_core_static_public_methods!();
+    play::skin_document_render_play_judge_public_methods!();
+    play::skin_document_render_play_lane_public_methods!();
+    select::skin_document_render_select_interaction_public_methods!();
+    select::skin_document_render_select_render_public_methods!();
+}
+
+impl SkinDocumentRenderInternal for SkinDocument {
     core::skin_document_render_core_static_methods!();
     core::skin_document_render_core_clip_methods!();
     core::skin_document_render_core_resolve_methods!();

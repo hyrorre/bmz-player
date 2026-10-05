@@ -1,4 +1,4 @@
-macro_rules! skin_document_render_select_interaction_methods {
+macro_rules! skin_document_render_select_interaction_public_methods {
     () => {
         fn select_click_hit(
             &self,
@@ -85,7 +85,13 @@ macro_rules! skin_document_render_select_interaction_methods {
                 })
                 .next_back()
         }
+    };
+}
 
+pub(in crate::skin::document_render) use skin_document_render_select_interaction_public_methods;
+
+macro_rules! skin_document_render_select_interaction_methods {
+    () => {
         fn select_click_hits(
             &self,
             _sources: &HashMap<String, SkinDocumentTexture>,

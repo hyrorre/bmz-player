@@ -1,3 +1,69 @@
+macro_rules! skin_document_render_play_lane_public_methods {
+    () => {
+        /// `note.dst` の中から有効な条件に一致するエントリを探し、
+        /// 指定レーンのノートエリア矩形（正規化座標）を返す。
+        /// ノートエリアはレーン列全体を表す。Y軸: 上端=ノートが最も早い時点、下端=判定ライン。
+        ///
+        /// note.dst の解釈は2通り:
+        /// 1. `load_beatoraja_json` 経由で読んだ場合: `expand_json_skin_value` により条件ブロックが
+        ///    展開済みで、dst はレーン順の Frame エントリ列になっている。
+        ///    → 全 Frame をフラット配列として `lane_idx` 番目を使う。
+        /// 2. 直接 JSON パースした場合: Conditional エントリの frames 配列がレーン対応を持つ。
+        ///    → 条件を満たす Conditional を探し、その frames[lane_idx] を使う。
+        fn note_lane_area(
+            &self,
+            lane: Lane,
+            key_mode: KeyMode,
+            enabled_options: &[i32],
+        ) -> Option<Rect> {
+            let note = self.note.as_ref()?;
+            let lane_idx = beatoraja_note_index(lane, key_mode);
+            let canvas_w = self.w as f32;
+            let canvas_h = self.h as f32;
+
+            // 全エントリを展開してフラット化。Conditional は条件が合うものだけ展開する。
+            let frame = note
+                .dst
+                .iter()
+                .flat_map(|entry| match entry {
+                    SkinDstEntry::Frame(frame) => std::slice::from_ref(frame),
+                    SkinDstEntry::Conditional { if_ops, frames }
+                        if test_skin_dst_if(if_ops, enabled_options) =>
+                    {
+                        frames.as_slice()
+                    }
+                    SkinDstEntry::Conditional { .. } => &[],
+                })
+                .nth(lane_idx)?;
+            if let (Some(x), Some(y), Some(w), Some(h)) = (frame.x, frame.y, frame.w, frame.h) {
+                Some(normalize_skin_frame_rect(
+                    ResolvedSkinFrame { x, y, w, h, ..ResolvedSkinFrame::default() },
+                    canvas_w as u32,
+                    canvas_h as u32,
+                ))
+            } else {
+                None
+            }
+        }
+
+        fn primary_note_lane_height_px(&self) -> Option<i32> {
+            let enabled_options = self.enabled_options();
+            self.note_lane_area(Lane::Scratch, KeyMode::K7, &enabled_options)
+                .or_else(|| self.note_lane_area(Lane::Key1, KeyMode::K7, &enabled_options))
+                .map(|area| {
+                    if self.note.as_ref().is_some_and(|note| note.lr2_horizontal) {
+                        ((1.0 - area.x).max(0.0) * self.w.max(1) as f32).round() as i32
+                    } else {
+                        (area.height * self.h.max(1) as f32).round() as i32
+                    }
+                })
+                .filter(|height| *height > 0)
+        }
+    };
+}
+
+pub(in crate::skin::document_render) use skin_document_render_play_lane_public_methods;
+
 macro_rules! skin_document_render_play_lane_methods {
     () => {
         fn note_group_render_items(
@@ -87,66 +153,6 @@ macro_rules! skin_document_render_play_lane_methods {
                 items.push(item);
             }
             items
-        }
-
-        /// `note.dst` の中から有効な条件に一致するエントリを探し、
-        /// 指定レーンのノートエリア矩形（正規化座標）を返す。
-        /// ノートエリアはレーン列全体を表す。Y軸: 上端=ノートが最も早い時点、下端=判定ライン。
-        ///
-        /// note.dst の解釈は2通り:
-        /// 1. `load_beatoraja_json` 経由で読んだ場合: `expand_json_skin_value` により条件ブロックが
-        ///    展開済みで、dst はレーン順の Frame エントリ列になっている。
-        ///    → 全 Frame をフラット配列として `lane_idx` 番目を使う。
-        /// 2. 直接 JSON パースした場合: Conditional エントリの frames 配列がレーン対応を持つ。
-        ///    → 条件を満たす Conditional を探し、その frames[lane_idx] を使う。
-        fn note_lane_area(
-            &self,
-            lane: Lane,
-            key_mode: KeyMode,
-            enabled_options: &[i32],
-        ) -> Option<Rect> {
-            let note = self.note.as_ref()?;
-            let lane_idx = beatoraja_note_index(lane, key_mode);
-            let canvas_w = self.w as f32;
-            let canvas_h = self.h as f32;
-
-            // 全エントリを展開してフラット化。Conditional は条件が合うものだけ展開する。
-            let frame = note
-                .dst
-                .iter()
-                .flat_map(|entry| match entry {
-                    SkinDstEntry::Frame(frame) => std::slice::from_ref(frame),
-                    SkinDstEntry::Conditional { if_ops, frames }
-                        if test_skin_dst_if(if_ops, enabled_options) =>
-                    {
-                        frames.as_slice()
-                    }
-                    SkinDstEntry::Conditional { .. } => &[],
-                })
-                .nth(lane_idx)?;
-            if let (Some(x), Some(y), Some(w), Some(h)) = (frame.x, frame.y, frame.w, frame.h) {
-                Some(normalize_skin_frame_rect(
-                    ResolvedSkinFrame { x, y, w, h, ..ResolvedSkinFrame::default() },
-                    canvas_w as u32,
-                    canvas_h as u32,
-                ))
-            } else {
-                None
-            }
-        }
-
-        fn primary_note_lane_height_px(&self) -> Option<i32> {
-            let enabled_options = self.enabled_options();
-            self.note_lane_area(Lane::Scratch, KeyMode::K7, &enabled_options)
-                .or_else(|| self.note_lane_area(Lane::Key1, KeyMode::K7, &enabled_options))
-                .map(|area| {
-                    if self.note.as_ref().is_some_and(|note| note.lr2_horizontal) {
-                        ((1.0 - area.x).max(0.0) * self.w.max(1) as f32).round() as i32
-                    } else {
-                        (area.height * self.h.max(1) as f32).round() as i32
-                    }
-                })
-                .filter(|height| *height > 0)
         }
 
         fn notes_destination_offset(&self, state: &SkinDrawState) -> SkinOffsetValue {

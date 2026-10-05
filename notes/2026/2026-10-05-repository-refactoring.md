@@ -53,3 +53,17 @@
 検証（Windows）: fmt、対象crateのcheck・all-targets Clippy・全testが成功。
 全testは2,197成功、19 ignored。実際の更新適用やmacOS Sparkle操作は未実施。
 ログ: `.local/refactor-03-full.log`。
+
+## 4. 描画API
+
+- `SkinDocumentRenderExt` の89メソッドを、公開入口14個とskin内部評価75個に分離した。
+  外部利用されている描画・hit test・レーン寸法取得の入口は維持する。
+- `SkinDocumentRenderInternal` はskin内だけに公開し、内部のgraph/cache/lookup型を
+  公開traitから除いた。trait/implの `allow(private_interfaces)` は不要になった。
+- メソッド本体を変更せず、既存のscene別macroを公開/内部のimplへ振り分けた。
+  テスト専用のjudge image helperは既存のtext helper同様にcfg(test)とした。
+
+検証（Windows）: fmt、workspace全体のcheck・all-targets Clippy・全testが成功。
+bmz-renderは679成功・4 ignored、bmz-playerは2,197成功・19 ignored。
+Lua数値の準備順序・stateful callback・production cacheの既存テストを含む。
+GPUのignored testと実機の描画確認は未実施。ログ: `.local/refactor-04-full.log`。
