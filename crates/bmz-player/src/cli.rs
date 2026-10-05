@@ -43,6 +43,7 @@ pub(crate) fn configure_latency_stall_test(enabled: bool) {
 mod export;
 mod help;
 pub use export::{FrameRate, VideoExportOptions};
+pub mod audio_probe;
 mod ir;
 mod model;
 mod options;

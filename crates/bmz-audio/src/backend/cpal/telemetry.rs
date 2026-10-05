@@ -10,6 +10,7 @@ pub(super) struct OutputTiming {
     pub(super) duration_ns: AtomicLatencyHistogram,
     prediction_ns: AtomicLatencyHistogram,
     invalid_predictions: AtomicU64,
+    unavailable_predictions: AtomicU64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -20,6 +21,7 @@ pub struct OutputTimingSummary {
     pub duration_ns: DistributionSummary,
     pub prediction_ns: DistributionSummary,
     pub invalid_predictions: u64,
+    pub unavailable_predictions: u64,
 }
 
 impl OutputTiming {
@@ -29,6 +31,7 @@ impl OutputTiming {
         self.duration_ns.reset();
         self.prediction_ns.reset();
         self.invalid_predictions.store(0, Ordering::Relaxed);
+        self.unavailable_predictions.store(0, Ordering::Relaxed);
         self.epoch.fetch_add(1, Ordering::Release);
     }
     pub(super) fn observe(
@@ -46,6 +49,25 @@ impl OutputTiming {
         );
     }
 
+    // CPAL 0.18.1's PipeWire fallback manufactures a one-period prediction and
+    // provides no validity bit. Do not mix that with a server delay estimate.
+    pub(super) fn observe_unavailable(
+        &self,
+        frames: usize,
+        now: Instant,
+        previous: Option<Instant>,
+    ) {
+        self.observe_frames(frames, now, previous);
+        self.unavailable_predictions.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_frames(&self, frames: usize, now: Instant, previous: Option<Instant>) {
+        self.frames.record(frames as u64);
+        if let Some(previous) = previous.and_then(|previous| now.checked_duration_since(previous)) {
+            self.interval_ns.record(previous.as_nanos().min(u64::MAX as u128) as u64);
+        }
+    }
+
     /// The caller subtracts timestamps in the backend's own clock domain.
     pub(super) fn observe_delay(
         &self,
@@ -54,11 +76,7 @@ impl OutputTiming {
         previous: Option<Instant>,
         delay: Option<std::time::Duration>,
     ) {
-        self.frames.record(frames as u64);
-        if let Some(previous) = previous {
-            self.interval_ns
-                .record(now.duration_since(previous).as_nanos().min(u64::MAX as u128) as u64);
-        }
+        self.observe_frames(frames, now, previous);
         match delay.filter(|d| !d.is_zero() && d.as_secs() < 1) {
             Some(delay) => self.prediction_ns.record(delay.as_nanos() as u64),
             None => {
@@ -75,6 +93,7 @@ impl OutputTiming {
             duration_ns: self.duration_ns.summary(),
             prediction_ns: self.prediction_ns.summary(),
             invalid_predictions: self.invalid_predictions.load(Ordering::Relaxed),
+            unavailable_predictions: self.unavailable_predictions.load(Ordering::Relaxed),
         }
     }
 }
@@ -82,6 +101,16 @@ impl OutputTiming {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unavailable_server_prediction_is_not_a_zero_latency_sample() {
+        let timing = OutputTiming::default();
+        timing.observe_unavailable(512, Instant::now(), None);
+        let summary = timing.summary();
+        assert_eq!(summary.frames.max, 512);
+        assert_eq!(summary.prediction_ns.count, 0);
+        assert_eq!(summary.unavailable_predictions, 1);
+        assert_eq!(summary.invalid_predictions, 0);
+    }
     #[test]
     fn measures_actual_frames_and_excludes_invalid_predictions() {
         let timing = OutputTiming::default();

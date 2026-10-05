@@ -24,6 +24,8 @@ use crate::screens::result_model::ResultGraphCollector;
 use crate::select_options::TargetOption;
 use crate::storage::score_db::ScoreKey;
 use crate::video_bga::ActiveVideoBgaDecoder;
+mod diagnostics;
+pub use diagnostics::latency_json;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct AudioOutputDiagnostics {
@@ -618,6 +620,30 @@ fn cpal_asio_host() -> Result<Option<CpalHostId>> {
 mod tests {
     use super::*;
     use crate::config::app_config::AppConfig;
+
+    #[test]
+    fn linux_hosts_follow_compiled_features_without_changing_defaults() {
+        let available = available_audio_backends();
+        assert_eq!(
+            available.contains(&AudioBackend::PipeWire),
+            cfg!(all(
+                any(
+                    target_os = "linux",
+                    target_os = "freebsd",
+                    target_os = "dragonfly",
+                    target_os = "netbsd"
+                ),
+                feature = "pipewire"
+            ))
+        );
+        #[cfg(target_os = "linux")]
+        {
+            assert!(available.contains(&AudioBackend::Alsa));
+            assert_eq!(available.contains(&AudioBackend::Pulse), cfg!(feature = "pulseaudio"));
+            assert_eq!(AppConfig::default().audio.backend, AudioBackend::Auto);
+            assert_eq!(AppConfig::default().audio.buffer_size, 256);
+        }
+    }
 
     #[test]
     fn default_audio_config_can_use_cpal_default_output() {

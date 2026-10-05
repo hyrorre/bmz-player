@@ -156,6 +156,8 @@ pub struct CpalStreamInfo {
     pub requested_device: Option<String>,
     pub actual_host: String,
     pub actual_device: String,
+    pub actual_device_id: Option<String>,
+    pub channels: u16,
     pub requested_rate: Option<u32>,
     pub actual_rate: u32,
     pub requested_frames: Option<u32>,
@@ -233,19 +235,19 @@ pub enum CpalBackendError {
     UnsupportedHost(CpalHostId),
 
     #[error("requested cpal host is unavailable")]
-    HostUnavailable(::cpal::Error),
+    HostUnavailable(#[source] ::cpal::Error),
 
     #[error("failed to enumerate output devices")]
-    OutputDevices(::cpal::Error),
+    OutputDevices(#[source] ::cpal::Error),
 
     #[error("failed to query default output config")]
-    DefaultOutputConfig(::cpal::Error),
+    DefaultOutputConfig(#[source] ::cpal::Error),
 
     #[error("failed to build output stream")]
-    BuildStream(::cpal::Error),
+    BuildStream(#[source] ::cpal::Error),
 
     #[error("failed to play output stream")]
-    PlayStream(::cpal::Error),
+    PlayStream(#[source] ::cpal::Error),
 
     #[error("WASAPI exclusive output requires the WASAPI host")]
     ExclusiveRequiresWasapi,
