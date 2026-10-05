@@ -37,9 +37,6 @@ impl WinitApp {
             return;
         }
         if self.select.select_items.is_empty() {
-            self.reload_select_items();
-        }
-        if self.select.select_items.is_empty() {
             return;
         }
         let previous_index = self.select.selected_index;
@@ -158,8 +155,6 @@ impl WinitApp {
         let hints = favorite_hints_for_row(&row);
         match self.boot.collection_db.toggle_favorite_chart(sha256, &hints, now_unix_seconds()) {
             Ok(enabled) => {
-                self.reload_select_items();
-                self.restart_select_bar_timer_without_scroll(Instant::now());
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
                 let text = Localizer::new(self.boot.profile_config.ui.locale());
                 self.show_left_overlay_toast(text.text(if enabled {
@@ -167,6 +162,8 @@ impl WinitApp {
                 } else {
                     "toast-favorite-chart-removed"
                 }));
+                self.reload_select_items();
+                self.restart_select_bar_timer_without_scroll(Instant::now());
                 tracing::info!(enabled, title = row.display_title(), "favorite chart toggled");
             }
             Err(error) => tracing::error!(%error, "failed to toggle favorite chart"),
@@ -483,8 +480,6 @@ impl WinitApp {
         };
         match result {
             Ok(enabled) => {
-                self.reload_select_items();
-                self.restart_select_bar_timer_without_scroll(Instant::now());
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
                 let text = Localizer::new(self.boot.profile_config.ui.locale());
                 self.show_left_overlay_toast(text.text(if enabled {
@@ -492,6 +487,8 @@ impl WinitApp {
                 } else {
                     "toast-favorite-song-removed"
                 }));
+                self.reload_select_items();
+                self.restart_select_bar_timer_without_scroll(Instant::now());
                 tracing::info!(enabled, title = row.display_title(), "favorite song toggled");
             }
             Err(error) => tracing::error!(%error, "failed to toggle favorite song"),
@@ -513,14 +510,9 @@ impl WinitApp {
             }
             _ => return,
         };
-        self.select.selected_index_stack.push(self.select.selected_index);
-        self.select.folder_stack.push(path);
-        self.reload_select_items();
-        self.select.selected_index = 0;
-        self.reset_selected_replay_slot();
-        self.restart_select_bar_timer_without_scroll(Instant::now());
-        self.play_system_sound(crate::system_sound::SoundType::FolderOpen);
-        tracing::info!(target = %description, "entered related chart view");
+        if self.enter_select_folder(path) {
+            tracing::info!(target = %description, "entered related chart view");
+        }
     }
 
     pub(super) fn start_random_select(&mut self, chart_ids: &[i64]) {
@@ -530,20 +522,9 @@ impl WinitApp {
     }
 
     pub(super) fn enter_or_play_selected(&mut self) {
-        if self.select.select_items.is_empty() {
-            self.reload_select_items();
-        }
         match self.select.select_items.get(self.select.selected_index).cloned() {
             Some(SelectItem::Folder { path, .. }) => {
-                // 入る直前のカーソル位置を覚えておき、出た時に復元できるようにする。
-                self.select.selected_index_stack.push(self.select.selected_index);
-                self.select.folder_stack.push(path);
-                self.reload_select_items();
-                self.select.selected_index = 0;
-                self.reset_selected_replay_slot();
-                self.restart_select_bar_timer_without_scroll(Instant::now());
-                self.play_system_sound(crate::system_sound::SoundType::FolderOpen);
-                tracing::info!(folder = ?self.select.folder_stack.last(), "entered folder");
+                self.enter_select_folder(path);
             }
             Some(SelectItem::Chart(row)) => {
                 if self.select.course_builder.is_some() {
@@ -613,10 +594,17 @@ impl WinitApp {
                     self.apply_select_audio_settings();
                 }
             }
-            None => {
-                tracing::warn!("no item is available to select");
-            }
+            None => {}
         }
+    }
+
+    fn enter_select_folder(&mut self, path: String) -> bool {
+        if !self.change_select_list(SelectListAction::Enter(path)) {
+            return false;
+        }
+        self.play_system_sound(crate::system_sound::SoundType::FolderOpen);
+        tracing::info!(folder = ?self.select.folder_stack.last(), "entered folder");
+        true
     }
 
     pub(super) fn acquire_missing_chart(&mut self, row: &SelectChartRow) {
@@ -985,46 +973,18 @@ impl WinitApp {
 
     /// Runs the current `search_query` against the library DB. On hit: appends
     /// to history (dedupe + bounded), pushes a virtual folder onto the stack,
-    /// and exits search mode. On miss: leaves the query intact and updates the
-    /// feedback message.
+    /// and exits search mode. On miss: clears the query and updates the feedback
+    /// message. Load errors retain the query and the current view.
     pub(super) fn execute_song_search(&mut self) {
         let query = self.select.search.trimmed_query();
         if query.is_empty() {
             return;
         }
-        let roots = enabled_root_paths(&self.boot.app_config);
-        let hit_count = match self.boot.library_db.search_charts_in_roots(&query, Some(&roots)) {
-            Ok(charts) => charts.len(),
-            Err(error) => {
-                tracing::error!(%error, %query, "song search failed");
-                0
-            }
-        };
-        if hit_count == 0 {
-            // クエリをクリアして次入力を待つ。display_search_word はクエリ空 +
-            // メッセージ有りの組み合わせで "no song found" を流す。
-            self.select.search.set_no_results(
-                Localizer::new(self.boot.profile_config.ui.locale())
-                    .text("select-search-no-results"),
-            );
-            tracing::info!(%query, "song search returned no results");
+        if !self.enter_select_folder(format!("{SEARCH_PATH_PREFIX}{query}")) {
             return;
         }
-
         self.select.search.record_successful_query(query.clone());
-
-        self.set_search_mode(false);
-
-        // 検索結果フォルダへ入る。`enter_or_play_selected` と同じ流儀でカーソル
-        // 位置を退避してから push する。
-        self.select.selected_index_stack.push(self.select.selected_index);
-        self.select.folder_stack.push(format!("{SEARCH_PATH_PREFIX}{query}"));
-        self.reload_select_items();
-        self.select.selected_index = 0;
-        self.reset_selected_replay_slot();
-        self.restart_select_bar_timer_without_scroll(Instant::now());
-        self.play_system_sound(crate::system_sound::SoundType::FolderOpen);
-        tracing::info!(%query, hit_count, "entered search result folder");
+        tracing::info!(%query, "entered search result folder");
     }
 
     pub(super) fn exit_folder(&mut self) {
@@ -1034,16 +994,11 @@ impl WinitApp {
         if self.select.settings_edit.is_some() {
             self.cancel_settings_edit();
         }
-        if self.select.folder_stack.pop().is_some() {
-            let restored = self.select.selected_index_stack.pop().unwrap_or(0);
-            self.reload_select_items();
-            // 復元先がリスト範囲外なら末尾にクランプする。
-            self.select.selected_index =
-                restored.min(self.select.select_items.len().saturating_sub(1));
-            self.reset_selected_replay_slot();
-            self.restart_select_bar_timer_without_scroll(Instant::now());
-            self.play_system_sound(crate::system_sound::SoundType::FolderClose);
-            tracing::info!(depth = self.select.folder_stack.len(), "exited folder");
+        if !self.select.folder_stack.is_empty() {
+            if self.change_select_list(SelectListAction::Exit) {
+                self.play_system_sound(crate::system_sound::SoundType::FolderClose);
+                tracing::info!(depth = self.select.folder_stack.len(), "exited folder");
+            }
         } else if self.select.course_builder.is_some() {
             self.cancel_select_course_builder();
         }

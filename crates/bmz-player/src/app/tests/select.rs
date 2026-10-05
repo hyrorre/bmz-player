@@ -10,3 +10,5 @@ mod cases_03;
 mod cases_04;
 #[path = "select/cases_05.rs"]
 mod cases_05;
+#[path = "select/navigation.rs"]
+mod navigation;

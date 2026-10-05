@@ -54,7 +54,7 @@ impl WinitApp {
                 initial_mode_filter,
                 select_difficulty_filter,
                 select_sort,
-            )
+            )?
         };
         boot.profile_config.select.mode_filter = select_mode_filter.as_str().to_string();
         if !viewer_mode

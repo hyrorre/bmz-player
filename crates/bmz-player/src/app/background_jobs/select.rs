@@ -2,7 +2,63 @@ use super::*;
 
 impl WinitApp {
     pub(in crate::app) fn reload_select_items(&mut self) {
+        self.change_select_list(SelectListAction::Refresh);
+    }
+
+    pub(in crate::app) fn change_select_list(&mut self, action: SelectListAction) -> bool {
         let started_at = Instant::now();
+        let history: Vec<String> = self.select.search.history().iter().cloned().collect();
+        let previous_selected_key =
+            self.select.select_items.get(self.select.selected_index).map(select_item_key);
+        let prepared = prepare_select_list(
+            &action,
+            &self.select.folder_stack,
+            &self.select.selected_index_stack,
+            self.select.selected_index,
+            previous_selected_key,
+            |stack| {
+                load_items_for_stack(
+                    &self.boot,
+                    &mut self.select.collection_cache,
+                    stack,
+                    &history,
+                    self.select.select_mode_filter,
+                    self.select.select_difficulty_filter,
+                    self.select.select_sort,
+                )
+            },
+        );
+        let prepared = match prepared {
+            Ok(Some(prepared)) => prepared,
+            Ok(None) => {
+                if let SelectListAction::Enter(path) = &action {
+                    let text = Localizer::new(self.boot.profile_config.ui.locale());
+                    if parse_search_query(path).is_some() && self.select.search.is_active() {
+                        self.select.search.set_no_results(text.text("select-search-no-results"));
+                    } else {
+                        self.show_left_overlay_toast(text.text("toast-select-folder-empty"));
+                    }
+                }
+                return false;
+            }
+            Err(error) => {
+                tracing::error!(%error, ?action, "failed to load select list");
+                self.show_left_overlay_toast(
+                    Localizer::new(self.boot.profile_config.ui.locale())
+                        .text("toast-select-folder-load-failed"),
+                );
+                return false;
+            }
+        };
+        let folder_changed = self.select.folder_stack != prepared.folder_stack;
+        if matches!(&action, SelectListAction::Enter(path) if parse_search_query(path).is_some())
+            && self.select.search.is_active()
+        {
+            self.set_search_mode(false);
+        }
+        self.select.folder_stack = prepared.folder_stack;
+        self.select.selected_index_stack = prepared.selected_index_stack;
+        self.select.selected_index = prepared.selected_index;
         // Song scans and table/course updates all converge here. Keep the editor
         // cache until an actual library refresh instead of querying it per frame.
         self.course_editor_cache.invalidate();
@@ -10,23 +66,11 @@ impl WinitApp {
             self.invalidate_select_folder_summaries();
         }
         self.select.select_folder_summaries.sync_view(&self.select.folder_stack);
-        let previous_selected_key =
-            self.select.select_items.get(self.select.selected_index).map(select_item_key);
-        let history: Vec<String> = self.select.search.history().iter().cloned().collect();
-        let (items, resolved_mode_filter) = load_items_for_stack(
-            &self.boot,
-            &mut self.select.collection_cache,
-            &self.select.folder_stack,
-            &history,
-            self.select.select_mode_filter,
-            self.select.select_difficulty_filter,
-            self.select.select_sort,
-        );
         // beatoraja 準拠の自動送りで mode filter が変わることがあるので、
         // 表示状態と永続化用 profile config を実際に適用したモードへ揃える。
-        self.select.select_mode_filter = resolved_mode_filter;
-        self.boot.profile_config.select.mode_filter = resolved_mode_filter.as_str().to_string();
-        self.select.select_items = items;
+        self.select.select_mode_filter = prepared.mode_filter;
+        self.boot.profile_config.select.mode_filter = prepared.mode_filter.as_str().to_string();
+        self.select.select_items = prepared.items;
         // Table levels already resolve sources before score/analysis enrichment.
         let table_level = matches!(
             self.select.folder_stack.last().and_then(|path| parse_table_path(path)),
@@ -84,18 +128,32 @@ impl WinitApp {
                 Localizer::new(self.boot.profile_config.ui.locale())
                     .format("select-search-results", &args),
             );
+        } else if folder_changed {
+            self.select.search.clear_message();
         }
         self.select.replay_slot_cache.replace(None);
         self.select.selected_index = restored_select_index(
             &self.select.select_items,
-            previous_selected_key.as_ref(),
+            prepared.selected_key.as_ref(),
             self.select.selected_index,
         );
         self.sync_selected_play_mode();
         self.normalize_selected_replay_slot();
+        if folder_changed {
+            self.clear_select_hold();
+            self.reset_selected_replay_slot();
+            self.restart_select_bar_timer_without_scroll(Instant::now());
+        }
+        if prepared.left_empty_folder {
+            self.show_left_overlay_toast(
+                Localizer::new(self.boot.profile_config.ui.locale())
+                    .text("toast-select-folder-empty-returned"),
+            );
+        }
         tracing::debug!(target: "bmz_player::select_profile",
             elapsed_us = started_at.elapsed().as_micros(),
             items = self.select.select_items.len(), "select list loaded");
+        true
     }
 
     pub(in crate::app) fn invalidate_select_folder_summaries(&mut self) {
