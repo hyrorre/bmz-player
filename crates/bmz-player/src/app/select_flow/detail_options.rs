@@ -538,9 +538,14 @@ fn detail_gamepad_lane(
     control: &str,
     nine_key: bool,
 ) -> Option<Lane> {
+    if !nine_key && let Some(lane) = select_option_lane_for_gamepad(input, slots, device, control) {
+        return Some(lane);
+    }
+    // Match normal select options: retain explicit DP/device assignments, then
+    // accept the independent 7K bindings. Resolve the fallback with its device too.
     crate::config::play::lane_binding_for_chart_with_slots(
         input,
-        if nine_key { KeyMode::K9 } else { KeyMode::K14 },
+        if nine_key { KeyMode::K9 } else { KeyMode::K7 },
         slots,
     )
     .resolve(device, &PhysicalControl::GamepadButton(control.to_string()))
@@ -872,6 +877,52 @@ mod tests {
             }
         }
         assert_eq!(bindings.detail_value_direction("ArrowUp", true), None);
+    }
+
+    #[test]
+    fn detail_gamepad_accepts_independent_7k_bindings_without_crossing_devices() {
+        use crate::config::profile_config::{LaneConfig, PlayModeInputConfig};
+        let mut profile = ProfileConfig::new_default("test", "Test", 0);
+        for (mode, device, lane) in [
+            (KeyMode::K7, "gamepad1", LaneConfig::Key3),
+            (KeyMode::K14, "gamepad2", LaneConfig::Key10),
+            (KeyMode::K9, "gamepad1", LaneConfig::Key8),
+        ] {
+            let mut bindings = crate::config::play_input::default_play_bindings(mode);
+            bindings.retain(|binding| {
+                binding.lane != Some(lane) || !binding.device.starts_with("gamepad")
+            });
+            bindings.push(crate::config::play_input::gamepad_play_binding_for_device(
+                device, "Button13", lane,
+            ));
+            profile.input.play.insert(
+                mode.play_map_key().into(),
+                PlayModeInputConfig { bindings, ..Default::default() },
+            );
+        }
+        let slots = crate::input::gamepad::GamepadSlotMap::from_slot_ids([Some(0), Some(1)]);
+        let keys = SelectKeyBindings::from_profile(&profile.input);
+        assert_eq!(keys.ui_lane_for_control("Button13"), Some(Lane::Key3));
+        for (device, nine_key, expected, direction) in [
+            (DeviceId(16), false, Lane::Key3, 1),
+            (DeviceId(17), false, Lane::Key10, 1),
+            (DeviceId(16), true, Lane::Key8, -1),
+        ] {
+            let lane = detail_gamepad_lane(&profile.input, slots, device, "Button13", nine_key);
+            assert_eq!(lane, Some(expected));
+            assert_eq!(
+                lane.and_then(|lane| detail_lane_direction(lane, nine_key)),
+                Some(direction)
+            );
+        }
+        assert_eq!(
+            detail_gamepad_lane(&profile.input, slots, DeviceId(18), "Button13", false),
+            None
+        );
+        assert_eq!(
+            detail_gamepad_lane(&profile.input, slots, DeviceId(17), "Button13", true),
+            None
+        );
     }
 
     #[test]
