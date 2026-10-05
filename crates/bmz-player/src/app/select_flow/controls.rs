@@ -294,7 +294,7 @@ impl WinitApp {
         };
         match session {
             SelectSettingsEditSession::Profile(session) => {
-                let entry_id = session.entry_id;
+                let entry_id = session.entry_id();
                 let score_context_before =
                     SelectScoreContext::from_profile(&self.boot.profile_config);
                 session.restore(&mut self.boot.profile_config);
@@ -326,7 +326,7 @@ impl WinitApp {
     }
 
     fn commit_profile_settings_edit(&mut self, session: SettingsEditSession) {
-        let entry_id = session.entry_id;
+        let entry_id = session.entry_id();
         self.boot.profile_config.updated_at = now_unix_seconds();
         match save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
         {
@@ -489,7 +489,7 @@ impl WinitApp {
             return;
         };
         let profile_entry = match session {
-            SelectSettingsEditSession::Profile(session) => Some(session.entry_id),
+            SelectSettingsEditSession::Profile(session) => Some(session.entry_id()),
             SelectSettingsEditSession::App(_) => None,
         };
         let score_context_before =
@@ -497,7 +497,7 @@ impl WinitApp {
         let changed = match session {
             SelectSettingsEditSession::Profile(session) => {
                 let delta = direction
-                    * crate::config::settings_registry::settings_adjust_step(session.entry_id);
+                    * crate::config::settings_registry::settings_adjust_step(session.entry_id());
                 adjust_settings_draft(&mut self.boot.profile_config, session, delta)
             }
             SelectSettingsEditSession::App(session) => {

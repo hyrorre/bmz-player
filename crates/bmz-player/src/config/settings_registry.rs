@@ -19,126 +19,6 @@ use crate::i18n::AppLocale;
 use crate::ln_policy::LnPolicySetting;
 use crate::select_options::SessionMode;
 
-/// ゲーム内設定で編集可能な profile.toml 項目。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SettingsEntryId {
-    NormalizeChartVolume,
-    NormalizeSystemBgmVolume,
-    MasterVolume,
-    KeyVolume,
-    BgmVolume,
-    PreviewVolume,
-    SystemBgmVolume,
-    SystemSeVolume,
-    InputOffsetMs,
-    VisualOffsetMs,
-    VisualOffsetAutoAdjust,
-    JudgeAlgorithm,
-    FastSlowDisplayScope,
-    FastSlowDisplayThresholdMs,
-    RuleMode,
-    LnModePolicy,
-    Gauge,
-    GaugeAutoShift,
-    BottomShiftableGauge,
-    Random,
-    Random2,
-    DoubleOption,
-    HsFix,
-    Target,
-    Assist,
-    BgaMode,
-    BgaExpand,
-    SessionMode,
-    KeyModeConversion,
-    SevenToNinePattern,
-    SevenToNineType,
-    SevenToNineRuleMode,
-    PlayExitHoldMs,
-    AssistExpandJudge,
-    AssistJudgeArea,
-    AssistMarkNote,
-    AssistBpmGuide,
-    AssistScrollMode,
-    AssistLongNoteMode,
-    AssistMineMode,
-    AssistScrollSection,
-    AssistScrollRate,
-    AssistLongNoteRate,
-    AssistExtraNoteDepth,
-    AssistExtraNoteScratch,
-    AssistExtraNoteType,
-    AssistKeyPgreatRate,
-    AssistKeyGreatRate,
-    AssistKeyGoodRate,
-    AssistScratchPgreatRate,
-    AssistScratchGreatRate,
-    AssistScratchGoodRate,
-    AssistLongNoteMarginRate,
-    MisslayerDurationMs,
-    NoteRetention,
-    ShowLnTailCap,
-    GuideSe,
-    Hispeed,
-    HispeedMode,
-    NormalHispeedLevel,
-    ClassicHispeedStep,
-    FloatingHispeedStep,
-    SuddenEnabled,
-    Sudden,
-    LiftEnabled,
-    Lift,
-    HispeedAutoAdjust,
-    HiddenEnabled,
-    Hidden,
-    TargetGreenNumber,
-    NoteDisplayDurationMs,
-    Constant,
-    ConstantFadeMs,
-    SelectInputMode,
-    AnalogScratch1P,
-    AnalogScratchSensitivity1P,
-    AnalogScratchThreshold1P,
-    AnalogScratch2P,
-    AnalogScratchSensitivity2P,
-    AnalogScratchThreshold2P,
-    AnalogTicksPerScroll,
-    KeyboardReleaseBounceMs,
-    ControllerReleaseBounceMs,
-    Hispeed8Key1,
-    Hispeed8Key2,
-    Hispeed8Key3,
-    Hispeed8Key4,
-    Hispeed8Key5,
-    Hispeed8Key6,
-    Hispeed8Key7,
-    Hispeed8Key8,
-    DifficultyTableLevelDisplay,
-    SelectRandomSelect,
-    SelectRandomNoPlay,
-    SelectRandomFailed,
-    SelectRandomNotEasy,
-    SelectRandomNotClear,
-    SelectRandomNotHard,
-    SelectRandomNotExHard,
-    SelectRandomNotFullCombo,
-    RandomMixTargetLevel,
-    RandomMixMaxLevel,
-    RandomMixMinLevel,
-    RandomMixBpmRange,
-    RandomMixMaxBpm,
-    RandomMixMinBpm,
-    RandomMixStages,
-    ReplayAutoSave,
-    ReplayCompress,
-    ReplaySlot1Rule,
-    ReplaySlot2Rule,
-    ReplaySlot3Rule,
-    ReplaySlot4Rule,
-    Language,
-    ShowFps,
-}
-
 impl SettingsEntryId {
     pub const VOLUME_ENTRIES: &'static [Self] = &[
         Self::NormalizeChartVolume,
@@ -566,12 +446,15 @@ impl SettingsEntryId {
 
 /// 設定値 1 ステップの増減量。
 mod adjust;
+mod entries;
 mod support;
 mod value;
 
-pub use adjust::{adjust_settings_value, eight_key_hispeed_lane};
+pub use adjust::eight_key_hispeed_lane;
+pub(crate) use entries::SettingsSnapshot;
+pub use entries::{SettingsEntryId, adjust_settings_value, format_settings_value};
 pub(crate) use support::{format_bottom_shiftable_gauge, format_hispeed_mode};
-pub use value::{format_settings_value, settings_adjust_step};
+pub use value::settings_adjust_step;
 
 use support::*;
 #[cfg(test)]
