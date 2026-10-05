@@ -26,3 +26,27 @@ axis ticksが選曲・設定変更の両方へ流れていた。
   `.local/review-fix1-{check,clippy,test-unrestricted}.log`。
 - 実配置のLR2 / WMIX_HD / Seraphicやmz-select / Luxez-Flatのロードテストも実行。
   GPU・別途素材を必要とするignoreテストと、macOS実機のGameController操作は未実施。
+
+## LR2のクリック開閉と物理入力の共存
+
+1件目を`f5157260`としてコミットした後に修正。
+LR2 button 1が表示番号のみを書き換えていたため、次の入力で物理holdから再計算すると
+panel 0へ戻り、設定を変えるはずの鍵盤が選曲操作へ流れていた。
+
+- クリック開閉を既存の`OptionPanelSession`へ保存し、LR2ではE1/E2のholdが
+  変化したときだけ従来のholdパネルへ戻す。通常入力で開閉timerを再始動しない。
+- 開閉は`update_select_option_panel`へ統一し、終了長押しの解除、入力リセット、
+  開閉音も共通処理を使う。
+- modal・フォーカス喪失・画面/プロフィール切替の既存cancelで固定表示を解除する。
+  非LR2のhold方式とexperimentalのtap固定・E2切替は従来処理を維持する。
+- OpenLR2のクリック保持を参照し、E1/E2併用時はBMZの既存holdパネルへ戻す方針とした。
+
+検証:
+
+- 追加3テストでクリック後のkeyboard/gamepad押下・解放、開閉timerの維持、
+  E1/E2への移行、hold中のクリック閉鎖、cancel後の再同期を確認。
+- Windowsでfmt、bmz-player check / all-targets Clippy（`-D warnings`）、
+  全テスト（2,190件成功、19件ignore）が成功。1件目の回帰テストも含む。
+- 全テストは通常権限で実行。ログはGit管理外の`.local/review-fix2-{check,clippy,test}.log`。
+- 外部スキンのLua/CSVは変更していない。GPU表示・実入力による確認、
+  macOS / Linux実行とignoreテストは未実施。

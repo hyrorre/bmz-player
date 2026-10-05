@@ -43,15 +43,13 @@ impl WinitApp {
                 self.reload_select_items();
             }
             1 => {
-                let next = if self.select.select_option_panel == 1 { 0 } else { 1 };
-                transition_select_option_panel(
-                    &mut self.select.select_option_panel,
-                    &mut self.select.option_panel_started_at,
-                    &mut self.select.option_panel_off_started_at,
-                    &mut self.select.select_exit_hold_started_at,
-                    next,
-                    Instant::now(),
+                self.select.option_session.toggle_lr2_panel(
+                    self.select.select_option_panel,
+                    self.input.start_held,
+                    self.input.select_held,
                 );
+                self.update_select_option_panel();
+                return;
             }
             40 => {
                 const VALUES: [GaugeTypeConfig; 4] = [

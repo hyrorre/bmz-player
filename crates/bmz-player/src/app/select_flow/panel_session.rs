@@ -13,6 +13,21 @@ pub(super) struct OptionPanelSession {
 }
 
 impl OptionPanelSession {
+    pub(super) fn toggle_lr2_panel(&mut self, current_panel: u8, e1: bool, e2: bool) {
+        self.cancel(e1, e2);
+        self.panel = if current_panel == 1 { 0 } else { 1 };
+    }
+
+    pub(super) fn lr2_panel_for_holds(&mut self, e1: bool, e2: bool) -> u8 {
+        // Ordinary input/resync keeps a mouse-opened panel. A modifier edge
+        // hands ownership back to the established E1/E2 hold controls.
+        if (self.e1, self.e2) != (e1, e2) {
+            self.cancel(e1, e2);
+            self.panel = select_option_panel_for_holds(e1, e2);
+        }
+        self.panel
+    }
+
     fn route_event(
         &mut self,
         event: &ControlInputEvent,
@@ -140,6 +155,92 @@ fn panel_exit_blocks_input(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lr2_mouse_panel_survives_keyboard_and_gamepad_option_edges_without_restarting_timer() {
+        let keys =
+            SelectKeyBindings::from_profile(&crate::config::play_input::default_profile_input());
+        let mut input = AppInputRuntime::default();
+        let mut session = OptionPanelSession::default();
+        let now = Instant::now();
+        let mut panel = 0;
+        let mut on = now;
+        let mut off = [None; 6];
+        let mut exit_hold = Some(now);
+        session.toggle_lr2_panel(panel, false, false);
+        assert!(transition_select_option_panel(
+            &mut panel,
+            &mut on,
+            &mut off,
+            &mut exit_hold,
+            session.lr2_panel_for_holds(false, false),
+            now,
+        ));
+        assert_eq!(panel, 1);
+        assert_eq!(exit_hold, None);
+
+        for pressed in [true, false] {
+            for event in [
+                ControlInputEvent::keyboard_parts(
+                    PhysicalKey::Code(KeyCode::KeyS),
+                    if pressed { ElementState::Pressed } else { ElementState::Released },
+                    false,
+                ),
+                ControlInputEvent::gamepad(DeviceId(16), "Button2", pressed),
+            ] {
+                input.track_control(&event);
+                let (e1, e2, _) =
+                    select_hold_state_from_pressed_controls(&input.pressed_controls, &keys);
+                assert_eq!((e1, e2), (false, false));
+                let next = session.lr2_panel_for_holds(e1, e2);
+                assert!(!transition_select_option_panel(
+                    &mut panel,
+                    &mut on,
+                    &mut off,
+                    &mut exit_hold,
+                    next,
+                    now + Duration::from_secs(1),
+                ));
+                assert_eq!(panel, 1, "option input must still reach panel 1");
+                assert_eq!(on, now);
+                assert_eq!(off, [None; 6]);
+            }
+        }
+        session.toggle_lr2_panel(panel, false, false);
+        assert_eq!(session.lr2_panel_for_holds(false, false), 0);
+    }
+
+    #[test]
+    fn lr2_mouse_panel_hands_back_to_modifier_holds_and_click_can_close_a_held_panel() {
+        let mut session = OptionPanelSession::default();
+        for (e1, e2, expected) in [(true, false, 1), (false, true, 2), (true, true, 3)] {
+            session.cancel(false, false);
+            session.toggle_lr2_panel(0, false, false);
+            assert_eq!(session.lr2_panel_for_holds(e1, e2), expected);
+            assert_eq!(session.lr2_panel_for_holds(e1, e2), expected);
+            assert_eq!(session.lr2_panel_for_holds(false, false), 0);
+        }
+        assert_eq!(session.lr2_panel_for_holds(true, false), 1);
+        session.toggle_lr2_panel(1, true, false);
+        assert_eq!(session.lr2_panel_for_holds(true, false), 0);
+        assert_eq!(session.lr2_panel_for_holds(false, false), 0);
+        assert_eq!(session.lr2_panel_for_holds(true, false), 1);
+    }
+
+    #[test]
+    fn lr2_mouse_panel_cancel_does_not_reopen_on_resync_or_modifier_release() {
+        for (e1, e2) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut session = OptionPanelSession::default();
+            session.toggle_lr2_panel(0, e1, e2);
+            assert_eq!(session.lr2_panel_for_holds(e1, e2), 1);
+            // Shared reset used on modal entry, focus loss and scene/profile changes.
+            session.cancel(e1, e2);
+            session.reconcile(e1, e2);
+            assert_eq!(session.lr2_panel_for_holds(e1, e2), 0);
+            assert_eq!(session.lr2_panel_for_holds(false, false), 0);
+            assert_eq!(session.lr2_panel_for_holds(true, false), 1);
+        }
+    }
 
     #[test]
     fn panel_exit_animation_never_blocks_modal_input() {

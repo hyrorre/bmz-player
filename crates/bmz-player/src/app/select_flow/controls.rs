@@ -165,6 +165,10 @@ impl WinitApp {
             0
         } else if self.detail_options_enabled() {
             self.select.option_session.panel
+        } else if self.lr2_select_active() {
+            self.select
+                .option_session
+                .lr2_panel_for_holds(self.input.start_held, self.input.select_held)
         } else {
             self.reset_option_session_for_modal();
             select_option_panel_for_holds(self.input.start_held, self.input.select_held)

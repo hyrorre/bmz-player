@@ -114,6 +114,8 @@ NORMAL / MIRROR / RANDOM / S-RANDOM、DPはOFF / FLIP、HS-FIXはOFF / MAX / MIN
 LR2で表現できない現在値は別の値へ丸めず、変更操作でBMZ設定画面を開く。
 画面下部にはBMZの実際の設定と設定画面への操作案内を表示する。
 E1の基本オプションはLR2配置、E2とE1+E2はBMZパネルを使う。詳細は [操作](controls.md#lr2選曲スキン) を参照。
+button 1のクリック開閉は通常の鍵盤・ゲームパッド入力をまたいで維持する。
+E1/E2のhold変化で物理操作へ戻し、modal・フォーカス喪失・画面切替では解除する。
 
 リザルトは `GAUGECHART_1P/2P` の自分側と `SCORECHART` index 0を実際の履歴から描画する。
 `FLIPRESULT` / `DISABLEFLIP` に従って自分側のグラフ・number ref 100..116 / 120..136・ランク条件300..318を切り替える。
