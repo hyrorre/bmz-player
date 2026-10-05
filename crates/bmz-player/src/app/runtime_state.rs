@@ -202,6 +202,8 @@ pub(super) struct ResultRuntimeState {
     /// 直近に開始したプレイのsession mode。Play / Resultの常時表示に使う。
     pub(super) last_play_session_mode: SessionMode,
     pub(super) result_scene_started_at: Instant,
+    pub(super) lr2_result_progress: bmz_render::skin::Lr2ResultProgress,
+    pub(super) lr2_result_epoch: Option<Instant>,
     /// 現在インストール済みの Result skin が宣言した BGM / SE ランタイム。
     pub(super) result_skin_audio: Option<crate::skin_audio::SkinAudioRuntime>,
     /// リザルト画面終了アニメーションの進行状態。

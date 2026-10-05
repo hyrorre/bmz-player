@@ -107,6 +107,11 @@ impl WinitApp {
                 let AppSceneSnapshot::Result(snapshot) = scene else {
                     return None;
                 };
+                if let Some(document) = self.renderer.result_skin_document() {
+                    return Some(bmz_render::plan::result_skin_draw_state_for_document(
+                        snapshot, document,
+                    ));
+                }
                 let ranktime = self
                     .skin
                     .skin_video_sources

@@ -769,6 +769,9 @@ impl WinitApp {
     }
 
     pub(super) fn apply_play_option_control(&mut self, control: &str) -> bool {
+        if self.lr2_select_active() {
+            return self.apply_lr2_option_control(control);
+        }
         if self.select.select_keys.is_key1(control) {
             self.select.arrange_option = self.select.arrange_option.cycle();
             tracing::info!(arrange = self.select.arrange_option.as_str(), "arrange option changed");
@@ -849,12 +852,12 @@ impl WinitApp {
             app_config.input.gamepad_slot_runtime_device_ids,
             app_config.input.gamepad_slot_gilrs_ids,
         );
-        match select_option_lane_for_gamepad(
-            &self.boot.profile_config.input,
-            slots,
-            device,
-            control,
-        ) {
+        let lane =
+            select_option_lane_for_gamepad(&self.boot.profile_config.input, slots, device, control);
+        if self.lr2_select_active() {
+            return lane.is_some_and(|lane| self.apply_lr2_option_lane(lane));
+        }
+        match lane {
             Some(Lane::Key1) => {
                 self.select.arrange_option = self.select.arrange_option.cycle();
                 tracing::info!(

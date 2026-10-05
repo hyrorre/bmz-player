@@ -62,7 +62,7 @@ impl WinitApp {
             // Key1-4 / Key5 / Key7 の押下で終了アニメーションを開始する。
             // フェードアウト終了時の Key5/Key7 押下状態で retry か選曲へ戻るかを決める。
             lane if lane_starts_result_exit(lane) => {
-                if pressed && self.result_input_ready() {
+                if pressed && !repeat && self.result_input_ready() {
                     self.begin_result_exit(ResultExitAction::HeldLanes);
                 }
                 true
@@ -119,7 +119,7 @@ impl WinitApp {
                 true
             }
             lane if lane_starts_result_exit(lane) => {
-                if pressed && self.result_input_ready() {
+                if pressed && !repeat && self.result_input_ready() {
                     self.begin_result_exit(ResultExitAction::HeldCourseLanes);
                 }
                 true

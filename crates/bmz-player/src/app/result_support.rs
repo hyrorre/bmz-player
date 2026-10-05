@@ -339,6 +339,19 @@ pub(super) fn apply_result_summary_lua_load_state(
     table_level: &str,
     table_full: &str,
 ) {
+    // Asset #IF branches must see the finished score before the skin is decoded.
+    // Use the same rank boundaries (including zero score) as Result rendering.
+    let grade_state = bmz_render::skin::SkinDrawState {
+        ex_score: summary.ex_score,
+        total_notes: summary.total_notes,
+        result_failed: Some(false),
+        ..Default::default()
+    };
+    for option in 300..=308 {
+        runtime_state
+            .option_values
+            .insert(option, bmz_render::skin::lua_main_state_option(option, &[], &grade_state));
+    }
     runtime_state.option_values.insert(
         bmz_render::skin::SKIN_OPTION_BMZ_FIRST_PLAY,
         summary.previous_best_ex_score.is_none(),
@@ -480,6 +493,14 @@ pub(super) fn lua_runtime_state_for_result(
     option_values.insert(61, score_save_enabled);
     option_values.insert(32, !autoplay);
     option_values.insert(33, autoplay);
+    // Result has no shared LR2 BGA Size setting. Use the normal layout when
+    // skins reuse this Play setting to select their Result includes (e.g. 3R).
+    option_values.insert(30, true);
+    option_values.insert(31, false);
+    // Preload a valid Result asset branch before a finished summary exists.
+    // Entry into the actual Result overrides these with the recorded outcome.
+    option_values.insert(90, true);
+    option_values.insert(91, false);
     for option in 160..=164 {
         option_values.insert(option, result_key_mode_option_matches(option, key_mode));
     }

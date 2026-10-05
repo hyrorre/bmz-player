@@ -430,7 +430,7 @@ use result::*;
 use select::*;
 
 pub use result::result_skin_draw_state;
-pub(crate) use result::result_skin_draw_state_for_document;
+pub use result::result_skin_draw_state_for_document;
 
 #[cfg(test)]
 #[path = "plan/tests.rs"]

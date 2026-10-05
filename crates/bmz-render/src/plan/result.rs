@@ -39,7 +39,7 @@ pub(super) fn plan_result(
         };
         let items =
             skin.static_document_items_for_result_state_and_text(&snapshot.graph, &state, &text);
-        if !items.is_empty() {
+        if document.lr2 || !items.is_empty() {
             let mut commands = Vec::with_capacity(items.len() + 3);
             crate::skin::append_skin_render_items(&mut commands, &items);
             push_scene_overlays(&mut commands, &snapshot.overlay);
@@ -139,11 +139,16 @@ pub fn result_skin_draw_state(
     build_result_skin_draw_state(snapshot, result_ranktime_ms)
 }
 
-pub(crate) fn result_skin_draw_state_for_document(
+pub fn result_skin_draw_state_for_document(
     snapshot: &crate::scene::ResultSnapshot,
     document: &SkinDocument,
 ) -> crate::skin::SkinDrawState {
     let mut state = build_result_skin_draw_state(snapshot, document.ranktime);
+    if let Some(spec) = &document.lr2_result {
+        state.lr2_result_flip = spec.flip;
+        [state.result_graph_begin_ms, state.result_graph_end_ms, state.result_update_score_ms] =
+            snapshot.lr2_progress.timers(spec, state.elapsed_ms);
+    }
     if let Some((x, y)) = snapshot.mouse_position {
         state.mouse_x = Some(x.clamp(0.0, 1.0) * document.w as f32);
         state.mouse_y = Some((1.0 - y.clamp(0.0, 1.0)) * document.h as f32);

@@ -7,6 +7,12 @@ impl WinitApp {
             self.execute_detail_options_event(event_id, arg);
             return;
         }
+        if (bmz_render::skin::LR2_BUTTON_BASE..=bmz_render::skin::LR2_BUTTON_LAST)
+            .contains(&event_id)
+        {
+            self.execute_lr2_select_button(event_id - bmz_render::skin::LR2_BUTTON_BASE, arg);
+            return;
+        }
         match event_id {
             // beatoraja EventFactory: difficulty / skin config / documents.
             10 => self.cycle_select_difficulty_filter(arg),

@@ -43,6 +43,18 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
         }
     }
     match ref_id {
+        LR2_RESULT_NUMBER_BASE..=LR2_RESULT_NUMBER_LAST => {
+            let number = ref_id - LR2_RESULT_NUMBER_BASE + 100;
+            let second = number >= 120;
+            let own_number = if second { number - 20 } else { number };
+            if second == state.lr2_result_flip {
+                skin_state_number(own_number, state)
+            } else {
+                // Result snapshots currently retain only the player's final score.
+                // Do not confuse LR2's opponent with beatoraja's target score.
+                None
+            }
+        }
         SKIN_REF_BMZ_LR2_2P_BASE..=SKIN_REF_BMZ_LR2_2P_LAST => {
             Some(lr2_opponent_number(ref_id, state))
         }

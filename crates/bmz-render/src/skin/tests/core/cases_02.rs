@@ -862,6 +862,7 @@ fn src_zero_with_explicit_crop_keeps_pixel_rect() {
 #[test]
 fn image_negative_crop_size_uses_remaining_source_extent() {
     let image = SkinImageDef {
+        lr2_panel: None,
         id: "frame".to_string(),
         src: "src".to_string(),
         x: 10,

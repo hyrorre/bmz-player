@@ -36,6 +36,7 @@ pub use bmz_skin_document::*;
 
 mod condition;
 mod document_render;
+mod lr2_scene;
 #[path = "skin/pm_chara.rs"]
 mod pm_chara;
 mod runtime;

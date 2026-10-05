@@ -2,6 +2,8 @@ use super::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinDrawState {
+    pub lr2_result_flip: bool,
+    pub lr2_select_mode_index: i32,
     pub elapsed_ms: i32,
     /// RANDOM gauge values latched by the scene runtime for each gauge id.
     pub gauge_random_indices: HashMap<String, i32>,
@@ -455,6 +457,8 @@ pub struct SkinDrawState {
 impl Default for SkinDrawState {
     fn default() -> Self {
         Self {
+            lr2_result_flip: false,
+            lr2_select_mode_index: -1,
             elapsed_ms: 0,
             lua_runtime: None,
             gauge_random_indices: HashMap::new(),

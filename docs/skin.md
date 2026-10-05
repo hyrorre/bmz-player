@@ -86,6 +86,52 @@ LR2 CSV skinで `#RESOLUTION` を省略した場合は640×480として読み込
 `3` は3840×2160。`#RESOLUTION,幅,高さ` の正数による明示指定も受け付ける。
 include先の描画座標も、ヘッダーで決まった同じ基準解像度で変換する。
 
+Select / Result / Course Resultには `LR2 Resolution (BMZ)` を追加する。
+既定の `Skin default` は上の規則を維持し、640×480 / 1280×720 / 1920×1080を
+スキン単位で明示指定できる。解像度を宣言しないHDスキンでも、外部CSVを変更する必要はない。
+
+## LR2のSelect / Result
+
+type 5の選曲、type 7の通常リザルト、type 15のコースリザルトを既存の各スロットから選ぶ。
+ライブラリ、プロフィール設定、スコア保存、IR、リプレイ、リトライはBMZの処理を利用する。
+LR2固有のbutton / numberは変換時に内部参照へ分離し、beatorajaの同番号の意味を変えない。
+`LR2files/Theme/<theme>/...`形式のincludeは、同じスキンライブラリ内にある
+指定テーマの実ファイルを優先する。存在しない場合は従来の自テーマ内解決へ戻る。
+CSVの引用符はフィールド先頭で開く。引用されていない画像パス末尾の余分な引用符は
+パス正規化で除去し、後続のカンマやコメントを画像名へ混入させない。
+
+選曲は `BAR_BODY_ON/OFF`、`BAR_TITLE`、`BAR_LEVEL`、`BAR_LAMP`、
+`BAR_MY_LAMP`、`BAR_RIVAL_LAMP`、`BAR_FLASH`、`BAR_CENTER`、`BAR_AVAILABLE` を変換する。
+子部品はバーの左下を原点とし、スロット番号は条件分岐でずらさない。
+`DST_BAR_TITLE` の予約列（通常DSTのop1..3相当）は無視し、`#IF` の表示条件は維持する。
+画像の `blend=0` はDSTのalphaを無視する。画像素材自体の透過は維持する。
+クリアランプは表示だけLR2の同系列へまとめ、保存されたクリア種別は維持する。
+`ONMOUSE` の局所範囲とbuttonのパネル制限も評価する。
+
+共通設定は意味で対応付ける。ゲージはNORMAL / HARD / DEATH / EASY、配置は
+NORMAL / MIRROR / RANDOM / S-RANDOM、DPはOFF / FLIP、HS-FIXはOFF / MAX / MIN / MAIN。
+キーフィルターはALL / 7K / 5K / 14K / 10K / 9K、ソートはLEVEL / TITLE / CLEAR / SCORE。
+LR2で表現できない現在値は別の値へ丸めず、変更操作でBMZ設定画面を開く。
+画面下部にはBMZの実際の設定と設定画面への操作案内を表示する。
+E1の基本オプションはLR2配置、E2とE1+E2はBMZパネルを使う。詳細は [操作](controls.md#lr2選曲スキン) を参照。
+
+リザルトは `GAUGECHART_1P/2P` の自分側と `SCORECHART` index 0を実際の履歴から描画する。
+`FLIPRESULT` / `DISABLEFLIP` に従って自分側のグラフ・number ref 100..116 / 120..136・ランク条件300..318を切り替える。
+timer 150はグラフ開始、151は描画完了またはスキップ、152は更新演出開始。
+`STARTINPUT` の待ち時間に従い、グラフのスキップ→ランク表示→更新演出→退出を進める。
+保存対象外のプレイは更新演出を挟まない。演出段階とは独立して既存の保存処理を実行する。
+clear / failed・確定ランク300..308のロード時分岐と解像度指定はdecode cacheの依存関係に含める。
+ランクのロード時条件は`FLIPRESULT`適用前の自分の成績を使う。相手側310..318の成績は補完しない。
+Resultのロード時はLR2のBGA Size条件をNormal（30=true / 31=false）として渡す。
+Playスキン個別のBGA Size設定とは独立し、これをResultのinclude選択に使う3R等にも適用する。
+
+現時点ではLR2専用のFX/EQ/音声設定パネル、組合せキーフィルター、ディレクトリソート、
+特殊S-RANDOMの挙動、追加日によるBAR_TITLE切替、BAR_RANK / BAR_RIVAL装飾は未対応。
+`README` の埋込描画と独自 `MOUSECURSOR` も未対応。文書表示はBMZの既存機能、カーソルはOSの表示を使う。
+リザルトの対戦相手の確定値・履歴、過去ベストやライバルのSCORECHART index 1/2も未対応であり、
+ターゲットスコアを相手の実スコアとして表示したり、最終値から履歴を作ったりしない。
+スキンが参照する別配布の壁紙・マウス素材等は利用者が用意する。
+
 ## LR2のDST時刻
 
 LR2 CSVから生成したdestinationは内部属性 `lr2Timing: true` を保持し、

@@ -50,6 +50,10 @@ pub(in crate::skin) fn test_skin_op(
         return value;
     }
     match op {
+        LR2_RESULT_RANK_BASE..=LR2_RESULT_RANK_LAST => {
+            let rank = op - LR2_RESULT_RANK_BASE;
+            (rank >= 10) == state.lr2_result_flip && result_rank_op_matches(300 + rank % 10, state)
+        }
         40 => !state.bga_enabled,
         SKIN_OPTION_BMZ_BEST_SCORE_OPTIONS_AVAILABLE => {
             state.skin_attempt.best_score_options.is_some()
@@ -314,8 +318,8 @@ pub(in crate::skin) fn test_skin_op(
         }),
         336 => state.target_ex_score.is_some_and(|target| state.ex_score > target),
         1336 => state.target_ex_score.is_some_and(|target| state.ex_score == target),
-        350 => true,
-        351 => false,
+        350 => !state.lr2_result_flip,
+        351 => state.lr2_result_flip,
         352 => state.target_ex_score.is_some_and(|target| state.ex_score > target),
         353 => state.target_ex_score.is_some_and(|target| state.ex_score < target),
         354 => state.target_ex_score.is_some_and(|target| state.ex_score == target),

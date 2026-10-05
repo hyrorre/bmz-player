@@ -9,6 +9,20 @@ impl WinitApp {
         if self.result.result_exit.is_some() || self.result.finished_play.is_none() {
             return;
         }
+        let score_save_enabled = self.current_result_score_save_enabled();
+        if let Some(spec) = self.renderer.result_skin_document().and_then(|d| d.lr2_result.as_ref())
+        {
+            if self.result.lr2_result_epoch != Some(self.result.result_scene_started_at) {
+                self.result.lr2_result_epoch = Some(self.result.result_scene_started_at);
+                self.result.lr2_result_progress = Default::default();
+            }
+            let elapsed =
+                self.result.result_scene_started_at.elapsed().as_millis().min(i32::MAX as u128)
+                    as i32;
+            if !self.result.lr2_result_progress.press(spec, elapsed, score_save_enabled) {
+                return;
+            }
+        }
         tracing::info!(?action, "result screen exit animation started");
         self.result.result_exit = Some(ResultExit {
             started_at: Instant::now(),

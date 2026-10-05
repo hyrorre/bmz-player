@@ -393,6 +393,8 @@ impl WinitApp {
                 result_ir: None,
                 last_play_session_mode: SessionMode::Normal,
                 result_scene_started_at: now,
+                lr2_result_progress: Default::default(),
+                lr2_result_epoch: None,
                 result_skin_audio: None,
                 result_exit: None,
                 result_key5_held: false,
@@ -503,6 +505,7 @@ impl WinitApp {
             app.result.result_key5_held = false;
             app.result.result_key7_held = false;
             app.result.result_scene_started_at = Instant::now();
+            app.spawn_result_skin_decode_for(ResultSkinSlot::Normal);
         }
         if app.audio.system_audio.is_some() && !app.viewer_mode {
             app.start_system_sound_load();

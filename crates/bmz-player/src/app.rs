@@ -272,6 +272,8 @@ mod select_flow_detail_options;
 mod select_flow_gamepad;
 #[path = "app/select_flow/keyboard.rs"]
 mod select_flow_keyboard;
+#[path = "app/select_flow/lr2.rs"]
+mod select_flow_lr2;
 #[path = "app/select_flow/mode_config.rs"]
 mod select_flow_mode_config;
 #[path = "app/select_flow/navigation.rs"]

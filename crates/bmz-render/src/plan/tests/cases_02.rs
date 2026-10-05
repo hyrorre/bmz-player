@@ -212,6 +212,7 @@ fn result_plan_renders_gaugegraph_from_result_graph_data() {
         std::iter::empty(),
     );
     let snapshot = ResultSnapshot {
+        lr2_progress: Default::default(),
         operating_time_ms: 0,
         player_name: String::new(),
         target_name: String::new(),
@@ -374,6 +375,7 @@ fn result_plan_renders_timing_distribution_from_result_graph_data() {
     timing_distribution.add(-12);
     timing_distribution.add(8);
     let snapshot = ResultSnapshot {
+        lr2_progress: Default::default(),
         operating_time_ms: 0,
         player_name: String::new(),
         target_name: String::new(),

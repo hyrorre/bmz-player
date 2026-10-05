@@ -12,6 +12,35 @@ pub(super) fn plan_select(
             &skin.select_document_items_with_dynamic_timers(snapshot, Some(dynamic_timers)),
         );
         // timer/op条件で空になるフレームもスキンの演出として扱う。
+        if skin.document().is_some_and(|document| document.lr2) {
+            let text = TextRenderer;
+            if snapshot.option_panel > 1 {
+                push_select_option_panel(&text, &mut commands, snapshot);
+            }
+            commands.push(DrawCommand::Rect {
+                rect: Rect { x: 0.0, y: 0.965, width: 1.0, height: 0.035 },
+                color: Color::rgba(0.0, 0.0, 0.0, 0.9),
+            });
+            text.push_text(
+                &mut commands,
+                &format!(
+                    "{} / {} | {} | DP {} | HS {} | {} / {} | E2: ASSIST / E1+E2: DETAIL / F1: SETTINGS",
+                    snapshot.arrange,
+                    snapshot.arrange_2p,
+                    snapshot.gauge,
+                    snapshot.double_option,
+                    snapshot.hs_fix,
+                    snapshot.select_mode,
+                    snapshot.select_sort,
+                ),
+                BitmapTextStyle {
+                    x: 0.01,
+                    y: 0.975,
+                    cell: 0.0035,
+                    color: Color::rgb(0.9, 0.95, 1.0),
+                },
+            );
+        }
         push_exit_hold_indicator(&mut commands, snapshot.exit_hold_progress);
         push_scene_overlays(&mut commands, &snapshot.overlay);
         return DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands };

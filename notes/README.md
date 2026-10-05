@@ -33,6 +33,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-05 | [LR2 Select / Resultレビューの修正](2026/2026-10-05-lr2-select-result-review.md) |
 | 2026-10-05 | [ADFX02 / ECFNのBMZ基本拡張](2026/2026-10-05-ecfn-bmz-extensions.md) |
 | 2026-10-05 | [ADFX02 / ECFNのDETAIL OPTIONS表示](2026/2026-10-05-ecfn-detail-options.md) |
 | 2026-10-05 | [DETAIL OPTIONSのexperimental化と2パネル操作](2026/2026-10-05-experimental-detail-options.md) |
@@ -41,6 +42,7 @@
 | 2026-10-04 | [PLAYターゲットスコアの最終値表示修正](2026/2026-10-04-play-target-score.md) |
 | 2026-10-04 | [入力オフセットによる判定表示の点滅修正](2026/2026-10-04-input-offset-judge-display.md) |
 | 2026-10-03 | [Luxez-FlatのDETAIL OPTIONS表示](2026/2026-10-03-luxe-flat-detail-options.md) |
+| 2026-10-03 | [LR2 Select / Resultの互換対応](2026/2026-10-03-lr2-select-result.md) |
 | 2026-10-03 | [Luxe Flatリザルトのランク差分とLua数値評価順序](2026/2026-10-03-result-grade-lua-order.md) |
 | 2026-10-03 | [LR2のDXAアセット直接読込](2026/2026-10-03-lr2-dxa-assets.md) |
 | 2026-10-03 | [LR2 Play skin互換修正](2026/2026-10-03-lr2-play-compatibility.md) |

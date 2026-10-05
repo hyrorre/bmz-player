@@ -9,6 +9,13 @@ pub struct SkinTextureId(pub u32);
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SkinDocument {
+    /// LR2 CSV origin. Keeps compatibility behavior separate from JSON/Lua skins.
+    #[serde(default)]
+    pub lr2: bool,
+    #[serde(default, rename = "lr2Result")]
+    pub lr2_result: Option<SkinLr2ResultDef>,
+    #[serde(default, rename = "lr2Charts")]
+    pub lr2_charts: Vec<SkinLr2ChartDef>,
     #[serde(default, rename = "type")]
     pub skin_type: i32,
     #[serde(default)]
@@ -193,6 +200,11 @@ fn default_practice_visible_items() -> i32 {
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct SkinSongListDef {
+    /// LR2 child coordinates are relative to the bottom-left of each bar.
+    #[serde(default, rename = "lr2BottomOrigin")]
+    pub lr2_bottom_origin: bool,
+    #[serde(default)]
+    pub flash: Vec<DestinationListEntry>,
     #[serde(default, deserialize_with = "deserialize_skin_id")]
     pub id: String,
     #[serde(default)]
@@ -309,6 +321,8 @@ pub struct SkinFontDef {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SkinImageDef {
+    #[serde(default, rename = "lr2Panel")]
+    pub lr2_panel: Option<i32>,
     #[serde(default, deserialize_with = "deserialize_skin_id")]
     pub id: String,
     #[serde(default, deserialize_with = "deserialize_skin_id")]

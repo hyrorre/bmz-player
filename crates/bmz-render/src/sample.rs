@@ -211,6 +211,7 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
 
 pub fn sample_result_scene() -> AppSceneSnapshot {
     AppSceneSnapshot::Result(ResultSnapshot {
+        lr2_progress: Default::default(),
         operating_time_ms: 12_345,
         player_name: "Sample Player".to_string(),
         target_name: "RANK AAA".to_string(),

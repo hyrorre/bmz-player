@@ -453,7 +453,7 @@ fn lr2_play_bridges_keep_battle_values_and_gauge_display_separate() {
                 .unwrap();
         }
         let expected = if skin_type == 5 {
-            [10, 11, 121, 127]
+            [SKIN_REF_BMZ_LR2_HISPEED, SKIN_REF_BMZ_LR2_HISPEED, 121, 127]
         } else {
             [
                 SKIN_REF_BMZ_LR2_HISPEED,
@@ -476,7 +476,12 @@ fn lr2_play_bridges_keep_battle_values_and_gauge_display_separate() {
                 .unwrap();
         }
         for (image, event_id) in builder.images.iter().zip([40, 41, 55]) {
-            assert_eq!(image["act"], json!(event_id));
+            let act = if skin_type == 5 {
+                bmz_skin_document::LR2_BUTTON_BASE + event_id
+            } else {
+                event_id
+            };
+            assert_eq!(image["act"], json!(act));
             assert_eq!(image["clickable"], json!(false));
             if skin_type != 5 && event_id != 55 {
                 assert_eq!(

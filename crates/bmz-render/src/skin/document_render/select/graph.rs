@@ -137,7 +137,9 @@ macro_rules! skin_document_render_select_graph_methods {
             sources: &HashMap<String, SkinDocumentTexture>,
         ) -> Vec<SkinRenderItem> {
             let mut items = Vec::new();
-            let Some(destination) = destination_entry_at(entries, index, enabled_options) else {
+            let Some(destination) =
+                songlist_destination_at(entries, index, enabled_options, state, self.lr2)
+            else {
                 return items;
             };
             if let Some(mut resolved) = self.resolve_offset_destination_items(
@@ -179,6 +181,23 @@ macro_rules! skin_document_render_select_graph_methods {
                 table_text_fallback: &row.table_text_fallback,
                 ..SkinTextState::default()
             };
+            if self.lr2 {
+                if let Some(destination) =
+                    songlist_destination_at(&songlist.text, 0, enabled_options, state, true)
+                    && let Some(resolved) = self.resolve_offset_destination_items(
+                        destination,
+                        row_origin,
+                        images,
+                        enabled_options,
+                        state,
+                        &text_state,
+                        sources,
+                    )
+                {
+                    items.extend(resolved);
+                }
+                return items;
+            }
             let destinations = destination_entries(&songlist.text, enabled_options);
             let Some(destination) = select_row_slot_with_fallbacks(
                 &destinations,

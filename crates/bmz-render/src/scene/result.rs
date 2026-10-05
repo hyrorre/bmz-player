@@ -158,6 +158,7 @@ pub enum ResultIrState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResultSnapshot {
+    pub lr2_progress: bmz_skin_document::Lr2ResultProgress,
     /// アプリ起動からの経過時間。beatoraja number ref 27..29 に使う。
     pub operating_time_ms: i32,
     /// beatoraja STRING_PLAYER (2) に渡す現在プロフィール名。

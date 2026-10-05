@@ -48,6 +48,7 @@ impl SkinDocumentCache {
         skin_path: &Path,
         options: &BTreeMap<String, String>,
         files: &BTreeMap<String, String>,
+        runtime_state: &LuaLoadRuntimeState,
     ) -> Option<(SkinDocument, BTreeMap<String, String>)> {
         let entry_index = self.entries.iter().position(|entry| {
             entry.key == *key
@@ -57,6 +58,7 @@ impl SkinDocumentCache {
                     options,
                     files,
                     &entry.dependencies,
+                    runtime_state,
                 )
                 .is_ok_and(|fingerprint| fingerprint == entry.fingerprint)
         })?;
