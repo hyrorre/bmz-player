@@ -276,6 +276,7 @@ impl WinitApp {
                 obs_connection_status: &obs_connection_status,
                 connected_gamepads: &connected_gamepads,
                 audio_stream_info: self.audio.audio_runtime.as_ref().map(AudioRuntime::stream_info),
+                audio_open_error: self.audio.audio_open_error.as_deref(),
             },
         );
         self.ui.egui = Some(egui);

@@ -318,6 +318,7 @@ pub(super) struct AppAudioRuntimeState {
     pub(super) audio_output_open_attempted: bool,
     pub(super) audio_diagnostics_last_log_at: Instant,
     pub(super) audio_diagnostics_last: Option<AudioOutputDiagnostics>,
+    pub(super) audio_open_error: Option<String>,
     /// システム SE / BGM を再生する cpal ストリーム。
     /// 開けない環境では `None` で、システム音はサイレント。
     pub(super) system_audio: Option<crate::audio::SystemAudio>,

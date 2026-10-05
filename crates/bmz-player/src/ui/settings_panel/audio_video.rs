@@ -33,13 +33,17 @@ pub(super) fn build_audio_video_settings_sections(
         .scope(tr!(text, "settings-scope-app"))
         .id_salt("settings_audio")
         .show(ui, |ui| {
+            if let Some(error) = state.audio_open_error {
+                ui.label(tr!(text, "settings-audio-open-error", "error" => error));
+            }
             if let Some(info) = state.audio_stream_info {
                 ui.label(tr!(text, "settings-audio-stream-actual", "value" => format!("{} / {} / {} Hz / {} / {}",info.actual_host,info.actual_device,info.actual_rate,info.cpal_buffer,info.supported_frames)));
             }
             let available_audio_backends = crate::audio::available_audio_backends();
             if !available_audio_backends.contains(&config.audio.backend) {
-                config.audio.backend = AudioBackend::Auto;
+                ui.label(tr!(text, "settings-audio-backend-unbuilt"));
             }
+            let previous_backend = config.audio.backend.clone();
             egui::ComboBox::new("audio_backend", tr!(text, "settings-backend"))
                 .selected_text(audio_backend_label(&config.audio.backend, text))
                 .show_ui(ui, |ui| {
@@ -51,6 +55,10 @@ pub(super) fn build_audio_video_settings_sections(
                         );
                     }
                 });
+            if config.audio.backend != previous_backend {
+                // Device names belong to a host namespace. Re-select explicitly.
+                config.audio.output_device.clear();
+            }
             if config.audio.backend == AudioBackend::Wasapi {
                 egui::ComboBox::new("audio_output_mode", tr!(text, "settings-audio-output-mode"))
                     .selected_text(audio_output_mode_label(&config.audio.output_mode, text))

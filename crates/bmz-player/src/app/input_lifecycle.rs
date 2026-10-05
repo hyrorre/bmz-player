@@ -6,6 +6,18 @@ mod windows_modal_redraw;
 
 impl WinitApp {
     pub(super) fn sync_input_capture_target(&self) {
+        #[cfg(all(target_os = "linux", feature = "linux-evdev"))]
+        if let Some(capture) = &self.gamepad {
+            capture.configure_linux_keyboard(
+                (self.boot.app_config.input.keyboard_enabled
+                    && self.boot.app_config.input.backend == InputBackendKind::LinuxEvdev)
+                    .then(|| self.boot.app_config.input.linux_evdev_devices.clone()),
+            );
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(capture) = &self.gamepad {
+            capture.set_legacy_gamepad_wait(self.boot.app_config.input.linux_gamepad_legacy_poll);
+        }
         #[cfg(target_os = "macos")]
         if let Some(capture) = &self.gamepad {
             capture.configure_mac_keyboard(
@@ -32,6 +44,8 @@ impl WinitApp {
                 focused: self.ui.focused,
                 keyboard_enabled: self.keyboard_input_backend()
                     == Some(KeyboardInputBackend::RawInput)
+                    || (cfg!(target_os = "linux")
+                        && self.boot.app_config.input.backend == InputBackendKind::LinuxEvdev)
                     || (cfg!(target_os = "macos")
                         && matches!(
                             self.boot.app_config.input.backend,
@@ -247,7 +261,12 @@ impl WinitApp {
         #[cfg(target_os = "macos")]
         let gc_delivery =
             self.gamepad.as_ref().and_then(|capture| capture.route_gc_window_event(&event, &input));
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(all(target_os = "linux", feature = "linux-evdev"))]
+        let gc_delivery = self
+            .gamepad
+            .as_ref()
+            .and_then(|capture| capture.route_linux_window_event(&event, &input));
+        #[cfg(not(any(target_os = "macos", all(target_os = "linux", feature = "linux-evdev"))))]
         let gc_delivery: Option<bool> = None;
         match gc_delivery {
             Some(false) => return,
@@ -349,6 +368,7 @@ impl WinitApp {
         }
         match event_loop.create_window(attributes) {
             Ok(window) => {
+                crate::latency_environment::log(&window);
                 let window = Arc::new(window);
                 #[cfg(windows)]
                 if let Err(error) = windows_modal_redraw::install(&window) {
@@ -648,7 +668,9 @@ pub(super) fn keyboard_runtime_config_changed(
     before: &GlobalInputConfig,
     after: &GlobalInputConfig,
 ) -> bool {
-    before.backend != after.backend || before.keyboard_enabled != after.keyboard_enabled
+    before.backend != after.backend
+        || before.keyboard_enabled != after.keyboard_enabled
+        || before.linux_evdev_devices != after.linux_evdev_devices
 }
 
 pub(super) fn gamepad_runtime_config_changed(

@@ -247,6 +247,7 @@ impl EguiLayer {
             obs_connection_status,
             connected_gamepads,
             audio_stream_info,
+            audio_open_error,
         } = context;
         let font_coverage = profile_config.ui.locale().font_coverage();
         if font_coverage != self.font_coverage {
@@ -425,6 +426,7 @@ impl EguiLayer {
                             obs_connection_status,
                             connected_gamepads,
                             audio_stream_info,
+                            audio_open_error,
                         },
                     );
                     obs_enabled_changed |= settings_actions.obs_enabled_changed;

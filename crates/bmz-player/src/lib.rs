@@ -36,6 +36,7 @@ pub mod i18n;
 pub mod input;
 pub mod ir;
 pub mod ir_cmd;
+mod latency_environment;
 pub mod ln_policy;
 pub mod logging;
 pub mod obs;
