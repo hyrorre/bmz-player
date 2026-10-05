@@ -339,6 +339,19 @@ pub(super) fn apply_result_summary_lua_load_state(
     table_level: &str,
     table_full: &str,
 ) {
+    // Asset #IF branches must see the finished score before the skin is decoded.
+    // Use the same rank boundaries (including zero score) as Result rendering.
+    let grade_state = bmz_render::skin::SkinDrawState {
+        ex_score: summary.ex_score,
+        total_notes: summary.total_notes,
+        result_failed: Some(false),
+        ..Default::default()
+    };
+    for option in 300..=308 {
+        runtime_state
+            .option_values
+            .insert(option, bmz_render::skin::lua_main_state_option(option, &[], &grade_state));
+    }
     runtime_state.option_values.insert(
         bmz_render::skin::SKIN_OPTION_BMZ_FIRST_PLAY,
         summary.previous_best_ex_score.is_none(),

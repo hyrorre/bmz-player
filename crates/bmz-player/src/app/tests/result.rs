@@ -324,6 +324,119 @@ fn first_play_result_lua_values_match_beatoraja_missing_score_sentinels() {
 }
 
 #[test]
+fn result_load_rank_conditions_follow_finished_score_boundaries() {
+    let mut summary = debug_boot_result_summary();
+    summary.total_notes = 450;
+    summary.previous_best_ex_score = Some(700);
+    summary.target_ex_score = Some(900);
+    let mut runtime = bmz_skin::LuaLoadRuntimeState::default();
+    for (score, rank) in [
+        (900, 300),
+        (800, 300),
+        (799, 301),
+        (700, 301),
+        (699, 302),
+        (600, 302),
+        (599, 303),
+        (500, 303),
+        (499, 304),
+        (400, 304),
+        (399, 305),
+        (300, 305),
+        (299, 306),
+        (200, 306),
+        (199, 307),
+        (1, 307),
+        (0, 307),
+    ] {
+        summary.ex_score = score;
+        apply_result_summary_lua_load_state(&mut runtime, &summary, "", "", "");
+        for option in 300..=307 {
+            assert_eq!(runtime.option_values[&option], option == rank, "EX SCORE {score}");
+        }
+        assert_eq!(runtime.option_values[&308], score == 0);
+        assert!(runtime.option_values[&321], "previous best is independent");
+        assert!(
+            (310..=318).all(|option| !runtime.option_values.get(&option).copied().unwrap_or(false))
+        );
+    }
+    summary.total_notes = 0;
+    apply_result_summary_lua_load_state(&mut runtime, &summary, "", "", "");
+    assert!((300..=308).all(|option| !runtime.option_values[&option]));
+}
+
+#[test]
+fn result_lr2_rank_asset_branches_use_app_summary_before_flip() {
+    let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+    std::fs::create_dir_all(&data.paths.data_dir).unwrap();
+    let path = data.paths.data_dir.join("rank.lr2skin");
+    std::fs::write(
+        &path,
+        "#INFORMATION,7,test,test\n#FLIPRESULT\n\
+         #IF,300\n#IMAGE,aaa.png\n#ELSEIF,301\n#IMAGE,aa.png\n\
+         #ELSE\n#IMAGE,other.png\n#ENDIF\n#IF,310\n#IMAGE,opponent.png\n#ENDIF\n",
+    )
+    .unwrap();
+    let mut summary = debug_boot_result_summary();
+    summary.total_notes = 450;
+    summary.target_ex_score = Some(900);
+    let mut runtime = bmz_skin::LuaLoadRuntimeState::default();
+    for (score, expected) in [(800, "aaa.png"), (799, "aa.png"), (100, "other.png")] {
+        summary.ex_score = score;
+        apply_result_summary_lua_load_state(&mut runtime, &summary, "", "", "");
+        let loaded = bmz_skin::load_lr2_csv_skin_with_runtime_state(
+            &path,
+            bmz_skin::SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &runtime,
+        )
+        .unwrap();
+        assert_eq!(loaded.document.source.len(), 1);
+        assert_eq!(loaded.document.source[0].path, expected);
+        assert!(loaded.document.lr2_result.as_ref().unwrap().flip);
+    }
+}
+
+#[test]
+fn result_lr2_red_belt_selects_rank_assets_when_available() {
+    let root = std::env::var_os("BMZ_TEST_LR2_SKIN_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/skins"));
+    let path = root.join("RED_BELT/Result/result.lr2skin");
+    if !path.is_file() {
+        eprintln!("SKIP missing {}", path.display());
+        return;
+    }
+    let mut summary = debug_boot_result_summary();
+    summary.total_notes = 450;
+    let mut runtime = lua_runtime_state_for_result(
+        false,
+        None,
+        true,
+        false,
+        KeyMode::K7,
+        BTreeMap::new(),
+        "test",
+    );
+    for (score, rank) in [(800, "AAA"), (700, "AA")] {
+        summary.ex_score = score;
+        apply_result_summary_lua_load_state(&mut runtime, &summary, "", "", "");
+        let loaded = bmz_skin::load_lr2_csv_skin_with_runtime_state(
+            &path,
+            bmz_skin::SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &runtime,
+        )
+        .unwrap();
+        let path = &loaded.document.source.iter().find(|source| source.id == "2").unwrap().path;
+        assert!(path.contains(&format!("/Result/{rank}/")), "{rank}: {path}");
+        eprintln!("RED_BELT {rank}: {path}");
+    }
+}
+
+#[test]
 fn result_load_state_selects_normal_lr2_bga_layout_includes() {
     let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
     std::fs::create_dir_all(&data.paths.data_dir).unwrap();

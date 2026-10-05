@@ -38,3 +38,20 @@ BMZのResultにはPlayスキンと共有するBGA Size設定がないため、�
   最初の全テストは同梱素材の参照先不一致で3件失敗し、`BMZ_RESOURCE_DIR`を
   作業領域の`data`へ指定して解消。`BMZ_DATA_DIR`は隔離した`.local/lr2-test-data`を使用。
 - ログはmain側の`.local/lr2-fix2-test-resources.log`。GPU画面・実操作は未確認。
+
+## 確定ランクによる素材選択
+
+Resultのロード状態へ300..308を渡し、確定したEX SCORE / 総ノート数から
+描画と同じランク条件を計算する。前回ベスト320..327や相手側310..318とは分離する。
+OpenLR2は`LoadSceneG`後に`FlipScore`を呼ぶため、ロード時条件は反転前の1Pを使う。
+
+検証:
+
+- AAA〜Fの境界、0点、0ノート、前回ベスト、`FLIPRESULT`を回帰テストで確認。
+- cacheは先読み→AAA→AA→低ランク→AAAの順で正しい素材を選ぶ。
+- app生成状態でRED_BELTの実素材を読込み、`BG/Result/AAA/RANDOM/w.png`と
+  `BG/Result/AA/RANDOM/w.png`への切替を確認。
+- fmt、bmz-player check / all-targets Clippy / test成功（2120件、ignore 6件）。
+  素材・隔離データの環境設定は前項と同じ。
+- ログはmain側の`.local/lr2-fix3-focused.log`と`.local/lr2-fix3-test.log`。
+  GPU画面・実操作は未確認。
