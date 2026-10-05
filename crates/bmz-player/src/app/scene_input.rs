@@ -52,7 +52,7 @@ pub(super) fn select_action(
     event: &ControlInputEvent,
     bindings: &SelectKeyBindings,
 ) -> Option<SelectAction> {
-    if !event.pressed || event.repeat {
+    if !event.pressed || event.repeat || event.uses_analog_scroll(bindings) {
         return None;
     }
     let control = event.name.as_deref()?;
@@ -259,6 +259,63 @@ mod tests {
 
     fn bindings() -> SelectKeyBindings {
         SelectKeyBindings::from_profile(&ProfileConfig::new_default("default", "Default", 1).input)
+    }
+
+    #[test]
+    fn analog_scratch_moves_once_from_ticks_and_digital_axes_keep_button_navigation() {
+        use crate::app::input_runtime::AppInputRuntime;
+        use crate::app::select_key_bindings::{
+            select_analog_scroll_delta, take_analog_scroll_steps,
+        };
+        use crate::input::gamepad::GamepadButtonEvent;
+        use bmz_gameplay::input::backend::DeviceTimestamp;
+
+        for axis in ["Axis1", "GCAxisLeftX", "FutureBackendAxis"] {
+            let mut profile = ProfileConfig::new_default("test", "Test", 0);
+            for binding in
+                profile.input.ui.bindings.iter_mut().chain(
+                    profile.input.play.values_mut().flat_map(|mode| mode.bindings.iter_mut()),
+                )
+            {
+                if let Some(suffix) = binding.control.strip_prefix("Axis1") {
+                    binding.control = format!("{axis}{suffix}");
+                }
+            }
+            let keys = SelectKeyBindings::from_profile(&profile.input);
+            let mut button = GamepadButtonEvent {
+                name: format!("{axis}+"),
+                device_id: DeviceId(16),
+                pressed: true,
+                timestamp: DeviceTimestamp::MonotonicNs(1),
+                synthesized_analog_axis: true,
+            };
+            let event = ControlInputEvent::gamepad_button(&button);
+            let mut runtime = AppInputRuntime::default();
+            runtime.track_control(&event);
+            assert!(runtime.pressed_controls.contains(&button.name));
+            assert_eq!(select_action(&event, &keys), None, "{axis}: no extra button step");
+
+            let mut buffer = select_analog_scroll_delta(axis, 2, &keys).unwrap();
+            assert_eq!(take_analog_scroll_steps(&mut buffer, 3), 0);
+            buffer += select_analog_scroll_delta(axis, 1, &keys).unwrap();
+            assert_eq!(take_analog_scroll_steps(&mut buffer, 3), -1);
+            assert_eq!(buffer, 0);
+
+            button.pressed = false;
+            let release = ControlInputEvent::gamepad_button(&button);
+            runtime.track_control(&release);
+            assert!(!runtime.pressed_controls.contains(&button.name));
+            assert_eq!(select_action(&release, &keys), None);
+
+            // Analog scratch OFF emits endpoint buttons without any axis ticks.
+            button.pressed = true;
+            button.synthesized_analog_axis = false;
+            assert_eq!(
+                select_action(&ControlInputEvent::gamepad_button(&button), &keys),
+                Some(SelectAction::Move(SelectMove::Previous)),
+                "{axis}: digital axis must remain usable"
+            );
+        }
     }
 
     #[test]

@@ -286,7 +286,7 @@ impl WinitApp {
         }
         if self.result.result_exit.is_none()
             && let Some(control) = physical_key_to_control(event.physical_key)
-            && self.handle_course_intermediate_control(&control, pressed, event.repeat)
+            && self.handle_course_intermediate_control(&control, pressed, event.repeat, false)
         {
             return;
         }
@@ -331,7 +331,7 @@ impl WinitApp {
             // 終了アニメーション中 (result_exit=Some) は held 追跡のみで、
             // 新しいアクションは受け付けない。
             if self.result.result_exit.is_none()
-                && self.handle_result_control(&control, pressed, event.repeat)
+                && self.handle_result_control(&control, pressed, event.repeat, false)
             {
                 return;
             }
@@ -369,7 +369,7 @@ impl WinitApp {
                 return;
             }
             if self.result.result_exit.is_none()
-                && self.handle_course_result_control(&control, pressed, event.repeat)
+                && self.handle_course_result_control(&control, pressed, event.repeat, false)
             {
                 return;
             }
@@ -582,29 +582,29 @@ impl WinitApp {
                 return;
             }
             if let Some(control) = physical_key_name(event.physical_key) {
-                self.route_settings_control(&control);
+                self.route_settings_control(&control, false);
             } else {
                 match event.physical_key {
                     PhysicalKey::Code(KeyCode::ArrowUp) => {
-                        let _ = self.route_settings_control("ArrowUp");
+                        let _ = self.route_settings_control("ArrowUp", false);
                     }
                     PhysicalKey::Code(KeyCode::ArrowDown) => {
-                        let _ = self.route_settings_control("ArrowDown");
+                        let _ = self.route_settings_control("ArrowDown", false);
                     }
                     PhysicalKey::Code(KeyCode::ArrowLeft) => {
-                        let _ = self.route_settings_control("ArrowLeft");
+                        let _ = self.route_settings_control("ArrowLeft", false);
                     }
                     PhysicalKey::Code(KeyCode::ArrowRight) => {
-                        let _ = self.route_settings_control("ArrowRight");
+                        let _ = self.route_settings_control("ArrowRight", false);
                     }
                     PhysicalKey::Code(KeyCode::Enter) => {
-                        let _ = self.route_settings_control("Enter");
+                        let _ = self.route_settings_control("Enter", false);
                     }
                     PhysicalKey::Code(KeyCode::Space) => {
-                        let _ = self.route_settings_control("Space");
+                        let _ = self.route_settings_control("Space", false);
                     }
                     PhysicalKey::Code(KeyCode::Escape) => {
-                        let _ = self.route_settings_control("Escape");
+                        let _ = self.route_settings_control("Escape", false);
                     }
                     _ => {}
                 }

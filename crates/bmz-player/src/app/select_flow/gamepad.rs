@@ -79,7 +79,7 @@ impl WinitApp {
         if self.jobs.profile_change.is_some() {
             return;
         }
-        let control_event = ControlInputEvent::gamepad(event.device_id, &event.name, event.pressed);
+        let control_event = ControlInputEvent::gamepad_button(event);
         self.input.track_control(&control_event);
         // holdは物理状態を正とする。2回押しなどの単発操作はこの後のフィルターを通す。
         self.sync_select_holds_from_pressed_controls();
@@ -126,7 +126,7 @@ impl WinitApp {
                 let changed = if let Some(cycle) =
                     target_cycle_from_control(&event.name, &self.select.select_keys)
                 {
-                    if event.name.starts_with("Axis") {
+                    if event.synthesized_analog_axis {
                         return;
                     }
                     self.apply_target_option_cycle(cycle);
@@ -150,12 +150,7 @@ impl WinitApp {
         if self.viewer_waiting {
             return;
         }
-        self.route_gamepad_button(
-            event.device_id,
-            &event.name,
-            event.pressed,
-            event.synthesized_analog_axis,
-        );
+        self.route_gamepad_button(&control_event);
     }
 
     fn resync_gamepad_pressed_controls(
@@ -471,14 +466,11 @@ impl WinitApp {
         }
     }
 
-    pub(super) fn route_gamepad_button(
-        &mut self,
-        device: DeviceId,
-        button: &str,
-        pressed: bool,
-        synthesized_analog_axis: bool,
-    ) {
-        let control_event = ControlInputEvent::gamepad(device, button, pressed);
+    pub(super) fn route_gamepad_button(&mut self, control_event: &ControlInputEvent) {
+        let device = control_event.device;
+        let button = control_event.name.as_deref().expect("gamepad control always has a name");
+        let pressed = control_event.pressed;
+        let synthesized_analog_axis = control_event.synthesized_analog_axis;
         let physical_control =
             control_event.physical.as_ref().expect("gamepad control always has a physical value");
         let has_play_control_context =
@@ -523,7 +515,7 @@ impl WinitApp {
         });
         let play_option_control = play_option_control.flatten();
         let play_option_lane_action = play_option_control
-            .and_then(|action| lane_action_from_option(action, button.starts_with("Axis")));
+            .and_then(|action| lane_action_from_option(action, synthesized_analog_axis));
         if pressed {
             let lane_cover_changing = self
                 .play
@@ -574,7 +566,7 @@ impl WinitApp {
             if self.update_decide_cancel_control_state(button, pressed) {
                 return;
             }
-            if let Some(action) = scene_decide_action(&control_event, &self.select.select_keys) {
+            if let Some(action) = scene_decide_action(control_event, &self.select.select_keys) {
                 self.begin_decide_fadeout(matches!(action, DecideAction::Cancel));
             }
             return;
@@ -601,10 +593,15 @@ impl WinitApp {
                 return;
             }
             if self.result.result_exit.is_none() {
-                if self.handle_course_intermediate_control(&control, pressed, false) {
+                if self.handle_course_intermediate_control(
+                    &control,
+                    pressed,
+                    false,
+                    synthesized_analog_axis,
+                ) {
                     return;
                 }
-                if self.result_input_ready() && scene_result_action(&control_event).is_some() {
+                if self.result_input_ready() && scene_result_action(control_event).is_some() {
                     self.begin_result_exit(self.course_intermediate_exit_action());
                 }
             }
@@ -621,11 +618,11 @@ impl WinitApp {
             }
             // 終了アニメーション中 (result_exit=Some) は held 追跡のみ行う。
             if self.result.result_exit.is_none() {
-                if self.handle_result_control(&control, pressed, false) {
+                if self.handle_result_control(&control, pressed, false, synthesized_analog_axis) {
                     return;
                 }
                 if self.result_input_ready()
-                    && let Some(action) = scene_result_action(&control_event)
+                    && let Some(action) = scene_result_action(control_event)
                 {
                     self.apply_result_action(action, false);
                 }
@@ -642,11 +639,16 @@ impl WinitApp {
                 return;
             }
             if self.result.result_exit.is_none() {
-                if self.handle_course_result_control(&control, pressed, false) {
+                if self.handle_course_result_control(
+                    &control,
+                    pressed,
+                    false,
+                    synthesized_analog_axis,
+                ) {
                     return;
                 }
                 if self.result_input_ready()
-                    && let Some(action) = scene_result_action(&control_event)
+                    && let Some(action) = scene_result_action(control_event)
                 {
                     self.apply_result_action(action, true);
                 }
@@ -662,7 +664,7 @@ impl WinitApp {
                 return;
             }
             if pressed {
-                let _ = self.route_settings_control(button);
+                let _ = self.route_settings_control(button, synthesized_analog_axis);
             }
             return;
         }
@@ -671,7 +673,7 @@ impl WinitApp {
             && self.select.select_keys.is_ui_key4(button)
             && self.begin_select_ir_battle_hold(
                 button,
-                scene_select_action(&control_event, &self.select.select_keys),
+                scene_select_action(control_event, &self.select.select_keys),
             )
         {
             return;
@@ -727,7 +729,7 @@ impl WinitApp {
             if self.select.select_option_panel == 1
                 && let Some(cycle) = target_cycle_from_control(button, &self.select.select_keys)
             {
-                if button.starts_with("Axis") {
+                if synthesized_analog_axis {
                     return;
                 }
                 self.apply_target_option_cycle(cycle);
@@ -749,18 +751,10 @@ impl WinitApp {
             return;
         }
 
-        if matches!(self.view_state(), AppViewState::Select) {
-            // アナログ軸にバインドされたスクラッチは tick 比例スクロール
-            // (advance_select_analog_scroll) で処理する。beatoraja の isNonAnalogPressed 相当。
-            if button.starts_with("Axis")
-                && (self.select.select_keys.is_select_scratch_up(button)
-                    || self.select.select_keys.is_select_scratch_down(button))
-            {
-                return;
-            }
-            if let Some(action) = scene_select_action(&control_event, &self.select.select_keys) {
-                self.apply_select_action(action, Some(button));
-            }
+        if matches!(self.view_state(), AppViewState::Select)
+            && let Some(action) = scene_select_action(control_event, &self.select.select_keys)
+        {
+            self.apply_select_action(action, Some(button));
         }
     }
 }

@@ -315,7 +315,7 @@ impl WinitApp {
             return false;
         }
         let action = self.detail_input(event.device, control).filter(|action| {
-            !matches!(action, DetailInput::Move(_)) || !control.starts_with("Axis")
+            !matches!(action, DetailInput::Move(_)) || !event.synthesized_analog_axis
         });
         let held = self.detail_value_keys_held();
         if !event.pressed

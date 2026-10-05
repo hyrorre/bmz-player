@@ -16,11 +16,12 @@ impl WinitApp {
         control: &PhysicalControl,
         pressed: bool,
         repeat: bool,
+        synthesized_analog_axis: bool,
     ) -> bool {
         if self.handle_result_open_ir_control(control, pressed, repeat, false) {
             return true;
         }
-        if self.handle_result_ir_scroll_control(control, pressed, repeat) {
+        if self.handle_result_ir_scroll_control(control, pressed, repeat, synthesized_analog_axis) {
             return true;
         }
         if pressed
@@ -76,11 +77,12 @@ impl WinitApp {
         control: &PhysicalControl,
         pressed: bool,
         repeat: bool,
+        synthesized_analog_axis: bool,
     ) -> bool {
         if self.handle_result_open_ir_control(control, pressed, repeat, true) {
             return true;
         }
-        if self.handle_result_ir_scroll_control(control, pressed, repeat) {
+        if self.handle_result_ir_scroll_control(control, pressed, repeat, synthesized_analog_axis) {
             return true;
         }
         if pressed
@@ -168,6 +170,7 @@ impl WinitApp {
         control: &PhysicalControl,
         pressed: bool,
         repeat: bool,
+        synthesized_analog_axis: bool,
     ) -> bool {
         let Some(control_name) = physical_control_name(control) else {
             return false;
@@ -187,7 +190,7 @@ impl WinitApp {
         }
 
         // アナログ軸の合成 Press は tick 比例スクロールと重複させない。
-        if control_name.starts_with("Axis") || repeat {
+        if synthesized_analog_axis || repeat {
             return true;
         }
 

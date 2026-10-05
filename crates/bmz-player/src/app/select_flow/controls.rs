@@ -656,10 +656,14 @@ impl WinitApp {
         self.select.session_mode = options.session_mode;
     }
 
-    pub(super) fn route_settings_control(&mut self, control: &str) -> bool {
+    pub(super) fn route_settings_control(
+        &mut self,
+        control: &str,
+        synthesized_analog_axis: bool,
+    ) -> bool {
         let bindings = SettingsBindings::from_profile(&self.boot.profile_config.input);
 
-        if control.starts_with("Axis")
+        if synthesized_analog_axis
             && (self.select.select_keys.is_select_scratch_up(control)
                 || self.select.select_keys.is_select_scratch_down(control))
         {

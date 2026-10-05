@@ -33,6 +33,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-05 | [v0.4.3以降のレビュー指摘修正](2026/2026-10-05-post-v043-review-fixes.md) |
 | 2026-10-05 | [LR2 Select / Resultレビューの修正](2026/2026-10-05-lr2-select-result-review.md) |
 | 2026-10-05 | [ADFX02 / ECFNのBMZ基本拡張](2026/2026-10-05-ecfn-bmz-extensions.md) |
 | 2026-10-05 | [ADFX02 / ECFNのDETAIL OPTIONS表示](2026/2026-10-05-ecfn-detail-options.md) |

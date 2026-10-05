@@ -18,6 +18,7 @@ pub(super) struct ControlInputEvent {
     pub(super) physical: Option<PhysicalControl>,
     pub(super) pressed: bool,
     pub(super) repeat: bool,
+    pub(super) synthesized_analog_axis: bool,
 }
 
 impl ControlInputEvent {
@@ -41,6 +42,7 @@ impl ControlInputEvent {
             physical,
             pressed: state == ElementState::Pressed,
             repeat,
+            synthesized_analog_axis: false,
         }
     }
 
@@ -51,7 +53,27 @@ impl ControlInputEvent {
             physical: Some(PhysicalControl::GamepadButton(name.to_string())),
             pressed,
             repeat: false,
+            synthesized_analog_axis: false,
         }
+    }
+
+    pub(super) fn gamepad_button(event: &crate::input::gamepad::GamepadButtonEvent) -> Self {
+        Self {
+            synthesized_analog_axis: event.synthesized_analog_axis,
+            ..Self::gamepad(event.device_id, &event.name, event.pressed)
+        }
+    }
+
+    /// Scratch movement is handled by axis ticks, while its button edges still
+    /// update physical holds and gameplay. Digitalized axes have no ticks.
+    pub(super) fn uses_analog_scroll(
+        &self,
+        keys: &super::select_key_bindings::SelectKeyBindings,
+    ) -> bool {
+        self.synthesized_analog_axis
+            && self.name.as_deref().is_some_and(|control| {
+                keys.is_select_scratch_up(control) || keys.is_select_scratch_down(control)
+            })
     }
 }
 
