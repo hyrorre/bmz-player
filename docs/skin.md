@@ -95,6 +95,8 @@ Select / Result / Course Resultには `LR2 Resolution (BMZ)` を追加する。
 type 5の選曲、type 7の通常リザルト、type 15のコースリザルトを既存の各スロットから選ぶ。
 ライブラリ、プロフィール設定、スコア保存、IR、リプレイ、リトライはBMZの処理を利用する。
 LR2固有のbutton / numberは変換時に内部参照へ分離し、beatorajaの同番号の意味を変えない。
+`LR2files/Theme/<theme>/...`形式のincludeは、同じスキンライブラリ内にある
+指定テーマの実ファイルを優先する。存在しない場合は従来の自テーマ内解決へ戻る。
 
 選曲は `BAR_BODY_ON/OFF`、`BAR_TITLE`、`BAR_LEVEL`、`BAR_LAMP`、
 `BAR_MY_LAMP`、`BAR_RIVAL_LAMP`、`BAR_FLASH`、`BAR_CENTER`、`BAR_AVAILABLE` を変換する。

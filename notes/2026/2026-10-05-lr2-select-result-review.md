@@ -55,3 +55,15 @@ OpenLR2は`LoadSceneG`後に`FlipScore`を呼ぶため、ロード時条件は�
   素材・隔離データの環境設定は前項と同じ。
 - ログはmain側の`.local/lr2-fix3-focused.log`と`.local/lr2-fix3-test.log`。
   GPU画面・実操作は未確認。
+
+## 別テーマのinclude
+
+`LR2files/Theme/<theme>/...`を解決するとき、テーマ名を除去する前に
+同じライブラリ内の指定テーマを確認する。従来のリネーム済み自テーマへのfallbackは維持。
+テーマ指定側にファイルがあれば自テーマ側の同名ファイルより優先する。
+
+- 回帰テストで同名衝突、入れ子の相対include、読み込んだCSVの依存追跡を確認。
+- 実RED_BELTの`OA_DX+/setting/yellow_gauge_setting.csv`と
+  `ghost_battle_setting.csv`を読み込めること、include欠落警告がないことを確認。
+- fmt、bmz-skin check / all-targets Clippy / test成功（247件）。
+  実素材は`BMZ_TEST_LR2_SKIN_ROOT`で指定。ログはmain側の`.local/lr2-fix4-test.log`。

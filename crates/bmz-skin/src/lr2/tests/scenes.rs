@@ -35,6 +35,55 @@ fn lr2_scene_resolves_sibling_theme_assets_and_custom_files() {
 }
 
 #[test]
+fn lr2_includes_preserve_explicit_sibling_theme_and_nested_dependencies() {
+    let root = unique_test_dir("lr2-cross-theme-include");
+    for directory in ["Current/Result", "Current/setting", "Shared/setting"] {
+        fs::create_dir_all(root.join(directory)).unwrap();
+    }
+    let path = root.join("Current/Result/result.lr2skin");
+    fs::write(
+        &path,
+        "#INFORMATION,7,test,test\n#INCLUDE,.\\LR2files\\Theme\\Shared\\setting\\common.csv\n",
+    )
+    .unwrap();
+    fs::write(root.join("Current/setting/common.csv"), "#IMAGE,wrong-theme.png\n").unwrap();
+    fs::write(root.join("Shared/setting/common.csv"), "#INCLUDE,nested.csv\n").unwrap();
+    fs::write(root.join("Shared/setting/nested.csv"), "#IMAGE,shared.png\n").unwrap();
+    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    assert_eq!(loaded.value["source"][0]["path"], "shared.png");
+    for relative in ["Shared/setting/common.csv", "Shared/setting/nested.csv"] {
+        assert!(loaded.dependencies.loaded_files.keys().any(|path| path.ends_with(relative)));
+    }
+    assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn lr2_red_belt_loads_shared_settings_when_available() {
+    let root = std::env::var_os("BMZ_TEST_LR2_SKIN_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/skins"));
+    let path = root.join("RED_BELT/Result/result.lr2skin");
+    if !path.is_file() || !root.join("OA_DX+/setting/yellow_gauge_setting.csv").is_file() {
+        eprintln!("SKIP missing RED_BELT or OA_DX+ settings");
+        return;
+    }
+    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    for name in ["yellow_gauge_setting.csv", "ghost_battle_setting.csv"] {
+        assert!(
+            loaded
+                .dependencies
+                .loaded_files
+                .keys()
+                .any(|path| { path.ends_with(Path::new("OA_DX+/setting").join(name)) }),
+            "missing {name}"
+        );
+    }
+    assert!(!loaded.warnings.iter().any(|warning| warning.message.contains("include not found")));
+    eprintln!("RED_BELT: both OA_DX+ setting includes loaded");
+}
+
+#[test]
 fn lr2_scene_assets_decode_when_available() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins");
     for (relative, kind) in [

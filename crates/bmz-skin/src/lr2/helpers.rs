@@ -423,6 +423,20 @@ pub(super) fn resolve_include_path(
     current_path: &Path,
     raw: &str,
 ) -> PathBuf {
+    // Explicit references to another installed theme must keep that theme name.
+    // Try the shared theme directory before the legacy self-theme fallback,
+    // which also supports packages whose containing directory was renamed.
+    if let Some(relative) = clean_lr2_asset_path(raw).strip_prefix("LR2files/Theme/")
+        && Path::new(relative)
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+        && let Some(themes) = builder.skin_root.parent()
+    {
+        let candidate = themes.join(relative);
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
     let normalized = normalize_lr2_asset_path(raw);
     if normalized.contains('*') {
         let selected = builder.resolve_source_path(raw);
@@ -467,7 +481,7 @@ pub(super) fn infer_skin_root(path: &Path) -> PathBuf {
     }
 }
 
-pub(super) fn normalize_lr2_asset_path(path: &str) -> String {
+fn clean_lr2_asset_path(path: &str) -> String {
     let mut normalized = path.trim().trim_matches('"').replace('\\', "/");
     if let Some(index) = normalized.find("//") {
         normalized.truncate(index);
@@ -476,6 +490,11 @@ pub(super) fn normalize_lr2_asset_path(path: &str) -> String {
     while let Some(stripped) = normalized.strip_prefix("./") {
         normalized = stripped.to_string();
     }
+    normalized
+}
+
+pub(super) fn normalize_lr2_asset_path(path: &str) -> String {
+    let normalized = clean_lr2_asset_path(path);
     if let Some(stripped) = normalized.strip_prefix("LR2files/Theme/") {
         let mut parts = stripped.splitn(2, '/');
         let _theme = parts.next();
