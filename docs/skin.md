@@ -655,6 +655,12 @@ E1/E1+E2は同じ画像IDを共用する場合もあるため、ID全体で除�
 部品の無効・欠落・失敗時とBMZ以外では従来のAssistへ戻る。新規APIの採番はない。
 [表示・互換仕様](select-detail-options.md#luxez-flat)を参照。
 
+別途導入するADFX02/ECFNの拡張版も同じAPIを使う。`select/bmz_detail_options.lua`の正常構築後に
+v1・Numbers・Closeを宣言する。旧timer 22表示のみを置換し、200msフェードと通常パネルの退出を追加する。
+新しい公開IDは追加しない。既存timer 21/22/31/32とdraw callbackで暗幕を1枚に保つ。
+本体設定OFF・部品欠落・失敗時とBMZ以外では旧3パネルを保持する。
+[表示・互換仕様](select-detail-options.md#adfx02--ecfn)を参照。
+
 #### 選択項目のnumber ref
 
 | ID | 意味 |
