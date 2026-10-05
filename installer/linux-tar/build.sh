@@ -5,19 +5,29 @@ export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-2}
 # Keep test linking and temporary artifacts within the hosted runner's budget.
 export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
 cargo fmt --check
-cargo check --locked
-cargo clippy --locked
+cargo check --workspace --locked --features bmz-player/pipewire,bmz-player/linux-evdev
+cargo clippy --workspace --all-targets --locked --features bmz-player/pipewire,bmz-player/linux-evdev -- -D warnings
 # Existing UI tests expect Japanese defaults; permission tests need a non-root
 # process. Keep Cargo/toolchain access as root and run the test binaries as nobody.
 LANG=ja_JP.UTF-8 CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER='runuser -u nobody --' \
-  cargo test --locked
+  cargo test --workspace --locked --features bmz-player/pipewire,bmz-player/linux-evdev --no-fail-fast
 cargo clean --profile dev
-cargo build --locked --release -p bmz-player --no-default-features --features pulseaudio
+cargo build --locked --release -p bmz-player --no-default-features --features pulseaudio,pipewire,linux-evdev
 version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\([^"]*\)"/\1/p' Cargo.toml)
 name="bmz-player-v${version}-linux-x64"
 package="/tmp/$name"
 sources="/tmp/$name-sources"
 mkdir -p "$package/bin" "$package/lib" "$package/resources/licenses" "$sources/ffmpeg"
+mkdir -p "$package/lib/pipewire-0.3" "$package/lib/spa-0.2" "$package/resources/pipewire" "$sources/pipewire"
+cp -a /opt/pipewire/lib/libpipewire-0.3.so* "$package/lib/"
+for module in rt protocol-native client-node adapter metadata; do
+  cp "/opt/pipewire/lib/pipewire-0.3/libpipewire-module-${module}.so" "$package/lib/pipewire-0.3/"
+done
+cp -a /opt/pipewire/lib/spa-0.2/support /opt/pipewire/lib/spa-0.2/audioconvert "$package/lib/spa-0.2/"
+cp installer/linux-tar/pipewire-client.conf "$package/resources/pipewire/client.conf"
+cp /opt/pipewire-source/pipewire-*.tar.bz2 /opt/pipewire-source/configure.txt "$sources/pipewire/"
+cp /opt/pipewire-source/LICENSE "$package/resources/licenses/PipeWire-MIT.txt"
+cp /opt/pipewire-source/configure.txt "$package/resources/licenses/pipewire-build.txt"
 install -m755 target/release/bmz-player "$package/bin/"
 install -m755 installer/linux-tar/bmz-player "$package/"
 cp -a /source/data/skins /source/data/fonts /source/data/songs "$package/resources/"
@@ -28,6 +38,7 @@ cp data/fonts/noto-cjk/LICENSE "$package/resources/licenses/NotoSansCJK-OFL-1.1.
 cp docs/linux-tar.md "$package/README.md"
 printf '\nCorresponding source: %s-sources.tar.gz\nCompare build-manifest.json in both archives for version and full commit.\n' "$name" >> "$package/README.md"
 cargo-about generate --workspace --locked --fail --target x86_64-unknown-linux-gnu \
+  --features bmz-player/pipewire,bmz-player/linux-evdev \
   --output-file "$package/resources/licenses/rust-dependency-licenses.txt" about.hbs
 rust_docs="$(rustc --print sysroot)/share/doc/rust"
 mkdir "$package/resources/licenses/rust-runtime"
@@ -43,7 +54,7 @@ cp /opt/ffmpeg-source/COPYING* /opt/ffmpeg-source/LICENSE.md "$package/resources
   cargo -V
   cc --version
   ldd --version
-  printf '\nBuild command: cargo build --locked --release -p bmz-player --no-default-features --features pulseaudio\n'
+  printf '\nBuild command: cargo build --locked --release -p bmz-player --no-default-features --features pulseaudio,pipewire,linux-evdev\n'
   printf '\nFFmpeg source SHA256:\n'
   sha256sum /opt/ffmpeg-source/*.tar.xz
 } > "$package/resources/licenses/build.txt"

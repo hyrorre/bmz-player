@@ -67,7 +67,7 @@ def verify(source, rebuild):
         if rebuild:
             env["BMZ_REBUILD_DIR"] = str(work / "rebuild")
             subprocess.run(["bash", str(source / "installer/linux-tar/rebuild.sh")], env=env, check=True)
-            print("PASS: FFmpeg and BMZ release rebuilt offline from the source archive", flush=True)
+            print("PASS: FFmpeg, PipeWire client and BMZ release rebuilt offline from the source archive", flush=True)
 
 
 if __name__ == "__main__":

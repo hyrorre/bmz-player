@@ -73,9 +73,10 @@ def create(runtime, source):
         "submodules": [dict(commit=line.split()[0], path=line.split()[1])
                        for line in (source / "BUILD-SUBMODULES").read_text().splitlines()],
         "target": "x86_64-unknown-linux-gnu", "default_features": False,
-        "features": ["pulseaudio"],
-        "build_command": "cargo build --locked --release -p bmz-player --no-default-features --features pulseaudio",
-        "rebuild_command": "cargo build --offline --locked --release -p bmz-player --no-default-features --features pulseaudio",
+        "features": ["pulseaudio", "pipewire", "linux-evdev"],
+        "build_command": "cargo build --locked --release -p bmz-player --no-default-features --features pulseaudio,pipewire,linux-evdev",
+        "rebuild_command": "cargo build --offline --locked --release -p bmz-player --no-default-features --features pulseaudio,pipewire,linux-evdev",
+        "pipewire_client": (source / "pipewire/configure.txt").read_text(),
         "cargo_lock_sha256": sha256(source / "Cargo.lock"),
         "toolchain": {tool: command(*args) for tool, args in {
             "rust": ["rustc", "-Vv"], "cargo": ["cargo", "-V"],
@@ -116,6 +117,13 @@ def check_pair(runtime, source):
         raise ValueError("FFmpeg configuration mismatch")
     if (source / "ffmpeg/configure.txt").read_text().splitlines()[2] != ffmpeg["configure"]:
         raise ValueError("FFmpeg manifest configuration mismatch")
+    pipewire = manifest["pipewire_client"]
+    if (source / "pipewire/configure.txt").read_text() != pipewire or (runtime / "resources/licenses/pipewire-build.txt").read_text() != pipewire:
+        raise ValueError("PipeWire configuration mismatch")
+    pipewire_version = re.search(r"pipewire_([0-9.]+)\.orig", pipewire)[1]
+    pipewire_sha = pipewire.splitlines()[1].split("=", 1)[1]
+    if sha256(source / "pipewire" / f"pipewire-{pipewire_version}.tar.bz2") != pipewire_sha:
+        raise ValueError("PipeWire source mismatch")
     if json.loads((runtime / "resources/licenses/ubuntu/packages.json").read_text()) != manifest["ubuntu"]:
         raise ValueError("Ubuntu manifest mismatch")
     return manifest

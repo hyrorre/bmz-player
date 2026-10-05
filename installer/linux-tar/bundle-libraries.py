@@ -19,6 +19,11 @@ source_root = Path(sys.argv[2])
 # loaded at runtime also belong to the host; no Mesa/NVIDIA implementation ships.
 glibc = re.compile(r"^(ld-linux-x86-64\.so\.2|lib(c|m|pthread|dl|rt|resolv|util)\.so\.[0-9]+)$")
 listing = output("ldd", str(package / "bin/bmz-player"))
+plugins = list((package / "lib/pipewire-0.3").glob("*.so")) + list((package / "lib/spa-0.2").rglob("*.so"))
+for plugin in plugins:
+    listing += output("ldd", str(plugin))
+    relative = os.path.relpath(package / "lib", plugin.parent)
+    subprocess.run(["patchelf", "--set-rpath", "$ORIGIN/" + relative, str(plugin)], check=True)
 if "not found" in listing:
     raise RuntimeError(listing)
 sources = set()
@@ -27,6 +32,7 @@ notices.mkdir()
 shutil.copytree("/usr/share/common-licenses", notices / "common-licenses")
 provenance = []
 packages = []
+seen = set()
 for line in listing.splitlines():
     match = re.match(r"\s*(\S+) => (/\S+)", line)
     if not match:
@@ -34,10 +40,16 @@ for line in listing.splitlines():
     name, library = match.groups()
     if glibc.fullmatch(name):
         continue
+    if name in seen:
+        continue
+    seen.add(name)
     shutil.copy2(library, package / "lib" / name)
     subprocess.run(["patchelf", "--set-rpath", "$ORIGIN", str(package / "lib" / name)], check=True)
     if library.startswith("/opt/ffmpeg/"):
         provenance.append(f"{name}\tFFmpeg (see ffmpeg-build.txt)")
+        continue
+    if library.startswith("/opt/pipewire/"):
+        provenance.append(f"{name}\tPipeWire client (see pipewire-build.txt)")
         continue
     # dpkg may record the pre-usrmerge spelling of a library path.
     candidates = [library, os.path.realpath(library)]

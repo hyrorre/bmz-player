@@ -9,7 +9,10 @@ export CARGO_TARGET_DIR="$BMZ_REBUILD_DIR/target"
 mkdir -p "$CARGO_HOME" "$BMZ_REBUILD_DIR/ffmpeg-source"
 cp ffmpeg/*.tar.xz "$BMZ_REBUILD_DIR/ffmpeg-source/"
 bash installer/linux-tar/build-ffmpeg.sh "$BMZ_REBUILD_DIR/ffmpeg-source" "$BMZ_REBUILD_DIR/ffmpeg"
-export PKG_CONFIG_PATH="$BMZ_REBUILD_DIR/ffmpeg/lib/pkgconfig"
-export LD_LIBRARY_PATH="$BMZ_REBUILD_DIR/ffmpeg/lib"
-cargo build --offline --locked --release -p bmz-player --no-default-features --features pulseaudio
+mkdir -p "$BMZ_REBUILD_DIR/pipewire-source"
+cp pipewire/*.tar.bz2 "$BMZ_REBUILD_DIR/pipewire-source/"
+bash installer/linux-tar/build-pipewire.sh "$BMZ_REBUILD_DIR/pipewire-source" "$BMZ_REBUILD_DIR/pipewire"
+export PKG_CONFIG_PATH="$BMZ_REBUILD_DIR/ffmpeg/lib/pkgconfig:$BMZ_REBUILD_DIR/pipewire/lib/pkgconfig"
+export LD_LIBRARY_PATH="$BMZ_REBUILD_DIR/ffmpeg/lib:$BMZ_REBUILD_DIR/pipewire/lib"
+cargo build --offline --locked --release -p bmz-player --no-default-features --features pulseaudio,pipewire,linux-evdev
 "$CARGO_TARGET_DIR/release/bmz-player" --help

@@ -1,5 +1,9 @@
 # Rebuild the corresponding Linux source archive
 
+PipeWire 1.4.9 client sources, checksum and configure command are in `pipewire/`.
+The offline rebuild also builds this private client library; it does not install
+or start a host audio server. Required build tools include Meson and Ninja.
+
 Extract `bmz-player-vX-linux-x64-sources.tar.gz` into any new directory.
 This directory is the BMZ workspace root: `Cargo.toml`, `Cargo.lock`, `crates/`,
 `vendor/`, `.cargo/config.toml`, and the actual bundled skin files are here.
@@ -15,7 +19,7 @@ when comparing builds. The packaging Dockerfile's `tools` stage documents setup:
 ```sh
 sudo apt-get update
 sudo apt-get install build-essential ca-certificates curl git pkg-config clang \
-  libclang-dev nasm xz-utils python3 dpkg-dev libasound2-dev libpulse-dev \
+  libclang-dev nasm xz-utils python3 dpkg-dev meson ninja-build libasound2-dev libpulse-dev \
   libudev-dev libfontconfig1-dev libdbus-1-dev libxkbcommon-dev zlib1g-dev libbz2-dev
 ```
 
@@ -25,7 +29,7 @@ network access. The next steps use the included FFmpeg archive and Cargo vendor,
 and run without network access. No `.git`, original checkout, `/source` mount,
 or `/tmp/bmz-source` path is required.
 
-## Build FFmpeg and BMZ (offline)
+## Build FFmpeg, the PipeWire client and BMZ (offline)
 
 From the extracted source root:
 
@@ -40,13 +44,14 @@ the shared libraries with `installer/linux-tar/build-ffmpeg.sh`, and sets
 differs from `ffmpeg/configure.txt`. It then runs:
 
 ```sh
-cargo build --offline --locked --release -p bmz-player --no-default-features --features pulseaudio
+cargo build --offline --locked --release -p bmz-player --no-default-features --features pulseaudio,pipewire,linux-evdev
 ```
 
 The script uses a new Cargo cache and target directory under `BMZ_REBUILD_DIR`.
 The executable is `$BMZ_REBUILD_DIR/target/release/bmz-player`; retain the FFmpeg
-library path when running it. Rebuilding with the same sources and settings is
-tested; byte-for-byte binary reproducibility is not claimed.
+and PipeWire library paths when running it. Release verification runs the offline
+rebuild; consult the matching build's validation record. Byte-for-byte binary
+reproducibility is not claimed.
 
 ## Ubuntu corresponding sources
 

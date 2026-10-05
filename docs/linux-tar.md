@@ -5,6 +5,15 @@ x86_64, with Ubuntu 22.04 (glibc 2.35) as the minimum runtime baseline.
 Other distributions are not guaranteed to work. Flatpak remains available.
 Regular users only need the runtime archive; the sources archive is for rebuilding.
 
+The build enables `pulseaudio,pipewire,linux-evdev`. It bundles the pinned
+PipeWire 1.4.9 client, native-protocol/client-node/adapter/metadata/rt modules,
+SPA support/audioconvert plugins and a private client configuration. It ships no
+audio server, services, PAM or udev policy. The Ubuntu 22.04/glibc baseline stays
+unchanged. Auto still prefers PulseAudio then ALSA; PipeWire and evdev are opt-in.
+See [Linux latency verification](linux-latency.md) for dependencies, permissions,
+diagnostics and rollback. The launcher sets package-local PipeWire/SPA/config
+search paths only if callers did not already set them; it never forces a quantum.
+
 ## Run
 
 Extract `bmz-player-v<version>-linux-x64.tar.gz`, then run its `./bmz-player`

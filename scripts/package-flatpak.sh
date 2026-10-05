@@ -135,6 +135,7 @@ main() {
 
   need_command flatpak
   need_command flatpak-builder
+  need_command python3
 
   [[ -f "${manifest}" ]] || die "missing manifest: ${manifest}"
   [[ -f "${root}/data/skins/default/select.json" ]] || die "missing bundled default skin"
@@ -171,7 +172,31 @@ main() {
   fi
 
   echo "==> Building Flatpak"
-  flatpak-builder "${builder_args[@]}" "${build_dir}" "${manifest}"
+  # The dir source excludes .git. Carry build identity in a generated manifest,
+  # not a write into the user's checkout or an ambient runtime override.
+  local resolved_manifest="${out_dir}/build-manifest.json"
+  flatpak-builder --show-manifest "${manifest}" > "${resolved_manifest}"
+  python3 - "${resolved_manifest}" "${root}" <<'PY'
+import json
+from pathlib import Path
+import subprocess
+import sys
+path, root = Path(sys.argv[1]), Path(sys.argv[2])
+manifest = json.loads(path.read_text())
+try:
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    dirty = subprocess.check_output(["git", "status", "--porcelain", "--ignore-submodules=all",
+                                     "--", "crates", "Cargo.toml", "Cargo.lock"], cwd=root, text=True)
+    if dirty.strip():
+        commit += "-dirty"
+except subprocess.CalledProcessError:
+    commit = (root / "BUILD-COMMIT").read_text().strip() if (root / "BUILD-COMMIT").exists() else "unknown"
+module = manifest["modules"][0]
+module["sources"][0]["path"] = str(root)
+module["build-options"]["env"]["BMZ_BUILD_COMMIT_OVERRIDE"] = commit
+path.write_text(json.dumps(manifest, indent=2) + "\n")
+PY
+  flatpak-builder "${builder_args[@]}" "${build_dir}" "${resolved_manifest}"
 
   if [[ "${build_bundle}" == "1" ]]; then
     echo "==> Creating bundle ${bundle_path}"

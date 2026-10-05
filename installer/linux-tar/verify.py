@@ -22,11 +22,13 @@ assert not (package / "sources").exists()
 assert not Path("/source").exists() and not Path("/archives/sources").exists()
 for required in ("build-manifest.json", "README.md", "resources/licenses/BMZ-GPL-3.0-only.txt",
                  "resources/licenses/third-party-notices.txt", "resources/licenses/rust-dependency-licenses.txt",
-                 "resources/licenses/ffmpeg-build.txt", "resources/licenses/NotoSansCJK-OFL-1.1.txt"):
+                 "resources/licenses/ffmpeg-build.txt", "resources/licenses/NotoSansCJK-OFL-1.1.txt",
+                 "resources/licenses/pipewire-build.txt", "resources/licenses/PipeWire-MIT.txt",
+                 "resources/pipewire/client.conf"):
     assert (package / required).is_file(), required
 assert {p.name for p in package.iterdir()} == {"bmz-player", "bin", "lib", "resources", "README.md", "build-manifest.json"}
 glibc = re.compile(r"^lib(c|m|pthread|dl|rt|resolv|util)\.so\.[0-9]+$")
-for binary in [package / "bin/bmz-player", *sorted((package / "lib").iterdir())]:
+for binary in [package / "bin/bmz-player", *sorted(p for p in (package / "lib").rglob("*") if p.is_file())]:
     result = run("ldd", "-r", str(binary), capture_output=True).stdout
     print(result, flush=True)
     assert "not found" not in result
@@ -48,6 +50,15 @@ os.chdir(cwd)
 (cwd / "data").mkdir()  # Must not capture packaged user state via cwd/data.
 run(str(launcher), "--help")
 assert not (home / ".local/share/bmz-player").exists()
+# Client library/modules must load even without a PipeWire server.
+missing = subprocess.run([str(launcher), "audio-probe", "pipewire", "128", "48000", "3"],
+                         env=dict(os.environ, PIPEWIRE_REMOTE="bmz-test-missing-server"),
+                         capture_output=True, text=True, timeout=15)
+assert missing.returncode != 0 and '"kind":"audio_open_failure"' in missing.stdout, missing
+failures = [json.loads(line.split("BMZ_LATENCY_JSON ", 1)[1]) for line in missing.stdout.splitlines()
+            if '"kind":"audio_open_failure"' in line]
+assert failures[-1]["phase"] == "server_or_host_initialization", missing
+assert "error while loading shared libraries" not in missing.stderr, missing
 sample = package / "resources/songs/sample-playable"
 data = home / ".local/share/bmz-player"
 
@@ -55,6 +66,12 @@ data = home / ".local/share/bmz-player"
 # null PulseAudio sink. This tests packaging, not hardware performance or sound.
 run("pulseaudio", "--start", "--exit-idle-time=-1")
 run("pactl", "load-module", "module-null-sink")
+probe = run(str(launcher), "audio-probe", "pulse", "256", "48000", "4",
+            env=dict(os.environ, BMZ_LATENCY_DIAGNOSTICS="1"), capture_output=True).stdout
+samples = [json.loads(line.split("BMZ_LATENCY_JSON ", 1)[1]) for line in probe.splitlines()
+           if "BMZ_LATENCY_JSON " in line]
+assert samples[-1]["stream"]["actual_host"] == "PulseAudio"
+assert samples[-1]["frames"]["count"] > 0
 trace = home / "resource-access.trace"
 run("timeout", "120", "xvfb-run", "-a", "strace", "-f", "-e", "trace=openat",
     "-e", "status=successful",

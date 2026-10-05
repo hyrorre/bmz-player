@@ -37,11 +37,16 @@ class ArchiveTests(unittest.TestCase):
         self.write(self.runtime, "resources/licenses/ffmpeg-build.txt",
                    (self.source / "ffmpeg/configure.txt").read_text())
         self.write(self.runtime, "resources/licenses/ubuntu/packages.json", "[]")
+        self.write(self.source, "pipewire/pipewire-1.4.9.tar.bz2", "pipewire source")
+        pipewire = "source_url=https://example/pipewire_1.4.9.orig.tar.bz2\nsource_sha256=" + sha256(self.source / "pipewire/pipewire-1.4.9.tar.bz2") + "\nmeson setup build source\n"
+        self.write(self.source, "pipewire/configure.txt", pipewire)
+        self.write(self.runtime, "resources/licenses/pipewire-build.txt", pipewire)
         self.write(self.runtime, "bin/bmz-player", "binary")
         self.manifest = {
             "schema": 1, "commit": "a" * 40, "version": "0.4.0",
             "cargo_lock_sha256": sha256(self.source / "Cargo.lock"),
             "snapshot": self.snapshot, "ubuntu": [],
+            "pipewire_client": pipewire,
             "ffmpeg": {"version": "9.0.1", "sha256": sha256(self.source / "ffmpeg/ffmpeg-9.0.1.tar.xz"),
                        "configure": "./configure --enable-shared"},
             "files": {"runtime": inventory(self.runtime), "sources": inventory(self.source)},
@@ -60,6 +65,13 @@ class ArchiveTests(unittest.TestCase):
 
     def test_valid_pair(self):
         check_pair(self.runtime, self.source)
+
+    def test_pipewire_source_hash_is_checked_even_with_new_inventory(self):
+        self.write(self.source, "pipewire/pipewire-1.4.9.tar.bz2", "different source")
+        self.manifest["files"]["sources"] = inventory(self.source, ("build-manifest.json",))
+        self.save_manifest()
+        with self.assertRaisesRegex(ValueError, "PipeWire source mismatch"):
+            check_pair(self.runtime, self.source)
 
     def test_different_commit_pair(self):
         other = dict(self.manifest, commit="b" * 40)

@@ -65,8 +65,21 @@ exact binary/source versions and matching APT source archives. The application
 source and vendored Cargo dependencies also accompany the binary. Keep these
 sources and notices available together when redistributing: supply both matching
 archives and `SHA256SUMS.txt` from the same build. Source contents, exact versions,
-checksums and an offline FFmpeg/BMZ rebuild are checked before artifact upload;
+checksums and an offline FFmpeg/PipeWire/BMZ rebuild are checked before artifact upload;
 the Ubuntu libraries' full rebuild is a separate, unperformed check.
+
+## Linux PipeWire client
+
+The Linux tar archive bundles PipeWire 1.4.9 client libraries, selected modules
+and SPA plugins, built from the checksum-pinned source in
+`installer/linux-tar/build-pipewire.sh`. Preserve its unmodified MIT `COPYING`
+as `resources/licenses/PipeWire-MIT.txt`, the configure record as
+`resources/licenses/pipewire-build.txt`, and the complete corresponding source
+archive in `sources/pipewire/`. Include notices and exact source packages for
+the ELF dependency closure. No PipeWire server or host service files ship.
+Flatpak uses the SDK/runtime's PipeWire libraries instead. The optional Rust
+evdev/x11rb/zbus dependencies remain covered by the feature-enabled cargo-about
+inventory and vendored sources. Keep this inventory aligned with build features.
 
 ## ASIO SDK
 
