@@ -212,6 +212,7 @@ struct AudioCommandQueueInner {
     counters: AudioCommandQueueCounters,
     output_sample_rate: AtomicU32,
     idle: AtomicBool,
+    playback_stopped: AtomicBool,
     last_drop_warn_ms: AtomicU64,
 }
 
@@ -275,6 +276,7 @@ impl AudioEngineHandle {
                 counters: AudioCommandQueueCounters::default(),
                 output_sample_rate: AtomicU32::new(output_sample_rate),
                 idle: AtomicBool::new(idle),
+                playback_stopped: AtomicBool::new(false),
                 last_drop_warn_ms: AtomicU64::new(0),
             }),
             cancelled: None,
@@ -295,6 +297,20 @@ impl AudioEngineHandle {
 
     pub fn is_idle(&self) -> bool {
         self.inner.idle.load(Ordering::Relaxed)
+    }
+
+    /// Permanently stop this source's playback, retaining its decoded sample bank.
+    /// This latch bypasses the bounded command queue and play cancellation: even
+    /// a full/contended queue or a retired worker cannot lose the stop request.
+    /// All clones reject later commands. A retry uses a new source/handle with
+    /// the shared sample bank; never reuse a stopped source for a new play.
+    pub fn stop_playback(&self) {
+        self.inner.playback_stopped.store(true, Ordering::Release);
+    }
+
+    fn commands_cancelled(&self) -> bool {
+        self.inner.playback_stopped.load(Ordering::Acquire)
+            || self.cancelled.as_ref().is_some_and(|flag| flag.load(Ordering::Acquire))
     }
 
     pub fn diagnostics(&self) -> AudioCommandQueueDiagnostics {
@@ -352,11 +368,7 @@ impl AudioEngineHandle {
         }
         match self.inner.queue.lock() {
             Ok(mut queue) => {
-                if self
-                    .cancelled
-                    .as_ref()
-                    .is_some_and(|cancelled| cancelled.load(Ordering::Acquire))
-                {
+                if self.commands_cancelled() {
                     return false;
                 }
                 let coalescible = count_coalescible_pending_commands(&queue, &commands);
@@ -504,11 +516,7 @@ impl AudioEngineHandle {
         match self.inner.queue.lock() {
             Ok(mut queue) => {
                 let coalescible = usize::from(is_pending_command_coalescible(&queue, &command));
-                if self
-                    .cancelled
-                    .as_ref()
-                    .is_some_and(|cancelled| cancelled.load(Ordering::Acquire))
-                {
+                if self.commands_cancelled() {
                     return Err(command);
                 }
                 if queue.len().saturating_sub(coalescible).saturating_add(1) > self.inner.capacity {
@@ -560,6 +568,7 @@ impl CommandedAudioEngine {
             }
         };
         self.apply_pending_commands(&mut engine, output_start_frame);
+        self.apply_playback_stop(&mut engine);
         engine.render_stereo(output_start_frame, output);
         self.inner.output_sample_rate.store(engine.output_sample_rate(), Ordering::Relaxed);
         self.inner.idle.store(engine.is_idle(), Ordering::Relaxed);
@@ -572,8 +581,20 @@ impl CommandedAudioEngine {
             return;
         };
         self.apply_pending_commands(&mut engine, 0);
+        self.apply_playback_stop(&mut engine);
         self.inner.output_sample_rate.store(engine.output_sample_rate(), Ordering::Relaxed);
         self.inner.idle.store(engine.is_idle(), Ordering::Relaxed);
+    }
+
+    fn apply_playback_stop(&self, engine: &mut AudioEngine) {
+        if self.inner.playback_stopped.load(Ordering::Acquire) && !engine.is_idle() {
+            // clear_playback resets gain for Viewer replacement. Terminal stop
+            // must preserve gain, pause and playback rate, and leave the clock
+            // running for the closing animation. PCM remains owned by the bank.
+            let gain = engine.mixer.master_gain;
+            engine.clear_playback();
+            engine.set_master_gain(gain);
+        }
     }
 
     fn apply_pending_commands(&mut self, engine: &mut AudioEngine, output_frame: u64) {
@@ -597,7 +618,7 @@ impl CommandedAudioEngine {
 
         let drained = self.command_scratch.len() as u64;
         for queued in self.command_scratch.drain(..) {
-            if queued.is_cancelled() {
+            if queued.is_cancelled() || self.inner.playback_stopped.load(Ordering::Acquire) {
                 continue;
             }
             if let Some(enqueued) = queued.enqueued {
@@ -711,6 +732,78 @@ fn update_atomic_max(atomic: &AtomicU64, value: u64) {
 mod tests {
     use super::*;
     use crate::sample::DecodedSample;
+
+    #[test]
+    fn terminal_stop_survives_full_queue_contention_and_worker_retirement() {
+        let mut engine = AudioEngine::new(48_000);
+        engine.insert_sample(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0; 48_000 * 45] },
+        );
+        engine.set_master_gain(0.5);
+        engine.set_playback_rate_percent(150);
+        engine.schedule(ScheduledSound::one_shot(0, SoundId(1), 0.25, 0.0));
+        engine.schedule(ScheduledSound::one_shot(96_000, SoundId(1), 0.25, 0.0));
+        let handle = AudioEngineHandle::with_capacity(engine, 1);
+        let retired = Arc::new(AtomicBool::new(false));
+        let play = handle.for_play(retired.clone());
+        let mut processor = handle.processor();
+        let mut output = [0.0; 2];
+        assert!(processor.render_stereo(0, &mut output));
+        assert_eq!(output, [0.125; 2]);
+        assert!(play.play_now(SoundId(1), 0.25, false));
+        assert!(!play.schedule_sound(ScheduledSound::one_shot(1, SoundId(1), 0.25, 0.0)));
+
+        // Stop has no dependency on the queue mutex or capacity. The callback
+        // still clears active voices and future events when it cannot drain.
+        let queue = handle.inner.queue.lock().unwrap();
+        play.stop_playback();
+        retired.store(true, Ordering::Release);
+        play.stop_playback();
+        let locked_engine = handle.engine.lock().unwrap();
+        assert!(!processor.render_stereo(1, &mut output));
+        drop(locked_engine);
+        assert!(processor.render_stereo(2, &mut output));
+        assert_eq!(output, [0.0; 2]);
+        drop(queue);
+        assert!(processor.render_stereo(96_000, &mut output));
+        assert_eq!(output, [0.0; 2]);
+        // Even an unscoped clone cannot revive the stopped source.
+        assert!(!handle.play_now(SoundId(1), 1.0, false));
+        assert!(!handle.replace_playback(vec![ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0)]));
+        let engine = handle.engine.lock().unwrap();
+        assert!(engine.is_idle());
+        assert_eq!(engine.mixer.master_gain, 0.5);
+        assert_eq!(engine.mixer.playback_rate, 1.5);
+        assert_eq!(engine.samples.source_count(), 1);
+    }
+
+    #[test]
+    fn terminal_stop_preserves_paused_state_and_shared_pcm_for_new_source() {
+        let mut engine = AudioEngine::new(48_000);
+        engine.insert_sample(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.25; 8] },
+        );
+        engine.schedule(ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0));
+        engine.set_playback_paused(true, 0);
+        let old = AudioEngineHandle::new(engine);
+        let mut old_processor = old.processor();
+        old.stop_playback();
+        old_processor.apply_pending_commands_for_tests();
+        assert!(old.engine.lock().unwrap().playback_paused());
+        let (rate, bank) = old.clone_sample_bank().unwrap();
+        let retry = AudioEngineHandle::new(AudioEngine::with_sample_bank(rate, bank));
+        let mut retry_processor = retry.processor();
+        assert!(retry.play_now(SoundId(1), 1.0, false));
+        // A late, repeated stop belongs only to the old source.
+        old.stop_playback();
+        let mut output = [0.0; 2];
+        assert!(retry_processor.render_stereo(0, &mut output));
+        assert_eq!(output, [0.25; 2]);
+        assert!(old_processor.render_stereo(0, &mut output));
+        assert_eq!(output, [0.0; 2]);
+    }
 
     #[test]
     fn retired_play_rejects_queued_and_concurrent_audio_commands() {

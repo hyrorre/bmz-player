@@ -50,7 +50,7 @@ safety wake は HCN や時計の進行を補完するもので、renderer の ti
 既存の `advance_session_frame` が入力、判定、Mine、見逃し、LN/CN/HCN、ゲージ、score、
 replay recording、autoplay、終了判定を処理する。keysound と BGM は `ScheduledSound` の
 既存 frame 座標を保って AudioEngine の有界 command queue へ送る。
-送信できなかった keysound と HCN 音量更新は次の wake で再送する。
+送信できなかった keysound と HCN 音量更新は次の wake で再送する（途中 FAILED 時は破棄）。
 判定ガイド音、既定の地雷 SE、失敗 SE も gameplay が直接送信する。
 callback には判定・入力処理を移していない。command scratch と通常再生用 queue / voice 領域は
 callback 接続前に事前確保し、callback は
@@ -117,6 +117,40 @@ enqueue 時と callback の適用時に検査する。旧 worker の遅い送信
 worker はスコア確定時・終端遷移時に immutable `FinishSessionSnapshot` と graph を発行する。
 通常 play、course、replay、abort、結果画面への遷移はこの結果から従来の storage / IR 経路を呼ぶ。
 UI は終了要求を送った直後の古い観測値を保存せず、worker の確定結果を待つ。
+
+### 途中FAILED時の譜面音声
+
+手動中断（Esc / E1+E2 等）またはゲージ枯渇によって `PlayState::Failed` が確定すると、
+`GameplayRuntime` はそのプレイの譜面音声を停止する。閉店演出開始時の要求であり、
+描画更新・RESULT入場・システム効果音の初期化を待たない。Practiceで中断と同時に
+時計が停止しても、停止要求と未送信要求の破棄を行う。
+
+- `flush_audio()` はFAILEDフレーム内で生成済みのBGM・キー音、先行予約、再送待ちの
+  発音・HCN音量変更を破棄する。通常の発音時刻・入力／音声オフセットは変更しない。
+- プレイ別の `AudioEngineHandle::stop_playback()` は、有界キューとは独立したatomicの
+  停止フラグを保持する。送信時とcallback適用時に要求を拒否し、遅着・並行送信からの
+  再発音を防ぐ。workerの既存取消フラグとは別なので、worker破棄で停止自体は取り消されない。
+- callbackは停止フラグを観測した時点で `clear_playback()` により全voiceと予約を消去する。
+  キューの `try_lock` が失敗しても消去する。engineを取得できないcallbackは従来どおり無音で返し、
+  停止フラグは次回以降まで保持する。新しいロック待ち・I/O・ビジーループを追加しない。
+- デコード済みsample bankを保持し、`clear_playback()` に伴うgainリセットは元の値へ戻す。
+  pause状態、playback rate、音声時計は変えない。既にデバイスへ渡したバッファの巻き戻しは行わない。
+- 停止は当該sourceの寿命中は解除しない。同じ停止の再要求は安全で、`mark_draining()`でも
+  復活しない。再プレイは既存経路の新しいengine / handleを使うため、古い要求は作用しない。
+  Practice等が共有するデコード済みPCMは再利用できる。シーク用の `replace_playback()` は
+  終端停止の解除APIではなく、途中FAILEDしていないViewer sourceの差し替えに使う。
+
+判定条件は最終結果のクリアランプではない。`PlayState::Finished` の通常完走と
+全ノーツ処理後の終了操作は余韻をRESULTのdrainingへ引き継ぐ。完走時のFAILEDランプも同じ扱いで、
+RESULT退出時の既存フェードを維持する。GASで別ゲージへ移って続行する場合も停止しない。
+PlayStop、RESULTのBGM / SE、スキン音声は別のsystem sourceで再生し、この停止の対象外とする。
+
+AUTOPLAY / REPLAY / PRACTICE / コースも実際に `Failed` へ入る場合にだけ共通処理を使い、
+終了理由・画面遷移は変更しない。Viewerの終了・待機・一時停止・シークは従来の専用経路を維持する。
+スコア保存・IR・リプレイ記録の条件も変更しない。
+
+調査と回帰テスト、実機確認手順は
+[issue #26の作業記録](../notes/2026/2026-10-05-failed-chart-audio.md)を参照。
 
 ## Diagnostics と検証
 

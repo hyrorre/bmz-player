@@ -4,7 +4,7 @@ use bmz_audio::command::AudioEngineHandle;
 use bmz_audio::queue::ScheduledSoundQueue;
 use bmz_core::ids::SoundId;
 
-use crate::session::{GameSession, SessionFrame, advance_session_frame};
+use crate::session::{GameSession, PlayState, SessionFrame, advance_session_frame};
 
 pub struct GameplayRuntime {
     pub session: GameSession,
@@ -63,6 +63,11 @@ impl GameplayRuntime {
     }
 
     pub fn advance(&mut self, audio: &AudioEngineHandle) -> SessionFrame {
+        if self.session.state == PlayState::Failed {
+            // Manual abort may also pause the clock (Practice). Stop chart
+            // audio before the paused-clock early return, independently of SE.
+            self.flush_audio(audio);
+        }
         if !self.session.audio_clock.running {
             // Viewer pause consumes no gameplay input and advances no deadlines.
             self.session.input_system.backend.drain_events();
@@ -99,6 +104,15 @@ impl GameplayRuntime {
     }
 
     pub fn flush_audio(&mut self, audio: &AudioEngineHandle) {
+        if self.session.state == PlayState::Failed {
+            // Includes sounds generated before gauge failure in this advance,
+            // plus sounds/HCN volume changes retained after queue saturation.
+            // Finished (even with a FAILED clear lamp) keeps its normal tails.
+            self.pending_audio.clear();
+            self.pending_keysound_volumes.clear();
+            audio.stop_playback();
+            return;
+        }
         if !self.pending_audio.is_empty() {
             self.pending_audio.retain(|sound| {
                 if audio.schedule_sound(*sound) {

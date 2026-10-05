@@ -299,7 +299,10 @@ impl SystemSoundManager {
     }
 
     #[cfg(test)]
-    fn with_id_map(engine: AudioEngineHandle, id_map: HashMap<SoundType, SoundId>) -> Self {
+    pub(crate) fn with_id_map(
+        engine: AudioEngineHandle,
+        id_map: HashMap<SoundType, SoundId>,
+    ) -> Self {
         Self::with_id_map_and_normalization_gains(engine, id_map, HashMap::new(), false, false)
     }
 

@@ -12,6 +12,8 @@ use bmz_core::{
 use bmz_gameplay::input::{backend::*, binding::*, translator::*};
 use std::sync::atomic::AtomicI64;
 
+mod failure_audio;
+
 #[derive(Default)]
 pub struct RuntimeProbe {
     time: AtomicI64,
