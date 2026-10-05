@@ -33,6 +33,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-05 | [LR2 Select / Resultレビューの修正](2026/2026-10-05-lr2-select-result-review.md) |
 | 2026-10-03 | [LR2 Select / Resultの互換対応](2026/2026-10-03-lr2-select-result.md) |
 | 2026-10-03 | [Luxe Flatリザルトのランク差分とLua数値評価順序](2026/2026-10-03-result-grade-lua-order.md) |
 | 2026-10-03 | [LR2のDXAアセット直接読込](2026/2026-10-03-lr2-dxa-assets.md) |

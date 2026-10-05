@@ -99,6 +99,7 @@ LR2固有のbutton / numberは変換時に内部参照へ分離し、beatoraja�
 選曲は `BAR_BODY_ON/OFF`、`BAR_TITLE`、`BAR_LEVEL`、`BAR_LAMP`、
 `BAR_MY_LAMP`、`BAR_RIVAL_LAMP`、`BAR_FLASH`、`BAR_CENTER`、`BAR_AVAILABLE` を変換する。
 子部品はバーの左下を原点とし、スロット番号は条件分岐でずらさない。
+`DST_BAR_TITLE` の予約列（通常DSTのop1..3相当）は無視し、`#IF` の表示条件は維持する。
 画像の `blend=0` はDSTのalphaを無視する。画像素材自体の透過は維持する。
 クリアランプは表示だけLR2の同系列へまとめ、保存されたクリア種別は維持する。
 `ONMOUSE` の局所範囲とbuttonのパネル制限も評価する。

@@ -15,7 +15,7 @@ impl CsvBuilder<'_> {
             return false;
         }
         let command = line.command.as_str();
-        let values = parse_values(line);
+        let mut values = parse_values(line);
         if command == "BAR_CENTER" {
             self.select.center = values[1].clamp(0, 29);
             return true;
@@ -97,6 +97,10 @@ impl CsvBuilder<'_> {
                     .map(|current| current.variants.clone())
                     .unwrap_or_default()
             };
+            if kind == "TITLE" {
+                // LR2 reserves these columns for bar titles; only #IF supplies conditions.
+                values[18..=20].fill(0);
+            }
             for variant in variants {
                 let ops = self.combined_conditional_ops(&variant);
                 let mut destination = destination_def_with_default_offsets(

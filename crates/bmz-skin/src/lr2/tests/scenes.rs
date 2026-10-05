@@ -102,6 +102,27 @@ fn lr2_bar_sources_are_indexed_and_children_use_local_coordinates() {
 }
 
 #[test]
+fn lr2_bar_title_ignores_reserved_options_but_preserves_if_conditions() {
+    let root = unique_test_dir("lr2-bar-title-conditions");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("select.lr2skin");
+    fs::write(
+        &path,
+        "#INFORMATION,5,test,test\n#FONT,20,1,0\n\
+         #IF,32\n#SRC_BAR_TITLE,0,0,0,0\n\
+         #DST_BAR_TITLE,0,0,10,5,90,20,0,255,255,255,255,0,0,0,0,0,0,1,2,3\n\
+         #DST_BAR_TITLE,0,100,20,5,90,20,0,255,255,255,255,0,0,0,0,0,0\n#ENDIF\n",
+    )
+    .unwrap();
+    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let title = &loaded.value["songlist"]["text"][2];
+    assert_eq!(title["op"], json!([32]));
+    assert_eq!(title["dst"].as_array().unwrap().len(), 2);
+    assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn lr2_scene_resolution_button_and_hover_metadata_are_preserved() {
     let root = unique_test_dir("lr2-scene-controls");
     fs::create_dir_all(&root).unwrap();
