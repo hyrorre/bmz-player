@@ -225,6 +225,10 @@ pub struct SkinDestinationDef {
     pub offset: i32,
     #[serde(default)]
     pub offsets: Vec<i32>,
+    /// BMZ E2 carousel: one-column displacement in skin pixels, applied to
+    /// drawing and hit testing with the remaining select scroll interpolation.
+    #[serde(default, rename = "bmzDetailScroll")]
+    pub bmz_detail_scroll: [i32; 2],
     #[serde(default = "default_stretch")]
     pub stretch: i32,
     #[serde(default, deserialize_with = "deserialize_op_codes")]

@@ -2,6 +2,9 @@ use super::*;
 
 impl WinitApp {
     pub(super) fn route_mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        if self.ui.egui.as_ref().is_some_and(|ui| ui.blocks_game_input(false)) {
+            return;
+        }
         if self.jobs.profile_change.is_some() {
             return;
         }
@@ -33,6 +36,24 @@ impl WinitApp {
         if !matches!(self.view_state(), AppViewState::Select) {
             return;
         }
+        if self.option_panel_exit_blocks_input()
+            || (self.select.select_option_panel == 0
+                && self.detail_options_closing_snapshot().is_some())
+        {
+            return;
+        }
+        if self.detail_options_active() {
+            if let Some(movement) = select_wheel_move(delta) {
+                self.move_detail_options(if movement == SelectMove::Previous { -1 } else { 1 });
+            }
+            return;
+        }
+        if self.detail_options_enabled() && self.select.select_option_panel == 1 {
+            if let Some(movement) = select_wheel_move(delta) {
+                self.cycle_select_target(if movement == SelectMove::Previous { -1 } else { 1 });
+            }
+            return;
+        }
         if in_settings_stack(&self.select.folder_stack) && self.select.settings_edit.is_some() {
             let direction = settings_edit_direction_from_mouse_wheel(delta);
             if direction != 0 {
@@ -46,6 +67,10 @@ impl WinitApp {
     }
 
     pub(super) fn route_mouse_input(&mut self, state: ElementState, button: MouseButton) {
+        if self.ui.egui.as_ref().is_some_and(|ui| ui.blocks_game_input(false)) {
+            self.select.select_slider_dragging_type = None;
+            return;
+        }
         if self.jobs.profile_change.is_some() {
             return;
         }
@@ -80,6 +105,34 @@ impl WinitApp {
         }
         if !matches!(self.view_state(), AppViewState::Select) {
             self.select.select_slider_dragging_type = None;
+            return;
+        }
+        if self.option_panel_exit_blocks_input()
+            || (self.select.select_option_panel == 0
+                && self.detail_options_closing_snapshot().is_some())
+        {
+            return;
+        }
+        if self.detail_options_active() {
+            let snapshot = self.select_snapshot();
+            if let Some(hit) = self.renderer.select_skin_click_hit(&snapshot, x, y) {
+                self.handle_select_skin_click(hit, button, x, y);
+            }
+            return;
+        }
+        if self.detail_options_enabled() && self.select.select_option_panel == 1 {
+            let snapshot = self.select_snapshot();
+            if let Some(hit) = self.renderer.select_skin_click_hit(&snapshot, x, y)
+                && matches!(
+                    hit.target,
+                    SkinClickTarget::Event {
+                        event_id: 40 | 42 | 43 | 54 | 55 | 57 | 59 | 77 | 79 | 308,
+                        ..
+                    }
+                )
+            {
+                self.handle_select_skin_click(hit, button, x, y);
+            }
             return;
         }
         if button == MouseButton::Left

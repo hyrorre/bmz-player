@@ -2,6 +2,12 @@ use super::*;
 
 impl WinitApp {
     pub(super) fn route_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
+        // Releases must clear the exit gesture even when a panel/modal consumes input.
+        if event.physical_key == PhysicalKey::Code(KeyCode::Escape)
+            && event.state == ElementState::Released
+        {
+            self.select.select_exit_hold_started_at = None;
+        }
         if self.jobs.profile_change.is_some() {
             return;
         }
@@ -13,6 +19,9 @@ impl WinitApp {
         // Repeat suppression only applies to actions, never physical holds.
         self.sync_select_holds_from_pressed_controls();
         self.sync_play_control_holds_from_pressed_controls();
+        if self.detail_options_blocks_held_input(&control_event) {
+            return;
+        }
         if self.viewer_waiting {
             if self.route_waiting_viewer_keyboard(event) {
                 return;
@@ -29,6 +38,14 @@ impl WinitApp {
             return;
         }
         if self.route_viewer_keyboard(event) {
+            return;
+        }
+        if self.route_select_option_session_event(&control_event) {
+            return;
+        }
+        if matches!(self.view_state(), AppViewState::Select)
+            && self.option_panel_exit_blocks_input()
+        {
             return;
         }
         let play_control = control_event.name.as_deref();
@@ -379,20 +396,49 @@ impl WinitApp {
         event: &winit::event::KeyEvent,
         control_event: &ControlInputEvent,
     ) {
+        if self.ui.egui.as_ref().is_some_and(|ui| ui.blocks_game_input(false)) {
+            self.reset_detail_options_input();
+            return;
+        }
+        if self.route_detail_options_input(control_event) {
+            return;
+        }
+        if self.detail_options_enabled() && self.select.select_option_panel == 1 {
+            if control_event.pressed && !control_event.repeat {
+                if let Some(slot) = digit_to_replay_slot(event.physical_key) {
+                    self.start_replay_for_selected(slot);
+                } else {
+                    let cycle = target_cycle_from_key(event.physical_key).or_else(|| {
+                        control_event.name.as_deref().and_then(|control| {
+                            target_cycle_from_control(control, &self.select.select_keys)
+                        })
+                    });
+                    let changed = if let Some(cycle) = cycle {
+                        self.apply_target_option_cycle(cycle);
+                        true
+                    } else {
+                        control_event
+                            .name
+                            .as_deref()
+                            .is_some_and(|control| self.apply_play_option_control(control))
+                    };
+                    if changed {
+                        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                    }
+                }
+            }
+            return;
+        }
         if self.viewer_waiting {
             // 待機中はエディタからのIPCだけを再生入口にする。Escape長押しによる
             // 通常終了だけはSelectと同じ操作として残す。
             if event.physical_key == PhysicalKey::Code(KeyCode::Escape) {
-                match event.state {
-                    ElementState::Pressed => {
-                        if self.select.select_exit_hold_started_at.is_none() {
-                            self.select.select_exit_hold_started_at = Some(Instant::now());
-                        }
-                    }
-                    ElementState::Released => {
-                        self.select.select_exit_hold_started_at = None;
-                    }
-                }
+                update_select_exit_hold(
+                    &mut self.select.select_exit_hold_started_at,
+                    event.state,
+                    event.repeat,
+                    Instant::now(),
+                );
             }
             return;
         }
@@ -491,16 +537,12 @@ impl WinitApp {
                     return;
                 }
             }
-            match event.state {
-                ElementState::Pressed => {
-                    if self.select.select_exit_hold_started_at.is_none() {
-                        self.select.select_exit_hold_started_at = Some(Instant::now());
-                    }
-                }
-                ElementState::Released => {
-                    self.select.select_exit_hold_started_at = None;
-                }
-            }
+            update_select_exit_hold(
+                &mut self.select.select_exit_hold_started_at,
+                event.state,
+                event.repeat,
+                Instant::now(),
+            );
             return;
         }
 
@@ -668,9 +710,10 @@ impl WinitApp {
                     }
                     2 => {
                         if let Some(control) = physical_key_name(event.physical_key)
-                            && self.apply_assist_option_control(&control)
+                            && let Some(event_id) =
+                                self.select.select_keys.legacy_assist_event(&control)
                         {
-                            self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                            self.execute_select_skin_event(event_id, 1);
                         }
                     }
                     3 => {

@@ -2,14 +2,10 @@ use super::*;
 
 impl WinitApp {
     pub(super) fn should_exit_via_select_hold(&mut self) -> bool {
-        if !matches!(self.view_state(), AppViewState::Select) {
-            self.select.select_exit_hold_started_at = None;
-            return false;
-        }
-        let Some(started) = self.select.select_exit_hold_started_at else {
-            return false;
-        };
-        started.elapsed() >= SELECT_EXIT_HOLD_DURATION
+        let allowed = matches!(self.view_state(), AppViewState::Select)
+            && self.select.select_option_panel == 0
+            && self.input.pressed_controls.contains("Escape");
+        select_exit_hold_due(&mut self.select.select_exit_hold_started_at, allowed, Instant::now())
     }
 
     pub(super) fn select_exit_hold_progress(&self) -> f32 {
@@ -156,21 +152,48 @@ impl WinitApp {
     }
 
     pub(super) fn update_select_option_panel(&mut self) {
-        let panel = if in_settings_stack(&self.select.folder_stack) {
+        let unavailable = !matches!(self.view_state(), AppViewState::Select)
+            || in_settings_stack(&self.select.folder_stack)
+            || !self.ui.focused
+            || self.select.search.is_active()
+            || self.select.ir_battle.active
+            || self.select.key_config_edit.is_some()
+            || self.viewer_waiting
+            || self.ui.egui.as_ref().is_some_and(|ui| ui.blocks_game_input(false));
+        let panel = if unavailable {
+            self.reset_option_session_for_modal();
             0
+        } else if self.detail_options_enabled() {
+            self.select.option_session.panel
         } else {
+            self.reset_option_session_for_modal();
             select_option_panel_for_holds(self.input.start_held, self.input.select_held)
         };
         let previous_panel = self.select.select_option_panel;
         let now = Instant::now();
+        let closing = if panel == 2 || !self.detail_options_available() {
+            None
+        } else if previous_panel == 2 {
+            self.capture_detail_options_close()
+        } else {
+            // Keep the outgoing E2 across 3 -> 1/0 until its original timer expires.
+            self.detail_options_closing_snapshot()
+        };
         if transition_select_option_panel(
             &mut self.select.select_option_panel,
             &mut self.select.option_panel_started_at,
             &mut self.select.option_panel_off_started_at,
+            &mut self.select.select_exit_hold_started_at,
             panel,
             now,
         ) {
-            self.reset_select_analog_scroll();
+            self.reset_detail_options_input();
+            if previous_panel == 2 {
+                self.save_detail_options_if_dirty();
+            }
+            if panel == 2 || previous_panel == 2 {
+                self.sync_selected_play_mode();
+            }
             if let Some(sound_type) = select_option_panel_sound_for_scene_transition(
                 self.current_scene_kind(),
                 previous_panel,
@@ -179,6 +202,7 @@ impl WinitApp {
                 self.play_system_sound(sound_type);
             }
         }
+        self.select.detail_options.closing = closing;
     }
 
     pub(super) fn begin_settings_edit(&mut self, entry_id: SettingsEntryId) {
@@ -867,66 +891,18 @@ impl WinitApp {
         }
     }
 
-    pub(super) fn apply_assist_option_control(&mut self, control: &str) -> bool {
-        let button_id = if self.select.select_keys.is_key1(control) {
-            301
-        } else if self.select.select_keys.is_key2(control) {
-            302
-        } else if self.select.select_keys.is_key3(control) {
-            303
-        } else if self.select.select_keys.is_key4(control) {
-            304
-        } else if self.select.select_keys.is_key5(control) {
-            305
-        } else if self.select.select_keys.is_key6(control) {
-            306
-        } else if self.select.select_keys.is_key7(control) {
-            307
-        } else {
-            return false;
-        };
-        let changed = self.boot.profile_config.play.assist.toggle_beatoraja_button(button_id);
-        if changed {
-            self.boot.profile_config.updated_at = now_unix_seconds();
-            self.invalidate_play_preload();
-        }
-        changed
-    }
-
-    pub(super) fn apply_gamepad_assist_option_control(
-        &mut self,
-        device: DeviceId,
-        control: &str,
-    ) -> bool {
-        let app_config = self.play_session_app_config();
+    pub(super) fn apply_gamepad_legacy_assist_control(&mut self, device: DeviceId, control: &str) {
+        let config = self.play_session_app_config();
         let slots = crate::input::gamepad::GamepadSlotMap::from_runtime_or_legacy(
-            app_config.input.gamepad_slot_runtime_device_ids,
-            app_config.input.gamepad_slot_gilrs_ids,
+            config.input.gamepad_slot_runtime_device_ids,
+            config.input.gamepad_slot_gilrs_ids,
         );
-        let button_id = match select_option_lane_for_gamepad(
-            &self.boot.profile_config.input,
-            slots,
-            device,
-            control,
-        ) {
-            Some(Lane::Key1) => Some(301),
-            Some(Lane::Key2) => Some(302),
-            Some(Lane::Key3) => Some(303),
-            Some(Lane::Key4) => Some(304),
-            Some(Lane::Key5) => Some(305),
-            Some(Lane::Key6) => Some(306),
-            Some(Lane::Key7) => Some(307),
-            _ => None,
-        };
-        if let Some(button_id) = button_id {
-            let changed = self.boot.profile_config.play.assist.toggle_beatoraja_button(button_id);
-            if changed {
-                self.boot.profile_config.updated_at = now_unix_seconds();
-                self.invalidate_play_preload();
-            }
-            changed
-        } else {
-            self.apply_assist_option_control(control)
+        let event_id =
+            select_option_lane_for_gamepad(&self.boot.profile_config.input, slots, device, control)
+                .and_then(legacy_assist_event_for_lane)
+                .or_else(|| self.select.select_keys.legacy_assist_event(control));
+        if let Some(event_id) = event_id {
+            self.execute_select_skin_event(event_id, 1);
         }
     }
 

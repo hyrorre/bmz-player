@@ -1,0 +1,11 @@
+[
+  {"id": "detail_number_0", "op": [19300, 19405], "bmzDetailScroll": [165, 0], "dst": [{"x": 144, "y": 525, "w": 145, "h": 26}]},
+  {"id": "detail_number_1", "op": [19300, 19415], "bmzDetailScroll": [165, 0], "dst": [{"x": 309, "y": 525, "w": 145, "h": 26}]},
+  {"id": "detail_number_2", "op": [19300, 19425], "bmzDetailScroll": [165, 0], "dst": [{"x": 474, "y": 525, "w": 145, "h": 26}]},
+  {"id": "detail_number_3", "op": [19300, 19435], "bmzDetailScroll": [165, 0], "dst": [{"x": 639, "y": 525, "w": 145, "h": 26}]},
+  {"id": "detail_number_4", "op": [19300, 19445], "bmzDetailScroll": [165, 0], "dst": [{"x": 804, "y": 525, "w": 145, "h": 26}]},
+  {"id": "detail_number_5", "op": [19300, 19455], "bmzDetailScroll": [165, 0], "dst": [{"x": 969, "y": 525, "w": 145, "h": 26}]},
+  {"id": "detail_number_6", "op": [19300, 19465], "bmzDetailScroll": [165, 0], "dst": [{"x": 1134, "y": 525, "w": 145, "h": 26}]},
+  {"id": "detail_number_7", "op": [19300, 19475], "bmzDetailScroll": [165, 0], "dst": [{"x": -21, "y": 525, "w": 145, "h": 26}]},
+  {"id": "detail_number_8", "op": [19300, 19485], "bmzDetailScroll": [165, 0], "dst": [{"x": 1299, "y": 525, "w": 145, "h": 26}]}
+]

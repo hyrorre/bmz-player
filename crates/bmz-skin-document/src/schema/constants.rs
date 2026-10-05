@@ -208,6 +208,64 @@ pub const SKIN_REF_BMZ_BEST_SCORE_ARRANGE_1P: i32 = 19_201;
 pub const SKIN_REF_BMZ_BEST_SCORE_ARRANGE_2P: i32 = 19_202;
 /// Actual DP option (OFF / FLIP / BATTLE / BATTLE AS), not the score bucket.
 pub const SKIN_REF_BMZ_BEST_SCORE_DOUBLE_OPTION: i32 = 19_203;
+/// DETAIL OPTIONS v1. Number/text/option are independent namespaces.
+pub const SKIN_REF_DETAIL_OPTIONS_BASE: i32 = 19_300;
+pub const SKIN_REF_DETAIL_OPTIONS_LAST: i32 = 19_312;
+pub const SKIN_TEXT_DETAIL_OPTIONS_BASE: i32 = 19_300;
+pub const SKIN_TEXT_DETAIL_OPTIONS_LAST: i32 = 19_309;
+pub const SKIN_OPTION_DETAIL_OPTIONS_BASE: i32 = 19_300;
+pub const SKIN_OPTION_DETAIL_OPTIONS_LAST: i32 = 19_305;
+/// Slots 0..6 are visible, 7/8 are the left/right offscreen animation buffers.
+pub const SKIN_DETAIL_OPTIONS_ROW_BASE: i32 = 19_400;
+pub const SKIN_DETAIL_OPTIONS_ROW_LAST: i32 = 19_489;
+pub const SKIN_DETAIL_OPTIONS_ROW_STRIDE: i32 = 10;
+pub const SKIN_EVENT_DETAIL_OPTIONS_PREVIOUS: i32 = 19_300;
+pub const SKIN_EVENT_DETAIL_OPTIONS_NEXT: i32 = 19_301;
+pub const SKIN_EVENT_DETAIL_OPTIONS_DECREASE: i32 = 19_302;
+pub const SKIN_EVENT_DETAIL_OPTIONS_INCREASE: i32 = 19_303;
+pub const SKIN_EVENT_DETAIL_OPTIONS_SELECT_ID: i32 = 19_304;
+pub const SKIN_EVENT_DETAIL_OPTIONS_ROW_BASE: i32 = 19_310;
+pub const SKIN_EVENT_DETAIL_OPTIONS_ROW_LAST: i32 = 19_318;
+/// Per visible/draw slot: decrease, increase. Numeric rows only.
+pub const SKIN_EVENT_DETAIL_OPTIONS_NUMERIC_BASE: i32 = 19_320;
+pub const SKIN_EVENT_DETAIL_OPTIONS_NUMERIC_LAST: i32 = 19_337;
+
+pub fn detail_options_numeric_event(id: i32) -> Option<(usize, i32)> {
+    (SKIN_EVENT_DETAIL_OPTIONS_NUMERIC_BASE..=SKIN_EVENT_DETAIL_OPTIONS_NUMERIC_LAST)
+        .contains(&id)
+        .then(|| {
+            let index = id - SKIN_EVENT_DETAIL_OPTIONS_NUMERIC_BASE;
+            ((index / 2) as usize, if index % 2 == 0 { -1 } else { 1 })
+        })
+}
+
+/// Eight choice cells per visible item; number/text/option/event namespaces
+/// remain independent. Half of each 64-ID item block is reserved.
+pub const SKIN_DETAIL_OPTIONS_CHOICE_BASE: i32 = 19_500;
+pub const SKIN_DETAIL_OPTIONS_CHOICE_LAST: i32 = 20_075;
+pub const SKIN_DETAIL_OPTIONS_CHOICE_ITEM_STRIDE: i32 = 64;
+pub const SKIN_DETAIL_OPTIONS_CHOICE_STRIDE: i32 = 4;
+pub const SKIN_DETAIL_OPTIONS_CHOICES: usize = 8;
+
+pub fn detail_options_choice_slot(id: i32) -> Option<(usize, usize, i32)> {
+    (SKIN_DETAIL_OPTIONS_CHOICE_BASE..=SKIN_DETAIL_OPTIONS_CHOICE_LAST).contains(&id).then(|| {
+        let index = id - SKIN_DETAIL_OPTIONS_CHOICE_BASE;
+        let within = index % SKIN_DETAIL_OPTIONS_CHOICE_ITEM_STRIDE;
+        (
+            (index / SKIN_DETAIL_OPTIONS_CHOICE_ITEM_STRIDE) as usize,
+            (within / SKIN_DETAIL_OPTIONS_CHOICE_STRIDE) as usize,
+            within % SKIN_DETAIL_OPTIONS_CHOICE_STRIDE,
+        )
+    })
+}
+
+pub fn is_detail_options_event(id: i32) -> bool {
+    (SKIN_EVENT_DETAIL_OPTIONS_PREVIOUS..=SKIN_EVENT_DETAIL_OPTIONS_SELECT_ID).contains(&id)
+        || (SKIN_EVENT_DETAIL_OPTIONS_ROW_BASE..=SKIN_EVENT_DETAIL_OPTIONS_ROW_LAST).contains(&id)
+        || detail_options_numeric_event(id).is_some()
+        || detail_options_choice_slot(id)
+            .is_some_and(|(_, choice, field)| choice < SKIN_DETAIL_OPTIONS_CHOICES && field == 0)
+}
 /// Lua result skin の定数 `Expand_op` 代入を宣言的クリックイベントへ変換する ID。
 /// beatoraja の正数イベント ID と衝突しない BMZ 内部予約値を使う。
 pub const SKIN_EVENT_RESULT_PANEL_IR: i32 = -10_001;

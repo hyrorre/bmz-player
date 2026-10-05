@@ -152,6 +152,41 @@ fn select_play_mode_uses_chart_mode_and_filter_fallback() {
 }
 
 #[test]
+fn select_conversion_keeps_source_mode_for_random_mix_and_attempt_identity() {
+    use crate::config::profile_config::KeyModeConversionConfig as Conversion;
+    let item = chart_row_with_mode(1, "7K");
+    let SelectItem::Chart(row) = &item else { unreachable!() };
+    let chart = row.chart.as_ref().unwrap();
+    for (conversion, expected) in [
+        (Conversion::SevenToNine, KeyMode::K9),
+        (Conversion::SpToDp, KeyMode::K14),
+        (Conversion::SevenToSix, KeyMode::K6),
+    ] {
+        let source = select_item_play_mode(Some(&item), SelectModeFilter::All).unwrap();
+        assert_eq!(source, KeyMode::K7);
+        let mix = crate::app::select_random_mix::build_random_mix_definition(
+            std::slice::from_ref(chart),
+            crate::config::profile_config::RandomMixConfig { bpm_range: 0, ..Default::default() },
+            source,
+            7,
+        )
+        .expect("conversion must not exclude the selected source mode from RANDOM MIX");
+        assert_eq!(mix.entries[0].chart_id, Some(chart.chart_id));
+        assert!(conversion.applies_to(source));
+        assert_eq!(effective_play_key_mode(source, conversion), expected);
+        assert_eq!(
+            crate::skin_extension::select_effective_key_mode(
+                source,
+                DoubleOption::Off,
+                SessionMode::Normal,
+                conversion,
+            ),
+            expected
+        );
+    }
+}
+
+#[test]
 fn select_play_mode_requires_a_common_resolved_course_mode() {
     let mut same_mode = select_course_row(2, 2);
     same_mode.common_key_mode = Some(KeyMode::K14);

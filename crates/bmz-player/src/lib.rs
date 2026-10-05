@@ -47,6 +47,7 @@ pub mod random_option_seed;
 pub mod random_trainer;
 pub mod replay_cmd;
 pub mod screens;
+pub mod select_detail_options;
 pub mod select_options;
 pub mod skin_audio;
 pub(crate) mod skin_extension;

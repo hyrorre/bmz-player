@@ -24,15 +24,36 @@ pub(in crate::app) fn play_config_key_mode_for_runtime(
 }
 
 impl WinitApp {
-    pub(super) fn selected_play_mode(&self) -> Option<KeyMode> {
+    /// The source chart mode, before conversion (library queries and skin attempt identity).
+    pub(super) fn selected_source_key_mode(&self) -> Option<KeyMode> {
         select_item_play_mode(
             self.select.select_items.get(self.select.selected_index),
             self.select.select_mode_filter,
         )
     }
 
+    /// The profile slot used for editing and starting the selected chart.
+    pub(super) fn selected_play_config_key_mode(&self) -> Option<KeyMode> {
+        self.selected_source_key_mode()
+            .map(|mode| effective_play_key_mode(mode, self.selected_key_mode_conversion()))
+    }
+
+    pub(super) fn selected_key_mode_conversion(&self) -> KeyModeConversionConfig {
+        key_mode_conversion_for_session(
+            self.boot.profile_config.play.key_mode_conversion,
+            self.select.session_mode,
+            self.select.double_option,
+            self.select.ir_battle.active,
+        )
+    }
+
     pub(super) fn sync_selected_play_mode(&mut self) {
-        let Some(key_mode) = self.selected_play_mode() else {
+        let mode = if self.select.select_option_panel == 2 && self.detail_options_enabled() {
+            Some(self.detail_options_mode())
+        } else {
+            self.selected_play_config_key_mode()
+        };
+        let Some(key_mode) = mode else {
             return;
         };
         if self.boot.profile_config.active_play_mode == key_mode {
@@ -48,7 +69,7 @@ impl WinitApp {
     /// Every mutating entry point uses this guard so it cannot accidentally
     /// overwrite the mode that happened to be active before the course row.
     pub(super) fn begin_selected_play_mode_edit(&mut self) -> bool {
-        if self.selected_play_mode().is_none() {
+        if self.selected_source_key_mode().is_none() {
             return false;
         }
         self.sync_selected_play_mode();

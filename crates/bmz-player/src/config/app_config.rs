@@ -208,6 +208,9 @@ pub struct VideoConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MusicSelectConfig {
+    /// Opt-in two-panel UI. Missing values in existing configs remain disabled.
+    #[serde(default)]
+    pub experimental_detail_options: bool,
     #[serde(default = "default_scroll_duration_low_ms")]
     pub scroll_duration_low_ms: u32,
     #[serde(default = "default_scroll_duration_high_ms")]
@@ -300,6 +303,7 @@ pub fn default_screenshot_dir() -> String {
 impl Default for MusicSelectConfig {
     fn default() -> Self {
         Self {
+            experimental_detail_options: false,
             scroll_duration_low_ms: default_scroll_duration_low_ms(),
             scroll_duration_high_ms: default_scroll_duration_high_ms(),
         }

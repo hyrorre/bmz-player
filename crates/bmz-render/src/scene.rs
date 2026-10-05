@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+pub mod detail_options;
+
 use bmz_core::clear::ClearType;
 use bmz_core::lane::KeyMode;
 use bmz_core::time::TimeUs;

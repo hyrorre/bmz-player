@@ -1,0 +1,413 @@
+use super::*;
+use crate::config::profile_config::{GaugeAutoShiftConfig, ProfileConfig};
+use crate::i18n::{AppLocale, Localizer};
+use crate::select_detail_options::{CATALOG, DetailContext};
+use bmz_render::scene::detail_options::{DetailOptionsSnapshot, detail_options_viewport};
+
+pub(super) fn decode_experimental(path: &Path, kind: SkinKind) -> anyhow::Result<DecodedSkin> {
+    decode_beatoraja_skin_with_options(
+        path,
+        kind,
+        &BTreeMap::from([("bmz_detail_options".into(), "1".into())]),
+        &BTreeMap::new(),
+    )
+}
+
+#[test]
+fn detail_default_skin_preserves_song_info_when_closed() {
+    let path = default_skin_document_path_from_paths(&test_app_paths(), SkinKind::Select);
+    for experimental in [false, true] {
+        let decoded = if experimental {
+            decode_experimental(&path, SkinKind::Select)
+        } else {
+            decode_beatoraja_skin(&path, SkinKind::Select)
+        }
+        .unwrap();
+        let mut ids = std::collections::HashSet::new();
+        for text in &decoded.document.text {
+            assert!(ids.insert(&text.id), "duplicate text ID: {:?}", text.id);
+        }
+        let mut renderer = Renderer::default();
+        install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
+            .unwrap();
+        renderer.prepare_scene(AppSceneSnapshot::Select(SelectSnapshot {
+            selected_title: "Selected chart title".into(),
+            rows: vec![bmz_render::scene::SelectRowSnapshot {
+                title: "Selected chart title".into(),
+                is_folder: true,
+                kind: bmz_render::scene::SelectRowKind::Folder,
+                folder_lamp_counts: [12345, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                ..Default::default()
+            }],
+            time: TimeUs(2_000_000),
+            ..Default::default()
+        }));
+        let commands = &renderer.last_plan().unwrap().commands;
+        for expected in ["Selected chart title", "12345"] {
+            assert!(
+                commands.iter().any(|command| matches!(command,
+                DrawCommand::Text { text, .. } if text == expected)),
+                "experimental={experimental}: missing {expected}"
+            );
+        }
+    }
+}
+
+#[test]
+fn detail_experimental_off_keeps_legacy_and_on_shows_numbers_without_buttons() {
+    for name in
+        ["default/select.json", "mz-select/music_select.luaskin", "Luxez-Flat/music_select.luaskin"]
+    {
+        let path = test_app_paths().resource_dir.join("skins").join(name);
+        assert!(path.exists());
+        let old = decode_beatoraja_skin(&path, SkinKind::Select).unwrap();
+        assert!(!old.document.uses_detail_options(), "{name}: defaults off");
+        let mut renderer = Renderer::default();
+        install_decoded_skin(&mut renderer, old, bmz_render::skin::default_skin_manifest())
+            .unwrap();
+        let mut s = snapshot(AppLocale::En, 8);
+        s.time = TimeUs(2_000_000);
+        renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
+        assert!(!renderer.last_plan().unwrap().commands.iter().any(|command| matches!(command,
+            DrawCommand::Text { text, .. } if text == "GREEN NUMBER")));
+        let new = decode_experimental(&path, SkinKind::Select).unwrap();
+        assert!(new.document.bmz_detail_options_numbers);
+        install_decoded_skin(&mut renderer, new, bmz_render::skin::default_skin_manifest())
+            .unwrap();
+        for cursor in [8, 12] {
+            s = snapshot(AppLocale::En, cursor);
+            s.time = TimeUs(2_000_000);
+            renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
+            let row = s.detail_options.as_ref().unwrap().selected().unwrap();
+            assert!(renderer.last_plan().unwrap().commands.iter().any(|command| matches!(command,
+                DrawCommand::Text { text, .. } if text == &row.value_label)));
+            assert!(
+                !renderer.last_plan().unwrap().commands.iter().any(|command| matches!(command,
+                DrawCommand::Text { text, .. } if text == "+" || text == "−"))
+            );
+            for direction in 0..2 {
+                let (x, y) = if name.starts_with("default") {
+                    ((64.0 + 165.0 * 3.0 + 42.0 + direction as f32 * 75.0) / 1280.0, 225.0 / 720.0)
+                } else {
+                    ((9.0 + 274.0 * 3.0 + 68.0 + direction as f32 * 122.0) / 1920.0, 355.0 / 1080.0)
+                };
+                // Removing the buttons must also remove their invisible edit targets.
+                let hit = renderer.select_skin_click_hit(&s, x, y);
+                assert!(
+                    hit.as_ref().is_none_or(|hit| matches!(
+                        hit.target,
+                        bmz_render::skin::SkinClickTarget::Event { event_id: 19313, .. }
+                    )),
+                    "{name}: {hit:?}"
+                );
+            }
+        }
+    }
+}
+
+pub(super) fn snapshot(locale: AppLocale, cursor: usize) -> SelectSnapshot {
+    let p = ProfileConfig::new_default("test", "Test", 0);
+    let text = Localizer::new(locale);
+    SelectSnapshot {
+        option_panel: 2,
+        option_panel_time: TimeUs(500_000),
+        detail_options: Some(std::sync::Arc::new(DetailOptionsSnapshot {
+            cursor,
+            viewport_start: detail_options_viewport(cursor, CATALOG.len()),
+            items: CATALOG
+                .iter()
+                .map(|item| {
+                    item.row(
+                        &p,
+                        DetailContext {
+                            mode: Some(bmz_core::lane::KeyMode::K7),
+                            gas: GaugeAutoShiftConfig::Off,
+                            practice: false,
+                            course: false,
+                        },
+                        &text,
+                    )
+                })
+                .collect(),
+            title: text.text("detail-options-title"),
+            scope_label: if CATALOG[cursor].mode_scoped {
+                "7K".into()
+            } else {
+                text.text("detail-options-scope-global")
+            },
+            guide: text.text(CATALOG[cursor].guide_key()),
+            position: format!("{} / {}", cursor + 1, CATALOG.len()),
+        })),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn detail_default_skin_decodes_all_rows_and_routes_only_panel_clicks() {
+    let path = default_skin_document_path_from_paths(&test_app_paths(), SkinKind::Select);
+    let decoded = detail_options::decode_experimental(&path, SkinKind::Select).unwrap();
+    assert_eq!(decoded.document.bmz_detail_options, 1);
+    let mut renderer = Renderer::default();
+    install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
+        .unwrap();
+    for locale in [AppLocale::Ja, AppLocale::En] {
+        for cursor in 0..CATALOG.len() {
+            let s = snapshot(locale, cursor);
+            renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
+            let plan = renderer.last_plan().unwrap();
+            let panel = s.detail_options.as_ref().unwrap();
+            for slot in 0..7 {
+                let row = panel.row(slot).unwrap();
+                assert!(
+                    plan.commands.iter().any(
+                        |cmd| matches!(cmd,DrawCommand::Text { text, .. } if text == &row.label)
+                    ),
+                    "missing row {}",
+                    row.item_id
+                );
+                for (choice, value) in row.choices.iter().enumerate() {
+                    assert!(plan.commands.iter().any(|cmd| matches!(cmd, DrawCommand::Text { text, .. } if text == &value.label)), "missing choice {} for {}", choice, row.item_id);
+                    let hit = renderer
+                        .select_skin_click_hit(
+                            &s,
+                            0.10 + slot as f32 * 0.129,
+                            0.29 + choice as f32 * 0.041,
+                        )
+                        .unwrap();
+                    assert!(
+                        matches!(hit.target, bmz_render::skin::SkinClickTarget::Event { event_id, .. } if event_id == 19500 + slot as i32 * 64 + choice as i32 * 4)
+                    );
+                }
+            }
+            assert!(
+                plan.commands.iter().any(
+                    |cmd| matches!(cmd,DrawCommand::Text { text, .. } if text == &panel.title)
+                )
+            );
+            assert!(
+                plan.commands.iter().any(
+                    |cmd| matches!(cmd,DrawCommand::Text { text, .. } if text == &panel.guide)
+                )
+            );
+            let hit = renderer.select_skin_click_hit(&s, 0.10, 0.20).unwrap();
+            assert!(matches!(
+                hit.target,
+                bmz_render::skin::SkinClickTarget::Event { event_id: 19310, .. }
+            ));
+            for (x, expected) in [(0.74, 19302), (0.85, 19303)] {
+                let hit = renderer.select_skin_click_hit(&s, x, 0.87);
+                if matches!(
+                    panel.selected().unwrap().kind,
+                    bmz_render::scene::detail_options::DetailValueKind::Number { .. }
+                ) {
+                    assert!(hit.is_none(), "numeric rows must hide the footer edit buttons");
+                } else {
+                    assert!(matches!(hit.unwrap().target,
+                        bmz_render::skin::SkinClickTarget::Event { event_id, .. } if event_id == expected));
+                }
+            }
+            assert!(renderer.select_skin_click_hit(&s, 0.98, 0.98).is_none());
+            assert!(renderer.select_skin_slider_hit(&s, 0.5, 0.3).is_none());
+        }
+    }
+    let closed = SelectSnapshot::default();
+    renderer.prepare_scene(AppSceneSnapshot::Select(closed.clone()));
+    assert!(
+        !renderer.last_plan().unwrap().commands.iter().any(
+            |cmd| matches!(cmd,DrawCommand::Text { text,.. } if text.contains("DETAIL OPTIONS"))
+        )
+    );
+    assert!(!renderer.select_skin_click_hit(&closed, 0.85, 0.87).is_some_and(|hit| matches!(
+        hit.target,
+        bmz_render::skin::SkinClickTarget::Event { event_id: 19303, .. }
+    )));
+}
+
+#[test]
+fn detail_undeclared_skins_keep_legacy_panel_and_events_without_overlay() {
+    for declaration in [None, Some(0), Some(2)] {
+        let mut document = serde_json::json!({"type":5, "bmzDetailOptionsClose":true,
+        "text":[{"id":"legacy","constantText":"ASSIST OPTIONS","size":24},
+            {"id":"partial","ref":19300,"size":24}],
+        "image":[{"id":"toggle","src":-1,"w":1,"h":1,"act":301,"clickable":true}],
+        "destination":[
+            {"id":"legacy","op":[22],"timer":22,"dst":[{"time":0,"x":10,"y":500,"w":300,"h":30}]},
+            {"id":"toggle","op":[22],"dst":[{"x":640,"y":360,"w":128,"h":72}]},
+            {"id":"partial","op":[19300],"dst":[{"x":10,"y":400,"w":300,"h":30}]}
+        ]});
+        if let Some(version) = declaration {
+            document["bmzDetailOptions"] = version.into();
+        }
+        let document: bmz_render::skin::SkinDocument = serde_json::from_value(document).unwrap();
+        assert!(!document.uses_detail_options());
+        let mut renderer = Renderer::default();
+        set_decoded_skin_context(
+            &mut renderer,
+            SkinKind::Select,
+            bmz_render::skin::default_skin_manifest(),
+            document,
+            None,
+            vec![],
+            false,
+        );
+        // Even stale active/closing data after a skin switch cannot replace the old UI.
+        for closing in [false, true] {
+            let mut s = snapshot(AppLocale::Ja, 14);
+            if closing {
+                s.detail_options_closing =
+                    Some(bmz_render::scene::detail_options::DetailOptionsClosingSnapshot {
+                        panel: s.detail_options.take().unwrap(),
+                        scroll: 0.5,
+                    });
+                s.option_panel = 0;
+                s.option_panel_off_times[1] = Some(TimeUs(100_000));
+            }
+            renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
+            let commands = &renderer.last_plan().unwrap().commands;
+            assert!(!commands.iter().any(|cmd| matches!(cmd,DrawCommand::Text {text,..} if text.contains("DETAIL OPTIONS") || text == "BPM GUIDE")));
+            assert!(!commands.iter().any(|cmd| matches!(cmd,DrawCommand::Rect {rect,color} if rect.width==1.0 && rect.height==1.0 && color.a==1.0)));
+            if !closing {
+                assert!(commands.iter().any(
+                    |cmd| matches!(cmd,DrawCommand::Text {text,..} if text == "ASSIST OPTIONS")
+                ));
+                assert!(matches!(
+                    renderer.select_skin_click_hit(&s, 0.55, 0.45).unwrap().target,
+                    bmz_render::skin::SkinClickTarget::Event { event_id: 301, .. }
+                ));
+            }
+            assert!(renderer.select_skin_click_hit(&s, 0.85, 0.87).is_none());
+        }
+    }
+}
+
+#[test]
+fn detail_unskinned_path_keeps_native_legacy_assist_panel() {
+    let mut renderer = Renderer::default();
+    let s = snapshot(AppLocale::Ja, 14);
+    renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
+    let commands = &renderer.last_plan().unwrap().commands;
+    assert!(
+        commands
+            .iter()
+            .any(|cmd| matches!(cmd,DrawCommand::Text {text,..} if text == "ASSIST OPTIONS"))
+    );
+    assert!(
+        commands
+            .iter()
+            .any(|cmd| matches!(cmd,DrawCommand::Text {text,..} if text.starts_with("K7 NO MINE")))
+    );
+    assert!(
+        !commands.iter().any(
+            |cmd| matches!(cmd,DrawCommand::Text {text,..} if text.contains("DETAIL OPTIONS"))
+        )
+    );
+    assert!(renderer.select_skin_click_hit(&s, 0.85, 0.87).is_none());
+}
+
+#[test]
+fn detail_carousel_draw_and_click_positions_follow_the_same_animation() {
+    let mut renderer = Renderer::default();
+    let path = default_skin_document_path_from_paths(&test_app_paths(), SkinKind::Select);
+    let decoded = detail_options::decode_experimental(&path, SkinKind::Select).unwrap();
+    install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
+        .unwrap();
+    for cursor in [0, 14] {
+        let mut s = snapshot(AppLocale::En, cursor);
+        let selected_label = s.detail_options.as_ref().unwrap().selected().unwrap().label.clone();
+        let mut rest_x = 0.0;
+        let mut marker_x = 0.0;
+        for scroll in [0.0, 1.0, 0.5, -1.0, -0.5, 0.0] {
+            s.detail_options_scroll = scroll;
+            renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
+            let commands = &renderer.last_plan().unwrap().commands;
+            let text_x = |label: &str| {
+                commands
+                    .iter()
+                    .find_map(|cmd| match cmd {
+                        DrawCommand::Text { text, origin, .. } if text == label => Some(origin.x),
+                        _ => None,
+                    })
+                    .unwrap()
+            };
+            if scroll == 0.0 {
+                rest_x = text_x(&selected_label);
+                marker_x = text_x("▼");
+            } else {
+                let pitch = 165.0 / 1280.0;
+                assert!((text_x(&selected_label) - rest_x - scroll * pitch).abs() < 0.001);
+                assert_eq!(text_x("▼"), marker_x);
+            }
+            for slot in 1..6 {
+                let x = 0.10 + (slot as f32 + scroll) * 0.129;
+                let hit = renderer.select_skin_click_hit(&s, x, 0.29).unwrap();
+                assert!(
+                    matches!(hit.target, bmz_render::skin::SkinClickTarget::Event { event_id, .. } if event_id == if s.detail_options.as_ref().unwrap().row(slot as usize).unwrap().choices.is_empty() { 19310 + slot } else { 19500 + slot * 64 })
+                );
+            }
+            // Departing columns remain present and clickable in the
+            // visible edge strip, then disappear behind its fixed mask.
+            if scroll != 0.0 {
+                let (slot, x) = if scroll > 0.0 { (7, 0.075) } else { (8, 0.925) };
+                let hit = renderer.select_skin_click_hit(&s, x, 0.29).unwrap();
+                assert!(
+                    matches!(hit.target, bmz_render::skin::SkinClickTarget::Event { event_id, .. } if event_id == if s.detail_options.as_ref().unwrap().row(slot as usize).unwrap().choices.is_empty() { 19310 + slot } else { 19500 + slot * 64 })
+                );
+            }
+            // The fixed edge masks consume clicks, including during movement.
+            assert!(renderer.select_skin_click_hit(&s, 0.025, 0.29).is_none());
+            assert!(renderer.select_skin_click_hit(&s, 0.975, 0.29).is_none());
+            assert!(renderer.select_skin_slider_hit(&s, 0.5, 0.3).is_none());
+        }
+    }
+}
+
+/// Explicit opt-in visual QA; no window, profile, DB, audio, or input device.
+#[test]
+#[ignore = "requires an available GPU adapter; writes preview PNGs to a temporary directory"]
+fn detail_options_gpu_previews() {
+    let output = unique_test_dir("bmz-detail-options-preview");
+    std::fs::create_dir_all(&output).unwrap();
+    let path = default_skin_document_path_from_paths(&test_app_paths(), SkinKind::Select);
+    for native in [false, true] {
+        for (width, height) in [(1280, 720), (960, 540), (1024, 768), (1920, 1080)] {
+            let mut renderer = Renderer::default();
+            if !native {
+                let decoded = detail_options::decode_experimental(&path, SkinKind::Select).unwrap();
+                install_decoded_skin(
+                    &mut renderer,
+                    decoded,
+                    bmz_render::skin::default_skin_manifest(),
+                )
+                .unwrap();
+            }
+            renderer
+                .set_default_font_search_paths(vec![test_app_paths().resource_dir.join("fonts")]);
+            renderer.attach_offscreen(bmz_render::renderer::SurfaceSize { width, height }).unwrap();
+            for (locale, cursor, scroll) in [
+                (AppLocale::Ja, 0, 0.0),
+                (AppLocale::Ja, 12, 0.0),
+                (AppLocale::En, 12, 0.0),
+                (AppLocale::En, 14, 0.0),
+                (AppLocale::Ja, 0, 0.5),
+                (AppLocale::En, 14, -0.5),
+            ] {
+                let mut s = snapshot(locale, cursor);
+                s.detail_options_scroll = scroll;
+                if native {
+                    s.detail_options = None;
+                }
+                renderer.render_scene(AppSceneSnapshot::Select(s)).unwrap();
+                let rgba = renderer.read_offscreen_rgba().unwrap();
+                let image = image::RgbaImage::from_raw(width, height, rgba).unwrap();
+                image
+                    .save(output.join(format!(
+                        "{}-{}-{cursor}-{scroll}-{width}x{height}.png",
+                        if native { "native" } else { "default" },
+                        locale.code()
+                    )))
+                    .unwrap();
+            }
+        }
+    }
+    println!("DETAIL OPTIONS previews: {}", output.display());
+}

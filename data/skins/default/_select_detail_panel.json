@@ -1,0 +1,22 @@
+[
+  {
+    "id": "detail_background",
+    "color": "090E13"
+  },
+  {
+    "id": "detail_row",
+    "color": "121A21"
+  },
+  {
+    "id": "detail_selected",
+    "color": "1C454A"
+  },
+  {
+    "id": "detail_choice_base",
+    "color": "131F25"
+  },
+  {
+    "id": "detail_choice_current",
+    "color": "29615E"
+  }
+]

@@ -145,6 +145,12 @@ pub(super) fn skin_main_state_text(
     draw_state: Option<&SkinDrawState>,
     state: &SkinTextState<'_>,
 ) -> String {
+    if let Some(value) = crate::scene::detail_options::text(
+        ref_id,
+        draw_state.and_then(|state| state.detail_options.as_deref()),
+    ) {
+        return value.to_string();
+    }
     match ref_id {
         1 => {
             if state.rival.is_empty() {
@@ -302,6 +308,19 @@ pub(super) fn lua_main_state_text_values(
     refs.extend(190..=196);
     refs.extend(200..=219);
     refs.extend(SKIN_TEXT_BMZ_DAILY_RECENT_BASE..=SKIN_TEXT_BMZ_DAILY_RECENT_LAST);
+    if draw_state.detail_options.is_some() {
+        refs.extend(SKIN_TEXT_DETAIL_OPTIONS_BASE..=SKIN_TEXT_DETAIL_OPTIONS_LAST);
+        for slot in 0..crate::scene::detail_options::DETAIL_OPTION_DRAW_SLOTS as i32 {
+            let base = SKIN_DETAIL_OPTIONS_ROW_BASE + slot * SKIN_DETAIL_OPTIONS_ROW_STRIDE;
+            refs.extend(base..=base + 2);
+            let base =
+                SKIN_DETAIL_OPTIONS_CHOICE_BASE + slot * SKIN_DETAIL_OPTIONS_CHOICE_ITEM_STRIDE;
+            refs.extend(
+                (0..SKIN_DETAIL_OPTIONS_CHOICES as i32)
+                    .map(|choice| base + choice * SKIN_DETAIL_OPTIONS_CHOICE_STRIDE),
+            );
+        }
+    }
     refs.into_iter()
         .map(|ref_id| (ref_id, skin_main_state_text(ref_id, Some(draw_state), text_state)))
         .collect()

@@ -5,6 +5,7 @@ use bmz_render::renderer::WgpuPresentMode;
 mod render;
 
 struct EguiProfileBefore {
+    experimental_detail_options: bool,
     app_input: GlobalInputConfig,
     locale: crate::i18n::AppLocale,
     random_select: [bool; 8],
@@ -50,6 +51,7 @@ impl WinitApp {
         }
     }
     pub(super) fn restart_select_scene_timers(&mut self) {
+        self.cancel_select_option_session();
         let now = Instant::now();
         self.select.select_scene_timer_armed = false;
         self.select.select_scene_started_at = now;
@@ -237,6 +239,7 @@ impl WinitApp {
             return;
         };
         let profile_before = EguiProfileBefore {
+            experimental_detail_options: self.boot.app_config.select.experimental_detail_options,
             app_input: self.boot.app_config.input.clone(),
             locale: self.boot.profile_config.ui.locale(),
             random_select: self.boot.profile_config.select.random_select_flags(),
@@ -755,6 +758,12 @@ impl WinitApp {
     }
 
     fn apply_egui_profile_changes(&mut self, before: &EguiProfileBefore) {
+        if before.experimental_detail_options
+            != self.boot.app_config.select.experimental_detail_options
+        {
+            self.cancel_select_option_session();
+            self.reload_skins(SkinReloadRequest { select: true, ..Default::default() });
+        }
         let locale = self.boot.profile_config.ui.locale();
         self.renderer.set_default_font_coverage(locale.font_coverage());
         let locale_changed = locale != before.locale;
@@ -1063,8 +1072,23 @@ impl WinitApp {
             .or_else(|| {
                 self.play.pending_play_start.as_ref().map(|pending| pending.play_config_key_mode)
             })
-            .or_else(|| self.selected_play_mode())
+            .or_else(|| {
+                if self.select.select_option_panel == 2 && self.detail_options_enabled() {
+                    Some(self.detail_options_mode())
+                } else {
+                    self.selected_play_config_key_mode()
+                }
+            })
             .unwrap_or(KeyMode::K7);
+        self.save_play_options_for_mode(key_mode, hispeed, reason);
+    }
+
+    pub(super) fn save_play_options_for_mode(
+        &mut self,
+        key_mode: KeyMode,
+        hispeed: Option<f32>,
+        reason: &'static str,
+    ) -> bool {
         self.boot.profile_config.activate_play_mode(key_mode);
         let (hispeed, lane_state) = lane_state_for_profile_save(
             active_course_speed_locked(self.play.active_course.as_ref()),
@@ -1085,8 +1109,10 @@ impl WinitApp {
             save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
         {
             tracing::error!(%error, reason, "failed to save profile play options");
+            false
         } else {
             tracing::info!(reason, "saved profile play options");
+            true
         }
     }
 

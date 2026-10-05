@@ -124,6 +124,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     if let Some(egui) = self.ui.egui.as_mut() {
                         egui.toggle();
                     }
+                    self.update_select_option_panel();
                     return;
                 }
                 // Practice 設定画面だけは keyboard を UI 専用にする。通常プレイ中の
@@ -134,6 +135,11 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     play_owns_keyboard_input,
                     egui_consumed,
                 ) {
+                    // Modal UI may consume keyup; physical holds still need repair.
+                    let control = ControlInputEvent::keyboard(&event);
+                    self.input.track_control(&control);
+                    self.sync_select_holds_from_pressed_controls();
+                    self.reset_detail_options_input();
                     return;
                 }
                 if self.select.key_config_edit.is_none()
@@ -326,9 +332,11 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 self.reconcile_keyboard_modifier_releases();
                 self.consume_captured_gamepad_events();
                 if !self.viewer_waiting {
+                    self.update_select_option_panel();
                     self.advance_select_hold_move();
                     self.advance_select_ir_battle_hold();
                     self.advance_select_analog_scroll();
+                    self.advance_detail_value_repeat();
                 }
                 self.advance_result_ir_scroll_hold();
                 self.advance_result_ir_analog_scroll();

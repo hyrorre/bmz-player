@@ -1,0 +1,7271 @@
+[
+  {
+    "id": "detail_background",
+    "op": [
+      19300
+    ],
+    "dst": [
+      {
+        "x": 0,
+        "y": 0,
+        "w": 1280,
+        "h": 720
+      }
+    ]
+  },
+  {
+    "id": "detail_options_title",
+    "op": [
+      19300
+    ],
+    "dst": [
+      {
+        "x": 77,
+        "y": 664,
+        "w": 998,
+        "h": 24
+      }
+    ]
+  },
+  {
+    "id": "detail_options_count",
+    "op": [
+      19300
+    ],
+    "dst": [
+      {
+        "x": 1101,
+        "y": 666,
+        "w": 128,
+        "h": 17
+      }
+    ]
+  },
+  {
+    "id": "detail_scope",
+    "op": [
+      19300
+    ],
+    "dst": [
+      {
+        "x": 77,
+        "y": 630,
+        "w": 448,
+        "h": 18
+      }
+    ]
+  },
+  {
+    "id": "detail_category",
+    "op": [
+      19300
+    ],
+    "dst": [
+      {
+        "x": 589,
+        "y": 630,
+        "w": 614,
+        "h": 18
+      }
+    ]
+  },
+  {
+    "id": "detail_hit_0",
+    "op": [
+      19300,
+      19400
+    ],
+    "dst": [
+      {
+        "x": 64,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_row",
+    "op": [
+      19300,
+      19400
+    ],
+    "dst": [
+      {
+        "x": 64,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_selected",
+    "op": [
+      19300,
+      19401
+    ],
+    "dst": [
+      {
+        "x": 64,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_marker_0",
+    "op": [
+      19300,
+      19401
+    ],
+    "dst": [
+      {
+        "x": 133,
+        "y": 598,
+        "w": 32,
+        "h": 17
+      }
+    ]
+  },
+  {
+    "id": "detail_label_0",
+    "op": [
+      19300,
+      19400
+    ],
+    "dst": [
+      {
+        "x": 73,
+        "y": 557,
+        "w": 141,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_value_0",
+    "op": [
+      19300,
+      19400,
+      19404
+    ],
+    "dst": [
+      {
+        "x": 73,
+        "y": 529,
+        "w": 141,
+        "h": 15
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_status_0",
+    "op": [
+      19300,
+      19400
+    ],
+    "dst": [
+      {
+        "x": 73,
+        "y": 267,
+        "w": 141,
+        "h": 14
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_0_0",
+    "op": [
+      19300,
+      19500,
+      19502
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19500
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19501
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19501
+    ],
+    "dst": [
+      {
+        "x": 76,
+        "y": 500,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_0_0",
+    "op": [
+      19300,
+      19500
+    ],
+    "dst": [
+      {
+        "x": 92,
+        "y": 498,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_0_1",
+    "op": [
+      19300,
+      19504,
+      19506
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19504
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19505
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19505
+    ],
+    "dst": [
+      {
+        "x": 76,
+        "y": 471,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_0_1",
+    "op": [
+      19300,
+      19504
+    ],
+    "dst": [
+      {
+        "x": 92,
+        "y": 469,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_0_2",
+    "op": [
+      19300,
+      19508,
+      19510
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19508
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19509
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19509
+    ],
+    "dst": [
+      {
+        "x": 76,
+        "y": 441,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_0_2",
+    "op": [
+      19300,
+      19508
+    ],
+    "dst": [
+      {
+        "x": 92,
+        "y": 439,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_0_3",
+    "op": [
+      19300,
+      19512,
+      19514
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19512
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19513
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19513
+    ],
+    "dst": [
+      {
+        "x": 76,
+        "y": 412,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_0_3",
+    "op": [
+      19300,
+      19512
+    ],
+    "dst": [
+      {
+        "x": 92,
+        "y": 410,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_0_4",
+    "op": [
+      19300,
+      19516,
+      19518
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19516
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19517
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19517
+    ],
+    "dst": [
+      {
+        "x": 76,
+        "y": 382,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_0_4",
+    "op": [
+      19300,
+      19516
+    ],
+    "dst": [
+      {
+        "x": 92,
+        "y": 380,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_0_5",
+    "op": [
+      19300,
+      19520,
+      19522
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19520
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19521
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19521
+    ],
+    "dst": [
+      {
+        "x": 76,
+        "y": 353,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_0_5",
+    "op": [
+      19300,
+      19520
+    ],
+    "dst": [
+      {
+        "x": 92,
+        "y": 351,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_0_6",
+    "op": [
+      19300,
+      19524,
+      19526
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19524
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19525
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19525
+    ],
+    "dst": [
+      {
+        "x": 76,
+        "y": 323,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_0_6",
+    "op": [
+      19300,
+      19524
+    ],
+    "dst": [
+      {
+        "x": 92,
+        "y": 321,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_0_7",
+    "op": [
+      19300,
+      19528,
+      19530
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19528
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19529
+    ],
+    "dst": [
+      {
+        "x": 72,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19529
+    ],
+    "dst": [
+      {
+        "x": 76,
+        "y": 294,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_0_7",
+    "op": [
+      19300,
+      19528
+    ],
+    "dst": [
+      {
+        "x": 92,
+        "y": 292,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_hit_1",
+    "op": [
+      19300,
+      19410
+    ],
+    "dst": [
+      {
+        "x": 229,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_row",
+    "op": [
+      19300,
+      19410
+    ],
+    "dst": [
+      {
+        "x": 229,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_selected",
+    "op": [
+      19300,
+      19411
+    ],
+    "dst": [
+      {
+        "x": 229,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_marker_1",
+    "op": [
+      19300,
+      19411
+    ],
+    "dst": [
+      {
+        "x": 298,
+        "y": 598,
+        "w": 32,
+        "h": 17
+      }
+    ]
+  },
+  {
+    "id": "detail_label_1",
+    "op": [
+      19300,
+      19410
+    ],
+    "dst": [
+      {
+        "x": 238,
+        "y": 557,
+        "w": 141,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_value_1",
+    "op": [
+      19300,
+      19410,
+      19414
+    ],
+    "dst": [
+      {
+        "x": 238,
+        "y": 529,
+        "w": 141,
+        "h": 15
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_status_1",
+    "op": [
+      19300,
+      19410
+    ],
+    "dst": [
+      {
+        "x": 238,
+        "y": 267,
+        "w": 141,
+        "h": 14
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_1_0",
+    "op": [
+      19300,
+      19564,
+      19566
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19564
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19565
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19565
+    ],
+    "dst": [
+      {
+        "x": 241,
+        "y": 500,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_1_0",
+    "op": [
+      19300,
+      19564
+    ],
+    "dst": [
+      {
+        "x": 257,
+        "y": 498,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_1_1",
+    "op": [
+      19300,
+      19568,
+      19570
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19568
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19569
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19569
+    ],
+    "dst": [
+      {
+        "x": 241,
+        "y": 471,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_1_1",
+    "op": [
+      19300,
+      19568
+    ],
+    "dst": [
+      {
+        "x": 257,
+        "y": 469,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_1_2",
+    "op": [
+      19300,
+      19572,
+      19574
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19572
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19573
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19573
+    ],
+    "dst": [
+      {
+        "x": 241,
+        "y": 441,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_1_2",
+    "op": [
+      19300,
+      19572
+    ],
+    "dst": [
+      {
+        "x": 257,
+        "y": 439,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_1_3",
+    "op": [
+      19300,
+      19576,
+      19578
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19576
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19577
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19577
+    ],
+    "dst": [
+      {
+        "x": 241,
+        "y": 412,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_1_3",
+    "op": [
+      19300,
+      19576
+    ],
+    "dst": [
+      {
+        "x": 257,
+        "y": 410,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_1_4",
+    "op": [
+      19300,
+      19580,
+      19582
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19580
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19581
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19581
+    ],
+    "dst": [
+      {
+        "x": 241,
+        "y": 382,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_1_4",
+    "op": [
+      19300,
+      19580
+    ],
+    "dst": [
+      {
+        "x": 257,
+        "y": 380,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_1_5",
+    "op": [
+      19300,
+      19584,
+      19586
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19584
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19585
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19585
+    ],
+    "dst": [
+      {
+        "x": 241,
+        "y": 353,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_1_5",
+    "op": [
+      19300,
+      19584
+    ],
+    "dst": [
+      {
+        "x": 257,
+        "y": 351,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_1_6",
+    "op": [
+      19300,
+      19588,
+      19590
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19588
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19589
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19589
+    ],
+    "dst": [
+      {
+        "x": 241,
+        "y": 323,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_1_6",
+    "op": [
+      19300,
+      19588
+    ],
+    "dst": [
+      {
+        "x": 257,
+        "y": 321,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_1_7",
+    "op": [
+      19300,
+      19592,
+      19594
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19592
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19593
+    ],
+    "dst": [
+      {
+        "x": 237,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19593
+    ],
+    "dst": [
+      {
+        "x": 241,
+        "y": 294,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_1_7",
+    "op": [
+      19300,
+      19592
+    ],
+    "dst": [
+      {
+        "x": 257,
+        "y": 292,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_hit_2",
+    "op": [
+      19300,
+      19420
+    ],
+    "dst": [
+      {
+        "x": 394,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_row",
+    "op": [
+      19300,
+      19420
+    ],
+    "dst": [
+      {
+        "x": 394,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_selected",
+    "op": [
+      19300,
+      19421
+    ],
+    "dst": [
+      {
+        "x": 394,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_marker_2",
+    "op": [
+      19300,
+      19421
+    ],
+    "dst": [
+      {
+        "x": 463,
+        "y": 598,
+        "w": 32,
+        "h": 17
+      }
+    ]
+  },
+  {
+    "id": "detail_label_2",
+    "op": [
+      19300,
+      19420
+    ],
+    "dst": [
+      {
+        "x": 403,
+        "y": 557,
+        "w": 141,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_value_2",
+    "op": [
+      19300,
+      19420,
+      19424
+    ],
+    "dst": [
+      {
+        "x": 403,
+        "y": 529,
+        "w": 141,
+        "h": 15
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_status_2",
+    "op": [
+      19300,
+      19420
+    ],
+    "dst": [
+      {
+        "x": 403,
+        "y": 267,
+        "w": 141,
+        "h": 14
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_2_0",
+    "op": [
+      19300,
+      19628,
+      19630
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19628
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19629
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19629
+    ],
+    "dst": [
+      {
+        "x": 406,
+        "y": 500,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_2_0",
+    "op": [
+      19300,
+      19628
+    ],
+    "dst": [
+      {
+        "x": 422,
+        "y": 498,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_2_1",
+    "op": [
+      19300,
+      19632,
+      19634
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19632
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19633
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19633
+    ],
+    "dst": [
+      {
+        "x": 406,
+        "y": 471,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_2_1",
+    "op": [
+      19300,
+      19632
+    ],
+    "dst": [
+      {
+        "x": 422,
+        "y": 469,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_2_2",
+    "op": [
+      19300,
+      19636,
+      19638
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19636
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19637
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19637
+    ],
+    "dst": [
+      {
+        "x": 406,
+        "y": 441,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_2_2",
+    "op": [
+      19300,
+      19636
+    ],
+    "dst": [
+      {
+        "x": 422,
+        "y": 439,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_2_3",
+    "op": [
+      19300,
+      19640,
+      19642
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19640
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19641
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19641
+    ],
+    "dst": [
+      {
+        "x": 406,
+        "y": 412,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_2_3",
+    "op": [
+      19300,
+      19640
+    ],
+    "dst": [
+      {
+        "x": 422,
+        "y": 410,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_2_4",
+    "op": [
+      19300,
+      19644,
+      19646
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19644
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19645
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19645
+    ],
+    "dst": [
+      {
+        "x": 406,
+        "y": 382,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_2_4",
+    "op": [
+      19300,
+      19644
+    ],
+    "dst": [
+      {
+        "x": 422,
+        "y": 380,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_2_5",
+    "op": [
+      19300,
+      19648,
+      19650
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19648
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19649
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19649
+    ],
+    "dst": [
+      {
+        "x": 406,
+        "y": 353,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_2_5",
+    "op": [
+      19300,
+      19648
+    ],
+    "dst": [
+      {
+        "x": 422,
+        "y": 351,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_2_6",
+    "op": [
+      19300,
+      19652,
+      19654
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19652
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19653
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19653
+    ],
+    "dst": [
+      {
+        "x": 406,
+        "y": 323,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_2_6",
+    "op": [
+      19300,
+      19652
+    ],
+    "dst": [
+      {
+        "x": 422,
+        "y": 321,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_2_7",
+    "op": [
+      19300,
+      19656,
+      19658
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19656
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19657
+    ],
+    "dst": [
+      {
+        "x": 402,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19657
+    ],
+    "dst": [
+      {
+        "x": 406,
+        "y": 294,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_2_7",
+    "op": [
+      19300,
+      19656
+    ],
+    "dst": [
+      {
+        "x": 422,
+        "y": 292,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_hit_3",
+    "op": [
+      19300,
+      19430
+    ],
+    "dst": [
+      {
+        "x": 559,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_row",
+    "op": [
+      19300,
+      19430
+    ],
+    "dst": [
+      {
+        "x": 559,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_selected",
+    "op": [
+      19300,
+      19431
+    ],
+    "dst": [
+      {
+        "x": 559,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_marker_3",
+    "op": [
+      19300,
+      19431
+    ],
+    "dst": [
+      {
+        "x": 628,
+        "y": 598,
+        "w": 32,
+        "h": 17
+      }
+    ]
+  },
+  {
+    "id": "detail_label_3",
+    "op": [
+      19300,
+      19430
+    ],
+    "dst": [
+      {
+        "x": 568,
+        "y": 557,
+        "w": 141,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_value_3",
+    "op": [
+      19300,
+      19430,
+      19434
+    ],
+    "dst": [
+      {
+        "x": 568,
+        "y": 529,
+        "w": 141,
+        "h": 15
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_status_3",
+    "op": [
+      19300,
+      19430
+    ],
+    "dst": [
+      {
+        "x": 568,
+        "y": 267,
+        "w": 141,
+        "h": 14
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_3_0",
+    "op": [
+      19300,
+      19692,
+      19694
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19692
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19693
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19693
+    ],
+    "dst": [
+      {
+        "x": 571,
+        "y": 500,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_3_0",
+    "op": [
+      19300,
+      19692
+    ],
+    "dst": [
+      {
+        "x": 588,
+        "y": 498,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_3_1",
+    "op": [
+      19300,
+      19696,
+      19698
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19696
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19697
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19697
+    ],
+    "dst": [
+      {
+        "x": 571,
+        "y": 471,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_3_1",
+    "op": [
+      19300,
+      19696
+    ],
+    "dst": [
+      {
+        "x": 588,
+        "y": 469,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_3_2",
+    "op": [
+      19300,
+      19700,
+      19702
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19700
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19701
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19701
+    ],
+    "dst": [
+      {
+        "x": 571,
+        "y": 441,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_3_2",
+    "op": [
+      19300,
+      19700
+    ],
+    "dst": [
+      {
+        "x": 588,
+        "y": 439,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_3_3",
+    "op": [
+      19300,
+      19704,
+      19706
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19704
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19705
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19705
+    ],
+    "dst": [
+      {
+        "x": 571,
+        "y": 412,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_3_3",
+    "op": [
+      19300,
+      19704
+    ],
+    "dst": [
+      {
+        "x": 588,
+        "y": 410,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_3_4",
+    "op": [
+      19300,
+      19708,
+      19710
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19708
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19709
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19709
+    ],
+    "dst": [
+      {
+        "x": 571,
+        "y": 382,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_3_4",
+    "op": [
+      19300,
+      19708
+    ],
+    "dst": [
+      {
+        "x": 588,
+        "y": 380,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_3_5",
+    "op": [
+      19300,
+      19712,
+      19714
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19712
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19713
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19713
+    ],
+    "dst": [
+      {
+        "x": 571,
+        "y": 353,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_3_5",
+    "op": [
+      19300,
+      19712
+    ],
+    "dst": [
+      {
+        "x": 588,
+        "y": 351,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_3_6",
+    "op": [
+      19300,
+      19716,
+      19718
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19716
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19717
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19717
+    ],
+    "dst": [
+      {
+        "x": 571,
+        "y": 323,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_3_6",
+    "op": [
+      19300,
+      19716
+    ],
+    "dst": [
+      {
+        "x": 588,
+        "y": 321,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_3_7",
+    "op": [
+      19300,
+      19720,
+      19722
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19720
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19721
+    ],
+    "dst": [
+      {
+        "x": 567,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19721
+    ],
+    "dst": [
+      {
+        "x": 571,
+        "y": 294,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_3_7",
+    "op": [
+      19300,
+      19720
+    ],
+    "dst": [
+      {
+        "x": 588,
+        "y": 292,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_hit_4",
+    "op": [
+      19300,
+      19440
+    ],
+    "dst": [
+      {
+        "x": 724,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_row",
+    "op": [
+      19300,
+      19440
+    ],
+    "dst": [
+      {
+        "x": 724,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_selected",
+    "op": [
+      19300,
+      19441
+    ],
+    "dst": [
+      {
+        "x": 724,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_marker_4",
+    "op": [
+      19300,
+      19441
+    ],
+    "dst": [
+      {
+        "x": 794,
+        "y": 598,
+        "w": 32,
+        "h": 17
+      }
+    ]
+  },
+  {
+    "id": "detail_label_4",
+    "op": [
+      19300,
+      19440
+    ],
+    "dst": [
+      {
+        "x": 733,
+        "y": 557,
+        "w": 141,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_value_4",
+    "op": [
+      19300,
+      19440,
+      19444
+    ],
+    "dst": [
+      {
+        "x": 733,
+        "y": 529,
+        "w": 141,
+        "h": 15
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_status_4",
+    "op": [
+      19300,
+      19440
+    ],
+    "dst": [
+      {
+        "x": 733,
+        "y": 267,
+        "w": 141,
+        "h": 14
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_4_0",
+    "op": [
+      19300,
+      19756,
+      19758
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19756
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19757
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19757
+    ],
+    "dst": [
+      {
+        "x": 736,
+        "y": 500,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_4_0",
+    "op": [
+      19300,
+      19756
+    ],
+    "dst": [
+      {
+        "x": 753,
+        "y": 498,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_4_1",
+    "op": [
+      19300,
+      19760,
+      19762
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19760
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19761
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19761
+    ],
+    "dst": [
+      {
+        "x": 736,
+        "y": 471,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_4_1",
+    "op": [
+      19300,
+      19760
+    ],
+    "dst": [
+      {
+        "x": 753,
+        "y": 469,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_4_2",
+    "op": [
+      19300,
+      19764,
+      19766
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19764
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19765
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19765
+    ],
+    "dst": [
+      {
+        "x": 736,
+        "y": 441,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_4_2",
+    "op": [
+      19300,
+      19764
+    ],
+    "dst": [
+      {
+        "x": 753,
+        "y": 439,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_4_3",
+    "op": [
+      19300,
+      19768,
+      19770
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19768
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19769
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19769
+    ],
+    "dst": [
+      {
+        "x": 736,
+        "y": 412,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_4_3",
+    "op": [
+      19300,
+      19768
+    ],
+    "dst": [
+      {
+        "x": 753,
+        "y": 410,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_4_4",
+    "op": [
+      19300,
+      19772,
+      19774
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19772
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19773
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19773
+    ],
+    "dst": [
+      {
+        "x": 736,
+        "y": 382,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_4_4",
+    "op": [
+      19300,
+      19772
+    ],
+    "dst": [
+      {
+        "x": 753,
+        "y": 380,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_4_5",
+    "op": [
+      19300,
+      19776,
+      19778
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19776
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19777
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19777
+    ],
+    "dst": [
+      {
+        "x": 736,
+        "y": 353,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_4_5",
+    "op": [
+      19300,
+      19776
+    ],
+    "dst": [
+      {
+        "x": 753,
+        "y": 351,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_4_6",
+    "op": [
+      19300,
+      19780,
+      19782
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19780
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19781
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19781
+    ],
+    "dst": [
+      {
+        "x": 736,
+        "y": 323,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_4_6",
+    "op": [
+      19300,
+      19780
+    ],
+    "dst": [
+      {
+        "x": 753,
+        "y": 321,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_4_7",
+    "op": [
+      19300,
+      19784,
+      19786
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19784
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19785
+    ],
+    "dst": [
+      {
+        "x": 732,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19785
+    ],
+    "dst": [
+      {
+        "x": 736,
+        "y": 294,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_4_7",
+    "op": [
+      19300,
+      19784
+    ],
+    "dst": [
+      {
+        "x": 753,
+        "y": 292,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_hit_5",
+    "op": [
+      19300,
+      19450
+    ],
+    "dst": [
+      {
+        "x": 890,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_row",
+    "op": [
+      19300,
+      19450
+    ],
+    "dst": [
+      {
+        "x": 890,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_selected",
+    "op": [
+      19300,
+      19451
+    ],
+    "dst": [
+      {
+        "x": 890,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_marker_5",
+    "op": [
+      19300,
+      19451
+    ],
+    "dst": [
+      {
+        "x": 959,
+        "y": 598,
+        "w": 32,
+        "h": 17
+      }
+    ]
+  },
+  {
+    "id": "detail_label_5",
+    "op": [
+      19300,
+      19450
+    ],
+    "dst": [
+      {
+        "x": 899,
+        "y": 557,
+        "w": 141,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_value_5",
+    "op": [
+      19300,
+      19450,
+      19454
+    ],
+    "dst": [
+      {
+        "x": 899,
+        "y": 529,
+        "w": 141,
+        "h": 15
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_status_5",
+    "op": [
+      19300,
+      19450
+    ],
+    "dst": [
+      {
+        "x": 899,
+        "y": 267,
+        "w": 141,
+        "h": 14
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_5_0",
+    "op": [
+      19300,
+      19820,
+      19822
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19820
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19821
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19821
+    ],
+    "dst": [
+      {
+        "x": 901,
+        "y": 500,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_5_0",
+    "op": [
+      19300,
+      19820
+    ],
+    "dst": [
+      {
+        "x": 918,
+        "y": 498,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_5_1",
+    "op": [
+      19300,
+      19824,
+      19826
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19824
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19825
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19825
+    ],
+    "dst": [
+      {
+        "x": 901,
+        "y": 471,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_5_1",
+    "op": [
+      19300,
+      19824
+    ],
+    "dst": [
+      {
+        "x": 918,
+        "y": 469,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_5_2",
+    "op": [
+      19300,
+      19828,
+      19830
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19828
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19829
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19829
+    ],
+    "dst": [
+      {
+        "x": 901,
+        "y": 441,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_5_2",
+    "op": [
+      19300,
+      19828
+    ],
+    "dst": [
+      {
+        "x": 918,
+        "y": 439,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_5_3",
+    "op": [
+      19300,
+      19832,
+      19834
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19832
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19833
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19833
+    ],
+    "dst": [
+      {
+        "x": 901,
+        "y": 412,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_5_3",
+    "op": [
+      19300,
+      19832
+    ],
+    "dst": [
+      {
+        "x": 918,
+        "y": 410,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_5_4",
+    "op": [
+      19300,
+      19836,
+      19838
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19836
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19837
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19837
+    ],
+    "dst": [
+      {
+        "x": 901,
+        "y": 382,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_5_4",
+    "op": [
+      19300,
+      19836
+    ],
+    "dst": [
+      {
+        "x": 918,
+        "y": 380,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_5_5",
+    "op": [
+      19300,
+      19840,
+      19842
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19840
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19841
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19841
+    ],
+    "dst": [
+      {
+        "x": 901,
+        "y": 353,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_5_5",
+    "op": [
+      19300,
+      19840
+    ],
+    "dst": [
+      {
+        "x": 918,
+        "y": 351,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_5_6",
+    "op": [
+      19300,
+      19844,
+      19846
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19844
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19845
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19845
+    ],
+    "dst": [
+      {
+        "x": 901,
+        "y": 323,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_5_6",
+    "op": [
+      19300,
+      19844
+    ],
+    "dst": [
+      {
+        "x": 918,
+        "y": 321,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_5_7",
+    "op": [
+      19300,
+      19848,
+      19850
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19848
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19849
+    ],
+    "dst": [
+      {
+        "x": 897,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19849
+    ],
+    "dst": [
+      {
+        "x": 901,
+        "y": 294,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_5_7",
+    "op": [
+      19300,
+      19848
+    ],
+    "dst": [
+      {
+        "x": 918,
+        "y": 292,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_hit_6",
+    "op": [
+      19300,
+      19460
+    ],
+    "dst": [
+      {
+        "x": 1055,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_row",
+    "op": [
+      19300,
+      19460
+    ],
+    "dst": [
+      {
+        "x": 1055,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_selected",
+    "op": [
+      19300,
+      19461
+    ],
+    "dst": [
+      {
+        "x": 1055,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_marker_6",
+    "op": [
+      19300,
+      19461
+    ],
+    "dst": [
+      {
+        "x": 1124,
+        "y": 598,
+        "w": 32,
+        "h": 17
+      }
+    ]
+  },
+  {
+    "id": "detail_label_6",
+    "op": [
+      19300,
+      19460
+    ],
+    "dst": [
+      {
+        "x": 1064,
+        "y": 557,
+        "w": 141,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_value_6",
+    "op": [
+      19300,
+      19460,
+      19464
+    ],
+    "dst": [
+      {
+        "x": 1064,
+        "y": 529,
+        "w": 141,
+        "h": 15
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_status_6",
+    "op": [
+      19300,
+      19460
+    ],
+    "dst": [
+      {
+        "x": 1064,
+        "y": 267,
+        "w": 141,
+        "h": 14
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_6_0",
+    "op": [
+      19300,
+      19884,
+      19886
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19884
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19885
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19885
+    ],
+    "dst": [
+      {
+        "x": 1066,
+        "y": 500,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_6_0",
+    "op": [
+      19300,
+      19884
+    ],
+    "dst": [
+      {
+        "x": 1083,
+        "y": 498,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_6_1",
+    "op": [
+      19300,
+      19888,
+      19890
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19888
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19889
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19889
+    ],
+    "dst": [
+      {
+        "x": 1066,
+        "y": 471,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_6_1",
+    "op": [
+      19300,
+      19888
+    ],
+    "dst": [
+      {
+        "x": 1083,
+        "y": 469,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_6_2",
+    "op": [
+      19300,
+      19892,
+      19894
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19892
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19893
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19893
+    ],
+    "dst": [
+      {
+        "x": 1066,
+        "y": 441,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_6_2",
+    "op": [
+      19300,
+      19892
+    ],
+    "dst": [
+      {
+        "x": 1083,
+        "y": 439,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_6_3",
+    "op": [
+      19300,
+      19896,
+      19898
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19896
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19897
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19897
+    ],
+    "dst": [
+      {
+        "x": 1066,
+        "y": 412,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_6_3",
+    "op": [
+      19300,
+      19896
+    ],
+    "dst": [
+      {
+        "x": 1083,
+        "y": 410,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_6_4",
+    "op": [
+      19300,
+      19900,
+      19902
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19900
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19901
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19901
+    ],
+    "dst": [
+      {
+        "x": 1066,
+        "y": 382,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_6_4",
+    "op": [
+      19300,
+      19900
+    ],
+    "dst": [
+      {
+        "x": 1083,
+        "y": 380,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_6_5",
+    "op": [
+      19300,
+      19904,
+      19906
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19904
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19905
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19905
+    ],
+    "dst": [
+      {
+        "x": 1066,
+        "y": 353,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_6_5",
+    "op": [
+      19300,
+      19904
+    ],
+    "dst": [
+      {
+        "x": 1083,
+        "y": 351,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_6_6",
+    "op": [
+      19300,
+      19908,
+      19910
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19908
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19909
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19909
+    ],
+    "dst": [
+      {
+        "x": 1066,
+        "y": 323,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_6_6",
+    "op": [
+      19300,
+      19908
+    ],
+    "dst": [
+      {
+        "x": 1083,
+        "y": 321,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_6_7",
+    "op": [
+      19300,
+      19912,
+      19914
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19912
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19913
+    ],
+    "dst": [
+      {
+        "x": 1062,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19913
+    ],
+    "dst": [
+      {
+        "x": 1066,
+        "y": 294,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_6_7",
+    "op": [
+      19300,
+      19912
+    ],
+    "dst": [
+      {
+        "x": 1083,
+        "y": 292,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_hit_7",
+    "op": [
+      19300,
+      19470
+    ],
+    "dst": [
+      {
+        "x": -101,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_row",
+    "op": [
+      19300,
+      19470
+    ],
+    "dst": [
+      {
+        "x": -101,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_label_7",
+    "op": [
+      19300,
+      19470
+    ],
+    "dst": [
+      {
+        "x": -92,
+        "y": 557,
+        "w": 141,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_value_7",
+    "op": [
+      19300,
+      19470,
+      19474
+    ],
+    "dst": [
+      {
+        "x": -92,
+        "y": 529,
+        "w": 141,
+        "h": 15
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_status_7",
+    "op": [
+      19300,
+      19470
+    ],
+    "dst": [
+      {
+        "x": -92,
+        "y": 267,
+        "w": 141,
+        "h": 14
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_hit_8",
+    "op": [
+      19300,
+      19480
+    ],
+    "dst": [
+      {
+        "x": 1219,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_row",
+    "op": [
+      19300,
+      19480
+    ],
+    "dst": [
+      {
+        "x": 1219,
+        "y": 259,
+        "w": 159,
+        "h": 331
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_label_8",
+    "op": [
+      19300,
+      19480
+    ],
+    "dst": [
+      {
+        "x": 1228,
+        "y": 557,
+        "w": 141,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_value_8",
+    "op": [
+      19300,
+      19480,
+      19484
+    ],
+    "dst": [
+      {
+        "x": 1228,
+        "y": 529,
+        "w": 141,
+        "h": 15
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_status_8",
+    "op": [
+      19300,
+      19480
+    ],
+    "dst": [
+      {
+        "x": 1228,
+        "y": 267,
+        "w": 141,
+        "h": 14
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_7_0",
+    "op": [
+      19300,
+      19948,
+      19950
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19948
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19949
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19949
+    ],
+    "dst": [
+      {
+        "x": -89,
+        "y": 500,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_7_0",
+    "op": [
+      19300,
+      19948
+    ],
+    "dst": [
+      {
+        "x": -73,
+        "y": 498,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_7_1",
+    "op": [
+      19300,
+      19952,
+      19954
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19952
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19953
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19953
+    ],
+    "dst": [
+      {
+        "x": -89,
+        "y": 471,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_7_1",
+    "op": [
+      19300,
+      19952
+    ],
+    "dst": [
+      {
+        "x": -73,
+        "y": 469,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_7_2",
+    "op": [
+      19300,
+      19956,
+      19958
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19956
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19957
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19957
+    ],
+    "dst": [
+      {
+        "x": -89,
+        "y": 441,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_7_2",
+    "op": [
+      19300,
+      19956
+    ],
+    "dst": [
+      {
+        "x": -73,
+        "y": 439,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_7_3",
+    "op": [
+      19300,
+      19960,
+      19962
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19960
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19961
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19961
+    ],
+    "dst": [
+      {
+        "x": -89,
+        "y": 412,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_7_3",
+    "op": [
+      19300,
+      19960
+    ],
+    "dst": [
+      {
+        "x": -73,
+        "y": 410,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_7_4",
+    "op": [
+      19300,
+      19964,
+      19966
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19964
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19965
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19965
+    ],
+    "dst": [
+      {
+        "x": -89,
+        "y": 382,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_7_4",
+    "op": [
+      19300,
+      19964
+    ],
+    "dst": [
+      {
+        "x": -73,
+        "y": 380,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_7_5",
+    "op": [
+      19300,
+      19968,
+      19970
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19968
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19969
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19969
+    ],
+    "dst": [
+      {
+        "x": -89,
+        "y": 353,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_7_5",
+    "op": [
+      19300,
+      19968
+    ],
+    "dst": [
+      {
+        "x": -73,
+        "y": 351,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_7_6",
+    "op": [
+      19300,
+      19972,
+      19974
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19972
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19973
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19973
+    ],
+    "dst": [
+      {
+        "x": -89,
+        "y": 323,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_7_6",
+    "op": [
+      19300,
+      19972
+    ],
+    "dst": [
+      {
+        "x": -73,
+        "y": 321,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_7_7",
+    "op": [
+      19300,
+      19976,
+      19978
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      19976
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      19977
+    ],
+    "dst": [
+      {
+        "x": -93,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      19977
+    ],
+    "dst": [
+      {
+        "x": -89,
+        "y": 294,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_7_7",
+    "op": [
+      19300,
+      19976
+    ],
+    "dst": [
+      {
+        "x": -73,
+        "y": 292,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_8_0",
+    "op": [
+      19300,
+      20012,
+      20014
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      20012
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      20013
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 495,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      20013
+    ],
+    "dst": [
+      {
+        "x": 1231,
+        "y": 500,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_8_0",
+    "op": [
+      19300,
+      20012
+    ],
+    "dst": [
+      {
+        "x": 1247,
+        "y": 498,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_8_1",
+    "op": [
+      19300,
+      20016,
+      20018
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      20016
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      20017
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 465,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      20017
+    ],
+    "dst": [
+      {
+        "x": 1231,
+        "y": 471,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_8_1",
+    "op": [
+      19300,
+      20016
+    ],
+    "dst": [
+      {
+        "x": 1247,
+        "y": 469,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_8_2",
+    "op": [
+      19300,
+      20020,
+      20022
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      20020
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      20021
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 436,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      20021
+    ],
+    "dst": [
+      {
+        "x": 1231,
+        "y": 441,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_8_2",
+    "op": [
+      19300,
+      20020
+    ],
+    "dst": [
+      {
+        "x": 1247,
+        "y": 439,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_8_3",
+    "op": [
+      19300,
+      20024,
+      20026
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      20024
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      20025
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 406,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      20025
+    ],
+    "dst": [
+      {
+        "x": 1231,
+        "y": 412,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_8_3",
+    "op": [
+      19300,
+      20024
+    ],
+    "dst": [
+      {
+        "x": 1247,
+        "y": 410,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_8_4",
+    "op": [
+      19300,
+      20028,
+      20030
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      20028
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      20029
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 377,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      20029
+    ],
+    "dst": [
+      {
+        "x": 1231,
+        "y": 382,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_8_4",
+    "op": [
+      19300,
+      20028
+    ],
+    "dst": [
+      {
+        "x": 1247,
+        "y": 380,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_8_5",
+    "op": [
+      19300,
+      20032,
+      20034
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      20032
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      20033
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 347,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      20033
+    ],
+    "dst": [
+      {
+        "x": 1231,
+        "y": 353,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_8_5",
+    "op": [
+      19300,
+      20032
+    ],
+    "dst": [
+      {
+        "x": 1247,
+        "y": 351,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_8_6",
+    "op": [
+      19300,
+      20036,
+      20038
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      20036
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      20037
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 318,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      20037
+    ],
+    "dst": [
+      {
+        "x": 1231,
+        "y": 323,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_8_6",
+    "op": [
+      19300,
+      20036
+    ],
+    "dst": [
+      {
+        "x": 1247,
+        "y": 321,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_hit_8_7",
+    "op": [
+      19300,
+      20040,
+      20042
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_base",
+    "op": [
+      19300,
+      20040
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_current",
+    "op": [
+      19300,
+      20041
+    ],
+    "dst": [
+      {
+        "x": 1227,
+        "y": 288,
+        "w": 143,
+        "h": 24
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_marker",
+    "op": [
+      19300,
+      20041
+    ],
+    "dst": [
+      {
+        "x": 1231,
+        "y": 294,
+        "w": 15,
+        "h": 14,
+        "r": 107,
+        "g": 232,
+        "b": 201
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  {
+    "id": "detail_choice_8_7",
+    "op": [
+      19300,
+      20040
+    ],
+    "dst": [
+      {
+        "x": 1247,
+        "y": 292,
+        "w": 119,
+        "h": 16
+      }
+    ],
+    "bmzDetailScroll": [165, 0]
+  },
+  { "include": "_select_numeric_destination.json" },
+  {
+    "id": "detail_background",
+    "op": [
+      19300
+    ],
+    "act": 0,
+    "clickable": true,
+    "dst": [
+      {
+        "x": 1216,
+        "y": 252,
+        "w": 64,
+        "h": 367
+      }
+    ]
+  },
+  {
+    "id": "detail_background",
+    "op": [
+      19300
+    ],
+    "act": 0,
+    "clickable": true,
+    "dst": [
+      {
+        "x": 0,
+        "y": 252,
+        "w": 64,
+        "h": 367
+      }
+    ]
+  },
+  {
+    "id": "detail_auxiliary",
+    "op": [
+      19300
+    ],
+    "dst": [
+      {
+        "x": 77,
+        "y": 228,
+        "w": 1126,
+        "h": 17
+      }
+    ]
+  },
+  {
+    "id": "detail_description",
+    "op": [
+      19300
+    ],
+    "dst": [
+      {
+        "x": 77,
+        "y": 188,
+        "w": 1126,
+        "h": 17
+      }
+    ]
+  },
+  {
+    "id": "detail_reason",
+    "op": [
+      19300
+    ],
+    "dst": [
+      {
+        "x": 77,
+        "y": 150,
+        "w": 1126,
+        "h": 16
+      }
+    ]
+  },
+  {
+    "id": "detail_button_previous",
+    "op": [
+      19300
+    ],
+    "dst": [
+      {
+        "x": 77,
+        "y": 68,
+        "w": 154,
+        "h": 47
+      }
+    ]
+  },
+  {
+    "id": "detail_caption_previous",
+    "op": [
+      19300
+    ],
+    "dst": [
+      {
+        "x": 133,
+        "y": 82,
+        "w": 77,
+        "h": 22
+      }
+    ]
+  },
+  {
+    "id": "detail_button_next",
+    "op": [
+      19300
+    ],
+    "dst": [
+      {
+        "x": 243,
+        "y": 68,
+        "w": 154,
+        "h": 47
+      }
+    ]
+  },
+  {
+    "id": "detail_caption_next",
+    "op": [
+      19300
+    ],
+    "dst": [
+      {
+        "x": 300,
+        "y": 82,
+        "w": 77,
+        "h": 22
+      }
+    ]
+  },
+  {
+    "id": "detail_button_decrease",
+    "op": [
+      19300,
+      -19305
+    ],
+    "dst": [
+      {
+        "x": 870,
+        "y": 68,
+        "w": 154,
+        "h": 47
+      }
+    ]
+  },
+  {
+    "id": "detail_caption_decrease",
+    "op": [
+      19300,
+      -19305
+    ],
+    "dst": [
+      {
+        "x": 927,
+        "y": 82,
+        "w": 77,
+        "h": 22
+      }
+    ]
+  },
+  {
+    "id": "detail_button_increase",
+    "op": [
+      19300,
+      -19305
+    ],
+    "dst": [
+      {
+        "x": 1037,
+        "y": 68,
+        "w": 154,
+        "h": 47
+      }
+    ]
+  },
+  {
+    "id": "detail_caption_increase",
+    "op": [
+      19300,
+      -19305
+    ],
+    "dst": [
+      {
+        "x": 1093,
+        "y": 82,
+        "w": 77,
+        "h": 22
+      }
+    ]
+  },
+  {
+    "id": "detail_guide",
+    "op": [
+      19300
+    ],
+    "dst": [
+      {
+        "x": 77,
+        "y": 29,
+        "w": 1126,
+        "h": 14
+      }
+    ]
+  }
+]

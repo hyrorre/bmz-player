@@ -16,6 +16,7 @@ impl WinitApp {
             result_ir_skin_name(&self.boot.profile_config.ir),
             &skin,
             self.skin.lua_runtime_mode,
+            self.boot.app_config.select.experimental_detail_options,
         );
         if request.select {
             self.skin.skin_pipeline.set_pending(SkinKind::Select, pending_select);
@@ -111,6 +112,7 @@ impl WinitApp {
             result_ir_skin_name(&self.boot.profile_config.ir),
             &skin,
             self.skin.lua_runtime_mode,
+            self.boot.app_config.select.experimental_detail_options,
         );
         let pending = match kind {
             SkinKind::Select => pending_select,

@@ -1,6 +1,6 @@
 # スキン互換の対応状況
 
-この文書は、互換修正や次の作業を選ぶための索引です。最終確認日は2026-10-04です。
+この文書は、互換修正や次の作業を選ぶための索引です。最終確認日は2026-10-05です。
 「対応済み」は記載した範囲の実装・テストがあることを意味し、全スキンでの見た目の完全一致を保証しません。
 BMZ固有のIDや詳細な動作契約は [skin.md](skin.md)、互換修正の方針は [AGENTS.md](../AGENTS.md) を参照します。
 
@@ -17,6 +17,11 @@ BMZ固有のIDや詳細な動作契約は [skin.md](skin.md)、互換修正の�
 | LR2のDST時刻 | 単一時刻の表示保持、終端を過ぎてからのloop、開始前と負loopの非表示をOpenLR2に合わせる。[仕様](skin.md#lr2のdst時刻)、[回帰テスト](../crates/bmz-render/src/skin/tests/core/cases_05.rs) |
 | 旧DXA内のfont / image | 形式v1〜4の直接読込、既定キー・LZ圧縮に対応。KCOOLの3種類の専用フォントを実アーカイブでdecode検証。[仕様と制約](skin.md#lr2のdxaアセット)、[読込](../crates/bmz-skin-assets/src/lib.rs) |
 | JSON document | numeric/string IDの正規化、include、property条件等。[schema / loader](../crates/bmz-skin-document/src/lib.rs) |
+| Select DETAIL OPTIONS | 本体のexperimental設定ON（既定OFF）かつ`type: 5`、`bmzDetailOptions: 1`、`bmzDetailOptionsNumbers: true`のスキンで通常／詳細の2パネルを有効化。E1短押し固定／長押し一時表示、E2押下で切替。21項目、数値行と19320..19337の増減eventに対応。19300/19400帯のsnapshot API、19500..20075の選択肢セル。デフォルトselect.jsonは中央選択の環状7列＋補助2列、全選択肢を縦並びにする。`bmzDetailScroll`で描画とhitを補間。未宣言・0・未知version・スキンなしは旧Assist表示・固定7鍵操作を維持し、新UIは重ねない。旧E2 option/timer、Assist固定eventの意味は維持。[仕様](select-detail-options.md)、[描画・hitテスト](../crates/bmz-player/src/skin_loader/tests/detail_options.rs) |
+| mz-select DETAIL OPTIONS | 既存パネル素材とバージョン/IR欄のbitmap fontを再利用し、環状7列＋補助2列を半透明で表示。timer 22/32、300msの登場・退場に対応し、通常↔詳細の切り替えでは退出と登場を並行再生。退場中は最後の表示データを保持し、退出側の操作だけを無効化。パネルなしへ閉じる間は背後のクリックも遮断。部品の正常ロード時だけ対応宣言し、旧optionpanel3/4のE2開閉表示を置換。本体設定OFF・部品無効・欠落・失敗時とBMZ以外では従来のAssist表示・固定鍵操作を維持。[仕様](select-detail-options.md#mz-select)、[テスト](../crates/bmz-player/src/skin_loader/tests/mz_detail_options.rs) |
+| Luxez-Flat DETAIL OPTIONS | 紫の角丸枠・黒い値欄・オレンジのカーソルを再利用。見出し等は既存bitmap font、値欄はNoto Sans CJK Medium。7可視列＋補助2列、半透明、300msの開閉と通常↔詳細の並行アニメーション。正常ロード時のみ宣言し、旧E2のtimerなしhover領域も置換。本体設定OFF・部品無効・欠落・失敗時とBMZ以外は従来のAssist。[仕様](select-detail-options.md#luxez-flat)、[テスト](../crates/bmz-player/src/skin_loader/tests/luxe_detail_options.rs) |
+| ADFX02 / ECFN DETAIL OPTIONS | 別途導入する拡張済みECFNに対応。既存option.pngの直線枠・黒い値欄・オレンジのカーソル、同梱源暎エムゴを使用。7可視列＋補助2列と共通21項目。200msフェードで通常↔詳細の退出・登場を並行再生し、暗幕は1枚。正常ロード時のみ宣言し、本体設定OFF・部品欠落・失敗時とBMZ以外は従来の3パネル。本体同梱には追加しない。[仕様](select-detail-options.md#adfx02--ecfn)、[明示実行テスト](../crates/bmz-player/src/skin_loader/tests/ecfn_detail_options.rs) |
+| ADFX02 / ECFN 基本拡張 | 通常パネルの1P/2P配置を拡張ref 344/345による12種類へ拡張。既存画像の文字・枠・加算カーソルを再利用し、元の領域に収める。上部は`bmz_select_mode`で4K/6K/8Kを含むフィルター名、option 19168でFORCEを表示。クリックevent 11/308とLN/CN/HCNの画像は維持。experimental詳細パネルとは独立し、モジュール欠落・構築失敗・BMZ以外では元の表示を保持する。[記録](../notes/2026/2026-10-05-ecfn-bmz-extensions.md)、[明示実行テスト](../crates/bmz-player/src/skin_loader/tests/ecfn_extensions.rs) |
 | 基本描画 | source、image/imageset、value/text、note/gauge/judge、slider、hiddenCover、destinationのtimer/op/draw、keyframe、UV animation等。[描画評価](../crates/bmz-render/src/skin/document_render/) |
 | LR2減算合成 | `blend=3` はsource alphaを掛けたRGBを描画先から減算し、描画先alphaを保持する。通常描画とAmbient内の描画に対応 |
 | LR2 DST / SRC animation | 区間ごとの三次accとblend/filter/center、SRC/DSTが同じ時計の場合の画像cycle原点を保持。数字はSRC時計で更新 |

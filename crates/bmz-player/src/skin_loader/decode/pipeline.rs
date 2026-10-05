@@ -164,6 +164,13 @@ pub fn decode_beatoraja_skin_request(
         path_context.as_ref(),
     )?;
     let document_us = elapsed_us(document_start);
+    if kind == SkinKind::Select
+        && (options.get("bmz_detail_options").map(String::as_str) != Some("1")
+            || !document.bmz_detail_options_numbers)
+    {
+        document.bmz_detail_options = 0;
+        document.bmz_detail_options_close = false;
+    }
     if let Some(pinned) = pinned_sources {
         for source in &mut document.source {
             if let Some(path) = pinned.get(&source.path) {

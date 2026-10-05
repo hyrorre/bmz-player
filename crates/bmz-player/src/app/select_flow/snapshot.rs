@@ -102,9 +102,9 @@ impl WinitApp {
         let (search_word, search_word_alpha, search_caret_byte_index) = self.display_search_word();
         self.ensure_visible_select_chart_distributions(25);
         let chart_distributions = self.select.select_distribution_cache.borrow();
-        let selected_play_mode = self.selected_play_mode();
-        let mode_config =
-            selected_play_mode.map(|mode| self.boot.profile_config.play_mode_config(mode));
+        let mode_config = self
+            .selected_play_config_key_mode()
+            .map(|mode| self.boot.profile_config.play_mode_config(mode));
         let hispeed_config = mode_config.as_ref().map(PlayModeConfig::hispeed_config);
         let select_floating =
             mode_config.as_ref().is_some_and(|config| match config.floating_policy {
@@ -127,17 +127,10 @@ impl WinitApp {
             Some(SelectItem::Chart(row)) => row.chart.as_ref().map(|chart| chart.ln_profile),
             _ => None,
         };
-        let source_key_mode = selected_play_mode;
+        let source_key_mode = self.selected_source_key_mode();
         let conversion = source_key_mode
-            .filter(|_| {
-                !session_mode.is_battle()
-                    && !matches!(
-                        self.select.double_option,
-                        DoubleOption::Battle | DoubleOption::BattleAutoScratch
-                    )
-            })
-            .filter(|mode| self.boot.profile_config.play.key_mode_conversion.applies_to(*mode))
-            .map(|_| self.boot.profile_config.play.key_mode_conversion)
+            .filter(|mode| self.selected_key_mode_conversion().applies_to(*mode))
+            .map(|_| self.selected_key_mode_conversion())
             .unwrap_or(KeyModeConversionConfig::Off);
         let applied_double_option = if conversion == KeyModeConversionConfig::Off {
             self.select.double_option
@@ -279,6 +272,9 @@ impl WinitApp {
                 .option_panel_off_started_at
                 .map(|started_at| started_at.map(elapsed_since)),
             option_panel: self.select.select_option_panel,
+            detail_options: self.detail_options_snapshot(),
+            detail_options_scroll: self.detail_options_scroll(),
+            detail_options_closing: self.detail_options_closing_snapshot(),
             chart_count: if self.select.ir_battle.active {
                 battle_choices.len()
             } else {

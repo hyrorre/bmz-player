@@ -12,3 +12,5 @@ mod cases_03;
 mod cases_04;
 #[path = "core/cases_05.rs"]
 mod cases_05;
+#[path = "core/detail_options.rs"]
+mod detail_options;

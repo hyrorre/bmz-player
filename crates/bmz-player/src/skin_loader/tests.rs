@@ -50,13 +50,25 @@ fn unique_test_dir(name: &str) -> PathBuf {
 
 #[path = "tests/cache.rs"]
 mod cache;
+#[path = "tests/detail_options.rs"]
+mod detail_options;
 #[path = "tests/document.rs"]
 mod document;
+#[path = "tests/ecfn_detail_options.rs"]
+mod ecfn_detail_options;
+#[path = "tests/ecfn_extensions.rs"]
+mod ecfn_extensions;
 #[path = "tests/lr2.rs"]
 mod lr2;
 #[path = "tests/lua.rs"]
 mod lua;
+#[path = "tests/luxe_detail_options.rs"]
+mod luxe_detail_options;
+#[path = "tests/mz_detail_options.rs"]
+mod mz_detail_options;
 #[path = "tests/paths.rs"]
 mod paths;
 #[path = "tests/pm_chara.rs"]
 mod pm_chara;
+#[path = "tests/starseeker_result.rs"]
+mod starseeker_result;

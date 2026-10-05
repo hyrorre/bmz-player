@@ -61,6 +61,29 @@ pub(super) struct SelectKeyBindings {
 }
 
 impl SelectKeyBindings {
+    /// Keyboard lookup keeps the established 7K-before-14K precedence.
+    pub(super) fn detail_value_direction(&self, control: &str, nine_key: bool) -> Option<i32> {
+        let keys = [
+            &self.key1_controls,
+            &self.key2_controls,
+            &self.key3_controls,
+            &self.key4_controls,
+            &self.key5_controls,
+            &self.key6_controls,
+            &self.key7_controls,
+            &self.key8_controls,
+            &self.key9_controls,
+            &self.key10_controls,
+            &self.key11_controls,
+            &self.key12_controls,
+            &self.key13_controls,
+            &self.key14_controls,
+        ];
+        keys.iter().position(|keys| contains(keys, control)).map(|index| {
+            let local = if nine_key { index } else { index % 7 };
+            if local % 2 == 0 { 1 } else { -1 }
+        })
+    }
     pub(super) fn from_profile(input: &ProfileInputConfig) -> Self {
         if input.select_input_mode == SelectInputModeConfig::Key9 {
             return Self::from_profile_9k(input);
@@ -334,7 +357,7 @@ impl SelectKeyBindings {
              {start_str}:PLAY OPT  BACK:E2 OPT  {start_str}+BACK:DETAIL OPT  \
              {start_str}+K1/K2:1P ARR  {start_str}+2P K1/K2:2P ARR  {start_str}+K3/K4:GAUGE  \
              {start_str}+K5:HS-FIX  {start_str}+K6:DP OPT  {start_str}+K7:AUTOPLAY  \
-             BACK+K1..K7:ASSIST  \
+             BACK:DETAIL OPTIONS  \
              {start_str}+BACK+{key2_str}:GAS  {start_str}+UP/DOWN:TARGET  {start_str}+{bga_str}:BGA  {start_str}+K4/K6:GREEN  {start_str}+K5/K7:TIMING  {start_str}+1..4:REPLAY  N5:REPLAY"
         );
 
@@ -585,7 +608,7 @@ impl SelectKeyBindings {
              {replay_cycle_str}:CYCLE  {same_folder_str}:SAME  {rival_str}:RIVAL  {documents_str}:TEXT   \
              {start_str}:PLAY OPT  BACK:E2 OPT  {start_str}+BACK:DETAIL OPT  \
              {start_str}+K1/K2:1P ARR  {start_str}+K3:GAUGE  {start_str}+K5:HS-FIX  \
-             BACK+K1..K7:ASSIST  \
+             BACK:DETAIL OPTIONS  \
              {start_str}+K8/K9:TARGET  {start_str}+{bga_str}:BGA  {start_str}+K4/K6:GREEN  {start_str}+K5/K7:TIMING  {start_str}+1..4:REPLAY  N5:REPLAY"
         );
 
@@ -671,6 +694,21 @@ impl SelectKeyBindings {
 
     pub(super) fn is_key1(&self, control: &str) -> bool {
         contains(&self.key1_controls, control)
+    }
+
+    pub(super) fn legacy_assist_event(&self, control: &str) -> Option<i32> {
+        [
+            self.is_key1(control),
+            self.is_key2(control),
+            self.is_key3(control),
+            self.is_key4(control),
+            self.is_key5(control),
+            self.is_key6(control),
+            self.is_key7(control),
+        ]
+        .into_iter()
+        .position(|matches| matches)
+        .map(|index| 301 + index as i32)
     }
 
     pub(super) fn is_key2(&self, control: &str) -> bool {
