@@ -79,6 +79,96 @@ BGAサイズが「背景(1920x1080)」の場合は、Ambient OFFの鮮明なBGA�
 同梱antiqueの旧「BGAの明るさ(-255 ~ 0)」保存値とスキン履歴は前面側へ移行し、
 背景側は既定0から開始する。新しい前面設定が保存済みならそちらを優先する。
 
+## LR2の基準解像度
+
+LR2 CSV skinで `#RESOLUTION` を省略した場合は640×480として読み込む。
+`#RESOLUTION,0` も640×480、`1` は1280×720、`2` は1920×1080、
+`3` は3840×2160。`#RESOLUTION,幅,高さ` の正数による明示指定も受け付ける。
+include先の描画座標も、ヘッダーで決まった同じ基準解像度で変換する。
+
+## LR2のDST時刻
+
+LR2 CSVから生成したdestinationは内部属性 `lr2Timing: true` を保持し、
+OpenLR2の `SetDSTdrawByTime` に合わせて時刻を評価する。JSON/Luaの既定評価は変更しない。
+通常の画像、ゲージ、判定画像、コンボに共通で適用する。
+
+- ループ前の経過時刻が最初のDST時刻に達するまで非表示。
+- `loop < 0` は終端時刻まで表示し、終端を過ぎたら非表示。
+- 最初と最後のDSTが同時刻で `loop >= 0` なら、開始後は最後のフレームを保持。
+- `loop == 終端` は最終フレームで停止。
+- `0 <= loop < 終端` は終端を**過ぎてから**ループし、終端ちょうどでは最終フレームを表示。
+  ループ後の時刻が最初のDSTより前なら、最初のフレームを表示する。
+- 複数時刻で `loop > 終端` は評価時刻を0とする。
+
+例えば `time=1000, loop=0` のDSTが1つだけなら、1000ms以降の表示を保持する。
+タイマーがOFFなら通常どおり非表示。ループ・タイマー等のdestination属性は最初のDST行から取得する。
+
+## LR2のPlay描画
+
+`#HORIZONTAL`は`note.lr2Horizontal`へ変換し、右から左へスクロールする。
+画像の向き・レーンのY座標は維持し、移動距離は初期DST_NOTEのXからキャンバス右端まで。
+LNは両キャップ間に横長の胴体を描画し、小節線・補助線も同方向へ動かす。
+LIFT・lane cover・hidden coverのoffset（3..5）はX軸へ適用し、通常UIの座標は維持する。
+`DST_NOTE2`は横スクロール時には落下先Xとして扱う。
+参照実装で縦計算が残るLN/小節線も一貫して横へ流す点はBMZの補完動作。
+カバーの`disapearLine`による横向きcropは未対応で、従来の縦定義を使う。
+
+`#FONT`は`#LR2FONT`と別の番号表を使う。同番号のbitmap font宣言を優先し、
+system fontは`text.lr2SystemFont`に宣言サイズ・thickness・typeを保持する。
+描画高はDSTの高さ、幅上限はDST幅×DST高/FONTサイズで、中央・右揃えもこの幅を使う。
+typeのedge bitは黒の縁取りへ変換する。字形はBMZの既定フォントを使い、
+DxLib固有のthicknessとアンチエイリアス方式の再現は未対応。
+
+LR2の`#IMAGE`は既定の緑（0,255,0）を透過色とし、`#TRANSCOLOR`と互換綴り
+`#TRANSCLOLR` / `#TRANSCLOLOR`で以後の画像の透過色を変更できる。
+RGB画像だけに適用し、alphaを持つ画像は元のalphaを維持する。
+画像ごとの`source.lr2ColorKey`をCPU/GPUキャッシュにも含める。DXA内の画像にも適用する。
+
+LR2 Playのnumber ref=120..136は2Pの実プレイ状態へ接続する（127は既存のゲージ変換）。
+内部ref=19220..19236を予約し、beatorajaのtarget関連refと分離する。
+122/123は判定済みノート基準の率、135/136は全ノート基準の率、128は2P EX−1P EX。
+120はLR2判定配点からのスコア確定値を表示する（LR2の数値カウントアップ補間は含まない）。
+
+LR2の`SRC_AUTO_*`は`note.lr2Auto`へ分離し、部分AUTO入力の対象レーンだけに使う。
+全体AUTOPLAYとG-BATTLEの表示専用側は通常画像を使う。AUTO画像がない箇所は通常画像へ戻る。
+`DST_NOTE`は`note.lr2Dst`に全行を保持し、時計・条件・座標・大きさを毎フレーム評価する。
+初期レーン高をスクロール距離の基準に保ち、判定位置の移動による速度変化を避ける。
+ノーツRGB/角度を反映し、blendとalphaはLR2のplay-area描画と同様に通常合成・ゲーム側alphaを使う。
+
+LR2 CSVから変換したdestinationは、各dst行の`lr2Style`にblend/filter/centerを保持し、
+その区間の開始行を使用する。accも区間ごとに評価し、1は三次加速、2は三次減速、
+0は線形、その他は区間開始値を維持する。JSON/Luaのacc規則は変更しない。
+画像のSRC/DSTタイマーが一致する場合、SRC cycleは最初のDST時刻を原点にする。
+数字のcycleはSRCタイマーを使い、DST開始時刻は差し引かない。
+
+LR2の画像合成 `blend=3` は減算を使う。描画先RGBからsource RGB×alphaを引き、
+描画先alphaは保持する。`blend=2` の加算、`blend=4` の乗算と区別する。
+
+## LR2のDXAアセット
+
+旧DXArchiveのファイル形式バージョン1〜4を直接読み込む。KCOOL 1.72の
+`barfont.dxa` / `SystemFont.dxa` / `title.dxa` はバージョン3。
+例えば `Font/barfont/font.lr2font` を `Font/barfont.dxa` 内の `font.lr2font` として解決する。
+CSVやアーカイブを書き換えず、展開フォルダーも作成しない。
+
+- フォント定義（`.lr2font` / `.fnt`）と参照画像、スキンの静止画像を対象とする。
+  ベクターフォントも既存の対応拡張子で読み込める。動画・音声・LuaモジュールやCSV includeの
+  アーカイブ内読込、アーカイブ内wildcard列挙は対象外。
+- 通常ファイルを優先し、存在しない場合に同名フォルダーの `.dxa` を探索する。
+  ASCIIの大文字小文字を区別せず、旧形式のShift_JISファイル名に対応する。
+  v4のコードページは932 / 65001に対応する。
+- v1/v2の反転、v3/v4の既定キー、LZ圧縮に対応する。独自キー付きアーカイブとv5以降は未対応。
+  形式バージョンはDxaEncode.exeの製品バージョンとは異なる。
+- font/sourceキャッシュは仮想ファイル名を区別し、背後の `.dxa` の更新日時・サイズを追跡する。
+  フォントの参照画像もキャッシュ依存に含める。
+- Luaの既存 `SkinPathContext` 制約を維持し、アーカイブ実体の正規化パスが許可root外なら拒否する。
+  フォントの参照画像にも同じroot制約を適用する。JSON/CSVの従来のパス解決方針は維持する。
+- 索引16MiB、1ファイルの格納・展開サイズ256MiB、10万entry、ディレクトリ深さ64に制限する。
+  不正なoffset・循環参照・展開範囲外のLZ参照をエラーにする。
+
+読込はOS固有ライブラリに依存しない `bmz-skin-assets` で行い、画像decodeとGPU uploadは
+既存のrenderer / app側経路を使う。
+
 ## LR2 Play 表示参照
 
 LR2 play skin の `SRC_BUTTON 40/41` は、1P/2P の実際に有効なゲージ種類を
@@ -117,6 +207,15 @@ Selectのnumber `350/351` は鍵盤の通常ノーツ/LN数で、スクラッチ
 - `value[]`, `text[]`, `graph[]`, `slider[]` の `value`
 - `customTimers[].timer`（ID `10000..19999`）
 
+数字のruntime `value` はbeatorajaの `SkinNumber.prepare` と同様、destination順に、
+その数字の `draw` / timer判定より先に評価する。同じvalueを複数destinationで使う場合も
+destinationごとに1回評価し、その結果を描画・数値画像cacheへ渡す。非表示やcache hitでも
+Luaの状態更新を省略せず、同じdestination内で二重実行しない。失敗・非有限値・整数の
+非表示sentinelでは数字を描画しない。
+Luxe Flat Result型の `rank_diff_count` / `rank_diff_*` が共有 `rank_plus` を捕捉する場合、
+value / drawは `auto` でもLua実行を維持し、
+ランク差分の戻り値だけを組み込み式へ置き換えて `scorerate` 等の更新を失わないようにする。
+
 custom timer は描画前に宣言順で1フレーム1回更新する。`auto` では固定遅延・別名の
 推論を維持し、推論できないtimerを永続VMへ残す。VMを使うスキンでは推論済みの
 custom timerも同じVMで更新し、先行するtimerの変更を同じフレームで参照できる。
@@ -135,6 +234,15 @@ module stateを保持する。callbackからは現在フレームの `main_state
 各callbackの命令数上限、フレーム全体の命令数上限、Lua VMのメモリ上限を適用し、失敗時は
 draw=false、数値/文字列は未取得として扱う。runtime callbackを含むdocumentはVMをclone
 できないためdocument cacheとLua-to-JSON変換の対象外になる。
+
+Resultのパネル切替は、推論済みの `result_panel(...)` とLua runtime callbackで同じ
+現在状態を参照する。既存のパネル互換処理が認識するグローバル `Expand_op`
+（0=非表示、1=IR、2=GRAPH）と、callbackが直接保持するローカル `result_mode`
+（0=GRAPH、1=IR）を評価中に同期する。GRAPH/IRを表示しない状態では後者に2を渡す。
+`auto` / `compat` の両方で、配置設定や別のローカル変数を含む複合条件を維持する。
+Lua評価が入れ子になった場合や例外時には元のパネル値を復元し、他のclosure stateは
+リセットしない。これは既存パネル切替の互換処理であり、任意の `act` / `customEvents`
+を実行する汎用イベントruntimeではない。
 
 Lua sandboxはロード時の互換APIとして`os.clock` / `os.date` / `os.time`を提供する。
 `os.time`の日付tableは標準Luaと同様にローカル時刻として正規化し、正規化後の値を
@@ -305,6 +413,23 @@ BMZ default JSON では、digit atlas を同梱せずに既存フォントで数
 切り替え、PGREAT は水色、GREAT / GOOD は黄色、BAD / POOR / EMPTY POOR は赤で表示する。
 `judgeTimingRegion` は同じ判定領域の FAST / SLOW だけを文字列化し、`judgeTimingColor` で
 FAST を青、SLOW を赤に切り替える。
+
+### Play Target Score Refs
+
+beatoraja互換のターゲット数値とグラフは、最終値と進行値を区別する。
+
+| 種類 | ID | 値 |
+| --- | --- | --- |
+| 数値 | `121` / `151` | 曲全体の最終ターゲットEX SCORE |
+| 数値 | `153` | 現在EX SCORE − 現在のノート位置に対応するターゲット |
+| グラフ | `114` | 現在のノート位置に対応するターゲット / 曲全体の最大EX SCORE |
+| グラフ | `115` | 最終ターゲット / 曲全体の最大EX SCORE |
+
+`121` / `151` は `value.ref`、`text.numberRef`、Luaの `main_state.number()` で同じ値を参照する。
+ノート進行では変化しないが、IR取得等でターゲット自体が更新されれば新しい値を返す。
+0点は有効な値。未設定時は数値画像を非表示、`text.numberRef` を空文字、Luaを `0` とする。
+総ノーツ0でも設定済みの最終ターゲットを返す。デフォルトスキンのTARGET表示は `numberRef: 121` を使う。
+LR2 CSVのPlay ref `120..136` は読込時に2P専用内部refへ変換されるため、その `121` は2Pの現在EX SCOREを維持する。
 
 ### BMZ Arrange Refs
 
@@ -1126,6 +1251,13 @@ OpenLR2の原仕様と異なりPOOR / EMPTY POORも合計へ含む。
 
 リザルトの IR パネル (`result_panel(1)`) は、BMZ 対応 skin に限り全体ランキングと
 「自分 + IR ライバル」の一覧を切り替えられる。既存 skin は全体ランキングを表示し続ける。
+
+読み込み時に参照した IR 数値が変わると、Result skin の構築部分を再評価する。
+同じリザルト内では、`source.path` のワイルドカード解決と、ファイル選択 `Random` による
+`skin_config.get_path()` の結果を保持する。Lua が返されたパスを使って構築する表示も、
+初回と同じファイルを参照する。同じパターンを複数回呼ぶ場合は呼び出し順に保持し、
+更新で新しく現れた選択も、その更新が適用された時点から保持する。
+次のリザルトへの遷移やスキンの通常読み込みでは改めて抽選する。
 
 ```json
 {

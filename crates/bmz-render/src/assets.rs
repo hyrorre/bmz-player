@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::Read;
+use std::io::{Cursor, Read};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -37,13 +37,23 @@ pub fn load_png_rgba(path: &Path) -> Result<RgbaImageAsset> {
 }
 
 pub fn load_static_rgba_image(path: &Path) -> Result<RgbaImageAsset> {
+    load_static_rgba_image_with_color_key(path, None)
+}
+
+/// LR2 color key applies to images without their own alpha channel.
+pub fn load_static_rgba_image_with_color_key(
+    path: &Path,
+    color_key: Option<[u8; 3]>,
+) -> Result<RgbaImageAsset> {
     let extension = path
         .extension()
         .and_then(|extension| extension.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
     match extension.as_str() {
-        "png" | "bmp" | "jpg" | "jpeg" | "gif" | "tga" => load_image_rgba(path),
+        "png" | "bmp" | "jpg" | "jpeg" | "gif" | "tga" => {
+            load_image_rgba_with_color_key(path, color_key)
+        }
         "cim" => load_cim_rgba(path),
         _ => bail!("unsupported image format: {}", path.display()),
     }
@@ -54,13 +64,44 @@ pub fn load_chart_bga_image(path: &Path) -> Result<RgbaImageAsset> {
 }
 
 fn load_image_rgba(path: &Path) -> Result<RgbaImageAsset> {
+    load_image_rgba_with_color_key(path, None)
+}
+
+fn load_image_rgba_with_color_key(
+    path: &Path,
+    color_key: Option<[u8; 3]>,
+) -> Result<RgbaImageAsset> {
+    if !path.is_file() {
+        let bytes = bmz_skin_assets::read(path)?;
+        // TGA has no reliable magic. Keep the extension hint, as ImageReader::open does.
+        let reader =
+            ImageReader::with_format(Cursor::new(bytes), image::ImageFormat::from_path(path)?);
+        return decode_image_rgba(reader, path, color_key);
+    }
     let reader = ImageReader::open(path)
-        .with_context(|| format!("failed to open image: {}", path.display()))?
+        .with_context(|| format!("failed to open image: {}", path.display()))?;
+    decode_image_rgba(reader, path, color_key)
+}
+
+fn decode_image_rgba(
+    reader: ImageReader<impl std::io::BufRead + std::io::Seek>,
+    path: &Path,
+    color_key: Option<[u8; 3]>,
+) -> Result<RgbaImageAsset> {
+    let reader = reader
         .with_guessed_format()
         .with_context(|| format!("failed to guess image format: {}", path.display()))?;
     let image =
         reader.decode().with_context(|| format!("failed to decode image: {}", path.display()))?;
-    let rgba = image.to_rgba8();
+    let has_alpha = image.color().has_alpha();
+    let mut rgba = image.to_rgba8();
+    if !has_alpha && let Some(color_key) = color_key {
+        for pixel in rgba.pixels_mut() {
+            if pixel.0[..3] == color_key {
+                pixel.0[3] = 0;
+            }
+        }
+    }
     let width = rgba.width();
     let height = rgba.height();
     let asset = RgbaImageAsset { width, height, pixels: rgba.into_raw() };
@@ -74,8 +115,14 @@ fn load_image_rgba(path: &Path) -> Result<RgbaImageAsset> {
 /// Pixmap の生 pixel buffer を順に格納する。beatoraja は画像キャッシュだけでなく
 /// スキン配布物の source としてもこの形式を読み込む。
 fn load_cim_rgba(path: &Path) -> Result<RgbaImageAsset> {
-    let file = File::open(path)
-        .with_context(|| format!("failed to open CIM image: {}", path.display()))?;
+    let file: Box<dyn Read> = if path.is_file() {
+        Box::new(
+            File::open(path)
+                .with_context(|| format!("failed to open CIM image: {}", path.display()))?,
+        )
+    } else {
+        Box::new(Cursor::new(bmz_skin_assets::read(path)?))
+    };
     let mut decoder = ZlibDecoder::new(file);
     let mut header = [0_u8; CIM_HEADER_LEN];
     decoder
@@ -198,6 +245,27 @@ mod tests {
     use flate2::write::ZlibEncoder;
 
     use super::*;
+
+    #[test]
+    fn lr2_color_key_masks_rgb_but_preserves_existing_alpha() {
+        for extension in ["bmp", "png"] {
+            let path = temp_image_path(extension);
+            image::RgbImage::from_raw(2, 1, vec![0, 255, 0, 12, 34, 56])
+                .unwrap()
+                .save(&path)
+                .unwrap();
+            let asset = load_static_rgba_image_with_color_key(&path, Some([0, 255, 0])).unwrap();
+            assert_eq!(asset.pixels, [0, 255, 0, 0, 12, 34, 56, 255]);
+            let plain = load_static_rgba_image(&path).unwrap();
+            assert_eq!(plain.pixels[3], 255);
+            std::fs::remove_file(path).unwrap();
+        }
+        let path = temp_image_path("png");
+        image::RgbaImage::from_raw(1, 1, vec![0, 255, 0, 200]).unwrap().save(&path).unwrap();
+        let asset = load_static_rgba_image_with_color_key(&path, Some([0, 255, 0])).unwrap();
+        assert_eq!(asset.pixels, [0, 255, 0, 200]);
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn load_static_rgba_image_reads_24_bit_bmp_pixels() {

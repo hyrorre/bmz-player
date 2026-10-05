@@ -19,7 +19,9 @@ impl<'a> CsvBuilder<'a> {
             warnings: Vec::new(),
             sources: Vec::new(),
             source_paths: Vec::new(),
+            transparent_color: [0, 255, 0],
             fonts: Vec::new(),
+            system_fonts: Vec::new(),
             lr2font_ids: Vec::new(),
             images: Vec::new(),
             imagesets: Vec::new(),
@@ -153,6 +155,7 @@ impl<'a> CsvBuilder<'a> {
             "SRC_HCN_REACTIVE" => self.add_note_source(line, NoteSlot::HcnReactive),
             "SRC_MINE" | "SRC_AUTO_MINE" => self.add_note_source(line, NoteSlot::Mine),
             "DST_NOTE" => self.add_note_destination(line),
+            "HORIZONTAL" => self.note.horizontal = true,
             "DST_NOTE2" => self.note.dst2 = Some(parse_i32(line.fields.get(1))),
             "DST_NOTE_EXPANSION_RATE" => {
                 self.note.expansion_rate =
@@ -177,7 +180,12 @@ impl<'a> CsvBuilder<'a> {
             "STARTINPUT" | "SCENETIME" | "JUDGETIMER" => {}
             "STRETCH" => self.stretch = parse_i32(line.fields.get(1)),
             "FADEOUT" | "CLOSE" | "LOADSTART" | "LOADEND" | "PLAYSTART" | "FINISHMARGIN" => {}
-            "TRANSCLOLR" | "SCRATCHSIDE" | "ENDOFHEADER" => {}
+            "TRANSCOLOR" | "TRANSCLOLR" | "TRANSCLOLOR" => {
+                self.transparent_color = std::array::from_fn(|index| {
+                    parse_i32(line.fields.get(index + 1)).clamp(0, 255) as u8
+                });
+            }
+            "SCRATCHSIDE" | "ENDOFHEADER" => {}
             other if other.starts_with("DST_") || other.starts_with("SRC_") => {
                 self.warn(format!("unsupported lr2 csv command: #{other}"));
             }

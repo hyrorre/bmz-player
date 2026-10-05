@@ -42,7 +42,7 @@ pub struct BitmapFontGlyph {
 }
 
 pub fn load_bitmap_font(path: &Path) -> Result<BitmapFont> {
-    let bytes = std::fs::read(path)
+    let bytes = bmz_skin_assets::read(path)
         .with_context(|| format!("failed to read bitmap font: {}", path.display()))?;
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
     if path
@@ -60,7 +60,7 @@ pub fn load_bitmap_font(path: &Path) -> Result<BitmapFont> {
 
 /// Resolve page dependencies without decoding their pixels, for cache validation.
 pub fn bitmap_font_page_paths(path: &Path) -> Result<Vec<PathBuf>> {
-    let bytes = std::fs::read(path)?;
+    let bytes = bmz_skin_assets::read(path)?;
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
     let lr2 = path
         .extension()
@@ -126,7 +126,7 @@ fn parse_lr2_bitmap_font(text: &str, base_dir: &Path) -> Result<BitmapFont> {
                 let Some((page, path)) = lr2_page_path(&fields, base_dir) else {
                     continue;
                 };
-                if path.is_file() {
+                if bmz_skin_assets::is_file(&path) {
                     page_paths.insert(page, path);
                 }
             }

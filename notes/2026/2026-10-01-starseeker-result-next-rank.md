@@ -72,3 +72,8 @@ callback出力を確認する。単に古いassertionを削除するのではな
 ローカル通信を使う既存テストの待受制限を避け、全体テストはsandbox外で実行した。
 ログは`.local/starseeker-fix-*.log`。実ウィンドウ・GPU描画・Windows/Linuxの確認は未実施で、
 今回の変更はテストと記録のみ。
+
+同日のmain取り込み時、旧ref 154の画像シート選択テストはmain側にも追加されていたため、
+`result_lua_next_rank_matches_rendering_before_skin_load`へ統合した。
+一時ファイルにはmain側の`ProfileTestDir`とappのdecode経路を使い、同じ4種類のスコアを維持する。
+現行Starseekerの実アセット・共有Lua・runtime callbackの回帰テストは別途保持する。

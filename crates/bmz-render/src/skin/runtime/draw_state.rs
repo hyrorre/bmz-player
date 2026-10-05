@@ -101,6 +101,8 @@ pub struct SkinDrawState {
     pub gauge_type: i32,
     pub opponent_gauge: Option<f32>,
     pub opponent_gauge_type: Option<i32>,
+    pub lr2_opponent: Option<crate::snapshot::OpponentRenderSnapshot>,
+    pub lr2_horizontal: bool,
     pub gauge_auto_shift: bool,
     pub gauge_max: f32,
     pub gauge_border: f32,
@@ -406,6 +408,7 @@ pub struct SkinDrawState {
     pub stddev_timing_ms: Option<f32>,
     /// OPTION_AUTOPLAYON (33) / OPTION_AUTOPLAYOFF (32) 用。
     pub autoplay: bool,
+    pub auto_note_lanes: [bool; LANE_COUNT],
     /// BMSPlayer のプレイ画面か。プレイ専用 op が他 scene で true にならないために使う。
     pub play_screen: bool,
     /// BMSPlayer が replay モードか。
@@ -526,6 +529,8 @@ impl Default for SkinDrawState {
             gauge_type: 2,
             opponent_gauge: None,
             opponent_gauge_type: None,
+            lr2_opponent: None,
+            lr2_horizontal: false,
             gauge_auto_shift: false,
             gauge_max: 100.0,
             gauge_border: 80.0,
@@ -686,6 +691,7 @@ impl Default for SkinDrawState {
             average_duration_us: None,
             stddev_timing_ms: None,
             autoplay: false,
+            auto_note_lanes: [false; LANE_COUNT],
             play_screen: false,
             replay_playback: false,
             practice_mode: false,

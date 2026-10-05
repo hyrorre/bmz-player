@@ -78,3 +78,27 @@ defaultの共通フッタ増減ボタンも数値選択中は表示しない。�
 3スキンのMetal offscreenテストも成功し、日英・複数解像度の画像を生成した。
 代表画像で数値のみの欄と判定調整説明の表示を確認。実コントローラーや実プレイ・再起動の手動確認は未実施。
 ログは`.local/detail-options-tuning-*.log`に保存した。
+
+## 追補: main取り込みとPR準備
+
+2026-10-05、`feat/select-detail-options`の`5f912ac8`へmainの`3ddd2545`をマージした。
+Starseekerの旧ref 154テストはmain側のfixtureへ統合し、現行スキンの共有Lua・runtime callbackの検証を保持した。
+`docs/skin-compatibility.md`と`notes/README.md`は両ブランチの内容を維持して競合を解消した。
+mz-selectとLuxez-Flatの参照コミットは、それぞれのリモートmainに含まれることを確認した。
+
+macOSでの統合後の検証:
+
+- `cargo fmt --check`、`cargo check --workspace --locked`、
+  `cargo clippy --workspace --all-targets --locked -- -D warnings`、`git diff --cached --check`成功。
+- `cargo test --workspace --locked --no-fail-fast`は3,688成功・0失敗・27 ignored。
+  localhost待受を使うテストのためsandbox外で実行した。
+  内訳にbmz-playerの2,164件、bmz-renderの675件、現行Starseeker Resultの実アセット検証を含む。
+  旧パス`data/skins/Starseeker/play/play7.luaskin`の別テストは素材欠落で早期returnしており、互換確認済みとは扱わない。
+- `cargo test -p bmz-player --locked -- ecfn_ detail_options_gpu_previews mz_detail_options_switch_gpu_previews --ignored --nocapture --test-threads=1`成功。
+  導入済み`ADFX02/ECFN`の9件、defaultの1件、Luxez-Flatの1件、mz-selectの2件を実行した。
+  Metal offscreenで日英・複数解像度・開閉／パネル切替の画像を生成した。
+  集計は14成功だが、フィルターに含まれた旧パス`data/skins/ECFN`の性能計測1件は素材欠落で早期returnしたため、
+  実際に検証した追加テストは13件。default／ECFN／Luxez-Flatの判定表示オフセット画面の代表画像を目視確認した。
+
+ログはGit管理外の`.local/select-detail-merge-*.log`。実コントローラー、実ウィンドウでの
+プレイ開始・再起動、Windows/Linuxの手動確認は今回も未実施。

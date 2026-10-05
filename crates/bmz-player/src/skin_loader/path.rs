@@ -60,7 +60,7 @@ pub(super) fn resolve_json_skin_asset_path_with_context(
     let normalized = asset_path.replace('\\', "/");
     if !normalized.contains('*') {
         if let Some(path_context) = path_context {
-            return path_context.resolve_file(&normalized).ok();
+            return path_context.resolve_asset(&normalized).ok();
         }
         return Some(resolve_case_insensitive_path(&skin_root.join(normalized)));
     }
@@ -95,13 +95,13 @@ pub(super) fn resolve_json_skin_asset_path_with_context(
     //         ソース `custom/laser/*/main.png` を `custom/laser/veryshort/main.png` へ)。
     if let Some(substituted) = substitute_filepath_choice(&normalized, &document.filepath, files) {
         let candidate = if let Some(path_context) = path_context {
-            path_context.resolve_file(&substituted).ok()
+            path_context.resolve_asset(&substituted).ok()
         } else {
             Some(resolve_case_insensitive_path(&skin_root.join(&substituted)))
         };
         // A default such as "default" may identify the stem of default.png.
         // If direct substitution misses, retain the sandboxed wildcard fallback.
-        if let Some(candidate) = candidate.filter(|candidate| candidate.is_file()) {
+        if let Some(candidate) = candidate.filter(|candidate| bmz_skin_assets::is_file(candidate)) {
             return Some(candidate);
         }
     }

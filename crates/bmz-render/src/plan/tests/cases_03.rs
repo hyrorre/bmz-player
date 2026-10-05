@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn lr2_horizontal_plan_uses_scroll_width_for_lift() {
+    let document = serde_json::from_str(
+        r#"{"w":1000,"h":500,"note":{
+        "lr2Horizontal":true,"dst":[{"x":100,"y":200,"w":20,"h":300}]}}"#,
+    )
+    .unwrap();
+    let skin = SkinContext::from_manifest_and_document(SkinManifest::default(), document, []);
+    let snapshot = RenderSnapshot { lift: 0.1, ..Default::default() };
+    let state = build_play_skin_state(&snapshot, &skin, 0);
+    assert!(state.lr2_horizontal);
+    assert_eq!(state.offset_lift_px, 90);
+}
+
+#[test]
 fn lr2_battle_state_projects_live_opponent_without_a_target_score() {
     let skin = SkinContext::from_manifest_and_document(
         SkinManifest::default(),
@@ -15,6 +29,18 @@ fn lr2_battle_state_projects_live_opponent_without_a_target_score() {
         autoplay: true,
         opponent: Some(crate::snapshot::OpponentRenderSnapshot {
             ex_score: 789,
+            combo: 23,
+            max_combo: 41,
+            total_notes: 500,
+            past_notes: 450,
+            judge_counts: crate::snapshot::DisplayJudgeCounts {
+                pgreat: 350,
+                great: 89,
+                good: 5,
+                bad: 2,
+                poor: 4,
+                empty_poor: 7,
+            },
             gauge: 38.0,
             gauge_type: 1,
             ..Default::default()
@@ -27,6 +53,30 @@ fn lr2_battle_state_projects_live_opponent_without_a_target_score() {
     assert_eq!(state.target_ex_score, None);
     assert_eq!(state.opponent_gauge, Some(38.0));
     assert_eq!(state.opponent_gauge_type, Some(1));
+    for (ref_id, expected) in [
+        (120, 158300),
+        (121, 789),
+        (122, 87),
+        (123, 66),
+        (124, 23),
+        (125, 41),
+        (126, 500),
+        (128, 333),
+        (129, -99),
+        (130, 350),
+        (131, 89),
+        (132, 5),
+        (133, 2),
+        (134, 11),
+        (135, 78),
+        (136, 90),
+    ] {
+        let value = crate::skin::lua_main_state_number(
+            crate::skin::SKIN_REF_BMZ_LR2_2P_BASE + ref_id - 120,
+            &state,
+        );
+        assert_eq!(value, expected, "LR2 ref {ref_id}");
+    }
 }
 
 #[test]

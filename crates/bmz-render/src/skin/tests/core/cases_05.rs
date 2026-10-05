@@ -1,6 +1,174 @@
 use super::*;
 
 #[test]
+fn lr2_interpolation_uses_segment_acc_and_retains_segment_style() {
+    let destination: SkinDestinationDef = serde_json::from_str(
+        r#"{
+        "lr2Timing":true,"loop":400,"dst":[
+            {"time":0,"x":0,"acc":0,"lr2Style":{"blend":1,"filter":0,"center":1}},
+            {"time":100,"x":80,"acc":1,"lr2Style":{"blend":3,"filter":1,"center":9}},
+            {"time":200,"x":160,"acc":2},
+            {"time":300,"x":240,"acc":4},
+            {"time":400,"x":320}]
+    }"#,
+    )
+    .unwrap();
+    let state = SkinDrawState::default();
+    for (time, x, blend) in [
+        (50, 40, BlendMode::Normal),
+        (100, 80, BlendMode::Subtract),
+        (150, 90, BlendMode::Subtract),
+        (250, 230, BlendMode::Subtract),
+        (350, 240, BlendMode::Subtract),
+    ] {
+        let frame = resolve_destination_frame(&destination, time, &[], &state).unwrap();
+        assert_eq!(frame.x, x, "at {time}");
+        assert_eq!(frame.blend(BlendMode::Add), blend);
+        assert_eq!(frame.linear_filter(false), time >= 100);
+        assert_eq!(frame.center(0), if time < 100 { 1 } else { 9 });
+    }
+    // JSON/Lua retain their existing global quadratic interpolation rule.
+    let mut json = destination;
+    json.lr2_timing = false;
+    assert_eq!(resolve_destination_frame(&json, 50, &[], &state).unwrap().x, 20);
+}
+
+#[test]
+fn lr2_source_animation_starts_at_first_destination_with_matching_timer() {
+    let mut document: SkinDocument = serde_json::from_str(
+        r#"{
+        "w":100,"h":100,
+        "image":[{"id":"anim","src":"1","w":100,"h":20,"divx":2,"cycle":120}],
+        "destination":[{"id":"anim","lr2Timing":true,"dst":[
+            {"time":150,"w":100,"h":20,"angle":10,
+             "lr2Style":{"blend":3,"filter":1,"center":9}}]}]
+    }"#,
+    )
+    .unwrap();
+    let sources = mock_source("1", 100.0, 20.0);
+    for (time, x) in [(150, 0.0), (180, 0.0), (210, 0.5), (270, 0.0)] {
+        let state = SkinDrawState { elapsed_ms: time, ..Default::default() };
+        let items = document.static_image_render_items(&sources, &state);
+        let SkinRenderItem::RotatedImage { uv, blend, linear_filter, center, .. } = items[0] else {
+            panic!("image")
+        };
+        assert_eq!(uv.x, x);
+        assert_eq!(blend, BlendMode::Subtract);
+        assert!(linear_filter);
+        assert_eq!(center, Point { x: 1.0, y: 0.0 });
+    }
+    document.image[0].timer = Some(46);
+    let mut state = SkinDrawState { elapsed_ms: 180, ..Default::default() };
+    state.judge_ms[0] = Some(90);
+    let items = document.static_image_render_items(&sources, &state);
+    assert!(matches!(items[0],SkinRenderItem::RotatedImage { uv, .. } if uv.x == 0.5));
+}
+
+#[test]
+fn lr2_single_timestamp_starts_then_holds_including_judge_destinations() {
+    for time in [0, 30, 1000] {
+        for loop_time in [-1, 0, time, time + 1] {
+            // Multiple frames at one timestamp must select the last one too.
+            for frames in [
+                serde_json::json!([{"time": time, "x": 20}]),
+                serde_json::json!([{"time": time, "x": 10}, {"time": time, "x": 20}]),
+            ] {
+                let destination: SkinDestinationDef = serde_json::from_value(serde_json::json!({
+                    "lr2Timing": true, "loop": loop_time, "dst": frames
+                }))
+                .unwrap();
+                for elapsed in [time - 1, time, time + 1, time + 10000] {
+                    let expected =
+                        (elapsed >= time && (loop_time >= 0 || elapsed == time)).then_some(20);
+                    for actual in [
+                        resolve_destination_frame(
+                            &destination,
+                            elapsed,
+                            &[],
+                            &SkinDrawState::default(),
+                        ),
+                        resolve_destination_frame_until_end(
+                            &destination,
+                            elapsed,
+                            &[],
+                            &SkinDrawState::default(),
+                        ),
+                    ] {
+                        assert_eq!(
+                            actual.map(|frame| frame.x),
+                            expected,
+                            "time={time}, loop={loop_time}, elapsed={elapsed}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn lr2_loop_boundaries_and_activation_match_openlr2() {
+    for (loop_time, elapsed, expected) in [
+        (0, 99, None),
+        (0, 100, Some(100)),
+        (0, 999, Some(999)),
+        (0, 1000, Some(1000)),
+        (0, 1001, Some(100)),
+        (0, 1100, Some(100)),
+        (500, 1000, Some(1000)),
+        (500, 1001, Some(501)),
+        (500, 1500, Some(500)),
+        (1000, 500, Some(500)),
+        (1000, 1001, Some(1000)),
+        (1001, 99, None),
+        (1001, 100, Some(100)),
+        (1001, 1000, Some(100)),
+        (-1, 99, None),
+        (-1, 1000, Some(1000)),
+        (-1, 1001, None),
+    ] {
+        let destination: SkinDestinationDef = serde_json::from_value(serde_json::json!({
+            "lr2Timing": true, "loop": loop_time, "dst": [
+                {"time": 100, "x": 100}, {"time": 1000, "x": 1000}
+            ]
+        }))
+        .unwrap();
+        let frame =
+            resolve_destination_frame(&destination, elapsed, &[], &SkinDrawState::default());
+        assert_eq!(frame.map(|frame| frame.x), expected, "loop={loop_time}, elapsed={elapsed}");
+    }
+}
+
+#[test]
+fn lr2_loop_uses_active_conditional_frames_and_rejects_reversed_range() {
+    let destination: SkinDestinationDef = serde_json::from_value(serde_json::json!({
+        "lr2Timing": true, "dst": [
+            {"if": [1], "value": {"time": 30, "x": 10}},
+            {"if": [2], "value": {"time": 1000, "x": 20}}
+        ]
+    }))
+    .unwrap();
+    for (ops, elapsed, expected) in [
+        (&[][..], 1000, None),
+        (&[1], 30, Some(10)),
+        (&[2], 999, None),
+        (&[2], 1000, Some(20)),
+        (&[1, 2], 1000, Some(20)),
+    ] {
+        assert_eq!(
+            resolve_destination_frame(&destination, elapsed, ops, &SkinDrawState::default())
+                .map(|frame| frame.x),
+            expected
+        );
+    }
+    let reversed: SkinDestinationDef = serde_json::from_value(serde_json::json!({
+        "lr2Timing": true, "dst": [{"time": 1000}, {"time": 30}]
+    }))
+    .unwrap();
+    assert!(resolve_destination_frame(&reversed, 1000, &[], &SkinDrawState::default()).is_none());
+}
+
+#[test]
 fn negative_loop_destination_disappears_after_end() {
     // loop:-1 の destination はアニメーション終端を過ぎると描画されない（READY/ボム）。
     let destination: SkinDestinationDef = serde_json::from_str(

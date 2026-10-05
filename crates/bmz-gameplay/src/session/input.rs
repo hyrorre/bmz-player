@@ -34,7 +34,7 @@ pub fn apply_input_offset_auto_adjust(session: &mut GameSession, events: &[Judge
 }
 
 use super::audio::counts_for_input_offset_auto_adjust;
-use super::judgement::push_skin_runtime_event;
+use super::judgement::{apply_judge_outcome_with_display_time, push_skin_runtime_event};
 use super::state::{INPUT_OFFSET_AUTO_ADJUST_BATCH, INPUT_OFFSET_AUTO_ADJUST_STEP_US};
 
 pub fn update_recent_judgements(session: &mut GameSession, events: &[JudgementEvent], now: TimeUs) {
@@ -55,7 +55,7 @@ pub fn update_recent_judgements(session: &mut GameSession, events: &[JudgementEv
     session.recent_judgements.retain(|event| now.0 <= event.time.0 + JUDGEMENT_DISPLAY_US);
     session
         .recent_display_judgements
-        .retain(|event| now.0 <= event.judgement.time.0 + JUDGEMENT_DISPLAY_US);
+        .retain(|event| now.0 <= event.display_time.0.saturating_add(JUDGEMENT_DISPLAY_US));
 }
 
 pub fn update_recent_inputs(session: &mut GameSession, inputs: &[InputEvent], now: TimeUs) {
@@ -390,7 +390,12 @@ pub(super) fn process_session_input(
             });
         }
     }
-    apply_judge_outcome(session, outcome)
+    // 判定・記録・発音には補正済み input.time を維持し、表示だけ打鍵時から始める。
+    // 処理時の now ではなく入力の元時刻を使い、入力配送や描画の遅延を引き継ぐ。
+    // Replay / Auto は譜面時刻が確定済みなので現在の profile offset を引かない。
+    let display_time = (input.source == InputSource::Human)
+        .then(|| TimeUs(input.time.0.saturating_sub(session.offsets.input_offset_us)));
+    apply_judge_outcome_with_display_time(session, outcome, display_time)
 }
 
 fn hcn_passing_at(session: &GameSession, lane: Lane, time: TimeUs) -> bool {

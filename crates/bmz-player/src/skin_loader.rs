@@ -9,7 +9,7 @@ use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
 use bmz_audio::loader::SampleLoader;
 use bmz_audio::sample::DecodedSample;
 use bmz_core::lane::KeyMode;
-use bmz_render::assets::{RgbaImageAsset, load_static_rgba_image};
+use bmz_render::assets::RgbaImageAsset;
 use bmz_render::bitmap_font::{BitmapFont, load_bitmap_font};
 use bmz_render::plan::TextureId;
 use bmz_render::renderer::{GpuUploader, PreparedTexture, Renderer};

@@ -210,6 +210,14 @@ macro_rules! skin_document_render_select_render_methods {
                         }
                         continue;
                     }
+                    let prepared_number = prepare_lua_number_for_destination(
+                        values.get(destination.id.as_str()),
+                        &state,
+                    );
+                    if matches!(prepared_number, Some(None)) {
+                        continue;
+                    }
+                    let prepared_number = prepared_number.flatten();
                     if !crate::select_settings_dest::test_select_destination_visible(
                         settings_dest_index,
                         destination,
@@ -290,6 +298,7 @@ macro_rules! skin_document_render_select_render_methods {
                                         runtime_graphs: SkinRuntimeGraphs::from_document(self),
                                         cache: None,
                                         number_cache: None,
+                                        prepared_number,
                                     },
                                 )
                                 .unwrap_or_default(),
@@ -311,6 +320,7 @@ macro_rules! skin_document_render_select_render_methods {
                             runtime_graphs: SkinRuntimeGraphs::from_document(self),
                             cache: None,
                             number_cache: cache.as_deref_mut().map(|cache| &mut cache.numbers),
+                            prepared_number,
                         },
                     ) {
                         items.extend(resolved);

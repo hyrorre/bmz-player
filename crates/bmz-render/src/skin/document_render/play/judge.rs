@@ -149,7 +149,17 @@ macro_rules! skin_document_render_play_judge_methods {
             }
             let image = self.image.iter().find(|image| image.id == image_destination.id)?;
             let source = resolve_document_source(sources, &image.src)?;
-            let uv = skin_image_texture_region(image, source.source_size, image_elapsed_ms);
+            let uv = if image_destination.lr2_timing {
+                skin_image_texture_region_for_destination(
+                    image,
+                    image_destination,
+                    source.source_size,
+                    state,
+                    skin_image_pixel_rect(image),
+                )
+            } else {
+                skin_image_texture_region(image, source.source_size, image_elapsed_ms)
+            };
             let (rect, uv) = stretch_skin_image_geometry(
                 image_destination.stretch,
                 normalize_skin_frame_rect(image_frame, self.w, self.h),
@@ -185,12 +195,22 @@ macro_rules! skin_document_render_play_judge_methods {
                 } else {
                     SignedNumberRender::Unsigned
                 };
+                let source_elapsed = if number_destination.lr2_timing {
+                    self.value
+                        .iter()
+                        .find(|value| value.id == number_destination.id)
+                        .and_then(|value| skin_timer_elapsed_ms(value.timer, state))
+                        .unwrap_or(0)
+                        .max(0)
+                } else {
+                    number_elapsed_ms.unwrap_or(elapsed_ms)
+                };
                 items.extend(self.value_number_render_items(
                     &number_destination.id,
                     combo as i64,
                     image_frame_for_numbers,
                     number_frame,
-                    number_elapsed_ms.unwrap_or(elapsed_ms),
+                    source_elapsed,
                     sources,
                     false,
                     Some(judge_align),
@@ -330,23 +350,16 @@ macro_rules! skin_document_render_play_judge_methods {
                         divx,
                         divy,
                     );
-                    let tint = Color::rgba(
-                        frame.r as f32 / 255.0,
-                        frame.g as f32 / 255.0,
-                        frame.b as f32 / 255.0,
-                        frame.a as f32 / 255.0,
-                    );
-                    SkinRenderItem::Image {
-                        texture: source.texture,
+                    skin_image_item_for_frame(
+                        source.texture,
                         rect,
                         uv,
-                        tint,
-                        blend: BlendMode::Normal,
-                        scale: SkinImageScale::Stretch,
-                        border: None,
-                        source_size: Some(source.source_size),
-                        linear_filter: false,
-                    }
+                        frame,
+                        0,
+                        BlendMode::Normal,
+                        Some(source.source_size),
+                        false,
+                    )
                 })
                 .collect()
         }

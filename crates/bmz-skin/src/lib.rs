@@ -65,6 +65,9 @@ pub struct SkinLoadDependencies {
     pub offset_values: BTreeMap<String, LuaSkinOffsetValue>,
     pub offset_id_values: BTreeMap<i32, LuaSkinOffsetValue>,
     pub files: BTreeSet<String>,
+    /// Random `skin_config.get_path` results, in call order for each normalized pattern.
+    /// Result refreshes can replay these selections before rebuilding the Lua document.
+    pub random_file_paths: BTreeMap<String, Vec<String>>,
     pub loaded_files: BTreeMap<PathBuf, SkinLoadedFileDependency>,
     /// Read-only virtual files observed through Lua `io.open` / `io.lines`.
     ///
@@ -118,6 +121,9 @@ pub enum LuaSkinRuntimeMode {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LuaLoadRuntimeState {
     pub runtime_mode: LuaSkinRuntimeMode,
+    /// Previously resolved Random file choices for a refresh of the same scene.
+    /// Empty on a new scene load; paths still pass through the skin sandbox.
+    pub pinned_random_file_paths: BTreeMap<String, Vec<String>>,
     pub number_values: BTreeMap<i32, i32>,
     pub text_values: BTreeMap<i32, String>,
     pub option_values: BTreeMap<i32, bool>,
@@ -165,6 +171,11 @@ impl LuaLoadRuntimeState {
 /// 実装側は renderer の snapshot などを借用してよい。Lua へ Rust オブジェクト
 /// 自体を渡さず、callback 実行中にこの accessor を同期的に読むだけにする。
 pub trait LuaMainState {
+    /// BMZ Result panel: 0=inactive, 1=IR, 2=graph; None outside Result.
+    fn result_panel(&self) -> Option<i32> {
+        None
+    }
+
     fn option(&self, id: i32) -> bool;
     fn number(&self, id: i32) -> i64;
     /// Returns the current EX score used by Lua skins.

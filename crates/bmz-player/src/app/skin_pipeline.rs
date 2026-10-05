@@ -68,6 +68,7 @@ pub(super) struct SkinPipelineRuntime {
     pub(super) result_refresh_generation: Option<u64>,
     pub(super) result_load_dependencies: Option<bmz_skin::SkinLoadDependencies>,
     pub(super) result_source_selections: BTreeMap<String, String>,
+    pub(super) result_random_file_selections: BTreeMap<String, Vec<String>>,
     pub(super) font_cache: SharedSkinFontCache,
     pub(super) installed_font_cache: HashMap<String, SkinFontCacheKey>,
     pub(super) gpu_texture_cache: SharedSkinGpuTextureCache,
@@ -92,6 +93,7 @@ impl SkinPipelineRuntime {
             result_refresh_generation: None,
             result_load_dependencies: None,
             result_source_selections: BTreeMap::new(),
+            result_random_file_selections: BTreeMap::new(),
             font_cache: Arc::new(Mutex::new(SkinFontCache::default())),
             installed_font_cache: HashMap::new(),
             gpu_texture_cache: Arc::new(Mutex::new(SkinGpuTextureCache::default())),
@@ -185,6 +187,23 @@ impl SkinPipelineRuntime {
         let generation = self.bump_generation(SkinKind::Result);
         self.result_refresh_generation = refresh.then_some(generation);
         generation
+    }
+
+    pub(super) fn install_result_load_dependencies(
+        &mut self,
+        dependencies: bmz_skin::SkinLoadDependencies,
+        refresh: bool,
+    ) {
+        if !refresh {
+            self.result_random_file_selections.clear();
+        }
+        // Keep choices even if an IR-dependent branch temporarily omits a get_path call.
+        // Newly introduced patterns/calls become pinned once that refresh is installed.
+        for (pattern, paths) in &dependencies.random_file_paths {
+            let pinned = self.result_random_file_selections.entry(pattern.clone()).or_default();
+            pinned.extend(paths.iter().skip(pinned.len()).cloned());
+        }
+        self.result_load_dependencies = Some(dependencies);
     }
 
     /// Installed dependencies and the last requested/observed values are separate:

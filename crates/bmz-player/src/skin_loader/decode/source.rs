@@ -17,10 +17,25 @@ pub(in crate::skin_loader) fn load_source_asset_with_cache<F>(
 where
     F: FnOnce() -> Result<RgbaImageAsset>,
 {
+    load_source_asset_with_cache_key(
+        skin_source_asset_cache_key(path, is_video),
+        source_cache,
+        load,
+    )
+}
+
+pub(in crate::skin_loader) fn load_source_asset_with_cache_key<F>(
+    key: Option<SkinSourceAssetCacheKey>,
+    source_cache: Option<&SharedSkinSourceAssetCache>,
+    load: F,
+) -> Result<(RgbaImageAsset, SourceCacheStatus)>
+where
+    F: FnOnce() -> Result<RgbaImageAsset>,
+{
     let Some(source_cache) = source_cache else {
         return load().map(|asset| (asset, SourceCacheStatus::Disabled));
     };
-    let Some(key) = skin_source_asset_cache_key(path, is_video) else {
+    let Some(key) = key else {
         return load().map(|asset| (asset, SourceCacheStatus::Uncacheable));
     };
     if let Ok(cache) = source_cache.lock()
@@ -41,6 +56,13 @@ pub(in crate::skin_loader) fn lookup_source_texture_cache(
     is_video: bool,
 ) -> (Option<CachedSkinGpuTexture>, Option<SkinSourceAssetCacheKey>, TextureCacheStatus) {
     let key = skin_source_asset_cache_key(path, is_video);
+    lookup_source_texture_cache_key(texture_cache, key)
+}
+
+pub(in crate::skin_loader) fn lookup_source_texture_cache_key(
+    texture_cache: Option<&SharedSkinGpuTextureCache>,
+    key: Option<SkinSourceAssetCacheKey>,
+) -> (Option<CachedSkinGpuTexture>, Option<SkinSourceAssetCacheKey>, TextureCacheStatus) {
     match (texture_cache, key.as_ref()) {
         (Some(texture_cache), Some(key)) => {
             if let Ok(mut cache) = texture_cache.lock()
@@ -63,9 +85,11 @@ pub(in crate::skin_loader) fn skin_source_asset_cache_key(
     path: &Path,
     is_video: bool,
 ) -> Option<SkinSourceAssetCacheKey> {
-    let metadata = fs::metadata(path).ok()?;
-    let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let asset = bmz_skin_assets::SkinAsset::resolve(path).ok()?;
+    let metadata = fs::metadata(asset.backing_path()).ok()?;
+    let path = asset.logical_path().to_path_buf();
     Some(SkinSourceAssetCacheKey {
+        color_key: None,
         path,
         modified: metadata.modified().ok(),
         len: metadata.len(),

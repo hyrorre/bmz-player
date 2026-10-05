@@ -24,6 +24,10 @@ pub(in crate::plan) fn build_play_skin_state(
     let skin_lane_h = skin_lane_height_px(skin, snapshot.key_mode, skin_canvas_h);
 
     crate::skin::SkinDrawState {
+        lr2_horizontal: skin
+            .document()
+            .and_then(|document| document.note.as_ref())
+            .is_some_and(|note| note.lr2_horizontal),
         elapsed_ms: play_elapsed_ms,
         start_input_ms: crate::skin::skin_start_input_elapsed_ms(
             play_elapsed_ms,
@@ -72,6 +76,7 @@ pub(in crate::plan) fn build_play_skin_state(
         gauge_type: snapshot.gauge_type,
         opponent_gauge: snapshot.opponent.as_ref().map(|opponent| opponent.gauge),
         opponent_gauge_type: snapshot.opponent.as_ref().map(|opponent| opponent.gauge_type),
+        lr2_opponent: snapshot.opponent.clone(),
         gauge_auto_shift: snapshot.gauge_auto_shift,
         gauge_max: snapshot.gauge_max,
         gauge_border: snapshot.gauge_border,
@@ -175,6 +180,7 @@ pub(in crate::plan) fn build_play_skin_state(
         adjusted_rate: snapshot.adjusted_rate,
         adjusted_rate_adot: snapshot.adjusted_rate_adot,
         autoplay: snapshot.autoplay,
+        auto_note_lanes: snapshot.auto_note_lanes,
         play_screen: true,
         replay_playback: snapshot.replay_playback,
         practice_mode: snapshot.practice_mode,

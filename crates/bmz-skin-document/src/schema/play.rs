@@ -2,6 +2,14 @@ use super::*;
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SkinNoteSetDef {
+    #[serde(default, rename = "lr2Horizontal")]
+    pub lr2_horizontal: bool,
+    /// LR2 sprites for lanes played automatically by an assist.
+    #[serde(default, rename = "lr2Auto")]
+    pub lr2_auto: Option<Box<SkinNoteSetDef>>,
+    /// Full LR2 DST_NOTE animation per lane. `dst` remains the initial lane geometry.
+    #[serde(default, rename = "lr2Dst")]
+    pub lr2_dst: Vec<Option<SkinDestinationDef>>,
     #[serde(default, deserialize_with = "deserialize_skin_id")]
     pub id: String,
     #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
@@ -204,10 +212,13 @@ pub struct SkinDestinationDef {
     /// BMZ限定のruntime timer式。PeacefulPlay key loggerの反復event timerに使う。
     #[serde(default)]
     pub timer_expr: String,
-    /// `loop` フィールド。未指定(None)はLR2互換評価で0時刻へループバックする。
+    /// `loop` フィールド。未指定(None)は0時刻へループバックする。
     /// `Some(n>=0)`＝終端到達後 n 時刻へループバック。`Some(n<0)`＝終端後に非表示。
     #[serde(default, rename = "loop")]
     pub loop_time: Option<i32>,
+    /// LR2 CSV decoder marker: retain LR2 start/end and loop boundary semantics.
+    #[serde(default, rename = "lr2Timing")]
+    pub lr2_timing: bool,
     #[serde(default)]
     pub center: i32,
     #[serde(default)]
@@ -253,6 +264,9 @@ pub struct SkinRectDef {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct SkinAnimationDef {
+    /// LR2 keeps draw attributes on each keyframe, rather than the destination.
+    #[serde(default, rename = "lr2Style")]
+    pub lr2_style: Option<SkinLr2FrameStyle>,
     pub time: Option<i32>,
     pub x: Option<i32>,
     pub y: Option<i32>,
@@ -266,6 +280,13 @@ pub struct SkinAnimationDef {
     pub g: Option<i32>,
     pub b: Option<i32>,
     pub angle: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+pub struct SkinLr2FrameStyle {
+    pub blend: i32,
+    pub filter: i32,
+    pub center: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

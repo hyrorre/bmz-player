@@ -36,8 +36,17 @@
 | 2026-10-05 | [ADFX02 / ECFNのBMZ基本拡張](2026/2026-10-05-ecfn-bmz-extensions.md) |
 | 2026-10-05 | [ADFX02 / ECFNのDETAIL OPTIONS表示](2026/2026-10-05-ecfn-detail-options.md) |
 | 2026-10-05 | [DETAIL OPTIONSのexperimental化と2パネル操作](2026/2026-10-05-experimental-detail-options.md) |
+| 2026-10-04 | [PLAYターゲットスコアの最終値表示修正](2026/2026-10-04-play-target-score.md) |
+| 2026-10-04 | [入力オフセットによる判定表示の点滅修正](2026/2026-10-04-input-offset-judge-display.md) |
 | 2026-10-03 | [Luxez-FlatのDETAIL OPTIONS表示](2026/2026-10-03-luxe-flat-detail-options.md) |
+| 2026-10-03 | [Luxe Flatリザルトのランク差分とLua数値評価順序](2026/2026-10-03-result-grade-lua-order.md) |
+| 2026-10-03 | [LR2のDXAアセット直接読込](2026/2026-10-03-lr2-dxa-assets.md) |
+| 2026-10-03 | [LR2 Play skin互換修正](2026/2026-10-03-lr2-play-compatibility.md) |
+| 2026-10-03 | [LR2 DST時刻の互換修正](2026/2026-10-03-lr2-destination-timing.md) |
+| 2026-10-03 | [LR2スキンの既定解像度修正](2026/2026-10-03-lr2-default-resolution.md) |
+| 2026-10-03 | [ResultパネルとLua状態の同期](2026/2026-10-03-result-panel-lua-state.md) |
 | 2026-10-02 | [mz-selectのDETAIL OPTIONS表示](2026/2026-10-02-mz-select-detail-options.md) |
+| 2026-10-02 | [リザルト更新時のLuaランダム背景維持](2026/2026-10-02-result-random-background.md) |
 | 2026-10-01 | [Select E2 DETAIL OPTIONSの再設計](2026/2026-10-01-select-detail-options.md) |
 | 2026-10-01 | [並列テストの一時ディレクトリ衝突対策](2026/2026-10-01-parallel-test-directories.md) |
 | 2026-10-01 | [Starseeker ResultのMAX符号とLuaロード値](2026/2026-10-01-starseeker-result-next-rank.md) |

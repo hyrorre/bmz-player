@@ -75,6 +75,7 @@ pub(super) fn wrap_ambient_destination(
 pub(super) fn skin_blend_mode(blend: i32) -> BlendMode {
     match blend {
         2 => BlendMode::Add,
+        3 => BlendMode::Subtract,
         4 => BlendMode::Multiply,
         _ => BlendMode::Normal,
     }
@@ -336,6 +337,7 @@ pub(super) fn resize_about_center(rect: SkinPixelRect, width: f32, height: f32) 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct ResolvedSkinFrame {
+    pub(super) lr2_style: Option<SkinLr2FrameStyle>,
     pub(super) time: i32,
     pub(super) x: i32,
     pub(super) y: i32,
@@ -354,6 +356,7 @@ pub(super) struct ResolvedSkinFrame {
 impl Default for ResolvedSkinFrame {
     fn default() -> Self {
         Self {
+            lr2_style: None,
             time: 0,
             x: 0,
             y: 0,
@@ -368,4 +371,64 @@ impl Default for ResolvedSkinFrame {
             apply_offset_alpha: true,
         }
     }
+}
+
+impl ResolvedSkinFrame {
+    pub(super) fn blend(self, fallback: BlendMode) -> BlendMode {
+        self.lr2_style.map_or(fallback, |style| skin_blend_mode(style.blend))
+    }
+
+    pub(super) fn linear_filter(self, fallback: bool) -> bool {
+        self.lr2_style.map_or(fallback, |style| style.filter != 0)
+    }
+
+    pub(super) fn center(self, fallback: i32) -> i32 {
+        self.lr2_style.map_or(fallback, |style| style.center)
+    }
+}
+
+pub(super) fn lr2_note_destination(
+    document: &SkinDocument,
+    lane: Lane,
+    key_mode: KeyMode,
+) -> Option<&SkinDestinationDef> {
+    document.note.as_ref()?.lr2_dst.get(beatoraja_note_index(lane, key_mode))?.as_ref()
+}
+
+pub(super) fn lr2_note_frame(
+    document: &SkinDocument,
+    lane: Lane,
+    key_mode: KeyMode,
+    options: &[i32],
+    state: &SkinDrawState,
+) -> Option<ResolvedSkinFrame> {
+    let destination = lr2_note_destination(document, lane, key_mode)?;
+    if !destination_ops_match(destination, options, state) {
+        return None;
+    }
+    resolve_destination_frame(
+        destination,
+        destination_timer_elapsed_ms(destination, state)?,
+        options,
+        state,
+    )
+}
+
+pub(super) fn note_lane_area_for_state(
+    document: &SkinDocument,
+    lane: Lane,
+    key_mode: KeyMode,
+    options: &[i32],
+    state: &SkinDrawState,
+) -> Option<Rect> {
+    let mut area = document.note_lane_area(lane, key_mode, options)?;
+    if lr2_note_destination(document, lane, key_mode).is_some() {
+        let frame = lr2_note_frame(document, lane, key_mode, options, state)?;
+        area.x = frame.x as f32 / document.w.max(1) as f32;
+        area.width = frame.w as f32 / document.w.max(1) as f32;
+        // Scroll distance remains relative to the initial lane height. Animating
+        // the judgement position moves notes without changing their speed.
+        area.y = 1.0 - frame.y as f32 / document.h.max(1) as f32 - area.height;
+    }
+    Some(area)
 }

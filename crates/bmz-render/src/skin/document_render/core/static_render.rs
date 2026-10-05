@@ -191,6 +191,14 @@ macro_rules! skin_document_render_core_static_methods {
                         after_notes_marker = true;
                         continue;
                     }
+                    let prepared_number = prepare_lua_number_for_destination(
+                        values.get(destination.id.as_str()),
+                        state,
+                    );
+                    if matches!(prepared_number, Some(None)) {
+                        continue;
+                    }
+                    let prepared_number = prepared_number.flatten();
                     if !destination.op.is_empty()
                         && !destination_ops_match(destination, enabled_options, state)
                     {
@@ -276,6 +284,7 @@ macro_rules! skin_document_render_core_static_methods {
                                                 runtime_graphs,
                                                 cache: None,
                                                 number_cache: None,
+                                                prepared_number,
                                             },
                                         )
                                         .unwrap_or_default(),
@@ -299,6 +308,7 @@ macro_rules! skin_document_render_core_static_methods {
                                 runtime_graphs,
                                 cache: cache.as_deref_mut(),
                                 number_cache: None,
+                                prepared_number,
                             },
                         )
                     } else {

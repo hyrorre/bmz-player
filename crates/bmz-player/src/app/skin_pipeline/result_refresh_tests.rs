@@ -27,6 +27,29 @@ fn queue_refresh(
 }
 
 #[test]
+fn result_refresh_keeps_random_file_choices_until_next_result() {
+    let mut pipeline = SkinPipelineRuntime::new();
+    let dependencies = |paths: &[&str]| SkinLoadDependencies {
+        random_file_paths: BTreeMap::from([(
+            "bg/*.png".into(),
+            paths.iter().map(|path| (*path).into()).collect(),
+        )]),
+        ..Default::default()
+    };
+    pipeline.install_result_load_dependencies(dependencies(&["bg/one.png"]), false);
+    // An IR-dependent branch can disappear for one refresh, then return with another call.
+    pipeline.install_result_load_dependencies(SkinLoadDependencies::default(), true);
+    assert_eq!(pipeline.result_random_file_selections["bg/*.png"], ["bg/one.png"]);
+    pipeline.install_result_load_dependencies(dependencies(&["bg/one.png", "bg/two.png"]), true);
+    assert_eq!(pipeline.result_random_file_selections["bg/*.png"], ["bg/one.png", "bg/two.png"]);
+    pipeline.install_result_load_dependencies(dependencies(&["bg/one.png"]), true);
+    assert_eq!(pipeline.result_random_file_selections["bg/*.png"], ["bg/one.png", "bg/two.png"]);
+
+    pipeline.install_result_load_dependencies(dependencies(&["bg/three.png"]), false);
+    assert_eq!(pipeline.result_random_file_selections["bg/*.png"], ["bg/three.png"]);
+}
+
+#[test]
 fn result_refresh_return_to_installed_values_rejects_late_upload() {
     // Hold B's completion until after the user has scrolled back to A.
     // Unrelated values may also change; only installed dependencies matter.

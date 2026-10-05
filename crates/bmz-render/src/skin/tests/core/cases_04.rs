@@ -499,6 +499,28 @@ fn text_render_item_separates_bitmap_font_size_from_destination_height() {
 }
 
 #[test]
+fn lr2_system_font_uses_destination_height_and_scaled_width() {
+    let document: SkinDocument = serde_json::from_value(serde_json::json!({
+        "w": 640, "h": 480,
+        "text": [{"id":"text", "constantText":"TITLE", "align":1,
+            "lr2SystemFont":{"size":60, "thickness":4, "type":3}}]
+    }))
+    .unwrap();
+    for height in [20, 120] {
+        let frame = ResolvedSkinFrame { x: 320, w: 300, h: height, a: 128, ..Default::default() };
+        let item =
+            document.text_render_item(&document.text[0], frame, &SkinTextState::default()).unwrap();
+        let SkinRenderItem::Text { origin, style, .. } = item else { panic!("text") };
+        let width = 300.0 / 640.0 * height as f32 / 60.0;
+        assert!(approx_eq(style.size, height as f32 / 480.0));
+        assert!(approx_eq(style.max_width, width));
+        assert!(approx_eq(origin.x, 0.5 - width / 2.0));
+        assert!(approx_eq(style.outline.unwrap().width, height as f32 / 60.0 / 480.0));
+        assert!(approx_eq(style.outline.unwrap().color.a, 128.0 / 255.0));
+    }
+}
+
+#[test]
 fn skin_state_text_uses_constant_text_over_ref_id() {
     let state = SkinTextState { title: "Ignored", ..SkinTextState::default() };
     let text = SkinTextDef {

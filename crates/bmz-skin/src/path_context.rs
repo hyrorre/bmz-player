@@ -106,6 +106,24 @@ impl SkinPathContext {
         self.resolve_existing(requested, ExistingKind::File)
     }
 
+    /// Resolve a static image/font, including legacy DXA virtual folders.
+    /// Lua modules and ordinary file APIs continue to require physical files.
+    pub fn resolve_asset(&self, requested: &str) -> Result<PathBuf> {
+        let candidates = self.candidate_paths(requested)?;
+        let mut failure = None;
+        for candidate in candidates {
+            match bmz_skin_assets::SkinAsset::resolve_with(&candidate, |backing| {
+                // Normalize Windows extended prefixes exactly as other paths.
+                canonicalize_skin_path(backing)
+                    .is_ok_and(|path| self.library_roots.iter().any(|root| path.starts_with(root)))
+            }) {
+                Ok(asset) => return Ok(simplify_verbatim_path(asset.logical_path().to_path_buf())),
+                Err(error) => failure = Some(error),
+            }
+        }
+        Err(failure.unwrap_or_else(|| anyhow!("skin asset not found: {requested}")))
+    }
+
     /// Resolves an existing file or directory using the common path rules.
     pub fn resolve_path(&self, requested: &str) -> Result<PathBuf> {
         self.resolve_existing(requested, ExistingKind::Any)

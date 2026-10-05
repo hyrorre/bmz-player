@@ -355,8 +355,11 @@ impl<'a> RuntimeBuilder<'a> {
         }
         let id = format!("{}:source:{}", self.prefix, self.sources.len());
         self.source_ids.insert(path.clone(), id.clone());
-        self.sources
-            .push(SkinSourceDef { id: id.clone(), path: path.to_string_lossy().to_string() });
+        self.sources.push(SkinSourceDef {
+            id: id.clone(),
+            path: path.to_string_lossy().to_string(),
+            lr2_color_key: None,
+        });
         id
     }
 }

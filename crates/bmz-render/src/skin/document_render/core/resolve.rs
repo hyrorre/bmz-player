@@ -16,6 +16,7 @@ macro_rules! skin_document_render_core_resolve_methods {
                 runtime_graphs,
                 cache,
                 number_cache,
+                prepared_number,
             } = context;
             if let Some(judge_def) = self.judge.iter().find(|judge| judge.id == destination.id) {
                 // SkinJudge 自身に destination が設定されている場合は、beatoraja の
@@ -183,7 +184,13 @@ macro_rules! skin_document_render_core_resolve_methods {
             }
 
             if let Some(value) = value_for_destination {
-                let number = skin_value_number_for_destination(value, state)?;
+                let elapsed = if destination.lr2_timing {
+                    skin_timer_elapsed_ms(value.timer, state).unwrap_or(0).max(0)
+                } else {
+                    elapsed
+                };
+                let number =
+                    prepared_number.or_else(|| skin_value_number_for_destination(value, state))?;
                 let signed_render = signed_number_render_for_value(value, state);
                 // Evaluate the value callback before consulting the cache: a
                 // stable return value does not imply a side-effect-free closure.
@@ -280,8 +287,13 @@ macro_rules! skin_document_render_core_resolve_methods {
                 return Some(None);
             };
             let pixel_rect = skin_image_pixel_rect(image);
-            let mut uv =
-                skin_image_texture_region_for_state(image, source.source_size, state, pixel_rect);
+            let mut uv = skin_image_texture_region_for_destination(
+                image,
+                destination,
+                source.source_size,
+                state,
+                pixel_rect,
+            );
             if self.should_clip_image_at_disappear_line(destination, image)
                 && let Some((disappear_line, link_lift)) = self.disappear_line_for_lane_cover_clip()
             {
@@ -330,7 +342,7 @@ macro_rules! skin_document_render_core_resolve_methods {
             }
 
             let rect = normalize_skin_frame_rect(frame, self.w, self.h);
-            let blend = skin_blend_mode(destination.blend);
+            let blend = frame.blend(skin_blend_mode(destination.blend));
             let destination_tint = Color::rgba(
                 frame.r as f32 / 255.0,
                 frame.g as f32 / 255.0,
@@ -339,7 +351,7 @@ macro_rules! skin_document_render_core_resolve_methods {
             );
             let stretch =
                 if destination.stretch < 0 { state.bga_stretch } else { destination.stretch };
-            let linear_filter = destination.filter != 0;
+            let linear_filter = frame.linear_filter(destination.filter != 0);
             let mut items = Vec::new();
             if let Some(bga) = state.bga_poor {
                 items.push(bga_image_item(
@@ -367,12 +379,15 @@ macro_rules! skin_document_render_core_resolve_methods {
 
             if state.bga_poor.is_none() {
                 for bga in [state.bga_layer, state.bga_layer2].into_iter().flatten() {
-                    let layer_blend =
-                        if matches!(blend, BlendMode::Add | BlendMode::Multiply) || bga.is_video {
-                            blend
-                        } else {
-                            BlendMode::LayerMask
-                        };
+                    let layer_blend = if matches!(
+                        blend,
+                        BlendMode::Add | BlendMode::Subtract | BlendMode::Multiply
+                    ) || bga.is_video
+                    {
+                        blend
+                    } else {
+                        BlendMode::LayerMask
+                    };
                     items.push(bga_image_item(
                         bga,
                         stretch,
@@ -424,7 +439,13 @@ macro_rules! skin_document_render_core_resolve_methods {
             let (rect, uv) = stretch_skin_image_geometry(
                 destination.stretch,
                 normalize_skin_frame_rect(frame, self.w, self.h),
-                skin_image_texture_region_for_state(image, source.source_size, state, pixel_rect),
+                skin_image_texture_region_for_destination(
+                    image,
+                    destination,
+                    source.source_size,
+                    state,
+                    pixel_rect,
+                ),
                 source.source_size,
                 self.w,
                 self.h,
@@ -475,8 +496,9 @@ macro_rules! skin_document_render_core_resolve_methods {
                 }
                 let source = resolve_document_source(sources, &image.src)?;
                 let pixel_rect = skin_image_pixel_rect(image);
-                let mut uv = skin_image_texture_region_for_state(
+                let mut uv = skin_image_texture_region_for_destination(
                     image,
+                    destination,
                     source.source_size,
                     state,
                     pixel_rect,
@@ -517,6 +539,11 @@ macro_rules! skin_document_render_core_resolve_methods {
             }
 
             if let Some(value) = self.value.iter().find(|value| value.id == destination.id) {
+                let elapsed = if destination.lr2_timing {
+                    skin_timer_elapsed_ms(value.timer, state).unwrap_or(0).max(0)
+                } else {
+                    elapsed
+                };
                 let number = skin_value_number_for_destination(value, state)?;
                 let signed_render = signed_number_render_for_value(value, state);
                 return Some(self.value_number_render_items(

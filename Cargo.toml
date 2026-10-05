@@ -7,6 +7,7 @@ members = [
     "crates/bmz-render",
     "crates/bmz-skin",
     "crates/bmz-skin-document",
+    "crates/bmz-skin-assets",
     "crates/bmz-player",
     "crates/bmz-skin-convert",
     "crates/bmz-video",

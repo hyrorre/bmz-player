@@ -239,9 +239,21 @@ fn result_lua_runtime_values_cover_load_time_result_decisions() {
 
 #[test]
 fn result_lua_next_rank_matches_rendering_before_skin_load() {
+    let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+    std::fs::create_dir_all(&data.paths.data_dir).unwrap();
+    let skin_path = data.paths.data_dir.join("result.luaskin");
+    std::fs::write(
+        &skin_path,
+        r#"
+        local state = require("main_state")
+        return {type = 7, value = {{id = "rank_diff", ref = 154,
+            y = state.number(154) == 0 and 165 or 292}}}
+        "#,
+    )
+    .unwrap();
     let mut summary = debug_boot_result_summary();
     summary.total_notes = 1552;
-    // Legacy skins use ref 154 == 0 to choose their MAX number sheet at load time.
+    // Legacy Result skins use ref 154 == 0 to choose their MAX sheet at load time.
     for (score, expected) in [(2969, 135), (3104, 0), (2759, 1), (2760, 344)] {
         summary.ex_score = score;
         let values = result_lua_runtime_number_values_for_summary(&summary);
@@ -262,61 +274,23 @@ fn result_lua_next_rank_matches_rendering_before_skin_load() {
             "test",
         );
         assert_eq!(runtime.number_values.get(&154), Some(&expected));
-    }
-}
-
-#[test]
-fn result_lua_next_rank_selects_number_sheet_from_summary() {
-    let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    let root =
-        std::env::temp_dir().join(format!("bmz-result-next-rank-{}-{unique}", std::process::id()));
-    std::fs::create_dir_all(&root).unwrap();
-    let path = root.join("result.lua");
-    std::fs::write(
-        &path,
-        r#"
-        local state = require("main_state")
-        return {
-            type = 7,
-            value = {{
-                id = "next_rank", src = "numbers", ref = 154,
-                x = 0, y = state.number(154) == 0 and 165 or 292,
-                w = 228, h = 36, divx = 12, divy = 2, digit = 5
-            }}
-        }
-        "#,
-    )
-    .unwrap();
-    let mut summary = debug_boot_result_summary();
-    summary.total_notes = 1552;
-    for (score, expected_y) in [(2969, 292), (3104, 165), (2759, 292), (2760, 292)] {
-        summary.ex_score = score;
-        let runtime = lua_runtime_state_for_result(
-            false,
-            None,
-            true,
-            false,
-            summary.key_mode,
-            result_lua_runtime_number_values_for_summary(&summary),
-            "test",
-        );
-        let loaded = bmz_skin::load_lua_skin_with_runtime_state(
-            &path,
+        let decoded = crate::skin_loader::decode_beatoraja_skin_with_options_and_runtime_state(
+            &skin_path,
+            SkinKind::Result,
             &BTreeMap::new(),
             &BTreeMap::new(),
             &runtime,
         )
-        .expect("load number sheet selected from ResultSummary");
-        let value = loaded
+        .expect("decode ref 154 Result fixture with summary");
+        let value = decoded
             .document
             .value
             .iter()
-            .find(|value| value.id == "next_rank")
-            .expect("next-rank fixture number");
-        assert_eq!(value.y, expected_y, "EX SCORE {score}");
+            .find(|value| value.id == "rank_diff")
+            .expect("next-rank number");
+        assert_eq!(value.y, if expected == 0 { 165 } else { 292 }, "EX SCORE {score}");
         assert_eq!(value.ref_id, 154);
     }
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -706,7 +680,7 @@ fn result_panel_arrow_keys_match_luxe_flat_direction() {
 }
 
 #[test]
-fn result_panel_support_requires_default_and_runtime_draw_gate() {
+fn result_panel_support_requires_default_and_compiled_or_lua_draw_gate() {
     let document: SkinDocument = serde_json::from_value(serde_json::json!({
         "type": 7,
         "resultPanelDefault": 2,
@@ -718,6 +692,15 @@ fn result_panel_support_requires_default_and_runtime_draw_gate() {
     }))
     .unwrap();
     assert!(result_panel_supported(&document));
+
+    let mut compat = document.clone();
+    let DestinationListEntry::Single(destination) = &mut compat.destination[0] else {
+        panic!("single destination");
+    };
+    destination.draw = "bmz:lua_draw_callback:0".into();
+    assert!(result_panel_supported(&compat));
+    compat.result_panel_default = None;
+    assert!(!result_panel_supported(&compat));
 
     let without_gate: SkinDocument = serde_json::from_value(serde_json::json!({
         "type": 7,

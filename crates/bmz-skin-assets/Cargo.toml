@@ -1,0 +1,9 @@
+[package]
+name = "bmz-skin-assets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+encoding_rs.workspace = true

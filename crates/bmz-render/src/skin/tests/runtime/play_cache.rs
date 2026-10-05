@@ -3,6 +3,98 @@ use super::*;
 #[derive(Debug, Default)]
 struct OrderedRuntime(Mutex<Vec<usize>>);
 
+#[derive(Debug, Default)]
+struct PreparingNumberRuntime(Mutex<Vec<usize>>);
+
+impl SkinLuaDrawRuntime for PreparingNumberRuntime {
+    fn evaluate_draw(
+        &self,
+        id: usize,
+        state: &SkinDrawState,
+        _: &[i32],
+        _: &BTreeMap<i32, String>,
+    ) -> bool {
+        let mut calls = self.0.lock().unwrap();
+        assert_eq!(calls.last(), Some(&2), "value must run before its draw callback");
+        calls.push(id);
+        id == 0 || state.elapsed_ms % 2 == 0
+    }
+
+    fn evaluate_number(
+        &self,
+        id: usize,
+        _: &SkinDrawState,
+        _: &[i32],
+        _: &BTreeMap<i32, String>,
+    ) -> Option<f64> {
+        self.0.lock().unwrap().push(id);
+        match id {
+            2 => Some(0.0),
+            3 => None,
+            4 => Some(f64::from(i32::MIN)),
+            _ => panic!("unexpected number callback {id}"),
+        }
+    }
+}
+
+#[test]
+fn lua_numbers_prepare_once_per_destination_before_draw_and_timer_checks() {
+    let document: SkinDocument = serde_json::from_value(serde_json::json!({
+        "w":100,"h":100,
+        "value":[
+            {"id":"n","src":"digits","w":100,"h":10,"divx":10,"digit":2,
+             "value_expr":"bmz:lua_value_callback:2"},
+            {"id":"failed","value_expr":"bmz:lua_value_callback:3"},
+            {"id":"sentinel","value_expr":"bmz:lua_value_callback:4"}
+        ],
+        "destination":[
+            {"id":"n","draw":"bmz:lua_draw_callback:0","dst":[{"w":10,"h":10}]},
+            {"id":"n","draw":"bmz:lua_draw_callback:1","dst":[{"y":20,"w":10,"h":10}]},
+            {"id":"n","timer":10000,"dst":[{"y":40,"w":10,"h":10}]},
+            {"id":"failed","draw":"bmz:lua_draw_callback:0","dst":[{"w":10,"h":10}]},
+            {"id":"sentinel","draw":"bmz:lua_draw_callback:0","dst":[{"w":10,"h":10}]}
+        ]
+    }))
+    .unwrap();
+    let sources = [SkinDocumentTexture {
+        source_id: "digits".into(),
+        texture: SkinTextureId(1),
+        source_size: SkinImageSize { width: 100.0, height: 10.0 },
+    }];
+    for scene in ["play", "result", "select"] {
+        let mut context = SkinContext::from_manifest_and_document(
+            default_skin_manifest(),
+            document.clone(),
+            sources.clone(),
+        );
+        let runtime = Arc::new(PreparingNumberRuntime::default());
+        context.set_lua_draw_runtime(Some(runtime.clone()));
+        // Stable zero values still execute on cache hits; hidden destinations
+        // execute independently and failures must never be retried by resolve.
+        for elapsed in [1, 1, 2, 2] {
+            context.begin_frame();
+            let state = SkinDrawState { elapsed_ms: elapsed, ..Default::default() };
+            let text = SkinTextState::default();
+            let items = match scene {
+                "play" => context.static_document_items_for_state(&state),
+                "result" => context.static_document_items_for_result_state_and_text(
+                    &Arc::default(),
+                    &state,
+                    &text,
+                ),
+                "select" => context.select_document_items(&SelectSnapshot {
+                    time: TimeUs(i64::from(elapsed) * 1000),
+                    ..Default::default()
+                }),
+                _ => unreachable!(),
+            };
+            assert_eq!(items.len(), if elapsed % 2 == 0 { 2 } else { 1 }, "{scene}");
+            assert_eq!(runtime.0.lock().unwrap().as_slice(), &[2, 0, 2, 1, 2, 3, 4], "{scene}");
+            runtime.0.lock().unwrap().clear();
+        }
+    }
+}
+
 impl SkinLuaDrawRuntime for OrderedRuntime {
     fn evaluate_draw(
         &self,

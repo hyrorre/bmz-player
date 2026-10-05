@@ -1,7 +1,7 @@
 use crate::skin_loader::*;
 
 pub(in crate::skin_loader) enum SourceDecodeTask {
-    File { index: usize, source_id: String, path: PathBuf },
+    File { index: usize, source_id: String, path: PathBuf, color_key: Option<[u8; 3]> },
     Video { index: usize, source_id: String, path: PathBuf },
     Builtin { index: usize, source_id: String, path: PathBuf, asset: RgbaImageAsset },
 }

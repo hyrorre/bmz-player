@@ -374,6 +374,8 @@ pub struct RenderSnapshot {
     pub bpm_graph_segments: Arc<[BpmGraphSegment]>,
     /// OPTION_AUTOPLAYON (33) / OPTION_AUTOPLAYOFF (32) 用。
     pub autoplay: bool,
+    /// Partial autoplay lanes use LR2 AUTO sprites; full autoplay keeps normal sprites.
+    pub auto_note_lanes: [bool; LANE_COUNT],
     /// リプレイ再生中かどうか。プレイ中 FAST/SLOW 表示など、入力由来の表示制御に使う。
     pub replay_playback: bool,
     /// BMZ extension: frozen scoring rule mode index for Decide/Play.
@@ -597,6 +599,7 @@ pub struct DisplayJudgement {
     pub text: String,
     pub combo: u32,
     pub delta_us: i64,
+    /// 判定表示・コンボ・ボムの開始時刻。実入力の判定用オフセットを含まない。
     pub time: TimeUs,
     /// ノートを押さずに通過した見逃し判定（Poor）。
     /// このとき「打鍵」は発生していないのでキービームやボム演出は不要。

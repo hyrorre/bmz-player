@@ -269,6 +269,11 @@ fn refresh_play_ending_snapshot_expires_old_judgements() {
         note_id: Some(NoteId(1)),
         affects_score: true,
     });
+    session.recent_display_judgements.push(bmz_gameplay::session::DisplayJudgementEvent {
+        judgement: session.recent_judgements[0].clone(),
+        combo: 1,
+        display_time: TimeUs(0),
+    });
     session.audio_clock = test_running_audio_clock(0);
 
     let timers = PlayEndingSkinTimers {

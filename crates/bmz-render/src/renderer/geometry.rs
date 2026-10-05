@@ -143,6 +143,7 @@ pub(super) struct PlanGeometryDrawResources<'pass> {
     pub(super) image_pipeline: &'pass wgpu::RenderPipeline,
     pub(super) image_add_pipeline: &'pass wgpu::RenderPipeline,
     pub(super) image_multiply_pipeline: &'pass wgpu::RenderPipeline,
+    pub(super) image_subtract_pipeline: &'pass wgpu::RenderPipeline,
     pub(super) image_premultiplied_pipeline: &'pass wgpu::RenderPipeline,
     pub(super) image_layer_pipeline: &'pass wgpu::RenderPipeline,
     pub(super) image_bind_groups: &'pass [wgpu::BindGroup],
@@ -186,6 +187,7 @@ pub(super) fn draw_plan_geometry<'pass>(
                     BlendMode::Normal => resources.image_pipeline,
                     BlendMode::Add => resources.image_add_pipeline,
                     BlendMode::Multiply => resources.image_multiply_pipeline,
+                    BlendMode::Subtract => resources.image_subtract_pipeline,
                     BlendMode::Premultiplied => resources.image_premultiplied_pipeline,
                     BlendMode::LayerMask => resources.image_layer_pipeline,
                 });

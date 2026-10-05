@@ -1,8 +1,104 @@
 use super::*;
 
 #[test]
+fn horizontal_mode_preserves_missed_note_x_coordinate() {
+    let files = BTreeMap::new();
+    for horizontal in [false, true] {
+        let mut builder = CsvBuilder::new(Path::new("play.lr2skin"), Header::default(), &files);
+        for line in ["#DST_NOTE,1,0,100,300,20,10,0,255,255,255,255,1,0,0,0,0,0", "#DST_NOTE2,-20"]
+        {
+            builder.execute(&parse_csv_line(line).unwrap()).unwrap();
+        }
+        if horizontal {
+            builder.execute(&parse_csv_line("#HORIZONTAL").unwrap()).unwrap();
+        }
+        let value = builder.finish();
+        assert_eq!(value["note"]["lr2Horizontal"], horizontal);
+        assert_eq!(value["note"]["dst2"], if horizontal { -20 } else { 490 });
+    }
+}
+
+#[test]
+fn lr2_auto_note_sources_are_separate_regardless_of_declaration_order() {
+    let files = BTreeMap::new();
+    for reverse in [false, true] {
+        let mut builder = CsvBuilder::new(Path::new("play.lr2skin"), Header::default(), &files);
+        builder.add_source("notes.png");
+        for part in ["NOTE", "LN_START", "LN_END", "LN_BODY", "MINE"] {
+            for auto in if reverse { [true, false] } else { [false, true] } {
+                let prefix = if auto { "AUTO_" } else { "" };
+                let x = if auto { 100 } else { 0 };
+                builder
+                    .execute(
+                        &parse_csv_line(&format!("#SRC_{prefix}{part},1,0,{x},0,10,10,1,1,0,0"))
+                            .unwrap(),
+                    )
+                    .unwrap();
+            }
+        }
+        let auto = builder.note.auto.as_ref().unwrap();
+        for (normal, auto) in [
+            (&builder.note.note, &auto.note),
+            (&builder.note.lnstart, &auto.lnstart),
+            (&builder.note.lnend, &auto.lnend),
+            (&builder.note.lnbody, &auto.lnbody),
+            (&builder.note.mine, &auto.mine),
+        ] {
+            assert_ne!(normal[0], auto[0]);
+            assert_eq!(
+                builder.images.iter().find(|image| image["id"] == normal[0]).unwrap()["x"],
+                0
+            );
+            assert_eq!(
+                builder.images.iter().find(|image| image["id"] == auto[0]).unwrap()["x"],
+                100
+            );
+        }
+        for line in [
+            "#DST_NOTE,1,100,10,300,20,10,0,255,255,255,255,1,0,0,0,200,41,0,0,0",
+            "#DST_NOTE,1,200,40,300,30,20,0,255,255,255,255,1,0,0,0,200,41,0,0,0",
+        ] {
+            builder.execute(&parse_csv_line(line).unwrap()).unwrap();
+        }
+        let dst = builder.note.destinations[0].as_ref().unwrap();
+        assert_eq!(dst["timer"], 41);
+        assert_eq!(dst["dst"].as_array().unwrap().len(), 2);
+        assert_eq!(dst["dst"][1]["w"], 30);
+    }
+}
+
+#[test]
+fn lr2_destination_builders_preserve_timing_mode_and_first_row_loop() {
+    let mut values = [0; 22];
+    values[2] = 1000;
+    values[12] = 3;
+    values[13] = 1;
+    values[15] = 9;
+    let normal = destination_def_with_default_offsets("line", &values, 480, &[], &[]);
+    let gauge = gauge_destination_def("gauge", &values, 480, 6, 0, &[]);
+    let combo = judge_combo_destination_def("combo", &values, &[], &[]);
+    for mut destination in [normal, gauge, combo] {
+        assert_eq!(destination["lr2Timing"], true);
+        assert_eq!(destination["loop"], 0);
+        assert_eq!(destination["dst"][0]["lr2Style"], json!({"blend":3,"filter":1,"center":9}));
+        let mut next = destination.clone();
+        next["loop"] = json!(-1);
+        next["dst"][0]["time"] = json!(2000);
+        next["dst"][0]["lr2Style"]["blend"] = json!(2);
+        assert!(merge_destination_entry(&mut destination, next));
+        assert_eq!(destination["loop"], 0);
+        assert_eq!(destination["dst"].as_array().unwrap().len(), 2);
+        assert_eq!(destination["dst"][1]["lr2Style"]["blend"], 2);
+        let decoded: bmz_skin_document::SkinDestinationDef =
+            serde_json::from_value(destination).unwrap();
+        assert!(decoded.lr2_timing);
+    }
+}
+
+#[test]
 fn lr2_resolution_accepts_presets_and_explicit_dimensions() {
     for (source, expected, has_explicit_dimensions) in [
+        ("#RESOLUTION,0", (640, 480), false),
         ("#RESOLUTION,1", (1280, 720), false),
         ("#RESOLUTION,2,", (1920, 1080), false),
         ("#RESOLUTION,3", (3840, 2160), false),
@@ -17,6 +113,42 @@ fn lr2_resolution_accepts_presets_and_explicit_dimensions() {
             "source: {source}"
         );
     }
+}
+
+#[test]
+fn lr2_omitted_resolution_uses_sd_for_included_destinations() {
+    let root = unique_test_dir("bmz-lr2-default-resolution");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("play.csv"),
+        "#SRC_IMAGE,0,111,0,0,1,1,1,1,0,0\n\
+         #DST_IMAGE,0,0,0,0,640,480,0,255,255,255,255,1,0,0,0,0,0,0,0,0\n\
+         #SRC_NOTE,1,111,0,0,1,1,1,1,0,0\n\
+         #DST_NOTE,1,0,100,422,30,15,0,255,255,255,255,0,0,0,0,0,0,0,0,0\n",
+    )
+    .unwrap();
+    let path = root.join("play.lr2skin");
+    for resolution in ["", "#RESOLUTION,0\n"] {
+        fs::write(&path, format!("#INFORMATION,0,SD test,BMZ\n{resolution}#INCLUDE,play.csv\n"))
+            .unwrap();
+        let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        let document = loaded.value;
+        assert_eq!(document["w"], 640, "resolution: {resolution:?}");
+        assert_eq!(document["h"], 480, "resolution: {resolution:?}");
+        let background = &document["destination"][0]["dst"][0];
+        assert_eq!(background["x"], 0);
+        assert_eq!(background["y"], 0);
+        assert_eq!(background["w"], 640);
+        assert_eq!(background["h"], 480);
+        let lane = &document["note"]["dst"][0];
+        assert_eq!(lane["x"], 100);
+        assert_eq!(lane["y"], 43);
+        assert_eq!(lane["w"], 30);
+        assert_eq!(lane["h"], 437);
+        assert_eq!(document["note"]["size"][0], 15);
+    }
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -326,7 +458,7 @@ fn lr2_play_bridges_keep_battle_values_and_gauge_display_separate() {
             [
                 SKIN_REF_BMZ_LR2_HISPEED,
                 SKIN_REF_BMZ_LR2_HISPEED,
-                if skin_type >= 12 { 271 } else { 121 },
+                SKIN_REF_BMZ_LR2_2P_BASE + 1,
                 SKIN_REF_BMZ_LR2_GAUGE_2P,
             ]
         };
@@ -481,7 +613,7 @@ fn lr2_play_chart_sources_keep_beatoraja_fields_and_destination_size() {
     assert_eq!(graph["noGapX"], json!(1));
     let frame = builder.destinations[0]["dst"].as_array().unwrap().first().unwrap();
     assert_eq!(frame["x"], json!(50));
-    assert_eq!(frame["y"], json!(520));
+    assert_eq!(frame["y"], json!(280));
     assert_eq!(frame["w"], json!(300));
     assert_eq!(frame["h"], json!(120));
 }
@@ -567,8 +699,13 @@ fn lr2_ln_body_keeps_animation_only_while_held() {
 
         let inactive = &builder.images[0];
         let active = &builder.images[1];
-        assert_eq!(inactive["id"], json!(builder.note.lnbody[7]));
-        assert_eq!(active["id"], json!(builder.note.lnbody_active[7]));
+        let note = if command == "SRC_AUTO_LN_BODY" {
+            builder.note.auto.as_deref().unwrap()
+        } else {
+            &builder.note
+        };
+        assert_eq!(inactive["id"], json!(note.lnbody[7]));
+        assert_eq!(active["id"], json!(note.lnbody_active[7]));
         assert_eq!(inactive["cycle"], json!(0), "{command} inactive body");
         assert!(inactive["timer"].is_null(), "{command} inactive body");
         assert_eq!(active["cycle"], json!(266), "{command} active body");

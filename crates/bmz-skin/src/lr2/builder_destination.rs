@@ -269,11 +269,11 @@ impl<'a> CsvBuilder<'a> {
     }
 
     pub(super) fn relative_font_path_for_skin_file(&self, path: &str) -> String {
-        if self.skin_file_dir.join(path).is_file() {
+        if bmz_skin_assets::is_file(&self.skin_file_dir.join(path)) {
             return path.to_string();
         }
         let parent_relative = format!("../{path}");
-        if self.skin_file_dir.join(&parent_relative).is_file() {
+        if bmz_skin_assets::is_file(&self.skin_file_dir.join(&parent_relative)) {
             return parent_relative;
         }
         path.to_string()
@@ -410,11 +410,21 @@ impl<'a> CsvBuilder<'a> {
             .collect::<Vec<_>>();
         let note = (!self.note.note.is_empty() || !self.note.dst.is_empty()).then(|| {
             let dst2 = self.note.dst2.map(|y| {
-                (self.header.h as i32)
-                    .saturating_sub(y.saturating_add(self.note.size.first().copied().unwrap_or(0)))
+                if self.note.horizontal {
+                    y
+                } else {
+                    (self.header.h as i32).saturating_sub(
+                        y.saturating_add(self.note.size.first().copied().unwrap_or(0)),
+                    )
+                }
             });
             json!({
                 "id": "notes",
+                "lr2Horizontal": self.note.horizontal,
+                "lr2Auto": self.note.auto.as_ref().map(|auto| json!({
+                    "note": auto.note, "lnstart": auto.lnstart, "lnend": auto.lnend,
+                    "lnbody": auto.lnbody, "lnbodyActive": auto.lnbody_active, "mine": auto.mine,
+                })),
                 "note": self.note.note,
                 "lnstart": self.note.lnstart,
                 "lnend": self.note.lnend,
@@ -431,6 +441,7 @@ impl<'a> CsvBuilder<'a> {
                 "dst2": dst2.unwrap_or(i32::MIN),
                 "expansionrate": self.note.expansion_rate.unwrap_or([100, 100]),
                 "dst": self.note.dst,
+                "lr2Dst": self.note.destinations,
                 "group": self.note.group,
                 "bpm": self.note.bpm,
                 "stop": self.note.stop,

@@ -39,9 +39,14 @@ struct TestLuaMainState {
     session_counts: (i64, i64),
     score_date: i64,
     now_us: i64,
+    result_panel: Option<i32>,
 }
 
 impl LuaMainState for TestLuaMainState {
+    fn result_panel(&self) -> Option<i32> {
+        self.result_panel
+    }
+
     fn option(&self, id: i32) -> bool {
         self.options.get(&id).copied().unwrap_or(false)
     }
@@ -194,3 +199,5 @@ mod cases_06;
 mod cases_07;
 #[path = "tests/custom_timers.rs"]
 mod custom_timers;
+#[path = "tests/result_panels.rs"]
+mod result_panels;

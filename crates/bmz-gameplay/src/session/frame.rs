@@ -434,8 +434,11 @@ fn apply_battle_opponent_outcome(
                 event.time,
             );
         }
-        display_judgements
-            .push(DisplayJudgementEvent { judgement: event, combo: opponent.score.combo });
+        display_judgements.push(DisplayJudgementEvent {
+            display_time: event.time,
+            judgement: event,
+            combo: opponent.score.combo,
+        });
     }
     for mine in outcome.mine_hits {
         opponent.gauge.apply_mine(mine.damage);

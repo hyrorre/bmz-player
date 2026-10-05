@@ -128,7 +128,7 @@ pub struct SkinDocument {
     pub custom_events: Vec<SkinCustomEventDef>,
     /// Lua Result スキンがロード時に選んだ展開パネル。
     ///
-    /// WMII の `Expand_op` をロード時宣言へ変換した場合だけ設定され、
+    /// Lua の `Expand_op` / `result_mode` を認識した場合に設定され、
     /// 0=非表示、1=IR、2=グラフとして Result 入力と描画状態を同期する。
     #[serde(default, rename = "resultPanelDefault")]
     pub result_panel_default: Option<i32>,
@@ -289,6 +289,8 @@ pub struct SkinOffsetDef {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SkinSourceDef {
+    #[serde(default, rename = "lr2ColorKey")]
+    pub lr2_color_key: Option<[u8; 3]>,
     #[serde(default, deserialize_with = "deserialize_skin_id")]
     pub id: String,
     #[serde(default)]
@@ -404,8 +406,19 @@ pub struct SkinValueDef {
     pub offset: Vec<SkinValueDef>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct SkinLr2SystemFontDef {
+    pub size: i32,
+    #[serde(default)]
+    pub thickness: i32,
+    #[serde(default, rename = "type")]
+    pub font_type: i32,
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 pub struct SkinTextDef {
+    #[serde(default, rename = "lr2SystemFont")]
+    pub lr2_system_font: Option<SkinLr2SystemFontDef>,
     #[serde(default, deserialize_with = "deserialize_skin_id")]
     pub id: String,
     #[serde(default, deserialize_with = "deserialize_skin_id")]

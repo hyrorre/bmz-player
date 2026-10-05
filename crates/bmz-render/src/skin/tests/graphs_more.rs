@@ -103,7 +103,7 @@ fn static_render_items_resolve_gauge_in_destination_order() {
 }
 
 #[test]
-fn best_and_target_scores_follow_note_progress() {
+fn best_and_target_scores_show_final_values_while_differences_follow_note_progress() {
     let state = SkinDrawState {
         play_screen: true,
         ex_score: 450,
@@ -116,11 +116,80 @@ fn best_and_target_scores_follow_note_progress() {
 
     assert_eq!(skin_state_number(150, &state), Some(1800));
     assert_eq!(skin_state_number(170, &state), Some(1800));
-    assert_eq!(skin_state_number(121, &state), Some(400));
-    assert_eq!(skin_state_number(151, &state), Some(400));
+    assert_eq!(skin_state_number(121, &state), Some(1600));
+    assert_eq!(skin_state_number(151, &state), Some(1600));
     assert_eq!(skin_state_number(152, &state), Some(0));
     assert_eq!(skin_state_number(172, &state), Some(0));
     assert_eq!(skin_state_number(153, &state), Some(50));
+    assert!(approx_eq(graph_value(114, &state), 0.2));
+    assert!(approx_eq(graph_value(115, &state), 0.8));
+}
+
+#[test]
+fn target_score_refs_return_final_score_at_every_note_progress() {
+    let mut state = SkinDrawState {
+        play_screen: true,
+        total_notes: 1000,
+        target_ex_score: Some(1600),
+        ..SkinDrawState::default()
+    };
+    for past_notes in [0, 250, 1000] {
+        state.past_notes = past_notes;
+        for ref_id in [121, 151] {
+            assert_eq!(
+                skin_state_number(ref_id, &state),
+                Some(1600),
+                "ref={ref_id}, past={past_notes}"
+            );
+        }
+    }
+}
+
+#[test]
+fn target_score_refs_preserve_zero_missing_and_empty_chart_values() {
+    for (total_notes, target_ex_score, expected) in
+        [(1000, Some(0), Some(0)), (1000, None, None), (0, Some(1600), Some(1600))]
+    {
+        let state =
+            SkinDrawState { play_screen: true, total_notes, target_ex_score, ..Default::default() };
+        for ref_id in [121, 151] {
+            assert_eq!(
+                skin_state_number(ref_id, &state),
+                expected,
+                "ref={ref_id}, total={total_notes}"
+            );
+        }
+    }
+}
+
+#[test]
+fn target_score_value_text_and_lua_paths_follow_target_updates() {
+    let mut state = SkinDrawState {
+        play_screen: true,
+        total_notes: 1000,
+        past_notes: 250,
+        ..SkinDrawState::default()
+    };
+    for ref_id in [121, 151] {
+        let value = SkinValueDef { ref_id, ..Default::default() };
+        let text = SkinTextDef { number_ref: Some(ref_id), ..Default::default() };
+        for (target, expected, expected_text, expected_lua) in [
+            (None, None, "", 0),
+            (Some(1600), Some(1600), "1600", 1600),
+            (Some(1800), Some(1800), "1800", 1800),
+            (Some(0), Some(0), "0", 0),
+            (None, None, "", 0),
+        ] {
+            state.target_ex_score = target;
+            assert_eq!(skin_value_number_for_destination(&value, &state), expected, "ref={ref_id}");
+            assert_eq!(
+                skin_state_text_with_draw_state(&text, Some(&state), &SkinTextState::default()),
+                expected_text,
+                "ref={ref_id}"
+            );
+            assert_eq!(lua_main_state_number(ref_id, &state), expected_lua, "ref={ref_id}");
+        }
+    }
 }
 
 #[test]

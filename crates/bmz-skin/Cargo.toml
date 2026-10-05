@@ -8,6 +8,7 @@ authors.workspace = true
 [dependencies]
 anyhow.workspace = true
 bmz-skin-document = { path = "../bmz-skin-document" }
+bmz-skin-assets = { path = "../bmz-skin-assets" }
 encoding_rs.workspace = true
 getrandom.workspace = true
 libc.workspace = true

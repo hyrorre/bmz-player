@@ -279,8 +279,11 @@ impl SkinContext {
         state: &SkinDrawState,
     ) -> Option<Rect> {
         let document = self.document.as_ref()?;
+        if document.note.as_ref().is_some_and(|note| note.lr2_horizontal) {
+            return self.prepare_note_layout(key_mode, state).note_rect(lane, note_y, note_height);
+        }
         let enabled_options = document.enabled_options();
-        let area = document.note_lane_area(lane, key_mode, &enabled_options)?;
+        let area = note_lane_area_for_state(document, lane, key_mode, &enabled_options, state)?;
         let canvas_h = document.h.max(1) as f32;
         let bottom_y = note_progress_to_y(area, note_y, state, canvas_h);
         let rect =
@@ -298,11 +301,14 @@ impl SkinContext {
     ) -> Option<Rect> {
         let document = self.document.as_ref()?;
         let note = document.note.as_ref()?;
+        if note.lr2_horizontal {
+            return self.prepare_note_layout(key_mode, state).missed_rect(lane, fall, note_height);
+        }
         if note.dst2 == i32::MIN {
             return None;
         }
         let enabled_options = document.enabled_options();
-        let area = document.note_lane_area(lane, key_mode, &enabled_options)?;
+        let area = note_lane_area_for_state(document, lane, key_mode, &enabled_options, state)?;
         let canvas_h = document.h.max(1) as f32;
         let judge_bottom = note_judge_bottom_y(area, state, canvas_h);
         let target_bottom = (canvas_h - note.dst2 as f32) / canvas_h;
@@ -323,10 +329,15 @@ impl SkinContext {
         state: &SkinDrawState,
     ) -> Option<Rect> {
         let document = self.document.as_ref()?;
+        if document.note.as_ref().is_some_and(|note| note.lr2_horizontal) {
+            return self.prepare_note_layout(key_mode, state).body_rect(lane, head_y, tail_y);
+        }
         let enabled_options = document.enabled_options();
-        let area = document.note_lane_area(lane, key_mode, &enabled_options)?;
+        let area = note_lane_area_for_state(document, lane, key_mode, &enabled_options, state)?;
         let canvas_h = document.h.max(1) as f32;
-        let note_height = document.note_height_for_lane(lane, key_mode)?;
+        let note_height = lr2_note_frame(document, lane, key_mode, &enabled_options, state)
+            .map(|frame| frame.h.abs() as f32 / canvas_h)
+            .or_else(|| document.note_height_for_lane(lane, key_mode))?;
         let head_bottom = note_progress_to_y(area, head_y, state, canvas_h);
         let tail_bottom = note_progress_to_y(area, tail_y, state, canvas_h);
         // beatoraja の drawLongNote に合わせる:

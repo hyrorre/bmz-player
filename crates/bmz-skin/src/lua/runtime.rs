@@ -85,6 +85,78 @@ pub struct LuaSkinRuntime {
     pub(super) pending_timer_frame_start: bool,
     pub(super) custom_timers: Arc<Mutex<LuaCustomTimers>>,
     pub(super) custom_timer_callbacks: Vec<(i32, usize)>,
+    pub(super) result_panel_bindings: Arc<LuaResultPanelBindings>,
+}
+
+/// The same named panel state recognized by the declarative draw/action bridge.
+/// Retain one rooted closure per shared upvalue; never clone or fold its state.
+#[derive(Default)]
+pub(super) struct LuaResultPanelBindings {
+    global: bool,
+    locals: Vec<(Function, i32)>,
+}
+
+impl LuaResultPanelBindings {
+    pub(super) fn new(lua: &Lua, callbacks: &[LuaRuntimeCallback]) -> Self {
+        let global = lua
+            .globals()
+            .raw_get::<Value>("Expand_op")
+            .ok()
+            .and_then(lua_result_panel_value)
+            .is_some();
+        let mut seen = BTreeSet::new();
+        let locals = callbacks
+            .iter()
+            .filter_map(|callback| {
+                let function = callback.function.as_ref()?;
+                let (index, _, identity) = lua_result_mode_binding(lua, function)?;
+                seen.insert(identity).then(|| (function.clone(), index))
+            })
+            .collect();
+        Self { global, locals }
+    }
+
+    fn bind<'a>(&'a self, lua: &'a Lua, panel: Option<i32>) -> ResultPanelGuard<'a> {
+        let mut guard = ResultPanelGuard { lua, global: None, locals: Vec::new() };
+        let Some(panel) = panel.filter(|panel| (0..=2).contains(panel)) else {
+            return guard;
+        };
+        if self.global
+            && let Ok(previous) = lua.globals().raw_get::<Value>("Expand_op")
+        {
+            guard.global = Some(previous);
+            let _ = lua.globals().raw_set("Expand_op", panel);
+        }
+        let mode = match panel {
+            1 => 1,
+            2 => 0,
+            _ => 2,
+        };
+        for (function, index) in &self.locals {
+            if let Some((_, previous)) = lua_result_mode_upvalue(lua, function) {
+                guard.locals.push((function, *index, previous));
+                set_lua_integer_upvalue(lua, function, *index, mode);
+            }
+        }
+        guard
+    }
+}
+
+struct ResultPanelGuard<'a> {
+    lua: &'a Lua,
+    global: Option<Value>,
+    locals: Vec<(&'a Function, i32, i32)>,
+}
+
+impl Drop for ResultPanelGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(previous) = &self.global {
+            let _ = self.lua.globals().raw_set("Expand_op", previous.clone());
+        }
+        for (function, index, previous) in &self.locals {
+            set_lua_integer_upvalue(self.lua, function, *index, *previous);
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -339,6 +411,7 @@ impl LuaSkinRuntime {
             lua: self.lua.clone(),
             dispatch: self.main_state_dispatch.clone(),
             custom_timers: self.custom_timers.clone(),
+            result_panel_bindings: self.result_panel_bindings.clone(),
         }
     }
 
@@ -363,6 +436,7 @@ pub struct LuaRuntimeStateScope {
     lua: Lua,
     dispatch: Table,
     custom_timers: Arc<Mutex<LuaCustomTimers>>,
+    result_panel_bindings: Arc<LuaResultPanelBindings>,
 }
 
 impl LuaRuntimeStateScope {
@@ -373,6 +447,9 @@ impl LuaRuntimeStateScope {
         state: &dyn LuaMainState,
         run: impl FnOnce() -> R,
     ) -> mlua::Result<R> {
+        // Covers both individual callbacks and the renderer's shared scope.
+        // Restore on nesting/unwind without resetting any other closure state.
+        let _panel = self.result_panel_bindings.bind(&self.lua, state.result_panel());
         self.lua.scope(|scope| {
             let dispatch = scope.create_function(
                 |lua, (operation, argument, timer_value): (u8, Value, Option<i64>)| {

@@ -45,7 +45,13 @@ macro_rules! skin_document_render_play_lane_methods {
                 else {
                     continue;
                 };
-                frame.y += (timeline_bottom_px - judge_bottom_px).round() as i32;
+                if self.note.as_ref().is_some_and(|note| note.lr2_horizontal) {
+                    let distance = (1.0 - area.x).max(0.0) * self.w.max(1) as f32;
+                    let lift = (state.offset_lift_px as f32).clamp(0.0, distance);
+                    frame.x += (note_y.clamp(0.0, 1.0) * (distance - lift)).round() as i32;
+                } else {
+                    frame.y += (timeline_bottom_px - judge_bottom_px).round() as i32;
+                }
                 apply_bar_line_skin_offsets_to_frame(destination, &mut frame, state);
                 let Some(image) = images.get(destination.id.as_str()) else {
                     continue;
@@ -57,8 +63,9 @@ macro_rules! skin_document_render_play_lane_methods {
                 let (rect, uv) = stretch_skin_image_geometry(
                     destination.stretch,
                     normalize_skin_frame_rect(frame, self.w, self.h),
-                    skin_image_texture_region_for_state(
+                    skin_image_texture_region_for_destination(
                         image,
+                        destination,
                         source.source_size,
                         state,
                         pixel_rect,
@@ -132,7 +139,13 @@ macro_rules! skin_document_render_play_lane_methods {
             let enabled_options = self.enabled_options();
             self.note_lane_area(Lane::Scratch, KeyMode::K7, &enabled_options)
                 .or_else(|| self.note_lane_area(Lane::Key1, KeyMode::K7, &enabled_options))
-                .map(|area| (area.height * self.h.max(1) as f32).round() as i32)
+                .map(|area| {
+                    if self.note.as_ref().is_some_and(|note| note.lr2_horizontal) {
+                        ((1.0 - area.x).max(0.0) * self.w.max(1) as f32).round() as i32
+                    } else {
+                        (area.height * self.h.max(1) as f32).round() as i32
+                    }
+                })
                 .filter(|height| *height > 0)
         }
 

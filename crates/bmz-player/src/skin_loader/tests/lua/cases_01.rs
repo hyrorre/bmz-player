@@ -210,15 +210,12 @@ fn luxe_flat_result_decodes_local_panel_state_and_tab_actions() {
         DestinationListEntry::Single(destination)
             if destination.draw.contains("result_panel(2)")
     )));
-    assert_eq!(
-        loaded
-            .document
-            .value
-            .iter()
-            .find(|value| value.id == "rank_diff_count")
-            .map(|value| value.value_expr.as_str()),
-        Some("bmz:nearest_rank_diff_abs")
-    );
+    // This callback also updates shared rank/panel state. Its original Lua
+    // must survive inference; result_grade tests the resulting rendered digits.
+    assert!(loaded.lua_runtime.is_some());
+    assert!(loaded.document.value.iter().any(|value| {
+        value.id == "rank_diff_count" && value.value_expr.starts_with("bmz:lua_value_callback:")
+    }));
     assert_eq!(
         loaded
             .document
@@ -241,7 +238,7 @@ fn luxe_flat_result_decodes_local_panel_state_and_tab_actions() {
         entry,
         DestinationListEntry::Single(destination)
             if destination.id == "rank_diff_aaa_plus"
-                && destination.draw.contains("nearest_rank(AAA,plus)")
+                && destination.draw.starts_with("bmz:lua_draw_callback:")
     )));
 }
 

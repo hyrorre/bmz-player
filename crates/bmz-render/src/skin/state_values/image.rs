@@ -57,6 +57,38 @@ pub(super) fn skin_image_texture_region_for_state(
     skin_image_texture_region_with_elapsed(image, source_size, elapsed_ms, Some(state), pixel_rect)
 }
 
+pub(super) fn skin_image_texture_region_for_destination(
+    image: &SkinImageDef,
+    destination: &SkinDestinationDef,
+    source_size: SkinImageSize,
+    state: &SkinDrawState,
+    pixel_rect: (i32, i32, i32, i32),
+) -> TextureRegion {
+    if !destination.lr2_timing {
+        return skin_image_texture_region_for_state(image, source_size, state, pixel_rect);
+    }
+    let elapsed = lr2_source_elapsed(image.timer, destination, state);
+    skin_image_texture_region_with_elapsed(image, source_size, elapsed, Some(state), pixel_rect)
+}
+
+pub(super) fn lr2_source_elapsed(
+    timer: Option<i32>,
+    destination: &SkinDestinationDef,
+    state: &SkinDrawState,
+) -> i32 {
+    let elapsed = skin_timer_elapsed_ms(timer, state).unwrap_or(0);
+    let start = if timer.unwrap_or(0) == destination.timer.unwrap_or(0) {
+        // LR2 destination rows are unconditional after CSV preprocessing.
+        destination_animation_frames(&destination.dst, &[])
+            .next()
+            .and_then(|frame| frame.time)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    elapsed.saturating_sub(start).max(0)
+}
+
 fn skin_image_texture_region_with_elapsed(
     image: &SkinImageDef,
     source_size: SkinImageSize,

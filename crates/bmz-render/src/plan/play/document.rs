@@ -55,30 +55,21 @@ fn push_document_long_notes(
     for body in &snapshot.visible_long_notes {
         let start = commands.len();
         if let Some(rect) = notes.body_rect(body.lane, body.head_y, body.tail_y)
-            && let Some(item) = skin.document_long_body_item(
-                body.lane,
-                snapshot.key_mode,
-                rect,
-                body.mode,
-                body.body_state,
-                skin_state,
-            )
+            && let Some(item) = notes.body_item(body.lane, rect, body.mode, body.body_state)
         {
             append_document_item(commands, skin, skin_state, item);
         }
 
         let note_height = notes.note_height(body.lane).unwrap_or(NOTE_HEIGHT);
         if let Some(rect) = notes.note_rect(body.lane, body.head_y, note_height)
-            && let Some(item) =
-                skin.document_ln_start_item(body.lane, snapshot.key_mode, rect, body.mode)
+            && let Some(item) = notes.cap_item(body.lane, rect, body.mode, false)
         {
             append_document_item(commands, skin, skin_state, item);
         }
         if (body.mode != LongNoteMode::Ln || snapshot.show_ln_tail_cap)
             && body.tail_y < 1.0
             && let Some(rect) = notes.note_rect(body.lane, body.tail_y, note_height)
-            && let Some(item) =
-                skin.document_ln_end_item(body.lane, snapshot.key_mode, rect, body.mode)
+            && let Some(item) = notes.cap_item(body.lane, rect, body.mode, true)
         {
             append_document_item(commands, skin, skin_state, item);
         }
@@ -106,12 +97,8 @@ fn push_document_lane(
             apply_note_expansion(&mut rect, skin.document_note_expansion_scale(skin_state));
         }
         let item = match note.kind {
-            NoteVisualKind::LnStart => {
-                skin.document_ln_start_item(lane, snapshot.key_mode, rect, LongNoteMode::Ln)
-            }
-            NoteVisualKind::LnEnd => {
-                skin.document_ln_end_item(lane, snapshot.key_mode, rect, LongNoteMode::Ln)
-            }
+            NoteVisualKind::LnStart => notes.cap_item(lane, rect, LongNoteMode::Ln, false),
+            NoteVisualKind::LnEnd => notes.cap_item(lane, rect, LongNoteMode::Ln, true),
             NoteVisualKind::Tap => notes.tap_item(
                 lane,
                 rect,
@@ -132,7 +119,7 @@ fn push_document_lane(
         let Some(rect) = notes.note_rect(lane, mine.y, note_height) else {
             continue;
         };
-        if let Some(item) = skin.document_mine_item(lane, snapshot.key_mode, rect) {
+        if let Some(item) = notes.mine_item(lane, rect) {
             append_document_item(commands, skin, skin_state, item);
         } else {
             append_document_item(

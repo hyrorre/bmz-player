@@ -380,6 +380,9 @@ pub struct SkinRuntimeEvent {
 pub struct DisplayJudgementEvent {
     pub judgement: JudgementEvent,
     pub combo: u32,
+    /// 演出の開始時刻。実入力では入力オフセット補正前の譜面時刻を保持する。
+    /// 採点・FAST/SLOW・リプレイ用の `judgement.time` とは独立する。
+    pub display_time: TimeUs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

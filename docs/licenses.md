@@ -10,6 +10,15 @@ BMZ Player source code is licensed as `GPL-3.0-only`.
 - The full GPLv3 text is in `LICENSE`.
 - First-party crates under `crates/` inherit the workspace license.
 
+## DXArchive format reader
+
+`bmz-skin-assets` reads legacy DXArchive assets without linking or bundling DxLib.
+The Rust implementation references GARbro's MIT-licensed `ArcDX.cs` / `DxKey.cs`
+and the legacy DXArchive 1.02 format implementation. GARbro's copyright and MIT
+notice are preserved in [THIRD-PARTY-NOTICES.txt](../THIRD-PARTY-NOTICES.txt).
+No third-party skin archives are included; the small test archive is generated
+specifically for BMZ's tests.
+
 ## FFmpeg
 
 BMZ Player uses FFmpeg through the Rust `ffmpeg-next` crate.

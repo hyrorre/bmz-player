@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use bmz_skin_document::{
     SKIN_OPTION_BMZ_LR2_JUDGE_DETAIL_EARLY_LATE, SKIN_OPTION_BMZ_LR2_JUDGE_DETAIL_MS,
-    SKIN_OPTION_BMZ_LR2_JUDGE_DETAIL_OFF, SKIN_REF_BMZ_LR2_FAST_SLOW_1P, SKIN_REF_BMZ_LR2_GAUGE_2P,
-    SKIN_REF_BMZ_LR2_GAUGE_TYPE_1P, SKIN_REF_BMZ_LR2_GAUGE_TYPE_2P, SKIN_REF_BMZ_LR2_HISPEED,
+    SKIN_OPTION_BMZ_LR2_JUDGE_DETAIL_OFF, SKIN_REF_BMZ_LR2_2P_BASE, SKIN_REF_BMZ_LR2_FAST_SLOW_1P,
+    SKIN_REF_BMZ_LR2_GAUGE_2P, SKIN_REF_BMZ_LR2_GAUGE_TYPE_1P, SKIN_REF_BMZ_LR2_GAUGE_TYPE_2P,
+    SKIN_REF_BMZ_LR2_HISPEED,
 };
 use encoding_rs::SHIFT_JIS;
 use serde_json::{Value as JsonValue, json};
@@ -89,8 +90,8 @@ impl Default for Header {
             skin_type: 0,
             name: String::new(),
             author: String::new(),
-            w: 1280,
-            h: 720,
+            w: 640,
+            h: 480,
             explicit_resolution_dimensions: false,
             fadeout: 0,
             input: 0,
@@ -159,7 +160,9 @@ struct CsvBuilder<'a> {
     warnings: Vec<SkinLoadWarning>,
     sources: Vec<JsonValue>,
     source_paths: Vec<Option<String>>,
+    transparent_color: [u8; 3],
     fonts: Vec<JsonValue>,
+    system_fonts: Vec<JsonValue>,
     lr2font_ids: Vec<Option<String>>,
     images: Vec<JsonValue>,
     imagesets: Vec<JsonValue>,
@@ -196,6 +199,9 @@ struct CsvBuilder<'a> {
 
 #[derive(Default)]
 struct NoteState {
+    horizontal: bool,
+    auto: Option<Box<NoteState>>,
+    destinations: Vec<Option<JsonValue>>,
     note: Vec<String>,
     lnstart: Vec<String>,
     lnend: Vec<String>,
@@ -362,6 +368,7 @@ fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<Loaded
         offset_values: BTreeMap::new(),
         offset_id_values: BTreeMap::new(),
         files: BTreeSet::new(),
+        random_file_paths: BTreeMap::new(),
         loaded_files: BTreeMap::new(),
         virtual_io_files: BTreeMap::new(),
         opaque: false,

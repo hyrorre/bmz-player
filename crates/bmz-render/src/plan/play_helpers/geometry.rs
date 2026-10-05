@@ -8,9 +8,15 @@ pub(super) fn skin_lane_height_px(
     skin.document()
         .and_then(|document| {
             let enabled_options = document.enabled_options();
-            document.note_lane_area(Lane::Key1, key_mode, &enabled_options)
+            document.note_lane_area(Lane::Key1, key_mode, &enabled_options).map(|area| {
+                if document.note.as_ref().is_some_and(|note| note.lr2_horizontal) {
+                    (1.0 - area.x).max(0.0) * document.w.max(1) as f32
+                } else {
+                    area.height * fallback_canvas_h
+                }
+            })
         })
-        .map_or(fallback_canvas_h, |rect| rect.height * fallback_canvas_h)
+        .unwrap_or(fallback_canvas_h)
 }
 
 pub(super) fn skin_lift_offset_px(lift: f32, lane_h: f32) -> i32 {

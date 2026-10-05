@@ -181,6 +181,9 @@ pub const SKIN_REF_BMZ_LR2_HISPEED: i32 = 19_171;
 pub const SKIN_REF_BMZ_LR2_GAUGE_TYPE_1P: i32 = 19_172;
 pub const SKIN_REF_BMZ_LR2_GAUGE_TYPE_2P: i32 = 19_173;
 pub const SKIN_REF_BMZ_LR2_GAUGE_2P: i32 = 19_174;
+/// LR2 play refs 120..=136; separate from beatoraja's target-score refs.
+pub const SKIN_REF_BMZ_LR2_2P_BASE: i32 = 19_220;
+pub const SKIN_REF_BMZ_LR2_2P_LAST: i32 = 19_236;
 /// BMZ extension: source chart key mode before BATTLE / 7K-to-6K conversion.
 pub const SKIN_REF_BMZ_SOURCE_KEY_MODE: i32 = 19_180;
 /// BMZ extension: exact source key mode options in K4/K5/K6/K7/K8/K9/K10/K14 order.

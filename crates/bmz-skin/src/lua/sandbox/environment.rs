@@ -83,28 +83,53 @@ pub(super) fn install_sandbox(
         let skin_files_for_get_path = skin_files.clone();
         let skin_file_dependency_names_for_get_path = skin_file_dependency_names.clone();
         let dependencies_for_get_path = load_dependencies.clone();
-        let get_path = lua.create_function(move |_, requested: String| {
+        let mut pinned_random_paths = runtime_state
+            .pinned_random_file_paths
+            .iter()
+            .map(|(pattern, paths)| {
+                (pattern.clone(), std::collections::VecDeque::from(paths.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let get_path = lua.create_function_mut(move |_, requested: String| {
             record_skin_config_file_dependency(
                 &requested,
                 &skin_file_dependency_names_for_get_path,
                 dependencies_for_get_path.as_ref(),
             );
-            if skin_config_path_uses_random_selection(&requested, &skin_files_for_get_path) {
+            let random =
+                skin_config_path_uses_random_selection(&requested, &skin_files_for_get_path);
+            if random {
                 // Random は同じ設定値でもロードごとに結果が変わるため、具体パスを
                 // 埋め込んだ document を次回ロードへ再利用できない。
                 mark_load_dependency_opaque(dependencies_for_get_path.as_ref());
             }
-            let path = match skin_config_get_path(
-                &context_for_get_path,
-                &requested,
-                &skin_files_for_get_path,
-            ) {
+            let pattern = requested.replace('\\', "/");
+            let pinned = random
+                .then(|| pinned_random_paths.get_mut(&pattern).and_then(|paths| paths.pop_front()))
+                .flatten();
+            let resolved = if let Some(pinned) = pinned {
+                // The app's previous selection is still subject to the same sandbox checks.
+                context_for_get_path.resolve_path(&pinned)
+            } else {
+                skin_config_get_path(&context_for_get_path, &requested, &skin_files_for_get_path)
+            };
+            let path = match resolved {
                 Ok(path) => path,
                 Err(error) => {
                     mark_load_dependency_opaque(dependencies_for_get_path.as_ref());
                     return Err(mlua::Error::external(error));
                 }
             };
+            if random
+                && let Some(dependencies) = &dependencies_for_get_path
+                && let Ok(mut dependencies) = dependencies.lock()
+            {
+                dependencies
+                    .random_file_paths
+                    .entry(pattern)
+                    .or_default()
+                    .push(path.to_string_lossy().into_owned());
+            }
             record_lua_loaded_file_dependency(&path, dependencies_for_get_path.as_ref());
             Ok(path.to_string_lossy().to_string())
         })?;
