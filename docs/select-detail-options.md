@@ -60,6 +60,8 @@ VALUE_INDEX=-1とする。新E2で変更した時だけOFF / REMOVEへ移る。
 SUDDEN/HIDDENは`with_*_enabled`で他方を保持。LIFTも独立。OFF時も量は保存する。
 量0でONはONと表示する。選択項目の補助情報で保存量を示す。
 キーモードはプレイ開始と同じ変換後の設定対象を使い、BATTLEの描画用DPモードと区別する。
+RANDOM MIXの候補抽出とSkin APIのsource modeは変換前の譜面モードを使う。
+設定参照・編集・保存用のmodeとは分離し、実験機能OFFでもこの区別を維持する。
 曲行は保存済みmode、コースはcommon_key_mode、他の行は明示的なmode filterから
 解決する。ユーザーの追加指定により、未解決コースやALL状態のフォルダ等では
 E2の編集対象を明示的に7Kとする。初期案の「未解決なら編集不可」を置き換える。

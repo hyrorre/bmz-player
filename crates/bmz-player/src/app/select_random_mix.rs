@@ -17,7 +17,7 @@ impl WinitApp {
         };
         let active_song_roots = enabled_root_paths(&self.boot.app_config);
         charts.retain(|chart| chart_is_in_active_song_roots(chart, Some(&active_song_roots)));
-        let key_mode = self.selected_play_mode().unwrap_or(KeyMode::K7);
+        let key_mode = self.selected_source_key_mode().unwrap_or(KeyMode::K7);
         let seed = crate::random_option_seed::fresh_bms_random_seed();
         let config = self.boot.profile_config.select.random_mix;
         let Some(definition) = build_random_mix_definition(&charts, config, key_mode, seed) else {

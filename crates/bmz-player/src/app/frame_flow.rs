@@ -1076,7 +1076,7 @@ impl WinitApp {
                 if self.select.select_option_panel == 2 && self.detail_options_enabled() {
                     Some(self.detail_options_mode())
                 } else {
-                    self.selected_play_mode()
+                    self.selected_play_config_key_mode()
                 }
             })
             .unwrap_or(KeyMode::K7);
