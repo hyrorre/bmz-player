@@ -81,3 +81,11 @@ python scripts/test-windows-cli-console.py target/release/bmz-player.exe
 IR保存と背景IR同期を無効にする明示的な試験フラグです。通常は無効です。
 `BMZ_LATENCY_DIAGNOSTICS=1` で計測を有効にできます。
 測定境界・設定・比較手順は [macOS遅延検証](macos-latency.md) を参照してください。
+
+## Linux音声診断
+
+`audio-probe auto|pipewire|pulse|alsa auto|FRAMES RATE SECONDS` は、設定・DB・ウィンドウを
+作らず、無音の出力ストリームを3〜60秒開きます。`BMZ_LATENCY_DIAGNOSTICS=1`で既存の
+`BMZ_LATENCY_JSON`分布を出力します。終了コードと`audio_open_failure`で初期化失敗を確認できます。
+実コールバックサイズと要求値、API推定と物理測定は別です。
+既存の`--latency-stall-test`もLinuxで利用できます。詳細は[Linux遅延検証](linux-latency.md)を参照してください。

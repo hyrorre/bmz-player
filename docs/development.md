@@ -6,6 +6,9 @@ OS別のRust / FFmpeg等の準備は [README](../README.md) を確認してく�
 
 過去の調査・実装・計測記録は [notesの索引](../notes/README.md) にまとめています。
 
+LinuxのPipeWire/SPA開発依存、任意evdev、共通診断、独立したデータでのA/B検証は
+[Linux遅延検証](linux-latency.md)を参照してください。
+
 ## 同梱アセット
 
 Git管理のデフォルトスキン・サンプル曲・フォントは、そのcheckoutのファイルを使います。

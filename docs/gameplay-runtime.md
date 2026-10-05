@@ -182,3 +182,8 @@ callback 到着遅延が render stall によって増えないこと、snapshot 
 macOSの独立IOHID入力、時計変換、診断の測定境界と100ms停滞試験は
 [macOS遅延検証](macos-latency.md) を参照。winit経路のOSイベント時刻は測定不可として扱い、
 入力キューの観測時刻と判定用タイムスタンプを分離する。
+
+Linuxのgilrsは公開blocking APIで入力到着またはスクラッチ期限まで待機します（制御応答上限50ms）。
+任意evdevはnative X11/logind/デバイス権限に加え25msのwindow側フォーカス確認期限を要求し、
+期限切れ時は入力を抑止します。Wayland/XWayland/Flatpakではwinitです。
+診断・入力源切替・欠落復旧の詳細は[Linux遅延検証](linux-latency.md)を参照してください。

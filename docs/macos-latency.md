@@ -309,3 +309,7 @@ gilrsのnext_event_blockingはmacOSで内部channelのrecv_timeoutを使うが�
 - [Apple: privacy manifestのSystemBootTime利用理由](https://developer.apple.com/documentation/bundleresources/app-privacy-configuration/nsprivacyaccessedapitypes/nsprivacyaccessedapitype)
 - 実際に確認した依存ソース: Cargo registry内の `cpal-0.18.1/src/host/coreaudio/macos/device.rs`、
   `gilrs-core-0.5.15/src/platform/macos/gamepad.rs`、`winit-0.30.13/src/platform_impl/macos/event.rs`。
+
+共通JSON・比較スクリプトは[Linux遅延検証](linux-latency.md)でも使用します。
+`compare-latency.py`はstream id、epoch、input generationごとの最後の累積値を`segments`に保持し、
+再接続や復帰を一つの分布に混ぜません。macOS固有の入力・音声の既定値は変わりません。
