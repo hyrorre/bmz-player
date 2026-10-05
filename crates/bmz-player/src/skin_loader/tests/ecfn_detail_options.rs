@@ -6,7 +6,7 @@ use bmz_render::skin::SkinClickTarget;
 
 // ECFN is a separately installed skin, not a bundled submodule. These tests are
 // explicitly opt-in and fail if the real ADFX02 assets are absent.
-fn skin_path() -> PathBuf {
+pub(super) fn skin_path() -> PathBuf {
     let path = test_app_paths().resource_dir.join("skins/ADFX02/ECFN/select/select.luaskin");
     assert!(path.exists(), "install the extended ADFX02/ECFN skin before running these tests");
     path
@@ -27,7 +27,7 @@ fn renderer() -> Renderer {
     renderer
 }
 
-fn decode(experimental: bool) -> DecodedSkin {
+pub(super) fn decode(experimental: bool) -> DecodedSkin {
     decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
         pinned_sources: None,
         skin_path: &skin_path(),
@@ -48,14 +48,14 @@ fn decode(experimental: bool) -> DecodedSkin {
     .unwrap()
 }
 
-fn event_at(renderer: &Renderer, s: &SelectSnapshot, x: f32, y: f32) -> Option<i32> {
+pub(super) fn event_at(renderer: &Renderer, s: &SelectSnapshot, x: f32, y: f32) -> Option<i32> {
     renderer.select_skin_click_hit(s, x / 1920.0, y / 1080.0).and_then(|hit| match hit.target {
         SkinClickTarget::Event { event_id, .. } => Some(event_id),
         _ => None,
     })
 }
 
-fn switching(from: u8, to: u8, elapsed: i64) -> SelectSnapshot {
+pub(super) fn switching(from: u8, to: u8, elapsed: i64) -> SelectSnapshot {
     let mut s = snapshot(AppLocale::Ja, 0);
     if from == 2 {
         s.detail_options_closing = Some(DetailOptionsClosingSnapshot {
@@ -176,6 +176,11 @@ fn ecfn_detail_options_atomic_activation_and_legacy_fallback() {
         let root = unique_test_dir("bmz-ecfn-detail-fallback");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::copy(source.join("select.lua"), root.join("select.lua")).unwrap();
+        std::fs::copy(
+            source.join("bmz_select_extensions.lua"),
+            root.join("bmz_select_extensions.lua"),
+        )
+        .unwrap();
         if state != "missing" {
             std::fs::copy(
                 source.join("bmz_detail_options.lua"),
@@ -215,6 +220,11 @@ fn ecfn_detail_options_atomic_activation_and_legacy_fallback() {
         )
         .unwrap();
         let active = state == "loaded";
+        assert_eq!(
+            loaded.document.text.iter().any(|t| t.id == "bmz_select_mode"),
+            state != "non-bmz",
+            "basic extensions survive independent detail failure: {state}"
+        );
         assert_eq!(loaded.document.uses_detail_options(), active, "{state}");
         assert_eq!(loaded.document.bmz_detail_options_numbers, active, "{state}");
         assert_eq!(loaded.document.bmz_detail_options_close, active, "{state}");

@@ -56,6 +56,8 @@ mod detail_options;
 mod document;
 #[path = "tests/ecfn_detail_options.rs"]
 mod ecfn_detail_options;
+#[path = "tests/ecfn_extensions.rs"]
+mod ecfn_extensions;
 #[path = "tests/lr2.rs"]
 mod lr2;
 #[path = "tests/lua.rs"]

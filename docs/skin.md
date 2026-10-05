@@ -324,6 +324,9 @@ extended index は beatoraja 互換値 `0=NORMAL`, `1=MIRROR`, `2=RANDOM`, `3=R-
 `4=S-RANDOM`, `5=SPIRAL`, `6=H-RANDOM`, `7=ALL-SCR`, `8=RANDOM-EX`,
 `9=S-RANDOM-EX` に加えて、`10=F-RANDOM`, `11=MF-RANDOM` を返す。
 
+ADFX02/ECFNのBMZ拡張版も通常パネルの1P/2P選択枠に344/345を使い、元の領域へ
+12種類を表示する。選択操作は既存の本体入力に任せ、eventの344/345へ置き換えない。
+
 ### BMZ Attempt Session Mode Ref
 
 beatoraja 互換の assist `ref` / `event_index` `73` は従来どおり 2 値を返す。
@@ -559,6 +562,12 @@ skin 側のスプライト行追加は不要。
 | `bmz_select_bga` | BGA |
 | `bmz_select_chart_replication` | chart replication (`NONE` / `RIVALCHART` / `RIVALOPTION`) |
 | `bmz_select_judge_timing_auto_adjust` | judge timing auto adjust (`ON` / `OFF`) |
+
+ADFX02/ECFNの基本拡張は、上部のモードボタンに`bmz_select_mode`を使い、4K/6K/8Kも
+実際のフィルター名で表示する。透明なクリック領域は既存event 11を維持する。
+LNボタンのref/event 308はそのままに、option 19168でFORCE表示を重ねる。
+基本拡張は`select/bmz_select_extensions.lua`の正常構築後だけ適用し、experimental詳細パネルの
+設定・対応宣言から独立する。新しい公開IDは追加しない。
 
 BMZ 拡張の `panel` は画像を使わない単色矩形で、`color`, `borderColor` は
 `RRGGBB` / `RRGGBBAA`、`borderWidth` は skin canvas pixel で指定する。

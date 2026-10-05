@@ -1,6 +1,6 @@
 # スキン互換の対応状況
 
-この文書は、互換修正や次の作業を選ぶための索引です。最終確認日は2026-10-03です。
+この文書は、互換修正や次の作業を選ぶための索引です。最終確認日は2026-10-05です。
 「対応済み」は記載した範囲の実装・テストがあることを意味し、全スキンでの見た目の完全一致を保証しません。
 BMZ固有のIDや詳細な動作契約は [skin.md](skin.md)、互換修正の方針は [AGENTS.md](../AGENTS.md) を参照します。
 
@@ -18,6 +18,7 @@ BMZ固有のIDや詳細な動作契約は [skin.md](skin.md)、互換修正の�
 | mz-select DETAIL OPTIONS | 既存パネル素材とバージョン/IR欄のbitmap fontを再利用し、環状7列＋補助2列を半透明で表示。timer 22/32、300msの登場・退場に対応し、通常↔詳細の切り替えでは退出と登場を並行再生。退場中は最後の表示データを保持し、退出側の操作だけを無効化。パネルなしへ閉じる間は背後のクリックも遮断。部品の正常ロード時だけ対応宣言し、旧optionpanel3/4のE2開閉表示を置換。本体設定OFF・部品無効・欠落・失敗時とBMZ以外では従来のAssist表示・固定鍵操作を維持。[仕様](select-detail-options.md#mz-select)、[テスト](../crates/bmz-player/src/skin_loader/tests/mz_detail_options.rs) |
 | Luxez-Flat DETAIL OPTIONS | 紫の角丸枠・黒い値欄・オレンジのカーソルを再利用。見出し等は既存bitmap font、値欄はNoto Sans CJK Medium。7可視列＋補助2列、半透明、300msの開閉と通常↔詳細の並行アニメーション。正常ロード時のみ宣言し、旧E2のtimerなしhover領域も置換。本体設定OFF・部品無効・欠落・失敗時とBMZ以外は従来のAssist。[仕様](select-detail-options.md#luxez-flat)、[テスト](../crates/bmz-player/src/skin_loader/tests/luxe_detail_options.rs) |
 | ADFX02 / ECFN DETAIL OPTIONS | 別途導入する拡張済みECFNに対応。既存option.pngの直線枠・黒い値欄・オレンジのカーソル、同梱源暎エムゴを使用。7可視列＋補助2列と共通21項目。200msフェードで通常↔詳細の退出・登場を並行再生し、暗幕は1枚。正常ロード時のみ宣言し、本体設定OFF・部品欠落・失敗時とBMZ以外は従来の3パネル。本体同梱には追加しない。[仕様](select-detail-options.md#adfx02--ecfn)、[明示実行テスト](../crates/bmz-player/src/skin_loader/tests/ecfn_detail_options.rs) |
+| ADFX02 / ECFN 基本拡張 | 通常パネルの1P/2P配置を拡張ref 344/345による12種類へ拡張。既存画像の文字・枠・加算カーソルを再利用し、元の領域に収める。上部は`bmz_select_mode`で4K/6K/8Kを含むフィルター名、option 19168でFORCEを表示。クリックevent 11/308とLN/CN/HCNの画像は維持。experimental詳細パネルとは独立し、モジュール欠落・構築失敗・BMZ以外では元の表示を保持する。[記録](../notes/2026/2026-10-05-ecfn-bmz-extensions.md)、[明示実行テスト](../crates/bmz-player/src/skin_loader/tests/ecfn_extensions.rs) |
 | 基本描画 | source、image/imageset、value/text、note/gauge/judge、slider、hiddenCover、destinationのtimer/op/draw、keyframe、UV animation等。[描画評価](../crates/bmz-render/src/skin/document_render/) |
 | BGAの色・透明度 | destinationのRGBAをBase / Layer / Layer2 / POORのtintと乗算する。Ambientにも合成前に適用。[core/resolve](../crates/bmz-render/src/skin/document_render/core/resolve.rs)、[回帰テスト](../crates/bmz-render/src/skin/tests/play/ambient.rs) |
 | destination変換 | `center`、`offset` / `offsets`、`filter` の処理がある。[geometry](../crates/bmz-render/src/skin/geometry.rs)、[animation](../crates/bmz-render/src/skin/animation.rs)、[core評価](../crates/bmz-render/src/skin/document_render/core/)。オブジェクトごとの適用経路は個別に確認する |

@@ -287,8 +287,10 @@ BMZ以外では新部品がnilを返し、元のUIを維持する。
 `bmzDetailOptions=1`、`bmzDetailOptionsNumbers=true`、`bmzDetailOptionsClose=true`を宣言する。
 本体設定OFF、部品の欠落・例外、BMZ以外では従来の3パネルをそのまま使う。
 構築中は配列をコピーして元データを変更せず、途中の失敗で旧Assistだけが消える状態を防ぐ。
-旧timer 22のdestinationのみ置き換え、通常と旧サブオプションの定義、固定event、ランク表示の
-runtime callbackは保持する。入力・保存・適用条件は共通21項目の本体処理を使う。
+旧timer 22のdestinationのみ置き換え、基本表示拡張適用後の通常パネルと旧サブオプションの定義、
+固定event、ランク表示のruntime callbackは保持する。入力・保存・適用条件は共通21項目の本体処理を使う。
+先に独立ロードする`bmz_select_extensions.lua`は通常パネルの12種類の配置、動的キーモード名、
+FORCEバッジを提供し、experimental OFFでも有効。一方の部品が欠落・失敗しても他方の拡張は維持する。
 
 7可視列＋補助2列、中央選択、274pxの`bmzDetailScroll`を使用する。
 既存`option.png`の2P「譜面の配置」枠を分割して流用する。シアンの外枠だけでなく、
