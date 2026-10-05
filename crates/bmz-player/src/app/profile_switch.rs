@@ -152,7 +152,7 @@ impl WinitApp {
             && self.select.settings_edit.is_none()
             && self.select.key_config_edit.is_none()
             && self.jobs.pending_replay_import.is_none()
-            && self.jobs.pending_update_handoff.is_none()
+            && self.jobs.updates.pending_handoff.is_none()
             && !self.ui.egui.as_ref().is_some_and(EguiLayer::profile_operations_busy)
     }
 

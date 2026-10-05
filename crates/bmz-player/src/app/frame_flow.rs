@@ -223,7 +223,8 @@ impl WinitApp {
         let result_ir_panel = self.result.result_ir.as_mut();
         let update_dialog = self
             .jobs
-            .update_prompt
+            .updates
+            .prompt
             .as_ref()
             .filter(|_| update_allowed)
             .map(UpdatePrompt::as_dialog);
@@ -303,7 +304,7 @@ impl WinitApp {
                     scene,
                     practice_overlay,
                     select_course_builder,
-                    self.jobs.update_prompt.is_some(),
+                    self.jobs.updates.prompt.is_some(),
                 )
             });
         if !use_idle_frame {

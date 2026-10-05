@@ -27,7 +27,7 @@ impl WinitApp {
     /// network worker群へSelect実行許可を同期する。
     pub(super) fn sync_select_maintenance_gate(&self) {
         if !self.select_maintenance_allowed() {
-            if let Some(progress) = &self.jobs.update_progress {
+            if let Some(progress) = &self.jobs.updates.progress {
                 progress.paused.store(true, Ordering::Relaxed);
                 progress.cancel.store(true, Ordering::Relaxed);
             }
@@ -81,19 +81,19 @@ impl WinitApp {
     }
 
     pub(super) fn start_queued_song_scan_if_idle(&mut self) {
-        if self.jobs.pending_song_scan.is_some() {
+        if self.jobs.song_scan.pending.is_some() {
             return;
         }
-        if let Some((roots, force, label, scope)) = self.jobs.queued_song_scans.pop_front() {
+        if let Some((roots, force, label, scope)) = self.jobs.song_scan.queued.pop_front() {
             self.spawn_song_scan_with_scope(roots, force, label, scope);
         }
     }
 
     pub(super) fn start_queued_update_check_if_idle(&mut self) {
-        if self.jobs.pending_update_check.is_some() {
+        if self.jobs.updates.pending_check.is_some() {
             return;
         }
-        if let Some((label, report_up_to_date)) = self.jobs.queued_update_check.take() {
+        if let Some((label, report_up_to_date)) = self.jobs.updates.queued_check.take() {
             self.spawn_update_check(label, report_up_to_date);
         }
     }

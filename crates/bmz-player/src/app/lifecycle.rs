@@ -618,7 +618,7 @@ impl WinitApp {
         if pause_update {
             crate::update::sparkle::pause();
         }
-        if let Some(progress) = &self.jobs.update_progress {
+        if let Some(progress) = &self.jobs.updates.progress {
             progress.cancel.store(true, Ordering::Relaxed);
         }
         if let Some(handle) = self.integrations.discord_presence.take() {

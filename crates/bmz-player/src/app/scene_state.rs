@@ -340,7 +340,7 @@ impl WinitApp {
 
     pub(super) fn background_task_overlay_text(&self) -> String {
         let mut tasks = Vec::new();
-        if let Some(progress) = self.jobs.song_scan_progress {
+        if let Some(progress) = self.jobs.song_scan.progress {
             tasks.push(format!("SCAN {} / {}", progress.done, progress.total));
         }
         if let Some(pending) = &self.jobs.pending_replay_import {

@@ -39,3 +39,17 @@
 検証（Windows）: fmt、対象crateのcheck・all-targets Clippy・全testが成功。
 `cargo test -p bmz-player --locked --no-fail-fast`: 2,195成功、19 ignored。
 実機の演奏・リトライは未実施。ログ: `.local/refactor-02-full.log`。
+
+## 3. Background job
+
+- 1,384行の `background_jobs.rs` をSelect更新・インポート・曲スキャン・難易度表・
+  アプリ更新の5モジュールへ分割した。処理の可視範囲はapp内に維持する。
+- 曲スキャンの実行中・FIFO queue・進捗を `SongScanRuntime`、更新確認・download・
+  handoff・dialogを `AppUpdateRuntime` に集約した。
+- 更新確認の受信口と通知意図は `PendingUpdateCheck` に束ね、完了/切断時に一緒に
+  消費する。中断からの再投入も共通のqueue処理を通し、保留中の手動要求を維持する。
+- Empty/Paused/Disconnectedと手動・自動要求の併合をテストした。
+
+検証（Windows）: fmt、対象crateのcheck・all-targets Clippy・全testが成功。
+全testは2,197成功、19 ignored。実際の更新適用やmacOS Sparkle操作は未実施。
+ログ: `.local/refactor-03-full.log`。

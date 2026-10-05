@@ -246,22 +246,10 @@ pub(super) struct AppJobs {
     pub(super) pending_locale_refresh: bool,
     /// 通常表・rianIR表の取得channel、queue、progress、世代状態。
     pub(super) table_fetch: TableFetchRuntime,
-    pub(super) pending_song_scan: Option<PendingSongScan>,
+    pub(super) song_scan: SongScanRuntime,
     pub(super) pending_replay_import: Option<PendingReplayImport>,
-    /// Select外で要求されたscanを開始せず、次のSelectまでFIFOで保持する。
-    pub(super) queued_song_scans: VecDeque<(Vec<PathEntry>, bool, String, SongScanScope)>,
     pub(super) pending_chart_download: Option<Receiver<Result<ChartDownloadBatchResult>>>,
-    pub(super) song_scan_progress: Option<ScanProgress>,
-    pub(super) pending_update_check: Option<Receiver<UpdateCheckWorkerResult>>,
-    pub(super) pending_update_check_reports_up_to_date: bool,
-    /// 自動・手動update checkをSelectまで保留する。手動要求を優先して結果を表示する。
-    pub(super) queued_update_check: Option<(&'static str, bool)>,
-    pub(super) pending_update_download: Option<Receiver<Result<DownloadedUpdate>>>,
-    pub(super) update_progress: Option<Arc<crate::update::DownloadProgress>>,
-    pub(super) downloaded_update: Option<DownloadedUpdate>,
-    pub(super) pending_update_handoff: Option<Receiver<Result<bmz_updater::process::Handoff>>>,
-    pub(super) update_prompt: Option<UpdatePrompt>,
-    pub(super) update_dismissed_session_version: Option<String>,
+    pub(super) updates: update_runtime::AppUpdateRuntime,
     /// 起動時に1回だけ実行するrianIRライバル一覧同期。
     pub(super) startup_rival_sync: Option<RianRivalSyncRequest>,
     pub(super) pending_rival_sync: Option<Receiver<RianRivalSyncWorkerResult>>,
@@ -370,4 +358,12 @@ pub(super) struct UiRuntimeState {
     pub(super) last_cursor_position: Option<PhysicalPosition<f64>>,
     /// 現在マウスカーソルが表示されているか。
     pub(super) cursor_visible: bool,
+}
+
+#[derive(Default)]
+pub(super) struct SongScanRuntime {
+    pub(super) pending: Option<PendingSongScan>,
+    /// Select外で要求されたscanを、次のSelectまでFIFOで保持する。
+    pub(super) queued: VecDeque<(Vec<PathEntry>, bool, String, SongScanScope)>,
+    pub(super) progress: Option<ScanProgress>,
 }
