@@ -79,12 +79,12 @@ impl OptionPanelSession {
 
 impl WinitApp {
     pub(super) fn option_panel_exit_blocks_input(&self) -> bool {
-        self.detail_options_enabled()
-            && self.select.select_option_panel == 0
-            && self.select.option_panel_off_started_at[..2]
-                .iter()
-                .flatten()
-                .any(|started| started.elapsed() < Duration::from_millis(300))
+        panel_exit_blocks_input(
+            self.detail_options_enabled() && self.detail_options_available(),
+            self.select.select_option_panel,
+            &self.select.option_panel_off_started_at,
+            Instant::now(),
+        )
     }
 
     pub(super) fn route_select_option_session_event(&mut self, event: &ControlInputEvent) -> bool {
@@ -123,9 +123,117 @@ impl WinitApp {
     }
 }
 
+fn panel_exit_blocks_input(
+    available: bool,
+    panel: u8,
+    off_started_at: &[Option<Instant>; 6],
+    now: Instant,
+) -> bool {
+    available
+        && panel == 0
+        && off_started_at[..2]
+            .iter()
+            .flatten()
+            .any(|started| now.saturating_duration_since(*started) < Duration::from_millis(300))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panel_exit_animation_never_blocks_modal_input() {
+        let base = Instant::now();
+        for slot in [0, 1] {
+            let mut off = [None; 6];
+            off[slot] = Some(base);
+            assert!(panel_exit_blocks_input(true, 0, &off, base));
+            assert!(
+                !panel_exit_blocks_input(false, 0, &off, base),
+                "search/settings own input immediately"
+            );
+            assert!(!panel_exit_blocks_input(true, 1, &off, base));
+            assert!(!panel_exit_blocks_input(true, 0, &off, base + Duration::from_millis(300)));
+        }
+    }
+
+    #[test]
+    fn select_exit_hold_is_cancelled_by_normal_detail_and_pinned_panels() {
+        let base = Instant::now();
+        for detail in [false, true] {
+            for pinned in [false, true] {
+                let mut session = OptionPanelSession::default();
+                let mut input = AppInputRuntime::default();
+                let mut exit_hold = Some(base);
+                input.track_control(&ControlInputEvent::keyboard_parts(
+                    PhysicalKey::Code(KeyCode::Escape),
+                    ElementState::Pressed,
+                    false,
+                ));
+                session.edge(true, false, base);
+                if detail {
+                    session.edge(true, true, base);
+                }
+                if pinned {
+                    session.edge(false, detail, base + Duration::from_millis(100));
+                }
+                let mut panel = 0;
+                let mut on = base;
+                let mut off = [None; 6];
+                assert!(transition_select_option_panel(
+                    &mut panel,
+                    &mut on,
+                    &mut off,
+                    &mut exit_hold,
+                    session.panel,
+                    base,
+                ));
+                assert_eq!(exit_hold, None, "opening cancels even before Escape release");
+                input.track_control(&ControlInputEvent::keyboard_parts(
+                    PhysicalKey::Code(KeyCode::Escape),
+                    ElementState::Released,
+                    false,
+                ));
+                let later = base + SELECT_EXIT_HOLD_DURATION;
+                assert!(!select_exit_hold_due(
+                    &mut exit_hold,
+                    panel == 0 && input.pressed_controls.contains("Escape"),
+                    later
+                ));
+                assert!(transition_select_option_panel(
+                    &mut panel,
+                    &mut on,
+                    &mut off,
+                    &mut exit_hold,
+                    0,
+                    later,
+                ));
+                update_select_exit_hold(&mut exit_hold, ElementState::Pressed, true, later);
+                assert!(
+                    !select_exit_hold_due(&mut exit_hold, true, later),
+                    "closing must not resume the old timer"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn select_exit_hold_requires_continuous_input_and_keeps_normal_deadline() {
+        let base = Instant::now();
+        let mut hold = None;
+        update_select_exit_hold(&mut hold, ElementState::Pressed, false, base);
+        let deadline = base + SELECT_EXIT_HOLD_DURATION;
+        update_select_exit_hold(&mut hold, ElementState::Pressed, true, deadline);
+        assert!(!select_exit_hold_due(&mut hold, true, deadline - Duration::from_millis(1)));
+        assert!(select_exit_hold_due(&mut hold, true, deadline));
+        // Release/focus reconciliation cancels a stale timer even if a modal consumed keyup.
+        assert!(!select_exit_hold_due(&mut hold, false, deadline));
+        assert_eq!(hold, None);
+        assert!(!select_exit_hold_due(&mut hold, true, deadline + Duration::from_secs(1)));
+        update_select_exit_hold(&mut hold, ElementState::Pressed, false, deadline);
+        update_select_exit_hold(&mut hold, ElementState::Released, false, deadline);
+        assert!(!select_exit_hold_due(&mut hold, true, deadline + SELECT_EXIT_HOLD_DURATION));
+    }
 
     #[test]
     fn unavailable_panel_passes_modifier_keys_to_search_and_key_config() {

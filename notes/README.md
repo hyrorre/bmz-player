@@ -36,6 +36,7 @@
 | 2026-10-05 | [ADFX02 / ECFNのBMZ基本拡張](2026/2026-10-05-ecfn-bmz-extensions.md) |
 | 2026-10-05 | [ADFX02 / ECFNのDETAIL OPTIONS表示](2026/2026-10-05-ecfn-detail-options.md) |
 | 2026-10-05 | [DETAIL OPTIONSのexperimental化と2パネル操作](2026/2026-10-05-experimental-detail-options.md) |
+| 2026-10-05 | [DETAIL OPTIONSのレビュー7件への対応](2026/2026-10-05-select-detail-options-review.md) |
 | 2026-10-04 | [PLAYターゲットスコアの最終値表示修正](2026/2026-10-04-play-target-score.md) |
 | 2026-10-04 | [入力オフセットによる判定表示の点滅修正](2026/2026-10-04-input-offset-judge-display.md) |
 | 2026-10-03 | [Luxez-FlatのDETAIL OPTIONS表示](2026/2026-10-03-luxe-flat-detail-options.md) |

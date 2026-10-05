@@ -2,6 +2,12 @@ use super::*;
 
 impl WinitApp {
     pub(super) fn route_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
+        // Releases must clear the exit gesture even when a panel/modal consumes input.
+        if event.physical_key == PhysicalKey::Code(KeyCode::Escape)
+            && event.state == ElementState::Released
+        {
+            self.select.select_exit_hold_started_at = None;
+        }
         if self.jobs.profile_change.is_some() {
             return;
         }
@@ -427,16 +433,12 @@ impl WinitApp {
             // 待機中はエディタからのIPCだけを再生入口にする。Escape長押しによる
             // 通常終了だけはSelectと同じ操作として残す。
             if event.physical_key == PhysicalKey::Code(KeyCode::Escape) {
-                match event.state {
-                    ElementState::Pressed => {
-                        if self.select.select_exit_hold_started_at.is_none() {
-                            self.select.select_exit_hold_started_at = Some(Instant::now());
-                        }
-                    }
-                    ElementState::Released => {
-                        self.select.select_exit_hold_started_at = None;
-                    }
-                }
+                update_select_exit_hold(
+                    &mut self.select.select_exit_hold_started_at,
+                    event.state,
+                    event.repeat,
+                    Instant::now(),
+                );
             }
             return;
         }
@@ -535,16 +537,12 @@ impl WinitApp {
                     return;
                 }
             }
-            match event.state {
-                ElementState::Pressed => {
-                    if self.select.select_exit_hold_started_at.is_none() {
-                        self.select.select_exit_hold_started_at = Some(Instant::now());
-                    }
-                }
-                ElementState::Released => {
-                    self.select.select_exit_hold_started_at = None;
-                }
-            }
+            update_select_exit_hold(
+                &mut self.select.select_exit_hold_started_at,
+                event.state,
+                event.repeat,
+                Instant::now(),
+            );
             return;
         }
 

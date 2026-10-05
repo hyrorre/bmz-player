@@ -2,14 +2,10 @@ use super::*;
 
 impl WinitApp {
     pub(super) fn should_exit_via_select_hold(&mut self) -> bool {
-        if !matches!(self.view_state(), AppViewState::Select) {
-            self.select.select_exit_hold_started_at = None;
-            return false;
-        }
-        let Some(started) = self.select.select_exit_hold_started_at else {
-            return false;
-        };
-        started.elapsed() >= SELECT_EXIT_HOLD_DURATION
+        let allowed = matches!(self.view_state(), AppViewState::Select)
+            && self.select.select_option_panel == 0
+            && self.input.pressed_controls.contains("Escape");
+        select_exit_hold_due(&mut self.select.select_exit_hold_started_at, allowed, Instant::now())
     }
 
     pub(super) fn select_exit_hold_progress(&self) -> f32 {
@@ -187,6 +183,7 @@ impl WinitApp {
             &mut self.select.select_option_panel,
             &mut self.select.option_panel_started_at,
             &mut self.select.option_panel_off_started_at,
+            &mut self.select.select_exit_hold_started_at,
             panel,
             now,
         ) {

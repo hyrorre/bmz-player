@@ -53,12 +53,14 @@ pub(in crate::app) fn transition_select_option_panel(
     current_panel: &mut u8,
     on_started_at: &mut Instant,
     off_started_at: &mut [Option<Instant>; 6],
+    exit_hold_started_at: &mut Option<Instant>,
     next_panel: u8,
     now: Instant,
 ) -> bool {
     if *current_panel == next_panel {
         return false;
     }
+    *exit_hold_started_at = None;
     if let Some(index) = current_panel.checked_sub(1).filter(|index| *index < 6) {
         off_started_at[index as usize] = Some(now);
     }
@@ -68,6 +70,33 @@ pub(in crate::app) fn transition_select_option_panel(
     *current_panel = next_panel;
     *on_started_at = now;
     true
+}
+
+pub(in crate::app) fn select_exit_hold_due(
+    started_at: &mut Option<Instant>,
+    allowed: bool,
+    now: Instant,
+) -> bool {
+    if !allowed {
+        *started_at = None;
+    }
+    started_at
+        .is_some_and(|started| now.saturating_duration_since(started) >= SELECT_EXIT_HOLD_DURATION)
+}
+
+pub(in crate::app) fn update_select_exit_hold(
+    started_at: &mut Option<Instant>,
+    state: ElementState,
+    repeat: bool,
+    now: Instant,
+) {
+    match state {
+        ElementState::Released => *started_at = None,
+        ElementState::Pressed if !repeat => {
+            started_at.get_or_insert(now);
+        }
+        _ => {}
+    }
 }
 
 pub(in crate::app) fn select_hold_state_from_pressed_controls(

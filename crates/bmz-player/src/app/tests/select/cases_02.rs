@@ -178,15 +178,18 @@ fn select_option_panel_transition_tracks_independent_off_timers() {
     let mut current = 1;
     let mut on_started_at = base;
     let mut off_started_at = [None; 6];
+    let mut exit_hold = Some(base);
 
     assert!(transition_select_option_panel(
         &mut current,
         &mut on_started_at,
         &mut off_started_at,
+        &mut exit_hold,
         2,
         base + Duration::from_millis(100),
     ));
     assert_eq!(current, 2);
+    assert_eq!(exit_hold, None);
     assert_eq!(off_started_at[0], Some(base + Duration::from_millis(100)));
     assert_eq!(off_started_at[1], None);
 
@@ -194,6 +197,7 @@ fn select_option_panel_transition_tracks_independent_off_timers() {
         &mut current,
         &mut on_started_at,
         &mut off_started_at,
+        &mut exit_hold,
         0,
         base + Duration::from_millis(200),
     ));
@@ -204,6 +208,7 @@ fn select_option_panel_transition_tracks_independent_off_timers() {
         &mut current,
         &mut on_started_at,
         &mut off_started_at,
+        &mut exit_hold,
         1,
         base + Duration::from_millis(300),
     ));
@@ -213,6 +218,7 @@ fn select_option_panel_transition_tracks_independent_off_timers() {
         &mut current,
         &mut on_started_at,
         &mut off_started_at,
+        &mut exit_hold,
         1,
         base + Duration::from_millis(400),
     ));
@@ -259,6 +265,7 @@ fn select_option_panel_switch_starts_exit_and_entrance_together_for_e2_and_both_
     let mut current = 2;
     let mut on = base;
     let mut off = [None; 6];
+    let mut exit_hold = None;
     for (step, start, select, expected) in [
         (1, true, true, 3),
         (2, false, true, 2),
@@ -270,7 +277,14 @@ fn select_option_panel_switch_starts_exit_and_entrance_together_for_e2_and_both_
         let now = base + Duration::from_millis(step * 50);
         let next = select_option_panel_for_holds(start, select);
         assert_eq!(next, expected);
-        assert!(transition_select_option_panel(&mut current, &mut on, &mut off, next, now));
+        assert!(transition_select_option_panel(
+            &mut current,
+            &mut on,
+            &mut off,
+            &mut exit_hold,
+            next,
+            now
+        ));
         assert_eq!(on, now);
         assert_eq!(off[usize::from(previous - 1)], Some(now));
         if next != 0 {
