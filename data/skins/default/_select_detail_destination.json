@@ -14,7 +14,7 @@
     ]
   },
   {
-    "id": "detail_title",
+    "id": "detail_options_title",
     "op": [
       19300
     ],
@@ -28,7 +28,7 @@
     ]
   },
   {
-    "id": "detail_count",
+    "id": "detail_options_count",
     "op": [
       19300
     ],

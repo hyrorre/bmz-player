@@ -14,6 +14,46 @@ pub(super) fn decode_experimental(path: &Path, kind: SkinKind) -> anyhow::Result
 }
 
 #[test]
+fn detail_default_skin_preserves_song_info_when_closed() {
+    let path = default_skin_document_path_from_paths(&test_app_paths(), SkinKind::Select);
+    for experimental in [false, true] {
+        let decoded = if experimental {
+            decode_experimental(&path, SkinKind::Select)
+        } else {
+            decode_beatoraja_skin(&path, SkinKind::Select)
+        }
+        .unwrap();
+        let mut ids = std::collections::HashSet::new();
+        for text in &decoded.document.text {
+            assert!(ids.insert(&text.id), "duplicate text ID: {:?}", text.id);
+        }
+        let mut renderer = Renderer::default();
+        install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
+            .unwrap();
+        renderer.prepare_scene(AppSceneSnapshot::Select(SelectSnapshot {
+            selected_title: "Selected chart title".into(),
+            rows: vec![bmz_render::scene::SelectRowSnapshot {
+                title: "Selected chart title".into(),
+                is_folder: true,
+                kind: bmz_render::scene::SelectRowKind::Folder,
+                folder_lamp_counts: [12345, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                ..Default::default()
+            }],
+            time: TimeUs(2_000_000),
+            ..Default::default()
+        }));
+        let commands = &renderer.last_plan().unwrap().commands;
+        for expected in ["Selected chart title", "12345"] {
+            assert!(
+                commands.iter().any(|command| matches!(command,
+                DrawCommand::Text { text, .. } if text == expected)),
+                "experimental={experimental}: missing {expected}"
+            );
+        }
+    }
+}
+
+#[test]
 fn detail_experimental_off_keeps_legacy_and_on_shows_numbers_without_buttons() {
     for name in
         ["default/select.json", "mz-select/music_select.luaskin", "Luxez-Flat/music_select.luaskin"]

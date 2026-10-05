@@ -1,12 +1,12 @@
 [
   {
-    "id": "detail_title",
+    "id": "detail_options_title",
     "ref": 19306,
     "size": 24,
     "overflow": 1
   },
   {
-    "id": "detail_count",
+    "id": "detail_options_count",
     "ref": 19309,
     "size": 17,
     "overflow": 1
