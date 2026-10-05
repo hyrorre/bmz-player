@@ -38,20 +38,43 @@ impl PendingCourseStageLaunch {
 /// Cleared when leaving result back to select, or when starting an unrelated chart.
 pub(super) struct PlayMediaCache {
     pub(super) chart_id: i64,
-    /// Present for SameArrange reuse of the exact chart Arc.
-    pub(super) chart: Option<std::sync::Arc<PlayableChart>>,
-    pub(super) opponent_chart: Option<std::sync::Arc<PlayableChart>>,
-    pub(super) source_ln_profile: Option<crate::ln_policy::ChartLnProfile>,
-    pub(super) skin_attempt: Option<bmz_render::snapshot::SkinAttemptState>,
-    pub(super) chart_length_ms: u64,
-    pub(super) render_snapshot_cache:
-        Option<crate::screens::play_snapshot::PlayRenderSnapshotCache>,
+    /// All same-arrangement metadata is present together or absent together.
+    pub(super) prepared_chart: Option<PreparedPlayChart>,
     pub(super) chart_normalization_gain: f32,
-    pub(super) applied_arrange: Option<crate::screens::play_session::AppliedArrange>,
-    pub(super) score_key: Option<crate::storage::score_db::ScoreKey>,
-    pub(super) assist_runtime: bmz_gameplay::session::AssistRuntime,
-    pub(super) score_save_disabled: bool,
     pub(super) bga_frames: BgaFrameCatalog,
     pub(super) bga_assets: Vec<BgaAssetRef>,
     pub(super) video_bga_decoders: crate::video_bga::VideoBgaDecoderMap,
+}
+
+impl PlayMediaCache {
+    pub(super) fn from_running(
+        chart_id: i64,
+        running: &mut crate::audio::RunningPlaySession,
+        mode: ResultRetryMode,
+    ) -> Self {
+        let prepared_chart = (mode == ResultRetryMode::SameArrange).then(|| PreparedPlayChart {
+            chart: Arc::clone(&running.session.chart),
+            opponent_chart: running
+                .session
+                .battle_opponent
+                .as_ref()
+                .map(|opponent| Arc::clone(&opponent.chart)),
+            skin_attempt: running.skin_attempt,
+            source_ln_profile: running.source_ln_profile,
+            chart_length_ms: running.chart_length_ms,
+            render_snapshot_cache: running.render_snapshot_cache.clone(),
+            applied_arrange: running.applied_arrange.clone(),
+            score_key: running.score_key,
+            assist_runtime: running.session.assist,
+            score_save_disabled: running.score_save_disabled,
+        });
+        Self {
+            chart_id,
+            prepared_chart,
+            chart_normalization_gain: running.session.audio_mix.chart_normalization_gain,
+            bga_frames: running.bga_frames.clone(),
+            bga_assets: running.session.chart.bga_assets.clone(),
+            video_bga_decoders: std::mem::take(&mut running.video_bga_decoders),
+        }
+    }
 }

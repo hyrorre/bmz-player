@@ -228,6 +228,8 @@ mod course;
 mod course_sources;
 #[path = "tests/play.rs"]
 mod play;
+#[path = "tests/play_preload.rs"]
+mod play_preload;
 #[path = "tests/result.rs"]
 mod result;
 #[path = "tests/runtime.rs"]

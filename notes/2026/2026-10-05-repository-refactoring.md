@@ -26,3 +26,16 @@
 - 制限環境では一時ファイル/localhostを利用するテストが失敗・待機したため停止し、
   通常権限で全体を再実行して成功した。途中の実行中binaryへの再リンク失敗も再実行で解消。
 - ローカルログ: `.local/refactor-01-full.log`（Git管理外）。
+
+## 2. プレイ先読み
+
+- 通常開始・BGA再利用・同配置リトライのworkerを `app/play_preload.rs` へ集約した。
+  読み込み元をImport/Cachedで明示し、進捗・結果通知・世代IDの処理を共有する。
+- 同配置キャッシュは `PreparedPlayChart` を一式で保持し、複数の独立したOptionと
+  復元時のexpectを廃止した。BGAの所有権移動と音声エンジンの再生成は維持する。
+- 成功/失敗結果の世代IDとchart ID、保持済み譜面によるファイル削除後の再試行、
+  音声sample rate・normalization gainの引き継ぎをテストした。
+
+検証（Windows）: fmt、対象crateのcheck・all-targets Clippy・全testが成功。
+`cargo test -p bmz-player --locked --no-fail-fast`: 2,195成功、19 ignored。
+実機の演奏・リトライは未実施。ログ: `.local/refactor-02-full.log`。

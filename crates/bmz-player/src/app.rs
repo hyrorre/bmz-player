@@ -241,6 +241,7 @@ mod play_flow_replay;
 #[path = "app/play_flow/retry.rs"]
 mod play_flow_retry;
 mod play_loop_flow;
+mod play_preload;
 mod play_preload_state;
 mod play_support;
 mod play_transition_state;
@@ -318,6 +319,7 @@ mod update_runtime;
 use app_support::*;
 use course_metrics_state::*;
 use pending_state::*;
+use play_preload::PlayPreloadSource;
 use play_preload_state::*;
 use play_transition_state::*;
 use runtime_state::*;

@@ -253,17 +253,6 @@ impl WinitApp {
     ) -> u64 {
         self.normalize_key_mode_conversion_options(chart_id, &mut options);
         self.resolve_play_target_from_cache(chart_id, &mut options);
-        // 通常開始・practice・retry は、残っているコース次曲先読みを置き換える。
-        // コース側は worker 開始後に同じ generation の launch 情報を設定し直す。
-        self.play.pending_course_stage_launch = None;
-        self.play.play_preload_generation = self.play.play_preload_generation.wrapping_add(1);
-        let generation = self.play.play_preload_generation;
-        self.play.preloaded_play_session = None;
-        let (tx, rx) = mpsc::channel();
-        let library_db_path = self.boot.app_paths.library_db.clone();
-        let app_config = self.play_session_app_config();
-        let normalization_output_gain =
-            crate::config::play::chart_normalization_output_gain(&self.boot.profile_config);
         let play_config_key_mode =
             effective_play_key_mode(self.key_mode_for_chart(chart_id), options.key_mode_conversion);
         options.hs_fix = hs_fix_option_from_profile(
@@ -278,65 +267,20 @@ impl WinitApp {
                 self.boot.profile_config.play.ln_mode_policy,
                 self.boot.profile_config.play.rule_mode,
             ));
-        let input = SharedInputBackend::default();
-        let preload_input = input.clone();
-        let audio_progress = Arc::new(AtomicU32::new(0));
-        let worker_audio_progress = Arc::clone(&audio_progress);
-        let prepared_chart = Arc::new(OnceLock::new());
-        let worker_prepared_chart = Arc::clone(&prepared_chart);
-        thread::Builder::new()
-            .name(format!("play-preload-{chart_id}"))
-            .spawn(move || {
-                let result = (|| -> Result<PreloadedInputPlaySession> {
-                    let library_db =
-                        crate::storage::library_db::LibraryDatabase::open(&library_db_path)?;
-                    let mut session_options =
-                        crate::screens::play_start::play_session_options_from_start(
-                            &app_config,
-                            options,
-                        );
-                    session_options.play_config_key_mode = Some(play_config_key_mode);
-                    session_options.ln_policy_setting = ln_policy_setting;
-                    session_options.rule_mode = rule_mode;
-                    let preloaded =
-                        crate::screens::play_session::preload_play_session_for_chart_with_callbacks(
-                            &library_db,
-                            chart_id,
-                            session_options.clone(),
-                            normalization_output_gain,
-                            |chart| {
-                                let _ = worker_prepared_chart.set(chart.clone());
-                            },
-                            |loaded, total| {
-                                worker_audio_progress.store(
-                                    resource_load_progress_units(loaded, total),
-                                    Ordering::Relaxed,
-                                );
-                            },
-                        )?;
-                    Ok(PreloadedInputPlaySession {
-                        chart_id,
-                        preloaded,
-                        input: preload_input,
-                        session_options,
-                    })
-                })()
-                .map_err(|error| format!("{error:#}"));
-                let _ = tx.send(PlayPreloadResult { generation, chart_id, result });
-            })
-            .expect("failed to spawn play preload thread");
-        self.play.pending_play_preload = Some(PendingPlayPreload {
-            generation,
-            chart_id,
-            input,
-            audio_progress,
-            prepared_chart,
-            rx,
-        });
-        // 譜面変換結果を受け取ってから、その同じ chart manifest で BMP/BGA を開始する。
-        // ここでは対象だけを予約し、従来の BGA worker による BMS 二重 parse は行わない。
+        let mut session_options =
+            play_session_options_from_start(&self.play_session_app_config(), options);
+        session_options.play_config_key_mode = Some(play_config_key_mode);
+        session_options.ln_policy_setting = ln_policy_setting;
+        session_options.rule_mode = rule_mode;
+        let source = PlayPreloadSource::Import {
+            library_db_path: self.boot.app_paths.library_db.clone(),
+            normalization_output_gain: crate::config::play::chart_normalization_output_gain(
+                &self.boot.profile_config,
+            ),
+        };
+        let generation = self.spawn_play_preload(chart_id, session_options, source);
+        // Wait for the same prepared manifest used by audio before loading BGA.
         self.play.bga_preload.begin_unresolved(chart_id);
-        tracing::info!(chart_id, generation, "play preload started");
         generation
     }
 
