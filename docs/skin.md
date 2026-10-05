@@ -608,7 +608,8 @@ destination に `act` / `click` を置くと、text や panel も image / images
 本体設定`[select].experimental_detail_options = true`（既定false）かつ、JSON documentのルート
 （Luaでは返却するskin table）で`"bmzDetailOptions": 1`と`"bmzDetailOptionsNumbers": true`を
 明示した選曲スキン（type 5）で、新詳細の表示と2パネル入力を有効にする。
-Numbers宣言は数値行の現在値・増減を描画できることを表す。旧v1宣言だけでは従来操作に戻る。
+Numbers宣言は数値行の現在値を表示でき、本体の数値編集操作に対応することを表す。
+同梱3スキンは現在値のみを表示し、＋／−ボタンは置かない。旧v1宣言だけでは従来操作に戻る。
 
 本体はselectの読込optionに予約キー`bmz_detail_options`を文字列`"1"`/`"0"`で渡す。
 Luaは`bmz.get_option("bmz_detail_options", "0")`を確認し、OFFなら旧Assist表示を残すこと。
@@ -720,6 +721,7 @@ OFF値、非適用、編集不可は独立する。effectiveは譜面に変換�
 | 19320..19337 | slot `s=0..8`の数値を1ステップ変更。`19320+2*s`=減少、`19321+2*s`=増加 |
 
 数値eventはその列を選択してから増減する。bool/enum・空き行・非表示・退場中ではno-op。
+同梱スキンでは使わないが、外部スキン用APIとして番号・動作を維持する。
 最小／最大では設定・保存・重い再処理を行わない。argの符号は使わない。
 19304は引数を渡せるイベント経路用。通常のdestinationクリックは可視行eventを使う。
 event引数の符号で19300..19303の方向は変わらない。

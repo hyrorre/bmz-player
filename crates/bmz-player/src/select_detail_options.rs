@@ -130,6 +130,14 @@ pub fn stepped_value(kind: DetailValueKind, value: i64, choices: i64, direction:
 }
 
 impl DetailOptionDef {
+    pub fn guide_key(self) -> &'static str {
+        if matches!(self.kind, DetailValueKind::Number { .. }) {
+            "detail-options-guide-number"
+        } else {
+            "detail-options-guide"
+        }
+    }
+
     pub fn for_setting(setting: SettingsEntryId) -> Option<Self> {
         CATALOG.iter().find(|item| item.setting == setting).copied()
     }

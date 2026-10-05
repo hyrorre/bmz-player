@@ -1,7 +1,7 @@
 use super::*;
 use crate::select_detail_options::{CATALOG, DetailContext, DetailEffects, DetailOptionDef};
 use bmz_render::scene::detail_options::{
-    DETAIL_OPTIONS_CLOSE_MS, DetailOptionsClosingSnapshot, DetailOptionsSnapshot,
+    DETAIL_OPTIONS_CLOSE_MS, DetailOptionsClosingSnapshot, DetailOptionsSnapshot, DetailValueKind,
     detail_options_row_index, detail_options_viewport,
 };
 use std::cell::RefCell;
@@ -289,7 +289,11 @@ impl WinitApp {
         if self.select.select_keys.is_select_scratch_down(control) {
             return Some(DetailInput::Move(1));
         }
-        if device == W_KEYBOARD_DEVICE_ID { detail_arrow_input(control) } else { None }
+        if device == W_KEYBOARD_DEVICE_ID {
+            detail_arrow_input(control, CATALOG[self.select.detail_options.cursor].kind)
+        } else {
+            None
+        }
     }
 
     fn detail_value_keys_held(&self) -> bool {
@@ -500,7 +504,7 @@ impl WinitApp {
             items,
             title: text.text("detail-options-title"),
             scope_label,
-            guide: text.text("detail-options-guide"),
+            guide: text.text(CATALOG[cursor].guide_key()),
             position: format!("{} / {}", cursor + 1, CATALOG.len()),
         });
         *cache = Some((key, snapshot.clone()));
@@ -515,12 +519,14 @@ fn detail_edit_mode(
     source.map(|mode| effective_play_key_mode(mode, conversion)).unwrap_or(KeyMode::K7)
 }
 
-fn detail_arrow_input(control: &str) -> Option<DetailInput> {
+fn detail_arrow_input(control: &str, kind: DetailValueKind) -> Option<DetailInput> {
+    // Choices follow their vertical layout; numbers increase upwards.
+    let up = if matches!(kind, DetailValueKind::Number { .. }) { 1 } else { -1 };
     match control {
         "ArrowLeft" => Some(DetailInput::Move(-1)),
         "ArrowRight" => Some(DetailInput::Move(1)),
-        "ArrowUp" => Some(DetailInput::Value(-1)),
-        "ArrowDown" => Some(DetailInput::Value(1)),
+        "ArrowUp" => Some(DetailInput::Value(up)),
+        "ArrowDown" => Some(DetailInput::Value(-up)),
         _ => None,
     }
 }
@@ -640,9 +646,41 @@ mod tests {
             ("ArrowUp", DetailInput::Value(-1)),
             ("ArrowDown", DetailInput::Value(1)),
         ] {
-            assert_eq!(detail_arrow_input(key), Some(action));
+            for kind in [DetailValueKind::Bool, DetailValueKind::Enum] {
+                assert_eq!(detail_arrow_input(key, kind), Some(action));
+            }
         }
-        assert_eq!(detail_arrow_input("Enter"), None);
+        assert_eq!(detail_arrow_input("Enter", DetailValueKind::Enum), None);
+    }
+
+    #[test]
+    fn detail_numeric_up_and_odd_keys_increase_down_and_even_keys_decrease() {
+        let mut profile = ProfileConfig::new_default("test", "Test", 0);
+        let bindings = SelectKeyBindings::from_profile(&profile.input);
+        for item in
+            CATALOG.iter().filter(|item| matches!(item.kind, DetailValueKind::Number { .. }))
+        {
+            for (control, direction) in [("ArrowUp", 1), ("ArrowDown", -1)] {
+                assert_eq!(
+                    detail_arrow_input(control, item.kind),
+                    Some(DetailInput::Value(direction))
+                );
+                let before = item.value(&profile);
+                assert!(item.adjust(&mut profile, Some(KeyMode::K7), direction));
+                assert_eq!(item.value(&profile), before + i64::from(direction));
+            }
+            for (key, lane, direction) in [
+                ("Z", Lane::Key1, 1),
+                ("S", Lane::Key2, -1),
+                ("Z", Lane::Key8, 1),
+                ("S", Lane::Key9, -1),
+            ] {
+                assert_eq!(bindings.detail_value_direction(key, false), Some(direction));
+                assert_eq!(detail_lane_direction(lane, false), Some(direction));
+            }
+            assert_eq!(detail_arrow_input("ArrowLeft", item.kind), Some(DetailInput::Move(-1)));
+            assert_eq!(detail_arrow_input("ArrowRight", item.kind), Some(DetailInput::Move(1)));
+        }
     }
 
     #[test]

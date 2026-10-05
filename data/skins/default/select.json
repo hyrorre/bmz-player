@@ -15,7 +15,6 @@
   },
   "imageset": [
     { "include": "_select_detail_imageset.json" },
-    { "include": "_select_numeric_imageset.json" },
     { "include": "_select_legacy_assist_imageset.json" },
     {
       "id": "song_bar",

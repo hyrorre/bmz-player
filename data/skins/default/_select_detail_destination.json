@@ -7197,7 +7197,8 @@
   {
     "id": "detail_button_decrease",
     "op": [
-      19300
+      19300,
+      -19305
     ],
     "dst": [
       {
@@ -7211,7 +7212,8 @@
   {
     "id": "detail_caption_decrease",
     "op": [
-      19300
+      19300,
+      -19305
     ],
     "dst": [
       {
@@ -7225,7 +7227,8 @@
   {
     "id": "detail_button_increase",
     "op": [
-      19300
+      19300,
+      -19305
     ],
     "dst": [
       {
@@ -7239,7 +7242,8 @@
   {
     "id": "detail_caption_increase",
     "op": [
-      19300
+      19300,
+      -19305
     ],
     "dst": [
       {

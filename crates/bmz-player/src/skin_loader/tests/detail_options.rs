@@ -14,7 +14,7 @@ pub(super) fn decode_experimental(path: &Path, kind: SkinKind) -> anyhow::Result
 }
 
 #[test]
-fn detail_experimental_off_keeps_legacy_and_on_publishes_numeric_hits() {
+fn detail_experimental_off_keeps_legacy_and_on_shows_numbers_without_buttons() {
     for name in
         ["default/select.json", "mz-select/music_select.luaskin", "Luxez-Flat/music_select.luaskin"]
     {
@@ -41,15 +41,23 @@ fn detail_experimental_off_keeps_legacy_and_on_publishes_numeric_hits() {
             let row = s.detail_options.as_ref().unwrap().selected().unwrap();
             assert!(renderer.last_plan().unwrap().commands.iter().any(|command| matches!(command,
                 DrawCommand::Text { text, .. } if text == &row.value_label)));
+            assert!(
+                !renderer.last_plan().unwrap().commands.iter().any(|command| matches!(command,
+                DrawCommand::Text { text, .. } if text == "+" || text == "−"))
+            );
             for direction in 0..2 {
                 let (x, y) = if name.starts_with("default") {
                     ((64.0 + 165.0 * 3.0 + 42.0 + direction as f32 * 75.0) / 1280.0, 225.0 / 720.0)
                 } else {
                     ((9.0 + 274.0 * 3.0 + 68.0 + direction as f32 * 122.0) / 1920.0, 355.0 / 1080.0)
                 };
-                let hit = renderer.select_skin_click_hit(&s, x, y).unwrap();
+                // Removing the buttons must also remove their invisible edit targets.
+                let hit = renderer.select_skin_click_hit(&s, x, y);
                 assert!(
-                    matches!(hit.target, bmz_render::skin::SkinClickTarget::Event { event_id, .. } if event_id == 19326 + direction),
+                    hit.as_ref().is_none_or(|hit| matches!(
+                        hit.target,
+                        bmz_render::skin::SkinClickTarget::Event { event_id: 19313, .. }
+                    )),
                     "{name}: {hit:?}"
                 );
             }
@@ -87,7 +95,7 @@ pub(super) fn snapshot(locale: AppLocale, cursor: usize) -> SelectSnapshot {
             } else {
                 text.text("detail-options-scope-global")
             },
-            guide: text.text("detail-options-guide"),
+            guide: text.text(CATALOG[cursor].guide_key()),
             position: format!("{} / {}", cursor + 1, CATALOG.len()),
         })),
         ..Default::default()
@@ -146,11 +154,18 @@ fn detail_default_skin_decodes_all_rows_and_routes_only_panel_clicks() {
                 hit.target,
                 bmz_render::skin::SkinClickTarget::Event { event_id: 19310, .. }
             ));
-            let hit = renderer.select_skin_click_hit(&s, 0.85, 0.87).unwrap();
-            assert!(matches!(
-                hit.target,
-                bmz_render::skin::SkinClickTarget::Event { event_id: 19303, .. }
-            ));
+            for (x, expected) in [(0.74, 19302), (0.85, 19303)] {
+                let hit = renderer.select_skin_click_hit(&s, x, 0.87);
+                if matches!(
+                    panel.selected().unwrap().kind,
+                    bmz_render::scene::detail_options::DetailValueKind::Number { .. }
+                ) {
+                    assert!(hit.is_none(), "numeric rows must hide the footer edit buttons");
+                } else {
+                    assert!(matches!(hit.unwrap().target,
+                        bmz_render::skin::SkinClickTarget::Event { event_id, .. } if event_id == expected));
+                }
+            }
             assert!(renderer.select_skin_click_hit(&s, 0.98, 0.98).is_none());
             assert!(renderer.select_skin_slider_hit(&s, 0.5, 0.3).is_none());
         }
@@ -330,6 +345,8 @@ fn detail_options_gpu_previews() {
             renderer.attach_offscreen(bmz_render::renderer::SurfaceSize { width, height }).unwrap();
             for (locale, cursor, scroll) in [
                 (AppLocale::Ja, 0, 0.0),
+                (AppLocale::Ja, 12, 0.0),
+                (AppLocale::En, 12, 0.0),
                 (AppLocale::En, 14, 0.0),
                 (AppLocale::Ja, 0, 0.5),
                 (AppLocale::En, 14, -0.5),

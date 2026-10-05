@@ -1,7 +1,7 @@
 //! Logical panel lifetime is independent of the physical E1/E2 holds.
 use super::*;
 
-const TAP_DURATION: Duration = Duration::from_millis(300);
+const TAP_DURATION: Duration = Duration::from_millis(200);
 
 #[derive(Default)]
 pub(super) struct OptionPanelSession {
@@ -111,14 +111,14 @@ mod tests {
 
     #[test]
     fn tap_pins_hold_closes_and_next_press_closes_without_reopening() {
-        for duration in [0, 1, 299, 300, 900] {
+        for duration in [0, 1, 199, 200, 299, 300, 900] {
             let mut session = OptionPanelSession::default();
             let now = Instant::now();
             session.edge(true, false, now);
             assert_eq!(session.panel, 1);
             session.edge(false, false, now + Duration::from_millis(duration));
-            assert_eq!(session.panel, if duration < 300 { 1 } else { 0 });
-            if duration < 300 {
+            assert_eq!(session.panel, if duration < 200 { 1 } else { 0 });
+            if duration < 200 {
                 session.edge(true, false, now + Duration::from_secs(2));
                 assert_eq!(session.panel, 0);
                 session.edge(false, false, now + Duration::from_millis(2100));

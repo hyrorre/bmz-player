@@ -523,6 +523,7 @@ fn mz_detail_options_gpu_previews() {
             (AppLocale::En, 7, 0.0, 500),
             (AppLocale::Ja, 3, 0.0, 500),
             (AppLocale::Ja, 8, 0.0, 500),
+            (AppLocale::Ja, 12, 0.0, 500),
             (AppLocale::En, 12, 0.0, 500),
             (AppLocale::En, 14, -0.5, 500),
             (AppLocale::Ja, 0, 0.5, 500),
