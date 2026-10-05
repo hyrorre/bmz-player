@@ -324,6 +324,93 @@ fn first_play_result_lua_values_match_beatoraja_missing_score_sentinels() {
 }
 
 #[test]
+fn result_load_state_selects_normal_lr2_bga_layout_includes() {
+    let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+    std::fs::create_dir_all(&data.paths.data_dir).unwrap();
+    let skin_path = data.paths.data_dir.join("result.lr2skin");
+    std::fs::write(
+        &skin_path,
+        "#INFORMATION,7,test,test\n#IF,30\n#INCLUDE,normal.csv\n#ENDIF\n\
+         #IF,31\n#INCLUDE,extend.csv\n#ENDIF\n",
+    )
+    .unwrap();
+    std::fs::write(
+        data.paths.data_dir.join("normal.csv"),
+        "#IMAGE,normal.png\n#SRC_IMAGE,0,0,0,0,10,10,1,1,0,0\n\
+         #DST_IMAGE,0,0,0,0,10,10\n",
+    )
+    .unwrap();
+    // Exercise both startup preload and a finished attempt, including DP.
+    for key_mode in [KeyMode::K7, KeyMode::K14] {
+        let mut runtime = lua_runtime_state_for_result(
+            false,
+            None,
+            true,
+            false,
+            key_mode,
+            BTreeMap::new(),
+            "test",
+        );
+        for finished in [false, true] {
+            if finished {
+                let mut summary = debug_boot_result_summary();
+                summary.key_mode = key_mode;
+                apply_result_summary_lua_load_state(&mut runtime, &summary, "", "", "");
+            }
+            let loaded = bmz_skin::load_lr2_csv_skin_with_runtime_state(
+                &skin_path,
+                bmz_skin::SkinKind::Result,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &runtime,
+            )
+            .unwrap();
+            assert_eq!(loaded.document.destination.len(), 1);
+            assert_eq!(loaded.document.source[0].path, "normal.png");
+            assert_eq!(loaded.dependencies.option_values.get(&30), Some(&true));
+            assert_eq!(loaded.dependencies.option_values.get(&31), Some(&false));
+            assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        }
+    }
+}
+
+#[test]
+fn result_lr2_3r_loads_with_app_state_when_available() {
+    let root = std::env::var_os("BMZ_TEST_LR2_SKIN_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/skins"));
+    let path = root.join("3R/Result/result.lr2skin");
+    if !path.is_file() {
+        eprintln!("SKIP missing {}", path.display());
+        return;
+    }
+    let runtime = lua_runtime_state_for_result(
+        false,
+        None,
+        true,
+        false,
+        KeyMode::K7,
+        BTreeMap::new(),
+        "test",
+    );
+    let decoded = crate::skin_loader::decode_beatoraja_skin_with_options_and_runtime_state(
+        &path,
+        SkinKind::Result,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &runtime,
+    )
+    .unwrap();
+    assert!(decoded.document.destination.len() > 10);
+    assert!(decoded.sources.iter().any(|source| source.source_id == "0"));
+    eprintln!(
+        "3R Result: {} destinations, {} decoded sources",
+        decoded.document.destination.len(),
+        decoded.sources.len()
+    );
+}
+
+#[test]
 fn result_lua_runtime_state_exposes_scene_options() {
     let online = lua_runtime_state_for_result(
         false,

@@ -117,6 +117,8 @@ timer 150はグラフ開始、151は描画完了またはスキップ、152は�
 `STARTINPUT` の待ち時間に従い、グラフのスキップ→ランク表示→更新演出→退出を進める。
 保存対象外のプレイは更新演出を挟まない。演出段階とは独立して既存の保存処理を実行する。
 clear / failedのロード時分岐と解像度指定はdecode cacheの依存関係に含める。
+Resultのロード時はLR2のBGA Size条件をNormal（30=true / 31=false）として渡す。
+Playスキン個別のBGA Size設定とは独立し、これをResultのinclude選択に使う3R等にも適用する。
 
 現時点ではLR2専用のFX/EQ/音声設定パネル、組合せキーフィルター、ディレクトリソート、
 特殊S-RANDOMの挙動、追加日によるBAR_TITLE切替、BAR_RANK / BAR_RIVAL装飾は未対応。

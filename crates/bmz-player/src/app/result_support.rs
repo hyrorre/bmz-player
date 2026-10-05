@@ -480,6 +480,10 @@ pub(super) fn lua_runtime_state_for_result(
     option_values.insert(61, score_save_enabled);
     option_values.insert(32, !autoplay);
     option_values.insert(33, autoplay);
+    // Result has no shared LR2 BGA Size setting. Use the normal layout when
+    // skins reuse this Play setting to select their Result includes (e.g. 3R).
+    option_values.insert(30, true);
+    option_values.insert(31, false);
     // Preload a valid Result asset branch before a finished summary exists.
     // Entry into the actual Result overrides these with the recorded outcome.
     option_values.insert(90, true);
