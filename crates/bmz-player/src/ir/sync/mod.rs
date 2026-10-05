@@ -193,11 +193,13 @@ pub async fn sync_pending_ir_jobs_filtered(
 }
 
 mod evidence;
+mod outcome;
 mod payload;
 mod process;
 mod replay;
 
 use evidence::*;
+use outcome::*;
 use payload::*;
 use process::*;
 use replay::*;

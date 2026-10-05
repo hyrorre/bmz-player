@@ -67,3 +67,19 @@
 bmz-renderは679成功・4 ignored、bmz-playerは2,197成功・19 ignored。
 Lua数値の準備順序・stateful callback・production cacheの既存テストを含む。
 GPUのignored testと実機の描画確認は未実施。ログ: `.local/refactor-04-full.log`。
+
+## 5. IR送信結果
+
+- `sync/process.rs` はclaim・資格情報確認・通信・結果適用・待機の制御に絞った。
+  通信結果は `SubmittedIrJob`、DB/ログ/集計への反映は `JobCompletion` で扱う。
+- Replay/Attestation/Score/Courseの失敗処理を共有し、Retry-After、エラーの原因連鎖、
+  logのrequest/responseを維持する。送信job間のthrottleは成功・失敗共通の一か所とした。
+- provider/credentialsの事前検証失敗は従来通り送信せず次へ進む。
+  確認済みtokenの利用、ランキングのattempt識別、score完了とreplay登録のtransaction、
+  Replay成功時にscore submission logを作らない扱いも維持した。
+- 全job種別の失敗時のDB・log・Retry-After、成功時の集計/ランキング識別、
+  完了処理に失敗した場合のremote response保持を追加テストした。
+
+検証（Windows）: fmt、対象crateのcheck・all-targets Clippy・全testが成功。
+全testは2,200成功、19 ignored。実サーバーへのスコア送信は未実施。
+ログ: `.local/refactor-05-full.log`。
