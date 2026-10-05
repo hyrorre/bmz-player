@@ -1,6 +1,18 @@
 use super::*;
 
 #[test]
+fn experimental_detail_options_defaults_off_and_round_trips() {
+    let mut config = AppConfig::default();
+    assert!(!config.select.experimental_detail_options);
+    let old =
+        toml::to_string(&config).unwrap().replace("experimental_detail_options = false\n", "");
+    assert!(!toml::from_str::<AppConfig>(&old).unwrap().select.experimental_detail_options);
+    config.select.experimental_detail_options = true;
+    let reloaded: AppConfig = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+    assert!(reloaded.select.experimental_detail_options);
+}
+
+#[test]
 fn app_config_loads_missing_logging_section_with_defaults() {
     let serialized = toml::to_string(&AppConfig::default()).unwrap();
     let mut document: toml::Value = toml::from_str(&serialized).unwrap();

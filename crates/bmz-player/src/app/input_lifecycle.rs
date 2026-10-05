@@ -113,6 +113,7 @@ impl WinitApp {
             }
         }
         self.sync_select_holds_from_pressed_controls();
+        self.reconcile_select_option_session();
         self.sync_play_control_holds_from_pressed_controls();
         self.sync_viewer_wait_exit_holds();
     }

@@ -4,6 +4,59 @@ use crate::i18n::{AppLocale, Localizer};
 use crate::select_detail_options::{CATALOG, DetailContext};
 use bmz_render::scene::detail_options::{DetailOptionsSnapshot, detail_options_viewport};
 
+pub(super) fn decode_experimental(path: &Path, kind: SkinKind) -> anyhow::Result<DecodedSkin> {
+    decode_beatoraja_skin_with_options(
+        path,
+        kind,
+        &BTreeMap::from([("bmz_detail_options".into(), "1".into())]),
+        &BTreeMap::new(),
+    )
+}
+
+#[test]
+fn detail_experimental_off_keeps_legacy_and_on_publishes_numeric_hits() {
+    for name in
+        ["default/select.json", "mz-select/music_select.luaskin", "Luxez-Flat/music_select.luaskin"]
+    {
+        let path = test_app_paths().resource_dir.join("skins").join(name);
+        assert!(path.exists());
+        let old = decode_beatoraja_skin(&path, SkinKind::Select).unwrap();
+        assert!(!old.document.uses_detail_options(), "{name}: defaults off");
+        let mut renderer = Renderer::default();
+        install_decoded_skin(&mut renderer, old, bmz_render::skin::default_skin_manifest())
+            .unwrap();
+        let mut s = snapshot(AppLocale::En, 8);
+        s.time = TimeUs(2_000_000);
+        renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
+        assert!(!renderer.last_plan().unwrap().commands.iter().any(|command| matches!(command,
+            DrawCommand::Text { text, .. } if text == "GREEN NUMBER")));
+        let new = decode_experimental(&path, SkinKind::Select).unwrap();
+        assert!(new.document.bmz_detail_options_numbers);
+        install_decoded_skin(&mut renderer, new, bmz_render::skin::default_skin_manifest())
+            .unwrap();
+        for cursor in [8, 12] {
+            s = snapshot(AppLocale::En, cursor);
+            s.time = TimeUs(2_000_000);
+            renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
+            let row = s.detail_options.as_ref().unwrap().selected().unwrap();
+            assert!(renderer.last_plan().unwrap().commands.iter().any(|command| matches!(command,
+                DrawCommand::Text { text, .. } if text == &row.value_label)));
+            for direction in 0..2 {
+                let (x, y) = if name.starts_with("default") {
+                    ((64.0 + 165.0 * 3.0 + 42.0 + direction as f32 * 75.0) / 1280.0, 225.0 / 720.0)
+                } else {
+                    ((9.0 + 274.0 * 3.0 + 68.0 + direction as f32 * 122.0) / 1920.0, 355.0 / 1080.0)
+                };
+                let hit = renderer.select_skin_click_hit(&s, x, y).unwrap();
+                assert!(
+                    matches!(hit.target, bmz_render::skin::SkinClickTarget::Event { event_id, .. } if event_id == 19326 + direction),
+                    "{name}: {hit:?}"
+                );
+            }
+        }
+    }
+}
+
 pub(super) fn snapshot(locale: AppLocale, cursor: usize) -> SelectSnapshot {
     let p = ProfileConfig::new_default("test", "Test", 0);
     let text = Localizer::new(locale);
@@ -44,7 +97,7 @@ pub(super) fn snapshot(locale: AppLocale, cursor: usize) -> SelectSnapshot {
 #[test]
 fn detail_default_skin_decodes_all_rows_and_routes_only_panel_clicks() {
     let path = default_skin_document_path_from_paths(&test_app_paths(), SkinKind::Select);
-    let decoded = decode_beatoraja_skin(&path, SkinKind::Select).unwrap();
+    let decoded = detail_options::decode_experimental(&path, SkinKind::Select).unwrap();
     assert_eq!(decoded.document.bmz_detail_options, 1);
     let mut renderer = Renderer::default();
     install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
@@ -200,7 +253,7 @@ fn detail_unskinned_path_keeps_native_legacy_assist_panel() {
 fn detail_carousel_draw_and_click_positions_follow_the_same_animation() {
     let mut renderer = Renderer::default();
     let path = default_skin_document_path_from_paths(&test_app_paths(), SkinKind::Select);
-    let decoded = decode_beatoraja_skin(&path, SkinKind::Select).unwrap();
+    let decoded = detail_options::decode_experimental(&path, SkinKind::Select).unwrap();
     install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
         .unwrap();
     for cursor in [0, 14] {
@@ -233,7 +286,7 @@ fn detail_carousel_draw_and_click_positions_follow_the_same_animation() {
                 let x = 0.10 + (slot as f32 + scroll) * 0.129;
                 let hit = renderer.select_skin_click_hit(&s, x, 0.29).unwrap();
                 assert!(
-                    matches!(hit.target, bmz_render::skin::SkinClickTarget::Event { event_id, .. } if event_id == 19500 + slot * 64)
+                    matches!(hit.target, bmz_render::skin::SkinClickTarget::Event { event_id, .. } if event_id == if s.detail_options.as_ref().unwrap().row(slot as usize).unwrap().choices.is_empty() { 19310 + slot } else { 19500 + slot * 64 })
                 );
             }
             // Departing columns remain present and clickable in the
@@ -242,7 +295,7 @@ fn detail_carousel_draw_and_click_positions_follow_the_same_animation() {
                 let (slot, x) = if scroll > 0.0 { (7, 0.075) } else { (8, 0.925) };
                 let hit = renderer.select_skin_click_hit(&s, x, 0.29).unwrap();
                 assert!(
-                    matches!(hit.target, bmz_render::skin::SkinClickTarget::Event { event_id, .. } if event_id == 19500 + slot * 64)
+                    matches!(hit.target, bmz_render::skin::SkinClickTarget::Event { event_id, .. } if event_id == if s.detail_options.as_ref().unwrap().row(slot as usize).unwrap().choices.is_empty() { 19310 + slot } else { 19500 + slot * 64 })
                 );
             }
             // The fixed edge masks consume clicks, including during movement.
@@ -264,7 +317,7 @@ fn detail_options_gpu_previews() {
         for (width, height) in [(1280, 720), (960, 540), (1024, 768), (1920, 1080)] {
             let mut renderer = Renderer::default();
             if !native {
-                let decoded = decode_beatoraja_skin(&path, SkinKind::Select).unwrap();
+                let decoded = detail_options::decode_experimental(&path, SkinKind::Select).unwrap();
                 install_decoded_skin(
                     &mut renderer,
                     decoded,

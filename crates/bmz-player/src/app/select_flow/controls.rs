@@ -156,14 +156,21 @@ impl WinitApp {
     }
 
     pub(super) fn update_select_option_panel(&mut self) {
-        let panel = if in_settings_stack(&self.select.folder_stack)
+        let unavailable = !matches!(self.view_state(), AppViewState::Select)
+            || in_settings_stack(&self.select.folder_stack)
             || !self.ui.focused
             || self.select.search.is_active()
             || self.select.ir_battle.active
-            || self.ui.egui.as_ref().is_some_and(|ui| ui.blocks_game_input(false))
-        {
+            || self.select.key_config_edit.is_some()
+            || self.viewer_waiting
+            || self.ui.egui.as_ref().is_some_and(|ui| ui.blocks_game_input(false));
+        let panel = if unavailable {
+            self.reset_option_session_for_modal();
             0
+        } else if self.detail_options_enabled() {
+            self.select.option_session.panel
         } else {
+            self.reset_option_session_for_modal();
             select_option_panel_for_holds(self.input.start_held, self.input.select_held)
         };
         let previous_panel = self.select.select_option_panel;

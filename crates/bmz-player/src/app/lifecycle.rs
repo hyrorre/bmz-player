@@ -336,6 +336,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     self.advance_select_hold_move();
                     self.advance_select_ir_battle_hold();
                     self.advance_select_analog_scroll();
+                    self.advance_detail_value_repeat();
                 }
                 self.advance_result_ir_scroll_hold();
                 self.advance_result_ir_analog_scroll();

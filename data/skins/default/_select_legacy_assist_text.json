@@ -1,0 +1,11 @@
+[
+  {"id": "legacy_assist_off", "constantText": "OFF", "size": 20},
+  {"id": "legacy_assist_on", "constantText": "ON", "size": 20},
+  {"id": "legacy_assist_301_label", "constantText": "1  EXPAND JUDGE", "size": 22},
+  {"id": "legacy_assist_302_label", "constantText": "2  SCROLL REMOVE", "size": 22},
+  {"id": "legacy_assist_303_label", "constantText": "3  JUDGE AREA", "size": 22},
+  {"id": "legacy_assist_304_label", "constantText": "4  LN REMOVE", "size": 22},
+  {"id": "legacy_assist_305_label", "constantText": "5  MARK NOTE", "size": 22},
+  {"id": "legacy_assist_306_label", "constantText": "6  BPM GUIDE", "size": 22},
+  {"id": "legacy_assist_307_label", "constantText": "7  MINE REMOVE", "size": 22}
+]

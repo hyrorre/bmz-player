@@ -14,6 +14,7 @@ pub(super) struct DetailOptionsState {
     pub blocked_controls: std::collections::HashSet<(DeviceId, String)>,
     pub dirty: bool,
     pub closing: Option<DetailOptionsClosingSnapshot>,
+    repeat_value: Option<(DeviceId, String, i32, Instant)>,
     scroll_started: Option<Instant>,
     scroll_duration: Duration,
     scroll_from: f32,
@@ -42,6 +43,17 @@ enum DetailValueEdit {
 }
 
 impl DetailOptionsState {
+    fn repeat_step(&mut self, now: Instant, held: bool) -> Option<i32> {
+        if !held {
+            self.repeat_value = None;
+        }
+        let (_, _, direction, next) = self.repeat_value.as_mut()?;
+        if now < *next {
+            return None;
+        }
+        *next = now + Duration::from_millis(60);
+        Some(*direction)
+    }
     fn scroll_offset(&self, now: Instant) -> f32 {
         let Some(started) = self.scroll_started else { return 0.0 };
         if self.scroll_duration.is_zero() {
@@ -56,6 +68,7 @@ impl DetailOptionsState {
         if direction == 0 {
             return;
         }
+        self.repeat_value = None;
         let remaining = self.scroll_offset(now);
         self.cursor =
             (self.cursor as i64 + i64::from(direction)).rem_euclid(CATALOG.len() as i64) as usize;
@@ -99,6 +112,19 @@ impl WinitApp {
     pub(super) fn execute_detail_options_event(&mut self, id: i32, arg: i32) {
         use bmz_render::skin::*;
         if !self.detail_options_active() {
+            return;
+        }
+        if let Some((slot, direction)) = detail_options_numeric_event(id) {
+            if let Some(index) =
+                detail_options_row_index(self.select.detail_options.cursor, CATALOG.len(), slot)
+                && matches!(
+                    CATALOG[index].kind,
+                    bmz_render::scene::detail_options::DetailValueKind::Number { .. }
+                )
+            {
+                self.select_detail_options_index(index);
+                self.change_detail_options_value(direction);
+            }
             return;
         }
         if let Some((slot, choice, field)) = detail_options_choice_slot(id) {
@@ -146,7 +172,11 @@ impl WinitApp {
     }
 
     pub(super) fn detail_options_enabled(&self) -> bool {
-        self.renderer.select_skin_document().is_some_and(|doc| doc.uses_detail_options())
+        self.boot.app_config.select.experimental_detail_options
+            && self
+                .renderer
+                .select_skin_document()
+                .is_some_and(|doc| doc.uses_detail_options() && doc.bmz_detail_options_numbers)
     }
 
     pub(super) fn detail_options_available(&self) -> bool {
@@ -155,6 +185,8 @@ impl WinitApp {
             && !in_settings_stack(&self.select.folder_stack)
             && !self.select.search.is_active()
             && !self.select.ir_battle.active
+            && self.select.key_config_edit.is_none()
+            && !self.viewer_waiting
             && !self.ui.egui.as_ref().is_some_and(|ui| ui.blocks_game_input(false))
     }
 
@@ -199,6 +231,7 @@ impl WinitApp {
     }
 
     pub(super) fn reset_detail_options_input(&mut self) {
+        self.select.detail_options.repeat_value = None;
         self.select.detail_options.closing = None;
         self.select.detail_options.scroll_started = None;
         self.select.detail_options.value_latched = self.detail_value_keys_held();
@@ -281,18 +314,57 @@ impl WinitApp {
             !matches!(action, DetailInput::Move(_)) || !control.starts_with("Axis")
         });
         let held = self.detail_value_keys_held();
+        if !event.pressed
+            && self
+                .select
+                .detail_options
+                .repeat_value
+                .as_ref()
+                .is_some_and(|(device, name, _, _)| *device == event.device && name == control)
+        {
+            self.select.detail_options.repeat_value = None;
+        }
         match self.select.detail_options.input_edge(action, event.pressed, event.repeat, held) {
             Some(DetailInput::Move(direction)) => self.move_detail_options(direction),
-            Some(DetailInput::Value(direction)) => self.change_detail_options_value(direction),
+            Some(DetailInput::Value(direction)) => {
+                self.change_detail_options_value(direction);
+                if matches!(
+                    CATALOG[self.select.detail_options.cursor].kind,
+                    bmz_render::scene::detail_options::DetailValueKind::Number { .. }
+                ) {
+                    self.select.detail_options.repeat_value = Some((
+                        event.device,
+                        control.into(),
+                        direction,
+                        Instant::now() + Duration::from_millis(400),
+                    ));
+                }
+            }
             _ => {}
         }
         true
+    }
+
+    pub(super) fn advance_detail_value_repeat(&mut self) {
+        if !self.detail_options_active() {
+            self.select.detail_options.repeat_value = None;
+            return;
+        }
+        let held = self.select.detail_options.repeat_value.as_ref().is_some_and(
+            |(device, control, _, _)| {
+                self.input.pressed_control_sources().any(|(d, c)| d == device && c == control)
+            },
+        );
+        if let Some(direction) = self.select.detail_options.repeat_step(Instant::now(), held) {
+            self.change_detail_options_value(direction);
+        }
     }
 
     pub(super) fn move_detail_options(&mut self, direction: i32) {
         if !self.detail_options_active() || direction == 0 {
             return;
         }
+        self.select.detail_options.repeat_value = None;
         let low = self.select_scroll_duration_low();
         let high = self.select_scroll_duration_high();
         self.select.detail_options.move_cursor(direction, Instant::now(), low, high);
@@ -329,6 +401,9 @@ impl WinitApp {
 
     fn apply_detail_setting(&mut self, item: DetailOptionDef, edit: DetailValueEdit) -> bool {
         let mode = Some(self.detail_options_mode());
+        if item.effects == DetailEffects::GaugeMode {
+            self.boot.profile_config.play.gauge_auto_shift = self.select.gauge_auto_shift_option;
+        }
         let before = SelectScoreContext::from_profile(&self.boot.profile_config);
         let changed = match edit {
             DetailValueEdit::Step(direction) => {
@@ -346,6 +421,12 @@ impl WinitApp {
         if item.effects == DetailEffects::GaugeBottom {
             self.select.bottom_shiftable_gauge_option =
                 self.boot.profile_config.play.bottom_shiftable_gauge;
+        }
+        if item.effects == DetailEffects::GaugeMode {
+            self.select.gauge_auto_shift_option = self.boot.profile_config.play.gauge_auto_shift;
+        }
+        if matches!(item.effects, DetailEffects::Timing | DetailEffects::Lane) {
+            self.sync_realtime_profile_settings();
         }
         self.boot.profile_config.updated_at = now_unix_seconds();
         self.select.detail_options.dirty = true;
@@ -484,6 +565,30 @@ fn detail_lane_direction(lane: Lane, nine_key: bool) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn numeric_repeat_has_delay_cadence_no_catchup_and_stops_on_move_or_release() {
+        let t = Instant::now();
+        let mut state = DetailOptionsState {
+            repeat_value: Some((
+                W_KEYBOARD_DEVICE_ID,
+                "KeyZ".into(),
+                1,
+                t + Duration::from_millis(400),
+            )),
+            ..Default::default()
+        };
+        assert_eq!(state.repeat_step(t + Duration::from_millis(399), true), None);
+        assert_eq!(state.repeat_step(t + Duration::from_millis(400), true), Some(1));
+        assert_eq!(state.repeat_step(t + Duration::from_millis(459), true), None);
+        assert_eq!(state.repeat_step(t + Duration::from_secs(2), true), Some(1));
+        assert_eq!(state.repeat_step(t + Duration::from_secs(2), true), None);
+        state.move_cursor(1, t, Duration::ZERO, Duration::ZERO);
+        assert_eq!(state.repeat_step(t + Duration::from_secs(3), true), None);
+        state.repeat_value = Some((W_KEYBOARD_DEVICE_ID, "KeyZ".into(), -1, t));
+        assert_eq!(state.repeat_step(t, false), None);
+        assert_eq!(state.repeat_step(t + Duration::from_secs(3), true), None);
+    }
 
     #[test]
     fn legacy_assist_keyboard_and_gamepad_keep_fixed_seven_key_events() {

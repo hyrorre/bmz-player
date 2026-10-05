@@ -204,6 +204,11 @@ pub(super) fn build_library_settings_sections(
         .scope(tr!(text, "settings-scope-app"))
         .id_salt("settings_select")
         .show(ui, |ui| {
+            ui.checkbox(
+                &mut config.select.experimental_detail_options,
+                tr!(text, "settings-select-experimental-detail-options"),
+            );
+            ui.small(tr!(text, "settings-select-experimental-detail-options-help"));
             ui.add(
                 egui::Slider::new(&mut config.select.scroll_duration_low_ms, 2..=1000)
                     .text(tr!(text, "settings-select-scroll-initial")),

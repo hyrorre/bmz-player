@@ -15,7 +15,7 @@ fn snapshot(locale: AppLocale, cursor: usize) -> SelectSnapshot {
 }
 
 fn renderer() -> Renderer {
-    let decoded = decode_beatoraja_skin(&skin_path(), SkinKind::Select).unwrap();
+    let decoded = detail_options::decode_experimental(&skin_path(), SkinKind::Select).unwrap();
     assert!(decoded.document.uses_detail_options());
     assert!(decoded.document.bmz_detail_options_close);
     let mut renderer = Renderer::default();
@@ -134,7 +134,7 @@ fn luxe_detail_options_uses_existing_artwork_and_fonts_with_complete_labels() {
             }
         }
     }
-    let decoded = decode_beatoraja_skin(&path, SkinKind::Select).unwrap();
+    let decoded = detail_options::decode_experimental(&path, SkinKind::Select).unwrap();
     assert!(decoded.fonts.iter().any(|font| {
         font.stored_id == "select:luxe_detail_choices"
             && font.path.ends_with("NotoSansCJKjp-Medium.otf")
@@ -294,7 +294,7 @@ fn luxe_detail_options_handles_empty_locked_inactive_and_external_rows() {
 
 #[test]
 fn luxe_detail_options_enter_exit_and_other_panels_animate_together() {
-    let decoded = decode_beatoraja_skin(&skin_path(), SkinKind::Select).unwrap();
+    let decoded = detail_options::decode_experimental(&skin_path(), SkinKind::Select).unwrap();
     let panel_texture = |id: &str| {
         let src = &decoded.document.image.iter().find(|i| i.id == id).unwrap().src;
         bmz_render::plan::TextureId(
@@ -308,7 +308,7 @@ fn luxe_detail_options_enter_exit_and_other_panels_animate_together() {
     let mut renderer = Renderer::default();
     install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
         .unwrap();
-    for (from, to) in [(2, 0), (1, 3), (3, 1), (2, 3), (3, 2), (2, 1)] {
+    for (from, to) in [(2, 0), (1, 3), (3, 1), (2, 3), (3, 2), (2, 1), (1, 2)] {
         for elapsed in [0, 75, 150, 225, 299, 300] {
             let s = switching(from, to, elapsed);
             renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
@@ -378,7 +378,7 @@ fn luxe_detail_options_enter_exit_and_other_panels_animate_together() {
 #[test]
 fn luxe_detail_options_replaces_only_e2_after_successful_part_load() {
     let source = skin_path().parent().unwrap().to_path_buf();
-    for state in ["loaded", "disabled", "missing", "failed", "non-bmz"] {
+    for state in ["loaded", "experimental-off", "disabled", "missing", "failed", "non-bmz"] {
         let root = unique_test_dir("bmz-luxe-detail-fallback");
         let parts = root.join("select_skinparts");
         std::fs::create_dir_all(parts.join("default_optionpanel")).unwrap();
@@ -423,7 +423,10 @@ fn luxe_detail_options_replaces_only_e2_after_successful_part_load() {
         let loaded = bmz_skin::load_lua_skin(
             &root.join("music_select.luaskin"),
             bmz_skin::SkinKind::Select,
-            &BTreeMap::new(),
+            &BTreeMap::from([(
+                "bmz_detail_options".into(),
+                if state == "experimental-off" { "0" } else { "1" }.into(),
+            )]),
             &BTreeMap::new(),
         )
         .unwrap();
@@ -470,6 +473,8 @@ fn luxe_detail_options_gpu_previews() {
             (AppLocale::Ja, 0, 0.0),
             (AppLocale::En, 7, 0.0),
             (AppLocale::Ja, 3, 0.0),
+            (AppLocale::Ja, 8, 0.0),
+            (AppLocale::En, 12, 0.0),
             (AppLocale::En, 14, -0.5),
         ] {
             let mut s = snapshot(locale, cursor);
@@ -477,7 +482,7 @@ fn luxe_detail_options_gpu_previews() {
             scenes.push((format!("{}-{cursor}-{scroll}", locale.code()), s));
         }
         if (1280..=1920).contains(&width) {
-            for (from, to) in [(2, 0), (2, 3), (3, 2)] {
+            for (from, to) in [(2, 0), (2, 1), (1, 2)] {
                 for elapsed in [0, 75, 150, 225, 300] {
                     scenes
                         .push((format!("{from}-to-{to}-{elapsed}"), switching(from, to, elapsed)));

@@ -34,6 +34,14 @@ impl WinitApp {
         if self.route_viewer_keyboard(event) {
             return;
         }
+        if self.route_select_option_session_event(&control_event) {
+            return;
+        }
+        if matches!(self.view_state(), AppViewState::Select)
+            && self.option_panel_exit_blocks_input()
+        {
+            return;
+        }
         let play_control = control_event.name.as_deref();
         let play_physical_control = control_event.physical.as_ref();
         let has_play_control_context =
@@ -387,6 +395,32 @@ impl WinitApp {
             return;
         }
         if self.route_detail_options_input(control_event) {
+            return;
+        }
+        if self.detail_options_enabled() && self.select.select_option_panel == 1 {
+            if control_event.pressed && !control_event.repeat {
+                if let Some(slot) = digit_to_replay_slot(event.physical_key) {
+                    self.start_replay_for_selected(slot);
+                } else {
+                    let cycle = target_cycle_from_key(event.physical_key).or_else(|| {
+                        control_event.name.as_deref().and_then(|control| {
+                            target_cycle_from_control(control, &self.select.select_keys)
+                        })
+                    });
+                    let changed = if let Some(cycle) = cycle {
+                        self.apply_target_option_cycle(cycle);
+                        true
+                    } else {
+                        control_event
+                            .name
+                            .as_deref()
+                            .is_some_and(|control| self.apply_play_option_control(control))
+                    };
+                    if changed {
+                        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                    }
+                }
+            }
             return;
         }
         if self.viewer_waiting {

@@ -3,6 +3,7 @@
   "name": "BMZ Default Select",
   "author": "BMZ Player",
   "bmzDetailOptions": 1,
+  "bmzDetailOptionsNumbers": true,
   "panel": { "include": "_select_detail_panel.json" },
   "w": 1280,
   "h": 720,
@@ -14,6 +15,8 @@
   },
   "imageset": [
     { "include": "_select_detail_imageset.json" },
+    { "include": "_select_numeric_imageset.json" },
+    { "include": "_select_legacy_assist_imageset.json" },
     {
       "id": "song_bar",
       "images": [
@@ -93,6 +96,8 @@
   ],
   "text": [
     { "include": "_select_detail_text.json" },
+    { "include": "_select_numeric_text.json" },
+    { "include": "_select_legacy_assist_text.json" },
     {
       "id": "select_title_label",
       "constantText": "BMZ SELECT",
@@ -6983,6 +6988,7 @@
         }
       ]
     },
-    { "include": "_select_detail_destination.json" }
+    { "include": "_select_detail_destination.json" },
+    { "include": "_select_legacy_assist_destination.json" }
   ]
 }

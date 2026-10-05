@@ -7063,6 +7063,7 @@
     ],
     "bmzDetailScroll": [165, 0]
   },
+  { "include": "_select_numeric_destination.json" },
   {
     "id": "detail_background",
     "op": [

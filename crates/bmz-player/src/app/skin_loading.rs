@@ -18,6 +18,7 @@ pub(super) fn load_initial_skin_textures(
     skin: &SkinConfig,
     load_frontend_skins: bool,
     lua_runtime_mode: bmz_skin::LuaSkinRuntimeMode,
+    experimental_detail_options: bool,
 ) -> (Option<SkinManifest>, HashMap<SkinKind, Vec<ActiveSkinVideoSource>>, bool, bool, bool) {
     // Decide / Result の JSON skin は Select の同期ロードより**前**に decode スレッドを起動して
     // CPU をフル活用する。Select の sync 処理 (PNG GPU upload など) と並列に decode が進む。
@@ -153,6 +154,8 @@ pub(super) fn load_initial_skin_textures(
         let empty_files = BTreeMap::new();
         let active_select_options =
             if select_trimmed.is_empty() { &empty_options } else { &skin.select_options };
+        let active_select_options =
+            select_skin_options(active_select_options, experimental_detail_options);
         let active_select_files =
             if select_trimmed.is_empty() { &empty_files } else { &skin.select_files };
         match select_path {
@@ -164,7 +167,7 @@ pub(super) fn load_initial_skin_textures(
                     &path,
                     SkinKind::Select,
                     default_manifest.as_ref(),
-                    active_select_options,
+                    &active_select_options,
                     active_select_files,
                     &lua_runtime_state_with_mode(
                         lua_runtime_state_with_skin_offsets(
@@ -229,6 +232,7 @@ pub(super) fn reload_skin_textures(
     ir_name: Option<&str>,
     skin: &SkinConfig,
     lua_runtime_mode: bmz_skin::LuaSkinRuntimeMode,
+    experimental_detail_options: bool,
 ) -> (bool, bool, bool) {
     let mut pending_select = false;
     let mut pending_decide = false;
@@ -282,13 +286,18 @@ pub(super) fn reload_skin_textures(
             }
         };
         if is_decodable_skin_path(&path) {
+            let skin_options = if trimmed.is_empty() { BTreeMap::new() } else { options.clone() };
             spawn_skin_decode(
                 pipeline,
                 SkinDecodeRequest::new(
                     generation,
                     path.clone(),
                     kind,
-                    if trimmed.is_empty() { BTreeMap::new() } else { options.clone() },
+                    if kind == SkinKind::Select {
+                        select_skin_options(&skin_options, experimental_detail_options)
+                    } else {
+                        skin_options
+                    },
                     if trimmed.is_empty() { BTreeMap::new() } else { files.clone() },
                     lua_runtime_state_with_mode(
                         lua_runtime_state_with_skin_offsets(
@@ -316,6 +325,16 @@ pub(super) fn reload_skin_textures(
     }
 
     (pending_select, pending_decide, pending_result)
+}
+
+pub(super) fn select_skin_options(
+    options: &BTreeMap<String, String>,
+    enabled: bool,
+) -> BTreeMap<String, String> {
+    let mut options = options.clone();
+    // Owned by the application, never persisted as a skin customization.
+    options.insert("bmz_detail_options".into(), if enabled { "1" } else { "0" }.into());
+    options
 }
 
 pub(super) fn apply_json_skin_sync(

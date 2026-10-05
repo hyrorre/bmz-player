@@ -5,6 +5,7 @@ use bmz_render::renderer::WgpuPresentMode;
 mod render;
 
 struct EguiProfileBefore {
+    experimental_detail_options: bool,
     app_input: GlobalInputConfig,
     locale: crate::i18n::AppLocale,
     random_select: [bool; 8],
@@ -50,6 +51,7 @@ impl WinitApp {
         }
     }
     pub(super) fn restart_select_scene_timers(&mut self) {
+        self.cancel_select_option_session();
         let now = Instant::now();
         self.select.select_scene_timer_armed = false;
         self.select.select_scene_started_at = now;
@@ -237,6 +239,7 @@ impl WinitApp {
             return;
         };
         let profile_before = EguiProfileBefore {
+            experimental_detail_options: self.boot.app_config.select.experimental_detail_options,
             app_input: self.boot.app_config.input.clone(),
             locale: self.boot.profile_config.ui.locale(),
             random_select: self.boot.profile_config.select.random_select_flags(),
@@ -755,6 +758,12 @@ impl WinitApp {
     }
 
     fn apply_egui_profile_changes(&mut self, before: &EguiProfileBefore) {
+        if before.experimental_detail_options
+            != self.boot.app_config.select.experimental_detail_options
+        {
+            self.cancel_select_option_session();
+            self.reload_skins(SkinReloadRequest { select: true, ..Default::default() });
+        }
         let locale = self.boot.profile_config.ui.locale();
         self.renderer.set_default_font_coverage(locale.font_coverage());
         let locale_changed = locale != before.locale;

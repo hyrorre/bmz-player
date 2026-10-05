@@ -223,6 +223,18 @@ pub const SKIN_EVENT_DETAIL_OPTIONS_INCREASE: i32 = 19_303;
 pub const SKIN_EVENT_DETAIL_OPTIONS_SELECT_ID: i32 = 19_304;
 pub const SKIN_EVENT_DETAIL_OPTIONS_ROW_BASE: i32 = 19_310;
 pub const SKIN_EVENT_DETAIL_OPTIONS_ROW_LAST: i32 = 19_318;
+/// Per visible/draw slot: decrease, increase. Numeric rows only.
+pub const SKIN_EVENT_DETAIL_OPTIONS_NUMERIC_BASE: i32 = 19_320;
+pub const SKIN_EVENT_DETAIL_OPTIONS_NUMERIC_LAST: i32 = 19_337;
+
+pub fn detail_options_numeric_event(id: i32) -> Option<(usize, i32)> {
+    (SKIN_EVENT_DETAIL_OPTIONS_NUMERIC_BASE..=SKIN_EVENT_DETAIL_OPTIONS_NUMERIC_LAST)
+        .contains(&id)
+        .then(|| {
+            let index = id - SKIN_EVENT_DETAIL_OPTIONS_NUMERIC_BASE;
+            ((index / 2) as usize, if index % 2 == 0 { -1 } else { 1 })
+        })
+}
 
 /// Eight choice cells per visible item; number/text/option/event namespaces
 /// remain independent. Half of each 64-ID item block is reserved.
@@ -247,6 +259,7 @@ pub fn detail_options_choice_slot(id: i32) -> Option<(usize, usize, i32)> {
 pub fn is_detail_options_event(id: i32) -> bool {
     (SKIN_EVENT_DETAIL_OPTIONS_PREVIOUS..=SKIN_EVENT_DETAIL_OPTIONS_SELECT_ID).contains(&id)
         || (SKIN_EVENT_DETAIL_OPTIONS_ROW_BASE..=SKIN_EVENT_DETAIL_OPTIONS_ROW_LAST).contains(&id)
+        || detail_options_numeric_event(id).is_some()
         || detail_options_choice_slot(id)
             .is_some_and(|(_, choice, field)| choice < SKIN_DETAIL_OPTIONS_CHOICES && field == 0)
 }

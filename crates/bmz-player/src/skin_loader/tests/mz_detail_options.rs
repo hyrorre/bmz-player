@@ -14,7 +14,7 @@ fn snapshot(locale: AppLocale, cursor: usize) -> SelectSnapshot {
 }
 
 fn renderer() -> Renderer {
-    let decoded = decode_beatoraja_skin(&skin_path(), SkinKind::Select).unwrap();
+    let decoded = detail_options::decode_experimental(&skin_path(), SkinKind::Select).unwrap();
     assert_eq!(decoded.document.bmz_detail_options, 1);
     assert!(decoded.document.bmz_detail_options_close);
     assert!(!decoded.document.destination.iter().any(|entry| matches!(entry,
@@ -76,7 +76,7 @@ fn switching_panel(from: u8, to: u8, elapsed: i64) -> SelectSnapshot {
 
 #[test]
 fn mz_detail_options_switch_plays_both_exit_and_entrance_and_routes_current_panel_clicks() {
-    let mut decoded = decode_beatoraja_skin(&skin_path(), SkinKind::Select).unwrap();
+    let mut decoded = detail_options::decode_experimental(&skin_path(), SkinKind::Select).unwrap();
     let panel_texture = |id: &str| {
         let src = &decoded.document.image.iter().find(|image| image.id == id).unwrap().src;
         bmz_render::plan::TextureId(
@@ -101,7 +101,7 @@ fn mz_detail_options_switch_plays_both_exit_and_entrance_and_routes_current_pane
     let mut renderer = Renderer::default();
     install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
         .unwrap();
-    for (from, to) in [(1, 3), (3, 1), (2, 3), (3, 2), (2, 1)] {
+    for (from, to) in [(1, 3), (3, 1), (2, 3), (3, 2), (2, 1), (1, 2)] {
         for elapsed in [0, 75, 150, 225, 299, 300] {
             let s = switching_panel(from, to, elapsed);
             renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
@@ -221,7 +221,7 @@ fn mz_detail_options_exit_keeps_labels_and_scroll_but_blocks_all_clicks() {
 fn mz_detail_options_closing_data_requires_explicit_opt_in() {
     let mut s = snapshot(AppLocale::Ja, 0);
     close_panel(&mut s, 100);
-    let mut decoded = decode_beatoraja_skin(&skin_path(), SkinKind::Select).unwrap();
+    let mut decoded = detail_options::decode_experimental(&skin_path(), SkinKind::Select).unwrap();
     decoded.document.bmz_detail_options_close = false;
     let mut renderer = Renderer::default();
     install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
@@ -262,7 +262,7 @@ fn mz_detail_options_reuses_option_artwork_and_version_font() {
             }
         }
     }
-    let decoded = decode_beatoraja_skin(&path, SkinKind::Select).unwrap();
+    let decoded = detail_options::decode_experimental(&path, SkinKind::Select).unwrap();
     for (id, source) in
         [("mz_detail_button", "mz_detail_panel"), ("mz_detail_value_selected", "mz_detail_cursor")]
     {
@@ -431,7 +431,7 @@ fn mz_detail_options_small_catalogue_inactive_locked_and_external_values() {
 fn mz_detail_options_capability_requires_a_successfully_loaded_part() {
     let source = skin_path().parent().unwrap().to_path_buf();
     for version in [3, 4] {
-        for state in ["loaded", "disabled", "missing", "failed", "non-bmz"] {
+        for state in ["loaded", "experimental-off", "disabled", "missing", "failed", "non-bmz"] {
             let root = unique_test_dir("bmz-mz-detail-fallback");
             let advanced = root.join("customize/advanced");
             let legacy = format!("default_optionpanel{version}");
@@ -476,7 +476,10 @@ fn mz_detail_options_capability_requires_a_successfully_loaded_part() {
             let loaded = bmz_skin::load_lua_skin(
                 &root.join("music_select.luaskin"),
                 bmz_skin::SkinKind::Select,
-                &BTreeMap::new(),
+                &BTreeMap::from([(
+                    "bmz_detail_options".into(),
+                    if state == "experimental-off" { "0" } else { "1" }.into(),
+                )]),
                 &BTreeMap::new(),
             )
             .unwrap();
@@ -519,6 +522,8 @@ fn mz_detail_options_gpu_previews() {
             (AppLocale::Ja, 0, 0.0, 500),
             (AppLocale::En, 7, 0.0, 500),
             (AppLocale::Ja, 3, 0.0, 500),
+            (AppLocale::Ja, 8, 0.0, 500),
+            (AppLocale::En, 12, 0.0, 500),
             (AppLocale::En, 14, -0.5, 500),
             (AppLocale::Ja, 0, 0.5, 500),
             (AppLocale::Ja, 0, 0.0, 0),
@@ -583,7 +588,7 @@ fn mz_detail_options_switch_gpu_previews() {
         let mut renderer = renderer();
         renderer.set_default_font_search_paths(vec![test_app_paths().resource_dir.join("fonts")]);
         renderer.attach_offscreen(bmz_render::renderer::SurfaceSize { width, height }).unwrap();
-        for (from, to) in [(2, 3), (3, 2)] {
+        for (from, to) in [(2, 1), (1, 2)] {
             for elapsed in [0, 75, 150, 225, 300] {
                 let mut s = switching_panel(from, to, elapsed);
                 s.player_name = "BMZ Player".into();

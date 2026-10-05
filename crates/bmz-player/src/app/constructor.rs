@@ -138,6 +138,7 @@ impl WinitApp {
             &boot.profile_config.skin,
             !viewer_mode,
             options.lua_skin_runtime_mode,
+            boot.app_config.select.experimental_detail_options,
         );
         skin_pipeline.set_pending(SkinKind::Select, pending_select_skin);
         skin_pipeline.set_pending(SkinKind::Decide, pending_decide_skin);
@@ -326,6 +327,7 @@ impl WinitApp {
                 option_panel_started_at: now,
                 option_panel_off_started_at: [None; 6],
                 select_option_panel: 0,
+                option_session: Default::default(),
                 detail_options: Default::default(),
                 select_exit_hold_started_at: None,
                 select_assets,

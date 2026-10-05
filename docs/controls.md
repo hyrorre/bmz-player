@@ -281,7 +281,8 @@ GUIDE SE、追加ノート／地雷／SCROLL／LNモディファイア、CONSTAN
 譜面レベルがない場合は表のレベルを使います。表名・所属表情報は保持します。
 `???`や`地力A`など整数でない表レベルは数値スプライトを表示せず、表情報の文字列として表示します。
 設定フォルダ内では検索モードには入りません。
-E1 / E2 / E1+E2 を hold している間は、選曲オプションパネルを表示します。
+通常設定ではE1 / E2 / E1+E2をholdしている間、選曲オプションパネルを表示します。
+実験的な2パネル方式を有効にした場合の短押し固定表示・E2切替は、下記「選曲画面 7K/14K」を参照してください。
 `selectIrScopeBinding = "active"` と `selectIrScopeToggle = "e3_press"` を宣言した
 スキンでは、曲行を選択中かつオプションパネル・検索・設定編集を開いていないときに、E3で
 `RANKING`（全体）と `RIVAL`（自分 + IRライバル）を切り替えます。Rival scope 非対応時は
@@ -353,73 +354,75 @@ G-BATTLEは2K / 4K / 5K / 6K / 7K / 8K / 9K / 10K / 14Kで使用できます。
 
 ### 選曲画面 7K/14K
 
-対応宣言`bmzDetailOptions: 1`のある選曲スキン（default、mz-select、Luxez-Flat等）では、
-E2 holdは「詳細プレイオプション / DETAIL OPTIONS」を開きます。以下は対応スキンでの操作です。
-Scratch Up/Downまたは独立したUI Left/Rightで前/次の項目を選び、各サイド内の奇数鍵で値を次へ、
-偶数鍵で前へ変更します。UI Upは前の選択肢、UI Downは次の選択肢へ変更します。
-鍵盤に重複割当されたUIキーは鍵盤操作を優先します。9Kなどスクラッチのない構成では、
-鍵盤と重複しない左右キーかマウスで項目を選択できます。
-デフォルトは項目を横並びの7列にし、各列の全選択肢を縦に表示します。
-デフォルトでは、編集中の列は「▼」、設定されている値は「●」で示します。
-mz-selectとLuxez-Flatでは記号を使わず、中央の明るい列枠と現在値の発光で示します。
-Luxez-Flatは既存の紫の角丸枠・オレンジの選択カーソル・曲情報/IR欄のフォントを使います。
-左から現れる半透明のパネルで、タイトル・操作ガイド・ナビゲーションボタンは表示しません。
-E2を離すと300msで左へ戻って閉じます。E2とE1+E2の切り替えでは退出側と登場側を同時にアニメーションします。
-退出中のE2は編集できません。切り替え先のパネルは操作でき、パネルなしへ閉じる間は背後へのクリックを遮断します。
-項目は循環し、選択列が常に中央になります。項目変更時は選曲と同じスクロール時間設定で
-横方向にアニメーションします。先頭・末尾間でも同じ動きです。
-マウスは列見出しをクリックして項目選択、選択肢をクリックして直接設定できます。
-ホイールで項目移動、デフォルトスキンの＋／−ボタンで値変更もできます。
+本体設定「選曲 > 実験的な詳細オプション」は既定OFFです。OFFでは従来の3パネルを使います。
+ONかつ`bmzDetailOptions: 1`と`bmzDetailOptionsNumbers: true`の対応宣言があるスキン
+（default、mz-select、Luxez-Flat）では、通常／詳細の2パネルに切り替わります。
 
-値は押下ごとに1回だけ変更します。同時押しは最初の値変更を採用し、すべての値変更鍵を
-離すまで追加変更しません。項目移動やE2とE1+E2の切替時に保持していた鍵も押し直します。
-E2を離すと閉じて変更を保存します。カーソルは選曲セッション中維持します。
-SUDDEN+ / HIDDEN+ / LIFTのON/OFFは独立し、OFFでも保存量は保持します。
-GAS下限はGAS OFFでも編集でき、現在は作用しない場合に「非適用」を表示します。
-キーモードを解決できない場合は7Kの設定を編集します。未解決時の7Kへは譜面変換を重ねません。
-全15項目、対象設定、適用条件は[詳細仕様](select-detail-options.md)を参照してください。
+| 操作 | experimental ON＋対応スキン |
+| --- | --- |
+| 閉じた状態でE1押下 | 通常パネルをすぐ表示 |
+| E1を300ms未満で離す | パネルを固定表示 |
+| E1を300ms以上保持して離す | パネルを閉じる |
+| 固定表示中にE1を押す | 即座に閉じる。その解放では再び開かない |
+| パネル表示中にE2を押す | 通常／詳細を切り替える。E2解放では閉じない |
+| 閉じた状態でE2だけを押す | パネルを開かない |
+| 次回E1で開く | 通常から開く。詳細の項目カーソルはセッション中保持 |
 
-対応宣言のないスキン・0・未知のバージョンでは、従来のbeatoraja式Assistパネルを使います。
-スキンなしの場合も標準の旧Assist表示です。新UIは重ねません。
-この場合のE2＋KEY1〜7は順にEXPAND JUDGE、CONSTANT（SCROLL REMOVE）、JUDGE AREA、
-LEGACY NOTE（LN REMOVE）、MARK NOTE、BPM GUIDE、NO MINEの直接切り替えです。
-旧スキンのマウス操作も維持します。項目カーソルや奇数・偶数鍵による値変更は使いません。
-E1とE1+E2は対応宣言によらず従来どおりです。
+詳細表示中はScratch Up/Down・独立UI Left/Rightで前／次の項目を選びます。
+各サイド内の奇数鍵・UI Downで値を次へ／増加、偶数鍵・UI Upで前へ／減少します。
+鍵盤とUIキーの重複割当は鍵盤操作を優先します。9Kでは独立した矢印キーかマウスを使えます。
+項目は横並び7列で循環し、選択項目が中央へアニメーションします。bool/enumの全選択肢を縦に表示し、
+数値は現在値と＋／−ボタンを表示します。ホイールで項目選択、候補クリックで直接設定できます。
+bool/enumは押下エッジだけ、数値は400ms後から60ms間隔でリピートし、最小／最大で停止します。
+同時押しは最初の方向が優先され、項目移動・パネル切替時に保持した値変更鍵は押し直します。
+フォーカス喪失・別モーダルへの移行では固定表示と入力を解除します。
 
-| Key | 通常 | E1 hold | E2 hold（対応スキン） | E1+E2 hold |
+mz-select/Luxez-Flatでは、通常↔詳細の退出と登場を同時に再生します。
+退出側はクリックできず、パネルなしへ閉じる300ms間は背後の操作も遮断します。
+通常パネル内の設定・鍵盤割当は従来通りです。詳細には旧詳細のGAS方式、緑数字、BGA、
+判定表示自動調整、表示オフセット、判定アルゴリズムも統合しています。
+SUDDEN+ / HIDDEN+ / LIFTは独立し、OFFでも量を保持します。GAS下限はGAS OFFでも編集できます。
+キーモード未解決時は7Kを編集し、解決済みの譜面には従来の変換後モードを使います。
+変更は即時反映し、詳細を閉じる／通常へ切り替える際に保存します。
+全21項目・スコープ・適用条件は[詳細仕様](select-detail-options.md)を参照してください。
+
+OFF・未対応スキン・スキンなしでは以下の従来操作です。
+E1 hold=通常、E2 hold=Assist、E1+E2 hold=旧詳細。短押し固定表示はありません。
+旧Assist event・マウス操作・開閉timerの意味も維持します。
+| Key | 通常 | E1 hold | E2 hold（従来Assist） | E1+E2 hold |
 | --- | --- | --- | --- | --- |
-| KEY1 | 決定 / 開く / 曲開始 | 1P RANDOM 次 | 値を次へ / 増加 | BGA 切替 |
-| KEY2 | 戻る / 閉じる | 1P RANDOM 前 | 値を前へ / 減少 | GAUGE AUTO SHIFT 切替 |
-| KEY3 | 決定 / 開く / 曲開始 | GAUGE 次 | 値を次へ / 増加 | JUDGE AUTO ADJUST 切替 |
-| KEY4 | 戻る / 閉じる（120ms長押しでG-BATTLE相手選択） | GAUGE 前 | 値を前へ / 減少 | GREEN NUMBER -1 |
-| KEY5 | 決定 / 開く / 曲開始 | HS-FIX 次 | 値を次へ / 増加 | VISUAL OFFSET -1 ms |
-| KEY6 | 戻る / 閉じる | DP OPTION 次 | 値を前へ / 減少 | GREEN NUMBER +1 |
-| KEY7 | 決定 / 開く / 曲開始 | SESSION MODE 次（NORMAL → PRACTICE → AUTOPLAY → AUTOPLAY BATTLE → G-BATTLE） | 値を次へ / 増加 | VISUAL OFFSET +1 ms |
-| 2P KEY1 | 決定 / 開く / 曲開始 | 2P RANDOM 次 | 値を次へ / 増加 | BGA 切替 |
-| 2P KEY2 | 戻る / 閉じる | 2P RANDOM 前 | 値を前へ / 減少 | GAUGE AUTO SHIFT 切替 |
-| 2P KEY3 | 決定 / 開く / 曲開始 | GAUGE 次 | 値を次へ / 増加 | JUDGE AUTO ADJUST 切替 |
-| 2P KEY4 | 戻る / 閉じる | GAUGE 前 | 値を前へ / 減少 | GREEN NUMBER -1 |
-| 2P KEY5 | 決定 / 開く / 曲開始 | HS-FIX 次 | 値を次へ / 増加 | VISUAL OFFSET -1 ms |
-| 2P KEY6 | 戻る / 閉じる | DP OPTION 次 | 値を前へ / 減少 | GREEN NUMBER +1 |
-| 2P KEY7 | 決定 / 開く / 曲開始 | SESSION MODE 次 | 値を次へ / 増加 | VISUAL OFFSET +1 ms |
-| Scratch Up | カーソル上 | TARGET 前 | 前の項目 | - |
-| Scratch Down | カーソル下 | TARGET 次 | 次の項目 | - |
-| Up / Down | カーソル移動 | TARGET 前 / 次 | 前 / 次の項目 | - |
+| KEY1 | 決定 / 開く / 曲開始 | 1P RANDOM 次 | EXPAND JUDGE | BGA 切替 |
+| KEY2 | 戻る / 閉じる | 1P RANDOM 前 | SCROLL REMOVE | GAUGE AUTO SHIFT 切替 |
+| KEY3 | 決定 / 開く / 曲開始 | GAUGE 次 | JUDGE AREA | JUDGE AUTO ADJUST 切替 |
+| KEY4 | 戻る / 閉じる（120ms長押しでG-BATTLE相手選択） | GAUGE 前 | LN REMOVE | GREEN NUMBER -1 |
+| KEY5 | 決定 / 開く / 曲開始 | HS-FIX 次 | MARK NOTE | VISUAL OFFSET -1 ms |
+| KEY6 | 戻る / 閉じる | DP OPTION 次 | BPM GUIDE | GREEN NUMBER +1 |
+| KEY7 | 決定 / 開く / 曲開始 | SESSION MODE 次（NORMAL → PRACTICE → AUTOPLAY → AUTOPLAY BATTLE → G-BATTLE） | MINE REMOVE | VISUAL OFFSET +1 ms |
+| 2P KEY1 | 決定 / 開く / 曲開始 | 2P RANDOM 次 | EXPAND JUDGE | BGA 切替 |
+| 2P KEY2 | 戻る / 閉じる | 2P RANDOM 前 | SCROLL REMOVE | GAUGE AUTO SHIFT 切替 |
+| 2P KEY3 | 決定 / 開く / 曲開始 | GAUGE 次 | JUDGE AREA | JUDGE AUTO ADJUST 切替 |
+| 2P KEY4 | 戻る / 閉じる | GAUGE 前 | LN REMOVE | GREEN NUMBER -1 |
+| 2P KEY5 | 決定 / 開く / 曲開始 | HS-FIX 次 | MARK NOTE | VISUAL OFFSET -1 ms |
+| 2P KEY6 | 戻る / 閉じる | DP OPTION 次 | BPM GUIDE | GREEN NUMBER +1 |
+| 2P KEY7 | 決定 / 開く / 曲開始 | SESSION MODE 次 | MINE REMOVE | VISUAL OFFSET +1 ms |
+| Scratch Up | カーソル上 | TARGET 前 | - | - |
+| Scratch Down | カーソル下 | TARGET 次 | - | - |
+| Up / Down | カーソル移動 | TARGET 前 / 次 | - | - |
 
 ### 選曲画面 9K
 
 | Key | 通常 | E1 hold | E2 hold | E1+E2 hold |
 | --- | --- | --- | --- | --- |
-| KEY1 | - | 1P RANDOM 次 | 値を次へ / 増加 | BGA 切替 |
-| KEY2 | - | 1P RANDOM 前 | 値を前へ / 減少 | GAUGE AUTO SHIFT 切替 |
-| KEY3 | 戻る / 閉じる | GAUGE 次 | 値を次へ / 増加 | JUDGE AUTO ADJUST 切替 |
-| KEY4 | カーソル下（120ms長押しでG-BATTLE相手選択） | GAUGE 前 | 値を前へ / 減少 | GREEN NUMBER -1 |
-| KEY5 | 決定 / 開く / 曲開始 | HS-FIX 次 | 値を次へ / 増加 | VISUAL OFFSET -1 ms |
-| KEY6 | カーソル上 | DP OPTION 次 | 値を前へ / 減少 | GREEN NUMBER +1 |
-| KEY7 | 決定 / 開く / 曲開始 | SESSION MODE 次 | 値を次へ / 増加 | VISUAL OFFSET +1 ms |
-| KEY8 | - | TARGET 前 | 値を前へ / 減少 | - |
-| KEY9 | - | TARGET 次 | 値を次へ / 増加 | - |
-| Up / Down | カーソル移動 | TARGET 前 / 次 | 前 / 次の項目 | - |
+| KEY1 | - | 1P RANDOM 次 | EXPAND JUDGE | BGA 切替 |
+| KEY2 | - | 1P RANDOM 前 | SCROLL REMOVE | GAUGE AUTO SHIFT 切替 |
+| KEY3 | 戻る / 閉じる | GAUGE 次 | JUDGE AREA | JUDGE AUTO ADJUST 切替 |
+| KEY4 | カーソル下（120ms長押しでG-BATTLE相手選択） | GAUGE 前 | LN REMOVE | GREEN NUMBER -1 |
+| KEY5 | 決定 / 開く / 曲開始 | HS-FIX 次 | MARK NOTE | VISUAL OFFSET -1 ms |
+| KEY6 | カーソル上 | DP OPTION 次 | BPM GUIDE | GREEN NUMBER +1 |
+| KEY7 | 決定 / 開く / 曲開始 | SESSION MODE 次 | MINE REMOVE | VISUAL OFFSET +1 ms |
+| KEY8 | - | TARGET 前 | - | - |
+| KEY9 | - | TARGET 次 | - | - |
+| Up / Down | カーソル移動 | TARGET 前 / 次 | - | - |
 
 9K では、プレイ鍵盤とデフォルト UI 操作が同じキーに割り当てられている場合、選曲操作は 9K 側の意味を優先します。
 

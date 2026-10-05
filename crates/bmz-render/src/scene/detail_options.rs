@@ -131,6 +131,14 @@ pub fn number(id: i32, panel: Option<&DetailOptionsSnapshot>) -> Option<i64> {
                     1 => row.category_id,
                     2 => row.value,
                     3 => row.scope,
+                    4 => row.choice_count,
+                    5 => row.value_index,
+                    6..=8 => match row.kind {
+                        DetailValueKind::Number { min, max, step } => {
+                            [min, max, step][(field - 6) as usize]
+                        }
+                        _ => -1,
+                    },
                     _ => -1,
                 })
                 .unwrap_or(-1),
@@ -231,7 +239,16 @@ pub fn option(id: i32, panel: Option<&DetailOptionsSnapshot>) -> Option<bool> {
                 1 => slot == DETAIL_OPTION_CENTER,
                 2 => r.editable,
                 3 => r.effective,
-                4 => r.value_index < 0,
+                4 => r.kind == DetailValueKind::Enum && r.value_index < 0,
+                5 => matches!(r.kind, DetailValueKind::Number { .. }),
+                6 => {
+                    r.editable
+                        && matches!(r.kind, DetailValueKind::Number { min, .. } if r.value > min)
+                }
+                7 => {
+                    r.editable
+                        && matches!(r.kind, DetailValueKind::Number { max, .. } if r.value < max)
+                }
                 _ => false,
             })
         }));
@@ -352,5 +369,38 @@ mod tests {
         assert_eq!(option(19302, Some(&p)), Some(false));
         assert_eq!(option(19303, Some(&p)), Some(true));
         assert_eq!(number(19308, Some(&p)), Some(-1));
+    }
+
+    #[test]
+    fn numeric_rows_publish_range_without_enum_external_value_state() {
+        let mut p = panel(1, 0);
+        let mut row = p.items[0].clone();
+        row.kind = DetailValueKind::Number { min: -500, max: 500, step: 1 };
+        row.value = -1;
+        row.value_index = -1;
+        row.choice_count = 0;
+        row.choices = Vec::new().into();
+        p.items = vec![row].into();
+        assert_eq!(number(19305, Some(&p)), Some(-1));
+        assert_eq!(option(19301, Some(&p)), Some(true));
+        for (id, value) in [(19434, 0), (19435, -1), (19436, -500), (19437, 500), (19438, 1)] {
+            assert_eq!(number(id, Some(&p)), Some(value));
+        }
+        assert_eq!(option(19434, Some(&p)), Some(false));
+        assert_eq!(option(19435, Some(&p)), Some(true));
+        assert_eq!(option(19436, Some(&p)), Some(true));
+        assert_eq!(option(19437, Some(&p)), Some(true));
+        assert_eq!(option(19692, Some(&p)), Some(false));
+        for slot in 0..9 {
+            for (offset, direction) in [(0, -1), (1, 1)] {
+                let id = 19320 + slot * 2 + offset;
+                assert_eq!(
+                    bmz_skin_document::detail_options_numeric_event(id),
+                    Some((slot as usize, direction))
+                );
+                assert!(bmz_skin_document::is_detail_options_event(id));
+            }
+        }
+        assert!(bmz_skin_document::detail_options_numeric_event(19338).is_none());
     }
 }

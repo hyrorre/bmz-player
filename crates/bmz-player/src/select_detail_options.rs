@@ -32,6 +32,10 @@ pub struct DetailOptionDef {
 pub enum DetailEffects {
     Lane,
     GaugeBottom,
+    GaugeMode,
+    Timing,
+    Presentation,
+    Judgement,
     ScoreContext,
     Assist,
 }
@@ -54,6 +58,12 @@ const fn item(
         choices: if choices == 0 { 2 } else { choices },
         effects: match setting {
             SettingsEntryId::BottomShiftableGauge => DetailEffects::GaugeBottom,
+            SettingsEntryId::GaugeAutoShift => DetailEffects::GaugeMode,
+            SettingsEntryId::VisualOffsetMs | SettingsEntryId::VisualOffsetAutoAdjust => {
+                DetailEffects::Timing
+            }
+            SettingsEntryId::BgaMode => DetailEffects::Presentation,
+            SettingsEntryId::JudgeAlgorithm => DetailEffects::Judgement,
             SettingsEntryId::LnModePolicy => DetailEffects::ScoreContext,
             _ if mode_scoped => DetailEffects::Lane,
             _ => DetailEffects::Assist,
@@ -61,15 +71,35 @@ const fn item(
     }
 }
 
+const fn number(
+    id: i64,
+    key: &'static str,
+    category: i64,
+    setting: SettingsEntryId,
+    min: i64,
+    max: i64,
+) -> DetailOptionDef {
+    let mut def = item(id, key, category, setting, true, 0);
+    def.kind = DetailValueKind::Number { min, max, step: 1 };
+    def.choices = 0;
+    def
+}
+
 pub const CATALOG: &[DetailOptionDef] = &[
     item(101, "sudden", 1, SettingsEntryId::SuddenEnabled, true, 0),
     item(102, "hidden", 1, SettingsEntryId::HiddenEnabled, true, 0),
     item(103, "lift", 1, SettingsEntryId::LiftEnabled, true, 0),
     item(201, "gas-bottom", 2, SettingsEntryId::BottomShiftableGauge, false, 3),
+    item(202, "gas-mode", 2, SettingsEntryId::GaugeAutoShift, false, 5),
     item(301, "hs-auto", 3, SettingsEntryId::HispeedAutoAdjust, true, 0),
     item(302, "hs-config", 3, SettingsEntryId::HispeedMode, true, 5),
     item(303, "constant", 3, SettingsEntryId::Constant, true, 0),
+    number(304, "green-number", 3, SettingsEntryId::TargetGreenNumber, 1, 6000),
     item(401, "ln-mode", 4, SettingsEntryId::LnModePolicy, false, 6),
+    item(601, "bga", 6, SettingsEntryId::BgaMode, false, 3),
+    item(701, "judge-auto", 7, SettingsEntryId::VisualOffsetAutoAdjust, false, 0),
+    number(702, "visual-offset", 7, SettingsEntryId::VisualOffsetMs, -500, 500),
+    item(703, "judge-algorithm", 7, SettingsEntryId::JudgeAlgorithm, false, 3),
     item(501, "scroll-modifier", 5, SettingsEntryId::AssistScrollMode, false, 2),
     item(502, "ln-modifier", 5, SettingsEntryId::AssistLongNoteMode, false, 2),
     item(503, "mine-modifier", 5, SettingsEntryId::AssistMineMode, false, 2),
@@ -109,6 +139,25 @@ impl DetailOptionDef {
             SuddenEnabled => i64::from(p.play.lane_effect.sudden_enabled()),
             HiddenEnabled => i64::from(p.play.lane_effect.hidden_enabled()),
             LiftEnabled => i64::from(p.lane.lift_enabled),
+            GaugeAutoShift => match p.play.gauge_auto_shift {
+                GaugeAutoShiftConfig::Off => 0,
+                GaugeAutoShiftConfig::Continue => 1,
+                GaugeAutoShiftConfig::HardToGroove => 2,
+                GaugeAutoShiftConfig::BestClear => 3,
+                GaugeAutoShiftConfig::SelectToUnder => 4,
+            },
+            TargetGreenNumber => i64::from(p.lane.target_green_number),
+            BgaMode => match p.play.bga {
+                BgaModeConfig::On => 0,
+                BgaModeConfig::Auto => 1,
+                BgaModeConfig::Off => 2,
+            },
+            VisualOffsetAutoAdjust => i64::from(p.judge.visual_offset_auto_adjust),
+            VisualOffsetMs => p.judge.visual_offset_us / 1000,
+            JudgeAlgorithm => JudgeAlgorithmConfig::ORDER
+                .iter()
+                .position(|value| *value == p.judge.judge_algorithm)
+                .unwrap() as i64,
             BottomShiftableGauge => match p.play.bottom_shiftable_gauge {
                 BottomShiftableGaugeConfig::AssistEasy => 0,
                 BottomShiftableGaugeConfig::Easy => 1,
@@ -177,6 +226,14 @@ impl DetailOptionDef {
         if self.value(p) == next {
             return false;
         }
+        if matches!(self.kind, DetailValueKind::Number { .. }) {
+            let delta = (next - self.value(p)) as i32;
+            let changed = adjust_settings_value(p, self.setting, delta);
+            if changed && self.mode_scoped {
+                p.sync_active_play_mode();
+            }
+            return changed;
+        }
         // Use the same registry mutation as the settings screen; skip ADD values
         // that remain available through their existing configuration paths.
         for _ in 0..8 {
@@ -201,6 +258,13 @@ impl DetailOptionDef {
             return text.text(if index == 0 { "detail-options-off" } else { "detail-options-on" });
         }
         match self.setting {
+            SettingsEntryId::GaugeAutoShift => {
+                ["OFF", "CONTINUE", "HARD TO GROOVE", "BEST CLEAR", "SELECT TO UNDER"][index].into()
+            }
+            SettingsEntryId::BgaMode => ["ON", "AUTO", "OFF"][index].into(),
+            SettingsEntryId::JudgeAlgorithm => {
+                JudgeAlgorithmConfig::ORDER[index].beatoraja_name().to_uppercase()
+            }
             SettingsEntryId::BottomShiftableGauge => format_bottom_shiftable_gauge(
                 [
                     BottomShiftableGaugeConfig::AssistEasy,
@@ -237,8 +301,10 @@ impl DetailOptionDef {
             && !matches!(gas, GaugeAutoShiftConfig::BestClear | GaugeAutoShiftConfig::SelectToUnder)
         {
             Some("detail-options-gas-inactive")
-        } else if self.setting == SettingsEntryId::HispeedAutoAdjust
-            && !p.lane.hispeed_config().supports_floating()
+        } else if matches!(
+            self.setting,
+            SettingsEntryId::HispeedAutoAdjust | SettingsEntryId::TargetGreenNumber
+        ) && !p.lane.hispeed_config().supports_floating()
         {
             Some("detail-options-hs-inactive")
         } else if self.setting == SettingsEntryId::Constant && practice {
@@ -246,19 +312,23 @@ impl DetailOptionDef {
         } else {
             None
         };
-        let value = if editable { self.value(p) } else { -1 };
+        let value = if !editable {
+            -1
+        } else if self.setting == SettingsEntryId::GaugeAutoShift {
+            match gas {
+                GaugeAutoShiftConfig::Off => 0,
+                GaugeAutoShiftConfig::Continue => 1,
+                GaugeAutoShiftConfig::HardToGroove => 2,
+                GaugeAutoShiftConfig::BestClear => 3,
+                GaugeAutoShiftConfig::SelectToUnder => 4,
+            }
+        } else {
+            self.value(p)
+        };
         let value_label = if !editable {
             text.text("detail-options-unavailable")
-        } else if self.kind == DetailValueKind::Bool {
-            text.text(if value == 0 { "detail-options-off" } else { "detail-options-on" })
-        } else if matches!(
-            self.setting,
-            SettingsEntryId::AssistScrollMode
-                | SettingsEntryId::AssistLongNoteMode
-                | SettingsEntryId::AssistMineMode
-        ) && value < 2
-        {
-            text.text(if value == 0 { "detail-options-off" } else { "detail-options-remove" })
+        } else if (0..self.choices).contains(&value) {
+            self.choice_label(value as usize, text)
         } else {
             format_settings_value(p, self.setting)
         };
@@ -287,7 +357,7 @@ impl DetailOptionDef {
             ),
             _ => String::new(),
         };
-        let reason = if editable && value >= self.choices {
+        let reason = if editable && self.kind == DetailValueKind::Enum && value >= self.choices {
             text.text("detail-options-external-value")
         } else {
             reason_key.map(|key| text.text(key)).unwrap_or_default()
@@ -377,6 +447,34 @@ mod tests {
         assert_eq!(stepped_value(kind, 0, 0, -1), 0);
         assert_eq!(stepped_value(kind, 3, 0, -1), 0);
         assert_eq!(stepped_value(kind, 50, 0, 0), 50);
+    }
+
+    #[test]
+    fn numeric_settings_clamp_save_and_keep_other_key_modes() {
+        for setting in [SettingsEntryId::TargetGreenNumber, SettingsEntryId::VisualOffsetMs] {
+            let item = DetailOptionDef::for_setting(setting).unwrap();
+            let DetailValueKind::Number { min, max, .. } = item.kind else { panic!("numeric") };
+            let mut p = profile();
+            let original = p.play_mode_config(KeyMode::K7);
+            p.activate_play_mode(KeyMode::K14);
+            for bound in [min, max] {
+                if setting == SettingsEntryId::TargetGreenNumber {
+                    p.lane.target_green_number = bound as u32;
+                } else {
+                    p.judge.visual_offset_us = bound * 1000;
+                }
+                p.sync_active_play_mode();
+                let direction = if bound == min { -1 } else { 1 };
+                assert!(!item.adjust(&mut p, Some(KeyMode::K14), direction));
+                assert!(item.adjust(&mut p, Some(KeyMode::K14), -direction));
+                assert_eq!(item.value(&p), bound - i64::from(direction));
+                assert_eq!(p.play_mode_config(KeyMode::K7), original);
+                let saved = toml::to_string(&p).unwrap();
+                let mut restored: ProfileConfig = toml::from_str(&saved).unwrap();
+                restored.activate_play_mode(KeyMode::K14);
+                assert_eq!(item.value(&restored), item.value(&p));
+            }
+        }
     }
 
     #[test]
@@ -476,14 +574,20 @@ mod tests {
     fn similarly_named_options_and_external_add_values_stay_distinct() {
         let mut p = profile();
         let ln_mode = p.play.ln_mode_policy;
-        CATALOG[9].adjust(&mut p, None, 1);
+        DetailOptionDef::for_setting(SettingsEntryId::AssistLongNoteMode)
+            .unwrap()
+            .adjust(&mut p, None, 1);
         assert_eq!(p.play.ln_mode_policy, ln_mode);
         assert_eq!(p.play.assist.long_note_mode, AssistLongNoteMode::Remove);
-        CATALOG[6].adjust(&mut p, Some(KeyMode::K7), 1);
+        DetailOptionDef::for_setting(SettingsEntryId::Constant).unwrap().adjust(
+            &mut p,
+            Some(KeyMode::K7),
+            1,
+        );
         assert!(p.lane.constant_enabled);
         assert_eq!(p.play.assist.scroll_mode, AssistScrollMode::Off);
         p.play.assist.scroll_mode = AssistScrollMode::Add;
-        let row = CATALOG[8].row(
+        let row = DetailOptionDef::for_setting(SettingsEntryId::AssistScrollMode).unwrap().row(
             &p,
             DetailContext {
                 mode: None,
@@ -495,9 +599,13 @@ mod tests {
         );
         assert_eq!(row.value_label, "ADD");
         assert_eq!(row.value_index, -1);
-        CATALOG[8].adjust(&mut p, None, 1);
+        DetailOptionDef::for_setting(SettingsEntryId::AssistScrollMode)
+            .unwrap()
+            .adjust(&mut p, None, 1);
         assert_eq!(p.play.assist.scroll_mode, AssistScrollMode::Off);
-        CATALOG[8].adjust(&mut p, None, -1);
+        DetailOptionDef::for_setting(SettingsEntryId::AssistScrollMode)
+            .unwrap()
+            .adjust(&mut p, None, -1);
         assert_eq!(p.play.assist.scroll_mode, AssistScrollMode::Remove);
     }
 
@@ -528,7 +636,8 @@ mod tests {
             let mut p = profile();
             for index in 0..item.choices as usize {
                 item.select_choice(&mut p, context.mode, index);
-                let row = item.row(&p, context, &text);
+                let row =
+                    item.row(&p, DetailContext { gas: p.play.gauge_auto_shift, ..context }, &text);
                 assert_eq!(row.choices.len(), item.choices as usize);
                 assert_eq!(row.value_index, index as i64);
                 assert_eq!(row.value, row.choices[index].value);
@@ -541,7 +650,11 @@ mod tests {
         let mut p = profile();
         assert!(!CATALOG[0].select_choice(&mut p, None, 1));
         p.play.assist.scroll_mode = AssistScrollMode::Add;
-        assert!(CATALOG[8].select_choice(&mut p, None, 1));
+        assert!(
+            DetailOptionDef::for_setting(SettingsEntryId::AssistScrollMode)
+                .unwrap()
+                .select_choice(&mut p, None, 1)
+        );
         assert_eq!(p.play.assist.scroll_mode, AssistScrollMode::Remove);
     }
 

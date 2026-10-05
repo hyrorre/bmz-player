@@ -276,6 +276,8 @@ mod select_flow_keyboard;
 mod select_flow_mode_config;
 #[path = "app/select_flow/navigation.rs"]
 mod select_flow_navigation;
+#[path = "app/select_flow/panel_session.rs"]
+mod select_flow_panel_session;
 #[path = "app/select_flow/pointer.rs"]
 mod select_flow_pointer;
 #[path = "app/select_flow/preview.rs"]

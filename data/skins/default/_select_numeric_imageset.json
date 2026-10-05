@@ -1,0 +1,20 @@
+[
+  {"id": "detail_numeric_0_0", "act": 19320, "images": ["panel_img"]},
+  {"id": "detail_numeric_0_1", "act": 19321, "images": ["panel_img"]},
+  {"id": "detail_numeric_1_0", "act": 19322, "images": ["panel_img"]},
+  {"id": "detail_numeric_1_1", "act": 19323, "images": ["panel_img"]},
+  {"id": "detail_numeric_2_0", "act": 19324, "images": ["panel_img"]},
+  {"id": "detail_numeric_2_1", "act": 19325, "images": ["panel_img"]},
+  {"id": "detail_numeric_3_0", "act": 19326, "images": ["panel_img"]},
+  {"id": "detail_numeric_3_1", "act": 19327, "images": ["panel_img"]},
+  {"id": "detail_numeric_4_0", "act": 19328, "images": ["panel_img"]},
+  {"id": "detail_numeric_4_1", "act": 19329, "images": ["panel_img"]},
+  {"id": "detail_numeric_5_0", "act": 19330, "images": ["panel_img"]},
+  {"id": "detail_numeric_5_1", "act": 19331, "images": ["panel_img"]},
+  {"id": "detail_numeric_6_0", "act": 19332, "images": ["panel_img"]},
+  {"id": "detail_numeric_6_1", "act": 19333, "images": ["panel_img"]},
+  {"id": "detail_numeric_7_0", "act": 19334, "images": ["panel_img"]},
+  {"id": "detail_numeric_7_1", "act": 19335, "images": ["panel_img"]},
+  {"id": "detail_numeric_8_0", "act": 19336, "images": ["panel_img"]},
+  {"id": "detail_numeric_8_1", "act": 19337, "images": ["panel_img"]}
+]

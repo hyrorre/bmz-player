@@ -110,7 +110,34 @@ impl WinitApp {
         let Some(device_event) = self.filter_app_input_bounce(device_event) else {
             return;
         };
+        if self.route_select_option_session_event(&control_event) {
+            return;
+        }
+        if matches!(self.view_state(), AppViewState::Select)
+            && self.option_panel_exit_blocks_input()
+        {
+            return;
+        }
         if self.route_detail_options_input(&control_event) {
+            return;
+        }
+        if self.detail_options_enabled() && self.select.select_option_panel == 1 {
+            if event.pressed {
+                let changed = if let Some(cycle) =
+                    target_cycle_from_control(&event.name, &self.select.select_keys)
+                {
+                    if event.name.starts_with("Axis") {
+                        return;
+                    }
+                    self.apply_target_option_cycle(cycle);
+                    true
+                } else {
+                    self.apply_gamepad_play_option_control(event.device_id, &event.name)
+                };
+                if changed {
+                    self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                }
+            }
             return;
         }
         let practice_config = self
@@ -137,6 +164,7 @@ impl WinitApp {
     ) {
         self.input.replace_gamepad_pressed_controls(pressed_buttons);
         self.sync_select_holds_from_pressed_controls();
+        self.reconcile_select_option_session();
         self.sync_play_control_holds_from_pressed_controls();
         self.sync_viewer_wait_exit_holds();
     }
@@ -290,6 +318,7 @@ impl WinitApp {
     /// 選曲画面のアナログスクラッチ tick を蓄積する。回転量比例スクロール用。
     pub(super) fn accumulate_select_analog_ticks(&mut self, axis: &str, ticks: i32) {
         if !matches!(self.view_state(), AppViewState::Select)
+            || self.option_panel_exit_blocks_input()
             || self.play.active_play.is_some()
             || self.play.pending_decide.is_some()
             || self.play.pending_play_start.is_some()

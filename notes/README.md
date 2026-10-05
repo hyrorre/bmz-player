@@ -33,6 +33,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-05 | [DETAIL OPTIONSのexperimental化と2パネル操作](2026/2026-10-05-experimental-detail-options.md) |
 | 2026-10-03 | [Luxez-FlatのDETAIL OPTIONS表示](2026/2026-10-03-luxe-flat-detail-options.md) |
 | 2026-10-02 | [mz-selectのDETAIL OPTIONS表示](2026/2026-10-02-mz-select-detail-options.md) |
 | 2026-10-01 | [Select E2 DETAIL OPTIONSの再設計](2026/2026-10-01-select-detail-options.md) |

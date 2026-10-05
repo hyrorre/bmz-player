@@ -600,13 +600,22 @@ destination に `act` / `click` を置くと、text や panel も image / images
 
 ### BMZ Select DETAIL OPTIONS v1
 
-E2 holdのパネル操作状態を公開する。設定そのものの既存ref/eventと独立した名前空間で、
+新詳細パネル（互換panel 2）の操作状態を公開する。experimental ON時の物理入力はE1開閉／E2切替。設定そのものの既存ref/eventと独立した名前空間で、
 既存event 301..307をカーソル操作に読み替えない。event 302は従来通りSCROLL REMOVEの
 トグルであり、表示時間制御のCONSTANTはevent 400のまま。
 項目・適用条件・操作設計は[DETAIL OPTIONS仕様](select-detail-options.md)を参照する。
 
-JSON documentのルート（Luaでは返却するskin table）で `"bmzDetailOptions": 1` を
-明示した選曲スキン（type 5）でのみ、新E2の表示と入力を有効にする。
+本体設定`[select].experimental_detail_options = true`（既定false）かつ、JSON documentのルート
+（Luaでは返却するskin table）で`"bmzDetailOptions": 1`と`"bmzDetailOptionsNumbers": true`を
+明示した選曲スキン（type 5）で、新詳細の表示と2パネル入力を有効にする。
+Numbers宣言は数値行の現在値・増減を描画できることを表す。旧v1宣言だけでは従来操作に戻る。
+
+本体はselectの読込optionに予約キー`bmz_detail_options`を文字列`"1"`/`"0"`で渡す。
+Luaは`bmz.get_option("bmz_detail_options", "0")`を確認し、OFFなら旧Assist表示を残すこと。
+カスタマイズpropertyとして登録・保存しない。本体が値を上書きし、キャッシュの識別にも含める。
+OFF→ON／ON→OFFは選曲スキンを再ロードする。JSONは新option 19300とその否定で新旧を区別できる。
+OFF・未対応時はpanel 1/2/3を従来のholdで開く。ON・対応時はpanel 1/2だけを使い、
+固定表示中でもoption/timerは実際に表示するパネルを表す。物理E1/E2のhold参照は変更しない。
 宣言なし、0、未知のversionでは従来のbeatoraja式Assist表示・固定7鍵操作・旧クリックを維持し、
 本体の新UIを重ねない。一つのrefの使用だけでは対応を推定しない。
 スキンなしでは本体の旧ASSIST OPTIONSを使う。互換option 22、panel 2、開閉timerは変更しない。
@@ -621,19 +630,19 @@ E2表示中は新eventだけをクリック対象とし、背後の行・旧even
 
 退場を描画するスキンはルートに`"bmzDetailOptionsClose": true`も宣言できる（既定false）。
 E2から離れて300ms未満だけ、最後の項目snapshotと列のスクロール位置を描画用に保持する。
-E1/E1+E2への切り替えでも保持し、退出側timer 32と登場側timer 21/23を同時に進める。
+通常パネルへの切り替えでも保持し、退出側timer 32と登場側timer 21を同時に進める。
 この間はoption 19300と各ref/text/optionが保持データを表す。設定のeditableは設定自体の状態であり、
 退場中に操作できることを意味しない。退出側の新eventは即座に受け付けなくなる。
 他のパネルが開いていない場合は退場中のクリック・slider・ホイールも遮断する。
-切り替え先のE1/E1+E2がある場合は、従来どおり現在のパネルを操作できる。
+切り替え先の通常パネルがある場合は、現在のパネルを操作できる。
 開くdestinationには`op: [19300, 22]`とtimer 22、閉じるdestinationには
 `op: [19300, -22]`とtimer 32を使い、退場用クリック領域は作らない。
-別パネルの表示を禁止条件に含めない。E1+E2→E2ではtimer 33による旧パネルの退場とtimer 22を併用する。
+別パネルの表示を禁止条件に含めない。通常→詳細ではtimer 31による退場とtimer 22を併用する。
 300ms経過、E2再オープン、フォーカス喪失、別モーダル・画面への遷移で保持表示を終了する。
-途中でE1+E2→E1→パネルなしへ移ってもE2の退場時間は再起動しない。
+途中で詳細→通常→パネルなしへ移っても詳細の退場時間は再起動しない。
 保持期間後は下記の非表示値に戻る。Close宣言なしの対応スキンでは、新snapshotは解放時に終了する。
 未対応スキンの従来パネルの開閉演出には影響しない。
-互換option 22は解放時にfalse、timer 32は0msから開始し、それらの意味は変更しない。新規IDの追加はない。
+互換option 22は詳細を閉じる／通常へ切り替える時にfalse、timer 32は0msから開始し、それらの意味は変更しない。新規IDの追加はない。
 
 同梱のBMZ拡張版mz-selectもこのAPIを利用する。`default_detailoptions/parts.lua`の正常ロード時に
 対応宣言を伝播し、旧optionpanel3/4のE2表示（閉じるtimer 32を含む）だけを除去する。
@@ -652,7 +661,7 @@ E1/E1+E2は同じ画像IDを共用する場合もあるため、ID全体で除�
 | 19300 | CURSOR。表示順の0-based位置 |
 | 19301 | ITEM_COUNT。全項目数 |
 | 19302 | ITEM_ID。表示順と独立した安定ID |
-| 19303 | CATEGORY_ID。1=LANE、2=GAUGE、3=HI-SPEED、4=LONG NOTE、5=ASSIST / MODIFIER |
+| 19303 | CATEGORY_ID。1=LANE、2=GAUGE、3=HI-SPEED、4=LONG NOTE、5=ASSIST / MODIFIER、6=BGA、7=JUDGE |
 | 19304 | SCOPE。0=profile共通、4/5/6/7/8/9/10/14=編集対象キーモード、-1=未解決 |
 | 19305 | VALUE。保存設定の値。boolは0/1、enumは下記の明示コード、numberは数値そのもの |
 | 19306 | VALUE_INDEX。bool/enumの0-based選択肢index。number、未取得、候補外値は-1 |
@@ -664,12 +673,15 @@ E1/E1+E2は同じ画像IDを共用する場合もあるため、ID全体で除�
 enumのVALUEは、GAS下限: `0=ASSIST EASY,1=EASY,2=NORMAL`、HS CONFIG:
 `0=NORMAL,1=CLASSIC,2=FLOATING,3=NORMAL+FLOATING,4=CLASSIC+FLOATING`、LN MODE:
 `0=AUTO LN,1=AUTO CN,2=AUTO HCN,3=FORCE LN,4=FORCE CN,5=FORCE HCN`。
+GAS MODEは`0=OFF,1=CONTINUE,2=HARD TO GROOVE,3=BEST CLEAR,4=SELECT TO UNDER`、
+BGAは`0=ON,1=AUTO,2=OFF`、JUDGE ALGORITHMは`0=COMBO,1=DURATION,2=LOWEST`。
+緑数字は1..6000、表示オフセットは-500..500 ms、いずれも刻み1。
 Modifierは`0=OFF,1=REMOVE`を新E2の候補とする。既存経路で保存された候補外値は
 SCROLL `2=ADD`、LN `2=ADD LN,3=ADD CN,4=ADD HCN,5=ADD ALL`、MINE
 `2=ADD RANDOM,3=ADD NEAR,4=ADD BLANK`として読み取れる。変更するまで値を保持し、
 VALUE_INDEXは-1、CHOICE_COUNTは2、textの値と理由で候補外設定を知らせる。
 
-値未取得はVALUE=-1。E2はキーモード未解決時に7Kを編集対象として解決し、SCOPE=7を返す。
+値未取得はVALUE=-1。表示オフセットの有効な-1 msとは、editable/validで区別する。E2はキーモード未解決時に7Kを編集対象として解決し、SCOPE=7を返す。
 低水準snapshotで対象を未取得として渡す場合はSCOPE/VALUE=-1の契約を維持する。
 非表示時はITEM_COUNT / CHOICE_COUNT / ROW_SLOTS=0、他のnumber=-1、
 textは空文字、正のoptionはfalse。数値が0の設定と未取得を区別する。
@@ -705,7 +717,10 @@ OFF値、非適用、編集不可は独立する。effectiveは譜面に変換�
 | 19304 | 引数argの安定ITEM_IDを選択。不明なIDは無視 |
 | 19310..19316 | 可視行0..6を選択。空き行は無視 |
 | 19317 / 19318 | スクロール用の枠外slot 7 / 8を選択 |
+| 19320..19337 | slot `s=0..8`の数値を1ステップ変更。`19320+2*s`=減少、`19321+2*s`=増加 |
 
+数値eventはその列を選択してから増減する。bool/enum・空き行・非表示・退場中ではno-op。
+最小／最大では設定・保存・重い再処理を行わない。argの符号は使わない。
 19304は引数を渡せるイベント経路用。通常のdestinationクリックは可視行eventを使う。
 event引数の符号で19300..19303の方向は変わらない。
 number / text / option / eventは別名前空間で、同じ番号でも意味が異なる。
@@ -720,8 +735,12 @@ slot `s=0..6` の基底は `19400 + 10*s`。各名前空間で次を解決する
 | 1 | category_id | value_label | selected |
 | 2 | value | 状態ラベル（編集不可 / 非適用 / 空文字） | editable |
 | 3 | scope | 空文字 | effective |
-| 4 | -1 | 空文字 | VALUE_INDEXが-1（現在値の補足表示用） |
-| 5..9 | -1 | 空文字 | false（予約） |
+| 4 | CHOICE_COUNT | 空文字 | enumの候補外値（VALUE_INDEX=-1）。numberではfalse |
+| 5 | VALUE_INDEX | 空文字 | 数値型 |
+| 6 | 数値MIN（他の型は-1） | 空文字 | 数値の減少が可能（editableかつ現在値>MIN） |
+| 7 | 数値MAX（他の型は-1） | 空文字 | 数値の増加が可能（editableかつ現在値<MAX） |
+| 8 | 数値STEP（他の型は-1） | 空文字 | false（予約） |
+| 9 | -1 | 空文字 | false（予約） |
 
 空き行・非表示行はnumber=-1、text空、全option=false。
 viewportは環状で、項目がある場合に中央slot 3だけselected=trueになる。
@@ -753,7 +772,7 @@ destinationの`"bmzDetailScroll": [dx, dy]`に1項目分の移動量（skin canv
 可視項目slot `s=0..6`と枠外補助slot `s=7,8`、選択肢index `c=0..7` の基底IDは `19500 + 64*s + 4*c`。
 19500..20075を予約する（旧可視枠19500..19947に、補助枠19948..20075を追加）。
 各項目ブロック後半32 IDは将来用で未取得値を返す。
-現在の全項目は2〜6選択肢のため、全候補を同時表示できる。
+bool/enumは2〜6選択肢のため、全候補を同時表示できる。数値行は候補セルがすべて無効。
 
 | offset | number | text | option | event |
 |---|---|---|---|---|

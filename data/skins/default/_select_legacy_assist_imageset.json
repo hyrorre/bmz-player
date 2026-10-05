@@ -1,0 +1,9 @@
+[
+  {"id": "legacy_assist_301", "ref": 301, "act": 301, "images": ["panel_inactive_img", "panel_img"]},
+  {"id": "legacy_assist_302", "ref": 302, "act": 302, "images": ["panel_inactive_img", "panel_img"]},
+  {"id": "legacy_assist_303", "ref": 303, "act": 303, "images": ["panel_inactive_img", "panel_img"]},
+  {"id": "legacy_assist_304", "ref": 304, "act": 304, "images": ["panel_inactive_img", "panel_img"]},
+  {"id": "legacy_assist_305", "ref": 305, "act": 305, "images": ["panel_inactive_img", "panel_img"]},
+  {"id": "legacy_assist_306", "ref": 306, "act": 306, "images": ["panel_inactive_img", "panel_img"]},
+  {"id": "legacy_assist_307", "ref": 307, "act": 307, "images": ["panel_inactive_img", "panel_img"]}
+]

@@ -2,14 +2,20 @@
 
 ## 目的と設計判断
 
-E2 holdで本体共通のプレイ直前設定を編集する。優先順位は製品方針として
-SUDDEN+、HIDDEN+、LIFT、GAS下限とする。使用頻度の実測に基づくものではない。
-E1とE1+E2の操作は維持する。既存コードの`detail`はE1+E2を指すため、
-新E2のコードは`detail_options`と呼ぶ。
+本体設定「選曲 > 実験的な詳細オプション」をONにした場合だけ、対応スキンで通常／詳細の2パネルを使用する。
+既定はOFF。保存先はapp configの`[select].experimental_detail_options`で、profileとは独立する。
+既存configのキー欠落もOFFとし、設定変更時に選曲スキンを再読込する。
+優先順位は製品方針としてSUDDEN+、HIDDEN+、LIFT、GAS下限とする。
+使用頻度の実測に基づくものではない。
 
-2026-10-03の追加指定により、新E2の表示と入力は対応宣言のあるスキンだけで有効にする。
-未宣言スキンを本体の新UIで覆う初期方針と、全スキンで物理操作を統一する初期方針は取り消す。
-既存スキンの表示と固定鍵の意味を揃えるため、未宣言時は従来のbeatoraja式Assist操作を維持する。
+2026-10-05の仕様変更で、ON時はE2 hold・E1+E2 holdによるパネル割当を廃止し、
+E1で開閉、表示中のE2押下で通常／詳細を切り替える。旧詳細の6設定を新カタログへ統合する。
+通常パネル内の設定・鍵盤割当は維持する。既存の`detail`関数は旧3パネル用として残し、
+新カタログを`detail_options`、開閉の論理状態を`OptionPanelSession`とする。
+
+OFF、未対応スキン、スキンなしでは従来の3パネルを使う。
+E1 hold=通常、E2 hold=Assist、E1+E2 hold=旧詳細で、短押し固定表示は行わない。
+本書で描画APIを説明する「E2」は互換panel 2（新詳細）の名前であり、ON時の物理holdではない。
 
 基点: `main` / `753f81cbd2f3a8b1dd7c4ea08211c77b4edd7a84`。
 作業ブランチ: `feat/select-detail-options`。
@@ -27,17 +33,23 @@ E1とE1+E2の操作は維持する。既存コードの`detail`はE1+E2を指す
 |2|102 / hidden|LANE|HiddenEnabled|OFF / ON|キーモード|
 |3|103 / lift|LANE|LiftEnabled|OFF / ON|キーモード|
 |4|201 / gas-bottom|GAUGE|BottomShiftableGauge|ASSIST EASY / EASY / NORMAL|profile共通|
-|5|301 / hs-auto|HI-SPEED|HispeedAutoAdjust|OFF / ON|キーモード|
-|6|302 / hs-config|HI-SPEED|HispeedMode|NORMAL / CLASSIC / FLOATING / NORMAL+FLOATING / CLASSIC+FLOATING|キーモード|
-|7|303 / constant|HI-SPEED|Constant|OFF / ON|キーモード|
-|8|401 / ln-mode|LONG NOTE|LnModePolicy|AUTO(LN/CN/HCN) / FORCE(LN/CN/HCN)|profile共通|
-|9|501 / scroll-modifier|ASSIST / MODIFIER|AssistScrollMode|OFF / REMOVE|profile共通|
-|10|502 / ln-modifier|ASSIST / MODIFIER|AssistLongNoteMode|OFF / REMOVE|profile共通|
-|11|503 / mine-modifier|ASSIST / MODIFIER|AssistMineMode|OFF / REMOVE|profile共通|
-|12|504 / expand-judge|ASSIST / MODIFIER|AssistExpandJudge|OFF / ON|profile共通|
-|13|505 / judge-area|ASSIST / MODIFIER|AssistJudgeArea|OFF / ON|profile共通|
-|14|506 / mark-note|ASSIST / MODIFIER|AssistMarkNote|OFF / ON|profile共通|
-|15|507 / bpm-guide|ASSIST / MODIFIER|AssistBpmGuide|OFF / ON|profile共通|
+|5|202 / gas-mode|GAUGE|GaugeAutoShift|OFF / CONTINUE / HARD TO GROOVE / BEST CLEAR / SELECT TO UNDER|profile共通|
+|6|301 / hs-auto|HI-SPEED|HispeedAutoAdjust|OFF / ON|キーモード|
+|7|302 / hs-config|HI-SPEED|HispeedMode|NORMAL / CLASSIC / FLOATING / NORMAL+FLOATING / CLASSIC+FLOATING|キーモード|
+|8|303 / constant|HI-SPEED|Constant|OFF / ON|キーモード|
+|9|304 / green-number|HI-SPEED|TargetGreenNumber|1..6000、刻み1|キーモード|
+|10|401 / ln-mode|LONG NOTE|LnModePolicy|AUTO(LN/CN/HCN) / FORCE(LN/CN/HCN)|profile共通|
+|11|601 / bga|BGA|BgaMode|ON / AUTO / OFF|profile共通|
+|12|701 / judge-auto|JUDGE|VisualOffsetAutoAdjust|OFF / ON|profile共通|
+|13|702 / visual-offset|JUDGE|VisualOffsetMs|-500..500 ms、刻み1|キーモード|
+|14|703 / judge-algorithm|JUDGE|JudgeAlgorithm|COMBO / DURATION / LOWEST|profile共通|
+|15|501 / scroll-modifier|ASSIST / MODIFIER|AssistScrollMode|OFF / REMOVE|profile共通|
+|16|502 / ln-modifier|ASSIST / MODIFIER|AssistLongNoteMode|OFF / REMOVE|profile共通|
+|17|503 / mine-modifier|ASSIST / MODIFIER|AssistMineMode|OFF / REMOVE|profile共通|
+|18|504 / expand-judge|ASSIST / MODIFIER|AssistExpandJudge|OFF / ON|profile共通|
+|19|505 / judge-area|ASSIST / MODIFIER|AssistJudgeArea|OFF / ON|profile共通|
+|20|506 / mark-note|ASSIST / MODIFIER|AssistMarkNote|OFF / ON|profile共通|
+|21|507 / bpm-guide|ASSIST / MODIFIER|AssistBpmGuide|OFF / ON|profile共通|
 
 ADD系は今回は新E2の選択候補に含めない。`assist.rs`ではSCROLL ADD / MINE ADDは
 変換する一方、REMOVEと同じ実効Assist分類にはならず、LN ADDも追加結果に依存する。
@@ -58,11 +70,11 @@ E2の編集対象を明示的に7Kとする。初期案の「未解決なら編�
 変換関数に含まれないため、設定対象は元のサイドのモードを維持する。
 
 GAS下限はOFFでも編集できる。runtimeの`BestClear` / `SelectToUnder`の下限として
-利用する。`Off` / `Continue` / `HardToGroove`では非適用。方式自体はE1+E2に残す。
+利用する。`Off` / `Continue` / `HardToGroove`では非適用。方式も新詳細で編集する。OFF時の旧3パネルではE1+E2操作を維持する。
 コースのCLASS系ゲージは通常ゲージより上のrankだけで推移するため、GAS下限は
 非適用と表示する。Practiceでは開始前のGAS方式を基準に表示する。後続のPractice設定で
 ゲージを変更する場合（旧AutoShiftからのBEST CLEAR移行を含む）は、そのruntime設定が優先する。
-HS AUTO ADJUSTはFLOATING対応HS CONFIGで有効。CONSTANTはPracticeでは非適用。
+HS AUTO ADJUSTと緑数字はFLOATING対応HS CONFIGで有効。非適用でも次回用に編集・保持できる。CONSTANTはPracticeでは非適用。
 その他のeffectiveは本体設定を利用する条件を表し、譜面上の対象ノーツの存在や
 変換結果による最終Assist判定を推測しない。boolがOFFでもeditable/effectiveは独立する。
 CONSTANTは表示時間による制御で、SCROLL REMOVEとは別。
@@ -70,7 +82,16 @@ LN MODEはLN解釈、LN MODIFIERは譜面改変で、混同しない。
 
 ## 入力と状態
 
-E2+Scratch Up/Downは前/次項目、奇数/偶数鍵は値の次/前。
+ONかつ対応スキンでは、閉じた状態のE1押下で通常パネルを即時表示する。
+300ms未満で離すと固定表示し、300ms以上保持して離すと閉じる。
+固定中は次のE1押下で即座に閉じ、その解放で開き直さない。次回は通常パネルから開く。
+開いている間のE2押下エッジで通常／詳細を切り替え、E2解放では閉じない。
+閉じているときのE2だけの押下は無操作。開く前から保持したE2も切替を起こさない。
+同一イベントでE1/E2が新規押下になった場合は開く→切替の順に処理する。
+フォーカス喪失・モーダル・入力再同期で生じた解放は短押しとみなさず、固定表示を作らない。
+物理holdはプレイなど他画面にも必要なので書き換えず、論理的な開閉状態を分離した。
+
+詳細表示中のScratch Up/Downは前/次項目、奇数/偶数鍵は値の次/前。
 独立したUI Left/Rightで前/次項目、UI Up/Downで前/次の選択肢へ移る。
 横並びの項目・縦並びの候補に軸を合わせるため、初期案から矢印の役割を交換した。
 上は前（数値なら減少）、下は次（数値なら増加）。マウスも利用できる。鍵盤との重複は鍵盤を優先し、
@@ -79,6 +100,9 @@ E2+Scratch Up/Downは前/次項目、奇数/偶数鍵は値の次/前。
 
 bool/enumは押下エッジだけ。値変更鍵は全解放するまで次の変更を受け付けない。
 同方向の複数鍵も一変更、反対方向の追加押下は無視（最初の押下が優先）。
+数値は最初の変更から400ms後に60ms間隔でリピートする。遅延フレームでまとめて増減しない。
+最初の値変更キーの解放・項目移動・パネル切替で停止し、上限下限ではno-op。
+OS側リピートは使わない。マウスの数値＋／−は1クリック1ステップ。
 項目移動・パネル遷移時に押されている鍵は、全解放後に押し直す。
 アナログは既存の感度、閾値、tick蓄積と`analog_ticks_per_scroll`を使い、
 パネル遷移時は蓄積・選曲リピート・ドラッグを解除する。
@@ -97,8 +121,8 @@ registryの変更関数を共用し、実際に変化した場合のみdirty・�
 LN MODEは既存score context同期で一覧・replay・集計・ランキングと再利用cacheを更新する。
 HS計算は既存profile/session経路を利用し、パネル専用計算式を追加しない。
 保存は既存profile保存機構へ統合し、移動や描画で書き込まない。
-E2を離れるとdirtyの場合だけ既存保存の共通本体`save_play_options_for_mode`で保存し、次曲開始・終了時の
-既存保存にも含める。GAS方式・E1配置等の一時値を巻き戻さないよう、変更したGAS下限だけ
+詳細から通常へ切り替えるかパネルを閉じると、dirtyの場合だけ既存保存の共通本体`save_play_options_for_mode`で保存し、次曲開始・終了時の
+既存保存にも含める。GAS方式・E1配置等の一時値を巻き戻さないよう、変更したGAS方式・下限だけ
 選曲側へ同期する。registryのモード設定同期と、既存のプレイ開始時HS計算を利用する。
 E2中の毎フレームのモード同期と閉鎖時の保存には同じ編集先を使う。
 閉鎖時は7K fallbackを含む編集先を明示的に渡し、その後通常選曲の対象へ戻す。
@@ -109,8 +133,7 @@ LN MODEの既存event 308とGAS下限event 341は新E2と同じ変更経路を�
 
 `select_detail_options.rs`のカタログは安定ID、分類、registry key、型、候補数、
 スコープ、副作用分類を持ち、値表示・適用条件を同じadapterで解決する。
-初期構成はbool/enumのみ。数値のmin/max/stepとclamp契約は型・resolver・テストで
-用意するが、数値行のリピートは今回追加しない。項目追加時はカタログと設定adapter、
+数値行もmin/max/step、clamp、内部リピートと保存を共用する。項目追加時はカタログと設定adapter、
 i18nを追加すればよく、物理入力と7行スキンの変更は不要。
 
 描画snapshotは読み取り専用`Arc`。閉じている間は生成せず、開いている間も値・対象・
@@ -129,10 +152,15 @@ cache keyの項目数はカタログ長から決まり、追加項目の更新�
 `.local/beatoraja`のSkinPropertyを確認した。19300帯と19400帯に既存の同名前空間の
 定義はない。beatoraja custom timer 10000..19999とは名前空間が異なり、新timerは設けない。
 確定APIはnumber 19300..19312、text 19300..19309、option 19300..19305、
-event 19300..19304と19310..19318、行refは19400..19489。
+event 19300..19304と19310..19318、数値増減event 19320..19337、行refは19400..19489。
 全フィールド・未取得値・値コードは[Skin API](skin.md#bmz-select-detail-options-v1)に定義する。
 
-`type: 5`かつ`bmzDetailOptions: 1`の選曲スキンだけで新E2の表示と入力を有効にする。
+本体設定ONかつ`type: 5`、`bmzDetailOptions: 1`、`bmzDetailOptionsNumbers: true`を
+宣言する選曲スキンで新詳細を有効にする。数値を描画・編集できない旧v1だけの宣言では有効にしない。
+スキン読込時の本体予約option `bmz_detail_options`は文字列`"1"`/`"0"`。Luaは
+`bmz.get_option("bmz_detail_options", "0")`で確認し、OFFでは旧Assist部品を残す。
+ユーザーのスキンカスタマイズに保存せず、本体が最終値を上書きし、読込キャッシュの識別にも含める。
+ON/OFF切替時は入力・固定表示を解除して選曲スキンだけを再ロードする。
 未宣言・0・未知versionではスキン本来のAssistパネルと固定鍵操作を使用し、本体の新UIは重ねない。
 スキンなしの場合も本体標準の従来のASSIST OPTIONS（7トグル）を使用する。
 旧E2はKEY1から順にEXPAND JUDGE、CONSTANT（SCROLL REMOVE）、JUDGE AREA、LEGACY NOTE（LN REMOVE）、
@@ -144,7 +172,7 @@ MARK NOTE、BPM GUIDE、NO MINEを切り替える。旧名CONSTANTは表示時�
 描画は同じ読み取り専用snapshotを使い、7可視行と選択項目の情報を公開する。
 デフォルト選曲スキンでは、この7スロットを横並びの列として描画する。
 各列の下にその項目の全選択肢を縦並びで表示し、編集中の列は「▼」、設定中の値は「●」で
-区別する。15項目のうち選択項目と前後3項目が横へスクロールする。最初の4項目の順序は維持する。
+区別する。21項目のうち選択項目と前後3項目が横へスクロールする。最初の4項目の順序は維持する。
 列見出しのクリックで項目選択、選択肢のクリックで直接設定する。現在と同じ値はno-opとし、
 異なる値へ直接変更しても共通の設定変更処理と副作用は1回だけ通す。
 destination拡張`bmzDetailScroll: [dx,dy]`で同じ補間を適用し、クリック判定も移動後の位置を使う。
@@ -162,7 +190,8 @@ custom timer上限19999や負のruntime event -20000帯とも意味を共有し�
 セル容量と描画レイアウトの拡張が必要。既存19300/19400帯を使う縦リストの対応スキンも維持する。
 実際のデフォルトは`data/skins/default/select.json`（1280×720）で、解像度別の別ファイルはない。
 `_select_detail_{text,imageset,panel,destination}.json`をincludeし、全画面比率へ既存のcanvas
-変換で拡大・letterboxする。全画面パネルと行専用eventで入力を分離し、E1とE1+E2は維持する。
+変換で拡大・letterboxする。全画面パネルと行専用eventで入力を分離する。
+通常パネルの描画は維持し、旧詳細はexperimental OFF時に使用する。
 その他の未対応スキンは従来のAssist表示・操作を使用する。
 
 ### mz-select
@@ -191,12 +220,12 @@ OFFも通常の値として示し、編集不可・非適用は状態テキス�
 タイトル、スコープ、件数、操作ガイド、ナビゲーションボタンは表示しない。
 登場は旧Assistと同じtimer 22、300ms、acc 2で左から移動し、クリック領域も同じ座標で移動する。
 枠外2列は登場完了後に描画して、右の補助列が開き始めに飛び出すのを防ぐ。
-項目移動には本体の選曲スクロール補間を使う。E2解放時は操作を即終了し、timer 32、300ms、acc 2で
+項目移動には本体の選曲スクロール補間を使う。詳細を閉じる／通常へ切り替える時は操作を即終了し、timer 32、300ms、acc 2で
 左へ戻しながら暗幕を透明にする。退場には可視7列と説明欄を使い、枠外の補助列を新たに進入させない。
 `bmzDetailOptionsClose=true`を宣言したスキンだけに、最後の項目snapshot（Arc）と列変位を描画用に保持する。
 編集用snapshotとは分け、退場中のE2設定eventは受け付けない。
-E1/E1+E2への切替でもE2の退場を最後まで再生し、切り替え先の登場と並行させる。
-逆方向も既存のtimer 31/33による退場とE2のtimer 22による登場を並行させる。
+通常への切替でも詳細の退場を最後まで再生し、timer 32と21を並行させる。
+逆方向もtimer 31による通常の退場と22による詳細の登場を並行させる。
 切り替え先のパネルは通常どおり操作できる。パネルなしへ閉じる場合だけ、退場中のクリック・slider・ホイールを遮断する。
 E2再オープン、フォーカス喪失、別モーダル・画面への遷移ではE2の退場表示を打ち切る。
 既存timerを使って元パネルと同じ退場を小さく実装するため、退場の基準位置は開き終わりの位置とする。
@@ -213,7 +242,7 @@ BMZ以外では新部品は何も返さず、従来のAssist表示を維持す�
 ### Luxez-Flat
 
 `select_skinparts/default_detailoptions/parts.lua`を`default_optionpanel`の後、シャッターの前に追加する。
-項目・入力・保存は本体の既存15項目と変更経路を共用し、Luaはsnapshotの描画とeventの配置だけを担当する。
+項目・入力・保存は本体の既存21項目と変更経路を共用し、Luaはsnapshotの描画とeventの配置だけを担当する。
 新規Skin APIやスキン独自の設定値は追加しない。先頭4項目の順序、7K fallback、GASの適用条件も共通。
 
 7可視列＋補助2列を横に並べ、選択項目を中央へ循環・補間する。幅1920のcanvas内を使い、
@@ -235,7 +264,7 @@ BMZ以外では新部品は何も返さず、従来のAssist表示を維持す�
 ユーザー指定に合わせ、▼・●、パネルタイトル・操作ガイド・件数・ナビゲーションボタンは表示しない。
 
 開閉は旧パネルと同じtimer 22/32、300ms、acc 2、x=-1920との往復を使う。
-`bmzDetailOptionsClose=true`を宣言し、本体の保持snapshotでE2↔E1+E2の退出・登場を並行再生する。
+`bmzDetailOptionsClose=true`を宣言し、本体の保持snapshotで通常↔詳細の退出・登場を並行再生する。
 登場中は描画とhitを同じ座標へ動かし、退場は可視7列と説明欄のみでhitを持たない。
 透明な全画面hitと本体のevent制限で背後への入力を遮断する。
 項目切り替えの`bmzDetailScroll`、再オープン・モーダル・フォーカス喪失の扱いはmz-selectと共通。
@@ -243,7 +272,7 @@ BMZ以外では新部品は何も返さず、従来のAssist表示を維持す�
 ローダーは新部品が成功した場合だけ対応宣言を伝播する。旧`default_optionpanel`は一部の画像IDを
 E2とE1+E2で共用し、E2にはtimerを持たない`mouseRect`もある。そのため旧部品内で
 timer 22/32またはoption ±22のdestinationだけに`bmzLegacyAssist`を付け、正常ロード後に除去する。
-ID全体や他部品のdestinationを除去せず、E1/E1+E2のtimer・操作を維持する。
+ID全体や他部品のdestinationを除去せず、旧3パネル用のtimer・操作経路も保持する。
 新部品が無効・欠落・ロード失敗なら宣言せず、旧Assistの表示・固定7鍵・クリックを維持する。
 BMZ以外では新部品がnilを返し、元のUIを維持する。
 旧EXTRA MODEのADD候補を新E2へ追加しない判断も共通カタログに従う。設定画面・旧eventの経路は維持する。
@@ -258,33 +287,18 @@ snapshot/resolver、viewport、対応宣言・旧skinフォールバックをデ
 
 ## 動作確認手順
 
-1. `cargo run -p bmz-player --locked`で起動し、デフォルト選曲スキンを選び、7Kの曲行でE2を保持する。
-2. スクラッチ上下と独立矢印で横並びの15項目を一周する。各列の全選択肢と「●」の値が一致すること、
-   選択肢クリックでその値に変更できることを確認する。奇数鍵／下、偶数鍵／上でも変更し、
-   背後の曲選択・曲開始が起きないことを確認する。9Kでは独立矢印とマウスを使う。
-   左右で先頭と末尾を往復し、選択列が中央へ補間され、移動中のクリックが見えている候補へ届くことを確認する。
-3. SUDDEN/HIDDEN/LIFTの保存量を設定画面で用意し、独立にOFF/ONを切り替える。
-   E2を離れて開き直し、プレイ開始・アプリ再起動後も設定と量が保持されることを確認する。
-4. GAS OFFで下限を変え、E1+E2のKEY2でBEST CLEAR／SELECT TO UNDERにして次曲へ渡す。
-   LN MODEを変えたときは選曲スコア・ランキング・リプレイ対象が更新されることを確認する。
-5. 2Pの奇偶、同方向・反対方向同時押し、鍵を保持しての項目移動、E2→両押し→E2、
-   それぞれの解放順序を試す。値変更は全鍵解放後の押し直しを必要とする。
-6. E2中にF1、ウィンドウ切替、修飾キー解放を行い、復帰時に値や背後の選曲が暴発しないことを確認する。
-7. 未対応選曲スキンで元のAssistパネルと旧クリック領域が使えることを確認する。
-   KEY1〜7が各Assistを直接切り替え、新UIが重ならないことを確認する。E1・E1+E2も従来どおり操作する。
-8. 日本語／英語、960×540・1280×720・1024×768・1920×1080とOS表示スケールで行・説明・ガイドを確認する。
-9. ALLのフォルダやキーモード未解決コースでE2を開き、7Kと表示されること、7Kの設定が変更できることを確認する。
-   7K→9K変換ONでも未解決時は7Kを編集し、再起動後も7Kへ保存されることを確認する。
-10. mz-selectを選択し、同じ操作を試す。中央の列枠と現在値の発光、非適用の文字表示を確認する。
-    左からの登場中も見えているボタンをクリックでき、透明部分では背後の曲が反応しないことを確認する。
-    E2を離すと文字・値を保持した7列と説明欄が300msで左へ戻り、暗幕も消えることを確認する。
-    退場中のクリック・ホイールで設定や背後の選曲が動かず、終了後は通常操作できることを確認する。
-    E2→E1+E2とE1+E2→E2で退出・登場が両方動き、退出側の値をクリック変更できないことを確認する。
-    E2→E1+E2→E1→閉じると素早く解放し、E2の退場が再起動せずに終わることも確認する。
-    E2の再オープン・F1・フォーカス喪失では古いE2退場表示が残らないことを確認する。
-    E2からE1+E2へ移る・解放順序を変える操作で、旧Assist表示が現れないことを確認する。
-    `enable.txt`の`default_detailoptions/parts.lua`を一時的に外してスキンを再読込すると、
-    元のAssist表示・固定鍵操作へ戻ることを確認し、確認後にその行を戻す。
+1. 初期設定OFFでdefault、mz-select、Luxez-Flatを切り替え、従来のE1/E2/両holdと旧Assistクリックを確認する。
+2. 本体設定の選曲ページで実験的な詳細オプションをONにする。再読込後、E1短押し（300ms未満）で通常が固定表示され、次のE1押下で閉じることを確認する。
+3. E1を300ms以上保持して離すと閉じること、固定中／保持中どちらでもE2を押すたびに通常↔詳細が切り替わり、E2解放では変わらないことを確認する。
+4. E2だけでは開かないこと、E2を保持してからE1を押しても通常から開くこと、同時押し・解放順・OSリピート・フォーカス喪失で暴発しないことを確認する。
+5. スクラッチ／左右で21項目を一周し、奇数／下と偶数／上で変更する。SP/DPの奇偶、9Kの独立矢印、マウスも確認する。選択項目は中央へ循環・補間する。
+6. 緑数字と表示オフセットを長押しし、400ms後から60ms間隔で増減すること、端で停止すること、項目を移動すると止まることを確認する。マウスの＋／−も試す。
+7. 保存量を持つSUDDEN/HIDDEN/LIFTを独立にOFF/ONにする。GAS OFF中に下限を編集し、同じパネルでGAS方式を変える。BGA、判定自動調整、アルゴリズム、LN MODEも変更し、次のプレイ・再起動後に値が戻らないことを確認する。
+8. キーモード未解決行では7K、解決済み行では譜面変換後のモードを編集し、他モードが変わらないことを確認する。スキン表示・選曲スコア・リプレイ対象も確認する。
+9. mz-select/Luxez-Flatの通常↔詳細の両方向で退出と登場が並行再生されること、退出側・透明部分・閉鎖中へのクリックで背後が動かないことを確認する。
+10. ONのまま未対応スキンへ変更すると従来操作になること、OFFへ戻すと3パネルへ復帰することを確認する。日本語／英語、960×540・1280×720・1024×768・1920×1080とOS表示スケールも確認する。
 
-実行した自動検証と実機確認の区別は[作業記録](../notes/2026/2026-10-01-select-detail-options.md)に残す。
-mz-select追加分は[専用記録](../notes/2026/2026-10-02-mz-select-detail-options.md)を参照。
+今回の検証結果・未実施項目は[2026-10-05作業記録](../notes/2026/2026-10-05-experimental-detail-options.md)を参照。
+過去の表示検証は[初期実装](../notes/2026/2026-10-01-select-detail-options.md)、
+[mz-select](../notes/2026/2026-10-02-mz-select-detail-options.md)、
+[Luxez-Flat](../notes/2026/2026-10-03-luxe-flat-detail-options.md)に残す。
