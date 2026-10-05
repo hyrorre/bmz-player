@@ -13,6 +13,28 @@ pub(super) struct OptionPanelSession {
 }
 
 impl OptionPanelSession {
+    fn route_event(
+        &mut self,
+        event: &ControlInputEvent,
+        keys: &SelectKeyBindings,
+        available: bool,
+        holds: (bool, bool),
+        now: Instant,
+    ) -> bool {
+        if !available {
+            self.cancel(holds.0, holds.1);
+            return false;
+        }
+        let Some(control) = event.name.as_deref() else { return false };
+        if !keys.is_start(control) && !keys.is_e2_action(control) && control != "Select" {
+            return false;
+        }
+        if !event.repeat {
+            self.edge(holds.0, holds.1, now);
+        }
+        true
+    }
+
     fn edge(&mut self, e1: bool, e2: bool, now: Instant) {
         let start_pressed = e1 && !self.e1;
         let start_released = !e1 && self.e1;
@@ -69,22 +91,18 @@ impl WinitApp {
         if !self.detail_options_enabled() || !matches!(self.view_state(), AppViewState::Select) {
             return false;
         }
-        let Some(control) = event.name.as_deref() else { return false };
-        if !self.select.select_keys.is_start(control)
-            && !self.select.select_keys.is_e2_action(control)
-            && control != "Select"
-        {
-            return false;
-        }
-        if self.detail_options_available() && !event.repeat {
-            self.select.option_session.edge(
-                self.input.start_held,
-                self.input.select_held,
-                Instant::now(),
-            );
+        let available = self.detail_options_available();
+        let consumed = self.select.option_session.route_event(
+            event,
+            &self.select.select_keys,
+            available,
+            (self.input.start_held, self.input.select_held),
+            Instant::now(),
+        );
+        if consumed || !available {
             self.update_select_option_panel();
         }
-        true
+        consumed
     }
 
     pub(super) fn reconcile_select_option_session(&mut self) {
@@ -108,6 +126,45 @@ impl WinitApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unavailable_panel_passes_modifier_keys_to_search_and_key_config() {
+        let keys =
+            SelectKeyBindings::from_profile(&crate::config::play_input::default_profile_input());
+        let now = Instant::now();
+        let mut session = OptionPanelSession::default();
+        session.edge(true, false, now);
+        session.edge(false, false, now);
+        assert_eq!(session.panel, 1);
+        for code in [KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyV, KeyCode::KeyE, KeyCode::KeyQ] {
+            let holds = (code == KeyCode::KeyQ, code == KeyCode::KeyW);
+            for (state, repeat) in [
+                (ElementState::Pressed, false),
+                (ElementState::Pressed, true),
+                (ElementState::Released, false),
+            ] {
+                let event =
+                    ControlInputEvent::keyboard_parts(PhysicalKey::Code(code), state, repeat);
+                assert!(!session.route_event(&event, &keys, false, holds, now));
+                assert_eq!(session.panel, 0);
+            }
+        }
+        // A modal ending while E1 is held must not turn its release into a pinned panel.
+        let release = ControlInputEvent::keyboard_parts(
+            PhysicalKey::Code(KeyCode::KeyQ),
+            ElementState::Released,
+            false,
+        );
+        assert!(session.route_event(&release, &keys, true, (false, false), now));
+        assert_eq!(session.panel, 0);
+        let press = ControlInputEvent::keyboard_parts(
+            PhysicalKey::Code(KeyCode::KeyQ),
+            ElementState::Pressed,
+            false,
+        );
+        assert!(session.route_event(&press, &keys, true, (true, false), now));
+        assert_eq!(session.panel, 1, "fresh E1 must work again outside the modal");
+    }
 
     #[test]
     fn tap_pins_hold_closes_and_next_press_closes_without_reopening() {
