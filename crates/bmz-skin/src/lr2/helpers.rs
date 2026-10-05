@@ -655,7 +655,9 @@ pub(super) fn split_csv_line(line: &str) -> Vec<String> {
     let mut chars = line.chars().peekable();
     while let Some(ch) = chars.next() {
         match ch {
-            '"' => in_quotes = !in_quotes,
+            // A quote inside an unquoted field is not an opening delimiter.
+            // Some LR2 skins leave a stray quote after an image filename.
+            '"' if in_quotes || current.trim().is_empty() => in_quotes = !in_quotes,
             // `//` starts a trailing comment in LR2 skins; drop the rest of the
             // line so inline comments (e.g. `#IF,38,32 //scoregraph off`) are not
             // parsed as extra fields/conditions.

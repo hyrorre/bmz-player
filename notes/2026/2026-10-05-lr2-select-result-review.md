@@ -67,3 +67,30 @@ OpenLR2は`LoadSceneG`後に`FlipScore`を呼ぶため、ロード時条件は�
   `ghost_battle_setting.csv`を読み込めること、include欠落警告がないことを確認。
 - fmt、bmz-skin check / all-targets Clippy / test成功（247件）。
   実素材は`BMZ_TEST_LR2_SKIN_ROOT`で指定。ログはmain側の`.local/lr2-fix4-test.log`。
+
+## 画像名末尾の余分な引用符
+
+3RのCSVには`RED.png",,`のような定義があり、従来のparserは途中の引用符を
+開始引用符として扱って後続カンマまで画像名へ取り込んでいた。
+開始引用符はフィールド先頭だけで認識し、末尾の余分な引用符は既存のパス正規化で除去する。
+正常に引用されたカンマ入りファイル名と、末尾コメントの扱いは維持する。
+
+- synthetic CSVと実3RMain / 3RBTの定義で回帰テストを実施。
+- appの画像decodeでも、両スキンの判定線（144×6）、ビーム（122×482）、
+  キーフラッシュ（79×65）、発光（665×216）の4画像を確認。
+- ローカルログはmain側の`.local/lr2-fix5-focused.log`、`.local/lr2-fix5-decode.log`。
+
+## 最終検証と残る制約
+
+- `cargo fmt --check`成功。
+- `cargo check --workspace --locked`、
+  `cargo clippy --workspace --all-targets --locked -- -D warnings`、
+  `cargo test --workspace --locked --no-fail-fast`がすべて成功。
+  ログはmain側の`.local/lr2-final-{check,clippy,test}.log`。
+- テストの素材参照先と隔離データは前述の環境変数で指定。
+  `BMZ_TEST_LR2_SKIN_ROOT`は今回追加した実素材テストの参照先のみを変更する。
+  その他の既存外部スキンテストには素材不足による早期returnがある。
+- 実機のGPU表示・入力操作、macOS / Linuxでの実行は未確認。
+- 3R Selectの`reg.png` / `Shutter.png` / `parts.tga`、EndlessCirculation
+  SE-Selectの`parts.tga`は指定先に実ファイルが無い。外部素材の追加・改変は行っていない。
+  未対応命令・装飾等の範囲は [互換状況](../../docs/skin-compatibility.md) と仕様を参照。

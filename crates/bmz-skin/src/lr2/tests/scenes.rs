@@ -84,6 +84,51 @@ fn lr2_red_belt_loads_shared_settings_when_available() {
 }
 
 #[test]
+fn lr2_stray_filename_quotes_do_not_consume_delimiters_or_comments() {
+    for line in ["#IMAGE,parts/beam.png\",,\t//15\",,", "#IMAGE,parts/beam.png\" //15\",,"] {
+        let parsed = parse_csv_line(line).unwrap();
+        assert_eq!(normalize_lr2_asset_path(field(&parsed, 1)), "parts/beam.png");
+        assert!(parsed.fields.iter().skip(2).all(String::is_empty));
+    }
+    assert_eq!(
+        split_csv_line("#IMAGE,\"parts/a,b.png\",, // quoted name"),
+        ["#IMAGE", "parts/a,b.png", "", ""]
+    );
+    assert_eq!(split_csv_line("#IF,38,32 // trailing condition comment"), ["#IF", "38", "32"]);
+}
+
+#[test]
+fn lr2_3r_stray_quotes_resolve_existing_play_images_when_available() {
+    let root = std::env::var_os("BMZ_TEST_LR2_SKIN_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/skins"));
+    for name in ["3RMain.lr2skin", "3RBT.lr2skin"] {
+        let path = root.join("3R/Play").join(name);
+        if !path.is_file() {
+            eprintln!("SKIP missing {}", path.display());
+            continue;
+        }
+        let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+        for part in [
+            "parts/judgeline/RED.png",
+            "parts/beam/DEF.png",
+            "parts/keyflash/DEF.png",
+            "parts/grow/DEF.png",
+        ] {
+            let source = loaded.value["source"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|source| source["path"].as_str())
+                .find(|source| source.ends_with(part))
+                .unwrap_or_else(|| panic!("{name}: missing {part}"));
+            assert!(path.parent().unwrap().join(source).is_file(), "{name}: {source}");
+        }
+        eprintln!("3R {name}: all four formerly malformed image paths exist");
+    }
+}
+
+#[test]
 fn lr2_scene_assets_decode_when_available() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins");
     for (relative, kind) in [
