@@ -6,6 +6,12 @@ pub mod gamecontroller;
 pub mod gameinput;
 pub mod gamepad;
 pub mod gilrs;
+#[cfg(all(target_os = "linux", feature = "linux-evdev"))]
+mod linux_clock;
+#[cfg(all(target_os = "linux", feature = "linux-evdev"))]
+pub mod linux_evdev;
+#[cfg(all(target_os = "linux", feature = "linux-evdev"))]
+mod linux_keys;
 #[cfg(all(target_os = "macos", feature = "macos-iohid"))]
 pub mod macos;
 #[cfg(any(target_os = "macos", test))]

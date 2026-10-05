@@ -371,6 +371,11 @@ pub enum FrameLatencyModeConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalInputConfig {
+    #[serde(default)]
+    pub linux_evdev_devices: Vec<String>,
+    /// Linux A/B verification only. False uses gilrs' bounded event wait.
+    #[serde(default)]
+    pub linux_gamepad_legacy_poll: bool,
     pub backend: InputBackendKind,
     #[serde(default)]
     pub gamepad_backend: GamepadBackendKind,
@@ -440,6 +445,8 @@ pub enum GamepadBackendKind {
 pub enum InputBackendKind {
     Auto,
     Winit,
+    /// Opt-in native Linux X11 keyboard capture; unavailable routes use winit.
+    LinuxEvdev,
     RawInput,
     /// Opt-in macOS IOHID capture, compiled only with the `macos-iohid` feature.
     MacOsHid,
@@ -675,6 +682,8 @@ impl Default for AppConfig {
             obs: ObsConfig::default(),
             select: MusicSelectConfig::default(),
             input: GlobalInputConfig {
+                linux_evdev_devices: Vec::new(),
+                linux_gamepad_legacy_poll: false,
                 backend: InputBackendKind::Auto,
                 gamepad_backend: GamepadBackendKind::Gilrs,
                 keyboard_enabled: true,
