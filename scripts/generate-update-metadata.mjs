@@ -76,7 +76,7 @@ export async function packageManifest(root, kind, target, version, layout = 'gro
   return { schema: 1, kind, target, version, min_updater_protocol: paths.protocol, files }
 }
 
-export function signManifest(manifest, privateKey, expectedPublicKey) {
+export function signBytes(payload, privateKey, expectedPublicKey) {
   const key = createPrivateKey(privateKey)
   if (key.asymmetricKeyType !== 'ed25519')
     throw new Error('Expected an Ed25519 private key (PKCS8 PEM)')
@@ -84,10 +84,15 @@ export function signManifest(manifest, privateKey, expectedPublicKey) {
   const rawPublic = pub.export({ type: 'spki', format: 'der' }).subarray(-32).toString('base64')
   if (rawPublic !== expectedPublicKey)
     throw new Error('Signing key does not match the embedded public key')
-  const payload = Buffer.from(JSON.stringify(manifest))
   const signature = sign(null, payload, key)
   if (!verify(null, payload, pub, signature)) throw new Error('Signature self-check failed')
-  return { payload: payload.toString('base64'), signature: signature.toString('base64') }
+  return signature.toString('base64')
+}
+
+export function signManifest(manifest, privateKey, expectedPublicKey) {
+  const payload = Buffer.from(JSON.stringify(manifest))
+  const signature = signBytes(payload, privateKey, expectedPublicKey)
+  return { payload: payload.toString('base64'), signature }
 }
 
 export async function releaseManifest(

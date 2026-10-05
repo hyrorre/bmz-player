@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## Unreleased
+
+### 改善
+
+- Releaseのclient manifestを署名付き`release.json`へ統合。全OSの実行ファイル識別・配布物のSHA256・Windows更新条件をまとめ、アプリは新形式を優先して読む。移行期間は旧版向け`updates.json`と`SHA256SUMS.txt`も継続配布する。
+
 ## v0.4.3
 
 ### 改善

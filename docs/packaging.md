@@ -556,12 +556,16 @@ bmz-player-v<version>-linux-x64-sources.tar.gz
 SHA256SUMS.txt
 ```
 
-GitHub Release には配布物、`SHA256SUMS.txt`、client manifest、署名付き `updates.json` を添付する。
+GitHub Releaseには配布物、`SHA256SUMS.txt`、署名付き `release.json`、旧版互換用の
+`updates.json` を添付する。独立したclient manifestは添付せず、rianIRは `release.json` の
+`builds` を取り込む。形式と橋渡し版の公開手順は [Releaseメタデータ](release-metadata.md) を参照。
 Linux tarジョブは実行用単独の起動と対応ソースからのオフライン再ビルドを検証する。
 全ジョブはmetadataで解決した同じcommitをcheckoutし、manifestにもそのcommitを記録する。
 手動実行でもworkflow起動元の `GITHUB_SHA` を配布物のcommitとして使わない。
 Linux tarを含む全ビルド成功後に集約する。dry runでは集約済みmanifestとチェックサムを
 `verified-release-files` artifactとして保存し、Release・更新フィードへは公開しない。
+dry runの `release.json` は `signature: null` を持つ未署名の確認用データで、自動更新では拒否する。
+公開用署名キーを使わず、`updates.json` も生成しない。
 `*-provenance.txt` / `*-ffmpeg-build.txt` は Actions artifact 側に残し、
 Release asset には登録しない。
 

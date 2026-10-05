@@ -71,14 +71,16 @@ helper が準備完了してから本体を正常終了し、すべての packag
 
 ### updater の互換性
 
-現在の protocol は 2。署名済み更新情報の `min_updater_protocol` を満たさない場合は、
+現在の protocol は 3。新しい本体は署名付き `release.json` を優先し、assetが存在しない場合だけ
+従来の `updates.json` を読む。新形式の取得・署名・内容検証が失敗した場合は旧形式へ戻らない。
+署名済み更新情報の `min_updater_protocol` を満たさない場合は、
 `bridge_tag` が指す旧形式の橋渡し版へ先に更新する。次回起動後、新updaterが最新版を取得する。
 橋渡しは現在版より新しく、目的版より古く、選択チャンネル内にあることを検証する。最大8段で打ち切る。
 橋渡し版のReleaseと `updates.json` を削除しないこと。
 `bmz-package.json` の `min_updater_protocol` も「このパッケージを読んで適用するのに必要なprotocol」を指す。
 新helper自身がprotocol 2でも、橋渡し版のパッケージ形式とこの値は1を維持する。
 
-新配置の公開は次の順序で行う（このコード変更だけではReleaseを公開しない）:
+protocol 1から2への配置移行は次の順序で行う（このコード変更だけではReleaseを公開しない）:
 
 1. Repository variable `BMZ_WINDOWS_UPDATER_LAYOUT=legacy` を設定し、新旧配置対応の本体と
    updater を旧配置で含む橋渡し版を公開する。package / release の minimum protocol は 1。
@@ -91,6 +93,12 @@ helper が準備完了してから本体を正常終了し、すべての packag
 `BMZ_MIN_UPDATER_PROTOCOL` を下げても、新配置を protocol 1 として公開することはできない。
 ローカルのパッケージ作成・公開しないdry runには橋渡しタグは不要。
 
+protocol 3は統合Releaseメタデータへの対応を示す。groupedパッケージ内部の形式は変わらず、
+`updater/bmz-package.json` の最低protocolは2を維持する。protocol 3の本体・helperを含む
+橋渡し版Bも、旧 `updates.json` の最低protocolは2にする。B公開後に最低protocolを3へ
+引き上げる場合は、`BMZ_UPDATE_BRIDGE_TAG` をBへ切り替える。
+形式・公開設定・段階的な移行は [Releaseメタデータ](release-metadata.md) を参照。
+
 ## 更新の署名と公開設定
 
 ### Windows
@@ -98,7 +106,8 @@ helper が準備完了してから本体を正常終了し、すべての packag
 - Repository variable `BMZ_UPDATE_PUBLIC_KEY`: Ed25519 公開鍵の raw 32 bytes を base64 化した値。
 - Repository secret `BMZ_UPDATE_PRIVATE_KEY`: 対応する Ed25519 秘密鍵の PKCS8 PEM。
 - 本体のビルド時に `BMZ_UPDATE_PUBLIC_KEY` を埋め込む。キー未設定のローカルビルドでは portable 自動適用を無効にする。
-- `scripts/generate-update-metadata.mjs release` はキーの対応を確認して `updates.json` の payload bytes に署名する。
+- `scripts/generate-release-metadata.mjs` はキーの対応を確認し、統合 `release.json` と互換用
+  `updates.json` を同じ配布物情報から生成・署名する。旧形式のpayload bytesへの署名も維持する。
 - SHA256だけでなく、公開鍵で署名を検証してから対象URL・サイズ・version・protocolを使用する。
 
 キーは管理者が一度生成し、安全にバックアップする。秘密鍵をリポジトリや配信先へ置かない。
@@ -143,10 +152,10 @@ API / 配布仕様: [Sparkle](https://sparkle-project.org/documentation/)、
 
 ### CI の公開順
 
-1. Windows portable / installer、macOS両CPU版、Flatpakを生成・検証。
-2. 最終macOS ZIPに署名し、Windowsの署名付き更新情報を生成。
+1. Windows portable / installer、macOS両CPU版、Flatpak、Linux tarと対応ソースを生成・検証。
+2. 最終macOS ZIPに署名し、署名付き `release.json` / `updates.json` とSHA256SUMSを生成。
 3. 配布アーカイブ・SHA256SUMSをReleaseへ添付。
-4. 完成した `updates.json` とSparkleフィードを最後に公開。
+4. 完成した `release.json`、互換用 `updates.json`、Sparkleフィードを最後に公開。
 
 `update-feed` の書込みはworkflow間で直列化する。既存フィードの履歴を保持し、古いOSで動く過去版を消さない。
 署名キーを扱わないworkflow_dispatchは配布生成のdry runとして利用できる。
@@ -157,6 +166,7 @@ API / 配布仕様: [Sparkle](https://sparkle-project.org/documentation/)、
 cargo test -p bmz-updater
 cargo test -p bmz-player update
 node --test scripts/generate-update-metadata.test.mjs
+node --test scripts/generate-release-metadata.test.mjs
 node --test scripts/verify-sparkle-signature.test.mjs
 python scripts/test_sparkle_appcast.py
 cargo test --workspace

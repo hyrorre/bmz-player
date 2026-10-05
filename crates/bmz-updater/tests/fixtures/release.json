@@ -1,0 +1,110 @@
+{
+  "schema": "bmz-release-manifest-v1",
+  "client": "bmz-player",
+  "version": "0.5.0",
+  "git_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "builds": [
+    {
+      "id": "windows-x64",
+      "platform": "windows",
+      "arch": "x86_64",
+      "package_kind": "portable-installer",
+      "client_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "id": "macos-arm64",
+      "platform": "macos",
+      "arch": "aarch64",
+      "package_kind": "app",
+      "client_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "id": "macos-x64",
+      "platform": "macos",
+      "arch": "x86_64",
+      "package_kind": "app",
+      "client_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "id": "linux-x64-flatpak",
+      "platform": "linux",
+      "arch": "x86_64",
+      "package_kind": "flatpak",
+      "client_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "id": "linux-x64-tar",
+      "platform": "linux",
+      "arch": "x86_64",
+      "package_kind": "tar",
+      "client_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
+  "artifacts": [
+    {
+      "name": "bmz-player-v0.5.0-windows-x64-portable.zip",
+      "build": "windows-x64",
+      "kind": "portable",
+      "url": "https://github.com/hyrorre/bmz-player/releases/download/v0.5.0/bmz-player-v0.5.0-windows-x64-portable.zip",
+      "size": 123456789,
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "update": {
+        "min_updater_protocol": 2,
+        "bridge_tag": "v0.4.3"
+      }
+    },
+    {
+      "name": "bmz-player-v0.5.0-windows-x64-setup.exe",
+      "build": "windows-x64",
+      "kind": "installer",
+      "url": "https://github.com/hyrorre/bmz-player/releases/download/v0.5.0/bmz-player-v0.5.0-windows-x64-setup.exe",
+      "size": 123456789,
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "update": {
+        "min_updater_protocol": 2,
+        "bridge_tag": "v0.4.3"
+      }
+    },
+    {
+      "name": "bmz-player-v0.5.0-macos-arm64.app.zip",
+      "build": "macos-arm64",
+      "kind": "app",
+      "url": "https://github.com/hyrorre/bmz-player/releases/download/v0.5.0/bmz-player-v0.5.0-macos-arm64.app.zip",
+      "size": 123456789,
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    {
+      "name": "bmz-player-v0.5.0-macos-x64.app.zip",
+      "build": "macos-x64",
+      "kind": "app",
+      "url": "https://github.com/hyrorre/bmz-player/releases/download/v0.5.0/bmz-player-v0.5.0-macos-x64.app.zip",
+      "size": 123456789,
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    {
+      "name": "bmz-player-v0.5.0-linux-x64.flatpak",
+      "build": "linux-x64-flatpak",
+      "kind": "flatpak",
+      "url": "https://github.com/hyrorre/bmz-player/releases/download/v0.5.0/bmz-player-v0.5.0-linux-x64.flatpak",
+      "size": 123456789,
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    {
+      "name": "bmz-player-v0.5.0-linux-x64.tar.gz",
+      "build": "linux-x64-tar",
+      "kind": "tar",
+      "url": "https://github.com/hyrorre/bmz-player/releases/download/v0.5.0/bmz-player-v0.5.0-linux-x64.tar.gz",
+      "size": 123456789,
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    {
+      "name": "bmz-player-v0.5.0-linux-x64-sources.tar.gz",
+      "build": "linux-x64-tar",
+      "kind": "sources",
+      "url": "https://github.com/hyrorre/bmz-player/releases/download/v0.5.0/bmz-player-v0.5.0-linux-x64-sources.tar.gz",
+      "size": 123456789,
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
+  ],
+  "signature": "zNHWATdvTq1i20MJ9vD30k7U3CnNJnkUG+BWEsjacSySLUKq5YVd1+J5XJFh4gxHNuP/dYTaChCFT4jI91buCA=="
+}

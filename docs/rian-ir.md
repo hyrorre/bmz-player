@@ -386,12 +386,16 @@ SHA-256（小文字64桁hex）を `client_hash` として送る。archive、inst
 全体のhashではない。
 
 Windows/macOS/Flatpak/Linux tarの各release buildは最終実行ファイルから内部用manifestを生成する。
-最終release jobは全targetのmanifestを検証・集約し、GitHub ReleaseにはrianIR importer
-互換manifestを `client-manifest-bmz-player-vX.Y.Z.json` として1ファイルだけ含める。
+最終release jobは全targetのmanifestを検証・集約し、GitHub Releaseには統合した
+`release.json` を含める。従来の `client-manifest-bmz-player-vX.Y.Z.json` は添付しない。
+アプリ自身はmanifestを読まず、実行ファイルから直接 `client_hash` を計算する。
+内部用のtarget別manifestはビルド間の受け渡しに引き続き利用する。
+以下は統合JSONのrianIR用フィールドの抜粋で、全体には配布物一覧と署名も含む。
+完全な形式は [Releaseメタデータ](release-metadata.md) を参照。
 
 ```json
 {
-  "schema": "bmz-rianir-client-manifest-v1",
+  "schema": "bmz-release-manifest-v1",
   "client": "bmz-player",
   "version": "0.1.11",
   "git_commit": "<40 hex>",
@@ -434,6 +438,10 @@ Windows/macOS/Flatpak/Linux tarの各release buildは最終実行ファイルか
 targetをrianIRのplatform、arch、package_kindへ変換する。rianIR管理者はmanifestの
 version、commit、各buildを確認してから `builds[].client_hash`を `allowed_clients`
 へ登録する。失効時は同テーブルから削除する。
+
+確認したrianIRの `ClientManifestImportService` はトップレベルの `client` / `version` /
+`builds` を読み、追加フィールドとschema識別子を検査しないため、統合JSONを取り込める。
+署名検証は同インポーターでは行わない。署名を検証して登録する運用にはrianIR側の対応が必要。
 
 Linux tarは `linux-x64-tar` を `platform=linux, arch=x86_64, package_kind=tar` に変換する。
 ハッシュは `patchelf` 後のアーカイブ内 `bin/bmz-player` の検証済み値を使う。

@@ -127,7 +127,9 @@ integration; the manual artifact still contains only the two archives and checks
 It checks the archive version/commit against release metadata and combines the
 Linux tar client hash with the Windows, macOS and Flatpak builds. The hash is
 from the verified packaged executable after `patchelf`, not the launcher or tarball.
-Both archives and the combined client manifest enter the final `SHA256SUMS.txt`.
+Both archives and the signed unified `release.json` enter the final `SHA256SUMS.txt`.
+The release no longer attaches a separate client manifest; rianIR reads the
+top-level `builds` in `release.json`. See [Release metadata](release-metadata.md).
 Download corresponding sources from the same Release as the runtime; GitHub's
 automatic source snapshot does not include vendored dependencies or Ubuntu/FFmpeg sources.
 

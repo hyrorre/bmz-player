@@ -138,38 +138,27 @@ pub async fn check_for_update(channel: UpdateChannelConfig) -> Result<Option<Upd
     if let Some((_, installed)) = installed_package() {
         if let Some(key) = PUBLIC_KEY.filter(|key| !key.is_empty()) {
             for _ in 0..8 {
-                let Some(metadata) = release.assets.iter().find(|a| a.name == "updates.json")
-                else {
+                let Some(metadata) = update_metadata_asset(&release.assets) else {
                     return Ok(None);
                 };
                 ensure!(metadata.size <= 1024 * 1024, "update manifest too large");
                 let bytes =
                     bounded_bytes(&client, &metadata.browser_download_url, 1024 * 1024).await?;
-                let signed = bmz_updater::manifest::verify_release(&bytes, key)?;
-                let Some(target) = signed
-                    .packages
-                    .into_iter()
-                    .find(|p| p.target == installed.target && p.kind == installed.kind)
-                else {
-                    return Ok(None);
+                let signed = verify_update_metadata(&metadata.name, &bytes, key)?;
+                let tag = match update_step(
+                    signed.packages,
+                    &release.tag_name,
+                    &installed,
+                    current_version(),
+                    bmz_updater::PROTOCOL,
+                )? {
+                    None => return Ok(None),
+                    Some(UpdateStep::Package(package)) => {
+                        selected = Some(asset_from_signed(&package));
+                        break;
+                    }
+                    Some(UpdateStep::Bridge(tag)) => tag,
                 };
-                ensure!(
-                    target.version == release.tag_name.trim_start_matches('v'),
-                    "release/manifest version mismatch"
-                );
-                if target.min_updater_protocol <= bmz_updater::PROTOCOL {
-                    selected = Some(asset_from_signed(&target));
-                    break;
-                }
-                let bridge = target.bridge_tag.context(
-                    "この更新には新しいupdaterが必要です。リリースページから更新してください。",
-                )?;
-                ensure!(
-                    is_newer_version(&bridge, current_version())
-                        && is_newer_version(&release.tag_name, &bridge),
-                    "invalid bridge release"
-                );
-                let tag = format!("v{}", bmz_updater::manifest::version(&bridge)?);
                 release = client
                     .get(format!("{GITHUB_API_REPO}/releases/tags/{tag}"))
                     .send()
@@ -202,6 +191,58 @@ pub async fn check_for_update(channel: UpdateChannelConfig) -> Result<Option<Upd
         asset.sha256 = fetch_sha256(&client, &release.assets, &asset.name).await?;
     }
     Ok(Some(candidate(release, selected)))
+}
+
+fn update_metadata_asset(assets: &[GithubAsset]) -> Option<&GithubAsset> {
+    // An invalid new manifest is an error, never a reason to use the old one.
+    assets
+        .iter()
+        .find(|asset| asset.name == "release.json")
+        .or_else(|| assets.iter().find(|asset| asset.name == "updates.json"))
+}
+
+#[derive(Debug)]
+enum UpdateStep {
+    Package(ReleasePackage),
+    Bridge(String),
+}
+
+fn update_step(
+    packages: Vec<ReleasePackage>,
+    tag: &str,
+    installed: &PackageManifest,
+    current: &str,
+    protocol: u32,
+) -> Result<Option<UpdateStep>> {
+    let Some(target) =
+        packages.into_iter().find(|p| p.target == installed.target && p.kind == installed.kind)
+    else {
+        return Ok(None);
+    };
+    ensure!(target.version == tag.trim_start_matches('v'), "release/manifest version mismatch");
+    if target.min_updater_protocol <= protocol {
+        return Ok(Some(UpdateStep::Package(target)));
+    }
+    let bridge = target
+        .bridge_tag
+        .context("この更新には新しいupdaterが必要です。リリースページから更新してください。")?;
+    ensure!(
+        is_newer_version(&bridge, current) && is_newer_version(tag, &bridge),
+        "invalid bridge release"
+    );
+    Ok(Some(UpdateStep::Bridge(format!("v{}", bmz_updater::manifest::version(&bridge)?))))
+}
+
+fn verify_update_metadata(
+    name: &str,
+    bytes: &[u8],
+    key: &str,
+) -> Result<bmz_updater::manifest::ReleaseManifest> {
+    if name == "release.json" {
+        Ok(bmz_updater::release::verify_release(bytes, key)?.windows_updates())
+    } else {
+        bmz_updater::manifest::verify_release(bytes, key)
+    }
 }
 
 fn candidate(release: GithubRelease, asset: Option<UpdateAsset>) -> UpdateCandidate {
@@ -442,6 +483,10 @@ pub fn target_arch() -> &'static str {
 #[cfg(test)]
 #[path = "update/download_tests.rs"]
 mod download_tests;
+
+#[cfg(test)]
+#[path = "update/metadata_tests.rs"]
+mod metadata_tests;
 
 #[cfg(test)]
 mod tests {

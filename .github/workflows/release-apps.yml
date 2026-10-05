@@ -33,6 +33,7 @@ env:
   BMZ_UPDATE_PUBLIC_KEY: ${{ vars.BMZ_UPDATE_PUBLIC_KEY }}
   BMZ_WINDOWS_UPDATER_LAYOUT: ${{ vars.BMZ_WINDOWS_UPDATER_LAYOUT || 'grouped' }}
   BMZ_UPDATE_BRIDGE_TAG: ${{ vars.BMZ_UPDATE_BRIDGE_TAG }}
+  BMZ_MIN_UPDATER_PROTOCOL: ${{ vars.BMZ_MIN_UPDATER_PROTOCOL }}
 
 jobs:
   metadata:
@@ -96,6 +97,7 @@ jobs:
           node --test scripts/verify-sparkle-signature.test.mjs
           python3 scripts/test_sparkle_appcast.py
           node --test scripts/combine-client-hash-manifests.test.mjs
+          node --test scripts/generate-release-metadata.test.mjs
 
   build-windows:
     name: Build Windows x64
@@ -724,27 +726,23 @@ jobs:
             \( -name "*.txt" -o \( -name "*.json" ! -name "*-client-manifest.json" \) \) \
             -print -delete
 
-      - name: Combine client hash manifests
+      - name: Generate unified and compatible release metadata
         env:
           BMZ_VERSION: ${{ needs.metadata.outputs.version }}
+          BMZ_COMMIT: ${{ needs.metadata.outputs.commit }}
+          SHOULD_UPLOAD: ${{ needs.metadata.outputs.should_upload }}
+          BMZ_UPDATE_PRIVATE_KEY: ${{ needs.metadata.outputs.should_upload == 'true' && secrets.BMZ_UPDATE_PRIVATE_KEY || '' }}
         run: |
           set -euo pipefail
-          output="dist/release/client-manifest-bmz-player-v${BMZ_VERSION}.json"
-          node scripts/combine-client-hash-manifests.mjs \
-            --input-dir dist/release \
-            --output "${output}" \
-            --expected-targets windows-x64,macos-arm64,macos-x64,linux-x64-flatpak,linux-x64-tar
+          args=(dist/release "${BMZ_VERSION}" "${BMZ_COMMIT}")
+          if [[ "${SHOULD_UPLOAD}" != true ]]; then args+=(--unsigned); fi
+          node scripts/generate-release-metadata.mjs "${args[@]}"
+          # Per-build client hashes are inputs only; release.json replaces the public manifest.
           find dist/release -maxdepth 1 -type f \
-            -name "*-client-manifest.json" ! -path "${output}" \
+            -name "*-client-manifest.json" \
             -print -delete
-          cat "${output}"
-
-      - name: Generate SHA256SUMS
-        run: |
-          set -euo pipefail
-          cd dist/release
-          find . -maxdepth 1 -type f ! -name '*.signature' ! -name SHA256SUMS.txt -printf '%f\0' | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
-          cat SHA256SUMS.txt
+          cat dist/release/release.json
+          cat dist/release/SHA256SUMS.txt
 
       - name: Upload verified release files for dry run
         if: needs.metadata.outputs.should_upload != 'true'
@@ -755,13 +753,6 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
-
-      - name: Generate signed update metadata
-        if: needs.metadata.outputs.should_upload == 'true'
-        env:
-          BMZ_UPDATE_PRIVATE_KEY: ${{ secrets.BMZ_UPDATE_PRIVATE_KEY }}
-          BMZ_VERSION: ${{ needs.metadata.outputs.version }}
-        run: node scripts/generate-update-metadata.mjs release dist/release "${BMZ_VERSION}"
 
       - name: Upload files to GitHub Release
         if: needs.metadata.outputs.should_upload == 'true'
@@ -774,7 +765,7 @@ jobs:
           set -euo pipefail
           files=()
           for asset in dist/release/*; do
-            case "${asset}" in */updates.json|*.signature) continue ;; esac
+            case "${asset}" in */release.json|*/updates.json|*.signature) continue ;; esac
             files+=("${asset}")
           done
           args=(release upload "${RELEASE_TAG}" "${files[@]}")
@@ -793,6 +784,7 @@ jobs:
         run: |
           set -euo pipefail
           # New release metadata is a final commit marker, after every archive is available.
+          gh release upload "${RELEASE_TAG}" dist/release/release.json --clobber
           gh release upload "${RELEASE_TAG}" dist/release/updates.json --clobber
           if ! gh release view update-feed >/dev/null 2>&1; then
             gh release create update-feed --title "BMZ update feeds" --notes "Static appcast files used by BMZ Player." --prerelease --latest=false
