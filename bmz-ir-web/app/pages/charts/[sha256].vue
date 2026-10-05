@@ -125,55 +125,27 @@ const selfBestEntry = computed<IrRankingEntry | null>(
     ranking.value?.ranking.entries.find((entry) => entry.relation.is_self) ??
     null,
 )
-const historyOpen = ref(false)
-const historyPage = ref(1)
-const historyLimit = 50
-const historyOffset = computed(() => (historyPage.value - 1) * historyLimit)
-const historyQuery = computed(() => ({
-  scope: 'self',
-  limit: historyLimit,
-  offset: historyOffset.value,
-  ...(lnPolicy.value === 'ALL' ? {} : { ln_policy: lnPolicy.value }),
-  ...(ruleMode.value === 'ALL' ? {} : { rule_mode: ruleMode.value }),
-}))
 const {
+  open: historyOpen,
+  page: historyPage,
+  limit: historyLimit,
   data: selfHistory,
   pending: selfHistoryPending,
   error: selfHistoryError,
-  refresh: refreshSelfHistory,
-} = await useFetch<IrScoreHistoryResult>(() => `/api/v1/charts/${sha256.value}/self-scores`, {
-  immediate: false,
-  watch: false,
-  query: historyQuery,
-})
+  openHistory,
+} = useSelfScoreHistory<IrScoreHistoryResult>(
+  () => `/api/v1/charts/${sha256.value}/self-scores`,
+  () => ({
+    scope: 'self',
+    ...(lnPolicy.value === 'ALL' ? {} : { ln_policy: lnPolicy.value }),
+    ...(ruleMode.value === 'ALL' ? {} : { rule_mode: ruleMode.value }),
+  }),
+)
 
 const canShowSelfArea = computed(() => Boolean(selfBestEntry.value || detail.value?.stats.self))
 
-async function openHistory() {
-  historyOpen.value = true
-  await refreshSelfHistory()
-}
-
-watch([lnPolicy, ruleMode, sha256], () => {
-  if (!historyOpen.value) {
-    historyPage.value = 1
-    return
-  }
-  if (historyPage.value === 1) {
-    refreshSelfHistory()
-  } else {
-    historyPage.value = 1
-  }
-})
-
 watch(user, (currentUser) => {
   if (!currentUser) rankingScope.value = 'global'
-})
-
-watch(historyPage, () => {
-  if (historyOpen.value) {
-    refreshSelfHistory()
-  }
 })
 
 const copyMd5 = async () => {
@@ -408,74 +380,21 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
           </table>
         </div>
 
-        <UModal v-model:open="historyOpen" :title="t('ranking.selfHistory')">
-          <template #body>
-            <UAlert
-              v-if="selfHistoryError"
-              color="error"
-              :description="historyErrorDescription"
-              class="mb-4"
-            />
-            <p v-else-if="selfHistoryPending" class="text-sm text-neutral-400">
-              {{ t('common.loading') }}
-            </p>
-            <p v-else-if="!selfHistory?.scores.length" class="text-sm text-neutral-400">
-              {{ t('ranking.noHistory') }}
-            </p>
-            <div v-else class="overflow-x-auto rounded-lg border border-neutral-800">
-              <table class="w-full text-sm">
-                <thead class="bg-neutral-900 text-left text-neutral-300">
-                  <tr>
-                    <th class="px-3 py-2">{{ t('table.date') }}</th>
-                    <th class="px-3 py-2 text-right">EX</th>
-                    <th class="px-3 py-2">{{ t('table.clear') }}</th>
-                    <th class="px-3 py-2 text-right">COMBO</th>
-                    <th class="px-3 py-2 text-right">BP</th>
-                    <th class="px-3 py-2">{{ t('table.conditions') }}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr
-                    v-for="score in selfHistory.scores"
-                    :key="score.score_id"
-                    class="border-t border-neutral-800"
-                  >
-                    <td class="px-3 py-2 text-neutral-400">
-                      {{ formatScoreDate(score.played_at ?? score.server_received_at) }}
-                    </td>
-                    <td class="px-3 py-2 text-right font-medium">
-                      <NuxtLink
-                        :to="localePath(`/scores/${score.score_id}`)"
-                        class="hover:underline"
-                      >
-                        {{ score.ex_score }}
-                      </NuxtLink>
-                    </td>
-                    <td class="px-3 py-2">{{ score.clear }}</td>
-                    <td class="px-3 py-2 text-right">{{ score.max_combo }}</td>
-                    <td class="px-3 py-2 text-right">{{ score.min_bp }}</td>
-                    <td class="px-3 py-2 text-neutral-400">
-                      <p>{{ score.gauge }} / {{ score.ln_policy }} / {{ score.rule_mode }}</p>
-                      <p class="text-xs text-neutral-500">
-                        {{ formatArrangePair(score) }}
-                      </p>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <div
-              v-if="selfHistory && selfHistory.pagination.total > historyLimit"
-              class="mt-4 flex justify-end"
-            >
-              <UPagination
-                v-model:page="historyPage"
-                :items-per-page="historyLimit"
-                :total="selfHistory.pagination.total"
-              />
-            </div>
+        <ScoreHistoryModal
+          v-model:open="historyOpen"
+          v-model:page="historyPage"
+          :history="selfHistory"
+          :pending="selfHistoryPending"
+          :error-description="historyErrorDescription"
+          :limit="historyLimit"
+          :score-key="(score) => score.score_id"
+          :score-bp="(score) => score.min_bp"
+          :score-to="(score) => localePath(`/scores/${score.score_id}`)"
+        >
+          <template #conditions="{ score }">
+            <p class="text-xs text-dimmed">{{ formatArrangePair(score) }}</p>
           </template>
-        </UModal>
+        </ScoreHistoryModal>
       </template>
     </section>
   </main>

@@ -83,3 +83,20 @@ GPUのignored testと実機の描画確認は未実施。ログ: `.local/refacto
 検証（Windows）: fmt、対象crateのcheck・all-targets Clippy・全testが成功。
 全testは2,200成功、19 ignored。実サーバーへのスコア送信は未実施。
 ログ: `.local/refactor-05-full.log`。
+
+## 6. IR Web履歴表示
+
+- 譜面・コースの履歴open/page/limit/query/watchを `useSelfScoreHistory` へ集約した。
+  `useFetch` はwrapper内でawaitせず、呼び出し元のscopeにwatcherを登録する。
+- 共通の `ScoreHistoryModal` がloading/error/empty・table・paginationを扱う。
+  IDとBPの取得、譜面のスコア詳細リンクとARRANGE表示は型付きのprops/slotで渡す。
+  コースのgauge絞り込み、譜面のself scope、50件単位、日付fallbackは維持した。
+  共通モーダル内の色はNuxt UIのテーマトークンを使う。
+- 開くまで取得しないこと、条件変更時のページresetと重複refresh防止、URL変更、
+  譜面/コースの状態分離、scope終了後のwatch停止をVueのreactivityでテストした。
+  HTTP部分はmockし、`test:ir:ui` を既存の `test:ir` に組み込んだ。
+
+検証: 対象7ファイルのPrettier、`bunx vue-tsc --noEmit`、`bun run test:ir` が成功。
+IRテストは既存94件＋履歴3件の計97件。新しい自動import型は `bunx nuxt prepare` で生成。
+ブラウザーの実表示・実アカウントの履歴取得は未実施。deployは行っていない。
+ログ: `.local/refactor-06-tests.log`、`.local/refactor-06-typecheck.log`。
