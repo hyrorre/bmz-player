@@ -90,6 +90,7 @@ return skin
             &profile,
             &mut pipeline,
             bmz_skin::LuaSkinRuntimeMode::Compat,
+            false,
         )
         .unwrap();
         let result =
@@ -119,13 +120,15 @@ fn profile_select_skin_preparation_handles_default_missing_and_unsupported_paths
     let mut pipeline = SkinPipelineRuntime::new();
     let mut profile = ProfileConfig::new_default("test", "Test", 0);
     profile.skin.select.clear();
-    queue_profile_select_skin(&data.paths, &profile, &mut pipeline, Default::default()).unwrap();
+    queue_profile_select_skin(&data.paths, &profile, &mut pipeline, Default::default(), false)
+        .unwrap();
     let result =
         pipeline.decode_rx.as_ref().unwrap().recv_timeout(Duration::from_secs(10)).unwrap();
     assert_eq!(result.path, default_path);
     assert_eq!(result.result.unwrap().document.name, "default");
     profile.skin.select = "resource:skins/missing.json".into();
-    queue_profile_select_skin(&data.paths, &profile, &mut pipeline, Default::default()).unwrap();
+    queue_profile_select_skin(&data.paths, &profile, &mut pipeline, Default::default(), false)
+        .unwrap();
     assert!(
         pipeline
             .decode_rx
@@ -138,9 +141,104 @@ fn profile_select_skin_preparation_handles_default_missing_and_unsupported_paths
     );
     profile.skin.select = "resource:skins/unsupported.txt".into();
     assert!(
-        queue_profile_select_skin(&data.paths, &profile, &mut pipeline, Default::default())
+        queue_profile_select_skin(&data.paths, &profile, &mut pipeline, Default::default(), false)
             .is_err()
     );
+}
+
+#[test]
+fn profile_activation_preserves_app_detail_option_for_switch_create_and_copy() {
+    for enabled in [false, true] {
+        let data = ProfileTestDir::new();
+        let mut boot = data.boot();
+        let default_path = default_skin_document_path_from_paths(&data.paths, SkinKind::Select);
+        std::fs::create_dir_all(default_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &default_path,
+            r#"{
+            "type": 5, "name": "default", "bmzDetailOptions": 1,
+            "bmzDetailOptionsNumbers": true
+        }"#,
+        )
+        .unwrap();
+        let custom_path = default_path.with_file_name("custom.luaskin");
+        std::fs::write(&custom_path, r#"
+local skin = {
+    type = 5, bmzDetailOptions = 1, bmzDetailOptionsNumbers = true,
+    property = {{ name = "Theme", item = {{ name = "One", op = 900 }, { name = "Two", op = 901 }} }},
+}
+if skin_config == nil then return skin end
+skin.name = tostring(skin_config.option.Theme)
+return skin
+"#).unwrap();
+        boot.profile_config.skin.select = custom_path.to_string_lossy().into_owned();
+        boot.profile_config.skin.select_options = BTreeMap::from([
+            ("Theme".into(), "Two".into()),
+            // Even stale customization cannot override the application setting.
+            ("bmz_detail_options".into(), if enabled { "0" } else { "1" }.into()),
+        ]);
+        save_profile_config(&boot.profile_paths.profile_toml, &boot.profile_config).unwrap();
+        drop(boot);
+        let mut pipeline = SkinPipelineRuntime::new();
+        for action in [
+            ProfileManagerAction::Switch("default".into()),
+            ProfileManagerAction::Copy {
+                source_id: "default".into(),
+                id: "copy".into(),
+                display_name: None,
+                activate: true,
+            },
+            ProfileManagerAction::Create { id: "new".into(), display_name: None, activate: true },
+        ] {
+            let prepared = prepare_profile_action(&data.paths, &action).unwrap().unwrap();
+            let profile = &prepared.profile.config;
+            let original_options = profile.skin.select_options.clone();
+            queue_profile_select_skin(
+                &data.paths,
+                profile,
+                &mut pipeline,
+                Default::default(),
+                enabled,
+            )
+            .unwrap();
+            let decoded = pipeline
+                .decode_rx
+                .as_ref()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap()
+                .result
+                .unwrap();
+            assert_eq!(decoded.document.uses_detail_options(), enabled);
+            assert_eq!(profile.skin.select_options, original_options);
+            if !matches!(action, ProfileManagerAction::Create { .. }) {
+                assert_eq!(
+                    decoded.document.name, "901",
+                    "preserve target profile's custom options"
+                );
+            }
+            // The empty-path default fallback must receive the same reserved flag.
+            let mut fallback = profile.clone();
+            fallback.skin.select.clear();
+            queue_profile_select_skin(
+                &data.paths,
+                &fallback,
+                &mut pipeline,
+                Default::default(),
+                enabled,
+            )
+            .unwrap();
+            let decoded = pipeline
+                .decode_rx
+                .as_ref()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap()
+                .result
+                .unwrap();
+            assert_eq!(decoded.document.uses_detail_options(), enabled);
+        }
+    }
 }
 
 // WinitAppの実際のpoll/install経路を、window/GPU/audioなしで検証する。

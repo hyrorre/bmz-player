@@ -49,6 +49,7 @@ fn queue_profile_select_skin(
     profile: &ProfileConfig,
     pipeline: &mut SkinPipelineRuntime,
     runtime_mode: bmz_skin::LuaSkinRuntimeMode,
+    experimental_detail_options: bool,
 ) -> Result<u64> {
     let skin = &profile.skin;
     let trimmed = skin.select.trim();
@@ -60,6 +61,8 @@ fn queue_profile_select_skin(
     if !is_decodable_skin_path(&path) {
         bail!("unsupported select skin: {}", path.display());
     }
+    let default_options = BTreeMap::new();
+    let options = if trimmed.is_empty() { &default_options } else { &skin.select_options };
     let generation = pipeline.bump_generation(SkinKind::Select);
     spawn_skin_decode(
         pipeline,
@@ -67,7 +70,7 @@ fn queue_profile_select_skin(
             generation,
             path,
             SkinKind::Select,
-            if trimmed.is_empty() { BTreeMap::new() } else { skin.select_options.clone() },
+            crate::app::skin_loading::select_skin_options(options, experimental_detail_options),
             if trimmed.is_empty() { BTreeMap::new() } else { skin.select_files.clone() },
             lua_runtime_state_with_mode(
                 lua_runtime_state_with_skin_offsets(
@@ -302,6 +305,7 @@ impl WinitApp {
             profile,
             &mut self.skin.skin_pipeline,
             self.skin.lua_runtime_mode,
+            self.boot.app_config.select.experimental_detail_options,
         )
     }
 
