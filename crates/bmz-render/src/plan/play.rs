@@ -73,7 +73,7 @@ pub(super) fn plan_play(
     if !has_document {
         push_default_playfield(&mut commands, snapshot, skin, &skin_state, layout);
     } else {
-        push_document_playfield(&mut commands, snapshot, skin, &skin_state, layout);
+        push_document_playfield(&mut commands, snapshot, skin, &skin_state, &skin_text, layout);
     }
 
     // ノーツより前面の skin 要素（レーンカバー・枠・スコア等）をノーツの上に重ねる

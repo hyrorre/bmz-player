@@ -1,6 +1,6 @@
 use crate::skin::{
     SkinDestinationDef, SkinDocument, SkinDocumentRenderInternal, SkinDstEntry, SkinImageLookup,
-    skin_image_for_destination_id,
+    destination_has_clip, skin_image_for_destination_id,
 };
 
 pub(in crate::skin::document_render) fn static_image_destination_cacheable(
@@ -27,6 +27,7 @@ pub(in crate::skin::document_render) fn fixed_image_destination_cacheable(
         || destination.offset != 0
         || !destination.offsets.is_empty()
         || destination.mouse_rect.is_some()
+        || destination_has_clip(destination)
     {
         return false;
     }
@@ -217,16 +218,19 @@ macro_rules! skin_document_render_core_static_methods {
                     {
                         continue;
                     }
-                    let build_pie = || {
+                    let mut pie_clip = None;
+                    let mut build_pie = || {
                         self.result_judge_pie_destination_item(
                             destination,
                             &images,
                             enabled_options,
                             state,
                             sources,
+                            &mut pie_clip,
                         )
                     };
                     let pie_item = if destination.id == "judge_graph"
+                        && !destination_has_clip(destination)
                         && state.result_failed.is_some()
                         && state.elapsed_ms >= 0
                         && let Some(cache) = cache.as_deref_mut()
@@ -253,7 +257,7 @@ macro_rules! skin_document_render_core_static_methods {
                             &mut front,
                             &mut failed_overlay,
                         );
-                        target.push(item);
+                        target.extend(wrap_skin_destination_clip(vec![item], pie_clip));
                         continue;
                     }
                     if self.destination_uses_skin_gauge_bar_render(destination) {
@@ -262,6 +266,7 @@ macro_rules! skin_document_render_core_static_methods {
                             enabled_options,
                             state,
                             sources,
+                            None,
                         ) {
                             let target = destination_render_layer(
                                 destination.timer,

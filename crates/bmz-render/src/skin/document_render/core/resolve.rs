@@ -15,7 +15,11 @@ macro_rules! skin_document_render_core_resolve_methods {
                     context.state,
                 )?;
                 apply_skin_offset_to_frame(destination, &mut frame, context.state, false);
-                return Some(lr2_scene::chart_items(self, chart, destination, frame, &context));
+                let clip = frame.take_clip(self.w, self.h);
+                return Some(wrap_skin_destination_clip(
+                    lr2_scene::chart_items(self, chart, destination, frame, &context),
+                    clip,
+                ));
             }
             let DestinationResolveContext {
                 images,
@@ -33,26 +37,37 @@ macro_rules! skin_document_render_core_resolve_methods {
                 // SkinJudge 自身に destination が設定されている場合は、beatoraja の
                 // `super.prepare` と同じく外側の timer/op/draw も先に評価する。
                 // dst が空なら SkinJudge constructor の既定 destination が残る。
-                if !destination.dst.is_empty() {
+                let clip = if !destination.dst.is_empty() {
                     if !destination_ops_match(destination, enabled_options, state)
                         || !eval_skin_draw_condition(&destination.draw, state)
                     {
                         return None;
                     }
                     let outer_elapsed = destination_timer_elapsed_ms(destination, state)?;
-                    resolve_destination_frame(destination, outer_elapsed, enabled_options, state)?;
-                }
+                    let mut frame = resolve_destination_frame(
+                        destination,
+                        outer_elapsed,
+                        enabled_options,
+                        state,
+                    )?;
+                    apply_skin_offset_to_frame(destination, &mut frame, state, false);
+                    frame.take_clip(self.w, self.h)
+                } else {
+                    None
+                };
                 let region = judge_def.index.clamp(0, MAX_JUDGE_REGIONS as i32 - 1) as usize;
                 let elapsed = state.judge_ms[region]?;
                 let judge_image_index = state.judge_index[region]?;
-                return self.judge_render_items_for_def(
-                    judge_def,
-                    judge_image_index,
-                    state.judge_combo[region],
-                    elapsed,
-                    sources,
-                    state,
-                );
+                return self
+                    .judge_render_items_for_def(
+                        judge_def,
+                        judge_image_index,
+                        state.judge_combo[region],
+                        elapsed,
+                        sources,
+                        state,
+                    )
+                    .map(|items| wrap_skin_destination_clip(items, clip));
             }
 
             let value_for_destination = values.get(destination.id.as_str());
@@ -78,199 +93,226 @@ macro_rules! skin_document_render_core_resolve_methods {
             if !destination_mouse_rect_contains(destination, frame, state) {
                 return None;
             }
-            if let Some(panel) = self.panel.iter().find(|panel| panel.id == destination.id) {
-                return Some(skin_panel_render_items(panel, destination, frame, self.w, self.h));
-            }
-            if let Some(visualizer) =
-                self.hiterror_visualizer.iter().find(|visualizer| visualizer.id == destination.id)
-            {
-                return Some(self.hiterror_visualizer_render_items(
-                    visualizer,
+            // Resolve once, then exclude clip animation from object geometry caches.
+            // Ambient items are built inside this closure, keeping clip outside blur.
+            let clip = frame.take_clip(self.w, self.h);
+            let items = (|| {
+                if let Some(panel) = self.panel.iter().find(|panel| panel.id == destination.id) {
+                    return Some(skin_panel_render_items(
+                        panel,
+                        destination,
+                        frame,
+                        self.w,
+                        self.h,
+                    ));
+                }
+                if let Some(visualizer) = self
+                    .hiterror_visualizer
+                    .iter()
+                    .find(|visualizer| visualizer.id == destination.id)
+                {
+                    return Some(self.hiterror_visualizer_render_items(
+                        visualizer,
+                        destination,
+                        frame,
+                        state,
+                    ));
+                }
+                if let Some(visualizer) =
+                    self.timingvisualizer.iter().find(|visualizer| visualizer.id == destination.id)
+                {
+                    return Some(self.timing_visualizer_render_items(
+                        visualizer,
+                        destination,
+                        frame,
+                        state,
+                        runtime_graphs.result_timing_points,
+                    ));
+                }
+                if let Some(graph) =
+                    self.timingdistributiongraph.iter().find(|graph| graph.id == destination.id)
+                {
+                    return Some(self.timing_distribution_graph_render_items(
+                        graph,
+                        destination,
+                        frame,
+                        state,
+                        runtime_graphs.result_timing_points,
+                        runtime_graphs.result_timing_distribution,
+                    ));
+                }
+                if let Some(gauge_graph) =
+                    self.gaugegraph.iter().find(|graph| graph.id == destination.id)
+                {
+                    return Some(self.gaugegraph_render_items(
+                        destination_index,
+                        gauge_graph,
+                        destination,
+                        frame,
+                        state,
+                        runtime_graphs.result_gauge_graph_points,
+                        cache,
+                    ));
+                }
+                if let Some(judge_graph) =
+                    self.judgegraph.iter().find(|graph| graph.id == destination.id)
+                {
+                    return Some(self.judgegraph_render_items(
+                        destination_index,
+                        judge_graph,
+                        destination,
+                        frame,
+                        elapsed,
+                        state,
+                        runtime_graphs,
+                        cache,
+                    ));
+                }
+                if let Some(bpm_graph) =
+                    self.bpmgraph.iter().find(|graph| graph.id == destination.id)
+                {
+                    return Some(self.bpmgraph_render_items_with_segments(
+                        bpm_graph,
+                        destination,
+                        frame,
+                        state,
+                        runtime_graphs.play_bpm_graph_segments,
+                    ));
+                }
+                if let Some(pmchara) =
+                    self.pmchara.iter().find(|pmchara| pmchara.id == destination.id)
+                {
+                    return Some(pm_chara_render_items(
+                        pmchara,
+                        destination,
+                        frame,
+                        elapsed,
+                        state,
+                        sources,
+                        self.w,
+                        self.h,
+                    ));
+                }
+                if let Some(item) =
+                    self.direct_source_image_render_item(destination, frame, sources)
+                {
+                    return Some(wrap_ambient_destination(
+                        destination,
+                        frame,
+                        self.w,
+                        self.h,
+                        vec![item],
+                    ));
+                }
+                if let Some(items) =
+                    self.resolve_image_destination_items(destination, frame, images, state, sources)
+                {
+                    return items.map(|items| {
+                        wrap_ambient_destination(destination, frame, self.w, self.h, items)
+                    });
+                }
+
+                if let Some(items) = self.resolve_bga_destination_items(destination, frame, state) {
+                    return items.map(|items| {
+                        wrap_ambient_destination(destination, frame, self.w, self.h, items)
+                    });
+                }
+
+                // imageset (キービーム・ボム等) を destination 自身のタイマー駆動で描画する。
+                // timer が非アクティブな destination は上の skin_timer_elapsed_ms で除外済み。
+                if let Some(items) = self.resolve_imageset_destination_items(
                     destination,
                     frame,
-                    state,
-                ));
-            }
-            if let Some(visualizer) =
-                self.timingvisualizer.iter().find(|visualizer| visualizer.id == destination.id)
-            {
-                return Some(self.timing_visualizer_render_items(
-                    visualizer,
-                    destination,
-                    frame,
-                    state,
-                    runtime_graphs.result_timing_points,
-                ));
-            }
-            if let Some(graph) =
-                self.timingdistributiongraph.iter().find(|graph| graph.id == destination.id)
-            {
-                return Some(self.timing_distribution_graph_render_items(
-                    graph,
-                    destination,
-                    frame,
-                    state,
-                    runtime_graphs.result_timing_points,
-                    runtime_graphs.result_timing_distribution,
-                ));
-            }
-            if let Some(gauge_graph) =
-                self.gaugegraph.iter().find(|graph| graph.id == destination.id)
-            {
-                return Some(self.gaugegraph_render_items(
-                    destination_index,
-                    gauge_graph,
-                    destination,
-                    frame,
-                    state,
-                    runtime_graphs.result_gauge_graph_points,
-                    cache,
-                ));
-            }
-            if let Some(judge_graph) =
-                self.judgegraph.iter().find(|graph| graph.id == destination.id)
-            {
-                return Some(self.judgegraph_render_items(
-                    destination_index,
-                    judge_graph,
-                    destination,
-                    frame,
-                    elapsed,
-                    state,
-                    runtime_graphs,
-                    cache,
-                ));
-            }
-            if let Some(bpm_graph) = self.bpmgraph.iter().find(|graph| graph.id == destination.id) {
-                return Some(self.bpmgraph_render_items_with_segments(
-                    bpm_graph,
-                    destination,
-                    frame,
-                    state,
-                    runtime_graphs.play_bpm_graph_segments,
-                ));
-            }
-            if let Some(pmchara) = self.pmchara.iter().find(|pmchara| pmchara.id == destination.id)
-            {
-                return Some(pm_chara_render_items(
-                    pmchara,
-                    destination,
-                    frame,
-                    elapsed,
+                    images,
                     state,
                     sources,
-                    self.w,
-                    self.h,
-                ));
-            }
-            if let Some(item) = self.direct_source_image_render_item(destination, frame, sources) {
-                return Some(wrap_ambient_destination(
-                    destination,
-                    frame,
-                    self.w,
-                    self.h,
-                    vec![item],
-                ));
-            }
-            if let Some(items) =
-                self.resolve_image_destination_items(destination, frame, images, state, sources)
-            {
-                return items.map(|items| {
-                    wrap_ambient_destination(destination, frame, self.w, self.h, items)
-                });
-            }
+                ) {
+                    return items;
+                }
 
-            if let Some(items) = self.resolve_bga_destination_items(destination, frame, state) {
-                return items.map(|items| {
-                    wrap_ambient_destination(destination, frame, self.w, self.h, items)
-                });
-            }
-
-            // imageset (キービーム・ボム等) を destination 自身のタイマー駆動で描画する。
-            // timer が非アクティブな destination は上の skin_timer_elapsed_ms で除外済み。
-            if let Some(items) =
-                self.resolve_imageset_destination_items(destination, frame, images, state, sources)
-            {
-                return items;
-            }
-
-            if let Some(value) = value_for_destination {
-                let elapsed = if destination.lr2_timing {
-                    skin_timer_elapsed_ms(value.timer, state).unwrap_or(0).max(0)
-                } else {
-                    elapsed
-                };
-                let number =
-                    prepared_number.or_else(|| skin_value_number_for_destination(value, state))?;
-                let signed_render = signed_number_render_for_value(value, state);
-                // Evaluate the value callback before consulting the cache: a
-                // stable return value does not imply a side-effect-free closure.
-                if let Some(cache) = cache.map(|cache| &mut cache.numbers).or(number_cache) {
-                    return Some(cache.render(
-                        self,
-                        destination_index,
+                if let Some(value) = value_for_destination {
+                    let elapsed = if destination.lr2_timing {
+                        skin_timer_elapsed_ms(value.timer, state).unwrap_or(0).max(0)
+                    } else {
+                        elapsed
+                    };
+                    let number = prepared_number
+                        .or_else(|| skin_value_number_for_destination(value, state))?;
+                    let signed_render = signed_number_render_for_value(value, state);
+                    // Evaluate the value callback before consulting the cache: a
+                    // stable return value does not imply a side-effect-free closure.
+                    if let Some(cache) = cache.map(|cache| &mut cache.numbers).or(number_cache) {
+                        return Some(cache.render(
+                            self,
+                            destination_index,
+                            &value.id,
+                            number,
+                            frame,
+                            elapsed,
+                            sources,
+                            signed_render,
+                        ));
+                    }
+                    return Some(self.value_number_render_items(
                         &value.id,
                         number,
+                        ResolvedSkinFrame::default(),
                         frame,
                         elapsed,
                         sources,
+                        false,
+                        None,
                         signed_render,
                     ));
                 }
-                return Some(self.value_number_render_items(
-                    &value.id,
-                    number,
-                    ResolvedSkinFrame::default(),
-                    frame,
-                    elapsed,
-                    sources,
-                    false,
-                    None,
-                    signed_render,
-                ));
-            }
 
-            if let Some(graph) = self.graph.iter().find(|graph| graph.id == destination.id) {
-                return self.graph_render_item(graph, frame, state, sources).map(|item| vec![item]);
-            }
+                if let Some(graph) = self.graph.iter().find(|graph| graph.id == destination.id) {
+                    return self
+                        .graph_render_item(graph, frame, state, sources)
+                        .map(|item| vec![item]);
+                }
 
-            if let Some(text) = self.text.iter().find(|text| text.id == destination.id)
-                && let Some(item) =
-                    self.text_render_item_with_draw_state(text, frame, Some(state), text_state)
-            {
-                return Some(vec![item]);
-            }
+                if let Some(text) = self.text.iter().find(|text| text.id == destination.id)
+                    && let Some(item) =
+                        self.text_render_item_with_draw_state(text, frame, Some(state), text_state)
+                {
+                    return Some(vec![item]);
+                }
 
-            if let Some(slider) = self.slider.iter().find(|slider| slider.id == destination.id)
-                && let Some(item) =
-                    self.slider_render_item(slider, destination, frame, state, sources)
-            {
-                return Some(vec![item]);
-            }
+                if let Some(slider) = self.slider.iter().find(|slider| slider.id == destination.id)
+                    && let Some(item) =
+                        self.slider_render_item(slider, destination, frame, state, sources)
+                {
+                    return Some(vec![item]);
+                }
 
-            if self.destination_uses_skin_gauge_overlay_render(destination) {
-                return self.resolve_gauge_destination_items(
-                    destination,
-                    enabled_options,
-                    state,
-                    sources,
-                );
-            }
+                if self.destination_uses_skin_gauge_overlay_render(destination) {
+                    return self.resolve_gauge_destination_items(
+                        destination,
+                        enabled_options,
+                        state,
+                        sources,
+                        Some(frame),
+                    );
+                }
 
-            if let Some(item) = special_image_render_item(destination, frame, self.w, self.h) {
-                return Some(vec![item]);
-            }
+                if let Some(item) = special_image_render_item(destination, frame, self.w, self.h) {
+                    return Some(vec![item]);
+                }
 
-            if let Some(lift_cover) =
-                self.lift_cover.iter().find(|cover| cover.id == destination.id)
-            {
-                return self
-                    .hidden_cover_render_item(lift_cover, destination, frame, state, sources)
-                    .map(|item| vec![item]);
-            }
-            let hidden_cover = self.hidden_cover.iter().find(|cover| cover.id == destination.id)?;
-            self.hidden_cover_render_item(hidden_cover, destination, frame, state, sources)
-                .map(|item| vec![item])
+                if let Some(lift_cover) =
+                    self.lift_cover.iter().find(|cover| cover.id == destination.id)
+                {
+                    return self
+                        .hidden_cover_render_item(lift_cover, destination, frame, state, sources)
+                        .map(|item| vec![item]);
+                }
+                let hidden_cover =
+                    self.hidden_cover.iter().find(|cover| cover.id == destination.id)?;
+                self.hidden_cover_render_item(hidden_cover, destination, frame, state, sources)
+                    .map(|item| vec![item])
+            })()?;
+            Some(wrap_skin_destination_clip(items, clip))
         }
 
         fn resolve_image_destination_items(

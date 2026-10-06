@@ -6,8 +6,14 @@ pub(super) fn push_document_playfield(
     snapshot: &RenderSnapshot,
     skin: &SkinContext,
     skin_state: &crate::skin::SkinDrawState,
+    skin_text: &SkinTextState<'_>,
     layout: PlayfieldLayout<'_>,
 ) {
+    let clip = skin.document_playfield_clip(skin_state, skin_text);
+    let first_command = commands.len();
+    if let Some(rect) = clip {
+        append_document_item(commands, skin, skin_state, SkinRenderItem::PushClip { rect });
+    }
     for bar in &snapshot.bar_lines {
         push_play_bar_line(
             commands,
@@ -42,6 +48,13 @@ pub(super) fn push_document_playfield(
     push_document_long_notes(commands, snapshot, skin, skin_state, &notes);
     for &lane in layout.active_lanes {
         push_document_lane(commands, snapshot, skin, skin_state, lane, &notes);
+    }
+    if clip.is_some() {
+        if commands.len() == first_command + 1 {
+            commands.pop();
+        } else {
+            append_document_item(commands, skin, skin_state, SkinRenderItem::PopClip);
+        }
     }
 }
 

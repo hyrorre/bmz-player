@@ -5,6 +5,23 @@ use std::path::PathBuf;
 
 use super::*;
 
+#[test]
+fn destination_clip_fields_decode_through_json_and_lua_numeric_normalization() {
+    let frame = serde_json::json!({"clip_x":1.5,"clip_y":2.0,"clip_w":30.0,"clip_h":40.0});
+    for value in [
+        normalize_json_skin_integer_numbers(frame),
+        normalize_lua_json_skin_integer_numbers(serde_json::json!({
+            "clip_x":[1.5],"clip_y":[2.0],"clip_w":[30.0],"clip_h":[40.0]
+        })),
+    ] {
+        let frame: SkinAnimationDef = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            [frame.clip_x, frame.clip_y, frame.clip_w, frame.clip_h],
+            [Some(2), Some(2), Some(30), Some(40)]
+        );
+    }
+}
+
 fn unique_test_dir(name: &str) -> PathBuf {
     let mut path = std::env::temp_dir();
     path.push(format!(

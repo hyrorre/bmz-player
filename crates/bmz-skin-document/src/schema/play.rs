@@ -325,6 +325,10 @@ pub struct SkinAnimationDef {
     pub y: Option<i32>,
     pub w: Option<i32>,
     pub h: Option<i32>,
+    pub clip_x: Option<i32>,
+    pub clip_y: Option<i32>,
+    pub clip_w: Option<i32>,
+    pub clip_h: Option<i32>,
     #[serde(default, deserialize_with = "deserialize_skin_frame_expr_opt")]
     pub h_expr: Option<SkinFrameExpr>,
     pub acc: Option<i32>,

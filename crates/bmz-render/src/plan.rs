@@ -60,6 +60,11 @@ pub struct DrawPlan {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DrawCommand {
+    /// Intersect the current clip with a normalized, top-origin canvas rectangle.
+    PushClip {
+        rect: Rect,
+    },
+    PopClip,
     /// A bounded image/rectangle group composited and blurred on the GPU.
     Ambient {
         rect: Rect,

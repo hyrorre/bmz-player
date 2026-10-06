@@ -169,8 +169,11 @@ pub(super) fn apply_skin_offset_to_frame_inner(
     apply_skin_offset_ids_to_frame(&ids, frame, state, relative);
     if state.detail_options.is_some() && !relative {
         let scroll = state.detail_options_scroll.clamp(-1.0, 1.0);
-        frame.x += (destination.bmz_detail_scroll[0] as f32 * scroll).round() as i32;
-        frame.y += (destination.bmz_detail_scroll[1] as f32 * scroll).round() as i32;
+        let x = (destination.bmz_detail_scroll[0] as f32 * scroll).round() as i32;
+        let y = (destination.bmz_detail_scroll[1] as f32 * scroll).round() as i32;
+        frame.x += x;
+        frame.y += y;
+        frame.clip.offset(x as f32, y as f32, 0.0, 0.0);
     }
 }
 
@@ -189,6 +192,13 @@ pub(super) fn apply_skin_offset_ids_to_frame(
             frame.x += offset.x - offset.w / 2;
             frame.y += offset.y - offset.h / 2;
         }
+        // SkinObject's clip uses float offsets, including half-pixel centers.
+        frame.clip.offset(
+            if relative { 0.0 } else { offset.x as f32 - offset.w as f32 / 2.0 },
+            if relative { 0.0 } else { offset.y as f32 - offset.h as f32 / 2.0 },
+            offset.w as f32,
+            offset.h as f32,
+        );
         frame.w += offset.w;
         frame.h += offset.h;
         frame.angle += offset.r;
@@ -286,6 +296,10 @@ pub(super) fn apply_all_offset_to_render_item(
     let translate_x = offset.x as f32 / 100.0;
     let translate_y = offset.y as f32 / 100.0;
     match item {
+        SkinRenderItem::PushClip { rect } => SkinRenderItem::PushClip {
+            rect: apply_all_offset_to_rect(rect, scale_x, scale_y, translate_x, translate_y),
+        },
+        SkinRenderItem::PopClip => SkinRenderItem::PopClip,
         SkinRenderItem::Ambient { rect, blur, fade_edges, layers } => SkinRenderItem::Ambient {
             rect: apply_all_offset_to_rect(rect, scale_x, scale_y, translate_x, translate_y),
             blur,
@@ -769,6 +783,7 @@ fn interpolate_skin_frame_at_rate(
         y: interpolate_i32(start.y, end.y, t),
         w: interpolate_i32(start.w, end.w, t),
         h: interpolate_i32(start.h, end.h, t),
+        clip: start.clip.interpolate(end.clip, t),
         acc: end.acc,
         a: interpolate_i32(start.a, end.a, t),
         r: interpolate_i32(start.r, end.r, t),
@@ -824,6 +839,7 @@ pub(super) fn apply_skin_animation(
     animation: &SkinAnimationDef,
     state: &SkinDrawState,
 ) {
+    frame.clip.inherit(animation);
     if let Some(style) = animation.lr2_style {
         frame.lr2_style = Some(style);
     }

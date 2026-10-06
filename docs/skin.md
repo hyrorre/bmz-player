@@ -6,6 +6,29 @@ BMZ は beatoraja JSON / Lua skin の互換を基本にする。既存 beatoraja
 JSON / Lua / LR2 skinの対応範囲と残課題は [skin-compatibility.md](skin-compatibility.md) を参照。
 この文書ではIDや各機能の動作契約を管理する。
 
+## Destinationのクリッピング
+
+JSON / Luaのdestinationの各`dst`に`clip_x` / `clip_y` / `clip_w` / `clip_h`を指定すると、
+そのオブジェクトの描画を軸に平行な矩形内へ制限する。座標は通常のdestinationと同じ
+スキンpixel・左下原点で、オブジェクトの`x` / `y`からの相対座標ではない。
+
+- 省略した各値は前の有効なキーフレームから継承する。4値が揃う前はclipしない。
+- clipはdestinationと同じtimer・loop・accで補間する。補間途中の小数は保持する。
+  開始フレームにclipがなければ、次フレームのclipへ向けた補間はしない。
+- offsetの移動と幅・高さの変更をclipにも適用する。relativeオブジェクトでは移動を省く。
+  `angle`でclip自体は回転しないが、Playの全体移動・拡縮には追従する。
+- offset適用後の幅または高さが0以下ならclipを無効にする。正のclipが画面外にある場合や、
+  親clipとの交差が空の場合は描画されない。
+- 画像・数字・文字・グラフ・ゲージ等へ共通に適用する。Ambientとキャッシュ済みグラフは
+  合成後の出力をclipするため、clip外の元画像もぼかし計算に含まれる。
+- `notes` destinationはノーツ・LN・Mine・小節線・BPM/STOP線とラベルをまとめてclipする。
+  songlistとjudgeも外側destinationで全体をclipする。上流が子部品を直接描画する経路では、
+  小節線や選曲バー・判定画像・コンボ数字の子destination固有clipは適用しない。
+  入力中の検索テキストとcaretは別の入力overlayであり、skinのclip対象外。
+- scissorは実際の描画targetとletterboxに合わせて変換する。下原点のx/y/幅/高さを
+  beatorajaと同じ四捨五入（負のちょうど半分は正方向）でpixel化してから上原点へ変換する。
+  オブジェクト描画後は元のclipへ戻す。
+
 ## Ambient背景（BMZ拡張）
 
 JSON / LuaのimageまたはBGAのdestinationに `ambient: true` を指定すると、

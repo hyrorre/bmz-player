@@ -5,6 +5,43 @@ mod layout;
 pub(crate) use layout::PreparedNoteLayout;
 
 impl SkinContext {
+    /// The notes object owns the clip for the complete LaneRenderer playfield.
+    /// A clipped destination whose conditions/timer are inactive hides that object.
+    pub(crate) fn document_playfield_clip(
+        &self,
+        state: &SkinDrawState,
+        text: &SkinTextState<'_>,
+    ) -> Option<Rect> {
+        let document = self.document.as_ref()?;
+        let enabled_options = document.enabled_options();
+        let destination = document
+            .all_destinations(&enabled_options)
+            .into_iter()
+            .find(|destination| destination.id == "notes")?;
+        if !destination_has_clip(destination) {
+            return None;
+        }
+        let state = self.state_with_lua_runtime(state, text);
+        with_lua_render_state(&state, || {
+            let hidden = Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 };
+            if !destination_ops_match(destination, &enabled_options, &state)
+                || !eval_skin_draw_condition(&destination.draw, &state)
+            {
+                return Some(hidden);
+            }
+            let Some(elapsed) = destination_timer_elapsed_ms(destination, &state) else {
+                return Some(hidden);
+            };
+            let Some(mut frame) =
+                resolve_destination_frame(destination, elapsed, &enabled_options, &state)
+            else {
+                return Some(hidden);
+            };
+            apply_skin_offset_to_frame(destination, &mut frame, &state, false);
+            frame.take_clip(document.w, document.h)
+        })
+    }
+
     pub fn document_note_item(
         &self,
         lane: Lane,

@@ -8,6 +8,7 @@ macro_rules! skin_document_render_graph_select_methods {
             row_origin: (i32, i32),
             enabled_options: &[i32],
             state: &SkinDrawState,
+            clip_destination: bool,
         ) -> Vec<SkinRenderItem> {
             if row.chart_distribution.is_empty()
                 || !destination_ops_match(destination, enabled_options, state)
@@ -30,6 +31,7 @@ macro_rules! skin_document_render_graph_select_methods {
             if !destination_mouse_rect_contains(destination, frame, state) {
                 return Vec::new();
             }
+            let clip = frame.take_clip(self.w, self.h).filter(|_| clip_destination);
 
             let rect = normalize_skin_frame_rect(frame, self.w, self.h);
             if rect.width <= 0.0 || rect.height <= 0.0 {
@@ -98,7 +100,7 @@ macro_rules! skin_document_render_graph_select_methods {
                 }
             }
 
-            items
+            wrap_skin_destination_clip(items, clip)
         }
 
         fn select_bpmgraph_row_render_items(

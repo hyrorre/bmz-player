@@ -251,6 +251,7 @@ macro_rules! skin_document_render_select_songlist_methods {
                         row_origin,
                         enabled_options,
                         state,
+                        false,
                     ));
                     continue;
                 }

@@ -128,6 +128,7 @@ pub(super) trait SkinDocumentRenderInternal {
         enabled_options: &[i32],
         state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
+        clip: &mut Option<Rect>,
     ) -> Option<SkinRenderItem>;
 
     fn destination_looks_like_pre_notes_judge_line(
@@ -479,6 +480,7 @@ pub(super) trait SkinDocumentRenderInternal {
         enabled_options: &[i32],
         state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
+        prepared_frame: Option<ResolvedSkinFrame>,
     ) -> Option<Vec<SkinRenderItem>>;
 
     fn judge_render_items_with_offsets(
@@ -621,6 +623,7 @@ pub(super) trait SkinDocumentRenderInternal {
         row_origin: (i32, i32),
         enabled_options: &[i32],
         state: &SkinDrawState,
+        clip_destination: bool,
     ) -> Vec<SkinRenderItem>;
 
     fn select_bpmgraph_row_render_items(

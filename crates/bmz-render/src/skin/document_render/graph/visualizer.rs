@@ -146,7 +146,7 @@ macro_rules! skin_document_render_graph_visualizer_methods {
             let completed = render_progress >= 1.0;
             let key = graph_revision.map(|graph_revision| ResultGaugeGraphRectBatchCacheKey {
                 destination_index,
-                frame,
+                frame: frame.geometry_cache_frame(),
                 graph_revision,
                 display_gauge_type,
                 gauge_max_bits: max.to_bits(),

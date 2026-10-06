@@ -7,6 +7,7 @@ macro_rules! skin_document_render_core_clip_methods {
         enabled_options: &[i32],
         state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
+        clip: &mut Option<Rect>,
     ) -> Option<SkinRenderItem> {
         if state.result_failed.is_none() || destination.id != "judge_graph" {
             return None;
@@ -22,6 +23,7 @@ macro_rules! skin_document_render_core_clip_methods {
         if !destination_mouse_rect_contains(destination, frame, state) {
             return None;
         }
+        *clip = frame.take_clip(self.w, self.h);
         let (r, g, b) = result_judge_pie_segment_color(destination, image, frame, state)?;
         frame.r = r;
         frame.g = g;

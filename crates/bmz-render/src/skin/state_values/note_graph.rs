@@ -281,7 +281,7 @@ pub(super) fn result_note_graph_cache_key<const N: usize, B: ResultNoteGraphBuck
     ResultRectBatchCacheKey {
         destination_index,
         kind,
-        frame,
+        frame: frame.geometry_cache_frame(),
         key_mode: state.key_mode,
         judge_rank: state.judge_rank,
         visible_len: result_note_graph_visible_len(buckets.len(), graph, elapsed_ms),

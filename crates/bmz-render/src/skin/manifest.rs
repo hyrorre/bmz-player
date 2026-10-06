@@ -271,6 +271,8 @@ pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRe
 
 pub fn append_skin_render_item(commands: &mut Vec<DrawCommand>, item: &SkinRenderItem) {
     match item {
+        SkinRenderItem::PushClip { rect } => commands.push(DrawCommand::PushClip { rect: *rect }),
+        SkinRenderItem::PopClip => commands.push(DrawCommand::PopClip),
         SkinRenderItem::Ambient { rect, blur, fade_edges, layers } => {
             let mut layer_commands = Vec::new();
             append_skin_render_items(&mut layer_commands, layers);

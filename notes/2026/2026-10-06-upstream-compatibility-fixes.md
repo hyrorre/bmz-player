@@ -168,6 +168,36 @@ Booleanの否定、混在opの各個AND、既存の式・数値引数、load時�
   条件配列のサイズ増加による新規lintは固定長の格納形式へ変更して解消した。
 - 実機UI比較は未実施。ログ: `.local/validation/2026-10-06-property-names/`。
 
+## 8. destinationのclipアニメーション
+
+JSON / Luaの `clip_x` / `clip_y` / `clip_w` / `clip_h` を各キーフレームで継承し、
+既存のtimer・loop・acc、個別offsetと全体offsetを通してGPU scissorへ反映する。
+4値が揃うまでは無効、幅・高さが0以下なら解除し、正の矩形が画面外なら描画を抑止する。
+画像・回転画像・文字・数字・グラフ・ゲージ、notes・songlist・judge全体を対象にする。
+上流が直接描く子部品には独自のclipを追加せず、検索入力overlayも上流の扱いを維持する。
+
+Push/Popで切り抜き範囲を復元し、空の交差でも画像・文字・Ambientの内部indexを進める。
+AmbientやRectBatchは合成後にclipし、blurの入力は切り詰めない。
+clipのみのアニメーションでは完成済みグラフの形状・GPU texture cacheを再利用する。
+notesのLua条件にも実Playの文字情報を渡し、clipのためのcallback重複評価を避ける。
+対応契約は [skin.md](../../docs/skin.md#destinationのクリッピング) を参照。
+
+pixel変換はfloatで投影してからJavaの丸め規則を使う。正負の半pixelと奇数offsetを確認するが、
+正規化・投影のfloat精度により丸め境界で上流との1pixel差が残る可能性があり、
+全座標でのbit単位の一致は保証しない。epsilonによる補正は入れていない。
+既存の外部スキンにはclip使用例が見つからず、合成fixtureで確認する。
+
+- focused clip: renderer 23件、skin 1件、schema 1件成功。新規通常回帰は計20件。
+  ノーツ・LN各部・Mine・小節線・BPM/STOP/time guideの9種を別textureで検証した。
+- 新規GPU 2件と既存GPU 4件: 全件成功。新規テストはRTX 5090 / DX12、
+  driver `32.0.16.1714` でpixelを比較し、文字のclipなしbaselineも確認した。
+- fmt、workspace all-targets check、変更3crate all-targets Clippy: 成功。
+- 通常権限のworkspace全テスト: 3839 passed / 30 ignored
+  （player子プロセス出力の重複1件を除く）。rendererのignored 6件は上記で別途実行済み。
+- workspace Clippyは既存 `input/capture.rs:111` の `let_unit_value` だけで失敗。
+- 第三者スキンの実機操作・上流との同画面手動比較は未実施。
+  ログ: `.local/validation/2026-10-06-destination-clip/`。
+
 ## 検証楽曲
 
 [作者の配布ページ](https://www.luzeria.net/?p=387)から「運命論」を取得した。

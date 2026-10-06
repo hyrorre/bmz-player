@@ -15,7 +15,13 @@ macro_rules! skin_document_render_play_gauge_methods {
                         && destination_ops_match(destination, &enabled_options, &state)
                         && eval_skin_draw_condition(&destination.draw, &state)
                 })?;
-            self.resolve_gauge_destination_items(destination, &enabled_options, &state, sources)
+            self.resolve_gauge_destination_items(
+                destination,
+                &enabled_options,
+                &state,
+                sources,
+                None,
+            )
         }
 
         fn destination_uses_skin_gauge_bar_render(&self, destination: &SkinDestinationDef) -> bool {
@@ -48,12 +54,19 @@ macro_rules! skin_document_render_play_gauge_methods {
             enabled_options: &[i32],
             state: &SkinDrawState,
             sources: &HashMap<String, SkinDocumentTexture>,
+            prepared_frame: Option<ResolvedSkinFrame>,
         ) -> Option<Vec<SkinRenderItem>> {
             let gauge_def = self.skin_gauge_for_destination(destination)?;
             let elapsed_ms = skin_timer_elapsed_ms(destination.timer, state)?;
-            let mut frame =
-                resolve_destination_frame(destination, elapsed_ms, enabled_options, state)?;
-            apply_skin_offset_to_frame(destination, &mut frame, state, false);
+            let mut frame = if let Some(frame) = prepared_frame {
+                frame
+            } else {
+                let mut frame =
+                    resolve_destination_frame(destination, elapsed_ms, enabled_options, state)?;
+                apply_skin_offset_to_frame(destination, &mut frame, state, false);
+                frame
+            };
+            let clip = frame.take_clip(self.w, self.h);
             let reverse_parts = skin_gauge_reverse_parts(frame);
             let rect = normalize_skin_frame_rect(frame, self.w, self.h);
             let parts = gauge_def.parts.max(1);
@@ -122,7 +135,7 @@ macro_rules! skin_document_render_play_gauge_methods {
                     }
                 }
             }
-            Some(items)
+            Some(wrap_skin_destination_clip(items, clip))
         }
     };
 }

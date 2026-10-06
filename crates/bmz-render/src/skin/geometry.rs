@@ -1,5 +1,30 @@
 use super::*;
 
+pub(super) fn wrap_skin_destination_clip(
+    mut items: Vec<SkinRenderItem>,
+    clip: Option<Rect>,
+) -> Vec<SkinRenderItem> {
+    if let Some(rect) = clip
+        && !items.is_empty()
+    {
+        items.insert(0, SkinRenderItem::PushClip { rect });
+        items.push(SkinRenderItem::PopClip);
+    }
+    items
+}
+
+pub(super) fn destination_has_clip(destination: &SkinDestinationDef) -> bool {
+    destination.dst.iter().any(|entry| {
+        let frames = match entry {
+            SkinDstEntry::Frame(frame) => std::slice::from_ref(frame),
+            SkinDstEntry::Conditional { frames, .. } => frames.as_slice(),
+        };
+        frames.iter().any(|frame| {
+            [frame.clip_x, frame.clip_y, frame.clip_w, frame.clip_h].iter().any(Option::is_some)
+        })
+    })
+}
+
 pub(super) fn wrap_ambient_destination(
     destination: &SkinDestinationDef,
     frame: ResolvedSkinFrame,
@@ -343,6 +368,7 @@ pub(super) struct ResolvedSkinFrame {
     pub(super) y: i32,
     pub(super) w: i32,
     pub(super) h: i32,
+    pub(super) clip: ResolvedSkinClip,
     pub(super) acc: i32,
     pub(super) a: i32,
     pub(super) r: i32,
@@ -362,6 +388,7 @@ impl Default for ResolvedSkinFrame {
             y: 0,
             w: 0,
             h: 0,
+            clip: ResolvedSkinClip::default(),
             acc: 0,
             a: 255,
             r: 255,
@@ -374,6 +401,28 @@ impl Default for ResolvedSkinFrame {
 }
 
 impl ResolvedSkinFrame {
+    /// Shape caches describe already resolved geometry/color, not its timeline
+    /// or the scissor applied after compositing the cached texture.
+    pub(super) fn geometry_cache_frame(mut self) -> Self {
+        self.time = 0;
+        self.acc = 0;
+        self.clip = ResolvedSkinClip::default();
+        self.apply_offset_alpha = true;
+        self
+    }
+
+    /// Remove clip before caching object geometry: changing only the scissor
+    /// must not invalidate its shape/number cache.
+    pub(super) fn take_clip(&mut self, width: u32, height: u32) -> Option<Rect> {
+        let [x, y, w, h] = std::mem::take(&mut self.clip).values()?;
+        (w > 0.0 && h > 0.0).then(|| Rect {
+            x: x / width.max(1) as f32,
+            y: 1.0 - (y + h) / height.max(1) as f32,
+            width: w / width.max(1) as f32,
+            height: h / height.max(1) as f32,
+        })
+    }
+
     pub(super) fn blend(self, fallback: BlendMode) -> BlendMode {
         self.lr2_style.map_or(fallback, |style| skin_blend_mode(style.blend))
     }
@@ -384,6 +433,46 @@ impl ResolvedSkinFrame {
 
     pub(super) fn center(self, fallback: i32) -> i32 {
         self.lr2_style.map_or(fallback, |style| style.center)
+    }
+}
+
+/// Float bits retain subpixel interpolation while keeping frame cache keys Eq/Hash.
+/// Missing components remain missing until inherited from an earlier keyframe.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub(super) struct ResolvedSkinClip([Option<u32>; 4]);
+
+impl ResolvedSkinClip {
+    pub(super) fn inherit(&mut self, animation: &SkinAnimationDef) {
+        for (component, value) in self.0.iter_mut().zip([
+            animation.clip_x,
+            animation.clip_y,
+            animation.clip_w,
+            animation.clip_h,
+        ]) {
+            if let Some(value) = value.filter(|&value| value != i32::MIN) {
+                *component = Some((value as f32).to_bits());
+            }
+        }
+    }
+
+    fn values(self) -> Option<[f32; 4]> {
+        let [x, y, w, h] = self.0;
+        Some([f32::from_bits(x?), f32::from_bits(y?), f32::from_bits(w?), f32::from_bits(h?)])
+    }
+
+    pub(super) fn interpolate(self, end: Self, rate: f32) -> Self {
+        let (Some(start), Some(end)) = (self.values(), end.values()) else {
+            // A later complete clip does not activate an incomplete start frame.
+            return self;
+        };
+        Self(std::array::from_fn(|i| Some((start[i] + (end[i] - start[i]) * rate).to_bits())))
+    }
+
+    pub(super) fn offset(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        if let Some(values) = self.values() {
+            let delta = [x, y, w, h];
+            self.0 = std::array::from_fn(|i| Some((values[i] + delta[i]).to_bits()));
+        }
     }
 }
 

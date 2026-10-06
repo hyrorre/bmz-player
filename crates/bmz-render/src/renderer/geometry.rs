@@ -83,12 +83,79 @@ pub(super) struct TextAtlasDirtyRegion {
 /// 変わるか、別種コマンドを挟むたびに分割する。
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum DrawStep {
+    /// A nonempty pixel scissor, or an empty intersection that suppresses drawing.
+    Scissor { rect: Option<ScissorRect> },
     /// rect instance buffer 内のバイト範囲。
     Rects { range: Range<usize> },
     /// image instance buffer 内のバイト範囲。
     Image { texture: TextureId, blend: BlendMode, linear: bool, range: Range<usize> },
     /// text instance buffer 内のバイト範囲。atlas テクスチャは全 text で共有する。
     Text { range: Range<usize> },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ScissorRect {
+    pub(super) x: u32,
+    pub(super) y: u32,
+    pub(super) width: u32,
+    pub(super) height: u32,
+}
+
+impl ScissorRect {
+    fn full(size: SurfaceSize) -> Option<Self> {
+        size.is_drawable().then_some(Self { x: 0, y: 0, width: size.width, height: size.height })
+    }
+
+    fn intersect(self, other: Self) -> Option<Self> {
+        let x = self.x.max(other.x);
+        let y = self.y.max(other.y);
+        let right = (self.x + self.width).min(other.x + other.width);
+        let bottom = (self.y + self.height).min(other.y + other.height);
+        (right > x && bottom > y).then(|| Self { x, y, width: right - x, height: bottom - y })
+    }
+
+    /// ScissorStack fixes each bottom-origin component with Java Math.round,
+    /// then flips negative extents. Round before converting back to top origin;
+    /// rounding both endpoints would produce different widths at half pixels.
+    pub(super) fn from_canvas(
+        rect: Rect,
+        viewport: CanvasViewport,
+        size: SurfaceSize,
+    ) -> Option<Self> {
+        let rect = viewport.transform_rect(rect);
+        if !size.is_drawable()
+            || ![rect.x, rect.y, rect.width, rect.height].into_iter().all(f32::is_finite)
+        {
+            return None;
+        }
+        let round = |value: f64| (value + 0.5).floor();
+        let surface_width = f64::from(size.width);
+        let surface_height = f64::from(size.height);
+        // Project with float arithmetic just like libGDX. Widening normalized
+        // values first can move an exact projected half pixel below the tie.
+        let mut x = round(f64::from(rect.x * size.width as f32));
+        let mut y = round(f64::from((1.0 - rect.y - rect.height) * size.height as f32));
+        let mut width = round(f64::from(rect.width * size.width as f32));
+        let mut height = round(f64::from(rect.height * size.height as f32));
+        if width < 0.0 {
+            x += width;
+            width = -width;
+        }
+        if height < 0.0 {
+            y += height;
+            height = -height;
+        }
+        let left = x.clamp(0.0, surface_width) as u32;
+        let right = (x + width).clamp(0.0, surface_width) as u32;
+        let top = (surface_height - y - height).clamp(0.0, surface_height) as u32;
+        let bottom = (surface_height - y).clamp(0.0, surface_height) as u32;
+        (right > left && bottom > top).then(|| Self {
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
+        })
+    }
 }
 
 /// `DrawPlan` を GPU 描画用のバッファ列と順序付きステップ列へ変換した結果。
@@ -120,6 +187,7 @@ impl PlanGeometry {
         };
         for step in &self.steps {
             match step {
+                DrawStep::Scissor { .. } => {}
                 DrawStep::Rects { .. } => {
                     stats.rect_steps += 1;
                 }
@@ -159,9 +227,19 @@ pub(super) fn draw_plan_geometry<'pass>(
     resources: PlanGeometryDrawResources<'pass>,
 ) {
     let mut image_step_index = 0_usize;
+    let mut visible = true;
     for step in &geometry.steps {
         match step {
+            DrawStep::Scissor { rect } => {
+                visible = rect.is_some();
+                if let Some(rect) = rect {
+                    pass.set_scissor_rect(rect.x, rect.y, rect.width, rect.height);
+                }
+            }
             DrawStep::Rects { range } => {
+                if !visible {
+                    continue;
+                }
                 let Some(buffer) = resources.rect_buffer else {
                     continue;
                 };
@@ -176,6 +254,9 @@ pub(super) fn draw_plan_geometry<'pass>(
             DrawStep::Image { blend, range, .. } => {
                 let bind_group = &resources.image_bind_groups[image_step_index];
                 image_step_index += 1;
+                if !visible {
+                    continue;
+                }
                 let Some(buffer) = resources.image_buffer else {
                     continue;
                 };
@@ -196,6 +277,9 @@ pub(super) fn draw_plan_geometry<'pass>(
                 pass.draw(0..6, 0..instance_count);
             }
             DrawStep::Text { range } => {
+                if !visible {
+                    continue;
+                }
                 let (Some(bind_group), Some(buffer)) =
                     (resources.text_bind_group, resources.text_buffer)
                 else {
@@ -283,9 +367,29 @@ pub(super) fn encode_plan_geometry_into(
     let mut text_quad_cursor = 0_usize;
     let mut text_command_index = 0_usize;
     let mut ambient_index = 0_usize;
+    let mut clips: Vec<Option<ScissorRect>> = Vec::new();
+    let full_scissor = ScissorRect::full(surface_size);
 
     for command in &plan.commands {
         match command {
+            DrawCommand::PushClip { rect } => {
+                let parent = clips.last().copied().unwrap_or(full_scissor);
+                let clip = parent.and_then(|parent| {
+                    parent.intersect(ScissorRect::from_canvas(
+                        *rect,
+                        canvas_viewport,
+                        surface_size,
+                    )?)
+                });
+                clips.push(clip);
+                steps.push(DrawStep::Scissor { rect: clip });
+            }
+            DrawCommand::PopClip => {
+                clips.pop();
+                steps.push(DrawStep::Scissor {
+                    rect: clips.last().copied().unwrap_or(full_scissor),
+                });
+            }
             DrawCommand::Ambient { rect, blur, fade_edges, .. } => {
                 let index = ambient_index;
                 ambient_index += 1;

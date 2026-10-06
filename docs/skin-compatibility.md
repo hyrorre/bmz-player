@@ -44,6 +44,10 @@ BMZ固有のIDや詳細な動作契約は [skin.md](skin.md)、互換修正の�
 | フォント解決 | 同梱フォントを優先し、OSフォントへfallback。path / memory bytes / TTC indexを扱う。[bmz-font](../crates/bmz-font/src/system.rs) |
 | SCROLL / SPEED | SCROLLの区間積分と、SPEEDイベント間の線形補間を実装。見かけ距離にはnote位置のSPEED倍率を適用する。[scroll.rs](../crates/bmz-player/src/screens/play_snapshot/scroll.rs)、[snapshotテスト](../crates/bmz-player/src/screens/play_snapshot/tests/cases_03.rs) |
 
+destinationの`clip_x` / `clip_y` / `clip_w` / `clip_h`は、継承・補間・offsetを含めて
+GPU scissorへ反映する。notes・songlist・judgeの外枠、Ambient合成後の制限にも対応する。
+子部品と検索入力overlayの適用範囲は[Destinationのクリッピング](skin.md#destinationのクリッピング)を参照。
+
 ### Luaの推論とruntime
 
 `auto` はfunctionを宣言的なref / expr / draw条件等へ変換できる場合に推論を使い、

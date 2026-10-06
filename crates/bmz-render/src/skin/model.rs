@@ -386,6 +386,12 @@ pub struct Keyframe {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SkinRenderItem {
+    /// Intersect the current scissor with this normalized, axis-aligned rectangle.
+    PushClip {
+        rect: Rect,
+    },
+    /// Restore the scissor preceding the matching PushClip.
+    PopClip,
     /// Image/BGA layers composited before blurring. Coordinates remain in skin space.
     Ambient {
         rect: Rect,

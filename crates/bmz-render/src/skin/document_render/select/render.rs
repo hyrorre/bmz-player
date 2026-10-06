@@ -211,12 +211,39 @@ macro_rules! skin_document_render_select_render_methods {
                     if destination.id
                         == self.songlist.as_ref().map(|list| list.id.as_str()).unwrap_or("")
                     {
-                        items.extend(self.select_songlist_items(
-                            sources,
-                            snapshot,
-                            &images,
-                            enabled_options,
-                            &state,
+                        let clip = if destination_has_clip(destination) {
+                            if !destination_ops_match(destination, enabled_options, &state)
+                                || !eval_skin_draw_condition(&destination.draw, &state)
+                            {
+                                continue;
+                            }
+                            let Some(elapsed) = destination_timer_elapsed_ms(destination, &state)
+                            else {
+                                continue;
+                            };
+                            let Some(mut frame) = resolve_destination_frame(
+                                destination,
+                                elapsed,
+                                enabled_options,
+                                &state,
+                            ) else {
+                                continue;
+                            };
+                            apply_skin_offset_to_frame(destination, &mut frame, &state, false);
+                            frame.take_clip(self.w, self.h)
+                        } else {
+                            None
+                        };
+                        // SkinBar draws its children directly; only its outer clip applies.
+                        items.extend(wrap_skin_destination_clip(
+                            self.select_songlist_items(
+                                sources,
+                                snapshot,
+                                &images,
+                                enabled_options,
+                                &state,
+                            ),
+                            clip,
                         ));
                         continue;
                     }
@@ -232,7 +259,11 @@ macro_rules! skin_document_render_select_render_methods {
                                 .find(|anchor| std::ptr::eq(anchor.destination, destination))
                             && let Some(item) = search_input_render_item(anchor)
                         {
-                            items.push(item);
+                            let mut frame = anchor.frame;
+                            items.extend(wrap_skin_destination_clip(
+                                vec![item],
+                                frame.take_clip(self.w, self.h),
+                            ));
                         }
                         continue;
                     }
@@ -279,6 +310,7 @@ macro_rules! skin_document_render_select_render_methods {
                             (0, 0),
                             enabled_options,
                             &state,
+                            true,
                         ));
                         continue;
                     }
@@ -301,12 +333,16 @@ macro_rules! skin_document_render_select_render_methods {
                         if !destination_mouse_rect_contains(destination, frame, &state) {
                             continue;
                         }
-                        items.extend(self.bpmgraph_render_items_with_segments(
-                            bpm_graph,
-                            destination,
-                            frame,
-                            &state,
-                            &row.chart_bpm_graph_segments,
+                        let clip = frame.take_clip(self.w, self.h);
+                        items.extend(wrap_skin_destination_clip(
+                            self.bpmgraph_render_items_with_segments(
+                                bpm_graph,
+                                destination,
+                                frame,
+                                &state,
+                                &row.chart_bpm_graph_segments,
+                            ),
+                            clip,
                         ));
                         continue;
                     }
