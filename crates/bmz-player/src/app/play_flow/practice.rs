@@ -366,7 +366,7 @@ impl WinitApp {
                 &practice.property,
             )
         {
-            tracing::warn!(%error, "failed to save practice property before exit");
+            tracing::warn!(error = %format_args!("{error:#}"), "failed to save practice property before exit");
         }
         if let Some(active_play) = &mut self.play.active_play
             && let Err(error) = active_play.running.pause_audio()
@@ -383,12 +383,14 @@ impl WinitApp {
     }
 
     pub(super) fn leave_practice(&mut self) {
-        if let Some(practice) = &self.play.practice_session {
-            let _ = save_practice_property(
+        if let Some(practice) = &self.play.practice_session
+            && let Err(error) = save_practice_property(
                 &self.boot.profile_paths,
                 &practice.chart_sha256,
                 &practice.property,
-            );
+            )
+        {
+            tracing::warn!(error = %format_args!("{error:#}"), "failed to save practice property on exit");
         }
         if !self.commit_active_play_lane_state_to_profile() {
             self.commit_pending_play_lane_state_to_profile();
@@ -445,7 +447,7 @@ impl WinitApp {
         if let Err(error) =
             save_practice_property(&self.boot.profile_paths, &chart_sha256, &property)
         {
-            tracing::warn!(%error, "failed to save practice property");
+            tracing::warn!(error = %format_args!("{error:#}"), "failed to save practice property");
         }
         self.play.practice_chart_zero_time =
             Some(practice_chart_zero_time(&property, self.play_skin_playstart_offset()));
@@ -498,7 +500,7 @@ impl WinitApp {
         if let Err(error) =
             save_practice_property(&self.boot.profile_paths, &chart_sha256, &property)
         {
-            tracing::warn!(%error, "failed to save practice property after round");
+            tracing::warn!(error = %format_args!("{error:#}"), "failed to save practice property after round");
         }
         self.commit_active_play_lane_state_to_profile();
         if let Some(mut started) = self.play.active_play.take() {

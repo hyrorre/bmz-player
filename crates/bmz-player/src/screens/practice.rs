@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use bmz_chart::model::{JudgeRankKind, JudgeRankSpec, PlayableChart};
 use bmz_chart::practice::apply_practice_section;
 use bmz_core::clear::GaugeType;
@@ -18,6 +18,8 @@ use std::sync::Arc;
 use crate::config::profile_config::GaugeTypeConfig;
 use crate::paths::ProfilePaths;
 use crate::select_options::ArrangeOption;
+
+mod persistence;
 
 const PRACTICE_PROPERTY_FORMAT_VERSION: u32 = 1;
 const PRACTICE_PLAYBACK_RATE_MIN: u16 = 50;
@@ -263,15 +265,9 @@ pub fn load_practice_property(
     cli: &PracticeCliOverrides,
 ) -> Result<PracticeProperty> {
     let path = practice_property_path(profile_paths, chart_sha256);
-    let loaded_from_file = path.is_file();
-    let mut property = if loaded_from_file {
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("read practice config: {}", path.display()))?;
-        serde_json::from_str(&text)
-            .with_context(|| format!("parse practice config: {}", path.display()))?
-    } else {
-        PracticeProperty::default()
-    };
+    let saved = persistence::load(&path);
+    let loaded_from_file = saved.is_some();
+    let mut property = saved.unwrap_or_default();
 
     if !loaded_from_file {
         property.end_time_ms = default_end_time_ms(chart);
@@ -336,13 +332,7 @@ pub fn save_practice_property(
     property: &PracticeProperty,
 ) -> Result<()> {
     let path = practice_property_path(profile_paths, chart_sha256);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create practice dir: {}", parent.display()))?;
-    }
-    let text = serde_json::to_string_pretty(property).context("serialize practice property")?;
-    std::fs::write(&path, text)
-        .with_context(|| format!("write practice config: {}", path.display()))
+    persistence::save(&path, property)
 }
 
 pub fn apply_practice_property(chart: &mut PlayableChart, property: &PracticeProperty) {
@@ -655,6 +645,129 @@ mod tests {
         assert_eq!(property.gauge, PracticeGaugeType::Hard);
         assert_eq!(property.total, Some(250.0));
         std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn corrupt_practice_uses_fresh_chart_and_rule_defaults_with_cli_overrides() {
+        for (rule_mode, key_mode, gauge, initial) in [
+            (RuleMode::Dx, KeyMode::K7, GaugeTypeConfig::Normal, 22),
+            (RuleMode::Dx, KeyMode::K9, GaugeTypeConfig::Hard, 30),
+            (RuleMode::Dx, KeyMode::K9, GaugeTypeConfig::Hazard, 100),
+            (RuleMode::Beatoraja, KeyMode::K7, GaugeTypeConfig::Hard, 20),
+        ] {
+            for end_time_ms in [None, Some(60_000)] {
+                let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+                let paths = crate::paths::resolve_profile_paths(&data.paths, "default").unwrap();
+                let mut chart = empty_chart(120_000);
+                chart.metadata.key_mode = key_mode;
+                let path = practice_property_path(&paths, &chart.identity.file_sha256);
+                let rules = PracticeRuleContext { rule_mode, key_mode };
+                let cli = PracticeCliOverrides { start_time_ms: Some(5000), end_time_ms };
+                let load = || {
+                    load_practice_property(
+                        &paths,
+                        &chart.identity.file_sha256,
+                        &chart,
+                        gauge,
+                        rules,
+                        &cli,
+                    )
+                    .unwrap()
+                };
+                let fresh = load();
+                assert!(!path.exists(), "loading missing settings must not save defaults");
+                assert_eq!(fresh.start_time_ms, 5000);
+                assert_eq!(fresh.end_time_ms, end_time_ms.unwrap_or(121_000));
+                assert_eq!(fresh.start_gauge, initial);
+                assert_eq!(fresh.gauge, gauge.into());
+                assert_eq!(fresh.total, Some(250.0));
+                assert_eq!(fresh.gauge_category, Some(GaugeProperty::from_keymode(key_mode)));
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                let mut wrong_type = serde_json::to_value(&fresh).unwrap();
+                wrong_type["start_gauge"] = serde_json::json!("broken");
+                for original in [
+                    b"null".to_vec(),
+                    b"{\"start_time_ms\":".to_vec(),
+                    b"[]".to_vec(),
+                    b"\xff\xfe\x80".to_vec(),
+                    serde_json::to_vec(&wrong_type).unwrap(),
+                ] {
+                    std::fs::write(&path, &original).unwrap();
+                    assert_eq!(load(), fresh, "{rule_mode:?} {key_mode:?} {gauge:?}");
+                    assert_eq!(std::fs::read(&path).unwrap(), original);
+                    assert_eq!(std::fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unreadable_practice_uses_fresh_defaults_without_changing_the_path() {
+        let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+        let paths = crate::paths::resolve_profile_paths(&data.paths, "default").unwrap();
+        let chart = empty_chart(120_000);
+        let path = practice_property_path(&paths, &chart.identity.file_sha256);
+        let rules = PracticeRuleContext { rule_mode: RuleMode::Dx, key_mode: KeyMode::K9 };
+        let load = || {
+            load_practice_property(
+                &paths,
+                &chart.identity.file_sha256,
+                &chart,
+                GaugeTypeConfig::Hard,
+                rules,
+                &PracticeCliOverrides { start_time_ms: Some(5000), end_time_ms: None },
+            )
+            .unwrap()
+        };
+        let fresh = load();
+        std::fs::create_dir_all(&path).unwrap();
+        let sentinel = path.join("keep");
+        std::fs::write(&sentinel, b"original").unwrap();
+        assert_eq!(load(), fresh);
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"original");
+    }
+
+    #[test]
+    fn valid_practice_preserves_saved_values_and_only_applies_cli_in_memory() {
+        let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+        let paths = crate::paths::resolve_profile_paths(&data.paths, "default").unwrap();
+        let chart = empty_chart(120_000);
+        let path = practice_property_path(&paths, &chart.identity.file_sha256);
+        let saved = PracticeProperty {
+            start_time_ms: 10_000,
+            end_time_ms: 30_000,
+            start_gauge: 117,
+            gauge: PracticeGaugeType::Hard,
+            gauge_category: Some(GaugeProperty::Pms),
+            judgerank: 222,
+            total: Some(4321.0),
+            ..Default::default()
+        };
+        save_practice_property(&paths, &chart.identity.file_sha256, &saved).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let rules = PracticeRuleContext { rule_mode: RuleMode::Dx, key_mode: KeyMode::K9 };
+        for cli in [
+            PracticeCliOverrides::default(),
+            PracticeCliOverrides { start_time_ms: Some(15_000), end_time_ms: Some(40_000) },
+        ] {
+            let loaded = load_practice_property(
+                &paths,
+                &chart.identity.file_sha256,
+                &chart,
+                GaugeTypeConfig::Normal,
+                rules,
+                &cli,
+            )
+            .unwrap();
+            let expected = PracticeProperty {
+                start_time_ms: cli.start_time_ms.unwrap_or(saved.start_time_ms),
+                end_time_ms: cli.end_time_ms.unwrap_or(saved.end_time_ms),
+                ..saved.clone()
+            };
+            assert_eq!(loaded, expected);
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+            assert_eq!(std::fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+        }
     }
 
     #[test]

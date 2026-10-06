@@ -6,8 +6,8 @@
 - beatoraja: `d22ce10bc13e7ddb27805a3adc15bb03312e4c78`。期間内123コミット（merge除外107）。
 - LR2orajaED-rian: `4b44283e521a3147152cf70347336681f1f0631f`。期間内162コミット（merge除外125）。
 - BMZの開始点: `ea9b39693c3e81b65cf7e8b4adea19a9da36702d`、`main`。
-- ユーザー承認に基づき、P1/P2の9件をサブエージェントで順番に修正する。
-  各変更を親エージェントがレビューし、検証後に機能単位でコミットする。
+- ユーザー承認に基づき、P1/P2の9件をサブエージェントで順番に修正した。
+  全9件の実装・自動検証を完了し、各変更を親エージェントがレビューして機能単位でコミットした。
 - P3の追加機能候補（追加Lua API、複合モード等）は今回の修正対象外。
 
 ## 修正順序
@@ -197,6 +197,31 @@ pixel変換はfloatで投影してからJavaの丸め規則を使う。正負の
 - workspace Clippyは既存 `input/capture.rs:111` の `let_unit_value` だけで失敗。
 - 第三者スキンの実機操作・上流との同画面手動比較は未実施。
   ログ: `.local/validation/2026-10-06-destination-clip/`。
+
+## 9. 破損Practice JSONからの復帰
+
+Practice設定をbytesとして読み、JSONのparseが成功したときだけ保存済み設定として扱う。
+null・型不一致・途中切れ・不正UTF-8・読み取りエラーはpathと理由を警告し、新規設定へ戻す。
+譜面の区間・判定ランク・TOTAL、DXの実ゲージ初期値、CLI overrideを既存の経路で適用する。
+読み込み時には元ファイルもbackupも書き込まない。
+
+保存直前に既存ファイルを再読込し、破損していれば同じフォルダへ
+`<SHA-256>.json.corrupt-<UUID>.bak` を排他的に作成し、元のbytesを退避・同期する。
+その後、新JSONを同じフォルダの一意な一時ファイルへ書き込み・同期してからrenameする。
+既存ファイルの読み取り・退避・書き込み・renameに失敗した場合は元ファイルを維持する。
+自分で作成した失敗時の一時ファイルだけを削除し、元ファイル削除によるfallbackは行わない。
+保存エラーは退出経路を含め原因のchainをログへ残す。
+保存場所と復旧契約は [controls.md](../../docs/controls.md) を参照。
+
+- 新規8件: persistence 5件、初期値・CLI・保存値を確認する入口の回帰3件。
+  不正入力5種類、DX 7K/9Kと他rule、保存の失敗境界を含む。
+- Practice関連47件: 全件成功 / 0 ignored。
+- fmt、player all-targets check: 成功。
+- 通常権限のplayer全テスト: 2246 passed / 19 ignored、終了コード0。
+  Windowsの実ファイルで既存JSONのrename置換とbackupの完全一致を確認した。
+- all-targets Clippyは既存 `input/capture.rs:111` の `let_unit_value` だけで失敗。
+- 実アプリの手動操作は未実施。
+  ログ: `.local/validation/2026-10-06-practice-json-recovery/`。
 
 ## 検証楽曲
 
