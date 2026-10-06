@@ -310,6 +310,20 @@ skin catalogのJSON候補はinclude・条件・数値正規化後に数値の`ty
 照合し、`bar_text` / `folderbar_text`形式もbar textへ割り当てる。Lua skinのslider / graph
 で使う`isRefNum`はJSONのbooleanに加えて互換表現の整数`0` / `1`も受理する。
 
+### カタログとシステム音セットの走査
+
+スキンカタログとBGM / SEセットの再帰走査では、走査rootごとにcanonical pathで
+ディレクトリの実体を記録し、同じ実体を一度だけ読む。symlinkとWindows junctionによる
+自己・親への循環や、同じディレクトリの別名による候補の重複を防ぐ。
+root自体がリンクでも走査し、候補のパスには最初に到達した元の経路を使う。
+複数の別名がある場合にどの経路が残るかはディレクトリの列挙順による。
+canonical pathを取得できないディレクトリは走査しない。
+
+スキンの `resource:skins/` / `data:skins/` の相対パスとorigin、名前順の候補ソートは維持する。
+resourceとdataのrootが異なる場合はそれぞれ独立して走査する。
+システム音セットは従来どおりBGMの `select`、SEの `clear` をマーカーとし、
+`.wav` / `.ogg` / `.flac` / `.mp3` を拡張子の大文字小文字を区別せず検出する。
+
 ### Lua Module Path
 
 skin library root 配下の Lua skin へ公開する初期 `package.path` は、過去の beatoraja と同じ

@@ -72,6 +72,24 @@ app側でもreplay入力と見逃し処理を通してBAD / EMPTY POOR / POORの
   自分が起動したテストだけを中断し、通常権限で全体を再実行した。初回ログは別途保持する。
 - 検証ログ: `.local/validation/2026-10-06-dx9k-gauge/`（Git管理外）。
 
+## 3. スキン・システム音のディレクトリ循環対策
+
+カタログ走査ごとにcanonical pathで訪問済みディレクトリを記録し、自己参照・親参照・
+同じ実体を指す複数リンクの再走査を止める。リンク経由の明示rootと元の候補パスは維持し、
+canonical化できないディレクトリは走査しない。スキンとシステムBGM/SEで共通helperを使う。
+
+Windowsでは実junction、Unixではsymlinkを使う回帰テストを追加した。
+自己・親・2つの別名・明示linked rootと通常の階層を併存させ、候補欠落・重複・循環がないことを確認。
+同一実体の別名が複数ある場合は、既存の列挙順で最初に見つかった経路を採用する。
+
+- Windows junction回帰: 2 passed / 0 ignored。リンク作成を省略せず実行。
+- `cargo fmt --check` / `cargo check -p bmz-player --locked`: 成功。
+- 通常権限の `cargo test -p bmz-player --locked`: 2229 passed / 19 ignored。
+- all-targets Clippyは既存の `input/capture.rs:111` のunit値束縛だけで失敗。
+  変更箇所に新たな診断はなく、既存問題の修正・抑制はしていない。
+- 検証ログ: `.local/validation/2026-10-06-scan-cycles/`。
+- Unix/macOS上でのリンク作成・実機操作は未実施。
+
 ## 検証楽曲
 
 [作者の配布ページ](https://www.luzeria.net/?p=387)から「運命論」を取得した。

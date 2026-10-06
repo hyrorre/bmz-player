@@ -29,6 +29,7 @@ pub mod config;
 pub mod course;
 pub mod course_cmd;
 pub mod difficulty_table;
+mod directory_scan;
 pub mod discord_presence;
 pub mod gameplay_runtime;
 pub mod generated_preview;

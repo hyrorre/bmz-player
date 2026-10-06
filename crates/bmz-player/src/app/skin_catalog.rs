@@ -32,13 +32,31 @@ pub(super) fn scan_skin_catalog_dir(
     origin: SkinCandidateOrigin,
     catalog: &mut SkinCatalog,
 ) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    scan_skin_catalog_dir_once(
+        root,
+        dir,
+        library_roots,
+        origin,
+        catalog,
+        &mut crate::directory_scan::DirectoryScan::default(),
+    );
+}
+
+fn scan_skin_catalog_dir_once(
+    root: &Path,
+    dir: &Path,
+    library_roots: &[PathBuf],
+    origin: SkinCandidateOrigin,
+    catalog: &mut SkinCatalog,
+    scan: &mut crate::directory_scan::DirectoryScan,
+) {
+    let Some(entries) = scan.read_dir_once(dir) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            scan_skin_catalog_dir(root, &path, library_roots, origin, catalog);
+            scan_skin_catalog_dir_once(root, &path, library_roots, origin, catalog, scan);
             continue;
         }
         if !is_skin_candidate_file(&path) {

@@ -94,6 +94,43 @@ fn skin_catalog_refresh_finds_restored_skin_and_reports_invalid_headers() {
 }
 
 #[test]
+#[cfg(any(unix, windows))]
+fn skin_catalog_scans_directory_links_once_and_accepts_linked_root() {
+    let fixture = crate::directory_scan::test_support::LinkedDirectories::new();
+    std::fs::write(fixture.root.join("root.json"), r#"{"type":5,"name":"Zulu"}"#).unwrap();
+    std::fs::write(fixture.nested.join("select.JSON"), r#"{"type":5,"name":"Alpha"}"#).unwrap();
+    std::fs::write(fixture.nested.join("parts.lua"), "return {type=5, name='Parts'}").unwrap();
+
+    for root in [&fixture.root, &fixture.linked_root] {
+        for (origin, prefix) in [
+            (SkinCandidateOrigin::Bundled, "resource:skins/"),
+            (SkinCandidateOrigin::User, "data:skins/"),
+        ] {
+            let mut catalog = SkinCatalog::default();
+            scan_skin_catalog_dir(root, root, std::slice::from_ref(root), origin, &mut catalog);
+            sort_skin_catalog(&mut catalog);
+            assert_eq!(catalog.select.len(), 2);
+            assert_eq!(catalog.select[0].name, "Alpha");
+            assert_eq!(catalog.select[1].name, "Zulu");
+            assert_eq!(catalog.select[1].path, format!("{prefix}root.json"));
+            for (candidate, expected) in catalog
+                .select
+                .iter()
+                .zip([fixture.nested.join("select.JSON"), fixture.root.join("root.json")])
+            {
+                assert_eq!(candidate.origin, origin);
+                let relative = candidate.path.strip_prefix(prefix).unwrap();
+                assert!(!Path::new(relative).is_absolute());
+                assert_eq!(
+                    root.join(relative).canonicalize().unwrap(),
+                    expected.canonicalize().unwrap()
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn lua_runtime_offsets_keep_names_distinct_and_runtime_ids_last_wins() {
     let offsets = vec![
         SkinOffsetConfig { name: Some("First".to_string()), id: 42, x: 10, ..Default::default() },

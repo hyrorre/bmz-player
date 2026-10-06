@@ -1,6 +1,6 @@
 # スキン互換の対応状況
 
-この文書は、互換修正や次の作業を選ぶための索引です。最終確認日は2026-10-05です。
+この文書は、互換修正や次の作業を選ぶための索引です。最終確認日は2026-10-06です。
 「対応済み」は記載した範囲の実装・テストがあることを意味し、全スキンでの見た目の完全一致を保証しません。
 BMZ固有のIDや詳細な動作契約は [skin.md](skin.md)、互換修正の方針は [AGENTS.md](../AGENTS.md) を参照します。
 
@@ -13,6 +13,7 @@ BMZ固有のIDや詳細な動作契約は [skin.md](skin.md)、互換修正の�
 | 項目 | 現在の範囲・確認入口 |
 |---|---|
 | JSON / Lua / LR2読込 | JSON、`.luaskin` / `.lua`、LR2 CSV skinを読み込む。[decode API](../crates/bmz-skin/src/lib.rs)、[app側decode](../crates/bmz-player/src/skin_loader/decode/document.rs)。LR2全命令の完全互換を意味しない |
+| スキン / システム音セットの走査 | symlink / Windows junctionの循環と同一ディレクトリの重複走査を防止。明示したリンクrootは受理し、候補パスとoriginを保持する。[仕様](skin.md#カタログとシステム音セットの走査)、[スキン回帰テスト](../crates/bmz-player/src/app/tests/skin.rs)、[システム音回帰テスト](../crates/bmz-player/src/system_sound.rs) |
 | LR2の基準解像度 | `#RESOLUTION` 省略時は640×480。プリセットと幅・高さの明示指定も対応。[仕様](skin.md#lr2の基準解像度)、[回帰テスト](../crates/bmz-skin/src/lr2/tests/cases_01.rs) |
 | LR2 Select / Result | 曲バー・基本設定をBMZ操作へ接続。通常／コースResultの自分側グラフ、左右反転、timer 150..152と入力待ち、確定ランクによる素材選択に対応。特殊設定・相手履歴等の制限は [仕様](skin.md#lr2のselect--result)。素材を使った [初期検証](../notes/2026/2026-10-03-lr2-select-result.md) と [追加スキンの修正・検証](../notes/2026/2026-10-05-lr2-select-result-review.md) を参照 |
 | LR2のDST時刻 | 単一時刻の表示保持、終端を過ぎてからのloop、開始前と負loopの非表示をOpenLR2に合わせる。[仕様](skin.md#lr2のdst時刻)、[回帰テスト](../crates/bmz-render/src/skin/tests/core/cases_05.rs) |

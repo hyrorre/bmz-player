@@ -217,19 +217,29 @@ pub fn scan_sound_sets(root: &Path, marker_filename: &str) -> Vec<PathBuf> {
         None => marker_filename,
     };
     let mut out = Vec::new();
-    scan_sound_sets_into(root, marker_stem, &mut out);
+    scan_sound_sets_into(
+        root,
+        marker_stem,
+        &mut out,
+        &mut crate::directory_scan::DirectoryScan::default(),
+    );
     out
 }
 
-fn scan_sound_sets_into(dir: &Path, marker_stem: &str, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+fn scan_sound_sets_into(
+    dir: &Path,
+    marker_stem: &str,
+    out: &mut Vec<PathBuf>,
+    scan: &mut crate::directory_scan::DirectoryScan,
+) {
+    let Some(entries) = scan.read_dir_once(dir) else {
         return;
     };
     let mut has_marker = false;
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            scan_sound_sets_into(&path, marker_stem, out);
+            scan_sound_sets_into(&path, marker_stem, out, scan);
         } else if !has_marker && is_marker_file(&path, marker_stem) {
             has_marker = true;
         }
@@ -330,6 +340,31 @@ mod tests {
         assert_eq!(found, expected);
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(any(unix, windows))]
+    fn scan_sound_sets_scans_directory_links_once_and_accepts_linked_root() {
+        let fixture = crate::directory_scan::test_support::LinkedDirectories::new();
+        std::fs::write(fixture.root.join("select.MP3"), b"x").unwrap();
+        std::fs::write(fixture.root.join("clear.wav"), b"x").unwrap();
+        std::fs::write(fixture.nested.join("select.FLAC"), b"x").unwrap();
+        std::fs::write(fixture.nested.join("clear.OGG"), b"x").unwrap();
+        let mut expected =
+            vec![fixture.root.canonicalize().unwrap(), fixture.nested.canonicalize().unwrap()];
+        expected.sort();
+
+        for root in [&fixture.root, &fixture.linked_root] {
+            for marker in ["select.wav", "clear.wav", "clear"] {
+                let found = scan_sound_sets(root, marker);
+                assert_eq!(found.len(), 2);
+                assert!(found.iter().all(|path| path.starts_with(root)));
+                let mut canonical: Vec<_> =
+                    found.iter().map(|path| path.canonicalize().unwrap()).collect();
+                canonical.sort();
+                assert_eq!(canonical, expected);
+            }
+        }
     }
 
     #[test]
