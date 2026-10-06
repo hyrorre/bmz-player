@@ -32,8 +32,16 @@ pub fn import_bmson_to_intermediate(
 ) -> Result<IntermediateChart, ImportError> {
     let bytes = std::fs::read(source_path)
         .map_err(|source| ImportError::Io { path: source_path.to_path_buf(), source })?;
-    let identity = compute_chart_identity(&bytes);
-    let text = std::str::from_utf8(&bytes).map_err(|_| ImportError::Parse {
+    import_bmson_bytes_to_intermediate(source_path, &bytes, warnings)
+}
+
+pub(super) fn import_bmson_bytes_to_intermediate(
+    source_path: &Path,
+    bytes: &[u8],
+    warnings: &mut Vec<ImportWarning>,
+) -> Result<IntermediateChart, ImportError> {
+    let identity = compute_chart_identity(bytes);
+    let text = std::str::from_utf8(bytes).map_err(|_| ImportError::Parse {
         path: source_path.to_path_buf(),
         message: "BMSON file is not valid UTF-8".into(),
     })?;

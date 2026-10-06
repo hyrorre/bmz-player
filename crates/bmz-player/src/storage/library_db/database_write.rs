@@ -14,11 +14,32 @@ impl LibraryDatabase {
             stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
+        // Only a successfully decoded generation may prove that an entry vanished.
+        // Rechecking the generation also protects against rewrites after the scan.
+        let mut archive_entries: HashMap<PathBuf, Option<std::collections::HashSet<String>>> =
+            HashMap::new();
         let missing: Vec<_> = candidates
             .into_iter()
             .filter(|(_, path)| {
                 song_root_contains_file(&root, path)
-                    && matches!(Path::new(path).try_exists(), Ok(false))
+                    && match crate::chart_source::ChartLocator::parse(Path::new(path)) {
+                        Ok(crate::chart_source::ChartLocator::File(file)) => {
+                            matches!(file.try_exists(), Ok(false))
+                        }
+                        Ok(crate::chart_source::ChartLocator::Archive { container, entry }) => {
+                            matches!(container.try_exists(), Ok(false))
+                                || archive_entries.entry(container.clone()).or_insert_with(|| {
+                                    let index = crate::song_archive::inspect(&container, &Default::default()).ok()?;
+                                    let generation: String = self.conn.query_row(
+                                        "SELECT generation FROM song_archive_scans WHERE path = ?1", [library_path_key(&container)],
+                                        |row| row.get(0),
+                                    ).ok()?;
+                                    (generation == index.generation.fingerprint).then(|| index.entries.into_iter()
+                                        .filter(|entry| !entry.is_directory).map(|entry| entry.name).collect())
+                                }).as_ref().is_some_and(|entries| !entries.contains(&entry))
+                        }
+                        Err(_) => false,
+                    }
             })
             .map(|(id, _)| id)
             .collect();

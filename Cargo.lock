@@ -681,6 +681,7 @@ dependencies = [
  "ed25519-dalek",
  "egui",
  "egui-winit",
+ "encoding_rs",
  "evdev",
  "everything-ipc",
  "flate2",
@@ -692,6 +693,7 @@ dependencies = [
  "image",
  "keyring",
  "libc",
+ "rars",
  "rayon",
  "reqwest",
  "rfd",
@@ -712,6 +714,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "unic-langid",
+ "unicode-normalization",
  "uuid",
  "webbrowser",
  "windows-sys 0.61.2",
@@ -720,6 +723,7 @@ dependencies = [
  "x11rb",
  "x11rb-protocol",
  "zbus",
+ "zip",
 ]
 
 [[package]]
@@ -3150,9 +3154,9 @@ dependencies = [
 
 [[package]]
 name = "lzma-rust2"
-version = "0.16.5"
+version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca93e534d1142d1d0dcca6d25fe302508a5dfb40b302802904577725ea0b695b"
+checksum = "5e2a88783b84d2d67ef2791778a9e76bfb68b8017aaf6c9d7d5f2626a478b16c"
 
 [[package]]
 name = "mach2"
@@ -4440,6 +4444,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca45419789ae5a7899559e9512e58ca889e41f04f1f2445e9f4b290ceccd1d08"
 
 [[package]]
+name = "rars"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a1fb39150e8a5b3db405961d6814c6cdfd4965701ba9d9a116ed72db2ad8bbf"
+dependencies = [
+ "aho-corasick",
+]
+
+[[package]]
 name = "raw-window-handle"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4943,9 +4956,9 @@ dependencies = [
 
 [[package]]
 name = "sevenz-rust2"
-version = "0.21.3"
+version = "0.22.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b5d71c87d24cb22976f3f6e6c2c9296ef1f6958394e2b868d56ca01b082798a"
+checksum = "cb967eb8b29410e61e8c9005058fcfd5889d0b827856beb25529c73dfc86a98a"
 dependencies = [
  "aes",
  "bzip2",
@@ -5888,6 +5901,15 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "unicode-segmentation"

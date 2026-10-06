@@ -39,6 +39,21 @@ pub fn generated_preview_cache_key(chart_id: i64, start_ms: i64) -> String {
     format!("{GENERATED_PREVIEW_KEY_PREFIX}|{GENERATED_PREVIEW_VERSION}|{chart_id}|{start_ms}")
 }
 
+pub(crate) fn generated_preview_cache_key_for_source(
+    chart_id: i64,
+    start_ms: i64,
+    folder: &str,
+) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut key = generated_preview_cache_key(chart_id, start_ms);
+    if let Some(stamp) = crate::chart_asset::archive_asset_stamp(folder) {
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        (folder, stamp).hash(&mut hash);
+        key.push_str(&format!("|archive-{:016x}", hash.finish()));
+    }
+    key
+}
+
 pub fn parse_generated_preview_cache_key(key: &str) -> Option<GeneratedPreviewKey> {
     let mut parts = key.split('|');
     let prefix = parts.next()?;
@@ -51,7 +66,14 @@ pub fn parse_generated_preview_cache_key(key: &str) -> Option<GeneratedPreviewKe
     }
     let chart_id = parts.next()?.parse::<i64>().ok()?;
     let start_ms = parts.next()?.parse::<i64>().ok()?;
-    if parts.next().is_some() || chart_id <= 0 || start_ms < 0 {
+    if parts.next().is_some_and(|part| {
+        !part
+            .strip_prefix("archive-")
+            .is_some_and(|stamp| stamp.len() == 16 && stamp.bytes().all(|b| b.is_ascii_hexdigit()))
+    }) || parts.next().is_some()
+        || chart_id <= 0
+        || start_ms < 0
+    {
         return None;
     }
     Some(GeneratedPreviewKey { chart_id, start_ms })
@@ -103,24 +125,46 @@ pub fn fallback_preview_start_ms(
 
 pub fn render_generated_preview_for_chart(
     library_db_path: &Path,
+    cache_root: &Path,
     chart_id: i64,
     start_ms: i64,
     sample_rate: u32,
+    expected_cache_key: Option<&str>,
 ) -> Result<DecodedSample> {
     let db = LibraryDatabase::open(library_db_path)
         .with_context(|| format!("open library db {}", library_db_path.display()))?;
-    let (_, import) =
-        db.load_chart_source(chart_id, bmz_chart::import::BmsRandomSource::Seed(None))?;
+    let (source, _, import) = db.load_chart_source_with_cache(
+        chart_id,
+        bmz_chart::import::BmsRandomSource::Seed(None),
+        cache_root,
+    )?;
+    anyhow::ensure!(source.chart.chart_id == chart_id, "chart source changed during preview load");
+    let check_generation = || -> Result<()> {
+        if let Some(expected) = expected_cache_key {
+            anyhow::ensure!(
+                generated_preview_cache_key_for_source(
+                    chart_id,
+                    start_ms,
+                    &source.chart.folder_path
+                ) == expected,
+                "archive changed during generated preview load"
+            );
+        }
+        Ok(())
+    };
+    check_generation()?;
     let mut loader = FfmpegSampleLoader::with_packet_yield_interval(
         GENERATED_PREVIEW_DECODE_YIELD_INTERVAL_PACKETS,
     );
-    render_generated_preview_sample(
+    let sample = render_generated_preview_sample(
         &import.chart,
         start_ms,
         GENERATED_PREVIEW_DURATION_MS,
         sample_rate,
         &mut loader,
-    )
+    )?;
+    check_generation()?;
+    Ok(sample)
 }
 
 pub(crate) fn render_generated_preview_sample(

@@ -930,4 +930,14 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             roots_json TEXT NOT NULL
         );"],
     },
+    Migration {
+        version: 35,
+        // The archive generation covers assets as well as its chart entries. Stable
+        // chart_files paths stay independent of the disposable materialization cache.
+        statements: &["CREATE TABLE song_archive_scans (
+            path TEXT PRIMARY KEY,
+            generation TEXT NOT NULL,
+            import_version INTEGER NOT NULL
+        );"],
+    },
 ];

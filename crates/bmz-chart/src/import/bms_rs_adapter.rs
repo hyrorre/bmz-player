@@ -126,8 +126,29 @@ pub fn import_bms_to_intermediate_with_random_source(
     bms_switch_choices: &mut Vec<u64>,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
+    let bytes = std::fs::read(source_path)
+        .map_err(|source| ImportError::Io { path: source_path.to_path_buf(), source })?;
+    import_bms_bytes_to_intermediate(
+        source_path,
+        &bytes,
+        random_source,
+        bms_random_choices,
+        bms_switch_choices,
+        warnings,
+    )
+}
+
+pub(super) fn import_bms_bytes_to_intermediate(
+    source_path: &Path,
+    bytes: &[u8],
+    random_source: &BmsRandomSource,
+    bms_random_choices: &mut Vec<i32>,
+    bms_switch_choices: &mut Vec<u64>,
+    warnings: &mut Vec<ImportWarning>,
+) -> Result<IntermediateChart, ImportError> {
     import_with_layout::<KeyLayoutBeat>(
         source_path,
+        bytes,
         ChartKeyLayout::beat(),
         random_source,
         bms_random_choices,
@@ -159,7 +180,25 @@ pub fn import_pms_to_intermediate_with_random_source(
 ) -> Result<IntermediateChart, ImportError> {
     let bytes = std::fs::read(source_path)
         .map_err(|source| ImportError::Io { path: source_path.to_path_buf(), source })?;
-    let text = decode_bms_text(&bytes, warnings);
+    import_pms_bytes_to_intermediate(
+        source_path,
+        &bytes,
+        random_source,
+        bms_random_choices,
+        bms_switch_choices,
+        warnings,
+    )
+}
+
+pub(super) fn import_pms_bytes_to_intermediate(
+    source_path: &Path,
+    bytes: &[u8],
+    random_source: &BmsRandomSource,
+    bms_random_choices: &mut Vec<i32>,
+    bms_switch_choices: &mut Vec<u64>,
+    warnings: &mut Vec<ImportWarning>,
+) -> Result<IntermediateChart, ImportError> {
+    let text = decode_bms_text(bytes, warnings);
     let (variant, conflict) = detect_pms_variant(&text);
     if conflict {
         warnings.push(ImportWarning::ParserDiagnostic {
@@ -172,6 +211,7 @@ pub fn import_pms_to_intermediate_with_random_source(
     match variant {
         PmsKeyLayout::Standard => import_with_layout::<KeyLayoutPms>(
             source_path,
+            bytes,
             ChartKeyLayout::pms(PmsKeyLayout::Standard),
             random_source,
             bms_random_choices,
@@ -180,6 +220,7 @@ pub fn import_pms_to_intermediate_with_random_source(
         ),
         PmsKeyLayout::BmeType => import_with_layout::<KeyLayoutPmsBmeType>(
             source_path,
+            bytes,
             ChartKeyLayout::pms(PmsKeyLayout::BmeType),
             random_source,
             bms_random_choices,
@@ -191,16 +232,15 @@ pub fn import_pms_to_intermediate_with_random_source(
 
 fn import_with_layout<T: KeyLayoutMapper>(
     source_path: &Path,
+    bytes: &[u8],
     layout: ChartKeyLayout,
     random_source: &BmsRandomSource,
     bms_random_choices: &mut Vec<i32>,
     bms_switch_choices: &mut Vec<u64>,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
-    let bytes = std::fs::read(source_path)
-        .map_err(|source| ImportError::Io { path: source_path.to_path_buf(), source })?;
-    let identity = compute_chart_identity(&bytes);
-    let raw_text = decode_bms_text(&bytes, warnings);
+    let identity = compute_chart_identity(bytes);
+    let raw_text = decode_bms_text(bytes, warnings);
     let has_bms_random = source_text_has_bms_random(&raw_text);
     let layout_text = if layout == ChartKeyLayout::pms(PmsKeyLayout::Standard) {
         strip_pms_bme_upper_channels(&raw_text)

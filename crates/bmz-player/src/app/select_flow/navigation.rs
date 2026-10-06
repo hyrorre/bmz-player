@@ -6,12 +6,18 @@ pub(super) fn choose_random_chart_id(chart_ids: &[i64]) -> Option<i64> {
 }
 
 pub(in crate::app) fn select_explorer_path(item: &SelectItem) -> Option<PathBuf> {
-    match item {
+    let path = match item {
         SelectItem::Chart(row) => row.chart.as_ref().map(|chart| PathBuf::from(&chart.folder_path)),
         SelectItem::Folder { path, kind: bmz_render::scene::SelectRowKind::Folder, .. } => {
             Some(PathBuf::from(path))
         }
         _ => None,
+    }?;
+    let locator = crate::chart_source::ChartLocator::parse(&path).ok()?;
+    if locator.is_archive() {
+        locator.container_path().parent().map(Path::to_path_buf)
+    } else {
+        Some(path)
     }
 }
 
@@ -19,7 +25,10 @@ pub(in crate::app) fn select_explorer_file_path(
     db: &LibraryDatabase,
     chart: &crate::storage::library_db::ChartListItem,
 ) -> Result<Option<PathBuf>> {
-    Ok(db.available_chart_sources(&[chart])?.remove(&chart.chart_id).map(|source| source.path))
+    db.available_chart_sources(&[chart])?
+        .remove(&chart.chart_id)
+        .map(|source| source.locator().map(|locator| locator.container_path().to_path_buf()))
+        .transpose()
 }
 
 impl WinitApp {
@@ -295,6 +304,33 @@ impl WinitApp {
             return;
         };
         let folder = PathBuf::from(&chart.folder_path);
+        if let Ok(locator) = crate::chart_source::ChartLocator::parse(&folder)
+            && locator.is_archive()
+        {
+            let cache_dir = self.boot.app_paths.cache_dir.clone();
+            // Document extraction/opening must not stall the window thread.
+            thread::spawn(move || {
+                let result = (|| -> Result<()> {
+                    let source = locator.materialize(&cache_dir)?;
+                    for entry in std::fs::read_dir(&source.path)? {
+                        let path = entry?.path();
+                        if path
+                            .extension()
+                            .and_then(|ext| ext.to_str())
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("txt"))
+                        {
+                            source.validate_asset_path(&path)?;
+                            open_file_with_default_app(&path)?;
+                        }
+                    }
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    tracing::warn!(error = %format_args!("{error:#}"), "failed to open archive chart documents");
+                }
+            });
+            return;
+        }
         let mut opened = 0usize;
         match std::fs::read_dir(&folder) {
             Ok(entries) => {

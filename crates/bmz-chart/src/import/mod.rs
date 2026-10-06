@@ -68,21 +68,38 @@ pub fn import_chart_with_random_source(
     random_source: BmsRandomSource,
     check_resource_existence: bool,
 ) -> Result<ImportResult, ImportError> {
+    let bytes = std::fs::read(path)
+        .map_err(|source| ImportError::Io { path: path.to_path_buf(), source })?;
+    import_chart_bytes_with_random_source(path, &bytes, random_source, check_resource_existence)
+}
+
+/// Import original chart bytes, using `path` only for format, diagnostics and asset bases.
+/// The identity always hashes `bytes` before decoding or RANDOM processing.
+pub fn import_chart_bytes_with_random_source(
+    path: &Path,
+    bytes: &[u8],
+    random_source: BmsRandomSource,
+    check_resource_existence: bool,
+) -> Result<ImportResult, ImportError> {
     let mut warnings = Vec::new();
     let mut bms_random_choices = Vec::new();
     let mut bms_switch_choices = Vec::new();
     let file_format = chart_file_format(path);
     let intermediate = match file_format {
-        ChartFileFormat::Bmson => bmson_adapter::import_bmson_to_intermediate(path, &mut warnings)?,
-        ChartFileFormat::Bms => bms_rs_adapter::import_bms_to_intermediate_with_random_source(
+        ChartFileFormat::Bmson => {
+            bmson_adapter::import_bmson_bytes_to_intermediate(path, bytes, &mut warnings)?
+        }
+        ChartFileFormat::Bms => bms_rs_adapter::import_bms_bytes_to_intermediate(
             path,
+            bytes,
             &random_source,
             &mut bms_random_choices,
             &mut bms_switch_choices,
             &mut warnings,
         )?,
-        ChartFileFormat::Pms => bms_rs_adapter::import_pms_to_intermediate_with_random_source(
+        ChartFileFormat::Pms => bms_rs_adapter::import_pms_bytes_to_intermediate(
             path,
+            bytes,
             &random_source,
             &mut bms_random_choices,
             &mut bms_switch_choices,

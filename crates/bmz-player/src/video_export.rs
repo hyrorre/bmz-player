@@ -76,7 +76,7 @@ pub fn run(options: VideoExportOptions, paths: &AppPaths, profile_id: Option<&st
     )?;
     let mut media = media::Media::load(
         &prepared.play.session.chart,
-        &options.chart.canonicalize()?,
+        &crate::chart_asset::canonical_chart_path(&options.chart)?,
         &decoded,
         &mut renderer,
     )?;

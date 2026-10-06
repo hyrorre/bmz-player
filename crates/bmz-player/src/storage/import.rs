@@ -3,7 +3,7 @@ use std::time::UNIX_EPOCH;
 
 use anyhow::Result;
 use bmz_chart::import::error::ImportWarning;
-use bmz_chart::import::{ImportResult, import_bms_chart};
+use bmz_chart::import::import_bms_chart;
 
 use super::library_db::{ChartImportRecord, LibraryDatabase};
 
@@ -22,7 +22,10 @@ pub fn import_chart_file(
     random_seed: Option<u64>,
     scanned_at: i64,
 ) -> Result<ImportedChart> {
-    let metadata = std::fs::metadata(path)?;
+    let locator = crate::chart_source::ChartLocator::parse(path)?;
+    let stable_path = locator.to_path_buf();
+    let path = stable_path.as_path();
+    let metadata = std::fs::metadata(locator.container_path())?;
     let modified_at = metadata
         .modified()
         .ok()
@@ -30,28 +33,51 @@ pub fn import_chart_file(
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or(0);
 
-    let ImportResult { chart, warnings, .. } = import_bms_chart(path, random_seed, true)?;
-    let record = ChartImportRecord {
-        root_id,
-        file_path: path,
-        file_size: metadata.len(),
-        modified_at,
-        scanned_at,
-        chart: &chart,
-    };
+    let (mut import, archive_index, file_size) =
+        if let crate::chart_source::ChartLocator::Archive { container, entry } = &locator {
+            let read = crate::song_archive::read_chart(container, entry, &Default::default())?;
+            let bytes = read.bytes;
+            let index = crate::song_archive::inspect(container, &Default::default())?;
+            anyhow::ensure!(
+                read.generation == index.generation,
+                "archive changed during chart import"
+            );
+            let mut import = bmz_chart::import::import_chart_bytes_with_random_source(
+                path,
+                &bytes,
+                bmz_chart::import::BmsRandomSource::Seed(random_seed),
+                false,
+            )?;
+            import.chart.metadata.preview_file = crate::chart_source::archive_preview_file(
+                &index,
+                entry,
+                &import.chart.metadata.preview_file,
+            );
+            (import, Some(index), bytes.len() as u64)
+        } else {
+            (import_bms_chart(path, random_seed, true)?, None, metadata.len())
+        };
+    let chart = &mut import.chart;
+    let record =
+        ChartImportRecord { root_id, file_path: path, file_size, modified_at, scanned_at, chart };
 
     let chart_id = db.upsert_chart_import(&record)?;
     if let Some(folder) = path.parent() {
         db.update_folder_document_flags(&[(
             folder.to_path_buf(),
-            super::scan::folder_has_document(folder),
+            match (&locator, &archive_index) {
+                (crate::chart_source::ChartLocator::Archive { entry, .. }, Some(index)) => {
+                    crate::chart_source::archive_folder_has_document(index, entry)
+                }
+                _ => super::scan::folder_has_document(folder),
+            },
         )])?;
     }
     let chart_file_id =
         db.chart_file_id_by_path(path)?.expect("chart file must exist after import upsert");
-    db.replace_import_warnings(chart_file_id, &warnings, scanned_at)?;
+    db.replace_import_warnings(chart_file_id, &import.warnings, scanned_at)?;
 
-    Ok(ImportedChart { chart_id, chart_file_id, chart, warnings })
+    Ok(ImportedChart { chart_id, chart_file_id, chart: import.chart, warnings: import.warnings })
 }
 
 #[cfg(test)]

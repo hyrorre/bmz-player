@@ -21,8 +21,10 @@ pub(super) fn chart_file_path_candidates(path: &Path) -> Vec<String> {
         }
     };
     push(path_key(path));
-    if let Ok(canonical) = path.canonicalize() {
-        push(path_key(&canonical));
+    if let Ok(canonical) =
+        crate::chart_source::ChartLocator::parse(path).and_then(|locator| locator.canonicalize())
+    {
+        push(path_key(&canonical.to_path_buf()));
     }
     out
 }

@@ -110,7 +110,9 @@ pub(crate) fn song_root_contains_file(root: &PathEntry, path: &str) -> bool {
 
 fn song_root_path_contains_file(root_path: &str, recursive: bool, path: &str) -> bool {
     let root_path = normalize_library_path(root_path);
-    let path = normalize_library_path(path);
+    let path = crate::chart_source::ChartLocator::parse(Path::new(path))
+        .map(|locator| normalize_library_path(&locator.container_path().to_string_lossy()))
+        .unwrap_or_else(|_| normalize_library_path(path));
     #[cfg(windows)]
     let (root_path, path) = (root_path.to_lowercase(), path.to_lowercase());
     let prefix = format!("{}/", root_path.trim_end_matches('/'));

@@ -102,6 +102,8 @@ impl SRandomScheme {
 
 #[derive(Debug, Clone)]
 pub struct PlaySessionOptions {
+    /// Explicit disposable resource cache used by archive playback workers.
+    pub archive_cache_dir: Option<std::path::PathBuf>,
     /// Per-key presentation settings use the source chart mode. This differs
     /// from `chart.metadata.key_mode` after BATTLE expands 5K/7K to 10K/14K.
     pub play_config_key_mode: Option<KeyMode>,
@@ -381,6 +383,7 @@ impl PreloadedPlaySession {
 impl Default for PlaySessionOptions {
     fn default() -> Self {
         Self {
+            archive_cache_dir: None,
             play_config_key_mode: None,
             session_mode: SessionMode::Normal,
             autoplay: false,

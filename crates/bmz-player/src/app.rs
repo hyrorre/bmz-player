@@ -82,7 +82,7 @@ use crate::config::profile_config::{
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
 use crate::discord_presence::{DiscordPresence, DiscordPresenceConfig, DiscordPresenceHandle};
-use crate::generated_preview::{fallback_preview_start_ms, generated_preview_cache_key};
+use crate::generated_preview::fallback_preview_start_ms;
 use crate::i18n::{FluentArgs, Localizer};
 use crate::input::shared::SharedInputBackend;
 use crate::input::winit::{
@@ -475,7 +475,11 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
     };
     prepare_boot_chart_options(&mut boot, &mut options)?;
     boot.app_config.set_cli_window(options.window_overrides.clone())?;
-    if options.boot_play_path.as_ref().is_some_and(|p| !Path::new(p).is_file()) {
+    if options.boot_play_path.as_ref().is_some_and(|p| {
+        !Path::new(p).is_file()
+            && !crate::chart_source::ChartLocator::parse(Path::new(p))
+                .is_ok_and(|locator| locator.is_archive())
+    }) {
         options.play_overrides = Default::default();
     }
     boot.profile_config.set_cli_play(options.play_overrides.clone());
@@ -556,15 +560,13 @@ fn prepare_boot_chart_options(
     let Some(path) = options.boot_play_path.as_deref().map(Path::new) else {
         return Ok(());
     };
-    if !path.is_file() {
+    if !path.is_file()
+        && !crate::chart_source::ChartLocator::parse(path)?.is_archive()
+        && !crate::chart_source::is_archive_file(path)
+    {
         return Ok(());
     }
-    let canonical = path
-        .canonicalize()
-        .with_context(|| format!("failed to resolve boot chart: {}", path.display()))?;
-    if !crate::storage::scan::is_chart_file(&canonical) {
-        bail!("unsupported chart extension: {}", canonical.display());
-    }
+    let canonical = crate::chart_asset::canonical_chart_path(path)?;
     options.boot_play_path = Some(canonical.to_string_lossy().into_owned());
     // An explicit PATH means the current file, even when a previous scan indexed
     // different contents or the containing song root has since been disabled.

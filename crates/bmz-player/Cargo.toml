@@ -39,6 +39,10 @@ base64.workspace = true
 flate2.workspace = true
 tar.workspace = true
 sevenz-rust2.workspace = true
+rars.workspace = true
+zip = { version = "4.6", default-features = false, features = ["deflate"] }
+encoding_rs.workspace = true
+unicode-normalization.workspace = true
 webbrowser.workspace = true
 fluent-bundle.workspace = true
 tracing.workspace = true

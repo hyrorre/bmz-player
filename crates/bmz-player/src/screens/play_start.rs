@@ -145,6 +145,7 @@ pub(crate) fn normalize_battle_replay_for_key_mode(
 
 #[derive(Debug, Clone, Default)]
 pub struct PlayStartOptions {
+    pub archive_cache_dir: Option<std::path::PathBuf>,
     pub session_mode: SessionMode,
     pub autoplay: bool,
     pub key_mode_conversion: KeyModeConversionConfig,
@@ -289,6 +290,7 @@ pub fn play_session_options_from_start(
     });
 
     PlaySessionOptions {
+        archive_cache_dir: start_options.archive_cache_dir,
         play_config_key_mode: None,
         session_mode: start_options.session_mode,
         autoplay: start_options.autoplay,

@@ -117,8 +117,9 @@ impl BootstrappedApp {
     pub fn start_play_for_chart(
         &self,
         chart_id: i64,
-        options: PlayStartOptions,
+        mut options: PlayStartOptions,
     ) -> Result<crate::audio::RunningPlaySession> {
+        options.archive_cache_dir = Some(self.app_paths.cache_dir.clone());
         start_running_play_session_for_chart(
             &self.library_db,
             &self.score_db,
@@ -132,9 +133,10 @@ impl BootstrappedApp {
     pub fn start_play_for_chart_with_input_backend(
         &self,
         chart_id: i64,
-        options: PlayStartOptions,
+        mut options: PlayStartOptions,
         input_backend: Box<dyn InputBackend>,
     ) -> Result<crate::audio::RunningPlaySession> {
+        options.archive_cache_dir = Some(self.app_paths.cache_dir.clone());
         start_running_play_session_for_chart_with_input_backend(
             &self.library_db,
             &self.score_db,
@@ -149,8 +151,9 @@ impl BootstrappedApp {
     pub fn start_play_for_chart_with_winit_input(
         &self,
         chart_id: i64,
-        options: PlayStartOptions,
+        mut options: PlayStartOptions,
     ) -> Result<StartedInputPlaySession> {
+        options.archive_cache_dir = Some(self.app_paths.cache_dir.clone());
         start_running_play_session_for_chart_with_winit_input(
             &self.library_db,
             &self.score_db,
@@ -187,12 +190,7 @@ pub fn bootstrap_viewer_with_paths(
     bms_random_seed: u64,
     profile_id: Option<&str>,
 ) -> Result<ViewerBootstrap> {
-    let chart_path = chart_path
-        .canonicalize()
-        .with_context(|| format!("failed to resolve viewer chart: {}", chart_path.display()))?;
-    if !crate::storage::scan::is_chart_file(&chart_path) {
-        bail!("unsupported viewer chart extension: {}", chart_path.display());
-    }
+    let chart_path = crate::chart_asset::canonical_chart_path(chart_path)?;
     let library_path = viewer_library_path();
     let cleanup = ViewerLibraryCleanup { path: library_path.clone() };
     app_paths.library_db = library_path;

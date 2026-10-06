@@ -135,6 +135,9 @@ impl WinitApp {
         chart_id: i64,
         mode: ResultRetryMode,
     ) -> Option<PlayMediaCache> {
+        if self.chart_uses_archive(chart_id) {
+            return None;
+        }
         let active = self.play.active_play.as_mut()?;
         Some(PlayMediaCache::from_running(chart_id, &mut active.running, mode))
     }
@@ -144,8 +147,24 @@ impl WinitApp {
         chart_id: i64,
         running: &mut crate::audio::RunningPlaySession,
     ) {
+        if self.chart_uses_archive(chart_id) {
+            self.play.play_media_cache = None;
+            return;
+        }
         self.play.play_media_cache =
             Some(PlayMediaCache::from_running(chart_id, running, ResultRetryMode::SameArrange));
+    }
+
+    pub(super) fn chart_uses_archive(&self, chart_id: i64) -> bool {
+        self.boot
+            .library_db
+            .list_charts_by_ids(&[chart_id])
+            .ok()
+            .and_then(|rows| rows.into_iter().next())
+            .is_some_and(|chart| {
+                crate::chart_source::ChartLocator::parse(Path::new(&chart.folder_path))
+                    .is_ok_and(|locator| locator.is_archive())
+            })
     }
 
     pub(super) fn apply_reused_bga_preload(

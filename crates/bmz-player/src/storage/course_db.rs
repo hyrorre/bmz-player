@@ -451,7 +451,10 @@ fn chart_candidates_by_hash(
         let path: Option<String> = row.get(1)?;
         candidates.latest.get_or_insert(chart_id);
         if candidates.existing.is_none()
-            && path.as_deref().is_some_and(|path| std::path::Path::new(path).is_file())
+            && path.as_deref().is_some_and(|path| {
+                crate::chart_source::ChartLocator::parse(std::path::Path::new(path))
+                    .is_ok_and(|locator| locator.readable())
+            })
         {
             candidates.existing = Some(chart_id);
         }
@@ -469,7 +472,10 @@ fn chart_id_has_existing_file(conn: &Connection, chart_id: i64) -> Result<bool> 
     let paths = stmt
         .query_map(params![chart_id], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(paths.iter().any(|path| std::path::Path::new(path).is_file()))
+    Ok(paths.iter().any(|path| {
+        crate::chart_source::ChartLocator::parse(std::path::Path::new(path))
+            .is_ok_and(|locator| locator.readable())
+    }))
 }
 
 fn non_empty(value: String) -> Option<String> {

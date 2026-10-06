@@ -16,10 +16,11 @@ impl WinitApp {
     pub(super) fn selected_chart_needs_generated_preview_distribution(&self) -> bool {
         match self.select.select_items.get(self.select.selected_index) {
             Some(SelectItem::Chart(row)) => row.chart.as_ref().is_some_and(|chart| {
-                let explicit_key = format!("{}|{}", chart.folder_path, chart.preview_file);
+                let explicit_key =
+                    crate::chart_asset::asset_cache_key(&chart.folder_path, &chart.preview_file);
                 let explicit_missing =
                     self.select.select_assets.explicit_preview_missing(&explicit_key);
-                should_use_generated_preview(&chart.preview_file, explicit_missing)
+                uses_generated_preview(&chart.folder_path, &chart.preview_file, explicit_missing)
             }),
             _ => false,
         }
@@ -29,16 +30,25 @@ impl WinitApp {
         match self.select.select_items.get(self.select.selected_index) {
             Some(SelectItem::Chart(row)) => {
                 let chart = row.chart.as_ref()?;
-                let explicit_key = format!("{}|{}", chart.folder_path, chart.preview_file);
+                let explicit_key =
+                    crate::chart_asset::asset_cache_key(&chart.folder_path, &chart.preview_file);
                 let explicit_missing =
                     self.select.select_assets.explicit_preview_missing(&explicit_key);
-                if !should_use_generated_preview(&chart.preview_file, explicit_missing) {
+                if !uses_generated_preview(
+                    &chart.folder_path,
+                    &chart.preview_file,
+                    explicit_missing,
+                ) {
                     return Some(explicit_key);
                 }
                 let distributions = self.select.select_distribution_cache.borrow();
                 let distribution = distributions.get(&chart.chart_id)?;
                 let start_ms = fallback_preview_start_ms(&distribution.notes, chart.length_ms)?;
-                Some(generated_preview_cache_key(chart.chart_id, start_ms))
+                Some(crate::generated_preview::generated_preview_cache_key_for_source(
+                    chart.chart_id,
+                    start_ms,
+                    &chart.folder_path,
+                ))
             }
             _ => None,
         }
@@ -91,7 +101,8 @@ impl WinitApp {
                     SelectMetaImageSlot::Backbmp => &chart.backbmp_file,
                     SelectMetaImageSlot::Banner => &chart.banner_file,
                 };
-                (!file.is_empty()).then(|| format!("{}|{}", chart.folder_path, file))
+                (!file.is_empty())
+                    .then(|| crate::chart_asset::asset_cache_key(&chart.folder_path, file))
             }),
             _ => None,
         };
@@ -170,5 +181,31 @@ impl WinitApp {
             crate::system_sound::SoundType::Select,
         ) * factor.clamp(0.0, 1.0);
         manager.set_volume(crate::system_sound::SoundType::Select, volume);
+    }
+}
+
+fn uses_generated_preview(folder: &str, preview: &str, missing: bool) -> bool {
+    // Byte-only scanning cannot discover a preview*.ogg sibling. Let the
+    // archive worker try the normal prefix fallback before generating audio.
+    if preview.trim().is_empty()
+        && !missing
+        && crate::chart_asset::archive_asset_stamp(folder).is_some()
+    {
+        false
+    } else {
+        should_use_generated_preview(preview, missing)
+    }
+}
+
+#[cfg(test)]
+mod archive_preview_tests {
+    use super::*;
+
+    #[test]
+    fn archive_empty_preview_tries_siblings_before_generated_audio() {
+        assert!(!uses_generated_preview("set.zip!/song", "", false));
+        assert!(uses_generated_preview("set.zip!/song", "", true));
+        assert!(uses_generated_preview("native/song", "", false));
+        assert!(!uses_generated_preview("set.zip!/song", "explicit.wav", false));
     }
 }

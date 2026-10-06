@@ -725,11 +725,14 @@ impl WinitApp {
             self.show_left_overlay_toast("BMS files can only be dropped on the select screen");
             return;
         }
-        let canonical = match path.canonicalize() {
+        let canonical = match crate::chart_asset::canonical_chart_path(&path) {
             Ok(path) => path,
             Err(error) => {
                 tracing::warn!(path = %path.display(), %error, "dropped chart path is unavailable");
-                self.show_left_overlay_toast(format!("Could not open {}", path.display()));
+                self.show_left_overlay_toast(format!(
+                    "Could not open {}: {error:#}",
+                    path.display()
+                ));
                 return;
             }
         };

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -136,6 +136,7 @@ pub(super) struct SelectAssetRuntime {
     preview_normalization_gain: f32,
     preview: Option<SelectChartPreview>,
     library_db_path: PathBuf,
+    cache_dir: PathBuf,
     meta_image_cache: HashMap<String, SelectMetaImageCacheEntry>,
     meta_image_tx: mpsc::Sender<SelectMetaImageResult>,
     meta_image_rx: Receiver<SelectMetaImageResult>,
@@ -150,10 +151,15 @@ impl SelectAssetRuntime {
     pub(super) fn invalidate_library(&mut self) {
         self.stop_preview();
         // Drop old worker receivers too, so stale results cannot refill the caches.
-        *self = Self::new(self.preview.take(), self.library_db_path.clone());
+        *self =
+            Self::new(self.preview.take(), self.library_db_path.clone(), self.cache_dir.clone());
     }
 
-    pub(super) fn new(preview: Option<SelectChartPreview>, library_db_path: PathBuf) -> Self {
+    pub(super) fn new(
+        preview: Option<SelectChartPreview>,
+        library_db_path: PathBuf,
+        cache_dir: PathBuf,
+    ) -> Self {
         let (meta_image_tx, meta_image_rx) = mpsc::channel();
         let (preview_tx, preview_rx) = mpsc::channel();
         Self {
@@ -166,6 +172,7 @@ impl SelectAssetRuntime {
             preview_normalization_gain: 1.0,
             preview,
             library_db_path,
+            cache_dir,
             meta_image_cache: HashMap::new(),
             meta_image_tx,
             meta_image_rx,
@@ -460,6 +467,7 @@ impl SelectAssetRuntime {
         if let Some(generated) = parse_generated_preview_cache_key(&key) {
             self.generated_preview_loading = true;
             let library_db_path = self.library_db_path.clone();
+            let cache_dir = self.cache_dir.clone();
             let sample_rate = self.output_sample_rate().unwrap_or(48_000);
             let result_key = key.clone();
             if let Err(error) = thread::Builder::new()
@@ -468,9 +476,11 @@ impl SelectAssetRuntime {
                     lower_current_thread_priority();
                     let result = render_generated_preview_for_chart(
                         &library_db_path,
+                        &cache_dir,
                         generated.chart_id,
                         generated.start_ms,
                         sample_rate,
+                        Some(&result_key),
                     )
                     .map(prepare_select_preview)
                     .map_err(|error| format!("{error:#}"));
@@ -487,15 +497,19 @@ impl SelectAssetRuntime {
             return;
         }
 
+        let cache_dir = self.cache_dir.clone();
         thread::spawn(move || {
-            let (folder, file) = key.split_once('|').unwrap_or(("", ""));
-            let path = crate::chart_asset::resolve_preview_file(Path::new(folder), file);
+            let resolved = crate::chart_asset::resolve_cached_asset(&key, &cache_dir, true);
+            let path = resolved.as_ref().ok().and_then(Clone::clone);
             let result = match path.as_ref() {
                 Some(path) => {
                     let mut loader = FfmpegSampleLoader::default();
                     loader.load(path).map(prepare_select_preview).map_err(|error| error.to_string())
                 }
-                None => Err("chart preview audio file not found".to_string()),
+                None => Err(resolved.err().map_or_else(
+                    || "chart preview audio file not found".to_string(),
+                    |e| format!("{e:#}"),
+                )),
             };
             let _ = tx.send(SelectPreviewResult { key, path, result });
         });
@@ -504,12 +518,16 @@ impl SelectAssetRuntime {
     fn spawn_meta_image_load(&mut self, slot: SelectMetaImageSlot, key: String) {
         self.meta_image_cache.insert(key.clone(), SelectMetaImageCacheEntry::Loading);
         let tx = self.meta_image_tx.clone();
+        let cache_dir = self.cache_dir.clone();
         thread::spawn(move || {
-            let (folder, file) = key.split_once('|').unwrap_or(("", ""));
-            let path = crate::chart_asset::resolve_chart_asset_path(folder, file);
+            let resolved = crate::chart_asset::resolve_cached_asset(&key, &cache_dir, false);
+            let path = resolved.as_ref().ok().and_then(Clone::clone);
             let result = match path.as_ref() {
                 Some(path) => load_static_rgba_image(path).map_err(|error| error.to_string()),
-                None => Err("select meta image file not found".to_string()),
+                None => Err(resolved.err().map_or_else(
+                    || "select meta image file not found".to_string(),
+                    |e| format!("{e:#}"),
+                )),
             };
             let _ = tx.send(SelectMetaImageResult { slot, key, path, result });
         });
@@ -619,7 +637,7 @@ mod tests {
 
     #[test]
     fn runtime_initializes_preview_and_worker_state() {
-        let runtime = SelectAssetRuntime::new(None, PathBuf::new());
+        let runtime = SelectAssetRuntime::new(None, PathBuf::new(), PathBuf::new());
 
         assert!(runtime.preview.is_none());
         assert_eq!(runtime.preview_source, None);
@@ -633,7 +651,7 @@ mod tests {
 
     #[test]
     fn meta_image_slots_keep_independent_state() {
-        let mut runtime = SelectAssetRuntime::new(None, PathBuf::new());
+        let mut runtime = SelectAssetRuntime::new(None, PathBuf::new(), PathBuf::new());
         let stage_size = SkinImageSize { width: 640.0, height: 480.0 };
 
         runtime.set_meta_image_source(SelectMetaImageSlot::Stage, Some("stage".to_string()));

@@ -40,12 +40,13 @@ pub fn prepare(
     let mut library = LibraryDatabase::open(Path::new(":memory:"))?;
     run_migrations(library.conn_mut(), LIBRARY_MIGRATIONS)?;
     let seed = options.seed.unwrap_or(super::random_id()?.as_u128() as u64);
-    let chart_path = options.chart.canonicalize().context("chart file does not exist")?;
+    let chart_path = crate::chart_asset::canonical_chart_path(&options.chart)?;
     let imported =
         crate::storage::import::import_chart_file(&mut library, &chart_path, None, Some(seed), 0)?;
     profile.activate_play_mode(imported.chart.metadata.key_mode);
     profile.set_cli_play(options.play_overrides.clone());
     let mut play_options = crate::app::offline_play_options(&profile);
+    play_options.archive_cache_dir = Some(paths.cache_dir.clone());
     play_options.bms_random_seed = Some(seed);
     play_options.arrange_seed = Some((seed & 0xff_ffff) as i64);
     play_options.arrange_seed_2p = Some(((seed >> 24) & 0xff_ffff) as i64);

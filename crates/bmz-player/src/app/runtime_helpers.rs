@@ -134,7 +134,9 @@ pub(super) fn lookup_boot_chart_id(
     path: &str,
 ) -> Option<i64> {
     let path_obj = Path::new(path);
-    if !path_obj.is_file() {
+    if !crate::chart_source::ChartLocator::parse(path_obj)
+        .is_ok_and(|locator| locator.container_path().is_file())
+    {
         tracing::warn!(path, "boot chart path not found; starting normally");
         return None;
     }

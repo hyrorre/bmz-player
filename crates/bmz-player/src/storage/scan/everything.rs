@@ -6,7 +6,8 @@ use anyhow::{Context, Result, bail};
 use everything_ipc::wm::{EverythingClient, FileInfo, RequestFlags};
 
 use super::discovery::{
-    ChartDiscovery, ChartFileEntry, is_chart_file_name, is_document_file_name, usize_to_u32,
+    ChartDiscovery, ChartFileEntry, discover_archive_charts, is_chart_file_name,
+    is_document_file_name, usize_to_u32,
 };
 use super::{ScanConfig, ScanDiscoveryBackend};
 
@@ -67,6 +68,7 @@ pub(super) fn discover_chart_files_everything(
     }
 
     let mut chart_entries = Vec::new();
+    let mut archives = Vec::new();
     let mut document_folders = HashSet::new();
     for item in results.iter() {
         let parent = item
@@ -95,6 +97,11 @@ pub(super) fn discover_chart_files_everything(
             }
             continue;
         }
+        if crate::chart_source::is_archive_file(&output_path) {
+            chart_entries.extend(discover_archive_charts(&output_path, scan.skip_hidden)?);
+            archives.push(output_path);
+            continue;
+        }
         if !is_chart_file_name(output_path.file_name().unwrap_or_default()) {
             continue;
         }
@@ -115,7 +122,7 @@ pub(super) fn discover_chart_files_everything(
     }
 
     for entry in &mut chart_entries {
-        entry.has_document =
+        entry.has_document |=
             entry.path.parent().is_some_and(|parent| document_folders.contains(parent));
     }
     for count in 1..=usize_to_u32(chart_entries.len()) {
@@ -132,6 +139,7 @@ pub(super) fn discover_chart_files_everything(
 
     Ok(ChartDiscovery {
         entries: chart_entries,
+        archives,
         issues: Vec::new(),
         complete: true,
         root_readable: true,
@@ -147,7 +155,7 @@ fn everything_query(root: &Path) -> Result<String> {
     if !root.ends_with('\\') {
         root.push('\\');
     }
-    Ok(format!(r#"file: "{root}" ext:bms;bme;bml;pms;bmson;txt"#))
+    Ok(format!(r#"file: "{root}" ext:bms;bme;bml;pms;bmson;txt;zip;rar;7z"#))
 }
 
 fn path_relative_to_root(path: &Path, root: &Path) -> Option<PathBuf> {
@@ -193,7 +201,7 @@ mod tests {
     fn query_quotes_root_and_adds_trailing_separator() {
         assert_eq!(
             everything_query(Path::new(r"G:\BMS")).unwrap(),
-            r#"file: "G:\BMS\" ext:bms;bme;bml;pms;bmson;txt"#
+            r#"file: "G:\BMS\" ext:bms;bme;bml;pms;bmson;txt;zip;rar;7z"#
         );
     }
 

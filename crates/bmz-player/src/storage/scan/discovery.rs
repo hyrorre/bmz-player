@@ -11,6 +11,7 @@ pub struct ChartFileEntry {
 #[derive(Debug, Default)]
 pub(super) struct ChartDiscovery {
     pub(super) entries: Vec<ChartFileEntry>,
+    pub(super) archives: Vec<PathBuf>,
     pub(super) issues: Vec<ScanDiscoveryIssue>,
     pub(super) complete: bool,
     pub(super) root_readable: bool,
@@ -167,6 +168,27 @@ fn discover_chart_files_native(
                 if recursive {
                     dirs.push(path);
                 }
+            } else if file_type.is_file() && crate::chart_source::is_archive_file(&path) {
+                match discover_archive_charts(&path, scan.skip_hidden) {
+                    Ok(entries) => {
+                        discovery.archives.push(path.clone());
+                        for entry in entries {
+                            discovery.entries.push(entry);
+                            discovered_count = discovered_count.saturating_add(1);
+                            on_discovered(discovered_count);
+                        }
+                    }
+                    Err(error) => {
+                        discovery.complete = false;
+                        record_discovery_issue(
+                            &mut discovery.issues,
+                            root,
+                            &path,
+                            ScanDiscoveryOperation::ReadArchive,
+                            io::Error::other(format!("{error:#}")),
+                        );
+                    }
+                }
             } else if file_type.is_file() && is_chart_file_name(&file_name) {
                 let metadata = match meta_opt {
                     Some(metadata) => metadata,
@@ -206,6 +228,40 @@ fn discover_chart_files_native(
     }
 
     discovery
+}
+
+pub(super) fn discover_archive_charts(
+    path: &Path,
+    skip_hidden: bool,
+) -> Result<Vec<ChartFileEntry>> {
+    let index = crate::song_archive::inspect(path, &Default::default())?;
+    let modified_at = std::fs::metadata(path)?
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |time| time.as_secs() as i64);
+    Ok(index
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.is_chart()
+                && !entry.name.split('/').any(|part| {
+                    part == "__MACOSX"
+                        || part.starts_with("._")
+                        || (skip_hidden && part.starts_with('.'))
+                })
+        })
+        .map(|entry| ChartFileEntry {
+            path: crate::chart_source::ChartLocator::Archive {
+                container: path.to_path_buf(),
+                entry: entry.name.clone(),
+            }
+            .to_path_buf(),
+            file_size: entry.size,
+            modified_at,
+            has_document: crate::chart_source::archive_folder_has_document(&index, &entry.name),
+        })
+        .collect())
 }
 
 pub(super) fn record_discovery_issue(

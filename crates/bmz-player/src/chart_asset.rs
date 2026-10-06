@@ -1,7 +1,85 @@
 use std::path::{Path, PathBuf};
 
+/// Resolve only the container of an archive locator, never the virtual entry.
+pub fn canonical_chart_path(path: &Path) -> anyhow::Result<PathBuf> {
+    let locator = crate::chart_source::ChartLocator::parse(path)?;
+    if !locator.is_archive() && crate::chart_source::is_archive_file(locator.container_path()) {
+        anyhow::bail!(
+            "An archive contains multiple charts. Add its folder with `bmz-player songs load`, then select a chart, or specify archive.zip!/folder/chart.bms: {}",
+            path.display()
+        );
+    }
+    let locator = locator.canonicalize()?;
+    let path = locator.to_path_buf();
+    anyhow::ensure!(
+        crate::storage::scan::is_chart_file(&path),
+        "unsupported chart extension: {}",
+        path.display()
+    );
+    Ok(path)
+}
+
+/// File information is cheap enough for Select; hashing and extraction stay in workers.
+pub(crate) fn archive_asset_stamp(folder: &str) -> Option<String> {
+    let locator = crate::chart_source::ChartLocator::parse(Path::new(folder)).ok()?;
+    locator
+        .is_archive()
+        .then(|| format!("{:?}", crate::song_archive::metadata_stamp(locator.container_path())))
+}
+
+pub(crate) fn asset_cache_key(folder: &str, file: &str) -> String {
+    match archive_asset_stamp(folder) {
+        Some(stamp) => format!(
+            "archive-asset|{}",
+            serde_json::to_string(&(folder, file, stamp)).expect("string tuple")
+        ),
+        None => format!("{folder}|{file}"),
+    }
+}
+
+/// Called exclusively by asset workers. A changed source never fills an older cache key.
+pub(crate) fn resolve_cached_asset(
+    key: &str,
+    cache_root: &Path,
+    preview: bool,
+) -> anyhow::Result<Option<PathBuf>> {
+    let (folder, file) = if let Some(encoded) = key.strip_prefix("archive-asset|") {
+        let (folder, file, _): (String, String, String) = serde_json::from_str(encoded)?;
+        anyhow::ensure!(
+            asset_cache_key(&folder, &file) == key,
+            "archive changed before asset load"
+        );
+        (folder, file)
+    } else {
+        let (folder, file) = key.split_once('|').unwrap_or(("", ""));
+        (folder.to_owned(), file.to_owned())
+    };
+    let resolved =
+        crate::chart_source::ChartLocator::parse(Path::new(&folder))?.materialize(cache_root)?;
+    // Validate the requested name before any file probing, then validate extension fallback too.
+    let requested = resolved.resolve_asset(file.trim())?;
+    let asset_name = if resolved.archive_root.is_some() && !file.trim().is_empty() {
+        requested.to_string_lossy().into_owned()
+    } else {
+        file.clone()
+    };
+    let path = if preview {
+        resolve_preview_file(&resolved.path, &asset_name)
+    } else {
+        resolve_chart_asset_path(&resolved.path.to_string_lossy(), &asset_name)
+    };
+    if let Some(path) = &path {
+        resolved.validate_asset_path(path)?;
+    }
+    anyhow::ensure!(asset_cache_key(&folder, &file) == key, "archive changed during asset load");
+    Ok(path)
+}
+
 const CHART_IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "gif", "bmp", "png", "tga"];
 const PREVIEW_AUDIO_EXTENSIONS: &[&str] = &["wav", "ogg", "mp3", "flac"];
+
+#[cfg(test)]
+pub(crate) mod archive_tests;
 
 /// BMS ヘッダで指定された相対パスを曲フォルダ基準で解決する。
 pub fn resolve_chart_asset_path(folder_path: &str, relative: &str) -> Option<PathBuf> {

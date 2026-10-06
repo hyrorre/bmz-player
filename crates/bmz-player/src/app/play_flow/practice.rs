@@ -315,7 +315,7 @@ impl WinitApp {
         let (_, import) = self
             .boot
             .library_db
-            .load_chart_source(chart_id, bmz_chart::import::BmsRandomSource::Seed(None))?;
+            .load_chart_source_bytes(chart_id, bmz_chart::import::BmsRandomSource::Seed(None))?;
         let rules = crate::screens::practice::PracticeRuleContext {
             rule_mode: self.boot.profile_config.play.rule_mode,
             key_mode: import.chart.metadata.key_mode,

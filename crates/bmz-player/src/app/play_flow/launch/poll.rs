@@ -150,6 +150,10 @@ impl WinitApp {
             self.open_prepared_winit_play_session(prepared)
         } else {
             tracing::warn!(chart_id, "discarding mismatched play preload");
+            if self.chart_uses_archive(chart_id) {
+                self.start_play_preload(chart_id, start_options);
+                return;
+            }
             let app_config = self.play_session_app_config();
             prepare_play_session_for_chart_with_winit_input(
                 &self.boot.library_db,
@@ -200,6 +204,18 @@ impl WinitApp {
         let Some(prepared) = self.play_preload_prepared_chart(chart_id) else {
             return;
         };
+
+        // Archive metadata becomes an absolute generation path in the worker.
+        // Publish these images during Decide/LOAD, before audio completes.
+        let folder = chart_asset_folder(&prepared.chart)
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if Path::new(&prepared.chart.metadata.stage_file).is_absolute() {
+            self.sync_play_stagefile_texture(&folder, &prepared.chart.metadata.stage_file);
+        }
+        if Path::new(&prepared.chart.metadata.backbmp_file).is_absolute() {
+            self.sync_play_backbmp_texture(&folder, &prepared.chart.metadata.backbmp_file);
+        }
 
         // BMP/BGA は WAV worker と同じ変換済み chart の manifest から開始する。
         // assets=None は begin_unresolved 後、まだ worker を起動していない状態を表す。

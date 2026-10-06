@@ -27,6 +27,7 @@ pub fn scan_song_roots_with_progress(
         root_id: i64,
         root_num: usize,
         entries: Vec<ChartFileEntry>,
+        archives: Vec<PathBuf>,
         discovery_complete: bool,
         root_readable: bool,
         recursive: bool,
@@ -112,6 +113,7 @@ pub fn scan_song_roots_with_progress(
             root_id,
             root_num: root_index + 1,
             entries: discovery.entries,
+            archives: discovery.archives,
             discovery_complete: discovery.complete,
             root_readable: discovery.root_readable,
             recursive: root.recursive,
@@ -120,7 +122,7 @@ pub fn scan_song_roots_with_progress(
     on_progress(ScanProgress { done: 0, total: files_total });
 
     let mut progress_done = 0_u32;
-    for root in discovered_roots {
+    for mut root in discovered_roots {
         if !root.root_readable {
             continue;
         }
@@ -131,7 +133,7 @@ pub fn scan_song_roots_with_progress(
         let root_skipped_start = report.summary.skipped;
         let root_imported_start = report.summary.imported;
         let root_failed_start = report.summary.failed;
-        let folder_document_flags: Vec<(PathBuf, bool)> = entries
+        let mut folder_document_flags: Vec<(PathBuf, bool)> = entries
             .iter()
             .filter_map(|entry| {
                 entry.path.parent().map(|folder| (folder.to_path_buf(), entry.has_document))
@@ -148,7 +150,22 @@ pub fn scan_song_roots_with_progress(
         let skip_start = Instant::now();
         let mut to_import: Vec<FileTodo> = Vec::new();
         let mut unchanged_count = 0_u32;
+        let mut archives: HashMap<PathBuf, Vec<&ChartFileEntry>> = root
+            .archives
+            .into_iter()
+            .map(|path| {
+                // Use the same spelling as virtual chart entries, including removal
+                // of Windows extended-length prefixes, to avoid an empty alias group.
+                (PathBuf::from(library_path_key(&path)), Vec::new())
+            })
+            .collect();
         for entry in &entries {
+            if let Ok(crate::chart_source::ChartLocator::Archive { container, .. }) =
+                crate::chart_source::ChartLocator::parse(&entry.path)
+            {
+                archives.entry(container).or_default().push(entry);
+                continue;
+            }
             let key = library_path_key(&entry.path);
             let unchanged = !force
                 && fingerprints.get(&key).is_some_and(|fp| {
@@ -171,6 +188,42 @@ pub fn scan_song_roots_with_progress(
         report.timing.skip_check_ms += skip_check_ms;
         progress_done = progress_done.saturating_add(unchanged_count).min(files_total);
         on_progress(ScanProgress { done: progress_done, total: files_total });
+
+        let mut failed_archives = std::collections::HashSet::new();
+        for (container, archive_entries) in archives {
+            let count = usize_to_u32(archive_entries.len());
+            match super::archive::import_archive(
+                db,
+                &container,
+                root.root_id,
+                scanned_at,
+                force,
+                &fingerprints,
+                &archive_entries,
+            ) {
+                Ok(archive) => {
+                    report.summary.imported += archive.summary.imported;
+                    report.summary.skipped += archive.summary.skipped;
+                    report.summary.failed += archive.summary.failed;
+                    report.summary.warnings += archive.summary.warnings;
+                    report.timing.parse_ms += archive.timing.parse_ms;
+                    report.failures.extend(archive.failures);
+                }
+                Err(error) => {
+                    root.discovery_complete = false;
+                    failed_archives.insert(container.clone());
+                    report.summary.failed += count;
+                    report.failures.push(ScanFailure {
+                        path: container,
+                        message: format!(
+                            "archive import failed; existing registrations retained: {error:#}"
+                        ),
+                    });
+                }
+            }
+            progress_done = progress_done.saturating_add(count).min(files_total);
+            on_progress(ScanProgress { done: progress_done, total: files_total });
+        }
 
         let new_total = to_import.len();
         tracing::info!(
@@ -277,6 +330,11 @@ pub fn scan_song_roots_with_progress(
 
         // Discovery already enumerated every song directory. Persist the shared
         // folder flag even when every chart was skipped as unchanged.
+        folder_document_flags.retain(|(folder, _)| {
+            !matches!(crate::chart_source::ChartLocator::parse(folder),
+                Ok(crate::chart_source::ChartLocator::Archive { container, .. })
+                if failed_archives.contains(&container))
+        });
         db.update_folder_document_flags(&folder_document_flags)?;
 
         tracing::info!(

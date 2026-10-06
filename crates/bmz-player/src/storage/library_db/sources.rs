@@ -2,6 +2,7 @@ use super::*;
 
 #[cfg(test)]
 mod tests;
+use crate::chart_source::{ChartLocator, ResolvedChartSource};
 use anyhow::{Context, bail};
 use bmz_chart::import::{BmsRandomSource, ImportResult, import_bms_chart_with_random_source};
 
@@ -15,6 +16,9 @@ pub struct ChartSource {
 }
 
 impl ChartSource {
+    pub fn locator(&self) -> Result<ChartLocator> {
+        ChartLocator::parse(&self.path)
+    }
     fn active(&self, roots: &scope::SongRootScope) -> bool {
         if roots.is_unrestricted() {
             return true;
@@ -26,7 +30,7 @@ impl ChartSource {
     }
 
     fn readable(&self) -> bool {
-        self.path.is_file() && std::fs::File::open(&self.path).is_ok()
+        self.locator().is_ok_and(|locator| locator.readable())
     }
 }
 
@@ -173,7 +177,7 @@ impl LibraryDatabase {
     pub fn verified_chart_source(&self, chart_id: i64) -> Result<ChartSource> {
         let mut errors = Vec::new();
         for source in self.chart_source_candidates(chart_id, true)? {
-            match std::fs::read(&source.path) {
+            match source.locator().and_then(|locator| locator.read_bytes()) {
                 Ok(bytes)
                     if bmz_chart::hash::compute_chart_identity(&bytes).file_sha256
                         == source.chart.sha256 =>
@@ -222,16 +226,64 @@ impl LibraryDatabase {
         chart_id: i64,
         random: BmsRandomSource,
     ) -> Result<(ChartSource, ImportResult)> {
+        self.load_source_using(chart_id, |source| {
+            anyhow::ensure!(
+                !source.locator()?.is_archive(),
+                "archive playback requires an explicit cache root: {}",
+                source.path.display()
+            );
+            let import = import_bms_chart_with_random_source(&source.path, random.clone(), true)?;
+            verify_import(source, &import)?;
+            Ok(import)
+        })
+    }
+
+    /// Metadata-only import. No cache directory is created and assets are not materialized.
+    pub fn load_chart_source_bytes(
+        &self,
+        chart_id: i64,
+        random: BmsRandomSource,
+    ) -> Result<(ChartSource, ImportResult)> {
+        self.load_source_using(chart_id, |source| {
+            let bytes = source.locator()?.read_bytes()?;
+            let import = bmz_chart::import::import_chart_bytes_with_random_source(
+                &source.path,
+                &bytes,
+                random.clone(),
+                false,
+            )?;
+            verify_import(source, &import)?;
+            Ok(import)
+        })
+    }
+
+    pub fn load_chart_source_with_cache(
+        &self,
+        chart_id: i64,
+        random: BmsRandomSource,
+        cache_root: &Path,
+    ) -> Result<(ChartSource, ResolvedChartSource, ImportResult)> {
+        let (source, (resolved, import)) = self.load_source_using(chart_id, |source| {
+            let resolved = source.locator()?.materialize(cache_root)?;
+            let import = import_bms_chart_with_random_source(&resolved.path, random.clone(), true)?;
+            verify_import(source, &import)?;
+            resolved.validate_chart_assets(&import.chart)?;
+            Ok((resolved, import))
+        })?;
+        Ok((source, resolved, import))
+    }
+
+    fn load_source_using<T>(
+        &self,
+        chart_id: i64,
+        mut load: impl FnMut(&ChartSource) -> Result<T>,
+    ) -> Result<(ChartSource, T)> {
         let mut errors = Vec::new();
         for source in self.chart_source_candidates(chart_id, true)? {
-            let loaded = import_bms_chart_with_random_source(&source.path, random.clone(), true)
-                .with_context(|| format!("failed to read chart {}", source.path.display()));
-            match loaded {
-                Ok(import) if import.chart.identity.file_sha256 == source.chart.sha256 => {
-                    return Ok((source, import));
-                }
-                Ok(_) => errors
-                    .push(format!("{}: file hash changed; rescan library", source.path.display())),
+            match load(&source)
+                .with_context(|| format!("failed to read chart {}", source.path.display()))
+            {
+                Ok(loaded) => return Ok((source, loaded)),
                 Err(error) => errors.push(format!("{error:#}")),
             }
         }
@@ -280,4 +332,13 @@ impl LibraryDatabase {
             })
             .collect()
     }
+}
+
+fn verify_import(source: &ChartSource, import: &ImportResult) -> Result<()> {
+    anyhow::ensure!(
+        import.chart.identity.file_sha256 == source.chart.sha256,
+        "{}: file hash changed; rescan library",
+        source.path.display()
+    );
+    Ok(())
 }

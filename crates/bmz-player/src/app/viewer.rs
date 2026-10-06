@@ -49,12 +49,7 @@ impl WinitApp {
         measure: u32,
         battle: bool,
     ) -> Result<()> {
-        let path = path
-            .canonicalize()
-            .with_context(|| format!("failed to resolve viewer chart: {}", path.display()))?;
-        if !crate::storage::scan::is_chart_file(&path) {
-            bail!("unsupported viewer chart extension: {}", path.display());
-        }
+        let path = crate::chart_asset::canonical_chart_path(path)?;
 
         // RANDOM分岐と実プレイで同じ譜面を使うため、importとPlayStartOptionsへ同じseedを渡す。
         // importが失敗した場合は現在の再生を維持し、成功してから差し替える。

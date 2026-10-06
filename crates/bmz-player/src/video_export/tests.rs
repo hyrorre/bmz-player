@@ -2,6 +2,34 @@ use super::*;
 use crate::config::profile_config::ProfileConfig;
 use std::fs;
 
+#[test]
+fn archive_export_prepare_resolves_media_and_replay_by_internal_chart_hash() {
+    let archive = crate::chart_asset::archive_tests::ArchiveFixture::new();
+    let mut fixture = Fixture::new();
+    fixture.options.chart = archive.locator.clone();
+    fixture.save_replay();
+    let prepared = prepare::prepare(&fixture.options, &fixture.paths, Some("default")).unwrap();
+    assert!(prepared.replay.is_some());
+    assert!(prepared.play.audio.samples.source_count() > 0);
+    let chart = &prepared.play.session.chart;
+    let canonical_cache = fixture.paths.cache_dir.canonicalize().unwrap();
+    assert!(
+        chart.sounds.iter().all(|asset| asset
+            .path
+            .canonicalize()
+            .unwrap()
+            .starts_with(&canonical_cache))
+    );
+    assert!(
+        chart.bga_assets.iter().all(|asset| asset
+            .path
+            .canonicalize()
+            .unwrap()
+            .starts_with(&canonical_cache))
+    );
+    assert!(Path::new(&chart.metadata.stage_file).is_absolute());
+}
+
 struct Fixture {
     root: PathBuf,
     paths: AppPaths,

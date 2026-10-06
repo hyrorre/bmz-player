@@ -85,9 +85,10 @@ impl WinitApp {
     pub(super) fn spawn_play_preload(
         &mut self,
         chart_id: i64,
-        options: PlaySessionOptions,
+        mut options: PlaySessionOptions,
         source: PlayPreloadSource,
     ) -> u64 {
+        options.archive_cache_dir = Some(self.boot.app_paths.cache_dir.clone());
         // Course launch metadata is installed by its caller after receiving the
         // generation. Every other launch replaces any previous course preload.
         self.play.pending_course_stage_launch = None;

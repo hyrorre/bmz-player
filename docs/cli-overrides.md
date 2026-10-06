@@ -15,6 +15,11 @@ bmz-player "chart.bms" --gauge hard --print-effective-options
 
 ## 書式
 
+譜面パスには `"D:/BMS/set.zip!/song/chart.bms"` のような ZIP / RAR / 7z 内の指定も使えます。
+書庫部分だけを絶対パスへ解決し、`!/` 以降で内部譜面を選択します。通常起動、Autoplay、Practice、
+リプレイ、Viewer、動画出力、`--print-effective-options` で共通です。書庫ファイルだけを指定した場合は、
+そのフォルダを `songs load` / `songs add` で登録して選曲する案内を表示します。
+
 - `--gauge hard`と`--gauge=hard`の両方に対応。選択値は大小文字を区別しません。
 - 共通オプションと`--profile`はサブコマンドの前後どちらにも置けます。
 - 同じ項目を重ねて指定したら後勝ち。不明な値や範囲外はエラーです。

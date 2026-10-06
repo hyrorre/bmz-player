@@ -19,6 +19,22 @@ notice are preserved in [THIRD-PARTY-NOTICES.txt](../THIRD-PARTY-NOTICES.txt).
 No third-party skin archives are included; the small test archive is generated
 specifically for BMZ's tests.
 
+## Song archive readers
+
+ZIP, RAR and 7z song playback uses Rust library decoders. Releases do not require
+or bundle the `7z`, `unrar`, or `unar` command-line programs. `rars` 0.10.0 is
+Apache-2.0 and is built with default features disabled (reading only);
+`sevenz-rust2` 0.22.2 is Apache-2.0, and `zip` 4.6.1 is MIT. Filename decoding
+uses `encoding_rs` ((Apache-2.0 OR MIT) AND BSD-3-Clause), and collision detection
+uses `unicode-normalization` (MIT OR Apache-2.0). The existing release scripts
+discover these dependencies through `cargo-about generate --workspace --locked
+--fail`; the Linux source archive uses `cargo vendor --locked`. Preserve the
+generated notices and corresponding sources. No UnRAR-licensed decoder is linked.
+
+The small RAR regression archives are generated from BMZ-owned test data with
+the `rars` writer; see their [fixture README](../crates/bmz-player/src/song_archive/fixtures/README.md). Third-party song archives used for
+local validation are not distributed with BMZ.
+
 ## FFmpeg
 
 BMZ Player uses FFmpeg through the Rust `ffmpeg-next` crate.

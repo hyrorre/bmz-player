@@ -42,7 +42,7 @@ pub fn load_game_session_for_chart_with_input_backend(
     input_backend: Box<dyn InputBackend>,
 ) -> Result<GameSession> {
     let (_, import) =
-        library_db.load_chart_source(chart_id, bms_random_source_for_chart(&options))?;
+        library_db.load_chart_source_bytes(chart_id, bms_random_source_for_chart(&options))?;
     Ok(build_game_session_with_input_backend(
         Arc::new(import.chart),
         profile,
@@ -300,6 +300,7 @@ pub fn preload_play_session_for_chart_with_callbacks(
                 (imported.source_key_mode, prepared_chart.chart.metadata.key_mode),
                 (KeyMode::K5, KeyMode::K10) | (KeyMode::K7, KeyMode::K14)
             ),
+        imported.archive_source,
     )?;
     tracing::info!(
         chart_id,
@@ -383,6 +384,7 @@ pub fn preload_play_session_reloading_audio_with_progress(
 }
 
 pub(super) struct TransformedPlayChart {
+    pub(super) archive_source: bool,
     pub(super) chart: PlayableChart,
     pub(super) source_ln_profile: ChartLnProfile,
     pub(super) applied_arrange: AppliedArrange,
@@ -397,16 +399,37 @@ pub fn load_source_chart_for_chart(
     chart_id: i64,
     random_seed: Option<u64>,
 ) -> Result<PlayableChart> {
-    Ok(library_db.load_chart_source(chart_id, BmsRandomSource::Seed(random_seed))?.1.chart)
+    Ok(library_db.load_chart_source_bytes(chart_id, BmsRandomSource::Seed(random_seed))?.1.chart)
 }
 
 pub(super) fn load_source_chart_import_for_play(
     library_db: &LibraryDatabase,
     chart_id: i64,
     options: &PlaySessionOptions,
-) -> Result<ImportResult> {
-    let (source, import) =
-        library_db.load_chart_source(chart_id, bms_random_source_for_chart(options))?;
+) -> Result<(ImportResult, bool)> {
+    let random = bms_random_source_for_chart(options);
+    let (source, import) = if let Some(cache_dir) = &options.archive_cache_dir {
+        let (source, resolved, mut import) =
+            library_db.load_chart_source_with_cache(chart_id, random, cache_dir)?;
+        if resolved.archive_root.is_some() {
+            // Consumers outside the worker must never resolve virtual paths or
+            // trigger extraction. Keep DB metadata unchanged, but freeze this
+            // play's metadata assets to the same immutable resource generation.
+            for relative in [
+                &mut import.chart.metadata.stage_file,
+                &mut import.chart.metadata.backbmp_file,
+                &mut import.chart.metadata.banner_file,
+                &mut import.chart.metadata.preview_file,
+            ] {
+                if !relative.is_empty() {
+                    *relative = resolved.resolve_asset(relative)?.to_string_lossy().into_owned();
+                }
+            }
+        }
+        (source, import)
+    } else {
+        library_db.load_chart_source(chart_id, random)?
+    };
     // The app resolves the copy before preparing skins and starting the worker.
     // If it disappears during preload, abort rather than mix another folder's assets.
     anyhow::ensure!(
@@ -414,7 +437,7 @@ pub(super) fn load_source_chart_import_for_play(
         "chart source changed during preload; retry to use {}",
         source.path.display()
     );
-    Ok(import)
+    Ok((import, source.locator()?.is_archive()))
 }
 
 pub(super) fn load_transformed_chart_for_play(
@@ -422,7 +445,17 @@ pub(super) fn load_transformed_chart_for_play(
     chart_id: i64,
     options: &PlaySessionOptions,
 ) -> Result<TransformedPlayChart> {
-    let import = load_source_chart_import_for_play(library_db, chart_id, options)?;
+    let (import, archive_source) =
+        load_source_chart_import_for_play(library_db, chart_id, options)?;
+    let mut transformed = transform_chart_import(import, options)?;
+    transformed.archive_source = archive_source;
+    Ok(transformed)
+}
+
+fn transform_chart_import(
+    import: ImportResult,
+    options: &PlaySessionOptions,
+) -> Result<TransformedPlayChart> {
     let mut chart = import.chart;
     let source_ln_profile = ChartLnProfile::from_chart(&chart);
     // beatoraja BMSModelUtils.setStartNoteTime(model, 1000) 相当。
@@ -550,6 +583,7 @@ pub(super) fn load_transformed_chart_for_play(
     let conversion_persistence_disabled = applied_arrange.score_persistence_disabled();
 
     Ok(TransformedPlayChart {
+        archive_source: false,
         chart,
         source_ln_profile,
         applied_arrange,
@@ -604,7 +638,14 @@ pub fn scored_chart_metrics_for_chart(
     chart_id: i64,
     options: &PlaySessionOptions,
 ) -> Result<ScoredChartMetrics> {
-    let imported = load_transformed_chart_for_play(library_db, chart_id, options)?;
+    let (source, import) =
+        library_db.load_chart_source_bytes(chart_id, bms_random_source_for_chart(options))?;
+    anyhow::ensure!(
+        source.chart.chart_id == chart_id,
+        "chart source changed during metrics load; retry to use {}",
+        source.path.display()
+    );
+    let imported = transform_chart_import(import, options)?;
     Ok(ScoredChartMetrics {
         total_notes: scored_note_count(&imported.chart),
         ln_mode: played_ln_mode(imported.source_ln_profile, imported.score_key.ln_policy),
@@ -807,8 +848,13 @@ pub(super) fn load_or_compute_chart_normalization_gain(
     audio: &AudioEngine,
     normalization_output_gain: f32,
     battle_presentation: bool,
+    archive_source: bool,
 ) -> Result<f32> {
-    if let Some(analysis) = library_db.chart_normalization_analysis_by_chart_id(chart_id)? {
+    // Archive media can change without changing the chart hash. The legacy DB
+    // analysis has no resource generation, so only reuse it for native charts.
+    if !archive_source
+        && let Some(analysis) = library_db.chart_normalization_analysis_by_chart_id(chart_id)?
+    {
         return Ok(play_normalization_gain_for_analysis_with_output_gain(
             LoudnessAnalysis {
                 loudness_lufs: analysis.loudness_lufs,
@@ -845,7 +891,9 @@ pub(super) fn load_or_compute_chart_normalization_gain(
         short_term_lufs: analysis.short_term_lufs,
         sample_peak: analysis.peak_abs,
     };
-    library_db.write_chart_normalization_analysis(chart_id, stored)?;
+    if !archive_source {
+        library_db.write_chart_normalization_analysis(chart_id, stored)?;
+    }
     let play_gain =
         play_normalization_gain_for_analysis_with_output_gain(analysis, normalization_output_gain);
     tracing::info!(
@@ -854,7 +902,8 @@ pub(super) fn load_or_compute_chart_normalization_gain(
         short_term_lufs = stored.short_term_lufs,
         sample_peak = stored.sample_peak,
         chart_normalization_gain = play_gain,
-        "stored chart volume normalization analysis"
+        persisted = !archive_source,
+        "computed chart volume normalization analysis"
     );
     Ok(play_gain)
 }

@@ -1,6 +1,43 @@
 use super::*;
 use crate::bootstrap::profile_tests::ProfileTestDir;
 
+#[test]
+fn explicit_archive_boot_path_imports_without_extracting_and_reveals_container() {
+    let data = ProfileTestDir::new();
+    let mut boot = data.boot();
+    let fixture = crate::chart_asset::archive_tests::ArchiveFixture::new();
+    let mut options = AppOptions {
+        boot_play_path: Some(fixture.locator.to_string_lossy().into_owned()),
+        ..Default::default()
+    };
+    prepare_boot_chart_options(&mut boot, &mut options).unwrap();
+    let id = resolve_boot_chart_id(&boot.library_db, &options).unwrap();
+    let source = boot.library_db.verified_chart_source(id).unwrap();
+    assert!(source.locator().unwrap().is_archive());
+    assert!(!boot.app_paths.cache_dir.join("song-archives").exists());
+    let revealed = crate::app::select_flow_navigation::select_explorer_file_path(
+        &boot.library_db,
+        &source.chart,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(revealed.canonicalize().unwrap(), fixture.archive.canonicalize().unwrap());
+    assert_eq!(options.boot_play_path.as_deref(), Some(source.path.to_string_lossy().as_ref()));
+}
+
+#[test]
+fn bare_archive_boot_path_reports_scan_guidance() {
+    let data = ProfileTestDir::new();
+    let mut boot = data.boot();
+    let fixture = crate::chart_asset::archive_tests::ArchiveFixture::new();
+    let mut options = AppOptions {
+        boot_play_path: Some(fixture.archive.to_string_lossy().into_owned()),
+        ..Default::default()
+    };
+    let error = prepare_boot_chart_options(&mut boot, &mut options).unwrap_err();
+    assert!(error.to_string().contains("songs load"));
+}
+
 pub(super) fn registered_charts(
     data: &ProfileTestDir,
 ) -> (bootstrap::BootstrappedApp, PathBuf, PathBuf) {

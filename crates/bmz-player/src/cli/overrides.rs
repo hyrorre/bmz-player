@@ -228,7 +228,7 @@ pub fn print_effective(
         run_migrations(db.conn_mut(), LIBRARY_MIGRATIONS)?;
         let imported = crate::storage::import::import_chart_file(
             &mut db,
-            &path.canonicalize()?,
+            &crate::chart_asset::canonical_chart_path(path)?,
             None,
             play.seed,
             0,

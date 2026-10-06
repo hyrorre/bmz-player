@@ -1343,15 +1343,23 @@ fn cached_chart_normalization_uses_profile_output_gain() {
         .unwrap();
     let audio = AudioEngine::new(48_000);
 
-    let full_scale =
-        load_or_compute_chart_normalization_gain(&library_db, chart_id, &chart, &audio, 1.0, false)
-            .unwrap();
+    let full_scale = load_or_compute_chart_normalization_gain(
+        &library_db,
+        chart_id,
+        &chart,
+        &audio,
+        1.0,
+        false,
+        false,
+    )
+    .unwrap();
     let profile_scale = load_or_compute_chart_normalization_gain(
         &library_db,
         chart_id,
         &chart,
         &audio,
         0.25,
+        false,
         false,
     )
     .unwrap();

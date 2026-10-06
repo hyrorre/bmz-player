@@ -88,15 +88,16 @@ async fn main() -> ExitCode {
         }
         if options.viewer_play {
             let path = options.boot_play_path.as_deref().expect("viewer path validated by CLI");
-            let path = match std::path::Path::new(path).canonicalize() {
-                Ok(path) => path,
-                Err(error) => {
-                    bmz_player::stdio::stderr_line(format_args!(
-                        "Error: could not resolve viewer chart {path}: {error}"
-                    ));
-                    return ExitCode::FAILURE;
-                }
-            };
+            let path =
+                match bmz_player::chart_asset::canonical_chart_path(std::path::Path::new(path)) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        bmz_player::stdio::stderr_line(format_args!(
+                            "Error: could not resolve viewer chart {path}: {error}"
+                        ));
+                        return ExitCode::FAILURE;
+                    }
+                };
             if let Some(profile_id) = profile_id.as_deref() {
                 let app_paths = match bmz_player::paths::resolve_app_paths() {
                     Ok(paths) => paths,

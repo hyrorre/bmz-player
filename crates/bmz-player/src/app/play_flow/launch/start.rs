@@ -84,6 +84,12 @@ impl WinitApp {
         // Decide preload を通らない direct boot / replay / retry も新しい
         // Play scene entry として必ずロード時Randomを再評価する。
         self.skin.last_play_skin_signature = None;
+        if self.chart_uses_archive(chart_id) {
+            self.play.play_media_cache = None;
+            self.start_play_preload(chart_id, options.clone());
+            self.begin_preloaded_play_scene(chart_id, options);
+            return;
+        }
         self.prepare_play_skin_for_scene(chart_id, &options);
         self.invalidate_play_preload();
         if self.play.play_media_cache.as_ref().is_some_and(|cache| cache.chart_id != chart_id) {
@@ -191,6 +197,13 @@ impl WinitApp {
     }
 
     pub(super) fn prepare_play_meta_image_textures_from_chart(&mut self, chart: &ChartListItem) {
+        if crate::chart_source::ChartLocator::parse(Path::new(&chart.folder_path))
+            .is_ok_and(|locator| locator.is_archive())
+        {
+            // The play worker publishes absolute generation paths after extraction.
+            self.clear_play_meta_image_state();
+            return;
+        }
         self.sync_play_stagefile_texture(&chart.folder_path, &chart.stage_file);
         self.sync_play_backbmp_texture(&chart.folder_path, &chart.backbmp_file);
     }

@@ -48,6 +48,7 @@ pub enum ScanDiscoveryOperation {
     ReadEntry,
     ReadFileType,
     ReadMetadata,
+    ReadArchive,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -75,6 +76,7 @@ impl ScanDiscoveryOperation {
             Self::ReadEntry => "read_entry",
             Self::ReadFileType => "read_file_type",
             Self::ReadMetadata => "read_metadata",
+            Self::ReadArchive => "read_archive",
         }
     }
 }
@@ -113,6 +115,7 @@ pub struct ScanProgress {
     pub total: u32,
 }
 
+mod archive;
 mod discovery;
 #[cfg(windows)]
 mod everything;

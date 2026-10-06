@@ -1,6 +1,18 @@
 use super::*;
 
 #[test]
+fn archive_locator_is_preserved_for_all_existing_playback_modes() {
+    let locator = "C:/BMS/set.zip!/folder/chart.pms";
+    for flag in ["-a", "-P", "-r1", "--practice"] {
+        let options = AppOptions::parse_args([flag, locator]).unwrap();
+        assert_eq!(options.boot_play_path.as_deref(), Some(locator));
+    }
+    let invocation = parse_cli_command(["export", "video", locator, "-o", "out.mp4"]).unwrap();
+    let Command::Export(options) = invocation.command else { panic!("expected export") };
+    assert_eq!(options.chart, std::path::PathBuf::from(locator));
+}
+
+#[test]
 fn app_options_parse_beatoraja_style_boot_path() {
     let options = AppOptions::parse_args(["/music/song.bms"]).unwrap();
     assert_eq!(options.boot_play_path.as_deref(), Some("/music/song.bms"));

@@ -196,8 +196,11 @@ impl WinitApp {
         };
         let select_preview =
             system_audio.as_ref().map(|audio| SelectChartPreview::new(audio.engine()));
-        let select_assets =
-            SelectAssetRuntime::new(select_preview, boot.app_paths.library_db.clone());
+        let select_assets = SelectAssetRuntime::new(
+            select_preview,
+            boot.app_paths.library_db.clone(),
+            boot.app_paths.cache_dir.clone(),
+        );
         let audio_output_open_attempted = audio_runtime.is_some();
         let player_stats = if viewer_mode {
             PlayerStatsSnapshot::default()
