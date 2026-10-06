@@ -226,6 +226,15 @@ impl InputCapture {
         })
     }
 
+    /// Publish window focus even when the compositor is withholding redraws.
+    /// Route/configuration changes remain on the window thread as before.
+    pub fn set_focused(&self, focused: bool) {
+        let route = self.state.lock().unwrap_or_else(|e| e.into_inner()).route.clone();
+        if let Some(route) = route {
+            self.set_route(Some(InputRoute { focused, ..(*route).clone() }));
+        }
+    }
+
     pub fn set_route(&self, route: Option<InputRoute>) {
         #[cfg(all(target_os = "linux", feature = "linux-evdev"))]
         if let Some(keyboard) = &self.linux_keyboard.lock().unwrap_or_else(|e| e.into_inner()).1 {
@@ -580,6 +589,52 @@ fn create_backend(
 mod tests {
     use super::*;
     use bmz_gameplay::input::backend::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn focus_changes_reach_capture_without_a_redraw_or_new_route() {
+        let capture = InputCapture::new(None, [GamepadScratchConfig::default(); 2], None).unwrap();
+        // A focus event before Play must not manufacture a gameplay route.
+        capture.set_focused(false);
+        assert!(capture.state.lock().unwrap().route.is_none());
+
+        let mut input = SharedInputBackend::default();
+        capture.set_route(Some(InputRoute {
+            input: input.clone(),
+            binding: LaneBinding { entries: Vec::new() },
+            focused: true,
+            keyboard_enabled: false,
+        }));
+        let mut delivery = ButtonDelivery::default();
+        let event = DeviceInputEvent {
+            device: DeviceId(16),
+            control: PhysicalControl::GamepadButton("Button1".into()),
+            kind: bmz_core::input::InputKind::Press,
+            timestamp: DeviceTimestamp::MonotonicNs(123),
+            bounce_policy: Default::default(),
+        };
+        for focused in [true, false, false, true] {
+            // No renderer tick or set_route call between focus events.
+            capture.set_focused(focused);
+            let route = capture.state.lock().unwrap().route.clone().unwrap();
+            assert_eq!(route.focused, focused);
+            assert!(!route.keyboard_enabled);
+            assert!(route.input.same_source(&input));
+            delivery.set_route(route.focused.then_some(route.as_ref()));
+            if focused {
+                delivery.push(event.clone());
+            }
+        }
+        assert_eq!(
+            input.drain_events().iter().map(|event| event.kind).collect::<Vec<_>>(),
+            [
+                bmz_core::input::InputKind::Press,
+                bmz_core::input::InputKind::Release,
+                bmz_core::input::InputKind::Press,
+            ]
+        );
+    }
+
     #[test]
     fn changing_capture_route_releases_old_sink_without_leaking_into_retry() {
         let mut delivery = ButtonDelivery::default();

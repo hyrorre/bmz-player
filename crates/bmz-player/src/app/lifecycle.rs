@@ -248,6 +248,11 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 if previous_effective_focused != focus_update.effective_focused {
                     let previous_effective_frame_limit = self.current_frame_limit();
                     self.ui.focused = focus_update.effective_focused;
+                    // Wayland can stop RedrawRequested while hidden. Publish
+                    // both focus loss and regain without waiting for rendering.
+                    if let Some(capture) = &self.gamepad {
+                        capture.set_focused(self.ui.focused);
+                    }
                     let effective_frame_limit = self.current_frame_limit();
                     tracing::info!(
                         previous_effective_focused,

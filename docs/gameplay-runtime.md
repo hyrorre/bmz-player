@@ -110,6 +110,10 @@ READY 前は準備用 runtime をローカルに保持し、音声時計の開�
 Viewer seek でも入力 queue を作り直す。入力ルートの切り替え時は旧 sink へ release を送り、
 新しい play に旧押下状態を持ち越さない。
 
+windowの実効focus変更は、そのイベント処理中に入力captureのrouteへ反映する。
+Waylandの非表示等でRedrawRequestedが止まっていても、喪失時の保持解放と入力抑止、
+復帰時の配送再開を次の描画まで待たない。gilrs workerの反映待ちは既存の最大50ms以内。
+
 worker の停止は atomic flag と unpark で要求する。UI は終了済みの worker だけ join し、
 まだ終了していない worker の後始末を待たない。audio command も停止 flag を保持し、
 enqueue 時と callback の適用時に検査する。旧 worker の遅い送信を次の play に適用しない。
