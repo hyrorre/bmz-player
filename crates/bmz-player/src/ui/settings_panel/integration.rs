@@ -117,11 +117,6 @@ pub(super) fn build_integration_settings_sections(
                     config.input.backend = InputBackendKind::Winit;
                 }
             }
-            #[cfg(target_os = "linux")]
-            ui.checkbox(
-                &mut config.input.linux_gamepad_legacy_poll,
-                tr!(text, "settings-input-linux-poll"),
-            );
             #[cfg(all(target_os = "linux", feature = "linux-evdev"))]
             if config.input.backend == InputBackendKind::LinuxEvdev {
                 use crate::input::linux_evdev;

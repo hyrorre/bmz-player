@@ -880,7 +880,6 @@ detail-options-category-6 = BGA
 detail-options-category-7 = JUDGE
 detail-options-previous = PREVIOUS ITEM
 detail-options-next = NEXT ITEM
-settings-input-linux-poll = Comparison: use legacy 1 ms Linux controller polling
 settings-input-evdev-help = Optional direct input reads all keys on the selected keyboards. Requires native X11, an active logind session and device read permission. Select either a physical device or its remapped virtual device. UI and IME use winit.
 settings-input-evdev-active = Active: evdev (focus checked). Key reception and latency improvement are not verified.
 settings-input-evdev-session = Active: winit. evdev is unavailable on Wayland, XWayland, Flatpak or an unverified session.

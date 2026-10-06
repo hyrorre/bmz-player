@@ -877,7 +877,6 @@ detail-options-category-6 = 映像 / BGA
 detail-options-category-7 = 判定 / JUDGE
 detail-options-previous = 前の項目
 detail-options-next = 次の項目
-settings-input-linux-poll = 比較用: Linuxコントローラーを従来の1ms待機にする
 settings-input-evdev-help = evdevは任意の直接入力です。選択したキーボードの全キーを読み取ります。ネイティブX11、logindのアクティブセッション、デバイスの読取権限が必要です。物理機器とリマップ後の仮想機器を両方選ばないでください。UI・IMEはwinitを使います。
 settings-input-evdev-active = 実動作: evdev（フォーカス確認中）。実キーの受信・遅延改善は未確認です。
 settings-input-evdev-session = 実動作: winit。Wayland・XWayland・Flatpak、または確認できないセッションではevdevを利用できません。

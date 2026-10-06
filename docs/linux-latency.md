@@ -206,8 +206,6 @@ CPAL PipeWireのhost初期化APIは詳細な失敗理由を一部失うため、
 設定 → 入力 → デバイスの「キーボード入力方式」で `Linux evdev (X11)` を明示選択できる。
 同画面の「実動作」と理由を確認し、デバイス一覧を更新して対象の安定パスを選ぶ。
 戻す場合は「winitに戻す」、または方式をwinit/Autoにする。
-「比較用: Linuxコントローラーを従来の1ms待機にする」を有効にすると
-同じビルド・設定で待機方式だけを旧方式にできる。通常は無効（イベント待機）。
 設定の保存先・自動保存・適用時期は[操作仕様](controls.md)に従う。
 
 ## evdevの条件と制約
@@ -256,6 +254,8 @@ SYN_DROPPEDから次のSYN_REPORTまでは履歴を捨て、現在状態を取�
 ## gilrsの待機と時計
 
 gilrs 0.10.10 / gilrs-core 0.5.15の公開 `next_event_blocking(Some(timeout))` をLinuxだけで使う。
+比較用の旧1ms待機への切替は廃止した。古い設定の`linux_gamepad_legacy_poll`は無視し、
+次回保存時に除去する。キー割り当てやデバイススロットなど他の設定は保持する。
 到着で起床し、先頭1件と蓄積済みイベントを順に処理する。1件ごとのsleepは入れない。
 AnalogGamepadProcessorの既存release期限と制御応答上限50msからtimeoutを決める。
 gilrs内部のepollはthread::unparkでは解除できないため、この有限timeoutが必要。
@@ -395,10 +395,9 @@ companionのCPUは指定窓のプロセスCPU時間/経過時間（1コア=100%�
 1. 既存入力・既存音声をベースラインとして保存。
 2. 入力を固定し、PulseAudioとネイティブPipeWireを比較。
 3. 同じhostでAuto/256/128/64を比較。
-4. 音声を固定し、gilrsの従来1ms待機チェックのON/OFFを比較。
-5. 同じ音声でwinit/利用可能なevdevを比較。利用不可・安全上の抑止は遅延改善と数えない。
-6. 通常描画/停滞試験を比較。
-7. 同じ条件で診断環境変数なし/有効を比較し、CPUと安定性の変化を記録。
+4. 同じ音声でwinit/利用可能なevdevを比較。利用不可・安全上の抑止は遅延改善と数えない。
+5. 通常描画/停滞試験を比較。
+6. 同じ条件で診断環境変数なし/有効を比較し、CPUと安定性の変化を記録。
 
 各回の件数/p95/p99/max、CPU、callback時間と間隔、確認済みxrun、stream error、drop、
 catch-up、invalid/unavailable、focus抑止を記録する。表示FPSとsurface/present待ちは別項目にする。

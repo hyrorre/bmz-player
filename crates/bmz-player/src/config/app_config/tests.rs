@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn app_config_ignores_removed_linux_gamepad_poll_setting() {
+    let mut config = AppConfig::default();
+    config.input.keyboard_enabled = false;
+    config.input.gamepad_slot_device_ids = [Some("gilrs:1".into()), None];
+    let expected = toml::Value::try_from(&config).unwrap();
+
+    for legacy_enabled in [false, true] {
+        let mut old = expected.clone();
+        old["input"]
+            .as_table_mut()
+            .unwrap()
+            .insert("linux_gamepad_legacy_poll".into(), toml::Value::Boolean(legacy_enabled));
+        let loaded: AppConfig = old.try_into().unwrap();
+        // Re-saving removes the obsolete key without resetting the other settings.
+        assert_eq!(toml::Value::try_from(&loaded).unwrap(), expected);
+    }
+}
+
+#[test]
 fn experimental_detail_options_defaults_off_and_round_trips() {
     let mut config = AppConfig::default();
     assert!(!config.select.experimental_detail_options);

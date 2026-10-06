@@ -74,7 +74,7 @@ impl WinitApp {
                     "requested_keyboard":format!("{:?}",self.boot.app_config.input.backend),
                     "keyboard_enabled":self.boot.app_config.input.keyboard_enabled,
                     "native_keyboard_active":self.gamepad.as_ref().is_some_and(crate::input::capture::InputCapture::native_keyboard_enabled),
-                    "linux_gamepad_wait":if cfg!(target_os="linux") { Some(if self.boot.app_config.input.linux_gamepad_legacy_poll { "legacy_1ms" } else { "blocking_deadline_max_50ms" }) } else { None },
+                    "linux_gamepad_wait":if cfg!(target_os="linux") { Some("blocking_deadline_max_50ms") } else { None },
                     "linux_keyboard_route":if cfg!(target_os="linux") {
                         Some(if !self.boot.app_config.input.keyboard_enabled { "disabled" }
                         else if linux_evdev_status() == Some(7) { "evdev_delivery_suppressed" }

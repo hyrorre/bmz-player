@@ -877,7 +877,6 @@ detail-options-category-6 = BGA
 detail-options-category-7 = JUDGE
 detail-options-previous = PREVIOUS ITEM
 detail-options-next = NEXT ITEM
-settings-input-linux-poll = 比较用：Linux 控制器使用原有的 1ms 轮询
 settings-input-evdev-help = 直接读取所选键盘的所有按键。需要原生 X11、活动 logind 会话及设备读取权限。请勿同时选择物理设备和重映射后的虚拟设备。界面和输入法使用 winit。
 settings-input-evdev-active = 运行中：evdev（检查焦点）。尚未验证实际按键接收或延迟改善。
 settings-input-evdev-session = 运行中：winit。Wayland、XWayland、Flatpak 或无法确认的会话不支持 evdev。

@@ -373,9 +373,6 @@ pub enum FrameLatencyModeConfig {
 pub struct GlobalInputConfig {
     #[serde(default)]
     pub linux_evdev_devices: Vec<String>,
-    /// Linux A/B verification only. False uses gilrs' bounded event wait.
-    #[serde(default)]
-    pub linux_gamepad_legacy_poll: bool,
     pub backend: InputBackendKind,
     #[serde(default)]
     pub gamepad_backend: GamepadBackendKind,
@@ -683,7 +680,6 @@ impl Default for AppConfig {
             select: MusicSelectConfig::default(),
             input: GlobalInputConfig {
                 linux_evdev_devices: Vec::new(),
-                linux_gamepad_legacy_poll: false,
                 backend: InputBackendKind::Auto,
                 gamepad_backend: GamepadBackendKind::Gilrs,
                 keyboard_enabled: true,

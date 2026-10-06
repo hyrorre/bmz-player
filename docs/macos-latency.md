@@ -290,7 +290,9 @@ IOHIDの取得遅延測定ではない。
 
 gilrsのnext_event_blockingはmacOSで内部channelのrecv_timeoutを使うが、公開APIに
 設定変更・終了から待機解除する機構がない。scratch期限やroute変更を安全に統合する範囲を超えるため、
-コントローラーは従来の1ms待機を維持する。Linuxは変更しない。
+macOSのgilrs取得ループは従来の1ms待機を維持する。GameControllerはイベント通知で取得し、
+別途1ms周期のタイマーでスクラッチ停止などを処理する。
+Linuxのgilrsイベント待機は[Linux遅延検証](linux-latency.md#gilrsの待機と時計)を参照。
 
 ## 物理測定
 

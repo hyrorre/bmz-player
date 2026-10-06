@@ -258,3 +258,44 @@ default変更後の検証（開発ファイルは上記の展開先を利用）:
 default変更後の生ログは`.local/performance/pipewire-default-2026-10-06/`に保存した。
 この環境のシステムには`libpipewire-0.3-dev` / `libspa-0.2-dev`が未導入で、clang /
 libclang-dev / pkg-configは導入済み。通常のシェルからビルドするための追加導入コマンドをユーザーへ案内した。
+
+## 2026-10-06追記: Linuxコントローラーの比較用1ms待機を撤去
+
+基準HEADは`18950962`。ユーザーから、通常のイベント待機方式でコントローラーの動作に
+問題がなかったとの報告と、比較用機能の削除指示を受けた。
+設定チェックボックス、6言語の翻訳、`linux_gamepad_legacy_poll`、入力threadの切替stateと
+setter、旧`park_timeout(1ms)`分岐、appからの切替呼び出しを撤去した。
+診断JSONの`linux_gamepad_wait`はLinuxで`blocking_deadline_max_50ms`を報告する。
+操作仕様と現在の比較手順を更新し、過去のA/B計測記録は履歴として保持した。
+
+旧TOMLに`linux_gamepad_legacy_poll = true`または`false`が残っていても読み込みを継続し、
+次回保存時に旧キーが消える。キーボード有効値やデバイススロットなど他の設定を保持する
+回帰テストを追加した。ユーザーのconfig / profile / DBは直接編集していない。
+Linuxの通常イベント待機、スクラッチrelease期限、即時空復帰時のbackoffは変更していない。
+
+1ms待機・周期が残る箇所（今回の変更対象外）:
+
+- `src/input/capture.rs`: macOSでgilrsのbackendがある場合の`park_timeout(1ms)`と、
+  Windows / macOS / Linux以外向けの共通取得ループの`park_timeout(1ms)`。
+- `native/gamecontroller.m`: macOS GameControllerの1ms周期timer。
+  入力はイベント通知で受け取り、timerはRust側`PadState`のスクラッチ停止判定などを進める。
+  この経路が有効ならgilrs取得ループは使わない。
+- `src/input/native_capture.rs`: Windowsの`MsgWaitForMultipleObjectsEx`のtimeoutが1ms。
+  WM_INPUT到着時は即時起床し、timeoutでゲームパッド取得とアナログ停止判定も進める。
+- `src/input/gilrs.rs`: Linuxのイベント待機timeoutの下限は1ms、上限は50ms。
+  固定1ms sleepではなく、イベント到着で解除される待機の期限である。
+
+上記パスは`crates/bmz-player/`からの相対パス。macOS / Windows / その他OSの実機確認は未実施。
+
+検証:
+
+- `cargo fmt --check`、playerの`check` / `all-targets Clippy -D warnings`は成功。
+- playerテストは2230成功・0失敗・19 ignored。旧設定互換、翻訳キー整合、
+  スクラッチ停止・切断と待機期限の既存テストを含む。子プロセス内の再実行1件は加算していない。
+- 通常のrelease build成功。旧キーをtrue、gamepadを有効にした分離データで
+  Plasma / Wayland上の同梱sampleを自動演奏し、結果画面・正常終了まで確認した。
+  `linux_gamepad_wait=blocking_deadline_max_50ms`、最終poll_cycles / blocking_waitsは317 / 317、
+  early_empty_wakes・入力drop・WARN / ERRORは全て0。実キー/軸イベントは0件で、
+  今回は手動コントローラー操作を再実施していない。性能比較や物理入力遅延の測定ではない。
+- workspace全体と追加featureの再検証は未実施。
+- 生ログは`.local/performance/linux-gamepad-poll-removal-2026-10-06/`に保存した。

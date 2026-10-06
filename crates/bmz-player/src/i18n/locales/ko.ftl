@@ -877,7 +877,6 @@ detail-options-category-6 = BGA
 detail-options-category-7 = JUDGE
 detail-options-previous = PREVIOUS ITEM
 detail-options-next = NEXT ITEM
-settings-input-linux-poll = 비교용: Linux 컨트롤러의 기존 1ms 폴링 사용
 settings-input-evdev-help = 선택한 키보드의 모든 키를 직접 읽습니다. 네이티브 X11, 활성 logind 세션, 장치 읽기 권한이 필요합니다. 물리 장치와 리매핑된 가상 장치를 동시에 선택하지 마세요. UI와 IME는 winit을 사용합니다.
 settings-input-evdev-active = 동작: evdev(포커스 확인). 실제 입력 수신 및 지연 개선은 검증되지 않았습니다.
 settings-input-evdev-session = 동작: winit. Wayland, XWayland, Flatpak 또는 확인되지 않은 세션에서는 evdev를 사용할 수 없습니다.

@@ -22,8 +22,6 @@ pub struct InputRoute {
 struct State {
     #[cfg(target_os = "linux")]
     route_changed_at: u128,
-    #[cfg(target_os = "linux")]
-    legacy_gamepad_wait: bool,
     #[cfg(all(windows, feature = "experimental-gameinput"))]
     gameinput_diagnostics: Option<super::gameinput::GameInputPollDiagnostics>,
     configs: [GamepadScratchConfig; 2],
@@ -64,8 +62,6 @@ impl InputCapture {
         let state = Arc::new(Mutex::new(State {
             #[cfg(target_os = "linux")]
             route_changed_at: 0,
-            #[cfg(target_os = "linux")]
-            legacy_gamepad_wait: false,
             #[cfg(all(windows, feature = "experimental-gameinput"))]
             gameinput_diagnostics: None,
             configs,
@@ -189,17 +185,7 @@ impl InputCapture {
                 });
                 #[cfg(target_os = "linux")]
                 match &mut backend {
-                    Some(GamepadBackend::Gilrs(backend)) => {
-                        let legacy = worker_state
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .legacy_gamepad_wait;
-                        if legacy {
-                            thread::park_timeout(Duration::from_millis(1));
-                        } else {
-                            backend.wait_for_input();
-                        }
-                    }
+                    Some(GamepadBackend::Gilrs(backend)) => backend.wait_for_input(),
                     None => thread::park_timeout(Duration::from_millis(250)),
                 }
                 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
@@ -272,16 +258,6 @@ impl InputCapture {
         drop(old);
         if wake && let Some(thread) = &self.thread {
             thread.thread().unpark();
-        }
-    }
-    #[cfg(target_os = "linux")]
-    pub fn set_legacy_gamepad_wait(&self, legacy: bool) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        if state.legacy_gamepad_wait != legacy {
-            state.legacy_gamepad_wait = legacy;
-            if let Some(thread) = &self.thread {
-                thread.thread().unpark();
-            }
         }
     }
     pub fn native_keyboard_enabled(&self) -> bool {

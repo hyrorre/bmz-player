@@ -14,10 +14,6 @@ impl WinitApp {
                     .then(|| self.boot.app_config.input.linux_evdev_devices.clone()),
             );
         }
-        #[cfg(target_os = "linux")]
-        if let Some(capture) = &self.gamepad {
-            capture.set_legacy_gamepad_wait(self.boot.app_config.input.linux_gamepad_legacy_poll);
-        }
         #[cfg(target_os = "macos")]
         if let Some(capture) = &self.gamepad {
             capture.configure_mac_keyboard(

@@ -103,7 +103,6 @@ mod tests {
         );
         let mut config = crate::config::app_config::AppConfig::default().input;
         assert_eq!(config.backend, InputBackendKind::Auto);
-        assert!(!config.linux_gamepad_legacy_poll);
         assert!(config.linux_evdev_devices.is_empty());
         config.backend = InputBackendKind::LinuxEvdev;
         platform(false, false, false).normalize_config(&mut config);
@@ -116,7 +115,6 @@ mod tests {
             .join("\n");
         let loaded: GlobalInputConfig = toml::from_str(&old).unwrap();
         assert!(loaded.linux_evdev_devices.is_empty());
-        assert!(!loaded.linux_gamepad_legacy_poll);
     }
 
     fn platform(raw_input: bool, macos_hid: bool, gamecontroller: bool) -> BackendAvailability {
