@@ -32,6 +32,23 @@ Immediate/Mailboxおよび他のウィンドウbackendの待機方式は維持�
 
 ## 診断
 
+通常の `info` ログでも、focusedなPlay中の長い描画停止を
+`bmz_player::frame_stall` のWARNとして記録する。再現のための環境変数設定は不要。
+
+- `play redraw gap`: 前回の描画ハンドラ終了から次の開始まで、設定FPSの1周期に
+  250msを加えた時間以上空いた場合。待機からの起床遅れと、その後の描画開始までの時間も残す。
+- `slow play redraw`: 描画ハンドラ内で250ms以上かかった場合。入力、background結果の反映、
+  画面遷移、egui、play消費、scene描画、描画後処理の時間を残す。
+- `slow play scene render`: scene処理が250ms以上かかった場合。snapshot、動画、描画処理と、
+  surface取得・queue submit・presentなどの既存renderer計測値を残す。
+
+gapは前フレームの処理時間を含めず、focus・FPS・present mode・window modeの変更、
+Play以外の画面、新しいplay generationで比較をリセットする。復帰時に記録するため、
+停止中のクラッシュではgapが残らないことがある。描画処理が継続しているcompositor側の
+表示停止は、このログだけでは検出・原因確定できない。
+
+より細かい集計が必要な場合は、以下を追加する。
+
 ```powershell
 $env:RUST_LOG = 'info,bmz_player::play_profile=debug,bmz_player::frame_pacing=debug'
 ```

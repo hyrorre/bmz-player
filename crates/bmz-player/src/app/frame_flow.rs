@@ -88,7 +88,7 @@ impl WinitApp {
         }
     }
 
-    fn current_frame_pacing_state(&self) -> FramePacingState {
+    pub(super) fn current_frame_pacing_state(&self) -> FramePacingState {
         let window_mode = match &self.ui.applied_window_mode {
             WindowMode::Windowed => FrameWindowMode::Windowed,
             WindowMode::BorderlessFullscreen => FrameWindowMode::BorderlessFullscreen,

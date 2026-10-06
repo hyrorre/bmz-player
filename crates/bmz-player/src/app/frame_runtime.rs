@@ -4,6 +4,30 @@ use bmz_render::renderer::{RenderFrameTimings, RenderSurfaceStatus, WgpuPresentM
 
 use crate::i18n::{FluentArgs, Localizer};
 
+pub(super) const REDRAW_STALL_THRESHOLD: Duration = Duration::from_millis(250);
+
+#[derive(Default)]
+struct RedrawStallTracker {
+    last_finished: Option<(Instant, u64)>,
+}
+
+impl RedrawStallTracker {
+    fn begin(&mut self, now: Instant, generation: Option<u64>, fps: u32) -> Option<Duration> {
+        let (finished_at, previous_generation) = self.last_finished.take()?;
+        if generation != Some(previous_generation) {
+            return None;
+        }
+        // Measure time outside the redraw handler; a slow previous render must
+        // not also be reported as an event-loop gap. Allow intentional FPS waits.
+        let gap = now.saturating_duration_since(finished_at);
+        (gap >= frame_budget_or_zero(fps) + REDRAW_STALL_THRESHOLD).then_some(gap)
+    }
+
+    fn finish(&mut self, now: Instant, generation: Option<u64>) {
+        self.last_finished = generation.map(|generation| (now, generation));
+    }
+}
+
 pub(super) struct FrameRuntime {
     last_present: Option<Instant>,
     present_window: Instant,
@@ -16,6 +40,7 @@ pub(super) struct FrameRuntime {
     current_pacing_timings: FramePacingTimings,
     consecutive_deadline_misses: u32,
     cadence: Box<FrameCadence>,
+    redraw_stalls: RedrawStallTracker,
     select_profiler: SceneFrameProfiler,
     decide_profiler: SceneFrameProfiler,
     play_profiler: SceneFrameProfiler,
@@ -41,6 +66,7 @@ impl FrameRuntime {
             current_pacing_timings: FramePacingTimings::default(),
             consecutive_deadline_misses: 0,
             cadence: Box::default(),
+            redraw_stalls: RedrawStallTracker::default(),
             select_profiler: SceneFrameProfiler::default(),
             decide_profiler: SceneFrameProfiler::default(),
             play_profiler: SceneFrameProfiler::default(),
@@ -80,6 +106,7 @@ impl FrameRuntime {
             return;
         }
         let previous = self.pacing_state.replace(pacing_state);
+        self.reset_redraw_tracking();
         self.fps.reset(now);
         self.pending_wake = None;
         self.consecutive_deadline_misses = 0;
@@ -129,6 +156,31 @@ impl FrameRuntime {
 
     pub(super) fn current_pacing_timings(&self) -> FramePacingTimings {
         self.current_pacing_timings
+    }
+
+    pub(super) fn reset_redraw_tracking(&mut self) {
+        self.redraw_stalls = RedrawStallTracker::default();
+    }
+
+    pub(super) fn begin_play_redraw(&mut self, now: Instant, generation: Option<u64>) {
+        let pacing = self.current_pacing_timings;
+        if let Some(gap) = self.redraw_stalls.begin(now, generation, pacing.effective_frame_limit) {
+            tracing::warn!(
+                target: "bmz_player::frame_stall",
+                generation,
+                gap_us = duration_us_saturating(gap),
+                state = ?self.pacing_state,
+                wait_wake_sampled = pacing.wait_wake_sampled,
+                scheduled_wait_us = pacing.scheduled_wait_us,
+                wake_lateness_us = pacing.wake_lateness_us,
+                redraw_after_wake_us = pacing.redraw_after_wake_us,
+                "play redraw gap"
+            );
+        }
+    }
+
+    pub(super) fn finish_play_redraw(&mut self, now: Instant, generation: Option<u64>) {
+        self.redraw_stalls.finish(now, generation);
     }
 
     pub(super) fn record_surface_status(
@@ -827,6 +879,118 @@ fn frame_duration_percentiles(samples: &[u64]) -> Option<FrameDurationPercentile
 mod tests {
     use super::*;
     use crate::i18n::AppLocale;
+
+    #[test]
+    fn redraw_stall_detects_gap_without_counting_previous_slow_render() {
+        let start = Instant::now();
+        let mut tracker = RedrawStallTracker::default();
+        assert_eq!(tracker.begin(start, Some(1), 240), None);
+        let finish = start + Duration::from_secs(5);
+        tracker.finish(finish, Some(1));
+        assert_eq!(tracker.begin(finish + Duration::from_millis(4), Some(1), 240), None);
+        tracker.finish(finish + Duration::from_millis(6), Some(1));
+        assert_eq!(
+            tracker.begin(finish + Duration::from_millis(5_006), Some(1), 240),
+            Some(Duration::from_secs(5))
+        );
+    }
+
+    #[test]
+    fn redraw_stall_ignores_scene_and_generation_changes() {
+        let start = Instant::now();
+        for generation in [None, Some(2)] {
+            let mut tracker = RedrawStallTracker::default();
+            tracker.finish(start, Some(1));
+            assert_eq!(tracker.begin(start + Duration::from_secs(5), generation, 240), None);
+            // A subsequent Play frame must not reuse the old completion.
+            assert_eq!(tracker.begin(start + Duration::from_secs(6), Some(1), 240), None);
+        }
+        let mut tracker = RedrawStallTracker::default();
+        tracker.finish(start, None);
+        assert_eq!(tracker.begin(start + Duration::from_secs(5), Some(1), 240), None);
+    }
+
+    #[test]
+    fn redraw_stall_allows_intentional_low_fps_waits() {
+        let start = Instant::now();
+        for fps in [0, 1, 2, 60, 240] {
+            let threshold = frame_budget_or_zero(fps) + REDRAW_STALL_THRESHOLD;
+            let mut tracker = RedrawStallTracker::default();
+            tracker.finish(start, Some(1));
+            assert_eq!(
+                tracker.begin(start + threshold - Duration::from_micros(1), Some(1), fps),
+                None
+            );
+            tracker.finish(start, Some(1));
+            assert_eq!(tracker.begin(start + threshold, Some(1), fps), Some(threshold));
+        }
+    }
+
+    #[test]
+    fn redraw_stall_resets_on_focus_events_without_intervening_redraw() {
+        let start = Instant::now();
+        let mut runtime = FrameRuntime::new(start);
+        runtime.sync_pacing_state(start, test_pacing_state(240));
+        runtime.finish_play_redraw(start, Some(1));
+        runtime.reset_redraw_tracking(); // Focus lost; no redraw while hidden.
+        runtime.reset_redraw_tracking(); // Focus regained.
+        let resumed = start + Duration::from_secs(5);
+        runtime.sync_pacing_state(resumed, test_pacing_state(240));
+        assert_eq!(runtime.redraw_stalls.begin(resumed, Some(1), 240), None);
+    }
+
+    #[test]
+    fn redraw_stall_resets_on_pacing_changes() {
+        let start = Instant::now();
+        let mut runtime = FrameRuntime::new(start);
+        runtime.sync_pacing_state(start, test_pacing_state(240));
+        runtime.finish_play_redraw(start, Some(1));
+        let resumed = start + Duration::from_secs(5);
+        runtime.sync_pacing_state(resumed, test_pacing_state(60));
+        assert_eq!(runtime.redraw_stalls.begin(resumed, Some(1), 60), None);
+    }
+
+    #[test]
+    fn redraw_stall_is_logged_with_info_filter() {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct Writer(Arc<Mutex<Vec<u8>>>);
+        impl Write for Writer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let writer = Writer(output.clone());
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .without_time()
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            let start = Instant::now();
+            let pacing = test_pacing_state(240);
+            let mut runtime = FrameRuntime::new(start);
+            runtime.begin_scheduled_frame(start, pacing);
+            runtime.begin_play_redraw(start, Some(1));
+            runtime.finish_play_redraw(start + Duration::from_millis(1), Some(1));
+            let resumed = start + Duration::from_millis(5_001);
+            runtime.begin_scheduled_frame(resumed, pacing);
+            runtime.begin_play_redraw(resumed, Some(1));
+        });
+        let output = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert!(output.contains("WARN"), "{output}");
+        assert!(output.contains("play redraw gap"), "{output}");
+        assert!(output.contains("gap_us=5000000"), "{output}");
+    }
 
     #[test]
     fn frame_duration_percentiles_use_nearest_rank() {

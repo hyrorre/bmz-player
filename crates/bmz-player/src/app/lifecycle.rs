@@ -248,6 +248,9 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 if previous_effective_focused != focus_update.effective_focused {
                     let previous_effective_frame_limit = self.current_frame_limit();
                     self.ui.focused = focus_update.effective_focused;
+                    // A hidden Wayland window may lose and regain focus with
+                    // no redraw in between. Do not count that as a play stall.
+                    self.frame.reset_redraw_tracking();
                     // Wayland can stop RedrawRequested while hidden. Publish
                     // both focus loss and regain without waiting for rendering.
                     if let Some(capture) = &self.gamepad {
@@ -297,6 +300,8 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 let limit_us = instant_elapsed_us_u64(limit_start);
                 let redraw_started_at = Instant::now();
                 let scene_before = self.current_scene_kind();
+                let play_generation = self.focused_play_generation();
+                self.frame.begin_play_redraw(redraw_started_at, play_generation);
                 let pending_skin_before = self.has_pending_skin_reload();
                 let render_probe_before = self.skin.pending_skin_render_probe.is_some();
                 self.start_deferred_skin_uploads_if_ready();
@@ -400,6 +405,27 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 self.log_audio_diagnostics();
                 let post_scene_us = instant_elapsed_us_u64(post_scene_start);
                 let total_us = instant_elapsed_us_u64(redraw_started_at);
+                if play_generation.is_some()
+                    && total_us >= duration_us_u64(frame_runtime::REDRAW_STALL_THRESHOLD)
+                {
+                    tracing::warn!(
+                        target: "bmz_player::frame_stall",
+                        generation = play_generation,
+                        scene_after = ?self.current_scene_kind(),
+                        state = ?self.current_frame_pacing_state(),
+                        total_us,
+                        cursor_us,
+                        drain_us,
+                        input_us,
+                        background_us,
+                        transition_us,
+                        egui_us,
+                        consume_active_play_us,
+                        scene_us,
+                        post_scene_us,
+                        "slow play redraw"
+                    );
+                }
                 if let Some(sample) = scene_profile {
                     self.frame.record_profile(
                         sample,
@@ -450,6 +476,8 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     return;
                 }
                 self.handle_smoke_exit_after_redraw(event_loop);
+                let play_generation = self.focused_play_generation();
+                self.frame.finish_play_redraw(Instant::now(), play_generation);
             }
             _ => {}
         }
@@ -620,6 +648,13 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
 }
 
 impl WinitApp {
+    pub(super) fn focused_play_generation(&self) -> Option<u64> {
+        if !self.ui.focused || self.current_scene_kind() != AppSceneKind::Play {
+            return None;
+        }
+        self.play_input_backend().map(|input| input.generation())
+    }
+
     fn update_event_loop_probe_context(&mut self) {
         if self.event_loop_probe.is_none() {
             return;
