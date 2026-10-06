@@ -10,8 +10,8 @@ macOSの[共通診断](macos-latency.md)と同じヒストグラム・JSON・比
 
 | 配布・環境 | 音声 | キーボード | コントローラー |
 | --- | --- | --- | --- |
-| 通常のCargo既定ビルド | PulseAudio / ALSA | winit | gilrsイベント待機 |
-| `--features pipewire,linux-evdev` / Linux tar | 上記 + ネイティブPipeWire | winit / 条件を満たすネイティブX11のevdev | 同上 |
+| 通常のCargo既定ビルド | ネイティブPipeWire / PulseAudio / ALSA | winit | gilrsイベント待機 |
+| `--features linux-evdev` / Linux tar | 同上 | winit / 条件を満たすネイティブX11のevdev | 同上 |
 | Flatpak | PipeWire / PulseAudio / ALSA（実デバイスアクセスはsandbox次第） | winit | 同上、見える・openできるデバイスに限る |
 | Wayland / XWayland | 各ビルドに含まれる上記音声 | evdev要求時もwinit | 同上 |
 
@@ -106,15 +106,28 @@ CPU比較ではprobeが約91回/秒の追加起床を発生させることを考
 
 ## ビルド
 
-[README](../README.md)のRust / FFmpeg / ALSA / udev等に加え、PipeWireとSPAの開発ファイルが必要。
-CPAL 0.18.1の利用機能にはlibpipewire 0.3.53以上が必要。ネイティブの例:
+[README](../README.md)のRust / FFmpeg / ALSA / udev等に加え、通常のCargo既定ビルドでも
+PipeWireとSPAの開発ファイルが必要。`bmz-player`のdefault featureに`pipewire`を含む。
+バックエンド設定のAutoはPulseAudio→ALSAを維持し、ネイティブPipeWireは設定で明示選択する。
+CPAL 0.18.1の利用機能にはlibpipewire 0.3.53以上が必要。Ubuntuでのネイティブビルド例:
 
 ```bash
 # ホスト管理者が必要に応じて実行する準備。BMZは実行しない。
 sudo apt-get install libpipewire-0.3-dev libspa-0.2-dev clang libclang-dev pkg-config
 pkg-config --atleast-version=0.3.53 libpipewire-0.3
 pkg-config --modversion libpipewire-0.3 libspa-0.2
-cargo build --release --locked -p bmz-player --no-default-features --features pulseaudio,pipewire,linux-evdev
+cargo build --release --locked -p bmz-player
+```
+
+Fedoraでは[pipewire-devel](https://packages.fedoraproject.org/pkgs/pipewire/pipewire-devel/)が
+PipeWireとSPA両方の開発ファイルを提供する。開発ファイルはソースからのビルド時に必要で、
+ビルド済みアプリの実行には不要。Windows/macOSにはこのLinux/BSD向け依存を追加しない。
+任意のevdevも含める場合は上のbuildに`--features linux-evdev`を追加する。
+
+LinuxでPipeWireを含めず、PulseAudio / ALSAでビルドする場合:
+
+```bash
+cargo build --release --locked -p bmz-player --no-default-features --features pulseaudio
 ```
 
 Ubuntu 22.04標準のPipeWire開発パッケージはこの最低版を満たさない。

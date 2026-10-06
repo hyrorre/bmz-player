@@ -203,3 +203,58 @@ native X11でのevdev実デバイス、EACCES実機復旧、JIS/IME、複数台�
 コントローラーの実回転/方向転換/停止、他音声アプリ併用、通常/高密度譜面の長時間64/128 framesも必要。
 Fedora/Kinoite、X11/XWayland、従来PulseAudio、installed Flatpak bundle、macOS/Windowsは未検証。
 VM/コンテナ/WSLgの測定を実機保証へ読み替えない。
+
+## 2026-10-06追記: PipeWireの再確認とdefault featureへの復帰
+
+ユーザーから以前のクラッシュ懸念について確認を依頼され、`fedf33a2`を基準に再検証した。
+履歴上、`47c1e7c7`でPipeWireをopt-inにした直接の理由は、libspa 0.10.0の
+`SPA_ID_INVALID`参照が解決できないビルド失敗だった。`75b8f6e5`に記録された終了時の
+native abortはPulseAudio経路であり、その終了時回避処理は維持している。
+過去のPipeWireクラッシュと同一条件で比較したものではなく、原因修正の断定はしない。
+
+再確認時はUbuntu 26.04.1、Plasma / Wayland、PipeWire 1.6.2、
+既定出力Babyface Pro (Class Compliant Mode) Analog Stereo、48kHzを使用した。
+CPAL 0.18.1、libspa / libspa-sys / pipewire-sys 0.10.1のまま、
+`cargo build -p bmz-player --release --locked --offline --features pipewire`が成功した。
+開発パッケージはインストール済みruntimeと一致する1.6.2-1ubuntu1.2を専用ディレクトリへ
+展開し、`PKG_CONFIG_PATH`で参照した。システムへのapt installは行っていない。
+
+| 検証 | 結果 |
+| --- | --- |
+| ネイティブPipeWire無音probe | buffer Auto: 8秒、256: 30秒、128: 15秒、64: 10秒。全て実callback到着・正常終了 |
+| 音声Autoの無音probe | 256 framesで5秒。PipeWire feature有効でもPulseAudioを選択し正常終了 |
+| サンプル曲の自動演奏 | PipeWire 256 / 128 framesで各1回、分離したconfig / profile / DBから結果画面まで進み正常終了 |
+| エラー | 全7回でstream error / command dropは0。自動演奏のWARN / ERRORも0 |
+| 接続経路 | `pw-dump`でネイティブPipeWireの出力streamからBabyface Proへのactive linkを確認 |
+
+長時間・高密度譜面、実行中のバックエンド切替、デバイス抜き差し、物理発音遅延は未検証。
+この短い試験で全環境の安定性や音切れの不在を保証しない。
+生ログと集計は`.local/performance/pipewire-recheck-2026-10-06/`に保存した。
+
+この結果を確認したユーザーの指示により、`bmz-player`のdefault featureへ`pipewire`を追加した。
+依存の版と音声Auto（PulseAudio→ALSA）、Fixed 256の既定値は変更しない。
+Cargo既定ビルドもPipeWire / SPA開発ファイルを必要とするため、READMEと
+[Linuxビルド手順](../../docs/linux-latency.md#ビルド)を更新した。
+Ubuntuでは`libpipewire-0.3-dev` / `libspa-0.2-dev`、Fedoraでは`pipewire-devel`が必要。
+Linuxで除外する場合は`--no-default-features --features pulseaudio`を指定する。
+tar / Flatpakは既にPipeWireを明示してビルドしており、同梱物の変更はない。
+
+default変更後の検証（開発ファイルは上記の展開先を利用）:
+
+- `cargo fmt --check`、`cargo check --workspace --locked --offline`、
+  `cargo clippy --workspace --all-targets --locked --offline -- -D warnings`は成功。
+- `cargo test --workspace --locked --offline --no-fail-fast`は3753成功・6失敗・26 ignored。
+  テスト内部の子プロセスで再実行された1成功は全体件数から除外した。
+  失敗は既存のLuxez-Flat未配置による6件で、直前のplayerテストと失敗名が全て一致した。
+  PipeWire featureとバックエンド既定値の既存テストも成功した。
+- Linuxの`--no-default-features --features pulseaudio`でのplayer checkも成功。
+- `cargo build -p bmz-player --release --locked --offline`は追加feature指定なしで成功。
+  その実行ファイルで音声Autoの無音probe（256 / 48kHz / 4秒）がPulseAudioを選び、
+  PipeWireを明示したサンプル自動演奏（256 / 48kHz）が結果画面まで進み正常終了した。
+  実行時のfeature一覧に`PIPEWIRE`を確認。両方でstream error / command dropは0、WARN / ERRORも0。
+- Windows x86_64 / macOS arm64の通常依存tree、およびLinuxの上記除外構成には
+  PipeWire / SPAのcrateが含まれないことを確認。Windows/macOSでのコンパイル・実機確認は未実施。
+
+default変更後の生ログは`.local/performance/pipewire-default-2026-10-06/`に保存した。
+この環境のシステムには`libpipewire-0.3-dev` / `libspa-0.2-dev`が未導入で、clang /
+libclang-dev / pkg-configは導入済み。通常のシェルからビルドするための追加導入コマンドをユーザーへ案内した。
