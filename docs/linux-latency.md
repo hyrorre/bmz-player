@@ -20,6 +20,90 @@ evdevはLinux専用の任意featureで、Flatpakには含めない。Waylandのw
 音声・コントローラーの改善はevdevの利用条件から独立している。
 判定窓、入力オフセットの意味、判定補正、リプレイ形式、キー名、デバイススロットは変更しない。
 
+## evdev以外の経路とWaylandの入力待ち
+
+Waylandの通常winit入力では、VSync中の描画先取得が同じウィンドウスレッドを占有すると、
+後続の入力配送も待つ。BMZは実ウィンドウ接続がWayland、実効present modeがFifo/FifoRelaxedのとき、
+描画成功フレームの`present()`直前にwinit 0.30.13の`pre_present_notify()`を呼ぶ。
+これによりcompositorのframe callbackで次のRedrawRequestedを制御し、その間のイベント配送へ戻る。
+取得失敗・再構成・描画スキップ・headless出力では通知しない。
+[winitの公開API](https://docs.rs/winit/0.30.13/winit/window/struct.Window.html#method.pre_present_notify)に基づく。
+
+FPS/VSync設定やGPUのframe latency設定を変更する機能ではない。Immediate/Mailbox、X11/XWayland、
+macOS/Windowsではこの通知を追加しない。既存のゲーム入力は引き続きwinit経由で、IME・focus・
+入力抑止・キー割り当て・判定時計も同じである。100msのウィンドウスレッド停止から独立する機能ではない。
+物理押下から発音までの改善は未測定。ソフトウェア計測と採用判断は
+[追加調査記録](../notes/2026/2026-10-06-linux-input-alternatives.md)を参照。
+
+他の候補については次の制約があり、今回別の入力backendは追加していない。
+
+| 候補 | 調査結果・採用条件 |
+| --- | --- |
+| XInput2/XI2専用接続 | X11でウィンドウスレッドと独立した取得は可能。ただしrawイベントのfocus/セッション管理、時計変換、入力源の排他が必要。今回の接続先はXWaylandで、ネイティブX11の実入力比較は未測定 |
+| wl_keyboard / input-timestamps | 現ウィンドウと同じWayland接続のイベント。別接続で既存ウィンドウの入力を受ける代替にはならない。高分解能の時刻だけで到着や発音が速くなるわけではない |
+| hidraw / HIDAPI | 対象機器固有のreport解析と権限が必要。対応コントローラーでgilrsとの差を実測してから検討する。USBのpoll周期を自動で短縮するAPIではない |
+| libinput / libevdev | 下位のevdevアクセス権限を不要にはしない。通常アプリ向けの別の低遅延入力経路としては採用しない |
+| InputCapture portal / libei | compositorがcaptureを開始する仕組みで、アプリが即時にcaptureを有効化するAPIではない。通常のfocusedゲーム入力の代替には採用しない |
+
+一次資料: [XI2](https://xorg.freedesktop.org/archive/current/doc/inputproto/XI2proto.txt)、
+[wl_keyboard](https://wayland.freedesktop.org/docs/html/apa.html#protocol-spec-wl_keyboard)、
+[hidraw](https://docs.kernel.org/hid/hidraw.html)、
+[InputCapture portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.InputCapture.html)。
+
+### 人工通知によるイベントループ比較
+
+`--latency-event-loop-probe`は11ms周期で別スレッドからwinitへ人工通知を送り、
+送信直前のInstantから`user_event`処理までを共通ヒストグラムで計測する。
+キーボード入力を注入せず、判定・キー音も発生させない。OS→winitの区間Aや物理入力遅延ではない。
+`BMZ_LATENCY_JSON`の`kind=window_event_loop_probe`として出し、既存比較スクリプトで読める。
+probe自体は環境変数なしでも有効で、`BMZ_LATENCY_DIAGNOSTICS=1`は入力/音声診断を併用する指定。
+
+scene/focus/gameplay世代の変更、resume、1秒超の配送途絶はepochを分ける。
+各epochの最初の2秒はwarm-upとして除外し、異なる世代・未来時刻を0として集計しない。
+分位点は共通の対数bucket上端による近似。送信側は最大32件までに制限し、
+`capacity_skips_process`（満杯のため送らなかった回数）、`producer_missed_ticks_process`
+（送信スレッドの予定周期欠落）、`pending_process`（未処理）、`rejected_samples`を出す。
+`*_process`は起動からの累積で、初期ロード中も含む。前後の差を取り、プレイ中の欠落と区別する。
+配送途絶・満杯時の未取得値を分布へ捏造しない。probeのイベントは描画要求を起こさない。
+
+同一releaseビルド、同一検証用データ・音声・VSync/FPS設定で逐次実行する。通常データは使わず、
+後述の専用`BMZ_DATA_DIR`を用意する。例では自動演奏を使い、物理入力の実験とは分けている。
+
+```bash
+BMZ_DATA_DIR="$bmz_test_data" BMZ_RESOURCE_DIR="$PWD/data" BMZ_LATENCY_DIAGNOSTICS=1 \
+  target/release/bmz-player --boot-play-sample --autoplay-on-start --smoke-exit-on-result \
+  --latency-event-loop-probe --latency-legacy-wayland-present > before.log 2>&1
+BMZ_DATA_DIR="$bmz_test_data" BMZ_RESOURCE_DIR="$PWD/data" BMZ_LATENCY_DIAGNOSTICS=1 \
+  target/release/bmz-player --boot-play-sample --autoplay-on-start --smoke-exit-on-result \
+  --latency-event-loop-probe > after.log 2>&1
+python3 scripts/compare-latency.py before.log after.log
+```
+
+Flatpakでは同じ引数を`flatpak run`または検証buildのラッパーへ渡す。sandbox内の検証用
+`BMZ_DATA_DIR`とログ出力先を区別する。buildディレクトリからの実行には、例えば次のように
+配布manifestにあるソケット等を明示する（`flatpak build`はインストール済みアプリの起動とは異なる）。
+
+```bash
+flatpak build --runtime --readonly --nofilesystem=host \
+  --socket=wayland --socket=fallback-x11 --socket=pulseaudio \
+  --env=WAYLAND_DISPLAY="${WAYLAND_DISPLAY:?Waylandセッションで実行してください}" \
+  --share=ipc --device=dri --device=input --filesystem=xdg-run/pipewire-0 \
+  --env=BMZ_DATA_DIR=/tmp/bmz-window-probe-new --env=BMZ_LATENCY_DIAGNOSTICS=1 \
+  .local/latency-flatpak/build /app/bin/bmz-player-flatpak \
+  --boot-play-sample --autoplay-on-start --smoke-exit-on-result --latency-event-loop-probe
+```
+
+前後で同じconfig/profileを使う場合は、新規の検証ディレクトリ1つだけを
+`--filesystem=/absolute/test-directory`で公開して`BMZ_DATA_DIR`に指定できる。
+通常データやホスト全体を公開しない。通常描画の比較後、両方に既存`--latency-stall-test`を
+追加して停滞を比較する。frame callbackが人工的な100ms停止も解消したとは扱わない。
+CPU比較ではprobeが約91回/秒の追加起床を発生させることを考慮し、両側の診断条件を揃える。
+
+2つの新規CLIはプロセス限定で、いずれもスコア/リプレイ/IR保存と背景IR同期を抑止する。
+通常利用へ戻すには両フラグを外す。描画通知だけを従来方式に戻して比較するには
+`--latency-legacy-wayland-present`を付ける（この場合も検証モードで保存無効）。
+依存ライブラリの追加・更新、入力デバイス権限やFlatpak権限の追加は不要。
+
 ## ビルド
 
 [README](../README.md)のRust / FFmpeg / ALSA / udev等に加え、PipeWireとSPAの開発ファイルが必要。
@@ -58,6 +142,7 @@ scripts/package-flatpak.sh --out-dir .local/latency-flatpak
 
 ```bash
 flatpak build --runtime --readonly --nofilesystem=host \
+  --socket=pulseaudio --filesystem=xdg-run/pipewire-0 \
   --env=BMZ_LATENCY_DIAGNOSTICS=1 --env=BMZ_DATA_DIR=/tmp/bmz-latency-probe \
   .local/latency-flatpak/build /app/bin/bmz-player-flatpak \
   audio-probe pipewire 128 48000 8

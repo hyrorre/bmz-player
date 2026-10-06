@@ -89,3 +89,8 @@ IR保存と背景IR同期を無効にする明示的な試験フラグです。�
 `BMZ_LATENCY_JSON`分布を出力します。終了コードと`audio_open_failure`で初期化失敗を確認できます。
 実コールバックサイズと要求値、API推定と物理測定は別です。
 既存の`--latency-stall-test`もLinuxで利用できます。詳細は[Linux遅延検証](linux-latency.md)を参照してください。
+
+`--latency-event-loop-probe`は11ms周期の人工通知を使い、winitの通知投入→処理時間を
+共通JSONへ出します。物理キー入力・発音は測りません。`--latency-legacy-wayland-present`は
+Waylandの描画直前通知を無効にして従来方式と比較します。両方とも明示指定時だけ有効で、
+停滞試験と同じスコア/リプレイ/IR保存抑止が働きます。フラグを外せば通常動作へ戻ります。

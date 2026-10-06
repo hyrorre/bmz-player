@@ -23,6 +23,13 @@ FIFO / Mailbox / background / Unlimited / Windows以外ではこの短時間待�
 これはdisplay/compositorとの位相同期を実装したものではない。VSync、VRR、driver設定や
 present queue設定は変更しない。ImmediateのtearingやGPU stallを解消する保証もない。
 
+Waylandで実効present modeがFifo/FifoRelaxedのときは、取得できたsurfaceをpresentする直前に
+winitの`pre_present_notify()`を呼ぶ。winitのframe callback待機中も入力・user eventは処理できる。
+取得失敗や描画スキップでは通知せず、commitされないframe callbackを残さない。
+このcallbackを使う場合はUnlimited FPSでもControlFlow::Waitとし、callback待ちをPollでspinしない。
+Immediate/Mailboxおよび他のウィンドウbackendの待機方式は維持する。
+イベント配送の比較方法と限界は[Linux遅延検証](linux-latency.md)を参照。
+
 ## 診断
 
 ```powershell
