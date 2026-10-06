@@ -39,6 +39,68 @@ fn pending_finished_play_waits_for_worker_completion() {
     assert!(completed.load(std::sync::atomic::Ordering::SeqCst));
     assert!(error.to_string().contains("expected test error"));
 }
+
+#[test]
+fn last_play_result_uses_saved_attempt_including_clear_only_and_excludes_unsaved_modes() {
+    let root = make_temp_dir("last-play-result");
+    let paths = ProfilePaths {
+        root_dir: root.clone(),
+        profile_toml: root.join("profile.toml"),
+        collection_db: root.join("collection.db"),
+        score_db: root.join("score.db"),
+        network_db: root.join("network.db"),
+        replay_dir: root.join("replay"),
+    };
+    let mut conn = Connection::open_in_memory().unwrap();
+    configure_connection(&conn).unwrap();
+    run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+    let mut score_db = ScoreDatabase::from_connection(conn);
+    let mut network_db = open_network_db();
+    for (mode, expected) in [(0, Some(100)), (1, Some(101)), (2, None), (3, None), (4, None)] {
+        let mut session = session();
+        if mode == 1 {
+            session.assist.level = bmz_gameplay::session::AssistLevel::Assist;
+            session.assist.configured_mask = crate::assist::EXPAND_JUDGE_MASK;
+        }
+        if mode == 2 {
+            session.autoplay = Some(bmz_gameplay::autoplay::AutoplayController::default());
+        }
+        if mode == 3 {
+            session.replay_player = Some(bmz_gameplay::replay::ReplayPlayer::default());
+        }
+        let finished = finish_session_result(
+            &mut score_db,
+            &mut network_db,
+            FinishSessionResultRequest {
+                profile_paths: &paths,
+                replay_config: &ReplayConfig {
+                    auto_save: false,
+                    compress: false,
+                    slot_rules: crate::config::profile_config::default_slot_rules(),
+                },
+                ir_config: &IrConfig::default(),
+                session: &session,
+                source_ln_profile: ChartLnProfile::from_chart(&session.chart),
+                chart_length_ms: None,
+                play_duration_ms: None,
+                played_at: 100 + mode,
+                applied_arrange: &AppliedArrange::default(),
+                target_ex_score: None,
+                score_key: score_key(&session),
+                practice_mode: mode == 4,
+                finish_mode: FinishResultMode::Normal,
+            },
+        )
+        .unwrap();
+        assert_eq!(finished.summary.last_played_at, expected, "mode {mode}");
+        assert_eq!(
+            score_db.last_played_times_for_charts(&[score_key(&session)]).unwrap()
+                [&score_key(&session)],
+            if mode == 0 { 100 } else { 101 }
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
 use crate::config::play::DEFAULT_JUDGE_WINDOW;
 use crate::config::profile_config::{IrConfig, IrProviderConfig, ReplayConfig};
 use crate::storage::common::configure_connection;
@@ -383,6 +445,7 @@ fn finish_session_result_returns_summary() {
     .unwrap();
 
     assert_eq!(finished.summary.score_history_id, finished.stored.score_history_id);
+    assert_eq!(finished.summary.last_played_at, Some(1_700_000_102));
     assert_eq!(finished.summary.clear_type, finished.result.clear_type);
     assert_eq!(finished.summary.arrange, "RANDOM");
     assert_eq!(finished.summary.arrange_2p, "MIRROR");
@@ -767,6 +830,8 @@ fn finish_session_result_skips_storage_for_autoplay() {
     .unwrap();
 
     // オートプレイ時はDB保存・リプレイ保存をしない。
+    assert_eq!(finished.summary.last_played_at, None);
+    assert!(score_db.last_played_times_for_charts(&[score_key(&session)]).unwrap().is_empty());
     assert_eq!(finished.stored.score_history_id, 0);
     assert!(finished.stored.replay_path.is_empty());
     assert!(finished.stored.slot_paths.iter().all(Option::is_none));
@@ -830,6 +895,7 @@ fn finish_session_result_skips_all_storage_for_key_mode_conversion() {
     assert!(finished.stored.replay_path.is_empty());
     assert!(finished.stored.slot_paths.iter().all(Option::is_none));
     assert!(!finished.score_data_changed);
+    assert_eq!(finished.summary.last_played_at, None);
     assert_eq!(score_db.recent_history(10, 0).unwrap().len(), 0);
 
     std::fs::remove_dir_all(root).unwrap();
@@ -881,6 +947,8 @@ fn finish_session_result_skips_storage_for_replay_playback() {
     .unwrap();
 
     assert!(finished.replay_playback);
+    assert_eq!(finished.summary.last_played_at, None);
+    assert!(score_db.last_played_times_for_charts(&[score_key(&session)]).unwrap().is_empty());
     assert_eq!(finished.stored.score_history_id, 0);
     assert!(finished.stored.replay_path.is_empty());
     assert!(finished.stored.slot_paths.iter().all(Option::is_none));
@@ -995,6 +1063,7 @@ fn finish_settled_session_result_accepts_playing_session_after_judgement() {
     .unwrap();
 
     assert!(cached.is_some());
+    assert_eq!(finished.summary.last_played_at, None);
     assert_eq!(finished.summary.target_name, "ライバル_AAA");
     assert_eq!(finished.summary.target, crate::select_options::TargetOption::RankAaa);
 

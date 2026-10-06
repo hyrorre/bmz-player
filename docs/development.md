@@ -168,3 +168,15 @@ FPS等の比較には同じ譜面・設定・backend・計測条件が必要で�
 CLI引数・サブコマンドの一覧は `--help` と [cli.rs](../crates/bmz-player/src/cli.rs) を正とし、ここには重複して列挙しません。
 
 IR Webの環境・DB・検証コマンドは [ir.md](ir.md) の「開発環境と実装の入口」を参照します。
+
+Luaの画面寸法helperを変更した場合は、ロード・cache・非同期世代の回帰に加え、
+GPUを使う次のテストで全sceneとoffscreen出力の物理寸法を確認します。
+
+```bash
+cargo test -p bmz-skin --locked screen_dimensions
+cargo test -p bmz-player --locked screen_dimensions
+cargo test -p bmz-player --locked screen_dimensions_follow_offscreen_output_and_target_replacement_in_all_scenes -- --ignored
+```
+
+ウィンドウの手動確認では、起動直後、リサイズ、高DPI環境でロード時とcallbackの
+寸法を表示し、スキン設計解像度や内部解像度へ置き換わらないことを確認します。

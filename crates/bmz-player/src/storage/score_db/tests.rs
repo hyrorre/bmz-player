@@ -108,3 +108,5 @@ mod cases_01;
 mod cases_02;
 #[path = "tests/cases_03.rs"]
 mod cases_03;
+#[path = "tests/last_play.rs"]
+mod last_play;

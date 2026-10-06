@@ -481,6 +481,7 @@ use skin_gauge::*;
 use skin_geometry::*;
 use skin_interaction::*;
 pub use skin_manifest::*;
+pub use skin_value_datetime::last_play_datetime_numbers;
 use skin_value_datetime::*;
 use skin_value_format::*;
 pub use skin_value_option::*;

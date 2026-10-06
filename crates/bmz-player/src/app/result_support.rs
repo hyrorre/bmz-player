@@ -140,6 +140,9 @@ pub(super) fn result_lua_runtime_number_values_for_summary(
     summary: &ResultSummary,
 ) -> BTreeMap<i32, i32> {
     let mut number_values = BTreeMap::new();
+    number_values.extend(
+        (243..=249).zip(bmz_render::skin::last_play_datetime_numbers(summary.last_played_at)),
+    );
     let value = |value: u32| i32::try_from(value).unwrap_or(i32::MAX);
     let difference = |current: u32, previous: u32| value(current).saturating_sub(value(previous));
     number_values.insert(71, value(summary.ex_score));
@@ -679,7 +682,18 @@ pub(super) fn lua_runtime_state_for_frontend(
     player_name: &str,
     ir_name: Option<&str>,
 ) -> bmz_skin::LuaLoadRuntimeState {
+    lua_runtime_state_for_frontend_last_play(player_name, ir_name, None)
+}
+
+pub(super) fn lua_runtime_state_for_frontend_last_play(
+    player_name: &str,
+    ir_name: Option<&str>,
+    last_played_at: Option<i64>,
+) -> bmz_skin::LuaLoadRuntimeState {
     bmz_skin::LuaLoadRuntimeState {
+        number_values: (243..=249)
+            .zip(bmz_render::skin::last_play_datetime_numbers(last_played_at))
+            .collect(),
         text_values: BTreeMap::from([
             (2, player_name.to_string()),
             (1020, ir_name.unwrap_or_default().to_string()),

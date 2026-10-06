@@ -72,6 +72,7 @@ fn boot_course_intermediate_result_falls_back_when_scene_is_zero() {
 fn course_result_summary_for_skin_uses_aggregate_course_values() {
     fn entry_summary(ex_score: u32, notes: u32, max_combo: u32, duration_ms: i32) -> ResultSummary {
         ResultSummary {
+            last_played_at: None,
             clear_type: ClearType::NoPlay,
             skin_attempt: Default::default(),
             target_name: "RANK AAA".to_string(),
@@ -205,6 +206,7 @@ fn course_result_summary_for_skin_uses_aggregate_course_values() {
         replay_slots: [true, false, true, false],
         saved_replay_slots: [false, false, true, false],
         best_score: Some(crate::storage::score_db::CourseBestScore {
+            last_played_at: None,
             course_score_id: 22,
             course_hash: "course-hash".to_string(),
             ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
@@ -226,6 +228,7 @@ fn course_result_summary_for_skin_uses_aggregate_course_values() {
             played_at: 2,
         }),
         previous_best_score: Some(crate::storage::score_db::CourseBestScore {
+            last_played_at: None,
             course_score_id: 21,
             course_hash: "course-hash".to_string(),
             ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
@@ -276,6 +279,13 @@ fn course_result_summary_for_skin_uses_aggregate_course_values() {
     assert_eq!(summary.previous_best_bp, Some(12));
     assert_eq!(summary.target_ex_score, Some(400));
     let number_values = result_lua_runtime_number_values_for_summary(&summary);
+    assert_eq!(summary.last_played_at, None);
+    assert_eq!(number_values.get(&243), Some(&i32::MIN));
+    let mut saved_course = course.clone();
+    saved_course.course_played_at = Some(1_700_000_000);
+    let saved_summary = course_result_summary_for_skin(&saved_course);
+    assert_eq!(saved_summary.last_played_at, Some(1_700_000_000));
+    assert_eq!(result_lua_runtime_number_values_for_summary(&saved_summary)[&243], 1_700_000_000);
     assert_eq!(number_values.get(&74), Some(&400));
     assert_eq!(number_values.get(&110), Some(&160));
     assert_eq!(number_values.get(&113), Some(&2));

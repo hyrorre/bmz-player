@@ -188,6 +188,7 @@ pub fn load_select_items_for_course_contents(
                     .unwrap_or_default(),
             },
             best_score: None,
+            last_played_at: None,
             replay_slots: [false; 4],
             favorite_chart: false,
             favorite_song: false,
@@ -555,6 +556,7 @@ pub(super) fn load_select_items_in_table_filtered(
         })
         .collect();
     let mut replay_slot_map = replay_slot_map(score_db, &keys)?;
+    let last_played = score_db.last_played_times_for_charts(&keys)?;
     let chart_ids: Vec<i64> = entries
         .iter()
         .filter_map(|entry| entry.chart.as_ref().map(|chart| chart.chart_id))
@@ -573,14 +575,16 @@ pub(super) fn load_select_items_in_table_filtered(
             let chart_analysis =
                 entry.chart.as_ref().and_then(|chart| analysis_map.remove(&chart.chart_id));
             let has_document = entry.chart.as_ref().is_some_and(|chart| chart.has_document);
-            SelectItem::Chart(select_chart_row_from_table_entry(
+            let mut row = select_chart_row_from_table_entry(
                 entry,
                 chart_analysis,
                 has_document,
                 best_score,
                 replay_slots,
                 table_text,
-            ))
+            );
+            row.last_played_at = score_key.and_then(|key| last_played.get(&key).copied());
+            SelectItem::Chart(row)
         })
         .collect())
 }
@@ -728,6 +732,7 @@ pub(super) fn select_chart_row_from_table_entry(
             append_ipfs: entry.append_ipfs,
         },
         best_score,
+        last_played_at: None,
         replay_slots,
         favorite_chart: false,
         favorite_song: false,

@@ -1,6 +1,31 @@
 use super::*;
 
 #[test]
+fn last_play_select_refreshes_without_replacing_best_date() {
+    let (mut library_db, mut score_db) = open_in_memory_dbs();
+    let chart = chart("Last Play");
+    library_db.upsert_chart_import(&record_for_chart("/songs/last/date.bms", &chart)).unwrap();
+    let mut record = score_for_chart(chart.identity.file_sha256);
+    record.played_at = 100;
+    score_db.insert_score(&record).unwrap();
+    let load = |db: &ScoreDatabase| {
+        load_select_items_for_search(&library_db, db, "Last Play", LnPolicySetting::AutoLn).unwrap()
+    };
+    let first = load(&score_db);
+    assert!(matches!(&first[0], SelectItem::Chart(row) if row.last_played_at == Some(100)));
+    record.played_at = 200;
+    record.score = ScoreState::default();
+    record.clear_type = ClearType::Failed;
+    score_db.insert_score(&record).unwrap();
+    record.played_at = 300;
+    score_db.update_score_clear_only(&record).unwrap();
+    let refreshed = load(&score_db);
+    let SelectItem::Chart(row) = &refreshed[0] else { panic!("chart") };
+    assert_eq!(row.last_played_at, Some(300));
+    assert_eq!(row.best_score.as_ref().unwrap().played_at, 100);
+}
+
+#[test]
 fn load_select_items_in_table_returns_charts_sorted_by_level_order() {
     let (mut library_db, score_db) = open_in_memory_dbs();
 
@@ -103,6 +128,7 @@ fn song_scan_path_from_context_reads_folder_and_chart() {
     assert_eq!(song_scan_path_from_context(&[], Some(&folder)), Some("/music/bms".to_string()));
 
     let chart = SelectItem::Chart(SelectChartRow {
+        last_played_at: None,
         chart: Some(ChartListItem {
             chart_id: 1,
             md5: [0; 16],

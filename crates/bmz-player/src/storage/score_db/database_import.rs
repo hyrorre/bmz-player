@@ -61,6 +61,22 @@ impl ScoreDatabase {
     pub fn update_score_clear_only(&mut self, record: &ScoreRecord) -> Result<()> {
         let tx = self.conn.transaction()?;
         upsert_score_best_clear_only(&tx, record)?;
+        if !record.autoplay && record.played_at > 0 {
+            tx.execute(
+                "INSERT INTO score_unrecorded_plays
+                 (chart_sha256, ln_policy, double_option, rule_mode, played_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(chart_sha256, ln_policy, double_option, rule_mode)
+                 DO UPDATE SET played_at = MAX(played_at, excluded.played_at)",
+                params![
+                    hash_to_hex(&record.chart_sha256),
+                    record.ln_policy.as_str(),
+                    record.double_option.as_str(),
+                    record_rule_mode(record).as_str(),
+                    record.played_at
+                ],
+            )?;
+        }
         update_player_stats(&tx, record)?;
         tx.commit()?;
         Ok(())

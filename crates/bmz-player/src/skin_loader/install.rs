@@ -113,6 +113,10 @@ pub(super) struct RenderLuaMainState<'a> {
 }
 
 impl LuaMainState for RenderLuaMainState<'_> {
+    fn screen_size(&self) -> [u32; 2] {
+        self.state.screen_size
+    }
+
     fn result_panel(&self) -> Option<i32> {
         self.state.result_panel
     }

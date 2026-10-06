@@ -281,6 +281,7 @@ impl WinitApp {
             apply_course_result_lua_load_state(&mut runtime_state, course);
         }
         runtime_state.runtime_mode = self.skin.lua_runtime_mode;
+        runtime_state.screen_size = self.renderer.render_target_size();
         let binding = self
             .renderer
             .result_skin_document()
@@ -379,6 +380,10 @@ impl WinitApp {
     /// stale generation は破棄。GPU アップロードは worker で完了済みなので、
     /// ここではハンドル挿入・フォント登録・SkinContext 構築のみ (軽量)。
     pub(super) fn apply_uploaded_skin(&mut self, pending: PendingUploadResult) -> bool {
+        if self.skin.skin_pipeline.uploaded_screen_size_is_stale(&pending) {
+            self.retry_skin_for_screen_size(pending.kind);
+            return false;
+        }
         let pending = if let Some(change) = self.jobs.profile_change.as_mut() {
             let Some(pending) = change.stage_uploaded_skin(pending) else {
                 return false;
@@ -455,6 +460,7 @@ impl WinitApp {
         } = uploaded;
         let result_refresh = kind == SkinKind::Result
             && self.skin.skin_pipeline.result_refresh_generation == Some(generation);
+        self.skin.skin_pipeline.record_screen_dependencies(kind, load_dependencies.clone());
         if kind == SkinKind::Result {
             self.skin
                 .skin_pipeline

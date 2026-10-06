@@ -464,7 +464,7 @@ impl WinitApp {
                 skin_defs_cache: BTreeMap::new(),
                 skin_header_checks: BTreeMap::new(),
                 default_skin_manifest,
-                skin_pipeline,
+                skin_pipeline: Box::new(skin_pipeline),
                 skin_video_sources: initial_skin_video_sources,
                 pending_skin_render_probe: None,
                 last_play_skin_signature: None,

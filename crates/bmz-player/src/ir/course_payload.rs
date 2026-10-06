@@ -641,6 +641,7 @@ mod tests {
 
     fn stage_summary(clear_type: ClearType, gauge_value: f32) -> ResultSummary {
         ResultSummary {
+            last_played_at: None,
             clear_type,
             skin_attempt: Default::default(),
             target_name: String::new(),

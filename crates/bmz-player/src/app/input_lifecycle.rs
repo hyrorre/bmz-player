@@ -506,6 +506,7 @@ impl WinitApp {
                     vec![self.boot.app_paths.bundled_noto_cjk_font_root()],
                 ));
                 self.window = Some(window);
+                self.refresh_skin_screen_size();
             }
             Err(error) => {
                 tracing::error!(%error, "failed to create window");

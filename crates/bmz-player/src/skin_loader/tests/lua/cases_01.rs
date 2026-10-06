@@ -1,6 +1,67 @@
 use super::*;
 
 #[test]
+fn last_play_lua_load_and_runtime_keep_missing_values_in_auto_and_compat_modes() {
+    let root = unique_test_dir("bmz-last-play-lua");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("date.luaskin");
+    std::fs::write(
+        &path,
+        r#"
+        local s = require('main_state')
+        local stamp, year = s.numbers('lastplay_timestamp', 'lastplay_year')
+        return { type = 7, name = tostring(stamp) .. ':' .. tostring(year),
+            text = {{ id = 'date', value = function()
+                local t, y = s.numbers('lastplay_timestamp', 244)
+                return tostring(t) .. ':' .. tostring(y)
+            end }} }
+    "#,
+    )
+    .unwrap();
+    for mode in [bmz_skin::LuaSkinRuntimeMode::Auto, bmz_skin::LuaSkinRuntimeMode::Compat] {
+        for load_date in [None, Some(1_700_000_000)] {
+            let values = bmz_render::skin::last_play_datetime_numbers(load_date);
+            let loaded = bmz_skin::load_lua_skin_with_runtime_state(
+                &path,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &LuaLoadRuntimeState {
+                    runtime_mode: mode,
+                    number_values: (243..=249).zip(values).collect(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(loaded.document.name, format!("{}:{}", values[0], values[1]));
+            let callback =
+                loaded.document.text[0].value_expr.rsplit(':').next().unwrap().parse().unwrap();
+            let mut runtime = loaded.lua_runtime.unwrap();
+            let text_values = BTreeMap::new();
+            for runtime_date in [Some(2_147_483_648), None, Some(1_700_000_000)] {
+                let state = SkinDrawState {
+                    last_played_at: runtime_date,
+                    score_date_sec: 123,
+                    ..Default::default()
+                };
+                let provider = RenderLuaMainState {
+                    state: &state,
+                    enabled_options: &[],
+                    text_values: &text_values,
+                };
+                runtime.begin_frame();
+                let values = bmz_render::skin::last_play_datetime_numbers(runtime_date);
+                assert_eq!(
+                    runtime.evaluate_text(callback, &provider),
+                    Some(format!("{}:{}", values[0], values[1]))
+                );
+                assert_eq!(provider.score_date_sec_time(), 123, "BEST timestamp remains separate");
+            }
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn render_lua_shared_scope_uses_changed_rows_options_and_text_then_restores_outer_state() {
     let root = unique_test_dir("bmz-shared-render-state");
     std::fs::create_dir_all(&root).unwrap();

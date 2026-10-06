@@ -80,6 +80,7 @@ pub struct CourseReplaySlotRecord {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CourseBestScore {
+    pub last_played_at: Option<i64>,
     pub course_score_id: i64,
     pub course_hash: String,
     pub ln_policy: LnScorePolicy,
@@ -351,7 +352,11 @@ pub(super) fn best_course_score(
                       AND clear_cs.rule_mode = cs.rule_mode
                       AND clear_cs.replay_only = 0
                       AND clear_cs.clear_type NOT IN ('', 'NoPlay', 'Failed')),
-                cs.played_at
+                cs.played_at,
+                (SELECT MAX(last_cs.played_at) FROM course_scores last_cs
+                 WHERE last_cs.course_hash = cs.course_hash AND last_cs.ln_policy = cs.ln_policy
+                   AND last_cs.rule_mode = cs.rule_mode AND last_cs.replay_only = 0
+                   AND last_cs.played_at > 0)
          FROM course_scores cs
          WHERE cs.course_hash = ?1 AND cs.ln_policy = ?2 AND cs.rule_mode = ?3
            AND cs.replay_only = 0
@@ -509,7 +514,11 @@ pub(super) fn best_course_score_for_trophy(
                       AND clear_cs.rule_mode = cs.rule_mode
                       AND clear_cs.replay_only = 0
                       AND clear_cs.clear_type NOT IN ('', 'NoPlay', 'Failed')),
-                cs.played_at
+                cs.played_at,
+                (SELECT MAX(last_cs.played_at) FROM course_scores last_cs
+                 WHERE last_cs.course_hash = cs.course_hash AND last_cs.ln_policy = cs.ln_policy
+                   AND last_cs.rule_mode = cs.rule_mode AND last_cs.replay_only = 0
+                   AND last_cs.played_at > 0)
          FROM course_scores cs
          JOIN course_trophy_achievements cta
              ON cta.course_score_id = cs.id
@@ -894,6 +903,7 @@ fn course_replay_slot_from_row(
 
 fn course_best_score_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CourseBestScore> {
     Ok(CourseBestScore {
+        last_played_at: row.get(17)?,
         course_score_id: row.get(0)?,
         course_hash: row.get(1)?,
         ln_policy: ln_score_policy_from_row(row, 2)?,

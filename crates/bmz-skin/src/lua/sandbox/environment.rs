@@ -18,6 +18,7 @@ pub(super) fn install_sandbox(
         let mut probe =
             main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
         probe.runtime_mode = runtime_state.runtime_mode;
+        probe.screen_size = runtime_state.screen_size;
     }
     if let Some(load_dependencies) = load_dependencies.clone() {
         let mut probe =

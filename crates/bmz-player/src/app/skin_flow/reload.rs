@@ -7,6 +7,7 @@ impl WinitApp {
     /// バックグラウンド decode + 段階 install パイプラインへ流す。
     pub(super) fn reload_skins(&mut self, request: SkinReloadRequest) {
         let skin = self.boot.profile_config.skin.clone();
+        let select_last_played_at = self.select_snapshot().last_played_at;
         let texture_request = SkinReloadRequest { result: false, course_result: false, ..request };
         let (pending_select, pending_decide, _pending_result) = reload_skin_textures(
             &self.boot.app_paths,
@@ -17,6 +18,7 @@ impl WinitApp {
             &skin,
             self.skin.lua_runtime_mode,
             self.boot.app_config.select.experimental_detail_options,
+            select_last_played_at,
         );
         if request.select {
             self.skin.skin_pipeline.set_pending(SkinKind::Select, pending_select);
@@ -104,6 +106,7 @@ impl WinitApp {
             }
         };
         let skin = self.boot.profile_config.skin.clone();
+        let select_last_played_at = self.select_snapshot().last_played_at;
         let (pending_select, pending_decide, _) = reload_skin_textures(
             &self.boot.app_paths,
             &mut self.skin.skin_pipeline,
@@ -113,6 +116,7 @@ impl WinitApp {
             &skin,
             self.skin.lua_runtime_mode,
             self.boot.app_config.select.experimental_detail_options,
+            select_last_played_at,
         );
         let pending = match kind {
             SkinKind::Select => pending_select,
@@ -193,6 +197,7 @@ impl WinitApp {
         mut runtime_state: bmz_skin::LuaLoadRuntimeState,
     ) {
         runtime_state.runtime_mode = self.skin.lua_runtime_mode;
+        runtime_state.screen_size = self.renderer.render_target_size();
         let selection =
             play_skin_selection_for_session(&self.boot.profile_config.skin, key_mode, session_mode);
         runtime_state.offset_values.clear();

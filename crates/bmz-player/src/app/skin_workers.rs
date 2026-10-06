@@ -1,13 +1,14 @@
 use super::*;
 
+#[derive(Clone)]
 pub(super) struct SkinDecodeRequest {
     pub(super) pinned_sources: BTreeMap<String, String>,
-    generation: u64,
-    path: PathBuf,
-    kind: SkinKind,
+    pub(super) generation: u64,
+    pub(super) path: PathBuf,
+    pub(super) kind: SkinKind,
     options: BTreeMap<String, String>,
     files: BTreeMap<String, String>,
-    runtime_state: bmz_skin::LuaLoadRuntimeState,
+    pub(super) runtime_state: bmz_skin::LuaLoadRuntimeState,
     library_roots: Vec<PathBuf>,
     installed_font_cache: HashMap<String, SkinFontCacheKey>,
 }
@@ -45,7 +46,9 @@ impl SkinDecodeRequest {
     }
 }
 
-pub(super) fn spawn_skin_decode(pipeline: &SkinPipelineRuntime, request: SkinDecodeRequest) {
+pub(super) fn spawn_skin_decode(pipeline: &SkinPipelineRuntime, mut request: SkinDecodeRequest) {
+    request.runtime_state.screen_size = pipeline.screen_size;
+    pipeline.record_screen_request(request.clone());
     let SkinDecodeRequest {
         pinned_sources,
         generation,

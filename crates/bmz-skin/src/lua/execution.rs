@@ -62,6 +62,7 @@ pub(super) fn execute_lua_skin(
 
     let header_lua = Lua::new();
     let header_instruction_budget = install_instruction_limit(&header_lua);
+    let header_dependencies = Arc::new(Mutex::new(SkinLoadDependencies::default()));
     // The header pass intentionally uses neutral main_state values, but it must
     // see the same read-only virtual filesystem as the document pass. Some
     // skins read compatibility configuration while their required modules are
@@ -74,15 +75,21 @@ pub(super) fn execute_lua_skin(
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
-        &LuaLoadRuntimeState::default(),
+        &LuaLoadRuntimeState { screen_size: runtime_state.screen_size, ..Default::default() },
         virtual_io_files,
-        None,
+        Some(header_dependencies.clone()),
     )?;
     let header = header_lua
         .load(&source)
         .set_name(input.to_string_lossy().as_ref())
         .eval::<Value>()
         .with_context(|| format!("failed to execute lua skin header: {}", input.display()))?;
+    // Only actual header execution contributes dimensions. Header callback
+    // inference below must not turn runtime-only reads into load dependencies.
+    let header_screen_size = header_dependencies
+        .lock()
+        .map_err(|_| anyhow!("lua header dependency tracker lock poisoned"))?
+        .screen_size;
     header_instruction_budget.begin_inference();
     let header_json = lua_value_to_json(
         &header_lua,
@@ -116,7 +123,12 @@ pub(super) fn execute_lua_skin(
 
     let lua = Lua::new();
     let instruction_budget = install_instruction_limit(&lua);
-    let dependencies = Arc::new(Mutex::new(SkinLoadDependencies::default()));
+    // Header-only branches can select options/files based on output dimensions.
+    // Other header main_state values remain neutral and are not propagated.
+    let dependencies = Arc::new(Mutex::new(SkinLoadDependencies {
+        screen_size: header_screen_size,
+        ..Default::default()
+    }));
     let main_state_probe = install_sandbox(
         &lua,
         path_context,

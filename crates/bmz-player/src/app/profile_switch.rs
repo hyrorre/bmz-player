@@ -26,6 +26,15 @@ pub(super) struct PendingProfileChange {
 }
 
 impl PendingProfileChange {
+    pub(super) fn replace_skin_generation(&mut self, old: u64, new: u64) {
+        if let ProfileChangeStage::WaitingForSkin { generation, uploaded, .. } = &mut self.stage
+            && *generation == old
+        {
+            *generation = new;
+            *uploaded = None;
+        }
+    }
+
     /// 切替先の結果はまだrendererへ適用しない。旧profileの描画とLua状態を保つ。
     pub(super) fn stage_uploaded_skin(
         &mut self,
@@ -252,6 +261,17 @@ impl WinitApp {
             }
         }
         if matches!(pending.stage, ProfileChangeStage::WaitingForSkin { uploaded: Some(_), .. }) {
+            if let ProfileChangeStage::WaitingForSkin { uploaded: Some(uploaded), .. } =
+                &pending.stage
+                && self.skin.skin_pipeline.uploaded_screen_size_is_stale(uploaded)
+            {
+                let old = uploaded.generation;
+                if let Some(new) = self.retry_skin_for_screen_size(SkinKind::Select) {
+                    pending.replace_skin_generation(old, new);
+                }
+                self.jobs.profile_change = Some(pending);
+                return;
+            }
             let ProfileChangeStage::WaitingForSkin {
                 prepared, uploaded: Some(select_skin), ..
             } = pending.stage
@@ -284,6 +304,14 @@ impl WinitApp {
             let ProfileChangeStage::WaitingForIr { prepared, select_skin } = pending.stage else {
                 unreachable!()
             };
+            if self.skin.skin_pipeline.uploaded_screen_size_is_stale(&select_skin)
+                && let Some(generation) = self.retry_skin_for_screen_size(SkinKind::Select)
+            {
+                pending.stage =
+                    ProfileChangeStage::WaitingForSkin { prepared, generation, uploaded: None };
+                self.jobs.profile_change = Some(pending);
+                return;
+            }
             let result = self.install_profile(*prepared, *select_skin);
             self.restart_profile_ir_sync();
             self.finish_profile_change(&pending.action, result);

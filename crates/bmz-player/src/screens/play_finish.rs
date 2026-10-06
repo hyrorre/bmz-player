@@ -505,6 +505,8 @@ fn finish_session_snapshot_result(
             )?
         };
     let mut summary = ResultSummary::from_play_result(&result, &stored, &snapshot.chart);
+    summary.last_played_at =
+        score_data_changed.then_some(stored.played_at).filter(|date| *date > 0);
     summary.skin_attempt = snapshot.skin_attempt;
     // Result refers to the same pre-save record as its MYBEST score display.
     summary.skin_attempt.best_score_options =

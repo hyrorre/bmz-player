@@ -134,6 +134,8 @@ impl WinitApp {
                     .map(|document| document.result_ir_scope_binding)
                     .unwrap_or_default();
                 AppSceneSnapshot::Result(ResultSnapshot {
+                    screen_size: [0, 0],
+                    last_played_at: summary.last_played_at,
                     lr2_progress: if self.result.lr2_result_epoch
                         == Some(self.result.result_scene_started_at)
                     {

@@ -158,6 +158,9 @@ pub enum ResultIrState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResultSnapshot {
+    /// Physical output dimensions injected by Renderer before skin evaluation.
+    pub screen_size: [u32; 2],
+    pub last_played_at: Option<i64>,
     pub lr2_progress: bmz_skin_document::Lr2ResultProgress,
     /// アプリ起動からの経過時間。beatoraja number ref 27..29 に使う。
     pub operating_time_ms: i32,

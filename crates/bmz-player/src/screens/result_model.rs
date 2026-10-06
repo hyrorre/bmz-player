@@ -20,6 +20,8 @@ const RESULT_GAUGE_GRAPH_SAMPLE_MS: i32 = 500;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResultSummary {
+    /// This saved attempt's time, not the previous best. None for unsaved modes.
+    pub last_played_at: Option<i64>,
     pub clear_type: ClearType,
     pub skin_attempt: bmz_render::snapshot::SkinAttemptState,
     /// text ref 1 に渡すプレイ時ライバル/ターゲット名。
@@ -154,6 +156,7 @@ impl ResultSummary {
         let initial_bpm = metadata.initial_bpm as f32;
         Self {
             clear_type: result.clear_type,
+            last_played_at: None,
             skin_attempt: bmz_render::snapshot::SkinAttemptState {
                 effective_key_mode: Some(metadata.key_mode),
                 ln_mode_index: Some(crate::skin_extension::long_note_mode_index(

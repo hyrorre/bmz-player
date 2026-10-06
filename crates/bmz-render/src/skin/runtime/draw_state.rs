@@ -2,6 +2,7 @@ use super::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinDrawState {
+    pub screen_size: [u32; 2],
     pub lr2_result_flip: bool,
     pub lr2_select_mode_index: i32,
     pub elapsed_ms: i32,
@@ -98,6 +99,7 @@ pub struct SkinDrawState {
     pub judge_counts: DisplayJudgeCounts,
     pub player_stats: PlayerStatsSnapshot,
     pub score_date_sec: i64,
+    pub last_played_at: Option<i64>,
     pub course_result: CourseResultSkinSnapshot,
     pub gauge: f32,
     pub gauge_type: i32,
@@ -459,6 +461,7 @@ pub struct SkinDrawState {
 impl Default for SkinDrawState {
     fn default() -> Self {
         Self {
+            screen_size: [0, 0],
             lr2_result_flip: false,
             lr2_select_mode_index: -1,
             elapsed_ms: 0,
@@ -530,6 +533,7 @@ impl Default for SkinDrawState {
             judge_counts: DisplayJudgeCounts::default(),
             player_stats: PlayerStatsSnapshot::default(),
             score_date_sec: 0,
+            last_played_at: None,
             course_result: CourseResultSkinSnapshot::default(),
             gauge: 0.0,
             gauge_type: 2,

@@ -24,6 +24,7 @@ pub(in crate::plan) fn build_play_skin_state(
     let skin_lane_h = skin_lane_height_px(skin, snapshot.key_mode, skin_canvas_h);
 
     crate::skin::SkinDrawState {
+        screen_size: snapshot.screen_size,
         lr2_horizontal: skin
             .document()
             .and_then(|document| document.note.as_ref())

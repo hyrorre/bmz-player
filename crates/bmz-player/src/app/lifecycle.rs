@@ -242,6 +242,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     );
                 }
                 // 検索モード中はリサイズに合わせて IME 候補ウィンドウ位置を再計算する。
+                self.refresh_skin_screen_size();
                 self.update_search_ime_cursor_area();
             }
             WindowEvent::Focused(focused) => {

@@ -1,5 +1,26 @@
 use super::*;
 
+/// beatoraja numeric refs 243..249. A missing value uses Integer.MIN_VALUE
+/// for Lua; the number renderer separately treats that sentinel as absent.
+pub fn last_play_datetime_numbers(played_at: Option<i64>) -> [i32; 7] {
+    let Some(seconds) = played_at.filter(|seconds| *seconds > 0) else {
+        return [i32::MIN; 7];
+    };
+    let mut values = [i32::MIN; 7];
+    values[0] = i32::try_from(seconds).unwrap_or(i32::MIN);
+    if let Some(date) = unix_seconds_to_local_datetime(seconds) {
+        values[1..].copy_from_slice(&[
+            date.year,
+            date.month as i32,
+            date.day as i32,
+            date.hour as i32,
+            date.minute as i32,
+            date.second as i32,
+        ]);
+    }
+    values
+}
+
 pub(super) fn lookup_text(values: &[(TextSlot, String)], slot: TextSlot) -> String {
     values
         .iter()
@@ -175,4 +196,32 @@ pub(super) fn civil_from_days(days: i64) -> (i32, u32, u32) {
     let month = mp + if mp < 10 { 3 } else { -9 };
     let year = y + if month <= 2 { 1 } else { 0 };
     (year as i32, month as u32, day as u32)
+}
+
+#[cfg(test)]
+mod last_play_tests {
+    use super::*;
+
+    #[test]
+    fn last_play_calendar_uses_os_local_time_and_one_based_months() {
+        // Leap day and the signed 32-bit timestamp boundary; no TZ environment
+        // mutation, which would race the renderer's other datetime tests.
+        for seconds in [1_709_208_000, 2_147_483_648] {
+            let date = unix_seconds_to_local_datetime(seconds).unwrap();
+            let values = last_play_datetime_numbers(Some(seconds));
+            assert_eq!(
+                values[1..],
+                [
+                    date.year,
+                    date.month as i32,
+                    date.day as i32,
+                    date.hour as i32,
+                    date.minute as i32,
+                    date.second as i32
+                ]
+            );
+            assert!((1..=12).contains(&values[2]));
+            assert!((0..=23).contains(&values[4]));
+        }
+    }
 }

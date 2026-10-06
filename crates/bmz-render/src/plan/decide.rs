@@ -9,6 +9,7 @@ pub(super) fn plan_decide(
         let play_elapsed_ms =
             (snapshot.play_elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
         let mut state = crate::skin::SkinDrawState {
+            screen_size: snapshot.screen_size,
             elapsed_ms: play_elapsed_ms,
             start_input_ms: dynamic_timers.start_input_elapsed_ms(
                 play_elapsed_ms,

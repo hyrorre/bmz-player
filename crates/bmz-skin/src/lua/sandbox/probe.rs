@@ -2,6 +2,7 @@ use super::*;
 
 #[derive(Debug, Clone)]
 pub(super) struct MainStateProbe {
+    pub(super) screen_size: [u32; 2],
     pub(super) mode: MainStateProbeMode,
     pub(super) inferring: bool,
     pub(super) clean_runtime: bool,
@@ -49,6 +50,7 @@ pub(super) struct MainStateProbe {
 impl Default for MainStateProbe {
     fn default() -> Self {
         Self {
+            screen_size: [0, 0],
             mode: MainStateProbeMode::default(),
             inferring: false,
             clean_runtime: false,

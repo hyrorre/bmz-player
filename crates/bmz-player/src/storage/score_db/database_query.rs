@@ -1,6 +1,52 @@
 use super::*;
 
 impl ScoreDatabase {
+    /// Latest saved attempt, independent of the EX-score source. Batch this at
+    /// list loading time; callbacks/rendering must never query score.db.
+    pub fn last_played_times_for_charts(
+        &self,
+        keys: &[ScoreKey],
+    ) -> Result<HashMap<ScoreKey, i64>> {
+        let mut found = HashMap::new();
+        let mut seen = HashSet::new();
+        let keys: Vec<_> = keys.iter().copied().filter(|key| seen.insert(*key)).collect();
+        for chunk in keys.chunks(SCORE_KEY_LOOKUP_BATCH_SIZE) {
+            let placeholders =
+                std::iter::repeat_n("(?, ?, ?, ?)", chunk.len()).collect::<Vec<_>>().join(", ");
+            let sql = format!(
+                "WITH requested(chart_sha256, ln_policy, double_option, rule_mode) AS (VALUES {placeholders})
+                 SELECT r.chart_sha256, r.ln_policy, r.double_option, r.rule_mode,
+                    MAX(COALESCE((SELECT MAX(h.played_at) FROM score_history h
+                        WHERE h.chart_sha256 = r.chart_sha256 AND h.ln_policy = r.ln_policy
+                          AND h.double_option = r.double_option
+                          AND CASE h.rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
+                              WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END = r.rule_mode
+                          AND h.autoplay = 0), 0), COALESCE(u.played_at, 0))
+                 FROM requested r LEFT JOIN score_unrecorded_plays u
+                 ON u.chart_sha256 = r.chart_sha256 AND u.ln_policy = r.ln_policy
+                    AND u.double_option = r.double_option AND u.rule_mode = r.rule_mode"
+            );
+            let values = score_key_query_params(chunk);
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map(params_from_iter(values.iter()), |row| {
+                let key = ScoreKey::with_options(
+                    hex_to_hash::<32>(&row.get::<_, String>(0)?)?,
+                    ln_policy_from_row(row, 1)?,
+                    double_option_from_row(row, 2)?,
+                    rule_mode_from_row(row, 3)?,
+                );
+                Ok((key, row.get::<_, i64>(4)?))
+            })?;
+            for row in rows {
+                let (key, date) = row?;
+                if date > 0 {
+                    found.insert(key, date);
+                }
+            }
+        }
+        Ok(found)
+    }
+
     pub fn best_ex_score(&self, key: ScoreKey) -> Result<Option<u32>> {
         self.conn
             .query_row(

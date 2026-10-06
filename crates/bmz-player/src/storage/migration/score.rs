@@ -1190,4 +1190,25 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
                 ADD COLUMN replay_source_fingerprint TEXT NOT NULL DEFAULT '';",
         ],
     },
+    Migration {
+        version: 31,
+        // Normal attempts remain derived from history so deletion/reconciliation
+        // cannot leave a stale timestamp. Only clear-only attempts need storage.
+        statements: &[
+            "CREATE TABLE score_unrecorded_plays (
+                chart_sha256 TEXT NOT NULL,
+                ln_policy TEXT NOT NULL,
+                double_option TEXT NOT NULL,
+                rule_mode TEXT NOT NULL,
+                played_at INTEGER NOT NULL,
+                PRIMARY KEY(chart_sha256, ln_policy, double_option, rule_mode)
+            );",
+            "INSERT INTO score_unrecorded_plays
+             SELECT chart_sha256, ln_policy, double_option, rule_mode, played_at
+             FROM score_best WHERE best_score_history_id IS NULL AND played_at > 0;",
+            "CREATE INDEX idx_score_history_last_play
+             ON score_history(chart_sha256, ln_policy, double_option, rule_mode, played_at)
+             WHERE autoplay = 0;",
+        ],
+    },
 ];

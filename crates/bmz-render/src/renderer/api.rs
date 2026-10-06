@@ -441,6 +441,14 @@ impl Renderer {
         gpu.resize(size)
     }
 
+    /// Final output dimensions, independent of skin coordinates and internal scaling.
+    pub fn render_target_size(&self) -> [u32; 2] {
+        self.gpu.as_ref().map_or([0, 0], |gpu| {
+            let size = gpu.surface_size();
+            [size.width, size.height]
+        })
+    }
+
     pub fn render_scene(&mut self, scene: AppSceneSnapshot) -> Result<()> {
         self.render_scene_status(scene).map(|_| ())
     }
@@ -452,7 +460,15 @@ impl Renderer {
 
     /// Evaluate the scene exactly once before uploading assets needed by the
     /// resulting plan. Call `render_last_plan` to submit the prepared frame.
-    pub fn prepare_scene(&mut self, scene: AppSceneSnapshot) {
+    pub fn prepare_scene(&mut self, mut scene: AppSceneSnapshot) {
+        let size = self.render_target_size();
+        match &mut scene {
+            AppSceneSnapshot::Select(snapshot) => snapshot.screen_size = size,
+            AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
+                snapshot.screen_size = size
+            }
+            AppSceneSnapshot::Result(snapshot) => snapshot.screen_size = size,
+        }
         let entering_scene = self.last_scene.as_ref().is_none_or(|previous| {
             std::mem::discriminant(previous) != std::mem::discriminant(&scene)
         });

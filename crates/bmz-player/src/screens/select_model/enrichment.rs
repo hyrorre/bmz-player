@@ -57,6 +57,7 @@ fn chart_items_with_optional_table_enrichment(
         })
         .collect();
     let replay_slot_map = replay_slot_map(score_db, &keys)?;
+    let last_played = score_db.last_played_times_for_charts(&keys)?;
     let chart_ids: Vec<i64> = all_charts.iter().map(|c| c.chart_id).collect();
     let mut analysis_map = library_db.chart_analysis_summaries_by_chart_ids(&chart_ids)?;
 
@@ -132,6 +133,7 @@ fn chart_items_with_optional_table_enrichment(
             entry_sha256: None,
             download_metadata: ChartDownloadMetadata::default(),
             best_score,
+            last_played_at: last_played.get(&score_key).copied(),
             replay_slots,
             favorite_chart: false,
             favorite_song: false,

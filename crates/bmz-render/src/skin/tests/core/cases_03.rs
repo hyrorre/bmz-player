@@ -1,6 +1,44 @@
 use super::*;
 
 #[test]
+fn last_play_numbers_keep_missing_sentinel_for_lua_and_hide_number_images() {
+    let document: SkinDocument = serde_json::from_value(serde_json::json!({
+        "w": 100, "h": 100,
+        "value": [{"id":"date", "src":1, "w":100, "h":10, "divx":10, "digit":10, "ref":243}],
+        "destination": [{"id":"date", "dst":[{"w":10,"h":10}]}]
+    }))
+    .unwrap();
+    let sources = HashMap::from([(
+        "1".to_owned(),
+        SkinDocumentTexture {
+            source_id: "1".to_owned(),
+            texture: SkinTextureId(1),
+            source_size: SkinImageSize { width: 100.0, height: 10.0 },
+        },
+    )]);
+    let mut state = SkinDrawState::default();
+    for date in [None, Some(0), Some(-1)] {
+        state.last_played_at = date;
+        for id in 243..=249 {
+            assert_eq!(skin_state_number(id, &state), None);
+            assert_eq!(lua_main_state_number(id, &state), i64::from(i32::MIN));
+        }
+        assert!(
+            document.static_render_items(&sources, &state, &SkinTextState::default()).is_empty()
+        );
+    }
+    state.last_played_at = Some(1_700_000_000);
+    assert!(!document.static_render_items(&sources, &state, &SkinTextState::default()).is_empty());
+    state.last_played_at = Some(i64::from(i32::MAX));
+    assert_eq!(lua_main_state_number(243, &state), i64::from(i32::MAX));
+    state.last_played_at = Some(i64::from(i32::MAX) + 1);
+    assert_eq!(lua_main_state_number(243, &state), i64::from(i32::MIN));
+    assert!(document.static_render_items(&sources, &state, &SkinTextState::default()).is_empty());
+    assert_eq!(lua_main_state_number(244, &state), 2038);
+    assert_eq!(lua_main_state_number(245, &state), 1);
+}
+
+#[test]
 fn sudden_slider_draws_above_disappear_line() {
     let document: SkinDocument = serde_json::from_str(
             r#"

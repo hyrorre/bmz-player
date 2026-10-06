@@ -256,6 +256,7 @@ impl WinitApp {
             selected_row.replay_slots = self.selected_chart_replay_slots();
         }
         SelectSnapshot {
+            screen_size: [0, 0],
             time: self.select_time(),
             player_name: String::new(),
             current_fps: 0,
@@ -477,6 +478,13 @@ impl WinitApp {
                     row.best_score.as_ref().map_or(0, |score| score.played_at)
                 }
                 _ => 0,
+            },
+            last_played_at: match selected {
+                Some(SelectItem::Chart(row)) => row.last_played_at,
+                Some(SelectItem::Course(row)) => {
+                    row.best_score.as_ref().and_then(|score| score.last_played_at)
+                }
+                _ => None,
             },
         }
     }

@@ -1,6 +1,90 @@
 use super::*;
 
 #[test]
+fn select_custom_timers_advance_before_helpers_and_destination_gates_once_per_frame() {
+    let root = unique_test_dir("bmz-select-custom-timers");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("skin.lua");
+    fs::write(
+        &path,
+        r#"
+        local s = require('main_state')
+        local frames = 0
+        return {type=5, w=1280, h=720,
+            customTimers={
+                {id=10001, timer=function() return 0 end},
+                {id=10002},
+                {id=10003, timer=function()
+                    frames=frames+1
+                    s.set_timer(10002, s.time()<6000000 and 0 or s.timer_off_value)
+                end}
+            },
+            text={
+                {id='gate',size=24,constantText='ON'},
+                {id='helpers',size=24,value=function()
+                    assert(s.timer_is_on(10001) and not s.timer_is_off(10001))
+                    if s.time()>=6000000 then
+                        assert(s.timer_is_off(10002) and s.timer_elapsed(10002)==-1)
+                    end
+                    return string.format('%d:%d:%.3f:%d', s.timer_elapsed(10001),
+                        s.timer_elapsed_ms(10001), s.timer_elapsed_seconds(10001), frames)
+                end}
+            },
+            destination={
+                {id='gate',timer=10002,dst={{x=0,y=0,w=100,h=24}}},
+                {id='helpers',dst={{x=0,y=40,w=800,h=24}}}
+            }
+        }
+        "#,
+    )
+    .unwrap();
+    for mode in [bmz_skin::LuaSkinRuntimeMode::Auto, bmz_skin::LuaSkinRuntimeMode::Compat] {
+        let loaded = bmz_skin::load_lua_skin_with_runtime_state(
+            &path,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState { runtime_mode: mode, ..Default::default() },
+        )
+        .unwrap();
+        let mut context = SkinContext::from_manifest_and_document(
+            bmz_render::skin::default_skin_manifest(),
+            loaded.document,
+            [],
+        );
+        let adapter = Arc::new(LuaSkinDrawRuntimeAdapter::new(loaded.lua_runtime.unwrap()));
+        context.set_lua_draw_runtime(Some(adapter.clone()));
+        for (frame, (ms, on)) in [(5000, true), (5000, true), (6000, false)].into_iter().enumerate()
+        {
+            let snapshot =
+                bmz_render::scene::SelectSnapshot { time: TimeUs(ms * 1000), ..Default::default() };
+            context.begin_frame();
+            for _ in 0..2 {
+                let texts = context
+                    .select_document_items(&snapshot)
+                    .into_iter()
+                    .filter_map(|item| {
+                        if let SkinRenderItem::Text { text, .. } = item { Some(text) } else { None }
+                    })
+                    .collect::<Vec<_>>();
+                let mut expected = Vec::new();
+                if on {
+                    expected.push("ON".to_string());
+                }
+                expected.push(format!(
+                    "{}:{ms}:{:.3}:{}",
+                    ms * 1000,
+                    ms as f64 / 1000.0,
+                    frame + 1
+                ));
+                assert_eq!(texts, expected, "{mode:?} frame={frame}");
+            }
+        }
+        assert_eq!(adapter.runtime.lock().unwrap().as_ref().unwrap().failure_log_count(), 0);
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn custom_timers_reach_rendering_before_draw_and_are_shared_by_render_passes() {
     let root = unique_test_dir("bmz-render-custom-timers");
     fs::create_dir_all(&root).unwrap();

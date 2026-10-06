@@ -303,6 +303,8 @@ mod skin_catalog;
 mod skin_flow_profile;
 #[path = "app/skin_flow/reload.rs"]
 mod skin_flow_reload;
+#[path = "app/skin_flow/screen_size.rs"]
+mod skin_flow_screen_size;
 #[path = "app/skin_flow/upload.rs"]
 mod skin_flow_upload;
 #[path = "app/skin_flow/video.rs"]

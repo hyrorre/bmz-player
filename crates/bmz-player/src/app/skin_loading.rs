@@ -233,6 +233,7 @@ pub(super) fn reload_skin_textures(
     skin: &SkinConfig,
     lua_runtime_mode: bmz_skin::LuaSkinRuntimeMode,
     experimental_detail_options: bool,
+    select_last_played_at: Option<i64>,
 ) -> (bool, bool, bool) {
     let mut pending_select = false;
     let mut pending_decide = false;
@@ -301,7 +302,11 @@ pub(super) fn reload_skin_textures(
                     if trimmed.is_empty() { BTreeMap::new() } else { files.clone() },
                     lua_runtime_state_with_mode(
                         lua_runtime_state_with_skin_offsets(
-                            lua_runtime_state_for_frontend(player_name, ir_name),
+                            lua_runtime_state_for_frontend_last_play(
+                                player_name,
+                                ir_name,
+                                if kind == SkinKind::Select { select_last_played_at } else { None },
+                            ),
                             offsets,
                         ),
                         lua_runtime_mode,
@@ -358,6 +363,19 @@ pub(super) fn apply_json_skin_sync(
         return Vec::new();
     };
     let library_roots = app_paths.skin_library_roots();
+    let mut runtime_state = runtime_state.clone();
+    runtime_state.screen_size = renderer.render_target_size();
+    pipeline.record_screen_request(
+        SkinDecodeRequest::new(
+            pipeline.generation(kind),
+            path.to_path_buf(),
+            kind,
+            options.clone(),
+            files.clone(),
+            runtime_state.clone(),
+        )
+        .with_library_roots(library_roots.clone()),
+    );
     let decode_started_at = Instant::now();
     let decoded = match decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
         pinned_sources: None,
@@ -365,7 +383,7 @@ pub(super) fn apply_json_skin_sync(
         kind,
         options,
         files,
-        runtime_state,
+        runtime_state: &runtime_state,
         library_roots: &library_roots,
         document_cache: None,
         source_cache: None,
@@ -396,6 +414,7 @@ pub(super) fn apply_json_skin_sync(
         "startup synchronous skin decode complete"
     );
     let video_sources = skin_video_sources_from_decoded(&decoded);
+    let load_dependencies = decoded.load_dependencies.clone();
     let install_started_at = Instant::now();
     if let Err(error) = install_decoded_skin(renderer, decoded, manifest.clone()) {
         pipeline.record_load_result(path, Some(format!("{error:#}")));
@@ -413,5 +432,6 @@ pub(super) fn apply_json_skin_sync(
         "startup synchronous skin install complete"
     );
     pipeline.record_load_result(path, None);
+    pipeline.record_screen_dependencies(kind, load_dependencies);
     video_sources
 }

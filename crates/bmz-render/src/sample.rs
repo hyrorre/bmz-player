@@ -36,6 +36,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         .collect();
 
     AppSceneSnapshot::Select(SelectSnapshot {
+        screen_size: [0, 0],
         time: TimeUs(12_345_000),
         player_name: "Sample Player".to_string(),
         current_fps: 60,
@@ -56,6 +57,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         bar_scroll_progress: 0.0,
         selected_chart_id: Some(1),
         selected_score_date_sec: 0,
+        last_played_at: None,
         selected_replay_slot: Some(0),
         selected_title: "Sample BMS".to_string(),
         hispeed: 2.0,
@@ -211,6 +213,8 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
 
 pub fn sample_result_scene() -> AppSceneSnapshot {
     AppSceneSnapshot::Result(ResultSnapshot {
+        screen_size: [0, 0],
+        last_played_at: None,
         lr2_progress: Default::default(),
         operating_time_ms: 12_345,
         player_name: "Sample Player".to_string(),

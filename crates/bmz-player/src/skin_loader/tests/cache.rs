@@ -1,6 +1,49 @@
 use super::*;
 
 #[test]
+fn screen_dimensions_invalidate_only_documents_with_load_time_reads() {
+    let root = unique_test_dir("screen-dimensions-cache");
+    fs::create_dir_all(&root).unwrap();
+    for (name, source, dependent) in [
+        (
+            "dependent",
+            "local s=require('main_state'); return {type=5,name=tostring(s.screen_width()/s.screen_height())}",
+            true,
+        ),
+        ("independent", "return {type=5,name='independent'}", false),
+    ] {
+        let path = root.join(format!("{name}.lua"));
+        fs::write(&path, source).unwrap();
+        let cache = Arc::new(Mutex::new(SkinDocumentCache::default()));
+        let decode = |screen_size| {
+            decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
+                &path,
+                SkinKind::Select,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &LuaLoadRuntimeState { screen_size, ..Default::default() },
+                Some(cache.clone()),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        };
+        let first = decode([1920, 1080]);
+        assert_eq!(first.load_dependencies.screen_size.is_some(), dependent);
+        assert_eq!(decode([1920, 1080]).stats.document_cache_hits, 1);
+        let resized = decode([800, 600]);
+        assert_eq!(resized.stats.document_cache_hits, usize::from(!dependent));
+        if dependent {
+            assert_ne!(first.document.name, resized.document.name);
+            assert_eq!(resized.load_dependencies.screen_size, Some([800, 600]));
+        }
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn lr2_transparency_separates_source_and_texture_caches() {
     let root = unique_test_dir("lr2-color-key-cache");
     std::fs::create_dir_all(&root).unwrap();

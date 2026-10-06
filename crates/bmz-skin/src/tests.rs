@@ -30,6 +30,7 @@ fn unique_test_dir(name: &str) -> std::path::PathBuf {
 
 #[derive(Default)]
 struct TestLuaMainState {
+    screen_size: [u32; 2],
     options: BTreeMap<i32, bool>,
     numbers: BTreeMap<i32, i64>,
     floats: BTreeMap<i32, f64>,
@@ -43,6 +44,10 @@ struct TestLuaMainState {
 }
 
 impl LuaMainState for TestLuaMainState {
+    fn screen_size(&self) -> [u32; 2] {
+        self.screen_size
+    }
+
     fn result_panel(&self) -> Option<i32> {
         self.result_panel
     }

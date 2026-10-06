@@ -379,6 +379,10 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
         }
         390..=399 => ir_ranking_entry(&state.ir_ranking, ref_id - 390).and_then(|entry| entry.rank),
         201 => None,
+        243..=249 => {
+            let value = last_play_datetime_numbers(state.last_played_at)[(ref_id - 243) as usize];
+            (value != i32::MIN).then_some(i64::from(value))
+        }
         // NUMBER_RIVAL_SCORE / MAXCOMBO / MISSCOUNT (IR ライバルベスト)。
         271 => state.rival_ex_score,
         275 => state.rival_max_combo,

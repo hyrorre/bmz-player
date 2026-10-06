@@ -49,6 +49,41 @@ fn profile_select_skin_rejects_failure_stale_wrong_scene_and_missing_manifest() 
 }
 
 #[test]
+fn screen_dimensions_profile_retry_replaces_only_the_waiting_skin_generation() {
+    let data = ProfileTestDir::new();
+    drop(data.boot());
+    let action = ProfileManagerAction::Switch("default".into());
+    let prepared = prepare_profile_action(&data.paths, &action).unwrap().unwrap();
+    let mut change = PendingProfileChange {
+        action,
+        stage: ProfileChangeStage::WaitingForSkin {
+            prepared: Box::new(prepared),
+            generation: 4,
+            uploaded: Some(Box::new(select_upload(4, "old-size"))),
+        },
+    };
+    change.replace_skin_generation(3, 5);
+    assert!(matches!(
+        &change.stage,
+        ProfileChangeStage::WaitingForSkin { generation: 4, uploaded: Some(_), .. }
+    ));
+    change.replace_skin_generation(4, 5);
+    assert!(matches!(
+        &change.stage,
+        ProfileChangeStage::WaitingForSkin { generation: 5, uploaded: None, .. }
+    ));
+    assert!(change.stage_uploaded_skin(select_upload(4, "stale")).is_some());
+    assert!(change.stage_uploaded_skin(select_upload(5, "new-size")).is_none());
+    let ProfileChangeStage::WaitingForSkin { prepared, uploaded: Some(uploaded), .. } =
+        change.stage
+    else {
+        panic!("waiting profile must be retained")
+    };
+    assert_eq!(prepared.profile.config.id, "default");
+    assert_eq!(uploaded.uploaded.unwrap().document.name, "new-size");
+}
+
+#[test]
 fn profile_select_skin_preparation_uses_target_settings_and_fresh_lua() {
     let data = ProfileTestDir::new();
     let root = data.paths.resource_dir.join("skins/test");

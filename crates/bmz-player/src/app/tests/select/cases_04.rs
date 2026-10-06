@@ -472,6 +472,7 @@ fn select_snapshot_rows_exposes_effective_bms_scale_total() {
 fn select_snapshot_rows_copies_course_best_score_summary() {
     let mut row = select_course_row(2, 2);
     row.best_score = Some(crate::storage::score_db::CourseBestScore {
+        last_played_at: None,
         course_score_id: 99,
         course_hash: "course-hash".to_string(),
         ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,

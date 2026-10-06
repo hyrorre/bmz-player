@@ -268,6 +268,8 @@ fn result_plan_uses_skin_document_for_result_and_course_result_types() {
         };
         let skin = SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
         let snapshot = ResultSnapshot {
+            screen_size: [0, 0],
+            last_played_at: None,
             lr2_progress: Default::default(),
             operating_time_ms: 0,
             player_name: String::new(),
@@ -511,6 +513,8 @@ fn result_plan_supplies_result_judge_graph_data_to_skin_document() {
         std::iter::empty(),
     );
     let snapshot = ResultSnapshot {
+        screen_size: [0, 0],
+        last_played_at: None,
         lr2_progress: Default::default(),
         operating_time_ms: 0,
         player_name: String::new(),

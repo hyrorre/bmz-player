@@ -9,7 +9,7 @@ use crate::skin_loader::{
     SkinGpuTextureCache, SkinKind, SkinSourceAssetCache,
 };
 
-use super::{PendingSkinResult, PendingUploadResult};
+use super::{PendingSkinResult, PendingUploadResult, SkinDecodeRequest};
 
 pub(super) const MAX_PENDING_SKIN_UPLOADS: usize = 1;
 
@@ -56,6 +56,9 @@ struct PendingSkinKinds {
 /// Rendererへのinstallとscene固有のskin選択は `WinitApp` に残し、この型は
 /// pipelineのライフサイクルとstale結果判定に必要な状態だけを所有する。
 pub(super) struct SkinPipelineRuntime {
+    pub(super) screen_size: [u32; 2],
+    screen_requests: Mutex<HashMap<SkinKind, SkinDecodeRequest>>,
+    screen_dependencies: Mutex<HashMap<SkinKind, (u64, bmz_skin::SkinLoadDependencies)>>,
     load_errors: Mutex<HashMap<std::path::PathBuf, String>>,
     pub(super) decode_tx: mpsc::Sender<PendingSkinResult>,
     pub(super) decode_rx: Option<Receiver<PendingSkinResult>>,
@@ -81,6 +84,9 @@ impl SkinPipelineRuntime {
         let (decode_tx, decode_rx) = mpsc::channel();
         let (upload_tx, upload_rx) = mpsc::sync_channel(MAX_PENDING_SKIN_UPLOADS);
         Self {
+            screen_size: [0, 0],
+            screen_requests: Mutex::new(HashMap::new()),
+            screen_dependencies: Mutex::new(HashMap::new()),
             load_errors: Mutex::new(HashMap::new()),
             decode_tx,
             decode_rx: Some(decode_rx),
@@ -115,6 +121,68 @@ impl SkinPipelineRuntime {
             }
         }
         workers.push(worker);
+    }
+
+    pub(super) fn record_screen_request(&self, request: SkinDecodeRequest) {
+        if let Ok(mut requests) = self.screen_requests.lock() {
+            requests.insert(request.kind, request);
+        }
+    }
+
+    pub(super) fn screen_request(&self, kind: SkinKind) -> Option<SkinDecodeRequest> {
+        self.screen_requests
+            .lock()
+            .ok()?
+            .get(&kind)
+            .cloned()
+            .filter(|request| request.generation == self.generation(kind))
+    }
+
+    pub(super) fn record_screen_dependencies(
+        &self,
+        kind: SkinKind,
+        dependencies: bmz_skin::SkinLoadDependencies,
+    ) {
+        if let Ok(mut installed) = self.screen_dependencies.lock() {
+            installed.insert(kind, (self.generation(kind), dependencies));
+        }
+    }
+
+    pub(super) fn screen_dependencies(
+        &self,
+        kind: SkinKind,
+    ) -> Option<bmz_skin::SkinLoadDependencies> {
+        self.screen_dependencies
+            .lock()
+            .ok()?
+            .get(&kind)
+            .cloned()
+            .filter(|(generation, _)| *generation == self.generation(kind))
+            .map(|(_, dependencies)| dependencies)
+    }
+
+    pub(super) fn screen_load_needs_refresh(&self, kind: SkinKind) -> bool {
+        let Some(request) = self.screen_request(kind) else { return false };
+        self.screen_dependencies(kind)
+            .is_some_and(|dependencies| dependencies.screen_size_changed(self.screen_size))
+            || (request.runtime_state.screen_size == [0, 0]
+                && self.screen_size != [0, 0]
+                && self.load_error(&request.path).is_some())
+    }
+
+    pub(super) fn uploaded_screen_size_is_stale(&self, pending: &PendingUploadResult) -> bool {
+        if pending.generation != self.generation(pending.kind) {
+            return false;
+        }
+        match &pending.uploaded {
+            Ok(uploaded) => uploaded.load_dependencies.screen_size_changed(self.screen_size),
+            Err(_) => {
+                self.screen_size != [0, 0]
+                    && self
+                        .screen_request(pending.kind)
+                        .is_some_and(|request| request.runtime_state.screen_size == [0, 0])
+            }
+        }
     }
 
     /// GPU/cache を持つ worker が native driver の終了処理まで生き残らないようにする。
@@ -227,7 +295,9 @@ impl SkinPipelineRuntime {
         let Some(dependencies) = self.result_load_dependencies.as_ref() else {
             return false;
         };
-        if dependencies.numbers_changed(&current.number_values) {
+        if dependencies.numbers_changed(&current.number_values)
+            || dependencies.screen_size_changed(current.screen_size)
+        {
             return true;
         }
         if pending_refresh {
@@ -260,6 +330,8 @@ impl Drop for SkinPipelineRuntime {
 
 #[cfg(test)]
 mod result_refresh_tests;
+#[cfg(test)]
+mod screen_size_tests;
 
 #[cfg(test)]
 mod tests {

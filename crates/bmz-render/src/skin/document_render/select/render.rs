@@ -152,13 +152,16 @@ macro_rules! skin_document_render_select_render_methods {
                     planning.enabled_options.as_ref()
                 });
             if let Some(runtime) = lua_draw_runtime {
+                let text_values = Arc::new(lua_main_state_text_values(&state, &text));
+                state.lua_custom_timer_us =
+                    runtime.advance_custom_timers(&state, enabled_options, &text_values);
                 state.lua_runtime = Some(SkinLuaRuntimeContext {
                     runtime,
                     enabled_options: planning.as_ref().map_or_else(
                         || Arc::from(enabled_options),
                         |planning| Arc::clone(&planning.enabled_options),
                     ),
-                    text_values: Arc::new(lua_main_state_text_values(&state, &text)),
+                    text_values,
                 });
             }
             with_lua_render_state(&state, || {
@@ -451,6 +454,7 @@ macro_rules! skin_document_render_select_render_methods {
                 .then(|| snapshot.closing_detail_options())
                 .flatten();
             let mut state = SkinDrawState {
+                screen_size: snapshot.screen_size,
                 elapsed_ms,
                 start_input_ms,
                 current_fps: snapshot.current_fps,
@@ -516,6 +520,7 @@ macro_rules! skin_document_render_select_render_methods {
                 hispeed_auto_adjust: snapshot.hispeed_auto_adjust,
                 player_stats: snapshot.player_stats.clone(),
                 score_date_sec: snapshot.selected_score_date_sec,
+                last_played_at: snapshot.last_played_at,
                 select_assist_index: select_assist_index(&snapshot.assist),
                 assist_flags: snapshot.assist_flags,
                 assist_extra_note_depth: snapshot.assist_extra_note_depth,

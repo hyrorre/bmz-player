@@ -56,8 +56,9 @@ pub fn run(options: VideoExportOptions, paths: &AppPaths, profile_id: Option<&st
     } else {
         paths.resolve_path_ref(selection.path)?
     };
-    let runtime_state =
+    let mut runtime_state =
         crate::app::offline_skin_load_state(&prepared.play, &prepared.profile, prepared.best);
+    runtime_state.screen_size = renderer.render_target_size();
     let mut decoded = crate::skin_loader::decode_beatoraja_skin_request(
         crate::skin_loader::BeatorajaSkinDecodeRequest {
             pinned_sources: None,

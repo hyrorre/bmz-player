@@ -196,6 +196,8 @@ pub struct SelectChartRow {
     pub entry_sha256: Option<[u8; 32]>,
     pub download_metadata: ChartDownloadMetadata,
     pub best_score: Option<BestScoreSummary>,
+    /// Most recent saved attempt, independent of the best-score timestamp.
+    pub last_played_at: Option<i64>,
     pub replay_slots: [bool; 4],
     pub favorite_chart: bool,
     pub favorite_song: bool,

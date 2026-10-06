@@ -17,6 +17,79 @@ fn callback(runtime: &LuaSkinRuntime, path: &str) -> usize {
 }
 
 #[test]
+fn screen_dimensions_reach_header_load_and_captured_runtime_accessors() {
+    for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
+        let mut loaded = load(
+            r#"
+            local s = require('main_state')
+            local width, height = s.screen_width, s.screen_height
+            -- Header and document must see the same real size; division by a
+            -- neutral header height must not produce infinity or an exception.
+            assert(height() > 0)
+            local aspect = width() / height()
+            assert(aspect == 1920 / 1080)
+            return {type=5, name=tostring(width()) .. ':' .. tostring(height()),
+                value={{id='width',value=function() return width() end},
+                       {id='height',value=function() return height() end}}}
+            "#,
+            &LuaLoadRuntimeState {
+                runtime_mode: mode,
+                screen_size: [1920, 1080],
+                ..Default::default()
+            },
+        );
+        assert_eq!(loaded.document.name, "1920:1080");
+        assert_eq!(loaded.dependencies.screen_size, Some([1920, 1080]));
+        let runtime = loaded.lua_runtime.as_mut().unwrap();
+        let width = callback(runtime, "$.value[1].value");
+        let height = callback(runtime, "$.value[2].value");
+        for size in [[1920, 1080], [2560, 1440], [0, 0]] {
+            let state = TestLuaMainState { screen_size: size, ..Default::default() };
+            assert_eq!(runtime.evaluate_number(width, &state), Some(f64::from(size[0])));
+            assert_eq!(runtime.evaluate_number(height, &state), Some(f64::from(size[1])));
+        }
+        assert_eq!(runtime.failure_log_count(), 0);
+    }
+}
+
+#[test]
+fn screen_dimensions_read_only_in_header_are_load_dependencies() {
+    let loaded = load(
+        r#"
+        if skin_config == nil then
+            local s = require('main_state')
+            assert(s.screen_width() / s.screen_height() == 16 / 9)
+            return {type=5, property={{name='size', item={{name='wide',op=900}}}}}
+        end
+        return {type=5, name=tostring(skin_config.option.size)}
+        "#,
+        &LuaLoadRuntimeState { screen_size: [1920, 1080], ..Default::default() },
+    );
+    assert_eq!(loaded.dependencies.screen_size, Some([1920, 1080]));
+    assert!(loaded.lua_runtime.is_none());
+}
+
+#[test]
+fn screen_dimensions_runtime_only_reads_do_not_add_load_dependencies() {
+    for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
+        let mut loaded = load(
+            r#"
+            local s = require('main_state')
+            return {type=5, value={{id='width',value=function() return s.screen_width() end},
+                                  {id='height',value=function() return s.screen_height() end}}}
+            "#,
+            &LuaLoadRuntimeState { runtime_mode: mode, ..Default::default() },
+        );
+        assert_eq!(loaded.dependencies.screen_size, None);
+        let runtime = loaded.lua_runtime.as_mut().unwrap();
+        let width = callback(runtime, "$.value[1].value");
+        let height = callback(runtime, "$.value[2].value");
+        assert_eq!(runtime.evaluate_number(width, &TestLuaMainState::default()), Some(0.0));
+        assert_eq!(runtime.evaluate_number(height, &TestLuaMainState::default()), Some(0.0));
+    }
+}
+
+#[test]
 fn numbers_preserve_multiple_returns_load_dependencies_and_live_captured_accessors() {
     for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
         let mut loaded = load(

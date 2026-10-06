@@ -58,6 +58,8 @@ pub struct LoadedLuaSkinValue {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SkinLoadDependencies {
+    /// Physical output dimensions read while constructing the document.
+    pub screen_size: Option<[u32; 2]>,
     pub number_values: BTreeMap<i32, i32>,
     pub text_values: BTreeMap<i32, String>,
     pub option_values: BTreeMap<i32, bool>,
@@ -81,6 +83,10 @@ pub struct SkinLoadDependencies {
 }
 
 impl SkinLoadDependencies {
+    pub fn screen_size_changed(&self, size: [u32; 2]) -> bool {
+        self.screen_size.is_some_and(|loaded| loaded != size)
+    }
+
     /// Random/opaque loads still record the numeric values read during construction.
     /// Callback reads are deliberately not part of these dependencies.
     pub fn numbers_changed(&self, values: &BTreeMap<i32, i32>) -> bool {
@@ -120,6 +126,8 @@ pub enum LuaSkinRuntimeMode {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LuaLoadRuntimeState {
+    /// Physical output pixels; zero when no render target is attached.
+    pub screen_size: [u32; 2],
     pub runtime_mode: LuaSkinRuntimeMode,
     /// Previously resolved Random file choices for a refresh of the same scene.
     /// Empty on a new scene load; paths still pass through the skin sandbox.
@@ -171,6 +179,10 @@ impl LuaLoadRuntimeState {
 /// 実装側は renderer の snapshot などを借用してよい。Lua へ Rust オブジェクト
 /// 自体を渡さず、callback 実行中にこの accessor を同期的に読むだけにする。
 pub trait LuaMainState {
+    fn screen_size(&self) -> [u32; 2] {
+        [0, 0]
+    }
+
     /// BMZ Result panel: 0=inactive, 1=IR, 2=graph; None outside Result.
     fn result_panel(&self) -> Option<i32> {
         None

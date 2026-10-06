@@ -38,6 +38,7 @@ pub(super) fn lua_runtime_stub_number(ref_id: i32) -> i32 {
         21 => now.year,
         22 => now.month as i32,
         23 => now.day as i32,
+        243..=249 => i32::MIN,
         _ => 0,
     }
 }
@@ -47,6 +48,29 @@ pub(super) fn create_main_state_stub(
     probe: Arc<Mutex<MainStateProbe>>,
 ) -> mlua::Result<Value> {
     let table = lua.create_table()?;
+    for (index, field) in ["screen_width", "screen_height"].into_iter().enumerate() {
+        let probe = probe.clone();
+        table.set(
+            field,
+            lua.create_function(move |_, ()| {
+                let probe = probe
+                    .lock()
+                    .map_err(|_| mlua::Error::runtime("main_state probe lock poisoned"))?;
+                if probe.inferring {
+                    return Err(mlua::Error::runtime(
+                        "screen dimensions require runtime evaluation",
+                    ));
+                }
+                if let Some(dependencies) = &probe.load_dependencies {
+                    dependencies
+                        .lock()
+                        .map_err(|_| mlua::Error::runtime("load dependency lock poisoned"))?
+                        .screen_size = Some(probe.screen_size);
+                }
+                Ok(probe.screen_size[index])
+            })?,
+        )?;
+    }
     table.set("timer_off_value", i32::MIN)?;
     table.set(
         "set_timer",

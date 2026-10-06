@@ -317,7 +317,57 @@ callback内で呼ぶと現在フレームの値を取得します。`local numbe
 通常のビルドではチェックイン済みの表を使い、Javaや参照チェックアウトを必要としません。
 `floatvalue` 等の新しいスキーマやLua APIはこの対応には含みません。
 
+## 最終プレイ日時の数値ref
+
+| ref | 名前 | 値 |
+|---:|---|---|
+| 243 | `lastplay_timestamp` | Unix秒。1..2147483647 |
+| 244 | `lastplay_year` | ローカル時刻の年 |
+| 245 | `lastplay_month` | 月、1..12 |
+| 246 | `lastplay_day` | 日、1..31 |
+| 247 | `lastplay_hour` | 時、0..23 |
+| 248 | `lastplay_minute` | 分、0..59 |
+| 249 | `lastplay_second` | 秒、0..59 |
+
+Selectでは選択中の譜面またはコースの最終保存プレイ日時を返します。BEST更新が
+なくても更新し、Failedや履歴を作らないclear-only保存も含みます。Resultでは
+今回保存したattemptの日時です。Autoplay、Replay、Practice、保存禁止時のResult、
+フォルダ、Play / Decideで日時がない場合は欠損です。
+
+欠損はLuaの `number` / `numbers` では `-2147483648`、数字画像では非表示です。
+`243` は2038年の32bit上限を超えると欠損になりますが、`244..249` はOSが
+ローカル日時へ変換できる限り引き続き取得できます。値は起動環境のタイムゾーンを使います。
+`243` が `2147483647`（INT_MAX）ちょうどのときも、数字画像は既存のsentinel契約で
+非表示になります。Luaの `number` / `numbers` はその値を返します。
+`main_state.score_date_sec_time()` は従来どおり選択中の**BESTの日時**を返し、
+この最終日時とは分離します。保存・既存DB移行の詳細は [score-persistence.md](score-persistence.md) を参照します。
+
+```lua
+local state = require("main_state")
+local function last_play_text()
+    local y, m, d = state.numbers("lastplay_year", "lastplay_month", "lastplay_day")
+    if y == -2147483648 then return "プレイ記録なし" end
+    return string.format("%04d/%02d/%02d", y, m, d)
+end
+```
+
+選曲変更に追従する表示は `text[].value` などのcallback内で取得します。
+ロード時はそのロード要求の日時を使い、選択情報のない初期ロードは欠損です。
+
 ## Lua Runtime Compatibility Mode
+
+`main_state.screen_width()` / `main_state.screen_height()` は現在の描画先の物理pixel数を
+整数で返します。Select / Decide / Play / Resultで共通です。スキンの `w` / `h`、
+DPI補正後の論理寸法、内部描画解像度とは別で、動画exportでは出力動画の幅・高さになります。
+描画先が未接続のときは0です。
+
+headerと本体のロードは同じ寸法を使い、callback内では現在の寸法を参照します。
+`local width = main_state.screen_width` と関数を捕捉してもリサイズへ追従します。
+ロード時に寸法を読んで配置を構築したskinだけ、寸法変更時に再decodeします。
+runtime callback内でだけ読むskinは再decodeせず、closure stateを維持します。
+初回window生成前のロードで寸法に依存した場合やLuaロードに失敗した場合は、
+描画先の確定後に再試行します。非同期ロードの古い寸法の結果は適用しません。
+単独のheader走査・変換など描画先のない用途では0も扱えるように記述してください。
 
 通常の `auto` モードはLua functionをロード時に宣言的なref/式へ変換し、推論できない
 対応済みfieldだけ永続Lua VMのruntime callbackへ残す。スキン開発・beatoraja比較では

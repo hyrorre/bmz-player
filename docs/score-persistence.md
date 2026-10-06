@@ -133,6 +133,29 @@ beatoraja は lamp、EX score、average judge、min BP、max combo をそれぞ�
 BP / CB / combo だけが改善した場合の代表判定内訳・ghost・option/seed は BMZ と一致しない。
 また BMZ は average judge を best 項目として保存せず、代わりに CB を保持する。
 
+## 最終プレイ日時
+
+skin数値ref `243..249` はBESTの `played_at` と別に最終保存日時を返す。
+単曲はScoreKey（SHA-256 / LN policy / DOUBLE bucket / RuleMode）単位で、
+non-autoplay履歴の最大 `played_at` と、clear-only保存日時の大きい方を採用する。
+自己ベスト未更新やFailedも対象。保存しないAutoplay / Replay / Practice / 保存禁止の
+変換などは更新しない。Selectの一覧ロード時にバッチ取得し、描画時にはDBを読まない。
+Resultは今回保存に成功したattemptの日時を使い、非保存時は欠損とする。
+コースはcourse hash / LN policy / RuleMode単位で `replay_only = 0` のcourse attemptの
+最大日時を使う。コースのclear-only attemptも含む。
+
+score.db migration 31は、履歴を持たないclear-only日時を保存する
+`score_unrecorded_plays` 表と履歴検索indexを追加する。既存BEST日時は変更しない。
+通常履歴は都度MAXを集計するため、import日時補正や履歴cleanupに追従し、削除済み
+履歴の日時が残らない。clear-only日時は履歴cleanupでも保持する。
+
+移行時には既存履歴から最新日時を取得し、履歴由来のBESTを持たない行からは
+保存済み `played_at` をclear-only日時として移す。旧版ではclear-onlyを繰り返しても
+この値を更新しなかったため、旧DBの最初の日時しか残っていない場合や、通常履歴と
+混在する過去アシストの最終日時は復元できない。新たな保存以降は更新される。
+移行は追加のみでスコア・リプレイを削除しない。戻す場合は起動前に採ったscore.dbの
+整合したbackupへ復元する。`user_version` の手動巻き戻しは行わない。
+
 ## IR送信条件
 
 単曲 IR は、通常の履歴保存が成功して `score_history_id > 0` になった後でだけ enqueue

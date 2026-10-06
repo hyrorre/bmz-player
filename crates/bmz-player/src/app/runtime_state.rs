@@ -298,7 +298,7 @@ pub(super) struct SkinRuntimeState {
     pub(super) skin_header_checks: BTreeMap<String, Result<(), String>>,
     pub(super) default_skin_manifest: Option<SkinManifest>,
     /// skin decode/upload channel、共有cache、pending世代をまとめた非同期pipeline。
-    pub(super) skin_pipeline: SkinPipelineRuntime,
+    pub(super) skin_pipeline: Box<SkinPipelineRuntime>,
     pub(super) skin_video_sources: HashMap<SkinKind, Vec<ActiveSkinVideoSource>>,
     pub(super) pending_skin_render_probe: Option<PendingSkinRenderProbe>,
     /// 直近 install をリクエストしたプレイスキンの key_mode と設定 fingerprint。

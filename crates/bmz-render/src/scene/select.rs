@@ -2,6 +2,8 @@ use super::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectSnapshot {
+    /// Physical output dimensions injected by Renderer before skin evaluation.
+    pub screen_size: [u32; 2],
     pub time: TimeUs,
     /// beatoraja STRING_PLAYER (2) に渡す現在プロフィール名。
     pub player_name: String,
@@ -150,6 +152,7 @@ pub struct SelectSnapshot {
     pub replay_slot_rule_indices: [i64; 4],
     pub player_stats: PlayerStatsSnapshot,
     pub selected_score_date_sec: i64,
+    pub last_played_at: Option<i64>,
 }
 
 /// 選曲カーソル譜面に対する IR ライバル (最上位 1 名) のベストスコア。
@@ -193,6 +196,7 @@ impl SelectSnapshot {
 impl Default for SelectSnapshot {
     fn default() -> Self {
         Self {
+            screen_size: [0, 0],
             time: TimeUs::default(),
             player_name: String::new(),
             current_fps: 0,
@@ -284,6 +288,7 @@ impl Default for SelectSnapshot {
             replay_slot_rule_indices: [0; 4],
             player_stats: PlayerStatsSnapshot::default(),
             selected_score_date_sec: 0,
+            last_played_at: None,
         }
     }
 }

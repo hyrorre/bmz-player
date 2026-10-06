@@ -184,7 +184,7 @@ pub(super) fn missing_favorite_chart_item(
     record: FavoriteChartRecord,
     rule_mode: RuleMode,
 ) -> Result<SelectItem> {
-    let (best_score, replay_slots) =
+    let (best_score, replay_slots, last_played_at) =
         score_and_replays_for_missing_favorite(score_db, record.chart_sha256, rule_mode)?;
     Ok(SelectItem::Chart(SelectChartRow {
         chart: None,
@@ -195,6 +195,7 @@ pub(super) fn missing_favorite_chart_item(
         entry_sha256: Some(record.chart_sha256),
         download_metadata: ChartDownloadMetadata::default(),
         best_score,
+        last_played_at,
         replay_slots,
         favorite_chart: true,
         favorite_song: false,
@@ -208,7 +209,7 @@ pub(super) fn missing_favorite_song_item(
     record: FavoriteSongRecord,
     rule_mode: RuleMode,
 ) -> Result<SelectItem> {
-    let (best_score, replay_slots) =
+    let (best_score, replay_slots, last_played_at) =
         score_and_replays_for_missing_favorite(score_db, record.representative_sha256, rule_mode)?;
     Ok(SelectItem::Chart(SelectChartRow {
         chart: None,
@@ -219,6 +220,7 @@ pub(super) fn missing_favorite_song_item(
         entry_sha256: Some(record.representative_sha256),
         download_metadata: ChartDownloadMetadata::default(),
         best_score,
+        last_played_at,
         replay_slots,
         favorite_chart: false,
         favorite_song: true,
@@ -231,12 +233,13 @@ pub(super) fn score_and_replays_for_missing_favorite(
     score_db: &ScoreDatabase,
     sha256: [u8; 32],
     rule_mode: RuleMode,
-) -> Result<(Option<BestScoreSummary>, [bool; 4])> {
+) -> Result<(Option<BestScoreSummary>, [bool; 4], Option<i64>)> {
     let key = ScoreKey::new(sha256, LnScorePolicy::ForceLn).with_rule_mode(rule_mode);
     let best_score = score_db.best_scores_for_charts(&[key])?.into_iter().next();
     let mut replay_slots_map = replay_slot_map(score_db, &[key])?;
     let replay_slots = replay_slots_map.remove(&key).unwrap_or([false; 4]);
-    Ok((best_score, replay_slots))
+    let last_played_at = score_db.last_played_times_for_charts(&[key])?.remove(&key);
+    Ok((best_score, replay_slots, last_played_at))
 }
 
 pub(super) fn fallback_favorite_title(title_hint: &str, sha256: [u8; 32]) -> String {

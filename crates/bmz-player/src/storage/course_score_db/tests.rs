@@ -5,6 +5,29 @@ use crate::storage::migration::{SCORE_MIGRATIONS, run_migrations};
 
 const LN_POLICY: LnScorePolicy = LnScorePolicy::ForceLn;
 
+#[test]
+fn last_play_course_tracks_non_best_failed_attempts_and_excludes_replay_only() {
+    let mut conn = open_conn();
+    assert!(best_course_score(&conn, "date", LN_POLICY, RuleMode::Beatoraja).unwrap().is_none());
+    insert_course_score(&mut conn, &sample_score("date", 500, "Normal", 100)).unwrap();
+    insert_course_score(&mut conn, &sample_score("date", 100, "Failed", 200)).unwrap();
+    let replay = insert_course_score(&mut conn, &sample_score("date", 900, "Normal", 300)).unwrap();
+    conn.execute("UPDATE course_scores SET replay_only = 1 WHERE id = ?1", [replay]).unwrap();
+    let mut other = sample_score("date", 800, "Normal", 400);
+    other.ln_policy = LnScorePolicy::ForceCn;
+    insert_course_score(&mut conn, &other).unwrap();
+    other.ln_policy = LN_POLICY;
+    other.rule_mode = RuleMode::Dx;
+    insert_course_score(&mut conn, &other).unwrap();
+    let best = best_course_score(&conn, "date", LN_POLICY, RuleMode::Beatoraja).unwrap().unwrap();
+    assert_eq!(best.played_at, 100);
+    assert_eq!(best.last_played_at, Some(200));
+    let best = best_course_score_for_trophy(&conn, "date", LN_POLICY, RuleMode::Beatoraja, "gold")
+        .unwrap()
+        .unwrap();
+    assert_eq!(best.last_played_at, Some(200));
+}
+
 fn open_conn() -> Connection {
     let mut conn = Connection::open_in_memory().unwrap();
     super::super::common::configure_connection(&conn).unwrap();

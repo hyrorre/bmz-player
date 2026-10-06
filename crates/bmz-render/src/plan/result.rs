@@ -192,6 +192,7 @@ pub(super) fn build_result_skin_draw_state(
             .filter(|elapsed_after_rank| *elapsed_after_rank >= 0)
     };
     crate::skin::SkinDrawState {
+        screen_size: snapshot.screen_size,
         elapsed_ms,
         operating_time_ms: snapshot.operating_time_ms,
         current_fps: snapshot.current_fps,
@@ -264,6 +265,7 @@ pub(super) fn build_result_skin_draw_state(
         target_clear_index: snapshot.target_clear_type.map(|c| c as i64),
         select_clear_index: snapshot.clear_type as i64,
         result_failed: Some(snapshot.result_failed),
+        last_played_at: snapshot.last_played_at,
         autoplay: snapshot.autoplay,
         play_level: skin_level_number(&snapshot.play_level),
         table_song: !snapshot.table_text_primary.is_empty(),
