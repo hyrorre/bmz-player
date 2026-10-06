@@ -37,3 +37,25 @@ Releaseを再生成する。現在の契約は [linux-latency.md](../../docs/lin
 - fmt、linux-evdev付きcheck / all-targets Clippyが成功。
 - player全体は2190成功・40失敗・19 ignored。失敗したテスト集合は1件目の検証と同じで、
   通信制限17件と外部スキン23件。新しい失敗はない。
+
+## build metadataと再ビルド条件
+
+存在しない `BUILD-COMMIT` / `packed-refs` 等をCargoの監視対象に渡していたため、
+変更なしでも毎回build scriptとplayerが再コンパイルされていた。既存metadataだけを監視し、
+GitのHEAD・refパスはlinked worktreeも扱える `git rev-parse --git-path` で取得する。
+packed branchの次のcommitで作られるloose refは、作成前には既存の親ディレクトリを監視する。
+手順は [development.md](../../docs/development.md) に記載。
+
+- `scripts/test_build_identity.py` は実際のbuild.rsを小さなCargo workspaceで実行する。
+  通常checkout、linked worktree、manifestあり/なしのアーカイブの4テストで、修正前は
+  変更なしのビルドがfreshにならず全失敗、修正後は全成功。
+- packed refからのcommit、通常checkoutとworktreeのdetached HEAD、dirtyソース、
+  archive manifestの更新、overrideの設定・解除で識別情報が更新されることも確認。
+- fmt、linux-evdev付きcheck / all-targets Clippyが成功。
+- 最終のplayer全体テストはloopback通信可能な環境で2207成功・23失敗・19 ignored。
+  失敗集合は前2回の外部スキン23件と一致。
+  [先行記録](2026-10-06-linux-input-alternatives.md)にも同じ外部スキン環境の失敗が記録されている。
+- 直後の `cargo test -p bmz-player --locked --features linux-evdev --no-run` は
+  再コンパイルなしで0.19秒。これは当環境の無変更ビルドの確認であり、実行時の遅延計測ではない。
+- 今回はLinuxのplayer crateを検証。Windows / macOS実ビルド、Wayland非表示の実機操作、
+  PipeWire feature / 配布パッケージの再ビルド、workspace全体の再検証は未実施。

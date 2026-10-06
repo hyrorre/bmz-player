@@ -1,7 +1,8 @@
 fn main() {
-    // Source archives carry BUILD-COMMIT; Git checkouts track the real ref too.
-    for path in ["../../.git/HEAD", "../../.git/packed-refs", "../../BUILD-COMMIT"] {
-        println!("cargo:rerun-if-changed={path}");
+    // A missing watched path makes Cargo rerun this script on every build.
+    // Source archives provide this file before the first build.
+    if std::path::Path::new("../../BUILD-COMMIT").exists() {
+        println!("cargo:rerun-if-changed=../../BUILD-COMMIT");
     }
     println!("cargo:rerun-if-env-changed=BMZ_BUILD_COMMIT_OVERRIDE");
     for path in ["../../crates", "../../Cargo.toml", "../../Cargo.lock"] {
@@ -16,10 +17,22 @@ fn main() {
             .and_then(|output| String::from_utf8(output.stdout).ok())
             .map(|output| output.trim().to_owned())
     };
+    // Resolve metadata through Git: a linked worktree's .git is a file, and
+    // HEAD and shared refs can live in different directories.
+    for name in ["HEAD", "packed-refs"] {
+        if let Some(path) = git(&["rev-parse", "--git-path", name])
+            && std::path::Path::new(&path).exists()
+        {
+            println!("cargo:rerun-if-changed={path}");
+        }
+    }
     if let Some(reference) = git(&["symbolic-ref", "-q", "HEAD"])
         && let Some(path) = git(&["rev-parse", "--git-path", &reference])
+        // A packed branch creates a loose ref at its next commit. Watch the
+        // nearest existing parent until that file exists, never a missing file.
+        && let Some(path) = std::path::Path::new(&path).ancestors().find(|path| path.exists())
     {
-        println!("cargo:rerun-if-changed={path}");
+        println!("cargo:rerun-if-changed={}", path.display());
     }
     let commit = std::env::var("BMZ_BUILD_COMMIT_OVERRIDE")
         .ok()
