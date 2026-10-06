@@ -10,10 +10,11 @@ license.workspace = true
 # ASIO SDK / LLVM を用意できない環境では `--no-default-features` で除外できる。
 # PulseAudio は Linux / BSD 系の cpal host を有効化する。ALSA default PCM が
 # 使えない環境では PulseAudio を選択して回避できる。
-# PipeWire は Linux / BSD 系の cpal host を有効化する。環境の system
-# PipeWire / SPA headers に依存するため、必要な環境で `--features pipewire` を使う。
+# PipeWire は Linux / BSD 系の cpal host を既定ビルドで有効化する。
+# system PipeWire / SPA headers が必要。Linuxで除外する場合は
+# `--no-default-features --features pulseaudio` を使う。音声AutoはPulseAudio→ALSAを維持する。
 [features]
-default = ["asio", "pulseaudio", "experimental-coreaudio-ioproc"]
+default = ["asio", "pulseaudio", "pipewire", "experimental-coreaudio-ioproc"]
 asio = ["bmz-audio/asio"]
 pulseaudio = ["bmz-audio/pulseaudio"]
 pipewire = ["bmz-audio/pipewire"]
@@ -22,6 +23,8 @@ experimental-coreaudio-ioproc = ["bmz-audio/experimental-coreaudio-ioproc"]
 # IOHID は入力監視の許可が必要な macOS 向けの任意入力経路。
 # 通常ビルドから除外し、利用する場合だけ `--features macos-iohid` で有効化する。
 macos-iohid = []
+# Linux keyboard capture is explicitly selected; Auto remains winit.
+linux-evdev = ["dep:evdev", "dep:x11rb", "dep:x11rb-protocol", "dep:zbus"]
 # GameInputRedist 3.4.218 / 3.5.262が一部HID入力でプロセスごと落ちるため、
 # 通常ビルドではコンパイル対象外にする。実機再検証時だけ明示的に有効化する。
 experimental-gameinput = []
@@ -85,6 +88,10 @@ fluent-syntax.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 smithay-client-toolkit = { version = "0.20", default-features = false, features = ["calloop"] }
+evdev = { version = "0.13.2", optional = true }
+x11rb = { version = "0.13.2", optional = true }
+x11rb-protocol = { version = "0.13.2", optional = true }
+zbus = { version = "5.16", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 everything-ipc.workspace = true

@@ -110,6 +110,10 @@ READY 前は準備用 runtime をローカルに保持し、音声時計の開�
 Viewer seek でも入力 queue を作り直す。入力ルートの切り替え時は旧 sink へ release を送り、
 新しい play に旧押下状態を持ち越さない。
 
+windowの実効focus変更は、そのイベント処理中に入力captureのrouteへ反映する。
+Waylandの非表示等でRedrawRequestedが止まっていても、喪失時の保持解放と入力抑止、
+復帰時の配送再開を次の描画まで待たない。gilrs workerの反映待ちは既存の最大50ms以内。
+
 worker の停止は atomic flag と unpark で要求する。UI は終了済みの worker だけ join し、
 まだ終了していない worker の後始末を待たない。audio command も停止 flag を保持し、
 enqueue 時と callback の適用時に検査する。旧 worker の遅い送信を次の play に適用しない。
@@ -182,3 +186,8 @@ callback 到着遅延が render stall によって増えないこと、snapshot 
 macOSの独立IOHID入力、時計変換、診断の測定境界と100ms停滞試験は
 [macOS遅延検証](macos-latency.md) を参照。winit経路のOSイベント時刻は測定不可として扱い、
 入力キューの観測時刻と判定用タイムスタンプを分離する。
+
+Linuxのgilrsは公開blocking APIで入力到着またはスクラッチ期限まで待機します（制御応答上限50ms）。
+任意evdevはnative X11/logind/デバイス権限に加え25msのwindow側フォーカス確認期限を要求し、
+期限切れ時は入力を抑止します。Wayland/XWayland/Flatpakではwinitです。
+診断・入力源切替・欠落復旧の詳細は[Linux遅延検証](linux-latency.md)を参照してください。

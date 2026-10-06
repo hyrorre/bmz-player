@@ -589,6 +589,16 @@ impl Renderer {
     }
 
     pub fn render_last_plan(&mut self) -> Result<RenderSurfaceStatus> {
+        self.render_last_plan_with_pre_present_notify(|| {})
+    }
+
+    /// Notify the window system immediately before presenting an acquired surface
+    /// texture. Never called for headless output, skipped frames or acquisition
+    /// failures: a frame callback requested without a commit could block redraws.
+    pub fn render_last_plan_with_pre_present_notify(
+        &mut self,
+        notify: impl FnOnce(),
+    ) -> Result<RenderSurfaceStatus> {
         let egui = self.pending_egui.take();
         let screenshot = self.pending_screenshot.take();
         let Some(gpu) = &mut self.gpu else {
@@ -606,6 +616,7 @@ impl Renderer {
             &self.bitmap_fonts,
             egui.as_ref(),
             screenshot.as_ref(),
+            notify,
         )?;
         self.last_frame_timings = Some(RenderFrameTimings {
             draw_us: gpu_timings.draw_us,

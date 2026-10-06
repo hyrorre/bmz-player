@@ -576,6 +576,7 @@ jobs:
           desktop-file-validate installer/flatpak/net.hyrorre.BMZPlayer.desktop
           appstreamcli validate --no-net installer/flatpak/net.hyrorre.BMZPlayer.metainfo.xml
           flatpak-builder --show-deps installer/flatpak/net.hyrorre.BMZPlayer.yml
+          python3 -m unittest discover -s installer/flatpak -p 'test_*.py' -v
 
       - name: Record Flatpak dependency provenance
         run: |
@@ -608,6 +609,13 @@ jobs:
           dbus-run-session -- bash -c '
             flatpak install --user -y "dist/flatpak/bmz-player-${BMZ_VERSION}-linux.flatpak"
             flatpak run "${FLATPAK_APP_ID}" --help
+            set +e
+            flatpak run --env=PIPEWIRE_REMOTE=bmz-ci-missing-server "${FLATPAK_APP_ID}" audio-probe pipewire 128 48000 3 > /tmp/bmz-missing-pipewire.log 2>&1
+            result=$?
+            set -e
+            test "$result" -ne 0
+            grep -q "audio_open_failure" /tmp/bmz-missing-pipewire.log
+            grep -q "server_or_host_initialization" /tmp/bmz-missing-pipewire.log
           '
 
       - name: Create Flatpak release files

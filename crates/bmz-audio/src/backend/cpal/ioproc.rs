@@ -830,6 +830,8 @@ fn open(config: CpalOutputConfig, stream_id: u64) -> Result<CpalSharedOutput> {
                 requested_device: config.output_device_name,
                 actual_host: "CoreAudio IOProc".into(),
                 actual_device: device_name(&cpal_device),
+                actual_device_id: cpal_device.id().ok().map(|id| id.to_string()),
+                channels: channels as u16,
                 requested_rate: config.sample_rate,
                 actual_rate: sample_rate,
                 requested_frames: config.buffer_size,

@@ -9,4 +9,7 @@ pub mod latency;
 pub mod replay;
 #[cfg(target_os = "macos")]
 pub mod suspend;
+#[cfg(target_os = "linux")]
+#[path = "suspend_linux.rs"]
+pub mod suspend;
 pub mod time;

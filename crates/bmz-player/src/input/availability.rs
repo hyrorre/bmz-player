@@ -7,12 +7,14 @@ pub(crate) struct BackendAvailability {
     macos_hid: bool,
     gamecontroller: bool,
     gameinput: bool,
+    linux_evdev: bool,
 }
 
 impl BackendAvailability {
     pub(crate) fn current() -> Self {
         Self {
             raw_input: cfg!(windows),
+            linux_evdev: cfg!(all(target_os = "linux", feature = "linux-evdev")),
             macos_hid: cfg!(all(target_os = "macos", feature = "macos-iohid")),
             gamecontroller: {
                 #[cfg(target_os = "macos")]
@@ -31,6 +33,7 @@ impl BackendAvailability {
     fn supports_keyboard(self, backend: &InputBackendKind) -> bool {
         match backend {
             InputBackendKind::Auto | InputBackendKind::Winit => true,
+            InputBackendKind::LinuxEvdev => self.linux_evdev,
             InputBackendKind::RawInput => self.raw_input,
             InputBackendKind::MacOsHid => self.macos_hid,
             InputBackendKind::MacOsGameController => self.gamecontroller,
@@ -51,6 +54,7 @@ impl BackendAvailability {
         [
             InputBackendKind::Auto,
             InputBackendKind::Winit,
+            InputBackendKind::LinuxEvdev,
             InputBackendKind::RawInput,
             InputBackendKind::MacOsHid,
             InputBackendKind::MacOsGameController,
@@ -72,7 +76,11 @@ impl BackendAvailability {
     }
 
     pub(crate) fn normalize_config(self, config: &mut GlobalInputConfig) {
-        if !self.supports_keyboard(&config.backend) {
+        // Preserve an explicitly requested Linux backend in portable profiles;
+        // its runtime/UI must explain why winit is being used instead.
+        if !self.supports_keyboard(&config.backend)
+            && config.backend != InputBackendKind::LinuxEvdev
+        {
             tracing::warn!(backend = ?config.backend, "input backend unavailable in this build or on this platform; using auto");
             config.backend = InputBackendKind::Auto;
         }
@@ -87,8 +95,38 @@ impl BackendAvailability {
 mod tests {
     use super::*;
 
+    #[test]
+    fn evdev_is_opt_in_and_unbuilt_request_survives_for_fallback_diagnostics() {
+        assert_eq!(
+            BackendAvailability::current().supports_keyboard(&InputBackendKind::LinuxEvdev),
+            cfg!(all(target_os = "linux", feature = "linux-evdev"))
+        );
+        let mut config = crate::config::app_config::AppConfig::default().input;
+        assert_eq!(config.backend, InputBackendKind::Auto);
+        assert!(!config.linux_gamepad_legacy_poll);
+        assert!(config.linux_evdev_devices.is_empty());
+        config.backend = InputBackendKind::LinuxEvdev;
+        platform(false, false, false).normalize_config(&mut config);
+        assert_eq!(config.backend, InputBackendKind::LinuxEvdev);
+        let old = toml::to_string(&config)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.starts_with("linux_"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let loaded: GlobalInputConfig = toml::from_str(&old).unwrap();
+        assert!(loaded.linux_evdev_devices.is_empty());
+        assert!(!loaded.linux_gamepad_legacy_poll);
+    }
+
     fn platform(raw_input: bool, macos_hid: bool, gamecontroller: bool) -> BackendAvailability {
-        BackendAvailability { raw_input, macos_hid, gamecontroller, gameinput: false }
+        BackendAvailability {
+            raw_input,
+            macos_hid,
+            gamecontroller,
+            gameinput: false,
+            linux_evdev: false,
+        }
     }
 
     #[test]

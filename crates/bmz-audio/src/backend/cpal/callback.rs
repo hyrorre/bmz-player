@@ -91,12 +91,14 @@ where
     let sample_rate = config.sample_rate;
     let mut playback_timeline = OutputPlaybackTimeline::default();
     let timing_enabled = bmz_core::latency::diagnostics_enabled();
+    // Query outside the callback. A failed host identity is unknown too.
+    let prediction_available = device.id().ok().is_some_and(|id| id.host().name() != "PipeWire");
     let mut previous_callback = None;
     let mut previous_stream_callback: Option<::cpal::StreamInstant> = None;
     let mut warmup_until = Instant::now() + Duration::from_secs(2);
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     let mut suspend = bmz_core::suspend::SuspendMonitor::default();
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     if timing_enabled {
         suspend.poll();
     }
@@ -114,9 +116,9 @@ where
                 }
 
                 let frames = data.len() / channels;
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
                 let resumed = timing_enabled && suspend.poll();
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                 let resumed = false;
                 if timing_enabled
                     && (resumed
@@ -132,7 +134,13 @@ where
                     previous_callback = None;
                 }
                 let measure = timing_enabled && callback_start >= warmup_until;
-                if measure {
+                if measure && !prediction_available {
+                    diagnostics.timing.observe_unavailable(
+                        frames,
+                        callback_start,
+                        previous_callback,
+                    );
+                } else if measure {
                     diagnostics.timing.observe(
                         frames,
                         callback_start,

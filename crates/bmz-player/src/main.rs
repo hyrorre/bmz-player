@@ -34,6 +34,15 @@ async fn main() -> ExitCode {
         bmz_player::stdio::stderr_line(format_args!("Warning: {warning}"));
     }
     let command = invocation.command;
+    if let Command::AudioProbe(options) = &command {
+        return match bmz_player::cli::audio_probe::run(options) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                bmz_player::stdio::stderr_line(format_args!("Error: {error:#}"));
+                ExitCode::FAILURE
+            }
+        };
+    }
     let profile_id = invocation.profile_id;
     let _update_guard = match bmz_player::update::startup_guard() {
         Ok(guard) => guard,
@@ -199,7 +208,7 @@ async fn main() -> ExitCode {
     }
 
     let result = match command {
-        Command::Monitors => unreachable!("handled before bootstrap"),
+        Command::Monitors | Command::AudioProbe(_) => unreachable!("handled before bootstrap"),
         Command::Export(options) => {
             bmz_player::video_export::run(options, &app_paths, profile_id.as_deref())
         }

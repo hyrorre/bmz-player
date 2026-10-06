@@ -26,7 +26,7 @@ fn course_result_persistence_enabled(
     !any_autoplay
         && !any_replay_playback
         && !score_save_disabled
-        && !crate::cli::latency_stall_test_enabled()
+        && !crate::cli::latency_validation_enabled()
 }
 
 impl WinitApp {

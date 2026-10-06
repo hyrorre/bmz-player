@@ -1,5 +1,16 @@
 use super::*;
 
+fn linux_evdev_status() -> Option<u8> {
+    #[cfg(all(target_os = "linux", feature = "linux-evdev"))]
+    {
+        Some(crate::input::linux_evdev::status())
+    }
+    #[cfg(not(all(target_os = "linux", feature = "linux-evdev")))]
+    {
+        None
+    }
+}
+
 impl WinitApp {
     pub(super) fn ensure_audio_output(&mut self) {
         if self.audio.audio_runtime.is_some() || self.audio.audio_output_open_attempted {
@@ -13,6 +24,7 @@ impl WinitApp {
             Ok(runtime)
         }) {
             Ok(runtime) => {
+                self.audio.audio_open_error = None;
                 // Viewer は譜面音声だけを必要とする。Select BGM / system SE の
                 // engine と decode worker を作らず、direct Play の開始を優先する。
                 if !self.viewer_mode {
@@ -25,6 +37,7 @@ impl WinitApp {
                 );
             }
             Err(error) => {
+                self.audio.audio_open_error = Some(format!("{error:#}"));
                 tracing::warn!(error = %format!("{error:#}"), "failed to open audio output; running without audio");
             }
         }
@@ -39,53 +52,43 @@ impl WinitApp {
         }
         self.audio.audio_diagnostics_last_log_at = now;
 
-        if self.audio.audio_runtime.is_none() {
-            self.audio.audio_diagnostics_last = None;
-            return;
-        };
         let snapshot = self.collect_audio_diagnostics();
         if bmz_core::latency::diagnostics_enabled() {
-            let timing = snapshot.timing;
-            let info = self.audio.audio_runtime.as_ref().map(AudioRuntime::stream_info);
-            let summary = serde_json::json!({
-                "kind": "audio", "schema": 1,
-                "epoch": timing.epoch, "warmup_seconds": 2,
-                "frames": timing.frames, "interval_ns": timing.interval_ns,
-                "duration_ns": timing.duration_ns, "prediction_ns": timing.prediction_ns,
-                "invalid_predictions": timing.invalid_predictions,
-                "stream_errors": snapshot.stream_error_count,
-                "processor_overloads": snapshot.processor_overload_count,
-                "lock_misses": snapshot.engine_lock_miss_count,
-                "queue_drops": snapshot.command_dropped_count,
-                "timeline_catch_ups": snapshot.timeline_catch_up_count,
-                "stream": info.map(|i| serde_json::json!({
-                    "id":i.stream_id,
-                    "requested_host":format!("{:?}",i.requested_host),"requested_device":i.requested_device,
-                    "actual_host":i.actual_host,"actual_device":i.actual_device,
-                    "requested_rate":i.requested_rate,"actual_rate":i.actual_rate,
-                    "requested_frames":i.requested_frames,"supported_frames":i.supported_frames,
-                    "cpal_buffer":i.cpal_buffer,
-                    "prediction_source": if i.requested_host == Some(bmz_audio::backend::cpal::CpalHostId::CoreAudioIoProc) {
-                        "hal_output_time_minus_now"
-                    } else if self.audio.audio_runtime.as_ref().is_some_and(|r| r.config().output_mode == crate::config::app_config::AudioOutputMode::Exclusive) {
-                        "unmeasured"
-                    } else { "cpal_playback_minus_callback" },
-                })),
-            });
+            let summary = crate::audio::latency_json(
+                snapshot,
+                self.audio.audio_runtime.as_ref().map(AudioRuntime::stream_info),
+                self.audio.audio_runtime.as_ref().is_some_and(|r| {
+                    r.config().output_mode == crate::config::app_config::AudioOutputMode::Exclusive
+                }),
+            );
             tracing::info!("BMZ_LATENCY_JSON {summary}");
             if let Some(play) = &self.play.active_play {
                 let summary = serde_json::json!({"schema":1,"kind":"play_audio_commands",
+                    "generation": self.play_input_backend().map(|input| input.generation()),
                     "all_commands_enqueue_to_apply_ns":play.running.audio.command_diagnostics().enqueue_to_apply_ns});
                 tracing::info!("BMZ_LATENCY_JSON {summary}");
             }
             if let Some(input) = self.play_input_backend() {
                 let summary = serde_json::json!({"schema": 1, "kind": "input_queue",
+                    "generation":input.generation(),
                     "requested_keyboard":format!("{:?}",self.boot.app_config.input.backend),
                     "keyboard_enabled":self.boot.app_config.input.keyboard_enabled,
                     "native_keyboard_active":self.gamepad.as_ref().is_some_and(crate::input::capture::InputCapture::native_keyboard_enabled),
+                    "linux_gamepad_wait":if cfg!(target_os="linux") { Some(if self.boot.app_config.input.linux_gamepad_legacy_poll { "legacy_1ms" } else { "blocking_deadline_max_50ms" }) } else { None },
+                    "linux_keyboard_route":if cfg!(target_os="linux") {
+                        Some(if !self.boot.app_config.input.keyboard_enabled { "disabled" }
+                        else if linux_evdev_status() == Some(7) { "evdev_delivery_suppressed" }
+                        else if linux_evdev_status() == Some(1) { "evdev" } else { "winit" })
+                    } else { None },
+                    "winit_os_to_receive_ns": null,
+                    "evdev_status": linux_evdev_status(),
                     "enqueue_to_drain_ns": input.delivery_summary(), "drops": input.overflow_count()});
                 tracing::info!("BMZ_LATENCY_JSON {summary}");
             }
+        }
+        if self.audio.audio_runtime.is_none() {
+            self.audio.audio_diagnostics_last = None;
+            return;
         }
         let Some(previous) = self.audio.audio_diagnostics_last.replace(snapshot) else {
             return;
@@ -396,12 +399,14 @@ impl WinitApp {
         }) {
             Ok(runtime) => {
                 self.install_system_audio(&runtime, system_engine.clone());
+                self.audio.audio_open_error = None;
                 self.audio.audio_runtime = Some(runtime);
                 tracing::info!("audio output reopened with current settings");
                 true
             }
             Err(error) => {
                 tracing::error!(error = %format!("{error:#}"), "failed to reopen audio output with current settings");
+                self.audio.audio_open_error = Some(format!("{error:#}"));
                 let Some(previous_config) = previous_config else {
                     tracing::error!("no previous audio settings are available for recovery");
                     return false;

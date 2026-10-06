@@ -8,10 +8,14 @@ sdk-extensions:
 command: bmz-player-flatpak
 
 finish-args:
+  - --require-version=1.15.6
   - --share=ipc
   - --socket=wayland
   - --socket=fallback-x11
   - --socket=pulseaudio
+  # Only the ordinary PipeWire socket; never the unrestricted manager socket.
+  # PipeWire/WirePlumber must still recognize and restrict the Flatpak client.
+  - --filesystem=xdg-run/pipewire-0
   - --device=dri
   - --device=input
   - --share=network
@@ -26,7 +30,9 @@ modules:
       build-args:
         - --share=network
     build-commands:
-      - cargo build --release -p bmz-player --no-default-features --features pulseaudio
+      - pkg-config --atleast-version=0.3.53 libpipewire-0.3
+      - pkg-config --exists libspa-0.2
+      - cargo build --release --locked -p bmz-player --no-default-features --features pulseaudio,pipewire
       - install -Dm755 target/release/bmz-player /app/bin/bmz-player
       - install -Dm755 installer/flatpak/bmz-player-flatpak /app/bin/bmz-player-flatpak
       - install -Dm644 installer/flatpak/net.hyrorre.BMZPlayer.desktop /app/share/applications/net.hyrorre.BMZPlayer.desktop
@@ -51,6 +57,10 @@ modules:
         path: ../..
         skip:
           - .git
+          - .local
+          - .env
+          - node_modules
+          - bmz-ir-web/node_modules
           - .flatpak-builder
           - target
           - dist

@@ -44,7 +44,15 @@ impl WinitApp {
             self.renderer.request_screenshot(path.clone());
         }
         let render_start = Instant::now();
-        let render_status = self.renderer.render_last_plan();
+        let notify = self.uses_wayland_frame_callbacks();
+        let window = self.window.as_deref();
+        let render_status = self.renderer.render_last_plan_with_pre_present_notify(|| {
+            if notify && let Some(window) = window {
+                // winit 0.30's Wayland frame callback gates redraws, while input
+                // and user events remain dispatchable between display refreshes.
+                window.pre_present_notify();
+            }
+        });
         let render_us = plan_us + render_start.elapsed().as_micros();
         let frame_timings = self.renderer.last_frame_timings();
         let surface_status = render_status.as_ref().ok().copied();
@@ -86,6 +94,20 @@ impl WinitApp {
             render_us,
             frame_timings,
         )
+    }
+
+    pub(super) fn uses_wayland_frame_callbacks(&self) -> bool {
+        use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
+        !crate::cli::latency_legacy_wayland_present_enabled()
+            && self.window.as_ref().is_some_and(|window| {
+                let wayland = window
+                    .display_handle()
+                    .is_ok_and(|handle| matches!(handle.as_raw(), RawDisplayHandle::Wayland(_)));
+                wayland_frame_callback_required(
+                    wayland,
+                    self.renderer.surface_presentation_status().map(|status| status.effective_mode),
+                )
+            })
     }
 
     fn log_pending_skin_render_probe(
@@ -144,6 +166,12 @@ impl WinitApp {
     }
 }
 
+fn wayland_frame_callback_required(wayland: bool, effective_mode: Option<&str>) -> bool {
+    // Preserve explicitly unthrottled Mailbox/Immediate behavior and all other
+    // window backends. Decide from the actual display and actual present mode.
+    wayland && matches!(effective_mode, Some("Fifo" | "FifoRelaxed"))
+}
+
 fn log_render_status(render_status: Result<RenderSurfaceStatus>) {
     match render_status {
         Ok(RenderSurfaceStatus::Rendered)
@@ -178,4 +206,24 @@ fn frame_profile_sample(
         render_us,
         render_timings,
     })
+}
+
+#[cfg(test)]
+mod presentation_tests {
+    use super::*;
+
+    #[test]
+    fn only_wayland_fifo_modes_request_frame_callbacks() {
+        for (wayland, mode, expected) in [
+            (true, Some("Fifo"), true),
+            (true, Some("FifoRelaxed"), true),
+            (true, Some("Mailbox"), false),
+            (true, Some("Immediate"), false),
+            (true, None, false),
+            (false, Some("Fifo"), false),
+            (false, Some("FifoRelaxed"), false),
+        ] {
+            assert_eq!(wayland_frame_callback_required(wayland, mode), expected);
+        }
+    }
 }

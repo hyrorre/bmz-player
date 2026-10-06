@@ -6,6 +6,22 @@ OS別のRust / FFmpeg等の準備は [README](../README.md) を確認してく�
 
 過去の調査・実装・計測記録は [notesの索引](../notes/README.md) にまとめています。
 
+LinuxのPipeWire/SPA開発依存、任意evdev、共通診断、独立したデータでのA/B検証は
+[Linux遅延検証](linux-latency.md)を参照してください。
+
+## ビルド識別情報
+
+`bmz-player` はGitのHEADとコードのdirty状態をビルド時に記録します。
+通常checkoutとlinked worktreeのGit管理ファイルは `git rev-parse --git-path` で解決し、
+HEAD・参照先・既存のpacked-refsを監視します。packed branchにloose refがない場合は
+既存の親ディレクトリを監視し、次のcommitでのref作成も検知します。
+
+Gitを含まないソースアーカイブでは、最初のビルド前にrootへ `BUILD-COMMIT` を用意します。
+`BMZ_BUILD_COMMIT_OVERRIDE` が指定されていればそれを優先します。
+存在しないmetadataを監視対象へ渡さず、変更のないビルドを毎回やり直さないようにします。
+Linux上の回帰テストは `python3 scripts/test_build_identity.py` で実行できます。
+Git・Python 3.11以降・Rustが必要で、依存を取得済みの環境でoffline Cargoを使います。
+
 ## 同梱アセット
 
 Git管理のデフォルトスキン・サンプル曲・フォントは、そのcheckoutのファイルを使います。

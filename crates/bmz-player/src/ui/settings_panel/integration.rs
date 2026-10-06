@@ -110,6 +110,66 @@ pub(super) fn build_integration_settings_sections(
                 };
                 ui.label(text.text(key));
             }
+            #[cfg(not(all(target_os = "linux", feature = "linux-evdev")))]
+            if config.input.backend == InputBackendKind::LinuxEvdev {
+                ui.label(tr!(text, "settings-input-evdev-unbuilt"));
+                if ui.button(tr!(text, "settings-input-evdev-restore")).clicked() {
+                    config.input.backend = InputBackendKind::Winit;
+                }
+            }
+            #[cfg(target_os = "linux")]
+            ui.checkbox(
+                &mut config.input.linux_gamepad_legacy_poll,
+                tr!(text, "settings-input-linux-poll"),
+            );
+            #[cfg(all(target_os = "linux", feature = "linux-evdev"))]
+            if config.input.backend == InputBackendKind::LinuxEvdev {
+                use crate::input::linux_evdev;
+                ui.label(tr!(text, "settings-input-evdev-help"));
+                if crate::input::linux_evdev::unsupported_key_seen() {
+                    ui.label(tr!(text, "settings-input-evdev-unmapped"));
+                }
+                ui.label(text.text(match linux_evdev::status() {
+                    1 => "settings-input-evdev-active",
+                    2 => "settings-input-evdev-session",
+                    3 => "settings-input-evdev-selection",
+                    4 => "settings-input-evdev-permission",
+                    5 => "settings-input-evdev-missing",
+                    6 => "settings-input-evdev-failed",
+                    7 => "settings-input-evdev-suppressed",
+                    _ => "settings-input-evdev-inactive",
+                }));
+                // Explicit refresh only; never enumerate devices per input event.
+                let id = ui.make_persistent_id("evdev_candidates");
+                if ui.button(tr!(text, "settings-input-evdev-refresh")).clicked() {
+                    ui.ctx().data_mut(|data| data.insert_temp(id, linux_evdev::device_paths()));
+                }
+                let paths =
+                    ui.ctx().data(|data| data.get_temp::<Vec<String>>(id)).unwrap_or_default();
+                for path in paths {
+                    let mut selected = config.input.linux_evdev_devices.contains(&path);
+                    if ui.checkbox(&mut selected, &path).changed() {
+                        if selected {
+                            config.input.linux_evdev_devices.push(path);
+                        } else {
+                            config.input.linux_evdev_devices.retain(|p| p != &path);
+                        }
+                    }
+                }
+                let mut paths = config.input.linux_evdev_devices.join("\n");
+                ui.label(tr!(text, "settings-input-evdev-paths"));
+                if ui.text_edit_multiline(&mut paths).changed() {
+                    config.input.linux_evdev_devices = paths
+                        .lines()
+                        .map(str::trim)
+                        .filter(|p| !p.is_empty())
+                        .map(str::to_owned)
+                        .collect();
+                }
+                if ui.button(tr!(text, "settings-input-evdev-restore")).clicked() {
+                    config.input.backend = InputBackendKind::Winit;
+                }
+            }
             #[cfg(all(target_os = "macos", feature = "macos-iohid"))]
             if config.input.backend == InputBackendKind::MacOsHid {
                 let status = crate::input::macos::status();

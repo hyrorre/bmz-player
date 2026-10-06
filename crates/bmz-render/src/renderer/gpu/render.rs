@@ -10,6 +10,7 @@ impl WgpuRenderer {
         bitmap_fonts: &HashMap<String, BitmapFont>,
         egui: Option<&EguiFrame>,
         screenshot_request: Option<&ScreenshotRequest>,
+        pre_present_notify: impl FnOnce(),
     ) -> Result<(RenderSurfaceStatus, GpuRenderTimings)> {
         let draw_start = Instant::now();
         let mut timings = GpuRenderTimings::default();
@@ -258,6 +259,7 @@ impl WgpuRenderer {
         self.geometry_scratch = geometry;
         let present_start = Instant::now();
         if let Some(output) = output {
+            pre_present_notify();
             output.present();
         }
         timings.present_us = present_start.elapsed().as_micros();

@@ -515,7 +515,11 @@ PulseAudio 接続用の `PULSE_COOKIE` が未指定なら、sandbox 内の
 Flatpak sandbox の XDG path に作られる。通常は host 側の
 `~/.var/app/net.hyrorre.BMZPlayer/` 配下になる。
 `finish-args` は Wayland / fallback X11 / DRI / PulseAudio / network / input device を
-許可する。`--device=input` はゲームパッド入力用。
+許可する。`--device=input` はゲームパッド入力用（最低Flatpak 1.15.6）。
+`pulseaudio,pipewire`をビルドし、native PipeWireには`xdg-run/pipewire-0`だけを公開する。
+SDK/runtime 25.08のクライアントライブラリ・moduleを利用する。サーバー側のFlatpak分類と
+アクセス制限も必要で、manager socketや全bus/deviceは公開しない。
+ビルド・権限確認・Pulseへの復旧は[Linux遅延検証](linux-latency.md)を参照する。
 
 現在の manifest はローカル配布 bundle を作りやすくするため、build 時に Cargo が
 crate を取得できるよう `build-args: --share=network` を使う。Flathub へ提出する場合は

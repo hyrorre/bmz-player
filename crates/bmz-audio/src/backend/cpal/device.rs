@@ -28,7 +28,7 @@ impl CpalBackend {
                 };
                 ::cpal::host_from_id(cpal_host_id).map_err(CpalBackendError::HostUnavailable)?
             }
-            None => ::cpal::default_host(),
+            None => auto_host()?,
         };
         let device = output_device(&host, config.output_device_name.as_deref())?;
         let requested_sample_rate = config.sample_rate;
@@ -94,6 +94,8 @@ impl CpalBackend {
                         requested_device,
                         actual_host: format!("{:?}", host.id()),
                         actual_device: device_name(&device),
+                        actual_device_id: device.id().ok().map(|id| id.to_string()),
+                        channels: info.channels,
                         requested_rate: requested_sample_rate,
                         actual_rate: info.sample_rate,
                         requested_frames: requested_buffer_size,
@@ -255,6 +257,8 @@ impl CpalBackend {
                     requested_device,
                     actual_host: format!("{:?}", host.id()),
                     actual_device: device_name,
+                    actual_device_id: device.id().ok().map(|id| id.to_string()),
+                    channels: config.channels,
                     requested_rate: requested_sample_rate,
                     actual_rate: sample_rate,
                     requested_frames: requested_buffer_size,
@@ -407,6 +411,26 @@ pub fn is_host_supported(host: CpalHostId) -> bool {
     cpal_host_id(host).is_some()
 }
 
+// CPAL 0.18 changes default_host() priority when its pipewire feature is
+// enabled. Keep BMZ's existing Linux Auto policy (Pulse, then ALSA).
+fn auto_host() -> Result<::cpal::Host, CpalBackendError> {
+    #[cfg(target_os = "linux")]
+    {
+        #[cfg(feature = "pulseaudio")]
+        if ::cpal::available_hosts().contains(&::cpal::HostId::PulseAudio) {
+            match ::cpal::host_from_id(::cpal::HostId::PulseAudio) {
+                Ok(host) => return Ok(host),
+                Err(error) => {
+                    tracing::warn!(%error, "Linux Auto: PulseAudio unavailable; trying ALSA")
+                }
+            }
+        }
+        ::cpal::host_from_id(::cpal::HostId::Alsa).map_err(CpalBackendError::HostUnavailable)
+    }
+    #[cfg(not(target_os = "linux"))]
+    Ok(::cpal::default_host())
+}
+
 /// 指定ホスト(`None` は既定ホスト)の出力デバイス名を列挙する。
 ///
 /// UI のデバイス選択用。列挙に失敗した場合やホストが利用不可の場合は空 Vec を返す
@@ -420,7 +444,10 @@ pub fn list_output_device_names(host: Option<CpalHostId>) -> Vec<String> {
             },
             None => return Vec::new(),
         },
-        None => ::cpal::default_host(),
+        None => match auto_host() {
+            Ok(host) => host,
+            Err(_) => return Vec::new(),
+        },
     };
 
     let Ok(devices) = host.output_devices() else {

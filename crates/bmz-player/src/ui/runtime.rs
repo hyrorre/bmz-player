@@ -247,6 +247,7 @@ impl EguiLayer {
             obs_connection_status,
             connected_gamepads,
             audio_stream_info,
+            audio_open_error,
         } = context;
         let font_coverage = profile_config.ui.locale().font_coverage();
         if font_coverage != self.font_coverage {
@@ -294,7 +295,7 @@ impl EguiLayer {
             update_dialog.is_some() && (info.scene == "Select" || *show_settings);
         self.update_dialog_active = update_dialog_allowed;
         let full_output = ctx.run_ui(raw_input, |ui| {
-            if crate::cli::latency_stall_test_enabled() {
+            if crate::cli::latency_validation_enabled() {
                 egui::Area::new(egui::Id::new("latency_test_banner"))
                     .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 8.0))
                     .interactable(false)
@@ -425,6 +426,7 @@ impl EguiLayer {
                             obs_connection_status,
                             connected_gamepads,
                             audio_stream_info,
+                            audio_open_error,
                         },
                     );
                     obs_enabled_changed |= settings_actions.obs_enabled_changed;

@@ -147,6 +147,7 @@ pub(in crate::ui) fn input_backend_label(backend: &InputBackendKind, text: Local
     match backend {
         InputBackendKind::Auto => tr!(text, "common-auto-select"),
         InputBackendKind::Winit => "winit".to_owned(),
+        InputBackendKind::LinuxEvdev => "Linux evdev (X11)".to_owned(),
         InputBackendKind::MacOsHid => "macOS IOHID".to_owned(),
         InputBackendKind::MacOsGameController => "GCKeyboard".to_owned(),
         InputBackendKind::RawInput => tr!(text, "settings-input-raw-input"),

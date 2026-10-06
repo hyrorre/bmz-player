@@ -328,6 +328,31 @@ pub struct AnalogGamepadProcessor {
 }
 
 impl AnalogGamepadProcessor {
+    #[cfg(target_os = "linux")]
+    pub(super) fn next_timeout(&self, now: Instant) -> Option<Duration> {
+        self.scratch_state
+            .iter()
+            .filter_map(|((device, _), state)| {
+                if !state.active {
+                    return None;
+                }
+                let threshold = clamp_analog_scratch_threshold(
+                    config_for_device(self.configs, self.slots, *device).threshold,
+                );
+                let ticks = threshold.saturating_mul(2).saturating_sub(state.counter);
+                let remaining = Duration::from_millis(u64::from(
+                    ticks / ANALOG_SCRATCH_CALLS_PER_AXIS_POLL + 1,
+                ));
+                Some(
+                    remaining.saturating_sub(state.counter_elapsed_remainder).saturating_sub(
+                        state
+                            .last_counter_update
+                            .map_or(Duration::ZERO, |last| now.saturating_duration_since(last)),
+                    ),
+                )
+            })
+            .min()
+    }
     pub fn new(configs: [GamepadScratchConfig; 2], slots: GamepadSlotMap) -> Self {
         Self {
             axis_prev: HashMap::new(),
@@ -1104,6 +1129,33 @@ mod tests {
         events.clear();
         state.advance_to(now + Duration::from_millis(101), 100, device_id, &mut events);
         assert_eq!(button_events(&events), vec![("Axis1+".to_string(), false)]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn blocking_deadline_matches_existing_scratch_release_and_disconnect() {
+        let mut processor = AnalogGamepadProcessor::new(
+            [GamepadScratchConfig { threshold: 100, ..Default::default() }; 2],
+            GamepadSlotMap::default(),
+        );
+        let now = Instant::now();
+        assert_eq!(processor.next_timeout(now), None);
+        let mut state = ScratchState::default();
+        let mut events = Vec::new();
+        state.advance_to(now, 100, DeviceId(16), &mut events);
+        state.apply_movement(2, "Axis1", DeviceId(16), event_timestamp(10), 100, &mut events);
+        processor.scratch_state.insert((DeviceId(16), 1), state);
+        let deadline = processor.next_timeout(now).unwrap();
+        assert_eq!(deadline, Duration::from_millis(101));
+        events.clear();
+        processor.check_timeouts(now + deadline - Duration::from_micros(1), &mut events);
+        assert!(events.is_empty());
+        assert_eq!(processor.next_timeout(now + deadline), Some(Duration::ZERO));
+        processor.check_timeouts(now + deadline, &mut events);
+        assert_eq!(button_events(&events), [("Axis1+".into(), false)]);
+        assert_eq!(processor.next_timeout(now + deadline), None);
+        processor.release_device(DeviceId(16), event_timestamp(11), &mut events);
+        assert_eq!(processor.next_timeout(now + deadline), None);
     }
 
     #[test]

@@ -33,6 +33,10 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-06 | [プレイ中の画面停止調査とGNOME / Plasma比較](2026/2026-10-06-play-freeze-diagnostics.md) |
+| 2026-10-06 | [Linux遅延対応のレビュー指摘修正](2026/2026-10-06-linux-latency-review-fixes.md) |
+| 2026-10-06 | [evdev以外の入力経路とWaylandイベント配送の比較](2026/2026-10-06-linux-input-alternatives.md) |
+| 2026-10-06 | [Linux遅延診断・PipeWire・入力取得の実装と検証](2026/2026-10-06-linux-latency.md) |
 | 2026-10-06 | [空フォルダへの選曲遷移と入力時再読み込みの修正](2026/2026-10-06-empty-select-folders.md) |
 | 2026-10-05 | [リポジトリ横断リファクタリング](2026/2026-10-05-repository-refactoring.md) |
 | 2026-10-05 | [Releaseメタデータの統合と橋渡し版の準備](2026/2026-10-05-release-metadata.md) |

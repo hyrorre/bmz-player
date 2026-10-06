@@ -15,6 +15,7 @@ where
     let (args, profile_id, mut warnings) = extract_global_profile(args)?;
     let (args, mut play, window, print) = super::overrides::extract(args)?;
     let mut command = match args.first().map(|s| s.as_str()) {
+        Some("audio-probe") => super::audio_probe::parse(&args[1..]).map(Command::AudioProbe),
         Some("monitors") => {
             if args.len() != 2 || args[1] != "list" {
                 bail!("Use: monitors list");
@@ -231,6 +232,7 @@ fn command_uses_profile(command: &Command) -> bool {
         | Command::Replay(_)
         | Command::Ir(_) => true,
         Command::Monitors
+        | Command::AudioProbe(_)
         | Command::Table(_)
         | Command::Songs(_)
         | Command::Course(CourseCommand::Import { .. } | CourseCommand::List)

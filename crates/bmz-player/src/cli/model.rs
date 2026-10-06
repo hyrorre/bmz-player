@@ -8,6 +8,7 @@ pub struct ParsedCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
+    AudioProbe(super::audio_probe::Options),
     Monitors,
     Export(super::VideoExportOptions),
     Run(AppOptions),
