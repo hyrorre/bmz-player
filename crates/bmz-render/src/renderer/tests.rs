@@ -2,6 +2,17 @@ use crate::scene::{AppSceneSnapshot, SelectSnapshot};
 
 use super::*;
 
+#[test]
+fn skipped_surface_does_not_arm_a_window_frame_callback() {
+    let mut renderer = Renderer::default();
+    let mut notified = false;
+    assert_eq!(
+        renderer.render_last_plan_with_pre_present_notify(|| notified = true).unwrap(),
+        RenderSurfaceStatus::SkippedNoSurface
+    );
+    assert!(!notified);
+}
+
 fn test_surface_size() -> SurfaceSize {
     SurfaceSize { width: 16, height: 9 }
 }

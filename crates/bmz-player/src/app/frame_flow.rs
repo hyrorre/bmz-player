@@ -159,11 +159,8 @@ impl WinitApp {
             return;
         }
 
-        if fps == 0 {
-            event_loop.set_control_flow(ControlFlow::Poll);
-        } else {
-            event_loop.set_control_flow(ControlFlow::Wait);
-        }
+        event_loop
+            .set_control_flow(frame_idle_control_flow(fps, self.uses_wayland_frame_callbacks()));
         self.request_redraw();
     }
 
@@ -289,7 +286,7 @@ impl WinitApp {
         scene_kind: AppSceneKind,
         scene: &'static str,
     ) -> bool {
-        if crate::cli::latency_stall_test_enabled() {
+        if crate::cli::latency_validation_enabled() {
             return false;
         }
         let practice_overlay = self
@@ -1145,9 +1142,29 @@ fn should_arm_select_scene_timers(
     select_view && !timer_armed && render_status == Some(RenderSurfaceStatus::Rendered)
 }
 
+fn frame_idle_control_flow(fps: u32, wayland_frame_callbacks: bool) -> ControlFlow {
+    if fps == 0 && !wayland_frame_callbacks {
+        ControlFlow::Poll
+    } else {
+        // A compositor callback wakes winit. Poll would spin at Unlimited FPS
+        // while Wayland is withholding RedrawRequested until that callback.
+        ControlFlow::Wait
+    }
+}
+
 #[cfg(test)]
 mod select_scene_timer_tests {
-    use super::{RenderSurfaceStatus, should_arm_select_scene_timers};
+    use super::{
+        ControlFlow, RenderSurfaceStatus, frame_idle_control_flow, should_arm_select_scene_timers,
+    };
+
+    #[test]
+    fn unlimited_wayland_frames_wait_for_the_compositor_without_spinning() {
+        assert_eq!(frame_idle_control_flow(0, true), ControlFlow::Wait);
+        assert_eq!(frame_idle_control_flow(0, false), ControlFlow::Poll);
+        assert_eq!(frame_idle_control_flow(240, true), ControlFlow::Wait);
+        assert_eq!(frame_idle_control_flow(240, false), ControlFlow::Wait);
+    }
 
     #[test]
     fn select_timer_arms_only_after_first_rendered_surface() {
