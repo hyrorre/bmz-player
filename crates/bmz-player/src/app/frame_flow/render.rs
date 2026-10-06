@@ -2,7 +2,6 @@ use super::*;
 
 impl WinitApp {
     pub(in crate::app) fn render_current_scene(&mut self) -> Option<SceneFrameProfileSample> {
-        let scene_started_at = Instant::now();
         let select_view = matches!(self.view_state(), AppViewState::Select);
         let decide_view = matches!(self.view_state(), AppViewState::Decide);
         let play_view = matches!(self.view_state(), AppViewState::Play);
@@ -57,22 +56,6 @@ impl WinitApp {
         let render_us = plan_us + render_start.elapsed().as_micros();
         let frame_timings = self.renderer.last_frame_timings();
         let surface_status = render_status.as_ref().ok().copied();
-        if play_view
-            && self.ui.focused
-            && scene_started_at.elapsed() >= frame_runtime::REDRAW_STALL_THRESHOLD
-        {
-            tracing::warn!(
-                target: "bmz_player::frame_stall",
-                generation = self.focused_play_generation(),
-                surface_status = ?surface_status,
-                wayland_frame_callbacks = notify,
-                snapshot_us,
-                video_us,
-                render_us,
-                gpu_timings = ?frame_timings,
-                "slow play scene render"
-            );
-        }
         self.frame.record_surface_status(Instant::now(), surface_status);
         if surface_status == Some(RenderSurfaceStatus::Rendered) && !self.smoke.first_present_logged
         {
