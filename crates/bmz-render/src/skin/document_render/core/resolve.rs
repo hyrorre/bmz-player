@@ -436,7 +436,18 @@ macro_rules! skin_document_render_core_resolve_methods {
             sources: &HashMap<String, SkinDocumentTexture>,
         ) -> Option<Option<Vec<SkinRenderItem>>> {
             let imageset = self.imageset.iter().find(|set| set.id == destination.id)?;
-            let image_id = if let Some(index) = skin_state_imageset_index(imageset.ref_id, state) {
+            let image_id = if let Some(property) = &imageset.value {
+                let Some(index) =
+                    skin_integer_property(property, state).filter(|index| *index >= 0)
+                else {
+                    return Some(None);
+                };
+                let index = usize::try_from(index)
+                    .ok()
+                    .filter(|index| *index < imageset.images.len())
+                    .unwrap_or(0);
+                imageset.images.get(index).cloned()
+            } else if let Some(index) = skin_state_imageset_index(imageset.ref_id, state) {
                 imageset.images.get(index.min(imageset.images.len().saturating_sub(1))).cloned()
             } else {
                 let judge_index = imageset_ref_lane(imageset.ref_id)

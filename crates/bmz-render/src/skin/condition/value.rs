@@ -142,6 +142,9 @@ pub(in crate::skin) fn skin_value_number(
     value: &SkinValueDef,
     state: &SkinDrawState,
 ) -> Option<i64> {
+    if let Some(property) = &value.value {
+        return skin_integer_property(property, state);
+    }
     if value.id == "Number_Todayplayednotes" {
         return Some(player_stat_u64(daily_completed_notes(&state.player_stats.daily)));
     }
@@ -158,6 +161,34 @@ pub(in crate::skin) fn skin_value_number(
         return skin_state_float_expr(&value.value_expr, state).map(integer_property_value);
     }
     skin_state_number(value.ref_id, state)
+}
+
+pub(in crate::skin) fn skin_integer_property(
+    property: &SkinPropertyValue,
+    state: &SkinDrawState,
+) -> Option<i64> {
+    if let Some(id) = property.resolve_id(PropertyFamily::Integer) {
+        return skin_state_number(id, state);
+    }
+    let expression = property.expression()?;
+    evaluate_lua_number_expr(expression, state)
+        .map(|number| number as i64)
+        .or_else(|| skin_builtin_value_i64(expression, state))
+        .or_else(|| skin_state_float_expr(expression, state).map(integer_property_value))
+}
+
+pub(in crate::skin) fn skin_rate_property(
+    property: &SkinPropertyValue,
+    state: &SkinDrawState,
+) -> Option<f32> {
+    if let Some(id) = property.resolve_id(PropertyFamily::Rate) {
+        return skin_state_float_number(id, state);
+    }
+    let expression = property.expression()?;
+    evaluate_lua_number_expr(expression, state)
+        .map(|number| number as f32)
+        .or_else(|| skin_builtin_value_f32(expression, state))
+        .or_else(|| skin_state_float_expr(expression, state))
 }
 
 pub(in crate::skin) fn lua_value_callback_id(expr: &str) -> Option<usize> {
@@ -197,7 +228,11 @@ pub(in crate::skin) fn skin_value_number_for_destination(
     if let Some(level) = state.select_songlist_level_override {
         return Some(level);
     }
-    if value.ref_id == 0 && value.expr.trim().is_empty() && value.value_expr.trim().is_empty() {
+    if value.value.is_none()
+        && value.ref_id == 0
+        && value.expr.trim().is_empty()
+        && value.value_expr.trim().is_empty()
+    {
         return Some(if state.play_level != 0 {
             state.play_level
         } else {

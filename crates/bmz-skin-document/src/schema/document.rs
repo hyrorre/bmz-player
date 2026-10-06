@@ -363,6 +363,9 @@ pub struct SkinImageSetDef {
     pub id: String,
     #[serde(default, rename = "ref")]
     pub ref_id: i32,
+    /// IntegerProperty; `ref` above belongs to the separate image-index family.
+    #[serde(default)]
+    pub value: Option<SkinPropertyValue>,
     #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
     pub images: Vec<String>,
     #[serde(default)]
@@ -412,6 +415,8 @@ pub struct SkinValueDef {
     #[serde(default, rename = "ref")]
     pub ref_id: i32,
     #[serde(default)]
+    pub value: Option<SkinPropertyValue>,
+    #[serde(default)]
     pub expr: String,
     /// Lua `value = function()` から変換した浮動小数 digit 式。空なら `expr` / `ref` を使う。
     #[serde(default)]
@@ -443,6 +448,8 @@ pub struct SkinTextDef {
     pub align: i32,
     #[serde(default, rename = "ref")]
     pub ref_id: i32,
+    #[serde(default)]
+    pub value: Option<SkinPropertyValue>,
     #[serde(default, rename = "constantText", deserialize_with = "deserialize_skin_string")]
     pub constant_text: String,
     /// BMZ extension: render a numeric skin ref with the text renderer.
@@ -548,6 +555,9 @@ pub struct SkinSliderDef {
     /// Lua `value = function()` から変換した slider 進捗式 (0.0–1.0)。空なら `type` を使う。
     #[serde(default)]
     pub value_expr: String,
+    /// beatoraja JSON FloatProperty uses the Rate family.
+    #[serde(default)]
+    pub value: Option<SkinPropertyValue>,
 }
 
 /// beatoraja `judgegraph[]` 要素。

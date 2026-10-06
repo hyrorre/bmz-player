@@ -13,7 +13,7 @@ macro_rules! skin_document_render_select_graph_methods {
             let Some(source) = sources.get(&graph.src) else {
                 return Vec::new();
             };
-            if !test_skin_ops(&destination.op, enabled_options, state)
+            if !destination_ops_match(destination, enabled_options, state)
                 || !eval_skin_draw_condition(&destination.draw, state)
             {
                 return Vec::new();

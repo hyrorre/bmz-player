@@ -10,7 +10,7 @@ macro_rules! skin_document_render_graph_select_methods {
             state: &SkinDrawState,
         ) -> Vec<SkinRenderItem> {
             if row.chart_distribution.is_empty()
-                || !test_skin_ops(&destination.op, enabled_options, state)
+                || !destination_ops_match(destination, enabled_options, state)
                 || !eval_skin_draw_condition(&destination.draw, state)
                 || graph.graph_type() != 0
             {
@@ -111,7 +111,7 @@ macro_rules! skin_document_render_graph_select_methods {
             state: &SkinDrawState,
         ) -> Vec<SkinRenderItem> {
             if row.chart_bpm_graph_segments.is_empty()
-                || !test_skin_ops(&destination.op, enabled_options, state)
+                || !destination_ops_match(destination, enabled_options, state)
                 || !eval_skin_draw_condition(&destination.draw, state)
             {
                 return Vec::new();

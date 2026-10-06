@@ -3,6 +3,34 @@ use super::*;
 pub(super) const LUA_TEXT_REF_SENTINEL_PREFIX: &str = "__BMZ_TEXT_REF_";
 pub(super) const LUA_TEXT_REF_SENTINEL_SUFFIX: &str = "__";
 
+pub(super) fn lua_property_id(
+    lua: &Lua,
+    value: &Value,
+    family: PropertyFamily,
+) -> mlua::Result<Option<i32>> {
+    // Preserve mlua's existing numeric and numeric-string argument conversions.
+    match <i32 as mlua::FromLua>::from_lua(value.clone(), lua) {
+        Ok(id) => Ok(Some(id)),
+        Err(error) => match value {
+            Value::String(name) => Ok(resolve_property_name(family, &name.to_str()?)),
+            _ => Err(error),
+        },
+    }
+}
+
+pub(super) fn lua_boolean_property(
+    lua: &Lua,
+    value: &Value,
+) -> mlua::Result<Option<ResolvedBooleanProperty>> {
+    match <i32 as mlua::FromLua>::from_lua(value.clone(), lua) {
+        Ok(id) => Ok(Some(ResolvedBooleanProperty { id, negated: false })),
+        Err(error) => match value {
+            Value::String(name) => Ok(resolve_boolean_property_name(&name.to_str()?)),
+            _ => Err(error),
+        },
+    }
+}
+
 pub(super) fn lua_runtime_stub_number(ref_id: i32) -> i32 {
     let now = unix_seconds_to_utc_datetime(lua_os_now_seconds());
     match ref_id {
@@ -50,7 +78,10 @@ pub(super) fn create_main_state_stub(
     let probe_for_number = probe.clone();
     table.set(
         "number",
-        lua.create_function(move |_, ref_id: i32| {
+        lua.create_function(move |lua, argument: Value| {
+            let Some(ref_id) = lua_property_id(lua, &argument, PropertyFamily::Integer)? else {
+                return Ok(0);
+            };
             Ok(probe_for_number
                 .lock()
                 .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
@@ -81,17 +112,24 @@ pub(super) fn create_main_state_stub(
     let probe_for_timer = probe.clone();
     table.set(
         "option",
-        lua.create_function(move |_, option_id: i32| {
+        lua.create_function(move |lua, argument: Value| {
+            let Some(property) = lua_boolean_property(lua, &argument)? else {
+                return Ok(false);
+            };
             Ok(probe_for_option
                 .lock()
                 .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
-                .option(option_id))
+                .option(property.id)
+                ^ property.negated)
         })?,
     )?;
     let probe_for_text = probe.clone();
     table.set(
         "text",
-        lua.create_function(move |_, ref_id: i32| {
+        lua.create_function(move |lua, argument: Value| {
+            let Some(ref_id) = lua_property_id(lua, &argument, PropertyFamily::String)? else {
+                return Ok(String::new());
+            };
             Ok(probe_for_text
                 .lock()
                 .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
@@ -112,7 +150,10 @@ pub(super) fn create_main_state_stub(
     let probe_for_float_number = probe.clone();
     table.set(
         "float_number",
-        lua.create_function(move |_, ref_id: i32| {
+        lua.create_function(move |lua, argument: Value| {
+            let Some(ref_id) = lua_property_id(lua, &argument, PropertyFamily::Float)? else {
+                return Ok(0.0);
+            };
             Ok(probe_for_float_number
                 .lock()
                 .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?

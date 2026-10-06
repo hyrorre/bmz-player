@@ -19,6 +19,7 @@ pub(in crate::skin::document_render) fn fixed_image_destination_cacheable(
 ) -> bool {
     if document.lr2_charts.iter().any(|chart| chart.id == destination.id)
         || !destination.op.is_empty()
+        || !destination.op_expr.is_empty()
         || !destination.draw.trim().is_empty()
         || destination.timer.is_some()
         || !destination.timer_expr.is_empty()
@@ -206,7 +207,7 @@ macro_rules! skin_document_render_core_static_methods {
                         continue;
                     }
                     let prepared_number = prepared_number.flatten();
-                    if !destination.op.is_empty()
+                    if (!destination.op.is_empty() || !destination.op_expr.is_empty())
                         && !destination_ops_match(destination, enabled_options, state)
                     {
                         continue;

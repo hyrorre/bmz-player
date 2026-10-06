@@ -191,6 +191,7 @@ fn default_ambient_blur() -> f32 {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(remote = "Self")]
 pub struct SkinDestinationDef {
     #[serde(default, deserialize_with = "deserialize_skin_id")]
     pub id: String,
@@ -233,6 +234,9 @@ pub struct SkinDestinationDef {
     pub stretch: i32,
     #[serde(default, deserialize_with = "deserialize_op_codes")]
     pub op: Vec<i32>,
+    /// String properties and expressions are ANDed individually with numeric `op`.
+    #[serde(default)]
+    pub op_expr: Box<[String]>,
     #[serde(default)]
     pub draw: String,
     /// BMZ extension: make any destination, including text and panel, an event target.
@@ -248,6 +252,55 @@ pub struct SkinDestinationDef {
     pub dst: Vec<SkinDstEntry>,
     #[serde(rename = "mouseRect")]
     pub mouse_rect: Option<SkinRectDef>,
+}
+
+impl<'de> Deserialize<'de> for SkinDestinationDef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut value = JsonValue::deserialize(deserializer)?;
+        if let Some(object) = value.as_object_mut() {
+            if let Some(op) = object.remove("op") {
+                let values = match op {
+                    JsonValue::Array(values) => values,
+                    value => vec![value],
+                };
+                let mut expressions = Vec::new();
+                let mut numbers = Vec::new();
+                for value in values {
+                    if let Some(name) = value.as_str() {
+                        if let Some(property) = resolve_boolean_property_name(name)
+                            && (!property.negated || property.id != 0)
+                        {
+                            numbers.push(JsonValue::from(if property.negated {
+                                -property.id
+                            } else {
+                                property.id
+                            }));
+                        } else {
+                            expressions.push(value);
+                        }
+                    } else {
+                        numbers.push(value);
+                    }
+                }
+                object.insert("op".to_string(), JsonValue::Array(numbers));
+                if !expressions.is_empty() {
+                    let existing =
+                        object.entry("op_expr").or_insert_with(|| JsonValue::Array(Vec::new()));
+                    let Some(existing) = existing.as_array_mut() else {
+                        return Err(D::Error::custom("op_expr must be an array"));
+                    };
+                    existing.extend(expressions);
+                }
+            }
+            if let Some(JsonValue::Number(id)) = object.get("draw") {
+                object.insert("draw".to_string(), JsonValue::String(format!("option({id})")));
+            }
+        }
+        Self::deserialize(value).map_err(D::Error::custom)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

@@ -199,5 +199,7 @@ mod cases_06;
 mod cases_07;
 #[path = "tests/custom_timers.rs"]
 mod custom_timers;
+#[path = "tests/property_names.rs"]
+mod property_names;
 #[path = "tests/result_panels.rs"]
 mod result_panels;

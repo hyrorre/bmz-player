@@ -82,9 +82,6 @@ fn config_allow_destination(
 ) -> bool {
     let filter_ops: Vec<i32> =
         destination.op.iter().copied().filter(|op| !(1..=3).contains(op)).collect();
-    if filter_ops.is_empty() {
-        return true;
-    }
     test_ops(&filter_ops, enabled_options, state)
 }
 

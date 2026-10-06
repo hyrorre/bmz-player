@@ -245,6 +245,42 @@ Selectのnumber `350/351` は鍵盤の通常ノーツ/LN数で、スクラッチ
 含めない。END密度は時刻順のノーツ分布とTOTALから求め、保存済み分布の読み込み時にも
 再計算してキャッシュするため、この表示修正のための曲再スキャンは不要。
 
+## 名前によるプロパティ参照
+
+beatorajaの名前付きプロパティを、BMZが既に扱う数値IDの評価経路へ解決します。
+名前は大文字小文字を区別し、上流の綴りをそのまま使用します。
+対応表は上流の固定名512件と番号付きの名前を含みますが、名前からIDへの解決と
+そのIDが表す値の実装は別です。未対応IDの意味を追加するものではありません。
+
+| 入力 | 名前を解決する種類 |
+|---|---|
+| JSON / Luaの `value[].value`、`imageset[].value` | IntegerProperty（例: `score`） |
+| JSON / Luaの `text[].value` | StringProperty（例: `title`） |
+| JSON / Luaの `slider[].value`、`graph[].value` | RateType（例: `music_progress`） |
+| destinationの `op`、`draw` | BooleanProperty（例: `bgaon`、`!bgaon`） |
+| `main_state.number` / `text` / `option` の引数 | 各Integer / String / BooleanProperty |
+| `main_state.float_number` の引数 | FloatPropertyの番号付き名、FloatType、RateTypeの順 |
+
+`ref` は従来どおり数値です。特に `imageset.ref` のIndexTypeと
+`imageset.value` のIntegerPropertyは異なる種類として扱います。
+`imageset.value` が負なら非表示、画像数以上なら先頭画像を選びます。
+JSONのFloatPropertyにあたる `slider.value` / `graph.value` はRateTypeだけを使い、
+Luaの `main_state.float_number` が扱うFloatType名へは拡張しません。
+
+Boolean名の先頭の `!` は1個ごとに否定します。未知名は否定してもtrueにしません。
+`op` 配列は数値と文字列を混在でき、各条件をANDで評価します。
+文字列内のOR等はその条件の中で評価し、隣の条件とは結合しません。
+型付き `value` や条件の未知文字列は既存の式評価へ渡します。
+Luaの `main_state` への未知名は式として実行せず、number / float_numberは0、
+textは空文字、optionはfalseを返します。既存の数値・数値文字列引数も使用できます。
+ロード時の依存値捕捉と永続VMの実行時評価は同じ名前解決を使用します。
+
+対応表は [生成スクリプト](../scripts/generate_skin_property_names.py) で
+`.local/beatoraja` の参照ソースから生成しています。
+`python scripts/generate_skin_property_names.py --check` で参照ソースとの一致を確認できます。
+通常のビルドではチェックイン済みの表を使い、Javaや参照チェックアウトを必要としません。
+`floatvalue` 等の新しいスキーマやLua APIはこの対応には含みません。
+
 ## Lua Runtime Compatibility Mode
 
 通常の `auto` モードはLua functionをロード時に宣言的なref/式へ変換し、推論できない

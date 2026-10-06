@@ -84,6 +84,9 @@ pub(super) fn graph_value(graph_type: i32, state: &SkinDrawState) -> f32 {
 }
 
 pub(super) fn graph_raw_value(graph: &SkinGraphDef, state: &SkinDrawState) -> f32 {
+    if let Some(property) = &graph.value {
+        return skin_rate_property(property, state).unwrap_or(0.0);
+    }
     if !graph.value_expr.trim().is_empty() {
         if let Some(value) = evaluate_lua_number_expr(&graph.value_expr, state) {
             return value as f32;
@@ -102,7 +105,7 @@ pub(super) fn graph_raw_value(graph: &SkinGraphDef, state: &SkinDrawState) -> f3
 /// Returns (fill multiplier on dst extent, UV clip ratio 0.0-1.0).
 pub(super) fn graph_fill_dimensions(graph: &SkinGraphDef, state: &SkinDrawState) -> (f32, f32) {
     let raw = graph_raw_value(graph, state);
-    if !graph.value_expr.trim().is_empty() {
+    if graph.value.is_some() || !graph.value_expr.trim().is_empty() {
         // beatoraja Lua graph: rendered size = dst.w * value (value is pixel multiplier).
         let max = graph.max.max(1) as f32;
         let raw = raw.max(0.0);
@@ -190,6 +193,9 @@ pub(super) fn judge_rate(count: u32, total: u32) -> f32 {
 }
 
 pub(super) fn skin_slider_progress(slider: &SkinSliderDef, state: &SkinDrawState) -> Option<f32> {
+    if let Some(property) = &slider.value {
+        return skin_rate_property(property, state).map(|progress| progress.clamp(0.0, 1.0));
+    }
     if let Some(progress) = evaluate_lua_number_expr(&slider.value_expr, state) {
         return Some((progress as f32).clamp(0.0, 1.0));
     }

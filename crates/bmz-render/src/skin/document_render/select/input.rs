@@ -35,7 +35,8 @@ pub(in crate::skin::document_render) fn select_search_input_anchors<'a>(
                 if ops.len() == destination.op.len() && ops.iter().eq(destination.op.iter()) {
                     destination_ops_match(destination, enabled_options, state)
                 } else {
-                    test_skin_ops(ops, enabled_options, state)
+                    destination_property_conditions_match(destination, enabled_options, state)
+                        && test_skin_ops(ops, enabled_options, state)
                 }
             },
         ) {

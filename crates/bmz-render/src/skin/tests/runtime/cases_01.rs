@@ -882,6 +882,7 @@ fn display_signed_number_digits_uses_sign_cell_and_row_offset() {
         zeropadding: 1,
         space: 0,
         ref_id: 152,
+        value: None,
         expr: String::new(),
         value_expr: String::new(),
         offset: Vec::new(),

@@ -29,6 +29,9 @@ pub struct SkinGraphDef {
     /// Lua `value = function()` から変換した fill 比率式 (0.0–1.0)。空なら `graph_type` を使う。
     #[serde(default)]
     pub value_expr: String,
+    /// beatoraja JSON FloatProperty uses the Rate family.
+    #[serde(default)]
+    pub value: Option<SkinPropertyValue>,
     #[serde(default, rename = "isRefNum", deserialize_with = "deserialize_skin_bool")]
     pub is_ref_num: bool,
     #[serde(default)]

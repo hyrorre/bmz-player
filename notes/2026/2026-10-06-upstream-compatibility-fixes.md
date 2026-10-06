@@ -145,6 +145,29 @@ BMSONのresource ID 0には既定ミス表示の意味を追加しない。譜�
 - fmt、bmz-chart check / all-targets Clippy / 全テスト: 成功。169 passed / 2 ignored。
 - 環境由来のincremental cache hard-link警告あり。実機での画像表示は未確認。
 
+## 7. 名前によるスキンプロパティ・否定条件
+
+参照beatorajaのfactoryから固定512名・完全一致パターン95名・番号範囲15件を生成し、
+種類別の名前解決を `bmz-skin-document` へ集約した。公開名の大小文字・綴りを保持する。
+Integer / Index / Rate / Float / String / Booleanを区別し、名前対応と未実装IDの意味対応は分ける。
+生成スクリプトは参照commitとJavaファイルの一致、未解決定数・欠落・重複を検証する。
+通常ビルドはチェックイン済みの表を使い、参照checkoutやJavaへ依存しない。
+
+型付き `value`、destinationの名前付き `op` / `draw`、Luaの `main_state` 4種の引数に適用。
+Booleanの否定、混在opの各個AND、既存の式・数値引数、load時依存捕捉と永続VMを維持する。
+`imageset.value` はIntegerとして扱い、負値は非表示、上限外は先頭画像とする。
+`ref` は数値のまま。新しいfloatvalue schemaやLua APIは追加しない。
+対応範囲は [skin.md](../../docs/skin.md#名前によるプロパティ参照) を参照。
+
+- 追加回帰15件: resolver 6、schema 3、renderer 4、Lua 2。
+  全名・番号境界・種類衝突・未知名・否定、Auto/Compat、Lua→JSON→load、状態保持を確認。
+- 生成表 `--check`、fmt、workspace check、変更3crateのall-targets Clippy: 成功。
+- 通常権限のworkspace全テスト: 3819 passed / 28 ignored
+  （player子プロセス出力の重複1件を除く）。
+- workspace Clippyは既存 `input/capture.rs:111` の `let_unit_value` だけで失敗。
+  条件配列のサイズ増加による新規lintは固定長の格納形式へ変更して解消した。
+- 実機UI比較は未実施。ログ: `.local/validation/2026-10-06-property-names/`。
+
 ## 検証楽曲
 
 [作者の配布ページ](https://www.luzeria.net/?p=387)から「運命論」を取得した。

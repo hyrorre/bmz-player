@@ -12,7 +12,7 @@ macro_rules! skin_document_render_play_gauge_methods {
                 self.all_destinations(&enabled_options).into_iter().find(|destination| {
                     self.destination_uses_skin_gauge_bar_render(destination)
                         && destination.timer.is_none()
-                        && test_skin_ops(&destination.op, &enabled_options, &state)
+                        && destination_ops_match(destination, &enabled_options, &state)
                         && eval_skin_draw_condition(&destination.draw, &state)
                 })?;
             self.resolve_gauge_destination_items(destination, &enabled_options, &state, sources)

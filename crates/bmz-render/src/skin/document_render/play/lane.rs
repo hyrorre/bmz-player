@@ -98,7 +98,7 @@ macro_rules! skin_document_render_play_lane_methods {
             let timeline_bottom_px = canvas_h * (1.0 - bottom_y);
             let mut items = Vec::new();
             for destination in destinations {
-                if !test_skin_ops(&destination.op, &enabled_options, state)
+                if !destination_ops_match(destination, &enabled_options, state)
                     || !eval_skin_draw_condition(&destination.draw, state)
                 {
                     continue;

@@ -242,12 +242,12 @@ pub(in crate::skin) fn skin_state_lane_judge_event_index(
     })
 }
 
-/// beatoraja `main_state.float_number(ref)`。BARGRAPH / SLIDER 系の比率 0.0-1.0。
+/// `main_state.float_number` と既存の FloatProperty 描画経路が共有する数値ID評価。
 pub(in crate::skin) fn skin_state_float_number(ref_id: i32, state: &SkinDrawState) -> Option<f32> {
     let is_play = !state.select_screen && state.result_failed.is_none();
     match ref_id {
-        // `MainStateAccessor.float_number()` calls beatoraja's getRateProperty(),
-        // so only SLIDER/BARGRAPH RateType IDs belong to this namespace.
+        // Names may resolve from FloatType or RateType, but this evaluator only
+        // implements the IDs listed below. Name support does not add ID semantics.
         1 => Some(if state.select_screen {
             state.select_scroll_progress.clamp(0.0, 1.0)
         } else {

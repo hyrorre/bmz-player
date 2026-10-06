@@ -13,6 +13,10 @@ use serde::{Deserialize, Deserializer};
 use serde_json::Value as JsonValue;
 
 mod load;
+mod property_names;
+mod property_value;
+pub use property_names::*;
+pub use property_value::*;
 mod lr2;
 pub use lr2::*;
 mod runtime;

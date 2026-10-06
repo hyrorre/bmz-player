@@ -39,6 +39,30 @@ pub(super) fn skin_state_text_with_draw_state(
     draw_state: Option<&SkinDrawState>,
     state: &SkinTextState<'_>,
 ) -> String {
+    if let Some(property) = &text.value {
+        if let Some(id) = property.resolve_id(PropertyFamily::String) {
+            return skin_main_state_text(id, draw_state, state);
+        }
+        let expression = property.expression().unwrap_or_default();
+        if let Some(draw_state) = draw_state
+            && let Some(value) = evaluate_lua_text_expr(expression, draw_state)
+        {
+            return value;
+        }
+        if matches!(
+            expression.trim(),
+            "bmz:text_concat:1001:1002"
+                | SKIN_EXPR_RESULT_TABLE_TITLE
+                | SKIN_EXPR_DIFFICULTY_NAME
+                | SKIN_EXPR_COURSE_TABLE_TEXT
+        ) {
+            let mut text = text.clone();
+            text.value = None;
+            text.value_expr = expression.to_string();
+            return skin_state_text_with_draw_state(&text, draw_state, state);
+        }
+        return String::new();
+    }
     if let Some(draw_state) = draw_state
         && lua_value_callback_id(&text.value_expr).is_some()
     {

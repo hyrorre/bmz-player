@@ -25,6 +25,7 @@ BMZ固有のIDや詳細な動作契約は [skin.md](skin.md)、互換修正の�
 | ADFX02 / ECFN DETAIL OPTIONS | 別途導入する拡張済みECFNに対応。既存option.pngの直線枠・黒い値欄・オレンジのカーソル、同梱源暎エムゴを使用。7可視列＋補助2列と共通21項目。200msフェードで通常↔詳細の退出・登場を並行再生し、暗幕は1枚。正常ロード時のみ宣言し、本体設定OFF・部品欠落・失敗時とBMZ以外は従来の3パネル。本体同梱には追加しない。[仕様](select-detail-options.md#adfx02--ecfn)、[明示実行テスト](../crates/bmz-player/src/skin_loader/tests/ecfn_detail_options.rs) |
 | ADFX02 / ECFN 基本拡張 | 通常パネルの1P/2P配置を拡張ref 344/345による12種類へ拡張。既存画像の文字・枠・加算カーソルを再利用し、元の領域に収める。上部は`bmz_select_mode`で4K/6K/8Kを含むフィルター名、option 19168でFORCEを表示。クリックevent 11/308とLN/CN/HCNの画像は維持。experimental詳細パネルとは独立し、モジュール欠落・構築失敗・BMZ以外では元の表示を保持する。[記録](../notes/2026/2026-10-05-ecfn-bmz-extensions.md)、[明示実行テスト](../crates/bmz-player/src/skin_loader/tests/ecfn_extensions.rs) |
 | 基本描画 | source、image/imageset、value/text、note/gauge/judge、slider、hiddenCover、destinationのtimer/op/draw、keyframe、UV animation等。[描画評価](../crates/bmz-render/src/skin/document_render/) |
+| 名前付きプロパティ | 型付き `value`、destinationの `op` / `draw`、Luaの `main_state.number` / `float_number` / `text` / `option` を上流名から既存IDへ解決。Boolean名の `!` 否定と混在条件のANDを保持。固定512名と番号付き名の解決に対応するが、未対応IDの意味実装は別。[仕様](skin.md#名前によるプロパティ参照)、[対応表](../crates/bmz-skin-document/src/property_names/generated.rs)、[回帰テスト](../crates/bmz-skin/src/tests/property_names.rs) |
 | LR2減算合成 | `blend=3` はsource alphaを掛けたRGBを描画先から減算し、描画先alphaを保持する。通常描画とAmbient内の描画に対応 |
 | LR2 DST / SRC animation | 区間ごとの三次accとblend/filter/center、SRC/DSTが同じ時計の場合の画像cycle原点を保持。数字はSRC時計で更新 |
 | LR2ノーツ | `DST_NOTE`の全行・時計・条件・座標・大きさを評価し、`SRC_AUTO_*`を部分AUTO入力レーンへ適用。全体AUTOPLAYは通常画像 |

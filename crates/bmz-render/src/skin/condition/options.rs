@@ -10,6 +10,9 @@ pub(in crate::skin) fn destination_ops_match(
     enabled_options: &[i32],
     state: &SkinDrawState,
 ) -> bool {
+    if !destination_property_conditions_match(destination, enabled_options, state) {
+        return false;
+    }
     if is_grade_diff_rank_destination(destination, state) {
         return destination
             .op
@@ -17,6 +20,25 @@ pub(in crate::skin) fn destination_ops_match(
             .all(|&op| test_grade_diff_rank_op(destination, op, enabled_options, state));
     }
     test_skin_ops(&destination.op, enabled_options, state)
+}
+
+pub(in crate::skin) fn destination_property_conditions_match(
+    destination: &SkinDestinationDef,
+    enabled_options: &[i32],
+    state: &SkinDrawState,
+) -> bool {
+    destination.op_expr.iter().all(|expression| {
+        if let Some(property) = resolve_boolean_property_name(expression) {
+            let enabled = if is_grade_diff_rank_destination(destination, state) {
+                test_grade_diff_rank_op(destination, property.id, enabled_options, state)
+            } else {
+                test_skin_op(property.id, enabled_options, state)
+            };
+            enabled ^ property.negated
+        } else {
+            eval_skin_draw_condition(expression, state)
+        }
+    })
 }
 
 fn test_grade_diff_rank_op(

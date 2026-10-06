@@ -100,6 +100,8 @@ mod graphs;
 mod graphs_more;
 #[path = "tests/play.rs"]
 mod play;
+#[path = "tests/property_names.rs"]
+mod property_names;
 #[path = "tests/result.rs"]
 mod result;
 #[path = "tests/runtime.rs"]

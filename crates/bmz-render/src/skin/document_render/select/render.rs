@@ -258,7 +258,11 @@ macro_rules! skin_document_render_select_render_methods {
                             {
                                 destination_ops_match(destination, enabled_options, state)
                             } else {
-                                test_skin_ops(ops, enabled_options, state)
+                                destination_property_conditions_match(
+                                    destination,
+                                    enabled_options,
+                                    state,
+                                ) && test_skin_ops(ops, enabled_options, state)
                             }
                         },
                     ) {

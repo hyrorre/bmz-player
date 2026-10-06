@@ -455,11 +455,26 @@ impl LuaRuntimeStateScope {
                 |lua, (operation, argument, timer_value): (u8, Value, Option<i64>)| {
                     let id = || <i32 as mlua::FromLua>::from_lua(argument.clone(), lua);
                     Ok(match operation {
-                        0 => Value::Boolean(state.option(id()?)),
-                        1 => Value::Integer(state.number(id()?)),
+                        0 => {
+                            Value::Boolean(lua_boolean_property(lua, &argument)?.is_some_and(
+                                |property| state.option(property.id) ^ property.negated,
+                            ))
+                        }
+                        1 => Value::Integer(
+                            lua_property_id(lua, &argument, PropertyFamily::Integer)?
+                                .map_or(0, |id| state.number(id)),
+                        ),
                         2 => Value::Integer(state.exscore()),
-                        3 | 4 => Value::Number(state.float(id()?)),
-                        5 => Value::String(lua.create_string(state.text(id()?))?),
+                        3 | 4 => Value::Number(
+                            lua_property_id(lua, &argument, PropertyFamily::Float)?
+                                .map_or(0.0, |id| state.float(id)),
+                        ),
+                        5 => Value::String(
+                            lua.create_string(
+                                lua_property_id(lua, &argument, PropertyFamily::String)?
+                                    .map_or_else(String::new, |id| state.text(id)),
+                            )?,
+                        ),
                         6 => {
                             let id = id()?;
                             let custom = self
