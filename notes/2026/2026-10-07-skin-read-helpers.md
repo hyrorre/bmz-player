@@ -90,7 +90,7 @@ runtime callback内でだけ参照した場合はVMを維持する。初回Selec
 
 - `cargo fmt --check`: 成功。
 - `cargo check --workspace --locked`: 成功。
-- `cargo clippy --workspace --all-targets --locked -- -D warnings`: 既存問題で失敗。
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`: 初回は既存問題で失敗（下記追補で解消）。
   `crates/bmz-player/src/input/capture.rs:111` の `let _ = route_changed_at` に対する
   `clippy::let_unit_value`。今回の親HEADにも同じ行が存在し、当該ファイルは変更していない。
   lintの抑制や無関係な修正は行わない。
@@ -132,3 +132,16 @@ Lua fixtureと生ログ・PNGは `.local/validation/2026-10-07-skin-read-helpers
 
 未実施: macOS / Linuxの実機表示、モニター間のDPI切替、外部スキン全体の見た目確認。
 offscreen寸法はGPU回帰で検証し、動画ファイル全体のexportはこの作業では行っていない。
+
+### 追補: Clippy修正
+
+追加依頼により `input/capture.rs` のnon-Linux用unit値と破棄を削除した。
+`route_changed_at` はLinuxでだけ宣言・代入し、経路と時刻は従来どおり同じlock内で取得する。
+lintの抑制や入力動作の変更は行っていない。
+
+- `cargo fmt --check`: 成功。
+- `cargo check -p bmz-player --locked`: 成功。
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`: 成功。
+- `cargo test -p bmz-player --locked`: 2,306 passed / 0 failed / 20 ignored。
+
+検証はWindows。Linux/macOSのビルド・実機確認は行っていない。

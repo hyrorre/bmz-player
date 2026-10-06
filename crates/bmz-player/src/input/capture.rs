@@ -93,22 +93,16 @@ impl InputCapture {
             let mut last_devices = Instant::now() - Duration::from_secs(1);
             let mut delivery = ButtonDelivery::default();
             while !worker_stop.load(Ordering::Acquire) {
-                let (configs, slots, route, owner, route_changed_at) = {
+                #[cfg(target_os = "linux")]
+                let route_changed_at;
+                let (configs, slots, route, owner) = {
                     let state = worker_state.lock().unwrap_or_else(|e| e.into_inner());
                     #[cfg(target_os = "linux")]
-                    let changed_at = state.route_changed_at;
-                    #[cfg(not(target_os = "linux"))]
-                    let changed_at = ();
-                    (
-                        state.configs,
-                        state.slots,
-                        state.route.clone(),
-                        state.owner_window,
-                        changed_at,
-                    )
+                    {
+                        route_changed_at = state.route_changed_at;
+                    }
+                    (state.configs, state.slots, state.route.clone(), state.owner_window)
                 };
-                #[cfg(not(target_os = "linux"))]
-                let _ = route_changed_at;
                 #[cfg(windows)]
                 if let Some(native) = &mut native {
                     native_status.store(native.attach(owner).is_ok(), Ordering::Release);
