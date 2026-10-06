@@ -441,7 +441,7 @@ fn finish_session_snapshot_result(
     let summary_clear_type = finish_mode.summary_clear_type(result.clear_type);
     let replay_playback = snapshot.replay_playback;
     let conversion_persistence_disabled =
-        applied_arrange.score_persistence_disabled() || crate::cli::latency_stall_test_enabled();
+        applied_arrange.score_persistence_disabled() || crate::cli::latency_validation_enabled();
     let previous_best = (!conversion_persistence_disabled)
         .then(|| score_db.best_scores_for_charts(&[score_key]).ok())
         .flatten()

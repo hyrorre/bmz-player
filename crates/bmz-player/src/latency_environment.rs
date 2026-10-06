@@ -2,7 +2,8 @@
 use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
 
 pub(crate) fn log(window: &winit::window::Window) {
-    if !bmz_core::latency::diagnostics_enabled() {
+    if !bmz_core::latency::diagnostics_enabled() && !crate::cli::latency_event_loop_probe_enabled()
+    {
         return;
     }
     let display = window.display_handle().ok().map(|h| h.as_raw());
@@ -21,7 +22,9 @@ pub(crate) fn log(window: &winit::window::Window) {
         "execution": if std::path::Path::new("/.flatpak-info").exists() { "flatpak" } else { "native" },
         "window_backend": window_backend, "xwayland": null,
         "session_type_hint": std::env::var("XDG_SESSION_TYPE").ok(),
-        "diagnostics": true, "stall_test": crate::cli::latency_stall_test_enabled(),
+        "diagnostics": bmz_core::latency::diagnostics_enabled(), "stall_test": crate::cli::latency_stall_test_enabled(),
+        "event_loop_probe": crate::cli::latency_event_loop_probe_enabled(),
+        "legacy_wayland_present": crate::cli::latency_legacy_wayland_present_enabled(),
         "quantiles": "logarithmic bucket upper bound capped by observed max",
         "physical_press_to_output_ns": null,
         "winit_os_to_receive_ns": null,

@@ -1,6 +1,8 @@
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppOptions {
     pub latency_stall_test: bool,
+    pub latency_event_loop_probe: bool,
+    pub latency_legacy_wayland_present: bool,
     pub play_overrides: super::PlayOverrides,
     pub window_overrides: super::WindowOverrides,
     pub print_effective_options: bool,
@@ -160,6 +162,8 @@ impl AppOptions {
                 }
                 SMOKE_EXIT_ON_RESULT_ARG => options.smoke_exit_on_result = true,
                 LATENCY_STALL_TEST_ARG => options.latency_stall_test = true,
+                LATENCY_EVENT_LOOP_PROBE_ARG => options.latency_event_loop_probe = true,
+                LATENCY_LEGACY_WAYLAND_PRESENT_ARG => options.latency_legacy_wayland_present = true,
                 SMOKE_SCREENSHOT_ARG => {
                     let Some(value) = args.next() else {
                         bail!("{SMOKE_SCREENSHOT_ARG} requires an output path");

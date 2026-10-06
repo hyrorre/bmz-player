@@ -15,6 +15,10 @@ impl WinitApp {
     ) -> Result<Self> {
         let constructor_started_at = Instant::now();
         crate::cli::configure_latency_stall_test(options.latency_stall_test);
+        crate::cli::configure_latency_event_loop_probe(options.latency_event_loop_probe);
+        crate::cli::configure_latency_legacy_wayland_present(
+            options.latency_legacy_wayland_present,
+        );
         let mut boot = boot;
         let viewer_mode = options.viewer_play;
         if let Some(cli_renderer) = options.renderer.clone() {
@@ -269,6 +273,11 @@ impl WinitApp {
             input: AppInputRuntime::default(),
             raw_input_bridge,
             gamepad,
+            event_loop_probe: if options.latency_event_loop_probe {
+                Some(event_loop_probe::Probe::start(event_proxy.clone())?)
+            } else {
+                None
+            },
             event_proxy,
             frame: FrameRuntime::new(now),
             deferred_boot: deferred_boot_action(boot_chart_id, &options),

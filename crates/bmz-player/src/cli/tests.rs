@@ -825,3 +825,25 @@ fn latency_stall_test_is_explicit_and_defaults_off() {
     assert!(AppOptions::parse_args(["--latency-stall-test"]).unwrap().latency_stall_test);
     assert!(app_help_text().contains("--latency-stall-test"));
 }
+
+#[test]
+fn event_loop_probe_is_explicit_and_does_not_enable_stalls() {
+    assert!(!AppOptions::default().latency_event_loop_probe);
+    let options = AppOptions::parse_args(["--latency-event-loop-probe"]).unwrap();
+    assert!(options.latency_event_loop_probe);
+    assert!(!options.latency_stall_test);
+    let options =
+        AppOptions::parse_args(["--latency-event-loop-probe", "--latency-stall-test"]).unwrap();
+    assert!(options.latency_event_loop_probe && options.latency_stall_test);
+    assert!(app_help_text().contains("--latency-event-loop-probe"));
+}
+
+#[test]
+fn legacy_wayland_presentation_is_only_an_explicit_comparison_override() {
+    assert!(!AppOptions::default().latency_legacy_wayland_present);
+    let options = AppOptions::parse_args(["--latency-legacy-wayland-present"]).unwrap();
+    assert!(options.latency_legacy_wayland_present);
+    assert!(!options.latency_stall_test);
+    assert!(!options.latency_event_loop_probe);
+    assert!(app_help_text().contains("--latency-legacy-wayland-present"));
+}

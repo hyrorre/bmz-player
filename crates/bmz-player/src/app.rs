@@ -216,6 +216,7 @@ mod course_flow_metrics;
 mod course_flow_start;
 #[path = "app/course_metrics_state.rs"]
 mod course_metrics_state;
+mod event_loop_probe;
 mod frame_flow;
 mod frame_runtime;
 mod input_runtime;
@@ -401,6 +402,7 @@ const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
 #[derive(Debug, Clone)]
 enum AppUserEvent {
+    LatencyProbe(event_loop_probe::Ticket),
     ProfileChangeReady,
     SkinUpload { sent_at: Instant },
     SystemSoundReady { generation: u64 },
@@ -614,7 +616,7 @@ fn spawn_ir_sync_worker(
     boot: &bootstrap::BootstrappedApp,
     mut select_rx: tokio::sync::watch::Receiver<bool>,
 ) -> Option<IrSyncWorker> {
-    if crate::cli::latency_stall_test_enabled() {
+    if crate::cli::latency_validation_enabled() {
         return None;
     }
     let ir_config = boot.profile_config.ir.clone();
@@ -748,6 +750,7 @@ struct WinitApp {
     gamepad: Option<crate::input::capture::InputCapture>,
     /// worker 完了時に main thread の redraw を起こすための winit user event proxy。
     event_proxy: EventLoopProxy<AppUserEvent>,
+    event_loop_probe: Option<event_loop_probe::Probe>,
     /// frame pacing、確定FPS、scene別profile集計をまとめた描画runtime。
     frame: FrameRuntime,
     deferred_boot: Option<DeferredBoot>,

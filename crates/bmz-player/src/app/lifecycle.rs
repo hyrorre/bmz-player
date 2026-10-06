@@ -34,6 +34,9 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         tracing::info!("winit app resumed");
+        if let Some(probe) = &mut self.event_loop_probe {
+            probe.reset("resumed");
+        }
         self.ensure_window(event_loop);
     }
 
@@ -460,6 +463,12 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AppUserEvent) {
         match event {
+            AppUserEvent::LatencyProbe(ticket) => {
+                self.update_event_loop_probe_context();
+                if let Some(probe) = &mut self.event_loop_probe {
+                    probe.receive(ticket);
+                }
+            }
             AppUserEvent::ProfileChangeReady => {
                 self.poll_select_maintenance();
                 self.request_redraw();
@@ -566,6 +575,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.update_event_loop_probe_context();
         if std::mem::take(&mut self.ui.device_events_reconfigure_pending) {
             self.configure_device_events(event_loop);
         }
@@ -605,6 +615,25 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
 }
 
 impl WinitApp {
+    fn update_event_loop_probe_context(&mut self) {
+        if self.event_loop_probe.is_none() {
+            return;
+        }
+        let context = event_loop_probe::Context {
+            scene: match self.current_scene_kind() {
+                AppSceneKind::Select => "select",
+                AppSceneKind::Decide => "decide",
+                AppSceneKind::Play => "play",
+                AppSceneKind::Result => "result",
+            },
+            focused: self.ui.focused,
+            generation: self.play_input_backend().map(|input| input.generation()),
+        };
+        if let Some(probe) = &mut self.event_loop_probe {
+            probe.set_context(context);
+        }
+    }
+
     /// Rust の drop cascade に依存せず、プロセス終了前に必要な永続化と停止を完了する。
     ///
     /// Sparkle の延期 handler を呼ぶ前にも通常の `exiting` からも通るため、再入可能にする。
@@ -614,6 +643,7 @@ impl WinitApp {
             return;
         }
         self.integrations.exit_prepared = true;
+        self.event_loop_probe = None;
         tracing::info!(reason, "exit preparation started");
         if pause_update {
             crate::update::sparkle::pause();
