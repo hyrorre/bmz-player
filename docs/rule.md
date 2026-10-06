@@ -34,7 +34,8 @@ DX MODE も現在の LR2oraja Endless Dream 本体に統合されているため
 | CN/HCN 早離し猶予 | 9K は 200ms、それ以外は 0 | 0 | 9K は 200ms、それ以外は 0 |
 | score / replay 保存 | `rule_mode=Beatoraja` | `rule_mode=Lr2Oraja` | `rule_mode=Dx` |
 
-DX MODE の IR 抑制は BMZ では実装しない方針。
+DX MODE 固有の IR 抑制は BMZ公式IR / rianIR には適用しない。
+BMS-IR は対応 rule mode の制約により DX を送信対象にしない。
 
 ## Judge Windows
 
@@ -275,15 +276,21 @@ Hard / Class は 30% 未満でダメージを 0.5 倍にする。
 
 | gauge | min / max | init | border | PG/GR/GD | BAD/POOR/EMPTY POOR |
 | --- | --- | ---: | ---: | --- | --- |
-| AssistEasy | 2 / 120 | 30 | 65 | `POP total * 1.2/1.2/0.6` | `-1.02/-3/-3` |
-| Easy | 2 / 120 | 30 | 85 | `POP total * 1.2/1.2/0.6` | `-1.02/-3/-3` |
-| Normal | 2 / 120 | 30 | 85 | `POP total * 1.2/1.2/0.6` | `-2.04/-6/-6` |
-| Hard | 2 / 120 | 30 | 85 | `POP total * 1.2/1.2/0.6` | `-4.08/-12/-12` |
-| ExHard | 2 / 120 | 30 | 85 | `POP total * 1.2/1.2/0.6` | `-8.16/-24/-24` |
+| AssistEasy | 2 / 120 | 30 | 65 | `POP total * 1.2/1.2/0.6` | `-0.937/-2.929/-2.929` |
+| Easy | 2 / 120 | 30 | 85 | `POP total * 1.2/1.2/0.6` | `-0.937/-2.929/-2.929` |
+| Normal | 2 / 120 | 30 | 85 | `POP total * 1.2/1.2/0.6` | `-1.992/-5.976/-5.976` |
+| Hard | 2 / 120 | 30 | 85 | `POP total * 1.2/1.2/0.6` | `-3.984/-11.952/-11.952` |
+| ExHard | 2 / 120 | 30 | 85 | `POP total * 1.2/1.2/0.6` | `-7.968/-23.906/-23.906` |
 | Hazard | 0 / 100 | 100 | 0 | `0.15/0.06/0` | `-100/-100/-100` |
 | Class | 0 / 100 | 100 | 0 | `0.15/0.15/0.06` | `-1.5/-3/-3` |
 | ExClass | 0 / 100 | 100 | 0 | `0.15/0.15/0.03` | `-3/-6/-6` |
 | ExHardClass | 0 / 100 | 100 | 0 | `0.15/0.15/0` | `-5/-10/-10` |
+
+AssistEasy から ExHard までの減少量は、LR2orajaED-rian の
+`c980834957b03195880544ced49c9ee94890557b` に合わせる。
+この補正は 9K DX の BAD / POOR / EMPTY POOR と、BAD の半分を適用する
+HCN 早離し中の継続ダメージに反映される。回復量、下限・上限・クリア境界、
+Hazard / Class 系、9K 以外の DX と他の RuleMode は変更しない。
 
 AssistEasy から ExHard までの正の回復量には次の POP TOTAL を使う。
 除算と `floor` は LR2oraja Endless Dream と同じ整数切り捨てを含む。
@@ -320,9 +327,23 @@ recovery = base * pop_total / total_notes
 コースの集計キーは `(course_hash, ln_policy, rule_mode)` とし、`ln_policy` には
 全譜面の `ChartLnProfile` とコース LN constraint から正規化した `LnScorePolicy` を保存する。
 
+### 9K DX ゲージ補正と過去の記録
+
+上記のゲージ減少量補正で、保存済みのスコア・ランプ・履歴は書き換えない。
+replay はゲージ係数の世代を保存しておらず、入力を再生時のルールで採点するため、
+補正前の 9K DX replay は保存当時とゲージ推移・クリア成否が異なる場合がある。
+replay 再生結果はローカルスコアを更新せず、IR にも送信しない。
+
+新規プレイは補正後のゲージで保存・IR 送信を行う。score / replay の形式と
+`RuleMode::Dx` の保存キーは変えず、IR のルール識別子も既存のまま扱う
+（BMZ公式IR は `Dx`、rianIR は `body=DX MODE`）。BMS-IR は従来どおり DX を
+送信対象にしない。
+ゲージ係数の世代ではランキングを分離しないため、過去の DX スコアと同じ区分になる。
+送信条件は [score-persistence.md](score-persistence.md) を参照する。
+
 ## Known Notes
 
-- DX MODE の IR 抑制は BMZ では実装しない。
+- DX MODE 固有の IR 抑制は BMZ公式IR / rianIR には適用しない。BMS-IR は DX 非対応。
 - Beatoraja mode の `#DEFEXRANK` 実機挙動は、必要になった時点で改めて
   beatoraja 実行結果と突き合わせる。LR2oraja mode は元種別を保持して実装済み。
 - LR2 csvskin は未対応。現在の rule mode は gameplay / score / gauge の切替だけを対象にする。

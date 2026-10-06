@@ -46,6 +46,32 @@
 
 対応書式は [README](../../README.md) に記載。
 
+## 2. DX 9Kゲージ減少量
+
+`dx_pop_gauge_definition_table` のAssistEasy～ExHardについて、BAD / POOR / EMPTY POORを
+上流 `c9808349` の値へ合わせた。回復量、下限2・上限120、クリア境界、Hazard・段位、
+9K以外のDX、他ルールは維持する。HCN継続ダメージも既存のBAD半率から補正後の値になる。
+
+ゲージ更新テストでTOTAL・ノーツ数への非依存、クリア境界の前後、下限、HCNを検証。
+app側でもreplay入力と見逃し処理を通してBAD / EMPTY POOR / POORの減少量を検証した。
+保存済みのスコアは移行しない。古いreplayを現行ルールで採点すると、記録時とゲージ推移が
+異なる場合がある。保存・IRの扱いは [rule.md](../../docs/rule.md) に記載した。
+
+- focused `dx_9key` 回帰: 8件成功。
+- `cargo fmt --check` / `cargo check --workspace --locked`: 成功。
+- `cargo clippy -p bmz-gameplay --all-targets --locked -- -D warnings`: 成功。
+- 通常権限の `cargo test --workspace --locked --no-fail-fast -- --show-output`: 成功。
+  bmz-player 2227 passed / 19 ignored、bmz-gameplay 236 passed。
+  全crate合計3784 passed / 28 ignored（player子プロセス出力の重複1件を除く）。
+  ignoredのGPU・実機等の検証を成功件数に含めない。
+- 全体Clippy: 未変更の `crates/bmz-player/src/input/capture.rs:111` にある
+  `let _ = route_changed_at;` がWindowsで `clippy::let_unit_value` となり失敗。
+  この作業では修正・抑制していない。
+- 初回の制限付きworkspaceテストはファイル保存・通信で失敗し、更新テストが待機した。
+  replay保存の同一テストが制限付き実行では `os error 5`、通常権限では成功することを確認。
+  自分が起動したテストだけを中断し、通常権限で全体を再実行した。初回ログは別途保持する。
+- 検証ログ: `.local/validation/2026-10-06-dx9k-gauge/`（Git管理外）。
+
 ## 検証楽曲
 
 [作者の配布ページ](https://www.luzeria.net/?p=387)から「運命論」を取得した。

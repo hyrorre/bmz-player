@@ -52,7 +52,56 @@ fn build_game_session_applies_dx_9key_pop_rules() {
         .expect("Normal gauge present");
     assert_eq!((normal.definition.min, normal.definition.max), (2.0, 120.0));
     assert_eq!((normal.definition.init, normal.definition.border), (30.0, 85.0));
-    assert_eq!(normal.definition.values[3..], [-2.04, -6.0, -6.0]);
+    assert_eq!(normal.definition.values[3..], [-1.992, -5.976, -5.976]);
+}
+
+#[test]
+fn dx_9key_replay_judgements_apply_current_pop_damage() {
+    use bmz_core::judge::Judge;
+    use bmz_core::replay::ReplayEvent;
+    use bmz_gameplay::session::{process_misses, process_replay_inputs};
+
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.play.rule_mode = RuleMode::Dx;
+    for (input_time, expected_judge, expected_gauge) in [
+        (Some(900_000), Judge::Bad, 28.008),
+        (Some(800_000), Judge::EmptyPoor, 24.024),
+        (None, Judge::Poor, 24.024),
+    ] {
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K9;
+        chart.lane_notes[Lane::Key1.index()].push(note(1, Lane::Key1, 1_000_000));
+        let mut session = build_game_session(
+            Arc::new(chart),
+            &profile,
+            PlaySessionOptions {
+                gauge_override: Some(GaugeType::Normal),
+                replay_player: Some(ReplayPlayer {
+                    events: input_time
+                        .map(|time| ReplayEvent {
+                            lane: Lane::Key1,
+                            kind: InputKind::Press,
+                            time: TimeUs(time),
+                            device_kind: bmz_core::input::InputDeviceKind::Keyboard,
+                            scratch_direction: None,
+                        })
+                        .into_iter()
+                        .collect(),
+                    ..ReplayPlayer::default()
+                }),
+                ..PlaySessionOptions::default()
+            },
+        );
+
+        let judgements = if let Some(time) = input_time {
+            process_replay_inputs(&mut session, TimeUs(time))
+        } else {
+            process_misses(&mut session, TimeUs(1_200_000))
+        };
+        assert_eq!(judgements.len(), 1);
+        assert_eq!(judgements[0].judge, expected_judge);
+        assert!((session.gauge.current().value - expected_gauge).abs() < 0.000_1);
+    }
 }
 
 #[test]

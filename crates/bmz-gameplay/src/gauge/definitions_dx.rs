@@ -114,7 +114,7 @@ pub(super) fn dx_pop_gauge_definition_table() -> [GaugeDefinition; 9] {
             120.0,
             30.0,
             65.0,
-            [1.2, 1.2, 0.6, -1.02, -3.0, -3.0],
+            [1.2, 1.2, 0.6, -0.937, -2.929, -2.929],
             &[],
         ),
         def(
@@ -125,7 +125,7 @@ pub(super) fn dx_pop_gauge_definition_table() -> [GaugeDefinition; 9] {
             120.0,
             30.0,
             85.0,
-            [1.2, 1.2, 0.6, -1.02, -3.0, -3.0],
+            [1.2, 1.2, 0.6, -0.937, -2.929, -2.929],
             &[],
         ),
         def(
@@ -136,7 +136,7 @@ pub(super) fn dx_pop_gauge_definition_table() -> [GaugeDefinition; 9] {
             120.0,
             30.0,
             85.0,
-            [1.2, 1.2, 0.6, -2.04, -6.0, -6.0],
+            [1.2, 1.2, 0.6, -1.992, -5.976, -5.976],
             &[],
         ),
         def(
@@ -147,7 +147,7 @@ pub(super) fn dx_pop_gauge_definition_table() -> [GaugeDefinition; 9] {
             120.0,
             30.0,
             85.0,
-            [1.2, 1.2, 0.6, -4.08, -12.0, -12.0],
+            [1.2, 1.2, 0.6, -3.984, -11.952, -11.952],
             &[],
         ),
         def(
@@ -158,7 +158,7 @@ pub(super) fn dx_pop_gauge_definition_table() -> [GaugeDefinition; 9] {
             120.0,
             30.0,
             85.0,
-            [1.2, 1.2, 0.6, -8.16, -24.0, -24.0],
+            [1.2, 1.2, 0.6, -7.968, -23.906, -23.906],
             &[],
         ),
         def(

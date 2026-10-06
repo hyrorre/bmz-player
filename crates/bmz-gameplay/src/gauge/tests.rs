@@ -371,23 +371,23 @@ fn dx_9key_gauge_definitions_match_endless_dream_pop_mode() {
         definition_for_rule_mode_and_keymode(GaugeType::AssistEasy, RuleMode::Dx, KeyMode::K9);
     assert_eq!(assist.modifier, GaugeModifier::Pop);
     assert_eq!((assist.min, assist.max, assist.init, assist.border), (2.0, 120.0, 30.0, 65.0));
-    assert_eq!(assist.values, [1.2, 1.2, 0.6, -1.02, -3.0, -3.0]);
+    assert_eq!(assist.values, [1.2, 1.2, 0.6, -0.937, -2.929, -2.929]);
 
     let easy = definition_for_rule_mode_and_keymode(GaugeType::Easy, RuleMode::Dx, KeyMode::K9);
     assert_eq!((easy.min, easy.max, easy.init, easy.border), (2.0, 120.0, 30.0, 85.0));
-    assert_eq!(easy.values, [1.2, 1.2, 0.6, -1.02, -3.0, -3.0]);
+    assert_eq!(easy.values, [1.2, 1.2, 0.6, -0.937, -2.929, -2.929]);
 
     let normal = definition_for_rule_mode_and_keymode(GaugeType::Normal, RuleMode::Dx, KeyMode::K9);
     assert_eq!(normal.modifier, GaugeModifier::Pop);
     assert_eq!((normal.min, normal.max, normal.init, normal.border), (2.0, 120.0, 30.0, 85.0));
-    assert_eq!(normal.values, [1.2, 1.2, 0.6, -2.04, -6.0, -6.0]);
+    assert_eq!(normal.values, [1.2, 1.2, 0.6, -1.992, -5.976, -5.976]);
 
     let hard = definition_for_rule_mode_and_keymode(GaugeType::Hard, RuleMode::Dx, KeyMode::K9);
     assert_eq!(hard.modifier, GaugeModifier::Pop);
-    assert_eq!(hard.values, [1.2, 1.2, 0.6, -4.08, -12.0, -12.0]);
+    assert_eq!(hard.values, [1.2, 1.2, 0.6, -3.984, -11.952, -11.952]);
 
     let exhard = definition_for_rule_mode_and_keymode(GaugeType::ExHard, RuleMode::Dx, KeyMode::K9);
-    assert_eq!(exhard.values, [1.2, 1.2, 0.6, -8.16, -24.0, -24.0]);
+    assert_eq!(exhard.values, [1.2, 1.2, 0.6, -7.968, -23.906, -23.906]);
 
     let hazard = definition_for_rule_mode_and_keymode(GaugeType::Hazard, RuleMode::Dx, KeyMode::K9);
     assert_eq!((hazard.min, hazard.max, hazard.init, hazard.border), (0.0, 100.0, 100.0, 0.0));
@@ -414,6 +414,59 @@ fn dx_9key_gauge_definitions_match_endless_dream_pop_mode() {
 }
 
 #[test]
+fn dx_9key_damage_preserves_clear_border_and_floor() {
+    for (gauge_type, bad, poor, border) in [
+        (GaugeType::AssistEasy, 0.937, 2.929, 65.0),
+        (GaugeType::Easy, 0.937, 2.929, 85.0),
+        (GaugeType::Normal, 1.992, 5.976, 85.0),
+        (GaugeType::Hard, 3.984, 11.952, 85.0),
+        (GaugeType::ExHard, 7.968, 23.906, 85.0),
+    ] {
+        // Damage is independent of chart TOTAL and the dense-chart GOOD boost.
+        for (total, total_notes) in [(160.0, 1), (999.0, 1536), (999.0, 1537)] {
+            let mut gauge = GaugeState::new_with_property_and_rule_mode_and_keymode(
+                gauge_type,
+                total,
+                total_notes,
+                GaugeProperty::Pms,
+                RuleMode::Dx,
+                KeyMode::K9,
+            );
+            for (judge, damage) in
+                [(Judge::Bad, bad), (Judge::Poor, poor), (Judge::EmptyPoor, poor)]
+            {
+                gauge.set_initial_value(120.0);
+                gauge.apply_judge(judge, 1.0);
+                assert!((gauge.current().value - (120.0 - damage)).abs() < 0.000_1);
+
+                for margin in [-0.01, 0.0, 0.01] {
+                    gauge.set_initial_value(border + damage + margin);
+                    gauge.apply_judge(judge, 1.0);
+                    assert!((gauge.current().value - (border + margin)).abs() < 0.000_1);
+                    assert_eq!(gauge.current().is_qualified(), margin >= 0.0);
+                }
+
+                gauge.set_initial_value(2.0 + damage + 0.01);
+                gauge.apply_judge(judge, 1.0);
+                assert!((gauge.current().value - 2.01).abs() < 0.000_1);
+                assert!(!gauge.current_closes_play_on_zero());
+                gauge.apply_judge(judge, 1.0);
+                assert_eq!(gauge.current().value, 2.0);
+                assert_eq!(
+                    gauge.current_closes_play_on_zero(),
+                    matches!(gauge_type, GaugeType::Hard | GaugeType::ExHard)
+                );
+                assert!(!gauge.current().is_qualified());
+            }
+
+            gauge.set_initial_value(30.0);
+            gauge.apply_hcn_drain();
+            assert!((gauge.current().value - (30.0 - bad * 0.5)).abs() < 0.000_1);
+        }
+    }
+}
+
+#[test]
 fn dx_9key_pop_recovery_uses_note_count_formula_and_dense_good_boost() {
     assert_eq!(pop_total_value(0), 0.0);
     assert_eq!(pop_total_value(3072), 300.0);
@@ -429,7 +482,7 @@ fn dx_9key_pop_recovery_uses_note_count_formula_and_dense_good_boost() {
 
     let empty = compile_gauge_definition(&normal, 999.0, 0);
     assert_eq!(empty.values[GaugeJudgeIndex::Pg as usize], 0.0);
-    assert_eq!(empty.values[GaugeJudgeIndex::Bd as usize], -2.04);
+    assert_eq!(empty.values[GaugeJudgeIndex::Bd as usize], -1.992);
 }
 
 #[test]
