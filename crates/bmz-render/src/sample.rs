@@ -245,6 +245,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         main_bpm: 150.0,
         total_gauge: 260.0,
         judge_rank: Some(2),
+        note_judge_window: None,
         key_mode: bmz_core::lane::KeyMode::K7,
         has_long_notes: true,
         ln_mode_index: 1,

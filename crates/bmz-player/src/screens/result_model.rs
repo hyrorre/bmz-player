@@ -42,6 +42,8 @@ pub struct ResultSummary {
     pub main_bpm: f32,
     pub total_gauge: f32,
     pub judge_rank: Option<i32>,
+    /// Final effective note judge window in chart time, frozen at session finish.
+    pub note_judge_window: Option<bmz_gameplay::judge::model::JudgeWindow>,
     pub key_mode: KeyMode,
     /// LN policy / course constraint適用後の実効譜面にLNが含まれるか。
     pub has_long_notes: bool,
@@ -180,6 +182,7 @@ impl ResultSummary {
             main_bpm: initial_bpm,
             total_gauge: gauge_total_for_chart(metadata.total, result.total_notes) as f32,
             judge_rank: metadata.judge_rank,
+            note_judge_window: None,
             key_mode: metadata.key_mode,
             has_long_notes: !chart.long_notes.is_empty(),
             long_note_mode: metadata.long_note_mode,

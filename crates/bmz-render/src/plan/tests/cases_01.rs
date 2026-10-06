@@ -17,16 +17,23 @@ fn skin_difficulty_code_matches_numeric_and_case_insensitive_names() {
 
 #[test]
 fn play_skin_state_carries_frozen_rule_and_ln_score_policy() {
+    let window = bmz_gameplay::judge::window::judge_windows_for_keymode_and_rule_mode(
+        bmz_core::lane::KeyMode::K9,
+        bmz_gameplay::rule::RuleMode::Dx,
+    )
+    .note;
     let snapshot = RenderSnapshot {
         has_long_notes: Some(true),
         rule_mode_index: 2,
         ln_score_policy_index: Some(4),
+        note_judge_window: Some(window),
         ..RenderSnapshot::default()
     };
 
     let state = play::build_play_skin_state(&snapshot, &SkinContext::default(), 0);
 
     assert_eq!(state.rule_mode_index, 2);
+    assert_eq!(state.note_judge_window, Some(window));
     assert_eq!(state.ln_score_policy_index, Some(4));
     assert_eq!(state.ln_policy_setting_index, None);
     assert_eq!(state.chart_has_long_notes, Some(true));
@@ -300,6 +307,7 @@ fn result_plan_uses_skin_document_for_result_and_course_result_types() {
             main_bpm: 0.0,
             total_gauge: 0.0,
             judge_rank: None,
+            note_judge_window: None,
             key_mode: bmz_core::lane::KeyMode::default(),
             has_long_notes: false,
             ln_mode_index: 0,
@@ -542,6 +550,7 @@ fn result_plan_supplies_result_judge_graph_data_to_skin_document() {
         main_bpm: 0.0,
         total_gauge: 0.0,
         judge_rank: None,
+        note_judge_window: None,
         key_mode: bmz_core::lane::KeyMode::default(),
         has_long_notes: false,
         ln_mode_index: 0,
@@ -689,6 +698,10 @@ fn result_skin_state_maps_effective_long_note_state() {
     snapshot.ln_mode_index = 2;
     snapshot.rule_mode_index = 1;
     snapshot.ln_score_policy_index = Some(5);
+    let window = bmz_gameplay::judge::model::JudgeWindow::symmetric(
+        8_333, 16_666, 58_333, 100_000, 500_000, 100_000, 0,
+    );
+    snapshot.note_judge_window = Some(window);
 
     let state = build_result_skin_draw_state(&snapshot, 0);
 
@@ -696,4 +709,5 @@ fn result_skin_state_maps_effective_long_note_state() {
     assert_eq!(state.result_ln_mode_index, Some(2));
     assert_eq!(state.rule_mode_index, 1);
     assert_eq!(state.ln_score_policy_index, Some(5));
+    assert_eq!(state.note_judge_window, Some(window));
 }

@@ -188,6 +188,7 @@ impl WinitApp {
                     main_bpm: result_main_bpm(summary),
                     total_gauge: summary.total_gauge,
                     judge_rank: summary.judge_rank,
+                    note_judge_window: summary.note_judge_window,
                     key_mode: summary.key_mode,
                     has_long_notes: summary.has_long_notes,
                     ln_mode_index: result_long_note_mode_index(summary.long_note_mode),

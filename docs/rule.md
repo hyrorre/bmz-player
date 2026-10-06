@@ -51,6 +51,20 @@ Practiceなどの実入力は従来どおり、譜面時間の判定窓を再生
 実時間の判定幅を維持する。表示オフセットは採点には適用しない。
 リプレイファイルの形式と既存スコアの保存データは変更しない。
 
+### タイミンググラフの判定帯
+
+スキンの TimingVisualizer / TimingDistributionGraph は、Play 中に実際に使う
+通常ノートの判定窓を表示する。`#RANK` だけから再推定せず、DX の 7K / 9K 固定窓、
+LR2oraja のランク変換、custom judge・コース制約を適用した窓に追従する。
+グラフの判定差分と窓はともに譜面時間で扱うため、Practice は速度補正後の窓、
+replay は視聴速度に依存しない窓を使う。`#EXRANK` / chA0 の非適用も各ルールと同じ。
+
+Result は終了時点の最終判定窓を保持し、終了後のプロフィール設定から再計算しない。
+コース全体のグラフは最後にプレイした曲の最終窓を使う。履歴の各判定時点や各曲ごとに
+背景の判定帯を切り替える表示ではない。セッション未生成の placeholder / debug 表示は
+rule mode と key mode・判定ランクから補完し、不明な rule mode は従来の beatoraja 相当とする。
+この表示情報は実行時だけ保持し、スコア・replay の保存形式や採点処理は変更しない。
+
 ### Beatoraja
 
 key mode から beatoraja の player rule に対応する `JudgeProperty` を選ぶ。

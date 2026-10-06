@@ -153,6 +153,7 @@ pub(in crate::plan) fn build_play_skin_state(
         table_song: !snapshot.table_text_primary.is_empty(),
         difficulty: skin_difficulty_code(&snapshot.difficulty_name),
         judge_rank: snapshot.judge_rank,
+        note_judge_window: snapshot.note_judge_window,
         now_bpm: snapshot.now_bpm,
         min_bpm: snapshot.min_bpm,
         max_bpm: snapshot.max_bpm,

@@ -90,6 +90,26 @@ Windowsでは実junction、Unixではsymlinkを使う回帰テストを追加し
 - 検証ログ: `.local/validation/2026-10-06-scan-cycles/`。
 - Unix/macOS上でのリンク作成・実機操作は未実施。
 
+## 4. タイミンググラフの実判定窓反映
+
+Playの `judge.window_set.note` を描画snapshotへ渡し、TimingVisualizerと
+TimingDistributionGraphの判定帯に使う。Resultは終了時snapshotに窓を固定し、
+非同期保存中に元sessionやprofileが変わっても最終窓を保持する。
+コースResultは最終曲の窓を使う。未生成sessionの補完表示もrule/key modeに従う。
+
+DX 7K/9K、LR2oraja、DEFEXRANK、Practice速度50/100/200%、replay視聴速度不変、
+非対称BAD幅と描画矩形を検証した。動的EXRANK非適用など既存の採点契約は維持する。
+保存済みスコア・replay形式は変更しない。表示単位の詳細は [rule.md](../../docs/rule.md) を参照。
+
+- 対象 `timing_judge` 回帰: player 1件、renderer 4件成功。
+- `cargo fmt --check` / workspace all-targets check: 成功。
+- 通常権限のworkspace全テスト: 3789 passed / 28 ignored
+  （player子プロセスの重複1件を除く）。player 2230 passed、renderer 682 passed。
+- renderer all-targets Clippy: 成功。workspace Clippyは既存の
+  `input/capture.rs:111` の `let_unit_value` だけで失敗。
+- 実GPU上の見た目や上流との実プレイ比較は未実施。
+- 検証ログ: `.local/validation/2026-10-06-timing-judge-window/`。
+
 ## 検証楽曲
 
 [作者の配布ページ](https://www.luzeria.net/?p=387)から「運命論」を取得した。

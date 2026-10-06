@@ -1,6 +1,55 @@
 use super::*;
 
 #[test]
+fn timing_judge_window_tracks_runtime_rules_and_playback_speed() {
+    use bmz_chart::model::{JudgeRankEvent, JudgeRankKind, JudgeRankSpec};
+    use bmz_gameplay::replay::ReplayPlayer;
+    use bmz_gameplay::rule::RuleMode;
+    use bmz_gameplay::session::sync_judge_windows;
+
+    for (rule, mode, rank, kind, pgreat_us) in [
+        (RuleMode::Dx, KeyMode::K7, 0, JudgeRankKind::BmsRank, 16_666),
+        (RuleMode::Dx, KeyMode::K9, 0, JudgeRankKind::BmsRank, 25_000),
+        (RuleMode::Lr2Oraja, KeyMode::K7, 4, JudgeRankKind::BmsRank, 18_000),
+        (RuleMode::Beatoraja, KeyMode::K7, 125, JudgeRankKind::DefExRank, 18_600),
+    ] {
+        for replay in [false, true] {
+            let mut profile = ProfileConfig::new_default("default", "Default", 1);
+            profile.play.rule_mode = rule;
+            let mut chart = chart();
+            chart.metadata.key_mode = mode;
+            chart.metadata.judge_rank = Some(rank);
+            chart.metadata.judge_rank_spec = Some(JudgeRankSpec { value: rank, kind });
+            chart.judge_rank_events.push(JudgeRankEvent {
+                tick: ChartTick(0),
+                time: TimeUs(1_000_000),
+                rank_percent: 25,
+            });
+            let mut session = build_game_session(
+                Arc::new(chart),
+                &profile,
+                PlaySessionOptions {
+                    replay_player: replay.then(ReplayPlayer::default),
+                    ..Default::default()
+                },
+            );
+            for rate in [50, 100, 200] {
+                session.audio_clock.set_playback_rate_percent(rate).unwrap();
+                // Imported EXRANK events remain ignored by all current compatible rules.
+                for now in [TimeUs(0), TimeUs(1_500_000)] {
+                    sync_judge_windows(&mut session, now);
+                    let snapshot = build_render_snapshot(&session, now, &[], None);
+                    let actual = session.judge.window_set.note;
+                    assert_eq!(snapshot.note_judge_window, Some(actual));
+                    let scale = if replay { 100 } else { i64::from(rate) };
+                    assert_eq!(actual.pgreat_us, pgreat_us * scale / 100, "{rule:?} {mode:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn snapshot_auto_note_lanes_exclude_full_autoplay_and_display_only_opponent() {
     use bmz_gameplay::autoplay::AutoplayController;
     let profile = ProfileConfig::new_default("default", "Default", 1);

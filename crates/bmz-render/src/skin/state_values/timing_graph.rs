@@ -52,7 +52,7 @@ pub(super) fn timing_judge_band_items(
     colors: [Color; 5],
     state: &SkinDrawState,
 ) -> Vec<SkinRenderItem> {
-    let areas = beatoraja_timing_judge_areas(state);
+    let areas = timing_judge_areas(state);
     let mut items = Vec::new();
     let mut inner_late_ms = 0.0;
     let mut inner_early_ms = 0.0;
@@ -122,6 +122,33 @@ pub(super) fn beatoraja_timing_judge_areas(state: &SkinDrawState) -> [TimingJudg
         state.key_mode,
     );
     timing_judge_areas_from_window(window)
+}
+
+pub(super) fn timing_judge_areas(state: &SkinDrawState) -> [TimingJudgeArea; 5] {
+    use bmz_gameplay::judge::window::{
+        judge_rank_to_percent_optional_for_rule_mode, judge_window_for_rule_mode_and_keymode,
+        judge_windows_for_keymode_and_rule_mode,
+    };
+    use bmz_gameplay::rule::RuleMode;
+
+    if let Some(window) = state.note_judge_window {
+        return timing_judge_areas_from_window(window);
+    }
+    // Placeholder/debug scenes have no session. Preserve legacy beatoraja rank
+    // interpretation, but do not display beatoraja bands for known LR2/DX rules.
+    let rule_mode = match state.rule_mode_index {
+        1 => RuleMode::Lr2Oraja,
+        2 => RuleMode::Dx,
+        _ => return beatoraja_timing_judge_areas(state),
+    };
+    let base = judge_windows_for_keymode_and_rule_mode(state.key_mode, rule_mode).note;
+    let percent = judge_rank_to_percent_optional_for_rule_mode(state.judge_rank, rule_mode);
+    timing_judge_areas_from_window(judge_window_for_rule_mode_and_keymode(
+        base,
+        percent,
+        rule_mode,
+        state.key_mode,
+    ))
 }
 
 pub(super) fn timing_judge_areas_from_window(

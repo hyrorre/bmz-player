@@ -93,6 +93,7 @@ fn course_result_summary_for_skin_uses_aggregate_course_values() {
             main_bpm: 128.0,
             total_gauge: 260.0,
             judge_rank: Some(2),
+            note_judge_window: None,
             key_mode: KeyMode::K7,
             has_long_notes: false,
             long_note_mode: bmz_chart::model::LongNoteMode::Ln,
@@ -247,7 +248,16 @@ fn course_result_summary_for_skin_uses_aggregate_course_values() {
         }),
     };
 
+    let first_window = bmz_gameplay::judge::model::JudgeWindow::symmetric(
+        20_000, 60_000, 150_000, 200_000, 500_000, 150_000, 0,
+    );
+    let last_window = bmz_gameplay::judge::model::JudgeWindow::symmetric(
+        25_000, 50_000, 87_500, 100_000, 500_000, 112_500, 0,
+    );
+    course.entry_summaries[0].note_judge_window = Some(first_window);
+    course.entry_summaries[1].note_judge_window = Some(last_window);
     let mut summary = course_result_summary_for_skin(&course);
+    assert_eq!(summary.note_judge_window, Some(last_window));
     assert_eq!(summary.title, "Course Title");
     assert_eq!(summary.genre, "DAN");
     assert_eq!(summary.clear_type, ClearType::Hard);

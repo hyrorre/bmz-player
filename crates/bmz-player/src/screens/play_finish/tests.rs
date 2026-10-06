@@ -337,7 +337,10 @@ fn finish_session_result_returns_summary() {
         compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
-    let session = session();
+    let mut session = session();
+    let mut windows = session.judge.window_set;
+    windows.note.pgreat_us = 7_000;
+    session.judge.set_window_set(windows);
     let lane_shuffle_pattern = (0..bmz_core::lane::LANE_COUNT as u8).rev().collect::<Vec<_>>();
     let applied_arrange = AppliedArrange {
         arrange: crate::select_options::ArrangeOption::Random,
@@ -385,6 +388,7 @@ fn finish_session_result_returns_summary() {
     assert_eq!(finished.summary.arrange_2p, "MIRROR");
     assert_eq!(finished.summary.lane_shuffle_pattern, lane_shuffle_pattern);
     assert_eq!(finished.summary.target_ex_score, Some(1600));
+    assert_eq!(finished.summary.note_judge_window, Some(windows.note));
     assert_eq!(finished.summary.saved_replay_slots, [true, true, true, false]);
     assert_eq!(finished.summary.replay_slots, [true, true, true, false]);
 
@@ -1030,6 +1034,7 @@ fn spawned_settled_session_result_persists_on_background_worker() {
     );
     let settled_at = TimeUs(i64::MAX);
 
+    let frozen_window = session.judge.window_set.note;
     let pending = spawn_settled_session_result(
         FinishSessionResultOnceRequest {
             profile_paths: &paths,
@@ -1053,6 +1058,7 @@ fn spawned_settled_session_result_persists_on_background_worker() {
     )
     .unwrap();
 
+    session.judge.window_set.note.pgreat_us = 1;
     let deadline = Instant::now() + Duration::from_secs(5);
     let finished = loop {
         if let Some(finished) = pending.try_recv().unwrap() {
@@ -1064,6 +1070,7 @@ fn spawned_settled_session_result_persists_on_background_worker() {
 
     assert!(finished.stored.score_history_id > 0);
     assert_eq!(finished.summary.target_name, "RANK_AAA");
+    assert_eq!(finished.summary.note_judge_window, Some(frozen_window));
     assert_eq!(finished.summary.target, crate::select_options::TargetOption::IrTop);
     assert!(!finished.summary.graph.note_graph_buckets.is_empty());
     assert!(root.join(&finished.stored.replay_path).is_file());

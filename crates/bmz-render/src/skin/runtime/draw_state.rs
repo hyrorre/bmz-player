@@ -280,6 +280,8 @@ pub struct SkinDrawState {
     pub difficulty: i64,
     /// 現在の曲の #RANK / 判定ランク。0..4 は VERYHARD..VERYEASY、10 以上は直接倍率。
     pub judge_rank: Option<i32>,
+    /// Effective note judge window in chart time for timing graph bands.
+    pub note_judge_window: Option<bmz_gameplay::judge::model::JudgeWindow>,
     /// 選択中曲のベストEXスコア。
     pub select_ex_score: Option<u32>,
     /// 選択中曲のリプレイスロット有無。
@@ -623,6 +625,7 @@ impl Default for SkinDrawState {
             table_song: false,
             difficulty: 0,
             judge_rank: None,
+            note_judge_window: None,
             select_ex_score: None,
             select_replay_slots: [false; 4],
             select_replay_index: None,

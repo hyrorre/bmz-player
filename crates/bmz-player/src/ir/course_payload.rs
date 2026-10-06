@@ -662,6 +662,7 @@ mod tests {
             main_bpm: 0.0,
             total_gauge: 0.0,
             judge_rank: None,
+            note_judge_window: None,
             key_mode: KeyMode::K7,
             has_long_notes: false,
             long_note_mode: bmz_chart::model::LongNoteMode::Ln,

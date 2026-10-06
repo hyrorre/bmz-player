@@ -279,6 +279,8 @@ pub struct RenderSnapshot {
     pub genre: String,
     pub difficulty_name: String,
     pub judge_rank: Option<i32>,
+    /// Effective note judge window in chart time; absent before a session exists.
+    pub note_judge_window: Option<bmz_gameplay::judge::model::JudgeWindow>,
     pub play_level: String,
     /// 1P play option arrange label for skin ref 42/344.
     pub arrange: String,

@@ -342,6 +342,7 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         genre: session.chart.metadata.genre.clone(),
         difficulty_name: session.chart.metadata.difficulty_name.clone(),
         judge_rank: session.chart.metadata.judge_rank,
+        note_judge_window: Some(session.judge.window_set.note),
         play_level: session.chart.metadata.play_level.clone(),
         arrange: "NORMAL".to_string(),
         arrange_2p: "NORMAL".to_string(),

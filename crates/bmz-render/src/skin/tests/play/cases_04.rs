@@ -378,6 +378,68 @@ fn timing_judge_areas_apply_pms_rank_rule() {
 }
 
 #[test]
+fn timing_judge_bands_use_effective_window_instead_of_rank_and_rule() {
+    let window = bmz_gameplay::judge::model::JudgeWindow {
+        bad_fast_us: 100_000,
+        bad_slow_us: 125_000,
+        ..bmz_gameplay::judge::model::JudgeWindow::symmetric(
+            25_000, 50_000, 87_500, 100_000, 500_000, 112_500, 0,
+        )
+    };
+    let state = SkinDrawState {
+        key_mode: KeyMode::K7,
+        judge_rank: Some(0),
+        rule_mode_index: 1,
+        note_judge_window: Some(window),
+        ..Default::default()
+    };
+    let areas = timing_judge_areas(&state);
+    assert_eq!(areas[0], TimingJudgeArea { late_ms: -25.0, early_ms: 25.0 });
+    assert_eq!(areas[3], TimingJudgeArea { late_ms: -100.0, early_ms: 125.0 });
+    let items = timing_judge_band_items(
+        Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+        200.0,
+        1.0,
+        BlendMode::Normal,
+        [Color::rgba(1.0, 1.0, 1.0, 1.0); 5],
+        &state,
+    );
+    assert!(items.len() >= 2, "both sides of the PGREAT band must be drawn");
+    for (item, expected_x) in items.iter().take(2).zip([0.4375, 0.5]) {
+        let SkinRenderItem::Rect { rect, .. } = item else { panic!("expected judge band") };
+        assert!((rect.x - expected_x).abs() < 0.000_1);
+        assert!((rect.width - 0.0625).abs() < 0.000_1);
+    }
+}
+
+#[test]
+fn timing_judge_areas_without_session_follow_rule_mode() {
+    for (key_mode, pgreat, good) in [(KeyMode::K7, 16.666, 116.666), (KeyMode::K9, 25.0, 87.5)] {
+        for rank in [None, Some(0), Some(4), Some(150)] {
+            let areas = timing_judge_areas(&SkinDrawState {
+                key_mode,
+                judge_rank: rank,
+                rule_mode_index: 2,
+                ..Default::default()
+            });
+            assert_eq!(areas[0], TimingJudgeArea { late_ms: -pgreat, early_ms: pgreat });
+            assert_eq!(areas[2], TimingJudgeArea { late_ms: -good, early_ms: good });
+        }
+    }
+    for rank in [None, Some(2), Some(4)] {
+        let areas = timing_judge_areas(&SkinDrawState {
+            judge_rank: rank,
+            rule_mode_index: 1,
+            ..Default::default()
+        });
+        assert_eq!(areas[0], TimingJudgeArea { late_ms: -18.0, early_ms: 18.0 });
+        assert_eq!(areas[2], TimingJudgeArea { late_ms: -100.0, early_ms: 100.0 });
+    }
+    let unknown = SkinDrawState { rule_mode_index: usize::MAX, ..Default::default() };
+    assert_eq!(timing_judge_areas(&unknown), beatoraja_timing_judge_areas(&unknown));
+}
+
+#[test]
 fn skin_state_text_formats_bmz_judge_region_extension() {
     let text = SkinTextDef {
         id: "judge_text".to_string(),

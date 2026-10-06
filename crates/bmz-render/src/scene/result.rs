@@ -208,6 +208,8 @@ pub struct ResultSnapshot {
     pub main_bpm: f32,
     pub total_gauge: f32,
     pub judge_rank: Option<i32>,
+    /// Final effective note judge window; courses use the last played stage.
+    pub note_judge_window: Option<bmz_gameplay::judge::model::JudgeWindow>,
     pub key_mode: KeyMode,
     /// 実効譜面にLNが含まれるか (OPTION_NO_LN/LN=172/173)。
     pub has_long_notes: bool,

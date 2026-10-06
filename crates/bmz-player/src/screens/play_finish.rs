@@ -240,6 +240,7 @@ pub struct FinishSessionSnapshot {
     replay_playback: bool,
     replay_lane_mask: bool,
     rule_mode: bmz_gameplay::rule::RuleMode,
+    note_judge_window: bmz_gameplay::judge::model::JudgeWindow,
     gauge_carry: Vec<GaugeCarryValue>,
     course_combo: u32,
     course_max_combo: u32,
@@ -336,6 +337,7 @@ impl FinishSessionSnapshot {
             replay_playback: session.replay_player.is_some() && session.replay_lane_mask.is_none(),
             replay_lane_mask: session.replay_lane_mask.is_some(),
             rule_mode: session.rule_mode,
+            note_judge_window: session.judge.window_set.note,
             gauge_carry: session.gauge.carry_values(),
             course_combo: session.display_combo(),
             course_max_combo: session.display_max_combo(),
@@ -508,6 +510,7 @@ fn finish_session_snapshot_result(
     summary.skin_attempt.best_score_options =
         previous_best.as_ref().and_then(|best| best.play_options);
     summary.key_mode = snapshot.primary_key_mode;
+    summary.note_judge_window = Some(snapshot.note_judge_window);
     summary.clear_type = summary_clear_type;
     summary.arrange = applied_arrange.arrange.as_str().to_string();
     summary.arrange_2p = applied_arrange.arrange_2p.as_str().to_string();
