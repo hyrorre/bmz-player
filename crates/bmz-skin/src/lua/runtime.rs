@@ -594,6 +594,7 @@ pub(super) fn install_runtime_main_state_dispatch(lua: &Lua) -> mlua::Result<Tab
             }
         })?,
     )?;
+    install_main_state_read_helpers(lua, &main_state)?;
     Ok(dispatch_slot)
 }
 

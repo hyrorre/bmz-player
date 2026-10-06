@@ -272,7 +272,60 @@ pub(super) fn create_main_state_stub(
             Ok(true)
         })?,
     )?;
+    install_main_state_read_helpers(lua, &table)?;
     Ok(Value::Table(table))
+}
+
+/// Capture the current accessors, rather than a snapshot of their values. The
+/// runtime VM installs these again after its stable dispatchers are available.
+pub(super) fn install_main_state_read_helpers(lua: &Lua, table: &Table) -> mlua::Result<()> {
+    let number: Function = table.get("number")?;
+    table.set(
+        "numbers",
+        lua.create_function(move |_, arguments: Variadic<Value>| {
+            arguments
+                .into_iter()
+                .map(|argument| number.call::<Value>(argument))
+                .collect::<mlua::Result<Variadic<Value>>>()
+        })?,
+    )?;
+    let timer: Function = table.get("timer")?;
+    let time: Function = table.get("time")?;
+    for (field, expected_on) in [("timer_is_on", true), ("timer_is_off", false)] {
+        let timer = timer.clone();
+        table.set(
+            field,
+            lua.create_function(move |_, id: i32| {
+                let start = timer.call::<i64>(id)?;
+                Ok((start != i64::from(TIMER_OFF_VALUE)) == expected_on)
+            })?,
+        )?;
+    }
+    for (field, divisor) in [
+        ("timer_elapsed", Some(1)),
+        ("timer_elapsed_ms", Some(1_000)),
+        ("timer_elapsed_seconds", None),
+    ] {
+        let timer = timer.clone();
+        let time = time.clone();
+        table.set(
+            field,
+            lua.create_function(move |_, id: i32| {
+                let start = timer.call::<i64>(id)?;
+                if start == i64::from(TIMER_OFF_VALUE) {
+                    return Ok(Value::Integer(-1));
+                }
+                // Match Java long subtraction and division, including future
+                // start times; do not clamp negative elapsed values to zero.
+                let elapsed = time.call::<i64>(())?.wrapping_sub(start);
+                Ok(match divisor {
+                    Some(divisor) => Value::Integer(elapsed / divisor),
+                    None => Value::Number(elapsed as f64 / 1_000_000.0),
+                })
+            })?,
+        )?;
+    }
+    Ok(())
 }
 
 pub(super) fn lua_audio_path_and_volume(path: Value, volume: Value) -> Option<(String, f64)> {

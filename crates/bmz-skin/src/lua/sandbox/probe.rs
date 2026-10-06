@@ -482,7 +482,8 @@ impl MainStateProbe {
     }
 
     pub(super) fn record_load_time_number_dependency(&self, ref_id: i32, value: i32) {
-        if let Some(dependencies) = &self.load_dependencies
+        if !self.inferring
+            && let Some(dependencies) = &self.load_dependencies
             && let Ok(mut dependencies) = dependencies.lock()
         {
             dependencies.number_values.insert(ref_id, value);

@@ -298,6 +298,19 @@ Luaの `main_state` への未知名は式として実行せず、number / float_
 textは空文字、optionはfalseを返します。既存の数値・数値文字列引数も使用できます。
 ロード時の依存値捕捉と永続VMの実行時評価は同じ名前解決を使用します。
 
+`main_state.numbers(...)` は各引数を `number` と同じ規則で解決し、同じ順序の
+**複数戻り値**を返します。テーブルではありません。数値IDと名前を混在でき、
+未知名は0、取得先の欠損sentinel（`-2147483648`等）はそのまま返します。
+引数なしなら戻り値も0個です。テーブルが必要なら `{ main_state.numbers(...) }` とします。
+
+```lua
+local state = require("main_state")
+local score, best = state.numbers("score", 150)
+```
+
+callback内で呼ぶと現在フレームの値を取得します。`local numbers = state.numbers`
+のように関数を捕捉しても追従します。ロード時に取得して変数へ保存した数値自体は更新されません。
+
 対応表は [生成スクリプト](../scripts/generate_skin_property_names.py) で
 `.local/beatoraja` の参照ソースから生成しています。
 `python scripts/generate_skin_property_names.py --check` で参照ソースとの一致を確認できます。
@@ -332,6 +345,22 @@ Luaの `main_state.timer(id)` はシーン基準の開始時刻（マイクロ�
 現在時刻（マイクロ秒）を返す。描画側では経過ミリ秒へ変換する。OFF判定には
 `main_state.timer_off_value` を使う。timer callbackのnilはbeatorajaと同じく開始時刻0、
 例外・非有限値・命令数上限超過はOFFとして扱い、失敗の診断はcallbackごとに1回出す。
+
+次の参照用helperも同じtimerと時計を使う。組み込みtimerとcustom timerの両方を扱い、
+同一フレーム内の先行callbackや `set_timer` による更新も反映する。
+
+| API | 戻り値 |
+|---|---|
+| `main_state.timer_is_on(id)` | ONならtrue。開始時刻0もON |
+| `main_state.timer_is_off(id)` | OFFならtrue。未知timerもOFF |
+| `main_state.timer_elapsed(id)` | 現在時刻から開始時刻を引いた整数マイクロ秒。OFFなら-1 |
+| `main_state.timer_elapsed_ms(id)` | 同じ経過時間を整数ミリ秒で返す。0方向へ切り捨て。OFFなら-1 |
+| `main_state.timer_elapsed_seconds(id)` | 同じ経過時間を小数付き秒で返す。OFFなら-1 |
+
+開始時刻が未来なら経過時間は負になるため、ON/OFFを経過時間の符号だけで判定しない。
+これらは `auto` / `compat` とも現在の状態を参照し、32bit範囲を超える時計でも動作する。
+既存のBMZの `timer_off_value`（`-2147483648`）は変更しない。
+
 `timer_util.timer_function` / `timer_observe_boolean` / `new_passive_timer` をcustom timer内で
 使う場合も実行時の時計と状態を参照する。destinationへ直接指定した任意timer functionや
 `customEvents` の汎用runtime実行はこの対応には含まれない。

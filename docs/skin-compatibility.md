@@ -62,6 +62,8 @@ closure/module stateを維持し、frameごとのmain_stateを参照します。
 | Lua数字の状態更新 | 数字のruntime valueをdestinationごとにdraw / timer判定前に1回評価。cache hitでも実行を維持。Luxe FlatのResult / Course ResultでMAX+0とランク境界を確認。[回帰テスト](../crates/bmz-player/src/skin_loader/tests/lua/result_grade.rs) |
 | `customTimers[].timer` | ID `10000..19999`。推論とruntime callback。宣言順で1フレーム1回更新 |
 | `main_state.set_timer` | 受動custom timerのON/OFF。組み込みtimerや能動timerへの書き込みには制約がある |
+| `main_state.numbers` | ID / 名前を混在して複数戻り値で取得。未知名は0、欠損sentinelは維持。ロード時依存捕捉とruntime参照に対応 |
+| `main_state.timer_is_on` / `timer_is_off` / `timer_elapsed` / `timer_elapsed_ms` / `timer_elapsed_seconds` | 組み込み / custom timerの現在状態・経過時間を取得。経過時間はOFF時-1。custom timerの同一frame更新、開始0・未来開始、64bit時計に対応。[回帰テスト](../crates/bmz-skin/src/tests/read_helpers.rs) |
 | `timer_util` | timer_function / timer_observe_boolean / new_passive_timer等をcustom timer内で利用可能 |
 | file / module解決 | `SkinPathContext` の許可rootに限定。require / dofile / loadfile、source等のパス解決を扱う |
 | `os` / `io` | clock/date/time等の限定API、仮想ファイル読込・永続化しない書込stub。任意のOS操作を許可しない |

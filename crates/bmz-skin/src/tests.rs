@@ -203,5 +203,7 @@ mod custom_timers;
 mod destination_clip;
 #[path = "tests/property_names.rs"]
 mod property_names;
+#[path = "tests/read_helpers.rs"]
+mod read_helpers;
 #[path = "tests/result_panels.rs"]
 mod result_panels;
