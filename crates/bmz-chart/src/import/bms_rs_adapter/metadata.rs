@@ -111,14 +111,7 @@ pub(super) fn split_bms_header_command(body: &str) -> (String, String) {
 }
 
 pub(super) fn is_bms_channel_command(body: &str) -> bool {
-    let Some((head, tail)) = body.split_once(':') else {
-        return false;
-    };
-    let bytes = head.as_bytes();
-    bytes.len() == 5
-        && bytes[..3].iter().all(u8::is_ascii_digit)
-        && bytes[3..].iter().all(u8::is_ascii_alphanumeric)
-        && !tail.is_empty()
+    split_bms_channel_command(body).is_some_and(|(_, tail)| !tail.is_empty())
 }
 
 pub(super) fn append_url_from_headers(headers: &BTreeMap<String, String>) -> String {

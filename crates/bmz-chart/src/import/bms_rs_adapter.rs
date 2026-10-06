@@ -207,7 +207,7 @@ fn import_with_layout<T: KeyLayoutMapper>(
     } else {
         raw_text.clone()
     };
-    let compatible_text = normalize_beatoraja_header_separators(&layout_text);
+    let compatible_text = normalize_beatoraja_separators(&layout_text);
     let text = apply_beatoraja_random_control(
         &compatible_text,
         random_source,

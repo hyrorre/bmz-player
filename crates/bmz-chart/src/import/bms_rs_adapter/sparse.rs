@@ -349,20 +349,10 @@ pub(super) fn inject_sparse_bms_message<T: KeyLayoutMapper>(
 
 pub(super) fn message_channel_bytes(line: &str) -> Option<[u8; 2]> {
     let line = line.trim();
-    if !line.starts_with('#') {
-        return None;
-    }
     let body = line.strip_prefix('#')?;
-    let colon = body.find(':')?;
-    let head = &body[..colon];
-    if head.len() < 5 || !head.is_ascii() {
-        return None;
-    }
+    let (head, _) = split_bms_channel_command(body)?;
     let channel_str = &head[head.len() - 2..];
     let bytes = channel_str.as_bytes();
-    if bytes.len() != 2 {
-        return None;
-    }
     Some([bytes[0], bytes[1]])
 }
 

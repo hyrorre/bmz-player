@@ -14,6 +14,10 @@ Supported Format
 - Base 62 BMS (62進数BMS)
 - BMSON
 
+BMS / PMS の小節データは `#00111:0101` と空白区切りの `#00111 0101`（タブも可）を
+混在して読み込めます。小節長変更や BGA にも同じ区切りを使えます。
+互換処理は読み込み時だけに適用し、譜面ファイルと MD5 / SHA-256 は原文を維持します。
+
 Supported Skin
 - beatoraja json skin
 - beatoraja lua skin

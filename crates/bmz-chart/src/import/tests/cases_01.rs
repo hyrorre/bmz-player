@@ -1,6 +1,71 @@
 use super::*;
 
 #[test]
+fn imports_mixed_space_and_colon_channel_data_into_playable_chart() {
+    let text = "\
+#TITLE Mixed Channel Separators
+#BPM 120
+#TOTAL 200
+#WAV01 key.wav
+#BMP01 base.png
+#BMP02 poor.png
+#BMP03 layer.png
+#BMP04 layer2.png
+#BPM01 180
+#STOP01 192
+#00002 0.5
+#00004 01
+#00006: 02
+#00007\t03
+#0000A   04
+#00001 01
+#00111  : 0101\x20\x20
+#00112\t0101\t
+#00133 01
+#00208 01
+#00209 01
+#00311 01
+";
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mixed.bms");
+    std::fs::write(&path, text).unwrap();
+    for name in ["key.wav", "base.png", "poor.png", "layer.png", "layer2.png"] {
+        write_temp_file(&dir.path().join(name));
+    }
+
+    let result = import_bms_chart(&path, None, true).unwrap();
+    let chart = &result.chart;
+    assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
+    assert_eq!(chart.identity, compute_chart_identity(text.as_bytes()));
+    assert_eq!(chart.total_notes, 5);
+    assert_eq!(chart.notes_for_lane(Lane::Key1)[0].time.0, 1_000_000);
+    assert_eq!(chart.notes_for_lane(Lane::Key2)[1].time.0, 2_000_000);
+    assert_eq!(chart.bgm_events.len(), 1);
+    assert_eq!(chart.notes_for_lane(Lane::Key3).len(), 1);
+    assert_eq!(chart.notes_for_lane(Lane::Key3)[0].kind, NoteKind::Invisible);
+    assert!(chart.metadata.has_bga);
+    assert_eq!(chart.bga_events.len(), 4);
+    for kind in [BgaEventKind::Base, BgaEventKind::Poor, BgaEventKind::Layer, BgaEventKind::Layer2]
+    {
+        assert!(chart.bga_events.iter().any(|event| event.kind == kind && event.time.0 == 0));
+    }
+    assert!(
+        chart
+            .timing_events
+            .iter()
+            .any(|event| matches!(event.kind, TimingEventKind::BpmChange { bpm: 180.0 })
+                && event.time.0 == 3_000_000)
+    );
+    assert!(
+        chart
+            .timing_events
+            .iter()
+            .any(|event| matches!(event.kind, TimingEventKind::Stop { duration_us: 1_333_333 })
+                && event.time.0 == 3_000_000)
+    );
+}
+
+#[test]
 fn imports_basic_7k_bms_into_playable_chart() {
     let text = "\
 #TITLE Integration Song

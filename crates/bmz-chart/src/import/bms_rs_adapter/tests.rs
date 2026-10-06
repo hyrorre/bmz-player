@@ -138,6 +138,22 @@ fn pms_bme_9k_maps_key1_through_key9() {
 }
 
 #[test]
+fn space_separated_pms_uses_bme_layout_and_drops_conflicting_channels() {
+    let bme_text = pms_note_lines_bme().replace(':', " ");
+    assert_eq!(detect_pms_variant(&bme_text), (PmsKeyLayout::BmeType, false));
+    let bme_chart = import_pms_text(&bme_text);
+    assert_eq!(bme_chart.metadata.key_mode, KeyMode::K9);
+    assert_eq!(note_lanes(&bme_chart).len(), 9);
+    assert!(note_lanes(&bme_chart).contains(&Lane::Key9));
+
+    let standard_text = format!("{}#01018 01\n", pms_note_lines_standard().replace(':', " "));
+    assert_eq!(detect_pms_variant(&standard_text), (PmsKeyLayout::Standard, true));
+    let standard_chart = import_pms_text(&standard_text);
+    assert_eq!(note_lanes(&standard_chart).len(), 9);
+    assert_eq!(playable_lane_counts(&standard_chart)[Lane::Key8.index()], 1);
+}
+
+#[test]
 fn pms_5k_still_reports_k9_key_mode() {
     let mut text = String::from(PMS_HEADER);
     for (i, channel) in ["11", "12", "13", "14", "15"].into_iter().enumerate() {
@@ -197,6 +213,56 @@ const BMS_HEADER: &str = "\
 #BPM 120
 #WAV01 key.wav
 ";
+
+#[test]
+fn space_separated_data_respects_random_branch_and_source_identity() {
+    let text = format!(
+        "{BMS_HEADER}#TOTAL 200\n#BMP01 base.png\n#BMP02 layer.png\n\
+         #RANDOM 2\n#IF 1\n#00111 01\n#00104 01\n#ENDIF\n\
+         #IF 2\n#00112:01\n#00107 02\n#ENDIF\n#ENDRANDOM\n"
+    );
+    let (chart, warnings, random, _) = import_bms_text_with_control_choices(&text, vec![2], vec![]);
+
+    assert!(warnings.is_empty(), "warnings: {warnings:?}");
+    assert_eq!(note_lanes(&chart), vec![Lane::Key2]);
+    assert_eq!(random, vec![2]);
+    assert_eq!(chart.identity, compute_chart_identity(text.as_bytes()));
+    let bga: Vec<_> = chart
+        .objects
+        .iter()
+        .filter_map(|object| match object.kind {
+            IntermediateObjectKind::Bga { bmp_key, kind } => Some((bmp_key, kind)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(bga, vec![(2, IntermediateBgaKind::Layer)]);
+    assert!(!chart.metadata.bms_headers.contains_key("00111"));
+    assert!(!chart.metadata.bms_headers.contains_key("00107"));
+}
+
+#[test]
+fn space_separated_sparse_data_and_bga_keep_extended_measure_numbers() {
+    let payload = format!("{}01", "00".repeat(SPARSE_BMS_MESSAGE_OBJECT_THRESHOLD));
+    let text = format!("{BMS_HEADER}#100011 {payload}\n#100004 01\n");
+    let (chart, warnings) = import_bms_text_with_warnings(&text);
+
+    assert!(warnings.iter().any(|warning| matches!(
+        warning, ImportWarning::ParserDiagnostic { code, .. } if code == "SparseBmsMessage"
+    )));
+    let note = chart
+        .objects
+        .iter()
+        .find(|object| matches!(object.kind, IntermediateObjectKind::VisibleNote { .. }))
+        .unwrap();
+    assert_eq!(note.measure, 1_000);
+    assert_eq!(note.position_num, SPARSE_BMS_MESSAGE_OBJECT_THRESHOLD as u32);
+    assert_eq!(note.position_den, SPARSE_BMS_MESSAGE_OBJECT_THRESHOLD as u32 + 1);
+    assert!(chart.objects.iter().any(|object| {
+        object.measure == 1_000
+            && matches!(object.kind, IntermediateObjectKind::Bga { bmp_key: 1, .. })
+    }));
+    assert!(!chart.metadata.bms_headers.contains_key("100011"));
+}
 
 fn ue_8k_note_lines() -> String {
     let mut lines = String::from(BMS_HEADER);
