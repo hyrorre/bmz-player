@@ -64,17 +64,25 @@ impl SharedInputBackend {
                 // History is lost. Release everything gameplay actually saw,
                 // discard the incomplete history and inhibit holds until key-up.
                 // This recovery is independent of the OS SYN_DROPPED mechanism.
-                let delivered = std::mem::take(&mut buffer.delivered);
+                // Keep delivered state until gameplay drains the releases, so
+                // another overflow cannot discard a pending recovery release.
+                let delivered = buffer.delivered.clone();
                 let queued = std::mem::take(&mut buffer.events);
-                buffer.blocked.extend(delivered.keys().cloned());
-                for (queued, _) in queued {
-                    if queued.kind == InputKind::Press {
-                        buffer.blocked.insert((queued.device, queued.control));
+                let mut held: HashSet<_> = delivered.keys().cloned().collect();
+                for pending in queued.into_iter().map(|(event, _)| event).chain([event]) {
+                    let key = (pending.device, pending.control);
+                    match pending.kind {
+                        InputKind::Press => {
+                            held.insert(key);
+                        }
+                        InputKind::Release => {
+                            held.remove(&key);
+                        }
                     }
                 }
-                if event.kind == InputKind::Press {
-                    buffer.blocked.insert(key);
-                }
+                // Earlier blocked holds survive synthesized releases in queued;
+                // only a real incoming key-up clears them above.
+                buffer.blocked.extend(held);
                 for (_, mut release) in delivered {
                     release.kind = InputKind::Release;
                     release.timestamp = DeviceTimestamp::MonotonicNs(monotonic_timestamp_ns());
@@ -145,6 +153,95 @@ mod tests {
     use bmz_gameplay::input::backend::{DeviceId, DeviceTimestamp, PhysicalControl};
 
     use super::*;
+
+    fn button_event(button: u32, kind: InputKind) -> DeviceInputEvent {
+        DeviceInputEvent {
+            device: DeviceId(0),
+            control: PhysicalControl::HidButton(button),
+            kind,
+            timestamp: DeviceTimestamp::MonotonicNs(123),
+            bounce_policy: Default::default(),
+        }
+    }
+
+    #[test]
+    fn overflow_preserves_fresh_presses_after_queued_or_triggering_releases() {
+        for delivered in [false, true] {
+            for triggering_release in [false, true] {
+                let mut input = SharedInputBackend::default();
+                input.push_shared_event(button_event(1, InputKind::Press));
+                if delivered {
+                    assert_eq!(input.drain_events().len(), 1);
+                }
+                if !triggering_release {
+                    input.push_shared_event(button_event(1, InputKind::Release));
+                }
+                let queued = usize::from(!delivered) + usize::from(!triggering_release);
+                for _ in queued..SharedInputBackend::CAPACITY {
+                    input.push_shared_event(button_event(2, InputKind::Press));
+                }
+                input.push_shared_event(if triggering_release {
+                    button_event(1, InputKind::Release)
+                } else {
+                    button_event(2, InputKind::Press)
+                });
+                assert_eq!(input.overflow_count(), 1);
+                let releases = input.drain_events();
+                assert_eq!(releases.len(), usize::from(delivered));
+                if delivered {
+                    assert_eq!(releases[0].kind, InputKind::Release);
+                    assert_eq!(releases[0].control, PhysicalControl::HidButton(1));
+                }
+                input.push_shared_event(button_event(1, InputKind::Press));
+                let fresh = input.drain_events();
+                assert_eq!(fresh.len(), 1, "delivered={delivered}, trigger={triggering_release}");
+                assert_eq!(fresh[0].kind, InputKind::Press);
+                assert_eq!(fresh[0].timestamp, DeviceTimestamp::MonotonicNs(123));
+            }
+        }
+    }
+
+    #[test]
+    fn overflow_inhibits_a_repress_after_a_queued_release_until_its_own_release() {
+        let mut input = SharedInputBackend::default();
+        input.push_shared_event(button_event(1, InputKind::Press));
+        input.drain_events();
+        input.push_shared_event(button_event(1, InputKind::Release));
+        input.push_shared_event(button_event(1, InputKind::Press));
+        for _ in 2..=SharedInputBackend::CAPACITY {
+            input.push_shared_event(button_event(2, InputKind::Press));
+        }
+        assert_eq!(input.drain_events()[0].kind, InputKind::Release);
+        input.push_shared_event(button_event(1, InputKind::Press));
+        assert!(input.drain_events().is_empty());
+        input.push_shared_event(button_event(1, InputKind::Release));
+        input.push_shared_event(button_event(1, InputKind::Press));
+        assert_eq!(input.drain_events()[0].kind, InputKind::Press);
+    }
+
+    #[test]
+    fn repeated_overflow_keeps_pending_recovery_releases_and_blocks_real_holds() {
+        let mut input = SharedInputBackend::default();
+        input.push_shared_event(button_event(1, InputKind::Press));
+        input.drain_events();
+        for _ in 0..=SharedInputBackend::CAPACITY {
+            input.push_shared_event(button_event(2, InputKind::Press));
+        }
+        // Overflow again before gameplay has drained the synthesized release.
+        for _ in 1..=SharedInputBackend::CAPACITY {
+            input.push_shared_event(button_event(3, InputKind::Press));
+        }
+        assert_eq!(input.overflow_count(), 2);
+        let releases = input.drain_events();
+        assert_eq!(releases.len(), 1);
+        assert_eq!(releases[0].kind, InputKind::Release);
+        assert_eq!(releases[0].control, PhysicalControl::HidButton(1));
+        input.push_shared_event(button_event(1, InputKind::Press));
+        assert!(input.drain_events().is_empty());
+        input.push_shared_event(button_event(1, InputKind::Release));
+        input.push_shared_event(button_event(1, InputKind::Press));
+        assert_eq!(input.drain_events()[0].kind, InputKind::Press);
+    }
 
     #[test]
     fn overflow_releases_delivered_holds_and_inhibits_missing_history_until_release() {

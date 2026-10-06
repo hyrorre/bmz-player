@@ -235,6 +235,9 @@ BOOTTIMEとの差でスリープを検出し、時計の不連続では保持を
 SYN_DROPPEDから次のSYN_REPORTまでは履歴を捨て、現在状態を取得する。
 不明な過去の押下を新規判定として再現しない。内部キューoverflowも別カウンターで検出し、
 配送済み保持を解放して、不完全な履歴を捨て、キー解放まで抑止する。
+内部キューの既存イベントとoverflowを起こしたイベントのReleaseも順に反映し、
+既に離されたキーの次のPressは受け付ける。合成Releaseはgameplayが受け取るまで維持し、
+連続overflowでも保持解放を失わない。
 [カーネル仕様](https://docs.kernel.org/input/event-codes.html)を参照。
 
 ## gilrsの待機と時計

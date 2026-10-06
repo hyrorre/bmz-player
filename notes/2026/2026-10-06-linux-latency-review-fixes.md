@@ -23,3 +23,17 @@ Waylandでは非表示中にframe callbackが止まり、`RedrawRequested` が�
 
 詳細ログは `.local/performance/linux-latency-review-2026-10-06/` に保存した。
 ローカル専用であり、この記録には同梱しない。
+
+## 共有入力queueのoverflow回復
+
+破棄するqueueとoverflowを起こしたイベントを順に適用して、実際に残る保持だけを抑止する。
+Releaseが確認済みのキーは次のPressを受け付ける。過去のoverflowで抑止した保持は
+合成Releaseでは解除せず、実入力のReleaseまで維持する。
+配送済み状態はgameplayがReleaseをdrainするまで保存し、その前の再overflowでも
+Releaseを再生成する。現在の契約は [linux-latency.md](../../docs/linux-latency.md) を参照。
+
+- 配送済み/未配送とqueue内/overflow原因のReleaseの4組合せ、Release後の再保持、
+  drain前の連続overflowを回帰テストで確認。入力関連88テストが成功。
+- fmt、linux-evdev付きcheck / all-targets Clippyが成功。
+- player全体は2190成功・40失敗・19 ignored。失敗したテスト集合は1件目の検証と同じで、
+  通信制限17件と外部スキン23件。新しい失敗はない。
