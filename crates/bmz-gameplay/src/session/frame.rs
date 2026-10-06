@@ -525,9 +525,10 @@ fn update_opponent_full_combo_timer(session: &mut GameSession, judgements: &[Jud
 }
 
 pub fn should_finish(session: &GameSession, audio_now: TimeUs) -> bool {
+    let end_time = session.result_wait_end_time.unwrap_or(session.chart.end_time);
     session.judge.is_exhausted(&session.chart)
         && session.bgm_scheduler.is_done(&session.chart)
-        && audio_now.0 > session.chart.end_time.0.saturating_add(SESSION_END_MARGIN_US)
+        && audio_now.0 > end_time.0.saturating_add(SESSION_END_MARGIN_US)
 }
 
 /// 最終ノーツに対する Poor / Empty Poor / Mine の SLOW 側受付が終了し、

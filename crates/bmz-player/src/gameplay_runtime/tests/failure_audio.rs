@@ -33,6 +33,137 @@ fn fixture(capacity: usize) -> (GameplayRuntime, AudioEngineHandle, SharedInputB
     (GameplayRuntime::new(session), AudioEngineHandle::with_capacity(engine, capacity), input)
 }
 
+#[test]
+fn optional_play_behaviors_wait_for_events_not_pcm_and_preserve_terminal_audio_rules() {
+    for enabled in [false, true] {
+        for terminal in [PlayState::Playing, PlayState::Finished, PlayState::Failed] {
+            let (mut runtime, audio, input) = fixture(64);
+            runtime.session.result_wait_end_time = enabled.then_some(TimeUs(8_000_000));
+            runtime.session.play_keysound_on_miss = enabled;
+            let mut processor = audio.processor();
+            start_long_bgm_and_keys(&mut runtime, &audio, &input, &mut processor);
+            runtime.session.audio_clock.current_frame.store(2_000, Ordering::Release);
+            runtime.advance(&audio);
+            assert!(runtime.session.judge.is_exhausted(&runtime.session.chart));
+            assert!(bmz_gameplay::session::result_is_settled(&runtime.session, TimeUs(2_000_000)));
+            if terminal != PlayState::Playing {
+                runtime.session.state = terminal;
+            }
+            runtime.session.audio_clock.current_frame.store(7_000, Ordering::Release);
+            let actual = runtime.advance(&audio).state;
+            let expected = if terminal != PlayState::Playing {
+                terminal
+            } else if enabled {
+                PlayState::Playing
+            } else {
+                PlayState::Finished
+            };
+            assert_eq!(actual, expected);
+            assert_eq!(render(&mut processor, 7_000)[0] == 0.0, terminal == PlayState::Failed);
+            if expected == PlayState::Playing {
+                runtime.session.audio_clock.current_frame.store(13_001, Ordering::Release);
+                assert_eq!(runtime.advance(&audio).state, PlayState::Finished);
+                // The 45s PCM still has a tail: wait is an event-time deadline.
+                assert!(render(&mut processor, 13_001)[0] > 0.0);
+                let result =
+                    crate::screens::play_finish::play_result_from_session(&runtime.session);
+                assert_eq!(result.clear_type, ClearType::Failed);
+            }
+        }
+    }
+}
+
+#[test]
+fn optional_play_behaviors_missed_keysound_reaches_audio_in_normal_and_replay() {
+    for replay in [false, true] {
+        for enabled in [false, true] {
+            let (mut runtime, audio, _) = fixture(64);
+            // The shared fixture uses one sound ID for every lane. Isolate
+            // the HCN voice so its existing miss mute does not silence taps.
+            Arc::make_mut(&mut runtime.session.chart).lane_notes[Lane::Key4.index()][0].sound =
+                Some(SoundId(3));
+            runtime.session.play_keysound_on_miss = enabled;
+            runtime.session.audio_mix.bgm_volume = 0.0;
+            if replay {
+                runtime.session.replay_player = Some(bmz_gameplay::replay::ReplayPlayer {
+                    events: Vec::new(),
+                    next_index: 0,
+                    next_scoring_time: None,
+                });
+            }
+            let mut processor = audio.processor();
+            runtime.advance(&audio);
+            assert_eq!(render(&mut processor, 0), [0.0; 2]);
+            runtime.session.audio_clock.current_frame.store(600, Ordering::Release);
+            let frame = runtime.advance(&audio);
+            assert!(frame.judgements.iter().any(|event| event.judge == Judge::Poor));
+            assert_eq!(render(&mut processor, 600)[0] > 0.0, enabled, "replay={replay}");
+            runtime.session.state = PlayState::Failed;
+            runtime.advance(&audio);
+            assert_eq!(render(&mut processor, 601), [0.0; 2]);
+        }
+    }
+}
+
+#[test]
+fn optional_play_behaviors_hcn_miss_plays_then_mutes_and_resumes_on_press() {
+    for replay in [false, true] {
+        for enabled in [false, true] {
+            let (mut runtime, audio, input) = fixture(64);
+            // Only the HCN head has a keysound in this fixture.
+            for note in Arc::make_mut(&mut runtime.session.chart).lane_notes.iter_mut().flatten() {
+                note.sound = (note.id == NoteId(9)).then_some(SoundId(1));
+            }
+            runtime.session.play_keysound_on_miss = enabled;
+            runtime.session.audio_mix.bgm_volume = 0.0;
+            if replay {
+                runtime.session.replay_player = Some(bmz_gameplay::replay::ReplayPlayer {
+                    events: vec![bmz_core::replay::ReplayEvent {
+                        lane: Lane::Key4,
+                        kind: InputKind::Press,
+                        time: TimeUs(950_000),
+                        device_kind: bmz_core::input::InputDeviceKind::Keyboard,
+                        scratch_direction: None,
+                    }],
+                    next_index: 0,
+                    next_scoring_time: None,
+                });
+            }
+            let mut processor = audio.processor();
+            let mut missed_at = None;
+            // Replay advances in 1ms scoring steps; observe the update that
+            // actually produces the head POOR, not an arbitrary later update.
+            for at in 0..600 {
+                runtime.session.audio_clock.current_frame.store(at, Ordering::Release);
+                let frame = runtime.advance(&audio);
+                let output = render(&mut processor, at);
+                if frame
+                    .judgements
+                    .iter()
+                    .any(|event| event.note_id == Some(NoteId(9)) && event.judge == Judge::Poor)
+                {
+                    assert_eq!(output[0] > 0.0, enabled, "first miss replay={replay}");
+                    missed_at = Some(at);
+                    break;
+                }
+                assert_eq!(output, [0.0; 2]);
+            }
+            let next = missed_at.expect("HCN head must become POOR") + 1;
+            runtime.session.audio_clock.current_frame.store(next, Ordering::Release);
+            runtime.advance(&audio);
+            assert_eq!(render(&mut processor, next), [0.0; 2]);
+            if !replay {
+                for event in events(950) {
+                    input.push_shared_event(event);
+                }
+            }
+            runtime.session.audio_clock.current_frame.store(950, Ordering::Release);
+            runtime.advance(&audio);
+            assert_eq!(render(&mut processor, 950)[0] > 0.0, enabled, "resume replay={replay}");
+        }
+    }
+}
+
 fn render(processor: &mut CommandedAudioEngine, frame: u64) -> [f32; 2] {
     let mut output = [0.0; 2];
     assert!(processor.render_stereo(frame, &mut output));

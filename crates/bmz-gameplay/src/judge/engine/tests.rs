@@ -200,3 +200,5 @@ fn chart_with_mine(time: TimeUs, damage: f64) -> PlayableChart {
 mod judgement;
 #[path = "tests/mine.rs"]
 mod mine;
+#[path = "tests/miss_keysound.rs"]
+mod miss_keysound;

@@ -1,22 +1,63 @@
 use super::*;
 
 pub(super) fn current_poor_bga_frame(
+    session: &GameSession,
     cache: &PlayRenderSnapshotCache,
     render_now: TimeUs,
     recent_judgements: &[JudgementEvent],
     bga_frames: &BgaFrameCatalog,
+) -> Option<DisplayBgaFrame> {
+    if session.hide_misslayer_on_good && recent_judgements == session.recent_judgements {
+        poor_bga_from_events(
+            cache,
+            render_now,
+            session
+                .recent_display_judgements
+                .iter()
+                .map(|event| (&event.judgement, event.display_time)),
+            bga_frames,
+            session.poor_bga_duration_us,
+            true,
+        )
+    } else {
+        // Keep the raw-history contract for OFF and standalone snapshots.
+        poor_bga_from_events(
+            cache,
+            render_now,
+            recent_judgements.iter().map(|event| (event, event.time)),
+            bga_frames,
+            session.poor_bga_duration_us,
+            session.hide_misslayer_on_good,
+        )
+    }
+}
+
+fn poor_bga_from_events<'a>(
+    cache: &PlayRenderSnapshotCache,
+    render_now: TimeUs,
+    events: impl DoubleEndedIterator<Item = (&'a JudgementEvent, TimeUs)>,
+    bga_frames: &BgaFrameCatalog,
     duration_us: i64,
+    hide_on_good: bool,
 ) -> Option<DisplayBgaFrame> {
     if duration_us <= 0 {
         return None;
     }
 
-    let judgement = recent_judgements.iter().rev().find(|event| {
-        matches!(event.judge, Judge::Bad | Judge::Poor)
-            && render_now.0 >= event.time.0
-            && render_now.0 < event.time.0 + duration_us
-    })?;
-    current_bga_frame(cache, judgement.time, BgaEventKind::Poor, bga_frames)
+    for (event, display_time) in events.rev() {
+        if render_now < display_time {
+            continue;
+        }
+        if hide_on_good && matches!(event.judge, Judge::PGreat | Judge::Great | Judge::Good) {
+            return None;
+        }
+        if matches!(event.judge, Judge::Bad | Judge::Poor)
+            && render_now.0 < display_time.0.saturating_add(duration_us)
+        {
+            return current_bga_frame(cache, event.time, BgaEventKind::Poor, bga_frames);
+        }
+    }
+    None
 }
 
 pub(super) fn note_display_duration_ms(

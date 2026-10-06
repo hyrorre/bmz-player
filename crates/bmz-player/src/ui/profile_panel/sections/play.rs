@@ -376,9 +376,23 @@ pub(in crate::ui::profile_panel) fn build_profile_play_section(
             ui.checkbox(&mut profile.play.note_retention, tr!(text, "profile-play-note-retention"));
             ui.checkbox(&mut profile.play.show_ln_tail_cap, tr!(text, "profile-play-ln-tail-cap"));
             ui.checkbox(&mut profile.play.guide_se, tr!(text, "profile-play-guide-se"));
+            ui.checkbox(
+                &mut profile.play.wait_all_notes_result,
+                tr!(text, "profile-play-wait-all-notes-result"),
+            )
+            .on_hover_text(tr!(text, "settings-entry-description-wait-all-notes-result"));
+            ui.checkbox(
+                &mut profile.play.play_keysound_on_miss,
+                tr!(text, "profile-play-play-keysound-on-miss"),
+            )
+            .on_hover_text(tr!(text, "settings-entry-description-play-keysound-on-miss"));
             ui.add(
                 egui::Slider::new(&mut profile.play.misslayer_duration_ms, 0..=5000)
                     .text(tr!(text, "profile-play-miss-layer-duration")),
+            );
+            ui.checkbox(
+                &mut profile.play.hide_misslayer_on_good,
+                tr!(text, "profile-play-hide-misslayer-on-good"),
             );
             ui.add(
                 egui::Slider::new(&mut profile.play.play_exit_hold_ms, 100..=5000)

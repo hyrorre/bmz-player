@@ -241,6 +241,9 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
         skin_offsets: Vec::new(),
         bga_enabled: true,
         poor_bga_duration_us: 500_000,
+        hide_misslayer_on_good: false,
+        play_keysound_on_miss: false,
+        result_wait_end_time: None,
         bga_stretch: 1,
         show_ln_tail_cap: false,
         lane_hcn_timer: [None; LANE_COUNT],
@@ -346,5 +349,7 @@ mod cases_03;
 mod cases_04;
 #[path = "tests/judgement_display_time.rs"]
 mod judgement_display_time;
+#[path = "tests/optional_play_behaviors.rs"]
+mod optional_play_behaviors;
 #[path = "tests/replay_speed.rs"]
 mod replay_speed;

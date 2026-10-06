@@ -462,7 +462,11 @@ pub fn process_mine_passes(session: &mut GameSession, audio_now: TimeUs) -> Vec<
 }
 
 pub fn process_misses(session: &mut GameSession, audio_now: TimeUs) -> Vec<JudgementEvent> {
-    let outcome = session.judge.process_misses(&session.chart, audio_now);
+    let outcome = session.judge.process_misses_with_keysounds(
+        &session.chart,
+        audio_now,
+        session.play_keysound_on_miss,
+    );
     apply_judge_outcome(session, outcome)
 }
 use super::*;

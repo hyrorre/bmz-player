@@ -572,6 +572,30 @@ define_settings! {
             format!("{} ms", profile.play.misslayer_duration_ms)
         },
     }
+    WaitAllNotesResult(bool) {
+        value: [field play.wait_all_notes_result],
+        adjust: |profile, _delta| {
+            profile.play.wait_all_notes_result = !profile.play.wait_all_notes_result;
+            true
+        },
+        format: |profile| format_bool_on_off(profile.play.wait_all_notes_result),
+    }
+    HideMisslayerOnGood(bool) {
+        value: [field play.hide_misslayer_on_good],
+        adjust: |profile, _delta| {
+            profile.play.hide_misslayer_on_good = !profile.play.hide_misslayer_on_good;
+            true
+        },
+        format: |profile| format_bool_on_off(profile.play.hide_misslayer_on_good),
+    }
+    PlayKeysoundOnMiss(bool) {
+        value: [field play.play_keysound_on_miss],
+        adjust: |profile, _delta| {
+            profile.play.play_keysound_on_miss = !profile.play.play_keysound_on_miss;
+            true
+        },
+        format: |profile| format_bool_on_off(profile.play.play_keysound_on_miss),
+    }
     NoteRetention(bool) {
         value: [field play.note_retention],
         adjust: |profile, _delta| {

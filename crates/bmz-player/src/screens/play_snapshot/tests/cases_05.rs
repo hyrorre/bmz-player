@@ -359,6 +359,81 @@ fn current_bpm_returns_initial_bpm_before_first_change() {
 }
 
 #[test]
+fn misslayer_good_clear_respects_event_order_offsets_and_raw_snapshot_fallback() {
+    use bmz_gameplay::session::DisplayJudgementEvent;
+    let mut source = chart();
+    source.bga_events = vec![BgaEvent {
+        tick: ChartTick(0),
+        time: TimeUs(0),
+        asset: Some(BgaAssetId(0)),
+        kind: BgaEventKind::Poor,
+    }];
+    let profile = ProfileConfig::new_default("default", "Default", 0);
+    let mut session = build_game_session(Arc::new(source), &profile, Default::default());
+    let frames =
+        BgaFrameCatalog::from([(BgaAssetId(0), display_bga_frame(BgaAssetId(0), 320, 240))]);
+    let miss = JudgementEvent {
+        note_id: Some(NoteId(1)),
+        lane: Lane::Key1,
+        judge: Judge::Poor,
+        side: TimingSide::Slow,
+        delta: TimeUs(0),
+        time: TimeUs(100_000),
+        affects_score: true,
+    };
+    for judge in
+        [Judge::PGreat, Judge::Great, Judge::Good, Judge::Bad, Judge::Poor, Judge::EmptyPoor]
+    {
+        for offset in [-200_000, 0, 200_000] {
+            let hit = JudgementEvent { judge, time: TimeUs(200_000 + offset), ..miss.clone() };
+            session.recent_judgements = vec![miss.clone(), hit.clone()];
+            session.recent_display_judgements = vec![
+                DisplayJudgementEvent {
+                    judgement: miss.clone(),
+                    display_time: miss.time,
+                    combo: 0,
+                },
+                DisplayJudgementEvent { judgement: hit, display_time: TimeUs(200_000), combo: 1 },
+            ];
+            for enabled in [false, true] {
+                session.hide_misslayer_on_good = enabled;
+                let snapshot = build_render_snapshot_with_bga_frames(
+                    &session,
+                    TimeUs(200_000),
+                    &session.recent_judgements,
+                    None,
+                    &frames,
+                );
+                let cleared =
+                    enabled && matches!(judge, Judge::PGreat | Judge::Great | Judge::Good);
+                assert_eq!(snapshot.bga_poor.is_none(), cleared, "{enabled}/{judge:?}/{offset}");
+            }
+        }
+    }
+    session.hide_misslayer_on_good = true;
+    for judgements in [
+        vec![miss.clone(), JudgementEvent { judge: Judge::Good, time: miss.time, ..miss.clone() }],
+        vec![JudgementEvent { judge: Judge::Good, time: miss.time, ..miss.clone() }, miss.clone()],
+    ] {
+        let expected_clear = judgements.last().unwrap().judge == Judge::Good;
+        let snapshot = build_render_snapshot_with_bga_frames(
+            &session,
+            TimeUs(200_000),
+            &judgements,
+            None,
+            &frames,
+        );
+        assert_eq!(snapshot.bga_poor.is_none(), expected_clear);
+    }
+    session.poor_bga_duration_us = 0;
+    assert!(
+        build_render_snapshot_with_bga_frames(&session, TimeUs(200_000), &[miss], None, &frames)
+            .bga_poor
+            .is_none()
+    );
+}
+
+#[test]
 fn current_bpm_returns_changed_bpm_after_event() {
     let chart = chart_with_bpm_changes();
     // BPM changes to 180 at t=500_000 µs

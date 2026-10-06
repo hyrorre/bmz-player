@@ -5,7 +5,7 @@ pub fn schedule_keysounds(session: &mut GameSession, audio: &mut dyn AudioSchedu
         let allow_fallback = session.audio_mix.auto_keysound_fallback;
         let allow_mine = session.audio_mix.auto_keysound_mine;
         pending.retain(|event| match event.trigger {
-            KeySoundTrigger::NoteJudged => false,
+            KeySoundTrigger::NoteJudged | KeySoundTrigger::Miss => false,
             KeySoundTrigger::Fallback => allow_fallback,
             KeySoundTrigger::Mine => allow_mine,
         });

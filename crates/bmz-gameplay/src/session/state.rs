@@ -275,6 +275,11 @@ pub struct GameSession {
     pub skin_offsets: Vec<PlaySkinOffset>,
     pub bga_enabled: bool,
     pub poor_bga_duration_us: i64,
+    pub hide_misslayer_on_good: bool,
+    pub play_keysound_on_miss: bool,
+    /// Optional chart-event deadline before the usual result margin. This is
+    /// independent of scoring/chart length and of decoded PCM durations.
+    pub result_wait_end_time: Option<TimeUs>,
     pub bga_stretch: i32,
     /// LN モードでも終端 (tail) キャップを描画するか。既定 OFF (beatoraja 準拠)。
     pub show_ln_tail_cap: bool,

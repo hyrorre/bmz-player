@@ -156,6 +156,30 @@ AUTOPLAY / REPLAY / PRACTICE / コースも実際に `Failed` へ入る場合に
 調査と回帰テスト、実機確認手順は
 [issue #26の作業記録](../notes/2026/2026-10-05-failed-chart-audio.md)を参照。
 
+## 任意の終了・発音設定
+
+プロファイルの `play.wait_all_notes_result` は既定OFF。ONでは通常終了に使う
+`GameSession.result_wait_end_time` を、譜面末尾とノート・不可視ノート・BGM・通常BGA
+レイヤー（Base / Layer / Layer2）の最終配置時刻の最大値にします。その時刻から
+従来どおり譜面時刻で5秒の余白を経て終了します。PoorだけのBGA・BPM等の制御イベント・未使用音声定義・
+PCM長は延長に使いません。`chart.end_time`、結果確定の `result_is_settled`、保存用の
+譜面長・identityを変えず、終了時の確定snapshotから既存Result遷移を通します。
+Practiceは設定の対象外で、Replay / Autoplay / Courseは通常終了時に適用します。
+手動終了と途中FAILEDには待機を追加せず、上記のFAILED音声停止を維持します。
+
+`play.play_keysound_on_miss` も既定OFF。ONでは見逃し処理から発音対象だけを
+`KeySoundEvent` として出し、既存schedulerのキー音音量・正規化・多重定義・同一音の
+再発音規則を使います。音はPOOR確定時刻で予約し、判定オフセットを再適用しません。
+通常の自動キー音が有効なら追加分を抑止します。Replayでも現在のプロファイル設定を
+使い、判定・ゲージ・保存される入力列やスコア区分には含めません。
+見逃したHCN始端は上流の処理順に合わせて発音した更新ではミュートせず、次回更新から
+通常のpassing音量制御を適用します。押し直すと既存のHCN音量復帰が働きます。
+
+`play.hide_misslayer_on_good` は既定OFF。ONの通常snapshot経路では表示判定履歴の
+発生順と `DisplayJudgementEvent.display_time` を使ってPGREAT / GREAT / GOOD時に
+ミスBGAを解除するため、正負の入力オフセットで解除を遅らせません。
+ミス画像は従来どおり判定の譜面時刻から選び、OFFでは従来の表示条件を維持します。
+
 ## Diagnostics と検証
 
 INFO に gameplay / input の専用 thread、audio scheduling の担当、play generation を記録する。

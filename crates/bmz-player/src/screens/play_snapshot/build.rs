@@ -412,13 +412,7 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         bga_poor: session
             .bga_enabled
             .then(|| {
-                current_poor_bga_frame(
-                    cache,
-                    chart_now,
-                    recent_judgements,
-                    bga_frames,
-                    session.poor_bga_duration_us,
-                )
+                current_poor_bga_frame(session, cache, chart_now, recent_judgements, bga_frames)
             })
             .flatten(),
         bga_stretch: session.bga_stretch,

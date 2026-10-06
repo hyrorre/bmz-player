@@ -49,6 +49,19 @@ pub fn update_hcn_lane_timers(session: &mut GameSession, audio_now: TimeUs) {
                 .is_some_and(|note| note.sounds().next().is_some())
         {
             let muted = !inclease;
+            // Upstream updates HCN volume before playing newly missed heads.
+            // Keep that first playback, then apply the normal passing mute
+            // on the next update. Do not mark it as already applied here.
+            let just_played_missed_head = muted
+                && session.pending_keysounds.iter().any(|event| {
+                    event.trigger == KeySoundTrigger::Miss
+                        && event.note_id == pair.start_note_id
+                        && event.time == audio_now
+                });
+            if just_played_missed_head {
+                next_muted[idx] = None;
+                continue;
+            }
             if !session.display_only_lane_mask[idx]
                 && session.lane_hcn_keysound_muted[idx] != Some(muted)
             {

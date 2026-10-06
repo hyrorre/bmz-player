@@ -87,6 +87,9 @@ fn play_defaults_uses_default_misslayer_duration_for_old_profiles() {
     assert_eq!(play.bga, BgaModeConfig::On);
     assert_eq!(play.bga_expand, BgaExpandConfig::KeepAspect);
     assert_eq!(play.misslayer_duration_ms, 500);
+    assert!(!play.wait_all_notes_result);
+    assert!(!play.hide_misslayer_on_good);
+    assert!(!play.play_keysound_on_miss);
     assert_eq!(play.play_exit_hold_ms, 1000);
     assert_eq!(play.bottom_shiftable_gauge, BottomShiftableGaugeConfig::AssistEasy);
     assert!(!play.note_retention);
@@ -102,6 +105,38 @@ fn note_retention_defaults_off_and_roundtrips() {
     let decoded: PlayDefaultsConfig = toml::from_str(&encoded).unwrap();
 
     assert!(decoded.note_retention);
+}
+
+#[test]
+fn optional_play_behaviors_are_independent_and_roundtrip() {
+    use crate::config::settings_registry::{
+        SettingsEntryId, adjust_settings_value, format_settings_value,
+    };
+    let defaults = ProfileConfig::new_default("default", "Default", 0);
+    for entry in [
+        SettingsEntryId::WaitAllNotesResult,
+        SettingsEntryId::HideMisslayerOnGood,
+        SettingsEntryId::PlayKeysoundOnMiss,
+    ] {
+        let mut profile = defaults.clone();
+        assert_eq!(format_settings_value(&profile, entry), "OFF");
+        assert!(adjust_settings_value(&mut profile, entry, 1));
+        let encoded = toml::to_string(&profile).unwrap();
+        let decoded: ProfileConfig = toml::from_str(&encoded).unwrap();
+        assert_eq!(format_settings_value(&decoded, entry), "ON");
+        assert_eq!(
+            decoded.play.wait_all_notes_result,
+            entry == SettingsEntryId::WaitAllNotesResult
+        );
+        assert_eq!(
+            decoded.play.hide_misslayer_on_good,
+            entry == SettingsEntryId::HideMisslayerOnGood
+        );
+        assert_eq!(
+            decoded.play.play_keysound_on_miss,
+            entry == SettingsEntryId::PlayKeysoundOnMiss
+        );
+    }
 }
 
 #[test]

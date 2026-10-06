@@ -207,6 +207,8 @@ pub struct JudgeOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeySoundTrigger {
     NoteJudged,
+    /// Optional no-input POOR playback, including missed long-note heads.
+    Miss,
     Fallback,
     Mine,
 }

@@ -540,6 +540,8 @@ pub fn build_game_session_with_input_backend(
         judge.set_scratch_lane_mask(projection.playback_scratch_lane_mask);
     }
 
+    let result_wait_end_time = (profile.play.wait_all_notes_result && !session_mode.is_practice())
+        .then(|| result_wait_end_time(&chart));
     GameSession {
         gauge,
         opponent_gauge,
@@ -618,6 +620,9 @@ pub fn build_game_session_with_input_backend(
         skin_offsets: skin_offsets_from_profile(profile, play_config_key_mode, session_mode),
         bga_enabled: bga_enabled_from_profile(profile, autoplay_enabled, is_replay),
         poor_bga_duration_us: poor_bga_duration_us_from_profile(profile),
+        hide_misslayer_on_good: profile.play.hide_misslayer_on_good,
+        play_keysound_on_miss: profile.play.play_keysound_on_miss,
+        result_wait_end_time,
         bga_stretch: bga_stretch_from_profile(profile),
         show_ln_tail_cap: profile.play.show_ln_tail_cap,
         lane_hcn_timer: [None; bmz_core::lane::LANE_COUNT],
@@ -635,6 +640,23 @@ pub fn build_game_session_with_input_backend(
 
 pub(super) fn clamp_hispeed(hispeed: f32) -> f32 {
     crate::config::play::clamp_hispeed(hispeed)
+}
+
+fn result_wait_end_time(chart: &PlayableChart) -> TimeUs {
+    // rian BMSModel.getLastTime(): note/hidden note, BGM, base/layer BGA
+    // placements. Poor-only/timing events and PCM tails do not extend play.
+    chart
+        .lane_notes
+        .iter()
+        .flatten()
+        .map(|note| note.time)
+        .chain(chart.bgm_events.iter().map(|event| event.time))
+        .chain(chart.bga_events.iter().filter_map(|event| {
+            (!matches!(event.kind, bmz_chart::model::BgaEventKind::Poor)).then_some(event.time)
+        }))
+        .chain(std::iter::once(chart.end_time))
+        .max()
+        .unwrap_or(chart.end_time)
 }
 
 pub(super) fn hsfix_index_from_option(option: HsFixOption) -> i32 {

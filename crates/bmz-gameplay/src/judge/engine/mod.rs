@@ -140,6 +140,17 @@ impl JudgeEngine {
     }
 
     pub fn process_misses(&mut self, chart: &PlayableChart, now: TimeUs) -> JudgeOutcome {
+        self.process_misses_with_keysounds(chart, now, false)
+    }
+
+    /// Optionally plays only notes missed without input, rather than every POOR
+    /// score event (a missed CN head also scores its tail immediately).
+    pub fn process_misses_with_keysounds(
+        &mut self,
+        chart: &PlayableChart,
+        now: TimeUs,
+        play_keysound: bool,
+    ) -> JudgeOutcome {
         let mut outcome = JudgeOutcome::default();
 
         for lane in Lane::ALL {
@@ -161,6 +172,13 @@ impl JudgeEngine {
                 self.judged_notes.insert(note.id, Judge::Poor);
                 let miss_delta = TimeUs(now.0 - note.time.0);
                 if !bad_was_already_scored {
+                    if play_keysound {
+                        outcome.keysounds.push(KeySoundEvent {
+                            note_id: note.id,
+                            time: now,
+                            trigger: KeySoundTrigger::Miss,
+                        });
+                    }
                     outcome.events.push(JudgementEvent {
                         note_id: Some(note.id),
                         lane,
@@ -241,6 +259,13 @@ impl JudgeEngine {
                         if now.0 > active.end.end_time.0 + windows.bad_slow_us {
                             lane_state.active_long = None;
                             self.judged_notes.insert(active.end.end_note_id, Judge::Poor);
+                            if play_keysound {
+                                outcome.keysounds.push(KeySoundEvent {
+                                    note_id: active.end.end_note_id,
+                                    time: now,
+                                    trigger: KeySoundTrigger::Miss,
+                                });
+                            }
                             outcome.events.push(JudgementEvent {
                                 note_id: Some(active.end.end_note_id),
                                 lane,

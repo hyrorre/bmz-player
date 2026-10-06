@@ -244,6 +244,13 @@ pub struct PlayDefaultsConfig {
     pub bga_expand: BgaExpandConfig,
     #[serde(default = "default_misslayer_duration_ms")]
     pub misslayer_duration_ms: u32,
+    /// Wait until five seconds after the last chart BGM/BGA placement.
+    #[serde(default)]
+    pub wait_all_notes_result: bool,
+    #[serde(default)]
+    pub hide_misslayer_on_good: bool,
+    #[serde(default)]
+    pub play_keysound_on_miss: bool,
     /// E1+E2 長押し強制終了までの時間(ms)。beatoraja 既定 1000ms。
     #[serde(default = "default_play_exit_hold_ms")]
     pub play_exit_hold_ms: u32,
