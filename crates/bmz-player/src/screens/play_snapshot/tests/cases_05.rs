@@ -289,6 +289,69 @@ fn build_render_snapshot_selects_current_bga_frames() {
 }
 
 #[test]
+fn build_render_snapshot_uses_zero_asset_for_initial_poor_before_later_event() {
+    use bmz_chart::model::BgaEvent;
+
+    let profile = ProfileConfig::new_default("default", "Default", 1);
+    let mut chart = chart();
+    chart.metadata.has_bga = true;
+    chart.bga_events = vec![
+        BgaEvent {
+            tick: ChartTick(0),
+            time: TimeUs(0),
+            asset: Some(BgaAssetId(0)),
+            kind: BgaEventKind::Poor,
+        },
+        BgaEvent {
+            tick: ChartTick(960),
+            time: TimeUs(1_000_000),
+            asset: Some(BgaAssetId(1)),
+            kind: BgaEventKind::Poor,
+        },
+    ];
+    let mut session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+    session.poor_bga_duration_us = 250_000;
+    let bga_frames = BgaFrameCatalog::from([
+        (BgaAssetId(0), display_bga_frame(BgaAssetId(0), 320, 240)),
+        (BgaAssetId(1), display_bga_frame(BgaAssetId(1), 640, 480)),
+    ]);
+    let idle =
+        build_render_snapshot_with_bga_frames(&session, TimeUs(500_000), &[], None, &bga_frames);
+    assert!(idle.has_bga);
+    assert!(idle.bga_base.is_none());
+    assert!(idle.bga_poor.is_none());
+
+    for (time, asset) in [(900_000, BgaAssetId(0)), (1_050_000, BgaAssetId(1))] {
+        let judgements = [JudgementEvent {
+            note_id: Some(NoteId(1)),
+            lane: Lane::Key1,
+            judge: Judge::Poor,
+            side: TimingSide::Slow,
+            delta: TimeUs(0),
+            time: TimeUs(time),
+            affects_score: true,
+        }];
+        // The miss image is selected at judgement time, even across a later change.
+        let active = build_render_snapshot_with_bga_frames(
+            &session,
+            TimeUs(1_100_000),
+            &judgements,
+            None,
+            &bga_frames,
+        );
+        assert_eq!(active.bga_poor, bga_frames.get(&asset).copied());
+        let expired = build_render_snapshot_with_bga_frames(
+            &session,
+            TimeUs(time + 250_000),
+            &judgements,
+            None,
+            &bga_frames,
+        );
+        assert!(expired.bga_poor.is_none());
+    }
+}
+
+#[test]
 fn current_bpm_returns_initial_bpm_before_first_change() {
     let chart = chart_with_bpm_changes();
     // At time 0, before any BPM change

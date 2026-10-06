@@ -66,6 +66,7 @@ fn bga_asset_manifest(
     manifest
 }
 
+mod bmp00;
 #[path = "cases_01.rs"]
 mod cases_01;
 #[path = "cases_02.rs"]

@@ -1,5 +1,35 @@
 use super::*;
 
+/// bms-rs keeps #BMP00 outside bmp_files. Restore its resource and implicit
+/// initial Poor event only for the BMS/PMS import path, after RANDOM selection.
+pub(super) fn restore_default_poor_bga(chart: &mut IntermediateChart, path: Option<&Path>) {
+    let Some(path) = path else {
+        return;
+    };
+    if let Some(bmp) = chart.resources.bmps.iter_mut().find(|bmp| bmp.key == 0) {
+        bmp.path = path.to_path_buf();
+    } else {
+        chart.resources.bmps.push(BmpDef { key: 0, path: path.to_path_buf() });
+    }
+    let has_initial_poor = chart.objects.iter().any(|object| {
+        object.measure == 0
+            && object.position_num == 0
+            && matches!(
+                object.kind,
+                IntermediateObjectKind::Bga { kind: IntermediateBgaKind::Poor, .. }
+            )
+    });
+    if !has_initial_poor {
+        chart.objects.push(IntermediateObject {
+            measure: 0,
+            position_num: 0,
+            position_den: 1,
+            kind: IntermediateObjectKind::Bga { bmp_key: 0, kind: IntermediateBgaKind::Poor },
+        });
+    }
+    chart.metadata.has_bga = true;
+}
+
 pub(super) fn build_resources(bms: &Bms) -> IntermediateResources {
     let wavs: Vec<WavDef> = bms
         .wav

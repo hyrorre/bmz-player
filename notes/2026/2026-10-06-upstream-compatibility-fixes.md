@@ -131,6 +131,20 @@ DXのカテゴリ・判定ランク・TOTALは固定表示とし、保存値と�
 - all-targets Clippyは既存 `input/capture.rs:111` の `let_unit_value` だけで失敗。
 - 実機手動操作は未実施。ログ: `.local/validation/2026-10-06-practice-dx/`。
 
+## 6. BMP00の既定ミスレイヤー
+
+bms-rsは `#BMP00` を通常のBMP一覧ではなく `poor_bmp` に保持していた。
+BMS/PMS専用の取り込みで、有効RANDOM分岐のこの値をBMP key 0 resourceと初期Poorイベントへ復元する。
+時刻0の明示Poorは優先し、空チャンネル・途中切替・他レイヤーとの共存を維持する。
+BMSONのresource ID 0には既定ミス表示の意味を追加しない。譜面原文・ハッシュは維持する。
+
+- import回帰7件: 上流4ケース、空データ・途中切替・空白区切り、未定義の明示Poor、
+  他の全BGA層、有効/無効RANDOM分岐、PMS両配置、BMSONを確認。
+- player回帰: asset ID 0のミス表示、後続画像への切替、判定時刻での選択、有効期間を確認。
+  新規回帰と既存BGA回帰の各1件が成功。
+- fmt、bmz-chart check / all-targets Clippy / 全テスト: 成功。169 passed / 2 ignored。
+- 環境由来のincremental cache hard-link警告あり。実機での画像表示は未確認。
+
 ## 検証楽曲
 
 [作者の配布ページ](https://www.luzeria.net/?p=387)から「運命論」を取得した。

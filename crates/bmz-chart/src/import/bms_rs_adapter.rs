@@ -251,6 +251,7 @@ fn import_with_layout<T: KeyLayoutMapper>(
         &bga_objects,
         warnings,
     )?;
+    restore_default_poor_bga(&mut intermediate, bms.bmp.poor_bmp.as_deref());
     intermediate.lnobj_wav_key =
         extract_lnobj_wav_key(&text, bms_uses_base62_obj_ids(&bms), warnings);
     let bms_headers = extract_bms_headers_from_text(&raw_text);
