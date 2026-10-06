@@ -424,6 +424,161 @@ fn build_practice_session_preserves_preloaded_hsfix_and_rule_mode() {
 }
 
 #[test]
+fn practice_dx_preloaded_gauges_match_effective_rules_and_keep_fixed_scoring() {
+    use crate::screens::practice::{PracticeRuleContext, clamp_practice_property};
+
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.play.rule_mode = RuleMode::Dx;
+    for (key_mode, conversion, conversion_rule, expected_mode, initial, max) in [
+        (
+            KeyMode::K7,
+            KeyModeConversionConfig::Off,
+            SevenToNineRuleMode::Keys7,
+            KeyMode::K7,
+            22,
+            100,
+        ),
+        (
+            KeyMode::K9,
+            KeyModeConversionConfig::Off,
+            SevenToNineRuleMode::Keys9,
+            KeyMode::K9,
+            30,
+            120,
+        ),
+        (
+            KeyMode::K9,
+            KeyModeConversionConfig::SevenToNine,
+            SevenToNineRuleMode::Keys7,
+            KeyMode::K7,
+            22,
+            100,
+        ),
+        (
+            KeyMode::K9,
+            KeyModeConversionConfig::SevenToNine,
+            SevenToNineRuleMode::Keys9,
+            KeyMode::K9,
+            30,
+            120,
+        ),
+    ] {
+        let mut source = chart();
+        source.metadata.key_mode = key_mode;
+        source.end_time = TimeUs(2_000_000);
+        source.lane_notes[Lane::Key1.index()].push(note(1, Lane::Key1, 1_000_000));
+        let options = PlaySessionOptions {
+            session_mode: SessionMode::Practice,
+            key_mode_conversion: conversion,
+            seven_to_nine_rule_mode: conversion_rule,
+            rule_mode: RuleMode::Dx,
+            ..Default::default()
+        };
+        let rules =
+            PracticeRuleContext::for_play_session(profile.play.rule_mode, key_mode, &options);
+        let mut property = PracticeProperty {
+            start_gauge: 120,
+            gauge_category: Some(GaugeProperty::FiveKeys),
+            judgerank: 1,
+            total: Some(10.0),
+            ..Default::default()
+        };
+        assert_eq!(rules.key_mode, expected_mode);
+        assert_eq!(rules.gauge_bounds(&property).initial, initial);
+        assert_eq!(rules.gauge_bounds(&property).max, max);
+        clamp_practice_property(&mut property, &source, rules);
+        assert_eq!(property.start_gauge, max);
+        let prepared = build_practice_prepared_from_preloaded(
+            preloaded_play_session(source.clone()),
+            &profile,
+            &property,
+            options.clone(),
+            Box::new(NullInputBackend),
+        );
+        assert_eq!(prepared.session.primary_key_mode, rules.key_mode);
+        assert_eq!(prepared.session.gauge.current().value, max as f32);
+        assert_eq!(prepared.session.gauge.current().definition.max, max as f32);
+        assert_eq!(
+            prepared.session.base_judge_windows,
+            judge_windows_for_keymode_and_rule_mode(expected_mode, RuleMode::Dx)
+        );
+
+        property.judgerank = 400;
+        property.total = Some(5000.0);
+        property.gauge_category = Some(GaugeProperty::Pms);
+        let changed_ignored_settings = build_practice_prepared_from_preloaded(
+            preloaded_play_session(source),
+            &profile,
+            &property,
+            options,
+            Box::new(NullInputBackend),
+        );
+        assert_eq!(
+            prepared.session.gauge.current().definition.values,
+            changed_ignored_settings.session.gauge.current().definition.values
+        );
+        assert_eq!(
+            prepared.session.base_judge_windows,
+            changed_ignored_settings.session.base_judge_windows
+        );
+    }
+}
+
+#[test]
+fn practice_dx_start_keeps_pop_gauge_above_one_hundred_during_gas() {
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.play.rule_mode = RuleMode::Dx;
+    for mode in [GaugeAutoShiftMode::Off, GaugeAutoShiftMode::BestClear] {
+        for gauge in PracticeGaugeType::VALUES {
+            let mut source = chart();
+            source.metadata.key_mode = KeyMode::K9;
+            let property = PracticeProperty { gauge, start_gauge: 120, ..Default::default() };
+            let prepared = build_practice_prepared_from_preloaded(
+                preloaded_play_session(source),
+                &profile,
+                &property,
+                PlaySessionOptions {
+                    gauge_override: Some(GaugeType::Normal),
+                    gauge_auto_shift: mode,
+                    ..Default::default()
+                },
+                Box::new(NullInputBackend),
+            );
+            for member in &prepared.session.gauge.gauges {
+                let expected = if matches!(
+                    member.definition.gauge_type,
+                    GaugeType::AssistEasy
+                        | GaugeType::Easy
+                        | GaugeType::Normal
+                        | GaugeType::Hard
+                        | GaugeType::ExHard
+                ) {
+                    120.0
+                } else {
+                    100.0
+                };
+                assert_eq!(
+                    member.value, expected,
+                    "{mode:?} {gauge:?} {:?}",
+                    member.definition.gauge_type
+                );
+            }
+            if mode == GaugeAutoShiftMode::BestClear
+                && !matches!(
+                    gauge,
+                    PracticeGaugeType::Class
+                        | PracticeGaugeType::ExClass
+                        | PracticeGaugeType::ExHardClass
+                )
+            {
+                assert_eq!(prepared.session.gauge.selected, GaugeType::Hazard);
+                assert_eq!(prepared.session.gauge.current().value, 100.0);
+            }
+        }
+    }
+}
+
+#[test]
 fn main_bpm_uses_bpm_with_most_notes() {
     let mut bpm_chart = chart();
     bpm_chart.timing_events.push(bmz_chart::model::TimingEvent {

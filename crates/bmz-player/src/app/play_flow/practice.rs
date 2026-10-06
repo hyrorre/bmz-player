@@ -143,6 +143,7 @@ impl WinitApp {
                             practice.is_double,
                             increment,
                             practice.max_end_time_ms,
+                            practice.rules,
                         )
                     })
                     .unwrap_or(crate::screens::practice::PracticeCursorAction::None);
@@ -268,6 +269,7 @@ impl WinitApp {
             chart_title: defaults.title,
             chart_sha256: defaults.sha256,
             property: defaults.property,
+            rules: defaults.rules,
             phase: PracticePhase::Config,
             max_end_time_ms: defaults.max_end_time_ms,
             last_graph: defaults.graph,
@@ -314,12 +316,16 @@ impl WinitApp {
             .boot
             .library_db
             .load_chart_source(chart_id, bmz_chart::import::BmsRandomSource::Seed(None))?;
+        let rules = crate::screens::practice::PracticeRuleContext {
+            rule_mode: self.boot.profile_config.play.rule_mode,
+            key_mode: import.chart.metadata.key_mode,
+        };
         let property = load_practice_property(
             &self.boot.profile_paths,
             &import.chart.identity.file_sha256,
             &import.chart,
             self.select.gauge_option,
-            self.boot.profile_config.play.rule_mode,
+            rules,
             cli,
         )?;
         let title = if import.chart.metadata.title.is_empty() {
@@ -333,6 +339,7 @@ impl WinitApp {
         let is_double = matches!(import.chart.metadata.key_mode, KeyMode::K10 | KeyMode::K14);
         Ok(PracticeChartDefaults {
             property,
+            rules,
             title,
             sha256: import.chart.identity.file_sha256,
             graph: std::sync::Arc::new(graph),
@@ -420,7 +427,16 @@ impl WinitApp {
                 return;
             };
             if let Some(preloaded) = &self.play.preloaded_play_session {
-                clamp_practice_property(&mut practice.property, &preloaded.preloaded.chart);
+                practice.rules = crate::screens::practice::PracticeRuleContext::for_play_session(
+                    self.boot.profile_config.play.rule_mode,
+                    preloaded.preloaded.chart.metadata.key_mode,
+                    &preloaded.session_options,
+                );
+                clamp_practice_property(
+                    &mut practice.property,
+                    &preloaded.preloaded.chart,
+                    practice.rules,
+                );
                 practice.max_end_time_ms =
                     crate::screens::practice::default_end_time_ms(&preloaded.preloaded.chart);
             }
@@ -572,6 +588,21 @@ impl WinitApp {
     pub(super) fn refresh_practice_preview_snapshot(&mut self) {
         if self.play.play_ending.is_some() {
             return;
+        }
+        if let Some(practice) = self.play.practice_session.as_mut()
+            && practice.phase == PracticePhase::Config
+            && let Some(preloaded) = self.play.preloaded_play_session.as_ref()
+            && preloaded.chart_id == practice.chart_id
+        {
+            let rules = crate::screens::practice::PracticeRuleContext::for_play_session(
+                self.boot.profile_config.play.rule_mode,
+                preloaded.preloaded.chart.metadata.key_mode,
+                &preloaded.session_options,
+            );
+            if practice.rules != rules {
+                practice.rules = rules;
+                rules.clamp_start_gauge(&mut practice.property);
+            }
         }
         let (chart_id, start_time_ms) = {
             let Some(practice) = self.play.practice_session.as_ref() else {

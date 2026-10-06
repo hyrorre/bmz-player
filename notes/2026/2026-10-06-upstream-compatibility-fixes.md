@@ -110,6 +110,27 @@ DX 7K/9K、LR2oraja、DEFEXRANK、Practice速度50/100/200%、replay視聴速度
 - 実GPU上の見た目や上流との実プレイ比較は未実施。
 - 検証ログ: `.local/validation/2026-10-06-timing-judge-window/`。
 
+## 5. PracticeのDX初期ゲージ・上限
+
+Practiceのrule/key modeから実ゲージ定義の初期値・上限を解決し、読み込み・マウス・
+キー操作・開始直前で共有する。新規DX設定とゲージ切替は実定義の初期値を使い、
+保存済みの20を含むcustom値は範囲内なら保持する。DX 9KのAssistEasy～ExHardは30/120、
+7K系のAssistEasy～Normalは22/100、Hazard・段位系等は100/100となる。
+
+開始時はGaugeStateの各memberの制限を利用し、GASでもPOPの120とHazardの100を保持する。
+変換済みpreloaded譜面は実判定用key modeでUI範囲を同期する。通常のPractice開始に
+新たな譜面変換を追加する変更ではない。非DXの新規初期値・ゲージ切替の方針は維持する。
+DXのカテゴリ・判定ランク・TOTALは固定表示とし、保存値と採点式は変更しない。
+詳細は [controls.md](../../docs/controls.md) と [rule.md](../../docs/rule.md) を参照。
+
+- Practice関連39件: 全件成功 / 0 ignored。
+- 新規回帰7件: fresh DX、保存20/117、9Kゲージ切替、固定欄・keyboard、egui、
+  7→9 Keys7/Keys9のpreloadedと実session、GAS各memberの上限を確認。
+- `cargo fmt --check` / `cargo check -p bmz-player --locked`: 成功。
+- 通常権限のplayer全テスト: 2237 passed / 19 ignored。
+- all-targets Clippyは既存 `input/capture.rs:111` の `let_unit_value` だけで失敗。
+- 実機手動操作は未実施。ログ: `.local/validation/2026-10-06-practice-dx/`。
+
 ## 検証楽曲
 
 [作者の配布ページ](https://www.luzeria.net/?p=387)から「運命論」を取得した。

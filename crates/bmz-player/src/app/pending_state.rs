@@ -33,6 +33,7 @@ pub(super) enum UpdateCheckWorkerResult {
 
 pub(super) struct PracticeChartDefaults {
     pub(super) property: crate::screens::practice::PracticeProperty,
+    pub(super) rules: crate::screens::practice::PracticeRuleContext,
     pub(super) title: String,
     pub(super) sha256: [u8; 32],
     pub(super) graph: std::sync::Arc<bmz_render::snapshot::ResultGraphSnapshot>,

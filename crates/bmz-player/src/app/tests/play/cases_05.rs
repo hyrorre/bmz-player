@@ -51,6 +51,7 @@ fn decide_launch_promotes_only_staged_practice_config() {
         chart_title: "Practice".to_string(),
         chart_sha256: [7; 32],
         property: Default::default(),
+        rules: Default::default(),
         phase: PracticePhase::Config,
         max_end_time_ms: 120_000,
         last_graph: Arc::new(Default::default()),

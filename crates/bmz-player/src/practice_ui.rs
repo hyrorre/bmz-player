@@ -5,6 +5,7 @@ use egui::{Context, RichText};
 use crate::i18n::Localizer;
 use crate::screens::practice::{
     PracticeCursorAction, PracticeGaugeType, PracticeGraphType, PracticeProperty,
+    PracticeRuleContext,
 };
 use crate::select_options::ArrangeOption;
 use bmz_gameplay::gauge::GaugeProperty;
@@ -12,6 +13,7 @@ use bmz_render::snapshot::ResultGraphSnapshot;
 
 pub struct PracticePanelContext<'a> {
     pub property: &'a mut PracticeProperty,
+    pub rules: PracticeRuleContext,
     pub graph: &'a ResultGraphSnapshot,
     pub graph_start_time_ms: u32,
     pub is_double: bool,
@@ -55,6 +57,7 @@ pub fn build_practice_panel(
             practice.is_double,
             increment,
             practice.max_end_time_ms,
+            practice.rules,
         ) {
             PracticeCursorAction::None => {}
             PracticeCursorAction::Start => start_play = true,
@@ -105,52 +108,61 @@ pub fn build_practice_panel(
 
         practice_field_label(ui, practice.cursor, 2, text.text("practice-gauge"));
         ui.horizontal(|ui| {
+            let mut selected_gauge = practice.property.gauge;
             egui::ComboBox::from_id_salt("practice_gauge")
                 .selected_text(gauge_label(text, practice.property.gauge))
                 .show_ui(ui, |ui| {
                     for gauge in practice_gauges() {
-                        ui.selectable_value(
-                            &mut practice.property.gauge,
-                            gauge,
-                            gauge_label(text, gauge),
-                        );
+                        ui.selectable_value(&mut selected_gauge, gauge, gauge_label(text, gauge));
                     }
                 });
+            practice.rules.set_gauge(practice.property, selected_gauge);
         });
         practice_field_label(ui, practice.cursor, 3, text.text("practice-gauge-category"));
         ui.horizontal(|ui| {
-            let category = practice.property.gauge_category.get_or_insert(GaugeProperty::SevenKeys);
-            let previous_category = *category;
-            egui::ComboBox::from_id_salt("practice_gauge_category")
-                .selected_text(gauge_category_label(*category))
-                .show_ui(ui, |ui| {
-                    for value in practice_gauge_categories() {
-                        ui.selectable_value(category, value, gauge_category_label(value));
-                    }
-                });
-            let selected_category = *category;
-            if selected_category != previous_category {
-                practice.property.start_gauge =
-                    crate::screens::practice::practice_gauge_initial_value(
-                        practice.property.gauge,
-                        selected_category,
-                    );
+            if practice.rules.field_is_fixed(3) {
+                ui.label(RichText::new(dx_rule_label(practice.rules)).weak());
+            } else {
+                let mut category = practice
+                    .property
+                    .gauge_category
+                    .unwrap_or_else(|| GaugeProperty::from_keymode(practice.rules.key_mode));
+                let previous_category = category;
+                egui::ComboBox::from_id_salt("practice_gauge_category")
+                    .selected_text(gauge_category_label(category))
+                    .show_ui(ui, |ui| {
+                        for value in practice_gauge_categories() {
+                            ui.selectable_value(&mut category, value, gauge_category_label(value));
+                        }
+                    });
+                if category != previous_category {
+                    practice.rules.set_gauge_category(practice.property, category);
+                }
             }
         });
         practice_field_label(ui, practice.cursor, 4, text.text("practice-gauge-percent"));
         ui.horizontal(|ui| {
+            let max = practice.rules.gauge_bounds(practice.property).max;
             ui.add(
-                egui::DragValue::new(&mut practice.property.start_gauge).range(1..=100).speed(0.2),
+                egui::DragValue::new(&mut practice.property.start_gauge).range(1..=max).speed(0.2),
             );
         });
         practice_field_label(ui, practice.cursor, 5, text.text("practice-judge-rank"));
         ui.horizontal(|ui| {
-            ui.add(
-                egui::DragValue::new(&mut practice.property.judgerank).range(1..=400).speed(0.5),
-            );
+            if practice.rules.field_is_fixed(5) {
+                ui.label(RichText::new(dx_rule_label(practice.rules)).weak());
+            } else {
+                ui.add(
+                    egui::DragValue::new(&mut practice.property.judgerank)
+                        .range(1..=400)
+                        .speed(0.5),
+                );
+            }
         });
         practice_field_label(ui, practice.cursor, 6, text.text("practice-total"));
-        if let Some(total) = practice.property.total.as_mut() {
+        if practice.rules.field_is_fixed(6) {
+            ui.label(RichText::new("AUTO (DX MODE)").weak());
+        } else if let Some(total) = practice.property.total.as_mut() {
             ui.horizontal(|ui| {
                 ui.add(egui::DragValue::new(total).range(10.0..=5000.0).speed(1.0));
             });
@@ -268,6 +280,10 @@ fn format_time_ms(ms: u32) -> String {
     let seconds = (ms / 1000) % 60;
     let tenths = (ms / 100) % 10;
     format!("{minutes:02}:{seconds:02}.{tenths}")
+}
+
+fn dx_rule_label(rules: PracticeRuleContext) -> &'static str {
+    if rules.key_mode == bmz_core::lane::KeyMode::K9 { "POP (DX MODE)" } else { "IIDX (DX MODE)" }
 }
 
 fn practice_gauges() -> [PracticeGaugeType; 9] {
@@ -470,6 +486,73 @@ mod tests {
             }
             for arrange in ArrangeOption::VALUES {
                 assert!(!arrange_label(text, arrange).starts_with("practice-"));
+            }
+        }
+    }
+
+    #[test]
+    fn dx_practice_panel_keeps_pop_maximum_and_fixed_fields() {
+        let ctx = egui::Context::default();
+        let rules = PracticeRuleContext {
+            rule_mode: bmz_gameplay::rule::RuleMode::Dx,
+            key_mode: bmz_core::lane::KeyMode::K9,
+        };
+        let mut property = PracticeProperty {
+            start_gauge: 120,
+            judgerank: 222,
+            total: Some(4321.0),
+            gauge_category: Some(GaugeProperty::FiveKeys),
+            ..Default::default()
+        };
+        let before = property.clone();
+        let graph = ResultGraphSnapshot::default();
+        for mut cursor in [4, 3, 5, 6] {
+            let mut panel = PracticePanelContext {
+                property: &mut property,
+                rules,
+                graph: &graph,
+                graph_start_time_ms: 0,
+                is_double: false,
+                cursor: &mut cursor,
+                chart_title: "DX Practice",
+                media_ready: true,
+                input_enabled: true,
+                max_end_time_ms: 120_000,
+                default_position: None,
+            };
+            for pressed in [false, true] {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1280.0, 1024.0),
+                        )),
+                        events: vec![egui::Event::Key {
+                            key: egui::Key::ArrowRight,
+                            physical_key: None,
+                            pressed,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        build_practice_panel(ui.ctx(), &mut panel, Localizer::new(AppLocale::En));
+                    },
+                );
+                if pressed {
+                    let labels: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Text(label) => Some(label.galley.job.text.as_str()),
+                            _ => None,
+                        })
+                        .collect();
+                    assert!(labels.contains(&"POP (DX MODE)"));
+                    assert!(labels.contains(&"AUTO (DX MODE)"));
+                }
+                assert_eq!(*panel.property, before);
             }
         }
     }

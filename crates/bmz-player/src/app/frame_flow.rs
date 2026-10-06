@@ -32,6 +32,7 @@ fn practice_panel_context(
     let practice = practice.filter(|practice| practice.phase == PracticePhase::Config)?;
     Some(PracticePanelContext {
         property: &mut practice.property,
+        rules: practice.rules,
         graph: &practice.last_graph,
         graph_start_time_ms: practice.graph_start_time_ms,
         is_double: practice.is_double,

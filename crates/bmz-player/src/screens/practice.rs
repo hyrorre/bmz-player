@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use bmz_chart::model::{JudgeRankKind, JudgeRankSpec, PlayableChart};
 use bmz_chart::practice::apply_practice_section;
 use bmz_core::clear::GaugeType;
+use bmz_core::lane::KeyMode;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::gauge::{GaugeProperty, GaugeState};
 use bmz_gameplay::judge::window::judge_rank_spec_to_percent_optional_for_keymode_and_rule_mode;
@@ -139,6 +140,81 @@ impl Default for PracticeProperty {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PracticeRuleContext {
+    pub rule_mode: RuleMode,
+    pub key_mode: KeyMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PracticeGaugeBounds {
+    pub initial: u32,
+    pub max: u32,
+}
+
+impl PracticeRuleContext {
+    pub fn for_play_session(
+        rule_mode: RuleMode,
+        chart_key_mode: KeyMode,
+        options: &crate::screens::play_session::PlaySessionOptions,
+    ) -> Self {
+        Self {
+            rule_mode,
+            key_mode: crate::screens::play_session::effective_primary_key_mode(
+                chart_key_mode,
+                options,
+            ),
+        }
+    }
+
+    pub fn is_dx(self) -> bool {
+        self.rule_mode == RuleMode::Dx
+    }
+
+    pub fn gauge_bounds(self, property: &PracticeProperty) -> PracticeGaugeBounds {
+        let category =
+            property.gauge_category.unwrap_or_else(|| GaugeProperty::from_keymode(self.key_mode));
+        let definition = bmz_gameplay::gauge::gauge_definitions_for_rule_mode_and_keymode(
+            category,
+            self.rule_mode,
+            self.key_mode,
+        )
+        .into_iter()
+        .find(|definition| definition.gauge_type == property.gauge.gauge_type())
+        .expect("practice gauge must have a gameplay definition");
+        let max = definition.max.round().max(1.0) as u32;
+        PracticeGaugeBounds { initial: (definition.init.round() as u32).clamp(1, max), max }
+    }
+
+    pub fn clamp_start_gauge(self, property: &mut PracticeProperty) {
+        property.start_gauge = property.start_gauge.clamp(1, self.gauge_bounds(property).max);
+    }
+
+    pub fn set_gauge(self, property: &mut PracticeProperty, gauge: PracticeGaugeType) {
+        if property.gauge == gauge {
+            return;
+        }
+        property.gauge = gauge;
+        if self.is_dx() {
+            property.start_gauge = self.gauge_bounds(property).initial;
+        } else {
+            self.clamp_start_gauge(property);
+        }
+    }
+
+    pub fn set_gauge_category(self, property: &mut PracticeProperty, category: GaugeProperty) {
+        if self.is_dx() || property.gauge_category == Some(category) {
+            return;
+        }
+        property.gauge_category = Some(category);
+        property.start_gauge = self.gauge_bounds(property).initial;
+    }
+
+    pub fn field_is_fixed(self, field: usize) -> bool {
+        self.is_dx() && matches!(field, 3 | 5 | 6)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PracticePhase {
     /// Settings overlay; chart is preloaded but not playing.
@@ -153,6 +229,7 @@ pub struct PracticeSession {
     pub chart_title: String,
     pub chart_sha256: [u8; 32],
     pub property: PracticeProperty,
+    pub rules: PracticeRuleContext,
     pub phase: PracticePhase,
     pub max_end_time_ms: u32,
     pub last_graph: Arc<ResultGraphSnapshot>,
@@ -182,7 +259,7 @@ pub fn load_practice_property(
     chart_sha256: &[u8; 32],
     chart: &PlayableChart,
     profile_gauge: GaugeTypeConfig,
-    rule_mode: RuleMode,
+    rules: PracticeRuleContext,
     cli: &PracticeCliOverrides,
 ) -> Result<PracticeProperty> {
     let path = practice_property_path(profile_paths, chart_sha256);
@@ -198,16 +275,17 @@ pub fn load_practice_property(
 
     if !loaded_from_file {
         property.end_time_ms = default_end_time_ms(chart);
-        property.judgerank = practice_judgerank_percent(chart, rule_mode);
+        property.judgerank = practice_judgerank_percent(chart, rules.rule_mode);
         if profile_gauge != GaugeTypeConfig::AutoShift {
             property.gauge = profile_gauge.into();
         }
     } else {
-        migrate_legacy_practice_property(&mut property, chart, rule_mode);
+        migrate_legacy_practice_property(&mut property, chart, rules.rule_mode);
     }
-    property
-        .gauge_category
-        .get_or_insert_with(|| GaugeProperty::from_keymode(chart.metadata.key_mode));
+    property.gauge_category.get_or_insert_with(|| GaugeProperty::from_keymode(rules.key_mode));
+    if !loaded_from_file && rules.is_dx() {
+        property.start_gauge = rules.gauge_bounds(&property).initial;
+    }
     if property.total.is_none() {
         property.total = chart.metadata.total;
     }
@@ -218,7 +296,7 @@ pub fn load_practice_property(
     if let Some(end) = cli.end_time_ms {
         property.end_time_ms = end;
     }
-    clamp_practice_property(&mut property, chart);
+    clamp_practice_property(&mut property, chart, rules);
 
     Ok(property)
 }
@@ -291,8 +369,9 @@ pub fn apply_practice_property(chart: &mut PlayableChart, property: &PracticePro
 }
 
 pub fn apply_practice_start_gauge(gauge: &mut GaugeState, start_gauge: u32) {
-    let value = start_gauge.clamp(1, 100) as f32;
-    gauge.set_initial_value(value);
+    // GAS can start on Hazard while retaining a POP gauge with a 120 maximum.
+    // GaugeState clamps each member to its own definition, not the selected one.
+    gauge.set_initial_value(start_gauge.max(1) as f32);
 }
 
 pub fn practice_chart_zero_time(property: &PracticeProperty, skin_playstart_us: TimeUs) -> TimeUs {
@@ -307,13 +386,17 @@ pub fn practice_chart_zero_time(property: &PracticeProperty, skin_playstart_us: 
     TimeUs(lead_us.saturating_sub(ready_chart_us))
 }
 
-pub fn clamp_practice_property(property: &mut PracticeProperty, chart: &PlayableChart) {
+pub fn clamp_practice_property(
+    property: &mut PracticeProperty,
+    chart: &PlayableChart,
+    rules: PracticeRuleContext,
+) {
     let max_end = default_end_time_ms(chart);
     property.start_time_ms = property.start_time_ms.min(max_end.saturating_sub(3000));
     property.end_time_ms =
         property.end_time_ms.clamp(property.start_time_ms.saturating_add(1000), max_end);
     property.judgerank = property.judgerank.clamp(1, 400);
-    property.start_gauge = property.start_gauge.clamp(1, 100);
+    rules.clamp_start_gauge(property);
     property.playback_rate_percent = property
         .playback_rate_percent
         .clamp(PRACTICE_PLAYBACK_RATE_MIN, PRACTICE_PLAYBACK_RATE_MAX);
@@ -372,10 +455,18 @@ pub fn apply_practice_cursor_horizontal(
     is_double: bool,
     increment: bool,
     max_end_time_ms: u32,
+    rules: PracticeRuleContext,
 ) -> PracticeCursorAction {
     match practice_cursor_target(cursor, is_double) {
         PracticeCursorTarget::Field(field) => {
-            adjust_practice_selected_field(property, field, is_double, increment, max_end_time_ms);
+            adjust_practice_selected_field(
+                property,
+                field,
+                is_double,
+                increment,
+                max_end_time_ms,
+                rules,
+            );
             PracticeCursorAction::None
         }
         PracticeCursorTarget::Start if increment => PracticeCursorAction::Start,
@@ -390,7 +481,11 @@ pub fn adjust_practice_selected_field(
     is_double: bool,
     increment: bool,
     max_end_time_ms: u32,
+    rules: PracticeRuleContext,
 ) {
+    if rules.field_is_fixed(cursor) {
+        return;
+    }
     let direction = if increment { 1_i32 } else { -1 };
     match cursor {
         0 => {
@@ -409,15 +504,20 @@ pub fn adjust_practice_selected_field(
             property.start_time_ms.saturating_add(1000),
             max_end_time_ms,
         ),
-        2 => cycle_gauge(&mut property.gauge, increment),
-        3 => {
-            cycle_gauge_category(&mut property.gauge_category, increment);
-            property.start_gauge = practice_gauge_initial_value(
-                property.gauge,
-                property.gauge_category.unwrap_or_default(),
-            );
+        2 => {
+            let mut gauge = property.gauge;
+            cycle_gauge(&mut gauge, increment);
+            rules.set_gauge(property, gauge);
         }
-        4 => adjust_u32(&mut property.start_gauge, direction, 1, 100),
+        3 => {
+            let mut category = property.gauge_category;
+            cycle_gauge_category(&mut category, increment);
+            rules.set_gauge_category(property, category.unwrap_or_default());
+        }
+        4 => {
+            let max = rules.gauge_bounds(property).max;
+            adjust_u32(&mut property.start_gauge, direction, 1, max);
+        }
         5 => property.judgerank = (property.judgerank + direction).clamp(1, 400),
         6 => {
             if let Some(total) = property.total.as_mut() {
@@ -454,14 +554,6 @@ fn cycle_gauge_category(value: &mut Option<GaugeProperty>, increment: bool) {
     let current = value.unwrap_or(GaugeProperty::SevenKeys);
     let index = values.iter().position(|item| *item == current).unwrap_or(0);
     *value = Some(values[(index + if increment { 1 } else { values.len() - 1 }) % values.len()]);
-}
-
-pub fn practice_gauge_initial_value(gauge: PracticeGaugeType, property: GaugeProperty) -> u32 {
-    bmz_gameplay::gauge::gauge_definitions_for(property)
-        .into_iter()
-        .find(|definition| definition.gauge_type == gauge.gauge_type())
-        .map(|definition| definition.init.round().clamp(1.0, 100.0) as u32)
-        .unwrap_or(20)
 }
 
 fn cycle_graph_type(value: &mut PracticeGraphType, increment: bool) {
@@ -553,7 +645,7 @@ mod tests {
             &chart.identity.file_sha256,
             &chart,
             GaugeTypeConfig::Hard,
-            RuleMode::Beatoraja,
+            PracticeRuleContext::default(),
             &PracticeCliOverrides { start_time_ms: Some(5000), end_time_ms: None },
         )
         .unwrap();
@@ -647,19 +739,47 @@ mod tests {
         let leave = practice_leave_cursor(false);
 
         assert_eq!(
-            apply_practice_cursor_horizontal(&mut property, start, false, true, 120_000),
+            apply_practice_cursor_horizontal(
+                &mut property,
+                start,
+                false,
+                true,
+                120_000,
+                PracticeRuleContext::default()
+            ),
             PracticeCursorAction::Start
         );
         assert_eq!(
-            apply_practice_cursor_horizontal(&mut property, start, false, false, 120_000),
+            apply_practice_cursor_horizontal(
+                &mut property,
+                start,
+                false,
+                false,
+                120_000,
+                PracticeRuleContext::default()
+            ),
             PracticeCursorAction::None
         );
         assert_eq!(
-            apply_practice_cursor_horizontal(&mut property, leave, false, true, 120_000),
+            apply_practice_cursor_horizontal(
+                &mut property,
+                leave,
+                false,
+                true,
+                120_000,
+                PracticeRuleContext::default()
+            ),
             PracticeCursorAction::Leave
         );
         assert_eq!(
-            apply_practice_cursor_horizontal(&mut property, leave, false, false, 120_000),
+            apply_practice_cursor_horizontal(
+                &mut property,
+                leave,
+                false,
+                false,
+                120_000,
+                PracticeRuleContext::default()
+            ),
             PracticeCursorAction::None
         );
     }
@@ -668,11 +788,161 @@ mod tests {
     fn practice_playback_rate_remains_limited_to_fifty_through_two_hundred_percent() {
         let chart = empty_chart(120_000);
         let mut slow = PracticeProperty { playback_rate_percent: 25, ..Default::default() };
-        clamp_practice_property(&mut slow, &chart);
+        clamp_practice_property(&mut slow, &chart, PracticeRuleContext::default());
         assert_eq!(slow.playback_rate_percent, 50);
 
         let mut fast = PracticeProperty { playback_rate_percent: 300, ..Default::default() };
-        clamp_practice_property(&mut fast, &chart);
+        clamp_practice_property(&mut fast, &chart, PracticeRuleContext::default());
         assert_eq!(fast.playback_rate_percent, 200);
+    }
+
+    #[test]
+    fn fresh_practice_uses_dx_gauge_initial_values_without_changing_other_rules() {
+        let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+        let paths = crate::paths::resolve_profile_paths(&data.paths, "default").unwrap();
+        let mut chart = empty_chart(120_000);
+        for (rule_mode, key_mode, gauge, expected) in [
+            (RuleMode::Dx, KeyMode::K7, GaugeTypeConfig::Normal, 22),
+            (RuleMode::Dx, KeyMode::K7, GaugeTypeConfig::Hard, 100),
+            (RuleMode::Dx, KeyMode::K9, GaugeTypeConfig::AssistEasy, 30),
+            (RuleMode::Dx, KeyMode::K9, GaugeTypeConfig::Easy, 30),
+            (RuleMode::Dx, KeyMode::K9, GaugeTypeConfig::Normal, 30),
+            (RuleMode::Dx, KeyMode::K9, GaugeTypeConfig::Hard, 30),
+            (RuleMode::Dx, KeyMode::K9, GaugeTypeConfig::ExHard, 30),
+            (RuleMode::Dx, KeyMode::K9, GaugeTypeConfig::Hazard, 100),
+            (RuleMode::Dx, KeyMode::K9, GaugeTypeConfig::AutoShift, 30),
+            (RuleMode::Beatoraja, KeyMode::K7, GaugeTypeConfig::Hard, 20),
+            (RuleMode::Lr2Oraja, KeyMode::K9, GaugeTypeConfig::Normal, 20),
+        ] {
+            chart.metadata.key_mode = key_mode;
+            let rules = PracticeRuleContext { rule_mode, key_mode };
+            let property = load_practice_property(
+                &paths,
+                &chart.identity.file_sha256,
+                &chart,
+                gauge,
+                rules,
+                &Default::default(),
+            )
+            .unwrap();
+            assert_eq!(property.start_gauge, expected, "{rule_mode:?} {key_mode:?} {gauge:?}");
+        }
+    }
+
+    #[test]
+    fn saved_practice_preserves_custom_values_and_clamps_only_to_actual_gauge_maximum() {
+        let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+        let paths = crate::paths::resolve_profile_paths(&data.paths, "default").unwrap();
+        let chart = empty_chart(120_000);
+        for (rule_mode, key_mode, gauge, value, expected) in [
+            (RuleMode::Dx, KeyMode::K7, PracticeGaugeType::Normal, 20, 20),
+            (RuleMode::Dx, KeyMode::K9, PracticeGaugeType::Hard, 117, 117),
+            (RuleMode::Dx, KeyMode::K9, PracticeGaugeType::ExHard, 150, 120),
+            (RuleMode::Dx, KeyMode::K9, PracticeGaugeType::Hazard, 117, 100),
+            (RuleMode::Dx, KeyMode::K9, PracticeGaugeType::Class, 117, 100),
+            (RuleMode::Dx, KeyMode::K9, PracticeGaugeType::ExClass, 117, 100),
+            (RuleMode::Dx, KeyMode::K9, PracticeGaugeType::ExHardClass, 117, 100),
+            (RuleMode::Beatoraja, KeyMode::K9, PracticeGaugeType::Normal, 117, 117),
+            (RuleMode::Lr2Oraja, KeyMode::K9, PracticeGaugeType::Normal, 117, 100),
+        ] {
+            let saved = PracticeProperty {
+                gauge,
+                start_gauge: value,
+                gauge_category: Some(GaugeProperty::Pms),
+                judgerank: 222,
+                total: Some(4321.0),
+                ..Default::default()
+            };
+            save_practice_property(&paths, &chart.identity.file_sha256, &saved).unwrap();
+            let loaded = load_practice_property(
+                &paths,
+                &chart.identity.file_sha256,
+                &chart,
+                GaugeTypeConfig::Hard,
+                PracticeRuleContext { rule_mode, key_mode },
+                &Default::default(),
+            )
+            .unwrap();
+            assert_eq!(loaded.start_gauge, expected, "{rule_mode:?} {key_mode:?} {gauge:?}");
+            assert_eq!(loaded.gauge, saved.gauge);
+            assert_eq!(loaded.gauge_category, saved.gauge_category);
+            assert_eq!(loaded.judgerank, saved.judgerank);
+            assert_eq!(loaded.total, saved.total);
+        }
+    }
+
+    #[test]
+    fn practice_gauge_selection_and_keyboard_share_dx_initial_values_and_non_dx_clamping() {
+        for (rule_mode, expected) in [(RuleMode::Dx, 30), (RuleMode::Beatoraja, 100)] {
+            let rules = PracticeRuleContext { rule_mode, key_mode: KeyMode::K9 };
+            let mut selected = PracticeProperty {
+                gauge_category: Some(GaugeProperty::Pms),
+                start_gauge: 119,
+                ..Default::default()
+            };
+            let mut keyboard = selected.clone();
+            rules.set_gauge(&mut selected, PracticeGaugeType::Hard);
+            adjust_practice_selected_field(&mut keyboard, 2, false, true, 120_000, rules);
+            assert_eq!(selected, keyboard);
+            assert_eq!(selected.start_gauge, expected);
+        }
+        let rules = PracticeRuleContext { rule_mode: RuleMode::Dx, key_mode: KeyMode::K9 };
+        for gauge in PracticeGaugeType::VALUES {
+            let mut property =
+                PracticeProperty { gauge: PracticeGaugeType::AutoShift, ..Default::default() };
+            rules.set_gauge(&mut property, gauge);
+            let (initial, max) = if matches!(
+                gauge,
+                PracticeGaugeType::AssistEasy
+                    | PracticeGaugeType::Easy
+                    | PracticeGaugeType::Normal
+                    | PracticeGaugeType::Hard
+                    | PracticeGaugeType::ExHard
+            ) {
+                (30, 120)
+            } else {
+                (100, 100)
+            };
+            assert_eq!(property.start_gauge, initial, "{gauge:?}");
+            assert_eq!(rules.gauge_bounds(&property).max, max, "{gauge:?}");
+        }
+    }
+
+    #[test]
+    fn practice_keyboard_uses_actual_maximum_and_keeps_dx_fixed_fields_unchanged() {
+        let rules = PracticeRuleContext { rule_mode: RuleMode::Dx, key_mode: KeyMode::K9 };
+        let mut property = PracticeProperty {
+            start_gauge: 119,
+            judgerank: 222,
+            total: Some(4321.0),
+            gauge_category: Some(GaugeProperty::FiveKeys),
+            ..Default::default()
+        };
+        for _ in 0..2 {
+            adjust_practice_selected_field(&mut property, 4, false, true, 120_000, rules);
+            assert_eq!(property.start_gauge, 120);
+        }
+        adjust_practice_selected_field(&mut property, 4, false, false, 120_000, rules);
+        assert_eq!(property.start_gauge, 119);
+        let before = property.clone();
+        for field in [3, 5, 6] {
+            for increment in [true, false] {
+                apply_practice_cursor_horizontal(
+                    &mut property,
+                    field,
+                    false,
+                    increment,
+                    120_000,
+                    rules,
+                );
+                assert_eq!(property, before);
+            }
+        }
+        rules.set_gauge_category(&mut property, GaugeProperty::Pms);
+        assert_eq!(property, before);
+        let non_dx = PracticeRuleContext { rule_mode: RuleMode::Beatoraja, ..rules };
+        non_dx.set_gauge_category(&mut property, GaugeProperty::Pms);
+        assert_eq!(property.start_gauge, 30);
+        assert_eq!(non_dx.gauge_bounds(&property).max, 120);
     }
 }

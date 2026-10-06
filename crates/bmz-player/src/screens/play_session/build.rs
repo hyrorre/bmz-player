@@ -1,5 +1,33 @@
 use super::*;
 
+/// Rule/gauge key mode after chart conversion and battle presentation.
+pub(crate) fn effective_primary_key_mode(
+    chart_key_mode: KeyMode,
+    options: &PlaySessionOptions,
+) -> KeyMode {
+    if chart_key_mode == KeyMode::K9
+        && options.key_mode_conversion == KeyModeConversionConfig::SevenToNine
+        && options.seven_to_nine_rule_mode == SevenToNineRuleMode::Keys7
+    {
+        return KeyMode::K7;
+    }
+    let battle_presentation = (options.session_mode.is_battle()
+        || options.battle_opponent.is_some())
+        && matches!(
+            (play_config_key_mode(chart_key_mode, options), chart_key_mode),
+            (KeyMode::K5, KeyMode::K10) | (KeyMode::K7, KeyMode::K14)
+        );
+    if battle_presentation {
+        match chart_key_mode {
+            KeyMode::K10 => KeyMode::K5,
+            KeyMode::K14 => KeyMode::K7,
+            _ => chart_key_mode,
+        }
+    } else {
+        chart_key_mode
+    }
+}
+
 /// Play 入場直後 (preload 完了前) の placeholder snapshot に、
 /// セッション開始時と同じ初期ゲージ・レーン設定を反映する。
 /// `install_active_play` でフルスナップショットに置き換わるまでの間、
@@ -247,17 +275,7 @@ pub fn build_game_session_with_input_backend(
     let seven_to_nine_7k_rule = chart_key_mode == KeyMode::K9
         && options.key_mode_conversion == KeyModeConversionConfig::SevenToNine
         && options.seven_to_nine_rule_mode == SevenToNineRuleMode::Keys7;
-    let primary_key_mode = if seven_to_nine_7k_rule {
-        KeyMode::K7
-    } else if battle_presentation {
-        match chart_key_mode {
-            KeyMode::K10 => KeyMode::K5,
-            KeyMode::K14 => KeyMode::K7,
-            _ => chart_key_mode,
-        }
-    } else {
-        chart_key_mode
-    };
+    let primary_key_mode = effective_primary_key_mode(chart_key_mode, &options);
     let display_only_lane_mask =
         if battle_presentation { second_player_lane_mask() } else { [false; LANE_COUNT] };
     let replay_lane_mask = None;

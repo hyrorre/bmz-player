@@ -321,6 +321,16 @@ recovery = base * pop_total / total_notes
 さらに 9K DX で `total_notes >= 1537` の場合は、POP TOTAL 適用前に GOOD の
 基礎回復量を 2 倍にする。Class は 30% 未満でダメージを 0.5 倍にする。
 
+Practiceでも同じrule mode・判定用key modeのゲージ定義を使う。新規DX設定の初期値と
+ゲージ種別切替時の初期値、編集上限をこの定義から取得し、保存済みの初期値は範囲内なら保持する。
+9Kで120を設定した場合も、開始時に100へ一律に制限しない。GASでは各ゲージをそれぞれの
+上限で制限するため、POPゲージの120とHazard / 段位系の100を同時に保持できる。
+変換済み譜面を扱う開始経路では表示レーン数ではなく実セッションの判定用key modeに合わせる。
+7→9の7KルールならIIDX、9KルールならPOPとなる。通常のPractice開始は原譜面のkey modeを使う。
+
+Practiceのゲージカテゴリ・判定ランク・TOTALの保存値はDX採点では使わず、設定画面では
+固定表示とする。TOTAL式と判定窓は上記の通常DXと共通であり、Practice独自の計算へ置き換えない。
+
 ## Score And Replay Separation
 
 `RuleMode` は score DB と replay slot のキーに含める。
