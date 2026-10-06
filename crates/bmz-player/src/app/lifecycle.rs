@@ -38,6 +38,17 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
             probe.reset("resumed");
         }
         self.ensure_window(event_loop);
+        #[cfg(target_os = "linux")]
+        if let Some(inhibitor) = &self.ui.idle_inhibitor {
+            inhibitor.set_focused(self.window.as_ref().is_some_and(|window| window.has_focus()));
+        }
+    }
+
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        #[cfg(target_os = "linux")]
+        if let Some(inhibitor) = &self.ui.idle_inhibitor {
+            inhibitor.set_focused(false);
+        }
     }
 
     fn window_event(
@@ -112,6 +123,13 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
             WindowEvent::CloseRequested => {
                 self.save_configs_for_exit(self.active_hispeed(), "game exit");
                 event_loop.exit();
+            }
+            WindowEvent::Destroyed =>
+            {
+                #[cfg(target_os = "linux")]
+                if let Some(inhibitor) = &self.ui.idle_inhibitor {
+                    inhibitor.set_focused(false);
+                }
             }
             WindowEvent::DroppedFile(path) => {
                 if self.jobs.profile_change.is_none() {
@@ -236,6 +254,12 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     native_focused,
                     cfg!(target_os = "macos"),
                 );
+                // The inhibitor starts from Window::has_focus(), while ui.focused
+                // initially defaults to true. Publish even an unchanged UI focus.
+                #[cfg(target_os = "linux")]
+                if let Some(inhibitor) = &self.ui.idle_inhibitor {
+                    inhibitor.set_focused(focus_update.effective_focused);
+                }
                 if event_focused != native_focused {
                     tracing::warn!(
                         event_focused,
@@ -648,6 +672,10 @@ impl WinitApp {
             return;
         }
         self.integrations.exit_prepared = true;
+        #[cfg(target_os = "linux")]
+        {
+            self.ui.idle_inhibitor = None;
+        }
         self.event_loop_probe = None;
         tracing::info!(reason, "exit preparation started");
         if pause_update {

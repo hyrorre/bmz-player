@@ -33,6 +33,8 @@ pub mod discord_presence;
 pub mod gameplay_runtime;
 pub mod generated_preview;
 pub mod i18n;
+#[cfg(target_os = "linux")]
+mod idle_inhibit;
 pub mod input;
 pub mod ir;
 pub mod ir_cmd;

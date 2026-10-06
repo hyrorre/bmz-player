@@ -485,6 +485,8 @@ impl WinitApp {
                 egui: None,
                 #[cfg(target_os = "linux")]
                 wayland_clipboard: None,
+                #[cfg(target_os = "linux")]
+                idle_inhibitor: None,
                 log_buffer,
                 applied_window_mode: initial_window_mode,
                 exclusive_fullscreen_fallback_active: false,

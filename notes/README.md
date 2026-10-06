@@ -33,6 +33,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-06 | [Linuxのコントローラープレイ中のアイドル抑止](2026/2026-10-06-linux-idle-inhibit.md) |
 | 2026-10-06 | [プレイ中の画面停止調査とGNOME / Plasma比較](2026/2026-10-06-play-freeze-diagnostics.md) |
 | 2026-10-06 | [Linux遅延対応のレビュー指摘修正](2026/2026-10-06-linux-latency-review-fixes.md) |
 | 2026-10-06 | [evdev以外の入力経路とWaylandイベント配送の比較](2026/2026-10-06-linux-input-alternatives.md) |

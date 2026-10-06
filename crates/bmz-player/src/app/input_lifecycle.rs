@@ -493,6 +493,8 @@ impl WinitApp {
                 window.request_redraw();
                 #[cfg(target_os = "linux")]
                 {
+                    self.ui.idle_inhibitor =
+                        crate::idle_inhibit::IdleInhibitor::new(window.has_focus());
                     self.ui.wayland_clipboard =
                         match crate::wayland_clipboard::WaylandClipboard::new(window.clone()) {
                             Ok(clipboard) => clipboard,

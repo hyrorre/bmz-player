@@ -24,7 +24,7 @@ experimental-coreaudio-ioproc = ["bmz-audio/experimental-coreaudio-ioproc"]
 # 通常ビルドから除外し、利用する場合だけ `--features macos-iohid` で有効化する。
 macos-iohid = []
 # Linux keyboard capture is explicitly selected; Auto remains winit.
-linux-evdev = ["dep:evdev", "dep:x11rb", "dep:x11rb-protocol", "dep:zbus"]
+linux-evdev = ["dep:evdev", "dep:x11rb", "dep:x11rb-protocol"]
 # GameInputRedist 3.4.218 / 3.5.262が一部HID入力でプロセスごと落ちるため、
 # 通常ビルドではコンパイル対象外にする。実機再検証時だけ明示的に有効化する。
 experimental-gameinput = []
@@ -91,7 +91,7 @@ smithay-client-toolkit = { version = "0.20", default-features = false, features 
 evdev = { version = "0.13.2", optional = true }
 x11rb = { version = "0.13.2", optional = true }
 x11rb-protocol = { version = "0.13.2", optional = true }
-zbus = { version = "5.16", optional = true }
+zbus = "5.16"
 
 [target.'cfg(windows)'.dependencies]
 everything-ipc.workspace = true

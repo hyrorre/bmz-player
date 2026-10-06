@@ -341,6 +341,8 @@ pub(super) struct UiRuntimeState {
     pub(super) egui: Option<EguiLayer>,
     #[cfg(target_os = "linux")]
     pub(super) wayland_clipboard: Option<Arc<crate::wayland_clipboard::WaylandClipboard>>,
+    #[cfg(target_os = "linux")]
+    pub(super) idle_inhibitor: Option<crate::idle_inhibit::IdleInhibitor>,
     /// デバッグ表示へ渡す bounded tracing ログバッファ。
     pub(super) log_buffer: LogBuffer,
     /// 現在ウィンドウへ適用済みのウィンドウモード。

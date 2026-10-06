@@ -9,6 +9,10 @@ OS別のRust / FFmpeg等の準備は [README](../README.md) を確認してく�
 LinuxのPipeWire/SPA開発依存、任意evdev、共通診断、独立したデータでのA/B検証は
 [Linux遅延検証](linux-latency.md)を参照してください。
 
+Linuxのアイドル抑止テストには `dbus-daemon` とUnixソケットを作成できる環境が必要です。
+`cargo test -p bmz-player --locked idle_inhibit --lib` はサービス自動起動を無効にした
+専用のsession busでPortal／ScreenSaverの模擬サービスを動かし、実際のデスクトップには接続しません。
+
 ## ビルド識別情報
 
 `bmz-player` はGitのHEADとコードのdirty状態をビルド時に記録します。
