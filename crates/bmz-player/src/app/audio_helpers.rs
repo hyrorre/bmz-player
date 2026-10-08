@@ -33,10 +33,23 @@ pub(super) fn system_bgm_stop_targets_on_scene_enter(
 ) -> &'static [crate::system_sound::SoundType] {
     use crate::system_sound::SoundType;
     match scene_kind {
-        AppSceneKind::Play => &[SoundType::Select],
-        AppSceneKind::Select | AppSceneKind::Decide | AppSceneKind::Result => {
-            &[SoundType::Select, SoundType::Decide]
-        }
+        AppSceneKind::Play => &[
+            SoundType::Select,
+            SoundType::ResultBgmClear,
+            SoundType::ResultBgmFail,
+            SoundType::ResultBgmA,
+            SoundType::ResultBgmAA,
+            SoundType::ResultBgmAAA,
+        ],
+        AppSceneKind::Select | AppSceneKind::Decide | AppSceneKind::Result => &[
+            SoundType::Select,
+            SoundType::Decide,
+            SoundType::ResultBgmClear,
+            SoundType::ResultBgmFail,
+            SoundType::ResultBgmA,
+            SoundType::ResultBgmAA,
+            SoundType::ResultBgmAAA,
+        ],
     }
 }
 
@@ -157,10 +170,18 @@ pub(super) fn result_exit_system_sounds() -> &'static [crate::system_sound::Soun
     &[
         SoundType::ResultClear,
         SoundType::ResultFail,
+        SoundType::ResultA,
+        SoundType::ResultAA,
+        SoundType::ResultAAA,
         SoundType::ResultClose,
         SoundType::CourseClear,
         SoundType::CourseFail,
         SoundType::CourseClose,
+        SoundType::ResultBgmClear,
+        SoundType::ResultBgmFail,
+        SoundType::ResultBgmA,
+        SoundType::ResultBgmAA,
+        SoundType::ResultBgmAAA,
     ]
 }
 
@@ -173,6 +194,57 @@ pub(super) fn result_entry_sound_for_clear(
     } else {
         SoundType::ResultClear
     }
+}
+
+pub(super) fn result_entry_sound_for_result(
+    clear: bmz_core::clear::ClearType,
+    ex_score: u32,
+    total_notes: u32,
+    has_sound: impl Fn(crate::system_sound::SoundType) -> bool,
+) -> crate::system_sound::SoundType {
+    use crate::system_sound::SoundType;
+    if clear == bmz_core::clear::ClearType::Failed {
+        return if has_sound(SoundType::ResultBgmFail) {
+            SoundType::ResultBgmFail
+        } else {
+            SoundType::ResultFail
+        };
+    }
+    if clear != bmz_core::clear::ClearType::NoPlay {
+        // Result表示と同じrank optionを使い、丸めたスコア率や自己ベストを参照しない。
+        let state = bmz_render::skin::SkinDrawState {
+            ex_score,
+            total_notes,
+            result_failed: Some(false),
+            ..Default::default()
+        };
+        let rank_sounds = [
+            (300, SoundType::ResultBgmAAA, SoundType::ResultAAA),
+            (301, SoundType::ResultBgmAA, SoundType::ResultAA),
+            (302, SoundType::ResultBgmA, SoundType::ResultA),
+        ]
+        .into_iter()
+        .find_map(|(option, bgm, se)| {
+            bmz_render::skin::lua_main_state_option(option, &[], &state).then_some((bgm, se))
+        });
+        if let Some((bgm, _)) = rank_sounds.filter(|(bgm, _)| has_sound(*bgm)) {
+            return bgm;
+        }
+        if has_sound(SoundType::ResultBgmClear) {
+            return SoundType::ResultBgmClear;
+        }
+        if let Some((_, se)) = rank_sounds.filter(|(_, se)| has_sound(*se)) {
+            return se;
+        }
+    }
+    result_entry_sound_for_clear(clear)
+}
+
+pub(super) fn should_apply_system_sound_load(
+    scene: AppSceneKind,
+    set_already_applied: bool,
+) -> bool {
+    scene == AppSceneKind::Select || !set_already_applied
 }
 
 pub(super) fn result_entry_clear_type_for_sound(

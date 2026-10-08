@@ -4,10 +4,12 @@
 //! に倣い、以下を扱う。
 //!
 //! - 起動時に「BGM セット」と「SE セット」のディレクトリツリーをスキャンして候補を集める。
-//! - BGM セットは `select.wav` を含むディレクトリ、SE セットは `clear.wav` を含むディレクトリ。
+//! - サウンドセットは `select.wav`、補完用SEセットは `clear.wav` を含むディレクトリ。
 //! - 初期化時と選曲画面へ戻るたび、ランダムに 1 セットずつ選んで各 [`SoundType`] の
 //!   ファイルパスを解決する。
-//! - 解決できないファイルは `defaultsound/<filename>` をフォールバック検索する。
+//! - SEはサウンドセット、SEセット、`defaultsound/` の順に解決する。
+//!   RESULT入口音はサウンドセットではBGM、SEセットと既定音源では単発SEとして扱う。
+//! - RESULT BGMはサウンドセット内だけから解決し、`.loop` 付きならループする。
 //!
 //! 本モジュールは「どのファイルを使うか」までを決めるところまでが責務。
 //! 実際の AudioEngine への投入や再生は呼び出し側で行う。
@@ -42,14 +44,24 @@ pub enum SoundType {
     GuideSeMiss,
     /// 選曲画面 BGM(ループ)。
     Select,
-    /// Decide シーン BGM(ループ)。
+    /// Decide シーン BGM(単発)。
     Decide,
     /// 地雷ノーツを踏んだときの固定 SE (beatoraja の `defaultsound/landmine.wav` 相当)。
     Landmine,
+    /// サウンドセット内のRESULT専用BGM。従来のclear/fail SEとは別の音種。
+    ResultBgmClear,
+    ResultBgmFail,
+    ResultBgmA,
+    ResultBgmAA,
+    ResultBgmAAA,
+    /// 補完用SEセット・既定音源内のランク別RESULT SE（単発）。
+    ResultA,
+    ResultAA,
+    ResultAAA,
 }
 
 impl SoundType {
-    pub const ALL: [SoundType; 23] = [
+    pub const ALL: [SoundType; 31] = [
         SoundType::Scratch,
         SoundType::FolderOpen,
         SoundType::FolderClose,
@@ -73,6 +85,22 @@ impl SoundType {
         SoundType::Select,
         SoundType::Decide,
         SoundType::Landmine,
+        SoundType::ResultBgmClear,
+        SoundType::ResultBgmFail,
+        SoundType::ResultBgmA,
+        SoundType::ResultBgmAA,
+        SoundType::ResultBgmAAA,
+        SoundType::ResultA,
+        SoundType::ResultAA,
+        SoundType::ResultAAA,
+    ];
+
+    pub const RESULT_BGMS: [SoundType; 5] = [
+        SoundType::ResultBgmClear,
+        SoundType::ResultBgmFail,
+        SoundType::ResultBgmA,
+        SoundType::ResultBgmAA,
+        SoundType::ResultBgmAAA,
     ];
 
     /// beatoraja 既定のファイル名(セットディレクトリ直下から探す)。
@@ -103,6 +131,14 @@ impl SoundType {
             SoundType::Select => "select.wav",
             SoundType::Decide => "decide.wav",
             SoundType::Landmine => "landmine.wav",
+            SoundType::ResultBgmClear => "clear.wav",
+            SoundType::ResultBgmFail => "fail.wav",
+            SoundType::ResultBgmA => "a.wav",
+            SoundType::ResultBgmAA => "aa.wav",
+            SoundType::ResultBgmAAA => "aaa.wav",
+            SoundType::ResultA => "a.wav",
+            SoundType::ResultAA => "aa.wav",
+            SoundType::ResultAAA => "aaa.wav",
         }
     }
 
@@ -117,7 +153,11 @@ impl SoundType {
 
     /// BGM セット探索とシーン遷移時の停止対象かどうか。
     pub fn is_bgm(&self) -> bool {
-        matches!(self, SoundType::Select | SoundType::Decide)
+        matches!(self, SoundType::Select | SoundType::Decide) || self.is_result_bgm()
+    }
+
+    pub fn is_result_bgm(&self) -> bool {
+        Self::RESULT_BGMS.contains(self)
     }
 
     pub fn loops(&self) -> bool {
@@ -141,21 +181,40 @@ pub const fn guide_se_for_judge(judge: Judge) -> SoundType {
 /// beatoraja の挙動と合わせて `.wav` / `.ogg` / `.flac` / `.mp3` をサポート。
 pub const SUPPORTED_EXTENSIONS: &[&str] = &["wav", "ogg", "flac", "mp3"];
 
-/// `dir/<stem>.<ext>` を [`SUPPORTED_EXTENSIONS`] の順に試し、最初に見つかったパスを返す。
-fn first_existing_with_extension(dir: &Path, stem: &str) -> Option<PathBuf> {
-    for ext in SUPPORTED_EXTENSIONS {
-        let candidate = dir.join(format!("{stem}.{ext}"));
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
+/// `dir/<stem>.<ext>` を拡張子優先順で列挙する。実パスを保持して拡張子の大小文字を許容する。
+fn files_with_extensions(dir: &Path, stem: &str) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut candidates = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path.file_stem().and_then(|name| name.to_str()).is_some_and(|name| {
+                    if cfg!(windows) { name.eq_ignore_ascii_case(stem) } else { name == stem }
+                })
+        })
+        .filter_map(|path| {
+            let extension = path.extension()?.to_str()?;
+            let priority = SUPPORTED_EXTENSIONS
+                .iter()
+                .position(|supported| extension.eq_ignore_ascii_case(supported))?;
+            Some((priority, path))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.into_iter().map(|(_, path)| path).collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedSystemSound {
+    pub path: PathBuf,
+    pub loop_playback: bool,
 }
 
 /// スキャンで選ばれた1つの BGM セット / SE セットディレクトリ。
 #[derive(Debug, Clone, Default)]
 pub struct SoundSetSelection {
-    /// BGM セットディレクトリ。`select.wav` を含むディレクトリ。
+    /// サウンドセットディレクトリ。`select.wav` を含み、BGMと任意のSEをまとめる。
     pub bgm_dir: Option<PathBuf>,
     /// SE セットディレクトリ。`clear.wav` を含むディレクトリ。
     pub se_dir: Option<PathBuf>,
@@ -183,27 +242,58 @@ impl SoundSetCatalog {
 impl SoundSetSelection {
     /// `sound_type` に対応するファイルパスを解決する。
     ///
-    /// 解決順は beatoraja と同じ:
-    /// 1. BGM か SE に応じたセットディレクトリ直下のステム + 各拡張子。
-    /// 2. `default_dir` 直下のステム + 各拡張子。
-    /// 3. 上記がいずれも存在しなければ `None`。
-    ///
-    /// 拡張子は [`SUPPORTED_EXTENSIONS`] の順で試す(`.wav` / `.ogg` / `.flac` / `.mp3`)。
+    /// 優先順で最初の既存パスを返す。decode失敗時の補完には [`Self::candidates`] を使う。
     pub fn resolve(&self, sound_type: SoundType) -> Option<PathBuf> {
+        self.candidates(sound_type).into_iter().next().map(|sound| sound.path)
+    }
+
+    /// RESULT BGMはサウンドセット内の`.loop`版、通常版の順に解決する。
+    /// 既存BGMはサウンドセット、default、SEはサウンドセット、SEセット、defaultの順。
+    /// ただしRESULT入口SEはSEセットとdefaultだけから解決する（セット内の同名音源はBGM）。
+    /// 各段階で拡張子優先順を保ち、読み込みに失敗した候補の次を試せるよう全候補を返す。
+    pub fn candidates(&self, sound_type: SoundType) -> Vec<ResolvedSystemSound> {
         let stem = sound_type.stem();
-        let dir =
-            if sound_type.is_bgm() { self.bgm_dir.as_deref() } else { self.se_dir.as_deref() };
-        if let Some(dir) = dir
-            && let Some(path) = first_existing_with_extension(dir, stem)
-        {
-            return Some(path);
+        let mut candidates = Vec::new();
+        let soundset_dir = self.bgm_dir.as_deref().filter(|_| {
+            !matches!(
+                sound_type,
+                SoundType::ResultClear
+                    | SoundType::ResultFail
+                    | SoundType::ResultA
+                    | SoundType::ResultAA
+                    | SoundType::ResultAAA
+            )
+        });
+        if let Some(dir) = soundset_dir {
+            if sound_type.is_result_bgm() {
+                candidates.extend(
+                    files_with_extensions(dir, &format!("{stem}.loop"))
+                        .into_iter()
+                        .map(|path| ResolvedSystemSound { path, loop_playback: true }),
+                );
+            }
+            candidates.extend(
+                files_with_extensions(dir, stem)
+                    .into_iter()
+                    .map(|path| ResolvedSystemSound { path, loop_playback: sound_type.loops() }),
+            );
         }
-        if let Some(default) = self.default_dir.as_deref()
-            && let Some(path) = first_existing_with_extension(default, stem)
-        {
-            return Some(path);
+        if sound_type.is_result_bgm() {
+            return candidates;
         }
-        None
+        let fallback_dirs = [
+            (!sound_type.is_bgm()).then_some(self.se_dir.as_deref()).flatten(),
+            self.default_dir.as_deref(),
+        ];
+        for dir in fallback_dirs.into_iter().flatten() {
+            for path in files_with_extensions(dir, stem) {
+                if !candidates.iter().any(|candidate| candidate.path == path) {
+                    candidates
+                        .push(ResolvedSystemSound { path, loop_playback: sound_type.loops() });
+                }
+            }
+        }
+        candidates
     }
 }
 
@@ -307,6 +397,14 @@ mod tests {
         assert_eq!(SoundType::ResultClear.file_name(), "clear.wav");
         assert_eq!(SoundType::Landmine.file_name(), "landmine.wav");
         assert!(!SoundType::Landmine.is_bgm());
+        for sound in SoundType::RESULT_BGMS {
+            assert!(sound.is_bgm());
+            assert!(!sound.loops());
+        }
+        for sound in [SoundType::ResultA, SoundType::ResultAA, SoundType::ResultAAA] {
+            assert!(!sound.is_bgm());
+            assert!(!sound.loops());
+        }
     }
 
     #[test]
@@ -395,6 +493,17 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
+    fn resolve_keeps_windows_case_insensitive_file_names() {
+        let root = temp_dir("windows-file-case");
+        let path = root.join("SCRATCH.WAV");
+        std::fs::write(&path, b"fixture").unwrap();
+        let selection = SoundSetSelection { bgm_dir: Some(root.clone()), ..Default::default() };
+        assert_eq!(selection.resolve(SoundType::Scratch), Some(path));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn scan_sound_sets_matches_alternative_extensions() {
         // ModernChic 等の SE セットは `.ogg` で配布されている。`.wav` 指定で
         // スキャンしても `.ogg` のマーカーを認識できることを確認する。
@@ -464,5 +573,86 @@ mod tests {
         assert_eq!(selection.bgm_dir.as_deref(), Some(bgm.as_path()));
         assert_eq!(selection.se_dir.as_deref(), Some(se.as_path()));
         assert_eq!(selection.default_dir.as_deref(), Some(default.as_path()));
+    }
+
+    #[test]
+    fn soundset_overrides_se_and_missing_files_keep_legacy_fallback() {
+        let root = temp_dir("se-overrides");
+        let bgm = root.join("bgm");
+        let se = root.join("se");
+        let default = root.join("default");
+        for dir in [&bgm, &se, &default] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let selection = SoundSetSelection {
+            bgm_dir: Some(bgm.clone()),
+            se_dir: Some(se.clone()),
+            default_dir: Some(default.clone()),
+        };
+        for sound in SoundType::ALL.into_iter().filter(|sound| !sound.is_bgm()) {
+            let name = sound.file_name();
+            for dir in [&bgm, &se, &default] {
+                std::fs::write(dir.join(name), b"fixture").unwrap();
+            }
+            let result_bgm = match sound {
+                SoundType::ResultClear => Some(SoundType::ResultBgmClear),
+                SoundType::ResultFail => Some(SoundType::ResultBgmFail),
+                SoundType::ResultA => Some(SoundType::ResultBgmA),
+                SoundType::ResultAA => Some(SoundType::ResultBgmAA),
+                SoundType::ResultAAA => Some(SoundType::ResultBgmAAA),
+                _ => None,
+            };
+            if let Some(bgm_sound) = result_bgm {
+                assert_eq!(selection.resolve(bgm_sound), Some(bgm.join(name)));
+                assert_eq!(selection.resolve(sound), Some(se.join(name)));
+            } else {
+                assert_eq!(selection.resolve(sound), Some(bgm.join(name)));
+            }
+            std::fs::remove_file(bgm.join(name)).unwrap();
+            if let Some(bgm_sound) = result_bgm {
+                assert_eq!(selection.resolve(bgm_sound), None);
+            }
+            assert_eq!(selection.resolve(sound), Some(se.join(name)));
+            std::fs::remove_file(se.join(name)).unwrap();
+            assert_eq!(selection.resolve(sound), Some(default.join(name)));
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn result_bgm_loop_variant_precedes_plain_files_and_stays_in_selected_set() {
+        let root = temp_dir("result-bgm");
+        let bgm = root.join("bgm");
+        let se = root.join("se");
+        let default = root.join("default");
+        for dir in [&bgm, &se, &default] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(bgm.join("clear.wav"), b"fixture").unwrap();
+        std::fs::write(bgm.join("clear.loop.OGG"), b"fixture").unwrap();
+        std::fs::write(bgm.join("aaa.FLAC"), b"fixture").unwrap();
+        std::fs::write(bgm.join("scratch.loop.wav"), b"fixture").unwrap();
+        for dir in [&se, &default] {
+            std::fs::write(dir.join("fail.wav"), b"fixture").unwrap();
+        }
+        let selection = SoundSetSelection {
+            bgm_dir: Some(bgm.clone()),
+            se_dir: Some(se),
+            default_dir: Some(default),
+        };
+        assert_eq!(
+            selection.candidates(SoundType::ResultBgmClear),
+            vec![
+                ResolvedSystemSound { path: bgm.join("clear.loop.OGG"), loop_playback: true },
+                ResolvedSystemSound { path: bgm.join("clear.wav"), loop_playback: false },
+            ]
+        );
+        assert_eq!(
+            selection.candidates(SoundType::ResultBgmAAA),
+            vec![ResolvedSystemSound { path: bgm.join("aaa.FLAC"), loop_playback: false }]
+        );
+        assert!(selection.candidates(SoundType::ResultBgmFail).is_empty());
+        assert!(selection.candidates(SoundType::Scratch).is_empty());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

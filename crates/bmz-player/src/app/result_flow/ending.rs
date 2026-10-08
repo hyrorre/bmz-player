@@ -335,8 +335,16 @@ impl WinitApp {
         for sound_type in [
             SoundType::ResultClear,
             SoundType::ResultFail,
+            SoundType::ResultA,
+            SoundType::ResultAA,
+            SoundType::ResultAAA,
             SoundType::CourseClear,
             SoundType::CourseFail,
+            SoundType::ResultBgmClear,
+            SoundType::ResultBgmFail,
+            SoundType::ResultBgmA,
+            SoundType::ResultBgmAA,
+            SoundType::ResultBgmAAA,
         ] {
             manager.stop_with_fade_out(sound_type, fade_out_frames);
         }

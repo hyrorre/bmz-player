@@ -459,8 +459,10 @@ canonical pathを取得できないディレクトリは走査しない。
 
 スキンの `resource:skins/` / `data:skins/` の相対パスとorigin、名前順の候補ソートは維持する。
 resourceとdataのrootが異なる場合はそれぞれ独立して走査する。
-システム音セットは従来どおりBGMの `select`、SEの `clear` をマーカーとし、
+システム音セットは従来どおりサウンドセットの `select`、補完用SEセットの `clear` をマーカーとし、
 `.wav` / `.ogg` / `.flac` / `.mp3` を拡張子の大文字小文字を区別せず検出する。
+サウンドセット内のRESULT BGMと全SEの優先選択、`.loop`指定は
+[サウンドセット仕様](system-sound.md)を参照する。既存の配置と`bgm_dir` / `se_dir`設定キーは維持する。
 
 ### Lua Module Path
 

@@ -995,10 +995,16 @@ fn result_exit_cleanup_only_targets_result_sounds() {
 
     assert!(sounds.contains(&SoundType::ResultClear));
     assert!(sounds.contains(&SoundType::ResultFail));
+    assert!(sounds.contains(&SoundType::ResultA));
+    assert!(sounds.contains(&SoundType::ResultAA));
+    assert!(sounds.contains(&SoundType::ResultAAA));
     assert!(sounds.contains(&SoundType::ResultClose));
     assert!(sounds.contains(&SoundType::CourseClear));
     assert!(sounds.contains(&SoundType::CourseFail));
     assert!(sounds.contains(&SoundType::CourseClose));
+    for bgm in SoundType::RESULT_BGMS {
+        assert!(sounds.contains(&bgm));
+    }
     assert!(!sounds.contains(&SoundType::Select));
     assert!(!sounds.contains(&SoundType::Decide));
     assert!(!sounds.contains(&SoundType::OptionChange));
@@ -1013,4 +1019,114 @@ fn result_entry_sound_uses_fail_for_failed_play() {
     assert_eq!(result_entry_sound_for_clear(ClearType::Normal), SoundType::ResultClear);
     assert_eq!(course_result_entry_sound_for_clear(ClearType::Failed), SoundType::CourseFail);
     assert_eq!(course_result_entry_sound_for_clear(ClearType::Normal), SoundType::CourseClear);
+}
+
+#[test]
+fn result_bgm_selection_matches_display_rank_and_never_plays_clear_on_failed() {
+    use crate::system_sound::SoundType;
+
+    let available = |sound| SoundType::RESULT_BGMS.contains(&sound);
+    for (score, expected) in [
+        (900, SoundType::ResultBgmAAA),
+        (800, SoundType::ResultBgmAAA),
+        (799, SoundType::ResultBgmAA),
+        (700, SoundType::ResultBgmAA),
+        (699, SoundType::ResultBgmA),
+        (600, SoundType::ResultBgmA),
+        (599, SoundType::ResultBgmClear),
+        (0, SoundType::ResultBgmClear),
+    ] {
+        assert_eq!(
+            result_entry_sound_for_result(ClearType::Normal, score, 450, available),
+            expected
+        );
+    }
+    assert_eq!(
+        result_entry_sound_for_result(ClearType::Failed, 900, 450, available),
+        SoundType::ResultBgmFail
+    );
+    assert_eq!(
+        result_entry_sound_for_result(ClearType::NoPlay, 900, 450, available),
+        SoundType::ResultClear
+    );
+    assert_eq!(
+        result_entry_sound_for_result(ClearType::Normal, 0, 0, available),
+        SoundType::ResultBgmClear
+    );
+}
+
+#[test]
+fn missing_result_bgm_uses_generic_bgm_then_legacy_se_without_rank_downgrade() {
+    use crate::system_sound::SoundType;
+
+    let generic_and_aa =
+        |sound| [SoundType::ResultBgmClear, SoundType::ResultBgmAA].contains(&sound);
+    assert_eq!(
+        result_entry_sound_for_result(ClearType::Normal, 900, 450, generic_and_aa),
+        SoundType::ResultBgmClear
+    );
+    assert_eq!(
+        result_entry_sound_for_result(ClearType::Failed, 900, 450, generic_and_aa),
+        SoundType::ResultFail
+    );
+    assert_eq!(
+        result_entry_sound_for_result(ClearType::Normal, 900, 450, |sound| sound
+            == SoundType::ResultBgmAA),
+        SoundType::ResultClear
+    );
+    assert_eq!(
+        result_entry_sound_for_result(ClearType::Normal, 600, 450, |_| false),
+        SoundType::ResultClear
+    );
+}
+
+#[test]
+fn applied_soundset_is_kept_after_select_and_result_bgms_stop_on_every_scene_entry() {
+    use crate::system_sound::SoundType;
+
+    for scene in
+        [AppSceneKind::Select, AppSceneKind::Decide, AppSceneKind::Play, AppSceneKind::Result]
+    {
+        assert!(should_apply_system_sound_load(scene, false));
+        assert_eq!(should_apply_system_sound_load(scene, true), scene == AppSceneKind::Select);
+        let targets = system_bgm_stop_targets_on_scene_enter(scene);
+        for sound in SoundType::RESULT_BGMS {
+            assert!(targets.contains(&sound));
+        }
+        assert!(!targets.contains(&SoundType::Scratch));
+    }
+}
+
+#[test]
+fn rank_se_is_used_only_after_result_bgms_and_never_downgrades_rank() {
+    use crate::system_sound::SoundType;
+
+    for (score, se) in
+        [(800, SoundType::ResultAAA), (700, SoundType::ResultAA), (600, SoundType::ResultA)]
+    {
+        assert_eq!(
+            result_entry_sound_for_result(ClearType::Normal, score, 450, |sound| sound == se),
+            se
+        );
+        assert_eq!(
+            result_entry_sound_for_result(ClearType::Normal, score, 450, |sound| {
+                sound == se || sound == SoundType::ResultBgmClear
+            }),
+            SoundType::ResultBgmClear
+        );
+        assert_eq!(
+            result_entry_sound_for_result(ClearType::Failed, score, 450, |sound| sound == se),
+            SoundType::ResultFail
+        );
+    }
+    assert_eq!(
+        result_entry_sound_for_result(ClearType::Normal, 800, 450, |sound| {
+            [SoundType::ResultA, SoundType::ResultAA].contains(&sound)
+        }),
+        SoundType::ResultClear
+    );
+    assert_eq!(
+        result_entry_sound_for_result(ClearType::Normal, 0, 0, |_| true),
+        SoundType::ResultBgmClear
+    );
 }

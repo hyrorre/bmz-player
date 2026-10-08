@@ -81,11 +81,23 @@ impl Simulation {
         use bmz_audio::loader::SampleLoader;
         let mut loader = bmz_audio::ffmpeg_loader::FfmpegSampleLoader::default();
         for (index, kind) in SoundType::ALL.into_iter().enumerate() {
-            if let Some(path) = selection.resolve(kind) {
-                let sample = loader.load(&path)?;
+            // 動画出力はPlayだけを描画するため、RESULT専用BGMはロードしない。
+            if kind.is_result_bgm() {
+                continue;
+            }
+            for candidate in selection.candidates(kind) {
+                let sample = match loader.load(&candidate.path) {
+                    Ok(sample) => sample,
+                    Err(error) => {
+                        tracing::warn!(?kind, path = %candidate.path.display(), %error,
+                            "failed to decode export system sound; trying next candidate");
+                        continue;
+                    }
+                };
                 let id = SoundId(100_000 + index as u32);
                 ensure!(system_handle.insert_sample(id, sample), "system sound queue full");
                 sounds.insert(kind, id);
+                break;
             }
         }
         let result = Self {

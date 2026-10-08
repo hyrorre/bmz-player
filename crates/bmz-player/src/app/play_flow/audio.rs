@@ -295,6 +295,14 @@ impl WinitApp {
     }
 
     pub(super) fn poll_system_sound_load(&mut self) {
+        // Selectを離れた後は適用済みセットをResultまで維持する。
+        // 初回ロードは既存セットがないため、従来どおりどのシーンでも受理する。
+        if !should_apply_system_sound_load(
+            self.current_scene_kind(),
+            self.audio.system_sound.is_some(),
+        ) {
+            return;
+        }
         let Some(pending) = self.audio.pending_system_sound.take() else {
             return;
         };
