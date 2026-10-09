@@ -181,17 +181,19 @@ pub const fn guide_se_for_judge(judge: Judge) -> SoundType {
 /// beatoraja の挙動と合わせて `.wav` / `.ogg` / `.flac` / `.mp3` をサポート。
 pub const SUPPORTED_EXTENSIONS: &[&str] = &["wav", "ogg", "flac", "mp3"];
 
-/// `dir/<stem>.<ext>` を拡張子優先順で列挙する。実パスを保持して拡張子の大小文字を許容する。
+/// `dir/<stem>.<ext>` を拡張子優先順で列挙する。ASCIIの大小文字はOSに関係なく許容し、
+/// 同名の表記違いが共存する場合は正式な小文字名を優先する。
 fn files_with_extensions(dir: &Path, stem: &str) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
-    let mut candidates = entries
+    let mut candidates: Vec<(usize, PathBuf)> = entries
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| {
             path.is_file()
-                && path.file_stem().and_then(|name| name.to_str()).is_some_and(|name| {
-                    if cfg!(windows) { name.eq_ignore_ascii_case(stem) } else { name == stem }
-                })
+                && path
+                    .file_stem()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.eq_ignore_ascii_case(stem))
         })
         .filter_map(|path| {
             let extension = path.extension()?.to_str()?;
@@ -200,9 +202,27 @@ fn files_with_extensions(dir: &Path, stem: &str) -> Vec<PathBuf> {
                 .position(|supported| extension.eq_ignore_ascii_case(supported))?;
             Some((priority, path))
         })
-        .collect::<Vec<_>>();
-    candidates.sort();
+        .collect();
+    sort_sound_candidates(&mut candidates, stem);
     candidates.into_iter().map(|(_, path)| path).collect()
+}
+
+/// 同じ拡張子内では期待される小文字名を優先し、残る大小文字違いは名前順に固定する。
+fn sort_sound_candidates(candidates: &mut [(usize, PathBuf)], stem: &str) {
+    let preferred_names = SUPPORTED_EXTENSIONS
+        .iter()
+        .map(|extension| format!("{stem}.{extension}"))
+        .collect::<Vec<_>>();
+    candidates.sort_by(|(left_priority, left_path), (right_priority, right_path)| {
+        let left_name = left_path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+        let right_name = right_path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+        let left_preferred = preferred_names.iter().any(|name| name == left_name);
+        let right_preferred = preferred_names.iter().any(|name| name == right_name);
+        left_priority
+            .cmp(right_priority)
+            .then_with(|| right_preferred.cmp(&left_preferred))
+            .then_with(|| left_name.cmp(right_name))
+    });
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -340,12 +360,12 @@ fn scan_sound_sets_into(
 }
 
 /// `path` のファイル名がステム `marker_stem` + [`SUPPORTED_EXTENSIONS`] のいずれか
-/// に一致するか。大文字小文字は区別しない(拡張子のみ)。
+/// に一致するか。ASCIIの大文字小文字は拡張子を含めて区別しない。
 fn is_marker_file(path: &Path, marker_stem: &str) -> bool {
     let Some(stem) = path.file_stem().and_then(|n| n.to_str()) else {
         return false;
     };
-    if stem != marker_stem {
+    if !stem.eq_ignore_ascii_case(marker_stem) {
         return false;
     }
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
@@ -444,10 +464,10 @@ mod tests {
     #[cfg(any(unix, windows))]
     fn scan_sound_sets_scans_directory_links_once_and_accepts_linked_root() {
         let fixture = crate::directory_scan::test_support::LinkedDirectories::new();
-        std::fs::write(fixture.root.join("select.MP3"), b"x").unwrap();
+        std::fs::write(fixture.root.join("SELECT.MP3"), b"x").unwrap();
         std::fs::write(fixture.root.join("clear.wav"), b"x").unwrap();
-        std::fs::write(fixture.nested.join("select.FLAC"), b"x").unwrap();
-        std::fs::write(fixture.nested.join("clear.OGG"), b"x").unwrap();
+        std::fs::write(fixture.nested.join("SeLeCt.FLAC"), b"x").unwrap();
+        std::fs::write(fixture.nested.join("CLEAR.OGG"), b"x").unwrap();
         let mut expected =
             vec![fixture.root.canonicalize().unwrap(), fixture.nested.canonicalize().unwrap()];
         expected.sort();
@@ -493,9 +513,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(windows)]
-    fn resolve_keeps_windows_case_insensitive_file_names() {
-        let root = temp_dir("windows-file-case");
+    fn resolve_matches_ascii_case_insensitive_names_on_every_platform() {
+        let root = temp_dir("case-insensitive-name");
         let path = root.join("SCRATCH.WAV");
         std::fs::write(&path, b"fixture").unwrap();
         let selection = SoundSetSelection { bgm_dir: Some(root.clone()), ..Default::default() };
@@ -504,16 +523,42 @@ mod tests {
     }
 
     #[test]
+    fn sound_candidates_prefer_lowercase_then_sort_names_stably() {
+        // Synthetic paths exercise case-colliding names on filesystems that cannot
+        // represent these entries together in a real directory.
+        let mut candidates = [
+            (1, PathBuf::from("scratch.ogg")),
+            (0, PathBuf::from("Scratch.wav")),
+            (0, PathBuf::from("scratch.WAV")),
+            (0, PathBuf::from("SCRATCH.WAV")),
+            (0, PathBuf::from("scratch.wav")),
+        ];
+
+        sort_sound_candidates(&mut candidates, "scratch");
+
+        assert_eq!(
+            candidates.into_iter().map(|(_, path)| path).collect::<Vec<_>>(),
+            [
+                PathBuf::from("scratch.wav"),
+                PathBuf::from("SCRATCH.WAV"),
+                PathBuf::from("Scratch.wav"),
+                PathBuf::from("scratch.WAV"),
+                PathBuf::from("scratch.ogg"),
+            ]
+        );
+    }
+
+    #[test]
     fn scan_sound_sets_matches_alternative_extensions() {
-        // ModernChic 等の SE セットは `.ogg` で配布されている。`.wav` 指定で
-        // スキャンしても `.ogg` のマーカーを認識できることを確認する。
+        // 代替拡張子とASCII大小文字の違いを、リンク権限なしで確認する。
         let root = temp_dir("scan-ogg");
         let set = root.join("modernchic");
         std::fs::create_dir_all(&set).unwrap();
-        std::fs::write(set.join("clear.ogg"), b"x").unwrap();
+        std::fs::write(set.join("CLEAR.OGG"), b"x").unwrap();
+        std::fs::write(set.join("SeLeCt.MP3"), b"x").unwrap();
 
-        let found = scan_sound_sets(&root, "clear.wav");
-        assert_eq!(found, vec![set]);
+        assert_eq!(scan_sound_sets(&root, "clear.wav"), vec![set.clone()]);
+        assert_eq!(scan_sound_sets(&root, "select.wav"), vec![set]);
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -628,9 +673,9 @@ mod tests {
         for dir in [&bgm, &se, &default] {
             std::fs::create_dir_all(dir).unwrap();
         }
-        std::fs::write(bgm.join("clear.wav"), b"fixture").unwrap();
-        std::fs::write(bgm.join("clear.loop.OGG"), b"fixture").unwrap();
-        std::fs::write(bgm.join("aaa.FLAC"), b"fixture").unwrap();
+        std::fs::write(bgm.join("CLEAR.WAV"), b"fixture").unwrap();
+        std::fs::write(bgm.join("CLEAR.LOOP.OGG"), b"fixture").unwrap();
+        std::fs::write(bgm.join("AAA.FLAC"), b"fixture").unwrap();
         std::fs::write(bgm.join("scratch.loop.wav"), b"fixture").unwrap();
         for dir in [&se, &default] {
             std::fs::write(dir.join("fail.wav"), b"fixture").unwrap();
@@ -643,13 +688,13 @@ mod tests {
         assert_eq!(
             selection.candidates(SoundType::ResultBgmClear),
             vec![
-                ResolvedSystemSound { path: bgm.join("clear.loop.OGG"), loop_playback: true },
-                ResolvedSystemSound { path: bgm.join("clear.wav"), loop_playback: false },
+                ResolvedSystemSound { path: bgm.join("CLEAR.LOOP.OGG"), loop_playback: true },
+                ResolvedSystemSound { path: bgm.join("CLEAR.WAV"), loop_playback: false },
             ]
         );
         assert_eq!(
             selection.candidates(SoundType::ResultBgmAAA),
-            vec![ResolvedSystemSound { path: bgm.join("aaa.FLAC"), loop_playback: false }]
+            vec![ResolvedSystemSound { path: bgm.join("AAA.FLAC"), loop_playback: false }]
         );
         assert!(selection.candidates(SoundType::ResultBgmFail).is_empty());
         assert!(selection.candidates(SoundType::Scratch).is_empty());

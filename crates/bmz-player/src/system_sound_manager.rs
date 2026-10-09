@@ -52,6 +52,8 @@ pub struct SystemSoundPrepareStats {
 
 #[derive(Debug)]
 pub struct PreparedSystemSoundSet {
+    pub(crate) normalization_paths: HashMap<SoundType, PathBuf>,
+    normalization_keys: HashMap<SoundType, LoudnessCacheKey>,
     samples: Vec<(SoundType, SoundId, DecodedSample)>,
     looping_sounds: HashSet<SoundType>,
     bgm_normalization_gains: HashMap<SoundType, f32>,
@@ -96,6 +98,8 @@ struct LoudnessCacheFile {
 }
 
 pub struct SystemSoundManager {
+    normalization_paths: HashMap<SoundType, PathBuf>,
+    normalization_keys: HashMap<SoundType, LoudnessCacheKey>,
     engine: AudioEngineHandle,
     id_map: HashMap<SoundType, SoundId>,
     looping_sounds: HashSet<SoundType>,
@@ -160,6 +164,8 @@ impl SystemSoundManager {
     ) -> PreparedSystemSoundSet {
         let total_started_at = Instant::now();
         let mut bgm_normalization_gains = HashMap::new();
+        let mut normalization_paths = HashMap::new();
+        let mut normalization_keys = HashMap::new();
         let mut loader = FfmpegSampleLoader::default();
         let mut samples = Vec::new();
         let mut looping_sounds = HashSet::new();
@@ -187,6 +193,12 @@ impl SystemSoundManager {
                         let decode_ms = elapsed_ms_u64(decode_started_at);
                         stats.decode_ms = stats.decode_ms.saturating_add(decode_ms);
                         stats.decoded_count = stats.decoded_count.saturating_add(1);
+                        if sound_type.is_bgm() {
+                            normalization_paths.insert(*sound_type, path.clone());
+                            if let Some(key) = loudness_cache_key(&path) {
+                                normalization_keys.insert(*sound_type, key);
+                            }
+                        }
                         if normalize_bgm_volume && sound_type.is_bgm() {
                             let key = loudness_cache_key(&path);
                             let cached = key.as_ref().and_then(|key| {
@@ -273,6 +285,8 @@ impl SystemSoundManager {
         }
         stats.total_ms = elapsed_ms_u64(total_started_at);
         PreparedSystemSoundSet {
+            normalization_paths,
+            normalization_keys,
             samples,
             looping_sounds,
             bgm_normalization_gains,
@@ -306,6 +320,8 @@ impl SystemSoundManager {
             normalize_bgm_volume,
             prepared.normalization_analysis_enabled,
         );
+        manager.normalization_paths = prepared.normalization_paths;
+        manager.normalization_keys = prepared.normalization_keys;
         manager.looping_sounds = prepared.looping_sounds;
         manager
     }
@@ -326,6 +342,8 @@ impl SystemSoundManager {
         normalization_analysis_enabled: bool,
     ) -> Self {
         Self {
+            normalization_paths: HashMap::new(),
+            normalization_keys: HashMap::new(),
             engine,
             looping_sounds: id_map.keys().copied().filter(SoundType::loops).collect(),
             id_map,
@@ -346,6 +364,107 @@ impl SystemSoundManager {
 
     pub fn normalization_analysis_enabled(&self) -> bool {
         self.normalization_analysis_enabled
+    }
+
+    pub fn normalization_paths(&self) -> HashMap<SoundType, PathBuf> {
+        self.normalization_paths.clone()
+    }
+
+    pub fn normalization_source_matches(&self, prepared: &PreparedSystemSoundSet) -> bool {
+        self.normalization_paths == prepared.normalization_paths
+            && self.normalization_keys == prepared.normalization_keys
+    }
+
+    /// 適用済みサンプルのBGMパスだけをデコードして解析するworker向け処理。
+    pub fn prepare_normalization_for_paths(
+        paths: &HashMap<SoundType, PathBuf>,
+        cache_dir: Option<&Path>,
+    ) -> PreparedSystemSoundSet {
+        let started_at = Instant::now();
+        let cache_path = cache_dir.map(|dir| dir.join(SYSTEM_BGM_LOUDNESS_CACHE_FILE));
+        let mut cache = cache_path.as_deref().map(load_loudness_cache).unwrap_or_default();
+        let mut cache_changed = false;
+        let mut gains = HashMap::new();
+        let mut normalization_keys = HashMap::new();
+        let mut stats = SystemSoundPrepareStats::default();
+        let mut loader = FfmpegSampleLoader::default();
+        for (sound_type, path) in paths {
+            if !sound_type.is_bgm() {
+                continue;
+            }
+            let decode_started_at = Instant::now();
+            let sample = match loader.load(path) {
+                Ok(sample) => sample,
+                Err(error) => {
+                    tracing::warn!(sound_type = ?sound_type, path = %path.display(), %error, "failed to decode selected system BGM for normalization");
+                    continue;
+                }
+            };
+            stats.decode_ms = stats.decode_ms.saturating_add(elapsed_ms_u64(decode_started_at));
+            stats.decoded_count += 1;
+            let key = loudness_cache_key(path);
+            if let Some(key) = key.as_ref() {
+                normalization_keys.insert(*sound_type, key.clone());
+            }
+            let cached = key.as_ref().and_then(|key| {
+                cache
+                    .entries
+                    .iter()
+                    .find(|entry| entry.key == *key)
+                    .and_then(LoudnessCacheEntry::analysis)
+            });
+            let analysis = if let Some(analysis) = cached {
+                stats.cache_hit_count += 1;
+                Some(analysis)
+            } else {
+                let analysis_started_at = Instant::now();
+                let analysis = analyze_decoded_loudness(&sample);
+                stats.analysis_ms =
+                    stats.analysis_ms.saturating_add(elapsed_ms_u64(analysis_started_at));
+                stats.analysis_count += 1;
+                if let (Some(key), Some(analysis)) = (key, analysis) {
+                    cache.entries.retain(|entry| entry.key.path != key.path);
+                    cache.entries.push(LoudnessCacheEntry {
+                        key,
+                        loudness_lufs: analysis.loudness_lufs,
+                        short_term_lufs: analysis.short_term_lufs,
+                        peak_abs: analysis.peak_abs,
+                    });
+                    cache_changed = true;
+                }
+                analysis
+            };
+            if let Some(analysis) = analysis {
+                gains.insert(*sound_type, system_bgm_normalization_gain_for_analysis(analysis));
+            }
+        }
+        if cache_changed {
+            cache.version = SYSTEM_BGM_LOUDNESS_CACHE_FORMAT_VERSION;
+            if cache.entries.len() > MAX_SYSTEM_BGM_LOUDNESS_CACHE_ENTRIES {
+                cache.entries.drain(
+                    ..cache.entries.len().saturating_sub(MAX_SYSTEM_BGM_LOUDNESS_CACHE_ENTRIES),
+                );
+            }
+            if let Some(path) = cache_path.as_deref() {
+                save_loudness_cache(path, &cache);
+            }
+        }
+        stats.total_ms = elapsed_ms_u64(started_at);
+        PreparedSystemSoundSet {
+            normalization_paths: paths.clone(),
+            normalization_keys,
+            samples: Vec::new(),
+            looping_sounds: HashSet::new(),
+            bgm_normalization_gains: gains,
+            normalization_analysis_enabled: true,
+            stats,
+        }
+    }
+
+    /// 現在の登録サンプルと再生状態を維持し、選択済みセットの解析ゲインだけを反映する。
+    pub fn apply_normalization_analysis(&mut self, prepared: PreparedSystemSoundSet) {
+        self.bgm_normalization_gains = prepared.bgm_normalization_gains;
+        self.normalization_analysis_enabled = prepared.normalization_analysis_enabled;
     }
 
     /// 指定音種を、準備時に解決したループ設定で再生する。SEは単発。
@@ -641,6 +760,58 @@ mod tests {
         let changed = SystemSoundManager::prepare(&selection, true, 48_000, Some(&root));
         assert_eq!(changed.stats.analysis_count, 1);
         assert_eq!(changed.stats.cache_hit_count, 0);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn disabled_prepare_can_analyze_only_loaded_bgms_and_reject_changed_sources() {
+        let root = test_temp_dir("normalization-only-loaded-bgms");
+        let bgm = root.join("bgm");
+        let se = root.join("se");
+        std::fs::create_dir_all(&bgm).unwrap();
+        std::fs::create_dir_all(&se).unwrap();
+        let select_path = bgm.join("select.wav");
+        let result_bgm_path = bgm.join("clear.wav");
+        write_test_wav(&select_path, 48_000);
+        write_test_wav(&result_bgm_path, 48_000);
+        write_test_wav(&se.join("clear.wav"), 48_000);
+        let selection =
+            SoundSetSelection { bgm_dir: Some(bgm), se_dir: Some(se), default_dir: None };
+
+        let disabled = SystemSoundManager::prepare(&selection, false, 48_000, None);
+        assert!(!disabled.normalization_analysis_enabled);
+        assert_eq!(disabled.stats.analysis_count, 0);
+        assert_eq!(disabled.normalization_paths.get(&SoundType::Select), Some(&select_path));
+        assert_eq!(
+            disabled.normalization_paths.get(&SoundType::ResultBgmClear),
+            Some(&result_bgm_path)
+        );
+        assert!(!disabled.normalization_paths.contains_key(&SoundType::ResultClear));
+
+        let (engine, _processor) = test_engine();
+        let mut manager = SystemSoundManager::from_prepared(engine, disabled, false);
+        let normalization = SystemSoundManager::prepare_normalization_for_paths(
+            &manager.normalization_paths(),
+            Some(&root),
+        );
+        assert_eq!(normalization.stats.decoded_count, 2);
+        assert_eq!(normalization.stats.analysis_count, 2);
+        assert!(!normalization.bgm_normalization_gains.contains_key(&SoundType::ResultClear));
+        assert!(manager.normalization_source_matches(&normalization));
+
+        manager.apply_normalization_analysis(normalization);
+        assert!(manager.normalization_analysis_enabled());
+        assert!(manager.bgm_normalization_gains.contains_key(&SoundType::Select));
+        assert!(manager.bgm_normalization_gains.contains_key(&SoundType::ResultBgmClear));
+        assert!(!manager.bgm_normalization_gains.contains_key(&SoundType::ResultClear));
+
+        write_test_wav(&select_path, 48_001);
+        let replaced = SystemSoundManager::prepare_normalization_for_paths(
+            &manager.normalization_paths(),
+            Some(&root),
+        );
+        assert!(!manager.normalization_source_matches(&replaced));
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -950,6 +1121,37 @@ mod tests {
         manager.set_bgm_normalization_enabled(false);
         manager.refresh_volumes(|_| 1.0);
         assert_eq!(render(&mut processor, 2, 1), vec![1.0, 1.0]);
+    }
+
+    #[test]
+    fn apply_normalization_analysis_updates_active_voice_without_replacing_sample() {
+        let (engine, mut processor) = test_engine();
+        let select_id = SoundId(SYSTEM_SOUND_BASE);
+        let id_map = HashMap::from([(SoundType::Select, select_id)]);
+        insert_sample(
+            &engine,
+            &mut processor,
+            select_id,
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 0.5, 0.25] },
+        );
+        let mut manager = SystemSoundManager::with_id_map(engine, id_map);
+        manager.play(SoundType::Select, 1.0);
+        assert_eq!(render(&mut processor, 0, 1), vec![1.0, 1.0]);
+
+        manager.apply_normalization_analysis(PreparedSystemSoundSet {
+            normalization_paths: HashMap::new(),
+            normalization_keys: HashMap::new(),
+            samples: Vec::new(),
+            looping_sounds: HashSet::new(),
+            bgm_normalization_gains: HashMap::from([(SoundType::Select, 0.25)]),
+            normalization_analysis_enabled: true,
+            stats: SystemSoundPrepareStats::default(),
+        });
+        manager.set_bgm_normalization_enabled(true);
+        manager.refresh_volumes(|_| 1.0);
+
+        // 既存voiceが同じ再生位置から続き、登録済みsampleを差し替えずgainだけ反映する。
+        assert_eq!(render(&mut processor, 1, 1), vec![0.125, 0.125]);
     }
 
     #[test]

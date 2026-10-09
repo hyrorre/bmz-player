@@ -247,6 +247,14 @@ pub(super) fn should_apply_system_sound_load(
     scene == AppSceneKind::Select || !set_already_applied
 }
 
+pub(super) fn should_apply_system_sound_result(
+    scene: AppSceneKind,
+    set_already_applied: bool,
+    normalization_only: bool,
+) -> bool {
+    normalization_only || should_apply_system_sound_load(scene, set_already_applied)
+}
+
 pub(super) fn result_entry_clear_type_for_sound(
     finished: &FinishedPlaySession,
 ) -> bmz_core::clear::ClearType {

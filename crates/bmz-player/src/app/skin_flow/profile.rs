@@ -22,8 +22,9 @@ impl WinitApp {
                 }
             });
         }
-        if needs_system_sound_analysis && self.audio.pending_system_sound.is_none() {
-            self.start_system_sound_load();
+        if needs_system_sound_analysis && self.audio.pending_system_sound_normalization.is_none() {
+            // セット差し替えworkerと独立して解析し、現在のManagerに適用する。
+            self.start_system_sound_normalization_load();
         }
         self.apply_select_preview_audio_mix();
     }

@@ -1,5 +1,152 @@
 use super::*;
 
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "creates a Winit event loop; run alone with --ignored"]
+fn system_sound_normalization_poll_preserves_set_load_and_rejects_stale_results() {
+    use crate::bootstrap::profile_tests::ProfileTestDir;
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+
+    let event_loop =
+        EventLoop::<AppUserEvent>::with_user_event().with_any_thread(true).build().unwrap();
+    let data = ProfileTestDir::new();
+    let boot = data.boot();
+    let (maintenance_tx, _) = tokio::sync::watch::channel(false);
+    let mut app = WinitApp::new(
+        boot,
+        AppOptions { viewer_play: true, ..Default::default() },
+        Instant::now(),
+        None,
+        None,
+        Arc::new(AtomicBool::new(false)),
+        event_loop.create_proxy(),
+        LogBuffer::default(),
+        maintenance_tx,
+        None,
+    )
+    .unwrap();
+    app.viewer_mode = true;
+    app.viewer_waiting = true;
+    app.play.last_play_snapshot = Some(Default::default());
+    assert_eq!(app.current_scene_kind(), AppSceneKind::Play);
+
+    let engine =
+        bmz_audio::command::AudioEngineHandle::new(bmz_audio::engine::AudioEngine::new(48_000));
+    app.audio.system_sound = Some(crate::system_sound_manager::SystemSoundManager::with_id_map(
+        engine.clone(),
+        Default::default(),
+    ));
+    let normalization_result = || {
+        crate::system_sound_manager::SystemSoundManager::prepare_normalization_for_paths(
+            &Default::default(),
+            None,
+        )
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.audio.system_sound_normalization_generation = 3;
+    tx.send(SystemSoundLoadWorkerResult { generation: 3, prepared: normalization_result() })
+        .unwrap();
+    app.audio.pending_system_sound_normalization =
+        Some(PendingSystemSoundLoad { generation: 3, started_at: Instant::now(), finished: rx });
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(SystemSoundLoadWorkerResult {
+        generation: 7,
+        prepared: crate::system_sound_manager::SystemSoundManager::prepare(
+            &crate::system_sound::SoundSetSelection::default(),
+            false,
+            48_000,
+            None,
+        ),
+    })
+    .unwrap();
+    app.audio.system_sound_generation = 7;
+    app.audio.pending_system_sound =
+        Some(PendingSystemSoundLoad { generation: 7, started_at: Instant::now(), finished: rx });
+
+    assert!(!app.audio.system_sound.as_ref().unwrap().normalization_analysis_enabled());
+    app.poll_system_sound_load();
+    assert!(app.audio.system_sound.as_ref().unwrap().normalization_analysis_enabled());
+    assert!(app.audio.pending_system_sound.is_some());
+    assert!(app.audio.pending_system_sound_normalization.is_none());
+
+    app.play.last_play_snapshot = None;
+    app.viewer_mode = false;
+    app.audio.system_sound = Some(crate::system_sound_manager::SystemSoundManager::with_id_map(
+        engine.clone(),
+        Default::default(),
+    ));
+    app.result.finished_course = Some(crate::screens::course_session::CourseResultSummary {
+        course_id: 1,
+        course_score_id: None,
+        course_played_at: None,
+        ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
+        rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
+        title: "test".into(),
+        kind: bmz_core::course::CourseKind::Dan,
+        course_titles: Default::default(),
+        entry_summaries: Vec::new(),
+        entry_arranges: Vec::new(),
+        total_ex_score: 0,
+        max_ex_score: 0,
+        total_notes: 0,
+        course_ln_mode: None,
+        bp: 0,
+        final_clear_type: bmz_core::clear::ClearType::NoPlay,
+        final_gauge_type: bmz_core::clear::GaugeType::Normal,
+        final_gauge_value: 0.0,
+        course_max_combo: 0,
+        judge_counts: Default::default(),
+        trophy_results: Vec::new(),
+        course_clear: false,
+        course_failed: false,
+        total_entries: 0,
+        played_entries: 0,
+        replay_slots: [false; 4],
+        saved_replay_slots: [false; 4],
+        best_score: None,
+        previous_best_score: None,
+    });
+    assert_eq!(app.current_scene_kind(), AppSceneKind::Result);
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(SystemSoundLoadWorkerResult { generation: 4, prepared: normalization_result() })
+        .unwrap();
+    app.audio.system_sound_normalization_generation = 4;
+    app.audio.pending_system_sound_normalization =
+        Some(PendingSystemSoundLoad { generation: 4, started_at: Instant::now(), finished: rx });
+    assert!(!app.audio.system_sound.as_ref().unwrap().normalization_analysis_enabled());
+    app.poll_system_sound_load();
+    assert!(app.audio.system_sound.as_ref().unwrap().normalization_analysis_enabled());
+    assert!(app.audio.pending_system_sound.is_some());
+
+    app.audio.system_sound = Some(crate::system_sound_manager::SystemSoundManager::with_id_map(
+        engine,
+        Default::default(),
+    ));
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(SystemSoundLoadWorkerResult { generation: 5, prepared: normalization_result() })
+        .unwrap();
+    app.audio.system_sound_normalization_generation = 6;
+    app.audio.pending_system_sound_normalization =
+        Some(PendingSystemSoundLoad { generation: 5, started_at: Instant::now(), finished: rx });
+    app.poll_system_sound_load();
+    assert!(!app.audio.system_sound.as_ref().unwrap().normalization_analysis_enabled());
+    assert!(app.audio.pending_system_sound_normalization.is_none());
+
+    app.audio.pending_system_sound = None;
+    app.audio.system_sound = None;
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(SystemSoundLoadWorkerResult { generation: 7, prepared: normalization_result() })
+        .unwrap();
+    app.audio.system_sound_normalization_generation = 7;
+    app.audio.pending_system_sound_normalization =
+        Some(PendingSystemSoundLoad { generation: 7, started_at: Instant::now(), finished: rx });
+    app.poll_system_sound_load();
+    assert!(app.audio.system_sound.is_none());
+    assert!(app.audio.pending_system_sound.is_none());
+    assert!(app.audio.pending_system_sound_normalization.is_none());
+}
+
 #[test]
 fn result_load_numbers_follow_ir_ranking_updates() {
     let mut runtime = bmz_skin::LuaLoadRuntimeState::default();
@@ -1094,6 +1241,19 @@ fn applied_soundset_is_kept_after_select_and_result_bgms_stop_on_every_scene_ent
             assert!(targets.contains(&sound));
         }
         assert!(!targets.contains(&SoundType::Scratch));
+    }
+}
+
+#[test]
+fn normalization_results_apply_in_play_while_set_replacements_wait_for_select() {
+    for scene in
+        [AppSceneKind::Select, AppSceneKind::Decide, AppSceneKind::Play, AppSceneKind::Result]
+    {
+        assert!(should_apply_system_sound_result(scene, true, true));
+        assert_eq!(
+            should_apply_system_sound_result(scene, true, false),
+            scene == AppSceneKind::Select
+        );
     }
 }
 

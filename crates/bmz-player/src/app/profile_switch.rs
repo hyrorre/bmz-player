@@ -468,7 +468,10 @@ impl WinitApp {
         }
         self.audio.system_sound = None;
         self.audio.pending_system_sound = None;
+        self.audio.pending_system_sound_normalization = None;
         self.audio.system_sound_generation = self.audio.system_sound_generation.wrapping_add(1);
+        self.audio.system_sound_normalization_generation =
+            self.audio.system_sound_normalization_generation.wrapping_add(1);
         self.audio.draining_audio = None;
         self.audio.system_sound_catalog = system_sound_catalog_from_boot(&self.boot);
         self.start_system_sound_load();
