@@ -125,20 +125,54 @@ fn skin_image_texture_region_with_elapsed(
         };
         row * divx + col
     } else if image.cycle > 0 && frame_count > 1 {
-        (elapsed_ms.rem_euclid(image.cycle) * frame_count / image.cycle).min(frame_count - 1)
+        skin_source_image_animation_frame_index(i64::from(frame_count), image.cycle, elapsed_ms)
+            as i32
     } else {
         0
     };
 
-    let cell_width = pw as f32 / divx as f32;
-    let cell_height = ph as f32 / divy as f32;
     let source_column = frame_index % divx;
     let source_row = frame_index / divx;
+    skin_image_texture_region_for_pixel_bounds(
+        px as f32 + pw as f32 / divx as f32 * source_column as f32,
+        py as f32 + ph as f32 / divy as f32 * source_row as f32,
+        pw as f32 / divx as f32,
+        ph as f32 / divy as f32,
+        source_width,
+        source_height,
+    )
+}
+
+/// beatoraja `SkinSourceImage` が `timer/cycle` から選ぶ画像配列 index。
+pub(super) fn skin_source_image_animation_frame_index(
+    frame_count: i64,
+    cycle: i32,
+    elapsed_ms: i32,
+) -> i64 {
+    if cycle <= 0 || frame_count <= 1 {
+        return 0;
+    }
+    let elapsed_in_cycle = i64::from(elapsed_ms.rem_euclid(cycle));
+    elapsed_in_cycle
+        .saturating_mul(frame_count)
+        .checked_div(i64::from(cycle))
+        .unwrap_or(0)
+        .clamp(0, frame_count - 1)
+}
+
+pub(super) fn skin_image_texture_region_for_pixel_bounds(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    source_width: f32,
+    source_height: f32,
+) -> TextureRegion {
     TextureRegion {
-        x: (px as f32 + cell_width * source_column as f32) / source_width,
-        y: (py as f32 + cell_height * source_row as f32) / source_height,
-        width: cell_width / source_width,
-        height: cell_height / source_height,
+        x: x / source_width,
+        y: y / source_height,
+        width: width / source_width,
+        height: height / source_height,
     }
 }
 
@@ -196,11 +230,17 @@ pub(super) fn resolve_skin_image_pixel_rect(
     source_height: f32,
 ) -> (i32, i32, i32, i32) {
     let (px, py, pw, ph) = pixel_rect;
-    let resolved_w =
-        if pw < 0 { (source_width.round() as i32).saturating_sub(px).max(0) } else { pw };
-    let resolved_h =
-        if ph < 0 { (source_height.round() as i32).saturating_sub(py).max(0) } else { ph };
-    (px, py, resolved_w, resolved_h)
+    let source_width = source_width.round().max(0.0) as i32;
+    let source_height = source_height.round().max(0.0) as i32;
+    let resolved_x = px.clamp(0, source_width);
+    let resolved_y = py.clamp(0, source_height);
+    let requested_w = if pw < 0 { source_width.saturating_sub(px).max(0) } else { pw.max(0) };
+    let requested_h = if ph < 0 { source_height.saturating_sub(py).max(0) } else { ph.max(0) };
+    let rect_end_x = px.saturating_add(requested_w).clamp(0, source_width);
+    let rect_end_y = py.saturating_add(requested_h).clamp(0, source_height);
+    let resolved_w = rect_end_x.saturating_sub(resolved_x);
+    let resolved_h = rect_end_y.saturating_sub(resolved_y);
+    (resolved_x, resolved_y, resolved_w, resolved_h)
 }
 
 pub(super) fn gauge_after_dot(gauge: f32) -> u32 {

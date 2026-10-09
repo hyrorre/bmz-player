@@ -682,6 +682,280 @@ fn skin_document_resolves_music_progress_slider() {
 }
 
 #[test]
+fn slider_image_rectangle_resolves_remaining_and_positive_source_bounds() {
+    let document: SkinDocument = serde_json::from_str(
+        r#"
+        {
+            "w":100,"h":100,
+            "slider":[
+                {"id":"full","src":"src","x":0,"y":0,"w":-1,"h":-1,"type":6},
+                {"id":"offset","src":"src","x":10,"y":5,"w":-1,"h":-1,"type":6},
+                {"id":"positive","src":"src","x":10,"y":20,"w":30,"h":20,"type":6}
+            ],
+            "destination":[
+                {"id":"full","dst":[{"x":0,"y":0,"w":10,"h":10}]},
+                {"id":"offset","dst":[{"x":20,"y":0,"w":10,"h":10}]},
+                {"id":"positive","dst":[{"x":40,"y":0,"w":10,"h":10}]}
+            ]
+        }
+        "#,
+    )
+    .unwrap();
+    let sources = mock_source("src", 100.0, 80.0);
+    let items = document.static_image_render_items(&sources, &SkinDrawState::default());
+
+    assert_eq!(items.len(), 3);
+    assert!(matches!(
+        items[0],
+        SkinRenderItem::Image { uv: TextureRegion { x, y, width, height }, .. }
+            if approx_eq(x, 0.0) && approx_eq(y, 0.0)
+                && approx_eq(width, 1.0) && approx_eq(height, 1.0)
+    ));
+    assert!(matches!(
+        items[1],
+        SkinRenderItem::Image { uv: TextureRegion { x, y, width, height }, .. }
+            if approx_eq(x, 0.1) && approx_eq(y, 5.0 / 80.0)
+                && approx_eq(width, 0.9) && approx_eq(height, 75.0 / 80.0)
+    ));
+    assert!(matches!(
+        items[2],
+        SkinRenderItem::Image { uv: TextureRegion { x, y, width, height }, .. }
+            if approx_eq(x, 0.1) && approx_eq(y, 0.25)
+                && approx_eq(width, 0.3) && approx_eq(height, 0.25)
+    ));
+}
+
+#[test]
+fn slider_source_bounds_are_clipped_and_empty_regions_are_skipped() {
+    let document: SkinDocument = serde_json::from_str(
+        r#"
+        {
+            "w":100,"h":100,
+            "slider":[
+                {"id":"clipped","src":"src","x":90,"y":70,"w":50,"h":50,"type":6},
+                {"id":"negative-origin","src":"src","x":-10,"y":-5,"w":30,"h":20,"type":6},
+                {"id":"outside","src":"src","x":101,"y":80,"w":-1,"h":-1,"type":6},
+                {"id":"empty","src":"src","x":0,"y":0,"w":0,"h":10,"type":6}
+            ],
+            "destination":[
+                {"id":"clipped","dst":[{"x":0,"y":0,"w":10,"h":10}]},
+                {"id":"negative-origin","dst":[{"x":20,"y":0,"w":10,"h":10}]},
+                {"id":"outside","dst":[{"x":20,"y":0,"w":10,"h":10}]},
+                {"id":"empty","dst":[{"x":40,"y":0,"w":10,"h":10}]}
+            ]
+        }
+        "#,
+    )
+    .unwrap();
+    let sources = mock_source("src", 100.0, 80.0);
+    let items = document.static_image_render_items(&sources, &SkinDrawState::default());
+
+    assert_eq!(items.len(), 2);
+    assert!(matches!(
+        items[0],
+        SkinRenderItem::Image { uv: TextureRegion { x, y, width, height }, .. }
+            if approx_eq(x, 0.9) && approx_eq(y, 70.0 / 80.0)
+                && approx_eq(width, 0.1) && approx_eq(height, 10.0 / 80.0)
+    ));
+    assert!(matches!(
+        items[1],
+        SkinRenderItem::Image { uv: TextureRegion { x, y, width, height }, .. }
+            if approx_eq(x, 0.0) && approx_eq(y, 0.0)
+                && approx_eq(width, 0.2) && approx_eq(height, 15.0 / 80.0)
+    ));
+}
+
+#[test]
+fn music_progress_slider_uses_clamped_rate_direction_range_and_destination_style() {
+    let document: SkinDocument = serde_json::from_str(
+        r#"
+        {
+            "w":1920,"h":1080,
+            "slider":[
+                {"id":"progress","src":"src","x":0,"y":0,"w":-1,"h":-1,
+                    "angle":2,"range":617,"type":6}
+            ],
+            "destination":[
+                {"id":"progress","blend":2,"filter":1,"dst":[
+                    {"x":25,"y":1014,"w":36,"h":42,"r":128,"g":64,"b":32,"a":128}
+                ]}
+            ]
+        }
+        "#,
+    )
+    .unwrap();
+    let sources = mock_source("src", 100.0, 80.0);
+
+    for (progress, expected_y) in [(-0.1, 1014), (0.0, 1014), (0.5, 705), (1.0, 397), (1.1, 397)] {
+        let items = document.static_image_render_items(
+            &sources,
+            &SkinDrawState { play_progress: progress, ..SkinDrawState::default() },
+        );
+        assert_eq!(items.len(), 1);
+        assert!(
+            matches!(
+                &items[0],
+                SkinRenderItem::Image {
+                    rect: Rect { x, y, width, height },
+                    uv: TextureRegion { width: uv_width, height: uv_height, .. },
+                    tint: Color { r, g, b, a },
+                    blend,
+                    linear_filter,
+                    ..
+                } if approx_eq(*x, 25.0 / 1920.0)
+                    && approx_eq(*y, 1.0 - expected_y as f32 / 1080.0 - 42.0 / 1080.0)
+                    && approx_eq(*width, 36.0 / 1920.0)
+                    && approx_eq(*height, 42.0 / 1080.0)
+                    && approx_eq(*uv_width, 1.0) && approx_eq(*uv_height, 1.0)
+                    && approx_eq(*r, 128.0 / 255.0) && approx_eq(*g, 64.0 / 255.0)
+                    && approx_eq(*b, 32.0 / 255.0) && approx_eq(*a, 128.0 / 255.0)
+                    && *blend == BlendMode::Add && *linear_filter
+            ),
+            "unexpected slider item for progress {progress}: {:?}",
+            items[0]
+        );
+    }
+}
+
+#[test]
+fn slider_source_animation_uses_its_timer_and_cycle_separately_from_destination() {
+    let document: SkinDocument = serde_json::from_str(
+        r#"
+        {
+            "w":100,"h":100,
+            "slider":[
+                {"id":"animated","src":"src","x":10,"y":5,"w":40,"h":20,
+                    "divx":2,"divy":2,"timer":41,"cycle":100,"type":6}
+            ],
+            "destination":[
+                {"id":"animated","timer":40,"loop":100,"dst":[
+                    {"time":0,"x":20,"y":60,"w":10,"h":10},
+                    {"time":100,"x":40}
+                ]}
+            ]
+        }
+        "#,
+    )
+    .unwrap();
+    let sources = mock_source("src", 80.0, 40.0);
+
+    for (source_elapsed, expected_u, expected_v) in [
+        (None, 10.0 / 80.0, 5.0 / 40.0),
+        (Some(25), 30.0 / 80.0, 5.0 / 40.0),
+        (Some(50), 10.0 / 80.0, 15.0 / 40.0),
+        (Some(75), 30.0 / 80.0, 15.0 / 40.0),
+    ] {
+        let items = document.static_image_render_items(
+            &sources,
+            &SkinDrawState {
+                elapsed_ms: 80,
+                ready_timer_ms: Some(50),
+                play_timer_ms: source_elapsed,
+                ..SkinDrawState::default()
+            },
+        );
+        assert_eq!(items.len(), 1);
+        assert!(
+            matches!(
+                &items[0],
+                SkinRenderItem::Image {
+                    rect: Rect { x, y, .. },
+                    uv: TextureRegion { x: u, y: v, width, height },
+                    ..
+                } if approx_eq(*x, 0.3) && approx_eq(*y, 0.3)
+                    && approx_eq(*u, expected_u) && approx_eq(*v, expected_v)
+                    && approx_eq(*width, 0.25) && approx_eq(*height, 0.25)
+            ),
+            "source timer elapsed {source_elapsed:?} did not select its expected frame: {:?}",
+            items[0]
+        );
+    }
+}
+
+#[test]
+fn non_play_slider_types_keep_scroll_and_volume_progress() {
+    let document: SkinDocument = serde_json::from_str(
+        r#"
+        {
+            "w":100,"h":100,
+            "slider":[
+                {"id":"scroll","src":"src","w":10,"h":10,"angle":1,"range":20,"type":1},
+                {"id":"master","src":"src","w":10,"h":10,"angle":1,"range":20,"type":17},
+                {"id":"key","src":"src","w":10,"h":10,"angle":1,"range":20,"type":18},
+                {"id":"bgm","src":"src","w":10,"h":10,"angle":1,"range":20,"type":19}
+            ],
+            "destination":[
+                {"id":"scroll","dst":[{"x":0,"y":0,"w":10,"h":10}]},
+                {"id":"master","dst":[{"x":20,"y":0,"w":10,"h":10}]},
+                {"id":"key","dst":[{"x":40,"y":0,"w":10,"h":10}]},
+                {"id":"bgm","dst":[{"x":60,"y":0,"w":10,"h":10}]}
+            ]
+        }
+        "#,
+    )
+    .unwrap();
+    let sources = mock_source("src", 100.0, 100.0);
+    let items = document.static_image_render_items(
+        &sources,
+        &SkinDrawState {
+            select_screen: true,
+            select_scroll_progress: 0.25,
+            select_master_volume: 0.5,
+            select_key_volume: 0.75,
+            select_bgm_volume: 1.0,
+            ..SkinDrawState::default()
+        },
+    );
+
+    assert_eq!(items.len(), 4);
+    for (item, expected_x) in items.iter().zip([0.05, 0.3, 0.55, 0.8]) {
+        assert!(matches!(
+            item,
+            SkinRenderItem::Image { rect: Rect { x, .. }, .. }
+                if approx_eq(*x, expected_x)
+        ));
+    }
+}
+
+#[test]
+fn ir_ranking_slider_keeps_ranking_scroll_progress() {
+    let document: SkinDocument = serde_json::from_str(
+        r#"
+        {
+            "w":100,"h":100,
+            "slider":[
+                {"id":"ranking","src":"src","w":10,"h":10,"angle":1,"range":20,"type":8}
+            ],
+            "destination":[
+                {"id":"ranking","draw":"result_panel(1)","dst":[{"x":0,"y":0,"w":10,"h":10}]}
+            ]
+        }
+        "#,
+    )
+    .unwrap();
+    let sources = mock_source("src", 100.0, 100.0);
+    let items = document.static_image_render_items(
+        &sources,
+        &SkinDrawState {
+            result_panel: Some(1),
+            ir_ranking: crate::scene::ResultIrSnapshot {
+                scroll_offset: 5,
+                scroll_max: 10,
+                ..Default::default()
+            },
+            ..SkinDrawState::default()
+        },
+    );
+
+    assert_eq!(items.len(), 1);
+    assert!(matches!(
+        &items[0],
+        SkinRenderItem::Image { rect: Rect { x, .. }, .. }
+            if approx_eq(*x, 0.1)
+    ));
+}
+
+#[test]
 fn skin_document_moves_sliders_in_beatoraja_directions() {
     let document: SkinDocument = serde_json::from_str(
             r#"

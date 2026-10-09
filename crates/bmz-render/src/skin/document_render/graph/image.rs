@@ -41,6 +41,40 @@ macro_rules! skin_document_render_graph_image_methods {
             let source = sources.get(&slider.src)?;
             let source_width = source.source_size.width.max(1.0);
             let source_height = source.source_size.height.max(1.0);
+            let (source_x, source_y, source_rect_width, source_rect_height) =
+                resolve_skin_image_pixel_rect(
+                    (slider.x, slider.y, slider.w, slider.h),
+                    source_width,
+                    source_height,
+                );
+            if source_rect_width <= 0 || source_rect_height <= 0 {
+                return None;
+            }
+
+            // beatoraja JsonSkinObjectLoader splits SkinSlider's source rectangle into
+            // divx*divy TextureRegions before SkinSourceImage applies timer/cycle.
+            let divx = slider.divx.max(1).min(source_rect_width);
+            let divy = slider.divy.max(1).min(source_rect_height);
+            let frame_count = i64::from(divx) * i64::from(divy);
+            let source_elapsed_ms = skin_timer_elapsed_ms(slider.timer, state).unwrap_or(0).max(0);
+            let source_frame = skin_source_image_animation_frame_index(
+                frame_count,
+                slider.cycle,
+                source_elapsed_ms,
+            );
+            let source_column = (source_frame % i64::from(divx)) as i32;
+            let source_row = (source_frame / i64::from(divx)) as i32;
+            let cell_width = source_rect_width / divx;
+            let cell_height = source_rect_height / divy;
+            let mut uv = skin_image_texture_region_for_pixel_bounds(
+                (source_x + source_column * cell_width) as f32,
+                (source_y + source_row * cell_height) as f32,
+                cell_width as f32,
+                cell_height as f32,
+                source_width,
+                source_height,
+            );
+
             let mut frame = frame;
             let offset = (slider.range as f32 * progress).round() as i32;
             match slider.angle {
@@ -50,12 +84,6 @@ macro_rules! skin_document_render_graph_image_methods {
                 3 => frame.x -= offset,
                 _ => {}
             }
-            let mut uv = TextureRegion {
-                x: slider.x as f32 / source_width,
-                y: slider.y as f32 / source_height,
-                width: slider.w as f32 / source_width,
-                height: slider.h as f32 / source_height,
-            };
             if slider.slider_type == 4
                 && let Some((disappear_line, link_lift)) = self.disappear_line_for_lane_cover_clip()
             {
