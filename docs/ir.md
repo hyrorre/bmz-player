@@ -148,6 +148,8 @@ SHA-256 fallback でラベルを付与する。
   `primary_provider` が明示されている場合、ランキング取得・表示はそのproviderだけを使い、
   無効・未設定でも別providerへフォールバックしない。空の旧設定だけは先頭の有効providerを使う。
   submit-only providerはスコアを送信するが、送信応答へのランキング同梱を要求しない。
+  ResultのランキングAPI取得はprimaryの今回分の送信完了後に開始し、secondary providerや
+  backlogの送信完了を待たない。primary jobを別の同期taskがclaim済みの場合も、そのjobだけを待つ。
   eguiのResultオーバーレイは、送信対象なし・成功・失敗をprovider別に表示する。
 - BMS-IR: `https://www.bms-ir.org` を3番目の固定 provider として保持する。
   既定は無効で、BMS-IR の数値 ID と LR2 game token を credential store に保存する。

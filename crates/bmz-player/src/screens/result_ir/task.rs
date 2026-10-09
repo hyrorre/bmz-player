@@ -168,96 +168,124 @@ pub(super) fn spawn_result_ir_task_for_target(
             .await
         }
         .await;
-        let mut included_global_ranking = None;
         match primary_outcome {
             Ok(report) => {
                 let primary_processed = report.submitted.saturating_add(report.failed);
-                included_global_ranking = included_global_ranking_for_query(&submit_query, &report);
-                // 通常のランキングAPIには更新前順位が無い。今回の primary provider の
-                // 送信応答を取得できた時点で先に Result へ渡し、残りの provider や
-                // backlog の同期完了を待たせない。
-                if let Some(ranking) = included_global_ranking.clone() {
-                    let _ = submit_sender.send(ResultIrEvent::Ranking {
+                let mut included_global_ranking =
+                    included_global_ranking_for_query(&submit_query, &report);
+
+                if primary_processed > 0 {
+                    let _ = submit_sender.send(ResultIrEvent::Submit {
                         provider: submit_query.provider.clone(),
-                        scope: IrRankingScope::Global,
-                        result: Ok(ranking),
+                        submitted: report.submitted,
+                        failed: report.failed,
+                        message: report.messages.first().cloned(),
                     });
-                }
-
-                // primary provider だけでなく、今回の Result attempt に紐づく全
-                // provider/account の job を古い backlog より先に送る。generic batch
-                // の上限が古い job で埋まっても、Result の送信待ちをtimeoutさせない。
-                let secondary_processed = match sync_current_secondary_submissions(
-                    &network_db_path,
-                    &score_db_path,
-                    &submit_query.profile_root,
-                    &logs_dir,
-                    &ir_config,
-                    &submit_query,
-                    &submission_targets_for_task,
-                )
-                .await
-                {
-                    Ok(processed) => processed,
-                    Err(error) => {
-                        tracing::warn!(%error, "failed to sync current secondary IR submissions from Result");
-                        0
-                    }
-                };
-                let current_processed = primary_processed.saturating_add(secondary_processed);
-
-                // 今回分を全providerについて優先した後、残りの枠で従来どおり
-                // pending backlogを送る。primaryの送信応答は上で確保済みなので、
-                // バッチ順や上限によって通常ランキング取得へ誤ってフォールバックしない。
-                let remaining_outcome = async {
-                    let mut network_db =
-                        crate::storage::network_db::NetworkDatabase::open(&network_db_path)?;
-                    sync_pending_ir_jobs(
-                        &mut network_db,
-                        &score_db_path,
-                        &submit_query.profile_root,
-                        &logs_dir,
-                        &ir_config,
-                        now_unix_seconds(),
-                        IR_SYNC_BATCH_LIMIT.saturating_sub(current_processed),
-                        false,
-                        IrSyncThrottle::rate_limited(),
+                } else {
+                    // 常駐同期が primary job を先に claim した場合だけ、そのjobの
+                    // 完了を確認する。secondary provider の応答はランキング取得を待たせない。
+                    let primary_target = ResultIrSubmissionTarget {
+                        provider: submit_query.provider.clone(),
+                        account_id: submit_query.account_id.clone(),
+                    };
+                    for event in watch_result_submissions(
+                        &network_db_path,
+                        &submit_query,
+                        std::slice::from_ref(&primary_target),
                     )
                     .await
+                    {
+                        let _ = submit_sender.send(event);
+                    }
                 }
-                .await;
-                if let Err(error) = remaining_outcome {
-                    tracing::warn!(%error, "failed to sync remaining IR jobs from Result");
-                }
-                // 別の同期 task がこの job を先に claim していても、送信完了まで
-                // 待ってから ranking を取得する。これで古いサーバ側 ranking を
-                // Result に固定しない。
-                for event in watch_result_submissions(
-                    &network_db_path,
-                    &submit_query,
-                    &submission_targets_for_task,
-                )
-                .await
-                {
-                    let _ = submit_sender.send(event);
-                }
-                if included_global_ranking.is_none() {
+
+                if prefetch_global && included_global_ranking.is_none() {
                     match stored_included_global_ranking(&network_db_path, &submit_query) {
-                        Ok(Some(ranking)) => {
-                            let _ = submit_sender.send(ResultIrEvent::Ranking {
-                                provider: submit_query.provider.clone(),
-                                scope: IrRankingScope::Global,
-                                result: Ok(ranking.clone()),
-                            });
-                            included_global_ranking = Some(ranking);
-                        }
+                        Ok(Some(ranking)) => included_global_ranking = Some(ranking),
                         Ok(None) => {}
                         Err(error) => tracing::warn!(
                             %error,
-                            "failed to load the completed IR submission response",
+                            "failed to load the completed primary IR submission response",
                         ),
                     }
                 }
+
+                let other_submission_targets = submission_targets_for_task
+                    .iter()
+                    .filter(|target| {
+                        target.provider != submit_query.provider
+                            || target.account_id != submit_query.account_id
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+
+                start_ranking_prefetches_then(
+                    &submit_query,
+                    included_global_ranking,
+                    prefetch_global,
+                    prefetch_rivals,
+                    &submit_sender,
+                    spawn_ranking_fetch,
+                    async {
+                        // ランキング取得はprimaryの今回分が完了した時点で開始済み。
+                        // secondary送信やbacklogは別の継続処理として進める。
+                        let secondary_processed = match sync_current_secondary_submissions(
+                            &network_db_path,
+                            &score_db_path,
+                            &submit_query.profile_root,
+                            &logs_dir,
+                            &ir_config,
+                            &submit_query,
+                            &submission_targets_for_task,
+                        )
+                        .await
+                        {
+                            Ok(processed) => processed,
+                            Err(error) => {
+                                tracing::warn!(%error, "failed to sync current secondary IR submissions from Result");
+                                0
+                            }
+                        };
+                        let current_processed =
+                            primary_processed.saturating_add(secondary_processed);
+
+                        // 今回分を全providerについて優先した後、残りの枠で従来どおり
+                        // pending backlogを送る。
+                        let remaining_outcome = async {
+                            let mut network_db =
+                                crate::storage::network_db::NetworkDatabase::open(
+                                    &network_db_path,
+                                )?;
+                            sync_pending_ir_jobs(
+                                &mut network_db,
+                                &score_db_path,
+                                &submit_query.profile_root,
+                                &logs_dir,
+                                &ir_config,
+                                now_unix_seconds(),
+                                IR_SYNC_BATCH_LIMIT.saturating_sub(current_processed),
+                                false,
+                                IrSyncThrottle::rate_limited(),
+                            )
+                            .await
+                        }
+                        .await;
+                        if let Err(error) = remaining_outcome {
+                            tracing::warn!(%error, "failed to sync remaining IR jobs from Result");
+                        }
+                        // primary状態は先に通知済みなので、残りのproviderだけを監視する。
+                        for event in watch_result_submissions(
+                            &network_db_path,
+                            &submit_query,
+                            &other_submission_targets,
+                        )
+                        .await
+                        {
+                            let _ = submit_sender.send(event);
+                        }
+                    },
+                )
+                .await;
             }
             Err(error) => {
                 let message = format!("{error:#}");
@@ -269,16 +297,17 @@ pub(super) fn spawn_result_ir_task_for_target(
                         message: Some(message.clone()),
                     });
                 }
-            }
-        }
-        let included_global_loaded = included_global_ranking.is_some();
-        // 送信完了後に prefetch する。best 更新前のランキングを返さないため。
-        if prefetch_global && !included_global_loaded {
-            fetch_ranking_and_send(&submit_query, IrRankingScope::Global, &submit_sender).await;
-        }
-        if prefetch_rivals {
-            fetch_ranking_and_send(&submit_query, IrRankingScope::SelfAndRivals, &submit_sender)
+                start_ranking_prefetches_then(
+                    &submit_query,
+                    None,
+                    prefetch_global,
+                    prefetch_rivals,
+                    &submit_sender,
+                    spawn_ranking_fetch,
+                    async {},
+                )
                 .await;
+            }
         }
     });
 
@@ -289,6 +318,34 @@ pub(super) fn spawn_result_ir_task_for_target(
         state.self_and_rivals = RankingLoadState::Loading;
     }
     Some(state)
+}
+
+async fn start_ranking_prefetches_then<F>(
+    query: &ResultIrTaskQuery,
+    global_ranking: Option<ResultIrRanking>,
+    prefetch_global: bool,
+    prefetch_rivals: bool,
+    sender: &Sender<ResultIrEvent>,
+    spawn_fetch: fn(ResultIrTaskQuery, IrRankingScope, Sender<ResultIrEvent>),
+    followup: F,
+) where
+    F: std::future::Future<Output = ()>,
+{
+    if prefetch_global {
+        if let Some(ranking) = global_ranking {
+            let _ = sender.send(ResultIrEvent::Ranking {
+                provider: query.provider.clone(),
+                scope: IrRankingScope::Global,
+                result: Ok(ranking),
+            });
+        } else {
+            spawn_fetch(query.clone(), IrRankingScope::Global, sender.clone());
+        }
+    }
+    if prefetch_rivals {
+        spawn_fetch(query.clone(), IrRankingScope::SelfAndRivals, sender.clone());
+    }
+    followup.await;
 }
 
 async fn sync_current_secondary_submissions(
@@ -714,6 +771,28 @@ pub(super) fn now_unix_seconds() -> i64 {
 mod tests {
     use super::*;
 
+    fn spawn_test_ranking_fetch(
+        query: ResultIrTaskQuery,
+        scope: IrRankingScope,
+        sender: Sender<ResultIrEvent>,
+    ) {
+        tokio::spawn(async move {
+            let _ = sender.send(ResultIrEvent::Ranking {
+                provider: query.provider,
+                scope,
+                result: Ok(ResultIrRanking {
+                    scope,
+                    entries: Vec::new(),
+                    clear_rate: None,
+                    clear_counts: None,
+                    self_rank: None,
+                    previous_rank: None,
+                    total: None,
+                }),
+            });
+        });
+    }
+
     #[test]
     fn current_attempt_selects_every_secondary_provider_and_account_before_backlog() {
         let query = ResultIrTaskQuery {
@@ -756,5 +835,65 @@ mod tests {
                 (crate::ir::rian_ir::RIAN_IR_PROVIDER, "rian-account"),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn global_ranking_prefetch_is_published_while_followup_work_is_pending() {
+        let query = ResultIrTaskQuery {
+            profile_root: PathBuf::new(),
+            provider: crate::ir::rian_ir::RIAN_IR_PROVIDER.to_string(),
+            account_id: String::new(),
+            base_url: "https://rianir.link/".to_string(),
+            target: ResultIrTarget::Chart {
+                local_score_id: 42,
+                chart_sha256_hex: "ab".repeat(32),
+                ln_policy: LnScorePolicy::AutoLn,
+                double_option: DoubleOptionScoreBucket::Off,
+                rule_mode: RuleMode::Beatoraja,
+            },
+        };
+        let (sender, receiver) = channel();
+        let task_query = query.clone();
+        let task_sender = sender.clone();
+        let task = tokio::spawn(async move {
+            start_ranking_prefetches_then(
+                &task_query,
+                None,
+                true,
+                false,
+                &task_sender,
+                spawn_test_ranking_fetch,
+                async { tokio::time::sleep(Duration::from_secs(30)).await },
+            )
+            .await;
+        });
+
+        let event = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                match receiver.try_recv() {
+                    Ok(event) => break event,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        panic!("ranking task disconnected before publishing its result")
+                    }
+                }
+            }
+        })
+        .await
+        .expect("ranking should arrive before follow-up work completes");
+
+        match event {
+            ResultIrEvent::Ranking { provider, scope, result } => {
+                assert_eq!(provider, crate::ir::rian_ir::RIAN_IR_PROVIDER);
+                assert_eq!(scope, IrRankingScope::Global);
+                assert!(result.unwrap().entries.is_empty());
+            }
+            ResultIrEvent::Submit { .. } => panic!("expected a ranking event"),
+        }
+        assert!(!task.is_finished(), "follow-up work should still be pending");
+        task.abort();
+        let _ = task.await;
     }
 }
