@@ -173,6 +173,53 @@ fn select_option_panel_transition_plays_open_and_close_sounds() {
 }
 
 #[test]
+fn select_option_panel_open_sound_occurs_once_when_returning_with_e1_held() {
+    use crate::system_sound::SoundType;
+
+    let keys = default_select_keys();
+    let mut input = AppInputRuntime::default();
+    input.track_control(&ControlInputEvent::keyboard_parts(
+        PhysicalKey::Code(KeyCode::KeyQ),
+        ElementState::Pressed,
+        false,
+    ));
+
+    // Result exit reconciles physical holds before Select's scene-entry reset.
+    // The state-only reconciliation must not open the panel or play its sound.
+    let mut panel = 0;
+    reconcile_select_holds_from_pressed_controls(&mut input, &keys);
+    assert!(input.start_held, "E1 should remain held across Result exit");
+    assert!(input.select_e_action_holds.contains(&InputActionConfig::E1));
+    assert_eq!(panel, 0, "hold reconciliation must not transition the panel");
+
+    // Select's scene-entry reset leaves it closed; the first normal update opens it once.
+    let next_panel = select_option_panel_for_holds(input.start_held, input.select_held);
+    let base = Instant::now();
+    let mut on_started_at = base;
+    let mut off_started_at = [None; 6];
+    let mut exit_hold = None;
+    assert!(transition_select_option_panel(
+        &mut panel,
+        &mut on_started_at,
+        &mut off_started_at,
+        &mut exit_hold,
+        next_panel,
+        base,
+    ));
+    assert_eq!(select_option_panel_sound_for_transition(0, panel), Some(SoundType::OptionOpen));
+
+    assert!(!transition_select_option_panel(
+        &mut panel,
+        &mut on_started_at,
+        &mut off_started_at,
+        &mut exit_hold,
+        next_panel,
+        base + Duration::from_millis(16),
+    ));
+    assert_eq!(select_option_panel_sound_for_transition(panel, next_panel), None);
+}
+
+#[test]
 fn select_option_panel_transition_tracks_independent_off_timers() {
     let base = Instant::now();
     let mut current = 1;

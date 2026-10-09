@@ -133,3 +133,22 @@ incremental cacheのhard link失敗に伴うコピーへの切り替えwarning�
 ログと起動確認スクリプトは`.local/validation/2026-10-09-soundset-variants/`に保存した
 （ローカルのみ、Git管理外）。既存データは変更せず、専用profileとDBを使用した。
 起動確認はmaster音量0で、手動聴取、macOS / Linuxの実機確認は未実施。
+
+## 2026-10-09 Result退出時のオプションパネルSE重複
+
+E1を押したままResultを退出すると、`leave_result()`内で物理押下状態をSelectへ同期する際に
+オプションパネルも即時更新され、`OptionOpen`が再生されていた。その後、Selectシーン開始処理が
+パネル状態を閉じ、最初の通常更新で再度開くため、同じSEがもう一度再生される。
+
+Result退出時は押下状態とEアクション保持だけを再構築し、パネル更新を行わないようにした。
+Selectのシーン開始処理後、通常の更新経路がパネルを一度だけ開く。通常の入力同期は従来どおり
+押下状態の再構築後にパネルを更新する。
+
+検証（Windows）:
+
+- E1を保持したままの状態再構築でOptionOpen遷移が起きず、Selectの最初の通常更新で一度だけ
+  開く回帰テストが成功。
+- `cargo fmt --all --check`、`cargo check -p bmz-player --locked`、
+  `cargo clippy -p bmz-player --all-targets --locked -- -D warnings`が成功。
+- `cargo test -p bmz-player --locked --no-fail-fast`: 2,325件成功、21件除外、失敗なし。
+- 実機での手動操作・聴取は未実施。
