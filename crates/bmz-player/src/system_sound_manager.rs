@@ -25,7 +25,7 @@ use bmz_audio::sample::DecodedSample;
 use bmz_core::ids::SoundId;
 use serde::{Deserialize, Serialize};
 
-use crate::system_sound::{SoundSetSelection, SoundType};
+use crate::system_sound::{ResolvedSystemSound, SoundSetSelection, SoundType};
 
 /// chart 側のキー音 SoundId と衝突しないよう確保する予約レンジの先頭。
 /// `SampleBank` は `Vec<Option<DecodedSample>>` で `SoundId.0` を index に取るため、
@@ -54,11 +54,28 @@ pub struct SystemSoundPrepareStats {
 pub struct PreparedSystemSoundSet {
     pub(crate) normalization_paths: HashMap<SoundType, PathBuf>,
     normalization_keys: HashMap<SoundType, LoudnessCacheKey>,
+    source_fingerprint: Option<SystemSoundSourceFingerprint>,
     samples: Vec<(SoundType, SoundId, DecodedSample)>,
     looping_sounds: HashSet<SoundType>,
     bgm_normalization_gains: HashMap<SoundType, f32>,
     pub normalization_analysis_enabled: bool,
+    pub(crate) reused_existing_sound_set: bool,
     pub stats: SystemSoundPrepareStats,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SystemSoundSourceFingerprint {
+    selection: SoundSetSelection,
+    output_sample_rate: u32,
+    candidates: Vec<Vec<SystemSoundCandidateFingerprint>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SystemSoundCandidateFingerprint {
+    path: String,
+    file_len: u64,
+    modified_ns: u64,
+    loop_playback: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,6 +117,7 @@ struct LoudnessCacheFile {
 pub struct SystemSoundManager {
     normalization_paths: HashMap<SoundType, PathBuf>,
     normalization_keys: HashMap<SoundType, LoudnessCacheKey>,
+    source_fingerprint: Option<SystemSoundSourceFingerprint>,
     engine: AudioEngineHandle,
     id_map: HashMap<SoundType, SoundId>,
     looping_sounds: HashSet<SoundType>,
@@ -162,7 +180,50 @@ impl SystemSoundManager {
         output_sample_rate: u32,
         cache_dir: Option<&Path>,
     ) -> PreparedSystemSoundSet {
+        Self::prepare_with_source_reuse(
+            selection,
+            normalize_bgm_volume,
+            output_sample_rate,
+            cache_dir,
+            None,
+        )
+    }
+
+    /// Reuses the applied sound set when a Select return randomly chooses the same unchanged
+    /// files. Fingerprinting and any required decoding stay on the worker thread.
+    pub(crate) fn prepare_with_source_reuse(
+        selection: &SoundSetSelection,
+        normalize_bgm_volume: bool,
+        output_sample_rate: u32,
+        cache_dir: Option<&Path>,
+        previous_fingerprint: Option<&SystemSoundSourceFingerprint>,
+    ) -> PreparedSystemSoundSet {
         let total_started_at = Instant::now();
+        let candidates_by_type = SoundType::ALL
+            .iter()
+            .map(|sound_type| selection.candidates(*sound_type))
+            .collect::<Vec<_>>();
+        let source_fingerprint =
+            system_sound_source_fingerprint(selection, output_sample_rate, &candidates_by_type);
+        if source_fingerprint
+            .as_ref()
+            .is_some_and(|fingerprint| previous_fingerprint == Some(fingerprint))
+        {
+            return PreparedSystemSoundSet {
+                normalization_paths: HashMap::new(),
+                normalization_keys: HashMap::new(),
+                source_fingerprint,
+                samples: Vec::new(),
+                looping_sounds: HashSet::new(),
+                bgm_normalization_gains: HashMap::new(),
+                normalization_analysis_enabled: normalize_bgm_volume,
+                reused_existing_sound_set: true,
+                stats: SystemSoundPrepareStats {
+                    total_ms: elapsed_ms_u64(total_started_at),
+                    ..Default::default()
+                },
+            };
+        }
         let mut bgm_normalization_gains = HashMap::new();
         let mut normalization_paths = HashMap::new();
         let mut normalization_keys = HashMap::new();
@@ -172,11 +233,11 @@ impl SystemSoundManager {
         let mut stats = SystemSoundPrepareStats::default();
         let cache_path = cache_dir.map(|dir| dir.join(SYSTEM_BGM_LOUDNESS_CACHE_FILE));
         let mut cache = cache_path.as_deref().map(load_loudness_cache).unwrap_or_default();
-        let mut cache_changed = false;
+        let mut cache_updates = Vec::new();
 
         for (i, sound_type) in SoundType::ALL.iter().enumerate() {
             let id = SoundId(SYSTEM_SOUND_BASE + i as u32);
-            let candidates = selection.candidates(*sound_type);
+            let candidates = &candidates_by_type[i];
             if candidates.is_empty() {
                 tracing::info!(
                     sound_type = ?sound_type,
@@ -186,7 +247,7 @@ impl SystemSoundManager {
                 continue;
             }
             for candidate in candidates {
-                let path = candidate.path;
+                let path = candidate.path.clone();
                 let decode_started_at = Instant::now();
                 match loader.load(&path) {
                     Ok(sample) => {
@@ -220,13 +281,14 @@ impl SystemSoundManager {
                                 stats.analysis_count = stats.analysis_count.saturating_add(1);
                                 if let (Some(key), Some(analysis)) = (key, analysis) {
                                     cache.entries.retain(|entry| entry.key.path != key.path);
-                                    cache.entries.push(LoudnessCacheEntry {
+                                    let entry = LoudnessCacheEntry {
                                         key,
                                         loudness_lufs: analysis.loudness_lufs,
                                         short_term_lufs: analysis.short_term_lufs,
                                         peak_abs: analysis.peak_abs,
-                                    });
-                                    cache_changed = true;
+                                    };
+                                    cache.entries.push(entry.clone());
+                                    cache_updates.push(entry);
                                 }
                                 analysis
                             };
@@ -272,25 +334,21 @@ impl SystemSoundManager {
             }
         }
 
-        if cache_changed {
-            cache.version = SYSTEM_BGM_LOUDNESS_CACHE_FORMAT_VERSION;
-            if cache.entries.len() > MAX_SYSTEM_BGM_LOUDNESS_CACHE_ENTRIES {
-                cache.entries.drain(
-                    ..cache.entries.len().saturating_sub(MAX_SYSTEM_BGM_LOUDNESS_CACHE_ENTRIES),
-                );
-            }
-            if let Some(path) = cache_path.as_deref() {
-                save_loudness_cache(path, &cache);
-            }
+        if !cache_updates.is_empty()
+            && let Some(path) = cache_path.as_deref()
+        {
+            save_loudness_cache(path, &cache_updates);
         }
         stats.total_ms = elapsed_ms_u64(total_started_at);
         PreparedSystemSoundSet {
             normalization_paths,
             normalization_keys,
+            source_fingerprint,
             samples,
             looping_sounds,
             bgm_normalization_gains,
             normalization_analysis_enabled: normalize_bgm_volume,
+            reused_existing_sound_set: false,
             stats,
         }
     }
@@ -322,6 +380,7 @@ impl SystemSoundManager {
         );
         manager.normalization_paths = prepared.normalization_paths;
         manager.normalization_keys = prepared.normalization_keys;
+        manager.source_fingerprint = prepared.source_fingerprint;
         manager.looping_sounds = prepared.looping_sounds;
         manager
     }
@@ -344,6 +403,7 @@ impl SystemSoundManager {
         Self {
             normalization_paths: HashMap::new(),
             normalization_keys: HashMap::new(),
+            source_fingerprint: None,
             engine,
             looping_sounds: id_map.keys().copied().filter(SoundType::loops).collect(),
             id_map,
@@ -375,6 +435,10 @@ impl SystemSoundManager {
             && self.normalization_keys == prepared.normalization_keys
     }
 
+    pub(crate) fn source_fingerprint(&self) -> Option<&SystemSoundSourceFingerprint> {
+        self.source_fingerprint.as_ref()
+    }
+
     /// 適用済みサンプルのBGMパスだけをデコードして解析するworker向け処理。
     pub fn prepare_normalization_for_paths(
         paths: &HashMap<SoundType, PathBuf>,
@@ -383,7 +447,7 @@ impl SystemSoundManager {
         let started_at = Instant::now();
         let cache_path = cache_dir.map(|dir| dir.join(SYSTEM_BGM_LOUDNESS_CACHE_FILE));
         let mut cache = cache_path.as_deref().map(load_loudness_cache).unwrap_or_default();
-        let mut cache_changed = false;
+        let mut cache_updates = Vec::new();
         let mut gains = HashMap::new();
         let mut normalization_keys = HashMap::new();
         let mut stats = SystemSoundPrepareStats::default();
@@ -424,13 +488,14 @@ impl SystemSoundManager {
                 stats.analysis_count += 1;
                 if let (Some(key), Some(analysis)) = (key, analysis) {
                     cache.entries.retain(|entry| entry.key.path != key.path);
-                    cache.entries.push(LoudnessCacheEntry {
+                    let entry = LoudnessCacheEntry {
                         key,
                         loudness_lufs: analysis.loudness_lufs,
                         short_term_lufs: analysis.short_term_lufs,
                         peak_abs: analysis.peak_abs,
-                    });
-                    cache_changed = true;
+                    };
+                    cache.entries.push(entry.clone());
+                    cache_updates.push(entry);
                 }
                 analysis
             };
@@ -438,25 +503,21 @@ impl SystemSoundManager {
                 gains.insert(*sound_type, system_bgm_normalization_gain_for_analysis(analysis));
             }
         }
-        if cache_changed {
-            cache.version = SYSTEM_BGM_LOUDNESS_CACHE_FORMAT_VERSION;
-            if cache.entries.len() > MAX_SYSTEM_BGM_LOUDNESS_CACHE_ENTRIES {
-                cache.entries.drain(
-                    ..cache.entries.len().saturating_sub(MAX_SYSTEM_BGM_LOUDNESS_CACHE_ENTRIES),
-                );
-            }
-            if let Some(path) = cache_path.as_deref() {
-                save_loudness_cache(path, &cache);
-            }
+        if !cache_updates.is_empty()
+            && let Some(path) = cache_path.as_deref()
+        {
+            save_loudness_cache(path, &cache_updates);
         }
         stats.total_ms = elapsed_ms_u64(started_at);
         PreparedSystemSoundSet {
             normalization_paths: paths.clone(),
             normalization_keys,
+            source_fingerprint: None,
             samples: Vec::new(),
             looping_sounds: HashSet::new(),
             bgm_normalization_gains: gains,
             normalization_analysis_enabled: true,
+            reused_existing_sound_set: false,
             stats,
         }
     }
@@ -656,12 +717,45 @@ fn loudness_cache_key(path: &Path) -> Option<LoudnessCacheKey> {
     })
 }
 
+fn system_sound_source_fingerprint(
+    selection: &SoundSetSelection,
+    output_sample_rate: u32,
+    candidates: &[Vec<ResolvedSystemSound>],
+) -> Option<SystemSoundSourceFingerprint> {
+    let candidates = candidates
+        .iter()
+        .map(|candidates| {
+            candidates
+                .iter()
+                .map(|candidate| {
+                    let key = loudness_cache_key(&candidate.path)?;
+                    Some(SystemSoundCandidateFingerprint {
+                        path: key.path,
+                        file_len: key.file_len,
+                        modified_ns: key.modified_ns,
+                        loop_playback: candidate.loop_playback,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(SystemSoundSourceFingerprint {
+        selection: selection.clone(),
+        output_sample_rate,
+        candidates,
+    })
+}
+
 fn cache_path_text(path: &Path) -> String {
     path.canonicalize().unwrap_or_else(|_| PathBuf::from(path)).to_string_lossy().into_owned()
 }
 
 fn load_loudness_cache(path: &Path) -> LoudnessCacheFile {
     let _cache_guard = system_bgm_loudness_cache_io_guard();
+    read_loudness_cache(path)
+}
+
+fn read_loudness_cache(path: &Path) -> LoudnessCacheFile {
     let Ok(text) = std::fs::read_to_string(path) else {
         return LoudnessCacheFile {
             version: SYSTEM_BGM_LOUDNESS_CACHE_FORMAT_VERSION,
@@ -684,9 +778,20 @@ fn load_loudness_cache(path: &Path) -> LoudnessCacheFile {
     }
 }
 
-fn save_loudness_cache(path: &Path, cache: &LoudnessCacheFile) {
+fn save_loudness_cache(path: &Path, updates: &[LoudnessCacheEntry]) {
     let _cache_guard = system_bgm_loudness_cache_io_guard();
-    let result = serde_json::to_vec(cache)
+    let mut cache = read_loudness_cache(path);
+    cache.version = SYSTEM_BGM_LOUDNESS_CACHE_FORMAT_VERSION;
+    for update in updates {
+        cache.entries.retain(|entry| entry.key.path != update.key.path);
+        cache.entries.push(update.clone());
+    }
+    if cache.entries.len() > MAX_SYSTEM_BGM_LOUDNESS_CACHE_ENTRIES {
+        cache
+            .entries
+            .drain(..cache.entries.len().saturating_sub(MAX_SYSTEM_BGM_LOUDNESS_CACHE_ENTRIES));
+    }
+    let result = serde_json::to_vec(&cache)
         .map_err(anyhow::Error::from)
         .and_then(|bytes| std::fs::write(path, bytes).map_err(anyhow::Error::from));
     if let Err(error) = result {
@@ -764,6 +869,135 @@ mod tests {
         let changed = SystemSoundManager::prepare(&selection, true, 48_000, Some(&root));
         assert_eq!(changed.stats.analysis_count, 1);
         assert_eq!(changed.stats.cache_hit_count, 0);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn loudness_cache_save_merges_parallel_worker_updates() {
+        let root = test_temp_dir("parallel-loudness-cache");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join(SYSTEM_BGM_LOUDNESS_CACHE_FILE);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+        let workers = ["sound-a.wav", "sound-b.wav"].map(|sound_path| {
+            let path = path.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                // Both workers keep the same initial snapshot while analyzing different sounds.
+                let snapshot = load_loudness_cache(&path);
+                assert!(snapshot.entries.is_empty());
+                barrier.wait();
+
+                let update = LoudnessCacheEntry {
+                    key: LoudnessCacheKey {
+                        path: sound_path.to_owned(),
+                        file_len: 128,
+                        modified_ns: 256,
+                        analysis_version: SYSTEM_BGM_LOUDNESS_ANALYSIS_VERSION,
+                    },
+                    loudness_lufs: -12.0,
+                    short_term_lufs: -11.0,
+                    peak_abs: 0.5,
+                };
+                save_loudness_cache(&path, &[update]);
+            })
+        });
+
+        for worker in workers {
+            worker.join().expect("cache worker should finish");
+        }
+
+        let cache = load_loudness_cache(&path);
+        assert_eq!(cache.entries.len(), 2);
+        assert!(cache.entries.iter().any(|entry| entry.key.path == "sound-a.wav"));
+        assert!(cache.entries.iter().any(|entry| entry.key.path == "sound-b.wav"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prepare_reuses_unchanged_selected_sound_sources() {
+        let root = test_temp_dir("reuse-system-sound-set");
+        std::fs::create_dir_all(&root).unwrap();
+        write_test_wav(&root.join("select.wav"), 48_000);
+        let result_bgm = root.join("clear.wav");
+        write_test_wav(&result_bgm, 48_000);
+        let selection = SoundSetSelection { bgm_dir: Some(root.clone()), ..Default::default() };
+
+        let first = SystemSoundManager::prepare(&selection, false, 48_000, None);
+        let fingerprint = first.source_fingerprint.as_ref().unwrap();
+        let reused = SystemSoundManager::prepare_with_source_reuse(
+            &selection,
+            false,
+            48_000,
+            None,
+            Some(fingerprint),
+        );
+        assert!(reused.reused_existing_sound_set);
+        assert_eq!(reused.stats.decoded_count, 0);
+        assert!(reused.samples.is_empty());
+
+        let changed_rate = SystemSoundManager::prepare_with_source_reuse(
+            &selection,
+            false,
+            44_100,
+            None,
+            Some(fingerprint),
+        );
+        assert!(!changed_rate.reused_existing_sound_set);
+
+        write_test_wav(&result_bgm, 48_001);
+        let changed = SystemSoundManager::prepare_with_source_reuse(
+            &selection,
+            false,
+            48_000,
+            None,
+            Some(fingerprint),
+        );
+        assert!(!changed.reused_existing_sound_set);
+        assert_eq!(changed.stats.decoded_count, 2);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "manual system sound loading measurement"]
+    fn measure_long_result_bgm_decode_and_reselection_cost() {
+        const DURATION_SECONDS: u32 = 60;
+        let root = test_temp_dir("long-result-bgm-measurement");
+        std::fs::create_dir_all(&root).unwrap();
+        for sound_type in SoundType::RESULT_BGMS {
+            write_stereo_test_wav(&root.join(sound_type.file_name()), DURATION_SECONDS);
+        }
+        let selection = SoundSetSelection { bgm_dir: Some(root.clone()), ..Default::default() };
+
+        let first = SystemSoundManager::prepare(&selection, false, 48_000, None);
+        let second = SystemSoundManager::prepare(&selection, false, 48_000, None);
+        let reused = SystemSoundManager::prepare_with_source_reuse(
+            &selection,
+            false,
+            48_000,
+            None,
+            first.source_fingerprint.as_ref(),
+        );
+        let pcm_bytes = |prepared: &PreparedSystemSoundSet| {
+            prepared
+                .samples
+                .iter()
+                .map(|(_, _, sample)| sample.frames.len() * std::mem::size_of::<f32>())
+                .sum::<usize>()
+        };
+        let mib = |bytes: usize| bytes as f64 / (1024.0 * 1024.0);
+        println!(
+            "{}-second stereo RESULT set: first decode={} ms, reselect decode={} ms, unchanged-source reuse decode={} ms, retained PCM={} MiB, old/new overlap without reuse={} MiB, reuse keeps={} MiB",
+            DURATION_SECONDS,
+            first.stats.decode_ms,
+            second.stats.decode_ms,
+            reused.stats.decode_ms,
+            mib(pcm_bytes(&first)),
+            mib(pcm_bytes(&first) + pcm_bytes(&second)),
+            mib(pcm_bytes(&first) + pcm_bytes(&reused)),
+        );
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -1204,10 +1438,12 @@ mod tests {
         manager.apply_normalization_analysis(PreparedSystemSoundSet {
             normalization_paths: HashMap::new(),
             normalization_keys: HashMap::new(),
+            source_fingerprint: None,
             samples: Vec::new(),
             looping_sounds: HashSet::new(),
             bgm_normalization_gains: HashMap::from([(SoundType::Select, 0.25)]),
             normalization_analysis_enabled: true,
+            reused_existing_sound_set: false,
             stats: SystemSoundPrepareStats::default(),
         });
         manager.set_bgm_normalization_enabled(true);
@@ -1352,6 +1588,37 @@ mod tests {
             bytes.extend_from_slice(&sample.to_le_bytes());
         }
         std::fs::write(path, bytes).unwrap();
+    }
+
+    fn write_stereo_test_wav(path: &Path, duration_seconds: u32) {
+        use std::io::Write;
+
+        const SAMPLE_RATE: u32 = 48_000;
+        let frames = SAMPLE_RATE * duration_seconds;
+        let data_len = frames * 4;
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(b"RIFF").unwrap();
+        file.write_all(&(36u32 + data_len).to_le_bytes()).unwrap();
+        file.write_all(b"WAVEfmt ").unwrap();
+        file.write_all(&16u32.to_le_bytes()).unwrap();
+        file.write_all(&1u16.to_le_bytes()).unwrap();
+        file.write_all(&2u16.to_le_bytes()).unwrap();
+        file.write_all(&SAMPLE_RATE.to_le_bytes()).unwrap();
+        file.write_all(&(SAMPLE_RATE * 4).to_le_bytes()).unwrap();
+        file.write_all(&4u16.to_le_bytes()).unwrap();
+        file.write_all(&16u16.to_le_bytes()).unwrap();
+        file.write_all(b"data").unwrap();
+        file.write_all(&data_len.to_le_bytes()).unwrap();
+
+        let mut one_second = Vec::with_capacity((SAMPLE_RATE * 4) as usize);
+        for frame in 0..SAMPLE_RATE {
+            let sample = if frame.is_multiple_of(2) { 10_000i16 } else { -10_000i16 };
+            one_second.extend_from_slice(&sample.to_le_bytes());
+            one_second.extend_from_slice(&(-sample).to_le_bytes());
+        }
+        for _ in 0..duration_seconds {
+            file.write_all(&one_second).unwrap();
+        }
     }
 
     fn render(processor: &mut CommandedAudioEngine, start_frame: u64, frames: usize) -> Vec<f32> {

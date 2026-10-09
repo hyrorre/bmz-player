@@ -276,6 +276,14 @@ impl WinitApp {
             .then(|| self.audio.system_sound.as_ref().map(|manager| manager.normalization_paths()))
             .flatten()
             .unwrap_or_default();
+        let previous_source_fingerprint = (!normalization_only)
+            .then(|| {
+                self.audio
+                    .system_sound
+                    .as_ref()
+                    .and_then(|manager| manager.source_fingerprint().cloned())
+            })
+            .flatten();
         let normalize_bgm_volume = self.boot.profile_config.audio_mix.normalize_system_bgm_volume;
         let cache_dir = self.boot.app_paths.cache_dir.clone();
         let generation = if normalization_only {
@@ -295,11 +303,12 @@ impl WinitApp {
                     Some(&cache_dir),
                 )
             } else {
-                crate::system_sound_manager::SystemSoundManager::prepare(
+                crate::system_sound_manager::SystemSoundManager::prepare_with_source_reuse(
                     selection.as_ref().expect("set load has a selection"),
                     normalize_bgm_volume,
                     output_sample_rate,
                     Some(&cache_dir),
+                    previous_source_fingerprint.as_ref(),
                 )
             };
             let _ = tx.send(SystemSoundLoadWorkerResult { generation, prepared });
@@ -380,6 +389,16 @@ impl WinitApp {
                 current_generation,
                 "ignored stale system sound worker result"
             );
+            return;
+        }
+        if !normalization_only && result.prepared.reused_existing_sound_set {
+            tracing::info!(generation = result.generation, "reused unchanged system sound set");
+            if should_play_select_bgm_on_enter(
+                self.select.select_assets.preview_playing(),
+                self.audio.pending_system_sound.is_some(),
+            ) {
+                self.play_system_sound(crate::system_sound::SoundType::Select);
+            }
             return;
         }
         let normalize_bgm_volume = self.boot.profile_config.audio_mix.normalize_system_bgm_volume;

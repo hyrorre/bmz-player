@@ -152,3 +152,23 @@ Selectのシーン開始処理後、通常の更新経路がパネルを一度�
   `cargo clippy -p bmz-player --all-targets --locked -- -D warnings`が成功。
 - `cargo test -p bmz-player --locked --no-fail-fast`: 2,325件成功、21件除外、失敗なし。
 - 実機での手動操作・聴取は未実施。
+
+## 2026-10-10 レビュー指摘: キャッシュ競合と長尺RESULT BGM
+
+正規化キャッシュは、通常セット準備と正規化専用workerがそれぞれ古い全体snapshotを保存すると、
+後発workerが先発workerの追加entryを消せる状態だった。保存時にmutex下で最新ファイルを再読込し、
+今回のworkerが解析したpathだけをマージするよう変更した。2 workerが同じ空snapshotを読んでから
+並行保存するbarrier付き回帰テストを追加し、両entryが残ることを確認した。
+
+長尺RESULT BGMはWindows debug testで、合成した48 kHz stereo PCM16 WAVを5本・各60秒用意して計測した。
+正規化を無効にした状態で初回prepareのdecodeは1,143 ms、同じセットの再prepareは1,157 ms、
+同一source再利用時は0 msだった。f32 PCM保持量は1セット109.86 MiB、旧セットを保持したまま
+同じ5本を再ロードすると219.73 MiBだった。3分音源ならそれぞれ約329.59 MiB、約659.18 MiBになる
+単純比例の見積りである。これはDecodedSampleのPCM領域量で、OSが報告するプロセスpeak RSSではない。
+
+Select復帰時、前回と選択root/variant/SE set、候補ファイル一覧、各候補のsize・mtime・loop指定、
+出力sample rateが一致する場合は、workerが既存セットを再利用して再デコードしない。
+ファイルの追加・削除・変更や別セット選択時は通常どおり5種のRESULT BGMをロードするため、
+別セットへの切替時に長尺5本を同時保持するメモリ上限は残る。これを解消するにはRESULT入口時の
+遅延decodeまたはstreaming化が必要で、BGM/SE fallbackとRESULT開始タイミングを変える設計になるため、
+今回は既存挙動を保つ範囲で同一セット再利用までを実装した。

@@ -239,7 +239,7 @@ pub struct SoundSetRoot {
 }
 
 /// スキャンで選ばれた1つのBGMセット/バリエーションとSEセット。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SoundSetSelection {
     /// サウンドセットroot。対応するシステム音源を1つ以上含む。
     pub bgm_dir: Option<PathBuf>,
