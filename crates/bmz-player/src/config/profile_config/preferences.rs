@@ -273,7 +273,7 @@ pub fn default_system_se_volume() -> u32 {
 /// profile.toml の `[system_sound]` に配置する。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemSoundConfig {
-    /// サウンドセットのルート(`select.wav` を含むディレクトリの親)。
+    /// BGM探索ルート。対応する音源を直接含む最初のディレクトリをセットrootとする。
     /// Select / Decide / RESULT BGMと任意のSEをまとめる。保存キーは従来の`bgm_dir`を維持。
     /// 空文字列ならスキャンせず、`default_sound_dir` だけを参照する。
     #[serde(default)]

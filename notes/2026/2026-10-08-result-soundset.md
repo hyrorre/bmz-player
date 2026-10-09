@@ -89,3 +89,47 @@ macOS / Linuxでの実機確認と、実音源を使った手動の聴取・リ�
 全テストのログは`.local/validation/2026-10-09-result-soundset-review/test.log`、
 起動確認は同ディレクトリの`run-smoke.ps1`と`runtime/logs/bmz-player.2026-10-09.log`に保存した。
 手動聴取とmacOS / Linuxの実機確認は未実施。
+
+## 2026-10-09 共通音源と子フォルダのバリエーション
+
+`0a32da63`を基点に、ユーザー指定の`gpt-6-luna`で実装し、別のLunaによる読み取りレビューと
+親側の統合確認を行った。専用の`variants`フォルダを設けず、セット直下の任意名フォルダを使う。
+
+- `bgm_dir`から整理用フォルダを再帰走査し、対応するBGM / SEを直接含む最初のフォルダを
+  セットのルートとして確定する。`select`は必須ではなく、共通SEだけの親も認識する。
+- ルート直下で対応音源を持つ子をバリエーション候補にする。孫以降は探索しない。
+  非対応名の音声ファイルや、音源名と同じディレクトリは認識対象外とする。
+- セット、次にその子を均等に抽選する。子の数はセット自体の当選確率に影響しない。
+  候補一覧は起動・profile切替時に保持し、Select復帰時はキャッシュから再抽選する。
+- 同名音源は子、親、従来の補完先の順で試す。欠落・デコード失敗時は次の候補に進み、
+  別の子から補完しない。子の通常版は親の`.loop`版より優先する。
+- Resultのランク優先は維持する。AAAなら子の`aaa`、親の`aaa`、子の`clear`、親の`clear`、
+  ランクSE、clear SEの順とする。親子の音源も配置先に従ってBGM / SEとして扱う。
+- 親子の組み合わせはDecide / Play / ResultとSelectを経由しないリトライで保持する。
+  正規化には各音源が実際にロードされた子・親のパスを記録する。
+- 補完用SEセットは従来の`clear`マーカーで検出する。
+  動画出力は同じ候補構造から名前順で最初のセット・子を選ぶ。
+
+以前は親子それぞれの`select`を独立したセットとして検出していたが、現在は1セットとその子になる。
+独立したセットは、音源を含まない整理用フォルダの下へ兄弟として置く。
+配置例と優先順位を[サウンドセット仕様](../../docs/system-sound.md)に反映した。
+
+検証（Windows）:
+
+- `cargo fmt --check`、`cargo check -p bmz-player --locked`、
+  `cargo clippy -p bmz-player --all-targets --locked -- -D warnings`、
+  `cargo build -p bmz-player --locked`: 成功。
+- `cargo test -p bmz-player --locked --no-fail-fast`: 2,324件成功、21件除外、失敗なし。
+  SEのみのルート、Resultのみの子、孫の除外、二段抽選、候補の優先順、
+  子のデコード失敗時の親への補完、正規化パス、リンクの循環・別名重複を確認した。
+- `cargo test -p bmz-audio -p bmz-ffmpeg --locked`: bmz-audio 128件成功、3件除外。
+  bmz-ffmpegとdoc testも成功。
+- 共通SEだけの親と、Select / Result音源を持つ`style-a` / `style-b`を専用データに配置し、
+  Windows/DX12でサンプル譜面を自動プレイした。親と`style-b`の選択、10音源のロード、
+  音声出力開始、Resultの120フレーム描画、正常終了を確認した。
+
+全体テストは保存・ローカル通信・ディレクトリリンクを扱える通常権限で実行した。
+incremental cacheのhard link失敗に伴うコピーへの切り替えwarningは環境由来として残る。
+ログと起動確認スクリプトは`.local/validation/2026-10-09-soundset-variants/`に保存した
+（ローカルのみ、Git管理外）。既存データは変更せず、専用profileとDBを使用した。
+起動確認はmaster音量0で、手動聴取、macOS / Linuxの実機確認は未実施。

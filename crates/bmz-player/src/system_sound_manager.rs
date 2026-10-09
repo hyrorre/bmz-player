@@ -738,8 +738,12 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let select = root.join("select.wav");
         write_test_wav(&select, 48_000);
-        let selection =
-            SoundSetSelection { bgm_dir: Some(root.clone()), se_dir: None, default_dir: None };
+        let selection = SoundSetSelection {
+            bgm_dir: Some(root.clone()),
+            bgm_variant_dir: None,
+            se_dir: None,
+            default_dir: None,
+        };
 
         let disabled = SystemSoundManager::prepare(&selection, false, 48_000, Some(&root));
         assert_eq!(disabled.stats.analysis_count, 0);
@@ -776,8 +780,12 @@ mod tests {
         write_test_wav(&select_path, 48_000);
         write_test_wav(&result_bgm_path, 48_000);
         write_test_wav(&se.join("clear.wav"), 48_000);
-        let selection =
-            SoundSetSelection { bgm_dir: Some(bgm), se_dir: Some(se), default_dir: None };
+        let selection = SoundSetSelection {
+            bgm_dir: Some(bgm),
+            bgm_variant_dir: None,
+            se_dir: Some(se),
+            default_dir: None,
+        };
 
         let disabled = SystemSoundManager::prepare(&selection, false, 48_000, None);
         assert!(!disabled.normalization_analysis_enabled);
@@ -822,8 +830,12 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let select = root.join("select.wav");
         write_test_wav_at_rate(&select, 2, 24_000);
-        let selection =
-            SoundSetSelection { bgm_dir: Some(root.clone()), se_dir: None, default_dir: None };
+        let selection = SoundSetSelection {
+            bgm_dir: Some(root.clone()),
+            bgm_variant_dir: None,
+            se_dir: None,
+            default_dir: None,
+        };
 
         let prepared = SystemSoundManager::prepare(&selection, false, 48_000, None);
         let sample = prepared
@@ -865,8 +877,12 @@ mod tests {
         std::fs::write(se.join("a.wav"), b"broken").unwrap();
         write_test_wav(&default.join("a.wav"), 6);
         std::fs::write(bgm.join("fail.wav"), b"broken").unwrap();
-        let selection =
-            SoundSetSelection { bgm_dir: Some(bgm), se_dir: Some(se), default_dir: Some(default) };
+        let selection = SoundSetSelection {
+            bgm_dir: Some(bgm),
+            bgm_variant_dir: None,
+            se_dir: Some(se),
+            default_dir: Some(default),
+        };
         let prepared = SystemSoundManager::prepare(&selection, true, 48_000, None);
         for (sound, expected_frames) in [
             (SoundType::Scratch, 3),
@@ -884,6 +900,53 @@ mod tests {
         assert!(!prepared.samples.iter().any(|(sound, _, _)| *sound == SoundType::ResultBgmClear));
         assert!(!prepared.samples.iter().any(|(sound, _, _)| *sound == SoundType::ResultAA));
         assert_eq!(prepared.stats.analysis_count, 1, "only the Result BGM should be analyzed");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prepare_uses_variant_then_parent_and_falls_back_after_decode_failure() {
+        let root = test_temp_dir("variant-prepare-fallback");
+        let parent = root.join("set");
+        let child = parent.join("chosen");
+        let se = root.join("se");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::create_dir_all(&se).unwrap();
+        std::fs::write(child.join("scratch.wav"), b"broken").unwrap();
+        write_test_wav(&parent.join("scratch.wav"), 3);
+        write_test_wav(&child.join("clear.wav"), 2);
+        write_test_wav(&parent.join("clear.loop.wav"), 4);
+        write_test_wav(&parent.join("aaa.wav"), 5);
+        write_test_wav(&se.join("clear.wav"), 6);
+        let selection = SoundSetSelection {
+            bgm_dir: Some(parent.clone()),
+            bgm_variant_dir: Some(child.clone()),
+            se_dir: Some(se),
+            default_dir: None,
+        };
+
+        let prepared = SystemSoundManager::prepare(&selection, true, 48_000, None);
+
+        let frames_for = |kind| {
+            prepared
+                .samples
+                .iter()
+                .find_map(|(sound_type, _, sample)| {
+                    (*sound_type == kind).then_some(sample.frames.len())
+                })
+                .unwrap()
+        };
+        assert_eq!(frames_for(SoundType::Scratch), 3, "broken child should fall back to parent");
+        assert_eq!(frames_for(SoundType::ResultBgmClear), 2, "child plain file beats parent loop");
+        assert_eq!(frames_for(SoundType::ResultBgmAAA), 5, "rank BGM can come from parent");
+        assert!(!prepared.looping_sounds.contains(&SoundType::ResultBgmClear));
+        assert_eq!(
+            prepared.normalization_paths.get(&SoundType::ResultBgmClear),
+            Some(&child.join("clear.wav"))
+        );
+        assert_eq!(
+            prepared.normalization_paths.get(&SoundType::ResultBgmAAA),
+            Some(&parent.join("aaa.wav"))
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

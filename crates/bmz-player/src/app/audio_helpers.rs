@@ -324,10 +324,7 @@ pub(super) fn system_sound_catalog_from_boot(
     let bgm_candidates = if cfg.bgm_dir.is_empty() {
         Vec::new()
     } else {
-        crate::system_sound::scan_sound_sets(
-            Path::new(&cfg.bgm_dir),
-            crate::system_sound::SoundType::Select.file_name(),
-        )
+        crate::system_sound::scan_bgm_sound_sets(Path::new(&cfg.bgm_dir))
     };
     let se_candidates = if cfg.se_dir.is_empty() {
         Vec::new()
@@ -343,7 +340,7 @@ pub(super) fn system_sound_catalog_from_boot(
         Some(PathBuf::from(&cfg.default_sound_dir))
     };
     crate::system_sound::SoundSetCatalog {
-        bgm_dirs: bgm_candidates,
+        bgm_roots: bgm_candidates,
         se_dirs: se_candidates,
         default_dir,
     }
@@ -355,6 +352,7 @@ pub(super) fn system_sound_selection_from_catalog(
     let selection = catalog.select_random();
     tracing::info!(
         bgm_dir = ?selection.bgm_dir,
+        bgm_variant_dir = ?selection.bgm_variant_dir,
         se_dir = ?selection.se_dir,
         "selected system sound sets"
     );

@@ -4,8 +4,8 @@
 //! に倣い、以下を扱う。
 //!
 //! - 起動時に「BGM セット」と「SE セット」のディレクトリツリーをスキャンして候補を集める。
-//! - サウンドセットは `select.wav`、補完用SEセットは `clear.wav` を含むディレクトリ。
-//! - 初期化時と選曲画面へ戻るたび、ランダムに 1 セットずつ選んで各 [`SoundType`] の
+//! - BGMセットは対応音源を直接含むディレクトリと、その直下にあるバリエーション。
+//! - 初期化時と選曲画面へ戻るたび、rootとバリエーションを二段階で選び、各 [`SoundType`] の
 //!   ファイルパスを解決する。
 //! - SEはサウンドセット、SEセット、`defaultsound/` の順に解決する。
 //!   RESULT入口音はサウンドセットではBGM、SEセットと既定音源では単発SEとして扱う。
@@ -231,11 +231,20 @@ pub struct ResolvedSystemSound {
     pub loop_playback: bool,
 }
 
-/// スキャンで選ばれた1つの BGM セット / SE セットディレクトリ。
+/// BGMセットrootと、その直下にあるバリエーション候補。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SoundSetRoot {
+    pub dir: PathBuf,
+    pub variants: Vec<PathBuf>,
+}
+
+/// スキャンで選ばれた1つのBGMセット/バリエーションとSEセット。
 #[derive(Debug, Clone, Default)]
 pub struct SoundSetSelection {
-    /// サウンドセットディレクトリ。`select.wav` を含み、BGMと任意のSEをまとめる。
+    /// サウンドセットroot。対応するシステム音源を1つ以上含む。
     pub bgm_dir: Option<PathBuf>,
+    /// root直下から抽選されたバリエーション。全音種で共通して使う。
+    pub bgm_variant_dir: Option<PathBuf>,
     /// SE セットディレクトリ。`clear.wav` を含むディレクトリ。
     pub se_dir: Option<PathBuf>,
     /// `defaultsound/` のパス。各ファイルのフォールバック検索に使う。
@@ -248,14 +257,14 @@ pub struct SoundSetSelection {
 /// [`SoundSetSelection`] を再抽選する。
 #[derive(Debug, Clone, Default)]
 pub struct SoundSetCatalog {
-    pub bgm_dirs: Vec<PathBuf>,
+    pub bgm_roots: Vec<SoundSetRoot>,
     pub se_dirs: Vec<PathBuf>,
     pub default_dir: Option<PathBuf>,
 }
 
 impl SoundSetCatalog {
     pub fn select_random(&self) -> SoundSetSelection {
-        select_random_sound_set(&self.bgm_dirs, &self.se_dirs, self.default_dir.clone())
+        select_random_sound_set(&self.bgm_roots, &self.se_dirs, self.default_dir.clone())
     }
 }
 
@@ -267,36 +276,38 @@ impl SoundSetSelection {
         self.candidates(sound_type).into_iter().next().map(|sound| sound.path)
     }
 
-    /// RESULT BGMはサウンドセット内の`.loop`版、通常版の順に解決する。
-    /// 既存BGMはサウンドセット、default、SEはサウンドセット、SEセット、defaultの順。
+    /// 選択されたchild、root、既存fallbackの順で各音源を解決する。
+    /// RESULT BGMは各layer内で`.loop`版、通常版の順に解決する。
     /// ただしRESULT入口SEはSEセットとdefaultだけから解決する（セット内の同名音源はBGM）。
     /// 各段階で拡張子優先順を保ち、読み込みに失敗した候補の次を試せるよう全候補を返す。
     pub fn candidates(&self, sound_type: SoundType) -> Vec<ResolvedSystemSound> {
         let stem = sound_type.stem();
         let mut candidates = Vec::new();
-        let soundset_dir = self.bgm_dir.as_deref().filter(|_| {
-            !matches!(
-                sound_type,
-                SoundType::ResultClear
-                    | SoundType::ResultFail
-                    | SoundType::ResultA
-                    | SoundType::ResultAA
-                    | SoundType::ResultAAA
-            )
-        });
-        if let Some(dir) = soundset_dir {
-            if sound_type.is_result_bgm() {
+        let soundset_layers = [self.bgm_variant_dir.as_deref(), self.bgm_dir.as_deref()];
+        let include_soundset = !matches!(
+            sound_type,
+            SoundType::ResultClear
+                | SoundType::ResultFail
+                | SoundType::ResultA
+                | SoundType::ResultAA
+                | SoundType::ResultAAA
+        );
+        if include_soundset {
+            for dir in soundset_layers.into_iter().flatten() {
+                if sound_type.is_result_bgm() {
+                    candidates.extend(
+                        files_with_extensions(dir, &format!("{stem}.loop"))
+                            .into_iter()
+                            .map(|path| ResolvedSystemSound { path, loop_playback: true }),
+                    );
+                }
                 candidates.extend(
-                    files_with_extensions(dir, &format!("{stem}.loop"))
-                        .into_iter()
-                        .map(|path| ResolvedSystemSound { path, loop_playback: true }),
+                    files_with_extensions(dir, stem).into_iter().map(|path| ResolvedSystemSound {
+                        path,
+                        loop_playback: sound_type.loops(),
+                    }),
                 );
             }
-            candidates.extend(
-                files_with_extensions(dir, stem)
-                    .into_iter()
-                    .map(|path| ResolvedSystemSound { path, loop_playback: sound_type.loops() }),
-            );
         }
         if sound_type.is_result_bgm() {
             return candidates;
@@ -315,6 +326,71 @@ impl SoundSetSelection {
         }
         candidates
     }
+}
+
+/// BGM設定root配下から、音源を直接含む最初のディレクトリごとにrootを検出する。
+/// 音源を含まない整理用階層だけを再帰し、root直下の音源ディレクトリはvariantsにする。
+pub fn scan_bgm_sound_sets(root: &Path) -> Vec<SoundSetRoot> {
+    let mut roots = Vec::new();
+    scan_bgm_sound_sets_into(
+        root,
+        &mut roots,
+        &mut crate::directory_scan::DirectoryScan::default(),
+    );
+    roots.sort_by(|left, right| left.dir.cmp(&right.dir));
+    roots
+}
+
+fn scan_bgm_sound_sets_into(
+    dir: &Path,
+    roots: &mut Vec<SoundSetRoot>,
+    scan: &mut crate::directory_scan::DirectoryScan,
+) {
+    let Some(entries) = scan.read_dir_once(dir) else {
+        return;
+    };
+    let entries = entries.flatten().map(|entry| entry.path()).collect::<Vec<_>>();
+    let mut child_dirs = entries.iter().filter(|path| path.is_dir()).cloned().collect::<Vec<_>>();
+    child_dirs.sort();
+    if directory_has_supported_sound(&entries) {
+        let variants = child_dirs
+            .into_iter()
+            .filter(|path| {
+                scan.read_dir_once(path).is_some_and(|children| {
+                    directory_has_supported_sound(
+                        &children.flatten().map(|entry| entry.path()).collect::<Vec<_>>(),
+                    )
+                })
+            })
+            .collect();
+        roots.push(SoundSetRoot { dir: dir.to_path_buf(), variants });
+        return;
+    }
+    for child in child_dirs {
+        scan_bgm_sound_sets_into(&child, roots, scan);
+    }
+}
+
+fn directory_has_supported_sound(entries: &[PathBuf]) -> bool {
+    entries.iter().any(|path| {
+        path.is_file()
+            && SoundType::ALL.iter().any(|sound_type| is_supported_sound_path(path, *sound_type))
+    })
+}
+
+fn is_supported_sound_path(path: &Path, sound_type: SoundType) -> bool {
+    let Some(stem) = path.file_stem().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
+        return false;
+    };
+    if !SUPPORTED_EXTENSIONS.iter().any(|supported| extension.eq_ignore_ascii_case(supported)) {
+        return false;
+    }
+    stem.eq_ignore_ascii_case(sound_type.stem())
+        || (sound_type.is_result_bgm()
+            && stem.eq_ignore_ascii_case(&format!("{}.loop", sound_type.stem())))
 }
 
 /// `root` 配下を再帰的に走査し、`marker_filename` を含むディレクトリのリストを返す。
@@ -375,14 +451,30 @@ fn is_marker_file(path: &Path, marker_stem: &str) -> bool {
     SUPPORTED_EXTENSIONS.iter().any(|supported| *supported == ext_lower)
 }
 
-/// `bgms` と `ses` からランダムに 1 セットずつ選んで [`SoundSetSelection`] を作る。
+/// `bgm_roots` と `ses` からランダムに1セットずつ選んで [`SoundSetSelection`] を作る。
 /// 候補が空ならそれぞれ `None`。`default_dir` はそのまま転写する。
 pub fn select_random_sound_set(
-    bgms: &[PathBuf],
+    bgm_roots: &[SoundSetRoot],
     ses: &[PathBuf],
     default_dir: Option<PathBuf>,
 ) -> SoundSetSelection {
-    SoundSetSelection { bgm_dir: pick_random(bgms), se_dir: pick_random(ses), default_dir }
+    let (bgm_dir, bgm_variant_dir) =
+        select_bgm_set_with(bgm_roots, crate::random_index::random_index);
+    SoundSetSelection { bgm_dir, bgm_variant_dir, se_dir: pick_random(ses), default_dir }
+}
+
+fn select_bgm_set_with(
+    roots: &[SoundSetRoot],
+    mut choose_index: impl FnMut(usize) -> Option<usize>,
+) -> (Option<PathBuf>, Option<PathBuf>) {
+    let Some(root_index) = choose_index(roots.len()).filter(|&index| index < roots.len()) else {
+        return (None, None);
+    };
+    let root = &roots[root_index];
+    let variant = choose_index(root.variants.len())
+        .filter(|&index| index < root.variants.len())
+        .map(|index| root.variants[index].clone());
+    (Some(root.dir.clone()), variant)
 }
 
 fn pick_random(paths: &[PathBuf]) -> Option<PathBuf> {
@@ -482,6 +574,14 @@ mod tests {
                 canonical.sort();
                 assert_eq!(canonical, expected);
             }
+
+            let bgm_sets = scan_bgm_sound_sets(root);
+            assert_eq!(bgm_sets.len(), 1);
+            assert_eq!(bgm_sets[0].dir, *root);
+            assert_eq!(bgm_sets[0].variants.len(), 1);
+            let variant = bgm_sets[0].variants[0].canonicalize().unwrap();
+            assert_eq!(variant, fixture.nested.canonicalize().unwrap());
+            assert_ne!(variant, root.canonicalize().unwrap());
         }
     }
 
@@ -495,6 +595,7 @@ mod tests {
 
         let selection = SoundSetSelection {
             bgm_dir: Some(bgm_dir.clone()),
+            bgm_variant_dir: None,
             se_dir: None,
             default_dir: Some(default_dir.clone()),
         };
@@ -564,6 +665,103 @@ mod tests {
     }
 
     #[test]
+    fn scan_bgm_sound_sets_finds_se_roots_and_only_direct_variants() {
+        let root = temp_dir("bgm-roots");
+        let organize = root.join("organize");
+        let nested_root = organize.join("deep").join("result-only-root");
+        let se_root = organize.join("se-only-root");
+        let result_variant = se_root.join("ResultOnly");
+        let grandchild = result_variant.join("grandchild");
+        let invalid_variant = se_root.join("invalid");
+        let sound_named_directory = se_root.join("select.wav");
+        std::fs::create_dir_all(&nested_root).unwrap();
+        std::fs::create_dir_all(&grandchild).unwrap();
+        std::fs::create_dir_all(&sound_named_directory).unwrap();
+        std::fs::create_dir_all(invalid_variant.join("select.wav")).unwrap();
+        std::fs::write(nested_root.join("AAA.FLAC"), b"x").unwrap();
+        std::fs::write(se_root.join("SCRATCH.OGG"), b"x").unwrap();
+        std::fs::write(result_variant.join("CLEAR.LOOP.OGG"), b"x").unwrap();
+        std::fs::write(grandchild.join("select.wav"), b"x").unwrap();
+        std::fs::write(invalid_variant.join("readme.ogg"), b"x").unwrap();
+        std::fs::write(invalid_variant.join("scratch.loop.ogg"), b"x").unwrap();
+
+        let sets = scan_bgm_sound_sets(&root);
+
+        assert_eq!(
+            sets,
+            vec![
+                SoundSetRoot { dir: nested_root, variants: vec![] },
+                SoundSetRoot { dir: se_root, variants: vec![result_variant] },
+            ]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn selected_variant_precedes_parent_without_cross_variant_fallback() {
+        let root = temp_dir("variant-priority");
+        let parent = root.join("set");
+        let child = parent.join("chosen");
+        let sibling = parent.join("other");
+        let se = root.join("se");
+        let default = root.join("default");
+        for dir in [&child, &sibling, &se, &default] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        for (dir, name) in [
+            (&child, "clear.ogg"),
+            (&parent, "clear.loop.ogg"),
+            (&parent, "aaa.wav"),
+            (&sibling, "decide.wav"),
+            (&se, "clear.wav"),
+            (&se, "scratch.wav"),
+            (&default, "clear.wav"),
+            (&default, "scratch.wav"),
+        ] {
+            std::fs::write(dir.join(name), b"fixture").unwrap();
+        }
+        let selection = SoundSetSelection {
+            bgm_dir: Some(parent.clone()),
+            bgm_variant_dir: Some(child.clone()),
+            se_dir: Some(se.clone()),
+            default_dir: Some(default.clone()),
+        };
+
+        assert_eq!(
+            selection.candidates(SoundType::ResultBgmClear),
+            vec![
+                ResolvedSystemSound { path: child.join("clear.ogg"), loop_playback: false },
+                ResolvedSystemSound { path: parent.join("clear.loop.ogg"), loop_playback: true },
+            ]
+        );
+        assert_eq!(
+            selection.candidates(SoundType::ResultBgmAAA),
+            vec![ResolvedSystemSound { path: parent.join("aaa.wav"), loop_playback: false }]
+        );
+        assert_eq!(
+            selection.candidates(SoundType::ResultClear),
+            vec![
+                ResolvedSystemSound { path: se.join("clear.wav"), loop_playback: false },
+                ResolvedSystemSound { path: default.join("clear.wav"), loop_playback: false },
+            ]
+        );
+        assert_eq!(
+            selection.candidates(SoundType::Scratch),
+            vec![
+                ResolvedSystemSound { path: se.join("scratch.wav"), loop_playback: false },
+                ResolvedSystemSound { path: default.join("scratch.wav"), loop_playback: false },
+            ]
+        );
+        assert!(
+            !selection
+                .candidates(SoundType::Decide)
+                .iter()
+                .any(|candidate| candidate.path.starts_with(&sibling))
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn resolve_falls_back_through_supported_extensions() {
         // se_dir に scratch.ogg がある場合、SoundType::Scratch.file_name() = "scratch.wav"
         // でも解決できること。
@@ -571,8 +769,12 @@ mod tests {
         std::fs::write(se_dir.join("scratch.ogg"), b"x").unwrap();
         std::fs::write(se_dir.join("clear.flac"), b"x").unwrap();
 
-        let selection =
-            SoundSetSelection { bgm_dir: None, se_dir: Some(se_dir.clone()), default_dir: None };
+        let selection = SoundSetSelection {
+            bgm_dir: None,
+            bgm_variant_dir: None,
+            se_dir: Some(se_dir.clone()),
+            default_dir: None,
+        };
 
         assert_eq!(selection.resolve(SoundType::Scratch), Some(se_dir.join("scratch.ogg")));
         assert_eq!(selection.resolve(SoundType::ResultClear), Some(se_dir.join("clear.flac")));
@@ -585,21 +787,53 @@ mod tests {
     fn select_random_returns_none_when_no_candidates() {
         let selection = select_random_sound_set(&[], &[], None);
         assert!(selection.bgm_dir.is_none());
+        assert!(selection.bgm_variant_dir.is_none());
         assert!(selection.se_dir.is_none());
         assert!(selection.default_dir.is_none());
     }
 
     #[test]
     fn select_random_picks_a_candidate_when_present() {
-        let bgm = vec![PathBuf::from("/bgm/set1")];
+        let bgm = vec![SoundSetRoot {
+            dir: PathBuf::from("/bgm/set1"),
+            variants: vec![PathBuf::from("/bgm/set1/one")],
+        }];
         let se = vec![PathBuf::from("/se/set1"), PathBuf::from("/se/set2")];
         let default = PathBuf::from("/default");
 
         let selection = select_random_sound_set(&bgm, &se, Some(default.clone()));
 
-        assert_eq!(selection.bgm_dir.as_deref(), Some(bgm[0].as_path()));
+        assert_eq!(selection.bgm_dir.as_deref(), Some(bgm[0].dir.as_path()));
+        assert_eq!(selection.bgm_variant_dir.as_deref(), Some(bgm[0].variants[0].as_path()));
         assert!(se.iter().any(|p| Some(p.as_path()) == selection.se_dir.as_deref()));
         assert_eq!(selection.default_dir.as_deref(), Some(default.as_path()));
+    }
+
+    #[test]
+    fn bgm_root_and_variant_are_selected_in_two_independent_draws() {
+        let roots = vec![
+            SoundSetRoot {
+                dir: PathBuf::from("/bgm/a"),
+                variants: vec![PathBuf::from("/bgm/a/only")],
+            },
+            SoundSetRoot {
+                dir: PathBuf::from("/bgm/b"),
+                variants: vec![
+                    PathBuf::from("/bgm/b/one"),
+                    PathBuf::from("/bgm/b/two"),
+                    PathBuf::from("/bgm/b/three"),
+                ],
+            },
+        ];
+        let mut requested_bounds = Vec::new();
+        let (root, variant) = select_bgm_set_with(&roots, |len| {
+            requested_bounds.push(len);
+            Some(if len == 2 { 1 } else { 2 })
+        });
+
+        assert_eq!(requested_bounds, [2, 3]);
+        assert_eq!(root, Some(PathBuf::from("/bgm/b")));
+        assert_eq!(variant, Some(PathBuf::from("/bgm/b/three")));
     }
 
     #[test]
@@ -608,7 +842,7 @@ mod tests {
         let se = PathBuf::from("/se/set1");
         let default = PathBuf::from("/default");
         let catalog = SoundSetCatalog {
-            bgm_dirs: vec![bgm.clone()],
+            bgm_roots: vec![SoundSetRoot { dir: bgm.clone(), variants: vec![] }],
             se_dirs: vec![se.clone()],
             default_dir: Some(default.clone()),
         };
@@ -631,6 +865,7 @@ mod tests {
         }
         let selection = SoundSetSelection {
             bgm_dir: Some(bgm.clone()),
+            bgm_variant_dir: None,
             se_dir: Some(se.clone()),
             default_dir: Some(default.clone()),
         };
@@ -682,6 +917,7 @@ mod tests {
         }
         let selection = SoundSetSelection {
             bgm_dir: Some(bgm.clone()),
+            bgm_variant_dir: None,
             se_dir: Some(se),
             default_dir: Some(default),
         };
