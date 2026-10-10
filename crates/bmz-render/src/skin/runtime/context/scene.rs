@@ -13,6 +13,7 @@ impl Default for SkinContext {
                 crate::select_settings_dest::SelectSettingsDestIndex::default(),
             ),
             result_render_cache: Arc::new(Mutex::new(ResultRenderCache::default())),
+            playfield_clip_candidate: false,
         }
     }
 }
@@ -30,6 +31,7 @@ impl SkinContext {
                 crate::select_settings_dest::SelectSettingsDestIndex::default(),
             ),
             result_render_cache: Arc::new(Mutex::new(ResultRenderCache::default())),
+            playfield_clip_candidate: false,
         }
     }
 
@@ -43,6 +45,7 @@ impl SkinContext {
         let document_sources: HashMap<_, _> =
             document_sources.into_iter().map(|source| (source.source_id.clone(), source)).collect();
         let runtime_document_sources = Arc::new(Mutex::new(document_sources.clone()));
+        let playfield_clip_candidate = super::play::notes_clip_candidate(&document);
         Self {
             manifest,
             document: Some(document),
@@ -52,6 +55,7 @@ impl SkinContext {
             select_render_cache: Arc::new(Mutex::new(SelectRenderCache::default())),
             select_settings_dest_index,
             result_render_cache: Arc::new(Mutex::new(ResultRenderCache::default())),
+            playfield_clip_candidate,
         }
     }
 

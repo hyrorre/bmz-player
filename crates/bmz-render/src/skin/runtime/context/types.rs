@@ -179,6 +179,9 @@ pub struct SkinContext {
     pub(super) select_settings_dest_index:
         Arc<crate::select_settings_dest::SelectSettingsDestIndex>,
     pub(super) result_render_cache: Arc<Mutex<ResultRenderCache>>,
+    /// Whether any option branch has a clipped `notes` destination. Destinations are
+    /// fixed at load, so skins without one skip the per-frame playfield clip lookup.
+    pub(in crate::skin) playfield_clip_candidate: bool,
 }
 
 impl PartialEq for SkinContext {

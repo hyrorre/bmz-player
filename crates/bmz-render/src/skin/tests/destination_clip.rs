@@ -430,3 +430,27 @@ fn destination_clip_hides_inactive_notes_timer_without_treating_it_as_no_clip() 
     assert_eq!(rect.width, 0.0);
     assert_eq!(rect.height, 0.0);
 }
+
+#[test]
+fn playfield_clip_candidate_covers_option_branches_and_skips_unclipped_notes() {
+    let unclipped: SkinDocument = serde_json::from_value(json!({
+        "w":100,"h":100,"destination":[{"id":"notes","dst":[{"time":0,"x":0,"y":0,"w":80,"h":60}]}]
+    }))
+    .unwrap();
+    let context = SkinContext::from_manifest_and_document(default_skin_manifest(), unclipped, []);
+    assert!(!context.playfield_clip_candidate);
+    assert!(
+        context
+            .document_playfield_clip(&SkinDrawState::default(), &SkinTextState::default())
+            .is_none()
+    );
+
+    // A clip inside an option branch keeps the per-frame lookup, whichever option is active.
+    let branched: SkinDocument = serde_json::from_value(json!({
+        "w":100,"h":100,
+        "destination":[{"if":[901],"values":[{"id":"notes","dst":[clip_frame()]}]}]
+    }))
+    .unwrap();
+    let context = SkinContext::from_manifest_and_document(default_skin_manifest(), branched, []);
+    assert!(context.playfield_clip_candidate);
+}

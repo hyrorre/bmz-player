@@ -4,6 +4,17 @@ use super::*;
 mod layout;
 pub(crate) use layout::PreparedNoteLayout;
 
+pub(super) fn notes_clip_candidate(document: &SkinDocument) -> bool {
+    document.destination.iter().any(|entry| match entry {
+        DestinationListEntry::Single(destination) => {
+            destination.id == "notes" && destination_has_clip(destination)
+        }
+        DestinationListEntry::Conditional { destinations, .. } => destinations
+            .iter()
+            .any(|destination| destination.id == "notes" && destination_has_clip(destination)),
+    })
+}
+
 impl SkinContext {
     /// The notes object owns the clip for the complete LaneRenderer playfield.
     /// A clipped destination whose conditions/timer are inactive hides that object.
@@ -12,6 +23,9 @@ impl SkinContext {
         state: &SkinDrawState,
         text: &SkinTextState<'_>,
     ) -> Option<Rect> {
+        if !self.playfield_clip_candidate {
+            return None;
+        }
         let document = self.document.as_ref()?;
         let enabled_options = document.enabled_options();
         let destination = document
