@@ -58,7 +58,8 @@ fn route_change_focus_loss_and_lease_expiry_release_and_inhibit() {
     routing.set_route(Some(route(input.clone())));
     routing.set_native(true);
     routing.push(event(InputKind::Press));
-    assert!(!routing.leased(Instant::now() + Duration::from_millis(100)));
+    assert!(routing.leased(Instant::now() + Duration::from_millis(100)));
+    assert!(!routing.leased(Instant::now() + Duration::from_millis(300)));
     routing.set_route(Some(route(next.clone())));
     assert_eq!(input.drain_events().len(), 2);
     assert!(next.drain_events().is_empty());
@@ -174,4 +175,16 @@ fn arbiter_preserves_the_exact_input_sequence_used_by_gameplay() {
             .collect::<Vec<_>>()
     };
     assert_eq!(describe(direct.drain_events()), describe(native.drain_events()));
+}
+
+#[test]
+fn lapsed_lease_blocks_new_presses_but_keeps_releases_of_holds() {
+    assert!(admits(InputKind::Press, true, true));
+    assert!(admits(InputKind::Release, true, true));
+    // A redraw stall must not cut a long note that is already held.
+    assert!(!admits(InputKind::Press, true, false));
+    assert!(admits(InputKind::Release, true, false));
+    // Focus/clock failures still deny everything; held keys are released by the reset.
+    assert!(!admits(InputKind::Press, false, true));
+    assert!(!admits(InputKind::Release, false, true));
 }

@@ -35,7 +35,15 @@ pub fn unsupported_key_seen() -> bool {
 pub fn status() -> u8 {
     STATUS.load(Ordering::Acquire)
 }
-const LEASE: Duration = Duration::from_millis(25);
+/// How long window-side UI suppression state stays trusted. A lapsed lease only stops
+/// new presses: gameplay runs on its own thread, so a redraw stall must not cut holds.
+const LEASE: Duration = Duration::from_millis(250);
+
+/// Hard conditions (native, focus, clock) reset holds when they fail; a lapsed lease only
+/// keeps new presses out, so releases of keys already delivered still arrive.
+fn admits(kind: InputKind, permitted: bool, leased: bool) -> bool {
+    permitted && (leased || kind == InputKind::Release)
+}
 
 #[derive(Default)]
 struct Routing {
@@ -415,12 +423,17 @@ fn run(
             break;
         }
         let sample = Clock::sample();
-        let continuous = sample.is_some_and(|s| clock.as_ref().is_some_and(|c| c.continuous(s)));
+        // A preempted sample proves nothing about the clocks; keep the current mapping.
+        let continuous = match sample {
+            Some(sample) => clock.as_ref().is_some_and(|c| c.continuous(sample)),
+            None => clock.is_some(),
+        };
         // Do not query X while holding the routing lock; replies have a bounded wait.
         let focused = !devices.is_empty() && focus.focused();
         let mut route = routing.lock().unwrap_or_else(|e| e.into_inner());
         let input_overflow = route.route.as_ref().map_or(0, |r| r.input.overflow_count());
-        let permitted = route.native && focused && route.leased(Instant::now()) && continuous;
+        let permitted = route.native && focused && continuous;
+        let leased = route.leased(Instant::now());
         let reset = generation != route.generation
             || active != permitted
             || !continuous
@@ -447,7 +460,7 @@ fn run(
             active = permitted;
         }
         if route.native {
-            STATUS.store(if permitted { 1 } else { 7 }, Ordering::Release);
+            STATUS.store(if permitted && leased { 1 } else { 7 }, Ordering::Release);
         }
         let mut batches: Vec<VecDeque<evdev::InputEvent>> = vec![VecDeque::new(); devices.len()];
         for index in 0..devices.len() {
@@ -509,7 +522,7 @@ fn run(
                 }
                 continue;
             };
-            if !permitted || reset {
+            if reset || !admits(kind, permitted, leased) {
                 if kind == InputKind::Press {
                     devices[index].keys.blocked.insert(code);
                 }

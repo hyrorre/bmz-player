@@ -21,7 +21,11 @@ pub(super) struct Clock {
 }
 
 impl Clock {
+    /// Retries a bracket stretched by preemption before giving up.
     pub(super) fn sample() -> Option<(u128, u128, u128)> {
+        (0..4).find_map(|_| Self::sample_once())
+    }
+    fn sample_once() -> Option<(u128, u128, u128)> {
         let before = monotonic_timestamp_ns();
         let os = clock_ns(libc::CLOCK_MONOTONIC)?;
         let boot = clock_ns(libc::CLOCK_BOOTTIME)?;

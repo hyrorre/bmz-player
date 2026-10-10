@@ -12,6 +12,11 @@ use x11rb::{
     utils::RawFdContainer,
 };
 
+/// Focus changes reach BMZ within this interval; winit focus events still wake at once.
+const FOCUS_REFRESH: Duration = Duration::from_millis(20);
+/// Consecutive failed queries (e.g. a busy system bus) before input is denied.
+const FOCUS_FAILURES: u8 = 3;
+
 struct BoundedStream {
     inner: DefaultStream,
     deadline: Cell<Instant>,
@@ -59,6 +64,8 @@ pub(super) struct Guard {
     window: u32,
     bus: zbus::blocking::Connection,
     session: zbus::zvariant::OwnedObjectPath,
+    cached: Option<(Instant, bool)>,
+    failures: u8,
 }
 
 impl Guard {
@@ -104,23 +111,39 @@ impl Guard {
             !x.query_extension(b"XWAYLAND")?.reply()?.present,
             "XWayland evdev unavailable"
         );
-        Ok(Self { x, window, bus, session })
+        Ok(Self { x, window, bus, session, cached: None, failures: 0 })
     }
+    /// Cached for FOCUS_REFRESH so event delivery does not wait on D-Bus/X11 round trips.
+    /// A single timed-out query keeps the previous answer; repeated failures deny input.
     pub(super) fn focused(&mut self) -> bool {
-        let Ok(properties) = session_properties(&self.bus, &self.session) else {
-            return false;
+        let now = Instant::now();
+        if let Some((at, focused)) = self.cached
+            && now.saturating_duration_since(at) < FOCUS_REFRESH
+        {
+            return focused;
+        }
+        let focused = match self.query() {
+            Ok(focused) => {
+                self.failures = 0;
+                focused
+            }
+            Err(_) => {
+                self.failures = self.failures.saturating_add(1);
+                self.failures < FOCUS_FAILURES && self.cached.is_some_and(|(_, focused)| focused)
+            }
         };
+        self.cached = Some((now, focused));
+        focused
+    }
+    fn query(&mut self) -> anyhow::Result<bool> {
+        let properties = session_properties(&self.bus, &self.session)?;
         if properties.get("Active").and_then(|v| bool::try_from(v).ok()) != Some(true)
             || properties.get("LockedHint").and_then(|v| bool::try_from(v).ok()) != Some(false)
         {
-            return false;
+            return Ok(false);
         }
         self.x.stream().deadline.set(Instant::now() + Duration::from_millis(5));
-        self.x
-            .get_input_focus()
-            .ok()
-            .and_then(|cookie| cookie.reply().ok())
-            .is_some_and(|reply| reply.focus == self.window)
+        Ok(self.x.get_input_focus()?.reply()?.focus == self.window)
     }
 }
 

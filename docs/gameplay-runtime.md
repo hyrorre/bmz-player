@@ -212,6 +212,6 @@ macOSの独立IOHID入力、時計変換、診断の測定境界と100ms停滞�
 入力キューの観測時刻と判定用タイムスタンプを分離する。
 
 Linuxのgilrsは公開blocking APIで入力到着またはスクラッチ期限まで待機します（制御応答上限50ms）。
-任意evdevはnative X11/logind/デバイス権限に加え25msのwindow側フォーカス確認期限を要求し、
-期限切れ時は入力を抑止します。Wayland/XWayland/Flatpakではwinitです。
+任意evdevはnative X11/logind/デバイス権限に加え250msのwindow側フォーカス確認期限を要求し、
+期限切れ中は新しい押下だけを抑止します（押下中キーの解放は配送します）。Wayland/XWayland/Flatpakではwinitです。
 診断・入力源切替・欠落復旧の詳細は[Linux遅延検証](linux-latency.md)を参照してください。
