@@ -7,6 +7,13 @@ package_dir=${launcher%/*}
 export BMZ_RESOURCE_DIR="${BMZ_RESOURCE_DIR:-$package_dir/resources}"
 # Bundled client modules must match the private client library. These are only
 # search paths; no PipeWire server settings or latency environment are forced.
+# Record the caller's values so BMZ restores them for browsers and file managers.
+for name in PIPEWIRE_MODULE_DIR SPA_PLUGIN_DIR PIPEWIRE_CONFIG_DIR; do
+    if eval "[ -n \"\${$name+set}\" ]"; then
+        eval "export BMZ_ORIG_$name=\"\$$name\""
+    fi
+done
+export BMZ_BUNDLED_PIPEWIRE=1
 export PIPEWIRE_MODULE_DIR="${PIPEWIRE_MODULE_DIR:-$package_dir/lib/pipewire-0.3}"
 export SPA_PLUGIN_DIR="${SPA_PLUGIN_DIR:-$package_dir/lib/spa-0.2}"
 export PIPEWIRE_CONFIG_DIR="${PIPEWIRE_CONFIG_DIR:-$package_dir/resources/pipewire}"

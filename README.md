@@ -150,18 +150,22 @@ rustup-init
 source ~/.bashrc
 
 # Install dependencies
-sudo dnf install -y gcc g++ make clang llvm git ffmpeg-free ffmpeg-free-devel openssl-devel alsa-lib-devel rust-libudev-devel fontconfig-devel pipewire pipewire-devel pipewire-pulseaudio wireplumber alsa-utils alsa-plugins-pulseaudio google-noto-sans-cjk-fonts google-noto-sans-cjk-vf-fonts
+sudo dnf install -y gcc g++ make clang llvm git ffmpeg-free ffmpeg-free-devel openssl-devel dbus-devel alsa-lib-devel rust-libudev-devel fontconfig-devel pipewire pipewire-devel pipewire-pulseaudio wireplumber alsa-utils alsa-plugins-pulseaudio google-noto-sans-cjk-fonts google-noto-sans-cjk-vf-fonts
 
 cargo build
 cargo run
 ```
 
 Linux builds include native PipeWire by default and require PipeWire / SPA development
-headers (libpipewire 0.3.53 or newer). In addition to the existing build dependencies,
-Ubuntu needs:
+headers (libpipewire 0.3.53 or newer). The resulting binary links `libpipewire-0.3.so.0`
+dynamically, so the PipeWire client library must be installed to start it even when
+PulseAudio or ALSA is selected. Example in Ubuntu:
 
 ```sh
-sudo apt-get install libpipewire-0.3-dev libspa-0.2-dev clang libclang-dev pkg-config
+sudo apt-get install build-essential clang libclang-dev pkg-config \
+  libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libavdevice-dev \
+  libswscale-dev libswresample-dev libasound2-dev libudev-dev libfontconfig1-dev \
+  libssl-dev libdbus-1-dev libpipewire-0.3-dev libspa-0.2-dev
 ```
 
 Audio backend Auto continues to prefer PulseAudio, then ALSA.

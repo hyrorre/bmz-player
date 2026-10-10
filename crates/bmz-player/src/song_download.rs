@@ -117,10 +117,22 @@ pub fn choose_missing_chart_action(
     }
 }
 
+#[cfg(all(unix, not(target_os = "macos")))]
+fn open_browser_url(url: &str) -> Result<()> {
+    // xdg-open via desktop_command keeps the tar launcher's PipeWire paths out of the browser.
+    crate::external_process::desktop_command("xdg-open").arg(url).spawn()?;
+    Ok(())
+}
+
+#[cfg(not(all(unix, not(target_os = "macos"))))]
+fn open_browser_url(url: &str) -> Result<()> {
+    Ok(webbrowser::open(url)?)
+}
+
 pub fn open_browser_urls(urls: &[String]) -> Result<usize> {
     let urls = validated_browser_urls(urls.iter());
     for url in &urls {
-        webbrowser::open(url).with_context(|| format!("ブラウザでURLを開けませんでした: {url}"))?;
+        open_browser_url(url).with_context(|| format!("ブラウザでURLを開けませんでした: {url}"))?;
     }
     Ok(urls.len())
 }

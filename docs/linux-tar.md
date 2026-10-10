@@ -13,6 +13,9 @@ unchanged. Auto still prefers PulseAudio then ALSA; PipeWire and evdev are opt-i
 See [Linux latency verification](linux-latency.md) for dependencies, permissions,
 diagnostics and rollback. The launcher sets package-local PipeWire/SPA/config
 search paths only if callers did not already set them; it never forces a quantum.
+It records the caller's values, and BMZ restores them (or removes the package-local
+paths) for xdg-open, browsers and file managers, so those programs never load the
+bundled PipeWire modules into the host client library.
 
 ## Run
 

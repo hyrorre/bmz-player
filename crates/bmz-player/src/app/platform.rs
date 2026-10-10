@@ -307,7 +307,10 @@ pub(super) fn open_external_url(url: &str) -> Result<()> {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        Command::new("xdg-open").arg(url).spawn().context("failed to open URL with xdg-open")?;
+        crate::external_process::desktop_command("xdg-open")
+            .arg(url)
+            .spawn()
+            .context("failed to open URL with xdg-open")?;
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos", unix)))]
     {
@@ -341,7 +344,7 @@ pub(super) fn reveal_file_in_browser(path: &Path) -> Result<()> {
             .map_err(|()| anyhow::anyhow!("invalid file browser path: {}", path.display()))?;
         std::thread::Builder::new().name("reveal-chart".into()).spawn(move || {
             // dbus-send bounds the reply wait; unavailable services/tools fall back to a folder.
-            let revealed = Command::new("dbus-send")
+            let revealed = crate::external_process::desktop_command("dbus-send")
                 .args(["--session", "--type=method_call", "--print-reply", "--reply-timeout=2000",
                     "--dest=org.freedesktop.FileManager1", "/org/freedesktop/FileManager1",
                     "org.freedesktop.FileManager1.ShowItems"])
@@ -385,7 +388,7 @@ pub(super) fn open_file_browser_path(path: &Path) -> Result<()> {
         } else {
             path.parent().unwrap_or(path).to_path_buf()
         };
-        Command::new("xdg-open")
+        crate::external_process::desktop_command("xdg-open")
             .arg(target)
             .spawn()
             .context("failed to open path with xdg-open")?;
@@ -432,7 +435,10 @@ pub(super) fn open_file_with_default_app(path: &Path) -> Result<()> {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        Command::new("xdg-open").arg(path).spawn().context("failed to open file with xdg-open")?;
+        crate::external_process::desktop_command("xdg-open")
+            .arg(path)
+            .spawn()
+            .context("failed to open file with xdg-open")?;
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos", unix)))]
     {

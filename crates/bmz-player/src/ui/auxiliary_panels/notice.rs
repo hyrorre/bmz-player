@@ -116,7 +116,7 @@ pub(super) fn spawn_directory_opener(path: &Path) -> std::io::Result<()> {
 
 #[cfg(unix)]
 pub(super) fn run_directory_opener(program: &str, path: &Path) -> std::io::Result<()> {
-    let status = Command::new(program).arg(path).status()?;
+    let status = crate::external_process::desktop_command(program).arg(path).status()?;
     if status.success() {
         Ok(())
     } else {

@@ -32,6 +32,8 @@ pub mod course_cmd;
 pub mod difficulty_table;
 mod directory_scan;
 pub mod discord_presence;
+#[cfg(unix)]
+mod external_process;
 pub mod gameplay_runtime;
 pub mod generated_preview;
 pub mod i18n;
