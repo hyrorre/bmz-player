@@ -281,7 +281,7 @@ pub(crate) fn archive_preview_file(
         .unwrap_or_else(|| preview.trim().to_string())
 }
 
-fn normalize_entry(entry: &str) -> Result<String> {
+pub(crate) fn normalize_entry(entry: &str) -> Result<String> {
     let entry = entry.replace('\\', "/");
     ensure!(
         !entry.starts_with('/') && !entry.contains(':') && !entry.contains('\0'),

@@ -167,8 +167,14 @@ fn archive_asset_only_update_invalidates_images_and_both_preview_keys() {
     let next_key = asset_cache_key(&fixture.folder(), "preview.wav");
     let second = resolve_cached_asset(&next_key, &cache, true).unwrap().unwrap();
     assert_ne!(first, second);
-    assert_eq!(std::fs::read(&first).unwrap(), first_bytes);
+    // Select assets are loaded into memory, so only the current generation is kept.
+    assert!(!first.exists());
     assert_ne!(std::fs::read(&second).unwrap(), first_bytes);
+    // Only the requested entry is extracted, never the rest of the archive.
+    let generation = second.parent().unwrap().parent().unwrap();
+    assert!(!generation.join("song/stage.png").exists());
+    assert!(!generation.join("shared/key.wav").exists());
+    assert!(!cache.join("song-archives").exists());
     std::fs::remove_dir_all(&cache).unwrap();
     assert_eq!(resolve_cached_asset(&next_key, &cache, true).unwrap().unwrap(), second);
     assert!(second.is_file());

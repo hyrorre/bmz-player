@@ -16,7 +16,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub use cache::materialize;
+pub use cache::{materialize, materialize_entry};
 use formats::Backend;
 use safety::{MeteredWriter, validate_entries};
 

@@ -54,8 +54,16 @@ pub(crate) fn resolve_cached_asset(
         let (folder, file) = key.split_once('|').unwrap_or(("", ""));
         (folder.to_owned(), file.to_owned())
     };
-    let resolved =
-        crate::chart_source::ChartLocator::parse(Path::new(&folder))?.materialize(cache_root)?;
+    let locator = crate::chart_source::ChartLocator::parse(Path::new(&folder))?;
+    if let crate::chart_source::ChartLocator::Archive { container, entry } = &locator {
+        let path = resolve_archive_asset(container, entry, &file, cache_root, preview)?;
+        anyhow::ensure!(
+            asset_cache_key(&folder, &file) == key,
+            "archive changed during asset load"
+        );
+        return Ok(path);
+    }
+    let resolved = locator.materialize(cache_root)?;
     // Validate the requested name before any file probing, then validate extension fallback too.
     let requested = resolved.resolve_asset(file.trim())?;
     let asset_name = if resolved.archive_root.is_some() && !file.trim().is_empty() {
@@ -73,6 +81,117 @@ pub(crate) fn resolve_cached_asset(
     }
     anyhow::ensure!(asset_cache_key(&folder, &file) == key, "archive changed during asset load");
     Ok(path)
+}
+
+/// Concurrent Select asset extractions; each may decode a solid archive prefix.
+const ARCHIVE_ASSET_WORKERS: usize = 2;
+static ARCHIVE_ASSET_SLOTS: (std::sync::Mutex<usize>, std::sync::Condvar) =
+    (std::sync::Mutex::new(0), std::sync::Condvar::new());
+
+struct ArchiveAssetSlot;
+impl ArchiveAssetSlot {
+    fn acquire() -> Self {
+        let (count, ready) = &ARCHIVE_ASSET_SLOTS;
+        let mut count = ready
+            .wait_while(count.lock().unwrap_or_else(|e| e.into_inner()), |count| {
+                *count >= ARCHIVE_ASSET_WORKERS
+            })
+            .unwrap_or_else(|e| e.into_inner());
+        *count += 1;
+        Self
+    }
+}
+impl Drop for ArchiveAssetSlot {
+    fn drop(&mut self) {
+        let (count, ready) = &ARCHIVE_ASSET_SLOTS;
+        *count.lock().unwrap_or_else(|e| e.into_inner()) -= 1;
+        ready.notify_one();
+    }
+}
+
+/// Select images and previews need one entry; extracting the whole archive here would
+/// let cursor movement fill the disk with every pack scrolled past.
+fn resolve_archive_asset(
+    container: &Path,
+    folder: &str,
+    file: &str,
+    cache_root: &Path,
+    preview: bool,
+) -> anyhow::Result<Option<PathBuf>> {
+    let _slot = ArchiveAssetSlot::acquire();
+    let control = crate::song_archive::ArchiveControl::default();
+    let index = crate::song_archive::inspect(container, &control)?;
+    let Some(entry) = archive_asset_entry(&index, folder, file, preview)? else {
+        return Ok(None);
+    };
+    crate::song_archive::materialize_entry(
+        container,
+        &index.generation,
+        &entry,
+        cache_root,
+        &control,
+    )
+    .map(Some)
+}
+
+/// Mirror resolve_chart_asset_path/resolve_preview_file over the archive index.
+fn archive_asset_entry(
+    index: &crate::song_archive::ArchiveIndex,
+    folder: &str,
+    relative: &str,
+    preview: bool,
+) -> anyhow::Result<Option<String>> {
+    let exists = |name: &str| {
+        index.entries.iter().any(|candidate| !candidate.is_directory && candidate.name == name)
+    };
+    // A chart entry stands for its folder, like the parent of a chart file.
+    let folder = if exists(folder) {
+        folder.rsplit_once('/').map_or("", |(parent, _)| parent)
+    } else {
+        folder
+    };
+    let relative = relative.trim();
+    if !relative.is_empty() {
+        anyhow::ensure!(
+            !relative.contains(':')
+                && !relative.contains('\0')
+                && !relative.starts_with(['/', '\\']),
+            "unsafe archive asset: {relative}"
+        );
+        let name = crate::chart_source::normalize_entry(&format!("{folder}/{relative}"))?;
+        if exists(&name) {
+            return Ok(Some(name));
+        }
+        let (parent, file) = name.rsplit_once('/').map_or(("", name.as_str()), |split| split);
+        if let Some(stem) = Path::new(file).file_stem().and_then(|stem| stem.to_str()) {
+            let extensions =
+                if preview { PREVIEW_AUDIO_EXTENSIONS } else { CHART_IMAGE_EXTENSIONS };
+            for extension in extensions {
+                for extension in [extension.to_string(), extension.to_ascii_uppercase()] {
+                    let candidate = if parent.is_empty() {
+                        format!("{stem}.{extension}")
+                    } else {
+                        format!("{parent}/{stem}.{extension}")
+                    };
+                    if exists(&candidate) {
+                        return Ok(Some(candidate));
+                    }
+                }
+            }
+        }
+    }
+    if !preview {
+        return Ok(None);
+    }
+    let prefix = if folder.is_empty() { String::new() } else { format!("{folder}/") };
+    Ok(index
+        .entries
+        .iter()
+        .filter(|candidate| !candidate.is_directory)
+        .filter_map(|candidate| candidate.name.strip_prefix(&prefix).map(|name| (candidate, name)))
+        .filter(|(_, name)| !name.contains('/') && is_preview_audio_file(Path::new(name)))
+        .min_by_key(|(_, name)| preview_sort_key(Path::new(name)))
+        .map(|(candidate, _)| candidate.name.clone()))
 }
 
 const CHART_IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "gif", "bmp", "png", "tga"];
