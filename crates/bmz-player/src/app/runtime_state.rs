@@ -331,8 +331,11 @@ pub(super) struct AppAudioRuntimeState {
     pub(super) system_sound: Option<crate::system_sound_manager::SystemSoundManager>,
     /// decode / loudness解析中のシステム音セット。重いファイルI/Oをapp threadから外す。
     pub(super) pending_system_sound: Option<PendingSystemSoundLoad>,
+    /// 適用済みセットを対象にする正規化解析。セット差し替えworkerと並行して保持する。
+    pub(super) pending_system_sound_normalization: Option<PendingSystemSoundLoad>,
     /// サウンドセット再抽選や設定変更で古いworker結果を破棄する世代番号。
     pub(super) system_sound_generation: u64,
+    pub(super) system_sound_normalization_generation: u64,
 }
 
 pub(super) struct UiRuntimeState {

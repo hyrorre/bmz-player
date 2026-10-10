@@ -258,35 +258,77 @@ impl WinitApp {
     }
 
     pub(super) fn start_system_sound_load(&mut self) {
+        self.start_system_sound_load_with_mode(false);
+    }
+
+    pub(super) fn start_system_sound_normalization_load(&mut self) {
+        self.start_system_sound_load_with_mode(true);
+    }
+
+    fn start_system_sound_load_with_mode(&mut self, normalization_only: bool) {
         let Some(system_audio) = self.audio.system_audio.as_ref() else {
             return;
         };
         let output_sample_rate = system_audio.engine().output_sample_rate();
-        let selection = system_sound_selection_from_catalog(&self.audio.system_sound_catalog);
+        let selection = (!normalization_only)
+            .then(|| system_sound_selection_from_catalog(&self.audio.system_sound_catalog));
+        let normalization_paths = normalization_only
+            .then(|| self.audio.system_sound.as_ref().map(|manager| manager.normalization_paths()))
+            .flatten()
+            .unwrap_or_default();
+        let previous_source_fingerprint = (!normalization_only)
+            .then(|| {
+                self.audio
+                    .system_sound
+                    .as_ref()
+                    .and_then(|manager| manager.source_fingerprint().cloned())
+            })
+            .flatten();
         let normalize_bgm_volume = self.boot.profile_config.audio_mix.normalize_system_bgm_volume;
         let cache_dir = self.boot.app_paths.cache_dir.clone();
-        self.audio.system_sound_generation = self.audio.system_sound_generation.wrapping_add(1);
-        let generation = self.audio.system_sound_generation;
+        let generation = if normalization_only {
+            self.audio.system_sound_normalization_generation =
+                self.audio.system_sound_normalization_generation.wrapping_add(1);
+            self.audio.system_sound_normalization_generation
+        } else {
+            self.audio.system_sound_generation = self.audio.system_sound_generation.wrapping_add(1);
+            self.audio.system_sound_generation
+        };
         let (tx, rx) = mpsc::channel();
         let event_proxy = self.event_proxy.clone();
         let spawn = thread::Builder::new().name("system-sound-load".to_string()).spawn(move || {
-            let prepared = crate::system_sound_manager::SystemSoundManager::prepare(
-                &selection,
-                normalize_bgm_volume,
-                output_sample_rate,
-                Some(&cache_dir),
-            );
+            let prepared = if normalization_only {
+                crate::system_sound_manager::SystemSoundManager::prepare_normalization_for_paths(
+                    &normalization_paths,
+                    Some(&cache_dir),
+                )
+            } else {
+                crate::system_sound_manager::SystemSoundManager::prepare_with_source_reuse(
+                    selection.as_ref().expect("set load has a selection"),
+                    normalize_bgm_volume,
+                    output_sample_rate,
+                    Some(&cache_dir),
+                    previous_source_fingerprint.as_ref(),
+                )
+            };
             let _ = tx.send(SystemSoundLoadWorkerResult { generation, prepared });
             let _ = event_proxy.send_event(AppUserEvent::SystemSoundReady { generation });
         });
         match spawn {
             Ok(_) => {
-                self.audio.pending_system_sound = Some(PendingSystemSoundLoad {
+                let pending =
+                    PendingSystemSoundLoad { generation, started_at: Instant::now(), finished: rx };
+                if normalization_only {
+                    self.audio.pending_system_sound_normalization = Some(pending);
+                } else {
+                    self.audio.pending_system_sound = Some(pending);
+                }
+                tracing::info!(
                     generation,
-                    started_at: Instant::now(),
-                    finished: rx,
-                });
-                tracing::info!(generation, normalize_bgm_volume, "started system sound worker");
+                    normalize_bgm_volume,
+                    normalization_only,
+                    "started system sound worker"
+                );
             }
             Err(error) => {
                 tracing::warn!(%error, generation, "failed to start system sound worker");
@@ -295,13 +337,36 @@ impl WinitApp {
     }
 
     pub(super) fn poll_system_sound_load(&mut self) {
-        let Some(pending) = self.audio.pending_system_sound.take() else {
+        self.poll_system_sound_load_kind(true);
+        self.poll_system_sound_load_kind(false);
+    }
+
+    fn poll_system_sound_load_kind(&mut self, normalization_only: bool) {
+        let pending_slot = if normalization_only {
+            &mut self.audio.pending_system_sound_normalization
+        } else {
+            &mut self.audio.pending_system_sound
+        };
+        let Some(pending) = pending_slot.take() else {
             return;
         };
+        // セット選択結果はSelectでのみ差し替える。解析更新は再生中もゲインだけ適用する。
+        if !should_apply_system_sound_result(
+            self.current_scene_kind(),
+            self.audio.system_sound.is_some(),
+            normalization_only,
+        ) {
+            self.audio.pending_system_sound = Some(pending);
+            return;
+        }
         let result = match pending.finished.try_recv() {
             Ok(result) => result,
             Err(mpsc::TryRecvError::Empty) => {
-                self.audio.pending_system_sound = Some(pending);
+                if normalization_only {
+                    self.audio.pending_system_sound_normalization = Some(pending);
+                } else {
+                    self.audio.pending_system_sound = Some(pending);
+                }
                 return;
             }
             Err(mpsc::TryRecvError::Disconnected) => {
@@ -313,30 +378,66 @@ impl WinitApp {
                 return;
             }
         };
-        if result.generation != self.audio.system_sound_generation {
+        let current_generation = if normalization_only {
+            self.audio.system_sound_normalization_generation
+        } else {
+            self.audio.system_sound_generation
+        };
+        if result.generation != current_generation {
             tracing::info!(
                 generation = result.generation,
-                current_generation = self.audio.system_sound_generation,
+                current_generation,
                 "ignored stale system sound worker result"
             );
             return;
         }
-        let normalize_bgm_volume = self.boot.profile_config.audio_mix.normalize_system_bgm_volume;
-        if normalize_bgm_volume && !result.prepared.normalization_analysis_enabled {
-            tracing::info!(
-                generation = result.generation,
-                "restarting system sound worker after normalization was enabled"
-            );
-            self.start_system_sound_load();
+        if !normalization_only && result.prepared.reused_existing_sound_set {
+            tracing::info!(generation = result.generation, "reused unchanged system sound set");
+            if should_play_select_bgm_on_enter(
+                self.select.select_assets.preview_playing(),
+                self.audio.pending_system_sound.is_some(),
+            ) {
+                self.play_system_sound(crate::system_sound::SoundType::Select);
+            }
             return;
         }
+        let normalize_bgm_volume = self.boot.profile_config.audio_mix.normalize_system_bgm_volume;
         let stats = result.prepared.stats;
+        if normalization_only {
+            let Some(manager) = self.audio.system_sound.as_mut() else {
+                tracing::info!(
+                    generation = result.generation,
+                    "ignored normalization result because no system sound set is applied"
+                );
+                return;
+            };
+            if !manager.normalization_source_matches(&result.prepared) {
+                tracing::info!(
+                    generation = result.generation,
+                    "ignored normalization for a replaced system sound set"
+                );
+                return;
+            }
+            manager.apply_normalization_analysis(result.prepared);
+            manager.set_bgm_normalization_enabled(normalize_bgm_volume);
+            self.sync_realtime_profile_settings();
+            tracing::info!(
+                generation = result.generation,
+                analysis_count = stats.analysis_count,
+                cache_hit_count = stats.cache_hit_count,
+                "updated system sound normalization gains"
+            );
+            return;
+        }
         let Some(system_audio) = self.audio.system_audio.as_ref() else {
             return;
         };
         if let Some(manager) = &self.audio.system_sound {
             manager.stop_all_bgm();
         }
+        self.audio.system_sound_normalization_generation =
+            self.audio.system_sound_normalization_generation.wrapping_add(1);
+        self.audio.pending_system_sound_normalization = None;
         self.audio.system_sound =
             Some(crate::system_sound_manager::SystemSoundManager::from_prepared(
                 system_audio.engine(),

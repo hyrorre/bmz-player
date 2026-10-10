@@ -114,6 +114,17 @@ pub(in crate::app) fn select_hold_state_from_pressed_controls(
     (start_held, select_held, e_action_holds)
 }
 
+pub(in crate::app) fn reconcile_select_holds_from_pressed_controls(
+    input: &mut AppInputRuntime,
+    bindings: &SelectKeyBindings,
+) {
+    let (start_held, select_held, e_action_holds) =
+        select_hold_state_from_pressed_controls(&input.pressed_controls, bindings);
+    input.select_e_action_holds = e_action_holds;
+    input.start_held = start_held;
+    input.select_held = select_held;
+}
+
 pub(in crate::app) fn skin_logical_input_snapshot_from_pressed_controls(
     pressed_controls: &HashSet<String>,
     bindings: &SelectKeyBindings,

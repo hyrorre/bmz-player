@@ -482,7 +482,9 @@ impl WinitApp {
                 system_sound_catalog,
                 system_sound: None,
                 pending_system_sound: None,
+                pending_system_sound_normalization: None,
                 system_sound_generation: 0,
+                system_sound_normalization_generation: 0,
             },
             ui: UiRuntimeState {
                 egui: None,

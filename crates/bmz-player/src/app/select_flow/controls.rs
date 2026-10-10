@@ -125,14 +125,12 @@ impl WinitApp {
         }
     }
 
+    pub(super) fn reconcile_select_holds_from_pressed_controls(&mut self) {
+        reconcile_select_holds_from_pressed_controls(&mut self.input, &self.select.select_keys);
+    }
+
     pub(super) fn sync_select_holds_from_pressed_controls(&mut self) {
-        let (start_held, select_held, e_action_holds) = select_hold_state_from_pressed_controls(
-            &self.input.pressed_controls,
-            &self.select.select_keys,
-        );
-        self.input.select_e_action_holds = e_action_holds;
-        self.input.start_held = start_held;
-        self.input.select_held = select_held;
+        self.reconcile_select_holds_from_pressed_controls();
         self.update_select_option_panel();
     }
 

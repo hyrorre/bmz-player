@@ -68,10 +68,12 @@ impl Simulation {
             true,
         );
         let config = &prepared.profile.system_sound;
+        let bgm_root = paths
+            .resolve_optional_path_ref(&config.bgm_dir)?
+            .and_then(|path| crate::system_sound::scan_bgm_sound_sets(&path).into_iter().next());
         let selection = SoundSetSelection {
-            bgm_dir: paths.resolve_optional_path_ref(&config.bgm_dir)?.and_then(|p| {
-                crate::system_sound::scan_sound_sets(&p, "select.wav").into_iter().next()
-            }),
+            bgm_dir: bgm_root.as_ref().map(|root| root.dir.clone()),
+            bgm_variant_dir: bgm_root.and_then(|root| root.variants.into_iter().next()),
             se_dir: paths.resolve_optional_path_ref(&config.se_dir)?.and_then(|p| {
                 crate::system_sound::scan_sound_sets(&p, "clear.wav").into_iter().next()
             }),
@@ -80,12 +82,27 @@ impl Simulation {
         let mut sounds = HashMap::new();
         use bmz_audio::loader::SampleLoader;
         let mut loader = bmz_audio::ffmpeg_loader::FfmpegSampleLoader::default();
-        for (index, kind) in SoundType::ALL.into_iter().enumerate() {
-            if let Some(path) = selection.resolve(kind) {
-                let sample = loader.load(&path)?;
+        let candidates_by_type = selection.candidates_for_all();
+        for (index, (kind, candidates)) in
+            SoundType::ALL.into_iter().zip(candidates_by_type).enumerate()
+        {
+            // 動画出力はPlayだけを描画するため、RESULT専用BGMはロードしない。
+            if kind.is_result_bgm() {
+                continue;
+            }
+            for candidate in candidates {
+                let sample = match loader.load(&candidate.path) {
+                    Ok(sample) => sample,
+                    Err(error) => {
+                        tracing::warn!(?kind, path = %candidate.path.display(), %error,
+                            "failed to decode export system sound; trying next candidate");
+                        continue;
+                    }
+                };
                 let id = SoundId(100_000 + index as u32);
                 ensure!(system_handle.insert_sample(id, sample), "system sound queue full");
                 sounds.insert(kind, id);
+                break;
             }
         }
         let result = Self {

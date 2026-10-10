@@ -197,7 +197,13 @@ impl WinitApp {
                     return;
                 };
                 let clear_type = result_entry_clear_type_for_sound(finished);
-                self.play_system_sound(result_entry_sound_for_clear(clear_type));
+                let sound = result_entry_sound_for_result(
+                    clear_type,
+                    finished.summary.ex_score,
+                    finished.summary.total_notes,
+                    |sound| self.system_sound_has(sound),
+                );
+                self.play_system_sound(sound);
             }
         }
     }
@@ -235,15 +241,7 @@ impl WinitApp {
     }
 
     pub(super) fn play_course_result_entry_sound(&self, clear_type: bmz_core::clear::ClearType) {
-        use crate::system_sound::SoundType;
-        for sound in [
-            SoundType::ResultClear,
-            SoundType::ResultFail,
-            SoundType::ResultClose,
-            SoundType::CourseClear,
-            SoundType::CourseFail,
-            SoundType::CourseClose,
-        ] {
+        for &sound in result_exit_system_sounds() {
             self.stop_system_sound(sound);
         }
         let preferred = course_result_entry_sound_for_clear(clear_type);

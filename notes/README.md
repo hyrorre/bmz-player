@@ -33,6 +33,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-08 | [RESULT BGMとサウンドセット（Discussion #29）](2026/2026-10-08-result-soundset.md) |
 | 2026-10-07 | [最終プレイ日時refとLua参照ヘルパー](2026/2026-10-07-skin-read-helpers.md) |
 | 2026-10-06 | [ZIP・RAR・7z内楽曲の直接再生](2026/2026-10-06-archive-song-playback.md) |
 | 2026-10-06 | [演奏終了・ミス表示・見逃しキー音の任意設定](2026/2026-10-06-optional-play-behaviors.md) |
