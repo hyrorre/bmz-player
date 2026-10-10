@@ -426,3 +426,17 @@ fn scanned_archive_generation_is_persisted_for_later_processes() {
     f.zip("songs.zip", &[("chart/song.bms", b"#TITLE Different\n#BPM 120\n")]);
     assert!(f.db.verified_chart_source(id).unwrap_err().to_string().contains("hash changed"));
 }
+
+#[test]
+fn unchanged_archive_with_a_failed_chart_is_not_decoded_again() {
+    let mut f = Fixture::new();
+    f.zip("songs.zip", &[("good/song.bms", BMS), ("bad/song.bmson", b"{not json")]);
+    let first = f.scan();
+    assert_eq!((first.summary.imported, first.summary.failed), (1, 1));
+    let second = f.scan();
+    assert_eq!((second.summary.imported, second.summary.failed, second.summary.skipped), (0, 0, 2));
+    // A rewrite retries the failed chart.
+    f.zip("songs.zip", &[("good/song.bms", BMS), ("bad/song.bmson", BMSON)]);
+    let fixed = f.scan();
+    assert_eq!((fixed.summary.imported, fixed.summary.failed), (2, 0));
+}

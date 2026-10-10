@@ -7,9 +7,9 @@ use everything_ipc::wm::{EverythingClient, FileInfo, RequestFlags};
 
 use super::discovery::{
     ChartDiscovery, ChartFileEntry, discover_archive_charts, is_chart_file_name,
-    is_document_file_name, usize_to_u32,
+    is_document_file_name, record_discovery_issue, usize_to_u32,
 };
-use super::{ScanConfig, ScanDiscoveryBackend};
+use super::{ScanConfig, ScanDiscoveryBackend, ScanDiscoveryOperation};
 
 const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 const FILETIME_TICKS_PER_SECOND: u64 = 10_000_000;
@@ -69,6 +69,7 @@ pub(super) fn discover_chart_files_everything(
 
     let mut chart_entries = Vec::new();
     let mut archives = Vec::new();
+    let mut issues = Vec::new();
     let mut document_folders = HashSet::new();
     for item in results.iter() {
         let parent = item
@@ -98,8 +99,21 @@ pub(super) fn discover_chart_files_everything(
             continue;
         }
         if crate::chart_source::is_archive_file(&output_path) {
-            chart_entries.extend(discover_archive_charts(&output_path, scan.skip_hidden)?);
-            archives.push(output_path);
+            // Like native discovery, one unreadable archive is an issue, not a reason to
+            // abandon the whole root and fall back to a much slower directory walk.
+            match discover_archive_charts(&output_path, scan.skip_hidden) {
+                Ok(entries) => {
+                    chart_entries.extend(entries);
+                    archives.push(output_path);
+                }
+                Err(error) => record_discovery_issue(
+                    &mut issues,
+                    root,
+                    &output_path,
+                    ScanDiscoveryOperation::ReadArchive,
+                    std::io::Error::other(format!("{error:#}")),
+                ),
+            }
             continue;
         }
         if !is_chart_file_name(output_path.file_name().unwrap_or_default()) {
@@ -140,8 +154,8 @@ pub(super) fn discover_chart_files_everything(
     Ok(ChartDiscovery {
         entries: chart_entries,
         archives,
-        issues: Vec::new(),
-        complete: true,
+        complete: issues.is_empty(),
+        issues,
         root_readable: true,
         backend: ScanDiscoveryBackend::Everything,
     })

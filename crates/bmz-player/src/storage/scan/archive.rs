@@ -32,10 +32,12 @@ pub(super) fn import_archive(
         .iter()
         .map(|entry| crate::storage::library_db::library_path_key(&entry.path))
         .collect::<std::collections::HashSet<_>>();
+    // Failed charts have no linked chart (import_version 0). They are recorded for this
+    // generation, so an unchanged archive is not decoded again just to fail once more.
     let registered = entries.iter().all(|entry| {
-        fingerprints
-            .get(&crate::storage::library_db::library_path_key(&entry.path))
-            .is_some_and(|fingerprint| fingerprint.import_version == CHART_IMPORT_VERSION)
+        fingerprints.get(&crate::storage::library_db::library_path_key(&entry.path)).is_some_and(
+            |fingerprint| matches!(fingerprint.import_version, 0 | CHART_IMPORT_VERSION),
+        )
     });
     let mut report = ScanReport::default();
     if !force
@@ -115,14 +117,11 @@ pub(super) fn import_archive(
         scanned.generation == index.generation,
         "archive changed between discovery and import"
     );
-    // Retry parse failures on a subsequent scan, just like ordinary chart files.
-    if report.summary.failed == 0 {
-        tx.execute("INSERT INTO song_archive_scans (path, generation, import_version) VALUES (?1, ?2, ?3)
-            ON CONFLICT(path) DO UPDATE SET generation = excluded.generation, import_version = excluded.import_version",
-            rusqlite::params![archive_key, scanned.generation.fingerprint, CHART_IMPORT_VERSION])?;
-    } else {
-        tx.execute("DELETE FROM song_archive_scans WHERE path = ?1", [&archive_key])?;
-    }
+    // A changed archive or CHART_IMPORT_VERSION retries failed charts; an unchanged one
+    // keeps its recorded failures instead of re-decoding the whole container each scan.
+    tx.execute("INSERT INTO song_archive_scans (path, generation, import_version) VALUES (?1, ?2, ?3)
+        ON CONFLICT(path) DO UPDATE SET generation = excluded.generation, import_version = excluded.import_version",
+        rusqlite::params![archive_key, scanned.generation.fingerprint, CHART_IMPORT_VERSION])?;
     tx.commit()?;
     report.timing.parse_ms = started.elapsed().as_millis();
     Ok(report)
