@@ -28,28 +28,35 @@ pub(super) fn should_shuffle_system_sound_sets_on_scene_enter(
     next == AppSceneKind::Select && previous.is_some_and(|scene| scene != AppSceneKind::Select)
 }
 
+/// `head` の後ろに [`SoundType::RESULT_BGMS`] を連結した配列を作る。`M` は合計長。
+const fn with_result_bgms<const N: usize, const M: usize>(
+    head: [crate::system_sound::SoundType; N],
+) -> [crate::system_sound::SoundType; M] {
+    use crate::system_sound::SoundType;
+    assert!(N + SoundType::RESULT_BGMS.len() == M);
+    let mut sounds = [SoundType::Select; M];
+    let mut index = 0;
+    while index < N {
+        sounds[index] = head[index];
+        index += 1;
+    }
+    let mut index = 0;
+    while index < SoundType::RESULT_BGMS.len() {
+        sounds[N + index] = SoundType::RESULT_BGMS[index];
+        index += 1;
+    }
+    sounds
+}
+
 pub(super) fn system_bgm_stop_targets_on_scene_enter(
     scene_kind: AppSceneKind,
 ) -> &'static [crate::system_sound::SoundType] {
     use crate::system_sound::SoundType;
+    static PLAY: [SoundType; 6] = with_result_bgms([SoundType::Select]);
+    static NON_PLAY: [SoundType; 7] = with_result_bgms([SoundType::Select, SoundType::Decide]);
     match scene_kind {
-        AppSceneKind::Play => &[
-            SoundType::Select,
-            SoundType::ResultBgmClear,
-            SoundType::ResultBgmFail,
-            SoundType::ResultBgmA,
-            SoundType::ResultBgmAA,
-            SoundType::ResultBgmAAA,
-        ],
-        AppSceneKind::Select | AppSceneKind::Decide | AppSceneKind::Result => &[
-            SoundType::Select,
-            SoundType::Decide,
-            SoundType::ResultBgmClear,
-            SoundType::ResultBgmFail,
-            SoundType::ResultBgmA,
-            SoundType::ResultBgmAA,
-            SoundType::ResultBgmAAA,
-        ],
+        AppSceneKind::Play => &PLAY,
+        AppSceneKind::Select | AppSceneKind::Decide | AppSceneKind::Result => &NON_PLAY,
     }
 }
 
@@ -167,7 +174,7 @@ pub(super) fn decide_bgm_fade_out_frames(chart_zero_time: TimeUs, sample_rate: u
 
 pub(super) fn result_exit_system_sounds() -> &'static [crate::system_sound::SoundType] {
     use crate::system_sound::SoundType;
-    &[
+    static SOUNDS: [SoundType; 14] = with_result_bgms([
         SoundType::ResultClear,
         SoundType::ResultFail,
         SoundType::ResultA,
@@ -177,12 +184,8 @@ pub(super) fn result_exit_system_sounds() -> &'static [crate::system_sound::Soun
         SoundType::CourseClear,
         SoundType::CourseFail,
         SoundType::CourseClose,
-        SoundType::ResultBgmClear,
-        SoundType::ResultBgmFail,
-        SoundType::ResultBgmA,
-        SoundType::ResultBgmAA,
-        SoundType::ResultBgmAAA,
-    ]
+    ]);
+    &SOUNDS
 }
 
 pub(super) fn result_entry_sound_for_clear(

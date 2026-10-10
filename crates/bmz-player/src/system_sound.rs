@@ -14,6 +14,7 @@
 //! 本モジュールは「どのファイルを使うか」までを決めるところまでが責務。
 //! 実際の AudioEngine への投入や再生は呼び出し側で行う。
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use bmz_core::judge::Judge;
@@ -181,30 +182,54 @@ pub const fn guide_se_for_judge(judge: Judge) -> SoundType {
 /// beatoraja の挙動と合わせて `.wav` / `.ogg` / `.flac` / `.mp3` をサポート。
 pub const SUPPORTED_EXTENSIONS: &[&str] = &["wav", "ogg", "flac", "mp3"];
 
-/// `dir/<stem>.<ext>` を拡張子優先順で列挙する。ASCIIの大小文字はOSに関係なく許容し、
-/// 同名の表記違いが共存する場合は正式な小文字名を優先する。
-fn files_with_extensions(dir: &Path, stem: &str) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
-    let mut candidates: Vec<(usize, PathBuf)> = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.is_file()
-                && path
-                    .file_stem()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.eq_ignore_ascii_case(stem))
-        })
-        .filter_map(|path| {
-            let extension = path.extension()?.to_str()?;
-            let priority = SUPPORTED_EXTENSIONS
+/// 1ディレクトリ内の対応音源を、ASCII小文字化したstemごとにまとめた索引。
+/// 全音種の解決でディレクトリを1回だけ列挙し、対応拡張子の名前だけをファイル判定する。
+#[derive(Debug, Default)]
+struct SoundFileIndex {
+    by_stem: HashMap<String, Vec<(usize, PathBuf)>>,
+}
+
+impl SoundFileIndex {
+    fn read(dir: &Path) -> Self {
+        let mut by_stem: HashMap<String, Vec<(usize, PathBuf)>> = HashMap::new();
+        let Ok(entries) = std::fs::read_dir(dir) else { return Self { by_stem } };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let (Some(stem), Some(extension)) = (
+                path.file_stem().and_then(|name| name.to_str()),
+                path.extension().and_then(|extension| extension.to_str()),
+            ) else {
+                continue;
+            };
+            let Some(priority) = SUPPORTED_EXTENSIONS
                 .iter()
-                .position(|supported| extension.eq_ignore_ascii_case(supported))?;
-            Some((priority, path))
-        })
-        .collect();
-    sort_sound_candidates(&mut candidates, stem);
-    candidates.into_iter().map(|(_, path)| path).collect()
+                .position(|supported| extension.eq_ignore_ascii_case(supported))
+            else {
+                continue;
+            };
+            // file_typeはsymlinkを辿らないため、linkだけ実体を確認する。
+            let is_file = match entry.file_type() {
+                Ok(file_type) if file_type.is_symlink() => path.is_file(),
+                Ok(file_type) => file_type.is_file(),
+                Err(_) => false,
+            };
+            if is_file {
+                by_stem.entry(stem.to_ascii_lowercase()).or_default().push((priority, path));
+            }
+        }
+        Self { by_stem }
+    }
+
+    /// `<stem>.<ext>` を拡張子優先順で返す。ASCIIの大小文字はOSに関係なく許容し、
+    /// 同名の表記違いが共存する場合は正式な小文字名を優先する。
+    fn files(&self, stem: &str) -> Vec<PathBuf> {
+        let Some(files) = self.by_stem.get(&stem.to_ascii_lowercase()) else {
+            return Vec::new();
+        };
+        let mut candidates = files.clone();
+        sort_sound_candidates(&mut candidates, stem);
+        candidates.into_iter().map(|(_, path)| path).collect()
+    }
 }
 
 /// 同じ拡張子内では期待される小文字名を優先し、残る大小文字違いは名前順に固定する。
@@ -281,9 +306,39 @@ impl SoundSetSelection {
     /// ただしRESULT入口SEはSEセットとdefaultだけから解決する（セット内の同名音源はBGM）。
     /// 各段階で拡張子優先順を保ち、読み込みに失敗した候補の次を試せるよう全候補を返す。
     pub fn candidates(&self, sound_type: SoundType) -> Vec<ResolvedSystemSound> {
+        SoundSetIndex::read(self).candidates(sound_type)
+    }
+
+    /// [`SoundType::ALL`] の順に全音種の候補を返す。各ディレクトリの列挙は1回だけ行う。
+    pub fn candidates_for_all(&self) -> Vec<Vec<ResolvedSystemSound>> {
+        let index = SoundSetIndex::read(self);
+        SoundType::ALL.iter().map(|sound_type| index.candidates(*sound_type)).collect()
+    }
+}
+
+/// [`SoundSetSelection`] の各layerを1回ずつ列挙した索引。
+struct SoundSetIndex {
+    variant: Option<SoundFileIndex>,
+    root: Option<SoundFileIndex>,
+    se: Option<SoundFileIndex>,
+    default: Option<SoundFileIndex>,
+}
+
+impl SoundSetIndex {
+    fn read(selection: &SoundSetSelection) -> Self {
+        let read = |dir: &Option<PathBuf>| dir.as_deref().map(SoundFileIndex::read);
+        Self {
+            variant: read(&selection.bgm_variant_dir),
+            root: read(&selection.bgm_dir),
+            se: read(&selection.se_dir),
+            default: read(&selection.default_dir),
+        }
+    }
+
+    fn candidates(&self, sound_type: SoundType) -> Vec<ResolvedSystemSound> {
         let stem = sound_type.stem();
         let mut candidates = Vec::new();
-        let soundset_layers = [self.bgm_variant_dir.as_deref(), self.bgm_dir.as_deref()];
+        let soundset_layers = [self.variant.as_ref(), self.root.as_ref()];
         let include_soundset = !matches!(
             sound_type,
             SoundType::ResultClear
@@ -293,16 +348,17 @@ impl SoundSetSelection {
                 | SoundType::ResultAAA
         );
         if include_soundset {
-            for dir in soundset_layers.into_iter().flatten() {
+            for layer in soundset_layers.into_iter().flatten() {
                 if sound_type.is_result_bgm() {
                     candidates.extend(
-                        files_with_extensions(dir, &format!("{stem}.loop"))
+                        layer
+                            .files(&format!("{stem}.loop"))
                             .into_iter()
                             .map(|path| ResolvedSystemSound { path, loop_playback: true }),
                     );
                 }
                 candidates.extend(
-                    files_with_extensions(dir, stem).into_iter().map(|path| ResolvedSystemSound {
+                    layer.files(stem).into_iter().map(|path| ResolvedSystemSound {
                         path,
                         loop_playback: sound_type.loops(),
                     }),
@@ -312,12 +368,10 @@ impl SoundSetSelection {
         if sound_type.is_result_bgm() {
             return candidates;
         }
-        let fallback_dirs = [
-            (!sound_type.is_bgm()).then_some(self.se_dir.as_deref()).flatten(),
-            self.default_dir.as_deref(),
-        ];
-        for dir in fallback_dirs.into_iter().flatten() {
-            for path in files_with_extensions(dir, stem) {
+        let fallback_layers =
+            [(!sound_type.is_bgm()).then_some(self.se.as_ref()).flatten(), self.default.as_ref()];
+        for layer in fallback_layers.into_iter().flatten() {
+            for path in layer.files(stem) {
                 if !candidates.iter().any(|candidate| candidate.path == path) {
                     candidates
                         .push(ResolvedSystemSound { path, loop_playback: sound_type.loops() });
@@ -757,6 +811,11 @@ mod tests {
                 .candidates(SoundType::Decide)
                 .iter()
                 .any(|candidate| candidate.path.starts_with(&sibling))
+        );
+        // 一括解決は、各layerの列挙を共有しても音種ごとの解決と同じ順序を返す。
+        assert_eq!(
+            selection.candidates_for_all(),
+            SoundType::ALL.map(|sound| selection.candidates(sound)).to_vec()
         );
         std::fs::remove_dir_all(root).unwrap();
     }

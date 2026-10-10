@@ -82,12 +82,15 @@ impl Simulation {
         let mut sounds = HashMap::new();
         use bmz_audio::loader::SampleLoader;
         let mut loader = bmz_audio::ffmpeg_loader::FfmpegSampleLoader::default();
-        for (index, kind) in SoundType::ALL.into_iter().enumerate() {
+        let candidates_by_type = selection.candidates_for_all();
+        for (index, (kind, candidates)) in
+            SoundType::ALL.into_iter().zip(candidates_by_type).enumerate()
+        {
             // 動画出力はPlayだけを描画するため、RESULT専用BGMはロードしない。
             if kind.is_result_bgm() {
                 continue;
             }
-            for candidate in selection.candidates(kind) {
+            for candidate in candidates {
                 let sample = match loader.load(&candidate.path) {
                     Ok(sample) => sample,
                     Err(error) => {

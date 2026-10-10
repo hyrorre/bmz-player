@@ -199,10 +199,7 @@ impl SystemSoundManager {
         previous_fingerprint: Option<&SystemSoundSourceFingerprint>,
     ) -> PreparedSystemSoundSet {
         let total_started_at = Instant::now();
-        let candidates_by_type = SoundType::ALL
-            .iter()
-            .map(|sound_type| selection.candidates(*sound_type))
-            .collect::<Vec<_>>();
+        let candidates_by_type = selection.candidates_for_all();
         let source_fingerprint =
             system_sound_source_fingerprint(selection, output_sample_rate, &candidates_by_type);
         if source_fingerprint
@@ -255,57 +252,34 @@ impl SystemSoundManager {
                         stats.decode_ms = stats.decode_ms.saturating_add(decode_ms);
                         stats.decoded_count = stats.decoded_count.saturating_add(1);
                         if sound_type.is_bgm() {
-                            normalization_paths.insert(*sound_type, path.clone());
-                            if let Some(key) = loudness_cache_key(&path) {
-                                normalization_keys.insert(*sound_type, key);
-                            }
-                        }
-                        if normalize_bgm_volume && sound_type.is_bgm() {
                             let key = loudness_cache_key(&path);
-                            let cached = key.as_ref().and_then(|key| {
-                                cache
-                                    .entries
-                                    .iter()
-                                    .find(|entry| entry.key == *key)
-                                    .and_then(LoudnessCacheEntry::analysis)
-                            });
-                            let analysis = if let Some(analysis) = cached {
-                                stats.cache_hit_count = stats.cache_hit_count.saturating_add(1);
-                                Some(analysis)
-                            } else {
-                                let analysis_started_at = Instant::now();
-                                let analysis = analyze_decoded_loudness(&sample);
-                                stats.analysis_ms = stats
-                                    .analysis_ms
-                                    .saturating_add(elapsed_ms_u64(analysis_started_at));
-                                stats.analysis_count = stats.analysis_count.saturating_add(1);
-                                if let (Some(key), Some(analysis)) = (key, analysis) {
-                                    cache.entries.retain(|entry| entry.key.path != key.path);
-                                    let entry = LoudnessCacheEntry {
-                                        key,
-                                        loudness_lufs: analysis.loudness_lufs,
-                                        short_term_lufs: analysis.short_term_lufs,
-                                        peak_abs: analysis.peak_abs,
-                                    };
-                                    cache.entries.push(entry.clone());
-                                    cache_updates.push(entry);
-                                }
-                                analysis
-                            };
-                            if let Some(analysis) = analysis {
-                                let gain = system_bgm_normalization_gain_for_analysis(analysis);
-                                tracing::debug!(
-                                    sound_type = ?sound_type,
-                                    path = %path.display(),
-                                    loudness_lufs = analysis.loudness_lufs,
-                                    short_term_lufs = analysis.short_term_lufs,
-                                    sample_peak = analysis.peak_abs,
-                                    normalization_gain = gain,
-                                    cache_hit = cached.is_some(),
-                                    decode_ms,
-                                    "prepared system BGM loudness"
+                            normalization_paths.insert(*sound_type, path.clone());
+                            if let Some(key) = key.as_ref() {
+                                normalization_keys.insert(*sound_type, key.clone());
+                            }
+                            if normalize_bgm_volume {
+                                let (analysis, cache_hit) = bgm_loudness_with_cache(
+                                    &sample,
+                                    key,
+                                    &mut cache,
+                                    &mut cache_updates,
+                                    &mut stats,
                                 );
-                                bgm_normalization_gains.insert(*sound_type, gain);
+                                if let Some(analysis) = analysis {
+                                    let gain = system_bgm_normalization_gain_for_analysis(analysis);
+                                    tracing::debug!(
+                                        sound_type = ?sound_type,
+                                        path = %path.display(),
+                                        loudness_lufs = analysis.loudness_lufs,
+                                        short_term_lufs = analysis.short_term_lufs,
+                                        sample_peak = analysis.peak_abs,
+                                        normalization_gain = gain,
+                                        cache_hit,
+                                        decode_ms,
+                                        "prepared system BGM loudness"
+                                    );
+                                    bgm_normalization_gains.insert(*sound_type, gain);
+                                }
                             }
                         }
                         let sample = if sample.sample_rate == output_sample_rate {
@@ -470,35 +444,8 @@ impl SystemSoundManager {
             if let Some(key) = key.as_ref() {
                 normalization_keys.insert(*sound_type, key.clone());
             }
-            let cached = key.as_ref().and_then(|key| {
-                cache
-                    .entries
-                    .iter()
-                    .find(|entry| entry.key == *key)
-                    .and_then(LoudnessCacheEntry::analysis)
-            });
-            let analysis = if let Some(analysis) = cached {
-                stats.cache_hit_count += 1;
-                Some(analysis)
-            } else {
-                let analysis_started_at = Instant::now();
-                let analysis = analyze_decoded_loudness(&sample);
-                stats.analysis_ms =
-                    stats.analysis_ms.saturating_add(elapsed_ms_u64(analysis_started_at));
-                stats.analysis_count += 1;
-                if let (Some(key), Some(analysis)) = (key, analysis) {
-                    cache.entries.retain(|entry| entry.key.path != key.path);
-                    let entry = LoudnessCacheEntry {
-                        key,
-                        loudness_lufs: analysis.loudness_lufs,
-                        short_term_lufs: analysis.short_term_lufs,
-                        peak_abs: analysis.peak_abs,
-                    };
-                    cache.entries.push(entry.clone());
-                    cache_updates.push(entry);
-                }
-                analysis
-            };
+            let (analysis, _) =
+                bgm_loudness_with_cache(&sample, key, &mut cache, &mut cache_updates, &mut stats);
             if let Some(analysis) = analysis {
                 gains.insert(*sound_type, system_bgm_normalization_gain_for_analysis(analysis));
             }
@@ -715,6 +662,40 @@ fn loudness_cache_key(path: &Path) -> Option<LoudnessCacheKey> {
         modified_ns,
         analysis_version: SYSTEM_BGM_LOUDNESS_ANALYSIS_VERSION,
     })
+}
+
+/// キャッシュ済みの解析結果を再利用し、無ければdecode済みsampleを解析する。
+/// 新しい解析結果は `cache` と保存用の `cache_updates` に追加する。戻り値の `bool` はキャッシュヒット。
+fn bgm_loudness_with_cache(
+    sample: &DecodedSample,
+    key: Option<LoudnessCacheKey>,
+    cache: &mut LoudnessCacheFile,
+    cache_updates: &mut Vec<LoudnessCacheEntry>,
+    stats: &mut SystemSoundPrepareStats,
+) -> (Option<LoudnessAnalysis>, bool) {
+    let cached = key.as_ref().and_then(|key| {
+        cache.entries.iter().find(|entry| entry.key == *key).and_then(LoudnessCacheEntry::analysis)
+    });
+    if let Some(analysis) = cached {
+        stats.cache_hit_count = stats.cache_hit_count.saturating_add(1);
+        return (Some(analysis), true);
+    }
+    let analysis_started_at = Instant::now();
+    let analysis = analyze_decoded_loudness(sample);
+    stats.analysis_ms = stats.analysis_ms.saturating_add(elapsed_ms_u64(analysis_started_at));
+    stats.analysis_count = stats.analysis_count.saturating_add(1);
+    if let (Some(key), Some(analysis)) = (key, analysis) {
+        cache.entries.retain(|entry| entry.key.path != key.path);
+        let entry = LoudnessCacheEntry {
+            key,
+            loudness_lufs: analysis.loudness_lufs,
+            short_term_lufs: analysis.short_term_lufs,
+            peak_abs: analysis.peak_abs,
+        };
+        cache.entries.push(entry.clone());
+        cache_updates.push(entry);
+    }
+    (analysis, false)
 }
 
 fn system_sound_source_fingerprint(
