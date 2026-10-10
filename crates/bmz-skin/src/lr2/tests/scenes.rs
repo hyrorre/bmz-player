@@ -236,3 +236,23 @@ fn lr2_scene_resolution_button_and_hover_metadata_are_preserved() {
     assert_eq!(loaded.dependencies.option_values.get(&99_002), Some(&true));
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn lr2_bar_level_with_undefined_image_keeps_earlier_number_reference() {
+    let root = unique_test_dir("lr2-bar-level-undefined");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("select.lr2skin");
+    fs::write(
+        &path,
+        "#INFORMATION,5,test,test\n#IMAGE,a.png\n\
+         #SRC_NUMBER,0,0,0,0,110,20,11,1,0,0,71,0,4,0,1\n\
+         #DST_NUMBER,0,0,10,10,10,20,0,255,255,255,255,0,0,0,0,0,0\n\
+         #SRC_BAR_LEVEL,0,9,0,0,110,20,11,1,0,0,0,0,2\n",
+    )
+    .unwrap();
+    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let values = loaded.value["value"].as_array().unwrap();
+    assert_eq!(values.len(), 1);
+    assert_eq!(values[0]["ref"], 71);
+    fs::remove_dir_all(root).unwrap();
+}

@@ -69,8 +69,12 @@ impl CsvBuilder<'_> {
                     }
                 }
                 "LEVEL" => {
+                    // add_number skips an undefined image; never retarget an earlier number.
+                    let before = self.values.len();
                     self.add_number(line);
-                    if let Some(number) = self.values.last_mut() {
+                    if self.values.len() > before
+                        && let Some(number) = self.values.last_mut()
+                    {
                         number["ref"] = json!(96);
                     }
                 }
