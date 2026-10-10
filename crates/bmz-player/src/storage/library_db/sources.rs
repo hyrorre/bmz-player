@@ -34,6 +34,21 @@ impl ChartSource {
     }
 }
 
+pub(crate) fn prime_archive_generations(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare("SELECT path, stamp, generation FROM song_archive_fingerprints")?;
+    let rows = stmt.query_map([], |row| {
+        Ok(crate::song_archive::GenerationRecord {
+            path: PathBuf::from(row.get::<_, String>(0)?),
+            stamp: row.get(1)?,
+            generation: crate::song_archive::ArchiveGeneration { fingerprint: row.get(2)? },
+        })
+    })?;
+    for record in rows {
+        crate::song_archive::remember_generation(record?);
+    }
+    Ok(())
+}
+
 fn sources_for_hash(conn: &Connection, column: &str, hash: &str) -> Result<Vec<ChartSource>> {
     debug_assert!(matches!(column, "sha256" | "md5"));
     let mut stmt = conn.prepare(&format!(
@@ -177,6 +192,9 @@ impl LibraryDatabase {
     pub fn verified_chart_source(&self, chart_id: i64) -> Result<ChartSource> {
         let mut errors = Vec::new();
         for source in self.chart_source_candidates(chart_id, true)? {
+            if self.archive_import_is_current(&source) {
+                return Ok(source);
+            }
             match source.locator().and_then(|locator| locator.read_bytes()) {
                 Ok(bytes)
                     if bmz_chart::hash::compute_chart_identity(&bytes).file_sha256
@@ -197,6 +215,56 @@ impl LibraryDatabase {
                 errors.join("; ")
             }
         )
+    }
+
+    /// An archive chart imported from the archive's current generation is unchanged by
+    /// construction, so the window thread need not decode the entry to re-hash it.
+    fn archive_import_is_current(&self, source: &ChartSource) -> bool {
+        let Ok(ChartLocator::Archive { container, entry }) = source.locator() else {
+            return false;
+        };
+        let Some(generation) = self
+            .conn
+            .query_row(
+                "SELECT generation FROM song_archive_scans WHERE path = ?1 AND import_version = ?2",
+                rusqlite::params![library_path_key(&container), source.import_version],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+        else {
+            return false;
+        };
+        // inspect() only re-hashes when the archive's metadata stamp changed.
+        crate::song_archive::inspect(&container, &Default::default()).is_ok_and(|index| {
+            index.generation.fingerprint == generation
+                && index
+                    .entries
+                    .iter()
+                    .any(|candidate| !candidate.is_directory && candidate.name == entry)
+        })
+    }
+
+    /// Seed remembered whole-archive hashes so unchanged archives are not re-read.
+    pub fn prime_archive_generations(&self) -> Result<()> {
+        prime_archive_generations(&self.conn)
+    }
+
+    pub fn store_archive_generation(
+        &self,
+        record: &crate::song_archive::GenerationRecord,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO song_archive_fingerprints (path, stamp, generation) VALUES (?1, ?2, ?3)
+             ON CONFLICT(path) DO UPDATE SET stamp = excluded.stamp, generation = excluded.generation",
+            rusqlite::params![
+                record.path.to_string_lossy(),
+                record.stamp,
+                record.generation.fingerprint
+            ],
+        )?;
+        Ok(())
     }
 
     fn chart_source_candidates(

@@ -514,3 +514,27 @@ fn rar_volume_corruption_and_decoder_limits_are_rejected() {
     };
     assert!(scan_charts(&path, &control, |_, _| Ok(())).is_err());
 }
+
+#[test]
+fn unchanged_stamp_reuses_remembered_generation_and_rewrite_rehashes() {
+    let temp = Temp::new();
+    let path = temp.path("song.zip");
+    zip(&path, &[(b"chart.bms", b"#TITLE old", 0o100644)]);
+    let control = ArchiveControl::default();
+    let hashed = read_chart(&path, "chart.bms", &control).unwrap().generation;
+    let record = generation_record(&path).unwrap();
+    assert_eq!(record.generation, hashed);
+    assert_eq!(record.stamp, metadata_stamp(&path).unwrap().token());
+
+    // A remembered generation for the current stamp is trusted without re-reading the file.
+    let seeded = ArchiveGeneration { fingerprint: "v1-seeded".into() };
+    remember_generation(GenerationRecord { generation: seeded.clone(), ..record.clone() });
+    assert_eq!(read_chart(&path, "chart.bms", &control).unwrap().generation, seeded);
+
+    // Rewriting the archive changes its stamp, so the stale record is ignored.
+    zip(&path, &[(b"chart.bms", b"#TITLE new generation", 0o100644)]);
+    let rewritten = read_chart(&path, "chart.bms", &control).unwrap().generation;
+    assert_ne!(rewritten, seeded);
+    assert_ne!(rewritten, hashed);
+    assert_eq!(generation_record(&path).unwrap().generation, rewritten);
+}

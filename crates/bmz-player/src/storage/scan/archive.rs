@@ -16,6 +16,9 @@ pub(super) fn import_archive(
 ) -> Result<ScanReport> {
     let control = ArchiveControl::default();
     let index = song_archive::inspect(container, &control)?;
+    if let Some(record) = song_archive::generation_record(container) {
+        db.store_archive_generation(&record)?;
+    }
     let archive_key = crate::storage::library_db::library_path_key(container);
     let previous: Option<(String, i64)> = db
         .conn()

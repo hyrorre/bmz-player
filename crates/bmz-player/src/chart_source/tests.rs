@@ -396,3 +396,33 @@ fn course_hash_and_preferred_copy_resolution_accept_archive_entries() {
         );
     }
 }
+
+#[test]
+fn scanned_archive_generation_is_persisted_for_later_processes() {
+    let mut f = Fixture::new();
+    let archive = f.zip("songs.zip", &[("chart/song.bms", BMS)]);
+    f.scan();
+    let id = f.id("songs.zip", "chart/song.bms");
+    let canonical = archive.canonicalize().unwrap();
+    let (stamp, generation): (String, String) =
+        f.db.conn()
+            .query_row(
+                "SELECT stamp, generation FROM song_archive_fingerprints WHERE path = ?1",
+                [canonical.to_string_lossy()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+    assert_eq!(stamp, song_archive::metadata_stamp(&canonical).unwrap().token());
+    let scanned: String =
+        f.db.conn()
+            .query_row("SELECT generation FROM song_archive_scans", [], |row| row.get(0))
+            .unwrap();
+    assert_eq!(generation, scanned);
+    f.db.prime_archive_generations().unwrap();
+    assert_eq!(song_archive::generation_record(&archive).unwrap().generation.fingerprint, scanned);
+    assert_eq!(f.db.verified_chart_source(id).unwrap().chart.chart_id, id);
+
+    // A rewrite invalidates the scanned generation, so verification re-reads the entry.
+    f.zip("songs.zip", &[("chart/song.bms", b"#TITLE Different\n#BPM 120\n")]);
+    assert!(f.db.verified_chart_source(id).unwrap_err().to_string().contains("hash changed"));
+}

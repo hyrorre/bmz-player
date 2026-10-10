@@ -41,6 +41,32 @@ pub(super) fn remember_index(
     }
 }
 
+type Generations = Mutex<HashMap<PathBuf, (String, ArchiveGeneration)>>;
+static GENERATIONS: OnceLock<Generations> = OnceLock::new();
+const MAX_GENERATIONS: usize = 1 << 16;
+
+pub(super) fn known_generation(path: &Path, stamp: &str) -> Option<ArchiveGeneration> {
+    let generations = GENERATIONS.get_or_init(Mutex::default).lock().unwrap();
+    generations
+        .get(path)
+        .filter(|(known, _)| known == stamp)
+        .map(|(_, generation)| generation.clone())
+}
+
+pub(super) fn remember_generation(path: PathBuf, stamp: String, generation: ArchiveGeneration) {
+    let mut generations = GENERATIONS.get_or_init(Mutex::default).lock().unwrap();
+    if generations.len() >= MAX_GENERATIONS && !generations.contains_key(&path) {
+        // Entries are tiny; a reset only costs one rehash per archive touched afterwards.
+        generations.clear();
+    }
+    generations.insert(path, (stamp, generation));
+}
+
+fn forget_generation(path: &Path) {
+    GENERATIONS.get_or_init(Mutex::default).lock().unwrap().remove(path);
+    INDEX.get_or_init(Mutex::default).lock().unwrap().retain(|cached| cached.path != path);
+}
+
 type MaterializeLocks = Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>;
 static LOCKS: OnceLock<MaterializeLocks> = OnceLock::new();
 static NEXT_STAGE: AtomicU64 = AtomicU64::new(0);
@@ -144,7 +170,11 @@ pub fn materialize(
     // Rehash before publication: a source rewrite must never publish mixed-generation bytes.
     let mut verification =
         CheckedFile { file: std::fs::File::open(&path)?, control: control.clone() };
-    ensure!(fingerprint(&mut verification)? == *expected, "song archive changed during extraction");
+    if fingerprint(&mut verification)? != *expected {
+        // The remembered generation no longer describes these bytes; hash afresh next time.
+        forget_generation(&path);
+        anyhow::bail!("song archive changed during extraction");
+    }
     let marker_path = stage.0.join("complete.json");
     let mut marker = std::fs::OpenOptions::new().create_new(true).write(true).open(marker_path)?;
     serde_json::to_writer(&mut marker, expected)?;

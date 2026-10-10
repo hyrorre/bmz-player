@@ -56,6 +56,10 @@ pub fn scan_song_roots_with_progress(
     // Discovery runs across every root before fingerprinting/importing so the
     // progress denominator can grow in real time without resetting per root.
     on_progress(ScanProgress::default());
+    // Unchanged archives keep their remembered generation instead of being re-hashed.
+    if let Err(error) = db.prime_archive_generations() {
+        tracing::warn!(error = %error, "failed to load remembered song archive generations");
+    }
     for (root_index, root) in enabled_roots.into_iter().enumerate() {
         report.summary.roots_seen = report.summary.roots_seen.saturating_add(1);
         let root_path = Path::new(&root.path);

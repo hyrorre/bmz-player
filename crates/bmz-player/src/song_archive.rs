@@ -69,6 +69,24 @@ pub struct ArchiveStamp {
     pub size: u64,
     pub modified: Option<SystemTime>,
     pub created: Option<SystemTime>,
+    /// Unix inode and status-change time; unlike mtime, ctime cannot be set back by tools.
+    pub changed: Option<(u64, i64)>,
+}
+
+impl ArchiveStamp {
+    /// Stable text form for persisting a stamp alongside the generation it was hashed at.
+    pub fn token(&self) -> String {
+        fn time(value: Option<SystemTime>) -> String {
+            match value.map(|time| time.duration_since(SystemTime::UNIX_EPOCH)) {
+                Some(Ok(after)) => after.as_nanos().to_string(),
+                Some(Err(before)) => format!("-{}", before.duration().as_nanos()),
+                None => "_".to_string(),
+            }
+        }
+        let changed =
+            self.changed.map_or("_".to_string(), |(inode, ctime)| format!("{inode}.{ctime}"));
+        format!("v1:{}:{}:{}:{changed}", self.size, time(self.modified), time(self.created))
+    }
 }
 
 pub fn metadata_stamp(path: &Path) -> Result<ArchiveStamp> {
@@ -81,7 +99,41 @@ fn stamp(metadata: &std::fs::Metadata) -> Result<ArchiveStamp> {
         size: metadata.len(),
         modified: metadata.modified().ok(),
         created: metadata.created().ok(),
+        changed: changed(metadata),
     })
+}
+
+#[cfg(unix)]
+fn changed(metadata: &std::fs::Metadata) -> Option<(u64, i64)> {
+    use std::os::unix::fs::MetadataExt;
+    Some((metadata.ino(), metadata.ctime().saturating_mul(1_000_000_000) + metadata.ctime_nsec()))
+}
+
+#[cfg(not(unix))]
+fn changed(_: &std::fs::Metadata) -> Option<(u64, i64)> {
+    None
+}
+
+/// A whole-archive hash remembered for the stamp it was computed at, so unchanged
+/// archives are not re-read on every play, preview or process start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenerationRecord {
+    pub path: PathBuf,
+    pub stamp: String,
+    pub generation: ArchiveGeneration,
+}
+
+/// The remembered generation for `path`, if its stamp still matches the file.
+pub fn generation_record(path: &Path) -> Option<GenerationRecord> {
+    let path = std::fs::canonicalize(path).ok()?;
+    let stamp = metadata_stamp(&path).ok()?.token();
+    let generation = cache::known_generation(&path, &stamp)?;
+    Some(GenerationRecord { path, stamp, generation })
+}
+
+/// Seed a persisted record. A stale record is harmless: lookups require an equal stamp.
+pub fn remember_generation(record: GenerationRecord) {
+    cache::remember_generation(record.path, record.stamp, record.generation);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -231,17 +283,26 @@ impl Opened {
     fn new(path: &Path, control: &ArchiveControl) -> Result<Self> {
         control.check()?;
         ensure!(is_archive(path), "unsupported song archive extension");
+        let canonical = std::fs::canonicalize(path)?;
         let mut file = CheckedFile { file: std::fs::File::open(path)?, control: control.clone() };
         let before = stamp(&file.file.metadata()?)?;
         ensure!(
             before.size <= control.limits.compressed_bytes,
             "archive compressed bytes exceed limit"
         );
-        let generation = fingerprint(&mut file)?;
-        file.seek(SeekFrom::Start(0))?;
+        let token = before.token();
+        let generation = match cache::known_generation(&canonical, &token) {
+            Some(generation) => generation,
+            None => {
+                let generation = fingerprint(&mut file)?;
+                file.seek(SeekFrom::Start(0))?;
+                generation
+            }
+        };
         let (backend, entries) = Backend::open(file, control)?;
         validate_entries(&entries, &control.limits)?;
         ensure!(metadata_stamp(path)? == before, "archive changed while reading index");
+        cache::remember_generation(canonical, token, generation.clone());
         Ok(Self { backend, index: ArchiveIndex { generation, entries }, stamp: before })
     }
 

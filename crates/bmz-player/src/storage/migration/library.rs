@@ -940,4 +940,14 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             import_version INTEGER NOT NULL
         );"],
     },
+    Migration {
+        version: 36,
+        // Whole-archive hashes keyed by canonical path and metadata stamp. Losing a row
+        // only costs one rehash, so a stale or missing row never affects correctness.
+        statements: &["CREATE TABLE song_archive_fingerprints (
+            path TEXT PRIMARY KEY,
+            stamp TEXT NOT NULL,
+            generation TEXT NOT NULL
+        );"],
+    },
 ];
