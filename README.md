@@ -1,11 +1,11 @@
 # bmz-player
 
-Next-Generation BMS Player (WIP)
+Next-Generation BMS Player (beta)
 
 Supported OS
 - Windows
 - macOS
-- Linux (probably works)
+- Linux
 
 Supported Format
 - BMS (5K / 7K / 10K / 14K)
@@ -14,16 +14,6 @@ Supported Format
 - Base 62 BMS (62進数BMS)
 - BMSON
 
-ZIP / RAR / 7z 内の譜面も曲rootのスキャンから選曲・再生できます。
-CLIでは `"set.zip!/song/chart.bms"` のように内部譜面を指定します。
-資源は必要時にキャッシュへ展開します。[書庫内譜面の対応範囲](docs/archive-songs.md)を参照してください。
-
-BMS / PMS の小節データは `#00111:0101` と空白区切りの `#00111 0101`（タブも可）を
-混在して読み込めます。小節長変更や BGA にも同じ区切りを使えます。
-互換処理は読み込み時だけに適用し、譜面ファイルと MD5 / SHA-256 は原文を維持します。
-
-BMS / PMS の `#BMP00` は開始時のミス画像になります。チャンネル06でミス画像を変更でき、
-開始時刻に明示したチャンネル06がある場合はそちらを優先します。
 
 Supported Skin
 - beatoraja json skin
@@ -34,12 +24,15 @@ Features
 - score database migration from LR2 / beatoraja
 - auto-adjust (自動判定調整)
 - normalizing volume per-chart (譜面ごとの自動音量調整)
-- internet ranking (BMZ IR)
+- internet ranking ([BMZ IR](https://bmz-player.hyrorre.workers.dev/) / [rianIR](https://rianir.link/) / [BMS-IR](https://bms-ir.org/))
 - selectable rule-mode (beatoraja / LR2oraja / DX MODE)
 - advanced selectable ln-mode (AUTO(LN) / AUTO(CN) / AUTO(HCN) / FORCE(LN) / FORCE(CN) / FORCE(HCN))
 - on-demand preview generation
   - #PREVIEW 定義や preview.wav(.ogg) がない曲のプレビューを再生することができます
 - FAST/SLOW 表示ms指定機能
+- BMSエディタ連携
+  - エディタからbmzを起動してプレビューすることができます。カーソルキーなどでシークも可能。
+- 圧縮ファイル(ZIP / RAR / 7z)内の譜面のロードに対応
 - Discord Rich Presence
 - OBS WebSocket control integration
 
@@ -171,8 +164,8 @@ Ubuntu needs:
 sudo apt-get install libpipewire-0.3-dev libspa-0.2-dev clang libclang-dev pkg-config
 ```
 
-Audio backend Auto continues to prefer PulseAudio, then ALSA. See
-[Linux build and audio setup](docs/linux-latency.md#ビルド) for backend selection,
+Audio backend Auto continues to prefer PulseAudio, then ALSA.
+See [Linux build and audio setup](docs/linux-latency.md#ビルド) for backend selection,
 Ubuntu 22.04 limitations, and building without PipeWire.
 
 ## Roadmap
@@ -180,15 +173,16 @@ Ubuntu 22.04 limitations, and building without PipeWire.
 - [x] WASAPI exclusive
 - [x] practice mode
 - [x] more beatoraja-compatible features
-- [ ] battle mode (WIP)
-- [ ] rec mode (譜面動画作成モード)
+- [x] battle mode
+- [x] rec mode (譜面動画作成モード)
+- [x] ギミック系BMSへの対応
+- [ ] LR2-style csv skin (WIP)
 - [ ] Arena Mode
-- [ ] ギミック系BMSへの対応
-- [ ] non stop mode
+- [ ] マニュアルの整備
+- [ ] デフォルトスキンの改善
+- [ ] 正式版(v1)リリース？
 
 ## Out of Scope (but welcome your contributions)
 
 - [ ] 24K / 48K BMS
 - [ ] 18K PMS (9K DOUBLE PLAY)
-- [ ] LR2-style csv skin
-- [ ] More features like LR2

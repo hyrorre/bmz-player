@@ -4,7 +4,6 @@ BMZ Player の継続開発で常に参照する作業方針です。機能の詳
 
 ## 1. 作業方針
 
-- 回答・提案・Planは日本語で行います。
 - BMZ Player は LunaticRave2 / beatoraja の後継を目指すBMSプレイヤーです。
   Rust + wgpu、egui、cpal + ffmpeg-next、bms-rsを使用し、Windows / macOS / Linuxを対象にします。
 - 「調査」「レビュー」「改良案」「実装計画」の依頼では、調査結果と提案を先に示します。
