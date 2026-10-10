@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(cargo fmt *)",
+      "Bash(cargo check *)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo test *)",
+      "Bash(cargo build *)",
+      "Bash(rg *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(bun run test:ir*)",
+      "Bash(bun run test:i18n *)",
+      "Bash(bunx vue-tsc *)",
+      "Bash(bunx prettier --check *)",
+      "PowerShell(cargo fmt *)",
+      "PowerShell(cargo check *)",
+      "PowerShell(cargo clippy *)",
+      "PowerShell(cargo test *)",
+      "PowerShell(cargo build *)",
+      "PowerShell(rg *)",
+      "PowerShell(git status *)",
+      "PowerShell(git diff *)",
+      "PowerShell(git log *)",
+      "PowerShell(git show *)",
+      "PowerShell(git add *)",
+      "PowerShell(git commit *)",
+      "PowerShell(bun run test:ir*)",
+      "PowerShell(bun run test:i18n *)",
+      "PowerShell(bunx vue-tsc *)",
+      "PowerShell(bunx prettier --check *)"
+    ],
+    "ask": [
+      "Bash(git push *)",
+      "PowerShell(git push *)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Bash(bun run deploy *)",
+      "Bash(bun run db:migrate:remote *)",
+      "Bash(bun run db:execute:remote *)",
+      "Bash(bun run db:export:remote *)",
+      "Bash(*wrangler deploy *)",
+      "Bash(*wrangler d1 * --remote *)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "PowerShell(bun run deploy *)",
+      "PowerShell(bun run db:migrate:remote *)",
+      "PowerShell(bun run db:execute:remote *)",
+      "PowerShell(bun run db:export:remote *)",
+      "PowerShell(*wrangler deploy *)",
+      "PowerShell(*wrangler d1 * --remote *)",
+      "PowerShell(git push --force *)",
+      "PowerShell(git push -f *)"
+    ]
+  }
+}

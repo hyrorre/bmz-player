@@ -10,7 +10,7 @@ BMZ Player の継続開発で常に参照する作業方針です。機能の詳
   修正を依頼されたら、合意した範囲の実装・検証まで進めます。
 - 最初に `git status --short` を確認し、ユーザーや別ツールの変更を保持します。
   作業と無関係な差分を戻したり、コミットへ混ぜたりしません。
-- ファイル・テキスト探索は `rg --files` / `rg`、手編集は `apply_patch` を使います。
+- ファイル・テキスト探索は `rg --files` / `rg`、手編集はエージェントのファイル編集ツール（`apply_patch`、Edit等）を使います。
   PowerShellではファイル引数のワイルドカード展開に頼らず、実在するパスを渡します。
 - 既存のhelper・境界・テストを調べてから変更します。関係のないwarningや大規模整形は原則触りません。
 - 不具合は設定・保存データ・非同期処理・入力・描画まで関連する経路を追います。
@@ -181,7 +181,7 @@ Webのコマンドはリポジトリrootから実行します。対象ファイ�
 - subjectは具体的で短い英語とし、小文字の命令形動詞で始め、末尾にピリオドを付けません。
   `feat` は機能追加、`fix` は不具合修正、`test` はテスト変更、`chore` は文書・整形等に使います。
 - 本文に必要性、主要変更、検証結果を記載します。日本語で構いません。
-  Footerには実際に使用したagent/modelを `Co-Authored-By:` で記載します。
+  Footerには実際に使用したagent/modelを `Co-Authored-By:` で記載します。他のagentの名前やアドレスを流用しません。
 
 ```text
 fix(bmz-player): discard obsolete result skin refreshes
@@ -190,13 +190,16 @@ fix(bmz-player): discard obsolete result skin refreshes
 
 - 検証したテストと、未実施の確認があれば記載する。
 
-Co-Authored-By: Codex <実際のモデル名> <noreply@openai.com>
+Co-Authored-By: <agent名> <実際のモデル名> <agentのnoreplyアドレス>
 ```
+
+Footerの例: `Co-Authored-By: Codex <実際のモデル名> <noreply@openai.com>`、
+`Co-Authored-By: Claude <実際のモデル名> <noreply@anthropic.com>`。
 
 - 本文やFooterを含む複数行のcommit messageは、OSやshellを問わずBOMなしUTF-8の一時ファイルへ保存し、
   `git commit -F <file>` で渡します。shell引数内の `\n` による改行表現は、literalな `\n` の混入を防ぐため使いません。
   一時ファイルは `.local/commit-message.txt` 等のGit管理外の場所へ作成し、commit後に削除します。
-- macOS / Linuxでは `apply_patch` 等の通常のファイル編集で一時ファイルを作成します。
-  Windows / PowerShell 7では、例として `Set-Content -Encoding utf8NoBOM .local/commit-message.txt` を使えます。
+- 一時ファイルはエージェントのファイル編集ツールで作成します。
+  shellで作成する場合、Windows / PowerShell 7では、例として `Set-Content -Encoding utf8NoBOM .local/commit-message.txt` を使えます。
 - commit後は `git show -s --format=fuller HEAD` で本文とFooterを確認し、literalな `\n` が混入していれば、
   正しいメッセージファイルを使って直ちに `git commit --amend -F <file>` で修正します。
