@@ -132,6 +132,25 @@ LIFTに追従するボム・キービーム等の扱いを変えない。
 閉じられていない `#IF` はファイル末尾まで有効とする。
 beatorajaは入れ子を持たず `#IF` ごとに判定し直すが、閉じた入れ子を除けば同じ結果になる。
 
+## LR2のnumber / option
+
+LR2とbeatorajaで同じ番号の意味が違うnumber / optionは、変換時にLR2専用の参照へ移し、
+LR2の `GetNumber` / `GetOptionFlag_dst` の定義で評価する（number `93_000+ID`、
+option `94_000+ID`、否定は符号を維持）。意味が一致する番号はbeatorajaの参照のまま使う。
+変換の表は [refs.rs](../crates/bmz-skin/src/lr2/refs.rs) に集約する。
+
+| 種類 | ID | 画面 | LR2の定義 |
+|---|---|---|---|
+| number | 100 / 107 / 108 / 109 / 114 | Play、Result（1P / 反転後の自分側） | LR2式スコア、2%刻みのゲージ、2P（SPではターゲットの現在進捗）とのEX差、次ランクまでの差（負値、MAXは0）、POOR＋空POOR |
+| number | 92 / 93 / 94 / 95 | Select / Decide | 選択中の曲のIR順位、参加人数、EASY以上のクリア率、ライバルとのEX差。フォルダでは非表示 |
+| number | 290 / 291 | 全画面 | 最高 / 最低BPM（90 / 91と同じ） |
+| option | 52 / 54 / 56、620 / 622 | 全画面 | EXTRA OFF、オートスクラッチOFF、ランキング表示OFF、ゴーストバトルOFFとして常にtrue（53 / 55 / 57、621 / 623はfalse） |
+| option | 100..105 / 110..117 | Select / Decide | 選択中の曲のクリアランプ（beatorajaのクリア種別をバーのランプと同じ5段階へ畳む）とランク（プレイ済みのみ）。描画時に評価する |
+| option | 340..347 | Result / Course Result | 今回のスコアのランク |
+
+レベルバー（option 500..565）、ゴーストの進捗値（number 150 / 151、155..158）、
+IRのクリア人数の5分類（number 210..219）等は、必要な値の供給が無いため未対応。
+
 ## LR2のSelect / Result
 
 type 5の選曲、type 7の通常リザルト、type 15のコースリザルトを既存の各スロットから選ぶ。

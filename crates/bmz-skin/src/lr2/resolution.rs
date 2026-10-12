@@ -19,7 +19,7 @@ impl<'a> CsvBuilder<'a> {
         ops: &HashMap<i32, bool>,
     ) -> Option<(u32, u32)> {
         let mut counts = [0_usize; LR2_INFERABLE_RESOLUTIONS.len()];
-        let mut processor = Processor::new(ops.clone());
+        let mut processor = Processor::for_skin(ops.clone(), self.header.skin_type);
         self.count_full_screen_destinations(lines, path, &mut processor, &mut counts, 0);
         let (index, count) = counts
             .iter()

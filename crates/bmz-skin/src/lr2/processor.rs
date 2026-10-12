@@ -2,9 +2,15 @@ use super::*;
 
 pub(super) struct Processor {
     pub(super) ops: HashMap<i32, bool>,
+    skin_type: Option<i32>,
     runtime_aliases: HashMap<i32, Vec<i32>>,
     stack: Vec<IfState>,
     pub(super) option_dependencies: BTreeMap<i32, bool>,
+}
+
+fn is_runtime_option(skin_type: Option<i32>, option_id: i32) -> bool {
+    is_runtime_lr2_option(option_id)
+        || skin_type.is_some_and(|skin_type| is_lr2_scene_runtime_option(skin_type, option_id))
 }
 
 /// One `#IF` level. As in LR2, each level is evaluated on its own condition only:
@@ -22,10 +28,16 @@ impl Processor {
     pub(super) fn new(ops: HashMap<i32, bool>) -> Self {
         Self {
             ops,
+            skin_type: None,
             runtime_aliases: HashMap::new(),
             stack: Vec::new(),
             option_dependencies: BTreeMap::new(),
         }
+    }
+
+    /// Also keeps the scene's song-dependent LR2 options for draw-time evaluation.
+    pub(super) fn for_skin(ops: HashMap<i32, bool>, skin_type: i32) -> Self {
+        Self { skin_type: Some(skin_type), ..Self::new(ops) }
     }
 
     pub(super) fn process_lines(
@@ -183,6 +195,7 @@ impl Processor {
     pub(super) fn eval_if(&mut self, line: &CsvLine) -> IfEval {
         let mut runtime_ops = Vec::new();
         let ops = self.ops.clone();
+        let skin_type = self.skin_type;
         let dependencies = &mut self.option_dependencies;
         let matches =
             line.fields.iter().skip(1).filter(|field| !field.trim().is_empty()).all(|field| {
@@ -200,7 +213,7 @@ impl Processor {
                     }
                 } else if matches!(option_id, 350 | 351) && ops.contains_key(&option_id) {
                     ops[&option_id] == (option >= 0)
-                } else if is_runtime_lr2_option(option_id) {
+                } else if is_runtime_option(skin_type, option_id) {
                     runtime_ops.push(option);
                     true
                 } else if let Some(enabled) = ops.get(&option_id).copied() {

@@ -141,6 +141,13 @@ impl<'a> CsvBuilder<'a> {
                 ops.push(json!(op));
             }
         }
+        for op in ops.iter_mut() {
+            if let Some(value) = op.as_i64().and_then(|value| i32::try_from(value).ok())
+                && let Some(mapped) = lr2_option_ref(self.header.skin_type, value)
+            {
+                *op = json!(mapped);
+            }
+        }
         if matches!(self.header.skin_type, 7 | 15) {
             for op in ops.iter_mut() {
                 if let Some(value) = op.as_i64()

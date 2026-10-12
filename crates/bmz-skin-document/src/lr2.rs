@@ -8,6 +8,14 @@ pub const LR2_RESULT_NUMBER_BASE: i32 = 91_000;
 pub const LR2_RESULT_NUMBER_LAST: i32 = 91_036;
 pub const LR2_RESULT_RANK_BASE: i32 = 92_000;
 pub const LR2_RESULT_RANK_LAST: i32 = 92_018;
+/// LR2 number IDs whose meaning differs from beatoraja's ref with the same number.
+/// The renderer evaluates `LR2_NUMBER_BASE + id` with LR2's definition.
+pub const LR2_NUMBER_BASE: i32 = 93_000;
+pub const LR2_NUMBER_LAST: i32 = 93_999;
+/// LR2 option IDs whose meaning differs from beatoraja's option with the same number.
+/// Negated options keep their sign: `-(LR2_OPTION_BASE + id)`.
+pub const LR2_OPTION_BASE: i32 = 94_000;
+pub const LR2_OPTION_LAST: i32 = 94_999;
 
 pub fn lr2_gauge_index(index: usize) -> Option<usize> {
     match index {

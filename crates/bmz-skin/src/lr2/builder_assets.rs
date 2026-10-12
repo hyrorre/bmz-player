@@ -156,7 +156,9 @@ impl<'a> CsvBuilder<'a> {
         } else {
             0
         };
-        let ref_id = if matches!(self.header.skin_type, 0 | 1 | 2 | 3 | 4 | 12 | 13) {
+        let ref_id = if let Some(ref_id) = lr2_number_ref(self.header.skin_type, values[11]) {
+            ref_id
+        } else if matches!(self.header.skin_type, 0 | 1 | 2 | 3 | 4 | 12 | 13) {
             match values[11] {
                 10 | 11 => SKIN_REF_BMZ_LR2_HISPEED,
                 127 => SKIN_REF_BMZ_LR2_GAUGE_2P,

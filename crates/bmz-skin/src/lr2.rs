@@ -22,10 +22,12 @@ mod builder_result;
 mod builder_select;
 mod helpers;
 mod processor;
+mod refs;
 mod resolution;
 
 use helpers::*;
 use processor::Processor;
+use refs::*;
 
 const LR2_OFFSET_LIFT: i32 = 3;
 const LR2_OFFSET_JUDGE_1P: i32 = 32;
@@ -272,8 +274,8 @@ pub(super) fn load_lr2_csv_skin_value_with_runtime_options(
     apply_selected_header_options(&mut header, options);
     let mut builder = CsvBuilder::new(path, header, files);
     let lines = read_csv_lines(path)?;
-    let mut ops =
-        runtime_options.iter().map(|(&id, &value)| (id, value)).collect::<HashMap<_, _>>();
+    let mut ops = LR2_FIXED_OPTIONS.into_iter().collect::<HashMap<_, _>>();
+    ops.extend(runtime_options.iter().map(|(&id, &value)| (id, value)));
     ops.extend(builder.header.selected_ops.clone());
     if matches!(builder.header.skin_type, 7 | 15) {
         ops.insert(350, true);
@@ -284,7 +286,7 @@ pub(super) fn load_lr2_csv_skin_value_with_runtime_options(
     {
         (builder.header.w, builder.header.h) = (w, h);
     }
-    let mut processor = Processor::new(ops);
+    let mut processor = Processor::for_skin(ops, builder.header.skin_type);
     processor.process_lines(&lines, path, &mut builder)?;
     dependencies.option_values.extend(processor.option_dependencies);
     dependencies.option_values.extend(builder.load_time_option_dependencies());

@@ -72,6 +72,7 @@ pub(in crate::skin) fn test_skin_op(
         return value;
     }
     match op {
+        LR2_OPTION_BASE..=LR2_OPTION_LAST => super::lr2::lr2_option(op - LR2_OPTION_BASE, state),
         LR2_RESULT_RANK_BASE..=LR2_RESULT_RANK_LAST => {
             let rank = op - LR2_RESULT_RANK_BASE;
             (rank >= 10) == state.lr2_result_flip && result_rank_op_matches(300 + rank % 10, state)

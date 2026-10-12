@@ -2,6 +2,7 @@ use super::*;
 
 mod draw;
 mod expression;
+mod lr2;
 mod operand;
 mod options;
 mod value;

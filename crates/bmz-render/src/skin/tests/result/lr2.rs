@@ -165,3 +165,106 @@ fn lr2_select_option_buttons_show_cycled_profile_values() {
     let result = SkinDrawState { select_screen: false, ..state };
     assert_eq!((index(50, &result), index(75, &result), index(77, &result)), (-1, -1, -1));
 }
+
+#[test]
+fn lr2_numbers_follow_lr2_definitions() {
+    let lr2 = |id: i32, state: &SkinDrawState| skin_state_number(LR2_NUMBER_BASE + id, state);
+    let mut state = SkinDrawState {
+        play_screen: true,
+        key_mode: KeyMode::K7,
+        total_notes: 100,
+        past_notes: 50,
+        ex_score: 120,
+        gauge: 77.9,
+        target_ex_score: Some(160),
+        judge_counts: crate::snapshot::DisplayJudgeCounts {
+            pgreat: 50,
+            great: 20,
+            good: 5,
+            bad: 3,
+            poor: 4,
+            empty_poor: 6,
+        },
+        ..Default::default()
+    };
+    // POOR includes empty POOR, unlike beatoraja's NUMBER_POOR (114).
+    assert_eq!(lr2(114, &state), Some(10));
+    assert_eq!(skin_state_number(114, &state), Some(4));
+    assert_eq!(lr2(100, &state), Some((50 * 4 + 20 * 2 + 5) * 50_000 / 100));
+    assert_eq!(lr2(107, &state), Some(76));
+    // Single play compares with the target ghost at the current progress.
+    assert_eq!(lr2(108, &state), Some(120 - 80));
+    // 120 / 200 is rank 5 (B); A starts at 200 * 6 / 9 = 133.
+    assert_eq!(lr2(109, &state), Some(120 - 133));
+    // Result 1P POOR goes through the flip namespace to the same definition.
+    state.play_screen = false;
+    state.result_failed = Some(false);
+    assert_eq!(skin_state_number(LR2_RESULT_NUMBER_BASE + 14, &state), Some(10));
+    state.lr2_result_flip = true;
+    assert_eq!(skin_state_number(LR2_RESULT_NUMBER_BASE + 34, &state), Some(10));
+}
+
+#[test]
+fn lr2_select_ir_numbers_are_not_the_main_bpm() {
+    let mut state = SkinDrawState {
+        select_screen: true,
+        select_row_kind: SelectRowKind::Song,
+        select_in_library: true,
+        select_chart_main_bpm: 150.0,
+        select_ex_score: Some(900),
+        rival_ex_score: Some(850),
+        ..Default::default()
+    };
+    state.ir_ranking.rank = Some(12);
+    state.ir_ranking.total_player = Some(345);
+    let mut counts = [0; 11];
+    counts[1] = 10; // FAILED
+    counts[4] = 20; // EASY
+    counts[6] = 10; // HARD
+    state.ir_ranking.clear_counts = Some(counts);
+    let lr2 = |id: i32, state: &SkinDrawState| skin_state_number(LR2_NUMBER_BASE + id, state);
+    assert_eq!(lr2(92, &state), Some(12));
+    assert_eq!(skin_state_number(92, &state), Some(150));
+    assert_eq!(lr2(93, &state), Some(345));
+    assert_eq!(lr2(94, &state), Some(75));
+    assert_eq!(lr2(95, &state), Some(50));
+    // Folders have no per-song IR values.
+    state.select_is_folder = true;
+    assert_eq!((lr2(92, &state), lr2(95, &state)), (None, None));
+}
+
+#[test]
+fn lr2_options_follow_lr2_definitions() {
+    let op = |id: i32, state: &SkinDrawState| test_skin_ops(&[LR2_OPTION_BASE + id], &[], state);
+    let mut select = SkinDrawState {
+        select_screen: true,
+        select_row_kind: SelectRowKind::Song,
+        select_in_library: true,
+        select_total_notes: 500,
+        select_ex_score: Some(780), // 780 * 9 / 1000 = 7 (AA)
+        select_clear_index: 7,      // EX-HARD is LR2's HARD lamp
+        ..Default::default()
+    };
+    assert!(op(104, &select) && !op(103, &select) && !op(105, &select));
+    assert!(op(111, &select) && !op(110, &select) && !op(112, &select));
+    assert!(test_skin_ops(&[-(LR2_OPTION_BASE + 110)], &[], &select));
+    // Ranks are hidden until the song has been played.
+    select.select_clear_index = 0;
+    assert!(op(100, &select) && !op(111, &select));
+    select.select_is_folder = true;
+    assert!(!op(100, &select));
+    // Fixed values for settings BMZ does not have.
+    for (id, expected) in [(52, true), (53, false), (54, true), (620, true), (621, false)] {
+        assert_eq!(op(id, &select), expected, "option {id}");
+    }
+    // Result new rank 340..347 from the score just played.
+    let result = SkinDrawState {
+        result_failed: Some(false),
+        total_notes: 500,
+        ex_score: 900,
+        ..Default::default()
+    };
+    assert!(op(340, &result) && !op(341, &result));
+    let result = SkinDrawState { ex_score: 250, ..result };
+    assert!(op(346, &result) && !op(347, &result));
+}

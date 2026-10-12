@@ -10,4 +10,5 @@ fn unique_test_dir(name: &str) -> PathBuf {
 mod cases_01;
 #[path = "cases_02.rs"]
 mod cases_02;
+mod refs;
 mod scenes;
