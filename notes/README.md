@@ -33,6 +33,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-13 | [LR2選曲スキンのオプションbuttonを直接切り替えにする](2026/2026-10-13-lr2-select-option-buttons.md) |
 | 2026-10-12 | [upload-local / download-scores レビューと修正](2026/2026-10-12-ir-bulk-review-fixes.md) |
 | 2026-10-11 | [設定画面からのIR一括操作と送信キュー画面](2026/2026-10-11-ir-settings-bulk-ops.md) |
 | 2026-10-11 | [入場SEとシステムBGMの独立指定](2026/2026-10-11-system-sound-enter-loop.md) |

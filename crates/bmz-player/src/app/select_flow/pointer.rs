@@ -337,6 +337,9 @@ impl WinitApp {
                 self.handle_select_row_click(row_index, button);
             }
             SkinClickTarget::Event { event_id, click } => {
+                if !select_skin_click_allowed(event_id, button) {
+                    return;
+                }
                 let Some(arg) = select_click_event_arg(click, button, hit.rect, x, y) else {
                     return;
                 };

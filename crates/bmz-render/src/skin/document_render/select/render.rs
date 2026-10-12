@@ -498,6 +498,16 @@ macro_rules! skin_document_render_select_render_methods {
                     "9K" => 7,
                     _ => -1,
                 },
+                // LR2 TARGET: NO TARGET / MY BEST / AAA / AA / A / % / IR TOP / IR NEXT / IR AVG.
+                lr2_select_target_index: match snapshot.target.as_str() {
+                    "NONE" => 0,
+                    "RANK_AAA" => 2,
+                    "RANK_AA" => 3,
+                    "RANK_A" => 4,
+                    "IR_TOP" => 6,
+                    "IR_NEXT" => 7,
+                    _ => -1,
+                },
                 select_arrange_2p_index: select_arrange_index(&snapshot.arrange_2p),
                 select_extended_arrange_index: extended_arrange_index(&snapshot.arrange),
                 select_extended_arrange_2p_index: extended_arrange_index(&snapshot.arrange_2p),

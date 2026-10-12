@@ -5,6 +5,8 @@ pub struct SkinDrawState {
     pub screen_size: [u32; 2],
     pub lr2_result_flip: bool,
     pub lr2_select_mode_index: i32,
+    /// LR2 select button 77 (TARGET) image index. -1 when LR2 has no equivalent.
+    pub lr2_select_target_index: i32,
     pub elapsed_ms: i32,
     /// RANDOM gauge values latched by the scene runtime for each gauge id.
     pub gauge_random_indices: HashMap<String, i32>,
@@ -464,6 +466,7 @@ impl Default for SkinDrawState {
             screen_size: [0, 0],
             lr2_result_flip: false,
             lr2_select_mode_index: -1,
+            lr2_select_target_index: -1,
             elapsed_ms: 0,
             lua_runtime: None,
             gauge_random_indices: HashMap::new(),

@@ -40,6 +40,12 @@ pub(super) fn button_index(button: i32, state: &SkinDrawState) -> i32 {
             2 => 0,
             _ => -1,
         },
+        // LR2 EFFECT: OFF / HIDDEN / SUDDEN / HID+SUD.
+        50 if state.select_screen => {
+            i32::from(state.hidden_enabled) + 2 * i32::from(state.lanecover_enabled)
+        }
+        75 if state.select_screen => i32::from(state.judge_timing_auto_adjust),
+        77 if state.select_screen => state.lr2_select_target_index,
         74 => 0,
         91..=96 => i32::from(state.select_difficulty_filter_index == (button - 91) as usize),
         13..=19 | 57 | 58 => 0,
