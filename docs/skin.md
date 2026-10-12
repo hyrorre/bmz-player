@@ -150,10 +150,30 @@ CSVの引用符はフィールド先頭で開く。引用されていない画�
 クリアランプは表示だけLR2の同系列へまとめ、保存されたクリア種別は維持する。
 `ONMOUSE` の局所範囲とbuttonのパネル制限も評価する。
 
-共通設定は意味で対応付ける。ゲージはNORMAL / HARD / DEATH / EASY、配置は
-NORMAL / MIRROR / RANDOM / S-RANDOM、DPはOFF / FLIP、HS-FIXはOFF / MAX / MIN / MAIN。
-キーフィルターはALL / 7K / 5K / 14K / 10K / 9K、ソートはLEVEL / TITLE / CLEAR / SCORE。
-LR2で表現できない現在値は別の値へ丸めず、変更操作でBMZ設定画面を開く。
+共通設定は意味で対応付ける。LR2のbuttonはBMZ設定画面を開かず、profileの値をLR2の順に直接切り替える。
+
+| button | 設定 | LR2の順（BMZ値） |
+|---|---|---|
+| 10 / 91..96 | 難易度フィルター | 10は常に次へ。91..96は直接選択 |
+| 11 | キーフィルター | ALL / 7K / 5K / 14K / 10K / 9K（常に次へ） |
+| 12 | ソート | LEVEL / TITLE / CLEAR / SCORE（常に次へ） |
+| 40 | ゲージ | NORMAL / HARD / DEATH(HAZARD) / EASY |
+| 42 / 43 | 1P / 2P配置 | NORMAL / MIRROR / RANDOM / S-RANDOM / H-RANDOM / ALL-SCR |
+| 50 | EFFECT | OFF / HIDDEN / SUDDEN / HID+SUD（選択中モードのlane effect） |
+| 54 | DP FLIP | OFF / FLIP |
+| 55 | HS-FIX | OFF / MAX / MIN / MAIN |
+| 57 | ハイスピード | 押した側で上下 |
+| 72 | BGA | OFF / ON / AUTOPLAY |
+| 74 / 75 | 判定タイミング / 自動調整 | ±1ms / OFF・ON |
+| 77 | TARGET | NO TARGET / AAA / AA / A / IR TOP / IR NEXT |
+
+マウスはLR2と同じく左クリックだけを受け付け、増減はbuttonの指定（plus only / minus only / 左右半分）で決める。
+10..12はLR2と同じくクリック位置に関係なく次へ進める。
+現在値がLR2の候補にないBMZ独自値（EX-HARD、R-RANDOM、START BPM、BATTLE等）の場合、
+次へは候補の先頭、前へは末尾へ移る。BMZ独自値はbuttonから選ばず、BMZ設定画面で変更する。
+2..8のパネル、FX/EQ/PITCH、2P側のゲージ・EFFECT・HS、AUTO SCRATCH(44/45)、shutter(46)、
+BATTLE(56)、SCOREGRAPH・GHOST(70/71)、BGA SIZE(73)、既定ターゲット率(76)、
+システム設定(80..83)、favorite tag(90)等、BMZに同じ意味の設定が無いbuttonは何もしない。
 画面下部にはBMZの実際の設定と設定画面への操作案内を表示する。
 E1の基本オプションはLR2配置、E2とE1+E2はBMZパネルを使う。詳細は [操作](controls.md#lr2選曲スキン) を参照。
 button 1のクリック開閉は通常の鍵盤・ゲームパッド入力をまたいで維持する。

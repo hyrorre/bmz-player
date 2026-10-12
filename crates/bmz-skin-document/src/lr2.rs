@@ -19,10 +19,13 @@ pub fn lr2_gauge_index(index: usize) -> Option<usize> {
     }
 }
 
+/// LR2 RANDOM: NORMAL / MIRROR / RANDOM / S-RANDOM / H-RANDOM / ALL-SCR.
 pub fn lr2_arrange_index(index: usize) -> Option<usize> {
     match index {
         0..=2 => Some(index),
         4 => Some(3),
+        6 => Some(4),
+        7 => Some(5),
         _ => None,
     }
 }
@@ -126,6 +129,8 @@ mod tests {
         assert_eq!((lr2_gauge_index(2), lr2_gauge_index(1)), (Some(0), Some(3)));
         assert_eq!(lr2_gauge_index(4), None);
         assert_eq!(lr2_arrange_index(4), Some(3));
+        assert_eq!((lr2_arrange_index(6), lr2_arrange_index(7)), (Some(4), Some(5)));
+        assert_eq!((lr2_arrange_index(3), lr2_arrange_index(5)), (None, None));
         assert_eq!(lr2_arrange_index(9), None);
         assert_eq!(lr2_arrange_index(10), None);
     }

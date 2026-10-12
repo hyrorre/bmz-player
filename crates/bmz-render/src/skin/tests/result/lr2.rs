@@ -137,3 +137,31 @@ fn lr2_button_indices_and_click_panel_restrictions_are_separate_from_bmz() {
     let state = SkinDrawState { select_option_panel: 1, ..state };
     assert!(doc.result_click_hit(&state, 0.15, 0.85).is_some());
 }
+
+#[test]
+fn lr2_select_option_buttons_show_cycled_profile_values() {
+    let select = SkinDrawState { select_screen: true, ..Default::default() };
+    let index = |button: i32, state: &SkinDrawState| {
+        skin_state_event_index(LR2_BUTTON_BASE + button, state)
+    };
+    // RANDOM: H-RANDOM / ALL-SCR are LR2 values 4 / 5; R-RANDOM has no LR2 frame.
+    for (arrange, expected) in [(6, 4), (7, 5), (3, -1)] {
+        let state = SkinDrawState { select_extended_arrange_index: arrange, ..select.clone() };
+        assert_eq!(index(42, &state), expected);
+    }
+    // EFFECT: OFF / HIDDEN / SUDDEN / HID+SUD.
+    for (sudden, hidden, expected) in
+        [(false, false, 0), (false, true, 1), (true, false, 2), (true, true, 3)]
+    {
+        let state =
+            SkinDrawState { lanecover_enabled: sudden, hidden_enabled: hidden, ..select.clone() };
+        assert_eq!(index(50, &state), expected);
+    }
+    let state = SkinDrawState { judge_timing_auto_adjust: true, ..select.clone() };
+    assert_eq!((index(75, &select), index(75, &state)), (0, 1));
+    let state = SkinDrawState { lr2_select_target_index: 6, ..select.clone() };
+    assert_eq!(index(77, &state), 6);
+    // Result screens keep these select-only buttons hidden.
+    let result = SkinDrawState { select_screen: false, ..state };
+    assert_eq!((index(50, &result), index(75, &result), index(77, &result)), (-1, -1, -1));
+}

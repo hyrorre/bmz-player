@@ -5,44 +5,12 @@ impl WinitApp {
         self.renderer.select_skin_document().is_some_and(|d| d.lr2)
     }
 
+    /// Executes an LR2 select button. LR2 options cycle the BMZ value in LR2 order;
+    /// options without a BMZ counterpart are ignored and never open a BMZ window.
     pub(super) fn execute_lr2_select_button(&mut self, button: i32, direction: i32) {
-        match button {
-            91..=96 => {
-                self.select.select_difficulty_filter =
-                    SelectDifficultyFilter::ORDER[(button - 91) as usize];
-                self.boot.profile_config.select.difficulty_filter =
-                    self.select.select_difficulty_filter.as_str().to_string();
-                self.reload_select_items();
-            }
-            11 => {
-                const VALUES: [SelectModeFilter; 6] = [
-                    SelectModeFilter::All,
-                    SelectModeFilter::K7,
-                    SelectModeFilter::K5,
-                    SelectModeFilter::K14,
-                    SelectModeFilter::K10,
-                    SelectModeFilter::K9,
-                ];
-                if !VALUES.contains(&self.select.select_mode_filter) {
-                    self.open_advanced_settings_from_select();
-                    return;
-                }
-                self.select.select_mode_filter =
-                    cycle_enum(VALUES, self.select.select_mode_filter, direction);
-                self.reload_select_items();
-            }
-            12 => {
-                const VALUES: [SelectSort; 4] =
-                    [SelectSort::Level, SelectSort::Title, SelectSort::Clear, SelectSort::Score];
-                if !VALUES.contains(&self.select.select_sort) {
-                    self.open_advanced_settings_from_select();
-                    return;
-                }
-                self.select.select_sort = cycle_enum(VALUES, self.select.select_sort, direction);
-                self.boot.profile_config.select.sort = self.select.select_sort.as_str().to_string();
-                self.reload_select_items();
-            }
-            1 => {
+        let direction = lr2_select_button_direction(button, direction);
+        match lr2_select_button_action(button) {
+            Lr2SelectButtonAction::TogglePanel => {
                 self.select.option_session.toggle_lr2_panel(
                     self.select.select_option_panel,
                     self.input.start_held,
@@ -51,81 +19,77 @@ impl WinitApp {
                 self.update_select_option_panel();
                 return;
             }
-            40 => {
-                const VALUES: [GaugeTypeConfig; 4] = [
-                    GaugeTypeConfig::Normal,
-                    GaugeTypeConfig::Hard,
-                    GaugeTypeConfig::Hazard,
-                    GaugeTypeConfig::Easy,
-                ];
-                if VALUES.contains(&self.select.gauge_option) {
-                    self.select.gauge_option =
-                        cycle_enum(VALUES, self.select.gauge_option, direction);
-                } else {
-                    self.open_advanced_settings_from_select();
-                }
+            Lr2SelectButtonAction::DifficultyTab(index) => {
+                self.select.select_difficulty_filter = SelectDifficultyFilter::ORDER[index];
+                self.boot.profile_config.select.difficulty_filter =
+                    self.select.select_difficulty_filter.as_str().to_string();
+                self.reload_select_items();
             }
-            42 | 43 => {
-                const VALUES: [ArrangeOption; 4] = [
-                    ArrangeOption::Normal,
-                    ArrangeOption::Mirror,
-                    ArrangeOption::Random,
-                    ArrangeOption::SRandom,
-                ];
-                let current = if button == 42 {
-                    self.select.arrange_option
-                } else {
-                    self.select.arrange_option_2p
-                };
-                if !VALUES.contains(&current) {
-                    self.open_advanced_settings_from_select();
+            Lr2SelectButtonAction::SkinEvent(event_id) => {
+                self.execute_select_skin_event(event_id, direction);
+                return;
+            }
+            Lr2SelectButtonAction::KeyFilter => {
+                self.select.select_mode_filter =
+                    cycle_lr2_value(LR2_KEY_FILTERS, self.select.select_mode_filter, direction);
+                self.reload_select_items();
+            }
+            Lr2SelectButtonAction::Sort => {
+                self.select.select_sort =
+                    cycle_lr2_value(LR2_SORTS, self.select.select_sort, direction);
+                self.boot.profile_config.select.sort = self.select.select_sort.as_str().to_string();
+                self.reload_select_items();
+            }
+            Lr2SelectButtonAction::Gauge => {
+                self.select.gauge_option =
+                    cycle_lr2_value(LR2_GAUGES, self.select.gauge_option, direction);
+            }
+            Lr2SelectButtonAction::Arrange1P => {
+                self.select.arrange_option =
+                    cycle_lr2_value(LR2_ARRANGES, self.select.arrange_option, direction);
+            }
+            Lr2SelectButtonAction::Arrange2P => {
+                self.select.arrange_option_2p =
+                    cycle_lr2_value(LR2_ARRANGES, self.select.arrange_option_2p, direction);
+            }
+            Lr2SelectButtonAction::LaneEffect => {
+                if !self.begin_selected_play_mode_edit() {
                     return;
                 }
-                let next = cycle_enum(VALUES, current, direction);
-                if button == 42 {
-                    self.select.arrange_option = next;
-                } else {
-                    self.select.arrange_option_2p = next;
-                }
+                self.boot.profile_config.play.lane_effect = cycle_lr2_value(
+                    LR2_LANE_EFFECTS,
+                    self.boot.profile_config.play.lane_effect,
+                    direction,
+                );
+                self.finish_selected_play_mode_edit();
             }
-            54 => {
-                if matches!(self.select.double_option, DoubleOption::Off | DoubleOption::Flip) {
-                    self.select.double_option = if self.select.double_option == DoubleOption::Off {
-                        DoubleOption::Flip
-                    } else {
-                        DoubleOption::Off
-                    };
-                } else {
-                    self.open_advanced_settings_from_select();
-                }
+            Lr2SelectButtonAction::DpFlip => {
+                self.select.double_option =
+                    cycle_lr2_value(LR2_DP_OPTIONS, self.select.double_option, direction);
             }
-            55 => {
-                const VALUES: [HsFixOption; 4] = [
-                    HsFixOption::Off,
-                    HsFixOption::MaxBpm,
-                    HsFixOption::MinBpm,
-                    HsFixOption::MainBpm,
-                ];
-                if !VALUES.contains(&self.select.hs_fix_option) {
-                    self.open_advanced_settings_from_select();
-                    return;
-                }
+            Lr2SelectButtonAction::HsFix => {
                 if !self.begin_selected_play_mode_edit() {
                     return;
                 }
                 self.select.hs_fix_option =
-                    cycle_enum(VALUES, self.select.hs_fix_option, direction);
+                    cycle_lr2_value(LR2_HS_FIXES, self.select.hs_fix_option, direction);
                 self.boot.profile_config.play.hs_fix =
                     hs_fix_config_from_option(self.select.hs_fix_option);
                 self.finish_selected_play_mode_edit();
             }
-            10 | 13..=17 | 19 | 57 | 72 | 74 => {
-                self.execute_select_skin_event(button, direction);
+            Lr2SelectButtonAction::JudgeAutoAdjust => self.toggle_visual_offset_auto_adjust(),
+            Lr2SelectButtonAction::Target => {
+                self.select.target_option =
+                    cycle_lr2_value(LR2_TARGETS, self.select.target_option, direction);
+                tracing::info!(
+                    target = self.select.target_option.as_str(),
+                    "target option changed"
+                );
+            }
+            Lr2SelectButtonAction::Unsupported => {
+                tracing::debug!(button, "LR2 select button has no BMZ equivalent");
                 return;
             }
-            // The remaining LR2 panels/settings do not have identical BMZ semantics.
-            // Keep their current values and provide the common settings entry point.
-            _ => self.open_advanced_settings_from_select(),
         }
         self.invalidate_play_preload();
         self.play_system_sound(crate::system_sound::SoundType::OptionChange);
