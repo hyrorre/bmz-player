@@ -467,6 +467,11 @@ fn apply_selected_header_options(header: &mut Header, options: &BTreeMap<String,
 
 fn apply_default_play_header_items(header: &mut Header) {
     if !matches!(header.skin_type, 0 | 1 | 2 | 3 | 4 | 12 | 13) {
+        // LR2 sets ops 30/31 from the global BGA size on every screen, and some
+        // result skins such as 3R reuse them to pick their layout.
+        if header.builtin_options[0] {
+            add_builtin_option(header, "BGA Size", 30, &["Normal", "Extend"]);
+        }
         return;
     }
     if header.builtin_options[0] {

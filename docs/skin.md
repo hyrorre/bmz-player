@@ -124,6 +124,14 @@ beatorajaは推定せず640×480として読むため、この挙動は互換仕
 LIFTに追従するボム・キービーム等の扱いを変えない。
 解像度を宣言しないHDスキンでも、外部CSVを変更する必要はない。
 
+## LR2の条件分岐
+
+`#IF` / `#ELSEIF` / `#ELSE` / `#ENDIF` はOpenLR2の `ReadSkin` と同じく、
+各階層を自分の条件だけで判定する。外側が偽のブロック内でも、内側の `#IF` が真なら実行し、
+`#ENDIF` で外側の状態へ戻る。描画時に評価するopの条件も、最も内側の階層の分を付ける。
+閉じられていない `#IF` はファイル末尾まで有効とする。
+beatorajaは入れ子を持たず `#IF` ごとに判定し直すが、閉じた入れ子を除けば同じ結果になる。
+
 ## LR2のSelect / Result
 
 type 5の選曲、type 7の通常リザルト、type 15のコースリザルトを既存の各スロットから選ぶ。
@@ -158,8 +166,10 @@ timer 150はグラフ開始、151は描画完了またはスキップ、152は�
 保存対象外のプレイは更新演出を挟まない。演出段階とは独立して既存の保存処理を実行する。
 clear / failed・確定ランク300..308のロード時分岐と解像度指定はdecode cacheの依存関係に含める。
 ランクのロード時条件は`FLIPRESULT`適用前の自分の成績を使う。相手側310..318の成績は補完しない。
-Resultのロード時はLR2のBGA Size条件をNormal（30=true / 31=false）として渡す。
-Playスキン個別のBGA Size設定とは独立し、これをResultのinclude選択に使う3R等にも適用する。
+LR2ではop 30/31（BGA Size）がグローバル設定として全画面で有効なため、
+Play以外のLR2スキンにもスキンオプション `BGA Size`（Normal / Extend、既定Normal）を追加する。
+3R等はこれをResultのレイアウト選択に使う。Playスキン個別の設定とは連動しない。
+`#CUSTOMOPTION_ADDITION_SETTING` で非表示にしたResultでは、Normal（30=true / 31=false）として渡す。
 
 現時点ではLR2専用のFX/EQ/音声設定パネル、組合せキーフィルター、ディレクトリソート、
 特殊S-RANDOMの挙動、追加日によるBAR_TITLE切替、BAR_RANK / BAR_RIVAL装飾は未対応。

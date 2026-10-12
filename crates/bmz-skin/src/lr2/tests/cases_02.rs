@@ -68,7 +68,7 @@ fn processor_selects_default_custom_option_branch() {
 }
 
 #[test]
-fn processor_keeps_outer_false_branch_inactive_inside_true_nested_if() {
+fn processor_evaluates_nested_if_on_its_own_condition_like_lr2() {
     let mut ops = HashMap::new();
     ops.insert(900, false);
     ops.insert(901, true);
@@ -78,11 +78,12 @@ fn processor_keeps_outer_false_branch_inactive_inside_true_nested_if() {
         fields: vec!["#IF".into(), "900".into()],
     }));
     assert!(!processor.active());
+    // LR2 checks only the innermost #IF, even inside an inactive block.
     assert!(!processor.should_execute(&CsvLine {
         command: "IF".into(),
         fields: vec!["#IF".into(), "901".into()],
     }));
-    assert!(!processor.active());
+    assert!(processor.active());
     assert!(
         !processor
             .should_execute(&CsvLine { command: "ENDIF".into(), fields: vec!["#ENDIF".into()] })
@@ -93,6 +94,48 @@ fn processor_keeps_outer_false_branch_inactive_inside_true_nested_if() {
             .should_execute(&CsvLine { command: "ENDIF".into(), fields: vec!["#ENDIF".into()] })
     );
     assert!(processor.active());
+}
+
+#[test]
+fn result_skin_selects_bga_size_layout_through_unclosed_nested_if() {
+    // 3R Result picks its left/right layout from the LR2 BGA size ops and nests the
+    // second #IF inside the unclosed first one.
+    let root = unique_test_dir("bmz-lr2-result-bga-size-layout");
+    fs::create_dir_all(&root).unwrap();
+    for (name, x) in [("left.csv", 10), ("right.csv", 20), ("battle.csv", 30)] {
+        fs::write(
+            root.join(name),
+            format!(
+                "#SRC_IMAGE,0,111,0,0,1,1,1,1,0,0\n\
+                 #DST_IMAGE,0,0,{x},0,1,1,0,255,255,255,255,0,0,0,0,0,0,0,0,0\n"
+            ),
+        )
+        .unwrap();
+    }
+    let path = root.join("result.lr2skin");
+    fs::write(
+        &path,
+        "#INFORMATION,7,3R-like,BMZ\n#ENDOFHEADER\n\
+         #IF,30\n#INCLUDE,left.csv\n#IF,31\n#INCLUDE,right.csv\n#ENDIF\n\
+         #IF,11\n#INCLUDE,battle.csv\n#ENDIF\n",
+    )
+    .unwrap();
+    for (bga_size, expected_x) in [("Normal", 10), ("Extend", 20)] {
+        let options = BTreeMap::from([("BGA Size".to_string(), bga_size.to_string())]);
+        let loaded = load_lr2_csv_skin_value(&path, &options, &BTreeMap::new()).unwrap();
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        let destinations = loaded.value["destination"].as_array().unwrap();
+        let xs = destinations.iter().map(|d| d["dst"][0]["x"].clone()).collect::<Vec<_>>();
+        assert_eq!(xs, vec![json!(expected_x)], "BGA Size {bga_size}");
+        let property = loaded.value["property"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|property| property["name"] == "BGA Size")
+            .expect("non-play LR2 skins expose BGA Size");
+        assert_eq!(property["def"], bga_size);
+    }
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

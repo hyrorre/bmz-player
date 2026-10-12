@@ -30,9 +30,9 @@ Play / Decideには、解像度を手動で選ぶ設定もなかった。
 | 640×480 | LR2標準 Select / Result / Play / Decide、KCOOL Play / Decide、Seraphic、RED BELT、OA_DX+ |
 | 1920×1080 | WMII_FHD_LR2 Play（`#RESOLUTION,1920,1080` を宣言） |
 
-3R Resultは640×480になった。本体の `#INCLUDE` が `#IF,30` / `#IF,31` の内側にあり、
-Resultではこのoptionが設定されないため、destinationが0件になる。
-解像度推定とは別の既存の問題で、今回は修正していない。
+3R Resultはこの一時テストでは640×480になった。本体の `#INCLUDE` が `#IF,30` / `#IF,31` の内側にあり、
+appがResultに渡すruntime option（30=true）なしで読んだためdestinationが0件だった。
+appでの読み込みと入れ子 `#IF` の扱いは [後続の記録](2026-10-13-lr2-nested-if-bga-size.md) を参照。
 
 ## 検証
 

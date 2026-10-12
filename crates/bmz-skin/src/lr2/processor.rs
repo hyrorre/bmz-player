@@ -7,9 +7,11 @@ pub(super) struct Processor {
     pub(super) option_dependencies: BTreeMap<i32, bool>,
 }
 
+/// One `#IF` level. As in LR2, each level is evaluated on its own condition only:
+/// an `#IF` nested inside an inactive block still runs when its condition holds,
+/// and returning from it with `#ENDIF` restores the enclosing level's state.
 #[derive(Debug, Clone)]
 struct IfState {
-    parent_active: bool,
     branch_taken: bool,
     active: bool,
     runtime_ops: Vec<i32>,
@@ -90,9 +92,8 @@ impl Processor {
     pub(super) fn handle_control(&mut self, line: &CsvLine) -> bool {
         match line.command.as_str() {
             "IF" => {
-                let parent_active = self.active();
                 let eval = self.eval_if(line);
-                let condition = parent_active && eval.matches;
+                let condition = eval.matches;
                 let runtime_ops = if condition { eval.runtime_ops } else { Vec::new() };
                 let branch_taken = condition && runtime_ops.is_empty();
                 let runtime_branches = if condition && !runtime_ops.is_empty() {
@@ -101,7 +102,6 @@ impl Processor {
                     Vec::new()
                 };
                 self.stack.push(IfState {
-                    parent_active,
                     branch_taken,
                     active: condition,
                     runtime_ops,
@@ -113,7 +113,7 @@ impl Processor {
                 let Some(mut state) = self.stack.pop() else {
                     return true;
                 };
-                if !state.parent_active || state.branch_taken {
+                if state.branch_taken {
                     state.active = false;
                     state.runtime_ops.clear();
                 } else {
@@ -149,7 +149,7 @@ impl Processor {
             }
             "ELSE" => {
                 if let Some(state) = self.stack.last_mut() {
-                    if !state.parent_active || state.branch_taken {
+                    if state.branch_taken {
                         state.active = false;
                         state.runtime_ops.clear();
                     } else if !state.runtime_branches.is_empty() {
@@ -177,7 +177,7 @@ impl Processor {
     }
 
     pub(super) fn active(&self) -> bool {
-        self.stack.iter().all(|state| state.active)
+        self.stack.last().is_none_or(|state| state.active)
     }
 
     pub(super) fn eval_if(&mut self, line: &CsvLine) -> IfEval {
@@ -216,9 +216,9 @@ impl Processor {
 
     pub(super) fn active_runtime_ops(&self) -> Vec<i32> {
         self.stack
-            .iter()
+            .last()
             .filter(|state| state.active)
-            .flat_map(|state| state.runtime_ops.iter().copied())
-            .collect()
+            .map(|state| state.runtime_ops.clone())
+            .unwrap_or_default()
     }
 }

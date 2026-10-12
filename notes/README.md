@@ -33,6 +33,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-13 | [LR2の入れ子 #IF とPlay以外のBGA Size](2026/2026-10-13-lr2-nested-if-bga-size.md) |
 | 2026-10-13 | [LR2スキンの解像度推定と全画面種別の上書き設定](2026/2026-10-13-lr2-resolution-inference.md) |
 | 2026-10-12 | [upload-local / download-scores レビューと修正](2026/2026-10-12-ir-bulk-review-fixes.md) |
 | 2026-10-11 | [設定画面からのIR一括操作と送信キュー画面](2026/2026-10-11-ir-settings-bulk-ops.md) |
