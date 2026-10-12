@@ -74,3 +74,40 @@ fn lr2_options_with_other_meanings_use_the_lr2_namespace() {
     assert_eq!(op(&load(0, &image("100,0,0")), 0), json!([100]));
     assert_eq!(op(&load(7, &image("340,-347,0")), 0), json!([lr2(340), -(LR2_OPTION_BASE + 347)]));
 }
+
+#[test]
+fn lr2_select_values_with_other_meanings_use_the_lr2_namespace() {
+    let lr2 = |id: i32| json!(LR2_NUMBER_BASE + id);
+    // Judge timing, difficulty levels, EQ, my best score / rate and IR clear classes.
+    let select = load(5, &[12, 45, 54, 57, 70, 73, 210, 219].map(number).concat());
+    assert_eq!(
+        number_refs(&select),
+        vec![lr2(12), lr2(45), lr2(54), json!(57), lr2(70), lr2(73), lr2(210), lr2(219)]
+    );
+    // Extended LR2 result FAST / SLOW / combo break.
+    let result = load(7, &[212, 214, 216].map(number).concat());
+    assert_eq!(number_refs(&result), vec![json!(423), json!(424), json!(425)]);
+    // Random course settings have no BMZ text.
+    let text = load(
+        5,
+        "#FONT,20,1,0\n#SRC_TEXT,0,0,190,0\n#DST_TEXT,0,0,0,0,10,10,0,255,255,255,255,0,0,0,0,0,0\n#SRC_TEXT,0,0,10,0\n#DST_TEXT,0,0,0,0,10,10,0,255,255,255,255,0,0,0,0,0,0\n",
+    );
+    let refs =
+        text["text"].as_array().unwrap().iter().map(|t| t["ref"].clone()).collect::<Vec<_>>();
+    assert_eq!(refs, vec![json!(bmz_skin_document::LR2_TEXT_BASE + 190), json!(10)]);
+}
+
+#[test]
+fn lr2_select_panel_and_ir_connection_are_draw_time_conditions() {
+    let image = "#SRC_IMAGE,0,0,0,0,1,1,1,1,0,0\n\
+                 #DST_IMAGE,0,0,0,0,1,1,0,255,255,255,255,0,0,0,0,0,0,0,0,0\n";
+    let select =
+        load(5, &format!("#IF,20\n{image}#ENDIF\n#IF,51\n{image}#ENDIF\n#IF,50\n{image}#ENDIF\n"));
+    let ops = select["destination"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["op"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(ops, vec![json!([LR2_OPTION_BASE + 20]), json!([51]), json!([50])]);
+}

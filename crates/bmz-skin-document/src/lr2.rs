@@ -16,6 +16,9 @@ pub const LR2_NUMBER_LAST: i32 = 93_999;
 /// Negated options keep their sign: `-(LR2_OPTION_BASE + id)`.
 pub const LR2_OPTION_BASE: i32 = 94_000;
 pub const LR2_OPTION_LAST: i32 = 94_999;
+/// LR2 text IDs whose meaning differs from beatoraja's text with the same number.
+pub const LR2_TEXT_BASE: i32 = 95_000;
+pub const LR2_TEXT_LAST: i32 = 95_999;
 
 pub fn lr2_gauge_index(index: usize) -> Option<usize> {
     match index {

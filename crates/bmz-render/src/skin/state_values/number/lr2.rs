@@ -6,6 +6,33 @@ pub(in crate::skin) fn lr2_number(id: i32, state: &SkinDrawState) -> Option<i64>
     let counts = state.judge_counts;
     let ex = i64::from(state.ex_score);
     match id {
+        // LR2 shows the judge timing here even while the sort is changed.
+        12 => Some(i64::from(state.judge_timing_offset_ms)),
+        // Levels of the song's difficulties. BMZ knows only the selected chart, so
+        // only its own difficulty slot shows a level.
+        45..=49 => {
+            if !select_chart_metadata_available(state) || state.difficulty != i64::from(id - 44) {
+                return None;
+            }
+            Some(if state.play_level != 0 { state.play_level } else { state.select_play_level })
+        }
+        // EQ, FX and pitch settings do not exist in BMZ.
+        50..=56 | 60..=66 => None,
+        // My best score and rate of the selected song.
+        70 | 73 if !select_score_metadata_available(state) => None,
+        70 => Some(lr2_point_score(
+            counts.pgreat,
+            counts.great,
+            counts.good,
+            state.select_total_notes,
+            state.select_chart_key_mode.unwrap_or(state.key_mode),
+        )),
+        73 => {
+            let max = i64::from(state.select_total_notes) * 2;
+            (max > 0).then(|| i64::from(state.select_ex_score.unwrap_or(0)) * 100 / max)
+        }
+        // IR players / rates per LR2 clear class: FAILED, EASY, CLEAR, HARD, FULLCOMBO.
+        210..=219 => lr2_ir_clear_class(&state.ir_ranking, id),
         // Selected song's IR rank / players / clear rate.
         92..=94 if !select_score_metadata_available(state) => None,
         92 => state.ir_ranking.rank,
@@ -78,6 +105,25 @@ fn lr2_ir_clear_rate(ranking: &crate::scene::ResultIrSnapshot) -> Option<i64> {
     let total = counts.iter().map(|&count| i64::from(count)).sum::<i64>();
     let cleared = counts[2..].iter().map(|&count| i64::from(count)).sum::<i64>();
     (total > 0).then(|| cleared * 100 / total)
+}
+
+/// LR2 folds clears into five classes; beatoraja's assist clears count as EASY,
+/// EX-HARD as HARD and PERFECT / MAX as FULLCOMBO.
+fn lr2_ir_clear_class(ranking: &crate::scene::ResultIrSnapshot, id: i32) -> Option<i64> {
+    if ranking.state != crate::scene::ResultIrState::Loaded {
+        return None;
+    }
+    let counts = ranking.clear_counts?;
+    let classes: [&[usize]; 5] = [&[1], &[2, 3, 4], &[5], &[6, 7], &[8, 9, 10]];
+    let players = classes[((id - 210) / 2) as usize]
+        .iter()
+        .map(|&index| i64::from(counts[index]))
+        .sum::<i64>();
+    if id % 2 == 0 {
+        return Some(players);
+    }
+    let total = counts.iter().map(|&count| i64::from(count)).sum::<i64>();
+    (total > 0).then(|| players * 100 / total)
 }
 
 pub(in crate::skin) fn lr2_opponent_number(ref_id: i32, state: &SkinDrawState) -> i64 {

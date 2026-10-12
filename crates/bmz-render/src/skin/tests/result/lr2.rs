@@ -268,3 +268,60 @@ fn lr2_options_follow_lr2_definitions() {
     let result = SkinDrawState { ex_score: 250, ..result };
     assert!(op(346, &result) && !op(347, &result));
 }
+
+#[test]
+fn lr2_select_numbers_follow_lr2_definitions() {
+    let mut state = SkinDrawState {
+        select_screen: true,
+        select_row_kind: SelectRowKind::Song,
+        select_in_library: true,
+        select_total_notes: 500,
+        select_ex_score: Some(780),
+        select_play_level: 12,
+        difficulty: 4,
+        judge_timing_offset_ms: -15,
+        select_sort_index: 2,
+        select_double_option_index: 1,
+        key_mode: KeyMode::K7,
+        judge_counts: crate::snapshot::DisplayJudgeCounts {
+            pgreat: 300,
+            great: 180,
+            good: 15,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let lr2 = |id: i32, state: &SkinDrawState| skin_state_number(LR2_NUMBER_BASE + id, state);
+    // Judge timing instead of the sort; beatoraja's 12 stays the sort on select.
+    assert_eq!((lr2(12, &state), skin_state_number(12, &state)), (Some(-15), Some(2)));
+    // Only the selected chart's difficulty slot (ANOTHER) has a level.
+    assert_eq!(lr2(48, &state), Some(12));
+    assert_eq!((lr2(45, &state), lr2(49, &state)), (None, None));
+    // EQ4 is not BMZ's DP option index.
+    assert_eq!((lr2(54, &state), skin_state_number(54, &state)), (None, Some(1)));
+    assert_eq!(lr2(70, &state), Some((300 * 4 + 180 * 2 + 15) * 50_000 / 500));
+    assert_eq!(lr2(73, &state), Some(78));
+    // IR clear classes: FAILED / EASY (assist + easy) / CLEAR / HARD (+EX-HARD) / FULLCOMBO.
+    let mut counts = [0; 11];
+    (counts[1], counts[2], counts[4], counts[5], counts[7], counts[10]) = (5, 1, 4, 6, 2, 2);
+    state.ir_ranking.state = crate::scene::ResultIrState::Loaded;
+    state.ir_ranking.clear_counts = Some(counts);
+    let classes = (210..=219).map(|id| lr2(id, &state)).collect::<Vec<_>>();
+    assert_eq!(classes, [5, 25, 5, 25, 6, 30, 2, 10, 2, 10].map(Some).to_vec(),);
+}
+
+#[test]
+fn lr2_select_panel_option_and_selected_score_rate_graphs() {
+    let mut state = SkinDrawState {
+        select_screen: true,
+        select_total_notes: 400,
+        judge_counts: crate::snapshot::DisplayJudgeCounts { pgreat: 100, ..Default::default() },
+        ..Default::default()
+    };
+    assert!(test_skin_ops(&[LR2_OPTION_BASE + 20], &[], &state));
+    state.select_option_panel = 1;
+    assert!(!test_skin_ops(&[LR2_OPTION_BASE + 20], &[], &state));
+    let graph: SkinGraphDef =
+        serde_json::from_value(serde_json::json!({"id": "pg", "type": 140})).unwrap();
+    assert!((graph_raw_value(&graph, &state) - 0.25).abs() < 1e-6);
+}

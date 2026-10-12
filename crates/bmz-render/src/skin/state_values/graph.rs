@@ -11,13 +11,14 @@ pub(super) fn graph_value(graph_type: i32, state: &SkinDrawState) -> f32 {
             if max > 0.0 { state.ex_score as f32 / max } else { 0.0 }
         }
         111 => current_score_rate_value(state),
-        // BARGRAPH_RATE_PGREAT..RATE_EXSCORE: judge count / past_notes (or total_notes)
-        140 => judge_rate(state.judge_counts.pgreat, state.past_notes),
-        141 => judge_rate(state.judge_counts.great, state.past_notes),
-        142 => judge_rate(state.judge_counts.good, state.past_notes),
-        143 => judge_rate(state.judge_counts.bad, state.past_notes),
-        144 => judge_rate(state.judge_counts.poor, state.past_notes),
-        145 => judge_rate(state.max_combo, state.total_notes),
+        // BARGRAPH_RATE_PGREAT..RATE_EXSCORE: judge count / past_notes (or total_notes).
+        // Select shows the selected score over the selected chart's notes.
+        140 => judge_rate(state.judge_counts.pgreat, judge_rate_notes(state)),
+        141 => judge_rate(state.judge_counts.great, judge_rate_notes(state)),
+        142 => judge_rate(state.judge_counts.good, judge_rate_notes(state)),
+        143 => judge_rate(state.judge_counts.bad, judge_rate_notes(state)),
+        144 => judge_rate(state.judge_counts.poor, judge_rate_notes(state)),
+        145 => judge_rate(state.max_combo, select_or_total_notes(state)),
         146 => {
             // BARGRAPH_RATE_SCORE: (pgreat + great*0.5) / total_notes
             let max = (state.past_notes * 2) as f32;
@@ -186,6 +187,18 @@ pub(super) fn fast_slow_breakdown_height(ref_id: i32, state: &SkinDrawState) -> 
     }
     let value = skin_state_number(ref_id, state).unwrap_or(0).max(0);
     Some((value as f32 / max as f32 * 100.0).round() as i32)
+}
+
+fn select_or_total_notes(state: &SkinDrawState) -> u32 {
+    if state.select_screen {
+        state.select_total_notes.max(state.total_notes)
+    } else {
+        state.total_notes
+    }
+}
+
+fn judge_rate_notes(state: &SkinDrawState) -> u32 {
+    if state.select_screen { select_or_total_notes(state) } else { state.past_notes }
 }
 
 pub(super) fn judge_rate(count: u32, total: u32) -> f32 {

@@ -10,6 +10,8 @@ pub(super) fn lr2_option(id: i32, state: &SkinDrawState) -> bool {
         // EXTRA mode and auto scratch are off; the IR ranking view and ghost battle are closed.
         52 | 54 | 56 | 620 | 622 => true,
         53 | 55 | 57 | 621 | 623 => false,
+        // No option panel is open.
+        20 => state.select_option_panel == 0,
         // Selected song's clear lamp, false on folders.
         100..=105 => lr2_select_clear(state) == Some(i64::from(id - 100)),
         // Selected song's rank, only after the song has been played.

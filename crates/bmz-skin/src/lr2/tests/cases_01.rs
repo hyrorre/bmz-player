@@ -462,7 +462,7 @@ fn lr2_play_number_refs_map_modified_lr2_fast_slow_extension() {
 }
 
 #[test]
-fn lr2_non_play_number_refs_keep_beatoraja_meanings() {
+fn lr2_select_number_210_is_the_ir_clear_class_not_fast_slow() {
     let files = BTreeMap::new();
     let skin_path = unique_test_dir("bmz-lr2-non-play-fast-slow-refs").join("select.lr2skin");
     let header = Header { skin_type: 5, ..Header::default() };
@@ -475,7 +475,7 @@ fn lr2_non_play_number_refs_keep_beatoraja_meanings() {
         )
         .unwrap();
 
-    assert_eq!(builder.values[0]["ref"], json!(210));
+    assert_eq!(builder.values[0]["ref"], json!(bmz_skin_document::LR2_NUMBER_BASE + 210));
 }
 
 #[test]

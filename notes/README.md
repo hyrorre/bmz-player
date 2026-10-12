@@ -33,6 +33,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-13 | [LR2選曲スキンの値のずれと条件の修正](2026/2026-10-13-lr2-select-value-fixes.md) |
 | 2026-10-13 | [LR2専用のnumber / option参照](2026/2026-10-13-lr2-number-option-refs.md) |
 | 2026-10-13 | [LR2選曲スキンのオプションbuttonを直接切り替えにする](2026/2026-10-13-lr2-select-option-buttons.md) |
 | 2026-10-13 | [LR2の入れ子 #IF とPlay以外のBGA Size](2026/2026-10-13-lr2-nested-if-bga-size.md) |

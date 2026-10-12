@@ -214,7 +214,7 @@ impl<'a> CsvBuilder<'a> {
         self.texts.push(json!({
             "id": id,
             "font": font,
-            "ref": values[3],
+            "ref": lr2_text_ref(self.header.skin_type, values[3]).unwrap_or(values[3]),
             "align": values[4],
             "overflow": 1,
             "size": if system_font.is_some() { 0 } else { self.lr2_text_size(values[2]) },
