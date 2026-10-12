@@ -22,6 +22,7 @@ mod builder_result;
 mod builder_select;
 mod helpers;
 mod processor;
+mod resolution;
 
 use helpers::*;
 use processor::Processor;
@@ -66,6 +67,8 @@ struct Header {
     author: String,
     w: u32,
     h: u32,
+    /// `#RESOLUTION` or the BMZ resolution option fixed the canvas.
+    resolution_fixed: bool,
     explicit_resolution_dimensions: bool,
     fadeout: i32,
     input: i32,
@@ -98,6 +101,7 @@ impl Default for Header {
             author: String::new(),
             w: 640,
             h: 480,
+            resolution_fixed: false,
             explicit_resolution_dimensions: false,
             fadeout: 0,
             input: 0,
@@ -275,6 +279,11 @@ pub(super) fn load_lr2_csv_skin_value_with_runtime_options(
         ops.insert(350, true);
         ops.insert(351, false);
     }
+    if !builder.header.resolution_fixed
+        && let Some((w, h)) = builder.infer_lr2_resolution(&lines, path, &ops)
+    {
+        (builder.header.w, builder.header.h) = (w, h);
+    }
     let mut processor = Processor::new(ops);
     processor.process_lines(&lines, path, &mut builder)?;
     dependencies.option_values.extend(processor.option_dependencies);
@@ -323,6 +332,7 @@ fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<Loaded
         match line.command.as_str() {
             "RESOLUTION" => {
                 (header.w, header.h) = lr2_resolution(line);
+                header.resolution_fixed = true;
                 header.explicit_resolution_dimensions =
                     lr2_resolution_has_explicit_dimensions(line);
             }
@@ -388,20 +398,18 @@ fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<Loaded
         }
     }
 
-    if matches!(header.skin_type, 5 | 7 | 15) {
-        header.options.push(CustomOption {
-            name: "LR2 Resolution (BMZ)".into(),
-            base: 99_000,
-            items: ["Skin default", "640x480", "1280x720", "1920x1080"]
-                .map(str::to_string)
-                .to_vec(),
-        });
-    }
+    // "Auto" keeps `#RESOLUTION` or infers the canvas of skins that omit it.
+    // Older profiles saved "Skin default", which falls back to the first item.
+    header.options.push(CustomOption {
+        name: "LR2 Resolution (BMZ)".into(),
+        base: 99_000,
+        items: ["Auto", "640x480", "1280x720", "1920x1080"].map(str::to_string).to_vec(),
+    });
     apply_selected_header_options(&mut header, options);
     for (id, dimensions) in [(99_001, (640, 480)), (99_002, (1280, 720)), (99_003, (1920, 1080))] {
         if header.selected_ops.get(&id) == Some(&true) {
             (header.w, header.h) = dimensions;
-            header.explicit_resolution_dimensions = true;
+            header.resolution_fixed = true;
         }
     }
     apply_derived_play_options(&mut header);

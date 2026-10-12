@@ -152,6 +152,104 @@ fn lr2_omitted_resolution_uses_sd_for_included_destinations() {
 }
 
 #[test]
+fn lr2_omitted_resolution_is_inferred_from_full_screen_destinations() {
+    let root = unique_test_dir("bmz-lr2-inferred-resolution");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("body.csv"),
+        "#SRC_IMAGE,0,111,0,0,1,1,1,1,0,0\n\
+         #DST_IMAGE,0,0,0,0,640,480,0,255,255,255,255,0,0,0,0,0,0,0,0,0\n\
+         #SRC_IMAGE,0,111,0,0,1,1,1,1,0,0\n\
+         #DST_IMAGE,0,0,0,0,1280,720,0,255,255,255,255,0,0,0,0,0,0,0,0,0\n\
+         #SRC_IMAGE,0,111,0,0,1,1,1,1,0,0\n\
+         #DST_IMAGE,0,0,0,0,1280,720,0,255,255,255,255,0,0,0,0,0,0,0,0,0\n\
+         #DST_IMAGE,0,0,0,400,1280,320,0,255,255,255,255,0,0,0,0,0,0,0,0,0\n",
+    )
+    .unwrap();
+    let path = root.join("skin.lr2skin");
+    let load = |skin_type: i32, resolution: &str, options: &[(&str, &str)]| {
+        fs::write(
+            &path,
+            format!("#INFORMATION,{skin_type},HD test,BMZ\n{resolution}#INCLUDE,body.csv\n"),
+        )
+        .unwrap();
+        let options = options
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect::<BTreeMap<_, _>>();
+        let loaded = load_lr2_csv_skin_value(&path, &options, &BTreeMap::new()).unwrap();
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        loaded.value
+    };
+    let size = |document: &JsonValue| (document["w"].clone(), document["h"].clone());
+
+    // Select, decide, result and play screens share the header inference.
+    for skin_type in [0, 5, 6, 7, 15] {
+        let document = load(skin_type, "", &[]);
+        assert_eq!(size(&document), (json!(1280), json!(720)), "type {skin_type}");
+        let resolution = document["property"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|property| property["name"] == "LR2 Resolution (BMZ)")
+            .unwrap_or_else(|| panic!("type {skin_type} has no resolution option"));
+        assert_eq!(resolution["def"], "Auto");
+    }
+    let background = &load(5, "", &[])["destination"][1]["dst"][0];
+    assert_eq!((background["y"].clone(), background["h"].clone()), (json!(0), json!(720)));
+
+    // Profiles saved before "Auto" still select the first item.
+    let legacy = load(5, "", &[("LR2 Resolution (BMZ)", "Skin default")]);
+    assert_eq!(size(&legacy), (json!(1280), json!(720)));
+    // A declared resolution and the explicit override are never replaced by inference.
+    assert_eq!(size(&load(5, "#RESOLUTION,0\n", &[])), (json!(640), json!(480)));
+    let forced = load(0, "", &[("LR2 Resolution (BMZ)", "640x480")]);
+    assert_eq!(size(&forced), (json!(640), json!(480)));
+    let forced_fhd = load(6, "#RESOLUTION,1\n", &[("LR2 Resolution (BMZ)", "1920x1080")]);
+    assert_eq!(size(&forced_fhd), (json!(1920), json!(1080)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn lr2_resolution_inference_counts_only_active_branches() {
+    let root = unique_test_dir("bmz-lr2-inferred-resolution-branch");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("skin.lr2skin");
+    fs::write(
+        &path,
+        "#INFORMATION,7,branch test,BMZ\n#CUSTOMOPTION,Layout,920,SD,HD\n\
+         #SRC_IMAGE,0,111,0,0,1,1,1,1,0,0\n\
+         #IF,920\n#DST_IMAGE,0,0,0,0,640,480,0,255,255,255,255,0,0,0,0,0,0,0,0,0\n\
+         #ELSE\n#DST_IMAGE,0,0,0,0,1280,720,0,255,255,255,255,0,0,0,0,0,0,0,0,0\n\
+         #DST_IMAGE,0,0,0,0,1280,720,0,255,255,255,255,0,0,0,0,0,0,0,0,0\n#ENDIF\n",
+    )
+    .unwrap();
+    for (layout, expected) in [("SD", (640, 480)), ("HD", (1280, 720))] {
+        let options = BTreeMap::from([("Layout".to_string(), layout.to_string())]);
+        let document = load_lr2_csv_skin_value(&path, &options, &BTreeMap::new()).unwrap().value;
+        assert_eq!(
+            (document["w"].clone(), document["h"].clone()),
+            (json!(expected.0), json!(expected.1))
+        );
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn lr2_resolution_override_keeps_open_lr2_effect_mode() {
+    let root = unique_test_dir("bmz-lr2-resolution-override-play");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("play.lr2skin");
+    fs::write(&path, "#INFORMATION,0,play,BMZ\n").unwrap();
+    let options = BTreeMap::from([("LR2 Resolution (BMZ)".to_string(), "1280x720".to_string())]);
+    let LoadedHeader { header, .. } = load_header(&path, &options).unwrap();
+    assert_eq!((header.w, header.h), (1280, 720));
+    assert!(header.resolution_fixed);
+    assert!(!header.explicit_resolution_dimensions);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn explicit_resolution_lr2_effects_follow_open_lr2_note_adjustment() {
     let files = BTreeMap::new();
     let skin_path = unique_test_dir("bmz-lr2-openlr2-effects").join("play.lr2skin");
