@@ -20,6 +20,7 @@ pub(super) fn load_initial_skin_textures(
     lua_runtime_mode: bmz_skin::LuaSkinRuntimeMode,
     experimental_detail_options: bool,
 ) -> (Option<SkinManifest>, HashMap<SkinKind, Vec<ActiveSkinVideoSource>>, bool, bool, bool) {
+    tracing::info!("startup initial skin texture load begin");
     // Decide / Result の JSON skin は Select の同期ロードより**前**に decode スレッドを起動して
     // CPU をフル活用する。Select の sync 処理 (PNG GPU upload など) と並列に decode が進む。
     let pending_select = false;
@@ -131,6 +132,8 @@ pub(super) fn load_initial_skin_textures(
         }
     }
 
+    let default_skin_started_at = Instant::now();
+    tracing::info!("startup default skin manifest load begin");
     let default_manifest = match load_default_skin_into_renderer_from_paths(renderer, app_paths) {
         Ok(manifest) => Some(manifest),
         Err(error) => {
@@ -141,6 +144,11 @@ pub(super) fn load_initial_skin_textures(
             None
         }
     };
+    tracing::info!(
+        load_ms = default_skin_started_at.elapsed().as_millis(),
+        loaded = default_manifest.is_some(),
+        "startup default skin manifest load complete"
+    );
 
     // Select skin (クリティカルパス: 起動直後に表示される)
     let select_trimmed = skin.select.trim();
@@ -160,6 +168,11 @@ pub(super) fn load_initial_skin_textures(
             if select_trimmed.is_empty() { &empty_files } else { &skin.select_files };
         match select_path {
             Ok(path) if is_decodable_skin_path(&path) => {
+                tracing::info!(
+                    kind = ?SkinKind::Select,
+                    path = %path.display(),
+                    "startup synchronous skin load begin"
+                );
                 let video_sources = apply_json_skin_sync(
                     renderer,
                     pipeline,
@@ -377,6 +390,11 @@ pub(super) fn apply_json_skin_sync(
         .with_library_roots(library_roots.clone()),
     );
     let decode_started_at = Instant::now();
+    tracing::info!(
+        ?kind,
+        path = %path.display(),
+        "synchronous skin decode begin"
+    );
     let decoded = match decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
         pinned_sources: None,
         skin_path: path,
@@ -416,6 +434,11 @@ pub(super) fn apply_json_skin_sync(
     let video_sources = skin_video_sources_from_decoded(&decoded);
     let load_dependencies = decoded.load_dependencies.clone();
     let install_started_at = Instant::now();
+    tracing::info!(
+        ?kind,
+        path = %path.display(),
+        "synchronous skin install begin"
+    );
     if let Err(error) = install_decoded_skin(renderer, decoded, manifest.clone()) {
         pipeline.record_load_result(path, Some(format!("{error:#}")));
         tracing::warn!(

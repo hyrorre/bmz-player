@@ -269,11 +269,15 @@ pub(super) fn load_lr2_csv_skin_value_with_runtime_options(
     files: &BTreeMap<String, String>,
     runtime_options: &BTreeMap<i32, bool>,
 ) -> Result<LoadedLuaSkinValue> {
+    tracing::debug!(path = %path.display(), "lr2 skin header load begin");
     let LoadedHeader { mut header, mut dependencies } = load_header(path, options)?;
+    tracing::debug!(path = %path.display(), "lr2 skin header load complete");
     apply_default_play_header_items(&mut header);
     apply_selected_header_options(&mut header, options);
     let mut builder = CsvBuilder::new(path, header, files);
+    tracing::debug!(path = %path.display(), "lr2 skin command file read begin");
     let lines = read_csv_lines(path)?;
+    tracing::debug!(path = %path.display(), command_count = lines.len(), "lr2 skin command file read complete");
     let mut ops = LR2_FIXED_OPTIONS.into_iter().collect::<HashMap<_, _>>();
     ops.extend(runtime_options.iter().map(|(&id, &value)| (id, value)));
     ops.extend(builder.header.selected_ops.clone());
@@ -281,21 +285,33 @@ pub(super) fn load_lr2_csv_skin_value_with_runtime_options(
         ops.insert(350, true);
         ops.insert(351, false);
     }
-    if !builder.header.resolution_fixed
-        && let Some((w, h)) = builder.infer_lr2_resolution(&lines, path, &ops)
-    {
-        (builder.header.w, builder.header.h) = (w, h);
+    if !builder.header.resolution_fixed {
+        tracing::debug!(path = %path.display(), "lr2 skin resolution inference begin");
+        if let Some((w, h)) = builder.infer_lr2_resolution(&lines, path, &ops) {
+            (builder.header.w, builder.header.h) = (w, h);
+        }
+        tracing::debug!(
+            path = %path.display(),
+            width = builder.header.w,
+            height = builder.header.h,
+            "lr2 skin resolution inference complete"
+        );
     }
     let mut processor = Processor::for_skin(ops, builder.header.skin_type);
+    tracing::debug!(path = %path.display(), command_count = lines.len(), "lr2 skin command processing begin");
     processor.process_lines(&lines, path, &mut builder)?;
+    tracing::debug!(path = %path.display(), "lr2 skin command processing complete");
     dependencies.option_values.extend(processor.option_dependencies);
     dependencies.option_values.extend(builder.load_time_option_dependencies());
     dependencies.files.extend(builder.file_dependencies.iter().cloned());
     dependencies.loaded_files.extend(builder.loaded_file_dependencies.clone());
     let warnings = builder.warnings.clone();
     let internal_enabled_options = builder.internal_enabled_options();
+    tracing::debug!(path = %path.display(), "lr2 skin document finalization begin");
+    let value = builder.finish();
+    tracing::debug!(path = %path.display(), "lr2 skin document finalization complete");
     Ok(LoadedLuaSkinValue {
-        value: builder.finish(),
+        value,
         lua_runtime: None,
         runtime_callback_paths: Vec::new(),
         runtime_draw_paths: Vec::new(),
@@ -327,7 +343,13 @@ fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<Loaded
     let mut header = Header::default();
     let lines = read_csv_lines(path)?;
     let mut processor = Processor::new(HashMap::new());
-    for line in &lines {
+    for (command_index, line) in lines.iter().enumerate() {
+        tracing::trace!(
+            path = %path.display(),
+            command_index = command_index + 1,
+            command = %line.command,
+            "lr2 skin header command begin"
+        );
         if !processor.should_execute(line) {
             continue;
         }

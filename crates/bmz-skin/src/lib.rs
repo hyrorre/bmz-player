@@ -357,9 +357,13 @@ pub fn load_lr2_csv_skin_with_runtime_state(
 }
 
 fn decode_lr2_skin_value(path: &Path, loaded: LoadedLuaSkinValue) -> Result<LoadedSkinDocument> {
+    tracing::debug!(path = %path.display(), "lr2 skin integer normalization begin");
     let value = bmz_skin_document::normalize_lua_json_skin_integer_numbers(loaded.value);
+    tracing::debug!(path = %path.display(), "lr2 skin integer normalization complete");
+    tracing::debug!(path = %path.display(), "lr2 skin document deserialization begin");
     let mut document: SkinDocument = serde_path_to_error::deserialize(value)
         .with_context(|| format!("failed to parse lr2 csv skin as document: {}", path.display()))?;
+    tracing::debug!(path = %path.display(), "lr2 skin document deserialization complete");
     document.internal_enabled_options = loaded.internal_enabled_options;
     Ok(LoadedSkinDocument {
         document,

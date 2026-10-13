@@ -12,7 +12,7 @@ impl WinitApp {
         log_buffer: LogBuffer,
         maintenance_select_tx: tokio::sync::watch::Sender<bool>,
         raw_input_bridge: Option<crate::input::rawinput::RawInputBridge>,
-    ) -> Result<Self> {
+    ) -> Result<Box<Self>> {
         let constructor_started_at = Instant::now();
         crate::cli::configure_latency_stall_test(options.latency_stall_test);
         crate::cli::configure_latency_event_loop_probe(options.latency_event_loop_probe);
@@ -275,7 +275,10 @@ impl WinitApp {
             && boot.app_config.updates.check_on_startup)
             .then_some(("startup update check", false));
 
-        let mut app = Self {
+        // Return the heap-owned app directly. Returning `Self` first also reserves
+        // full-size temporaries in the async startup frame in debug builds, leaving
+        // too little of Windows' main-thread stack for synchronous skin decoding.
+        let mut app = Box::new(Self {
             startup_error: None,
             boot,
             window: None,
@@ -515,7 +518,7 @@ impl WinitApp {
                 cursor_visible: true,
             },
             course_editor_cache: course_editor::CourseEditorDataCache::default(),
-        };
+        });
         if options.boot_result_sample {
             tracing::info!("booting directly into synthetic result screen");
             app.result.finished_play = Some(debug_boot_finished_play_session());

@@ -534,7 +534,7 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
 
     let (maintenance_select_tx, _) = tokio::sync::watch::channel(false);
 
-    let mut app = Box::new(WinitApp::new(
+    let mut app = WinitApp::new(
         boot,
         options,
         startup_started_at,
@@ -545,7 +545,7 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
         log_buffer,
         maintenance_select_tx,
         raw_input_bridge,
-    )?);
+    )?;
     app.restart_profile_ir_sync();
     tracing::info!("starting winit event loop");
     let result = event_loop.run_app(app.as_mut()).context("winit event loop failed");

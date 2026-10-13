@@ -148,6 +148,11 @@ pub fn decode_beatoraja_skin_request(
         None
     };
     let document_start = Instant::now();
+    tracing::debug!(
+        ?kind,
+        path = %skin_path.display(),
+        "skin decode document load begin"
+    );
     let LoadedSkinDocumentForDecode {
         dependencies: load_dependencies,
         mut document,
@@ -164,6 +169,15 @@ pub fn decode_beatoraja_skin_request(
         path_context.as_ref(),
     )?;
     let document_us = elapsed_us(document_start);
+    tracing::debug!(
+        ?kind,
+        path = %skin_path.display(),
+        document_us,
+        dependency_file_count = load_dependencies.loaded_files.len(),
+        font_count = document.font.len(),
+        source_count = document.source.len(),
+        "skin decode document load complete"
+    );
     if kind == SkinKind::Select
         && (options.get("bmz_detail_options").map(String::as_str) != Some("1")
             || !document.bmz_detail_options_numbers)
@@ -188,12 +202,17 @@ pub fn decode_beatoraja_skin_request(
         }
     }
     let skin_root = skin_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    tracing::debug!(?kind, "skin decode character preparation begin");
     prepare_pm_chara(&mut document, &skin_root, &resolved_files, path_context.as_ref());
+    tracing::debug!(?kind, "skin decode character preparation complete");
+    tracing::debug!(?kind, "skin decode audio asset preparation begin");
     let audio_assets = decode_skin_audio_assets(kind, &skin_root, path_context.as_ref(), &document);
+    tracing::debug!(?kind, "skin decode audio asset preparation complete");
     let required_sources: HashSet<String> =
         required_skin_source_ids(&document).into_iter().map(str::to_string).collect();
     let warn_missing_required = kind.warn_missing_required_sources();
 
+    tracing::debug!(?kind, font_count = document.font.len(), "skin decode fonts begin");
     let decoded_fonts = decode_skin_fonts(
         &document,
         &skin_root,
@@ -203,7 +222,13 @@ pub fn decode_beatoraja_skin_request(
         font_cache.as_ref(),
         installed_fonts.as_ref(),
     );
+    tracing::debug!(
+        ?kind,
+        decoded_font_count = decoded_fonts.fonts.len(),
+        "skin decode fonts complete"
+    );
 
+    tracing::debug!(?kind, source_count = document.source.len(), "skin decode sources begin");
     let decoded_sources = decode_skin_sources(
         &document,
         &skin_root,
@@ -213,6 +238,12 @@ pub fn decode_beatoraja_skin_request(
         warn_missing_required,
         source_cache.as_ref(),
         texture_cache.as_ref(),
+    );
+    tracing::debug!(
+        ?kind,
+        task_count = decoded_sources.task_count,
+        decoded_source_count = decoded_sources.pairs.len(),
+        "skin decode sources complete"
     );
     let decoded_pairs = decoded_sources.pairs;
 

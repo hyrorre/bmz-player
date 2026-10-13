@@ -113,6 +113,7 @@ fn decode_skin_font(
             FontCacheStatus::SkippedInstalled,
         ));
     }
+    tracing::trace!(font_id = %stored_id, path = %font_path.display(), "skin font decode begin");
     match decode_font_with_cache_key(&font_path, font_cache, cache_key) {
         Ok((data, status, cache_key)) => {
             Some((DecodedFont { stored_id, path: font_path, data: Some(data), cache_key }, status))

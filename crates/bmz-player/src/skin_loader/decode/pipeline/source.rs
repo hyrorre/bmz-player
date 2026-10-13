@@ -138,6 +138,11 @@ fn decode_file_source(
     source_cache: Option<&SharedSkinSourceAssetCache>,
     texture_cache: Option<&SharedSkinGpuTextureCache>,
 ) -> Option<DecodedSourceResult> {
+    tracing::trace!(
+        source_id = %source_id,
+        path = %path.display(),
+        "skin source file decode begin"
+    );
     let key = skin_source_asset_cache_key(&path, false).map(|mut key| {
         key.color_key = color_key;
         key

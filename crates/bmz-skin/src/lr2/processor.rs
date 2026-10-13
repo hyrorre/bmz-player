@@ -46,7 +46,14 @@ impl Processor {
         current_path: &Path,
         builder: &mut CsvBuilder,
     ) -> Result<()> {
-        for line in lines {
+        for (command_index, line) in lines.iter().enumerate() {
+            tracing::trace!(
+                path = %current_path.display(),
+                command_index = command_index + 1,
+                command = %line.command,
+                if_depth = self.stack.len(),
+                "lr2 skin command begin"
+            );
             if self.handle_control(line) {
                 continue;
             }

@@ -167,6 +167,38 @@ FPS等の比較には同じ譜面・設定・backend・計測条件が必要で�
 外部エディタ連携は [viewer.md](viewer.md)、オフライン動画出力は [video-export.md](video-export.md) を参照します。
 CLI引数・サブコマンドの一覧は `--help` と [cli.rs](../crates/bmz-player/src/cli.rs) を正とし、ここには重複して列挙しません。
 
+### Windows debug起動のスタック回帰と調査ログ
+
+次のテストは別プロセスでdebug実行ファイルを起動し、LR2 Selectスキンの同期ロードと
+3フレーム描画・正常終了を確認します。GPU・音声デバイスとウィンドウ表示が必要なため、
+通常のテスト実行ではignoreします。設定・DBは一時ディレクトリに作成します。
+合成スキンは常に検証し、WMIXは `data/skins/WMIX_HD` に素材がある場合に検証します。
+
+```powershell
+cargo test -p bmz-player --locked --test startup_stack -- --ignored --test-threads=1
+```
+
+通常のinfoログにはdefault manifestのロード・同期decode・installの開始と完了を記録します。
+JSON変換やフォント・画像処理の段階まで調べる場合は、PowerShellで次を使います。
+`RUST_LOG` は設定ファイルのログレベルより優先されます。
+
+```powershell
+New-Item -ItemType Directory -Force .local | Out-Null
+$bmzPreviousRustLog = $env:RUST_LOG
+try {
+    $env:RUST_LOG = 'info,bmz_skin=debug,bmz_player::skin_loader=debug'
+    cargo run -p bmz-player 2>&1 | Tee-Object .local/startup-console.log
+} finally {
+    $env:RUST_LOG = $bmzPreviousRustLog
+}
+```
+
+LR2のコマンド単位の追跡は `bmz_skin::lr2=trace`、個々のフォント・画像のdecode開始は
+`bmz_player::skin_loader=trace` で有効にします。コマンド番号はコメント・空行を除いた
+解析済みコマンドの番号です。並列workerのログが混在するため、スキンのpathと
+ファイルログのthread名・IDも合わせて確認します。
+原因と修正時の計測は [debug起動のスタックオーバーフロー調査](../notes/2026/2026-10-14-debug-startup-stack-overflow.md) に記録しています。
+
 IR Webの環境・DB・検証コマンドは [ir.md](ir.md) の「開発環境と実装の入口」を参照します。
 
 Luaの画面寸法helperを変更した場合は、ロード・cache・非同期世代の回帰に加え、
