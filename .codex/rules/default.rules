@@ -1,0 +1,73 @@
+# BMZ Player のコマンド実行ルール。
+# Codex の rules は、コマンド引数の先頭に一致する prefix_rule で指定する。
+
+# Rust と IR Web の通常の開発・検証コマンド。
+prefix_rule(pattern = ["cargo", "fmt"], decision = "allow")
+prefix_rule(pattern = ["cargo", "check"], decision = "allow")
+prefix_rule(pattern = ["cargo", "clippy"], decision = "allow")
+prefix_rule(pattern = ["cargo", "test"], decision = "allow")
+prefix_rule(pattern = ["cargo", "build"], decision = "allow")
+prefix_rule(pattern = ["rg"], decision = "allow")
+prefix_rule(pattern = ["bun", "run", "test:ir"], decision = "allow")
+prefix_rule(pattern = ["bun", "run", "test:i18n"], decision = "allow")
+prefix_rule(pattern = ["bunx", "vue-tsc"], decision = "allow")
+prefix_rule(pattern = ["bunx", "prettier", "--check"], decision = "allow")
+
+# Git の確認・ローカル変更コマンド。
+prefix_rule(pattern = ["git", "status"], decision = "allow")
+prefix_rule(pattern = ["git", "diff"], decision = "allow")
+prefix_rule(pattern = ["git", "log"], decision = "allow")
+prefix_rule(pattern = ["git", "show"], decision = "allow")
+prefix_rule(pattern = ["git", "add"], decision = "allow")
+prefix_rule(pattern = ["git", "commit"], decision = "allow")
+
+# push は実行ごとに確認する。
+prefix_rule(
+    pattern = ["git", "push"],
+    decision = "prompt",
+    justification = "リモートへの push は実行前に確認してください。",
+)
+
+# force push は禁止する。forbidden は prompt より優先される。
+prefix_rule(
+    pattern = ["git", "push", "--force"],
+    decision = "forbidden",
+    justification = "force push は禁止です。",
+)
+prefix_rule(
+    pattern = ["git", "push", "-f"],
+    decision = "forbidden",
+    justification = "force push は禁止です。",
+)
+
+# リモート環境の変更・データ操作は禁止する。
+prefix_rule(
+    pattern = ["bun", "run", "deploy"],
+    decision = "forbidden",
+    justification = "デプロイは禁止です。",
+)
+prefix_rule(
+    pattern = ["bun", "run", "db:migrate:remote"],
+    decision = "forbidden",
+    justification = "リモート DB の migration は禁止です。",
+)
+prefix_rule(
+    pattern = ["bun", "run", "db:execute:remote"],
+    decision = "forbidden",
+    justification = "リモート DB の SQL 実行は禁止です。",
+)
+prefix_rule(
+    pattern = ["bun", "run", "db:export:remote"],
+    decision = "forbidden",
+    justification = "リモート DB の export は禁止です。",
+)
+prefix_rule(
+    pattern = ["wrangler", "deploy"],
+    decision = "forbidden",
+    justification = "Wrangler によるデプロイは禁止です。",
+)
+prefix_rule(
+    pattern = ["bunx", "wrangler", "deploy"],
+    decision = "forbidden",
+    justification = "Wrangler によるデプロイは禁止です。",
+)
