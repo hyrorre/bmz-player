@@ -225,6 +225,7 @@ pub(super) fn build_result_skin_draw_state(
         assist_mine_mode: snapshot.assist_mine_mode,
         assist_scroll_mode: snapshot.assist_scroll_mode,
         assist_long_note_mode: snapshot.assist_long_note_mode,
+        auto_scratch_setting: snapshot.auto_scratch,
         ex_score: snapshot.ex_score,
         total_notes: snapshot.total_notes,
         past_notes: snapshot.total_notes,

@@ -52,6 +52,8 @@ impl WinitApp {
         }
     }
     pub(super) fn restart_select_scene_timers(&mut self) {
+        // A restarted scene has nothing left for a pending customize reload to keep.
+        self.take_lr2_skin_settings_reload();
         self.cancel_select_option_session();
         let now = Instant::now();
         self.select.select_scene_timer_armed = false;

@@ -96,5 +96,18 @@ fn lr2_skin_items_list_options_then_files_and_cycle_with_wraparound() {
     assert!(lr2_cycle_skin_item(target, &defs, &mut skin, &app_paths, 1, 1));
     assert_eq!(rows(&skin)[1].1, "a.png");
     assert!(!lr2_cycle_skin_item(target, &defs, &mut skin, &app_paths, 5, 1));
+
+    // A single choice never changes, so nothing is saved and the skin is not reloaded.
+    let single = SceneSkinDefs {
+        property: vec![SkinPropertyDef {
+            category: String::new(),
+            name: "Only".to_string(),
+            item: vec![bmz_render::skin::SkinPropertyItemDef { name: "On".to_string(), op: 900 }],
+            def: "On".to_string(),
+        }],
+        ..Default::default()
+    };
+    assert!(!lr2_cycle_skin_item(target, &single, &mut skin, &app_paths, 0, 1));
+    assert!(!skin.select_options.contains_key("Only"));
     fs::remove_dir_all(root).unwrap();
 }

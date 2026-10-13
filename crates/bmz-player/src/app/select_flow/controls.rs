@@ -778,7 +778,9 @@ impl WinitApp {
 
     pub(super) fn apply_play_option_control(&mut self, control: &str) -> bool {
         if self.lr2_select_active() {
-            return self.apply_lr2_option_control(control);
+            // The LR2 button plays the option sound itself, only when a value changes.
+            self.apply_lr2_option_control(control);
+            return false;
         }
         if self.select.select_keys.is_key1(control) {
             self.select.arrange_option = self.select.arrange_option.cycle();
@@ -863,7 +865,11 @@ impl WinitApp {
         let lane =
             select_option_lane_for_gamepad(&self.boot.profile_config.input, slots, device, control);
         if self.lr2_select_active() {
-            return lane.is_some_and(|lane| self.apply_lr2_option_lane(lane));
+            // The LR2 button plays the option sound itself, only when a value changes.
+            if let Some(lane) = lane {
+                self.apply_lr2_option_lane(lane);
+            }
+            return false;
         }
         match lane {
             Some(Lane::Key1) => {

@@ -51,13 +51,15 @@ pub(super) fn lr2_option(id: i32, state: &SkinDrawState) -> bool {
         }
         11 | 571 => false,
         572 => true,
-        // AUTO SCRATCH off / on for 1P (54 / 55) and 2P (56 / 57).
+        // AUTO SCRATCH off / on for 1P (54 / 55) and 2P (56 / 57). Play shows the
+        // scratch lanes actually played automatically; other scenes show the setting
+        // like LR2's `p1_assist`.
         54..=57 => {
             let lane = if id < 56 { Lane::Scratch } else { Lane::Scratch2 };
-            let on = if state.select_screen {
-                state.select_auto_scratch
-            } else {
+            let on = if state.play_screen {
                 state.auto_note_lanes[lane.index()]
+            } else {
+                state.auto_scratch_setting
             };
             on == (id % 2 == 1)
         }
@@ -190,7 +192,7 @@ fn lr2_clear_lamp_challenge(state: &SkinDrawState) -> i64 {
     if irregular_arrange(state.select_extended_arrange_index)
         || irregular_arrange(state.select_extended_arrange_2p_index)
         || state.constant_enabled
-        || (state.select_auto_scratch && state.lr2_select_battle_index != 2)
+        || (state.auto_scratch_setting && state.lr2_select_battle_index != 2)
     {
         return 1;
     }

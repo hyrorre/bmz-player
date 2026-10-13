@@ -228,6 +228,7 @@ impl WinitApp {
                     assist_scroll_mode: self.boot.profile_config.play.assist.scroll_mode as i64,
                     assist_long_note_mode: self.boot.profile_config.play.assist.long_note_mode
                         as i64,
+                    auto_scratch: self.boot.profile_config.play.assist.auto_scratch,
                     score_history_id: summary.score_history_id,
                     replay_saved: !summary.replay_path.is_empty(),
                     replay_slots: summary.replay_slots,

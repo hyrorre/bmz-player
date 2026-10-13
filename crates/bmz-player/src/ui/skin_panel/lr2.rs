@@ -220,7 +220,12 @@ pub(crate) fn lr2_cycle_skin_item(
         let current = options.get(&prop.name).cloned().unwrap_or_else(|| property_default(prop));
         let position = prop.item.iter().position(|item| item.name == current).unwrap_or(0);
         let next = prop.item[step_index(position, prop.item.len(), direction)].name.clone();
-        return options.insert(prop.name.clone(), next.clone()).as_deref() != Some(next.as_str());
+        // A single choice keeps its value; saving the default would only reload the skin.
+        if next == current {
+            return false;
+        }
+        options.insert(prop.name.clone(), next);
+        return true;
     }
     let Some(filepath) = defs.filepath.get(index - defs.property.len()) else {
         return false;
@@ -241,7 +246,11 @@ pub(crate) fn lr2_cycle_skin_item(
     let current = normalize_filepath_selection(&current, &candidates).unwrap_or(current);
     let position = values.iter().position(|value| *value == current).unwrap_or(0);
     let next = values[step_index(position, values.len(), direction)].clone();
-    files.insert(filepath.name.clone(), next.clone()).as_deref() != Some(next.as_str())
+    if next == current {
+        return false;
+    }
+    files.insert(filepath.name.clone(), next);
+    true
 }
 
 use super::*;

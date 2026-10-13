@@ -52,7 +52,7 @@ pub(super) fn lr2_text_ref(skin_type: i32, id: i32) -> Option<i32> {
     (is_song_scene(skin_type)
         && matches!(
             id,
-            50 | 51 | 60..=65 | 67..=70 | 74 | 76 | 80 | 84 | 100..=119 | 190..=199
+            50 | 51 | 60..=65 | 67..=70 | 74 | 76 | 80 | 84 | 85 | 100..=119 | 190..=199
         ))
     .then_some(LR2_TEXT_BASE + id)
 }

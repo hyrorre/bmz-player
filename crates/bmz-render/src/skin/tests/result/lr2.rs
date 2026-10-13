@@ -671,6 +671,7 @@ fn lr2_option_labels_show_bmz_values() {
     assert_eq!(lr2_text(76), "AUTO");
     assert_eq!(lr2_text(80), "ON");
     assert_eq!(lr2_text(84), "HID+SUD");
+    assert_eq!(lr2_text(85), "HID+SUD");
     // Settings BMZ cannot change keep LR2's labels blank.
     assert_eq!(lr2_text(71), "");
 }
@@ -698,7 +699,7 @@ fn lr2_assist_and_battle_follow_bmz_settings() {
     let text = SkinTextState { select_double_option: "BATTLE AS", ..SkinTextState::default() };
     let select = SkinDrawState { select_screen: true, ..Default::default() };
     let assisted = SkinDrawState {
-        select_auto_scratch: true,
+        auto_scratch_setting: true,
         lr2_select_battle_index: 2,
         select_double_option_index: 3,
         ..select.clone()
@@ -725,15 +726,20 @@ fn lr2_assist_and_battle_follow_bmz_settings() {
     }
 
     // Play reads the scratch lanes actually played automatically.
-    let mut play = SkinDrawState::default();
+    let mut play =
+        SkinDrawState { play_screen: true, auto_scratch_setting: true, ..Default::default() };
     play.auto_note_lanes[Lane::Scratch.index()] = true;
     assert!(op(55, &play) && op(56, &play) && !op(57, &play));
+    // Result and other scenes show the setting, like LR2's `p1_assist`.
+    let result = SkinDrawState { auto_scratch_setting: true, ..Default::default() };
+    assert!(op(55, &result) && op(57, &result) && !op(54, &result));
+    assert!(op(54, &SkinDrawState::default()));
 
     // Lamp challenge: AUTO SCRATCH limits to EASY except in D-BATTLE; SP-TO-DP saves nothing.
     let lamp = |state: &SkinDrawState| (62..=66).find(|&id| op(id, state)).map(|id| id - 62);
     let normal = SkinDrawState { select_gauge_index: 2, ..select.clone() };
     assert_eq!(lamp(&normal), Some(2));
-    let auto = SkinDrawState { select_auto_scratch: true, ..normal.clone() };
+    let auto = SkinDrawState { auto_scratch_setting: true, ..normal.clone() };
     assert_eq!(lamp(&auto), Some(1));
     assert_eq!(lamp(&SkinDrawState { lr2_select_battle_index: 2, ..auto.clone() }), Some(2));
     assert_eq!(lamp(&SkinDrawState { lr2_select_battle_index: 3, ..normal }), Some(0));

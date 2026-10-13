@@ -236,6 +236,8 @@ pub struct ResultSnapshot {
     pub assist_mine_mode: i64,
     pub assist_scroll_mode: i64,
     pub assist_long_note_mode: i64,
+    /// The profile's AUTO SCRATCH setting (LR2 option 54..57).
+    pub auto_scratch: bool,
     pub score_history_id: i64,
     pub replay_saved: bool,
     pub replay_slots: [bool; 4],

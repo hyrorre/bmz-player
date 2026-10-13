@@ -433,6 +433,10 @@ impl WinitApp {
                     error = %format_error_chain(&error),
                     "failed to decode/upload beatoraja skin in background"
                 );
+                if kind == SkinKind::Select {
+                    // The skin shown stays; a later install must restart the scene.
+                    self.take_lr2_skin_settings_reload();
+                }
                 return false;
             }
         };

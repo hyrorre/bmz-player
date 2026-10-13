@@ -290,6 +290,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         assist_mine_mode: 0,
         assist_scroll_mode: 0,
         assist_long_note_mode: 0,
+        auto_scratch: false,
         score_history_id: 42,
         replay_saved: true,
         replay_slots: [true, false, false, false],

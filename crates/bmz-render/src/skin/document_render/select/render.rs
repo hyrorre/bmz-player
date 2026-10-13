@@ -506,7 +506,7 @@ macro_rules! skin_document_render_select_render_methods {
                     _ => -1,
                 },
                 lr2_select_battle_index: lr2_select_battle_index(snapshot),
-                select_auto_scratch: snapshot.auto_scratch,
+                auto_scratch_setting: snapshot.auto_scratch,
                 select_arrange_2p_index: select_arrange_index(&snapshot.arrange_2p),
                 select_extended_arrange_index: extended_arrange_index(&snapshot.arrange),
                 select_extended_arrange_2p_index: extended_arrange_index(&snapshot.arrange_2p),

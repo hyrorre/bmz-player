@@ -9,8 +9,8 @@ pub struct SkinDrawState {
     pub lr2_select_target_index: i32,
     /// LR2 select BATTLE (button 56, text 69): 0 OFF, 2 D-BATTLE, 3 SP-TO-DP, 4 G-BATTLE.
     pub lr2_select_battle_index: i32,
-    /// AUTO SCRATCH on the select screen (LR2 ASSIST).
-    pub select_auto_scratch: bool,
+    /// The profile's AUTO SCRATCH setting (LR2 ASSIST), shown on select and result.
+    pub auto_scratch_setting: bool,
     pub elapsed_ms: i32,
     /// RANDOM gauge values latched by the scene runtime for each gauge id.
     pub gauge_random_indices: HashMap<String, i32>,
@@ -484,7 +484,7 @@ impl Default for SkinDrawState {
             lr2_select_mode_index: -1,
             lr2_select_target_index: -1,
             lr2_select_battle_index: 0,
-            select_auto_scratch: false,
+            auto_scratch_setting: false,
             elapsed_ms: 0,
             lua_runtime: None,
             gauge_random_indices: HashMap::new(),

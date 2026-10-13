@@ -177,14 +177,27 @@ fn lr2_embedded_skin_settings_texts_use_the_lr2_namespace() {
              #DST_TEXT,0,0,0,0,10,10,0,255,255,255,255,0,0,0,0,0,0\n"
         )
     };
-    let select =
-        load(5, &format!("{font}{}", [50, 51, 100, 119, 10, 76, 80, 71].map(text).concat()));
+    let select = load(
+        5,
+        &format!("{font}{}", [50, 51, 100, 119, 10, 76, 80, 71, 84, 85].map(text).concat()),
+    );
     let refs =
         select["text"].as_array().unwrap().iter().map(|t| t["ref"].clone()).collect::<Vec<_>>();
     let lr2 = |id: i32| json!(bmz_skin_document::LR2_TEXT_BASE + id);
     assert_eq!(
         refs,
-        vec![lr2(50), lr2(51), lr2(100), lr2(119), json!(10), lr2(76), lr2(80), json!(71)]
+        vec![
+            lr2(50),
+            lr2(51),
+            lr2(100),
+            lr2(119),
+            json!(10),
+            lr2(76),
+            lr2(80),
+            json!(71),
+            lr2(84),
+            lr2(85)
+        ]
     );
 }
 

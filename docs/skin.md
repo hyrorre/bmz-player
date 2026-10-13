@@ -149,7 +149,7 @@ option `94_000+ID`、否定は符号を維持）。意味が一致する番号�
 | option | 520..565 | Select / Decide | 各難易度のレベルバーのランプ（`520 + 10 × 難易度 + LR2ランプ`）。同じ難易度が複数あれば最良のクリア |
 | option | 70..79 | Select / Decide | 各難易度のレベルが点滅しきい値以下（70..74）/ 超過（75..79）。しきい値はLR2の既定値（5 / 10鍵 9、7 / 14鍵 12、9鍵 42） |
 | bargraph | 105..109 | Select | 各難易度のレベル ÷ 点滅しきい値（LR2のアニメーションは省略） |
-| option | 118..149 | Select / Decide | 選択中の譜面を過去にクリアしたオプション（LR2の `op_history`）。スコア履歴のオート以外のクリアから、NORMAL以上はゲージ（118..123）とRANDOM（126..131）、EASY系はEASYゲージ（121）、アシスト付きは142だけを立てる。HIDDEN / SUDDEN（134..141）は記録が無いため立たない |
+| option | 118..149 | Select / Decide | 選択中の譜面を過去にクリアしたオプション（LR2の `op_history`）。スコア履歴のオート以外のクリアから、NORMAL以上はゲージ（118..123）とRANDOM（126..131）、EASY系はEASYゲージ（121）、アシスト付きは142だけを立てる。HIDDEN / SUDDEN（134..141）は記録が無いため立たない。BMZではアシスト付き（AUTO SCRATCHを含む）とH-RANDOM / ALL-SCRのクリアはランプだけを更新し、スコア履歴に残らない（[スコア保存](score-persistence.md)）。そのため142とH-RANDOM / ALL-SCRのbit（130 / 131）も実際には立たない |
 | number | 250..259 | Select / Decide | 選択中のコースの各ステージのレベル。未解決のステージは非表示 |
 | number | 70 / 73 | Select / Decide | 選択中の曲の自己ベストのLR2式スコア / レート（%） |
 | number | 210..219 | Select / Decide | IRのFAILED / EASY / CLEAR / HARD / FULLCOMBOの人数と率。ASSIST系はEASY、EX-HARDはHARD、PERFECT / MAXはFULLCOMBOへ畳む |
@@ -279,7 +279,7 @@ PRACTICE・AUTOPLAY・FLIP・7K TO 9K / 6KはLR2に無い値のため、置き�
 D-BATTLE中はFLIPがOFFとして表示される（button 54 / text 70）。option 10 / 12はDPのキーフィルターに加え、D-BATTLE / SP-TO-DPでも成立する。
 
 ASSIST（button 44 / 45、text 67 / 68）はプロフィールのAUTO SCRATCHを切り替える。D-BATTLE中に切り替えると、BATTLEとBATTLE ASも連動して切り替わる。
-option 54..57（1P / 2PのAUTO SCRATCH OFF / ON）は、選曲画面では設定値、プレイ画面では実際に自動演奏しているスクラッチレーンで判定する。
+option 54..57（1P / 2PのAUTO SCRATCH OFF / ON）は、プレイ画面では実際に自動演奏しているスクラッチレーン、選曲・リザルト等の他の画面ではLR2の`p1_assist`と同じく設定値で判定する。
 option 62..66（このまま取れる最高ランプ）は、AUTO SCRATCHをD-BATTLE以外でEASY止まり、SP-TO-DPを保存なし（0）として扱う。
 
 マウスはLR2と同じく左クリックだけを受け付け、増減はbuttonの指定（plus only / minus only / 左右半分）で決める。

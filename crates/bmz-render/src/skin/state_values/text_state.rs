@@ -326,7 +326,7 @@ fn lr2_option_label(id: i32, draw: &SkinDrawState, state: &SkinTextState<'_>) ->
         63 => state.select_arrange.to_string(),
         64 => state.select_arrange_2p.to_string(),
         65 => state.select_gauge.to_string(),
-        67 | 68 => if draw.select_auto_scratch { "AUTO SCRATCH" } else { "OFF" }.to_string(),
+        67 | 68 => if draw.auto_scratch_setting { "AUTO SCRATCH" } else { "OFF" }.to_string(),
         69 => match draw.lr2_select_battle_index {
             2 => "D-BATTLE",
             3 => "SP-TO-DP",
