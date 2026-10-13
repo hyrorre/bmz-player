@@ -29,6 +29,86 @@ fn load(
 }
 
 #[test]
+fn root_function_folders_keep_kinds_and_favorite_follows_my_best() {
+    let data = ProfileTestDir::new();
+    let mut boot = data.boot();
+    let (without_favorites, _) = load(&boot, &[], SelectModeFilter::All).unwrap();
+    assert!(!without_favorites.iter().any(|item| {
+        matches!(item, SelectItem::Folder { path, .. } if path == FAVORITE_ROOT_PATH)
+    }));
+    for id in
+        ["lamp-update", "score-update", "clear-type", "score-rank", "density", "feature", "level"]
+    {
+        assert!(
+            without_favorites.iter().any(|item| {
+                matches!(item, SelectItem::Folder { path, kind: SelectRowKind::Container, .. }
+                if path == &format!("{VIRTUAL_FOLDER_PATH_PREFIX}{id}"))
+            }),
+            "{id}"
+        );
+    }
+    assert!(without_favorites.iter().any(|item| {
+        matches!(item, SelectItem::Folder { path, kind: SelectRowKind::NewSongFolder, .. }
+            if path == "bmz-filter:new")
+    }));
+    boot.collection_db
+        .toggle_favorite_chart([9; 32], &FavoriteHints::new("Favorite", "Artist", "/song"), 1)
+        .unwrap();
+    for (config, has_best) in [
+        ("version = 1\n", true),
+        (
+            "version = 1\n[[folders]]\nid = 'my-best'\nname = 'Renamed'\nquery = 'level >= 0'\n",
+            true,
+        ),
+        ("version = 1\n[[folders]]\nid = 'my-best'\nenabled = false\n", false),
+    ] {
+        std::fs::write(boot.profile_paths.root_dir.join("select-folders.toml"), config).unwrap();
+        for sort in [
+            SelectSort::Title,
+            SelectSort::Artist,
+            SelectSort::Bpm,
+            SelectSort::Length,
+            SelectSort::Level,
+            SelectSort::Clear,
+            SelectSort::Score,
+            SelectSort::Bp,
+        ] {
+            let (items, _) = load_items_for_stack(
+                &boot,
+                &mut SelectCollectionCache::default(),
+                &[],
+                &[],
+                SelectModeFilter::All,
+                SelectDifficultyFilter::All,
+                sort,
+            )
+            .unwrap();
+            let favorite = items.iter().position(|item| {
+                matches!(item, SelectItem::Folder { path, .. } if path == FAVORITE_ROOT_PATH)
+            }).unwrap();
+            if has_best {
+                assert!(
+                    matches!(&items[favorite - 1], SelectItem::Folder { path, .. }
+                    if path == "bmz-filter:my-best"),
+                    "{sort:?}"
+                );
+            } else {
+                assert!(
+                    matches!(
+                        &items[favorite + 1],
+                        SelectItem::Folder { kind: SelectRowKind::SettingsRoot, .. }
+                    ),
+                    "{sort:?}"
+                );
+            }
+            assert_eq!(items.iter().filter(|item| {
+                matches!(item, SelectItem::Folder { path, .. } if path == FAVORITE_ROOT_PATH)
+            }).count(), 1);
+        }
+    }
+}
+
+#[test]
 fn empty_folder_entry_keeps_parent_list_cursor_history_and_filter() {
     let data = ProfileTestDir::new();
     let mut boot = data.boot();

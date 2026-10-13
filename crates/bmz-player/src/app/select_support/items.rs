@@ -222,11 +222,6 @@ pub(in crate::app) fn build_select_items_for_stack(
             // ルートには曲フォルダに続けて、コースフォルダ・各難易度表フォルダを並べる。
             // COURSE は選曲画面からの新規作成入口も兼ねるため、保存済みコースがなくても表示する。
             let mut items = root_folder_items(&active_song_roots);
-            match favorite_root_items(&boot.collection_db) {
-                Ok(favorites) if !favorites.is_empty() => items.push(favorite_root_item()),
-                Ok(_) => {}
-                Err(error) => tracing::error!(%error, "failed to check favorite root"),
-            }
             items.push(course_root_item());
             match table_folder_items_for_active_sources(
                 &boot.library_db,
@@ -243,6 +238,20 @@ pub(in crate::app) fn build_select_items_for_stack(
                 Err(error) => {
                     tracing::error!(%error, "failed to load virtual-folder catalog");
                 }
+            }
+            match favorite_root_items(&boot.collection_db) {
+                Ok(favorites) if !favorites.is_empty() => {
+                    let after_best = items
+                        .iter()
+                        .position(|item| {
+                            matches!(item, SelectItem::Folder { path, .. }
+                                if path == "bmz-filter:my-best")
+                        })
+                        .map_or(items.len(), |index| index + 1);
+                    items.insert(after_best, favorite_root_item());
+                }
+                Ok(_) => {}
+                Err(error) => tracing::error!(%error, "failed to check favorite root"),
             }
             items.push(settings_root_item_for_locale(boot.profile_config.ui.locale()));
             if !search_history.is_empty() {

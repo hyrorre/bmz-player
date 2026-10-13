@@ -104,3 +104,34 @@ beatoraja形式の画像・タイトル番号は維持し、新しい行種別�
   合成LR2スキンとWMIX_HDの2件が成功。Windowsの実GPUで読み込み・初回描画・正常終了を確認。
 - 全体テストの生ログはWorktreeの `.local/performance/lr2-row-tests-final.log` に保存。
   Git管理外のローカル資料であり、コミットには含めない。
+
+## 2026-10-14 フォルダ表示とFAVORITE配置の追加指定
+
+ユーザーの指定に従い、BMZの表示方針を同じWorktreeで更新した。
+
+| 項目 | LR2画像番号 | WMIX_HDでの見た目 |
+|---|---|---|
+| NEWのルート・配下の階層・TODAY等の抽出項目 | 3 | NEW SONG |
+| 設定フォルダ・その中の設定カテゴリ・戻る | 4 | 赤色のRIVAL |
+| LAMP UPDATE〜LEVELの分類階層・抽出項目 | 2 | 緑色のCUSTOM |
+
+NEWの `new_song` 指定をqueryの有無にかかわらず行種別へ反映する。
+設定の画像4は外観の指定であり、ライバルのスコアや操作には結び付けない。
+通常の曲フォルダは画像1、設定の「閉じる」は画像1を維持する。
+beatoraja形式の画像番号は変えていない。
+
+FAVORITEは登録がある場合にMY BESTの直後へ挿入する。
+表示名ではなく `bmz-filter:my-best` で配置先を識別し、ソート後もフォルダの順序を維持する。
+MY BESTが非表示またはカタログを読み込めない場合は、機能フォルダ群の末尾へ配置する。
+お気に入りが無い場合はこれまで通りFAVORITEを表示しない。
+
+ルート構築の回帰テストでNEWと機能フォルダの行種別、FAVORITEの有無、
+MY BESTの改名・非表示、全8種類のソートを確認する。
+描画の回帰テストでは設定ルート・設定カテゴリ・戻る・閉じると分類階層の画像番号を確認する。
+
+追加指定後の `cargo fmt --check`、`cargo check --workspace --locked`、
+`cargo clippy --workspace --all-targets --locked -- -D warnings`、
+`cargo test --workspace --locked --no-fail-fast` はすべて成功。
+全体テストのログは `.local/performance/lr2-folder-appearance-tests.log` に保存した。
+Windows GPUの起動確認も合成LR2スキン・素材ありのWMIX_HDの2件が成功。
+全項目の実画面での目視・操作確認は未実施。

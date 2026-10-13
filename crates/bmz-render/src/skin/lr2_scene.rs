@@ -17,12 +17,12 @@ pub(super) fn bar_index(row: &SelectRowSnapshot) -> usize {
         SelectRowKind::TableFolder
         | SelectRowKind::Executable
         | SelectRowKind::Command
-        | SelectRowKind::SearchFolder => 2,
-        SelectRowKind::Container => 1,
+        | SelectRowKind::SearchFolder
+        | SelectRowKind::Container => 2,
         SelectRowKind::SettingsRoot
         | SelectRowKind::SettingsFolder
-        | SelectRowKind::SettingsBack
-        | SelectRowKind::SettingsClose => 1,
+        | SelectRowKind::SettingsBack => 4,
+        SelectRowKind::SettingsClose => 1,
         _ => select_row_bar_image_index(row),
     }
 }

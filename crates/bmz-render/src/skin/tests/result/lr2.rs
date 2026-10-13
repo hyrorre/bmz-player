@@ -126,7 +126,7 @@ fn lr2_songlist_renders_unowned_songs_and_courses_with_native_bodies() {
         (SelectRowKind::Song, false, 5),
         (SelectRowKind::NoSong, false, 5),
         (SelectRowKind::Command, true, 2),
-        (SelectRowKind::Container, true, 1),
+        (SelectRowKind::Container, true, 2),
         (SelectRowKind::SearchFolder, true, 2),
         (SelectRowKind::TableFolder, true, 2),
         (SelectRowKind::Folder, true, 1),
@@ -138,8 +138,10 @@ fn lr2_songlist_renders_unowned_songs_and_courses_with_native_bodies() {
         (SelectRowKind::Course, false, 5),
         (SelectRowKind::RandomCourse, true, 9),
         (SelectRowKind::RandomCourse, false, 5),
-        (SelectRowKind::SettingsRoot, true, 1),
-        (SelectRowKind::SettingsBack, true, 1),
+        (SelectRowKind::SettingsRoot, true, 4),
+        (SelectRowKind::SettingsFolder, true, 4),
+        (SelectRowKind::SettingsBack, true, 4),
+        (SelectRowKind::SettingsClose, true, 1),
     ] {
         let snapshot = SelectSnapshot {
             rows: vec![SelectRowSnapshot { kind, in_library, ..Default::default() }],

@@ -30,7 +30,7 @@ struct VirtualFolderDef {
     id: String,
     #[serde(default)]
     name: String,
-    /// Mark query descendants as LR2's new-song folders, independently of their names.
+    /// Mark this folder and its descendants as LR2's new-song folders.
     #[serde(default)]
     new_song: bool,
     #[serde(default = "default_true")]
@@ -363,8 +363,10 @@ fn folder_item(folder: &VirtualFolderDef, parent_path: &str) -> SelectItem {
     SelectItem::Folder {
         path,
         name: folder.name.clone(),
-        kind: if folder.query.is_some() {
-            if folder.new_song { SelectRowKind::NewSongFolder } else { SelectRowKind::Command }
+        kind: if folder.new_song {
+            SelectRowKind::NewSongFolder
+        } else if folder.query.is_some() {
+            SelectRowKind::Command
         } else {
             SelectRowKind::Container
         },
@@ -538,7 +540,7 @@ mod tests {
         let new = folders.iter().find(|folder| folder.id == "new").unwrap();
         assert!(matches!(
             folder_item(new, VIRTUAL_FOLDER_PATH_PREFIX),
-            SelectItem::Folder { kind: SelectRowKind::Container, .. }
+            SelectItem::Folder { kind: SelectRowKind::NewSongFolder, .. }
         ));
         assert!(new.items.iter().all(|child| matches!(
             folder_item(child, "bmz-filter:new"),
