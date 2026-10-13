@@ -269,6 +269,23 @@ pub(super) fn select_session_mode_index(assist: &str) -> usize {
     }
 }
 
+/// Display label of the select key filter. The snapshot keeps the internal value
+/// ("ALL", "7K", ...) that is also stored in the profile.
+pub fn select_mode_label(mode: &str) -> &str {
+    match mode {
+        "ALL" => "ALL KEYS",
+        "4K" => "4KEYS",
+        "5K" => "5KEYS",
+        "6K" => "6KEYS",
+        "7K" => "7KEYS",
+        "8K" => "8KEYS",
+        "9K" => "9KEYS",
+        "10K" => "10KEYS",
+        "14K" => "14KEYS",
+        other => other,
+    }
+}
+
 pub(super) fn select_mode_index(mode: &str) -> usize {
     match mode {
         "5K" => 1,

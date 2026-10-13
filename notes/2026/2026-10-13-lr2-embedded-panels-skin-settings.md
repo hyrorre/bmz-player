@@ -39,3 +39,16 @@ ASSIST / DETAILはF1の設定画面で変更する方針（案a）にした。
 - `cargo fmt --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、
   `cargo test --workspace --locked --no-fail-fast` は成功。
 - 実画面でのパネル表示・クリック操作・スキン再読み込みの確認は未実施。
+
+## 追記: 設定ラベルと14K / 10Kの入れ替わり
+
+- ECBEのシステムパネルでBGA・AUTO ADJUST等の値欄が空だった。LR2のtext 60..85は `LR2files/Config/optionstr.csv` の文言で、
+  BMZで変更できる設定（60..65 / 70 / 74 / 76 / 80 / 84）だけ、BMZの表記で現在値を表示する。
+  ユーザー環境のLR2（`G:\LR2`）の `optionstr.csv` と比較したうえで、ユーザーの判断によりBMZの表記（NORMAL / HARD / HAZARD、H-RANDOM / ALL-SCR、SCORE等）を採用した。
+  キーフィルターだけは逆にBMZ側をLR2の表記へそろえ、JSON / Luaスキンの `bmz_select_mode` を含めて `ALL KEYS` / `7KEYS` / … / `4KEYS` / `6KEYS` / `8KEYS` と表示する。プロフィールへの保存値（`ALL` / `7K` 等）は変更しない。
+- ECBEのスキン種別タブで14Kと10Kが入れ替わる件は、ECBE側の割り当てと判断した。
+  - OpenLR2はbutton 170..188を `op - 170` でスキン種別へ変換し、種別は2が14KEYS、3が10KEYS。
+  - LR2同梱の `skinselect.csv` はコメントが逆（173を14KEYS）だが、`skinselect.tga` の該当領域を描画すると
+    173のボタン画像は「10KEYS」、172は「14KEYS」だった。RED BELTとW-mix HDも172を14Kに割り当てている。
+  - ECBEは画面上の「14K」タブに173、「10K」タブに172を割り当てている（EndlessCirculationのskinselect.csvも同じコメント）。
+  - 第三者スキンは書き換えず、BMZもLR2本体の割り当てを維持する。

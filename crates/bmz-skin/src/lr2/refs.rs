@@ -45,11 +45,16 @@ pub(super) fn lr2_number_ref(skin_type: i32, id: i32) -> Option<i32> {
     }
 }
 
-/// LR2 text refs: the embedded skin settings (skin name / author, customize rows)
-/// and random course settings, which have no BMZ counterpart.
+/// LR2 text refs: labels of options BMZ can change (key filter, sort, difficulty,
+/// RANDOM, gauge, FLIP, HS-FIX, BGA, auto adjust, effect), the embedded skin
+/// settings, and random course settings, which have no BMZ counterpart.
 pub(super) fn lr2_text_ref(skin_type: i32, id: i32) -> Option<i32> {
-    (is_song_scene(skin_type) && matches!(id, 50 | 51 | 100..=119 | 190..=199))
-        .then_some(LR2_TEXT_BASE + id)
+    (is_song_scene(skin_type)
+        && matches!(
+            id,
+            50 | 51 | 60..=65 | 70 | 74 | 76 | 80 | 84 | 100..=119 | 190..=199
+        ))
+    .then_some(LR2_TEXT_BASE + id)
 }
 
 /// Options LR2 always resolves to one value because BMZ has no such setting:

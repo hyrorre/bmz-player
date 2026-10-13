@@ -162,8 +162,9 @@ fn select_lua_skins_decode_with_explicit_library_root_when_available() {
                         ..SelectSnapshot::default()
                     };
                     let items = context.select_document_items(&snapshot);
+                    let label = bmz_render::skin::select_mode_label(mode);
                     let mode_style = items.iter().find_map(|item| match item {
-                        SkinRenderItem::Text { text, style, .. } if text == mode => Some(style),
+                        SkinRenderItem::Text { text, style, .. } if text == label => Some(style),
                         _ => None,
                     });
                     assert!(mode_style.is_some(), "{label} must render {mode}");

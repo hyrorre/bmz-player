@@ -199,7 +199,7 @@ pub(super) fn skin_main_state_text(
             .map(|entry| entry.player_name.as_str().to_string())
             .unwrap_or_default(),
         150..=159 => state.course_titles[(ref_id - 150) as usize].to_string(),
-        LR2_TEXT_BASE..=LR2_TEXT_LAST => lr2_text(ref_id - LR2_TEXT_BASE, state),
+        LR2_TEXT_BASE..=LR2_TEXT_LAST => lr2_text(ref_id - LR2_TEXT_BASE, draw_state, state),
         190..=196 => {
             draw_state.map(|state| random_mix_option_text(ref_id, state)).unwrap_or_default()
         }
@@ -292,10 +292,16 @@ pub(super) fn skin_main_state_text(
     }
 }
 
-/// LR2 texts whose meaning differs from beatoraja (`LR2_TEXT_BASE + id`). Embedded
-/// skin settings show the edited skin and ten customize rows from the scroll position;
-/// random course settings (190..199) have no BMZ counterpart.
-fn lr2_text(id: i32, state: &SkinTextState<'_>) -> String {
+/// LR2 texts whose meaning differs from beatoraja (`LR2_TEXT_BASE + id`).
+/// Labels of settings BMZ can change show BMZ's current values. Embedded skin
+/// settings show the edited skin and ten customize rows from the scroll position; random
+/// course settings (190..199) have no BMZ counterpart.
+fn lr2_text(id: i32, draw_state: Option<&SkinDrawState>, state: &SkinTextState<'_>) -> String {
+    if let Some(draw) = draw_state
+        && let Some(label) = lr2_option_label(id, draw, state)
+    {
+        return label;
+    }
     let Some(settings) = state.lr2_skin_settings else {
         return String::new();
     };
@@ -309,6 +315,27 @@ fn lr2_text(id: i32, state: &SkinTextState<'_>) -> String {
     }
 }
 
+/// Current values of settings BMZ can change, in BMZ's wording.
+fn lr2_option_label(id: i32, draw: &SkinDrawState, state: &SkinTextState<'_>) -> Option<String> {
+    Some(match id {
+        60 => state.select_mode.to_string(),
+        61 => state.select_sort.to_string(),
+        62 => ["ALL", "BEGINNER", "NORMAL", "HYPER", "ANOTHER", "INSANE"]
+            .get(draw.select_difficulty_filter_index)
+            .map_or_else(String::new, |label| label.to_string()),
+        63 => state.select_arrange.to_string(),
+        64 => state.select_arrange_2p.to_string(),
+        65 => state.select_gauge.to_string(),
+        70 => state.select_double_option.to_string(),
+        74 => state.select_hs_fix.to_string(),
+        76 => state.select_bga.to_string(),
+        80 => if draw.judge_timing_auto_adjust { "ON" } else { "OFF" }.to_string(),
+        84 => ["OFF", "HIDDEN", "SUDDEN", "HID+SUD"]
+            [usize::from(draw.hidden_enabled) + 2 * usize::from(draw.lanecover_enabled)]
+        .to_string(),
+        _ => return None,
+    })
+}
 pub(super) fn lua_main_state_text_values(
     draw_state: &SkinDrawState,
     text_state: &SkinTextState<'_>,

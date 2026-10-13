@@ -465,3 +465,51 @@ fn lr2_embedded_skin_settings_texts_buttons_and_scroll_slider() {
     assert_eq!((index(175), index(170), index(190), index(225)), (1, 0, 0, 0));
     assert_eq!(skin_slider_progress_by_type(7, &state), Some(2.0 / 3.0));
 }
+
+#[test]
+fn lr2_option_labels_show_bmz_values() {
+    let text = SkinTextState {
+        select_mode: select_mode_label("7K"),
+        select_sort: "SCORE",
+        select_gauge: "HAZARD",
+        select_arrange: "H-RANDOM",
+        select_bga: "AUTO",
+        ..SkinTextState::default()
+    };
+    let state = SkinDrawState {
+        select_screen: true,
+        judge_timing_auto_adjust: true,
+        select_difficulty_filter_index: 4,
+        hidden_enabled: true,
+        lanecover_enabled: true,
+        ..Default::default()
+    };
+    let lr2_text = |id: i32| skin_main_state_text(LR2_TEXT_BASE + id, Some(&state), &text);
+    assert_eq!(lr2_text(60), "7KEYS");
+    assert_eq!(lr2_text(61), "SCORE");
+    assert_eq!(lr2_text(62), "ANOTHER");
+    assert_eq!(lr2_text(63), "H-RANDOM");
+    assert_eq!(lr2_text(65), "HAZARD");
+    assert_eq!(lr2_text(76), "AUTO");
+    assert_eq!(lr2_text(80), "ON");
+    assert_eq!(lr2_text(84), "HID+SUD");
+    // Settings BMZ cannot change keep LR2's labels blank.
+    assert_eq!(lr2_text(71), "");
+}
+
+#[test]
+fn select_key_filter_labels_follow_lr2_wording() {
+    for (mode, label) in [
+        ("ALL", "ALL KEYS"),
+        ("7K", "7KEYS"),
+        ("5K", "5KEYS"),
+        ("14K", "14KEYS"),
+        ("10K", "10KEYS"),
+        ("9K", "9KEYS"),
+        ("4K", "4KEYS"),
+        ("6K", "6KEYS"),
+        ("8K", "8KEYS"),
+    ] {
+        assert_eq!(select_mode_label(mode), label);
+    }
+}

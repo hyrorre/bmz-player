@@ -157,6 +157,7 @@ option `94_000+ID`、否定は符号を維持）。意味が一致する番号�
 | number | 50..56 / 60..66 | 全画面 | EQ / FX / PITCH。BMZに設定が無いため非表示（beatorajaの54 / 55はDPオプション / HS-FIX） |
 | number | 290 / 291 | 全画面 | 最高 / 最低BPM（90 / 91と同じ） |
 | text | 190..199 | Select / Decide | ランダムコースの設定。BMZに該当が無いため空文字 |
+| text | 60..65 / 70 / 74 / 76 / 80 / 84 | Select / Decide | BMZで変更できる設定の現在値（キーフィルター、ソート、難易度、RANDOM 1P / 2P、ゲージ、FLIP、HS-FIX、BGA、自動調整、EFFECT）。文言はBMZの表記（例: NORMAL / HARD / HAZARD、H-RANDOM / ALL-SCR、SCORE、AUTO）を使う。キーフィルターはBMZ全体でLR2と同じ `ALL KEYS` / `7KEYS` 等の表記にそろえている。変更できない設定（GHOST、SCORE GRAPH、BGA SIZE、画面設定、REPLAY等）は空文字 |
 | number | 150 / 151、155..158 | Play | 自己ベスト / ターゲットのゴーストの現在進捗でのEXと率。自己ベストはゴーストがあれば使い、無ければ線形換算。ターゲットは線形換算 |
 | number | 120..136（シングルプレイ） | Play | 2Pはターゲットのゴースト。BMZはEXの進捗換算だけを持つため、EX・率・差・次ランク差・ノーツ数以外は0 |
 | number | 272 / 273 / 274 | Select / Decide | ライバルの理論値EX・レート・ノーツ数（同じ譜面のノーツ数から計算） |
@@ -202,7 +203,7 @@ CSVの引用符はフィールド先頭で開く。引用されていない画�
 | button | 設定 | LR2の順（BMZ値） |
 |---|---|---|
 | 10 / 91..96 | 難易度フィルター | 10は常に次へ。91..96は直接選択 |
-| 11 | キーフィルター | ALL / 7K / 5K / 14K / 10K / 9K（常に次へ） |
+| 11 | キーフィルター | ALL KEYS / 7KEYS / 5KEYS / 14KEYS / 10KEYS / 9KEYS（常に次へ） |
 | 12 | ソート | LEVEL / TITLE / CLEAR / SCORE（常に次へ） |
 | 40 | ゲージ | NORMAL / HARD / DEATH(HAZARD) / EASY |
 | 42 / 43 | 1P / 2P配置 | NORMAL / MIRROR / RANDOM / S-RANDOM / H-RANDOM / ALL-SCR |
@@ -235,6 +236,9 @@ button 1..6のクリック開閉は通常の鍵盤・ゲームパッド入力を
 保存値が無い項目はスキンの既定値を表示する。位置調整（offset）は一覧に出さない。
 text 50 / 51は対象スキンの名前・作者、100..109 / 110..119は表示中10行の項目名・値、
 slider 7は一覧のスクロール位置。F1の設定画面での変更も一覧へ反映する。
+対象のbuttonはLR2本体と同じく172を14KEYS、173を10KEYSとして扱う（LR2同梱のskinselect画像とOpenLR2の
+`op - 170` による種別番号で確認）。ECBEは14K表示のタブに173、10K表示のタブに172を割り当てているため、
+LR2本体と同様にタブの表示と編集対象が入れ替わる。スキン側の割り当てであり、BMZでは補正しない。
 E1/E2のhold変化で物理操作へ戻し、modal・フォーカス喪失・画面切替では解除する。
 
 リザルトは `GAUGECHART_1P/2P` の自分側と `SCORECHART` index 0を実際の履歴から描画する。
@@ -983,7 +987,7 @@ skin 側のスプライト行追加は不要。
 | `bmz_select_double_option` | DP option |
 | `bmz_select_hs_fix` | hi-speed fix |
 | `bmz_select_assist` | assist |
-| `bmz_select_mode` | mode |
+| `bmz_select_mode` | key filter (`ALL KEYS` / `7KEYS` / `5KEYS` / `14KEYS` / `10KEYS` / `9KEYS` / `4KEYS` / `6KEYS` / `8KEYS`) |
 | `bmz_select_sort` | sort |
 | `bmz_select_ln_mode` | LN mode |
 | `bmz_select_bga` | BGA |

@@ -91,7 +91,7 @@ macro_rules! skin_document_render_select_render_methods {
                 select_double_option: &snapshot.double_option,
                 select_hs_fix: &snapshot.hs_fix,
                 select_assist: &snapshot.assist,
-                select_mode: &snapshot.select_mode,
+                select_mode: select_mode_label(&snapshot.select_mode),
                 select_sort: &snapshot.select_sort,
                 select_ln_mode: &snapshot.select_ln_mode,
                 select_bga: &snapshot.bga,

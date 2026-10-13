@@ -29,7 +29,7 @@ pub(super) fn plan_select(
                     snapshot.gauge,
                     snapshot.double_option,
                     snapshot.hs_fix,
-                    snapshot.select_mode,
+                    crate::skin::select_mode_label(&snapshot.select_mode),
                     snapshot.select_sort,
                 ),
                 BitmapTextStyle {
