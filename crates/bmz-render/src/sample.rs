@@ -55,6 +55,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         selected_index: 0,
         bar_scroll_direction: 0,
         bar_scroll_progress: 0.0,
+        bar_scroll_rows: None,
         selected_chart_id: Some(1),
         selected_score_date_sec: 0,
         last_played_at: None,

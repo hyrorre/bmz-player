@@ -12,17 +12,16 @@ macro_rules! skin_document_render_select_songlist_methods {
                 return Vec::new();
             };
             let mut items = Vec::new();
-            let selected_row_position =
-                select_snapshot_selected_row_position(&snapshot.rows, snapshot.selected_index)
-                    as i32;
+            let (rows, center_row_position) = snapshot.bar_rows_and_center();
+            let (whole_scroll, scroll_direction, scroll_fraction) = snapshot.bar_scroll_slots();
             let mut row_state = state.clone();
-            for (row_position, row) in snapshot.rows.iter().enumerate() {
-                let offset = row_position as i32 - selected_row_position;
-                let slot = songlist.center + offset;
+            for (row_position, row) in rows.iter().enumerate() {
+                let offset = row_position as i32 - center_row_position as i32;
+                let slot = songlist.center + offset + whole_scroll;
                 if slot < 0 {
                     continue;
                 }
-                let selected = row_position as i32 == selected_row_position;
+                let selected = slot == songlist.center;
                 let row_destinations = if selected { &songlist.liston } else { &songlist.listoff };
                 Self::apply_select_songlist_render_row_state(
                     &mut row_state,
@@ -47,14 +46,20 @@ macro_rules! skin_document_render_select_songlist_methods {
                 ) else {
                     continue;
                 };
+                // The selection flash marks the fixed center slot. Moving it with
+                // a row would make it jump when the visual window crosses a row.
+                let flash_origin = (
+                    row_frame.x,
+                    row_frame.y + if songlist.lr2_bottom_origin { row_frame.h } else { 0 },
+                );
                 self.apply_select_songlist_scroll_to_frame(
                     &mut row_frame,
                     songlist,
                     slot,
                     enabled_options,
                     &row_state,
-                    snapshot.bar_scroll_direction,
-                    snapshot.bar_scroll_progress,
+                    scroll_direction,
+                    scroll_fraction,
                 );
                 let row_origin = (
                     row_frame.x,
@@ -70,7 +75,7 @@ macro_rules! skin_document_render_select_songlist_methods {
                     items.extend(self.select_songlist_child_items_by_index(
                         &songlist.flash,
                         0,
-                        row_origin,
+                        flash_origin,
                         images,
                         enabled_options,
                         &row_state,
@@ -225,8 +230,14 @@ macro_rules! skin_document_render_select_songlist_methods {
             else {
                 return;
             };
-            frame.x += ((next_frame.x - frame.x) as f32 * progress).round() as i32;
-            frame.y += ((next_frame.y - frame.y) as f32 * progress).round() as i32;
+            let interpolate = |from: i32, to: i32| {
+                (f64::from(from) + (f64::from(to) - f64::from(from)) * f64::from(progress)).round()
+                    as i32
+            };
+            frame.x = interpolate(frame.x, next_frame.x);
+            frame.y = interpolate(frame.y, next_frame.y);
+            frame.w = interpolate(frame.w, next_frame.w);
+            frame.h = interpolate(frame.h, next_frame.h);
         }
 
         fn select_songlist_all_child_items(

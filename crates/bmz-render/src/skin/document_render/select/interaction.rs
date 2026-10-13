@@ -147,18 +147,17 @@ macro_rules! skin_document_render_select_interaction_methods {
             let Some(songlist) = &self.songlist else {
                 return Vec::new();
             };
-            let selected_row_position =
-                select_snapshot_selected_row_position(&snapshot.rows, snapshot.selected_index)
-                    as i32;
+            let (rows, center_row_position) = snapshot.bar_rows_and_center();
+            let (whole_scroll, scroll_direction, scroll_fraction) = snapshot.bar_scroll_slots();
             let mut hits = Vec::new();
             let mut row_state = state.clone();
-            for (row_position, row) in snapshot.rows.iter().enumerate() {
-                let offset = row_position as i32 - selected_row_position;
-                let slot = songlist.center + offset;
+            for (row_position, row) in rows.iter().enumerate() {
+                let offset = row_position as i32 - center_row_position as i32;
+                let slot = songlist.center + offset + whole_scroll;
                 if !songlist.clickable.contains(&slot) || slot < 0 {
                     continue;
                 }
-                let selected = row_position as i32 == selected_row_position;
+                let selected = slot == songlist.center;
                 let row_destinations = if selected { &songlist.liston } else { &songlist.listoff };
                 Self::apply_select_songlist_click_row_state(
                     &mut row_state,
@@ -189,8 +188,8 @@ macro_rules! skin_document_render_select_interaction_methods {
                     slot,
                     enabled_options,
                     &row_state,
-                    snapshot.bar_scroll_direction,
-                    snapshot.bar_scroll_progress,
+                    scroll_direction,
+                    scroll_fraction,
                 );
                 apply_skin_offset_to_frame(row_destination, &mut frame, &row_state, false);
                 if !destination_mouse_rect_contains(row_destination, frame, &row_state) {

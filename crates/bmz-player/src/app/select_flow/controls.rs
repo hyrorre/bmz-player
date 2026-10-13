@@ -37,22 +37,24 @@ impl WinitApp {
 
     pub(super) fn restart_select_bar_timer_without_scroll(&mut self, now: Instant) {
         self.select.select_bar_started_at = now;
-        self.select.select_bar_scroll_direction = 0;
-        self.select.select_bar_scroll_duration = Duration::ZERO;
+        self.select.select_bar_scroll.reset();
     }
 
-    pub(super) fn select_bar_scroll_progress(&self) -> f32 {
-        if !self.select.select_scene_timer_armed
-            || self.select.select_bar_scroll_direction == 0
-            || self.select.select_bar_scroll_duration.is_zero()
-        {
+    pub(super) fn select_bar_scroll_remaining(&self) -> f64 {
+        if !self.select.select_scene_timer_armed {
             return 0.0;
         }
-        let elapsed = self.select.select_bar_started_at.elapsed();
-        if elapsed >= self.select.select_bar_scroll_duration {
-            return 0.0;
+        self.select.select_bar_scroll.remaining_at(Instant::now())
+    }
+
+    pub(super) fn restart_select_bar_timer_with_scroll(&mut self, rows: i32, duration: Duration) {
+        let now = Instant::now();
+        self.select.select_bar_started_at = now;
+        if rows == 0 {
+            self.select.select_bar_scroll.reset();
+        } else {
+            self.select.select_bar_scroll.move_by(rows, now, duration);
         }
-        1.0 - elapsed.as_secs_f32() / self.select.select_bar_scroll_duration.as_secs_f32()
     }
 
     pub(super) fn select_scroll_duration_low(&self) -> Duration {

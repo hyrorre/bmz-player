@@ -7,6 +7,7 @@ mod lr2_buttons;
 mod mode_sort;
 mod navigation;
 mod options;
+mod scroll;
 mod snapshot;
 
 pub(super) use filters::*;
@@ -16,4 +17,5 @@ pub(super) use lr2_buttons::*;
 pub(super) use mode_sort::*;
 pub(super) use navigation::*;
 pub(super) use options::*;
+pub(super) use scroll::*;
 pub(super) use snapshot::*;

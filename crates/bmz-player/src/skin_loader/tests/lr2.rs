@@ -16,3 +16,5 @@ mod cases_06;
 mod scenes;
 #[path = "lr2/select_conditions.rs"]
 mod select_conditions;
+#[path = "lr2/select_scroll.rs"]
+mod select_scroll;

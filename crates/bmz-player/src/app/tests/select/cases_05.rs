@@ -36,13 +36,13 @@ fn select_scroll_duration_config_uses_beatoraja_bounds() {
 }
 
 #[test]
-fn select_move_scroll_direction_matches_row_movement() {
-    assert_eq!(select_move_scroll_direction(SelectMove::Previous), -1);
-    assert_eq!(select_move_scroll_direction(SelectMove::Next), 1);
-    assert_eq!(select_move_scroll_direction(SelectMove::PagePrevious), -1);
-    assert_eq!(select_move_scroll_direction(SelectMove::PageNext), 1);
-    assert_eq!(select_move_scroll_direction(SelectMove::First), 0);
-    assert_eq!(select_move_scroll_direction(SelectMove::Last), 0);
+fn select_move_scroll_rows_matches_row_movement() {
+    assert_eq!(select_move_scroll_rows(SelectMove::Previous), -1);
+    assert_eq!(select_move_scroll_rows(SelectMove::Next), 1);
+    assert_eq!(select_move_scroll_rows(SelectMove::PagePrevious), -7);
+    assert_eq!(select_move_scroll_rows(SelectMove::PageNext), 7);
+    assert_eq!(select_move_scroll_rows(SelectMove::First), 0);
+    assert_eq!(select_move_scroll_rows(SelectMove::Last), 0);
 }
 
 #[test]

@@ -334,16 +334,3 @@ pub(super) fn select_scroll_progress(snapshot: &SelectSnapshot) -> f32 {
     }
     snapshot.selected_index.min(snapshot.chart_count - 1) as f32 / (snapshot.chart_count - 1) as f32
 }
-
-pub(super) fn select_snapshot_selected_row_position(
-    rows: &[SelectRowSnapshot],
-    selected_index: u32,
-) -> usize {
-    let center = rows.len() / 2;
-    rows.iter()
-        .enumerate()
-        .filter(|(_, row)| row.index == selected_index)
-        .min_by_key(|(index, _)| index.abs_diff(center))
-        .map(|(index, _)| index)
-        .unwrap_or(0)
-}

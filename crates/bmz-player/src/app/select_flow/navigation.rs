@@ -41,26 +41,39 @@ impl WinitApp {
         select_move: SelectMove,
         duration: Duration,
     ) {
+        let rows = select_move_scroll_rows(select_move);
+        self.move_selection_with_scroll(select_move, rows, duration);
+    }
+
+    pub(super) fn move_selection_with_scroll(
+        &mut self,
+        select_move: SelectMove,
+        rows: i32,
+        duration: Duration,
+    ) {
         if self.select.ir_battle.active {
-            self.move_select_ir_battle(select_move, duration);
+            self.move_select_ir_battle(select_move, rows, duration);
             return;
         }
         if self.select.select_items.is_empty() {
             return;
         }
         let previous_index = self.select.selected_index;
-        self.select.selected_index = moved_select_index(
-            self.select.selected_index,
-            self.select.select_items.len(),
-            select_move,
-        );
-        if self.select.selected_index != previous_index {
+        self.select.selected_index = if rows == 0 {
+            moved_select_index(previous_index, self.select.select_items.len(), select_move)
+        } else {
+            (previous_index as i64 + i64::from(rows))
+                .rem_euclid(self.select.select_items.len() as i64) as usize
+        };
+        if self.select.selected_index != previous_index
+            || (rows != 0 && self.select.select_items.len() > 1)
+        {
             self.sync_selected_play_mode();
             self.reset_selected_replay_slot();
-            self.select.select_bar_started_at = Instant::now();
-            self.select.select_bar_scroll_direction = select_move_scroll_direction(select_move);
-            self.select.select_bar_scroll_duration = duration;
+            self.restart_select_bar_timer_with_scroll(rows, duration);
             self.play_system_sound(crate::system_sound::SoundType::Scratch);
+        } else if rows == 0 {
+            self.restart_select_bar_timer_without_scroll(Instant::now());
         }
     }
 
@@ -82,11 +95,11 @@ impl WinitApp {
         };
         let now = Instant::now();
         let elapsed = now.duration_since(started_at);
-        if elapsed < self.select_scroll_duration_low() {
+        if elapsed < select_scroll_repeat_interval(self.select_scroll_duration_low()) {
             return;
         }
         let since_last = now.duration_since(last_trigger_at);
-        if since_last >= self.select_scroll_duration_high() {
+        if since_last >= select_scroll_repeat_interval(self.select_scroll_duration_high()) {
             self.select.select_hold_last_trigger_at = Some(now);
             self.move_selection_with_duration(select_move, self.select_scroll_duration_high());
         }

@@ -213,10 +213,10 @@ impl WinitApp {
             self.select.folder_stack.last().is_some_and(|path| {
                 matches!(parse_table_path(path), Some(TablePath::Level { .. }))
             });
-        let mut rows = if self.select.ir_battle.active {
+        let battle_source_row = if self.select.ir_battle.active {
             // G-BATTLEでは人物/スコア表示だけを差し替え、譜面そのものの
             // BPM・長さ・ノート数・解析値などは元の選択行から引き継ぐ。
-            let source_row = select_snapshot_rows_with_rival(
+            select_snapshot_rows_with_rival(
                 &self.select.select_items,
                 self.select.selected_index,
                 1,
@@ -228,12 +228,16 @@ impl WinitApp {
                 Some(&self.select.select_ir),
             )
             .into_iter()
-            .next();
+            .next()
+        } else {
+            None
+        };
+        let mut rows = if self.select.ir_battle.active {
             crate::app::select_ir_battle::select_ir_battle_snapshot_rows(
                 &battle_choices,
                 self.select.ir_battle.cursor,
                 25,
-                source_row.as_ref(),
+                battle_source_row.as_ref(),
             )
         } else {
             select_snapshot_rows_with_rival(
@@ -257,6 +261,47 @@ impl WinitApp {
             selected_row.same_folder_difficulties = self.selected_same_folder_difficulties();
             selected_row.lr2_option_history = self.selected_lr2_option_history();
         }
+        let scroll_remaining = self.select_bar_scroll_remaining();
+        let scroll_center = select_scroll_center_index(
+            displayed_index,
+            if self.select.ir_battle.active {
+                battle_choices.len()
+            } else {
+                self.select.select_items.len()
+            },
+            scroll_remaining,
+        );
+        let bar_scroll_rows = if scroll_remaining.trunc() == 0.0 {
+            None
+        } else if self.select.ir_battle.active {
+            Some(crate::app::select_ir_battle::select_ir_battle_snapshot_rows(
+                &battle_choices,
+                scroll_center,
+                25,
+                battle_source_row.as_ref(),
+            ))
+        } else {
+            let mut displayed_rows = select_snapshot_rows_with_rival(
+                &self.select.select_items,
+                scroll_center,
+                25,
+                &self.boot.profile_config,
+                &self.boot.app_config,
+                in_difficulty_table_level,
+                self.select.key_config_edit.as_ref(),
+                &chart_distributions,
+                Some(&self.select.select_ir),
+            );
+            // Preserve selection-only replay/history metadata where windows overlap.
+            for row in &mut displayed_rows {
+                if let Some(selected_row) =
+                    rows.iter().find(|candidate| candidate.index == row.index)
+                {
+                    row.clone_from(selected_row);
+                }
+            }
+            Some(displayed_rows)
+        };
         SelectSnapshot {
             screen_size: [0, 0],
             time: self.select_time(),
@@ -284,8 +329,13 @@ impl WinitApp {
                 self.select.select_items.len()
             } as u32,
             selected_index: displayed_index as u32,
-            bar_scroll_direction: self.select.select_bar_scroll_direction,
-            bar_scroll_progress: self.select_bar_scroll_progress(),
+            bar_scroll_direction: if scroll_remaining == 0.0 {
+                0
+            } else {
+                scroll_remaining.signum() as i32
+            },
+            bar_scroll_progress: select_scroll_fraction(scroll_remaining),
+            bar_scroll_rows,
             selected_chart_id: match selected {
                 Some(SelectItem::Chart(row)) => row.chart.as_ref().map(|chart| chart.chart_id),
                 _ => None,

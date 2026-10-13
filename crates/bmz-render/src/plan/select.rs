@@ -18,8 +18,8 @@ pub(super) fn plan_select(
     }
 
     let chart_count = snapshot.chart_count;
-    let selected_index = snapshot.selected_index;
-    let rows = &snapshot.rows;
+    let (rows, center_row_position) = snapshot.bar_rows_and_center();
+    let (whole_scroll, direction, fraction) = snapshot.bar_scroll_slots();
 
     let mut commands = Vec::new();
     if snapshot.stage_background {
@@ -89,13 +89,13 @@ pub(super) fn plan_select(
     }
 
     let visible_rows = rows.len().max(1);
-    let selected_row_position = select_snapshot_selected_row_position(rows, selected_index);
     for row in 0..visible_rows {
         let snapshot_row = rows.get(row);
-        let selected = snapshot_row.map_or(row == 0, |_| row == selected_row_position);
+        let selected = snapshot_row
+            .map_or(row == 0, |_| row as i32 + whole_scroll == center_row_position as i32);
         let is_folder = snapshot_row.map(|r| r.is_folder).unwrap_or(false);
         let in_library = snapshot_row.map(|r| r.in_library).unwrap_or(true);
-        let row_y = 0.2 + row as f32 * 0.09;
+        let row_y = 0.2 + (row as f32 + whole_scroll as f32 + direction as f32 * fraction) * 0.09;
         let (left_bg, right_bg) = if is_folder {
             if selected {
                 (Color::rgb(0.26, 0.21, 0.08), Color::rgb(0.20, 0.16, 0.06))
@@ -229,19 +229,6 @@ pub(super) fn push_select_option_panel(
             },
         );
     }
-}
-
-pub(super) fn select_snapshot_selected_row_position(
-    rows: &[SelectRowSnapshot],
-    selected_index: u32,
-) -> usize {
-    let center = rows.len() / 2;
-    rows.iter()
-        .enumerate()
-        .filter(|(_, row)| row.index == selected_index)
-        .min_by_key(|(index, _)| index.abs_diff(center))
-        .map(|(index, _)| index)
-        .unwrap_or(0)
 }
 
 pub(super) fn push_select_title_text(

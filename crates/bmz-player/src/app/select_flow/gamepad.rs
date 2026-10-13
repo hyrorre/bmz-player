@@ -457,12 +457,11 @@ impl WinitApp {
             }
             self.play_system_sound(crate::system_sound::SoundType::OptionChange);
         } else {
-            for _ in 0..mov.abs() {
-                self.move_selection_with_duration(
-                    if mov > 0 { SelectMove::Next } else { SelectMove::Previous },
-                    select_analog_scroll_duration(mov),
-                );
-            }
+            self.move_selection_with_scroll(
+                if mov > 0 { SelectMove::Next } else { SelectMove::Previous },
+                mov,
+                select_analog_scroll_duration(mov),
+            );
         }
     }
 

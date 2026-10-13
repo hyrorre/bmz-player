@@ -27,11 +27,15 @@ pub struct SelectSnapshot {
     pub detail_options_closing: Option<super::detail_options::DetailOptionsClosingSnapshot>,
     pub chart_count: u32,
     pub selected_index: u32,
-    /// beatoraja-style song bar movement direction. `1` means the new bars start
+    /// Song bar movement direction. `1` means the new bars start
     /// from the next slot, `-1` from the previous slot, `0` disables movement.
     pub bar_scroll_direction: i32,
-    /// Remaining song bar movement progress (1.0 at movement start, 0.0 at rest).
+    /// Remaining distance in rows. When `bar_scroll_rows` is supplied, its
+    /// window already accounts for whole rows and only the fraction is needed.
     pub bar_scroll_progress: f32,
+    /// Rows around the displayed whole-row position when it lags the selection.
+    /// Logical selection data remains in `rows` for skin refs and actions.
+    pub bar_scroll_rows: Option<Vec<SelectRowSnapshot>>,
     pub selected_chart_id: Option<i64>,
     /// Currently selected replay slot (0..=3), normalized to an existing slot.
     pub selected_replay_slot: Option<u8>,
@@ -203,6 +207,34 @@ pub struct SelectRivalJudgeCounts {
 }
 
 impl SelectSnapshot {
+    pub(crate) fn bar_rows_and_center(&self) -> (&[SelectRowSnapshot], usize) {
+        if let Some(rows) = &self.bar_scroll_rows {
+            return (rows, rows.len() / 2);
+        }
+        let center = self.rows.len() / 2;
+        let selected_position = self
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.index == self.selected_index)
+            .min_by_key(|(position, _)| position.abs_diff(center))
+            .map_or(0, |(position, _)| position);
+        (&self.rows, selected_position)
+    }
+
+    pub(crate) fn bar_scroll_slots(&self) -> (i32, i32, f32) {
+        if !self.bar_scroll_progress.is_finite() || self.bar_scroll_progress <= 0.0 {
+            return (0, 0, 0.0);
+        }
+        let direction = self.bar_scroll_direction.signum();
+        let whole = if self.bar_scroll_rows.is_some() {
+            0
+        } else {
+            (self.bar_scroll_progress.trunc() as i32).saturating_mul(direction)
+        };
+        (whole, direction, self.bar_scroll_progress.fract())
+    }
+
     pub fn closing_detail_options(
         &self,
     ) -> Option<&super::detail_options::DetailOptionsClosingSnapshot> {
@@ -239,6 +271,7 @@ impl Default for SelectSnapshot {
             selected_index: 0,
             bar_scroll_direction: 0,
             bar_scroll_progress: 0.0,
+            bar_scroll_rows: None,
             selected_chart_id: None,
             selected_replay_slot: None,
             selected_title: String::new(),

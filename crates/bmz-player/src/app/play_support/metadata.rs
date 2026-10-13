@@ -127,10 +127,12 @@ pub(in crate::app) fn moved_select_index(
     }
 }
 
-pub(in crate::app) fn select_move_scroll_direction(select_move: SelectMove) -> i32 {
+pub(in crate::app) fn select_move_scroll_rows(select_move: SelectMove) -> i32 {
     match select_move {
-        SelectMove::Previous | SelectMove::PagePrevious => -1,
-        SelectMove::Next | SelectMove::PageNext => 1,
+        SelectMove::Previous => -1,
+        SelectMove::Next => 1,
+        SelectMove::PagePrevious => -7,
+        SelectMove::PageNext => 7,
         SelectMove::First | SelectMove::Last => 0,
     }
 }

@@ -231,19 +231,28 @@ impl WinitApp {
         was_open
     }
 
-    pub(super) fn move_select_ir_battle(&mut self, select_move: SelectMove, duration: Duration) {
+    pub(super) fn move_select_ir_battle(
+        &mut self,
+        select_move: SelectMove,
+        rows: i32,
+        duration: Duration,
+    ) {
         let len = self.select_battle_choices().len();
         if len == 0 {
             self.close_select_ir_battle();
             return;
         }
         let previous = self.select.ir_battle.cursor;
-        self.select.ir_battle.cursor = moved_select_index(previous, len, select_move);
-        if previous != self.select.ir_battle.cursor {
-            self.select.select_bar_started_at = Instant::now();
-            self.select.select_bar_scroll_direction = select_move_scroll_direction(select_move);
-            self.select.select_bar_scroll_duration = duration;
+        self.select.ir_battle.cursor = if rows == 0 {
+            moved_select_index(previous, len, select_move)
+        } else {
+            (previous as i64 + i64::from(rows)).rem_euclid(len as i64) as usize
+        };
+        if previous != self.select.ir_battle.cursor || (rows != 0 && len > 1) {
+            self.restart_select_bar_timer_with_scroll(rows, duration);
             self.play_system_sound(crate::system_sound::SoundType::Scratch);
+        } else if rows == 0 {
+            self.restart_select_bar_timer_without_scroll(Instant::now());
         }
     }
 
