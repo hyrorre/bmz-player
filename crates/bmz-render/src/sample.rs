@@ -104,6 +104,8 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         lanecover_enabled: false,
         lift_enabled: true,
         hidden_enabled: false,
+        lanecover_enabled_2p: false,
+        hidden_enabled_2p: false,
         hispeed_auto_adjust: false,
         master_volume: 1.0,
         key_volume: 1.0,

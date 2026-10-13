@@ -568,6 +568,7 @@ impl ProfileConfig {
                 hs_fix: HsFixConfig::Off,
                 target: TargetOptionConfig::None,
                 lane_effect: LaneEffectConfig::Off,
+                lane_effect_2p: None,
                 assist: AssistOptionConfig::default(),
                 guide_se: false,
                 note_retention: false,

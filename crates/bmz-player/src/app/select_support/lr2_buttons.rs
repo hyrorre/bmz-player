@@ -22,6 +22,7 @@ pub(in crate::app) enum Lr2SelectButtonAction {
     HsFix,
     JudgeAutoAdjust,
     Target,
+    LaneEffect2P,
     /// Embedded skin settings: skin type to edit, skin change, customize row.
     SkinTarget(i32),
     SkinChange,
@@ -42,6 +43,7 @@ pub(in crate::app) fn lr2_select_button_action(button: i32) -> Lr2SelectButtonAc
         42 => Arrange1P,
         43 => Arrange2P,
         50 => LaneEffect,
+        51 => LaneEffect2P,
         54 => DpFlip,
         55 => HsFix,
         75 => JudgeAutoAdjust,
@@ -49,7 +51,7 @@ pub(in crate::app) fn lr2_select_button_action(button: i32) -> Lr2SelectButtonAc
         170..=185 => SkinTarget(button),
         190 => SkinChange,
         220..=229 => SkinItem((button - 220) as usize),
-        // Panels 7..8, FX/EQ/PITCH, 2P gauge/HS/EFFECT, AUTO SCRATCH, shutter type,
+        // Panels 7..8, FX/EQ/PITCH, 2P gauge/HS, AUTO SCRATCH, shutter type,
         // BATTLE, score graph, ghost, BGA size, default target rate, system and
         // favorite tag buttons have no identical BMZ setting.
         _ => Unsupported,

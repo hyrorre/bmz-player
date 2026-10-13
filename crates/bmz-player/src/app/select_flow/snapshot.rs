@@ -406,6 +406,18 @@ impl WinitApp {
                     LaneEffectConfig::Hidden | LaneEffectConfig::HiddenSudden
                 )
             }),
+            lanecover_enabled_2p: mode_config.as_ref().is_some_and(|config| {
+                matches!(
+                    config.lane_effect_2p.unwrap_or(config.lane_effect),
+                    LaneEffectConfig::Sudden | LaneEffectConfig::HiddenSudden
+                )
+            }),
+            hidden_enabled_2p: mode_config.as_ref().is_some_and(|config| {
+                matches!(
+                    config.lane_effect_2p.unwrap_or(config.lane_effect),
+                    LaneEffectConfig::Hidden | LaneEffectConfig::HiddenSudden
+                )
+            }),
             hispeed_auto_adjust: mode_config
                 .as_ref()
                 .is_some_and(|config| config.hispeed_auto_adjust),

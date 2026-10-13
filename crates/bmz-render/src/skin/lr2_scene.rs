@@ -44,6 +44,10 @@ pub(super) fn button_index(button: i32, state: &SkinDrawState) -> i32 {
         50 if state.select_screen => {
             i32::from(state.hidden_enabled) + 2 * i32::from(state.lanecover_enabled)
         }
+        51 if state.select_screen => {
+            i32::from(state.select_hidden_enabled_2p)
+                + 2 * i32::from(state.select_lanecover_enabled_2p)
+        }
         75 if state.select_screen => i32::from(state.judge_timing_auto_adjust),
         77 if state.select_screen => state.lr2_select_target_index,
         // Embedded skin settings: the edited skin type is lit, the other buttons stay plain.

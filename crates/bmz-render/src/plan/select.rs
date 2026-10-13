@@ -12,34 +12,6 @@ pub(super) fn plan_select(
             &skin.select_document_items_with_dynamic_timers(snapshot, Some(dynamic_timers)),
         );
         // timer/op条件で空になるフレームもスキンの演出として扱う。
-        if skin.document().is_some_and(|document| document.lr2) {
-            // LR2 skins draw their own option panels 1..6; BMZ's ASSIST / DETAIL
-            // settings stay in the F1 settings screen.
-            let text = TextRenderer;
-            commands.push(DrawCommand::Rect {
-                rect: Rect { x: 0.0, y: 0.965, width: 1.0, height: 0.035 },
-                color: Color::rgba(0.0, 0.0, 0.0, 0.9),
-            });
-            text.push_text(
-                &mut commands,
-                &format!(
-                    "{} / {} | {} | DP {} | HS {} | {} / {} | F1: SETTINGS",
-                    snapshot.arrange,
-                    snapshot.arrange_2p,
-                    snapshot.gauge,
-                    snapshot.double_option,
-                    snapshot.hs_fix,
-                    crate::skin::select_mode_label(&snapshot.select_mode),
-                    snapshot.select_sort,
-                ),
-                BitmapTextStyle {
-                    x: 0.01,
-                    y: 0.975,
-                    cell: 0.0035,
-                    color: Color::rgb(0.9, 0.95, 1.0),
-                },
-            );
-        }
         push_exit_hold_indicator(&mut commands, snapshot.exit_hold_progress);
         push_scene_overlays(&mut commands, &snapshot.overlay);
         return DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands };

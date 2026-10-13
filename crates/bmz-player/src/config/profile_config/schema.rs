@@ -220,6 +220,10 @@ pub struct PlayDefaultsConfig {
     #[serde(default)]
     pub target: TargetOptionConfig,
     pub lane_effect: LaneEffectConfig,
+    /// LR2's independent 2P lane effect. `None` follows the 1P setting until
+    /// the 2P option is changed explicitly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane_effect_2p: Option<LaneEffectConfig>,
     #[serde(default)]
     pub assist: AssistOptionConfig,
     /// beatoraja `PlayerConfig.guideSE` 相当。判定時に guide-*.wav を再生する。
@@ -1076,6 +1080,10 @@ pub struct PlayModeConfig {
     pub hs_fix: HsFixConfig,
     #[serde(default)]
     pub lane_effect: LaneEffectConfig,
+    /// LR2's independent 2P lane effect. `None` follows the 1P setting until
+    /// the 2P option is changed explicitly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane_effect_2p: Option<LaneEffectConfig>,
     #[serde(default)]
     pub sudden: u32,
     #[serde(default)]
@@ -1109,6 +1117,7 @@ impl Default for PlayModeConfig {
             normal_hispeed_level: default_normal_hispeed_level(),
             hs_fix: HsFixConfig::Off,
             lane_effect: LaneEffectConfig::Off,
+            lane_effect_2p: None,
             sudden: 0,
             lift: 0,
             lift_enabled: true,

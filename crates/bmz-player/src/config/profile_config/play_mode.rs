@@ -96,6 +96,7 @@ impl ProfileConfig {
             normal_hispeed_level: self.lane.normal_hispeed_level,
             hs_fix: self.play.hs_fix,
             lane_effect: self.play.lane_effect,
+            lane_effect_2p: self.play.lane_effect_2p,
             sudden: self.lane.sudden,
             lift: self.lane.lift,
             lift_enabled: self.lane.lift_enabled,
@@ -115,6 +116,7 @@ impl ProfileConfig {
         self.lane.normal_hispeed_level = config.normal_hispeed_level;
         self.play.hs_fix = config.hs_fix;
         self.play.lane_effect = config.lane_effect;
+        self.play.lane_effect_2p = config.lane_effect_2p;
         self.lane.sudden = config.sudden;
         self.lane.lift = config.lift;
         self.lane.lift_enabled = config.lift_enabled;
