@@ -22,7 +22,9 @@ pub(super) fn button_index(button: i32, state: &SkinDrawState) -> i32 {
             0 => 0,
             2 => 1,
             4 => 2,
-            3 => 5,
+            // BMZ's MAIN BPM behavior occupies LR2's AVERAGE slot. The LR2-specific
+            // MAINBPM slot is a separate setting and is not exposed by BMZ.
+            3 => 3,
             _ => -1,
         },
         11 => state.lr2_select_mode_index,

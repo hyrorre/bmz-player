@@ -209,7 +209,7 @@ CSVの引用符はフィールド先頭で開く。引用されていない画�
 | 42 / 43 | 1P / 2P配置 | NORMAL / MIRROR / RANDOM / S-RANDOM / H-RANDOM / ALL-SCR |
 | 50 / 51 | EFFECT 1P / 2P | OFF / HIDDEN / SUDDEN / HID+SUD（同じ共通レーン効果を切り替える） |
 | 54 | DP FLIP | OFF / FLIP |
-| 55 | HS-FIX | OFF / MAX / MIN / MAIN |
+| 55 | HS-FIX | OFF / MAX / MIN / MAIN BPM（LR2のAVERAGEスロットを使用） |
 | 57 | ハイスピード | 押した側で上下 |
 | 72 | BGA | OFF / ON / AUTOPLAY |
 | 74 / 75 | 判定タイミング / 自動調整 | ±1ms / OFF・ON |
@@ -221,6 +221,7 @@ CSVの引用符はフィールド先頭で開く。引用されていない画�
 
 button 50 / 51は1P / 2Pどちらの項目を操作しても共通のレーン効果を切り替える。text 84 / 85も同じ共通値を表示する。
 難易度フィルターを切り替えると、選択中の曲フォルダにある該当難易度の譜面を選択する。その難易度が無い場合は、一覧に残るフォルダ内の譜面を選択する。
+HS-FIXのBMZ MAIN BPMは、LR2 button 55の選択状態ではAVERAGE（値3）に対応させ、text ref 74ではMAIN BPMと表示する。LR2固有のMAINBPM（値5）とは分けて扱う。
 
 マウスはLR2と同じく左クリックだけを受け付け、増減はbuttonの指定（plus only / minus only / 左右半分）で決める。
 10..12はLR2と同じくクリック位置に関係なく次へ進める。
