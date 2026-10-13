@@ -78,6 +78,7 @@ impl SettingsEntryId {
         Self::AssistScrollMode,
         Self::AssistLongNoteMode,
         Self::AssistMineMode,
+        Self::AssistAutoScratch,
     ];
 
     pub const ASSIST_NOTE_ENTRIES: &'static [Self] = &[
@@ -232,6 +233,7 @@ impl SettingsEntryId {
             Self::AssistJudgeArea => "JUDGE AREA",
             Self::AssistMarkNote => "MARK NOTE",
             Self::AssistBpmGuide => "BPM GUIDE",
+            Self::AssistAutoScratch => "AUTO SCRATCH",
             Self::AssistScrollMode => "SCROLL",
             Self::AssistLongNoteMode => "LONGNOTE",
             Self::AssistMineMode => "MINE",
@@ -359,6 +361,7 @@ impl SettingsEntryId {
             Self::AssistJudgeArea => "settings-entry-description-assist-judge-area",
             Self::AssistMarkNote => "settings-entry-description-assist-mark-note",
             Self::AssistBpmGuide => "settings-entry-description-assist-bpm-guide",
+            Self::AssistAutoScratch => "settings-entry-description-assist-auto-scratch",
             Self::AssistScrollMode => "settings-entry-description-assist-scroll-mode",
             Self::AssistLongNoteMode => "settings-entry-description-assist-long-note-mode",
             Self::AssistMineMode => "settings-entry-description-assist-mine-mode",
@@ -662,6 +665,29 @@ mod tests {
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::AssistKeyPgreatRate, -5));
         assert_eq!(profile.play.assist.key_pgreat_rate, 395);
         assert_eq!(format_settings_value(&profile, SettingsEntryId::AssistKeyPgreatRate), "395%");
+    }
+
+    #[test]
+    fn auto_scratch_entry_switches_battle_and_battle_as_together() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        assert!(SettingsEntryId::ASSIST_ENTRIES.contains(&SettingsEntryId::AssistAutoScratch));
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::AssistAutoScratch), "OFF");
+
+        profile.play.double_option = DoubleOptionConfig::Battle;
+        let before = SettingsEntryId::AssistAutoScratch.capture(&profile);
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::AssistAutoScratch, 1));
+        assert!(profile.play.assist.auto_scratch);
+        assert_eq!(profile.play.double_option, DoubleOptionConfig::BattleAutoScratch);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::AssistAutoScratch), "ON");
+        // Cancelling restores both settings.
+        before.restore(&mut profile);
+        assert!(!profile.play.assist.auto_scratch);
+        assert_eq!(profile.play.double_option, DoubleOptionConfig::Battle);
+
+        // Other DP options are left alone.
+        profile.play.double_option = DoubleOptionConfig::Flip;
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::AssistAutoScratch, 1));
+        assert_eq!(profile.play.double_option, DoubleOptionConfig::Flip);
     }
 
     #[test]

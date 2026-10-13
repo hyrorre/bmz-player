@@ -1022,6 +1022,61 @@ fn load_transformed_chart_marks_beatoraja_arrange_assists() {
 }
 
 #[test]
+fn load_transformed_chart_marks_auto_scratch_only_when_scratch_notes_exist() {
+    let load = |body: &str| {
+        let path = write_temp_bms(body);
+        let imported = import_bms_chart(&path, None, true).unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut library_db = LibraryDatabase::from_connection(conn);
+        let chart_id = library_db
+            .upsert_chart_import(&ChartImportRecord {
+                root_id: None,
+                file_path: &path,
+                file_size: 1,
+                modified_at: 1,
+                scanned_at: 1,
+                chart: &imported.chart,
+            })
+            .unwrap();
+        (path, library_db, chart_id)
+    };
+    let auto_scratch = |double_option| PlaySessionOptions {
+        assist: AssistOptionConfig { auto_scratch: true, ..Default::default() },
+        double_option,
+        ..Default::default()
+    };
+
+    let (path, library_db, chart_id) = load("#TITLE Scratch\n#BPM 120\n#00011:01\n#00016:01\n");
+    let transformed =
+        load_transformed_chart_for_play(&library_db, chart_id, &auto_scratch(DoubleOption::Off))
+            .unwrap();
+    // LR2: no score, the clear counts as an assist clear.
+    assert_eq!(transformed.assist_runtime.level, bmz_gameplay::session::AssistLevel::Assist);
+    assert!(!transformed.assist_runtime.score_update_enabled());
+
+    // D-BATTLE with AUTO SCRATCH is BATTLE AS: its own bucket, not an assist.
+    let battle =
+        load_transformed_chart_for_play(&library_db, chart_id, &auto_scratch(DoubleOption::Battle))
+            .unwrap();
+    assert_eq!(battle.applied_arrange.double_option, DoubleOption::BattleAutoScratch);
+    assert_eq!(
+        battle.score_key.double_option,
+        crate::select_options::DoubleOptionScoreBucket::BattleAutoScratch
+    );
+    assert_eq!(battle.assist_runtime.level, bmz_gameplay::session::AssistLevel::None);
+    std::fs::remove_file(path).unwrap();
+
+    let (path, library_db, chart_id) = load("#TITLE No Scratch\n#BPM 120\n#00011:01\n");
+    let no_scratch =
+        load_transformed_chart_for_play(&library_db, chart_id, &auto_scratch(DoubleOption::Off))
+            .unwrap();
+    assert_eq!(no_scratch.assist_runtime.level, bmz_gameplay::session::AssistLevel::None);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn load_transformed_chart_applies_only_compatible_key_mode_conversions() {
     let seven_key_path = write_temp_bms(
         "\

@@ -60,6 +60,7 @@ settings-entry-description-assist-bpm-guide = BPM が変わる位置をレーン
 settings-entry-description-assist-scroll-mode = ノーツの流れる速さの変化（SCROLL）を取り除くか、追加するかを選びます。
 settings-entry-description-assist-long-note-mode = ロングノートを取り除くか、指定した種類のロングノートを追加します。
 settings-entry-description-assist-mine-mode = 地雷ノーツを取り除くか、指定した位置に追加します。
+settings-entry-description-assist-auto-scratch = スクラッチを自動で演奏します。クリアはASSIST EASYとしてだけ記録されます。
 settings-entry-description-assist-scroll-section = SCROLL を追加するとき、譜面をいくつの区間に分けるかを決めます。
 settings-entry-description-assist-scroll-rate = 各区間に SCROLL の変化を追加する確率です。
 settings-entry-description-assist-long-note-rate = ノーツをロングノートに変える確率です。

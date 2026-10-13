@@ -98,6 +98,7 @@ settings-entry-description-assist-bpm-guide = BPM이 바뀌는 위치를 레인 
 settings-entry-description-assist-scroll-mode = 노트가 흐르는 속도의 변화(SCROLL)를 없앨지, 추가할지 선택합니다.
 settings-entry-description-assist-long-note-mode = 롱노트를 없애거나, 지정한 종류의 롱노트를 추가합니다.
 settings-entry-description-assist-mine-mode = 지뢰 노트를 없애거나, 지정한 위치에 추가합니다.
+settings-entry-description-assist-auto-scratch = 스크래치를 자동으로 연주합니다. 클리어는 ASSIST EASY로만 기록됩니다.
 settings-entry-description-assist-scroll-section = SCROLL을 추가할 때 채보를 몇 구간으로 나눌지 정합니다.
 settings-entry-description-assist-scroll-rate = 각 구간에 SCROLL 변화를 추가할 확률입니다.
 settings-entry-description-assist-long-note-rate = 노트를 롱노트로 바꿀 확률입니다.

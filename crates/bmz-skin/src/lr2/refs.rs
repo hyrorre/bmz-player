@@ -46,31 +46,21 @@ pub(super) fn lr2_number_ref(skin_type: i32, id: i32) -> Option<i32> {
 }
 
 /// LR2 text refs: labels of options BMZ can change (key filter, sort, difficulty,
-/// RANDOM, gauge, FLIP, HS-FIX, BGA, auto adjust, effect), the embedded skin
-/// settings, and random course settings, which have no BMZ counterpart.
+/// RANDOM, gauge, ASSIST, BATTLE, FLIP, HS-FIX, BGA, auto adjust, effect), the
+/// embedded skin settings, and random course settings, which have no BMZ counterpart.
 pub(super) fn lr2_text_ref(skin_type: i32, id: i32) -> Option<i32> {
     (is_song_scene(skin_type)
         && matches!(
             id,
-            50 | 51 | 60..=65 | 70 | 74 | 76 | 80 | 84 | 100..=119 | 190..=199
+            50 | 51 | 60..=65 | 67..=70 | 74 | 76 | 80 | 84 | 100..=119 | 190..=199
         ))
     .then_some(LR2_TEXT_BASE + id)
 }
 
 /// Options LR2 always resolves to one value because BMZ has no such setting:
-/// EXTRA mode and auto scratch are off, the IR ranking view and ghost battle are closed.
-pub(super) const LR2_FIXED_OPTIONS: [(i32, bool); 10] = [
-    (52, true),
-    (53, false),
-    (54, true),
-    (55, false),
-    (56, true),
-    (57, false),
-    (620, true),
-    (621, false),
-    (622, true),
-    (623, false),
-];
+/// EXTRA mode is off, the IR ranking view and ghost battle are closed.
+pub(super) const LR2_FIXED_OPTIONS: [(i32, bool); 6] =
+    [(52, true), (53, false), (620, true), (621, false), (622, true), (623, false)];
 
 /// Song-scene options with an LR2-only meaning, evaluated per draw.
 fn is_lr2_song_scene_option(skin_type: i32, id: i32) -> bool {
@@ -94,16 +84,26 @@ fn is_lr2_song_scene_option(skin_type: i32, id: i32) -> bool {
         )
 }
 
+/// AUTO SCRATCH off / on for 1P (54 / 55) and 2P (56 / 57). Select reads the
+/// setting, Play the scratch lanes actually played automatically.
+fn is_lr2_auto_scratch_option(id: i32) -> bool {
+    matches!(id, 54..=57)
+}
+
 /// Options that must be evaluated per draw instead of at load. The selected song,
-/// the open panel and the IR connection change while the scene is shown.
+/// the open panel, the IR connection and the play settings change while the scene
+/// is shown.
 pub(super) fn is_lr2_scene_runtime_option(skin_type: i32, id: i32) -> bool {
-    is_lr2_song_scene_option(skin_type, id) || (is_song_scene(skin_type) && matches!(id, 50 | 51))
+    is_lr2_song_scene_option(skin_type, id)
+        || (is_song_scene(skin_type) && matches!(id, 50 | 51))
+        || is_lr2_auto_scratch_option(id)
 }
 
 /// Destination ops evaluated with LR2's definition.
 pub(super) fn lr2_option_ref(skin_type: i32, op: i32) -> Option<i32> {
     let id = op.abs();
     let divergent = LR2_FIXED_OPTIONS.iter().any(|&(fixed, _)| fixed == id)
+        || is_lr2_auto_scratch_option(id)
         || is_lr2_song_scene_option(skin_type, id)
         || (is_result(skin_type) && matches!(id, 340..=347))
         // Win / lose / draw against the 2P player, which is the target ghost in single play.

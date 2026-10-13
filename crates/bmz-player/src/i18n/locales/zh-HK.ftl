@@ -98,6 +98,7 @@ settings-entry-description-assist-bpm-guide = 在軌道上顯示 BPM 變化的�
 settings-entry-description-assist-scroll-mode = 選擇移除還是加入音符流動速度的變化（SCROLL）。
 settings-entry-description-assist-long-note-mode = 移除長條音符，或加入指定類型的長條音符。
 settings-entry-description-assist-mine-mode = 移除地雷音符，或在指定位置加入。
+settings-entry-description-assist-auto-scratch = 自動演奏轉盤。通關只會記錄為 ASSIST EASY。
 settings-entry-description-assist-scroll-section = 加入 SCROLL 時，決定將譜面分成幾個區間。
 settings-entry-description-assist-scroll-rate = 在各區間加入 SCROLL 變化的機率。
 settings-entry-description-assist-long-note-rate = 將音符變為長條音符的機率。

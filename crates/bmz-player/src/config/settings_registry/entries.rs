@@ -404,6 +404,14 @@ define_settings! {
         },
         format: |profile| format_bool_on_off(profile.play.assist.bpm_guide),
     }
+    AssistAutoScratch((bool, DoubleOptionConfig)) {
+        value: [access |profile| (profile.play.assist.auto_scratch, profile.play.double_option), |profile, value| { profile.play.assist.auto_scratch = value.0; profile.play.double_option = value.1; }],
+        adjust: |profile, _delta| {
+            profile.play.set_auto_scratch(!profile.play.assist.auto_scratch);
+            true
+        },
+        format: |profile| format_bool_on_off(profile.play.assist.auto_scratch),
+    }
     AssistScrollMode(AssistOptionConfig) {
         value: [field play.assist],
         adjust: |profile, delta| {

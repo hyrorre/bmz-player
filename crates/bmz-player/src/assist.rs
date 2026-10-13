@@ -65,6 +65,26 @@ pub fn merge_arrange_assist_level(
     }
 }
 
+/// AUTO SCRATCH を実効アシストへ合成する。
+///
+/// LR2oraja Endless Dream の `AutoplayModifier` と同じく、自動演奏するレーンに
+/// 採点対象ノーツが無ければアシスト扱いにしない。呼び出し側は全譜面オプション
+/// 適用後の譜面と、プレイヤーが判定されるスクラッチレーンを渡す。
+pub fn merge_auto_scratch_assist_level(
+    runtime: &mut AssistRuntime,
+    chart: &PlayableChart,
+    scratch_lanes: &[Lane],
+) {
+    let has_scratch_notes = scratch_lanes.iter().any(|lane| {
+        chart.lane_notes.get(lane.index()).is_some_and(|notes| {
+            notes.iter().any(|note| matches!(note.kind, NoteKind::Tap | NoteKind::LongStart))
+        })
+    });
+    if has_scratch_notes {
+        runtime.level = runtime.level.max(AssistLevel::Assist);
+    }
+}
+
 /// 譜面依存の有効性を判定しながら、beatoraja と同じ modifier 順で適用する。
 ///
 /// 呼び出し位置は LN policy の後、DOUBLE / lane arrange の前とする。

@@ -336,6 +336,19 @@ impl DoubleOption {
         }
     }
 
+    /// BATTLE / BATTLE AS を AUTO SCRATCH の有無に合わせる。それ以外は変えない。
+    pub const fn with_auto_scratch(self, auto_scratch: bool) -> Self {
+        match self {
+            Self::Battle | Self::BattleAutoScratch if auto_scratch => Self::BattleAutoScratch,
+            Self::Battle | Self::BattleAutoScratch => Self::Battle,
+            other => other,
+        }
+    }
+
+    pub const fn is_battle(self) -> bool {
+        matches!(self, Self::Battle | Self::BattleAutoScratch)
+    }
+
     pub fn normalize_for_key_mode(self, key_mode: KeyMode) -> Self {
         match self {
             Self::Off => Self::Off,

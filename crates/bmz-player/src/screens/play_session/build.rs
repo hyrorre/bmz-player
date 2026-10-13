@@ -308,6 +308,10 @@ pub fn build_game_session_with_input_backend(
     let autoplay_enabled = !is_replay
         && !session_mode.is_practice()
         && (session_mode.primary_autoplay() || profile.play.auto_play || options.autoplay);
+    // AUTO SCRATCH はリプレイ再生ではキーログと食い違うため掛けない。
+    let auto_scratch = options.double_option == DoubleOption::BattleAutoScratch
+        || profile.cli_auto_scratch()
+        || (options.assist.auto_scratch && !is_replay);
     let autoplay = if autoplay_enabled {
         Some(AutoplayController::default())
     } else if session_mode == SessionMode::GBattle
@@ -318,14 +322,11 @@ pub fn build_game_session_with_input_backend(
             .into_iter()
             .filter(|lane| display_only_lane_mask[lane.index()])
             .collect::<Vec<_>>();
-        if (options.double_option == DoubleOption::BattleAutoScratch || profile.cli_auto_scratch())
-            && !lanes.contains(&Lane::Scratch)
-        {
+        if auto_scratch && !lanes.contains(&Lane::Scratch) {
             lanes.push(Lane::Scratch);
         }
         Some(AutoplayController::for_lanes(&lanes))
-    } else if options.double_option == DoubleOption::BattleAutoScratch || profile.cli_auto_scratch()
-    {
+    } else if auto_scratch {
         Some(AutoplayController::for_lanes(&[Lane::Scratch, Lane::Scratch2]))
     } else {
         None

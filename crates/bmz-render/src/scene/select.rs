@@ -72,6 +72,11 @@ pub struct SelectSnapshot {
     pub assist_mine_mode: i64,
     pub assist_scroll_mode: i64,
     pub assist_long_note_mode: i64,
+    /// AUTO SCRATCH (LR2 ASSIST, button 44/45, option 54..57).
+    pub auto_scratch: bool,
+    /// KEY CONVERSION label ("OFF", "SP TO DP", ...). With `assist` (the session
+    /// mode) and `double_option` it gives LR2's BATTLE value.
+    pub key_mode_conversion: String,
     pub guide_se_enabled: bool,
     pub constant_enabled: bool,
     pub select_mode: String,
@@ -299,6 +304,8 @@ impl Default for SelectSnapshot {
             assist_mine_mode: 0,
             assist_scroll_mode: 0,
             assist_long_note_mode: 0,
+            auto_scratch: false,
+            key_mode_conversion: String::new(),
             guide_se_enabled: false,
             constant_enabled: false,
             select_mode: String::new(),

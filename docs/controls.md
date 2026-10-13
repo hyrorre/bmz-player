@@ -277,10 +277,10 @@ LR2 CSVスキンでは、E1を押している間の基本オプションを次�
 |---|---|
 | Key1 | 難易度フィルター |
 | Key2 | 配置（NORMAL / MIRROR / RANDOM / S-RANDOM / H-RANDOM / ALL-SCR） |
-| Key3 | DP FLIP |
+| Key3 | キーフィルターが14KEYS / 10KEYSならDP FLIP、それ以外はBATTLE（OFF / D-BATTLE / SP-TO-DP / G-BATTLE） |
 | Key4 | ゲージ（NORMAL / HARD / DEATH / EASY） |
 | Key5 / Key7 | ハイスピードを下げる / 上げる |
-| Key6 | なし（LR2のAUTO SCRATCHに当たる設定はBMZに無い） |
+| Key6 | ASSIST（OFF / AUTO SCRATCH） |
 
 E2はスキンのパネル2、E1+E2はパネル3を表示する。どちらもマウスで操作し、鍵盤では設定を変更しない。
 BMZのASSISTとDETAILの設定はF1の設定画面で変更する。
@@ -291,7 +291,9 @@ E1/E2の押下状態を変えるとhold操作へ戻る。検索・設定画面�
 スキン内のオプションボタンは左クリックで操作し、BMZ設定画面を開かずに値をLR2の順で切り替える。
 増減はボタンの種類（＋のみ／−のみ／左右半分）で決まり、難易度・キー・ソートのフィルターは常に次へ進む。
 現在値がEX-HARDやR-RANDOM等のBMZ独自の値なら、次へは先頭、前へは末尾の値へ移る。
-BMZ独自の値や、AUTO SCRATCH・BATTLE・FX等のBMZに同じ設定が無い項目はボタンでは変更しない。
+BATTLEはSESSION MODE・DP OPTION・KEY CONVERSIONを書き換える（D-BATTLEはDP OPTIONのBATTLE、
+SP-TO-DPはKEY CONVERSIONのSP TO DP、G-BATTLEはSESSION MODEのG-BATTLE）。
+BMZ独自の値や、FX等のBMZに同じ設定が無い項目はボタンでは変更しない。
 これらはF1の設定画面から変更する。対応表は [スキン仕様](skin.md#lr2のselect--result) を参照。
 画面下部の設定表示はBMZの実際の値を示す。
 LR2リザルトでは決定入力でグラフをスキップし、スキン指定の待ち時間の後、

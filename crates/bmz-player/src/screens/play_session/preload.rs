@@ -482,12 +482,17 @@ fn transform_chart_import(
     let sp_to_dp = key_mode_conversion == KeyModeConversionConfig::SpToDp;
     // SessionMode のbattle、または明示したbattle targetは表示用に2P側を作るが、
     // 通常のBATTLE譜面オプションとは異なり、1P側のスコアキーと保存可否を維持する。
-    let applied_double_option =
+    let mut applied_double_option =
         if key_mode_conversion != KeyModeConversionConfig::Off || battle_presentation {
             DoubleOption::Off
         } else {
             options.double_option.normalize_for_key_mode(source_key_mode)
         };
+    // AUTO SCRATCH 併用の BATTLE は BATTLE AS として専用 bucket へ保存する
+    // (LR2 も D-BATTLE 中の AUTO SCRATCH はイージー扱いにしない)。
+    if options.assist.auto_scratch {
+        applied_double_option = applied_double_option.with_auto_scratch(true);
+    }
     let ln_policy = course_score_ln_policy(
         options.ln_policy_setting,
         options.ln_mode_override,
@@ -572,6 +577,16 @@ fn transform_chart_import(
             options.seven_to_nine_type,
             options.h_random_threshold_ms.unwrap_or(125),
         );
+    }
+    // LR2oraja Endless Dream と同じく全譜面オプションの後で判定し、配置で
+    // スクラッチへ移ったノーツも自動演奏の対象として数える。
+    if options.assist.auto_scratch
+        && options.replay_player.is_none()
+        && !applied_double_option.is_battle()
+    {
+        let lanes: &[Lane] =
+            if battle_presentation { &[Lane::Scratch] } else { &[Lane::Scratch, Lane::Scratch2] };
+        crate::assist::merge_auto_scratch_assist_level(&mut assist_runtime, &chart, lanes);
     }
     applied_arrange.double_option = applied_double_option;
     applied_arrange.bms_random_choices = import.bms_random_choices;

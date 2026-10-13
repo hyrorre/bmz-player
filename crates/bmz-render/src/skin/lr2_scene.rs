@@ -33,9 +33,13 @@ pub(super) fn button_index(button: i32, state: &SkinDrawState) -> i32 {
         }
         42 => optional(lr2_arrange_index(state.select_extended_arrange_index)),
         43 => optional(lr2_arrange_index(state.select_extended_arrange_2p_index)),
+        // ASSIST: OFF / AUTO SCRATCH, one BMZ setting for both sides.
+        44 | 45 if state.select_screen => i32::from(state.select_auto_scratch),
+        56 if state.select_screen => state.lr2_select_battle_index,
+        // FLIP is OFF while D-BATTLE (shown by button 56) uses DP OPTION.
         54 => match state.select_double_option_index {
             0 | 1 => state.select_double_option_index as i32,
-            _ => -1,
+            _ => 0,
         },
         55 => match state.skin_attempt.hsfix_index.unwrap_or(state.select_hs_fix_index) {
             0 => 0,

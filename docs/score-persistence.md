@@ -67,6 +67,13 @@ BMZ はプレイ終了時に次の順で保存可否を決める。
 | `LONGNOTE=ADD LN` | 通常ノートを LN に変換 | なし | 通常保存 |
 | `LONGNOTE=ADD CN/HCN/ALL` | CN / HCN を実際に追加 | Assist | clear-only |
 | `MINE=ADD RANDOM/NEAR/BLANK` | Mine を追加 | なし | 通常保存 |
+| AUTO SCRATCH | 全譜面オプション適用後、自分側のスクラッチレーンに採点対象ノーツがある | Assist | clear-only |
+
+AUTO SCRATCH は LR2 / LR2oraja Endless Dream の同名オプションに合わせる。両者ともスコアを保存せず、
+クリアはイージー（Endless Dream は ASSIST EASY）扱いにする。リプレイ再生では自動演奏せず、
+全体 AUTOPLAY ではもともと保存しない。DP OPTION の `BATTLE` と併用した場合は `BATTLE AS`
+として専用 bucket に通常保存し、アシスト扱いにしない（LR2 も D-BATTLE 中の AUTO SCRATCH を
+イージー扱いにしない）。CLI の `--auto-scratch on` は従来どおりスコア・リプレイを保存しない。
 
 重要なのは「設定値」ではなく「実際に効果が出たか」である。たとえば固定 BPM 譜面の
 BPM GUIDE、Mine の無い譜面の NO MINE、100% 以下の EXPAND JUDGE はスコアを無効化しない。

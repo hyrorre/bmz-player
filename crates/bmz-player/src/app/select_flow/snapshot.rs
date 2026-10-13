@@ -396,6 +396,14 @@ impl WinitApp {
             assist_mine_mode: self.boot.profile_config.play.assist.mine_mode as i64,
             assist_scroll_mode: self.boot.profile_config.play.assist.scroll_mode as i64,
             assist_long_note_mode: self.boot.profile_config.play.assist.long_note_mode as i64,
+            auto_scratch: self.boot.profile_config.play.assist.auto_scratch,
+            key_mode_conversion: self
+                .boot
+                .profile_config
+                .play
+                .key_mode_conversion
+                .as_str()
+                .to_string(),
             guide_se_enabled: self.boot.profile_config.play.guide_se,
             constant_enabled: mode_config.as_ref().is_some_and(|config| config.constant_enabled),
             select_mode: self.select.select_mode_filter.as_str().to_string(),

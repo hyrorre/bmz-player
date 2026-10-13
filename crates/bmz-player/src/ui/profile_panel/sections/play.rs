@@ -259,6 +259,14 @@ pub(in crate::ui::profile_panel) fn build_profile_play_section(
                 .scope(tr!(text, "settings-scope-profile"))
                 .id_salt("profile_play_assist")
                 .show(ui, |ui| {
+                    let mut auto_scratch = profile.play.assist.auto_scratch;
+                    if ui
+                        .checkbox(&mut auto_scratch, "AUTO SCRATCH")
+                        .on_hover_text(tr!(text, "settings-entry-description-assist-auto-scratch"))
+                        .changed()
+                    {
+                        profile.play.set_auto_scratch(auto_scratch);
+                    }
                     let assist = &mut profile.play.assist;
                     ui.checkbox(&mut assist.expand_judge, "EXPAND JUDGE");
                     ui.checkbox(&mut assist.judge_area, "JUDGE AREA");

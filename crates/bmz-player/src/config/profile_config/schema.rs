@@ -260,6 +260,26 @@ pub struct PlayDefaultsConfig {
     pub show_ln_tail_cap: bool,
 }
 
+impl PlayDefaultsConfig {
+    /// AUTO SCRATCH を切り替える。DP OPTION の BATTLE は AUTO SCRATCH 併用時に
+    /// BATTLE AS として扱うため、LR2 の D-BATTLE と同じく両者を連動させる。
+    pub fn set_auto_scratch(&mut self, enabled: bool) {
+        self.assist.auto_scratch = enabled;
+        self.double_option = self.double_option.with_auto_scratch(enabled);
+    }
+}
+
+impl DoubleOptionConfig {
+    /// BATTLE / BATTLE AS を AUTO SCRATCH の有無に合わせる。それ以外は変えない。
+    pub const fn with_auto_scratch(self, auto_scratch: bool) -> Self {
+        match self {
+            Self::Battle | Self::BattleAutoScratch if auto_scratch => Self::BattleAutoScratch,
+            Self::Battle | Self::BattleAutoScratch => Self::Battle,
+            other => other,
+        }
+    }
+}
+
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -714,6 +734,10 @@ pub struct AssistOptionConfig {
     pub extra_note_depth: u8,
     #[serde(default)]
     pub extra_note_scratch: bool,
+    /// LR2 / LR2oraja Endless Dream の AUTO SCRATCH。全譜面オプション適用後の
+    /// スクラッチレーンを自動演奏する。
+    #[serde(default)]
+    pub auto_scratch: bool,
 }
 
 impl AssistOptionConfig {
@@ -793,6 +817,7 @@ impl Default for AssistOptionConfig {
             extra_note_type: 0,
             extra_note_depth: 0,
             extra_note_scratch: false,
+            auto_scratch: false,
         }
     }
 }
@@ -886,6 +911,8 @@ struct AssistOptionConfigFields {
     extra_note_depth: u8,
     #[serde(default)]
     extra_note_scratch: bool,
+    #[serde(default)]
+    auto_scratch: bool,
 }
 
 impl<'de> Deserialize<'de> for AssistOptionConfig {
@@ -898,9 +925,10 @@ impl<'de> Deserialize<'de> for AssistOptionConfig {
             AssistOptionConfigRepr::Legacy(LegacyAssistOptionConfig::LegacyNote) => {
                 Self { long_note_mode: AssistLongNoteMode::Remove, ..Self::default() }
             }
-            AssistOptionConfigRepr::Legacy(
-                LegacyAssistOptionConfig::None | LegacyAssistOptionConfig::AutoScratch,
-            ) => Self::default(),
+            AssistOptionConfigRepr::Legacy(LegacyAssistOptionConfig::AutoScratch) => {
+                Self { auto_scratch: true, ..Self::default() }
+            }
+            AssistOptionConfigRepr::Legacy(LegacyAssistOptionConfig::None) => Self::default(),
             AssistOptionConfigRepr::Current(fields) => Self {
                 expand_judge: fields.expand_judge,
                 judge_area: fields.judge_area,
@@ -930,6 +958,7 @@ impl<'de> Deserialize<'de> for AssistOptionConfig {
                 extra_note_type: fields.extra_note_type,
                 extra_note_depth: fields.extra_note_depth.min(100),
                 extra_note_scratch: fields.extra_note_scratch,
+                auto_scratch: fields.auto_scratch,
             },
         })
     }

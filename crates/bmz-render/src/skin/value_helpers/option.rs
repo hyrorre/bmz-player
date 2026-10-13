@@ -269,6 +269,21 @@ pub(super) fn select_session_mode_index(assist: &str) -> usize {
     }
 }
 
+/// LR2 BATTLE value of the select settings: 0 OFF, 2 D-BATTLE, 3 SP-TO-DP, 4 G-BATTLE.
+/// G-BATTLE wins over a DP battle, which wins over key conversion, as at play start.
+/// LR2's two-player BATTLE (1) has no BMZ setting.
+pub fn lr2_select_battle_index(snapshot: &SelectSnapshot) -> i32 {
+    if select_session_mode_index(&snapshot.assist) == 4 {
+        4
+    } else if matches!(select_double_option_index(&snapshot.double_option), 2 | 3) {
+        2
+    } else if snapshot.key_mode_conversion == "SP TO DP" {
+        3
+    } else {
+        0
+    }
+}
+
 /// Display label of the select key filter. The snapshot keeps the internal value
 /// ("ALL", "7K", ...) that is also stored in the profile.
 pub fn select_mode_label(mode: &str) -> &str {

@@ -60,6 +60,7 @@ settings-entry-description-assist-bpm-guide = Shows where the BPM changes on the
 settings-entry-description-assist-scroll-mode = Chooses whether to remove or add changes in note scroll speed (SCROLL).
 settings-entry-description-assist-long-note-mode = Removes long notes, or adds long notes of the selected type.
 settings-entry-description-assist-mine-mode = Removes mines, or adds them at the selected kind of position.
+settings-entry-description-assist-auto-scratch = Plays the scratch lane automatically. Only a clear is saved, as ASSIST EASY.
 settings-entry-description-assist-scroll-section = When adding SCROLL changes, sets how many sections the chart is split into.
 settings-entry-description-assist-scroll-rate = The chance of adding a SCROLL change to each section.
 settings-entry-description-assist-long-note-rate = The chance of turning a note into a long note.

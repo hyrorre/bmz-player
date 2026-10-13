@@ -184,6 +184,8 @@ fn assist_config_migrates_legacy_value_and_roundtrips_all_modifiers() {
 
     let legacy = toml::from_str::<AssistWrapper>("value = \"LegacyNote\"").unwrap().value;
     assert_eq!(legacy.long_note_mode, AssistLongNoteMode::Remove);
+    let legacy = toml::from_str::<AssistWrapper>("value = \"AutoScratch\"").unwrap().value;
+    assert_eq!(legacy, AssistOptionConfig { auto_scratch: true, ..Default::default() });
 
     let config = AssistOptionConfig {
         expand_judge: true,
@@ -196,6 +198,7 @@ fn assist_config_migrates_legacy_value_and_roundtrips_all_modifiers() {
         key_pgreat_rate: 321,
         extra_note_depth: 3,
         extra_note_scratch: true,
+        auto_scratch: true,
         ..Default::default()
     };
     let encoded = toml::to_string(&config).unwrap();

@@ -90,6 +90,8 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         assist_mine_mode: 0,
         assist_scroll_mode: 0,
         assist_long_note_mode: 0,
+        auto_scratch: false,
+        key_mode_conversion: "OFF".to_string(),
         select_mode: "ALL".to_string(),
         select_difficulty_filter: 0,
         random_mix_options: [0, 0, 0, 10, 0, 0, 5],

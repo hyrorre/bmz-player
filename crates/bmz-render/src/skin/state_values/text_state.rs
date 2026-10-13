@@ -326,6 +326,16 @@ fn lr2_option_label(id: i32, draw: &SkinDrawState, state: &SkinTextState<'_>) ->
         63 => state.select_arrange.to_string(),
         64 => state.select_arrange_2p.to_string(),
         65 => state.select_gauge.to_string(),
+        67 | 68 => if draw.select_auto_scratch { "AUTO SCRATCH" } else { "OFF" }.to_string(),
+        69 => match draw.lr2_select_battle_index {
+            2 => "D-BATTLE",
+            3 => "SP-TO-DP",
+            4 => "G-BATTLE",
+            _ => "OFF",
+        }
+        .to_string(),
+        // D-BATTLE uses DP OPTION, so FLIP itself is off.
+        70 if matches!(draw.select_double_option_index, 2 | 3) => "OFF".to_string(),
         70 => state.select_double_option.to_string(),
         74 => state.select_hs_fix.to_string(),
         76 => state.select_bga.to_string(),

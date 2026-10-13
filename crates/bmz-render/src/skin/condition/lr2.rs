@@ -7,14 +7,28 @@ const LR2_CLEAR_FROM_BEATORAJA: [i64; 11] = [0, 1, 2, 2, 2, 3, 4, 4, 5, 5, 5];
 /// Definitions follow LR2's `GetOptionFlag_dst`.
 pub(super) fn lr2_option(id: i32, state: &SkinDrawState) -> bool {
     match id {
-        // LR2 Select uses the STYLE filter, not the selected chart's key mode.
-        // BMZ has no BATTLE / DOUBLE BATTLE or course editor setting.
-        10 | 12 => matches!(state.lr2_select_mode_index, 4..=6),
+        // LR2 Select uses the STYLE filter, not the selected chart's key mode, or a
+        // BATTLE that plays on both sides (D-BATTLE / SP-TO-DP). BMZ has no
+        // two-player BATTLE or course editor setting.
+        10 | 12 => {
+            matches!(state.lr2_select_mode_index, 4..=6)
+                || matches!(state.lr2_select_battle_index, 2 | 3)
+        }
         11 | 571 => false,
         572 => true,
-        // EXTRA mode and auto scratch are off; the IR ranking view and ghost battle are closed.
-        52 | 54 | 56 | 620 | 622 => true,
-        53 | 55 | 57 | 621 | 623 => false,
+        // AUTO SCRATCH off / on for 1P (54 / 55) and 2P (56 / 57).
+        54..=57 => {
+            let lane = if id < 56 { Lane::Scratch } else { Lane::Scratch2 };
+            let on = if state.select_screen {
+                state.select_auto_scratch
+            } else {
+                state.auto_note_lanes[lane.index()]
+            };
+            on == (id % 2 == 1)
+        }
+        // EXTRA mode is off; the IR ranking view and ghost battle are closed.
+        52 | 620 | 622 => true,
+        53 | 621 | 623 => false,
         // No option panel is open.
         20 => state.select_option_panel == 0,
         21..=29 => i32::from(state.select_option_panel) == id - 20,
@@ -129,13 +143,19 @@ fn lr2_rival_rank(state: &SkinDrawState) -> Option<i64> {
 /// limited to EASY as LR2's irregular options.
 fn lr2_clear_lamp_challenge(state: &SkinDrawState) -> i64 {
     // Session modes: PRACTICE / AUTOPLAY / AUTOPLAY BATTLE.
-    if state.select_assist_index != 0 || matches!(state.select_session_mode_index, 1..=3) {
+    // SP-TO-DP saves nothing in BMZ.
+    if state.select_assist_index != 0
+        || matches!(state.select_session_mode_index, 1..=3)
+        || state.lr2_select_battle_index == 3
+    {
         return 0;
     }
     let irregular_arrange = |index: usize| lr2_arrange_index(index).is_some_and(|lr2| lr2 >= 4);
+    // AUTO SCRATCH is an assist except in D-BATTLE, as in LR2.
     if irregular_arrange(state.select_extended_arrange_index)
         || irregular_arrange(state.select_extended_arrange_2p_index)
         || state.constant_enabled
+        || (state.select_auto_scratch && state.lr2_select_battle_index != 2)
     {
         return 1;
     }

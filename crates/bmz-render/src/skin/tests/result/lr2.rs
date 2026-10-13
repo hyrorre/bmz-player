@@ -581,6 +581,70 @@ fn lr2_option_labels_show_bmz_values() {
 }
 
 #[test]
+fn lr2_assist_and_battle_follow_bmz_settings() {
+    let battle = |session: &str, double: &str, conversion: &str| {
+        lr2_select_battle_index(&crate::scene::SelectSnapshot {
+            assist: session.to_string(),
+            double_option: double.to_string(),
+            key_mode_conversion: conversion.to_string(),
+            ..Default::default()
+        })
+    };
+    assert_eq!(battle("NORMAL", "FLIP", "OFF"), 0);
+    assert_eq!(battle("NORMAL", "BATTLE", "OFF"), 2);
+    assert_eq!(battle("PRACTICE", "BATTLE AS", "7K TO 9K"), 2);
+    assert_eq!(battle("NORMAL", "OFF", "SP TO DP"), 3);
+    assert_eq!(battle("G-BATTLE", "BATTLE", "SP TO DP"), 4);
+
+    let op = |id: i32, state: &SkinDrawState| test_skin_ops(&[LR2_OPTION_BASE + id], &[], state);
+    let index = |button: i32, state: &SkinDrawState| {
+        skin_state_event_index(LR2_BUTTON_BASE + button, state)
+    };
+    let text = SkinTextState { select_double_option: "BATTLE AS", ..SkinTextState::default() };
+    let select = SkinDrawState { select_screen: true, ..Default::default() };
+    let assisted = SkinDrawState {
+        select_auto_scratch: true,
+        lr2_select_battle_index: 2,
+        select_double_option_index: 3,
+        ..select.clone()
+    };
+    assert_eq!((index(44, &select), index(45, &assisted), index(56, &assisted)), (0, 1, 2));
+    // FLIP is off while D-BATTLE uses DP OPTION.
+    assert_eq!(index(54, &assisted), 0);
+    assert!(op(54, &select) && op(56, &select) && !op(55, &select) && !op(57, &select));
+    assert!(op(55, &assisted) && op(57, &assisted) && !op(54, &assisted));
+    // D-BATTLE plays on both sides, as LR2's DOUBLE options 10 / 12.
+    assert!(op(10, &assisted) && op(12, &assisted) && !op(10, &select));
+    let lr2_text = |id: i32, state: &SkinDrawState| {
+        skin_main_state_text(LR2_TEXT_BASE + id, Some(state), &text)
+    };
+    assert_eq!(
+        (lr2_text(67, &select), lr2_text(68, &assisted)),
+        ("OFF".into(), "AUTO SCRATCH".into())
+    );
+    assert_eq!((lr2_text(69, &select), lr2_text(69, &assisted)), ("OFF".into(), "D-BATTLE".into()));
+    assert_eq!(lr2_text(70, &assisted), "OFF");
+    for (battle, label) in [(3, "SP-TO-DP"), (4, "G-BATTLE")] {
+        let state = SkinDrawState { lr2_select_battle_index: battle, ..select.clone() };
+        assert_eq!(lr2_text(69, &state), label);
+    }
+
+    // Play reads the scratch lanes actually played automatically.
+    let mut play = SkinDrawState::default();
+    play.auto_note_lanes[Lane::Scratch.index()] = true;
+    assert!(op(55, &play) && op(56, &play) && !op(57, &play));
+
+    // Lamp challenge: AUTO SCRATCH limits to EASY except in D-BATTLE; SP-TO-DP saves nothing.
+    let lamp = |state: &SkinDrawState| (62..=66).find(|&id| op(id, state)).map(|id| id - 62);
+    let normal = SkinDrawState { select_gauge_index: 2, ..select.clone() };
+    assert_eq!(lamp(&normal), Some(2));
+    let auto = SkinDrawState { select_auto_scratch: true, ..normal.clone() };
+    assert_eq!(lamp(&auto), Some(1));
+    assert_eq!(lamp(&SkinDrawState { lr2_select_battle_index: 2, ..auto.clone() }), Some(2));
+    assert_eq!(lamp(&SkinDrawState { lr2_select_battle_index: 3, ..normal }), Some(0));
+}
+
+#[test]
 fn select_key_filter_labels_follow_lr2_wording() {
     for (mode, label) in [
         ("ALL", "ALL KEYS"),

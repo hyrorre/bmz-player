@@ -224,9 +224,11 @@ Selectの`songlist`は、LR2形式・JSON/Lua形式ともに、現在の描画�
 | 12 | ソート | LEVEL / TITLE / CLEAR / SCORE（常に次へ） |
 | 40 | ゲージ | NORMAL / HARD / DEATH(HAZARD) / EASY |
 | 42 / 43 | 1P / 2P配置 | NORMAL / MIRROR / RANDOM / S-RANDOM / H-RANDOM / ALL-SCR |
+| 44 / 45 | ASSIST 1P / 2P | OFF / AUTO SCRATCH（両側共通のAUTO SCRATCHを切り替える） |
 | 50 / 51 | EFFECT 1P / 2P | OFF / HIDDEN / SUDDEN / HID+SUD（同じ共通レーン効果を切り替える） |
 | 54 | DP FLIP | OFF / FLIP |
 | 55 | HS-FIX | OFF / MAX / MIN / MAIN BPM（LR2のAVERAGEスロットを使用） |
+| 56 | BATTLE | OFF / D-BATTLE / SP-TO-DP / G-BATTLE（下記） |
 | 57 | ハイスピード | 押した側で上下 |
 | 72 | BGA | OFF / ON / AUTOPLAY |
 | 74 / 75 | 判定タイミング / 自動調整 | ±1ms / OFF・ON |
@@ -240,12 +242,31 @@ button 50 / 51は1P / 2Pどちらの項目を操作しても共通のレーン�
 難易度フィルターを切り替えると、選択中の曲フォルダにある該当難易度の譜面を選択する。その難易度が無い場合は、一覧に残るフォルダ内の譜面を選択する。
 HS-FIXのBMZ MAIN BPMは、LR2 button 55の選択状態ではAVERAGE（値3）に対応させ、text ref 74ではMAIN BPMと表示する。LR2固有のMAINBPM（値5）とは分けて扱う。
 
+BATTLE（button 56 / text 69）はBMZに単独の設定を持たず、SESSION MODE・DP OPTION・KEY CONVERSIONから値を決める。
+LR2の2人対戦BATTLE（値1）は選べない。
+
+| LR2 BATTLE（値） | 条件（上から優先） | 選んだときの書き込み |
+|---|---|---|
+| G-BATTLE (4) | SESSION MODE = G-BATTLE | SESSION MODEをG-BATTLEにする |
+| D-BATTLE (2) | DP OPTION = BATTLE / BATTLE AS | DP OPTIONをBATTLE（AUTO SCRATCH ONならBATTLE AS）にする |
+| SP-TO-DP (3) | KEY CONVERSION = SP TO DP | KEY CONVERSIONをSP TO DPにする |
+| OFF (0) | 上記以外 | — |
+
+どの値を選んでも、他の値に当たる設定は解除する（G-BATTLE / AUTOPLAY BATTLEはNORMAL、BATTLE系のDP OPTIONはOFF、SP TO DPはOFF）。
+PRACTICE・AUTOPLAY・FLIP・7K TO 9K / 6KはLR2に無い値のため、置き換える場合を除いて維持する。
+優先順はプレイ開始時の扱い（バトルがKEY CONVERSIONより優先）と同じ。譜面のキー数で使えない値は、これまでどおり開始時に無効化する。
+D-BATTLE中はFLIPがOFFとして表示される（button 54 / text 70）。option 10 / 12はDPのキーフィルターに加え、D-BATTLE / SP-TO-DPでも成立する。
+
+ASSIST（button 44 / 45、text 67 / 68）はプロフィールのAUTO SCRATCHを切り替える。D-BATTLE中に切り替えると、BATTLEとBATTLE ASも連動して切り替わる。
+option 54..57（1P / 2PのAUTO SCRATCH OFF / ON）は、選曲画面では設定値、プレイ画面では実際に自動演奏しているスクラッチレーンで判定する。
+option 62..66（このまま取れる最高ランプ）は、AUTO SCRATCHをD-BATTLE以外でEASY止まり、SP-TO-DPを保存なし（0）として扱う。
+
 マウスはLR2と同じく左クリックだけを受け付け、増減はbuttonの指定（plus only / minus only / 左右半分）で決める。
 10..12はLR2と同じくクリック位置に関係なく次へ進める。
-現在値がLR2の候補にないBMZ独自値（EX-HARD、R-RANDOM、START BPM、BATTLE等）の場合、
+現在値がLR2の候補にないBMZ独自値（EX-HARD、R-RANDOM、START BPM等）の場合、
 次へは候補の先頭、前へは末尾へ移る。BMZ独自値はbuttonから選ばず、BMZ設定画面で変更する。
-7..8のパネル、FX/EQ/PITCH、2P側のゲージ・HS、AUTO SCRATCH(44/45)、shutter(46)、
-BATTLE(56)、SCOREGRAPH・GHOST(70/71)、BGA SIZE(73)、既定ターゲット率(76)、
+7..8のパネル、FX/EQ/PITCH、2P側のゲージ・HS、shutter(46)、
+SCOREGRAPH・GHOST(70/71)、BGA SIZE(73)、既定ターゲット率(76)、
 システム設定(80..83)、favorite tag(90)等、BMZに同じ意味の設定が無いbuttonは何もしない。
 LR2スキンのoption panelを使うときは、BMZ独自の画面下部オプション表示を重ねない。
 E1 / E2 / E1+E2はスキンのパネル1 / 2 / 3を開く。パネル2以降はマウスで操作し、

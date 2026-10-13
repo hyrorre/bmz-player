@@ -78,6 +78,27 @@ impl WinitApp {
                     hs_fix_config_from_option(self.select.hs_fix_option);
                 self.finish_selected_play_mode_edit();
             }
+            Lr2SelectButtonAction::AutoScratch => {
+                let enabled = !self.boot.profile_config.play.assist.auto_scratch;
+                self.boot.profile_config.play.set_auto_scratch(enabled);
+                self.select.double_option = self.select.double_option.with_auto_scratch(enabled);
+                self.boot.profile_config.updated_at = now_unix_seconds();
+            }
+            Lr2SelectButtonAction::Battle => {
+                let current = self.lr2_battle_settings();
+                let battle = cycle_lr2_value(LR2_BATTLES, current.battle(), direction);
+                let next =
+                    current.with_battle(battle, self.boot.profile_config.play.assist.auto_scratch);
+                self.select.double_option = next.double_option;
+                if next.session_mode != current.session_mode {
+                    self.set_session_mode(next.session_mode);
+                }
+                if next.key_mode_conversion != current.key_mode_conversion {
+                    self.boot.profile_config.play.key_mode_conversion = next.key_mode_conversion;
+                    self.boot.profile_config.updated_at = now_unix_seconds();
+                    self.play.play_media_cache = None;
+                }
+            }
             Lr2SelectButtonAction::JudgeAutoAdjust => self.toggle_visual_offset_auto_adjust(),
             Lr2SelectButtonAction::Target => {
                 self.select.target_option =
@@ -114,12 +135,24 @@ impl WinitApp {
         self.play_system_sound(crate::system_sound::SoundType::OptionChange);
     }
 
+    pub(super) fn lr2_battle_settings(&self) -> Lr2BattleSettings {
+        Lr2BattleSettings {
+            session_mode: self.select.session_mode,
+            double_option: self.select.double_option,
+            key_mode_conversion: self.boot.profile_config.play.key_mode_conversion,
+        }
+    }
+
     pub(super) fn apply_lr2_option_lane(&mut self, lane: Lane) -> bool {
+        // LR2 key 3 changes FLIP under a DP key filter and BATTLE otherwise.
+        let dp_filter =
+            matches!(self.select.select_mode_filter, SelectModeFilter::K14 | SelectModeFilter::K10);
         let (button, direction) = match lane {
             Lane::Key1 | Lane::Key8 => (10, 1),
             Lane::Key2 => (42, 1),
             Lane::Key9 => (43, 1),
-            Lane::Key3 | Lane::Key10 => (54, 1),
+            Lane::Key3 | Lane::Key10 if dp_filter => (54, 1),
+            Lane::Key3 | Lane::Key10 => (56, 1),
             Lane::Key4 | Lane::Key11 => (40, 1),
             Lane::Key5 | Lane::Key12 => (57, -1),
             Lane::Key6 | Lane::Key13 => (44, 1),

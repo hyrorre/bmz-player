@@ -33,6 +33,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-14 | [LR2選曲のASSIST（AUTO SCRATCH）とBATTLE](2026/2026-10-14-lr2-assist-auto-scratch-battle.md) |
 | 2026-10-14 | [LR2選曲の未所持譜面・コースのバー画像](2026/2026-10-14-lr2-select-bar-types.md) |
 | 2026-10-14 | [選曲バーの連続移動補間](2026/2026-10-14-select-continuous-scroll.md) |
 | 2026-10-14 | [LR2選曲のDP表示・ホバー・スコアバー](2026/2026-10-14-lr2-select-dp-hover-score-bar.md) |

@@ -22,6 +22,10 @@ pub(in crate::app) enum Lr2SelectButtonAction {
     HsFix,
     JudgeAutoAdjust,
     Target,
+    /// ASSIST: OFF / AUTO SCRATCH. BMZ has one setting for both sides.
+    AutoScratch,
+    /// BATTLE: OFF / D-BATTLE / SP-TO-DP / G-BATTLE, see [`Lr2Battle`].
+    Battle,
     /// Embedded skin settings: skin type to edit, skin change, customize row.
     SkinTarget(i32),
     SkinChange,
@@ -41,17 +45,19 @@ pub(in crate::app) fn lr2_select_button_action(button: i32) -> Lr2SelectButtonAc
         40 => Gauge,
         42 => Arrange1P,
         43 => Arrange2P,
+        44 | 45 => AutoScratch,
         50 | 51 => LaneEffect,
         54 => DpFlip,
         55 => HsFix,
+        56 => Battle,
         75 => JudgeAutoAdjust,
         77 => Target,
         170..=185 => SkinTarget(button),
         190 => SkinChange,
         220..=229 => SkinItem((button - 220) as usize),
-        // Panels 7..8, FX/EQ/PITCH, 2P gauge/HS, AUTO SCRATCH, shutter type,
-        // BATTLE, score graph, ghost, BGA size, default target rate, system and
-        // favorite tag buttons have no identical BMZ setting.
+        // Panels 7..8, FX/EQ/PITCH, 2P gauge/HS, shutter type, score graph,
+        // ghost, BGA size, default target rate, system and favorite tag buttons
+        // have no identical BMZ setting.
         _ => Unsupported,
     }
 }
@@ -111,6 +117,74 @@ pub(in crate::app) const LR2_TARGETS: [TargetOption; 6] = [
     TargetOption::IrTop,
     TargetOption::IrNext,
 ];
+
+/// LR2 BATTLE values BMZ offers. LR2's two-player BATTLE is not offered.
+///
+/// BMZ stores no BATTLE value: it is derived from SESSION MODE, DP OPTION and
+/// KEY CONVERSION, and choosing one writes those settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::app) enum Lr2Battle {
+    Off,
+    /// DP OPTION BATTLE, or BATTLE AS with AUTO SCRATCH.
+    DBattle,
+    /// KEY CONVERSION SP TO DP.
+    SpToDp,
+    /// SESSION MODE G-BATTLE.
+    GBattle,
+}
+
+pub(in crate::app) const LR2_BATTLES: [Lr2Battle; 4] =
+    [Lr2Battle::Off, Lr2Battle::DBattle, Lr2Battle::SpToDp, Lr2Battle::GBattle];
+
+/// The BMZ settings an LR2 BATTLE value reads and writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::app) struct Lr2BattleSettings {
+    pub session_mode: SessionMode,
+    pub double_option: DoubleOption,
+    pub key_mode_conversion: KeyModeConversionConfig,
+}
+
+impl Lr2BattleSettings {
+    /// G-BATTLE wins over a DP battle, which wins over key conversion, as at play start.
+    pub fn battle(self) -> Lr2Battle {
+        if self.session_mode == SessionMode::GBattle {
+            Lr2Battle::GBattle
+        } else if self.double_option.is_battle() {
+            Lr2Battle::DBattle
+        } else if self.key_mode_conversion == KeyModeConversionConfig::SpToDp {
+            Lr2Battle::SpToDp
+        } else {
+            Lr2Battle::Off
+        }
+    }
+
+    /// Clears the other BATTLE values and sets `battle`. Values LR2 lacks (PRACTICE,
+    /// AUTOPLAY, FLIP, 7K TO 9K / 6K) are kept unless `battle` replaces them.
+    pub fn with_battle(self, battle: Lr2Battle, auto_scratch: bool) -> Self {
+        let mut next = self;
+        if battle != Lr2Battle::GBattle && next.session_mode.is_battle() {
+            next.session_mode = SessionMode::Normal;
+        }
+        if battle != Lr2Battle::DBattle && next.double_option.is_battle() {
+            next.double_option = DoubleOption::Off;
+        }
+        if battle != Lr2Battle::SpToDp
+            && next.key_mode_conversion == KeyModeConversionConfig::SpToDp
+        {
+            next.key_mode_conversion = KeyModeConversionConfig::Off;
+        }
+        match battle {
+            Lr2Battle::Off => {}
+            Lr2Battle::DBattle if !next.double_option.is_battle() => {
+                next.double_option = DoubleOption::Battle.with_auto_scratch(auto_scratch);
+            }
+            Lr2Battle::DBattle => {}
+            Lr2Battle::SpToDp => next.key_mode_conversion = KeyModeConversionConfig::SpToDp,
+            Lr2Battle::GBattle => next.session_mode = SessionMode::GBattle,
+        }
+        next
+    }
+}
 
 /// Steps through LR2's values. A BMZ-only current value enters the LR2 list at
 /// its first value going forward, or at its last value going backward.

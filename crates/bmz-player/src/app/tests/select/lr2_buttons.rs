@@ -13,10 +13,13 @@ fn lr2_select_buttons_cycle_lr2_values_without_opening_settings() {
         (40, Gauge),
         (42, Arrange1P),
         (43, Arrange2P),
+        (44, AutoScratch),
+        (45, AutoScratch),
         (50, LaneEffect),
         (51, LaneEffect),
         (54, DpFlip),
         (55, HsFix),
+        (56, Battle),
         (57, SkinEvent(57)),
         (72, SkinEvent(72)),
         (74, SkinEvent(74)),
@@ -27,7 +30,7 @@ fn lr2_select_buttons_cycle_lr2_values_without_opening_settings() {
         assert_eq!(lr2_select_button_action(button), action, "button {button}");
     }
     // LR2 options without an identical BMZ setting are ignored instead of opening BMZ UI.
-    for button in [7, 8, 18, 20, 29, 33, 41, 44, 45, 46, 56, 58, 70, 71, 73, 76, 80, 83, 90] {
+    for button in [7, 8, 18, 20, 29, 33, 41, 46, 58, 70, 71, 73, 76, 80, 83, 90] {
         assert_eq!(lr2_select_button_action(button), Unsupported, "button {button}");
     }
 }
@@ -103,6 +106,65 @@ fn lr2_select_option_values_cycle_in_lr2_order() {
     assert_eq!(cycle_lr2_value(LR2_SORTS, SelectSort::Score, 1), SelectSort::Level);
     assert_eq!(cycle_lr2_value(LR2_SORTS, SelectSort::Artist, 1), SelectSort::Level);
     assert_eq!(cycle_lr2_value(LR2_KEY_FILTERS, SelectModeFilter::K9, 1), SelectModeFilter::All);
+}
+
+#[test]
+fn lr2_battle_reads_and_writes_bmz_session_dp_and_key_conversion() {
+    let off = Lr2BattleSettings {
+        session_mode: SessionMode::Normal,
+        double_option: DoubleOption::Flip,
+        key_mode_conversion: KeyModeConversionConfig::Off,
+    };
+    assert_eq!(off.battle(), Lr2Battle::Off);
+
+    let mut seen = Vec::new();
+    let mut settings = off;
+    for _ in 0..4 {
+        let battle = cycle_lr2_value(LR2_BATTLES, settings.battle(), 1);
+        settings = settings.with_battle(battle, false);
+        assert_eq!(settings.battle(), battle);
+        seen.push(settings);
+    }
+    let d_battle = Lr2BattleSettings { double_option: DoubleOption::Battle, ..off };
+    let sp_to_dp = Lr2BattleSettings {
+        double_option: DoubleOption::Off,
+        key_mode_conversion: KeyModeConversionConfig::SpToDp,
+        ..off
+    };
+    let g_battle = Lr2BattleSettings {
+        session_mode: SessionMode::GBattle,
+        double_option: DoubleOption::Off,
+        ..off
+    };
+    let back_off = Lr2BattleSettings { double_option: DoubleOption::Off, ..off };
+    assert_eq!(seen, [d_battle, sp_to_dp, g_battle, back_off]);
+
+    // D-BATTLE follows AUTO SCRATCH; OFF keeps FLIP and values LR2 lacks.
+    assert_eq!(
+        off.with_battle(Lr2Battle::DBattle, true).double_option,
+        DoubleOption::BattleAutoScratch
+    );
+    assert_eq!(off.with_battle(Lr2Battle::Off, false), off);
+    let practice_seven_to_nine = Lr2BattleSettings {
+        session_mode: SessionMode::Practice,
+        key_mode_conversion: KeyModeConversionConfig::SevenToNine,
+        ..off
+    };
+    assert_eq!(practice_seven_to_nine.battle(), Lr2Battle::Off);
+    let d = practice_seven_to_nine.with_battle(Lr2Battle::DBattle, false);
+    assert_eq!(d.session_mode, SessionMode::Practice);
+    assert_eq!(d.key_mode_conversion, KeyModeConversionConfig::SevenToNine);
+    // AUTOPLAY BATTLE is a battle session and leaves for a DP battle.
+    let autoplay_battle = Lr2BattleSettings { session_mode: SessionMode::AutoplayBattle, ..off };
+    assert_eq!(
+        autoplay_battle.with_battle(Lr2Battle::SpToDp, false).session_mode,
+        SessionMode::Normal
+    );
+    // G-BATTLE wins over the other settings, as at play start.
+    assert_eq!(
+        Lr2BattleSettings { double_option: DoubleOption::Battle, ..g_battle }.battle(),
+        Lr2Battle::GBattle
+    );
 }
 
 #[test]

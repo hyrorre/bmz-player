@@ -35,6 +35,21 @@ fn cli_overrides_reach_game_session_and_auto_scratch() {
 }
 
 #[test]
+fn profile_auto_scratch_plays_only_scratch_lanes() {
+    let profile = ProfileConfig::new_default("default", "Default", 1);
+    let options = PlaySessionOptions {
+        assist: AssistOptionConfig { auto_scratch: true, ..Default::default() },
+        ..Default::default()
+    };
+    let session = build_game_session(Arc::new(chart()), &profile, options);
+    let autoplay = session.autoplay.as_ref().expect("AUTO SCRATCH autoplays the scratch lanes");
+    assert!(!autoplay.is_full());
+    assert!(autoplay.is_lane_enabled(Lane::Scratch));
+    assert!(autoplay.is_lane_enabled(Lane::Scratch2));
+    assert!(!autoplay.is_lane_enabled(Lane::Key1));
+}
+
+#[test]
 fn build_game_session_uses_profile_play_settings() {
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
     profile.play.auto_play = true;
