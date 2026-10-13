@@ -64,20 +64,6 @@ impl WinitApp {
                 );
                 self.finish_selected_play_mode_edit();
             }
-            Lr2SelectButtonAction::LaneEffect2P => {
-                if !self.begin_selected_play_mode_edit() {
-                    return;
-                }
-                let current = self
-                    .boot
-                    .profile_config
-                    .play
-                    .lane_effect_2p
-                    .unwrap_or(self.boot.profile_config.play.lane_effect);
-                self.boot.profile_config.play.lane_effect_2p =
-                    Some(cycle_lr2_value(LR2_LANE_EFFECTS, current, direction));
-                self.finish_selected_play_mode_edit();
-            }
             Lr2SelectButtonAction::DpFlip => {
                 self.select.double_option =
                     cycle_lr2_value(LR2_DP_OPTIONS, self.select.double_option, direction);

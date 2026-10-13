@@ -524,8 +524,6 @@ macro_rules! skin_document_render_select_render_methods {
                 lanecover_enabled: snapshot.lanecover_enabled,
                 lift_enabled: snapshot.lift_enabled,
                 hidden_enabled: snapshot.hidden_enabled,
-                select_lanecover_enabled_2p: snapshot.lanecover_enabled_2p,
-                select_hidden_enabled_2p: snapshot.hidden_enabled_2p,
                 hispeed_auto_adjust: snapshot.hispeed_auto_adjust,
                 player_stats: snapshot.player_stats.clone(),
                 score_date_sec: snapshot.selected_score_date_sec,

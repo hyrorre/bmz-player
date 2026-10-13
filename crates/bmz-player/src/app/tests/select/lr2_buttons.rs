@@ -14,7 +14,7 @@ fn lr2_select_buttons_cycle_lr2_values_without_opening_settings() {
         (42, Arrange1P),
         (43, Arrange2P),
         (50, LaneEffect),
-        (51, LaneEffect2P),
+        (51, LaneEffect),
         (54, DpFlip),
         (55, HsFix),
         (57, SkinEvent(57)),

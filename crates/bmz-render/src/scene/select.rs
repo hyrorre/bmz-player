@@ -92,9 +92,6 @@ pub struct SelectSnapshot {
     pub lanecover_enabled: bool,
     pub lift_enabled: bool,
     pub hidden_enabled: bool,
-    /// LR2 Select EFFECT2P (button 51 / text 85).
-    pub lanecover_enabled_2p: bool,
-    pub hidden_enabled_2p: bool,
     /// beatoraja image/index ref 342。
     pub hispeed_auto_adjust: bool,
     pub master_volume: f32,
@@ -286,8 +283,6 @@ impl Default for SelectSnapshot {
             lanecover_enabled: false,
             lift_enabled: true,
             hidden_enabled: false,
-            lanecover_enabled_2p: false,
-            hidden_enabled_2p: false,
             hispeed_auto_adjust: false,
             master_volume: 0.0,
             key_volume: 0.0,

@@ -157,7 +157,7 @@ option `94_000+ID`、否定は符号を維持）。意味が一致する番号�
 | number | 50..56 / 60..66 | 全画面 | EQ / FX / PITCH。BMZに設定が無いため非表示（beatorajaの54 / 55はDPオプション / HS-FIX） |
 | number | 290 / 291 | 全画面 | 最高 / 最低BPM（90 / 91と同じ） |
 | text | 190..199 | Select / Decide | ランダムコースの設定。BMZに該当が無いため空文字 |
-| text | 60..65 / 70 / 74 / 76 / 80 / 84..85 | Select / Decide | BMZで変更できる設定の現在値（キーフィルター、ソート、難易度、RANDOM 1P / 2P、ゲージ、FLIP、HS-FIX、BGA、自動調整、EFFECT 1P / 2P）。文言はBMZの表記（例: NORMAL / HARD / HAZARD、H-RANDOM / ALL-SCR、SCORE、AUTO）を使う。キーフィルターはBMZ全体でLR2と同じ `ALL KEYS` / `7KEYS` 等の表記にそろえている。変更できない設定（GHOST、SCORE GRAPH、BGA SIZE、画面設定、REPLAY等）は空文字 |
+| text | 60..65 / 70 / 74 / 76 / 80 / 84..85 | Select / Decide | BMZで変更できる設定の現在値（キーフィルター、ソート、難易度、RANDOM 1P / 2P、ゲージ、FLIP、HS-FIX、BGA、自動調整、レーン効果）。text 84 / 85は同じ共通設定を表示する。文言はBMZの表記（例: NORMAL / HARD / HAZARD、H-RANDOM / ALL-SCR、SCORE、AUTO）を使う。キーフィルターはBMZ全体でLR2と同じ `ALL KEYS` / `7KEYS` 等の表記にそろえている。変更できない設定（GHOST、SCORE GRAPH、BGA SIZE、画面設定、REPLAY等）は空文字 |
 | number | 150 / 151、155..158 | Play | 自己ベスト / ターゲットのゴーストの現在進捗でのEXと率。自己ベストはゴーストがあれば使い、無ければ線形換算。ターゲットは線形換算 |
 | number | 120..136（シングルプレイ） | Play | 2Pはターゲットのゴースト。BMZはEXの進捗換算だけを持つため、EX・率・差・次ランク差・ノーツ数以外は0 |
 | number | 272 / 273 / 274 | Select / Decide | ライバルの理論値EX・レート・ノーツ数（同じ譜面のノーツ数から計算） |
@@ -207,7 +207,7 @@ CSVの引用符はフィールド先頭で開く。引用されていない画�
 | 12 | ソート | LEVEL / TITLE / CLEAR / SCORE（常に次へ） |
 | 40 | ゲージ | NORMAL / HARD / DEATH(HAZARD) / EASY |
 | 42 / 43 | 1P / 2P配置 | NORMAL / MIRROR / RANDOM / S-RANDOM / H-RANDOM / ALL-SCR |
-| 50 / 51 | EFFECT 1P / 2P | OFF / HIDDEN / SUDDEN / HID+SUD（選択中モードの左右lane effect。2Pは未設定なら1Pに追従） |
+| 50 / 51 | EFFECT 1P / 2P | OFF / HIDDEN / SUDDEN / HID+SUD（同じ共通レーン効果を切り替える） |
 | 54 | DP FLIP | OFF / FLIP |
 | 55 | HS-FIX | OFF / MAX / MIN / MAIN |
 | 57 | ハイスピード | 押した側で上下 |
@@ -219,7 +219,7 @@ CSVの引用符はフィールド先頭で開く。引用されていない画�
 | 190 | スキン変更 | 対象のスキンをBMZの既定と導入済みスキンの順で切り替える（端で折り返す） |
 | 220..229 | カスタマイズ | 表示中の行の値を切り替える。選択肢は端で折り返し、ファイル選択はRANDOMと候補ファイルを順に選ぶ |
 
-EFFECT 2Pは選曲スキン上で独立して選択・保存する。現状、BMZのPlay描画で左右別にlane effectを適用する機能はなく、Play中は既存の共通設定を使う。
+button 50 / 51は1P / 2Pどちらの項目を操作しても共通のレーン効果を切り替える。text 84 / 85も同じ共通値を表示する。
 
 マウスはLR2と同じく左クリックだけを受け付け、増減はbuttonの指定（plus only / minus only / 左右半分）で決める。
 10..12はLR2と同じくクリック位置に関係なく次へ進める。

@@ -333,8 +333,8 @@ fn lr2_option_label(id: i32, draw: &SkinDrawState, state: &SkinTextState<'_>) ->
         84 => ["OFF", "HIDDEN", "SUDDEN", "HID+SUD"]
             [usize::from(draw.hidden_enabled) + 2 * usize::from(draw.lanecover_enabled)]
         .to_string(),
-        85 => ["OFF", "HIDDEN", "SUDDEN", "HID+SUD"][usize::from(draw.select_hidden_enabled_2p)
-            + 2 * usize::from(draw.select_lanecover_enabled_2p)]
+        85 => ["OFF", "HIDDEN", "SUDDEN", "HID+SUD"]
+            [usize::from(draw.hidden_enabled) + 2 * usize::from(draw.lanecover_enabled)]
         .to_string(),
         _ => return None,
     })

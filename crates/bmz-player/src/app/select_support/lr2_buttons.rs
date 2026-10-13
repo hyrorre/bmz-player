@@ -22,7 +22,6 @@ pub(in crate::app) enum Lr2SelectButtonAction {
     HsFix,
     JudgeAutoAdjust,
     Target,
-    LaneEffect2P,
     /// Embedded skin settings: skin type to edit, skin change, customize row.
     SkinTarget(i32),
     SkinChange,
@@ -42,8 +41,7 @@ pub(in crate::app) fn lr2_select_button_action(button: i32) -> Lr2SelectButtonAc
         40 => Gauge,
         42 => Arrange1P,
         43 => Arrange2P,
-        50 => LaneEffect,
-        51 => LaneEffect2P,
+        50 | 51 => LaneEffect,
         54 => DpFlip,
         55 => HsFix,
         75 => JudgeAutoAdjust,

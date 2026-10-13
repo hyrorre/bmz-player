@@ -211,9 +211,6 @@ pub struct SkinDrawState {
     pub lift_enabled: bool,
     /// OPTION_HIDDEN1_ON (273)。
     pub hidden_enabled: bool,
-    /// LR2 Select EFFECT2P state, separate from play-scene OPTION_HIDDEN2_ON.
-    pub select_lanecover_enabled_2p: bool,
-    pub select_hidden_enabled_2p: bool,
     /// beatoraja image/index ref 342。
     pub hispeed_auto_adjust: bool,
     /// 現在 BPM (NUMBER_NOWBPM=160 に使用)。
@@ -611,8 +608,6 @@ impl Default for SkinDrawState {
             lanecover_enabled: true,
             lift_enabled: true,
             hidden_enabled: false,
-            select_lanecover_enabled_2p: false,
-            select_hidden_enabled_2p: false,
             hispeed_auto_adjust: false,
             now_bpm: 0.0,
             min_bpm: 0.0,
