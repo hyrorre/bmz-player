@@ -14,3 +14,5 @@ mod cases_05;
 mod cases_06;
 #[path = "lr2/scenes.rs"]
 mod scenes;
+#[path = "lr2/select_conditions.rs"]
+mod select_conditions;

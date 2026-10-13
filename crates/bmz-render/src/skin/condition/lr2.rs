@@ -7,11 +7,17 @@ const LR2_CLEAR_FROM_BEATORAJA: [i64; 11] = [0, 1, 2, 2, 2, 3, 4, 4, 5, 5, 5];
 /// Definitions follow LR2's `GetOptionFlag_dst`.
 pub(super) fn lr2_option(id: i32, state: &SkinDrawState) -> bool {
     match id {
+        // LR2 Select uses the STYLE filter, not the selected chart's key mode.
+        // BMZ has no BATTLE / DOUBLE BATTLE or course editor setting.
+        10 | 12 => matches!(state.lr2_select_mode_index, 4..=6),
+        11 | 571 => false,
+        572 => true,
         // EXTRA mode and auto scratch are off; the IR ranking view and ghost battle are closed.
         52 | 54 | 56 | 620 | 622 => true,
         53 | 55 | 57 | 621 | 623 => false,
         // No option panel is open.
         20 => state.select_option_panel == 0,
+        21..=29 => i32::from(state.select_option_panel) == id - 20,
         // Selected song's clear lamp, false on folders.
         100..=105 => lr2_select_clear(state) == Some(i64::from(id - 100)),
         // Selected song's rank, only after the song has been played.

@@ -33,6 +33,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-14 | [LR2選曲のDP表示・ホバー・スコアバー](2026/2026-10-14-lr2-select-dp-hover-score-bar.md) |
 | 2026-10-14 | [Windows debug起動のスタックオーバーフロー](2026/2026-10-14-debug-startup-stack-overflow.md) |
 | 2026-10-13 | [LR2選曲スキンのパネル2以降と埋め込みスキン設定](2026/2026-10-13-lr2-embedded-panels-skin-settings.md) |
 | 2026-10-13 | [LR2選曲スキンへの値の供給（ゴースト・ライバル・レベルバー・履歴）](2026/2026-10-13-lr2-select-data-supply.md) |

@@ -77,7 +77,7 @@ fn is_lr2_song_scene_option(skin_type: i32, id: i32) -> bool {
     is_song_scene(skin_type)
         && matches!(
             id,
-            20 | 62..=66
+            10..=12 | 20..=29 | 62..=66
                 | 70..=79
                 | 100..=105
                 | 110..=117
@@ -88,6 +88,7 @@ fn is_lr2_song_scene_option(skin_type: i32, id: i32) -> bool {
                 | 540..=545
                 | 550..=555
                 | 560..=565
+                | 571..=572
                 | 640..=645
                 | 650..=657
         )

@@ -189,7 +189,7 @@ struct CsvBuilder<'a> {
     bpm_graphs: Vec<JsonValue>,
     timing_visualizers: Vec<JsonValue>,
     special_destination_sizes: HashMap<String, (i32, i32)>,
-    mouse_rects: HashMap<String, JsonValue>,
+    mouse_rects: HashMap<String, (JsonValue, i32)>,
     hidden_covers: Vec<JsonValue>,
     gauge: Option<JsonValue>,
     gauges: Vec<JsonValue>,

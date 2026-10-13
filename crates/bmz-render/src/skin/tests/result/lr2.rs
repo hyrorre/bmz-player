@@ -327,6 +327,38 @@ fn lr2_select_panel_option_and_selected_score_rate_graphs() {
 }
 
 #[test]
+fn lr2_select_dp_conditions_follow_style_instead_of_chart() {
+    for (mode, double) in
+        [(0, false), (2, false), (3, false), (4, true), (5, true), (6, true), (7, false)]
+    {
+        for key_mode in [KeyMode::K7, KeyMode::K14] {
+            let state = SkinDrawState {
+                select_screen: true,
+                lr2_select_mode_index: mode,
+                key_mode,
+                select_chart_key_mode: Some(key_mode),
+                ..Default::default()
+            };
+            assert_eq!(
+                test_skin_ops(&[LR2_OPTION_BASE + 10, -(LR2_OPTION_BASE + 11)], &[], &state),
+                double
+            );
+            assert_eq!(test_skin_ops(&[-(LR2_OPTION_BASE + 12)], &[], &state), !double);
+            assert!(test_skin_ops(&[LR2_OPTION_BASE + 572, -(LR2_OPTION_BASE + 571)], &[], &state));
+        }
+    }
+    for panel in 0..=9 {
+        let state = SkinDrawState { select_option_panel: panel, ..Default::default() };
+        for required in 1..=9 {
+            assert_eq!(
+                test_skin_ops(&[LR2_OPTION_BASE + 20 + required], &[], &state),
+                i32::from(panel) == required
+            );
+        }
+    }
+}
+
+#[test]
 fn lr2_ghost_rival_and_lamp_challenge_values() {
     let lr2 = |id: i32, state: &SkinDrawState| skin_state_number(LR2_NUMBER_BASE + id, state);
     let op = |id: i32, state: &SkinDrawState| test_skin_ops(&[LR2_OPTION_BASE + id], &[], state);

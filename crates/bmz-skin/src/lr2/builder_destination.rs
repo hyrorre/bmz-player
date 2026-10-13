@@ -69,8 +69,19 @@ impl<'a> CsvBuilder<'a> {
                 dst["stretch"] = json!(self.stretch);
             }
             self.expand_destination_option_aliases(&mut dst);
-            if let Some(rect) = self.mouse_rects.get(&variant.id) {
+            if let Some((rect, panel)) = self.mouse_rects.get(&variant.id) {
                 dst["mouseRect"] = rect.clone();
+                // SRC_ONMOUSE panel=0 is unrestricted. Its panel constraint is
+                // independent of DST options and must also gate drawing.
+                if *panel != 0 {
+                    let op = if (1..=9).contains(panel) {
+                        bmz_skin_document::LR2_OPTION_BASE + 20 + panel
+                    } else {
+                        // An invalid panel never matches LR2's current panel.
+                        bmz_skin_document::LR2_OPTION_BASE + 53
+                    };
+                    dst["op"].as_array_mut().unwrap().push(json!(op));
+                }
             }
             if self.current_has_destination {
                 merge_or_push_current_destination(&mut self.destinations, dst);

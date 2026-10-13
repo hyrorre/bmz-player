@@ -85,10 +85,13 @@ impl<'a> CsvBuilder<'a> {
         if line.command == "SRC_ONMOUSE" {
             self.mouse_rects.insert(
                 id.clone(),
-                json!({
-                    "x": values[12], "y": values[6] - values[13] - values[15],
-                    "w": values[14], "h": values[15],
-                }),
+                (
+                    json!({
+                        "x": values[12], "y": values[6] - values[13] - values[15],
+                        "w": values[14], "h": values[15],
+                    }),
+                    values[11],
+                ),
             );
         }
         self.images.push(image);

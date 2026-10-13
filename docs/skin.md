@@ -165,6 +165,9 @@ option `94_000+ID`、否定は符号を維持）。意味が一致する番号�
 | option | 100..105 / 110..117 | Select / Decide | 選択中の曲のクリアランプ（beatorajaのクリア種別をバーのランプと同じ5段階へ畳む）とランク（プレイ済みのみ）。描画時に評価する |
 | option | 340..347 | Result / Course Result | 今回のスコアのランク |
 | option | 20 | Select / Decide | オプションパネルを開いていない。描画時に評価する |
+| option | 10 / 11 / 12 | Select / Decide | STYLEフィルターのDP / BATTLE / DPまたはBATTLE。14 / 10鍵フィルターでは10と12がtrue。選択譜面の鍵盤数からは判定しない。BATTLEはBMZ未対応のため11はfalse。`#IF`内も描画時に評価する |
+| option | 21..29 | Select / Decide | 対応するオプションパネルを開いている。`#IF`内も描画時に評価する |
+| option | 571 / 572 | Select / Decide | コース作成中 / コース作成中ではない。BMZにコース編集画面が無いため571はfalse、572はtrue。572を条件とする選曲スコアバーも表示する |
 | option | 62..66 | Select / Decide | 現在の設定で取れる最高ランプ（クリア不可 / EASY / NORMAL / HARD / FULLCOMBO）。オート・練習はクリア不可、H-RANDOM / ALL-SCR / 等速はEASYまで。ゲージはA-EASY / EASY→EASY、HARD / EX-HARD→HARD、HAZARD→FULLCOMBO |
 | option | 640..645 / 650..657 | Select / Decide | 選択中ライバルのクリアランプ（5段階）とランク |
 | option | 352..354 | Play | 2P（シングルプレイではターゲットのゴーストの現在進捗）との勝ち / 負け / 引き分け |
@@ -196,7 +199,9 @@ CSVの引用符はフィールド先頭で開く。引用されていない画�
 `DST_BAR_TITLE` の予約列（通常DSTのop1..3相当）は無視し、`#IF` の表示条件は維持する。
 画像の `blend=0` はDSTのalphaを無視する。画像素材自体の透過は維持する。
 クリアランプは表示だけLR2の同系列へまとめ、保存されたクリア種別は維持する。
-`ONMOUSE` の局所範囲とbuttonのパネル制限も評価する。
+`ONMOUSE` の局所範囲と、`SRC_ONMOUSE` / buttonのパネル制限も評価する。
+`SRC_ONMOUSE`のpanel=0は全パネル共通、1..9は指定パネルでだけ描画する。
+この条件はDSTの表示条件と併せて評価し、別パネル用の発光が重ならないようにする。
 
 共通設定は意味で対応付ける。LR2のbuttonはBMZ設定画面を開かず、profileの値をLR2の順に直接切り替える。
 

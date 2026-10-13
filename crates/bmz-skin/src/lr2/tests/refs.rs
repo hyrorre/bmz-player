@@ -178,3 +178,31 @@ fn lr2_embedded_skin_settings_texts_use_the_lr2_namespace() {
         vec![lr2(50), lr2(51), lr2(100), lr2(119), json!(10), lr2(76), lr2(80), json!(71)]
     );
 }
+
+#[test]
+fn lr2_select_style_course_and_hover_conditions_survive_decode() {
+    let image = "#SRC_IMAGE,0,0,0,0,1,1,1,1,0,0\n\
+                 #DST_IMAGE,0,0,0,0,1,1,0,255,255,255,255,0,0,0,0,0,0,10,-11,572\n";
+    let select = load(5, &format!("{image}#IF,12\n{image}#ENDIF\n#IF,572\n{image}#ENDIF\n"));
+    let ops = &select["destination"];
+    assert_eq!(
+        ops[0]["op"],
+        json!([LR2_OPTION_BASE + 10, -(LR2_OPTION_BASE + 11), LR2_OPTION_BASE + 572])
+    );
+    assert!(ops[1]["op"].as_array().unwrap().contains(&json!(LR2_OPTION_BASE + 12)));
+    assert!(ops[2]["op"].as_array().unwrap().contains(&json!(LR2_OPTION_BASE + 572)));
+
+    for panel in [0, 1, 3, 7] {
+        let hover = load(
+            5,
+            &format!(
+                "#SRC_ONMOUSE,0,0,0,0,20,30,1,1,0,0,{panel},1,2,15,25\n\
+             #DST_ONMOUSE,0,0,4,6,20,30,0,255,255,255,255,1,0,0,0,0,0,5,0,0\n"
+            ),
+        );
+        assert_eq!(hover["destination"][0]["mouseRect"], json!({"x":1,"y":3,"w":15,"h":25}));
+        let expected =
+            if panel == 0 { json!([5]) } else { json!([5, LR2_OPTION_BASE + 20 + panel]) };
+        assert_eq!(hover["destination"][0]["op"], expected);
+    }
+}
