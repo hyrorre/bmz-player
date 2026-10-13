@@ -199,6 +199,7 @@ pub(super) fn skin_main_state_text(
             .map(|entry| entry.player_name.as_str().to_string())
             .unwrap_or_default(),
         150..=159 => state.course_titles[(ref_id - 150) as usize].to_string(),
+        LR2_TEXT_BASE..=LR2_TEXT_LAST => lr2_text(ref_id - LR2_TEXT_BASE, state),
         190..=196 => {
             draw_state.map(|state| random_mix_option_text(ref_id, state)).unwrap_or_default()
         }
@@ -287,6 +288,23 @@ pub(super) fn skin_main_state_text(
         200..=209 => select_target_name_by_offset(state.target, ref_id - 210),
         210..=219 => select_target_name_by_offset(state.target, ref_id - 209),
         1000 => state.current_folder.to_string(),
+        _ => String::new(),
+    }
+}
+
+/// LR2 texts whose meaning differs from beatoraja (`LR2_TEXT_BASE + id`). Embedded
+/// skin settings show the edited skin and ten customize rows from the scroll position;
+/// random course settings (190..199) have no BMZ counterpart.
+fn lr2_text(id: i32, state: &SkinTextState<'_>) -> String {
+    let Some(settings) = state.lr2_skin_settings else {
+        return String::new();
+    };
+    let row = |offset: i32| settings.items.get(settings.scroll + offset as usize);
+    match id {
+        50 => settings.skin_name.clone(),
+        51 => settings.skin_author.clone(),
+        100..=109 => row(id - 100).map(|(name, _)| name.clone()).unwrap_or_default(),
+        110..=119 => row(id - 110).map(|(_, value)| value.clone()).unwrap_or_default(),
         _ => String::new(),
     }
 }

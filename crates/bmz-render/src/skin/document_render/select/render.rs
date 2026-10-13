@@ -129,6 +129,7 @@ macro_rules! skin_document_render_select_render_methods {
                 rival: &snapshot.rival_name,
                 resolved_target_name: snapshot.resolved_target_name.as_deref(),
                 ir_ranking: &snapshot.ir,
+                lr2_skin_settings: snapshot.lr2_skin_settings.as_ref(),
                 ..SkinTextState::default()
             };
 
@@ -473,11 +474,7 @@ macro_rules! skin_document_render_select_render_methods {
                         })
                     },
                 ),
-                select_option_panel: if self.lr2 && snapshot.option_panel > 1 {
-                    0
-                } else {
-                    snapshot.option_panel
-                },
+                select_option_panel: snapshot.option_panel,
                 detail_options: detail_enabled
                     .then(|| snapshot.detail_options.clone())
                     .flatten()
@@ -644,6 +641,11 @@ macro_rules! skin_document_render_select_render_methods {
                 select_same_folder: selected_row.and_then(|row| row.same_folder_difficulties),
                 select_lr2_option_history: selected_row.and_then(|row| row.lr2_option_history),
                 select_course_levels: selected_row.map_or([None; 10], |row| row.course_levels),
+                lr2_skin_target: snapshot.lr2_skin_settings.as_ref().map_or(0, |s| s.target_button),
+                lr2_skin_scroll: snapshot.lr2_skin_settings.as_ref().map_or(0.0, |s| {
+                    let max = s.max_scroll();
+                    if max == 0 { 0.0 } else { s.scroll as f32 / max as f32 }
+                }),
                 random_lane_refs: selected_row
                     .and_then(|row| row.chart_key_mode)
                     .map_or([0; SKIN_RANDOM_LANE_REF_COUNT], |key_mode| {

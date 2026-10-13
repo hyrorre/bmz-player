@@ -10,8 +10,9 @@ impl WinitApp {
     pub(super) fn execute_lr2_select_button(&mut self, button: i32, direction: i32) {
         let direction = lr2_select_button_direction(button, direction);
         match lr2_select_button_action(button) {
-            Lr2SelectButtonAction::TogglePanel => {
+            Lr2SelectButtonAction::TogglePanel(panel) => {
                 self.select.option_session.toggle_lr2_panel(
+                    panel,
                     self.select.select_option_panel,
                     self.input.start_held,
                     self.input.select_held,
@@ -85,6 +86,24 @@ impl WinitApp {
                     target = self.select.target_option.as_str(),
                     "target option changed"
                 );
+            }
+            Lr2SelectButtonAction::SkinTarget(button) => {
+                if self.select_lr2_skin_target(button) {
+                    self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                }
+                return;
+            }
+            Lr2SelectButtonAction::SkinChange => {
+                if self.cycle_lr2_skin(direction) {
+                    self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                }
+                return;
+            }
+            Lr2SelectButtonAction::SkinItem(row) => {
+                if self.cycle_lr2_skin_item(row, direction) {
+                    self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                }
+                return;
             }
             Lr2SelectButtonAction::Unsupported => {
                 tracing::debug!(button, "LR2 select button has no BMZ equivalent");

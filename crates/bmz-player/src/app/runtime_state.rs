@@ -36,6 +36,8 @@ pub(super) struct SelectRuntimeState {
     /// LR2 select data of the selected chart, cleared when the select list reloads.
     /// Boxed to keep `WinitApp` small.
     pub(super) lr2_select_cache: Box<RefCell<super::select_same_folder::Lr2SelectCache>>,
+    /// LR2 select skins' embedded skin settings. Boxed to keep `WinitApp` small.
+    pub(super) lr2_skin_settings: Box<super::select_lr2_skin_settings::Lr2SkinSettingsRuntime>,
     pub(super) select_distributions: RefCell<select_distribution::SelectDistributionRuntime>,
     pub(super) difficulty_tables: Vec<DifficultyTableRecord>,
     pub(super) table_breadcrumb_cache: RefCell<HashMap<String, TableBreadcrumb>>,

@@ -13,9 +13,9 @@ pub(super) struct OptionPanelSession {
 }
 
 impl OptionPanelSession {
-    pub(super) fn toggle_lr2_panel(&mut self, current_panel: u8, e1: bool, e2: bool) {
+    pub(super) fn toggle_lr2_panel(&mut self, panel: u8, current_panel: u8, e1: bool, e2: bool) {
         self.cancel(e1, e2);
-        self.panel = if current_panel == 1 { 0 } else { 1 };
+        self.panel = if current_panel == panel { 0 } else { panel };
     }
 
     pub(super) fn lr2_panel_for_holds(&mut self, e1: bool, e2: bool) -> u8 {
@@ -167,7 +167,7 @@ mod tests {
         let mut on = now;
         let mut off = [None; 6];
         let mut exit_hold = Some(now);
-        session.toggle_lr2_panel(panel, false, false);
+        session.toggle_lr2_panel(1, panel, false, false);
         assert!(transition_select_option_panel(
             &mut panel,
             &mut on,
@@ -206,7 +206,7 @@ mod tests {
                 assert_eq!(off, [None; 6]);
             }
         }
-        session.toggle_lr2_panel(panel, false, false);
+        session.toggle_lr2_panel(1, panel, false, false);
         assert_eq!(session.lr2_panel_for_holds(false, false), 0);
     }
 
@@ -215,13 +215,13 @@ mod tests {
         let mut session = OptionPanelSession::default();
         for (e1, e2, expected) in [(true, false, 1), (false, true, 2), (true, true, 3)] {
             session.cancel(false, false);
-            session.toggle_lr2_panel(0, false, false);
+            session.toggle_lr2_panel(1, 0, false, false);
             assert_eq!(session.lr2_panel_for_holds(e1, e2), expected);
             assert_eq!(session.lr2_panel_for_holds(e1, e2), expected);
             assert_eq!(session.lr2_panel_for_holds(false, false), 0);
         }
         assert_eq!(session.lr2_panel_for_holds(true, false), 1);
-        session.toggle_lr2_panel(1, true, false);
+        session.toggle_lr2_panel(1, 1, true, false);
         assert_eq!(session.lr2_panel_for_holds(true, false), 0);
         assert_eq!(session.lr2_panel_for_holds(false, false), 0);
         assert_eq!(session.lr2_panel_for_holds(true, false), 1);
@@ -231,7 +231,7 @@ mod tests {
     fn lr2_mouse_panel_cancel_does_not_reopen_on_resync_or_modifier_release() {
         for (e1, e2) in [(false, false), (true, false), (false, true), (true, true)] {
             let mut session = OptionPanelSession::default();
-            session.toggle_lr2_panel(0, e1, e2);
+            session.toggle_lr2_panel(1, 0, e1, e2);
             assert_eq!(session.lr2_panel_for_holds(e1, e2), 1);
             // Shared reset used on modal entry, focus loss and scene/profile changes.
             session.cancel(e1, e2);

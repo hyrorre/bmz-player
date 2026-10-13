@@ -13,10 +13,9 @@ pub(super) fn plan_select(
         );
         // timer/op条件で空になるフレームもスキンの演出として扱う。
         if skin.document().is_some_and(|document| document.lr2) {
+            // LR2 skins draw their own option panels 1..6; BMZ's ASSIST / DETAIL
+            // settings stay in the F1 settings screen.
             let text = TextRenderer;
-            if snapshot.option_panel > 1 {
-                push_select_option_panel(&text, &mut commands, snapshot);
-            }
             commands.push(DrawCommand::Rect {
                 rect: Rect { x: 0.0, y: 0.965, width: 1.0, height: 0.035 },
                 color: Color::rgba(0.0, 0.0, 0.0, 0.9),
@@ -24,7 +23,7 @@ pub(super) fn plan_select(
             text.push_text(
                 &mut commands,
                 &format!(
-                    "{} / {} | {} | DP {} | HS {} | {} / {} | E2: ASSIST / E1+E2: DETAIL / F1: SETTINGS",
+                    "{} / {} | {} | DP {} | HS {} | {} / {} | F1: SETTINGS",
                     snapshot.arrange,
                     snapshot.arrange_2p,
                     snapshot.gauge,

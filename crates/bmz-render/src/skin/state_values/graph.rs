@@ -233,6 +233,8 @@ pub(super) fn skin_slider_progress_by_type(slider_type: i32, state: &SkinDrawSta
             (lane_cover > 0.0).then_some(lane_cover)
         }
         6 => Some(state.play_progress.clamp(0.0, 1.0)),
+        // LR2 embedded skin settings list scroll.
+        7 if state.select_screen => Some(state.lr2_skin_scroll.clamp(0.0, 1.0)),
         8 => Some(ir_ranking_scroll_progress(state)),
         17 => Some(state.select_master_volume.clamp(0.0, 1.0)),
         18 => Some(state.select_key_volume.clamp(0.0, 1.0)),

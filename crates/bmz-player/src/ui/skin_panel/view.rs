@@ -646,6 +646,7 @@ mod tests {
                 r: false,
                 a: false,
             }],
+            ..Default::default()
         };
         let meta = SkinConfigMeta { select: defs, ..Default::default() };
         let text = Localizer::new(AppLocale::En);

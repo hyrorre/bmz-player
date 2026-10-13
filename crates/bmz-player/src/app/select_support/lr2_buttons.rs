@@ -7,7 +7,8 @@ use super::*;
 /// BMZ-only settings stay in the BMZ settings screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::app) enum Lr2SelectButtonAction {
-    TogglePanel,
+    /// Opens LR2 option panel 1..6, or closes it when already open.
+    TogglePanel(u8),
     DifficultyTab(usize),
     /// Same meaning as the beatoraja select event with this id.
     SkinEvent(i32),
@@ -21,13 +22,18 @@ pub(in crate::app) enum Lr2SelectButtonAction {
     HsFix,
     JudgeAutoAdjust,
     Target,
+    /// Embedded skin settings: skin type to edit, skin change, customize row.
+    SkinTarget(i32),
+    SkinChange,
+    SkinItem(usize),
     Unsupported,
 }
 
 pub(in crate::app) fn lr2_select_button_action(button: i32) -> Lr2SelectButtonAction {
     use Lr2SelectButtonAction::*;
     match button {
-        1 => TogglePanel,
+        // LR2 skin timers cover panels 1..6 (21..26 / 31..36).
+        1..=6 => TogglePanel(button as u8),
         91..=96 => DifficultyTab((button - 91) as usize),
         10 | 13..=17 | 19 | 57 | 72 | 74 => SkinEvent(button),
         11 => KeyFilter,
@@ -40,7 +46,10 @@ pub(in crate::app) fn lr2_select_button_action(button: i32) -> Lr2SelectButtonAc
         55 => HsFix,
         75 => JudgeAutoAdjust,
         77 => Target,
-        // Panels 2..8, FX/EQ/PITCH, 2P gauge/HS/EFFECT, AUTO SCRATCH, shutter type,
+        170..=185 => SkinTarget(button),
+        190 => SkinChange,
+        220..=229 => SkinItem((button - 220) as usize),
+        // Panels 7..8, FX/EQ/PITCH, 2P gauge/HS/EFFECT, AUTO SCRATCH, shutter type,
         // BATTLE, score graph, ghost, BGA size, default target rate, system and
         // favorite tag buttons have no identical BMZ setting.
         _ => Unsupported,

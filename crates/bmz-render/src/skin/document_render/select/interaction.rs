@@ -330,7 +330,7 @@ macro_rules! skin_document_render_select_interaction_methods {
             x: f32,
             y: f32,
         ) -> Option<SkinSliderHit> {
-            if !slider.changeable || !matches!(slider.slider_type, 1 | 8 | 17..=19) {
+            if !slider.changeable || !matches!(slider.slider_type, 1 | 7 | 8 | 17..=19) {
                 return None;
             }
             let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;

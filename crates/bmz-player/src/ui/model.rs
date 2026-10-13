@@ -60,6 +60,9 @@ pub struct SceneSkinDefs {
     pub property: Vec<SkinPropertyDef>,
     pub filepath: Vec<SkinFilepathDef>,
     pub offset: Vec<SkinOffsetDef>,
+    /// Skin header name / author (LR2 text 50 / 51 in the embedded skin settings).
+    pub name: String,
+    pub author: String,
 }
 
 impl SceneSkinDefs {
@@ -70,6 +73,8 @@ impl SceneSkinDefs {
                 property: doc.property.clone(),
                 filepath: doc.filepath.clone(),
                 offset: doc.offset.clone(),
+                name: doc.name.clone(),
+                author: doc.author.clone(),
             },
             None => Self::default(),
         }

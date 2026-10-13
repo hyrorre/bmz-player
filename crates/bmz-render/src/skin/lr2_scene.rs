@@ -46,6 +46,9 @@ pub(super) fn button_index(button: i32, state: &SkinDrawState) -> i32 {
         }
         75 if state.select_screen => i32::from(state.judge_timing_auto_adjust),
         77 if state.select_screen => state.lr2_select_target_index,
+        // Embedded skin settings: the edited skin type is lit, the other buttons stay plain.
+        170..=185 if state.select_screen => i32::from(state.lr2_skin_target == button),
+        190 | 220..=229 if state.select_screen => 0,
         74 => 0,
         91..=96 => i32::from(state.select_difficulty_filter_index == (button - 91) as usize),
         13..=19 | 57 | 58 => 0,

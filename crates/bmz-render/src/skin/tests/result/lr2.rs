@@ -437,3 +437,31 @@ fn lr2_course_stage_levels() {
     let lr2 = |id: i32| skin_state_number(LR2_NUMBER_BASE + id, &state);
     assert_eq!((lr2(250), lr2(251), lr2(252)), (Some(10), Some(12), None));
 }
+
+#[test]
+fn lr2_embedded_skin_settings_texts_buttons_and_scroll_slider() {
+    let settings = crate::scene::Lr2SkinSettingsSnapshot {
+        target_button: 175,
+        skin_name: "EC:BE".to_string(),
+        skin_author: "ric".to_string(),
+        items: (0..13).map(|i| (format!("Option {i}"), format!("Value {i}"))).collect(),
+        scroll: 2,
+    };
+    let text = SkinTextState { lr2_skin_settings: Some(&settings), ..SkinTextState::default() };
+    let state = SkinDrawState {
+        select_screen: true,
+        lr2_skin_target: 175,
+        lr2_skin_scroll: 2.0 / 3.0,
+        ..Default::default()
+    };
+    let lr2_text = |id: i32| skin_main_state_text(LR2_TEXT_BASE + id, Some(&state), &text);
+    assert_eq!((lr2_text(50), lr2_text(51)), ("EC:BE".to_string(), "ric".to_string()));
+    // Ten rows from the scroll position; rows past the list are blank.
+    assert_eq!((lr2_text(100), lr2_text(110)), ("Option 2".to_string(), "Value 2".to_string()));
+    assert_eq!((lr2_text(109), lr2_text(119)), ("Option 11".to_string(), "Value 11".to_string()));
+    assert_eq!(settings.max_scroll(), 3);
+    // The edited skin type is lit; skin change and row buttons are shown.
+    let index = |button: i32| skin_state_event_index(LR2_BUTTON_BASE + button, &state);
+    assert_eq!((index(175), index(170), index(190), index(225)), (1, 0, 0, 0));
+    assert_eq!(skin_slider_progress_by_type(7, &state), Some(2.0 / 3.0));
+}

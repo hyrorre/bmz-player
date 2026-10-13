@@ -261,6 +261,7 @@ impl WinitApp {
     pub(super) fn apply_select_slider_hit(&mut self, hit: SkinSliderHit) {
         match hit.slider_type {
             1 => self.apply_select_scroll_slider(hit.value),
+            7 => self.set_lr2_skin_settings_scroll(hit.value),
             17..=19 => {
                 let value = volume_f32_to_unit(hit.value);
                 let mix = &mut self.boot.profile_config.audio_mix;

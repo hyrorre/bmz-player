@@ -76,6 +76,7 @@ fn fill_missing_skin_defaults_keeps_saved_values_and_fills_new_items() {
             def: "default".to_string(),
         }],
         offset: Vec::new(),
+        ..Default::default()
     };
     let mut options = BTreeMap::from([("Saved".to_string(), "B".to_string())]);
     let mut files = BTreeMap::new();
@@ -101,6 +102,7 @@ fn fill_missing_skin_defaults_replaces_stale_option_selection() {
         }],
         filepath: Vec::new(),
         offset: Vec::new(),
+        ..Default::default()
     };
     let mut options = BTreeMap::from([("Graph".to_string(), "999".to_string())]);
     let mut files = BTreeMap::new();
@@ -125,6 +127,7 @@ fn fill_missing_skin_defaults_keeps_stale_file_selection_like_beatoraja() {
             def: "default".to_string(),
         }],
         offset: Vec::new(),
+        ..Default::default()
     };
     let mut options = BTreeMap::new();
     let mut files = BTreeMap::from([("Notes".to_string(), "../old/default.png".to_string())]);
@@ -295,6 +298,7 @@ fn reset_scene_skin_to_defaults_clears_saved_values_and_restores_factory_default
             r: false,
             a: false,
         }],
+        ..Default::default()
     };
     let mut options = BTreeMap::from([("Lane".to_string(), "Off".to_string())]);
     let mut files = BTreeMap::from([("Notes".to_string(), "aaa.png".to_string())]);

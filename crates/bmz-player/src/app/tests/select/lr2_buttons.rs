@@ -4,7 +4,9 @@ use super::*;
 fn lr2_select_buttons_cycle_lr2_values_without_opening_settings() {
     use Lr2SelectButtonAction::*;
     for (button, action) in [
-        (1, TogglePanel),
+        (1, TogglePanel(1)),
+        (2, TogglePanel(2)),
+        (6, TogglePanel(6)),
         (10, SkinEvent(10)),
         (11, KeyFilter),
         (12, Sort),
@@ -24,7 +26,7 @@ fn lr2_select_buttons_cycle_lr2_values_without_opening_settings() {
         assert_eq!(lr2_select_button_action(button), action, "button {button}");
     }
     // LR2 options without an identical BMZ setting are ignored instead of opening BMZ UI.
-    for button in [2, 8, 18, 20, 29, 33, 41, 44, 45, 46, 51, 56, 58, 70, 71, 73, 76, 80, 83, 90] {
+    for button in [7, 8, 18, 20, 29, 33, 41, 44, 45, 46, 51, 56, 58, 70, 71, 73, 76, 80, 83, 90] {
         assert_eq!(lr2_select_button_action(button), Unsupported, "button {button}");
     }
 }
@@ -100,4 +102,19 @@ fn lr2_select_option_values_cycle_in_lr2_order() {
     assert_eq!(cycle_lr2_value(LR2_SORTS, SelectSort::Score, 1), SelectSort::Level);
     assert_eq!(cycle_lr2_value(LR2_SORTS, SelectSort::Artist, 1), SelectSort::Level);
     assert_eq!(cycle_lr2_value(LR2_KEY_FILTERS, SelectModeFilter::K9, 1), SelectModeFilter::All);
+}
+
+#[test]
+fn lr2_select_panel_and_skin_settings_buttons() {
+    use Lr2SelectButtonAction::*;
+    for (button, action) in [
+        (3, TogglePanel(3)),
+        (170, SkinTarget(170)),
+        (185, SkinTarget(185)),
+        (190, SkinChange),
+        (220, SkinItem(0)),
+        (229, SkinItem(9)),
+    ] {
+        assert_eq!(lr2_select_button_action(button), action, "button {button}");
+    }
 }

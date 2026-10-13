@@ -122,6 +122,8 @@ pub struct SkinTextState<'a> {
     /// Optional caret position for `search_word`, expressed as a UTF-8 byte index.
     pub search_caret_byte_index: Option<usize>,
     pub ir_ranking: &'a crate::scene::ResultIrSnapshot,
+    /// LR2 select skins' embedded skin settings (text 50 / 51 / 100..119).
+    pub lr2_skin_settings: Option<&'a crate::scene::Lr2SkinSettingsSnapshot>,
 }
 
 impl<'a> Default for SkinTextState<'a> {
@@ -165,6 +167,7 @@ impl<'a> Default for SkinTextState<'a> {
             search_word_alpha: 1.0,
             search_caret_byte_index: None,
             ir_ranking: &DEFAULT_RESULT_IR_SNAPSHOT,
+            lr2_skin_settings: None,
         }
     }
 }

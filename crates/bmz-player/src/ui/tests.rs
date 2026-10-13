@@ -34,3 +34,5 @@ mod cases_02;
 mod cases_03;
 #[path = "tests/cases_04.rs"]
 mod cases_04;
+#[path = "tests/lr2_skin_settings.rs"]
+mod lr2_skin_settings;

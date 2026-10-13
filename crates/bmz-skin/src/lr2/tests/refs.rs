@@ -158,3 +158,19 @@ fn lr2_level_bar_options_are_draw_time_conditions() {
         ]
     );
 }
+
+#[test]
+fn lr2_embedded_skin_settings_texts_use_the_lr2_namespace() {
+    let font = "#FONT,20,1,0\n";
+    let text = |id: i32| {
+        format!(
+            "#SRC_TEXT,0,0,{id},0\n\
+             #DST_TEXT,0,0,0,0,10,10,0,255,255,255,255,0,0,0,0,0,0\n"
+        )
+    };
+    let select = load(5, &format!("{font}{}", [50, 51, 100, 119, 10].map(text).concat()));
+    let refs =
+        select["text"].as_array().unwrap().iter().map(|t| t["ref"].clone()).collect::<Vec<_>>();
+    let lr2 = |id: i32| json!(bmz_skin_document::LR2_TEXT_BASE + id);
+    assert_eq!(refs, vec![lr2(50), lr2(51), lr2(100), lr2(119), json!(10)]);
+}

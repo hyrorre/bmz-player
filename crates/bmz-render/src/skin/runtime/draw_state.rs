@@ -381,6 +381,10 @@ pub struct SkinDrawState {
     pub select_lr2_option_history: Option<u32>,
     /// Selected course's stage play levels (LR2 number 250..259).
     pub select_course_levels: [Option<u16>; 10],
+    /// LR2 embedded skin settings: button of the edited skin type (0 = none) and
+    /// the customize list scroll (slider 7, 0..1).
+    pub lr2_skin_target: i32,
+    pub lr2_skin_scroll: f32,
     /// 同 BP (NUMBER_RIVAL_MISSCOUNT=276)。
     pub rival_bp: Option<i64>,
     /// EXスコア元プレイの PGREAT/GREAT/GOOD/BAD/POOR
@@ -695,6 +699,8 @@ impl Default for SkinDrawState {
             select_same_folder: None,
             select_lr2_option_history: None,
             select_course_levels: [None; 10],
+            lr2_skin_target: 0,
+            lr2_skin_scroll: 0.0,
             rival_bp: None,
             rival_judge_counts: None,
             previous_best_ex_score: None,

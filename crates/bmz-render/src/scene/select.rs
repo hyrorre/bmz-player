@@ -153,6 +153,30 @@ pub struct SelectSnapshot {
     pub player_stats: PlayerStatsSnapshot,
     pub selected_score_date_sec: i64,
     pub last_played_at: Option<i64>,
+    /// Skin settings embedded in LR2 select skins. None for other skins.
+    pub lr2_skin_settings: Option<Lr2SkinSettingsSnapshot>,
+}
+
+/// LR2 select skins' embedded skin settings (button 170..190 / 220..229,
+/// text 50 / 51 / 100..119, slider 7).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Lr2SkinSettingsSnapshot {
+    /// LR2 button of the skin type being edited (170..185).
+    pub target_button: i32,
+    pub skin_name: String,
+    pub skin_author: String,
+    /// Customize rows (option / file name, current value).
+    pub items: Vec<(String, String)>,
+    /// First row shown in the ten visible rows.
+    pub scroll: usize,
+}
+
+impl Lr2SkinSettingsSnapshot {
+    pub const VISIBLE_ROWS: usize = 10;
+
+    pub fn max_scroll(&self) -> usize {
+        self.items.len().saturating_sub(Self::VISIBLE_ROWS)
+    }
 }
 
 /// 選曲カーソル譜面に対する IR ライバル (最上位 1 名) のベストスコア。
@@ -289,6 +313,7 @@ impl Default for SelectSnapshot {
             player_stats: PlayerStatsSnapshot::default(),
             selected_score_date_sec: 0,
             last_played_at: None,
+            lr2_skin_settings: None,
         }
     }
 }

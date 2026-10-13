@@ -213,17 +213,28 @@ CSVの引用符はフィールド先頭で開く。引用されていない画�
 | 72 | BGA | OFF / ON / AUTOPLAY |
 | 74 / 75 | 判定タイミング / 自動調整 | ±1ms / OFF・ON |
 | 77 | TARGET | NO TARGET / AAA / AA / A / IR TOP / IR NEXT |
+| 1..6 | パネル | 対応するパネルを開く。開いているパネルの同じbuttonで閉じる |
+| 170..185 | スキン設定の対象 | 7 / 5 / 14 / 10 / 9KEYS、SELECT、DECIDE、RESULT、BATTLE7 / 5、COURSERESULTを選ぶ（KEYCONFIG / SKINSELECT / SOUNDSET / THEME / BATTLE9は対象外） |
+| 190 | スキン変更 | 対象のスキンをBMZの既定と導入済みスキンの順で切り替える（端で折り返す） |
+| 220..229 | カスタマイズ | 表示中の行の値を切り替える。選択肢は端で折り返し、ファイル選択はRANDOMと候補ファイルを順に選ぶ |
 
 マウスはLR2と同じく左クリックだけを受け付け、増減はbuttonの指定（plus only / minus only / 左右半分）で決める。
 10..12はLR2と同じくクリック位置に関係なく次へ進める。
 現在値がLR2の候補にないBMZ独自値（EX-HARD、R-RANDOM、START BPM、BATTLE等）の場合、
 次へは候補の先頭、前へは末尾へ移る。BMZ独自値はbuttonから選ばず、BMZ設定画面で変更する。
-2..8のパネル、FX/EQ/PITCH、2P側のゲージ・EFFECT・HS、AUTO SCRATCH(44/45)、shutter(46)、
+7..8のパネル、FX/EQ/PITCH、2P側のゲージ・EFFECT・HS、AUTO SCRATCH(44/45)、shutter(46)、
 BATTLE(56)、SCOREGRAPH・GHOST(70/71)、BGA SIZE(73)、既定ターゲット率(76)、
 システム設定(80..83)、favorite tag(90)等、BMZに同じ意味の設定が無いbuttonは何もしない。
 画面下部にはBMZの実際の設定と設定画面への操作案内を表示する。
-E1の基本オプションはLR2配置、E2とE1+E2はBMZパネルを使う。詳細は [操作](controls.md#lr2選曲スキン) を参照。
-button 1のクリック開閉は通常の鍵盤・ゲームパッド入力をまたいで維持する。
+E1 / E2 / E1+E2はスキンのパネル1 / 2 / 3を開く。パネル2以降はマウスで操作し、
+BMZのASSIST / DETAILパネルはLR2スキンでは表示しない（F1の設定画面で変更する）。詳細は [操作](controls.md#lr2選曲スキン) を参照。
+button 1..6のクリック開閉は通常の鍵盤・ゲームパッド入力をまたいで維持する。
+
+スキン設定はF1の設定画面と同じプロフィールのスキン設定を変更し、変更したスキンをその場で再読み込みする。
+カスタマイズの行は選択肢（`#CUSTOMOPTION` 等）、ファイル選択（`#CUSTOMFILE` 等）の順に並び、
+保存値が無い項目はスキンの既定値を表示する。位置調整（offset）は一覧に出さない。
+text 50 / 51は対象スキンの名前・作者、100..109 / 110..119は表示中10行の項目名・値、
+slider 7は一覧のスクロール位置。F1の設定画面での変更も一覧へ反映する。
 E1/E2のhold変化で物理操作へ戻し、modal・フォーカス喪失・画面切替では解除する。
 
 リザルトは `GAUGECHART_1P/2P` の自分側と `SCORECHART` index 0を実際の履歴から描画する。

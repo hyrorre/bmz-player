@@ -481,6 +481,7 @@ impl WinitApp {
                 }
                 _ => 0,
             },
+            lr2_skin_settings: self.lr2_skin_settings_snapshot(),
             last_played_at: match selected {
                 Some(SelectItem::Chart(row)) => row.last_played_at,
                 Some(SelectItem::Course(row)) => {

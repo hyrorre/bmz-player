@@ -726,6 +726,10 @@ impl WinitApp {
         }
 
         if self.select.select_option_panel != 0 {
+            // LR2 panels 2..6 are operated with the mouse; ASSIST / DETAIL are in F1 settings.
+            if self.select.select_option_panel > 1 && self.lr2_select_active() {
+                return;
+            }
             if self.select.select_option_panel == 1
                 && let Some(cycle) = target_cycle_from_control(button, &self.select.select_keys)
             {
