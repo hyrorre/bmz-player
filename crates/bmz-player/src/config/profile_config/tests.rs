@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn lr2_new_title_hours_default_for_old_profiles_and_roundtrip_disabled() {
+    let mut profile = ProfileConfig::new_default("default", "Player", 0);
+    assert_eq!(profile.select.new_title_hours, 24);
+    let mut value = toml::Value::try_from(&profile).unwrap();
+    value.get_mut("select").unwrap().as_table_mut().unwrap().remove("new_title_hours");
+    let decoded: ProfileConfig = value.try_into().unwrap();
+    assert_eq!(decoded.select.new_title_hours, 24);
+
+    profile.select.new_title_hours = 0;
+    let decoded: ProfileConfig = toml::from_str(&toml::to_string(&profile).unwrap()).unwrap();
+    assert_eq!(decoded.select.new_title_hours, 0);
+}
+
+#[test]
 fn ui_scale_preserves_old_profiles_and_roundtrips() {
     let mut profile = ProfileConfig::new_default("default", "Player", 0);
     assert_eq!(profile.ui.scale_percent, 100);
@@ -319,6 +333,7 @@ fn select_state_uses_defaults_for_old_profiles() {
     assert_eq!(select.mode_filter, "ALL");
     assert_eq!(select.difficulty_filter, "ALL");
     assert_eq!(select.sort, "TITLE");
+    assert_eq!(select.new_title_hours, 24);
     assert_eq!(select.difficulty_table_level_display, DifficultyTableLevelDisplay::Table);
     assert!(!select.random_select);
     assert_eq!(select.random_mix, RandomMixConfig::default());
@@ -330,6 +345,7 @@ fn select_state_roundtrips_through_toml() {
         mode_filter: "7K".to_string(),
         difficulty_filter: "HYPER".to_string(),
         sort: "LEVEL".to_string(),
+        new_title_hours: 48,
         difficulty_table_level_display: DifficultyTableLevelDisplay::Chart,
         random_select: true,
         random_select_no_play: true,
@@ -356,6 +372,7 @@ fn select_state_roundtrips_through_toml() {
     assert_eq!(parsed.mode_filter, "7K");
     assert_eq!(parsed.difficulty_filter, "HYPER");
     assert_eq!(parsed.sort, "LEVEL");
+    assert_eq!(parsed.new_title_hours, 48);
     assert_eq!(parsed.difficulty_table_level_display, DifficultyTableLevelDisplay::Chart);
     assert!(parsed.random_select);
     assert_eq!(parsed.random_select_flags(), [true; 8]);

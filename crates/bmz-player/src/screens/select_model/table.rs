@@ -46,7 +46,7 @@ pub fn course_root_item() -> SelectItem {
     SelectItem::Folder {
         path: COURSE_ROOT_PATH.to_string(),
         name: "COURSE".to_string(),
-        kind: SelectRowKind::TableFolder,
+        kind: SelectRowKind::CourseFolder,
         summary: None,
     }
 }
@@ -189,6 +189,7 @@ pub fn load_select_items_for_course_contents(
             },
             best_score: None,
             last_played_at: None,
+            lr2_added_at: None,
             replay_slots: [false; 4],
             favorite_chart: false,
             favorite_song: false,
@@ -733,6 +734,7 @@ pub(super) fn select_chart_row_from_table_entry(
         },
         best_score,
         last_played_at: None,
+        lr2_added_at: None,
         replay_slots,
         favorite_chart: false,
         favorite_song: false,

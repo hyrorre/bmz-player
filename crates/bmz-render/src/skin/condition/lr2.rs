@@ -7,6 +7,41 @@ const LR2_CLEAR_FROM_BEATORAJA: [i64; 11] = [0, 1, 2, 2, 2, 3, 4, 4, 5, 5, 5];
 /// Definitions follow LR2's `GetOptionFlag_dst`.
 pub(super) fn lr2_option(id: i32, state: &SkinDrawState) -> bool {
     match id {
+        // LR2's selected bar classification is independent of playability.
+        1 => {
+            matches!(
+                state.select_row_kind,
+                SelectRowKind::Folder
+                    | SelectRowKind::TableFolder
+                    | SelectRowKind::SearchFolder
+                    | SelectRowKind::CourseFolder
+                    | SelectRowKind::NewSongFolder
+                    | SelectRowKind::Command
+                    | SelectRowKind::Container
+                    | SelectRowKind::SettingsRoot
+                    | SelectRowKind::SettingsFolder
+                    | SelectRowKind::SettingsBack
+                    | SelectRowKind::SettingsClose
+            )
+        }
+        2 => {
+            matches!(state.select_row_kind, SelectRowKind::Song | SelectRowKind::NoSong)
+        }
+        3 => state.select_row_kind == SelectRowKind::Course,
+        4 => {
+            matches!(state.select_row_kind, SelectRowKind::NewCourse | SelectRowKind::RandomCourse)
+        }
+        5 => {
+            !state.in_settings
+                && matches!(
+                    state.select_row_kind,
+                    SelectRowKind::Song
+                        | SelectRowKind::NoSong
+                        | SelectRowKind::Course
+                        | SelectRowKind::RandomCourse
+                        | SelectRowKind::Executable
+                )
+        }
         // LR2 Select uses the STYLE filter, not the selected chart's key mode, or a
         // BATTLE that plays on both sides (D-BATTLE / SP-TO-DP). BMZ has no
         // two-player BATTLE or course editor setting.

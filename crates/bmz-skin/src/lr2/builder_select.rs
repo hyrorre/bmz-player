@@ -46,7 +46,7 @@ impl CsvBuilder<'_> {
             return false;
         }
         let index = values[1].clamp(0, 29);
-        if matches!(kind, "RANK" | "RIVAL") {
+        if kind == "RANK" {
             if command.starts_with("SRC_") {
                 self.warn(format!("unsupported lr2 song bar decoration: #{command}"));
             }
@@ -161,11 +161,12 @@ impl CsvBuilder<'_> {
             "clickable": (first..=last).collect::<Vec<_>>(),
             "listoff": slots("BODY_OFF", &(0..30).collect::<Vec<_>>()),
             "liston": slots("BODY_ON", &(0..30).collect::<Vec<_>>()),
-            "text": slots("TITLE", &[0; 14]),
+            "text": slots("TITLE", &[0, 1]),
             "level": slots("LEVEL", &[0, 1, 2, 3, 4, 5, 6]),
             "lamp": slots("LAMP", &lamps),
             "playerlamp": slots("MY_LAMP", &lamps),
             "rivallamp": slots("RIVAL_LAMP", &lamps),
+            "lr2rival": slots("RIVAL", &[0, 1, 2, 3, 4, 5]),
             "flash": slots("FLASH", &[0]),
         })
     }

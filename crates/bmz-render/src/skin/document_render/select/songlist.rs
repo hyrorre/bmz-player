@@ -84,7 +84,9 @@ macro_rules! skin_document_render_select_songlist_methods {
                 }
                 if select_row_shows_lamp(row) {
                     let clear_index = select_row_clear_index(row);
-                    if snapshot.rival_selected {
+                    if snapshot.rival_selected
+                        && (!self.lr2 || row.rival_ex_score.is_some_and(|ex| ex > 0))
+                    {
                         items.extend(self.select_songlist_child_items_by_index(
                             &songlist.playerlamp,
                             clear_index,
@@ -114,6 +116,29 @@ macro_rules! skin_document_render_select_songlist_methods {
                             sources,
                         ));
                     }
+                }
+                if self.lr2
+                    && let Some(rival_ex) = row.rival_ex_score.filter(|ex| *ex > 0)
+                {
+                    let player_ex = row.ex_score.unwrap_or(0);
+                    let index = if player_ex == 0 {
+                        3
+                    } else {
+                        match player_ex.cmp(&rival_ex) {
+                            std::cmp::Ordering::Greater => 0,
+                            std::cmp::Ordering::Less => 1,
+                            std::cmp::Ordering::Equal => 2,
+                        }
+                    };
+                    items.extend(self.select_songlist_child_items_by_index(
+                        &songlist.lr2rival,
+                        index,
+                        row_origin,
+                        images,
+                        enabled_options,
+                        &row_state,
+                        sources,
+                    ));
                 }
                 if select_row_shows_score_decorations(row) {
                     if select_row_shows_level(row) {

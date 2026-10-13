@@ -30,6 +30,7 @@ struct SelectFolderSummaryRequest {
     key: String,
     path: String,
     kind: SelectRowKind,
+    active_song_roots: Vec<String>,
     ln_policy_setting: LnPolicySetting,
     rule_mode: RuleMode,
     view_generation: u64,
@@ -53,6 +54,7 @@ pub(super) struct SelectFolderSummaryRuntime {
     view_key: String,
     ln_policy: LnPolicySetting,
     rule_mode: RuleMode,
+    active_song_roots: Vec<String>,
 }
 
 impl SelectFolderSummaryRuntime {
@@ -75,6 +77,7 @@ impl SelectFolderSummaryRuntime {
             view_key: view_key(folder_stack),
             ln_policy,
             rule_mode,
+            active_song_roots: Vec::new(),
         }
     }
 
@@ -97,6 +100,7 @@ impl SelectFolderSummaryRuntime {
             view_key: view_key(folder_stack),
             ln_policy,
             rule_mode,
+            active_song_roots: Vec::new(),
         })
     }
 
@@ -122,7 +126,17 @@ impl SelectFolderSummaryRuntime {
         visible_indices: &[usize],
         ln_policy: LnPolicySetting,
         rule_mode: RuleMode,
+        active_song_roots: &[String],
     ) {
+        if self.active_song_roots != active_song_roots {
+            self.active_song_roots = active_song_roots.to_vec();
+            self.invalidate_data();
+            for item in &mut *items {
+                if let SelectItem::Folder { summary, .. } = item {
+                    *summary = None;
+                }
+            }
+        }
         self.sync_score_context(items, ln_policy, rule_mode);
         self.poll(items);
         self.request_visible(items, visible_indices);
@@ -216,6 +230,7 @@ impl SelectFolderSummaryRuntime {
                 key,
                 path: path.clone(),
                 kind: *kind,
+                active_song_roots: self.active_song_roots.clone(),
                 ln_policy_setting: self.ln_policy,
                 rule_mode: self.rule_mode,
                 view_generation: self.view_generation,
@@ -289,6 +304,22 @@ fn spawn_worker(
                         ));
                     }
                     let (library_db, score_db) = databases.as_ref().expect("databases initialized");
+                    if matches!(request.kind, SelectRowKind::Command | SelectRowKind::NewSongFolder)
+                    {
+                        let profile_root = score_db_path
+                            .parent()
+                            .context("score database has no profile directory")?;
+                        return crate::screens::select_model::virtual_folder_summary(
+                            library_db,
+                            score_db,
+                            profile_root,
+                            &request.path,
+                            request.ln_policy_setting,
+                            request.rule_mode,
+                            &request.active_song_roots,
+                        )
+                        .map(Some);
+                    }
                     select_folder_summary_for_rule_mode(
                         library_db,
                         score_db,
@@ -380,6 +411,7 @@ mod tests {
             key: key.to_string(),
             path: key.to_string(),
             kind: SelectRowKind::TableFolder,
+            active_song_roots: Vec::new(),
             ln_policy_setting: LnPolicySetting::AutoLn,
             rule_mode: RuleMode::Beatoraja,
             view_generation,

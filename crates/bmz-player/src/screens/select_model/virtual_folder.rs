@@ -30,6 +30,9 @@ struct VirtualFolderDef {
     id: String,
     #[serde(default)]
     name: String,
+    /// Mark query descendants as LR2's new-song folders, independently of their names.
+    #[serde(default)]
+    new_song: bool,
     #[serde(default = "default_true")]
     enabled: bool,
     #[serde(default)]
@@ -260,7 +263,17 @@ fn expand_folder(mut folder: VirtualFolderDef) -> Result<VirtualFolderDef> {
                 .with_context(|| format!("parse order_by for folder `{}`", folder.id))?;
         }
     }
+    if folder.new_song {
+        mark_new_song_queries(&mut folder);
+    }
     Ok(folder)
+}
+
+fn mark_new_song_queries(folder: &mut VirtualFolderDef) {
+    folder.new_song = true;
+    for child in &mut folder.items {
+        mark_new_song_queries(child);
+    }
 }
 
 fn generated_leaf(id: String, name: String, filter: String) -> Result<VirtualFolderDef> {
@@ -268,6 +281,7 @@ fn generated_leaf(id: String, name: String, filter: String) -> Result<VirtualFol
     Ok(VirtualFolderDef {
         id,
         name,
+        new_song: false,
         enabled: true,
         query: Some(QueryDef::Simple(filter)),
         items: Vec::new(),
@@ -350,7 +364,7 @@ fn folder_item(folder: &VirtualFolderDef, parent_path: &str) -> SelectItem {
         path,
         name: folder.name.clone(),
         kind: if folder.query.is_some() {
-            SelectRowKind::Command
+            if folder.new_song { SelectRowKind::NewSongFolder } else { SelectRowKind::Command }
         } else {
             SelectRowKind::Container
         },
@@ -478,6 +492,34 @@ pub fn load_select_items_in_virtual_folder(
     )
 }
 
+pub fn virtual_folder_summary(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+    profile_root: &Path,
+    path: &str,
+    ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
+    active_song_roots: &[String],
+) -> Result<SelectFolderSummary> {
+    let items = load_select_items_in_virtual_folder(
+        library_db,
+        score_db,
+        profile_root,
+        path,
+        ln_policy_setting,
+        rule_mode,
+        Some(active_song_roots),
+    )?;
+    let rows = items
+        .into_iter()
+        .filter_map(|item| match item {
+            SelectItem::Chart(row) => Some(row),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    Ok(SelectFolderSummary::from(rows.as_slice()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -493,6 +535,20 @@ mod tests {
         assert_eq!(lamp.items[1].name, "2 DAYS AGO");
         let density = folders.iter().find(|folder| folder.id == "density").unwrap();
         assert_eq!(density.items[0].items.len(), 46);
+        let new = folders.iter().find(|folder| folder.id == "new").unwrap();
+        assert!(matches!(
+            folder_item(new, VIRTUAL_FOLDER_PATH_PREFIX),
+            SelectItem::Folder { kind: SelectRowKind::Container, .. }
+        ));
+        assert!(new.items.iter().all(|child| matches!(
+            folder_item(child, "bmz-filter:new"),
+            SelectItem::Folder { kind: SelectRowKind::NewSongFolder, .. }
+        )));
+        let best = folders.iter().find(|folder| folder.id == "my-best").unwrap();
+        assert!(matches!(
+            folder_item(best, VIRTUAL_FOLDER_PATH_PREFIX),
+            SelectItem::Folder { kind: SelectRowKind::Command, .. }
+        ));
     }
 
     #[test]

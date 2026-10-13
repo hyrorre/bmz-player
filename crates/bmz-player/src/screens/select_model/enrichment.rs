@@ -134,6 +134,7 @@ fn chart_items_with_optional_table_enrichment(
             download_metadata: ChartDownloadMetadata::default(),
             best_score,
             last_played_at: last_played.get(&score_key).copied(),
+            lr2_added_at: None,
             replay_slots,
             favorite_chart: false,
             favorite_song: false,
@@ -210,6 +211,9 @@ pub fn select_folder_summary_for_rule_mode(
         },
         SelectRowKind::Song
         | SelectRowKind::Course
+        | SelectRowKind::CourseFolder
+        | SelectRowKind::NewCourse
+        | SelectRowKind::NewSongFolder
         | SelectRowKind::Executable
         | SelectRowKind::RandomCourse
         | SelectRowKind::Command

@@ -182,18 +182,21 @@ macro_rules! skin_document_render_select_graph_methods {
                 ..SkinTextState::default()
             };
             if self.lr2 {
-                if let Some(destination) =
-                    songlist_destination_at(&songlist.text, 0, enabled_options, state, true)
-                    && let Some(resolved) = self.resolve_offset_destination_items(
-                        destination,
-                        row_origin,
-                        images,
-                        enabled_options,
-                        state,
-                        &text_state,
-                        sources,
-                    )
-                {
+                if let Some(destination) = songlist_destination_at(
+                    &songlist.text,
+                    usize::from(row.lr2_new_title),
+                    enabled_options,
+                    state,
+                    true,
+                ) && let Some(resolved) = self.resolve_offset_destination_items(
+                    destination,
+                    row_origin,
+                    images,
+                    enabled_options,
+                    state,
+                    &text_state,
+                    sources,
+                ) {
                     items.extend(resolved);
                 }
                 return items;

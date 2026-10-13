@@ -225,6 +225,9 @@ pub struct SkinSongListDef {
     pub playerlamp: Vec<DestinationListEntry>,
     #[serde(default)]
     pub rivallamp: Vec<DestinationListEntry>,
+    /// Native LR2 BAR_RIVAL slots; 0..3 are win, lose, draw, and no player score.
+    #[serde(default)]
+    pub lr2rival: Vec<DestinationListEntry>,
     #[serde(default, deserialize_with = "deserialize_destination_entries")]
     pub trophy: Vec<DestinationListEntry>,
     #[serde(default, deserialize_with = "deserialize_destination_entries")]

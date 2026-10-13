@@ -72,6 +72,29 @@ query = "mode == '7K' && level >= 10"
         })
         .collect::<Vec<_>>();
     assert_eq!(titles, ["High"]);
+    let summary = virtual_folder_summary(
+        &library_db,
+        &score_db,
+        &profile_root,
+        "bmz-filter:custom",
+        LnPolicySetting::AutoLn,
+        RuleMode::Beatoraja,
+        &["/songs".to_string()],
+    )
+    .unwrap();
+    assert_eq!(summary.lamp_counts[0], 1);
+    assert_eq!(summary.lamp_counts.iter().sum::<u32>(), 1);
+    let inactive = virtual_folder_summary(
+        &library_db,
+        &score_db,
+        &profile_root,
+        "bmz-filter:custom",
+        LnPolicySetting::AutoLn,
+        RuleMode::Beatoraja,
+        &["/other".to_string()],
+    )
+    .unwrap();
+    assert_eq!(inactive.lamp_counts.iter().sum::<u32>(), 0);
     std::fs::remove_dir_all(profile_root).unwrap();
 }
 
@@ -562,6 +585,7 @@ fn collection_cache_observes_other_connection_commits() {
 fn missing_favorite_chart_item_for_test() -> SelectItem {
     SelectItem::Chart(SelectChartRow {
         last_played_at: None,
+        lr2_added_at: None,
         chart: None,
         chart_analysis: None,
         has_document: false,

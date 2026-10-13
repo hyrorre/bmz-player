@@ -56,6 +56,9 @@ pub struct SelectStateConfig {
     pub difficulty_filter: String,
     #[serde(default = "default_select_sort")]
     pub sort: String,
+    /// Hours after registration during which LR2 skins use BAR_TITLE 1. Zero disables it.
+    #[serde(default = "default_new_title_hours")]
+    pub new_title_hours: u32,
     /// 難易度表のレベルフォルダ内で、表のレベルと譜面本来のレベルの
     /// どちらを選曲表示へ使うか。
     #[serde(default)]
@@ -139,6 +142,10 @@ pub fn default_select_sort() -> String {
     "TITLE".to_string()
 }
 
+pub const fn default_new_title_hours() -> u32 {
+    24
+}
+
 pub fn default_select_difficulty_filter() -> String {
     "ALL".to_string()
 }
@@ -164,6 +171,7 @@ impl Default for SelectStateConfig {
             mode_filter: default_select_mode_filter(),
             difficulty_filter: default_select_difficulty_filter(),
             sort: default_select_sort(),
+            new_title_hours: default_new_title_hours(),
             difficulty_table_level_display: DifficultyTableLevelDisplay::default(),
             random_select: false,
             random_select_no_play: false,

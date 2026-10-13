@@ -172,6 +172,7 @@ insert_at = 1
 [[folders]]
 id = "new"
 name = "NEW"
+new_song = true
 items = [
   { id = "this-week", name = "THIS WEEK", query = "added_at in local_days(7)" },
 ]

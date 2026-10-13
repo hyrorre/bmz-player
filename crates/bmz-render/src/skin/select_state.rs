@@ -115,10 +115,14 @@ pub(super) fn select_row_bar_image_index(row: &SelectRowSnapshot) -> usize {
         SelectRowKind::NoSong => 4,
         SelectRowKind::Song => 0,
         SelectRowKind::Folder => 1,
-        SelectRowKind::TableFolder | SelectRowKind::Executable | SelectRowKind::RandomCourse => 2,
+        SelectRowKind::TableFolder
+        | SelectRowKind::CourseFolder
+        | SelectRowKind::NewCourse
+        | SelectRowKind::Executable
+        | SelectRowKind::RandomCourse => 2,
         SelectRowKind::SearchFolder => 6,
         SelectRowKind::Course => 3,
-        SelectRowKind::Command | SelectRowKind::Container => 5,
+        SelectRowKind::Command | SelectRowKind::Container | SelectRowKind::NewSongFolder => 5,
         SelectRowKind::SettingsRoot | SelectRowKind::SettingsFolder => 8,
         SelectRowKind::SettingsBack => 9,
         SelectRowKind::SettingsClose => 10,
@@ -144,10 +148,14 @@ pub(super) fn select_row_bar_text_index(row: &SelectRowSnapshot) -> usize {
         SelectRowKind::NoSong => 8,
         SelectRowKind::Song => 2,
         SelectRowKind::Folder => 4,
-        SelectRowKind::TableFolder | SelectRowKind::Executable | SelectRowKind::RandomCourse => 6,
+        SelectRowKind::TableFolder
+        | SelectRowKind::CourseFolder
+        | SelectRowKind::NewCourse
+        | SelectRowKind::Executable
+        | SelectRowKind::RandomCourse => 6,
         SelectRowKind::SearchFolder => 10,
         SelectRowKind::Course => 7,
-        SelectRowKind::Command | SelectRowKind::Container => 9,
+        SelectRowKind::Command | SelectRowKind::Container | SelectRowKind::NewSongFolder => 9,
         SelectRowKind::SettingsRoot | SelectRowKind::SettingsFolder => 11,
         SelectRowKind::SettingsBack => 12,
         SelectRowKind::SettingsClose => 13,
@@ -407,6 +415,8 @@ pub(super) fn select_detail_title<'a>(
         SelectRowKind::Song
         | SelectRowKind::Folder
         | SelectRowKind::TableFolder
+        | SelectRowKind::CourseFolder
+        | SelectRowKind::NewSongFolder
         | SelectRowKind::SearchFolder
         | SelectRowKind::Command
         | SelectRowKind::Container
@@ -415,6 +425,7 @@ pub(super) fn select_detail_title<'a>(
         | SelectRowKind::SettingsBack
         | SelectRowKind::SettingsClose => row.title.as_str(),
         SelectRowKind::Course
+        | SelectRowKind::NewCourse
         | SelectRowKind::Executable
         | SelectRowKind::RandomCourse
         | SelectRowKind::NoSong
@@ -476,6 +487,8 @@ pub(super) fn select_row_shows_lamp(row: &SelectRowSnapshot) -> bool {
                 | SelectRowKind::TableFolder
                 | SelectRowKind::SearchFolder
                 | SelectRowKind::Command
+                | SelectRowKind::CourseFolder
+                | SelectRowKind::NewSongFolder
                 | SelectRowKind::Container
         )
 }
@@ -492,6 +505,8 @@ pub(super) fn select_row_shows_folder_distribution(row: &SelectRowSnapshot) -> b
                 | SelectRowKind::TableFolder
                 | SelectRowKind::SearchFolder
                 | SelectRowKind::Command
+                | SelectRowKind::CourseFolder
+                | SelectRowKind::NewSongFolder
                 | SelectRowKind::Container
         )
 }

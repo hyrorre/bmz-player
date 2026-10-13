@@ -69,6 +69,8 @@ fn select_row_bar_slots_follow_beatoraja_bar_types() {
         (SelectRowKind::Song, false, 4, 8),
         (SelectRowKind::Folder, true, 1, 4),
         (SelectRowKind::TableFolder, true, 2, 6),
+        (SelectRowKind::CourseFolder, true, 2, 6),
+        (SelectRowKind::NewCourse, true, 2, 6),
         (SelectRowKind::SearchFolder, true, 6, 10),
         (SelectRowKind::Course, true, 3, 7),
         (SelectRowKind::Course, false, 4, 8),
@@ -76,6 +78,7 @@ fn select_row_bar_slots_follow_beatoraja_bar_types() {
         (SelectRowKind::RandomCourse, true, 2, 6),
         (SelectRowKind::RandomCourse, false, 4, 8),
         (SelectRowKind::Command, true, 5, 9),
+        (SelectRowKind::NewSongFolder, true, 5, 9),
         (SelectRowKind::Container, true, 5, 9),
         (SelectRowKind::NoSong, false, 4, 8),
         (SelectRowKind::SettingsRoot, true, 8, 11),
@@ -93,6 +96,8 @@ fn select_row_bar_slots_follow_beatoraja_bar_types() {
                 kind,
                 SelectRowKind::Folder
                     | SelectRowKind::TableFolder
+                    | SelectRowKind::CourseFolder
+                    | SelectRowKind::NewSongFolder
                     | SelectRowKind::SearchFolder
                     | SelectRowKind::Command
                     | SelectRowKind::Container
@@ -105,6 +110,22 @@ fn select_row_bar_slots_follow_beatoraja_bar_types() {
         };
         assert_eq!(select_row_bar_image_index(&row), image_index, "image index for {kind:?}");
         assert_eq!(select_row_bar_text_index(&row), text_index, "text index for {kind:?}");
+    }
+}
+
+#[test]
+fn virtual_query_folders_expose_their_aggregated_song_count() {
+    for kind in [SelectRowKind::Command, SelectRowKind::NewSongFolder] {
+        let row = SelectRowSnapshot {
+            kind,
+            is_folder: true,
+            folder_lamp_counts: [1; 11],
+            ..Default::default()
+        };
+        assert_eq!(select_row_folder_song_count(&row), Some(11));
+        let state =
+            SkinDrawState { select_screen: true, select_row_kind: kind, ..Default::default() };
+        assert!(select_folder_lamp_counts_available(&state));
     }
 }
 

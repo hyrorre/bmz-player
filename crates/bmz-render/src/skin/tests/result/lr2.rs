@@ -13,6 +13,91 @@ fn lr2_songlist_conditional_variants_keep_fixed_slots() {
 }
 
 #[test]
+fn lr2_bar_conditions_distinguish_courses_actions_and_folders() {
+    for (kind, expected) in [
+        (SelectRowKind::NewCourse, [false, false, false, true, false]),
+        (SelectRowKind::RandomCourse, [false, false, false, true, true]),
+        (SelectRowKind::Course, [false, false, true, false, true]),
+        (SelectRowKind::CourseFolder, [true, false, false, false, false]),
+        (SelectRowKind::NewSongFolder, [true, false, false, false, false]),
+        (SelectRowKind::Command, [true, false, false, false, false]),
+        (SelectRowKind::Container, [true, false, false, false, false]),
+        (SelectRowKind::SearchFolder, [true, false, false, false, false]),
+        (SelectRowKind::Song, [false, true, false, false, true]),
+        // BMZ's direct random selection is a playable extension.
+        (SelectRowKind::Executable, [false, false, false, false, true]),
+    ] {
+        let state =
+            SkinDrawState { select_screen: true, select_row_kind: kind, ..Default::default() };
+        for (index, enabled) in expected.into_iter().enumerate() {
+            assert_eq!(
+                test_skin_ops(&[LR2_OPTION_BASE + index as i32 + 1], &[], &state),
+                enabled,
+                "{kind:?} op {}",
+                index + 1
+            );
+        }
+    }
+}
+
+#[test]
+fn lr2_songlist_uses_new_titles_and_per_row_rival_decorations() {
+    let names =
+        ["body", "lamp", "player", "rival", "old", "new", "win", "lose", "draw", "unplayed"];
+    let images = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            serde_json::json!({
+                "id": name, "src": "src", "x": 0, "y": i * 10, "w": 10, "h": 10,
+            })
+        })
+        .collect::<Vec<_>>();
+    let part = |id: &str| serde_json::json!({"id": id, "dst": [{"x":0,"y":0,"w":10,"h":10}]});
+    let document: SkinDocument = serde_json::from_value(serde_json::json!({
+        "type":5, "lr2":true, "w":100, "h":100,
+        "image":images, "imageset":[{"id":"bars","images":["body"]}],
+        "songlist":{
+            "id":"list", "center":0, "liston":[part("bars")], "listoff":[part("bars")],
+            "text":[part("old"),part("new")],
+            "lamp":[part("lamp")], "playerlamp":[part("player")], "rivallamp":[part("rival")],
+            "lr2rival":[part("win"),part("lose"),part("draw"),part("unplayed")],
+        },
+        "destination":[{"id":"list"}],
+    }))
+    .unwrap();
+    let sources = mock_source("src", 100.0, 100.0);
+    for (new_title, player, rival, expected) in [
+        (false, None, None, vec![0, 1, 4]),
+        (true, None, Some(0), vec![0, 1, 5]),
+        (false, Some(200), Some(100), vec![0, 2, 3, 6, 4]),
+        (false, Some(50), Some(100), vec![0, 2, 3, 7, 4]),
+        (true, Some(100), Some(100), vec![0, 2, 3, 8, 5]),
+        (false, None, Some(100), vec![0, 2, 3, 9, 4]),
+    ] {
+        let snapshot = SelectSnapshot {
+            rival_selected: true,
+            rows: vec![SelectRowSnapshot {
+                lr2_new_title: new_title,
+                ex_score: player,
+                rival_ex_score: rival,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let rows = document
+            .select_render_items(&sources, &snapshot)
+            .iter()
+            .filter_map(|item| match item {
+                SkinRenderItem::Image { uv, .. } => Some((uv.y * 10.0).round() as i32),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rows, expected);
+    }
+}
+
+#[test]
 fn lr2_songlist_renders_unowned_songs_and_courses_with_native_bodies() {
     let images: Vec<_> = (0..10)
         .map(|index| {
@@ -40,8 +125,15 @@ fn lr2_songlist_renders_unowned_songs_and_courses_with_native_bodies() {
         (SelectRowKind::Song, true, 0),
         (SelectRowKind::Song, false, 5),
         (SelectRowKind::NoSong, false, 5),
-        (SelectRowKind::Command, true, 5),
-        (SelectRowKind::Container, true, 5),
+        (SelectRowKind::Command, true, 2),
+        (SelectRowKind::Container, true, 1),
+        (SelectRowKind::SearchFolder, true, 2),
+        (SelectRowKind::TableFolder, true, 2),
+        (SelectRowKind::Folder, true, 1),
+        (SelectRowKind::CourseFolder, true, 6),
+        (SelectRowKind::NewCourse, true, 7),
+        (SelectRowKind::NewSongFolder, true, 3),
+        (SelectRowKind::Executable, true, 2),
         (SelectRowKind::Course, true, 8),
         (SelectRowKind::Course, false, 5),
         (SelectRowKind::RandomCourse, true, 9),

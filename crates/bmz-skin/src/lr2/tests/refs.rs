@@ -1,6 +1,15 @@
 use super::*;
 use bmz_skin_document::{LR2_NUMBER_BASE, LR2_OPTION_BASE};
 
+#[test]
+fn lr2_bar_classification_if_conditions_are_evaluated_at_runtime() {
+    let value = load(
+        5,
+        "#IMAGE,a.png\n#IF,4\n#SRC_IMAGE,0,0,0,0,20,20,1,1,0,0\n#DST_IMAGE,0,0,0,0,20,20,0,255,255,255,255,1,0,0,0,0,0,5,0,0\n#ENDIF\n",
+    );
+    assert_eq!(value["destination"][0]["op"], json!([LR2_OPTION_BASE + 4, LR2_OPTION_BASE + 5]));
+}
+
 fn load(skin_type: i32, body: &str) -> JsonValue {
     let root = unique_test_dir(&format!("bmz-lr2-refs-{skin_type}"));
     fs::create_dir_all(&root).unwrap();
@@ -201,8 +210,11 @@ fn lr2_select_style_course_and_hover_conditions_survive_decode() {
             ),
         );
         assert_eq!(hover["destination"][0]["mouseRect"], json!({"x":1,"y":3,"w":15,"h":25}));
-        let expected =
-            if panel == 0 { json!([5]) } else { json!([5, LR2_OPTION_BASE + 20 + panel]) };
+        let expected = if panel == 0 {
+            json!([LR2_OPTION_BASE + 5])
+        } else {
+            json!([LR2_OPTION_BASE + 5, LR2_OPTION_BASE + 20 + panel])
+        };
         assert_eq!(hover["destination"][0]["op"], expected);
     }
 }

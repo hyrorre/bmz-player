@@ -204,11 +204,13 @@ impl WinitApp {
         );
         let ln_policy = self.boot.profile_config.play.ln_mode_policy;
         let rule_mode = self.boot.profile_config.play.rule_mode;
+        let active_song_roots = enabled_root_paths(&self.boot.app_config);
         self.select.select_folder_summaries.refresh(
             &mut self.select.select_items,
             &visible_indices,
             ln_policy,
             rule_mode,
+            &active_song_roots,
         );
     }
 }

@@ -187,6 +187,8 @@ pub(in crate::skin) fn test_skin_op(
             state.select_row_kind,
             SelectRowKind::Folder
                 | SelectRowKind::TableFolder
+                | SelectRowKind::CourseFolder
+                | SelectRowKind::NewSongFolder
                 | SelectRowKind::SearchFolder
                 | SelectRowKind::Command
                 | SelectRowKind::Container
@@ -203,21 +205,23 @@ pub(in crate::skin) fn test_skin_op(
         SKIN_OPTION_BMZ_SETTINGS_CLOSE => state.select_row_kind == SelectRowKind::SettingsClose,
         2 => select_song_detail_row(state),
         3 => state.select_row_kind == SelectRowKind::Course,
-        1030 => state.select_row_kind == SelectRowKind::Executable,
+        1030 => {
+            matches!(state.select_row_kind, SelectRowKind::Executable | SelectRowKind::NewCourse)
+        }
         1031 => state.select_row_kind == SelectRowKind::RandomCourse,
         1008 => state.table_song,
         1002..=1017 => gradebar_constraint_op_matches(op, state),
         5 => {
             !state.in_settings
-                && (matches!(state.select_row_kind, SelectRowKind::Executable)
-                    || (state.select_in_library
-                        && !state.select_is_folder
-                        && matches!(
-                            state.select_row_kind,
-                            SelectRowKind::Song
-                                | SelectRowKind::Course
-                                | SelectRowKind::RandomCourse
-                        )))
+                && (matches!(
+                    state.select_row_kind,
+                    SelectRowKind::Executable | SelectRowKind::NewCourse
+                ) || (state.select_in_library
+                    && !state.select_is_folder
+                    && matches!(
+                        state.select_row_kind,
+                        SelectRowKind::Song | SelectRowKind::Course | SelectRowKind::RandomCourse
+                    )))
         }
         // OPTION_OFFLINE / OPTION_ONLINE. beatoraja は設定済み IR 接続の有無を
         // 返す。結果スキンでは 51 が IR 送信完了/失敗の timer 173/174 を

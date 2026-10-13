@@ -400,6 +400,10 @@ pub struct SelectRowSnapshot {
     /// 選択中ライバルの beatoraja ClearType index (0=NO PLAY .. 10=MAX)。
     /// ライバル未プレイ譜面も 0。
     pub rival_clear_index: usize,
+    /// Rival EX score for LR2's per-row lamp selection and win/lose decoration.
+    pub rival_ex_score: Option<u32>,
+    /// Recently added chart: use LR2 BAR_TITLE 1.
+    pub lr2_new_title: bool,
     pub ex_score: Option<u32>,
     pub max_combo: Option<u32>,
     pub gauge_value: Option<f32>,
@@ -505,6 +509,8 @@ impl Default for SelectRowSnapshot {
             length_ms: 0,
             clear_type: String::new(),
             rival_clear_index: 0,
+            rival_ex_score: None,
+            lr2_new_title: false,
             ex_score: None,
             max_combo: None,
             gauge_value: None,
@@ -611,6 +617,9 @@ pub enum SelectRowKind {
     TableFolder,
     SearchFolder,
     Course,
+    CourseFolder,
+    NewCourse,
+    NewSongFolder,
     Executable,
     RandomCourse,
     Command,

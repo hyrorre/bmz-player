@@ -51,3 +51,56 @@ BMZのLAMP UPDATE、DENSITY、FEATURE等の組み込み仮想フォルダは
   それぞれ `cargo test -p bmz-player --locked --lib <test-name> -- --exact` で個別実行すると成功した。
   全体テスト自体の終了コードは1であり、全件成功とは扱わない。
 - GPUでの実画面確認は未実施。
+
+## 2026-10-14 追加調査後の修正
+
+上の修正ではNEW COURSEの行種別がsnapshotで失われ、コース一覧・機能フォルダには
+beatorajaの番号を流用していた。機能フォルダを灰色とした前の説明はLR2の分類に一致しない。
+`codex/lr2-select-row-compat` Worktreeで、LR2の行種別と実際のWMIX_HD素材を再確認した。
+
+参照したLR2コードは `LR2_songmanage.cpp` のカスタムフォルダとコース行の分類、
+`Scene02_Songselect.cpp` のバー・タイトル・ランプ・勝敗表示、
+`LR2_skinobject.cpp` の選択行条件1..5、`LR2_configsave.cpp` のtitleflash既定値。
+
+| BMZの行 | LR2の画像番号 | WMIX_HDでの見た目 |
+|---|---|---|
+| コース一覧 | 6 | 黄色のCOURSE |
+| NEW COURSE | 7 | 黄色のCOURSE |
+| 保存済みコース | 8 | 灰色 |
+| RANDOM MIX | 9 | 黄色のCOURSE |
+| 仮想フォルダの分類階層 | 1 | 青色のFOLDER |
+| 仮想フォルダの抽出項目・検索履歴・難易度表 | 2 | 緑色のCUSTOM |
+| NEW配下の抽出項目 | 3 | NEW SONG |
+| 未所持譜面・未所持コース | 5 | 灰色（前の表示方針を維持） |
+
+NEW COURSEはop 4、保存済みコースはop 3として評価し、op 5にはNEW COURSEを含めない。
+抽出項目のランプ・曲数は実際に開くときと同じquery・limit・有効root・スコアルールで
+既存の非同期workerから集計する。有効root変更時はキャッシュの世代を更新する。
+分類階層の子孫ランプは合成しない。
+
+譜面の初回登録日時をsnapshotへ渡し、既定24時間はBAR_TITLE 1を使う。
+profileの `[select].new_title_hours = 0` で無効にできる。
+ライバルのEXが1以上ある曲だけ自分・ライバルのランプを分け、それ以外は通常ランプを使う。
+BAR_RIVALは自分とライバルのEX比較で勝ち・負け・同点・自分未プレイを選ぶ。
+beatoraja形式の画像・タイトル番号は維持し、新しい行種別でも回帰テストで確認する。
+
+### 確認範囲と残課題
+
+- 外部スキンは編集していない。WMIX_HDをWorktree内のGit管理外へコピーし、個人のDB・configはコピーしていない。
+- BAR_RANKはLR2のIRランキング一覧表示がBMZに無いため未対応。
+- フォルダにはLR2の追加日時に相当する永続値が無く、BAR_TITLEは通常表示を維持する。
+- 起動確認は独立した一時profile・DBで3フレームを表示するもの。全行の実画面での目視・操作確認は未実施。
+
+### 今回の検証
+
+- `cargo fmt --check`、`cargo check --workspace --locked`、
+  `cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。
+- `cargo test --workspace --locked --no-fail-fast` は終了コード0。
+  bmz-player 2428件、bmz-render 735件、bmz-skin 275件が成功。
+  既定でignoredのテストは全体実行の成功件数に含めない。
+- WMIX_HDのSelect・Result・CourseResultをdecodeする既存テストを素材ありで確認。
+  通常LR2・Seraphic・ECBEの素材はWorktreeに無く、そのテストケースはskip。
+- `cargo test -p bmz-player --locked --test startup_stack -- --ignored --test-threads=1` は
+  合成LR2スキンとWMIX_HDの2件が成功。Windowsの実GPUで読み込み・初回描画・正常終了を確認。
+- 全体テストの生ログはWorktreeの `.local/performance/lr2-row-tests-final.log` に保存。
+  Git管理外のローカル資料であり、コミットには含めない。

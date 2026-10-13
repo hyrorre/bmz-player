@@ -181,7 +181,7 @@ bargraph 140..145（判定率）はSelectでは選択中のスコアを譜面の
 
 ライバルのIR順位（number 292 / 293）等は、
 必要な値の供給が無いため未対応。EQ / FX / PITCH、パネル2..7、スキン設定・コース作成・ヘルプの埋め込み、
-`README` / `MOUSECURSOR`、`BAR_RANK` / `BAR_RIVAL` はBMZに同じ機能が無いため対応しない。
+`README` / `MOUSECURSOR`、IRランキング一覧の `BAR_RANK` はBMZに同じ機能が無いため対応しない。
 
 ## LR2のSelect / Result
 
@@ -194,10 +194,12 @@ CSVの引用符はフィールド先頭で開く。引用されていない画�
 パス正規化で除去し、後続のカンマやコメントを画像名へ混入させない。
 
 選曲は `BAR_BODY_ON/OFF`、`BAR_TITLE`、`BAR_LEVEL`、`BAR_LAMP`、
-`BAR_MY_LAMP`、`BAR_RIVAL_LAMP`、`BAR_FLASH`、`BAR_CENTER`、`BAR_AVAILABLE` を変換する。
+`BAR_MY_LAMP`、`BAR_RIVAL_LAMP`、`BAR_RIVAL`、`BAR_FLASH`、`BAR_CENTER`、`BAR_AVAILABLE` を変換する。
 子部品はバーの左下を原点とし、スロット番号は条件分岐でずらさない。
 バー本体はLR2の番号を保持し、コースは `SRC_BAR_BODY` の8、ランダムコースは9を使う。
-未所持譜面・未所持コースはBMZの機能フォルダと同じ5のバーを使い、ライバルフォルダ用の4は使わない。
+コース一覧フォルダは6、NEW COURSEは7を使う。分類階層は1、抽出項目・検索履歴は2、
+新着抽出項目は3を使い、beatorajaのバー番号をLR2へ流用しない。
+未所持譜面・未所持コースは5の灰色バーを使い、ライバルフォルダ用の4は使わない。
 これはBMZの表示方針であり、5はLR2ではライバルモードの曲バーに相当する。色や装飾はスキンの画像定義に従う。
 
 Selectの`songlist`は、LR2形式・JSON/Lua形式ともに、現在の描画位置・速度から目標位置への
@@ -207,6 +209,17 @@ Selectの`songlist`は、LR2形式・JSON/Lua形式ともに、現在の描画�
 反転・残量0の再入力では、現在位置と目標の間から外へ進む量を約1/4行以内に抑える時間へ短縮する。
 位置や速度のclampで不連続を作らず、所要時間だけを調整する。時間0と直接指定のリセットは即時反映。
 補間は残量全体に1回だけ適用し、行ごとの区間にeaseを適用しない。
+
+選択行の条件op 1..5もLR2として評価する。1はフォルダ、2は譜面、3は保存済みコース、
+4はNEW COURSE / RANDOM MIX、5は譜面・保存済みコース・RANDOM MIXで、NEW COURSEを含まない。
+BMZ独自のRANDOM SELECTは2の画像を使い、op 5で決定可能な操作として扱う。
+`BAR_TITLE` は譜面の初回登録日時により0（通常）/ 1（新着）を選ぶ。
+profileの `[select].new_title_hours` は既定24時間、0で無効。NEWフォルダの抽出期間とは独立する。
+フォルダや未所持譜面には登録日時を補完せず、通常タイトルを使う。
+ライバルのEXが1以上ある曲だけ `BAR_MY_LAMP` / `BAR_RIVAL_LAMP` に分け、
+それ以外は `BAR_LAMP` を使う。`BAR_RIVAL` は各行の自分とライバルのEXから
+勝ち0・負け1・同点2・自分のスコアなし3を選ぶ。
+
 整数部分は表示行の組み替え、小数部分は隣接スロットのdestinationの座標・幅・高さの補間に使用する。
 この空間上の補間は線形であり、整数pixelへの丸めとスキン配置の折れ曲がりは残る。
 非等間隔・左右に曲がる配置にも同じ計算を適用し、本文・タイトル・ランプとクリック領域を揃える。
@@ -310,7 +323,7 @@ Play以外のLR2スキンにもスキンオプション `BGA Size`（Normal / Ex
 `#CUSTOMOPTION_ADDITION_SETTING` で非表示にしたResultでは、Normal（30=true / 31=false）として渡す。
 
 現時点ではLR2専用のFX/EQ/音声設定パネル、組合せキーフィルター、ディレクトリソート、
-特殊S-RANDOMの挙動、追加日によるBAR_TITLE切替、BAR_RANK / BAR_RIVAL装飾は未対応。
+特殊S-RANDOMの挙動、BAR_RANK装飾は未対応。
 `README` の埋込描画と独自 `MOUSECURSOR` も未対応。文書表示はBMZの既存機能、カーソルはOSの表示を使う。
 リザルトの対戦相手の確定値・履歴、過去ベストやライバルのSCORECHART index 1/2も未対応であり、
 ターゲットスコアを相手の実スコアとして表示したり、最終値から履歴を作ったりしない。

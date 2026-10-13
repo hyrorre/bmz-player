@@ -180,7 +180,11 @@ pub(in crate::skin) fn select_folder_lamp_counts_available(state: &SkinDrawState
     state.select_screen
         && matches!(
             state.select_row_kind,
-            SelectRowKind::Folder | SelectRowKind::SearchFolder | SelectRowKind::TableFolder
+            SelectRowKind::Folder
+                | SelectRowKind::SearchFolder
+                | SelectRowKind::TableFolder
+                | SelectRowKind::Command
+                | SelectRowKind::NewSongFolder
         )
 }
 
@@ -188,7 +192,11 @@ pub(in crate::skin) fn select_row_folder_song_count(row: &SelectRowSnapshot) -> 
     (row.is_folder
         && matches!(
             row.kind,
-            SelectRowKind::Folder | SelectRowKind::SearchFolder | SelectRowKind::TableFolder
+            SelectRowKind::Folder
+                | SelectRowKind::SearchFolder
+                | SelectRowKind::TableFolder
+                | SelectRowKind::Command
+                | SelectRowKind::NewSongFolder
         ))
     .then(|| row.folder_lamp_counts.iter().copied().sum())
 }

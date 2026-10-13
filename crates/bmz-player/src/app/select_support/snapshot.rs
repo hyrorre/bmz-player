@@ -91,6 +91,7 @@ struct SelectSnapshotRowContext<'a> {
     key_config_edit: Option<&'a KeyConfigEditSession>,
     chart_distributions: &'a HashMap<i64, CachedSelectChartDistribution>,
     select_ir: Option<&'a crate::screens::select_ir::SelectIrRanking>,
+    now_unix: i64,
 }
 
 #[cfg(test)]
@@ -155,6 +156,10 @@ pub(in crate::app) fn select_snapshot_rows_with_rival(
         key_config_edit,
         chart_distributions,
         select_ir,
+        now_unix: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64,
     };
     select_visible_item_indices(items.len(), selected_index, visible_limit)
         .into_iter()
@@ -176,10 +181,10 @@ fn select_snapshot_row(
         SelectItem::Executable(row) => SelectRowSnapshot {
             index: index as u32,
             title: row.title.clone(),
-            kind: if row.kind == SelectExecutableKind::RandomMix {
-                bmz_render::scene::SelectRowKind::RandomCourse
-            } else {
-                bmz_render::scene::SelectRowKind::Executable
+            kind: match row.kind {
+                SelectExecutableKind::RandomMix => bmz_render::scene::SelectRowKind::RandomCourse,
+                SelectExecutableKind::NewCourse => bmz_render::scene::SelectRowKind::NewCourse,
+                SelectExecutableKind::RandomSelect => bmz_render::scene::SelectRowKind::Executable,
             },
             in_library: matches!(
                 row.kind,
@@ -262,7 +267,7 @@ fn select_chart_snapshot(
         .map(|chart| chart.scored_total_notes_for_setting(context.profile.play.ln_mode_policy))
         .unwrap_or(0);
     let distribution = chart.and_then(|chart| context.chart_distributions.get(&chart.chart_id));
-    let rival_clear_index = context
+    let rival_score = context
         .select_ir
         .filter(|select_ir| select_ir.active_rival_display_name().is_some())
         .and_then(|select_ir| {
@@ -272,7 +277,8 @@ fn select_chart_snapshot(
                 crate::ln_policy::score_ln_policy(context.profile.play.ln_mode_policy, ln_profile);
             let ln_mode = crate::screens::select_ir::rian_ln_mode_for_chart(ln_profile, policy);
             select_ir.active_rival_score(chart_sha256, ln_mode)
-        })
+        });
+    let rival_clear_index = rival_score
         .map(|score| i64::from(score.clear_type).clamp(0, ClearType::Max as i64) as usize)
         .unwrap_or(0);
     let level_display_override = context.in_difficulty_table_level.then(|| {
@@ -298,6 +304,12 @@ fn select_chart_snapshot(
     SelectRowSnapshot {
         index: index as u32,
         title: row.display_title().to_string(),
+        rival_ex_score: rival_score.map(|score| score.ex_score),
+        lr2_new_title: lr2_new_title(
+            row.lr2_added_at,
+            context.profile.select.new_title_hours,
+            context.now_unix,
+        ),
         subtitle: chart.map(|chart| chart.subtitle.clone()).unwrap_or_default(),
         artist: row.display_artist().to_string(),
         genre: chart.map(|chart| chart.genre.clone()).unwrap_or_default(),
@@ -375,6 +387,12 @@ fn select_chart_snapshot(
         chart_key_mode: chart.and_then(|chart| KeyMode::from_str_opt(&chart.mode)),
         ..SelectRowSnapshot::default()
     }
+}
+
+fn lr2_new_title(added_at: Option<i64>, hours: u32, now: i64) -> bool {
+    hours > 0
+        && added_at
+            .is_some_and(|added| added > 0 && now.saturating_sub(added) < i64::from(hours) * 3600)
 }
 
 fn select_course_snapshot(index: usize, row: &SelectCourseRow) -> SelectRowSnapshot {
@@ -464,5 +482,46 @@ fn select_settings_action_snapshot(
         subtitle: text.text(description_id),
         kind: bmz_render::scene::SelectRowKind::SettingsFolder,
         ..SelectRowSnapshot::default()
+    }
+}
+
+#[cfg(test)]
+mod lr2_bar_tests {
+    use super::*;
+
+    #[test]
+    fn new_title_uses_registration_time_and_expires_at_the_boundary() {
+        let now = 200_000;
+        assert!(lr2_new_title(Some(now - 86_399), 24, now));
+        assert!(!lr2_new_title(Some(now - 86_400), 24, now));
+        assert!(!lr2_new_title(Some(now), 0, now));
+        assert!(!lr2_new_title(None, 24, now));
+        assert!(!lr2_new_title(Some(0), 24, now));
+    }
+
+    #[test]
+    fn course_action_and_folder_keep_distinct_snapshot_kinds() {
+        let items = [
+            crate::screens::select_model::course_root_item(),
+            crate::screens::select_model::new_course_item_for_locale(
+                crate::i18n::AppLocale::DEFAULT,
+            ),
+            crate::screens::select_model::random_mix_item(),
+        ];
+        let rows = select_snapshot_rows(
+            &items,
+            0,
+            3,
+            &ProfileConfig::new_default("test", "Test", 0),
+            None,
+            &HashMap::new(),
+        );
+        assert!(rows.iter().any(|row| {
+            row.kind == bmz_render::scene::SelectRowKind::CourseFolder && row.is_folder
+        }));
+        assert!(rows.iter().any(|row| {
+            row.kind == bmz_render::scene::SelectRowKind::NewCourse && !row.is_folder
+        }));
+        assert!(rows.iter().any(|row| row.kind == bmz_render::scene::SelectRowKind::RandomCourse));
     }
 }

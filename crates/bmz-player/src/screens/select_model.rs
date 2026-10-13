@@ -73,7 +73,7 @@ pub use table::{
 };
 pub use virtual_folder::{
     VIRTUAL_FOLDER_CONFIG_FILE, VIRTUAL_FOLDER_PATH_PREFIX, load_select_items_in_virtual_folder,
-    virtual_folder_breadcrumb, virtual_folder_root_items,
+    virtual_folder_breadcrumb, virtual_folder_root_items, virtual_folder_summary,
 };
 
 pub fn normalized_course_ln_policy_for_charts(
@@ -201,6 +201,8 @@ pub struct SelectChartRow {
     pub best_score: Option<BestScoreSummary>,
     /// Most recent saved attempt, independent of the best-score timestamp.
     pub last_played_at: Option<i64>,
+    /// Earliest chart registration time for LR2's new-title animation.
+    pub lr2_added_at: Option<i64>,
     pub replay_slots: [bool; 4],
     pub favorite_chart: bool,
     pub favorite_song: bool,

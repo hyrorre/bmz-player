@@ -188,7 +188,7 @@ fn lr2_bar_sources_are_indexed_and_children_use_local_coordinates() {
     fs::write(&path, "#INFORMATION,5,test,test\n#IMAGE,a.png\n#FONT,20,1,0\n#SRC_BAR_BODY,0,0,0,0,100,30,1,1,0,0\n#SRC_BAR_BODY,1,0,0,30,100,30,1,1,0,0\n#DST_BAR_BODY_OFF,0,0,100,200,100,30,0,255,255,255,255,0,0,0,0,0,0\n#DST_BAR_BODY_ON,0,0,100,200,100,30,0,255,255,255,255,0,0,0,0,0,0\n#SRC_BAR_TITLE,0,0,0,0\n#DST_BAR_TITLE,0,0,10,5,90,20,0,255,255,255,255,0,0,0,0,0,0\n#BAR_CENTER,0\n#BAR_AVAILABLE,0,0\n").unwrap();
     let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
     assert_eq!(loaded.value["songlist"]["listoff"][0]["dst"][0]["y"], 250);
-    assert_eq!(loaded.value["songlist"]["text"][2]["dst"][0]["y"], -25);
+    assert_eq!(loaded.value["songlist"]["text"][0]["dst"][0]["y"], -25);
     assert_eq!(loaded.value["songlist"]["clickable"], json!([0]));
     assert_eq!(loaded.value["imageset"][0]["images"][0], loaded.value["image"][0]["id"]);
     assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
@@ -209,14 +209,50 @@ fn lr2_bar_sources_preserve_course_and_random_course_bodies() {
     let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
     let bodies = loaded.value["imageset"][0]["images"].as_array().unwrap();
     assert_eq!(bodies.len(), 10);
-    for index in [4, 5, 8, 9] {
+    for (index, body) in bodies.iter().enumerate() {
         let image = loaded.value["image"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|image| image["id"] == bodies[index])
+            .find(|image| image["id"] == *body)
             .unwrap();
         assert_eq!(image["y"], index * 10);
+    }
+    assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn lr2_bar_new_title_and_rival_sources_keep_distinct_slots() {
+    let root = unique_test_dir("lr2-bar-new-title-rival");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("select.lr2skin");
+    let mut csv = String::from("#INFORMATION,5,test,test\n#IMAGE,a.png\n#FONT,20,1,0\n");
+    for index in 0..2 {
+        csv.push_str(&format!(
+            "#SRC_BAR_TITLE,{index},0,0,0\n#DST_BAR_TITLE,{index},0,10,5,90,20\n"
+        ));
+    }
+    for index in 0..4 {
+        csv.push_str(&format!(
+            "#SRC_BAR_RIVAL,{index},0,{},0,10,10,1,1,0,0\n#DST_BAR_RIVAL,{index},0,10,5,10,10\n",
+            index * 10
+        ));
+    }
+    fs::write(&path, csv).unwrap();
+    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let titles = loaded.value["songlist"]["text"].as_array().unwrap();
+    assert_eq!(titles.len(), 2);
+    assert_ne!(titles[0]["id"], titles[1]["id"]);
+    let rivals = loaded.value["songlist"]["lr2rival"].as_array().unwrap();
+    for (index, rival) in rivals.iter().take(4).enumerate() {
+        let image = loaded.value["image"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|image| image["id"] == rival["id"])
+            .unwrap();
+        assert_eq!(image["x"], index * 10);
     }
     assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
     fs::remove_dir_all(root).unwrap();
@@ -236,7 +272,7 @@ fn lr2_bar_title_ignores_reserved_options_but_preserves_if_conditions() {
     )
     .unwrap();
     let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
-    let title = &loaded.value["songlist"]["text"][2];
+    let title = &loaded.value["songlist"]["text"][0];
     assert_eq!(title["op"], json!([32]));
     assert_eq!(title["dst"].as_array().unwrap().len(), 2);
     assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);

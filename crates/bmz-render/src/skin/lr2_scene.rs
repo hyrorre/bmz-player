@@ -5,12 +5,20 @@ pub(super) fn bar_index(row: &SelectRowSnapshot) -> usize {
         SelectRowKind::Song | SelectRowKind::Course | SelectRowKind::RandomCourse
             if !row.in_library =>
         {
-            // LR2 body 4 is a rival folder. Use the same plain body as BMZ command rows.
+            // LR2 body 4 is a rival folder. BMZ uses the plain body for missing charts.
             5
         }
         SelectRowKind::NoSong => 5,
         SelectRowKind::Course => 8,
+        SelectRowKind::CourseFolder => 6,
+        SelectRowKind::NewCourse => 7,
+        SelectRowKind::NewSongFolder => 3,
         SelectRowKind::RandomCourse => 9,
+        SelectRowKind::TableFolder
+        | SelectRowKind::Executable
+        | SelectRowKind::Command
+        | SelectRowKind::SearchFolder => 2,
+        SelectRowKind::Container => 1,
         SelectRowKind::SettingsRoot
         | SelectRowKind::SettingsFolder
         | SelectRowKind::SettingsBack

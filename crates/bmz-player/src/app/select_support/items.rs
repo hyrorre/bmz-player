@@ -32,6 +32,20 @@ pub(in crate::app) fn load_items_for_stack(
     sort: SelectSort,
 ) -> Result<(Vec<SelectItem>, SelectModeFilter)> {
     let mut items = build_select_items_for_stack(boot, stack, search_history)?;
+    let chart_ids = items
+        .iter()
+        .filter_map(|item| match item {
+            SelectItem::Chart(row) => row.chart.as_ref().map(|chart| chart.chart_id),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let first_seen = boot.library_db.chart_first_seen_at_by_chart_ids(&chart_ids)?;
+    for item in &mut items {
+        if let SelectItem::Chart(row) = item {
+            row.lr2_added_at =
+                row.chart.as_ref().and_then(|chart| first_seen.get(&chart.chart_id).copied());
+        }
+    }
     let ordered_course_contents = stack.last().and_then(|path| parse_course_contents_path(path));
     if ordered_course_contents.is_some() {
         if let Err(error) =

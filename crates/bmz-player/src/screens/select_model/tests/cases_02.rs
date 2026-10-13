@@ -129,6 +129,7 @@ fn song_scan_path_from_context_reads_folder_and_chart() {
 
     let chart = SelectItem::Chart(SelectChartRow {
         last_played_at: None,
+        lr2_added_at: None,
         chart: Some(ChartListItem {
             chart_id: 1,
             md5: [0; 16],
