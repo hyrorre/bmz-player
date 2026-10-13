@@ -20,11 +20,15 @@ fn is_song_scene(skin_type: i32) -> bool {
 /// `LR2_RESULT_NUMBER_BASE` and reach the same definitions after the flip.
 pub(super) fn lr2_number_ref(skin_type: i32, id: i32) -> Option<i32> {
     match id {
-        // 1P score, gauge, target diff, next rank diff and POOR including empty POOR.
-        100 | 107 | 108 | 109 | 114 if is_play(skin_type) => Some(LR2_NUMBER_BASE + id),
+        // 1P score, gauge, target diff, next rank diff, POOR including empty POOR,
+        // and the best / target ghost EX and rates at the current progress.
+        100 | 107 | 108 | 109 | 114 | 150 | 151 | 155..=158 if is_play(skin_type) => {
+            Some(LR2_NUMBER_BASE + id)
+        }
         // Judge timing, per-difficulty levels, my best score / rate, the selected
-        // song's IR rank / players / clear rate / rival diff and IR clear classes.
-        12 | 45..=49 | 70 | 73 | 92..=95 | 210..=219 if is_song_scene(skin_type) => {
+        // song's IR rank / players / clear rate / rival diff, IR clear classes and
+        // the rival's max EX / rate / notes.
+        12 | 45..=49 | 70 | 73 | 92..=95 | 210..=219 | 272..=274 if is_song_scene(skin_type) => {
             Some(LR2_NUMBER_BASE + id)
         }
         // Extended LR2 result FAST / SLOW / combo break, as on the play screen.
@@ -61,7 +65,8 @@ pub(super) const LR2_FIXED_OPTIONS: [(i32, bool); 10] = [
 
 /// Song-scene options with an LR2-only meaning, evaluated per draw.
 fn is_lr2_song_scene_option(skin_type: i32, id: i32) -> bool {
-    is_song_scene(skin_type) && matches!(id, 20 | 100..=105 | 110..=117)
+    is_song_scene(skin_type)
+        && matches!(id, 20 | 62..=66 | 100..=105 | 110..=117 | 640..=645 | 650..=657)
 }
 
 /// Options that must be evaluated per draw instead of at load. The selected song,
@@ -75,6 +80,8 @@ pub(super) fn lr2_option_ref(skin_type: i32, op: i32) -> Option<i32> {
     let id = op.abs();
     let divergent = LR2_FIXED_OPTIONS.iter().any(|&(fixed, _)| fixed == id)
         || is_lr2_song_scene_option(skin_type, id)
-        || (is_result(skin_type) && matches!(id, 340..=347));
+        || (is_result(skin_type) && matches!(id, 340..=347))
+        // Win / lose / draw against the 2P player, which is the target ghost in single play.
+        || (is_play(skin_type) && matches!(id, 352..=354));
     divergent.then(|| op.signum() * (LR2_OPTION_BASE + id))
 }

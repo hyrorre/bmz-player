@@ -373,6 +373,8 @@ pub struct SkinDrawState {
     pub rival_ex_score: Option<i64>,
     /// 同 max combo (NUMBER_RIVAL_MAXCOMBO=275)。
     pub rival_max_combo: Option<i64>,
+    /// 同 beatoraja ClearType index (LR2 option 640..657)。
+    pub rival_clear_index: Option<i64>,
     /// 同 BP (NUMBER_RIVAL_MISSCOUNT=276)。
     pub rival_bp: Option<i64>,
     /// EXスコア元プレイの PGREAT/GREAT/GOOD/BAD/POOR
@@ -683,6 +685,7 @@ impl Default for SkinDrawState {
             rival_selected: false,
             rival_ex_score: None,
             rival_max_combo: None,
+            rival_clear_index: None,
             rival_bp: None,
             rival_judge_counts: None,
             previous_best_ex_score: None,

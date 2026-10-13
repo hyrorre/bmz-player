@@ -151,16 +151,21 @@ option `94_000+ID`、否定は符号を維持）。意味が一致する番号�
 | number | 50..56 / 60..66 | 全画面 | EQ / FX / PITCH。BMZに設定が無いため非表示（beatorajaの54 / 55はDPオプション / HS-FIX） |
 | number | 290 / 291 | 全画面 | 最高 / 最低BPM（90 / 91と同じ） |
 | text | 190..199 | Select / Decide | ランダムコースの設定。BMZに該当が無いため空文字 |
+| number | 150 / 151、155..158 | Play | 自己ベスト / ターゲットのゴーストの現在進捗でのEXと率。自己ベストはゴーストがあれば使い、無ければ線形換算。ターゲットは線形換算 |
+| number | 120..136（シングルプレイ） | Play | 2Pはターゲットのゴースト。BMZはEXの進捗換算だけを持つため、EX・率・差・次ランク差・ノーツ数以外は0 |
+| number | 272 / 273 / 274 | Select / Decide | ライバルの理論値EX・レート・ノーツ数（同じ譜面のノーツ数から計算） |
 | option | 52 / 54 / 56、620 / 622 | 全画面 | EXTRA OFF、オートスクラッチOFF、ランキング表示OFF、ゴーストバトルOFFとして常にtrue（53 / 55 / 57、621 / 623はfalse） |
 | option | 100..105 / 110..117 | Select / Decide | 選択中の曲のクリアランプ（beatorajaのクリア種別をバーのランプと同じ5段階へ畳む）とランク（プレイ済みのみ）。描画時に評価する |
 | option | 340..347 | Result / Course Result | 今回のスコアのランク |
 | option | 20 | Select / Decide | オプションパネルを開いていない。描画時に評価する |
+| option | 62..66 | Select / Decide | 現在の設定で取れる最高ランプ（クリア不可 / EASY / NORMAL / HARD / FULLCOMBO）。オート・練習はクリア不可、H-RANDOM / ALL-SCR / 等速はEASYまで。ゲージはA-EASY / EASY→EASY、HARD / EX-HARD→HARD、HAZARD→FULLCOMBO |
+| option | 640..645 / 650..657 | Select / Decide | 選択中ライバルのクリアランプ（5段階）とランク |
+| option | 352..354 | Play | 2P（シングルプレイではターゲットのゴーストの現在進捗）との勝ち / 負け / 引き分け |
 
 Select / Decideの `#IF` に書かれたoption 50 / 51（IRオフライン / オンライン）は、読み込み時に固定せず描画時に評価する。
 bargraph 140..145（判定率）はSelectでは選択中のスコアを譜面のノーツ数で割る。
 
-レベルバー（option 500..565）、ゴーストの進捗値（number 150 / 151、155..158）、
-同じフォルダ内の他難易度のレベル（number 45..49、bargraph 105..109）、ライバルのIR順位（number 292 / 293）等は、
+レベルバー（option 500..565）、同じフォルダ内の他難易度のレベル（number 45..49、bargraph 105..109）、ライバルのIR順位（number 292 / 293）等は、
 必要な値の供給が無いため未対応。EQ / FX / PITCH、パネル2..7、スキン設定・コース作成・ヘルプの埋め込み、
 `README` / `MOUSECURSOR`、`BAR_RANK` / `BAR_RIVAL` はBMZに同じ機能が無いため対応しない。
 

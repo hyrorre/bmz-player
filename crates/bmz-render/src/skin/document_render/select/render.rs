@@ -652,6 +652,7 @@ macro_rules! skin_document_render_select_render_methods {
                 rival_selected: snapshot.rival_selected,
                 rival_ex_score: snapshot.rival.as_ref().map(|rival| i64::from(rival.ex_score)),
                 rival_max_combo: snapshot.rival.as_ref().map(|rival| i64::from(rival.max_combo)),
+                rival_clear_index: snapshot.rival.as_ref().map(|rival| rival.clear_index),
                 rival_bp: snapshot.rival.as_ref().map(|rival| i64::from(rival.bp)),
                 rival_judge_counts: snapshot.rival.as_ref().and_then(|rival| {
                     rival.judge_counts.map(|counts| {

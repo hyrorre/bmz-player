@@ -20,6 +20,24 @@ pub(super) fn lr2_option(id: i32, state: &SkinDrawState) -> bool {
             117 => rank < 2,
             _ => rank == i64::from(118 - id),
         }),
+        // Best lamp the current settings can earn.
+        62..=66 => lr2_clear_lamp_challenge(state) == i64::from(id - 62),
+        // Selected rival's clear lamp and rank on the selected song.
+        640..=645 => lr2_rival_clear(state) == Some(i64::from(id - 640)),
+        650..=657 => lr2_rival_rank(state).is_some_and(|rank| match id {
+            650 => rank >= 8,
+            657 => rank < 2,
+            _ => rank == i64::from(658 - id),
+        }),
+        // Win / lose / draw against the 2P player (the target ghost in single play).
+        352..=354 => lr2_2p_ex(state).is_some_and(|other| {
+            let ex = i64::from(state.ex_score);
+            match id {
+                352 => ex > other,
+                353 => ex < other,
+                _ => ex == other,
+            }
+        }),
         // Rank of the score just played.
         340..=347 => {
             lr2_rank(i64::from(state.ex_score), state.total_notes).is_some_and(|rank| match id {
@@ -44,6 +62,45 @@ fn lr2_select_rank(state: &SkinDrawState) -> Option<i64> {
         return None;
     }
     lr2_rank(i64::from(state.select_ex_score?), state.select_total_notes)
+}
+
+fn lr2_rival_clear(state: &SkinDrawState) -> Option<i64> {
+    if !state.select_screen || !select_chart_metadata_available(state) {
+        return None;
+    }
+    let clear = state.rival_clear_index.unwrap_or(0);
+    LR2_CLEAR_FROM_BEATORAJA.get(usize::try_from(clear).ok()?).copied()
+}
+
+fn lr2_rival_rank(state: &SkinDrawState) -> Option<i64> {
+    if lr2_rival_clear(state)? < 1 {
+        return None;
+    }
+    lr2_rank(state.rival_ex_score?, state.select_total_notes)
+}
+
+/// LR2's `CheckClearLampChallenge`: 0 no clear, 1 EASY, 2 NORMAL, 3 HARD, 4 FULLCOMBO.
+/// Autoplay and practice save nothing; H-RANDOM / ALL-SCR and constant speed are
+/// limited to EASY as LR2's irregular options.
+fn lr2_clear_lamp_challenge(state: &SkinDrawState) -> i64 {
+    // Session modes: PRACTICE / AUTOPLAY / AUTOPLAY BATTLE.
+    if state.select_assist_index != 0 || matches!(state.select_session_mode_index, 1..=3) {
+        return 0;
+    }
+    let irregular_arrange = |index: usize| lr2_arrange_index(index).is_some_and(|lr2| lr2 >= 4);
+    if irregular_arrange(state.select_extended_arrange_index)
+        || irregular_arrange(state.select_extended_arrange_2p_index)
+        || state.constant_enabled
+    {
+        return 1;
+    }
+    // A-EASY / EASY / NORMAL / HARD / EX-HARD / HAZARD.
+    match state.select_gauge_index {
+        0 | 1 => 1,
+        3 | 4 => 3,
+        5 => 4,
+        _ => 2,
+    }
 }
 
 /// LR2's rank index `EX * 9 / max`: 8 or more is AAA, 1 or less is F.

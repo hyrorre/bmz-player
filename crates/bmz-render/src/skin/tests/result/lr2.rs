@@ -325,3 +325,49 @@ fn lr2_select_panel_option_and_selected_score_rate_graphs() {
         serde_json::from_value(serde_json::json!({"id": "pg", "type": 140})).unwrap();
     assert!((graph_raw_value(&graph, &state) - 0.25).abs() < 1e-6);
 }
+
+#[test]
+fn lr2_ghost_rival_and_lamp_challenge_values() {
+    let lr2 = |id: i32, state: &SkinDrawState| skin_state_number(LR2_NUMBER_BASE + id, state);
+    let op = |id: i32, state: &SkinDrawState| test_skin_ops(&[LR2_OPTION_BASE + id], &[], state);
+    // Play: best / target ghosts at half progress of a 100-note chart.
+    let play = SkinDrawState {
+        play_screen: true,
+        total_notes: 100,
+        past_notes: 50,
+        ex_score: 90,
+        best_ex_score: Some(150),
+        target_ex_score: Some(180),
+        ..Default::default()
+    };
+    assert_eq!((lr2(150, &play), lr2(151, &play)), (Some(75), Some(90)));
+    assert_eq!((lr2(155, &play), lr2(156, &play)), (Some(37), Some(50)));
+    assert_eq!((lr2(157, &play), lr2(158, &play)), (Some(45), Some(0)));
+    // Single play 2P numbers follow the target ghost.
+    let two_p = |id: i32| skin_state_number(SKIN_REF_BMZ_LR2_2P_BASE + id - 120, &play);
+    assert_eq!((two_p(121), two_p(122), two_p(128)), (Some(90), Some(90), Some(0)));
+    assert!(op(354, &play) && !op(352, &play) && !op(353, &play));
+
+    // Select: rival lamp / rank / max EX and the lamp the current settings can earn.
+    let mut select = SkinDrawState {
+        select_screen: true,
+        select_row_kind: SelectRowKind::Song,
+        select_in_library: true,
+        select_total_notes: 500,
+        rival_ex_score: Some(820),
+        rival_clear_index: Some(6),
+        select_gauge_index: 5,
+        ..Default::default()
+    };
+    assert!(op(644, &select) && !op(643, &select));
+    assert!(op(651, &select) && !op(650, &select));
+    assert_eq!(
+        (lr2(272, &select), lr2(273, &select), lr2(274, &select)),
+        (Some(1000), Some(82), Some(500))
+    );
+    assert!(op(66, &select));
+    select.select_extended_arrange_index = 6; // H-RANDOM
+    assert!(op(63, &select));
+    select.select_session_mode_index = 2; // AUTOPLAY
+    assert!(op(62, &select));
+}

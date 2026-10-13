@@ -111,3 +111,26 @@ fn lr2_select_panel_and_ir_connection_are_draw_time_conditions() {
         .collect::<Vec<_>>();
     assert_eq!(ops, vec![json!([LR2_OPTION_BASE + 20]), json!([51]), json!([50])]);
 }
+
+#[test]
+fn lr2_ghost_and_rival_refs_use_the_lr2_namespace() {
+    let lr2 = |id: i32| json!(LR2_NUMBER_BASE + id);
+    let play = load(0, &[150, 151, 155, 158].map(number).concat());
+    assert_eq!(number_refs(&play), vec![lr2(150), lr2(151), lr2(155), lr2(158)]);
+    let select = load(5, &[272, 273, 274, 275].map(number).concat());
+    assert_eq!(number_refs(&select), vec![lr2(272), lr2(273), lr2(274), json!(275)]);
+    let image = |ops: &str| {
+        format!(
+            "#SRC_IMAGE,0,0,0,0,1,1,1,1,0,0\n\
+             #DST_IMAGE,0,0,0,0,1,1,0,255,255,255,255,0,0,0,0,0,0,{ops}\n"
+        )
+    };
+    let op = |document: &JsonValue| document["destination"][0]["op"].clone();
+    assert_eq!(
+        op(&load(5, &image("62,640,-657"))),
+        json!([LR2_OPTION_BASE + 62, LR2_OPTION_BASE + 640, -(LR2_OPTION_BASE + 657)])
+    );
+    assert_eq!(op(&load(0, &image("352,0,0"))), json!([LR2_OPTION_BASE + 352]));
+    // Result keeps the final-target comparison.
+    assert_eq!(op(&load(7, &image("352,0,0"))), json!([352]));
+}

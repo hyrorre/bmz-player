@@ -54,16 +54,49 @@ pub(in crate::skin) fn lr2_number(id: i32, state: &SkinDrawState) -> Option<i64>
         )),
         107 => Some(lr2_gauge(state.gauge)),
         // EX difference to the 2P player; in single play LR2's 2P is the target ghost.
-        108 => match state.lr2_opponent.as_ref() {
-            Some(opponent) => Some(ex - i64::from(opponent.ex_score)),
-            None => state
-                .target_ex_score
-                .map(|target| ex - i64::from(projected_score_at_progress(target, state))),
-        },
+        108 => lr2_2p_ex(state).map(|other| ex - other),
+        // Best / target ghost EX at the current progress, and their rates.
+        150 => projected_best_score_at_progress(state).map(i64::from),
+        151 => lr2_target_ghost_ex(state),
+        155..=158 => {
+            let ghost = if id <= 156 {
+                projected_best_score_at_progress(state).map(i64::from)
+            } else {
+                lr2_target_ghost_ex(state)
+            }?;
+            let max = i64::from(state.total_notes) * 2;
+            if max == 0 {
+                return None;
+            }
+            Some(if id % 2 == 1 { ghost * 100 / max } else { ghost * 10_000 / max % 100 })
+        }
+        // Rival's max EX / rate / notes on the selected chart.
+        272..=274 => {
+            let rival = state.rival_ex_score?;
+            let notes = i64::from(state.select_total_notes);
+            match id {
+                272 => Some(notes * 2),
+                273 => (notes > 0).then(|| rival * 100 / (notes * 2)),
+                _ => Some(notes),
+            }
+        }
         109 => Some(lr2_next_rank_diff(ex, i64::from(state.total_notes) * 2)),
         // LR2 counts empty POOR into POOR.
         114 => Some(i64::from(poor_plus_miss(counts))),
         _ => None,
+    }
+}
+
+/// Target ghost EX at the current progress.
+fn lr2_target_ghost_ex(state: &SkinDrawState) -> Option<i64> {
+    state.target_ex_score.map(|target| i64::from(projected_score_at_progress(target, state)))
+}
+
+/// EX of LR2's 2P player: the battle opponent, or the target ghost in single play.
+pub(in crate::skin) fn lr2_2p_ex(state: &SkinDrawState) -> Option<i64> {
+    match state.lr2_opponent.as_ref() {
+        Some(opponent) => Some(i64::from(opponent.ex_score)),
+        None => lr2_target_ghost_ex(state),
     }
 }
 
@@ -127,8 +160,18 @@ fn lr2_ir_clear_class(ranking: &crate::scene::ResultIrSnapshot, id: i32) -> Opti
 }
 
 pub(in crate::skin) fn lr2_opponent_number(ref_id: i32, state: &SkinDrawState) -> i64 {
+    // In single play LR2's 2P is the target ghost; BMZ projects only its EX score.
+    let ghost =
+        state.lr2_opponent.is_none().then(|| lr2_target_ghost_ex(state)).flatten().map(|ex| {
+            crate::snapshot::OpponentRenderSnapshot {
+                ex_score: ex as u32,
+                total_notes: state.total_notes,
+                past_notes: state.past_notes,
+                ..Default::default()
+            }
+        });
     let empty = crate::snapshot::OpponentRenderSnapshot::default();
-    let opponent = state.lr2_opponent.as_ref().unwrap_or(&empty);
+    let opponent = state.lr2_opponent.as_ref().or(ghost.as_ref()).unwrap_or(&empty);
     let ex = i64::from(opponent.ex_score);
     let total = i64::from(opponent.total_notes) * 2;
     let current = i64::from(opponent.past_notes) * 2;
