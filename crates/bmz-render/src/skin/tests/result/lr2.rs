@@ -13,6 +13,57 @@ fn lr2_songlist_conditional_variants_keep_fixed_slots() {
 }
 
 #[test]
+fn lr2_songlist_renders_unowned_songs_and_courses_with_native_bodies() {
+    let images: Vec<_> = (0..10)
+        .map(|index| {
+            serde_json::json!({
+                "id": format!("body-{index}"), "src": "src",
+                "x": 0, "y": index * 10, "w": 40, "h": 10,
+            })
+        })
+        .collect();
+    let body_ids: Vec<_> = (0..10).map(|index| format!("body-{index}")).collect();
+    let document: SkinDocument = serde_json::from_value(serde_json::json!({
+        "type": 5, "lr2": true, "w": 100, "h": 100,
+        "image": images,
+        "imageset": [{"id": "bars", "images": body_ids}],
+        "songlist": {
+            "id": "songlist", "center": 0,
+            "listoff": [{"id": "bars", "dst": [{"x": 0, "y": 0, "w": 40, "h": 10}]}],
+            "liston": [{"id": "bars", "dst": [{"x": 0, "y": 0, "w": 40, "h": 10}]}],
+        },
+        "destination": [{"id": "songlist"}],
+    }))
+    .unwrap();
+    let sources = mock_source("src", 100.0, 100.0);
+    for (kind, in_library, expected_body) in [
+        (SelectRowKind::Song, true, 0),
+        (SelectRowKind::Song, false, 5),
+        (SelectRowKind::NoSong, false, 5),
+        (SelectRowKind::Command, true, 5),
+        (SelectRowKind::Container, true, 5),
+        (SelectRowKind::Course, true, 8),
+        (SelectRowKind::Course, false, 5),
+        (SelectRowKind::RandomCourse, true, 9),
+        (SelectRowKind::RandomCourse, false, 5),
+        (SelectRowKind::SettingsRoot, true, 1),
+        (SelectRowKind::SettingsBack, true, 1),
+    ] {
+        let snapshot = SelectSnapshot {
+            rows: vec![SelectRowSnapshot { kind, in_library, ..Default::default() }],
+            ..Default::default()
+        };
+        let items = document.select_render_items(&sources, &snapshot);
+        assert_eq!(items.len(), 1, "{kind:?}, owned={in_library}");
+        assert!(
+            matches!(&items[0], SkinRenderItem::Image { uv, .. }
+            if approx_eq(uv.y, expected_body as f32 / 10.0)),
+            "{kind:?}, owned={in_library}: {items:?}"
+        );
+    }
+}
+
+#[test]
 fn lr2_result_flip_uses_player_values_without_fabricating_an_opponent() {
     let mut state = SkinDrawState {
         ex_score: 1234,

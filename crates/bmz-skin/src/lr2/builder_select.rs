@@ -127,10 +127,12 @@ impl CsvBuilder<'_> {
         if !self.select.marker {
             return JsonValue::Null;
         }
-        let body_ids = [0, 1, 2, 3, 4, 5, 6, 7, 1, 1, 1].map(|index| {
+        // Keep LR2's native body slots, including course (8) and random course (9).
+        // The renderer translates BMZ row kinds instead of reusing beatoraja indices.
+        let body_ids = std::array::from_fn::<_, 10, _>(|index| {
             self.select
                 .sources
-                .get(&("BODY".to_string(), index))
+                .get(&("BODY".to_string(), index as i32))
                 .or_else(|| self.select.sources.get(&("BODY".to_string(), 0)))
                 .and_then(|current| current.variants.first())
                 .map(|v| v.id.clone())

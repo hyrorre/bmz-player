@@ -9,7 +9,8 @@ macro_rules! skin_document_render_select_bar_methods {
             state: &SkinDrawState,
         ) -> Option<SkinRenderItem> {
             let imageset = self.imageset.iter().find(|set| set.id == destination.id)?;
-            let image_index = select_row_bar_image_index(row);
+            let image_index =
+                if self.lr2 { lr2_scene::bar_index(row) } else { select_row_bar_image_index(row) };
             let image_id = select_row_slot_with_fallbacks(
                 &imageset.images,
                 image_index,

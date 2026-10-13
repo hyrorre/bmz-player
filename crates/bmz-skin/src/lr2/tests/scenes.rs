@@ -196,6 +196,33 @@ fn lr2_bar_sources_are_indexed_and_children_use_local_coordinates() {
 }
 
 #[test]
+fn lr2_bar_sources_preserve_course_and_random_course_bodies() {
+    let root = unique_test_dir("lr2-native-bar-bodies");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("select.lr2skin");
+    let mut csv = String::from("#INFORMATION,5,test,test\n#IMAGE,a.png\n");
+    for index in 0..10 {
+        csv.push_str(&format!("#SRC_BAR_BODY,{index},0,0,{},100,10,1,1,0,0\n", index * 10));
+    }
+    csv.push_str("#DST_BAR_BODY_OFF,0,0,100,200,100,30\n");
+    fs::write(&path, csv).unwrap();
+    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let bodies = loaded.value["imageset"][0]["images"].as_array().unwrap();
+    assert_eq!(bodies.len(), 10);
+    for index in [4, 5, 8, 9] {
+        let image = loaded.value["image"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|image| image["id"] == bodies[index])
+            .unwrap();
+        assert_eq!(image["y"], index * 10);
+    }
+    assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn lr2_bar_title_ignores_reserved_options_but_preserves_if_conditions() {
     let root = unique_test_dir("lr2-bar-title-conditions");
     fs::create_dir_all(&root).unwrap();

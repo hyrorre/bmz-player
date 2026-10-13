@@ -1,5 +1,24 @@
 use super::*;
 
+pub(super) fn bar_index(row: &SelectRowSnapshot) -> usize {
+    match row.kind {
+        SelectRowKind::Song | SelectRowKind::Course | SelectRowKind::RandomCourse
+            if !row.in_library =>
+        {
+            // LR2 body 4 is a rival folder. Use the same plain body as BMZ command rows.
+            5
+        }
+        SelectRowKind::NoSong => 5,
+        SelectRowKind::Course => 8,
+        SelectRowKind::RandomCourse => 9,
+        SelectRowKind::SettingsRoot
+        | SelectRowKind::SettingsFolder
+        | SelectRowKind::SettingsBack
+        | SelectRowKind::SettingsClose => 1,
+        _ => select_row_bar_image_index(row),
+    }
+}
+
 pub(super) fn button_index(button: i32, state: &SkinDrawState) -> i32 {
     let optional = |value: Option<usize>| value.map_or(-1, |v| v as i32);
     match button {
