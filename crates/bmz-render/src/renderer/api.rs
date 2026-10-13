@@ -383,6 +383,32 @@ impl Renderer {
         self.select_skin_context.select_slider_hit(snapshot, x, y)
     }
 
+    /// Moves a slider held since the press. Outside the canvas the cursor is
+    /// clamped to its edge so the slider reaches its ends.
+    pub fn select_skin_slider_drag(
+        &self,
+        snapshot: &crate::scene::SelectSnapshot,
+        slider_type: i32,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinSliderHit> {
+        let (x, y) = self.select_skin_canvas_point_clamped(x, y);
+        self.select_skin_context.select_slider_drag(snapshot, slider_type, x, y)
+    }
+
+    /// Whether the point is over the embedded skin settings of an LR2 select skin
+    /// (rows, customize buttons and the list's slider).
+    pub fn select_skin_lr2_settings_contains(
+        &self,
+        snapshot: &crate::scene::SelectSnapshot,
+        x: f32,
+        y: f32,
+    ) -> bool {
+        self.select_skin_canvas_point(x, y).is_some_and(|(x, y)| {
+            self.select_skin_context.select_lr2_skin_settings_contains(snapshot, x, y)
+        })
+    }
+
     fn select_detail_options_closing(&self, snapshot: &crate::scene::SelectSnapshot) -> bool {
         self.select_skin_document()
             .is_some_and(|doc| doc.uses_detail_options() && doc.bmz_detail_options_close)
@@ -715,6 +741,15 @@ impl Renderer {
         let viewport =
             CanvasViewport::from_policy(surface, self.select_skin_canvas_render_policy());
         viewport.surface_to_canvas_point(x, y)
+    }
+
+    fn select_skin_canvas_point_clamped(&self, x: f32, y: f32) -> (f32, f32) {
+        let Some(surface) = self.gpu.as_ref().map(WgpuRenderer::surface_size) else {
+            return (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
+        };
+        let viewport =
+            CanvasViewport::from_policy(surface, self.select_skin_canvas_render_policy());
+        viewport.surface_to_canvas_point_clamped(x, y)
     }
 
     fn result_skin_canvas_point(&self, x: f32, y: f32) -> Option<(f32, f32)> {

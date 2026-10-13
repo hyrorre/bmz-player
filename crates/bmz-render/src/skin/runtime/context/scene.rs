@@ -296,6 +296,34 @@ impl SkinContext {
         document.select_slider_hit(snapshot, &self.select_settings_dest_index, x, y)
     }
 
+    pub fn select_slider_drag(
+        &self,
+        snapshot: &SelectSnapshot,
+        slider_type: i32,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinSliderHit> {
+        let document = self.document.as_ref()?;
+        document.select_slider_drag(snapshot, &self.select_settings_dest_index, slider_type, x, y)
+    }
+
+    /// Whether the point is over the embedded skin settings of an LR2 select skin.
+    pub fn select_lr2_skin_settings_contains(
+        &self,
+        snapshot: &SelectSnapshot,
+        x: f32,
+        y: f32,
+    ) -> bool {
+        self.document.as_ref().is_some_and(|document| {
+            document.select_lr2_skin_settings_contains(
+                snapshot,
+                &self.select_settings_dest_index,
+                x,
+                y,
+            )
+        })
+    }
+
     /// 静的 destination を `{"id":"notes"}` マーカーと `timer: 3` (FAILED) で分割して返す。
     /// `.0` はノーツ背面、`.1` はノーツ前面、`.2` は閉店/暗転オーバーレイ（最前面）。
     pub fn static_document_items_split_for_state_and_text(

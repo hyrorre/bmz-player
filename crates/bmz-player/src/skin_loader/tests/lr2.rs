@@ -18,3 +18,5 @@ mod scenes;
 mod select_conditions;
 #[path = "lr2/select_scroll.rs"]
 mod select_scroll;
+#[path = "lr2/select_skin_settings.rs"]
+mod select_skin_settings;

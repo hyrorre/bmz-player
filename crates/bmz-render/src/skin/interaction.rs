@@ -137,6 +137,32 @@ pub(super) fn slider_value_at(
     Some(value.clamp(0.0, 1.0))
 }
 
+/// LR2 `SliderByTime`: the hit area is the handle plus its travel, and the value
+/// follows the handle's center. While dragging, the cursor may leave the area and
+/// the value is clamped to the ends. `x` / `y` use the canvas' bottom-up axis.
+pub(super) fn lr2_slider_value_at(
+    slider: &SkinSliderDef,
+    frame: ResolvedSkinFrame,
+    x: f32,
+    y: f32,
+    dragging: bool,
+) -> Option<f32> {
+    let range = slider.range.unsigned_abs() as f32;
+    if range <= f32::EPSILON {
+        return None;
+    }
+    let (fx, fy, fw, fh) = (frame.x as f32, frame.y as f32, frame.w as f32, frame.h as f32);
+    let (inside, value) = match slider.angle {
+        // Up / right / down / left, as LR2's direction.
+        0 => (fx <= x && x <= fx + fw && fy <= y && y <= fy + fh + range, y - (fy + fh / 2.0)),
+        1 => (fx <= x && x <= fx + fw + range && fy <= y && y <= fy + fh, x - (fx + fw / 2.0)),
+        2 => (fx <= x && x <= fx + fw && fy - range <= y && y <= fy + fh, fy + fh / 2.0 - y),
+        3 => (fx - range <= x && x <= fx + fw && fy <= y && y <= fy + fh, fx + fw / 2.0 - x),
+        _ => return None,
+    };
+    (dragging || inside).then(|| (value / range).clamp(0.0, 1.0))
+}
+
 pub(super) fn scroll_slider_value_at(
     slider: &SkinSliderDef,
     frame: ResolvedSkinFrame,

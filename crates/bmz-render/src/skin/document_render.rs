@@ -65,6 +65,27 @@ pub trait SkinDocumentRenderExt {
         y: f32,
     ) -> Option<SkinSliderHit>;
 
+    /// Whether the point is over the visible embedded skin settings of an LR2
+    /// select skin: the rows (texts 100..119), customize buttons (220..229) and
+    /// the list's slider (type 7) with its travel.
+    fn select_lr2_skin_settings_contains(
+        &self,
+        snapshot: &SelectSnapshot,
+        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+        x: f32,
+        y: f32,
+    ) -> bool;
+
+    /// The value of a slider held since the press, with the cursor anywhere.
+    fn select_slider_drag(
+        &self,
+        snapshot: &SelectSnapshot,
+        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+        slider_type: i32,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinSliderHit>;
+
     fn note_lane_area(
         &self,
         lane: Lane,
@@ -260,12 +281,23 @@ pub(super) trait SkinDocumentRenderInternal {
         state: &SkinDrawState,
     ) -> Option<Rect>;
 
+    #[allow(clippy::too_many_arguments)]
     fn destination_slider_hit(
         &self,
         slider: &SkinSliderDef,
         destination: &SkinDestinationDef,
         enabled_options: &[i32],
         state: &SkinDrawState,
+        x: f32,
+        y: f32,
+        dragging: bool,
+    ) -> Option<SkinSliderHit>;
+
+    fn select_slider_value(
+        &self,
+        snapshot: &SelectSnapshot,
+        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+        dragging: Option<i32>,
         x: f32,
         y: f32,
     ) -> Option<SkinSliderHit>;

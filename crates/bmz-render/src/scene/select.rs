@@ -176,15 +176,25 @@ pub struct Lr2SkinSettingsSnapshot {
     pub skin_author: String,
     /// Customize rows (option / file name, current value).
     pub items: Vec<(String, String)>,
-    /// First row shown in the ten visible rows.
+    /// First row shown in the visible rows.
     pub scroll: usize,
+    /// Rows the skin shows (texts 100.. / 110.., buttons 220..). 0 means the
+    /// LR2 maximum of ten.
+    pub visible_rows: usize,
 }
 
 impl Lr2SkinSettingsSnapshot {
-    pub const VISIBLE_ROWS: usize = 10;
+    pub const MAX_VISIBLE_ROWS: usize = 10;
+
+    pub fn visible_rows(&self) -> usize {
+        match self.visible_rows {
+            0 => Self::MAX_VISIBLE_ROWS,
+            rows => rows.min(Self::MAX_VISIBLE_ROWS),
+        }
+    }
 
     pub fn max_scroll(&self) -> usize {
-        self.items.len().saturating_sub(Self::VISIBLE_ROWS)
+        self.items.len().saturating_sub(self.visible_rows())
     }
 }
 

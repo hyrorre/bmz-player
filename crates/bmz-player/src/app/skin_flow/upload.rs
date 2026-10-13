@@ -668,7 +668,10 @@ impl WinitApp {
             installed_sources,
             "beatoraja skin reload timings"
         );
-        if kind == SkinKind::Select && matches!(self.view_state(), AppViewState::Select) {
+        if kind == SkinKind::Select
+            && matches!(self.view_state(), AppViewState::Select)
+            && !self.take_lr2_skin_settings_reload()
+        {
             self.restart_select_scene_timers();
         }
         true

@@ -41,6 +41,27 @@ pub fn lr2_arrange_index(index: usize) -> Option<usize> {
     }
 }
 
+impl crate::SkinDocument {
+    /// Rows of the embedded skin settings this LR2 select skin shows: the last row
+    /// with a customize button (220..229) or row text (100..109 / 110..119), plus one.
+    /// LR2 skins show five to ten rows; `None` when the skin has none.
+    pub fn lr2_skin_settings_rows(&self) -> Option<usize> {
+        let buttons = self
+            .image
+            .iter()
+            .filter_map(|image| image.act)
+            .filter(|act| (LR2_BUTTON_BASE + 220..=LR2_BUTTON_BASE + 229).contains(act))
+            .map(|act| (act - LR2_BUTTON_BASE - 220) as usize);
+        let texts = self
+            .text
+            .iter()
+            .map(|text| text.ref_id)
+            .filter(|id| (LR2_TEXT_BASE + 100..=LR2_TEXT_BASE + 119).contains(id))
+            .map(|id| ((id - LR2_TEXT_BASE - 100) % 10) as usize);
+        buttons.chain(texts).max().map(|row| row + 1)
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct SkinLr2ResultDef {

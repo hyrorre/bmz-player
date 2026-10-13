@@ -61,9 +61,19 @@ impl WinitApp {
             }
             return;
         }
-        if let Some(select_move) = select_wheel_move(delta) {
-            self.move_selection(select_move);
+        let Some(select_move) = select_wheel_move(delta) else {
+            return;
+        };
+        // Over the embedded skin settings of an LR2 select skin the wheel scrolls
+        // that list instead of the songs (a BMZ addition; LR2 always moves the songs).
+        if self.lr2_select_active()
+            && let Some((x, y)) = self.cursor_position_normalized()
+            && self.renderer.select_skin_lr2_settings_contains(&self.select_snapshot(), x, y)
+        {
+            self.scroll_lr2_skin_settings(if select_move == SelectMove::Previous { -1 } else { 1 });
+            return;
         }
+        self.move_selection(select_move);
     }
 
     pub(super) fn route_mouse_input(&mut self, state: ElementState, button: MouseButton) {
@@ -158,6 +168,13 @@ impl WinitApp {
         let Some(hit) = self.renderer.select_skin_click_hit(&snapshot, x, y) else {
             return;
         };
+        // The song list may lie under the embedded skin settings; a click on the
+        // settings never selects or starts a song.
+        if matches!(hit.target, SkinClickTarget::SelectRow { .. })
+            && self.renderer.select_skin_lr2_settings_contains(&snapshot, x, y)
+        {
+            return;
+        }
         self.handle_select_skin_click(hit, button, x, y);
     }
 
@@ -226,8 +243,11 @@ impl WinitApp {
         if !matches!(self.view_state(), AppViewState::Select) {
             return;
         }
+        let Some(slider_type) = self.select.select_slider_dragging_type else {
+            return;
+        };
         let snapshot = self.select_snapshot();
-        if let Some(hit) = self.renderer.select_skin_slider_hit(&snapshot, x, y) {
+        if let Some(hit) = self.renderer.select_skin_slider_drag(&snapshot, slider_type, x, y) {
             self.apply_select_slider_hit(hit);
         }
     }

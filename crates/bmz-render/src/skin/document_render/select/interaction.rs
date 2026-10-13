@@ -51,7 +51,15 @@ macro_rules! skin_document_render_select_interaction_public_methods {
                 .filter_map(|destination| {
                     let slider = self.slider.iter().find(|slider| slider.id == destination.id)?;
                     (slider.slider_type == 8).then_some(())?;
-                    self.destination_slider_hit(slider, destination, &enabled_options, state, x, y)
+                    self.destination_slider_hit(
+                        slider,
+                        destination,
+                        &enabled_options,
+                        state,
+                        x,
+                        y,
+                        false,
+                    )
                 })
                 .next_back()
         }
@@ -60,6 +68,119 @@ macro_rules! skin_document_render_select_interaction_public_methods {
             &self,
             snapshot: &SelectSnapshot,
             settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+            x: f32,
+            y: f32,
+        ) -> Option<SkinSliderHit> {
+            self.select_slider_value(snapshot, settings_dest_index, None, x, y)
+        }
+
+        fn select_slider_drag(
+            &self,
+            snapshot: &SelectSnapshot,
+            settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+            slider_type: i32,
+            x: f32,
+            y: f32,
+        ) -> Option<SkinSliderHit> {
+            self.select_slider_value(snapshot, settings_dest_index, Some(slider_type), x, y)
+        }
+
+        fn select_lr2_skin_settings_contains(
+            &self,
+            snapshot: &SelectSnapshot,
+            settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+            x: f32,
+            y: f32,
+        ) -> bool {
+            if !self.lr2 || snapshot.lr2_skin_settings.is_none() {
+                return false;
+            }
+            let (state, selected_row) = self.select_draw_state(snapshot, None);
+            let enabled_options = self.enabled_options();
+            let buttons = LR2_BUTTON_BASE + 220..=LR2_BUTTON_BASE + 229;
+            let texts = LR2_TEXT_BASE + 100..=LR2_TEXT_BASE + 119;
+            let parts = self
+                .image
+                .iter()
+                .filter(|image| image.act.is_some_and(|act| buttons.contains(&act)))
+                .map(|image| image.id.as_str())
+                .chain(
+                    self.text
+                        .iter()
+                        .filter(|text| texts.contains(&text.ref_id))
+                        .map(|text| text.id.as_str()),
+                )
+                .collect::<std::collections::HashSet<_>>();
+            let mut area: Option<Rect> = None;
+            for destination in self.all_destinations(&enabled_options) {
+                let slider = self
+                    .slider
+                    .iter()
+                    .find(|slider| slider.id == destination.id && slider.slider_type == 7);
+                if (slider.is_none() && !parts.contains(destination.id.as_str()))
+                    || !crate::select_settings_dest::test_select_destination_visible(
+                        settings_dest_index,
+                        destination,
+                        &enabled_options,
+                        &state,
+                        snapshot,
+                        selected_row,
+                        eval_skin_draw_condition,
+                        test_skin_ops,
+                    )
+                {
+                    continue;
+                }
+                let Some(elapsed) = skin_timer_elapsed_ms(destination.timer, &state) else {
+                    continue;
+                };
+                let Some(mut frame) =
+                    resolve_destination_frame(destination, elapsed, &enabled_options, &state)
+                else {
+                    continue;
+                };
+                apply_skin_offset_to_frame(destination, &mut frame, &state, false);
+                if let Some(slider) = slider {
+                    let range = slider.range.abs();
+                    match slider.angle {
+                        0 => frame.h += range,
+                        1 => frame.w += range,
+                        2 => {
+                            frame.y -= range;
+                            frame.h += range;
+                        }
+                        3 => {
+                            frame.x -= range;
+                            frame.w += range;
+                        }
+                        _ => {}
+                    }
+                }
+                let rect = normalize_skin_frame_rect(frame, self.w, self.h);
+                area = Some(area.map_or(rect, |area| {
+                    let left = area.x.min(rect.x);
+                    let top = area.y.min(rect.y);
+                    let right = (area.x + area.width).max(rect.x + rect.width);
+                    let bottom = (area.y + area.height).max(rect.y + rect.height);
+                    Rect { x: left, y: top, width: right - left, height: bottom - top }
+                }));
+            }
+            area.is_some_and(|area| rect_contains(area, x, y))
+        }
+    };
+}
+
+pub(in crate::skin::document_render) use skin_document_render_select_interaction_public_methods;
+
+macro_rules! skin_document_render_select_interaction_methods {
+    () => {
+        /// `dragging` names the slider type held since the press. LR2 keeps
+        /// moving it with the cursor outside its track, clamped to the ends.
+        fn select_slider_value(
+            &self,
+            snapshot: &SelectSnapshot,
+            settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+            dragging: Option<i32>,
             x: f32,
             y: f32,
         ) -> Option<SkinSliderHit> {
@@ -81,17 +202,22 @@ macro_rules! skin_document_render_select_interaction_public_methods {
                         return None;
                     }
                     let slider = self.slider.iter().find(|slider| slider.id == destination.id)?;
-                    self.destination_slider_hit(slider, destination, &enabled_options, &state, x, y)
+                    if dragging.is_some_and(|slider_type| slider_type != slider.slider_type) {
+                        return None;
+                    }
+                    self.destination_slider_hit(
+                        slider,
+                        destination,
+                        &enabled_options,
+                        &state,
+                        x,
+                        y,
+                        dragging.is_some(),
+                    )
                 })
                 .next_back()
         }
-    };
-}
 
-pub(in crate::skin::document_render) use skin_document_render_select_interaction_public_methods;
-
-macro_rules! skin_document_render_select_interaction_methods {
-    () => {
         fn select_click_hits(
             &self,
             _sources: &HashMap<String, SkinDocumentTexture>,
@@ -328,6 +454,7 @@ macro_rules! skin_document_render_select_interaction_methods {
             state: &SkinDrawState,
             x: f32,
             y: f32,
+            dragging: bool,
         ) -> Option<SkinSliderHit> {
             if !slider.changeable || !matches!(slider.slider_type, 1 | 7 | 8 | 17..=19) {
                 return None;
@@ -336,12 +463,14 @@ macro_rules! skin_document_render_select_interaction_methods {
             let mut frame =
                 resolve_destination_frame(destination, elapsed, enabled_options, state)?;
             apply_skin_offset_to_frame(destination, &mut frame, state, false);
-            if !destination_mouse_rect_contains(destination, frame, state) {
+            if !dragging && !destination_mouse_rect_contains(destination, frame, state) {
                 return None;
             }
             let mouse_x = x.clamp(0.0, 1.0) * self.w as f32;
             let mouse_y = (1.0 - y.clamp(0.0, 1.0)) * self.h as f32;
-            let value = if slider.slider_type == 1 {
+            let value = if self.lr2 {
+                lr2_slider_value_at(slider, frame, mouse_x, mouse_y, dragging)?
+            } else if slider.slider_type == 1 {
                 scroll_slider_value_at(slider, frame, mouse_x, mouse_y)?
             } else {
                 slider_value_at(slider, frame, mouse_x, mouse_y)?

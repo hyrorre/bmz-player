@@ -529,6 +529,7 @@ fn lr2_embedded_skin_settings_texts_buttons_and_scroll_slider() {
         skin_author: "ric".to_string(),
         items: (0..13).map(|i| (format!("Option {i}"), format!("Value {i}"))).collect(),
         scroll: 2,
+        visible_rows: 0,
     };
     let text = SkinTextState { lr2_skin_settings: Some(&settings), ..SkinTextState::default() };
     let state = SkinDrawState {

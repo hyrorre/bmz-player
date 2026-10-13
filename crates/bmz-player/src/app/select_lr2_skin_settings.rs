@@ -13,6 +13,10 @@ type SettingsKey = (Lr2SkinTarget, String, BTreeMap<String, String>, BTreeMap<St
 pub(super) struct Lr2SkinSettingsRuntime {
     target: Lr2SkinTarget,
     scroll: usize,
+    /// A customize change reloads the select skin being shown. Its install then
+    /// keeps the open panel and scene timers instead of restarting the scene, so
+    /// the next click still lands on the settings.
+    keep_select_scene: bool,
     /// Rebuilt when the edited slot's skin path, options or files change, so
     /// edits from the F1 settings screen are shown too.
     cache: RefCell<Option<(SettingsKey, SceneSkinDefs, Lr2SkinSettingsSnapshot)>>,
@@ -29,6 +33,11 @@ impl WinitApp {
         let cache = runtime.cache.borrow();
         let (_, _, snapshot) = cache.as_ref()?;
         let mut snapshot = snapshot.clone();
+        snapshot.visible_rows = self
+            .renderer
+            .select_skin_document()
+            .and_then(|document| document.lr2_skin_settings_rows())
+            .unwrap_or(0);
         snapshot.scroll = runtime.scroll.min(snapshot.max_scroll());
         Some(snapshot)
     }
@@ -54,6 +63,7 @@ impl WinitApp {
             skin_author: defs.author.clone(),
             items,
             scroll: 0,
+            visible_rows: 0,
         };
         *cache = Some((key, defs, snapshot));
     }
@@ -105,8 +115,17 @@ impl WinitApp {
         ) {
             return false;
         }
+        if target.reload_request().select {
+            self.select.lr2_skin_settings.keep_select_scene = true;
+        }
         self.apply_lr2_skin_settings_change(target);
         true
+    }
+
+    /// Whether this select skin install comes from a customize change made on the
+    /// embedded skin settings, and so keeps the scene.
+    pub(super) fn take_lr2_skin_settings_reload(&mut self) -> bool {
+        std::mem::take(&mut self.select.lr2_skin_settings.keep_select_scene)
     }
 
     /// Slider 7 scrolls the customize list.
@@ -114,6 +133,13 @@ impl WinitApp {
         let max = self.lr2_skin_settings_snapshot().map_or(0, |settings| settings.max_scroll());
         self.select.lr2_skin_settings.scroll =
             (value.clamp(0.0, 1.0) * max as f32).round() as usize;
+    }
+
+    /// The mouse wheel over the list moves it one row.
+    pub(super) fn scroll_lr2_skin_settings(&mut self, rows: i32) {
+        let max = self.lr2_skin_settings_snapshot().map_or(0, |settings| settings.max_scroll());
+        let runtime = &mut self.select.lr2_skin_settings;
+        runtime.scroll = runtime.scroll.min(max).saturating_add_signed(rows as isize).min(max);
     }
 
     fn apply_lr2_skin_settings_change(&mut self, target: Lr2SkinTarget) {

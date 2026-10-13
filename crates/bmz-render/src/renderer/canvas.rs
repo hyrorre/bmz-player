@@ -203,6 +203,15 @@ impl CanvasViewport {
         Some(((x - self.rect.x) / self.rect.width, (y - self.rect.y) / self.rect.height))
     }
 
+    /// Like [`Self::surface_to_canvas_point`], with points outside the canvas
+    /// moved to its nearest edge.
+    pub(super) fn surface_to_canvas_point_clamped(self, x: f32, y: f32) -> (f32, f32) {
+        (
+            ((x - self.rect.x) / self.rect.width).clamp(0.0, 1.0),
+            ((y - self.rect.y) / self.rect.height).clamp(0.0, 1.0),
+        )
+    }
+
     pub(super) fn transform_rect_command(self, command: RectCommand) -> RectCommand {
         RectCommand { rect: self.transform_rect(command.rect), color: command.color }
     }
