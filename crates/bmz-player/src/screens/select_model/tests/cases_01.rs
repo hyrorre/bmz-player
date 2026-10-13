@@ -807,3 +807,47 @@ fn chart_enrichment_with_filters_hides_removed_table_levels() {
     assert_eq!(row.table_level, "B2");
     assert_eq!(row.table_text.table_level, "B2");
 }
+
+#[test]
+fn same_folder_difficulties_fold_charts_by_difficulty_with_best_clears() {
+    let (mut library_db, mut score_db) = open_in_memory_dbs();
+    let make = |title: &str, difficulty: &str, level: &str| {
+        let mut c = chart(title);
+        c.metadata.difficulty_name = difficulty.to_string();
+        c.metadata.play_level = level.to_string();
+        c
+    };
+    let hyper = make("Song [HYPER]", "HYPER", "9");
+    let another = make("Song [ANOTHER]", "ANOTHER", "11");
+    let another2 = make("Song [ANOTHER2]", "4", "12");
+    let other = make("Song [EX]", "", "13");
+    let elsewhere = make("Other [INSANE]", "INSANE", "12");
+    for (path, c) in [
+        ("/songs/a/h.bms", &hyper),
+        ("/songs/a/a.bms", &another),
+        ("/songs/a/a2.bms", &another2),
+        ("/songs/a/x.bms", &other),
+        ("/songs/b/i.bms", &elsewhere),
+    ] {
+        library_db.upsert_chart_import(&record_for_chart(path, c)).unwrap();
+    }
+    let mut score = score_for_chart(another.identity.file_sha256);
+    score.ln_policy =
+        crate::ln_policy::score_ln_policy(LnPolicySetting::AutoLn, Default::default());
+    score_db.insert_score(&score).unwrap();
+
+    let folder = library_db.list_charts_by_ids(&[1]).unwrap()[0].folder_path.clone();
+    let slots = same_folder_difficulties(
+        &library_db,
+        &score_db,
+        &folder,
+        LnPolicySetting::AutoLn,
+        RuleMode::Beatoraja,
+    )
+    .unwrap();
+    let summary = slots.map(|slot| (slot.charts, slot.level, slot.clear_index));
+    assert_eq!(
+        summary,
+        [(0, None, 0), (0, None, 0), (1, Some(9), 0), (2, Some(12), 5), (0, None, 0)]
+    );
+}

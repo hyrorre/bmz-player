@@ -379,6 +379,20 @@ pub struct SelectRowSnapshot {
     pub course_constraints: CourseConstraintFlags,
     /// 曲行のみ。beatoraja OPTION_MODE_* (160..164, 1160..1161) 用。
     pub chart_key_mode: Option<bmz_core::lane::KeyMode>,
+    /// Selected song row only: BEGINNER..INSANE of the charts in the same folder,
+    /// for LR2's level bar. None when not loaded.
+    pub same_folder_difficulties: Option<[SelectSameFolderDifficulty; 5]>,
+}
+
+/// One difficulty slot of the charts in the selected chart's folder.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SelectSameFolderDifficulty {
+    /// Charts with this difficulty.
+    pub charts: u32,
+    /// Highest play level among them.
+    pub level: Option<i64>,
+    /// Best beatoraja clear index among them (0 = no play).
+    pub clear_index: i64,
 }
 
 impl SelectRowSnapshot {
@@ -450,6 +464,7 @@ impl Default for SelectRowSnapshot {
             course_titles: Default::default(),
             course_constraints: CourseConstraintFlags::default(),
             chart_key_mode: None,
+            same_folder_difficulties: None,
         }
     }
 }

@@ -74,6 +74,11 @@ pub(super) fn graph_value(graph_type: i32, state: &SkinDrawState) -> f32 {
             let max = (total_notes * 2) as f32;
             if max > 0.0 { state.ex_score as f32 / max } else { 0.0 }
         }
+        // BARGRAPH_LEVEL_BEGINNER..INSANE: same-folder level over the level bar limit.
+        105..=109 => lr2_same_folder_level(state, (graph_type - 105) as usize)
+            .map_or(0.0, |level| {
+                (level.max(0) as f32 / lr2_level_bar_limit(state) as f32).clamp(0.0, 1.0)
+            }),
         17 => state.select_master_volume.clamp(0.0, 1.0),
         18 => state.select_key_volume.clamp(0.0, 1.0),
         19 => state.select_bgm_volume.clamp(0.0, 1.0),

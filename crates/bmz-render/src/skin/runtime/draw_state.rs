@@ -375,6 +375,8 @@ pub struct SkinDrawState {
     pub rival_max_combo: Option<i64>,
     /// 同 beatoraja ClearType index (LR2 option 640..657)。
     pub rival_clear_index: Option<i64>,
+    /// Selected song's same-folder difficulties (LR2 level bar, number 45..49).
+    pub select_same_folder: Option<[crate::scene::SelectSameFolderDifficulty; 5]>,
     /// 同 BP (NUMBER_RIVAL_MISSCOUNT=276)。
     pub rival_bp: Option<i64>,
     /// EXスコア元プレイの PGREAT/GREAT/GOOD/BAD/POOR
@@ -686,6 +688,7 @@ impl Default for SkinDrawState {
             rival_ex_score: None,
             rival_max_combo: None,
             rival_clear_index: None,
+            select_same_folder: None,
             rival_bp: None,
             rival_judge_counts: None,
             previous_best_ex_score: None,

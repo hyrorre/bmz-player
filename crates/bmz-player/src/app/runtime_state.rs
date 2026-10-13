@@ -33,6 +33,9 @@ pub(super) struct SelectRuntimeState {
     pub(super) collection_cache: crate::screens::select_model::SelectCollectionCache,
     pub(super) replay_slot_cache: RefCell<Option<(crate::storage::score_db::ScoreKey, [bool; 4])>>,
     pub(super) select_distribution_cache: RefCell<HashMap<i64, CachedSelectChartDistribution>>,
+    /// Same-folder difficulties by folder path, cleared when the select list reloads.
+    pub(super) same_folder_cache:
+        RefCell<HashMap<String, [bmz_render::scene::SelectSameFolderDifficulty; 5]>>,
     pub(super) select_distributions: RefCell<select_distribution::SelectDistributionRuntime>,
     pub(super) difficulty_tables: Vec<DifficultyTableRecord>,
     pub(super) table_breadcrumb_cache: RefCell<HashMap<String, TableBreadcrumb>>,

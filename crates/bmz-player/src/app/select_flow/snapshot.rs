@@ -254,6 +254,7 @@ impl WinitApp {
                 rows.iter_mut().find(|row| row.index as usize == self.select.selected_index)
         {
             selected_row.replay_slots = self.selected_chart_replay_slots();
+            selected_row.same_folder_difficulties = self.selected_same_folder_difficulties();
         }
         SelectSnapshot {
             screen_size: [0, 0],

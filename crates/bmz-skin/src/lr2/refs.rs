@@ -66,7 +66,21 @@ pub(super) const LR2_FIXED_OPTIONS: [(i32, bool); 10] = [
 /// Song-scene options with an LR2-only meaning, evaluated per draw.
 fn is_lr2_song_scene_option(skin_type: i32, id: i32) -> bool {
     is_song_scene(skin_type)
-        && matches!(id, 20 | 62..=66 | 100..=105 | 110..=117 | 640..=645 | 650..=657)
+        && matches!(
+            id,
+            20 | 62..=66
+                | 70..=79
+                | 100..=105
+                | 110..=117
+                | 500..=519
+                | 520..=525
+                | 530..=535
+                | 540..=545
+                | 550..=555
+                | 560..=565
+                | 640..=645
+                | 650..=657
+        )
 }
 
 /// Options that must be evaluated per draw instead of at load. The selected song,

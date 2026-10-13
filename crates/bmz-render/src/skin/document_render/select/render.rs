@@ -641,6 +641,7 @@ macro_rules! skin_document_render_select_render_methods {
                 in_settings: snapshot.in_settings,
                 settings_editing: snapshot.settings_editing,
                 select_chart_key_mode: selected_row.and_then(|row| row.chart_key_mode),
+                select_same_folder: selected_row.and_then(|row| row.same_folder_difficulties),
                 random_lane_refs: selected_row
                     .and_then(|row| row.chart_key_mode)
                     .map_or([0; SKIN_RANDOM_LANE_REF_COUNT], |key_mode| {

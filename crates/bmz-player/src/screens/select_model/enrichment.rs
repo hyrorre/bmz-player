@@ -323,6 +323,63 @@ pub(super) fn replay_slot_map(
         .collect())
 }
 
+/// BEGINNER..INSANE of the charts in `folder_path` with their best clears, for
+/// LR2's same-folder level bar. Charts without a recognized difficulty are skipped.
+pub fn same_folder_difficulties(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+    folder_path: &str,
+    ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
+) -> Result<[SelectSameFolderDifficulty; 5]> {
+    let charts = library_db.list_charts_in_folder(folder_path)?;
+    let keys: Vec<ScoreKey> =
+        charts.iter().map(|c| score_key_for_chart(c, ln_policy_setting, rule_mode)).collect();
+    let mut bests: HashMap<ScoreKey, BestScoreSummary> = score_db
+        .best_scores_for_charts(&keys)?
+        .into_iter()
+        .map(|s| {
+            (ScoreKey::with_options(s.chart_sha256, s.ln_policy, s.double_option, s.rule_mode), s)
+        })
+        .collect();
+    let mut slots = [SelectSameFolderDifficulty::default(); 5];
+    for (chart, key) in charts.iter().zip(keys) {
+        let slot = match chart.difficulty_name.trim().to_ascii_uppercase().as_str() {
+            "1" | "BEGINNER" => 0,
+            "2" | "NORMAL" => 1,
+            "3" | "HYPER" => 2,
+            "4" | "ANOTHER" => 3,
+            "5" | "INSANE" | "LEGGENDARIA" => 4,
+            _ => continue,
+        };
+        let slot = &mut slots[slot];
+        slot.charts += 1;
+        if let Ok(level) = chart.play_level.trim().parse::<i64>() {
+            slot.level = Some(slot.level.map_or(level, |current| current.max(level)));
+        }
+        let clear = bests.remove(&key).map_or(0, |best| clear_type_index(&best.clear_type));
+        slot.clear_index = slot.clear_index.max(clear);
+    }
+    Ok(slots)
+}
+
+/// beatoraja ClearType index of a stored clear type name.
+fn clear_type_index(clear_type: &str) -> i64 {
+    match clear_type {
+        "Failed" => 1,
+        "AssistEasy" => 2,
+        "LightAssistEasy" => 3,
+        "Easy" => 4,
+        "Normal" => 5,
+        "Hard" => 6,
+        "ExHard" => 7,
+        "FullCombo" => 8,
+        "Perfect" => 9,
+        "Max" => 10,
+        _ => 0,
+    }
+}
+
 pub(super) fn score_key_for_chart(
     chart: &ChartListItem,
     ln_policy_setting: LnPolicySetting,

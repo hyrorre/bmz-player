@@ -8,10 +8,16 @@ pub(in crate::skin) fn lr2_number(id: i32, state: &SkinDrawState) -> Option<i64>
     match id {
         // LR2 shows the judge timing here even while the sort is changed.
         12 => Some(i64::from(state.judge_timing_offset_ms)),
-        // Levels of the song's difficulties. BMZ knows only the selected chart, so
-        // only its own difficulty slot shows a level.
+        // Levels of the song's difficulties in its folder. Without the folder data
+        // only the selected chart's own difficulty slot shows a level.
         45..=49 => {
-            if !select_chart_metadata_available(state) || state.difficulty != i64::from(id - 44) {
+            if !select_chart_metadata_available(state) {
+                return None;
+            }
+            if let Some(slots) = state.select_same_folder {
+                return slots[(id - 45) as usize].level;
+            }
+            if state.difficulty != i64::from(id - 44) {
                 return None;
             }
             Some(if state.play_level != 0 { state.play_level } else { state.select_play_level })
@@ -85,6 +91,25 @@ pub(in crate::skin) fn lr2_number(id: i32, state: &SkinDrawState) -> Option<i64>
         114 => Some(i64::from(poor_plus_miss(counts))),
         _ => None,
     }
+}
+
+/// LR2's level bar limit per key mode (`levelbarflash_5/7/9` defaults): levels above
+/// it flash, and the bar graphs reach full length at it.
+pub(in crate::skin) fn lr2_level_bar_limit(state: &SkinDrawState) -> i64 {
+    match state.select_chart_key_mode.unwrap_or(state.key_mode) {
+        KeyMode::K5 | KeyMode::K10 => 9,
+        KeyMode::K9 => 42,
+        _ => 12,
+    }
+}
+
+/// Level of a same-folder difficulty slot, or -1 when the folder lacks it (LR2's value).
+pub(in crate::skin) fn lr2_same_folder_level(state: &SkinDrawState, slot: usize) -> Option<i64> {
+    if !state.select_screen || !select_chart_metadata_available(state) {
+        return None;
+    }
+    let slot = state.select_same_folder?[slot];
+    Some(if slot.charts == 0 { -1 } else { slot.level.unwrap_or(0) })
 }
 
 /// Target ghost EX at the current progress.

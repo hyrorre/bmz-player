@@ -134,3 +134,27 @@ fn lr2_ghost_and_rival_refs_use_the_lr2_namespace() {
     // Result keeps the final-target comparison.
     assert_eq!(op(&load(7, &image("352,0,0"))), json!([352]));
 }
+
+#[test]
+fn lr2_level_bar_options_are_draw_time_conditions() {
+    let image = |ops: &str| {
+        format!(
+            "#SRC_IMAGE,0,0,0,0,1,1,1,1,0,0\n\
+             #DST_IMAGE,0,0,0,0,1,1,0,255,255,255,255,0,0,0,0,0,0,{ops}\n"
+        )
+    };
+    let select = load(5, &format!("{}#IF,505\n{}#ENDIF\n", image("500,-523,75"), image("0,0,0")));
+    let ops = select["destination"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["op"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ops,
+        vec![
+            json!([LR2_OPTION_BASE + 500, -(LR2_OPTION_BASE + 523), LR2_OPTION_BASE + 75]),
+            json!([LR2_OPTION_BASE + 505]),
+        ]
+    );
+}

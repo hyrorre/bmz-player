@@ -297,6 +297,7 @@ mod select_ir_battle;
 mod select_key_bindings;
 #[path = "app/select_random_mix.rs"]
 mod select_random_mix;
+mod select_same_folder;
 mod select_search;
 mod select_support;
 mod skin_catalog;

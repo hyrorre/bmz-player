@@ -144,7 +144,11 @@ option `94_000+ID`、否定は符号を維持）。意味が一致する番号�
 | number | 100 / 107 / 108 / 109 / 114 | Play、Result（1P / 反転後の自分側） | LR2式スコア、2%刻みのゲージ、2P（SPではターゲットの現在進捗）とのEX差、次ランクまでの差（負値、MAXは0）、POOR＋空POOR |
 | number | 92 / 93 / 94 / 95 | Select / Decide | 選択中の曲のIR順位、参加人数、EASY以上のクリア率、ライバルとのEX差。フォルダでは非表示 |
 | number | 12 | Select / Decide | 判定タイミング（ソート変更中も同じ） |
-| number | 45..49 | Select / Decide | 曲の各難易度のレベル。BMZは選択中の譜面だけを持つため、その難易度の欄だけ表示する |
+| number | 45..49 | Select / Decide | 選択中の譜面と同じフォルダにある各難易度（BEGINNER..INSANE）の最高レベル。難易度が無い欄は非表示 |
+| option | 500..519 | Select / Decide | 同じフォルダに各難易度が無い / ある / 1譜面 / 複数譜面 |
+| option | 520..565 | Select / Decide | 各難易度のレベルバーのランプ（`520 + 10 × 難易度 + LR2ランプ`）。同じ難易度が複数あれば最良のクリア |
+| option | 70..79 | Select / Decide | 各難易度のレベルが点滅しきい値以下（70..74）/ 超過（75..79）。しきい値はLR2の既定値（5 / 10鍵 9、7 / 14鍵 12、9鍵 42） |
+| bargraph | 105..109 | Select | 各難易度のレベル ÷ 点滅しきい値（LR2のアニメーションは省略） |
 | number | 70 / 73 | Select / Decide | 選択中の曲の自己ベストのLR2式スコア / レート（%） |
 | number | 210..219 | Select / Decide | IRのFAILED / EASY / CLEAR / HARD / FULLCOMBOの人数と率。ASSIST系はEASY、EX-HARDはHARD、PERFECT / MAXはFULLCOMBOへ畳む |
 | number | 212 / 214 / 216 | Result / Course Result | 拡張LR2のFAST / SLOW / コンボブレイク数（Playの210 / 212 / 214と同じ扱い） |
@@ -165,7 +169,11 @@ option `94_000+ID`、否定は符号を維持）。意味が一致する番号�
 Select / Decideの `#IF` に書かれたoption 50 / 51（IRオフライン / オンライン）は、読み込み時に固定せず描画時に評価する。
 bargraph 140..145（判定率）はSelectでは選択中のスコアを譜面のノーツ数で割る。
 
-レベルバー（option 500..565）、同じフォルダ内の他難易度のレベル（number 45..49、bargraph 105..109）、ライバルのIR順位（number 292 / 293）等は、
+同じフォルダ内の各難易度は、選択中の譜面の `folder_path` が同じ譜面をライブラリから読み、
+難易度名（数字またはBEGINNER..INSANE / LEGGENDARIA）で振り分ける。難易度名が無い譜面は数えない。
+結果は選曲一覧の再読み込み（プレイ後のスコア更新を含む）まで保持する。
+
+ライバルのIR順位（number 292 / 293）等は、
 必要な値の供給が無いため未対応。EQ / FX / PITCH、パネル2..7、スキン設定・コース作成・ヘルプの埋め込み、
 `README` / `MOUSECURSOR`、`BAR_RANK` / `BAR_RIVAL` はBMZに同じ機能が無いため対応しない。
 

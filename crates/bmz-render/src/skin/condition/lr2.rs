@@ -20,6 +20,29 @@ pub(super) fn lr2_option(id: i32, state: &SkinDrawState) -> bool {
             117 => rank < 2,
             _ => rank == i64::from(118 - id),
         }),
+        // Level bar: normal (70..74) or above the flash limit (75..79).
+        70..=79 => {
+            let slot = (id - 70) as usize % 5;
+            lr2_same_folder_level(state, slot)
+                .is_some_and(|level| (level <= lr2_level_bar_limit(state)) == (id < 75))
+        }
+        // Difficulty missing (500..504) / present (505..509) / one chart (510..514) /
+        // several charts (515..519) in the selected song's folder.
+        500..=519 => {
+            lr2_same_folder_slot(state, (id - 500) as usize % 5).is_some_and(|slot| match id {
+                500..=504 => slot.charts == 0,
+                505..=509 => slot.charts > 0,
+                510..=514 => slot.charts == 1,
+                _ => slot.charts > 1,
+            })
+        }
+        // Level bar lamp per difficulty: 520 + 10 * slot + LR2 lamp (0..5).
+        520..=565 if (id - 520) % 10 <= 5 => {
+            lr2_same_folder_slot(state, ((id - 520) / 10) as usize).is_some_and(|slot| {
+                LR2_CLEAR_FROM_BEATORAJA.get(usize::try_from(slot.clear_index).unwrap_or(0))
+                    == Some(&i64::from((id - 520) % 10))
+            })
+        }
         // Best lamp the current settings can earn.
         62..=66 => lr2_clear_lamp_challenge(state) == i64::from(id - 62),
         // Selected rival's clear lamp and rank on the selected song.
@@ -62,6 +85,16 @@ fn lr2_select_rank(state: &SkinDrawState) -> Option<i64> {
         return None;
     }
     lr2_rank(i64::from(state.select_ex_score?), state.select_total_notes)
+}
+
+fn lr2_same_folder_slot(
+    state: &SkinDrawState,
+    slot: usize,
+) -> Option<crate::scene::SelectSameFolderDifficulty> {
+    if !state.select_screen || !select_chart_metadata_available(state) {
+        return None;
+    }
+    state.select_same_folder.map(|slots| slots[slot])
 }
 
 fn lr2_rival_clear(state: &SkinDrawState) -> Option<i64> {

@@ -4,7 +4,7 @@ use anyhow::Result;
 use bmz_core::course::{CourseDefinition, CourseKind, CourseLnConstraint};
 use bmz_core::lane::KeyMode;
 use bmz_gameplay::rule::RuleMode;
-use bmz_render::scene::SelectRowKind;
+use bmz_render::scene::{SelectRowKind, SelectSameFolderDifficulty};
 
 use crate::i18n::{AppLocale, FluentArgs, Localizer};
 use crate::ln_policy::{LnPolicySetting, LnScorePolicy, course_score_ln_policy, score_ln_policy};
@@ -31,7 +31,9 @@ use enrichment::*;
 use paths::*;
 use table::*;
 
-pub use enrichment::{select_folder_summary, select_folder_summary_for_rule_mode};
+pub use enrichment::{
+    same_folder_difficulties, select_folder_summary, select_folder_summary_for_rule_mode,
+};
 pub use favorites::{
     SelectCollectionCache, apply_collection_flags, favorite_song_representatives_for_folder,
     load_select_items_for_favorite_charts, load_select_items_for_favorite_song,

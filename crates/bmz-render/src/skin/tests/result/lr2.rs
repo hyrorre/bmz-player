@@ -371,3 +371,44 @@ fn lr2_ghost_rival_and_lamp_challenge_values() {
     select.select_session_mode_index = 2; // AUTOPLAY
     assert!(op(62, &select));
 }
+
+#[test]
+fn lr2_level_bar_uses_same_folder_difficulties() {
+    use crate::scene::SelectSameFolderDifficulty as Slot;
+    let op = |id: i32, state: &SkinDrawState| test_skin_ops(&[LR2_OPTION_BASE + id], &[], state);
+    let lr2 = |id: i32, state: &SkinDrawState| skin_state_number(LR2_NUMBER_BASE + id, state);
+    let empty = Slot::default();
+    let state = SkinDrawState {
+        select_screen: true,
+        select_row_kind: SelectRowKind::Song,
+        select_in_library: true,
+        select_chart_key_mode: Some(KeyMode::K7),
+        select_same_folder: Some([
+            empty,
+            Slot { charts: 1, level: Some(5), clear_index: 4 },
+            Slot { charts: 1, level: Some(9), clear_index: 0 },
+            Slot { charts: 2, level: Some(12), clear_index: 7 },
+            Slot { charts: 1, level: Some(13), clear_index: 10 },
+        ]),
+        ..Default::default()
+    };
+    // Levels per difficulty; a missing difficulty has no level.
+    assert_eq!(lr2(45, &state), None);
+    assert_eq!((lr2(46, &state), lr2(48, &state), lr2(49, &state)), (Some(5), Some(12), Some(13)));
+    // Missing / present / one chart / several charts.
+    assert!(op(500, &state) && !op(505, &state));
+    assert!(op(506, &state) && op(511, &state) && op(518, &state) && !op(513, &state));
+    // Lamps per difficulty: EASY is LR2 lamp 2, EX-HARD folds into HARD (4), MAX into FC (5).
+    assert!(op(532, &state) && op(540, &state) && op(554, &state) && op(565, &state));
+    assert!(op(520, &state));
+    // 7 keys flash above level 12.
+    assert!(op(73, &state) && !op(78, &state) && op(79, &state) && !op(74, &state));
+    // Bar length is the level over the same limit.
+    let graph = |kind: i32| {
+        let def: SkinGraphDef =
+            serde_json::from_value(serde_json::json!({"id": "g", "type": kind})).unwrap();
+        graph_raw_value(&def, &state)
+    };
+    assert!((graph(106) - 5.0 / 12.0).abs() < 1e-6);
+    assert_eq!((graph(105), graph(109)), (0.0, 1.0));
+}
