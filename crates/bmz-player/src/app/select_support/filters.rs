@@ -124,6 +124,7 @@ pub(in crate::app) fn apply_select_sort(items: &mut [SelectItem], sort: SelectSo
 pub(in crate::app) enum SelectItemKey {
     Folder(String),
     ChartId(i64),
+    ChartFolder(String),
     ChartSha256([u8; 32]),
     ChartFallback { title: String, artist: String, table_level: String, table_full: String },
     Course(i64),
@@ -183,7 +184,12 @@ pub(in crate::app) fn restored_select_index(
     previous_index: usize,
 ) -> usize {
     previous_selected_key
-        .and_then(|key| items.iter().position(|item| select_item_key(item) == *key))
+        .and_then(|key| match key {
+            SelectItemKey::ChartFolder(folder_path) => items.iter().position(|item| {
+                matches!(item, SelectItem::Chart(row) if row.chart.as_ref().is_some_and(|chart| chart.folder_path == *folder_path))
+            }),
+            _ => items.iter().position(|item| select_item_key(item) == *key),
+        })
         .unwrap_or_else(|| previous_index.min(items.len().saturating_sub(1)))
 }
 

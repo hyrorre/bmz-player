@@ -24,7 +24,7 @@ impl WinitApp {
                 self.select.select_difficulty_filter = SelectDifficultyFilter::ORDER[index];
                 self.boot.profile_config.select.difficulty_filter =
                     self.select.select_difficulty_filter.as_str().to_string();
-                self.reload_select_items();
+                self.reload_select_items_for_difficulty_filter();
             }
             Lr2SelectButtonAction::SkinEvent(event_id) => {
                 self.execute_select_skin_event(event_id, direction);

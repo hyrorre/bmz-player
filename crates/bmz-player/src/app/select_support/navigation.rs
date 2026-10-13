@@ -4,6 +4,7 @@ use super::*;
 pub(in crate::app) enum SelectListAction {
     Enter(String),
     Refresh,
+    RefreshSelectedChartFolder(String),
     Exit,
 }
 
@@ -45,6 +46,9 @@ pub(in crate::app) fn prepare_select_list(
             };
             index = indices.pop().unwrap_or(0);
             key = Some(SelectItemKey::Folder(path));
+        }
+        SelectListAction::RefreshSelectedChartFolder(folder_path) => {
+            key = Some(SelectItemKey::ChartFolder(folder_path.clone()));
         }
         SelectListAction::Refresh => {}
     }

@@ -5,6 +5,24 @@ impl WinitApp {
         self.change_select_list(SelectListAction::Refresh);
     }
 
+    pub(in crate::app) fn reload_select_items_for_difficulty_filter(&mut self) {
+        if self.select.select_difficulty_filter == SelectDifficultyFilter::All {
+            self.reload_select_items();
+            return;
+        }
+
+        let selected_folder =
+            self.select.select_items.get(self.select.selected_index).and_then(|item| match item {
+                SelectItem::Chart(row) => row.chart.as_ref().map(|chart| chart.folder_path.clone()),
+                _ => None,
+            });
+        if let Some(folder_path) = selected_folder {
+            self.change_select_list(SelectListAction::RefreshSelectedChartFolder(folder_path));
+        } else {
+            self.reload_select_items();
+        }
+    }
+
     pub(in crate::app) fn change_select_list(&mut self, action: SelectListAction) -> bool {
         let started_at = Instant::now();
         let history: Vec<String> = self.select.search.history().iter().cloned().collect();
