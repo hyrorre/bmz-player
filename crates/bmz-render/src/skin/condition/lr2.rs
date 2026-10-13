@@ -43,6 +43,12 @@ pub(super) fn lr2_option(id: i32, state: &SkinDrawState) -> bool {
                     == Some(&i64::from((id - 520) % 10))
             })
         }
+        // Gauges / RANDOM / assist used in the selected song's past clears.
+        118..=149 => {
+            state.select_screen
+                && select_chart_metadata_available(state)
+                && state.select_lr2_option_history.is_some_and(|bits| bits & (1 << (id - 118)) != 0)
+        }
         // Best lamp the current settings can earn.
         62..=66 => lr2_clear_lamp_challenge(state) == i64::from(id - 62),
         // Selected rival's clear lamp and rank on the selected song.

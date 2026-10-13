@@ -310,7 +310,7 @@ impl WinitApp {
                 select_items,
                 replay_slot_cache: RefCell::new(None),
                 select_distribution_cache: RefCell::new(HashMap::new()),
-                same_folder_cache: RefCell::new(HashMap::new()),
+                lr2_select_cache: Box::default(),
                 collection_cache,
                 select_distributions: RefCell::new(Default::default()),
                 difficulty_tables,

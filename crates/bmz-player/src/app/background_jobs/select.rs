@@ -71,7 +71,7 @@ impl WinitApp {
         self.select.select_mode_filter = prepared.mode_filter;
         self.boot.profile_config.select.mode_filter = prepared.mode_filter.as_str().to_string();
         self.select.select_items = prepared.items;
-        self.select.same_folder_cache.borrow_mut().clear();
+        *self.select.lr2_select_cache.borrow_mut() = Default::default();
         // Table levels already resolve sources before score/analysis enrichment.
         let table_level = matches!(
             self.select.folder_stack.last().and_then(|path| parse_table_path(path)),

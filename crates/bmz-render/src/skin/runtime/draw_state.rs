@@ -377,6 +377,10 @@ pub struct SkinDrawState {
     pub rival_clear_index: Option<i64>,
     /// Selected song's same-folder difficulties (LR2 level bar, number 45..49).
     pub select_same_folder: Option<[crate::scene::SelectSameFolderDifficulty; 5]>,
+    /// Selected song's LR2 clear-option history bits (option 118..149).
+    pub select_lr2_option_history: Option<u32>,
+    /// Selected course's stage play levels (LR2 number 250..259).
+    pub select_course_levels: [Option<u16>; 10],
     /// 同 BP (NUMBER_RIVAL_MISSCOUNT=276)。
     pub rival_bp: Option<i64>,
     /// EXスコア元プレイの PGREAT/GREAT/GOOD/BAD/POOR
@@ -689,6 +693,8 @@ impl Default for SkinDrawState {
             rival_max_combo: None,
             rival_clear_index: None,
             select_same_folder: None,
+            select_lr2_option_history: None,
+            select_course_levels: [None; 10],
             rival_bp: None,
             rival_judge_counts: None,
             previous_best_ex_score: None,

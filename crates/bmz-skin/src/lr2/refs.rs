@@ -28,7 +28,9 @@ pub(super) fn lr2_number_ref(skin_type: i32, id: i32) -> Option<i32> {
         // Judge timing, per-difficulty levels, my best score / rate, the selected
         // song's IR rank / players / clear rate / rival diff, IR clear classes and
         // the rival's max EX / rate / notes.
-        12 | 45..=49 | 70 | 73 | 92..=95 | 210..=219 | 272..=274 if is_song_scene(skin_type) => {
+        12 | 45..=49 | 70 | 73 | 92..=95 | 210..=219 | 250..=259 | 272..=274
+            if is_song_scene(skin_type) =>
+        {
             Some(LR2_NUMBER_BASE + id)
         }
         // Extended LR2 result FAST / SLOW / combo break, as on the play screen.
@@ -72,6 +74,7 @@ fn is_lr2_song_scene_option(skin_type: i32, id: i32) -> bool {
                 | 70..=79
                 | 100..=105
                 | 110..=117
+                | 118..=149
                 | 500..=519
                 | 520..=525
                 | 530..=535

@@ -255,6 +255,7 @@ impl WinitApp {
         {
             selected_row.replay_slots = self.selected_chart_replay_slots();
             selected_row.same_folder_difficulties = self.selected_same_folder_difficulties();
+            selected_row.lr2_option_history = self.selected_lr2_option_history();
         }
         SelectSnapshot {
             screen_size: [0, 0],

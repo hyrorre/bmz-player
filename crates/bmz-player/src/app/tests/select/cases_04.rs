@@ -590,3 +590,16 @@ fn moved_select_index_moves_by_single_page_and_wraps_edges() {
     assert_eq!(moved_select_index(0, 10, SelectMove::Last), 9);
     assert_eq!(moved_select_index(9, 10, SelectMove::First), 0);
 }
+
+#[test]
+fn select_snapshot_rows_expose_course_stage_levels() {
+    let mut row = select_course_row(2, 3);
+    for (entry, level) in row.entry_previews.iter_mut().zip(["10", "12", "14"]) {
+        entry.play_level = level.to_string();
+    }
+    let rows = vec![SelectItem::Course(row)];
+    let profile = ProfileConfig::new_default("default", "Default", 0);
+    let snapshot = select_snapshot_rows(&rows, 0, 1, &profile, None, &HashMap::new());
+    // Unresolved stages have no level.
+    assert_eq!(&snapshot[0].course_levels[..4], &[Some(10), Some(12), None, None]);
+}

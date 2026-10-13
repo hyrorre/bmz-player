@@ -851,3 +851,36 @@ fn same_folder_difficulties_fold_charts_by_difficulty_with_best_clears() {
         [(0, None, 0), (0, None, 0), (1, Some(9), 0), (2, Some(12), 5), (0, None, 0)]
     );
 }
+
+#[test]
+fn lr2_clear_option_history_folds_stored_clears() {
+    let (mut library_db, mut score_db) = open_in_memory_dbs();
+    let song = chart("History");
+    library_db.upsert_chart_import(&record_for_chart("/songs/history.bms", &song)).unwrap();
+    let sha = song.identity.file_sha256;
+    let policy = crate::ln_policy::score_ln_policy(LnPolicySetting::AutoLn, Default::default());
+    let record = |clear: ClearType, gauge: GaugeType, arrange: &str, assist_mask: u32| {
+        let mut score = score_for_chart(sha);
+        score.ln_policy = policy;
+        score.clear_type = clear;
+        score.gauge_type = Some(gauge);
+        score.arrange = arrange.to_string();
+        score.assist_mask = assist_mask;
+        score
+    };
+    for score in [
+        record(ClearType::Normal, GaugeType::Normal, "Normal", 0),
+        record(ClearType::Hard, GaugeType::ExHard, "Mirror", 0),
+        record(ClearType::Easy, GaugeType::Easy, "Random", 0),
+        record(ClearType::Failed, GaugeType::Hazard, "SRandom", 0),
+        record(ClearType::AssistEasy, GaugeType::Normal, "HRandom", 1),
+    ] {
+        score_db.insert_score(&score).unwrap();
+    }
+    let chart = library_db.list_charts_by_ids(&[1]).unwrap().remove(0);
+    let bits =
+        lr2_clear_option_history(&score_db, &chart, LnPolicySetting::AutoLn, RuleMode::Beatoraja)
+            .unwrap();
+    // GROOVE + NORMAL, HARD (EX-HARD) + MIRROR, EASY gauge, assist; the failed play is ignored.
+    assert_eq!(bits, 0x1 | 0x100 | 0x2 | 0x200 | 0x8 | 0x100_0000);
+}

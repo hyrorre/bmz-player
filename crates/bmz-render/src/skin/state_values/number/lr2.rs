@@ -37,6 +37,8 @@ pub(in crate::skin) fn lr2_number(id: i32, state: &SkinDrawState) -> Option<i64>
             let max = i64::from(state.select_total_notes) * 2;
             (max > 0).then(|| i64::from(state.select_ex_score.unwrap_or(0)) * 100 / max)
         }
+        // Selected course's stage levels.
+        250..=259 => state.select_course_levels[(id - 250) as usize].map(i64::from),
         // IR players / rates per LR2 clear class: FAILED, EASY, CLEAR, HARD, FULLCOMBO.
         210..=219 => lr2_ir_clear_class(&state.ir_ranking, id),
         // Selected song's IR rank / players / clear rate.

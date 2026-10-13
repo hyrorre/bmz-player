@@ -194,6 +194,15 @@ fn score_key_query_params(keys: &[ScoreKey]) -> Vec<String> {
     params
 }
 
+/// One clear in the score history, as stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClearOptionHistoryRow {
+    pub clear_type: String,
+    pub gauge_type: String,
+    pub arrange: String,
+    pub assist_mask: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct ScoreRecord {
     pub chart_sha256: [u8; 32],

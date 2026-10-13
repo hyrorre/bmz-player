@@ -642,6 +642,8 @@ macro_rules! skin_document_render_select_render_methods {
                 settings_editing: snapshot.settings_editing,
                 select_chart_key_mode: selected_row.and_then(|row| row.chart_key_mode),
                 select_same_folder: selected_row.and_then(|row| row.same_folder_difficulties),
+                select_lr2_option_history: selected_row.and_then(|row| row.lr2_option_history),
+                select_course_levels: selected_row.map_or([None; 10], |row| row.course_levels),
                 random_lane_refs: selected_row
                     .and_then(|row| row.chart_key_mode)
                     .map_or([0; SKIN_RANDOM_LANE_REF_COUNT], |key_mode| {

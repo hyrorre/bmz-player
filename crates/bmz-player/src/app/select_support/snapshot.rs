@@ -406,6 +406,12 @@ fn select_course_snapshot(index: usize, row: &SelectCourseRow) -> SelectRowSnaps
         course_titles: course_titles_from_entries(
             row.entry_previews.iter().map(|entry| (entry.title.as_str(), entry.resolved)),
         ),
+        course_levels: std::array::from_fn(|stage| {
+            row.entry_previews
+                .get(stage)
+                .filter(|entry| entry.resolved)
+                .and_then(|entry| entry.play_level.trim().parse().ok())
+        }),
         course_constraints: course_constraint_flags(&row.constraints),
         ..SelectRowSnapshot::default()
     }

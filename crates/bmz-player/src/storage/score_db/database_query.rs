@@ -65,6 +65,35 @@ impl ScoreDatabase {
             .map_err(Into::into)
     }
 
+    /// Clear type, gauge type, arrange and assist mask of every non-autoplay clear
+    /// of `key`, for LR2's clear-option history (select option 118..145).
+    pub fn clear_option_history(&self, key: ScoreKey) -> Result<Vec<ClearOptionHistoryRow>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT clear_type, gauge_type, arrange, assist_mask FROM score_history
+             WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3
+               AND CASE rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
+                   WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END = ?4
+               AND autoplay = 0 AND clear_type NOT IN ('NoPlay', 'Failed')",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                hash_to_hex(&key.chart_sha256),
+                key.ln_policy.as_str(),
+                key.double_option.as_str(),
+                key.rule_mode.as_str(),
+            ],
+            |row| {
+                Ok(ClearOptionHistoryRow {
+                    clear_type: row.get(0)?,
+                    gauge_type: row.get(1)?,
+                    arrange: row.get(2)?,
+                    assist_mask: row.get(3)?,
+                })
+            },
+        )?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
     pub fn best_ghost(&self, key: ScoreKey, total_notes: u32) -> Result<Option<Vec<u8>>> {
         let Some(ghost) = self
             .conn

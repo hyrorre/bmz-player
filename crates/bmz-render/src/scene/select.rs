@@ -375,6 +375,8 @@ pub struct SelectRowSnapshot {
     /// beatoraja STRING_COURSE1_TITLE..10_TITLE (150..159) for course rows.
     /// Empty for non-course rows.
     pub course_titles: [String; 10],
+    /// Play levels of course stages 1..10 for course rows (LR2 number 250..259).
+    pub course_levels: [Option<u16>; 10],
     /// beatoraja OPTION_GRADEBAR_* (1002..1017) for course rows.
     pub course_constraints: CourseConstraintFlags,
     /// 曲行のみ。beatoraja OPTION_MODE_* (160..164, 1160..1161) 用。
@@ -382,6 +384,8 @@ pub struct SelectRowSnapshot {
     /// Selected song row only: BEGINNER..INSANE of the charts in the same folder,
     /// for LR2's level bar. None when not loaded.
     pub same_folder_difficulties: Option<[SelectSameFolderDifficulty; 5]>,
+    /// Selected song row only: LR2 clear-option history bits (option 118..149).
+    pub lr2_option_history: Option<u32>,
 }
 
 /// One difficulty slot of the charts in the selected chart's folder.
@@ -462,9 +466,11 @@ impl Default for SelectRowSnapshot {
             in_library: true,
             achieved_trophy_names: Vec::new(),
             course_titles: Default::default(),
+            course_levels: [None; 10],
             course_constraints: CourseConstraintFlags::default(),
             chart_key_mode: None,
             same_folder_difficulties: None,
+            lr2_option_history: None,
         }
     }
 }

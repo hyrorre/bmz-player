@@ -412,3 +412,28 @@ fn lr2_level_bar_uses_same_folder_difficulties() {
     assert!((graph(106) - 5.0 / 12.0).abs() < 1e-6);
     assert_eq!((graph(105), graph(109)), (0.0, 1.0));
 }
+
+#[test]
+fn lr2_clear_option_history_bits_drive_options_118_to_149() {
+    let op = |id: i32, state: &SkinDrawState| test_skin_ops(&[LR2_OPTION_BASE + id], &[], state);
+    let state = SkinDrawState {
+        select_screen: true,
+        select_row_kind: SelectRowKind::Song,
+        select_in_library: true,
+        select_lr2_option_history: Some(0x1 | 0x200 | 0x100_0000),
+        ..Default::default()
+    };
+    assert!(op(118, &state) && op(127, &state) && op(142, &state));
+    assert!(!op(119, &state) && !op(126, &state) && !op(134, &state));
+    let folder = SkinDrawState { select_is_folder: true, ..state };
+    assert!(!op(118, &folder));
+}
+
+#[test]
+fn lr2_course_stage_levels() {
+    let mut state = SkinDrawState { select_screen: true, ..Default::default() };
+    state.select_course_levels[0] = Some(10);
+    state.select_course_levels[1] = Some(12);
+    let lr2 = |id: i32| skin_state_number(LR2_NUMBER_BASE + id, &state);
+    assert_eq!((lr2(250), lr2(251), lr2(252)), (Some(10), Some(12), None));
+}

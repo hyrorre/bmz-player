@@ -32,7 +32,8 @@ use paths::*;
 use table::*;
 
 pub use enrichment::{
-    same_folder_difficulties, select_folder_summary, select_folder_summary_for_rule_mode,
+    lr2_clear_option_history, same_folder_difficulties, select_folder_summary,
+    select_folder_summary_for_rule_mode,
 };
 pub use favorites::{
     SelectCollectionCache, apply_collection_flags, favorite_song_representatives_for_folder,

@@ -363,6 +363,53 @@ pub fn same_folder_difficulties(
     Ok(slots)
 }
 
+/// LR2's clear-option history (`op_history`, select option 118..149) of a chart's
+/// score key, built from its stored clears.
+pub fn lr2_clear_option_history(
+    score_db: &ScoreDatabase,
+    chart: &ChartListItem,
+    ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
+) -> Result<u32> {
+    let key = score_key_for_chart(chart, ln_policy_setting, rule_mode);
+    Ok(lr2_clear_option_bits(&score_db.clear_option_history(key)?))
+}
+
+/// Mirrors LR2's `ConvertOptionHistory`. Assisted clears set only the assist bit (142).
+/// EASY-family clears set the EASY gauge bit (121) when played on an EASY gauge.
+/// NORMAL or better clears set the gauge bit (118..123) and the RANDOM bit (126..131).
+/// BMZ does not store HIDDEN / SUDDEN, so 134..141 stay unset.
+pub(super) fn lr2_clear_option_bits(
+    rows: &[crate::storage::score_db::ClearOptionHistoryRow],
+) -> u32 {
+    rows.iter().fold(0, |bits, row| {
+        if row.assist_mask != 0 {
+            return bits | 0x100_0000;
+        }
+        let easy_gauge = matches!(row.gauge_type.as_str(), "Easy" | "AssistEasy");
+        if matches!(row.clear_type.as_str(), "AssistEasy" | "LightAssistEasy" | "Easy") {
+            return if easy_gauge { bits | 0x8 } else { bits };
+        }
+        let gauge = match row.gauge_type.as_str() {
+            "Normal" => 0x1,
+            "Hard" | "ExHard" => 0x2,
+            "Hazard" => 0x4,
+            _ if easy_gauge => 0x8,
+            _ => 0,
+        };
+        let arrange = match row.arrange.as_str() {
+            "Normal" => 0x100,
+            "Mirror" => 0x200,
+            "Random" => 0x400,
+            "SRandom" => 0x800,
+            "HRandom" => 0x1000,
+            "AllScratch" => 0x2000,
+            _ => 0,
+        };
+        bits | gauge | arrange
+    })
+}
+
 /// beatoraja ClearType index of a stored clear type name.
 fn clear_type_index(clear_type: &str) -> i64 {
     match clear_type {
