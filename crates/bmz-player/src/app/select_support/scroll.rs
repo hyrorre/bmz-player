@@ -7,27 +7,66 @@ pub(in crate::app) struct SelectBarScroll {
     started_at: Option<Instant>,
     duration: Duration,
     remaining: f64,
+    remaining_velocity: f64,
 }
 
 impl SelectBarScroll {
     pub(in crate::app) fn remaining_at(&self, now: Instant) -> f64 {
-        let Some(started_at) = self.started_at else { return 0.0 };
+        self.sample_at(now).0
+    }
+
+    /// Evaluate the residual and its derivative (rows/second) on the same clock.
+    fn sample_at(&self, now: Instant) -> (f64, f64) {
+        let Some(started_at) = self.started_at else { return (0.0, 0.0) };
         if self.duration.is_zero() {
-            return 0.0;
+            return (0.0, 0.0);
         }
-        let progress =
-            now.saturating_duration_since(started_at).as_secs_f64() / self.duration.as_secs_f64();
-        self.remaining * (1.0 - progress).clamp(0.0, 1.0)
+        let seconds = self.duration.as_secs_f64();
+        let u = now.saturating_duration_since(started_at).as_secs_f64() / seconds;
+        if u >= 1.0 {
+            return (0.0, 0.0);
+        }
+        // Cubic Hermite to residual=0, velocity=0. Factoring (1-u) avoids
+        // cancellation near arrival; do not ease each individual row interval.
+        let rest = 1.0 - u;
+        let tangent = self.remaining_velocity * seconds;
+        let remaining = rest * rest * (self.remaining * (1.0 + 2.0 * u) + tangent * u);
+        let velocity = rest * (-6.0 * self.remaining * u + tangent * (1.0 - 3.0 * u)) / seconds;
+        (remaining, velocity)
     }
 
     pub(in crate::app) fn move_by(&mut self, rows: i32, now: Instant, duration: Duration) {
-        self.remaining = self.remaining_at(now) + f64::from(rows);
+        let (remaining, velocity) = self.sample_at(now);
+        self.remaining = remaining + f64::from(rows);
+        self.remaining_velocity = velocity;
         self.started_at = Some(now);
-        self.duration = duration;
+        self.duration = bounded_scroll_duration(self.remaining, velocity, duration);
     }
 
     pub(in crate::app) fn reset(&mut self) {
         *self = Self::default();
+    }
+}
+
+fn bounded_scroll_duration(remaining: f64, velocity: f64, requested: Duration) -> Duration {
+    if requested.is_zero() || velocity == 0.0 {
+        return requested;
+    }
+    let limit = if remaining * velocity < 0.0 {
+        // A tangent of at most 3 times the distance is monotone. Shorten time
+        // rather than clamp velocity, preserving continuity at retargeting.
+        3.0 * remaining.abs() / velocity.abs()
+    } else {
+        // Reversal (or retargeting exactly onto the current position) must
+        // first brake. h10=u*(1-u)^2 <= 4/27 bounds travel outside the interval
+        // between the current position and the target to a quarter row.
+        const MAX_REVERSAL_DRIFT_ROWS: f64 = 0.25;
+        MAX_REVERSAL_DRIFT_ROWS * 27.0 / (4.0 * velocity.abs())
+    };
+    if limit < requested.as_secs_f64() {
+        Duration::from_secs_f64(limit).max(Duration::from_nanos(1))
+    } else {
+        requested
     }
 }
 
@@ -67,7 +106,7 @@ mod tests {
         let again = now + Duration::from_millis(60);
         let before = 1.0 - scroll.remaining_at(again);
         scroll.move_by(1, again, duration);
-        assert!((scroll.remaining_at(again) - 1.4).abs() < 1e-9);
+        assert!((scroll.remaining_at(again) - 1.352).abs() < 1e-9);
         assert!((2.0 - scroll.remaining_at(again) - before).abs() < 1e-9);
         let reverse = again + Duration::from_millis(10);
         let before = 2.0 - scroll.remaining_at(reverse);
@@ -122,10 +161,119 @@ mod tests {
             scroll.move_by(7, now, Duration::from_secs(1));
             for frame in 0..=hz {
                 let elapsed = Duration::from_secs_f64(f64::from(frame) / f64::from(hz));
-                let expected = 7.0 * (1.0 - elapsed.as_secs_f64());
+                let u = elapsed.as_secs_f64();
+                let expected = 7.0 * (1.0 - u).powi(2) * (1.0 + 2.0 * u);
                 assert!((scroll.remaining_at(now + elapsed) - expected).abs() < 1e-8);
             }
         }
+    }
+
+    #[test]
+    fn retargeting_preserves_position_and_velocity_with_different_durations() {
+        let start = Instant::now();
+        let mut scroll = SelectBarScroll::default();
+        let mut target = 0.0;
+        for (elapsed_ms, rows, duration_ms) in
+            [(0, 1, 300), (90, 1, 50), (100, -1, 300), (105, 7, 100), (130, -36, 50)]
+        {
+            let now = start + Duration::from_millis(elapsed_ms);
+            let (remaining, velocity) = scroll.sample_at(now);
+            let position = target - remaining;
+            scroll.move_by(rows, now, Duration::from_millis(duration_ms));
+            target += f64::from(rows);
+            let (remaining, after_velocity) = scroll.sample_at(now);
+            assert!((target - remaining - position).abs() < 1e-9);
+            assert!((after_velocity - velocity).abs() < 1e-9);
+            let epsilon = Duration::from_nanos(1);
+            let difference =
+                (scroll.remaining_at(now + epsilon) - remaining) / epsilon.as_secs_f64();
+            assert!(
+                (difference - velocity).abs() < 0.01,
+                "time={elapsed_ms}, difference={difference}, velocity={velocity}"
+            );
+        }
+    }
+
+    #[test]
+    fn arrival_is_exact_and_starts_and_stops_at_rest() {
+        let start = Instant::now();
+        let duration = Duration::from_millis(100);
+        let mut scroll = SelectBarScroll::default();
+        scroll.move_by(7, start, duration);
+        assert_eq!(scroll.sample_at(start), (7.0, 0.0));
+        assert_eq!(scroll.remaining_at(start + duration / 2), 3.5);
+        assert_eq!(scroll.sample_at(start + duration), (0.0, 0.0));
+        assert_eq!(scroll.sample_at(start + duration * 2), (0.0, 0.0));
+        let (_, velocity) = scroll.sample_at(start + duration - Duration::from_nanos(1));
+        assert!(velocity.abs() < 1e-5);
+        scroll.move_by(-1, start + duration, duration);
+        assert_eq!(scroll.sample_at(start + duration), (-1.0, 0.0));
+    }
+
+    #[test]
+    fn reversal_brakes_with_bounded_drift_and_no_position_clamp() {
+        let start = Instant::now();
+        let mut scroll = SelectBarScroll::default();
+        let initial_duration = Duration::from_millis(50);
+        scroll.move_by(1, start, initial_duration);
+        let reverse = start + initial_duration / 2;
+        let (before_remaining, before_velocity) = scroll.sample_at(reverse);
+        scroll.move_by(-1, reverse, Duration::from_millis(300));
+        assert!(scroll.duration < Duration::from_millis(300));
+        let initial_remaining = before_remaining - 1.0;
+        assert_eq!(scroll.sample_at(reverse), (initial_remaining, before_velocity));
+        assert!(scroll.remaining_at(reverse + Duration::from_micros(1)) < initial_remaining);
+        let mut changed_direction = false;
+        for frame in 0..=1000 {
+            let now = reverse + scroll.duration.mul_f64(f64::from(frame) / 1000.0);
+            let (remaining, velocity) = scroll.sample_at(now);
+            assert!(remaining >= initial_remaining - 0.25 - 1e-8);
+            assert!(remaining <= 1e-9);
+            changed_direction |= velocity > 0.0;
+        }
+        assert!(changed_direction);
+        assert_eq!(scroll.sample_at(reverse + scroll.duration), (0.0, 0.0));
+    }
+
+    #[test]
+    fn nearby_target_shortens_time_without_overshooting_or_changing_velocity() {
+        let start = Instant::now();
+        let mut scroll = SelectBarScroll::default();
+        scroll.move_by(2, start, Duration::from_millis(100));
+        let again = start + Duration::from_millis(40);
+        let (remaining, velocity) = scroll.sample_at(again);
+        scroll.move_by(-1, again, Duration::from_millis(300));
+        assert!(scroll.duration < Duration::from_millis(300));
+        assert_eq!(scroll.sample_at(again).0, remaining - 1.0);
+        assert!((scroll.sample_at(again).1 - velocity).abs() < 1e-9);
+        let mut previous = remaining - 1.0;
+        for frame in 0..=1000 {
+            let now = again + scroll.duration.mul_f64(f64::from(frame) / 1000.0);
+            let (remaining, velocity) = scroll.sample_at(now);
+            assert!(remaining >= -1e-9 && remaining <= previous + 1e-9);
+            assert!(velocity <= 1e-8);
+            previous = remaining;
+        }
+    }
+
+    #[test]
+    fn zero_distance_retarget_brakes_then_returns_and_reset_discards_velocity() {
+        let start = Instant::now();
+        let mut scroll = SelectBarScroll::default();
+        scroll.move_by(2, start, Duration::from_millis(100));
+        let again = start + Duration::from_millis(50);
+        let velocity = scroll.sample_at(again).1;
+        scroll.move_by(-1, again, Duration::from_millis(300));
+        assert_eq!(scroll.sample_at(again), (0.0, velocity));
+        assert!(scroll.remaining_at(again + scroll.duration / 3) < 0.0);
+        assert!(scroll.remaining_at(again + scroll.duration / 3).abs() <= 0.25 + 1e-8);
+        assert_eq!(scroll.sample_at(again + scroll.duration), (0.0, 0.0));
+        scroll.reset();
+        assert_eq!(scroll.sample_at(again), (0.0, 0.0));
+        scroll.move_by(-7, again, Duration::from_millis(100));
+        assert_eq!(scroll.sample_at(again), (-7.0, 0.0));
+        scroll.move_by(1, again + Duration::from_millis(10), Duration::ZERO);
+        assert_eq!(scroll.sample_at(again + Duration::from_millis(10)), (0.0, 0.0));
     }
 
     #[test]
