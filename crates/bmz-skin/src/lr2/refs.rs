@@ -8,6 +8,16 @@ fn is_play(skin_type: i32) -> bool {
     matches!(skin_type, 0 | 1 | 2 | 3 | 4 | 12 | 13)
 }
 
+/// These properties are fixed for a loaded attempt or Result. DST options remain
+/// draw-time properties; only #IF uses the supplied load snapshot here.
+pub(super) fn is_lr2_load_time_option(skin_type: i32, id: i32) -> bool {
+    (is_play(skin_type) || is_result(skin_type))
+        && matches!(id,
+        32 | 33 | 54..=57 | 60 | 61 | 82 | 84 | 150..=175 | 177
+        | 180..=191 | 194 | 195 | 280..=293 | 1080)
+        || (is_result(skin_type) && matches!(id, 40..=43))
+}
+
 fn is_result(skin_type: i32) -> bool {
     matches!(skin_type, 7 | 15)
 }

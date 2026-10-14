@@ -336,7 +336,7 @@ fn wmii_fhd_lr2skin_renders_ac_bga_frame_when_available() {
     for entry in &decoded.document.destination {
         match entry {
             bmz_render::skin::DestinationListEntry::Single(destination) => {
-                destinations.push(destination);
+                destinations.push(destination.as_ref());
             }
             bmz_render::skin::DestinationListEntry::Conditional {
                 destinations: nested, ..

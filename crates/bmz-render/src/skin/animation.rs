@@ -59,7 +59,7 @@ pub(super) fn destination_entries<'a>(
     let mut result = Vec::new();
     for entry in entries {
         match entry {
-            DestinationListEntry::Single(destination) => result.push(destination),
+            DestinationListEntry::Single(destination) => result.push(destination.as_ref()),
             DestinationListEntry::Conditional { if_ops, destinations } => {
                 if test_skin_dst_if(if_ops, enabled_options) {
                     result.extend(destinations);

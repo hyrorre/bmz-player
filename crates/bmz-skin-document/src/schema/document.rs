@@ -381,6 +381,9 @@ pub struct SkinImageSetDef {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 pub struct SkinValueDef {
+    /// LR2 CSV numbers use consecutive 10/11/24-cell frames rather than rows.
+    #[serde(default, rename = "lr2Number")]
+    pub lr2_number: bool,
     #[serde(default, deserialize_with = "deserialize_skin_id")]
     pub id: String,
     #[serde(default, deserialize_with = "deserialize_skin_id")]

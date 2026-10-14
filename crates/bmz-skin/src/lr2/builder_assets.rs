@@ -154,7 +154,7 @@ impl<'a> CsvBuilder<'a> {
         let digit = if signed_layout { values[13].saturating_add(1) } else { values[13] };
         let zeropadding = if signed_layout {
             if line.fields.get(14).is_some_and(|value| !value.is_empty()) { values[14] } else { 2 }
-        } else if cells % 10 != 0 {
+        } else if cells % 11 == 0 || cells % 10 != 0 {
             2
         } else {
             0
@@ -185,6 +185,7 @@ impl<'a> CsvBuilder<'a> {
         };
         let id = self.alloc_id("lr2-number");
         self.values.push(json!({
+            "lr2Number": true,
             "id": id,
             "src": region.src,
             "x": region.x,

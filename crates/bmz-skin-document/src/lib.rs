@@ -486,7 +486,7 @@ impl SkinDocument {
         let mut result = Vec::new();
         for entry in &self.destination {
             match entry {
-                DestinationListEntry::Single(d) => result.push(d),
+                DestinationListEntry::Single(d) => result.push(d.as_ref()),
                 DestinationListEntry::Conditional { if_ops, destinations } => {
                     if test_skin_dst_if(if_ops, enabled_options) {
                         result.extend(destinations.iter());

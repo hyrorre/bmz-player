@@ -32,7 +32,7 @@ fn luxe_flat_result_grade_draws_zero_and_boundary_differences_in_auto_and_compat
                 .into_iter()
                 .filter(|dst| dst.id.starts_with("rank_diff_"))
                 .cloned()
-                .map(DestinationListEntry::Single)
+                .map(|destination| DestinationListEntry::Single(Box::new(destination)))
                 .collect();
             assert!(!document.destination.is_empty(), "{file}");
             let grade_value =

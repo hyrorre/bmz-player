@@ -97,6 +97,10 @@ impl<'a> CsvBuilder<'a> {
         let values = parse_values(line);
         let index = values[1].max(0) as usize;
         let Some(region) = self.source_region(&values) else {
+            self.current = None;
+            if let Some(source) = self.note.line_sources.get_mut(index) {
+                *source = None;
+            }
             return;
         };
         let id = self.alloc_id("lr2-line");
@@ -214,6 +218,7 @@ impl<'a> CsvBuilder<'a> {
     pub(super) fn add_judge_image(&mut self, line: &CsvLine, index: usize) {
         let values = parse_values(line);
         let Some(region) = self.source_region(&values) else {
+            self.current = None;
             return;
         };
         let id = self.alloc_id("lr2-judge-image");
@@ -251,12 +256,16 @@ impl<'a> CsvBuilder<'a> {
         let values = parse_values(line);
         for variant in current.variants {
             let ops = self.combined_conditional_ops(&variant);
-            let dst = self.destination_def_with_default_offsets(
+            let mut dst = self.destination_def_with_default_offsets(
                 &variant.id,
                 &values,
                 &ops,
                 &[LR2_OFFSET_JUDGE_1P, LR2_OFFSET_LIFT],
             );
+            let mut excluded = variant.excluded_ops;
+            excluded.extend(self.conditional_not_ops.clone());
+            dst["lr2Not"] = json!(excluded);
+            self.expand_destination_option_aliases(&mut dst);
             if let Some(entry) = self.judges[index].images.iter_mut().rev().find(|entry| {
                 entry.get("id").and_then(JsonValue::as_str) == Some(variant.id.as_str())
             }) {
@@ -267,6 +276,7 @@ impl<'a> CsvBuilder<'a> {
             self.judges[index].detail_inserted = true;
             self.add_default_judge_detail(&values, index);
         }
+        self.current_has_destination = true;
     }
 
     pub(super) fn add_default_judge_detail(&mut self, judge_dst: &[i32; 22], side: usize) {
@@ -378,6 +388,9 @@ impl<'a> CsvBuilder<'a> {
                 &ops,
                 &[LR2_OFFSET_JUDGE_1P, LR2_OFFSET_LIFT],
             );
+            let mut excluded = variant.excluded_ops;
+            excluded.extend(self.conditional_not_ops.clone());
+            dst["lr2Not"] = json!(excluded);
             self.expand_destination_option_aliases(&mut dst);
             if let Some(entry) = self.judges[index].numbers.iter_mut().rev().find(|entry| {
                 entry.get("id").and_then(JsonValue::as_str) == Some(variant.id.as_str())
@@ -385,6 +398,7 @@ impl<'a> CsvBuilder<'a> {
                 merge_destination_entry(entry, dst);
             }
         }
+        self.current_has_destination = true;
     }
 
     pub(super) fn add_hidden_cover(&mut self, line: &CsvLine) {

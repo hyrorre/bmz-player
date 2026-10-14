@@ -102,6 +102,50 @@ pub(super) fn number_padding(value: &SkinValueDef) -> NumberPadding {
     NumberPadding::None
 }
 
+pub(super) fn lr2_number_frame_cells(value: &SkinValueDef) -> Option<i32> {
+    let cells = value.divx.max(1).saturating_mul(value.divy.max(1));
+    // LR2's later format checks take precedence when a sheet is divisible by
+    // several glyph counts (for example 110 cells is an eleven-cell font).
+    [24, 11, 10].into_iter().find(|stride| cells % stride == 0)
+}
+
+/// LR2's glyph indices are linear in the source grid, including blanks and
+/// the sign cell. MAX denotes an undrawn space in a ten-cell font.
+pub(super) fn lr2_number_digits(value: &SkinValueDef, number: i64, align: i32) -> Option<Vec<u8>> {
+    let stride = lr2_number_frame_cells(value)?;
+    let signed = stride == 24;
+    if number < 0 && !signed {
+        return None;
+    }
+    let width = value.digit.saturating_sub(i32::from(signed)).max(0) as usize;
+    if width == 0 {
+        return None;
+    }
+    let text = number.unsigned_abs().to_string();
+    let text = if text.len() > width {
+        if align == 0 { &text[text.len() - width..] } else { &text[..width] }
+    } else {
+        text.as_str()
+    };
+    // LR2 only selects the negative numeric row for a single 24-cell sheet;
+    // animated sheets keep the common numeric row and select a minus sign.
+    let offset = if number < 0 && value.divx.saturating_mul(value.divy) == 24 { 12 } else { 0 };
+    let blank = if stride == 10 { u8::MAX } else { 10 + offset };
+    let mut digits = Vec::with_capacity(value.digit.max(0) as usize);
+    if signed {
+        digits.push(if number < 0 { 23 } else { 11 });
+    }
+    let blanks = width.saturating_sub(text.len());
+    if align == 0 {
+        digits.extend(std::iter::repeat_n(blank, blanks));
+    }
+    digits.extend(text.bytes().map(|digit| digit - b'0' + offset));
+    if align != 0 {
+        digits.extend(std::iter::repeat_n(blank, blanks));
+    }
+    Some(digits)
+}
+
 pub(super) fn signed_value_padding(_value: &SkinValueDef, padding: NumberPadding) -> NumberPadding {
     // beatoraja の SkinNumber は、mimage がある符号付き数値でも
     // `zeropadding` をそのまま適用する。差分 ref だけ設定を無視すると、

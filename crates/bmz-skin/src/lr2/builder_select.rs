@@ -93,6 +93,7 @@ impl CsvBuilder<'_> {
                 vec![CurrentObjectVariant {
                     id: "lr2-bars".to_string(),
                     conditional_ops: Vec::new(),
+                    excluded_ops: Vec::new(),
                 }]
             } else {
                 self.select
@@ -114,6 +115,9 @@ impl CsvBuilder<'_> {
                     &ops,
                     &[],
                 );
+                let mut excluded = variant.excluded_ops;
+                excluded.extend(self.conditional_not_ops.clone());
+                destination["lr2Not"] = json!(excluded);
                 self.expand_destination_option_aliases(&mut destination);
                 let entries =
                     self.select.destinations.entry((kind.to_string(), index)).or_default();

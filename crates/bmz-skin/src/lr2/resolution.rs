@@ -41,6 +41,16 @@ impl<'a> CsvBuilder<'a> {
             if !processor.should_execute(line) {
                 continue;
             }
+            if line.command == "SETOPTION" {
+                let condition = processor.active_runtime_condition();
+                if condition.op.is_empty() && condition.not.is_empty() {
+                    processor.assign_option(
+                        parse_i32(line.fields.get(1)),
+                        parse_i32(line.fields.get(2)) >= 1,
+                    );
+                }
+                continue;
+            }
             if line.command == "INCLUDE" {
                 if depth >= LR2_RESOLUTION_INCLUDE_DEPTH {
                     continue;

@@ -21,10 +21,12 @@ mod builder_play;
 mod builder_result;
 mod builder_select;
 mod helpers;
+mod include;
 mod processor;
 mod refs;
 mod resolution;
 
+use bmz_skin_document::SkinLr2ConditionDef as Lr2Condition;
 use helpers::*;
 use processor::Processor;
 use refs::*;
@@ -145,6 +147,7 @@ struct CurrentObject {
 struct CurrentObjectVariant {
     id: String,
     conditional_ops: Vec<i32>,
+    excluded_ops: Vec<Lr2Condition>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -198,8 +201,11 @@ struct CsvBuilder<'a> {
     bga: Option<JsonValue>,
     destinations: Vec<JsonValue>,
     current: Option<CurrentObject>,
+    current_kind: String,
+    current_by_kind: HashMap<String, (Option<CurrentObject>, bool)>,
     conditional_ops: Vec<i32>,
-    runtime_option_aliases: HashMap<i32, Vec<i32>>,
+    conditional_not_ops: Vec<Lr2Condition>,
+    runtime_option_aliases: HashMap<i32, Lr2Condition>,
     stretch: i32,
     lr2_gauge_id: Option<String>,
     lr2_gauge_add_x: i32,
@@ -210,6 +216,7 @@ struct CsvBuilder<'a> {
     remap_single_play_2p_lanes: bool,
     file_dependencies: BTreeSet<String>,
     loaded_file_dependencies: BTreeMap<PathBuf, SkinLoadedFileDependency>,
+    include_choices: HashMap<PathBuf, PathBuf>,
 }
 
 #[derive(Default)]
@@ -279,6 +286,9 @@ pub(super) fn load_lr2_csv_skin_value_with_runtime_options(
     let lines = read_csv_lines(path)?;
     tracing::debug!(path = %path.display(), command_count = lines.len(), "lr2 skin command file read complete");
     let mut ops = LR2_FIXED_OPTIONS.into_iter().collect::<HashMap<_, _>>();
+    // The snapshot-free API loads the ordinary Play layout. Runtime callers
+    // override these defaults for autoplay; replay keeps ordinary Play's layout.
+    ops.extend([(32, true), (33, false)]);
     ops.extend(runtime_options.iter().map(|(&id, &value)| (id, value)));
     ops.extend(builder.header.selected_ops.clone());
     if matches!(builder.header.skin_type, 7 | 15) {
@@ -305,6 +315,9 @@ pub(super) fn load_lr2_csv_skin_value_with_runtime_options(
     dependencies.option_values.extend(builder.load_time_option_dependencies());
     dependencies.files.extend(builder.file_dependencies.iter().cloned());
     dependencies.loaded_files.extend(builder.loaded_file_dependencies.clone());
+    // A fresh load must draw a new random include. Asset caches can still reuse
+    // the decoded images, but the constructed document is attempt-specific.
+    dependencies.opaque |= !builder.include_choices.is_empty();
     let warnings = builder.warnings.clone();
     let internal_enabled_options = builder.internal_enabled_options();
     tracing::debug!(path = %path.display(), "lr2 skin document finalization begin");
@@ -334,7 +347,7 @@ pub fn load_lr2_csv_skin_dependency_option_values(
         .into_iter()
         .map(|option_id| {
             let option_id = option_id.abs();
-            (option_id, header.selected_ops.get(&option_id).copied().unwrap_or(false))
+            (option_id, header.selected_ops.get(&option_id).copied().unwrap_or(option_id == 32))
         })
         .collect())
 }
@@ -354,6 +367,15 @@ fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<Loaded
             continue;
         }
         match line.command.as_str() {
+            "SETOPTION" => {
+                let condition = processor.active_runtime_condition();
+                if condition.op.is_empty() && condition.not.is_empty() {
+                    processor.assign_option(
+                        parse_i32(line.fields.get(1)),
+                        parse_i32(line.fields.get(2)) >= 1,
+                    );
+                }
+            }
             "RESOLUTION" => {
                 (header.w, header.h) = lr2_resolution(line);
                 header.resolution_fixed = true;

@@ -12,6 +12,23 @@ macro_rules! skin_document_render_play_value_methods {
         ) -> TextureRegion {
             let source_width = source_size.width.max(1.0);
             let source_height = source_size.height.max(1.0);
+            if value.lr2_number {
+                let stride = lr2_number_frame_cells(value).unwrap_or(1);
+                let frames = divx.saturating_mul(divy) / stride;
+                let animation = if value.cycle > 0 {
+                    (i64::from(elapsed_ms.rem_euclid(value.cycle)) * i64::from(frames)
+                        / i64::from(value.cycle)) as i32
+                } else {
+                    0
+                };
+                let cell = animation * stride + digit as i32;
+                return TextureRegion {
+                    x: (value.x as f32 + cell_width_px * (cell % divx) as f32) / source_width,
+                    y: (value.y as f32 + cell_height_px * (cell / divx) as f32) / source_height,
+                    width: cell_width_px / source_width,
+                    height: cell_height_px / source_height,
+                };
+            }
             let digit_column = digit as i32 % divx;
             let digit_row = digit as i32 / divx;
             let animation_rows = divy.saturating_sub(digit_row).max(1);

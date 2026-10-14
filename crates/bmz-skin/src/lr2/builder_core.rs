@@ -41,7 +41,10 @@ impl<'a> CsvBuilder<'a> {
             bga: None,
             destinations: Vec::new(),
             current: None,
+            current_kind: String::new(),
+            current_by_kind: HashMap::new(),
             conditional_ops: Vec::new(),
+            conditional_not_ops: Vec::new(),
             runtime_option_aliases: HashMap::new(),
             // Unspecified BGA stretch inherits the profile, as in beatoraja.
             stretch: -1,
@@ -54,6 +57,7 @@ impl<'a> CsvBuilder<'a> {
             remap_single_play_2p_lanes,
             file_dependencies: BTreeSet::new(),
             loaded_file_dependencies: BTreeMap::new(),
+            include_choices: HashMap::new(),
         }
     }
 
@@ -104,6 +108,7 @@ impl<'a> CsvBuilder<'a> {
     }
 
     pub(super) fn execute(&mut self, line: &CsvLine) -> Result<()> {
+        self.activate_current_kind(line);
         if self.execute_result_command(line) {
             return Ok(());
         }
@@ -137,7 +142,10 @@ impl<'a> CsvBuilder<'a> {
             "SRC_GROOVEGAUGE" | "SRC_GROOVEGAUGE_EX" => self.add_gauge(line),
             "DST_GROOVEGAUGE" => self.add_destination(line),
             "SRC_LINE" => self.add_line_source(line),
-            "DST_LINE" => self.add_line_destination(line),
+            "DST_LINE" => {
+                self.add_line_destination(line);
+                self.current_has_destination = true;
+            }
             "SRC_JUDGELINE" => self.add_image(line),
             "DST_JUDGELINE" => self.add_destination_with_default_offsets(line, &[LR2_OFFSET_LIFT]),
             "SRC_BGA" => self.add_bga(),

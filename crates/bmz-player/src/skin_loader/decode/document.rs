@@ -266,8 +266,13 @@ pub(in crate::skin_loader) fn load_skin_document_with_path_context(
             runtime_state,
             path_context,
         )?;
-        loaded.cache_status = DocumentCacheStatus::Miss;
+        loaded.cache_status = if loaded.dependencies.opaque {
+            DocumentCacheStatus::Uncacheable
+        } else {
+            DocumentCacheStatus::Miss
+        };
         if let Ok(mut cache) = document_cache.lock()
+            && !loaded.dependencies.opaque
             && let Ok(fingerprint) = lr2_document_dependency_fingerprint(
                 skin_path,
                 options,

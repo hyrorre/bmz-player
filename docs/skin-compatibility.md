@@ -31,6 +31,9 @@ BMZ固有のIDや詳細な動作契約は [skin.md](skin.md)、互換修正の�
 | 名前付きプロパティ | 型付き `value`、destinationの `op` / `draw`、Luaの `main_state.number` / `float_number` / `text` / `option` を上流名から既存IDへ解決。Boolean名の `!` 否定と混在条件のANDを保持。固定512名と番号付き名の解決に対応するが、未対応IDの意味実装は別。[仕様](skin.md#名前によるプロパティ参照)、[対応表](../crates/bmz-skin-document/src/property_names/generated.rs)、[回帰テスト](../crates/bmz-skin/src/tests/property_names.rs) |
 | LR2減算合成 | `blend=3` はsource alphaを掛けたRGBを描画先から減算し、描画先alphaを保持する。通常描画とAmbient内の描画に対応 |
 | LR2 DST / SRC animation | 区間ごとの三次accとblend/filter/center、SRC/DSTが同じ時計の場合の画像cycle原点を保持。数字はSRC時計で更新 |
+| LR2 PlayのSRC/DSTと分岐 | 種類別のSRC保持、既定画像の条件付き置換、ロード時の通常／AUTO等の分岐、複合ELSEの否定を保持。[仕様](skin.md#lr2のplay描画)、[変換テスト](../crates/bmz-skin/src/lr2/tests/play_compat.rs) |
+| LR2 wildcard include | CUSTOMFILE適用後に残るCSVファイル名の単一`*`から抽選。解像度推定と本変換で選択を共有。ディレクトリwildcard・DXA内CSVは対象外 |
+| LR2数値のセル配置 | 10 / 11 / 24セル単位のcycle、6×4 / 4×6 / 24×1の符号付き素材、空き桁・揃え・桁あふれをLR2用に評価。[描画テスト](../crates/bmz-render/src/skin/tests/play/lr2_compat.rs) |
 | LR2ノーツ | `DST_NOTE`の全行・時計・条件・座標・大きさを評価し、`SRC_AUTO_*`を部分AUTO入力レーンへ適用。全体AUTOPLAYは通常画像 |
 | LR2横スクロール | `#HORIZONTAL`で通常ノーツ・LN・小節線を右から左へ移動し、LIFT等のoffsetをXへ適用。参照実装で縦計算が残るLN/小節線はBMZ側で補完。カバー消失ラインの横向きcropは未対応 |
 | LR2画像透過色 | RGB画像の既定緑と`#TRANSCOLOR`（互換綴り2種を含む）を適用。元からalphaを持つ画像は維持。DXA内の画像も対象 |

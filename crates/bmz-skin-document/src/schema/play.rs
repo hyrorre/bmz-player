@@ -234,6 +234,9 @@ pub struct SkinDestinationDef {
     pub stretch: i32,
     #[serde(default, deserialize_with = "deserialize_op_codes")]
     pub op: Vec<i32>,
+    /// LR2 SRC replacement: hide this fallback when any later SRC condition matches.
+    #[serde(default, rename = "lr2Not")]
+    pub lr2_not: Vec<SkinLr2ConditionDef>,
     /// String properties and expressions are ANDed individually with numeric `op`.
     #[serde(default)]
     pub op_expr: Box<[String]>,
@@ -252,6 +255,16 @@ pub struct SkinDestinationDef {
     pub dst: Vec<SkinDstEntry>,
     #[serde(rename = "mouseRect")]
     pub mouse_rect: Option<SkinRectDef>,
+}
+
+/// Converter-only LR2 condition tree. Each node ANDs its options and excludes
+/// every matching child; this preserves compound ELSE and SRC replacements.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, serde::Serialize)]
+pub struct SkinLr2ConditionDef {
+    #[serde(default)]
+    pub op: Vec<i32>,
+    #[serde(default, rename = "lr2Not")]
+    pub not: Vec<SkinLr2ConditionDef>,
 }
 
 impl<'de> Deserialize<'de> for SkinDestinationDef {
@@ -393,7 +406,7 @@ impl<'de> Deserialize<'de> for SkinDstEntry {
 /// `{"if": [...], "values": [...]}` 形式の条件付きグループ。
 #[derive(Debug, Clone, PartialEq)]
 pub enum DestinationListEntry {
-    Single(SkinDestinationDef),
+    Single(Box<SkinDestinationDef>),
     /// `{"if": [...], "values": [...]}` 形式。条件が満たされた場合のみ内部エントリを展開する。
     Conditional {
         if_ops: Vec<i32>,
