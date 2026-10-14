@@ -48,6 +48,8 @@ fn unique_test_dir(name: &str) -> PathBuf {
     path
 }
 
+#[path = "tests/adfx02_bpm_preview.rs"]
+mod adfx02_bpm_preview;
 #[path = "tests/cache.rs"]
 mod cache;
 #[path = "tests/detail_options.rs"]
