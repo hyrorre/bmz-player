@@ -94,3 +94,22 @@ GPUテストに、TYPE A/Bで数字と「»」の縦方向の中心差が0.5px�
 ユーザー指定により、TYPE C/Dの黒い下地を削除した。FAST/SLOWやスコア差分と同じく、
 数字と「»」だけを表示する。ADFX02 (EC:FN / Starseeker) 版も同じ変更をした。
 読込テストで下地のpanelがないことを確認し、GPU画像を `.local/performance/bpm-change-preview/no-backing/` に保存した。
+## 2026-10-15 追記: LIFT・オフセットへの追従と表示位置の調整
+
+ユーザー指定により、次の2点をantique・ADFX02 (EC:FN / Starseeker) に実装した。
+既存表示のオフセット値を重なり回避へ反映する案は採用しない。
+
+- TYPE AをFAST/SLOWと同じオフセットに追従させた（antique `{3, 32, 33}`、ADFX02 `{3, 33}`）。
+  従来の `{3, 32}` では「Judge Detail offset」でFAST/SLOWだけが動き、TYPE Aと重なり得た。
+  TYPE B/Cは判定文字と同じ `{3, 32}`、TYPE DはLIFTの `{3}` のまま。
+- オフセット「BPM変化予告の表示位置」を追加した（antique id 66、ADFX02 id 48）。x/y/w/h/aを調整できる。
+  w/hは数字1桁の幅・高さに加え、「»」・間隔も同じ比率で変える。aは透明度。
+  w/hで配置をやり直す必要があるため、描画時のoffsetではなく読み込み時に `skin_config.offset` から反映する。
+  プレイ中に設定を変えた場合は次のプレイ開始時の読み直しで反映される。
+
+検証:
+
+- 読込テストで、TYPEごとのoffsets、表示位置オフセットによる位置・桁の大きさ・「»」の大きさと間隔・透明度を確認。
+- 描画計画のテストで、LIFTと「Judge offset」「Judge Detail offset」を変えたとき、
+  予告がFAST/SLOWと同じだけ（TYPE B/Cは判定文字のoffset分、TYPE DはLIFT分）動くことを確認。
+  antiqueのTYPE Aを従来の `{3, 32}` に戻すとこのテストが失敗する（予告94px、FAST 124px）ことも確認した。

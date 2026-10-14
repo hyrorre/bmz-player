@@ -454,3 +454,200 @@ fn adfx02_bpm_preview_judge_detail_screenshots() {
         .unwrap();
     }
 }
+
+fn load_with_offset(
+    skin: Skin,
+    options: &[(&str, &str)],
+    offset: bmz_skin::LuaSkinOffsetValue,
+) -> SkinDocument {
+    let path = skin.path();
+    let context = SkinPathContext::new(&path, test_app_paths().skin_library_roots()).unwrap();
+    load_skin_document_with_path_context(
+        &path,
+        SkinKind::Play,
+        &options.iter().map(|(key, value)| ((*key).into(), (*value).into())).collect(),
+        &BTreeMap::new(),
+        &LuaLoadRuntimeState {
+            offset_values: BTreeMap::from([("BPM変化予告の表示位置".to_string(), offset)]),
+            offset_id_values: BTreeMap::from([(48, offset)]),
+            ..Default::default()
+        },
+        None,
+        Some(&context),
+    )
+    .unwrap()
+    .document
+}
+
+/// TYPE A sits above FAST/SLOW (offsets 3, 33); B/C follow the judge text (3, 32); D follows LIFT.
+#[test]
+#[ignore = "requires separately installed ADFX02 assets"]
+fn adfx02_bpm_preview_offset_ids_follow_neighbors() {
+    for skin in [Skin::Ecfn, Skin::Starseeker] {
+        for (index, expected) in
+            [vec![3, 33], vec![3, 32], vec![3, 32], vec![3]].into_iter().enumerate()
+        {
+            let document = load(skin, &[("BPM変化予告 (BMZ)", TYPES[index])]);
+            for destination in preview_destinations(&document) {
+                assert_eq!(destination.offsets, expected, "{} {}", TYPES[index], destination.id);
+            }
+            let offset =
+                document.offset.iter().find(|offset| offset.name == "BPM変化予告の表示位置");
+            assert_eq!(offset.map(|offset| offset.id), Some(48));
+        }
+    }
+}
+
+/// x/y move the preview; w/h resize each digit, the arrow and the gaps; a changes alpha.
+#[test]
+#[ignore = "requires separately installed ADFX02 assets"]
+fn adfx02_bpm_preview_custom_offset_adjusts_position_size_and_alpha() {
+    for skin in [Skin::Ecfn, Skin::Starseeker] {
+        let options = [("BPM変化予告 (BMZ)", TYPES[0])];
+        let base = load(skin, &options);
+        let offset = bmz_skin::LuaSkinOffsetValue {
+            x: 10,
+            y: -5,
+            w: 16,
+            h: 16,
+            a: -55,
+            ..Default::default()
+        };
+        let adjusted = load_with_offset(skin, &options, offset);
+        let find = |document: &SkinDocument, id: &str| {
+            let destination = preview_destinations(document)
+                .into_iter()
+                .find(|destination| destination.id == id && destination.op.contains(&19066))
+                .unwrap();
+            let SkinDstEntry::Frame(last) = destination.dst.last().unwrap() else {
+                panic!("frame")
+            };
+            (*frame(&destination), last.a)
+        };
+        let (base_to, _) = find(&base, "num_bpm_preview_to_dec");
+        let (to, alpha) = find(&adjusted, "num_bpm_preview_to_dec");
+        assert_eq!((to.w, to.h, alpha), (Some(32), Some(32), Some(200)), "{}", skin.atlas());
+        assert_eq!(to.y, base_to.y.map(|y| y - 5));
+        let (base_arrow, _) = find(&base, "txt_bpm_preview_arrow_dec");
+        let (arrow, _) = find(&adjusted, "txt_bpm_preview_arrow_dec");
+        assert_eq!(arrow.x, base_arrow.x.map(|x| x + 10));
+        assert_eq!(arrow.w, base_arrow.w.map(|w| w * 2));
+        assert_eq!(
+            to.x.unwrap() - arrow.x.unwrap(),
+            (base_to.x.unwrap() - base_arrow.x.unwrap()) * 2
+        );
+        let size = |document: &SkinDocument| {
+            document.text.iter().find(|text| text.id == "txt_bpm_preview_arrow_dec").unwrap().size
+        };
+        assert_eq!(size(&adjusted), size(&base) * 2);
+    }
+}
+
+/// In the draw plan, LIFT and the judge / judge detail offsets move the preview as its neighbors move.
+#[test]
+#[ignore = "requires separately installed ADFX02 assets"]
+fn adfx02_bpm_preview_moves_with_lift_and_judge_offsets() {
+    use bmz_core::judge::{Judge, TimingSide};
+    use bmz_core::lane::Lane;
+    use bmz_render::skin_offset::{SkinOffsetValue, SkinOffsetValues};
+    use bmz_render::snapshot::{
+        BpmChangePreviewSnapshot, DisplayJudgement, RenderSnapshot, UpcomingBpmChange,
+    };
+    let positions = |skin: Skin, type_label: &str, lift: f32, offsets: &[(i32, i32)]| {
+        let options = BTreeMap::from([
+            ("判定タイミング表示".to_string(), "EARLY/LATE".to_string()),
+            ("fast/slow".to_string(), "EARLY/LATE".to_string()),
+            ("BPM変化予告 (BMZ)".to_string(), type_label.to_string()),
+        ]);
+        let decoded = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+            pinned_sources: None,
+            skin_path: &skin.path(),
+            kind: SkinKind::Play,
+            options: &options,
+            files: &BTreeMap::new(),
+            runtime_state: &LuaLoadRuntimeState::default(),
+            library_roots: &test_app_paths().skin_library_roots(),
+            document_cache: None,
+            source_cache: None,
+            texture_cache: None,
+            font_cache: None,
+            installed_fonts: None,
+        })
+        .unwrap();
+        let mut renderer = Renderer::default();
+        install_decoded_skin(&mut renderer, decoded, SkinManifest::default()).unwrap();
+        let mut skin_offsets = SkinOffsetValues::default();
+        for &(id, y) in offsets {
+            skin_offsets.set(id, SkinOffsetValue { y, ..Default::default() });
+        }
+        renderer.prepare_scene(AppSceneSnapshot::Play(RenderSnapshot {
+            time: TimeUs(10_000_000),
+            play_elapsed_time: TimeUs(15_000_000),
+            ready_elapsed_time: Some(TimeUs(12_000_000)),
+            resources_loaded: true,
+            key_mode: KeyMode::K7,
+            lift,
+            skin_offsets,
+            recent_judgements: vec![DisplayJudgement {
+                lane: Lane::Key1,
+                judge: Judge::Great,
+                side: Some(TimingSide::Fast),
+                text: "GREAT".into(),
+                combo: 1,
+                delta_us: 20_000,
+                time: TimeUs(9_870_000),
+                is_miss: false,
+                timing_ms_suppressed: false,
+            }],
+            bpm_change_preview: BpmChangePreviewSnapshot {
+                next: Some(UpcomingBpmChange { remaining_ms: 500, from_bpm: 155.0, to_bpm: 85.0 }),
+                since_last_change_ms: None,
+            },
+            ..Default::default()
+        }));
+        let commands = &renderer.last_plan().unwrap().commands;
+        let arrow = commands
+            .iter()
+            .find_map(|command| match command {
+                DrawCommand::Text { text, origin, .. } if text == "»" => Some(origin.y * 1080.0),
+                _ => None,
+            })
+            .expect("preview arrow");
+        // EARLY/LATE image: 74x18 skin pixels.
+        let fast = commands
+            .iter()
+            .find_map(|command| match command {
+                DrawCommand::Image { rect, .. }
+                    if (rect.width * 1920.0 - 74.0).abs() < 0.5
+                        && (rect.height * 1080.0 - 18.0).abs() < 0.5 =>
+                {
+                    Some(rect.y * 1080.0)
+                }
+                _ => None,
+            })
+            .expect("FAST image");
+        (arrow, fast)
+    };
+    // (type, lift, offsets, expected arrow movement minus FAST movement in image rows).
+    // FAST uses offsets 3 and 33; a positive offset y moves up (negative rows).
+    let cases: [(usize, f32, &[(i32, i32)], f32); 4] = [
+        (0, 0.1, &[(33, 30)], 0.0),
+        (1, 0.1, &[(32, 20)], -20.0),
+        (2, 0.1, &[(32, 20)], -20.0),
+        (3, 0.1, &[(33, 30)], 30.0),
+    ];
+    for skin in [Skin::Ecfn, Skin::Starseeker] {
+        for (type_index, lift, offsets, expected) in cases {
+            let label = format!("{} {}", skin.atlas(), TYPES[type_index]);
+            let (arrow, fast) = positions(skin, TYPES[type_index], 0.0, &[]);
+            let (moved_arrow, moved_fast) = positions(skin, TYPES[type_index], lift, offsets);
+            let fast_delta = moved_fast - fast;
+            assert!(fast_delta.abs() > 1.0, "{label}: FAST moved by {fast_delta}");
+            let relative = (moved_arrow - arrow) - fast_delta;
+            assert!(
+                (relative - expected).abs() < 0.5,
+                "{label} {offsets:?}: {relative} vs {expected}"
+            );
+        }
+    }
+}

@@ -62,3 +62,10 @@ EC:FNは1P/2P × 予告TYPE A〜Dの8枚。画像と一覧は `.local/performanc
 確認結果: Starseekerでレーン外のfast/slow・スコア差分と重なる組み合わせでは、予告がその上へ移動し、
 複数ある場合は「予告、FAST、スコア差分」の順に積み重なる。TYPE A/Bはレーン内の表示と重ならない。
 EC:FNはスコア差分（判定詳細の高さ）と重ならない。
+
+## 2026-10-15 追記: LIFT・オフセットへの追従と表示位置の調整
+
+TYPE Aをfast/slowと同じ `{3, 33}` に追従させ、オフセット「BPM変化予告の表示位置」（id 48、x/y/w/h/a）を追加した。
+詳細は[antique側の記録](2026-10-14-bpm-change-preview.md)と同じ。両スキンで読込・描画計画の明示実行テスト
+（`adfx02_bpm_preview_offset_ids_follow_neighbors`、`..._custom_offset_adjusts_position_size_and_alpha`、
+`..._moves_with_lift_and_judge_offsets`）を実行し成功。
