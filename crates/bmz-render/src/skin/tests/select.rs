@@ -16,5 +16,7 @@ mod cases_06;
 mod cases_07;
 #[path = "select/litone_properties.rs"]
 mod litone_properties;
+#[path = "select/lr2_slider.rs"]
+mod lr2_slider;
 #[path = "select/scroll.rs"]
 mod scroll;

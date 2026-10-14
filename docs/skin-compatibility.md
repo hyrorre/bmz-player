@@ -30,6 +30,7 @@ BMZ固有のIDや詳細な動作契約は [skin.md](skin.md)、互換修正の�
 | 基本描画 | source、image/imageset、value/text、note/gauge/judge、slider、hiddenCover、destinationのtimer/op/draw、keyframe、UV animation等。[描画評価](../crates/bmz-render/src/skin/document_render/) |
 | 名前付きプロパティ | 型付き `value`、destinationの `op` / `draw`、Luaの `main_state.number` / `float_number` / `text` / `option` を上流名から既存IDへ解決。Boolean名の `!` 否定と混在条件のANDを保持。固定512名と番号付き名の解決に対応するが、未対応IDの意味実装は別。[仕様](skin.md#名前によるプロパティ参照)、[対応表](../crates/bmz-skin-document/src/property_names/generated.rs)、[回帰テスト](../crates/bmz-skin/src/tests/property_names.rs) |
 | LR2減算合成 | `blend=3` はsource alphaを掛けたRGBを描画先から減算し、描画先alphaを保持する。通常描画とAmbient内の描画に対応 |
+| LR2スライダーのalpha | `blend=0`はDSTのalphaを無視し、素材の透過を維持。WMIX HDの選曲スクロールバーを含む。開始時刻・ループ・つまみ位置・ドラッグを確認。[回帰テスト](../crates/bmz-render/src/skin/tests/select/lr2_slider.rs) |
 | LR2 DST / SRC animation | 区間ごとの三次accとblend/filter/center、SRC/DSTが同じ時計の場合の画像cycle原点を保持。数字はSRC時計で更新 |
 | LR2 PlayのSRC/DSTと分岐 | 種類別のSRC保持、既定画像の条件付き置換、ロード時の通常／AUTO等の分岐、複合ELSEの否定を保持。[仕様](skin.md#lr2のplay描画)、[変換テスト](../crates/bmz-skin/src/lr2/tests/play_compat.rs) |
 | LR2 wildcard include | CUSTOMFILE適用後に残るCSVファイル名の単一`*`から抽選。解像度推定と本変換で選択を共有。ディレクトリwildcard・DXA内CSVは対象外 |

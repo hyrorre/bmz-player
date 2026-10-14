@@ -106,22 +106,16 @@ macro_rules! skin_document_render_graph_image_methods {
                 self.w,
                 self.h,
             );
-            Some(SkinRenderItem::Image {
-                texture: source.texture,
+            Some(skin_image_item_for_frame(
+                source.texture,
                 rect,
                 uv,
-                tint: Color::rgba(
-                    frame.r as f32 / 255.0,
-                    frame.g as f32 / 255.0,
-                    frame.b as f32 / 255.0,
-                    frame.a as f32 / 255.0,
-                ),
-                blend: frame.blend(skin_blend_mode(destination.blend)),
-                scale: SkinImageScale::Stretch,
-                border: None,
-                source_size: Some(source.source_size),
-                linear_filter: frame.linear_filter(destination.filter != 0),
-            })
+                frame,
+                destination.center,
+                skin_blend_mode(destination.blend),
+                Some(source.source_size),
+                destination.filter != 0,
+            ))
         }
 
         fn hidden_cover_render_item(

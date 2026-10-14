@@ -33,6 +33,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-15 | [LR2選曲スクロールバーのalpha](2026/2026-10-15-lr2-select-scroll-slider.md) |
 | 2026-10-14 | [LR2 PlayのSRC/DST・分岐・フレームinclude・数値セル](2026/2026-10-14-lr2-play-compatibility.md) |
 | 2026-10-14 | [LR2 ResultのCLEAR TYPE・左右切替・TARGET・DURATION](2026/2026-10-14-lr2-result-compatibility.md) |
 | 2026-10-14 | [LR2スキン関連コミットのレビュー指摘の修正](2026/2026-10-14-lr2-review-fixes.md) |
