@@ -53,12 +53,18 @@ fn part_span(destination: &SkinDestinationDef) -> (i32, i32) {
 }
 
 /// Returns `(left, right, bottom, top)` of the preview group in skin pixels.
+/// The vertical range comes from the digits: the arrow text box is taller than its glyph.
 fn preview_bounds(destinations: &[SkinDestinationDef]) -> (i32, i32, i32, i32) {
     destinations.iter().fold((i32::MAX, i32::MIN, i32::MAX, i32::MIN), |bounds, destination| {
         let (left, right) = part_span(destination);
-        let frame = frame(destination);
-        let (y, h) = (frame.y.unwrap(), frame.h.unwrap());
-        (bounds.0.min(left), bounds.1.max(right), bounds.2.min(y), bounds.3.max(y + h))
+        let (bottom, top) = if destination.id.starts_with("txt_bpm_preview_arrow") {
+            (bounds.2, bounds.3)
+        } else {
+            let frame = frame(destination);
+            let (y, h) = (frame.y.unwrap(), frame.h.unwrap());
+            (bounds.2.min(y), bounds.3.max(y + h))
+        };
+        (bounds.0.min(left), bounds.1.max(right), bottom, top)
     })
 }
 
@@ -348,8 +354,32 @@ fn antique_bpm_preview_gpu_draws_colored_digits_only_inside_the_lead_window() {
                     let last = *columns.last().unwrap() as i32;
                     assert!((edge - 8..edge).contains(&last), "{name} {color}: ends at {last}");
                 }
-                None => {}
+                None => {
+                    // The arrow box is centered on the lane; digits sit on both sides.
+                    let arrow = (left + right) / 2 - 10..(left + right) / 2 + 10;
+                    let digit_rows = row_center(frame, matches, &|x| {
+                        (left..right).contains(&x) && !arrow.contains(&x)
+                    });
+                    let arrow_rows = row_center(frame, matches, &|x| arrow.contains(&x));
+                    assert!(
+                        (digit_rows - arrow_rows).abs() <= 0.5,
+                        "{name} {color}: digits {digit_rows}, arrow {arrow_rows}"
+                    );
+                }
             }
         }
     }
+}
+
+/// Vertical center of the matching pixels in the selected columns, in image rows.
+fn row_center(frame: &[u8], matches: fn(&[u8]) -> bool, column: &dyn Fn(i32) -> bool) -> f32 {
+    let mut rows = (0..1080).filter(|&y| {
+        (0..1920).filter(|&x| column(x)).any(|x| {
+            let index = (y * 1920 + x as usize) * 4;
+            matches(&frame[index..index + 3])
+        })
+    });
+    let first = rows.next().expect("matching pixels") as f32;
+    let last = rows.last().map_or(first, |row| row as f32);
+    (first + last) / 2.0
 }
