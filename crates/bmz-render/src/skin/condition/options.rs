@@ -13,6 +13,13 @@ pub(in crate::skin) fn destination_ops_match(
     if !destination_property_conditions_match(destination, enabled_options, state) {
         return false;
     }
+    if destination
+        .lr2_not
+        .iter()
+        .any(|condition| lr2_condition_matches(condition, enabled_options, state))
+    {
+        return false;
+    }
     if is_grade_diff_rank_destination(destination, state) {
         return destination
             .op
@@ -20,6 +27,15 @@ pub(in crate::skin) fn destination_ops_match(
             .all(|&op| test_grade_diff_rank_op(destination, op, enabled_options, state));
     }
     test_skin_ops(&destination.op, enabled_options, state)
+}
+
+fn lr2_condition_matches(
+    condition: &bmz_skin_document::SkinLr2ConditionDef,
+    enabled_options: &[i32],
+    state: &SkinDrawState,
+) -> bool {
+    test_skin_ops(&condition.op, enabled_options, state)
+        && condition.not.iter().all(|child| !lr2_condition_matches(child, enabled_options, state))
 }
 
 pub(in crate::skin) fn destination_property_conditions_match(

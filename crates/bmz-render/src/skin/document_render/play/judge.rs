@@ -295,6 +295,12 @@ macro_rules! skin_document_render_play_judge_methods {
             };
             let divx = value.divx.max(1);
             let divy = value.divy.max(1);
+            if value.lr2_number
+                && (lr2_number_frame_cells(value).is_none()
+                    || (number < 0 && !value_layout_is_signed(value)))
+            {
+                return Vec::new();
+            }
             let source_width_px =
                 if value.w == -1 { source.source_size.width.round() as i32 } else { value.w };
             let source_height_px =
@@ -306,39 +312,61 @@ macro_rules! skin_document_render_play_judge_methods {
             }
             let padding = number_padding(value);
             let max_digits = value.digit.max(0) as usize;
-            let digits = match signed_render {
-                SignedNumberRender::Signed(row_order) => {
-                    display_signed_number_digits_with_row_order(
-                        number,
-                        max_digits,
-                        signed_value_padding(value, padding),
-                        divx as u32,
-                        row_order,
-                    )
+            let align = align_override.unwrap_or(value.align);
+            let mut digits = if value.lr2_number {
+                let Some(digits) = lr2_number_digits(value, number, align) else {
+                    return Vec::new();
+                };
+                digits
+            } else {
+                match signed_render {
+                    SignedNumberRender::Signed(row_order) => {
+                        display_signed_number_digits_with_row_order(
+                            number,
+                            max_digits,
+                            signed_value_padding(value, padding),
+                            divx as u32,
+                            row_order,
+                        )
+                    }
+                    SignedNumberRender::Unsigned => {
+                        display_number_digits(number, max_digits, padding)
+                    }
                 }
-                SignedNumberRender::Unsigned => display_number_digits(number, max_digits, padding),
             };
+            if value.lr2_number && compact_digits {
+                digits.retain(|digit| !matches!(*digit, 10 | 22 | u8::MAX));
+            }
             // 桁間スペース (space フィールド、px 単位)
             let digit_step = frame.w + value.space;
             // 先頭の空き桁数 (align のためのオフセット計算に使用)
             let shiftbase = max_digits.saturating_sub(digits.len());
             // align=0: 右寄せ (デフォルト), align=1: 左寄せ, align=2: 中央
-            let align = align_override.unwrap_or(value.align);
             let shift = match align {
                 1 => digit_step * shiftbase as i32,
                 2 => digit_step * shiftbase as i32 / 2,
                 _ => 0,
             };
+            let lr2_center_shift = if value.lr2_number && !compact_digits && align == 2 {
+                digit_step
+                    * digits.iter().filter(|digit| matches!(**digit, 10 | 22 | u8::MAX)).count()
+                        as i32
+                    / 2
+            } else {
+                0
+            };
 
             digits
                 .into_iter()
                 .enumerate()
+                .filter(|(_, digit)| *digit != u8::MAX)
                 .map(|(index, digit)| {
                     let digit_position =
                         if compact_digits { index } else { shiftbase + index } as i32;
                     let rect = normalize_skin_frame_rect(
                         ResolvedSkinFrame {
-                            x: base_frame.x + frame.x + digit_step * digit_position - shift,
+                            x: base_frame.x + frame.x + digit_step * digit_position - shift
+                                + lr2_center_shift,
                             y: base_frame.y + frame.y,
                             w: frame.w,
                             h: frame.h,

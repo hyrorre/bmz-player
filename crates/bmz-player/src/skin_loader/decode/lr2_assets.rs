@@ -10,7 +10,7 @@ pub(in crate::skin_loader) fn lr2_builtin_source_asset(path: &str) -> Option<Rgb
         // BACKBMP itself is drawn by the play snapshot path.  Keep a transparent
         // source so LR2 CSV objects using IMAGE_BACKBMP can be decoded without
         // failing texture resolution when the chart has no backbmp.
-        "bmz://lr2/backbmp" => [0, 0, 0, 0],
+        "bmz://lr2/backbmp" | "bmz://lr2/empty" => [0, 0, 0, 0],
         _ => return None,
     };
     Some(RgbaImageAsset { width: 1, height: 1, pixels: pixel.to_vec() })

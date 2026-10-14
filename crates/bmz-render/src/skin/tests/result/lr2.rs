@@ -166,9 +166,10 @@ fn lr2_result_flip_uses_player_values_without_fabricating_an_opponent() {
         ..Default::default()
     };
     assert_eq!(skin_state_number(LR2_RESULT_NUMBER_BASE + 1, &state), Some(1234));
-    assert_eq!(skin_state_number(LR2_RESULT_NUMBER_BASE + 21, &state), None);
+    assert_eq!(skin_state_number(LR2_RESULT_NUMBER_BASE + 21, &state), Some(2345));
+    assert_eq!(skin_state_number(LR2_RESULT_NUMBER_BASE + 30, &state), None);
     state.lr2_result_flip = true;
-    assert_eq!(skin_state_number(LR2_RESULT_NUMBER_BASE + 1, &state), None);
+    assert_eq!(skin_state_number(LR2_RESULT_NUMBER_BASE + 1, &state), Some(2345));
     assert_eq!(skin_state_number(LR2_RESULT_NUMBER_BASE + 21, &state), Some(1234));
     state.total_notes = 1000;
     assert!(test_skin_ops(&[LR2_RESULT_RANK_BASE + 13], &[], &state));

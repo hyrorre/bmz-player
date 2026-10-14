@@ -217,7 +217,7 @@ impl WinitApp {
             .unwrap_or_else(|| self.play_skin_key_mode_for_chart(chart_id, &options));
         let skin_attempt = self.skin_attempt_for_chart(chart_id, &options);
         snapshot.skin_attempt = skin_attempt;
-        let play_skin_runtime_state = lua_runtime_state_for_play(
+        let mut play_skin_runtime_state = lua_runtime_state_for_play(
             &options,
             self.boot.profile_config.play.auto_play,
             play_skin_key_mode,
@@ -226,6 +226,12 @@ impl WinitApp {
                 .and_then(|chart| self.play_skin_previous_best_ex_score_for_chart(chart, &options)),
             &self.boot.profile_config.display_name,
             skin_attempt,
+        );
+        self.apply_lr2_play_best_clear_load_state(
+            chart_id,
+            &options,
+            play_skin_key_mode,
+            &mut play_skin_runtime_state,
         );
         self.start_play_preload(chart_id, options.clone());
         self.spawn_play_skin_decode_for(
@@ -462,6 +468,37 @@ impl WinitApp {
     ) -> Option<u32> {
         let chart = self.play_skin_chart(chart_id)?;
         self.play_skin_previous_best_ex_score_for_chart(&chart, options)
+    }
+
+    pub(super) fn apply_lr2_play_best_clear_load_state(
+        &self,
+        chart_id: i64,
+        options: &PlayStartOptions,
+        key_mode: KeyMode,
+        runtime_state: &mut bmz_skin::LuaLoadRuntimeState,
+    ) {
+        let selection = play_skin_selection_for_session(
+            &self.boot.profile_config.skin,
+            key_mode,
+            options.session_mode,
+        );
+        if !crate::skin_loader::is_lr2_skin_path(Path::new(selection.path)) {
+            return;
+        }
+        let clear = self.play_skin_chart(chart_id).and_then(|chart| {
+            let key = self.play_skin_score_key_for_chart(&chart, options);
+            match self.boot.score_db.best_scores_for_charts(&[key]) {
+                Ok(scores) => scores
+                    .into_iter()
+                    .next()
+                    .and_then(|best| ClearType::from_label(&best.clear_type)),
+                Err(error) => {
+                    tracing::warn!(chart_id, %error, "failed to load best clear for LR2 play skin");
+                    None
+                }
+            }
+        });
+        apply_lr2_best_clear_load_options(runtime_state, clear);
     }
 
     pub(super) fn play_skin_score_key_for_chart_id(

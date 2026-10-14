@@ -10,3 +10,5 @@ mod cases_03;
 mod cases_04;
 #[path = "result/lr2.rs"]
 mod lr2;
+#[path = "result/lr2_compat.rs"]
+mod lr2_compat;

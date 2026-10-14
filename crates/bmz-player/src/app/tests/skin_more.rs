@@ -104,6 +104,25 @@ fn play_lua_state_keeps_selected_rival_separate_from_target_setting() {
 }
 
 #[test]
+fn lr2_play_best_clear_load_options_select_one_lamp_class() {
+    for (clear, expected) in [
+        (None, 100),
+        (Some(ClearType::Failed), 101),
+        (Some(ClearType::AssistEasy), 102),
+        (Some(ClearType::Normal), 103),
+        (Some(ClearType::ExHard), 104),
+        (Some(ClearType::FullCombo), 105),
+        (Some(ClearType::Max), 105),
+    ] {
+        let mut state = bmz_skin::LuaLoadRuntimeState::default();
+        apply_lr2_best_clear_load_options(&mut state, clear);
+        for option in 100..=105 {
+            assert_eq!(state.option_values[&option], option == expected);
+        }
+    }
+}
+
+#[test]
 fn play_lua_runtime_state_exposes_play_mode_and_score_save_options() {
     let normal = lua_runtime_state_for_play(
         &PlayStartOptions::default(),

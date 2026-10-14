@@ -520,6 +520,16 @@ pub(super) fn lua_runtime_state_for_result(
     }
 }
 
+pub(super) fn apply_lr2_best_clear_load_options(
+    state: &mut bmz_skin::LuaLoadRuntimeState,
+    clear: Option<ClearType>,
+) {
+    let index = [0, 1, 2, 2, 2, 3, 4, 4, 5, 5, 5][clear.unwrap_or(ClearType::NoPlay) as usize];
+    for option in 100..=105 {
+        state.option_values.insert(option, option - 100 == index);
+    }
+}
+
 pub(super) fn lua_runtime_state_for_play(
     options: &PlayStartOptions,
     profile_autoplay: bool,

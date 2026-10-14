@@ -162,6 +162,7 @@ fn grade_diff_destinations_use_the_fixed_next_rank_in_select_and_result() {
             stretch: default_stretch(),
             op: vec![op],
             op_expr: Box::default(),
+            lr2_not: Vec::new(),
             draw: String::new(),
             act: None,
             click: 0,
@@ -172,6 +173,7 @@ fn grade_diff_destinations_use_the_fixed_next_rank_in_select_and_result() {
     }
     fn grade_diff_value() -> SkinValueDef {
         SkinValueDef {
+            lr2_number: false,
             id: "RANK_Diff_Exscore".to_string(),
             src: "num".to_string(),
             x: 0,

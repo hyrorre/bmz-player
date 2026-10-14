@@ -54,9 +54,7 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
                     skin_state_number(own_number, state)
                 }
             } else {
-                // Result snapshots currently retain only the player's final score.
-                // Do not confuse LR2's opponent with beatoraja's target score.
-                None
+                lr2_result_other_number(own_number, state)
             }
         }
         LR2_NUMBER_BASE..=LR2_NUMBER_LAST => lr2_number(ref_id - LR2_NUMBER_BASE, state),

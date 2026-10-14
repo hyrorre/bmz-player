@@ -3,6 +3,7 @@ use super::*;
 pub(super) struct IfEval {
     pub(super) matches: bool,
     pub(super) runtime_ops: Vec<i32>,
+    pub(super) runtime_not_ops: Vec<Lr2Condition>,
 }
 
 pub(super) fn is_runtime_lr2_option(option: i32) -> bool {
@@ -37,8 +38,16 @@ pub(super) fn is_runtime_lr2_option(option: i32) -> bool {
     )
 }
 
-pub(super) fn negate_runtime_branches(branches: &[Vec<i32>]) -> Option<Vec<i32>> {
-    branches.iter().map(|branch| (branch.len() == 1).then_some(-branch[0])).collect()
+pub(super) fn negate_runtime_branches(branches: &[Lr2Condition]) -> Lr2Condition {
+    let mut condition = Lr2Condition::default();
+    for branch in branches {
+        if branch.op.len() == 1 && branch.not.is_empty() {
+            condition.op.push(-branch.op[0]);
+        } else {
+            condition.not.push(branch.clone());
+        }
+    }
+    condition
 }
 
 pub(super) fn lr2_option_text_matches(a: &str, b: &str) -> bool {
@@ -423,35 +432,7 @@ pub(super) fn resolve_include_path(
     current_path: &Path,
     raw: &str,
 ) -> PathBuf {
-    // Explicit references to another installed theme must keep that theme name.
-    // Try the shared theme directory before the legacy self-theme fallback,
-    // which also supports packages whose containing directory was renamed.
-    if let Some(relative) = clean_lr2_asset_path(raw).strip_prefix("LR2files/Theme/")
-        && Path::new(relative)
-            .components()
-            .all(|component| matches!(component, std::path::Component::Normal(_)))
-        && let Some(themes) = builder.skin_root.parent()
-    {
-        let candidate = themes.join(relative);
-        if candidate.is_file() {
-            return candidate;
-        }
-    }
-    let normalized = normalize_lr2_asset_path(raw);
-    if normalized.contains('*') {
-        let selected = builder.resolve_source_path(raw);
-        for candidate in [builder.skin_root.join(&selected), builder.skin_file_dir.join(&selected)]
-        {
-            if candidate.is_file() {
-                return candidate;
-            }
-        }
-    }
-    let root_candidate = builder.skin_root.join(&normalized);
-    if root_candidate.is_file() {
-        return root_candidate;
-    }
-    current_path.parent().unwrap_or_else(|| Path::new(".")).join(normalized)
+    include::resolve(builder, current_path, raw)
 }
 
 pub(super) fn infer_skin_root(path: &Path) -> PathBuf {
@@ -481,7 +462,7 @@ pub(super) fn infer_skin_root(path: &Path) -> PathBuf {
     }
 }
 
-fn clean_lr2_asset_path(path: &str) -> String {
+pub(super) fn clean_lr2_asset_path(path: &str) -> String {
     let mut normalized = path.trim().trim_matches('"').replace('\\', "/");
     if let Some(index) = normalized.find("//") {
         normalized.truncate(index);

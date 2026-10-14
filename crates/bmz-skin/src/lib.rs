@@ -125,7 +125,16 @@ pub enum LuaSkinRuntimeMode {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Lr2ContinueAssets {
+    pub sources: BTreeMap<String, bmz_skin_document::SkinSourceDef>,
+    pub fonts: BTreeMap<String, bmz_skin_document::SkinFontDef>,
+    pub system_fonts: Vec<bmz_skin_document::SkinLr2SystemFontDef>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LuaLoadRuntimeState {
+    /// Resolved assets from the previous LR2 scene; immutable for a Result entry.
+    pub lr2_continue_assets: std::sync::Arc<Lr2ContinueAssets>,
     /// Physical output pixels; zero when no render target is attached.
     pub screen_size: [u32; 2],
     pub runtime_mode: LuaSkinRuntimeMode,
@@ -347,11 +356,12 @@ pub fn load_lr2_csv_skin_with_runtime_state(
     files: &BTreeMap<String, String>,
     runtime_state: &LuaLoadRuntimeState,
 ) -> Result<LoadedSkinDocument> {
-    let loaded = lr2::load_lr2_csv_skin_value_with_runtime_options(
+    let loaded = lr2::load_lr2_csv_skin_value_with_inherited_assets(
         path,
         options,
         files,
         &runtime_state.option_values,
+        &runtime_state.lr2_continue_assets,
     )?;
     decode_lr2_skin_value(path, loaded)
 }

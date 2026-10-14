@@ -411,7 +411,7 @@ pub(super) fn skin_document_destination_op_sets(
         .iter()
         .flat_map(|entry| match entry {
             DestinationListEntry::Single(destination) => {
-                vec![(destination, destination.op.clone())]
+                vec![(destination.as_ref(), destination.op.clone())]
             }
             DestinationListEntry::Conditional { if_ops, destinations } => destinations
                 .iter()

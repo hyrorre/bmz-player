@@ -68,6 +68,9 @@ impl<'a> CsvBuilder<'a> {
             if matches!(line.command.as_str(), "DST_IMAGE" | "DST_BGA") {
                 dst["stretch"] = json!(self.stretch);
             }
+            let mut excluded = variant.excluded_ops;
+            excluded.extend(self.conditional_not_ops.clone());
+            dst["lr2Not"] = json!(excluded);
             self.expand_destination_option_aliases(&mut dst);
             if let Some((rect, panel)) = self.mouse_rects.get(&variant.id) {
                 dst["mouseRect"] = rect.clone();
@@ -93,17 +96,52 @@ impl<'a> CsvBuilder<'a> {
     }
 
     pub(super) fn set_current(&mut self, id: String) {
-        let variant = CurrentObjectVariant { id, conditional_ops: self.conditional_ops.clone() };
-        if !variant.conditional_ops.is_empty()
+        let variant = CurrentObjectVariant {
+            id,
+            conditional_ops: self.conditional_ops.clone(),
+            excluded_ops: self.conditional_not_ops.clone(),
+        };
+        if (!variant.conditional_ops.is_empty() || !variant.excluded_ops.is_empty())
             && !self.current_has_destination
             && let Some(current) = &mut self.current
         {
+            // SRC without DST is a fallback. Only the last matching SRC receives
+            // the following DST, rather than drawing every matching alternative.
+            for previous in &mut current.variants {
+                previous.excluded_ops.push(Lr2Condition {
+                    op: variant.conditional_ops.clone(),
+                    not: variant.excluded_ops.clone(),
+                });
+            }
             current.variants.push(variant);
             return;
         }
 
         self.current = Some(CurrentObject { variants: vec![variant] });
         self.current_has_destination = false;
+    }
+
+    pub(super) fn activate_current_kind(&mut self, line: &CsvLine) {
+        let Some(kind) =
+            line.command.strip_prefix("SRC_").or_else(|| line.command.strip_prefix("DST_"))
+        else {
+            return;
+        };
+        let kind = match kind {
+            "IMAGESET" => "IMAGE",
+            "GROOVEGAUGE_EX" => "GROOVEGAUGE",
+            "SLIDER_REFNUMBER" => "SLIDER",
+            "BARGRAPH_REFNUMBER" => "BARGRAPH",
+            other => other,
+        };
+        if self.current_kind == kind {
+            return;
+        }
+        let previous = (self.current.take(), self.current_has_destination);
+        self.current_by_kind.insert(std::mem::take(&mut self.current_kind), previous);
+        (self.current, self.current_has_destination) =
+            self.current_by_kind.remove(kind).unwrap_or((None, false));
+        self.current_kind = kind.to_string();
     }
 
     pub(super) fn current_primary_variant(&self) -> Option<CurrentObjectVariant> {
@@ -120,21 +158,22 @@ impl<'a> CsvBuilder<'a> {
         &mut self,
         option: i32,
         value: bool,
-        condition: &[i32],
+        condition: &Lr2Condition,
     ) {
         if value
-            && !condition.is_empty()
+            && (!condition.op.is_empty() || !condition.not.is_empty())
             && !self.header.selected_ops.get(&option.abs()).copied().unwrap_or(false)
         {
-            self.runtime_option_aliases.entry(option.abs()).or_insert_with(|| condition.to_vec());
+            self.runtime_option_aliases.entry(option.abs()).or_insert_with(|| condition.clone());
         }
     }
 
     pub(super) fn expand_destination_option_aliases(&self, destination: &mut JsonValue) {
-        let Some(ops) = destination.get_mut("op").and_then(JsonValue::as_array_mut) else {
-            return;
-        };
-        let original = std::mem::take(ops);
+        let original =
+            destination.get("op").and_then(JsonValue::as_array).cloned().unwrap_or_default();
+        let mut excluded =
+            destination.get("lr2Not").and_then(JsonValue::as_array).cloned().unwrap_or_default();
+        let mut ops = Vec::new();
         for op in original {
             let Some(op) = op.as_i64().and_then(|value| i32::try_from(value).ok()) else {
                 continue;
@@ -142,11 +181,12 @@ impl<'a> CsvBuilder<'a> {
             let option_id = op.abs();
             if let Some(alias) = self.runtime_option_aliases.get(&option_id) {
                 if op >= 0 {
-                    ops.extend(alias.iter().map(|value| json!(value)));
-                } else if alias.len() == 1 {
-                    ops.push(json!(-alias[0]));
+                    ops.extend(alias.op.iter().map(|value| json!(value)));
+                    excluded.extend(alias.not.iter().map(|condition| json!(condition)));
+                } else if alias.op.len() == 1 && alias.not.is_empty() {
+                    ops.push(json!(-alias.op[0]));
                 } else {
-                    ops.push(json!(op));
+                    excluded.push(json!(alias));
                 }
             } else {
                 ops.push(json!(op));
@@ -174,6 +214,11 @@ impl<'a> CsvBuilder<'a> {
         }
         let mut seen = BTreeSet::new();
         ops.retain(|op| op.as_i64().is_none_or(|value| seen.insert(value)));
+        for condition in &mut excluded {
+            self.expand_destination_option_aliases(condition);
+        }
+        destination["op"] = json!(ops);
+        destination["lr2Not"] = json!(excluded);
     }
 
     pub(super) fn destination_def_with_ops(
@@ -189,6 +234,7 @@ impl<'a> CsvBuilder<'a> {
             conditional_ops,
             &[],
         );
+        destination["lr2Not"] = json!(self.conditional_not_ops);
         self.expand_destination_option_aliases(&mut destination);
         destination
     }
@@ -207,6 +253,7 @@ impl<'a> CsvBuilder<'a> {
             conditional_ops,
             default_offsets,
         );
+        destination["lr2Not"] = json!(self.conditional_not_ops);
         self.expand_destination_option_aliases(&mut destination);
         destination
     }
@@ -525,6 +572,7 @@ impl<'a> CsvBuilder<'a> {
             "offset": offset,
             "source": self.sources,
             "font": self.fonts,
+            "lr2SystemFonts": self.system_fonts,
             "image": self.images,
             "imageset": self.imagesets,
             "value": self.values,

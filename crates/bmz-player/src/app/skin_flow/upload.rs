@@ -89,6 +89,9 @@ impl WinitApp {
                 Err(_) => break,
             }
         }
+        if kind == SkinKind::Play {
+            self.skin.skin_pipeline.lr2_assets.previous_scene = Some(SkinKind::Play);
+        }
     }
 
     pub(super) fn ensure_result_skin_ready(&mut self, slot: ResultSkinSlot) {
@@ -111,9 +114,14 @@ impl WinitApp {
             .filter(|panel| (0..=2).contains(panel))
             .unwrap_or(0);
         self.clear_result_ir_scroll_input();
+        self.skin.skin_pipeline.lr2_assets.previous_scene = Some(SkinKind::Result);
     }
 
     pub(super) fn ensure_result_skin_ready_for_entry(&mut self, slot: ResultSkinSlot) {
+        self.skin.skin_pipeline.begin_lr2_result_entry(
+            slot == ResultSkinSlot::Course,
+            self.result.finished_play.is_some() || self.result.finished_course.is_some(),
+        );
         self.skin.skin_pipeline.result_refresh_generation = None;
         self.skin.skin_pipeline.result_load_dependencies = None;
         self.skin.skin_pipeline.result_source_selections.clear();
@@ -294,6 +302,7 @@ impl WinitApp {
             .map(|state| state.skin_snapshot_for_binding(binding))
             .unwrap_or_default();
         apply_result_ir_lua_load_numbers(&mut runtime_state, ir);
+        runtime_state.lr2_continue_assets = self.skin.skin_pipeline.lr2_assets.inherited.clone();
         runtime_state
     }
 
@@ -464,6 +473,14 @@ impl WinitApp {
         } = uploaded;
         let result_refresh = kind == SkinKind::Result
             && self.skin.skin_pipeline.result_refresh_generation == Some(generation);
+        if matches!(kind, SkinKind::Play | SkinKind::Result) {
+            let assets = lr2_resolved_assets(&document, &prepared, &fonts);
+            if kind == SkinKind::Play {
+                self.skin.skin_pipeline.lr2_assets.play = assets.into();
+            } else {
+                self.skin.skin_pipeline.lr2_assets.result = assets.into();
+            }
+        }
         self.skin.skin_pipeline.record_screen_dependencies(kind, load_dependencies.clone());
         if kind == SkinKind::Result {
             self.skin
@@ -691,9 +708,118 @@ fn should_defer_initial_skin_uploads(
     select_view && (!first_frame_startup_completed || select_elapsed_ms < select_input_ms.max(0))
 }
 
+fn lr2_resolved_assets(
+    document: &SkinDocument,
+    sources: &[crate::skin_loader::PreparedSource],
+    fonts: &[crate::skin_loader::DecodedFont],
+) -> bmz_skin::Lr2ContinueAssets {
+    if !document.lr2 {
+        return Default::default();
+    }
+    bmz_skin::Lr2ContinueAssets {
+        sources: document
+            .source
+            .iter()
+            .filter_map(|source| {
+                let resolved = sources.iter().find(|resolved| resolved.source_id == source.id)?;
+                let mut source = source.clone();
+                if !source.path.starts_with("bmz://") {
+                    source.path = std::path::absolute(&resolved.path)
+                        .unwrap_or_else(|_| resolved.path.clone())
+                        .to_string_lossy()
+                        .into_owned();
+                }
+                Some((source.id.clone(), source))
+            })
+            .collect(),
+        fonts: document
+            .font
+            .iter()
+            .filter_map(|font| {
+                let suffix = format!(":{}", font.id);
+                let resolved =
+                    fonts.iter().find(|resolved| resolved.stored_id.ends_with(&suffix))?;
+                let mut font = font.clone();
+                font.path = std::path::absolute(&resolved.path)
+                    .unwrap_or_else(|_| resolved.path.clone())
+                    .to_string_lossy()
+                    .into_owned();
+                Some((font.id.clone(), font))
+            })
+            .collect(),
+        system_fonts: document.lr2_system_fonts.clone(),
+    }
+}
+
 #[cfg(test)]
 mod deferred_upload_tests {
-    use super::should_defer_initial_skin_uploads;
+    use super::*;
+
+    #[test]
+    fn lr2_continue_assets_capture_resolved_paths_instead_of_wildcards() {
+        let document: SkinDocument = serde_json::from_value(serde_json::json!({
+            "lr2":true,
+            "source":[{"id":"0","path":"frame/*.png","lr2ColorKey":[255,0,255]}],
+            "font":[{"id":"lr2font-0","path":"font/*.lr2font","type":1}],
+            "lr2SystemFonts":[{"size":24,"thickness":2,"type":1}]
+        }))
+        .unwrap();
+        let sources = [crate::skin_loader::PreparedSource {
+            texture_lease: None,
+            source_id: "0".into(),
+            path: "C:/skins/play/frame/selected.png".into(),
+            texture: bmz_render::skin::SkinTextureId(1),
+            prepared: None,
+            size: bmz_render::skin::SkinImageSize { width: 1.0, height: 1.0 },
+            is_video: false,
+            cache_key: None,
+        }];
+        let fonts = [crate::skin_loader::DecodedFont {
+            stored_id: "Play:lr2font-0".into(),
+            path: "C:/skins/play/font/selected.lr2font".into(),
+            data: None,
+            cache_key: None,
+        }];
+        let inherited = lr2_resolved_assets(&document, &sources, &fonts);
+        assert_eq!(
+            Path::new(&inherited.sources["0"].path),
+            Path::new("C:/skins/play/frame/selected.png")
+        );
+        assert_eq!(inherited.sources["0"].lr2_color_key, Some([255, 0, 255]));
+        assert_eq!(
+            Path::new(&inherited.fonts["lr2font-0"].path),
+            Path::new("C:/skins/play/font/selected.lr2font")
+        );
+        assert_eq!(inherited.system_fonts, document.lr2_system_fonts);
+        let mut json_document = document;
+        json_document.lr2 = false;
+        assert_eq!(lr2_resolved_assets(&json_document, &sources, &fonts), Default::default());
+    }
+
+    #[test]
+    fn lr2_continue_paths_become_absolute_but_builtin_uris_stay_intact() {
+        let mut document: SkinDocument = serde_json::from_value(serde_json::json!({
+            "lr2":true,"source":[{"id":"0","path":"frame/*.png"}]
+        }))
+        .unwrap();
+        let sources = [crate::skin_loader::PreparedSource {
+            texture_lease: None,
+            source_id: "0".into(),
+            path: "data/skins/play/frame/selected.png".into(),
+            texture: bmz_render::skin::SkinTextureId(1),
+            prepared: None,
+            size: bmz_render::skin::SkinImageSize { width: 1.0, height: 1.0 },
+            is_video: false,
+            cache_key: None,
+        }];
+        let inherited = lr2_resolved_assets(&document, &sources, &[]);
+        assert!(Path::new(&inherited.sources["0"].path).is_absolute());
+        document.source[0].path = "bmz://lr2/empty".into();
+        assert_eq!(
+            lr2_resolved_assets(&document, &sources, &[]).sources["0"].path,
+            "bmz://lr2/empty"
+        );
+    }
 
     #[test]
     fn initial_select_defers_background_skin_uploads_until_input_time() {

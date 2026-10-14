@@ -6,6 +6,11 @@ pub(in crate::skin) fn lr2_number(id: i32, state: &SkinDrawState) -> Option<i64>
     let counts = state.judge_counts;
     let ex = i64::from(state.ex_score);
     match id {
+        154 => Some(lr2_next_rank_diff(ex, i64::from(state.total_notes) * 2)),
+        163 if state.result_failed.is_some() => Some(result_or_select_length_ms(state) / 60_000),
+        164 if state.result_failed.is_some() => {
+            Some(result_or_select_length_ms(state) / 1_000 % 60)
+        }
         // LR2 shows the judge timing here even while the sort is changed.
         12 => Some(i64::from(state.judge_timing_offset_ms)),
         // Levels of the song's difficulties in its folder. Without the folder data
@@ -116,6 +121,9 @@ pub(in crate::skin) fn lr2_same_folder_level(state: &SkinDrawState, slot: usize)
 
 /// Target ghost EX at the current progress.
 fn lr2_target_ghost_ex(state: &SkinDrawState) -> Option<i64> {
+    if state.result_failed.is_some() {
+        return state.target_ex_score.map(i64::from);
+    }
     state.target_ex_score.map(|target| i64::from(projected_score_at_progress(target, state)))
 }
 
@@ -124,6 +132,25 @@ pub(in crate::skin) fn lr2_2p_ex(state: &SkinDrawState) -> Option<i64> {
     match state.lr2_opponent.as_ref() {
         Some(opponent) => Some(i64::from(opponent.ex_score)),
         None => lr2_target_ghost_ex(state),
+    }
+}
+
+/// Result retains the single-player ghost's EX, but not invented judge counts.
+pub(in crate::skin) fn lr2_result_other_number(id: i32, state: &SkinDrawState) -> Option<i64> {
+    if state.lr2_opponent.is_some() {
+        return Some(lr2_opponent_number(SKIN_REF_BMZ_LR2_2P_BASE + id - 100, state));
+    }
+    let ex = lr2_target_ghost_ex(state)?;
+    let max = i64::from(state.total_notes) * 2;
+    match id {
+        101 => Some(ex),
+        102 | 115 if max > 0 => Some(ex * 100 / max),
+        103 | 116 if max > 0 => Some(ex * 10_000 / max % 100),
+        105 => state.target_max_combo.map(i64::from),
+        106 => Some(i64::from(state.total_notes)),
+        108 => Some(ex - i64::from(state.ex_score)),
+        109 => Some(lr2_next_rank_diff(ex, max)),
+        _ => None,
     }
 }
 
