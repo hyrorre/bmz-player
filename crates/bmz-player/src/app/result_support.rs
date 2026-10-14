@@ -342,18 +342,19 @@ pub(super) fn apply_result_summary_lua_load_state(
     table_level: &str,
     table_full: &str,
 ) {
-    // Asset #IF branches must see the finished score before the skin is decoded.
-    // Use the same rank boundaries (including zero score) as Result rendering.
-    let grade_state = bmz_render::skin::SkinDrawState {
+    // Asset #IF branches must see the finished chart and score before decoding.
+    // Share difficulty conversion and rank boundaries with Result rendering.
+    let result_state = bmz_render::skin::SkinDrawState {
+        difficulty: bmz_render::plan::skin_difficulty_code(&summary.difficulty_name),
         ex_score: summary.ex_score,
         total_notes: summary.total_notes,
         result_failed: Some(false),
         ..Default::default()
     };
-    for option in 300..=308 {
+    for option in (150..=155).chain(300..=308) {
         runtime_state
             .option_values
-            .insert(option, bmz_render::skin::lua_main_state_option(option, &[], &grade_state));
+            .insert(option, bmz_render::skin::lua_main_state_option(option, &[], &result_state));
     }
     runtime_state.option_values.insert(
         bmz_render::skin::SKIN_OPTION_BMZ_FIRST_PLAY,

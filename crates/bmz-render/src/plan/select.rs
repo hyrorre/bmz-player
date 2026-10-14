@@ -405,7 +405,8 @@ pub(super) fn skin_level_number(label: &str) -> i64 {
     value
 }
 
-pub(super) fn skin_difficulty_code(label: &str) -> i64 {
+/// Maps chart metadata labels to the difficulty used by skin options 150..155.
+pub fn skin_difficulty_code(label: &str) -> i64 {
     let label = label.trim();
     match label {
         "1" => 1,

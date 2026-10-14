@@ -65,3 +65,38 @@ TARGET 1846と差202、DURATION 2:11、指定側への配置を確認した。
 
 現在の契約は[スキン仕様](../../docs/skin.md#lr2のselect--result)と
 [対応状況](../../docs/skin-compatibility.md)へ反映した。
+
+## 2026-10-15追記: WMIXの難易度画像
+
+Black Wings [Another]のResultでANOTHERが欠落する報告を追跡した。
+登録済みmetadataと実BMSのimport結果はどちらもdifficulty=4であり、
+元ファイルの`#difficulty 04`はimport時に数値4へ正規化されていた。
+原因はResult読込状態にop 150..155を渡していなかったこと。
+WMIXはこの条件で難易度画像のSRCを選ぶため、全分岐が無効になっていた。
+
+描画時に使う共通の難易度変換をResult読込でも使い、150..155を毎回上書きする。
+通常／コースResultの画像分岐とdecode cacheの回帰テストを追加し、
+数値・名前の別表現、ANOTHER→INSANE→未定義の切替を確認する。
+WMIX実CSVではLeft / RightそれぞれのANOTHER（atlas y=496）とINSANE（y=454）を確認する。
+実素材テストがskipする環境はGPU確認済みと見なさない。
+
+先のGPU確認は描画状態から全optionを注入しており、アプリの条件供給漏れを検出できなかった。
+今回のGPU確認は`WinitApp::result_lua_runtime_state`と`scene_snapshot`を使い、
+実アプリと同じ供給経路で画像を作る。
+テストは[Result難易度の回帰テスト](../../crates/bmz-player/src/app/tests/result_difficulty.rs)に置く。
+
+修正前は追加した3テストがすべて失敗し、WMIXの難易度画像0枚を再現した。
+修正後は3テストが成功し、WMIX実素材の8条件（左右×数値／名前×ANOTHER／INSANE）を
+skipせず確認した。通常／コースResultのcacheは、同じ難易度の数値→名前ではhitし、
+ANOTHER→INSANE→未定義では再decodeすることを確認した。
+
+Windows / wgpuでignoredのGPUテストも明示実行して成功。
+合成した終了結果を使い、Left / Right × ANOTHER / INSANEの1280×720画像4枚を保存し、
+下部の難易度ラベルを目視確認した。ゲームパッドの初期化はテストで無効にした。
+画像は`.local/lr2-play-audit/difficulty-fixed/`、全体検証ログは同auditディレクトリに保存する。
+実BMSの演奏からResultへ入る操作、全カスタム設定、macOS / Linuxは未確認。
+
+今回の全体検証はfmt、workspace check、all-targets Clippy（`CARGO_INCREMENTAL=0`、
+`-D warnings`）、workspace test（`--no-fail-fast`）がすべて成功した。
+Cargoの検証には`--locked --offline`を付けた。主な成功件数はbmz-player 2456、
+bmz-render 747、bmz-skin 291、bmz-skin-document 22。

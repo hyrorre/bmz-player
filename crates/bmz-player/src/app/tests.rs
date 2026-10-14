@@ -234,6 +234,8 @@ mod play;
 mod play_preload;
 #[path = "tests/result.rs"]
 mod result;
+#[path = "tests/result_difficulty.rs"]
+mod result_difficulty;
 #[path = "tests/runtime.rs"]
 mod runtime;
 #[path = "tests/select.rs"]
