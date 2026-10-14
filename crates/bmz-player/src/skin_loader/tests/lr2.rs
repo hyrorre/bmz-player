@@ -16,6 +16,8 @@ mod cases_06;
 mod scenes;
 #[path = "lr2/select_conditions.rs"]
 mod select_conditions;
+#[path = "lr2/select_ir_status.rs"]
+mod select_ir_status;
 #[path = "lr2/select_scroll.rs"]
 mod select_scroll;
 #[path = "lr2/select_skin_settings.rs"]

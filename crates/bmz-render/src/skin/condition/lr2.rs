@@ -113,6 +113,9 @@ pub(super) fn lr2_option(id: i32, state: &SkinDrawState) -> bool {
         }
         // Best lamp the current settings can earn.
         62..=66 => lr2_clear_lamp_challenge(state) == i64::from(id - 62),
+        // LR2's IR status: exactly one of 600..608 holds (`IRstatus`), unlike
+        // beatoraja's overlapping IR options.
+        600..=608 => lr2_ir_status(state) == id,
         // Selected rival's clear lamp and rank on the selected song.
         640..=645 => lr2_rival_clear(state) == Some(i64::from(id - 640)),
         650..=657 => lr2_rival_rank(state).is_some_and(|rank| match id {
@@ -138,6 +141,22 @@ pub(super) fn lr2_option(id: i32, state: &SkinDrawState) -> bool {
             })
         }
         _ => false,
+    }
+}
+
+/// The option of LR2's `IRstatus` for BMZ's ranking state. LR2 moves from waiting
+/// (3, option 606) to connecting (4, 607) and then to a ranking with players (2, 602),
+/// no players (-1, 603) or a connection failure (-3, 604); 0 (600) is no IR target.
+/// BMZ has no momentary reading (601), banned song (605) or rate-limit busy (608).
+fn lr2_ir_status(state: &SkinDrawState) -> i32 {
+    use crate::scene::ResultIrState;
+    match state.ir_ranking.state {
+        ResultIrState::Offline => 600,
+        ResultIrState::Waiting => 606,
+        ResultIrState::Loading => 607,
+        ResultIrState::Loaded if state.ir_ranking.total_player == Some(0) => 603,
+        ResultIrState::Loaded => 602,
+        ResultIrState::Failed => 604,
     }
 }
 

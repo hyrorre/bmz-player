@@ -33,6 +33,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-15 | [LR2選曲スキンのIR状態表示の重複](2026/2026-10-15-lr2-select-ir-status.md) |
 | 2026-10-15 | [LR2選曲スクロールバーのalpha](2026/2026-10-15-lr2-select-scroll-slider.md) |
 | 2026-10-14 | [ADFX02 (EC:FN / Starseeker) 7KのBPM変化予告](2026/2026-10-14-adfx02-bpm-preview.md) |
 | 2026-10-14 | [BPM変化予告の拡張refとantique実装](2026/2026-10-14-bpm-change-preview.md) |

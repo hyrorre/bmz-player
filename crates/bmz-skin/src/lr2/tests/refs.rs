@@ -122,6 +122,28 @@ fn lr2_select_panel_and_ir_connection_are_draw_time_conditions() {
 }
 
 #[test]
+fn lr2_select_ir_status_options_use_the_lr2_namespace() {
+    let image = |ops: &str| {
+        format!(
+            "#SRC_IMAGE,0,0,0,0,1,1,1,1,0,0\n\
+             #DST_IMAGE,0,0,0,0,1,1,0,255,255,255,255,0,0,0,0,0,0,{ops}\n"
+        )
+    };
+    let op = |document: &JsonValue| document["destination"][0]["op"].clone();
+    // Select and Decide evaluate LR2's single IRstatus, also inside #IF.
+    for skin_type in [5, 6] {
+        assert_eq!(
+            op(&load(skin_type, &image("600,-603,608"))),
+            json!([LR2_OPTION_BASE + 600, -(LR2_OPTION_BASE + 603), LR2_OPTION_BASE + 608])
+        );
+    }
+    let in_if = load(5, &format!("#IF,602\n{}#ENDIF\n", image("0,0,0")));
+    assert_eq!(op(&in_if), json!([LR2_OPTION_BASE + 602]));
+    // Result keeps the shared IR options.
+    assert_eq!(op(&load(7, &image("602,0,0"))), json!([602]));
+}
+
+#[test]
 fn lr2_ghost_and_rival_refs_use_the_lr2_namespace() {
     let lr2 = |id: i32| json!(LR2_NUMBER_BASE + id);
     let play = load(0, &[150, 151, 155, 158].map(number).concat());

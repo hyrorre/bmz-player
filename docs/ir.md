@@ -222,7 +222,9 @@ SHA-256 fallback でラベルを付与する。
   batch 間を 200ms 空ける。
 - ランキング表示: Result / Select スキンの `NUMBER_IR_RANK(179)` /
   `NUMBER_IR_TOTALPLAYER(180/200)` / `NUMBER_IR_CLEARRATE(181)` /
-  `OPTION_IR_LOADING/LOADED/NOPLAYER/FAILED(601..604)`、
+  `OPTION_IR_LOADING/LOADED/NOPLAYER/FAILED(601..604)`
+  （LR2 CSVのSelect / Decideでは600..608を単一の状態として排他的に評価。
+  [スキン仕様](skin.md)の600..608を参照）、
   Select の `STRING_RIVAL(1)` / `NUMBER_RIVAL_SCORE(271)` /
   `NUMBER_RIVAL_MAXCOMBO(275)` / `NUMBER_RIVAL_MISSCOUNT(276)` /
   `OPTION_(NOT_)COMPARE_RIVAL(624/625)`。egui のリザルトオーバーレイもあり。

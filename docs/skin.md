@@ -183,12 +183,14 @@ option `94_000+ID`、否定は符号を維持）。意味が一致する番号�
 | number | 120..136（シングルプレイ） | Play | 2Pはターゲットのゴースト。BMZはEXの進捗換算だけを持つため、EX・率・差・次ランク差・ノーツ数以外は0 |
 | number | 120..136（シングルプレイ） | Result / Course Result | 自分と反対側はターゲットの最終EX・率・差・次ランク差・ノーツ数・取得済み最大コンボを表示する。判定数・ゲージ等の未取得値は非表示。左右反転に追従する |
 | number | 272 / 273 / 274 | Select / Decide | ライバルの理論値EX・レート・ノーツ数（同じ譜面のノーツ数から計算） |
-| option | 52 / 54 / 56、620 / 622 | 全画面 | EXTRA OFF、オートスクラッチOFF、ランキング表示OFF、ゴーストバトルOFFとして常にtrue（53 / 55 / 57、621 / 623はfalse） |
+| option | 52、620 / 622 | 全画面 | EXTRA OFF、ランキング表示OFF、ゴーストバトルOFFとして常にtrue（53、621 / 623はfalse） |
+| option | 54..57 | 全画面 | 1P / 2PのAUTO SCRATCH OFF / ON。プレイ画面は実際に自動演奏しているスクラッチレーン、他の画面は設定値 |
 | option | 100..105 / 110..117 | Select / Decide | 選択中の曲のクリアランプ（beatorajaのクリア種別をバーのランプと同じ5段階へ畳む）とランク（プレイ済みのみ）。描画時に評価する |
 | option | 340..347 | Result / Course Result | 今回のスコアのランク |
 | option | 20 | Select / Decide | オプションパネルを開いていない。描画時に評価する |
-| option | 10 / 11 / 12 | Select / Decide | STYLEフィルターのDP / BATTLE / DPまたはBATTLE。14 / 10鍵フィルターでは10と12がtrue。選択譜面の鍵盤数からは判定しない。BATTLEはBMZ未対応のため11はfalse。`#IF`内も描画時に評価する |
+| option | 10 / 11 / 12 | Select / Decide | STYLEフィルターのDP / BATTLE / DPまたはBATTLE。14 / 10鍵フィルター、またはBATTLEがD-BATTLE / SP-TO-DPのとき10と12がtrue。選択譜面の鍵盤数からは判定しない。2人対戦BATTLEはBMZ未対応のため11はfalse。`#IF`内も描画時に評価する |
 | option | 21..29 | Select / Decide | 対応するオプションパネルを開いている。`#IF`内も描画時に評価する |
+| option | 600..608 | Select / Decide | LR2の単一の`IRstatus`。常にどれか1つだけが成立する。IR未設定・非対象の行は600、取得待ちは606、取得中は607（LR2の接続中）、取得済みで参加者ありは602、参加者0人（未登録の譜面を含む）は603、取得失敗は604。BMZに無い一時読み込み（601）、BAN曲（605）、IRビジー（608）はfalse。beatoraja / JSON / Luaの600..608は従来どおり（0人で602と603、失敗で604と608が同時に成立する）。`#IF`内も描画時に評価する |
 | option | 571 / 572 | Select / Decide | コース作成中 / コース作成中ではない。BMZにコース編集画面が無いため571はfalse、572はtrue。572を条件とする選曲スコアバーも表示する |
 | option | 62..66 | Select / Decide | 現在の設定で取れる最高ランプ（クリア不可 / EASY / NORMAL / HARD / FULLCOMBO）。オート・練習はクリア不可、H-RANDOM / ALL-SCR / 等速はEASYまで。ゲージはA-EASY / EASY→EASY、HARD / EX-HARD→HARD、HAZARD→FULLCOMBO |
 | option | 640..645 / 650..657 | Select / Decide | 選択中ライバルのクリアランプ（5段階）とランク |

@@ -750,6 +750,48 @@ fn lr2_assist_and_battle_follow_bmz_settings() {
 }
 
 #[test]
+fn lr2_ir_status_options_are_exclusive() {
+    use crate::scene::{ResultIrSnapshot, ResultIrState};
+    let state = |ir_state: ResultIrState, total_player: Option<i64>| SkinDrawState {
+        select_screen: true,
+        ir_ranking: ResultIrSnapshot { state: ir_state, total_player, ..Default::default() },
+        ..Default::default()
+    };
+    let lr2 = |state: &SkinDrawState| {
+        (600..=608)
+            .filter(|id| test_skin_ops(&[LR2_OPTION_BASE + id], &[], state))
+            .collect::<Vec<_>>()
+    };
+    // IR not set and non-chart rows are Offline in BMZ.
+    for (ir_state, total, expected) in [
+        (ResultIrState::Offline, None, 600),
+        (ResultIrState::Waiting, None, 606),
+        (ResultIrState::Loading, None, 607),
+        (ResultIrState::Loaded, Some(0), 603),
+        (ResultIrState::Loaded, Some(1), 602),
+        (ResultIrState::Loaded, Some(25), 602),
+        (ResultIrState::Failed, None, 604),
+    ] {
+        assert_eq!(lr2(&state(ir_state, total)), vec![expected], "{ir_state:?} {total:?}");
+    }
+    // Players -> no players -> failure -> players never shows two statuses.
+    for (ir_state, total, expected) in [
+        (ResultIrState::Loaded, Some(3), 602),
+        (ResultIrState::Loaded, Some(0), 603),
+        (ResultIrState::Failed, None, 604),
+        (ResultIrState::Loaded, Some(3), 602),
+    ] {
+        assert_eq!(lr2(&state(ir_state, total)), vec![expected]);
+    }
+    // beatoraja / JSON / Lua keep their overlapping meanings.
+    let shared = |state: &SkinDrawState| {
+        (600..=608).filter(|id| test_skin_ops(&[*id], &[], state)).collect::<Vec<_>>()
+    };
+    assert_eq!(shared(&state(ResultIrState::Loaded, Some(0))), vec![602, 603]);
+    assert_eq!(shared(&state(ResultIrState::Failed, None)), vec![604, 608]);
+}
+
+#[test]
 fn select_key_filter_labels_follow_lr2_wording() {
     for (mode, label) in [
         ("ALL", "ALL KEYS"),
