@@ -269,6 +269,7 @@ profileの `[select].new_title_hours` は既定24時間、0で無効。NEWフォ
 | 40 | ゲージ | NORMAL / HARD / DEATH(HAZARD) / EASY |
 | 42 / 43 | 1P / 2P配置 | NORMAL / MIRROR / RANDOM / S-RANDOM / H-RANDOM / ALL-SCR |
 | 44 / 45 | ASSIST 1P / 2P | OFF / AUTO SCRATCH（両側共通のAUTO SCRATCHを切り替える） |
+| 46 | LANE COVER | OFF / ON。BMZはLR2のSUDDENとSUDDEN+を1つのSUDDEN+として扱うため、レーン効果のSUDDEN成分（SUDDEN / HID+SUDでON）を表示・切り替える |
 | 50 / 51 | EFFECT 1P / 2P | OFF / HIDDEN / SUDDEN / HID+SUD（同じ共通レーン効果を切り替える） |
 | 54 | DP FLIP | OFF / FLIP |
 | 55 | HS-FIX | OFF / MAX / MIN / MAIN BPM（LR2のAVERAGEスロットを使用） |
@@ -309,7 +310,7 @@ option 62..66（このまま取れる最高ランプ）は、AUTO SCRATCHをD-BA
 10..12はLR2と同じくクリック位置に関係なく次へ進める。
 現在値がLR2の候補にないBMZ独自値（EX-HARD、R-RANDOM、START BPM等）の場合、
 次へは候補の先頭、前へは末尾へ移る。BMZ独自値はbuttonから選ばず、BMZ設定画面で変更する。
-7..8のパネル、FX/EQ/PITCH、2P側のゲージ・HS、shutter(46)、
+7..8のパネル、FX/EQ/PITCH、2P側のゲージ・HS、
 SCOREGRAPH・GHOST(70/71)、BGA SIZE(73)、既定ターゲット率(76)、
 システム設定(80..83)、favorite tag(90)等、BMZに同じ意味の設定が無いbuttonは何もしない。
 LR2スキンのoption panelを使うときは、BMZ独自の画面下部オプション表示を重ねない。

@@ -15,6 +15,7 @@ fn lr2_select_buttons_cycle_lr2_values_without_opening_settings() {
         (43, Arrange2P),
         (44, AutoScratch),
         (45, AutoScratch),
+        (46, LaneCover),
         (50, LaneEffect),
         (51, LaneEffect),
         (54, DpFlip),
@@ -30,7 +31,7 @@ fn lr2_select_buttons_cycle_lr2_values_without_opening_settings() {
         assert_eq!(lr2_select_button_action(button), action, "button {button}");
     }
     // LR2 options without an identical BMZ setting are ignored instead of opening BMZ UI.
-    for button in [7, 8, 18, 20, 29, 33, 41, 46, 58, 70, 71, 73, 76, 80, 83, 90] {
+    for button in [7, 8, 18, 20, 29, 33, 41, 58, 70, 71, 73, 76, 80, 83, 90] {
         assert_eq!(lr2_select_button_action(button), Unsupported, "button {button}");
     }
 }

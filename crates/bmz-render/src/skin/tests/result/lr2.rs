@@ -302,6 +302,8 @@ fn lr2_select_option_buttons_show_cycled_profile_values() {
         let state =
             SkinDrawState { lanecover_enabled: sudden, hidden_enabled: hidden, ..select.clone() };
         assert_eq!(index(50, &state), expected);
+        // LANE COVER is ON with SUDDEN and HID+SUD.
+        assert_eq!(index(46, &state), i32::from(sudden));
     }
     let state = SkinDrawState { judge_timing_auto_adjust: true, ..select.clone() };
     assert_eq!((index(75, &select), index(75, &state)), (0, 1));
@@ -310,6 +312,7 @@ fn lr2_select_option_buttons_show_cycled_profile_values() {
     // Result screens keep these select-only buttons hidden.
     let result = SkinDrawState { select_screen: false, ..state };
     assert_eq!((index(50, &result), index(75, &result), index(77, &result)), (-1, -1, -1));
+    assert_eq!(index(46, &result), -1);
 }
 
 #[test]

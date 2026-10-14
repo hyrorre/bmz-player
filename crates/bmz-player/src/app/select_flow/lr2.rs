@@ -64,6 +64,15 @@ impl WinitApp {
                 );
                 self.finish_selected_play_mode_edit();
             }
+            Lr2SelectButtonAction::LaneCover => {
+                if !self.begin_selected_play_mode_edit() {
+                    return;
+                }
+                let effect = self.boot.profile_config.play.lane_effect;
+                self.boot.profile_config.play.lane_effect =
+                    effect.with_sudden_enabled(!effect.sudden_enabled());
+                self.finish_selected_play_mode_edit();
+            }
             Lr2SelectButtonAction::DpFlip => {
                 self.select.double_option =
                     cycle_lr2_value(LR2_DP_OPTIONS, self.select.double_option, direction);
