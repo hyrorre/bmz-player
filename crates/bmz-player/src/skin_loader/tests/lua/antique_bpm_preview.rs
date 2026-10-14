@@ -1,9 +1,9 @@
 use super::*;
 use bmz_render::skin::{SkinDestinationDef, SkinDocument, SkinDstEntry};
 
-/// Digit cell width/height after doubling the 13px FAST/SLOW digits.
-const DIGIT_W: i32 = 26;
-const DIGITS: i32 = 4;
+/// FAST/SLOW digit cell width (drawn at 1x) and maximum shown digits.
+const DIGIT_W: i32 = 13;
+const DIGITS: i32 = 3;
 
 fn antique_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -24,7 +24,7 @@ fn load_antique(options: &[(&str, &str)]) -> SkinDocument {
 }
 
 fn is_preview_part(id: &str) -> bool {
-    id.starts_with("num_bpm_preview_") || id == "txt_bpm_preview_arrow"
+    id.starts_with("num_bpm_preview_") || id.starts_with("txt_bpm_preview_arrow_")
 }
 
 fn preview_destinations(document: &SkinDocument) -> Vec<SkinDestinationDef> {
@@ -41,11 +41,11 @@ fn frame(destination: &SkinDestinationDef) -> &bmz_render::skin::SkinAnimationDe
     frame
 }
 
-/// `(left, right)` of one part. Numbers span four digit cells; the arrow text is centered.
+/// `(left, right)` of one part. Numbers span three digit cells; the arrow text is centered.
 fn part_span(destination: &SkinDestinationDef) -> (i32, i32) {
     let frame = frame(destination);
     let (x, w) = (frame.x.unwrap(), frame.w.unwrap());
-    if destination.id == "txt_bpm_preview_arrow" {
+    if destination.id.starts_with("txt_bpm_preview_arrow") {
         (x - w / 2, x + w / 2)
     } else {
         (x, x + w * DIGITS)
@@ -109,25 +109,29 @@ fn antique_bpm_preview_types_use_fast_slow_digits_and_place_parts_when_available
                     assert_eq!((value.ref_id, value.align), (ref_id, align), "{id}");
                 }
             }
-            let arrow = document.text.iter().find(|text| text.id == "txt_bpm_preview_arrow");
-            assert_eq!(arrow.unwrap().constant_text, "»");
+            // The arrow outline uses the digit color to thicken the glyph.
+            for (key, outline) in [("inc", "ccccffff"), ("dec", "ffccccff")] {
+                let id = format!("txt_bpm_preview_arrow_{key}");
+                let arrow = document.text.iter().find(|text| text.id == id).unwrap();
+                assert_eq!(arrow.constant_text, "»");
+                assert_eq!(arrow.outline_color, outline);
+            }
 
             let destinations = preview_destinations(&document);
             // Inside: three parts per color. Outside: lane-side number plus
             // arrow / far number for each digit count of the lane-side number.
-            assert_eq!(destinations.len(), if inside { 6 } else { 18 }, "{type_label}");
+            assert_eq!(destinations.len(), if inside { 6 } else { 14 }, "{type_label}");
             for destination in &destinations {
                 assert_eq!(destination.timer, Some(19068));
                 assert!(destination.op.contains(&19064));
                 let increase = destination.op.contains(&19065);
                 assert!(increase || destination.op.contains(&19066));
                 let key = if increase { "_inc" } else { "_dec" };
-                if destination.id == "txt_bpm_preview_arrow" {
+                assert!(destination.id.ends_with(key), "{}", destination.id);
+                if destination.id.starts_with("txt_bpm_preview_arrow") {
                     let color = (frame(destination).r, frame(destination).g, frame(destination).b);
                     let expected = if increase { (204, 204, 255) } else { (255, 204, 204) };
                     assert_eq!(color, (Some(expected.0), Some(expected.1), Some(expected.2)));
-                } else {
-                    assert!(destination.id.ends_with(key), "{}", destination.id);
                 }
             }
 
@@ -215,17 +219,17 @@ fn antique_bpm_preview_digit_variants_are_exclusive_when_available() {
     let document = load_antique(&[("BPM変化予告 (BMZ)", "TYPE C (レーン外・判定文字の横)")]);
     let arrows = preview_destinations(&document)
         .into_iter()
-        .filter(|destination| destination.id == "txt_bpm_preview_arrow")
+        .filter(|destination| destination.id == "txt_bpm_preview_arrow_inc")
         .filter(|destination| destination.op.contains(&19065))
         .map(|destination| (destination.draw.clone(), frame(&destination).x.unwrap()))
         .collect::<Vec<_>>();
     assert_eq!(
         arrows,
         vec![
-            ("number(19062) < 10".to_string(), 601 + DIGIT_W + 6 + 11),
-            ("number(19062) >= 10 && number(19062) < 100".to_string(), 601 + DIGIT_W * 2 + 17),
-            ("number(19062) >= 100 && number(19062) < 1000".to_string(), 601 + DIGIT_W * 3 + 17),
-            ("number(19062) >= 1000".to_string(), 601 + DIGIT_W * 4 + 17),
+            // x = lane edge + digits * width + gap (3) + half arrow box (10).
+            ("number(19062) < 10".to_string(), 601 + DIGIT_W + 13),
+            ("number(19062) >= 10 && number(19062) < 100".to_string(), 601 + DIGIT_W * 2 + 13),
+            ("number(19062) >= 100".to_string(), 601 + DIGIT_W * 3 + 13),
         ]
     );
 }
@@ -277,10 +281,10 @@ fn antique_bpm_preview_gpu_draws_colored_digits_only_inside_the_lead_window() {
         install_decoded_skin(&mut renderer, decoded, SkinManifest::default()).unwrap();
         let mut frames = Vec::new();
         // The lane-side number has 2 / 3 digits on the right of the lane (from)
-        // and 4 / 2 digits on the left of the lane (to).
+        // and 3 / 2 digits on the left of the lane (to).
         for (case, remaining_ms, from_bpm, to_bpm) in [
             ("before", 2_500, 153.0, 156.0),
-            ("increase", 500, 98.0, 1_200.0),
+            ("increase", 500, 98.0, 150.0),
             ("decrease", 500, 155.0, 85.0),
         ] {
             renderer.prepare_scene(AppSceneSnapshot::Play(RenderSnapshot {
@@ -334,7 +338,7 @@ fn antique_bpm_preview_gpu_draws_colored_digits_only_inside_the_lead_window() {
             [(&frames[1], blue as fn(&[u8]) -> bool, "blue"), (&frames[2], red, "red")]
         {
             let columns = matching_columns(frame, matches);
-            assert!(columns.len() > 40, "{name}: {color} preview drawn");
+            assert!(columns.len() > 30, "{name}: {color} preview drawn");
             match lane_edge {
                 Some(edge) if edge < 960 => {
                     let first = columns[0] as i32;
