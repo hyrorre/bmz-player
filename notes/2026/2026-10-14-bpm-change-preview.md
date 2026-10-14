@@ -113,3 +113,9 @@ GPUテストに、TYPE A/Bで数字と「»」の縦方向の中心差が0.5px�
 - 描画計画のテストで、LIFTと「Judge offset」「Judge Detail offset」を変えたとき、
   予告がFAST/SLOWと同じだけ（TYPE B/Cは判定文字のoffset分、TYPE DはLIFT分）動くことを確認。
   antiqueのTYPE Aを従来の `{3, 32}` に戻すとこのテストが失敗する（予告94px、FAST 124px）ことも確認した。
+## 2026-10-15 追記: 数字と「»」の間隔
+
+ユーザー提示の参考画像（数字の高さ20pxに対し、数字と「»」の間が約20px）に合わせ、
+間隔を数字の高さ程度へ広げた。antiqueは設定値3→9（見た目の間7px→13px、数字13px）、
+ADFX02は3→8（7px→12px、数字の字面約12px）。表示位置オフセットのwで同じ比率に拡大縮小する。
+GPU画像を `.local/performance/bpm-change-preview/gap/` に保存し、画素で間隔を測って確認した。

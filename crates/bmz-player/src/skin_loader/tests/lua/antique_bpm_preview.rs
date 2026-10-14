@@ -226,10 +226,10 @@ fn antique_bpm_preview_digit_variants_are_exclusive_when_available() {
     assert_eq!(
         arrows,
         vec![
-            // x = lane edge + digits * width + gap (3) + half arrow box (10).
-            ("number(19062) < 10".to_string(), 601 + DIGIT_W + 13),
-            ("number(19062) >= 10 && number(19062) < 100".to_string(), 601 + DIGIT_W * 2 + 13),
-            ("number(19062) >= 100".to_string(), 601 + DIGIT_W * 3 + 13),
+            // x = lane edge + digits * width + gap (9) + half arrow box (10).
+            ("number(19062) < 10".to_string(), 601 + DIGIT_W + 19),
+            ("number(19062) >= 10 && number(19062) < 100".to_string(), 601 + DIGIT_W * 2 + 19),
+            ("number(19062) >= 100".to_string(), 601 + DIGIT_W * 3 + 19),
         ]
     );
 }
