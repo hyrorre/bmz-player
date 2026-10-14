@@ -44,3 +44,20 @@ Starseekerはrepo内に規約がない（作者は同じ）。ユーザーの方
 ```sh
 cargo test -p bmz-player --locked skin_loader::tests::adfx02_bpm_preview -- --ignored --test-threads=1
 ```
+
+## 2026-10-14 追記: 判定詳細との重なりのスクリーンショット
+
+`adfx02_bpm_preview_judge_detail_screenshots`（ignored、`BMZ_BPM_PREVIEW_DIR`へ保存）で、
+判定文字・FAST・スコア差分を表示した状態の全組み合わせを撮影した。
+Starseekerは1P/2P × fast/slow位置TYPE-A〜C × スコア差分位置TYPE-A〜C × 予告TYPE A〜Dの72枚、
+EC:FNは1P/2P × 予告TYPE A〜Dの8枚。画像と一覧は `.local/performance/bpm-change-preview/overlap/`。
+
+撮影条件で分かったこと:
+
+- Starseekerのスコア差分の数値定義はスコアグラフのモジュールにあり、「スコアグラフ」がOnの場合だけ表示される。
+- 判定文字は30msごとに文字と空白のフレームを交互に表示するため、判定から130ms後で撮影した。
+- 1つのrendererへ別スキンを続けて導入すると、同じtexture IDが残るため、撮影ごとにrendererを作成した。
+
+確認結果: Starseekerでレーン外のfast/slow・スコア差分と重なる組み合わせでは、予告がその上へ移動し、
+複数ある場合は「予告、FAST、スコア差分」の順に積み重なる。TYPE A/Bはレーン内の表示と重ならない。
+EC:FNはスコア差分（判定詳細の高さ）と重ならない。

@@ -326,3 +326,126 @@ fn adfx02_bpm_preview_gpu_draws_colored_digits_next_to_the_lane() {
         }
     }
 }
+
+/// Writes screenshots of every preview type next to each FAST/SLOW and score
+/// difference position, with a judgement on screen so those details are drawn.
+#[test]
+#[ignore = "requires ADFX02 assets and a GPU; writes screenshots to BMZ_BPM_PREVIEW_DIR"]
+fn adfx02_bpm_preview_judge_detail_screenshots() {
+    use bmz_core::judge::{Judge, TimingSide};
+    use bmz_core::lane::Lane;
+    use bmz_render::renderer::SurfaceSize;
+    use bmz_render::snapshot::{
+        BpmChangePreviewSnapshot, DisplayJudgement, RenderSnapshot, UpcomingBpmChange,
+    };
+    let directory =
+        PathBuf::from(std::env::var_os("BMZ_BPM_PREVIEW_DIR").expect("set BMZ_BPM_PREVIEW_DIR"));
+    std::fs::create_dir_all(&directory).unwrap();
+
+    let mut cases: Vec<(Skin, String, Vec<(&str, &str)>)> = Vec::new();
+    for side in ["1P", "2P"] {
+        for (type_index, type_label) in TYPES.into_iter().enumerate() {
+            let type_name = (b'a' + type_index as u8) as char;
+            for fast_slow in ["TYPE-A", "TYPE-B", "TYPE-C"] {
+                for score in ["TYPE-A", "TYPE-B", "TYPE-C"] {
+                    cases.push((
+                        Skin::Starseeker,
+                        format!("starseeker-{side}-{type_name}-fs{fast_slow}-diff{score}"),
+                        vec![
+                            ("プレーサイド", side),
+                            ("fast/slow", "EARLY/LATE"),
+                            ("fast/slow位置", fast_slow),
+                            ("スコア差分", "mybest"),
+                            ("スコア差分位置", score),
+                            // Starseeker defines the score difference in the graph module.
+                            ("スコアグラフ", "On"),
+                            ("BPM変化予告 (BMZ)", type_label),
+                        ],
+                    ));
+                }
+            }
+            cases.push((
+                Skin::Ecfn,
+                format!("ecfn-{side}-{type_name}"),
+                vec![
+                    ("プレーサイド", side),
+                    ("判定タイミング表示", "EARLY/LATE"),
+                    ("スコア差分", "mybest"),
+                    ("BPM変化予告 (BMZ)", type_label),
+                ],
+            ));
+        }
+    }
+    // Mirror a normal (non-autoplay) play start with a saved best, as the app passes
+    // to play skins; score difference draw callbacks read NUMBER_HIGHSCORE (150).
+    let runtime_state = LuaLoadRuntimeState {
+        runtime_mode: bmz_skin::LuaSkinRuntimeMode::Compat,
+        number_values: BTreeMap::from([(150, 1_200)]),
+        option_values: BTreeMap::from([(32, true), (33, false), (61, true), (82, true)]),
+        ..Default::default()
+    };
+    for (skin, name, options) in cases {
+        let decoded = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+            pinned_sources: None,
+            skin_path: &skin.path(),
+            kind: SkinKind::Play,
+            options: &options.iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect(),
+            files: &BTreeMap::new(),
+            runtime_state: &runtime_state,
+            library_roots: &test_app_paths().skin_library_roots(),
+            document_cache: None,
+            source_cache: None,
+            texture_cache: None,
+            font_cache: None,
+            installed_fonts: None,
+        })
+        .unwrap();
+        // A fresh renderer per screenshot: skins reuse texture IDs between installs.
+        let mut renderer = Renderer::default();
+        renderer.attach_offscreen(SurfaceSize { width: 1920, height: 1080 }).unwrap();
+        install_decoded_skin(&mut renderer, decoded, SkinManifest::default()).unwrap();
+        // The judge image blinks between a text frame and a blank frame every 30ms;
+        // 130ms after the judgement shows the text frame.
+        let now = TimeUs(10_000_000);
+        renderer.prepare_scene(AppSceneSnapshot::Play(RenderSnapshot {
+            time: now,
+            play_elapsed_time: TimeUs(15_000_000),
+            ready_elapsed_time: Some(TimeUs(12_000_000)),
+            resources_loaded: true,
+            key_mode: KeyMode::K7,
+            now_bpm: 155.0,
+            ex_score: 1_234,
+            past_notes: 700,
+            total_notes: 1_000,
+            best_ex_score: Some(1_200),
+            projected_best_ex_score: Some(1_100),
+            target_ex_score: Some(1_300),
+            recent_judgements: vec![DisplayJudgement {
+                lane: Lane::Key4,
+                judge: Judge::Great,
+                side: Some(TimingSide::Fast),
+                text: "GREAT".into(),
+                combo: 345,
+                delta_us: 23_000,
+                time: TimeUs(now.0 - 130_000),
+                is_miss: false,
+                timing_ms_suppressed: false,
+            }],
+            bpm_change_preview: BpmChangePreviewSnapshot {
+                next: Some(UpcomingBpmChange { remaining_ms: 500, from_bpm: 155.0, to_bpm: 202.0 }),
+                since_last_change_ms: None,
+            },
+            ..Default::default()
+        }));
+        renderer.render_last_plan().unwrap();
+        let pixels = renderer.read_offscreen_rgba().unwrap();
+        image::save_buffer(
+            directory.join(format!("{name}.png")),
+            &pixels,
+            1920,
+            1080,
+            image::ColorType::Rgba8,
+        )
+        .unwrap();
+    }
+}
