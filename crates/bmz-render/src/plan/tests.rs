@@ -72,6 +72,8 @@ fn draw_command_has_rect(command: &DrawCommand, predicate: impl Fn(&Rect, &Color
     }
 }
 
+#[path = "tests/bpm_change.rs"]
+mod bpm_change;
 #[path = "tests/cases_01.rs"]
 mod cases_01;
 #[path = "tests/cases_02.rs"]

@@ -33,6 +33,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-14 | [BPM変化予告の拡張refとantique実装](2026/2026-10-14-bpm-change-preview.md) |
 | 2026-10-14 | [LR2スキン関連コミットのレビュー指摘の修正](2026/2026-10-14-lr2-review-fixes.md) |
 | 2026-10-14 | [LR2選曲スキンのSKIN SETTINGSのマウス操作](2026/2026-10-14-lr2-skin-settings-mouse.md) |
 | 2026-10-14 | [LR2選曲のASSIST（AUTO SCRATCH）とBATTLE](2026/2026-10-14-lr2-assist-auto-scratch-battle.md) |

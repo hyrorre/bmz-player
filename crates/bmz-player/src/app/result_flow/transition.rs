@@ -135,7 +135,7 @@ impl WinitApp {
             return;
         }
 
-        let Some(decide) = self.play.pending_decide.take() else {
+        let Some(decide) = self.play.pending_decide.take().map(|decide| *decide) else {
             return;
         };
         if decide.cancel {

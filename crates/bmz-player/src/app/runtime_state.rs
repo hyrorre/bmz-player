@@ -108,7 +108,9 @@ pub(super) struct PlayRuntimeState {
     /// コースプレイ中のセッション。単曲プレイ時は None。
     pub(super) active_course: Option<ActiveCourseSession>,
     pub(super) last_play_snapshot: Option<RenderSnapshot>,
-    pub(super) pending_decide: Option<DecideTransition>,
+    /// Boxed: it carries a full `RenderSnapshot` only during the decide screen,
+    /// and `WinitApp` must stay below the stack-size bound.
+    pub(super) pending_decide: Option<Box<DecideTransition>>,
     pub(super) pending_play_start: Option<PendingPlayStart>,
     pub(super) pending_play_preload: Option<PendingPlayPreload>,
     /// 中間リザルト表示中に開始した次コース譜面の先読み要求。

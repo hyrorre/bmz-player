@@ -21,6 +21,8 @@ pub(super) fn skin_timer_elapsed_ms(timer: Option<i32>, state: &SkinDrawState) -
         Some(SKIN_TIMER_BMZ_JUDGE_LANE_BASE..=SKIN_TIMER_BMZ_JUDGE_LANE_LAST) => {
             state.judge_lane_ms[(timer.unwrap() - SKIN_TIMER_BMZ_JUDGE_LANE_BASE) as usize]
         }
+        Some(SKIN_TIMER_BMZ_BPM_CHANGE_PREVIEW) => bpm_change_preview_elapsed_ms(state),
+        Some(SKIN_TIMER_BMZ_BPM_CHANGED) => bpm_changed_elapsed_ms(state),
         Some(150) => state.result_graph_begin_ms,
         Some(151) => state.result_graph_end_ms,
         Some(152) => state.result_update_score_ms,

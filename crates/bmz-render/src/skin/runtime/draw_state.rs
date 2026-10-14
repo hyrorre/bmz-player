@@ -227,6 +227,10 @@ pub struct SkinDrawState {
     pub has_bga: bool,
     /// 現在の曲に STOP イベントが含まれるかどうか (OPTION_BPMSTOP=1177)。
     pub has_bpm_stop: bool,
+    /// BMZ BPM change preview facts (`19060..=19069`)。
+    pub bpm_change_preview: crate::snapshot::BpmChangePreviewSnapshot,
+    /// `bmzBpmChangePreview.leadMs`。未宣言なら予告option/timerは常にOFF。
+    pub bpm_change_preview_lead_ms: Option<i32>,
     /// BGA表示設定がONかどうか。曲の有無とは分けて扱う。
     pub bga_enabled: bool,
     /// `#STAGEFILE` 相当の曲画像があるか (OPTION_NO_STAGEFILE=190 / OPTION_STAGEFILE=191)。
@@ -620,6 +624,8 @@ impl Default for SkinDrawState {
             max_bpm: 0.0,
             has_bga: false,
             has_bpm_stop: false,
+            bpm_change_preview: Default::default(),
+            bpm_change_preview_lead_ms: None,
             bga_enabled: true,
             has_stagefile: false,
             stagefile_image_size: None,

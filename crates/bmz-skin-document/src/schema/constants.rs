@@ -70,6 +70,26 @@ pub const SKIN_OPTION_BMZ_JUDGE_LANE_SLOW_LAST: i32 = 19_045;
 /// BMZ extension: timing difference refs for the split judgement slots.
 pub const SKIN_REF_BMZ_JUDGE_LANE_DURATION_BASE: i32 = 19_050;
 pub const SKIN_REF_BMZ_JUDGE_LANE_DURATION_LAST: i32 = 19_055;
+/// BMZ extension: real-time milliseconds until the next BPM change.
+pub const SKIN_REF_BMZ_BPM_CHANGE_REMAINING_MS: i32 = 19_060;
+/// BMZ extension: BPM after the next change, rounded like `NUMBER_NOWBPM`.
+pub const SKIN_REF_BMZ_BPM_CHANGE_NEXT_BPM: i32 = 19_061;
+/// BMZ extension: BPM immediately before the next change.
+pub const SKIN_REF_BMZ_BPM_CHANGE_PREVIOUS_BPM: i32 = 19_062;
+/// BMZ extension: next BPM / previous BPM as a rounded percentage.
+pub const SKIN_REF_BMZ_BPM_CHANGE_RATIO_PERCENT: i32 = 19_063;
+/// BMZ extension: the next change is within the skin-declared preview lead time.
+pub const SKIN_OPTION_BMZ_BPM_CHANGE_PREVIEW_ACTIVE: i32 = 19_064;
+pub const SKIN_OPTION_BMZ_BPM_CHANGE_INCREASE: i32 = 19_065;
+pub const SKIN_OPTION_BMZ_BPM_CHANGE_DECREASE: i32 = 19_066;
+/// BMZ extension: a later BPM change exists, regardless of distance.
+pub const SKIN_OPTION_BMZ_BPM_CHANGE_AVAILABLE: i32 = 19_067;
+/// BMZ extension: starts at `change time - leadMs` and ends at the change.
+pub const SKIN_TIMER_BMZ_BPM_CHANGE_PREVIEW: i32 = 19_068;
+/// BMZ extension: real-time elapsed milliseconds since the latest BPM change.
+pub const SKIN_TIMER_BMZ_BPM_CHANGED: i32 = 19_069;
+/// Upper bound for `bmzBpmChangePreview.leadMs`.
+pub const SKIN_BMZ_BPM_CHANGE_PREVIEW_MAX_LEAD_MS: i32 = 10_000;
 /// BMZ extension: generic daily statistics number refs.
 pub const SKIN_REF_BMZ_DAILY_BASE: i32 = 1930;
 pub const SKIN_REF_BMZ_DAILY_LAST: i32 = 1946;

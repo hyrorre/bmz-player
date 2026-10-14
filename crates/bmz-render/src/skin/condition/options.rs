@@ -171,6 +171,9 @@ pub(in crate::skin) fn test_skin_op(
             state.logical_input_held[(op - SKIN_OPTION_BMZ_INPUT_BASE) as usize]
         }
         SKIN_OPTION_BMZ_E1_E2_HELD => state.logical_input_held[0] || state.logical_input_held[1],
+        SKIN_OPTION_BMZ_BPM_CHANGE_PREVIEW_ACTIVE..=SKIN_OPTION_BMZ_BPM_CHANGE_AVAILABLE => {
+            bpm_change_option(op, state)
+        }
         SKIN_OPTION_BMZ_JUDGE_LANE_PGREAT_BASE..=SKIN_OPTION_BMZ_JUDGE_LANE_PGREAT_LAST => {
             state.judge_lane_index[(op - SKIN_OPTION_BMZ_JUDGE_LANE_PGREAT_BASE) as usize]
                 == Some(0)

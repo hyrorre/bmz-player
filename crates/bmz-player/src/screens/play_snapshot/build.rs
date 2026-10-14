@@ -393,6 +393,11 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         has_bga: session.chart.metadata.has_bga,
         has_long_notes: Some(!session.chart.long_notes.is_empty()),
         has_bpm_stop: cache.has_bpm_stop,
+        bpm_change_preview: bpm_change_preview(
+            &cache.bpm_changes,
+            lane_render_now,
+            session.audio_clock.playback_rate_percent(),
+        ),
         bga_enabled: session.bga_enabled,
         bga_base: session
             .bga_enabled

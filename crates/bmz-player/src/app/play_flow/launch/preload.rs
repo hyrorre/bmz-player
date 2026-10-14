@@ -234,7 +234,7 @@ impl WinitApp {
             play_skin_runtime_state,
         );
         let now = Instant::now();
-        self.play.pending_decide = Some(DecideTransition {
+        self.play.pending_decide = Some(Box::new(DecideTransition {
             chart_id,
             options,
             launch,
@@ -243,7 +243,7 @@ impl WinitApp {
             cancel: false,
             snapshot,
             title_override,
-        });
+        }));
     }
 
     pub(super) fn start_play_preload(

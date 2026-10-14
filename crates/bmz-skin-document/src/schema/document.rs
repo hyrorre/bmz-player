@@ -31,6 +31,9 @@ pub struct SkinDocument {
     /// Opt in to a read-only 300 ms E2 exit snapshot, animated with timer 32.
     #[serde(default, rename = "bmzDetailOptionsClose")]
     pub bmz_detail_options_close: bool,
+    /// BMZ play extension: preview window for upcoming BPM changes.
+    #[serde(default, rename = "bmzBpmChangePreview")]
+    pub bmz_bpm_change_preview: Option<SkinBpmChangePreviewDef>,
     #[serde(default = "default_skin_canvas_width")]
     pub w: u32,
     #[serde(default = "default_skin_canvas_height")]
@@ -184,6 +187,24 @@ pub struct SkinDocument {
     /// リザルト描画時のみ plan 側が設定する timingdistributiongraph 用の固定分布。
     #[serde(skip, default)]
     pub result_timing_distribution: ResultTimingDistribution,
+}
+
+/// BMZ play extension declared by skins that preview upcoming BPM changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct SkinBpmChangePreviewDef {
+    /// Real-time milliseconds before a BPM change when the preview starts.
+    #[serde(default = "default_bpm_change_preview_lead_ms", rename = "leadMs")]
+    pub lead_ms: i32,
+}
+
+impl SkinBpmChangePreviewDef {
+    pub fn clamped_lead_ms(self) -> i32 {
+        self.lead_ms.clamp(0, SKIN_BMZ_BPM_CHANGE_PREVIEW_MAX_LEAD_MS)
+    }
+}
+
+fn default_bpm_change_preview_lead_ms() -> i32 {
+    2_000
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]

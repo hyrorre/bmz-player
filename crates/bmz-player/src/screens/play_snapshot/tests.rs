@@ -186,6 +186,8 @@ fn chart_with_long_note() -> PlayableChart {
     }
 }
 
+#[path = "tests/bpm_change.rs"]
+mod bpm_change;
 #[path = "tests/cases_01.rs"]
 mod cases_01;
 #[path = "tests/cases_02.rs"]

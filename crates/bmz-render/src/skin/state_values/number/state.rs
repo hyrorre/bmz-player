@@ -345,6 +345,9 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
         525 => state.judge_timing_ms[0].map(|ms| -(ms as i64)),
         526 => state.judge_timing_ms[1].map(|ms| -(ms as i64)),
         527 => state.judge_timing_ms[2].map(|ms| -(ms as i64)),
+        SKIN_REF_BMZ_BPM_CHANGE_REMAINING_MS..=SKIN_REF_BMZ_BPM_CHANGE_RATIO_PERCENT => {
+            bpm_change_number(ref_id, state)
+        }
         SKIN_REF_BMZ_JUDGE_LANE_DURATION_BASE..=SKIN_REF_BMZ_JUDGE_LANE_DURATION_LAST => state
             .judge_lane_timing_ms[(ref_id - SKIN_REF_BMZ_JUDGE_LANE_DURATION_BASE) as usize]
             .map(|ms| -(ms as i64)),

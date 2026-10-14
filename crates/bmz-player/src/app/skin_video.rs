@@ -224,6 +224,7 @@ pub(super) fn play_skin_video_draw_state(
         max_bpm: snapshot.max_bpm,
         has_bga: snapshot.has_bga,
         has_bpm_stop: snapshot.has_bpm_stop,
+        bpm_change_preview: snapshot.bpm_change_preview,
         bga_enabled: snapshot.bga_enabled,
         has_backbmp: snapshot.backbmp_background,
         bga_stretch: snapshot.bga_stretch,

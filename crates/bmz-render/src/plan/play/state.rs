@@ -160,6 +160,11 @@ pub(in crate::plan) fn build_play_skin_state(
         max_bpm: snapshot.max_bpm,
         has_bga: snapshot.has_bga,
         has_bpm_stop: snapshot.has_bpm_stop,
+        bpm_change_preview: snapshot.bpm_change_preview,
+        bpm_change_preview_lead_ms: skin
+            .document()
+            .and_then(|document| document.bmz_bpm_change_preview)
+            .map(|preview| preview.clamped_lead_ms()),
         bga_enabled: snapshot.bga_enabled,
         has_stagefile: snapshot.stagefile_background,
         stagefile_image_size: snapshot.stagefile_image_size,

@@ -41,6 +41,8 @@ mod lr2_scene;
 mod pm_chara;
 mod runtime;
 mod select_state;
+#[path = "skin/state_values/bpm_change.rs"]
+mod state_value_bpm_change;
 #[path = "skin/state_values/gauge_graph.rs"]
 mod state_value_gauge_graph;
 #[path = "skin/state_values/graph.rs"]
@@ -75,6 +77,7 @@ pub use runtime::{
 pub use select_state::play_target_name;
 pub use select_state::target_setting_name;
 use select_state::*;
+use state_value_bpm_change::*;
 use state_value_gauge_graph::*;
 use state_value_graph::*;
 use state_value_image::*;

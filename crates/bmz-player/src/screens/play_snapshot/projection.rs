@@ -157,6 +157,8 @@ impl PlayfieldProjection {
         snapshot.stop_lines.clear();
         snapshot.time_lines.clear();
         snapshot.now_bpm = self.timing_map.bpm_at_time(lane_now) as f32;
+        snapshot.bpm_change_preview =
+            bpm_change_preview(&self.cache.bpm_changes, lane_now, self.playback_rate_percent);
         let cursor_tick = self.timing_map.time_to_tick_f64(scroll_render_time(lane_now));
         let multiplier = current_scroll_multiplier_from_segments(
             &self.cache.scroll_integral,

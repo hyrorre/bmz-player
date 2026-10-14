@@ -2,6 +2,8 @@ use super::*;
 
 #[path = "lua/antique_ambient.rs"]
 mod antique_ambient;
+#[path = "lua/antique_bpm_preview.rs"]
+mod antique_bpm_preview;
 #[path = "lua/antique_progress.rs"]
 mod antique_progress;
 #[path = "lua/best_score_options.rs"]

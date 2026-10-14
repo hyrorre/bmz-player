@@ -36,6 +36,7 @@ const BGA_EVENT_KIND_COUNT: usize = 4;
 pub type BgaFrameCatalog = HashMap<BgaAssetId, DisplayBgaFrame>;
 
 mod bga;
+mod bpm_change;
 mod build;
 mod cache;
 mod display;
@@ -63,6 +64,7 @@ pub use visuals::{
 
 pub(crate) use bga::effective_bpm_for_playback_rate;
 use bga::*;
+use bpm_change::*;
 use cache::*;
 use display::*;
 use scroll::*;

@@ -121,6 +121,24 @@ impl SkinAttemptState {
     }
 }
 
+/// Upcoming BPM change on the lane clock, measured in real time.
+/// Millisecond fields keep `RenderSnapshot` (held inline by the app) compact.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct UpcomingBpmChange {
+    /// Real-time milliseconds until the change (playback rate applied).
+    pub remaining_ms: i32,
+    pub from_bpm: f32,
+    pub to_bpm: f32,
+}
+
+/// Skin-independent BPM change facts. Skins choose the preview lead time.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct BpmChangePreviewSnapshot {
+    pub next: Option<UpcomingBpmChange>,
+    /// Real-time milliseconds since the latest change; `None` before the first change.
+    pub since_last_change_ms: Option<i32>,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct ResultTimingMetrics {
     pub initialized: bool,
@@ -349,6 +367,8 @@ pub struct RenderSnapshot {
     /// None は開始譜面をまだ特定できない placeholder。
     pub has_long_notes: Option<bool>,
     pub has_bpm_stop: bool,
+    /// BMZ BPM change preview refs `19060..=19069`.
+    pub bpm_change_preview: BpmChangePreviewSnapshot,
     pub bga_enabled: bool,
     pub bga_base: Option<DisplayBgaFrame>,
     pub bga_layer: Option<DisplayBgaFrame>,

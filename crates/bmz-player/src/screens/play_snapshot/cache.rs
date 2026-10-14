@@ -7,6 +7,7 @@ pub struct PlayRenderSnapshotCache {
     pub(super) min_bpm: f32,
     pub(super) max_bpm: f32,
     pub(super) has_bpm_stop: bool,
+    pub(super) bpm_changes: Arc<[BpmChangePoint]>,
     pub(super) end_of_note_time: TimeUs,
     pub(super) scroll_integral: ScrollIntegralCache,
     pub(super) speed_segments: Arc<[(f64, f64)]>,
@@ -41,6 +42,7 @@ impl PlayRenderSnapshotCache {
             .timing_events
             .iter()
             .any(|event| matches!(event.kind, TimingEventKind::Stop { .. }));
+        let bpm_changes = Arc::from(build_bpm_change_points(chart).into_boxed_slice());
         let end_of_note_time = end_of_note_time(chart);
         let scroll_integral = ScrollIntegralCache::from_segments(
             chart.scroll_events.iter().map(|event| (event.tick.0 as f64, event.factor)),
@@ -72,6 +74,7 @@ impl PlayRenderSnapshotCache {
             min_bpm,
             max_bpm,
             has_bpm_stop,
+            bpm_changes,
             end_of_note_time,
             scroll_integral,
             speed_segments,
