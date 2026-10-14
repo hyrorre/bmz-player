@@ -1,6 +1,57 @@
 use super::*;
 
 #[test]
+fn lr2_continue_source_changes_invalidate_document_cache() {
+    let root = unique_test_dir("lr2-result-continue-cache");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("result.lr2skin");
+    fs::write(&path, "#INFORMATION,7,test,test\n#IMAGE,CONTINUE\n").unwrap();
+    let cache = Arc::new(Mutex::new(SkinDocumentCache::default()));
+    for (name, key) in
+        [("first.png", [0, 255, 0]), ("second.png", [0, 0, 0]), ("second.png", [255, 0, 0])]
+    {
+        let source = bmz_render::skin::SkinSourceDef {
+            id: "0".into(),
+            path: root.join(name).to_string_lossy().into_owned(),
+            lr2_color_key: Some(key),
+        };
+        let state = LuaLoadRuntimeState {
+            lr2_continue_assets: bmz_skin::Lr2ContinueAssets {
+                sources: BTreeMap::from([("0".into(), source.clone())]),
+                ..Default::default()
+            }
+            .into(),
+            ..Default::default()
+        };
+        let loaded = load_skin_document(
+            &path,
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &state,
+            Some(cache.clone()),
+        )
+        .unwrap();
+        assert_eq!(loaded.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(loaded.document.source[0], source);
+        assert_eq!(
+            load_skin_document(
+                &path,
+                SkinKind::Result,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &state,
+                Some(cache.clone()),
+            )
+            .unwrap()
+            .cache_status,
+            DocumentCacheStatus::Hit
+        );
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn lr2_play_mode_invalidates_documents_and_random_includes_are_not_cached() {
     let root = unique_test_dir("bmz-lr2-play-mode-cache");
     fs::create_dir_all(&root).unwrap();

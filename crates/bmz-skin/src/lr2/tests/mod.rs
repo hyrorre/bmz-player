@@ -12,4 +12,5 @@ mod cases_01;
 mod cases_02;
 mod play_compat;
 mod refs;
+mod result_compat;
 mod scenes;

@@ -2,8 +2,20 @@ use super::*;
 
 impl<'a> CsvBuilder<'a> {
     pub(super) fn add_source(&mut self, raw_path: &str) {
-        let path = self.resolve_source_path(raw_path);
         let id = format!("{}", self.source_paths.len());
+        if raw_path.eq_ignore_ascii_case("CONTINUE") {
+            if let Some(source) = self.inherited_assets.sources.get(&id).cloned() {
+                self.record_loaded_file_dependency(Path::new(&source.path));
+                self.sources
+                    .push(json!({"id":id,"path":source.path,"lr2ColorKey":source.lr2_color_key}));
+                self.source_paths.push(Some(source.path));
+            } else {
+                self.sources.push(json!({"id":id,"path":"bmz://lr2/empty"}));
+                self.source_paths.push(None);
+            }
+            return;
+        }
+        let path = self.resolve_source_path(raw_path);
         self.sources.push(json!({ "id": id, "path": path, "lr2ColorKey": self.transparent_color }));
         self.source_paths.push(Some(path));
     }
@@ -25,6 +37,13 @@ impl<'a> CsvBuilder<'a> {
     }
 
     pub(super) fn add_system_font(&mut self, line: &CsvLine) {
+        if field(line, 1).eq_ignore_ascii_case("CONTINUE")
+            && let Some(font) = self.inherited_assets.system_fonts.get(self.system_fonts.len())
+        {
+            self.system_fonts
+                .push(json!({"size":font.size,"thickness":font.thickness,"type":font.font_type}));
+            return;
+        }
         let values = parse_values(line);
         self.system_fonts.push(json!({
             "size": if values[1] > 0 { values[1] } else { 16 },
@@ -34,8 +53,20 @@ impl<'a> CsvBuilder<'a> {
     }
 
     pub(super) fn add_lr2_font(&mut self, raw_path: &str) {
-        let path = self.resolve_lr2_font_path(raw_path);
         let id = format!("lr2font-{}", self.fonts.len());
+        if raw_path.eq_ignore_ascii_case("CONTINUE") {
+            let font = self.inherited_assets.fonts.get(&id).cloned();
+            if let Some(font) = font {
+                self.record_loaded_file_dependency(Path::new(&font.path));
+                self.fonts.push(json!({"id":id,"path":font.path,"type":font.font_type}));
+                self.lr2font_ids.push(Some(id));
+            } else {
+                self.fonts.push(json!({"id":id,"path":"","type":1}));
+                self.lr2font_ids.push(None);
+            }
+            return;
+        }
+        let path = self.resolve_lr2_font_path(raw_path);
         self.fonts.push(json!({ "id": id, "path": path, "type": 1 }));
         self.lr2font_ids.push(Some(id));
     }
@@ -60,6 +91,7 @@ impl<'a> CsvBuilder<'a> {
             "timer": region.timer,
         });
         if line.command == "SRC_BUTTON" {
+            image["lr2Button"] = json!(true);
             image["act"] = json!(values[11]);
             if matches!(self.header.skin_type, 5 | 7 | 15) {
                 image["act"] = json!(bmz_skin_document::LR2_BUTTON_BASE + values[11].clamp(0, 999));

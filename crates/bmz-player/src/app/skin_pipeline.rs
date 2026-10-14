@@ -51,6 +51,14 @@ struct PendingSkinKinds {
     result: bool,
 }
 
+#[derive(Default)]
+pub(super) struct Lr2SceneAssets {
+    pub(super) play: Arc<bmz_skin::Lr2ContinueAssets>,
+    pub(super) result: Arc<bmz_skin::Lr2ContinueAssets>,
+    pub(super) inherited: Arc<bmz_skin::Lr2ContinueAssets>,
+    pub(super) previous_scene: Option<SkinKind>,
+}
+
 /// skin decode (CPU) と upload (GPU) workerをつなぐchannel、共有cache、世代状態。
 ///
 /// Rendererへのinstallとscene固有のskin選択は `WinitApp` に残し、この型は
@@ -71,6 +79,7 @@ pub(super) struct SkinPipelineRuntime {
     pub(super) result_refresh_generation: Option<u64>,
     pub(super) result_load_dependencies: Option<bmz_skin::SkinLoadDependencies>,
     pub(super) result_source_selections: BTreeMap<String, String>,
+    pub(super) lr2_assets: Lr2SceneAssets,
     pub(super) result_random_file_selections: BTreeMap<String, Vec<String>>,
     pub(super) font_cache: SharedSkinFontCache,
     pub(super) installed_font_cache: HashMap<String, SkinFontCacheKey>,
@@ -80,6 +89,18 @@ pub(super) struct SkinPipelineRuntime {
 }
 
 impl SkinPipelineRuntime {
+    /// Freeze CONTINUE slots on entry so Result refreshes cannot inherit from
+    /// their own replacement document. Course Result can follow a stage Result.
+    pub(super) fn begin_lr2_result_entry(&mut self, course: bool, finished: bool) {
+        self.lr2_assets.inherited = if !finished {
+            Default::default()
+        } else if course && self.lr2_assets.previous_scene == Some(SkinKind::Result) {
+            self.lr2_assets.result.clone()
+        } else {
+            self.lr2_assets.play.clone()
+        };
+    }
+
     pub(super) fn new() -> Self {
         let (decode_tx, decode_rx) = mpsc::channel();
         let (upload_tx, upload_rx) = mpsc::sync_channel(MAX_PENDING_SKIN_UPLOADS);
@@ -99,6 +120,7 @@ impl SkinPipelineRuntime {
             result_refresh_generation: None,
             result_load_dependencies: None,
             result_source_selections: BTreeMap::new(),
+            lr2_assets: Default::default(),
             result_random_file_selections: BTreeMap::new(),
             font_cache: Arc::new(Mutex::new(SkinFontCache::default())),
             installed_font_cache: HashMap::new(),
@@ -339,6 +361,40 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn lr2_result_continue_slots_follow_scene_entry_and_stay_frozen_on_refresh() {
+        let mut runtime = SkinPipelineRuntime::new();
+        let assets = |name: &str| -> Arc<bmz_skin::Lr2ContinueAssets> {
+            bmz_skin::Lr2ContinueAssets {
+                sources: BTreeMap::from([(
+                    "0".into(),
+                    bmz_render::skin::SkinSourceDef {
+                        id: "0".into(),
+                        path: name.into(),
+                        lr2_color_key: Some([0, 255, 0]),
+                    },
+                )]),
+                ..Default::default()
+            }
+            .into()
+        };
+        runtime.lr2_assets.play = assets("play-selected.png");
+        runtime.lr2_assets.result = assets("result-selected.png");
+        runtime.lr2_assets.previous_scene = Some(SkinKind::Play);
+        runtime.begin_lr2_result_entry(false, true);
+        assert_eq!(runtime.lr2_assets.inherited, assets("play-selected.png"));
+        runtime.lr2_assets.result = assets("refreshed-result.png");
+        runtime.lr2_assets.previous_scene = Some(SkinKind::Result);
+        assert_eq!(runtime.lr2_assets.inherited, assets("play-selected.png"));
+        runtime.begin_lr2_result_entry(true, true);
+        assert_eq!(runtime.lr2_assets.inherited, assets("refreshed-result.png"));
+        runtime.lr2_assets.previous_scene = Some(SkinKind::Play);
+        runtime.begin_lr2_result_entry(true, true);
+        assert_eq!(runtime.lr2_assets.inherited, assets("play-selected.png"));
+        runtime.begin_lr2_result_entry(false, false);
+        assert_eq!(runtime.lr2_assets.inherited, Default::default());
+    }
 
     fn failed_upload() -> PendingUploadResult {
         let now = Instant::now();

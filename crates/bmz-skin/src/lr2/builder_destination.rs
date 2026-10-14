@@ -572,6 +572,7 @@ impl<'a> CsvBuilder<'a> {
             "offset": offset,
             "source": self.sources,
             "font": self.fonts,
+            "lr2SystemFonts": self.system_fonts,
             "image": self.images,
             "imageset": self.imagesets,
             "value": self.values,

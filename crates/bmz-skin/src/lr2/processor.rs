@@ -5,6 +5,7 @@ pub(super) struct Processor {
     skin_type: Option<i32>,
     runtime_aliases: HashMap<i32, Lr2Condition>,
     stack: Vec<IfState>,
+    include_condition: Lr2Condition,
     pub(super) option_dependencies: BTreeMap<i32, bool>,
     assigned_options: BTreeSet<i32>,
 }
@@ -18,7 +19,7 @@ fn is_runtime_option(skin_type: Option<i32>, option_id: i32) -> bool {
 /// an `#IF` nested inside an inactive block still runs when its condition holds,
 /// and returning from it with `#ENDIF` restores the enclosing level's state.
 #[derive(Debug, Clone)]
-struct IfState {
+pub(super) struct IfState {
     branch_taken: bool,
     active: bool,
     runtime_ops: Vec<i32>,
@@ -26,13 +27,33 @@ struct IfState {
     runtime_branches: Vec<Lr2Condition>,
 }
 
+pub(super) struct IncludeState {
+    stack: Vec<IfState>,
+    condition: Lr2Condition,
+}
+
 impl Processor {
+    pub(super) fn begin_include_file(&mut self) -> IncludeState {
+        // A deferred caller IF still gates the whole file: LR2 would only call
+        // ReadSkin when that IF matched. Child ENDIFs cannot consume this gate.
+        let condition = self.active_runtime_condition();
+        IncludeState {
+            stack: std::mem::take(&mut self.stack),
+            condition: std::mem::replace(&mut self.include_condition, condition),
+        }
+    }
+
+    pub(super) fn end_include_file(&mut self, parent: IncludeState) {
+        self.stack = parent.stack;
+        self.include_condition = parent.condition;
+    }
     pub(super) fn new(ops: HashMap<i32, bool>) -> Self {
         Self {
             ops,
             skin_type: None,
             runtime_aliases: HashMap::new(),
             stack: Vec::new(),
+            include_condition: Lr2Condition::default(),
             option_dependencies: BTreeMap::new(),
             assigned_options: BTreeSet::new(),
         }
@@ -93,7 +114,13 @@ impl Processor {
                 if include.is_file() {
                     builder.record_loaded_file_dependency(&include);
                     let include_lines = read_csv_lines(&include)?;
-                    self.process_lines(&include_lines, &include, builder)?;
+                    // LR2 ReadSkin owns its IF stack per file. Keep SETOPTION and
+                    // SRC/DST state shared, but an unmatched child ENDIF must not
+                    // consume the parent's branch.
+                    let parent_stack = self.begin_include_file();
+                    let result = self.process_lines(&include_lines, &include, builder);
+                    self.end_include_file(parent_stack);
+                    result?;
                 } else {
                     builder.warn(format!(
                         "lr2 include not found: {} ({}: command {})",
@@ -278,21 +305,15 @@ impl Processor {
     }
 
     pub(super) fn active_runtime_ops(&self) -> Vec<i32> {
-        self.stack
-            .last()
-            .filter(|state| state.active)
-            .map(|state| state.runtime_ops.clone())
-            .unwrap_or_default()
+        self.active_runtime_condition().op
     }
 
     pub(super) fn active_runtime_condition(&self) -> Lr2Condition {
-        self.stack
-            .last()
-            .filter(|state| state.active)
-            .map(|state| Lr2Condition {
-                op: state.runtime_ops.clone(),
-                not: state.runtime_not_ops.clone(),
-            })
-            .unwrap_or_default()
+        let mut condition = self.include_condition.clone();
+        if let Some(state) = self.stack.last().filter(|state| state.active) {
+            condition.op.extend(state.runtime_ops.iter().copied());
+            condition.not.extend(state.runtime_not_ops.iter().cloned());
+        }
+        condition
     }
 }

@@ -30,6 +30,7 @@ fn is_song_scene(skin_type: i32) -> bool {
 /// `LR2_RESULT_NUMBER_BASE` and reach the same definitions after the flip.
 pub(super) fn lr2_number_ref(skin_type: i32, id: i32) -> Option<i32> {
     match id {
+        154 | 163 | 164 if is_result(skin_type) => Some(LR2_NUMBER_BASE + id),
         // 1P score, gauge, target diff, next rank diff, POOR including empty POOR,
         // and the best / target ghost EX and rates at the current progress.
         100 | 107 | 108 | 109 | 114 | 150 | 151 | 155..=158 if is_play(skin_type) => {
@@ -107,6 +108,7 @@ pub(super) fn is_lr2_scene_runtime_option(skin_type: i32, id: i32) -> bool {
     is_lr2_song_scene_option(skin_type, id)
         || (is_song_scene(skin_type) && matches!(id, 50 | 51))
         || is_lr2_auto_scratch_option(id)
+        || (is_result(skin_type) && matches!(id, 100..=105))
 }
 
 /// Destination ops evaluated with LR2's definition.
@@ -115,7 +117,7 @@ pub(super) fn lr2_option_ref(skin_type: i32, op: i32) -> Option<i32> {
     let divergent = LR2_FIXED_OPTIONS.iter().any(|&(fixed, _)| fixed == id)
         || is_lr2_auto_scratch_option(id)
         || is_lr2_song_scene_option(skin_type, id)
-        || (is_result(skin_type) && matches!(id, 340..=347))
+        || (is_result(skin_type) && matches!(id, 100..=105 | 340..=347))
         // Win / lose / draw against the 2P player, which is the target ghost in single play.
         || (is_play(skin_type) && matches!(id, 352..=354));
     divergent.then(|| op.signum() * (LR2_OPTION_BASE + id))

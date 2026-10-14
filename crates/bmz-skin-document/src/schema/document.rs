@@ -67,6 +67,8 @@ pub struct SkinDocument {
     pub source: Vec<SkinSourceDef>,
     #[serde(default)]
     pub font: Vec<SkinFontDef>,
+    #[serde(default, rename = "lr2SystemFonts")]
+    pub lr2_system_fonts: Vec<SkinLr2SystemFontDef>,
     #[serde(default)]
     pub image: Vec<SkinImageDef>,
     #[serde(default)]
@@ -324,6 +326,9 @@ pub struct SkinFontDef {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SkinImageDef {
+    /// LR2 buttons select a flat cell, independent of atlas orientation.
+    #[serde(default, rename = "lr2Button")]
+    pub lr2_button: bool,
     #[serde(default, rename = "lr2Panel")]
     pub lr2_panel: Option<i32>,
     #[serde(default, deserialize_with = "deserialize_skin_id")]

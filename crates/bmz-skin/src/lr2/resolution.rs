@@ -60,6 +60,7 @@ impl<'a> CsvBuilder<'a> {
                     continue;
                 };
                 self.record_loaded_file_dependency(&include);
+                let parent_stack = processor.begin_include_file();
                 self.count_full_screen_destinations(
                     &include_lines,
                     &include,
@@ -67,6 +68,7 @@ impl<'a> CsvBuilder<'a> {
                     counts,
                     depth + 1,
                 );
+                processor.end_include_file(parent_stack);
                 continue;
             }
             if !line.command.starts_with("DST_")

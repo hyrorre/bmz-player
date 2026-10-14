@@ -178,6 +178,7 @@ struct CsvBuilder<'a> {
     sources: Vec<JsonValue>,
     source_paths: Vec<Option<String>>,
     transparent_color: [u8; 3],
+    inherited_assets: crate::Lr2ContinueAssets,
     fonts: Vec<JsonValue>,
     system_fonts: Vec<JsonValue>,
     lr2font_ids: Vec<Option<String>>,
@@ -276,12 +277,29 @@ pub(super) fn load_lr2_csv_skin_value_with_runtime_options(
     files: &BTreeMap<String, String>,
     runtime_options: &BTreeMap<i32, bool>,
 ) -> Result<LoadedLuaSkinValue> {
+    load_lr2_csv_skin_value_with_inherited_assets(
+        path,
+        options,
+        files,
+        runtime_options,
+        &Default::default(),
+    )
+}
+
+pub(super) fn load_lr2_csv_skin_value_with_inherited_assets(
+    path: &Path,
+    options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
+    runtime_options: &BTreeMap<i32, bool>,
+    inherited_assets: &crate::Lr2ContinueAssets,
+) -> Result<LoadedLuaSkinValue> {
     tracing::debug!(path = %path.display(), "lr2 skin header load begin");
     let LoadedHeader { mut header, mut dependencies } = load_header(path, options)?;
     tracing::debug!(path = %path.display(), "lr2 skin header load complete");
     apply_default_play_header_items(&mut header);
     apply_selected_header_options(&mut header, options);
     let mut builder = CsvBuilder::new(path, header, files);
+    builder.inherited_assets = inherited_assets.clone();
     tracing::debug!(path = %path.display(), "lr2 skin command file read begin");
     let lines = read_csv_lines(path)?;
     tracing::debug!(path = %path.display(), command_count = lines.len(), "lr2 skin command file read complete");

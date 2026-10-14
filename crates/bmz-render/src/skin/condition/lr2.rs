@@ -7,6 +7,11 @@ const LR2_CLEAR_FROM_BEATORAJA: [i64; 11] = [0, 1, 2, 2, 2, 3, 4, 4, 5, 5, 5];
 /// Definitions follow LR2's `GetOptionFlag_dst`.
 pub(super) fn lr2_option(id: i32, state: &SkinDrawState) -> bool {
     match id {
+        100..=105 if state.result_failed.is_some() => {
+            let clear = state.best_clear_index.unwrap_or(state.select_clear_index);
+            LR2_CLEAR_FROM_BEATORAJA.get(usize::try_from(clear).unwrap_or(0))
+                == Some(&(i64::from(id) - 100))
+        }
         // LR2's selected bar classification is independent of playability.
         1 => {
             matches!(

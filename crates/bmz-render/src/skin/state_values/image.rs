@@ -106,7 +106,18 @@ fn skin_image_texture_region_with_elapsed(
     // ref_id / act が指定されている画像は「状態値 = 行」「cycle = 列のサブアニメ」と解釈する。
     // 値が解決できない場合 (state 未提供 or 値 None) は行 0 にフォールバックし、
     // 全フレームを順次再生する cycle モードへは落とさない（高速点滅を防ぐため）。
-    let frame_index = if image.ref_id != 0 || image.act.is_some() {
+    let frame_index = if image.lr2_button {
+        let index = state
+            .and_then(|s| {
+                if image.ref_id != 0 {
+                    skin_image_ref_number(image.ref_id, s)
+                } else {
+                    image.act.map(|id| i64::from(skin_state_event_index(id, s)))
+                }
+            })
+            .unwrap_or(0);
+        index.clamp(0, i64::from(frame_count - 1)) as i32
+    } else if image.ref_id != 0 || image.act.is_some() {
         let row = state
             .and_then(|s| {
                 if image.ref_id != 0 {

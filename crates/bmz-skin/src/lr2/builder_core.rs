@@ -18,6 +18,7 @@ impl<'a> CsvBuilder<'a> {
             sources: Vec::new(),
             source_paths: Vec::new(),
             transparent_color: [0, 255, 0],
+            inherited_assets: Default::default(),
             fonts: Vec::new(),
             system_fonts: Vec::new(),
             lr2font_ids: Vec::new(),
