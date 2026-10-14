@@ -142,20 +142,14 @@ fn antique_bpm_preview_types_use_fast_slow_digits_and_place_parts_when_available
             }
 
             let (left, right, bottom, top) = preview_bounds(&destinations);
-            let backing = document
-                .all_destinations(&document.enabled_options())
-                .into_iter()
-                .filter(|destination| destination.id == "pnl_bpm_preview")
-                .map(|destination| (destination.timer, destination.op.clone()))
-                .collect::<Vec<_>>();
+            // Like FAST/SLOW and the score difference, the preview has no backing panel.
+            assert!(document.panel.iter().all(|panel| panel.id != "pnl_bpm_preview"));
             if inside {
-                assert!(backing.is_empty(), "{type_label}: keep notes visible");
                 assert!(
                     ((left + right) / 2 - lane_center).abs() <= 1 && left >= 63 && right <= 576,
                     "{type_label}: {left}..{right}"
                 );
             } else {
-                assert_eq!(backing, vec![(Some(19068), vec![19064])], "{type_label}");
                 // The lane-side number starts right next to the play frame.
                 let from = destinations
                     .iter()

@@ -138,6 +138,11 @@ fn adfx02_bpm_preview_uses_pgreat_ms_digits_and_places_each_type() {
                 }
                 let destinations = preview_destinations(&document);
                 assert_eq!(destinations.len(), if outside { 14 } else { 6 }, "{label}");
+                // Like FAST/SLOW and the score difference, the preview has no backing panel.
+                assert!(
+                    document.panel.iter().all(|panel| panel.id != "pnl_bpm_preview"),
+                    "{label}"
+                );
                 let (left, right, bottom, top) = bounds(&destinations);
                 assert_eq!(top - bottom, DIGIT_W, "{label}");
                 if !outside {
