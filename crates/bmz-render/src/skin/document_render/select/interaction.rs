@@ -228,15 +228,20 @@ macro_rules! skin_document_render_select_interaction_methods {
             let enabled_options = self.enabled_options();
             let images: SkinImageLookup<'_> = self.image_map().into();
             let mut hits = Vec::new();
+            let mut songlist_hit_tested = false;
             for destination in self.all_destinations(&enabled_options) {
                 if destination.id
                     == self.songlist.as_ref().map(|list| list.id.as_str()).unwrap_or("")
                 {
-                    hits.extend(self.select_songlist_click_hits(
-                        snapshot,
-                        &enabled_options,
-                        &state,
-                    ));
+                    // LR2 has a marker per bar part; the rows are hit-tested once,
+                    // at the first one, as before parts had their own positions.
+                    if !std::mem::replace(&mut songlist_hit_tested, true) {
+                        hits.extend(self.select_songlist_click_hits(
+                            snapshot,
+                            &enabled_options,
+                            &state,
+                        ));
+                    }
                     continue;
                 }
                 if !crate::select_settings_dest::test_select_destination_visible(

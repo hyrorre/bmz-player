@@ -8,10 +8,58 @@ macro_rules! skin_document_render_select_songlist_methods {
             enabled_options: &[i32],
             state: &SkinDrawState,
         ) -> Vec<SkinRenderItem> {
+            self.select_songlist_part_items(sources, snapshot, images, enabled_options, state)
+                .into_iter()
+                .map(|(_, item)| item)
+                .collect()
+        }
+
+        /// Songlist items in row order, each tagged with the entry list and index
+        /// that drew it, so LR2 can place every bar part at its own DST position.
+        fn select_songlist_part_items(
+            &self,
+            sources: &HashMap<String, SkinDocumentTexture>,
+            snapshot: &SelectSnapshot,
+            images: &SkinImageLookup<'_>,
+            enabled_options: &[i32],
+            state: &SkinDrawState,
+        ) -> Vec<(SongListPartKey, SkinRenderItem)> {
             let Some(songlist) = &self.songlist else {
                 return Vec::new();
             };
             let mut items = Vec::new();
+            let tag = |part: &'static str, index: usize, row_state: &SkinDrawState| {
+                let entries = match part {
+                    "listoff" => Some(&songlist.listoff),
+                    "liston" => Some(&songlist.liston),
+                    "text" => Some(&songlist.text),
+                    "level" => Some(&songlist.level),
+                    "lamp" => Some(&songlist.lamp),
+                    "playerlamp" => Some(&songlist.playerlamp),
+                    "rivallamp" => Some(&songlist.rivallamp),
+                    "lr2rival" => Some(&songlist.lr2rival),
+                    "flash" => Some(&songlist.flash),
+                    _ => None,
+                };
+                let order = self
+                    .lr2
+                    .then(|| {
+                        entries
+                            .and_then(|entries| {
+                                songlist_destination_at(
+                                    entries,
+                                    index,
+                                    enabled_options,
+                                    row_state,
+                                    true,
+                                )
+                            })
+                            .and_then(|destination| destination.lr2_bar_part.as_ref())
+                            .and_then(|part| part.order)
+                    })
+                    .flatten();
+                move |item: SkinRenderItem| (SongListPartKey { part, index, order }, item)
+            };
             let (rows, center_row_position) = snapshot.bar_rows_and_center();
             let (whole_scroll, scroll_direction, scroll_fraction) = snapshot.bar_scroll_slots();
             let mut row_state = state.clone();
@@ -69,52 +117,76 @@ macro_rules! skin_document_render_select_songlist_methods {
                 if let Some(item) =
                     self.select_bar_item(row, row_destination, row_frame, sources, state)
                 {
-                    items.push(item);
+                    items.push(tag(
+                        if selected { "liston" } else { "listoff" },
+                        slot as usize,
+                        &row_state,
+                    )(item));
                 }
                 if selected {
-                    items.extend(self.select_songlist_child_items_by_index(
-                        &songlist.flash,
-                        0,
-                        flash_origin,
-                        images,
-                        enabled_options,
-                        &row_state,
-                        sources,
-                    ));
+                    items.extend(
+                        self.select_songlist_child_items_by_index(
+                            &songlist.flash,
+                            0,
+                            flash_origin,
+                            images,
+                            enabled_options,
+                            &row_state,
+                            sources,
+                        )
+                        .into_iter()
+                        .map(tag("flash", 0, &row_state)),
+                    );
                 }
                 if select_row_shows_lamp(row) {
                     let clear_index = select_row_clear_index(row);
                     if snapshot.rival_selected
                         && (!self.lr2 || row.rival_ex_score.is_some_and(|ex| ex > 0))
                     {
-                        items.extend(self.select_songlist_child_items_by_index(
-                            &songlist.playerlamp,
-                            clear_index,
-                            row_origin,
-                            images,
-                            enabled_options,
-                            &row_state,
-                            sources,
-                        ));
-                        items.extend(self.select_songlist_child_items_by_index(
-                            &songlist.rivallamp,
-                            row.rival_clear_index,
-                            row_origin,
-                            images,
-                            enabled_options,
-                            &row_state,
-                            sources,
-                        ));
+                        items.extend(
+                            self.select_songlist_child_items_by_index(
+                                &songlist.playerlamp,
+                                clear_index,
+                                row_origin,
+                                images,
+                                enabled_options,
+                                &row_state,
+                                sources,
+                            )
+                            .into_iter()
+                            .map(tag("playerlamp", clear_index, &row_state)),
+                        );
+                        items.extend(
+                            self.select_songlist_child_items_by_index(
+                                &songlist.rivallamp,
+                                row.rival_clear_index,
+                                row_origin,
+                                images,
+                                enabled_options,
+                                &row_state,
+                                sources,
+                            )
+                            .into_iter()
+                            .map(tag(
+                                "rivallamp",
+                                row.rival_clear_index,
+                                &row_state,
+                            )),
+                        );
                     } else {
-                        items.extend(self.select_songlist_child_items_by_index(
-                            &songlist.lamp,
-                            clear_index,
-                            row_origin,
-                            images,
-                            enabled_options,
-                            &row_state,
-                            sources,
-                        ));
+                        items.extend(
+                            self.select_songlist_child_items_by_index(
+                                &songlist.lamp,
+                                clear_index,
+                                row_origin,
+                                images,
+                                enabled_options,
+                                &row_state,
+                                sources,
+                            )
+                            .into_iter()
+                            .map(tag("lamp", clear_index, &row_state)),
+                        );
                     }
                 }
                 if self.lr2
@@ -130,90 +202,124 @@ macro_rules! skin_document_render_select_songlist_methods {
                             std::cmp::Ordering::Equal => 2,
                         }
                     };
-                    items.extend(self.select_songlist_child_items_by_index(
-                        &songlist.lr2rival,
-                        index,
-                        row_origin,
-                        images,
-                        enabled_options,
-                        &row_state,
-                        sources,
-                    ));
-                }
-                if select_row_shows_score_decorations(row) {
-                    if select_row_shows_level(row) {
-                        items.extend(self.select_songlist_level_items(
-                            &songlist.level,
-                            row,
-                            row_origin,
-                            images,
-                            enabled_options,
-                            &mut row_state,
-                            sources,
-                        ));
-                    }
-                    for label_index in select_row_label_indices(row) {
-                        items.extend(self.select_songlist_child_items_by_index(
-                            &songlist.label,
-                            label_index,
+                    items.extend(
+                        self.select_songlist_child_items_by_index(
+                            &songlist.lr2rival,
+                            index,
                             row_origin,
                             images,
                             enabled_options,
                             &row_state,
                             sources,
-                        ));
+                        )
+                        .into_iter()
+                        .map(tag("lr2rival", index, &row_state)),
+                    );
+                }
+                if select_row_shows_score_decorations(row) {
+                    if select_row_shows_level(row) {
+                        let level_index =
+                            select_row_difficulty_code(row).clamp(0, i64::MAX) as usize;
+                        items.extend(
+                            self.select_songlist_level_items(
+                                &songlist.level,
+                                row,
+                                row_origin,
+                                images,
+                                enabled_options,
+                                &mut row_state,
+                                sources,
+                            )
+                            .into_iter()
+                            .map(tag("level", level_index, &row_state)),
+                        );
+                    }
+                    for label_index in select_row_label_indices(row) {
+                        items.extend(
+                            self.select_songlist_child_items_by_index(
+                                &songlist.label,
+                                label_index,
+                                row_origin,
+                                images,
+                                enabled_options,
+                                &row_state,
+                                sources,
+                            )
+                            .into_iter()
+                            .map(tag("label", label_index, &row_state)),
+                        );
                     }
                     if select_row_shows_course_trophy(row)
                         && let Some(trophy_index) = select_row_trophy_index(row)
                     {
-                        items.extend(self.select_songlist_child_items_by_index(
-                            &songlist.trophy,
-                            trophy_index,
+                        items.extend(
+                            self.select_songlist_child_items_by_index(
+                                &songlist.trophy,
+                                trophy_index,
+                                row_origin,
+                                images,
+                                enabled_options,
+                                &row_state,
+                                sources,
+                            )
+                            .into_iter()
+                            .map(tag("trophy", trophy_index, &row_state)),
+                        );
+                    }
+                    items.extend(
+                        self.select_songlist_all_child_items(
+                            &songlist.judgegraph,
+                            row,
                             row_origin,
                             images,
                             enabled_options,
                             &row_state,
                             sources,
-                        ));
-                    }
-                    items.extend(self.select_songlist_all_child_items(
-                        &songlist.judgegraph,
-                        row,
-                        row_origin,
-                        images,
-                        enabled_options,
-                        &row_state,
-                        sources,
-                    ));
-                    items.extend(self.select_songlist_all_child_items(
-                        &songlist.bpmgraph,
-                        row,
-                        row_origin,
-                        images,
-                        enabled_options,
-                        &row_state,
-                        sources,
-                    ));
+                        )
+                        .into_iter()
+                        .map(tag("judgegraph", usize::MAX, &row_state)),
+                    );
+                    items.extend(
+                        self.select_songlist_all_child_items(
+                            &songlist.bpmgraph,
+                            row,
+                            row_origin,
+                            images,
+                            enabled_options,
+                            &row_state,
+                            sources,
+                        )
+                        .into_iter()
+                        .map(tag("bpmgraph", usize::MAX, &row_state)),
+                    );
                 }
                 if select_row_shows_folder_distribution(row) {
-                    items.extend(self.select_songlist_all_child_items(
-                        &songlist.graph,
+                    items.extend(
+                        self.select_songlist_all_child_items(
+                            &songlist.graph,
+                            row,
+                            row_origin,
+                            images,
+                            enabled_options,
+                            &row_state,
+                            sources,
+                        )
+                        .into_iter()
+                        .map(tag("graph", usize::MAX, &row_state)),
+                    );
+                }
+                items.extend(
+                    self.select_songlist_text_items(
                         row,
                         row_origin,
                         images,
                         enabled_options,
                         &row_state,
                         sources,
-                    ));
-                }
-                items.extend(self.select_songlist_text_items(
-                    row,
-                    row_origin,
-                    images,
-                    enabled_options,
-                    &row_state,
-                    sources,
-                ));
+                    )
+                    .into_iter()
+                    .map(tag("text", usize::from(row.lr2_new_title), &row_state)),
+                );
             }
             items
         }

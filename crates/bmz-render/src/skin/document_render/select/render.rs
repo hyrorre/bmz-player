@@ -203,6 +203,9 @@ macro_rules! skin_document_render_select_render_methods {
                         Some(item)
                     };
                 let mut items = Vec::new();
+                let mut songlist_parts = None;
+                let mut songlist_markers = None;
+                let mut songlist_marker_seen = false;
                 for destination_index in 0..destination_count {
                     let Some(destination) = planning
                         .as_ref()
@@ -238,17 +241,45 @@ macro_rules! skin_document_render_select_render_methods {
                         } else {
                             None
                         };
-                        // SkinBar draws its children directly; only its outer clip applies.
-                        items.extend(wrap_skin_destination_clip(
-                            self.select_songlist_items(
-                                sources,
-                                snapshot,
-                                &images,
-                                enabled_options,
-                                &state,
-                            ),
-                            clip,
-                        ));
+                        let songlist_items =
+                            match destination.lr2_bar_part.as_ref().filter(|_| self.lr2) {
+                                // SkinBar draws its children directly; only its outer clip applies.
+                                None => self.select_songlist_items(
+                                    sources,
+                                    snapshot,
+                                    &images,
+                                    enabled_options,
+                                    &state,
+                                ),
+                                // LR2 draws each bar part at its own DST position.
+                                Some(part) => {
+                                    let pending = songlist_parts.get_or_insert_with(|| {
+                                        self.select_songlist_part_items(
+                                            sources,
+                                            snapshot,
+                                            &images,
+                                            enabled_options,
+                                            &state,
+                                        )
+                                    });
+                                    let markers = songlist_markers.get_or_insert_with(|| {
+                                        songlist_bar_part_markers(self, enabled_options)
+                                    });
+                                    // Parts without their own DST keep the first marker's position.
+                                    let first = !std::mem::replace(&mut songlist_marker_seen, true);
+                                    pending
+                                        .extract_if(.., |(key, _)| {
+                                            key.matches(part)
+                                                || (first
+                                                    && !markers
+                                                        .iter()
+                                                        .any(|marker| key.matches(marker)))
+                                        })
+                                        .map(|(_, item)| item)
+                                        .collect()
+                                }
+                            };
+                        items.extend(wrap_skin_destination_clip(songlist_items, clip));
                         continue;
                     }
                     // beatoraja keeps STRING_SEARCHWORD empty in the regular SkinText

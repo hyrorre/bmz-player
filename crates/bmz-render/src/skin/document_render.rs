@@ -115,6 +115,37 @@ pub trait SkinDocumentRenderExt {
 }
 
 /// 描画評価の内部処理。runtime cacheやlookup型を公開APIへ露出させない。
+/// The songlist entry list (`listoff`, `lamp`, ...) and the entry index that drew
+/// a songlist item. LR2 song bar parts are drawn at their own DST positions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct SongListPartKey {
+    pub(super) part: &'static str,
+    pub(super) index: usize,
+    pub(super) order: Option<usize>,
+}
+
+impl SongListPartKey {
+    pub(super) fn matches(self, part: &SkinLr2BarPartDef) -> bool {
+        if part.order.is_some() {
+            self.order == part.order
+        } else {
+            self.part == part.part && part.indices.contains(&self.index)
+        }
+    }
+}
+
+/// The LR2 song bar parts that have their own songlist marker.
+pub(super) fn songlist_bar_part_markers(
+    document: &SkinDocument,
+    enabled_options: &[i32],
+) -> Vec<SkinLr2BarPartDef> {
+    document
+        .all_destinations(enabled_options)
+        .into_iter()
+        .filter_map(|destination| destination.lr2_bar_part.clone())
+        .collect()
+}
+
 pub(super) trait SkinDocumentRenderInternal {
     fn static_render_items_with_graphs(
         &self,
@@ -310,6 +341,15 @@ pub(super) trait SkinDocumentRenderInternal {
         enabled_options: &[i32],
         state: &SkinDrawState,
     ) -> Vec<SkinRenderItem>;
+
+    fn select_songlist_part_items(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        snapshot: &SelectSnapshot,
+        images: &SkinImageLookup<'_>,
+        enabled_options: &[i32],
+        state: &SkinDrawState,
+    ) -> Vec<(SongListPartKey, SkinRenderItem)>;
 
     fn apply_select_songlist_scroll_to_frame(
         &self,

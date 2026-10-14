@@ -1,5 +1,9 @@
 use super::*;
 
+/// LR2 lamp slot of each beatoraja clear index. Only display lamp families are
+/// collapsed; stored clear types remain unchanged.
+const LR2_LAMPS: [i32; 11] = [0, 1, 2, 2, 2, 3, 4, 4, 5, 5, 5];
+
 #[derive(Default)]
 pub(super) struct SelectState {
     sources: BTreeMap<(String, i32), CurrentObject>,
@@ -7,6 +11,30 @@ pub(super) struct SelectState {
     center: i32,
     available: Option<(i32, i32)>,
     marker: bool,
+}
+
+/// The songlist entry list and indices drawn by an LR2 `DST_BAR_*` part.
+fn lr2_bar_part(kind: &str, index: i32) -> Option<JsonValue> {
+    let (part, indices): (&str, Vec<i32>) = match kind {
+        "BODY_OFF" => ("listoff", vec![index]),
+        "BODY_ON" => ("liston", vec![index]),
+        "TITLE" => ("text", vec![index]),
+        "LEVEL" => ("level", vec![index]),
+        "LAMP" | "MY_LAMP" | "RIVAL_LAMP" => (
+            match kind {
+                "LAMP" => "lamp",
+                "MY_LAMP" => "playerlamp",
+                _ => "rivallamp",
+            },
+            (0..LR2_LAMPS.len() as i32)
+                .filter(|&clear| LR2_LAMPS[clear as usize] == index)
+                .collect(),
+        ),
+        "RIVAL" => ("lr2rival", vec![index]),
+        "FLASH" => ("flash", vec![0]),
+        _ => return None,
+    };
+    Some(json!({"part": part, "indices": indices}))
 }
 
 impl CsvBuilder<'_> {
@@ -84,10 +112,7 @@ impl CsvBuilder<'_> {
                 self.select.sources.insert((kind.to_string(), index), current);
             }
         } else {
-            if !self.select.marker {
-                self.destinations.push(json!({"id": "lr2-songlist"}));
-                self.select.marker = true;
-            }
+            self.select.marker = true;
             let body = kind.starts_with("BODY_");
             let variants = if body {
                 vec![CurrentObjectVariant {
@@ -121,7 +146,22 @@ impl CsvBuilder<'_> {
                 self.expand_destination_option_aliases(&mut destination);
                 let entries =
                     self.select.destinations.entry((kind.to_string(), index)).or_default();
-                merge_or_push_current_destination(entries, destination);
+                // Keyframes of the same conditional destination share a marker.
+                // A different source or IF branch keeps its own declaration position.
+                if let Some(previous) = entries.iter_mut().rev().find(|previous| {
+                    previous["id"] == destination["id"]
+                        && previous["op"] == destination["op"]
+                        && previous["lr2Not"] == destination["lr2Not"]
+                }) && merge_destination_entry(previous, destination.clone())
+                {
+                    continue;
+                }
+                if let Some(mut part) = lr2_bar_part(kind, index) {
+                    part["order"] = json!(self.destinations.len());
+                    destination["lr2BarPart"] = part.clone();
+                    self.destinations.push(json!({"id": "lr2-songlist", "lr2BarPart": part}));
+                }
+                entries.push(destination);
             }
         }
         true
@@ -156,8 +196,7 @@ impl CsvBuilder<'_> {
         let slots = |kind: &str, indices: &[i32]| {
             indices.iter().map(|&i| entry(kind, i)).collect::<Vec<_>>()
         };
-        // Collapse only display lamp families; stored clear types remain unchanged.
-        let lamps = [0, 1, 2, 2, 2, 3, 4, 4, 5, 5, 5];
+        let lamps = LR2_LAMPS;
         let (first, last) = self.select.available.unwrap_or((0, 29));
         json!({
             "id": "lr2-songlist", "center": self.select.center,

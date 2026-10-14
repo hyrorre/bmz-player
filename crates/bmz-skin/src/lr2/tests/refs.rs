@@ -253,3 +253,45 @@ fn lr2_select_style_course_and_hover_conditions_survive_decode() {
         assert_eq!(hover["destination"][0]["op"], expected);
     }
 }
+
+#[test]
+fn lr2_select_bar_parts_keep_a_marker_at_their_first_dst() {
+    let dst = |command: &str, index: i32| {
+        format!("#{command},{index},0,0,0,10,10,0,255,255,255,255,0,0,0,0,0,0,0,0,0\n")
+    };
+    let image = "#SRC_IMAGE,0,0,0,0,1,1,1,1,0,0\n\
+                 #DST_IMAGE,0,0,0,0,1,1,0,255,255,255,255,0,0,0,0,0,0,0,0,0\n";
+    let body = [
+        "#SRC_BAR_BODY,0,0,0,0,10,10,1,1,0,0\n#SRC_BAR_FLASH,0,0,0,0,10,10,1,1,0,0\n",
+        "#SRC_BAR_LAMP,2,0,0,0,10,10,1,1,0,0\n",
+        &dst("DST_BAR_BODY_OFF", 3),
+        &dst("DST_BAR_BODY_OFF", 3),
+        image,
+        &dst("DST_BAR_LAMP", 2),
+        &dst("DST_BAR_FLASH", 0),
+        &dst("DST_BAR_BODY_ON", 3),
+    ]
+    .concat();
+    let select = load(5, &body);
+    let order = select["destination"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|destination| match &destination["lr2BarPart"] {
+            JsonValue::Null => destination["id"].as_str().unwrap().to_string(),
+            part => format!("{}{}", part["part"].as_str().unwrap(), part["indices"]),
+        })
+        .collect::<Vec<_>>();
+    // One marker per part at its first DST; the lamp marker covers the clear types
+    // folded into LR2's lamp 2 (ASSIST EASY / LIGHT ASSIST EASY / EASY).
+    assert_eq!(
+        order
+            .iter()
+            .map(String::as_str)
+            .filter(|id| !id.starts_with("lr2-image"))
+            .collect::<Vec<_>>(),
+        ["listoff[3]", "lamp[2,3,4]", "flash[0]", "liston[3]"]
+    );
+    let image_position = order.iter().position(|id| id.starts_with("lr2-image")).unwrap();
+    assert_eq!(image_position, 1, "{order:?}");
+}

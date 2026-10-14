@@ -13,6 +13,7 @@ BMZ固有のIDや詳細な動作契約は [skin.md](skin.md)、互換修正の�
 | 項目 | 現在の範囲・確認入口 |
 |---|---|
 | LR2選曲バーの分類・装飾 | NEW COURSE・コース一覧・機能フォルダ・検索履歴をLR2の画像番号で描画。NEWはルートと配下を新曲、設定フォルダ・戻るはライバルフォルダ、その他の仮想フォルダは分類階層を含めカスタムフォルダの画像とする（BMZ表示方針）。op 1..5、新着譜面のBAR_TITLE切替、各曲のライバルEXに応じたランプとBAR_RIVAL勝敗表示に対応。BAR_RANKとフォルダの新着タイトル判定は未対応。[仕様](skin.md#lr2のselect--result)、[回帰テスト](../crates/bmz-render/src/skin/tests/result/lr2.rs) |
+| LR2選曲バーの描画順 | 各BAR部品の最初のDST位置をinclude先も含めて保持し、通常画像・パネル・マスクと同じ宣言順で描画。条件分岐では有効なdestination自身の位置を使う。発光の中央位置とJSON / Luaの行ごとの描画は維持。[仕様](skin.md#lr2のselect--result)、[回帰テスト](../crates/bmz-player/src/skin_loader/tests/lr2/select_bar_order.rs) |
 | JSON / Lua / LR2読込 | JSON、`.luaskin` / `.lua`、LR2 CSV skinを読み込む。[decode API](../crates/bmz-skin/src/lib.rs)、[app側decode](../crates/bmz-player/src/skin_loader/decode/document.rs)。LR2全命令の完全互換を意味しない |
 | スキン / システム音セットの走査 | symlink / Windows junctionの循環と同一ディレクトリの重複走査を防止。明示したリンクrootは受理し、候補パスとoriginを保持する。[仕様](skin.md#カタログとシステム音セットの走査)、[スキン回帰テスト](../crates/bmz-player/src/app/tests/skin.rs)、[システム音回帰テスト](../crates/bmz-player/src/system_sound.rs) |
 | LR2の基準解像度 | `#RESOLUTION` 省略時は全画面destinationから推定し、該当がなければ640×480（BMZ拡張）。プリセットと幅・高さの明示指定、全スキン種別の `LR2 Resolution (BMZ)` による上書きも対応。[仕様](skin.md#lr2の基準解像度)、[回帰テスト](../crates/bmz-skin/src/lr2/tests/cases_01.rs) |

@@ -169,6 +169,7 @@ fn grade_diff_destinations_use_the_fixed_next_rank_in_select_and_result() {
             clickable: None,
             dst: Vec::new(),
             mouse_rect: None,
+            lr2_bar_part: None,
         }
     }
     fn grade_diff_value() -> SkinValueDef {

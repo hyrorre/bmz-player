@@ -255,6 +255,23 @@ pub struct SkinDestinationDef {
     pub dst: Vec<SkinDstEntry>,
     #[serde(rename = "mouseRect")]
     pub mouse_rect: Option<SkinRectDef>,
+    /// LR2 CSV decoder marker on a songlist destination: draw only this song bar
+    /// part at the position of its first DST, as LR2 orders draws by DST line.
+    #[serde(default, rename = "lr2BarPart")]
+    pub lr2_bar_part: Option<SkinLr2BarPartDef>,
+}
+
+/// One LR2 song bar part: a songlist entry list (`listoff`, `liston`, `text`,
+/// `level`, `lamp`, `playerlamp`, `rivallamp`, `lr2rival` or `flash`) and the
+/// entry indices declared by the same LR2 DST.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct SkinLr2BarPartDef {
+    pub part: String,
+    #[serde(default)]
+    pub indices: Vec<usize>,
+    /// Identifies a particular conditional destination and its root marker.
+    #[serde(default)]
+    pub order: Option<usize>,
 }
 
 /// Converter-only LR2 condition tree. Each node ANDs its options and excludes
