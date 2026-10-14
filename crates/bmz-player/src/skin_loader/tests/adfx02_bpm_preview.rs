@@ -136,6 +136,12 @@ fn adfx02_bpm_preview_uses_pgreat_ms_digits_and_places_each_type() {
                         assert_eq!((value.divx, value.digit, value.ref_id), (10, DIGITS, ref_id));
                     }
                 }
+                // The arrow outline matches the dark rim of each digit row.
+                for (key, outline) in [("inc", "04080cff"), ("dec", "1e0c0cff")] {
+                    let id = format!("txt_bpm_preview_arrow_{key}");
+                    let arrow = document.text.iter().find(|text| text.id == id).unwrap();
+                    assert_eq!(arrow.outline_color, outline, "{label} {id}");
+                }
                 let destinations = preview_destinations(&document);
                 assert_eq!(destinations.len(), if outside { 14 } else { 6 }, "{label}");
                 // Like FAST/SLOW and the score difference, the preview has no backing panel.
@@ -287,7 +293,7 @@ fn adfx02_bpm_preview_gpu_draws_colored_digits_next_to_the_lane() {
                 }
                 found
             };
-            // Digit cores are about (70,149,218) and (238,76,76).
+            // Digit fills are #499ce5 and #f84f4f.
             let blue = |p: &[u8]| p[2] > 180 && p[0] < 120 && p[2] as i32 - p[0] as i32 > 80;
             let red = |p: &[u8]| p[0] > 200 && p[2] < 120 && p[0] as i32 - p[2] as i32 > 80;
             assert!(matching(&frames[0], blue).is_empty(), "{name}: hidden before lead");
