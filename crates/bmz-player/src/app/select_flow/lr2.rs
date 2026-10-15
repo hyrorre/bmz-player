@@ -21,6 +21,7 @@ impl WinitApp {
                 return;
             }
             Lr2SelectButtonAction::DifficultyTab(index) => {
+                self.select.selection_generation = self.select.selection_generation.wrapping_add(1);
                 self.select.select_difficulty_filter = SelectDifficultyFilter::ORDER[index];
                 self.boot.profile_config.select.difficulty_filter =
                     self.select.select_difficulty_filter.as_str().to_string();
@@ -31,6 +32,7 @@ impl WinitApp {
                 return;
             }
             Lr2SelectButtonAction::KeyFilter => {
+                self.select.selection_generation = self.select.selection_generation.wrapping_add(1);
                 self.select.select_mode_filter =
                     cycle_lr2_value(LR2_KEY_FILTERS, self.select.select_mode_filter, direction);
                 self.reload_select_items();

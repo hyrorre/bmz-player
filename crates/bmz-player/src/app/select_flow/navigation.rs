@@ -68,6 +68,7 @@ impl WinitApp {
         if self.select.selected_index != previous_index
             || (rows != 0 && self.select.select_items.len() > 1)
         {
+            self.select.selection_generation = self.select.selection_generation.wrapping_add(1);
             self.sync_selected_play_mode();
             self.reset_selected_replay_slot();
             self.restart_select_bar_timer_with_scroll(rows, duration);
@@ -681,7 +682,13 @@ impl WinitApp {
                 );
             }
             action @ (MissingChartAction::Ipfs { .. } | MissingChartAction::Http { .. }) => {
-                self.spawn_chart_download(action, row.display_title().to_string());
+                self.spawn_chart_download_batch(vec![(
+                    action,
+                    row.display_title().to_string(),
+                    crate::song_download::ChartDownloadIdentity::from_metadata(
+                        &row.download_metadata,
+                    ),
+                )]);
             }
         }
     }
@@ -719,7 +726,13 @@ impl WinitApp {
                 &chart.download_metadata,
             ) {
                 action @ (MissingChartAction::Ipfs { .. } | MissingChartAction::Http { .. }) => {
-                    downloads.push((action, chart.display_title().to_string()));
+                    downloads.push((
+                        action,
+                        chart.display_title().to_string(),
+                        crate::song_download::ChartDownloadIdentity::from_metadata(
+                            &chart.download_metadata,
+                        ),
+                    ));
                 }
                 MissingChartAction::Browser(urls) => browser_urls.extend(urls),
                 MissingChartAction::Unavailable => unavailable += 1,
@@ -762,13 +775,9 @@ impl WinitApp {
         self.spawn_chart_download_batch(downloads);
     }
 
-    pub(super) fn spawn_chart_download(&mut self, action: MissingChartAction, title: String) {
-        self.spawn_chart_download_batch(vec![(action, title)]);
-    }
-
     pub(super) fn spawn_chart_download_batch(
         &mut self,
-        downloads: Vec<(MissingChartAction, String)>,
+        downloads: Vec<(MissingChartAction, String, crate::song_download::ChartDownloadIdentity)>,
     ) {
         let text = Localizer::new(self.boot.profile_config.ui.locale());
         if self.jobs.pending_chart_download.is_some() {
@@ -778,7 +787,7 @@ impl WinitApp {
         let mut source_names = HashSet::new();
         let requests: Vec<ChartDownloadRequest> = downloads
             .into_iter()
-            .filter_map(|(action, title)| {
+            .filter_map(|(action, title, identity)| {
                 match &action {
                     MissingChartAction::Ipfs { .. } => {
                         source_names.insert("IPFS");
@@ -791,6 +800,11 @@ impl WinitApp {
                     }
                 }
                 Some(ChartDownloadRequest {
+                    request_id: {
+                        self.jobs.download_request_id += 1;
+                        self.jobs.download_request_id
+                    },
+                    identity,
                     action,
                     title,
                     data_dir: self.boot.app_paths.data_dir.clone(),
@@ -801,6 +815,17 @@ impl WinitApp {
             return;
         }
         let request_count = requests.len();
+        self.jobs.download_selection = (request_count == 1).then(|| DownloadSelection {
+            request_id: requests[0].request_id,
+            identity: requests[0].identity.clone(),
+            folder_stack: self.select.folder_stack.clone(),
+            selected_key: self
+                .select
+                .select_items
+                .get(self.select.selected_index)
+                .map(select_item_key),
+            generation: self.select.selection_generation,
+        });
         let source_name = if source_names.len() == 1 {
             source_names.into_iter().next().unwrap_or("HTTP").to_string()
         } else {
@@ -908,14 +933,17 @@ impl WinitApp {
                 if let Err(error) = self.publish_song_scope() {
                     tracing::error!(%error, "failed to publish downloaded song roots");
                 }
-                let scan_roots = roots
-                    .into_iter()
+                let scan_roots = result
+                    .completed
+                    .iter()
+                    .map(|completed| completed.chart_dir.clone())
                     .map(|root| PathEntry {
                         path: root.to_string_lossy().into_owned(),
                         enabled: true,
                         recursive: true,
                     })
                     .collect();
+                self.jobs.download_registrations.extend(result.completed);
                 self.spawn_song_scan(scan_roots, true, "course chart download scan".to_string());
             }
             Ok(Err(error)) => {

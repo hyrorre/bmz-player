@@ -15,6 +15,15 @@ pub(super) struct PendingSongScan {
     pub(super) finished: Receiver<Result<ScanReport>>,
     pub(super) progress: Arc<AtomicU64>,
     pub(super) library_roots: Option<Vec<PathEntry>>,
+    pub(super) scanned_roots: Vec<PathEntry>,
+}
+
+pub(super) struct DownloadSelection {
+    pub(super) request_id: u64,
+    pub(super) identity: crate::song_download::ChartDownloadIdentity,
+    pub(super) folder_stack: Vec<String>,
+    pub(super) selected_key: Option<SelectItemKey>,
+    pub(super) generation: u64,
 }
 
 pub(super) struct PendingReplayImport {

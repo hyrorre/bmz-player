@@ -126,6 +126,7 @@ pub(in crate::app) enum SelectItemKey {
     ChartId(i64),
     ChartFolder(String),
     ChartSha256([u8; 32]),
+    ChartMd5([u8; 16]),
     ChartFallback { title: String, artist: String, table_level: String, table_full: String },
     Course(i64),
     Executable(String),
@@ -146,6 +147,7 @@ pub(in crate::app) fn select_item_key(item: &SelectItem) -> SelectItemKey {
             .as_ref()
             .map(|chart| SelectItemKey::ChartId(chart.chart_id))
             .or_else(|| row.score_sha256().map(SelectItemKey::ChartSha256))
+            .or_else(|| row.score_md5().map(SelectItemKey::ChartMd5))
             .unwrap_or_else(|| SelectItemKey::ChartFallback {
                 title: row.display_title().to_string(),
                 artist: row.display_artist().to_string(),
@@ -185,12 +187,44 @@ pub(in crate::app) fn restored_select_index(
 ) -> usize {
     previous_selected_key
         .and_then(|key| match key {
+            // Missing table entries acquire a ChartId after a download. Keep
+            // ChartId for local duplicates, but bridge this transition by hash.
+            SelectItemKey::ChartSha256(hash) => items.iter().enumerate()
+                .filter(|(_, item)| matches!(item, SelectItem::Chart(row) if row.score_sha256() == Some(*hash)))
+                .min_by_key(|(index, _)| index.abs_diff(previous_index)).map(|(index, _)| index),
+            SelectItemKey::ChartMd5(hash) => items.iter().enumerate()
+                .filter(|(_, item)| matches!(item, SelectItem::Chart(row) if row.score_md5() == Some(*hash)))
+                .min_by_key(|(index, _)| index.abs_diff(previous_index)).map(|(index, _)| index),
             SelectItemKey::ChartFolder(folder_path) => items.iter().position(|item| {
                 matches!(item, SelectItem::Chart(row) if row.chart.as_ref().is_some_and(|chart| chart.folder_path == *folder_path))
             }),
             _ => items.iter().position(|item| select_item_key(item) == *key),
         })
         .unwrap_or_else(|| previous_index.min(items.len().saturating_sub(1)))
+}
+
+pub(in crate::app) fn download_selection_index(
+    selection: &DownloadSelection,
+    folder_stack: &[String],
+    generation: u64,
+    items: &[SelectItem],
+) -> Option<usize> {
+    if selection.folder_stack != folder_stack || selection.generation != generation {
+        return None;
+    }
+    // Keep a matching table reference where possible. Never fall back to a
+    // title or an index when the requested file is absent/filtered out.
+    let matches = |item: &SelectItem| {
+        matches!(item,
+        SelectItem::Chart(row) if row.chart.as_ref().is_some_and(|chart| selection.identity.matches(chart)))
+    };
+    items
+        .iter()
+        .position(|item| {
+            matches(item)
+                && selection.selected_key.as_ref().is_some_and(|key| select_item_key(item) == *key)
+        })
+        .or_else(|| items.iter().position(matches))
 }
 
 pub(in crate::app) fn compare_select_chart_rows(

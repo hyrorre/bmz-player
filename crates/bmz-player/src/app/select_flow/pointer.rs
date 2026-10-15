@@ -338,6 +338,7 @@ impl WinitApp {
             return;
         };
         if self.select.selected_index != next {
+            self.select.selection_generation = self.select.selection_generation.wrapping_add(1);
             self.select.selected_index = next;
             self.sync_selected_play_mode();
             self.reset_selected_replay_slot();
@@ -427,6 +428,7 @@ impl WinitApp {
             self.select.settings_edit.is_some(),
         ) {
             Some(SelectRowClickAction::Select(next)) => {
+                self.select.selection_generation = self.select.selection_generation.wrapping_add(1);
                 self.select.selected_index = next;
                 self.sync_selected_play_mode();
                 self.reset_selected_replay_slot();

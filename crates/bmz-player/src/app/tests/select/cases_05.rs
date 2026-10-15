@@ -385,6 +385,65 @@ fn select_item_key_uses_typed_settings_identity() {
 }
 
 #[test]
+fn restored_select_index_bridges_missing_hashes_without_merging_local_copies() {
+    for sha256 in [true, false] {
+        let row = select_chart_row(7);
+        let mut missing = row.clone();
+        missing.download_metadata.md5 = hash_to_hex(&row.chart.as_ref().unwrap().md5);
+        missing.entry_sha256 = sha256.then_some(row.chart.as_ref().unwrap().sha256);
+        missing.chart = None;
+        let key = select_item_key(&SelectItem::Chart(missing));
+        let mut other = select_chart_row(8);
+        other.chart.as_mut().unwrap().sha256 = [99; 32];
+        other.chart.as_mut().unwrap().md5 = [99; 16];
+        let items = [SelectItem::Chart(other), SelectItem::Chart(row.clone())];
+        assert_eq!(restored_select_index(&items, Some(&key), 0), 1);
+        let mut duplicate = row.clone();
+        duplicate.chart.as_mut().unwrap().chart_id = 123;
+        let local_key = select_item_key(&SelectItem::Chart(row.clone()));
+        assert_eq!(
+            restored_select_index(
+                &[SelectItem::Chart(duplicate), SelectItem::Chart(row)],
+                Some(&local_key),
+                0
+            ),
+            1
+        );
+    }
+}
+
+#[test]
+fn download_selection_respects_generation_folder_filters_and_file_identity() {
+    let row = select_chart_row(7);
+    let selection = DownloadSelection {
+        request_id: 1,
+        identity: crate::song_download::ChartDownloadIdentity {
+            sha256: Some(row.chart.as_ref().unwrap().sha256),
+            md5: None,
+        },
+        folder_stack: vec!["table".into()],
+        selected_key: None,
+        generation: 10,
+    };
+    let items = [SelectItem::Chart(row)];
+    assert_eq!(download_selection_index(&selection, &["table".into()], 10, &items), Some(0));
+    assert_eq!(download_selection_index(&selection, &["other".into()], 10, &items), None);
+    assert_eq!(download_selection_index(&selection, &["table".into()], 11, &items), None);
+    assert_eq!(download_selection_index(&selection, &["table".into()], 10, &[]), None);
+    let mut same_title = select_chart_row(7);
+    same_title.chart.as_mut().unwrap().sha256 = [99; 32];
+    assert_eq!(
+        download_selection_index(
+            &selection,
+            &["table".into()],
+            10,
+            &[SelectItem::Chart(same_title)]
+        ),
+        None
+    );
+}
+
+#[test]
 fn select_skin_key_config_preserves_folder_history_for_return() {
     let original_folders = vec!["songs".to_string(), "songs/genre".to_string()];
     let original_indices = vec![3, 5];

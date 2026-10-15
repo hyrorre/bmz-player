@@ -87,6 +87,7 @@ impl WinitApp {
         let (tx, rx) = mpsc::channel();
         let progress = Arc::new(AtomicU64::new(pack_scan_progress(ScanProgress::default())));
         let worker_progress = Arc::clone(&progress);
+        let scanned_roots = roots.clone();
         self.jobs.song_scan.progress = Some(ScanProgress::default());
         thread::Builder::new()
             .name("song-scan".to_string())
@@ -113,7 +114,7 @@ impl WinitApp {
             })
             .expect("failed to spawn song scan thread");
         self.jobs.song_scan.pending =
-            Some(PendingSongScan { finished: rx, progress, library_roots });
+            Some(PendingSongScan { finished: rx, progress, library_roots, scanned_roots });
         tracing::info!(%label, force, "started song scan");
     }
 
@@ -194,15 +195,18 @@ impl WinitApp {
                 self.select.select_assets.invalidate_library();
                 self.invalidate_select_folder_summaries();
                 self.reload_select_items();
+                self.finish_download_registration(&pending.scanned_roots, true);
                 keep_pending = false;
             }
             Ok(Err(error)) => {
+                self.finish_download_registration(&pending.scanned_roots, false);
                 self.song_scan_error(&error);
                 self.jobs.song_scan.progress = None;
                 keep_pending = false;
             }
             Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) => {
+                self.finish_download_registration(&pending.scanned_roots, false);
                 tracing::warn!("song scan worker disconnected");
                 self.jobs.song_scan.progress = None;
                 keep_pending = false;
@@ -211,5 +215,50 @@ impl WinitApp {
         if keep_pending {
             self.jobs.song_scan.pending = Some(pending);
         }
+    }
+
+    fn finish_download_registration(&mut self, roots: &[PathEntry], scan_succeeded: bool) {
+        let mut remaining = Vec::new();
+        for completed in std::mem::take(&mut self.jobs.download_registrations) {
+            if !roots.iter().any(|root| Path::new(&root.path) == completed.chart_dir) {
+                remaining.push(completed);
+                continue;
+            }
+            let registered = scan_succeeded && crate::song_download::registered_download_identity(
+                &self.boot.library_db, &completed.identity, &completed.chart_dir,
+            ).unwrap_or_else(|error| {
+                tracing::error!(request_id = completed.request_id, %error, "download registration lookup failed");
+                false
+            });
+            if !registered {
+                tracing::error!(request_id = completed.request_id, identity = ?completed.identity,
+                    "downloaded archive did not register the requested chart");
+                self.show_left_overlay_toast(
+                    Localizer::new(self.boot.profile_config.ui.locale())
+                        .text("toast-chart-download-failed"),
+                );
+            }
+            if self
+                .jobs
+                .download_selection
+                .as_ref()
+                .is_some_and(|selection| selection.request_id == completed.request_id)
+            {
+                let selection = self.jobs.download_selection.take().unwrap();
+                if registered
+                    && let Some(index) = download_selection_index(
+                        &selection,
+                        &self.select.folder_stack,
+                        self.select.selection_generation,
+                        &self.select.select_items,
+                    )
+                {
+                    self.select.selected_index = index;
+                    self.sync_selected_play_mode();
+                    self.reset_selected_replay_slot();
+                }
+            }
+        }
+        self.jobs.download_registrations = remaining;
     }
 }

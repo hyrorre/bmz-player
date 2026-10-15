@@ -69,6 +69,9 @@ impl WinitApp {
             }
         };
         let folder_changed = self.select.folder_stack != prepared.folder_stack;
+        if !matches!(action, SelectListAction::Refresh) {
+            self.select.selection_generation = self.select.selection_generation.wrapping_add(1);
+        }
         if matches!(&action, SelectListAction::Enter(path) if parse_search_query(path).is_some())
             && self.select.search.is_active()
         {

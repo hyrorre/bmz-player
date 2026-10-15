@@ -47,6 +47,7 @@ pub(super) struct SelectRuntimeState {
     /// フォルダから出た時にカーソル位置を復元するために使う。長さは `folder_stack` と一致。
     pub(super) selected_index_stack: Vec<usize>,
     pub(super) selected_index: usize,
+    pub(super) selection_generation: u64,
     pub(super) arrange_option: ArrangeOption,
     pub(super) arrange_option_2p: ArrangeOption,
     /// Endless Dream 互換の7K RANDOM固定配置。profileへは保存しない。
@@ -259,6 +260,9 @@ pub(super) struct AppJobs {
     pub(super) song_scan: SongScanRuntime,
     pub(super) pending_replay_import: Option<PendingReplayImport>,
     pub(super) pending_chart_download: Option<Receiver<Result<ChartDownloadBatchResult>>>,
+    pub(super) download_request_id: u64,
+    pub(super) download_selection: Option<DownloadSelection>,
+    pub(super) download_registrations: Vec<crate::song_download::ChartDownloadResult>,
     pub(super) updates: update_runtime::AppUpdateRuntime,
     /// 起動時に1回だけ実行するrianIRライバル一覧同期。
     pub(super) startup_rival_sync: Option<RianRivalSyncRequest>,

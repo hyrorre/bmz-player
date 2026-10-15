@@ -323,6 +323,7 @@ impl WinitApp {
                 selected_index_stack: vec![0; folder_stack.len()],
                 folder_stack,
                 selected_index: 0,
+                selection_generation: 0,
                 arrange_option,
                 arrange_option_2p,
                 random_trainer: RandomTrainerState::default(),
@@ -438,6 +439,9 @@ impl WinitApp {
                 song_scan: SongScanRuntime::default(),
                 pending_replay_import: None,
                 pending_chart_download: None,
+                download_request_id: 0,
+                download_selection: None,
+                download_registrations: Vec::new(),
                 updates: update_runtime::AppUpdateRuntime {
                     queued_check: queued_update_check,
                     ..Default::default()

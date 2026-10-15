@@ -60,6 +60,8 @@ pub enum MissingChartAction {
 
 #[derive(Debug, Clone)]
 pub struct ChartDownloadRequest {
+    pub request_id: u64,
+    pub identity: ChartDownloadIdentity,
     pub action: MissingChartAction,
     pub title: String,
     pub data_dir: PathBuf,
@@ -67,9 +69,46 @@ pub struct ChartDownloadRequest {
 
 #[derive(Debug, Clone)]
 pub struct ChartDownloadResult {
+    pub request_id: u64,
+    pub identity: ChartDownloadIdentity,
     pub source: ChartDownloadSource,
     pub root_dir: PathBuf,
     pub chart_dir: PathBuf,
+}
+
+/// File hashes, independent of the table row and the local chart registration.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct ChartDownloadIdentity {
+    pub sha256: Option<[u8; 32]>,
+    pub md5: Option<[u8; 16]>,
+}
+
+impl ChartDownloadIdentity {
+    pub fn from_metadata(metadata: &ChartDownloadMetadata) -> Self {
+        Self {
+            sha256: crate::storage::common::hex_to_hash(metadata.sha256.trim()).ok(),
+            md5: crate::storage::common::hex_to_hash(metadata.md5.trim()).ok(),
+        }
+    }
+
+    pub fn matches(&self, chart: &crate::storage::library_db::ChartListItem) -> bool {
+        if let Some(sha256) = self.sha256 {
+            chart.sha256 == sha256 && self.md5.is_none_or(|md5| chart.md5 == md5)
+        } else {
+            self.md5.is_some_and(|md5| chart.md5 == md5)
+        }
+    }
+}
+
+pub fn registered_download_identity(
+    db: &crate::storage::library_db::LibraryDatabase,
+    identity: &ChartDownloadIdentity,
+    chart_dir: &Path,
+) -> Result<bool> {
+    let mut folders = db.list_descendant_folder_paths(&chart_dir.to_string_lossy())?;
+    folders.push(chart_dir.to_string_lossy().into_owned());
+    let folder_refs: Vec<_> = folders.iter().map(String::as_str).collect();
+    Ok(db.list_charts_in_folders(&folder_refs)?.iter().any(|chart| identity.matches(chart)))
 }
 
 #[derive(Debug)]
@@ -242,7 +281,13 @@ pub async fn download_chart(request: ChartDownloadRequest) -> Result<ChartDownlo
     std::fs::remove_file(&archive_path).ok();
     cleanup.disarm();
 
-    Ok(ChartDownloadResult { source, root_dir, chart_dir: final_dir })
+    Ok(ChartDownloadResult {
+        request_id: request.request_id,
+        identity: request.identity,
+        source,
+        root_dir,
+        chart_dir: final_dir,
+    })
 }
 
 /// Downloads every request sequentially so one failed course stage does not
@@ -734,6 +779,8 @@ mod tests {
         let requests = ["First", "Second"]
             .into_iter()
             .map(|title| ChartDownloadRequest {
+                request_id: 0,
+                identity: ChartDownloadIdentity::default(),
                 action: MissingChartAction::Unavailable,
                 title: title.to_string(),
                 data_dir: PathBuf::new(),

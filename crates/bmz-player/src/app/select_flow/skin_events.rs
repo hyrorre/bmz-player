@@ -170,6 +170,7 @@ impl WinitApp {
     }
 
     pub(super) fn cycle_select_mode_filter(&mut self, arg: i32) {
+        self.select.selection_generation = self.select.selection_generation.wrapping_add(1);
         self.select.select_mode_filter = if arg >= 0 {
             self.select.select_mode_filter.next()
         } else {
@@ -189,6 +190,7 @@ impl WinitApp {
     }
 
     pub(super) fn cycle_select_difficulty_filter(&mut self, arg: i32) {
+        self.select.selection_generation = self.select.selection_generation.wrapping_add(1);
         self.select.select_difficulty_filter = if arg >= 0 {
             self.select.select_difficulty_filter.next()
         } else {
