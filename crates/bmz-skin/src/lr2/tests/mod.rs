@@ -1,9 +1,9 @@
 use super::*;
-use std::time::{SystemTime, UNIX_EPOCH};
 
+/// A fresh, exclusively created directory. The name used to be `{name}-{nanos}` only, so
+/// two test processes could share it. Tests still own the path's lifetime, as before.
 fn unique_test_dir(name: &str) -> PathBuf {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    std::env::temp_dir().join(format!("{name}-{nanos}"))
+    tempfile::Builder::new().prefix(&format!("{name}-")).tempdir().unwrap().keep()
 }
 
 #[path = "cases_01.rs"]
