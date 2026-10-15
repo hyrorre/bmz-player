@@ -348,17 +348,25 @@ pub(in crate::skin) fn test_skin_op(
         2246 => state.judge_counts.empty_poor > 0,
         // Result/update comparison options. In play skins these are often reused
         // as target-reached draw conditions.
-        330 => state.previous_best_ex_score.is_some_and(|best| state.ex_score > best),
-        1330 => state.previous_best_ex_score.is_some_and(|best| state.ex_score == best),
-        331 => state.previous_best_max_combo.is_some_and(|best| state.max_combo > best),
-        1331 => state.previous_best_max_combo.is_some_and(|best| state.max_combo == best),
-        332 => state.previous_best_bp.is_some_and(|best| current_bp(state) < best),
-        1332 => state.previous_best_bp.is_some_and(|best| current_bp(state) == best),
-        335 => state.previous_best_ex_score.is_some_and(|best| {
+        // A first play on Result compares with beatoraja's empty ScoreData
+        // (EX 0, combo 0, minbp Integer.MAX_VALUE).
+        330 => result_previous_best(state, state.previous_best_ex_score, 0)
+            .is_some_and(|best| state.ex_score > best),
+        1330 => result_previous_best(state, state.previous_best_ex_score, 0)
+            .is_some_and(|best| state.ex_score == best),
+        331 => result_previous_best(state, state.previous_best_max_combo, 0)
+            .is_some_and(|best| state.max_combo > best),
+        1331 => result_previous_best(state, state.previous_best_max_combo, 0)
+            .is_some_and(|best| state.max_combo == best),
+        332 => result_previous_best(state, state.previous_best_bp, u32::MAX)
+            .is_some_and(|best| current_bp(state) < best),
+        1332 => result_previous_best(state, state.previous_best_bp, u32::MAX)
+            .is_some_and(|best| current_bp(state) == best),
+        335 => result_previous_best(state, state.previous_best_ex_score, 0).is_some_and(|best| {
             score_rate_cmp_value(state.ex_score, state.total_notes)
                 > score_rate_cmp_value(best, state.total_notes)
         }),
-        1335 => state.previous_best_ex_score.is_some_and(|best| {
+        1335 => result_previous_best(state, state.previous_best_ex_score, 0).is_some_and(|best| {
             score_rate_cmp_value(state.ex_score, state.total_notes)
                 == score_rate_cmp_value(best, state.total_notes)
         }),
@@ -470,6 +478,12 @@ fn play_rank_option_matches(op: i32, state: &SkinDrawState) -> bool {
     let rank_index = if op == 227 { 0 } else { 24_i64.saturating_sub(i64::from(op - 220) * 3) };
     let threshold_numerator = rank_index.max(0);
     i64::from(state.ex_score) * 27 >= i64::from(state.total_notes) * 2 * threshold_numerator
+}
+
+/// The pre-save best value an update option compares with. Result without a
+/// previous record uses beatoraja's empty ScoreData value; other scenes keep none.
+fn result_previous_best(state: &SkinDrawState, previous: Option<u32>, empty: u32) -> Option<u32> {
+    previous.or_else(|| state.result_failed.is_some().then_some(empty))
 }
 
 fn chart_metadata_option_available(state: &SkinDrawState) -> bool {

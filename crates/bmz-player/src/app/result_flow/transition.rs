@@ -88,7 +88,14 @@ impl WinitApp {
         true
     }
 
+    /// Decide skip / cancel input. An LR2 skin skips with its close timer (3).
     pub(super) fn begin_decide_fadeout(&mut self, cancel: bool) {
+        let lr2 = self.renderer.decide_skin_document().is_some_and(|document| document.lr2);
+        let exit = if lr2 && !cancel { DecideExit::Lr2Close } else { DecideExit::Fadeout };
+        self.begin_decide_exit(cancel, exit);
+    }
+
+    fn begin_decide_exit(&mut self, cancel: bool, exit: DecideExit) {
         if self.play.pending_decide.is_none() {
             return;
         }
@@ -100,6 +107,7 @@ impl WinitApp {
             return;
         }
         decide.cancel = cancel;
+        decide.exit = exit;
         decide.fadeout_started_at = Some(Instant::now());
     }
 
@@ -118,16 +126,14 @@ impl WinitApp {
         if decide.fadeout_started_at.is_none()
             && decide.started_at.elapsed() >= self.decide_scene_duration()
         {
-            self.begin_decide_fadeout(false);
+            self.begin_decide_exit(false, DecideExit::Fadeout);
             return;
         }
 
-        let Some(fadeout_started_at) =
-            self.play.pending_decide.as_ref().and_then(|d| d.fadeout_started_at)
-        else {
+        let Some(fadeout_started_at) = decide.fadeout_started_at else {
             return;
         };
-        if fadeout_started_at.elapsed() < self.decide_fadeout_duration() {
+        if fadeout_started_at.elapsed() < self.decide_exit_duration(decide.exit) {
             return;
         }
 

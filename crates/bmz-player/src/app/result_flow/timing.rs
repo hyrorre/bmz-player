@@ -38,6 +38,15 @@ impl WinitApp {
         skin_duration_ms(self.renderer.decide_skin_document().map(|d| d.fadeout).unwrap_or(0))
     }
 
+    pub(super) fn decide_exit_duration(&self, exit: DecideExit) -> Duration {
+        match exit {
+            DecideExit::Fadeout => self.decide_fadeout_duration(),
+            DecideExit::Lr2Close => skin_duration_ms(
+                self.renderer.decide_skin_document().map_or(0, lr2_decide_close_ms),
+            ),
+        }
+    }
+
     pub(super) fn decide_fadeout_scene_timing(&self) -> DecideFadeoutSceneTiming {
         decide_fadeout_scene_timing(self.renderer.decide_skin_document())
     }

@@ -948,4 +948,30 @@ fn table_level_override_applies_to_songlist_numbers_without_leaking_to_other_val
     snapshot.rows[0].level_display_override = Some("2".into());
     snapshot.rows[1].level_display_override = Some("7".into());
     assert_eq!(digits(&snapshot, &document), [2, 7, 2]);
+    // Table levels with a trailing modifier show their integer part in the bar
+    // and in ref 96; non-integer labels hide the bar level and keep ref 96 at 0.
+    snapshot.rows[0].level_display_override = Some("3+".into());
+    snapshot.rows[1].level_display_override = Some("4-".into());
+    assert_eq!(digits(&snapshot, &document), [3, 4, 3]);
+    snapshot.rows[0].level_display_override = Some("2.5".into());
+    assert_eq!(digits(&snapshot, &document), [4, 0]);
+}
+
+#[test]
+fn table_level_display_number_keeps_integer_part_of_modified_levels() {
+    for (label, expected) in [
+        ("11+", Some(11)),
+        ("11-", Some(11)),
+        (" 12++ ", Some(12)),
+        ("-1", Some(-1)),
+        ("0", Some(0)),
+        ("12.5", None),
+        ("???", None),
+        ("地力A", None),
+        ("12a", None),
+        ("", None),
+        ("-", None),
+    ] {
+        assert_eq!(table_level_display_number(label), expected, "{label}");
+    }
 }

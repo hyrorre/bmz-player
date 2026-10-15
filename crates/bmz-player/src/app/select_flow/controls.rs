@@ -79,15 +79,15 @@ impl WinitApp {
 
     pub(super) fn decide_snapshot(&self, decide: &DecideTransition) -> RenderSnapshot {
         let mut snapshot = decide.snapshot_for_render();
+        let exit_duration = self.decide_exit_duration(decide.exit);
         let elapsed = match decide.fadeout_started_at {
             Some(fadeout_started_at) => {
-                let fadeout_duration = self.decide_fadeout_duration();
-                let fadeout_elapsed = fadeout_started_at.elapsed().min(fadeout_duration);
+                let fadeout_elapsed = fadeout_started_at.elapsed().min(exit_duration);
                 let scene_elapsed = decide_fadeout_scene_elapsed(
                     fadeout_started_at.duration_since(decide.started_at),
                     fadeout_elapsed,
                     self.decide_scene_duration(),
-                    fadeout_duration,
+                    exit_duration,
                     self.decide_fadeout_scene_timing(),
                 );
                 TimeUs(scene_elapsed.as_micros().min(i64::MAX as u128) as i64)
@@ -95,12 +95,15 @@ impl WinitApp {
             None => elapsed_since(decide.started_at),
         };
         snapshot.play_elapsed_time = elapsed;
-        snapshot.fadeout_elapsed_ms = decide.fadeout_started_at.map(|started_at| {
-            let elapsed_ms = elapsed_since_ms(started_at);
-            let fadeout_ms =
-                self.decide_fadeout_duration().as_millis().min(i32::MAX as u128) as i32;
-            elapsed_ms.min(fadeout_ms)
+        let exit_elapsed_ms = decide.fadeout_started_at.map(|started_at| {
+            let exit_ms = exit_duration.as_millis().min(i32::MAX as u128) as i32;
+            elapsed_since_ms(started_at).min(exit_ms)
         });
+        // Timer 2 is the fadeout; an LR2 skip runs timer 3 (close) instead.
+        match decide.exit {
+            DecideExit::Fadeout => snapshot.fadeout_elapsed_ms = exit_elapsed_ms,
+            DecideExit::Lr2Close => snapshot.failed_elapsed_ms = exit_elapsed_ms,
+        }
         snapshot
     }
 

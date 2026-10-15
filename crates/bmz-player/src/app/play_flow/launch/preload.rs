@@ -247,6 +247,7 @@ impl WinitApp {
             started_at: now,
             fadeout_started_at: None,
             cancel: false,
+            exit: DecideExit::Fadeout,
             snapshot,
             title_override,
         }));

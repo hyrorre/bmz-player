@@ -528,6 +528,7 @@ mod preload_failure_tests {
             started_at: Instant::now(),
             fadeout_started_at: None,
             cancel: false,
+            exit: DecideExit::Fadeout,
             snapshot: RenderSnapshot::default(),
             title_override: None,
         };

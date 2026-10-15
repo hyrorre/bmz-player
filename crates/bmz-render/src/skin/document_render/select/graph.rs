@@ -104,8 +104,9 @@ macro_rules! skin_document_render_select_graph_methods {
         ) -> Vec<SkinRenderItem> {
             let level_override = if let Some(level) = &row.level_display_override {
                 // A numeric sprite cannot represent labels such as "???" or "地力A".
-                // Keep those labels in table text instead of inventing a number.
-                let Ok(level) = level.trim().parse::<i64>() else { return Vec::new() };
+                // Keep those labels in table text instead of inventing a number;
+                // "11+" / "11-" show their integer part.
+                let Some(level) = table_level_display_number(level) else { return Vec::new() };
                 Some(level)
             } else {
                 None

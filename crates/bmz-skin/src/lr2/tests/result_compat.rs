@@ -105,6 +105,41 @@ fn result_lr2_only_refs_and_flat_buttons_are_converted() {
 }
 
 #[test]
+fn result_update_stage_follows_timer_152_objects() {
+    let files = BTreeMap::new();
+    for (timer, expected) in [(151, false), (152, true)] {
+        let mut builder = CsvBuilder::new(
+            Path::new("result.lr2skin"),
+            Header { skin_type: 7, ..Default::default() },
+            &files,
+        );
+        builder.add_source("atlas.png");
+        for line in [
+            "#SRC_IMAGE,0,0,0,0,10,10,1,1,0,0".to_string(),
+            format!("#DST_IMAGE,0,0,0,0,10,10,0,255,255,255,255,0,0,0,0,0,{timer},0,0,0"),
+        ] {
+            builder.execute(&parse_csv_line(&line).unwrap()).unwrap();
+        }
+        assert_eq!(builder.finish_lr2_result()["update_stage"], expected, "{timer}");
+    }
+}
+
+#[test]
+fn installed_result_skins_detect_update_stage_when_available() {
+    for (skin, expected) in [
+        ("EndlessCirculation/SE-Result/SelfEvolution-Result.lr2skin", false),
+        ("LR2/Result/result.lr2skin", true),
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins").join(skin);
+        if !path.is_file() {
+            continue;
+        }
+        let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+        assert_eq!(loaded.value["lr2Result"]["update_stage"], expected, "{skin}");
+    }
+}
+
+#[test]
 fn wmix_play_selects_best_clear_source_before_result_continues_when_available() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../data/skins/WMIX_HD/play/HDPLAY_AC.lr2skin");
@@ -143,5 +178,7 @@ fn wmix_left_and_right_load_only_their_selected_file_when_available() {
         .unwrap();
         assert!(loaded.dependencies.loaded_files.keys().any(|p| p.ends_with(suffix)));
         assert!(!loaded.dependencies.loaded_files.keys().any(|p| p.ends_with(absent)));
+        // W-MIX draws nothing on timer 152 and leaves the Result in one stage.
+        assert_eq!(loaded.value["lr2Result"]["update_stage"], false);
     }
 }

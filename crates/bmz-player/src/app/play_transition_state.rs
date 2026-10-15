@@ -88,10 +88,23 @@ pub(super) struct DecideTransition {
     pub(super) options: PlayStartOptions,
     pub(super) launch: DecideLaunch,
     pub(super) started_at: Instant,
+    /// The decide exit started (skip, cancel or scene end); `exit` says how it runs.
     pub(super) fadeout_started_at: Option<Instant>,
     pub(super) cancel: bool,
+    pub(super) exit: DecideExit,
     pub(super) snapshot: RenderSnapshot,
     pub(super) title_override: Option<DecideTitleOverride>,
+}
+
+/// How a started decide exit is drawn and how long it waits.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum DecideExit {
+    /// Timer 2 for the skin's `fadeout` (cancel, scene end, and skip on JSON / Lua).
+    #[default]
+    Fadeout,
+    /// LR2 skip (OpenLR2 `ProcI_Decide`): timer 3 for `#CLOSE`, or `#FADEOUT`
+    /// when the skin has no `#CLOSE`.
+    Lr2Close,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

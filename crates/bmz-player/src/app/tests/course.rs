@@ -9,6 +9,7 @@ fn course_decide_title_override_preserves_play_metadata_and_course_context() {
         started_at: Instant::now(),
         fadeout_started_at: None,
         cancel: false,
+        exit: DecideExit::Fadeout,
         snapshot: RenderSnapshot {
             title: "Song Title".to_string(),
             subtitle: "Song Subtitle".to_string(),
@@ -272,8 +273,10 @@ fn course_result_summary_for_skin_uses_aggregate_course_values() {
     assert!((summary.ex_score_rate() - 0.4).abs() < 0.001);
     assert_eq!(summary.max_combo, 170);
     assert_eq!(summary.score_history_id, 22);
-    assert_eq!(summary.best_ex_score, Some(300));
-    assert_eq!(summary.best_clear_type, Some(ClearType::Normal));
+    // `best_*` is the saved record (LR2 option 100..105), `previous_*` the baseline.
+    assert_eq!(summary.best_ex_score, Some(340));
+    assert_eq!(summary.best_clear_type, Some(ClearType::ExHard));
+    assert_eq!(summary.best_bp, Some(4));
     assert_eq!(summary.previous_best_ex_score, Some(300));
     assert_eq!(summary.previous_best_clear_type, Some(ClearType::Normal));
     assert_eq!(summary.previous_best_bp, Some(12));

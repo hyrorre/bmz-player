@@ -38,11 +38,28 @@ impl CsvBuilder<'_> {
             .result_charts
             .iter()
             .find(|c| c["player"] == 0 && c["index"] == 0 && c["score"] == false);
+        // Skins such as W-MIX / ECSE draw nothing on the update timer (152) and
+        // leave the Result with the press after the rank stage.
+        let update_stage = [&self.destinations, &self.images, &self.values]
+            .into_iter()
+            .flatten()
+            .any(|value| uses_timer(value, 152));
         json!({
             "rank_wait": self.header.rank_wait, "update_wait": self.header.update_wait,
             "graph_start": first.map(|c| c["start"].clone()).unwrap_or(json!(0)),
             "graph_end": first.map(|c| c["end"].clone()).unwrap_or(json!(0)),
             "flip": self.result_flip,
+            "update_stage": update_stage,
         })
+    }
+}
+
+fn uses_timer(value: &JsonValue, timer: i64) -> bool {
+    match value {
+        JsonValue::Object(map) => map.iter().any(|(key, value)| {
+            (key == "timer" && value.as_i64() == Some(timer)) || uses_timer(value, timer)
+        }),
+        JsonValue::Array(values) => values.iter().any(|value| uses_timer(value, timer)),
+        _ => false,
     }
 }

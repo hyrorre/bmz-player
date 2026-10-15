@@ -115,13 +115,20 @@ pub(super) enum DecideFadeoutSceneTiming {
     TailStart(Duration),
 }
 
+/// LR2 decide skip waits `#CLOSE`; skins without it use `#FADEOUT`.
+pub(super) fn lr2_decide_close_ms(document: &SkinDocument) -> i32 {
+    if document.close > 0 { document.close } else { document.fadeout }
+}
+
 pub(super) fn decide_fadeout_scene_timing(
     document: Option<&SkinDocument>,
 ) -> DecideFadeoutSceneTiming {
     let Some(document) = document else {
         return DecideFadeoutSceneTiming::DefaultTail;
     };
-    if document_has_fadeout_timer_black(document) {
+    // LR2 keeps the scene clock running on skip / cancel; its timer 2 / 3
+    // objects draw the exit.
+    if document.lr2 || document_has_fadeout_timer_black(document) {
         return DecideFadeoutSceneTiming::DirectOnly;
     }
     decide_scene_fadeout_tail_start(Some(document))

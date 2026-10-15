@@ -31,14 +31,9 @@ pub(super) fn button_index(button: i32, state: &SkinDrawState) -> i32 {
     let optional = |value: Option<usize>| value.map_or(-1, |v| v as i32);
     match button {
         1..=8 => i32::from(i32::from(state.select_option_panel) == button),
-        40 => optional(lr2_gauge_index(if state.select_screen {
-            state.select_gauge_index
-        } else {
-            state.gauge_type.max(0) as usize
-        })),
-        41 => {
-            state.opponent_gauge_type.map_or(-1, |v| optional(lr2_gauge_index(v.max(0) as usize)))
-        }
+        40 if state.select_screen => optional(lr2_gauge_index(state.select_gauge_index)),
+        40 => lr2_played_gauge_cell(state.gauge_type),
+        41 => state.opponent_gauge_type.map_or(-1, lr2_played_gauge_cell),
         42 => optional(lr2_arrange_index(state.select_extended_arrange_index)),
         43 => optional(lr2_arrange_index(state.select_extended_arrange_2p_index)),
         // ASSIST: OFF / AUTO SCRATCH, one BMZ setting for both sides.
@@ -89,6 +84,18 @@ pub(super) fn button_index(button: i32, state: &SkinDrawState) -> i32 {
         13..=19 | 57 | 58 => 0,
         _ => -1,
     }
+}
+
+/// Button 40 / 41 cell of the gauge played on Play / Result. LR2 has only GROOVE /
+/// HARD / HAZARD / EASY, so A-EASY is shown as EASY and EX-HARD and the class
+/// gauges as HARD instead of an empty cell. Select keeps unknown values empty.
+fn lr2_played_gauge_cell(gauge_type: i32) -> i32 {
+    let folded = match gauge_type {
+        0 => 1,
+        4 | 6..=8 => 3,
+        other => other.max(0) as usize,
+    };
+    lr2_gauge_index(folded).map_or(-1, |cell| cell as i32)
 }
 
 pub(super) fn chart_items(

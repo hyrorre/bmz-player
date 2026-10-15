@@ -62,7 +62,7 @@ impl crate::SkinDocument {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct SkinLr2ResultDef {
     pub rank_wait: i32,
@@ -70,6 +70,30 @@ pub struct SkinLr2ResultDef {
     pub graph_start: i32,
     pub graph_end: i32,
     pub flip: bool,
+    /// The skin draws on the update timer (152). Without it the press after the
+    /// rank stage leaves the Result, as on LR2 W-MIX / ECSE.
+    pub update_stage: bool,
+}
+
+impl Default for SkinLr2ResultDef {
+    fn default() -> Self {
+        Self {
+            rank_wait: 0,
+            update_wait: 0,
+            graph_start: 0,
+            graph_end: 0,
+            flip: false,
+            update_stage: true,
+        }
+    }
+}
+
+impl SkinLr2ResultDef {
+    /// beatoraja starts the update timer with the scene when the rank time is 0,
+    /// so its single press after input start leaves the Result.
+    fn update_starts_with_scene(&self) -> bool {
+        self.update_stage && self.rank_wait <= 0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -97,8 +121,12 @@ impl Lr2ResultProgress {
         [
             elapsed_since(spec.graph_start),
             elapsed_since(self.graph_end.unwrap_or(spec.graph_end)),
-            self.update.and_then(elapsed_since),
+            self.update_start(spec).and_then(elapsed_since),
         ]
+    }
+
+    fn update_start(self, spec: &SkinLr2ResultDef) -> Option<i32> {
+        self.update.or_else(|| spec.update_starts_with_scene().then_some(0))
     }
 
     /// Returns true only when the next input may leave the Result scene.
@@ -116,10 +144,10 @@ impl Lr2ResultProgress {
         if elapsed.saturating_sub(end) < spec.rank_wait.max(0) {
             return false;
         }
-        if !score_save_enabled {
+        if !score_save_enabled || !spec.update_stage {
             return true;
         }
-        if let Some(update) = self.update {
+        if let Some(update) = self.update_start(spec) {
             elapsed.saturating_sub(update) >= spec.update_wait.max(0)
         } else {
             self.update = Some(elapsed);
@@ -154,6 +182,38 @@ mod tests {
         assert!(progress.press(&spec, 2800, true));
         assert!(Lr2ResultProgress::default().press(&spec, 3600, false));
         assert_eq!(Lr2ResultProgress::default().timers(&spec, 2000), [Some(1500), Some(0), None]);
+    }
+
+    #[test]
+    fn result_without_update_timer_or_rank_time_leaves_in_one_stage() {
+        // W-MIX / ECSE: no timer 152 object, so the press after the rank stage exits.
+        let no_update = SkinLr2ResultDef {
+            graph_end: 2000,
+            rank_wait: 500,
+            update_wait: 500,
+            update_stage: false,
+            ..Default::default()
+        };
+        let mut progress = Lr2ResultProgress::default();
+        assert!(!progress.press(&no_update, 2499, true));
+        assert!(progress.press(&no_update, 2500, true));
+        assert_eq!(progress.timers(&no_update, 2600)[2], None);
+
+        // beatoraja: rank time 0 starts the update timer with the scene.
+        let rank_zero = SkinLr2ResultDef {
+            graph_end: 2000,
+            rank_wait: 0,
+            update_wait: 500,
+            ..Default::default()
+        };
+        let mut progress = Lr2ResultProgress::default();
+        assert_eq!(progress.timers(&rank_zero, 100)[2], Some(100));
+        assert!(progress.press(&rank_zero, 2000, true));
+        // A press during the graph still skips the graph first.
+        let mut progress = Lr2ResultProgress::default();
+        assert!(!progress.press(&rank_zero, 300, true));
+        assert!(!progress.press(&rank_zero, 400, true));
+        assert!(progress.press(&rank_zero, 500, true));
     }
 
     #[test]

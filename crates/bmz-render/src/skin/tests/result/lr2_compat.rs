@@ -64,6 +64,53 @@ fn lr2_buttons_select_flat_cells_while_json_buttons_keep_row_selection() {
 }
 
 #[test]
+fn lr2_played_gauge_button_folds_gauges_missing_from_lr2() {
+    // LR2 cells: GROOVE 0 / HARD 1 / HAZARD 2 / EASY 3.
+    for (gauge_type, cell) in
+        [(0, 3), (1, 3), (2, 0), (3, 1), (4, 1), (5, 2), (6, 1), (7, 1), (8, 1)]
+    {
+        let state = SkinDrawState {
+            gauge_type,
+            opponent_gauge_type: Some(gauge_type),
+            ..Default::default()
+        };
+        assert_eq!(skin_state_event_index(LR2_BUTTON_BASE + 40, &state), cell, "{gauge_type}");
+        assert_eq!(skin_state_event_index(LR2_BUTTON_BASE + 41, &state), cell, "{gauge_type}");
+    }
+    // Select keeps settings LR2 cannot show (EX-HARD) as an empty cell.
+    let select = SkinDrawState { select_screen: true, select_gauge_index: 4, ..Default::default() };
+    assert_eq!(skin_state_event_index(LR2_BUTTON_BASE + 40, &select), -1);
+}
+
+#[test]
+fn first_play_update_options_compare_with_empty_score_on_result_only() {
+    let mut state = SkinDrawState {
+        ex_score: 10,
+        max_combo: 5,
+        total_notes: 10,
+        result_bp: Some(3),
+        result_failed: Some(false),
+        ..Default::default()
+    };
+    for op in [330, 331, 332, 335] {
+        assert!(test_skin_ops(&[op], &[], &state), "{op}");
+    }
+    for op in [1330, 1331, 1332] {
+        assert!(!test_skin_ops(&[op], &[], &state), "{op}");
+    }
+    state.ex_score = 0;
+    state.max_combo = 0;
+    assert!(test_skin_ops(&[1330], &[], &state));
+    assert!(test_skin_ops(&[1331], &[], &state));
+    // Outside Result there is no score to compare with.
+    state.result_failed = None;
+    state.ex_score = 10;
+    for op in [330, 331, 332, 335] {
+        assert!(!test_skin_ops(&[op], &[], &state), "{op}");
+    }
+}
+
+#[test]
 fn lr2_next_rank_uses_integer_floor_boundary_and_max_zero() {
     for (score, expected) in [(4, 0), (8, 0), (9, -1), (10, 0)] {
         assert_eq!(

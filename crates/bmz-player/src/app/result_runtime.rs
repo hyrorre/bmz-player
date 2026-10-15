@@ -35,9 +35,13 @@ pub(super) fn course_result_summary_for_skin(course: &CourseResultSummary) -> Re
                 slow_empty_poor: acc.slow_empty_poor + summary.fast_slow_counts.slow_empty_poor,
             }
         });
-    let skin_best_score = course.previous_best_score.as_ref();
-    let skin_best_clear_type =
-        skin_best_score.and_then(|best| ClearType::from_label(&best.clear_type));
+    // Like a chart Result, `best_*` is the record after this attempt was saved
+    // (LR2 options 100..105) and `previous_*` the MYBEST / diff baseline before it.
+    let previous_best_score = course.previous_best_score.as_ref();
+    let previous_best_clear_type =
+        previous_best_score.and_then(|best| ClearType::from_label(&best.clear_type));
+    let best_score = course.best_score.as_ref().or(previous_best_score);
+    let best_clear_type = best_score.and_then(|best| ClearType::from_label(&best.clear_type));
     // A course target is the sum of the per-stage pacemaker targets.  Keeping
     // this in the aggregate ResultSummary makes the standard Result value refs
     // (121/151, 122/123, 157/158 and signed diff 153) work for course skins too.
@@ -97,14 +101,14 @@ pub(super) fn course_result_summary_for_skin(course: &CourseResultSummary) -> Re
         replay_slots: course.replay_slots,
         saved_replay_slots: course.saved_replay_slots,
         score_history_id: course.best_score.as_ref().map(|best| best.course_score_id).unwrap_or(0),
-        best_ex_score: skin_best_score.map(|best| best.ex_score),
-        best_clear_type: skin_best_clear_type,
-        best_max_combo: skin_best_score.map(|best| best.max_combo),
-        best_bp: skin_best_score.map(|best| best.bp),
-        previous_best_ex_score: skin_best_score.map(|best| best.ex_score),
-        previous_best_clear_type: skin_best_clear_type,
-        previous_best_max_combo: skin_best_score.map(|best| best.max_combo),
-        previous_best_bp: skin_best_score.map(|best| best.bp),
+        best_ex_score: best_score.map(|best| best.ex_score),
+        best_clear_type,
+        best_max_combo: best_score.map(|best| best.max_combo),
+        best_bp: best_score.map(|best| best.bp),
+        previous_best_ex_score: previous_best_score.map(|best| best.ex_score),
+        previous_best_clear_type,
+        previous_best_max_combo: previous_best_score.map(|best| best.max_combo),
+        previous_best_bp: previous_best_score.map(|best| best.bp),
         target_ex_score,
         target_max_combo: None,
         target_bp: None,

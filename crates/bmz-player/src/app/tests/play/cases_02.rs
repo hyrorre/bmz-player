@@ -120,6 +120,21 @@ fn decide_scene_fadeout_tail_start_ignores_scene_tail_when_timer_fadeout_exists(
 }
 
 #[test]
+fn lr2_decide_keeps_scene_clock_and_skips_for_close_or_fadeout() {
+    let mut document: SkinDocument = serde_json::from_str(
+        r#"{ "type": 6, "lr2": true, "w": 640, "h": 480, "scene": 3000, "fadeout": 550 }"#,
+    )
+    .unwrap();
+    // No scene-tail jump: LR2 draws the exit with its timer 2 / 3 objects.
+    assert_eq!(decide_fadeout_scene_timing(Some(&document)), DecideFadeoutSceneTiming::DirectOnly);
+    assert_eq!(lr2_decide_close_ms(&document), 550);
+    document.close = 200;
+    assert_eq!(lr2_decide_close_ms(&document), 200);
+    document.lr2 = false;
+    assert_eq!(decide_fadeout_scene_timing(Some(&document)), DecideFadeoutSceneTiming::DefaultTail);
+}
+
+#[test]
 fn bga_option_cycles_on_auto_off() {
     assert!(matches!(cycle_bga_option(BgaModeConfig::On), BgaModeConfig::Auto));
     assert!(matches!(cycle_bga_option(BgaModeConfig::Auto), BgaModeConfig::Off));

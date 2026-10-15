@@ -61,6 +61,8 @@ pub(super) fn plan_decide(
             lane_cover: snapshot.lane_cover,
             hidden_cover: snapshot.hidden_cover,
             fadeout_ms: snapshot.fadeout_elapsed_ms,
+            // Timer 3: LR2 decide close after a skip.
+            failed_ms: snapshot.failed_elapsed_ms,
             gauge_increase_ms: snapshot.gauge_increase_elapsed_ms,
             gauge_max_ms: snapshot.gauge_max_elapsed_ms,
             score_save_enabled: Some(snapshot.score_save_enabled),

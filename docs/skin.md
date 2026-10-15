@@ -351,7 +351,17 @@ E1/E2のhold変化で物理操作へ戻し、modal・フォーカス喪失・画
 `FLIPRESULT` / `DISABLEFLIP` に従って自分側のグラフ・number ref 100..116 / 120..136・ランク条件300..318を切り替える。
 timer 150はグラフ開始、151は描画完了またはスキップ、152は更新演出開始。
 `STARTINPUT` の待ち時間に従い、グラフのスキップ→ランク表示→更新演出→退出を進める。
-保存対象外のプレイは更新演出を挟まない。演出段階とは独立して既存の保存処理を実行する。
+保存対象外のプレイと、timer 152を使う部品が無いスキン（W-MIX、ECSE等）は更新演出を挟まず、
+ランク表示後の1回の入力で退出する。`STARTINPUT` のランク表示時間が0なら、beatorajaと同じく
+timer 152を画面開始と同時に始め、更新演出を待つ入力を挟まない。演出段階とは独立して既存の保存処理を実行する。
+Play / Resultのbutton 40 / 41（ゲージ種別）は、LR2に無いゲージをA-EASY→EASY、EX-HARD・段位ゲージ→HARDの画像で表示する。
+Selectの設定表示では従来どおり表示しない。
+Course Resultのoption 100..105は、通常Resultと同じく今回の結果を保存した後のコースベストを使う。
+
+LR2のDecideはOpenLR2の`ProcI_Decide`に合わせ、スキップでtimer 3を開始し、`#CLOSE`の時間
+（`#CLOSE`が無いスキンは`#FADEOUT`の時間）が過ぎたらPlayへ進む。timer 2は開始しない。
+キャンセルと`#SCENETIME`の経過は従来どおりtimer 2と`#FADEOUT`を使う。LR2のDecideでは
+JSON / Lua向けのシーン末尾への時計の補正を行わず、timer 2 / 3の部品で退出演出を描く。
 clear / failed・難易度150..155・確定ランク300..308のロード時分岐と解像度指定はdecode cacheの依存関係に含める。
 難易度のロード時条件は終了した譜面のmetadataを使い、描画時と同じ変換で評価する。
 数値1..5とBEGINNER / NORMAL / HYPER / ANOTHER / INSANEを151..155へ対応付け、
