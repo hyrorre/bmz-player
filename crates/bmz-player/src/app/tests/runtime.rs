@@ -646,20 +646,6 @@ fn left_overlay_expires_toast() {
 }
 
 #[test]
-fn chart_text_fallback_skips_skin_text_and_keeps_existing_overlay_text() {
-    let mut left = String::new();
-    append_chart_text_fallback(&mut left, "Hello", false);
-    assert_eq!(left, "");
-    append_chart_text_fallback(&mut left, "", true);
-    assert_eq!(left, "");
-    append_chart_text_fallback(&mut left, "Hello", true);
-    assert_eq!(left, "Hello");
-    let mut left = "SCAN 1 / 2".to_string();
-    append_chart_text_fallback(&mut left, "Hello", true);
-    assert_eq!(left, "SCAN 1 / 2 | Hello");
-}
-
-#[test]
 fn screenshot_dir_defaults_when_empty() {
     let data_dir = Path::new("user-data");
 

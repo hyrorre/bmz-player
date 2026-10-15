@@ -295,3 +295,63 @@ fn documented_chart_text_skin_sample_renders() {
     assert_eq!(scene_texts(&mut renderer, scene("MISS!!", Some(50))), ["MISS!!"]);
     assert!(scene_texts(&mut renderer, scene("", None)).is_empty());
 }
+
+fn overlay_scene(chart_text: &str) -> AppSceneSnapshot {
+    AppSceneSnapshot::Play(RenderSnapshot {
+        chart_text: chart_text.into(),
+        chart_text_overlay: true,
+        ready_elapsed_time: Some(TimeUs(0)),
+        ..Default::default()
+    })
+}
+
+fn write_lua(name: &str, body: &str) -> (crate::test_dir::TestDir, PathBuf) {
+    let root = unique_test_dir(name);
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("play.lua");
+    fs::write(&path, body).unwrap();
+    (root, path)
+}
+
+#[test]
+fn lua_functions_that_read_chart_text_suppress_the_overlay_from_the_first_frame() {
+    // A concatenating, option-gated function stays a runtime callback in both modes,
+    // so only the runtime read can tell that the skin shows the chart text.
+    let (_root, path) = write_lua(
+        "chart-text-lua-overlay",
+        r#"
+            local s = require('main_state')
+            return {type=0,w=320,h=180,
+                text={{id='m',size=12,value=function() return 'M:' .. s.text(20100) end}},
+                destination={{id='m',draw=function() return s.option(20101) end,
+                    dst={{x=0,y=0,w=300,h=20}}}}
+            }
+        "#,
+    );
+    for mode in [bmz_skin::LuaSkinRuntimeMode::Auto, bmz_skin::LuaSkinRuntimeMode::Compat] {
+        let mut renderer = install(&path, mode);
+        assert!(scene_texts(&mut renderer, overlay_scene("")).is_empty(), "{mode:?}");
+        // The callback runs before the overlay is decided in the same frame.
+        assert_eq!(scene_texts(&mut renderer, overlay_scene("Hello")), ["M:Hello"], "{mode:?}");
+        assert_eq!(scene_texts(&mut renderer, overlay_scene("")), Vec::<String>::new());
+        assert_eq!(scene_texts(&mut renderer, overlay_scene("Next")), ["M:Next"], "{mode:?}");
+    }
+}
+
+#[test]
+fn lua_skins_without_chart_text_use_the_overlay() {
+    let (_root, path) = write_lua(
+        "chart-text-lua-no-ref",
+        r#"
+            local s = require('main_state')
+            return {type=0,w=320,h=180,
+                text={{id='t',size=12,value=function() return 'T:' .. s.text(10) end}},
+                destination={{id='t',dst={{x=0,y=0,w=300,h=20}}}}
+            }
+        "#,
+    );
+    for mode in [bmz_skin::LuaSkinRuntimeMode::Auto, bmz_skin::LuaSkinRuntimeMode::Compat] {
+        let mut renderer = install(&path, mode);
+        assert_eq!(scene_texts(&mut renderer, overlay_scene("Hello")), ["T:", "Hello"], "{mode:?}");
+    }
+}

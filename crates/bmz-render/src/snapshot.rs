@@ -504,6 +504,9 @@ pub struct RenderSnapshot {
     /// ミス表示開始からの経過 ms (BMZ timer 20105)。表示中だけ Some (option 20104)。
     /// 表示中は `chart_text` がミス表示文字列になる。
     pub chart_miss_text_elapsed_ms: Option<i32>,
+    /// true なら、プレイスキンが譜面テキストを表示しないとき `chart_text` を左上の
+    /// 汎用メッセージ欄へ出す。判定は同じフレームのスキン評価後に行う。
+    pub chart_text_overlay: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

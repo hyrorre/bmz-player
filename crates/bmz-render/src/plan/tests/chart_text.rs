@@ -185,3 +185,65 @@ fn miss_text_refs_option_and_timer_are_exposed() {
         ["Only"]
     );
 }
+
+fn overlay_texts(skin: &SkinContext, left_text: &str, chart_text: &str) -> Vec<String> {
+    plan_texts(
+        skin,
+        RenderSnapshot {
+            chart_text: chart_text.into(),
+            chart_text_overlay: true,
+            overlay: crate::snapshot::OverlaySnapshot {
+                left_text: left_text.to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+}
+
+#[derive(Debug)]
+struct ReadFlagRuntime(bool);
+
+impl crate::skin::SkinLuaDrawRuntime for ReadFlagRuntime {
+    fn chart_text_read(&self) -> bool {
+        self.0
+    }
+
+    fn evaluate_draw(
+        &self,
+        _callback_id: usize,
+        _state: &crate::skin::SkinDrawState,
+        _enabled_options: &[i32],
+        _text_values: &std::collections::BTreeMap<i32, String>,
+    ) -> bool {
+        true
+    }
+}
+
+#[test]
+fn chart_text_overlay_is_used_only_when_the_skin_does_not_show_chart_text() {
+    // The built-in skin draws its own HUD text first; the overlay is the last command.
+    let fallback = SkinContext::from_manifest(SkinManifest::default());
+    let last = |left: &str, chart: &str| overlay_texts(&fallback, left, chart).pop();
+    assert_eq!(last("", "Hello").as_deref(), Some("Hello"));
+    assert_eq!(last("SCAN 1 / 2", "Hello").as_deref(), Some("SCAN 1 / 2 | Hello"));
+    assert_eq!(last("SCAN 1 / 2", "").as_deref(), Some("SCAN 1 / 2"));
+    // Without the app's request the plan never adds chart text by itself.
+    assert!(
+        !plan_texts(&fallback, RenderSnapshot { chart_text: "Hello".into(), ..Default::default() })
+            .contains(&"Hello".to_string())
+    );
+
+    let empty: SkinDocument = serde_json::from_str(r#"{ "type": 0 }"#).unwrap();
+    let mut lua_skin = SkinContext::from_manifest_and_document(SkinManifest::default(), empty, []);
+    assert_eq!(overlay_texts(&lua_skin, "", "Hello"), ["Hello"]);
+    // A Lua callback that read 20100 / 20103 makes the skin responsible for the text.
+    lua_skin.set_lua_draw_runtime(Some(Arc::new(ReadFlagRuntime(false))));
+    assert_eq!(overlay_texts(&lua_skin, "", "Hello"), ["Hello"]);
+    lua_skin.set_lua_draw_runtime(Some(Arc::new(ReadFlagRuntime(true))));
+    assert!(overlay_texts(&lua_skin, "", "Hello").is_empty());
+
+    // Static ref / value references are enough without running anything.
+    assert_eq!(overlay_texts(&chart_text_skin(), "", "Hello")[..3], ["Hello"; 3]);
+    assert_eq!(overlay_texts(&chart_text_skin(), "", "Hello").len(), 4);
+}

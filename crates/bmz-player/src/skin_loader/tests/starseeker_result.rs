@@ -68,6 +68,7 @@ fn starseeker_result_rank_difference_uses_shared_lua_and_runtime_values_when_ava
                         state: &state,
                         enabled_options: &[],
                         text_values: &text_values,
+                        chart_text_read: &AtomicBool::new(false),
                     };
                     runtime.begin_frame();
                     assert_eq!(

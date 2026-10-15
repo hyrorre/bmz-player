@@ -432,16 +432,9 @@ impl WinitApp {
             AppSceneSnapshot::Select(snapshot) => snapshot.overlay = overlay,
             AppSceneSnapshot::Decide(snapshot) => snapshot.overlay = overlay,
             AppSceneSnapshot::Play(snapshot) => {
-                let fallback = !self
-                    .renderer
-                    .play_skin_document()
-                    .is_some_and(|document| document.references_chart_text());
                 snapshot.overlay = overlay;
-                append_chart_text_fallback(
-                    &mut snapshot.overlay.left_text,
-                    &snapshot.chart_text,
-                    fallback,
-                );
+                // The renderer adds the chart text when the play skin does not show it.
+                snapshot.chart_text_overlay = true;
             }
             AppSceneSnapshot::Result(snapshot) => snapshot.overlay = overlay,
         }

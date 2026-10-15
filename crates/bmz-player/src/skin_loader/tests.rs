@@ -1,6 +1,7 @@
 use super::*;
 use std::collections::BTreeSet;
 use std::hint::black_box;
+use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
 use bmz_core::time::TimeUs;

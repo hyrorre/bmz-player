@@ -559,6 +559,7 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         chart_text_event_elapsed_ms: None,
         chart_miss_text: Arc::from(""),
         chart_miss_text_elapsed_ms: None,
+        chart_text_overlay: false,
     };
     apply_chart_text(
         &mut snapshot,

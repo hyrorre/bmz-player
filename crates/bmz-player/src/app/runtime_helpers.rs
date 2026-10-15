@@ -51,18 +51,6 @@ pub(super) fn resolve_left_overlay_text(
     fallback.to_string()
 }
 
-/// Adds BMS `#TEXT` to the top-left overlay. `enabled` is false when the play skin
-/// shows chart text itself.
-pub(super) fn append_chart_text_fallback(left_text: &mut String, chart_text: &str, enabled: bool) {
-    if !enabled || chart_text.is_empty() {
-        return;
-    }
-    if !left_text.is_empty() {
-        left_text.push_str(" | ");
-    }
-    left_text.push_str(chart_text);
-}
-
 pub(super) fn pack_scan_progress(progress: ScanProgress) -> u64 {
     (u64::from(progress.done) << 32) | u64::from(progress.total)
 }

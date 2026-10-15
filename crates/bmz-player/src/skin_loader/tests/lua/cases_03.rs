@@ -313,8 +313,12 @@ fn milliondollar_result_rank_diff_uses_load_time_result_scores_when_available() 
     let mut lua_runtime = decoded.lua_runtime.expect("MILLIONDOLLAR value callback runtime");
     let state = SkinDrawState::default();
     let text_values = BTreeMap::new();
-    let provider =
-        RenderLuaMainState { state: &state, enabled_options: &[], text_values: &text_values };
+    let provider = RenderLuaMainState {
+        state: &state,
+        enabled_options: &[],
+        text_values: &text_values,
+        chart_text_read: &AtomicBool::new(false),
+    };
     lua_runtime.begin_frame();
     assert_eq!(lua_runtime.evaluate_number(callback_id, &provider), Some(121.0));
 }
@@ -387,8 +391,12 @@ fn starseeker_result_rank_diff_uses_library_scope_and_runtime_values_when_availa
             .expect("valid Lua callback ID");
         let mut lua_runtime = decoded.lua_runtime.expect("Starseeker value callback runtime");
         let text_values = BTreeMap::new();
-        let provider =
-            RenderLuaMainState { state: &state, enabled_options: &[], text_values: &text_values };
+        let provider = RenderLuaMainState {
+            state: &state,
+            enabled_options: &[],
+            text_values: &text_values,
+            chart_text_read: &AtomicBool::new(false),
+        };
         lua_runtime.begin_frame();
         assert_eq!(
             lua_runtime.evaluate_number(callback_id, &provider),
@@ -401,6 +409,7 @@ fn starseeker_result_rank_diff_uses_library_scope_and_runtime_values_when_availa
             state: &max_state,
             enabled_options: &[],
             text_values: &text_values,
+            chart_text_read: &AtomicBool::new(false),
         };
         lua_runtime.begin_frame();
         assert_eq!(lua_runtime.evaluate_number(callback_id, &max_provider), Some(0.0));

@@ -78,7 +78,12 @@ fn ir_ranking_missing_scores_match_auto_and_compat_through_updates() {
 fn ir_ranking_missing_values_remain_sentinels_in_lua_api() {
     let mut state = SkinDrawState::default();
     let text = BTreeMap::new();
-    let provider = RenderLuaMainState { state: &state, enabled_options: &[], text_values: &text };
+    let provider = RenderLuaMainState {
+        state: &state,
+        enabled_options: &[],
+        text_values: &text,
+        chart_text_read: &AtomicBool::new(false),
+    };
     for reference in 380..=399 {
         assert_eq!(provider.number(reference), i64::from(i32::MIN), "ref={reference}");
     }
@@ -86,7 +91,12 @@ fn ir_ranking_missing_values_remain_sentinels_in_lua_api() {
     assert_eq!(provider.number(-999), 0);
     state.ir_ranking.entries[0].ex_score = Some(0);
     state.ir_ranking.entries[0].rank = Some(1);
-    let provider = RenderLuaMainState { state: &state, enabled_options: &[], text_values: &text };
+    let provider = RenderLuaMainState {
+        state: &state,
+        enabled_options: &[],
+        text_values: &text,
+        chart_text_read: &AtomicBool::new(false),
+    };
     assert_eq!(provider.number(380), 0);
     assert_eq!(provider.number(390), 1);
     assert_eq!(provider.number(381), i64::from(i32::MIN));
