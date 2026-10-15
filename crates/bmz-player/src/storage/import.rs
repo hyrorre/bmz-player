@@ -83,7 +83,6 @@ pub fn import_chart_file(
 #[cfg(test)]
 mod tests {
     use std::io::Write;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     use rusqlite::Connection;
 
@@ -98,7 +97,7 @@ mod tests {
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
         let mut db = LibraryDatabase::from_connection(conn);
-        let path = write_temp_bms(
+        let (dir, path) = write_temp_bms(
             "\
 #TITLE Storage Import
 #BPM 120
@@ -107,8 +106,7 @@ mod tests {
 #00011:0199
 ",
         );
-        let key_path = path.parent().unwrap().join("key.wav");
-        write_file(&key_path, b"");
+        write_file(&dir.path().join("key.wav"), b"");
 
         let imported = import_chart_file(&mut db, &path, None, None, 1_700_000_010).unwrap();
 
@@ -121,9 +119,6 @@ mod tests {
             db.conn().query_row("SELECT title FROM charts", [], |row| row.get(0)).unwrap();
 
         assert_eq!(title, "Storage Import");
-
-        std::fs::remove_file(&path).unwrap();
-        std::fs::remove_file(key_path).unwrap();
     }
 
     #[test]
@@ -132,7 +127,7 @@ mod tests {
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
         let mut db = LibraryDatabase::from_connection(conn);
-        let path = write_temp_bms(
+        let (_dir, path) = write_temp_bms(
             "\
 #RANDOM 2
 #IF 1
@@ -151,18 +146,15 @@ mod tests {
 
         assert_eq!(imported.chart.metadata.title, expected.metadata.title);
         assert_eq!(imported.chart.total_notes, expected.total_notes);
-
-        std::fs::remove_file(path).unwrap();
     }
 
-    fn write_temp_bms(text: &str) -> std::path::PathBuf {
-        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let path = std::env::temp_dir()
-            .join(format!("bmz-player-import-{}-{stamp}.bms", std::process::id()));
-        let mut file = std::fs::File::create(&path).unwrap();
-        file.write_all(text.as_bytes()).unwrap();
-        file.sync_all().unwrap();
-        path
+    /// The chart lives in its own directory: assets resolve beside it, and fixed asset
+    /// names in the shared temp root would collide with concurrent test runs.
+    fn write_temp_bms(text: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::Builder::new().prefix("bmz-player-import-").tempdir().unwrap();
+        let path = dir.path().join("song.bms");
+        write_file(&path, text.as_bytes());
+        (dir, path)
     }
 
     fn write_file(path: &Path, bytes: &[u8]) {

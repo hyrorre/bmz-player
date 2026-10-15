@@ -707,6 +707,7 @@ dependencies = [
  "smithay-client-toolkit 0.20.0",
  "sys-locale",
  "tar",
+ "tempfile",
  "tokio",
  "tokio-tungstenite",
  "toml 0.8.23",
