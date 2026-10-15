@@ -102,15 +102,10 @@ macro_rules! skin_document_render_select_graph_methods {
             state: &mut SkinDrawState,
             sources: &HashMap<String, SkinDocumentTexture>,
         ) -> Vec<SkinRenderItem> {
-            let level_override = if let Some(level) = &row.level_display_override {
-                // A numeric sprite cannot represent labels such as "???" or "地力A".
-                // Keep those labels in table text instead of inventing a number;
-                // "11+" / "11-" show their integer part.
-                let Some(level) = table_level_display_number(level) else { return Vec::new() };
-                Some(level)
-            } else {
-                None
-            };
+            // "11+" / "12.5" show their leading integer; labels such as "???" or
+            // "地力A" fall back to the chart's own level, as on LR2.
+            let level_override =
+                row.level_display_override.as_deref().and_then(table_level_display_number);
             let previous =
                 std::mem::replace(&mut state.select_songlist_level_override, level_override);
             let level_index = select_row_difficulty_code(row).clamp(0, i64::MAX) as usize;

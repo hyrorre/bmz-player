@@ -63,24 +63,21 @@ pub(super) fn full_label(primary: &str, secondary: &str) -> String {
     }
 }
 
-/// Numeric value of a difficulty table level label for number sprites.
-/// A trailing modifier such as `11+` / `11-` keeps the integer part; labels that are
-/// not an integer (`???`, `地力A`, `12.5`) have no number.
+/// Numeric value of a difficulty table level label for number sprites: the leading
+/// integer, as LR2 shows `11+` / `12.5` as 11 / 12. Labels that do not start with a
+/// number (`???`, `地力A`) have none and the chart's own level is shown instead.
 pub(super) fn table_level_display_number(label: &str) -> Option<i64> {
     let label = label.trim();
     let unsigned = label.strip_prefix('-').unwrap_or(label);
     let digits = unsigned.len() - unsigned.trim_start_matches(|ch: char| ch.is_ascii_digit()).len();
-    let (number, modifier) = unsigned.split_at(digits);
-    if number.is_empty() || modifier.chars().any(char::is_alphanumeric) {
-        return None;
-    }
-    let value = number.parse::<i64>().ok()?;
+    let value = unsigned[..digits].parse::<i64>().ok()?;
     Some(if unsigned.len() < label.len() { -value } else { value })
 }
 
 pub(super) fn select_row_level_number(row: &SelectRowSnapshot) -> i64 {
-    if let Some(level) = &row.level_display_override {
-        return table_level_display_number(level).unwrap_or(0);
+    if let Some(level) = row.level_display_override.as_deref().and_then(table_level_display_number)
+    {
+        return level;
     }
     row.play_level.chars().filter(|ch| ch.is_ascii_digit()).collect::<String>().parse().unwrap_or(0)
 }

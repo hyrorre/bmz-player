@@ -938,8 +938,9 @@ fn table_level_override_applies_to_songlist_numbers_without_leaking_to_other_val
     // Declared level objects use each row's override even with an explicit BPM ref.
     // The same numeric object outside songlist.level still shows selected BPM.
     assert_eq!(digits(&snapshot, &document), [2, 7, 6]);
+    // A label without a leading number keeps the object's own value.
     snapshot.rows[0].level_display_override = Some("???".into());
-    assert_eq!(digits(&snapshot, &document), [7, 6]);
+    assert_eq!(digits(&snapshot, &document), [6, 7, 6]);
     snapshot.rows[0].level_display_override = None;
     snapshot.rows[1].level_display_override = None;
     assert_eq!(digits(&snapshot, &document), [6, 8, 6]);
@@ -948,13 +949,13 @@ fn table_level_override_applies_to_songlist_numbers_without_leaking_to_other_val
     snapshot.rows[0].level_display_override = Some("2".into());
     snapshot.rows[1].level_display_override = Some("7".into());
     assert_eq!(digits(&snapshot, &document), [2, 7, 2]);
-    // Table levels with a trailing modifier show their integer part in the bar
-    // and in ref 96; non-integer labels hide the bar level and keep ref 96 at 0.
+    // Table levels starting with a number show their leading integer in the bar
+    // and in ref 96; other labels fall back to the chart's own level (LR2).
     snapshot.rows[0].level_display_override = Some("3+".into());
-    snapshot.rows[1].level_display_override = Some("4-".into());
+    snapshot.rows[1].level_display_override = Some("4.5".into());
     assert_eq!(digits(&snapshot, &document), [3, 4, 3]);
-    snapshot.rows[0].level_display_override = Some("2.5".into());
-    assert_eq!(digits(&snapshot, &document), [4, 0]);
+    snapshot.rows[0].level_display_override = Some("???".into());
+    assert_eq!(digits(&snapshot, &document), [5, 4, 5]);
 }
 
 #[test]
@@ -963,12 +964,13 @@ fn table_level_display_number_keeps_integer_part_of_modified_levels() {
         ("11+", Some(11)),
         ("11-", Some(11)),
         (" 12++ ", Some(12)),
+        ("12.5", Some(12)),
+        ("12a", Some(12)),
         ("-1", Some(-1)),
         ("0", Some(0)),
-        ("12.5", None),
         ("???", None),
         ("地力A", None),
-        ("12a", None),
+        ("★12", None),
         ("", None),
         ("-", None),
     ] {

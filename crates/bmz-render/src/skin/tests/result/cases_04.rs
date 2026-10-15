@@ -567,7 +567,8 @@ fn skin_state_number_maps_result_value_refs() {
     assert_eq!(lua_main_state_number(176, &first_play_result_state), i64::from(i32::MIN));
     assert_eq!(lua_main_state_number(178, &first_play_result_state), i64::from(i32::MIN));
     assert!(eval_skin_draw_condition("number(176)<0", &first_play_result_state));
-    assert!(!test_skin_op(332, &[], &first_play_result_state));
+    // beatoraja compares a first play with an empty ScoreData (minbp MAX).
+    assert!(test_skin_op(332, &[], &first_play_result_state));
     assert!(!test_skin_op(1332, &[], &first_play_result_state));
     assert_eq!(skin_state_number(183, &first_play_result_state), Some(0));
     assert_eq!(skin_state_number(184, &first_play_result_state), Some(0));
