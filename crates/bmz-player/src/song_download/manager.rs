@@ -81,8 +81,20 @@ impl DownloadControl {
 
 #[derive(Default)]
 pub struct DownloadServices {
+    #[cfg(test)]
+    pub(super) timeout: Option<Duration>,
     pub(super) extraction: Mutex<()>,
     pub(super) archives: Mutex<std::collections::HashMap<String, Arc<Mutex<ArchiveResult>>>>,
+}
+
+impl DownloadServices {
+    pub(super) fn timeout(&self) -> Duration {
+        #[cfg(test)]
+        if let Some(timeout) = self.timeout {
+            return timeout;
+        }
+        Duration::from_secs(30 * 60)
+    }
 }
 
 pub(super) type ArchiveResult = Option<std::result::Result<ChartDownloadResult, String>>;

@@ -22,6 +22,18 @@ impl HttpFixture {
         handler: impl Fn(&str) -> (u16, String, Vec<u8>) + Send + Sync + 'static,
         delay: Duration,
     ) -> Self {
+        Self::raw(
+            move |path| {
+                let (status, content_type, body) = handler(path);
+                let mut response = format!("HTTP/1.1 {status} Fixture\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).into_bytes();
+                response.extend_from_slice(&body);
+                response
+            },
+            delay,
+        )
+    }
+
+    pub fn raw(handler: impl Fn(&str) -> Vec<u8> + Send + Sync + 'static, delay: Duration) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         listener.set_nonblocking(true).unwrap();
@@ -52,7 +64,9 @@ impl HttpFixture {
                     stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
                     let mut buffer = [0; 8192];
                     let mut length = 0;
-                    while length < buffer.len() && !buffer[..length].windows(4).any(|window| window == b"\r\n\r\n") {
+                    while length < buffer.len()
+                        && !buffer[..length].windows(4).any(|window| window == b"\r\n\r\n")
+                    {
                         match stream.read(&mut buffer[length..]) {
                             Ok(0) | Err(_) => return,
                             Ok(count) => length += count,
@@ -61,11 +75,14 @@ impl HttpFixture {
                     requests.fetch_add(1, Ordering::Relaxed);
                     let count = active.fetch_add(1, Ordering::Relaxed) + 1;
                     maximum.fetch_max(count, Ordering::Relaxed);
-                    let path = String::from_utf8_lossy(&buffer[..length]).split_whitespace().nth(1).unwrap_or("/").to_string();
-                    let (status, content_type, body) = handler(&path);
+                    let path = String::from_utf8_lossy(&buffer[..length])
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap_or("/")
+                        .to_string();
+                    let response = handler(&path);
                     std::thread::sleep(delay);
-                    let _ = write!(stream, "HTTP/1.1 {status} Fixture\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
-                    let _ = stream.write_all(&body);
+                    let _ = stream.write_all(&response);
                     let _ = stream.flush();
                     active.fetch_sub(1, Ordering::Relaxed);
                     // Gracefully close the write side and drain the peer. A

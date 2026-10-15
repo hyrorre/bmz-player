@@ -22,6 +22,8 @@ pub use bulk::{
     BulkDownloadScope, prepare_bulk_download,
 };
 #[cfg(test)]
+mod integration_tests;
+#[cfg(test)]
 mod test_support;
 pub use manager::{
     ChartDownloadManager, DownloadControl, DownloadServices, DownloadState, DownloadTask,
@@ -289,7 +291,7 @@ async fn download_chart_inner(
     let client = reqwest::Client::builder()
         .user_agent(concat!("bmz-player/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(20))
-        .timeout(Duration::from_secs(30 * 60))
+        .timeout(services.timeout())
         .redirect(reqwest::redirect::Policy::limited(10))
         .build()?;
 
