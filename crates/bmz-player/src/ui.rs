@@ -108,6 +108,7 @@ use settings_panel::*;
 use skin_panel::*;
 pub(crate) use skin_panel::{Lr2SkinTarget, lr2_cycle_skin_item, lr2_skin_items};
 
+mod download_task_list;
 mod downloads;
 mod fonts;
 mod ir_manual_ui;

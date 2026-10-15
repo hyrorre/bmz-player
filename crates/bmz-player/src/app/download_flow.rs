@@ -21,6 +21,9 @@ impl WinitApp {
     pub(super) fn apply_download_command(&mut self, command: crate::ui::DownloadUiCommand) {
         use crate::ui::DownloadUiCommand;
         match command {
+            DownloadUiCommand::Cancel(id) => self.jobs.chart_downloads.cancel(id),
+            DownloadUiCommand::Retry(id) => self.jobs.chart_downloads.retry(id),
+            DownloadUiCommand::CancelQueued => self.jobs.chart_downloads.cancel_queued(),
             DownloadUiCommand::Prepare(scope) => {
                 if !self.select_maintenance_allowed() || self.jobs.pending_bulk_download.is_some() {
                     return;

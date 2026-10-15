@@ -316,6 +316,9 @@ pub struct EguiOutput {
 }
 
 pub enum DownloadUiCommand {
+    Cancel(u64),
+    Retry(u64),
+    CancelQueued,
     Prepare(crate::song_download::BulkDownloadScope),
     Confirm,
     Dismiss,
@@ -416,6 +419,7 @@ pub struct EguiLayer {
     /// デバッグ表示パネルの開閉状態。
     pub(super) show_debug: bool,
     pub(super) show_downloads: bool,
+    pub(super) download_list: super::download_task_list::DownloadListUi,
     /// 7K RANDOM 固定配置パネルの開閉状態。
     pub(super) show_random_trainer: bool,
     /// デバッグ表示内のログ最低表示レベル。

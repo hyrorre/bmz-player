@@ -125,7 +125,10 @@ impl ChartDownloadManager {
         &self.tasks
     }
     pub fn task(&self, id: DownloadTaskId) -> Option<&DownloadTask> {
-        self.tasks.iter().find(|task| task.id == id)
+        id.checked_sub(1)
+            .and_then(|index| usize::try_from(index).ok())
+            .and_then(|index| self.tasks.get(index))
+            .filter(|task| task.id == id)
     }
 
     /// Returns (task id, merged). Scope includes the exact API configuration and
@@ -218,7 +221,11 @@ impl ChartDownloadManager {
                 Ok(result) => {
                     task.result = Some(result);
                     task.scan_pending = true;
-                    task.control.set_state(DownloadState::Scanning);
+                    task.control.set_state(if task.control.is_cancelled() {
+                        DownloadState::Cancelled
+                    } else {
+                        DownloadState::Scanning
+                    });
                 }
                 Err(error) => {
                     task.error = Some(format!("{error:#}"));

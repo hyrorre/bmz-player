@@ -8,6 +8,7 @@ pub(super) fn build_download_panel(
     ctx: &egui::Context,
     visible: &mut bool,
     manager: &ChartDownloadManager,
+    list: &mut super::download_task_list::DownloadListUi,
     preview: &BulkDownloadPreview,
     scope: Option<&BulkDownloadScope>,
     select: bool,
@@ -37,7 +38,8 @@ pub(super) fn build_download_panel(
                     if ui.button(tr!(text, "downloads-bulk-dismiss")).clicked() { commands.push(DownloadUiCommand::Dismiss); }
                 });
             }
-            for batch in manager.batches.iter().rev().take(8) {
+            super::download_task_list::build_task_list(ui, manager, list, &mut commands, text);
+            for batch in manager.batches.iter().rev().take(4) {
                 ui.separator(); scope_label(ui, &batch.scope, tables, text); counts_label(ui, &batch.counts, text);
                 let (completed, failed) = batch.results(manager);
                 ui.label(tr!(text, "downloads-bulk-results", "queued" => batch.counts.queued as i64, "merged" => batch.counts.merged as i64, "completed" => completed as i64, "failed" => failed as i64));
