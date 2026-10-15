@@ -324,41 +324,33 @@ mod tests {
 
     #[test]
     fn resolves_relative_path_under_folder() {
-        let dir = std::env::temp_dir().join(format!(
-            "bmz-chart-asset-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
+        let temp = tempfile::Builder::new().prefix("bmz-chart-asset-").tempdir().unwrap();
+        let dir = temp.path().to_path_buf();
         let image = dir.join("stage.png");
         fs::write(&image, b"png").unwrap();
 
         let got = resolve_chart_asset_path(dir.to_str().unwrap(), "stage.png");
         assert_eq!(got.as_deref(), Some(image.as_path()));
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn empty_or_missing_paths_return_none() {
-        let dir = std::env::temp_dir().join(format!(
-            "bmz-chart-asset-empty-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
+        let temp = tempfile::Builder::new().prefix("bmz-chart-asset-empty-").tempdir().unwrap();
+        let dir = temp.path().to_path_buf();
         assert!(resolve_chart_asset_path(dir.to_str().unwrap(), "").is_none());
         assert!(resolve_chart_asset_path(dir.to_str().unwrap(), "missing.png").is_none());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn resolves_chart_meta_image_by_same_stem_extension() {
-        let dir = temp_dir("meta-image-extension");
+        let temp = temp_dir("meta-image-extension");
+        let dir = temp.path().to_path_buf();
         let stage = dir.join("stage.png");
         fs::write(&stage, b"png").unwrap();
 
         let got = resolve_chart_asset_path(dir.to_str().unwrap(), "stage.bmp");
 
         assert_eq!(got.as_deref(), Some(stage.as_path()));
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -381,44 +373,39 @@ mod tests {
 
     #[test]
     fn normalizes_preview_to_existing_audio_extension() {
-        let dir = temp_dir("preview-extension");
+        let temp = temp_dir("preview-extension");
+        let dir = temp.path().to_path_buf();
         fs::write(dir.join("_Preview.ogg"), b"ogg").unwrap();
 
         let got = normalize_preview_file(&dir.join("song.bms"), "_Preview.wav");
 
         assert_eq!(got, "_Preview.ogg");
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn finds_preview_prefix_audio_when_header_is_empty() {
-        let dir = temp_dir("preview-prefix");
+        let temp = temp_dir("preview-prefix");
+        let dir = temp.path().to_path_buf();
         fs::write(dir.join("preview.ogg"), b"ogg").unwrap();
 
         let got = normalize_preview_file(&dir.join("song.bms"), "");
 
         assert_eq!(got, "preview.ogg");
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn ignores_non_prefix_preview_when_header_is_empty() {
-        let dir = temp_dir("preview-prefix-only");
+        let temp = temp_dir("preview-prefix-only");
+        let dir = temp.path().to_path_buf();
         fs::write(dir.join("_Preview.ogg"), b"ogg").unwrap();
 
         let got = normalize_preview_file(&dir.join("song.bms"), "");
 
         assert_eq!(got, "");
-        fs::remove_dir_all(dir).unwrap();
     }
 
-    fn temp_dir(label: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "bmz-chart-asset-{label}-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        dir
+    fn temp_dir(label: &str) -> tempfile::TempDir {
+        tempfile::Builder::new().prefix(&format!("bmz-chart-asset-{label}-")).tempdir().unwrap()
     }
 
     fn repo_root() -> PathBuf {

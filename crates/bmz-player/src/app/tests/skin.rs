@@ -276,11 +276,8 @@ fn skin_catalog_scan_ignores_lua_parts_files() {
 
 #[test]
 fn skin_catalog_rejects_json_without_explicit_skin_type() {
-    let root = std::env::temp_dir().join(format!(
-        "bmz-player-skin-catalog-json-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
+    let temp = tempfile::Builder::new().prefix("bmz-player-skin-catalog-json-").tempdir().unwrap();
+    let root = temp.path().to_path_buf();
     let player_data = root.join("songs.json");
     std::fs::write(&player_data, r#"{"20260829":{"songs":[]}}"#).unwrap();
     let valid_skin = root.join("result.json");
