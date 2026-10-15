@@ -87,61 +87,61 @@ mod tests {
 
     #[test]
     fn resolves_declared_image_to_same_stem_image_by_beatoraja_order() {
-        let dir = temp_dir("image-order");
+        let temp = temp_dir("image-order");
+        let dir = temp.path().to_path_buf();
         std::fs::write(dir.join("bga.png"), b"png").unwrap();
 
         let resolved = resolve_bga_asset_path(&dir, Path::new("bga.bmp"));
 
         assert_eq!(resolved.as_deref(), Some(dir.join("bga.png").as_path()));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn resolves_existing_declared_image_by_beatoraja_order() {
-        let dir = temp_dir("existing-image-order");
+        let temp = temp_dir("existing-image-order");
+        let dir = temp.path().to_path_buf();
         std::fs::write(dir.join("bga.bmp"), b"bmp").unwrap();
         std::fs::write(dir.join("bga.jpg"), b"jpg").unwrap();
 
         let resolved = resolve_bga_asset_path(&dir, Path::new("bga.bmp"));
 
         assert_eq!(resolved.as_deref(), Some(dir.join("bga.jpg").as_path()));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn resolves_declared_video_to_same_stem_video_by_beatoraja_order() {
-        let dir = temp_dir("video-order");
+        let temp = temp_dir("video-order");
+        let dir = temp.path().to_path_buf();
         std::fs::write(dir.join("movie.mp4"), b"mp4").unwrap();
         std::fs::write(dir.join("movie.avi"), b"avi").unwrap();
 
         let resolved = resolve_bga_asset_path(&dir, Path::new("movie.mpg"));
 
         assert_eq!(resolved.as_deref(), Some(dir.join("movie.mp4").as_path()));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn resolves_existing_declared_video_by_beatoraja_order() {
-        let dir = temp_dir("existing-video-order");
+        let temp = temp_dir("existing-video-order");
+        let dir = temp.path().to_path_buf();
         std::fs::write(dir.join("movie.mpg"), b"mpg").unwrap();
         std::fs::write(dir.join("movie.mp4"), b"mp4").unwrap();
 
         let resolved = resolve_bga_asset_path(&dir, Path::new("movie.mpg"));
 
         assert_eq!(resolved.as_deref(), Some(dir.join("movie.mp4").as_path()));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn resolves_missing_declared_path_to_video_before_image() {
-        let dir = temp_dir("missing-video-first");
+        let temp = temp_dir("missing-video-first");
+        let dir = temp.path().to_path_buf();
         std::fs::write(dir.join("asset.png"), b"png").unwrap();
         std::fs::write(dir.join("asset.webm"), b"webm").unwrap();
 
         let resolved = resolve_bga_asset_path(&dir, Path::new("asset.bmp"));
 
         assert_eq!(resolved.as_deref(), Some(dir.join("asset.webm").as_path()));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -160,11 +160,7 @@ mod tests {
         assert_eq!(bga_asset_kind(Path::new("movie.mov")), BgaAssetKind::Video);
     }
 
-    fn temp_dir(label: &str) -> PathBuf {
-        let stamp =
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let dir = std::env::temp_dir().join(format!("bmz-bga-asset-{label}-{stamp}"));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn temp_dir(label: &str) -> tempfile::TempDir {
+        tempfile::Builder::new().prefix(&format!("bmz-bga-asset-{label}-")).tempdir().unwrap()
     }
 }

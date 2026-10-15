@@ -37,7 +37,8 @@ mod tests {
 
     #[test]
     fn candidates_follow_beatoraja_audio_order() {
-        let dir = temp_dir("audio-order");
+        let temp = temp_dir("audio-order");
+        let dir = temp.path().to_path_buf();
         let requested = dir.join("foo.wav");
         let flac = dir.join("foo.flac");
         let ogg = dir.join("foo.ogg");
@@ -47,39 +48,32 @@ mod tests {
         std::fs::write(&mp3, b"dummy").unwrap();
 
         assert_eq!(sound_asset_candidates(&requested), vec![flac, ogg, mp3]);
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn candidates_keep_declared_file_first() {
-        let dir = temp_dir("declared-first");
+        let temp = temp_dir("declared-first");
+        let dir = temp.path().to_path_buf();
         let requested = dir.join("foo.ogg");
         let wav = dir.join("foo.wav");
         std::fs::write(&requested, b"dummy").unwrap();
         std::fs::write(&wav, b"dummy").unwrap();
 
         assert_eq!(sound_asset_candidates(&requested), vec![requested, wav]);
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn missing_path_without_fallback_has_no_candidates() {
-        let dir = temp_dir("missing");
+        let temp = temp_dir("missing");
+        let dir = temp.path().to_path_buf();
 
         assert!(sound_asset_candidates(&dir.join("missing.wav")).is_empty());
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
-    fn temp_dir(label: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "bmz-chart-sound-asset-{label}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn temp_dir(label: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(&format!("bmz-chart-sound-asset-{label}-"))
+            .tempdir()
+            .unwrap()
     }
 }
