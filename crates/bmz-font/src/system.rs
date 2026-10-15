@@ -530,15 +530,14 @@ mod tests {
             return;
         };
 
-        let temp_dir = std::env::temp_dir().join(format!("bmz-font-test-{}", std::process::id()));
-        let _ = fs::create_dir_all(&temp_dir);
-        let fixture_path = temp_dir.join("fixture.ttf");
+        // A PID-only name was reused by a later run and cleaned only on success.
+        let temp = tempfile::Builder::new().prefix("bmz-font-test-").tempdir().unwrap();
+        let fixture_path = temp.path().join("fixture.ttf");
         if fs::write(&fixture_path, &bytes).is_err() {
-            let _ = fs::remove_dir_all(&temp_dir);
             return;
         }
 
-        let source = FsSource::in_path(&temp_dir);
+        let source = FsSource::in_path(temp.path());
         let handle = source.all_fonts().ok().and_then(|handles| {
             handles
                 .into_iter()
@@ -551,8 +550,5 @@ mod tests {
             let fixture_bytes = read_resolved_font_bytes(&fixture).expect("fixture bytes");
             assert_eq!(fixture_bytes.len(), bytes.len());
         }
-
-        let _ = fs::remove_file(&fixture_path);
-        let _ = fs::remove_dir_all(&temp_dir);
     }
 }
