@@ -505,7 +505,6 @@ profile-play-play-keysound-on-miss = Play keysounds on missed POOR
 settings-entry-description-wait-all-notes-result = For songs whose BGM or BGA continues after the last note, waits until 5 seconds after the last sound or image starts before showing the result screen.
 settings-entry-description-hide-misslayer-on-good = Hides the miss image as soon as you get GOOD or better.
 settings-entry-description-play-keysound-on-miss = Plays a note's sound even when you miss it without pressing. Judgement and score do not change.
-settings-entry-description-chart-text-fallback = Shows BMS chart text (#TEXT) in the top-left corner when the play skin has no place for it. Skins that use Lua functions to show it may show it twice.
 profile-play-exit-hold-duration = E1+E2 force-exit hold duration (ms)
 profile-display-title = Display
 profile-display-hispeed = Classic HS

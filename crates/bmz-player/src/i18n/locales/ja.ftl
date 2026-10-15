@@ -502,7 +502,6 @@ profile-play-play-keysound-on-miss = 見逃しPOOR時にキー音を再生
 settings-entry-description-wait-all-notes-result = 最後のノーツのあとも BGM や BGA が続く曲で、最後の音や映像が始まってから 5 秒後までリザルト画面に進むのを待ちます。
 settings-entry-description-hide-misslayer-on-good = GOOD 以上の判定を取ったら、ミスしたときの画像をすぐに消します。
 settings-entry-description-play-keysound-on-miss = ノーツを押さずに見逃したときも、そのノーツの音を鳴らします。判定やスコアは変わりません。
-settings-entry-description-chart-text-fallback = プレイスキンに譜面テキスト（#TEXT）の表示が無いとき、画面左上に表示します。Lua の関数で表示するスキンでは二重に表示されることがあります。
 profile-play-exit-hold-duration = E1+E2 強制終了長押し時間 (ms)
 profile-display-title = 表示
 profile-display-hispeed = Classic HS

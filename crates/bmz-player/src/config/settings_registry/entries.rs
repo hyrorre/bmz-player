@@ -596,14 +596,6 @@ define_settings! {
         },
         format: |profile| format_bool_on_off(profile.play.hide_misslayer_on_good),
     }
-    ChartTextFallback(bool) {
-        value: [field play.chart_text_fallback],
-        adjust: |profile, _delta| {
-            profile.play.chart_text_fallback = !profile.play.chart_text_fallback;
-            true
-        },
-        format: |profile| format_bool_on_off(profile.play.chart_text_fallback),
-    }
     PlayKeysoundOnMiss(bool) {
         value: [field play.play_keysound_on_miss],
         adjust: |profile, _delta| {

@@ -432,11 +432,10 @@ impl WinitApp {
             AppSceneSnapshot::Select(snapshot) => snapshot.overlay = overlay,
             AppSceneSnapshot::Decide(snapshot) => snapshot.overlay = overlay,
             AppSceneSnapshot::Play(snapshot) => {
-                let fallback = self.boot.profile_config.play.chart_text_fallback
-                    && !self
-                        .renderer
-                        .play_skin_document()
-                        .is_some_and(|document| document.references_chart_text());
+                let fallback = !self
+                    .renderer
+                    .play_skin_document()
+                    .is_some_and(|document| document.references_chart_text());
                 snapshot.overlay = overlay;
                 append_chart_text_fallback(
                     &mut snapshot.overlay.left_text,

@@ -646,7 +646,7 @@ fn left_overlay_expires_toast() {
 }
 
 #[test]
-fn chart_text_fallback_is_opt_in_and_keeps_existing_overlay_text() {
+fn chart_text_fallback_skips_skin_text_and_keeps_existing_overlay_text() {
     let mut left = String::new();
     append_chart_text_fallback(&mut left, "Hello", false);
     assert_eq!(left, "");

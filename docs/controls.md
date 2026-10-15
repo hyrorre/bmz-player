@@ -147,7 +147,6 @@ ON/OFFできます。すべて既定OFFで、判定・スコア保存条件・IR
 | RESULT WAIT / BGM・BGAの最終配置までリザルトを待機 | 通常終了を最後のノート・BGM・通常BGAレイヤー配置から譜面時刻で5秒後まで延長します。PCMファイルの再生完了を検知する設定ではありません。 |
 | MISSLAYER GOOD CLEAR / GOOD以上でミスレイヤーを解除 | PGREAT・GREAT・GOODでミスBGAを即時解除します。次のBAD・POORで再表示します。 |
 | MISS KEYSOUND / 見逃しPOOR時にキー音を再生 | 打鍵せず見逃した通常ノート・LN始端と、離さず見逃したCN/HCN終端のキー音をPOOR確定時に再生します。 |
-| BMS TEXT / 譜面テキストを左上に表示 | プレイスキンが譜面テキスト（BMSの `#TEXT`、[text 20100](skin.md#bmz-chart-text-refs)）を表示しないとき、画面左上のメッセージ欄に表示します。 |
 
 RESULT WAITは通常プレイ・Autoplay・Replay・Courseに適用し、Practiceの区間終了、
 Esc等の手動終了、途中FAILEDは待機を延長しません。ミスBGAだけの配置や未使用音声定義は
