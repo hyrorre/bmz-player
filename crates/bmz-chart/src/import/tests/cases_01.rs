@@ -85,11 +85,14 @@ fn imports_basic_7k_bms_into_playable_chart() {
 #00109:0100
 #00111:01
 ";
-    let path = write_temp_bms(text);
-    let base_dir = path.parent().unwrap().to_path_buf();
-    write_temp_file(&base_dir.join("key.wav"));
-    write_temp_file(&base_dir.join("bgm.wav"));
-    write_temp_file(&base_dir.join("bga.png"));
+    // The chart resolves assets beside itself, so keep chart and assets in a private
+    // directory: fixed names in the shared temp root collide with concurrent test runs.
+    let dir = tempfile::Builder::new().prefix("bmz-chart-import-").tempdir().unwrap();
+    let path = dir.path().join("song.bms");
+    std::fs::write(&path, text).unwrap();
+    for asset in ["key.wav", "bgm.wav", "bga.png"] {
+        write_temp_file(&dir.path().join(asset));
+    }
 
     let result = import_bms_chart(&path, None, true).unwrap();
     let expected_identity = compute_chart_identity(text.as_bytes());
@@ -125,11 +128,6 @@ fn imports_basic_7k_bms_into_playable_chart() {
         event.kind,
         TimingEventKind::Stop { duration_us } if duration_us == 1_333_333
     )));
-
-    std::fs::remove_file(&path).unwrap();
-    std::fs::remove_file(base_dir.join("key.wav")).unwrap();
-    std::fs::remove_file(base_dir.join("bgm.wav")).unwrap();
-    std::fs::remove_file(base_dir.join("bga.png")).unwrap();
 }
 
 #[test]
