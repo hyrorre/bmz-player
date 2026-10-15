@@ -248,10 +248,13 @@ fn lua_skin_records_required_module_skin_config_option_dependency() {
 
 #[test]
 fn lua_skin_rejects_paths_outside_root() {
-    let root = unique_test_dir("bmz-skin-lua");
+    // The escape target must exist beside the root, so own the parent as well: the
+    // root of a shared temp directory would be written by every concurrent test run.
+    let parent = tempfile::Builder::new().prefix("bmz-skin-lua-").tempdir().unwrap();
+    let root = parent.path().join("skin");
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("play7.luaskin"), "return dofile('../outside.lua')").unwrap();
-    fs::write(root.parent().unwrap().join("outside.lua"), "return {}").unwrap();
+    fs::write(parent.path().join("outside.lua"), "return {}").unwrap();
 
     let err = load_lua_skin(
         &root.join("play7.luaskin"),
