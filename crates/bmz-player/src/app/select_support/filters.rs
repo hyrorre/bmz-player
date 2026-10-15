@@ -224,7 +224,14 @@ pub(in crate::app) fn download_selection_index(
             matches(item)
                 && selection.selected_key.as_ref().is_some_and(|key| select_item_key(item) == *key)
         })
-        .or_else(|| items.iter().position(matches))
+        .or_else(|| {
+            items
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| matches(item))
+                .min_by_key(|(index, _)| index.abs_diff(selection.selected_index))
+                .map(|(index, _)| index)
+        })
 }
 
 pub(in crate::app) fn compare_select_chart_rows(

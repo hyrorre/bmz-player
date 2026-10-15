@@ -7,6 +7,9 @@ pub(super) struct DownloadListUi {
     indices: Vec<usize>,
     counts: [usize; 8],
     refreshed: Option<std::time::Instant>,
+    task_count: usize,
+    batch_count: usize,
+    pub(super) batch_results: Vec<(usize, (usize, usize, usize))>,
 }
 
 const FILTERS: [&str; 6] = [
@@ -25,8 +28,9 @@ pub(super) fn build_task_list(
     commands: &mut Vec<DownloadUiCommand>,
     text: Localizer,
 ) {
-    let refresh =
-        view.refreshed.is_none_or(|at| at.elapsed() >= std::time::Duration::from_millis(150));
+    let refresh = view.task_count != manager.tasks().len()
+        || view.batch_count != manager.batches.len()
+        || view.refreshed.is_none_or(|at| at.elapsed() >= std::time::Duration::from_millis(150));
     if refresh {
         view.counts.fill(0);
         view.indices.clear();
@@ -52,6 +56,19 @@ pub(super) fn build_task_list(
             }
         }
         view.refreshed = Some(std::time::Instant::now());
+        view.task_count = manager.tasks().len();
+        view.batch_count = manager.batches.len();
+        view.batch_results = manager
+            .batches
+            .iter()
+            .enumerate()
+            .rev()
+            .take(4)
+            .map(|(index, batch)| {
+                let (completed, failed) = batch.results(manager);
+                (index, (completed, failed, batch.merged_count(manager)))
+            })
+            .collect();
     }
     ui.separator();
     let finished = view.counts[5] + view.counts[6] + view.counts[7];
@@ -90,11 +107,23 @@ pub(super) fn build_task_list(
                     let state = task.state();
                     ui.horizontal(|ui| {
                         ui.add(
-                            egui::Label::new(format!("#{} {}", task.id, task.requests[0].title))
-                                .truncate(),
+                            egui::Label::new(format!(
+                                "#{} {} ({})",
+                                task.id,
+                                task.requests[0].title,
+                                task.requests.len()
+                            ))
+                            .truncate(),
                         )
-                        .on_hover_text(&task.requests[0].title);
-                        ui.label(format!("{} · {}", task.source_name(), state_label(state, text)));
+                        .on_hover_ui(|ui| {
+                            for request in task.requests.iter().take(30) {
+                                ui.label(&request.title);
+                            }
+                            if task.requests.len() > 30 {
+                                ui.label("…");
+                            }
+                        });
+                        ui.label(format!("{} · {}", task.source_label(), state_label(state, text)));
                         if matches!(state, DownloadState::Failed | DownloadState::Cancelled) {
                             if ui.button(tr!(text, "downloads-retry")).clicked() {
                                 commands.push(DownloadUiCommand::Retry(task.id));
@@ -123,7 +152,16 @@ pub(super) fn build_task_list(
                             tr!(text, "downloads-bytes-unknown", "bytes" => bytes.to_string()),
                         );
                     }
-                    if let Some(error) = &task.error {
+                    if task.registration_missing {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(tr!(text, "downloads-target-missing"))
+                                    .color(egui::Color32::LIGHT_RED),
+                            )
+                            .truncate(),
+                        )
+                        .on_hover_text(tr!(text, "downloads-target-missing"));
+                    } else if let Some(error) = &task.error {
                         ui.add(
                             egui::Label::new(
                                 egui::RichText::new(error).color(egui::Color32::LIGHT_RED),

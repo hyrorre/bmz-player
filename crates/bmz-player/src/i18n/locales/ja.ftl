@@ -1002,3 +1002,4 @@ settings-downloads-source-help = プリセットを選ぶとAPI URLを入力し�
 settings-downloads-wriggle-status = Wriggle: 接続未確認（検証環境でTLS接続に失敗しました）。
 settings-downloads-required-hashes = 必要なハッシュ: { $hashes }
 settings-downloads-parallelism = HTTP同時取得数
+downloads-target-missing = 取得したアーカイブ内に対象の譜面が見つかりません。

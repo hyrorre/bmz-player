@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
 use reqwest::{Response, Url};
 use serde_json::Value;
+use sha2::Digest;
 use std::io::Write;
 use std::sync::{
     Arc,
@@ -17,9 +18,15 @@ use std::sync::{
 mod bulk;
 mod http_response;
 mod manager;
+mod registration;
+mod transfer_key;
 pub use bulk::{
     BulkDownloadBatch, BulkDownloadCounts, BulkDownloadPlan, BulkDownloadPreview,
     BulkDownloadScope, prepare_bulk_download,
+};
+pub use registration::{
+    DownloadScanRegistration, attach_download_registrations, downloaded_chart_identities,
+    verify_download_registrations,
 };
 #[cfg(test)]
 mod integration_tests;
@@ -89,6 +96,7 @@ pub struct ChartDownloadRequest {
 
 #[derive(Debug, Clone)]
 pub struct ChartDownloadResult {
+    pub(crate) archive_cache_key: Option<[u8; 32]>,
     pub request_id: u64,
     pub identity: ChartDownloadIdentity,
     pub source: ChartDownloadSource,
@@ -137,10 +145,9 @@ pub fn registered_download_identity(
     identity: &ChartDownloadIdentity,
     chart_dir: &Path,
 ) -> Result<bool> {
-    let mut folders = db.list_descendant_folder_paths(&chart_dir.to_string_lossy())?;
-    folders.push(chart_dir.to_string_lossy().into_owned());
-    let folder_refs: Vec<_> = folders.iter().map(String::as_str).collect();
-    Ok(db.list_charts_in_folders(&folder_refs)?.iter().any(|chart| identity.matches(chart)))
+    Ok(downloaded_chart_identities(db, chart_dir)?
+        .iter()
+        .any(|registered| identity.overlaps(registered)))
 }
 
 #[derive(Debug)]
@@ -281,12 +288,15 @@ async fn download_chart_inner(
         .with_context(|| format!("保存先を作成できませんでした: {}", root_dir.display()))?;
 
     let stamp = unique_stamp();
-    let archive_path = root_dir.join(format!(".bmz-{stamp}.download"));
-    let staging_dir = root_dir.join(format!(".bmz-{stamp}.extract"));
+    let work_dir = root_dir.join(format!(".bmz-{stamp}.work"));
+    std::fs::create_dir(&work_dir)
+        .context("failed to exclusively create download work directory")?;
+    let _cleanup = DownloadCleanup::new(work_dir.clone());
+    let archive_path = work_dir.join("archive.download");
+    let staging_dir = work_dir.join("extracted");
     std::fs::create_dir(&staging_dir).with_context(|| {
         format!("展開用フォルダを作成できませんでした: {}", staging_dir.display())
     })?;
-    let mut cleanup = DownloadCleanup::new(archive_path.clone(), staging_dir.clone());
 
     let client = reqwest::Client::builder()
         .user_agent(concat!("bmz-player/", env!("CARGO_PKG_VERSION")))
@@ -305,7 +315,11 @@ async fn download_chart_inner(
                 let package_dir = staging_dir.join(format!(".package-{index}"));
                 std::fs::create_dir(&package_dir)?;
                 {
-                    let _permit = services.extraction.lock().unwrap_or_else(|e| e.into_inner());
+                    let _permit = services
+                        .extraction
+                        .acquire()
+                        .await
+                        .context("archive extraction queue closed")?;
                     control.check()?;
                     control.set_state(DownloadState::Extracting);
                     extract_archive_controlled(&archive_path, &package_dir, control)?;
@@ -323,7 +337,7 @@ async fn download_chart_inner(
             let api_url = expand_http_api_url(api_url, md5, sha256)?;
             let response = client.get(api_url.clone()).send().await?.error_for_status()?;
             let metadata_base = response.url().clone();
-            let (archive_url, direct_response) = match http_response::inspect(response).await? {
+            let (mut archive_url, direct_response) = match http_response::inspect(response).await? {
                 http_response::HttpPayload::Metadata(value) => {
                     let download_url = http_response::metadata_download_url(&value)?;
                     (resolve_http_url(&metadata_base, download_url)?, None)
@@ -332,7 +346,9 @@ async fn download_chart_inner(
                     (response.url().clone(), Some((response, prefix)))
                 }
             };
-            let key = format!("{scope}\n{archive_url}");
+            archive_url.set_fragment(None);
+            let key: [u8; 32] =
+                sha2::Sha256::digest(format!("{scope}\n{archive_url}").as_bytes()).into();
             // The first owner publishes an extracted directory. Followers keep
             // their own hashes and verify each one after the shared partial scan.
             let mut direct_response = direct_response;
@@ -344,13 +360,12 @@ async fn download_chart_inner(
                         (Arc::clone(shared), false)
                     } else {
                         let shared = Arc::new(std::sync::Mutex::new(None));
-                        cache.insert(key.clone(), Arc::clone(&shared));
+                        cache.insert(key, Arc::clone(&shared));
                         (shared, true)
                     }
                 };
                 if owner {
-                    cache_owner =
-                        Some(ArchiveOwner { services, key: key.clone(), shared, completed: false });
+                    cache_owner = Some(ArchiveOwner { services, key, shared, completed: false });
                     break;
                 }
                 // A cancelled owner releases its claim; a waiting task can take
@@ -389,7 +404,11 @@ async fn download_chart_inner(
             )
             .await?;
             {
-                let _permit = services.extraction.lock().unwrap_or_else(|e| e.into_inner());
+                let _permit = services
+                    .extraction
+                    .acquire()
+                    .await
+                    .context("archive extraction queue closed")?;
                 control.check()?;
                 control.set_state(DownloadState::Extracting);
                 extract_archive_controlled(&archive_path, &staging_dir, control)?;
@@ -405,9 +424,9 @@ async fn download_chart_inner(
         format!("展開済みフォルダを保存できませんでした: {}", final_dir.display())
     })?;
     std::fs::remove_file(&archive_path).ok();
-    cleanup.disarm();
 
     let result = ChartDownloadResult {
+        archive_cache_key: cache_owner.as_ref().map(|owner| owner.key),
         request_id: request.request_id,
         identity: request.identity,
         source,
@@ -423,7 +442,7 @@ async fn download_chart_inner(
 
 struct ArchiveOwner<'a> {
     services: &'a DownloadServices,
-    key: String,
+    key: [u8; 32],
     shared: Arc<std::sync::Mutex<manager::ArchiveResult>>,
     completed: bool,
 }
@@ -433,7 +452,10 @@ impl Drop for ArchiveOwner<'_> {
         if !self.completed {
             *self.shared.lock().unwrap_or_else(|e| e.into_inner()) =
                 Some(Err("archive owner ended".into()));
-            self.services.archives.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.key);
+            let mut cache = self.services.archives.lock().unwrap_or_else(|e| e.into_inner());
+            if cache.get(&self.key).is_some_and(|current| Arc::ptr_eq(current, &self.shared)) {
+                cache.remove(&self.key);
+            }
         }
     }
 }
@@ -651,7 +673,8 @@ fn extract_tar_gz_controlled(
 ) -> Result<()> {
     std::fs::create_dir_all(destination)?;
     let file = File::open(archive_path)?;
-    let decoder = GzDecoder::new(CancelReader { reader: file, control });
+    let decoder =
+        CancelReader { reader: GzDecoder::new(CancelReader { reader: file, control }), control };
     let mut archive = tar::Archive::new(decoder);
     archive.set_preserve_permissions(false);
     archive.set_preserve_ownerships(false);
@@ -683,6 +706,10 @@ fn extract_tar_gz_controlled(
             bail!("保存先の外へ出るアーカイブパスを拒否しました")
         }
     }
+    // Verify the gzip checksum after tar's end marker, bounding discarded data.
+    let trailing =
+        std::io::copy(&mut archive.into_inner().take(1024 * 1024 + 1), &mut std::io::sink())?;
+    anyhow::ensure!(trailing <= 1024 * 1024, "excessive archive trailing data");
     Ok(())
 }
 
@@ -825,26 +852,21 @@ fn unique_stamp() -> String {
 }
 
 struct DownloadCleanup {
-    archive_path: PathBuf,
-    staging_dir: PathBuf,
-    armed: bool,
+    work_dir: PathBuf,
 }
 
 impl DownloadCleanup {
-    fn new(archive_path: PathBuf, staging_dir: PathBuf) -> Self {
-        Self { archive_path, staging_dir, armed: true }
-    }
-
-    fn disarm(&mut self) {
-        self.armed = false;
+    fn new(work_dir: PathBuf) -> Self {
+        Self { work_dir }
     }
 }
 
 impl Drop for DownloadCleanup {
     fn drop(&mut self) {
-        if self.armed {
-            std::fs::remove_file(&self.archive_path).ok();
-            std::fs::remove_dir_all(&self.staging_dir).ok();
+        if let Err(error) = std::fs::remove_dir_all(&self.work_dir)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(%error, path = %self.work_dir.display(), "failed to clean private download work directory");
         }
     }
 }

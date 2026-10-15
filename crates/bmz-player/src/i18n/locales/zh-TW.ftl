@@ -1003,3 +1003,4 @@ settings-downloads-source-help = 選擇預設會填入 API URL。能否下載取
 settings-downloads-wriggle-status = Wriggle：連線未確認（驗證環境中 TLS 連線失敗）。
 settings-downloads-required-hashes = 所需雜湊：{ $hashes }
 settings-downloads-parallelism = HTTP 同時下載數
+downloads-target-missing = 下載的壓縮檔中找不到目標譜面。

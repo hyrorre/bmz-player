@@ -60,6 +60,12 @@ fn shared_http_archive_registers_multiple_chart_hashes_before_completion() {
     let scans = manager.take_scan_requests();
     assert_eq!(scans.len(), 2);
     assert_eq!(scans[0].1.chart_dir, scans[1].1.chart_dir);
+    let batch = BulkDownloadBatch {
+        scope: BulkDownloadScope { source_url: "table".into(), level: None },
+        counts: Default::default(),
+        targets: vec![(a, chart_identity(first)), (b, chart_identity(second))],
+    };
+    assert_eq!(batch.merged_count(&manager), 1);
     let db_path = root.path().join("library.db");
     crate::storage::migration::migrate_library_db(&db_path).unwrap();
     let mut db = LibraryDatabase::open(&db_path).unwrap();
@@ -81,7 +87,10 @@ fn shared_http_archive_registers_multiple_chart_hashes_before_completion() {
     let report =
         crate::storage::scan::scan_song_roots(&mut db, &roots, &config.scan, 1, true).unwrap();
     assert_eq!(report.summary.imported, 2);
-    let registered = [chart_identity(first), chart_identity(second)];
+    let registrations = verify_download_registrations(&db, scans.clone()).unwrap();
+    assert_eq!(registrations.len(), 1);
+    assert_eq!(registrations[0].task_ids.len(), 2);
+    let registered = registrations[0].identities.clone();
     for (id, result) in &scans {
         assert!(registered_download_identity(&db, &result.identity, &result.chart_dir).unwrap());
         manager.finish_scan(*id, &registered, None);
@@ -326,4 +335,161 @@ fn declared_oversized_tar_file_is_rejected_before_reading_its_contents() {
     let error = extract_tar_gz(&path, &root.path().join("output")).unwrap_err();
     assert!(format!("{error:#}").contains("単一ファイル"));
     assert!(!root.path().join("output/large.bin").exists());
+}
+
+#[test]
+fn gzip_checksum_is_verified_after_the_tar_end_marker() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("bad.tar.gz");
+    let mut body = archive(&[("chart.bms", b"#TITLE Test")]);
+    let checksum = body.len() - 8;
+    body[checksum] ^= 0xff;
+    std::fs::write(&path, body).unwrap();
+    assert!(extract_tar_gz(&path, &root.path().join("staging")).is_err());
+}
+
+#[tokio::test]
+async fn cancelling_an_extraction_waiter_does_not_wait_for_the_other_archive() {
+    let root = tempfile::tempdir().unwrap();
+    let server = HttpFixture::new(archive(&[("chart.bms", b"#TITLE Test")]), Duration::ZERO, 200);
+    let services = Arc::new(DownloadServices::default());
+    let permit = services.extraction.acquire().await.unwrap();
+    let control = Arc::new(DownloadControl::default());
+    let future = tokio::spawn(download_chart_controlled(
+        request(root.path(), &format!("{}/{{md5}}", server.url), 1),
+        Arc::clone(&control),
+        Arc::clone(&services),
+    ));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while control.bytes().0 == 0 {
+        assert!(std::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    control.cancel();
+    assert!(tokio::time::timeout(Duration::from_secs(1), future).await.unwrap().unwrap().is_err());
+    assert_eq!(std::fs::read_dir(root.path().join("songs/http")).unwrap().count(), 0);
+    drop(permit);
+}
+
+#[test]
+fn manager_shutdown_waits_for_private_temporary_files_to_be_cleaned() {
+    let root = tempfile::tempdir().unwrap();
+    let server = HttpFixture::new(
+        archive(&[("chart.bms", b"#TITLE Test")]),
+        Duration::from_millis(100),
+        200,
+    );
+    let mut manager = ChartDownloadManager::default();
+    manager.submit(request(root.path(), &format!("{}/{{md5}}", server.url), 1));
+    manager.poll(1);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while server.requests.load(Ordering::Relaxed) == 0 {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    drop(manager);
+    assert_eq!(std::fs::read_dir(root.path().join("songs/http")).unwrap().count(), 0);
+}
+
+#[test]
+fn late_download_completions_attach_without_consuming_other_scan_requests() {
+    let result = |id: u64, directory: &str| ChartDownloadResult {
+        archive_cache_key: None,
+        request_id: id,
+        identity: ChartDownloadIdentity::default(),
+        source: ChartDownloadSource::Http,
+        root_dir: PathBuf::from("downloads"),
+        chart_dir: PathBuf::from(directory),
+    };
+    let mut pending =
+        vec![(1, result(1, "shared")), (2, result(2, "unrelated")), (3, result(3, "shared"))];
+    assert_eq!(attach_download_registrations(&mut pending, Path::new("shared")), vec![1, 3]);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].0, 2);
+    assert!(attach_download_registrations(&mut pending, Path::new("shared")).is_empty());
+    assert_eq!(attach_download_registrations(&mut pending, Path::new("unrelated")), vec![2]);
+    assert!(pending.is_empty());
+}
+
+#[test]
+fn task_errors_do_not_expose_request_tokens() {
+    let root = tempfile::tempdir().unwrap();
+    let server = HttpFixture::new(b"error".to_vec(), Duration::ZERO, 500);
+    let mut manager = ChartDownloadManager::default();
+    let (id, _) = manager.submit(request(
+        root.path(),
+        &format!("{}/{{md5}}?token=private-fixture-token", server.url),
+        1,
+    ));
+    wait(&mut manager, 1, |m| m.task(id).unwrap().state() == DownloadState::Failed);
+    let error = manager.task(id).unwrap().error.as_ref().unwrap();
+    assert!(error.contains("500"));
+    assert!(!error.contains("private-fixture-token"));
+}
+
+#[test]
+fn retry_of_missing_chart_refetches_an_updated_archive_without_deleting_old_songs() {
+    use std::sync::atomic::AtomicBool;
+    let expected = b"#TITLE Expected\n#BPM 120\n#00011:01\n";
+    let updated = Arc::new(AtomicBool::new(false));
+    let worker_updated = Arc::clone(&updated);
+    let server = HttpFixture::with_handler(
+        move |_| {
+            let bytes = if worker_updated.load(Ordering::Relaxed) {
+                &expected[..]
+            } else {
+                &b"#TITLE Other\n#BPM 180\n#00011:01\n"[..]
+            };
+            (200, "application/octet-stream".into(), archive(&[("song/chart.bms", bytes)]))
+        },
+        Duration::ZERO,
+    );
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = ChartDownloadManager::default();
+    let (id, _) = manager.submit(identified_request(
+        root.path(),
+        &format!("{}/{{md5}}", server.url),
+        expected,
+        1,
+    ));
+    wait(&mut manager, 1, |m| m.task(id).unwrap().state() == DownloadState::Scanning);
+    let old = manager.take_scan_requests().pop().unwrap().1;
+    let db_path = root.path().join("library.db");
+    crate::storage::migration::migrate_library_db(&db_path).unwrap();
+    let mut db = LibraryDatabase::open(&db_path).unwrap();
+    let mut config = AppConfig::default();
+    config.scan.use_everything = false;
+    db.set_configured_song_roots(&[PathEntry {
+        path: old.root_dir.to_string_lossy().into_owned(),
+        enabled: true,
+        recursive: true,
+    }])
+    .unwrap();
+    let scan = |db: &mut LibraryDatabase, dir: &Path| {
+        crate::storage::scan::scan_song_roots(
+            db,
+            &[PathEntry {
+                path: dir.to_string_lossy().into_owned(),
+                enabled: true,
+                recursive: true,
+            }],
+            &config.scan,
+            1,
+            true,
+        )
+        .unwrap();
+        downloaded_chart_identities(db, dir).unwrap()
+    };
+    manager.finish_scan(id, &scan(&mut db, &old.chart_dir), None);
+    assert!(manager.task(id).unwrap().registration_missing);
+    updated.store(true, Ordering::Relaxed);
+    manager.retry(id);
+    assert!(manager.task(id).unwrap().result.is_none());
+    wait(&mut manager, 1, |m| m.task(id).unwrap().state() == DownloadState::Scanning);
+    let new = manager.take_scan_requests().pop().unwrap().1;
+    manager.finish_scan(id, &scan(&mut db, &new.chart_dir), None);
+    assert_eq!(manager.task(id).unwrap().state(), DownloadState::Completed);
+    assert_eq!(server.requests.load(Ordering::Relaxed), 2);
+    assert_ne!(old.chart_dir, new.chart_dir);
+    assert!(old.chart_dir.join("song/chart.bms").is_file());
 }

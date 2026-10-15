@@ -416,6 +416,8 @@ fn restored_select_index_bridges_missing_hashes_without_merging_local_copies() {
 fn download_selection_respects_generation_folder_filters_and_file_identity() {
     let row = select_chart_row(7);
     let selection = DownloadSelection {
+        task_id: 1,
+        selected_index: 0,
         request_id: 1,
         identity: crate::song_download::ChartDownloadIdentity {
             sha256: Some(row.chart.as_ref().unwrap().sha256),
@@ -466,6 +468,8 @@ fn downloaded_chart_is_restored_after_clear_sort_changes_its_position() {
     apply_select_sort(&mut after, SelectSort::Clear);
     assert_eq!(restored_select_index(&after, Some(&key), 0), 1);
     let selection = DownloadSelection {
+        task_id: 1,
+        selected_index: 0,
         request_id: 1,
         identity: crate::song_download::ChartDownloadIdentity {
             sha256: Some([1; 32]),
@@ -479,6 +483,50 @@ fn downloaded_chart_is_restored_after_clear_sort_changes_its_position() {
     assert_eq!(download_selection_index(&selection, &["table".into()], 2, &after), None);
     assert_eq!(download_selection_index(&selection, &["other table".into()], 1, &after), None);
     assert_eq!(download_selection_index(&selection, &["table".into()], 1, &before), None);
+}
+
+#[test]
+fn download_restoration_keeps_the_nearest_duplicate_hash_reference() {
+    let row = select_chart_row(7);
+    let mut duplicate = row.clone();
+    duplicate.chart.as_mut().unwrap().chart_id = 99;
+    let selection = DownloadSelection {
+        task_id: 1,
+        request_id: 1,
+        selected_index: 1,
+        identity: crate::song_download::ChartDownloadIdentity { sha256: Some([7; 32]), md5: None },
+        folder_stack: vec!["table".into()],
+        selected_key: Some(SelectItemKey::ChartSha256([7; 32])),
+        generation: 1,
+    };
+    assert_eq!(
+        download_selection_index(
+            &selection,
+            &["table".into()],
+            1,
+            &[SelectItem::Chart(row), SelectItem::Chart(duplicate)]
+        ),
+        Some(1)
+    );
+}
+
+#[test]
+fn acquisition_metadata_keeps_hashes_known_only_by_the_select_row() {
+    let mut row = select_chart_row(7);
+    row.chart = None;
+    row.entry_sha256 = Some([7; 32]);
+    row.download_metadata.sha256.clear();
+    let metadata = row.acquisition_metadata();
+    assert_eq!(metadata.sha256, hash_to_hex(&[7; 32]));
+    let config = crate::config::app_config::ChartDownloadsConfig {
+        http_enabled: true,
+        http_api_url: "https://fixture.invalid/{sha256}".into(),
+        ..Default::default()
+    };
+    assert!(matches!(
+        choose_missing_chart_action(&config, &metadata),
+        MissingChartAction::Http { .. }
+    ));
 }
 
 #[test]

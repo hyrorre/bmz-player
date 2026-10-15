@@ -6,7 +6,6 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     mpsc,
 };
-
 pub type DownloadTaskId = u64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,15 +78,39 @@ impl DownloadControl {
     }
 }
 
-#[derive(Default)]
 pub struct DownloadServices {
     #[cfg(test)]
     pub(super) timeout: Option<Duration>,
-    pub(super) extraction: Mutex<()>,
-    pub(super) archives: Mutex<std::collections::HashMap<String, Arc<Mutex<ArchiveResult>>>>,
+    pub(super) extraction: tokio::sync::Semaphore,
+    pub(super) archives: Mutex<std::collections::HashMap<[u8; 32], Arc<Mutex<ArchiveResult>>>>,
+}
+
+impl Default for DownloadServices {
+    fn default() -> Self {
+        Self {
+            #[cfg(test)]
+            timeout: None,
+            extraction: tokio::sync::Semaphore::new(1),
+            archives: Mutex::default(),
+        }
+    }
 }
 
 impl DownloadServices {
+    fn evict_archive(&self, result: &ChartDownloadResult) {
+        let Some(key) = result.archive_cache_key else {
+            return;
+        };
+        let mut cache = self.archives.lock().unwrap_or_else(|error| error.into_inner());
+        let same_result = cache.get(&key).is_some_and(|entry| {
+            let entry = entry.lock().unwrap_or_else(|error| error.into_inner());
+            matches!(entry.as_ref(), Some(Ok(current)) if current.chart_dir == result.chart_dir)
+        });
+        if same_result {
+            cache.remove(&key);
+        }
+    }
+
     pub(super) fn timeout(&self) -> Duration {
         #[cfg(test)]
         if let Some(timeout) = self.timeout {
@@ -104,9 +127,11 @@ pub struct DownloadTask {
     pub requests: Vec<ChartDownloadRequest>,
     pub control: Arc<DownloadControl>,
     pub error: Option<String>,
+    pub registration_missing: bool,
     pub result: Option<ChartDownloadResult>,
-    pub registered: Vec<ChartDownloadIdentity>,
+    pub registered: HashSet<ChartDownloadIdentity>,
     worker: Option<mpsc::Receiver<Result<ChartDownloadResult>>>,
+    thread: Option<std::thread::JoinHandle<()>>,
     scan_pending: bool,
 }
 
@@ -120,6 +145,23 @@ impl DownloadTask {
             _ => "HTTP",
         }
     }
+
+    pub fn source_label(&self) -> String {
+        let api = match &self.requests[0].action {
+            MissingChartAction::Http { api_url, .. } | MissingChartAction::Ipfs { api_url, .. } => {
+                api_url
+            }
+            _ => return self.source_name().into(),
+        };
+        let url = Url::parse(api).ok();
+        match url.as_ref().and_then(Url::host_str) {
+            Some("gingerrush.com") => "Ginger".into(),
+            Some("bms.alvorna.com") => "Konmai".into(),
+            Some("bms.wrigglebug.xyz") => "Wriggle".into(),
+            Some(host) => format!("{} · {host}", self.source_name()),
+            None => self.source_name().into(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -128,6 +170,10 @@ pub struct ChartDownloadManager {
     tasks: Vec<DownloadTask>,
     queues: [VecDeque<usize>; 2],
     active: Vec<usize>,
+    retired: Vec<usize>,
+    scan_queue: VecDeque<usize>,
+    failed_notices: VecDeque<DownloadTaskId>,
+    transfers: std::collections::HashMap<super::transfer_key::TransferKey, usize>,
     services: Arc<DownloadServices>,
     next_id: u64,
 }
@@ -146,32 +192,48 @@ impl ChartDownloadManager {
     /// Returns (task id, merged). Scope includes the exact API configuration and
     /// destination. Credentials/query parameters are never stripped for sharing.
     pub fn submit(&mut self, request: ChartDownloadRequest) -> (DownloadTaskId, bool) {
-        if let Some(task) = self.tasks.iter_mut().find(|task| {
-            !matches!(task.state(), DownloadState::Failed | DownloadState::Cancelled)
-                && task.requests.iter().any(|other| requests_share_transfer(other, &request))
-        }) {
+        let keys = super::transfer_key::transfer_keys(&request);
+        let existing =
+            keys.iter().filter_map(|key| self.transfers.get(key).copied()).find(|index| {
+                let task = &self.tasks[*index];
+                !matches!(task.state(), DownloadState::Failed | DownloadState::Cancelled)
+                    && task.requests.iter().any(|other| requests_share_transfer(other, &request))
+            });
+        if let Some(index) = existing {
+            for key in keys {
+                self.transfers.insert(key, index);
+            }
+            let task = &mut self.tasks[index];
+            tracing::info!(task_id = task.id, request_id = request.request_id, identity = ?request.identity, source = task.source_label(), "merged chart download request");
             task.requests.push(request);
             if task.state() == DownloadState::Completed {
                 task.control.set_state(DownloadState::Scanning);
                 task.scan_pending = true;
+                self.scan_queue.push_back(index);
             }
             return (task.id, true);
         }
         self.next_id += 1;
         let id = self.next_id;
-        tracing::info!(task_id = id, identity = ?request.identity, "queued chart download");
+        let index = self.tasks.len();
+        for key in keys {
+            self.transfers.insert(key, index);
+        }
         self.queues[usize::from(matches!(request.action, MissingChartAction::Ipfs { .. }))]
-            .push_back(self.tasks.len());
+            .push_back(index);
         self.tasks.push(DownloadTask {
             id,
             requests: vec![request],
             control: Arc::default(),
             error: None,
+            registration_missing: false,
             result: None,
-            registered: Vec::new(),
+            registered: HashSet::new(),
             worker: None,
+            thread: None,
             scan_pending: false,
         });
+        tracing::info!(task_id = id, request_id = self.tasks[index].requests[0].request_id, identity = ?self.tasks[index].requests[0].identity, source = self.tasks[index].source_label(), "queued chart download");
         (id, false)
     }
 
@@ -200,11 +262,19 @@ impl ChartDownloadManager {
             && matches!(task.state(), DownloadState::Failed | DownloadState::Cancelled)
             && task.worker.is_none()
         {
+            if (task.registration_missing
+                || task.result.as_ref().is_some_and(|result| !result.chart_dir.is_dir()))
+                && let Some(result) = task.result.take()
+            {
+                self.services.evict_archive(&result);
+            }
             task.control = Arc::default();
             task.error = None;
+            task.registration_missing = false;
             if task.result.is_some() {
                 task.control.set_state(DownloadState::Scanning);
                 task.scan_pending = true;
+                self.scan_queue.push_back(index);
             } else {
                 self.queues[usize::from(task.source_name() == "IPFS")].push_back(index);
             }
@@ -212,6 +282,19 @@ impl ChartDownloadManager {
     }
 
     pub fn poll(&mut self, http_parallelism: usize) {
+        self.retired.retain(|index| {
+            let handle = &mut self.tasks[*index].thread;
+            if handle.is_none() {
+                false
+            } else if handle.as_ref().is_some_and(|handle| handle.is_finished()) {
+                if handle.take().unwrap().join().is_err() {
+                    tracing::warn!("download worker panicked");
+                }
+                false
+            } else {
+                true
+            }
+        });
         let mut active = Vec::new();
         for index in std::mem::take(&mut self.active) {
             let task = &mut self.tasks[index];
@@ -229,10 +312,12 @@ impl ChartDownloadManager {
                 }
             };
             task.worker = None;
+            self.retired.push(index);
             match result {
                 Ok(result) => {
                     task.result = Some(result);
                     task.scan_pending = true;
+                    self.scan_queue.push_back(index);
                     task.control.set_state(if task.control.is_cancelled() {
                         DownloadState::Cancelled
                     } else {
@@ -240,12 +325,15 @@ impl ChartDownloadManager {
                     });
                 }
                 Err(error) => {
-                    task.error = Some(format!("{error:#}"));
+                    task.error = Some(sanitized_download_error(&error));
                     task.control.set_state(if task.control.is_cancelled() {
                         DownloadState::Cancelled
                     } else {
                         DownloadState::Failed
                     });
+                    if task.state() == DownloadState::Failed {
+                        self.failed_notices.push_back(task.id);
+                    }
                     tracing::warn!(task_id = task.id, identity = ?task.requests[0].identity, source = task.source_name(), error = ?task.error, "chart download ended");
                 }
             }
@@ -267,6 +355,10 @@ impl ChartDownloadManager {
                 if task.state() != DownloadState::Queued {
                     continue;
                 }
+                if task.thread.is_some() {
+                    self.queues[queue].push_back(index);
+                    break;
+                }
                 slots -= 1;
                 task.control.set_state(DownloadState::Resolving);
                 let control = Arc::clone(&task.control);
@@ -284,8 +376,9 @@ impl ChartDownloadManager {
                         let _ = tx.send(result);
                     },
                 ) {
-                    Ok(_) => {
+                    Ok(handle) => {
                         task.worker = Some(rx);
+                        task.thread = Some(handle);
                         self.active.push(index);
                     }
                     Err(error) => {
@@ -298,15 +391,20 @@ impl ChartDownloadManager {
     }
 
     pub fn take_scan_requests(&mut self) -> Vec<(DownloadTaskId, ChartDownloadResult)> {
-        self.tasks
-            .iter_mut()
-            .filter_map(|task| {
-                if !std::mem::take(&mut task.scan_pending) {
-                    return None;
-                }
-                task.result.clone().map(|result| (task.id, result))
-            })
-            .collect()
+        let mut scans = Vec::new();
+        while let Some(index) = self.scan_queue.pop_front() {
+            let task = &mut self.tasks[index];
+            if std::mem::take(&mut task.scan_pending)
+                && let Some(result) = &task.result
+            {
+                scans.push((task.id, result.clone()));
+            }
+        }
+        scans
+    }
+
+    pub fn take_failure_notices(&mut self) -> Vec<DownloadTaskId> {
+        self.failed_notices.drain(..).collect()
     }
 
     pub fn finish_scan(
@@ -321,17 +419,39 @@ impl ChartDownloadManager {
         if task.state() == DownloadState::Cancelled {
             return;
         }
-        task.registered = registered.to_vec();
-        let success = error.is_none()
-            && task.requests.iter().all(|r| {
-                registered.iter().any(|identity| {
-                    r.identity.sha256.is_some_and(|sha| identity.sha256 == Some(sha))
-                        && r.identity.md5.is_none_or(|md5| identity.md5 == Some(md5))
-                        || r.identity.sha256.is_none()
-                            && r.identity.md5.is_some()
-                            && r.identity.md5 == identity.md5
-                })
-            });
+        let mut sha256s = HashSet::new();
+        let mut md5s = HashSet::new();
+        let mut pairs = HashSet::new();
+        for identity in registered {
+            if let Some(sha) = identity.sha256 {
+                sha256s.insert(sha);
+            }
+            if let Some(md5) = identity.md5 {
+                md5s.insert(md5);
+            }
+            if let (Some(sha), Some(md5)) = (identity.sha256, identity.md5) {
+                pairs.insert((sha, md5));
+            }
+        }
+        task.registered = task
+            .requests
+            .iter()
+            .filter(|request| match (request.identity.sha256, request.identity.md5) {
+                (Some(sha), Some(md5)) => pairs.contains(&(sha, md5)),
+                (Some(sha), None) => sha256s.contains(&sha),
+                (None, Some(md5)) => md5s.contains(&md5),
+                _ => false,
+            })
+            .map(|request| request.identity.clone())
+            .collect();
+        let success =
+            error.is_none() && task.requests.iter().all(|r| task.registered.contains(&r.identity));
+        task.registration_missing = error.is_none() && !success;
+        if task.registration_missing
+            && let Some(result) = &task.result
+        {
+            self.services.evict_archive(result);
+        }
         task.error = (!success).then(|| {
             error.unwrap_or("requested chart not found in the library after scanning").to_string()
         });
@@ -344,11 +464,34 @@ impl ChartDownloadManager {
     }
 }
 
+fn sanitized_download_error(error: &anyhow::Error) -> String {
+    let mut message = format!("{error:#}");
+    for cause in error.chain() {
+        if let Some(request_error) = cause.downcast_ref::<reqwest::Error>()
+            && let Some(url) = request_error.url()
+        {
+            let mut safe = url.clone();
+            let _ = safe.set_username("");
+            let _ = safe.set_password(None);
+            safe.set_query(None);
+            safe.set_fragment(None);
+            message = message.replace(url.as_str(), safe.as_str());
+        }
+    }
+    message
+}
+
 impl Drop for ChartDownloadManager {
     fn drop(&mut self) {
         for task in &self.tasks {
             if task.worker.is_some() {
                 task.control.cancel();
+            }
+        }
+        // Shutdown only: wait for cancellation cleanup before the process exits.
+        for task in &mut self.tasks {
+            if let Some(handle) = task.thread.take() {
+                let _ = handle.join();
             }
         }
     }
@@ -373,7 +516,11 @@ fn requests_share_transfer(a: &ChartDownloadRequest, b: &ChartDownloadRequest) -
                         expand_http_api_url(a_url, a_md5, a_sha),
                         expand_http_api_url(b_url, b_md5, b_sha),
                     ) {
-                        (Ok(a), Ok(b)) => a == b,
+                        (Ok(mut a), Ok(mut b)) => {
+                            a.set_fragment(None);
+                            b.set_fragment(None);
+                            a == b
+                        }
                         _ => false,
                     })
         }
@@ -389,6 +536,95 @@ fn requests_share_transfer(a: &ChartDownloadRequest, b: &ChartDownloadRequest) -
 mod tests {
     use super::super::test_support::*;
     use super::*;
+
+    #[test]
+    fn large_submissions_remain_queued_without_spawning_workers() {
+        let root = tempfile::tempdir().unwrap();
+        let mut manager = ChartDownloadManager::default();
+        for id in 1_u64..=10_000 {
+            let mut sha = [0; 32];
+            sha[..8].copy_from_slice(&id.to_le_bytes());
+            let request = ChartDownloadRequest {
+                request_id: id,
+                identity: ChartDownloadIdentity { sha256: Some(sha), md5: None },
+                action: MissingChartAction::Http {
+                    api_url: "https://fixture.invalid/{sha256}".into(),
+                    md5: String::new(),
+                    sha256: crate::storage::common::hash_to_hex(&sha),
+                },
+                title: "Chart".into(),
+                data_dir: root.path().into(),
+            };
+            let (task_id, merged) = manager.submit(request.clone());
+            assert!(!merged);
+            assert_eq!(manager.submit(request), (task_id, true));
+        }
+        assert_eq!(manager.tasks.len(), 10_000);
+        assert!(manager.active.is_empty());
+        assert_eq!(manager.queues[0].len(), 10_000);
+        assert!(manager.take_scan_requests().is_empty());
+    }
+
+    #[test]
+    fn partially_registered_shared_tasks_report_each_target_independently() {
+        let root = tempfile::tempdir().unwrap();
+        let mut manager = ChartDownloadManager::default();
+        let first = request(root.path(), "https://fixture.invalid/{sha256}", 1);
+        let mut second = first.clone();
+        second.request_id = 2;
+        second.identity.md5 = Some([2; 16]);
+        let first_identity = first.identity.clone();
+        let second_identity = second.identity.clone();
+        let (id, _) = manager.submit(first);
+        assert_eq!(manager.submit(second), (id, true));
+        manager.tasks[0].control.set_state(DownloadState::Scanning);
+        manager.finish_scan(id, std::slice::from_ref(&first_identity), None);
+        let task = manager.task(id).unwrap();
+        assert_eq!(task.state(), DownloadState::Failed);
+        assert!(task.registered.contains(&first_identity));
+        assert!(!task.registered.contains(&second_identity));
+        let batch = BulkDownloadBatch {
+            scope: BulkDownloadScope { source_url: "table".into(), level: None },
+            counts: Default::default(),
+            targets: vec![(id, first_identity), (id, second_identity)],
+        };
+        assert_eq!(batch.results(&manager), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_shared_archive_owner_allows_the_waiter_to_take_over() {
+        let root = tempfile::tempdir().unwrap();
+        let server = HttpFixture::with_handler(
+            move |path| {
+                if path == "/archive" {
+                    (
+                        200,
+                        "application/octet-stream".into(),
+                        archive(&[("chart.bms", b"#TITLE Fixture")]),
+                    )
+                } else {
+                    (200, "application/json".into(), br#"{"downloadURL":"/archive"}"#.to_vec())
+                }
+            },
+            Duration::from_millis(5),
+        );
+        let mut manager = ChartDownloadManager::default();
+        let services = Arc::clone(&manager.services);
+        let permit = services.extraction.acquire().await.unwrap();
+        manager.submit(request(root.path(), &format!("{}/{{md5}}", server.url), 1));
+        manager.submit(request(root.path(), &format!("{}/{{md5}}", server.url), 2));
+        wait(&mut manager, 3, |m| m.tasks.iter().any(|task| task.control.bytes().0 > 0));
+        let owner = manager.tasks.iter().find(|task| task.control.bytes().0 > 0).unwrap().id;
+        let waiter = manager.tasks.iter().find(|task| task.id != owner).unwrap().id;
+        manager.cancel(owner);
+        wait(&mut manager, 3, |m| {
+            m.task(owner).unwrap().state() == DownloadState::Cancelled
+                && m.task(waiter).unwrap().control.bytes().0 > 0
+        });
+        drop(permit);
+        wait(&mut manager, 3, |m| m.task(waiter).unwrap().state() == DownloadState::Scanning);
+        assert_eq!(manager.task(owner).unwrap().state(), DownloadState::Cancelled);
+    }
 
     #[test]
     fn bounded_queue_accepts_more_work_and_waits_for_db_registration() {
@@ -416,7 +652,7 @@ mod tests {
                 assert!(task.result.as_ref().unwrap().chart_dir.join("song/chart.bms").is_file());
             }
             let id = manager.tasks[0].id;
-            manager.finish_scan(id, &[], None);
+            manager.finish_scan(id, &[], Some("temporary database error"));
             assert_eq!(manager.task(id).unwrap().state(), DownloadState::Failed);
             manager.retry(id);
             assert_eq!(manager.take_scan_requests().len(), 1);

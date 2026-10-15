@@ -241,6 +241,17 @@ impl SelectChartRow {
             (!md5.is_empty()).then(|| crate::storage::common::hex_to_hash::<16>(md5).ok()).flatten()
         })
     }
+
+    pub fn acquisition_metadata(&self) -> ChartDownloadMetadata {
+        let mut metadata = self.download_metadata.clone();
+        if let Some(hash) = self.score_sha256() {
+            metadata.sha256 = hash_to_hex(&hash);
+        }
+        if let Some(hash) = self.score_md5() {
+            metadata.md5 = hash_to_hex(&hash);
+        }
+        metadata
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

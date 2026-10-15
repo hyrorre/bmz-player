@@ -57,12 +57,17 @@ pub(super) fn metadata_download_url(value: &Value) -> Result<&str> {
         anyhow::ensure!(success.as_bool() == Some(true), "HTTP API reports chart unavailable");
     }
     anyhow::ensure!(
-        !object.get("error").is_some_and(|error| !error.is_null() && error.as_str() != Some("")),
+        !object.get("error").is_some_and(|error| !error.is_null()
+            && error.as_str() != Some("")
+            && error.as_bool() != Some(false)),
         "HTTP API returned an error"
     );
-    if let Some(size) = object.get("fileSize") {
+    if let Some(size) = object.get("fileSize")
+        && !size.is_null()
+    {
         let size = size
             .as_u64()
+            .or_else(|| size.as_str().and_then(|size| size.parse().ok()))
             .ok_or_else(|| anyhow::anyhow!("HTTP API returned an invalid file size"))?;
         anyhow::ensure!(size <= MAX_DOWNLOAD_BYTES, "HTTP API archive exceeds size limit");
     }
@@ -101,5 +106,16 @@ mod tests {
             .unwrap(),
             "https://archive.test"
         );
+    }
+
+    #[test]
+    fn optional_metadata_fields_keep_legacy_custom_responses_usable() {
+        for value in [
+            serde_json::json!({"error":false,"downloadURL":"/archive","fileSize":null}),
+            serde_json::json!({"downloadURL":"/archive","fileSize":"123"}),
+            serde_json::json!({"error":"","downloadURL":"/archive"}),
+        ] {
+            assert_eq!(metadata_download_url(&value).unwrap(), "/archive");
+        }
     }
 }

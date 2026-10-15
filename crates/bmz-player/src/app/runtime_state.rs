@@ -391,3 +391,16 @@ pub(super) struct SongScanRuntime {
     pub(super) queued: VecDeque<(Vec<PathEntry>, bool, String, SongScanScope)>,
     pub(super) progress: Option<ScanProgress>,
 }
+
+impl SongScanRuntime {
+    pub(super) fn has_download_scan_for(&self, dir: &Path) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(|pending| pending.download_dirs.iter().any(|path| path == dir))
+            || self.queued.iter().any(|(roots, _, _, _)| {
+                roots
+                    .iter()
+                    .any(|root| root.enabled && root.recursive && Path::new(&root.path) == dir)
+            })
+    }
+}

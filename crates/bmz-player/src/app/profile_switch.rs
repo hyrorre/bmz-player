@@ -403,6 +403,8 @@ impl WinitApp {
         self.select.folder_stack.clear();
         self.select.selected_index_stack.clear();
         self.select.selected_index = 0;
+        self.select.selection_generation = self.select.selection_generation.wrapping_add(1);
+        self.jobs.download_selections.clear();
         self.select.select_items.clear();
         self.select.collection_cache.invalidate();
         self.select.selected_replay_slot = None;

@@ -153,6 +153,7 @@ impl WinitApp {
         }
         self.reload_select_items();
         self.select.selected_index = 0;
+        self.select.selection_generation = self.select.selection_generation.wrapping_add(1);
         self.reset_selected_replay_slot();
         self.restart_select_bar_timer_without_scroll(Instant::now());
         self.play_system_sound(crate::system_sound::SoundType::FolderOpen);
@@ -659,8 +660,8 @@ impl WinitApp {
 
     pub(super) fn acquire_missing_chart(&mut self, row: &SelectChartRow) {
         let text = Localizer::new(self.boot.profile_config.ui.locale());
-        let action =
-            choose_missing_chart_action(&self.boot.app_config.downloads, &row.download_metadata);
+        let metadata = row.acquisition_metadata();
+        let action = choose_missing_chart_action(&self.boot.app_config.downloads, &metadata);
         match action {
             MissingChartAction::Browser(urls) => match open_browser_urls(&urls) {
                 Ok(count) => {
@@ -686,9 +687,7 @@ impl WinitApp {
                     vec![(
                         action,
                         row.display_title().to_string(),
-                        crate::song_download::ChartDownloadIdentity::from_metadata(
-                            &row.download_metadata,
-                        ),
+                        crate::song_download::ChartDownloadIdentity::from_metadata(&metadata),
                     )],
                     true,
                 );
@@ -724,17 +723,13 @@ impl WinitApp {
             SelectItem::Chart(chart) if !chart.in_library() => Some(chart),
             _ => None,
         }) {
-            match choose_missing_chart_action(
-                &self.boot.app_config.downloads,
-                &chart.download_metadata,
-            ) {
+            let metadata = chart.acquisition_metadata();
+            match choose_missing_chart_action(&self.boot.app_config.downloads, &metadata) {
                 action @ (MissingChartAction::Ipfs { .. } | MissingChartAction::Http { .. }) => {
                     downloads.push((
                         action,
                         chart.display_title().to_string(),
-                        crate::song_download::ChartDownloadIdentity::from_metadata(
-                            &chart.download_metadata,
-                        ),
+                        crate::song_download::ChartDownloadIdentity::from_metadata(&metadata),
                     ));
                 }
                 MissingChartAction::Browser(urls) => browser_urls.extend(urls),
@@ -783,7 +778,15 @@ impl WinitApp {
         downloads: Vec<(MissingChartAction, String, crate::song_download::ChartDownloadIdentity)>,
         restore_selection: bool,
     ) {
-        let single = restore_selection && downloads.len() == 1;
+        let request_count = downloads.len();
+        let single = restore_selection && request_count == 1;
+        let source =
+            downloads
+                .first()
+                .map(|(action, _, _)| {
+                    if matches!(action, MissingChartAction::Ipfs { .. }) { "IPFS" } else { "HTTP" }
+                })
+                .unwrap_or("HTTP");
         for (action, title, identity) in downloads {
             self.jobs.download_request_id += 1;
             let request_id = self.jobs.download_request_id;
@@ -797,6 +800,8 @@ impl WinitApp {
             let (task_id, _) = self.jobs.chart_downloads.submit(request);
             if single {
                 self.jobs.download_selections.push(DownloadSelection {
+                    task_id,
+                    selected_index: self.select.selected_index,
                     request_id,
                     identity,
                     folder_stack: self.select.folder_stack.clone(),
@@ -811,10 +816,46 @@ impl WinitApp {
             tracing::info!(task_id, request_id, "submitted chart download");
         }
         self.jobs.chart_downloads.poll(self.boot.app_config.downloads.http_parallelism as usize);
+        if request_count > 0 {
+            let mut args = FluentArgs::new();
+            args.set("source", source);
+            args.set("count", request_count as i64);
+            self.show_left_overlay_toast(
+                Localizer::new(self.boot.profile_config.ui.locale()).format(
+                    if request_count == 1 {
+                        "toast-chart-download-started"
+                    } else {
+                        "toast-course-download-started"
+                    },
+                    &args,
+                ),
+            );
+        }
     }
 
     pub(super) fn poll_pending_chart_download(&mut self) {
         self.jobs.chart_downloads.poll(self.boot.app_config.downloads.http_parallelism as usize);
+        let failures = self.jobs.chart_downloads.take_failure_notices();
+        if failures.into_iter().any(|id| {
+            self.jobs
+                .chart_downloads
+                .task(id)
+                .is_some_and(|task| task.state() == crate::song_download::DownloadState::Failed)
+        }) {
+            self.show_left_overlay_toast(
+                Localizer::new(self.boot.profile_config.ui.locale())
+                    .text("toast-chart-download-failed"),
+            );
+        }
+        self.jobs.download_selections.retain(|selection| {
+            self.jobs.chart_downloads.task(selection.task_id).is_some_and(|task| {
+                !matches!(
+                    task.state(),
+                    crate::song_download::DownloadState::Failed
+                        | crate::song_download::DownloadState::Cancelled
+                )
+            })
+        });
         let scans = self.jobs.chart_downloads.take_scan_requests();
         if scans.is_empty() {
             return;
@@ -826,7 +867,9 @@ impl WinitApp {
                 &mut self.boot.app_config.songs.roots,
                 &result.root_dir.to_string_lossy(),
             );
-            if !roots.iter().any(|root: &PathEntry| Path::new(&root.path) == result.chart_dir) {
+            if !self.jobs.song_scan.has_download_scan_for(&result.chart_dir)
+                && !roots.iter().any(|root: &PathEntry| Path::new(&root.path) == result.chart_dir)
+            {
                 roots.push(PathEntry {
                     path: result.chart_dir.to_string_lossy().into_owned(),
                     enabled: true,
@@ -845,10 +888,9 @@ impl WinitApp {
                     .text("toast-chart-download-root-save-failed"),
             );
         }
-        if let Err(error) = self.publish_song_scope() {
-            tracing::error!(%error, "failed to publish downloaded song roots");
+        if !roots.is_empty() {
+            self.spawn_song_scan(roots, true, "chart download registration".into());
         }
-        self.spawn_song_scan(roots, true, "chart download registration".into());
     }
 
     pub(in crate::app) fn finish_download_selection(&mut self, task_id: u64) {
@@ -856,14 +898,20 @@ impl WinitApp {
             return;
         };
         let ids: HashSet<_> = task.requests.iter().map(|request| request.request_id).collect();
-        let completed = task.state() == crate::song_download::DownloadState::Completed;
+        let failed = task.state() == crate::song_download::DownloadState::Failed;
+        let completed: HashSet<_> = task
+            .requests
+            .iter()
+            .filter(|request| task.registered.contains(&request.identity))
+            .map(|request| request.request_id)
+            .collect();
         let mut remaining = Vec::new();
         for selection in std::mem::take(&mut self.jobs.download_selections) {
             if !ids.contains(&selection.request_id) {
                 remaining.push(selection);
                 continue;
             }
-            if completed
+            if completed.contains(&selection.request_id)
                 && let Some(index) = download_selection_index(
                     &selection,
                     &self.select.folder_stack,
@@ -877,6 +925,12 @@ impl WinitApp {
             }
         }
         self.jobs.download_selections = remaining;
+        if failed {
+            self.show_left_overlay_toast(
+                Localizer::new(self.boot.profile_config.ui.locale())
+                    .text("toast-chart-download-failed"),
+            );
+        }
     }
 
     /// Returns true when the event was consumed by the search input layer

@@ -37,6 +37,7 @@ impl WinitApp {
         self.set_search_mode(false);
         self.select.course_builder = Some(state);
         self.select.selected_index = 0;
+        self.select.selection_generation = self.select.selection_generation.wrapping_add(1);
         self.reload_select_items();
         self.reset_selected_replay_slot();
         self.restart_select_bar_timer_without_scroll(Instant::now());

@@ -1002,3 +1002,4 @@ settings-downloads-source-help = 选择预设会填入 API URL。能否下载取
 settings-downloads-wriggle-status = Wriggle：连接未确认（验证环境中 TLS 连接失败）。
 settings-downloads-required-hashes = 所需哈希：{ $hashes }
 settings-downloads-parallelism = HTTP 同时下载数
+downloads-target-missing = 下载的压缩包中未找到目标谱面。

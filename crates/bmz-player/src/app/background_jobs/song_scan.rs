@@ -89,7 +89,9 @@ impl WinitApp {
         let worker_progress = Arc::clone(&progress);
         let mut downloads = Vec::new();
         self.jobs.download_registrations.retain(|(id, result)| {
-            if roots.iter().any(|root| Path::new(&root.path) == result.chart_dir) {
+            if roots.iter().any(|root| {
+                root.enabled && root.recursive && Path::new(&root.path) == result.chart_dir
+            }) {
                 downloads.push((*id, result.clone()));
                 false
             } else {
@@ -97,6 +99,14 @@ impl WinitApp {
             }
         });
         let download_ids = downloads.iter().map(|(id, _)| *id).collect();
+        let download_dirs = downloads.iter().map(|(_, result)| result.chart_dir.clone()).collect();
+        // Publish roots only after the FIFO admits this scan, never while an
+        // earlier scan owns the SQLite writer on its background thread.
+        if !downloads.is_empty()
+            && let Err(error) = self.publish_song_scope()
+        {
+            tracing::error!(%error, "failed to publish downloaded song roots");
+        }
         self.jobs.song_scan.progress = Some(ScanProgress::default());
         thread::Builder::new()
             .name("song-scan".to_string())
@@ -117,29 +127,22 @@ impl WinitApp {
                     if scope == SongScanScope::Paths {
                         library_db.register_partial_song_roots(&roots)?;
                     }
-                    let mut downloaded = Vec::new();
-                    for (id, result) in downloads {
-                        let mut folders = library_db
-                            .list_descendant_folder_paths(&result.chart_dir.to_string_lossy())?;
-                        folders.push(result.chart_dir.to_string_lossy().into_owned());
-                        let refs: Vec<_> = folders.iter().map(String::as_str).collect();
-                        let identities = library_db
-                            .list_charts_in_folders(&refs)?
-                            .into_iter()
-                            .map(|chart| crate::song_download::ChartDownloadIdentity {
-                                sha256: Some(chart.sha256),
-                                md5: Some(chart.md5),
-                            })
-                            .collect();
-                        downloaded.push((id, identities));
-                    }
+                    let downloaded = crate::song_download::verify_download_registrations(
+                        &library_db,
+                        downloads,
+                    )?;
                     Ok(SongScanResult { report, downloaded })
                 })();
                 let _ = tx.send(result);
             })
             .expect("failed to spawn song scan thread");
-        self.jobs.song_scan.pending =
-            Some(PendingSongScan { finished: rx, progress, library_roots, download_ids });
+        self.jobs.song_scan.pending = Some(PendingSongScan {
+            finished: rx,
+            progress,
+            library_roots,
+            download_ids,
+            download_dirs,
+        });
         tracing::info!(%label, force, "started song scan");
     }
 
@@ -225,14 +228,29 @@ impl WinitApp {
                 } else {
                     self.change_select_list(SelectListAction::RefreshDownloads);
                 }
-                for (id, identities) in result.downloaded {
-                    self.jobs.chart_downloads.finish_scan(id, &identities, None);
-                    self.finish_download_selection(id);
+                for mut registration in result.downloaded {
+                    registration.task_ids.extend(
+                        crate::song_download::attach_download_registrations(
+                            &mut self.jobs.download_registrations,
+                            &registration.chart_dir,
+                        ),
+                    );
+                    for id in registration.task_ids {
+                        self.jobs.chart_downloads.finish_scan(id, &registration.identities, None);
+                        self.finish_download_selection(id);
+                    }
                 }
                 keep_pending = false;
             }
             Ok(Err(error)) => {
-                for id in &pending.download_ids {
+                let mut ids = pending.download_ids.clone();
+                for dir in &pending.download_dirs {
+                    ids.extend(crate::song_download::attach_download_registrations(
+                        &mut self.jobs.download_registrations,
+                        dir,
+                    ));
+                }
+                for id in &ids {
                     self.jobs.chart_downloads.finish_scan(*id, &[], Some(&format!("{error:#}")));
                 }
                 self.song_scan_error(&error);
@@ -241,7 +259,14 @@ impl WinitApp {
             }
             Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) => {
-                for id in &pending.download_ids {
+                let mut ids = pending.download_ids.clone();
+                for dir in &pending.download_dirs {
+                    ids.extend(crate::song_download::attach_download_registrations(
+                        &mut self.jobs.download_registrations,
+                        dir,
+                    ));
+                }
+                for id in &ids {
                     self.jobs.chart_downloads.finish_scan(
                         *id,
                         &[],

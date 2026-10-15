@@ -39,10 +39,10 @@ pub(super) fn build_download_panel(
                 });
             }
             super::download_task_list::build_task_list(ui, manager, list, &mut commands, text);
-            for batch in manager.batches.iter().rev().take(4) {
+            for (index, batch) in manager.batches.iter().enumerate().rev().take(4) {
                 ui.separator(); scope_label(ui, &batch.scope, tables, text); counts_label(ui, &batch.counts, text);
-                let (completed, failed) = batch.results(manager);
-                ui.label(tr!(text, "downloads-bulk-results", "queued" => batch.counts.queued as i64, "merged" => batch.counts.merged as i64, "completed" => completed as i64, "failed" => failed as i64));
+                let (completed, failed, merged) = list.batch_results.iter().find(|(id,_)| *id == index).map(|(_,results)| *results).unwrap_or_default();
+                ui.label(tr!(text, "downloads-bulk-results", "queued" => batch.counts.queued as i64, "merged" => merged as i64, "completed" => completed as i64, "failed" => failed as i64));
             }
         });
     commands

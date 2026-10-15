@@ -1005,3 +1005,4 @@ settings-downloads-source-help = Selecting a preset fills in the API URL. Availa
 settings-downloads-wriggle-status = Wriggle: connection unverified (TLS connection failed in validation).
 settings-downloads-required-hashes = Required hashes: { $hashes }
 settings-downloads-parallelism = Concurrent HTTP downloads
+downloads-target-missing = The requested chart was not found in the downloaded archive.

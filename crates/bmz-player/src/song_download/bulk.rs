@@ -123,12 +123,29 @@ pub struct BulkDownloadBatch {
 }
 
 impl BulkDownloadBatch {
+    pub fn merged_count(&self, manager: &ChartDownloadManager) -> usize {
+        let mut task_ids = HashSet::new();
+        let mut directories = HashSet::new();
+        let mut shared = 0;
+        for (id, _) in &self.targets {
+            if !task_ids.insert(*id) {
+                continue;
+            }
+            if let Some(result) = manager.task(*id).and_then(|task| task.result.as_ref())
+                && !directories.insert(&result.chart_dir)
+            {
+                shared += 1;
+            }
+        }
+        self.counts.merged + shared
+    }
+
     pub fn results(&self, manager: &ChartDownloadManager) -> (usize, usize) {
         let mut succeeded = 0;
         let mut failed = 0;
         for (id, identity) in &self.targets {
             if let Some(task) = manager.task(*id) {
-                if task.registered.iter().any(|registered| identity.overlaps(registered)) {
+                if task.registered.contains(identity) {
                     succeeded += 1;
                 } else if task.state() == DownloadState::Failed {
                     failed += 1;

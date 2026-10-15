@@ -1002,3 +1002,4 @@ settings-downloads-source-help = 프리셋을 선택하면 API URL이 입력됩�
 settings-downloads-wriggle-status = Wriggle: 연결 미확인 (검증 환경에서 TLS 연결 실패).
 settings-downloads-required-hashes = 필요한 해시: { $hashes }
 settings-downloads-parallelism = HTTP 동시 다운로드 수
+downloads-target-missing = 다운로드한 압축 파일에서 대상 채보를 찾을 수 없습니다.
