@@ -6,7 +6,7 @@
 
 - 実施日: 2026-10-15
 - 対象: ブランチ `claude/festive-mendel-rnpzpw`（`origin/main` を `b1633644` でmerge済み）
-- 環境: Linuxのクラウドコンテナ。テストはrootで実行。Windows / macOSでは実行していない。
+- 環境: Linuxのクラウドコンテナ。テストはrootで実行。Windowsの結果は「Windowsでの追加調査」に記載。macOSでは実行していない。
 
 ## 調べ方
 
@@ -66,6 +66,34 @@
   強制終了されることがある（終了コード137）。
 - 繰り返し実行で `/tmp` にテストの残骸とdebugビルドの成果物が溜まり、ディスクが不足した。
   生ログはセッションのscratchpadにだけ置き、共有していない。
+
+## Windowsでの追加調査
+
+署名し直したブランチ（`fd820a93`）で、Windows 11（論理CPU 24、メモリ64GB）を使って同じ観点を確かめた。
+テストバイナリを直接起動するときは、vcpkgのFFmpeg DLLのあるディレクトリ
+（`%VCPKG_ROOT%\installed\x64-windows\bin`）をPATHに加える必要があった。
+
+| 条件 | 失敗 |
+|---|---|
+| 全17テストバイナリを1プロセスずつ、10回 | 0 / 170 |
+| 同じバイナリを2プロセス同時に、5回 | 3 / 170（すべて `bmz_player`） |
+| 下記の2テストだけを負荷なしで30回 | 0 / 30 |
+| 同じ2テストを、busy-loopのプロセス48本（CPUの2倍）と並走させて | 14 / 14（途中で打ち切り） |
+
+失敗したのは `gameplay_runtime` の `gameplay_results_replay_and_audio_are_invariant_to_render_stalls` と
+`autoplay_and_replay_are_invariant_to_render_stalls` で、どちらも描画停止中に音の送出数が増えたことのassertだった。
+手動入力では次の音がtick 200等の押下時にしかなく、停止開始から最大でdriverとgameplayスレッドの往復が
+約10回必要になる。これを停止時間（100ms）以内に終える前提が、CPUが混むと崩れていた。
+gameplay側は停止中も進行しており、製品コードの不具合ではない。
+
+修正では、停止時間のsleep後もslotを保持したまま、期限付きの `wait_until` で時刻と送出数が増えるのを待つ。
+修正後は48本の負荷下で12 / 12成功し、`bmz_player` のlibテスト全体を2プロセス同時に5回流しても
+10 / 10成功した。`cargo clippy -p bmz-player --all-targets --locked -- -D warnings` も成功。
+
+一時パスの衝突やnamed pipe名の衝突など、Windows固有の失敗は見つからなかった。
+`unreadable_subdirectory` のテストは `#[cfg(unix)]` のためWindowsでは実行されない。
+一方、`%TEMP%` には `bmz*` の残骸が約3.6万件（約405MB、大半は空ディレクトリ）溜まっていた。
+大半は `bmz-skin` の `unique_test_dir` 由来で、下記の残課題に当たる。
 
 ## 残課題
 
