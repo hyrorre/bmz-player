@@ -144,6 +144,12 @@ impl WinitApp {
             snapshot.command_drained_count.saturating_sub(previous.command_drained_count);
         let commands_coalesced =
             snapshot.command_coalesced_count.saturating_sub(previous.command_coalesced_count);
+        let scheduling_late_frames =
+            snapshot.scheduling_late_frames.saturating_sub(previous.scheduling_late_frames);
+        // `collect_audio_diagnostics` takes each source's interval peak (including
+        // play sources dropped since the last collect), so this value covers only
+        // the current reporting interval.
+        let scheduling_max_late_frames = snapshot.scheduling_max_late_frames;
 
         let sample_rate =
             self.audio.audio_runtime.as_ref().map(AudioRuntime::sample_rate).unwrap_or(1).max(1);
@@ -152,6 +158,7 @@ impl WinitApp {
             ((avg_callback_frames / f64::from(sample_rate)) * 1_000_000_000.0).round() as u64;
         let callback_over_budget =
             callback_budget_ns > 0 && snapshot.max_callback_ns > callback_budget_ns;
+        let late_schedule = late_schedule_from_interval(scheduling_max_late_frames, sample_rate);
         let suspected_cause = classify_audio_output_issue(AudioOutputIssueMetrics {
             stream_errors,
             source_lock_misses,
@@ -161,6 +168,7 @@ impl WinitApp {
             callback_over_budget: callback_over_budget || processor_overloads != 0,
             clipped_samples,
             generated_preview_loading: self.select.select_assets.generated_preview_loading(),
+            late_schedule,
         });
 
         if stream_errors == 0
@@ -172,6 +180,7 @@ impl WinitApp {
             && command_engine_lock_misses == 0
             && clipped_samples == 0
             && !callback_over_budget
+            && !late_schedule
         {
             return;
         }
@@ -199,6 +208,10 @@ impl WinitApp {
             command_drain_lock_misses,
             command_engine_lock_misses,
             command_queue_max_depth = snapshot.command_queue_max_depth,
+            scheduling_late_frames,
+            scheduling_max_late_frames,
+            scheduling_max_late_us =
+                scheduling_max_late_frames.saturating_mul(1_000_000) / u64::from(sample_rate),
             suspected_cause = suspected_cause.as_str(),
             generated_preview_loading = self.select.select_assets.generated_preview_loading(),
             select_preview_playing = self.select.select_assets.preview_playing(),
@@ -222,13 +235,13 @@ impl WinitApp {
             .map(AudioRuntime::take_diagnostics)
             .unwrap_or_default();
         if let Some(system_audio) = &self.audio.system_audio {
-            snapshot.add_command_queue(system_audio.command_diagnostics());
+            snapshot.add_command_queue(system_audio.take_command_diagnostics());
         }
         if let Some(active_play) = &self.play.active_play {
-            snapshot.add_command_queue(active_play.running.audio.command_diagnostics());
+            snapshot.add_command_queue(active_play.running.audio.take_command_diagnostics());
         }
         if let Some(draining_audio) = &self.audio.draining_audio {
-            snapshot.add_command_queue(draining_audio.command_diagnostics());
+            snapshot.add_command_queue(draining_audio.take_command_diagnostics());
         }
         snapshot
     }

@@ -359,17 +359,25 @@ fn advance_session_frame_schedules_autoplay_keysounds() {
     session.audio_mix.key_volume = 0.25;
     session.audio_mix.chart_normalization_gain = 0.5;
     session.audio_mix.normalize_chart_volume = true;
+    // auto_keysound 設定OFFでもフルオートは schedule-ahead 経路を使う。
+    assert!(!session.audio_mix.auto_keysound);
     let mut audio = TestAudio::default();
 
     let frame = advance_session_frame(&mut session, &mut audio);
 
     assert_eq!(frame.judgements.len(), 1);
+    // 判定キー音と schedule-ahead の二重再生にならないこと。
     assert_eq!(audio.scheduled.len(), 1);
     assert_eq!(audio.scheduled[0].sound_id, SoundId(7));
     assert_eq!(audio.scheduled[0].start_frame, 0);
     assert_eq!(audio.scheduled[0].volume, 0.0625);
     assert_eq!(audio.scheduled[0].restart_policy, RestartPolicy::StopSameSound);
+    assert!(
+        !audio.scheduled[0].catch_up,
+        "auto schedule-ahead keysounds must not catch_up into the sample attack"
+    );
     assert_eq!(session.recent_judgements.len(), 1);
+    assert!(session.auto_keysound_scheduler.next_note_index[Lane::Key1.index()] > 0);
 }
 
 #[test]
@@ -481,6 +489,10 @@ fn note_press_schedules_primary_and_layered_keysounds() {
     assert_eq!(
         audio.scheduled.iter().map(|sound| sound.sound_id).collect::<Vec<_>>(),
         vec![SoundId(7), SoundId(8)]
+    );
+    assert!(
+        audio.scheduled.iter().all(|sound| !sound.catch_up),
+        "manual judgement keysounds must not catch_up into the sample attack"
     );
 }
 

@@ -64,10 +64,11 @@ pub fn advance_session_frame(
             audio,
         );
 
-        // キー音自動再生モード: ノーツの押下有無に関わらず、譜面の生タイミングで
-        // キー音を鳴らす。入力オフセット・表示オフセットは適用しない。
-        // 押鍵時のキー音は `schedule_keysounds` 側で抑制する。
-        if session.audio_mix.auto_keysound {
+        // キー音自動再生モード / フルオート: 譜面の生タイミングで schedule-ahead する。
+        // フルオートで判定時にキー音を出すと、フレーム遅延時に catch_up が攻撃を削り、
+        // 同一WAVの連打(キック／バス等)がピッチ変化のように聞こえる。
+        // 入力オフセット・表示オフセットは適用しない。押鍵時キー音は schedule_keysounds 側で抑制。
+        if uses_scheduled_auto_keysounds(session) {
             session.auto_keysound_scheduler.schedule_until(
                 &session.chart,
                 &session.display_only_lane_mask,

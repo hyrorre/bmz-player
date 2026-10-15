@@ -7,6 +7,8 @@ fn miss_keysound_setting_preserves_score_and_uses_key_mix_without_auto_duplicate
             let mut chart = chart_with_keysound();
             chart.lane_notes[Lane::Key1.index()][0].layered_sounds.push(SoundId(8));
             let mut session = session_with_autoplay(chart);
+            // Miss-keysound policy is for human play; full auto uses schedule-ahead.
+            session.autoplay = None;
             session.play_keysound_on_miss = enabled;
             session.audio_mix.auto_keysound = auto;
             session.audio_mix.master_volume = 0.8;
@@ -67,6 +69,7 @@ fn miss_keysound_does_not_escape_display_only_or_viewer_seek_boundaries() {
 fn missed_hcn_head_resets_prior_lane_mute_before_muting_new_voice() {
     for previous in [None, Some(false), Some(true)] {
         let mut session = session_with_autoplay(chart_with_hcn_long_note());
+        session.autoplay = None;
         session.play_keysound_on_miss = true;
         process_misses(&mut session, TimeUs(130_000));
         // A frame jump can retain the mute state of the preceding HCN.

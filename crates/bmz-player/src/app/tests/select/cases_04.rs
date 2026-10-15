@@ -184,6 +184,106 @@ fn audio_diagnostic_marks_generated_preview_callback_pressure() {
 }
 
 #[test]
+fn late_schedule_classification_uses_per_interval_maximum() {
+    // ~2 ms threshold at 48 kHz is 96 frames.
+    assert!(late_schedule_from_interval(96, 48_000));
+    assert!(!late_schedule_from_interval(95, 48_000));
+    assert!(!late_schedule_from_interval(0, 48_000));
+    // A tiny or zero sample rate never makes every interval late.
+    assert!(!late_schedule_from_interval(0, 0));
+    assert!(late_schedule_from_interval(1, 0));
+
+    // A prior interval's large spike must not keep later tiny delays as late_schedule.
+    let first_interval = late_schedule_from_interval(480, 48_000);
+    let second_interval = late_schedule_from_interval(10, 48_000);
+    assert!(first_interval);
+    assert!(!second_interval);
+    assert_eq!(
+        classify_audio_output_issue(AudioOutputIssueMetrics {
+            late_schedule: second_interval,
+            ..Default::default()
+        }),
+        AudioOutputIssueCause::Unknown
+    );
+    assert_eq!(
+        classify_audio_output_issue(AudioOutputIssueMetrics {
+            late_schedule: first_interval,
+            ..Default::default()
+        }),
+        AudioOutputIssueCause::LateSchedule
+    );
+}
+
+#[test]
+fn late_schedule_collection_survives_source_replacement_and_aggregates_sources() {
+    use crate::audio::{RetiredLateSchedule, take_interval_command_diagnostics};
+    use bmz_audio::command::AudioEngineHandle;
+    use bmz_audio::engine::AudioEngine;
+    use bmz_audio::queue::ScheduledSound;
+    use bmz_core::ids::SoundId;
+
+    fn late_by(engine: &AudioEngineHandle, frame: u64, late: u64) {
+        let sound = ScheduledSound::one_shot(frame - late, SoundId(1), 1.0, 0.0);
+        assert!(engine.schedule_sound(sound));
+        assert!(engine.processor().render_stereo(frame, &mut [0.0; 2]));
+    }
+    // Same composition as `collect_audio_diagnostics`: the runtime snapshot
+    // carries retired sources' peaks, then each live source adds its interval.
+    fn collect(
+        retired: &RetiredLateSchedule,
+        sources: &[&AudioEngineHandle],
+    ) -> crate::audio::AudioOutputDiagnostics {
+        let mut snapshot = crate::audio::AudioOutputDiagnostics {
+            scheduling_max_late_frames: retired.take(),
+            ..Default::default()
+        };
+        for source in sources {
+            snapshot.add_command_queue(take_interval_command_diagnostics(source));
+        }
+        snapshot
+    }
+
+    let retired = RetiredLateSchedule::default();
+    let system = AudioEngineHandle::new(AudioEngine::new(48_000));
+    let play = AudioEngineHandle::new(AudioEngine::new(48_000));
+
+    late_by(&system, 1_000, 0);
+    late_by(&play, 1_000, 480);
+    let first = collect(&retired, &[&system, &play]);
+    assert_eq!(first.scheduling_max_late_frames, 480);
+    assert!(late_schedule_from_interval(first.scheduling_max_late_frames, 48_000));
+
+    // The play source is late, then replaced (retry / drain end) before the
+    // next collect. The cumulative sum shrinks, so its delta saturates to 0.
+    late_by(&play, 2_000, 200);
+    retired.retire(&play);
+    drop(play);
+    let next_play = AudioEngineHandle::new(AudioEngine::new(48_000));
+    late_by(&next_play, 2_000, 5);
+    let second = collect(&retired, &[&system, &next_play]);
+    assert_eq!(second.scheduling_late_frames.saturating_sub(first.scheduling_late_frames), 0);
+    assert_eq!(second.scheduling_max_late_frames, 200);
+    assert!(late_schedule_from_interval(second.scheduling_max_late_frames, 48_000));
+
+    // A normal interval after large spikes is not late_schedule.
+    late_by(&next_play, 3_000, 10);
+    let third = collect(&retired, &[&system, &next_play]);
+    assert_eq!(third.scheduling_max_late_frames, 10);
+    assert!(!late_schedule_from_interval(third.scheduling_max_late_frames, 48_000));
+
+    // The interval maximum is the peak across all live sources.
+    late_by(&system, 4_000, 150);
+    late_by(&next_play, 4_000, 20);
+    let fourth = collect(&retired, &[&system, &next_play]);
+    assert_eq!(fourth.scheduling_max_late_frames, 150);
+    assert!(late_schedule_from_interval(fourth.scheduling_max_late_frames, 48_000));
+
+    // Lifetime diagnostics used by the play-loop debug log are unaffected.
+    assert_eq!(system.diagnostics().scheduling_max_late_frames, 150);
+    assert_eq!(next_play.diagnostics().scheduling_late_frames, 35);
+}
+
+#[test]
 fn select_distributions_load_in_background_and_reuse_cached_results() {
     let path = std::env::temp_dir().join(format!(
         "bmz-distribution-{}-{}.db",

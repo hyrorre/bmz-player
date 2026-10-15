@@ -287,6 +287,7 @@ settings-audio-auto-driver-default = Auto
 settings-audio-sample-rate = Sample rate
 settings-audio-buffer-mode = Buffer size mode
 settings-audio-buffer-frames = Buffer size (frames)
+settings-audio-buffer-stable-help = Smaller Fixed values reduce key sound delay. With WASAPI Exclusive, your value is tried first and raised to the device minimum if it is smaller. If initialization fails, it switches to the device default buffer size or another fallback. Values that are too small may cause crackling. Check the "native …" value above for the actual size.
 settings-audio-presets = Presets:
 settings-audio-exclusive-unimplemented = Exclusive mode (not implemented)
 settings-audio-refresh-devices = Refresh device list

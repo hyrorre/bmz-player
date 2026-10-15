@@ -697,14 +697,22 @@ impl ExclusiveWorkerStream {
         let requested_period = requested_buffer_frames
             .map(|frames| frames_to_period_100ns(frames, sample_rate))
             .transpose()?
-            .unwrap_or(default_period_100ns)
-            .max(minimum_period_100ns);
+            .unwrap_or(default_period_100ns);
+        // Match stock BMZ: prefer the user's Fixed period (clamped only to the device
+        // minimum) so key-to-sound latency stays as low as the setting allows. Default /
+        // 2×default are Initialize fallbacks only, never preferred over a successful low
+        // period.
+        let preferred_periods = exclusive_period_candidates(
+            requested_period,
+            minimum_period_100ns,
+            default_period_100ns,
+        );
 
-        let (client, buffer_frames, period_100ns) = initialize_exclusive_client(
+        let (client, buffer_frames, period_100ns) = initialize_exclusive_client_with_fallbacks(
             &endpoint,
             initial_client,
             &candidate.wave.Format,
-            requested_period,
+            &preferred_periods,
             sample_rate,
         )?;
         let audio_event =
@@ -1298,6 +1306,57 @@ fn frames_to_period_100ns(frames: u32, sample_rate: u32) -> Result<i64, String> 
     i64::try_from(period).map_err(|_| "WASAPI period exceeds i64".to_string())
 }
 
+/// Exclusive event-driven period candidates, preferred first.
+///
+/// Same priority as stock BMZ Player: use the requested Fixed period clamped to the
+/// device minimum. Larger periods are only tried if Initialize rejects the low one.
+fn exclusive_period_candidates(requested: i64, minimum: i64, default: i64) -> Vec<i64> {
+    let minimum = minimum.max(1);
+    let default = default.max(minimum);
+    let requested = requested.max(minimum);
+    let double_default = default.saturating_mul(2);
+
+    let mut periods = Vec::with_capacity(3);
+    let push_unique = |periods: &mut Vec<i64>, value: i64| {
+        if !periods.contains(&value) {
+            periods.push(value);
+        }
+    };
+
+    push_unique(&mut periods, requested);
+    push_unique(&mut periods, default);
+    if double_default > default {
+        push_unique(&mut periods, double_default);
+    }
+    periods
+}
+
+fn initialize_exclusive_client_with_fallbacks(
+    endpoint: &IMMDevice,
+    initial_client: IAudioClient,
+    format: &WAVEFORMATEX,
+    periods_100ns: &[i64],
+    sample_rate: u32,
+) -> Result<(IAudioClient, u32, i64), String> {
+    let mut client = initial_client;
+    let mut last_error = None;
+    for (index, &period_100ns) in periods_100ns.iter().enumerate() {
+        match initialize_exclusive_client(endpoint, client, format, period_100ns, sample_rate) {
+            Ok(value) => return Ok(value),
+            Err(error) => {
+                last_error = Some(error);
+                if index + 1 >= periods_100ns.len() {
+                    break;
+                }
+                // Initialize consumes the client on failure paths that don't
+                // return it; open a fresh one for the next candidate period.
+                client = activate_audio_client(endpoint)?;
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "WASAPI exclusive initialize failed".to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1332,6 +1391,35 @@ mod tests {
         assert_eq!(frames_to_period_100ns(48, 48_000).unwrap(), 10_000);
         assert_eq!(frames_to_period_100ns(64, 44_100).unwrap(), 14_512);
         assert!(frames_to_period_100ns(0, 48_000).is_err());
+    }
+
+    #[test]
+    fn exclusive_period_prefers_requested_then_falls_back() {
+        let minimum = 30_000; // ~3ms
+        let default = 100_000; // ~10ms
+        // Below device minimum: clamp to minimum first (stock behavior).
+        assert_eq!(
+            exclusive_period_candidates(6_667, minimum, default),
+            vec![30_000, 100_000, 200_000]
+        );
+        assert_eq!(
+            exclusive_period_candidates(20_000, minimum, default),
+            vec![30_000, 100_000, 200_000]
+        );
+        // Fixed 256 @ 44.1k ≈ 5.8 ms: keep request first.
+        assert_eq!(
+            exclusive_period_candidates(58_050, minimum, default),
+            vec![58_050, 100_000, 200_000]
+        );
+        assert_eq!(
+            exclusive_period_candidates(80_000, minimum, default),
+            vec![80_000, 100_000, 200_000]
+        );
+        // When default equals minimum, still offer 2× as last resort.
+        assert_eq!(
+            exclusive_period_candidates(1_000, minimum, minimum),
+            vec![minimum, minimum.saturating_mul(2)]
+        );
     }
 
     #[test]

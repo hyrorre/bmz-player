@@ -288,6 +288,7 @@ settings-audio-auto-driver-default = 自動
 settings-audio-sample-rate = 取樣率
 settings-audio-buffer-mode = 緩衝區大小模式
 settings-audio-buffer-frames = 緩衝區大小（畫格）
+settings-audio-buffer-stable-help = 固定值越小，鍵音延遲越低。WASAPI 獨佔會優先使用設定值，低於裝置最小值時會自動修正；初始化失敗時會改用預設緩衝區大小等。數值過小可能導致斷音。實際值可在上方「native …」確認。
 settings-audio-presets = 預設值：
 settings-audio-exclusive-unimplemented = 獨佔模式（尚未實作）
 settings-audio-refresh-devices = 重新整理裝置清單

@@ -137,6 +137,7 @@ pub(super) fn build_audio_video_settings_sections(
                         }
                     }
                 });
+                ui.label(tr!(text, "settings-audio-buffer-stable-help"));
             }
             // ASIO 以外は安価なのでバックエンド変更時に自動列挙する。
             // ASIO はドライバ初期化を伴い得るため、更新ボタンでのみ列挙する。

@@ -100,6 +100,7 @@ pub(super) enum AudioOutputIssueCause {
     GeneratedPreviewCpuPressure,
     CallbackDeadlineExceeded,
     MixClipping,
+    LateSchedule,
     Unknown,
 }
 
@@ -112,6 +113,7 @@ impl AudioOutputIssueCause {
             Self::GeneratedPreviewCpuPressure => "generated_preview_cpu_pressure",
             Self::CallbackDeadlineExceeded => "callback_deadline_exceeded",
             Self::MixClipping => "mix_clipping",
+            Self::LateSchedule => "late_schedule",
             Self::Unknown => "unknown",
         }
     }
@@ -127,6 +129,7 @@ pub(super) struct AudioOutputIssueMetrics {
     pub(super) callback_over_budget: bool,
     pub(super) clipped_samples: u64,
     pub(super) generated_preview_loading: bool,
+    pub(super) late_schedule: bool,
 }
 
 pub(super) fn classify_audio_output_issue(
@@ -142,11 +145,25 @@ pub(super) fn classify_audio_output_issue(
         AudioOutputIssueCause::GeneratedPreviewCpuPressure
     } else if metrics.callback_over_budget {
         AudioOutputIssueCause::CallbackDeadlineExceeded
+    } else if metrics.late_schedule {
+        AudioOutputIssueCause::LateSchedule
     } else if metrics.clipped_samples != 0 {
         AudioOutputIssueCause::MixClipping
     } else {
         AudioOutputIssueCause::Unknown
     }
+}
+
+/// Suspect late schedule from one reporting interval only.
+///
+/// Threshold is ~2 ms (`sample_rate / 500`, at least one frame). The maximum must
+/// be the peak late distance inside that interval across all sources, not a
+/// lifetime max — otherwise a single old spike keeps classifying later tiny delays
+/// as `late_schedule`. The cumulative late-frame delta is not required: it can
+/// shrink to zero when sources are added or removed within the interval.
+pub(super) fn late_schedule_from_interval(interval_max_late_frames: u64, sample_rate: u32) -> bool {
+    let threshold = (u64::from(sample_rate) / 500).max(1);
+    interval_max_late_frames >= threshold
 }
 
 pub(super) fn select_preview_normalization_gain(enabled: bool, analyzed_gain: f32) -> f32 {

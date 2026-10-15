@@ -252,6 +252,7 @@ fn auto_keysound_plays_note_sounds_without_input() {
     assert_eq!(audio.scheduled[0].start_frame, 0);
     assert_eq!(audio.scheduled[0].volume, 0.0625);
     assert_eq!(audio.scheduled[0].restart_policy, RestartPolicy::StopSameSound);
+    assert!(!audio.scheduled[0].catch_up);
 }
 
 #[test]
@@ -439,6 +440,67 @@ fn auto_keysound_schedules_long_start_and_long_end() {
     sounds.sort_by_key(|s| s.0);
     // LongStart (SoundId 7) と LongEnd (SoundId 8) がそれぞれ 1 回ずつ。
     assert_eq!(sounds, vec![SoundId(7), SoundId(8)]);
+}
+
+#[test]
+fn full_autoplay_schedules_long_note_sounds_once_from_ready_through_end() {
+    for mode in [LongNoteMode::Ln, LongNoteMode::Cn, LongNoteMode::Hcn] {
+        // Key1 covers LN/CN/HCN; Scratch covers BSS (a long note on the scratch lane).
+        for lane in [Lane::Key1, Lane::Scratch] {
+            for end_sound in [None, Some(SoundId(8))] {
+                let label = format!("{mode:?} {lane:?} end={end_sound:?}");
+                let mut chart = ln_chart_with_start_sound_and_end_sound(end_sound);
+                chart.metadata.long_note_mode = mode;
+                chart.long_notes[0].mode = Some(mode);
+                if lane != Lane::Key1 {
+                    let mut notes = std::mem::take(&mut chart.lane_notes[Lane::Key1.index()]);
+                    for note in &mut notes {
+                        note.lane = lane;
+                    }
+                    chart.lane_notes[lane.index()] = notes;
+                    chart.long_notes[0].lane = lane;
+                }
+                let mut session = session_with_autoplay(chart);
+                assert!(session.autoplay.as_ref().is_some_and(AutoplayController::is_full));
+                // Full auto uses the chart-time path even with auto_keysound OFF.
+                session.audio_mix.auto_keysound = false;
+                // Start in READY 50ms before chart zero; output frame 0 = chart -50ms.
+                let current_frame = Arc::new(AtomicU64::new(0));
+                session.audio_clock =
+                    AudioClock::with_position(48_000, 0, -50_000, current_frame.clone(), true);
+                let mut audio = TestAudio::default();
+
+                advance_session_frame(&mut session, &mut audio);
+                assert_eq!(session.state, PlayState::Ready, "{label}");
+                // The chart-head sound is scheduled ahead during READY, not dropped
+                // by the READY -> PLAYING transition.
+                assert_eq!(
+                    audio.scheduled.iter().map(|s| (s.sound_id, s.start_frame)).collect::<Vec<_>>(),
+                    vec![(SoundId(7), 2_400)],
+                    "{label}"
+                );
+
+                // Advance through the LN end in 10ms steps; judgements (start,
+                // CN/HCN end) must not add keysounds on top of the schedule-ahead.
+                for frame in (480..=60_000).step_by(480) {
+                    current_frame.store(frame, std::sync::atomic::Ordering::Release);
+                    advance_session_frame(&mut session, &mut audio);
+                }
+                assert_ne!(session.state, PlayState::Ready, "{label}");
+                let mut expected = vec![(SoundId(7), 2_400)];
+                if let Some(end) = end_sound {
+                    // LN end at 1s = 1.05s after output frame 0.
+                    expected.push((end, 50_400));
+                }
+                assert_eq!(
+                    audio.scheduled.iter().map(|s| (s.sound_id, s.start_frame)).collect::<Vec<_>>(),
+                    expected,
+                    "{label}"
+                );
+                assert!(audio.scheduled.iter().all(|s| !s.catch_up), "{label}");
+            }
+        }
+    }
 }
 
 #[test]

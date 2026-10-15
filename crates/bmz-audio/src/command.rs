@@ -147,6 +147,7 @@ struct AudioCommandQueueCounters {
     scheduled_sound_count: AtomicU64,
     scheduling_late_frames: AtomicU64,
     scheduling_max_late_frames: AtomicU64,
+    scheduling_interval_max_late_frames: AtomicU64,
     submitted: AtomicU64,
     dropped: AtomicU64,
     drained: AtomicU64,
@@ -163,6 +164,7 @@ impl Default for AudioCommandQueueCounters {
             scheduled_sound_count: AtomicU64::new(0),
             scheduling_late_frames: AtomicU64::new(0),
             scheduling_max_late_frames: AtomicU64::new(0),
+            scheduling_interval_max_late_frames: AtomicU64::new(0),
             submitted: AtomicU64::new(0),
             dropped: AtomicU64::new(0),
             drained: AtomicU64::new(0),
@@ -315,6 +317,15 @@ impl AudioEngineHandle {
 
     pub fn diagnostics(&self) -> AudioCommandQueueDiagnostics {
         self.inner.diagnostics()
+    }
+
+    /// Read and reset the max late-schedule distance since the previous take.
+    ///
+    /// This uses a dedicated interval counter. [`Self::diagnostics`] keeps reporting the
+    /// cumulative late frames and the lifetime maximum, so other readers never lose them
+    /// when a reporter takes its interval maximum.
+    pub fn take_scheduling_max_late_frames(&self) -> u64 {
+        self.inner.counters.scheduling_interval_max_late_frames.swap(0, Ordering::Relaxed)
     }
 
     pub fn set_output_sample_rate(&self, rate: u32) {
@@ -640,6 +651,10 @@ impl CommandedAudioEngine {
                 self.inner.counters.scheduled_sound_count.fetch_add(1, Ordering::Relaxed);
                 self.inner.counters.scheduling_late_frames.fetch_add(late, Ordering::Relaxed);
                 self.inner.counters.scheduling_max_late_frames.fetch_max(late, Ordering::Relaxed);
+                self.inner
+                    .counters
+                    .scheduling_interval_max_late_frames
+                    .fetch_max(late, Ordering::Relaxed);
             }
             command.apply(engine, output_frame);
         }
@@ -825,6 +840,33 @@ mod tests {
         assert!(processor.render_stereo(0, &mut output));
         assert_eq!(output, [0.75; 2]);
         assert_eq!(handle.diagnostics().scheduled_sound_count, 1);
+    }
+
+    #[test]
+    fn interval_late_maximum_resets_without_touching_cumulative_diagnostics() {
+        let handle = AudioEngineHandle::new(AudioEngine::new(48_000));
+        let mut processor = handle.processor();
+        let mut output = [0.0; 2];
+
+        // Callback at frame 1_000 drains sounds scheduled 480 and 10 frames earlier.
+        assert!(handle.schedule_all(vec![
+            ScheduledSound::one_shot(520, SoundId(1), 1.0, 0.0),
+            ScheduledSound::one_shot(990, SoundId(1), 1.0, 0.0),
+        ]));
+        assert!(processor.render_stereo(1_000, &mut output));
+        assert_eq!(handle.take_scheduling_max_late_frames(), 480);
+        assert_eq!(handle.take_scheduling_max_late_frames(), 0);
+
+        // The next interval reports only its own peak.
+        assert!(handle.schedule_sound(ScheduledSound::one_shot(1_990, SoundId(1), 1.0, 0.0)));
+        assert!(processor.render_stereo(2_000, &mut output));
+        assert_eq!(handle.take_scheduling_max_late_frames(), 10);
+
+        // Taking the interval maximum never resets the cumulative diagnostics.
+        let diagnostics = handle.diagnostics();
+        assert_eq!(diagnostics.scheduled_sound_count, 3);
+        assert_eq!(diagnostics.scheduling_late_frames, 500);
+        assert_eq!(diagnostics.scheduling_max_late_frames, 480);
     }
 
     #[test]

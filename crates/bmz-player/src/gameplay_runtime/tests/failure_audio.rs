@@ -273,6 +273,52 @@ fn failed_paused_practice_discards_pending_requests_when_command_queue_is_full()
 }
 
 #[test]
+fn full_command_queue_keeps_all_pending_sounds_and_retries_once_in_order() {
+    let (mut runtime, audio, _) = fixture(4);
+    runtime.session.state = PlayState::Playing;
+    let mut processor = audio.processor();
+    // Saturate the command queue with unrelated, non-coalescing commands.
+    for id in 0..4 {
+        assert!(audio.set_sound_volume(SoundId(100 + id), 1.0));
+    }
+    let pending = [
+        ScheduledSound::one_shot(6_000, SoundId(3), 1.0, 0.0),
+        ScheduledSound::one_shot(5_000, SoundId(1), 1.0, 0.0),
+        ScheduledSound::one_shot(6_000, SoundId(2), 1.0, 0.0),
+    ];
+    for sound in pending {
+        runtime.pending_audio.schedule(sound);
+    }
+    let queued = |runtime: &mut GameplayRuntime| {
+        let mut copy = runtime.pending_audio.clone();
+        copy.drain_all().map(|sound| (sound.start_frame, sound.sound_id)).collect::<Vec<_>>()
+    };
+    let expected = vec![(5_000, SoundId(1)), (6_000, SoundId(2)), (6_000, SoundId(3))];
+    assert_eq!(queued(&mut runtime), expected);
+
+    // ScheduleAll is rejected as a whole; every event stays pending in order.
+    runtime.flush_audio(&audio);
+    assert_eq!(queued(&mut runtime), expected);
+    assert_eq!(audio.diagnostics().dropped, 1);
+    assert_eq!(audio.diagnostics().submitted, 4);
+
+    // After the callback drains the queue, a retry submits one batch once.
+    processor.apply_pending_commands_for_tests();
+    runtime.flush_audio(&audio);
+    assert!(runtime.pending_audio.is_empty());
+    assert_eq!(audio.diagnostics().submitted, 5);
+    runtime.flush_audio(&audio);
+    assert_eq!(audio.diagnostics().submitted, 5, "an empty retry must not resubmit");
+
+    // Start times survive the retry: nothing before 5_000, one voice at 5_000,
+    // three voices from 6_000. No duplicate voices were registered.
+    assert_eq!(render(&mut processor, 4_999), [0.0; 2]);
+    assert_eq!(render(&mut processor, 5_000), [0.125; 2]);
+    assert_eq!(render(&mut processor, 6_000), [0.375; 2]);
+    assert_eq!(audio.diagnostics().scheduled_sound_count, 3);
+}
+
+#[test]
 fn completed_failed_lamp_and_requested_finish_keep_audio_tails() {
     for requested_finish in [false, true] {
         let (mut runtime, audio, input) = fixture(64);

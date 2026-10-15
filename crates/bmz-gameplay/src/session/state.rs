@@ -546,7 +546,11 @@ impl AutoKeysoundScheduler {
                         pan: 0.0,
                         loop_playback: false,
                         fade_in_frames: 0,
-                        catch_up: true,
+                        // Keysounds must start at the sample head. catch_up seek
+                        // into short kick/bass WAVs sounds like a pitch change;
+                        // a few ms late from-head is preferable and keeps manual
+                        // key-press latency the same path.
+                        catch_up: false,
                         restart_policy: RestartPolicy::StopSameSound,
                     });
                 }

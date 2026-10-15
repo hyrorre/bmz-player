@@ -1,7 +1,7 @@
 //! The renderer-independent owner of one chart's mutable gameplay state.
 //! Audio callbacks consume commands only; all judgement stays on this owner.
 use bmz_audio::command::AudioEngineHandle;
-use bmz_audio::queue::ScheduledSoundQueue;
+use bmz_audio::queue::{AudioScheduler, ScheduledSoundQueue};
 use bmz_core::ids::SoundId;
 
 use crate::session::{GameSession, PlayState, SessionFrame, advance_session_frame};
@@ -114,14 +114,23 @@ impl GameplayRuntime {
             return;
         }
         if !self.pending_audio.is_empty() {
-            self.pending_audio.retain(|sound| {
-                if audio.schedule_sound(*sound) {
-                    crate::session::latency::audio_enqueued();
-                    false
-                } else {
-                    true
+            // One ScheduleAll keeps the command-queue lock free for the WASAPI
+            // callback. Per-sound Schedule on dense charts contended the queue
+            // long enough to miss periods and punch silence holes.
+            let sounds = self.pending_audio.drain_all().collect::<Vec<_>>();
+            let count = sounds.len() as u64;
+            match audio.try_schedule_all(sounds) {
+                Ok(()) => {
+                    for _ in 0..count {
+                        crate::session::latency::audio_enqueued();
+                    }
                 }
-            });
+                Err(sounds) => {
+                    for sound in sounds {
+                        self.pending_audio.schedule(sound);
+                    }
+                }
+            }
         }
         self.pending_keysound_volumes.retain(|&(id, volume)| !audio.set_sound_volume(id, volume));
     }

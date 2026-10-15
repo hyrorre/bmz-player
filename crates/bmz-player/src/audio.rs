@@ -12,6 +12,8 @@ use bmz_chart::model::BgaAssetId;
 use bmz_core::ids::SoundId;
 use bmz_core::time::TimeUs;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::config::app_config::{
     AudioBackend, AudioBufferSizeMode, AudioConfig, AudioOutputMode, AudioSampleRateMode,
@@ -53,6 +55,11 @@ pub struct AudioOutputDiagnostics {
     pub command_drain_lock_miss_count: u64,
     pub command_engine_lock_miss_count: u64,
     pub command_queue_max_depth: u64,
+    /// Sum of the current sources' cumulative late frames.
+    pub scheduling_late_frames: u64,
+    /// Peak late distance since the previous collect, across current and
+    /// retired sources.
+    pub scheduling_max_late_frames: u64,
 }
 
 impl AudioOutputDiagnostics {
@@ -91,6 +98,10 @@ impl AudioOutputDiagnostics {
         self.command_engine_lock_miss_count =
             self.command_engine_lock_miss_count.saturating_add(diagnostics.engine_lock_misses);
         self.command_queue_max_depth = self.command_queue_max_depth.max(diagnostics.max_depth);
+        self.scheduling_late_frames =
+            self.scheduling_late_frames.saturating_add(diagnostics.scheduling_late_frames);
+        self.scheduling_max_late_frames =
+            self.scheduling_max_late_frames.max(diagnostics.scheduling_max_late_frames);
     }
 }
 
@@ -104,6 +115,8 @@ pub struct AppAudioOutput {
 pub struct AudioRuntime {
     output: CpalSharedOutput,
     config: AudioConfig,
+    /// Folded into the next [`Self::take_diagnostics`].
+    retired_late_schedule: RetiredLateSchedule,
 }
 
 pub struct RunningPlaySession {
@@ -164,6 +177,11 @@ impl AppAudioOutput {
         self.engine.diagnostics()
     }
 
+    /// Command-queue diagnostics with a per-interval scheduling-late maximum.
+    pub fn take_command_diagnostics(&self) -> AudioCommandQueueDiagnostics {
+        take_interval_command_diagnostics(&self.engine)
+    }
+
     pub fn clock(&self) -> AudioClock {
         self.source.clock()
     }
@@ -210,6 +228,40 @@ impl AppAudioOutput {
     pub fn mark_draining(&mut self) {
         self.source.set_kind(CpalOutputSourceKind::Draining);
     }
+}
+
+impl Drop for AppAudioOutput {
+    fn drop(&mut self) {
+        // Play / draining sources are replaced between diagnostics collects.
+        // Keep their unreported interval peak for the next collect.
+        self.runtime.retired_late_schedule.retire(&self.engine);
+    }
+}
+
+/// Interval late-schedule peak of sources dropped before the next diagnostics
+/// collect. Without it, a play source replaced mid-interval would lose its peak.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RetiredLateSchedule(Arc<AtomicU64>);
+
+impl RetiredLateSchedule {
+    pub(crate) fn retire(&self, engine: &AudioEngineHandle) {
+        self.0.fetch_max(engine.take_scheduling_max_late_frames(), Ordering::Relaxed);
+    }
+
+    pub(crate) fn take(&self) -> u64 {
+        self.0.swap(0, Ordering::Relaxed)
+    }
+}
+
+/// Command-queue diagnostics whose late-schedule maximum covers only the
+/// interval since the previous take. Cumulative counters stay unchanged.
+pub(crate) fn take_interval_command_diagnostics(
+    engine: &AudioEngineHandle,
+) -> AudioCommandQueueDiagnostics {
+    let scheduling_max_late_frames = engine.take_scheduling_max_late_frames();
+    let mut diagnostics = engine.diagnostics();
+    diagnostics.scheduling_max_late_frames = scheduling_max_late_frames;
+    diagnostics
 }
 
 impl RunningPlaySession {
@@ -348,7 +400,11 @@ impl AudioRuntime {
         let output_config = cpal_output_config(config)?;
         let output = CpalBackend::open_shared(output_config)
             .context("failed to open audio output stream")?;
-        Ok(Self { output, config: config.clone() })
+        Ok(Self {
+            output,
+            config: config.clone(),
+            retired_late_schedule: RetiredLateSchedule::default(),
+        })
     }
 
     pub fn play(&self) -> Result<()> {
@@ -368,7 +424,9 @@ impl AudioRuntime {
     }
 
     pub fn take_diagnostics(&self) -> AudioOutputDiagnostics {
-        AudioOutputDiagnostics::from_cpal(self.output.take_diagnostics())
+        let mut diagnostics = AudioOutputDiagnostics::from_cpal(self.output.take_diagnostics());
+        diagnostics.scheduling_max_late_frames = self.retired_late_schedule.take();
+        diagnostics
     }
     pub fn stream_info(&self) -> &bmz_audio::backend::cpal::CpalStreamInfo {
         self.output.stream_info()
@@ -408,6 +466,11 @@ pub struct SystemAudio {
 impl SystemAudio {
     pub fn command_diagnostics(&self) -> AudioCommandQueueDiagnostics {
         self.engine.diagnostics()
+    }
+
+    /// Command-queue diagnostics with a per-interval scheduling-late maximum.
+    pub fn take_command_diagnostics(&self) -> AudioCommandQueueDiagnostics {
+        take_interval_command_diagnostics(&self.engine)
     }
 
     /// クロックを開始してストリームを走らせ、`play_now` / `stop_sound` を即座に
