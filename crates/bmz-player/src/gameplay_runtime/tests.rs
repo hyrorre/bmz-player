@@ -361,8 +361,13 @@ fn run_mode_with_render_stall(stall_ms: u64, mode: u8) -> (String, u64) {
             let guard = slot.lock().unwrap();
             thread::sleep(Duration::from_millis(stall_ms));
             if stall_ms >= 100 {
-                assert!(probe.time.load(Ordering::Acquire) > before_time);
-                assert!(probe.scheduled.load(Ordering::Acquire) > before_audio);
+                // The next keysound can be ten driver round trips away, so how far
+                // gameplay gets within the stall depends on OS scheduling. Keep
+                // holding the slot and wait for gameplay to schedule audio anyway.
+                wait_until(|| {
+                    probe.time.load(Ordering::Acquire) > before_time
+                        && probe.scheduled.load(Ordering::Acquire) > before_audio
+                });
             }
             drop(guard);
             stalled = true;
