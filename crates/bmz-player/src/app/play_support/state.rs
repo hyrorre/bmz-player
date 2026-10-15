@@ -142,7 +142,10 @@ pub(in crate::app) fn apply_profile_lane_settings_to_session(
 
     let direct_hispeed_change = hispeed_changed;
     if direct_hispeed_change && session.hispeed_mode == HispeedMode::Classic {
-        session.hispeed = clamp_hispeed(profile.hispeed);
+        session.hispeed = crate::config::play::classic_effective_hispeed(
+            profile.hispeed,
+            crate::screens::play_snapshot::classic_hsfix_scale_for_session(session),
+        );
     }
 
     if session.hispeed_mode == HispeedMode::Normal {

@@ -180,8 +180,11 @@ pub struct SkinDrawState {
     pub offset_hidden_cover_px: i32,
     /// ユーザーまたは profile で指定された任意の skin offset 値。
     pub skin_offsets: SkinOffsetValues,
-    /// 現在のハイスピード倍率 (NUMBER_HISPEED=310, NUMBER_HISPEED_AFTERDOT=311 に使用)。
+    /// 現在の実効ハイスピード倍率。表示時間の計算に使う。
     pub hispeed: f32,
+    /// skinに表示するHS値 (NUMBER_HISPEED=310, NUMBER_HISPEED_AFTERDOT=311)。
+    /// Classic + HS-FIXではBPM150基準の値。`None` は `hispeed` と同じ。
+    pub hispeed_display: Option<f32>,
     /// BMZ extension: current hispeed mode. 0=base, 1=Floating.
     pub hispeed_mode_index: i32,
     /// BMZ extension: configured base hispeed. 0=Classic, 1=Normal.
@@ -602,6 +605,7 @@ impl Default for SkinDrawState {
             offset_hidden_cover_px: 0,
             skin_offsets: SkinOffsetValues::default(),
             hispeed: 0.0,
+            hispeed_display: None,
             hispeed_mode_index: 0,
             base_hispeed_index: 0,
             normal_hispeed_level: 18,

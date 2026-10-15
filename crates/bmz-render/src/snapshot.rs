@@ -335,6 +335,8 @@ pub struct RenderSnapshot {
     pub gauge_border: f32,
     pub opponent: Option<OpponentRenderSnapshot>,
     pub hispeed: f32,
+    /// skinに表示するHS値。Classic + HS-FIXではBPM150基準の値。`None` は `hispeed` と同じ。
+    pub hispeed_display: Option<f32>,
     /// BMZ extension: current hispeed mode for play skin refs. 0=base, 1=Floating.
     pub hispeed_mode_index: i32,
     /// BMZ extension: configured base hispeed. 0=Classic, 1=Normal.

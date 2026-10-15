@@ -177,7 +177,7 @@ impl WinitApp {
                         }
                     }
                 };
-                let hispeed = Some(active_play.running.session.hispeed);
+                let hispeed = Some(active_play.running.session.display_hispeed);
                 let mut snapshot = frame.render_snapshot;
                 snapshot.play_elapsed_time = play_elapsed_time;
                 snapshot.ready_elapsed_time = ready_elapsed_time;

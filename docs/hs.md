@@ -26,9 +26,28 @@ Floating の目標緑数字は `floating_target_green` に保存する。旧名�
 
 ## Classic
 
-Classic は `classic_hispeed` の倍率をそのまま使う。倍率の範囲は `0.01..=20.0`。
-操作刻みは `classic_hispeed_step` で、既定値は0.25、設定範囲は
-`0.05..=1.00`。
+Classic は HS-FIX が `OFF` のとき `classic_hispeed` の倍率をそのまま使う。
+倍率の範囲は `0.01..=20.0`。操作刻みは `classic_hispeed_step` で、既定値は0.25、
+設定範囲は `0.05..=1.00`。
+
+HS-FIX が `OFF` 以外の Classic は LR2 の HS-FIX と同じく、`classic_hispeed` を
+BPM150での倍率として扱う。HS-FIXの基準BPMでノーツが流れる速さは、BPM150・
+同じHS値と一致する。
+
+```text
+effective_hispeed = classic_hispeed * 150 / (hsfix_base_bpm * playback_rate)
+```
+
+- HS操作、設定UIでの変更、profileへの保存、skinのHS表示
+  （`NUMBER_HISPEED` 310 / 311、LR2 HS）は `classic_hispeed` の値で行う。
+  たとえばMAX BPM 300の譜面でHS 3.00は実効倍率1.50で、表示と保存は3.00のまま。
+- `NUMBER_DURATION` 等の表示時間と緑数字は実効倍率から求める。
+- 基準BPMは次節「HS-FIX」の表と同じ定義を使う。LR2のMAX/MIN BPMはノーツのある
+  BPMだけで決まるが、BMZは初期BPMとBPM変化イベント全体で決める。
+- Floatingから戻るときは見た目の速さを保ち、表示値は実効倍率から逆算する。
+- Floating中とNormalは変換しない。
+
+参照: OpenLR2 `LR2_bmsload.cpp` の `speedmultiplier = 150 / fixBPM`。
 
 ## Normal
 
@@ -118,7 +137,8 @@ HS-FIX の選択肢とBPM基準は次のとおり。
 
 Floating の再計算は、READY前と曲タイマー開始前には選択したHS-FIXの基準BPM、
 曲開始後には現在BPMを使う。Normalの初期倍率は開始時の基準BPM、段階操作時は
-その時点のBPMを使う。
+その時点のBPMを使う。Classicは基準BPMから求めた実効倍率をプレイ中に固定し、
+BPM変化では再計算しない（前述のClassicを参照）。
 
 設定UIと選曲中の巡回順は次のとおり。
 

@@ -124,6 +124,11 @@ pub fn apply_placeholder_session_visuals(
         crate::config::play::normalize_normal_hispeed_level(mode_config.normal_hispeed_level);
     snapshot.hispeed_config_index = mode_config.hispeed_config().index();
     let target_green_number = mode_config.target_green_number.max(1);
+    let classic_hsfix_scale = crate::screens::play_snapshot::classic_hsfix_scale_for_option(
+        hs_fix,
+        f64::from(placeholder_hsfix_base_bpm(snapshot, hs_fix)),
+        options.playback_rate_percent,
+    );
     snapshot.hispeed = if speed_locked {
         1.0
     } else {
@@ -135,8 +140,14 @@ pub fn apply_placeholder_session_visuals(
             snapshot.lift,
             snapshot.now_bpm,
             options.playback_rate_percent,
+            classic_hsfix_scale,
         )
     };
+    snapshot.hispeed_display = Some(if !speed_locked && hispeed_mode == HispeedMode::Classic {
+        crate::config::play::classic_display_hispeed(snapshot.hispeed, classic_hsfix_scale)
+    } else {
+        snapshot.hispeed
+    });
     snapshot.lanecover_enabled = lanecover_enabled;
     snapshot.lift_enabled = mode_config.lift_enabled;
     snapshot.hidden_enabled = hidden_enabled_from_mode_config(&mode_config);
@@ -779,7 +790,10 @@ pub(super) fn initial_hispeed_for_mode(
     let scroll_multiplier =
         crate::screens::play_snapshot::current_scroll_multiplier(chart, timing_map, TimeUs(0));
     match hispeed_mode {
-        HispeedMode::Classic => clamp_hispeed(mode_config.hispeed),
+        HispeedMode::Classic => crate::config::play::classic_effective_hispeed(
+            mode_config.hispeed,
+            crate::screens::play_snapshot::classic_hsfix_scale_for_option(hs_fix, now_bpm, 100),
+        ),
         HispeedMode::Normal => {
             let green =
                 crate::config::play::normal_hispeed_green_number(mode_config.normal_hispeed_level);
@@ -869,6 +883,18 @@ pub(super) fn main_bpm_for_chart(
         .unwrap_or(chart.metadata.initial_bpm)
 }
 
+/// placeholder snapshotでのHS-FIX基準BPM。`PendingPlayLaneState` と同じ値を使う。
+fn placeholder_hsfix_base_bpm(
+    snapshot: &bmz_render::snapshot::RenderSnapshot,
+    hs_fix: HsFixOption,
+) -> f32 {
+    match hs_fix {
+        HsFixOption::Off | HsFixOption::StartBpm | HsFixOption::MainBpm => snapshot.now_bpm,
+        HsFixOption::MaxBpm => snapshot.max_bpm,
+        HsFixOption::MinBpm => snapshot.min_bpm,
+    }
+}
+
 pub(super) fn placeholder_hispeed_for_mode(
     mode_config: &PlayModeConfig,
     hispeed_mode: HispeedMode,
@@ -877,13 +903,16 @@ pub(super) fn placeholder_hispeed_for_mode(
     lift: f32,
     now_bpm: f32,
     playback_rate_percent: u16,
+    classic_hsfix_scale: f32,
 ) -> f32 {
     let now_bpm = crate::screens::play_snapshot::effective_bpm_for_playback_rate(
         f64::from(now_bpm),
         playback_rate_percent,
     );
     match hispeed_mode {
-        HispeedMode::Classic => clamp_hispeed(mode_config.hispeed),
+        HispeedMode::Classic => {
+            crate::config::play::classic_effective_hispeed(mode_config.hispeed, classic_hsfix_scale)
+        }
         HispeedMode::Normal => {
             let green =
                 crate::config::play::normal_hispeed_green_number(mode_config.normal_hispeed_level);

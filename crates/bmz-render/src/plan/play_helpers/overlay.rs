@@ -165,7 +165,7 @@ pub(super) fn push_play_status_text(
     );
     text.push_text(
         commands,
-        &format!("HS {:.2}", snapshot.hispeed),
+        &format!("HS {:.2}", snapshot.hispeed_display.unwrap_or(snapshot.hispeed)),
         BitmapTextStyle { x: 0.065, y: 0.32, cell: 0.0045, color: Color::rgb(0.72, 0.82, 0.8) },
     );
 }

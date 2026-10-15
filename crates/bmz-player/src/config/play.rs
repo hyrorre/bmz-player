@@ -79,6 +79,34 @@ pub fn clamp_hispeed(hispeed: f32) -> f32 {
     hispeed.clamp(HISPEED_MIN, HISPEED_MAX)
 }
 
+/// LR2のHS-FIXが倍率の基準にするBPM。
+pub const CLASSIC_HSFIX_REFERENCE_BPM: f64 = 150.0;
+
+/// Classic + HS-FIXで、BPM150基準のHS値を実効倍率へ変換する係数。
+/// `base_bpm` は再生速度を反映したHS-FIXの基準BPM。
+pub fn classic_hsfix_scale(base_bpm: f64) -> f32 {
+    if base_bpm.is_finite() && base_bpm > 0.0 {
+        (CLASSIC_HSFIX_REFERENCE_BPM / base_bpm) as f32
+    } else {
+        1.0
+    }
+}
+
+/// BPM150基準のHS値から実効倍率を求める。
+pub fn classic_effective_hispeed(display_hispeed: f32, scale: f32) -> f32 {
+    clamp_hispeed(clamp_hispeed(display_hispeed) * scale)
+}
+
+/// 実効倍率からBPM150基準のHS値を求める。往復時の誤差で表示値が
+/// 0.01刻みの下位桁へ落ちないよう、小数4桁で丸める。
+pub fn classic_display_hispeed(effective_hispeed: f32, scale: f32) -> f32 {
+    if !(scale.is_finite() && scale > 0.0) {
+        return clamp_hispeed(effective_hispeed);
+    }
+    let display = f64::from(effective_hispeed) / f64::from(scale);
+    clamp_hispeed(((display * 10_000.0).round() / 10_000.0) as f32)
+}
+
 pub const fn duration_ms_from_green_number(green_number: u32) -> u32 {
     green_number.saturating_mul(5).saturating_add(1) / 3
 }
@@ -293,6 +321,21 @@ mod tests {
 
     use super::*;
     use crate::config::profile_config::ProfileConfig;
+
+    #[test]
+    fn classic_hsfix_hispeed_round_trips_bpm150_values() {
+        assert_eq!(classic_hsfix_scale(300.0), 0.5);
+        assert_eq!(classic_hsfix_scale(0.0), 1.0);
+        assert_eq!(classic_hsfix_scale(f64::NAN), 1.0);
+
+        for bpm in [97.0, 128.0, 173.0, 222.2, 300.0] {
+            let scale = classic_hsfix_scale(bpm);
+            for display in [0.5, 1.0, 2.25, 3.0, 3.75, 4.5] {
+                let effective = classic_effective_hispeed(display, scale);
+                assert_eq!(classic_display_hispeed(effective, scale), display, "bpm={bpm}");
+            }
+        }
+    }
 
     #[test]
     fn maps_profile_offsets() {

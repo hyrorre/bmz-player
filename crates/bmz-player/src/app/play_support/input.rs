@@ -225,4 +225,18 @@ pub(in crate::app) fn adjusted_hispeed(current: f32, change: HispeedChange, step
     };
     clamp_hispeed(current + delta)
 }
+
+/// Classic + HS-FIXでは、実効倍率ではなくBPM150基準のHS値に対して操作する。
+pub(in crate::app) fn adjust_hispeed_in_display_units(
+    hispeed: f32,
+    mode: HispeedMode,
+    classic_hsfix_scale: f32,
+    adjust: impl FnOnce(f32) -> f32,
+) -> f32 {
+    if mode != HispeedMode::Classic || classic_hsfix_scale == 1.0 {
+        return adjust(hispeed);
+    }
+    let display = crate::config::play::classic_display_hispeed(hispeed, classic_hsfix_scale);
+    crate::config::play::classic_effective_hispeed(adjust(display), classic_hsfix_scale)
+}
 use super::*;

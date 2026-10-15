@@ -21,6 +21,8 @@ pub struct PlaySessionObservation {
     pub input_offset_auto_adjust: Option<InputOffsetAutoAdjustState>,
     pub audio_mix: PlayAudioMix,
     pub hispeed: f32,
+    /// skin表示とprofile保存に使うHS値。Classic + HS-FIXではBPM150基準。
+    pub display_hispeed: f32,
     pub hispeed_mode: HispeedMode,
     pub base_hispeed_mode: HispeedMode,
     pub floating_policy: FloatingPolicy,
@@ -65,6 +67,7 @@ impl PlaySessionObservation {
             input_offset_auto_adjust: session.input_offset_auto_adjust,
             audio_mix: session.audio_mix,
             hispeed: session.hispeed,
+            display_hispeed: crate::screens::play_snapshot::display_hispeed_for_session(session),
             hispeed_mode: session.hispeed_mode,
             base_hispeed_mode: session.base_hispeed_mode,
             floating_policy: session.floating_policy,

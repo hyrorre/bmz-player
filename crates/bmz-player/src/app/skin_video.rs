@@ -194,6 +194,7 @@ pub(super) fn play_skin_video_draw_state(
         music_end_ms: snapshot.music_end_elapsed_ms,
         skin_offsets: snapshot.skin_offsets,
         hispeed: snapshot.hispeed,
+        hispeed_display: snapshot.hispeed_display,
         hispeed_mode_index: snapshot.hispeed_mode_index,
         base_hispeed_index: snapshot.base_hispeed_index,
         normal_hispeed_level: snapshot.normal_hispeed_level,

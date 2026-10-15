@@ -547,3 +547,104 @@ fn profile_play_option_changes_disable_random_and_autoplay_without_rollback() {
     assert_eq!(profile.play.random2, RandomOptionConfig::Off);
     assert!(!profile.play.auto_play);
 }
+
+fn classic_hsfix_session(hispeed: f32) -> (ProfileConfig, bmz_gameplay::session::GameSession) {
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.lane.base_hispeed = BaseHispeedConfig::Classic;
+    profile.lane.floating_policy = FloatingPolicyConfig::Disabled;
+    profile.lane.hispeed = hispeed;
+    let mut chart = app_test_chart();
+    chart.metadata.initial_bpm = 300.0;
+    let session = crate::screens::play_session::build_game_session(
+        std::sync::Arc::new(chart),
+        &profile,
+        crate::screens::play_session::PlaySessionOptions {
+            hs_fix: HsFixOption::StartBpm,
+            ..crate::screens::play_session::PlaySessionOptions::default()
+        },
+    );
+    (profile, session)
+}
+
+#[test]
+fn classic_hsfix_hispeed_change_steps_bpm150_value() {
+    let (_, mut session) = classic_hsfix_session(3.0);
+    assert!((session.hispeed - 1.5).abs() < 0.000_01, "hispeed={}", session.hispeed);
+
+    assert!(apply_play_option_control_to_session(
+        &mut session,
+        PlayOptionControl::Hispeed(HispeedChange::Up),
+        false,
+        0.25,
+    ));
+
+    assert!((session.hispeed - 1.625).abs() < 0.000_01, "hispeed={}", session.hispeed);
+    assert_eq!(crate::screens::play_snapshot::display_hispeed_for_session(&session), 3.25);
+}
+
+#[test]
+fn classic_hsfix_profile_hispeed_edit_and_save_use_bpm150_value() {
+    let (mut profile, mut session) = classic_hsfix_session(3.0);
+    let before = profile.lane.clone();
+    let mut edited = profile.lane.clone();
+    edited.hispeed = 4.0;
+
+    assert!(apply_profile_lane_settings_to_session(
+        &mut session,
+        &before,
+        profile.play.lane_effect,
+        &edited,
+        profile.play.lane_effect,
+        false,
+        false,
+    ));
+    assert!((session.hispeed - 2.0).abs() < 0.000_01, "hispeed={}", session.hispeed);
+
+    apply_lane_state_to_profile(
+        &mut profile,
+        Some(crate::screens::play_snapshot::display_hispeed_for_session(&session)),
+        Some(active_lane_state_for_session(&session)),
+    );
+    assert_eq!(profile.lane.hispeed, 4.0);
+}
+
+#[test]
+fn pending_classic_hsfix_hispeed_tracks_chart_base_bpm() {
+    let profile = ProfileConfig::new_default("default", "Default", 1);
+    let mut lane = PendingPlayLaneState {
+        hispeed: 1.5,
+        hispeed_mode: HispeedMode::Classic,
+        base_hispeed_mode: HispeedMode::Classic,
+        floating_policy: FloatingPolicy::Disabled,
+        normal_hispeed_level: 18,
+        target_green_number: 300,
+        lane_cover: 0.0,
+        lift: 0.0,
+        hidden_cover: 0.0,
+        sudden_enabled: false,
+        lift_enabled: false,
+        hidden_enabled: false,
+        lane_cover_visible: false,
+        lane_target: PlayLaneTarget::Lift,
+        lane_cover_changing: false,
+        hsfix_base_bpm: 300.0,
+        classic_hsfix_scale: 0.5,
+        hispeed_auto_adjust: false,
+        playback_rate_percent: 100,
+    };
+
+    assert!(apply_pending_play_lane_action_to_state(
+        &mut lane,
+        PlayLaneAction::Hispeed(HispeedChange::Up),
+        &profile,
+        300.0,
+        false,
+    ));
+    assert!((lane.hispeed - 1.625).abs() < 0.000_01, "hispeed={}", lane.hispeed);
+    assert_eq!(lane.display_hispeed(), 3.25);
+
+    let snapshot = bmz_render::snapshot::RenderSnapshot { max_bpm: 150.0, ..Default::default() };
+    lane.sync_chart_bpm(&snapshot, HsFixOption::MaxBpm);
+    assert!((lane.hispeed - 3.25).abs() < 0.000_01, "hispeed={}", lane.hispeed);
+    assert_eq!(lane.display_hispeed(), 3.25);
+}

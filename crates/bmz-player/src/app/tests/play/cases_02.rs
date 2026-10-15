@@ -215,6 +215,7 @@ fn pending_hispeed_changes_use_displayed_mode_without_mutating_profile() {
         lane_target: PlayLaneTarget::Lift,
         lane_cover_changing: false,
         hsfix_base_bpm: 120.0,
+        classic_hsfix_scale: 1.0,
         hispeed_auto_adjust: false,
         playback_rate_percent: 100,
     };
@@ -252,6 +253,7 @@ fn pending_disabled_covers_use_zero_cover_as_auto_adjust_trigger() {
         lane_target: PlayLaneTarget::Lift,
         lane_cover_changing: true,
         hsfix_base_bpm: 120.0,
+        classic_hsfix_scale: 1.0,
         hispeed_auto_adjust: true,
         playback_rate_percent: 100,
     };
@@ -290,6 +292,7 @@ fn pending_disabled_covers_without_auto_adjust_change_hispeed_directly() {
         lane_target: PlayLaneTarget::Lift,
         lane_cover_changing: true,
         hsfix_base_bpm: 120.0,
+        classic_hsfix_scale: 1.0,
         hispeed_auto_adjust: false,
         playback_rate_percent: 100,
     };
@@ -334,6 +337,7 @@ fn pending_hidden_cover_reverses_digital_and_analog_lane_actions() {
         lane_target: PlayLaneTarget::Lift,
         lane_cover_changing: true,
         hsfix_base_bpm: 120.0,
+        classic_hsfix_scale: 1.0,
         hispeed_auto_adjust: false,
         playback_rate_percent: 100,
     };
@@ -395,6 +399,7 @@ fn pending_green_number_change_switches_displayed_state_to_floating() {
         lane_target: PlayLaneTarget::Lift,
         lane_cover_changing: true,
         hsfix_base_bpm: 120.0,
+        classic_hsfix_scale: 1.0,
         hispeed_auto_adjust: false,
         playback_rate_percent: 100,
     };
@@ -440,6 +445,7 @@ fn pending_floating_to_normal_uses_full_lane_rounding_boundaries() {
             lane_target: PlayLaneTarget::Lift,
             lane_cover_changing: true,
             hsfix_base_bpm: 120.0,
+            classic_hsfix_scale: 1.0,
             hispeed_auto_adjust: false,
             playback_rate_percent: 100,
         };
@@ -479,6 +485,7 @@ fn pending_normal_hispeed_action_changes_level_and_ignores_lane_effects() {
         lane_target: PlayLaneTarget::Lift,
         lane_cover_changing: true,
         hsfix_base_bpm: 120.0,
+        classic_hsfix_scale: 1.0,
         hispeed_auto_adjust: false,
         playback_rate_percent: 100,
     };
@@ -515,6 +522,7 @@ fn pending_hispeed_policy_rejects_unavailable_controls() {
         lane_target: PlayLaneTarget::Lift,
         lane_cover_changing: true,
         hsfix_base_bpm: 120.0,
+        classic_hsfix_scale: 1.0,
         hispeed_auto_adjust: false,
         playback_rate_percent: 100,
     };
@@ -569,6 +577,7 @@ fn pending_lane_state_rejects_all_no_speed_controls() {
         lane_target: PlayLaneTarget::Lift,
         lane_cover_changing: true,
         hsfix_base_bpm: 120.0,
+        classic_hsfix_scale: 1.0,
         hispeed_auto_adjust: false,
         playback_rate_percent: 100,
     };

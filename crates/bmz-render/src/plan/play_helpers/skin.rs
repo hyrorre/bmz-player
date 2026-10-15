@@ -141,7 +141,10 @@ pub(super) fn push_default_play_skin(
     let number_values = [
         (NumberSlot::Combo, snapshot.combo as i64),
         (NumberSlot::Gauge, snapshot.gauge.round() as i64),
-        (NumberSlot::Hispeed, (snapshot.hispeed * 100.0).round() as i64),
+        (
+            NumberSlot::Hispeed,
+            (snapshot.hispeed_display.unwrap_or(snapshot.hispeed) * 100.0).round() as i64,
+        ),
     ];
     let items = skin.resolve(&SkinRenderContext {
         phase: SkinPhase::Play,

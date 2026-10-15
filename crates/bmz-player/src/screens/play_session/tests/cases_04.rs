@@ -1498,3 +1498,96 @@ fn battle_chart_normalization_matches_autoplay_and_shared_cache() {
     std::fs::remove_file(path).unwrap();
     std::fs::remove_file(wav_path).unwrap();
 }
+
+fn classic_hsfix_profile(hispeed: f32) -> ProfileConfig {
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.lane.base_hispeed = BaseHispeedConfig::Classic;
+    profile.lane.floating_policy = FloatingPolicyConfig::Disabled;
+    profile.lane.hispeed = hispeed;
+    profile
+}
+
+fn bpm_120_to_300_chart() -> PlayableChart {
+    let mut bpm_chart = chart();
+    bpm_chart.metadata.initial_bpm = 120.0;
+    bpm_chart.timing_events.push(bmz_chart::model::TimingEvent {
+        tick: bmz_core::time::ChartTick(48),
+        time: TimeUs(1_000_000),
+        kind: TimingEventKind::BpmChange { bpm: 300.0 },
+    });
+    bpm_chart
+}
+
+#[test]
+fn build_game_session_treats_classic_hsfix_hispeed_as_bpm150_value() {
+    let profile = classic_hsfix_profile(3.0);
+    let build = |hs_fix| {
+        build_game_session(
+            Arc::new(bpm_120_to_300_chart()),
+            &profile,
+            PlaySessionOptions { hs_fix, ..PlaySessionOptions::default() },
+        )
+    };
+
+    let off = build(HsFixOption::Off);
+    let start = build(HsFixOption::StartBpm);
+    let max = build(HsFixOption::MaxBpm);
+
+    assert_eq!(off.hispeed_mode, HispeedMode::Classic);
+    assert_eq!(off.hispeed, 3.0);
+    assert!((start.hispeed - 3.75).abs() < 0.000_01, "hispeed={}", start.hispeed);
+    assert_eq!(max.hispeed_mode, HispeedMode::Classic);
+    assert!((max.hispeed - 1.5).abs() < 0.000_01, "hispeed={}", max.hispeed);
+    for session in [&off, &start, &max] {
+        assert_eq!(crate::screens::play_snapshot::display_hispeed_for_session(session), 3.0);
+    }
+    // MAX BPMでの表示時間は、BPM150・HS 3.00と同じになる。
+    let max_bpm_duration = crate::screens::play_snapshot::display_duration_ms_for_bpm_hispeed(
+        300.0,
+        max.hispeed,
+        0.0,
+        0.0,
+        1.0,
+    );
+    let reference_duration = crate::screens::play_snapshot::display_duration_ms_for_bpm_hispeed(
+        150.0, 3.0, 0.0, 0.0, 1.0,
+    );
+    assert!((max_bpm_duration - reference_duration).abs() < 0.01);
+}
+
+#[test]
+fn build_game_session_compensates_classic_hsfix_hispeed_for_practice_rate() {
+    let profile = classic_hsfix_profile(3.0);
+
+    let session = build_game_session(
+        Arc::new(bpm_120_to_300_chart()),
+        &profile,
+        PlaySessionOptions {
+            session_mode: SessionMode::Practice,
+            hs_fix: HsFixOption::MaxBpm,
+            playback_rate_percent: 200,
+            ..PlaySessionOptions::default()
+        },
+    );
+
+    assert!((session.hispeed - 0.75).abs() < 0.000_01, "hispeed={}", session.hispeed);
+    assert_eq!(crate::screens::play_snapshot::display_hispeed_for_session(&session), 3.0);
+}
+
+#[test]
+fn placeholder_session_visuals_scale_classic_hsfix_hispeed() {
+    let profile = classic_hsfix_profile(3.0);
+    let options =
+        PlaySessionOptions { hs_fix: HsFixOption::MaxBpm, ..PlaySessionOptions::default() };
+    let mut snapshot = bmz_render::snapshot::RenderSnapshot {
+        now_bpm: 120.0,
+        max_bpm: 300.0,
+        ..Default::default()
+    };
+
+    apply_placeholder_session_visuals(&mut snapshot, &profile, KeyMode::K7, &options);
+
+    assert_eq!(snapshot.hispeed_mode_index, 0);
+    assert!((snapshot.hispeed - 1.5).abs() < 0.000_01, "hispeed={}", snapshot.hispeed);
+    assert_eq!(snapshot.hispeed_display, Some(3.0));
+}

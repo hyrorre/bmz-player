@@ -337,6 +337,23 @@ fn lr2_hispeed_bridge_scales_both_sides_without_changing_decimal_refs() {
 }
 
 #[test]
+fn hispeed_refs_show_display_value_while_durations_use_effective_hispeed() {
+    // Classic + HS-FIX MAX BPM 300: 表示HS 3.00、実効倍率 1.50。
+    let state = SkinDrawState {
+        hispeed: 1.5,
+        hispeed_display: Some(3.0),
+        max_bpm: 300.0,
+        ..Default::default()
+    };
+
+    assert_eq!(skin_state_number(310, &state), Some(3));
+    assert_eq!(skin_state_number(311, &state), Some(0));
+    assert_eq!(skin_state_number(SKIN_REF_BMZ_LR2_HISPEED, &state), Some(300));
+    // MAX BPMのカバーなし表示時間 (1326) は実効倍率から 240000 / 300 / 1.5。
+    assert_eq!(skin_state_number(1326, &state), Some(533));
+}
+
+#[test]
 fn display_number_digits_uses_absolute_value_like_beatoraja_skin_number() {
     assert_eq!(display_number_digits(-34, 2, NumberPadding::Zero), vec![3, 4]);
     assert_eq!(display_number_digits(-34, 4, NumberPadding::Blank), vec![10, 10, 3, 4]);

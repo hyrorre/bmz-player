@@ -62,8 +62,11 @@ pub use visuals::{
     refresh_play_skin_visuals_with_input_elapsed, skin_visual_time,
 };
 
-pub(crate) use bga::effective_bpm_for_playback_rate;
 use bga::*;
+pub(crate) use bga::{
+    classic_hsfix_scale_for_option, classic_hsfix_scale_for_session, display_hispeed_for_session,
+    effective_bpm_for_playback_rate,
+};
 use bpm_change::*;
 use cache::*;
 use display::*;

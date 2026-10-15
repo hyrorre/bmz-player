@@ -971,11 +971,9 @@ impl WinitApp {
     }
 
     pub(super) fn active_hispeed(&self) -> Option<f32> {
-        self.play
-            .active_play
-            .as_ref()
-            .map(|active| active.running.session.hispeed)
-            .or_else(|| self.play.pending_play_start.as_ref().map(|pending| pending.lane.hispeed))
+        self.play.active_play.as_ref().map(|active| active.running.session.display_hispeed).or_else(
+            || self.play.pending_play_start.as_ref().map(|pending| pending.lane.display_hispeed()),
+        )
     }
 
     pub(super) fn start_scene_timers_before_snapshot(
@@ -1029,7 +1027,7 @@ impl WinitApp {
         self.boot.profile_config.activate_play_mode(pending.play_config_key_mode);
         apply_lane_state_to_profile(
             &mut self.boot.profile_config,
-            Some(pending.lane.hispeed),
+            Some(pending.lane.display_hispeed()),
             Some(ActiveLaneState {
                 lane_cover: pending.lane.lane_cover,
                 lift: pending.lane.lift,

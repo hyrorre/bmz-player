@@ -327,7 +327,7 @@ impl WinitApp {
         tracing::info!(chart_id, ?mode, "quick retrying chart");
         self.notify_obs_retry_play();
         self.save_configs_after_play(
-            self.play.active_play.as_ref().map(|active| active.running.session.hispeed),
+            self.play.active_play.as_ref().map(|active| active.running.session.display_hispeed),
             "quick retry",
         );
         if let Some(active) = &mut self.play.active_play

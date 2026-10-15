@@ -369,6 +369,7 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         gauge_border: session.gauge.current().definition.border,
         opponent,
         hispeed: session.hispeed,
+        hispeed_display: Some(display_hispeed_for_session(session)),
         hispeed_mode_index: hispeed_mode_index(session.hispeed_mode),
         base_hispeed_index: base_hispeed_index(session.base_hispeed_mode),
         normal_hispeed_level: session.normal_hispeed_level,
@@ -564,6 +565,7 @@ pub fn update_render_snapshot_play_options(
     chart_now: TimeUs,
 ) {
     snapshot.hispeed = session.hispeed;
+    snapshot.hispeed_display = Some(display_hispeed_for_session(session));
     snapshot.hispeed_mode_index = hispeed_mode_index(session.hispeed_mode);
     snapshot.base_hispeed_index = base_hispeed_index(session.base_hispeed_mode);
     snapshot.normal_hispeed_level = session.normal_hispeed_level;

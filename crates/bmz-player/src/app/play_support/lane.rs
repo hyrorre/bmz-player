@@ -46,7 +46,12 @@ pub(in crate::app) fn apply_pending_play_lane_action_to_state(
                 lane.refresh_normal_hispeed(now_bpm, false);
             } else {
                 let step = hispeed_step_for_profile(profile, lane.hispeed_mode);
-                lane.hispeed = adjusted_hispeed(lane.hispeed, change, step);
+                lane.hispeed = adjust_hispeed_in_display_units(
+                    lane.hispeed,
+                    lane.hispeed_mode,
+                    lane.classic_hsfix_scale,
+                    |hispeed| adjusted_hispeed(hispeed, change, step),
+                );
             }
         }
         PlayLaneAction::LaneCoverDelta(delta) => {
@@ -101,13 +106,20 @@ fn apply_pending_lane_cover_delta(
         if lane.hispeed_auto_adjust {
             lane.refresh_floating_hispeed_without_lane_effects(now_bpm, false);
         } else if analog {
-            lane.hispeed = clamp_hispeed(lane.hispeed + delta * ANALOG_HISPEED_PER_LANE_COVER);
+            lane.hispeed = adjust_hispeed_in_display_units(
+                lane.hispeed,
+                lane.hispeed_mode,
+                lane.classic_hsfix_scale,
+                |hispeed| clamp_hispeed(hispeed + delta * ANALOG_HISPEED_PER_LANE_COVER),
+            );
         } else {
             let change = if delta >= 0.0 { HispeedChange::Up } else { HispeedChange::Down };
-            lane.hispeed = adjusted_hispeed(
+            let step = hispeed_step_for_profile(profile, lane.hispeed_mode);
+            lane.hispeed = adjust_hispeed_in_display_units(
                 lane.hispeed,
-                change,
-                hispeed_step_for_profile(profile, lane.hispeed_mode),
+                lane.hispeed_mode,
+                lane.classic_hsfix_scale,
+                |hispeed| adjusted_hispeed(hispeed, change, step),
             );
         }
         return;
@@ -147,7 +159,12 @@ pub(in crate::app) fn apply_hispeed_change_to_session(
     change: HispeedChange,
     step: f32,
 ) {
-    session.hispeed = adjusted_hispeed(session.hispeed, change, step);
+    session.hispeed = adjust_hispeed_in_display_units(
+        session.hispeed,
+        session.hispeed_mode,
+        crate::screens::play_snapshot::classic_hsfix_scale_for_session(session),
+        |hispeed| adjusted_hispeed(hispeed, change, step),
+    );
 }
 
 pub(in crate::app) fn apply_play_lane_action_to_session(
@@ -246,7 +263,12 @@ fn apply_lane_cover_action_to_session(
                 hispeed_for_green_number_without_lane_effects_at_bpm(session, now, now_bpm);
         }
     } else if analog {
-        session.hispeed = clamp_hispeed(session.hispeed + delta * ANALOG_HISPEED_PER_LANE_COVER);
+        session.hispeed = adjust_hispeed_in_display_units(
+            session.hispeed,
+            session.hispeed_mode,
+            crate::screens::play_snapshot::classic_hsfix_scale_for_session(session),
+            |hispeed| clamp_hispeed(hispeed + delta * ANALOG_HISPEED_PER_LANE_COVER),
+        );
     } else {
         let change = if delta >= 0.0 { HispeedChange::Up } else { HispeedChange::Down };
         apply_hispeed_change_to_session(session, change, hispeed_step);
