@@ -752,6 +752,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
  "wgpu",
 ]

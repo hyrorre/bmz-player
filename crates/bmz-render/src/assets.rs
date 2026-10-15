@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn lr2_color_key_masks_rgb_but_preserves_existing_alpha() {
         for extension in ["bmp", "png"] {
-            let path = temp_image_path(extension);
+            let (_temp, path) = temp_image_path(extension);
             image::RgbImage::from_raw(2, 1, vec![0, 255, 0, 12, 34, 56])
                 .unwrap()
                 .save(&path)
@@ -258,18 +258,16 @@ mod tests {
             assert_eq!(asset.pixels, [0, 255, 0, 0, 12, 34, 56, 255]);
             let plain = load_static_rgba_image(&path).unwrap();
             assert_eq!(plain.pixels[3], 255);
-            std::fs::remove_file(path).unwrap();
         }
-        let path = temp_image_path("png");
+        let (_temp, path) = temp_image_path("png");
         image::RgbaImage::from_raw(1, 1, vec![0, 255, 0, 200]).unwrap().save(&path).unwrap();
         let asset = load_static_rgba_image_with_color_key(&path, Some([0, 255, 0])).unwrap();
         assert_eq!(asset.pixels, [0, 255, 0, 200]);
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
     fn load_static_rgba_image_reads_24_bit_bmp_pixels() {
-        let path = temp_image_path("bmp");
+        let (_temp, path) = temp_image_path("bmp");
         std::fs::write(
             &path,
             test_bmp_24_bytes(2, 2, &[[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]]),
@@ -284,14 +282,13 @@ mod tests {
             asset.pixels,
             vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,]
         );
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
     fn load_static_rgba_image_decodes_8bpp_indexed_bmp() {
         // 旧デコーダは bits_per_pixel=8 を弾いていたため、image crate 移行後は
         // パレット付き 8bpp BMP がデコードできることを担保する。
-        let path = temp_image_path("bmp");
+        let (_temp, path) = temp_image_path("bmp");
         let buffer = image::GrayImage::from_raw(2, 2, vec![10, 20, 30, 40]).unwrap();
         buffer.save_with_format(&path, image::ImageFormat::Bmp).unwrap();
 
@@ -299,7 +296,6 @@ mod tests {
 
         assert_eq!(asset.width, 2);
         assert_eq!(asset.height, 2);
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -307,7 +303,7 @@ mod tests {
         for (extension, format) in
             [("gif", image::ImageFormat::Gif), ("tga", image::ImageFormat::Tga)]
         {
-            let path = temp_image_path(extension);
+            let (_temp, path) = temp_image_path(extension);
             let buffer = image::RgbaImage::from_raw(1, 1, vec![12, 34, 56, 255]).unwrap();
             buffer.save_with_format(&path, format).unwrap();
 
@@ -317,13 +313,12 @@ mod tests {
             assert_eq!(asset.width, 1);
             assert_eq!(asset.height, 1);
             assert_eq!(asset.pixels, vec![12, 34, 56, 255]);
-            std::fs::remove_file(path).unwrap();
         }
     }
 
     #[test]
     fn load_static_rgba_image_decodes_libgdx_cim_rgba8888() {
-        let path = temp_image_path("cim");
+        let (_temp, path) = temp_image_path("cim");
         write_test_cim(&path, 2, 1, 4, &[12, 34, 56, 78, 90, 123, 200, 255]);
 
         let asset = load_static_rgba_image(&path).expect("libGDX CIM must decode");
@@ -331,27 +326,24 @@ mod tests {
         assert_eq!(asset.width, 2);
         assert_eq!(asset.height, 1);
         assert_eq!(asset.pixels, vec![12, 34, 56, 78, 90, 123, 200, 255]);
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
     fn load_static_rgba_image_rejects_truncated_cim_pixels() {
-        let path = temp_image_path("cim");
+        let (_temp, path) = temp_image_path("cim");
         write_test_cim(&path, 2, 1, 4, &[12, 34, 56, 78]);
 
         let error = load_static_rgba_image(&path).unwrap_err();
 
         assert!(error.to_string().contains("truncated CIM pixel data"));
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
     fn load_static_rgba_image_rejects_unsupported_extension() {
-        let path = temp_image_path("xyz");
+        let (_temp, path) = temp_image_path("xyz");
         std::fs::write(&path, b"not an image").unwrap();
         let err = load_static_rgba_image(&path).unwrap_err();
         assert!(err.to_string().contains("unsupported image format"));
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -363,7 +355,7 @@ mod tests {
 
     #[test]
     fn load_chart_bga_image_pads_small_images_like_beatoraja() {
-        let path = temp_image_path("png");
+        let (_temp, path) = temp_image_path("png");
         let image = image::RgbaImage::from_raw(
             2,
             2,
@@ -386,7 +378,6 @@ mod tests {
         assert_eq!(&asset.pixels[first_source_pixel], &[255, 0, 0, 255]);
         let second_row_pixel = pixel_range(1, 128);
         assert_eq!(&asset.pixels[second_row_pixel], &[255, 255, 255, 255]);
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -424,10 +415,12 @@ mod tests {
         assert_eq!(&asset.pixels[first_source_pixel], &[255, 0, 0, 255]);
     }
 
-    fn temp_image_path(extension: &str) -> PathBuf {
-        let stamp =
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        std::env::temp_dir().join(format!("bmz-render-test-{stamp}.{extension}"))
+    /// The name only carried a timestamp, so equal stamps (coarse clocks, or another test
+    /// process) shared a file. The TempDir owns the image and removes it on drop.
+    fn temp_image_path(extension: &str) -> (tempfile::TempDir, PathBuf) {
+        let temp = tempfile::Builder::new().prefix("bmz-render-test-").tempdir().unwrap();
+        let path = temp.path().join(format!("image.{extension}"));
+        (temp, path)
     }
 
     fn write_test_cim(path: &Path, width: i32, height: i32, format: i32, pixels: &[u8]) {
