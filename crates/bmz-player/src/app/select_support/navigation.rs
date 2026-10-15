@@ -4,6 +4,7 @@ use super::*;
 pub(in crate::app) enum SelectListAction {
     Enter(String),
     Refresh,
+    RefreshDownloads,
     RefreshSelectedChartFolder(String),
     Exit,
 }
@@ -50,12 +51,15 @@ pub(in crate::app) fn prepare_select_list(
         SelectListAction::RefreshSelectedChartFolder(folder_path) => {
             key = Some(SelectItemKey::ChartFolder(folder_path.clone()));
         }
-        SelectListAction::Refresh => {}
+        SelectListAction::Refresh | SelectListAction::RefreshDownloads => {}
     }
     let mut left_empty_folder = false;
     loop {
         let (items, mode_filter) = load(&stack)?;
-        if !items.is_empty() || stack.is_empty() {
+        if !items.is_empty()
+            || stack.is_empty()
+            || matches!(action, SelectListAction::RefreshDownloads)
+        {
             return Ok(Some(PreparedSelectList {
                 folder_stack: stack,
                 selected_index_stack: indices,

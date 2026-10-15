@@ -438,9 +438,9 @@ impl WinitApp {
                 table_fetch,
                 song_scan: SongScanRuntime::default(),
                 pending_replay_import: None,
-                pending_chart_download: None,
+                chart_downloads: Default::default(),
                 download_request_id: 0,
-                download_selection: None,
+                download_selections: Vec::new(),
                 download_registrations: Vec::new(),
                 updates: update_runtime::AppUpdateRuntime {
                     queued_check: queued_update_check,

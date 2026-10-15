@@ -12,10 +12,15 @@ pub(super) struct PendingSystemSoundLoad {
 }
 
 pub(super) struct PendingSongScan {
-    pub(super) finished: Receiver<Result<ScanReport>>,
+    pub(super) finished: Receiver<Result<SongScanResult>>,
     pub(super) progress: Arc<AtomicU64>,
     pub(super) library_roots: Option<Vec<PathEntry>>,
-    pub(super) scanned_roots: Vec<PathEntry>,
+    pub(super) download_ids: Vec<u64>,
+}
+
+pub(super) struct SongScanResult {
+    pub(super) report: ScanReport,
+    pub(super) downloaded: Vec<(u64, Vec<crate::song_download::ChartDownloadIdentity>)>,
 }
 
 pub(super) struct DownloadSelection {

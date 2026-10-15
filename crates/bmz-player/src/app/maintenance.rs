@@ -47,6 +47,9 @@ impl WinitApp {
     /// Select中だけmaintenance workerの完了をDB/UIへ反映し、queued jobを開始する。
     pub(super) fn poll_select_maintenance(&mut self) {
         self.poll_profile_change();
+        // Transfer workers continue through Play/Result. Library registration
+        // remains serialized by the existing Select maintenance gate.
+        self.jobs.chart_downloads.poll(self.boot.app_config.downloads.http_parallelism as usize);
         self.sync_select_maintenance_gate();
         if !self.select_maintenance_allowed() {
             return;

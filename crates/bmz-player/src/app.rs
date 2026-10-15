@@ -162,8 +162,7 @@ use crate::skin_loader::{
     set_decoded_skin_context, upload_decoded_skin_with_texture_cache,
 };
 use crate::song_download::{
-    ChartDownloadBatchResult, ChartDownloadRequest, MissingChartAction,
-    choose_missing_chart_action, download_charts, open_browser_urls,
+    ChartDownloadRequest, MissingChartAction, choose_missing_chart_action, open_browser_urls,
 };
 use crate::songs_cmd::scan_songs_with_progress;
 use crate::storage::collection_db::FavoriteHints;

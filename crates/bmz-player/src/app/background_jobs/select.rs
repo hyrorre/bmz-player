@@ -35,7 +35,7 @@ impl WinitApp {
             self.select.selected_index,
             previous_selected_key,
             |stack| {
-                load_items_for_stack(
+                let (mut items, mut mode) = load_items_for_stack(
                     &self.boot,
                     &mut self.select.collection_cache,
                     stack,
@@ -43,7 +43,12 @@ impl WinitApp {
                     self.select.select_mode_filter,
                     self.select.select_difficulty_filter,
                     self.select.select_sort,
-                )
+                )?;
+                if matches!(action, SelectListAction::RefreshDownloads) {
+                    mode = self.select.select_mode_filter;
+                    apply_select_mode_filter(&mut items, mode);
+                }
+                Ok((items, mode))
             },
         );
         let prepared = match prepared {
@@ -69,7 +74,7 @@ impl WinitApp {
             }
         };
         let folder_changed = self.select.folder_stack != prepared.folder_stack;
-        if !matches!(action, SelectListAction::Refresh) {
+        if !matches!(action, SelectListAction::Refresh | SelectListAction::RefreshDownloads) {
             self.select.selection_generation = self.select.selection_generation.wrapping_add(1);
         }
         if matches!(&action, SelectListAction::Enter(path) if parse_search_query(path).is_some())

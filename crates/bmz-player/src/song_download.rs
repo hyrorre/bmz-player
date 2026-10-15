@@ -8,7 +8,19 @@ use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
 use reqwest::{Response, Url};
 use serde_json::Value;
-use tokio::io::AsyncWriteExt;
+use std::io::Write;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
+
+mod manager;
+#[cfg(test)]
+mod test_support;
+pub use manager::{
+    ChartDownloadManager, DownloadControl, DownloadServices, DownloadState, DownloadTask,
+    DownloadTaskId,
+};
 
 use crate::config::app_config::ChartDownloadsConfig;
 
@@ -204,6 +216,28 @@ mod public_url_tests {
 }
 
 pub async fn download_chart(request: ChartDownloadRequest) -> Result<ChartDownloadResult> {
+    download_chart_controlled(request, Arc::default(), Arc::default()).await
+}
+
+async fn download_chart_controlled(
+    request: ChartDownloadRequest,
+    control: Arc<DownloadControl>,
+    services: Arc<DownloadServices>,
+) -> Result<ChartDownloadResult> {
+    control.check()?;
+    tokio::select! {
+        biased;
+        _ = control.cancelled() => bail!("download cancelled"),
+        result = download_chart_inner(request, &control, &services) => result,
+    }
+}
+
+async fn download_chart_inner(
+    request: ChartDownloadRequest,
+    control: &DownloadControl,
+    services: &DownloadServices,
+) -> Result<ChartDownloadResult> {
+    control.set_state(DownloadState::Resolving);
     let source = match &request.action {
         MissingChartAction::Ipfs { .. } => ChartDownloadSource::Ipfs,
         MissingChartAction::Http { .. } => ChartDownloadSource::Http,
@@ -230,14 +264,21 @@ pub async fn download_chart(request: ChartDownloadRequest) -> Result<ChartDownlo
         .redirect(reqwest::redirect::Policy::limited(10))
         .build()?;
 
+    let mut cache_owner = None;
     let hash_hint = match &request.action {
         MissingChartAction::Ipfs { api_url, cids } => {
+            anyhow::ensure!(!cids.is_empty(), "IPFS action requires at least one CID");
             for (index, cid) in cids.iter().enumerate() {
                 let response = request_ipfs_archive(&client, api_url, cid).await?;
-                save_response(response, &archive_path).await?;
+                save_response_controlled(response, &archive_path, control).await?;
                 let package_dir = staging_dir.join(format!(".package-{index}"));
                 std::fs::create_dir(&package_dir)?;
-                extract_archive(&archive_path, &package_dir)?;
+                {
+                    let _permit = services.extraction.lock().unwrap_or_else(|e| e.into_inner());
+                    control.check()?;
+                    control.set_state(DownloadState::Extracting);
+                    extract_archive_controlled(&archive_path, &package_dir, control)?;
+                }
                 merge_ipfs_package(&package_dir, &staging_dir)?;
                 std::fs::remove_file(&archive_path).ok();
                 if index + 1 < cids.len() {
@@ -247,9 +288,10 @@ pub async fn download_chart(request: ChartDownloadRequest) -> Result<ChartDownlo
             normalize_ipfs_arg(cids.first().expect("IPFS action has at least one CID"))?
         }
         MissingChartAction::Http { api_url, md5, sha256 } => {
+            let scope = format!("{}\n{}", request.data_dir.display(), api_url);
             let api_url = expand_http_api_url(api_url, md5, sha256)?;
             let response = client.get(api_url.clone()).send().await?.error_for_status()?;
-            let archive_response = if response_is_json(&response) {
+            let (archive_url, direct_response) = if response_is_json(&response) {
                 let content_length = response.content_length().unwrap_or(0);
                 if content_length > MAX_METADATA_BYTES {
                     bail!("HTTP APIのJSON応答が大きすぎます")
@@ -263,17 +305,69 @@ pub async fn download_chart(request: ChartDownloadRequest) -> Result<ChartDownlo
                 let download_url = find_download_url(&value)
                     .ok_or_else(|| anyhow::anyhow!("HTTP API応答にダウンロードURLがありません"))?;
                 let download_url = resolve_http_url(&api_url, download_url)?;
-                client.get(download_url).send().await?.error_for_status()?
+                (download_url, None)
             } else {
-                response
+                (response.url().clone(), Some(response))
             };
-            save_response(archive_response, &archive_path).await?;
-            extract_archive(&archive_path, &staging_dir)?;
-            md5.clone()
+            let key = format!("{scope}\n{archive_url}");
+            // The first owner publishes an extracted directory. Followers keep
+            // their own hashes and verify each one after the shared partial scan.
+            let mut direct_response = direct_response;
+            loop {
+                control.check()?;
+                let (shared, owner) = {
+                    let mut cache = services.archives.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(shared) = cache.get(&key) {
+                        (Arc::clone(shared), false)
+                    } else {
+                        let shared = Arc::new(std::sync::Mutex::new(None));
+                        cache.insert(key.clone(), Arc::clone(&shared));
+                        (shared, true)
+                    }
+                };
+                if owner {
+                    cache_owner =
+                        Some(ArchiveOwner { services, key: key.clone(), shared, completed: false });
+                    break;
+                }
+                // A cancelled owner releases its claim; a waiting task can take
+                // over without inheriting the other task's cancellation.
+                let cached = shared.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                match cached {
+                    Some(Ok(mut result)) if result.chart_dir.is_dir() => {
+                        result.request_id = request.request_id;
+                        result.identity = request.identity;
+                        return Ok(result);
+                    }
+                    Some(_) => {
+                        let mut cache = services.archives.lock().unwrap_or_else(|e| e.into_inner());
+                        if cache.get(&key).is_some_and(|current| Arc::ptr_eq(current, &shared)) {
+                            cache.remove(&key);
+                        }
+                    }
+                    None => {
+                        tokio::time::sleep(Duration::from_millis(25)).await;
+                    }
+                }
+            }
+            let archive_response = match direct_response.take() {
+                Some(response) => response,
+                None => client.get(archive_url).send().await?.error_for_status()?,
+            };
+            anyhow::ensure!(!response_is_json(&archive_response), "archive endpoint returned JSON");
+            save_response_controlled(archive_response, &archive_path, control).await?;
+            {
+                let _permit = services.extraction.lock().unwrap_or_else(|e| e.into_inner());
+                control.check()?;
+                control.set_state(DownloadState::Extracting);
+                extract_archive_controlled(&archive_path, &staging_dir, control)?;
+            }
+            if md5.is_empty() { sha256.clone() } else { md5.clone() }
         }
         MissingChartAction::Browser(_) | MissingChartAction::Unavailable => unreachable!(),
     };
 
+    control.check()?;
     let final_dir = unique_final_dir(&root_dir, &request.title, &hash_hint);
     std::fs::rename(&staging_dir, &final_dir).with_context(|| {
         format!("展開済みフォルダを保存できませんでした: {}", final_dir.display())
@@ -281,13 +375,35 @@ pub async fn download_chart(request: ChartDownloadRequest) -> Result<ChartDownlo
     std::fs::remove_file(&archive_path).ok();
     cleanup.disarm();
 
-    Ok(ChartDownloadResult {
+    let result = ChartDownloadResult {
         request_id: request.request_id,
         identity: request.identity,
         source,
         root_dir,
         chart_dir: final_dir,
-    })
+    };
+    if let Some(owner) = &mut cache_owner {
+        *owner.shared.lock().unwrap_or_else(|e| e.into_inner()) = Some(Ok(result.clone()));
+        owner.completed = true;
+    }
+    Ok(result)
+}
+
+struct ArchiveOwner<'a> {
+    services: &'a DownloadServices,
+    key: String,
+    shared: Arc<std::sync::Mutex<manager::ArchiveResult>>,
+    completed: bool,
+}
+
+impl Drop for ArchiveOwner<'_> {
+    fn drop(&mut self) {
+        if !self.completed {
+            *self.shared.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(Err("archive owner ended".into()));
+            self.services.archives.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.key);
+        }
+    }
 }
 
 /// Downloads every request sequentially so one failed course stage does not
@@ -410,49 +526,73 @@ fn resolve_http_url(base: &Url, value: &str) -> Result<Url> {
     Ok(url)
 }
 
-async fn save_response(mut response: Response, path: &Path) -> Result<()> {
+async fn save_response_controlled(
+    mut response: Response,
+    path: &Path,
+    control: &DownloadControl,
+) -> Result<()> {
+    control.set_state(DownloadState::Downloading);
+    let content_length = response.content_length();
+    control.progress(0, content_length);
     if response.content_length().is_some_and(|length| length > MAX_DOWNLOAD_BYTES) {
         bail!("ダウンロードサイズが上限を超えています")
     }
-    let mut file = tokio::fs::File::create(path).await?;
+    let mut file = File::create(path)?;
     let mut total = 0_u64;
     while let Some(chunk) = response.chunk().await? {
+        control.check()?;
         total = total.saturating_add(chunk.len() as u64);
         if total > MAX_DOWNLOAD_BYTES {
             bail!("ダウンロードサイズが上限を超えています")
         }
-        file.write_all(&chunk).await?;
+        file.write_all(&chunk)?;
+        control.progress(total, content_length);
     }
-    file.flush().await?;
+    file.flush()?;
     if total == 0 {
         bail!("ダウンロードしたアーカイブが空です")
     }
     Ok(())
 }
 
-fn extract_archive(archive_path: &Path, destination: &Path) -> Result<()> {
+fn extract_archive_controlled(
+    archive_path: &Path,
+    destination: &Path,
+    control: &DownloadControl,
+) -> Result<()> {
     let mut signature = [0_u8; 8];
     let read = File::open(archive_path)?.read(&mut signature)?;
     if read >= 2 && signature[..2] == [0x1f, 0x8b] {
-        extract_tar_gz(archive_path, destination)
+        extract_tar_gz_controlled(archive_path, destination, control)
     } else if read >= 6 && signature[..6] == [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c] {
-        extract_7z(archive_path, destination)
+        extract_7z(archive_path, destination, control)
     } else {
         bail!("対応していないアーカイブ形式です（tar.gz / 7z のみ対応）")
     }
 }
 
+#[cfg(test)]
 fn extract_tar_gz(archive_path: &Path, destination: &Path) -> Result<()> {
+    extract_tar_gz_controlled(archive_path, destination, &DownloadControl::default())
+}
+
+fn extract_tar_gz_controlled(
+    archive_path: &Path,
+    destination: &Path,
+    control: &DownloadControl,
+) -> Result<()> {
     std::fs::create_dir_all(destination)?;
     let file = File::open(archive_path)?;
-    let decoder = GzDecoder::new(file);
+    let decoder = GzDecoder::new(CancelReader { reader: file, control });
     let mut archive = tar::Archive::new(decoder);
     archive.set_preserve_permissions(false);
     archive.set_preserve_ownerships(false);
     let mut count = 0_usize;
     let mut total = 0_u64;
     for entry in archive.entries()? {
+        control.check()?;
         let mut entry = entry?;
+        validate_archive_path(&entry.path()?.to_string_lossy())?;
         count += 1;
         if count > MAX_ARCHIVE_ENTRIES {
             bail!("アーカイブ内のファイル数が上限を超えています")
@@ -478,13 +618,25 @@ fn extract_tar_gz(archive_path: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-fn extract_7z(archive_path: &Path, destination: &Path) -> Result<()> {
+fn extract_7z(archive_path: &Path, destination: &Path, control: &DownloadControl) -> Result<()> {
     let mut count = 0_usize;
     let mut total = 0_u64;
     sevenz_rust2::decompress_file_with_extract_fn(
         archive_path,
         destination,
         |entry, reader, path| {
+            let unix_type = (entry.windows_attributes >> 16) & 0o170000;
+            if entry.is_anti_item
+                || (entry.windows_attributes & 0x400) != 0
+                || !matches!(unix_type, 0 | 0o100000 | 0o040000)
+            {
+                return Err(sevenz_rust2::Error::Other("unsupported archive entry".into()));
+            }
+            if control.is_cancelled() {
+                return Err(sevenz_rust2::Error::Other("download cancelled".into()));
+            }
+            validate_archive_path(entry.name())
+                .map_err(|e| sevenz_rust2::Error::Other(e.to_string().into()))?;
             count += 1;
             if count > MAX_ARCHIVE_ENTRIES {
                 return Err(sevenz_rust2::Error::Other(std::borrow::Cow::Borrowed(
@@ -504,10 +656,38 @@ fn extract_7z(archive_path: &Path, destination: &Path) -> Result<()> {
                     )));
                 }
             }
-            sevenz_rust2::default_entry_extract_fn(entry, reader, path)
+            sevenz_rust2::default_entry_extract_fn(
+                entry,
+                &mut CancelReader { reader, control },
+                path,
+            )
         },
     )
     .context("7zアーカイブを展開できませんでした")
+}
+
+struct CancelReader<'a, R> {
+    reader: R,
+    control: &'a DownloadControl,
+}
+impl<R: Read> Read for CancelReader<'_, R> {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        if self.control.is_cancelled() {
+            return Err(std::io::Error::other("download cancelled"));
+        }
+        self.reader.read(bytes)
+    }
+}
+
+fn validate_archive_path(name: &str) -> Result<()> {
+    anyhow::ensure!(
+        !name.starts_with(['/', '\\'])
+            && !name.contains(':')
+            && !name.contains('\0')
+            && !name.split(['/', '\\']).any(|part| part == ".."),
+        "unsafe archive entry path"
+    );
+    Ok(())
 }
 
 fn merge_ipfs_package(package_dir: &Path, destination: &Path) -> Result<()> {
@@ -548,8 +728,7 @@ fn unique_final_dir(root: &Path, title: &str, hash_hint: &str) -> PathBuf {
     let hash =
         hash_hint.chars().filter(|ch| ch.is_ascii_alphanumeric()).take(12).collect::<String>();
     let stem = if hash.is_empty() { title } else { format!("{title}-{hash}") };
-    let candidate = root.join(&stem);
-    if !candidate.exists() { candidate } else { root.join(format!("{stem}-{}", unique_stamp())) }
+    root.join(format!("{stem}-{}", unique_stamp()))
 }
 
 fn sanitize_name(value: &str) -> String {
@@ -569,11 +748,12 @@ fn sanitize_name(value: &str) -> String {
 }
 
 fn unique_stamp() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    format!("{}-{nanos}", std::process::id())
+    format!("{}-{nanos}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed))
 }
 
 struct DownloadCleanup {
@@ -632,6 +812,7 @@ mod tests {
     #[test]
     fn ipfs_has_priority_over_http_and_browser() {
         let config = ChartDownloadsConfig {
+            http_parallelism: 3,
             ipfs_enabled: true,
             ipfs_api_url: "http://127.0.0.1:5001".to_string(),
             http_enabled: true,
@@ -647,6 +828,7 @@ mod tests {
     #[test]
     fn http_is_used_when_ipfs_has_no_cid() {
         let config = ChartDownloadsConfig {
+            http_parallelism: 3,
             ipfs_enabled: true,
             ipfs_api_url: "http://127.0.0.1:5001".to_string(),
             http_enabled: true,

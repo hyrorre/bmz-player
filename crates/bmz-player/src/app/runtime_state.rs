@@ -259,10 +259,10 @@ pub(super) struct AppJobs {
     pub(super) table_fetch: TableFetchRuntime,
     pub(super) song_scan: SongScanRuntime,
     pub(super) pending_replay_import: Option<PendingReplayImport>,
-    pub(super) pending_chart_download: Option<Receiver<Result<ChartDownloadBatchResult>>>,
+    pub(super) chart_downloads: crate::song_download::ChartDownloadManager,
     pub(super) download_request_id: u64,
-    pub(super) download_selection: Option<DownloadSelection>,
-    pub(super) download_registrations: Vec<crate::song_download::ChartDownloadResult>,
+    pub(super) download_selections: Vec<DownloadSelection>,
+    pub(super) download_registrations: Vec<(u64, crate::song_download::ChartDownloadResult)>,
     pub(super) updates: update_runtime::AppUpdateRuntime,
     /// 起動時に1回だけ実行するrianIRライバル一覧同期。
     pub(super) startup_rival_sync: Option<RianRivalSyncRequest>,
