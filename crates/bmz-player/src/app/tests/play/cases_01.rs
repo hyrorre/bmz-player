@@ -604,3 +604,98 @@ fn decide_control_action_skips_with_1p_and_2p_decide_keys() {
     assert_eq!(decide_control_action("S", &keys), None);
     assert_eq!(decide_control_action("P2K6", &keys), None);
 }
+
+#[test]
+fn play_control_hold_state_treats_e4_as_e1() {
+    let input = crate::config::play_input::default_profile_input();
+    let play_input = play_option_input_for(&input, KeyMode::K7);
+    let keyboard =
+        |control: &str| (W_KEYBOARD_DEVICE_ID, PhysicalControl::KeyboardKey(control.to_string()));
+
+    // 既定のE4はR。
+    let pressed = HashSet::from([keyboard("R")]);
+    assert_eq!(
+        play_control_hold_state_from_pressed_inputs(&pressed, &play_input),
+        (true, false, false)
+    );
+    let pressed = HashSet::from([keyboard("R"), keyboard("W")]);
+    assert_eq!(
+        play_control_hold_state_from_pressed_inputs(&pressed, &play_input),
+        (true, true, false)
+    );
+    assert!(play_input.is_action(
+        W_KEYBOARD_DEVICE_ID,
+        &PhysicalControl::KeyboardKey("R".to_string()),
+        InputActionConfig::E1,
+    ));
+    assert!(!play_input.is_action(
+        W_KEYBOARD_DEVICE_ID,
+        &PhysicalControl::KeyboardKey("Q".to_string()),
+        InputActionConfig::E4,
+    ));
+}
+
+#[test]
+fn play_option_control_toggles_floating_with_e4_and_e2() {
+    let input = crate::config::play_input::default_profile_input();
+    let keys = SelectKeyBindings::from_profile(&input);
+    let play_input = play_option_input_for(&input, KeyMode::K7);
+
+    // E2 hold中にE4、E4 hold中にE2のどちらでも切替。
+    assert_eq!(
+        keyboard_play_option("R", false, true, &keys, &play_input, &input),
+        Some(PlayOptionControl::ToggleHispeedMode)
+    );
+    assert_eq!(
+        keyboard_play_option("W", true, false, &keys, &play_input, &input),
+        Some(PlayOptionControl::ToggleHispeedMode)
+    );
+}
+
+#[test]
+fn play_skin_input_mirrors_e4_to_e1_only_in_play() {
+    let mut skin_input = SkinLogicalInputSnapshot::default();
+    skin_input.held[3] = true;
+
+    let mut play = AppSceneSnapshot::Play(Default::default());
+    apply_skin_logical_input_to_scene(&mut play, skin_input);
+    let AppSceneSnapshot::Play(play) = play else { unreachable!() };
+    assert!(play.skin_input.held[0]);
+    assert!(play.skin_input.held[3]);
+
+    let mut decide = AppSceneSnapshot::Decide(Default::default());
+    apply_skin_logical_input_to_scene(&mut decide, skin_input);
+    let AppSceneSnapshot::Decide(decide) = decide else { unreachable!() };
+    assert!(!decide.skin_input.held[0]);
+}
+
+#[test]
+fn play_e1_hold_survives_releasing_one_of_e1_and_e4() {
+    let input = crate::config::play_input::default_profile_input();
+    let play_input = play_option_input_for(&input, KeyMode::K7);
+    let key = |control: &str| PhysicalControl::KeyboardKey(control.to_string());
+    let both = HashSet::from([(W_KEYBOARD_DEVICE_ID, key("Q")), (W_KEYBOARD_DEVICE_ID, key("R"))]);
+    let only_e4 = HashSet::from([(W_KEYBOARD_DEVICE_ID, key("R"))]);
+
+    // Qを離してもRを押していればE1 holdを維持する (解放前後どちらの集合でも)。
+    for pressed in [&both, &only_e4] {
+        assert_eq!(
+            play_e1_held_after_input(pressed, &play_input, W_KEYBOARD_DEVICE_ID, &key("Q"), false),
+            Some(true)
+        );
+    }
+    assert_eq!(
+        play_e1_held_after_input(
+            &HashSet::new(),
+            &play_input,
+            W_KEYBOARD_DEVICE_ID,
+            &key("R"),
+            false
+        ),
+        Some(false)
+    );
+    assert_eq!(
+        play_e1_held_after_input(&both, &play_input, W_KEYBOARD_DEVICE_ID, &key("W"), true),
+        None
+    );
+}

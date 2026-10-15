@@ -216,7 +216,7 @@ impl WinitApp {
         if control_event.pressed
             && !control_event.repeat
             && let Some(control) = play_control
-            && self.select.select_keys.is_start(control)
+            && self.select.select_keys.is_play_start(control)
         {
             self.handle_play_start_double_press();
             // Start キーはゲームプレイ入力としても通すのでフォールスルー
@@ -266,7 +266,7 @@ impl WinitApp {
         if event.state == ElementState::Pressed
             && !event.repeat
             && let Some(control) = play_control
-            && self.select.select_keys.is_start(control)
+            && self.select.select_keys.is_play_start(control)
         {
             self.handle_play_start_double_press();
         }

@@ -853,13 +853,17 @@ impl WinitApp {
         control: &PhysicalControl,
         pressed: bool,
     ) -> bool {
-        let is_e1 = self.play.play_option_input.as_ref().is_some_and(|input| {
-            !input.resolves_lane(device, control)
-                && input.is_action(device, control, InputActionConfig::E1)
-        });
-        if !is_e1 {
+        let Some(pressed) = self.play.play_option_input.as_ref().and_then(|input| {
+            play_e1_held_after_input(
+                &self.input.pressed_play_inputs,
+                input,
+                device,
+                control,
+                pressed,
+            )
+        }) else {
             return false;
-        }
+        };
         let was_ready_blocked =
             play_ready_blocked_by_control_holds(self.play.play_e1_held, self.play.play_e2_held);
         if self.play.play_e1_held != pressed {

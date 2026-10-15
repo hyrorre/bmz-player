@@ -346,6 +346,10 @@ fn final_notes_fadeout_accepts_e1_e2_and_escape_controls() {
     assert!(play_fadeout_after_final_notes_control("Q", &keys));
     assert!(play_fadeout_after_final_notes_control("W", &keys));
     assert!(play_fadeout_after_final_notes_control("Escape", &keys));
+    // プレイ画面ではE4 (R) もE1と同じ。
+    assert!(play_fadeout_after_final_notes_control("R", &keys));
+    assert!(keys.is_play_start("R"));
+    assert!(!keys.is_start("R"));
     assert!(!play_fadeout_after_final_notes_control("Z", &keys));
 }
 

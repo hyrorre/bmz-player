@@ -688,6 +688,15 @@ impl SelectKeyBindings {
         contains(&self.start, control)
     }
 
+    /// プレイ画面ではE4をE1 (Start) と同じ操作として扱う。
+    pub(super) fn is_play_start(&self, control: &str) -> bool {
+        self.is_start(control)
+            || self
+                .e_action_controls
+                .iter()
+                .any(|(action, key)| *action == InputActionConfig::E4 && key == control)
+    }
+
     pub(super) fn e_action_for_control(&self, control: &str) -> Option<InputActionConfig> {
         self.e_action_controls.iter().find_map(|(action, key)| (key == control).then_some(*action))
     }

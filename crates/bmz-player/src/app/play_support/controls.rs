@@ -157,7 +157,11 @@ pub(in crate::app) fn apply_skin_logical_input_to_scene(
 ) {
     match scene {
         AppSceneSnapshot::Select(snapshot) => snapshot.skin_input = skin_input,
-        AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
+        AppSceneSnapshot::Decide(snapshot) => snapshot.skin_input = skin_input,
+        AppSceneSnapshot::Play(snapshot) => {
+            // プレイ画面ではE4をE1と同じ操作として扱い、E1連動のHSパネル等にも反映する。
+            let mut skin_input = skin_input;
+            skin_input.held[0] |= skin_input.held[3];
             snapshot.skin_input = skin_input;
         }
         AppSceneSnapshot::Result(snapshot) => snapshot.skin_input = skin_input,
@@ -177,6 +181,31 @@ pub(in crate::app) fn play_control_hold_state_from_pressed_inputs(
     let e2_held = action_held(InputActionConfig::E2);
     let e3_held = action_held(InputActionConfig::E3);
     (e1_held, e2_held, e3_held)
+}
+
+/// E1扱いの入力の押下・解放後に、E1をholdしているかを返す。E1扱いでなければ `None`。
+/// E1とE4のように同じ扱いの入力が複数あるため、片方を離しても他方の押下を維持する。
+pub(in crate::app) fn play_e1_held_after_input(
+    pressed_inputs: &HashSet<(DeviceId, PhysicalControl)>,
+    input: &PlayOptionInput,
+    device: DeviceId,
+    control: &PhysicalControl,
+    pressed: bool,
+) -> Option<bool> {
+    let is_e1 = |device: DeviceId, control: &PhysicalControl| {
+        !input.resolves_lane(device, control)
+            && input.is_action(device, control, InputActionConfig::E1)
+    };
+    if !is_e1(device, control) {
+        return None;
+    }
+    Some(
+        pressed
+            || pressed_inputs.iter().any(|(held_device, held_control)| {
+                (*held_device != device || held_control != control)
+                    && is_e1(*held_device, held_control)
+            }),
+    )
 }
 
 pub(in crate::app) fn autoplay_replay_playback_rate_from_pressed_inputs(
@@ -321,7 +350,7 @@ pub(in crate::app) fn play_fadeout_after_final_notes_control(
     control: &str,
     bindings: &SelectKeyBindings,
 ) -> bool {
-    bindings.is_start(control) || bindings.is_e2_action(control) || control == "Escape"
+    bindings.is_play_start(control) || bindings.is_e2_action(control) || control == "Escape"
 }
 
 pub(in crate::app) fn is_select_start_key(

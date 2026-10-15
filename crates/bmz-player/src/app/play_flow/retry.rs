@@ -230,7 +230,7 @@ impl WinitApp {
         {
             return false;
         }
-        let mode = if self.select.select_keys.is_start(control) {
+        let mode = if self.select.select_keys.is_play_start(control) {
             Some(ResultRetryMode::DifferentArrange)
         } else if self.select.select_keys.is_e2_action(control) || matches!(control, "Select") {
             Some(ResultRetryMode::SameArrange)

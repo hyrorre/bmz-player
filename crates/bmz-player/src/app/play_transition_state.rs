@@ -536,7 +536,7 @@ impl PlayOptionInput {
             .any(|entry| entry.device == Some(device) && entry.control == *control);
         self.action_bindings.iter().any(|entry| {
             entry.control == *control
-                && entry.action == action
+                && play_action_matches(entry.action, action)
                 && if has_device_specific_binding {
                     entry.device == Some(device)
                 } else {
@@ -544,6 +544,11 @@ impl PlayOptionInput {
                 }
         })
     }
+}
+
+/// プレイ画面ではE4をE1と同じ操作として扱う。
+pub(super) fn play_action_matches(bound: InputActionConfig, query: InputActionConfig) -> bool {
+    bound == query || (query == InputActionConfig::E1 && bound == InputActionConfig::E4)
 }
 
 #[derive(Debug, Clone)]
