@@ -2,7 +2,8 @@ use super::*;
 
 #[test]
 fn frontend_lua_load_exposes_ir_connection_before_building_objects() {
-    let path = std::env::temp_dir().join(format!("bmz-frontend-ir-{}.lua", std::process::id()));
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("frontend-ir.lua");
     std::fs::write(
         &path,
         r#"
@@ -32,7 +33,6 @@ fn frontend_lua_load_exposes_ir_connection_before_building_objects() {
         assert_eq!(loaded.document.imageset.len(), 1);
         assert_eq!(loaded.document.imageset[0].id, expected);
     }
-    std::fs::remove_file(path).unwrap();
 }
 
 #[test]

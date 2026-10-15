@@ -588,9 +588,9 @@ mod tests {
 
     #[test]
     fn render_generated_preview_keeps_bgm_started_before_window() {
-        let temp_dir =
-            std::env::temp_dir().join(format!("bmz-generated-preview-test-{}", std::process::id()));
-        fs::create_dir_all(&temp_dir).unwrap();
+        let temp =
+            tempfile::Builder::new().prefix("bmz-generated-preview-test-").tempdir().unwrap();
+        let temp_dir = temp.path();
         let sample_path = temp_dir.join("bgm.wav");
         fs::write(&sample_path, b"dummy").unwrap();
 
@@ -610,15 +610,15 @@ mod tests {
         assert_eq!(sample.sample_rate, sample_rate);
         let middle_left = sample.frames[500 * 2];
         assert!(middle_left > 0.45);
-
-        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]
     fn render_generated_preview_skips_invisible_note_sounds() {
-        let temp_dir = std::env::temp_dir()
-            .join(format!("bmz-generated-preview-invisible-test-{}", std::process::id()));
-        fs::create_dir_all(&temp_dir).unwrap();
+        let temp = tempfile::Builder::new()
+            .prefix("bmz-generated-preview-invisible-test-")
+            .tempdir()
+            .unwrap();
+        let temp_dir = temp.path();
         let tap_path = temp_dir.join("tap.wav");
         let invisible_path = temp_dir.join("invisible.wav");
         fs::write(&tap_path, b"dummy").unwrap();
@@ -669,14 +669,15 @@ mod tests {
         assert!((sample.frames[500 * 2] - 0.25).abs() < 0.001);
         assert!(loader.loaded_paths.contains(&tap_path));
         assert!(!loader.loaded_paths.contains(&invisible_path));
-        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]
     fn render_generated_preview_limits_bgm_assets_before_window() {
-        let temp_dir = std::env::temp_dir()
-            .join(format!("bmz-generated-preview-lookback-test-{}", std::process::id()));
-        fs::create_dir_all(&temp_dir).unwrap();
+        let temp = tempfile::Builder::new()
+            .prefix("bmz-generated-preview-lookback-test-")
+            .tempdir()
+            .unwrap();
+        let temp_dir = temp.path();
 
         let sample_rate = 1_000;
         let mut chart = test_chart_with_bgm(temp_dir.join("unused.wav"));
@@ -733,8 +734,6 @@ mod tests {
         assert!(loader.loaded_paths.contains(&long_path.unwrap()));
         assert!(loader.loaded_paths.contains(&window_path.unwrap()));
         assert!(!loader.loaded_paths.contains(&distant_path.unwrap()));
-
-        let _ = fs::remove_dir_all(temp_dir);
     }
 
     fn test_chart_with_bgm(sample_path: PathBuf) -> PlayableChart {

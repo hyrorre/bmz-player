@@ -391,8 +391,13 @@ mod tests {
         }
     }
 
-    fn missing_profile_root(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("bmz-select-ir-{name}-{}", std::process::id()))
+    /// A profile root that does not exist, inside a directory the TempDir owns. Never the
+    /// shared temp root itself: credentials found there would change what the tests see.
+    fn missing_profile_root(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let temp =
+            tempfile::Builder::new().prefix(&format!("bmz-select-ir-{name}-")).tempdir().unwrap();
+        let root = temp.path().join("missing-profile");
+        (temp, root)
     }
 
     #[test]
@@ -606,12 +611,8 @@ mod tests {
             ))
             .unwrap();
 
-        select_ir.update_course(
-            &ir_config(true),
-            &missing_profile_root("course-ranking"),
-            "course-context",
-            Some(target.clone()),
-        );
+        let (_temp, root) = missing_profile_root("course-ranking");
+        select_ir.update_course(&ir_config(true), &root, "course-context", Some(target.clone()));
         let snapshot = select_ir.course_snapshot_for(&ir_config(true), Some(&target));
 
         assert_eq!(snapshot.state, SkinIrState::Loaded);
@@ -757,7 +758,7 @@ mod tests {
         let first = rival_fetch_target("1001", "beatoraja");
         let second = rival_fetch_target("1002", "beatoraja");
         let requested_at = Instant::now();
-        let root = missing_profile_root("reuse-success");
+        let (_temp, root) = missing_profile_root("reuse-success");
 
         select_ir.active_rival = Some(first.clone());
         select_ir.rival_in_flight = Some((first.clone(), requested_at));
@@ -780,7 +781,7 @@ mod tests {
     fn first_rival_selection_still_schedules_session_refresh() {
         let mut select_ir = SelectIrRanking::default();
         let target = rival_fetch_target("1001", "beatoraja");
-        let root = missing_profile_root("first-refresh");
+        let (_temp, root) = missing_profile_root("first-refresh");
 
         select_ir.update_rival(Some(target), &root);
 
@@ -795,7 +796,7 @@ mod tests {
         let first = rival_fetch_target("1001", "beatoraja");
         let second = rival_fetch_target("1002", "beatoraja");
         let requested_at = Instant::now();
-        let root = missing_profile_root("reuse-stale");
+        let (_temp, root) = missing_profile_root("reuse-stale");
 
         select_ir.active_rival = Some(second.clone());
         select_ir.rival_in_flight = Some((first.clone(), requested_at));
@@ -813,7 +814,7 @@ mod tests {
         let first = rival_fetch_target("1001", "beatoraja");
         let second = rival_fetch_target("1002", "beatoraja");
         let requested_at = Instant::now();
-        let root = missing_profile_root("retry-failure");
+        let (_temp, root) = missing_profile_root("retry-failure");
 
         select_ir.active_rival = Some(first.clone());
         select_ir.rival_in_flight = Some((first.clone(), requested_at));
@@ -837,7 +838,7 @@ mod tests {
         other_body.body = "DX MODE".to_string();
         let mut other_base_url = fetched.clone();
         other_base_url.base_url = "https://other.example.test/api/".to_string();
-        let root = missing_profile_root("cache-key");
+        let (_temp, root) = missing_profile_root("cache-key");
 
         select_ir.rival_fetched_this_session.insert((&fetched).into());
         select_ir.active_rival = Some(fetched);
@@ -854,7 +855,7 @@ mod tests {
         let mut select_ir = SelectIrRanking::default();
         let sha = [7u8; 32];
         let config = ir_config(true);
-        let root = std::env::temp_dir();
+        let (_temp, root) = missing_profile_root("debounce");
 
         // 1回目はデバウンス予約のみで取得を開始しない。
         select_ir.update(
@@ -892,7 +893,7 @@ mod tests {
         let mut select_ir = SelectIrRanking::default();
         let sha = [7u8; 32];
         let config = ir_config(false);
-        let root = std::env::temp_dir();
+        let (_temp, root) = missing_profile_root("context-change");
         let requested_at = Instant::now();
 
         select_ir.context = "new".to_string();
@@ -920,7 +921,7 @@ mod tests {
         let mut select_ir = SelectIrRanking::default();
         let sha = [7u8; 32];
         let config = ir_config(false);
-        let root = std::env::temp_dir();
+        let (_temp, root) = missing_profile_root("stale-response");
         let stale_requested_at = Instant::now();
 
         select_ir.context = "ctx".to_string();
@@ -967,7 +968,7 @@ mod tests {
         let mut select_ir = SelectIrRanking::default();
         let sha = [7u8; 32];
         let config = ir_config(false);
-        let root = std::env::temp_dir();
+        let (_temp, root) = missing_profile_root("context-reuse");
 
         select_ir.context = "ctx".to_string();
         select_ir

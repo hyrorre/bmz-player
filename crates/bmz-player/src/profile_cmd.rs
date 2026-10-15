@@ -209,21 +209,25 @@ fn now_unix_seconds() -> i64 {
 mod tests {
     use super::*;
 
-    fn test_app_paths(name: &str) -> AppPaths {
-        let root = std::env::temp_dir()
-            .join(format!("bmz-player-profile-cmd-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        AppPaths::from_dirs(
+    /// The TempDir owns the data root for the whole test and removes it on drop.
+    fn test_app_paths(name: &str) -> (tempfile::TempDir, AppPaths) {
+        let temp = tempfile::Builder::new()
+            .prefix(&format!("bmz-player-profile-cmd-{name}-"))
+            .tempdir()
+            .unwrap();
+        let root = temp.path().to_path_buf();
+        let paths = AppPaths::from_dirs(
             root.join("resources"),
             root.clone(),
             root.join("cache"),
             root.join("logs"),
-        )
+        );
+        (temp, paths)
     }
 
     #[test]
     fn create_profile_writes_profile_config_and_can_activate() {
-        let app_paths = test_app_paths("create");
+        let (_temp, app_paths) = test_app_paths("create");
         app_paths.ensure_dirs().unwrap();
 
         create_profile(&app_paths, "alt", Some("Alt Player"), true).unwrap();
@@ -239,13 +243,11 @@ mod tests {
         assert!(profile_paths.score_db.exists());
         assert!(profile_paths.network_db.exists());
         assert!(profile_paths.replay_dir.exists());
-
-        let _ = fs::remove_dir_all(&app_paths.data_dir);
     }
 
     #[test]
     fn copy_profile_copies_only_profile_toml_and_rewrites_identity() {
-        let app_paths = test_app_paths("copy");
+        let (_temp, app_paths) = test_app_paths("copy");
         app_paths.ensure_dirs().unwrap();
         create_profile(&app_paths, "default", Some("Default"), false).unwrap();
 
@@ -268,7 +270,5 @@ mod tests {
         assert!(!target_paths.collection_db.exists());
         assert!(!target_paths.score_db.exists());
         assert!(!target_paths.network_db.exists());
-
-        let _ = fs::remove_dir_all(&app_paths.data_dir);
     }
 }

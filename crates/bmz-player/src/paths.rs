@@ -552,15 +552,19 @@ mod tests {
         assert_eq!(normalize_library_path(r"\\?\UNC\server\share\songs"), "//server/share/songs");
     }
 
-    fn temporary_path_root(label: &str) -> PathBuf {
-        let stamp =
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        env::temp_dir().join(format!("bmz-player-paths-{label}-{}-{stamp}", std::process::id()))
+    /// A not-yet-created root inside a directory the returned TempDir owns and removes.
+    fn temporary_path_root(label: &str) -> (tempfile::TempDir, PathBuf) {
+        let temp = tempfile::Builder::new()
+            .prefix(&format!("bmz-player-paths-{label}-"))
+            .tempdir()
+            .unwrap();
+        let root = temp.path().join("root");
+        (temp, root)
     }
 
     #[test]
     fn portable_first_launch_uses_adjacent_data_even_from_another_data_directory() {
-        let root = temporary_path_root("portable-first");
+        let (_temp, root) = temporary_path_root("portable-first");
         let cwd = root.join("other-installation");
         std::fs::create_dir_all(cwd.join("data")).unwrap();
         let exe = root.join("portable/bmz-player.exe");
@@ -584,12 +588,11 @@ mod tests {
         paths.ensure_required_dirs().unwrap();
         assert!(paths.data_dir.join("skins").is_dir());
         assert!(!cwd.join("data/profiles").exists());
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn explicit_overrides_win_for_every_distribution_and_data_override_groups_auxiliary_paths() {
-        let root = temporary_path_root("overrides");
+        let (_temp, root) = temporary_path_root("overrides");
         let exe = root.join("app/bmz-player.exe");
         for kind in [None, Some(PackageKind::Portable), Some(PackageKind::Installer)] {
             let paths = resolve_app_paths_from(
@@ -626,7 +629,7 @@ mod tests {
 
     #[test]
     fn installer_ignores_working_directory_but_preserves_existing_adjacent_data() {
-        let root = temporary_path_root("installer");
+        let (_temp, root) = temporary_path_root("installer");
         std::fs::create_dir_all(root.join("data")).unwrap();
         let exe = root.join("installed/bmz-player.exe");
         let paths = resolve_app_paths_from(
@@ -653,12 +656,11 @@ mod tests {
         assert_eq!(paths.data_dir, root.join("installed/data"));
         assert_eq!(paths.cache_dir, paths.data_dir.join("cache"));
         assert_eq!(paths.logs_dir, paths.data_dir.join("logs"));
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn portable_data_creation_failure_never_redirects_to_working_directory() {
-        let root = temporary_path_root("portable-blocked");
+        let (_temp, root) = temporary_path_root("portable-blocked");
         std::fs::create_dir_all(root.join("portable")).unwrap();
         std::fs::write(root.join("portable/data"), b"not a directory").unwrap();
         let exe = root.join("portable/bmz-player.exe");
@@ -673,7 +675,6 @@ mod tests {
         assert!(paths.ensure_required_dirs().is_err());
         assert_eq!(paths.data_dir, root.join("portable/data"));
         assert!(!root.join("data").exists());
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     fn create_development_workspace(root: &Path) -> PathBuf {
@@ -689,7 +690,7 @@ mod tests {
 
     #[test]
     fn development_workspace_data_is_used_for_its_release_binary() {
-        let root = temporary_path_root("development-release");
+        let (_temp, root) = temporary_path_root("development-release");
         let manifest_dir = create_development_workspace(&root);
         let exe_path = root.join("target/release/bmz-player.exe");
         std::fs::write(&exe_path, b"").unwrap();
@@ -697,12 +698,11 @@ mod tests {
         let resolved = development_workspace_data_dir_from(&exe_path, &manifest_dir, "bmz-player");
 
         assert_eq!(resolved, Some(root.join("data")));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn development_workspace_data_is_used_for_its_cargo_test_binary() {
-        let root = temporary_path_root("development-test");
+        let (_temp, root) = temporary_path_root("development-test");
         let manifest_dir = create_development_workspace(&root);
         let exe_path = root.join("target/release/deps/bmz_player-a1b2c3.exe");
         std::fs::create_dir_all(exe_path.parent().unwrap()).unwrap();
@@ -711,12 +711,11 @@ mod tests {
         let resolved = development_workspace_data_dir_from(&exe_path, &manifest_dir, "bmz-player");
 
         assert_eq!(resolved, Some(root.join("data")));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn copied_release_binary_does_not_reuse_build_workspace_data() {
-        let root = temporary_path_root("copied-release");
+        let (_temp, root) = temporary_path_root("copied-release");
         let manifest_dir = create_development_workspace(&root);
         let copied_exe = root.join("copied/target/release/bmz-player.exe");
         std::fs::create_dir_all(copied_exe.parent().unwrap()).unwrap();
@@ -726,13 +725,11 @@ mod tests {
             development_workspace_data_dir_from(&copied_exe, &manifest_dir, "bmz-player"),
             None
         );
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn development_data_precedes_current_directory_but_not_portable_data() {
-        let root = temporary_path_root("development-priority");
+        let (_temp, root) = temporary_path_root("development-priority");
         let current_dir = root.join("working");
         let exe_dir = root.join("target/release");
         let development_data = root.join("data");
@@ -751,8 +748,6 @@ mod tests {
         );
         assert_eq!(development.path, development_data);
         assert!(development.keep_auxiliary_dirs_with_data);
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn test_app_paths() -> AppPaths {
@@ -786,11 +781,7 @@ mod tests {
 
     #[test]
     fn ensure_dirs_creates_user_skin_root() {
-        let stamp =
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let root = env::temp_dir()
-            .join(format!("bmz-player-paths-ensure-dirs-{}-{stamp}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let (_temp, root) = temporary_path_root("ensure-dirs");
         let app = AppPaths::from_dirs(
             root.join("resources"),
             root.join("data"),
@@ -801,8 +792,6 @@ mod tests {
         app.ensure_dirs().unwrap();
 
         assert!(root.join("data/skins").is_dir());
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -887,9 +876,7 @@ mod tests {
 
     #[test]
     fn legacy_data_skin_paths_fall_back_to_bundled_skin_when_user_copy_is_missing() {
-        let root =
-            env::temp_dir().join(format!("bmz-player-paths-legacy-skin-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let (_temp, root) = temporary_path_root("legacy-skin");
         let resource_skin = root.join("resources/skins/Rmz-skin/play7main.luaskin");
         std::fs::create_dir_all(resource_skin.parent().unwrap()).unwrap();
         std::fs::write(&resource_skin, b"return {}").unwrap();
@@ -904,8 +891,6 @@ mod tests {
             app.resolve_path_ref("data/skins/Rmz-skin/play7main.luaskin").unwrap(),
             resource_skin
         );
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

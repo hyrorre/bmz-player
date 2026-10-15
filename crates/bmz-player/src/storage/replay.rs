@@ -521,11 +521,8 @@ mod tests {
 
     #[test]
     fn save_and_load_replay_file() {
-        let path = std::env::temp_dir().join(format!(
-            "bmz-replay-{}-{}.toml",
-            std::process::id(),
-            TimeUs(42).0
-        ));
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("bmz-replay.toml");
         let replay = ReplayFile::new(
             [1; 32],
             1_700_000_050,
@@ -554,8 +551,6 @@ mod tests {
         assert_eq!(loaded.s_random_scheme, S_RANDOM_SCHEME_LM_120HZ_V1);
         assert_eq!(loaded.effective_s_random_scheme().unwrap(), SRandomScheme::Lm120HzV1);
         assert_eq!(loaded.events, replay.events);
-
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -654,11 +649,8 @@ events = []
 
     #[test]
     fn load_replay_player_builds_replay_player() {
-        let path = std::env::temp_dir().join(format!(
-            "bmz-replay-player-{}-{}.toml",
-            std::process::id(),
-            TimeUs(43).0
-        ));
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("bmz-replay-player.toml");
         let replay = ReplayFile::new(
             [2; 32],
             1_700_000_051,
@@ -680,17 +672,12 @@ events = []
 
         assert_eq!(player.next_index, 0);
         assert_eq!(player.events, replay.events);
-
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
     fn load_replay_player_for_chart_rejects_mismatched_hash() {
-        let path = std::env::temp_dir().join(format!(
-            "bmz-replay-player-mismatch-{}-{}.toml",
-            std::process::id(),
-            TimeUs(44).0
-        ));
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("bmz-replay-player-mismatch.toml");
         let replay = ReplayFile::new(
             [2; 32],
             1_700_000_052,
@@ -704,17 +691,12 @@ events = []
 
         assert!(load_replay_player_for_chart(&path, [3; 32]).is_err());
         assert!(load_replay_player_for_chart(&path, [2; 32]).is_ok());
-
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
     fn load_replay_for_chart_and_policy_rejects_mismatched_ln_policy() {
-        let path = std::env::temp_dir().join(format!(
-            "bmz-replay-policy-mismatch-{}-{}.toml",
-            std::process::id(),
-            TimeUs(45).0
-        ));
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("bmz-replay-policy-mismatch.toml");
         let replay = ReplayFile::new_with_policy(
             [4; 32],
             LnScorePolicy::ForceCn,
@@ -731,17 +713,12 @@ events = []
 
         assert!(load_replay_for_chart_and_policy(&path, [4; 32], LnScorePolicy::ForceLn).is_err());
         assert!(load_replay_for_chart_and_policy(&path, [4; 32], LnScorePolicy::ForceCn).is_ok());
-
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
     fn load_replay_for_chart_and_policy_accepts_legacy_replay_without_ln_policy() {
-        let path = std::env::temp_dir().join(format!(
-            "bmz-replay-policy-legacy-{}-{}.toml",
-            std::process::id(),
-            TimeUs(46).0
-        ));
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("bmz-replay-policy-legacy.toml");
         std::fs::write(
             &path,
             r#"
@@ -757,17 +734,12 @@ events = []
             load_replay_for_chart_and_policy(&path, [5; 32], LnScorePolicy::ForceHcn).unwrap();
 
         assert!(replay.ln_policy.is_empty());
-
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
     fn replay_file_round_trip_with_arrange_random() {
-        let path = std::env::temp_dir().join(format!(
-            "bmz-replay-arrange-{}-{}.toml",
-            std::process::id(),
-            TimeUs(45).0
-        ));
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("bmz-replay-arrange.toml");
         let pattern = vec![0, 3, 2, 1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         let replay = ReplayFile::new(
             [5; 32],
@@ -792,8 +764,6 @@ events = []
         assert_eq!(loaded.bms_switch_choices, Some(vec![2_000_000_000_000]));
         assert_eq!(loaded.effective_seed_scheme(), SEED_SCHEME_LEGACY_SHARED_V3);
         assert_eq!(loaded.lane_shuffle_pattern, Some(pattern));
-
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -871,11 +841,8 @@ events = []
 
     #[test]
     fn replay_s_random_scheme_round_trip_preserves_mixed_dp_generations() {
-        let path = std::env::temp_dir().join(format!(
-            "bmz-replay-s-random-scheme-{}-{}.toml",
-            std::process::id(),
-            TimeUs(49).0
-        ));
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("bmz-replay-s-random-scheme.toml");
         let replay = ReplayFile::new(
             [8; 32],
             1_700_000_062,
@@ -895,17 +862,12 @@ events = []
         assert_eq!(loaded.s_random_scheme_2p, S_RANDOM_SCHEME_LEGACY_40MS_V1);
         assert_eq!(loaded.effective_s_random_scheme().unwrap(), SRandomScheme::Lm120HzV1);
         assert_eq!(loaded.effective_s_random_scheme_2p().unwrap(), SRandomScheme::Legacy40MsV1);
-
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
     fn replay_rejects_unknown_non_empty_s_random_scheme() {
-        let path = std::env::temp_dir().join(format!(
-            "bmz-replay-unknown-s-random-scheme-{}-{}.toml",
-            std::process::id(),
-            TimeUs(50).0
-        ));
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("bmz-replay-unknown-s-random-scheme.toml");
         let mut replay = ReplayFile::new(
             [9; 32],
             1_700_000_063,
@@ -920,17 +882,12 @@ events = []
 
         let error = load_replay(&path).unwrap_err();
         assert!(error.to_string().contains("unsupported S-RANDOM scheme: future_240hz_v2"));
-
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
     fn load_course_replays_loads_all_files_in_position_order() {
-        let dir = std::env::temp_dir().join(format!(
-            "bmz-course-replays-{}-{}",
-            std::process::id(),
-            TimeUs(47).0
-        ));
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().to_path_buf();
         let replay_subdir = dir.join("replay");
         std::fs::create_dir_all(&replay_subdir).unwrap();
 
@@ -992,17 +949,12 @@ events = []
         assert_eq!(queued[0].replay.events.len(), 1);
         assert_eq!(queued[1].chart_id, 2);
         assert_eq!(queued[1].replay.arrange_option(), ArrangeOption::Mirror);
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn load_course_replays_rejects_when_chart_sha_no_longer_matches() {
-        let dir = std::env::temp_dir().join(format!(
-            "bmz-course-replays-mismatch-{}-{}",
-            std::process::id(),
-            TimeUs(48).0
-        ));
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().to_path_buf();
         let replay_subdir = dir.join("replay");
         std::fs::create_dir_all(&replay_subdir).unwrap();
         let replay =
@@ -1019,17 +971,12 @@ events = []
         let entries = vec![(0_i64, [1; 32], "replay/c0.toml".to_string())];
         let err = load_course_replays(&entries, &dir, |_| Ok(None)).unwrap_err();
         assert!(err.to_string().contains("no longer in the library"));
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn load_replay_for_chart_returns_full_replay() {
-        let path = std::env::temp_dir().join(format!(
-            "bmz-replay-load-full-{}-{}.toml",
-            std::process::id(),
-            TimeUs(46).0
-        ));
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("bmz-replay-load-full.toml");
         let pattern = vec![1, 0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         let replay = ReplayFile::new(
             [9; 32],
@@ -1046,7 +993,5 @@ events = []
 
         assert_eq!(loaded.arrange, "Mirror");
         assert_eq!(loaded.lane_shuffle_pattern, Some(pattern));
-
-        std::fs::remove_file(path).unwrap();
     }
 }

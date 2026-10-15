@@ -528,7 +528,8 @@ mod tests {
 
     #[test]
     fn built_in_catalog_excludes_invisible_and_expands_generators() {
-        let profile = tempfile_path_that_does_not_exist();
+        let temp = tempfile::tempdir().unwrap();
+        let profile = temp.path().join("missing-profile");
         let folders = load_catalog(&profile).unwrap();
         assert!(!folders.iter().any(|folder| folder.name.contains("INVISIBLE")));
         let lamp = folders.iter().find(|folder| folder.id == "lamp-update").unwrap();
@@ -555,9 +556,8 @@ mod tests {
 
     #[test]
     fn profile_catalog_can_disable_and_replace_top_level_folder() {
-        let root =
-            std::env::temp_dir().join(format!("bmz-virtual-folder-test-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
         std::fs::write(
             root.join(VIRTUAL_FOLDER_CONFIG_FILE),
             r#"
@@ -574,13 +574,8 @@ query = "mode == '7K' && level >= 10"
 "#,
         )
         .unwrap();
-        let folders = load_catalog(&root).unwrap();
+        let folders = load_catalog(root).unwrap();
         assert!(!folders.iter().any(|folder| folder.id == "density"));
         assert!(folders.iter().any(|folder| folder.id == "custom"));
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    fn tempfile_path_that_does_not_exist() -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("bmz-no-virtual-folder-config-{}", std::process::id()))
     }
 }

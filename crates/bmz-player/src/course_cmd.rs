@@ -337,13 +337,12 @@ mod tests {
 
     #[test]
     fn course_json_files_returns_single_file() {
-        let file =
-            std::env::temp_dir().join(format!("bmz-course-files-{}.json", std::process::id()));
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("course.json");
         std::fs::write(&file, "{}").unwrap();
 
         let files = course_json_files(&file).unwrap();
 
         assert_eq!(files, vec![file.clone()]);
-        std::fs::remove_file(file).unwrap();
     }
 }
