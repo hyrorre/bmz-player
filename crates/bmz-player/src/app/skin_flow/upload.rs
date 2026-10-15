@@ -757,6 +757,11 @@ mod deferred_upload_tests {
 
     #[test]
     fn lr2_continue_assets_capture_resolved_paths_instead_of_wildcards() {
+        // Resolved paths are absolute; "C:/..." is only absolute on Windows, so build a
+        // platform-absolute root (no file is created).
+        let root = std::env::temp_dir().join("skins/play");
+        let image = root.join("frame/selected.png");
+        let font = root.join("font/selected.lr2font");
         let document: SkinDocument = serde_json::from_value(serde_json::json!({
             "lr2":true,
             "source":[{"id":"0","path":"frame/*.png","lr2ColorKey":[255,0,255]}],
@@ -767,7 +772,7 @@ mod deferred_upload_tests {
         let sources = [crate::skin_loader::PreparedSource {
             texture_lease: None,
             source_id: "0".into(),
-            path: "C:/skins/play/frame/selected.png".into(),
+            path: image.clone(),
             texture: bmz_render::skin::SkinTextureId(1),
             prepared: None,
             size: bmz_render::skin::SkinImageSize { width: 1.0, height: 1.0 },
@@ -776,20 +781,14 @@ mod deferred_upload_tests {
         }];
         let fonts = [crate::skin_loader::DecodedFont {
             stored_id: "Play:lr2font-0".into(),
-            path: "C:/skins/play/font/selected.lr2font".into(),
+            path: font.clone(),
             data: None,
             cache_key: None,
         }];
         let inherited = lr2_resolved_assets(&document, &sources, &fonts);
-        assert_eq!(
-            Path::new(&inherited.sources["0"].path),
-            Path::new("C:/skins/play/frame/selected.png")
-        );
+        assert_eq!(Path::new(&inherited.sources["0"].path), image);
         assert_eq!(inherited.sources["0"].lr2_color_key, Some([255, 0, 255]));
-        assert_eq!(
-            Path::new(&inherited.fonts["lr2font-0"].path),
-            Path::new("C:/skins/play/font/selected.lr2font")
-        );
+        assert_eq!(Path::new(&inherited.fonts["lr2font-0"].path), font);
         assert_eq!(inherited.system_fonts, document.lr2_system_fonts);
         let mut json_document = document;
         json_document.lr2 = false;
