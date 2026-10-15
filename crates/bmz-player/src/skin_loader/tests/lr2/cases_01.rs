@@ -217,8 +217,12 @@ fn wmii_course_result_uses_native_stage_titles_and_result_data() {
     let mut lua_runtime = loaded.lua_runtime.expect("WMII stage values should use Lua callbacks");
     let state = SkinDrawState::default();
     let text_values = BTreeMap::new();
-    let provider =
-        RenderLuaMainState { state: &state, enabled_options: &[], text_values: &text_values };
+    let provider = RenderLuaMainState {
+        state: &state,
+        enabled_options: &[],
+        text_values: &text_values,
+        chart_text_read: &AtomicBool::new(false),
+    };
     for (id, expected) in [("stage_gauge4", 88.0), ("stage_score4", 3456.0), ("stage_miss4", 13.0)]
     {
         let value = loaded

@@ -2,7 +2,9 @@
 //!
 //! The checked-in tables are generated from the pinned upstream Java sources.
 //! IDs describe names only; a recognized name does not imply runtime support.
+//! BMZ extension names live in a separate table and never shadow beatoraja names.
 
+mod bmz;
 mod generated;
 
 /// Property factories have separate name spaces, even when names or IDs overlap.
@@ -23,9 +25,14 @@ pub struct ResolvedBooleanProperty {
     pub negated: bool,
 }
 
-/// Resolve an exact, case-sensitive name using the matching beatoraja factory.
+/// Resolve an exact, case-sensitive name using the matching beatoraja factory,
+/// then the BMZ extension names of the same family.
 /// Boolean negation is accepted only by [`resolve_boolean_property_name`].
 pub fn resolve_property_name(family: PropertyFamily, name: &str) -> Option<i32> {
+    resolve_beatoraja_property_name(family, name).or_else(|| bmz::resolve(family, name))
+}
+
+fn resolve_beatoraja_property_name(family: PropertyFamily, name: &str) -> Option<i32> {
     use generated::*;
     match family {
         PropertyFamily::Integer => {

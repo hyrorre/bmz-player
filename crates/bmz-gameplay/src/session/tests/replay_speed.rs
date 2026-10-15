@@ -115,13 +115,14 @@ fn playback_trace(
             let mut notes: Vec<_> = session.result_judgements.iter().collect();
             notes.sort_by_key(|(id, _)| **id);
             trace.push(format!(
-                "{:?}|{:?}|{}|{}|{}|{:?}",
+                "{:?}|{:?}|{}|{}|{}|{:?}|{:?}",
                 notes,
                 session.score,
                 session.gauge.current().value,
                 session.score.ex_score(),
                 session.score.bp(),
-                judgements
+                judgements,
+                session.last_miss_judgement_time
             ));
         }
     }
@@ -151,6 +152,14 @@ fn replay_scoring_is_independent_of_speed_frame_cadence_and_visual_offset() {
             }
         }
     }
+}
+
+#[test]
+fn replay_reproduces_the_chart_miss_text_trigger() {
+    let trace = playback_trace(LongNoteMode::Ln, &[100], 0, false, None);
+    // Note 5 is missed at 2.621s; the cadence test above compares this field at every speed.
+    assert!(trace.last().unwrap().ends_with("|Some(TimeUs(2621000))"));
+    assert!(trace.first().unwrap().ends_with("|None"));
 }
 
 #[test]

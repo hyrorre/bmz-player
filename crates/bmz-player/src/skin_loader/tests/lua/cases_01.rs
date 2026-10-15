@@ -47,6 +47,7 @@ fn last_play_lua_load_and_runtime_keep_missing_values_in_auto_and_compat_modes()
                     state: &state,
                     enabled_options: &[],
                     text_values: &text_values,
+                    chart_text_read: &AtomicBool::new(false),
                 };
                 runtime.begin_frame();
                 let values = bmz_render::skin::last_play_datetime_numbers(runtime_date);
@@ -136,8 +137,12 @@ fn render_lua_main_state_reads_session_totals_and_selected_score_date() {
         ..Default::default()
     };
     let text_values = BTreeMap::new();
-    let provider =
-        RenderLuaMainState { state: &state, enabled_options: &[], text_values: &text_values };
+    let provider = RenderLuaMainState {
+        state: &state,
+        enabled_options: &[],
+        text_values: &text_values,
+        chart_text_read: &AtomicBool::new(false),
+    };
     assert_eq!(provider.total_play_counts_in_session(), 2);
     assert_eq!(provider.total_play_notes_in_session(), 1234);
     assert_eq!(provider.score_date_sec_time(), 2_208_988_800);
@@ -150,8 +155,12 @@ fn render_lua_main_state_reads_current_frame_skin_offset() {
         .skin_offsets
         .set(45, bmz_render::skin_offset::SkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: 5, a: -6 });
     let text_values = BTreeMap::new();
-    let provider =
-        RenderLuaMainState { state: &state, enabled_options: &[], text_values: &text_values };
+    let provider = RenderLuaMainState {
+        state: &state,
+        enabled_options: &[],
+        text_values: &text_values,
+        chart_text_read: &AtomicBool::new(false),
+    };
 
     assert_eq!(
         provider.offset(45),

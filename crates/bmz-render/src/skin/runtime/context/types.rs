@@ -5,6 +5,12 @@ use super::*;
 pub trait SkinLuaDrawRuntime: std::fmt::Debug + Send + Sync {
     fn begin_frame(&self) {}
 
+    /// Whether a callback has read BMS chart text (text 20100 / 20103) at runtime.
+    /// Lua functions are opaque to the static document check, so this covers them.
+    fn chart_text_read(&self) -> bool {
+        false
+    }
+
     fn advance_custom_timers(
         &self,
         _state: &SkinDrawState,

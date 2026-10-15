@@ -494,8 +494,19 @@ pub struct RenderSnapshot {
     pub stagefile_image_size: Option<crate::skin::SkinImageSize>,
     /// `#BACKBMP` テクスチャがロード済みなら true (BGA より下に描画)。
     pub backbmp_background: bool,
-    /// BMS `#TEXT` / チャネル #99 で表示する譜面テキスト。
-    pub chart_text: String,
+    /// BMS `#TEXT` / チャネル #99 で表示する譜面テキスト (BMZ text 20100)。
+    /// 毎フレームの snapshot 複製で文字列を複製しないよう譜面のイベントと共有する。
+    pub chart_text: std::sync::Arc<str>,
+    /// 直近のチャネル #99 イベントからの譜面時間 ms (BMZ timer 20102)。最初のイベント前は None。
+    pub chart_text_event_elapsed_ms: Option<i32>,
+    /// BMS `#TEXT00` のミス表示文字列 (BMZ text 20103)。未定義なら空。
+    pub chart_miss_text: std::sync::Arc<str>,
+    /// ミス表示開始からの経過 ms (BMZ timer 20105)。表示中だけ Some (option 20104)。
+    /// 表示中は `chart_text` がミス表示文字列になる。
+    pub chart_miss_text_elapsed_ms: Option<i32>,
+    /// true なら、プレイスキンが譜面テキストを表示しないとき `chart_text` を左上の
+    /// 汎用メッセージ欄へ出す。判定は同じフレームのスキン評価後に行う。
+    pub chart_text_overlay: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

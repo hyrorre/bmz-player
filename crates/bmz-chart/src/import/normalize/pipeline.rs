@@ -107,6 +107,7 @@ pub(super) fn normalize_metadata(input: &IntermediateMetadata) -> ChartMetadata 
         source_url: input.source_url.clone(),
         append_url: input.append_url.clone(),
         bms_headers: input.bms_headers.clone(),
+        miss_text: input.miss_text.clone(),
         key_mode: input.key_mode,
     }
 }

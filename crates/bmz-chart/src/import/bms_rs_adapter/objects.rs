@@ -264,7 +264,7 @@ pub(super) fn push_text_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>
             measure: track_of(text_obj.time),
             position_num: text_obj.time.numerator() as u32,
             position_den: text_obj.time.denominator().get() as u32,
-            kind: IntermediateObjectKind::SetText { text: text_obj.text.clone() },
+            kind: IntermediateObjectKind::SetText { text: text_obj.text.as_str().into() },
         });
     }
 }

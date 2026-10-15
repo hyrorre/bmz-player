@@ -1,0 +1,20 @@
+{
+  "type": 0,
+  "name": "BMZ chart text sample",
+  "w": 1280,
+  "h": 720,
+  "text": [
+    { "id": "chart_message", "size": 28, "align": 1, "value": "bmz_chart_text" },
+    { "id": "miss_flash", "size": 40, "align": 1, "ref": 20103 }
+  ],
+  "destination": [
+    { "id": "chart_message", "op": [20101, -20104], "timer": 20102, "loop": 300, "dst": [
+      { "time": 0, "x": 640, "y": 600, "w": 1000, "h": 32, "a": 0 },
+      { "time": 300, "x": 640, "y": 600, "w": 1000, "h": 32, "a": 255 }
+    ] },
+    { "id": "miss_flash", "op": [20104], "timer": 20105, "loop": 200, "dst": [
+      { "time": 0, "x": 640, "y": 560, "w": 1000, "h": 48, "a": 255, "r": 255, "g": 64, "b": 64 },
+      { "time": 200, "x": 640, "y": 600, "w": 1000, "h": 48, "a": 255, "r": 255, "g": 64, "b": 64 }
+    ] }
+  ]
+}

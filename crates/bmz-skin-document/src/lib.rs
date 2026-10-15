@@ -300,6 +300,21 @@ impl SkinDocument {
         self.skin_type == 5 && self.bmz_detail_options == 1
     }
 
+    /// Whether a text element shows BMS chart text (20100 / 20103) through its ref or value.
+    /// Lua functions that call `main_state.text(20100)` cannot be seen statically.
+    pub fn references_chart_text(&self) -> bool {
+        let is_chart_text =
+            |id: i32| matches!(id, SKIN_TEXT_BMZ_CHART_TEXT | SKIN_TEXT_BMZ_CHART_MISS_TEXT);
+        self.text.iter().any(|text| {
+            is_chart_text(text.ref_id)
+                || text
+                    .value
+                    .as_ref()
+                    .and_then(|value| value.resolve_id(PropertyFamily::String))
+                    .is_some_and(is_chart_text)
+        })
+    }
+
     pub fn load_beatoraja_json(path: &Path) -> Result<Self> {
         let raw = load_json_value(path)?;
         let options = default_enabled_options(&raw);

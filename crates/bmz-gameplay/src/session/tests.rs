@@ -193,6 +193,7 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
         lane_auto_release_at: Default::default(),
         recent_judgements: Vec::new(),
         recent_display_judgements: Vec::new(),
+        last_miss_judgement_time: None,
         pending_skin_events: Vec::new(),
         next_skin_event_sequence: 0,
         result_judgements: Default::default(),
@@ -348,6 +349,8 @@ mod cases_02;
 mod cases_03;
 #[path = "tests/cases_04.rs"]
 mod cases_04;
+#[path = "tests/chart_miss_text.rs"]
+mod chart_miss_text;
 #[path = "tests/judgement_display_time.rs"]
 mod judgement_display_time;
 #[path = "tests/optional_play_behaviors.rs"]

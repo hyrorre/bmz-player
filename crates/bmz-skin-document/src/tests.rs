@@ -283,3 +283,20 @@ fn practice_destination_position_uses_beatoraja_practice_object() {
     assert_eq!(document.practice.as_ref().unwrap().visible_items, 12);
     assert_eq!(document.practice_destination_position(), Some((0.1, 0.4)));
 }
+
+#[test]
+fn chart_text_reference_is_detected_from_text_ref_and_value() {
+    for (json, expected) in [
+        (r#"{"text":[{"id":"a","ref":20100}]}"#, true),
+        (r#"{"text":[{"id":"a","value":20100}]}"#, true),
+        (r#"{"text":[{"id":"a","value":"bmz_chart_text"}]}"#, true),
+        (r#"{"text":[{"id":"a","ref":20103}]}"#, true),
+        (r#"{"text":[{"id":"a","value":"bmz_chart_miss_text"}]}"#, true),
+        (r#"{"text":[{"id":"a","ref":10}]}"#, false),
+        (r#"{"text":[{"id":"a","constantText":"20100"}]}"#, false),
+        (r#"{}"#, false),
+    ] {
+        let document: SkinDocument = serde_json::from_str(json).unwrap();
+        assert_eq!(document.references_chart_text(), expected, "{json}");
+    }
+}

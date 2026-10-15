@@ -85,6 +85,13 @@ impl SkinContext {
         ids
     }
 
+    /// Whether the skin itself shows BMS chart text: a text `ref` / `value` names
+    /// 20100 / 20103, or a Lua callback has read them while drawing.
+    pub fn shows_chart_text(&self) -> bool {
+        self.document.as_ref().is_some_and(|document| document.references_chart_text())
+            || self.lua_draw_runtime.as_ref().is_some_and(|runtime| runtime.chart_text_read())
+    }
+
     pub(super) fn state_with_lua_runtime(
         &self,
         state: &SkinDrawState,

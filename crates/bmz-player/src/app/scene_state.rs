@@ -430,8 +430,11 @@ impl WinitApp {
     ) {
         match scene {
             AppSceneSnapshot::Select(snapshot) => snapshot.overlay = overlay,
-            AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
-                snapshot.overlay = overlay
+            AppSceneSnapshot::Decide(snapshot) => snapshot.overlay = overlay,
+            AppSceneSnapshot::Play(snapshot) => {
+                snapshot.overlay = overlay;
+                // The renderer adds the chart text when the play skin does not show it.
+                snapshot.chart_text_overlay = true;
             }
             AppSceneSnapshot::Result(snapshot) => snapshot.overlay = overlay,
         }

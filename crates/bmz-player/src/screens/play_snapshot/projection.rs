@@ -65,6 +65,7 @@ pub(crate) struct PlayfieldProjection {
     published_time: TimeUs,
     duration_lane_cover: f32,
     playback_rate_percent: u16,
+    chart_miss_text: ChartMissTextClock,
 }
 
 impl PlayfieldProjection {
@@ -90,6 +91,7 @@ impl PlayfieldProjection {
                 published_time: session.audio_clock.now(),
                 duration_lane_cover: 0.0,
                 playback_rate_percent: session.audio_clock.playback_rate_percent(),
+                chart_miss_text: ChartMissTextClock::from_session(session),
             };
             projection.update(session, projection.published_time);
             Arc::new(projection)
@@ -117,6 +119,7 @@ impl PlayfieldProjection {
             0.0
         };
         self.playback_rate_percent = session.audio_clock.playback_rate_percent();
+        self.chart_miss_text = ChartMissTextClock::from_session(session);
     }
 
     pub(crate) fn project(
@@ -156,6 +159,7 @@ impl PlayfieldProjection {
         snapshot.bpm_lines.clear();
         snapshot.stop_lines.clear();
         snapshot.time_lines.clear();
+        apply_chart_text(snapshot, &self.chart, chart_now, self.chart_miss_text);
         snapshot.now_bpm = self.timing_map.bpm_at_time(lane_now) as f32;
         snapshot.bpm_change_preview =
             bpm_change_preview(&self.cache.bpm_changes, lane_now, self.playback_rate_percent);

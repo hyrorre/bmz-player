@@ -817,6 +817,7 @@ mod tests {
                 source_url: String::new(),
                 append_url: String::new(),
                 bms_headers: BTreeMap::new(),
+                miss_text: None,
                 key_mode: bmz_core::lane::KeyMode::K7,
                 long_note_mode: bmz_chart::model::LongNoteMode::Ln,
                 long_note_mode_defined: false,

@@ -72,3 +72,4 @@ mod bytes;
 mod cases_01;
 #[path = "cases_02.rs"]
 mod cases_02;
+mod chart_text;

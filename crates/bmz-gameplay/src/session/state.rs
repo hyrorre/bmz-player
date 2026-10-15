@@ -216,6 +216,9 @@ pub struct GameSession {
     /// DP/BATTLE では左右の判定表示が独立して残るため、現在の全体コンボから
     /// 再計算せず、beatoraja と同じく各判定時点の値を描画へ渡す。
     pub recent_display_judgements: Vec<DisplayJudgementEvent>,
+    /// 直近の BAD / POOR の譜面時刻 (`is_misslayer_judge`)。BMS `#TEXT00` のミス表示に使う。
+    /// 判定列と違い表示時間で捨てないため、ミスレイヤー時間が長くても失わない。
+    pub last_miss_judgement_time: Option<TimeUs>,
     /// Skin runtime がフレーム間で入力・判定履歴を構築するためのイベント列。
     /// `advance_session_frame` の終端で drain し、長時間プレイでもセッション側に
     /// 無制限に蓄積しない。sequence は同一時刻のイベント順も一意にする。

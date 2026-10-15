@@ -206,6 +206,7 @@ fn luxe_flat_custom_timer_switches_option_warning_on_current_frame_when_availabl
             state: &state,
             enabled_options: &[],
             text_values: &BTreeMap::new(),
+            chart_text_read: &AtomicBool::new(false),
         };
         runtime.begin_frame();
         assert_eq!(runtime.advance_custom_timers(&provider)[&timer], expected);
@@ -237,6 +238,7 @@ fn mz_select_custom_timers_run_without_missing_callback_failures_when_available(
             state: &state,
             enabled_options: &[],
             text_values: &BTreeMap::new(),
+            chart_text_read: &AtomicBool::new(false),
         };
         runtime.begin_frame();
         assert!(!runtime.advance_custom_timers(&provider).is_empty());

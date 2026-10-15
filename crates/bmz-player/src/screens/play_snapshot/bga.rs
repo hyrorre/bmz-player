@@ -51,7 +51,7 @@ fn poor_bga_from_events<'a>(
         if hide_on_good && matches!(event.judge, Judge::PGreat | Judge::Great | Judge::Good) {
             return None;
         }
-        if matches!(event.judge, Judge::Bad | Judge::Poor)
+        if bmz_gameplay::session::is_misslayer_judge(event.judge)
             && render_now.0 < display_time.0.saturating_add(duration_us)
         {
             return current_bga_frame(cache, event.time, BgaEventKind::Poor, bga_frames);

@@ -43,6 +43,11 @@ pub fn update_recent_judgements(session: &mut GameSession, events: &[JudgementEv
             continue;
         }
         session.hit_error_ring.push_judgement(event.judge, event.delta.0);
+        if is_misslayer_judge(event.judge) {
+            session.last_miss_judgement_time = Some(
+                session.last_miss_judgement_time.map_or(event.time, |last| last.max(event.time)),
+            );
+        }
     }
     session.recent_judgements.extend(
         events
@@ -56,6 +61,13 @@ pub fn update_recent_judgements(session: &mut GameSession, events: &[JudgementEv
     session
         .recent_display_judgements
         .retain(|event| now.0 <= event.display_time.0.saturating_add(JUDGEMENT_DISPLAY_US));
+}
+
+/// ミスレイヤー (ミス BGA) と BMS `#TEXT00` のミス表示を出す判定。BAD と POOR
+/// (見逃し・早離し) が対象で、空 POOR は含めない。nanasi の `#TEXT00` の対象判定は
+/// 未確認のため、BMZ ではミスレイヤーに合わせる。
+pub fn is_misslayer_judge(judge: Judge) -> bool {
+    matches!(judge, Judge::Bad | Judge::Poor)
 }
 
 pub fn update_recent_inputs(session: &mut GameSession, inputs: &[InputEvent], now: TimeUs) {

@@ -130,8 +130,7 @@ fn play_plan_passes_runtime_backbmp_to_skin_document() {
 
 #[test]
 fn play_plan_does_not_inject_bms_text() {
-    let snapshot =
-        RenderSnapshot { chart_text: "BMS #TEXT MESSAGE".to_string(), ..Default::default() };
+    let snapshot = RenderSnapshot { chart_text: "BMS #TEXT MESSAGE".into(), ..Default::default() };
     let fallback_plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot.clone()));
 
     let document: SkinDocument = serde_json::from_str(r#"{ "type": 0 }"#).unwrap();

@@ -1,0 +1,22 @@
+*---------------------- HEADER FIELD
+#PLAYER 1
+#TITLE BMZ chart text sample
+#ARTIST BMZ
+#BPM 120
+#PLAYLEVEL 1
+#RANK 3
+#TOTAL 200
+
+#TEXT00 "MISS!!"
+#TEXT01 "Hello World"
+#TEXT02 "Second message"
+#TEXT03 ""
+#SONG04 "Legacy message"
+#SONG01 "Ignored: #TEXT01 wins"
+
+*---------------------- MAIN DATA FIELD
+#00111:01010101
+#00211:01010101
+#00199:01000200
+#00299:01000300
+#00399:04

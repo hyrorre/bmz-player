@@ -125,8 +125,8 @@ fn imports_text_events() {
     let path = write_temp_bms(text);
     let result = import_bms_chart(&path, None, false).unwrap();
     assert_eq!(result.chart.text_events.len(), 4);
-    assert!(result.chart.text_events.iter().any(|event| event.text == "Hello World"));
-    assert!(result.chart.text_events.iter().any(|event| event.text == "Test Message"));
+    assert!(result.chart.text_events.iter().any(|event| &*event.text == "Hello World"));
+    assert!(result.chart.text_events.iter().any(|event| &*event.text == "Test Message"));
     std::fs::remove_file(&path).unwrap();
 }
 

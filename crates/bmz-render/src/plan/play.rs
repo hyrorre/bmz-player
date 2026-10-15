@@ -99,9 +99,25 @@ pub(super) fn plan_play(
     if !skin.has_timer_destination(2) {
         push_default_play_fadeout_overlay(&mut commands, snapshot);
     }
-    push_scene_overlays(&mut commands, &snapshot.overlay);
+    // Decided after the skin items above so a Lua callback that read the chart
+    // text in this frame already counts.
+    if snapshot.chart_text_overlay && !snapshot.chart_text.is_empty() && !skin.shows_chart_text() {
+        let mut overlay = snapshot.overlay.clone();
+        append_chart_text_overlay(&mut overlay.left_text, &snapshot.chart_text);
+        push_scene_overlays(&mut commands, &overlay);
+    } else {
+        push_scene_overlays(&mut commands, &snapshot.overlay);
+    }
 
     DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands }
+}
+
+/// Adds BMS `#TEXT` after the existing top-left overlay text (toasts, tasks).
+pub(super) fn append_chart_text_overlay(left_text: &mut String, chart_text: &str) {
+    if !left_text.is_empty() {
+        left_text.push_str(" | ");
+    }
+    left_text.push_str(chart_text);
 }
 
 pub(super) fn judge_starts_bomb(judge_index: Option<usize>, judge_timer_limit: usize) -> bool {

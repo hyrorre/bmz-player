@@ -1,3 +1,7 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use bmz_render::skin::{SKIN_TEXT_BMZ_CHART_MISS_TEXT, SKIN_TEXT_BMZ_CHART_TEXT};
+
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,11 +54,17 @@ pub(super) struct LuaSkinDrawRuntimeAdapter {
     // attempt observes None and safely falls back to false.
     pub(super) runtime: Mutex<Option<LuaSkinRuntime>>,
     bound_state: Mutex<Option<RenderLuaStateKey>>,
+    /// Set once a callback reads BMS chart text (20100 / 20103) via `main_state.text`.
+    chart_text_read: AtomicBool,
 }
 
 impl LuaSkinDrawRuntimeAdapter {
     pub(super) fn new(runtime: LuaSkinRuntime) -> Self {
-        Self { runtime: Mutex::new(Some(runtime)), bound_state: Mutex::new(None) }
+        Self {
+            runtime: Mutex::new(Some(runtime)),
+            bound_state: Mutex::new(None),
+            chart_text_read: AtomicBool::new(false),
+        }
     }
 
     fn state_is_bound(
@@ -110,6 +120,7 @@ pub(super) struct RenderLuaMainState<'a> {
     pub(super) state: &'a SkinDrawState,
     pub(super) enabled_options: &'a [i32],
     pub(super) text_values: &'a BTreeMap<i32, String>,
+    pub(super) chart_text_read: &'a AtomicBool,
 }
 
 impl LuaMainState for RenderLuaMainState<'_> {
@@ -134,6 +145,9 @@ impl LuaMainState for RenderLuaMainState<'_> {
     }
 
     fn text(&self, id: i32) -> String {
+        if matches!(id, SKIN_TEXT_BMZ_CHART_TEXT | SKIN_TEXT_BMZ_CHART_MISS_TEXT) {
+            self.chart_text_read.store(true, Ordering::Relaxed);
+        }
         self.text_values.get(&id).cloned().unwrap_or_default()
     }
 
@@ -198,7 +212,12 @@ impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
         let Some(mut runtime) = self.runtime.lock().ok().and_then(|mut slot| slot.take()) else {
             return BTreeMap::new();
         };
-        let provider = RenderLuaMainState { state, enabled_options, text_values };
+        let provider = RenderLuaMainState {
+            state,
+            enabled_options,
+            text_values,
+            chart_text_read: &self.chart_text_read,
+        };
         let result = runtime.advance_custom_timers(&provider);
         if let Ok(mut slot) = self.runtime.lock() {
             *slot = Some(runtime);
@@ -234,7 +253,12 @@ impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
             run();
             return;
         };
-        let provider = RenderLuaMainState { state, enabled_options, text_values };
+        let provider = RenderLuaMainState {
+            state,
+            enabled_options,
+            text_values,
+            chart_text_read: &self.chart_text_read,
+        };
         let mut called = false;
         let _ = scope.with_state(&provider, || {
             called = true;
@@ -245,6 +269,10 @@ impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
         if !called {
             run();
         }
+    }
+
+    fn chart_text_read(&self) -> bool {
+        self.chart_text_read.load(Ordering::Relaxed)
     }
 
     fn begin_frame(&self) {
@@ -265,7 +293,12 @@ impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
         let Some(mut runtime) = self.runtime.lock().ok().and_then(|mut slot| slot.take()) else {
             return false;
         };
-        let provider = RenderLuaMainState { state, enabled_options, text_values };
+        let provider = RenderLuaMainState {
+            state,
+            enabled_options,
+            text_values,
+            chart_text_read: &self.chart_text_read,
+        };
         let result = if self.state_is_bound(state, enabled_options, text_values) {
             runtime.evaluate_draw_in_scope(callback_id)
         } else {
@@ -285,7 +318,12 @@ impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
         text_values: &BTreeMap<i32, String>,
     ) -> Option<f64> {
         let mut runtime = self.runtime.lock().ok().and_then(|mut slot| slot.take())?;
-        let provider = RenderLuaMainState { state, enabled_options, text_values };
+        let provider = RenderLuaMainState {
+            state,
+            enabled_options,
+            text_values,
+            chart_text_read: &self.chart_text_read,
+        };
         let result = if self.state_is_bound(state, enabled_options, text_values) {
             runtime.evaluate_number_in_scope(callback_id)
         } else {
@@ -305,7 +343,12 @@ impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
         text_values: &BTreeMap<i32, String>,
     ) -> Option<String> {
         let mut runtime = self.runtime.lock().ok().and_then(|mut slot| slot.take())?;
-        let provider = RenderLuaMainState { state, enabled_options, text_values };
+        let provider = RenderLuaMainState {
+            state,
+            enabled_options,
+            text_values,
+            chart_text_read: &self.chart_text_read,
+        };
         let result = if self.state_is_bound(state, enabled_options, text_values) {
             runtime.evaluate_text_in_scope(callback_id)
         } else {

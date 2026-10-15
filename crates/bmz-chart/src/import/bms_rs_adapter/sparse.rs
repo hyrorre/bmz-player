@@ -88,6 +88,16 @@ pub(super) fn extract_bga_message_lines(text: &str) -> Vec<BgaMessage> {
 }
 
 pub(super) fn extract_bga_message_line(line: &str, line_number: usize) -> Option<BgaMessage> {
+    let (channel, measure, object_count, objects) = extract_object_message_line(line)?;
+    let kind = bga_kind_from_channel(channel)?;
+    Some(BgaMessage { line_number, measure, kind, object_count, objects })
+}
+
+/// Splits `#mmmCC:payload` into its channel, measure, slot count and non-`00` objects.
+/// Lines with an odd payload length or no slots are not object messages.
+pub(super) fn extract_object_message_line(
+    line: &str,
+) -> Option<(&str, u64, u64, Vec<SparseBmsObject>)> {
     let trimmed = line.trim();
     let body = trimmed.strip_prefix('#')?;
     let colon = body.find(':')?;
@@ -97,7 +107,6 @@ pub(super) fn extract_bga_message_line(line: &str, line_number: usize) -> Option
     }
     let measure_text = &head[..head.len() - 2];
     let channel = &head[head.len() - 2..];
-    let kind = bga_kind_from_channel(channel)?;
     let payload = body[colon + 1..].trim();
     if payload.len() % 2 != 0 {
         return None;
@@ -114,7 +123,7 @@ pub(super) fn extract_bga_message_line(line: &str, line_number: usize) -> Option
             objects.push(SparseBmsObject { index: index as u64, id });
         }
     }
-    Some(BgaMessage { line_number, measure, kind, object_count: object_count as u64, objects })
+    Some((channel, measure, object_count as u64, objects))
 }
 
 pub(super) fn bga_kind_from_channel(channel: &str) -> Option<IntermediateBgaKind> {
