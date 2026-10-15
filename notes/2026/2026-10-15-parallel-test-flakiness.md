@@ -93,11 +93,35 @@ gameplay側は停止中も進行しており、製品コードの不具合では
 一時パスの衝突やnamed pipe名の衝突など、Windows固有の失敗は見つからなかった。
 `unreadable_subdirectory` のテストは `#[cfg(unix)]` のためWindowsでは実行されない。
 一方、`%TEMP%` には `bmz*` の残骸が約3.6万件（約405MB、大半は空ディレクトリ）溜まっていた。
-大半は `bmz-skin` の `unique_test_dir` 由来で、下記の残課題に当たる。
+大半は `bmz-skin` の `unique_test_dir` 由来だった。
+
+## `%TEMP%` の残骸の解消
+
+テストバイナリを1回ずつ実行して増えたエントリを数えると、`bmz_skin` libが158件、`bmz_player` libが約54件、
+`bmz_skin_document` libが1件だった。いずれも `std::env::temp_dir()` 直下の `PathBuf` を返すhelper
+（`unique_test_dir`、`unique_skin_test_dir`、pm_charaの `test_dir`、`.keep()` したlr2のhelper）由来で、
+237か所の呼び出しのうち末尾で `remove_dir_all` していたのは約50か所だけだった。
+
+helperが `TestDir` を返すようにした。`TestDir` は専用の `TempDir`（名前をprefixにする）の中の
+未作成パスを指し、`Deref<Target = Path>` と `AsRef<Path>` を持つ。未作成パスにしたので、
+helperが従来返していた「まだ存在しないパス」の意味は変わらない。呼び出し側はほぼそのまま使え、
+コンパイルエラーは2か所（`root.clone()` と配列への値渡し）だけだった。手動の `remove_dir_all(root)` 48か所は削除した。
+
+移行で見つかった落とし穴:
+
+- `unique_test_dir("x").join("skins")` は一時値のガードが文の終わりで破棄される。
+  後続の `create_dir_all` が親ごと作り直すので、テストは通ったまま残骸だけが残った（8件）。
+  ガードを変数に保持してからjoinする形に29か所を書き換えた。パスだけを返すfixtureはガードも返すようにした。
+- `fs::canonicalize(root)` はガードをmoveして即座に削除し、3テストが失敗した。`&root` に直した。
+
+修正後、`bmz-skin`（293件）、`bmz-skin-document`（22件）、`bmz-player`（2465件）のテストは成功し、
+`%TEMP%` の新規エントリは0件だった。3crateのlibテストを2プロセス同時に3回流しても18 / 18成功した。
+既存の残骸のうち、テスト形式の名前を持つ `bmz*` のディレクトリ40,470件を削除した。
+`bmz*` のファイル32件は過去の検証用ツールやcommit message等で、テストの残骸ではないため残した。
 
 ## 残課題
 
 - `scan_song_roots_skips_unreadable_subdirectory_and_keeps_accessible_files` は、
   root実行時にskipするか、権限で読めないことを前提にしない形にするか未決定。
-- `unique_test_dir` を使うbmz-skinのテストは、パスの寿命を呼び出し元が管理する方針のまま。
-  失敗時の残骸をなくすには、各テストが `TempDir` を保持する形への移行が必要。
+- `bmz-player` のほかのテスト（`storage`、`ir` 等）にはPID+時刻で名前を作り、末尾で削除する形が残っている。
+  通常は残骸を残さないが、失敗時には残る。

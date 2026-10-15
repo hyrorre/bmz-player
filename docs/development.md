@@ -222,6 +222,11 @@ CIジョブ、IDEとターミナルなど、別のテストプロセスが同時
 - 一時ファイル・ディレクトリは `tempfile::TempDir`（`tempfile::Builder` でprefixを付けてよい）
   を作り、テストが寿命の間保持します。片付けはDropに任せ、手動の `remove_dir_all` は書きません。
   失敗したテストの残骸も残りません。
+  `bmz-skin` と `bmz-player` のテストhelper（`unique_test_dir` 等）は、`TempDir` の中の
+  未作成パスを指す `TestDir` を返します。`TestDir` は変数に束縛して保持します。
+  `unique_test_dir("x").join("skins")` のように一時値のまま使ったり、`fs::canonicalize(root)` のように
+  値で渡したりすると、その時点でディレクトリが削除されます。パスが必要な箇所には `&root` や
+  `root.to_path_buf()` を渡します。
 - 名前にPIDだけ、時刻だけ、ファイルの長さ等を使って独自に一時パスを作りません。
   同じプロセスでは一意でも、PIDの再利用や別プロセスとの同時実行で衝突します。
 - 一時ディレクトリ直下（`std::env::temp_dir()` そのもの）にファイルを置いたり、
