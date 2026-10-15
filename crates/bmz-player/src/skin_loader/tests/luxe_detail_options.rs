@@ -455,7 +455,6 @@ fn luxe_detail_options_replaces_only_e2_after_successful_part_load() {
             })
             .count();
         assert_eq!(hover_count, if active { 1 } else { 3 }, "{state}");
-        std::fs::remove_dir_all(root).unwrap();
     }
 }
 

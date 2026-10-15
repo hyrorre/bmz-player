@@ -1,9 +1,8 @@
 use super::*;
 
-/// A fresh, exclusively created directory. The name used to be `{name}-{nanos}` only, so
-/// two test processes could share it. Tests still own the path's lifetime, as before.
-fn unique_test_dir(name: &str) -> PathBuf {
-    tempfile::Builder::new().prefix(&format!("{name}-")).tempdir().unwrap().keep()
+/// A fresh, exclusively created directory, removed when the returned guard drops.
+fn unique_test_dir(name: &str) -> crate::tests::TestDir {
+    crate::tests::TestDir::created(name)
 }
 
 #[path = "cases_01.rs"]

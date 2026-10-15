@@ -38,14 +38,8 @@ fn test_font_cache_key(path: &str) -> SkinFontCacheKey {
     }
 }
 
-fn unique_test_dir(name: &str) -> PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push(format!(
-        "{name}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    path
+fn unique_test_dir(name: &str) -> crate::test_dir::TestDir {
+    crate::test_dir::TestDir::new(name)
 }
 
 #[path = "tests/adfx02_bpm_preview.rs"]

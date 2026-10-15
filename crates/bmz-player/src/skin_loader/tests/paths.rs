@@ -21,8 +21,6 @@ fn skin_audio_path_stays_inside_skin_root() {
         resolve_skin_audio_path(&root, root.join("parts/bgm.ogg").to_string_lossy().as_ref())
             .is_none()
     );
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -73,7 +71,7 @@ fn wildcard_source_with_context_falls_back_to_default_file_stem() {
     let root = unique_test_dir("bmz-skin-wildcard-default-stem");
     fs::create_dir_all(root.join("system")).unwrap();
     fs::create_dir_all(root.join("customize")).unwrap();
-    let root = fs::canonicalize(root).unwrap();
+    let root = fs::canonicalize(&root).unwrap();
     let entry = root.join("system/main.luaskin");
     fs::write(&entry, []).unwrap();
     fs::write(root.join("customize/default.png"), []).unwrap();
@@ -97,7 +95,6 @@ fn wildcard_source_with_context_falls_back_to_default_file_stem() {
         // and Windows verbatim prefixes.
         assert_eq!(fs::canonicalize(resolved).unwrap(), root.join("customize").join(expected));
     }
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

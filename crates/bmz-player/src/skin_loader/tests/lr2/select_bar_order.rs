@@ -41,7 +41,6 @@ fn draw_order_with_panel(files: &[(&str, String)], scroll: (i32, f32), panel: u8
     )
     .unwrap()
     .document;
-    fs::remove_dir_all(root).unwrap();
     let sources: HashMap<String, SkinDocumentTexture> = document
         .source
         .iter()

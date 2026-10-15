@@ -44,7 +44,6 @@ fn included_draw_conditions_survive_child_endifs_and_restore_the_caller() {
         loaded.value["destination"][1]["op"],
         json!([-(bmz_skin_document::LR2_OPTION_BASE + 105), 624])
     );
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

@@ -16,7 +16,6 @@ fn load(skin_type: i32, body: &str) -> JsonValue {
     let path = root.join("skin.lr2skin");
     fs::write(&path, format!("#INFORMATION,{skin_type},refs,BMZ\n#IMAGE,a.png\n{body}")).unwrap();
     let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
-    fs::remove_dir_all(root).unwrap();
     loaded.value
 }
 

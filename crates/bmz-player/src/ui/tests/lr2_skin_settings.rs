@@ -109,5 +109,4 @@ fn lr2_skin_items_list_options_then_files_and_cycle_with_wraparound() {
     };
     assert!(!lr2_cycle_skin_item(target, &single, &mut skin, &app_paths, 0, 1));
     assert!(!skin.select_options.contains_key("Only"));
-    fs::remove_dir_all(root).unwrap();
 }

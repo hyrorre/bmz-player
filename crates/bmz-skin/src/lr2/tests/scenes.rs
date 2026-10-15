@@ -10,7 +10,6 @@ fn lr2_result_uses_separate_player_number_and_rank_references() {
     assert_eq!(loaded.value["value"][0]["ref"], bmz_skin_document::LR2_RESULT_NUMBER_BASE + 21);
     let destinations = loaded.value["destination"].as_array().unwrap();
     assert_eq!(destinations[0]["op"][0], bmz_skin_document::LR2_RESULT_RANK_BASE + 14);
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -31,7 +30,6 @@ fn lr2_scene_resolves_sibling_theme_assets_and_custom_files() {
     let selected = BTreeMap::from([("Shared".into(), "../Decide/custom.png".into())]);
     let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &selected).unwrap();
     assert_eq!(loaded.value["source"][1]["path"], "../Decide/custom.png");
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -55,7 +53,6 @@ fn lr2_includes_preserve_explicit_sibling_theme_and_nested_dependencies() {
         assert!(loaded.dependencies.loaded_files.keys().any(|path| path.ends_with(relative)));
     }
     assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -192,7 +189,6 @@ fn lr2_bar_sources_are_indexed_and_children_use_local_coordinates() {
     assert_eq!(loaded.value["songlist"]["clickable"], json!([0]));
     assert_eq!(loaded.value["imageset"][0]["images"][0], loaded.value["image"][0]["id"]);
     assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -219,7 +215,6 @@ fn lr2_bar_sources_preserve_course_and_random_course_bodies() {
         assert_eq!(image["y"], index * 10);
     }
     assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -255,7 +250,6 @@ fn lr2_bar_new_title_and_rival_sources_keep_distinct_slots() {
         assert_eq!(image["x"], index * 10);
     }
     assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -276,7 +270,6 @@ fn lr2_bar_title_ignores_reserved_options_but_preserves_if_conditions() {
     assert_eq!(title["op"], json!([32]));
     assert_eq!(title["dst"].as_array().unwrap().len(), 2);
     assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -297,7 +290,6 @@ fn lr2_scene_resolution_button_and_hover_metadata_are_preserved() {
     assert_eq!(value["destination"][1]["dst"][0]["x"], 4);
     assert_eq!(value["destination"][1]["mouseRect"], json!({"x":1,"y":3,"w":15,"h":25}));
     assert_eq!(loaded.dependencies.option_values.get(&99_002), Some(&true));
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -317,5 +309,4 @@ fn lr2_bar_level_with_undefined_image_keeps_earlier_number_reference() {
     let values = loaded.value["value"].as_array().unwrap();
     assert_eq!(values.len(), 1);
     assert_eq!(values[0]["ref"], 71);
-    fs::remove_dir_all(root).unwrap();
 }

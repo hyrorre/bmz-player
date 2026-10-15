@@ -445,11 +445,9 @@ fn motion_for_type(chara_type: i32) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn test_dir(name: &str) -> PathBuf {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        std::env::temp_dir().join(format!("{name}-{}-{nonce}", std::process::id()))
+    fn test_dir(name: &str) -> crate::tests::TestDir {
+        crate::tests::TestDir::new(name)
     }
 
     #[test]

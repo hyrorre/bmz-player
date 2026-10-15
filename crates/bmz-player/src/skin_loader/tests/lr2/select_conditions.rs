@@ -110,7 +110,6 @@ fn lr2_select_conditions_decode_and_render_without_external_assets() {
     )
     .unwrap();
     check_select_conditions(&loaded.document);
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

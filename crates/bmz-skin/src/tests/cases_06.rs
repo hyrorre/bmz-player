@@ -1002,7 +1002,7 @@ fn wmii_beatoraja_branch_next_rank_updates_when_available() {
             ),
         )
         .unwrap();
-        let context = SkinPathContext::new(&path, [root.clone(), library.clone()]).unwrap();
+        let context = SkinPathContext::new(&path, [root.to_path_buf(), library.clone()]).unwrap();
         for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
             for color in ["WHITE/RED", "WHITE ONLY"] {
                 let mut loaded = load_lua_skin_with_path_context(

@@ -1,9 +1,40 @@
 use super::*;
 use std::fs;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+/// A not-yet-created path inside a private `TempDir`. Drop removes the directory even when
+/// the test fails, so nothing is left in the shared temp root.
+pub(crate) struct TestDir {
+    path: std::path::PathBuf,
+    _parent: tempfile::TempDir,
+}
+
+impl TestDir {
+    pub(crate) fn new(name: &str) -> Self {
+        let parent = tempfile::Builder::new().prefix(&format!("{name}-")).tempdir().unwrap();
+        Self { path: parent.path().join(name), _parent: parent }
+    }
+
+    pub(crate) fn created(name: &str) -> Self {
+        let dir = Self::new(name);
+        fs::create_dir(&dir.path).unwrap();
+        dir
+    }
+}
+
+impl std::ops::Deref for TestDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl AsRef<Path> for TestDir {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
 
 fn unix_epoch_year_for_test() -> i32 {
     let seconds = SystemTime::now()
@@ -22,10 +53,8 @@ fn unix_epoch_year_for_test() -> i32 {
     (y + if month <= 2 { 1 } else { 0 }) as i32
 }
 
-fn unique_test_dir(name: &str) -> std::path::PathBuf {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    let counter = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("{name}-{nanos}-{counter}"))
+fn unique_test_dir(name: &str) -> TestDir {
+    TestDir::new(name)
 }
 
 #[derive(Default)]

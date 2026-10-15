@@ -1,8 +1,6 @@
 //! serde decode と include 展開の純 document テスト。
 //! 描画評価を含むテストは `bmz-render/src/skin.rs` 側に残している。
 
-use std::path::PathBuf;
-
 use super::*;
 
 #[test]
@@ -20,16 +18,6 @@ fn destination_clip_fields_decode_through_json_and_lua_numeric_normalization() {
             [Some(2), Some(2), Some(30), Some(40)]
         );
     }
-}
-
-fn unique_test_dir(name: &str) -> PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push(format!(
-        "{name}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    path
 }
 
 #[test]
@@ -158,8 +146,8 @@ fn skin_document_decodes_lift_cover_with_beatoraja_link_default() {
 
 #[test]
 fn skin_document_expands_conditions_and_includes() {
-    let root = unique_test_dir("bmz-skin-document-json");
-    std::fs::create_dir_all(&root).unwrap();
+    let dir = tempfile::Builder::new().prefix("bmz-skin-document-json-").tempdir().unwrap();
+    let root = dir.path();
     std::fs::write(
         root.join("included.json"),
         r#"

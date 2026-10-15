@@ -38,7 +38,6 @@ fn lr2_delayed_single_frame_survives_decode_and_render() {
         );
         assert_eq!(items.len(), usize::from(elapsed >= 30), "elapsed={elapsed}");
     }
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -84,7 +83,6 @@ fn lr2skin_decodes_native_lr2_bitmap_font() {
     };
     assert_eq!(font.size, 16);
     assert_eq!(font.glyphs[&'A'].xadvance, 0);
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

@@ -8,7 +8,6 @@ fn load(source: &str, state: &LuaLoadRuntimeState) -> LoadedSkinDocument {
     let loaded =
         load_lua_skin_with_runtime_state(&path, &BTreeMap::new(), &BTreeMap::new(), state).unwrap();
     assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
-    fs::remove_dir_all(root).unwrap();
     loaded
 }
 

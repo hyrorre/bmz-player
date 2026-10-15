@@ -148,7 +148,6 @@ fn lr2_omitted_resolution_uses_sd_for_included_destinations() {
         assert_eq!(lane["h"], 437);
         assert_eq!(document["note"]["size"][0], 15);
     }
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -207,7 +206,6 @@ fn lr2_omitted_resolution_is_inferred_from_full_screen_destinations() {
     assert_eq!(size(&forced), (json!(640), json!(480)));
     let forced_fhd = load(6, "#RESOLUTION,1\n", &[("LR2 Resolution (BMZ)", "1920x1080")]);
     assert_eq!(size(&forced_fhd), (json!(1920), json!(1080)));
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -232,7 +230,6 @@ fn lr2_resolution_inference_counts_only_active_branches() {
             (json!(expected.0), json!(expected.1))
         );
     }
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -246,13 +243,13 @@ fn lr2_resolution_override_keeps_open_lr2_effect_mode() {
     assert_eq!((header.w, header.h), (1280, 720));
     assert!(header.resolution_fixed);
     assert!(!header.explicit_resolution_dimensions);
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn explicit_resolution_lr2_effects_follow_open_lr2_note_adjustment() {
     let files = BTreeMap::new();
-    let skin_path = unique_test_dir("bmz-lr2-openlr2-effects").join("play.lr2skin");
+    let skin_path_dir = unique_test_dir("bmz-lr2-openlr2-effects");
+    let skin_path = skin_path_dir.join("play.lr2skin");
     let mut builder = CsvBuilder::new(
         &skin_path,
         Header { w: 1920, h: 1080, explicit_resolution_dimensions: true, ..Header::default() },
@@ -311,7 +308,8 @@ fn explicit_resolution_lr2_effects_follow_open_lr2_note_adjustment() {
 #[test]
 fn preset_resolution_lr2_effects_do_not_gain_lift_offsets() {
     let files = BTreeMap::new();
-    let skin_path = unique_test_dir("bmz-lr2-preset-effects").join("play.lr2skin");
+    let skin_path_dir = unique_test_dir("bmz-lr2-preset-effects");
+    let skin_path = skin_path_dir.join("play.lr2skin");
     let mut builder =
         CsvBuilder::new(&skin_path, Header { w: 1920, h: 1080, ..Header::default() }, &files);
     builder.destinations = vec![
@@ -368,7 +366,8 @@ fn lr2_destination_preserves_angle_and_custom_offset_id() {
 #[test]
 fn lr2_dst_line_defaults_to_lift_offset() {
     let files = BTreeMap::new();
-    let skin_path = unique_test_dir("bmz-lr2-dst-line").join("play.lr2skin");
+    let skin_path_dir = unique_test_dir("bmz-lr2-dst-line");
+    let skin_path = skin_path_dir.join("play.lr2skin");
     let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
     builder.add_source("line.png");
     builder
@@ -423,7 +422,8 @@ fn lr2_nowjudge_indices_match_beatoraja_slots() {
 #[test]
 fn lr2_number_ref_preserves_poor_plus_miss() {
     let files = BTreeMap::new();
-    let skin_path = unique_test_dir("bmz-lr2-number-ref").join("play.lr2skin");
+    let skin_path_dir = unique_test_dir("bmz-lr2-number-ref");
+    let skin_path = skin_path_dir.join("play.lr2skin");
     let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
     builder.add_source("numbers.png");
     builder
@@ -443,7 +443,8 @@ fn lr2_number_ref_preserves_poor_plus_miss() {
 #[test]
 fn lr2_play_number_refs_map_modified_lr2_fast_slow_extension() {
     let files = BTreeMap::new();
-    let skin_path = unique_test_dir("bmz-lr2-fast-slow-refs").join("play.lr2skin");
+    let skin_path_dir = unique_test_dir("bmz-lr2-fast-slow-refs");
+    let skin_path = skin_path_dir.join("play.lr2skin");
     let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
     builder.add_source("numbers.png");
 
@@ -464,7 +465,8 @@ fn lr2_play_number_refs_map_modified_lr2_fast_slow_extension() {
 #[test]
 fn lr2_select_number_210_is_the_ir_clear_class_not_fast_slow() {
     let files = BTreeMap::new();
-    let skin_path = unique_test_dir("bmz-lr2-non-play-fast-slow-refs").join("select.lr2skin");
+    let skin_path_dir = unique_test_dir("bmz-lr2-non-play-fast-slow-refs");
+    let skin_path = skin_path_dir.join("select.lr2skin");
     let header = Header { skin_type: 5, ..Header::default() };
     let mut builder = CsvBuilder::new(&skin_path, header, &files);
     builder.add_source("numbers.png");
@@ -481,7 +483,8 @@ fn lr2_select_number_210_is_the_ir_clear_class_not_fast_slow() {
 #[test]
 fn lr2_signed_number_reserves_sign_digit_and_defaults_to_blank_padding() {
     let files = BTreeMap::new();
-    let skin_path = unique_test_dir("bmz-lr2-signed-number").join("play.lr2skin");
+    let skin_path_dir = unique_test_dir("bmz-lr2-signed-number");
+    let skin_path = skin_path_dir.join("play.lr2skin");
     let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
     builder.add_source("numbers.png");
     builder
@@ -500,7 +503,8 @@ fn lr2_signed_number_reserves_sign_digit_and_defaults_to_blank_padding() {
 #[test]
 fn lr2_unsigned_number_ignores_explicit_zero_padding_like_beatoraja() {
     let files = BTreeMap::new();
-    let skin_path = unique_test_dir("bmz-lr2-unsigned-number").join("play.lr2skin");
+    let skin_path_dir = unique_test_dir("bmz-lr2-unsigned-number");
+    let skin_path = skin_path_dir.join("play.lr2skin");
     let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
     builder.add_source("numbers.png");
     builder
@@ -518,7 +522,8 @@ fn lr2_unsigned_number_ignores_explicit_zero_padding_like_beatoraja() {
 #[test]
 fn lr2_button_keeps_state_reference_separate_from_clickability() {
     let files = BTreeMap::new();
-    let skin_path = unique_test_dir("bmz-lr2-button").join("play.lr2skin");
+    let skin_path_dir = unique_test_dir("bmz-lr2-button");
+    let skin_path = skin_path_dir.join("play.lr2skin");
     let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
     builder.add_source("button.png");
     builder
@@ -538,7 +543,8 @@ fn lr2_button_keeps_state_reference_separate_from_clickability() {
 #[test]
 fn lr2_play_bridges_keep_battle_values_and_gauge_display_separate() {
     let files = BTreeMap::new();
-    let path = unique_test_dir("bmz-lr2-battle-values").join("play.lr2skin");
+    let path_dir = unique_test_dir("bmz-lr2-battle-values");
+    let path = path_dir.join("play.lr2skin");
     for skin_type in [0, 5, 12, 13] {
         let mut builder = CsvBuilder::new(&path, Header { skin_type, ..Header::default() }, &files);
         builder.add_source("parts.png");
@@ -600,7 +606,8 @@ fn lr2_play_bridges_keep_battle_values_and_gauge_display_separate() {
 #[test]
 fn lr2_imageset_combines_registered_source_sets() {
     let files = BTreeMap::new();
-    let skin_path = unique_test_dir("bmz-lr2-imageset").join("play.lr2skin");
+    let skin_path_dir = unique_test_dir("bmz-lr2-imageset");
+    let skin_path = skin_path_dir.join("play.lr2skin");
     let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
     builder.add_source("set.png");
     builder
@@ -668,7 +675,8 @@ fn lr2_bga_stretch_distinguishes_unspecified_from_explicit_full() {
 #[test]
 fn lr2_bargraph_preserves_negative_fill_direction() {
     let files = BTreeMap::new();
-    let skin_path = unique_test_dir("bmz-lr2-negative-graph").join("play.lr2skin");
+    let skin_path_dir = unique_test_dir("bmz-lr2-negative-graph");
+    let skin_path = skin_path_dir.join("play.lr2skin");
     let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
     builder.add_source("graph.png");
     builder
@@ -692,7 +700,8 @@ fn lr2_bargraph_preserves_negative_fill_direction() {
 #[test]
 fn lr2_play_chart_sources_keep_beatoraja_fields_and_destination_size() {
     let files = BTreeMap::new();
-    let skin_path = unique_test_dir("bmz-lr2-play-chart").join("play.lr2skin");
+    let skin_path_dir = unique_test_dir("bmz-lr2-play-chart");
+    let skin_path = skin_path_dir.join("play.lr2skin");
     let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
     builder
         .execute(
@@ -724,7 +733,8 @@ fn lr2_play_chart_sources_keep_beatoraja_fields_and_destination_size() {
 #[test]
 fn lr2_nowjudge_adds_beatoraja_judge_detail_objects() {
     let files = BTreeMap::new();
-    let skin_path = unique_test_dir("bmz-lr2-judge-detail").join("play.lr2skin");
+    let skin_path_dir = unique_test_dir("bmz-lr2-judge-detail");
+    let skin_path = skin_path_dir.join("play.lr2skin");
     let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
     builder.add_source("judge.png");
     builder
@@ -766,7 +776,8 @@ fn lr2_nowjudge_adds_beatoraja_judge_detail_objects() {
 #[test]
 fn lr2_text_defaults_to_shrink_overflow() {
     let files = BTreeMap::new();
-    let skin_path = unique_test_dir("bmz-lr2-text-shrink").join("play.lr2skin");
+    let skin_path_dir = unique_test_dir("bmz-lr2-text-shrink");
+    let skin_path = skin_path_dir.join("play.lr2skin");
     let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
     builder.execute(&parse_csv_line("#SRC_TEXT,0,0,10,1,0").expect("valid SRC_TEXT")).unwrap();
     builder
@@ -790,7 +801,8 @@ fn lr2_ln_body_keeps_animation_only_while_held() {
     let files = BTreeMap::new();
 
     for command in ["SRC_LN_BODY", "SRC_AUTO_LN_BODY"] {
-        let skin_path = unique_test_dir("bmz-lr2-ln-body").join("play.lr2skin");
+        let skin_path_dir = unique_test_dir("bmz-lr2-ln-body");
+        let skin_path = skin_path_dir.join("play.lr2skin");
         let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
         builder.execute(&parse_csv_line("#IMAGE,notes.png").expect("valid IMAGE")).unwrap();
         builder

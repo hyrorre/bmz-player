@@ -84,5 +84,4 @@ fn best_score_options_lua_auto_and_compat_follow_snapshot_changes() {
             assert_eq!(texts, expected, "{mode:?}: {options:?}");
         }
     }
-    fs::remove_dir_all(root).unwrap();
 }

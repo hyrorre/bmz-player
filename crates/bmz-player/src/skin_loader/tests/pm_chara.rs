@@ -2,7 +2,8 @@ use super::*;
 
 #[test]
 fn lua_skin_decode_expands_selected_pm_chara_directory() {
-    let library_root = unique_test_dir("bmz-player-pmchara").join("skins");
+    let library_root_dir = unique_test_dir("bmz-player-pmchara");
+    let library_root = library_root_dir.join("skins");
     let entry_dir = library_root.join("theme/system");
     let character_dir = library_root.join("theme/customize/pm/default");
     fs::create_dir_all(&entry_dir).unwrap();
@@ -59,7 +60,8 @@ fn lua_skin_decode_expands_selected_pm_chara_directory() {
 
 #[test]
 fn json_skin_decode_expands_pm_chara_directory_default() {
-    let library_root = unique_test_dir("bmz-player-json-pmchara").join("skins");
+    let library_root_dir = unique_test_dir("bmz-player-json-pmchara");
+    let library_root = library_root_dir.join("skins");
     let entry_dir = library_root.join("theme/system");
     let character_dir = library_root.join("theme/customize/pm/default");
     fs::create_dir_all(&entry_dir).unwrap();

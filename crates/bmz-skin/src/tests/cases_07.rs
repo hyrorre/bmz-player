@@ -31,7 +31,6 @@ fn lua_decorated_text_preserves_destination_and_intrinsic_alpha() {
         panic!("frame")
     };
     assert_eq!(frame.a, Some(128));
-    fs::remove_dir_all(&root).unwrap();
 }
 use crate::path_context::canonicalize_skin_path;
 
@@ -50,8 +49,9 @@ fn copy_tree(source: &Path, destination: &Path) {
     }
 }
 
-fn hub_fixture(name: &str) -> (PathBuf, PathBuf) {
-    let root = unique_test_dir(name).join("skins");
+fn hub_fixture(name: &str) -> (TestDir, PathBuf, PathBuf) {
+    let root_dir = unique_test_dir(name);
+    let root = root_dir.join("skins");
     let entry_dir = root.join("GenericTheme-master/play");
     let hub = root.join("Hub");
     fs::create_dir_all(&entry_dir).unwrap();
@@ -153,12 +153,13 @@ fn hub_fixture(name: &str) -> (PathBuf, PathBuf) {
     fs::write(entry_dir.join("play.lua"), "return { kind = 'original' }").unwrap();
     fs::write(hub.join("extension/sample/parts.lua"), "return { x = 7 }").unwrap();
     fs::write(hub.join("parts/sample.png"), b"synthetic-png").unwrap();
-    (root, entry)
+    (root_dir, root, entry)
 }
 
 #[test]
 fn package_path_context_exposes_beatoraja_logical_entry_directory() {
-    let library_root = unique_test_dir("bmz-skin-logical-package-path").join("skins");
+    let library_root_dir = unique_test_dir("bmz-skin-logical-package-path");
+    let library_root = library_root_dir.join("skins");
     let entry_dir = library_root.join("simple-play-simple/system");
     fs::create_dir_all(entry_dir.join("modules")).unwrap();
     let entry = entry_dir.join("play7.luaskin");
@@ -199,7 +200,8 @@ fn package_path_context_keeps_entry_only_absolute_fallback() {
 
 #[test]
 fn selected_basename_prefers_the_wildcard_directory() {
-    let library_root = unique_test_dir("bmz-skin-selected-basename-collision").join("skins");
+    let library_root_dir = unique_test_dir("bmz-skin-selected-basename-collision");
+    let library_root = library_root_dir.join("skins");
     let entry_dir = library_root.join("simple-play-simple/system");
     let gauge = library_root.join("simple-play-simple/customize/gauge/default");
     fs::create_dir_all(entry_dir.join("default")).unwrap();
@@ -217,7 +219,7 @@ fn selected_basename_prefers_the_wildcard_directory() {
 
 #[test]
 fn package_aware_hub_load_uses_dynamic_package_path_in_every_vm() {
-    let (library_root, entry) = hub_fixture("bmz-skin-package-aware-hub");
+    let (_dir, library_root, entry) = hub_fixture("bmz-skin-package-aware-hub");
     let context = SkinPathContext::new(&entry, [library_root.clone()]).unwrap();
 
     let header = load_lua_skin_header_value_with_path_context(&context).unwrap();
@@ -265,7 +267,7 @@ fn package_aware_hub_load_uses_dynamic_package_path_in_every_vm() {
 
 #[test]
 fn package_path_context_allows_only_paths_inside_library_root() {
-    let (library_root, entry) = hub_fixture("bmz-skin-package-path-boundary");
+    let (_dir, library_root, entry) = hub_fixture("bmz-skin-package-path-boundary");
     let context = SkinPathContext::new(&entry, [library_root.clone()]).unwrap();
 
     fs::write(entry.parent().unwrap().join("const.lua"), "return 'entry-local'").unwrap();
@@ -299,7 +301,8 @@ fn package_path_context_allows_only_paths_inside_library_root() {
 
 #[test]
 fn package_path_context_preserves_renamed_self_alias_without_masking_siblings() {
-    let library_root = unique_test_dir("bmz-skin-renamed-package-alias").join("skins");
+    let library_root_dir = unique_test_dir("bmz-skin-renamed-package-alias");
+    let library_root = library_root_dir.join("skins");
     let entry_dir = library_root.join("renamed-package/select");
     let self_parts = library_root.join("renamed-package/parts");
     fs::create_dir_all(&entry_dir).unwrap();
@@ -329,7 +332,8 @@ fn package_path_context_preserves_renamed_self_alias_without_masking_siblings() 
 
 #[test]
 fn lua_to_json_conversion_uses_explicit_skin_library_roots() {
-    let library_root = unique_test_dir("bmz-skin-package-convert").join("skins");
+    let library_root_dir = unique_test_dir("bmz-skin-package-convert");
+    let library_root = library_root_dir.join("skins");
     let entry_dir = library_root.join("GenericTheme-master/play");
     fs::create_dir_all(&entry_dir).unwrap();
     fs::create_dir_all(library_root.join("Hub")).unwrap();
@@ -367,7 +371,7 @@ fn lua_to_json_conversion_uses_explicit_skin_library_roots() {
 fn package_path_context_rejects_symlink_escape() {
     use std::os::unix::fs::symlink;
 
-    let (library_root, entry) = hub_fixture("bmz-skin-package-symlink-boundary");
+    let (_dir, library_root, entry) = hub_fixture("bmz-skin-package-symlink-boundary");
     let context = SkinPathContext::new(&entry, [library_root.clone()]).unwrap();
     let outside = library_root.parent().unwrap().join("outside-target.lua");
     fs::write(&outside, "return 'outside'").unwrap();
@@ -389,7 +393,8 @@ fn real_hub_wraps_generic_theme_when_local_copies_are_available() {
         return;
     }
 
-    let library_root = unique_test_dir("bmz-skin-real-hub").join("skins");
+    let library_root_dir = unique_test_dir("bmz-skin-real-hub");
+    let library_root = library_root_dir.join("skins");
     copy_tree(&generic_source, &library_root.join("GenericTheme-master"));
     copy_tree(&hub_package_source, &library_root.join("Hub"));
     let entry = library_root.join("GenericTheme-master/play/Hub_play7.luaskin");

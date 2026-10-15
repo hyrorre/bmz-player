@@ -64,7 +64,6 @@ fn dxa_font_and_image_decode_without_extraction_and_refresh_caches() {
     assert_eq!(font.pages[&0].image.pixels, [255, 0, 0, 255]);
     assert!(!root.join("font").exists());
     assert_eq!(fs::read(&archive).unwrap(), FONT_DXA);
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -86,7 +85,6 @@ fn dxa_asset_paths_and_bitmap_page_paths_obey_skin_roots() {
     assert!(context.resolve_asset(&root.join("outside/font.lr2font").to_string_lossy()).is_err());
     let decoded = decode_beatoraja_skin(&path, SkinKind::Play).unwrap();
     assert!(decoded.fonts.is_empty());
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

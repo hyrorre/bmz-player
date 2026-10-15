@@ -2,7 +2,8 @@ use super::*;
 
 #[test]
 fn lua_cross_package_source_decodes_with_explicit_library_root() {
-    let root = unique_test_dir("lua-cross-package-source").join("skins");
+    let root_dir = unique_test_dir("lua-cross-package-source");
+    let root = root_dir.join("skins");
     let entry_dir = root.join("GenericTheme-master/play");
     let hub_parts = root.join("Hub/parts");
     fs::create_dir_all(&entry_dir).unwrap();

@@ -72,7 +72,6 @@ fn ir_ranking_missing_scores_match_auto_and_compat_through_updates() {
         assert_eq!(auto, compat, "scores={scores:?}");
         assert_eq!(auto.len(), expected_digits, "scores={scores:?}");
     }
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

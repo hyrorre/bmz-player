@@ -31,7 +31,6 @@ fn install_skins(renderer: &mut Renderer, mode: bmz_skin::LuaSkinRuntimeMode) {
         assert_eq!(decoded.load_dependencies.screen_size, None);
         install_decoded_skin(renderer, decoded, bmz_render::skin::default_skin_manifest()).unwrap();
     }
-    fs::remove_dir_all(root).unwrap();
 }
 
 fn assert_all_scenes(renderer: &mut Renderer, size: [u32; 2]) {

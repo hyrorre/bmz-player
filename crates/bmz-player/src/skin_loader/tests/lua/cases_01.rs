@@ -58,7 +58,6 @@ fn last_play_lua_load_and_runtime_keep_missing_values_in_auto_and_compat_modes()
             }
         }
     }
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -122,7 +121,6 @@ fn render_lua_shared_scope_uses_changed_rows_options_and_text_then_restores_oute
     }));
     assert!(panic.is_err());
     assert_eq!(adapter.evaluate_number(number, &state, &options, &texts), Some(16.0));
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

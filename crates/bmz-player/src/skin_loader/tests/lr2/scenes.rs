@@ -31,7 +31,6 @@ fn lr2_result_cache_follows_clear_assets_and_canvas_selection() {
     let hd = load(false, &BTreeMap::from([("LR2 Resolution (BMZ)".into(), "1280x720".into())]));
     assert_eq!(hd.cache_status, DocumentCacheStatus::Miss);
     assert_eq!((hd.document.w, hd.document.h), (1280, 720));
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -65,7 +64,6 @@ fn lr2_result_cache_follows_rank_branch_changes() {
         assert_eq!(loaded.document.source[0].path, expected);
         assert_eq!(loaded.cache_status, status);
     }
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

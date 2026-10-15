@@ -504,7 +504,6 @@ fn mz_detail_options_capability_requires_a_successfully_loaded_part() {
                     "{version}: {state}, timer {timer}"
                 );
             }
-            std::fs::remove_dir_all(root).unwrap();
         }
     }
 }

@@ -542,17 +542,10 @@ fn truncate_chars(value: String, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
     use super::*;
 
-    fn unique_test_dir(label: &str) -> PathBuf {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        std::env::temp_dir().join(format!(
-            "{label}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ))
+    fn unique_test_dir(label: &str) -> crate::test_dir::TestDir {
+        crate::test_dir::TestDir::new(label)
     }
 
     #[test]

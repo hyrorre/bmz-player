@@ -45,5 +45,4 @@ fn lua_destination_clip_keeps_partial_keyframes_through_conversion() {
     assert_eq!(frames[1].clip_x, Some(11));
     assert_eq!(frames[1].clip_w, None, "inheritance is evaluated with the destination timeline");
     assert_eq!(frames[2].clip_w, Some(0));
-    fs::remove_dir_all(root).unwrap();
 }

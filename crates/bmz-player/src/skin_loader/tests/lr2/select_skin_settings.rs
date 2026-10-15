@@ -30,7 +30,6 @@ fn lr2_skin_settings_slider_rows_and_area_follow_lr2() {
     )
     .unwrap()
     .document;
-    fs::remove_dir_all(root).unwrap();
 
     // The skin shows seven rows, so ten items scroll by three.
     assert_eq!(document.lr2_skin_settings_rows(), Some(7));

@@ -216,7 +216,6 @@ fn ecfn_extensions_atomic_fallback_is_independent_of_detail_options() {
                     !basic
                 );
             }
-            fs::remove_dir_all(root).unwrap();
         }
     }
 }

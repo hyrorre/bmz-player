@@ -135,7 +135,6 @@ fn result_skin_selects_bga_size_layout_through_unclosed_nested_if() {
             .expect("non-play LR2 skins expose BGA Size");
         assert_eq!(property["def"], bga_size);
     }
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -514,7 +513,8 @@ fn lr2_gauge_destination_preserves_negative_additive_direction() {
 #[test]
 fn lr2_gauge_omitted_parts_uses_beatoraja_animation_defaults() {
     let files = BTreeMap::new();
-    let skin_path = unique_test_dir("bmz-lr2-gauge-defaults").join("play.lr2skin");
+    let skin_path_dir = unique_test_dir("bmz-lr2-gauge-defaults");
+    let skin_path = skin_path_dir.join("play.lr2skin");
     let header = Header { skin_type: 2, ..Header::default() };
     let mut builder = CsvBuilder::new(&skin_path, header, &files);
     builder

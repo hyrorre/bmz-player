@@ -239,7 +239,6 @@ fn ecfn_detail_options_atomic_activation_and_legacy_fallback() {
         assert_eq!(has("option-panel1", 31), active);
         assert!(has("subop-panel1", 23));
         assert_eq!(loaded.document.text.iter().any(|t| t.id.starts_with("ecfn_detail_")), active);
-        std::fs::remove_dir_all(root).unwrap();
     }
     let old = decode(false);
     let new = decode(true);

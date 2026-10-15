@@ -81,7 +81,6 @@ fn select_custom_timers_advance_before_helpers_and_destination_gates_once_per_fr
         }
         assert_eq!(adapter.runtime.lock().unwrap().as_ref().unwrap().failure_log_count(), 0);
     }
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

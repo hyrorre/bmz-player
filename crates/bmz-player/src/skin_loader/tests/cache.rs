@@ -48,7 +48,6 @@ fn lr2_continue_source_changes_invalidate_document_cache() {
             DocumentCacheStatus::Hit
         );
     }
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -141,7 +140,6 @@ fn screen_dimensions_invalidate_only_documents_with_load_time_reads() {
             assert_eq!(resized.load_dependencies.screen_size, Some([800, 600]));
         }
     }
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -194,7 +192,7 @@ fn lr2_transparency_separates_source_and_texture_caches() {
 fn result_refresh_pins_resolved_wildcard_source() {
     let root = unique_test_dir("result-pinned-background");
     std::fs::create_dir_all(root.join("bg")).unwrap();
-    let root = std::fs::canonicalize(root).unwrap();
+    let root = std::fs::canonicalize(&root).unwrap();
     for name in ["one.png", "two.png"] {
         image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255]))
             .save(root.join("bg").join(name))
@@ -242,7 +240,7 @@ fn result_refresh_pins_resolved_wildcard_source() {
 fn result_refresh_preserves_lua_random_file_selection_before_document_construction() {
     let root = unique_test_dir("result-pinned-lua-background");
     std::fs::create_dir_all(root.join("bg")).unwrap();
-    let root = std::fs::canonicalize(root).unwrap();
+    let root = std::fs::canonicalize(&root).unwrap();
     for name in ["one.png", "two.png"] {
         image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255]))
             .save(root.join("bg").join(name))
@@ -434,7 +432,7 @@ fn lua_document_cache_key_includes_explicit_library_roots() {
     let skin_path = entry_dir.join("play.luaskin");
     std::fs::write(&skin_path, "return { type = 0 }").unwrap();
     let narrow = SkinPathContext::new(&skin_path, [library_root]).unwrap();
-    let broad = SkinPathContext::new(&skin_path, [base]).unwrap();
+    let broad = SkinPathContext::new(&skin_path, [base.to_path_buf()]).unwrap();
 
     assert_ne!(
         skin_document_cache_key(&skin_path, SkinKind::Play, Some(&narrow)),
@@ -520,7 +518,8 @@ return {
 
 #[test]
 fn lua_document_cache_invalidates_cross_package_module_changes() {
-    let library_root = unique_test_dir("bmz-lua-document-cache-cross-package").join("skins");
+    let library_root_dir = unique_test_dir("bmz-lua-document-cache-cross-package");
+    let library_root = library_root_dir.join("skins");
     let entry_dir = library_root.join("GenericTheme-master/play");
     let hub_dir = library_root.join("Hub");
     std::fs::create_dir_all(&entry_dir).unwrap();
@@ -1257,7 +1256,6 @@ fn bitmap_page_changes_invalidate_cached_and_installed_fonts() {
         };
         assert_eq!(font.pages[&0].image.width, 2);
         assert_eq!(&font.pages[&0].image.pixels[..4], &[0, 255, 0, 255]);
-        fs::remove_dir_all(root).unwrap();
     }
 }
 

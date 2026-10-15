@@ -1,15 +1,9 @@
 use super::*;
 
 use std::fs;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
-static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-fn unique_test_dir(name: &str) -> PathBuf {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    let counter = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("{name}-{nanos}-{counter}"))
+fn unique_test_dir(name: &str) -> crate::test_dir::TestDir {
+    crate::test_dir::TestDir::new(name)
 }
 
 fn test_offset_def(name: &str, id: i32) -> SkinOffsetDef {

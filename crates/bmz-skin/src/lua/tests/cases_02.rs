@@ -506,7 +506,8 @@ fn infers_peaceful_play_gauge_value_builtins() {
 
 #[test]
 fn beatoraja_skin_alias_accepts_renamed_skin_root() {
-    let root = unique_skin_test_dir("renamed-root").join("mz-select");
+    let root_dir = unique_skin_test_dir("renamed-root");
+    let root = root_dir.join("mz-select");
     fs::create_dir_all(root.join("customize/advanced")).unwrap();
     fs::write(root.join("customize/advanced/enable.txt"), "parts.lua\n").unwrap();
 

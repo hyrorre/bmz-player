@@ -265,7 +265,8 @@ fn glob_candidates_strips_beatoraja_filter_suffix() {
 
 #[test]
 fn glob_candidates_use_lua_skin_library_context_for_sibling_packages() {
-    let library_root = unique_test_dir("bmz-ui-package-glob").join("skins");
+    let library_root_dir = unique_test_dir("bmz-ui-package-glob");
+    let library_root = library_root_dir.join("skins");
     let entry_dir = library_root.join("GenericTheme-master/play");
     let extension = library_root.join("Hub/extension/sample");
     fs::create_dir_all(&entry_dir).unwrap();

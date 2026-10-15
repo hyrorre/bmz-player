@@ -79,7 +79,6 @@ fn named_main_state_properties_preserve_dependencies_and_runtime_closure_state()
         assert_eq!(runtime.evaluate_text(text, &state).as_deref(), Some("runtime2"));
         assert!(!runtime.evaluate_draw(draw, &state));
         assert_eq!(runtime.failure_log_count(), 0);
-        fs::remove_dir_all(root).unwrap();
     }
 }
 
@@ -132,5 +131,4 @@ fn lua_conversion_preserves_typed_names_and_each_condition_in_json() {
     };
     assert_eq!(legacy.op, [41, -40]);
     assert!(legacy.op_expr.is_empty());
-    fs::remove_dir_all(root).unwrap();
 }

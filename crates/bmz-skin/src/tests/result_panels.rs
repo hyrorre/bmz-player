@@ -57,7 +57,6 @@ fn rank_value_inference_preserves_shared_state_even_when_the_return_matches_a_re
         }
         assert_eq!(runtime.failure_log_count(), 0);
     }
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -165,5 +164,4 @@ fn result_panel_compat_detects_local_default_without_tab_actions() {
         assert!(!runtime.evaluate_draw(callbacks[1], &unspecified));
     }
     assert_eq!(runtime.failure_log_count(), 0);
-    fs::remove_dir_all(root).unwrap();
 }
