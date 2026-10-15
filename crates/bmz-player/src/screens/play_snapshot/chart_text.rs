@@ -9,7 +9,7 @@ use bmz_chart::text::chart_text_event_at_time;
 /// Session inputs for the `#TEXT00` miss message.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct ChartMissTextClock {
-    /// Chart time of the latest POOR / empty POOR.
+    /// Chart time of the latest BAD / POOR, the same judgements as the misslayer.
     pub(super) last_miss: Option<TimeUs>,
     /// Profile misslayer duration. `0` never shows the miss message.
     pub(super) duration_us: i64,
