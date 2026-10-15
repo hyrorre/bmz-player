@@ -92,7 +92,7 @@ pub const CATALOG: &[DetailOptionDef] = &[
     item(201, "gas-bottom", 2, SettingsEntryId::BottomShiftableGauge, false, 3),
     item(202, "gas-mode", 2, SettingsEntryId::GaugeAutoShift, false, 5),
     item(301, "hs-auto", 3, SettingsEntryId::HispeedAutoAdjust, true, 0),
-    item(302, "hs-config", 3, SettingsEntryId::HispeedMode, true, 5),
+    item(302, "hs-config", 3, SettingsEntryId::HispeedMode, true, 6),
     item(303, "constant", 3, SettingsEntryId::Constant, true, 0),
     number(304, "green-number", 3, SettingsEntryId::TargetGreenNumber, 1, 6000),
     item(401, "ln-mode", 4, SettingsEntryId::LnModePolicy, false, 6),

@@ -946,6 +946,14 @@ mod tests {
                 ],
             ),
             (
+                crate::config::profile_config::HispeedConfigPreset::Lr2,
+                vec![
+                    SettingsEntryId::HispeedMode,
+                    SettingsEntryId::Hispeed,
+                    SettingsEntryId::ClassicHispeedStep,
+                ],
+            ),
+            (
                 crate::config::profile_config::HispeedConfigPreset::Floating,
                 vec![
                     SettingsEntryId::HispeedMode,

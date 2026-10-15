@@ -266,6 +266,7 @@ pub(super) fn skin_main_state_text(
                 1 => "CLASSIC",
                 2 => "FLOATING",
                 3 => "NORMAL+FLOATING",
+                5 => "LR2",
                 _ => "CLASSIC+FLOATING",
             })
             .unwrap_or_default()

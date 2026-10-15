@@ -79,6 +79,7 @@ BPM이 다른 곡이라도 녹색 숫자가 같으면 같은 속도로 보입니
 | FLOATING | 녹색 숫자를 지정하면 곡의 BPM에 맞춰 배율을 자동으로 정합니다 |
 | NORMAL+FLOATING | NORMAL과 FLOATING을 플레이 중에 전환할 수 있습니다 |
 | CLASSIC+FLOATING | CLASSIC과 FLOATING을 플레이 중에 전환할 수 있습니다(처음 설정) |
+| LR2 | CLASSIC처럼 배율을 직접 지정합니다(배율은 CLASSIC과 공통). HS-FIX를 사용할 때는 배율을 BPM 150에서의 속도로 취급합니다(LR2와 같음) |
 
 전환할 수 있는 방식에서는 플레이 중에 **E1과 E2를 동시에 누르면** 전환됩니다.
 FLOATING일 때는 **E2를 누른 채 건반이나 스크래치**로 녹색 숫자를 바꿉니다.

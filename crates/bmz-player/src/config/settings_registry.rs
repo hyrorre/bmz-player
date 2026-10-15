@@ -472,7 +472,9 @@ use support::*;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::profile_config::{FloatingPolicyConfig, LaneEffectConfig, ProfileConfig};
+    use crate::config::profile_config::{
+        BaseHispeedConfig, FloatingPolicyConfig, LaneEffectConfig, ProfileConfig,
+    };
 
     #[test]
     fn adjust_volume_clamps_to_range() {
@@ -736,7 +738,28 @@ mod tests {
             "CLASSIC+FLOATING"
         );
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::HispeedMode, 1));
+        assert_eq!(profile.lane.hispeed_config(), HispeedConfigPreset::Lr2);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::HispeedMode), "LR2");
+        assert_eq!(profile.lane.base_hispeed, BaseHispeedConfig::Lr2);
+        assert_eq!(profile.lane.floating_policy, FloatingPolicyConfig::Disabled);
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::HispeedMode, 1));
         assert_eq!(profile.lane.hispeed_config(), HispeedConfigPreset::Normal);
+    }
+
+    #[test]
+    fn hispeed_config_order_matches_skin_index_and_parts() {
+        for (position, preset) in HispeedConfigPreset::ORDER.into_iter().enumerate() {
+            assert_eq!(preset.index(), position as i32);
+            let (base, floating) = preset.parts();
+            assert_eq!(HispeedConfigPreset::from_parts(base, floating), preset);
+        }
+        // LR2はFloatingを持たない。
+        assert_eq!(
+            HispeedConfigPreset::from_parts(BaseHispeedConfig::Lr2, FloatingPolicyConfig::Toggle),
+            HispeedConfigPreset::Lr2
+        );
+        assert!(HispeedConfigPreset::Lr2.supports_classic());
+        assert!(!HispeedConfigPreset::Lr2.supports_floating());
     }
 
     #[test]

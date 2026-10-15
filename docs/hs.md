@@ -1,11 +1,11 @@
 # BMZ Hispeed Notes
 
-BMZ のハイスピードは、基準方式の Normal / Classic と、表示時間を基準にする
+BMZ のハイスピードは、基準方式の Normal / Classic / LR2 と、表示時間を基準にする
 Floating を組み合わせて扱う。HS-FIX はこれとは別に BPM 基準を選択する。
 
 ## 設定
 
-設定画面の `HS CONFIG` には次の5種類がある。
+設定画面の `HS CONFIG` には次の6種類がある。
 
 | 設定 | 基準方式 | Floating の扱い |
 | --- | --- | --- |
@@ -14,6 +14,7 @@ Floating を組み合わせて扱う。HS-FIX はこれとは別に BPM 基準�
 | `FLOATING` | Classic | 常時有効 |
 | `NORMAL+FLOATING` | Normal | プレイ中に切替可能 |
 | `CLASSIC+FLOATING` | Classic | プレイ中に切替可能 |
+| `LR2` | LR2 | 無効 |
 
 既定値は `CLASSIC+FLOATING`。HS設定を保存していない profile もこの設定として読み込み、
 直接倍率と Floating を使う。
@@ -26,13 +27,19 @@ Floating の目標緑数字は `floating_target_green` に保存する。旧名�
 
 ## Classic
 
-Classic は HS-FIX が `OFF` のとき `classic_hispeed` の倍率をそのまま使う。
+Classic は `classic_hispeed` の倍率をそのまま使い、HS-FIXでは変換しない。
 倍率の範囲は `0.01..=20.0`。操作刻みは `classic_hispeed_step` で、既定値は0.25、
 設定範囲は `0.05..=1.00`。
 
-HS-FIX が `OFF` 以外の Classic は LR2 の HS-FIX と同じく、`classic_hispeed` を
-BPM150での倍率として扱う。HS-FIXの基準BPMでノーツが流れる速さは、BPM150・
-同じHS値と一致する。
+## LR2
+
+LR2 は Classic と同じ直接倍率で、`classic_hispeed` と `classic_hispeed_step` を
+CLASSICと共有する。Floatingは使えない。profile の `base_hispeed` は `Lr2`、
+`floating_policy` は `Disabled` になる。
+
+HS-FIX が `OFF` のときは Classic と同じ。HS-FIX が `OFF` 以外では LR2 の HS-FIX と
+同じく、`classic_hispeed` を BPM150 での倍率として扱う。HS-FIXの基準BPMで
+ノーツが流れる速さは、BPM150・同じHS値と一致する。
 
 ```text
 effective_hispeed = classic_hispeed * 150 / (hsfix_base_bpm * playback_rate)
@@ -44,8 +51,9 @@ effective_hispeed = classic_hispeed * 150 / (hsfix_base_bpm * playback_rate)
 - `NUMBER_DURATION` 等の表示時間と緑数字は実効倍率から求める。
 - 基準BPMは次節「HS-FIX」の表と同じ定義を使う。LR2のMAX/MIN BPMはノーツのある
   BPMだけで決まるが、BMZは初期BPMとBPM変化イベント全体で決める。
-- Floatingから戻るときは見た目の速さを保ち、表示値は実効倍率から逆算する。
-- Floating中とNormalは変換しない。
+- プレイ中に CLASSIC と LR2 を切り替えた場合は、表示中のHS値を保ったまま実効倍率を
+  求め直す。CLASSIC と LR2 でHS値を共有するため、同じ値でもHS-FIX使用時の速さは変わる。
+- skin の基準方式 (1900 / 1916) は Classic と同じ `0` / `CHS` で、`1918` だけが `5=LR2`。
 
 参照: OpenLR2 `LR2_bmsload.cpp` の `speedmultiplier = 150 / fixBPM`。
 
@@ -131,14 +139,14 @@ HS-FIX の選択肢とBPM基準は次のとおり。
 | `MAIN BPM` | ノート数が最も多いBPM |
 | `MIN BPM` | 初期BPMとBPM変化イベントの最小BPM |
 
-`FLOATING` はHS-FIXにかかわらずFloatingで開始する。Floating無効の `NORMAL` と
-`CLASSIC` は常に基準方式で開始する。切替可能な2設定は、HS-FIXが `OFF` なら
+`FLOATING` はHS-FIXにかかわらずFloatingで開始する。Floating無効の `NORMAL`、`CLASSIC`、
+`LR2` は常に基準方式で開始する。切替可能な2設定は、HS-FIXが `OFF` なら
 基準方式、その他ならFloatingで開始する。
 
 Floating の再計算は、READY前と曲タイマー開始前には選択したHS-FIXの基準BPM、
 曲開始後には現在BPMを使う。Normalの初期倍率は開始時の基準BPM、段階操作時は
-その時点のBPMを使う。Classicは基準BPMから求めた実効倍率をプレイ中に固定し、
-BPM変化では再計算しない（前述のClassicを参照）。
+その時点のBPMを使う。LR2は基準BPMから求めた実効倍率をプレイ中に固定し、
+BPM変化では再計算しない（前述のLR2を参照）。
 
 設定UIと選曲中の巡回順は次のとおり。
 
@@ -185,10 +193,10 @@ Floating無効の設定では緑数字操作を受け付けない。Floating固�
 | 1902 | number | Floating中は固定目標緑数字、それ以外は現在緑数字 |
 | 1916 | number / event_index / text | 基準方式。`0=Classic`, `1=Normal`。textは `CHS` / `NHS` |
 | 1917 | number / event_index | Normal段階 `1..=20` |
-| 1918 | number / event_index / text | 5設定のindexと設定名 |
+| 1918 | number / event_index / text | 6設定のindexと設定名 |
 
 ref 1918は `0=NORMAL`, `1=CLASSIC`, `2=FLOATING`,
-`3=NORMAL+FLOATING`, `4=CLASSIC+FLOATING`。
+`3=NORMAL+FLOATING`, `4=CLASSIC+FLOATING`, `5=LR2`。
 
 E1/E2操作に連動する共通HSパネルには、押下中option `1928`、共通press / hold timer
 `19008`、共通release timer `19009`を使える。詳細は`docs/skin.md`を参照。

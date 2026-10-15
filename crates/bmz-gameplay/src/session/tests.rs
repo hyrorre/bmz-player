@@ -229,6 +229,7 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
         guide_se_enabled: false,
         note_retention: false,
         hsfix_base_bpm: 120.0,
+        lr2_hispeed: false,
         lift: 0.0,
         lane_cover: 0.0,
         lane_cover_visible: true,

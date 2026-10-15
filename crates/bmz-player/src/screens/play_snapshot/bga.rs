@@ -93,14 +93,16 @@ pub(crate) fn effective_bpm_for_playback_rate(bpm: f64, playback_rate_percent: u
     bpm * f64::from(playback_rate_percent) / 100.0
 }
 
-/// LR2互換のClassic + HS-FIXで、BPM150基準のHS値を実効倍率へ変換する係数。
-/// `base_bpm` はHS-FIXの基準BPMで、再生速度はここで反映する。HS-FIX OFFでは1.0。
+/// HS CONFIG = LR2のClassic + HS-FIXで、BPM150基準のHS値を実効倍率へ変換する係数。
+/// `base_bpm` はHS-FIXの基準BPMで、再生速度はここで反映する。
+/// LR2以外、またはHS-FIX OFFでは1.0。
 pub(crate) fn classic_hsfix_scale_for_option(
+    lr2_hispeed: bool,
     hs_fix: crate::select_options::HsFixOption,
     base_bpm: f64,
     playback_rate_percent: u16,
 ) -> f32 {
-    if hs_fix == crate::select_options::HsFixOption::Off {
+    if !lr2_hispeed || hs_fix == crate::select_options::HsFixOption::Off {
         return 1.0;
     }
     crate::config::play::classic_hsfix_scale(effective_bpm_for_playback_rate(
@@ -109,9 +111,10 @@ pub(crate) fn classic_hsfix_scale_for_option(
     ))
 }
 
-/// Classic + HS-FIXで表示HSと実効倍率を変換する係数。HS-FIX OFFでは1.0。
+/// HS CONFIG = LR2のClassic + HS-FIXで表示HSと実効倍率を変換する係数。
+/// LR2以外、またはHS-FIX OFFでは1.0。
 pub(crate) fn classic_hsfix_scale_for_session(session: &GameSession) -> f32 {
-    if session.hsfix_index == 0 {
+    if !session.lr2_hispeed || session.hsfix_index == 0 {
         return 1.0;
     }
     crate::config::play::classic_hsfix_scale(effective_bpm_for_playback_rate(
@@ -120,7 +123,7 @@ pub(crate) fn classic_hsfix_scale_for_session(session: &GameSession) -> f32 {
     ))
 }
 
-/// skin表示とprofile保存に使うHS値。Classic + HS-FIXではBPM150基準の値を返す。
+/// skin表示とprofile保存に使うHS値。LR2 + HS-FIXではBPM150基準の値を返す。
 pub(crate) fn display_hispeed_for_session(session: &GameSession) -> f32 {
     if session.hispeed_mode == bmz_gameplay::session::HispeedMode::Classic {
         crate::config::play::classic_display_hispeed(

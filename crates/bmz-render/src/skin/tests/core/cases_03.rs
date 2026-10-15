@@ -648,6 +648,20 @@ fn skin_state_number_maps_bmz_hispeed_mode_refs() {
     );
 
     assert_eq!(skin_state_number(1900, &clamped), Some(1));
+
+    // LR2はClassic系の基準方式として CHS を返し、5設定index (1918) だけを5にする。
+    let lr2 = SkinDrawState { hispeed_config_index: 5, ..SkinDrawState::default() };
+    assert_eq!(skin_state_number(SKIN_REF_BMZ_HISPEED_CONFIG, &lr2), Some(5));
+    assert_eq!(skin_state_event_index(SKIN_REF_BMZ_HISPEED_CONFIG, &lr2), 5);
+    assert_eq!(skin_state_number(SKIN_REF_BMZ_BASE_HISPEED, &lr2), Some(0));
+    assert_eq!(
+        skin_state_text_with_draw_state(&config_text, Some(&lr2), &SkinTextState::default()),
+        "LR2"
+    );
+    assert_eq!(
+        skin_state_text_with_draw_state(&mode_text, Some(&lr2), &SkinTextState::default()),
+        "CHS"
+    );
 }
 
 #[test]

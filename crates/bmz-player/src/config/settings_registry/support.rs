@@ -231,6 +231,7 @@ pub(crate) fn format_hispeed_mode(value: HispeedConfigPreset) -> String {
         HispeedConfigPreset::Floating => "FLOATING".to_string(),
         HispeedConfigPreset::NormalFloating => "NORMAL+FLOATING".to_string(),
         HispeedConfigPreset::ClassicFloating => "CLASSIC+FLOATING".to_string(),
+        HispeedConfigPreset::Lr2 => "LR2".to_string(),
     }
 }
 

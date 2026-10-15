@@ -17,7 +17,7 @@ pub(in crate::skin) fn skin_normal_hispeed_level(state: &SkinDrawState) -> i64 {
 }
 
 pub(in crate::skin) fn skin_hispeed_config_index(state: &SkinDrawState) -> i32 {
-    state.hispeed_config_index.clamp(0, 4)
+    state.hispeed_config_index.clamp(0, 5)
 }
 
 pub(in crate::skin) fn skin_target_green_number(state: &SkinDrawState) -> i64 {

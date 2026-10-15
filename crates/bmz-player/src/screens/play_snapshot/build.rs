@@ -376,6 +376,7 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         hispeed_config_index: hispeed_config_index(
             session.base_hispeed_mode,
             session.floating_policy,
+            session.lr2_hispeed,
         ),
         target_green_number: session.target_green_number,
         lift: session.lift,
@@ -569,8 +570,11 @@ pub fn update_render_snapshot_play_options(
     snapshot.hispeed_mode_index = hispeed_mode_index(session.hispeed_mode);
     snapshot.base_hispeed_index = base_hispeed_index(session.base_hispeed_mode);
     snapshot.normal_hispeed_level = session.normal_hispeed_level;
-    snapshot.hispeed_config_index =
-        hispeed_config_index(session.base_hispeed_mode, session.floating_policy);
+    snapshot.hispeed_config_index = hispeed_config_index(
+        session.base_hispeed_mode,
+        session.floating_policy,
+        session.lr2_hispeed,
+    );
     snapshot.target_green_number = session.target_green_number;
     snapshot.lift = session.lift;
     snapshot.lane_cover = if session.lanecover_enabled && session.lane_cover_visible {
@@ -611,9 +615,11 @@ pub(super) const fn base_hispeed_index(mode: bmz_gameplay::session::HispeedMode)
 pub(super) const fn hispeed_config_index(
     base: bmz_gameplay::session::HispeedMode,
     floating: bmz_gameplay::session::FloatingPolicy,
+    lr2_hispeed: bool,
 ) -> i32 {
     match (base, floating) {
         (_, bmz_gameplay::session::FloatingPolicy::Locked) => 2,
+        _ if lr2_hispeed => 5,
         (
             bmz_gameplay::session::HispeedMode::Normal,
             bmz_gameplay::session::FloatingPolicy::Disabled,

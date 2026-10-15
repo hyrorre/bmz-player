@@ -1280,7 +1280,7 @@ v1・Numbers・Closeを宣言する。旧timer 22表示のみを置換し、200m
 | 19312 | ROW_SLOTS。v1は7（項目数の上限ではない） |
 
 enumのVALUEは、GAS下限: `0=ASSIST EASY,1=EASY,2=NORMAL`、HS CONFIG:
-`0=NORMAL,1=CLASSIC,2=FLOATING,3=NORMAL+FLOATING,4=CLASSIC+FLOATING`、LN MODE:
+`0=NORMAL,1=CLASSIC,2=FLOATING,3=NORMAL+FLOATING,4=CLASSIC+FLOATING,5=LR2`、LN MODE:
 `0=AUTO LN,1=AUTO CN,2=AUTO HCN,3=FORCE LN,4=FORCE CN,5=FORCE HCN`。
 GAS MODEは`0=OFF,1=CONTINUE,2=HARD TO GROOVE,3=BEST CLEAR,4=SELECT TO UNDER`、
 BGAは`0=ON,1=AUTO,2=OFF`、JUDGE ALGORITHMは`0=COMBO,1=DURATION,2=LOWEST`。
@@ -1515,7 +1515,7 @@ select snapshotへ予定配置を設定する。
 | 1902 | number | target green number。Floating時は固定target、それ以外は現在green number |
 | 1916 | number / event_index / text | base HS。`0=Classic`, `1=Normal`、textは `CHS` / `NHS` |
 | 1917 | number / event_index | Normal HS level (`1..=20`) |
-| 1918 | number / event_index / text | HS設定。`0=NORMAL`, `1=CLASSIC`, `2=FLOATING`, `3=NORMAL+FLOATING`, `4=CLASSIC+FLOATING` |
+| 1918 | number / event_index / text | HS設定。`0=NORMAL`, `1=CLASSIC`, `2=FLOATING`, `3=NORMAL+FLOATING`, `4=CLASSIC+FLOATING`, `5=LR2` |
 
 `op: [1901]` または `draw: "number(1901)==1"` でFloating時だけdestinationを表示できる。
 

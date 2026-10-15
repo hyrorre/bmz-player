@@ -79,6 +79,7 @@ BPM が違う曲でも、緑数字が同じなら同じ速さに見えます。
 | FLOATING | 緑数字を指定し、曲の BPM に合わせて倍率を自動で決めます |
 | NORMAL+FLOATING | NORMAL と FLOATING をプレイ中に切り替えられます |
 | CLASSIC+FLOATING | CLASSIC と FLOATING をプレイ中に切り替えられます（最初の設定） |
+| LR2 | CLASSIC と同じく倍率を直接指定します（倍率は CLASSIC と共通）。HS-FIX を使うときは、倍率を BPM 150 での速さとして扱います（LR2 と同じ） |
 
 切り替えられる方式では、プレイ中に **E1 と E2 を同時に押す** と切り替わります。
 FLOATING のときは、**E2 を押しながら鍵盤やスクラッチ** で緑数字を変えます。

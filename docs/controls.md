@@ -725,7 +725,7 @@ HIDDEN+を変更対象にした場合だけ増減方向がSUDDEN+/LIFTと逆に�
 E1+ScratchのどちらでもUpでHIDDEN+量が増え、Downで減ります。
 
 HS設定は `NORMAL` / `CLASSIC` / `FLOATING` / `NORMAL+FLOATING` /
-`CLASSIC+FLOATING` の5種類です。`NORMAL` と `CLASSIC` ではFloatingと緑数字操作を
+`CLASSIC+FLOATING` / `LR2` の6種類です。`NORMAL`、`CLASSIC`、`LR2` ではFloatingと緑数字操作を
 無効にし、`FLOATING` ではFloatingを固定します。末尾が `+FLOATING` の2設定だけ、
 E1+E2で基準方式とFloatingを切り替えられます。Normalの段階表と切替時の変換規則は
 `docs/hs.md`を参照してください。

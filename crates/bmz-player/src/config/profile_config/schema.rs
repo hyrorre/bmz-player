@@ -1182,6 +1182,8 @@ pub const fn default_constant_fade_ms() -> i32 {
 pub enum BaseHispeedConfig {
     Normal,
     Classic,
+    /// Classicと同じ直接倍率。HS-FIXがOFF以外ではLR2と同じく、倍率をBPM150基準の値として扱う。
+    Lr2,
 }
 
 pub(super) const fn default_base_hispeed() -> BaseHispeedConfig {
@@ -1207,11 +1209,18 @@ pub enum HispeedConfigPreset {
     Floating,
     NormalFloating,
     ClassicFloating,
+    Lr2,
 }
 
 impl HispeedConfigPreset {
-    pub const ORDER: [Self; 5] =
-        [Self::Normal, Self::Classic, Self::Floating, Self::NormalFloating, Self::ClassicFloating];
+    pub const ORDER: [Self; 6] = [
+        Self::Normal,
+        Self::Classic,
+        Self::Floating,
+        Self::NormalFloating,
+        Self::ClassicFloating,
+        Self::Lr2,
+    ];
 
     pub const fn from_parts(base: BaseHispeedConfig, floating: FloatingPolicyConfig) -> Self {
         match (base, floating) {
@@ -1220,6 +1229,8 @@ impl HispeedConfigPreset {
             (BaseHispeedConfig::Classic, FloatingPolicyConfig::Disabled) => Self::Classic,
             (BaseHispeedConfig::Normal, FloatingPolicyConfig::Toggle) => Self::NormalFloating,
             (BaseHispeedConfig::Classic, FloatingPolicyConfig::Toggle) => Self::ClassicFloating,
+            // LR2はFloatingを持たない。
+            (BaseHispeedConfig::Lr2, _) => Self::Lr2,
         }
     }
 
@@ -1230,6 +1241,7 @@ impl HispeedConfigPreset {
             Self::Floating => (BaseHispeedConfig::Classic, FloatingPolicyConfig::Locked),
             Self::NormalFloating => (BaseHispeedConfig::Normal, FloatingPolicyConfig::Toggle),
             Self::ClassicFloating => (BaseHispeedConfig::Classic, FloatingPolicyConfig::Toggle),
+            Self::Lr2 => (BaseHispeedConfig::Lr2, FloatingPolicyConfig::Disabled),
         }
     }
 
@@ -1240,6 +1252,7 @@ impl HispeedConfigPreset {
             Self::Floating => 2,
             Self::NormalFloating => 3,
             Self::ClassicFloating => 4,
+            Self::Lr2 => 5,
         }
     }
 
@@ -1248,7 +1261,7 @@ impl HispeedConfigPreset {
     }
 
     pub const fn supports_classic(self) -> bool {
-        matches!(self, Self::Classic | Self::ClassicFloating)
+        matches!(self, Self::Classic | Self::ClassicFloating | Self::Lr2)
     }
 
     pub const fn supports_floating(self) -> bool {

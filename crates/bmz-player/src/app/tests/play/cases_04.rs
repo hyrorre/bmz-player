@@ -548,9 +548,12 @@ fn profile_play_option_changes_disable_random_and_autoplay_without_rollback() {
     assert!(!profile.play.auto_play);
 }
 
-fn classic_hsfix_session(hispeed: f32) -> (ProfileConfig, bmz_gameplay::session::GameSession) {
+fn hsfix_session(
+    base: BaseHispeedConfig,
+    hispeed: f32,
+) -> (ProfileConfig, bmz_gameplay::session::GameSession) {
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
-    profile.lane.base_hispeed = BaseHispeedConfig::Classic;
+    profile.lane.base_hispeed = base;
     profile.lane.floating_policy = FloatingPolicyConfig::Disabled;
     profile.lane.hispeed = hispeed;
     let mut chart = app_test_chart();
@@ -567,8 +570,8 @@ fn classic_hsfix_session(hispeed: f32) -> (ProfileConfig, bmz_gameplay::session:
 }
 
 #[test]
-fn classic_hsfix_hispeed_change_steps_bpm150_value() {
-    let (_, mut session) = classic_hsfix_session(3.0);
+fn lr2_hsfix_hispeed_change_steps_bpm150_value() {
+    let (_, mut session) = hsfix_session(BaseHispeedConfig::Lr2, 3.0);
     assert!((session.hispeed - 1.5).abs() < 0.000_01, "hispeed={}", session.hispeed);
 
     assert!(apply_play_option_control_to_session(
@@ -583,8 +586,8 @@ fn classic_hsfix_hispeed_change_steps_bpm150_value() {
 }
 
 #[test]
-fn classic_hsfix_profile_hispeed_edit_and_save_use_bpm150_value() {
-    let (mut profile, mut session) = classic_hsfix_session(3.0);
+fn lr2_hsfix_profile_hispeed_edit_and_save_use_bpm150_value() {
+    let (mut profile, mut session) = hsfix_session(BaseHispeedConfig::Lr2, 3.0);
     let before = profile.lane.clone();
     let mut edited = profile.lane.clone();
     edited.hispeed = 4.0;
@@ -606,10 +609,12 @@ fn classic_hsfix_profile_hispeed_edit_and_save_use_bpm150_value() {
         Some(active_lane_state_for_session(&session)),
     );
     assert_eq!(profile.lane.hispeed, 4.0);
+    // プレイ中はClassicとして扱うが、保存でLR2をClassicへ戻さない。
+    assert_eq!(profile.lane.base_hispeed, BaseHispeedConfig::Lr2);
 }
 
 #[test]
-fn pending_classic_hsfix_hispeed_tracks_chart_base_bpm() {
+fn pending_lr2_hsfix_hispeed_tracks_chart_base_bpm() {
     let profile = ProfileConfig::new_default("default", "Default", 1);
     let mut lane = PendingPlayLaneState {
         hispeed: 1.5,
@@ -628,6 +633,7 @@ fn pending_classic_hsfix_hispeed_tracks_chart_base_bpm() {
         lane_target: PlayLaneTarget::Lift,
         lane_cover_changing: false,
         hsfix_base_bpm: 300.0,
+        lr2_hispeed: true,
         classic_hsfix_scale: 0.5,
         hispeed_auto_adjust: false,
         playback_rate_percent: 100,
@@ -647,4 +653,61 @@ fn pending_classic_hsfix_hispeed_tracks_chart_base_bpm() {
     lane.sync_chart_bpm(&snapshot, HsFixOption::MaxBpm);
     assert!((lane.hispeed - 3.25).abs() < 0.000_01, "hispeed={}", lane.hispeed);
     assert_eq!(lane.display_hispeed(), 3.25);
+}
+
+#[test]
+fn classic_hispeed_ignores_hsfix_for_change_and_save() {
+    let (mut profile, mut session) = hsfix_session(BaseHispeedConfig::Classic, 3.0);
+    assert_eq!(session.hispeed, 3.0);
+
+    assert!(apply_play_option_control_to_session(
+        &mut session,
+        PlayOptionControl::Hispeed(HispeedChange::Up),
+        false,
+        0.25,
+    ));
+    assert_eq!(session.hispeed, 3.25);
+
+    apply_lane_state_to_profile(
+        &mut profile,
+        Some(crate::screens::play_snapshot::display_hispeed_for_session(&session)),
+        Some(active_lane_state_for_session(&session)),
+    );
+    assert_eq!(profile.lane.hispeed, 3.25);
+    assert_eq!(profile.lane.base_hispeed, BaseHispeedConfig::Classic);
+}
+
+#[test]
+fn switching_classic_to_lr2_mid_play_keeps_displayed_hispeed() {
+    let (profile, mut session) = hsfix_session(BaseHispeedConfig::Classic, 3.0);
+    let before = profile.lane.clone();
+    let mut edited = profile.lane.clone();
+    edited.base_hispeed = BaseHispeedConfig::Lr2;
+
+    assert!(apply_profile_lane_settings_to_session(
+        &mut session,
+        &before,
+        profile.play.lane_effect,
+        &edited,
+        profile.play.lane_effect,
+        false,
+        false,
+    ));
+    assert!(session.lr2_hispeed);
+    assert_eq!(session.hispeed_mode, HispeedMode::Classic);
+    // START BPM 300: 表示HS 3.00のまま、実効倍率は1.50。
+    assert!((session.hispeed - 1.5).abs() < 0.000_01, "hispeed={}", session.hispeed);
+    assert_eq!(crate::screens::play_snapshot::display_hispeed_for_session(&session), 3.0);
+
+    assert!(apply_profile_lane_settings_to_session(
+        &mut session,
+        &edited,
+        profile.play.lane_effect,
+        &before,
+        profile.play.lane_effect,
+        false,
+        false,
+    ));
+    assert!(!session.lr2_hispeed);
+    assert!((session.hispeed - 3.0).abs() < 0.000_01, "hispeed={}", session.hispeed);
 }

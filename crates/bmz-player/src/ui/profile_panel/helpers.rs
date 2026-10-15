@@ -217,6 +217,7 @@ pub(in crate::ui) fn hispeed_mode_label(value: HispeedConfigPreset) -> &'static 
         HispeedConfigPreset::Floating => "FLOATING",
         HispeedConfigPreset::NormalFloating => "NORMAL+FLOATING",
         HispeedConfigPreset::ClassicFloating => "CLASSIC+FLOATING",
+        HispeedConfigPreset::Lr2 => "LR2",
     }
 }
 

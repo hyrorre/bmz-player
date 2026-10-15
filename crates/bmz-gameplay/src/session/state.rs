@@ -256,6 +256,8 @@ pub struct GameSession {
     pub note_retention: bool,
     /// Floating hispeed の曲開始前基準 BPM。曲開始後は現在 BPM で再計算する。
     pub hsfix_base_bpm: f64,
+    /// HS CONFIG = LR2。Classic倍率をHS-FIXの基準BPMに対するBPM150基準の値として扱う。
+    pub lr2_hispeed: bool,
     pub lift: f32,
     pub lane_cover: f32,
     /// レーンカバー(SUDDEN+)の表示有無。

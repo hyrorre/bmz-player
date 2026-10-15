@@ -79,6 +79,7 @@ S-RANDOM 等逐個分配音符的排列，可能使譜面與原本形狀差異�
 | FLOATING | 指定綠色數字後，依歌曲的 BPM 自動決定倍率 |
 | NORMAL+FLOATING | 遊玩中可以在 NORMAL 與 FLOATING 之間切換 |
 | CLASSIC+FLOATING | 遊玩中可以在 CLASSIC 與 FLOATING 之間切換（初始設定） |
+| LR2 | 與 CLASSIC 一樣直接指定倍率（倍率與 CLASSIC 共用）。使用 HS-FIX 時，倍率表示 BPM 150 時的速度（與 LR2 相同） |
 
 在可切換的方式中，遊玩時 **同時按 E1 與 E2** 即可切換。
 使用 FLOATING 時，**按住 E2 + 按鍵或轉盤** 可變更綠色數字。

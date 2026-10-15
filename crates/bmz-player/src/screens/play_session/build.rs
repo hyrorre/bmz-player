@@ -117,7 +117,7 @@ pub fn apply_placeholder_session_visuals(
     let hispeed_mode = initial_hispeed_mode(&mode_config, hs_fix, speed_locked);
     snapshot.hispeed_mode_index = hispeed_mode_index(hispeed_mode);
     snapshot.base_hispeed_index = match mode_config.base_hispeed {
-        BaseHispeedConfig::Classic => 0,
+        BaseHispeedConfig::Classic | BaseHispeedConfig::Lr2 => 0,
         BaseHispeedConfig::Normal => 1,
     };
     snapshot.normal_hispeed_level =
@@ -125,6 +125,7 @@ pub fn apply_placeholder_session_visuals(
     snapshot.hispeed_config_index = mode_config.hispeed_config().index();
     let target_green_number = mode_config.target_green_number.max(1);
     let classic_hsfix_scale = crate::screens::play_snapshot::classic_hsfix_scale_for_option(
+        mode_config.base_hispeed == BaseHispeedConfig::Lr2,
         hs_fix,
         f64::from(placeholder_hsfix_base_bpm(snapshot, hs_fix)),
         options.playback_rate_percent,
@@ -620,6 +621,7 @@ pub fn build_game_session_with_input_backend(
         guide_se_enabled: profile.play.guide_se,
         note_retention: profile.play.note_retention,
         hsfix_base_bpm,
+        lr2_hispeed: !speed_locked && mode_config.base_hispeed == BaseHispeedConfig::Lr2,
         lift,
         lane_cover,
         lane_cover_visible: lanecover_enabled_from_mode_config(&mode_config),
@@ -732,7 +734,7 @@ pub(super) fn apply_judge_constraint_to_window(
 pub(super) const fn base_hispeed_mode(base: BaseHispeedConfig) -> HispeedMode {
     match base {
         BaseHispeedConfig::Normal => HispeedMode::Normal,
-        BaseHispeedConfig::Classic => HispeedMode::Classic,
+        BaseHispeedConfig::Classic | BaseHispeedConfig::Lr2 => HispeedMode::Classic,
     }
 }
 
@@ -792,7 +794,12 @@ pub(super) fn initial_hispeed_for_mode(
     match hispeed_mode {
         HispeedMode::Classic => crate::config::play::classic_effective_hispeed(
             mode_config.hispeed,
-            crate::screens::play_snapshot::classic_hsfix_scale_for_option(hs_fix, now_bpm, 100),
+            crate::screens::play_snapshot::classic_hsfix_scale_for_option(
+                mode_config.base_hispeed == BaseHispeedConfig::Lr2,
+                hs_fix,
+                now_bpm,
+                100,
+            ),
         ),
         HispeedMode::Normal => {
             let green =

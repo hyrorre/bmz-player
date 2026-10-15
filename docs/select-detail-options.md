@@ -39,7 +39,7 @@ E1 hold=通常、E2 hold=Assist、E1+E2 hold=旧詳細で、短押し固定表�
 |4|201 / gas-bottom|GAUGE|BottomShiftableGauge|ASSIST EASY / EASY / NORMAL|profile共通|
 |5|202 / gas-mode|GAUGE|GaugeAutoShift|OFF / CONTINUE / HARD TO GROOVE / BEST CLEAR / SELECT TO UNDER|profile共通|
 |6|301 / hs-auto|HI-SPEED|HispeedAutoAdjust|OFF / ON|キーモード|
-|7|302 / hs-config|HI-SPEED|HispeedMode|NORMAL / CLASSIC / FLOATING / NORMAL+FLOATING / CLASSIC+FLOATING|キーモード|
+|7|302 / hs-config|HI-SPEED|HispeedMode|NORMAL / CLASSIC / FLOATING / NORMAL+FLOATING / CLASSIC+FLOATING / LR2|キーモード|
 |8|303 / constant|HI-SPEED|Constant|OFF / ON|キーモード|
 |9|304 / green-number|HI-SPEED|TargetGreenNumber|1..6000、刻み1|キーモード|
 |10|401 / ln-mode|LONG NOTE|LnModePolicy|AUTO(LN/CN/HCN) / FORCE(LN/CN/HCN)|profile共通|

@@ -193,6 +193,8 @@ pub(super) struct PendingPlayLaneState {
     pub(super) lane_cover_changing: bool,
     pub(super) hsfix_base_bpm: f32,
     /// Classic + HS-FIXでBPM150基準のHS値を実効倍率へ変換する係数。
+    /// HS CONFIG = LR2。
+    pub(super) lr2_hispeed: bool,
     pub(super) classic_hsfix_scale: f32,
     pub(super) hispeed_auto_adjust: bool,
     pub(super) playback_rate_percent: u16,
@@ -209,9 +211,10 @@ impl PendingPlayLaneState {
         let hidden_enabled = mode_config.lane_effect.hidden_enabled();
         let base_hispeed_mode = match mode_config.base_hispeed {
             BaseHispeedConfig::Normal => HispeedMode::Normal,
-            BaseHispeedConfig::Classic => HispeedMode::Classic,
+            BaseHispeedConfig::Classic | BaseHispeedConfig::Lr2 => HispeedMode::Classic,
         };
         let hsfix_base_bpm = hsfix_base_bpm_from_snapshot(snapshot, hs_fix);
+        let lr2_hispeed = mode_config.base_hispeed == BaseHispeedConfig::Lr2;
         Self {
             hispeed: snapshot.hispeed,
             hispeed_mode: if snapshot.hispeed_mode_index == 0 {
@@ -246,7 +249,9 @@ impl PendingPlayLaneState {
             lane_target: PlayLaneTarget::Lift,
             lane_cover_changing: snapshot.lane_cover_changing,
             hsfix_base_bpm,
+            lr2_hispeed,
             classic_hsfix_scale: crate::screens::play_snapshot::classic_hsfix_scale_for_option(
+                lr2_hispeed,
                 hs_fix,
                 f64::from(hsfix_base_bpm),
                 playback_rate_percent,
@@ -256,7 +261,7 @@ impl PendingPlayLaneState {
         }
     }
 
-    /// skin表示とprofile保存に使うHS値。Classic + HS-FIXではBPM150基準の値を返す。
+    /// skin表示とprofile保存に使うHS値。LR2 + HS-FIXではBPM150基準の値を返す。
     pub(super) fn display_hispeed(self) -> f32 {
         if self.hispeed_mode == HispeedMode::Classic {
             crate::config::play::classic_display_hispeed(self.hispeed, self.classic_hsfix_scale)
@@ -323,6 +328,7 @@ impl PendingPlayLaneState {
         let display_hispeed = self.display_hispeed();
         self.hsfix_base_bpm = hsfix_base_bpm_from_snapshot(snapshot, hs_fix);
         self.classic_hsfix_scale = crate::screens::play_snapshot::classic_hsfix_scale_for_option(
+            self.lr2_hispeed,
             hs_fix,
             f64::from(self.hsfix_base_bpm),
             self.playback_rate_percent,
@@ -396,6 +402,7 @@ impl PendingPlayLaneState {
         snapshot.normal_hispeed_level = self.normal_hispeed_level;
         snapshot.hispeed_config_index = match (self.base_hispeed_mode, self.floating_policy) {
             (_, FloatingPolicy::Locked) => 2,
+            _ if self.lr2_hispeed => 5,
             (HispeedMode::Normal, FloatingPolicy::Disabled) => 0,
             (_, FloatingPolicy::Disabled) => 1,
             (HispeedMode::Normal, FloatingPolicy::Toggle) => 3,

@@ -95,6 +95,18 @@ pub(in crate::app) fn apply_profile_lane_settings_to_session(
     }
 
     let now = session.audio_clock.now();
+    let lr2_hispeed = profile.base_hispeed == BaseHispeedConfig::Lr2;
+    if config_changed && session.lr2_hispeed != lr2_hispeed {
+        // CLASSICとLR2の切替では、表示中のHS値を保ったまま実効倍率を求め直す。
+        let display_hispeed = crate::screens::play_snapshot::display_hispeed_for_session(session);
+        session.lr2_hispeed = lr2_hispeed;
+        if session.hispeed_mode == HispeedMode::Classic {
+            session.hispeed = crate::config::play::classic_effective_hispeed(
+                display_hispeed,
+                crate::screens::play_snapshot::classic_hsfix_scale_for_session(session),
+            );
+        }
+    }
     if config_changed {
         session.base_hispeed_mode = base_hispeed_mode_from_config(profile.base_hispeed);
         session.floating_policy = floating_policy_from_config(profile.floating_policy);
@@ -363,7 +375,13 @@ pub(in crate::app) fn apply_lane_state_to_profile(
         if state.hidden_enabled {
             profile.lane.hidden = crate::config::play::lane_f32_to_unit(state.hidden_cover);
         }
-        profile.lane.base_hispeed = base_hispeed_config(state.base_hispeed_mode);
+        let base_hispeed = base_hispeed_config(state.base_hispeed_mode);
+        // LR2はプレイ中の基準方式ではClassicとして扱うため、Classicで上書きしない。
+        if !(base_hispeed == BaseHispeedConfig::Classic
+            && profile.lane.base_hispeed == BaseHispeedConfig::Lr2)
+        {
+            profile.lane.base_hispeed = base_hispeed;
+        }
         profile.lane.floating_policy = floating_policy_config(state.floating_policy);
         profile.lane.normal_hispeed_level =
             crate::config::play::normalize_normal_hispeed_level(state.normal_hispeed_level);
@@ -386,7 +404,7 @@ pub(in crate::app) fn clamp_hispeed_for_profile(hispeed: f32, mode: HispeedMode,
 pub(in crate::app) const fn base_hispeed_mode_from_config(mode: BaseHispeedConfig) -> HispeedMode {
     match mode {
         BaseHispeedConfig::Normal => HispeedMode::Normal,
-        BaseHispeedConfig::Classic => HispeedMode::Classic,
+        BaseHispeedConfig::Classic | BaseHispeedConfig::Lr2 => HispeedMode::Classic,
     }
 }
 

@@ -79,6 +79,7 @@ Songs with different BPMs look equally fast when their green numbers are the sam
 | FLOATING | Set a green number, and the multiplier is chosen to match each song's BPM |
 | NORMAL+FLOATING | Switch between NORMAL and FLOATING during play |
 | CLASSIC+FLOATING | Switch between CLASSIC and FLOATING during play (the default) |
+| LR2 | Set the multiplier directly, like CLASSIC (the value is shared with CLASSIC). With HS-FIX, the multiplier means the speed at BPM 150 (as in LR2) |
 
 In the switchable modes, **press E1 and E2 together** during play to switch.
 In FLOATING, **hold E2 and press keys or the turntable** to change the green number.
