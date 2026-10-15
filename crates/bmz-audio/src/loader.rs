@@ -339,7 +339,8 @@ mod tests {
     #[test]
     fn load_chart_samples_inserts_loaded_samples_and_reports_failures() {
         let mut engine = AudioEngine::default();
-        let dir = temp_dir("load-samples");
+        let temp = temp_dir("load-samples");
+        let dir = temp.path().to_path_buf();
         let ok_path = dir.join("ok.wav");
         let missing_path = dir.join("missing.wav");
         std::fs::write(&ok_path, b"dummy").unwrap();
@@ -359,7 +360,6 @@ mod tests {
         assert!(matches!(report[1].status, LoadedSampleStatus::Failed(_)));
         assert!(engine.samples.get(SoundId(1)).is_some());
         assert!(engine.samples.get(SoundId(2)).is_none());
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -382,7 +382,8 @@ mod tests {
     #[test]
     fn load_chart_samples_applies_volwav_gain() {
         let mut engine = AudioEngine::default();
-        let dir = temp_dir("volwav");
+        let temp = temp_dir("volwav");
+        let dir = temp.path().to_path_buf();
         let ok_path = dir.join("ok.wav");
         std::fs::write(&ok_path, b"dummy").unwrap();
         let mut chart = chart_with_sounds(vec![SoundAssetRef {
@@ -402,13 +403,13 @@ mod tests {
         let sample = engine.samples.get(SoundId(1)).unwrap();
         assert_eq!(sample.sample_stereo(0), (0.5, 0.5));
         assert_eq!(sample.sample_stereo(1), (-0.5, -0.5));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn load_chart_samples_caches_source_and_crops_each_slice() {
         let mut engine = AudioEngine::default();
-        let dir = temp_dir("sound-slices");
+        let temp = temp_dir("sound-slices");
+        let dir = temp.path().to_path_buf();
         let path = dir.join("full.wav");
         std::fs::write(&path, b"dummy").unwrap();
         let chart = chart_with_sounds(vec![
@@ -447,13 +448,13 @@ mod tests {
         assert!((second.sample_stereo(0).0 - 0.5).abs() < 0.001);
         assert!((second.sample_stereo(second.frame_count() - 1).0 - 0.9).abs() < 0.001);
         assert!(first.shares_source_with(second));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn load_chart_samples_caches_candidates_and_decode_failures_by_actual_path() {
         let mut engine = AudioEngine::default();
-        let dir = temp_dir("candidate-cache");
+        let temp = temp_dir("candidate-cache");
+        let dir = temp.path().to_path_buf();
         let requested = dir.join("full.wav");
         let fallback = dir.join("full.ogg");
         std::fs::write(&requested, b"invalid").unwrap();
@@ -483,13 +484,13 @@ mod tests {
                 .unwrap()
                 .shares_source_with(engine.samples.get(SoundId(2)).unwrap())
         );
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn loads_two_thousand_regions_from_one_shared_source() {
         let mut engine = AudioEngine::new(1_000);
-        let dir = temp_dir("many-shared-regions");
+        let temp = temp_dir("many-shared-regions");
+        let dir = temp.path().to_path_buf();
         let path = dir.join("long-source.wav");
         std::fs::write(&path, b"dummy").unwrap();
         let chart = chart_with_sounds(
@@ -527,7 +528,6 @@ mod tests {
         assert_eq!(last.frame_count(), 1);
         assert_eq!(first.sample_stereo(0), (0.0, 0.0));
         assert_eq!(last.sample_stereo(0), (0.9995, 0.9995));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -545,8 +545,6 @@ mod tests {
         assert_eq!(sample.frames.len(), 2);
         assert_eq!(sample.frames[0], 0.0);
         assert!((sample.frames[1] - 0.9999695).abs() < 0.00001);
-
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -562,13 +560,12 @@ mod tests {
 
         assert_eq!(sample.channels, 2);
         assert_eq!(sample.sample_stereo(0), (0.25, -0.5));
-
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
     fn sound_asset_candidates_follow_beatoraja_audio_order() {
-        let dir = temp_dir("audio-order");
+        let temp = temp_dir("audio-order");
+        let dir = temp.path().to_path_buf();
 
         // #WAV では foo.wav を指定するが、実体は複数候補。
         let requested = dir.join("foo.wav");
@@ -580,8 +577,6 @@ mod tests {
         std::fs::write(&mp3, b"dummy").unwrap();
 
         assert_eq!(sound_asset_candidates(&requested), vec![flac, ogg, mp3]);
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -599,12 +594,12 @@ mod tests {
             let resampled = sample.resampled_to(48_000);
             assert!(resampled.frames.iter().all(|v| v.is_finite() && v.abs() <= 1.36));
         }
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
     fn sound_asset_candidates_keep_declared_file_first() {
-        let dir = temp_dir("declared-first");
+        let temp = temp_dir("declared-first");
+        let dir = temp.path().to_path_buf();
 
         let requested = dir.join("foo.ogg");
         let wav = dir.join("foo.wav");
@@ -612,14 +607,13 @@ mod tests {
         std::fs::write(&wav, b"dummy").unwrap();
 
         assert_eq!(sound_asset_candidates(&requested), vec![requested, wav]);
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn load_chart_samples_retries_decoding_candidates_in_order() {
         let mut engine = AudioEngine::default();
-        let dir = temp_dir("decode-retry");
+        let temp = temp_dir("decode-retry");
+        let dir = temp.path().to_path_buf();
         let requested = dir.join("foo.wav");
         let fallback = dir.join("foo.flac");
         std::fs::write(&requested, b"invalid").unwrap();
@@ -642,7 +636,6 @@ mod tests {
         assert_eq!(report[0].path, fallback);
         assert!(matches!(report[0].status, LoadedSampleStatus::Loaded));
         assert!(engine.samples.get(SoundId(1)).is_some());
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn chart_with_sounds(sounds: Vec<SoundAssetRef>) -> PlayableChart {
@@ -677,14 +670,8 @@ mod tests {
         }
     }
 
-    fn temp_dir(label: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "bmz-audio-{label}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn temp_dir(label: &str) -> tempfile::TempDir {
+        tempfile::Builder::new().prefix(&format!("bmz-audio-{label}-")).tempdir().unwrap()
     }
 
     fn wav_header(
@@ -714,17 +701,15 @@ mod tests {
         out
     }
 
-    fn write_temp_wav(parts: &[&[u8]]) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "bmz-audio-wav-{}-{}.wav",
-            std::process::id(),
-            parts.iter().map(|part| part.len()).sum::<usize>()
-        ));
-        let mut bytes = Vec::new();
+    /// Each call gets its own file; the name used to be derived from the byte length, so
+    /// two tests writing different WAVs of equal size overwrote each other. The handle is
+    /// closed (Windows decoders may reopen the file) and the file is removed on drop.
+    fn write_temp_wav(parts: &[&[u8]]) -> tempfile::TempPath {
+        let mut file =
+            tempfile::Builder::new().prefix("bmz-audio-wav-").suffix(".wav").tempfile().unwrap();
         for part in parts {
-            bytes.extend_from_slice(part);
+            std::io::Write::write_all(&mut file, part).unwrap();
         }
-        std::fs::write(&path, bytes).unwrap();
-        path
+        file.into_temp_path()
     }
 }
