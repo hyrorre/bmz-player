@@ -137,6 +137,29 @@ fn normalize_play_mode_config(config: &mut PlayModeConfig) {
 }
 
 impl ProfileConfig {
+    /// 旧既定 (LIFT有効・量0) の profile を、読込時にLIFT無効へ移行する。
+    /// プレイ開始時の0→既定量の補正で判定ラインが上がらないようにするため。
+    /// 量は既定値にし、後でLIFTを有効にしたときに再び無効化されないようにする。
+    /// 読込直後、`normalize_play_mode_configs` の後に呼ぶ。変更した場合は true を返す。
+    pub fn migrate_enabled_zero_lift(&mut self) -> bool {
+        fn migrate(lift_enabled: &mut bool, lift: &mut u32) -> bool {
+            if *lift_enabled && *lift == 0 {
+                *lift_enabled = false;
+                *lift = DEFAULT_LANE_COVER_AMOUNT;
+                true
+            } else {
+                false
+            }
+        }
+        let mut changed = migrate(&mut self.lane.lift_enabled, &mut self.lane.lift);
+        for config in self.play_mode.values_mut() {
+            changed |= migrate(&mut config.lift_enabled, &mut config.lift);
+        }
+        changed
+    }
+}
+
+impl ProfileConfig {
     /// プレイ開始時、有効なSUDDEN+・HIDDEN+・LIFTの量が0なら既定量にする。
     /// 0では有効か無効か分かりづらいため。対象は編集中の現在キーモード。
     /// 変更した場合は true を返す。

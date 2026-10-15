@@ -42,6 +42,7 @@ fn parse_profile_config(text: &str) -> Result<ProfileConfig> {
     let mut config: ProfileConfig = toml::from_str(text)?;
     config.migrate_legacy_key_mode_conversion();
     config.normalize_play_mode_configs();
+    config.migrate_enabled_zero_lift();
     config.skin.migrate_legacy_offsets();
     config.skin.migrate_legacy_ambient_option();
     config.skin.migrate_antique_bga_brightness();
@@ -276,5 +277,41 @@ mod tests {
         assert_eq!(loaded.play_mode_config(KeyMode::K7).visual_offset_us, 0);
         assert_eq!(loaded.play_mode_config(KeyMode::K14).target_green_number, 225);
         assert_eq!(loaded.play_mode_config(KeyMode::K14).visual_offset_us, 13_000);
+    }
+
+    #[test]
+    fn parse_profile_config_disables_legacy_enabled_zero_lift() {
+        use crate::config::profile_config::DEFAULT_LANE_COVER_AMOUNT;
+        use bmz_core::lane::KeyMode;
+
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.normalize_play_mode_configs();
+        // 旧既定: LIFT有効・量0。
+        profile.lane.lift_enabled = true;
+        profile.lane.lift = 0;
+        profile.sync_active_play_mode();
+        profile.activate_play_mode(KeyMode::K14);
+        profile.lane.lift_enabled = true;
+        profile.lane.lift = 200;
+        profile.sync_active_play_mode();
+
+        let loaded = parse_profile_config(&toml::to_string(&profile).unwrap()).unwrap();
+
+        let k7 = loaded.play_mode_config(KeyMode::K7);
+        assert!(!k7.lift_enabled);
+        assert_eq!(k7.lift, DEFAULT_LANE_COVER_AMOUNT);
+        assert!(!loaded.lane.lift_enabled);
+        // 量を設定済みのLIFTは変更しない。
+        let k14 = loaded.play_mode_config(KeyMode::K14);
+        assert!(k14.lift_enabled);
+        assert_eq!(k14.lift, 200);
+
+        // 移行後の値は再読込しても変わらない。
+        let mut enabled = loaded.clone();
+        enabled.lane.lift_enabled = true;
+        enabled.sync_active_play_mode();
+        let reloaded = parse_profile_config(&toml::to_string(&enabled).unwrap()).unwrap();
+        assert!(reloaded.play_mode_config(KeyMode::K7).lift_enabled);
+        assert_eq!(reloaded.play_mode_config(KeyMode::K7).lift, DEFAULT_LANE_COVER_AMOUNT);
     }
 }
