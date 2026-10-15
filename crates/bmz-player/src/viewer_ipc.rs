@@ -6,10 +6,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+/// The fixed rendezvous an external editor's `-P` / `-S` process connects to.
 #[cfg(windows)]
-const WINDOWS_PIPE_NAME: &str = r"\\.\pipe\bmz-player-viewer-v3";
+const DEFAULT_ENDPOINT: &str = r"\\.\pipe\bmz-player-viewer-v3";
 #[cfg(not(windows))]
-const LOOPBACK_ADDRESS: &str = "127.0.0.1:39078";
+const DEFAULT_ENDPOINT: &str = "127.0.0.1:39078";
 const MAX_COMMAND_BYTES: usize = 1024 * 1024;
 const COMMAND_ACK: u8 = 0x06;
 
@@ -62,12 +63,12 @@ pub fn request_quit() -> Result<bool> {
 }
 
 fn request_command(command: &ViewerCommand) -> Result<bool> {
-    platform::request_command(command)
+    platform::request_command(DEFAULT_ENDPOINT, command)
 }
 
 /// プロセス終了まで複数のビューワー命令を受け取れるlistenerを開始する。
 pub fn start_listener(on_command: impl Fn(ViewerCommand) + Send + 'static) -> Result<()> {
-    platform::start_listener(on_command)
+    platform::start_listener(DEFAULT_ENDPOINT, on_command).map(|_| ())
 }
 
 fn write_command(stream: &mut (impl Read + Write), command: &ViewerCommand) -> Result<()> {
@@ -141,9 +142,9 @@ mod platform {
         }
     }
 
-    pub(super) fn request_command(command: &ViewerCommand) -> Result<bool> {
+    pub(super) fn request_command(endpoint: &str, command: &ViewerCommand) -> Result<bool> {
         for attempt in 0..PIPE_CONNECT_RETRIES {
-            match OpenOptions::new().read(true).write(true).open(WINDOWS_PIPE_NAME) {
+            match OpenOptions::new().read(true).write(true).open(endpoint) {
                 Ok(mut pipe) => {
                     write_command(&mut pipe, command)
                         .context("failed to send command to the BMZ viewer pipe")?;
@@ -171,14 +172,18 @@ mod platform {
         Ok(false)
     }
 
+    /// Returns the pipe name the listener serves.
     pub(super) fn start_listener(
+        endpoint: &str,
         on_command: impl Fn(ViewerCommand) + Send + 'static,
-    ) -> Result<()> {
+    ) -> Result<String> {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let endpoint = endpoint.to_owned();
+        let served = endpoint.clone();
         std::thread::Builder::new()
             .name("viewer-command-listener".to_string())
             .spawn(move || {
-                let name: Vec<u16> = std::ffi::OsStr::new(WINDOWS_PIPE_NAME)
+                let name: Vec<u16> = std::ffi::OsStr::new(&endpoint)
                     .encode_wide()
                     .chain(std::iter::once(0))
                     .collect();
@@ -227,7 +232,8 @@ mod platform {
         ready_rx
             .recv()
             .context("viewer command listener exited before initialization")?
-            .context("failed to create the BMZ viewer pipe")
+            .context("failed to create the BMZ viewer pipe")?;
+        Ok(served)
     }
 }
 
@@ -238,8 +244,8 @@ mod platform {
 
     use super::*;
 
-    pub(super) fn request_command(command: &ViewerCommand) -> Result<bool> {
-        match TcpStream::connect(LOOPBACK_ADDRESS) {
+    pub(super) fn request_command(endpoint: &str, command: &ViewerCommand) -> Result<bool> {
+        match TcpStream::connect(endpoint) {
             Ok(mut stream) => {
                 write_command(&mut stream, command)
                     .context("failed to send command to the BMZ viewer listener")?;
@@ -257,11 +263,14 @@ mod platform {
         }
     }
 
+    /// Returns the bound address, which differs from `endpoint` for port 0.
     pub(super) fn start_listener(
+        endpoint: &str,
         on_command: impl Fn(ViewerCommand) + Send + 'static,
-    ) -> Result<()> {
-        let listener = TcpListener::bind(LOOPBACK_ADDRESS)
-            .context("failed to bind the BMZ viewer listener")?;
+    ) -> Result<String> {
+        let listener =
+            TcpListener::bind(endpoint).context("failed to bind the BMZ viewer listener")?;
+        let served = listener.local_addr()?.to_string();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         std::thread::Builder::new()
             .name("viewer-command-listener".to_string())
@@ -284,7 +293,7 @@ mod platform {
             })
             .context("failed to spawn the viewer command listener")?;
         ready_rx.recv().context("viewer command listener exited before initialization")?;
-        Ok(())
+        Ok(served)
     }
 }
 
@@ -313,41 +322,50 @@ mod tests {
         );
     }
 
+    /// The production endpoint is fixed, so a test listener there would collide with a
+    /// running viewer or with tests of another checkout. Serve a private endpoint instead.
+    fn private_endpoint() -> String {
+        #[cfg(windows)]
+        {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            format!(
+                r"\\.\pipe\bmz-player-viewer-test-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            )
+        }
+        #[cfg(not(windows))]
+        {
+            "127.0.0.1:0".to_string()
+        }
+    }
+
+    fn play(path: &str, measure: u32, battle: bool) -> ViewerCommand {
+        ViewerCommand::Play {
+            path: PathBuf::from(path),
+            measure,
+            battle,
+            play_overrides: Default::default(),
+            window_overrides: Default::default(),
+        }
+    }
+
     #[test]
     fn play_stop_and_quit_requests_round_trip_to_persistent_listener() {
         let (tx, rx) = mpsc::sync_channel(4);
-        start_listener(move |command| tx.send(command).unwrap()).unwrap();
+        let endpoint =
+            platform::start_listener(&private_endpoint(), move |command| tx.send(command).unwrap())
+                .unwrap();
+        let request = |command: &ViewerCommand| platform::request_command(&endpoint, command);
 
-        let path = PathBuf::from(r"C:\譜面\_temp.bms");
-        assert!(request_play(&path, 12, true).unwrap());
-        assert_eq!(
-            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
-            ViewerCommand::Play {
-                path,
-                measure: 12,
-                battle: true,
-                play_overrides: Default::default(),
-                window_overrides: Default::default()
-            }
-        );
-
-        assert!(request_stop().unwrap());
-        assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), ViewerCommand::Stop);
-
-        let replacement = PathBuf::from(r"C:\譜面\replacement.bms");
-        assert!(request_play(&replacement, 3, false).unwrap());
-        assert_eq!(
-            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
-            ViewerCommand::Play {
-                path: replacement,
-                measure: 3,
-                battle: false,
-                play_overrides: Default::default(),
-                window_overrides: Default::default()
-            }
-        );
-
-        assert!(request_quit().unwrap());
-        assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), ViewerCommand::Quit);
+        for command in [
+            play(r"C:\譜面\_temp.bms", 12, true),
+            ViewerCommand::Stop,
+            play(r"C:\譜面\replacement.bms", 3, false),
+            ViewerCommand::Quit,
+        ] {
+            assert!(request(&command).unwrap());
+            assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), command);
+        }
     }
 }
