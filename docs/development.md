@@ -212,3 +212,40 @@ cargo test -p bmz-player --locked screen_dimensions_follow_offscreen_output_and_
 
 ウィンドウの手動確認では、起動直後、リサイズ、高DPI環境でロード時とcallbackの
 寸法を表示し、スキン設計解像度や内部解像度へ置き換わらないことを確認します。
+
+## テストの一時リソースと並列実行
+
+`cargo test` は1つのテストバイナリの中で全テストを並列に動かします。さらに別のworktree、
+CIジョブ、IDEとターミナルなど、別のテストプロセスが同時に動くことがあります。
+テスト同士・テストプロセス同士が干渉しないよう、次の規則に従います。
+
+- 一時ファイル・ディレクトリは `tempfile::TempDir`（`tempfile::Builder` でprefixを付けてよい）
+  を作り、テストが寿命の間保持します。片付けはDropに任せ、手動の `remove_dir_all` は書きません。
+  失敗したテストの残骸も残りません。
+- 名前にPIDだけ、時刻だけ、ファイルの長さ等を使って独自に一時パスを作りません。
+  同じプロセスでは一意でも、PIDの再利用や別プロセスとの同時実行で衝突します。
+- 一時ディレクトリ直下（`std::env::temp_dir()` そのもの）にファイルを置いたり、
+  それをprofile root等として渡したりしません。譜面と参照する音声・画像のように
+  「隣に置く」必要があるファイルも、テスト専用のディレクトリの中に作ります。
+- 「まだ存在しないパス」が必要なテストは、`TempDir` の中の未作成パスを使います。
+- ソケット等の待受先は、本番の固定アドレスを使わずOSに割り当てさせます（`127.0.0.1:0`）。
+  実行中のBMZや別のテストプロセスと衝突しないようにするためです。
+- 非同期の処理を待つときは、途中の状態ではなく最終状態（例: jobの `failed`）を条件にします。
+
+再現の確認には、同じテストを2つのプロセスで同時に繰り返し実行するのが有効です。
+
+```bash
+bin=$(cargo test -p <crate> --locked --lib --no-run --message-format=json \
+  | python3 -c "import sys,json;[print(m['executable']) for m in map(json.loads,sys.stdin) if m.get('reason')=='compiler-artifact' and m.get('executable')]")
+for i in $(seq 1 50); do
+  (cd crates/<crate> && "$bin" --exact <test path>) & (cd crates/<crate> && "$bin" --exact <test path>); wait
+done
+```
+
+複数のworktreeで `CARGO_TARGET_DIR` を共有すると、内容の同じクレートは別のworktreeで
+作ったテストバイナリが再利用され、`env!("CARGO_MANIFEST_DIR")` に元のworktreeのパスが残ります。
+そのworktreeを削除すると、同梱データを参照するテストが存在しないパスを読んで失敗します。
+worktreeごとにtargetを分けるか、削除したworktreeの成果物を `cargo clean` してから実行します。
+
+実スキンを読むテストはメモリを多く使います。`--test-threads` を大きくしたり、
+複数のテストプロセスを同時に走らせたりするとOOMで強制終了されることがあります（終了コード137）。
