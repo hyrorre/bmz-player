@@ -62,6 +62,7 @@ fn floating_hispeed_recalculation_preserves_sub_one_hsfix_base() {
 #[test]
 fn floating_hispeed_recalculation_uses_current_bpm_after_chart_start() {
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.lane.sudden = 0;
     profile.lane.floating_policy = FloatingPolicyConfig::Locked;
     profile.lane.hispeed_auto_adjust = true;
     profile.lane.target_green_number = 300;
@@ -93,6 +94,7 @@ fn floating_hispeed_recalculation_uses_current_bpm_after_chart_start() {
 #[test]
 fn lane_cover_change_uses_hsfix_base_when_hispeed_auto_adjust_is_off() {
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.lane.sudden = 0;
     profile.lane.floating_policy = FloatingPolicyConfig::Locked;
     profile.lane.hispeed_auto_adjust = false;
     profile.lane.target_green_number = 300;
@@ -263,24 +265,26 @@ fn lane_cover_step_moves_one_profile_unit() {
 }
 
 #[test]
-fn lane_cover_step_accelerates_on_key_repeat() {
+fn lane_cover_step_uses_press_step_and_ignores_os_key_repeat() {
     assert_eq!(
         lane_cover_step(PhysicalKey::Code(KeyCode::ArrowUp), ElementState::Pressed, false),
-        Some(0.001)
+        Some(lane_cover_units_to_delta(10))
     );
+    assert_eq!(
+        lane_cover_step(PhysicalKey::Code(KeyCode::ArrowDown), ElementState::Pressed, false),
+        Some(-lane_cover_units_to_delta(10))
+    );
+    // 長押しはOSのキーリピートではなくLaneCoverKeyHoldで扱う。
     assert_eq!(
         lane_cover_step(PhysicalKey::Code(KeyCode::ArrowUp), ElementState::Pressed, true),
-        Some(0.01)
-    );
-    assert_eq!(
-        lane_cover_step(PhysicalKey::Code(KeyCode::ArrowDown), ElementState::Pressed, true),
-        Some(-0.01)
+        None
     );
 }
 
 #[test]
 fn lane_cover_step_clamps_sudden_and_lift_to_combined_range() {
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.lane.lift_enabled = true;
     profile.play.lane_effect = LaneEffectConfig::Sudden;
     let mut session = crate::screens::play_session::build_game_session(
         std::sync::Arc::new(app_test_chart()),
@@ -558,7 +562,8 @@ fn green_number_step_switches_normal_hispeed_to_floating() {
 
 #[test]
 fn active_lane_state_rejects_all_no_speed_controls() {
-    let profile = ProfileConfig::new_default("default", "Default", 1);
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.lane.sudden = 0;
     let mut session = crate::screens::play_session::build_game_session(
         std::sync::Arc::new(app_test_chart()),
         &profile,
@@ -655,4 +660,102 @@ fn e1_hispeed_change_keeps_target_green_during_play() {
     ));
 
     assert_eq!(session.target_green_number, 300);
+}
+
+#[test]
+fn lane_cover_key_hold_waits_for_delay_then_steps_every_frame_tick() {
+    let input = crate::config::play_input::default_profile_input();
+    let start = Instant::now();
+    let tick = Duration::from_micros(LANE_COVER_HOLD_TICK_US);
+    let delay = Duration::from_millis(u64::from(input.lane_cover_hold_delay_ms));
+    let mut hold = LaneCoverKeyHold::new("ArrowUp".to_string(), 1, false, start);
+
+    assert_eq!(hold.take_due_units(start + delay - Duration::from_millis(1), &input), 0);
+    // 待機時間に達した時点で1回目の連続変化。
+    assert_eq!(hold.take_due_units(start + delay, &input), 3);
+    assert_eq!(hold.take_due_units(start + delay, &input), 0);
+    // 3 tick 分進むと、まとめて加える。
+    assert_eq!(hold.take_due_units(start + delay + tick * 3, &input), 9);
+
+    let mut down = LaneCoverKeyHold::new("ArrowDown".to_string(), -1, true, start);
+    // Shift併用は1ずつ。フレームが止まっても1秒分 (60 tick) までに抑える。
+    assert_eq!(down.take_due_units(start + delay + Duration::from_secs(5), &input), -60);
+}
+
+#[test]
+fn lane_cover_press_step_uses_profile_value_and_shift_fine_step() {
+    let mut input = crate::config::play_input::default_profile_input();
+    assert_eq!(lane_cover_press_step_units(&input, false), 10);
+    assert_eq!(lane_cover_press_step_units(&input, true), 1);
+    input.lane_cover_step = 0;
+    assert_eq!(lane_cover_press_step_units(&input, false), 1);
+    input.lane_cover_step = 25;
+    assert_eq!(lane_cover_press_step_units(&input, false), 25);
+    assert_eq!(lane_cover_press_step_units(&input, true), 1);
+}
+
+#[test]
+fn analog_lane_cover_zero_delta_recalculates_floating_at_current_bpm() {
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.lane.floating_policy = FloatingPolicyConfig::Locked;
+    profile.lane.hispeed_auto_adjust = true;
+    profile.lane.target_green_number = 300;
+    profile.lane.sudden = 0;
+    profile.play.lane_effect = LaneEffectConfig::Sudden;
+    let mut chart = app_test_chart();
+    chart.metadata.initial_bpm = 120.0;
+    chart.timing_events.push(bmz_chart::model::TimingEvent {
+        tick: bmz_core::time::ChartTick(48),
+        time: TimeUs(1_000_000),
+        kind: bmz_chart::model::TimingEventKind::BpmChange { bpm: 240.0 },
+    });
+    let frame = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let mut session = crate::screens::play_session::build_game_session(
+        std::sync::Arc::new(chart),
+        &profile,
+        crate::screens::play_session::PlaySessionOptions {
+            hs_fix: HsFixOption::StartBpm,
+            ..Default::default()
+        },
+    );
+    session.audio_clock =
+        bmz_audio::clock::AudioClock::with_position(48_000, 0, 0, frame.clone(), true);
+    // BPM 240の区間 (2秒時点) まで進める。
+    frame.store(96_000, std::sync::atomic::Ordering::Relaxed);
+    let before = session.hispeed;
+    let lane_cover = session.lane_cover;
+
+    let mut lane_target = PlayLaneTarget::Lift;
+    assert!(apply_play_lane_action_to_session(
+        &mut session,
+        &mut lane_target,
+        PlayLaneAction::AnalogLaneCoverDelta(0.0),
+        false,
+        0.5,
+    ));
+
+    assert_eq!(session.lane_cover, lane_cover);
+    assert!((session.hispeed - before / 2.0).abs() < 0.000_1, "hispeed={}", session.hispeed);
+}
+
+#[test]
+fn floating_start_ignores_saved_amount_of_disabled_sudden() {
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.lane.floating_policy = FloatingPolicyConfig::Locked;
+    profile.lane.target_green_number = 300;
+    profile.lane.sudden = 500;
+    profile.play.lane_effect = LaneEffectConfig::Off;
+    let mut reference_profile = profile.clone();
+    reference_profile.lane.sudden = 0;
+    let build = |profile: &ProfileConfig| {
+        crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(app_test_chart()),
+            profile,
+            crate::screens::play_session::PlaySessionOptions::default(),
+        )
+    };
+
+    let session = build(&profile);
+    assert!(!session.lanecover_enabled);
+    assert_eq!(session.hispeed, build(&reference_profile).hispeed);
 }

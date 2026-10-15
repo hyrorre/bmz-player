@@ -344,6 +344,17 @@ impl WinitApp {
         let mut session_options =
             play_session_options_from_start(&self.play_session_app_config(), options.clone());
         session_options.play_config_key_mode = Some(play_config_key_mode);
+        // CLIの一時上書き中とコースのNoSpeed制約中は、profileの量を書き換えない。
+        if self.boot.profile_config.cli_play.is_none()
+            && session_options.speed_constraint != bmz_core::course::CourseSpeedConstraint::NoSpeed
+            && self.boot.profile_config.fill_zero_lane_cover_amounts()
+        {
+            self.boot.profile_config.sync_active_play_mode();
+            tracing::info!(
+                key_mode = ?play_config_key_mode,
+                "filled zero lane cover amounts for play start"
+            );
+        }
         crate::screens::play_session::apply_placeholder_session_visuals(
             &mut snapshot,
             &self.boot.profile_config,

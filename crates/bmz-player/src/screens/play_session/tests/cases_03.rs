@@ -473,6 +473,7 @@ fn build_game_session_uses_hidden_cover_only_for_hidden_effects() {
 #[test]
 fn build_game_session_maps_cover_skin_options_from_enable_settings() {
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.lane.lift_enabled = true;
     profile.play.lane_effect = LaneEffectConfig::Off;
     profile.lane.sudden = 290;
     profile.lane.lift = 222;
@@ -508,6 +509,7 @@ fn build_game_session_maps_cover_skin_options_from_enable_settings() {
 #[test]
 fn build_game_session_clamps_lane_cover_to_remaining_lift_range() {
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.lane.lift_enabled = true;
     profile.play.lane_effect = LaneEffectConfig::Sudden;
     profile.lane.sudden = 900;
     profile.lane.lift = 200;

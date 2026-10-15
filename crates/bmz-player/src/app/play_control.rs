@@ -1,8 +1,8 @@
 use crate::config::profile_config::{InputActionConfig, ProfileInputConfig};
 use bmz_gameplay::input::backend::PhysicalControl;
 
+use super::LANE_COVER_STEP;
 use super::input_runtime::ControlInputEvent;
-use super::{LANE_COVER_REPEAT_STEP, LANE_COVER_STEP};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum HispeedChange {
@@ -85,9 +85,126 @@ pub(super) enum GreenNumberChange {
     Down,
 }
 
+/// レーンカバー長押しで連続変化を加える間隔 (1/60秒)。
+pub(super) const LANE_COVER_HOLD_TICK_US: u64 = 1_000_000 / 60;
+/// フレームが止まった後に一度に加える連続変化の上限 (1秒分)。
+const LANE_COVER_HOLD_MAX_TICKS_PER_UPDATE: u32 = 60;
+
+/// ↑↓ (PlayLaneCoverUp/Down) の長押し状態。OSのキーリピートには依存しない。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct LaneCoverKeyHold {
+    pub(super) control: String,
+    /// `PlayLaneCoverUp` は +1、`PlayLaneCoverDown` は -1。
+    pub(super) direction: i32,
+    /// Shift併用の微調整。押した時点で決める。
+    pub(super) fine: bool,
+    pub(super) started_at: std::time::Instant,
+    pub(super) applied_ticks: u32,
+}
+
+impl LaneCoverKeyHold {
+    pub(super) fn new(
+        control: String,
+        direction: i32,
+        fine: bool,
+        started_at: std::time::Instant,
+    ) -> Self {
+        Self { control, direction, fine, started_at, applied_ticks: 0 }
+    }
+
+    /// `now` までに加えるべき連続変化のうち未適用の分を返し、適用済みにする。
+    /// 戻り値は1/1000単位の符号付き変化量。
+    pub(super) fn take_due_units(
+        &mut self,
+        now: std::time::Instant,
+        input: &ProfileInputConfig,
+    ) -> i32 {
+        let elapsed = now.saturating_duration_since(self.started_at);
+        let delay = std::time::Duration::from_millis(u64::from(input.lane_cover_hold_delay_ms));
+        let Some(holding) = elapsed.checked_sub(delay) else {
+            return 0;
+        };
+        let due = u32::try_from(holding.as_micros() / u128::from(LANE_COVER_HOLD_TICK_US))
+            .unwrap_or(u32::MAX)
+            .saturating_add(1);
+        let ticks =
+            due.saturating_sub(self.applied_ticks).min(LANE_COVER_HOLD_MAX_TICKS_PER_UPDATE);
+        self.applied_ticks = due;
+        let step = if self.fine { 1 } else { lane_cover_hold_step_units(input) };
+        self.direction * step * ticks as i32
+    }
+}
+
+/// ↑↓を1回押したときの変化量 (1/1000単位)。Shift併用時は常に1。
+pub(super) fn lane_cover_press_step_units(input: &ProfileInputConfig, fine: bool) -> i32 {
+    if fine {
+        1
+    } else {
+        input.lane_cover_step.clamp(
+            crate::config::profile_config::LANE_COVER_STEP_MIN,
+            crate::config::profile_config::LANE_COVER_STEP_MAX,
+        ) as i32
+    }
+}
+
+fn lane_cover_hold_step_units(input: &ProfileInputConfig) -> i32 {
+    input.lane_cover_hold_step.clamp(
+        crate::config::profile_config::LANE_COVER_HOLD_STEP_MIN,
+        crate::config::profile_config::LANE_COVER_HOLD_STEP_MAX,
+    ) as i32
+}
+
+pub(super) fn lane_cover_units_to_delta(units: i32) -> f32 {
+    units as f32 * LANE_COVER_STEP
+}
+
+/// キーボード入力がレーンカバー操作キーなら、そのcontrol名と向き (+1 / -1) を返す。
+/// 押下・解放のどちらにも使う。
+pub(super) fn keyboard_lane_cover_direction(
+    event: &ControlInputEvent,
+    input: &ProfileInputConfig,
+) -> Option<(String, i32)> {
+    let PhysicalControl::KeyboardKey(control) = event.physical.as_ref()? else {
+        return None;
+    };
+    let direction = match keyboard_shortcut_action(control, input)? {
+        InputActionConfig::PlayLaneCoverUp => 1,
+        InputActionConfig::PlayLaneCoverDown => -1,
+        _ => return None,
+    };
+    Some((control.clone(), direction))
+}
+
+fn keyboard_shortcut_action(
+    control: &str,
+    input: &ProfileInputConfig,
+) -> Option<InputActionConfig> {
+    // 設定ファイル内の行順に依存させず、プレイ操作の固定順で同一キーを
+    // 解決する。共通 E1〜E4 は呼び出し側で先に判定されるため、ここでは
+    // プレイ用ショートカット同士の決定順だけを定義する。
+    crate::config::profile_config::PLAY_KEYBOARD_SHORTCUT_ACTIONS.iter().copied().find(|action| {
+        input.ui.bindings.iter().any(|entry| {
+            entry.device == "keyboard"
+                && entry.action == Some(*action)
+                && keyboard_controls_match(&entry.control, control)
+        })
+    })
+}
+
+#[cfg(test)]
 pub(super) fn keyboard_lane_action(
     event: &ControlInputEvent,
     input: &ProfileInputConfig,
+) -> Option<PlayLaneAction> {
+    keyboard_lane_action_with_fine(event, input, false)
+}
+
+/// `fine_lane_cover` はShift併用の微調整。レーンカバー操作はOSのキーリピートを
+/// 無視し、長押しは [`LaneCoverKeyHold`] で扱う。
+pub(super) fn keyboard_lane_action_with_fine(
+    event: &ControlInputEvent,
+    input: &ProfileInputConfig,
+    fine_lane_cover: bool,
 ) -> Option<PlayLaneAction> {
     if !event.pressed {
         return None;
@@ -95,26 +212,16 @@ pub(super) fn keyboard_lane_action(
     let PhysicalControl::KeyboardKey(control) = event.physical.as_ref()? else {
         return None;
     };
-    let lane_cover_step = if event.repeat { LANE_COVER_REPEAT_STEP } else { LANE_COVER_STEP };
-    // 設定ファイル内の行順に依存させず、プレイ操作の固定順で同一キーを
-    // 解決する。共通 E1〜E4 は呼び出し側で先に判定されるため、ここでは
-    // プレイ用ショートカット同士の決定順だけを定義する。
-    let action = crate::config::profile_config::PLAY_KEYBOARD_SHORTCUT_ACTIONS
-        .iter()
-        .copied()
-        .find(|action| {
-            input.ui.bindings.iter().any(|entry| {
-                entry.device == "keyboard"
-                    && entry.action == Some(*action)
-                    && keyboard_controls_match(&entry.control, control)
-            })
-        })?;
-    match action {
+    let lane_cover_step =
+        lane_cover_units_to_delta(lane_cover_press_step_units(input, fine_lane_cover));
+    match keyboard_shortcut_action(control, input)? {
         InputActionConfig::PlayHispeedDown => Some(PlayLaneAction::Hispeed(HispeedChange::Down)),
         InputActionConfig::PlayHispeedUp => Some(PlayLaneAction::Hispeed(HispeedChange::Up)),
-        InputActionConfig::PlayLaneCoverUp => Some(PlayLaneAction::LaneCoverDelta(lane_cover_step)),
+        InputActionConfig::PlayLaneCoverUp => {
+            (!event.repeat).then_some(PlayLaneAction::LaneCoverDelta(lane_cover_step))
+        }
         InputActionConfig::PlayLaneCoverDown => {
-            Some(PlayLaneAction::LaneCoverDelta(-lane_cover_step))
+            (!event.repeat).then_some(PlayLaneAction::LaneCoverDelta(-lane_cover_step))
         }
         InputActionConfig::PlayVisualOffsetUp => Some(PlayLaneAction::VisualOffsetDelta(1)),
         InputActionConfig::PlayVisualOffsetDown => Some(PlayLaneAction::VisualOffsetDelta(-1)),
@@ -201,12 +308,14 @@ mod tests {
         );
         assert_eq!(
             keyboard_lane_action(&keyboard(KeyCode::ArrowUp, false), &input),
-            Some(PlayLaneAction::LaneCoverDelta(LANE_COVER_STEP))
+            Some(PlayLaneAction::LaneCoverDelta(lane_cover_units_to_delta(10)))
         );
         assert_eq!(
-            keyboard_lane_action(&keyboard(KeyCode::ArrowDown, true), &input),
-            Some(PlayLaneAction::LaneCoverDelta(-LANE_COVER_REPEAT_STEP))
+            keyboard_lane_action_with_fine(&keyboard(KeyCode::ArrowDown, false), &input, true),
+            Some(PlayLaneAction::LaneCoverDelta(-lane_cover_units_to_delta(1)))
         );
+        // 長押しはOSのキーリピートではなくLaneCoverKeyHoldで扱う。
+        assert_eq!(keyboard_lane_action(&keyboard(KeyCode::ArrowDown, true), &input), None);
     }
 
     #[test]
@@ -236,14 +345,14 @@ mod tests {
                 KeyCode::ArrowUp,
                 KeyCode::KeyK,
                 "K",
-                PlayLaneAction::LaneCoverDelta(LANE_COVER_REPEAT_STEP),
+                PlayLaneAction::LaneCoverDelta(lane_cover_units_to_delta(10)),
             ),
             (
                 InputActionConfig::PlayLaneCoverDown,
                 KeyCode::ArrowDown,
                 KeyCode::KeyL,
                 "L",
-                PlayLaneAction::LaneCoverDelta(-LANE_COVER_REPEAT_STEP),
+                PlayLaneAction::LaneCoverDelta(-lane_cover_units_to_delta(10)),
             ),
         ] {
             let target = KeyBindingTarget::Action { action, slot: KeyBindingSlot::KeyboardPrimary };
@@ -251,7 +360,7 @@ mod tests {
             input = toml::from_str(&toml::to_string(&input).unwrap()).unwrap();
             crate::config::play_input::normalize_profile_input(&mut input);
             assert_eq!(keyboard_lane_action(&keyboard(old_key, false), &input), None);
-            assert_eq!(keyboard_lane_action(&keyboard(new_key, true), &input), Some(expected));
+            assert_eq!(keyboard_lane_action(&keyboard(new_key, false), &input), Some(expected));
             let mut release = keyboard(new_key, false);
             release.pressed = false;
             assert_eq!(keyboard_lane_action(&release, &input), None);

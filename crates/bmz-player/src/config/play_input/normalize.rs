@@ -196,6 +196,9 @@ pub fn default_profile_input() -> ProfileInputConfig {
         gamepad1: GamepadScratchConfig::default(),
         gamepad2: GamepadScratchConfig::default(),
         analog_ticks_per_scroll: 3,
+        lane_cover_step: crate::config::profile_config::default_lane_cover_step(),
+        lane_cover_hold_delay_ms: crate::config::profile_config::default_lane_cover_hold_delay_ms(),
+        lane_cover_hold_step: crate::config::profile_config::default_lane_cover_hold_step(),
         keyboard_release_bounce_ms: 0,
         controller_release_bounce_ms: 0,
     }

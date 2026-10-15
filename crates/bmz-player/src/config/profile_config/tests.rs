@@ -1209,3 +1209,59 @@ fn play_mode_input_omits_empty_hispeed_directions_and_reads_old_profiles() {
     assert!(config.hispeed.is_empty());
     assert!(!toml::to_string(&config).unwrap().contains("hispeed"));
 }
+
+#[test]
+fn new_profile_uses_visible_default_lane_cover_amounts() {
+    let profile = ProfileConfig::new_default("default", "Player", 0);
+    assert_eq!(profile.lane.sudden, DEFAULT_LANE_COVER_AMOUNT);
+    assert_eq!(profile.lane.hidden, DEFAULT_LANE_COVER_AMOUNT);
+    assert_eq!(PlayModeConfig::default().sudden, DEFAULT_LANE_COVER_AMOUNT);
+    assert_eq!(PlayModeConfig::default().hidden, DEFAULT_LANE_COVER_AMOUNT);
+    assert_eq!(profile.lane.lift, DEFAULT_LANE_COVER_AMOUNT);
+    assert!(!profile.lane.lift_enabled);
+    assert!(!PlayModeConfig::default().lift_enabled);
+    assert_eq!(profile.input.lane_cover_step, 10);
+    assert_eq!(profile.input.lane_cover_hold_delay_ms, 300);
+    assert_eq!(profile.input.lane_cover_hold_step, 3);
+}
+
+#[test]
+fn lane_cover_key_settings_default_for_old_profiles() {
+    let profile = ProfileConfig::new_default("default", "Player", 0);
+    let mut value = toml::Value::try_from(&profile).unwrap();
+    let input = value.get_mut("input").unwrap().as_table_mut().unwrap();
+    for key in ["lane_cover_step", "lane_cover_hold_delay_ms", "lane_cover_hold_step"] {
+        assert!(input.remove(key).is_some(), "{key}");
+    }
+    let decoded: ProfileConfig = value.try_into().unwrap();
+    assert_eq!(decoded.input.lane_cover_step, 10);
+    assert_eq!(decoded.input.lane_cover_hold_delay_ms, 300);
+    assert_eq!(decoded.input.lane_cover_hold_step, 3);
+}
+
+#[test]
+fn play_start_fills_only_enabled_zero_lane_covers() {
+    let mut profile = ProfileConfig::new_default("default", "Player", 0);
+    profile.play.lane_effect = LaneEffectConfig::Sudden;
+    profile.lane.sudden = 0;
+    profile.lane.hidden = 0;
+    profile.lane.lift = 0;
+    profile.lane.lift_enabled = false;
+
+    assert!(profile.fill_zero_lane_cover_amounts());
+    assert_eq!(profile.lane.sudden, DEFAULT_LANE_COVER_AMOUNT);
+    // HIDDEN+とLIFTは無効なので保存値を変えない。
+    assert_eq!(profile.lane.hidden, 0);
+    assert_eq!(profile.lane.lift, 0);
+    assert!(!profile.fill_zero_lane_cover_amounts());
+
+    profile.play.lane_effect = LaneEffectConfig::HiddenSudden;
+    profile.lane.sudden = 37;
+    assert!(profile.fill_zero_lane_cover_amounts());
+    assert_eq!(profile.lane.sudden, 37);
+    assert_eq!(profile.lane.hidden, DEFAULT_LANE_COVER_AMOUNT);
+
+    profile.lane.lift_enabled = true;
+    assert!(profile.fill_zero_lane_cover_amounts());
+    assert_eq!(profile.lane.lift, DEFAULT_LANE_COVER_AMOUNT);
+}

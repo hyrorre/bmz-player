@@ -140,6 +140,9 @@ impl SettingsEntryId {
         Self::AnalogScratchSensitivity2P,
         Self::AnalogScratchThreshold2P,
         Self::AnalogTicksPerScroll,
+        Self::LaneCoverStep,
+        Self::LaneCoverHoldDelayMs,
+        Self::LaneCoverHoldStep,
         Self::KeyboardReleaseBounceMs,
         Self::ControllerReleaseBounceMs,
     ];
@@ -281,6 +284,9 @@ impl SettingsEntryId {
             Self::AnalogScratchSensitivity2P => "2P ANALOG SENS",
             Self::AnalogScratchThreshold2P => "2P ANALOG STOP",
             Self::AnalogTicksPerScroll => "ANALOG SCROLL",
+            Self::LaneCoverStep => "LANE COVER STEP",
+            Self::LaneCoverHoldDelayMs => "LANE COVER HOLD DELAY",
+            Self::LaneCoverHoldStep => "LANE COVER HOLD STEP",
             Self::KeyboardReleaseBounceMs => "KEYBOARD BOUNCE",
             Self::ControllerReleaseBounceMs => "CONTROLLER BOUNCE",
             Self::Hispeed8Key1 => "KEY 1 HS DIRECTION",
@@ -414,6 +420,9 @@ impl SettingsEntryId {
                 "settings-entry-description-analog-scratch-threshold"
             }
             Self::AnalogTicksPerScroll => "settings-entry-description-analog-ticks-per-scroll",
+            Self::LaneCoverStep => "settings-entry-description-lane-cover-step",
+            Self::LaneCoverHoldDelayMs => "settings-entry-description-lane-cover-hold-delay-ms",
+            Self::LaneCoverHoldStep => "settings-entry-description-lane-cover-hold-step",
             Self::KeyboardReleaseBounceMs => "settings-entry-description-keyboard-release-bounce",
             Self::ControllerReleaseBounceMs => {
                 "settings-entry-description-controller-release-bounce"
@@ -708,8 +717,9 @@ mod tests {
             "5 ms"
         );
 
+        // 新規profileのLIFTは既定でOFF。
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::LiftEnabled, 1));
-        assert!(!profile.lane.lift_enabled);
+        assert!(profile.lane.lift_enabled);
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::HispeedAutoAdjust, 1));
         assert!(!profile.lane.hispeed_auto_adjust);
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::ReplayCompress, 1));

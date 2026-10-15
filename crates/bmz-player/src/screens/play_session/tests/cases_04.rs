@@ -134,6 +134,7 @@ fn build_game_session_clamps_profile_hispeed() {
 #[test]
 fn build_game_session_preserves_green_number_below_legacy_hispeed_floor() {
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.play.lane_effect = LaneEffectConfig::Sudden;
     profile.lane.hispeed = 0.5;
     profile.lane.sudden = 286;
     profile.lane.lift = 150;
@@ -214,7 +215,7 @@ fn build_game_session_compensates_floating_hispeed_for_practice_rate() {
     let duration_ms = crate::screens::play_snapshot::display_duration_ms_for_bpm_hispeed(
         crate::screens::play_snapshot::effective_bpm_for_playback_rate(240.0, 200) as f32,
         double_speed.hispeed,
-        double_speed.lane_cover,
+        if double_speed.lanecover_enabled { double_speed.lane_cover } else { 0.0 },
         double_speed.lift,
         1.0,
     )

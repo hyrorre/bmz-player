@@ -1,6 +1,9 @@
 use super::value::{format_random_mix_bpm, format_random_mix_level};
 use super::*;
-use crate::config::profile_config::LaneEffectConfig;
+use crate::config::profile_config::{
+    LANE_COVER_HOLD_DELAY_MS_MAX, LANE_COVER_HOLD_STEP_MAX, LANE_COVER_HOLD_STEP_MIN,
+    LANE_COVER_STEP_MAX, LANE_COVER_STEP_MIN, LaneEffectConfig,
+};
 
 // One entry owns its value binding, adjustment and display. The same definition
 // generates the edit snapshot, so adding a setting cannot omit its undo path.
@@ -877,6 +880,36 @@ define_settings! {
         format: |profile| {
             format!("{} ticks", profile.input.analog_ticks_per_scroll)
         },
+    }
+    LaneCoverStep(u32) {
+        value: [field input.lane_cover_step],
+        adjust: |profile, delta| adjust_u32(
+            &mut profile.input.lane_cover_step,
+            delta,
+            LANE_COVER_STEP_MIN,
+            LANE_COVER_STEP_MAX,
+        ),
+        format: |profile| profile.input.lane_cover_step.to_string(),
+    }
+    LaneCoverHoldDelayMs(u32) {
+        value: [field input.lane_cover_hold_delay_ms],
+        adjust: |profile, delta| adjust_u32(
+            &mut profile.input.lane_cover_hold_delay_ms,
+            delta,
+            0,
+            LANE_COVER_HOLD_DELAY_MS_MAX,
+        ),
+        format: |profile| format!("{} ms", profile.input.lane_cover_hold_delay_ms),
+    }
+    LaneCoverHoldStep(u32) {
+        value: [field input.lane_cover_hold_step],
+        adjust: |profile, delta| adjust_u32(
+            &mut profile.input.lane_cover_hold_step,
+            delta,
+            LANE_COVER_HOLD_STEP_MIN,
+            LANE_COVER_HOLD_STEP_MAX,
+        ),
+        format: |profile| profile.input.lane_cover_hold_step.to_string(),
     }
     KeyboardReleaseBounceMs(u32) {
         value: [field input.keyboard_release_bounce_ms],

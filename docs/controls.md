@@ -655,7 +655,8 @@ E1/E2単押しでは開始・退出しません。E1/E2 hold中はプレイ側�
 | Key | 操作 |
 | --- | --- |
 | Left / Right | Normalは20段階を下げる / 上げる。Classic / Floatingは設定刻みで倍率を下げる / 上げる |
-| Up / Down | SUDDEN+表示中はSUDDEN+、非表示中は有効なLIFT/HIDDEN+を調整 |
+| Up / Down | SUDDEN+表示中はSUDDEN+、非表示中は有効なLIFT/HIDDEN+を調整。押下ごとと長押し中の変化量は下記を参照 |
+| Shift + Up / Down | Up / Downと同じ対象を1ずつ微調整。左右どちらのShiftでもよい |
 | E1 hold + 鍵盤 | KEY MODE ごとのHS方向に従い、Normalは段階、Classic / Floatingは倍率を変更 |
 | E1 hold + E2 | LIFT/HIDDEN+両方有効時は変更対象を切替。それ以外は切替可能な設定でFloatingを切替 |
 | E1 hold + Scratch Up/Down | Up/Downと同じ対象のカバー量を変更 |
@@ -723,6 +724,21 @@ E1+E2の押下エッジごとにLIFT/HIDDEN+を切り替えます。押す順序
 この短押し切替とE1+E2長押しによる中断は共存します。
 HIDDEN+を変更対象にした場合だけ増減方向がSUDDEN+/LIFTと逆になり、カーソルキーと
 E1+ScratchのどちらでもUpでHIDDEN+量が増え、Downで減ります。
+
+カバー量は1000でレーン全体です。Up / Downは押した瞬間に入力設定の `LANE COVER STEP`（既定10）
+だけ動き、`LANE COVER HOLD DELAY`（既定300ms）以上押し続けると、1/60秒ごとに
+`LANE COVER HOLD STEP`（既定3）ずつ動きます。OSのキーリピートは使いません。
+Shiftを押しながら押した場合は、押下時も長押し中も1ずつ動きます。Shiftは押下した時点で判定します。
+7Kの既定ではLShiftがスクラッチなので、演奏中の微調整には未割り当てのRShiftを使うと
+判定に影響しません。3つの値はいずれも1刻みで、範囲は `1..=1000`、`0..=1000ms`、`1..=100` です。
+
+E1+Scratchのアナログ回転は、`ANALOG SCROLL` のtick数に届くたびにカバーを1動かします。
+届かない回転量でも、スクラッチが反応した時点でFloatingのHSを再計算します。LIFTが対象の場合は
+HS Auto AdjustがONのときだけ再計算し、HIDDEN+が対象の場合は再計算しません。
+
+SUDDEN+、HIDDEN+、LIFTの量の既定値は150です。新規profileのLIFTは既定でOFFです。
+有効なカバーの量が0のままプレイを開始すると、開始時に150へ変更して保存します。
+無効なカバー、CLIの一時上書き中、コースのNoSpeed制約中は変更しません。
 
 HS設定は `NORMAL` / `CLASSIC` / `FLOATING` / `NORMAL+FLOATING` /
 `CLASSIC+FLOATING` / `LR2` の6種類です。`NORMAL`、`CLASSIC`、`LR2` ではFloatingと緑数字操作を

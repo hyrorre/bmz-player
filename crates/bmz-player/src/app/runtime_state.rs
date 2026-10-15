@@ -138,6 +138,8 @@ pub(super) struct PlayRuntimeState {
     pub(super) play_option_input: Option<PlayOptionInput>,
     pub(super) play_analog_scroll_buffer: i32,
     pub(super) play_analog_last_tick_at: Option<Instant>,
+    /// ↑↓によるレーンカバー操作の長押し状態。
+    pub(super) lane_cover_key_hold: Option<super::play_control::LaneCoverKeyHold>,
     /// 現在のPlay入場で開始/READY演出を表示するかを表すapp側の表現状態。
     pub(super) play_entry_presentation: PlayEntryPresentation,
     pub(super) play_scene_started_at: Instant,

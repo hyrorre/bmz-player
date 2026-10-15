@@ -614,6 +614,7 @@ fn pending_lane_state_rejects_all_no_speed_controls() {
 #[test]
 fn pending_lane_actions_replay_once_on_loaded_session() {
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.lane.sudden = 0;
     profile.lane.floating_policy = FloatingPolicyConfig::Locked;
     profile.lane.target_green_number = 300;
     profile.play.lane_effect = LaneEffectConfig::Sudden;

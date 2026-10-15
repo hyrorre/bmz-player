@@ -392,7 +392,8 @@ pub fn build_game_session_with_input_backend(
             &mode_config,
             hispeed_mode,
             target_green_number,
-            lane_cover,
+            // SUDDEN+無効時の保存値はFloatingの可視範囲に含めない。
+            if lanecover_enabled_from_mode_config(&mode_config) { lane_cover } else { 0.0 },
             lift,
             &chart,
             &timing_map,

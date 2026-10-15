@@ -1146,11 +1146,11 @@ impl Default for PlayModeConfig {
             normal_hispeed_level: default_normal_hispeed_level(),
             hs_fix: HsFixConfig::Off,
             lane_effect: LaneEffectConfig::Off,
-            sudden: 0,
-            lift: 0,
-            lift_enabled: true,
+            sudden: DEFAULT_LANE_COVER_AMOUNT,
+            lift: DEFAULT_LANE_COVER_AMOUNT,
+            lift_enabled: false,
             hispeed_auto_adjust: true,
-            hidden: 0,
+            hidden: DEFAULT_LANE_COVER_AMOUNT,
             target_green_number: default_target_green_number(),
             constant_enabled: false,
             constant_fade_ms: default_constant_fade_ms(),
@@ -1168,6 +1168,9 @@ impl PlayModeConfig {
 pub const fn default_mode_hispeed() -> f32 {
     2.0
 }
+
+/// SUDDEN+・HIDDEN+・LIFT の既定量。0では有効か無効か分かりづらいため0にしない。
+pub const DEFAULT_LANE_COVER_AMOUNT: u32 = 150;
 
 pub const fn default_target_green_number() -> u32 {
     300

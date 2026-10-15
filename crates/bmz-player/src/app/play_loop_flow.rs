@@ -22,6 +22,7 @@ impl WinitApp {
             self.update_play_ending_snapshot();
             return;
         }
+        self.apply_lane_cover_key_hold(Instant::now());
         if self.play.pending_play_start.is_some() {
             self.update_pending_play_snapshot_timers();
         }
@@ -750,7 +751,53 @@ impl WinitApp {
         );
     }
 
+    /// Shift併用でレーンカバーを1ずつ微調整するか。
+    pub(super) fn lane_cover_fine_modifier_held(&self) -> bool {
+        self.input.pressed_controls.contains("LShift")
+            || self.input.pressed_controls.contains("RShift")
+    }
+
+    /// ↑↓の押下で長押し状態を開始し、同じキーの解放で終える。
+    pub(super) fn update_lane_cover_key_hold(
+        &mut self,
+        event: &ControlInputEvent,
+        applied_press: bool,
+    ) {
+        let Some((control, direction)) =
+            keyboard_lane_cover_direction(event, &self.boot.profile_config.input)
+        else {
+            return;
+        };
+        if event.pressed {
+            self.play.lane_cover_key_hold = applied_press.then(|| {
+                LaneCoverKeyHold::new(
+                    control,
+                    direction,
+                    self.lane_cover_fine_modifier_held(),
+                    Instant::now(),
+                )
+            });
+        } else if self.play.lane_cover_key_hold.as_ref().is_some_and(|hold| hold.control == control)
+        {
+            self.play.lane_cover_key_hold = None;
+        }
+    }
+
+    /// 長押し待機時間を過ぎた↑↓に、1/60秒ごとの連続変化を加える。
+    pub(super) fn apply_lane_cover_key_hold(&mut self, now: Instant) {
+        let Some(hold) = &mut self.play.lane_cover_key_hold else {
+            return;
+        };
+        let units = hold.take_due_units(now, &self.boot.profile_config.input);
+        if units != 0 {
+            self.apply_play_lane_action(PlayLaneAction::LaneCoverDelta(lane_cover_units_to_delta(
+                units,
+            )));
+        }
+    }
+
     pub(super) fn clear_play_control_holds(&mut self) {
+        self.play.lane_cover_key_hold = None;
         self.play.last_play_start_press_at = None;
         self.play.decide_e1_held = false;
         self.play.play_e1_held = false;

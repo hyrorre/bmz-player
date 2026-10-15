@@ -136,6 +136,28 @@ fn normalize_play_mode_config(config: &mut PlayModeConfig) {
     );
 }
 
+impl ProfileConfig {
+    /// プレイ開始時、有効なSUDDEN+・HIDDEN+・LIFTの量が0なら既定量にする。
+    /// 0では有効か無効か分かりづらいため。対象は編集中の現在キーモード。
+    /// 変更した場合は true を返す。
+    pub fn fill_zero_lane_cover_amounts(&mut self) -> bool {
+        let mut changed = false;
+        if self.play.lane_effect.sudden_enabled() && self.lane.sudden == 0 {
+            self.lane.sudden = DEFAULT_LANE_COVER_AMOUNT;
+            changed = true;
+        }
+        if self.play.lane_effect.hidden_enabled() && self.lane.hidden == 0 {
+            self.lane.hidden = DEFAULT_LANE_COVER_AMOUNT;
+            changed = true;
+        }
+        if self.lane.lift_enabled && self.lane.lift == 0 {
+            self.lane.lift = DEFAULT_LANE_COVER_AMOUNT;
+            changed = true;
+        }
+        changed
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -293,6 +293,10 @@ impl WinitApp {
         let steps =
             take_analog_scroll_steps(&mut self.play.play_analog_scroll_buffer, ticks_per_scroll);
         if steps == 0 {
+            // 回転量が1段階に届かなくても、スクラッチが反応した時点でFloatingを再計算する。
+            if mode == PlayAnalogOptionMode::LaneCover {
+                self.apply_play_lane_action(PlayLaneAction::AnalogLaneCoverDelta(0.0));
+            }
             return true;
         }
 

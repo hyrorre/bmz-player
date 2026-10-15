@@ -144,8 +144,18 @@ impl WinitApp {
             }) {
             None
         } else {
-            keyboard_lane_action(&control_event, &self.boot.profile_config.input)
+            keyboard_lane_action_with_fine(
+                &control_event,
+                &self.boot.profile_config.input,
+                self.lane_cover_fine_modifier_held(),
+            )
         };
+        if has_play_control_context && !control_event.repeat {
+            self.update_lane_cover_key_hold(
+                &control_event,
+                matches!(fixed_play_lane_action, Some(PlayLaneAction::LaneCoverDelta(_))),
+            );
+        }
         if self.play.active_play.is_some() {
             self.route_active_play_keyboard(
                 event,

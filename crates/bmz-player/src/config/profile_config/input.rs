@@ -57,6 +57,15 @@ pub struct ProfileInputConfig {
     /// 選曲画面でアナログスクラッチ何 tick ごとにカーソルを 1 つ動かすか (beatoraja の analogTicksPerScroll)。
     #[serde(default = "default_analog_ticks_per_scroll")]
     pub analog_ticks_per_scroll: u32,
+    /// プレイ中のレーンカバー操作キー (↑↓) を1回押したときの変化量。1/1000 単位。
+    #[serde(default = "default_lane_cover_step")]
+    pub lane_cover_step: u32,
+    /// レーンカバー操作キーを押し続けてから連続変化を始めるまでの時間。
+    #[serde(default = "default_lane_cover_hold_delay_ms")]
+    pub lane_cover_hold_delay_ms: u32,
+    /// 連続変化中に1/60秒ごとに加える変化量。1/1000 単位。
+    #[serde(default = "default_lane_cover_hold_step")]
+    pub lane_cover_hold_step: u32,
     /// Release 直後に同じキーボードキーから届く Press を無視する時間。
     ///
     /// 0 はフィルタ無効。物理スイッチの Release 側チャタリングを対象とし、
@@ -111,6 +120,24 @@ fn default_true() -> bool {
 }
 
 fn default_analog_ticks_per_scroll() -> u32 {
+    3
+}
+
+pub const LANE_COVER_STEP_MIN: u32 = 1;
+pub const LANE_COVER_STEP_MAX: u32 = 1000;
+pub const LANE_COVER_HOLD_DELAY_MS_MAX: u32 = 1000;
+pub const LANE_COVER_HOLD_STEP_MIN: u32 = 1;
+pub const LANE_COVER_HOLD_STEP_MAX: u32 = 100;
+
+pub const fn default_lane_cover_step() -> u32 {
+    10
+}
+
+pub const fn default_lane_cover_hold_delay_ms() -> u32 {
+    300
+}
+
+pub const fn default_lane_cover_hold_step() -> u32 {
     3
 }
 

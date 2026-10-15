@@ -204,7 +204,6 @@ pub(super) const AUDIO_DIAGNOSTICS_LOG_INTERVAL: Duration = Duration::from_secs(
 pub(super) const SELECT_PREVIEW_START_DELAY: Duration = Duration::from_millis(400);
 /// レーンカバー / LIFT を上下キーで動かす際のステップ幅。
 pub(super) const LANE_COVER_STEP: f32 = 0.001;
-pub(super) const LANE_COVER_REPEAT_STEP: f32 = 0.01;
 /// アナログスクラッチの tick が途切れたとみなし、端数バッファを捨てるまでの時間 (ms)。
 /// beatoraja の `getAnalogDiffAndReset(i, 200)` の tolerance に相当。
 pub(super) const SELECT_ANALOG_SCROLL_TOLERANCE_MS: u64 = 200;

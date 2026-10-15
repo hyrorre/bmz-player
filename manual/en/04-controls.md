@@ -72,6 +72,7 @@ The display and controls may differ depending on the skin. See [Play options](05
 | --- | --- |
 | Left / Right | Lower / raise hi-speed |
 | Up / Down | Move the lane cover (SUDDEN+ and so on) |
+| Shift + Up / Down | Move the lane cover in small steps |
 | Hold E1 + keys | Change hi-speed |
 | Hold E1 + turntable | Move the lane cover |
 | Hold E2 + keys or turntable | Change the green number (when FLOATING is available) |
