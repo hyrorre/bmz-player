@@ -1339,22 +1339,62 @@ fn initialize_exclusive_client_with_fallbacks(
     sample_rate: u32,
 ) -> Result<(IAudioClient, u32, i64), String> {
     let mut client = initial_client;
-    let mut last_error = None;
+    // Keep every rejected period: the last HRESULT alone does not show which
+    // candidates were tried or why the preferred low period failed.
+    let mut failed_attempts = Vec::new();
     for (index, &period_100ns) in periods_100ns.iter().enumerate() {
         match initialize_exclusive_client(endpoint, client, format, period_100ns, sample_rate) {
-            Ok(value) => return Ok(value),
+            Ok(value) => {
+                if !failed_attempts.is_empty() {
+                    tracing::warn!(
+                        selected = %describe_exclusive_period(value.2, sample_rate),
+                        failed = %failed_attempts.join("; "),
+                        "WASAPI exclusive fell back to a larger period"
+                    );
+                }
+                return Ok(value);
+            }
             Err(error) => {
-                last_error = Some(error);
+                failed_attempts.push(format!(
+                    "{}: {error}",
+                    describe_exclusive_period(period_100ns, sample_rate)
+                ));
                 if index + 1 >= periods_100ns.len() {
                     break;
                 }
                 // Initialize consumes the client on failure paths that don't
                 // return it; open a fresh one for the next candidate period.
-                client = activate_audio_client(endpoint)?;
+                client = match activate_audio_client(endpoint) {
+                    Ok(client) => client,
+                    Err(error) => {
+                        failed_attempts.push(error);
+                        break;
+                    }
+                };
             }
         }
     }
-    Err(last_error.unwrap_or_else(|| "WASAPI exclusive initialize failed".to_string()))
+    Err(exclusive_initialize_failure(&failed_attempts))
+}
+
+/// Period with its approximate millisecond and frame sizes for diagnostics.
+fn describe_exclusive_period(period_100ns: i64, sample_rate: u32) -> String {
+    let frames = (i128::from(period_100ns) * i128::from(sample_rate) + 5_000_000) / 10_000_000;
+    format!(
+        "period {period_100ns} x100ns ({:.2} ms, ~{frames} frames @ {sample_rate} Hz)",
+        period_100ns as f64 / 10_000.0
+    )
+}
+
+fn exclusive_initialize_failure(failed_attempts: &[String]) -> String {
+    if failed_attempts.is_empty() {
+        return "WASAPI exclusive initialize failed: no period candidates".to_string();
+    }
+    format!(
+        "WASAPI exclusive initialize failed for {} attempt(s): {}",
+        failed_attempts.len(),
+        failed_attempts.join("; ")
+    )
 }
 
 #[cfg(test)]
@@ -1420,6 +1460,30 @@ mod tests {
             exclusive_period_candidates(1_000, minimum, minimum),
             vec![minimum, minimum.saturating_mul(2)]
         );
+    }
+
+    #[test]
+    fn exclusive_initialize_failure_lists_every_period_attempt() {
+        // Fixed 256 @ 44.1 kHz.
+        assert_eq!(
+            describe_exclusive_period(58_050, 44_100),
+            "period 58050 x100ns (5.80 ms, ~256 frames @ 44100 Hz)"
+        );
+        let attempts = [
+            format!("{}: E_FIRST", describe_exclusive_period(58_050, 44_100)),
+            format!("{}: E_SECOND", describe_exclusive_period(100_000, 44_100)),
+            "IMMDevice::Activate<IAudioClient>: E_ACTIVATE".to_string(),
+        ];
+        let message = exclusive_initialize_failure(&attempts);
+        assert!(message.starts_with("WASAPI exclusive initialize failed for 3 attempt(s): "));
+        for expected in [
+            "period 58050 x100ns (5.80 ms, ~256 frames @ 44100 Hz): E_FIRST",
+            "period 100000 x100ns (10.00 ms, ~441 frames @ 44100 Hz): E_SECOND",
+            "E_ACTIVATE",
+        ] {
+            assert!(message.contains(expected), "{message}");
+        }
+        assert!(exclusive_initialize_failure(&[]).contains("no period candidates"));
     }
 
     #[test]
