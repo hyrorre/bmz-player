@@ -998,3 +998,7 @@ downloads-cancel = キャンセル
 downloads-summary = 全 { $total } 件 / 完了 { $completed } / 失敗 { $failed } / キャンセル { $cancelled }
 downloads-overall-progress = 終了 { $finished } / { $total } 件
 downloads-bytes-unknown = { $bytes } B 取得済み（総容量不明）
+settings-downloads-source-help = プリセットを選ぶとAPI URLを入力します。提供サービスの稼働状況によっては取得できません。
+settings-downloads-wriggle-status = Wriggle: 接続未確認（検証環境でTLS接続に失敗しました）。
+settings-downloads-required-hashes = 必要なハッシュ: { $hashes }
+settings-downloads-parallelism = HTTP同時取得数

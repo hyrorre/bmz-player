@@ -998,3 +998,7 @@ downloads-cancel = 취소
 downloads-summary = 전체 { $total } / 완료 { $completed } / 실패 { $failed } / 취소 { $cancelled }
 downloads-overall-progress = 종료 { $finished } / { $total } 작업
 downloads-bytes-unknown = { $bytes } B 수신 (전체 크기 알 수 없음)
+settings-downloads-source-help = 프리셋을 선택하면 API URL이 입력됩니다. 제공 서비스 상태에 따라 다운로드할 수 없을 수 있습니다.
+settings-downloads-wriggle-status = Wriggle: 연결 미확인 (검증 환경에서 TLS 연결 실패).
+settings-downloads-required-hashes = 필요한 해시: { $hashes }
+settings-downloads-parallelism = HTTP 동시 다운로드 수

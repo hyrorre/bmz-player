@@ -15,6 +15,7 @@ use std::sync::{
 };
 
 mod bulk;
+mod http_response;
 mod manager;
 pub use bulk::{
     BulkDownloadBatch, BulkDownloadCounts, BulkDownloadPlan, BulkDownloadPreview,
@@ -166,14 +167,25 @@ pub fn choose_missing_chart_action(
         return MissingChartAction::Ipfs { api_url: config.ipfs_api_url.trim().to_string(), cids };
     }
 
+    let identity = ChartDownloadIdentity::from_metadata(metadata);
+    let http_api_url = config.effective_http_api_url();
     if config.http_enabled
-        && !config.http_api_url.trim().is_empty()
-        && !metadata.md5.trim().is_empty()
+        && crate::config::download_sources::template_supports_hashes(
+            http_api_url,
+            identity.md5.is_some(),
+            identity.sha256.is_some(),
+        )
     {
         return MissingChartAction::Http {
-            api_url: config.http_api_url.trim().to_string(),
-            md5: metadata.md5.trim().to_ascii_lowercase(),
-            sha256: metadata.sha256.trim().to_ascii_lowercase(),
+            api_url: http_api_url.to_string(),
+            md5: identity
+                .md5
+                .map(|hash| crate::storage::common::hash_to_hex(&hash))
+                .unwrap_or_default(),
+            sha256: identity
+                .sha256
+                .map(|hash| crate::storage::common::hash_to_hex(&hash))
+                .unwrap_or_default(),
         };
     }
 
@@ -308,23 +320,15 @@ async fn download_chart_inner(
             let scope = format!("{}\n{}", request.data_dir.display(), api_url);
             let api_url = expand_http_api_url(api_url, md5, sha256)?;
             let response = client.get(api_url.clone()).send().await?.error_for_status()?;
-            let (archive_url, direct_response) = if response_is_json(&response) {
-                let content_length = response.content_length().unwrap_or(0);
-                if content_length > MAX_METADATA_BYTES {
-                    bail!("HTTP APIのJSON応答が大きすぎます")
+            let metadata_base = response.url().clone();
+            let (archive_url, direct_response) = match http_response::inspect(response).await? {
+                http_response::HttpPayload::Metadata(value) => {
+                    let download_url = http_response::metadata_download_url(&value)?;
+                    (resolve_http_url(&metadata_base, download_url)?, None)
                 }
-                let body = response.bytes().await?;
-                if body.len() as u64 > MAX_METADATA_BYTES {
-                    bail!("HTTP APIのJSON応答が大きすぎます")
+                http_response::HttpPayload::Archive(response, prefix) => {
+                    (response.url().clone(), Some((response, prefix)))
                 }
-                let value: Value = serde_json::from_slice(&body)
-                    .context("HTTP APIのJSON応答を解析できませんでした")?;
-                let download_url = find_download_url(&value)
-                    .ok_or_else(|| anyhow::anyhow!("HTTP API応答にダウンロードURLがありません"))?;
-                let download_url = resolve_http_url(&api_url, download_url)?;
-                (download_url, None)
-            } else {
-                (response.url().clone(), Some(response))
             };
             let key = format!("{scope}\n{archive_url}");
             // The first owner publishes an extracted directory. Followers keep
@@ -369,10 +373,19 @@ async fn download_chart_inner(
             }
             let archive_response = match direct_response.take() {
                 Some(response) => response,
-                None => client.get(archive_url).send().await?.error_for_status()?,
+                None => (client.get(archive_url).send().await?.error_for_status()?, Vec::new()),
             };
-            anyhow::ensure!(!response_is_json(&archive_response), "archive endpoint returned JSON");
-            save_response_controlled(archive_response, &archive_path, control).await?;
+            anyhow::ensure!(
+                !response_is_json(&archive_response.0),
+                "archive endpoint returned JSON"
+            );
+            save_response_with_prefix(
+                archive_response.0,
+                archive_response.1,
+                &archive_path,
+                control,
+            )
+            .await?;
             {
                 let _permit = services.extraction.lock().unwrap_or_else(|e| e.into_inner());
                 control.check()?;
@@ -497,6 +510,14 @@ fn normalize_ipfs_arg(value: &str) -> Result<String> {
 }
 
 fn expand_http_api_url(template: &str, md5: &str, sha256: &str) -> Result<Url> {
+    anyhow::ensure!(
+        crate::config::download_sources::template_supports_hashes(
+            template,
+            !md5.is_empty(),
+            !sha256.is_empty()
+        ),
+        "HTTP API template requires an unavailable hash"
+    );
     let mut expanded = template.trim().to_string();
     let has_placeholder =
         expanded.contains("{md5}") || expanded.contains("{sha256}") || expanded.contains("%s");
@@ -525,16 +546,9 @@ fn response_is_json(response: &Response) -> bool {
         .is_some_and(|value| value.to_ascii_lowercase().contains("json"))
 }
 
+#[cfg(test)]
 fn find_download_url(value: &Value) -> Option<&str> {
-    let object = value.as_object()?;
-    for key in ["downloadURL", "downloadUrl", "download_url", "song_url", "url"] {
-        if let Some(url) =
-            object.get(key).and_then(Value::as_str).filter(|url| !url.trim().is_empty())
-        {
-            return Some(url);
-        }
-    }
-    object.get("data").and_then(find_download_url)
+    http_response::metadata_download_url(value).ok()
 }
 
 fn resolve_http_url(base: &Url, value: &str) -> Result<Url> {
@@ -544,7 +558,16 @@ fn resolve_http_url(base: &Url, value: &str) -> Result<Url> {
 }
 
 async fn save_response_controlled(
+    response: Response,
+    path: &Path,
+    control: &DownloadControl,
+) -> Result<()> {
+    save_response_with_prefix(response, Vec::new(), path, control).await
+}
+
+async fn save_response_with_prefix(
     mut response: Response,
+    prefix: Vec<u8>,
     path: &Path,
     control: &DownloadControl,
 ) -> Result<()> {
@@ -556,19 +579,45 @@ async fn save_response_controlled(
     }
     let mut file = File::create(path)?;
     let mut total = 0_u64;
-    while let Some(chunk) = response.chunk().await? {
+    let mut prefix = Some(prefix);
+    let mut signature = Vec::new();
+    let mut verified = false;
+    loop {
+        let chunk = if let Some(prefix) = prefix.take() {
+            prefix
+        } else if let Some(chunk) = response.chunk().await? {
+            chunk.to_vec()
+        } else {
+            break;
+        };
         control.check()?;
         total = total.saturating_add(chunk.len() as u64);
         if total > MAX_DOWNLOAD_BYTES {
             bail!("ダウンロードサイズが上限を超えています")
         }
-        file.write_all(&chunk)?;
+        if !verified {
+            signature.extend_from_slice(&chunk);
+            if signature.len() < 6 {
+                continue;
+            }
+            anyhow::ensure!(
+                signature.starts_with(&[0x1f, 0x8b])
+                    || signature.starts_with(&[0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]),
+                "unsupported archive signature (expected tar.gz or 7z)"
+            );
+            file.write_all(&signature)?;
+            signature.clear();
+            verified = true;
+        } else {
+            file.write_all(&chunk)?;
+        }
         control.progress(total, content_length);
     }
     file.flush()?;
     if total == 0 {
         bail!("ダウンロードしたアーカイブが空です")
     }
+    anyhow::ensure!(verified, "archive header is incomplete");
     Ok(())
 }
 
@@ -829,6 +878,7 @@ mod tests {
     #[test]
     fn ipfs_has_priority_over_http_and_browser() {
         let config = ChartDownloadsConfig {
+            http_source: Default::default(),
             http_parallelism: 3,
             ipfs_enabled: true,
             ipfs_api_url: "http://127.0.0.1:5001".to_string(),
@@ -845,6 +895,7 @@ mod tests {
     #[test]
     fn http_is_used_when_ipfs_has_no_cid() {
         let config = ChartDownloadsConfig {
+            http_source: Default::default(),
             http_parallelism: 3,
             ipfs_enabled: true,
             ipfs_api_url: "http://127.0.0.1:5001".to_string(),
@@ -867,6 +918,39 @@ mod tests {
                 .unwrap();
 
         assert_eq!(url.as_str(), "https://example.com/aabb?md5=aabb&sha=ccdd");
+    }
+
+    #[test]
+    fn sha256_only_charts_require_a_sha256_http_template() {
+        use crate::config::download_sources::HttpDownloadPreset;
+        let mut metadata = metadata();
+        metadata.md5.clear();
+        metadata.ipfs.clear();
+        let mut config = ChartDownloadsConfig {
+            http_enabled: true,
+            http_api_url: "https://api.test/{sha256}".into(),
+            ..Default::default()
+        };
+        assert!(
+            matches!(choose_missing_chart_action(&config, &metadata), MissingChartAction::Http { md5, .. } if md5.is_empty())
+        );
+        config.http_api_url.clear();
+        config.http_source = HttpDownloadPreset::Ginger;
+        assert!(matches!(
+            choose_missing_chart_action(&config, &metadata),
+            MissingChartAction::Browser(_)
+        ));
+        metadata.md5 = "../not-a-hash".into();
+        assert!(matches!(
+            choose_missing_chart_action(&config, &metadata),
+            MissingChartAction::Browser(_)
+        ));
+        config.http_enabled = false;
+        config.http_api_url = "https://api.test/{sha256}".into();
+        assert!(matches!(
+            choose_missing_chart_action(&config, &metadata),
+            MissingChartAction::Browser(_)
+        ));
     }
 
     #[test]

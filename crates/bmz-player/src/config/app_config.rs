@@ -516,6 +516,8 @@ pub struct DifficultyTableSource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChartDownloadsConfig {
+    #[serde(default)]
+    pub http_source: super::download_sources::HttpDownloadPreset,
     #[serde(default = "default_download_parallelism")]
     pub http_parallelism: u8,
     #[serde(default)]
@@ -535,11 +537,22 @@ fn default_download_parallelism() -> u8 {
 impl Default for ChartDownloadsConfig {
     fn default() -> Self {
         Self {
+            http_source: Default::default(),
             http_parallelism: 3,
             ipfs_enabled: false,
             ipfs_api_url: String::new(),
             http_enabled: false,
             http_api_url: String::new(),
+        }
+    }
+}
+
+impl ChartDownloadsConfig {
+    pub fn effective_http_api_url(&self) -> &str {
+        if self.http_api_url.trim().is_empty() {
+            self.http_source.api_url()
+        } else {
+            self.http_api_url.trim()
         }
     }
 }

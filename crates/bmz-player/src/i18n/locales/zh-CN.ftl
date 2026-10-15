@@ -998,3 +998,7 @@ downloads-cancel = 取消
 downloads-summary = 共 { $total } / 完成 { $completed } / 失败 { $failed } / 取消 { $cancelled }
 downloads-overall-progress = 已结束 { $finished } / { $total } 项
 downloads-bytes-unknown = 已接收 { $bytes } B（总大小未知）
+settings-downloads-source-help = 选择预设会填入 API URL。能否下载取决于服务状态。
+settings-downloads-wriggle-status = Wriggle：连接未确认（验证环境中 TLS 连接失败）。
+settings-downloads-required-hashes = 所需哈希：{ $hashes }
+settings-downloads-parallelism = HTTP 同时下载数

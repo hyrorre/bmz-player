@@ -1001,3 +1001,7 @@ downloads-cancel = Cancel
 downloads-summary = Total { $total } / Completed { $completed } / Failed { $failed } / Cancelled { $cancelled }
 downloads-overall-progress = Finished { $finished } / { $total } tasks
 downloads-bytes-unknown = { $bytes } B received (total unknown)
+settings-downloads-source-help = Selecting a preset fills in the API URL. Availability depends on the provider.
+settings-downloads-wriggle-status = Wriggle: connection unverified (TLS connection failed in validation).
+settings-downloads-required-hashes = Required hashes: { $hashes }
+settings-downloads-parallelism = Concurrent HTTP downloads

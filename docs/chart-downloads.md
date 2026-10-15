@@ -23,6 +23,28 @@ F1 →「譜面ダウンロード」で実行中・待機・完了・失敗・�
 複数譜面で共有するアーカイブは同じタスクへ統合される場合があります。
 履歴は再起動時に消えます。失敗の詳細はエラー欄にマウスを重ねて確認できます。
 
+## HTTP取得元
+
+設定 → ライブラリ → 譜面取得でGinger / Konmai / Wriggle / Customを選べます。
+プリセットを明示的に選ぶとAPI URLを入力します。既存の `http_api_url` は読み込み時に
+書き換えず、指定済みURLがプリセットの既定値より優先されます。HTTPの無効設定も維持します。
+HTTPの同時取得数を1〜5件に変更でき、変更は次に開始するタスクから反映します。
+
+| 取得元 | URLテンプレート | 対応ハッシュ・応答 |
+| --- | --- | --- |
+| Ginger | `https://gingerrush.com/download/package/{md5}` | MD5、`downloadURL` を持つJSON |
+| Konmai | `https://bms.alvorna.com/api/hash?md5={md5}` | MD5、`result: success` と `data.song_url` を持つJSON |
+| Wriggle | `https://bms.wrigglebug.xyz/download/package/{md5}` | EDの定義ではMD5、直接アーカイブ |
+| Custom | ユーザー指定 | `{md5}` / `%s` はMD5、`{sha256}` はSHA256が必要。両方指定なら両方必要 |
+
+2026-10-16の到達確認ではGingerは未登録ハッシュに404、Konmaiは404と取得不可JSONを返しました。
+Wriggleは検証環境でTLS接続に失敗しました。プリセットはEDの定義を参考にした候補であり、
+実在する譜面の取得成功やサービスの継続提供は未確認です。設定画面にも接続未確認を表示します。
+
+HTTPステータス異常、取得不可・未知のJSON、空URL、不正URL、サイズ超過を失敗として扱います。
+JSONはストリーミングで1 MiBに制限します。相対URLはリダイレクト後のAPI URLから解決します。
+Content-TypeがJSON以外でもJSON本体を検出し、アーカイブの署名を検証してから保存します。
+
 未所持譜面の決定操作は、設定が有効ならIPFS、次にHTTPの順で自動取得を選びます。
 どちらも利用できなければ、表に記載されたHTTP/HTTPSの配布ページをブラウザで開きます。
 コース不足譜面の取得も同じキューを使います。

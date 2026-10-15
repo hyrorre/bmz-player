@@ -1,4 +1,5 @@
 use super::*;
+mod download_sources;
 
 /// 本体設定パネルからのアクション要求。
 pub(super) struct SettingsPanelActions {

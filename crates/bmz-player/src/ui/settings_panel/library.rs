@@ -388,6 +388,7 @@ pub(super) fn build_library_settings_sections(
                 &mut config.downloads.http_enabled,
                 tr!(text, "settings-downloads-http-enable"),
             );
+            download_sources::build_download_source_settings(ui, &mut config.downloads, text);
             ui.horizontal(|ui| {
                 ui.label(tr!(text, "settings-downloads-http-api-url"));
                 ui.add(
