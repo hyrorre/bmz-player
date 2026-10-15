@@ -190,6 +190,7 @@ pub(in crate::skin) fn test_skin_op(
         SKIN_OPTION_BMZ_BPM_CHANGE_PREVIEW_ACTIVE..=SKIN_OPTION_BMZ_BPM_CHANGE_AVAILABLE => {
             bpm_change_option(op, state)
         }
+        SKIN_OPTION_BMZ_CHART_TEXT_VISIBLE => state.chart_text_visible,
         SKIN_OPTION_BMZ_JUDGE_LANE_PGREAT_BASE..=SKIN_OPTION_BMZ_JUDGE_LANE_PGREAT_LAST => {
             state.judge_lane_index[(op - SKIN_OPTION_BMZ_JUDGE_LANE_PGREAT_BASE) as usize]
                 == Some(0)

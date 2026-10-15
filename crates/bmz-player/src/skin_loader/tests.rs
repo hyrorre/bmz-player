@@ -46,6 +46,8 @@ fn unique_test_dir(name: &str) -> crate::test_dir::TestDir {
 mod adfx02_bpm_preview;
 #[path = "tests/cache.rs"]
 mod cache;
+#[path = "tests/chart_text.rs"]
+mod chart_text;
 #[path = "tests/detail_options.rs"]
 mod detail_options;
 #[path = "tests/document.rs"]

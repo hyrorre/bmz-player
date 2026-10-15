@@ -502,6 +502,7 @@ profile-play-play-keysound-on-miss = 놓친 POOR의 키음 재생
 settings-entry-description-wait-all-notes-result = 마지막 노트 뒤에도 BGM이나 BGA가 이어지는 곡에서, 마지막 소리나 영상이 시작되고 5초 뒤까지 결과 화면으로 넘어가지 않고 기다립니다.
 settings-entry-description-hide-misslayer-on-good = GOOD 이상의 판정을 받으면 미스했을 때의 이미지를 바로 지웁니다.
 settings-entry-description-play-keysound-on-miss = 노트를 누르지 않고 놓쳤을 때도 그 노트의 소리를 재생합니다. 판정과 점수는 바뀌지 않습니다.
+settings-entry-description-chart-text-fallback = 플레이 스킨에 채보 텍스트(#TEXT) 표시가 없을 때 화면 왼쪽 위에 표시합니다. Lua 함수로 표시하는 스킨에서는 두 번 표시될 수 있습니다.
 profile-play-exit-hold-duration = E1+E2 강제 종료 길게 누르기 시간 (ms)
 profile-display-title = 표시
 profile-display-hispeed = Classic HS

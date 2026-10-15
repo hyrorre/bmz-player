@@ -199,7 +199,7 @@ pub enum IntermediateObjectKind {
     },
     /// チャネル #99: テキスト表示。
     SetText {
-        text: String,
+        text: std::sync::Arc<str>,
     },
     /// チャネル 0B–0E: BGA レイヤ不透明度。
     SetBgaOpacity {

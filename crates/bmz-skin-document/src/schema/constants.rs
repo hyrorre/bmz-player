@@ -249,6 +249,12 @@ pub const SKIN_EVENT_DETAIL_OPTIONS_ROW_LAST: i32 = 19_318;
 /// Per visible/draw slot: decrease, increase. Numeric rows only.
 pub const SKIN_EVENT_DETAIL_OPTIONS_NUMERIC_BASE: i32 = 19_320;
 pub const SKIN_EVENT_DETAIL_OPTIONS_NUMERIC_LAST: i32 = 19_337;
+/// BMZ extension: BMS `#TEXTxx` / channel #99 text shown on the play screen.
+/// `20100..=20199` is reserved for chart text and is outside beatoraja's
+/// custom timer range (`10000..=19999`) and BMZ's `19000..` refs.
+pub const SKIN_TEXT_BMZ_CHART_TEXT: i32 = 20_100;
+/// True while the text of [`SKIN_TEXT_BMZ_CHART_TEXT`] is not empty.
+pub const SKIN_OPTION_BMZ_CHART_TEXT_VISIBLE: i32 = 20_101;
 
 pub fn detail_options_numeric_event(id: i32) -> Option<(usize, i32)> {
     (SKIN_EVENT_DETAIL_OPTIONS_NUMERIC_BASE..=SKIN_EVENT_DETAIL_OPTIONS_NUMERIC_LAST)

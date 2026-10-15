@@ -494,8 +494,9 @@ pub struct RenderSnapshot {
     pub stagefile_image_size: Option<crate::skin::SkinImageSize>,
     /// `#BACKBMP` テクスチャがロード済みなら true (BGA より下に描画)。
     pub backbmp_background: bool,
-    /// BMS `#TEXT` / チャネル #99 で表示する譜面テキスト。
-    pub chart_text: String,
+    /// BMS `#TEXT` / チャネル #99 で表示する譜面テキスト (BMZ text 20100)。
+    /// 毎フレームの snapshot 複製で文字列を複製しないよう譜面のイベントと共有する。
+    pub chart_text: std::sync::Arc<str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

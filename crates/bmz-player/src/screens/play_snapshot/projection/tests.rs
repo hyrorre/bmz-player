@@ -316,3 +316,65 @@ fn stop_freezes_positions_and_ready_time_remains_hidden() {
     pool[0].project(&mut snapshot, TimeUs(750_000), &mut clock);
     assert!(snapshot.visible_notes[Lane::Key1.index()][0].y < stopped_y);
 }
+
+fn chart_with_texts(texts: &[(i64, &str)]) -> PlayableChart {
+    let mut chart = chart();
+    chart.text_events = texts
+        .iter()
+        .enumerate()
+        .map(|(index, &(time, text))| bmz_chart::model::ChartTextEvent {
+            tick: ChartTick(index as u64),
+            time: TimeUs(time),
+            text: text.into(),
+        })
+        .collect();
+    chart
+}
+
+#[test]
+fn chart_text_follows_chart_time_in_build_and_projection() {
+    let session = session(chart_with_texts(&[
+        (1_000_000, "Hello World"),
+        (2_000_000, "Second message"),
+        (3_000_000, ""),
+    ]));
+    let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+    // READY and before the first event: empty.
+    assert_eq!(&*base(&session, TimeUs(-500_000), &cache).chart_text, "");
+    assert_eq!(&*base(&session, TimeUs(999_999), &cache).chart_text, "");
+    assert_eq!(&*base(&session, TimeUs(1_000_000), &cache).chart_text, "Hello World");
+    assert_eq!(&*base(&session, TimeUs(2_500_000), &cache).chart_text, "Second message");
+    assert_eq!(&*base(&session, TimeUs(9_000_000), &cache).chart_text, "");
+
+    let pool = PlayfieldProjection::pool(&session, &cache);
+    let mut clock = ProjectionClock::default();
+    let mut snapshot = base(&session, TimeUs(0), &cache);
+    for (now, expected) in
+        [(500_000, ""), (1_500_000, "Hello World"), (2_000_000, "Second message"), (3_000_000, "")]
+    {
+        pool[0].project(&mut snapshot, TimeUs(now), &mut clock);
+        assert_eq!(&*snapshot.chart_text, expected, "{now}");
+    }
+    // The text is shared with the chart event, not copied per frame.
+    pool[0].project(&mut snapshot, TimeUs(1_200_000), &mut ProjectionClock::default());
+    assert!(Arc::ptr_eq(&snapshot.chart_text, &session.chart.text_events[0].text));
+}
+
+#[test]
+fn chart_text_restores_the_state_at_seek_and_pause_positions() {
+    let session = session(chart_with_texts(&[(1_000_000, "A"), (2_000_000, "B")]));
+    let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+    let pool = PlayfieldProjection::pool(&session, &cache);
+    let mut snapshot = base(&session, TimeUs(0), &cache);
+    // A seek starts a new projection clock. Seeking back never keeps "B".
+    for (now, expected) in [(2_500_000, "B"), (1_500_000, "A"), (500_000, ""), (2_000_000, "B")] {
+        pool[0].project(&mut snapshot, TimeUs(now), &mut ProjectionClock::default());
+        assert_eq!(&*snapshot.chart_text, expected, "{now}");
+    }
+    // While paused the clock repeats the same time and the text does not move.
+    let mut clock = ProjectionClock::default();
+    for _ in 0..3 {
+        pool[0].project(&mut snapshot, TimeUs(1_999_999), &mut clock);
+        assert_eq!(&*snapshot.chart_text, "A");
+    }
+}

@@ -291,7 +291,7 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         },
     );
     let opponent = independent_opponent.or(legacy_opponent);
-    RenderSnapshot {
+    let mut snapshot = RenderSnapshot {
         screen_size: [0, 0],
         time: chart_now,
         player_name: String::new(),
@@ -555,9 +555,10 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         stagefile_background: false,
         stagefile_image_size: None,
         backbmp_background: false,
-        chart_text: bmz_chart::text::chart_text_at_time(&session.chart.text_events, chart_now)
-            .to_string(),
-    }
+        chart_text: Arc::from(""),
+    };
+    apply_chart_text(&mut snapshot.chart_text, &session.chart, chart_now);
+    snapshot
 }
 
 pub fn update_render_snapshot_play_options(

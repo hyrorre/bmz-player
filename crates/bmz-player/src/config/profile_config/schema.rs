@@ -259,6 +259,9 @@ pub struct PlayDefaultsConfig {
     pub hide_misslayer_on_good: bool,
     #[serde(default)]
     pub play_keysound_on_miss: bool,
+    /// Shows BMS `#TEXT` in the top-left overlay when the play skin has no text for it.
+    #[serde(default)]
+    pub chart_text_fallback: bool,
     /// E1+E2 長押し強制終了までの時間(ms)。beatoraja 既定 1000ms。
     #[serde(default = "default_play_exit_hold_ms")]
     pub play_exit_hold_ms: u32,

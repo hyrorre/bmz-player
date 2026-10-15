@@ -263,11 +263,13 @@ pub struct ChartVolumeEvent {
 }
 
 /// BMS `#TEXT` / チャネル #99 によるテキスト表示イベント。
+///
+/// 同じ定義を参照するイベントは文字列を共有する。空文字も表示を消すイベント。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChartTextEvent {
     pub tick: ChartTick,
     pub time: TimeUs,
-    pub text: String,
+    pub text: std::sync::Arc<str>,
 }
 
 /// BMS チャネル 0B–0E による BGA レイヤ不透明度変更。

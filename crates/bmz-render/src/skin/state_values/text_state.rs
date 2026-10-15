@@ -199,6 +199,7 @@ pub(super) fn skin_main_state_text(
             .map(|entry| entry.player_name.as_str().to_string())
             .unwrap_or_default(),
         150..=159 => state.course_titles[(ref_id - 150) as usize].to_string(),
+        SKIN_TEXT_BMZ_CHART_TEXT => state.chart_text.to_string(),
         LR2_TEXT_BASE..=LR2_TEXT_LAST => lr2_text(ref_id - LR2_TEXT_BASE, draw_state, state),
         190..=196 => {
             draw_state.map(|state| random_mix_option_text(ref_id, state)).unwrap_or_default()
@@ -384,6 +385,7 @@ pub(super) fn lua_main_state_text_values(
         SKIN_REF_BMZ_RULE_MODE,
         SKIN_REF_BMZ_LN_POLICY_SETTING,
         SKIN_REF_BMZ_LN_SCORE_POLICY,
+        SKIN_TEXT_BMZ_CHART_TEXT,
     ];
     refs.extend(120..=129);
     refs.extend(SKIN_REF_BMZ_BEST_SCORE_ARRANGE_1P..=SKIN_REF_BMZ_BEST_SCORE_DOUBLE_OPTION);

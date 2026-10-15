@@ -103,6 +103,7 @@ fn play_defaults_uses_default_misslayer_duration_for_old_profiles() {
     assert_eq!(play.misslayer_duration_ms, 500);
     assert!(!play.wait_all_notes_result);
     assert!(!play.hide_misslayer_on_good);
+    assert!(!play.chart_text_fallback);
     assert!(!play.play_keysound_on_miss);
     assert_eq!(play.play_exit_hold_ms, 1000);
     assert_eq!(play.bottom_shiftable_gauge, BottomShiftableGaugeConfig::AssistEasy);
@@ -131,6 +132,7 @@ fn optional_play_behaviors_are_independent_and_roundtrip() {
         SettingsEntryId::WaitAllNotesResult,
         SettingsEntryId::HideMisslayerOnGood,
         SettingsEntryId::PlayKeysoundOnMiss,
+        SettingsEntryId::ChartTextFallback,
     ] {
         let mut profile = defaults.clone();
         assert_eq!(format_settings_value(&profile, entry), "OFF");
@@ -150,6 +152,7 @@ fn optional_play_behaviors_are_independent_and_roundtrip() {
             decoded.play.play_keysound_on_miss,
             entry == SettingsEntryId::PlayKeysoundOnMiss
         );
+        assert_eq!(decoded.play.chart_text_fallback, entry == SettingsEntryId::ChartTextFallback);
     }
 }
 

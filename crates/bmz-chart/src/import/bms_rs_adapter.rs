@@ -23,7 +23,7 @@
 //!
 //! 未対応 (warning に流すか drop):
 //! - JUDGE 変更イベント (#EXRANK / chA0)
-//! - TEXT / OPTION / VIDEO / SEEK 等
+//! - OPTION / VIDEO / SEEK 等 (TEXT は `text.rs` が原文から読む)
 //! - foot pedal / free zone
 //! - PMS 18K (2P 側ノート)
 
@@ -67,6 +67,7 @@ mod metadata;
 mod objects;
 mod random;
 mod sparse;
+mod text;
 mod timing;
 
 use compat::*;
@@ -74,6 +75,7 @@ use metadata::*;
 use objects::*;
 use random::*;
 use sparse::*;
+use text::*;
 use timing::*;
 
 pub(crate) const MAX_SUPPORTED_MEASURE: u32 = 100_000;
@@ -258,6 +260,7 @@ fn import_with_layout<T: KeyLayoutMapper>(
     let metadata_text = strip_empty_metadata_commands(&text);
     let lnobj_parse_text = strip_lnobj_commands(&metadata_text);
     let bga_messages = extract_bga_message_lines(&lnobj_parse_text);
+    let source_texts = extract_source_texts(&lnobj_parse_text);
     let (parse_text, sparse_messages) =
         extract_sparse_bms_message_lines(&lnobj_parse_text, warnings);
 
@@ -276,7 +279,7 @@ fn import_with_layout<T: KeyLayoutMapper>(
         message: format!("{err:?}"),
     })?;
     inject_sparse_bms_messages::<T>(&mut bms, &sparse_messages, warnings);
-    let bga_objects = bga_messages_to_intermediate_objects(
+    let mut extra_objects = bga_messages_to_intermediate_objects(
         &bga_messages,
         bms_uses_base62_obj_ids(&bms),
         warnings,
@@ -284,11 +287,19 @@ fn import_with_layout<T: KeyLayoutMapper>(
     // bms-rs stores BGA changes in a single map keyed only by time, so simultaneous
     // Base/Poor/Layer changes overwrite each other. Use the source-derived events instead.
     bms.bmp.bga_changes.clear();
+    // Text events have the same limitation; bms-rs also drops the rest of a #99 message
+    // after an undefined object.
+    extra_objects.extend(source_text_objects(
+        &source_texts,
+        bms_uses_base62_obj_ids(&bms),
+        warnings,
+    ));
+    bms.text.text_events.clear();
 
-    let mut intermediate = build_intermediate_from_bms_with_extra_bga_objects::<T>(
+    let mut intermediate = build_intermediate_from_bms_with_extra_objects::<T>(
         &bms,
         layout,
-        &bga_objects,
+        &extra_objects,
         warnings,
     )?;
     restore_default_poor_bga(&mut intermediate, bms.bmp.poor_bmp.as_deref());
@@ -315,13 +326,13 @@ pub(crate) fn build_intermediate_from_bms<T: KeyLayoutMapper>(
     layout: ChartKeyLayout,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
-    build_intermediate_from_bms_with_extra_bga_objects::<T>(bms, layout, &[], warnings)
+    build_intermediate_from_bms_with_extra_objects::<T>(bms, layout, &[], warnings)
 }
 
-fn build_intermediate_from_bms_with_extra_bga_objects<T: KeyLayoutMapper>(
+fn build_intermediate_from_bms_with_extra_objects<T: KeyLayoutMapper>(
     bms: &Bms,
     layout: ChartKeyLayout,
-    extra_bga_objects: &[IntermediateObject],
+    extra_objects: &[IntermediateObject],
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
     let metadata = build_metadata(bms);
@@ -331,7 +342,7 @@ fn build_intermediate_from_bms_with_extra_bga_objects<T: KeyLayoutMapper>(
     push_note_objects::<T>(bms, layout, &mut objects, warnings);
     push_bgm_objects::<T>(bms, &mut objects);
     push_bga_objects(bms, &mut objects);
-    objects.extend_from_slice(extra_bga_objects);
+    objects.extend_from_slice(extra_objects);
     push_bpm_change_objects(bms, &mut objects);
     push_stop_objects(bms, &mut objects, &mut resources);
     push_scroll_objects(bms, &mut objects);

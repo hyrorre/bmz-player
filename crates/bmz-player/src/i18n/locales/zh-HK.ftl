@@ -503,6 +503,7 @@ profile-play-play-keysound-on-miss = 漏按 POOR 時播放鍵音
 settings-entry-description-wait-all-notes-result = 在最後一個音符之後仍有 BGM 或 BGA 的歌曲中，等到最後的聲音或影像開始 5 秒後再進入結算畫面。
 settings-entry-description-hide-misslayer-on-good = 取得 GOOD 以上的判定時，立即隱藏失誤時的圖片。
 settings-entry-description-play-keysound-on-miss = 未按下而錯過音符時，也播放該音符的聲音。判定與分數不變。
+settings-entry-description-chart-text-fallback = 遊玩面板沒有譜面文字（#TEXT）的顯示位置時，在畫面左上角顯示。使用 Lua 函數顯示它的面板可能會重複顯示。
 profile-play-exit-hold-duration = E1+E2 強制退出長按時間 (ms)
 profile-display-title = 顯示
 profile-display-hispeed = Classic HS

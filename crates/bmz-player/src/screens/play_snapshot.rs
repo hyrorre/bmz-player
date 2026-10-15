@@ -39,6 +39,7 @@ mod bga;
 mod bpm_change;
 mod build;
 mod cache;
+mod chart_text;
 mod display;
 mod projection;
 mod scroll;
@@ -69,6 +70,7 @@ pub(crate) use bga::{
 };
 use bpm_change::*;
 use cache::*;
+use chart_text::*;
 use display::*;
 use scroll::*;
 use state::*;

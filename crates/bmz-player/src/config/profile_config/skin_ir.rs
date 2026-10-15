@@ -578,6 +578,7 @@ impl ProfileConfig {
                 misslayer_duration_ms: default_misslayer_duration_ms(),
                 wait_all_notes_result: false,
                 hide_misslayer_on_good: false,
+                chart_text_fallback: false,
                 play_keysound_on_miss: false,
                 play_exit_hold_ms: default_play_exit_hold_ms(),
                 show_ln_tail_cap: false,

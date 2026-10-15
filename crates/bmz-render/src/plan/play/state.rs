@@ -162,6 +162,7 @@ pub(in crate::plan) fn build_play_skin_state(
         has_bga: snapshot.has_bga,
         has_bpm_stop: snapshot.has_bpm_stop,
         bpm_change_preview: snapshot.bpm_change_preview,
+        chart_text_visible: !snapshot.chart_text.is_empty(),
         bpm_change_preview_lead_ms: skin
             .document()
             .and_then(|document| document.bmz_bpm_change_preview)
@@ -262,6 +263,7 @@ pub(super) fn build_play_skin_text(snapshot: &RenderSnapshot) -> SkinTextState<'
         table_text_fallback: &snapshot.table_text_fallback,
         course_stage: snapshot.course_stage,
         course_titles: string_array_refs(&snapshot.course_titles),
+        chart_text: &snapshot.chart_text,
         ..SkinTextState::default()
     }
 }

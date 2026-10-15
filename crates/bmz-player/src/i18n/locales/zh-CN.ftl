@@ -502,6 +502,7 @@ profile-play-play-keysound-on-miss = 漏按 POOR 时播放键音
 settings-entry-description-wait-all-notes-result = 在最后一个音符之后仍有 BGM 或 BGA 的歌曲中，等到最后的声音或影像开始 5 秒后再进入结算画面。
 settings-entry-description-hide-misslayer-on-good = 取得 GOOD 以上的判定时，立即隐藏失误时的图片。
 settings-entry-description-play-keysound-on-miss = 未按下而错过音符时，也播放该音符的声音。判定和分数不变。
+settings-entry-description-chart-text-fallback = 游玩皮肤没有谱面文本（#TEXT）的显示位置时，在画面左上角显示。使用 Lua 函数显示它的皮肤可能会重复显示。
 profile-play-exit-hold-duration = E1+E2 强制退出长按时间 (ms)
 profile-display-title = 显示
 profile-display-hispeed = Classic HS
