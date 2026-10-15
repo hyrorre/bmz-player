@@ -260,6 +260,9 @@ pub(super) struct AppJobs {
     pub(super) song_scan: SongScanRuntime,
     pub(super) pending_replay_import: Option<PendingReplayImport>,
     pub(super) chart_downloads: crate::song_download::ChartDownloadManager,
+    pub(super) bulk_download: crate::song_download::BulkDownloadPreview,
+    pub(super) pending_bulk_download:
+        Option<Receiver<Result<crate::song_download::BulkDownloadPlan>>>,
     pub(super) download_request_id: u64,
     pub(super) download_selections: Vec<DownloadSelection>,
     pub(super) download_registrations: Vec<(u64, crate::song_download::ChartDownloadResult)>,

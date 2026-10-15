@@ -14,7 +14,12 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
+mod bulk;
 mod manager;
+pub use bulk::{
+    BulkDownloadBatch, BulkDownloadCounts, BulkDownloadPlan, BulkDownloadPreview,
+    BulkDownloadScope, prepare_bulk_download,
+};
 #[cfg(test)]
 mod test_support;
 pub use manager::{
@@ -96,6 +101,18 @@ pub struct ChartDownloadIdentity {
 }
 
 impl ChartDownloadIdentity {
+    pub fn overlaps(&self, other: &Self) -> bool {
+        match (self.sha256, other.sha256) {
+            (Some(a), Some(b)) => {
+                a == b
+                    && match (self.md5, other.md5) {
+                        (Some(a), Some(b)) => a == b,
+                        _ => true,
+                    }
+            }
+            _ => self.md5.is_some() && self.md5 == other.md5,
+        }
+    }
     pub fn from_metadata(metadata: &ChartDownloadMetadata) -> Self {
         Self {
             sha256: crate::storage::common::hex_to_hash(metadata.sha256.trim()).ok(),

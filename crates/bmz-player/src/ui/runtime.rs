@@ -37,6 +37,7 @@ impl EguiLayer {
             font_search_paths,
             visible: false,
             show_debug: false,
+            show_downloads: false,
             show_random_trainer: false,
             debug_log_filter: DebugLogFilter::default(),
             debug_log_autoscroll: true,
@@ -233,6 +234,9 @@ impl EguiLayer {
     /// 1 フレーム分の UI を構築し、描画データと要求されたアクションを返す。
     pub fn run(&mut self, window: &Window, context: EguiRunContext<'_, '_>) -> EguiOutput {
         let EguiRunContext {
+            downloads,
+            download_preview,
+            download_scope,
             info,
             log_buffer,
             app_config,
@@ -266,6 +270,8 @@ impl EguiLayer {
         let ctx = self.ctx.clone();
         SettingsFeedback::profile_changed(&ctx, &profile_config.id);
         let show_debug = &mut self.show_debug;
+        let show_downloads = &mut self.show_downloads;
+        let mut download_commands = Vec::new();
         let show_random_trainer = &mut self.show_random_trainer;
         let show_settings = &mut self.show_settings;
         let show_course_editor = &mut self.show_course_editor;
@@ -359,6 +365,7 @@ impl EguiLayer {
                     visible_flag,
                     MenuPanelVisibility {
                         debug: show_debug,
+                        downloads: show_downloads,
                         random_trainer: show_random_trainer,
                         settings: show_settings,
                         course_editor: show_course_editor,
@@ -377,6 +384,16 @@ impl EguiLayer {
                     text,
                 );
                 build_random_trainer_panel(ctx, show_random_trainer, random_trainer, text);
+                download_commands.extend(downloads::build_download_panel(
+                    ctx,
+                    show_downloads,
+                    downloads,
+                    download_preview,
+                    download_scope.as_ref(),
+                    info.scene == "Select",
+                    difficulty_tables,
+                    text,
+                ));
                 let profile_name = profile_config.display_name.clone();
                 build_settings_window(ctx, show_settings, &profile_name, text, |ui| {
                     let before_app = serde_json::to_value(&*app_config).ok();
@@ -493,6 +510,7 @@ impl EguiLayer {
         self.state.handle_platform_output(window, full_output.platform_output);
         let primitives = self.ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
         EguiOutput {
+            download_commands,
             profile_action,
             frame: EguiFrame {
                 primitives,

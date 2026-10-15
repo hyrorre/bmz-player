@@ -1,6 +1,7 @@
 /// 各サブパネルの開閉を切り替えるメインメニューハブ。
 pub(super) struct MenuPanelVisibility<'a> {
     pub(super) debug: &'a mut bool,
+    pub(super) downloads: &'a mut bool,
     pub(super) random_trainer: &'a mut bool,
     pub(super) settings: &'a mut bool,
     pub(super) course_editor: &'a mut bool,
@@ -24,6 +25,7 @@ pub(super) fn build_menu(
             build_manual_button(ui, text);
             ui.separator();
             ui.checkbox(panels.settings, tr!(text, "settings-workspace-title"));
+            ui.checkbox(panels.downloads, tr!(text, "downloads-title"));
             ui.checkbox(panels.course_editor, tr!(text, "menu-course-editor"));
             ui.checkbox(panels.random_trainer, tr!(text, "menu-random-trainer"));
             ui.checkbox(panels.debug, tr!(text, "menu-debug"));

@@ -250,6 +250,9 @@ pub struct DebugInfo {
 
 /// `EguiLayer::run` の 1 フレーム入力。
 pub struct EguiRunContext<'a, 'practice> {
+    pub downloads: &'a crate::song_download::ChartDownloadManager,
+    pub download_preview: &'a crate::song_download::BulkDownloadPreview,
+    pub download_scope: Option<crate::song_download::BulkDownloadScope>,
     pub info: &'a DebugInfo,
     pub log_buffer: &'a LogBuffer,
     pub app_config: &'a mut AppConfig,
@@ -277,6 +280,7 @@ pub struct EguiRunContext<'a, 'practice> {
 
 /// `EguiLayer::run` の 1 フレーム出力。
 pub struct EguiOutput {
+    pub download_commands: Vec<DownloadUiCommand>,
     pub profile_action: Option<ProfileManagerAction>,
     /// renderer へ渡す描画データ。
     pub frame: EguiFrame,
@@ -309,6 +313,12 @@ pub struct EguiOutput {
     pub practice_leave: bool,
     pub course_editor_action: Option<CourseEditorAction>,
     pub select_course_builder_action: Option<SelectCourseBuilderAction>,
+}
+
+pub enum DownloadUiCommand {
+    Prepare(crate::song_download::BulkDownloadScope),
+    Confirm,
+    Dismiss,
 }
 
 #[derive(Debug, Clone)]
@@ -405,6 +415,7 @@ pub struct EguiLayer {
     pub(super) visible: bool,
     /// デバッグ表示パネルの開閉状態。
     pub(super) show_debug: bool,
+    pub(super) show_downloads: bool,
     /// 7K RANDOM 固定配置パネルの開閉状態。
     pub(super) show_random_trainer: bool,
     /// デバッグ表示内のログ最低表示レベル。

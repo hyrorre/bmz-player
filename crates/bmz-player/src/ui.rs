@@ -108,6 +108,7 @@ use settings_panel::*;
 use skin_panel::*;
 pub(crate) use skin_panel::{Lr2SkinTarget, lr2_cycle_skin_item, lr2_skin_items};
 
+mod downloads;
 mod fonts;
 mod ir_manual_ui;
 mod ir_state;
@@ -121,11 +122,11 @@ use ir_state::*;
 use menu::*;
 use model::*;
 pub use model::{
-    CourseEditorAction, CourseEditorChart, CourseEditorData, DebugInfo, EguiKeyConfigAction,
-    EguiKeyConfigInput, EguiKeyConfigSection, EguiLayer, EguiOutput, EguiRunContext,
-    ProfileManagerAction, SceneSkinDefs, SelectCourseBuilderAction, SelectCourseBuilderData,
-    SkinCandidate, SkinCandidateOrigin, SkinCatalog, SkinConfigMeta, SkinReloadRequest,
-    SongScanRequest, UpdateDialog, UpdateDialogAction,
+    CourseEditorAction, CourseEditorChart, CourseEditorData, DebugInfo, DownloadUiCommand,
+    EguiKeyConfigAction, EguiKeyConfigInput, EguiKeyConfigSection, EguiLayer, EguiOutput,
+    EguiRunContext, ProfileManagerAction, SceneSkinDefs, SelectCourseBuilderAction,
+    SelectCourseBuilderData, SkinCandidate, SkinCandidateOrigin, SkinCatalog, SkinConfigMeta,
+    SkinReloadRequest, SongScanRequest, UpdateDialog, UpdateDialogAction,
 };
 use runtime::AudioDevicePickerState;
 #[cfg(test)]

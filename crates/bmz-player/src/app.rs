@@ -216,6 +216,7 @@ mod course_flow_metrics;
 mod course_flow_start;
 #[path = "app/course_metrics_state.rs"]
 mod course_metrics_state;
+mod download_flow;
 mod event_loop_probe;
 mod frame_flow;
 mod frame_runtime;

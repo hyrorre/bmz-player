@@ -46,6 +46,9 @@ impl HttpFixture {
                     Arc::clone(&handler),
                 );
                 workers.push(std::thread::spawn(move || {
+                    // Accepted sockets inherit the listener's nonblocking mode
+                    // on Windows. The handler deliberately uses blocking I/O.
+                    stream.set_nonblocking(false).unwrap();
                     stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
                     let mut buffer = [0; 8192];
                     let mut length = 0;

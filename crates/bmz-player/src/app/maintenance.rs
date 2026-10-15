@@ -64,6 +64,7 @@ impl WinitApp {
         self.poll_pending_table_fetch();
         self.poll_pending_rian_table_fetch();
         self.poll_pending_chart_download();
+        self.poll_bulk_download_plan();
         self.poll_pending_song_scan();
         self.poll_pending_replay_import();
         self.poll_ir_manual();

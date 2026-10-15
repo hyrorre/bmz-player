@@ -93,6 +93,7 @@ pub struct DownloadTask {
     pub control: Arc<DownloadControl>,
     pub error: Option<String>,
     pub result: Option<ChartDownloadResult>,
+    pub registered: Vec<ChartDownloadIdentity>,
     worker: Option<mpsc::Receiver<Result<ChartDownloadResult>>>,
     scan_pending: bool,
 }
@@ -111,6 +112,7 @@ impl DownloadTask {
 
 #[derive(Default)]
 pub struct ChartDownloadManager {
+    pub batches: Vec<BulkDownloadBatch>,
     tasks: Vec<DownloadTask>,
     queues: [VecDeque<usize>; 2],
     active: Vec<usize>,
@@ -151,6 +153,7 @@ impl ChartDownloadManager {
             control: Arc::default(),
             error: None,
             result: None,
+            registered: Vec::new(),
             worker: None,
             scan_pending: false,
         });
@@ -299,6 +302,7 @@ impl ChartDownloadManager {
         if task.state() == DownloadState::Cancelled {
             return;
         }
+        task.registered = registered.to_vec();
         let success = error.is_none()
             && task.requests.iter().all(|r| {
                 registered.iter().any(|identity| {

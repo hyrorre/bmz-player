@@ -439,6 +439,8 @@ impl WinitApp {
                 song_scan: SongScanRuntime::default(),
                 pending_replay_import: None,
                 chart_downloads: Default::default(),
+                bulk_download: Default::default(),
+                pending_bulk_download: None,
                 download_request_id: 0,
                 download_selections: Vec::new(),
                 download_registrations: Vec::new(),

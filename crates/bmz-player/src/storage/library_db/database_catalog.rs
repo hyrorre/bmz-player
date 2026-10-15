@@ -128,23 +128,44 @@ impl LibraryDatabase {
             )?,
             None => super::super::difficulty_table_db::list_table_entries(&self.conn, source_url)?,
         };
-        let md5_refs: Vec<&str> =
-            rows.iter().filter(|row| row.md5.len() >= 24).map(|row| row.md5.as_str()).collect();
-        let sha256_refs: Vec<&str> = rows
+        let normalized: Vec<_> = rows
             .iter()
-            .filter(|row| row.sha256.len() >= 24)
-            .map(|row| row.sha256.as_str())
+            .map(|row| {
+                (
+                    hex_to_hash::<16>(row.md5.trim())
+                        .map(|hash| hash_to_hex(&hash))
+                        .unwrap_or_default(),
+                    hex_to_hash::<32>(row.sha256.trim())
+                        .map(|hash| hash_to_hex(&hash))
+                        .unwrap_or_default(),
+                )
+            })
+            .collect();
+        let md5_refs: Vec<_> = normalized
+            .iter()
+            .filter(|(md5, _)| !md5.is_empty())
+            .map(|(md5, _)| md5.as_str())
+            .collect();
+        let sha256_refs: Vec<_> = normalized
+            .iter()
+            .filter(|(_, sha)| !sha.is_empty())
+            .map(|(_, sha)| sha.as_str())
             .collect();
         let md5_charts = self.charts_by_md5s(&md5_refs)?;
         let sha256_charts = self.charts_by_sha256s(&sha256_refs)?;
 
         Ok(rows
             .into_iter()
-            .map(|row| {
-                let chart = md5_charts
-                    .get(&row.md5)
+            .zip(normalized)
+            .map(|(row, (md5, sha256))| {
+                let chart = sha256_charts
+                    .get(&sha256)
                     .cloned()
-                    .or_else(|| sha256_charts.get(&row.sha256).cloned());
+                    .or_else(|| md5_charts.get(&md5).cloned())
+                    .filter(|chart| {
+                        (sha256.is_empty() || sha256 == hash_to_hex(&chart.sha256))
+                            && (md5.is_empty() || md5 == hash_to_hex(&chart.md5))
+                    });
                 TableEntryListItem {
                     level: row.level,
                     md5: row.md5,
