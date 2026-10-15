@@ -67,6 +67,9 @@ pub struct ChartMetadata {
     pub append_url: String,
     /// Raw BMS header commands keyed by uppercased command name.
     pub bms_headers: BTreeMap<String, String>,
+    /// nanasi の `#TEXT00` (ミス時に表示するテキスト)。未定義なら None。
+    /// チャネル #99 の `text_events` には含めない。
+    pub miss_text: Option<std::sync::Arc<str>>,
     pub key_mode: KeyMode,
     /// `#LNMODE` / BMSON `ln_type`。未指定時は LR2 互換の LN (終点判定なし)。
     pub long_note_mode: LongNoteMode,
@@ -148,6 +151,7 @@ impl Default for ChartMetadata {
             source_url: String::new(),
             append_url: String::new(),
             bms_headers: BTreeMap::new(),
+            miss_text: None,
             key_mode: KeyMode::default(),
             long_note_mode: LongNoteMode::default(),
             long_note_mode_defined: false,

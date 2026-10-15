@@ -59,6 +59,8 @@ pub struct IntermediateMetadata {
     /// Raw BMS header commands keyed by uppercased command name.
     pub bms_headers: BTreeMap<String, String>,
     pub key_mode: KeyMode,
+    /// nanasi の `#TEXT00`。チャネル #99 のイベントとは別に、ミス時の表示に使う。
+    pub miss_text: Option<std::sync::Arc<str>>,
     /// `#BASE 62` 相当。`true` のときオブジェクト ID は base62 換算する。
     pub base62_obj_ids: bool,
     /// BMSON `lines: []` のとき小節線を描画しない。

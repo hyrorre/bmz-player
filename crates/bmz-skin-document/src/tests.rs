@@ -290,6 +290,8 @@ fn chart_text_reference_is_detected_from_text_ref_and_value() {
         (r#"{"text":[{"id":"a","ref":20100}]}"#, true),
         (r#"{"text":[{"id":"a","value":20100}]}"#, true),
         (r#"{"text":[{"id":"a","value":"bmz_chart_text"}]}"#, true),
+        (r#"{"text":[{"id":"a","ref":20103}]}"#, true),
+        (r#"{"text":[{"id":"a","value":"bmz_chart_miss_text"}]}"#, true),
         (r#"{"text":[{"id":"a","ref":10}]}"#, false),
         (r#"{"text":[{"id":"a","constantText":"20100"}]}"#, false),
         (r#"{}"#, false),

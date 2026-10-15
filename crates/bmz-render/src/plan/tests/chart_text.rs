@@ -137,3 +137,51 @@ fn chart_text_event_timer_drives_destination_animation() {
         None
     );
 }
+
+#[test]
+fn miss_text_refs_option_and_timer_are_exposed() {
+    let document: SkinDocument = serde_json::from_str(
+        r#"
+            {
+                "type": 0, "w": 100, "h": 100,
+                "text": [
+                    { "id": "shown", "size": 12, "value": "bmz_chart_text" },
+                    { "id": "definition", "size": 12, "ref": 20103 },
+                    { "id": "flash", "size": 12, "constantText": "FLASH" }
+                ],
+                "destination": [
+                    { "id": "shown", "dst": [{ "x": 0, "y": 0, "w": 60, "h": 12 }] },
+                    { "id": "definition", "op": [-20104],
+                      "dst": [{ "x": 0, "y": 20, "w": 60, "h": 12 }] },
+                    { "id": "flash", "timer": 20105, "op": ["bmz_chart_miss_text_active"],
+                      "dst": [{ "x": 0, "y": 40, "w": 60, "h": 12 }] }
+                ]
+            }
+        "#,
+    )
+    .unwrap();
+    let skin = SkinContext::from_manifest_and_document(SkinManifest::default(), document, []);
+    let normal = RenderSnapshot {
+        chart_text: "Normal".into(),
+        chart_miss_text: "MISS!!".into(),
+        ..Default::default()
+    };
+    assert_eq!(plan_texts(&skin, normal.clone()), ["Normal", "MISS!!"]);
+    let missed = RenderSnapshot {
+        chart_text: "MISS!!".into(),
+        chart_miss_text_elapsed_ms: Some(10),
+        ..normal
+    };
+    assert_eq!(plan_texts(&skin, missed.clone()), ["MISS!!", "FLASH"]);
+    let state = build_play_skin_state(&missed, &skin, 0);
+    assert!(test_skin_ops(&[crate::skin::SKIN_OPTION_BMZ_CHART_MISS_TEXT_ACTIVE], &[], &state));
+    assert_eq!(
+        crate::skin::lua_main_state_timer(crate::skin::SKIN_TIMER_BMZ_CHART_MISS_TEXT, &state),
+        Some(10)
+    );
+    // Without #TEXT00 nothing extra is drawn.
+    assert_eq!(
+        plan_texts(&skin, RenderSnapshot { chart_text: "Only".into(), ..Default::default() }),
+        ["Only"]
+    );
+}

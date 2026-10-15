@@ -228,3 +228,70 @@ fn lr2_csv_destination_uses_chart_text_event_timer() {
     assert!(scene_texts(&mut renderer, timer_scene(None)).is_empty());
     assert_eq!(scene_texts(&mut renderer, timer_scene(Some(100))), ["TIMER"]);
 }
+
+#[test]
+fn lua_main_state_reads_miss_text_definition_option_and_timer() {
+    let root = unique_test_dir("chart-text-lua-miss");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("play.lua");
+    fs::write(
+        &path,
+        r#"
+            local s = require('main_state')
+            return {type=0,w=320,h=180,
+                text={{id='miss',size=12,value=function()
+                    return s.text(20100) .. '/' .. s.text('bmz_chart_miss_text') .. '/'
+                        .. tostring(s.option(20104)) .. '/'
+                        .. tostring(s.option('bmz_chart_miss_text_active')) .. '/'
+                        .. s.timer_elapsed_ms(20105)
+                end}},
+                destination={{id='miss',dst={{x=0,y=0,w=300,h=20}}}}
+            }
+        "#,
+    )
+    .unwrap();
+    let scene = |shown: &str, elapsed: Option<i32>| {
+        AppSceneSnapshot::Play(RenderSnapshot {
+            chart_text: shown.into(),
+            chart_miss_text: "MISS!!".into(),
+            chart_miss_text_elapsed_ms: elapsed,
+            time: TimeUs(5_000_000),
+            play_elapsed_time: TimeUs(5_000_000),
+            ready_elapsed_time: Some(TimeUs(0)),
+            ..Default::default()
+        })
+    };
+    for mode in [bmz_skin::LuaSkinRuntimeMode::Auto, bmz_skin::LuaSkinRuntimeMode::Compat] {
+        let mut renderer = install(&path, mode);
+        assert_eq!(
+            scene_texts(&mut renderer, scene("Normal", None)),
+            ["Normal/MISS!!/false/false/-1"],
+            "{mode:?}"
+        );
+        assert_eq!(
+            scene_texts(&mut renderer, scene("MISS!!", Some(120))),
+            ["MISS!!/MISS!!/true/true/120"],
+            "{mode:?}"
+        );
+    }
+}
+
+#[test]
+fn documented_chart_text_skin_sample_renders() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/examples/chart-text/play-chart-text.json");
+    let mut renderer = install(&path, bmz_skin::LuaSkinRuntimeMode::Auto);
+    let scene = |shown: &str, miss: Option<i32>| {
+        AppSceneSnapshot::Play(RenderSnapshot {
+            chart_text: shown.into(),
+            chart_text_event_elapsed_ms: Some(400),
+            chart_miss_text: "MISS!!".into(),
+            chart_miss_text_elapsed_ms: miss,
+            ready_elapsed_time: Some(TimeUs(0)),
+            ..Default::default()
+        })
+    };
+    assert_eq!(scene_texts(&mut renderer, scene("Hello World", None)), ["Hello World"]);
+    assert_eq!(scene_texts(&mut renderer, scene("MISS!!", Some(50))), ["MISS!!"]);
+    assert!(scene_texts(&mut renderer, scene("", None)).is_empty());
+}

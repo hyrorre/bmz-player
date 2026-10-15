@@ -443,3 +443,82 @@ fn chart_text_state_resets_when_the_chart_changes() {
         (true, None)
     );
 }
+
+fn miss_session(miss_text: Option<&str>, duration_us: i64) -> GameSession {
+    let mut chart = chart_with_texts(&[(1_000_000, "Normal"), (2_000_000, "Next")]);
+    chart.metadata.miss_text = miss_text.map(Into::into);
+    let mut session = session(chart);
+    session.poor_bga_duration_us = duration_us;
+    session
+}
+
+fn miss_state(snapshot: &RenderSnapshot) -> (String, Option<i32>, String, Option<i32>) {
+    (
+        snapshot.chart_text.to_string(),
+        snapshot.chart_miss_text_elapsed_ms,
+        snapshot.chart_miss_text.to_string(),
+        snapshot.chart_text_event_elapsed_ms,
+    )
+}
+
+#[test]
+fn text00_replaces_the_displayed_text_only_during_the_miss_window() {
+    let mut session = miss_session(Some("MISS!!"), 500_000);
+    let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+    let at = |session: &GameSession, now: i64| miss_state(&base(session, TimeUs(now), &cache));
+    let text = |text: &str| text.to_string();
+    // No miss yet: the definition is visible through 20103 only.
+    assert_eq!(at(&session, 1_500_000), (text("Normal"), None, text("MISS!!"), Some(500)));
+
+    session.last_miss_judgement_time = Some(TimeUs(1_800_000));
+    assert_eq!(at(&session, 1_800_000), (text("MISS!!"), Some(0), text("MISS!!"), Some(800)));
+    // Channel #99 keeps advancing under the miss message and timer 20102 is not reset.
+    assert_eq!(at(&session, 2_100_000), (text("MISS!!"), Some(300), text("MISS!!"), Some(100)));
+    // After the window the current channel #99 text returns.
+    assert_eq!(at(&session, 2_300_000), (text("Next"), None, text("MISS!!"), Some(300)));
+
+    // A consecutive miss restarts the window.
+    session.last_miss_judgement_time = Some(TimeUs(2_200_000));
+    assert_eq!(at(&session, 2_300_000), (text("MISS!!"), Some(100), text("MISS!!"), Some(300)));
+    assert_eq!(at(&session, 2_699_999), (text("MISS!!"), Some(499), text("MISS!!"), Some(699)));
+    assert_eq!(at(&session, 2_700_000), (text("Next"), None, text("MISS!!"), Some(700)));
+
+    // Projection uses the same window; PAUSE repeats the time and keeps the state.
+    let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+    let pool = PlayfieldProjection::pool(&session, &cache);
+    let mut snapshot = base(&session, TimeUs(0), &cache);
+    let mut clock = ProjectionClock::default();
+    for _ in 0..2 {
+        pool[0].project(&mut snapshot, TimeUs(2_450_000), &mut clock);
+        assert_eq!(miss_state(&snapshot), (text("MISS!!"), Some(250), text("MISS!!"), Some(450)));
+    }
+    pool[0].project(&mut snapshot, TimeUs(3_000_000), &mut clock);
+    assert_eq!(miss_state(&snapshot), (text("Next"), None, text("MISS!!"), Some(1_000)));
+}
+
+#[test]
+fn undefined_text00_or_zero_duration_never_changes_the_text() {
+    for (miss_text, duration) in [(None, 500_000), (Some("MISS"), 0)] {
+        let mut session = miss_session(miss_text, duration);
+        session.last_miss_judgement_time = Some(TimeUs(1_500_000));
+        let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+        let state = miss_state(&base(&session, TimeUs(1_600_000), &cache));
+        assert_eq!(
+            state,
+            ("Normal".to_string(), None, miss_text.unwrap_or_default().to_string(), Some(600)),
+            "{miss_text:?} {duration}"
+        );
+    }
+}
+
+#[test]
+fn miss_before_the_first_event_returns_to_empty_text() {
+    let mut session = miss_session(Some("MISS"), 200_000);
+    session.last_miss_judgement_time = Some(TimeUs(100_000));
+    let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+    let during = base(&session, TimeUs(150_000), &cache);
+    assert_eq!((&*during.chart_text, during.chart_miss_text_elapsed_ms), ("MISS", Some(50)));
+    assert_eq!(during.chart_text_event_elapsed_ms, None);
+    let after = base(&session, TimeUs(300_000), &cache);
+    assert_eq!((&*after.chart_text, after.chart_miss_text_elapsed_ms), ("", None));
+}

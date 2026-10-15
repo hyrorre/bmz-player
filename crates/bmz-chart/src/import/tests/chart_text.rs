@@ -148,3 +148,101 @@ fn malformed_text_commands_do_not_fail_import() {
     ));
     assert_eq!(text_events(&result), [(3 * SECOND, "ok".to_string())]);
 }
+
+#[test]
+fn legacy_song_definitions_are_text_definitions() {
+    let result = import_text(&format!("{HEADER}#SONG01 \"Legacy Message\"\n#00199:0100\n"));
+    assert_eq!(text_events(&result), [(2 * SECOND, "Legacy Message".to_string())]);
+    assert_eq!(result.chart.metadata.miss_text, None);
+}
+
+#[test]
+fn text_definitions_win_over_song_definitions_regardless_of_order() {
+    for source in [
+        "#SONG01 \"Old\"\n#TEXT01 \"New\"\n",
+        "#TEXT01 \"New\"\n#SONG01 \"Old\"\n",
+        "#song01 Old\n#TEXT01 Other\n#SONG01 Old2\n#text01 New\n",
+    ] {
+        let result = import_text(&format!("{HEADER}{source}#00199:0100\n"));
+        assert_eq!(text_events(&result), [(2 * SECOND, "New".to_string())], "{source}");
+    }
+    // An empty #TEXT definition still wins over #SONG.
+    let empty = import_text(&format!("{HEADER}#TEXT01 \"\"\n#SONG01 Old\n#00199:01\n"));
+    assert_eq!(text_events(&empty), [(2 * SECOND, String::new())]);
+    // Other IDs still fall back to #SONG, and repeated #SONG uses the later line.
+    let mixed = import_text(&format!(
+        "{HEADER}#TEXT01 Text\n#SONG02 Song A\n#SONG02 Song B\n#00199:0102\n"
+    ));
+    assert_eq!(
+        text_events(&mixed),
+        [(2 * SECOND, "Text".to_string()), (3 * SECOND, "Song B".to_string())]
+    );
+}
+
+#[test]
+fn song_definitions_follow_random_branches_and_base62() {
+    let source = format!(
+        "#BASE 62\n{HEADER}#SONGab lower\n#RANDOM 2\n#IF 1\n#TEXTab chosen\n#ENDIF\n\
+         #IF 2\n#SONGAB upper\n#ENDIF\n#ENDRANDOM\n#00199:abAB\n"
+    );
+    let one = import_bytes(
+        source.as_bytes(),
+        BmsRandomSource::Choices { random: vec![1], switches: Vec::new() },
+    );
+    assert_eq!(
+        text_events(&one),
+        [(2 * SECOND, "chosen".to_string()), (3 * SECOND, String::new())]
+    );
+    let two = import_bytes(
+        source.as_bytes(),
+        BmsRandomSource::Choices { random: vec![2], switches: Vec::new() },
+    );
+    assert_eq!(
+        text_events(&two),
+        [(2 * SECOND, "lower".to_string()), (3 * SECOND, "upper".to_string())]
+    );
+}
+
+#[test]
+fn text00_is_the_miss_message_and_not_a_channel_99_event() {
+    let result = import_text(&format!(
+        "{HEADER}#TEXT00 \"MISS!!\"\n#TEXT01 \"Normal message\"\n#00199:0100\n"
+    ));
+    assert_eq!(result.chart.metadata.miss_text.as_deref(), Some("MISS!!"));
+    assert_eq!(text_events(&result), [(2 * SECOND, "Normal message".to_string())]);
+
+    let without = import_text(&format!("{HEADER}#TEXT01 A\n#00199:01\n"));
+    assert_eq!(without.chart.metadata.miss_text, None);
+    // #SONG00 is outside the compatible range and is ignored.
+    let song00 = import_text(&format!("{HEADER}#SONG00 MISS\n#00199:01\n"));
+    assert_eq!(song00.chart.metadata.miss_text, None);
+    assert_eq!(text_events(&song00), [(2 * SECOND, String::new())]);
+    let empty = import_text(&format!("{HEADER}#TEXT00 \"\"\n#TEXT00 Later\n"));
+    assert_eq!(empty.chart.metadata.miss_text.as_deref(), Some("Later"));
+}
+
+#[test]
+fn text_import_keeps_the_raw_chart_identity() {
+    let source = format!("{HEADER}#SONG01 Old\n#TEXT01 New\n#TEXT00 MISS\n#00199:01\n");
+    let result = import_text(&source);
+    assert_eq!(result.chart.identity, compute_chart_identity(source.as_bytes()));
+    assert_eq!(result.chart.metadata.title, "Text");
+    assert_eq!(result.chart.total_notes, 1);
+}
+
+#[test]
+fn documented_chart_text_sample_imports() {
+    let path = repo_root().join("docs/examples/chart-text/chart-text.bms");
+    let result = import_bms_chart(&path, Some(1), false).unwrap();
+    assert_eq!(result.chart.metadata.miss_text.as_deref(), Some("MISS!!"));
+    assert_eq!(
+        text_events(&result),
+        [
+            (2 * SECOND, "Hello World".to_string()),
+            (3 * SECOND, "Second message".to_string()),
+            (4 * SECOND, "Hello World".to_string()),
+            (5 * SECOND, String::new()),
+            (6 * SECOND, "Legacy message".to_string()),
+        ]
+    );
+}

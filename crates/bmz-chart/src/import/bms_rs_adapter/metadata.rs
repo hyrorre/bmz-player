@@ -57,6 +57,7 @@ pub(super) fn build_metadata(bms: &Bms) -> IntermediateMetadata {
         source_url: String::new(),
         append_url: String::new(),
         bms_headers: BTreeMap::new(),
+        miss_text: None,
         key_mode: KeyMode::default(),
         base62_obj_ids: bms_uses_base62_obj_ids(bms),
         suppress_bar_lines: false,

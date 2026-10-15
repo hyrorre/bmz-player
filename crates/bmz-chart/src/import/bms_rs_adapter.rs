@@ -289,11 +289,8 @@ fn import_with_layout<T: KeyLayoutMapper>(
     bms.bmp.bga_changes.clear();
     // Text events have the same limitation; bms-rs also drops the rest of a #99 message
     // after an undefined object.
-    extra_objects.extend(source_text_objects(
-        &source_texts,
-        bms_uses_base62_obj_ids(&bms),
-        warnings,
-    ));
+    let source_texts = source_text_objects(&source_texts, bms_uses_base62_obj_ids(&bms), warnings);
+    extra_objects.extend(source_texts.objects);
     bms.text.text_events.clear();
 
     let mut intermediate = build_intermediate_from_bms_with_extra_objects::<T>(
@@ -307,6 +304,7 @@ fn import_with_layout<T: KeyLayoutMapper>(
         extract_lnobj_wav_key(&text, bms_uses_base62_obj_ids(&bms), warnings);
     let bms_headers = extract_bms_headers_from_text(&raw_text);
     intermediate.metadata.has_bms_random = has_bms_random;
+    intermediate.metadata.miss_text = source_texts.miss_text;
     intermediate.metadata.bms_headers = bms_headers.clone();
     apply_raw_judge_rank_headers(&mut intermediate, &bms_headers);
     intermediate.metadata.source_url = bms

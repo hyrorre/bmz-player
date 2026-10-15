@@ -258,6 +258,12 @@ pub const SKIN_OPTION_BMZ_CHART_TEXT_VISIBLE: i32 = 20_101;
 /// Elapsed ms since the latest channel #99 event, including repeats of the same text
 /// and switches to empty text. OFF before the first event.
 pub const SKIN_TIMER_BMZ_CHART_TEXT_EVENT: i32 = 20_102;
+/// BMS `#TEXT00` (nanasi miss message) definition. Empty when undefined.
+pub const SKIN_TEXT_BMZ_CHART_MISS_TEXT: i32 = 20_103;
+/// True while the `#TEXT00` miss message replaces [`SKIN_TEXT_BMZ_CHART_TEXT`].
+pub const SKIN_OPTION_BMZ_CHART_MISS_TEXT_ACTIVE: i32 = 20_104;
+/// Elapsed ms since the miss message display (re)started. OFF while inactive.
+pub const SKIN_TIMER_BMZ_CHART_MISS_TEXT: i32 = 20_105;
 
 pub fn detail_options_numeric_event(id: i32) -> Option<(usize, i32)> {
     (SKIN_EVENT_DETAIL_OPTIONS_NUMERIC_BASE..=SKIN_EVENT_DETAIL_OPTIONS_NUMERIC_LAST)

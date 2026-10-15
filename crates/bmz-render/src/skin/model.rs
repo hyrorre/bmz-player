@@ -114,6 +114,8 @@ pub struct SkinTextState<'a> {
     pub course_titles: [&'a str; 10],
     /// BMS `#TEXT` / チャネル #99 の表示文字列 (BMZ text 20100)。
     pub chart_text: &'a str,
+    /// BMS `#TEXT00` のミス表示文字列 (BMZ text 20103)。
+    pub chart_miss_text: &'a str,
     /// beatoraja `SkinProperty.STRING_SEARCHWORD` (`ref=30`) input overlay.
     /// Current song search query as typed by the user.
     pub search_word: &'a str,
@@ -165,6 +167,7 @@ impl<'a> Default for SkinTextState<'a> {
             course_stage: None,
             course_titles: [""; 10],
             chart_text: "",
+            chart_miss_text: "",
             search_word: "",
             rival: "",
             search_word_alpha: 1.0,

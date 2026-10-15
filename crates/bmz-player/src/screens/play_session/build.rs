@@ -591,6 +591,7 @@ pub fn build_game_session_with_input_backend(
         lane_auto_release_at: Default::default(),
         recent_judgements: Vec::new(),
         recent_display_judgements: Vec::new(),
+        last_miss_judgement_time: None,
         pending_skin_events: Vec::new(),
         next_skin_event_sequence: 0,
         result_judgements: Default::default(),

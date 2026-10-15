@@ -164,6 +164,7 @@ pub(in crate::plan) fn build_play_skin_state(
         bpm_change_preview: snapshot.bpm_change_preview,
         chart_text_visible: !snapshot.chart_text.is_empty(),
         chart_text_event_ms: snapshot.chart_text_event_elapsed_ms,
+        chart_miss_text_ms: snapshot.chart_miss_text_elapsed_ms,
         bpm_change_preview_lead_ms: skin
             .document()
             .and_then(|document| document.bmz_bpm_change_preview)
@@ -265,6 +266,7 @@ pub(super) fn build_play_skin_text(snapshot: &RenderSnapshot) -> SkinTextState<'
         course_stage: snapshot.course_stage,
         course_titles: string_array_refs(&snapshot.course_titles),
         chart_text: &snapshot.chart_text,
+        chart_miss_text: &snapshot.chart_miss_text,
         ..SkinTextState::default()
     }
 }
