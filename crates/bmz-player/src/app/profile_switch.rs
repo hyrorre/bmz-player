@@ -599,14 +599,17 @@ mod tests {
             assert_eq!(job_status().pending, 1);
             // 解除すると再開して、同じjobを処理する。
             pause_tx.send_replace(false);
+            // A claimed job leaves `pending` as `sending` before it is marked `failed`,
+            // so wait for the terminal state rather than for `pending` to empty.
             tokio::time::timeout(Duration::from_secs(5), async {
-                while job_status().pending != 0 {
+                while job_status().failed != 1 {
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
             })
             .await
             .unwrap();
-            assert_eq!(job_status().failed, 1);
+            let status = job_status();
+            assert_eq!((status.pending, status.sending, status.failed), (0, 0, 1));
             worker.stop();
         });
     }
