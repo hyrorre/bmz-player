@@ -956,6 +956,9 @@ fn table_level_override_applies_to_songlist_numbers_without_leaking_to_other_val
     assert_eq!(digits(&snapshot, &document), [3, 4, 3]);
     snapshot.rows[0].level_display_override = Some("???".into());
     assert_eq!(digits(&snapshot, &document), [5, 4, 5]);
+    // Negative levels (SB-1) also fall back; skins rarely draw a minus sign.
+    snapshot.rows[0].level_display_override = Some("-1".into());
+    assert_eq!(digits(&snapshot, &document), [5, 4, 5]);
 }
 
 #[test]
@@ -966,8 +969,9 @@ fn table_level_display_number_keeps_integer_part_of_modified_levels() {
         (" 12++ ", Some(12)),
         ("12.5", Some(12)),
         ("12a", Some(12)),
-        ("-1", Some(-1)),
         ("0", Some(0)),
+        ("-1", None),
+        ("-0.5", None),
         ("???", None),
         ("地力A", None),
         ("★12", None),

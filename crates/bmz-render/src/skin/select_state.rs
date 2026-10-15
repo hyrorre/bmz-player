@@ -65,13 +65,12 @@ pub(super) fn full_label(primary: &str, secondary: &str) -> String {
 
 /// Numeric value of a difficulty table level label for number sprites: the leading
 /// integer, as LR2 shows `11+` / `12.5` as 11 / 12. Labels that do not start with a
-/// number (`???`, `地力A`) have none and the chart's own level is shown instead.
+/// digit (`???`, `地力A`, and negative levels such as SB's `-1`, which skins rarely
+/// draw correctly) have none and the chart's own level is shown instead.
 pub(super) fn table_level_display_number(label: &str) -> Option<i64> {
     let label = label.trim();
-    let unsigned = label.strip_prefix('-').unwrap_or(label);
-    let digits = unsigned.len() - unsigned.trim_start_matches(|ch: char| ch.is_ascii_digit()).len();
-    let value = unsigned[..digits].parse::<i64>().ok()?;
-    Some(if unsigned.len() < label.len() { -value } else { value })
+    let digits = label.len() - label.trim_start_matches(|ch: char| ch.is_ascii_digit()).len();
+    label[..digits].parse::<i64>().ok()
 }
 
 pub(super) fn select_row_level_number(row: &SelectRowSnapshot) -> i64 {
