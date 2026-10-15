@@ -3,6 +3,42 @@ use super::*;
 #[derive(Debug, Default)]
 struct OrderedRuntime(Mutex<Vec<usize>>);
 
+#[test]
+fn prepared_lr2_layout_preserves_lua_condition_calls_even_without_a_base_area() {
+    for with_base_area in [true, false] {
+        let mut document: SkinDocument = serde_json::from_value(serde_json::json!({
+            "w":100,"h":100,
+            "note":{"dst":[{"x":0,"y":0,"w":10,"h":100}],
+                "lr2Dst":[{"op_expr":["bmz:lua_draw_callback:0"],
+                    "dst":[{"x":0,"y":0,"w":10,"h":5}]}]}
+        }))
+        .unwrap();
+        if !with_base_area {
+            document.note.as_mut().unwrap().dst.clear();
+        }
+        let skin =
+            SkinContext::from_manifest_and_document(default_skin_manifest(), document.clone(), []);
+        let runtime = Arc::new(OrderedRuntime::default());
+        let options = document.enabled_options();
+        let state = SkinDrawState {
+            lua_runtime: Some(SkinLuaRuntimeContext {
+                runtime: runtime.clone(),
+                enabled_options: Arc::from(options.clone()),
+                text_values: Arc::new(BTreeMap::new()),
+            }),
+            ..Default::default()
+        };
+        for lane in Lane::ALL {
+            let _ = note_lane_area_for_state(&document, lane, KeyMode::K7, &options, &state);
+            let _ = lr2_note_frame(&document, lane, KeyMode::K7, &options, &state);
+        }
+        let expected = std::mem::take(&mut *runtime.0.lock().unwrap());
+        assert!(!expected.is_empty());
+        let _ = skin.prepare_note_layout(KeyMode::K7, &state);
+        assert_eq!(*runtime.0.lock().unwrap(), expected, "base area={with_base_area}");
+    }
+}
+
 #[derive(Debug, Default)]
 struct PreparingNumberRuntime(Mutex<Vec<usize>>);
 

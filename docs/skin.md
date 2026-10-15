@@ -258,6 +258,9 @@ profileの `[select].new_title_hours` は既定24時間、0で無効。NEWフォ
 それぞれの位置を保ち、同じ定義の連続DSTはアニメーションのkeyframeとして同じ目印へまとめる。
 目印の無い部品は最初の目印の位置で描く。クリック判定は従来どおり最初の目印の位置で1回だけ行う。
 JSON / Luaスキンのsonglistは目印を持たず、従来どおり1か所で行ごとに描く。
+描画準備では目印一覧をdocumentの構造cacheへ保持し、`order`を持つLR2の部品は
+フレーム内で1回だけ描画位置へ振り分ける。目印の重複やclipで見えない目印も扱い、
+`order`の無い旧形式の目印は従来の部品名・indexによる照合を維持する。
 別オブジェクトのDSTをkeyframeの間へ挟み、アニメーションに応じて前後関係を変えるLR2の`sortID`補間は対象外とする。
 表示位置が選択から複数行遅れる場合は、その位置の周囲の行を別途供給する。
 選択中の譜面・number/text/option参照・決定操作は入力直後の選択に従い、選択変更タイマーと
@@ -639,6 +642,11 @@ runtime callback内でだけ読むskinは再decodeせず、closure stateを維�
 destinationごとに1回評価し、その結果を描画・数値画像cacheへ渡す。非表示やcache hitでも
 Luaの状態更新を省略せず、同じdestination内で二重実行しない。失敗・非有限値・整数の
 非表示sentinelでは数字を描画しない。
+描画用の構造cacheはdestinationとobject・検索欄textの対応を保持し、条件・timer・
+callbackの結果は固定しない。同じIDを複数定義した場合の各objectの優先順位も維持する。
+LR2数値画像のcacheは経過msではなく実際のsource frameを使い、値・座標・色・回転・
+LR2のblend/filter/center・素材が変わると作り直す。1フレーム素材にcycleが指定されても
+同じ画像を再利用できる。clipは数値画像のcache外で毎フレーム適用する。
 Luxe Flat Result型の `rank_diff_count` / `rank_diff_*` が共有 `rank_plus` を捕捉する場合、
 value / drawは `auto` でもLua実行を維持し、
 ランク差分の戻り値だけを組み込み式へ置き換えて `scorerate` 等の更新を失わないようにする。

@@ -17,7 +17,8 @@ struct NumberRenderEntry {
 #[derive(Debug, PartialEq)]
 struct NumberRenderKey {
     number: i64,
-    geometry_color: [i32; 8],
+    geometry_color: [i32; 9],
+    lr2_style: Option<SkinLr2FrameStyle>,
     texture: SkinTextureId,
     source_size: SkinImageSize,
     animation_phase: i32,
@@ -57,11 +58,26 @@ impl NumberRenderCache {
         let key = NumberRenderKey {
             number,
             geometry_color: [
-                frame.x, frame.y, frame.w, frame.h, frame.r, frame.g, frame.b, frame.a,
+                frame.x,
+                frame.y,
+                frame.w,
+                frame.h,
+                frame.r,
+                frame.g,
+                frame.b,
+                frame.a,
+                frame.angle,
             ],
+            lr2_style: frame.lr2_style,
             texture: source.texture,
             source_size: source.source_size,
-            animation_phase: if value.cycle > 0 { elapsed_ms.rem_euclid(value.cycle) } else { 0 },
+            animation_phase: if value.lr2_number {
+                lr2_number_animation_frame(value, elapsed_ms)
+            } else if value.cycle > 0 {
+                elapsed_ms.rem_euclid(value.cycle)
+            } else {
+                0
+            },
             signed,
         };
         if entry.key.as_ref() == Some(&key) {

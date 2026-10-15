@@ -117,11 +117,29 @@ macro_rules! skin_document_render_select_songlist_methods {
                 if let Some(item) =
                     self.select_bar_item(row, row_destination, row_frame, sources, state)
                 {
-                    items.push(tag(
-                        if selected { "liston" } else { "listoff" },
-                        slot as usize,
-                        &row_state,
-                    )(item));
+                    let part = if selected { "liston" } else { "listoff" };
+                    if row_state.lua_runtime.is_some() {
+                        // A Lua condition can change state when selecting the
+                        // tag. Keep that evaluation and its original order.
+                        items.push(tag(part, slot as usize, &row_state)(item));
+                    } else {
+                        items.push((
+                            SongListPartKey {
+                                part,
+                                index: slot as usize,
+                                order: self
+                                    .lr2
+                                    .then(|| {
+                                        row_destination
+                                            .lr2_bar_part
+                                            .as_ref()
+                                            .and_then(|part| part.order)
+                                    })
+                                    .flatten(),
+                            },
+                            item,
+                        ));
+                    }
                 }
                 if selected {
                     items.extend(

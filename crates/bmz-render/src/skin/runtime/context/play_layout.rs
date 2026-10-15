@@ -61,11 +61,24 @@ impl SkinContext {
                         .note_lane_area(lane, key_mode, &options)
                         .map_or(0.0, |area| (1.0 - area.x).max(0.0) * document.w.max(1) as f32);
                 }
-                layout.areas[lane.index()] =
-                    note_lane_area_for_state(document, lane, key_mode, &options, state);
-                layout.heights[lane.index()] = document.note_height_for_lane(lane, key_mode);
+                // LR2 imports have no Lua sidecar. Reuse their pure frame
+                // resolution, but keep existing callback calls/order for Lua.
+                if state.lua_runtime.is_some() {
+                    layout.areas[lane.index()] =
+                        note_lane_area_for_state(document, lane, key_mode, &options, state);
+                }
                 layout.frames[lane.index()] =
                     lr2_note_frame(document, lane, key_mode, &options, state);
+                if state.lua_runtime.is_none() {
+                    layout.areas[lane.index()] = note_lane_area_for_frame(
+                        document,
+                        lane,
+                        key_mode,
+                        &options,
+                        layout.frames[lane.index()],
+                    );
+                }
+                layout.heights[lane.index()] = document.note_height_for_lane(lane, key_mode);
                 if let Some(frame) = layout.frames[lane.index()] {
                     layout.heights[lane.index()] =
                         Some(frame.h.abs() as f32 / document.h.max(1) as f32);

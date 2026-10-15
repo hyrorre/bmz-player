@@ -14,15 +14,41 @@ pub(in crate::skin::document_render) fn select_search_input_anchors<'a>(
     selected_row: Option<&SelectRowSnapshot>,
     enabled_options: &[i32],
 ) -> Vec<SelectSearchInputAnchor<'a>> {
-    let destinations = document.all_destinations(enabled_options);
+    select_search_input_anchors_with_planning(
+        document,
+        snapshot,
+        settings_dest_index,
+        state,
+        selected_row,
+        enabled_options,
+        None,
+    )
+}
+
+pub(in crate::skin::document_render) fn select_search_input_anchors_with_planning<'a>(
+    document: &'a SkinDocument,
+    snapshot: &SelectSnapshot,
+    settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+    state: &SkinDrawState,
+    selected_row: Option<&SelectRowSnapshot>,
+    enabled_options: &[i32],
+    planning: Option<&DocumentPlanningCache>,
+) -> Vec<SelectSearchInputAnchor<'a>> {
+    let destinations =
+        if planning.is_none() { document.all_destinations(enabled_options) } else { Vec::new() };
     let mut anchors = Vec::new();
 
-    for destination in destinations {
-        let Some(text) =
-            document.text.iter().find(|text| text.ref_id == 30 && text.id == destination.id)
-        else {
-            continue;
-        };
+    let cached = planning.into_iter().flat_map(|p| p.search_inputs.iter()).filter_map(
+        |&(destination, text)| Some((destination.resolve(document)?, document.text.get(text)?)),
+    );
+    let uncached = destinations.into_iter().filter_map(|destination| {
+        document
+            .text
+            .iter()
+            .find(|text| text.ref_id == 30 && text.id == destination.id)
+            .map(|text| (destination, text))
+    });
+    for (destination, text) in cached.chain(uncached) {
         if !crate::select_settings_dest::test_select_destination_visible(
             settings_dest_index,
             destination,

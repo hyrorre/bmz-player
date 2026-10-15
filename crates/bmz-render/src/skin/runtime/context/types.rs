@@ -405,8 +405,31 @@ fn cached_document_planning(
         images: document.image.iter().enumerate().map(|(i, image)| (image.id.clone(), i)).collect(),
         values: document.value.iter().enumerate().map(|(i, value)| (value.id.clone(), i)).collect(),
     });
-    let planning =
-        DocumentPlanningCache { enabled_options, destinations: Arc::from(destinations), objects };
+    let destination_objects: Vec<_> = destinations
+        .iter()
+        .map(|destination| {
+            destination
+                .resolve(document)
+                .map(|destination| DestinationObjectIndices::new(document, destination))
+                .unwrap_or_default()
+        })
+        .collect();
+    let search_inputs = destinations
+        .iter()
+        .zip(&destination_objects)
+        .filter_map(|(&destination, objects)| objects.search_text.map(|text| (destination, text)))
+        .collect::<Vec<_>>();
+    let bar_parts = Arc::new(crate::skin::document_render::SongListBarParts::new(
+        crate::skin::document_render::songlist_bar_part_markers(document, &enabled_options),
+    ));
+    let planning = DocumentPlanningCache {
+        enabled_options,
+        destinations: Arc::from(destinations),
+        objects,
+        destination_objects: Arc::from(destination_objects),
+        search_inputs: Arc::from(search_inputs),
+        bar_parts,
+    };
     *cached = Some(planning.clone());
     planning
 }
@@ -423,6 +446,9 @@ pub(in crate::skin) struct DocumentPlanningCache {
     pub(in crate::skin) enabled_options: Arc<[i32]>,
     pub(in crate::skin) destinations: Arc<[ResultDestinationRef]>,
     pub(in crate::skin) objects: Arc<DocumentObjectIndices>,
+    pub(in crate::skin) destination_objects: Arc<[DestinationObjectIndices]>,
+    pub(in crate::skin) search_inputs: Arc<[(ResultDestinationRef, usize)]>,
+    pub(in crate::skin) bar_parts: Arc<crate::skin::document_render::SongListBarParts>,
 }
 
 #[derive(Debug)]

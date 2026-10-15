@@ -291,6 +291,9 @@ macro_rules! skin_document_render_core_static_methods {
                                             index,
                                             destination,
                                             DestinationResolveContext {
+                                                objects: planning
+                                                    .as_ref()
+                                                    .map(|p| &p.destination_objects[index]),
                                                 images: &images,
                                                 values: &values,
                                                 enabled_options,
@@ -315,6 +318,7 @@ macro_rules! skin_document_render_core_static_methods {
                             index,
                             destination,
                             DestinationResolveContext {
+                                objects: planning.as_ref().map(|p| &p.destination_objects[index]),
                                 images: &images,
                                 values: &values,
                                 enabled_options,

@@ -6,7 +6,11 @@ macro_rules! skin_document_render_core_resolve_methods {
             destination: &SkinDestinationDef,
             context: DestinationResolveContext<'_, '_>,
         ) -> Option<Vec<SkinRenderItem>> {
-            if let Some(chart) = self.lr2_charts.iter().find(|chart| chart.id == destination.id) {
+            if let Some(chart) = indexed_destination_object(
+                &self.lr2_charts,
+                context.objects.map(|o| o.lr2_charts),
+                |chart| chart.id == destination.id,
+            ) {
                 let elapsed = destination_timer_elapsed_ms(destination, context.state)?;
                 let mut frame = resolve_destination_frame(
                     destination,
@@ -22,6 +26,7 @@ macro_rules! skin_document_render_core_resolve_methods {
                 ));
             }
             let DestinationResolveContext {
+                objects,
                 images,
                 values,
                 enabled_options,
@@ -33,7 +38,11 @@ macro_rules! skin_document_render_core_resolve_methods {
                 number_cache,
                 prepared_number,
             } = context;
-            if let Some(judge_def) = self.judge.iter().find(|judge| judge.id == destination.id) {
+            if let Some(judge_def) =
+                indexed_destination_object(&self.judge, objects.map(|o| o.judge), |item| {
+                    item.id == destination.id
+                })
+            {
                 // SkinJudge 自身に destination が設定されている場合は、beatoraja の
                 // `super.prepare` と同じく外側の timer/op/draw も先に評価する。
                 // dst が空なら SkinJudge constructor の既定 destination が残る。
@@ -80,12 +89,19 @@ macro_rules! skin_document_render_core_resolve_methods {
             })?;
             let mut frame =
                 resolve_destination_frame(destination, elapsed, enabled_options, state)?;
-            let is_hidden_cover_destination = self
-                .hidden_cover
-                .iter()
-                .any(|cover| cover.id == destination.id && !is_lift_lane_cover_id(&cover.id));
-            let is_lift_cover_destination =
-                self.lift_cover.iter().any(|cover| cover.id == destination.id);
+            let is_hidden_cover_destination = indexed_destination_object(
+                &self.hidden_cover,
+                objects.map(|o| o.hidden_cover),
+                |cover| cover.id == destination.id,
+            )
+            .is_some()
+                && !is_lift_lane_cover_id(&destination.id);
+            let is_lift_cover_destination = indexed_destination_object(
+                &self.lift_cover,
+                objects.map(|o| o.lift_cover),
+                |cover| cover.id == destination.id,
+            )
+            .is_some();
             apply_skin_offset_to_frame(destination, &mut frame, state, is_hidden_cover_destination);
             if is_lift_cover_destination && !destination_uses_skin_offset(destination, 3) {
                 apply_skin_offset_ids_to_frame(&[3], &mut frame, state, false);
@@ -97,7 +113,11 @@ macro_rules! skin_document_render_core_resolve_methods {
             // Ambient items are built inside this closure, keeping clip outside blur.
             let clip = frame.take_clip(self.w, self.h);
             let items = (|| {
-                if let Some(panel) = self.panel.iter().find(|panel| panel.id == destination.id) {
+                if let Some(panel) =
+                    indexed_destination_object(&self.panel, objects.map(|o| o.panel), |item| {
+                        item.id == destination.id
+                    })
+                {
                     return Some(skin_panel_render_items(
                         panel,
                         destination,
@@ -106,11 +126,11 @@ macro_rules! skin_document_render_core_resolve_methods {
                         self.h,
                     ));
                 }
-                if let Some(visualizer) = self
-                    .hiterror_visualizer
-                    .iter()
-                    .find(|visualizer| visualizer.id == destination.id)
-                {
+                if let Some(visualizer) = indexed_destination_object(
+                    &self.hiterror_visualizer,
+                    objects.map(|o| o.hiterror_visualizer),
+                    |item| item.id == destination.id,
+                ) {
                     return Some(self.hiterror_visualizer_render_items(
                         visualizer,
                         destination,
@@ -118,9 +138,11 @@ macro_rules! skin_document_render_core_resolve_methods {
                         state,
                     ));
                 }
-                if let Some(visualizer) =
-                    self.timingvisualizer.iter().find(|visualizer| visualizer.id == destination.id)
-                {
+                if let Some(visualizer) = indexed_destination_object(
+                    &self.timingvisualizer,
+                    objects.map(|o| o.timingvisualizer),
+                    |item| item.id == destination.id,
+                ) {
                     return Some(self.timing_visualizer_render_items(
                         visualizer,
                         destination,
@@ -129,9 +151,11 @@ macro_rules! skin_document_render_core_resolve_methods {
                         runtime_graphs.result_timing_points,
                     ));
                 }
-                if let Some(graph) =
-                    self.timingdistributiongraph.iter().find(|graph| graph.id == destination.id)
-                {
+                if let Some(graph) = indexed_destination_object(
+                    &self.timingdistributiongraph,
+                    objects.map(|o| o.timingdistributiongraph),
+                    |item| item.id == destination.id,
+                ) {
                     return Some(self.timing_distribution_graph_render_items(
                         graph,
                         destination,
@@ -141,9 +165,11 @@ macro_rules! skin_document_render_core_resolve_methods {
                         runtime_graphs.result_timing_distribution,
                     ));
                 }
-                if let Some(gauge_graph) =
-                    self.gaugegraph.iter().find(|graph| graph.id == destination.id)
-                {
+                if let Some(gauge_graph) = indexed_destination_object(
+                    &self.gaugegraph,
+                    objects.map(|o| o.gaugegraph),
+                    |item| item.id == destination.id,
+                ) {
                     return Some(self.gaugegraph_render_items(
                         destination_index,
                         gauge_graph,
@@ -154,9 +180,11 @@ macro_rules! skin_document_render_core_resolve_methods {
                         cache,
                     ));
                 }
-                if let Some(judge_graph) =
-                    self.judgegraph.iter().find(|graph| graph.id == destination.id)
-                {
+                if let Some(judge_graph) = indexed_destination_object(
+                    &self.judgegraph,
+                    objects.map(|o| o.judgegraph),
+                    |item| item.id == destination.id,
+                ) {
                     return Some(self.judgegraph_render_items(
                         destination_index,
                         judge_graph,
@@ -168,9 +196,11 @@ macro_rules! skin_document_render_core_resolve_methods {
                         cache,
                     ));
                 }
-                if let Some(bpm_graph) =
-                    self.bpmgraph.iter().find(|graph| graph.id == destination.id)
-                {
+                if let Some(bpm_graph) = indexed_destination_object(
+                    &self.bpmgraph,
+                    objects.map(|o| o.bpmgraph),
+                    |item| item.id == destination.id,
+                ) {
                     return Some(self.bpmgraph_render_items_with_segments(
                         bpm_graph,
                         destination,
@@ -180,7 +210,9 @@ macro_rules! skin_document_render_core_resolve_methods {
                     ));
                 }
                 if let Some(pmchara) =
-                    self.pmchara.iter().find(|pmchara| pmchara.id == destination.id)
+                    indexed_destination_object(&self.pmchara, objects.map(|o| o.pmchara), |item| {
+                        item.id == destination.id
+                    })
                 {
                     return Some(pm_chara_render_items(
                         pmchara,
@@ -221,6 +253,7 @@ macro_rules! skin_document_render_core_resolve_methods {
                 // imageset (キービーム・ボム等) を destination 自身のタイマー駆動で描画する。
                 // timer が非アクティブな destination は上の skin_timer_elapsed_ms で除外済み。
                 if let Some(items) = self.resolve_imageset_destination_items(
+                    objects,
                     destination,
                     frame,
                     images,
@@ -266,20 +299,30 @@ macro_rules! skin_document_render_core_resolve_methods {
                     ));
                 }
 
-                if let Some(graph) = self.graph.iter().find(|graph| graph.id == destination.id) {
+                if let Some(graph) =
+                    indexed_destination_object(&self.graph, objects.map(|o| o.graph), |item| {
+                        item.id == destination.id
+                    })
+                {
                     return self
                         .graph_render_item(graph, frame, state, sources)
                         .map(|item| vec![item]);
                 }
 
-                if let Some(text) = self.text.iter().find(|text| text.id == destination.id)
+                if let Some(text) =
+                    indexed_destination_object(&self.text, objects.map(|o| o.text), |item| {
+                        item.id == destination.id
+                    })
                     && let Some(item) =
                         self.text_render_item_with_draw_state(text, frame, Some(state), text_state)
                 {
                     return Some(vec![item]);
                 }
 
-                if let Some(slider) = self.slider.iter().find(|slider| slider.id == destination.id)
+                if let Some(slider) =
+                    indexed_destination_object(&self.slider, objects.map(|o| o.slider), |item| {
+                        item.id == destination.id
+                    })
                     && let Some(item) =
                         self.slider_render_item(slider, destination, frame, state, sources)
                 {
@@ -300,15 +343,20 @@ macro_rules! skin_document_render_core_resolve_methods {
                     return Some(vec![item]);
                 }
 
-                if let Some(lift_cover) =
-                    self.lift_cover.iter().find(|cover| cover.id == destination.id)
-                {
+                if let Some(lift_cover) = indexed_destination_object(
+                    &self.lift_cover,
+                    objects.map(|o| o.lift_cover),
+                    |item| item.id == destination.id,
+                ) {
                     return self
                         .hidden_cover_render_item(lift_cover, destination, frame, state, sources)
                         .map(|item| vec![item]);
                 }
-                let hidden_cover =
-                    self.hidden_cover.iter().find(|cover| cover.id == destination.id)?;
+                let hidden_cover = indexed_destination_object(
+                    &self.hidden_cover,
+                    objects.map(|o| o.hidden_cover),
+                    |item| item.id == destination.id,
+                )?;
                 self.hidden_cover_render_item(hidden_cover, destination, frame, state, sources)
                     .map(|item| vec![item])
             })()?;
@@ -471,13 +519,17 @@ macro_rules! skin_document_render_core_resolve_methods {
 
         fn resolve_imageset_destination_items(
             &self,
+            objects: Option<&DestinationObjectIndices>,
             destination: &SkinDestinationDef,
             frame: ResolvedSkinFrame,
             images: &SkinImageLookup<'_>,
             state: &SkinDrawState,
             sources: &HashMap<String, SkinDocumentTexture>,
         ) -> Option<Option<Vec<SkinRenderItem>>> {
-            let imageset = self.imageset.iter().find(|set| set.id == destination.id)?;
+            let imageset =
+                indexed_destination_object(&self.imageset, objects.map(|o| o.imageset), |set| {
+                    set.id == destination.id
+                })?;
             let image_id = if let Some(property) = &imageset.value {
                 let Some(index) =
                     skin_integer_property(property, state).filter(|index| *index >= 0)

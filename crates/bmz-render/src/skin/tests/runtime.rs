@@ -2,6 +2,8 @@ use super::*;
 
 #[path = "runtime/number_cache.rs"]
 mod number_cache;
+#[path = "runtime/planning.rs"]
+mod planning;
 #[path = "runtime/play_cache.rs"]
 mod play_cache;
 

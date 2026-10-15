@@ -510,9 +510,31 @@ pub(super) fn note_lane_area_for_state(
     options: &[i32],
     state: &SkinDrawState,
 ) -> Option<Rect> {
+    resolve_note_lane_area(document, lane, key_mode, options, || {
+        lr2_note_frame(document, lane, key_mode, options, state)
+    })
+}
+
+pub(super) fn note_lane_area_for_frame(
+    document: &SkinDocument,
+    lane: Lane,
+    key_mode: KeyMode,
+    options: &[i32],
+    frame: Option<ResolvedSkinFrame>,
+) -> Option<Rect> {
+    resolve_note_lane_area(document, lane, key_mode, options, || frame)
+}
+
+fn resolve_note_lane_area(
+    document: &SkinDocument,
+    lane: Lane,
+    key_mode: KeyMode,
+    options: &[i32],
+    resolve_frame: impl FnOnce() -> Option<ResolvedSkinFrame>,
+) -> Option<Rect> {
     let mut area = document.note_lane_area(lane, key_mode, options)?;
     if lr2_note_destination(document, lane, key_mode).is_some() {
-        let frame = lr2_note_frame(document, lane, key_mode, options, state)?;
+        let frame = resolve_frame()?;
         area.x = frame.x as f32 / document.w.max(1) as f32;
         area.width = frame.w as f32 / document.w.max(1) as f32;
         // Scroll distance remains relative to the initial lane height. Animating

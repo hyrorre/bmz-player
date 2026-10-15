@@ -173,13 +173,14 @@ macro_rules! skin_document_render_select_render_methods {
                 let destination_count = planning
                     .as_ref()
                     .map_or(destinations.len(), |planning| planning.destinations.len());
-                let search_input_anchors = select::select_search_input_anchors(
+                let search_input_anchors = select::select_search_input_anchors_with_planning(
                     self,
                     snapshot,
                     settings_dest_index,
                     &state,
                     selected_row,
                     enabled_options,
+                    planning.as_ref(),
                 );
                 let search_input_render_item =
                     |anchor: &select::SelectSearchInputAnchor<'_>| -> Option<SkinRenderItem> {
@@ -215,6 +216,8 @@ macro_rules! skin_document_render_select_render_methods {
                     else {
                         continue;
                     };
+                    let objects =
+                        planning.as_ref().map(|p| &p.destination_objects[destination_index]);
                     if destination.id
                         == self.songlist.as_ref().map(|list| list.id.as_str()).unwrap_or("")
                     {
@@ -241,44 +244,44 @@ macro_rules! skin_document_render_select_render_methods {
                         } else {
                             None
                         };
-                        let songlist_items =
-                            match destination.lr2_bar_part.as_ref().filter(|_| self.lr2) {
-                                // SkinBar draws its children directly; only its outer clip applies.
-                                None => self.select_songlist_items(
-                                    sources,
-                                    snapshot,
-                                    &images,
-                                    enabled_options,
-                                    &state,
-                                ),
-                                // LR2 draws each bar part at its own DST position.
-                                Some(part) => {
-                                    let pending = songlist_parts.get_or_insert_with(|| {
-                                        self.select_songlist_part_items(
-                                            sources,
-                                            snapshot,
-                                            &images,
-                                            enabled_options,
-                                            &state,
-                                        )
-                                    });
-                                    let markers = songlist_markers.get_or_insert_with(|| {
-                                        songlist_bar_part_markers(self, enabled_options)
-                                    });
-                                    // Parts without their own DST keep the first marker's position.
-                                    let first = !std::mem::replace(&mut songlist_marker_seen, true);
-                                    pending
-                                        .extract_if(.., |(key, _)| {
-                                            key.matches(part)
-                                                || (first
-                                                    && !markers
-                                                        .iter()
-                                                        .any(|marker| key.matches(marker)))
-                                        })
-                                        .map(|(_, item)| item)
-                                        .collect()
-                                }
-                            };
+                        let songlist_items = match destination
+                            .lr2_bar_part
+                            .as_ref()
+                            .filter(|_| self.lr2)
+                        {
+                            // SkinBar draws its children directly; only its outer clip applies.
+                            None => self.select_songlist_items(
+                                sources,
+                                snapshot,
+                                &images,
+                                enabled_options,
+                                &state,
+                            ),
+                            // LR2 draws each bar part at its own DST position.
+                            Some(part) => {
+                                let markers = songlist_markers.get_or_insert_with(|| {
+                                    planning.as_ref().map_or_else(
+                                        || {
+                                            Arc::new(SongListBarParts::new(
+                                                songlist_bar_part_markers(self, enabled_options),
+                                            ))
+                                        },
+                                        |p| Arc::clone(&p.bar_parts),
+                                    )
+                                });
+                                let pending = songlist_parts.get_or_insert_with(|| {
+                                    markers.bucket(self.select_songlist_part_items(
+                                        sources,
+                                        snapshot,
+                                        &images,
+                                        enabled_options,
+                                        &state,
+                                    ))
+                                });
+                                let first = !std::mem::replace(&mut songlist_marker_seen, true);
+                                pending.take(part, first, markers)
+                            }
+                        };
                         items.extend(wrap_skin_destination_clip(songlist_items, clip));
                         continue;
                     }
@@ -287,7 +290,14 @@ macro_rules! skin_document_render_select_render_methods {
                     // the destination's original z position so later skin objects
                     // (notably option panels) can cover it. While editing, the input
                     // and caret remain a separate TextField-like overlay after the skin.
-                    if self.text.iter().any(|text| text.ref_id == 30 && text.id == destination.id) {
+                    if objects.map_or_else(
+                        || {
+                            self.text
+                                .iter()
+                                .any(|text| text.ref_id == 30 && text.id == destination.id)
+                        },
+                        |o| o.search_text.is_some(),
+                    ) {
                         if !snapshot.search_input_active
                             && let Some(anchor) = search_input_anchors
                                 .iter()
@@ -336,7 +346,11 @@ macro_rules! skin_document_render_select_render_methods {
                     }
                     if let (Some(row), Some(judge_graph)) = (
                         selected_row.filter(|row| select_row_shows_score_decorations(row)),
-                        self.judgegraph.iter().find(|graph| graph.id == destination.id),
+                        indexed_destination_object(
+                            &self.judgegraph,
+                            objects.map(|o| o.judgegraph),
+                            |graph| graph.id == destination.id,
+                        ),
                     ) {
                         items.extend(self.select_note_distribution_graph_render_items(
                             row,
@@ -351,7 +365,11 @@ macro_rules! skin_document_render_select_render_methods {
                     }
                     if let (Some(row), Some(bpm_graph)) = (
                         selected_row.filter(|row| select_row_shows_score_decorations(row)),
-                        self.bpmgraph.iter().find(|graph| graph.id == destination.id),
+                        indexed_destination_object(
+                            &self.bpmgraph,
+                            objects.map(|o| o.bpmgraph),
+                            |graph| graph.id == destination.id,
+                        ),
                     ) {
                         let Some(elapsed) = skin_timer_elapsed_ms(destination.timer, &state) else {
                             continue;
@@ -390,6 +408,9 @@ macro_rules! skin_document_render_select_render_methods {
                                     destination_index,
                                     destination,
                                     DestinationResolveContext {
+                                        objects: planning
+                                            .as_ref()
+                                            .map(|p| &p.destination_objects[destination_index]),
                                         images: &images,
                                         values: &values,
                                         enabled_options,
@@ -412,6 +433,9 @@ macro_rules! skin_document_render_select_render_methods {
                         destination_index,
                         destination,
                         DestinationResolveContext {
+                            objects: planning
+                                .as_ref()
+                                .map(|p| &p.destination_objects[destination_index]),
                             images: &images,
                             values: &values,
                             enabled_options,

@@ -1,5 +1,8 @@
 use super::*;
 
+mod songlist_parts;
+pub(in crate::skin) use songlist_parts::SongListBarParts;
+
 /// SkinDocumentの描画・hit test・レーン寸法を利用する公開API。
 /// destination解決やcache構築の詳細はskinモジュール内の評価traitに置く。
 pub trait SkinDocumentRenderExt {
@@ -238,6 +241,7 @@ pub(super) trait SkinDocumentRenderInternal {
 
     fn resolve_imageset_destination_items(
         &self,
+        objects: Option<&DestinationObjectIndices>,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
         images: &SkinImageLookup<'_>,

@@ -109,6 +109,17 @@ pub(super) fn lr2_number_frame_cells(value: &SkinValueDef) -> Option<i32> {
     [24, 11, 10].into_iter().find(|stride| cells % stride == 0)
 }
 
+/// The source frame shared by every glyph, also used by the number cache.
+pub(super) fn lr2_number_animation_frame(value: &SkinValueDef, elapsed_ms: i32) -> i32 {
+    if value.cycle <= 0 {
+        return 0;
+    }
+    let stride = lr2_number_frame_cells(value).unwrap_or(1);
+    let frames = value.divx.max(1).saturating_mul(value.divy.max(1)) / stride;
+    (i64::from(elapsed_ms.rem_euclid(value.cycle)) * i64::from(frames) / i64::from(value.cycle))
+        as i32
+}
+
 /// LR2's glyph indices are linear in the source grid, including blanks and
 /// the sign cell. MAX denotes an undrawn space in a ten-cell font.
 pub(super) fn lr2_number_digits(value: &SkinValueDef, number: i64, align: i32) -> Option<Vec<u8>> {
