@@ -38,6 +38,7 @@ BMZ固有のIDや詳細な動作契約は [skin.md](skin.md)、互換修正の�
 | LR2 wildcard include | CUSTOMFILE適用後に残るCSVファイル名の単一`*`から抽選。解像度推定と本変換で選択を共有。ディレクトリwildcard・DXA内CSVは対象外 |
 | LR2数値のセル配置 | 10 / 11 / 24セル単位のcycle、6×4 / 4×6 / 24×1の符号付き素材、空き桁・揃え・桁あふれをLR2用に評価。[描画テスト](../crates/bmz-render/src/skin/tests/play/lr2_compat.rs) |
 | LR2 ResultのCLEAR TYPE・TARGET・DURATION | buttonのセルを横縦共通で選択し、更新後のランプ条件、MAXへの負の差、SPターゲットの最終EX、譜面・コース長を表示。Playからの`IMAGE` / `LR2FONT`のCONTINUEとResult再読込・Course Resultへの引継ぎに対応。[仕様](skin.md#lr2のselect--result)、[描画テスト](../crates/bmz-render/src/skin/tests/result/lr2_compat.rs) |
+| LR2 ResultのCONTINUE補完 | BMZ独自。PlayがLua / JSONまたは別テーマのLR2スキンなら、Resultと同じテーマのLR2 Playスキンの素材（自己ベストのランプ、ゲージ画像、LR2FONT）で引継ぎを補う。RED_BELTとDecide経由は対象外。[仕様](skin.md#lr2のselect--result)、[回帰テスト](../crates/bmz-player/src/app/tests/skin.rs) |
 | LR2 Resultの入力段階 | グラフスキップ→ランク表示→更新演出（timer 152）→退出。timer 152を使わないW-MIX / ECSE等とランク表示時間0のスキンは更新演出の入力を挟まない。[仕様](skin.md#lr2のselect--result)、[段階テスト](../crates/bmz-skin-document/src/lr2.rs) |
 | LR2 Decideのスキップ | OpenLR2の`ProcI_Decide`に合わせ、スキップはtimer 3を開始して`#CLOSE`（無ければ`#FADEOUT`）だけ待つ。キャンセルと時間切れはtimer 2。いずれもシーン時計を末尾へ進めない。[仕様](skin.md#lr2のselect--result) |
 | Resultの更新option | `330..332` / `335`と同値の`1330..1332` / `1335`は、過去ベストが無い初回プレイでbeatorajaの空ScoreData（EX 0、combo 0、BP上限）と比較する。Result以外ではfalse。[回帰テスト](../crates/bmz-render/src/skin/tests/result/lr2_compat.rs) |

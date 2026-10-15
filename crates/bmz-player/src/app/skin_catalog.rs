@@ -227,6 +227,74 @@ pub(super) fn push_skin_candidate(
     }
 }
 
+/// LR2 Play skin candidates in fallback order: the played key mode first, then
+/// 7K and the other LR2 Play types. Lua / JSON skins cannot hand over CONTINUE assets.
+pub(super) fn lr2_play_skin_candidates(catalog: &SkinCatalog, key_mode: KeyMode) -> Vec<&str> {
+    let preferred = match key_mode {
+        KeyMode::K5 => &catalog.play5,
+        KeyMode::K9 => &catalog.play9,
+        KeyMode::K10 => &catalog.play10,
+        KeyMode::K14 => &catalog.play14,
+        _ => &catalog.play7,
+    };
+    let mut paths = Vec::new();
+    for candidates in [
+        preferred,
+        &catalog.play7,
+        &catalog.play5,
+        &catalog.play14,
+        &catalog.play10,
+        &catalog.play9,
+        &catalog.battle7,
+        &catalog.battle5,
+    ] {
+        let mut group: Vec<&str> = candidates
+            .iter()
+            .map(|candidate| candidate.path.as_str())
+            .filter(|path| is_lr2_skin_path(Path::new(path)))
+            .filter(|path| !paths.contains(path))
+            .collect();
+        group.sort_unstable();
+        paths.extend(group);
+    }
+    paths
+}
+
+/// The theme folder of a skin: the first folder under the skin library root.
+pub(super) fn skin_theme_dir(path: &Path, library_roots: &[PathBuf]) -> Option<PathBuf> {
+    let absolute = |path: &Path| std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let path = absolute(path);
+    library_roots.iter().find_map(|root| {
+        let root = absolute(root);
+        let theme = path.strip_prefix(&root).ok()?.components().next()?;
+        // A skin file directly under the root has no theme folder.
+        path.strip_prefix(root.join(theme)).ok().filter(|rest| !rest.as_os_str().is_empty())?;
+        Some(root.join(theme))
+    })
+}
+
+/// The LR2 Play skin whose CONTINUE assets stand in for the attempt's Play skin
+/// (BMZ extension). `None` when the Play skin was an LR2 skin of the Result's theme,
+/// or the theme has no LR2 Play skin.
+pub(super) fn lr2_continue_fallback_play_skin<'a>(
+    result_skin: &Path,
+    played_skin: Option<&Path>,
+    played_skin_is_lr2: bool,
+    candidates: impl IntoIterator<Item = &'a Path>,
+    library_roots: &[PathBuf],
+) -> Option<PathBuf> {
+    let theme = skin_theme_dir(result_skin, library_roots)?;
+    if played_skin_is_lr2
+        && played_skin.and_then(|path| skin_theme_dir(path, library_roots)).as_ref() == Some(&theme)
+    {
+        return None;
+    }
+    candidates
+        .into_iter()
+        .find(|path| skin_theme_dir(path, library_roots).as_ref() == Some(&theme))
+        .map(Path::to_path_buf)
+}
+
 pub(super) fn sort_skin_catalog(catalog: &mut SkinCatalog) {
     for candidates in [
         &mut catalog.select,

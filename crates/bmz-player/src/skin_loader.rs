@@ -303,6 +303,7 @@ pub use decode::{
     decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache, default_skin_root,
     default_skin_root_from_paths, is_decodable_skin_path, is_json_skin_path, is_lr2_skin_path,
     is_lua_skin_path, load_default_skin_into_renderer, load_default_skin_into_renderer_from_paths,
+    resolve_lr2_continue_assets,
 };
 pub use install::{
     PreparedSource, SkinUploadStats, UploadedSkin, install_decoded_font, install_decoded_skin,

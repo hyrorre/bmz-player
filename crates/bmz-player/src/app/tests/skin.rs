@@ -531,3 +531,142 @@ fn skin_catalog_loads_modern_chic_headers_when_available() {
         assert!(candidate.name.contains("ModernChic"), "candidate name: {}", candidate.name);
     }
 }
+
+#[test]
+fn lr2_continue_fallback_uses_a_same_theme_play_skin_unless_that_theme_was_played() {
+    let root = std::env::temp_dir().join("bmz-continue-fallback/skins");
+    let roots = [root.clone()];
+    let result = root.join("ECSE/SE-Result/result.lr2skin");
+    let ecse_play = root.join("ECSE/Play/play_a.lr2skin");
+    let wmix_play = root.join("WMIX/play/play.lr2skin");
+    let lua_play = root.join("ECFN/play/play7.luaskin");
+    let candidates = [wmix_play.as_path(), ecse_play.as_path()];
+    let fallback = |played: Option<&Path>, lr2: bool| {
+        lr2_continue_fallback_play_skin(&result, played, lr2, candidates, &roots)
+    };
+    // A Lua / JSON Play skin hands nothing over, so the Result's theme stands in.
+    assert_eq!(fallback(Some(&lua_play), false), Some(ecse_play.clone()));
+    assert_eq!(fallback(None, false), Some(ecse_play.clone()));
+    // An LR2 Play skin of another theme is also replaced.
+    assert_eq!(fallback(Some(&wmix_play), true), Some(ecse_play.clone()));
+    // The Result's own theme keeps LR2's CONTINUE.
+    assert_eq!(fallback(Some(&ecse_play), true), None);
+    // No LR2 Play skin of that theme, or a Result without a theme folder.
+    let lone = root.join("LONE/Result/result.lr2skin");
+    assert_eq!(lr2_continue_fallback_play_skin(&lone, None, false, candidates, &roots), None);
+    let flat = root.join("result.lr2skin");
+    assert_eq!(lr2_continue_fallback_play_skin(&flat, None, false, candidates, &roots), None);
+}
+
+#[test]
+fn lr2_play_skin_candidates_prefer_the_played_key_mode_and_skip_lua() {
+    let candidate = |path: &str| SkinCandidate {
+        name: path.into(),
+        path: path.into(),
+        origin: SkinCandidateOrigin::User,
+    };
+    let catalog = SkinCatalog {
+        play7: vec![candidate("data:skins/A/b7.lr2skin"), candidate("data:skins/A/a7.lr2skin")],
+        play14: vec![candidate("data:skins/A/dp.lr2skin"), candidate("data:skins/B/dp.luaskin")],
+        battle7: vec![candidate("data:skins/A/battle.lr2skin")],
+        ..Default::default()
+    };
+    assert_eq!(
+        lr2_play_skin_candidates(&catalog, KeyMode::K14),
+        [
+            "data:skins/A/dp.lr2skin",
+            "data:skins/A/a7.lr2skin",
+            "data:skins/A/b7.lr2skin",
+            "data:skins/A/battle.lr2skin"
+        ]
+    );
+    assert_eq!(lr2_play_skin_candidates(&catalog, KeyMode::K7)[0], "data:skins/A/a7.lr2skin");
+}
+
+#[test]
+fn lr2_continue_fallback_assets_win_but_keep_inherited_empty_slots() {
+    let source = |path: &str| bmz_render::skin::SkinSourceDef {
+        id: String::new(),
+        path: path.into(),
+        lr2_color_key: None,
+    };
+    let inherited = bmz_skin::Lr2ContinueAssets {
+        sources: BTreeMap::from([
+            ("23".into(), source("other/clear.png")),
+            ("27".into(), source("other/decide.png")),
+        ]),
+        ..Default::default()
+    };
+    let fallback = bmz_skin::Lr2ContinueAssets {
+        sources: BTreeMap::from([
+            ("23".into(), source("theme/HARDCLEAR.png")),
+            ("27".into(), source("bmz://lr2/empty")),
+        ]),
+        ..Default::default()
+    };
+    let merged = merge_lr2_continue_assets(fallback, &inherited);
+    assert_eq!(merged.sources["23"].path, "theme/HARDCLEAR.png");
+    assert_eq!(merged.sources["27"].path, "other/decide.png");
+}
+
+#[test]
+fn installed_lr2_play_skins_resolve_result_continue_assets_when_available() {
+    let skins = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins");
+    for (play, clear, slot, expected) in [
+        ("EndlessCirculation/Play/play_Maniac.lr2skin", ClearType::Hard, "23", "HARDCLEAR.png"),
+        ("EndlessCirculation/Play/play_Maniac.lr2skin", ClearType::NoPlay, "23", "NOPLAY.png"),
+        ("WMIX_HD/play/HDPLAY_AC.lr2skin", ClearType::FullCombo, "23", "FULLCOMBO.png"),
+    ] {
+        let path = skins.join(play);
+        if !path.is_file() {
+            continue;
+        }
+        let mut state = bmz_skin::LuaLoadRuntimeState::default();
+        apply_lr2_best_clear_load_options(&mut state, Some(clear));
+        let assets = crate::skin_loader::resolve_lr2_continue_assets(&path, &state, None)
+            .unwrap_or_else(|error| panic!("{play}: {error:#}"));
+        let source = Path::new(&assets.sources[slot].path);
+        assert!(source.is_absolute(), "{play}");
+        assert!(source.ends_with(expected), "{play}: {}", source.display());
+        // The Result's LR2FONT CONTINUE slots come from the same Play skin. W-MIX keeps
+        // its fonts in DXA archives, so the path may name a file inside one.
+        let font = Path::new(&assets.fonts["lr2font-0"].path);
+        assert!(font.is_absolute() && font.ends_with("font.lr2font"), "{play}");
+    }
+    // ECSE Result draws the pre-update best lamp from the fallback's image 23.
+    let (play, result) = (
+        skins.join("EndlessCirculation/Play/play_Maniac.lr2skin"),
+        skins.join("EndlessCirculation/SE-Result/SelfEvolution-Result.lr2skin"),
+    );
+    if play.is_file() && result.is_file() {
+        let mut play_state = bmz_skin::LuaLoadRuntimeState::default();
+        apply_lr2_best_clear_load_options(&mut play_state, Some(ClearType::Easy));
+        let fallback =
+            crate::skin_loader::resolve_lr2_continue_assets(&play, &play_state, None).unwrap();
+        let result_state = bmz_skin::LuaLoadRuntimeState {
+            lr2_continue_assets: merge_lr2_continue_assets(fallback, &Default::default()).into(),
+            ..Default::default()
+        };
+        let loaded = bmz_skin::load_lr2_csv_skin_with_runtime_state(
+            &result,
+            bmz_skin::SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &result_state,
+        )
+        .unwrap();
+        let source = loaded.document.source.iter().find(|source| source.id == "23").unwrap();
+        assert!(source.path.ends_with("EASYCLEAR.png"), "{}", source.path);
+    }
+    let wmix = skins.join("WMIX_HD/play/HDPLAY_AC.lr2skin");
+    if wmix.is_file() {
+        let assets = crate::skin_loader::resolve_lr2_continue_assets(
+            &wmix,
+            &bmz_skin::LuaLoadRuntimeState::default(),
+            None,
+        )
+        .unwrap();
+        // W-MIX Result draws the GROOVE / HARD gauge from the Play skin's GAUGE COLOR file.
+        assert!(Path::new(&assets.sources["24"].path).is_file());
+    }
+}

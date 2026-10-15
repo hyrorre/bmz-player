@@ -122,12 +122,63 @@ impl WinitApp {
             slot == ResultSkinSlot::Course,
             self.result.finished_play.is_some() || self.result.finished_course.is_some(),
         );
+        self.skin.skin_pipeline.lr2_assets.continue_fallback = self.lr2_continue_fallback(slot);
         self.skin.skin_pipeline.result_refresh_generation = None;
         self.skin.skin_pipeline.result_load_dependencies = None;
         self.skin.skin_pipeline.result_source_selections.clear();
         self.skin.skin_pipeline.result_random_file_selections.clear();
         self.skin.last_result_skin_signature = None;
         self.ensure_result_skin_ready(slot);
+    }
+
+    /// An LR2 Result inherits CONTINUE assets from the Play skin. When the attempt was
+    /// played with a Lua / JSON skin or an LR2 skin of another theme, an LR2 Play skin
+    /// of the Result's theme stands in (BMZ extension), loaded with its default options
+    /// and the pre-play best clear like the Play scene.
+    fn lr2_continue_fallback(&self, slot: ResultSkinSlot) -> Option<Lr2ContinueFallback> {
+        let assets = &self.skin.skin_pipeline.lr2_assets;
+        if !assets.inherited_from_play {
+            return None;
+        }
+        let skin = &self.boot.profile_config.skin;
+        let result_ref = match slot {
+            ResultSkinSlot::Normal => &skin.result,
+            ResultSkinSlot::Course => &skin.course_result,
+        };
+        let result_skin = self.boot.app_paths.resolve_path_ref(result_ref.trim()).ok()?;
+        if !is_lr2_skin_path(&result_skin) {
+            return None;
+        }
+        let summary = match slot {
+            ResultSkinSlot::Course => self.result.finished_course_skin_summary.as_ref(),
+            ResultSkinSlot::Normal => {
+                self.result.finished_play.as_ref().map(|finished| &finished.summary)
+            }
+        }?;
+        let candidates: Vec<PathBuf> =
+            lr2_play_skin_candidates(&self.skin.skin_catalog, summary.key_mode)
+                .into_iter()
+                .filter_map(|path| self.boot.app_paths.resolve_path_ref(path).ok())
+                .collect();
+        let (played_skin, played_lr2) = match &assets.play_skin {
+            Some((path, lr2)) => (Some(path.as_path()), *lr2),
+            None => (None, false),
+        };
+        let play_skin = lr2_continue_fallback_play_skin(
+            &result_skin,
+            played_skin,
+            played_lr2,
+            candidates.iter().map(PathBuf::as_path),
+            &self.boot.app_paths.skin_library_roots(),
+        )?;
+        let mut runtime_state = bmz_skin::LuaLoadRuntimeState::default();
+        apply_lr2_best_clear_load_options(&mut runtime_state, summary.previous_best_clear_type);
+        tracing::info!(
+            result_skin = %result_skin.display(),
+            play_skin = %play_skin.display(),
+            "using same-theme LR2 play skin for result CONTINUE assets"
+        );
+        Some(Lr2ContinueFallback { play_skin, runtime_state })
     }
 
     pub(super) fn refresh_result_favorite_chart(&mut self) {
@@ -221,7 +272,8 @@ impl WinitApp {
             runtime_state,
         )
         .with_library_roots(self.boot.app_paths.skin_library_roots())
-        .reuse_installed_fonts(&self.skin.skin_pipeline);
+        .reuse_installed_fonts(&self.skin.skin_pipeline)
+        .with_lr2_continue_fallback(self.skin.skin_pipeline.lr2_assets.continue_fallback.clone());
         if refresh {
             request.pinned_sources = self.skin.skin_pipeline.result_source_selections.clone();
         }
@@ -477,6 +529,7 @@ impl WinitApp {
             let assets = lr2_resolved_assets(&document, &prepared, &fonts);
             if kind == SkinKind::Play {
                 self.skin.skin_pipeline.lr2_assets.play = assets.into();
+                self.skin.skin_pipeline.lr2_assets.play_skin = Some((path.clone(), document.lr2));
             } else {
                 self.skin.skin_pipeline.lr2_assets.result = assets.into();
             }

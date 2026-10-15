@@ -1,4 +1,5 @@
 mod assets;
+mod continue_assets;
 mod document;
 mod entry;
 mod font;
@@ -7,6 +8,7 @@ mod pipeline;
 mod source;
 
 pub(in crate::skin_loader) use assets::*;
+pub use continue_assets::resolve_lr2_continue_assets;
 pub(crate) use document::enabled_options_from_selections;
 pub(in crate::skin_loader) use document::*;
 pub use document::{is_decodable_skin_path, is_json_skin_path, is_lr2_skin_path, is_lua_skin_path};

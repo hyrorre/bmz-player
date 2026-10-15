@@ -11,6 +11,8 @@ pub(super) struct SkinDecodeRequest {
     pub(super) runtime_state: bmz_skin::LuaLoadRuntimeState,
     library_roots: Vec<PathBuf>,
     installed_font_cache: HashMap<String, SkinFontCacheKey>,
+    /// Resolved on the worker and merged into `runtime_state.lr2_continue_assets`.
+    lr2_continue_fallback: Option<Lr2ContinueFallback>,
 }
 
 impl SkinDecodeRequest {
@@ -32,7 +34,16 @@ impl SkinDecodeRequest {
             runtime_state,
             library_roots: Vec::new(),
             installed_font_cache: HashMap::new(),
+            lr2_continue_fallback: None,
         }
+    }
+
+    pub(super) fn with_lr2_continue_fallback(
+        mut self,
+        fallback: Option<Lr2ContinueFallback>,
+    ) -> Self {
+        self.lr2_continue_fallback = fallback;
+        self
     }
 
     pub(super) fn with_library_roots(mut self, library_roots: Vec<PathBuf>) -> Self {
@@ -56,9 +67,10 @@ pub(super) fn spawn_skin_decode(pipeline: &SkinPipelineRuntime, mut request: Ski
         kind,
         options,
         files,
-        runtime_state,
+        mut runtime_state,
         library_roots,
         installed_font_cache,
+        lr2_continue_fallback,
     } = request;
     let tx = pipeline.decode_tx.clone();
     let source_cache = pipeline.source_asset_cache.clone();
@@ -71,6 +83,24 @@ pub(super) fn spawn_skin_decode(pipeline: &SkinPipelineRuntime, mut request: Ski
         .name(format!("skin-decode-{:?}", kind))
         .spawn(move || {
             let decode_started_at = Instant::now();
+            if let Some(fallback) = lr2_continue_fallback {
+                match crate::skin_loader::resolve_lr2_continue_assets(
+                    &fallback.play_skin,
+                    &fallback.runtime_state,
+                    Some(document_cache.clone()),
+                ) {
+                    Ok(assets) => {
+                        runtime_state.lr2_continue_assets =
+                            merge_lr2_continue_assets(assets, &runtime_state.lr2_continue_assets)
+                                .into();
+                    }
+                    Err(error) => tracing::warn!(
+                        play_skin = %fallback.play_skin.display(),
+                        error = %format_error_chain(&error),
+                        "failed to resolve LR2 CONTINUE fallback assets"
+                    ),
+                }
+            }
             let result = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
                 pinned_sources: Some(&pinned_sources),
                 skin_path: &path,

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -54,9 +55,40 @@ struct PendingSkinKinds {
 #[derive(Default)]
 pub(super) struct Lr2SceneAssets {
     pub(super) play: Arc<bmz_skin::Lr2ContinueAssets>,
+    /// The installed Play skin and whether it is an LR2 skin.
+    pub(super) play_skin: Option<(PathBuf, bool)>,
     pub(super) result: Arc<bmz_skin::Lr2ContinueAssets>,
     pub(super) inherited: Arc<bmz_skin::Lr2ContinueAssets>,
+    /// `inherited` came from the Play scene (not from a stage Result).
+    pub(super) inherited_from_play: bool,
+    /// Same-theme LR2 Play skin standing in for the attempt's Play skin.
+    pub(super) continue_fallback: Option<Lr2ContinueFallback>,
     pub(super) previous_scene: Option<SkinKind>,
+}
+
+/// A Result's CONTINUE assets resolved from an LR2 Play skin of the Result's theme
+/// when the attempt was played with a Lua / JSON skin or another theme (BMZ extension).
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct Lr2ContinueFallback {
+    pub(super) play_skin: PathBuf,
+    /// Load-time options of that Play skin, such as the pre-play best clear (100..105).
+    pub(super) runtime_state: bmz_skin::LuaLoadRuntimeState,
+}
+
+/// The fallback skin's assets win; its empty CONTINUE slots keep the inherited ones.
+pub(super) fn merge_lr2_continue_assets(
+    fallback: bmz_skin::Lr2ContinueAssets,
+    inherited: &bmz_skin::Lr2ContinueAssets,
+) -> bmz_skin::Lr2ContinueAssets {
+    let mut merged = inherited.clone();
+    merged.sources.extend(
+        fallback.sources.into_iter().filter(|(_, source)| source.path != "bmz://lr2/empty"),
+    );
+    merged.fonts.extend(fallback.fonts);
+    if !fallback.system_fonts.is_empty() {
+        merged.system_fonts = fallback.system_fonts;
+    }
+    merged
 }
 
 /// skin decode (CPU) と upload (GPU) workerをつなぐchannel、共有cache、世代状態。
@@ -92,13 +124,16 @@ impl SkinPipelineRuntime {
     /// Freeze CONTINUE slots on entry so Result refreshes cannot inherit from
     /// their own replacement document. Course Result can follow a stage Result.
     pub(super) fn begin_lr2_result_entry(&mut self, course: bool, finished: bool) {
+        let from_result = course && self.lr2_assets.previous_scene == Some(SkinKind::Result);
         self.lr2_assets.inherited = if !finished {
             Default::default()
-        } else if course && self.lr2_assets.previous_scene == Some(SkinKind::Result) {
+        } else if from_result {
             self.lr2_assets.result.clone()
         } else {
             self.lr2_assets.play.clone()
         };
+        self.lr2_assets.inherited_from_play = finished && !from_result;
+        self.lr2_assets.continue_fallback = None;
     }
 
     pub(super) fn new() -> Self {
@@ -384,16 +419,21 @@ mod tests {
         runtime.lr2_assets.previous_scene = Some(SkinKind::Play);
         runtime.begin_lr2_result_entry(false, true);
         assert_eq!(runtime.lr2_assets.inherited, assets("play-selected.png"));
+        assert!(runtime.lr2_assets.inherited_from_play);
         runtime.lr2_assets.result = assets("refreshed-result.png");
         runtime.lr2_assets.previous_scene = Some(SkinKind::Result);
         assert_eq!(runtime.lr2_assets.inherited, assets("play-selected.png"));
         runtime.begin_lr2_result_entry(true, true);
         assert_eq!(runtime.lr2_assets.inherited, assets("refreshed-result.png"));
+        // A Course Result after a stage Result keeps that Result's (fallback) assets.
+        assert!(!runtime.lr2_assets.inherited_from_play);
         runtime.lr2_assets.previous_scene = Some(SkinKind::Play);
         runtime.begin_lr2_result_entry(true, true);
         assert_eq!(runtime.lr2_assets.inherited, assets("play-selected.png"));
+        assert!(runtime.lr2_assets.inherited_from_play);
         runtime.begin_lr2_result_entry(false, false);
         assert_eq!(runtime.lr2_assets.inherited, Default::default());
+        assert!(!runtime.lr2_assets.inherited_from_play);
     }
 
     fn failed_upload() -> PendingUploadResult {
