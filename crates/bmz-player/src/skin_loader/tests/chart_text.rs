@@ -155,3 +155,76 @@ fn lr2_csv_text_ref_reads_chart_text() {
     assert!(scene("").is_empty());
     assert_eq!(scene("CSV"), ["CSV", "TITLE"]);
 }
+
+fn timer_scene(elapsed: Option<i32>) -> AppSceneSnapshot {
+    AppSceneSnapshot::Play(RenderSnapshot {
+        chart_text: "TIMER".into(),
+        chart_text_event_elapsed_ms: elapsed,
+        time: TimeUs(5_000_000),
+        play_elapsed_time: TimeUs(5_000_000),
+        ready_elapsed_time: Some(TimeUs(0)),
+        ..Default::default()
+    })
+}
+
+fn scene_texts(renderer: &mut Renderer, scene: AppSceneSnapshot) -> Vec<String> {
+    renderer.prepare_scene(scene);
+    renderer
+        .last_plan()
+        .unwrap()
+        .commands
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn lua_main_state_reads_chart_text_event_timer() {
+    let root = unique_test_dir("chart-text-lua-timer");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("play.lua");
+    fs::write(
+        &path,
+        r#"
+            local main_state = require('main_state')
+            return {type=0,w=320,h=180,
+                text={{id='timer',size=12,value=function()
+                    return 'T:' .. main_state.timer_elapsed_ms(20102)
+                        .. (main_state.timer_is_off(20102) and ':OFF' or ':ON')
+                end}},
+                destination={{id='timer',dst={{x=0,y=0,w=300,h=20}}}}
+            }
+        "#,
+    )
+    .unwrap();
+    for mode in [bmz_skin::LuaSkinRuntimeMode::Auto, bmz_skin::LuaSkinRuntimeMode::Compat] {
+        let mut renderer = install(&path, mode);
+        assert_eq!(scene_texts(&mut renderer, timer_scene(None)), ["T:-1:OFF"], "{mode:?}");
+        assert_eq!(scene_texts(&mut renderer, timer_scene(Some(250))), ["T:250:ON"], "{mode:?}");
+        // A repeated event restarts the timer from zero.
+        assert_eq!(scene_texts(&mut renderer, timer_scene(Some(0))), ["T:0:ON"], "{mode:?}");
+    }
+}
+
+#[test]
+fn lr2_csv_destination_uses_chart_text_event_timer() {
+    let root = unique_test_dir("chart-text-csv-timer");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("play.lr2skin");
+    fs::write(
+        &path,
+        "#INFORMATION,0,Chart Text Timer,Author\n#RESOLUTION,100,100\n\
+         #SRC_TEXT,0,0,20100,0,0\n\
+         #DST_TEXT,0,0,10,20,80,30,0,255,255,255,255,0,0,0,0,0,20102,0,0,0\n",
+    )
+    .unwrap();
+    let decoded = decode_beatoraja_skin(&path, SkinKind::Play).unwrap();
+    let mut renderer = Renderer::default();
+    install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
+        .unwrap();
+    assert!(scene_texts(&mut renderer, timer_scene(None)).is_empty());
+    assert_eq!(scene_texts(&mut renderer, timer_scene(Some(100))), ["TIMER"]);
+}

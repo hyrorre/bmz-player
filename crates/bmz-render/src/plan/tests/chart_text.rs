@@ -71,3 +71,69 @@ fn chart_text_visible_option_is_false_before_the_first_event_and_for_empty_text(
     assert!(test_skin_ops(&[SKIN_OPTION_BMZ_CHART_TEXT_VISIBLE], &[], &shown));
     assert!(!test_skin_ops(&[-SKIN_OPTION_BMZ_CHART_TEXT_VISIBLE], &[], &shown));
 }
+
+fn fade_skin() -> SkinContext {
+    let document: SkinDocument = serde_json::from_str(
+        r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "text": [{ "id": "message", "size": 12, "value": "bmz_chart_text" }],
+                "destination": [
+                    { "id": "message", "timer": 20102, "loop": 1000, "dst": [
+                        { "time": 0, "x": 0, "y": 0, "w": 60, "h": 12, "a": 0 },
+                        { "time": 1000, "x": 0, "y": 0, "w": 60, "h": 12, "a": 255 }
+                    ] }
+                ]
+            }
+        "#,
+    )
+    .unwrap();
+    SkinContext::from_manifest_and_document(SkinManifest::default(), document, [])
+}
+
+fn message_alpha(skin: &SkinContext, elapsed: Option<i32>) -> Option<f32> {
+    let plan = DrawPlan::from_scene_with_skin(
+        &AppSceneSnapshot::Play(RenderSnapshot {
+            chart_text: "FADE".into(),
+            chart_text_event_elapsed_ms: elapsed,
+            ..Default::default()
+        }),
+        skin,
+        &mut crate::skin::DynamicTimerRuntime::default(),
+    );
+    plan.commands.iter().find_map(|command| match command {
+        DrawCommand::Text { text, style, .. } if text == "FADE" => Some(style.color.a),
+        _ => None,
+    })
+}
+
+#[test]
+fn chart_text_event_timer_drives_destination_animation() {
+    let skin = fade_skin();
+    // OFF before the first event: the timer destination is hidden.
+    assert_eq!(message_alpha(&skin, None), None);
+    let start = message_alpha(&skin, Some(0)).unwrap();
+    let middle = message_alpha(&skin, Some(500)).unwrap();
+    let end = message_alpha(&skin, Some(1_000)).unwrap();
+    assert!(start < 0.01, "{start}");
+    assert!((middle - 0.5).abs() < 0.02, "{middle}");
+    assert!(end > 0.99, "{end}");
+    assert!(message_alpha(&skin, Some(60_000)).unwrap() > 0.99);
+
+    let state = build_play_skin_state(
+        &RenderSnapshot { chart_text_event_elapsed_ms: Some(250), ..Default::default() },
+        &skin,
+        0,
+    );
+    assert_eq!(
+        crate::skin::lua_main_state_timer(crate::skin::SKIN_TIMER_BMZ_CHART_TEXT_EVENT, &state),
+        Some(250)
+    );
+    let off = build_play_skin_state(&RenderSnapshot::default(), &skin, 0);
+    assert_eq!(
+        crate::skin::lua_main_state_timer(crate::skin::SKIN_TIMER_BMZ_CHART_TEXT_EVENT, &off),
+        None
+    );
+}

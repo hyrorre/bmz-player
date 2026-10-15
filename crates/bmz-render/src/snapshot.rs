@@ -497,6 +497,8 @@ pub struct RenderSnapshot {
     /// BMS `#TEXT` / チャネル #99 で表示する譜面テキスト (BMZ text 20100)。
     /// 毎フレームの snapshot 複製で文字列を複製しないよう譜面のイベントと共有する。
     pub chart_text: std::sync::Arc<str>,
+    /// 直近のチャネル #99 イベントからの譜面時間 ms (BMZ timer 20102)。最初のイベント前は None。
+    pub chart_text_event_elapsed_ms: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -236,6 +236,8 @@ pub struct SkinDrawState {
     pub bpm_change_preview_lead_ms: Option<i32>,
     /// BMS `#TEXT` の表示文字列が空でないか (BMZ option 20101)。
     pub chart_text_visible: bool,
+    /// 直近のチャネル #99 イベントからの経過 ms (BMZ timer 20102)。
+    pub chart_text_event_ms: Option<i32>,
     /// BGA表示設定がONかどうか。曲の有無とは分けて扱う。
     pub bga_enabled: bool,
     /// `#STAGEFILE` 相当の曲画像があるか (OPTION_NO_STAGEFILE=190 / OPTION_STAGEFILE=191)。
@@ -633,6 +635,7 @@ impl Default for SkinDrawState {
             bpm_change_preview: Default::default(),
             bpm_change_preview_lead_ms: None,
             chart_text_visible: false,
+            chart_text_event_ms: None,
             bga_enabled: true,
             has_stagefile: false,
             stagefile_image_size: None,

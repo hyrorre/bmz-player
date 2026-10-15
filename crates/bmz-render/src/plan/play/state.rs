@@ -163,6 +163,7 @@ pub(in crate::plan) fn build_play_skin_state(
         has_bpm_stop: snapshot.has_bpm_stop,
         bpm_change_preview: snapshot.bpm_change_preview,
         chart_text_visible: !snapshot.chart_text.is_empty(),
+        chart_text_event_ms: snapshot.chart_text_event_elapsed_ms,
         bpm_change_preview_lead_ms: skin
             .document()
             .and_then(|document| document.bmz_bpm_change_preview)

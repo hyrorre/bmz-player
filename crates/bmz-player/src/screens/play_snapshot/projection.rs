@@ -156,7 +156,7 @@ impl PlayfieldProjection {
         snapshot.bpm_lines.clear();
         snapshot.stop_lines.clear();
         snapshot.time_lines.clear();
-        apply_chart_text(&mut snapshot.chart_text, &self.chart, chart_now);
+        apply_chart_text(snapshot, &self.chart, chart_now);
         snapshot.now_bpm = self.timing_map.bpm_at_time(lane_now) as f32;
         snapshot.bpm_change_preview =
             bpm_change_preview(&self.cache.bpm_changes, lane_now, self.playback_rate_percent);

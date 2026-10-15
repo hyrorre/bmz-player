@@ -556,8 +556,9 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         stagefile_image_size: None,
         backbmp_background: false,
         chart_text: Arc::from(""),
+        chart_text_event_elapsed_ms: None,
     };
-    apply_chart_text(&mut snapshot.chart_text, &session.chart, chart_now);
+    apply_chart_text(&mut snapshot, &session.chart, chart_now);
     snapshot
 }
 

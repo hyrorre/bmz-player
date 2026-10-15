@@ -117,7 +117,18 @@ mod tests {
             judge_rank_events: Vec::new(),
             bgm_volume_events: Vec::new(),
             key_volume_events: Vec::new(),
-            text_events: Vec::new(),
+            text_events: vec![
+                crate::model::ChartTextEvent {
+                    tick: ChartTick(0),
+                    time: TimeUs(500_000),
+                    text: "Before".into(),
+                },
+                crate::model::ChartTextEvent {
+                    tick: ChartTick(0),
+                    time: TimeUs(1_500_000),
+                    text: "Inside".into(),
+                },
+            ],
             bga_opacity_events: Vec::new(),
             bga_argb_events: Vec::new(),
             swbga_definitions: Vec::new(),
@@ -137,5 +148,14 @@ mod tests {
         assert!(matches!(chart.lane_notes[Lane::Key1.index()][1].kind, NoteKind::Tap));
         assert!(matches!(chart.lane_notes[Lane::Key1.index()][2].kind, NoteKind::Invisible));
         assert_eq!(chart.metadata.total, Some(100.0));
+        // `#TEXT` events stay so a section start shows the latest earlier text.
+        assert_eq!(
+            crate::text::chart_text_at_time(&chart.text_events, TimeUs(1_000_000)),
+            "Before"
+        );
+        assert_eq!(
+            crate::text::chart_text_at_time(&chart.text_events, TimeUs(1_500_000)),
+            "Inside"
+        );
     }
 }

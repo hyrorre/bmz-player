@@ -378,3 +378,68 @@ fn chart_text_restores_the_state_at_seek_and_pause_positions() {
         assert_eq!(&*snapshot.chart_text, "A");
     }
 }
+
+#[test]
+fn chart_text_event_timer_restarts_on_every_event_and_follows_seek() {
+    let session = session(chart_with_texts(&[
+        (1_000_000, "Same"),
+        (2_000_000, "Same"),
+        (3_000_000, ""),
+        (3_000_000, "Last"),
+    ]));
+    let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+    let at = |now: i64| {
+        let snapshot = base(&session, TimeUs(now), &cache);
+        (snapshot.chart_text.to_string(), snapshot.chart_text_event_elapsed_ms)
+    };
+    // READY and before the first event the timer is OFF.
+    assert_eq!(at(-1_000_000), (String::new(), None));
+    assert_eq!(at(999_999), (String::new(), None));
+    assert_eq!(at(1_000_000), ("Same".to_string(), Some(0)));
+    assert_eq!(at(1_999_000), ("Same".to_string(), Some(999)));
+    // Re-specifying the same text is an event: the timer restarts.
+    assert_eq!(at(2_000_000), ("Same".to_string(), Some(0)));
+    assert_eq!(at(2_400_000), ("Same".to_string(), Some(400)));
+    // Simultaneous events reset once and show the later one.
+    assert_eq!(at(3_250_000), ("Last".to_string(), Some(250)));
+    // The text never expires by itself.
+    assert_eq!(at(600_000_000), ("Last".to_string(), Some(597_000)));
+
+    let pool = PlayfieldProjection::pool(&session, &cache);
+    let mut snapshot = base(&session, TimeUs(0), &cache);
+    let mut clock = ProjectionClock::default();
+    pool[0].project(&mut snapshot, TimeUs(2_500_000), &mut clock);
+    assert_eq!(snapshot.chart_text_event_elapsed_ms, Some(500));
+    // PAUSE repeats the same audio time; the timer does not advance.
+    pool[0].project(&mut snapshot, TimeUs(2_500_000), &mut clock);
+    assert_eq!(snapshot.chart_text_event_elapsed_ms, Some(500));
+    // Seeking backwards restores the earlier event instead of carrying the later one.
+    pool[0].project(&mut snapshot, TimeUs(1_500_000), &mut ProjectionClock::default());
+    assert_eq!(snapshot.chart_text_event_elapsed_ms, Some(500));
+    assert_eq!(&*snapshot.chart_text, "Same");
+    pool[0].project(&mut snapshot, TimeUs(500_000), &mut ProjectionClock::default());
+    assert_eq!(
+        (snapshot.chart_text.is_empty(), snapshot.chart_text_event_elapsed_ms),
+        (true, None)
+    );
+}
+
+#[test]
+fn chart_text_state_resets_when_the_chart_changes() {
+    let first = session(chart_with_texts(&[(1_000_000, "Stage 1")]));
+    let second = session(chart_with_texts(&[(4_000_000, "Stage 2")]));
+    let first_cache = PlayRenderSnapshotCache::from_chart(&first.chart);
+    let second_cache = PlayRenderSnapshotCache::from_chart(&second.chart);
+    let first_snapshot = base(&first, TimeUs(3_000_000), &first_cache);
+    assert_eq!(&*first_snapshot.chart_text, "Stage 1");
+    // The next course stage starts from its own chart, with no state from the previous one.
+    let next = base(&second, TimeUs(3_000_000), &second_cache);
+    assert_eq!((next.chart_text.is_empty(), next.chart_text_event_elapsed_ms), (true, None));
+    let pool = PlayfieldProjection::pool(&second, &second_cache);
+    let mut snapshot = first_snapshot;
+    pool[0].project(&mut snapshot, TimeUs(3_000_000), &mut ProjectionClock::default());
+    assert_eq!(
+        (snapshot.chart_text.is_empty(), snapshot.chart_text_event_elapsed_ms),
+        (true, None)
+    );
+}
