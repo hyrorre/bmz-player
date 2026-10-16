@@ -25,7 +25,10 @@ F1 →「譜面ダウンロード」で実行中・待機・完了・失敗・�
 
 ## HTTP取得元
 
-設定 → ライブラリ → 譜面取得でGinger / Konmai / Wriggle / Customを選べます。
+設定 → ライブラリ → 譜面取得でGinger / Konmai / Customを選べます。
+Wriggleはサービスを利用できないため、プリセットの選択と既定URLを無効にしています。
+保存済みの `http_source = "wriggle"` は読み込めます。明示的なAPI URLがあれば維持し、
+URLが空ならIPFSまたは手動配布ページへ従来の優先順でフォールバックします。
 プリセットを明示的に選ぶとAPI URLを入力します。既存の `http_api_url` は読み込み時に
 書き換えず、指定済みURLがプリセットの既定値より優先されます。HTTPの無効設定も維持します。
 HTTPの同時取得数を1〜5件に変更でき、変更は次に開始するタスクから反映します。
@@ -34,12 +37,16 @@ HTTPの同時取得数を1〜5件に変更でき、変更は次に開始する�
 | --- | --- | --- |
 | Ginger | `https://gingerrush.com/download/package/{md5}` | MD5、`downloadURL` を持つJSON |
 | Konmai | `https://bms.alvorna.com/api/hash?md5={md5}` | MD5、`result: success` と `data.song_url` を持つJSON |
-| Wriggle | `https://bms.wrigglebug.xyz/download/package/{md5}` | EDの定義ではMD5、直接アーカイブ |
+| Wriggle（無効） | 既定URLなし | サービス利用不可。保存済みの設定値と明示URLの読み込みのみ維持 |
 | Custom | ユーザー指定 | `{md5}` / `%s` はMD5、`{sha256}` はSHA256が必要。両方指定なら両方必要 |
 
-2026-10-16の到達確認ではGingerは未登録ハッシュに404、Konmaiは404と取得不可JSONを返しました。
-Wriggleは検証環境でTLS接続に失敗しました。プリセットはEDの定義を参考にした候補であり、
-実在する譜面の取得成功やサービスの継続提供は未確認です。設定画面にも接続未確認を表示します。
+2026-10-16の確認ではGingerは未登録ハッシュに404を返しました。
+Konmaiは[Satelliteの段位譜面](https://stellabms.xyz/sl/header.json)3件でHTTP 200、
+`result: success` と `data.song_url` を返しました。
+例: [Life is PIANO [Another]のAPI応答](https://bms.alvorna.com/api/hash?md5=4023045d9134dfc47e953bc430e5ef07)。
+取得先はHTTP 200、`application/x-7z-compressed`、106,431,803バイトと応答し、
+Range取得した先頭32バイトも7zの署名と一致しました。未登録ハッシュは404と取得不可JSONになります。
+実サービスの全アーカイブ取得・展開・DB登録は未確認で、サービスの継続提供は保証しません。
 
 HTTPステータス異常、取得不可・未知のJSON、空URL、不正URL、サイズ超過を失敗として扱います。
 JSONはストリーミングで1 MiBに制限します。相対URLはリダイレクト後のAPI URLから解決します。

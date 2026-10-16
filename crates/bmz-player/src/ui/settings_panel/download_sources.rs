@@ -11,7 +11,9 @@ pub(super) fn build_download_source_settings(
         .selected_text(config.http_source.name())
         .show_ui(ui, |ui| {
             for preset in HttpDownloadPreset::ALL {
-                ui.selectable_value(&mut config.http_source, preset, preset.name());
+                ui.add_enabled_ui(preset.is_available(), |ui| {
+                    ui.selectable_value(&mut config.http_source, preset, preset.name());
+                });
             }
         });
     if config.http_source != before && config.http_source != HttpDownloadPreset::Custom {

@@ -900,6 +900,31 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_preset_uses_existing_fallbacks_without_changing_custom_urls() {
+        let mut config = ChartDownloadsConfig {
+            http_source: crate::config::download_sources::HttpDownloadPreset::Wriggle,
+            http_enabled: true,
+            ..Default::default()
+        };
+        assert!(matches!(
+            choose_missing_chart_action(&config, &metadata()),
+            MissingChartAction::Browser(_)
+        ));
+        config.http_api_url = "https://custom.test/{md5}".into();
+        assert!(matches!(
+            choose_missing_chart_action(&config, &metadata()),
+            MissingChartAction::Http { api_url, .. } if api_url == config.http_api_url
+        ));
+        config.http_api_url.clear();
+        config.ipfs_enabled = true;
+        config.ipfs_api_url = "http://127.0.0.1:5001".into();
+        assert!(matches!(
+            choose_missing_chart_action(&config, &metadata()),
+            MissingChartAction::Ipfs { .. }
+        ));
+    }
+
+    #[test]
     fn ipfs_has_priority_over_http_and_browser() {
         let config = ChartDownloadsConfig {
             http_source: Default::default(),

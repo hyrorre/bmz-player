@@ -86,3 +86,24 @@ fixtureのacceptソケットもWindowsでは非ブロッキング設定を継承
 未実施: 実画面でのF1/選曲/プレイ遷移操作、実IPFSノード、実HTTPサービスからの譜面取得、
 macOS/Linux実機、プレイ中のCPU/音声/GPU負荷の比較測定。
 履歴の永続化・再起動後の再開・自動再試行は今回の対象外。
+
+## 2026-10-16 追記: Wriggle無効化とKonmaiの実応答
+
+Wriggleは利用できないというユーザーの指摘に合わせ、プリセットの選択と既定URLを無効化した。
+保存済みenumは引き続き読み込み、明示URLとHTTP有効/無効は変更しない。
+URLが空なら既存のIPFS・手動URL選択へ戻る。設定往復・HTTP選択・IPFS優先の回帰試験を追加した。
+
+Konmaiの未登録ハッシュ応答だけでは稼働確認が不足していたため、公開Satelliteの段位定義にある
+MD5 `9ee5524e4ed8a3e7033b4de1fedc35fd`、`9498378a847b94b949d11a566a86d3c0`、
+`4023045d9134dfc47e953bc430e5ef07` の3件を読み取り確認した。
+すべてHTTP 200、`result: success`、`data.song_url` を返し、BMZの既存JSON解析形式と一致した。
+最後の「Life is PIANO [Another]」の取得URLはHEADでHTTP 200、7zのContent-Type、
+106,431,803バイトを返した。Range `bytes=0-31` もHTTP 206で応答し、
+先頭署名 `37 7A BC AF 27 1C` を確認した。実サービスの全取得・展開・DB登録は行っていない。
+生ログの先頭32バイトと応答ヘッダーは `.local/performance/chart-download-manager/konmai-prefix*` に保持する。
+
+追記後の検証: `cargo fmt --all -- --check`、`cargo check -p bmz-player --locked`、
+`cargo clippy -p bmz-player --all-targets --locked -- -D warnings` が成功。
+`cargo test -p bmz-player --locked` はライブラリ2,549件成功・32件ignore・失敗0件。
+ネイティブ起動試験2件は既定のignore。設定と取得方式選択の追加2試験、翻訳キー整合性も成功。
+ログは同じローカルディレクトリの `check-sources.log`、`clippy-sources.log`、`test-sources.log` に保持する。

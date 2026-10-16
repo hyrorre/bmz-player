@@ -24,11 +24,16 @@ impl HttpDownloadPreset {
 
     pub fn api_url(self) -> &'static str {
         match self {
-            Self::Custom => "",
+            // Keep the retired variant readable in saved configurations, but
+            // never supply a default endpoint for an unavailable service.
+            Self::Custom | Self::Wriggle => "",
             Self::Ginger => "https://gingerrush.com/download/package/{md5}",
             Self::Konmai => "https://bms.alvorna.com/api/hash?md5={md5}",
-            Self::Wriggle => "https://bms.wrigglebug.xyz/download/package/{md5}",
         }
+    }
+
+    pub fn is_available(self) -> bool {
+        self != Self::Wriggle
     }
 }
 
@@ -45,14 +50,33 @@ mod tests {
     use super::*;
     #[test]
     fn source_hash_requirements_are_explicit() {
-        for preset in
-            [HttpDownloadPreset::Ginger, HttpDownloadPreset::Konmai, HttpDownloadPreset::Wriggle]
-        {
+        for preset in [HttpDownloadPreset::Ginger, HttpDownloadPreset::Konmai] {
             assert!(template_supports_hashes(preset.api_url(), true, false));
             assert!(!template_supports_hashes(preset.api_url(), false, true));
         }
         assert!(template_supports_hashes("https://custom.test/{sha256}", false, true));
         assert!(!template_supports_hashes("https://custom.test/{md5}/{sha256}", false, true));
+    }
+
+    #[test]
+    fn retired_wriggle_preset_has_no_default_but_preserves_explicit_urls() {
+        use crate::config::app_config::ChartDownloadsConfig;
+        let mut config: ChartDownloadsConfig =
+            toml::from_str("http_source = 'wriggle'\nhttp_enabled = true\n").unwrap();
+        assert_eq!(config.http_source, HttpDownloadPreset::Wriggle);
+        assert!(!config.http_source.is_available());
+        assert!(config.effective_http_api_url().is_empty());
+        assert!(config.http_enabled);
+        for preset in
+            [HttpDownloadPreset::Ginger, HttpDownloadPreset::Konmai, HttpDownloadPreset::Custom]
+        {
+            assert!(preset.is_available());
+        }
+        config.http_api_url = "https://custom.test/{md5}".into();
+        let reloaded: ChartDownloadsConfig =
+            toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(reloaded.effective_http_api_url(), "https://custom.test/{md5}");
+        assert_eq!(reloaded.http_source, HttpDownloadPreset::Wriggle);
     }
 
     #[test]
