@@ -359,7 +359,7 @@ async fn download_chart_inner(
                     if let Some(shared) = cache.get(&key) {
                         (Arc::clone(shared), false)
                     } else {
-                        let shared = Arc::new(std::sync::Mutex::new(None));
+                        let shared = Arc::new(manager::SharedArchive::default());
                         cache.insert(key, Arc::clone(&shared));
                         (shared, true)
                     }
@@ -370,7 +370,11 @@ async fn download_chart_inner(
                 }
                 // A cancelled owner releases its claim; a waiting task can take
                 // over without inheriting the other task's cancellation.
-                let cached = shared.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                // Register for the wake-up before reading to avoid a lost notify.
+                let ready = shared.ready.notified();
+                tokio::pin!(ready);
+                ready.as_mut().enable();
+                let cached = shared.result.lock().unwrap_or_else(|e| e.into_inner()).clone();
                 match cached {
                     Some(Ok(mut result)) if result.chart_dir.is_dir() => {
                         result.request_id = request.request_id;
@@ -384,7 +388,10 @@ async fn download_chart_inner(
                         }
                     }
                     None => {
-                        tokio::time::sleep(Duration::from_millis(25)).await;
+                        // Do not keep an unread archive stream open while the
+                        // owner downloads; a takeover requests it again.
+                        direct_response = None;
+                        ready.await;
                     }
                 }
             }
@@ -434,7 +441,7 @@ async fn download_chart_inner(
         chart_dir: final_dir,
     };
     if let Some(owner) = &mut cache_owner {
-        *owner.shared.lock().unwrap_or_else(|e| e.into_inner()) = Some(Ok(result.clone()));
+        owner.shared.publish(Ok(result.clone()));
         owner.completed = true;
     }
     Ok(result)
@@ -443,19 +450,19 @@ async fn download_chart_inner(
 struct ArchiveOwner<'a> {
     services: &'a DownloadServices,
     key: [u8; 32],
-    shared: Arc<std::sync::Mutex<manager::ArchiveResult>>,
+    shared: Arc<manager::SharedArchive>,
     completed: bool,
 }
 
 impl Drop for ArchiveOwner<'_> {
     fn drop(&mut self) {
         if !self.completed {
-            *self.shared.lock().unwrap_or_else(|e| e.into_inner()) =
-                Some(Err("archive owner ended".into()));
             let mut cache = self.services.archives.lock().unwrap_or_else(|e| e.into_inner());
             if cache.get(&self.key).is_some_and(|current| Arc::ptr_eq(current, &self.shared)) {
                 cache.remove(&self.key);
             }
+            drop(cache);
+            self.shared.publish(Err("archive owner ended".into()));
         }
     }
 }
@@ -777,7 +784,9 @@ impl<R: Read> Read for CancelReader<'_, R> {
 fn validate_archive_path(name: &str) -> Result<()> {
     anyhow::ensure!(
         !name.starts_with(['/', '\\'])
-            && !name.contains(':')
+            // ':' is an ordinary name character outside Windows, where it
+            // would name a drive or an alternate data stream instead.
+            && !(cfg!(windows) && name.contains(':'))
             && !name.contains('\0')
             && !name.split(['/', '\\']).any(|part| part == ".."),
         "unsafe archive entry path"
@@ -897,6 +906,14 @@ mod tests {
                 "https://example.com/diff".to_string()
             ])
         );
+    }
+
+    #[test]
+    fn colons_in_archive_names_are_rejected_only_on_windows() {
+        assert_eq!(validate_archive_path("song/bgm:01.ogg").is_err(), cfg!(windows));
+        assert_eq!(validate_archive_path("C:/song/chart.bms").is_err(), cfg!(windows));
+        assert!(validate_archive_path("../chart.bms").is_err());
+        assert!(validate_archive_path("/chart.bms").is_err());
     }
 
     #[test]

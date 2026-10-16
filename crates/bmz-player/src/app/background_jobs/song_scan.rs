@@ -228,6 +228,7 @@ impl WinitApp {
                 } else {
                     self.change_select_list(SelectListAction::RefreshDownloads);
                 }
+                let mut download_failed = false;
                 for mut registration in result.downloaded {
                     registration.task_ids.extend(
                         crate::song_download::attach_download_registrations(
@@ -237,8 +238,14 @@ impl WinitApp {
                     );
                     for id in registration.task_ids {
                         self.jobs.chart_downloads.finish_scan(id, &registration.identities, None);
-                        self.finish_download_selection(id);
+                        download_failed |= self.finish_download_selection(id);
                     }
+                }
+                if download_failed {
+                    self.show_left_overlay_toast(
+                        Localizer::new(self.boot.profile_config.ui.locale())
+                            .text("toast-chart-download-failed"),
+                    );
                 }
                 keep_pending = false;
             }

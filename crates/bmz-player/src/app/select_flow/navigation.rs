@@ -893,9 +893,11 @@ impl WinitApp {
         }
     }
 
-    pub(in crate::app) fn finish_download_selection(&mut self, task_id: u64) {
+    /// Restores the selection for a registered task. Returns whether the task
+    /// failed so the caller can report a whole scan with one toast.
+    pub(in crate::app) fn finish_download_selection(&mut self, task_id: u64) -> bool {
         let Some(task) = self.jobs.chart_downloads.task(task_id) else {
-            return;
+            return false;
         };
         let ids: HashSet<_> = task.requests.iter().map(|request| request.request_id).collect();
         let failed = task.state() == crate::song_download::DownloadState::Failed;
@@ -925,12 +927,7 @@ impl WinitApp {
             }
         }
         self.jobs.download_selections = remaining;
-        if failed {
-            self.show_left_overlay_toast(
-                Localizer::new(self.boot.profile_config.ui.locale())
-                    .text("toast-chart-download-failed"),
-            );
-        }
+        failed
     }
 
     /// Returns true when the event was consumed by the search input layer

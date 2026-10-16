@@ -108,8 +108,8 @@ impl LibraryDatabase {
     }
 
     /// Returns every entry of the given difficulty table, including entries that
-    /// are not present in the local library.  Matched charts use MD5 first, then
-    /// SHA-256.
+    /// are not present in the local library.  Matched charts use SHA-256 first,
+    /// then MD5, and every hash the table row provides must match the chart.
     pub fn list_table_entries_with_chart(
         &self,
         source_url: &str,

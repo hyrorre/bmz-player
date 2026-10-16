@@ -82,7 +82,7 @@ pub struct DownloadServices {
     #[cfg(test)]
     pub(super) timeout: Option<Duration>,
     pub(super) extraction: tokio::sync::Semaphore,
-    pub(super) archives: Mutex<std::collections::HashMap<[u8; 32], Arc<Mutex<ArchiveResult>>>>,
+    pub(super) archives: Mutex<std::collections::HashMap<[u8; 32], Arc<SharedArchive>>>,
 }
 
 impl Default for DownloadServices {
@@ -103,7 +103,7 @@ impl DownloadServices {
         };
         let mut cache = self.archives.lock().unwrap_or_else(|error| error.into_inner());
         let same_result = cache.get(&key).is_some_and(|entry| {
-            let entry = entry.lock().unwrap_or_else(|error| error.into_inner());
+            let entry = entry.result.lock().unwrap_or_else(|error| error.into_inner());
             matches!(entry.as_ref(), Some(Ok(current)) if current.chart_dir == result.chart_dir)
         });
         if same_result {
@@ -121,6 +121,21 @@ impl DownloadServices {
 }
 
 pub(super) type ArchiveResult = Option<std::result::Result<ChartDownloadResult, String>>;
+
+/// One archive URL's extraction, shared by every task that resolves to it.
+#[derive(Default)]
+pub(super) struct SharedArchive {
+    pub(super) result: Mutex<ArchiveResult>,
+    /// Woken when the owner publishes a result or releases its claim.
+    pub(super) ready: tokio::sync::Notify,
+}
+
+impl SharedArchive {
+    pub(super) fn publish(&self, result: std::result::Result<ChartDownloadResult, String>) {
+        *self.result.lock().unwrap_or_else(|error| error.into_inner()) = Some(result);
+        self.ready.notify_waiters();
+    }
+}
 
 pub struct DownloadTask {
     pub id: DownloadTaskId,
@@ -196,7 +211,9 @@ impl ChartDownloadManager {
         let existing =
             keys.iter().filter_map(|key| self.transfers.get(key).copied()).find(|index| {
                 let task = &self.tasks[*index];
+                // A cancel takes effect at the next poll; never merge into it.
                 !matches!(task.state(), DownloadState::Failed | DownloadState::Cancelled)
+                    && !task.control.is_cancelled()
                     && task.requests.iter().any(|other| requests_share_transfer(other, &request))
             });
         if let Some(index) = existing {
@@ -238,11 +255,13 @@ impl ChartDownloadManager {
     }
 
     pub fn cancel(&mut self, id: DownloadTaskId) {
+        // Committed files and ongoing DB scans must never be deleted, so a
+        // registering task can no longer be cancelled.
         if let Some(task) = self.tasks.iter_mut().find(|task| task.id == id)
             && !task.state().terminal()
+            && task.state() != DownloadState::Scanning
         {
             task.control.cancel();
-            // Committed files and ongoing DB scans must never be deleted.
             if task.worker.is_none() {
                 task.control.set_state(DownloadState::Cancelled);
             }
@@ -318,11 +337,9 @@ impl ChartDownloadManager {
                     task.result = Some(result);
                     task.scan_pending = true;
                     self.scan_queue.push_back(index);
-                    task.control.set_state(if task.control.is_cancelled() {
-                        DownloadState::Cancelled
-                    } else {
-                        DownloadState::Scanning
-                    });
+                    // The folder is committed and will be registered even if a
+                    // cancel arrived too late to stop the transfer.
+                    task.control.set_state(DownloadState::Scanning);
                 }
                 Err(error) => {
                     task.error = Some(sanitized_download_error(&error));
@@ -419,29 +436,10 @@ impl ChartDownloadManager {
         if task.state() == DownloadState::Cancelled {
             return;
         }
-        let mut sha256s = HashSet::new();
-        let mut md5s = HashSet::new();
-        let mut pairs = HashSet::new();
-        for identity in registered {
-            if let Some(sha) = identity.sha256 {
-                sha256s.insert(sha);
-            }
-            if let Some(md5) = identity.md5 {
-                md5s.insert(md5);
-            }
-            if let (Some(sha), Some(md5)) = (identity.sha256, identity.md5) {
-                pairs.insert((sha, md5));
-            }
-        }
         task.registered = task
             .requests
             .iter()
-            .filter(|request| match (request.identity.sha256, request.identity.md5) {
-                (Some(sha), Some(md5)) => pairs.contains(&(sha, md5)),
-                (Some(sha), None) => sha256s.contains(&sha),
-                (None, Some(md5)) => md5s.contains(&md5),
-                _ => false,
-            })
+            .filter(|request| registered.iter().any(|chart| request.identity.overlaps(chart)))
             .map(|request| request.identity.clone())
             .collect();
         let success =
@@ -501,10 +499,7 @@ fn requests_share_transfer(a: &ChartDownloadRequest, b: &ChartDownloadRequest) -
     if a.data_dir != b.data_dir {
         return false;
     }
-    let same_hash = match (a.identity.sha256, b.identity.sha256) {
-        (Some(a), Some(b)) => a == b,
-        _ => a.identity.md5.is_some() && a.identity.md5 == b.identity.md5,
-    };
+    let same_hash = a.identity.overlaps(&b.identity);
     match (&a.action, &b.action) {
         (
             MissingChartAction::Http { api_url: a_url, md5: a_md5, sha256: a_sha },
@@ -660,6 +655,58 @@ mod tests {
             manager.finish_scan(id, &[identity], None);
             assert_eq!(manager.task(id).unwrap().state(), DownloadState::Completed);
         }
+    }
+
+    fn finished_result(task: &DownloadTask, chart_dir: &Path) -> ChartDownloadResult {
+        ChartDownloadResult {
+            archive_cache_key: None,
+            request_id: task.requests[0].request_id,
+            identity: task.requests[0].identity.clone(),
+            source: ChartDownloadSource::Http,
+            root_dir: chart_dir.parent().unwrap().into(),
+            chart_dir: chart_dir.into(),
+        }
+    }
+
+    #[test]
+    fn requests_never_merge_into_a_task_with_a_pending_cancel() {
+        let root = tempfile::tempdir().unwrap();
+        let mut manager = ChartDownloadManager::default();
+        let r = request(root.path(), "https://test.invalid/{md5}", 1);
+        let (id, _) = manager.submit(r.clone());
+        // Running transfers observe the cancel only at the next poll.
+        manager.tasks[0].control.set_state(DownloadState::Downloading);
+        manager.tasks[0].control.cancel();
+        let (other, merged) = manager.submit(r);
+        assert!(!merged);
+        assert_ne!(other, id);
+    }
+
+    #[test]
+    fn transfers_finishing_after_a_cancel_are_still_registered() {
+        let root = tempfile::tempdir().unwrap();
+        let chart_dir = root.path().join("songs/http/chart");
+        std::fs::create_dir_all(&chart_dir).unwrap();
+        let mut manager = ChartDownloadManager::default();
+        let (id, _) = manager.submit(request(root.path(), "https://test.invalid/{md5}", 1));
+        let (tx, rx) = mpsc::channel();
+        tx.send(Ok(finished_result(&manager.tasks[0], &chart_dir))).unwrap();
+        manager.tasks[0].worker = Some(rx);
+        manager.tasks[0].control.set_state(DownloadState::Extracting);
+        manager.queues[0].clear();
+        manager.active.push(0);
+        manager.cancel(id);
+        manager.poll(1);
+        assert_eq!(manager.task(id).unwrap().state(), DownloadState::Scanning);
+        // Registration cannot be undone, so a cancel during the scan is ignored.
+        manager.cancel(id);
+        assert_eq!(manager.task(id).unwrap().state(), DownloadState::Scanning);
+        assert_eq!(manager.take_scan_requests().len(), 1);
+        let identity = manager.task(id).unwrap().requests[0].identity.clone();
+        manager.finish_scan(id, std::slice::from_ref(&identity), None);
+        let task = manager.task(id).unwrap();
+        assert_eq!(task.state(), DownloadState::Completed);
+        assert!(task.registered.contains(&identity));
     }
 
     #[test]

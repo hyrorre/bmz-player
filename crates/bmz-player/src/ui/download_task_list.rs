@@ -130,6 +130,7 @@ pub(super) fn build_task_list(
                                 view.refreshed = None;
                             }
                         } else if !state.terminal()
+                            && state != DownloadState::Scanning
                             && ui.button(tr!(text, "downloads-cancel")).clicked()
                         {
                             commands.push(DownloadUiCommand::Cancel(task.id));
