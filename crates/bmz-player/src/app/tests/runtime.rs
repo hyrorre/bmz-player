@@ -1,4 +1,44 @@
 use super::*;
+
+#[test]
+fn download_scan_coalescing_tracks_running_and_queued_directories() {
+    let mut scans = SongScanRuntime::default();
+    let (_tx, rx) = mpsc::channel();
+    scans.pending = Some(PendingSongScan {
+        finished: rx,
+        progress: Arc::new(AtomicU64::new(0)),
+        library_roots: None,
+        download_ids: vec![1],
+        download_dirs: vec![PathBuf::from("shared")],
+    });
+    assert!(scans.has_download_scan_for(Path::new("shared")));
+    assert!(!scans.has_download_scan_for(Path::new("other")));
+    scans.queued.push_back((
+        vec![PathEntry { path: "other".into(), enabled: true, recursive: true }],
+        true,
+        "other scan".into(),
+        SongScanScope::Paths,
+    ));
+    assert!(scans.has_download_scan_for(Path::new("other")));
+    scans.queued.push_back((
+        vec![PathEntry { path: "disabled".into(), enabled: false, recursive: true }],
+        true,
+        "disabled scan".into(),
+        SongScanScope::Paths,
+    ));
+    scans.queued.push_back((
+        vec![PathEntry { path: "shallow".into(), enabled: true, recursive: false }],
+        true,
+        "shallow scan".into(),
+        SongScanScope::Paths,
+    ));
+    assert!(!scans.has_download_scan_for(Path::new("disabled")));
+    assert!(!scans.has_download_scan_for(Path::new("shallow")));
+    scans.pending = None;
+    assert!(!scans.has_download_scan_for(Path::new("shared")));
+    assert!(scans.has_download_scan_for(Path::new("other")));
+    assert_eq!(scans.queued.pop_front().unwrap().0[0].path, "other");
+}
 use crate::app::input_lifecycle::{
     gamepad_runtime_config_changed, keyboard_runtime_config_changed,
 };

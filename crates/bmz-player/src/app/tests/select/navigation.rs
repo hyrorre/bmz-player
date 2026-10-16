@@ -29,6 +29,22 @@ fn load(
 }
 
 #[test]
+fn download_refresh_keeps_an_empty_filtered_folder_and_its_history() {
+    let stack = vec!["table".into(), "level".into()];
+    let history = vec![3, 7];
+    let prepared =
+        prepare_select_list(&SelectListAction::RefreshDownloads, &stack, &history, 2, None, |_| {
+            Ok((Vec::new(), SelectModeFilter::K14))
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(prepared.folder_stack, stack);
+    assert_eq!(prepared.selected_index_stack, history);
+    assert_eq!(prepared.mode_filter, SelectModeFilter::K14);
+    assert!(!prepared.left_empty_folder);
+}
+
+#[test]
 fn root_function_folders_keep_kinds_and_favorite_follows_my_best() {
     let data = ProfileTestDir::new();
     let mut boot = data.boot();

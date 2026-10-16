@@ -207,6 +207,7 @@ impl WinitApp {
         let skin_meta = self.egui_skin_meta();
 
         // コース graph は egui を Option から取り出した後、clone せず参照で渡す。
+        let download_scope = self.bulk_download_scope();
         let course_result = self.result.finished_course.as_ref();
         let course_preview = self.egui_course_preview(scene_kind);
         let course_editor = &self.course_editor_cache.data;
@@ -251,6 +252,9 @@ impl WinitApp {
         let output = egui.run(
             &window,
             EguiRunContext {
+                downloads: &self.jobs.chart_downloads,
+                download_preview: &self.jobs.bulk_download,
+                download_scope,
                 info: &info,
                 app_config: &mut self.boot.app_config,
                 profile_config: &mut self.boot.profile_config,
@@ -280,6 +284,8 @@ impl WinitApp {
             },
         );
         self.ui.egui = Some(egui);
+        // Commands carry IDs/data only; UI reads task references without cloning
+        // the queue on every frame.
         self.apply_egui_output(&window, output, profile_before);
     }
 
@@ -712,6 +718,9 @@ impl WinitApp {
         }
         if !output.table_fetch_urls.is_empty() {
             self.spawn_table_fetches(output.table_fetch_urls, "egui table fetch".to_string());
+        }
+        for command in output.download_commands {
+            self.apply_download_command(command);
         }
         for request in output.song_scan_requests {
             self.spawn_song_scan_request(request);

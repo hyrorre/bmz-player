@@ -162,8 +162,7 @@ use crate::skin_loader::{
     set_decoded_skin_context, upload_decoded_skin_with_texture_cache,
 };
 use crate::song_download::{
-    ChartDownloadBatchResult, ChartDownloadRequest, MissingChartAction,
-    choose_missing_chart_action, download_charts, open_browser_urls,
+    ChartDownloadRequest, MissingChartAction, choose_missing_chart_action, open_browser_urls,
 };
 use crate::songs_cmd::scan_songs_with_progress;
 use crate::storage::collection_db::FavoriteHints;
@@ -217,6 +216,7 @@ mod course_flow_metrics;
 mod course_flow_start;
 #[path = "app/course_metrics_state.rs"]
 mod course_metrics_state;
+mod download_flow;
 mod event_loop_probe;
 mod frame_flow;
 mod frame_runtime;

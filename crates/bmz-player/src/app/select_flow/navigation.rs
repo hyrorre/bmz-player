@@ -68,6 +68,7 @@ impl WinitApp {
         if self.select.selected_index != previous_index
             || (rows != 0 && self.select.select_items.len() > 1)
         {
+            self.select.selection_generation = self.select.selection_generation.wrapping_add(1);
             self.sync_selected_play_mode();
             self.reset_selected_replay_slot();
             self.restart_select_bar_timer_with_scroll(rows, duration);
@@ -152,6 +153,7 @@ impl WinitApp {
         }
         self.reload_select_items();
         self.select.selected_index = 0;
+        self.select.selection_generation = self.select.selection_generation.wrapping_add(1);
         self.reset_selected_replay_slot();
         self.restart_select_bar_timer_without_scroll(Instant::now());
         self.play_system_sound(crate::system_sound::SoundType::FolderOpen);
@@ -658,8 +660,8 @@ impl WinitApp {
 
     pub(super) fn acquire_missing_chart(&mut self, row: &SelectChartRow) {
         let text = Localizer::new(self.boot.profile_config.ui.locale());
-        let action =
-            choose_missing_chart_action(&self.boot.app_config.downloads, &row.download_metadata);
+        let metadata = row.acquisition_metadata();
+        let action = choose_missing_chart_action(&self.boot.app_config.downloads, &metadata);
         match action {
             MissingChartAction::Browser(urls) => match open_browser_urls(&urls) {
                 Ok(count) => {
@@ -681,7 +683,14 @@ impl WinitApp {
                 );
             }
             action @ (MissingChartAction::Ipfs { .. } | MissingChartAction::Http { .. }) => {
-                self.spawn_chart_download(action, row.display_title().to_string());
+                self.spawn_chart_download_batch(
+                    vec![(
+                        action,
+                        row.display_title().to_string(),
+                        crate::song_download::ChartDownloadIdentity::from_metadata(&metadata),
+                    )],
+                    true,
+                );
             }
         }
     }
@@ -714,12 +723,14 @@ impl WinitApp {
             SelectItem::Chart(chart) if !chart.in_library() => Some(chart),
             _ => None,
         }) {
-            match choose_missing_chart_action(
-                &self.boot.app_config.downloads,
-                &chart.download_metadata,
-            ) {
+            let metadata = chart.acquisition_metadata();
+            match choose_missing_chart_action(&self.boot.app_config.downloads, &metadata) {
                 action @ (MissingChartAction::Ipfs { .. } | MissingChartAction::Http { .. }) => {
-                    downloads.push((action, chart.display_title().to_string()));
+                    downloads.push((
+                        action,
+                        chart.display_title().to_string(),
+                        crate::song_download::ChartDownloadIdentity::from_metadata(&metadata),
+                    ));
                 }
                 MissingChartAction::Browser(urls) => browser_urls.extend(urls),
                 MissingChartAction::Unavailable => unavailable += 1,
@@ -759,177 +770,164 @@ impl WinitApp {
             unavailable,
             "starting missing course stage acquisition"
         );
-        self.spawn_chart_download_batch(downloads);
-    }
-
-    pub(super) fn spawn_chart_download(&mut self, action: MissingChartAction, title: String) {
-        self.spawn_chart_download_batch(vec![(action, title)]);
+        self.spawn_chart_download_batch(downloads, false);
     }
 
     pub(super) fn spawn_chart_download_batch(
         &mut self,
-        downloads: Vec<(MissingChartAction, String)>,
+        downloads: Vec<(MissingChartAction, String, crate::song_download::ChartDownloadIdentity)>,
+        restore_selection: bool,
     ) {
-        let text = Localizer::new(self.boot.profile_config.ui.locale());
-        if self.jobs.pending_chart_download.is_some() {
-            self.show_left_overlay_toast(text.text("toast-chart-download-in-progress"));
-            return;
-        }
-        let mut source_names = HashSet::new();
-        let requests: Vec<ChartDownloadRequest> = downloads
-            .into_iter()
-            .filter_map(|(action, title)| {
-                match &action {
-                    MissingChartAction::Ipfs { .. } => {
-                        source_names.insert("IPFS");
-                    }
-                    MissingChartAction::Http { .. } => {
-                        source_names.insert("HTTP");
-                    }
-                    MissingChartAction::Browser(_) | MissingChartAction::Unavailable => {
-                        return None;
-                    }
-                }
-                Some(ChartDownloadRequest {
-                    action,
-                    title,
-                    data_dir: self.boot.app_paths.data_dir.clone(),
+        let request_count = downloads.len();
+        let single = restore_selection && request_count == 1;
+        let source =
+            downloads
+                .first()
+                .map(|(action, _, _)| {
+                    if matches!(action, MissingChartAction::Ipfs { .. }) { "IPFS" } else { "HTTP" }
                 })
-            })
-            .collect();
-        if requests.is_empty() {
-            return;
+                .unwrap_or("HTTP");
+        for (action, title, identity) in downloads {
+            self.jobs.download_request_id += 1;
+            let request_id = self.jobs.download_request_id;
+            let request = ChartDownloadRequest {
+                request_id,
+                identity: identity.clone(),
+                action,
+                title,
+                data_dir: self.boot.app_paths.data_dir.clone(),
+            };
+            let (task_id, _) = self.jobs.chart_downloads.submit(request);
+            if single {
+                self.jobs.download_selections.push(DownloadSelection {
+                    task_id,
+                    selected_index: self.select.selected_index,
+                    request_id,
+                    identity,
+                    folder_stack: self.select.folder_stack.clone(),
+                    selected_key: self
+                        .select
+                        .select_items
+                        .get(self.select.selected_index)
+                        .map(select_item_key),
+                    generation: self.select.selection_generation,
+                });
+            }
+            tracing::info!(task_id, request_id, "submitted chart download");
         }
-        let request_count = requests.len();
-        let source_name = if source_names.len() == 1 {
-            source_names.into_iter().next().unwrap_or("HTTP").to_string()
-        } else {
-            "IPFS / HTTP".to_string()
-        };
-        let (tx, rx) = mpsc::channel();
-        thread::Builder::new()
-            .name("chart-download".to_string())
-            .spawn(move || {
-                let result = (|| -> Result<ChartDownloadBatchResult> {
-                    let runtime =
-                        tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
-                    Ok(runtime.block_on(download_charts(requests)))
-                })();
-                let _ = tx.send(result);
-            })
-            .expect("failed to spawn chart download thread");
-        self.jobs.pending_chart_download = Some(rx);
-        if request_count == 1 {
+        self.jobs.chart_downloads.poll(self.boot.app_config.downloads.http_parallelism as usize);
+        if request_count > 0 {
             let mut args = FluentArgs::new();
-            args.set("source", source_name.as_str());
-            self.show_left_overlay_toast(text.format("toast-chart-download-started", &args));
-        } else {
-            let mut args = FluentArgs::new();
+            args.set("source", source);
             args.set("count", request_count as i64);
-            self.show_left_overlay_toast(text.format("toast-course-download-started", &args));
+            self.show_left_overlay_toast(
+                Localizer::new(self.boot.profile_config.ui.locale()).format(
+                    if request_count == 1 {
+                        "toast-chart-download-started"
+                    } else {
+                        "toast-course-download-started"
+                    },
+                    &args,
+                ),
+            );
         }
-        tracing::info!(source = source_name, count = request_count, "started chart downloads");
     }
 
     pub(super) fn poll_pending_chart_download(&mut self) {
-        let text = Localizer::new(self.boot.profile_config.ui.locale());
-        let Some(rx) = &self.jobs.pending_chart_download else {
+        self.jobs.chart_downloads.poll(self.boot.app_config.downloads.http_parallelism as usize);
+        let failures = self.jobs.chart_downloads.take_failure_notices();
+        if failures.into_iter().any(|id| {
+            self.jobs
+                .chart_downloads
+                .task(id)
+                .is_some_and(|task| task.state() == crate::song_download::DownloadState::Failed)
+        }) {
+            self.show_left_overlay_toast(
+                Localizer::new(self.boot.profile_config.ui.locale())
+                    .text("toast-chart-download-failed"),
+            );
+        }
+        self.jobs.download_selections.retain(|selection| {
+            self.jobs.chart_downloads.task(selection.task_id).is_some_and(|task| {
+                !matches!(
+                    task.state(),
+                    crate::song_download::DownloadState::Failed
+                        | crate::song_download::DownloadState::Cancelled
+                )
+            })
+        });
+        let scans = self.jobs.chart_downloads.take_scan_requests();
+        if scans.is_empty() {
             return;
-        };
-        match rx.try_recv() {
-            Ok(Ok(result)) => {
-                self.jobs.pending_chart_download = None;
-                let completed_count = result.completed.len();
-                let failed_count = result.failures.len();
-                for failure in result.failures {
-                    tracing::error!(
-                        title = failure.title,
-                        error = %format_error_chain(&failure.error),
-                        "chart download failed"
-                    );
-                }
-                if completed_count == 0 {
-                    if failed_count == 1 {
-                        self.show_left_overlay_toast(text.text("toast-chart-download-failed"));
-                    } else {
-                        let mut args = FluentArgs::new();
-                        args.set("count", failed_count as i64);
-                        self.show_left_overlay_toast(
-                            text.format("toast-course-download-failed", &args),
-                        );
-                    }
-                    return;
-                }
+        }
+        let mut roots = Vec::new();
+        let mut changed = false;
+        for (id, result) in scans {
+            changed |= crate::songs_cmd::ensure_download_song_root(
+                &mut self.boot.app_config.songs.roots,
+                &result.root_dir.to_string_lossy(),
+            );
+            if !self.jobs.song_scan.has_download_scan_for(&result.chart_dir)
+                && !roots.iter().any(|root: &PathEntry| Path::new(&root.path) == result.chart_dir)
+            {
+                roots.push(PathEntry {
+                    path: result.chart_dir.to_string_lossy().into_owned(),
+                    enabled: true,
+                    recursive: true,
+                });
+            }
+            self.jobs.download_registrations.push((id, result));
+        }
+        if changed
+            && let Err(error) =
+                save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config)
+        {
+            tracing::error!(%error, "failed to save downloaded song roots");
+            self.show_left_overlay_toast(
+                Localizer::new(self.boot.profile_config.ui.locale())
+                    .text("toast-chart-download-root-save-failed"),
+            );
+        }
+        if !roots.is_empty() {
+            self.spawn_song_scan(roots, true, "chart download registration".into());
+        }
+    }
 
-                let mut roots = HashSet::new();
-                for completed in &result.completed {
-                    roots.insert(completed.root_dir.clone());
-                    tracing::info!(
-                        source = completed.source.display_name(),
-                        path = %completed.chart_dir.display(),
-                        "chart download complete"
-                    );
-                }
-                if completed_count == 1 && failed_count == 0 {
-                    let source_name = result.completed[0].source.display_name();
-                    let mut args = FluentArgs::new();
-                    args.set("source", source_name);
-                    self.show_left_overlay_toast(
-                        text.format("toast-chart-download-complete-registering", &args),
-                    );
-                } else {
-                    let mut args = FluentArgs::new();
-                    args.set("completed", completed_count as i64);
-                    args.set("failed", failed_count as i64);
-                    self.show_left_overlay_toast(
-                        text.format("toast-course-download-complete-registering", &args),
-                    );
-                }
-                let mut config_changed = false;
-                for root in &roots {
-                    config_changed |= crate::songs_cmd::ensure_download_song_root(
-                        &mut self.boot.app_config.songs.roots,
-                        &root.to_string_lossy(),
-                    );
-                }
-                let save_roots = if config_changed {
-                    save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config)
-                } else {
-                    Ok(())
-                };
-                if let Err(error) = save_roots {
-                    tracing::error!(%error, "failed to save downloaded song roots");
-                    self.show_left_overlay_toast(
-                        text.text("toast-chart-download-root-save-failed"),
-                    );
-                }
-                // A save failure must not hide a successfully downloaded chart in
-                // this session. Startup restores the scope from persisted settings.
-                if let Err(error) = self.publish_song_scope() {
-                    tracing::error!(%error, "failed to publish downloaded song roots");
-                }
-                let scan_roots = roots
-                    .into_iter()
-                    .map(|root| PathEntry {
-                        path: root.to_string_lossy().into_owned(),
-                        enabled: true,
-                        recursive: true,
-                    })
-                    .collect();
-                self.spawn_song_scan(scan_roots, true, "course chart download scan".to_string());
+    /// Restores the selection for a registered task. Returns whether the task
+    /// failed so the caller can report a whole scan with one toast.
+    pub(in crate::app) fn finish_download_selection(&mut self, task_id: u64) -> bool {
+        let Some(task) = self.jobs.chart_downloads.task(task_id) else {
+            return false;
+        };
+        let ids: HashSet<_> = task.requests.iter().map(|request| request.request_id).collect();
+        let failed = task.state() == crate::song_download::DownloadState::Failed;
+        let completed: HashSet<_> = task
+            .requests
+            .iter()
+            .filter(|request| task.registered.contains(&request.identity))
+            .map(|request| request.request_id)
+            .collect();
+        let mut remaining = Vec::new();
+        for selection in std::mem::take(&mut self.jobs.download_selections) {
+            if !ids.contains(&selection.request_id) {
+                remaining.push(selection);
+                continue;
             }
-            Ok(Err(error)) => {
-                self.jobs.pending_chart_download = None;
-                self.show_left_overlay_toast(text.text("toast-chart-download-failed"));
-                tracing::error!(error = %format_error_chain(&error), "chart download failed");
-            }
-            Err(mpsc::TryRecvError::Empty) => {}
-            Err(mpsc::TryRecvError::Disconnected) => {
-                self.jobs.pending_chart_download = None;
-                self.show_left_overlay_toast(text.text("toast-chart-download-worker-ended"));
-                tracing::warn!("chart download worker disconnected");
+            if completed.contains(&selection.request_id)
+                && let Some(index) = download_selection_index(
+                    &selection,
+                    &self.select.folder_stack,
+                    self.select.selection_generation,
+                    &self.select.select_items,
+                )
+            {
+                self.select.selected_index = index;
+                self.sync_selected_play_mode();
+                self.reset_selected_replay_slot();
             }
         }
+        self.jobs.download_selections = remaining;
+        failed
     }
 
     /// Returns true when the event was consumed by the search input layer

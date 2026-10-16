@@ -12,9 +12,26 @@ pub(super) struct PendingSystemSoundLoad {
 }
 
 pub(super) struct PendingSongScan {
-    pub(super) finished: Receiver<Result<ScanReport>>,
+    pub(super) finished: Receiver<Result<SongScanResult>>,
     pub(super) progress: Arc<AtomicU64>,
     pub(super) library_roots: Option<Vec<PathEntry>>,
+    pub(super) download_ids: Vec<u64>,
+    pub(super) download_dirs: Vec<PathBuf>,
+}
+
+pub(super) struct SongScanResult {
+    pub(super) report: ScanReport,
+    pub(super) downloaded: Vec<crate::song_download::DownloadScanRegistration>,
+}
+
+pub(super) struct DownloadSelection {
+    pub(super) task_id: u64,
+    pub(super) selected_index: usize,
+    pub(super) request_id: u64,
+    pub(super) identity: crate::song_download::ChartDownloadIdentity,
+    pub(super) folder_stack: Vec<String>,
+    pub(super) selected_key: Option<SelectItemKey>,
+    pub(super) generation: u64,
 }
 
 pub(super) struct PendingReplayImport {

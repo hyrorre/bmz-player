@@ -47,6 +47,7 @@ pub(super) struct SelectRuntimeState {
     /// フォルダから出た時にカーソル位置を復元するために使う。長さは `folder_stack` と一致。
     pub(super) selected_index_stack: Vec<usize>,
     pub(super) selected_index: usize,
+    pub(super) selection_generation: u64,
     pub(super) arrange_option: ArrangeOption,
     pub(super) arrange_option_2p: ArrangeOption,
     /// Endless Dream 互換の7K RANDOM固定配置。profileへは保存しない。
@@ -260,7 +261,13 @@ pub(super) struct AppJobs {
     pub(super) table_fetch: TableFetchRuntime,
     pub(super) song_scan: SongScanRuntime,
     pub(super) pending_replay_import: Option<PendingReplayImport>,
-    pub(super) pending_chart_download: Option<Receiver<Result<ChartDownloadBatchResult>>>,
+    pub(super) chart_downloads: crate::song_download::ChartDownloadManager,
+    pub(super) bulk_download: crate::song_download::BulkDownloadPreview,
+    pub(super) pending_bulk_download:
+        Option<Receiver<Result<crate::song_download::BulkDownloadPlan>>>,
+    pub(super) download_request_id: u64,
+    pub(super) download_selections: Vec<DownloadSelection>,
+    pub(super) download_registrations: Vec<(u64, crate::song_download::ChartDownloadResult)>,
     pub(super) updates: update_runtime::AppUpdateRuntime,
     /// 起動時に1回だけ実行するrianIRライバル一覧同期。
     pub(super) startup_rival_sync: Option<RianRivalSyncRequest>,
@@ -385,4 +392,17 @@ pub(super) struct SongScanRuntime {
     /// Select外で要求されたscanを、次のSelectまでFIFOで保持する。
     pub(super) queued: VecDeque<(Vec<PathEntry>, bool, String, SongScanScope)>,
     pub(super) progress: Option<ScanProgress>,
+}
+
+impl SongScanRuntime {
+    pub(super) fn has_download_scan_for(&self, dir: &Path) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(|pending| pending.download_dirs.iter().any(|path| path == dir))
+            || self.queued.iter().any(|(roots, _, _, _)| {
+                roots
+                    .iter()
+                    .any(|root| root.enabled && root.recursive && Path::new(&root.path) == dir)
+            })
+    }
 }

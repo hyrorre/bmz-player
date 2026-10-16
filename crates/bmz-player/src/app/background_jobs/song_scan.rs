@@ -87,11 +87,31 @@ impl WinitApp {
         let (tx, rx) = mpsc::channel();
         let progress = Arc::new(AtomicU64::new(pack_scan_progress(ScanProgress::default())));
         let worker_progress = Arc::clone(&progress);
+        let mut downloads = Vec::new();
+        self.jobs.download_registrations.retain(|(id, result)| {
+            if roots.iter().any(|root| {
+                root.enabled && root.recursive && Path::new(&root.path) == result.chart_dir
+            }) {
+                downloads.push((*id, result.clone()));
+                false
+            } else {
+                true
+            }
+        });
+        let download_ids = downloads.iter().map(|(id, _)| *id).collect();
+        let download_dirs = downloads.iter().map(|(_, result)| result.chart_dir.clone()).collect();
+        // Publish roots only after the FIFO admits this scan, never while an
+        // earlier scan owns the SQLite writer on its background thread.
+        if !downloads.is_empty()
+            && let Err(error) = self.publish_song_scope()
+        {
+            tracing::error!(%error, "failed to publish downloaded song roots");
+        }
         self.jobs.song_scan.progress = Some(ScanProgress::default());
         thread::Builder::new()
             .name("song-scan".to_string())
             .spawn(move || {
-                let result = (|| -> Result<ScanReport> {
+                let result = (|| -> Result<SongScanResult> {
                     migrate_library_db(&library_db_path)?;
                     let mut library_db = LibraryDatabase::open(&library_db_path)?;
                     let report = scan_songs_with_progress(
@@ -107,13 +127,22 @@ impl WinitApp {
                     if scope == SongScanScope::Paths {
                         library_db.register_partial_song_roots(&roots)?;
                     }
-                    Ok(report)
+                    let downloaded = crate::song_download::verify_download_registrations(
+                        &library_db,
+                        downloads,
+                    )?;
+                    Ok(SongScanResult { report, downloaded })
                 })();
                 let _ = tx.send(result);
             })
             .expect("failed to spawn song scan thread");
-        self.jobs.song_scan.pending =
-            Some(PendingSongScan { finished: rx, progress, library_roots });
+        self.jobs.song_scan.pending = Some(PendingSongScan {
+            finished: rx,
+            progress,
+            library_roots,
+            download_ids,
+            download_dirs,
+        });
         tracing::info!(%label, force, "started song scan");
     }
 
@@ -125,7 +154,8 @@ impl WinitApp {
             Some(unpack_scan_progress(pending.progress.load(Ordering::Relaxed)));
         let mut keep_pending = true;
         match pending.finished.try_recv() {
-            Ok(Ok(mut report)) => {
+            Ok(Ok(result)) => {
+                let mut report = result.report;
                 if let Some(roots) = &pending.library_roots {
                     let current = crate::songs_cmd::configured_library_roots(
                         &self.boot.app_config,
@@ -193,16 +223,63 @@ impl WinitApp {
                 self.jobs.song_scan.progress = None;
                 self.select.select_assets.invalidate_library();
                 self.invalidate_select_folder_summaries();
-                self.reload_select_items();
+                if pending.download_ids.is_empty() {
+                    self.reload_select_items();
+                } else {
+                    self.change_select_list(SelectListAction::RefreshDownloads);
+                }
+                let mut download_failed = false;
+                for mut registration in result.downloaded {
+                    registration.task_ids.extend(
+                        crate::song_download::attach_download_registrations(
+                            &mut self.jobs.download_registrations,
+                            &registration.chart_dir,
+                        ),
+                    );
+                    for id in registration.task_ids {
+                        self.jobs.chart_downloads.finish_scan(id, &registration.identities, None);
+                        download_failed |= self.finish_download_selection(id);
+                    }
+                }
+                if download_failed {
+                    self.show_left_overlay_toast(
+                        Localizer::new(self.boot.profile_config.ui.locale())
+                            .text("toast-chart-download-failed"),
+                    );
+                }
                 keep_pending = false;
             }
             Ok(Err(error)) => {
+                let mut ids = pending.download_ids.clone();
+                for dir in &pending.download_dirs {
+                    ids.extend(crate::song_download::attach_download_registrations(
+                        &mut self.jobs.download_registrations,
+                        dir,
+                    ));
+                }
+                for id in &ids {
+                    self.jobs.chart_downloads.finish_scan(*id, &[], Some(&format!("{error:#}")));
+                }
                 self.song_scan_error(&error);
                 self.jobs.song_scan.progress = None;
                 keep_pending = false;
             }
             Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) => {
+                let mut ids = pending.download_ids.clone();
+                for dir in &pending.download_dirs {
+                    ids.extend(crate::song_download::attach_download_registrations(
+                        &mut self.jobs.download_registrations,
+                        dir,
+                    ));
+                }
+                for id in &ids {
+                    self.jobs.chart_downloads.finish_scan(
+                        *id,
+                        &[],
+                        Some("scan worker disconnected"),
+                    );
+                }
                 tracing::warn!("song scan worker disconnected");
                 self.jobs.song_scan.progress = None;
                 keep_pending = false;
