@@ -358,10 +358,13 @@ use play_control::{
     GreenNumberChange, HispeedChange, LaneCoverChange, LaneCoverKeyHold, PlayAnalogOptionMode,
     PlayLaneAction, PlayLaneTarget, PlayOptionControl, keyboard_lane_action_with_fine,
     keyboard_lane_cover_direction, lane_action_from_option, lane_cover_units_to_delta,
-    resolved_play_lane_target,
+    lane_cover_wheel_step_units, resolved_play_lane_target,
 };
 #[cfg(test)]
-use play_control::{LANE_COVER_HOLD_TICK_US, keyboard_lane_action, lane_cover_press_step_units};
+use play_control::{
+    LANE_COVER_HOLD_TICK_US, LaneCoverWheelAccumulator, WHEEL_PIXELS_PER_NOTCH,
+    keyboard_lane_action, lane_cover_press_step_units,
+};
 use play_support::*;
 use result_runtime::{
     course_result_skin_snapshot, course_result_summary_for_skin, debug_boot_finished_play_session,

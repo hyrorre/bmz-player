@@ -65,6 +65,7 @@ mod tests {
             lane_cover_hold_delay_ms:
                 crate::config::profile_config::default_lane_cover_hold_delay_ms(),
             lane_cover_hold_step: crate::config::profile_config::default_lane_cover_hold_step(),
+            lane_cover_wheel_step: crate::config::profile_config::default_lane_cover_wheel_step(),
             keyboard_release_bounce_ms: 0,
             controller_release_bounce_ms: 0,
         }
@@ -108,6 +109,7 @@ mod tests {
             lane_cover_hold_delay_ms:
                 crate::config::profile_config::default_lane_cover_hold_delay_ms(),
             lane_cover_hold_step: crate::config::profile_config::default_lane_cover_hold_step(),
+            lane_cover_wheel_step: crate::config::profile_config::default_lane_cover_wheel_step(),
             keyboard_release_bounce_ms: 0,
             controller_release_bounce_ms: 0,
         };
@@ -293,6 +295,7 @@ mod tests {
             lane_cover_hold_delay_ms:
                 crate::config::profile_config::default_lane_cover_hold_delay_ms(),
             lane_cover_hold_step: crate::config::profile_config::default_lane_cover_hold_step(),
+            lane_cover_wheel_step: crate::config::profile_config::default_lane_cover_wheel_step(),
             keyboard_release_bounce_ms: 0,
             controller_release_bounce_ms: 0,
         };

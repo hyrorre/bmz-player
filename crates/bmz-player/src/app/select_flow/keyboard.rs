@@ -147,7 +147,7 @@ impl WinitApp {
             keyboard_lane_action_with_fine(
                 &control_event,
                 &self.boot.profile_config.input,
-                self.lane_cover_fine_modifier_held(),
+                self.lane_cover_fine_adjust_held(),
             )
         };
         if has_play_control_context && !control_event.repeat {

@@ -384,6 +384,7 @@ impl WinitApp {
                 play_analog_scroll_buffer: 0,
                 play_analog_last_tick_at: None,
                 lane_cover_key_hold: None,
+                lane_cover_wheel: Default::default(),
                 play_entry_presentation: PlayEntryPresentation::Normal,
                 play_scene_started_at: now,
                 play_ready_sound_started_at: None,

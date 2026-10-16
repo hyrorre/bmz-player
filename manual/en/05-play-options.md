@@ -104,7 +104,7 @@ Use them to make fast notes easier to read, or to match where notes appear to yo
 
 Enable the covers you want for each key mode in the **Display** section of Settings → **Gameplay**.
 During play, move them with **Up / Down**, or by **holding E1 and moving the turntable**.
-One press of Up / Down moves the cover by 1% of the lane, and holding the key keeps it moving. **Hold Shift** to move it by 0.1% at a time (the right Shift key is handy next to the arrow keys). You can change how far it moves and how long to hold before it keeps moving in Settings → **Input**.
+One press of Up / Down moves the cover by 1% of the lane, and holding the key keeps it moving. **Hold E2** to move it by 0.1% at a time. You can also use the mouse wheel: one notch moves it by 0.5% of the lane (0.1% while holding E2). You can change how far it moves and how long to hold before it keeps moving in Settings → **Input**.
 If an enabled cover is set to 0, it is set to 150 (15% of the lane) when play starts.
 **Press E1 twice** to show or hide SUDDEN+.
 

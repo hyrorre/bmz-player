@@ -14,12 +14,8 @@ impl WinitApp {
         if self.viewer_waiting {
             return;
         }
-        if let Some(change) = lane_cover_wheel_change(delta)
-            && (self.play.active_play.is_some() || self.play.pending_play_start.is_some())
-        {
-            self.apply_play_lane_action(PlayLaneAction::LaneCoverDelta(lane_cover_change_step(
-                change,
-            )));
+        if self.play.active_play.is_some() || self.play.pending_play_start.is_some() {
+            self.apply_lane_cover_wheel(delta);
             return;
         }
         if matches!(self.view_state(), AppViewState::Result) {

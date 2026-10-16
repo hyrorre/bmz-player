@@ -2,7 +2,8 @@ use super::value::{format_random_mix_bpm, format_random_mix_level};
 use super::*;
 use crate::config::profile_config::{
     LANE_COVER_HOLD_DELAY_MS_MAX, LANE_COVER_HOLD_STEP_MAX, LANE_COVER_HOLD_STEP_MIN,
-    LANE_COVER_STEP_MAX, LANE_COVER_STEP_MIN, LaneEffectConfig,
+    LANE_COVER_STEP_MAX, LANE_COVER_STEP_MIN, LANE_COVER_WHEEL_STEP_MAX, LANE_COVER_WHEEL_STEP_MIN,
+    LaneEffectConfig,
 };
 
 // One entry owns its value binding, adjustment and display. The same definition
@@ -910,6 +911,16 @@ define_settings! {
             LANE_COVER_HOLD_STEP_MAX,
         ),
         format: |profile| profile.input.lane_cover_hold_step.to_string(),
+    }
+    LaneCoverWheelStep(u32) {
+        value: [field input.lane_cover_wheel_step],
+        adjust: |profile, delta| adjust_u32(
+            &mut profile.input.lane_cover_wheel_step,
+            delta,
+            LANE_COVER_WHEEL_STEP_MIN,
+            LANE_COVER_WHEEL_STEP_MAX,
+        ),
+        format: |profile| profile.input.lane_cover_wheel_step.to_string(),
     }
     KeyboardReleaseBounceMs(u32) {
         value: [field input.keyboard_release_bounce_ms],

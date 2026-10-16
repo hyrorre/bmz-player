@@ -1223,6 +1223,7 @@ fn new_profile_uses_visible_default_lane_cover_amounts() {
     assert_eq!(profile.input.lane_cover_step, 10);
     assert_eq!(profile.input.lane_cover_hold_delay_ms, 300);
     assert_eq!(profile.input.lane_cover_hold_step, 3);
+    assert_eq!(profile.input.lane_cover_wheel_step, 5);
 }
 
 #[test]
@@ -1230,13 +1231,19 @@ fn lane_cover_key_settings_default_for_old_profiles() {
     let profile = ProfileConfig::new_default("default", "Player", 0);
     let mut value = toml::Value::try_from(&profile).unwrap();
     let input = value.get_mut("input").unwrap().as_table_mut().unwrap();
-    for key in ["lane_cover_step", "lane_cover_hold_delay_ms", "lane_cover_hold_step"] {
+    for key in [
+        "lane_cover_step",
+        "lane_cover_hold_delay_ms",
+        "lane_cover_hold_step",
+        "lane_cover_wheel_step",
+    ] {
         assert!(input.remove(key).is_some(), "{key}");
     }
     let decoded: ProfileConfig = value.try_into().unwrap();
     assert_eq!(decoded.input.lane_cover_step, 10);
     assert_eq!(decoded.input.lane_cover_hold_delay_ms, 300);
     assert_eq!(decoded.input.lane_cover_hold_step, 3);
+    assert_eq!(decoded.input.lane_cover_wheel_step, 5);
 }
 
 #[test]

@@ -143,6 +143,7 @@ impl SettingsEntryId {
         Self::LaneCoverStep,
         Self::LaneCoverHoldDelayMs,
         Self::LaneCoverHoldStep,
+        Self::LaneCoverWheelStep,
         Self::KeyboardReleaseBounceMs,
         Self::ControllerReleaseBounceMs,
     ];
@@ -287,6 +288,7 @@ impl SettingsEntryId {
             Self::LaneCoverStep => "LANE COVER STEP",
             Self::LaneCoverHoldDelayMs => "LANE COVER HOLD DELAY",
             Self::LaneCoverHoldStep => "LANE COVER HOLD STEP",
+            Self::LaneCoverWheelStep => "LANE COVER WHEEL STEP",
             Self::KeyboardReleaseBounceMs => "KEYBOARD BOUNCE",
             Self::ControllerReleaseBounceMs => "CONTROLLER BOUNCE",
             Self::Hispeed8Key1 => "KEY 1 HS DIRECTION",
@@ -423,6 +425,7 @@ impl SettingsEntryId {
             Self::LaneCoverStep => "settings-entry-description-lane-cover-step",
             Self::LaneCoverHoldDelayMs => "settings-entry-description-lane-cover-hold-delay-ms",
             Self::LaneCoverHoldStep => "settings-entry-description-lane-cover-hold-step",
+            Self::LaneCoverWheelStep => "settings-entry-description-lane-cover-wheel-step",
             Self::KeyboardReleaseBounceMs => "settings-entry-description-keyboard-release-bounce",
             Self::ControllerReleaseBounceMs => {
                 "settings-entry-description-controller-release-bounce"

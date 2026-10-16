@@ -66,6 +66,9 @@ pub struct ProfileInputConfig {
     /// 連続変化中に1/60秒ごとに加える変化量。1/1000 単位。
     #[serde(default = "default_lane_cover_hold_step")]
     pub lane_cover_hold_step: u32,
+    /// プレイ中のマウスホイール1ノッチでレーンカバーを動かす量。1/1000 単位。
+    #[serde(default = "default_lane_cover_wheel_step")]
+    pub lane_cover_wheel_step: u32,
     /// Release 直後に同じキーボードキーから届く Press を無視する時間。
     ///
     /// 0 はフィルタ無効。物理スイッチの Release 側チャタリングを対象とし、
@@ -128,6 +131,8 @@ pub const LANE_COVER_STEP_MAX: u32 = 1000;
 pub const LANE_COVER_HOLD_DELAY_MS_MAX: u32 = 1000;
 pub const LANE_COVER_HOLD_STEP_MIN: u32 = 1;
 pub const LANE_COVER_HOLD_STEP_MAX: u32 = 100;
+pub const LANE_COVER_WHEEL_STEP_MIN: u32 = 1;
+pub const LANE_COVER_WHEEL_STEP_MAX: u32 = 1000;
 
 pub const fn default_lane_cover_step() -> u32 {
     10
@@ -139,6 +144,11 @@ pub const fn default_lane_cover_hold_delay_ms() -> u32 {
 
 pub const fn default_lane_cover_hold_step() -> u32 {
     3
+}
+
+/// beatoraja `ControlInputProcessor` のホイール1ノッチ (0.005) 相当。
+pub const fn default_lane_cover_wheel_step() -> u32 {
+    5
 }
 
 fn default_keyboard_release_bounce_ms() -> u32 {

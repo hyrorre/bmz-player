@@ -751,10 +751,31 @@ impl WinitApp {
         );
     }
 
-    /// Shift併用でレーンカバーを1ずつ微調整するか。
-    pub(super) fn lane_cover_fine_modifier_held(&self) -> bool {
-        self.input.pressed_controls.contains("LShift")
-            || self.input.pressed_controls.contains("RShift")
+    /// プレイ中のマウスホイールでレーンカバーを動かす。上回しでカバーが上がる
+    /// (beatoraja / LR2 と同じ向き)。カバーが全て無効なときのHS操作を1ノッチ1段階に
+    /// するため、ノッチごとに適用する。
+    pub(super) fn apply_lane_cover_wheel(&mut self, delta: MouseScrollDelta) {
+        let notches = self.play.lane_cover_wheel.take_whole_notches(delta, Instant::now());
+        if notches == 0 {
+            return;
+        }
+        let step = lane_cover_wheel_step_units(
+            &self.boot.profile_config.input,
+            self.lane_cover_fine_adjust_held(),
+        );
+        let units = step * notches.signum();
+        for _ in 0..notches.abs() {
+            if !self.apply_play_lane_action(PlayLaneAction::LaneCoverDelta(
+                lane_cover_units_to_delta(units),
+            )) {
+                break;
+            }
+        }
+    }
+
+    /// E2 hold中は、↑↓とホイールでレーンカバーを1ずつ微調整する。
+    pub(super) fn lane_cover_fine_adjust_held(&self) -> bool {
+        self.play.play_e2_held
     }
 
     /// ↑↓の押下で長押し状態を開始し、同じキーの解放で終える。
@@ -773,7 +794,7 @@ impl WinitApp {
                 LaneCoverKeyHold::new(
                     control,
                     direction,
-                    self.lane_cover_fine_modifier_held(),
+                    self.lane_cover_fine_adjust_held(),
                     Instant::now(),
                 )
             });
@@ -798,6 +819,7 @@ impl WinitApp {
 
     pub(super) fn clear_play_control_holds(&mut self) {
         self.play.lane_cover_key_hold = None;
+        self.play.lane_cover_wheel.reset();
         self.play.last_play_start_press_at = None;
         self.play.decide_e1_held = false;
         self.play.play_e1_held = false;

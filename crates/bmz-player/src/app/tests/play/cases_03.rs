@@ -678,12 +678,12 @@ fn lane_cover_key_hold_waits_for_delay_then_steps_every_frame_tick() {
     assert_eq!(hold.take_due_units(start + delay + tick * 3, &input), 9);
 
     let mut down = LaneCoverKeyHold::new("ArrowDown".to_string(), -1, true, start);
-    // Shift併用は1ずつ。フレームが止まっても1秒分 (60 tick) までに抑える。
+    // E2 hold中は1ずつ。フレームが止まっても1秒分 (60 tick) までに抑える。
     assert_eq!(down.take_due_units(start + delay + Duration::from_secs(5), &input), -60);
 }
 
 #[test]
-fn lane_cover_press_step_uses_profile_value_and_shift_fine_step() {
+fn lane_cover_press_step_uses_profile_value_and_e2_fine_step() {
     let mut input = crate::config::play_input::default_profile_input();
     assert_eq!(lane_cover_press_step_units(&input, false), 10);
     assert_eq!(lane_cover_press_step_units(&input, true), 1);
@@ -758,4 +758,46 @@ fn floating_start_ignores_saved_amount_of_disabled_sudden() {
     let session = build(&profile);
     assert!(!session.lanecover_enabled);
     assert_eq!(session.hispeed, build(&reference_profile).hispeed);
+}
+
+#[test]
+fn lane_cover_wheel_accumulates_notches_and_drops_stale_fractions() {
+    use winit::dpi::PhysicalPosition;
+    use winit::event::MouseScrollDelta::{LineDelta, PixelDelta};
+
+    let start = Instant::now();
+    let mut wheel = LaneCoverWheelAccumulator::default();
+    assert_eq!(wheel.take_whole_notches(LineDelta(0.0, 1.0), start), 1);
+    assert_eq!(wheel.take_whole_notches(LineDelta(0.0, -3.0), start), -3);
+    // 高分解能ホイールの半ノッチは、2回で1ノッチになる。
+    assert_eq!(wheel.take_whole_notches(LineDelta(0.0, 0.5), start), 0);
+    assert_eq!(wheel.take_whole_notches(LineDelta(0.0, 0.5), start), 1);
+    // 向きが反転したら端数を捨てる。
+    assert_eq!(wheel.take_whole_notches(LineDelta(0.0, 0.6), start), 0);
+    assert_eq!(wheel.take_whole_notches(LineDelta(0.0, -0.6), start), 0);
+    assert_eq!(wheel.take_whole_notches(LineDelta(0.0, -0.6), start), -1);
+    // 間が空いたら端数を捨てる。
+    assert_eq!(wheel.take_whole_notches(LineDelta(0.0, 0.6), start), 0);
+    let later = start + Duration::from_millis(SELECT_ANALOG_SCROLL_TOLERANCE_MS + 1);
+    assert_eq!(wheel.take_whole_notches(LineDelta(0.0, 0.6), later), 0);
+    // 横方向だけのホイールは無視する。
+    assert_eq!(wheel.take_whole_notches(LineDelta(1.0, 0.0), later), 0);
+    // PixelDelta は WHEEL_PIXELS_PER_NOTCH ごとに1ノッチ。
+    let mut pixels = LaneCoverWheelAccumulator::default();
+    let half = f64::from(WHEEL_PIXELS_PER_NOTCH / 2.0);
+    assert_eq!(pixels.take_whole_notches(PixelDelta(PhysicalPosition::new(0.0, half)), start), 0);
+    assert_eq!(pixels.take_whole_notches(PixelDelta(PhysicalPosition::new(0.0, half)), start), 1);
+    // 1イベントの適用ノッチ数には上限がある。
+    assert_eq!(pixels.take_whole_notches(LineDelta(0.0, 1_000.0), start), 20);
+}
+
+#[test]
+fn lane_cover_wheel_step_uses_profile_value_and_e2_fine_step() {
+    let mut input = crate::config::play_input::default_profile_input();
+    assert_eq!(lane_cover_wheel_step_units(&input, false), 5);
+    assert_eq!(lane_cover_wheel_step_units(&input, true), 1);
+    input.lane_cover_wheel_step = 0;
+    assert_eq!(lane_cover_wheel_step_units(&input, false), 1);
+    input.lane_cover_wheel_step = 5_000;
+    assert_eq!(lane_cover_wheel_step_units(&input, false), 1_000);
 }

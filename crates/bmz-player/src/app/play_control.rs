@@ -96,7 +96,7 @@ pub(super) struct LaneCoverKeyHold {
     pub(super) control: String,
     /// `PlayLaneCoverUp` は +1、`PlayLaneCoverDown` は -1。
     pub(super) direction: i32,
-    /// Shift併用の微調整。押した時点で決める。
+    /// E2 hold中の微調整。押した時点で決める。
     pub(super) fine: bool,
     pub(super) started_at: std::time::Instant,
     pub(super) applied_ticks: u32,
@@ -135,7 +135,7 @@ impl LaneCoverKeyHold {
     }
 }
 
-/// ↑↓を1回押したときの変化量 (1/1000単位)。Shift併用時は常に1。
+/// ↑↓を1回押したときの変化量 (1/1000単位)。E2 hold中は常に1。
 pub(super) fn lane_cover_press_step_units(input: &ProfileInputConfig, fine: bool) -> i32 {
     if fine {
         1
@@ -156,6 +156,68 @@ fn lane_cover_hold_step_units(input: &ProfileInputConfig) -> i32 {
 
 pub(super) fn lane_cover_units_to_delta(units: i32) -> f32 {
     units as f32 * LANE_COVER_STEP
+}
+
+/// `PixelDelta` (トラックパッド等) を1ノッチとみなす量。
+pub(super) const WHEEL_PIXELS_PER_NOTCH: f32 = 40.0;
+/// 1イベントで適用するホイールノッチ数の上限。
+pub(super) const LANE_COVER_WHEEL_MAX_NOTCHES_PER_EVENT: i32 = 20;
+
+/// プレイ中のマウスホイール回転量を1ノッチ単位にまとめる。
+/// 高分解能ホイールやトラックパッドの細かいイベントも、回転量に比例させる。
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(super) struct LaneCoverWheelAccumulator {
+    notches: f32,
+    last_at: Option<std::time::Instant>,
+}
+
+impl LaneCoverWheelAccumulator {
+    /// 上回しを正とする整数ノッチ数を返し、端数を保持する。向きが反転したとき、
+    /// または `SELECT_ANALOG_SCROLL_TOLERANCE_MS` 以上空いたときは端数を捨てる。
+    pub(super) fn take_whole_notches(
+        &mut self,
+        delta: winit::event::MouseScrollDelta,
+        now: std::time::Instant,
+    ) -> i32 {
+        let amount = match delta {
+            winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+            winit::event::MouseScrollDelta::PixelDelta(position) => {
+                position.y as f32 / WHEEL_PIXELS_PER_NOTCH
+            }
+        };
+        if !amount.is_finite() || amount == 0.0 {
+            return 0;
+        }
+        let idle = self.last_at.is_none_or(|last| {
+            now.saturating_duration_since(last)
+                > std::time::Duration::from_millis(super::SELECT_ANALOG_SCROLL_TOLERANCE_MS)
+        });
+        self.last_at = Some(now);
+        if idle || self.notches.signum() * amount.signum() < 0.0 {
+            self.notches = 0.0;
+        }
+        self.notches += amount;
+        let whole = self.notches.trunc();
+        self.notches -= whole;
+        (whole as i32)
+            .clamp(-LANE_COVER_WHEEL_MAX_NOTCHES_PER_EVENT, LANE_COVER_WHEEL_MAX_NOTCHES_PER_EVENT)
+    }
+
+    pub(super) fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+/// ホイール1ノッチの変化量 (1/1000単位)。E2 hold中は常に1。
+pub(super) fn lane_cover_wheel_step_units(input: &ProfileInputConfig, fine: bool) -> i32 {
+    if fine {
+        1
+    } else {
+        input.lane_cover_wheel_step.clamp(
+            crate::config::profile_config::LANE_COVER_WHEEL_STEP_MIN,
+            crate::config::profile_config::LANE_COVER_WHEEL_STEP_MAX,
+        ) as i32
+    }
 }
 
 /// キーボード入力がレーンカバー操作キーなら、そのcontrol名と向き (+1 / -1) を返す。
@@ -199,7 +261,7 @@ pub(super) fn keyboard_lane_action(
     keyboard_lane_action_with_fine(event, input, false)
 }
 
-/// `fine_lane_cover` はShift併用の微調整。レーンカバー操作はOSのキーリピートを
+/// `fine_lane_cover` はE2 hold中の微調整。レーンカバー操作はOSのキーリピートを
 /// 無視し、長押しは [`LaneCoverKeyHold`] で扱う。
 pub(super) fn keyboard_lane_action_with_fine(
     event: &ControlInputEvent,

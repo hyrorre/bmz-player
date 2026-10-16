@@ -88,19 +88,6 @@ fn select_wheel_move_supports_pixel_delta() {
 }
 
 #[test]
-fn lane_cover_wheel_change_maps_vertical_scroll() {
-    assert_eq!(
-        lane_cover_wheel_change(MouseScrollDelta::LineDelta(0.0, 1.0)),
-        Some(LaneCoverChange::Up)
-    );
-    assert_eq!(
-        lane_cover_wheel_change(MouseScrollDelta::LineDelta(0.0, -1.0)),
-        Some(LaneCoverChange::Down)
-    );
-    assert_eq!(lane_cover_wheel_change(MouseScrollDelta::LineDelta(1.0, 0.0)), None);
-}
-
-#[test]
 fn select_click_event_arg_matches_beatoraja_click_types() {
     let rect = Rect { x: 0.2, y: 0.3, width: 0.4, height: 0.2 };
     assert_eq!(select_click_event_arg(0, MouseButton::Left, rect, 0.3, 0.4), Some(1));

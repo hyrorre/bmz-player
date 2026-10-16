@@ -111,17 +111,6 @@ pub(in crate::app) fn select_wheel_move(delta: MouseScrollDelta) -> Option<Selec
     }
 }
 
-pub(in crate::app) fn lane_cover_wheel_change(delta: MouseScrollDelta) -> Option<LaneCoverChange> {
-    let y = mouse_wheel_y(delta);
-    if y > 0.0 {
-        Some(LaneCoverChange::Up)
-    } else if y < 0.0 {
-        Some(LaneCoverChange::Down)
-    } else {
-        None
-    }
-}
-
 pub(in crate::app) fn mouse_wheel_y(delta: MouseScrollDelta) -> f32 {
     match delta {
         MouseScrollDelta::LineDelta(_, y) => y,
