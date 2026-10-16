@@ -1003,3 +1003,4 @@ settings-downloads-wriggle-status = Wriggle: 서비스를 이용할 수 없어 �
 settings-downloads-required-hashes = 필요한 해시: { $hashes }
 settings-downloads-parallelism = HTTP 동시 다운로드 수
 downloads-target-missing = 다운로드한 압축 파일에서 대상 채보를 찾을 수 없습니다.
+downloads-archive-unchanged = 다운로드 소스의 압축 파일이 이전과 같아서 다시 압축을 풀지 않았습니다.

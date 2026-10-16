@@ -1003,3 +1003,4 @@ settings-downloads-wriggle-status = Wriggle: サービスを利用できない�
 settings-downloads-required-hashes = 必要なハッシュ: { $hashes }
 settings-downloads-parallelism = HTTP同時取得数
 downloads-target-missing = 取得したアーカイブ内に対象の譜面が見つかりません。
+downloads-archive-unchanged = 取得元のアーカイブが前回と同じため、再展開しませんでした。

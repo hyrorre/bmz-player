@@ -1006,3 +1006,4 @@ settings-downloads-wriggle-status = Wriggle: this preset is disabled because the
 settings-downloads-required-hashes = Required hashes: { $hashes }
 settings-downloads-parallelism = Concurrent HTTP downloads
 downloads-target-missing = The requested chart was not found in the downloaded archive.
+downloads-archive-unchanged = The source returned the same archive as before, so it was not extracted again.

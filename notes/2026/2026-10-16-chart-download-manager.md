@@ -107,3 +107,29 @@ MD5 `9ee5524e4ed8a3e7033b4de1fedc35fd`、`9498378a847b94b949d11a566a86d3c0`、
 `cargo test -p bmz-player --locked` はライブラリ2,549件成功・32件ignore・失敗0件。
 ネイティブ起動試験2件は既定のignore。設定と取得方式選択の追加2試験、翻訳キー整合性も成功。
 ログは同じローカルディレクトリの `check-sources.log`、`clippy-sources.log`、`test-sources.log` に保持する。
+
+## 2026-10-16 追記: レビュー対応と再試行の重複展開
+
+レビューで、対象譜面を含まないアーカイブを再試行するたびに、同じ内容を別フォルダへ展開する問題を確認した。
+`retry_of_missing_chart_refetches_an_updated_archive_without_deleting_old_songs` が示すとおり、
+再取得は取得元のアーカイブ更新に追従するための設計であり、保存済みフォルダの再スキャンだけには変更しない。
+
+LR2oraja Endless Dream（`.local/lr2oraja-endlessdream` 3c1a4129）の `HttpDownloadProcessor` と比較した。
+- 取得URLは投入時に1回だけ解決し、再試行は同じURLを再実行する。メタデータAPIは再照会しない。
+- 再試行はダウンロード失敗のError状態だけが対象。展開失敗はDownloaded状態のまま残り、再試行できない。
+- 展開先はダウンロードフォルダ直下で、アーカイブ内のパスへ上書きする。重複フォルダはできないが、既存ファイルを上書きする。
+- 対象譜面がDBへ登録されたかの確認はなく、展開できれば完了扱い。
+- 同じ取得URLのタスクは、完了・失敗後も含めて再投入を拒否する。
+
+BMZは既存フォルダを上書きしない方針を維持し、成功結果にアーカイブ全体のSHA256（IPFSは取得順に連結）を保持する。
+対象なしの再試行で同じSHA256を取得した場合は展開せず `ArchiveUnchanged` で失敗にする。
+前回の展開フォルダが無い場合は比較しない。取得元が更新された場合だけ新しいフォルダへ展開する。
+
+同時に、取消要求が未反映のタスクへの統合禁止、取消と完了が重なった転送の登録継続、
+登録中のキャンセル無効化、共有アーカイブ待機のNotify化、失敗トーストの集約、
+`:` を含むアーカイブ名の拒否のWindows限定化、identity照合の共通化を行った。
+
+検証: `cargo fmt --check`、`cargo clippy -p bmz-player --all-targets --locked -- -D warnings` が成功。
+`cargo test -p bmz-player --locked` はライブラリ2,554件成功・32件ignore・失敗0件。
+未変更アーカイブの再試行と、展開フォルダ削除後の再展開を統合試験で確認した。
+実HTTPサービスでの再試行、実画面操作は未実施。

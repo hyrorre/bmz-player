@@ -97,6 +97,8 @@ pub struct ChartDownloadRequest {
 #[derive(Debug, Clone)]
 pub struct ChartDownloadResult {
     pub(crate) archive_cache_key: Option<[u8; 32]>,
+    /// SHA-256 of the downloaded archive bytes, in download order for IPFS.
+    pub archive_sha256: Option<[u8; 32]>,
     pub request_id: u64,
     pub identity: ChartDownloadIdentity,
     pub source: ChartDownloadSource,
@@ -149,6 +151,20 @@ pub fn registered_download_identity(
         .iter()
         .any(|registered| identity.overlaps(registered)))
 }
+
+/// A retry fetched the same archive bytes as the attempt whose extracted
+/// folder lacked the requested chart, so extracting it again would only add a
+/// duplicate folder.
+#[derive(Debug)]
+pub struct ArchiveUnchanged;
+
+impl std::fmt::Display for ArchiveUnchanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the source returned the same archive as the previous attempt")
+    }
+}
+
+impl std::error::Error for ArchiveUnchanged {}
 
 #[derive(Debug)]
 pub struct ChartDownloadFailure {
@@ -254,19 +270,22 @@ mod public_url_tests {
 }
 
 pub async fn download_chart(request: ChartDownloadRequest) -> Result<ChartDownloadResult> {
-    download_chart_controlled(request, Arc::default(), Arc::default()).await
+    download_chart_controlled(request, Arc::default(), Arc::default(), None).await
 }
 
+/// `previous_archive` is the archive digest of an attempt whose folder lacked
+/// the requested chart. The same bytes fail with [`ArchiveUnchanged`].
 async fn download_chart_controlled(
     request: ChartDownloadRequest,
     control: Arc<DownloadControl>,
     services: Arc<DownloadServices>,
+    previous_archive: Option<[u8; 32]>,
 ) -> Result<ChartDownloadResult> {
     control.check()?;
     tokio::select! {
         biased;
         _ = control.cancelled() => bail!("download cancelled"),
-        result = download_chart_inner(request, &control, &services) => result,
+        result = download_chart_inner(request, &control, &services, previous_archive) => result,
     }
 }
 
@@ -274,6 +293,7 @@ async fn download_chart_inner(
     request: ChartDownloadRequest,
     control: &DownloadControl,
     services: &DownloadServices,
+    previous_archive: Option<[u8; 32]>,
 ) -> Result<ChartDownloadResult> {
     control.set_state(DownloadState::Resolving);
     let source = match &request.action {
@@ -306,12 +326,22 @@ async fn download_chart_inner(
         .build()?;
 
     let mut cache_owner = None;
+    let mut archive_hasher = sha2::Sha256::new();
+    let ensure_changed = |hasher: &sha2::Sha256| -> Result<()> {
+        if previous_archive
+            .is_some_and(|previous| previous == <[u8; 32]>::from(hasher.clone().finalize()))
+        {
+            return Err(ArchiveUnchanged.into());
+        }
+        Ok(())
+    };
     let hash_hint = match &request.action {
         MissingChartAction::Ipfs { api_url, cids } => {
             anyhow::ensure!(!cids.is_empty(), "IPFS action requires at least one CID");
             for (index, cid) in cids.iter().enumerate() {
                 let response = request_ipfs_archive(&client, api_url, cid).await?;
-                save_response_controlled(response, &archive_path, control).await?;
+                save_response_controlled(response, &archive_path, control, &mut archive_hasher)
+                    .await?;
                 let package_dir = staging_dir.join(format!(".package-{index}"));
                 std::fs::create_dir(&package_dir)?;
                 {
@@ -330,6 +360,8 @@ async fn download_chart_inner(
                     tracing::debug!("extracting additional IPFS package");
                 }
             }
+            // Packages are extracted one by one, so compare once all are read.
+            ensure_changed(&archive_hasher)?;
             normalize_ipfs_arg(cids.first().expect("IPFS action has at least one CID"))?
         }
         MissingChartAction::Http { api_url, md5, sha256 } => {
@@ -408,8 +440,11 @@ async fn download_chart_inner(
                 archive_response.1,
                 &archive_path,
                 control,
+                &mut archive_hasher,
             )
             .await?;
+            // Compare before extracting so an unchanged retry costs no disk work.
+            ensure_changed(&archive_hasher)?;
             {
                 let _permit = services
                     .extraction
@@ -434,6 +469,7 @@ async fn download_chart_inner(
 
     let result = ChartDownloadResult {
         archive_cache_key: cache_owner.as_ref().map(|owner| owner.key),
+        archive_sha256: Some(archive_hasher.finalize().into()),
         request_id: request.request_id,
         identity: request.identity,
         source,
@@ -592,8 +628,9 @@ async fn save_response_controlled(
     response: Response,
     path: &Path,
     control: &DownloadControl,
+    hasher: &mut sha2::Sha256,
 ) -> Result<()> {
-    save_response_with_prefix(response, Vec::new(), path, control).await
+    save_response_with_prefix(response, Vec::new(), path, control, hasher).await
 }
 
 async fn save_response_with_prefix(
@@ -601,6 +638,7 @@ async fn save_response_with_prefix(
     prefix: Vec<u8>,
     path: &Path,
     control: &DownloadControl,
+    hasher: &mut sha2::Sha256,
 ) -> Result<()> {
     control.set_state(DownloadState::Downloading);
     let content_length = response.content_length();
@@ -637,10 +675,12 @@ async fn save_response_with_prefix(
                 "unsupported archive signature (expected tar.gz or 7z)"
             );
             file.write_all(&signature)?;
+            hasher.update(&signature);
             signature.clear();
             verified = true;
         } else {
             file.write_all(&chunk)?;
+            hasher.update(&chunk);
         }
         control.progress(total, content_length);
     }

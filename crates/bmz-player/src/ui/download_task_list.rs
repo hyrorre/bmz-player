@@ -153,15 +153,21 @@ pub(super) fn build_task_list(
                             tr!(text, "downloads-bytes-unknown", "bytes" => bytes.to_string()),
                         );
                     }
-                    if task.registration_missing {
+                    let notice = if task.registration_missing {
+                        Some("downloads-target-missing")
+                    } else if task.archive_unchanged {
+                        Some("downloads-archive-unchanged")
+                    } else {
+                        None
+                    };
+                    if let Some(key) = notice {
                         ui.add(
                             egui::Label::new(
-                                egui::RichText::new(tr!(text, "downloads-target-missing"))
-                                    .color(egui::Color32::LIGHT_RED),
+                                egui::RichText::new(text.text(key)).color(egui::Color32::LIGHT_RED),
                             )
                             .truncate(),
                         )
-                        .on_hover_text(tr!(text, "downloads-target-missing"));
+                        .on_hover_text(text.text(key));
                     } else if let Some(error) = &task.error {
                         ui.add(
                             egui::Label::new(

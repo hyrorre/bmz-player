@@ -1003,3 +1003,4 @@ settings-downloads-wriggle-status = Wriggle：服务不可用，已禁用此预�
 settings-downloads-required-hashes = 所需哈希：{ $hashes }
 settings-downloads-parallelism = HTTP 同时下载数
 downloads-target-missing = 下载的压缩包中未找到目标谱面。
+downloads-archive-unchanged = 下载源的压缩包与上次相同，因此未重新解压。

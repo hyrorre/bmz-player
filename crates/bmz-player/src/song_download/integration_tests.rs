@@ -256,6 +256,7 @@ async fn timed_out_and_cancelled_requests_clean_only_their_own_staging() {
         request(root.path(), &format!("{}/{{md5}}", server.url), 1),
         Arc::default(),
         Arc::new(services),
+        None,
     )
     .await;
     assert!(result.is_err());
@@ -359,6 +360,7 @@ async fn cancelling_an_extraction_waiter_does_not_wait_for_the_other_archive() {
         request(root.path(), &format!("{}/{{md5}}", server.url), 1),
         Arc::clone(&control),
         Arc::clone(&services),
+        None,
     ));
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while control.bytes().0 == 0 {
@@ -395,6 +397,7 @@ fn manager_shutdown_waits_for_private_temporary_files_to_be_cleaned() {
 fn late_download_completions_attach_without_consuming_other_scan_requests() {
     let result = |id: u64, directory: &str| ChartDownloadResult {
         archive_cache_key: None,
+        archive_sha256: None,
         request_id: id,
         identity: ChartDownloadIdentity::default(),
         source: ChartDownloadSource::Http,
@@ -492,4 +495,85 @@ fn retry_of_missing_chart_refetches_an_updated_archive_without_deleting_old_song
     assert_eq!(server.requests.load(Ordering::Relaxed), 2);
     assert_ne!(old.chart_dir, new.chart_dir);
     assert!(old.chart_dir.join("song/chart.bms").is_file());
+}
+
+#[test]
+fn retry_of_missing_chart_skips_an_unchanged_archive_until_the_source_updates() {
+    use std::sync::atomic::AtomicBool;
+    let expected = b"#TITLE Expected\n#BPM 120\n#00011:01\n";
+    let updated = Arc::new(AtomicBool::new(false));
+    let worker_updated = Arc::clone(&updated);
+    let server = HttpFixture::with_handler(
+        move |_| {
+            let bytes = if worker_updated.load(Ordering::Relaxed) {
+                &expected[..]
+            } else {
+                &b"#TITLE Other\n#BPM 180\n#00011:01\n"[..]
+            };
+            (200, "application/octet-stream".into(), archive(&[("song/chart.bms", bytes)]))
+        },
+        Duration::ZERO,
+    );
+    let root = tempfile::tempdir().unwrap();
+    let songs = root.path().join("songs/http");
+    let mut manager = ChartDownloadManager::default();
+    let (id, _) = manager.submit(identified_request(
+        root.path(),
+        &format!("{}/{{md5}}", server.url),
+        expected,
+        1,
+    ));
+    wait(&mut manager, 1, |m| m.task(id).unwrap().state() == DownloadState::Scanning);
+    let old = manager.take_scan_requests().pop().unwrap().1;
+    assert!(old.archive_sha256.is_some());
+    manager.finish_scan(id, &[], None);
+    assert!(manager.task(id).unwrap().registration_missing);
+
+    // Same bytes: fetched again, but never extracted into a second folder.
+    for attempt in 2..=3 {
+        manager.retry(id);
+        wait(&mut manager, 1, |m| m.task(id).unwrap().state() == DownloadState::Failed);
+        let task = manager.task(id).unwrap();
+        assert!(task.archive_unchanged);
+        assert!(task.result.is_none());
+        assert_eq!(server.requests.load(Ordering::Relaxed), attempt);
+        assert_eq!(std::fs::read_dir(&songs).unwrap().count(), 1);
+        assert!(manager.take_scan_requests().is_empty());
+    }
+
+    updated.store(true, Ordering::Relaxed);
+    manager.retry(id);
+    assert!(!manager.task(id).unwrap().archive_unchanged);
+    wait(&mut manager, 1, |m| m.task(id).unwrap().state() == DownloadState::Scanning);
+    let new = manager.take_scan_requests().pop().unwrap().1;
+    assert_ne!(old.chart_dir, new.chart_dir);
+    assert_ne!(old.archive_sha256, new.archive_sha256);
+    assert!(old.chart_dir.join("song/chart.bms").is_file());
+    assert_eq!(std::fs::read_dir(&songs).unwrap().count(), 2);
+}
+
+#[test]
+fn retry_extracts_the_same_archive_again_after_the_previous_folder_is_removed() {
+    let server = HttpFixture::new(
+        archive(&[("song/chart.bms", b"#TITLE Other\n#BPM 180\n#00011:01\n")]),
+        Duration::ZERO,
+        200,
+    );
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = ChartDownloadManager::default();
+    let (id, _) = manager.submit(identified_request(
+        root.path(),
+        &format!("{}/{{md5}}", server.url),
+        b"#TITLE Expected\n#BPM 120\n#00011:01\n",
+        1,
+    ));
+    wait(&mut manager, 1, |m| m.task(id).unwrap().state() == DownloadState::Scanning);
+    let old = manager.take_scan_requests().pop().unwrap().1;
+    manager.finish_scan(id, &[], None);
+    manager.retry(id);
+    std::fs::remove_dir_all(&old.chart_dir).unwrap();
+    wait(&mut manager, 1, |m| m.task(id).unwrap().state() == DownloadState::Scanning);
+    let new = manager.take_scan_requests().pop().unwrap().1;
+    assert!(new.chart_dir.join("song/chart.bms").is_file());
+    assert!(!manager.task(id).unwrap().archive_unchanged);
 }

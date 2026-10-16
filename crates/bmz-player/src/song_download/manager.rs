@@ -143,9 +143,13 @@ pub struct DownloadTask {
     pub control: Arc<DownloadControl>,
     pub error: Option<String>,
     pub registration_missing: bool,
+    /// The last retry fetched the same archive as the attempt that lacked the chart.
+    pub archive_unchanged: bool,
     pub result: Option<ChartDownloadResult>,
     pub registered: HashSet<ChartDownloadIdentity>,
     worker: Option<mpsc::Receiver<Result<ChartDownloadResult>>>,
+    /// Archive digest and folder of the attempt that lacked the requested chart.
+    previous_archive: Option<([u8; 32], PathBuf)>,
     thread: Option<std::thread::JoinHandle<()>>,
     scan_pending: bool,
 }
@@ -244,9 +248,11 @@ impl ChartDownloadManager {
             control: Arc::default(),
             error: None,
             registration_missing: false,
+            archive_unchanged: false,
             result: None,
             registered: HashSet::new(),
             worker: None,
+            previous_archive: None,
             thread: None,
             scan_pending: false,
         });
@@ -286,10 +292,19 @@ impl ChartDownloadManager {
                 && let Some(result) = task.result.take()
             {
                 self.services.evict_archive(&result);
+                // The source may have updated the archive, so fetch it again,
+                // but never extract the same bytes into a second folder.
+                if task.registration_missing {
+                    task.previous_archive = result
+                        .archive_sha256
+                        .filter(|_| result.chart_dir.is_dir())
+                        .map(|digest| (digest, result.chart_dir.clone()));
+                }
             }
             task.control = Arc::default();
             task.error = None;
             task.registration_missing = false;
+            task.archive_unchanged = false;
             if task.result.is_some() {
                 task.control.set_state(DownloadState::Scanning);
                 task.scan_pending = true;
@@ -334,6 +349,7 @@ impl ChartDownloadManager {
             self.retired.push(index);
             match result {
                 Ok(result) => {
+                    task.previous_archive = None;
                     task.result = Some(result);
                     task.scan_pending = true;
                     self.scan_queue.push_back(index);
@@ -342,6 +358,7 @@ impl ChartDownloadManager {
                     task.control.set_state(DownloadState::Scanning);
                 }
                 Err(error) => {
+                    task.archive_unchanged = error.downcast_ref::<ArchiveUnchanged>().is_some();
                     task.error = Some(sanitized_download_error(&error));
                     task.control.set_state(if task.control.is_cancelled() {
                         DownloadState::Cancelled
@@ -381,6 +398,12 @@ impl ChartDownloadManager {
                 let control = Arc::clone(&task.control);
                 let services = Arc::clone(&self.services);
                 let request = task.requests[0].clone();
+                // A deleted folder no longer duplicates anything; extract again.
+                let previous_archive = task
+                    .previous_archive
+                    .as_ref()
+                    .filter(|(_, dir)| dir.is_dir())
+                    .map(|(digest, _)| *digest);
                 let (tx, rx) = mpsc::channel();
                 match std::thread::Builder::new().name(format!("chart-download-{}", task.id)).spawn(
                     move || {
@@ -388,7 +411,12 @@ impl ChartDownloadManager {
                             let runtime = tokio::runtime::Builder::new_current_thread()
                                 .enable_all()
                                 .build()?;
-                            runtime.block_on(download_chart_controlled(request, control, services))
+                            runtime.block_on(download_chart_controlled(
+                                request,
+                                control,
+                                services,
+                                previous_archive,
+                            ))
                         })();
                         let _ = tx.send(result);
                     },
@@ -660,6 +688,7 @@ mod tests {
     fn finished_result(task: &DownloadTask, chart_dir: &Path) -> ChartDownloadResult {
         ChartDownloadResult {
             archive_cache_key: None,
+            archive_sha256: None,
             request_id: task.requests[0].request_id,
             identity: task.requests[0].identity.clone(),
             source: ChartDownloadSource::Http,
