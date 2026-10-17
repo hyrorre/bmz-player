@@ -15,14 +15,14 @@ bmz-player "chart.bms" --gauge hard --print-effective-options
 
 ## 書式
 
-譜面パスには `"D:/BMS/set.zip!/song/chart.bms"` のような ZIP / RAR / 7z 内の指定も使えます。
-書庫部分だけを絶対パスへ解決し、`!/` 以降で内部譜面を選択します。通常起動、Autoplay、Practice、
-リプレイ、Viewer、動画出力、`--print-effective-options` で共通です。書庫ファイルだけを指定した場合は、
-そのフォルダを `songs load` / `songs add` で登録して選曲する案内を表示します。
+譜面パスには`"D:/BMS/set.zip!/song/chart.bms"`のようなZIP / RAR / 7z内の指定も使えます。
+書庫部分だけを絶対パスへ解決し、`!/`以降で内部譜面を選択します。通常起動、Autoplay、Practice、
+リプレイ、Viewer、動画出力、`--print-effective-options`で共通です。書庫ファイルだけを指定した場合は、
+そのフォルダを`songs load` / `songs add`で登録して選曲する案内を表示します。
 
-- `--gauge hard`と`--gauge=hard`の両方に対応。選択値は大小文字を区別しません。
+- `--gauge hard`と`--gauge=hard`の両方に対応します。選択値は大小文字を区別しません。
 - 共通オプションと`--profile`はサブコマンドの前後どちらにも置けます。
-- 同じ項目を重ねて指定したら後勝ち。不明な値や範囲外はエラーです。
+- 同じ項目を重ねて指定したら後勝ちです。不明な値や範囲外はエラーです。
 - プレイを伴わない`songs`・`table`などには指定できません。
 - `--print-effective-options`は設定値と明示したCLI上書きをJSON表示して終了します。起動・動画生成はしません。リプレイ記録とコース制約の適用前の設定確認です。
 
@@ -44,19 +44,19 @@ Viewer IPCはv3です。更新前の常駐Viewerは終了してから新版を�
 | オプション | 値 |
 |---|---|
 | `--window-mode` | `windowed` / `borderless` / `exclusive` |
-| `--window-size` | `WIDTHxHEIGHT`。物理ピクセル、各辺1～16384。実効モードがwindowedの場合のみ |
+| `--window-size` | `WIDTHxHEIGHT`です。物理ピクセル、各辺1〜16384です。実効モードがwindowedの場合のみ |
 | `--monitor` | `primary`または`monitors list`に表示されたID全体を引用符で囲んで指定 |
 | `--arrange` / `--arrange-2p` | `off` / `mirror` / `random` / `r-random` / `s-random` / `spiral` / `h-random` / `all-scratch` / `random-ex` / `s-random-ex` / `f-random` / `mf-random` |
 | `--double-option` | `off` / `flip` / `battle` / `battle-auto-scratch` |
 | `--gauge` | `assist-easy` / `easy` / `normal` / `hard` / `ex-hard` / `hazard` |
 | `--gas` | `off` / `continue` / `hard-to-groove` / `best-clear` / `select-to-under` |
 | `--gas-bottom` | `assist-easy` / `easy` / `normal` |
-| `--hispeed` | `0.01`～`20.0`。指定中はClassic・Floating無効の固定倍率 |
+| `--hispeed` | `0.01`〜`20.0`です。指定中はClassic・Floating無効の固定倍率 |
 | `--hs-fix` | `off` / `start-bpm` / `min-bpm` / `max-bpm` / `main-bpm` |
-| `--auto-scratch` | `on` / `off`。onはスクラッチレーンを自動演奏し、スコア・リプレイ保存を無効化 |
+| `--auto-scratch` | `on` / `off`です。onはスクラッチレーンを自動演奏し、スコア・リプレイ保存を無効化 |
 | `--bga` | `on` / `auto` / `off` |
 | `--guide-se` | `on` / `off` |
-| `--seed` | 符号なし64bit整数。P1は下位24bit、P2は次の24bit、BMS分岐seedは指定値 |
+| `--seed` | 符号なし64bit整数です。P1は下位24bit、P2は次の24bit、BMS分岐seedは指定値 |
 
 P1配置はP2にコピーしません。`-B`のG-BATTLEと`--double-option battle`は別の設定です。
 コースの必須制約は引き続き適用されます。
@@ -79,17 +79,17 @@ cargo build -p bmz-player --release
 python scripts/test-windows-cli-console.py target/release/bmz-player.exe
 ```
 
-参考: [AttachConsole](https://learn.microsoft.com/en-us/windows/console/attachconsole)、[GetStdHandle](https://learn.microsoft.com/en-us/windows/console/getstdhandle)。
+参考: [AttachConsole](https://learn.microsoft.com/en-us/windows/console/attachconsole)、[GetStdHandle](https://learn.microsoft.com/en-us/windows/console/getstdhandle)です。
 ## macOS遅延検証
 
-`--latency-stall-test` はウィンドウスレッドを約2秒ごとに100ms停止し、スコア・リプレイ・
+`--latency-stall-test`はウィンドウスレッドを約2秒ごとに100ms停止し、スコア・リプレイ・
 IR保存と背景IR同期を無効にする明示的な試験フラグです。通常は無効です。
-`BMZ_LATENCY_DIAGNOSTICS=1` で計測を有効にできます。
-測定境界・設定・比較手順は [macOS遅延検証](macos-latency.md) を参照してください。
+`BMZ_LATENCY_DIAGNOSTICS=1`で計測を有効にできます。
+測定境界・設定・比較手順は[macOS遅延検証](macos-latency.md)を参照してください。
 
 ## Linux音声診断
 
-`audio-probe auto|pipewire|pulse|alsa auto|FRAMES RATE SECONDS` は、設定・DB・ウィンドウを
+`audio-probe auto|pipewire|pulse|alsa auto|FRAMES RATE SECONDS`は、設定・DB・ウィンドウを
 作らず、無音の出力ストリームを3〜60秒開きます。`BMZ_LATENCY_DIAGNOSTICS=1`で既存の
 `BMZ_LATENCY_JSON`分布を出力します。終了コードと`audio_open_failure`で初期化失敗を確認できます。
 実コールバックサイズと要求値、API推定と物理測定は別です。

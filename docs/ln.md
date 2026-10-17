@@ -1,19 +1,19 @@
 # LN / CN / HCN policy
 
-BMZ は beatoraja 完全互換ではなく、譜面が宣言した LNMODE とユーザーの希望する LNMODE を分けて扱う。
-ユーザーは profile の設定で、譜面の LN 宣言を尊重するか、特定の LN 種別へ強制するかを選べる。
+BMZはbeatoraja完全互換ではなく、譜面が宣言したLNMODEとユーザーの希望するLNMODEを分けて扱います。
+ユーザーはprofileの設定で、譜面のLN宣言を尊重するか、特定のLN種別へ強制するかを選べます。
 
 ## Terms
 
-- undefined LN: BMS 側に `#LNMODE` などの明示的な LN 種別宣言が無い long note。現在の BMS で主流の形。
-- defined LN/CN/HCN: BMS / BMSON 側が明示した `LN`, `CN`, `HCN` の long note。
-- profile policy: ユーザーが `profile.toml` に設定する希望。
-- score policy: score DB の保存キーに使う、実プレイ結果の区別単位。
-- effective LN mode: 実際に降らせる LN 種別。`LN`, `CN`, `HCN` のいずれか。
+- undefined LN: BMS側に`#LNMODE`などの明示的なLN種別宣言が無いlong noteです。現在のBMSで主流の形です。
+- defined LN/CN/HCN: BMS / BMSON側が明示した`LN`, `CN`, `HCN`のlong noteです。
+- profile policy: ユーザーが`profile.toml`に設定する希望です。
+- score policy: score DBの保存キーに使う、実プレイ結果の区別単位です。
+- effective LN mode: 実際に降らせるLN種別です。`LN`, `CN`, `HCN`のいずれかです。
 
 ## Profile Setting
 
-`profile.toml` の `[play]` に `ln_mode_policy` を保存する。
+`profile.toml`の`[play]`に`ln_mode_policy`を保存します。
 
 設定値:
 
@@ -24,28 +24,28 @@ BMZ は beatoraja 完全互換ではなく、譜面が宣言した LNMODE とユ
 - `force_cn`
 - `force_hcn`
 
-`auto_*` は譜面の明示 LN 種別を尊重し、未定義 LN だけをユーザー設定の種別として解釈する。
-`force_*` は譜面の明示 LN 種別に関係なく、指定した種別としてプレイする。
+`auto_*`は譜面の明示LN種別を尊重し、未定義LNだけをユーザー設定の種別として解釈します。
+`force_*`は譜面の明示LN種別に関係なく、指定した種別としてプレイします。
 
 ## Library DB
 
-BMS フォルダスキャン時に、各譜面の long note 構成を `library.db` に保存する。
+BMSフォルダスキャン時に、各譜面のlong note構成を`library.db`に保存します。
 
-`charts` に保存する flags:
+`charts`に保存するflags:
 
 - `has_undefined_ln`
 - `has_defined_ln`
 - `has_defined_cn`
 - `has_defined_hcn`
 
-BMZ 内部では `ChartLnProfile` として扱う。
+BMZ内部では`ChartLnProfile`として扱います。
 
-`#LNMODE` が明示されていない BMS の long note は undefined LN とする。
-`#LNMODE` が明示されている BMS の long note は、そのモードの defined LN/CN/HCN とする。
+`#LNMODE`が明示されていないBMSのlong noteはundefined LNとします。
+`#LNMODE`が明示されているBMSのlong noteは、そのモードのdefined LN/CN/HCNとします。
 
 ## Score Policy
 
-score DB には `LnScorePolicy` を保存する。
+score DBには`LnScorePolicy`を保存します。
 
 保存値:
 
@@ -56,78 +56,78 @@ score DB には `LnScorePolicy` を保存する。
 - `ForceCn`
 - `ForceHcn`
 
-score policy は profile policy と chart LN profile から決める。
+score policyはprofile policyとchart LN profileから決めます。
 
 | Chart LN profile | `auto_ln` | `auto_cn` | `auto_hcn` | `force_ln` | `force_cn` | `force_hcn` |
 | --- | --- | --- | --- | --- | --- | --- |
-| LN なし | `ForceLn` | `ForceLn` | `ForceLn` | `ForceLn` | `ForceLn` | `ForceLn` |
-| undefined LN のみ | `ForceLn` | `ForceCn` | `ForceHcn` | `ForceLn` | `ForceCn` | `ForceHcn` |
-| defined LN のみ | `ForceLn` | `ForceLn` | `ForceLn` | `ForceLn` | `ForceCn` | `ForceHcn` |
-| defined CN のみ | `ForceCn` | `ForceCn` | `ForceCn` | `ForceLn` | `ForceCn` | `ForceHcn` |
-| defined HCN のみ | `ForceHcn` | `ForceHcn` | `ForceHcn` | `ForceLn` | `ForceCn` | `ForceHcn` |
-| defined LN/CN/HCN 混在 | `AutoLn` | `AutoLn` | `AutoLn` | `ForceLn` | `ForceCn` | `ForceHcn` |
-| undefined + defined 混在 | `AutoLn` | `AutoCn` | `AutoHcn` | `ForceLn` | `ForceCn` | `ForceHcn` |
+| LNなし | `ForceLn` | `ForceLn` | `ForceLn` | `ForceLn` | `ForceLn` | `ForceLn` |
+| undefined LNのみ | `ForceLn` | `ForceCn` | `ForceHcn` | `ForceLn` | `ForceCn` | `ForceHcn` |
+| defined LNのみ | `ForceLn` | `ForceLn` | `ForceLn` | `ForceLn` | `ForceCn` | `ForceHcn` |
+| defined CNのみ | `ForceCn` | `ForceCn` | `ForceCn` | `ForceLn` | `ForceCn` | `ForceHcn` |
+| defined HCNのみ | `ForceHcn` | `ForceHcn` | `ForceHcn` | `ForceLn` | `ForceCn` | `ForceHcn` |
+| defined LN/CN/HCN混在 | `AutoLn` | `AutoLn` | `AutoLn` | `ForceLn` | `ForceCn` | `ForceHcn` |
+| undefined + defined混在 | `AutoLn` | `AutoCn` | `AutoHcn` | `ForceLn` | `ForceCn` | `ForceHcn` |
 
 補足:
 
-- LN が無い譜面は LN 種別でスコアを分ける意味が無いため、常に `ForceLn` に正規化する。
-- undefined LN のみの譜面では、実際にはユーザー設定の種別しか降らないため `auto_*` も `force_*` に寄せて保存する。
-- defined 単一種別のみの譜面では、`auto_*` は譜面定義に寄せて `Force*` として保存する。
-- defined 種別が混在する譜面では、beatoraja 互換の固定挙動に寄せず、譜面の混在を表す `AutoLn` として保存する。
-- undefined と defined が混在する譜面では、undefined 部分の解釈が profile に依存するため `AutoLn` / `AutoCn` / `AutoHcn` を区別して保存する。
+- LNが無い譜面はLN種別でスコアを分ける意味が無いため、常に`ForceLn`に正規化します。
+- undefined LNのみの譜面では、実際にはユーザー設定の種別しか降らないため`auto_*`も`force_*`に寄せて保存します。
+- defined単一種別のみの譜面では、`auto_*`は譜面定義に寄せて`Force*`として保存します。
+- defined種別が混在する譜面では、beatoraja互換の固定挙動に寄せず、譜面の混在を表す`AutoLn`として保存します。
+- undefinedとdefinedが混在する譜面では、undefined部分の解釈がprofileに依存するため`AutoLn` / `AutoCn` / `AutoHcn`を区別して保存します。
 
 ## Effective LN Mode
 
-score policy から undefined LN の fallback 種別を決める。
+score policyからundefined LNのfallback種別を決めます。
 
 - `AutoLn` / `ForceLn` -> `LN`
 - `AutoCn` / `ForceCn` -> `CN`
 - `AutoHcn` / `ForceHcn` -> `HCN`
 
-defined 種別が混在する譜面では score policy は `AutoLn` になる。
-実プレイでは note ごとの defined 種別を尊重し、undefined 部分だけ fallback 種別で解釈する。
+defined種別が混在する譜面ではscore policyは`AutoLn`になります。
+実プレイではnoteごとのdefined種別を尊重し、undefined部分だけfallback種別で解釈します。
 
-`force_*` の場合は defined / undefined に関係なく全 long note を指定種別として扱う。
+`force_*`の場合はdefined / undefinedに関係なく全long noteを指定種別として扱います。
 
 ## Runtime Judgement
 
-始点 / 終点の扱いは beatoraja の `JudgeManager` を基準にする。ここでいう LN / CN / HCN は、
-profile policy を適用した後の effective LN mode を指す。
+始点 / 終点の扱いはbeatorajaの`JudgeManager`を基準にします。ここでいうLN / CN / HCNは、
+profile policyを適用した後のeffective LN modeを指します。
 
-- LN は始点押下時の判定を保持し、終点まで維持できた時点で 1 ノーツ分として確定する。
-  始点と終点を別々のスコア対象にはしない。
-- CN / HCN は始点と終点を別々のスコア対象として扱う。始点は押下時、終点は離した時に
-  それぞれ判定する。
-- CN / HCN の始点を見逃した場合、beatoraja と同じく始点と対応する終点の両方を
-  その時点で POOR にする。終点時刻まで追加 POOR を遅延させない。
-- CN / HCN の終点を離して判定する場合は通常ノート窓ではなく long-note end 窓を使う。
-- 方向付きスクラッチ CN / HCN (BSS) は、始点と同じ方向の Release が long-note end 窓内なら
-  その Release で終点を判定する。beatoraja はこの Release を無視して逆方向 Press を待つが、
-  BMZ はスクラッチを止める操作だけでも終点を取れるよう、ここを意図的に変更している。
-- 上記 Release の直後 30ms 以内（30ms ちょうどを含む）に来た最初の逆方向 Press は 1 回だけ
-  消費し、通常ノート、Mine、フォールバックキー音へ流さない。別方向の Press または 30ms 超過後の
-  Press は通常どおり処理する。Release を伴わず逆方向 Press で終点を取る場合は、終点だけを判定し、
-  同じ入力を直後の通常ノートへ流さない。
-- CN / HCN を離さず終点を通過した場合の見逃し確定時刻は、long-note end の
-  BAD 終端ではなく通常ノートの late BAD 終端を使う。
-- 9K の beatoraja PMS と DX POP には 200ms の release margin がある。BAD / POOR 相当の
-  早離しは直ちに確定せず、この猶予内に押し直すと取り消す。猶予を過ぎると保留判定を確定する。
-  それ以外の通常レーンと long scratch の margin は 0。
-- HCN の `passing` 参照自体は現在時刻が始点を通過すると設定されるが、始点 state が未判定の
-  `0` の間は active/damage タイマーとゲージ増減を動かさない。始点が判定済みになった後、
-  HCN 区間中は 200ms ごとに、押下中なら回復、非押下なら減少を適用する。
+- LNは始点押下時の判定を保持し、終点まで維持できた時点で1ノーツ分として確定します。
+  始点と終点を別々のスコア対象にはしません。
+- CN / HCNは始点と終点を別々のスコア対象として扱います。始点は押下時、終点は離した時に
+  それぞれ判定します。
+- CN / HCNの始点を見逃した場合、beatorajaと同じく始点と対応する終点の両方を
+  その時点でPOORにします。終点時刻まで追加POORを遅延させません。
+- CN / HCNの終点を離して判定する場合は通常ノート窓ではなくlong-note end窓を使います。
+- 方向付きスクラッチCN / HCN (BSS)は、始点と同じ方向のReleaseがlong-note end窓内なら
+  そのReleaseで終点を判定します。beatorajaはこのReleaseを無視して逆方向Pressを待つが、
+  BMZはスクラッチを止める操作だけでも終点を取れるよう、ここを意図的に変更しています。
+- 上記Releaseの直後30ms以内（30msちょうどを含む）に来た最初の逆方向Pressは1回だけ
+  消費し、通常ノート、Mine、フォールバックキー音へ流しません。別方向のPressまたは30ms超過後の
+  Pressは通常どおり処理します。Releaseを伴わず逆方向Pressで終点を取る場合は、終点だけを判定し、
+  同じ入力を直後の通常ノートへ流しません。
+- CN / HCNを離さず終点を通過した場合の見逃し確定時刻は、long-note endの
+  BAD終端ではなく通常ノートのlate BAD終端を使います。
+- 9Kのbeatoraja PMSとDX POPには200msのrelease marginがあります。BAD / POOR相当の
+  早離しは直ちに確定せず、この猶予内に押し直すと取り消します。猶予を過ぎると保留判定を確定します。
+  それ以外の通常レーンとlong scratchのmarginは0です。
+- HCNの`passing`参照自体は現在時刻が始点を通過すると設定されるが、始点stateが未判定の
+  `0`の間はactive/damageタイマーとゲージ増減を動かしません。始点が判定済みになった後、
+  HCN区間中は200msごとに、押下中なら回復、非押下なら減少を適用します。
 
 参照箇所:
 
 - beatoraja: `.local/beatoraja/src/bms/player/beatoraja/play/JudgeManager.java`
-- beatoraja 判定窓: `.local/beatoraja/src/bms/player/beatoraja/play/JudgeProperty.java`
+- beatoraja判定窓: `.local/beatoraja/src/bms/player/beatoraja/play/JudgeProperty.java`
 - LR2oraja Endless Dream DX: `.local/lr2oraja-endlessdream/core/src/bms/player/beatoraja/play/JudgeManager.java`
-- DX 判定窓: `.local/lr2oraja-endlessdream/core/src/bms/player/beatoraja/play/JudgeProperty.java`
+- DX判定窓: `.local/lr2oraja-endlessdream/core/src/bms/player/beatoraja/play/JudgeProperty.java`
 
 ## Score DB
 
-score DB は profile ごとに分かれている。
-LN policy は profile 内のスコア・リプレイをさらに分けるキーとして扱う。
+score DBはprofileごとに分かれています。
+LN policyはprofile内のスコア・リプレイをさらに分けるキーとして扱います。
 
 保存先:
 
@@ -141,67 +141,67 @@ LN policy は profile 内のスコア・リプレイをさらに分けるキー�
 
 - `score_best`: `(chart_sha256, ln_policy)`
 - `replay_slots`: `(chart_sha256, ln_policy, slot)`
-- `course_scores` の検索キー: `(course_hash, ln_policy, rule_mode)`
+- `course_scores`の検索キー: `(course_hash, ln_policy, rule_mode)`
 - `course_replay_slots`: `(course_hash, ln_policy, rule_mode, slot)`
 
-単曲の `ln_policy` は譜面ごとに正規化した `LnScorePolicy` を保存する。コースも
-全譜面の `ChartLnProfile` flags を論理和で集約し、コース LN constraint による
-undefined LN fallback を反映してから、同じ `score_ln_policy` 規則で正規化した
-`LnScorePolicy` を保存する。したがって、全譜面に LN が無いコースは設定にかかわらず
-`ForceLn`、単一の defined 種別だけを含むコースの AUTO はその `Force*`、defined
-種別が混在するコースの AUTO は `AutoLn` になる。undefined と defined が混在する
-場合だけ fallback に応じた `AutoLn` / `AutoCn` / `AutoHcn` を区別する。
-既存のコーススコアは設定値を一意に復元できないため、migration では
-`ForceLn` bucket へ移す。
+単曲の`ln_policy`は譜面ごとに正規化した`LnScorePolicy`を保存します。コースも
+全譜面の`ChartLnProfile` flagsを論理和で集約し、コースLN constraintによる
+undefined LN fallbackを反映してから、同じ`score_ln_policy`規則で正規化した
+`LnScorePolicy`を保存します。したがって、全譜面にLNが無いコースは設定にかかわらず
+`ForceLn`、単一のdefined種別だけを含むコースのAUTOはその`Force*`、defined
+種別が混在するコースのAUTOは`AutoLn`になります。undefinedとdefinedが混在する
+場合だけfallbackに応じた`AutoLn` / `AutoCn` / `AutoHcn`を区別します。
+既存のコーススコアは設定値を一意に復元できないため、migrationでは
+`ForceLn` bucketへ移します。
 
-通常リプレイファイルは `score_history` が個別 path を持つため、ファイル名衝突は起きにくい。
-replay slot は同じ chart SHA256 / slot 番号を複数 policy で使うため、新規保存時の slot replay ファイル名に `ln_policy` を含める。
+通常リプレイファイルは`score_history`が個別pathを持つため、ファイル名衝突は起きにくいです。
+replay slotは同じchart SHA256 / slot番号を複数policyで使うため、新規保存時のslot replayファイル名に`ln_policy`を含めます。
 
 ## External score DB import (LR2 / beatoraja / LR2oraja)
 
-スコアインポートは egui 本体設定の「スコアインポート」から行う。
+スコアインポートは「BMZ メニュー → データ移行」の「スコアインポート」から行います。
 
 ### 経路
 
-| 種別 | ソース DB | 照合キー | 保存 `rule_mode` | `ln_policy` |
+| 種別 | ソースDB | 照合キー | 保存`rule_mode` | `ln_policy` |
 | --- | --- | --- | --- | --- |
-| LR2 | LR2 `score` | MD5 | `Lr2Oraja` | 常に `ForceLn` |
+| LR2 | LR2 `score` | MD5 | `Lr2Oraja` | 常に`ForceLn` |
 | beatoraja | `score` / `scoredatalog` | SHA256 | `Beatoraja` | `score.mode` + 正規化 |
-| LR2oraja | beatoraja 形式 | SHA256 | `Lr2Oraja` | 同上 |
-| LR2oraja (DX) | beatoraja 形式 | SHA256 | `Dx` | 同上 |
+| LR2oraja | beatoraja形式 | SHA256 | `Lr2Oraja` | 同上 |
+| LR2oraja (DX) | beatoraja形式 | SHA256 | `Dx` | 同上 |
 
 ### beatoraja / LR2oraja の `score.mode`
 
-beatoraja 系の `mode` は key mode ではなく LNMODE である。
+beatoraja系の`mode`はkey modeではなくLNMODEです。
 
 - `0` = LN, `1` = CN, `2` = HCN
-- undefined LN がある譜面だけ `mode` が分かれる。無い譜面は常に `0`
+- undefined LNがある譜面だけ`mode`が分かれます。無い譜面は常に`0`
 
-インポート時は `mode` を `AutoLn` / `AutoCn` / `AutoHcn` にマップし、library の `ChartLnProfile` と合わせて `score_ln_policy` で正規化する。
+インポート時は`mode`を`AutoLn` / `AutoCn` / `AutoHcn`にマップし、libraryの`ChartLnProfile`と合わせて`score_ln_policy`で正規化します。
 
 ### ノーツ数チェック
 
-外部 DB のノーツ数と、**正規化後の `ln_policy` における期待スコア対象ノーツ数**を比較する。
+外部DBのノーツ数と、**正規化後の`ln_policy`における期待スコア対象ノーツ数**を比較します。
 
-- beatoraja 系は `score.notes`、純 LR2 は `score.totalnotes` を外部 DB のノーツ数として使う
-- 期待値 = `Tap + LongStart`（library / chart `total_notes`）+ effective CN/HCN の long pair 数
-- library `total_notes` 自体は ln_policy 非考慮のため、生値だけでは比較しない
-- 現行の解析バージョンで保存した `ChartLnCounts` と `scored_total_notes()` を使い、件数確認のためにBMSを再読込しない。譜面ファイルが移動・消失していても検証できる
-- 同一ハッシュの古い解析情報より新しい情報を優先する。最新の情報が無い場合は再スキャンが必要な理由を表示する
-- 不一致かつ policy が `ForceLn` 以外なら `ForceLn` で期待値を再計算して再比較（ビルド差フォールバック）
-- それでも不一致ならその行は `failed` としてスキップする
-- あわせて `EX score <= 外部ノーツ数 * 2`、`max combo <= 外部ノーツ数` を検証する
+- beatoraja系は`score.notes`、純LR2は`score.totalnotes`を外部DBのノーツ数として使う
+- 期待値 = `Tap + LongStart`（library / chart `total_notes`）+ effective CN/HCNのlong pair数
+- library `total_notes`自体はln_policy非考慮のため、生値だけでは比較しない
+- 現行の解析バージョンで保存した`ChartLnCounts`と`scored_total_notes()`を使い、件数確認のためにBMSを再読込しません。譜面ファイルが移動・消失していても検証できる
+- 同一ハッシュの古い解析情報より新しい情報を優先します。最新の情報が無い場合は再スキャンが必要な理由を表示する
+- 不一致かつpolicyが`ForceLn`以外なら`ForceLn`で期待値を再計算して再比較（ビルド差フォールバック）
+- それでも不一致ならその行は`failed`としてスキップする
+- あわせて`EX score <= 外部ノーツ数 * 2`、`max combo <= 外部ノーツ数`を検証する
 
-判定合計はノーツ数チェックに使わない。beatoraja 系は途中 FAILED で未処理ノーツが判定に含まれず、非消滅判定では同じノーツに複数判定が付く場合がある。純 LR2 の `poor` には Empty Poor も含まれるため、いずれも判定合計とノーツ数の一致は保証されない。
+判定合計はノーツ数チェックに使いません。beatoraja系は途中FAILEDで未処理ノーツが判定に含まれず、非消滅判定では同じノーツに複数判定が付く場合があります。純LR2の`poor`にはEmpty Poorも含まれるため、いずれも判定合計とノーツ数の一致は保証されません。
 
-結果には未所持、重複、ノーツ数不一致、読み込み失敗、譜面情報の更新が必要、不正なスコア、未対応を分けて件数と代表理由を表示する。
-ノーツ数不一致では元件数・選ばれたLN policyの期待値・各FORCE設定の期待値を表示する。
-未定義LN譜面で `mode=0` にCN相当の `notes` が保存されていても、CNとして取り込む補正はしない。
-再スキャンはlibraryの解析情報を更新する操作で、読み取り専用で開く外部score DBの `mode` / `notes` は修正しない。
+結果には未所持、重複、ノーツ数不一致、読み込み失敗、譜面情報の更新が必要、不正なスコア、未対応を分けて件数と代表理由を表示します。
+ノーツ数不一致では元件数・選ばれたLN policyの期待値・各FORCE設定の期待値を表示します。
+未定義LN譜面で`mode=0`にCN相当の`notes`が保存されていても、CNとして取り込む補正はしません。
+再スキャンはlibraryの解析情報を更新する操作で、読み取り専用で開く外部score DBの`mode` / `notes`は修正しません。
 
-純 LR2 は CN/HCN が無いため常に `ForceLn` とし、`score.totalnotes` と期待ノーツ数を照合する。
+純LR2はCN/HCNが無いため常に`ForceLn`とし、`score.totalnotes`と期待ノーツ数を照合します。
 
-BMZ の score DB schema migration で既存行へ付けた `ForceLn` 既定値は、上記インポートとは別件である。
+BMZのscore DB schema migrationで既存行へ付けた`ForceLn`既定値は、上記インポートとは別件です。
 
 ## Implementation Pointers
 

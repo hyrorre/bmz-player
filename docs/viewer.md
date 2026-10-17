@@ -32,7 +32,7 @@ Select / Decide / Result skin、skin catalog、システムBGM / SEは初期化�
 単曲の再生後はResult画面を表示せず、最後のPlay画面を保持したまま次の再生を待機します。
 再生中に`-S`を受け取った場合も、現在のPlay画面を保持した同じ待機状態へ戻ります。
 Viewerの再生中および再生終了後の待機中は、`Escape`、`E2+E3`、または`E1+E2`の
-長押しで黒フェードアウト後にBMZ Playerを終了します。ViewerからSelect画面へは移動せず、
+長押しで黒フェードアウト後にBMZ Playerを終了します。Viewerから選曲画面へは移動せず、
 Viewer起動時に省略した選曲リスト、Select skin、skin catalog、システムBGM / SEも
 初期化しません。再生だけを停止して次の命令を待機させる場合は、BMSエディタから`-S`を
 送信します。
@@ -86,9 +86,9 @@ Playerを終了します。E1+E2長押しとE2+E3による退出も同じです�
 `[PATH]`だけを指定した通常起動でも、未登録の`.bms` / `.bme` / `.bml` / `.pms` /
 `.bmson`を1ファイルだけ通常のライブラリへ取り込んで開始できます。
 
-ZIP / RAR / 7z 内の譜面は `bmz-player -P "D:/BMS/set.zip!/song/chart.bms"` と指定します。
+ZIP / RAR / 7z内の譜面は`bmz-player -P "D:/BMS/set.zip!/song/chart.bms"`と指定します。
 通常起動も同じ書式です。IPCでは元書庫の絶対パスと内部エントリ名を送信し、再生workerが
-`cache_dir/song-archives` へ資源を展開します。F5再読込では書庫を再確認し、資源だけの更新も反映します。
+`cache_dir/song-archives`へ資源を展開します。F5再読込では書庫を再確認し、資源だけの更新も反映します。
 書庫だけを渡す場合は、曲rootとして登録・スキャンして選曲してください。
 
 ## 停止通信
@@ -97,7 +97,7 @@ BMSエディタはBMZと直接通信する必要はありません。uBMplay連�
 `bmz-player.exe -S`を別プロセスとして起動します。`-P`と`-S`の短命プロセスが、実行中
 ビューワーへ長さ付きコマンドと受信ACKを使う次のローカルIPCで要求を中継します。
 
-- Windows: 名前付きパイプ `\\.\pipe\bmz-player-viewer-v2`
+- Windows: 名前付きパイプ`\\.\pipe\bmz-player-viewer-v2`
 - macOS / Linux: loopback TCP `127.0.0.1:39077`
 
 受信側はプロセス終了まで接続待ちを繰り返し、`Play { path, measure, battle }`と`Stop`を処理します。
@@ -120,7 +120,7 @@ BMS Maker 3とwoseqはエディタ側に独立した停止コマンドがない�
 
 ## ドラッグ＆ドロップ
 
-Select画面のBMZウィンドウへ対応譜面をドロップすると、その1ファイルを通常のライブラリへ
+選曲画面のBMZウィンドウへ対応譜面をドロップすると、その1ファイルを通常のライブラリへ
 取り込み、通常プレイを開始します。通常起動ではSelect以外の画面へのドロップは受け付けません。
 
 Viewerウィンドウへ対応譜面をドロップすると、その譜面をViewerモードで0小節目から再生します。

@@ -6,7 +6,7 @@
 「未所持譜面を確認」を押します。表示中のフォルダも対象にできます。
 対象総数・所持済み・自動取得可能・取得不可・重複を確認し、「キューへ追加」で確定します。
 レベルフォルダではそのレベルのみ、難易度表フォルダでは全レベルが対象です。
-対象は選曲スキンのパンくずリストと同じ表記で表示します（例: レベルは `Stella > st0`、表全体は `Stella`）。
+対象は選曲スキンのパンくずリストと同じ表記で表示します（例: レベルは`Stella > st0`、表全体は`Stella`）。
 現在の選曲のモード・難易度フィルタによる表示件数には限定しません。
 
 表の譜面とローカル登録をまとめて照合し、SHA256/MD5の大小文字・前後空白を正規化します。
@@ -41,29 +41,29 @@ beatoraja形式スキンのsonglist `graph`（フォルダのランプ分布グ�
 
 終了したタスクのバーは5秒間表示します。曲バーとはSHA256、無ければMD5で照合し、
 両方を持つ曲バーは両方が一致するタスクだけを表示します。
-songlistに `graph` を持たないスキンとLR2スキンには表示しません。
+songlistに`graph`を持たないスキンとLR2スキンには表示しません。
 
 ## HTTP取得元
 
 設定 → ライブラリ → 譜面取得でGinger / Konmai / Customを選べます。
 Wriggleはサービスを利用できないため、プリセットの選択と既定URLを無効にしています。
-保存済みの `http_source = "wriggle"` は読み込めます。明示的なAPI URLがあれば維持し、
+保存済みの`http_source = "wriggle"`は読み込めます。明示的なAPI URLがあれば維持し、
 URLが空ならIPFSまたは手動配布ページへ従来の優先順でフォールバックします。
-プリセットを明示的に選ぶとAPI URLを入力します。既存の `http_api_url` は読み込み時に
+プリセットを明示的に選ぶとAPI URLを入力します。既存の`http_api_url`は読み込み時に
 書き換えず、指定済みURLがプリセットの既定値より優先されます。HTTPの無効設定も維持します。
 HTTPの同時取得数を1〜5件に変更でき、変更は次に開始するタスクから反映します。
 
 | 取得元 | URLテンプレート | 対応ハッシュ・応答 |
 | --- | --- | --- |
-| Ginger | `https://gingerrush.com/download/package/{md5}` | MD5、`downloadURL` を持つJSON |
-| Konmai | `https://bms.alvorna.com/api/hash?md5={md5}` | MD5、`result: success` と `data.song_url` を持つJSON |
-| Wriggle（無効） | 既定URLなし | サービス利用不可。保存済みの設定値と明示URLの読み込みのみ維持 |
-| Custom | ユーザー指定 | `{md5}` / `%s` はMD5、`{sha256}` はSHA256が必要。両方指定なら両方必要 |
+| Ginger | `https://gingerrush.com/download/package/{md5}` | MD5、`downloadURL`を持つJSON |
+| Konmai | `https://bms.alvorna.com/api/hash?md5={md5}` | MD5、`result: success`と`data.song_url`を持つJSON |
+| Wriggle（無効） | 既定URLなし | サービス利用不可です。保存済みの設定値と明示URLの読み込みのみ維持 |
+| Custom | ユーザー指定 | `{md5}` / `%s`はMD5、`{sha256}`はSHA256が必要です。両方指定なら両方必要 |
 
 2026-10-16の確認ではGingerは未登録ハッシュに404を返しました。
 Konmaiは[Satelliteの段位譜面](https://stellabms.xyz/sl/header.json)3件でHTTP 200、
-`result: success` と `data.song_url` を返しました。
-例: [Life is PIANO [Another]のAPI応答](https://bms.alvorna.com/api/hash?md5=4023045d9134dfc47e953bc430e5ef07)。
+`result: success`と`data.song_url`を返しました。
+例: [Life is PIANO [Another]のAPI応答](https://bms.alvorna.com/api/hash?md5=4023045d9134dfc47e953bc430e5ef07)です。
 取得先はHTTP 200、`application/x-7z-compressed`、106,431,803バイトと応答し、
 Range取得した先頭32バイトも7zの署名と一致しました。未登録ハッシュは404と取得不可JSONになります。
 実サービスの全アーカイブ取得・展開・DB登録は未確認で、サービスの継続提供は保証しません。
@@ -76,7 +76,7 @@ Content-TypeがJSON以外でもJSON本体を検出し、アーカイブの署名
 どちらも利用できなければ、表に記載されたHTTP/HTTPSの配布ページをブラウザで開きます。
 コース不足譜面の取得も同じキューを使います。
 
-HTTPの同時実行数は `downloads.http_parallelism`（初期値3、実効値1〜5）です。
+HTTPの同時実行数は`downloads.http_parallelism`（初期値3、実効値1〜5）です。
 IPFSは1件、アーカイブ展開は全方式を合わせて1件に制限します。
 待機中の要求ごとにスレッドや非同期タスクは作りません。
 
@@ -87,7 +87,7 @@ IPFSは1件、アーカイブ展開は全方式を合わせて1件に制限し�
 取得したアーカイブのSHA256が前回と同じなら展開せず、「前回と同じアーカイブ」として失敗にします。
 前回の展開フォルダが削除されている場合は、同じアーカイブでも展開し直します。
 保存後の登録中はキャンセルできません。転送完了とキャンセルが重なった場合も登録まで進めます。
-スキャンは既存のキューへ追加し、Play/Result中の反映は次のSelectまで保留します。
+スキャンは既存のキューへ追加し、プレイ画面・リザルト画面で追加した分は、次に選曲画面へ戻るまで反映を保留します。
 転送はメニューを閉じた後や画面遷移後も継続します。
 
 単一譜面の取得後は、同じフォルダで選曲操作をしていなければハッシュで対象を選択します。

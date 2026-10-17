@@ -1,14 +1,14 @@
 # 曲の取得元とスキャン
 
-曲rootには通常の譜面ファイルと ZIP / RAR / 7z を置けます。書庫を置いたフォルダを設定の
-曲rootへ追加してスキャンするか、`bmz-player songs load <folder>` で登録し、Selectで譜面を選択します。
-書庫内の BMS / BME / BML / PMS / BMSON を登録し、音声・BGA・曲画像・プレビューは利用時に展開します。
+曲rootには通常の譜面ファイルとZIP / RAR / 7zを置けます。書庫を置いたフォルダを設定の
+曲rootへ追加してスキャンするか、`bmz-player songs load <folder>`で登録し、Selectで譜面を選択します。
+書庫内のBMS / BME / BML / PMS / BMSONを登録し、音声・BGA・曲画像・プレビューは利用時に展開します。
 暗号化書庫や安全性・資源量の制限を超える書庫はエラーとして扱います。
 再生コマンド、メディアキャッシュ、対応圧縮方式と上限は[書庫内譜面の直接再生](archive-songs.md)を参照してください。
 
 ## 安定したパスと譜面identity
 
-DBの取得元は `C:/BMS/pack.zip!/folder/song.bms` の形式で保存します。`!/` より前は元の書庫、
+DBの取得元は`C:/BMS/pack.zip!/folder/song.bms`の形式で保存します。`!/`より前は元の書庫、
 後ろは内部entryです。譜面pathを受ける既存CLI引数にもこの形式を指定できます。
 書庫本体だけを譜面として指定した場合は、スキャン登録または内部譜面の指定を案内します。
 
@@ -24,8 +24,8 @@ cacheの有無は所持判定に影響しません。元譜面が変更された
 ## 走査と更新
 
 rootの有効・無効および再帰設定は、書庫本体の位置を基準にします。再帰を無効にしたrootでも、
-直下の書庫内にあるサブフォルダの譜面を列挙します。`skip_hidden` は書庫内のドットで始まる
-ファイル・フォルダにも適用します。AppleDoubleの `._*` と `__MACOSX` は常に譜面から除外します。
+直下の書庫内にあるサブフォルダの譜面を列挙します。`skip_hidden`は書庫内のドットで始まる
+ファイル・フォルダにも適用します。AppleDoubleの`._*`と`__MACOSX`は常に譜面から除外します。
 Everythingによる発見でも同じ書庫一覧化を使い、利用できない場合は通常の走査へ戻ります。
 読み取れない書庫は通常の走査と同じく個別のissueとして記録し、root全体の発見は失敗させません。
 
@@ -36,17 +36,17 @@ solid書庫の譜面は1回の展開走査でまとめて読み取り、書庫�
 正常に列挙・読み取りできたスキャンでのみ、削除された内部entryや元書庫の登録を取り除きます。
 書庫が破損・読み取り不能、または展開途中でCRC不一致になった場合は既存登録を保持し、そのrootの
 削除判定を見送ります。再走査で書庫が復旧すれば再び更新します。通常の譜面parseエラーは個別に記録します。
-書庫内の譜面のparseエラーはその世代の結果として記録し、書庫か `CHART_IMPORT_VERSION` が
+書庫内の譜面のparseエラーはその世代の結果として記録し、書庫か`CHART_IMPORT_VERSION`が
 変わったときに再試行します（変化のない書庫を毎回全体復号しないため）。
 
-`library.db` のmigration 35は書庫の取り込み済み世代を記録する `song_archive_scans` テーブルを追加します。
-migration 36の `song_archive_fingerprints` は書庫全体のhashをファイル情報と組で記録し、
+`library.db`のmigration 35は書庫の取り込み済み世代を記録する`song_archive_scans`テーブルを追加します。
+migration 36の`song_archive_fingerprints`は書庫全体のhashをファイル情報と組で記録し、
 変化のない書庫の再hashを省きます。行を失っても次回に再計算するだけです。
 既存charts・chart_filesのpathやscoreデータに破壊的変更はありません。
 
 ## 展開cacheと素材の境界
 
-展開先は実アプリの `AppPaths.cache_dir`（`BMZ_CACHE_DIR` 指定対応）から明示的に渡します。
+展開先は実アプリの`AppPaths.cache_dir`（`BMZ_CACHE_DIR`指定対応）から明示的に渡します。
 DBを開いた時点や譜面metadataの読み取りだけでは、ユーザーのcacheディレクトリへ書き込みません。
 テストは個別の一時ディレクトリを使います。cacheを削除しても次の利用時に元書庫から再生成できます。
 この機能では自動GCを行いません。使用中のcacheの手動削除は再生終了後に行ってください。
@@ -55,6 +55,6 @@ DBを開いた時点や譜面metadataの読み取りだけでは、ユーザー�
 cacheの実パスを永続的な譜面identityとして使いません。元書庫を更新した場合は新しい世代を展開し、
 古い世代の読み取り結果が新しい要求へ混ざらないようにします。
 
-内部entryと譜面由来の WAV / BMP / STAGEFILE / BACKBMP / BANNER / PREVIEW は書庫root内に限定します。
-`sub/song.bms` から `../shared/key.wav` へ参照する構成は使えます。絶対パス、root外への `../`、
+内部entryと譜面由来のWAV / BMP / STAGEFILE / BACKBMP / BANNER / PREVIEWは書庫root内に限定します。
+`sub/song.bms`から`../shared/key.wav`へ参照する構成は使えます。絶対パス、root外への`../`、
 代替データストリーム、cache内のリンク経由で外へ出る参照は拒否します。元譜面bytesを書き換える補正は行いません。

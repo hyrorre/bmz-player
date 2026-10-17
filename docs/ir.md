@@ -1,19 +1,19 @@
 # BMZ IR (Internet Ranking) API 設計メモ
 
-Codex に最終レビューと実装を引き継ぐための設計まとめ。
-本ドキュメントでは、BMZ 新BMSプレイヤー向けの IR API、クライアント側 Provider trait、認証、ランキング取得、リザルト画面連携、replay 拡張、NuxtHub / Drizzle 実装方針を整理する。
-beatoraja向け既存サービスrianIRとの互換adapterは `docs/rian-ir.md` を参照する。
+Codexに最終レビューと実装を引き継ぐための設計まとめです。
+本ドキュメントでは、BMZ新BMSプレイヤー向けのIR API、クライアント側Provider trait、認証、ランキング取得、リザルト画面連携、replay拡張、NuxtHub / Drizzle実装方針を整理します。
+beatoraja向け既存サービスrianIRとの互換adapterは`docs/rian-ir.md`を参照します。
 アシスト、特殊モード、ランプ・履歴・replay・IRの保存条件は
-`docs/score-persistence.md` を参照する。
+`docs/score-persistence.md`を参照します。
 
 ---
 
 ## 実装状況 (2026-07-13)
 
-以下は本メモを元に実装済みの範囲と、設計からの主な差分。
-ソースの所在: クライアントは `crates/bmz-player/src/ir/`、サーバーは
-`bmz-ir-web/server/`、DB schema は `bmz-ir-web/server/db/schema.ts`、
-DB migration は `server/db/migrations/sqlite/`。
+以下は本メモを元に実装済みの範囲と、設計からの主な差分です。
+ソースの所在: クライアントは`crates/bmz-player/src/ir/`、サーバーは
+`bmz-ir-web/server/`、DB schemaは`bmz-ir-web/server/db/schema.ts`、
+DB migrationは`server/db/migrations/sqlite/`です。
 
 ### 実装済み API
 
@@ -52,272 +52,272 @@ GET    /api/v1/courses/{course_hash}           # registry + play_count
 GET    /api/v1/courses/{course_hash}/ranking   # global のみ
 ```
 
-未実装: `PUT /api/v1/charts/{sha256}` (chart upsert は score submit 内で実施)、
-難易度表の公開管理 API。
+未実装: `PUT /api/v1/charts/{sha256}` (chart upsertはscore submit内で実施)、
+難易度表の公開管理APIです。
 
-日次成果は `/daily?player=<id>&date=YYYY-MM-DD&mode=all` で公開し、`player` 省略時は
-ログイン中の本人を対象にする。成果日の切り替わりは profile の
-`daily_boundary_minutes` (JST 00:00 からの分、既定 0) で設定できる。難易度表は
-運用側 allowlist を 6 時間ごとに D1 へ世代同期し、日次 API 返却時に MD5 優先、
-SHA-256 fallback でラベルを付与する。
+日次成果は`/daily?player=<id>&date=YYYY-MM-DD&mode=all`で公開し、`player`省略時は
+ログイン中の本人を対象にします。成果日の切り替わりはprofileの
+`daily_boundary_minutes` (JST 00:00からの分、既定0)で設定できます。難易度表は
+運用側allowlistを6時間ごとにD1へ世代同期し、日次API返却時にMD5優先、
+SHA-256 fallbackでラベルを付与します。
 
 難易度表を即時同期する管理APIは、ログイン済みユーザーのうち
-`NUXT_IR_ADMIN_USER_IDS`（カンマ区切り）に含まれるIDだけが実行できる。未設定時は
-全ユーザーを拒否する。Cronと管理APIが重なった場合はD1の期限付きロックで片方を
-`already_running`としてスキップする。同期失敗はCloudflare LogsへURLと原因を最大10件、
-各エラー500文字まで記録し、全件失敗時は最初の原因を管理APIの502エラーにも含める。
+`NUXT_IR_ADMIN_USER_IDS`（カンマ区切り）に含まれるIDだけが実行できます。未設定時は
+全ユーザーを拒否します。Cronと管理APIが重なった場合はD1の期限付きロックで片方を
+`already_running`としてスキップします。同期失敗はCloudflare LogsへURLと原因を最大10件、
+各エラー500文字まで記録し、全件失敗時は最初の原因を管理APIの502エラーにも含めます。
 
 ### クライアント (bmz-player)
 
-- CLI: `bmz ir login|logout|status|ranking|sync|upload-local|download-scores|attest-submitted|cleanup-imported|cleanup-duplicate|rivals|device-key|replay`。
-  egui プロファイル設定からもログイン可能。
-- 送信: リザルト確定時に譜面時間を `result.duration_ms` へ含め、
-  `ir_score_jobs` へ enqueue (send_policy 判定込み) →
-  リザルト画面で即時送信 + アプリ常駐ワーカー (30 秒間隔) が残りを処理。
-  結果画面・常駐ワーカーは 1 バッチ 20 件、job 間 3.1 秒待ちで送信する。CLI の
-  `ir sync` / local backfill は手動検証を速くするため 100 件 / 200ms を使う。
-  バッチ取得時に対象 job をまとめて `sending` として claim し、リザルト送信と
-  常駐ワーカーが並行しても同じ job を二重送信しない。
-  CLI の `ir sync` / `ir upload-local --sync` は中断時に未処理jobを一括で
-  `sending` に残さないよう1件ずつclaimし、`[N/100]` の進捗を逐次表示する。
-  Ctrl+C時に残る `sending` は処理中の最大1件で、5分後に再取得される。
-  リトライは 1分 → 5分 → 30分 → 2時間 → 以降24時間。
-  429 が `Retry-After` を返した場合は通常のバックオフより優先してその時刻まで待つ。
-  score 成功履歴の保存と `kind=replay` job の投入は同じ transaction で確定する。
-  replay upload / verify の失敗は replay job だけを再試行し、成功済み score を
-  未送信状態へ戻さない。
-  成功済み job は payload を空にし、同期後に 30 日以内または最新 500 件だけを
-  `network.db` に保持する。未送信 / 失敗 / 送信中 job は剪定対象外。成功判定と
-  remote score ID の紐付けは job/log の保持期間から独立した成功台帳にも保存し、
-  pruning後も upload-local の既送信判定と download-scores の既存履歴リンクに使う。
-  成功台帳は成功時に元のrequest payload、chart hash、LN policyも同一transactionで保存する。
-  成功履歴ごとに元request body分の容量を台帳で保持する一方、job本体の保持期間は従来どおりにする。
-  snapshotをjob pruning後の安全な `--resend` に使う。元payloadが消去済みの旧成功履歴は本文を
-  再構築せず再送不可として数え、CLIは非ゼロで終了する。IR cleanupではsnapshotも台帳と
-  同じtransactionで削除する。
-  migration は残っている成功submissionから台帳を作るが、過去に pruning 済みの
-  submission にしかなかった remote ID / 紐付けは復元できない。
-- local backfill: `bmz ir upload-local [--dry-run] [--limit N] [--sync] [--all]` で
-  `score.db` の既存 `score_history` を `local_backfill` source の score submit として enqueue
-  する。既送信履歴と既に queue にある履歴は既定でスキップする。`download-scores` で
-  同じ provider/account から取得済みのscoreも、IR上に既存scoreがあるため候補から除外し、
-  `--resend`でも再投入しない。別providerまたは別accountへの送信は引き続き候補になる。
-  downloaded source marker はBMZ IR / BMS-IR共通の `bmz_ir` で、providerとaccountも照合する。
+- CLI: `bmz ir login|logout|status|ranking|sync|upload-local|download-scores|attest-submitted|cleanup-imported|cleanup-duplicate|rivals|device-key|replay`です。
+  eguiプロファイル設定からもログイン可能です。
+- 送信: リザルト確定時に譜面時間を`result.duration_ms`へ含め、
+  `ir_score_jobs`へenqueue (send_policy判定込み) →
+  リザルト画面で即時送信 + アプリ常駐ワーカー (30秒間隔)が残りを処理します。
+  結果画面・常駐ワーカーは1バッチ20件、job間3.1秒待ちで送信します。CLIの
+  `ir sync` / local backfillは手動検証を速くするため100件 / 200msを使います。
+  バッチ取得時に対象jobをまとめて`sending`としてclaimし、リザルト送信と
+  常駐ワーカーが並行しても同じjobを二重送信しません。
+  CLIの`ir sync` / `ir upload-local --sync`は中断時に未処理jobを一括で
+  `sending`に残さないよう1件ずつclaimし、`[N/100]`の進捗を逐次表示します。
+  Ctrl+C時に残る`sending`は処理中の最大1件で、5分後に再取得されます。
+  リトライは1分 → 5分 → 30分 → 2時間 → 以降24時間です。
+  429が`Retry-After`を返した場合は通常のバックオフより優先してその時刻まで待ちます。
+  score成功履歴の保存と`kind=replay` jobの投入は同じtransactionで確定します。
+  replay upload / verifyの失敗はreplay jobだけを再試行し、成功済みscoreを
+  未送信状態へ戻しません。
+  成功済みjobはpayloadを空にし、同期後に30日以内または最新500件だけを
+  `network.db`に保持します。未送信 / 失敗 / 送信中jobは剪定対象外です。成功判定と
+  remote score IDの紐付けはjob/logの保持期間から独立した成功台帳にも保存し、
+  pruning後もupload-localの既送信判定とdownload-scoresの既存履歴リンクに使います。
+  成功台帳は成功時に元のrequest payload、chart hash、LN policyも同一transactionで保存します。
+  成功履歴ごとに元request body分の容量を台帳で保持する一方、job本体の保持期間は従来どおりにします。
+  snapshotをjob pruning後の安全な`--resend`に使います。元payloadが消去済みの旧成功履歴は本文を
+  再構築せず再送不可として数え、CLIは非ゼロで終了します。IR cleanupではsnapshotも台帳と
+  同じtransactionで削除します。
+  migrationは残っている成功submissionから台帳を作るが、過去にpruning済みの
+  submissionにしかなかったremote ID / 紐付けは復元できません。
+- local backfill: `bmz ir upload-local [--dry-run] [--limit N] [--sync] [--all]`で
+  `score.db`の既存`score_history`を`local_backfill` sourceのscore submitとしてenqueue
+  します。既送信履歴と既にqueueにある履歴は既定でスキップします。`download-scores`で
+  同じprovider/accountから取得済みのscoreも、IR上に既存scoreがあるため候補から除外し、
+  `--resend`でも再投入しません。別providerまたは別accountへの送信は引き続き候補になります。
+  downloaded source markerはBMZ IR / BMS-IR共通の`bmz_ir`で、providerとaccountも照合します。
   値を解釈できない履歴や、譜面情報・replayファイルを読めない履歴はその行だけを飛ばし、
-  `invalid` として件数と理由を出力する。他の履歴の投入は続け、1件以上あればCLIは最後に
-  非ゼロで終了する。`--all` では同じ実行内で失敗した行を再走査しない。
-  course stage / autoplay は既定で除外。local backfill は未登録 chart を作成できるが、既存 chart
-  の正規メタデータは上書きしない。`--sync` で既存の未完了score jobがある場合は、
-  queueを増やさず先に最大100件を同期する。投入 batch の既定値は200件。
-  `--sync` の同期で送信に失敗したjobが残った場合や、他プロセスの `sending` jobだけが残って
-  進捗できない場合は、`--all` と同じく非ゼロで終了する（失敗jobはqueueに残る）。
-  `--all` は `--sync` を含む完走モードで、既存queueの排出と次の投入batchを候補が
-  なくなるまで繰り返す。履歴は `(played_at, id)` 順に512行ずつ読み、次の投入batchは
-  前のbatchが止まった行の次から読む（同じ実行内で全履歴を読み直さない）。
-  dry-run（GUIの件数見積もりを含む）は譜面の解析情報を読まず、replayはhashせず存在だけを確かめる。
-  1回の実行で各jobは最大1回だけ送る。実行開始前から残る `failed` job は
-  retry/backoffを無視して1回再送し、実行中に失敗したjobは取り直さない。送信に失敗したjobは
-  queueに残したまま次のjobへ進み、全件を処理した後に失敗件数を報告して非ゼロで終了する。
-  失敗jobは常駐workerのbackoffに従う再試行、送信キューからの再送、次回の `--all` で再び送られる。
-  次の場合は途中で打ち切って非ゼロで終了する。
-  - 401/403・未ログイン・provider設定の不備: 以降のjobも失敗するため即座に止める。
-  - 429: サーバーの送信制限に従い即座に止める。
+  `invalid`として件数と理由を出力します。他の履歴の投入は続け、1件以上あればCLIは最後に
+  非ゼロで終了します。`--all`では同じ実行内で失敗した行を再走査しません。
+  course stage / autoplayは既定で除外します。local backfillは未登録chartを作成できるが、既存chart
+  の正規メタデータは上書きしません。`--sync`で既存の未完了score jobがある場合は、
+  queueを増やさず先に最大100件を同期します。投入batchの既定値は200件です。
+  `--sync`の同期で送信に失敗したjobが残った場合や、他プロセスの`sending` jobだけが残って
+  進捗できない場合は、`--all`と同じく非ゼロで終了します（失敗jobはqueueに残る）。
+  `--all`は`--sync`を含む完走モードで、既存queueの排出と次の投入batchを候補が
+  なくなるまで繰り返します。履歴は`(played_at, id)`順に512行ずつ読み、次の投入batchは
+  前のbatchが止まった行の次から読みます（同じ実行内で全履歴を読み直さない）。
+  dry-run（GUIの件数見積もりを含む）は譜面の解析情報を読まず、replayはhashせず存在だけを確かめます。
+  1回の実行で各jobは最大1回だけ送ります。実行開始前から残る`failed` jobは
+  retry/backoffを無視して1回再送し、実行中に失敗したjobは取り直しません。送信に失敗したjobは
+  queueに残したまま次のjobへ進み、全件を処理した後に失敗件数を報告して非ゼロで終了します。
+  失敗jobは常駐workerのbackoffに従う再試行、送信キューからの再送、次回の`--all`で再び送られます。
+  次の場合は途中で打ち切って非ゼロで終了します。
+  - 401/403・未ログイン・provider設定の不備: 以降のjobも失敗するため即座に止めます。
+  - 429: サーバーの送信制限に従い即座に止めます。
   - それ以外の失敗（4xxの内容エラー、5xx、通信エラー）が10件続いた場合
-    （`IR_MANUAL_CONSECUTIVE_FAILURE_LIMIT`）。サーバー障害中に全jobのbackoffを
-    伸ばさないためで、成功が1件あれば数え直す。
-  他プロセスの `sending` job だけが残って進捗できない場合も非ゼロで終了し、5分のlease後に再実行する。
-  `--resend` は失敗済みjob・成功snapshotを同じidempotency keyとrequest payloadで再queueする。
-  再queueしたjobは試行回数を0に戻し、次に失敗したときのbackoffを初回（1分）から数え直す。
-  既存pending jobと有効なsending leaseは変更せず、`enqueued` は実際に再queueした件数を示す。
-  `--all --resend` は1回の実行内で各履歴を最大1回だけ処理する。`--dry-run --resend` は
-  状態を書き換えず、元payloadが不足して再送できない履歴も別カウンターで報告する。
-  送信直前にdevice keyで署名し、サーバー側では `signed_backfill` として保存する。
+    （`IR_MANUAL_CONSECUTIVE_FAILURE_LIMIT`）です。サーバー障害中に全jobのbackoffを
+    伸ばさないためで、成功が1件あれば数え直します。
+  他プロセスの`sending` jobだけが残って進捗できない場合も非ゼロで終了し、5分のlease後に再実行します。
+  `--resend`は失敗済みjob・成功snapshotを同じidempotency keyとrequest payloadで再queueします。
+  再queueしたjobは試行回数を0に戻し、次に失敗したときのbackoffを初回（1分）から数え直します。
+  既存pending jobと有効なsending leaseは変更せず、`enqueued`は実際に再queueした件数を示します。
+  `--all --resend`は1回の実行内で各履歴を最大1回だけ処理します。`--dry-run --resend`は
+  状態を書き換えず、元payloadが不足して再送できない履歴も別カウンターで報告します。
+  送信直前にdevice keyで署名し、サーバー側では`signed_backfill`として保存します。
   `source_kind`、1P/2Pの配置、実際に適用したDPオプションも送信し、ランキング用の
-  `double_option` バケットとは分けて個別スコアの履歴に保持する。
-  upload-local の同期対象と進捗件数は指定provider/accountのscore jobだけに限る。
-  `--include-replay` はscore payloadにreplay upload intentを付け、score成功後にreplay jobを作る。
-  replay jobの実送信はupload-localでは行わず、通常のworkerまたは `ir sync` が処理する。
-  local backfill の `pass_notes` は保存済み判定数から生成し、`empty_poor` は実ノーツ判定数に
-  含めない。Failed スコアでは未処理ノーツ分を `min_bp` / `min_cb` に含めた状態で送るため、
-  download-scores は同じ `pass_notes` からローカル履歴を復元できる。旧backfillで
-  `pass_notes == notes` のまま送信したFailedスコアは、BP/CBの増分が同じ正数で、そこから
-  推定した処理済み数が判定数と一致する場合だけ復元する。不一致の履歴は取り込まずエラーにする。
-  既に送信済みで署名のないscoreは `bmz ir attest-submitted --all` で、ローカルの
-  成功履歴に残るremote score IDへ後付けattestationを送る。attestationはscore本文を
-  再送せず、所有者のdevice keyでscore IDを署名してverificationだけを更新する。
-  現行DBでは成功台帳がjob/logのpruning後もremote score IDを保持する。成功台帳の追加前に
-  jobをpruningしてremote score IDが失われた旧DBの履歴は復元できず、そのscoreは対象外。
-  その場合は将来のserver側一括 attestation APIが必要になる。
-  同じユーザー・`idempotency_key`・同じプレイ内容の再送は、保存済みscoreを副作用なしで成功として返す。
-  同じkeyで譜面・ルール・成績などが異なる場合は409 Conflictを返す。
+  `double_option`バケットとは分けて個別スコアの履歴に保持します。
+  upload-localの同期対象と進捗件数は指定provider/accountのscore jobだけに限ります。
+  `--include-replay`はscore payloadにreplay upload intentを付け、score成功後にreplay jobを作ります。
+  replay jobの実送信はupload-localでは行わず、通常のworkerまたは`ir sync`が処理します。
+  local backfillの`pass_notes`は保存済み判定数から生成し、`empty_poor`は実ノーツ判定数に
+  含めません。Failedスコアでは未処理ノーツ分を`min_bp` / `min_cb`に含めた状態で送るため、
+  download-scoresは同じ`pass_notes`からローカル履歴を復元できます。旧backfillで
+  `pass_notes == notes`のまま送信したFailedスコアは、BP/CBの増分が同じ正数で、そこから
+  推定した処理済み数が判定数と一致する場合だけ復元します。不一致の履歴は取り込まずエラーにします。
+  既に送信済みで署名のないscoreは`bmz ir attest-submitted --all`で、ローカルの
+  成功履歴に残るremote score IDへ後付けattestationを送ります。attestationはscore本文を
+  再送せず、所有者のdevice keyでscore IDを署名してverificationだけを更新します。
+  現行DBでは成功台帳がjob/logのpruning後もremote score IDを保持します。成功台帳の追加前に
+  jobをpruningしてremote score IDが失われた旧DBの履歴は復元できず、そのscoreは対象外です。
+  その場合は将来のserver側一括attestation APIが必要になります。
+  同じユーザー・`idempotency_key`・同じプレイ内容の再送は、保存済みscoreを副作用なしで成功として返します。
+  同じkeyで譜面・ルール・成績などが異なる場合は409 Conflictを返します。
   これは廃止済みのevidence形式でqueueに残ったjobを回復するためで、初回送信の署名・
-  データ検証も行う。
-  per-history ghost は現在の `score_history` には保持していないため送らない。
+  データ検証も行います。
+  per-history ghostは現在の`score_history`には保持していないため送りません。
 - download scores: 自分の送信したscoreは新規履歴として取り込まず、既存のローカル履歴へ
-  `bmz_ir` sourceを紐付ける。照合は成功台帳のremote score IDを優先し、引けない場合は
-  `GET /api/v1/me/scores` が返す投稿時の `idempotency_key` を、成功台帳・未完了jobの
-  `submission_key`、local backfillの `score_history_ir_identity` の順に照合する。応答を失った送信、
-  score IDの無い応答、送信中のjob、台帳追加前にpruningされた履歴も重複取り込みしない。
-  keyで引いた履歴は譜面hashが一致する場合だけ紐付ける。keyを返さないproviderでは従来どおり
-  remote score IDだけで照合する。
-- download scores: `bmz ir download-scores` は各行の取り込み失敗数を集計してから出力し、
-  1件以上あれば通常実行・dry-runとも非ゼロで終了する。通常実行ではほかの有効な行を保存し、
-  再実行時に重複登録しない。dry-runでは保存しない。途中のページの取得に失敗した場合も、
-  それまでのページで保存した件数を出力してから非ゼロで終了する。
-  無効化したproviderからは取得しない。認証情報のaccountが設定の `account_id` と異なる場合も
-  取得しない（取り込み元の記録とupload-localの送り返し除外を同じaccountで照合するため）。
-- ゲーム内の手動IR操作: 設定 → IR の「スコアの一括操作」と、その下の「IR送信キュー」
-  ウィンドウ。処理は CLI と共通の `ir::manual`（`upload_local_batch` / `upload_local_all` /
-  `sync_jobs` / `download_scores` / `resend_job` / `resend_failed_jobs`）で、CLI は進捗通知を
-  従来の出力へ変換するだけにしている。
-  - 対象は primary provider のみ。ローカルスコアの一括送信は BMZ IR のみ（BMS-IR / rianIR は
-    非対応）、スコア取得は rianIR を除く。未ログインやアカウント未確定の間はボタンを無効にする。
-  - 「ローカルスコアを一括送信」は `ir upload-local --all` 相当の完走モードで、
-    `include_replay` と `include_course_stages` は CLI 既定値（どちらも false）。
-    確認モーダルを開くと、dry-run 相当で候補件数を数え（送信待ちの既存 job も加える）、
-    `件数 × IR_CLI_SYNC_JOB_SPACING_MS` を最短時間の目安として表示する。
-    失敗jobの扱いと打ち切り条件は `--all` と同じ。lease待ちから再開しても同じ実行開始時刻を使い、
-    その実行で失敗したjobは再送しない。失敗が残った完了・連続失敗・認証エラー・送信制限は
-    それぞれ別のトーストで通知する。
-  - 「IRからスコアを取得」は `ir download-scores` 相当で、CLI の既定上限（200 件）を付けず全件を対象にする。
-    既に取り込んだ score は除外されるため、中断後の再実行は続きから進む。GUIでは新規scoreが
-    保存された場合、完了・中断・エラーの通知時にSelect一覧、フォルダsummary、player statsを更新する。
-    既存履歴へのリンクだけで新規保存がない場合は更新しない。取得結果には取り込み・紐付け・失敗件数を
-    表示し、部分失敗は通常完了と区別する。
-  - 送信は `IR_CLI_SYNC_BATCH_LIMIT`（100）件ずつ、job 間 `IR_CLI_SYNC_JOB_SPACING_MS`（200ms）。
-    中断は job 間・batch 間・送信間隔の sleep 中に確認し、処理中の 1 件は完了させてから止まる。
-  - 書き込み系の操作は同時に 1 つ。要求ごとの世代番号で、古い結果・進捗・一覧読み込みは破棄する。
-    専用スレッドの current-thread runtime で動き、設定ウィンドウを閉じても継続する。
-    完了・失敗・中断はトーストで通知する。
-  - 実行中は常駐ワーカーを一時停止し、終了・失敗・中断のいずれでも再開する。
-  - 他のプロセスや停止前に claim 済みの job が `sending` で進捗できない場合は、15 秒間隔で
-    再試行する。進捗なしのまま 6 分（lease 5 分 + 余裕）続くと停止して報告する。待機中も中断できる。
-    失敗 job があった場合は待たずに停止する。
-  - 実行中は profile 切替を開始できない（UI も無効）。アプリ終了時は中断を要求して処理中の
-    1 件を最大 3 秒待つ。待ち切れなかった job は `sending` のまま残り、5 分の lease 後に再取得される。
-  - 送信キュー画面は `list_ir_score_jobs` / `ir_score_job_status_counts` で読み、status 別件数、
-    status フィルタ（既定: 失敗）、1 ページ 50 件のページングを持つ。並びは failed → sending →
-    pending → succeeded、次に更新日時の新しい順。DB 読み込みは別スレッドで行い、UI スレッドでは開かない。
-    一覧は操作の完了後に自動で再読み込みする。
-  - 再送（個別・失敗分一括）は状態を直接書き換えず、通常の送信と同じ claim 経由で、
-    再試行待ち時刻（backoff）を無視して送る。`Immediate` トランザクション内で `sending` へ更新するため、
-    常駐ワーカーや他プロセスが送信中の job は二重に送らず、「送信中のため送らなかった」件数として数える。
-    失敗分の一括再送は開始時点の failed 一覧を対象に固定する。
-  - Decide / Play 中は IR 設定と同様に操作できない。
-- import cleanup: `bmz ir cleanup-imported` は、Beatoraja 行と譜面 hash、プレイ日時、
-  EX、全判定内訳、BP、CB、max combo、random seed が一致する旧 `source_kind=Local`
-  履歴を dry-run で表示する。`--apply` は選択した provider/account の明示的な
-  `local_backfill` score だけを server 側で削除して affected `best_scores` を残存 history
-  から再構築する。ローカル重複に対応する通常プレイまたは旧形式の IR score は保持し、
-  次にローカルの IR job/submission 台帳を削除してから `score.db` の履歴、`score_best`、
-  `player_stats` を再集計する。別 IR account への送信済み候補がある場合は、ローカル削除を止める。
-- exact duplicate cleanup: `bmz ir cleanup-duplicate <HISTORY_ID> --apply` は、同じ source kind 内で
-  譜面 hash、プレイ日時、EX、全判定内訳、BP、CB、max combo、random seed が一致する履歴が
-  ちょうど1件だけあることを再確認してから、指定 history を削除する。対応する
-  `local_backfill` IR score、network job/submission、ローカル集計も同じ順序で整理する。
-- rate limit: score submit / course score は 15 分あたり user 6000 / IP 12000。
-  replay upload 系は 1 replay あたり upload-url / upload / verify の 3 request を使うため、
-  15 分あたり user 900 / IP 1800。429 では `Retry-After` を返す。
-  backfill cleanup は 19 score / request、15 分あたり user 6000 / IP 12000 で、client は
-  batch 間を 200ms 空ける。
-- ランキング表示: Result / Select スキンの `NUMBER_IR_RANK(179)` /
+  `bmz_ir` sourceを紐付けます。照合は成功台帳のremote score IDを優先し、引けない場合は
+  `GET /api/v1/me/scores`が返す投稿時の`idempotency_key`を、成功台帳・未完了jobの
+  `submission_key`、local backfillの`score_history_ir_identity`の順に照合します。応答を失った送信、
+  score IDの無い応答、送信中のjob、台帳追加前にpruningされた履歴も重複取り込みしません。
+  keyで引いた履歴は譜面hashが一致する場合だけ紐付けます。keyを返さないproviderでは従来どおり
+  remote score IDだけで照合します。
+- download scores: `bmz ir download-scores`は各行の取り込み失敗数を集計してから出力し、
+  1件以上あれば通常実行・dry-runとも非ゼロで終了します。通常実行ではほかの有効な行を保存し、
+  再実行時に重複登録しません。dry-runでは保存しません。途中のページの取得に失敗した場合も、
+  それまでのページで保存した件数を出力してから非ゼロで終了します。
+  無効化したproviderからは取得しません。認証情報のaccountが設定の`account_id`と異なる場合も
+  取得しません（取り込み元の記録とupload-localの送り返し除外を同じaccountで照合するため）。
+- ゲーム内の手動IR操作: 設定 → IRの「スコアの一括操作」と、その下の「IR送信キュー」
+  ウィンドウです。処理はCLIと共通の`ir::manual`（`upload_local_batch` / `upload_local_all` /
+  `sync_jobs` / `download_scores` / `resend_job` / `resend_failed_jobs`）で、CLIは進捗通知を
+  従来の出力へ変換するだけにしています。
+  - 対象はprimary providerのみです。ローカルスコアの一括送信はBMZ IRのみ（BMS-IR / rianIRは
+    非対応）、スコア取得はrianIRを除きます。未ログインやアカウント未確定の間はボタンを無効にします。
+  - 「ローカルスコアを一括送信」は`ir upload-local --all`相当の完走モードで、
+    `include_replay`と`include_course_stages`はCLI既定値（どちらもfalse）です。
+    確認モーダルを開くと、dry-run相当で候補件数を数え（送信待ちの既存jobも加える）、
+    `件数 × IR_CLI_SYNC_JOB_SPACING_MS`を最短時間の目安として表示します。
+    失敗jobの扱いと打ち切り条件は`--all`と同じです。lease待ちから再開しても同じ実行開始時刻を使い、
+    その実行で失敗したjobは再送しません。失敗が残った完了・連続失敗・認証エラー・送信制限は
+    それぞれ別のトーストで通知します。
+  - 「IRからスコアを取得」は`ir download-scores`相当で、CLIの既定上限（200件）を付けず全件を対象にします。
+    既に取り込んだscoreは除外されるため、中断後の再実行は続きから進みます。GUIでは新規scoreが
+    保存された場合、完了・中断・エラーの通知時にSelect一覧、フォルダsummary、player statsを更新します。
+    既存履歴へのリンクだけで新規保存がない場合は更新しません。取得結果には取り込み・紐付け・失敗件数を
+    表示し、部分失敗は通常完了と区別します。
+  - 送信は`IR_CLI_SYNC_BATCH_LIMIT`（100）件ずつ、job間`IR_CLI_SYNC_JOB_SPACING_MS`（200ms）です。
+    中断はjob間・batch間・送信間隔のsleep中に確認し、処理中の1件は完了させてから止まります。
+  - 書き込み系の操作は同時に1つだけ実行します。要求ごとの世代番号で、古い結果・進捗・一覧読み込みは破棄します。
+    専用スレッドのcurrent-thread runtimeで動き、設定ウィンドウを閉じても継続します。
+    完了・失敗・中断はトーストで通知します。
+  - 実行中は常駐ワーカーを一時停止し、終了・失敗・中断のいずれでも再開します。
+  - 他のプロセスや停止前にclaim済みのjobが`sending`で進捗できない場合は、15秒間隔で
+    再試行します。進捗なしのまま6分（lease 5分 + 余裕）続くと停止して報告します。待機中も中断できます。
+    失敗jobがあった場合は待たずに停止します。
+  - 実行中はprofile切替を開始できません（UIも無効）。アプリ終了時は中断を要求して処理中の
+    1件を最大3秒待ちます。待ち切れなかったjobは`sending`のまま残り、5分のlease後に再取得されます。
+  - 送信キュー画面は`list_ir_score_jobs` / `ir_score_job_status_counts`で読み、status別件数、
+    statusフィルタ（既定: 失敗）、1ページ50件のページングを持ちます。並びはfailed → sending →
+    pending → succeeded、次に更新日時の新しい順です。DB読み込みは別スレッドで行い、UIスレッドでは開きません。
+    一覧は操作の完了後に自動で再読み込みします。
+  - 再送（個別・失敗分一括）は状態を直接書き換えず、通常の送信と同じclaim経由で、
+    再試行待ち時刻（backoff）を無視して送ります。`Immediate`トランザクション内で`sending`へ更新するため、
+    常駐ワーカーや他プロセスが送信中のjobは二重に送らず、「送信中のため送らなかった」件数として数えます。
+    失敗分の一括再送は開始時点のfailed一覧を対象に固定します。
+  - 決定画面・プレイ画面では、IR設定と同様に操作できません。
+- import cleanup: `bmz ir cleanup-imported`は、Beatoraja行と譜面hash、プレイ日時、
+  EX、全判定内訳、BP、CB、max combo、random seedが一致する旧`source_kind=Local`
+  履歴をdry-runで表示します。`--apply`は選択したprovider/accountの明示的な
+  `local_backfill` scoreだけをserver側で削除してaffected `best_scores`を残存history
+  から再構築します。ローカル重複に対応する通常プレイまたは旧形式のIR scoreは保持し、
+  次にローカルのIR job/submission台帳を削除してから`score.db`の履歴、`score_best`、
+  `player_stats`を再集計します。別IR accountへの送信済み候補がある場合は、ローカル削除を止めます。
+- exact duplicate cleanup: `bmz ir cleanup-duplicate <HISTORY_ID> --apply`は、同じsource kind内で
+  譜面hash、プレイ日時、EX、全判定内訳、BP、CB、max combo、random seedが一致する履歴が
+  ちょうど1件だけあることを再確認してから、指定historyを削除します。対応する
+  `local_backfill` IR score、network job/submission、ローカル集計も同じ順序で整理します。
+- rate limit: score submit / course scoreは15分あたりuser 6000 / IP 12000です。
+  replay upload系は1 replayあたりupload-url / upload / verifyの3 requestを使うため、
+  15分あたりuser 900 / IP 1800です。429では`Retry-After`を返します。
+  backfill cleanupは19 score / request、15分あたりuser 6000 / IP 12000で、clientは
+  batch間を200ms空けます。
+- ランキング表示: Result / Selectスキンの`NUMBER_IR_RANK(179)` /
   `NUMBER_IR_TOTALPLAYER(180/200)` / `NUMBER_IR_CLEARRATE(181)` /
   `OPTION_IR_LOADING/LOADED/NOPLAYER/FAILED(601..604)`
-  （LR2 CSVのSelect / Decideでは600..608を単一の状態として排他的に評価。
+  （LR2 CSVのSelect / Decideでは600..608を単一の状態として排他的に評価します。
   [スキン仕様](skin.md)の600..608を参照）、
-  Select の `STRING_RIVAL(1)` / `NUMBER_RIVAL_SCORE(271)` /
+  Selectの`STRING_RIVAL(1)` / `NUMBER_RIVAL_SCORE(271)` /
   `NUMBER_RIVAL_MAXCOMBO(275)` / `NUMBER_RIVAL_MISSCOUNT(276)` /
-  `OPTION_(NOT_)COMPARE_RIVAL(624/625)`。egui のリザルトオーバーレイもあり。
-- ターゲット: `TARGET: RIVAL` (TargetOption::Rival) が選曲時の IR ライバル
-  ベスト EX をプレイ中ゴースト / リザルト差分に使う。
-- ライバル: `ir rivals` 実行時に `profile.rival.entries` (source=Ir) へ同期。
-- Web: ユーザーページからライバルを登録・解除し、`/rivals` で逆ライバル一覧と
-  `chart_sha256 + ln_policy + double_option + rule_mode + scoring` 単位の EX/BP 比較を表示。
-  譜面ランキングは全体と「自分＋ライバル」を切り替えられる。
-- リプレイ: 送信 payload に hash 申告 → 送信成功後に自動アップロード + 検証。
-  `bmz ir replay <SCORE_ID>` でダウンロードし
-  `bmz --boot-replay-file <PATH>` で再生。
-- provider key: BMZ クライアントは `/api/v1/auth/login` /
-  `/api/v1/auth/refresh` が返す `provider_key` を credentials / device key /
-  `ir_score_jobs.provider` / `primary_provider` の識別子として使う。
-  `IrProviderConfig.provider` は表示名または実装種別として残す。
-  `primary_provider` が明示されている場合、ランキング取得・表示はそのproviderだけを使い、
-  無効・未設定でも別providerへフォールバックしない。空の旧設定だけは先頭の有効providerを使う。
-  submit-only providerはスコアを送信するが、送信応答へのランキング同梱を要求しない。
+  `OPTION_(NOT_)COMPARE_RIVAL(624/625)`です。eguiのリザルトオーバーレイもありです。
+- ターゲット: `TARGET: RIVAL` (TargetOption::Rival)が選曲時のIRライバル
+  ベストEXをプレイ中ゴースト / リザルト差分に使います。
+- ライバル: `ir rivals`実行時に`profile.rival.entries` (source=Ir)へ同期します。
+- Web: ユーザーページからライバルを登録・解除し、`/rivals`で逆ライバル一覧と
+  `chart_sha256 + ln_policy + double_option + rule_mode + scoring`単位のEX/BP比較を表示します。
+  譜面ランキングは全体と「自分＋ライバル」を切り替えられます。
+- リプレイ: 送信payloadにhash申告 → 送信成功後に自動アップロード + 検証です。
+  `bmz ir replay <SCORE_ID>`でダウンロードし
+  `bmz --boot-replay-file <PATH>`で再生します。
+- provider key: BMZクライアントは`/api/v1/auth/login` /
+  `/api/v1/auth/refresh`が返す`provider_key`をcredentials / device key /
+  `ir_score_jobs.provider` / `primary_provider`の識別子として使います。
+  `IrProviderConfig.provider`は表示名または実装種別として残します。
+  `primary_provider`が明示されている場合、ランキング取得・表示はそのproviderだけを使い、
+  無効・未設定でも別providerへフォールバックしません。空の旧設定だけは先頭の有効providerを使います。
+  submit-only providerはスコアを送信するが、送信応答へのランキング同梱を要求しません。
   ResultのランキングAPI取得はprimaryの今回分の送信完了後に開始し、secondary providerや
-  backlogの送信完了を待たない。primary jobを別の同期taskがclaim済みの場合も、そのjobだけを待つ。
-  eguiのResultオーバーレイは、送信対象なし・成功・失敗をprovider別に表示する。
-- BMS-IR: `https://www.bms-ir.org` を3番目の固定 provider として保持する。
-  既定は無効で、BMS-IR の数値 ID と LR2 game token を credential store に保存する。
-  ログイン後は primary provider に選択でき、既存の durable queue から単曲・終端
-  course/Dan scoreを送る。ランキング、登録ライバルとbest同期、BMS-IR難易度表、
-  server→localの自己スコア同期をprovider別cacheで扱う。ライバル追加・解除はWebで行う。
-  BMS/PMS は MD5、BMSON は BMS-IR 互換 SHA hash で照合し、Beatoraja/LR2oraja rule、
-  実効LN/CN/HCN、Off/Flip/Battle/Battle ASの4/5/6/7/8/9/10/14/24/48Kを送信対象にする。
-  BattleとBattle ASは別bucket、G-BATTLEは通常bucketを使う。DX、full autoplay、
-  replay再生、Practice、実効assist、replay file送受信、local backfillは対象外である。
-  コース中の単曲スコアは `course_stage=true` を付け、保存時と同じ
-  NoPlay/FullCombo/Perfect/Maxへの丸めを行ったlampだけを送る。数値score・judgeは
-  単曲結果を維持する。終端course/Dan scoreは別jobとして送る。
-  4/6/8Kもクライアント固有枠ではなくBMS-IRの正規キーモードとして送る。
-  ローカル統合確認用のビルドだけは、`BMZ_BMS_IR_BASE_URL` を `cargo build` 時に
-  指定すると固定 endpoint を差し替えられる。通常ビルドでは production URL 固定で、
-  profile 設定から game token の送信先を変更することはできない。
-- random seed: 新規プレイは beatoraja と同じ side 別 24 bit seed を使い、SP は P1、
-  DP は `P1 + P2 * 2^24` を `play_options.seed` / `random_seed` に10進文字列で送る。
-  `seed_scheme=beatoraja_24bit_v1` と BMS `#RANDOM` の選択列を別 metadata として保持する。
-  F-RANDOM / MF-RANDOM を含む option の送信可否・外部IDへの対応は共通層で拒否せず、
-  将来の `IrProvider` capability とユーザー設定で決める。
+  backlogの送信完了を待ちません。primary jobを別の同期taskがclaim済みの場合も、そのjobだけを待ちます。
+  eguiのResultオーバーレイは、送信対象なし・成功・失敗をprovider別に表示します。
+- BMS-IR: `https://www.bms-ir.org`を3番目の固定providerとして保持します。
+  既定は無効で、BMS-IRの数値IDとLR2 game tokenをcredential storeに保存します。
+  ログイン後はprimary providerに選択でき、既存のdurable queueから単曲・終端
+  course/Dan scoreを送ります。ランキング、登録ライバルとbest同期、BMS-IR難易度表、
+  server→localの自己スコア同期をprovider別cacheで扱います。ライバル追加・解除はWebで行います。
+  BMS/PMSはMD5、BMSONはBMS-IR互換SHA hashで照合し、Beatoraja/LR2oraja rule、
+  実効LN/CN/HCN、Off/Flip/Battle/Battle ASの4/5/6/7/8/9/10/14/24/48Kを送信対象にします。
+  BattleとBattle ASは別bucket、G-BATTLEは通常bucketを使います。DX、full autoplay、
+  replay再生、Practice、実効assist、replay file送受信、local backfillは対象外です。
+  コース中の単曲スコアは`course_stage=true`を付け、保存時と同じ
+  NoPlay/FullCombo/Perfect/Maxへの丸めを行ったlampだけを送ります。数値score・judgeは
+  単曲結果を維持します。終端course/Dan scoreは別jobとして送ります。
+  4/6/8Kもクライアント固有枠ではなくBMS-IRの正規キーモードとして送ります。
+  ローカル統合確認用のビルドだけは、`BMZ_BMS_IR_BASE_URL`を`cargo build`時に
+  指定すると固定endpointを差し替えられます。通常ビルドではproduction URL固定で、
+  profile設定からgame tokenの送信先を変更することはできません。
+- random seed: 新規プレイはbeatorajaと同じside別24 bit seedを使い、SPはP1、
+  DPは`P1 + P2 * 2^24`を`play_options.seed` / `random_seed`に10進文字列で送ります。
+  `seed_scheme=beatoraja_24bit_v1`とBMS `#RANDOM`の選択列を別metadataとして保持します。
+  F-RANDOM / MF-RANDOMを含むoptionの送信可否・外部IDへの対応は共通層で拒否せず、
+  将来の`IrProvider` capabilityとユーザー設定で決めます。
 
 ### 設計からの主な差分
 
-1. **認証**: OAuth/OIDC device flow ではなくローカル email+password
-   (`/api/v1/auth/login`, `nuxt-auth-utils` session + bearer token) を採用。
-   device flow は将来課題。
-2. **秘密情報の保存先**: `profile.toml` の `[ir] credential_store = "File" | "Os"`。
-   既定は File (プロファイル配下 0600 JSON)。開発時の Keychain 許可ダイアログを
-   避けるためで、`"Os"` にすると keyring 経由で OS credential store に保存し、
-   既存ファイルは初回アクセスで自動移行する。
-   Linux ビルドは Secret Service 用に libdbus が必要。
-3. **provider 設定**: `IrProviderConfig` に `base_url` と `provider_key` を追加。
-   `providers[0]` は BMZ IR、`providers[1]` は rianIR、`providers[2]` は BMS-IR の
-   固定枠とし、無効時も profile に保持する。4枠目以降は BMZ / rianIR 互換プロトコルを選ぶ
-   カスタム URL 用とする。
-   `provider_key` はクライアント側で URL から推測せず、BMZ IR サーバーの
-   auth response から取得する。ローカル IR は `bmz-dev`、production IR は
-   `bmz` を返す。サーバー側は `NUXT_IR_PROVIDER_KEY` で明示上書き可能。
-4. **verification**: DB は `unverified / signed_backfill / verified_play` の 3 値。
-   `replay_uploaded / verified` はスコアの verification ではなく
+1. **認証**: OAuth/OIDC device flowではなくローカルemail+password
+   (`/api/v1/auth/login`, `nuxt-auth-utils` session + bearer token)を採用します。
+   device flowは将来課題です。
+2. **秘密情報の保存先**: `profile.toml`の`[ir] credential_store = "File" | "Os"`です。
+   既定はFile (プロファイル配下0600 JSON)です。開発時のKeychain許可ダイアログを
+   避けるためで、`"Os"`にするとkeyring経由でOS credential storeに保存し、
+   既存ファイルは初回アクセスで自動移行します。
+   LinuxビルドはSecret Service用にlibdbusが必要です。
+3. **provider設定**: `IrProviderConfig`に`base_url`と`provider_key`を追加します。
+   `providers[0]`はBMZ IR、`providers[1]`はrianIR、`providers[2]`はBMS-IRの
+   固定枠とし、無効時もprofileに保持します。4枠目以降はBMZ / rianIR互換プロトコルを選ぶ
+   カスタムURL用とします。
+   `provider_key`はクライアント側でURLから推測せず、BMZ IRサーバーの
+   auth responseから取得します。ローカルIRは`bmz-dev`、production IRは
+   `bmz`を返します。サーバー側は`NUXT_IR_PROVIDER_KEY`で明示上書き可能です。
+4. **verification**: DBは`unverified / signed_backfill / verified_play`の3値です。
+   `replay_uploaded / verified`はスコアのverificationではなく
    `replay_objects.status` (`metadata_only / pending_upload / uploaded /
-   verified / rejected`) で管理する。不正な署名はscore submitを400で拒否する。
-5. **tamper evidence**: canonical form は「top-level `evidence` を除いた
-   payload を RFC 8785 JSON Canonicalization Scheme (JCS) で compact JSON 化」
-   したもの。署名は Ed25519(secret, SHA256(canonical))。
-   JSON number は ECMAScript `JSON.stringify()` 相当の表現に正規化するため、
-   `160.0` と `160` は同じ canonical bytes になる。
-6. **ranking response**: `pagination.total` (scope 内総数) と
-   `ranking.clear_rate` (%)、score submit の scope ごとの `previous_rank` を返す。
-   `previous_rank` は送信スコアを除いた自己ベストをレスポンス生成時点の
-   全体ランキングへ仮に置いた順位で、初回プレイは `0`。Result skin の
-   `NUMBER_IR_PREVRANK(182)` に反映する。
-7. **played_at**: クライアントは unix 秒で送る。サーバーが ISO へ正規化して
-   timestamptz に保存する。
-8. **gauge 表記**: 保存値・返却値は BMZ の `GaugeType::as_str()` と同じ
+   verified / rejected`)で管理します。不正な署名はscore submitを400で拒否します。
+5. **tamper evidence**: canonical formは「top-level `evidence`を除いた
+   payloadをRFC 8785 JSON Canonicalization Scheme (JCS)でcompact JSON化」
+   したものです。署名はEd25519(secret, SHA256(canonical))です。
+   JSON numberはECMAScript `JSON.stringify()`相当の表現に正規化するため、
+   `160.0`と`160`は同じcanonical bytesになります。
+6. **ranking response**: `pagination.total` (scope内総数)と
+   `ranking.clear_rate` (%)、score submitのscopeごとの`previous_rank`を返します。
+   `previous_rank`は送信スコアを除いた自己ベストをレスポンス生成時点の
+   全体ランキングへ仮に置いた順位で、初回プレイは`0`です。Result skinの
+   `NUMBER_IR_PREVRANK(182)`に反映します。
+7. **played_at**: クライアントはunix秒で送ります。サーバーがISOへ正規化して
+   timestamptzに保存します。
+8. **gauge表記**: 保存値・返却値はBMZの`GaugeType::as_str()`と同じ
    `AssistEasy` / `Easy` / `Normal` / `Hard` / `ExHard` / `Hazard` /
-   `Class` / `ExClass` / `ExHardClass`。API は lowercase や legacy alias も
-   受けるが、DB と response では canonical 値へ正規化する。
-9. **idempotency / retry**: score / course score の重複投稿は既存行を返す。
-   course score の重複時は best を再計算せず `best_updated=false`。
-   ローカル job queue は `sending` のまま 5 分以上止まった job も再送対象にする。
-   refresh token は rotation 方式で、BMZ クライアント側はプロセス内 mutex で
-   refresh を直列化する。サーバー側は直近の `rotated` token 再利用を並行 retry
-   とみなし、新 token を巻き込んだ全 session revoke はしない。
-10. **course score**: 実装済み (本節の API 一覧と §19 の DDL 参照)。
-   コース終了時に `ir_score_jobs` (kind=course) へ enqueue し、
-   evidence schema は `bmz-course-score-evidence-v1`。
-   `around_self` は自分の前後 5 件ずつのウィンドウを返す
-   (未ログイン / 自己スコアなしのときは global と同じ)。
-   **tables の専用実装**は未着手。
+   `Class` / `ExClass` / `ExHardClass`です。APIはlowercaseやlegacy aliasも
+   受けるが、DBとresponseではcanonical値へ正規化します。
+9. **idempotency / retry**: score / course scoreの重複投稿は既存行を返します。
+   course scoreの重複時はbestを再計算せず`best_updated=false`です。
+   ローカルjob queueは`sending`のまま5分以上止まったjobも再送対象にします。
+   refresh tokenはrotation方式で、BMZクライアント側はプロセス内mutexで
+   refreshを直列化します。サーバー側は直近の`rotated` token再利用を並行retry
+   とみなし、新tokenを巻き込んだ全session revokeはしません。
+10. **course score**: 実装済み (本節のAPI一覧と §19のDDL参照)です。
+   コース終了時に`ir_score_jobs` (kind=course)へenqueueし、
+   evidence schemaは`bmz-course-score-evidence-v1`です。
+   `around_self`は自分の前後5件ずつのウィンドウを返す
+   (未ログイン / 自己スコアなしのときはglobalと同じ)です。
+   **tablesの専用実装**は未着手です。
 
 ### 動作確認の手順 (ローカル)
 
@@ -340,36 +340,36 @@ bmz ir ranking <SHA256> --ln-policy ForceLn
 
 ### 前提
 
-- BMZ は新規 BMS プレイヤー。
-- IR は beatoraja IR API 互換そのものではなく、BMZ 内部モデルを中心に設計する。
-- beatoraja の `IRConnection` 的な公開境界は参考にする。
-- 将来 Mocha / MinIR 互換 Provider を追加する可能性がある。
-- BMZ 公式 IR サーバーも作成中だが、現時点では動作確認・reference implementation 寄り。
-- 公式 IR サーバーは Nuxt + NuxtHub DB / Drizzle ORM で実装中。
-- Cloudflare deploy は NuxtHub が生成する wrangler config を使い、D1 binding は
-  `DB`、R2 replay blob binding は `BLOB` とする。
-- リプレイ blob は `hub:blob` 経由で保存し、ローカルは `.data/blob`、Cloudflare
-  build は `NUXT_HUB_BLOB_BUCKET` の R2 bucket を使う。
-- 長期的に BMZ 公式 IR をサポートし続けるかは未確定。
-- BMZ 本体は公式 IR API に密結合しない。
-- 譜面 hash は SHA256 を主キーにする。
-- MD5 は beatoraja 系互換・外部IR連携用に保持する。
-- ランキングの主軸は EX score 固定。
-- LN / CN / HCN は `docs/ln.md` の `LnScorePolicy` に従って区別する。
-- IR の score identity は chart SHA256 単独ではなく、`chart_sha256` / `ln_policy` / `double_option` / `rule_mode` / `scoring` を含む。
-  `gauge` は投稿時のプレイ設定・表示 metadata として保存するが、ランキング分離キーにはしない。
-- replay は将来アップロードする可能性があるため、初期設計から hash / format / status を持たせる。
+- BMZは新規BMSプレイヤーです。
+- IRはbeatoraja IR API互換そのものではなく、BMZ内部モデルを中心に設計します。
+- beatorajaの`IRConnection`的な公開境界は参考にします。
+- 将来Mocha / MinIR互換Providerを追加する可能性があります。
+- BMZ公式IRサーバーも作成中だが、現時点では動作確認・reference implementation寄りです。
+- 公式IRサーバーはNuxt + NuxtHub DB / Drizzle ORMで実装中です。
+- Cloudflare deployはNuxtHubが生成するwrangler configを使い、D1 bindingは
+  `DB`、R2 replay blob bindingは`BLOB`とします。
+- リプレイblobは`hub:blob`経由で保存し、ローカルは`.data/blob`、Cloudflare
+  buildは`NUXT_HUB_BLOB_BUCKET`のR2 bucketを使います。
+- 長期的にBMZ公式IRをサポートし続けるかは未確定です。
+- BMZ本体は公式IR APIに密結合しません。
+- 譜面hashはSHA256を主キーにします。
+- MD5はbeatoraja系互換・外部IR連携用に保持します。
+- ランキングの主軸はEX score固定です。
+- LN / CN / HCNは`docs/ln.md`の`LnScorePolicy`に従って区別します。
+- IRのscore identityはchart SHA256単独ではなく、`chart_sha256` / `ln_policy` / `double_option` / `rule_mode` / `scoring`を含みます。
+  `gauge`は投稿時のプレイ設定・表示metadataとして保存するが、ランキング分離キーにはしません。
+- replayは将来アップロードする可能性があるため、初期設計からhash / format / statusを持たせます。
 
 ### 設計ゴール
 
-- BMZ 内部モデルを中心にして、Provider Adapter で外部IR差分を吸収する。
-- スコア送信とランキング取得がセットになりやすい BMS プレイヤーの UX に合わせる。
-- リザルト画面で全体ランキング / ライバルランキングを切り替え可能にする。
-- スコア送信時にランキングを同時取得するかどうかを設定可能にする。
-- ランキング取得失敗でスコア送信成功まで失敗扱いにしない。
-- replay upload / verification に将来拡張できる。
-- tamper evidence として canonical hash / client signature を入れる。
-- 完全なチート防止ではなく、「提出内容があとから改変されていない」ことを示す仕組みを作る。
+- BMZ内部モデルを中心にして、Provider Adapterで外部IR差分を吸収します。
+- スコア送信とランキング取得がセットになりやすいBMSプレイヤーのUXに合わせます。
+- リザルト画面で全体ランキング / ライバルランキングを切り替え可能にします。
+- スコア送信時にランキングを同時取得するかどうかを設定可能にします。
+- ランキング取得失敗でスコア送信成功まで失敗扱いにしません。
+- replay upload / verificationに将来拡張できます。
+- tamper evidenceとしてcanonical hash / client signatureを入れます。
+- 完全なチート防止ではなく、「提出内容があとから改変されていない」ことを示す仕組みを作ります。
 
 ---
 
@@ -391,11 +391,11 @@ BMZ Core
 
 ### 基本方針
 
-- BMZ 内部では独自の `IrProvider` trait を定義する。
-- 公式IRも外部IRも trait 実装として扱う。
-- スコア送信は有効な全 IR に送る。
-- ランキング取得、ライバル取得、表取得、URL open は Primary IR のみで行う。
-- Secondary IR は原則スコア送信用。
+- BMZ内部では独自の`IrProvider` traitを定義します。
+- 公式IRも外部IRもtrait実装として扱います。
+- スコア送信は有効な全IRに送ります。
+- ランキング取得、ライバル取得、表取得、URL openはPrimary IRのみで行います。
+- Secondary IRは原則スコア送信用です。
 
 ```txt
 全IR:
@@ -416,10 +416,10 @@ Primary IR:
 
 ### 方針
 
-- ブラウザ認証 + token 保存。
-- デスクトップアプリでは OAuth/OIDC の device authorization flow または loopback redirect を使う。
-- BMZ の config には秘密情報を置かない。
-- refresh token は OS credential store に保存する。
+- ブラウザ認証 + token保存です。
+- デスクトップアプリではOAuth/OIDCのdevice authorization flowまたはloopback redirectを使います。
+- BMZのconfigには秘密情報を置きません。
+- refresh tokenはOS credential storeに保存します。
 
 ### OS credential store
 
@@ -428,12 +428,12 @@ Primary IR:
 - macOS: Keychain
 - Windows: Credential Manager
 - Linux: Secret Service / libsecret
-- Rust: `keyring` crate 系を候補にする
+- Rust: `keyring` crate系を候補にする
 
 ### Config に置くもの
 
-IR 関連設定はユーザー / profile 単位の状態なので、BMZ 本体の global
-`config.toml` ではなく `data/profiles/{profile}/profile.toml` に保存する。
+IR関連設定はユーザー / profile単位の状態なので、BMZ本体のglobal
+`config.toml`ではなく`data/profiles/{profile}/profile.toml`に保存します。
 
 ```toml
 [ir]
@@ -476,8 +476,8 @@ send_policy = "complete_song"
 role = "submit_only"
 ```
 
-先頭3件は egui で削除・種別変更できない。追加 provider は4件目以降へ保存し、
-互換プロトコルとカスタム `base_url` をログイン前に設定する。
+先頭3件はeguiで削除・種別変更できません。追加providerは4件目以降へ保存し、
+互換プロトコルとカスタム`base_url`をログイン前に設定します。
 
 保存してよいもの:
 
@@ -575,7 +575,7 @@ pub trait IrProvider: Send + Sync {
 
 ### AuthManager 分離案
 
-Login flow は OS / UI / ブラウザ起動が絡むため、Provider に閉じ込めすぎない。
+Login flowはOS / UI / ブラウザ起動が絡むため、Providerに閉じ込めすぎません。
 
 ```txt
 IrProvider
@@ -595,7 +595,7 @@ IrAuthManager
 
 ## 4. IR 送信ポリシー
 
-beatoraja の三択を踏襲する。
+beatorajaの三択を踏襲します。
 
 ```rust
 pub enum IrSendPolicy {
@@ -620,16 +620,16 @@ UpdateScore:
 
 ### 注意
 
-- 送信ポリシーはクライアント側 UX の制御。
-- 実効アシスト、autoplay、replay、Practice、key mode 変換は送信ポリシーより前に除外する。
-- サーバー側はサーバー側で best 更新判定を行う。
-- クライアントが送ってきたからといって必ず best として採用しない。
+- 送信ポリシーはクライアント側UXの制御です。
+- 実効アシスト、autoplay、replay、Practice、key mode変換は送信ポリシーより前に除外します。
+- サーバー側はサーバー側でbest更新判定を行います。
+- クライアントが送ってきたからといって必ずbestとして採用しません。
 
 ---
 
 ## 5. リザルト画面用ランキング取得設定
 
-本体設定にチェックボックスを2つ用意する。
+BMZ メニューのIR設定にチェックボックスを2つ用意します。
 
 ```txt
 [ ] スコア送信時に全体ランキングを取得する
@@ -638,7 +638,7 @@ UpdateScore:
 
 ### 内部設定名
 
-ユーザー向け文言は上記でよいが、内部名は `prefetch` として扱う。
+ユーザー向け文言は上記でよいが、内部名は`prefetch`として扱います。
 
 ```toml
 [ir.result]
@@ -669,9 +669,9 @@ pub struct IrResultOptions {
 | 全体取得 | ライバル取得 | スコア送信時 | 切り替え時 |
 |---|---|---|---|
 | OFF | OFF | スコア送信のみ | 初めて開いたランキングを都度取得 |
-| ON | OFF | global だけ取得 | self_and_rivals は切替時に取得 |
-| OFF | ON | self_and_rivals だけ取得 | global は切替時に取得 |
-| ON | ON | global と self_and_rivals を取得 | 両方即切替可能 |
+| ON | OFF | globalだけ取得 | self_and_rivalsは切替時に取得 |
+| OFF | ON | self_and_rivalsだけ取得 | globalは切替時に取得 |
+| ON | ON | globalとself_and_rivalsを取得 | 両方即切替可能 |
 
 ### リザルト画面状態管理案
 
@@ -749,22 +749,22 @@ POST /api/v1/scores?include=rankings&ranking_scopes=global,self_and_rivals&ranki
 
 | parameter | type | description |
 |---|---|---|
-| `include` | string | `rankings` を指定するとランキングを同時取得する |
-| `ranking_scopes` | comma-separated string | `global`, `self_and_rivals` など |
-| `ranking_limit` | integer | 各ランキングの最大件数。初期値は 100 など |
+| `include` | string | `rankings`を指定するとランキングを同時取得する |
+| `ranking_scopes` | comma-separated string | `global`, `self_and_rivals`など |
+| `ranking_limit` | integer | 各ランキングの最大件数です。初期値は100など |
 
 ### Request payload
 
-`play_count` / `clear_count` は Score Submission API では送らない。
-これらはクライアントが自己申告する値ではなく、IR Server が `scores` 投稿履歴から集計する値として扱う。
-Local BMZ がローカル表示用に `play_count` / `clear_count` を保持していても、IR 送信 payload には含めない。
+`play_count` / `clear_count`はScore Submission APIでは送りません。
+これらはクライアントが自己申告する値ではなく、IR Serverが`scores`投稿履歴から集計する値として扱います。
+Local BMZがローカル表示用に`play_count` / `clear_count`を保持していても、IR送信payloadには含めません。
 
-`device_type` は BMS IR の慣習に合わせ、スコアを記録した主入力デバイスとして必ず送る。
-値は `keyboard` / `controller` の2種類だけにし、`mixed` は作らない。
-BMZ はプレイ中の human press input を集計し、controller 入力数が keyboard 入力数より多ければ `controller`、
-それ以外は `keyboard` と判定する。
-controller のスクラッチだけ keyboard 入力へ変換している環境でも、鍵盤側が controller なら `controller` になる。
-`device_type` はランキング分離キーではなく、表示・検索・検証補助用の score metadata として扱う。
+`device_type`はBMS IRの慣習に合わせ、スコアを記録した主入力デバイスとして必ず送ります。
+値は`keyboard` / `controller`の2種類だけにし、`mixed`は作りません。
+BMZはプレイ中のhuman press inputを集計し、controller入力数がkeyboard入力数より多ければ`controller`、
+それ以外は`keyboard`と判定します。
+controllerのスクラッチだけkeyboard入力へ変換している環境でも、鍵盤側がcontrollerなら`controller`になります。
+`device_type`はランキング分離キーではなく、表示・検索・検証補助用のscore metadataとして扱います。
 
 ```json
 {
@@ -846,10 +846,10 @@ controller のスクラッチだけ keyboard 入力へ変換している環境�
 
 ### LN policy
 
-BMZ 本体は `docs/ln.md` の `LnScorePolicy` を local score DB の保存キーに使う。
-IR でも同じ値を score identity の一部として扱う。
+BMZ本体は`docs/ln.md`の`LnScorePolicy`をlocal score DBの保存キーに使います。
+IRでも同じ値をscore identityの一部として扱います。
 
-送信 payload の `rule.ln_policy` は BMZ が profile policy と chart LN profile から正規化した結果で、保存値は次のいずれか。
+送信payloadの`rule.ln_policy`はBMZがprofile policyとchart LN profileから正規化した結果で、保存値は次のいずれかです。
 
 ```txt
 AutoLn
@@ -860,11 +860,11 @@ ForceCn
 ForceHcn
 ```
 
-`rule.effective_ln_mode` は実際に降らせた LN 種別の補助情報で、初期値は `ln` / `cn` / `hcn` のいずれかにする。
-ランキング、best score、play_count / clear_count の集計キーは `effective_ln_mode` ではなく `ln_policy` を使う。
+`rule.effective_ln_mode`は実際に降らせたLN種別の補助情報で、初期値は`ln` / `cn` / `hcn`のいずれかにします。
+ランキング、best score、play_count / clear_countの集計キーは`effective_ln_mode`ではなく`ln_policy`を使います。
 
-`chart.ln_profile` はサーバーが譜面 metadata を補完・検証するための参考情報であり、best score の分離単位にはしない。
-ただし chart registry には保存してよい。
+`chart.ln_profile`はサーバーが譜面metadataを補完・検証するための参考情報であり、best scoreの分離単位にはしません。
+ただしchart registryには保存して構いません。
 
 ### Response: ランキングなし
 
@@ -884,28 +884,28 @@ ForceHcn
 }
 ```
 
-`verification` と replay hash は server DB に保存される。リプレイの upload URL
-は score submit response には含めず、
-`POST /api/v1/scores/{id}/replay/upload-url` で別途取得する。
+`verification`とreplay hashはserver DBに保存されます。リプレイのupload URL
+はscore submit responseには含めず、
+`POST /api/v1/scores/{id}/replay/upload-url`で別途取得します。
 
-同じ player / `idempotency_key` で保存済みのプレイ内容と一致する投稿は、既存の
-`score_id` を返し、履歴・bestを変更しない。譜面SHA256、ルール、成績、判定内訳、
-プレイオプション、replay情報などが異なる場合は409 Conflictを返す。
-retryごとに変わり得るevidenceやclient version、譜面の表示用metadataは比較しない。
-旧形式のkeyも受け付けるが、衝突時は同じ409を返す。
+同じplayer / `idempotency_key`で保存済みのプレイ内容と一致する投稿は、既存の
+`score_id`を返し、履歴・bestを変更しません。譜面SHA256、ルール、成績、判定内訳、
+プレイオプション、replay情報などが異なる場合は409 Conflictを返します。
+retryごとに変わり得るevidenceやclient version、譜面の表示用metadataは比較しません。
+旧形式のkeyも受け付けるが、衝突時は同じ409を返します。
 
-新しいプレイの送信keyは `bmz-score-v2-<UUID v4>` をenqueue前に一度だけ生成し、
-payloadに保存する。HTTP retryでは保存済みkeyを再利用する。ローカルscore IDは
-keyの一意性には使わない。通常リザルト送信では既存スコアの再送や既存jobの再enqueueは行わない。
-local backfillのkeyも `score_history` ごとの永続UUIDを使う。score DB migrationで既存履歴へ
-keyを割り当て、新規履歴は保存transaction内で生成する。同じ履歴を再実行・DB再openしても
-keyは変わらず、別profileで同じhistory IDになってもkeyは衝突しない。profile DBを複製した
-後で各profileに別々の履歴を追加した場合も、それぞれ新しいkeyを生成する。dry-runはkeyを
-割り当てず、既存queueの再送では保存済みpayloadとkeyをそのまま使う。
+新しいプレイの送信keyは`bmz-score-v2-<UUID v4>`をenqueue前に一度だけ生成し、
+payloadに保存します。HTTP retryでは保存済みkeyを再利用します。ローカルscore IDは
+keyの一意性には使いません。通常リザルト送信では既存スコアの再送や既存jobの再enqueueは行いません。
+local backfillのkeyも`score_history`ごとの永続UUIDを使います。score DB migrationで既存履歴へ
+keyを割り当て、新規履歴は保存transaction内で生成します。同じ履歴を再実行・DB再openしても
+keyは変わらず、別プロファイルで同じhistory IDになってもkeyは衝突しません。プロファイルのDBを複製した
+後で各profileに別々の履歴を追加した場合も、それぞれ新しいkeyを生成します。dry-runはkeyを
+割り当てず、既存queueの再送では保存済みpayloadとkeyをそのまま使います。
 
 ### Response: ランキングあり
 
-`rankings` は request された scope だけ含める。
+`rankings`はrequestされたscopeだけ含めます。
 
 ```json
 {
@@ -959,7 +959,7 @@ keyは変わらず、別profileで同じhistory IDになってもkeyは衝突し
 
 ### Ranking 部分だけ失敗した場合
 
-スコア送信自体は成功扱いにする。
+スコア送信自体は成功扱いにします。
 
 ```json
 {
@@ -992,7 +992,7 @@ keyは変わらず、別profileで同じhistory IDになってもkeyは衝突し
 
 ### 重要な処理順序
 
-ランキング同時取得時は、必ず best 更新後にランキングを取得する。
+ランキング同時取得時は、必ずbest更新後にランキングを取得します。
 
 ```txt
 access token検証
@@ -1037,10 +1037,10 @@ rule_mode=Beatoraja
 |---|---|---|
 | `scope` | string | `global`, `self_and_rivals`, `rivals`, `self`, `around_self` |
 | `limit` | integer | 最大件数 |
-| `offset` | integer | pagination 用 |
-| `ln_policy` | string | 任意。指定した場合だけ `AutoLn` / `AutoCn` / `AutoHcn` / `ForceLn` / `ForceCn` / `ForceHcn` で絞り込む |
-| `rule_mode` | string | 必須。`Beatoraja` / `Lr2Oraja` / `Dx` |
-| `scoring` | string | 初期は `bms_ex_score_v1` |
+| `offset` | integer | pagination用 |
+| `ln_policy` | string | 任意です。指定した場合だけ`AutoLn` / `AutoCn` / `AutoHcn` / `ForceLn` / `ForceCn` / `ForceHcn`で絞り込む |
+| `rule_mode` | string | 必須です。`Beatoraja` / `Lr2Oraja` / `Dx` |
+| `scoring` | string | 初期は`bms_ex_score_v1` |
 
 ### Ranking scope
 
@@ -1048,16 +1048,16 @@ rule_mode=Beatoraja
 |---|---|
 | `global` | 全体ランキング |
 | `self_and_rivals` | 自分 + ライバル |
-| `rivals` | ライバルのみ。自分は含めない |
+| `rivals` | ライバルのみです。自分は含めない |
 | `self` | 自分だけ |
 | `around_self` | 全体ランキング上で自分の周辺 |
 
-ユーザーが希望している「ライバルと自分のみ」は `self_and_rivals` を使う。
+ユーザーが希望している「ライバルと自分のみ」は`self_and_rivals`を使います。
 
 ### `rival_only` alias
 
-正式には `scope` を推奨する。
-互換・分かりやすさ用に alias を受けてもよい。
+正式には`scope`を推奨します。
+互換・分かりやすさ用にaliasを受けても構いません。
 
 ```txt
 rival_only=true&include_self=true  -> scope=self_and_rivals
@@ -1157,9 +1157,9 @@ rival_only=true&include_self=false -> scope=rivals
 
 ### 順位の考え方
 
-- `rank` は常に全体ランキング上の順位。
-- `scope_rank` は scope 内での表示順位。
-- `self_and_rivals` でも `rank` は全体順位を返す。
+- `rank`は常に全体ランキング上の順位です。
+- `scope_rank`はscope内での表示順位です。
+- `self_and_rivals`でも`rank`は全体順位を返します。
 
 例:
 
@@ -1180,29 +1180,29 @@ scope=self_and_rivals:
 
 ### play_count / clear_count
 
-Ranking API は必要なら entry ごとに `stats.play_count` / `stats.clear_count` を返す。
-これらは投稿 payload 由来ではなく、IR Server が `scores` 投稿履歴から集計する。
+Ranking APIは必要ならentryごとに`stats.play_count` / `stats.clear_count`を返します。
+これらは投稿payload由来ではなく、IR Serverが`scores`投稿履歴から集計します。
 
 ```txt
 play_count  = 対象 player + chart + rule の accepted score 投稿数
 clear_count = そのうち clear_type が Failed / NoPlay 以外の投稿数
 ```
 
-集計単位は ranking query と同じ `chart_sha256` / `ln_policy` / `double_option` / `rule_mode` / `scoring` を基本にする。
-`play_count` / `clear_count` が不要な画面では response から省略してよい。
+集計単位はranking queryと同じ`chart_sha256` / `ln_policy` / `double_option` / `rule_mode` / `scoring`を基本にします。
+`play_count` / `clear_count`が不要な画面ではresponseから省略して構いません。
 
 ### Device type
 
-Ranking API / Chart detail API は score 表示に `device_type` を含める。
-`device_type` は `keyboard` / `controller` の2値で、`mixed` は返さない。
+Ranking API / Chart detail APIはscore表示に`device_type`を含めます。
+`device_type`は`keyboard` / `controller`の2値で、`mixed`は返しません。
 
-集計・順位の key には含めない。
-同じ player / chart / ln_policy / double_option / rule_mode / scoring の best score が更新された場合、`best_scores.device_type` は
-その best score を記録した投稿の値で上書きする。
+集計・順位のkeyには含めません。
+同じplayer / chart / ln_policy / double_option / rule_mode / scoringのbest scoreが更新された場合、`best_scores.device_type`は
+そのbest scoreを記録した投稿の値で上書きします。
 
 ### EX score 同点順位
 
-BMS IR らしさを考えると、順位は EX score のみで同点同順位にする。
+BMS IRらしさを考えると、順位はEX scoreのみで同点同順位にします。
 
 ```sql
 RANK() OVER (
@@ -1210,7 +1210,7 @@ RANK() OVER (
 ) AS rank
 ```
 
-表示順の安定化には追加条件を使う。
+表示順の安定化には追加条件を使います。
 
 ```sql
 ORDER BY
@@ -1233,7 +1233,7 @@ PUT /api/v1/charts/{sha256}
 GET /api/v1/charts/{sha256}
 ```
 
-`PUT` にしておくと、スコア送信前に chart metadata を upsert できる。
+`PUT`にしておくと、スコア送信前にchart metadataをupsertできます。
 
 ### Chart identity
 
@@ -1330,9 +1330,9 @@ pub struct IrChartIdentity {
 
 ### Chart detail response stats
 
-`GET /api/v1/charts/{sha256}` は必要なら chart 全体、またはログイン中 player の
-`play_count` / `clear_count` を返してよい。これも Score Submission payload の値ではなく、
-IR Server が `scores` 投稿履歴から集計する。
+`GET /api/v1/charts/{sha256}`は必要ならchart全体、またはログイン中playerの
+`play_count` / `clear_count`を返して構いません。これもScore Submission payloadの値ではなく、
+IR Serverが`scores`投稿履歴から集計します。
 
 例:
 
@@ -1354,7 +1354,7 @@ IR Server が `scores` 投稿履歴から集計する。
 }
 ```
 
-Chart detail に stats が不要な画面では省略してよい。
+Chart detailにstatsが不要な画面では省略して構いません。
 
 ---
 
@@ -1362,11 +1362,11 @@ Chart detail に stats が不要な画面では省略してよい。
 
 ### 初期方針
 
-- replay 本体アップロードは score submit とは分離し、送信成功後に専用 API で
-  upload URL を取得して実行する。
-- Score submission payload には replay hash / format / upload_intent を入れる。
-- サーバーは replay hash と storage object の hash を照合し、
-  `replay_objects.status` で状態を管理する。
+- replay本体アップロードはscore submitとは分離し、送信成功後に専用APIで
+  upload URLを取得して実行します。
+- Score submission payloadにはreplay hash / format / upload_intentを入れます。
+- サーバーはreplay hashとstorage objectのhashを照合し、
+  `replay_objects.status`で状態を管理します。
 
 ### Score submission の replay field
 
@@ -1384,9 +1384,9 @@ Chart detail に stats が不要な画面では省略してよい。
 
 | value | description |
 |---|---|
-| `none` | replay なし |
-| `later` | hash だけ送って、あとでアップロード予定 |
-| `now` | score submit 後に続けてアップロード予定 |
+| `none` | replayなし |
+| `later` | hashだけ送って、あとでアップロード予定 |
+| `now` | score submit後に続けてアップロード予定 |
 
 ### Replay status
 
@@ -1440,15 +1440,15 @@ replay status = uploaded / verified
 
 ### 方針
 
-- 完全なチート防止ではない。
-- 改造クライアントなら偽スコアに署名できる。
-- 目的は「提出内容があとから改変されていない」ことを示すこと。
-- 将来 replay upload / replay verification と組み合わせる。
+- 完全なチート防止ではありません。
+- 改造クライアントなら偽スコアに署名できます。
+- 目的は「提出内容があとから改変されていない」ことを示します。
+- 将来replay upload / replay verificationと組み合わせます。
 
 ### 署名対象
 
-Canonical JSON または MessagePack などで正規化する。
-JSON の素朴な文字列化は避ける。
+Canonical JSONまたはMessagePackなどで正規化します。
+JSONの素朴な文字列化は避けます。
 
 署名対象に含めるもの:
 
@@ -1477,9 +1477,9 @@ played_at
 replay hash
 ```
 
-`played_at` はクライアント時計由来なので、署名対象に入れる場合でも信用時刻として扱わない。
-ランキングや監査の基準時刻には、サーバー側で付与する `server_received_at` / `created_at` を別に保存する。
-クライアント時計が大きくずれている場合は、表示用の参考値として保持しつつ warning / suspicious flag を付けられるようにする。
+`played_at`はクライアント時計由来なので、署名対象に入れる場合でも信用時刻として扱いません。
+ランキングや監査の基準時刻には、サーバー側で付与する`server_received_at` / `created_at`を別に保存します。
+クライアント時計が大きくずれている場合は、表示用の参考値として保持しつつwarning / suspicious flagを付けられるようにします。
 
 含めないもの:
 
@@ -1493,8 +1493,8 @@ refresh token
 
 ### Device key
 
-初回スコア送信時、または `bmz ir device-key` / egui の署名鍵操作時に
-provider key ごとの device key を lazy 生成する。
+初回スコア送信時、または`bmz ir device-key` / eguiの署名鍵操作時に
+provider keyごとのdevice keyをlazy生成します。
 
 ```txt
 private key: OS credential store
@@ -1526,7 +1526,7 @@ signed_backfill  local score.db history を後日device keyで署名
 verified_play    通常プレイ結果をdevice keyで署名
 ```
 
-リプレイの検証状態は `replay_objects.status` として別管理する。
+リプレイの検証状態は`replay_objects.status`として別管理します。
 
 ---
 
@@ -1534,13 +1534,13 @@ verified_play    通常プレイ結果をdevice keyで署名
 
 ### EX Score
 
-beatoraja メモに合わせる。
+beatorajaメモに合わせます。
 
 ```txt
 (epg + lpg) * 2 + egr + lgr
 ```
 
-BMZ 内部関数案:
+BMZ内部関数案:
 
 ```rust
 pub fn ex_score(j: &JudgeCounts) -> u32 {
@@ -1552,9 +1552,9 @@ pub fn ex_score(j: &JudgeCounts) -> u32 {
 
 ### Judge counts
 
-IR payload は現行 BMZ の `ScoreState::JudgeCounts` に合わせる。
-BMZ では `Miss` という判定名は使わず、見逃しは `Poor`、空押しは `EmptyPoor` として扱う。
-`EmptyPoor` にも FAST/SLOW があるため、IR でも丸めずに保存する。
+IR payloadは現行BMZの`ScoreState::JudgeCounts`に合わせます。
+BMZでは`Miss`という判定名は使わず、見逃しは`Poor`、空押しは`EmptyPoor`として扱います。
+`EmptyPoor`にもFAST/SLOWがあるため、IRでも丸めずに保存します。
 
 ```txt
 fast.pgreat
@@ -1572,39 +1572,39 @@ slow.poor
 slow.empty_poor
 ```
 
-将来 FAST/SLOW に分類できない独立イベントが必要になった場合は、v1 payload へ `neutral` を足すのではなく、
-用途を明確にした別 field として追加する。
+将来FAST/SLOWに分類できない独立イベントが必要になった場合は、v1 payloadへ`neutral`を足すのではなく、
+用途を明確にした別fieldとして追加します。
 
 ### BP / CB
 
-BMZ 本体では `miss_count` 名を廃止し、BMS 文脈の BP / CB をそのまま保存・表示名に使う。
+BMZ本体では`miss_count`名を廃止し、BMS文脈のBP / CBをそのまま保存・表示名に使います。
 
 ```txt
 bp = bad + poor + empty_poor
 cb = bad + poor
 ```
 
-`empty_poor` は combo を切らないため、combo break 集計の `cb` からは除外する。
-IR v1 では最小値として次を扱う。
+`empty_poor`はcomboを切らないため、combo break集計の`cb`からは除外します。
+IR v1では最小値として次を扱います。
 
 ```txt
 min_bp = best play の最小 bp
 min_cb = best play の最小 cb
 ```
 
-BMZ の local score DB は `score_history` / `score_best` / `replay_slots` に `bp` / `cb` を直接保存する。
+BMZのlocal score DBは`score_history` / `score_best` / `replay_slots`に`bp` / `cb`を直接保存します。
 本体側の対応方針:
 
-- `ScoreState::bp()` は `bad + poor + empty_poor`、`ScoreState::cb()` は `bad + poor` を返す。
-- `score_history` / `score_best` / `replay_slots` に `bp` / `cb` を保存し、表示・リプレイ slot metrics でも `miss_count` 名を使わない。
-- local best 更新条件は `ex_score`、`clear_type`、`bp`、`cb`、`max_combo` の順に比較する。
-- IR 側の `min_bp` / `min_cb` は、送信された `bp` / `cb` の自己ベスト最小値として扱う。
+- `ScoreState::bp()`は`bad + poor + empty_poor`、`ScoreState::cb()`は`bad + poor`を返します。
+- `score_history` / `score_best` / `replay_slots`に`bp` / `cb`を保存し、表示・リプレイslot metricsでも`miss_count`名を使いません。
+- local best更新条件は`ex_score`、`clear_type`、`bp`、`cb`、`max_combo`の順に比較します。
+- IR側の`min_bp` / `min_cb`は、送信された`bp` / `cb`の自己ベスト最小値として扱います。
 
 ### Device type
 
-BMZ の local score DB は `score_history` / `score_best` に `device_type` を保存する。
-`replay_slots` は score history の snapshot 表示に必要なら `device_type` を持ってよいが、IR payload の元データは
-`score_history.device_type` を正とする。
+BMZのlocal score DBは`score_history` / `score_best`に`device_type`を保存します。
+`replay_slots`はscore historyのsnapshot表示に必要なら`device_type`を持ってよいが、IR payloadの元データは
+`score_history.device_type`を正とします。
 
 判定ルール:
 
@@ -1613,17 +1613,17 @@ human controller press count > human keyboard press count => controller
 otherwise                                             => keyboard
 ```
 
-- `mixed` は保存しない。
-- `InputKind::Press` だけを数え、release による二重カウントを避ける。
-- `InputSource::Human` だけを数え、autoplay / replay 再生入力はローカル実プレイの device 判定に含めない。
-- 旧 replay や device 情報のない入力は `keyboard` fallback でよい。
+- `mixed`は保存しません。
+- `InputKind::Press`だけを数え、releaseによる二重カウントを避けます。
+- `InputSource::Human`だけを数え、autoplay / replay再生入力はローカル実プレイのdevice判定に含めません。
+- 旧replayやdevice情報のない入力は`keyboard` fallbackで構いません。
 
 ---
 
 ## 12. Clear Lamp
 
-サーバー・クライアントで順序を固定する。IR v1 は BMZ の `ClearType::as_str()` に準拠する。
-文字列表現は local DB と同じ PascalCase を送る。
+サーバー・クライアントで順序を固定します。IR v1はBMZの`ClearType::as_str()`に準拠します。
+文字列表現はlocal DBと同じPascalCaseを送ります。
 
 ```rust
 pub enum ClearType {
@@ -1641,9 +1641,9 @@ pub enum ClearType {
 }
 ```
 
-API の human-friendly alias として `hard_clear` などを受ける場合でも、保存時・response 時は
-`ClearType::as_str()` の値へ正規化する。
-BMS系ではアシスト、EASY、HARD、EXHARD、FULLCOMBO、MAX の扱いがズレやすいので、早めに固定する。
+APIのhuman-friendly aliasとして`hard_clear`などを受ける場合でも、保存時・response時は
+`ClearType::as_str()`の値へ正規化します。
+BMS系ではアシスト、EASY、HARD、EXHARD、FULLCOMBO、MAXの扱いがズレやすいので、早めに固定します。
 
 ---
 
@@ -1663,9 +1663,9 @@ device_keys
 
 ### scores
 
-投稿履歴をすべて保存する。`play_count` / `clear_count` は submission payload から受け取らず、
-この `scores` 履歴から IR Server 側で集計する。
-`device_type` は投稿時点の主入力デバイスとして `scores.device_type` に保存する。
+投稿履歴をすべて保存します。`play_count` / `clear_count`はsubmission payloadから受け取らず、
+この`scores`履歴からIR Server側で集計します。
+`device_type`は投稿時点の主入力デバイスとして`scores.device_type`に保存します。
 
 集計の基本条件:
 
@@ -1684,16 +1684,16 @@ play_count  = COUNT(*)
 clear_count = COUNT(*) FILTER (WHERE clear_rank > Failed)
 ```
 
-`clear_rank > Failed` は `NoPlay` / `Failed` を除外する意味。
-Chart detail の global stats のように player 単位でない集計が必要な場合は、`player_id` 条件を外す。
-負荷が問題になるまでは `scores` から都度集計でよく、必要になったら materialized view や summary table を検討する。
+`clear_rank > Failed`は`NoPlay` / `Failed`を除外する意味です。
+Chart detailのglobal statsのようにplayer単位でない集計が必要な場合は、`player_id`条件を外します。
+負荷が問題になるまでは`scores`から都度集計でよく、必要になったらmaterialized viewやsummary tableを検討します。
 
-`device_type` は集計条件に含めない。
-controller / keyboard 別ランキングを作る場合は v1 の score identity とは別の filter / view として追加する。
+`device_type`は集計条件に含めません。
+controller / keyboard別ランキングを作る場合はv1のscore identityとは別のfilter / viewとして追加します。
 
 ### best_scores
 
-ランキング用に正規化する。
+ランキング用に正規化します。
 
 ```sql
 CREATE TABLE best_scores (
@@ -1724,11 +1724,11 @@ CREATE TABLE best_scores (
 );
 ```
 
-`scores` 側にも同じ `device_type text NOT NULL` を持たせる。
-`best_scores.device_type` は best 更新に採用された `scores.device_type` をコピーする。
+`scores`側にも同じ`device_type text NOT NULL`を持たせます。
+`best_scores.device_type`はbest更新に採用された`scores.device_type`をコピーします。
 
-`effective_ln_mode` は表示・互換・将来の検証用に保存するが、best の unique key には使わない。
-BMZ local DB と同じく、score 分離の正規化キーは `ln_policy` とする。
+`effective_ln_mode`は表示・互換・将来の検証用に保存するが、bestのunique keyには使いません。
+BMZ local DBと同じく、score分離の正規化キーは`ln_policy`とします。
 
 ### scores と best_scores を分ける
 
@@ -1742,7 +1742,7 @@ best_scores:
 
 ### best 更新条件
 
-EX score ranking 固定のため、基本は EX score を主軸にする。
+EX score ranking固定のため、基本はEX scoreを主軸にします。
 
 ```txt
 1. EX score が高い
@@ -1753,7 +1753,7 @@ EX score ranking 固定のため、基本は EX score を主軸にする。
 6. 同点なら played_at が古い/新しい、どちらか仕様で固定
 ```
 
-ただし beatoraja 的な `IR_SEND_UPDATE_SCORE` は次のいずれかが改善したら送信する。
+ただしbeatoraja的な`IR_SEND_UPDATE_SCORE`は次のいずれかが改善したら送信します。
 
 ```txt
 EX score
@@ -1763,7 +1763,7 @@ minbp
 mincb
 ```
 
-そのため、将来は項目別 best を分けてもよい。
+そのため、将来は項目別bestを分けても構いません。
 
 ```txt
 best_score_by_ex_score
@@ -1773,8 +1773,8 @@ best_minbp
 best_mincb
 ```
 
-初期は `best_scores` にランキング用 best を保存するだけでよい。
-BMZ 本体の local DB は `bp` / `cb` を保存するため、IR payload でも `min_bp` / `min_cb` を v1 から必須項目として扱う。
+初期は`best_scores`にランキング用bestを保存するだけで構いません。
+BMZ本体のlocal DBは`bp` / `cb`を保存するため、IR payloadでも`min_bp` / `min_cb`をv1から必須項目として扱います。
 
 ---
 
@@ -1782,7 +1782,7 @@ BMZ 本体の local DB は `bp` / `cb` を保存するため、IR payload でも
 
 ### Global ranking
 
-順位は EX score のみで同点同順位。
+順位はEX scoreのみで同点同順位です。
 
 ```sql
 WITH ranked AS (
@@ -1814,7 +1814,7 @@ LIMIT $4 OFFSET $5;
 
 ### self_and_rivals
 
-全体順位を維持したまま表示対象だけ絞る。
+全体順位を維持したまま表示対象だけ絞ります。
 
 ```sql
 WITH ranked AS (
@@ -1856,7 +1856,7 @@ ORDER BY
 
 ### rivals only
 
-`self_and_rivals` から `UNION SELECT $4` を抜く。
+`self_and_rivals`から`UNION SELECT $4`を抜きます。
 
 ---
 
@@ -1919,9 +1919,9 @@ Response:
 }
 ```
 
-比較 API は、BMZ の best score identity
-`chart_sha256 + ln_policy + double_option + rule_mode + scoring` が一致する共通譜面だけを対象に、
-EX SCORE と MIN BP の勝敗・差分を返す。
+比較APIは、BMZのbest score identity
+`chart_sha256 + ln_policy + double_option + rule_mode + scoring`が一致する共通譜面だけを対象に、
+EX SCOREとMIN BPの勝敗・差分を返します。
 
 ---
 
@@ -1929,9 +1929,9 @@ EX SCORE と MIN BP の勝敗・差分を返す。
 
 ### ir_accounts
 
-現行実装では `provider` は IR サーバーが返す `provider_key` を保存する。
-同じ provider 実装名でも、production `bmz` と local `bmz-dev` は別 provider
-として扱う。
+現行実装では`provider`はIRサーバーが返す`provider_key`を保存します。
+同じprovider実装名でも、production `bmz`とlocal `bmz-dev`は別provider
+として扱います。
 
 ```sql
 CREATE TABLE ir_accounts (
@@ -1948,8 +1948,8 @@ CREATE TABLE ir_accounts (
 
 ### ir_score_jobs
 
-`provider` は送信先の `provider_key`。pending job はこの値で
-`IrProviderConfig.provider_key` を引き、該当する `base_url` へ送信する。
+`provider`は送信先の`provider_key`です。pending jobはこの値で
+`IrProviderConfig.provider_key`を引き、該当する`base_url`へ送信します。
 
 ```sql
 CREATE TABLE ir_score_jobs (
@@ -1987,9 +1987,9 @@ succeeded
 failed
 ```
 
-`pending` / `failed` は `next_attempt_at <= now` のとき送信対象。
-`sending` は通常はワーカーが処理中の印だが、プロセス終了などで残る可能性が
-あるため、`updated_at` から 300 秒以上経過したものは再送対象にする。
+`pending` / `failed`は`next_attempt_at <= now`のとき送信対象です。
+`sending`は通常はワーカーが処理中の印だが、プロセス終了などで残る可能性が
+あるため、`updated_at`から300秒以上経過したものは再送対象にします。
 
 ### ir_score_submissions
 
@@ -2012,26 +2012,26 @@ CREATE INDEX idx_ir_score_submissions_local_score
     ON ir_score_submissions(local_score_id);
 ```
 
-`ir_score_success_ledger` は成功したjobの idempotency key、local / remote score IDを
-`ir_score_jobs` への外部キーなしで保持する。jobの30日 / 最新500件pruningでは削除せず、
-upload-local、download-scores、attestation、IR cleanup が成功履歴を参照する。
+`ir_score_success_ledger`は成功したjobのidempotency key、local / remote score IDを
+`ir_score_jobs`への外部キーなしで保持します。jobの30日 / 最新500件pruningでは削除せず、
+upload-local、download-scores、attestation、IR cleanupが成功履歴を参照します。
 成功時のrequest payloadと譜面hash / LN policyも台帳へsnapshotするため、pruning後も
-元の内容を保った `--resend` ができる。旧履歴のsnapshotが空なら安全に再構築できないため
-再送不可とする。cleanupで対応するlocal scoreを削除するときは、submission/jobと同じ
-transactionで台帳とpayload snapshotも消す。
+元の内容を保った`--resend`ができます。旧履歴のsnapshotが空なら安全に再構築できないため
+再送不可とします。cleanupで対応するlocal scoreを削除するときは、submission/jobと同じ
+transactionで台帳とpayload snapshotも消します。
 
 ### Local score device type
 
-IR 実装前準備として、BMZ 本体の通常スコア保存にも `device_type` を持たせる。
+IR実装前準備として、BMZ本体の通常スコア保存にも`device_type`を持たせます。
 
 ```sql
 ALTER TABLE score_history ADD COLUMN device_type TEXT NOT NULL DEFAULT 'keyboard';
 ALTER TABLE score_best ADD COLUMN device_type TEXT NOT NULL DEFAULT 'keyboard';
 ```
 
-`device_type` は `keyboard` / `controller` の2値に固定する。
-local best が更新された場合、`score_best.device_type` は更新元の `score_history.device_type` で上書きする。
-IR job 作成時は `score_history.device_type` から payload の `play_options.device_type` を生成する。
+`device_type`は`keyboard` / `controller`の2値に固定します。
+local bestが更新された場合、`score_best.device_type`は更新元の`score_history.device_type`で上書きします。
+IR job作成時は`score_history.device_type`からpayloadの`play_options.device_type`を生成します。
 
 ---
 
@@ -2133,9 +2133,9 @@ pub enum IrRankingScope {
 
 ### 方針
 
-- スコア送信は job queue 化する。
-- オフライン時や一時失敗時は retry する。
-- `idempotency_key` を使い二重投稿を防ぐ。
+- スコア送信はjob queue化します。
+- オフライン時や一時失敗時はretryします。
+- `idempotency_key`を使い二重投稿を防ぎます。
 
 ### Retry schedule example
 
@@ -2156,27 +2156,27 @@ IR送信:
   - 手動送信
 ```
 
-初期は自動送信 + retry でよい。
+初期は自動送信 + retryで構いません。
 
 ---
 
 ## 19. Course Score API
 
-コーススコア投稿・ランキングは実装済み。
+コーススコア投稿・ランキングは実装済みです。
 
 ### Server DB 設計 (2026-06-11)
 
-`scores` / `best_scores` の規約 (clear_rank、verification、idempotency、
-served timestamps) をコースにもそのまま流用する。BMZ local の
-metadata は `library.db` の `courses`、プレイ結果は profile-local
-`score.db` の `course_scores` / `course_score_charts` と対応させる。
+`scores` / `best_scores`の規約 (clear_rank、verification、idempotency、
+served timestamps)をコースにもそのまま流用します。BMZ localの
+metadataは`library.db`の`courses`、プレイ結果はprofile-local
+`score.db`の`course_scores` / `course_score_charts`と対応させます。
 
 #### Course identity
 
-- `course_hash` を主キー相当の identity にする。
-  ローカル `course_key` ではなくサーバー間で再現可能な値として、
-  「譜面 sha256 の順序付きリスト + constraint 群」を canonical JSON 化した
-  ものの SHA256 とする (tamper evidence と同じ正規化規則)。
+- `course_hash`を主キー相当のidentityにします。
+  ローカル`course_key`ではなくサーバー間で再現可能な値として、
+  「譜面 sha256 の順序付きリスト + constraint 群」をcanonical JSON化した
+  もののSHA256とする (tamper evidenceと同じ正規化規則)です。
 
 ```txt
 course_hash = SHA256(canonical_json({
@@ -2187,19 +2187,19 @@ course_hash = SHA256(canonical_json({
 }))
 ```
 
-- タイトルや出典 URL は identity に含めない (表示 metadata)。
+- タイトルや出典URLはidentityに含めない (表示metadata)です。
 - BMS-IR向けにはcanonical `course_hash`を置換せず、LR2互換の長い
-  `course_key`を別フィールドで併送する。BMS-IRから取得した表はserver提供keyを
-  そのまま保持し、それ以外は標準Dan headerと譜面順MD5から生成する。rianIR用hashは
-  これとは独立して扱う。
-- score identity (best / ranking の分離キー) は
-  `course_hash + gauge + ln_policy + rule_mode + scoring`。
-  - `gauge`: 段位 (class 系 constraint) では constraint で固定されるが、
-    通常コースではユーザー選択なので key に含める。
-  - `ln_policy`: コース内全譜面の `ChartLnProfile` を集約し、コース LN constraint
-    を反映して単曲と同じ規則で正規化した `LnScorePolicy` を使う。
-  - `rule_mode`: 単曲スコアと同じく `Beatoraja` / `Lr2Oraja` / `Dx` を
-    別ランキングとして扱う。
+  `course_key`を別フィールドで併送します。BMS-IRから取得した表はserver提供keyを
+  そのまま保持し、それ以外は標準Dan headerと譜面順MD5から生成します。rianIR用hashは
+  これとは独立して扱います。
+- score identity (best / rankingの分離キー)は
+  `course_hash + gauge + ln_policy + rule_mode + scoring`です。
+  - `gauge`: 段位 (class系constraint)ではconstraintで固定されるが、
+    通常コースではユーザー選択なのでkeyに含めます。
+  - `ln_policy`: コース内全譜面の`ChartLnProfile`を集約し、コースLN constraint
+    を反映して単曲と同じ規則で正規化した`LnScorePolicy`を使います。
+  - `rule_mode`: 単曲スコアと同じく`Beatoraja` / `Lr2Oraja` / `Dx`を
+    別ランキングとして扱います。
 
 #### ir_courses (registry)
 
@@ -2220,9 +2220,9 @@ create table public.ir_courses (
 );
 ```
 
-submit 時に `scores` の chart upsert と同様に upsert する。
-個々の譜面は `charts` registry に既存の仕組みで upsert 済みである前提
-(コース送信時に未登録 chart があれば metadata なしで sha256 だけ登録)。
+submit時に`scores`のchart upsertと同様にupsertします。
+個々の譜面は`charts` registryに既存の仕組みでupsert済みである前提
+(コース送信時に未登録chartがあればmetadataなしでsha256だけ登録)です。
 
 #### course_scores (投稿履歴)
 
@@ -2279,8 +2279,8 @@ create index idx_course_scores_course
   on public.course_scores(course_hash, server_received_at desc);
 ```
 
-`entries` を jsonb にするのはランキング集計に内訳を使わないため。
-譜面単位の分析が必要になったら正規化テーブルへ移す。
+`entries`をjsonbにするのはランキング集計に内訳を使わないためです。
+譜面単位の分析が必要になったら正規化テーブルへ移します。
 
 #### best_course_scores (ランキング用 best)
 
@@ -2312,36 +2312,36 @@ create table public.best_course_scores (
 );
 ```
 
-best 更新条件は単曲と同じ
-`ex_score > clear_rank > bp(小) > max_combo` の順。
-段位らしさを優先するなら `clear_rank` (合格段位) を第一キーにする案も
-あるが、IR 全体の「EX score 主軸」を崩さない方を既定にする。
-不正な署名は保存せず拒否する。
-同じ player / `idempotency_key` の重複投稿は既存の `course_score_id` を返し、
-best は再計算せず `best_updated=false` とする。
+best更新条件は単曲と同じ
+`ex_score > clear_rank > bp(小) > max_combo`の順です。
+段位らしさを優先するなら`clear_rank` (合格段位)を第一キーにする案も
+あるが、IR全体の「EX score 主軸」を崩さない方を既定にします。
+不正な署名は保存せず拒否します。
+同じplayer / `idempotency_key`の重複投稿は既存の`course_score_id`を返し、
+bestは再計算せず`best_updated=false`とします。
 
 #### API
 
-- `scores` / `best_scores` と同じ方針:
-  select は公開、書き込みは server route の認証済み API のみ。
-- API は本節冒頭の `POST /api/v1/course-scores` に加えて:
+- `scores` / `best_scores`と同じ方針:
+  selectは公開、書き込みはserver routeの認証済みAPIのみです。
+- APIは本節冒頭の`POST /api/v1/course-scores`に加えて:
 
 ```http
 GET /api/v1/courses/{course_hash}                # registry + 集計
 GET /api/v1/courses/{course_hash}/ranking        # scope/gauge/ln_policy/rule_mode
 ```
 
-- evidence は `bmz-course-score-evidence-v1` schema で、単曲と同じ
-  Ed25519 device key / canonical JSON を使う。
+- evidenceは`bmz-course-score-evidence-v1` schemaで、単曲と同じ
+  Ed25519 device key / canonical JSONを使います。
 
 #### クライアント側の対応 (実装済み)
 
-- `CourseResultSummary` (course_session.rs) から payload を構築。
-  `course_hash` は course 定義 (charts + constraints) から計算し、
-  ローカル `courses.course_key` とは独立に持つ。
-- `ir_score_jobs.kind = 'course'` で単曲 job と同じ queue を使う。
-  `local_score_id` は local course score id、`chart_sha256` は course hash を
-  入れる。
+- `CourseResultSummary` (course_session.rs)からpayloadを構築します。
+  `course_hash`はcourse定義 (charts + constraints)から計算し、
+  ローカル`courses.course_key`とは独立に持ちます。
+- `ir_score_jobs.kind = 'course'`で単曲jobと同じqueueを使います。
+  `local_score_id`はlocal course score id、`chart_sha256`はcourse hashを
+  入れます。
 
 ```http
 POST /api/v1/course-scores
@@ -2427,7 +2427,7 @@ Payload:
 
 ## 20. URL Resolver
 
-beatoraja の `getSongURL`, `getCourseURL`, `getPlayerURL` 相当。
+beatorajaの`getSongURL`, `getCourseURL`, `getPlayerURL`相当です。
 
 ```rust
 pub trait IrUrlResolver {
@@ -2449,7 +2449,7 @@ https://ir.example.com/players/{player_id}
 
 ## 21. API 一覧: 初期実装優先度 (履歴)
 
-この節は初期計画の履歴。現在の実装済み API は冒頭の「実装状況」を正とする。
+この節は初期計画の履歴です。現在の実装済みAPIは冒頭の「実装状況」を正とします。
 
 ### Must have
 
@@ -2495,20 +2495,20 @@ GET  /api/v1/courses/{course_id}/ranking
 
 ### Auth
 
-- `nuxt-auth-utils` cookie session と BMZ クライアント向け bearer access token を検証する。
-- `users` と `profiles` を紐付ける。
-- BMZ クライアントは email/password login で access/refresh token を取得する。
+- `nuxt-auth-utils` cookie sessionとBMZクライアント向けbearer access tokenを検証します。
+- `users`と`profiles`を紐付けます。
+- BMZクライアントはemail/password loginでaccess/refresh tokenを取得します。
 
 ### NuxtHub DB
 
-- Schema は `bmz-ir-web/server/db/schema.ts` の Drizzle schema を正とする。
-- Migration は NuxtHub CLI / drizzle-kit の既定に合わせて
-  `server/db/migrations/sqlite/` に生成する。
-- server route は `hub:db` の Drizzle client 経由で DB を読む。
+- Schemaは`bmz-ir-web/server/db/schema.ts`のDrizzle schemaを正とします。
+- MigrationはNuxtHub CLI / drizzle-kitの既定に合わせて
+  `server/db/migrations/sqlite/`に生成します。
+- server routeは`hub:db`のDrizzle client経由でDBを読みます。
 
 ### Transaction
 
-Score submission では次を transaction 的に扱う。
+Score submissionでは次をtransaction的に扱います。
 
 ```txt
 score insert
@@ -2516,13 +2516,13 @@ best_scores upsert
 ranking select
 ```
 
-Nuxt server route だけでつらくなったら RPC 化する。
+Nuxt server routeだけでつらくなったらRPC化します。
 
 ---
 
 ## 23. Provider Adapter 方針
 
-BMZ 内部では情報をリッチに持つ。
+BMZ内部では情報をリッチに持ちます。
 
 ```txt
 BMZ Score
@@ -2534,7 +2534,7 @@ BMZ Score
   - signature
 ```
 
-外部IRが受け取れない項目は Adapter で明示的に落とす。
+外部IRが受け取れない項目はAdapterで明示的に落とします。
 
 ```rust
 impl MochaAdapter {
@@ -2544,7 +2544,7 @@ impl MochaAdapter {
 }
 ```
 
-情報を落とす箇所はログ・コメントで明示する。
+情報を落とす箇所はログ・コメントで明示します。
 
 ---
 
@@ -2552,87 +2552,87 @@ impl MochaAdapter {
 
 ### Phase 1: BMZ client model / trait
 
-- `IrProvider` trait を追加。
-- `IrSubmitOptions` / `IrSubmitResponse` / `IrRankingQuery` / `IrRankingScope` を追加。
-- `IrChartIdentity` / `IrScoreSubmission` / `IrRanking` を定義。
-- リザルト画面用の `ResultRankingState` を追加。
-- IR 設定項目を `profile.toml` 側に追加。
+- `IrProvider` traitを追加します。
+- `IrSubmitOptions` / `IrSubmitResponse` / `IrRankingQuery` / `IrRankingScope`を追加します。
+- `IrChartIdentity` / `IrScoreSubmission` / `IrRanking`を定義します。
+- リザルト画面用の`ResultRankingState`を追加します。
+- IR設定項目を`profile.toml`側に追加します。
 
 ### Phase 2: Local DB / Job Queue
 
-- BMZ 本体の score 保存に `bp` / `cb` 集計を追加する。
-- `score_history` / `score_best` / replay slot metrics の `bp` / `cb` を IR payload / best update に接続する。
-- BMZ 本体の入力 pipeline に `keyboard` / `controller` の device kind を残し、human press input の多数決で `device_type` を決める。
-- `score_history` / `score_best` に `device_type` を保存し、IR payload の `play_options.device_type` へ接続する。
-- ローカル表示用の `play_count` / `clear_count` を local score DB から集計または保存する。ただし IR 送信値には使わない。
+- BMZ本体のscore保存に`bp` / `cb`集計を追加します。
+- `score_history` / `score_best` / replay slot metricsの`bp` / `cb`をIR payload / best updateに接続します。
+- BMZ本体の入力pipelineに`keyboard` / `controller`のdevice kindを残し、human press inputの多数決で`device_type`を決めます。
+- `score_history` / `score_best`に`device_type`を保存し、IR payloadの`play_options.device_type`へ接続します。
+- ローカル表示用の`play_count` / `clear_count`をlocal score DBから集計または保存します。ただしIR送信値には使いません。
 - `ir_accounts`
 - `ir_score_jobs`
 - `ir_score_submissions`
-- retry / idempotency 管理
+- retry / idempotency管理
 
 ### Phase 3: BMZ Official Provider
 
-- OAuth/OIDC login flow 連携。
-- token refresh。
-- Credential Store 保存。
-- `POST /api/v1/scores` 実装。
-- `GET /api/v1/charts/{sha256}/ranking` 実装。
+- OAuth/OIDC login flow連携です。
+- token refreshです。
+- Credential Store保存です。
+- `POST /api/v1/scores`実装です。
+- `GET /api/v1/charts/{sha256}/ranking`実装です。
 
 ### Phase 4: NuxtHub / Drizzle IR server
 
-- `players`, `charts`, `scores`, `best_scores`, `rival_relationships`, `device_keys`, `replay_objects` を作成。
-- Score submission route 実装。
-- `ln_policy` を score / best / ranking / stats の分離キーとして実装する。
-- `play_count` / `clear_count` は submission payload から受け取らず、`scores` 投稿履歴から集計する。
-- Ranking route 実装。
-- Ranking / Chart detail response で必要に応じて `play_count` / `clear_count` を返す。
-- Rival route 実装。
-- `include=rankings&ranking_scopes=...` に対応。
+- `players`, `charts`, `scores`, `best_scores`, `rival_relationships`, `device_keys`, `replay_objects`を作成します。
+- Score submission route実装です。
+- `ln_policy`をscore / best / ranking / statsの分離キーとして実装します。
+- `play_count` / `clear_count`はsubmission payloadから受け取らず、`scores`投稿履歴から集計します。
+- Ranking route実装です。
+- Ranking / Chart detail responseで必要に応じて`play_count` / `clear_count`を返します。
+- Rival route実装です。
+- `include=rankings&ranking_scopes=...`に対応します。
 
 ### Phase 5: Replay / Evidence
 
-- canonical payload hash 実装。
-- Ed25519 device key 署名。
-- server-side signature verification。
-- replay hash 保存。
-- replay upload / download / verify API 実装。
-- device key 登録 / 一覧 / 失効 API 実装。
+- canonical payload hash実装です。
+- Ed25519 device key署名です。
+- server-side signature verificationです。
+- replay hash保存です。
+- replay upload / download / verify API実装です。
+- device key登録 / 一覧 / 失効API実装です。
 
 ---
 
 ## 25. 未決事項 / 要レビュー
 
-Codex にレビューしてほしい点。
+Codexにレビューしてほしい点です。
 
-1. `rankings` response の wrapper 形式
-   - `rankings.global.succeeded/data` の形でよいか。
-   - それとも `rankings.global = null | IrRanking` にして error は別 field にするか。
+1. `rankings` responseのwrapper形式
+   - `rankings.global.succeeded/data`の形でよいか。
+   - それとも`rankings.global = null | IrRanking`にしてerrorは別fieldにするか。
 
-2. `best_scores` の採用条件
-   - ランキング主軸は EX score 固定。
-   - 同点時に clear / minbp / mincb / combo を best 更新判定に含めるか。
-   - ランキング順位は EX score のみで同点同順位にする。
-   - LN/CN/HCN の分離は `docs/ln.md` の `LnScorePolicy` 準拠で固定し、`best_scores` の unique key に含める。
+2. `best_scores`の採用条件
+   - ランキング主軸はEX score固定です。
+   - 同点時にclear / minbp / mincb / comboをbest更新判定に含めるか。
+   - ランキング順位はEX scoreのみで同点同順位にします。
+   - LN/CN/HCNの分離は`docs/ln.md`の`LnScorePolicy`準拠で固定し、`best_scores`のunique keyに含めます。
 
-3. `scope_rank` の必要性
+3. `scope_rank`の必要性
    - 初期から返すか。
    - UI側で計算するか。
 
 4. replay upload API
-   - 実装済み。score submit response には upload URL を含めず、
-     `POST /api/v1/scores/{id}/replay/upload-url` で取得する。
-   - replay object の hash 検証は
-     `POST /api/v1/scores/{id}/replay/verify` で行う。
+   - 実装済みです。score submit responseにはupload URLを含めず、
+     `POST /api/v1/scores/{id}/replay/upload-url`で取得します。
+   - replay objectのhash検証は
+     `POST /api/v1/scores/{id}/replay/verify`で行います。
 
 5. tamper evidence
-   - canonical JSON を採用するか。
-   - MessagePack 等の binary canonical format を採用するか。
-   - Ed25519 key の生成・保存・rotate・revoke をどう実装するか。
-   - クライアント時計由来の `played_at` とサーバー受信時刻のズレをどう表示・警告するか。
+   - canonical JSONを採用するか。
+   - MessagePack等のbinary canonical formatを採用するか。
+   - Ed25519 keyの生成・保存・rotate・revokeをどう実装するか。
+   - クライアント時計由来の`played_at`とサーバー受信時刻のズレをどう表示・警告するか。
 
-6. NuxtHub / Drizzle route 分担
-   - submit + best update + ranking fetch を route/service 内で書く。
-   - D1 / Turso 移行を見据え、DB 固有 RPC には寄せない。
+6. NuxtHub / Drizzle route分担
+   - submit + best update + ranking fetchをroute/service内で書きます。
+   - D1 / Turso移行を見据え、DB固有RPCには寄せません。
 
 ---
 
@@ -2687,23 +2687,23 @@ GET /api/v1/charts/{sha256}/ranking?scope=self_and_rivals&limit=100&rule_mode=Be
 ## 開発環境と実装の入口
 
 Node.js / Bunを用意し、リポジトリrootから操作します。
-コマンドの定義は [package.json](../package.json)、ディレクトリ対応とruntime設定は
-[nuxt.config.ts](../nuxt.config.ts) を確認します。
+コマンドの定義は[package.json](../package.json)、ディレクトリ対応とruntime設定は
+[nuxt.config.ts](../nuxt.config.ts)を確認します。
 
 ### アプリ構成
 
 | 場所 | 責務 |
 |---|---|
-| [bmz-ir-web/app](../bmz-ir-web/app/) | Nuxt UI。pages、components、layouts、composables等 |
+| [bmz-ir-web/app](../bmz-ir-web/app/) | Nuxt UIです。pages、components、layouts、composables等 |
 | [bmz-ir-web/server](../bmz-ir-web/server/) | Nitro API、middleware、services、repositories等 |
-| [bmz-ir-web/shared](../bmz-ir-web/shared/) | app/server共通の型・schema・定数・純粋関数。secretやDB queryは置かない |
+| [bmz-ir-web/shared](../bmz-ir-web/shared/) | app/server共通の型・schema・定数・純粋関数です。secretやDB queryは置かない |
 | [bmz-ir-web/public](../bmz-ir-web/public/) | root URLから配信する静的ファイル |
 | [Rust IR client](../crates/bmz-player/src/ir/) | client、credentials、device_key、sync、secret_store |
 | [Rust IR CLI](../crates/bmz-player/src/ir_cmd.rs) | login / logout / status / ranking / sync / rivals / device-key / replay |
 
-Result / Selectの連携は `crates/bmz-player/src/screens/result_ir.rs` / `select_ir.rs`、
-skin IDの解決は `crates/bmz-render/src/skin/` を確認します。
-秘密情報の保存先はprofileの `[ir] credential_store = "File" | "Os"` で選びます。
+Result / Selectの連携は`crates/bmz-player/src/screens/result_ir.rs` / `select_ir.rs`、
+skin IDの解決は`crates/bmz-render/src/skin/`を確認します。
+秘密情報の保存先はprofileの`[ir] credential_store = "File" | "Os"`で選びます。
 実装済みAPIとローカルでの操作例は、この文書冒頭の「実装状況」を参照してください。
 
 ### ローカルの準備
@@ -2722,21 +2722,21 @@ bun run build
 bun run cf:types
 ```
 
-`bun run build` はNuxt buildとWeb依存ライセンス生成を実行します。
-Worker設定が必要な `cf:types` はbuild後に実行します。
-開発サーバーは `bun run dev` です。現行scriptは `TMPDIR=/tmp nuxt dev` を使うため、
+`bun run build`はNuxt buildとWeb依存ライセンス生成を実行します。
+Worker設定が必要な`cf:types`はbuild後に実行します。
+開発サーバーは`bun run dev`です。現行scriptは`TMPDIR=/tmp nuxt dev`を使うため、
 実行環境のshellと一時ディレクトリがこの指定に対応していることを確認します。
 
 ### DB / blob
 
-- schemaの正は [bmz-ir-web/server/db/schema.ts](../bmz-ir-web/server/db/schema.ts) です。
+- schemaの正は[bmz-ir-web/server/db/schema.ts](../bmz-ir-web/server/db/schema.ts)です。
   NuxtHub DB + Drizzle ORMを使います。
-- migrationは [server/db/migrations/sqlite](../server/db/migrations/sqlite/) に集約します。
-  schema変更時の生成は `bun run db:generate`、ローカル適用は `bun run db:migrate` です。
-- Cloudflare向け設定はbuildが生成する `.output/server/wrangler.json` を使います。
-  D1 bindingは `DB`、R2 bindingは `BLOB` です。配布先の定義は [wrangler.jsonc](../wrangler.jsonc) を確認します。
-- replay blobは `hub:blob` 経由で保存し、ローカルは `.data/blob` を使います。
-  配布先のbinding・環境変数は設定と [.env.example](../.env.example) を確認します。
+- migrationは[server/db/migrations/sqlite](../server/db/migrations/sqlite/)に集約します。
+  schema変更時の生成は`bun run db:generate`、ローカル適用は`bun run db:migrate`です。
+- Cloudflare向け設定はbuildが生成する`.output/server/wrangler.json`を使います。
+  D1 bindingは`DB`、R2 bindingは`BLOB`です。配布先の定義は[wrangler.jsonc](../wrangler.jsonc)を確認します。
+- replay blobは`hub:blob`経由で保存し、ローカルは`.data/blob`を使います。
+  配布先のbinding・環境変数は設定と[.env.example](../.env.example)を確認します。
 - `.env`、認証token、production dataはコミットしません。
   production / remoteへの破壊的書き込みは、対象と内容への明示的な承認後に実行します。
 
@@ -2749,5 +2749,5 @@ bunx vue-tsc --noEmit
 bun run test:ir
 ```
 
-翻訳変更では `bun run test:i18n` も使います。Webのみの変更にRust全テストは原則不要です。
-共通の作業・コミット規約は [AGENTS.md](../AGENTS.md) を参照します。
+翻訳変更では`bun run test:i18n`も使います。Webのみの変更にRust全テストは原則不要です。
+共通の作業・コミット規約は[AGENTS.md](../AGENTS.md)を参照します。
