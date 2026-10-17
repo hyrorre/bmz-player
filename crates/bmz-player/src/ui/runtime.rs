@@ -170,11 +170,25 @@ impl EguiLayer {
         select_course_builder: bool,
     ) -> bool {
         let response = self.state.on_window_event(window, event);
-        (self.blocks_game_input(practice_overlay) || select_course_builder) && response.consumed
+        egui_consumed_game_input(
+            self.visible,
+            practice_overlay,
+            select_course_builder,
+            self.update_dialog_active,
+            self.profile_manager.busy,
+            response.consumed,
+        )
     }
 
+    /// egui のモーダル状態が、画面側の入力を専有するか。
+    ///
+    /// F1 メニューは表示中でも入力を一律には専有せず、各 window event の consumed 状態で伝播を決める。
     pub fn blocks_game_input(&self, practice_overlay: bool) -> bool {
-        self.visible || practice_overlay || self.update_dialog_active || self.profile_manager.busy
+        blocks_game_input_for_modal_state(
+            practice_overlay,
+            self.update_dialog_active,
+            self.profile_manager.busy,
+        )
     }
 
     /// 設定 metadata や profile 差分検出を含む完全な egui frame が必要かを返す。
@@ -539,6 +553,32 @@ impl EguiLayer {
             select_course_builder_action,
         }
     }
+}
+
+pub(super) fn egui_consumed_game_input(
+    menu_visible: bool,
+    practice_overlay: bool,
+    select_course_builder: bool,
+    update_dialog_active: bool,
+    profile_manager_busy: bool,
+    event_consumed: bool,
+) -> bool {
+    (menu_visible
+        || select_course_builder
+        || blocks_game_input_for_modal_state(
+            practice_overlay,
+            update_dialog_active,
+            profile_manager_busy,
+        ))
+        && event_consumed
+}
+
+pub(super) fn blocks_game_input_for_modal_state(
+    practice_overlay: bool,
+    update_dialog_active: bool,
+    profile_manager_busy: bool,
+) -> bool {
+    practice_overlay || update_dialog_active || profile_manager_busy
 }
 
 impl EguiKeyConfigUiState {

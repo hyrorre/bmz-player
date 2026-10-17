@@ -138,6 +138,22 @@ fn hidden_egui_uses_idle_frame_on_every_scene_until_an_overlay_needs_full_state(
 }
 
 #[test]
+fn f1_menu_only_blocks_window_input_when_egui_consumes_it() {
+    assert!(!egui_consumed_game_input(true, false, false, false, false, false));
+    assert!(egui_consumed_game_input(true, false, false, false, false, true));
+    assert!(!egui_consumed_game_input(false, false, false, false, false, true));
+    assert!(egui_consumed_game_input(false, true, false, false, false, true));
+}
+
+#[test]
+fn modal_game_input_blocks_do_not_depend_on_f1_menu_visibility() {
+    assert!(!blocks_game_input_for_modal_state(false, false, false));
+    assert!(blocks_game_input_for_modal_state(true, false, false));
+    assert!(blocks_game_input_for_modal_state(false, true, false));
+    assert!(blocks_game_input_for_modal_state(false, false, true));
+}
+
+#[test]
 fn difficulty_table_source_label_shows_fetched_table_name() {
     let tables = vec![DifficultyTableRecord {
         id: 1,
