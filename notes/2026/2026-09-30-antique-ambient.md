@@ -25,7 +25,7 @@ antiqueにすりガラス風のAmbient演出を追加し、既定OFFのオプシ
   その他のBGAサイズ・左右配置・汎用BGA/BGI選択条件は既存の指定を使う。
 
 仕様と操作は [skin.md](../../docs/skin.md#ambient背景bmz拡張)、
-[controls.md](../../docs/controls.md#共通) に記載。
+[settings.md](../../docs/settings.md#同梱antiqueスキンのオプション) に記載。
 
 ## 検証
 

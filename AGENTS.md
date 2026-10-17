@@ -96,7 +96,7 @@ BMZ Player の継続開発で常に参照する作業方針です。機能の詳
 | 作業 | 先に読む文書・入口 |
 |---|---|
 | build・worktree・smoke | [README](README.md)、[development.md](docs/development.md) |
-| キー操作・設定UI | [controls.md](docs/controls.md)、`crates/bmz-player/src/input/`、`src/ui/` |
+| キー操作・設定UI | [controls.md](docs/controls.md)、[settings.md](docs/settings.md)、`crates/bmz-player/src/input/`、`src/ui/` |
 | 判定・ゲージ・コンボ | [rule.md](docs/rule.md)、`crates/bmz-gameplay/src/judge/`、`src/score.rs`、`src/gauge.rs` |
 | LN・score identity | [ln.md](docs/ln.md)、[score-persistence.md](docs/score-persistence.md) |
 | HS・SCROLL・SPEED | [hs.md](docs/hs.md)、`crates/bmz-player/src/screens/play_snapshot/scroll.rs` |
@@ -110,7 +110,7 @@ BMZ Player の継続開発で常に参照する作業方針です。機能の詳
 | プレイヤー向けの文章・マニュアル | [writing-style.md](docs/writing-style.md)、[manual/README.md](manual/README.md) |
 | 配布・更新・ライセンス | [packaging.md](docs/packaging.md)、[auto-update.md](docs/auto-update.md)、[linux-tar.md](docs/linux-tar.md)、[licenses.md](docs/licenses.md) |
 
-操作やキー割り当てを変更するときは `docs/controls.md` を確認・更新します。
+操作やキー割り当てを変更するときは `docs/controls.md`、BMZ メニューの設定を変更するときは `docs/settings.md` を確認・更新します。
 新しいCLI/debug optionは `crates/bmz-player/src/cli.rs` の既存構成に集約します。
 仕様や対応範囲を変更したら、その仕様を管理しているdocも更新します。
 
