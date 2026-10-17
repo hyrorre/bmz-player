@@ -24,7 +24,8 @@ By default, KEY1 to KEY7 are **Z S X D C F V**, and E1 to E4 are **Q W E R**.
 | Enter, Right, KEY1 / KEY3 / KEY5 / KEY7 | Confirm (open a folder or start a song) |
 | Left, KEY2 / KEY4 / KEY6 | Close the folder |
 | / | Search for songs |
-| Esc (hold) | Quit BMZ Player |
+| Esc | Close the BMZ Menu if it is open, otherwise close the folder |
+| Esc (hold at the top level) | Quit BMZ Player |
 
 You can also use the mouse. Scroll the wheel to move the cursor, click the selected row to confirm, and right-click to close the folder.
 

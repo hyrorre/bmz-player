@@ -79,6 +79,18 @@ impl EguiLayer {
         tracing::info!(visible = self.visible, "egui menu toggled");
     }
 
+    /// ESC で BMZ メニューを閉じる。閉じたら true。
+    ///
+    /// 文字入力中など egui が ESC を消費したときと、プルダウン等のポップアップを
+    /// 表示中は、egui 側の「入力・ポップアップを閉じる」を優先してメニューは残す。
+    pub fn close_on_escape(&mut self, egui_consumed: bool) -> bool {
+        if !escape_closes_menu(self.visible, egui_consumed, self.ctx.any_popup_open()) {
+            return false;
+        }
+        self.toggle();
+        true
+    }
+
     /// 選曲画面の「詳細設定」から BMZ メニューを開く。表示中のページは維持する。
     pub fn open_advanced_settings(&mut self) {
         self.visible = true;
@@ -571,6 +583,14 @@ pub(super) fn egui_consumed_game_input(
             profile_manager_busy,
         ))
         && event_consumed
+}
+
+pub(super) fn escape_closes_menu(
+    menu_visible: bool,
+    egui_consumed: bool,
+    popup_open: bool,
+) -> bool {
+    menu_visible && !egui_consumed && !popup_open
 }
 
 pub(super) fn blocks_game_input_for_modal_state(

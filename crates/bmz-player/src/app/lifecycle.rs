@@ -148,6 +148,18 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     self.update_select_option_panel();
                     return;
                 }
+                // ESC は BMZ メニューを閉じる操作を、フォルダを閉じる・長押し終了より優先する。
+                // プレイ中は ESC がプレイ中断なので、メニュー表示中もプレイ側へ渡す。
+                if event.physical_key == PhysicalKey::Code(KeyCode::Escape)
+                    && event.state == ElementState::Pressed
+                    && !event.repeat
+                    && !has_play_context
+                    && !practice_overlay
+                    && self.ui.egui.as_mut().is_some_and(|egui| egui.close_on_escape(egui_consumed))
+                {
+                    self.update_select_option_panel();
+                    return;
+                }
                 // Practice 設定画面だけは keyboard を UI 専用にする。通常プレイ中の
                 // F1メニュー等はeguiへ供給しつつ、プレイ側にも同じ入力を通す。
                 if egui_blocks_window_keyboard_route(

@@ -133,6 +133,7 @@ use runtime::AudioDevicePickerState;
 #[cfg(test)]
 use runtime::{
     blocks_game_input_for_modal_state, egui_consumed_game_input, egui_frame_needs_full_state,
+    escape_closes_menu,
 };
 
 #[cfg(test)]

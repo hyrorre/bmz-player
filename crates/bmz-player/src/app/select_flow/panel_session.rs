@@ -337,6 +337,19 @@ mod tests {
     }
 
     #[test]
+    fn select_escape_closes_folders_before_arming_the_root_exit_hold() {
+        assert_eq!(select_escape_press(true, 2), SelectEscapePress::CancelEdit);
+        assert_eq!(select_escape_press(false, 2), SelectEscapePress::ExitFolder);
+        assert_eq!(select_escape_press(false, 1), SelectEscapePress::ExitFolder);
+        assert_eq!(select_escape_press(false, 0), SelectEscapePress::ArmExitHold);
+        // フォルダを閉じた押下を押し続けても、OS repeat では終了の計測を始めない。
+        let now = Instant::now();
+        let mut hold = None;
+        update_select_exit_hold(&mut hold, ElementState::Pressed, true, now);
+        assert!(!select_exit_hold_due(&mut hold, true, now + SELECT_EXIT_HOLD_DURATION));
+    }
+
+    #[test]
     fn unavailable_panel_passes_modifier_keys_to_search_and_key_config() {
         let keys =
             SelectKeyBindings::from_profile(&crate::config::play_input::default_profile_input());

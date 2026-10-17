@@ -37,7 +37,7 @@ A sample song is included for testing. Try selecting and playing it.
 
 - Move the cursor with **Up / Down**, confirm with **Enter**, and close a folder with **Left**.
 - For 7 keys, the keys are **Z S X D C F V** and the turntable is **Left Shift / Left Ctrl**.
-- To quit, hold **Esc** on the song select screen.
+- To quit, hold **Esc** at the top level of the song select screen. Inside a folder, each press of Esc closes the folder.
 
 Press **F1** to open the **BMZ Menu**. Pick a category from the list on the left to show its settings on the right.
 Settings are saved automatically when you change them, so there is no save button to press.

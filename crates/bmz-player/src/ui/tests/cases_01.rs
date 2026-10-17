@@ -145,6 +145,106 @@ fn f1_menu_only_blocks_window_input_when_egui_consumes_it() {
     assert!(egui_consumed_game_input(false, true, false, false, false, true));
 }
 
+/// 表示中の BMZ メニューに実際の pointer / key 入力を与え、egui-winit が consumed の判定に使う
+/// egui の状態から、選曲画面へ渡る入力と止まる入力を確かめる。
+#[test]
+fn open_f1_menu_passes_unfocused_keys_and_keeps_pointer_input_over_the_menu() {
+    let ctx = egui::Context::default();
+    let text = Localizer::new(AppLocale::En);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+    let frame = |events: Vec<egui::Event>| {
+        let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+        let _ = ctx.run_ui(input, |ui| {
+            build_menu_window(ui.ctx(), &mut true, "Default", text, |ui| {
+                ui.label("page body");
+            });
+        });
+    };
+    for _ in 0..3 {
+        frame(Vec::new());
+    }
+    let window =
+        ctx.memory(|memory| memory.area_rect(egui::Id::new("settings_workspace"))).unwrap();
+    let inside = window.center();
+    let outside = egui::pos2(screen.right() - 4.0, screen.bottom() - 4.0);
+    assert!(!window.contains(outside), "probe point must be outside the menu: {window:?}");
+    let menu_consumed =
+        |consumed| egui_consumed_game_input(true, false, false, false, false, consumed);
+
+    // メニュー上のホイール・クリックは egui が使うので選曲画面へ渡さない。
+    frame(vec![egui::Event::PointerMoved(inside)]);
+    assert!(menu_consumed(ctx.egui_wants_pointer_input()));
+    // メニュー本文をクリックしてもキーボードフォーカスは取らず、矢印キー等は選曲画面へ渡る。
+    let click = |pressed| egui::Event::PointerButton {
+        pos: inside,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    frame(vec![click(true)]);
+    frame(vec![click(false)]);
+    frame(Vec::new());
+    assert!(!menu_consumed(ctx.egui_wants_keyboard_input()));
+    // メニューの外の pointer 入力も選曲画面へ渡る。
+    frame(vec![egui::Event::PointerMoved(outside)]);
+    assert!(!menu_consumed(ctx.egui_wants_pointer_input()));
+}
+
+#[test]
+fn escape_closes_the_menu_only_after_text_input_and_popups_are_done() {
+    let ctx = egui::Context::default();
+    let text = Localizer::new(AppLocale::En);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+    let combo_rect = std::cell::Cell::new(egui::Rect::NOTHING);
+    let focus_text = std::cell::Cell::new(false);
+    let frame = |events: Vec<egui::Event>| {
+        let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+        let _ = ctx.run_ui(input, |ui| {
+            build_menu_window(ui.ctx(), &mut true, "Default", text, |ui| {
+                let mut value = String::new();
+                let edit = ui.text_edit_singleline(&mut value);
+                if focus_text.replace(false) {
+                    edit.request_focus();
+                }
+                let combo = egui::ComboBox::from_id_salt("escape_probe")
+                    .selected_text("A")
+                    .show_ui(ui, |ui| {
+                        ui.label("B");
+                    });
+                combo_rect.set(combo.response.rect);
+            });
+        });
+    };
+    for _ in 0..3 {
+        frame(Vec::new());
+    }
+    assert!(escape_closes_menu(true, ctx.egui_wants_keyboard_input(), ctx.any_popup_open()));
+    assert!(!escape_closes_menu(false, false, false));
+
+    // 文字入力中の ESC は egui が消費して入力欄を抜けるだけにする。
+    focus_text.set(true);
+    frame(Vec::new());
+    frame(Vec::new());
+    assert!(ctx.egui_wants_keyboard_input());
+    assert!(!escape_closes_menu(true, ctx.egui_wants_keyboard_input(), ctx.any_popup_open()));
+    ctx.memory_mut(|memory| memory.stop_text_input());
+    frame(Vec::new());
+
+    // プルダウン表示中の ESC はプルダウンだけを閉じる。
+    let pos = combo_rect.get().center();
+    let click = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    frame(vec![egui::Event::PointerMoved(pos), click(true)]);
+    frame(vec![click(false)]);
+    frame(Vec::new());
+    assert!(ctx.any_popup_open());
+    assert!(!escape_closes_menu(true, ctx.egui_wants_keyboard_input(), ctx.any_popup_open()));
+}
+
 #[test]
 fn modal_game_input_blocks_do_not_depend_on_f1_menu_visibility() {
     assert!(!blocks_game_input_for_modal_state(false, false, false));

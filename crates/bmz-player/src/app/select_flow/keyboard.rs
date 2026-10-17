@@ -532,19 +532,27 @@ impl WinitApp {
             return;
         }
 
-        // Select 画面で ESC 長押し → アプリ終了 (実際の exit は redraw 時にチェック)。
+        // LR2 / beatoraja と同じく、ESC はフォルダ内ならフォルダを閉じる。
+        // ルートでだけ長押しでアプリ終了 (実際の exit は redraw 時にチェック) を受け付ける。
         if event.physical_key == PhysicalKey::Code(KeyCode::Escape) {
-            if in_settings_stack(&self.select.folder_stack)
-                && event.state == ElementState::Pressed
-                && !event.repeat
-            {
-                if self.select.key_config_edit.is_some() {
-                    self.cancel_key_config_edit();
-                    return;
-                }
-                if self.select.settings_edit.is_some() {
-                    self.cancel_settings_edit();
-                    return;
+            if event.state == ElementState::Pressed && !event.repeat {
+                let editing = in_settings_stack(&self.select.folder_stack)
+                    && (self.select.key_config_edit.is_some()
+                        || self.select.settings_edit.is_some());
+                match select_escape_press(editing, self.select.folder_stack.len()) {
+                    SelectEscapePress::CancelEdit => {
+                        if self.select.key_config_edit.is_some() {
+                            self.cancel_key_config_edit();
+                        } else {
+                            self.cancel_settings_edit();
+                        }
+                        return;
+                    }
+                    SelectEscapePress::ExitFolder => {
+                        self.apply_select_action(SelectAction::ExitFolder, None);
+                        return;
+                    }
+                    SelectEscapePress::ArmExitHold => {}
                 }
             }
             update_select_exit_hold(

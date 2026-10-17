@@ -84,6 +84,29 @@ pub(in crate::app) fn select_exit_hold_due(
         .is_some_and(|started| now.saturating_duration_since(started) >= SELECT_EXIT_HOLD_DURATION)
 }
 
+/// 選曲画面で ESC を押したときの動作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::app) enum SelectEscapePress {
+    /// 設定フォルダ内の値・キー割当の編集を取り消す。
+    CancelEdit,
+    /// LR2 / beatoraja と同じくフォルダを1階層閉じる。
+    ExitFolder,
+    /// ルートでだけ、長押しによるアプリ終了の計測を始める。
+    ArmExitHold,
+}
+
+/// ESC の優先順位: 編集の取消 → フォルダを閉じる → ルートで長押し終了。
+/// BMZ メニューを閉じる操作はこれより前に window event 側で処理する。
+pub(in crate::app) fn select_escape_press(editing: bool, folder_depth: usize) -> SelectEscapePress {
+    if editing {
+        SelectEscapePress::CancelEdit
+    } else if folder_depth > 0 {
+        SelectEscapePress::ExitFolder
+    } else {
+        SelectEscapePress::ArmExitHold
+    }
+}
+
 pub(in crate::app) fn update_select_exit_hold(
     started_at: &mut Option<Instant>,
     state: ElementState,
