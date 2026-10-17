@@ -18,7 +18,10 @@ async fn main() -> ExitCode {
         args.extend(["--profile".to_owned(), context.profile.clone()]);
     }
     if bmz_player::cli::args_request_help(&args) {
-        bmz_player::stdio::stdout_line(format_args!("{}", bmz_player::cli::app_help_text()));
+        bmz_player::stdio::stdout_line(format_args!(
+            "{}",
+            bmz_player::cli::help_text_for_args(&args)
+        ));
         return ExitCode::SUCCESS;
     }
 

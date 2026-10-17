@@ -152,6 +152,7 @@ DB migration / storage / scanの検証でコピー先が更新されても、元
 ```bash
 cargo run -p bmz-player
 cargo run -p bmz-player -- --help
+cargo run -p bmz-player -- --help-dev
 cargo run -p bmz-player -- --boot-play-sample
 cargo run -p bmz-player -- --boot-play-sample --smoke-exit-after-frames 3
 cargo run -p bmz-player -- --boot-play-sample --autoplay-on-start --smoke-exit-on-result
@@ -166,6 +167,8 @@ FPS等の比較には同じ譜面・設定・バックエンド・計測条件�
 操作は[controls.md](controls.md)、起動時の一時設定は[cli-overrides.md](cli-overrides.md)、
 外部エディタ連携は[viewer.md](viewer.md)、オフライン動画出力は[video-export.md](video-export.md)を参照します。
 CLI引数・サブコマンドの一覧は`--help`と[cli.rs](../crates/bmz-player/src/cli.rs)を正とし、ここには重複して列挙しません。
+`--help`はプレイヤー向けの起動・Viewer・一時設定・サブコマンドだけを表示します。`--boot-*-sample`、
+`--lua-skin-runtime`、`--smoke-*`、`audio-probe`、`--latency-*`等の開発・検証用オプションは`--help-dev`で表示します。
 
 ### Windows debug起動のスタック回帰と調査ログ
 

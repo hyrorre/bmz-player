@@ -324,29 +324,30 @@ fn help_args_are_detected() {
     assert!(args_request_help(["-h"]));
     assert!(args_request_help(["--boot-play-sample", "--help"]));
     assert!(!args_request_help(["--boot-play-sample"]));
+    assert!(args_request_help(["--help-dev"]));
+    assert_eq!(help_text_for_args(["--help"]), app_help_text());
+    assert_eq!(help_text_for_args(["-h", "--help-dev"]), dev_help_text());
 }
 
 #[test]
 fn help_text_lists_supported_options() {
     let help = app_help_text();
 
-    assert!(help.contains("--boot-play-sample"));
-    assert!(help.contains("--boot-result-sample"));
-    assert!(help.contains("--autoplay-on-start"));
-    assert!(help.contains("-P | --viewer-play"));
-    assert!(help.contains("-B | --battle"));
+    assert!(help.contains("-a, --autoplay-on-start"));
+    assert!(help.contains("-p, --practice"));
+    assert!(help.contains("--boot-replay-file <PATH>"));
+    assert!(help.contains("-P, --viewer-play"));
+    assert!(help.contains("-B, --battle"));
     assert!(help.contains("--profile <ID>"));
     assert!(help.contains("-N<N> | -N <N> | --start-measure <N>"));
-    assert!(help.contains("-S | --viewer-stop"));
+    assert!(help.contains("-S, --viewer-stop"));
     assert!(help.contains("--skip-decide"));
     assert!(help.contains("--skip-result"));
-    assert!(help.contains("--lua-skin-runtime <auto|compat>"));
-    assert!(help.contains("--smoke-exit-after-frames"));
-    assert!(help.contains("--smoke-exit-after-play-frames"));
-    assert!(help.contains("--smoke-exit-after-result-frames"));
-    assert!(help.contains("--smoke-exit-on-result"));
-    assert!(help.contains("--smoke-screenshot"));
     assert!(help.contains("--renderer"));
+    assert!(help.contains("--help-dev"));
+    assert!(help.contains("--window-mode"));
+    assert!(help.contains("monitors list"));
+    assert!(help.contains("export video <PATH> -o <OUTPUT.mp4>"));
     assert!(help.contains("replay import <PATH> [--overwrite] [--controller]"));
     assert!(help.contains("table add"));
     assert!(help.contains("table list"));
@@ -361,6 +362,36 @@ fn help_text_lists_supported_options() {
     assert!(help.contains("ir attest-submitted"));
     assert!(help.contains("ir cleanup-imported [--provider KEY] [--apply]"));
     assert!(help.contains("ir cleanup-duplicate <HISTORY_ID> [--provider KEY] --apply"));
+}
+
+#[test]
+fn dev_help_text_holds_developer_options_only() {
+    let help = app_help_text();
+    let dev = dev_help_text();
+
+    for option in [
+        "--boot-play-sample",
+        "--boot-result-sample",
+        "--lua-skin-runtime <auto|compat>",
+        "--smoke-exit-after-frames",
+        "--smoke-exit-after-play-frames",
+        "--smoke-exit-after-result-frames",
+        "--smoke-exit-on-result",
+        "--smoke-screenshot",
+        "audio-probe",
+        "--latency-stall-test",
+        "--latency-event-loop-probe",
+        "--latency-legacy-wayland-present",
+        "BMZ_LATENCY_DIAGNOSTICS",
+    ] {
+        assert!(dev.contains(option), "dev help is missing {option}");
+        assert!(!help.contains(option), "regular help still lists {option}");
+    }
+}
+
+#[test]
+fn help_dev_does_not_break_option_parsing() {
+    assert!(AppOptions::parse_args(["--help-dev"]).is_ok());
 }
 
 #[test]
@@ -835,7 +866,7 @@ fn help_text_lists_course_attempt() {
 fn latency_stall_test_is_explicit_and_defaults_off() {
     assert!(!AppOptions::default().latency_stall_test);
     assert!(AppOptions::parse_args(["--latency-stall-test"]).unwrap().latency_stall_test);
-    assert!(app_help_text().contains("--latency-stall-test"));
+    assert!(dev_help_text().contains("--latency-stall-test"));
 }
 
 #[test]
@@ -847,7 +878,7 @@ fn event_loop_probe_is_explicit_and_does_not_enable_stalls() {
     let options =
         AppOptions::parse_args(["--latency-event-loop-probe", "--latency-stall-test"]).unwrap();
     assert!(options.latency_event_loop_probe && options.latency_stall_test);
-    assert!(app_help_text().contains("--latency-event-loop-probe"));
+    assert!(dev_help_text().contains("--latency-event-loop-probe"));
 }
 
 #[test]
@@ -857,5 +888,5 @@ fn legacy_wayland_presentation_is_only_an_explicit_comparison_override() {
     assert!(options.latency_legacy_wayland_present);
     assert!(!options.latency_stall_test);
     assert!(!options.latency_event_loop_probe);
-    assert!(app_help_text().contains("--latency-legacy-wayland-present"));
+    assert!(dev_help_text().contains("--latency-legacy-wayland-present"));
 }

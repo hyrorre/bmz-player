@@ -1,53 +1,184 @@
+pub const HELP_DEV_ARG: &str = "--help-dev";
+
 pub fn args_request_help<I, S>(args: I) -> bool
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    args.into_iter().any(|arg| matches!(arg.as_ref(), "--help" | "-h"))
+    args.into_iter().any(|arg| matches!(arg.as_ref(), "--help" | "-h" | HELP_DEV_ARG))
 }
 
-pub fn app_help_text() -> String {
-    "bmz-player\n\nUsage:\n  bmz-player [OPTIONS] [PATH]\n  bmz-player table <SUBCOMMAND>\n  bmz-player songs <SUBCOMMAND>\n  bmz-player course <SUBCOMMAND>\n  bmz-player profile <SUBCOMMAND>\n  bmz-player ir <SUBCOMMAND>\n\nOptions:\n  [PATH]                                 Start the chart at PATH (beatoraja-style alias)\n  -p | --practice                        Start boot chart in practice mode (CLI only)\n  --practice-start-ms <MS>               Initial practice section start (milliseconds)\n  --practice-end-ms <MS>                 Initial practice section end (milliseconds)\n  -a                                     Enable autoplay for the boot chart (alias of --autoplay-on-start)\n  -r1 | -r2 | -r3 | -r4                  Start replay slot 1..4 for the boot chart\n  --boot-play-sample                     Start the bundled sample chart on boot\n  --boot-result-sample                   Start directly on a synthetic result screen (debug)\n  --autoplay-on-start                    Enable autoplay for started charts\n  --boot-replay <1..4>                   Start replay slot N for the boot chart\n  --boot-course <ID>                     Start course ID fresh on boot\n  --boot-course-replay <ID>              Replay the latest attempt of course ID\n  --lua-skin-runtime <auto|compat>       Lua function evaluation mode (developer option)\n  --smoke-exit-after-frames <N>          Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-after-result-frames <N>   Exit after N rendered result frames, clamped to 1 or more\n  --smoke-exit-on-result                 Exit when the app reaches the result screen\n  --smoke-screenshot <PATH>              Save a PNG screenshot on smoke exit (defaults to 3 frames)\n  --renderer <backend>                   wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                             Print this help\n\nTable subcommands:\n  table add <URL>       Add a difficulty table source and fetch it\n  table list            List all stored difficulty tables\n  table fetch [URL]     Fetch/update configured tables, or a single URL\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n\nCourse subcommands:\n  course import <PATH>             Import beatoraja course JSON from a file or directory\n  course list                      List stored courses\n  course history <ID> [--limit N]  Show recent attempts of course ID (default limit 10)\n  course attempt <SCORE_ID>        Show per-chart breakdown of a single attempt\n\nProfile subcommands:\n  profile list                                      List profiles under data/profiles\n  profile current                                   Show the active profile id\n  profile use <ID>                                  Set active_profile in data/config.toml\n  profile create <ID> [--name NAME] [--activate]    Create a new empty profile\n  profile copy <SRC> <ID> [--name NAME] [--activate] Copy an existing profile directory\n\nIR subcommands:\n  ir login --email <EMAIL> [--password PASS] [--base-url URL]\n  ir login --provider bms-ir --id <BMS_IR_ID> [--password GAME_TOKEN]\n  ir logout [--provider KEY]\n  ir status\n  ir ranking <SHA256> [--ln-policy P] [--scope S] [--limit N]\n  ir sync\n  ir upload-local [--dry-run] [--limit N] [--sync] [--all] [--provider KEY]\n  ir download-scores [--dry-run] [--limit N] [--provider KEY]\n  ir attest-submitted [--provider KEY] [--all]\n  ir cleanup-imported [--provider KEY] [--apply]\n  ir cleanup-duplicate <HISTORY_ID> [--provider KEY] --apply\n  ir rivals [add <PLAYER_ID> | remove <PLAYER_ID>]\n  ir device-key [rotate]\n  ir replay <SCORE_ID>\n\nExamples:\n  cargo run -p bmz-player -- /path/to/chart.bms\n  cargo run -p bmz-player -- -a /path/to/chart.bms\n  cargo run -p bmz-player -- -r2 /path/to/chart.bms\n  cargo run -p bmz-player -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-player -- --boot-result-sample --smoke-exit-after-result-frames 3\n  cargo run -p bmz-player -- --boot-play-sample --smoke-screenshot /tmp/bmz-play.png\n  cargo run -p bmz-player -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-player -- table add https://example.com/table.html\n  cargo run -p bmz-player -- table list\n  cargo run -p bmz-player -- table fetch https://example.com/table.html\n  cargo run -p bmz-player -- songs add /path/to/bms\n  cargo run -p bmz-player -- songs list\n  cargo run -p bmz-player -- songs load\n  cargo run -p bmz-player -- songs reload my-bms-folder\n  cargo run -p bmz-player -- course import /path/to/course.json\n  cargo run -p bmz-player -- course list\n  cargo run -p bmz-player -- profile create alt --name Alt --activate\n  cargo run -p bmz-player -- ir upload-local --dry-run\n  cargo run -p bmz-player -- ir upload-local --limit 20 --sync\n  cargo run -p bmz-player -- ir upload-local --all\n  cargo run -p bmz-player -- ir attest-submitted --all\n  cargo run -p bmz-player -- ir cleanup-imported\n  cargo run -p bmz-player -- ir cleanup-imported --apply\n  cargo run -p bmz-player -- ir download-scores --dry-run"
-        .replace("\n\nOptions:", "\n  bmz-player [--profile ID] export video PATH -o OUTPUT.mp4\n\nExport video options:\n  --resolution WIDTHxHEIGHT   Default: 1920x1080 (even dimensions)\n  --fps N[/D]                 Default: 60; rational FPS supported\n  --replay-slot 1..4           Default: autoplay\n  --seed N                    Reproducible autoplay arrangement and BMS branches\n  --ffmpeg PATH               FFmpeg with libx264 and AAC (default: ffmpeg)\n  --overwrite                 Replace completed output and metadata\n  Interval: Play skin entry through exit, including fades\n\nOptions:")
-        .replace("\n\nOptions:", "\n\nShared launch overrides (never saved):\n  --window-mode windowed|borderless|exclusive\n  --window-size WIDTHxHEIGHT   Physical pixels, windowed only\n  --monitor ID|primary        See: bmz-player monitors list\n  --arrange MODE              off, mirror, random, r-random, s-random, spiral, h-random, all-scratch, random-ex, s-random-ex, f-random, mf-random\n  --arrange-2p MODE           P2 arrangement\n  --double-option off|flip|battle|battle-auto-scratch\n  --gauge assist-easy|easy|normal|hard|ex-hard|hazard\n  --gas off|continue|hard-to-groove|best-clear|select-to-under\n  --gas-bottom assist-easy|easy|normal\n  --hispeed 0.01..20          Fixed Classic multiplier for this chart\n  --hs-fix off|start-bpm|min-bpm|max-bpm|main-bpm\n  --auto-scratch on|off       Scratch autoplay; on disables score saving\n  --bga on|auto|off\n  --guide-se on|off\n  --seed N                    Fixed arrangement and BMS branch seed\n  --print-effective-options   Print settings without starting playback\n  No chart target: play overrides are ignored. Returning to Select discards them.\n  Window overrides last for this process; export rejects window overrides.\n\nOptions:")
-        .replace("\n\nOptions:", "\n\nLatency verification:\n  audio-probe HOST BUFFER RATE SECONDS   Silent stream only; no config/DB/window (HOST: auto|pipewire|pulse|alsa, BUFFER: auto|frames, SECONDS: 3..60)\n  --latency-stall-test                   Stall window thread 100ms every 2s; disable score/IR persistence\n  --latency-event-loop-probe             Synthetic wake-to-dispatch probe; disable score/IR persistence\n  BMZ_LATENCY_DIAGNOSTICS=1              Enable latency distributions (JSON log summaries)\n\nOptions:")
-        .replace("  BMZ_LATENCY_DIAGNOSTICS=1", "  --latency-legacy-wayland-present       Compare without Wayland frame callbacks; disable score/IR saving\n  BMZ_LATENCY_DIAGNOSTICS=1")
-        .replace(
-            "  bmz-player table <SUBCOMMAND>\n  bmz-player songs <SUBCOMMAND>\n  bmz-player course <SUBCOMMAND>\n  bmz-player profile <SUBCOMMAND>\n  bmz-player ir <SUBCOMMAND>\n",
-            "  bmz-player [--profile ID] table <SUBCOMMAND>\n  bmz-player [--profile ID] songs <SUBCOMMAND>\n  bmz-player [--profile ID] course <SUBCOMMAND>\n  bmz-player [--profile ID] replay <SUBCOMMAND>\n  bmz-player [--profile ID] profile <SUBCOMMAND>\n  bmz-player [--profile ID] ir <SUBCOMMAND>\n",
-        )
-        .replace(
-            "  [PATH]                                 Start the chart at PATH (beatoraja-style alias)\n",
-            "  [PATH]                                 Start the chart at PATH (beatoraja-style alias)\n  -P | --viewer-play                     Play PATH as an external viewer\n  -B | --battle                          Start 5K/7K with battle skin (combines with -a/-P)\n  --profile <ID>                         Use profile ID for this CLI invocation (global option)\n  -N<N> | -N <N> | --start-measure <N>   Viewer only: start at zero-based measure/bar N\n  -S | --viewer-stop                     Stop playback and leave the viewer waiting\n  --skip-decide                          Enter Play without the Decide screen\n  --skip-result                          Exit after Play without the Result screen\n",
-        )
-        .replace(
-            "  cargo run -p bmz-player -- -a /path/to/chart.bms\n",
-            "  cargo run -p bmz-player -- -a /path/to/chart.bms\n  cargo run -p bmz-player -- -P -N12 /path/to/chart.bms\n  cargo run -p bmz-player -- -P -B --profile alt /path/to/chart.bms\n  cargo run -p bmz-player -- -S\n",
-        )
-        .replace(
-            "  --smoke-exit-after-frames <N>          Exit after N rendered frames, clamped to 1 or more\n",
-            "  --smoke-exit-after-frames <N>          Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-after-play-frames <N>     Exit after N rendered Play-scene frames, clamped to 1 or more\n",
-        )
-        .replace(
-            "  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n",
-            "  songs load [PATH|NAME] [--everything|--no-everything]    Scan song roots (incremental)\n  songs reload [PATH|NAME] [--everything|--no-everything]  Force rescan song roots\n",
-        )
-        .replace(
-            "  cargo run -p bmz-player -- songs load\n",
-            "  cargo run -p bmz-player -- songs load --everything\n",
-        )
-        .replace(
-            "  bmz-player course <SUBCOMMAND>\n",
-            "  bmz-player course <SUBCOMMAND>\n  bmz-player replay <SUBCOMMAND>\n",
-        )
-        .replace(
-            "  course attempt <SCORE_ID>        Show per-chart breakdown of a single attempt\n\nProfile subcommands:",
-            "  course attempt <SCORE_ID>        Show per-chart breakdown of a single attempt\n\nReplay subcommands:\n  replay import <PATH> [--overwrite] [--controller]\n      Import beatoraja .brd files from a player/replay directory or one file\n\nProfile subcommands:",
-        )
-        .replace(
-            "  cargo run -p bmz-player -- course list\n",
-            "  cargo run -p bmz-player -- course list\n  cargo run -p bmz-player -- replay import /path/to/player\n",
-        )
+/// `--help-dev`が含まれていれば開発者向けヘルプを返し、それ以外は通常のヘルプを返す。
+pub fn help_text_for_args<I, S>(args: I) -> &'static str
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    if args.into_iter().any(|arg| arg.as_ref() == HELP_DEV_ARG) {
+        dev_help_text()
+    } else {
+        app_help_text()
+    }
+}
+
+pub fn app_help_text() -> &'static str {
+    "\
+bmz-player
+
+Usage:
+  bmz-player [OPTIONS] [PATH]
+  bmz-player [--profile ID] <COMMAND> <SUBCOMMAND> [ARGS]
+
+Play:
+  [PATH]                       Start the chart at PATH (archives: ARCHIVE!/ENTRY)
+  -a, --autoplay-on-start      Autoplay the started chart
+  -r1 | -r2 | -r3 | -r4        Play replay slot 1..4 of the chart
+  --boot-replay <1..4>         Same as -r1..-r4
+  --boot-replay-file <PATH>    Play a replay file (see: ir replay)
+  -p, --practice               Start the chart in practice mode
+  --practice-start-ms <MS>     Initial practice section start
+  --practice-end-ms <MS>       Initial practice section end
+  -B, --battle                 Start 5K/7K with the battle skin (with -a or -P)
+  --boot-course <ID>           Start course ID
+  --boot-course-replay <ID>    Replay the latest attempt of course ID
+  --skip-decide                Enter Play without the Decide screen
+  --skip-result                Exit after Play without the Result screen
+  --profile <ID>               Use profile ID for this invocation (global option)
+  --renderer <BACKEND>         vulkan, metal, dx12, gl, auto
+  -h, --help                   Print this help
+  --help-dev                   Print developer and verification options
+
+Viewer (uBMplay-compatible arguments for BMS editors):
+  -P, --viewer-play            Play PATH in the resident viewer (autoplay, no Decide)
+  -N<N> | -N <N> | --start-measure <N>
+                               Start at zero-based measure N
+  -S, --viewer-stop            Stop playback and leave the viewer waiting
+
+Launch overrides (never saved):
+  --window-mode windowed|borderless|exclusive
+  --window-size WIDTHxHEIGHT   Physical pixels, windowed only
+  --monitor ID|primary         See: monitors list
+  --arrange MODE               off, mirror, random, r-random, s-random, spiral, h-random,
+                               all-scratch, random-ex, s-random-ex, f-random, mf-random
+  --arrange-2p MODE            P2 arrangement
+  --double-option off|flip|battle|battle-auto-scratch
+  --gauge assist-easy|easy|normal|hard|ex-hard|hazard
+  --gas off|continue|hard-to-groove|best-clear|select-to-under
+  --gas-bottom assist-easy|easy|normal
+  --hispeed 0.01..20           Fixed Classic multiplier for this chart
+  --hs-fix off|start-bpm|min-bpm|max-bpm|main-bpm
+  --auto-scratch on|off        Scratch autoplay; on disables score saving
+  --bga on|auto|off
+  --guide-se on|off
+  --seed N                     Fixed arrangement and BMS branch seed
+  --print-effective-options    Print settings without starting playback
+  Without a chart, play overrides are ignored. Returning to Select discards them.
+  Window overrides last for this process; export rejects them.
+
+Commands:
+  table add <URL>                                Add a difficulty table and fetch it
+  table list                                     List stored difficulty tables
+  table fetch [URL]                              Fetch all tables, or a single URL
+
+  songs add <PATH> [--no-recursive] [--disabled] Add a song root directory
+  songs list                                     List song roots
+  songs load [PATH|NAME] [--everything|--no-everything]
+                                                 Scan song roots (incremental)
+  songs reload [PATH|NAME] [--everything|--no-everything]
+                                                 Force rescan song roots
+
+  course import <PATH>                           Import beatoraja course JSON (file or directory)
+  course list                                    List stored courses
+  course history <ID> [--limit N]                Show recent attempts (default limit 10)
+  course attempt <SCORE_ID>                      Show per-chart breakdown of an attempt
+
+  replay import <PATH> [--overwrite] [--controller]
+                                                 Import beatoraja .brd files (directory or file)
+
+  profile list                                   List profiles under data/profiles
+  profile current                                Show the active profile id
+  profile use <ID>                               Set active_profile in data/config.toml
+  profile create <ID> [--name NAME] [--activate] Create a new empty profile
+  profile copy <SRC> <ID> [--name NAME] [--activate]
+                                                 Copy an existing profile
+
+  ir login --email <EMAIL> [--password PASS] [--base-url URL]
+  ir login --provider bms-ir --id <BMS_IR_ID> [--password GAME_TOKEN]
+  ir logout [--provider KEY]
+  ir status
+  ir ranking <SHA256> [--ln-policy P] [--scope S] [--limit N]
+  ir sync
+  ir upload-local [--dry-run] [--limit N] [--sync] [--all] [--provider KEY]
+  ir download-scores [--dry-run] [--limit N] [--provider KEY]
+  ir attest-submitted [--provider KEY] [--all]
+  ir cleanup-imported [--provider KEY] [--apply]
+  ir cleanup-duplicate <HISTORY_ID> [--provider KEY] --apply
+  ir rivals [add <PLAYER_ID> | remove <PLAYER_ID>]
+  ir device-key [rotate]
+  ir replay <SCORE_ID>
+
+  monitors list                                  List monitor IDs for --monitor
+
+  export video <PATH> -o <OUTPUT.mp4> [OPTIONS]  Render Play (skin entry to exit) to a video
+    --resolution WIDTHxHEIGHT  Default: 1920x1080 (even dimensions)
+    --fps N[/D]                Default: 60; rational FPS supported
+    --replay-slot 1..4         Default: autoplay
+    --seed N                   Reproducible autoplay arrangement and BMS branches
+    --ffmpeg PATH              FFmpeg with libx264 and AAC (default: ffmpeg)
+    --overwrite                Replace completed output and metadata
+
+Examples:
+  bmz-player /path/to/chart.bms
+  bmz-player -a /path/to/chart.bms
+  bmz-player -r2 /path/to/chart.bms
+  bmz-player --gauge hard --arrange mirror /path/to/chart.bms
+  bmz-player -P -N12 /path/to/chart.bms
+  bmz-player -P -B --profile alt /path/to/chart.bms
+  bmz-player -S
+  bmz-player songs add /path/to/bms
+  bmz-player songs load --everything
+  bmz-player table add https://example.com/table.html
+  bmz-player course import /path/to/course.json
+  bmz-player replay import /path/to/player
+  bmz-player profile create alt --name Alt --activate
+  bmz-player ir upload-local --dry-run
+  bmz-player export video /path/to/chart.bms -o out.mp4"
+}
+
+pub fn dev_help_text() -> &'static str {
+    "\
+bmz-player developer options
+
+These options are for development, smoke tests, and latency verification.
+See --help for regular options.
+
+Boot:
+  --boot-play-sample                     Start the bundled sample chart
+  --boot-result-sample                   Start on a synthetic result screen
+  --lua-skin-runtime <auto|compat>       Lua function evaluation mode
+
+Smoke tests:
+  --smoke-exit-after-frames <N>          Exit after N rendered frames (min 1)
+  --smoke-exit-after-play-frames <N>     Exit after N rendered Play-scene frames (min 1)
+  --smoke-exit-after-result-frames <N>   Exit after N rendered result frames (min 1)
+  --smoke-exit-on-result                 Exit when the app reaches the result screen
+  --smoke-screenshot <PATH>              Save a PNG on smoke exit (defaults to 3 frames)
+
+Latency verification:
+  audio-probe HOST BUFFER RATE SECONDS   Silent stream only; no config/DB/window
+                                         HOST: auto|pipewire|pulse|alsa
+                                         BUFFER: auto|frames, SECONDS: 3..60
+  --latency-stall-test                   Stall the window thread 100ms every 2s
+  --latency-event-loop-probe             Synthetic wake-to-dispatch probe
+  --latency-legacy-wayland-present       Compare without Wayland frame callbacks
+  BMZ_LATENCY_DIAGNOSTICS=1              Log latency distributions (JSON summaries)
+  The --latency-* options disable score and IR saving.
+
+Examples:
+  cargo run -p bmz-player -- --boot-play-sample --smoke-exit-after-frames 3
+  cargo run -p bmz-player -- --boot-result-sample --smoke-exit-after-result-frames 3
+  cargo run -p bmz-player -- --boot-play-sample --smoke-screenshot /tmp/bmz-play.png
+  cargo run -p bmz-player -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result"
 }
 
 pub(super) fn parse_lua_skin_runtime_mode(value: &str) -> Result<bmz_skin::LuaSkinRuntimeMode> {
