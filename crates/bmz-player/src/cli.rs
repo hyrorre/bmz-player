@@ -74,7 +74,10 @@ mod parse;
 
 #[cfg(test)]
 use help::parse_beatoraja_replay_flag;
-pub use help::{app_help_text, args_request_help, dev_help_text, help_text_for_args};
+pub use help::{
+    app_help_text, args_request_help, args_request_version, dev_help_text, help_text_for_args,
+    version_text,
+};
 pub use model::{
     Command, CourseCommand, IrCommand, ParsedCommand, ProfileCommand, ReplayCommand, RivalAction,
     SongsCommand, TableCommand,

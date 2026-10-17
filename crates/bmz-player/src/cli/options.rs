@@ -172,7 +172,11 @@ impl AppOptions {
                         Some(parse_smoke_screenshot_path(value.as_ref())?);
                     options.smoke_exit_after_frames.get_or_insert(3);
                 }
-                "--help" | "-h" | super::help::HELP_DEV_ARG => {}
+                "--help"
+                | "-h"
+                | super::help::HELP_DEV_ARG
+                | super::help::VERSION_ARG
+                | super::help::VERSION_SHORT_ARG => {}
                 SMOKE_EXIT_AFTER_FRAMES_ARG => {
                     let Some(value) = args.next() else {
                         bail!("{SMOKE_EXIT_AFTER_FRAMES_ARG} requires a frame count");

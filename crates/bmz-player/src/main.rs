@@ -24,6 +24,10 @@ async fn main() -> ExitCode {
         ));
         return ExitCode::SUCCESS;
     }
+    if bmz_player::cli::args_request_version(&args) {
+        bmz_player::stdio::stdout_line(format_args!("{}", bmz_player::cli::version_text()));
+        return ExitCode::SUCCESS;
+    }
 
     // Parse errors and help remain side-effect free: paths/config/log directories are not created.
     let invocation = match bmz_player::cli::parse_cli_command(args) {

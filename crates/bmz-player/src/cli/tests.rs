@@ -395,6 +395,22 @@ fn help_dev_does_not_break_option_parsing() {
 }
 
 #[test]
+fn version_args_are_detected_and_reported() {
+    assert!(args_request_version(["--version"]));
+    assert!(args_request_version(["-v"]));
+    assert!(args_request_version(["--boot-play-sample", "-v"]));
+    assert!(!args_request_version(["--boot-play-sample"]));
+    assert!(!args_request_version(["-V"]));
+    assert!(AppOptions::parse_args(["--version"]).is_ok());
+    assert!(AppOptions::parse_args(["-v"]).is_ok());
+
+    let version = version_text();
+    assert!(version.starts_with(&format!("bmz-player {} (", env!("CARGO_PKG_VERSION"))));
+    assert!(version.ends_with(')'));
+    assert!(app_help_text().contains("-v, --version"));
+}
+
+#[test]
 fn parse_command_routes_table_subcommands() {
     assert_eq!(
         parse_command(["table", "add", "https://example.com/"]).unwrap(),

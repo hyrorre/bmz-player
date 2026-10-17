@@ -1,4 +1,19 @@
 pub const HELP_DEV_ARG: &str = "--help-dev";
+pub const VERSION_ARG: &str = "--version";
+pub const VERSION_SHORT_ARG: &str = "-v";
+
+pub fn args_request_version<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter().any(|arg| matches!(arg.as_ref(), VERSION_ARG | VERSION_SHORT_ARG))
+}
+
+/// `bmz-player <version> (<commit>)`。commitはbuild.rsが埋め込むGit hash（未取得時は`unknown`）。
+pub fn version_text() -> String {
+    format!("bmz-player {} ({})", env!("CARGO_PKG_VERSION"), env!("BMZ_BUILD_COMMIT"))
+}
 
 pub fn args_request_help<I, S>(args: I) -> bool
 where
@@ -47,6 +62,7 @@ Play:
   --renderer <BACKEND>         vulkan, metal, dx12, gl, auto
   -h, --help                   Print this help
   --help-dev                   Print developer and verification options
+  -v, --version                Print version and build commit
 
 Viewer (uBMplay-compatible arguments for BMS editors):
   -P, --viewer-play            Play PATH in the resident viewer (autoplay, no Decide)
