@@ -19,10 +19,11 @@ pub(super) fn bar_index(row: &SelectRowSnapshot) -> usize {
         | SelectRowKind::Command
         | SelectRowKind::SearchFolder
         | SelectRowKind::Container => 2,
+        // LR2: 設定カテゴリは通常フォルダ、入口・戻る・閉じるはライバルフォルダ。
         SelectRowKind::SettingsRoot
-        | SelectRowKind::SettingsFolder
-        | SelectRowKind::SettingsBack => 4,
-        SelectRowKind::SettingsClose => 1,
+        | SelectRowKind::SettingsBack
+        | SelectRowKind::SettingsClose => 4,
+        SelectRowKind::SettingsFolder => 1,
         _ => select_row_bar_image_index(row),
     }
 }
