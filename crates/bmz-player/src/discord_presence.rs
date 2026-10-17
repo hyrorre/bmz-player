@@ -8,7 +8,12 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc::{self, UnboundedSender};
 
-use crate::config::app_config::{DEFAULT_DISCORD_APPLICATION_ID, DiscordConfig};
+use crate::config::app_config::DiscordConfig;
+
+/// BMZ Player の Discord application。画像 asset もこの application に登録している。
+const DISCORD_APPLICATION_ID: &str = "1524506927315419448";
+const DISCORD_LARGE_IMAGE_KEY: &str = "bmz";
+const DISCORD_LARGE_IMAGE_TEXT: &str = "BMZ Player";
 
 const OPCODE_HANDSHAKE: u32 = 0;
 const OPCODE_FRAME: u32 = 1;
@@ -20,9 +25,6 @@ static NEXT_NONCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscordPresenceConfig {
-    application_id: String,
-    large_image_key: String,
-    large_image_text: String,
     show_song_details: bool,
 }
 
@@ -31,13 +33,7 @@ impl DiscordPresenceConfig {
         if !config.enabled {
             return None;
         }
-        let application_id = effective_application_id(&config.application_id);
-        Some(Self {
-            application_id,
-            large_image_key: config.large_image_key.trim().to_string(),
-            large_image_text: config.large_image_text.trim().to_string(),
-            show_song_details: config.show_song_details,
-        })
+        Some(Self { show_song_details: config.show_song_details })
     }
 
     pub fn show_song_details(&self) -> bool {
@@ -99,9 +95,9 @@ pub struct DiscordPresenceHandle {
 }
 
 impl DiscordPresenceHandle {
-    pub fn start(config: DiscordPresenceConfig) -> Self {
+    pub fn start() -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        tokio::spawn(discord_presence_worker(config, rx));
+        tokio::spawn(discord_presence_worker(rx));
         Self { tx }
     }
 
@@ -131,11 +127,8 @@ enum DiscordPresenceCommand {
     Shutdown,
 }
 
-async fn discord_presence_worker(
-    config: DiscordPresenceConfig,
-    mut rx: mpsc::UnboundedReceiver<DiscordPresenceCommand>,
-) {
-    let mut client = DiscordRpcClient::new(config);
+async fn discord_presence_worker(mut rx: mpsc::UnboundedReceiver<DiscordPresenceCommand>) {
+    let mut client = DiscordRpcClient::new();
     let mut desired_presence: Option<DiscordPresence> = None;
     let mut last_sent: Option<DiscordPresence> = None;
     let mut refresh = tokio::time::interval_at(
@@ -242,17 +235,16 @@ async fn read_rpc_response(stream: &mut DiscordIpcStream) -> io::Result<(u32, Ve
 }
 
 struct DiscordRpcClient {
-    config: DiscordPresenceConfig,
     connection: Option<DiscordRpcConnection>,
 }
 
 impl DiscordRpcClient {
-    fn new(config: DiscordPresenceConfig) -> Self {
-        Self { config, connection: None }
+    fn new() -> Self {
+        Self { connection: None }
     }
 
     async fn update(&mut self, presence: &DiscordPresence) -> io::Result<()> {
-        let payload = build_set_activity_payload(presence, &self.config)?;
+        let payload = build_set_activity_payload(presence)?;
         self.send_payload(payload).await
     }
 
@@ -268,7 +260,7 @@ impl DiscordRpcClient {
         let mut last_error = None;
         for _ in 0..2 {
             if self.connection.is_none() {
-                match DiscordRpcConnection::connect(&self.config.application_id).await {
+                match DiscordRpcConnection::connect(DISCORD_APPLICATION_ID).await {
                     Ok(connection) => self.connection = Some(connection),
                     Err(error) => {
                         last_error = Some(error);
@@ -420,11 +412,8 @@ fn discord_ipc_candidates() -> Vec<String> {
     }
 }
 
-fn build_set_activity_payload(
-    presence: &DiscordPresence,
-    config: &DiscordPresenceConfig,
-) -> io::Result<String> {
-    let activity = Activity::from_presence(presence, config);
+fn build_set_activity_payload(presence: &DiscordPresence) -> io::Result<String> {
+    let activity = Activity::from_presence(presence);
     serde_json::to_string(&SetActivityPayload {
         cmd: "SET_ACTIVITY",
         nonce: next_nonce(),
@@ -483,10 +472,10 @@ struct Activity {
 }
 
 impl Activity {
-    fn from_presence(presence: &DiscordPresence, config: &DiscordPresenceConfig) -> Self {
-        let assets = (!config.large_image_key.is_empty()).then(|| Assets {
-            large_image: config.large_image_key.clone(),
-            large_text: non_empty_string(&config.large_image_text),
+    fn from_presence(presence: &DiscordPresence) -> Self {
+        let assets = Some(Assets {
+            large_image: DISCORD_LARGE_IMAGE_KEY.to_string(),
+            large_text: Some(DISCORD_LARGE_IMAGE_TEXT.to_string()),
         });
         Self {
             state: non_empty_string(&truncate_discord_field(&presence.state)),
@@ -534,15 +523,6 @@ fn truncate_discord_field(value: &str) -> String {
     value.chars().take(DISCORD_FIELD_MAX_CHARS).collect()
 }
 
-fn effective_application_id(configured_application_id: &str) -> String {
-    let application_id = configured_application_id.trim();
-    if application_id.is_empty() {
-        DEFAULT_DISCORD_APPLICATION_ID.to_string()
-    } else {
-        application_id.to_string()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::Value;
@@ -579,16 +559,10 @@ mod tests {
 
     #[test]
     fn set_activity_payload_contains_expected_activity_fields() {
-        let config = DiscordPresenceConfig {
-            application_id: "app".to_string(),
-            large_image_key: "bmz".to_string(),
-            large_image_text: "BMZ Player".to_string(),
-            show_song_details: true,
-        };
         let presence =
             DiscordPresence::play(123, Some("7Keys"), Some("Song Title"), Some("Artist"), true);
         let value: Value =
-            serde_json::from_str(&build_set_activity_payload(&presence, &config).unwrap()).unwrap();
+            serde_json::from_str(&build_set_activity_payload(&presence).unwrap()).unwrap();
 
         assert_eq!(value["cmd"], "SET_ACTIVITY");
         assert_eq!(value["args"]["pid"], process::id());
@@ -633,17 +607,12 @@ mod tests {
     }
 
     #[test]
-    fn config_requires_enabled_and_uses_builtin_application_id_by_default() {
+    fn config_requires_enabled_and_keeps_song_detail_choice() {
         let mut config = DiscordConfig::default();
         assert_eq!(DiscordPresenceConfig::from_app_config(&config), None);
 
         config.enabled = true;
         let presence_config = DiscordPresenceConfig::from_app_config(&config).unwrap();
-        assert_eq!(presence_config.application_id, DEFAULT_DISCORD_APPLICATION_ID);
-
-        config.application_id = " 123 ".to_string();
-        let presence_config = DiscordPresenceConfig::from_app_config(&config).unwrap();
-        assert_eq!(presence_config.application_id, "123");
         assert!(presence_config.show_song_details);
     }
 }

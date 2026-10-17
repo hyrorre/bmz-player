@@ -10,7 +10,6 @@ pub(super) struct AudioVideoSectionContext<'a, 'state> {
     pub(super) state: &'a mut SettingsPanelState<'state>,
     pub(super) apply_audio: &'a mut bool,
     pub(super) save_profile: &'a mut bool,
-    pub(super) obs_enabled_changed: &'a mut bool,
 }
 
 pub(super) fn build_audio_video_settings_sections(
@@ -27,7 +26,6 @@ pub(super) fn build_audio_video_settings_sections(
         state,
         apply_audio,
         save_profile,
-        obs_enabled_changed,
     } = context;
     SettingsSection::new(SettingsPage::Audio, tr!(text, "settings-audio-title"))
         .scope(tr!(text, "settings-scope-app"))
@@ -378,40 +376,6 @@ pub(super) fn build_audio_video_settings_sections(
                 });
             ui.label(tr!(text, "settings-video-apply-help"));
         });
-
-    SettingsSection::new(SettingsPage::Integration, tr!(text, "settings-screenshot-title"))
-        .scope(tr!(text, "settings-scope-app"))
-        .subpage(2)
-        .id_salt("settings_screenshot")
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(tr!(text, "settings-screenshot-directory"));
-                ui.add(
-                    egui::TextEdit::singleline(&mut config.screenshot.dir)
-                        .desired_width(300.0)
-                        .hint_text("screenshots"),
-                );
-            });
-            ui.horizontal(|ui| {
-                if ui.button(tr!(text, "common-choose-folder")).clicked()
-                    && let Some(dir) = rfd::FileDialog::new().pick_folder()
-                {
-                    config.screenshot.dir = dir.to_string_lossy().into_owned();
-                }
-                ui.checkbox(
-                    &mut config.screenshot.copy_to_clipboard,
-                    tr!(text, "settings-screenshot-copy-clipboard"),
-                );
-            });
-        });
-
-    *obs_enabled_changed |= build_obs_settings_section(
-        ui,
-        config,
-        state.obs_scene_picker,
-        state.obs_connection_status,
-        text,
-    );
 }
 
 /// ドラッグ中の低い値でUI自体が低FPSにならないよう、確定時だけ設定へ反映する。

@@ -241,20 +241,25 @@ fn app_config_defaults_discord_presence_disabled() {
     let config = AppConfig::default();
 
     assert!(!config.discord.enabled);
-    assert!(config.discord.application_id.is_empty());
-    assert_eq!(config.discord.large_image_key, "bmz");
-    assert_eq!(config.discord.large_image_text, "BMZ Player");
     assert!(config.discord.show_song_details);
 }
 
 #[test]
-fn app_config_does_not_serialize_builtin_discord_application_id() {
-    let mut config = AppConfig::default();
-    config.discord.application_id = DEFAULT_DISCORD_APPLICATION_ID.to_string();
+fn app_config_ignores_removed_discord_presence_overrides() {
+    // 以前の設定ファイルに残る上書き値は読み飛ばし、保存時にも書き戻さない。
+    let config = AppConfig {
+        discord: toml::from_str(
+            "enabled = true\napplication_id = \"123\"\nlarge_image_key = \"custom\"\nlarge_image_text = \"Custom\"\nshow_song_details = false\n",
+        )
+        .unwrap(),
+        ..AppConfig::default()
+    };
 
+    assert!(config.discord.enabled);
+    assert!(!config.discord.show_song_details);
     let toml = toml::to_string(&config).unwrap();
-
-    assert!(!toml.contains(DEFAULT_DISCORD_APPLICATION_ID));
+    assert!(!toml.contains("application_id"));
+    assert!(!toml.contains("large_image"));
 }
 
 #[test]

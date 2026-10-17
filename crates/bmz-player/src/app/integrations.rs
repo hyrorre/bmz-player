@@ -47,8 +47,8 @@ impl WinitApp {
             handle.shutdown();
         }
         self.integrations.discord_presence_config = desired.clone();
-        if let Some(config) = desired {
-            let handle = DiscordPresenceHandle::start(config);
+        if desired.is_some() {
+            let handle = DiscordPresenceHandle::start();
             handle.update(self.discord_presence_for_scene(self.current_scene_kind()));
             self.integrations.discord_presence = Some(handle);
             tracing::info!("Discord Rich Presence enabled");

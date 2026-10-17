@@ -2,7 +2,7 @@ use super::*;
 
 impl EguiLayer {
     pub(crate) fn profile_operations_busy(&self) -> bool {
-        self.ir_login.busy || self.ir_device_key.receiver.is_some() || self.show_course_editor
+        self.ir_login.busy || self.ir_device_key.receiver.is_some() || self.course_editor_visible()
     }
 
     pub(crate) fn set_profile_change_available(&mut self, available: bool) {
@@ -25,7 +25,6 @@ impl EguiLayer {
         self.profile_manager.selected_id = profile.id.clone();
         self.profile_manager.copy_source_id = profile.id.clone();
         self.show_fps = profile.ui.show_fps;
-        self.show_random_trainer = false;
         self.score_import_status.clear();
         self.score_import_error.clear();
         self.replay_import_status.clear();

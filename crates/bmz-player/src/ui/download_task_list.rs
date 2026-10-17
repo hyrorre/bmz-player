@@ -237,20 +237,6 @@ mod tests {
         assert_eq!(view.indices.len(), 1000);
         assert!(output.shapes.len() < 500, "only visible task rows should render");
         assert!(commands.is_empty());
-        let refreshed = view.refreshed;
-        let hidden = super::super::downloads::build_download_panel(
-            &ctx,
-            &mut false,
-            &manager,
-            &mut view,
-            &Default::default(),
-            None,
-            true,
-            &[],
-            Localizer::new(AppLocale::En),
-        );
-        assert!(hidden.is_empty());
-        assert_eq!(view.refreshed, refreshed);
         assert_eq!(manager.tasks().len(), 1000);
     }
 }

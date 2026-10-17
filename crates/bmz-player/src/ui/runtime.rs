@@ -36,16 +36,11 @@ impl EguiLayer {
             font_coverage,
             font_search_paths,
             visible: false,
-            show_debug: false,
-            show_downloads: false,
             download_list: Default::default(),
-            show_random_trainer: false,
             debug_log_filter: DebugLogFilter::default(),
             debug_log_autoscroll: true,
             show_fps,
-            show_settings: false,
             key_config: EguiKeyConfigUiState::default(),
-            show_course_editor: false,
             course_editor: CourseEditorUiState::default(),
             skin_ui_path_cache: SkinUiPathCache::default(),
             license_notice_text: None,
@@ -75,7 +70,7 @@ impl EguiLayer {
         }
     }
 
-    /// メニュー表示状態を反転する (F1)。
+    /// BMZ メニューの表示状態を反転する (F1)。
     pub fn toggle(&mut self) {
         self.visible = !self.visible;
         if !self.visible {
@@ -84,17 +79,15 @@ impl EguiLayer {
         tracing::info!(visible = self.visible, "egui menu toggled");
     }
 
-    /// 選曲画面の「詳細設定」から egui メニューと本体設定パネルを開く。
+    /// 選曲画面の「詳細設定」から BMZ メニューを開く。表示中のページは維持する。
     pub fn open_advanced_settings(&mut self) {
         self.visible = true;
-        self.show_settings = true;
         tracing::info!("egui advanced settings opened from select");
     }
 
     /// 選曲スキンの beatoraja event 14 からスキン設定を直接開く。
     pub fn open_skin_settings(&mut self) {
         self.visible = true;
-        self.show_settings = true;
         SettingsNavigation::select(&self.ctx, SettingsPage::Skin);
         tracing::info!("egui skin settings opened from select");
     }
@@ -153,7 +146,7 @@ impl EguiLayer {
     }
 
     pub fn course_editor_visible(&self) -> bool {
-        self.visible && self.show_course_editor
+        self.visible && SettingsNavigation::load(&self.ctx).page == SettingsPage::CourseEditor
     }
 
     pub fn course_editor_search_query(&self) -> &str {
@@ -203,7 +196,6 @@ impl EguiLayer {
                 select_course_builder,
                 has_update_dialog,
                 scene,
-                self.show_settings,
             )
     }
 
@@ -270,12 +262,7 @@ impl EguiLayer {
         let raw_input = self.state.take_egui_input(window);
         let ctx = self.ctx.clone();
         SettingsFeedback::profile_changed(&ctx, &profile_config.id);
-        let show_debug = &mut self.show_debug;
-        let show_downloads = &mut self.show_downloads;
         let mut download_commands = Vec::new();
-        let show_random_trainer = &mut self.show_random_trainer;
-        let show_settings = &mut self.show_settings;
-        let show_course_editor = &mut self.show_course_editor;
         let show_fps = &mut self.show_fps;
         let license_notice_text = &mut self.license_notice_text;
         let mut obs_enabled_changed = false;
@@ -305,7 +292,7 @@ impl EguiLayer {
         let ir_login = &mut self.ir_login;
         let directory_open_status = &mut self.directory_open_status;
         let update_dialog_allowed =
-            update_dialog.is_some() && (info.scene == "Select" || *show_settings);
+            update_dialog.is_some() && (info.scene == "Select" || *visible_flag);
         self.update_dialog_active = update_dialog_allowed;
         let full_output = ctx.run_ui(raw_input, |ui| {
             if crate::cli::latency_validation_enabled() {
@@ -361,152 +348,165 @@ impl EguiLayer {
                 if let Some(preview) = course_preview {
                     build_course_preview_panel(ctx, preview, text);
                 }
-                build_menu(
-                    ctx,
-                    visible_flag,
-                    MenuPanelVisibility {
-                        debug: show_debug,
-                        downloads: show_downloads,
-                        random_trainer: show_random_trainer,
-                        settings: show_settings,
-                        course_editor: show_course_editor,
-                    },
-                    app_paths,
-                    directory_open_status,
-                    text,
-                );
-                build_debug_panel(
-                    ctx,
-                    show_debug,
-                    info,
-                    log_buffer,
-                    &mut self.debug_log_filter,
-                    &mut self.debug_log_autoscroll,
-                    text,
-                );
-                build_random_trainer_panel(ctx, show_random_trainer, random_trainer, text);
-                download_commands.extend(downloads::build_download_panel(
-                    ctx,
-                    show_downloads,
-                    downloads,
-                    &mut self.download_list,
-                    download_preview,
-                    download_scope.as_ref(),
-                    info.scene == "Select",
-                    difficulty_tables,
-                    text,
-                ));
+                let navigation = SettingsNavigation::load(ctx);
+                let page = navigation.page;
+                let ir_queue_visible =
+                    page == SettingsPage::Ir && navigation.subpage() == IR_QUEUE_SUBPAGE;
+                if !ir_queue_visible {
+                    self.ir_manual.queue_hidden();
+                }
                 let profile_name = profile_config.display_name.clone();
-                build_settings_window(ctx, show_settings, &profile_name, text, |ui| {
-                    let before_app = serde_json::to_value(&*app_config).ok();
-                    let before_obs = serde_json::to_value(&app_config.obs).ok();
-                    let before_profile = serde_json::to_value(&*profile_config).ok();
-                    let profile_settings_actions = build_profile_settings_panel(
-                        ui,
-                        ProfileSettingsPanelContext {
-                            app_paths,
-                            profile: profile_config,
-                            app_config,
-                            show_fps,
-                            ir_login,
-                            ir_device_key: &mut self.ir_device_key,
-                            ir_manual: &mut self.ir_manual,
-                            profile_manager: &mut self.profile_manager,
-                            key_config: &mut self.key_config,
-                            profile_root,
-                            unrestricted: settings_editable,
+                build_menu_window(ctx, visible_flag, &profile_name, text, |ui| match page {
+                    SettingsPage::Downloads => {
+                        download_commands.extend(downloads::build_download_page(
+                            ui,
+                            downloads,
+                            &mut self.download_list,
+                            download_preview,
+                            download_scope.as_ref(),
+                            info.scene == "Select",
+                            difficulty_tables,
                             text,
-                        },
-                    );
-                    save_profile_config |= profile_settings_actions.save;
-                    save_app_config |= profile_settings_actions.save_app_config;
-                    key_config_action = profile_settings_actions.key_config_action;
-                    profile_action = profile_settings_actions.profile_action;
-                    let settings_actions = build_settings_panel(
+                        ));
+                    }
+                    SettingsPage::CourseEditor => {
+                        course_editor_action = build_course_editor_page(
+                            ui,
+                            &mut self.course_editor,
+                            course_editor,
+                            profile_root,
+                            info.scene == "Select",
+                            text,
+                        );
+                    }
+                    SettingsPage::RandomTrainer => {
+                        build_random_trainer_page(ui, random_trainer, text);
+                    }
+                    SettingsPage::Debug => build_debug_page(
                         ui,
-                        window,
-                        app_config,
-                        profile_config,
-                        show_fps,
-                        settings_editable,
-                        difficulty_tables,
+                        info,
+                        log_buffer,
+                        &mut self.debug_log_filter,
+                        &mut self.debug_log_autoscroll,
                         text,
-                        SettingsPanelState {
-                            new_root_path: &mut self.settings_new_root_path,
-                            add_root_error: &mut self.settings_add_root_error,
-                            new_table_url: &mut self.settings_new_table_url,
-                            add_table_error: &mut self.settings_add_table_error,
-                            score_import_path: &mut self.score_import_path,
-                            score_import_kind: &mut self.score_import_kind,
-                            score_import_device_type: &mut self.score_import_device_type,
-                            score_import_status: &self.score_import_status,
-                            score_import_error: &self.score_import_error,
-                            replay_import_path: &mut self.replay_import_path,
-                            replay_import_device_type: &mut self.replay_import_device_type,
-                            replay_import_overwrite: &mut self.replay_import_overwrite,
-                            replay_import_status: &self.replay_import_status,
-                            replay_import_error: &self.replay_import_error,
-                            replay_import_progress: self.replay_import_progress,
-                            audio_device_picker: &mut self.audio_device_picker,
-                            obs_scene_picker: &mut self.obs_scene_picker,
-                            obs_connection_status,
-                            connected_gamepads,
-                            audio_stream_info,
-                            audio_open_error,
-                        },
-                    );
-                    obs_enabled_changed |= settings_actions.obs_enabled_changed;
-                    save_app_config |= settings_actions.save;
-                    save_profile_config |= settings_actions.save_profile;
-                    check_for_update |= settings_actions.check_update;
-                    trigger_song_rescan |= settings_actions.rescan;
-                    song_scan_requests.extend(settings_actions.song_scan_requests);
-                    table_fetch_urls.extend(settings_actions.table_fetch_urls);
-                    apply_audio_output |= settings_actions.apply_audio;
-                    score_import_request = settings_actions.score_import_request;
-                    replay_import_request = settings_actions.replay_import_request;
-                    cancel_replay_import = settings_actions.cancel_replay_import;
-                    build_third_party_notice_page(ui, app_paths, license_notice_text);
-                    let skin_actions = build_skin_panel(
-                        ui,
-                        &mut profile_config.skin,
-                        skin_meta,
-                        skin_catalog,
-                        app_paths,
-                        &mut self.skin_ui_path_cache,
-                        text,
-                    );
-                    save_profile_config |= skin_actions.save;
-                    reset_skin_config |= skin_actions.reset;
-                    skin_reload_request.union(skin_actions.reload);
-                    SettingsFeedback::changed(
-                        ctx,
-                        before_app != serde_json::to_value(&*app_config).ok(),
-                        before_profile != serde_json::to_value(&*profile_config).ok(),
-                    );
-                    obs_enabled_changed |= before_obs != serde_json::to_value(&app_config.obs).ok();
+                    ),
+                    // Decide / Play 中は IR 設定と同様に、一括操作・再送信を開かない。
+                    SettingsPage::Ir if ir_queue_visible => {
+                        if settings_editable {
+                            build_ir_queue_page(ui, &profile_config.ir, &mut self.ir_manual, text);
+                        } else {
+                            ui.label(tr!(text, "ir-queue-restricted"));
+                        }
+                    }
+                    _ => {
+                        let before_app = serde_json::to_value(&*app_config).ok();
+                        let before_obs = serde_json::to_value(&app_config.obs).ok();
+                        let before_profile = serde_json::to_value(&*profile_config).ok();
+                        let profile_settings_actions = build_profile_settings_panel(
+                            ui,
+                            ProfileSettingsPanelContext {
+                                app_paths,
+                                profile: profile_config,
+                                app_config,
+                                show_fps,
+                                ir_login,
+                                ir_device_key: &mut self.ir_device_key,
+                                ir_manual: &mut self.ir_manual,
+                                profile_manager: &mut self.profile_manager,
+                                key_config: &mut self.key_config,
+                                profile_root,
+                                unrestricted: settings_editable,
+                                text,
+                            },
+                        );
+                        save_profile_config |= profile_settings_actions.save;
+                        save_app_config |= profile_settings_actions.save_app_config;
+                        key_config_action = profile_settings_actions.key_config_action;
+                        profile_action = profile_settings_actions.profile_action;
+                        let settings_actions = build_settings_panel(
+                            ui,
+                            window,
+                            app_config,
+                            profile_config,
+                            show_fps,
+                            settings_editable,
+                            difficulty_tables,
+                            text,
+                            SettingsPanelState {
+                                new_root_path: &mut self.settings_new_root_path,
+                                add_root_error: &mut self.settings_add_root_error,
+                                new_table_url: &mut self.settings_new_table_url,
+                                add_table_error: &mut self.settings_add_table_error,
+                                score_import_path: &mut self.score_import_path,
+                                score_import_kind: &mut self.score_import_kind,
+                                score_import_device_type: &mut self.score_import_device_type,
+                                score_import_status: &self.score_import_status,
+                                score_import_error: &self.score_import_error,
+                                replay_import_path: &mut self.replay_import_path,
+                                replay_import_device_type: &mut self.replay_import_device_type,
+                                replay_import_overwrite: &mut self.replay_import_overwrite,
+                                replay_import_status: &self.replay_import_status,
+                                replay_import_error: &self.replay_import_error,
+                                replay_import_progress: self.replay_import_progress,
+                                audio_device_picker: &mut self.audio_device_picker,
+                                obs_scene_picker: &mut self.obs_scene_picker,
+                                obs_connection_status,
+                                connected_gamepads,
+                                audio_stream_info,
+                                audio_open_error,
+                            },
+                        );
+                        obs_enabled_changed |= settings_actions.obs_enabled_changed;
+                        save_app_config |= settings_actions.save;
+                        save_profile_config |= settings_actions.save_profile;
+                        check_for_update |= settings_actions.check_update;
+                        trigger_song_rescan |= settings_actions.rescan;
+                        song_scan_requests.extend(settings_actions.song_scan_requests);
+                        table_fetch_urls.extend(settings_actions.table_fetch_urls);
+                        apply_audio_output |= settings_actions.apply_audio;
+                        score_import_request = settings_actions.score_import_request;
+                        replay_import_request = settings_actions.replay_import_request;
+                        cancel_replay_import = settings_actions.cancel_replay_import;
+                        SettingsSection::new(
+                            SettingsPage::General,
+                            tr!(text, "menu-open-directory"),
+                        )
+                        .id_salt("settings_general_directories")
+                        .show(ui, |ui| {
+                            build_directory_buttons(ui, app_paths, directory_open_status, text);
+                        });
+                        build_third_party_notice_page(ui, app_paths, license_notice_text);
+                        let skin_actions = build_skin_panel(
+                            ui,
+                            &mut profile_config.skin,
+                            skin_meta,
+                            skin_catalog,
+                            app_paths,
+                            &mut self.skin_ui_path_cache,
+                            text,
+                        );
+                        save_profile_config |= skin_actions.save;
+                        reset_skin_config |= skin_actions.reset;
+                        skin_reload_request.union(skin_actions.reload);
+                        SettingsFeedback::changed(
+                            ctx,
+                            before_app != serde_json::to_value(&*app_config).ok(),
+                            before_profile != serde_json::to_value(&*profile_config).ok(),
+                        );
+                        obs_enabled_changed |=
+                            before_obs != serde_json::to_value(&app_config.obs).ok();
+                    }
                 });
-                // Decide / Play 中は IR 設定と同様に、一括操作・再送信を開かない。
                 if settings_editable {
-                    build_ir_queue_window(ctx, &profile_config.ir, &mut self.ir_manual, text);
                     build_ir_confirm_modal(ctx, &profile_config.ir, &mut self.ir_manual, text);
                 }
-                if !*show_settings || !SettingsNavigation::load(ctx).accepts_key_capture() {
+                if !*visible_flag || !SettingsNavigation::load(ctx).accepts_key_capture() {
                     self.key_config.listening = None;
                 }
-                course_editor_action = build_course_editor_panel(
-                    ctx,
-                    show_course_editor,
-                    &mut self.course_editor,
-                    course_editor,
-                    profile_root,
-                    info.scene == "Select",
-                    text,
-                );
             }
         });
         SettingsFeedback::changed(&self.ctx, save_app_config, save_profile_config);
-        let pending = SettingsFeedback::autosave(&self.ctx, !self.show_settings || !self.visible);
+        let pending = SettingsFeedback::autosave(&self.ctx, !self.visible);
         save_app_config = pending.0;
         save_profile_config = pending.1;
         self.state.handle_platform_output(window, full_output.platform_output);
@@ -593,12 +593,8 @@ pub(super) fn egui_frame_needs_full_state(
     select_course_builder: bool,
     has_update_dialog: bool,
     scene: &str,
-    show_settings: bool,
 ) -> bool {
-    visible
-        || practice_overlay
-        || select_course_builder
-        || (has_update_dialog && (scene == "Select" || show_settings))
+    visible || practice_overlay || select_course_builder || (has_update_dialog && scene == "Select")
 }
 
 /// egui のデフォルトフォントは CJK グリフを含まないため、locale の地域別字形を

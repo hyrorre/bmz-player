@@ -60,7 +60,6 @@ pub(in crate::ui) fn build_settings_panel(
                 state: &mut state,
                 apply_audio: &mut apply_audio,
                 save_profile: &mut save_profile,
-                obs_enabled_changed: &mut obs_enabled_changed,
             },
         );
         build_integration_settings_sections(
@@ -70,6 +69,7 @@ pub(in crate::ui) fn build_settings_panel(
             &mut state,
             &mut save_clicked,
             &mut check_update_clicked,
+            &mut obs_enabled_changed,
         );
     });
     SettingsPanelActions {

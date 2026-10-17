@@ -85,7 +85,7 @@ Set **Rule** and **LN mode** in Settings → **Gameplay** back to the settings y
 
 ## Where logs and data are stored
 
-Press **F1** to open the BMZ Menu, and use the buttons under **Open directory** to open each folder.
+Press **F1** to open the BMZ Menu, go to **General**, and use the buttons under **Open directory** to open each folder.
 
 | Button | Contents |
 | --- | --- |

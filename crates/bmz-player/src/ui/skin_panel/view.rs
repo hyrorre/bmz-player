@@ -33,10 +33,7 @@ impl EguiLayer {
     }
 
     pub(crate) fn skin_settings_path<'a>(&self, skin: &'a SkinConfig) -> Option<&'a str> {
-        if !self.visible
-            || !self.show_settings
-            || SettingsNavigation::load(&self.ctx).page != SettingsPage::Skin
-        {
+        if !self.visible || SettingsNavigation::load(&self.ctx).page != SettingsPage::Skin {
             return None;
         }
         Some(match SkinEditorState::load(&self.ctx).slot {
@@ -696,7 +693,7 @@ mod tests {
             let output = ctx.run_ui(
                 egui::RawInput { screen_rect: Some(viewport), ..Default::default() },
                 |ui| {
-                    build_settings_window(
+                    build_menu_window(
                         ui.ctx(),
                         &mut true,
                         "Default",

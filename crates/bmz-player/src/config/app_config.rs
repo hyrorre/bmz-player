@@ -4,8 +4,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::paths::normalize_library_path;
 
-pub const DEFAULT_DISCORD_APPLICATION_ID: &str = "1524506927315419448";
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(skip)]
@@ -573,12 +571,6 @@ pub struct UpdatesConfig {
 pub struct DiscordConfig {
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default, skip_serializing_if = "should_skip_discord_application_id")]
-    pub application_id: String,
-    #[serde(default = "default_discord_large_image_key")]
-    pub large_image_key: String,
-    #[serde(default = "default_discord_large_image_text")]
-    pub large_image_text: String,
     #[serde(default = "default_true")]
     pub show_song_details: bool,
 }
@@ -604,13 +596,7 @@ impl Default for UpdatesConfig {
 
 impl Default for DiscordConfig {
     fn default() -> Self {
-        Self {
-            enabled: false,
-            application_id: String::new(),
-            large_image_key: default_discord_large_image_key(),
-            large_image_text: default_discord_large_image_text(),
-            show_song_details: true,
-        }
+        Self { enabled: false, show_song_details: true }
     }
 }
 
@@ -643,19 +629,6 @@ fn default_true() -> bool {
 
 fn default_update_check_on_startup() -> bool {
     !cfg!(debug_assertions)
-}
-
-fn default_discord_large_image_key() -> String {
-    "bmz".to_string()
-}
-
-fn default_discord_large_image_text() -> String {
-    "BMZ Player".to_string()
-}
-
-fn should_skip_discord_application_id(value: &str) -> bool {
-    let value = value.trim();
-    value.is_empty() || value == DEFAULT_DISCORD_APPLICATION_ID
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]

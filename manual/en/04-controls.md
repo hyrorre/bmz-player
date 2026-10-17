@@ -10,7 +10,7 @@ By default, KEY1 to KEY7 are **Z S X D C F V**, and E1 to E4 are **Q W E R**.
 
 | Key | Action |
 | --- | --- |
-| F1 | Open or close the BMZ Menu (settings are opened from here) |
+| F1 | Open or close the BMZ Menu (settings and tools) |
 | F12 | Save a screenshot |
 
 ## Song select

@@ -1,24 +1,5 @@
 use super::*;
 
-/// Window 内コンテンツを全体スクロール可能にする。
-pub(super) fn scrollable_window_content<R>(
-    ui: &mut egui::Ui,
-    add_contents: impl FnOnce(&mut egui::Ui) -> R,
-) -> R {
-    // レイアウト確定前に inner が膨らむのを防ぐため、
-    // 利用可能矩形から ScrollArea 高さを明示的に制限する。
-    let available = ui.available_rect_before_wrap();
-    let max_height = available.height().max(64.0);
-    egui::ScrollArea::vertical()
-        .max_height(max_height)
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.set_width(available.width());
-            add_contents(ui)
-        })
-        .inner
-}
-
 /// パネル Window の default / max サイズと初期位置をビューポート内に収める。
 pub(super) const PANEL_VIEWPORT_MARGIN: f32 = 16.0;
 

@@ -11,7 +11,6 @@ pub(in crate::ui) fn build_obs_settings_section(
     let mut enabled_changed = false;
     SettingsSection::new(SettingsPage::Integration, "OBS WebSocket")
         .scope(tr!(text, "settings-scope-app"))
-        .subpage(1)
         .id_salt("settings_obs")
         .show(ui, |ui| {
             ui.label(tr!(text, "settings-obs-deferred-help"));

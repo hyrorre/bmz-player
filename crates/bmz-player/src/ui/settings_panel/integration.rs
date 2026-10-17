@@ -7,6 +7,7 @@ pub(super) fn build_integration_settings_sections(
     state: &mut SettingsPanelState<'_>,
     save_clicked: &mut bool,
     check_update_clicked: &mut bool,
+    obs_enabled_changed: &mut bool,
 ) {
     SettingsSection::new(SettingsPage::General, tr!(text, "settings-updates-title"))
         .scope(tr!(text, "settings-scope-app"))
@@ -55,35 +56,43 @@ pub(super) fn build_integration_settings_sections(
         .scope(tr!(text, "settings-scope-app"))
         .show(ui, |ui| {
             ui.checkbox(&mut config.discord.enabled, "Rich Presence");
-            ui.horizontal(|ui| {
-                ui.label("Application ID");
-                ui.add(
-                    egui::TextEdit::singleline(&mut config.discord.application_id)
-                        .desired_width(260.0)
-                        .hint_text(tr!(text, "settings-discord-default-hint")),
-                );
-            });
-            ui.horizontal(|ui| {
-                ui.label("Large image key");
-                ui.add(
-                    egui::TextEdit::singleline(&mut config.discord.large_image_key)
-                        .desired_width(160.0)
-                        .hint_text("bmz"),
-                );
-            });
-            ui.horizontal(|ui| {
-                ui.label("Large image text");
-                ui.add(
-                    egui::TextEdit::singleline(&mut config.discord.large_image_text)
-                        .desired_width(220.0)
-                        .hint_text("BMZ Player"),
-                );
-            });
             ui.checkbox(
                 &mut config.discord.show_song_details,
                 tr!(text, "settings-discord-song-details"),
             );
-            ui.label(tr!(text, "settings-discord-default-help"));
+        });
+
+    *obs_enabled_changed |= build_obs_settings_section(
+        ui,
+        config,
+        state.obs_scene_picker,
+        state.obs_connection_status,
+        text,
+    );
+
+    SettingsSection::new(SettingsPage::Integration, tr!(text, "settings-screenshot-title"))
+        .scope(tr!(text, "settings-scope-app"))
+        .id_salt("settings_screenshot")
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(tr!(text, "settings-screenshot-directory"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut config.screenshot.dir)
+                        .desired_width(300.0)
+                        .hint_text("screenshots"),
+                );
+            });
+            ui.horizontal(|ui| {
+                if ui.button(tr!(text, "common-choose-folder")).clicked()
+                    && let Some(dir) = rfd::FileDialog::new().pick_folder()
+                {
+                    config.screenshot.dir = dir.to_string_lossy().into_owned();
+                }
+                ui.checkbox(
+                    &mut config.screenshot.copy_to_clipboard,
+                    tr!(text, "settings-screenshot-copy-clipboard"),
+                );
+            });
         });
 
     SettingsSection::new(SettingsPage::InputDevices, tr!(text, "settings-input-title"))

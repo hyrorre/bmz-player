@@ -4,120 +4,93 @@ use bmz_core::course::{CourseConstraints, CourseDefinition, CourseEntry, CourseK
 
 use super::{
     CourseEditorAction, CourseEditorData, CourseEditorUiState, FluentArgs, Localizer,
-    PANEL_VIEWPORT_MARGIN,
     course_form::{build_course_constraints_editor, build_course_trophy_editor},
 };
 
 const LOCAL_COURSE_SOURCE: &str = "bmz:local";
 
-pub(super) fn build_course_editor_panel(
-    ctx: &egui::Context,
-    open: &mut bool,
+pub(super) fn build_course_editor_page(
+    ui: &mut egui::Ui,
     state: &mut CourseEditorUiState,
     data: &CourseEditorData,
     profile_root: &Path,
     editable: bool,
     text: Localizer,
 ) -> Option<CourseEditorAction> {
-    if !*open {
+    if !editable {
+        ui.colored_label(egui::Color32::LIGHT_YELLOW, text.text("course-editor-select-only"));
         return None;
     }
+
+    build_course_picker(ui, state, data, text);
+    let draft = state.draft.as_mut()?;
     let mut action = None;
-    egui::Window::new(text.text("course-editor-title"))
-        .id(egui::Id::new("bmz_course_editor"))
-        .open(open)
-        .default_pos(egui::pos2(420.0, 24.0))
-        .default_size(egui::vec2(760.0, 760.0))
-        .constrain_to(ctx.content_rect().shrink(PANEL_VIEWPORT_MARGIN))
-        .show(ctx, |ui| {
-            if !editable {
-                ui.colored_label(
-                    egui::Color32::LIGHT_YELLOW,
-                    text.text("course-editor-select-only"),
-                );
-                return;
+    let mut reset_draft = false;
+
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        build_identity_editor(ui, draft, text);
+        ui.separator();
+        build_course_constraints_editor(ui, draft, text, "course_editor");
+        ui.separator();
+        build_entry_editor(ui, draft, &mut state.search_query, data, text);
+        ui.separator();
+        build_course_trophy_editor(ui, draft, text, "course_editor");
+        ui.separator();
+
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(text.text("course-editor-save")).clicked() {
+                action = Some(CourseEditorAction::Save(normalize_definition(
+                    draft.clone(),
+                    text.text("select-new-course"),
+                )));
             }
-
-            build_course_picker(ui, state, data, text);
-            let Some(draft) = state.draft.as_mut() else {
-                return;
-            };
-            let mut reset_draft = false;
-
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                build_identity_editor(ui, draft, text);
-                ui.separator();
-                build_course_constraints_editor(ui, draft, text, "course_editor");
-                ui.separator();
-                build_entry_editor(ui, draft, &mut state.search_query, data, text);
-                ui.separator();
-                build_course_trophy_editor(ui, draft, text, "course_editor");
-                ui.separator();
-
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button(text.text("course-editor-save")).clicked() {
-                        action = Some(CourseEditorAction::Save(normalize_definition(
-                            draft.clone(),
-                            text.text("select-new-course"),
-                        )));
-                    }
-                    let local_selected = state.selected_course_id.is_some_and(|id| {
-                        data.courses
-                            .iter()
-                            .any(|course| course.id == id && course.source == LOCAL_COURSE_SOURCE)
-                    });
-                    if ui
-                        .add_enabled(
-                            local_selected,
-                            egui::Button::new(text.text("course-editor-delete")),
-                        )
-                        .clicked()
-                        && let Some(id) = state.selected_course_id
-                    {
-                        action = Some(CourseEditorAction::Delete(id));
-                        reset_draft = true;
-                    }
-                });
-
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button(text.text("course-editor-export")).clicked()
-                        && let Some(path) = rfd::FileDialog::new()
-                            .add_filter("beatoraja course JSON", &["json"])
-                            .set_directory(profile_root)
-                            .set_file_name("courses.json")
-                            .save_file()
-                    {
-                        action = Some(CourseEditorAction::Export {
-                            path,
-                            definition: normalize_definition(
-                                draft.clone(),
-                                text.text("select-new-course"),
-                            ),
-                        });
-                    }
-                    if ui.button(text.text("course-editor-import")).clicked()
-                        && let Some(path) = rfd::FileDialog::new()
-                            .add_filter("beatoraja course JSON", &["json"])
-                            .set_directory(profile_root)
-                            .pick_file()
-                    {
-                        action = Some(CourseEditorAction::Import { path });
-                    }
-                });
-                if !state.status.is_empty() {
-                    let color = if state.error {
-                        egui::Color32::LIGHT_RED
-                    } else {
-                        egui::Color32::LIGHT_GREEN
-                    };
-                    ui.colored_label(color, &state.status);
-                }
+            let local_selected = state.selected_course_id.is_some_and(|id| {
+                data.courses
+                    .iter()
+                    .any(|course| course.id == id && course.source == LOCAL_COURSE_SOURCE)
             });
-            if reset_draft {
-                state.selected_course_id = None;
-                state.draft = None;
+            if ui
+                .add_enabled(local_selected, egui::Button::new(text.text("course-editor-delete")))
+                .clicked()
+                && let Some(id) = state.selected_course_id
+            {
+                action = Some(CourseEditorAction::Delete(id));
+                reset_draft = true;
             }
         });
+
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(text.text("course-editor-export")).clicked()
+                && let Some(path) = rfd::FileDialog::new()
+                    .add_filter("beatoraja course JSON", &["json"])
+                    .set_directory(profile_root)
+                    .set_file_name("courses.json")
+                    .save_file()
+            {
+                action = Some(CourseEditorAction::Export {
+                    path,
+                    definition: normalize_definition(draft.clone(), text.text("select-new-course")),
+                });
+            }
+            if ui.button(text.text("course-editor-import")).clicked()
+                && let Some(path) = rfd::FileDialog::new()
+                    .add_filter("beatoraja course JSON", &["json"])
+                    .set_directory(profile_root)
+                    .pick_file()
+            {
+                action = Some(CourseEditorAction::Import { path });
+            }
+        });
+        if !state.status.is_empty() {
+            let color =
+                if state.error { egui::Color32::LIGHT_RED } else { egui::Color32::LIGHT_GREEN };
+            ui.colored_label(color, &state.status);
+        }
+    });
+    if reset_draft {
+        state.selected_course_id = None;
+        state.draft = None;
+    }
     action
 }
 

@@ -1,5 +1,10 @@
 use super::*;
 
+const PAGE_COUNT: usize = 19;
+
+/// IR ページのサブページのうち、送信キューを表示する位置。
+pub(super) const IR_QUEUE_SUBPAGE: usize = 1;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(super) enum SettingsPage {
     #[default]
@@ -18,14 +23,37 @@ pub(super) enum SettingsPage {
     Tables,
     Ir,
     Licenses,
+    Downloads,
+    CourseEditor,
+    RandomTrainer,
+    Debug,
 }
 
 impl SettingsPage {
     pub(super) fn editable_during_play(self) -> bool {
-        matches!(self, Self::General | Self::Audio | Self::Video | Self::Integration)
+        matches!(
+            self,
+            Self::General
+                | Self::Audio
+                | Self::Video
+                | Self::Integration
+                | Self::RandomTrainer
+                | Self::Debug
+        )
     }
 
-    const ALL: [Self; 15] = [
+    /// 設定ではなく、サイドバーの「ツール」欄に並べるページ。
+    pub(super) fn is_tool(self) -> bool {
+        matches!(self, Self::Downloads | Self::CourseEditor | Self::RandomTrainer | Self::Debug)
+    }
+
+    /// 本文が自前のスクロール領域を持ち、ウィンドウ側の ScrollArea で包まないページ。
+    fn owns_scroll(self, subpage: usize) -> bool {
+        matches!(self, Self::CourseEditor | Self::Debug)
+            || (self == Self::Ir && subpage == IR_QUEUE_SUBPAGE)
+    }
+
+    const ALL: [Self; PAGE_COUNT] = [
         Self::General,
         Self::Profile,
         Self::Audio,
@@ -41,6 +69,10 @@ impl SettingsPage {
         Self::Integration,
         Self::Import,
         Self::Licenses,
+        Self::Downloads,
+        Self::CourseEditor,
+        Self::RandomTrainer,
+        Self::Debug,
     ];
 
     fn label(self, text: Localizer) -> String {
@@ -60,15 +92,17 @@ impl SettingsPage {
             Self::Tables => "settings-tables-title",
             Self::Ir => "profile-ir-title",
             Self::Licenses => "menu-licenses",
+            Self::Downloads => "downloads-title",
+            Self::CourseEditor => "menu-course-editor",
+            Self::RandomTrainer => "menu-random-trainer",
+            Self::Debug => "menu-debug",
         })
     }
 
     fn subpages(self) -> &'static [&'static str] {
         match self {
-            Self::Integration => {
-                &["settings-nav-discord", "settings-nav-obs", "settings-screenshot-title"]
-            }
             Self::Import => &["settings-score-import-title", "settings-nav-replay-import"],
+            Self::Ir => &["settings-nav-ir-settings", "ir-queue-title"],
             _ => &[],
         }
     }
@@ -77,7 +111,7 @@ impl SettingsPage {
 #[derive(Clone, Default)]
 pub(super) struct SettingsNavigation {
     pub(super) page: SettingsPage,
-    subpages: [usize; 15],
+    subpages: [usize; PAGE_COUNT],
 }
 
 #[derive(Clone, Default)]
@@ -192,7 +226,15 @@ impl SettingsNavigation {
         state.store(ctx);
     }
 
-    fn subpage(&self) -> usize {
+    /// ページとサブページを同時に選ぶ（IR 設定から送信キューを開く等）。
+    pub(super) fn select_subpage(ctx: &egui::Context, page: SettingsPage, subpage: usize) {
+        let mut state = Self::load(ctx);
+        state.page = page;
+        state.subpages[page as usize] = subpage.min(page.subpages().len().saturating_sub(1));
+        state.store(ctx);
+    }
+
+    pub(super) fn subpage(&self) -> usize {
         self.subpages[self.page as usize]
     }
 
@@ -255,8 +297,9 @@ impl SettingsSection {
     }
 }
 
+/// F1 の「BMZ メニュー」。設定ページとツールページを1つのウィンドウにまとめ、
 /// 自動保存の状態とナビゲーションをスクロール領域の外に配置する。
-pub(super) fn build_settings_window(
+pub(super) fn build_menu_window(
     ctx: &egui::Context,
     open: &mut bool,
     profile_name: &str,
@@ -265,7 +308,7 @@ pub(super) fn build_settings_window(
 ) {
     localized_sized_panel_window(
         "settings_workspace",
-        tr!(text, "settings-workspace-title"),
+        tr!(text, "menu-title"),
         ctx,
         open,
         900.0,
@@ -291,19 +334,28 @@ pub(super) fn build_settings_window(
                         |ui| {
                             egui::ScrollArea::vertical()
                                 .id_salt("settings_sidebar")
-                                .max_height((body_height - 36.0).max(0.0))
+                                .max_height((body_height - 64.0).max(0.0))
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
                                     ui.set_width(160.0);
                                     for page in SettingsPage::ALL {
-                                        if page == SettingsPage::Licenses {
+                                        if page == SettingsPage::Licenses || page.is_tool() {
                                             continue;
                                         }
                                         let label = page.label(text);
                                         ui.selectable_value(&mut navigation.page, page, label);
                                     }
+                                    ui.separator();
+                                    ui.weak(tr!(text, "menu-tools"));
+                                    for page in SettingsPage::ALL {
+                                        if page.is_tool() {
+                                            let label = page.label(text);
+                                            ui.selectable_value(&mut navigation.page, page, label);
+                                        }
+                                    }
                                 });
                             ui.separator();
+                            build_manual_button(ui, text);
                             ui.selectable_value(
                                 &mut navigation.page,
                                 SettingsPage::Licenses,
@@ -318,17 +370,20 @@ pub(super) fn build_settings_window(
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
                         if compact {
-                            egui::ComboBox::from_id_salt("settings_category")
-                                .selected_text(navigation.page.label(text))
-                                .show_ui(ui, |ui| {
-                                    for page in SettingsPage::ALL {
-                                        ui.selectable_value(
-                                            &mut navigation.page,
-                                            page,
-                                            page.label(text),
-                                        );
-                                    }
-                                });
+                            ui.horizontal_wrapped(|ui| {
+                                egui::ComboBox::from_id_salt("settings_category")
+                                    .selected_text(navigation.page.label(text))
+                                    .show_ui(ui, |ui| {
+                                        for page in SettingsPage::ALL {
+                                            ui.selectable_value(
+                                                &mut navigation.page,
+                                                page,
+                                                page.label(text),
+                                            );
+                                        }
+                                    });
+                                build_manual_button(ui, text);
+                            });
                         } else {
                             ui.heading(navigation.page.label(text));
                         }
@@ -349,7 +404,10 @@ pub(super) fn build_settings_window(
                         // スクロール領域そのものの ID 変更診断を発生させない。
                         let content_id =
                             ("settings_content_body", navigation.page, navigation.subpage());
-                        if navigation.page == SettingsPage::Skin && ui.available_height() >= 380.0 {
+                        let owns_scroll = navigation.page.owns_scroll(navigation.subpage())
+                            || (navigation.page == SettingsPage::Skin
+                                && ui.available_height() >= 380.0);
+                        if owns_scroll {
                             ui.push_id(content_id, contents);
                         } else {
                             egui::ScrollArea::vertical()
@@ -375,6 +433,26 @@ pub(super) fn build_settings_window(
             }
         });
     });
+}
+
+fn build_manual_button(ui: &mut egui::Ui, text: Localizer) {
+    let error_id = egui::Id::new("bmz_menu_manual_open_error");
+    let url = manual_url(text.locale());
+    if ui.button(tr!(text, "menu-open-manual")).on_hover_text(&url).clicked() {
+        let error = crate::song_download::open_browser_urls(std::slice::from_ref(&url))
+            .err()
+            .map(|error| format!("{error:#}"));
+        if let Some(error) = &error {
+            tracing::warn!(%error, "failed to open manual");
+        }
+        ui.data_mut(|data| data.insert_temp(error_id, error));
+    }
+    if let Some(error) = ui.data(|data| data.get_temp::<Option<String>>(error_id)).flatten() {
+        ui.colored_label(
+            egui::Color32::LIGHT_RED,
+            tr!(text, "menu-manual-open-failed", "error" => error),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -457,7 +535,7 @@ mod tests {
                 let output = ctx.run_ui(
                     egui::RawInput { screen_rect: Some(rect), ..Default::default() },
                     |ui| {
-                        build_settings_window(
+                        build_menu_window(
                             ui.ctx(),
                             &mut true,
                             "Test",
@@ -493,6 +571,58 @@ mod tests {
     }
 
     #[test]
+    fn tool_pages_follow_settings_and_manual_sits_above_licenses() {
+        let ctx = egui::Context::default();
+        let text = Localizer::new(AppLocale::En);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+        let keys = [
+            "settings-nav-general",
+            "settings-nav-import",
+            "menu-tools",
+            "downloads-title",
+            "menu-debug",
+            "menu-open-manual",
+            "menu-licenses",
+        ];
+        let mut tops = [None; 7];
+        for _ in 0..3 {
+            let output = ctx
+                .run_ui(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |ui| {
+                    build_menu_window(ui.ctx(), &mut true, "Default", text, |_| {})
+                });
+            for shape in output.shapes {
+                if let egui::Shape::Text(label) = shape.shape
+                    && let Some(index) =
+                        keys.iter().position(|key| label.galley.job.text == text.text(key))
+                {
+                    tops[index] = Some(label.pos.y);
+                }
+            }
+        }
+        let tops = tops.map(|top| top.expect("sidebar entry is visible"));
+        assert!(
+            tops.windows(2).all(|pair| pair[0] < pair[1]),
+            "unexpected sidebar order: {tops:?}"
+        );
+    }
+
+    #[test]
+    fn ir_queue_is_a_subpage_that_owns_its_scroll_area() {
+        let ctx = egui::Context::default();
+        SettingsNavigation::select_subpage(&ctx, SettingsPage::Ir, IR_QUEUE_SUBPAGE);
+        let navigation = SettingsNavigation::load(&ctx);
+        assert_eq!(navigation.page, SettingsPage::Ir);
+        assert_eq!(navigation.subpage(), IR_QUEUE_SUBPAGE);
+        assert!(navigation.page.owns_scroll(navigation.subpage()));
+        assert!(!SettingsPage::Ir.owns_scroll(0));
+        // 他ページへ移って戻っても送信キューを開いたままにする。
+        SettingsNavigation::select(&ctx, SettingsPage::Debug);
+        SettingsNavigation::select(&ctx, SettingsPage::Ir);
+        assert_eq!(SettingsNavigation::load(&ctx).subpage(), IR_QUEUE_SUBPAGE);
+        assert!(SettingsPage::Integration.subpages().is_empty());
+    }
+
+    #[test]
     fn license_navigation_stays_at_the_bottom_of_the_sidebar() {
         let ctx = egui::Context::default();
         let text = Localizer::new(AppLocale::En);
@@ -503,7 +633,7 @@ mod tests {
             let output = ctx.run_ui(
                 egui::RawInput { screen_rect: Some(rect), ..Default::default() },
                 |ui| {
-                    build_settings_window(ui.ctx(), &mut true, "Default", text, |_| {});
+                    build_menu_window(ui.ctx(), &mut true, "Default", text, |_| {});
                 },
             );
             for shape in output.shapes {
@@ -532,7 +662,7 @@ mod tests {
         let mut open = true;
         let render = |ctx: &egui::Context, open: &mut bool| {
             ctx.run_ui(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |_| {
-                build_settings_window(ctx, open, "Default", text, |ui| {
+                build_menu_window(ctx, open, "Default", text, |ui| {
                     let rect = ui.available_rect_before_wrap();
                     let _ = ui.interact(
                         egui::Rect::from_min_size(rect.min, egui::vec2(200.0, 22.0)),
@@ -551,6 +681,10 @@ mod tests {
             SettingsPage::Ir,
             SettingsPage::Library,
             SettingsPage::KeyConfig,
+            SettingsPage::Downloads,
+            SettingsPage::CourseEditor,
+            SettingsPage::RandomTrainer,
+            SettingsPage::Debug,
         ] {
             SettingsNavigation::select(&ctx, page);
             let output = render(&ctx, &mut open);

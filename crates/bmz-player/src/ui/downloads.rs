@@ -4,9 +4,8 @@ use crate::song_download::{
 };
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn build_download_panel(
-    ctx: &egui::Context,
-    visible: &mut bool,
+pub(super) fn build_download_page(
+    ui: &mut egui::Ui,
     manager: &ChartDownloadManager,
     list: &mut super::download_task_list::DownloadListUi,
     preview: &BulkDownloadPreview,
@@ -15,36 +14,62 @@ pub(super) fn build_download_panel(
     tables: &[DifficultyTableRecord],
     text: Localizer,
 ) -> Vec<DownloadUiCommand> {
-    if !*visible {
-        return Vec::new();
-    }
     let mut commands = Vec::new();
-    egui::Window::new(tr!(text, "downloads-title")).id(egui::Id::new("chart_downloads"))
-        .open(visible).default_width(660.0).constrain_to(ctx.content_rect().shrink(PANEL_VIEWPORT_MARGIN))
-        .show(ctx, |ui| {
-            if let Some(scope) = scope {
-                scope_label(ui, scope, tables);
-                if ui.add_enabled(select && !preview.preparing, egui::Button::new(tr!(text, "downloads-bulk-prepare"))).clicked() {
-                    commands.push(DownloadUiCommand::Prepare(scope.clone()));
-                }
-            } else { ui.label(tr!(text, "downloads-bulk-hint")); }
-            if preview.preparing { ui.horizontal(|ui| { ui.spinner(); ui.label(tr!(text, "downloads-bulk-preparing")); }); }
-            if let Some(error) = &preview.error { ui.colored_label(egui::Color32::LIGHT_RED, error); }
-            if let Some(plan) = &preview.plan {
-                ui.separator(); scope_label(ui, &plan.scope, tables);
-                counts_label(ui, &plan.counts, text);
-                ui.horizontal(|ui| {
-                    if ui.add_enabled(select && !plan.requests.is_empty(), egui::Button::new(tr!(text, "downloads-bulk-confirm"))).clicked() { commands.push(DownloadUiCommand::Confirm); }
-                    if ui.button(tr!(text, "downloads-bulk-dismiss")).clicked() { commands.push(DownloadUiCommand::Dismiss); }
-                });
+    if let Some(scope) = scope {
+        scope_label(ui, scope, tables);
+        if ui
+            .add_enabled(
+                select && !preview.preparing,
+                egui::Button::new(tr!(text, "downloads-bulk-prepare")),
+            )
+            .clicked()
+        {
+            commands.push(DownloadUiCommand::Prepare(scope.clone()));
+        }
+    } else {
+        ui.label(tr!(text, "downloads-bulk-hint"));
+    }
+    if preview.preparing {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(tr!(text, "downloads-bulk-preparing"));
+        });
+    }
+    if let Some(error) = &preview.error {
+        ui.colored_label(egui::Color32::LIGHT_RED, error);
+    }
+    if let Some(plan) = &preview.plan {
+        ui.separator();
+        scope_label(ui, &plan.scope, tables);
+        counts_label(ui, &plan.counts, text);
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    select && !plan.requests.is_empty(),
+                    egui::Button::new(tr!(text, "downloads-bulk-confirm")),
+                )
+                .clicked()
+            {
+                commands.push(DownloadUiCommand::Confirm);
             }
-            super::download_task_list::build_task_list(ui, manager, list, &mut commands, text);
-            for (index, batch) in manager.batches.iter().enumerate().rev().take(4) {
-                ui.separator(); scope_label(ui, &batch.scope, tables); counts_label(ui, &batch.counts, text);
-                let (completed, failed, merged) = list.batch_results.iter().find(|(id,_)| *id == index).map(|(_,results)| *results).unwrap_or_default();
-                ui.label(tr!(text, "downloads-bulk-results", "queued" => batch.counts.queued as i64, "merged" => merged as i64, "completed" => completed as i64, "failed" => failed as i64));
+            if ui.button(tr!(text, "downloads-bulk-dismiss")).clicked() {
+                commands.push(DownloadUiCommand::Dismiss);
             }
         });
+    }
+    super::download_task_list::build_task_list(ui, manager, list, &mut commands, text);
+    for (index, batch) in manager.batches.iter().enumerate().rev().take(4) {
+        ui.separator();
+        scope_label(ui, &batch.scope, tables);
+        counts_label(ui, &batch.counts, text);
+        let (completed, failed, merged) = list
+            .batch_results
+            .iter()
+            .find(|(id, _)| *id == index)
+            .map(|(_, results)| *results)
+            .unwrap_or_default();
+        ui.label(tr!(text, "downloads-bulk-results", "queued" => batch.counts.queued as i64, "merged" => merged as i64, "completed" => completed as i64, "failed" => failed as i64));
+    }
     commands
 }
 

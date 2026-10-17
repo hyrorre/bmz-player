@@ -414,26 +414,18 @@ pub struct EguiLayer {
     pub(super) font_coverage: bmz_render::FontCoverage,
     /// OS フォントに依存しない CJK fallback の検索先。
     pub(super) font_search_paths: Vec<PathBuf>,
-    /// メニュー全体の表示状態。F1 でトグルする。
+    /// BMZ メニュー（設定・ツールを統合したウィンドウ）の表示状態。F1 でトグルする。
     pub(super) visible: bool,
-    /// デバッグ表示パネルの開閉状態。
-    pub(super) show_debug: bool,
-    pub(super) show_downloads: bool,
     pub(super) download_list: super::download_task_list::DownloadListUi,
-    /// 7K RANDOM 固定配置パネルの開閉状態。
-    pub(super) show_random_trainer: bool,
     /// デバッグ表示内のログ最低表示レベル。
     pub(super) debug_log_filter: DebugLogFilter,
     /// デバッグ表示内のログを末尾へ追従するか。
     pub(super) debug_log_autoscroll: bool,
     /// 右上 FPS オーバーレイの表示状態。
     pub(super) show_fps: bool,
-    /// 本体設定パネルの開閉状態。
-    pub(super) show_settings: bool,
     /// プロファイル設定内のキー設定UIと入力待受状態。
     pub(super) key_config: EguiKeyConfigUiState,
-    /// ローカルのコース/段位作成・編集パネル。
-    pub(super) show_course_editor: bool,
+    /// ローカルのコース/段位作成・編集ページの状態。
     pub(super) course_editor: CourseEditorUiState,
     /// Lua skin の canonicalize をスキン設定 UI の毎フレームで繰り返さないためのキャッシュ。
     pub(super) skin_ui_path_cache: SkinUiPathCache,

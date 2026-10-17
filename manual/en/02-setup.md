@@ -39,7 +39,7 @@ A sample song is included for testing. Try selecting and playing it.
 - For 7 keys, the keys are **Z S X D C F V** and the turntable is **Left Shift / Left Ctrl**.
 - To quit, hold **Esc** on the song select screen.
 
-Press **F1** to open the **BMZ Menu**. Check **Settings** in the menu to open the settings window.
+Press **F1** to open the **BMZ Menu**. Pick a category from the list on the left to show its settings on the right.
 Settings are saved automatically when you change them, so there is no save button to press.
 
 ## 3. Register your song folders
