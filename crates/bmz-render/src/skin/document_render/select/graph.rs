@@ -30,12 +30,6 @@ macro_rules! skin_document_render_select_graph_methods {
             frame.y += row_origin.1;
             apply_skin_offset_to_frame(destination, &mut frame, state, false);
 
-            let total: u32 = row.folder_lamp_counts.iter().sum();
-            if total == 0 {
-                return Vec::new();
-            }
-
-            let dst = normalize_skin_frame_rect(frame, self.w, self.h);
             let source_w = source.source_size.width.max(1.0);
             let source_h = source.source_size.height.max(1.0);
             let cell_w = skin_grid_cell_size(graph.w, graph.divx.max(11));
@@ -50,7 +44,64 @@ macro_rules! skin_document_render_select_graph_methods {
             } else {
                 0
             };
+            let tint = Color::rgba(
+                frame.r as f32 / 255.0,
+                frame.g as f32 / 255.0,
+                frame.b as f32 / 255.0,
+                frame.a as f32 / 255.0,
+            );
+            let cell = |lamp_index: usize, rect: Rect| {
+                let source_x = graph.x + cell_w * lamp_index as i32;
+                let source_y = graph.y + cell_h * animation_row;
+                SkinRenderItem::Image {
+                    texture: source.texture,
+                    rect,
+                    uv: TextureRegion {
+                        x: source_x as f32 / source_w,
+                        y: source_y as f32 / source_h,
+                        width: cell_w as f32 / source_w,
+                        height: cell_h as f32 / source_h,
+                    },
+                    tint,
+                    blend: BlendMode::Normal,
+                    scale: SkinImageScale::Stretch,
+                    border: None,
+                    source_size: Some(source.source_size),
+                    linear_filter: false,
+                }
+            };
 
+            if !select_row_shows_folder_distribution(row) {
+                let Some(progress) = row.download_progress else {
+                    return Vec::new();
+                };
+                // Endless Dream: cell 0 fills the region, and the progress cell
+                // fills a 1px-inset bar from the left.
+                let mut items = vec![cell(0, normalize_skin_frame_rect(frame, self.w, self.h))];
+                let fraction = progress.fraction.clamp(0.0, 1.0);
+                if fraction > 0.0 && frame.w.abs() > 2 && frame.h.abs() > 2 {
+                    let mut inner = frame;
+                    inner.x += frame.w.signum();
+                    inner.y += frame.h.signum();
+                    inner.w -= 2 * frame.w.signum();
+                    inner.h -= 2 * frame.h.signum();
+                    let mut rect = normalize_skin_frame_rect(inner, self.w, self.h);
+                    if frame.w < 0 {
+                        rect.x += rect.width * (1.0 - fraction);
+                    }
+                    rect.width *= fraction;
+                    let lamp = usize::from(progress.lamp).min(graph.divx.max(11) as usize - 1);
+                    items.push(cell(lamp, rect));
+                }
+                return items;
+            }
+
+            let total: u32 = row.folder_lamp_counts.iter().sum();
+            if total == 0 {
+                return Vec::new();
+            }
+
+            let dst = normalize_skin_frame_rect(frame, self.w, self.h);
             let mut items = Vec::new();
             let mut filled = 0.0;
             for lamp_index in (0..row.folder_lamp_counts.len()).rev() {
@@ -62,31 +113,7 @@ macro_rules! skin_document_render_select_graph_methods {
                 if width <= 0.0 {
                     continue;
                 }
-                let rect = Rect { x: dst.x + filled, width, ..dst };
-                let source_x = graph.x + cell_w * lamp_index as i32;
-                let source_y = graph.y + cell_h * animation_row;
-                let uv = TextureRegion {
-                    x: source_x as f32 / source_w,
-                    y: source_y as f32 / source_h,
-                    width: cell_w as f32 / source_w,
-                    height: cell_h as f32 / source_h,
-                };
-                items.push(SkinRenderItem::Image {
-                    texture: source.texture,
-                    rect,
-                    uv,
-                    tint: Color::rgba(
-                        frame.r as f32 / 255.0,
-                        frame.g as f32 / 255.0,
-                        frame.b as f32 / 255.0,
-                        frame.a as f32 / 255.0,
-                    ),
-                    blend: BlendMode::Normal,
-                    scale: SkinImageScale::Stretch,
-                    border: None,
-                    source_size: Some(source.source_size),
-                    linear_filter: false,
-                });
+                items.push(cell(lamp_index, Rect { x: dst.x + filled, width, ..dst }));
                 filled += width;
             }
             items

@@ -717,3 +717,36 @@ fn screenshot_dir_keeps_absolute_configured_path() {
 
     assert_eq!(screenshot_dir(&absolute_dir.to_string_lossy(), data_dir), absolute_dir);
 }
+
+#[test]
+fn chart_download_rows_use_endless_dream_progress_cells() {
+    use crate::song_download::{
+        ChartDownloadIdentity, ChartDownloadManager, ChartDownloadRequest, DownloadState,
+        MissingChartAction,
+    };
+    let mut manager = ChartDownloadManager::default();
+    manager.submit(ChartDownloadRequest {
+        request_id: 1,
+        identity: ChartDownloadIdentity { sha256: Some([1; 32]), md5: Some([1; 16]) },
+        action: MissingChartAction::Http {
+            api_url: "https://test.invalid/{md5}".into(),
+            md5: "01".repeat(16),
+            sha256: "01".repeat(32),
+        },
+        title: "Chart".into(),
+        data_dir: PathBuf::from("data"),
+    });
+    let task = &manager.tasks()[0];
+    let progress = |state| {
+        task.control.set_state(state);
+        let progress = crate::app::download_flow::download_row_progress(task);
+        (progress.fraction, progress.lamp)
+    };
+    assert_eq!(progress(DownloadState::Queued), (0.0, 0));
+    assert_eq!(progress(DownloadState::Downloading), (0.0, 4));
+    assert_eq!(progress(DownloadState::Extracting), (1.0, 4));
+    assert_eq!(progress(DownloadState::Scanning), (1.0, 4));
+    assert_eq!(progress(DownloadState::Completed), (1.0, 6));
+    assert_eq!(progress(DownloadState::Failed), (1.0, 1));
+    assert_eq!(progress(DownloadState::Cancelled), (1.0, 4));
+}

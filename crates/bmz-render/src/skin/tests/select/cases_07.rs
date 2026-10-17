@@ -981,3 +981,70 @@ fn table_level_display_number_keeps_integer_part_of_modified_levels() {
         assert_eq!(table_level_display_number(label), expected, "{label}");
     }
 }
+
+#[test]
+fn select_songlist_graph_draws_chart_download_progress_like_endless_dream() {
+    let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "graph.png" }],
+                "graph": [
+                    { "id": "graph-lamp", "src": 1, "x": 0, "y": 0, "w": 44, "h": 4, "divx": 11, "divy": 1, "type": -1 }
+                ],
+                "songlist": {
+                    "id": "songlist",
+                    "center": 0,
+                    "liston": [{ "id": "row", "dst": [{ "x": 10, "y": 40, "w": 80, "h": 20 }] }],
+                    "graph": { "id": "graph-lamp", "dst": [{ "x": 0, "y": 0, "w": 44, "h": 4 }] }
+                },
+                "destination": [{ "id": "songlist" }]
+            }
+            "#,
+        )
+        .unwrap();
+    let sources = mock_source("1", 44.0, 4.0);
+    let render = |progress: Option<crate::scene::SelectRowDownloadProgress>| {
+        let snapshot = SelectSnapshot {
+            selected_index: 0,
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                title: "Song".into(),
+                download_progress: progress,
+                ..SelectRowSnapshot::default()
+            }],
+            ..SelectSnapshot::default()
+        };
+        document
+            .select_render_items(&sources, &snapshot)
+            .into_iter()
+            .filter_map(|item| match item {
+                SkinRenderItem::Image { texture: SkinTextureId(9999), rect, uv, .. } => {
+                    Some((rect, uv))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    assert!(render(None).is_empty());
+
+    let items = render(Some(crate::scene::SelectRowDownloadProgress { fraction: 0.5, lamp: 4 }));
+    assert_eq!(items.len(), 2);
+    let (background, background_uv) = items[0];
+    assert!(approx_eq(background.x, 0.10) && approx_eq(background.width, 0.44));
+    assert!(approx_eq(background_uv.x, 0.0));
+    // The fill is inset by one skin pixel and covers half the inner width.
+    let (fill, fill_uv) = items[1];
+    assert!(approx_eq(fill.x, 0.11) && approx_eq(fill.width, 0.21), "{fill:?}");
+    assert!(approx_eq(fill.height, 0.02), "{fill:?}");
+    assert!(approx_eq(fill_uv.x, 16.0 / 44.0));
+
+    // Not started: only the background cell.
+    assert_eq!(
+        render(Some(crate::scene::SelectRowDownloadProgress { fraction: 0.0, lamp: 0 })).len(),
+        1
+    );
+}

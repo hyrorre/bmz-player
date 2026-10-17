@@ -101,4 +101,43 @@ impl WinitApp {
             Err(error) => self.jobs.bulk_download.error = Some(format!("{error:#}")),
         }
     }
+
+    /// Fills chart rows' download bars from the task list, as LR2oraja
+    /// Endless Dream draws them with the songlist `graph`.
+    pub(super) fn apply_select_download_progress(&self, rows: &mut [SelectRowSnapshot]) {
+        if self.jobs.chart_downloads.tasks().is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        for row in rows {
+            let Some(SelectItem::Chart(chart)) = self.select.select_items.get(row.index as usize)
+            else {
+                continue;
+            };
+            row.download_progress = self
+                .jobs
+                .chart_downloads
+                .chart_row_task(chart.score_sha256(), chart.score_md5(), now)
+                .map(download_row_progress);
+        }
+    }
+}
+
+/// Endless Dream's bar: graph cells 0 (none), 1 (failed), 4 (in progress or
+/// cancelled) and 6 (completed).
+pub(super) fn download_row_progress(
+    task: &crate::song_download::DownloadTask,
+) -> bmz_render::scene::SelectRowDownloadProgress {
+    use crate::song_download::DownloadState;
+    let (fraction, lamp) = match task.state() {
+        DownloadState::Queued | DownloadState::Resolving => (0.0, 0),
+        DownloadState::Downloading => {
+            let (bytes, total) = task.control.bytes();
+            (total.map_or(0.0, |total| bytes as f32 / total as f32), 4)
+        }
+        DownloadState::Extracting | DownloadState::Scanning | DownloadState::Cancelled => (1.0, 4),
+        DownloadState::Completed => (1.0, 6),
+        DownloadState::Failed => (1.0, 1),
+    };
+    bmz_render::scene::SelectRowDownloadProgress { fraction: fraction.clamp(0.0, 1.0), lamp }
 }

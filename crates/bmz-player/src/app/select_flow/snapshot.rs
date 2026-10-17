@@ -252,6 +252,9 @@ impl WinitApp {
                 Some(&self.select.select_ir),
             )
         };
+        if !self.select.ir_battle.active {
+            self.apply_select_download_progress(&mut rows);
+        }
         if matches!(selected, Some(SelectItem::Chart(_)))
             && !self.select.ir_battle.active
             && let Some(selected_row) =
@@ -292,6 +295,7 @@ impl WinitApp {
                 &chart_distributions,
                 Some(&self.select.select_ir),
             );
+            self.apply_select_download_progress(&mut displayed_rows);
             // Preserve selection-only replay/history metadata where windows overlap.
             for row in &mut displayed_rows {
                 if let Some(selected_row) =

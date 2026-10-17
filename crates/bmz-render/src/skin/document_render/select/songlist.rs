@@ -311,7 +311,7 @@ macro_rules! skin_document_render_select_songlist_methods {
                         .map(tag("bpmgraph", usize::MAX, &row_state)),
                     );
                 }
-                if select_row_shows_folder_distribution(row) {
+                if select_row_shows_folder_distribution(row) || row.download_progress.is_some() {
                     items.extend(
                         self.select_songlist_all_child_items(
                             &songlist.graph,
@@ -428,7 +428,7 @@ macro_rules! skin_document_render_select_songlist_methods {
                     ));
                     continue;
                 }
-                if select_row_shows_folder_distribution(row)
+                if (select_row_shows_folder_distribution(row) || row.download_progress.is_some())
                     && let Some(graph) = self.graph.iter().find(|graph| graph.id == destination.id)
                 {
                     items.extend(self.select_folder_distribution_graph_render_items(

@@ -8,6 +8,15 @@ use std::sync::{
 };
 pub type DownloadTaskId = u64;
 
+/// Endless Dream keeps a finished task's bar visible for five seconds.
+pub const FINISHED_TASK_VISIBLE: std::time::Duration = std::time::Duration::from_secs(5);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ChartHash {
+    Sha256([u8; 32]),
+    Md5([u8; 16]),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum DownloadState {
@@ -147,6 +156,8 @@ pub struct DownloadTask {
     pub archive_unchanged: bool,
     pub result: Option<ChartDownloadResult>,
     pub registered: HashSet<ChartDownloadIdentity>,
+    /// When the task last reached a terminal state.
+    pub finished_at: Option<std::time::Instant>,
     worker: Option<mpsc::Receiver<Result<ChartDownloadResult>>>,
     /// Archive digest and folder of the attempt that lacked the requested chart.
     previous_archive: Option<([u8; 32], PathBuf)>,
@@ -193,6 +204,8 @@ pub struct ChartDownloadManager {
     scan_queue: VecDeque<usize>,
     failed_notices: VecDeque<DownloadTaskId>,
     transfers: std::collections::HashMap<super::transfer_key::TransferKey, usize>,
+    /// Latest task per requested chart hash, for drawing select rows.
+    charts: std::collections::HashMap<ChartHash, usize>,
     services: Arc<DownloadServices>,
     next_id: u64,
 }
@@ -206,6 +219,41 @@ impl ChartDownloadManager {
             .and_then(|index| usize::try_from(index).ok())
             .and_then(|index| self.tasks.get(index))
             .filter(|task| task.id == id)
+    }
+
+    fn index_chart(&mut self, identity: &ChartDownloadIdentity, index: usize) {
+        if let Some(hash) = identity.sha256 {
+            self.charts.insert(ChartHash::Sha256(hash), index);
+        }
+        if let Some(hash) = identity.md5 {
+            self.charts.insert(ChartHash::Md5(hash), index);
+        }
+    }
+
+    /// The task to draw on a chart row: unfinished, or finished within
+    /// [`FINISHED_TASK_VISIBLE`]. Matches by SHA-256 first, then MD5.
+    pub fn chart_row_task(
+        &self,
+        sha256: Option<[u8; 32]>,
+        md5: Option<[u8; 16]>,
+        now: std::time::Instant,
+    ) -> Option<&DownloadTask> {
+        let row = ChartDownloadIdentity { sha256, md5 };
+        let lookup = |hash| {
+            self.charts
+                .get(&hash)
+                .map(|&index| &self.tasks[index])
+                .filter(|task| task.requests.iter().any(|request| request.identity.overlaps(&row)))
+        };
+        sha256
+            .and_then(|hash| lookup(ChartHash::Sha256(hash)))
+            .or_else(|| md5.and_then(|hash| lookup(ChartHash::Md5(hash))))
+            .filter(|task| {
+                !task.state().terminal()
+                    || task
+                        .finished_at
+                        .is_some_and(|at| now.duration_since(at) < FINISHED_TASK_VISIBLE)
+            })
     }
 
     /// Returns (task id, merged). Scope includes the exact API configuration and
@@ -224,11 +272,13 @@ impl ChartDownloadManager {
             for key in keys {
                 self.transfers.insert(key, index);
             }
+            self.index_chart(&request.identity, index);
             let task = &mut self.tasks[index];
             tracing::info!(task_id = task.id, request_id = request.request_id, identity = ?request.identity, source = task.source_label(), "merged chart download request");
             task.requests.push(request);
             if task.state() == DownloadState::Completed {
                 task.control.set_state(DownloadState::Scanning);
+                task.finished_at = None;
                 task.scan_pending = true;
                 self.scan_queue.push_back(index);
             }
@@ -242,6 +292,7 @@ impl ChartDownloadManager {
         }
         self.queues[usize::from(matches!(request.action, MissingChartAction::Ipfs { .. }))]
             .push_back(index);
+        self.index_chart(&request.identity, index);
         self.tasks.push(DownloadTask {
             id,
             requests: vec![request],
@@ -251,6 +302,7 @@ impl ChartDownloadManager {
             archive_unchanged: false,
             result: None,
             registered: HashSet::new(),
+            finished_at: None,
             worker: None,
             previous_archive: None,
             thread: None,
@@ -270,6 +322,7 @@ impl ChartDownloadManager {
             task.control.cancel();
             if task.worker.is_none() {
                 task.control.set_state(DownloadState::Cancelled);
+                task.finished_at = Some(std::time::Instant::now());
             }
         }
     }
@@ -278,6 +331,7 @@ impl ChartDownloadManager {
             if task.state() == DownloadState::Queued {
                 task.control.cancel();
                 task.control.set_state(DownloadState::Cancelled);
+                task.finished_at = Some(std::time::Instant::now());
             }
         }
     }
@@ -305,6 +359,7 @@ impl ChartDownloadManager {
             task.error = None;
             task.registration_missing = false;
             task.archive_unchanged = false;
+            task.finished_at = None;
             if task.result.is_some() {
                 task.control.set_state(DownloadState::Scanning);
                 task.scan_pending = true;
@@ -365,6 +420,7 @@ impl ChartDownloadManager {
                     } else {
                         DownloadState::Failed
                     });
+                    task.finished_at = Some(std::time::Instant::now());
                     if task.state() == DownloadState::Failed {
                         self.failed_notices.push_back(task.id);
                     }
@@ -429,6 +485,7 @@ impl ChartDownloadManager {
                     Err(error) => {
                         task.error = Some(error.to_string());
                         task.control.set_state(DownloadState::Failed);
+                        task.finished_at = Some(std::time::Instant::now());
                     }
                 }
             }
@@ -486,6 +543,7 @@ impl ChartDownloadManager {
         } else {
             DownloadState::Failed
         });
+        task.finished_at = Some(std::time::Instant::now());
         tracing::info!(task_id = id, state = ?task.state(), error = ?task.error, "chart registration finished");
     }
 }
@@ -736,6 +794,31 @@ mod tests {
         let task = manager.task(id).unwrap();
         assert_eq!(task.state(), DownloadState::Completed);
         assert!(task.registered.contains(&identity));
+    }
+
+    #[test]
+    fn chart_rows_see_unfinished_tasks_and_finished_ones_for_five_seconds() {
+        let root = tempfile::tempdir().unwrap();
+        let mut manager = ChartDownloadManager::default();
+        let r = request(root.path(), "https://test.invalid/{md5}", 1);
+        let (sha, md5) = (r.identity.sha256, r.identity.md5);
+        let (id, _) = manager.submit(r);
+        let now = std::time::Instant::now();
+        assert_eq!(manager.chart_row_task(sha, md5, now).map(|task| task.id), Some(id));
+        // Rows that only know one hash still find the task.
+        assert!(manager.chart_row_task(None, md5, now).is_some());
+        assert!(manager.chart_row_task(sha, None, now).is_some());
+        // A row whose other hash disagrees is a different chart.
+        assert!(manager.chart_row_task(sha, Some([9; 16]), now).is_none());
+        assert!(manager.chart_row_task(Some([9; 32]), None, now).is_none());
+
+        manager.tasks[0].control.set_state(DownloadState::Scanning);
+        manager.finish_scan(id, &[], Some("database error"));
+        let finished = manager.task(id).unwrap().finished_at.unwrap();
+        assert!(manager.chart_row_task(sha, md5, finished).is_some());
+        assert!(manager.chart_row_task(sha, md5, finished + FINISHED_TASK_VISIBLE).is_none());
+        manager.retry(id);
+        assert!(manager.task(id).unwrap().finished_at.is_none());
     }
 
     #[test]

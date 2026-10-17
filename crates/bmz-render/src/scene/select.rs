@@ -368,6 +368,16 @@ impl Default for SelectSnapshot {
     }
 }
 
+/// One chart row's download progress bar.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SelectRowDownloadProgress {
+    /// Filled width, 0.0..=1.0.
+    pub fraction: f32,
+    /// `graph` image cell (BARLAMP index) of the filled part. Cell 0 is the
+    /// background, as in Endless Dream.
+    pub lamp: u8,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectRowSnapshot {
     pub index: u32,
@@ -440,6 +450,9 @@ pub struct SelectRowSnapshot {
     /// beatoraja DirectoryBar-style lamp distribution for folder rows.
     /// Indexes match SkinBar BARLAMP IDs: 0 no play, 1 failed, ... 10 max.
     pub folder_lamp_counts: [u32; 11],
+    /// Chart download progress for chart rows, drawn with the songlist `graph`
+    /// images as in LR2oraja Endless Dream. `None` hides it.
+    pub download_progress: Option<SelectRowDownloadProgress>,
     pub is_folder: bool,
     pub kind: SelectRowKind,
     /// library.db に登録済みかどうか。未登録の難易度表エントリは false。
@@ -542,6 +555,7 @@ impl Default for SelectRowSnapshot {
             chart_distribution: Vec::new(),
             chart_bpm_graph_segments: Vec::new(),
             folder_lamp_counts: [0; 11],
+            download_progress: None,
             is_folder: false,
             kind: SelectRowKind::default(),
             in_library: true,
