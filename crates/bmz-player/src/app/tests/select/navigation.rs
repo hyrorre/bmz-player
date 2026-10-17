@@ -102,6 +102,11 @@ fn root_function_folders_keep_kinds_and_favorite_follows_my_best() {
             let favorite = items.iter().position(|item| {
                 matches!(item, SelectItem::Folder { path, .. } if path == FAVORITE_ROOT_PATH)
             }).unwrap();
+            // FAVORITE is a feature folder (Container), not a difficulty table folder.
+            assert!(matches!(
+                &items[favorite],
+                SelectItem::Folder { kind: SelectRowKind::Container, .. }
+            ));
             if has_best {
                 assert!(
                     matches!(&items[favorite - 1], SelectItem::Folder { path, .. }
@@ -122,6 +127,13 @@ fn root_function_folders_keep_kinds_and_favorite_follows_my_best() {
             }).count(), 1);
         }
     }
+    let children = favorite_root_items(&boot.collection_db).unwrap();
+    assert!(!children.is_empty());
+    assert!(
+        children.iter().all(|item| {
+            matches!(item, SelectItem::Folder { kind: SelectRowKind::Container, .. })
+        })
+    );
 }
 
 #[test]

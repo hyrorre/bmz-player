@@ -138,10 +138,11 @@ fn lr2_songlist_renders_unowned_songs_and_courses_with_native_bodies() {
         (SelectRowKind::Course, false, 5),
         (SelectRowKind::RandomCourse, true, 9),
         (SelectRowKind::RandomCourse, false, 5),
+        // Settings categories are normal folders; entry, back and close are rival folders.
         (SelectRowKind::SettingsRoot, true, 4),
-        (SelectRowKind::SettingsFolder, true, 4),
+        (SelectRowKind::SettingsFolder, true, 1),
         (SelectRowKind::SettingsBack, true, 4),
-        (SelectRowKind::SettingsClose, true, 1),
+        (SelectRowKind::SettingsClose, true, 4),
     ] {
         let snapshot = SelectSnapshot {
             rows: vec![SelectRowSnapshot { kind, in_library, ..Default::default() }],
