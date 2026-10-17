@@ -1,39 +1,42 @@
-# Linux tar.gz distribution
+# Linux tar.gz配布
 
-GitHub Releases provide runtime and corresponding-source archives for Linux
-x86_64, with Ubuntu 22.04 (glibc 2.35) as the minimum runtime baseline.
-Other distributions are not guaranteed to work. Flatpak remains available.
-Regular users only need the runtime archive; the sources archive is for rebuilding.
+Linux x86_64向けに、GitHub Releasesで実行用アーカイブと対応ソースのアーカイブを配布します。
+この文書では、実行方法・更新・ビルドと検証・ライセンス表記と対応ソースを扱います。
+入力・音声の依存関係、権限、診断、元に戻す手順は[Linux遅延検証](linux-latency.md)を参照してください。
 
-The build enables `pulseaudio,pipewire,linux-evdev`. It bundles the pinned
-PipeWire 1.4.9 client, native-protocol/client-node/adapter/metadata/rt modules,
-SPA support/audioconvert plugins and a private client configuration. It ships no
-audio server, services, PAM or udev policy. The baseline is Ubuntu 22.04/glibc 2.35.
-Auto prefers PulseAudio then ALSA; PipeWire and evdev are opt-in.
-See [Linux latency verification](linux-latency.md) for dependencies, permissions,
-diagnostics and rollback. The launcher sets package-local PipeWire/SPA/config
-search paths only if callers did not already set them; it never forces a quantum.
-It records the caller's values, and BMZ restores them (or removes the package-local
-paths) for xdg-open, browsers and file managers, so those programs never load the
-bundled PipeWire modules into the host client library.
+## 概要
 
-## Run
+- 動作の最低基準はUbuntu 22.04（glibc 2.35）です。他のディストリビューションでの動作は保証しません。Flatpak版も引き続き利用できます。
+- 一般の利用者に必要なのは実行用アーカイブだけです。ソースのアーカイブは再ビルド用です。
+- ビルドでは`pulseaudio,pipewire,linux-evdev`を有効にします。
+- バージョンを固定したPipeWire 1.4.9のクライアント、native-protocol / client-node / adapter / metadata / rtモジュール、SPAのsupport / audioconvertプラグイン、専用のクライアント設定を同梱します。
+- 音声サーバー、サービス、PAM、udevのポリシーは同梱しません。
+- 音声のAutoはPulseAudio、次にALSAを優先します。PipeWireとevdevは明示的に選んだ場合だけ使います。
 
-Extract `bmz-player-v<version>-linux-x64.tar.gz`, then run its `./bmz-player`
-launcher. Use the launcher rather than `bin/bmz-player` directly. The directory
-may be read-only; keep its `bin`, `lib`, and `resources` directories together.
-No Flatpak installation, root installation, or system FFmpeg is needed.
+ランチャーは、呼び出し元がPipeWire / SPA / 設定の検索パスを設定していない場合だけ、パッケージ内のパスを設定します。
+quantumは強制しません。
+ランチャーは呼び出し元の値を記録し、BMZはxdg-open・ブラウザ・ファイルマネージャーを起動するときにその値へ戻します（元の値がなければパッケージ内のパスを外します）。
+これにより、外部のプログラムが同梱のPipeWireモジュールをホストのクライアントライブラリへ読み込むことはありません。
 
-The executable and shared libraries use relative ELF RUNPATHs. The launcher
-does not export a package-wide `LD_LIBRARY_PATH` to external programs such as
-the video-export encoder or the desktop browser.
+## 実行
 
-The host must provide an x86_64 glibc runtime, a desktop session (X11 or Wayland),
-a working Vulkan driver (or OpenGL with `--renderer gl`), and an audio device
-through ALSA or a PulseAudio-compatible server such as PipeWire-Pulse. GPU
-drivers, their loader/ICDs, display servers, audio servers and device permissions
-belong to the host. A minimal Ubuntu 22.04 installation can install the integration
-packages with:
+`bmz-player-v<version>-linux-x64.tar.gz`を展開し、中の`./bmz-player`ランチャーを実行します。
+`bin/bmz-player`を直接実行せず、ランチャーを使ってください。
+展開先は読み取り専用でも構いません。`bin`、`lib`、`resources`の各ディレクトリは同じ場所に置いたままにします。
+Flatpakのインストール、rootでのインストール、システムのFFmpegは不要です。
+
+実行ファイルと共有ライブラリは、相対パスのELF RUNPATHを使います。
+ランチャーは、動画出力のエンコーダーやデスクトップのブラウザなどの外部プログラムへ、パッケージ全体の`LD_LIBRARY_PATH`を渡しません。
+
+ホスト側には次のものが必要です。
+
+- x86_64のglibc実行環境
+- デスクトップセッション（X11またはWayland）
+- 動作するVulkanドライバー（`--renderer gl`を指定する場合はOpenGL）
+- ALSA、またはPipeWire-PulseなどのPulseAudio互換サーバー経由の音声デバイス
+
+GPUドライバーとそのloader / ICD、ディスプレイサーバー、音声サーバー、デバイスの権限はホスト側で用意します。
+最小構成のUbuntu 22.04では、次のコマンドで連携用のパッケージをインストールできます。
 
 ```sh
 sudo apt-get install libvulkan1 libgl1 libegl1 libx11-6 libxcursor1 libxi6 \
@@ -41,79 +44,75 @@ sudo apt-get install libvulkan1 libgl1 libegl1 libx11-6 libxcursor1 libxi6 \
   libasound2 libasound2-plugins libpulse0 libfontconfig1 libudev1 ca-certificates
 ```
 
-Install the appropriate GPU driver separately (for example Mesa Vulkan drivers
-or the distribution's NVIDIA driver) and configure the desktop's sound server.
-OS credential storage additionally needs a session D-Bus and Secret Service.
-Opening URLs needs the desktop's `xdg-open`. Video export needs an external
-FFmpeg executable with the required encoders; the bundled FFmpeg is decode-only.
+GPUドライバー（Mesa Vulkanドライバーや、ディストリビューションのNVIDIAドライバーなど）は別途インストールし、デスクトップのサウンドサーバーを設定してください。
+ほかに、機能によって次のものが必要です。
 
-Default writable paths are:
+- OSの認証情報ストア：セッションのD-BusとSecret Service
+- URLを開く操作：デスクトップの`xdg-open`
+- 動画出力：必要なエンコーダーを含む外部のFFmpeg実行ファイル（同梱のFFmpegはデコード専用です）
 
-| Content | Location |
+既定の書き込み先は次のとおりです。
+
+| 内容 | 場所 |
 | --- | --- |
-| Configuration, library DB, profiles, scores, replay, user skins | `${XDG_DATA_HOME:-$HOME/.local/share}/bmz-player` |
-| Cache | `${XDG_CACHE_HOME:-$HOME/.cache}/bmz-player` |
-| Logs | `${XDG_STATE_HOME:-$HOME/.local/state}/bmz-player/logs` |
+| 設定、ライブラリDB、プロファイル、スコア、リプレイ、追加スキン | `${XDG_DATA_HOME:-$HOME/.local/share}/bmz-player` |
+| キャッシュ | `${XDG_CACHE_HOME:-$HOME/.cache}/bmz-player` |
+| ログ | `${XDG_STATE_HOME:-$HOME/.local/state}/bmz-player/logs` |
 
-Nonempty `BMZ_RESOURCE_DIR`, `BMZ_DATA_DIR`, `BMZ_CACHE_DIR`, and `BMZ_LOGS_DIR`
-override these defaults. When `BMZ_DATA_DIR` is explicitly set, the app's existing
-default of `BMZ_DATA_DIR/cache` and `BMZ_DATA_DIR/logs` remains in effect unless
-overridden. Empty BMZ values mean unset, as in the app. The wrapper does not
-change the caller's working directory; relative arguments and relative BMZ
-overrides retain their meaning. A caller's `data/` directory does not override
-the package defaults. XDG values should be absolute paths.
+空でない`BMZ_RESOURCE_DIR`、`BMZ_DATA_DIR`、`BMZ_CACHE_DIR`、`BMZ_LOGS_DIR`は、これらの既定値より優先します。
+`BMZ_DATA_DIR`を明示した場合、個別に指定しない限り、キャッシュとログはアプリの既定どおり`BMZ_DATA_DIR/cache`と`BMZ_DATA_DIR/logs`になります。
+アプリと同じく、空のBMZ変数は未設定として扱います。
+ランチャーは呼び出し元の作業ディレクトリを変えないため、相対パスの引数や相対パスのBMZ変数も同じ意味のまま使えます。
+呼び出し元の`data/`ディレクトリは、パッケージの既定値より優先されません。
+XDG変数には絶対パスを指定してください。
 
-## Build and validate
+## 更新とFlatpakからの移行
 
-### Manual updates and Flatpak migration
+BMZを終了し、新しい実行用アーカイブを新しいディレクトリへ展開して、その直下の`./bmz-player`を起動します。
+既定の利用者データはパッケージの外にあるため、そのまま引き継がれます。
+`BMZ_*`を明示している場合は、特に`BMZ_DATA_DIR`を同じ値のまま使ってください。
+追加スキンは利用者データのディレクトリに置きます。
+Linux tar.gz版の更新は手動です。Windowsのupdaterと、macOSのSparkleのfeedはこのパッケージには適用されません。
 
-Close BMZ and extract the new runtime archive into a new directory, then launch
-its top-level `./bmz-player`. Default user data lives outside the package and is
-reused. Preserve any explicit `BMZ_*` overrides, especially `BMZ_DATA_DIR`.
-Keep additional skins in the user data directory. Linux tar updates are manual;
-the Windows updater and macOS Sparkle feeds do not apply to this package.
+Flatpak版は`~/.var/app/net.hyrorre.BMZPlayer/`以下のsandbox用パスを使います。
+そのため、配布形式を切り替えてもプロファイルやスコアは自動では移行されません。
+移行する場合は、両方のバージョンを終了してそれぞれのデータをバックアップし、既存のファイルを確認してから、Flatpak版のデータディレクトリの中身をtar.gz版のデータディレクトリへコピーしてください。
+ホスト側の譜面のパスやアクセス権限は、Flatpak環境と異なる場合があります。
 
-Flatpak uses sandbox paths under `~/.var/app/net.hyrorre.BMZPlayer/`, so switching
-formats does not automatically migrate profiles or scores. Close both versions,
-back up their data, and copy the Flatpak data directory's contents to the tar
-version's data directory only after checking for existing files. Host chart paths
-and access permissions may differ from the Flatpak environment.
+## ビルドと検証
 
-### Local packaging
+### ローカルでのパッケージ作成
 
-On a Linux x86_64 host with Docker, Git and initialized bundled-skin submodules:
+DockerとGitがあり、同梱スキンのsubmoduleを初期化済みのLinux x86_64ホストで実行します。
 
 ```sh
 git submodule update --init --recursive
 scripts/package-linux-tar.sh
-# Or use rootless Podman:
+# rootless Podmanを使う場合:
 CONTAINER_ENGINE=podman scripts/package-linux-tar.sh
 ```
 
-Commit tracked changes first. The script builds only committed source and the
-recorded skin submodule commits, excluding untracked files, local skin edits,
-credentials, configuration, databases, external skins and additional songs.
-No host runtime data is copied. All Git-managed fonts, skins and sample songs
-are included unchanged. Docker/Podman caches the build image; allow several GB
-of disk space, network access for dependencies, and time for Rust compilation.
+先に、追跡しているファイルの変更をコミットしてください。
+スクリプトはコミット済みのソースと、記録されたスキンsubmoduleのコミットだけをビルドします。
+追跡していないファイル、ローカルでのスキン編集、認証情報、設定、DB、外部スキン、追加曲は含めません。
+ホストの実行時データはコピーしません。
+Gitで管理しているフォント・スキン・サンプル曲は、すべてそのまま含めます。
+Docker / Podmanはビルド用イメージをキャッシュします。数GBのディスク容量、依存関係の取得に使うネットワーク、Rustのコンパイル時間が必要です。
 
-Output in `dist/linux-tar/` consists of:
+`dist/linux-tar/`には次のファイルを出力します。
 
-- `bmz-player-v<version>-linux-x64.tar.gz`: executable, libraries, resources and notices.
-- `bmz-player-v<version>-linux-x64-sources.tar.gz`: corresponding source workspace,
-  Cargo vendor, FFmpeg archive and exact Ubuntu source packages.
-- `SHA256SUMS.txt`: SHA256 of both compressed files.
+- `bmz-player-v<version>-linux-x64.tar.gz`：実行ファイル、ライブラリ、リソース、ライセンス表記
+- `bmz-player-v<version>-linux-x64-sources.tar.gz`：対応するソースのworkspace、Cargoのvendor、FFmpegのアーカイブ、対応するUbuntuのソースパッケージ
+- `SHA256SUMS.txt`：2つの圧縮ファイルのSHA256
 
-After all checks succeed, `validation.md` is written beside the runtime archive
-with its build commit, sizes, checksums and validation summary. This local report
-is separate from the three uploaded distribution files.
+すべての確認が成功すると、実行用アーカイブの隣に`validation.md`を書き出します。
+ビルドしたコミット、サイズ、チェックサム、検証結果の要約を記録したローカル用のレポートで、配布する3つのファイルには含めません。
 
-Each archive must be strictly below 2,147,483,648 bytes, the
-[GitHub Releases per-file limit](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases).
-The build uses gzip level 9 and fails if either file reaches the limit. It never
-removes required sources or notices to meet this limit. A failed check leaves
-archives for diagnosis; consider them validated only when the command succeeds.
-To revalidate a pair (with `SHA256SUMS.txt` beside the runtime archive):
+各アーカイブは、[GitHub Releasesのファイルごとの上限](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases)である2,147,483,648 bytes未満にする必要があります。
+ビルドはgzipのレベル9で圧縮し、どちらかのファイルが上限に達した場合は失敗します。
+上限に収めるために、必要なソースやライセンス表記を削ることはありません。
+確認に失敗した場合も、調査用にアーカイブを残します。コマンドが成功した場合だけ、検証済みとして扱ってください。
+2つのアーカイブを再検証するには、実行用アーカイブの隣に`SHA256SUMS.txt`を置いて次を実行します。
 
 ```sh
 scripts/package-linux-tar.sh --verify \
@@ -121,120 +120,127 @@ scripts/package-linux-tar.sh --verify \
   dist/linux-tar/bmz-player-v<version>-linux-x64-sources.tar.gz
 ```
 
-Run the **Optional Linux tar.gz** workflow manually
-to download both verified archives and checksums as one Actions artifact. It
-uploads only the current run's explicit output paths after all checks succeed,
-and records sizes, SHA256, full commit and verification results in the job summary.
-GitHub requires
-the workflow to exist on the repository's default branch before manual dispatch;
-then the run dialog can select another branch. See the
-[GitHub instructions](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
-This manual workflow does not publish a Release. After verification the package
-script also writes a `*-linux-x64-tar-client-manifest.json` sidecar for release
-integration; the manual artifact still contains only the two archives and checksums.
+### 手動のworkflow
 
-### Official release workflow
+**Optional Linux tar.gz** workflowを手動で実行すると、検証済みの2つのアーカイブとチェックサムを1つのActions artifactとして取得できます。
+すべての確認が成功した後、その実行で明示した出力パスだけをアップロードします。
+job summaryには、サイズ、SHA256、完全なコミットID、検証結果を記録します。
+GitHubでは、手動実行の前にworkflowがリポジトリの既定ブランチに存在する必要があります。
+その後は、実行ダイアログで別のブランチを選べます。
+詳しくは[GitHubの説明](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)を参照してください。
+この手動のworkflowはReleaseを公開しません。
+検証後、パッケージ作成スクリプトはRelease連携用に`*-linux-x64-tar-client-manifest.json`も書き出しますが、手動実行のartifactに含めるのは2つのアーカイブとチェックサムだけです。
 
-`release-apps.yml` builds the same pair from the resolved release-tag commit.
-It checks the archive version/commit against release metadata and combines the
-Linux tar client hash with the Windows, macOS and Flatpak builds. The hash is
-from the verified packaged executable after `patchelf`, not the launcher or tarball.
-Both archives and the signed unified `release.json` enter the final `SHA256SUMS.txt`.
-The release attaches no separate client manifest; rianIR reads the
-top-level `builds` in `release.json`. See [Release metadata](release-metadata.md).
-Download corresponding sources from the same Release as the runtime; GitHub's
-automatic source snapshot does not include vendored dependencies or Ubuntu/FFmpeg sources.
+### 正式リリースのworkflow
 
-With `upload_to_release=false`, the workflow validates and uploads the combined
-files as `verified-release-files` in Actions without publishing Release assets
-or update feeds. Before public distribution, verify real GPU/audio/input behavior
-and arrange rianIR allowlist registration as described in `docs/rian-ir.md`.
+`release-apps.yml`は、解決したリリースタグのコミットから同じ2つのアーカイブをビルドします。
+アーカイブのバージョンとコミットをリリースメタデータと照合し、Linux tar.gz版のクライアントハッシュをWindows・macOS・Flatpak版のビルドとまとめます。
+このハッシュは、`patchelf`を適用した後の検証済み実行ファイルから求めます。ランチャーやtarballのハッシュではありません。
+両方のアーカイブと、署名付きの統合`release.json`を最終的な`SHA256SUMS.txt`へ含めます。
+リリースには個別のclient manifestを添付しません。rianIRは`release.json`のトップレベルの`builds`を読みます。
+詳しくは[Releaseメタデータ](release-metadata.md)を参照してください。
+対応ソースは、実行用アーカイブと同じReleaseから取得してください。
+GitHubが自動で作るソースのスナップショットには、vendorした依存関係やUbuntu / FFmpegのソースが含まれません。
 
-The build stage uses Ubuntu 22.04, records its actual compiler versions, builds
-the pinned FFmpeg source without GPL/nonfree or autodetected external codecs,
-then runs `cargo fmt --check`, `cargo check`, `cargo clippy`, and `cargo test`
-before the release build. Tests run with Japanese locale defaults and as an
-unprivileged user, matching the existing UI-string and filesystem-permission
-tests; test debug symbols are omitted to limit temporary disk/memory usage.
-The application uses its existing PulseAudio feature.
-No native CPU tuning is enabled.
+`upload_to_release=false`を指定すると、workflowは検証した後、まとめたファイルを`verified-release-files`としてActionsへアップロードします。
+この場合、Releaseのassetや更新用のfeedは公開しません。
+一般へ配布する前に、実機でのGPU・音声・入力の動作を確認し、`docs/rian-ir.md`のとおりにrianIRのallowlistへの登録を依頼してください。
 
-Validation extracts the actual runtime tar.gz and mounts only it read-only in a separate
-Ubuntu 22.04 container as an unprivileged user. This image has no build-stage
-filesystem, compiler or FFmpeg. It verifies every packaged ELF's dependency
-resolution: non-glibc dependencies must resolve inside the archive even if a
-host integration package also provides them. A negative control verifies that
-the image cannot resolve FFmpeg for a copy of the executable without its library
-directory. It then
-exercises help, relative song scanning, SQLite writes, default and overridden
-data/cache/log/resource paths, a symlinked launcher, and sample play under Xvfb,
-software Vulkan and a null PulseAudio sink. Successful file opens confirm access
-to the packaged skin, CJK font, chart and audio sample. Neither the source archive
-nor the original build tree is accessible inside this runtime container.
+### ビルド段階
 
-Both archives carry the same `build-manifest.json` (schema 1). It records the
-version, commit, submodule commits, target/features/command, lockfile hash,
-compiler versions, Ubuntu release, build image ID, FFmpeg URL/hash/configuration,
-and Ubuntu binary/source package versions. File inventories cover hashes, sizes,
-executable modes and symlink targets. The committed snapshot is inventoried before
-building; source and skin files are compared against it after staging and extraction.
-The manifest is excluded from its own inventory. Compressed file hashes live only
-in the external checksum file.
+ビルド段階はUbuntu 22.04を使い、実際のコンパイラのバージョンを記録します。
+バージョンを固定したFFmpegのソースを、GPL / nonfreeのコーデックや自動検出した外部コーデックを含めずにビルドします。
+その後、release buildの前に`cargo fmt --check`、`cargo check`、`cargo clippy`、`cargo test`を実行します。
+テストは、既存のUI文字列とファイル権限のテストに合わせて、日本語ロケールを既定とし、権限のないユーザーで実行します。
+一時的なディスクとメモリの使用量を抑えるため、テストのデバッグシンボルは省きます。
+アプリは既存のPulseAudio featureを使います。ネイティブCPU向けの最適化は有効にしません。
 
-The source archive is extracted to a separate path. Its inventory and identity
-must match the runtime, Cargo workspace version/lockfile, FFmpeg source/configuration,
-and exact Ubuntu source versions. Every `.dsc` reference is checked for size and
-SHA256 and extracted with `dpkg-source`. A separate tool-only container mounts only
-the source archive, uses an empty Cargo cache, resolves vendor dependencies offline,
-then rebuilds FFmpeg and BMZ release with networking disabled. This does not rebuild
-all Ubuntu libraries or establish byte-for-byte binary reproducibility.
+### 実行用アーカイブの検証
 
-This smoke check does not establish real GPU compatibility, Wayland behavior,
-audible output, timing/latency, or physical controller access. Check those on a
-real Ubuntu 22.04 desktop before proposing a public binary release.
+検証では、実際の実行用tar.gzを展開し、それだけを読み取り専用で別のUbuntu 22.04コンテナへマウントして、権限のないユーザーで実行します。
+このイメージには、ビルド段階のファイルシステム、コンパイラ、FFmpegがありません。
 
-## Notices and corresponding source
+- 同梱したすべてのELFの依存関係が解決できることを確認します。glibc以外の依存関係は、ホストの連携用パッケージが同じものを提供していても、アーカイブ内で解決される必要があります。
+- 対照として、ライブラリのディレクトリを除いた実行ファイルのコピーでは、FFmpegを解決できないことを確認します。
+- help、相対パスでの曲スキャン、SQLiteへの書き込み、既定と上書きしたdata / cache / log / resourceのパス、シンボリックリンク経由のランチャー、Xvfb・ソフトウェアVulkan・null PulseAudio sinkでのサンプル曲のプレイを確認します。
+- ファイルを開けたことで、同梱のスキン、CJKフォント、譜面、音声サンプルにアクセスできることを確認します。
 
-`resources/licenses/` contains the existing BMZ and third-party notices, the
-mandatory cargo-about report, Rust runtime notices, the Noto OFL, FFmpeg licenses/configuration and
-build provenance. Skin-specific notices stay beside the unmodified assets.
-The existing skin restrictions, including noncommercial/NoDerivatives terms,
-still apply; see `resources/licenses/license-notes.md` in the archive
-(`docs/licenses.md` in the source tree).
+この実行用コンテナからは、ソースのアーカイブや元のビルドツリーにアクセスできません。
 
-FFmpeg is dynamically linked, retains its library names, and ships with the exact
-verified upstream archive in the matching source archive's `ffmpeg/`. Its recorded configure command and
-`installer/linux-tar/build-ffmpeg.sh` describe rebuilding it. This follows the
-[FFmpeg distribution checklist](https://ffmpeg.org/legal.html).
+### ビルド情報とソースの検証
 
-Other bundled ELF libraries are taken from Ubuntu packages. Each has its binary
-and source versions recorded in `resources/licenses/ubuntu/packages.txt`, its
-original copyright notice, and matching `.dsc`/upstream/Debian source archives
-downloaded by APT into the source archive's `ubuntu/<source-package>/`. Missing source or notices
-fail packaging. Use `dpkg-source -x` on the `.dsc` to unpack the patched source.
-ELF RUNPATHs are adjusted by the included packaging script; library code is not
-patched. These files accompany the binary, rather than relying on a future source offer.
-The host's glibc/loader and GPU drivers are not bundled.
+両方のアーカイブには、同じ`build-manifest.json`（schema 1）が入っています。
+次の内容を記録します。
 
-The source archive contains the application workspace directly, including the
-actual bundled submodule files, scripts, lockfile and Cargo vendor. Its
-`.cargo/config.toml` uses relative `vendor`, preserving existing configuration.
-Read `BUILDING.md` in that archive (repository copy:
-[`installer/linux-tar/SOURCE-README.md`](../installer/linux-tar/SOURCE-README.md))
-for development packages, offline rebuild commands, and Ubuntu source extraction.
-Preserve both matching archives and all notices when redistributing. Security
-updates to bundled dependencies require rebuilding and revalidating the archive.
-To refresh Ubuntu packages and the stable Rust toolchain instead of reusing
-cached image layers, first run:
+- バージョン、コミット、submoduleのコミット
+- target / features / コマンド、lockfileのハッシュ
+- コンパイラのバージョン、Ubuntuのリリース、ビルド用イメージのID
+- FFmpegのURL / ハッシュ / configure設定
+- Ubuntuのバイナリパッケージとソースパッケージのバージョン
+
+ファイルの一覧には、ハッシュ、サイズ、実行権限、シンボリックリンクの参照先を記録します。
+コミット済みのスナップショットはビルド前に一覧を作り、配置後と展開後にソースとスキンのファイルをその一覧と比較します。
+manifest自身は一覧から除きます。圧縮ファイルのハッシュは、外部のチェックサムファイルだけに記録します。
+
+ソースのアーカイブは別のパスへ展開します。
+その一覧と識別情報は、実行用アーカイブ、Cargo workspaceのバージョンとlockfile、FFmpegのソースとconfigure設定、Ubuntuのソースのバージョンと一致する必要があります。
+すべての`.dsc`の参照について、サイズとSHA256を確認し、`dpkg-source`で展開します。
+別のツール専用コンテナは、ソースのアーカイブだけをマウントし、空のCargoキャッシュでvendorの依存関係をオフラインで解決します。
+そのうえで、ネットワークを無効にしてFFmpegとBMZのreleaseを再ビルドします。
+この確認では、Ubuntuのライブラリをすべて再ビルドするわけではなく、バイト単位で同じバイナリを再現できることも保証しません。
+
+### 検証できない項目
+
+このsmoke checkでは、実際のGPUとの互換性、Waylandでの動作、音が実際に鳴るか、タイミング・遅延、物理コントローラーへのアクセスは確認できません。
+一般向けのバイナリリリースを提案する前に、実機のUbuntu 22.04デスクトップで確認してください。
+
+## ライセンス表記と対応ソース
+
+`resources/licenses/`には、次のものが入っています。
+
+- 既存のBMZと第三者のライセンス表記
+- 必須のcargo-aboutのレポート
+- Rustの実行時ライブラリのライセンス表記
+- NotoのOFL
+- FFmpegのライセンスとconfigure設定
+- ビルドの出所情報
+
+スキン固有のライセンス表記は、変更していない素材の隣に置きます。
+非営利・改変禁止などの既存のスキンの制限は、引き続き適用されます。
+詳しくはアーカイブ内の`resources/licenses/license-notes.md`（ソースツリーでは`docs/licenses.md`）を参照してください。
+
+FFmpegは動的リンクし、ライブラリ名を変えずに同梱します。
+検証済みの上流アーカイブそのものを、対応するソースのアーカイブの`ffmpeg/`に入れています。
+記録したconfigureコマンドと`installer/linux-tar/build-ffmpeg.sh`に、再ビルドの方法が書かれています。
+これは[FFmpegの配布チェックリスト](https://ffmpeg.org/legal.html)に従ったものです。
+
+ほかの同梱ELFライブラリは、Ubuntuのパッケージから取り出しています。
+それぞれについて、次のものを用意します。
+
+- `resources/licenses/ubuntu/packages.txt`に記録したバイナリとソースのバージョン
+- 元の著作権表示
+- APTで取得し、ソースのアーカイブの`ubuntu/<source-package>/`に入れた`.dsc` / 上流 / Debianのソースアーカイブ
+
+ソースやライセンス表記が欠けている場合は、パッケージ作成が失敗します。
+パッチ適用済みのソースを展開するには、`.dsc`に対して`dpkg-source -x`を実行します。
+ELF RUNPATHは同梱のパッケージ作成スクリプトで調整しますが、ライブラリのコードには変更を加えません。
+これらのファイルは、将来のソース提供の申し出に頼らず、バイナリと一緒に配布します。
+ホストのglibc / loaderとGPUドライバーは同梱しません。
+
+ソースのアーカイブには、アプリのworkspaceがそのまま入っています。
+実際に同梱したsubmoduleのファイル、スクリプト、lockfile、Cargoのvendorも含みます。
+`.cargo/config.toml`は相対パスの`vendor`を使い、既存の設定はそのまま残します。
+開発用パッケージ、オフラインでの再ビルドのコマンド、Ubuntuのソースの展開方法は、アーカイブ内の`BUILDING.md`（リポジトリでは[`installer/linux-tar/SOURCE-README.md`](../installer/linux-tar/SOURCE-README.md)）を参照してください。
+再配布するときは、対応する2つのアーカイブとすべてのライセンス表記をそのまま保ってください。
+同梱した依存関係のセキュリティ更新には、アーカイブの再ビルドと再検証が必要です。
+キャッシュしたイメージのレイヤーを再利用せず、Ubuntuのパッケージと安定版Rust toolchainを更新するには、先に次を実行します。
 
 ```sh
 docker build --pull --no-cache --target build -t bmz-linux-tar-build installer/linux-tar
 ```
 
-Use the equivalent Podman command when building with Podman.
+Podmanでビルドする場合は、同等のPodmanのコマンドを使ってください。
 
-## Validation records
+## 検証記録
 
-Historical split-archive and single-archive validation results, artifact hashes,
-and workflow evidence are recorded in the
-[2026-09-15 work note](../notes/2026/2026-09-15-linux-tar-validation.md).
+分割アーカイブ・単一アーカイブでの過去の検証結果、artifactのハッシュ、workflowの記録は[2026-09-15の作業記録](../notes/2026/2026-09-15-linux-tar-validation.md)にまとめています。
