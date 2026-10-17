@@ -350,9 +350,7 @@ impl EguiLayer {
                 }
                 let navigation = SettingsNavigation::load(ctx);
                 let page = navigation.page;
-                let ir_queue_visible =
-                    page == SettingsPage::Ir && navigation.subpage() == IR_QUEUE_SUBPAGE;
-                if !ir_queue_visible {
+                if page != SettingsPage::Ir || !settings_editable {
                     self.ir_manual.queue_hidden();
                 }
                 let profile_name = profile_config.display_name.clone();
@@ -390,14 +388,6 @@ impl EguiLayer {
                         &mut self.debug_log_autoscroll,
                         text,
                     ),
-                    // Decide / Play 中は IR 設定と同様に、一括操作・再送信を開かない。
-                    SettingsPage::Ir if ir_queue_visible => {
-                        if settings_editable {
-                            build_ir_queue_page(ui, &profile_config.ir, &mut self.ir_manual, text);
-                        } else {
-                            ui.label(tr!(text, "ir-queue-restricted"));
-                        }
-                    }
                     _ => {
                         let before_app = serde_json::to_value(&*app_config).ok();
                         let before_obs = serde_json::to_value(&app_config.obs).ok();
@@ -423,6 +413,15 @@ impl EguiLayer {
                         save_app_config |= profile_settings_actions.save_app_config;
                         key_config_action = profile_settings_actions.key_config_action;
                         profile_action = profile_settings_actions.profile_action;
+                        // Decide / Play 中は IR 設定と同様に、一括操作・再送信を開かない。
+                        if settings_editable {
+                            build_ir_queue_section(
+                                ui,
+                                &profile_config.ir,
+                                &mut self.ir_manual,
+                                text,
+                            );
+                        }
                         let settings_actions = build_settings_panel(
                             ui,
                             window,

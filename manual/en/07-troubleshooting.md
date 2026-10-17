@@ -81,7 +81,7 @@ Set **Rule** and **LN mode** in Settings → **Gameplay** back to the settings y
 
 - Check in Settings → **IR** that you are shown as logged in.
 - Scores played while offline are submitted automatically once you are back online.
-- To check scores that failed to send, open Settings → **IR** → "Open send queue", and use "Resend" to send them again.
+- To check scores that failed to send, see "IR send queue" in Settings → **IR**, and use "Resend" to send them again.
 
 ## Where logs and data are stored
 

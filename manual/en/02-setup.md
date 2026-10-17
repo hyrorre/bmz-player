@@ -162,7 +162,7 @@ You are notified when it finishes.
 
 ### Checking and resending scores that failed to send
 
-"Open send queue" opens the "IR send queue", a list of scores that are waiting, being sent, or failed. It first shows only failed scores. Change the filter with "Show", and press "Refresh" to update the list.
+Below the bulk operations is the "IR send queue", a list of scores that are waiting, being sent, or failed. It first shows only failed scores. Change the filter with "Show", and press "Refresh" to update the list.
 
 - Each row shows the type, chart, status, number of attempts, next retry time, and the last error.
 - "Resend" on a failed row sends that score again right away.

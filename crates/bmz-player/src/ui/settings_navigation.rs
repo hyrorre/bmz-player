@@ -2,9 +2,6 @@ use super::*;
 
 const PAGE_COUNT: usize = 19;
 
-/// IR ページのサブページのうち、送信キューを表示する位置。
-pub(super) const IR_QUEUE_SUBPAGE: usize = 1;
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(super) enum SettingsPage {
     #[default]
@@ -48,9 +45,8 @@ impl SettingsPage {
     }
 
     /// 本文が自前のスクロール領域を持ち、ウィンドウ側の ScrollArea で包まないページ。
-    fn owns_scroll(self, subpage: usize) -> bool {
+    fn owns_scroll(self) -> bool {
         matches!(self, Self::CourseEditor | Self::Debug)
-            || (self == Self::Ir && subpage == IR_QUEUE_SUBPAGE)
     }
 
     const ALL: [Self; PAGE_COUNT] = [
@@ -102,7 +98,6 @@ impl SettingsPage {
     fn subpages(self) -> &'static [&'static str] {
         match self {
             Self::Import => &["settings-score-import-title", "settings-nav-replay-import"],
-            Self::Ir => &["settings-nav-ir-settings", "ir-queue-title"],
             _ => &[],
         }
     }
@@ -226,15 +221,7 @@ impl SettingsNavigation {
         state.store(ctx);
     }
 
-    /// ページとサブページを同時に選ぶ（IR 設定から送信キューを開く等）。
-    pub(super) fn select_subpage(ctx: &egui::Context, page: SettingsPage, subpage: usize) {
-        let mut state = Self::load(ctx);
-        state.page = page;
-        state.subpages[page as usize] = subpage.min(page.subpages().len().saturating_sub(1));
-        state.store(ctx);
-    }
-
-    pub(super) fn subpage(&self) -> usize {
+    fn subpage(&self) -> usize {
         self.subpages[self.page as usize]
     }
 
@@ -404,7 +391,7 @@ pub(super) fn build_menu_window(
                         // スクロール領域そのものの ID 変更診断を発生させない。
                         let content_id =
                             ("settings_content_body", navigation.page, navigation.subpage());
-                        let owns_scroll = navigation.page.owns_scroll(navigation.subpage())
+                        let owns_scroll = navigation.page.owns_scroll()
                             || (navigation.page == SettingsPage::Skin
                                 && ui.available_height() >= 380.0);
                         if owns_scroll {
@@ -607,19 +594,12 @@ mod tests {
     }
 
     #[test]
-    fn ir_queue_is_a_subpage_that_owns_its_scroll_area() {
-        let ctx = egui::Context::default();
-        SettingsNavigation::select_subpage(&ctx, SettingsPage::Ir, IR_QUEUE_SUBPAGE);
-        let navigation = SettingsNavigation::load(&ctx);
-        assert_eq!(navigation.page, SettingsPage::Ir);
-        assert_eq!(navigation.subpage(), IR_QUEUE_SUBPAGE);
-        assert!(navigation.page.owns_scroll(navigation.subpage()));
-        assert!(!SettingsPage::Ir.owns_scroll(0));
-        // 他ページへ移って戻っても送信キューを開いたままにする。
-        SettingsNavigation::select(&ctx, SettingsPage::Debug);
-        SettingsNavigation::select(&ctx, SettingsPage::Ir);
-        assert_eq!(SettingsNavigation::load(&ctx).subpage(), IR_QUEUE_SUBPAGE);
-        assert!(SettingsPage::Integration.subpages().is_empty());
+    fn ir_and_integration_pages_stack_sections_without_subpages() {
+        // 送信キューは IR 設定の下、Discord / OBS / スクリーンショットは縦に並べる。
+        for page in [SettingsPage::Ir, SettingsPage::Integration] {
+            assert!(page.subpages().is_empty(), "{page:?} should not have a subpage picker");
+            assert!(!page.owns_scroll(), "{page:?} should scroll as one page");
+        }
     }
 
     #[test]

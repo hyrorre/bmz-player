@@ -166,7 +166,7 @@ SHA-256 fallback でラベルを付与する。
   それまでのページで保存した件数を出力してから非ゼロで終了する。
   無効化したproviderからは取得しない。認証情報のaccountが設定の `account_id` と異なる場合も
   取得しない（取り込み元の記録とupload-localの送り返し除外を同じaccountで照合するため）。
-- ゲーム内の手動IR操作: 設定 → IR の「スコアの一括操作」と、そこから開く「IR送信キュー」
+- ゲーム内の手動IR操作: 設定 → IR の「スコアの一括操作」と、その下の「IR送信キュー」
   ウィンドウ。処理は CLI と共通の `ir::manual`（`upload_local_batch` / `upload_local_all` /
   `sync_jobs` / `download_scores` / `resend_job` / `resend_failed_jobs`）で、CLI は進捗通知を
   従来の出力へ変換するだけにしている。

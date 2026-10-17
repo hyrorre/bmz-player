@@ -134,9 +134,6 @@ pub(super) fn build_ir_bulk_operations(
         {
             ir_manual.confirm = Some(IrConfirm::Download);
         }
-        if ui.button(tr!(text, "ir-bulk-queue-button")).clicked() {
-            SettingsNavigation::select_subpage(ui.ctx(), SettingsPage::Ir, IR_QUEUE_SUBPAGE);
-        }
     });
     if !target.can_upload {
         ui.small(tr!(text, "ir-bulk-unsupported-upload", "provider" => target.label.clone()));
@@ -147,7 +144,7 @@ pub(super) fn build_ir_bulk_operations(
     build_ir_manual_status(ui, &snapshot, &ir_manual.handle, text);
 }
 
-/// 実行中の進捗と、直近の結果。送信キュー画面からも使う。
+/// 実行中の進捗と、直近の結果。
 fn build_ir_manual_status(
     ui: &mut egui::Ui,
     snapshot: &IrManualSnapshot,
@@ -222,7 +219,7 @@ fn build_ir_manual_status(
     }
 }
 
-/// 確認モーダル。設定ページ・送信キュー画面のどちらから開いても、ここで1回だけ描く。
+/// 確認モーダル。一括操作・送信キューのどちらから開いても、ここで1回だけ描く。
 pub(super) fn build_ir_confirm_modal(
     ctx: &egui::Context,
     ir: &IrConfig,
@@ -368,20 +365,31 @@ fn truncate_chars(value: &str, max: usize) -> String {
     }
 }
 
-/// IR ページの「送信キュー」サブページ。
-pub(super) fn build_ir_queue_page(
+/// IR ページの一括操作の下に並べる「IR送信キュー」。
+/// 対象 provider が無いときは一括操作側の案内だけを表示し、この節は出さない。
+pub(super) fn build_ir_queue_section(
     ui: &mut egui::Ui,
     ir: &IrConfig,
     ir_manual: &mut IrManualUi,
     text: Localizer,
 ) {
-    let snapshot = ir_manual.handle.snapshot();
-    let target = primary_target(ir);
-    let busy = snapshot.running.is_some();
-    let Some(target) = target else {
-        ui.label(tr!(text, "ir-bulk-no-provider"));
+    let Some(target) = primary_target(ir) else {
+        ir_manual.queue_hidden();
         return;
     };
+    SettingsSection::new(SettingsPage::Ir, tr!(text, "ir-queue-title"))
+        .id_salt("settings_ir_queue")
+        .show(ui, |ui| build_ir_queue(ui, target, ir_manual, text));
+}
+
+fn build_ir_queue(
+    ui: &mut egui::Ui,
+    target: IrBulkTarget,
+    ir_manual: &mut IrManualUi,
+    text: Localizer,
+) {
+    let snapshot = ir_manual.handle.snapshot();
+    let busy = snapshot.running.is_some();
     let desired = IrQueueQuery {
         provider_key: target.provider_key.clone(),
         account_id: target.account_id.clone(),
@@ -435,8 +443,6 @@ pub(super) fn build_ir_queue_page(
             "sending" => view.counts.sending,
         ));
     }
-    build_ir_manual_status(ui, &snapshot, &ir_manual.handle, text);
-    ui.separator();
     match &snapshot.queue {
         IrQueueState::Idle | IrQueueState::Loading => {
             ui.horizontal(|ui| {
@@ -457,66 +463,60 @@ pub(super) fn build_ir_queue_page(
             }
             let pages = view.total.div_ceil(IR_QUEUE_PAGE_SIZE).max(1);
             let mut resend = None;
-            egui::ScrollArea::both()
-                .auto_shrink([false, false])
-                .max_height((ui.available_height() - 36.0).max(80.0))
-                .show(ui, |ui| {
-                    egui::Grid::new("ir_queue_grid").striped(true).show(ui, |ui| {
-                        for header in [
-                            "ir-queue-col-kind",
-                            "ir-queue-col-chart",
-                            "ir-queue-col-status",
-                            "ir-queue-col-attempts",
-                            "ir-queue-col-next",
-                            "ir-queue-col-error",
-                            "ir-queue-col-updated",
-                        ] {
-                            ui.strong(text.text(header));
+            egui::ScrollArea::both().auto_shrink([false, false]).max_height(360.0).show(ui, |ui| {
+                egui::Grid::new("ir_queue_grid").striped(true).show(ui, |ui| {
+                    for header in [
+                        "ir-queue-col-kind",
+                        "ir-queue-col-chart",
+                        "ir-queue-col-status",
+                        "ir-queue-col-attempts",
+                        "ir-queue-col-next",
+                        "ir-queue-col-error",
+                        "ir-queue-col-updated",
+                    ] {
+                        ui.strong(text.text(header));
+                    }
+                    ui.label("");
+                    ui.end_row();
+                    for row in &view.rows {
+                        let job = &row.job;
+                        ui.label(job_kind_label(job.kind, text));
+                        let chart = row.title.clone().unwrap_or_else(|| {
+                            hash_to_hex(&job.chart_sha256).chars().take(12).collect()
+                        });
+                        ui.label(truncate_chars(&chart, 36)).on_hover_text(chart);
+                        ui.label(job_status_label(&job.status, text));
+                        ui.label(job.attempt_count.to_string());
+                        ui.label(if job.status == "failed" {
+                            format_optional_timestamp(Some(job.next_attempt_at))
+                        } else {
+                            "-".to_string()
+                        });
+                        let error = job.last_error.trim();
+                        if error.is_empty() {
+                            ui.label("-");
+                        } else {
+                            ui.label(truncate_chars(error, 48)).on_hover_text(error);
                         }
-                        ui.label("");
+                        ui.label(format_optional_timestamp(Some(job.updated_at)));
+                        if job.status == "failed"
+                            && ui
+                                .add_enabled(!busy, egui::Button::new(tr!(text, "ir-queue-resend")))
+                                .clicked()
+                        {
+                            resend = Some(IrManualOp::ResendJob {
+                                provider_key: job.provider.clone(),
+                                account_id: job.account_id.clone(),
+                                kind: job.kind,
+                                local_score_id: job.local_score_id,
+                            });
+                        } else {
+                            ui.label("");
+                        }
                         ui.end_row();
-                        for row in &view.rows {
-                            let job = &row.job;
-                            ui.label(job_kind_label(job.kind, text));
-                            let chart = row.title.clone().unwrap_or_else(|| {
-                                hash_to_hex(&job.chart_sha256).chars().take(12).collect()
-                            });
-                            ui.label(truncate_chars(&chart, 36)).on_hover_text(chart);
-                            ui.label(job_status_label(&job.status, text));
-                            ui.label(job.attempt_count.to_string());
-                            ui.label(if job.status == "failed" {
-                                format_optional_timestamp(Some(job.next_attempt_at))
-                            } else {
-                                "-".to_string()
-                            });
-                            let error = job.last_error.trim();
-                            if error.is_empty() {
-                                ui.label("-");
-                            } else {
-                                ui.label(truncate_chars(error, 48)).on_hover_text(error);
-                            }
-                            ui.label(format_optional_timestamp(Some(job.updated_at)));
-                            if job.status == "failed"
-                                && ui
-                                    .add_enabled(
-                                        !busy,
-                                        egui::Button::new(tr!(text, "ir-queue-resend")),
-                                    )
-                                    .clicked()
-                            {
-                                resend = Some(IrManualOp::ResendJob {
-                                    provider_key: job.provider.clone(),
-                                    account_id: job.account_id.clone(),
-                                    kind: job.kind,
-                                    local_score_id: job.local_score_id,
-                                });
-                            } else {
-                                ui.label("");
-                            }
-                            ui.end_row();
-                        }
-                    });
+                    }
                 });
+            });
             if let Some(op) = resend {
                 ir_manual.handle.request(IrManualRequest::Run(op));
             }
@@ -601,7 +601,7 @@ mod tests {
     }
 
     #[test]
-    fn bulk_section_and_queue_page_render_without_a_provider() {
+    fn bulk_section_and_queue_section_render_without_a_provider() {
         let ctx = egui::Context::default();
         let text = Localizer::new(AppLocale::En);
         let mut ui_state = IrManualUi::new(Default::default());
@@ -609,7 +609,7 @@ mod tests {
         let ir = IrConfig::default();
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             build_ir_bulk_operations(ui, &ir, &mut ui_state, text);
-            build_ir_queue_page(ui, &ir, &mut ui_state, text);
+            build_ir_queue_section(ui, &ir, &mut ui_state, text);
             build_ir_confirm_modal(ui.ctx(), &ir, &mut ui_state, text);
         });
         // providerが無ければ確認モーダルは閉じ、要求も積まない。
