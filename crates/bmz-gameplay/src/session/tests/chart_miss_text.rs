@@ -31,6 +31,22 @@ fn chart_miss_text_tracks_the_latest_misslayer_judgement() {
 }
 
 #[test]
+fn chart_miss_text_tracks_the_latest_good_or_better_for_hiding() {
+    let mut session = session_with_autoplay(chart_with_keysound());
+    let mut update = |events: &[JudgementEvent], now: i64| {
+        update_recent_judgements(&mut session, events, TimeUs(now));
+        session.last_good_judgement_time
+    };
+    assert_eq!(update(&[event_at(Judge::Bad, 10_000, true)], 10_000), None);
+    assert_eq!(update(&[event_at(Judge::EmptyPoor, 11_000, true)], 11_000), None);
+    // Display-only events are ignored, as for the miss time.
+    assert_eq!(update(&[event_at(Judge::Good, 12_000, false)], 12_000), None);
+    let hits = [event_at(Judge::Great, 30_000, true), event_at(Judge::PGreat, 20_000, true)];
+    assert_eq!(update(&hits, 30_000), Some(TimeUs(30_000)));
+    assert_eq!(update(&[event_at(Judge::Good, 40_000, true)], 40_000), Some(TimeUs(40_000)));
+}
+
+#[test]
 fn chart_miss_text_uses_the_misslayer_judgements() {
     for (judge, expected) in [
         (Judge::PGreat, false),

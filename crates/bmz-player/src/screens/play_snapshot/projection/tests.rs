@@ -497,6 +497,33 @@ fn text00_replaces_the_displayed_text_only_during_the_miss_window() {
 }
 
 #[test]
+fn text00_hides_on_a_later_good_only_when_the_misslayer_does() {
+    for hide_on_good in [false, true] {
+        let mut session = miss_session(Some("MISS!!"), 500_000);
+        session.hide_misslayer_on_good = hide_on_good;
+        session.last_miss_judgement_time = Some(TimeUs(1_200_000));
+        // An earlier GOOD never hides a later miss.
+        session.last_good_judgement_time = Some(TimeUs(1_100_000));
+        let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+        let shown = |session: &GameSession, now: i64| {
+            base(session, TimeUs(now), &cache).chart_miss_text_elapsed_ms.is_some()
+        };
+        assert!(shown(&session, 1_300_000), "hide_on_good={hide_on_good}");
+
+        // A GOOD after the miss hides it from that time, like the misslayer BGA.
+        session.last_good_judgement_time = Some(TimeUs(1_400_000));
+        assert!(shown(&session, 1_399_999), "hide_on_good={hide_on_good}");
+        assert_eq!(shown(&session, 1_400_000), !hide_on_good);
+        let text = base(&session, TimeUs(1_450_000), &cache).chart_text.to_string();
+        assert_eq!(text, if hide_on_good { "Normal" } else { "MISS!!" });
+
+        // The next miss shows it again.
+        session.last_miss_judgement_time = Some(TimeUs(1_500_000));
+        assert!(shown(&session, 1_500_000), "hide_on_good={hide_on_good}");
+    }
+}
+
+#[test]
 fn undefined_text00_or_zero_duration_never_changes_the_text() {
     for (miss_text, duration) in [(None, 500_000), (Some("MISS"), 0)] {
         let mut session = miss_session(miss_text, duration);
