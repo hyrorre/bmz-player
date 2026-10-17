@@ -115,3 +115,4 @@
 | 2026-09-15 | [Linux配布アーカイブの検証](2026/2026-09-15-linux-tar-validation.md) |
 | 2026-09-08 | [Frame pacingとノーツ投影の実測・検証](2026/2026-09-08-frame-pacing.md) |
 | 2026-08-17 | [Everythingによる曲探索の計測](2026/2026-08-17-everything-performance.md) |
+| 2026-06-04 | [BMZ IRの設計記録](2026/2026-06-04-bmz-ir-design.md) |
