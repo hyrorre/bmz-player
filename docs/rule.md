@@ -1,4 +1,4 @@
-# BMZ Rule Mode Notes
+# ルールモード
 
 BMZの`RuleMode`は、判定窓、判定ランク、ゲージ、コンボ、score / replay
 の保存キーを切り替えるための設定です。profileの`[play].rule_mode`に保存し、
@@ -17,7 +17,7 @@ score DB / replay slotでも別条件として扱います。
 
 DX MODEも現在のLR2oraja Endless Dream本体に統合されているため、同じ参照ツリーを使います。
 
-## Mode Summary
+## モードの概要
 
 | item | Beatoraja | Lr2Oraja | Dx |
 | --- | --- | --- | --- |
@@ -37,7 +37,7 @@ DX MODEも現在のLR2oraja Endless Dream本体に統合されているため、
 DX MODE固有のIR抑制はBMZ公式IR / rianIRには適用しません。
 BMS-IRは対応rule modeの制約によりDXを送信対象にしません。
 
-## Judge Windows
+## 判定幅
 
 ### リプレイ視聴速度とPractice
 
@@ -210,7 +210,7 @@ release margin中だけ終端判定を保留します。その間に押し直せ
 BMZの実装でもDX modeの`judge_percent_at_time`は常に100%を返し、
 `judge_windows_for_rule_mode`は倍率を無視します。
 
-## Judge Algorithm
+## 判定アルゴリズム
 
 判定対象ノーツの選択アルゴリズムはrule modeとは別設定で、profileの
 `[judge].judge_algorithm`から選びます。
@@ -232,7 +232,7 @@ LR2oraja / DX modeでは、押下時に選ばれたノーツ周辺のBAD範囲�
 
 Beatoraja modeではMultiBadを出しません。
 
-## Gauge
+## ゲージ
 
 ### Beatoraja
 
@@ -336,7 +336,7 @@ Practiceでも同じrule mode・判定用key modeのゲージ定義を使いま�
 Practiceのゲージカテゴリ・判定ランク・TOTALの保存値はDX採点では使わず、設定画面では
 固定表示とします。TOTAL式と判定窓は上記の通常DXと共通であり、Practice独自の計算へ置き換えません。
 
-## Score And Replay Separation
+## スコアとリプレイの区別
 
 `RuleMode`はscore DBとreplay slotのキーに含めます。
 同じ譜面でもBeatoraja / LR2oraja / DXは別スコアとして保存します。
@@ -370,14 +370,14 @@ replay再生結果はローカルスコアを更新せず、IRにも送信しま
 ゲージ係数の世代ではランキングを分離しないため、過去のDXスコアと同じ区分になります。
 送信条件は[score-persistence.md](score-persistence.md)を参照します。
 
-## Known Notes
+## 既知の注意点
 
 - DX MODE固有のIR抑制はBMZ公式IR / rianIRには適用しません。BMS-IRはDX非対応です。
 - Beatoraja modeの`#DEFEXRANK`実機挙動は、必要になった時点で改めて
   beatoraja実行結果と突き合わせます。LR2oraja modeは元種別を保持して実装済みです。
 - LR2 csvskinは未対応です。現在のrule modeはgameplay / score / gaugeの切替だけを対象にします。
 
-## Implementation Pointers
+## 実装の入口
 
 - rule mode enum: `crates/bmz-gameplay/src/rule.rs`
 - judge windows / rank conversion: `crates/bmz-gameplay/src/judge/window.rs`

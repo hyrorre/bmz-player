@@ -1,4 +1,4 @@
-# BMZ Skin Notes
+# スキン仕様
 
 BMZはbeatoraja JSON / Lua skinの互換を基本にします。既存beatoraja skin typeは
 そのまま扱い、BMZ独自のkey modeだけ拡張skin typeを予約します。

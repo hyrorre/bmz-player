@@ -1,16 +1,16 @@
-# BMZ IR (Internet Ranking) API 設計メモ
+# BMZ IR (Internet Ranking) API設計
 
-Codexに最終レビューと実装を引き継ぐための設計まとめです。
-本ドキュメントでは、BMZ新BMSプレイヤー向けのIR API、クライアント側Provider trait、認証、ランキング取得、リザルト画面連携、replay拡張、NuxtHub / Drizzle実装方針を整理します。
+BMZ公式IRの設計と実装状況をまとめた文書です。
+この文書では、BMZ新BMSプレイヤー向けのIR API、クライアント側Provider trait、認証、ランキング取得、リザルト画面連携、replay拡張、NuxtHub / Drizzle実装方針を整理します。
 beatoraja向け既存サービスrianIRとの互換adapterは`docs/rian-ir.md`を参照します。
 アシスト、特殊モード、ランプ・履歴・replay・IRの保存条件は
 `docs/score-persistence.md`を参照します。
 
 ---
 
-## 実装状況 (2026-07-13)
+## 実装状況
 
-以下は本メモを元に実装済みの範囲と、設計からの主な差分です。
+設計のうち実装済みの範囲と、設計からの主な差分です。最終確認日は2026-07-13です。
 ソースの所在: クライアントは`crates/bmz-player/src/ir/`、サーバーは
 `bmz-ir-web/server/`、DB schemaは`bmz-ir-web/server/db/schema.ts`、
 DB migrationは`server/db/migrations/sqlite/`です。
@@ -2548,7 +2548,7 @@ impl MochaAdapter {
 
 ---
 
-## 24. Codex 実装タスク案
+## 24. 実装タスク案（履歴）
 
 ### Phase 1: BMZ client model / trait
 
@@ -2602,7 +2602,7 @@ impl MochaAdapter {
 
 ## 25. 未決事項 / 要レビュー
 
-Codexにレビューしてほしい点です。
+レビューで判断が必要な点です。
 
 1. `rankings` responseのwrapper形式
    - `rankings.global.succeeded/data`の形でよいか。

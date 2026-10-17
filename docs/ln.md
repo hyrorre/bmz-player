@@ -1,9 +1,9 @@
-# LN / CN / HCN policy
+# LN / CN / HCNの扱い
 
 BMZはbeatoraja完全互換ではなく、譜面が宣言したLNMODEとユーザーの希望するLNMODEを分けて扱います。
 ユーザーはprofileの設定で、譜面のLN宣言を尊重するか、特定のLN種別へ強制するかを選べます。
 
-## Terms
+## 用語
 
 - undefined LN: BMS側に`#LNMODE`などの明示的なLN種別宣言が無いlong noteです。現在のBMSで主流の形です。
 - defined LN/CN/HCN: BMS / BMSON側が明示した`LN`, `CN`, `HCN`のlong noteです。
@@ -11,7 +11,7 @@ BMZはbeatoraja完全互換ではなく、譜面が宣言したLNMODEとユー�
 - score policy: score DBの保存キーに使う、実プレイ結果の区別単位です。
 - effective LN mode: 実際に降らせるLN種別です。`LN`, `CN`, `HCN`のいずれかです。
 
-## Profile Setting
+## プロファイル設定
 
 `profile.toml`の`[play]`に`ln_mode_policy`を保存します。
 
@@ -27,7 +27,7 @@ BMZはbeatoraja完全互換ではなく、譜面が宣言したLNMODEとユー�
 `auto_*`は譜面の明示LN種別を尊重し、未定義LNだけをユーザー設定の種別として解釈します。
 `force_*`は譜面の明示LN種別に関係なく、指定した種別としてプレイします。
 
-## Library DB
+## ライブラリDB
 
 BMSフォルダスキャン時に、各譜面のlong note構成を`library.db`に保存します。
 
@@ -43,7 +43,7 @@ BMZ内部では`ChartLnProfile`として扱います。
 `#LNMODE`が明示されていないBMSのlong noteはundefined LNとします。
 `#LNMODE`が明示されているBMSのlong noteは、そのモードのdefined LN/CN/HCNとします。
 
-## Score Policy
+## スコアの区分（score policy）
 
 score DBには`LnScorePolicy`を保存します。
 
@@ -76,7 +76,7 @@ score policyはprofile policyとchart LN profileから決めます。
 - defined種別が混在する譜面では、beatoraja互換の固定挙動に寄せず、譜面の混在を表す`AutoLn`として保存します。
 - undefinedとdefinedが混在する譜面では、undefined部分の解釈がprofileに依存するため`AutoLn` / `AutoCn` / `AutoHcn`を区別して保存します。
 
-## Effective LN Mode
+## 実際に使うLN種別（effective LN mode）
 
 score policyからundefined LNのfallback種別を決めます。
 
@@ -89,7 +89,7 @@ defined種別が混在する譜面ではscore policyは`AutoLn`になります�
 
 `force_*`の場合はdefined / undefinedに関係なく全long noteを指定種別として扱います。
 
-## Runtime Judgement
+## 実行時の判定
 
 始点 / 終点の扱いはbeatorajaの`JudgeManager`を基準にします。ここでいうLN / CN / HCNは、
 profile policyを適用した後のeffective LN modeを指します。
@@ -124,7 +124,7 @@ profile policyを適用した後のeffective LN modeを指します。
 - LR2oraja Endless Dream DX: `.local/lr2oraja-endlessdream/core/src/bms/player/beatoraja/play/JudgeManager.java`
 - DX判定窓: `.local/lr2oraja-endlessdream/core/src/bms/player/beatoraja/play/JudgeProperty.java`
 
-## Score DB
+## スコアDB
 
 score DBはprofileごとに分かれています。
 LN policyはprofile内のスコア・リプレイをさらに分けるキーとして扱います。
@@ -157,7 +157,7 @@ undefined LN fallbackを反映してから、同じ`score_ln_policy`規則で正
 通常リプレイファイルは`score_history`が個別pathを持つため、ファイル名衝突は起きにくいです。
 replay slotは同じchart SHA256 / slot番号を複数policyで使うため、新規保存時のslot replayファイル名に`ln_policy`を含めます。
 
-## External score DB import (LR2 / beatoraja / LR2oraja)
+## 外部スコアDBの取り込み（LR2 / beatoraja / LR2oraja）
 
 スコアインポートは「BMZ メニュー → データ移行」の「スコアインポート」から行います。
 
@@ -203,7 +203,7 @@ beatoraja系の`mode`はkey modeではなくLNMODEです。
 
 BMZのscore DB schema migrationで既存行へ付けた`ForceLn`既定値は、上記インポートとは別件です。
 
-## Implementation Pointers
+## 実装の入口
 
 - policy calculation / expected scored notes: `crates/bmz-player/src/ln_policy.rs`
 - external score import: `crates/bmz-player/src/storage/score_import.rs`

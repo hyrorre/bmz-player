@@ -1,6 +1,6 @@
-# Packaging
+# 配布パッケージ
 
-## App icons
+## アプリのアイコン
 
 BMZ Playerのdesktop app iconは`scripts/generate-app-icons.sh`で生成します。
 web用の元iconは`bmz-ir-web/public/icon.svg`に置き、desktop配布用は
@@ -30,7 +30,7 @@ binaryに埋め込みます。Windows buildでは`bmz-player-window-windows.png`
 同じ`.ico`をWindows installer / shortcutにも使い、
 `bmz-player.icns`はmacOS `.app` bundle用です。
 
-## Windows installer (Inno Setup)
+## Windowsインストーラー（Inno Setup）
 
 Windowsのstaging directoryとInno Setup installerは`scripts/package-windows.ps1`
 で作ります。
@@ -155,7 +155,7 @@ eguiのライセンス表記は`resources/licenses/third-party-notices.txt`と
 dist/windows/installer/bmz-player-<version>-windows-<arch>-setup.exe
 ```
 
-### Windows options
+### Windowsのオプション
 
 GitHub ActionsのWindows release jobは`triplets/x64-windows-release.cmake`を
 overlay tripletとして使い、vcpkgのFFmpegをRelease-onlyでビルドします。
@@ -220,7 +220,7 @@ $env:BMZ_WINDOWS_DLL_DIRS = "C:\vcpkg\installed\x64-windows\bin;C:\extra\dlls"
 .\scripts\package-windows.ps1 -SkipRustLicenseReport
 ```
 
-### Windows FFmpeg / DLL bundling
+### WindowsでのFFmpeg / DLLの同梱
 
 WindowsでFFmpegをdynamic linkするbuildでは、実行環境に必要なDLLが存在する
 必要があります。配布用artifactでは`-DllDir`で必要なDLLをstaging rootへコピーします。
@@ -311,7 +311,7 @@ cargo install --locked --features cli cargo-about
 eguiのライセンス表記は`Contents/Resources/licenses/third-party-notices.txt`と
 `Contents/Resources/licenses/rust-dependency-licenses.txt`を連結して表示します。
 
-### Options
+### オプション
 
 debug buildで作る:
 
@@ -361,7 +361,7 @@ scripts/package-macos-app.sh --smoke
 scripts/package-macos-app.sh --skip-rust-license-report
 ```
 
-### FFmpeg / dylib bundling
+### FFmpeg / dylibの同梱
 
 既定ではHomebrewなど、実行環境に存在するdynamic librariesを使います。
 
@@ -403,7 +403,7 @@ scripts/package-macos-app.sh --bundle-dylibs --ad-hoc-sign
 公開用artifactを作る前に必ず`docs/licenses.md`を確認し、FFmpegの
 version / configure flags / source provenance / `--enable-nonfree`不使用を記録します。
 
-### Manual smoke
+### 手動のsmoke確認
 
 既に作った`.app`を直接起動してsmokeする場合:
 
@@ -539,7 +539,7 @@ FFmpegは`ffmpeg-next`経由で音声/動画decodeに使います。Flatpak arti
 ホスト要件、保存先、手動更新、対応ソースの再ビルドは[Linux tar.gz](linux-tar.md)を参照してください。
 Flatpakの配布も継続します。
 
-## GitHub Actions release build
+## GitHub Actionsのリリースビルド
 
 `.github/workflows/release-apps.yml`はGitHub Releaseが`published`になったときに
 release artifactを自動生成します。手動dry runには`workflow_dispatch`を使います。
@@ -573,7 +573,7 @@ dry runの`release.json`は`signature: null`を持つ未署名の確認用デー
 `*-provenance.txt` / `*-ffmpeg-build.txt`はActions artifact側に残し、
 Release assetには登録しません。
 
-## App update checks
+## アプリの更新確認
 
 WindowsはGitHub Releasesを更新確認先として使い、SemVerで最新版を比較します。
 Stableはdraft / prereleaseを除外し、Prereleaseは非draft releaseを対象にします。

@@ -1,4 +1,4 @@
-# BMZ Hispeed Notes
+# ハイスピード
 
 BMZのハイスピードは、基準方式のNormal / Classic / LR2と、表示時間を基準にする
 Floatingを組み合わせて扱います。HS-FIXはこれとは別にBPM基準を選択します。
@@ -184,7 +184,7 @@ Floating無効の設定では緑数字操作を受け付けません。Floating�
 切替操作を受け付けません。Courseの`NoSpeed`制約中は、速度、緑数字、レーンカバーの
 操作をすべて無効にします。
 
-## Skin Refs
+## スキンの参照ID
 
 | ref | kind | meaning |
 | ---: | --- | --- |

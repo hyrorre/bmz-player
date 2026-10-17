@@ -1,11 +1,11 @@
-# rianIR Compatibility Provider Plan
+# rianIR互換プロバイダー
 
 BMZ Playerからbeatoraja向けIRのrianIRへ接続するための設計・実装計画です。
 BMZ公式IRの設計は`docs/ir.md`、LN正規化は`docs/ln.md`、判定・ゲージの
 ruleは`docs/rule.md`、アシストを含む保存・送信条件は
 `docs/score-persistence.md`を正とし、本ドキュメントではrianIRとの互換境界だけを扱います。
 
-## Goal
+## 目的
 
 - rianIRの既存アカウントでログインできます。
 - BMZの単曲スコアをrianIR互換payloadに変換して送信できます。
@@ -19,7 +19,7 @@ rianIRはBMZ公式IRとは別providerとします。credential、送信queue、�
 ランキングcacheはprovider keyで分離し、片方の障害やログアウトをもう片方へ
 波及させません。
 
-## Initial Scope
+## 初期の対応範囲
 
 初期リリースでは次の6経路を実装対象とします。
 
@@ -46,7 +46,7 @@ rianIRはBMZ公式IRとは別providerとします。credential、送信queue、�
 実装順はlogin、単曲送信、単曲ランキング取得、course送信、courseランキング取得
 とします。単曲送信の変換・署名・送信可否判定を共通部品にし、course送信から再利用します。
 
-## Current BMZ Implementation
+## BMZの現在の実装
 
 `codex/rian-ir`の初期実装は次を含みます。
 
@@ -76,7 +76,7 @@ cargo run -p bmz-player -- ir login --provider rian-ir --id <LOGIN_ID>
 
 `rian-ir`のbase URLを省略した場合は`https://rianir.link/api/`を使います。
 
-## Provider and Authentication
+## プロバイダーと認証
 
 base URLは設定可能にし、既定値をrianIRのproduction URLとします。endpointの
 組み立てではbase URLの末尾slashを正規化し、HTTP timeoutを設けます。
@@ -110,7 +110,7 @@ course署名は次の配列を署名対象にします。
 署名生成はpayloadの文字列表現を含めてgolden testで固定します。表示用に整形した
 JSONやフィールド順が異なるobjectを署名対象にしてはなりません。
 
-## Client and Rule Contract
+## クライアントとルールの契約
 
 `client`はゲームクライアントの実装、`client_version`はそのバージョンを表します。
 判定窓・ゲージ・コンボなどのスコア規則は既存フィールド`body`で表し、両者を
@@ -155,7 +155,7 @@ client = bmz-player
 `body=bmz`は送りません。BMZはclientの名前であり、判定・ゲージ仕様ではありません。
 ランキング条件もclientではなく`body`で分離します。
 
-## Score Eligibility
+## 送信できるスコア
 
 provider固有の送信可否はresult保存後、rianIR jobをenqueueする直前に判定します。
 Battle / Battle ASのようなprovider固有の非送信resultは、ローカルscoreとreplay
@@ -186,7 +186,7 @@ Battle / Battle ASはレーン・ノーツ数とランキング条件を変え�
 通常スコア区分で安全に表現できないためです。`Off`と`Flip`はrianIRの通常
 DP契約で扱います。
 
-## LN Contract
+## LNの契約
 
 BMZは単曲score requestへ`ln_mode_format=canonical-v1`を必ず付けます。
 FORCE変換後のchartから元譜面の構成を逆算せず、import直後に取得したLN profileを
@@ -219,7 +219,7 @@ rianIRのランキング取得APIが`ln_mode`をfilter/group keyに含めるま�
 既存APIを利用し、LN別filter/groupingはrianIR側の後続改善とします。courseランキング
 にも同じ制約があります。
 
-## Key Mode Contract
+## キーモードの契約
 
 beatoraja由来のmode名に合わせ、BMZのkey modeを次の`play_mode`へ変換します。
 
@@ -242,7 +242,7 @@ upsert規則もrianIR側で固定します。
 BMZは初期版から`beat-4k` / `beat-6k` / `beat-8k`を送ります。rianIR側では予定されて
 いる表示・検索・統計対応を追加するが、score API schemaの変更は不要です。
 
-## Arrange and Seed Contract
+## 配置とseedの契約
 
 rianIRのlegacy `play_option`は次のdecimal packingを使います。
 
@@ -266,7 +266,7 @@ SPは`arrange_1p`、DPは`arrange_1p`と`arrange_2p`を送ります。
 
 random seedはbeatoraja互換のside別24 bit seedを使います。
 
-## Rival Target and Cache Contract
+## ライバルのターゲットとキャッシュの契約
 
 rianIRの`GET /api/score/get_rivals.php?id=...`はライバル関係の一覧同期に使います。
 BMZから追加・解除は行わず、`ir rivals`実行時にprimary rianIRの一覧で
@@ -314,7 +314,7 @@ seedは実際にプレイへ適用され、replayへ保存された値から作�
 再生成した乱数を送ってはなりません。BMS `#RANDOM`の分岐選択列はarrange seedと
 別概念であり、`play_seed`へ混ぜません。
 
-## Score Field Mapping Notes
+## スコアの項目の対応
 
 変換処理はrianIR provider内の純粋関数として実装し、BMZのscore modelやDBに
 rianIRの数値enumを持ち込みません。
@@ -354,7 +354,7 @@ duration-aware対応前に保存済みのqueue jobには`chart.length_ms`が無�
 曲名などの文字列metadataは`B64:<base64>`形式を使用し、UTF-8とJSON escapingの
 差で署名やrequestが壊れないようにします。
 
-## Course Submission
+## コースの送信
 
 course送信にも単曲と同じclient/rule/LN/arrangeの送信可否判定を適用します。
 
@@ -379,7 +379,7 @@ BMZ内部・BMZ公式IR用のcanonical course hashは変更しません。course
 
 course endpointの`client_hash`検証方針は単曲endpointと統一します。
 
-## `client_hash` Manifest
+## `client_hash`のmanifest
 
 release buildはbeatorajaのJAR hashと同じ考え方で、実行ファイルそのものの
 SHA-256（小文字64桁hex）を`client_hash`として送ります。archive、installer、app bundle
@@ -474,7 +474,7 @@ release buildは実行ファイルのSHA-256を送ります。
 Flatpakは配布`.flatpak`全体ではなく、`flatpak-builder`が最終配置した
 `build/files/bin/bmz-player`（実行時の`/app/bin/bmz-player`）をhash対象にします。
 
-## Error and Queue Policy
+## エラーと送信キューの方針
 
 - 初期版は401/403/429を含め、既存queueのbackoffを使います。
 - 401/403をcredentialまたはpayloadのterminal errorとして分類し、自動retryを止める
@@ -488,7 +488,7 @@ Flatpakは配布`.flatpak`全体ではなく、`flatpak-builder`が最終配置�
 - rianIRがplayer/chart/date単位で重複判定する可能性があるため、dateの再生成や
   秒単位への丸め直しをretryごとに行いません。
 
-## Known Constraints
+## 既知の制約
 
 - `body`は既存の判定・ゲージ仕様区分として維持し、BMZ識別には使いません。
 - rianIRの現在の通常スコア送信はallowlist済みの実行ファイル`client_hash`を要求します。
@@ -513,7 +513,7 @@ Flatpakは配布`.flatpak`全体ではなく、`flatpak-builder`が最終配置�
 - 初期実装ではserver-side replay verificationが無く、送信内容の正当性を完全には
   証明できません。
 
-## Minimal rianIR-side Work
+## rianIR側で必要な最小限の作業
 
 初期接続のためのDB schema変更や新endpoint追加は行いません。BMZは現行のlogin、
 score、get_score、course_score、get_course_scoreをそのまま利用します。
@@ -534,9 +534,9 @@ rianIR側の初期作業は次に限定します。
 - `client=bmz-player`が1.xになったときのversion prefix補正除外
 - manifestへのrelease署名とrianIRへのallowlist登録自動化
 
-## Verification Plan
+## 検証計画
 
-### BMZ unit tests
+### BMZの単体テスト
 
 - `RuleMode` 3種と`client=bmz-player`のmappingです。
 - clear type、gauge、assist、legacy optionの全enum mappingです。
@@ -557,7 +557,7 @@ rianIR側の初期作業は次に限定します。
 - primary providerがrianIRの場合の難易度表・POPULAR・レビュー・Rivals RECENT・
   course取得です。既存の難易度表folderとcourse表示を再利用します。
 
-### rianIR table cache lifecycle
+### rianIRの難易度表キャッシュの寿命
 
 - cache scopeは`provider_key + base_url + account_id`とし、scopeをSHA-256 digest化した
   内部source URLでアカウント間を分離します。ログインIDをDBのsource URLへ直接含めません。
@@ -572,7 +572,7 @@ rianIR側の初期作業は次に限定します。
   破棄し、旧アカウントのcacheを復活させません。
 - rianIR側の変更は不要で、既存`get_tables.php` responseをそのまま利用します。
 
-### rianIR integration tests
+### rianIRとの結合テスト
 
 - `client=bmz-player`、version、3種のruleを保存・取得できます。
 - `body`が既存のrule bucketとして保存・取得に使われます。
@@ -587,7 +587,7 @@ rianIR側の初期作業は次に限定します。
 - rate limit responseと`Retry-After`です。
 - 単曲とcourseでclient hash・rule・LN validationが一致します。
 
-### Manual end-to-end
+### 手動のend-to-end確認
 
 1. rianIRのテストアカウントでBMZからloginします。
 2. 5K/7K/14Kと4K/6K/8Kを各1曲プレイし、rule・mode・判定内訳をDBと画面で確認します。
@@ -600,7 +600,7 @@ rianIR側の初期作業は次に限定します。
    `tracks=[]`であることも確認します。
 7. 通信切断、401、403、429、5xxの各ケースでqueueとUI表示を確認します。
 
-## Implementation Pointers
+## 実装の入口
 
 BMZ側:
 
