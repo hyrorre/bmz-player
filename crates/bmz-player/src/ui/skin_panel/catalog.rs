@@ -22,17 +22,8 @@ pub(in crate::ui) fn skin_path_combo(
                     candidate.path.clone(),
                     skin_candidate_display(candidate, show_bundled_origin, text),
                 );
-                match candidate.origin {
-                    SkinCandidateOrigin::Bundled if show_bundled_origin => {
-                        response.on_hover_text(tr!(text, "skin-origin-bundled-help"));
-                    }
-                    SkinCandidateOrigin::Bundled => {}
-                    SkinCandidateOrigin::User => {
-                        response.on_hover_text(tr!(text, "skin-origin-user-help"));
-                    }
-                    SkinCandidateOrigin::External => {
-                        response.on_hover_text(tr!(text, "skin-origin-external-help"));
-                    }
+                if show_bundled_origin && candidate.origin == SkinCandidateOrigin::Bundled {
+                    response.on_hover_text(tr!(text, "skin-origin-bundled-help"));
                 }
             }
         });

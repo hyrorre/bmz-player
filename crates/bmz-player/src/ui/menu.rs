@@ -55,11 +55,13 @@ pub(super) fn build_random_trainer_page(
     ui.label(tr!(text, "random-trainer-description"));
     ui.label(tr!(text, "random-trainer-next-play"));
     let mut black_white_random = trainer.black_white_random();
-    if ui.checkbox(&mut black_white_random, tr!(text, "random-trainer-black-white")).changed() {
+    if ui
+        .checkbox(&mut black_white_random, tr!(text, "random-trainer-black-white"))
+        .on_hover_text(tr!(text, "random-trainer-black-white-help"))
+        .changed()
+    {
         trainer.set_black_white_random(black_white_random);
     }
-    ui.label(tr!(text, "random-trainer-black-white-help"));
-    ui.label(tr!(text, "random-trainer-partial-help"));
     ui.separator();
     ui.label(format!("{} {}", tr!(text, "random-trainer-order"), trainer.lane_order_string()));
 
@@ -93,7 +95,8 @@ pub(super) fn build_random_trainer_page(
                         response.dnd_set_drag_payload(RandomTrainerLaneDrag { index });
                         let response = response
                             .on_hover_cursor(egui::CursorIcon::Grab)
-                            .on_hover_text(tr!(text, "random-trainer-drag"));
+                            .on_hover_text(tr!(text, "random-trainer-drag"))
+                            .on_hover_text(tr!(text, "random-trainer-partial-help"));
                         if response.secondary_clicked() {
                             toggle_partial = Some(lane);
                         }

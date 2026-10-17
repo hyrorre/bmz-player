@@ -194,10 +194,6 @@ pub(super) fn build_library_settings_sections(
                 &mut config.scan.auto_rescan_on_startup,
                 tr!(text, "settings-scan-on-startup"),
             );
-            ui.checkbox(
-                &mut config.scan.rescan_missing_files,
-                tr!(text, "settings-scan-remove-missing"),
-            );
         });
 
     SettingsSection::new(SettingsPage::Select, tr!(text, "settings-select-title"))
@@ -217,7 +213,6 @@ pub(super) fn build_library_settings_sections(
                 egui::Slider::new(&mut config.select.scroll_duration_high_ms, 1..=1000)
                     .text(tr!(text, "settings-select-scroll-repeat")),
             );
-            ui.label(tr!(text, "settings-select-scroll-help"));
         });
 
     SettingsSection::new(SettingsPage::Tables, tr!(text, "settings-tables-title"))

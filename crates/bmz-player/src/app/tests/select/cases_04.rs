@@ -500,7 +500,7 @@ fn select_snapshot_rows_formats_app_config_values_and_audio_apply_action() {
         backend.subtitle,
         crate::i18n::text(crate::i18n::AppLocale::Ja, "settings-entry-description-audio-backend")
     );
-    assert_eq!(apply.title, "適用 (音声出力を開き直す)");
+    assert_eq!(apply.title, "適用");
     assert_eq!(
         apply.subtitle,
         crate::i18n::text(crate::i18n::AppLocale::Ja, "settings-audio-apply-help")

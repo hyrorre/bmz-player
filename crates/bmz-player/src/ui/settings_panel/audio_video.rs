@@ -35,7 +35,7 @@ pub(super) fn build_audio_video_settings_sections(
                 ui.label(tr!(text, "settings-audio-open-error", "error" => error));
             }
             if let Some(info) = state.audio_stream_info {
-                ui.label(tr!(text, "settings-audio-stream-actual", "value" => format!("{} / {} / {} Hz / {} / {}",info.actual_host,info.actual_device,info.actual_rate,info.cpal_buffer,info.supported_frames)));
+                ui.label(tr!(text, "settings-audio-stream-actual", "value" => format!("{} / {} / {} Hz", info.actual_host, info.actual_device, info.actual_rate)));
             }
             let available_audio_backends = crate::audio::available_audio_backends();
             if !available_audio_backends.contains(&config.audio.backend) {
@@ -226,9 +226,6 @@ pub(super) fn build_audio_video_settings_sections(
                 *apply_audio = true;
             }
             ui.label(tr!(text, "settings-audio-apply-help"));
-            if !unrestricted {
-                ui.label(tr!(text, "settings-audio-deferred-help"));
-            }
         });
 
     SettingsSection::new(SettingsPage::Video, tr!(text, "settings-video-title"))

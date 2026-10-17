@@ -51,7 +51,6 @@ pub(in crate::ui::profile_panel) fn build_profile_select_section(
                     );
                 }
             });
-            ui.small(tr!(text, "profile-select-difficulty-table-level-display-help"));
         });
 }
 

@@ -115,32 +115,40 @@ pub(super) fn build_ir_bulk_operations(
         return;
     };
     ui.horizontal_wrapped(|ui| {
-        if ui
-            .add_enabled(
-                !busy && target.can_upload,
-                egui::Button::new(tr!(text, "ir-bulk-upload-button")),
-            )
-            .clicked()
-        {
+        let upload = ui.add_enabled(
+            !busy && target.can_upload,
+            egui::Button::new(tr!(text, "ir-bulk-upload-button")),
+        );
+        let upload = if target.can_upload {
+            upload
+        } else {
+            upload.on_disabled_hover_text(tr!(
+                text,
+                "ir-bulk-unsupported-upload",
+                "provider" => target.label.clone()
+            ))
+        };
+        if upload.clicked() {
             ir_manual.confirm = Some(IrConfirm::Upload);
             ir_manual.handle.request(IrManualRequest::EstimateUpload);
         }
-        if ui
-            .add_enabled(
-                !busy && target.can_download,
-                egui::Button::new(tr!(text, "ir-bulk-download-button")),
-            )
-            .clicked()
-        {
+        let download = ui.add_enabled(
+            !busy && target.can_download,
+            egui::Button::new(tr!(text, "ir-bulk-download-button")),
+        );
+        let download = if target.can_download {
+            download
+        } else {
+            download.on_disabled_hover_text(tr!(
+                text,
+                "ir-bulk-unsupported-download",
+                "provider" => target.label.clone()
+            ))
+        };
+        if download.clicked() {
             ir_manual.confirm = Some(IrConfirm::Download);
         }
     });
-    if !target.can_upload {
-        ui.small(tr!(text, "ir-bulk-unsupported-upload", "provider" => target.label.clone()));
-    }
-    if !target.can_download {
-        ui.small(tr!(text, "ir-bulk-unsupported-download", "provider" => target.label.clone()));
-    }
     build_ir_manual_status(ui, &snapshot, &ir_manual.handle, text);
 }
 

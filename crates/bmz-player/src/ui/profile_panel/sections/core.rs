@@ -89,7 +89,6 @@ pub(in crate::ui::profile_panel) fn build_profile_volume_section(
                 &mut profile.audio_mix.system_se_volume,
                 &tr!(text, "profile-volume-system-se"),
             );
-            ui.label(tr!(text, "profile-volume-help"));
         });
 }
 
@@ -222,7 +221,6 @@ pub(in crate::ui::profile_panel) fn build_profile_input_section(
                 .text(tr!(text, "profile-input-controller-release-bounce-ms")),
             );
             ui.label(tr!(text, "profile-input-release-bounce-help"));
-            ui.label(tr!(text, "profile-input-key-bindings-help"));
         });
 }
 

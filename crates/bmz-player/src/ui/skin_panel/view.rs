@@ -106,7 +106,6 @@ pub(in crate::ui) fn build_skin_panel(
     }) {
         ui.colored_label(ui.visuals().error_fg_color, error);
     }
-    ui.small(tr!(text, "skin-resource-help"));
     ui.separator();
     let previous_slot = editor.slot;
     let groups: &[(&str, &[SkinSlot])] = &[
