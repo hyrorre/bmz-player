@@ -442,11 +442,7 @@ impl WinitApp {
 
     pub(super) fn fallback_table_breadcrumb(source_url: &str) -> TableBreadcrumb {
         TableBreadcrumb {
-            name: std::path::Path::new(source_url)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(source_url)
-                .to_string(),
+            name: crate::screens::select_model::fallback_table_name(source_url),
             symbol: String::new(),
         }
     }

@@ -2,6 +2,20 @@ use super::*;
 
 pub const RANDOM_MIX_COURSE_SOURCE: &str = "bmz:random-mix";
 
+/// Table name for a table whose record is unknown: the URL's last segment.
+pub fn fallback_table_name(source_url: &str) -> String {
+    std::path::Path::new(source_url)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(source_url)
+        .to_string()
+}
+
+/// Select skins' breadcrumb for a table level, e.g. "Stella > st0".
+pub fn table_level_breadcrumb(name: &str, symbol: &str, level: &str) -> String {
+    format!("{name} > {symbol}{level}")
+}
+
 /// Returns one folder item per registered difficulty table.
 pub fn table_folder_items(
     library_db: &LibraryDatabase,

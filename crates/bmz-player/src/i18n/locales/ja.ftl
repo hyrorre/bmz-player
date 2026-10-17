@@ -980,7 +980,6 @@ downloads-bulk-hint = 選曲で難易度表またはレベルフォルダを選�
 downloads-bulk-preparing = 対象を確認中…
 downloads-bulk-confirm = キューへ追加
 downloads-bulk-dismiss = 中止
-downloads-all-levels = 全レベル
 downloads-bulk-counts = 全 { $total } 件 / 所持済み { $owned } / 自動取得可能 { $downloadable } / 取得不可 { $unavailable } / 重複 { $merged }
 downloads-bulk-results = 登録 { $queued } / 統合 { $merged } / 成功 { $completed } / 失敗 { $failed }
 downloads-filter-all = すべて

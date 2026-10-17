@@ -980,7 +980,6 @@ downloads-bulk-hint = 请在选曲中选择难度表或等级文件夹。
 downloads-bulk-preparing = 正在检查谱面…
 downloads-bulk-confirm = 加入队列
 downloads-bulk-dismiss = 取消
-downloads-all-levels = 全部等级
 downloads-bulk-counts = 共 { $total } / 已持有 { $owned } / 可下载 { $downloadable } / 不可下载 { $unavailable } / 重复 { $merged }
 downloads-bulk-results = 入队 { $queued } / 合并 { $merged } / 成功 { $completed } / 失败 { $failed }
 downloads-filter-all = 全部

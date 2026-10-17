@@ -65,11 +65,12 @@ pub use search::{
     load_select_items_for_search_for_rule_mode_with_table_order,
 };
 pub use table::{
-    RANDOM_MIX_COURSE_SOURCE, course_root_item, load_select_items_for_course_contents,
-    load_select_items_for_courses, load_select_items_in_table,
-    load_select_items_in_table_for_rule_mode, load_select_items_in_table_level,
-    load_select_items_in_table_level_for_rule_mode, new_course_item_for_locale, table_folder_items,
-    table_folder_items_for_active_sources, table_level_folder_items,
+    RANDOM_MIX_COURSE_SOURCE, course_root_item, fallback_table_name,
+    load_select_items_for_course_contents, load_select_items_for_courses,
+    load_select_items_in_table, load_select_items_in_table_for_rule_mode,
+    load_select_items_in_table_level, load_select_items_in_table_level_for_rule_mode,
+    new_course_item_for_locale, table_folder_items, table_folder_items_for_active_sources,
+    table_level_breadcrumb, table_level_folder_items,
 };
 pub use virtual_folder::{
     VIRTUAL_FOLDER_CONFIG_FILE, VIRTUAL_FOLDER_PATH_PREFIX, load_select_items_in_virtual_folder,

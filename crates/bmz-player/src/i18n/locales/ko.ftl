@@ -980,7 +980,6 @@ downloads-bulk-hint = 선곡에서 난이도표 또는 레벨 폴더를 선택�
 downloads-bulk-preparing = 채보 확인 중…
 downloads-bulk-confirm = 대기열에 추가
 downloads-bulk-dismiss = 취소
-downloads-all-levels = 모든 레벨
 downloads-bulk-counts = 전체 { $total } / 보유 { $owned } / 다운로드 가능 { $downloadable } / 불가 { $unavailable } / 중복 { $merged }
 downloads-bulk-results = 등록 { $queued } / 통합 { $merged } / 성공 { $completed } / 실패 { $failed }
 downloads-filter-all = 전체

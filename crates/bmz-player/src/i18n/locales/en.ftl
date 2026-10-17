@@ -983,7 +983,6 @@ downloads-bulk-hint = Select a difficulty table or level folder in music selecti
 downloads-bulk-preparing = Checking charts…
 downloads-bulk-confirm = Add to queue
 downloads-bulk-dismiss = Dismiss
-downloads-all-levels = All levels
 downloads-bulk-counts = Total { $total } / Owned { $owned } / Downloadable { $downloadable } / Unavailable { $unavailable } / Duplicates { $merged }
 downloads-bulk-results = Queued { $queued } / Merged { $merged } / Completed { $completed } / Failed { $failed }
 downloads-filter-all = All

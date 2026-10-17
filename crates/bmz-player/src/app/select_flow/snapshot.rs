@@ -86,7 +86,11 @@ impl WinitApp {
                 Some(TablePath::Table { source_url }) => self.table_breadcrumb_name(source_url),
                 Some(TablePath::Level { source_url, level }) => {
                     let table = self.table_breadcrumb(source_url);
-                    format!("{} > {}{}", table.name, table.symbol, level)
+                    crate::screens::select_model::table_level_breadcrumb(
+                        &table.name,
+                        &table.symbol,
+                        level,
+                    )
                 }
             },
             Some(path) if in_settings_stack(std::slice::from_ref(path)) => {
