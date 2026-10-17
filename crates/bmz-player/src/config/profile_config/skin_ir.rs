@@ -546,7 +546,7 @@ pub enum IrProviderRoleConfig {
 impl ProfileConfig {
     pub fn new_default(id: &str, display_name: &str, now: i64) -> Self {
         Self {
-            version: 1,
+            version: PROFILE_CONFIG_VERSION,
             id: id.to_string(),
             display_name: display_name.to_string(),
             created_at: now,

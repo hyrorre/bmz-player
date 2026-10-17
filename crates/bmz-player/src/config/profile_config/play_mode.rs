@@ -139,9 +139,14 @@ fn normalize_play_mode_config(config: &mut PlayModeConfig) {
 impl ProfileConfig {
     /// 旧既定 (LIFT有効・量0) の profile を、読込時にLIFT無効へ移行する。
     /// プレイ開始時の0→既定量の補正で判定ラインが上がらないようにするため。
-    /// 量は既定値にし、後でLIFTを有効にしたときに再び無効化されないようにする。
+    /// 量は既定値にする。`version` 2 未満の profile だけが対象で、移行後は
+    /// `version` を上げる。移行後にプレイ中の調整でLIFTを0にしても無効化しない。
     /// 読込直後、`normalize_play_mode_configs` の後に呼ぶ。変更した場合は true を返す。
     pub fn migrate_enabled_zero_lift(&mut self) -> bool {
+        if self.version >= 2 {
+            return false;
+        }
+        self.version = 2;
         fn migrate(lift_enabled: &mut bool, lift: &mut u32) -> bool {
             if *lift_enabled && *lift == 0 {
                 *lift_enabled = false;

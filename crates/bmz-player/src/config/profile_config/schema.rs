@@ -1172,6 +1172,10 @@ pub const fn default_mode_hispeed() -> f32 {
 /// SUDDEN+・HIDDEN+・LIFT の既定量。0では有効か無効か分かりづらいため0にしない。
 pub const DEFAULT_LANE_COVER_AMOUNT: u32 = 150;
 
+/// `ProfileConfig.version` の現行値。読込時の一度だけの移行に使う。
+/// - 2: 旧既定 (LIFT有効・量0) をLIFT無効へ移行済み。
+pub const PROFILE_CONFIG_VERSION: u32 = 2;
+
 pub const fn default_target_green_number() -> u32 {
     300
 }

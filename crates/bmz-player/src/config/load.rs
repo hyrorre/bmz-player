@@ -285,6 +285,8 @@ mod tests {
         use bmz_core::lane::KeyMode;
 
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        // 移行前のprofileは version 1。
+        profile.version = 1;
         profile.normalize_play_mode_configs();
         // 旧既定: LIFT有効・量0。
         profile.lane.lift_enabled = true;
@@ -313,5 +315,24 @@ mod tests {
         let reloaded = parse_profile_config(&toml::to_string(&enabled).unwrap()).unwrap();
         assert!(reloaded.play_mode_config(KeyMode::K7).lift_enabled);
         assert_eq!(reloaded.play_mode_config(KeyMode::K7).lift, DEFAULT_LANE_COVER_AMOUNT);
+        assert_eq!(loaded.version, crate::config::profile_config::PROFILE_CONFIG_VERSION);
+    }
+
+    #[test]
+    fn parse_profile_config_keeps_enabled_lift_lowered_to_zero_after_migration() {
+        use bmz_core::lane::KeyMode;
+
+        // 移行済みのprofileで、プレイ中の調整によりLIFTを0まで下げて保存した状態。
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.normalize_play_mode_configs();
+        profile.lane.lift_enabled = true;
+        profile.lane.lift = 0;
+        profile.sync_active_play_mode();
+
+        let loaded = parse_profile_config(&toml::to_string(&profile).unwrap()).unwrap();
+
+        let k7 = loaded.play_mode_config(KeyMode::K7);
+        assert!(k7.lift_enabled);
+        assert_eq!(k7.lift, 0);
     }
 }
