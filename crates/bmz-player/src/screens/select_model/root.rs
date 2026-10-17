@@ -20,11 +20,12 @@ pub fn root_folder_items(root_paths: &[String]) -> Vec<SelectItem> {
         .collect()
 }
 
+// FAVORITE系はContainerとして作り、beatoraja系ではFEATURE、LR2では従来のカスタムフォルダにする。
 pub fn favorite_root_item() -> SelectItem {
     SelectItem::Folder {
         path: FAVORITE_ROOT_PATH.to_string(),
         name: "FAVORITE".to_string(),
-        kind: SelectRowKind::TableFolder,
+        kind: SelectRowKind::Container,
         summary: None,
     }
 }
@@ -35,7 +36,7 @@ pub fn favorite_root_items(collection_db: &CollectionDatabase) -> Result<Vec<Sel
         items.push(SelectItem::Folder {
             path: FAVORITE_CHART_PATH.to_string(),
             name: "FAVORITE CHART".to_string(),
-            kind: SelectRowKind::TableFolder,
+            kind: SelectRowKind::Container,
             summary: None,
         });
     }
@@ -43,7 +44,7 @@ pub fn favorite_root_items(collection_db: &CollectionDatabase) -> Result<Vec<Sel
         items.push(SelectItem::Folder {
             path: FAVORITE_SONG_PATH.to_string(),
             name: "FAVORITE SONG".to_string(),
-            kind: SelectRowKind::TableFolder,
+            kind: SelectRowKind::Container,
             summary: None,
         });
     }

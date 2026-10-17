@@ -13,6 +13,7 @@ BMZ の選曲ルートには、beatoraja の標準フォルダに相当する仮
 
 FAVORITE は既存のコレクション機能を使い、登録がある場合はMY BESTの直後に表示します。
 MY BESTを非表示にした場合は、機能フォルダ群の末尾に表示します。INVISIBLE は実装しません。
+FAVORITE と配下の FAVORITE CHART / FAVORITE SONG は、beatoraja系スキンではFEATURE FOLDER系、LR2スキンでは従来のカスタムフォルダとして表示します。
 同一曲フォルダは選択中の曲に対する既存の same-folder 操作を使います。
 
 曲root内の ZIP / RAR / 7z もスキャン対象です。書庫内の BMS / BME / BML / PMS / BMSON を
