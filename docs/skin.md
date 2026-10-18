@@ -1347,7 +1347,7 @@ slot `s=0..6`の基底は`19400 + 10*s`です。各名前空間で次を解決�
 | 0 | item_id | label | valid |
 | 1 | category_id | value_label | selected |
 | 2 | value | 状態ラベル（編集不可 / 非適用 / 空文字） | editable |
-| 3 | scope | 空文字 | effective |
+| 3 | scope | 大分類の英語表記（`LANE / HI-SPEED`等。言語設定によらず英語） | effective |
 | 4 | CHOICE_COUNT | 空文字 | enumの候補外値（VALUE_INDEX=-1）です。numberではfalse |
 | 5 | VALUE_INDEX | 空文字 | 数値型 |
 | 6 | 数値MIN（他の型は-1） | 空文字 | 数値の減少が可能（editableかつ現在値>MIN） |

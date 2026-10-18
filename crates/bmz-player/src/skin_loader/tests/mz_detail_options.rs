@@ -1,8 +1,13 @@
 use super::detail_options::cursor_of;
 use super::*;
+
 use crate::i18n::AppLocale;
 use crate::select_detail_options::CATALOG;
 use bmz_render::skin::SkinClickTarget;
+
+// First choice of the panel2-style card: 50 px cells stacked from y = 245.
+const CHOICE_Y: f32 = 270.0;
+const CHOICE_PITCH: f32 = 50.0;
 
 fn skin_path() -> PathBuf {
     let path = test_app_paths().resource_dir.join("skins/mz-select/music_select.luaskin");
@@ -159,7 +164,7 @@ fn mz_detail_options_switch_plays_both_exit_and_entrance_and_routes_current_pane
             if to != 2 {
                 for x in [100.0, 960.0, 1800.0] {
                     assert!(
-                        !event_at(&renderer, &s, x, 299.0)
+                        !event_at(&renderer, &s, x, CHOICE_Y)
                             .is_some_and(bmz_render::skin::is_detail_options_event)
                     );
                 }
@@ -194,7 +199,7 @@ fn mz_detail_options_exit_keeps_labels_and_scroll_but_blocks_all_clicks() {
                     assert!(x.is_none(), "expired close snapshot still drawn");
                 }
                 for x in [80.0, 450.0, 960.0, 1840.0] {
-                    for y in [60.0, 299.0, 700.0, 960.0] {
+                    for y in [60.0, CHOICE_Y, 700.0, 960.0] {
                         if elapsed < 300 {
                             assert_eq!(event_at(&renderer, &s, x, y), None);
                             assert!(
@@ -264,10 +269,18 @@ fn mz_detail_options_reuses_option_artwork_and_version_font() {
         }
     }
     let decoded = detail_options::decode_experimental(&path, SkinKind::Select).unwrap();
-    for (id, source) in
+    for (part, source) in
         [("mz_detail_button", "mz_detail_panel"), ("mz_detail_value_selected", "mz_detail_cursor")]
     {
-        assert!(decoded.document.image.iter().any(|i| i.id == id && i.src == source));
+        for side in ["l", "m", "r"] {
+            let id = format!("{part}_{side}");
+            assert!(decoded.document.image.iter().any(|i| i.id == id && i.src == source), "{id}");
+        }
+    }
+    // Three-slicing never samples the button's baked label (x 390..441 in panel2).
+    for image in decoded.document.image.iter().filter(|i| i.id.starts_with("mz_detail_button_")) {
+        let (x, w) = (image.x, image.w);
+        assert!(x + w <= 390 || x >= 442, "{} samples the baked label", image.id);
     }
     assert!(
         decoded
@@ -318,12 +331,12 @@ fn mz_detail_options_entrance_uses_legacy_easing_and_moving_hit_regions() {
                     bmz_render::scene::detail_options::DetailValueKind::Number { .. }
                 );
                 let expected = if number { 19310 + slot } else { 19500 + slot * 64 };
-                assert_eq!(event_at(&renderer, &s, x, 299.0), Some(expected));
+                assert_eq!(event_at(&renderer, &s, x, CHOICE_Y), Some(expected));
             }
         }
         // No right overscan column flashes into view while the panel enters.
         if elapsed < 300 {
-            assert_eq!(event_at(&renderer, &s, 1900.0, 299.0), None);
+            assert_eq!(event_at(&renderer, &s, 1900.0, CHOICE_Y), None);
         }
         assert_eq!(event_at(&renderer, &s, 960.0, 60.0), None);
         assert_eq!(event_at(&renderer, &s, 960.0, 960.0), None);
@@ -367,7 +380,7 @@ fn mz_detail_options_all_items_choices_and_animated_clicks() {
                     for (index, choice) in row.choices.iter().enumerate() {
                         assert!(has_text(&choice.label));
                         assert_eq!(
-                            event_at(&renderer, &s, x, 299.0 + index as f32 * 52.0),
+                            event_at(&renderer, &s, x, CHOICE_Y + index as f32 * CHOICE_PITCH),
                             Some(19500 + slot as i32 * 64 + index as i32 * 4)
                         );
                     }
@@ -451,10 +464,10 @@ fn mz_detail_options_small_catalogue_inactive_locked_and_external_values() {
             DrawCommand::Text { text, .. } if text == label)));
     }
     // A disabled value cannot fire its choice event, but its column stays selectable.
-    assert_eq!(event_at(&renderer, &s, 960.0, 299.0), Some(19313));
+    assert_eq!(event_at(&renderer, &s, 960.0, CHOICE_Y), Some(19313));
     let s = snapshot(AppLocale::Ja, cursor_of(201));
     assert!(!s.detail_options.as_ref().unwrap().selected().unwrap().effective);
-    assert_eq!(event_at(&renderer, &s, 960.0, 299.0), Some(19692));
+    assert_eq!(event_at(&renderer, &s, 960.0, CHOICE_Y), Some(19692));
 }
 
 #[test]

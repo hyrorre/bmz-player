@@ -5,6 +5,10 @@ use crate::select_detail_options::CATALOG;
 use bmz_render::scene::detail_options::{DetailOptionsClosingSnapshot, detail_options_column};
 use bmz_render::skin::SkinClickTarget;
 
+// First choice of the normal-panel layout: 37 px buttons every 42 px from y = 244.
+const CHOICE_Y: f32 = 262.0;
+const CHOICE_PITCH: f32 = 42.0;
+
 // ECFN is a separately installed skin, not a bundled submodule. These tests are
 // explicitly opt-in and fail if the real ADFX02 assets are absent.
 pub(super) fn skin_path() -> PathBuf {
@@ -108,7 +112,7 @@ fn ecfn_detail_options_all_items_and_scrolling_hits() {
                     for (index, choice) in row.choices.iter().enumerate() {
                         assert!(has_text(&choice.label));
                         assert_eq!(
-                            event_at(&renderer, &s, x, 296.0 + index as f32 * 52.0),
+                            event_at(&renderer, &s, x, CHOICE_Y + index as f32 * CHOICE_PITCH),
                             Some(19500 + slot as i32 * 64 + index as i32 * 4)
                         );
                     }
@@ -162,10 +166,10 @@ fn ecfn_detail_options_empty_locked_external_and_inactive_values() {
         assert!(renderer.last_plan().unwrap().commands.iter().any(|cmd| matches!(cmd,
             DrawCommand::Text { text, .. } if text == label)));
     }
-    assert_eq!(event_at(&renderer, &s, 960.0, 296.0), Some(19313));
+    assert_eq!(event_at(&renderer, &s, 960.0, CHOICE_Y), Some(19313));
     let s = snapshot(AppLocale::Ja, cursor_of(201));
     assert!(!s.detail_options.as_ref().unwrap().selected().unwrap().effective);
-    assert_eq!(event_at(&renderer, &s, 960.0, 296.0), Some(19692));
+    assert_eq!(event_at(&renderer, &s, 960.0, CHOICE_Y), Some(19692));
 }
 
 #[test]
@@ -343,7 +347,7 @@ fn ecfn_detail_options_parallel_fades_and_single_shade() {
             );
             if to != 2 {
                 assert!(
-                    !event_at(&renderer, &s, 960.0, 296.0)
+                    !event_at(&renderer, &s, 960.0, CHOICE_Y)
                         .is_some_and(bmz_render::skin::is_detail_options_event)
                 );
             }
@@ -411,14 +415,13 @@ fn ecfn_detail_options_value_boxes_never_draw_baked_off_text() {
                     continue;
                 };
                 let (w, h) = (rect.width * 1920.0, rect.height * 1080.0);
-                if (w - 236.0).abs() < 0.1 && (h - 3.0).abs() < 0.1 {
+                if (w - 236.0).abs() < 0.1 && (h - 2.0).abs() < 0.1 {
                     rims += 1;
                 }
                 let (x0, y0) = (uv.x * size.width, uv.y * size.height);
                 let (x1, y1) = (x0 + uv.width * size.width, y0 + uv.height * size.height);
                 assert!(
                     !((w - 236.0).abs() < 0.1
-                        && (h - 44.0).abs() < 0.1
                         && (x0..x1).contains(&text_x)
                         && (y0..y1).contains(&text_y)),
                     "{from}->{to} {elapsed}ms draws the baked OFF button: {command:?}"

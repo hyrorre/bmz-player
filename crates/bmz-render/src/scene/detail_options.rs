@@ -173,6 +173,20 @@ pub fn number(id: i32, panel: Option<&DetailOptionsSnapshot>) -> Option<i64> {
     })
 }
 
+/// English caption of a CATEGORY_ID for card subtitles. Skin API: it stays English
+/// in every locale, like the captions printed on the skins' normal option cards.
+pub fn detail_options_category_caption(category_id: i64) -> &'static str {
+    match category_id {
+        1 => "LANE / HI-SPEED",
+        2 => "GAUGE",
+        4 => "LONG NOTE",
+        5 => "ASSIST / MODIFIER",
+        6 => "BGA",
+        7 => "JUDGE",
+        _ => "",
+    }
+}
+
 pub fn text(id: i32, panel: Option<&DetailOptionsSnapshot>) -> Option<&str> {
     use bmz_skin_document::*;
     if let Some((slot, choice, field)) = detail_options_choice_slot(id) {
@@ -192,6 +206,7 @@ pub fn text(id: i32, panel: Option<&DetailOptionsSnapshot>) -> Option<&str> {
                     0 => r.label.as_str(),
                     1 => &r.value_label,
                     2 => &r.status,
+                    3 => detail_options_category_caption(r.category_id),
                     _ => "",
                 })
                 .unwrap_or(""),

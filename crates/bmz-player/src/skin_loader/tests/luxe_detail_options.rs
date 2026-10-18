@@ -5,6 +5,10 @@ use crate::select_detail_options::CATALOG;
 use bmz_render::scene::detail_options::{DetailOptionsClosingSnapshot, detail_options_column};
 use bmz_render::skin::SkinClickTarget;
 
+// First choice of the normal-card layout: 1:1 38 px buttons every 41 px from y = 244.
+const CHOICE_Y: f32 = 263.0;
+const CHOICE_PITCH: f32 = 41.0;
+
 fn skin_path() -> PathBuf {
     let path = test_app_paths().resource_dir.join("skins/Luxez-Flat/music_select.luaskin");
     assert!(path.exists(), "initialize the bundled Luxez-Flat submodule for these tests");
@@ -89,7 +93,7 @@ fn luxe_detail_options_all_items_choices_and_moving_hits() {
                     for (index, choice) in row.choices.iter().enumerate() {
                         assert!(has_text(&choice.label));
                         assert_eq!(
-                            event_at(&renderer, &s, x, 299.0 + index as f32 * 52.0),
+                            event_at(&renderer, &s, x, CHOICE_Y + index as f32 * CHOICE_PITCH),
                             Some(19500 + slot as i32 * 64 + index as i32 * 4)
                         );
                     }
@@ -142,13 +146,13 @@ fn luxe_detail_options_uses_existing_artwork_and_fonts_with_complete_labels() {
             && matches!(&font.data, Some(DecodedFontData::Vector(bytes)) if !bytes.is_empty())
     }));
     for (id, source) in [
-        ("luxe_detail_button_1", "luxe_detail_panel"),
-        ("luxe_detail_value_selected", "luxe_detail_cursor"),
+        ("luxe_detail_button_m", "luxe_detail_panel"),
+        ("luxe_detail_value_selected_l", "luxe_detail_cursor"),
+        ("luxe_detail_value_selected_m", "luxe_detail_cursor"),
+        ("luxe_detail_value_selected_r", "luxe_detail_cursor"),
     ] {
-        assert!(decoded.document.image.iter().any(|i| i.id == id && i.src == source));
+        assert!(decoded.document.image.iter().any(|i| i.id == id && i.src == source), "{id}");
     }
-    // The glow padding belongs outside the button. Scaling the whole cursor to
-    // the button's bounds shrinks its bright center and reproduces the mismatch.
     let image_frame = |id: &str| {
         decoded
             .document
@@ -165,55 +169,48 @@ fn luxe_detail_options_uses_existing_artwork_and_fonts_with_complete_labels() {
             })
             .unwrap()
     };
-    let hit = image_frame("luxe_detail_row_0_choice_0_hit");
-    let button_x = hit.x.unwrap() as f32 + 6.0;
-    let button_y = (1080 - hit.y.unwrap() - hit.h.unwrap()) as f32;
-    let cursor = image_frame("luxe_detail_value_selected");
-    let scale = 226.0 / 176.0;
-    for (actual, expected) in [
-        (cursor.w.unwrap() as f32, 213.0 * scale),
-        (cursor.h.unwrap() as f32, 76.0 * scale),
-        (cursor.x.unwrap() as f32, button_x - 19.0 * scale),
-        ((1080 - cursor.y.unwrap() - cursor.h.unwrap()) as f32, button_y - 19.0 * scale),
+    // Buttons and the cursor keep the normal panel's 1:1 height; only the plain
+    // middle stretches, and the cursor glows 19 px beyond the button.
+    for (id, w, h) in [
+        ("luxe_detail_button_l_0", 15, 38),
+        ("luxe_detail_button_m", 196, 38),
+        ("luxe_detail_button_r_0", 15, 38),
+        ("luxe_detail_value_selected_l", 37, 76),
+        ("luxe_detail_value_selected_m", 190, 76),
+        ("luxe_detail_value_selected_r", 37, 76),
     ] {
-        // Skin frames are quantized to whole canvas pixels by the Lua decoder.
-        assert!((actual - expected).abs() <= 1.0);
+        let frame = image_frame(id);
+        assert_eq!((frame.w.unwrap(), frame.h.unwrap()), (w, h), "{id}");
     }
-    let bands: Vec<_> = decoded
+    let assets: std::collections::HashMap<_, _> = decoded
+        .sources
+        .iter()
+        .filter_map(|s| s.asset.as_ref().map(|asset| (s.source_id.as_str(), asset)))
+        .collect();
+    let pixel = |source: &str, x: i32, y: i32| {
+        let asset = assets[source];
+        let offset = ((y as u32 * asset.width + x as u32) * 4) as usize;
+        asset.pixels[offset..offset + 4].to_vec()
+    };
+    // The plain middle never samples the rounded caps.
+    let middle = decoded.document.image.iter().find(|i| i.id == "luxe_detail_button_m").unwrap();
+    assert!(middle.x >= 623 + 15 && middle.x + middle.w <= 623 + 160);
+    // Each cap comes from a button on the same-colour card: outside its rounding it
+    // shows the card's own fill, identical to the row above the button, which the
+    // column fill reproduces at the same offsets.
+    let caps: Vec<_> = decoded
         .document
         .image
         .iter()
-        .filter(|image| image.id.starts_with("luxe_detail_button_"))
+        .filter(|i| {
+            i.id.starts_with("luxe_detail_button_l_") || i.id.starts_with("luxe_detail_button_r_")
+        })
         .collect();
-    let panel = decoded.sources.iter().find(|s| s.source_id == "luxe_detail_panel").unwrap();
-    let asset = panel.asset.as_ref().unwrap();
-    // Keep every neutral button pixel exactly once and exclude the purple matte,
-    // including the right/bottom padding, rather than covering it with a color.
-    for y in 277..316 {
-        for x in 623..799 {
-            let offset = ((y as u32 * asset.width + x as u32) * 4) as usize;
-            let pixel = &asset.pixels[offset..offset + 4];
-            let neutral = pixel[0] == pixel[1] && pixel[1] == pixel[2];
-            let count = bands
-                .iter()
-                .filter(|b| x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h)
-                .count();
-            assert_eq!(count, usize::from(neutral), "button pixel ({x}, {y})");
-        }
-    }
-    let mut previous_bottom = button_y;
-    for band in bands {
-        let frame = image_frame(&band.id);
-        let top = (1080 - frame.y.unwrap() - frame.h.unwrap()) as f32;
-        assert_eq!(top, previous_bottom, "button bands must not overlap or leave seams");
-        previous_bottom = top + frame.h.unwrap() as f32;
-        for (actual, expected) in [
-            (frame.x.unwrap() as f32, button_x + (band.x - 623) as f32 * scale),
-            (top, button_y + (band.y - 277) as f32 * scale),
-            (frame.w.unwrap() as f32, band.w as f32 * scale),
-            (frame.h.unwrap() as f32, band.h as f32 * scale),
-        ] {
-            assert!((actual - expected).abs() <= 1.0);
+    assert_eq!(caps.len(), 10);
+    for cap in caps {
+        let outer = if cap.id.contains("_l_") { cap.x } else { cap.x + cap.w - 1 };
+        for y in [cap.y, cap.y + cap.h - 1] {
+            assert_eq!(pixel(&cap.src, outer, y), pixel(&cap.src, outer, cap.y - 1), "{}", cap.id);
         }
     }
     assert!(
@@ -236,20 +233,41 @@ fn luxe_detail_options_uses_existing_artwork_and_fonts_with_complete_labels() {
             .iter()
             .any(|t| t.id.starts_with("luxe_detail_") && (19306..=19309).contains(&t.ref_id))
     );
-    let panel_texture = bmz_render::plan::TextureId(
-        decoded.sources.iter().find(|s| s.source_id == "luxe_detail_panel").unwrap().texture.0,
-    );
+    let card_sources: Vec<_> =
+        decoded.sources.iter().map(|s| (s.source_id.clone(), s.texture.0)).collect();
     let mut renderer = Renderer::default();
     install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
         .unwrap();
     renderer.prepare_scene(AppSceneSnapshot::Select(snapshot(AppLocale::Ja, cursor_of(101))));
-    // These points are inside the four rounded corners of the selected column.
-    // Opaque fill from the original 24x24 corner tiles must not cover them.
-    for x in [831.0 + 20.0, 831.0 + 258.0 - 20.0] {
-        for y in [180.0 + 20.0, 730.0 - 20.0] {
+    // Both rounded caps of the centre column's first button are really drawn.
+    for x in [831.0 + 16.0, 831.0 + 16.0 + 226.0 - 15.0] {
+        assert!(
+            renderer.last_plan().unwrap().commands.iter().any(|command| matches!(
+                command,
+                DrawCommand::Image { rect, .. }
+                    if (rect.x * 1920.0 - x).abs() < 0.5
+                        && (rect.y * 1080.0 - 244.0).abs() < 0.5
+                        && (rect.width * 1920.0 - 15.0).abs() < 0.5
+                        && (rect.height * 1080.0 - 38.0).abs() < 0.5
+            )),
+            "missing button cap at {x}"
+        );
+    }
+    // The opaque fill follows the rounded rim: nothing from the card textures is
+    // drawn just outside the four corners of the selected column.
+    let textures: Vec<_> = ["luxe_detail_panel", "luxe_detail_panel1", "luxe_detail_panel3"]
+        .iter()
+        .map(|id| {
+            bmz_render::plan::TextureId(
+                card_sources.iter().find(|(source, _)| source == id).unwrap().1,
+            )
+        })
+        .collect();
+    for x in [831.0 + 3.0, 831.0 + 258.0 - 3.0] {
+        for y in [180.0 + 3.0, 730.0 - 3.0] {
             assert!(!renderer.last_plan().unwrap().commands.iter().any(|command| {
                 matches!(command, DrawCommand::Image { texture, rect, .. }
-                    if *texture == panel_texture
+                    if textures.contains(texture)
                         && x / 1920.0 >= rect.x && x / 1920.0 < rect.x + rect.width
                         && y / 1080.0 >= rect.y && y / 1080.0 < rect.y + rect.height)
             }));
@@ -311,10 +329,10 @@ fn luxe_detail_options_handles_empty_locked_inactive_and_external_rows() {
         assert!(renderer.last_plan().unwrap().commands.iter().any(|cmd| matches!(cmd,
             DrawCommand::Text { text, .. } if text == label)));
     }
-    assert_eq!(event_at(&renderer, &s, 960.0, 299.0), Some(19313));
+    assert_eq!(event_at(&renderer, &s, 960.0, CHOICE_Y), Some(19313));
     let s = snapshot(AppLocale::Ja, cursor_of(201));
     assert!(!s.detail_options.as_ref().unwrap().selected().unwrap().effective);
-    assert_eq!(event_at(&renderer, &s, 960.0, 299.0), Some(19692));
+    assert_eq!(event_at(&renderer, &s, 960.0, CHOICE_Y), Some(19692));
 }
 
 #[test]
@@ -386,12 +404,12 @@ fn luxe_detail_options_enter_exit_and_other_panels_animate_together() {
                             bmz_render::scene::detail_options::DetailValueKind::Number { .. }
                         );
                         let expected = if number { 19310 + slot } else { 19500 + slot * 64 };
-                        assert_eq!(event_at(&renderer, &s, x, 299.0), Some(expected));
+                        assert_eq!(event_at(&renderer, &s, x, CHOICE_Y), Some(expected));
                     }
                 }
             } else {
                 assert!(
-                    !event_at(&renderer, &s, 960.0, 299.0)
+                    !event_at(&renderer, &s, 960.0, CHOICE_Y)
                         .is_some_and(bmz_render::skin::is_detail_options_event)
                 );
                 if to == 0 && elapsed < 300 {

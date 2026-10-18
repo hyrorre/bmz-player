@@ -51,7 +51,7 @@ fn detail_options_resolvers_and_lua_text_share_the_snapshot() {
     }
     let texts = lua_main_state_text_values(&state, &SkinTextState::default());
     for id in (19300..=19309)
-        .chain((0..9).flat_map(|slot| (0..3).map(move |field| 19400 + slot * 10 + field)))
+        .chain((0..9).flat_map(|slot| (0..4).map(move |field| 19400 + slot * 10 + field)))
     {
         assert_eq!(
             texts.get(&id).map(String::as_str),
@@ -70,6 +70,8 @@ fn detail_options_resolvers_and_lua_text_share_the_snapshot() {
     assert_eq!(skin_state_number(19305, &closed), Some(-1));
     assert!(!test_skin_op(19300, &[], &closed));
     // A single item occupies the center slot (3), leaving both edges empty.
+    assert_eq!(texts[&19433], "GAUGE");
+    assert_eq!(texts[&19423], "");
     let choice_base = 19500 + 3 * 64;
     assert_eq!(texts[&choice_base], "ASSIST EASY");
     assert_eq!(texts[&(choice_base + 4)], "EASY");
