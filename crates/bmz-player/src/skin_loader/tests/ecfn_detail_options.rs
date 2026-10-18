@@ -1,3 +1,4 @@
+use super::detail_options::cursor_of;
 use super::*;
 use crate::i18n::AppLocale;
 use crate::select_detail_options::CATALOG;
@@ -56,7 +57,7 @@ pub(super) fn event_at(renderer: &Renderer, s: &SelectSnapshot, x: f32, y: f32) 
 }
 
 pub(super) fn switching(from: u8, to: u8, elapsed: i64) -> SelectSnapshot {
-    let mut s = snapshot(AppLocale::Ja, 0);
+    let mut s = snapshot(AppLocale::Ja, cursor_of(101));
     if from == 2 {
         s.detail_options_closing = Some(DetailOptionsClosingSnapshot {
             panel: s.detail_options.take().unwrap(),
@@ -135,7 +136,7 @@ fn ecfn_detail_options_all_items_and_scrolling_hits() {
 fn ecfn_detail_options_empty_locked_external_and_inactive_values() {
     let mut renderer = renderer();
     for count in [0, 1, 3, 6] {
-        let mut s = snapshot(AppLocale::Ja, 0);
+        let mut s = snapshot(AppLocale::Ja, cursor_of(101));
         let panel = std::sync::Arc::make_mut(s.detail_options.as_mut().unwrap());
         panel.items = panel.items[..count].to_vec().into();
         renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
@@ -147,9 +148,9 @@ fn ecfn_detail_options_empty_locked_external_and_inactive_values() {
             );
         }
     }
-    let mut s = snapshot(AppLocale::Ja, 14);
+    let mut s = snapshot(AppLocale::Ja, cursor_of(501));
     let panel = std::sync::Arc::make_mut(s.detail_options.as_mut().unwrap());
-    let row = &mut std::sync::Arc::make_mut(&mut panel.items)[14];
+    let row = &mut std::sync::Arc::make_mut(&mut panel.items)[cursor_of(501)];
     row.value = 2;
     row.value_index = -1;
     row.value_label = "ADD".into();
@@ -162,7 +163,7 @@ fn ecfn_detail_options_empty_locked_external_and_inactive_values() {
             DrawCommand::Text { text, .. } if text == label)));
     }
     assert_eq!(event_at(&renderer, &s, 960.0, 296.0), Some(19313));
-    let s = snapshot(AppLocale::Ja, 3);
+    let s = snapshot(AppLocale::Ja, cursor_of(201));
     assert!(!s.detail_options.as_ref().unwrap().selected().unwrap().effective);
     assert_eq!(event_at(&renderer, &s, 960.0, 296.0), Some(19692));
 }
@@ -372,6 +373,29 @@ fn ecfn_detail_options_parallel_fades_and_single_shade() {
 
 #[test]
 #[ignore = "requires separately installed ADFX02/ECFN assets"]
+fn ecfn_detail_options_frames_follow_row_categories() {
+    // Source x of each normal-panel frame: blue for LANE / HI-SPEED and JUDGE,
+    // green GAUGE, orange LONG NOTE, red BGA, pink ASSIST / MODIFIER.
+    let frame_x = |category| match category {
+        1 | 7 => 1563.0,
+        2 => 1143.0,
+        4 => 933.0,
+        6 => 1773.0,
+        5 => 1353.0,
+        _ => panic!("unexpected category {category}"),
+    };
+    let mut renderer = renderer();
+    let mut cases: Vec<_> = [101, 201, 601, 501]
+        .map(|id| (id, snapshot(AppLocale::Ja, cursor_of(id))))
+        .into_iter()
+        .collect();
+    // The frozen exit snapshot must keep the colours of the rows it shows.
+    cases.push((0, switching(2, 0, 100)));
+    detail_options::assert_frames_follow_categories(&mut renderer, cases, (6.0, 528.0), frame_x);
+}
+
+#[test]
+#[ignore = "requires separately installed ADFX02/ECFN assets"]
 fn ecfn_detail_options_value_boxes_never_draw_baked_off_text() {
     // option.png bakes "OFF" into the gray value button at (1581,290,175,37).
     // A translucent fill over it leaked that text during every panel fade.
@@ -418,13 +442,13 @@ fn ecfn_detail_options_gpu_previews() {
         renderer.attach_offscreen(bmz_render::renderer::SurfaceSize { width, height }).unwrap();
         let mut scenes = Vec::new();
         for (locale, cursor, scroll) in [
-            (AppLocale::Ja, 0, 0.0),
-            (AppLocale::En, 7, 0.0),
-            (AppLocale::Ja, 3, 0.0),
-            (AppLocale::Ja, 8, 0.0),
-            (AppLocale::Ja, 12, 0.0),
-            (AppLocale::En, 12, 0.0),
-            (AppLocale::En, 14, -0.5),
+            (AppLocale::Ja, cursor_of(101), 0.0),
+            (AppLocale::En, cursor_of(303), 0.0),
+            (AppLocale::Ja, cursor_of(201), 0.0),
+            (AppLocale::Ja, cursor_of(304), 0.0),
+            (AppLocale::Ja, cursor_of(702), 0.0),
+            (AppLocale::En, cursor_of(702), 0.0),
+            (AppLocale::En, cursor_of(501), -0.5),
         ] {
             let mut s = snapshot(locale, cursor);
             s.detail_options_scroll = scroll;

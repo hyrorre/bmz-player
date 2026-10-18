@@ -1273,7 +1273,7 @@ v1・Numbers・Closeを宣言します。旧timer 22表示のみを置換し、2
 | 19300 | CURSORです。表示順の0-based位置 |
 | 19301 | ITEM_COUNTです。全項目数 |
 | 19302 | ITEM_IDです。表示順と独立した安定ID |
-| 19303 | CATEGORY_IDです。1=LANE、2=GAUGE、3=HI-SPEED、4=LONG NOTE、5=ASSIST / MODIFIER、6=BGA、7=JUDGE |
+| 19303 | CATEGORY_IDです。1=LANE / HI-SPEED、2=GAUGE、4=LONG NOTE、5=ASSIST / MODIFIER、6=BGA、7=JUDGE。3（旧HI-SPEED）は欠番 |
 | 19304 | SCOPEです。0=profile共通、4/5/6/7/8/9/10/14=編集対象キーモード、-1=未解決 |
 | 19305 | VALUEです。保存設定の値です。boolは0/1、enumは下記の明示コード、numberは数値そのもの |
 | 19306 | VALUE_INDEXです。bool/enumの0-based選択肢indexです。number、未取得、候補外値は-1 |

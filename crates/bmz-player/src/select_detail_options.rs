@@ -85,21 +85,22 @@ const fn number(
     def
 }
 
+/// Display order. Category IDs are stable: LANE and HI-SPEED share 1 and 3 is retired.
 pub const CATALOG: &[DetailOptionDef] = &[
-    item(101, "sudden", 1, SettingsEntryId::SuddenEnabled, true, 0),
-    item(102, "hidden", 1, SettingsEntryId::HiddenEnabled, true, 0),
-    item(103, "lift", 1, SettingsEntryId::LiftEnabled, true, 0),
-    item(201, "gas-bottom", 2, SettingsEntryId::BottomShiftableGauge, false, 3),
-    item(202, "gas-mode", 2, SettingsEntryId::GaugeAutoShift, false, 5),
-    item(301, "hs-auto", 3, SettingsEntryId::HispeedAutoAdjust, true, 0),
-    item(302, "hs-config", 3, SettingsEntryId::HispeedMode, true, 6),
-    item(303, "constant", 3, SettingsEntryId::Constant, true, 0),
-    number(304, "green-number", 3, SettingsEntryId::TargetGreenNumber, 1, 6000),
-    item(401, "ln-mode", 4, SettingsEntryId::LnModePolicy, false, 6),
-    item(601, "bga", 6, SettingsEntryId::BgaMode, false, 3),
     item(701, "judge-auto", 7, SettingsEntryId::VisualOffsetAutoAdjust, false, 0),
     number(702, "visual-offset", 7, SettingsEntryId::VisualOffsetMs, -500, 500),
     item(703, "judge-algorithm", 7, SettingsEntryId::JudgeAlgorithm, false, 3),
+    item(101, "sudden", 1, SettingsEntryId::SuddenEnabled, true, 0),
+    item(102, "hidden", 1, SettingsEntryId::HiddenEnabled, true, 0),
+    item(103, "lift", 1, SettingsEntryId::LiftEnabled, true, 0),
+    item(301, "hs-auto", 1, SettingsEntryId::HispeedAutoAdjust, true, 0),
+    item(302, "hs-config", 1, SettingsEntryId::HispeedMode, true, 6),
+    item(303, "constant", 1, SettingsEntryId::Constant, true, 0),
+    number(304, "green-number", 1, SettingsEntryId::TargetGreenNumber, 1, 6000),
+    item(201, "gas-bottom", 2, SettingsEntryId::BottomShiftableGauge, false, 3),
+    item(202, "gas-mode", 2, SettingsEntryId::GaugeAutoShift, false, 5),
+    item(401, "ln-mode", 4, SettingsEntryId::LnModePolicy, false, 6),
+    item(601, "bga", 6, SettingsEntryId::BgaMode, false, 3),
     item(501, "scroll-modifier", 5, SettingsEntryId::AssistScrollMode, false, 2),
     item(502, "ln-modifier", 5, SettingsEntryId::AssistLongNoteMode, false, 2),
     item(503, "mine-modifier", 5, SettingsEntryId::AssistMineMode, false, 2),
@@ -138,6 +139,9 @@ impl DetailOptionDef {
         }
     }
 
+    pub fn by_id(id: i64) -> Option<Self> {
+        CATALOG.iter().find(|item| item.id == id).copied()
+    }
     pub fn for_setting(setting: SettingsEntryId) -> Option<Self> {
         CATALOG.iter().find(|item| item.setting == setting).copied()
     }
@@ -417,6 +421,10 @@ mod tests {
     use super::*;
     use crate::i18n::AppLocale;
 
+    fn def(id: i64) -> DetailOptionDef {
+        DetailOptionDef::by_id(id).unwrap()
+    }
+
     fn profile() -> ProfileConfig {
         let mut p = ProfileConfig::new_default("detail-test", "Test", 0);
         p.normalize_play_mode_configs();
@@ -428,7 +436,7 @@ mod tests {
         assert!(CATALOG.len() > 7);
         assert_eq!(
             CATALOG[..4].iter().map(|item| item.id).collect::<Vec<_>>(),
-            [101, 102, 103, 201]
+            [701, 702, 703, 101]
         );
         let ids: std::collections::HashSet<_> = CATALOG.iter().map(|item| item.id).collect();
         assert_eq!(ids.len(), CATALOG.len());
@@ -495,14 +503,14 @@ mod tests {
         p.lane.hidden = 0;
         p.lane.lift = 120;
         p.lane.lift_enabled = false;
-        for item in &CATALOG[..3] {
+        for item in [101, 102, 103].map(def) {
             item.adjust(&mut p, Some(KeyMode::K14), 1);
         }
         assert!(p.play.lane_effect.sudden_enabled());
         assert!(p.play.lane_effect.hidden_enabled());
         assert!(p.lane.lift_enabled);
         assert_eq!(
-            CATALOG[1]
+            def(102)
                 .row(
                     &p,
                     DetailContext {
@@ -516,10 +524,10 @@ mod tests {
                 .value_label,
             "ON"
         );
-        CATALOG[0].adjust(&mut p, Some(KeyMode::K14), -1);
+        def(101).adjust(&mut p, Some(KeyMode::K14), -1);
         assert!(p.play.lane_effect.hidden_enabled());
-        CATALOG[1].adjust(&mut p, Some(KeyMode::K14), -1);
-        CATALOG[2].adjust(&mut p, Some(KeyMode::K14), -1);
+        def(102).adjust(&mut p, Some(KeyMode::K14), -1);
+        def(103).adjust(&mut p, Some(KeyMode::K14), -1);
         assert_eq!((p.lane.sudden, p.lane.hidden, p.lane.lift), (300, 0, 120));
         assert_eq!(p.play_mode_config(KeyMode::K7), k7);
         let saved = toml::to_string(&p).unwrap();
@@ -549,7 +557,7 @@ mod tests {
             assert_eq!(row.value, -1);
         }
         assert_eq!(p.play_mode_config(KeyMode::K7), before);
-        assert!(CATALOG[3].adjust(&mut p, None, 1));
+        assert!(def(201).adjust(&mut p, None, 1));
         let loaded: ProfileConfig = toml::from_str(&toml::to_string(&p).unwrap()).unwrap();
         assert_eq!(loaded.play_mode_config(KeyMode::K7), before);
         assert_eq!(loaded.play.bottom_shiftable_gauge, BottomShiftableGaugeConfig::Easy);
@@ -558,7 +566,7 @@ mod tests {
     #[test]
     fn gas_bottom_is_editable_while_off_and_conditionally_applies() {
         let mut p = profile();
-        let item = CATALOG[3];
+        let item = def(201);
         assert!(item.adjust(&mut p, None, 1));
         assert_eq!(p.play.bottom_shiftable_gauge, BottomShiftableGaugeConfig::Easy);
         for (gas, effective) in [
@@ -656,7 +664,7 @@ mod tests {
             assert!(!item.select_choice(&mut p, context.mode, usize::MAX));
         }
         let mut p = profile();
-        assert!(!CATALOG[0].select_choice(&mut p, None, 1));
+        assert!(!def(101).select_choice(&mut p, None, 1));
         p.play.assist.scroll_mode = AssistScrollMode::Add;
         assert!(
             DetailOptionDef::for_setting(SettingsEntryId::AssistScrollMode)
@@ -673,7 +681,7 @@ mod tests {
         {
             let mut panel = profile();
             let mut legacy = panel.clone();
-            let item = CATALOG.iter().find(|item| item.id == id).unwrap();
+            let item = def(id);
             for _ in 0..2 {
                 assert!(legacy.play.assist.toggle_beatoraja_button(event));
                 assert!(item.adjust(&mut panel, None, 1));
@@ -685,7 +693,7 @@ mod tests {
     #[test]
     fn course_gas_floor_remains_editable_without_claiming_effect() {
         let p = profile();
-        let row = CATALOG[3].row(
+        let row = def(201).row(
             &p,
             DetailContext {
                 mode: Some(KeyMode::K7),

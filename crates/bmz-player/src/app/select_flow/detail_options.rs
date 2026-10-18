@@ -744,14 +744,14 @@ mod tests {
         let mut p = ProfileConfig::new_default("test", "Test", 0);
         p.activate_play_mode(KeyMode::K9);
         let original = toml::to_string(&p.lane).unwrap();
-        assert!(CATALOG[0].select_choice(&mut p, Some(target), 1));
+        assert!(DetailOptionDef::by_id(101).unwrap().select_choice(&mut p, Some(target), 1));
         let edited = toml::to_string(&p.lane).unwrap();
         p.activate_play_mode(KeyMode::K9);
         assert_eq!(toml::to_string(&p.lane).unwrap(), original);
         let mut loaded: ProfileConfig = toml::from_str(&toml::to_string(&p).unwrap()).unwrap();
         loaded.activate_play_mode(KeyMode::K7);
         assert_eq!(toml::to_string(&loaded.lane).unwrap(), edited);
-        let row = CATALOG[0].row(
+        let row = DetailOptionDef::by_id(101).unwrap().row(
             &loaded,
             DetailContext {
                 mode: Some(target),

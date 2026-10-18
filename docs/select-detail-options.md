@@ -7,8 +7,8 @@
 既存configのキー欠落もOFFとし、設定変更時に選曲スキンを再読込します。
 起動・通常再読込・プロファイル切替（新規作成・コピーの有効化を含む）は、
 同じ本体予約option生成を通してこのフラグを渡します。スキン独自設定には保存しません。
-優先順位は製品方針としてSUDDEN+、HIDDEN+、LIFT、GAS下限とします。
-使用頻度の実測に基づくものではありません。
+表示順はユーザーの指定により、大分類のJUDGE、LANE / HI-SPEED、GAUGE、LONG NOTE、BGA、
+ASSIST / MODIFIERの順とします。使用頻度の実測に基づくものではありません。
 
 ON時はE2 hold・E1+E2 holdによるパネル割当を使わず、
 E1で開閉、表示中のE2押下で通常 / 詳細を切り替えます。旧詳細の6設定は新カタログに含みます。
@@ -33,20 +33,20 @@ E1 hold=通常、E2 hold=Assist、E1+E2 hold=旧詳細で、短押し固定表�
 
 |順|安定ID / 内部キー|分類|registry|値|スコープ|
 |---|---|---|---|---|---|
-|1|101 / sudden|LANE|SuddenEnabled|OFF / ON|キーモード|
-|2|102 / hidden|LANE|HiddenEnabled|OFF / ON|キーモード|
-|3|103 / lift|LANE|LiftEnabled|OFF / ON|キーモード|
-|4|201 / gas-bottom|GAUGE|BottomShiftableGauge|ASSIST EASY / EASY / NORMAL|profile共通|
-|5|202 / gas-mode|GAUGE|GaugeAutoShift|OFF / CONTINUE / HARD TO GROOVE / BEST CLEAR / SELECT TO UNDER|profile共通|
-|6|301 / hs-auto|HI-SPEED|HispeedAutoAdjust|OFF / ON|キーモード|
-|7|302 / hs-config|HI-SPEED|HispeedMode|NORMAL / CLASSIC / FLOATING / NORMAL+FLOATING / CLASSIC+FLOATING / LR2|キーモード|
-|8|303 / constant|HI-SPEED|Constant|OFF / ON|キーモード|
-|9|304 / green-number|HI-SPEED|TargetGreenNumber|1..6000、刻み1|キーモード|
-|10|401 / ln-mode|LONG NOTE|LnModePolicy|AUTO(LN/CN/HCN) / FORCE(LN/CN/HCN)|profile共通|
-|11|601 / bga|BGA|BgaMode|ON / AUTO / OFF|profile共通|
-|12|701 / judge-auto|JUDGE|VisualOffsetAutoAdjust|OFF / ON|profile共通|
-|13|702 / visual-offset|JUDGE|VisualOffsetMs|-500..500 ms、刻み1|キーモード|
-|14|703 / judge-algorithm|JUDGE|JudgeAlgorithm|COMBO / DURATION / LOWEST|profile共通|
+|1|701 / judge-auto|JUDGE|VisualOffsetAutoAdjust|OFF / ON|profile共通|
+|2|702 / visual-offset|JUDGE|VisualOffsetMs|-500..500 ms、刻み1|キーモード|
+|3|703 / judge-algorithm|JUDGE|JudgeAlgorithm|COMBO / DURATION / LOWEST|profile共通|
+|4|101 / sudden|LANE / HI-SPEED|SuddenEnabled|OFF / ON|キーモード|
+|5|102 / hidden|LANE / HI-SPEED|HiddenEnabled|OFF / ON|キーモード|
+|6|103 / lift|LANE / HI-SPEED|LiftEnabled|OFF / ON|キーモード|
+|7|301 / hs-auto|LANE / HI-SPEED|HispeedAutoAdjust|OFF / ON|キーモード|
+|8|302 / hs-config|LANE / HI-SPEED|HispeedMode|NORMAL / CLASSIC / FLOATING / NORMAL+FLOATING / CLASSIC+FLOATING / LR2|キーモード|
+|9|303 / constant|LANE / HI-SPEED|Constant|OFF / ON|キーモード|
+|10|304 / green-number|LANE / HI-SPEED|TargetGreenNumber|1..6000、刻み1|キーモード|
+|11|201 / gas-bottom|GAUGE|BottomShiftableGauge|ASSIST EASY / EASY / NORMAL|profile共通|
+|12|202 / gas-mode|GAUGE|GaugeAutoShift|OFF / CONTINUE / HARD TO GROOVE / BEST CLEAR / SELECT TO UNDER|profile共通|
+|13|401 / ln-mode|LONG NOTE|LnModePolicy|AUTO(LN/CN/HCN) / FORCE(LN/CN/HCN)|profile共通|
+|14|601 / bga|BGA|BgaMode|ON / AUTO / OFF|profile共通|
 |15|501 / scroll-modifier|ASSIST / MODIFIER|AssistScrollMode|OFF / REMOVE|profile共通|
 |16|502 / ln-modifier|ASSIST / MODIFIER|AssistLongNoteMode|OFF / REMOVE|profile共通|
 |17|503 / mine-modifier|ASSIST / MODIFIER|AssistMineMode|OFF / REMOVE|profile共通|
@@ -54,6 +54,19 @@ E1 hold=通常、E2 hold=Assist、E1+E2 hold=旧詳細で、短押し固定表�
 |19|505 / judge-area|ASSIST / MODIFIER|AssistJudgeArea|OFF / ON|profile共通|
 |20|506 / mark-note|ASSIST / MODIFIER|AssistMarkNote|OFF / ON|profile共通|
 |21|507 / bpm-guide|ASSIST / MODIFIER|AssistBpmGuide|OFF / ON|profile共通|
+
+LANEとHI-SPEEDは1つの大分類にまとめ、CATEGORY_IDは1を使います。旧HI-SPEEDの3は欠番です。
+安定IDと保存先は変更していません。
+スキンは各列の大分類（`19401+10*s`）で色を切り替えられます。同梱・対応スキンの配色は次のとおりです。
+
+|大分類|CATEGORY_ID|ECFN|mz-select|Luxez-Flat|
+|---|---|---|---|---|
+|JUDGE|7|シアン|シアン|シアン|
+|LANE / HI-SPEED|1|シアン|シアン|シアン|
+|GAUGE|2|緑|緑|緑|
+|LONG NOTE|4|橙|橙|橙|
+|BGA|6|赤|赤|赤|
+|ASSIST / MODIFIER|5|ピンク|ピンク|紫|
 
 ADD系は今回は新E2の選択候補に含めません。`assist.rs`ではSCROLL ADD / MINE ADDは
 変換する一方、REMOVEと同じ実効Assist分類にはならず、LN ADDも追加結果に依存します。
@@ -220,6 +233,10 @@ custom timer上限19999や負のruntime event -20000帯とも意味を共有し�
 
 1920×1080の既存canvas幅を使って7列と枠外2列を配置し、1列274pxを`bmzDetailScroll`に渡します。
 シアンの縁取り、暗い立体ボタン、白文字を既存デザインに合わせます。三角・丸のマーカーは使いません。
+列の縁・見出し・選択時の塗りは大分類で色を変えます。シアンは`panel2.png`、ほかの色は`panel3.png`の
+同じ構造のカード（3pxの縁と単色の見出し）から切り出します。列ごとのimagesetが`19401+10*s`の値で
+画像を選ぶため、destinationやdraw条件は増やしません。選択時の塗りは見出しの色を不透明度96で重ね、
+以前の`07373760`とほぼ同じ見え方にします。
 選択列は明るい枠と見出し背景、現在値は旧パネルの発光カーソルで区別します。
 OFFも通常の値として示し、編集不可・非適用は状態テキストと説明で区別します。
 選択肢外のADD設定は列内の補助値として保持・表示します。全8候補の描画枠を確保します。
@@ -254,7 +271,7 @@ BMZ以外では新部品は何も返さず、旧Assistを表示します。
 
 `select_skinparts/default_detailoptions/parts.lua`を`default_optionpanel`の後、シャッターの前に追加します。
 項目・入力・保存は本体の既存21項目と変更経路を共用し、Luaはsnapshotの描画とeventの配置だけを担当します。
-新規Skin APIやスキン独自の設定値は追加しません。先頭4項目の順序、7K fallback、GASの適用条件も共通です。
+新規Skin APIやスキン独自の設定値は追加しません。表示順、7K fallback、GASの適用条件も共通です。
 
 7可視列＋補助2列を横に並べ、選択項目を中央へ循環・補間します。幅1920のcanvas内を使い、
 `option2_panel_ver1.3.0.png`の紫の角丸枠と黒い値欄、`cursor_ver1.3.0.png`のオレンジの選択素材を切り出します。
@@ -264,6 +281,11 @@ BMZ以外では新部品は何も返さず、旧Assistを表示します。
 黒い値欄も、元画像の角丸ボタンだけを横帯に分けて切り出します。四隅と右端・下端の紫の背景を
 描画対象から除き、拡大後の帯の境界を共通の座標で丸めて隙間や重なりを防ぎます。
 既存画像を加工せず、背景・列・説明欄を半透明にして背後の選曲画面を見せます。
+枠・見出し・選択時の塗りは大分類で色を変えます。紫のカードと角の形状が完全に一致するカードだけを使い、
+シアン・橙・赤は`option3_panel_ver1.3.0.png`のBGA・GAS・判定自動調整、緑は`option1_panel_bmz.png`の
+グルーヴゲージから切り出します。塗りは各カードの内側の縁を1px切り出し、見出しは不透明度160、
+選択時は128で描きます。紫は以前の`35085CA0` / `34065780`とほぼ同じ色です。
+色は列ごとのimagesetが`19401+10*s`の値で選び、Luaのテーブル量の上限内に収めます。
 曲情報と同じ`font_sub`（26px）を見出し・説明へ、IRと同じ`font_sub_small`（18px）を状態・理由へ使用します。
 候補と現在値は部品内に同梱する`NotoSansCJKjp-Medium.otf`（weight 500）で、
 縁取りと影を付けずに描画します。候補の字形が枠の中央に収まるよう、フォントのメトリクスに合わせて配置します。
@@ -302,8 +324,11 @@ BMZ以外では新部品がnilを返し、元のUIを維持します。
 FORCEバッジを提供し、experimental OFFでも有効です。一方の部品が欠落・失敗しても他方の拡張は維持します。
 
 7可視列＋補助2列、中央選択、274pxの`bmzDetailScroll`を使用します。
-既存`option.png`の2P「譜面の配置」枠を分割して流用します。シアンの外枠だけでなく、
+既存`option.png`の通常パネルの枠を分割して流用します。外枠だけでなく、
 内側の縁と上部のグラデーションも元の厚みで保持し、中央列の枠だけ明るくします。
+枠の色は大分類で変え、シアンは2P「譜面の配置」、緑は「グルーヴゲージ」、橙は1P「譜面の配置」、
+赤は「DPオプション」、ピンクは「スクロール固定」の枠を使います。いずれも幅209pxの同じ構造で、
+下端の位置だけが異なります。列ごとのimagesetが`19401+10*s`の値で画像を選びます。
 値欄は2P側の灰色ボタンから文字のない縁だけを切り出し、3pxの4辺と内側の黒を重ねずに描きます。
 ボタン素材には「OFF」が焼き込まれているため全体を描かず、フェード中の半透明でも透けません。
 選択時は通常パネルと同じ175×37のオレンジ素材を値欄全体へ加算合成し、

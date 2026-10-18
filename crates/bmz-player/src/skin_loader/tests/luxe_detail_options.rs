@@ -1,3 +1,4 @@
+use super::detail_options::cursor_of;
 use super::*;
 use crate::i18n::AppLocale;
 use crate::select_detail_options::CATALOG;
@@ -43,7 +44,7 @@ fn close(s: &mut SelectSnapshot, next: u8, elapsed: i64) {
 }
 
 fn switching(from: u8, to: u8, elapsed: i64) -> SelectSnapshot {
-    let mut s = snapshot(AppLocale::Ja, 0);
+    let mut s = snapshot(AppLocale::Ja, cursor_of(101));
     if from == 2 {
         close(&mut s, to, elapsed);
     } else if to != 2 {
@@ -117,7 +118,7 @@ fn luxe_detail_options_uses_existing_artwork_and_fonts_with_complete_labels() {
         )
         .unwrap();
         for locale in [AppLocale::Ja, AppLocale::En] {
-            let s = snapshot(locale, 0);
+            let s = snapshot(locale, cursor_of(101));
             for row in s.detail_options.unwrap().items.iter() {
                 for label in [
                     &row.label,
@@ -241,7 +242,7 @@ fn luxe_detail_options_uses_existing_artwork_and_fonts_with_complete_labels() {
     let mut renderer = Renderer::default();
     install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
         .unwrap();
-    renderer.prepare_scene(AppSceneSnapshot::Select(snapshot(AppLocale::Ja, 0)));
+    renderer.prepare_scene(AppSceneSnapshot::Select(snapshot(AppLocale::Ja, cursor_of(101))));
     // These points are inside the four rounded corners of the selected column.
     // Opaque fill from the original 24x24 corner tiles must not cover them.
     for x in [831.0 + 20.0, 831.0 + 258.0 - 20.0] {
@@ -257,10 +258,34 @@ fn luxe_detail_options_uses_existing_artwork_and_fonts_with_complete_labels() {
 }
 
 #[test]
+fn luxe_detail_options_frames_follow_row_categories() {
+    // Left edge of each rounded option card with the purple card's corners:
+    // blue LANE / HI-SPEED and JUDGE, green GAUGE, orange LONG NOTE, red BGA and
+    // the original purple ASSIST / MODIFIER.
+    let card_x = |category| match category {
+        1 | 7 => 483.0,
+        2 => 749.0,
+        4 => 414.0,
+        6 => 713.0,
+        5 => 607.0,
+        _ => panic!("unexpected category {category}"),
+    };
+    let mut cases: Vec<_> = [101, 201, 601, 501]
+        .map(|id| (id, snapshot(AppLocale::Ja, cursor_of(id))))
+        .into_iter()
+        .collect();
+    // The exit starts from the settled columns with the rows it froze.
+    let mut closing = snapshot(AppLocale::Ja, cursor_of(601));
+    close(&mut closing, 0, 0);
+    cases.push((0, closing));
+    detail_options::assert_frames_follow_categories(&mut renderer(), cases, (7.0, 502.0), card_x);
+}
+
+#[test]
 fn luxe_detail_options_handles_empty_locked_inactive_and_external_rows() {
     let mut renderer = renderer();
     for count in [0, 1, 3, 6] {
-        let mut s = snapshot(AppLocale::Ja, 0);
+        let mut s = snapshot(AppLocale::Ja, cursor_of(101));
         let panel = std::sync::Arc::make_mut(s.detail_options.as_mut().unwrap());
         panel.items = panel.items[..count].to_vec().into();
         renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
@@ -272,9 +297,9 @@ fn luxe_detail_options_handles_empty_locked_inactive_and_external_rows() {
             );
         }
     }
-    let mut s = snapshot(AppLocale::Ja, 8);
+    let mut s = snapshot(AppLocale::Ja, cursor_of(304));
     let panel = std::sync::Arc::make_mut(s.detail_options.as_mut().unwrap());
-    let row = &mut std::sync::Arc::make_mut(&mut panel.items)[8];
+    let row = &mut std::sync::Arc::make_mut(&mut panel.items)[cursor_of(304)];
     row.value = 2;
     row.value_index = -1;
     row.value_label = "ADD".into();
@@ -287,7 +312,7 @@ fn luxe_detail_options_handles_empty_locked_inactive_and_external_rows() {
             DrawCommand::Text { text, .. } if text == label)));
     }
     assert_eq!(event_at(&renderer, &s, 960.0, 299.0), Some(19313));
-    let s = snapshot(AppLocale::Ja, 3);
+    let s = snapshot(AppLocale::Ja, cursor_of(201));
     assert!(!s.detail_options.as_ref().unwrap().selected().unwrap().effective);
     assert_eq!(event_at(&renderer, &s, 960.0, 299.0), Some(19692));
 }
@@ -355,7 +380,13 @@ fn luxe_detail_options_enter_exit_and_other_panels_animate_together() {
                 for slot in 0..7 {
                     let x = 138.0 + slot as f32 * 274.0 + offset;
                     if (0.0..1920.0).contains(&x) {
-                        assert_eq!(event_at(&renderer, &s, x, 299.0), Some(19500 + slot * 64));
+                        // Number rows have no choice cell; their value box selects the column.
+                        let number = matches!(
+                            s.detail_options.as_ref().unwrap().row(slot as usize).unwrap().kind,
+                            bmz_render::scene::detail_options::DetailValueKind::Number { .. }
+                        );
+                        let expected = if number { 19310 + slot } else { 19500 + slot * 64 };
+                        assert_eq!(event_at(&renderer, &s, x, 299.0), Some(expected));
                     }
                 }
             } else {
@@ -469,13 +500,13 @@ fn luxe_detail_options_gpu_previews() {
         renderer.attach_offscreen(bmz_render::renderer::SurfaceSize { width, height }).unwrap();
         let mut scenes = Vec::new();
         for (locale, cursor, scroll) in [
-            (AppLocale::Ja, 0, 0.0),
-            (AppLocale::En, 7, 0.0),
-            (AppLocale::Ja, 3, 0.0),
-            (AppLocale::Ja, 8, 0.0),
-            (AppLocale::Ja, 12, 0.0),
-            (AppLocale::En, 12, 0.0),
-            (AppLocale::En, 14, -0.5),
+            (AppLocale::Ja, cursor_of(101), 0.0),
+            (AppLocale::En, cursor_of(303), 0.0),
+            (AppLocale::Ja, cursor_of(201), 0.0),
+            (AppLocale::Ja, cursor_of(304), 0.0),
+            (AppLocale::Ja, cursor_of(702), 0.0),
+            (AppLocale::En, cursor_of(702), 0.0),
+            (AppLocale::En, cursor_of(501), -0.5),
         ] {
             let mut s = snapshot(locale, cursor);
             s.detail_options_scroll = scroll;
