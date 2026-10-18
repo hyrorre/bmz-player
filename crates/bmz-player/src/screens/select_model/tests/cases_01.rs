@@ -428,6 +428,60 @@ fn load_select_items_in_folder_shows_non_leaf_subfolder_as_folder() {
     assert!(matches!(&items[1], SelectItem::Chart(r) if r.display_title() == "B"));
 }
 
+fn folder_listing(paths: &[&str], folder: &str) -> Vec<SelectItem> {
+    let (mut library_db, score_db) = open_in_memory_dbs();
+    for (index, path) in paths.iter().enumerate() {
+        let chart = chart(&format!("{index}"));
+        library_db.upsert_chart_import(&record_for_chart(path, &chart)).unwrap();
+    }
+    load_select_items_in_folder(&library_db, &score_db, folder, LnPolicySetting::AutoLn).unwrap()
+}
+
+fn listing_shape(items: &[SelectItem]) -> Vec<String> {
+    items
+        .iter()
+        .map(|item| match item {
+            SelectItem::Folder { path, name, .. } => format!("folder {name} {path}"),
+            SelectItem::Chart(chart) => format!("chart {}", chart.display_title()),
+            _ => "other".to_string(),
+        })
+        .collect()
+}
+
+#[test]
+fn archive_with_one_inner_folder_lists_like_the_extracted_folder() {
+    // A song archive wrapping one folder shows its charts like a top-level archive.
+    let wrapped = folder_listing(&["/bms/pack.zip!/song/a.bms"], "/bms");
+    assert_eq!(listing_shape(&wrapped), ["chart 0"]);
+    assert_eq!(
+        listing_shape(&folder_listing(&["/bms/pack.zip!/a.bms"], "/bms")),
+        listing_shape(&wrapped)
+    );
+
+    // A pack archive wrapping one folder of songs shows that folder, not `pack.rar!`.
+    let pack =
+        folder_listing(&["/bms/pack.RAR!/Pack/x/a.bms", "/bms/pack.RAR!/Pack/y/b.bms"], "/bms");
+    assert_eq!(listing_shape(&pack), ["folder Pack /bms/pack.RAR!/Pack"]);
+    let inside = folder_listing(
+        &["/bms/pack.RAR!/Pack/x/a.bms", "/bms/pack.RAR!/Pack/y/b.bms"],
+        "/bms/pack.RAR!/Pack",
+    );
+    assert_eq!(listing_shape(&inside), ["chart 0", "chart 1"]);
+}
+
+#[test]
+fn archive_level_stays_when_it_has_several_folders_or_its_own_charts() {
+    let several = folder_listing(&["/bms/set.7z!/x/a.bms", "/bms/set.7z!/y/b.bms"], "/bms");
+    assert_eq!(listing_shape(&several), ["folder set.7z! /bms/set.7z!"]);
+
+    let own_charts = folder_listing(&["/bms/set.zip!/a.bms", "/bms/set.zip!/x/b.bms"], "/bms");
+    assert_eq!(listing_shape(&own_charts), ["folder set.zip! /bms/set.zip!"]);
+
+    // An ordinary folder ending with `!` is not an archive.
+    let folder = folder_listing(&["/bms/Wow!/song/a.bms"], "/bms");
+    assert_eq!(listing_shape(&folder), ["folder Wow! /bms/Wow!"]);
+}
+
 #[test]
 fn load_select_items_in_folder_with_filters_hides_charts_outside_active_roots() {
     let (mut library_db, score_db) = open_in_memory_dbs();

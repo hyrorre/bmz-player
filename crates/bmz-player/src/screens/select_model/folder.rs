@@ -94,7 +94,18 @@ pub fn load_select_items_in_folder_for_rule_mode_with_filters(
     let mut non_leaf_folders: Vec<(String, String)> = Vec::new();
     let mut leaf_folder_paths: Vec<String> = Vec::new();
     for (name, has_grandchild) in child_state {
-        let child_path = format!("{folder_key}/{name}");
+        let mut child_path = format!("{folder_key}/{name}");
+        let mut name = name;
+        let mut has_grandchild = has_grandchild;
+        // `pack.zip!/song/...` の書庫フォルダ1段は、展開済みの `song/` と同じに見せる。
+        if has_grandchild
+            && is_archive_folder_name(&name)
+            && let Some((inner, inner_deeper)) = single_archive_subfolder(&descendants, &child_path)
+        {
+            child_path = format!("{child_path}/{inner}");
+            name = inner;
+            has_grandchild = inner_deeper;
+        }
         if has_grandchild {
             non_leaf_folders.push((child_path, name));
         } else {
@@ -133,4 +144,35 @@ pub fn load_select_items_in_folder_for_rule_mode_with_filters(
     items.extend(chart_items);
 
     Ok(items)
+}
+
+/// `pack.zip!` のような書庫のフォルダ名か。`!` の前がZIP / RAR / 7zの拡張子の場合だけ。
+fn is_archive_folder_name(name: &str) -> bool {
+    name.strip_suffix('!')
+        .is_some_and(|archive| crate::chart_source::is_archive_file(std::path::Path::new(archive)))
+}
+
+/// 書庫フォルダの直下に譜面が無く、フォルダが1つだけなら、その名前と、
+/// さらに下にフォルダがあるかを返す。
+fn single_archive_subfolder(descendants: &[String], archive_path: &str) -> Option<(String, bool)> {
+    let prefix = format!("{archive_path}/");
+    let mut inner: Option<&str> = None;
+    let mut deeper = false;
+    for descendant in descendants {
+        if descendant == archive_path {
+            // 書庫の直下にも譜面がある。
+            return None;
+        }
+        let Some(rest) = descendant.strip_prefix(&prefix) else { continue };
+        let (head, tail) = rest.split_once('/').unwrap_or((rest, ""));
+        if head.is_empty() {
+            continue;
+        }
+        match inner {
+            Some(existing) if existing != head => return None,
+            _ => inner = Some(head),
+        }
+        deeper |= !tail.is_empty();
+    }
+    inner.map(|inner| (inner.to_string(), deeper))
 }
