@@ -517,6 +517,7 @@ macro_rules! skin_document_render_select_render_methods {
                 operating_time_ms: snapshot.operating_time_ms,
                 logical_input_held: snapshot.skin_input.held,
                 skin_offsets: snapshot.skin_offsets,
+                exit_hold: snapshot.exit_hold,
                 select_bar_elapsed_ms: (snapshot.selection_time.0 / 1_000)
                     .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
                 select_option_panel_elapsed_ms: (snapshot.option_panel_time.0 / 1_000)

@@ -257,30 +257,61 @@ fn push_exit_hold_indicator(commands: &mut Vec<DrawCommand>, progress: f32) {
     if progress <= 0.0 {
         return;
     }
-    // skin docが画面全体に画像を敷くケースで、DrawCommand::Rect は images より前に描画され
-    // 隠れてしまうため、文字レイヤ(=最前面)で全要素を描く。
-    const TOTAL_BLOCKS: usize = 16;
-    let filled = (progress * TOTAL_BLOCKS as f32).round() as usize;
-    let background_bar: String = "\u{2588}".repeat(TOTAL_BLOCKS); // ████ (U+2588)
-    let filled_bar: String = "\u{2588}".repeat(filled);
-    let text = TextRenderer;
-    text.push_text(
-        commands,
-        &background_bar,
-        BitmapTextStyle { x: 0.005, y: 0.005, cell: 0.006, color: Color::rgb(0.22, 0.22, 0.26) },
+    const PANEL: Rect = Rect { x: 0.008, y: 0.012, width: 0.18, height: 0.064 };
+    const ACCENT_WIDTH: f32 = 0.003;
+    const LABEL_TOP: f32 = 0.010;
+    const LABEL_SIZE: f32 = 0.022;
+    const TRACK_INSET_X: f32 = 0.012;
+    const TRACK_TOP: f32 = 0.044;
+    const TRACK_HEIGHT: f32 = 0.008;
+    // 押し始めの一瞬だけ出て消える場合にちらつかないよう、序盤でフェードインする。
+    const FADE_IN_PROGRESS: f32 = 0.08;
+    const FILL_START: Color = Color::rgb(0.96, 0.66, 0.28);
+    const FILL_END: Color = Color::rgb(0.96, 0.30, 0.28);
+
+    let alpha = (progress / FADE_IN_PROGRESS).min(1.0);
+    let fill = Color::rgba(
+        FILL_START.r + (FILL_END.r - FILL_START.r) * progress,
+        FILL_START.g + (FILL_END.g - FILL_START.g) * progress,
+        FILL_START.b + (FILL_END.b - FILL_START.b) * progress,
+        alpha,
     );
-    if filled > 0 {
-        text.push_text(
-            commands,
-            &filled_bar,
-            BitmapTextStyle { x: 0.005, y: 0.005, cell: 0.006, color: Color::rgb(0.92, 0.4, 0.32) },
-        );
-    }
-    text.push_text(
-        commands,
-        "HOLD ESC TO EXIT",
-        BitmapTextStyle { x: 0.005, y: 0.045, cell: 0.005, color: Color::rgb(0.95, 0.95, 0.95) },
-    );
+    commands.push(DrawCommand::Rect {
+        rect: PANEL,
+        color: Color::rgba(0.04, 0.05, 0.07, 0.84 * alpha),
+    });
+    commands.push(DrawCommand::Rect { rect: Rect { width: ACCENT_WIDTH, ..PANEL }, color: fill });
+    commands.push(DrawCommand::Text {
+        origin: Point { x: PANEL.x + ACCENT_WIDTH, y: PANEL.y + LABEL_TOP },
+        text: "HOLD ESC TO EXIT".to_string(),
+        caret: None,
+        post_scale: Point { x: 1.0, y: 1.0 },
+        style: TextStyle {
+            font_id: None,
+            size: LABEL_SIZE,
+            bitmap_size: None,
+            color: Color::rgba(0.94, 0.95, 0.97, alpha),
+            layer: TextLayer::Ui,
+            align: TextAlign::Center,
+            max_width: PANEL.width - ACCENT_WIDTH,
+            overflow: TextOverflow::Overflow,
+            wrapping: false,
+            outline: None,
+            shadow: None,
+        },
+    });
+    let track = Rect {
+        x: PANEL.x + ACCENT_WIDTH + TRACK_INSET_X,
+        y: PANEL.y + TRACK_TOP,
+        width: PANEL.width - ACCENT_WIDTH - TRACK_INSET_X * 2.0,
+        height: TRACK_HEIGHT,
+    };
+    commands
+        .push(DrawCommand::Rect { rect: track, color: Color::rgba(1.0, 1.0, 1.0, 0.14 * alpha) });
+    commands.push(DrawCommand::Rect {
+        rect: Rect { width: track.width * progress, ..track },
+        color: fill,
+    });
 }
 
 fn advance_skin_dynamic_timers(

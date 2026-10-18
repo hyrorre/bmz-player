@@ -1743,6 +1743,45 @@ Lua skinはロード結果のtableに同じキーを設定します。`leadMs`�
 レーン外に置く場合は、レーン側の数字の桁数を`draw: "number(19062) >= 10 && number(19062) < 100"`
 のような条件で判定し、「»」と反対側の数字の位置を変えてレーン側の数字をレーンへ寄せます。
 
+### BMZ Exit Hold Refs
+
+選曲画面のルートでEscapeを長押しして終了するときの進捗を、選曲skinが自前のデザインで
+表示するためのBMZ拡張です。既定では本体が画面左上に「HOLD ESC TO EXIT」のパネルと
+進捗バーを重ねます。skinが次の宣言をすると、本体の表示を出さずにskinの表示だけを使います。
+
+```json
+{ "bmzExitHold": { "builtin": false } }
+```
+
+Lua skinはロード結果のtableに同じキー（`bmzExitHold = { builtin = false }`）を設定します。
+`builtin`の省略時と宣言自体がない場合は`true`で、本体の表示を残します。
+次のref / option / timerは宣言に関係なく返すため、本体の表示に重ねる演出にも使えます。
+
+| ID | kind | meaning |
+| ---: | --- | --- |
+| 19070 | number / graph | 進捗です。numberは`0..100`（切り捨て）、graphの`type`では`0.0..1.0` |
+| 19071 | number | 終了までの残りms。長押ししていない間は`0` |
+| 19072 | number | 終了に必要な長押し時間ms（現在は1200） |
+| 19073 | option | Escapeを終了に向けて長押ししている |
+| 19074 | timer | 長押し開始からの経過ms。長押ししていない間はOFF |
+
+- 長押しの開始・取消の条件は操作仕様（[controls.md](controls.md)）と同じです。
+  フォルダ内のEscapeやパネル表示中は進みません。
+- 宣言はjson / Lua skinだけが対象です。LR2 CSVには宣言の手段がないため、本体の表示を残します
+  （refは利用できます）。
+
+```json
+{
+  "bmzExitHold": { "builtin": false },
+  "graph": [{ "id": "exit_bar", "src": "parts", "x": 0, "y": 0, "w": 400, "h": 8, "type": 19070, "angle": 0 }],
+  "destination": [
+    { "id": "exit_bar", "op": [19073], "timer": 19074, "loop": 150,
+      "dst": [{ "time": 0, "x": 40, "y": 40, "w": 400, "h": 8, "a": 0 },
+              { "time": 150, "x": 40, "y": 40, "w": 400, "h": 8, "a": 255 }] }
+  ]
+}
+```
+
 ### BMZ Chart Text Refs
 
 BMSの`#TEXTxx`とチャンネル99（`#xxx99`）で指定した譜面テキストを、既存のtext部品で

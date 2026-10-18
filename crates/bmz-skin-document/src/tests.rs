@@ -300,3 +300,14 @@ fn chart_text_reference_is_detected_from_text_ref_and_value() {
         assert_eq!(document.references_chart_text(), expected, "{json}");
     }
 }
+
+#[test]
+fn bmz_exit_hold_declaration_defaults_to_the_builtin_indicator() {
+    let decode = |json: &str| serde_json::from_str::<SkinDocument>(json).unwrap().bmz_exit_hold;
+    assert_eq!(decode("{}"), None);
+    assert_eq!(decode(r#"{"bmzExitHold":{}}"#), Some(SkinExitHoldDef { builtin: true }));
+    assert_eq!(
+        decode(r#"{"bmzExitHold":{"builtin":false}}"#),
+        Some(SkinExitHoldDef { builtin: false })
+    );
+}

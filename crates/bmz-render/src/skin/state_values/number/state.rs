@@ -346,6 +346,9 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
         SKIN_REF_BMZ_BPM_CHANGE_REMAINING_MS..=SKIN_REF_BMZ_BPM_CHANGE_RATIO_PERCENT => {
             bpm_change_number(ref_id, state)
         }
+        SKIN_REF_BMZ_EXIT_HOLD_PERCENT => Some((state.exit_hold.progress() * 100.0).floor() as i64),
+        SKIN_REF_BMZ_EXIT_HOLD_REMAINING_MS => Some(i64::from(state.exit_hold.remaining_ms())),
+        SKIN_REF_BMZ_EXIT_HOLD_DURATION_MS => Some(i64::from(state.exit_hold.duration_ms)),
         SKIN_REF_BMZ_JUDGE_LANE_DURATION_BASE..=SKIN_REF_BMZ_JUDGE_LANE_DURATION_LAST => state
             .judge_lane_timing_ms[(ref_id - SKIN_REF_BMZ_JUDGE_LANE_DURATION_BASE) as usize]
             .map(|ms| -(ms as i64)),

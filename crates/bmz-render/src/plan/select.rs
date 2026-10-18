@@ -12,7 +12,11 @@ pub(super) fn plan_select(
             &skin.select_document_items_with_dynamic_timers(snapshot, Some(dynamic_timers)),
         );
         // timer/op条件で空になるフレームもスキンの演出として扱う。
-        push_exit_hold_indicator(&mut commands, snapshot.exit_hold_progress);
+        // `bmzExitHold.builtin: false` のスキンは 19070..19074 で自前の表示を描く。
+        if skin.document().and_then(|document| document.bmz_exit_hold).is_none_or(|def| def.builtin)
+        {
+            push_exit_hold_indicator(&mut commands, snapshot.exit_hold.progress());
+        }
         push_scene_overlays(&mut commands, &snapshot.overlay);
         return DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands };
     }
@@ -135,7 +139,7 @@ pub(super) fn plan_select(
         BitmapTextStyle { x: 0.08, y: 0.895, cell: 0.005, color: Color::rgb(0.58, 0.67, 0.7) },
     );
 
-    push_exit_hold_indicator(&mut commands, snapshot.exit_hold_progress);
+    push_exit_hold_indicator(&mut commands, snapshot.exit_hold.progress());
     push_scene_overlays(&mut commands, &snapshot.overlay);
 
     DrawPlan { clear: Color::rgb(0.02, 0.025, 0.03), commands }

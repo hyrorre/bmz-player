@@ -616,3 +616,12 @@ fn graph_value_returns_zero_when_no_best_score() {
     assert_eq!(graph_value(113, &state), 0.0);
     assert_eq!(graph_value(115, &state), 0.0);
 }
+
+#[test]
+fn graph_value_exit_hold_progress_follows_the_hold() {
+    let mut state = SkinDrawState::default();
+    assert_eq!(graph_value(SKIN_REF_BMZ_EXIT_HOLD_PERCENT, &state), 0.0);
+    state.exit_hold =
+        crate::snapshot::ExitHoldSnapshot { elapsed_ms: Some(300), duration_ms: 1_200 };
+    assert!(approx_eq(graph_value(SKIN_REF_BMZ_EXIT_HOLD_PERCENT, &state), 0.25));
+}

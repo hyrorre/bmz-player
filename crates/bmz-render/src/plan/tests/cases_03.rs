@@ -1269,7 +1269,7 @@ fn empty_select_skin_keeps_overlays_and_exit_indicator() {
     let document: SkinDocument = serde_json::from_str(r#"{"type":5}"#).unwrap();
     let skin = SkinContext::from_manifest_and_document(SkinManifest::default(), document, []);
     let snapshot = crate::scene::SelectSnapshot {
-        exit_hold_progress: 0.5,
+        exit_hold: crate::snapshot::ExitHoldSnapshot { elapsed_ms: Some(600), duration_ms: 1_200 },
         overlay: crate::snapshot::OverlaySnapshot {
             fps_text: "FPS 60".into(),
             ..Default::default()
@@ -1284,7 +1284,7 @@ fn empty_select_skin_keeps_overlays_and_exit_indicator() {
     assert!(plan.commands.iter().any(|command| matches!(command,
         DrawCommand::Text { text, .. } if text == "FPS 60")));
     assert!(plan.commands.iter().any(|command| matches!(command,
-        DrawCommand::Text { text, .. } if text == &"\u{2588}".repeat(8))));
+        DrawCommand::Text { text, .. } if text == "HOLD ESC TO EXIT")));
     assert!(!plan.commands.iter().any(|command| matches!(command,
         DrawCommand::Text { text, .. } if text == "SELECT")));
 }

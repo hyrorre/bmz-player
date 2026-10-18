@@ -487,7 +487,7 @@ impl WinitApp {
             current_folder,
             key_hint: self.select.select_keys.key_hint().to_string(),
             option_hint: self.select.select_keys.option_hint().to_string(),
-            exit_hold_progress: self.select_exit_hold_progress(),
+            exit_hold: self.select_exit_hold_snapshot(),
             overlay: OverlaySnapshot::default(),
             stage_background: self
                 .select

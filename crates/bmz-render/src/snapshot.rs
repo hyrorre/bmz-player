@@ -139,6 +139,32 @@ pub struct BpmChangePreviewSnapshot {
     pub since_last_change_ms: Option<i32>,
 }
 
+/// Select ESC hold-to-exit state (BMZ refs `19070..=19074`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ExitHoldSnapshot {
+    /// Milliseconds since ESC was pressed toward exit; `None` while not held.
+    pub elapsed_ms: Option<i32>,
+    /// Hold duration required to exit.
+    pub duration_ms: i32,
+}
+
+impl ExitHoldSnapshot {
+    /// Progress in `0.0..=1.0`; `0.0` while not held.
+    pub fn progress(self) -> f32 {
+        match self.elapsed_ms {
+            Some(elapsed) if self.duration_ms > 0 => {
+                (elapsed as f32 / self.duration_ms as f32).clamp(0.0, 1.0)
+            }
+            Some(_) => 1.0,
+            None => 0.0,
+        }
+    }
+
+    pub fn remaining_ms(self) -> i32 {
+        self.elapsed_ms.map_or(0, |elapsed| self.duration_ms.saturating_sub(elapsed).max(0))
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct ResultTimingMetrics {
     pub initialized: bool,

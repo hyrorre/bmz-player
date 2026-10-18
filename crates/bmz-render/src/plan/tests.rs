@@ -86,3 +86,5 @@ mod cases_04;
 mod cases_05;
 #[path = "tests/chart_text.rs"]
 mod chart_text;
+#[path = "tests/exit_hold.rs"]
+mod exit_hold;
