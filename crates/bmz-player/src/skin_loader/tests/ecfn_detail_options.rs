@@ -371,6 +371,43 @@ fn ecfn_detail_options_parallel_fades_and_single_shade() {
 }
 
 #[test]
+#[ignore = "requires separately installed ADFX02/ECFN assets"]
+fn ecfn_detail_options_value_boxes_never_draw_baked_off_text() {
+    // option.png bakes "OFF" into the gray value button at (1581,290,175,37).
+    // A translucent fill over it leaked that text during every panel fade.
+    let (text_x, text_y) = (1581.0 + 87.5, 290.0 + 18.5);
+    let mut renderer = renderer();
+    for (from, to) in [(0, 2), (2, 0), (1, 2), (2, 1)] {
+        for elapsed in [0, 50, 100, 150, 199, 300] {
+            renderer.prepare_scene(AppSceneSnapshot::Select(switching(from, to, elapsed)));
+            let commands = &renderer.last_plan().unwrap().commands;
+            let mut rims = 0;
+            for command in commands {
+                let DrawCommand::Image { rect, uv, source_size: Some(size), .. } = command else {
+                    continue;
+                };
+                let (w, h) = (rect.width * 1920.0, rect.height * 1080.0);
+                if (w - 236.0).abs() < 0.1 && (h - 3.0).abs() < 0.1 {
+                    rims += 1;
+                }
+                let (x0, y0) = (uv.x * size.width, uv.y * size.height);
+                let (x1, y1) = (x0 + uv.width * size.width, y0 + uv.height * size.height);
+                assert!(
+                    !((w - 236.0).abs() < 0.1
+                        && (h - 44.0).abs() < 0.1
+                        && (x0..x1).contains(&text_x)
+                        && (y0..y1).contains(&text_y)),
+                    "{from}->{to} {elapsed}ms draws the baked OFF button: {command:?}"
+                );
+            }
+            if to == 2 || elapsed < 200 {
+                assert!(rims > 0, "{from}->{to} {elapsed}ms has no value box rims");
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires ADFX02/ECFN assets and a GPU; writes previews to a temporary directory"]
 fn ecfn_detail_options_gpu_previews() {
     let output = unique_test_dir("bmz-ecfn-detail-preview");
