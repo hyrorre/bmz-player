@@ -286,6 +286,109 @@ fn luxe_detail_options_number_values_use_an_unselected_button() {
 }
 
 #[test]
+fn luxe_detail_options_draws_all_buttons_before_the_choice_glow_and_labels() {
+    let decoded = detail_options::decode_experimental(&skin_path(), SkinKind::Select).unwrap();
+    let texture = |id| {
+        bmz_render::plan::TextureId(
+            decoded.sources.iter().find(|s| s.source_id == id).unwrap().texture.0,
+        )
+    };
+    let cursor_texture = texture("luxe_detail_cursor");
+    let card_textures = [
+        texture("luxe_detail_panel"),
+        texture("luxe_detail_panel1"),
+        texture("luxe_detail_panel3"),
+    ];
+    let mut renderer = Renderer::default();
+    install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
+        .unwrap();
+    for choice in 0..3 {
+        let mut s = snapshot(AppLocale::Ja, cursor_of(703));
+        let panel = std::sync::Arc::make_mut(s.detail_options.as_mut().unwrap());
+        let row = &mut std::sync::Arc::make_mut(&mut panel.items)[cursor_of(703)];
+        row.value_index = choice;
+        row.value = row.choices[choice as usize].value;
+        let labels: Vec<_> = row.choices.iter().map(|c| c.label.clone()).collect();
+        renderer.prepare_scene(AppSceneSnapshot::Select(s));
+        let commands = &renderer.last_plan().unwrap().commands;
+        let mut buttons = Vec::new();
+        let mut cursors = Vec::new();
+        let mut texts = Vec::new();
+        for (index, command) in commands.iter().enumerate() {
+            match command {
+                DrawCommand::Image { texture, rect, .. }
+                    if rect.x >= 828.0 / 1920.0 && rect.x < 1092.0 / 1920.0 =>
+                {
+                    if *texture == cursor_texture {
+                        cursors.push(index);
+                    }
+                    if card_textures.contains(texture) && (rect.height * 1080.0 - 38.0).abs() < 0.1
+                    {
+                        buttons.push(index);
+                    }
+                }
+                DrawCommand::Text { origin, text, .. }
+                    if origin.x > 830.0 / 1920.0
+                        && origin.x < 1090.0 / 1920.0
+                        && labels.contains(text) =>
+                {
+                    texts.push(index)
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(buttons.len(), 9);
+        assert_eq!(cursors.len(), 3);
+        assert_eq!(texts.len(), 3);
+        assert!(
+            buttons.iter().max().unwrap() < cursors.iter().min().unwrap(),
+            "choice {choice}: a neighboring button cuts off the cursor glow"
+        );
+        assert!(
+            cursors.iter().max().unwrap() < texts.iter().min().unwrap(),
+            "choice {choice}: the cursor overlays a choice label"
+        );
+    }
+}
+
+#[test]
+fn luxe_detail_options_orange_header_contains_no_baked_label_pixels() {
+    let decoded = detail_options::decode_experimental(&skin_path(), SkinKind::Select).unwrap();
+    for id in ["grad", "grad_l", "grad_r"] {
+        let image = decoded
+            .document
+            .image
+            .iter()
+            .find(|i| i.id == format!("luxe_detail_{id}_orange"))
+            .unwrap();
+        let source = decoded
+            .sources
+            .iter()
+            .find(|s| s.source_id == image.src)
+            .unwrap()
+            .asset
+            .as_ref()
+            .unwrap();
+        for x in image.x..image.x + image.w {
+            let mut previous_red = 255;
+            for y in image.y..image.y + image.h {
+                let offset = ((y as u32 * source.width + x as u32) * 4) as usize;
+                let pixel = &source.pixels[offset..offset + 4];
+                assert!(
+                    pixel[0] > pixel[1] && pixel[1] > 0 && pixel[2] == 0 && pixel[3] == 255,
+                    "{id} ({x}, {y}) contains a baked glyph instead of the orange gradient: {pixel:?}"
+                );
+                assert!(
+                    pixel[0] <= previous_red,
+                    "{id} ({x}, {y}) breaks the smooth header gradient"
+                );
+                previous_red = pixel[0];
+            }
+        }
+    }
+}
+
+#[test]
 fn luxe_detail_options_frames_follow_row_categories() {
     // Left edge of each rounded option card with the purple card's corners:
     // blue LANE / HI-SPEED and JUDGE, green GAUGE, orange LONG NOTE, red BGA and
@@ -536,6 +639,8 @@ fn luxe_detail_options_gpu_previews() {
             (AppLocale::Ja, cursor_of(101), 0.0),
             (AppLocale::En, cursor_of(303), 0.0),
             (AppLocale::Ja, cursor_of(201), 0.0),
+            (AppLocale::Ja, cursor_of(401), 0.0),
+            (AppLocale::En, cursor_of(401), 0.0),
             (AppLocale::Ja, cursor_of(304), 0.0),
             (AppLocale::Ja, cursor_of(702), 0.0),
             (AppLocale::En, cursor_of(702), 0.0),
@@ -651,6 +756,42 @@ fn luxe_detail_options_gpu_corners_match_the_original_card() {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU adapter; verifies the selected glow across neighboring button corners"]
+fn luxe_detail_options_gpu_glow_reaches_neighboring_button_corners() {
+    for scale in [1, 2] {
+        let mut renderer = renderer();
+        renderer
+            .attach_offscreen(bmz_render::renderer::SurfaceSize {
+                width: 1920 * scale,
+                height: 1080 * scale,
+            })
+            .unwrap();
+        let scene = |index: i64| {
+            let mut s = snapshot(AppLocale::Ja, cursor_of(101));
+            let panel = std::sync::Arc::make_mut(s.detail_options.as_mut().unwrap());
+            let row = &mut std::sync::Arc::make_mut(&mut panel.items)[cursor_of(101)];
+            row.value_index = index;
+            row.value = if index < 0 { -999 } else { row.choices[index as usize].value };
+            s
+        };
+        renderer.render_scene(AppSceneSnapshot::Select(scene(-1))).unwrap();
+        let baseline = renderer.read_offscreen_rgba().unwrap();
+        for (selected, neighbor_y) in [(0, 285), (1, 281)] {
+            renderer.render_scene(AppSceneSnapshot::Select(scene(selected))).unwrap();
+            let highlighted = renderer.read_offscreen_rgba().unwrap();
+            for dx in 0..scale {
+                let offset = ((neighbor_y * scale * 1920 * scale + 847 * scale + dx) * 4) as usize;
+                assert_eq!(baseline[offset], 0, "the baseline corner is cyan");
+                assert!(
+                    highlighted[offset] > baseline[offset],
+                    "choice {selected}, scale {scale}: the neighboring cap cuts off the orange halo"
+                );
             }
         }
     }
