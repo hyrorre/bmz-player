@@ -87,9 +87,27 @@ PlayのSTAGEFILEは、未マージのPR #20 commit `0404fb6`（Kaleid LOADINGFIL
   scene reset・keyの照合、Selectのcache上限、PlayのSTAGEFILE待機と再生、
   動画出力の延長READY中の譜面固定、Playでのsource `100`の差し替え。
 
+## レビュー指摘の修正（2026-10-20）
+
+PR #36のレビューで指摘された4件を修正した。
+
+- BGAのメモリ上限: 上限はcanvasサイズで判定していたが、BGAは256×256へpaddingしてから
+  保持するため、16×16の画像では判定の256倍を確保できた。`FrameLayout`で保持サイズを
+  判定し、各フレームをdecode直後にpaddingする。予算を超える時点でdecodeを止める。
+- Selectのcache: 解放したアニメーションが`Ready`のまま残り、再選択しても戻らなかった。
+  保持・解放済み・再decode中・静止画を区別し、解放済みは表示時にworkerで再decodeする。
+  容量はLRU順の台帳と合計値で管理する。
+- GPU上限: 16384px固定の格子では、4096 / 8192pxのGPUに収まる画像も読めなかった。
+  decodeとシート生成を分け、upload先デバイスの`max_texture_dimension_2d`で格子を決める。
+  GPU生成前のinstallはRendererがフレームを保留し、接続時に組み立ててsourceサイズを直す。
+- 同一素材の複数チャネル: textureを素材ごとに1つしか持たず、開始時刻の異なるチャネルが
+  フレームを共有していた。開始時刻が異なるチャネルだけチャネル専用textureを使う。
+
 ## 未確認事項
 
 - 実機（Windows / macOS / Linux）での表示、GPU上の動画出力。
 - GIF / APNGを含む第三者製スキン（LR2を含む）での見え方。`divx` / `divy`なしで使う
   スキンはシート全体が表示される。
 - 大きなアニメーション画像のdecode時間・メモリ量の計測。
+- 実GPU（上限4096 / 8192 / 16384px）でのスプライトシート表示と、GPU生成前にinstallした
+  スキンのsourceサイズ更新。

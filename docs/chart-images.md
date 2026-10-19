@@ -36,7 +36,8 @@ beatorajaはanimated WebPをスプライトシート全体の1枚として表示
   時刻を起点に、譜面時刻で再生します。Viewerのseekやリトライでも同じ起点から計算します。
 - 小さい画像の256×256 paddingは全フレームに適用します。Layerの黒抜きは静止画と同じです。
 - フレームはCPUに保持し、表示フレームが変わった時だけtextureを書き換えます。保持量は
-  譜面ごとに合計512MiBまでで、超えた画像は先頭フレームの静止画です。
+  padding後のサイズで数え、1画像256MiB、譜面ごとに合計512MiBまでです。各フレームは
+  decode直後にpaddingし、上限を超える時点でdecodeを止めて先頭フレームの静止画にします。
 - 同じ画像を複数のレイヤーで同時に使う場合も、各レイヤーはそれぞれの起点で再生します。
   POOR、Base、Layer、Layer2の順で最初のレイヤーが画像のtextureを使い、起点が同じレイヤーは
   そのtextureを共有します。起点が異なるレイヤーだけがレイヤー専用のtexture
@@ -47,7 +48,9 @@ beatorajaはanimated WebPをスプライトシート全体の1枚として表示
 
 Select / Decide / Resultと、Play中のBANNER / BACKBMPは、表示され始めた時刻から再生します。
 シーンが変わると先頭から再生し直します。待機は追加しません。Selectは展開したフレームを
-1画像64MiB、合計128MiBまでcacheし、古いものから静止画に戻します。
+1画像64MiB、合計128MiBまでcacheし、最も前に表示したものからフレームを解放します。
+解放した画像を再び表示すると、先頭フレームを表示しながらバックグラウンドでdecodeし直し、
+完了後にアニメーションへ戻します。
 
 PlayのSTAGEFILE（runtime source `100`）はKaleid beatのLOADINGFILE / READYFILEに近い
 規則で再生し、ロードとREADYを待ちます。
