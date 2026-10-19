@@ -34,3 +34,10 @@ OFF、SUDDEN+、HIDDEN+、SUD+ & HID+、LIFT、LIFT & SUD+、LIFT & HID+、ALL�
 mz-selectの選択肢フォントにある記号は`+ - . / : =`だけで、`&`は別フォントから補った字形だった。
 ユーザーの判断で、組み合わせの区切りを`/`に変更した（`SUD+/HID+`、`LIFT/SUD+`、`LIFT/HID+`）。
 `choices.fnt`への`&`の追加は戻し、mz-selectの素材は元の状態に戻した。
+
+## 追補: `/`はmz-selectだけに変更
+
+ユーザーの意図は「mz-selectだけ`/`にする」だった。本体の文言は`&`表記
+（`SUD+ & HID+`、`LIFT & SUD+`、`LIFT & HID+`）に戻し、ECFN・Luxez-Flatはそのまま表示する。
+mz-selectは`choices.fnt`で`&`（id 38）に元フォントの`/`（id 47）と同じ字形を割り当てた。
+本体の文言のスペースが残るため、表示は`SUD+ / HID+`になる。Luaの文字列置換（毎フレームのcallback）は使わない。

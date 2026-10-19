@@ -268,6 +268,21 @@ fn mz_detail_options_reuses_option_artwork_and_version_font() {
             }
         }
     }
+    // LANE COVER's "&" has no glyph in the version font; mz-select draws it as "/".
+    let (amp, slash) = (&choices.glyphs[&'&'], &choices.glyphs[&'/']);
+    assert_eq!(
+        (amp.x, amp.y, amp.width, amp.height, amp.xoffset, amp.yoffset, amp.xadvance, amp.page),
+        (
+            slash.x,
+            slash.y,
+            slash.width,
+            slash.height,
+            slash.xoffset,
+            slash.yoffset,
+            slash.xadvance,
+            slash.page
+        )
+    );
     let decoded = detail_options::decode_experimental(&path, SkinKind::Select).unwrap();
     for (part, source) in
         [("mz_detail_button", "mz_detail_panel"), ("mz_detail_value_selected", "mz_detail_cursor")]

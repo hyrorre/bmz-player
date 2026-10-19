@@ -36,7 +36,7 @@ E1 hold=通常、E2 hold=Assist、E1+E2 hold=旧詳細で、短押し固定表�
 |1|701 / judge-auto|JUDGE|VisualOffsetAutoAdjust|OFF / ON|profile共通|
 |2|702 / visual-offset|JUDGE|VisualOffsetMs|-500..500 ms、刻み1|キーモード|
 |3|703 / judge-algorithm|JUDGE|JudgeAlgorithm|COMBO / DURATION / LOWEST|profile共通|
-|4|104 / lane-cover|LANE / HI-SPEED|SuddenEnabled / HiddenEnabled / LiftEnabled|OFF / SUDDEN+ / HIDDEN+ / SUD+/HID+ / LIFT / LIFT/SUD+ / LIFT/HID+ / ALL|キーモード|
+|4|104 / lane-cover|LANE / HI-SPEED|SuddenEnabled / HiddenEnabled / LiftEnabled|OFF / SUDDEN+ / HIDDEN+ / SUD+ & HID+ / LIFT / LIFT & SUD+ / LIFT & HID+ / ALL|キーモード|
 |5|301 / hs-auto|LANE / HI-SPEED|HispeedAutoAdjust|OFF / ON|キーモード|
 |6|302 / hs-config|LANE / HI-SPEED|HispeedMode|NORMAL / CLASSIC / FLOATING / NORMAL+FLOATING / CLASSIC+FLOATING / LR2|キーモード|
 |7|303 / constant|LANE / HI-SPEED|Constant|OFF / ON|キーモード|
@@ -73,9 +73,10 @@ UI追加に伴ってscore / replay / IRの分類を変えないための範囲�
 VALUE_INDEX=-1とします。新E2で変更した時だけOFF / REMOVEへ移ります。
 
 SUDDEN+・HIDDEN+・LIFTは試験的に1項目「LANE COVER」（安定ID 104）へまとめ、8通りの組み合わせから選びます。
-選択肢の番号は1=SUDDEN+、2=HIDDEN+、4=LIFTのビット和で、表示順はOFF、SUDDEN+、HIDDEN+、SUD+/HID+、
-LIFT、LIFT/SUD+、LIFT/HID+、ALLです。
-区切りはmz-selectの選択肢フォントにもある`/`を使い、素材は変更しません。保存先は従来の3つの有効フラグのままで、OFF時も量は保存します。
+選択肢の番号は1=SUDDEN+、2=HIDDEN+、4=LIFTのビット和で、表示順はOFF、SUDDEN+、HIDDEN+、SUD+ & HID+、
+LIFT、LIFT & SUD+、LIFT & HID+、ALLです。
+mz-selectの選択肢フォントには`&`がないため、`choices.fnt`で`&`に元フォントの`/`の字形を割り当て、
+`SUD+ / HID+`のように表示します。画像素材は変更しません。保存先は従来の3つの有効フラグのままで、OFF時も量は保存します。
 補助情報で3つの保存量を示します。旧項目の101〜103は欠番です。
 キーモードはプレイ開始と同じ変換後の設定対象を使い、BATTLEの描画用DPモードと区別します。
 RANDOM MIXの候補抽出とSkin APIのsource modeは変換前の譜面モードを使います。
