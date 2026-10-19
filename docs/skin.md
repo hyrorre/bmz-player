@@ -805,12 +805,36 @@ ref `271`, `275`, `276`, `280..284`に公開し、judge rateは`285..289`に公�
 G-BATTLEの相手判定は
 表示専用で、1P側のスコア、ゲージ、キー音、保存用リプレイには混ぜません。
 
-## Static Image Sources
+## Image Sources
 
-beatoraja skinの`source.path`はPNG / BMP / JPEG / GIF / TGAに加え、libGDX
+beatoraja skinの`source.path`はPNG / BMP / JPEG / GIF / TGA / WebPに加え、libGDX
 `PixmapIO`のCIMを読み込めます。CIMはzlib stream内のwidth / height /
 Gdx2DPixmap formatとpixel bufferをRGBA8へ展開します。MILLIONDOLLAR RESULTの
 主要atlasは配布時点から`.cim`のため、PNG fallbackへ書き換えずそのまま扱います。
+JSON / Lua / LR2 CSV / PMcharaのsourceはすべて同じ規則で読み込みます。
+
+2フレーム以上のanimated WebP / APNG / GIFは、beatoraja `PixmapResourcePool`の
+`toSpriteSheetPixmap`と同じスプライトシート1枚へ展開します。
+
+- 各フレームはcanvasと同じ大きさで、左上から行優先に並べます。余ったセルは透明です。
+- 列数は、フレーム数を割り切る配置のうち、シートの幅と高さの差が最小のものです。
+  同点なら列数の少ない方を選びます。割り切れる配置が上限に収まらない場合は、
+  beatorajaの`getSpriteSheetGrid`と同じ代替計算を使います。
+- フレームの表示時間は使いません。スキンは通常の`divx` / `divy` / `cycle` / `timer`で
+  アニメーションさせます。
+- 1フレームの画像と、既定画像以外に1フレームしか持たないAPNGは従来どおり静止画です。
+  16bit APNGはアニメーションを展開できないため、既定画像を使います。
+
+beatorajaは格子をGPUの`GL_MAX_TEXTURE_SIZE`で決めます。BMZはスキンをGPUの初期化前にも
+decodeするため、同じスキンが常に同じ格子になるよう16384pxに固定して計算します。
+上限が16384px未満のGPUでシートが収まらない場合は、大きすぎるPNGと同じく警告して
+そのsourceを読み込みません。展開の上限（ファイル64MiB、canvas 8192px、4096フレーム、
+展開後256MiB、decode 10秒）を超えた場合も読み込みエラーです。
+
+APNG / GIFのシート化はBMZ独自の挙動です。beatoraja / LR2は先頭フレーム
+（APNGは既定画像）だけを表示するため、それらを`divx` / `divy`なしで使う既存スキンでは
+BMZだけシート全体が表示されます。読み込んだアニメーションはフレーム数と格子を
+info logに出力します。
 
 ## Play Gauge Source Layout
 

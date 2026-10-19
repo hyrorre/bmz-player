@@ -161,7 +161,7 @@ fn decode_file_source(
         ));
     }
     match load_source_asset_with_cache_key(cache_key.clone(), source_cache, || {
-        bmz_render::assets::load_static_rgba_image_with_color_key(&path, color_key)
+        bmz_render::assets::load_skin_source_rgba_image_with_color_key(&path, color_key)
     }) {
         Ok((asset, source_status)) => Some(asset_source_result(
             index,
