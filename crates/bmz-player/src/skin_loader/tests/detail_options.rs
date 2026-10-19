@@ -150,7 +150,8 @@ pub(super) fn assert_number_values_unselected(
 
 /// Asserts that every visible column draws its left frame piece (`size` in
 /// 1920x1080 canvas pixels, at the column's left edge) from the source that
-/// `source_x` assigns to the row's category, and that all categories appear.
+/// `source_x` assigns to the row's category, that all categories appear, and
+/// that the selected centre column is raised by 24 px.
 pub(super) fn assert_frames_follow_categories(
     renderer: &mut Renderer,
     cases: Vec<(i64, SelectSnapshot)>,
@@ -163,10 +164,11 @@ pub(super) fn assert_frames_follow_categories(
         let commands = &renderer.last_plan().unwrap().commands;
         let panel =
             s.detail_options.as_ref().or(s.detail_options_closing.as_ref().map(|c| &c.panel));
+        let mut tops = Vec::new();
         for slot in 0..7 {
             let category = panel.unwrap().row(slot).unwrap().category_id;
             seen.insert(category);
-            let mut sources: Vec<_> = commands
+            let pieces: Vec<_> = commands
                 .iter()
                 .filter_map(|command| match command {
                     DrawCommand::Image { rect, uv, source_size: Some(source), .. }
@@ -174,11 +176,13 @@ pub(super) fn assert_frames_follow_categories(
                             && (rect.height * 1080.0 - size.1).abs() < 0.1
                             && (rect.x * 1920.0 - (9.0 + 274.0 * slot as f32)).abs() < 0.5 =>
                     {
-                        Some(uv.x * source.width)
+                        Some((uv.x * source.width, rect.y * 1080.0))
                     }
                     _ => None,
                 })
                 .collect();
+            tops.push(pieces.first().map_or(f32::NAN, |piece| piece.1));
+            let mut sources: Vec<_> = pieces.iter().map(|piece| piece.0).collect();
             // Skins may layer a dim and a bright rim of the same colour.
             sources.dedup();
             assert_eq!(
@@ -186,6 +190,10 @@ pub(super) fn assert_frames_follow_categories(
                 [source_x(category)],
                 "item {id}, slot {slot}, category {category}"
             );
+        }
+        // The selected item's centre column stands 24 px above its neighbours.
+        for (slot, top) in tops.iter().enumerate().filter(|(slot, _)| *slot != 3) {
+            assert!((top - tops[3] - 24.0).abs() < 0.5, "item {id}, slot {slot}: tops {tops:?}");
         }
     }
     assert_eq!(seen.into_iter().collect::<Vec<_>>(), [1, 2, 4, 5, 6, 7]);

@@ -8,6 +8,7 @@
 
 | 場所 | 内容 | Git管理 |
 |---|---|---|
+| 2026-10-20 | [詳細オプションの選択列を上へずらす](2026/2026-10-20-detail-option-selected-raise.md) |
 | 2026-10-20 | [詳細オプションのSUDDEN+ / HIDDEN+ / LIFTを1項目にまとめる試行](2026/2026-10-20-detail-option-lane-cover.md) |
 | 2026-10-20 | [詳細オプションの見た目の追加調整](2026/2026-10-20-detail-option-style-fixes.md) |
 | 2026-10-19 | [詳細オプションの見た目を通常パネルに揃える](2026/2026-10-19-detail-option-normal-panel-style.md) |

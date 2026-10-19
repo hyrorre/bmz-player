@@ -8,6 +8,18 @@ use bmz_render::skin::SkinClickTarget;
 // First choice of the normal-card layout: 1:1 38 px buttons every 41 px from y = 244.
 const CHOICE_Y: f32 = 263.0;
 const CHOICE_PITCH: f32 = 41.0;
+// The selected item's centre column (slot 3) is raised by this much.
+const SELECTED_RAISE: f32 = 24.0;
+
+fn choice_y(centre: bool) -> f32 {
+    CHOICE_Y - if centre { SELECTED_RAISE } else { 0.0 }
+}
+
+/// A point in a column's header, clear of its first choice.
+fn header_y(centre: bool) -> f32 {
+    220.0 - if centre { SELECTED_RAISE } else { 0.0 }
+}
+const RAISE: u32 = SELECTED_RAISE as u32;
 
 fn skin_path() -> PathBuf {
     let path = test_app_paths().resource_dir.join("skins/Luxez-Flat/music_select.luaskin");
@@ -89,11 +101,19 @@ fn luxe_detail_options_all_items_choices_and_moving_hits() {
                     }
                     let row = panel.row(slot).unwrap();
                     assert!(has_text(&row.label), "missing {}", row.item_id);
-                    assert_eq!(event_at(&renderer, &s, x, 220.0), Some(19310 + slot as i32));
+                    assert_eq!(
+                        event_at(&renderer, &s, x, header_y(slot == 3)),
+                        Some(19310 + slot as i32)
+                    );
                     for (index, choice) in row.choices.iter().enumerate() {
                         assert!(has_text(&choice.label));
                         assert_eq!(
-                            event_at(&renderer, &s, x, CHOICE_Y + index as f32 * CHOICE_PITCH),
+                            event_at(
+                                &renderer,
+                                &s,
+                                x,
+                                choice_y(slot == 3) + index as f32 * CHOICE_PITCH
+                            ),
                             Some(19500 + slot as i32 * 64 + index as i32 * 4)
                         );
                     }
@@ -246,7 +266,7 @@ fn luxe_detail_options_uses_existing_artwork_and_fonts_with_complete_labels() {
                 command,
                 DrawCommand::Image { rect, .. }
                     if (rect.x * 1920.0 - x).abs() < 0.5
-                        && (rect.y * 1080.0 - 244.0).abs() < 0.5
+                        && (rect.y * 1080.0 - (244.0 - SELECTED_RAISE)).abs() < 0.5
                         && (rect.width * 1920.0 - 15.0).abs() < 0.5
                         && (rect.height * 1080.0 - 38.0).abs() < 0.5
             )),
@@ -264,7 +284,7 @@ fn luxe_detail_options_uses_existing_artwork_and_fonts_with_complete_labels() {
         })
         .collect();
     for x in [831.0 + 3.0, 831.0 + 258.0 - 3.0] {
-        for y in [180.0 + 3.0, 730.0 - 3.0] {
+        for y in [180.0 + 3.0 - SELECTED_RAISE, 730.0 - 3.0 - SELECTED_RAISE] {
             assert!(!renderer.last_plan().unwrap().commands.iter().any(|command| {
                 matches!(command, DrawCommand::Image { texture, rect, .. }
                     if textures.contains(texture)
@@ -423,7 +443,7 @@ fn luxe_detail_options_handles_empty_locked_inactive_and_external_rows() {
         for slot in 0..7 {
             let valid = s.detail_options.as_ref().unwrap().row(slot).is_some();
             assert_eq!(
-                event_at(&renderer, &s, 138.0 + slot as f32 * 274.0, 220.0),
+                event_at(&renderer, &s, 138.0 + slot as f32 * 274.0, header_y(slot == 3)),
                 valid.then_some(19310 + slot as i32)
             );
         }
@@ -442,10 +462,10 @@ fn luxe_detail_options_handles_empty_locked_inactive_and_external_rows() {
         assert!(renderer.last_plan().unwrap().commands.iter().any(|cmd| matches!(cmd,
             DrawCommand::Text { text, .. } if text == label)));
     }
-    assert_eq!(event_at(&renderer, &s, 960.0, CHOICE_Y), Some(19313));
+    assert_eq!(event_at(&renderer, &s, 960.0, choice_y(true)), Some(19313));
     let s = snapshot(AppLocale::Ja, cursor_of(201));
     assert!(!s.detail_options.as_ref().unwrap().selected().unwrap().effective);
-    assert_eq!(event_at(&renderer, &s, 960.0, CHOICE_Y), Some(19692));
+    assert_eq!(event_at(&renderer, &s, 960.0, choice_y(true)), Some(19692));
 }
 
 #[test]
@@ -517,7 +537,7 @@ fn luxe_detail_options_enter_exit_and_other_panels_animate_together() {
                             bmz_render::scene::detail_options::DetailValueKind::Number { .. }
                         );
                         let expected = if number { 19310 + slot } else { 19500 + slot * 64 };
-                        assert_eq!(event_at(&renderer, &s, x, CHOICE_Y), Some(expected));
+                        assert_eq!(event_at(&renderer, &s, x, choice_y(slot == 3)), Some(expected));
                     }
                 }
             } else {
@@ -724,7 +744,7 @@ fn luxe_detail_options_gpu_corners_match_the_original_card() {
             // the body underneath at both ends and on both rows of a 2x texel.
             for x in [847, 1072] {
                 for dx in 0..scale {
-                    for y in [244 * scale, 282 * scale - 1] {
+                    for y in [(244 - RAISE) * scale, (282 - RAISE) * scale - 1] {
                         assert_eq!(
                             pixel(x * scale + dx, y),
                             pixel(x * scale + dx, 400 * scale),
@@ -747,7 +767,7 @@ fn luxe_detail_options_gpu_corners_match_the_original_card() {
                                 continue;
                             }
                             let dx = if right { 1088 - x } else { 831 + x };
-                            let dy = if bottom { 729 - y } else { 180 + y };
+                            let dy = if bottom { 729 - RAISE - y } else { 180 - RAISE + y };
                             assert_eq!(
                                 pixel(dx * scale, dy * scale),
                                 expected,
@@ -782,7 +802,7 @@ fn luxe_detail_options_gpu_glow_reaches_neighboring_button_corners() {
         };
         renderer.render_scene(AppSceneSnapshot::Select(scene(-1))).unwrap();
         let baseline = renderer.read_offscreen_rgba().unwrap();
-        for (selected, neighbor_y) in [(0, 285), (1, 281)] {
+        for (selected, neighbor_y) in [(0, 285 - RAISE), (1, 281 - RAISE)] {
             renderer.render_scene(AppSceneSnapshot::Select(scene(selected))).unwrap();
             let highlighted = renderer.read_offscreen_rgba().unwrap();
             for dx in 0..scale {

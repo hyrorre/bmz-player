@@ -8,6 +8,17 @@ use bmz_render::skin::SkinClickTarget;
 // First choice of the normal-panel layout: 37 px buttons every 42 px from y = 244.
 const CHOICE_Y: f32 = 262.0;
 const CHOICE_PITCH: f32 = 42.0;
+// The selected item's centre column (slot 3) is raised by this much.
+const SELECTED_RAISE: f32 = 24.0;
+
+fn choice_y(centre: bool) -> f32 {
+    CHOICE_Y - if centre { SELECTED_RAISE } else { 0.0 }
+}
+
+/// A point in a column's header, clear of its first choice.
+fn header_y(centre: bool) -> f32 {
+    220.0 - if centre { SELECTED_RAISE } else { 0.0 }
+}
 
 // ECFN is a separately installed skin, not a bundled submodule. These tests are
 // explicitly opt-in and fail if the real ADFX02 assets are absent.
@@ -108,11 +119,19 @@ fn ecfn_detail_options_all_items_and_scrolling_hits() {
                     }
                     let row = panel.row(slot).unwrap();
                     assert!(has_text(&row.label), "missing {}", row.item_id);
-                    assert_eq!(event_at(&renderer, &s, x, 220.0), Some(19310 + slot as i32));
+                    assert_eq!(
+                        event_at(&renderer, &s, x, header_y(slot == 3)),
+                        Some(19310 + slot as i32)
+                    );
                     for (index, choice) in row.choices.iter().enumerate() {
                         assert!(has_text(&choice.label));
                         assert_eq!(
-                            event_at(&renderer, &s, x, CHOICE_Y + index as f32 * CHOICE_PITCH),
+                            event_at(
+                                &renderer,
+                                &s,
+                                x,
+                                choice_y(slot == 3) + index as f32 * CHOICE_PITCH
+                            ),
                             Some(19500 + slot as i32 * 64 + index as i32 * 4)
                         );
                     }
@@ -147,7 +166,7 @@ fn ecfn_detail_options_empty_locked_external_and_inactive_values() {
         for slot in 0..7 {
             let valid = s.detail_options.as_ref().unwrap().row(slot).is_some();
             assert_eq!(
-                event_at(&renderer, &s, 138.0 + slot as f32 * 274.0, 220.0),
+                event_at(&renderer, &s, 138.0 + slot as f32 * 274.0, header_y(slot == 3)),
                 valid.then_some(19310 + slot as i32)
             );
         }
@@ -166,10 +185,10 @@ fn ecfn_detail_options_empty_locked_external_and_inactive_values() {
         assert!(renderer.last_plan().unwrap().commands.iter().any(|cmd| matches!(cmd,
             DrawCommand::Text { text, .. } if text == label)));
     }
-    assert_eq!(event_at(&renderer, &s, 960.0, CHOICE_Y), Some(19313));
+    assert_eq!(event_at(&renderer, &s, 960.0, choice_y(true)), Some(19313));
     let s = snapshot(AppLocale::Ja, cursor_of(201));
     assert!(!s.detail_options.as_ref().unwrap().selected().unwrap().effective);
-    assert_eq!(event_at(&renderer, &s, 960.0, CHOICE_Y), Some(19692));
+    assert_eq!(event_at(&renderer, &s, 960.0, choice_y(true)), Some(19692));
 }
 
 #[test]
