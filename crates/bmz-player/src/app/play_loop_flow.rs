@@ -76,7 +76,7 @@ impl WinitApp {
                     &mut active_play.running,
                     snapshot.time,
                 );
-                crate::animated_bga::update_animated_bga_frames(
+                let channel_textures = crate::animated_bga::update_animated_bga_frames(
                     &mut self.renderer,
                     &mut active_play.running,
                     snapshot.time,
@@ -85,6 +85,7 @@ impl WinitApp {
                     &mut snapshot,
                     &active_play.running.bga_frames,
                 );
+                crate::animated_bga::apply_channel_textures(&mut snapshot, &channel_textures);
                 self.apply_profile_fast_slow_filter(&mut snapshot);
                 snapshot.play_elapsed_time = play_elapsed_time;
                 snapshot.ready_elapsed_time = ready_elapsed_time;
@@ -1133,7 +1134,7 @@ impl WinitApp {
             &mut active_play.running,
             video_update_time,
         );
-        crate::animated_bga::update_animated_bga_frames(
+        let channel_textures = crate::animated_bga::update_animated_bga_frames(
             &mut self.renderer,
             &mut active_play.running,
             video_update_time,
@@ -1141,6 +1142,7 @@ impl WinitApp {
 
         let mut snapshot = refresh_play_ending_snapshot(&mut active_play.running, timers);
         crate::video_bga::resolve_snapshot_textures(&mut snapshot, &active_play.running.bga_frames);
+        crate::animated_bga::apply_channel_textures(&mut snapshot, &channel_textures);
         snapshot.seamless_play_entry = seamless_play_entry;
         snapshot.stagefile_background = stagefile_background;
         snapshot.stagefile_image_size = stagefile_image_size;

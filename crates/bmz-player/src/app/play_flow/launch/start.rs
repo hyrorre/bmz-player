@@ -508,6 +508,7 @@ impl WinitApp {
                 &active_play.running.session.chart,
             )
         };
+        crate::animated_bga::release_channel_textures(&mut self.renderer);
         active_play.running.animated_bga = crate::animated_bga::AnimatedBgaState::from_catalog(
             self.play.bga_preload.animations.clone(),
         );

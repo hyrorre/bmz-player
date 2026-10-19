@@ -293,14 +293,15 @@ impl Media {
                 display.height = frame.height as f32;
             }
         }
-        // POOR decides the frame of an asset it shares with another layer, as in live play.
-        animated_channels.sort_by_key(|channel| channel.kind != BgaEventKind::Poor);
+        // Same channel priority and texture assignment as live play.
+        let animated_channels = crate::animated_bga::prioritized(animated_channels);
         let mut upload_error = None;
-        self.animated_bga.update(
+        let mut released = Vec::new();
+        let separate = self.animated_bga.update(
             &animated_channels,
             bmz_core::time::TimeUs(chart_us),
-            |id, frame| match renderer.upsert_rgba_texture_ref(
-                TextureId(bga_texture_id(id)),
+            |texture_id, frame| match renderer.upsert_rgba_texture_ref(
+                TextureId(texture_id),
                 frame.width,
                 frame.height,
                 &frame.pixels,
@@ -311,7 +312,12 @@ impl Media {
                     false
                 }
             },
+            |texture_id| released.push(texture_id),
         );
+        for texture_id in released {
+            renderer.remove_image_texture(TextureId(texture_id));
+        }
+        crate::animated_bga::apply_channel_textures(snapshot, &separate);
         upload_error.map_or(Ok(()), Err)
     }
 }
