@@ -490,7 +490,8 @@ mod task;
 
 pub use snapshot::ranking_to_ir_snapshot;
 pub(crate) use snapshot::{
-    course_ranking_to_result_ir_ranking, result_ir_ranking_to_skin_snapshot,
+    chart_ranking_to_result_ir_ranking, course_ranking_to_result_ir_ranking,
+    result_ir_ranking_to_skin_snapshot, result_ir_ranking_to_skin_snapshot_at,
 };
 pub(crate) use task::fetch_ranking_with_limit;
 pub use task::{spawn_course_result_ir_task, spawn_result_ir_task};

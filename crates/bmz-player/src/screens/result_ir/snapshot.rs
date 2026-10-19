@@ -17,7 +17,7 @@ pub(crate) fn result_ir_ranking_to_skin_snapshot(
     result_ir_ranking_to_skin_snapshot_at(ranking, 0)
 }
 
-pub(super) fn result_ir_ranking_to_skin_snapshot_at(
+pub(crate) fn result_ir_ranking_to_skin_snapshot_at(
     ranking: &ResultIrRanking,
     requested_offset: usize,
 ) -> bmz_render::scene::ResultIrSnapshot {
@@ -51,7 +51,7 @@ pub(super) fn result_ir_ranking_to_skin_snapshot_at(
     }
 }
 
-pub(super) fn chart_ranking_to_result_ir_ranking(ranking: &IrRankingResult) -> ResultIrRanking {
+pub(crate) fn chart_ranking_to_result_ir_ranking(ranking: &IrRankingResult) -> ResultIrRanking {
     chart_ranking_to_result_ir_ranking_with_previous(ranking, None)
 }
 

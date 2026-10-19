@@ -122,20 +122,29 @@ impl SelectIrRanking {
             }
             let completed_at = Instant::now();
             let entry = match result {
-                Ok((global, self_and_rivals, rivals)) => CachedChartIr {
-                    global: ranking_to_ir_snapshot(&global),
-                    self_and_rivals: self_and_rivals.as_ref().map(ranking_to_ir_snapshot),
-                    rival: rivals.as_ref().and_then(top_rival_snapshot),
-                    global_battle_entries: battle_entries(&global),
-                    self_and_rivals_battle_entries: self_and_rivals
-                        .as_ref()
-                        .map(battle_entries)
-                        .unwrap_or_default(),
-                    battle_entries_loaded: true,
-                    global_targets: ranking_targets(&global),
-                    rival_targets: rivals.as_ref().map(ranking_targets).unwrap_or_default(),
-                    completed_at,
-                },
+                Ok((global, self_and_rivals, rivals)) => {
+                    let global_ranking = chart_ranking_to_result_ir_ranking(&global);
+                    let self_and_rivals_ranking =
+                        self_and_rivals.as_ref().map(chart_ranking_to_result_ir_ranking);
+                    CachedChartIr {
+                        global: ranking_to_ir_snapshot(&global),
+                        global_ranking: Some(global_ranking),
+                        global_scroll_offset: 0,
+                        self_and_rivals: self_and_rivals.as_ref().map(ranking_to_ir_snapshot),
+                        self_and_rivals_ranking,
+                        self_and_rivals_scroll_offset: 0,
+                        rival: rivals.as_ref().and_then(top_rival_snapshot),
+                        global_battle_entries: battle_entries(&global),
+                        self_and_rivals_battle_entries: self_and_rivals
+                            .as_ref()
+                            .map(battle_entries)
+                            .unwrap_or_default(),
+                        battle_entries_loaded: true,
+                        global_targets: ranking_targets(&global),
+                        rival_targets: rivals.as_ref().map(ranking_targets).unwrap_or_default(),
+                        completed_at,
+                    }
+                }
                 Err(error) => {
                     tracing::debug!(%error, "select IR ranking fetch failed");
                     CachedChartIr {
@@ -143,7 +152,11 @@ impl SelectIrRanking {
                             state: SkinIrState::Failed,
                             ..Default::default()
                         },
+                        global_ranking: None,
+                        global_scroll_offset: 0,
                         self_and_rivals: None,
+                        self_and_rivals_ranking: None,
+                        self_and_rivals_scroll_offset: 0,
                         rival: None,
                         global_battle_entries: Vec::new(),
                         self_and_rivals_battle_entries: Vec::new(),
@@ -228,20 +241,22 @@ impl SelectIrRanking {
                 continue;
             }
             let completed_at = Instant::now();
-            let ir = match result {
-                Ok(ranking) => result_ir_ranking_to_skin_snapshot(
-                    &course_ranking_to_result_ir_ranking(&ranking),
-                ),
+            let (ir, ranking) = match result {
+                Ok(ranking) => {
+                    let ranking = course_ranking_to_result_ir_ranking(&ranking);
+                    (result_ir_ranking_to_skin_snapshot(&ranking), Some(ranking))
+                }
                 Err(error) => {
                     tracing::debug!(%error, "select course IR ranking fetch failed");
-                    ResultIrSnapshot { state: SkinIrState::Failed, ..Default::default() }
+                    (ResultIrSnapshot { state: SkinIrState::Failed, ..Default::default() }, None)
                 }
             };
             if self.course_cache.len() >= CACHE_CAPACITY && !self.course_cache.contains_key(&target)
             {
                 self.course_cache.clear();
             }
-            self.course_cache.insert(target, CachedCourseIr { ir, completed_at });
+            self.course_cache
+                .insert(target, CachedCourseIr { ir, ranking, scroll_offset: 0, completed_at });
         }
 
         let Some(provider) = enabled_provider(ir_config) else {
@@ -295,19 +310,36 @@ impl SelectIrRanking {
             );
             return;
         };
-        let (rival, rival_targets) = self
+        let (
+            self_and_rivals,
+            self_and_rivals_ranking,
+            self_and_rivals_scroll_offset,
+            rival,
+            rival_targets,
+            global_scroll_offset,
+        ) = self
             .cache
             .get(&sha256)
-            .map(|entry| (entry.rival.clone(), entry.rival_targets.clone()))
+            .map(|entry| {
+                (
+                    entry.self_and_rivals.clone(),
+                    entry.self_and_rivals_ranking.clone(),
+                    entry.self_and_rivals_scroll_offset,
+                    entry.rival.clone(),
+                    entry.rival_targets.clone(),
+                    entry.global_scroll_offset,
+                )
+            })
             .unwrap_or_default();
         self.insert_entry(
             sha256,
             CachedChartIr {
                 global: result_ir_ranking_to_skin_snapshot(ranking),
-                self_and_rivals: self
-                    .cache
-                    .get(&sha256)
-                    .and_then(|entry| entry.self_and_rivals.clone()),
+                global_ranking: Some(ranking.clone()),
+                global_scroll_offset,
+                self_and_rivals,
+                self_and_rivals_ranking,
+                self_and_rivals_scroll_offset,
                 rival,
                 // Result の表示用 ranking は G-BATTLE に必要な score identity を
                 // 持たない。古い候補を残さず、Select 復帰時に完全な ranking を

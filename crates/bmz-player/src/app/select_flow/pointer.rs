@@ -285,6 +285,21 @@ impl WinitApp {
         match hit.slider_type {
             1 => self.apply_select_scroll_slider(hit.value),
             7 => self.set_lr2_skin_settings_scroll(hit.value),
+            8 => {
+                let binding = self
+                    .renderer
+                    .select_skin_document()
+                    .map(|document| document.select_ir_scope_binding)
+                    .unwrap_or_default();
+                let selected_chart = self.selected_chart_sha256();
+                let selected_course = self.selected_course_ir_target();
+                self.select.select_ir.set_skin_scroll_rate(
+                    selected_chart,
+                    selected_course.as_ref(),
+                    binding,
+                    hit.value,
+                );
+            }
             17..=19 => {
                 let value = volume_f32_to_unit(hit.value);
                 let mix = &mut self.boot.profile_config.audio_mix;

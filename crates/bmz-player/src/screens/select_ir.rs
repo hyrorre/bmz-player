@@ -20,8 +20,9 @@ use crate::ir::bmz_official::{BmzOfficialIrClient, IrCourseRankingRequest};
 use crate::ir::types::{IrCourseRankingResult, IrRankingResult, IrRankingScope};
 use crate::ln_policy::LnScorePolicy;
 use crate::screens::result_ir::{
-    ResultIrQuery, ResultIrRanking, course_ranking_to_result_ir_ranking, ranking_to_ir_snapshot,
-    result_ir_ranking_to_skin_snapshot,
+    ResultIrQuery, ResultIrRanking, chart_ranking_to_result_ir_ranking,
+    course_ranking_to_result_ir_ranking, ranking_to_ir_snapshot,
+    result_ir_ranking_to_skin_snapshot, result_ir_ranking_to_skin_snapshot_at,
 };
 use crate::select_options::DoubleOptionScoreBucket;
 use crate::select_options::{ResolvedTarget, TargetOption};
@@ -154,7 +155,11 @@ pub struct SelectCourseIrTarget {
 #[derive(Debug, Clone)]
 struct CachedChartIr {
     global: ResultIrSnapshot,
+    global_ranking: Option<ResultIrRanking>,
+    global_scroll_offset: usize,
     self_and_rivals: Option<ResultIrSnapshot>,
+    self_and_rivals_ranking: Option<ResultIrRanking>,
+    self_and_rivals_scroll_offset: usize,
     rival: Option<SelectRivalSnapshot>,
     global_battle_entries: Vec<SelectIrBattleEntry>,
     self_and_rivals_battle_entries: Vec<SelectIrBattleEntry>,
@@ -179,6 +184,8 @@ pub enum SelectIrRankingScope {
 #[derive(Debug, Clone)]
 struct CachedCourseIr {
     ir: ResultIrSnapshot,
+    ranking: Option<ResultIrRanking>,
+    scroll_offset: usize,
     completed_at: Instant,
 }
 
@@ -480,9 +487,15 @@ mod tests {
                     previous_rank: None,
                     ..Default::default()
                 },
+                global_ranking: None,
+                global_scroll_offset: 0,
                 self_and_rivals: Some(ranking_to_ir_snapshot(&raw_self_and_rivals_ranking(
                     sha, 1, 1750, 2,
                 ))),
+                self_and_rivals_ranking: Some(chart_ranking_to_result_ir_ranking(
+                    &raw_self_and_rivals_ranking(sha, 1, 1750, 2),
+                )),
+                self_and_rivals_scroll_offset: 0,
                 rival: Some(SelectRivalSnapshot {
                     display_name: "RivalOne".to_string(),
                     ex_score: 1500,
@@ -563,6 +576,54 @@ mod tests {
     }
 
     #[test]
+    fn skin_scroll_rate_moves_chart_ranking_window() {
+        let mut select_ir = SelectIrRanking::default();
+        let sha = [8u8; 32];
+        let ranking = ResultIrRanking {
+            scope: IrRankingScope::Global,
+            entries: (1..=25)
+                .map(|rank| ResultIrRankingEntry {
+                    rank,
+                    player_name: format!("Player{rank}"),
+                    ex_score: 2000 - rank,
+                    clear: "Hard".to_string(),
+                    bp: rank,
+                    max_combo: 1000 - rank,
+                })
+                .collect(),
+            clear_rate: Some(80),
+            clear_counts: None,
+            self_rank: Some(8),
+            previous_rank: None,
+            total: Some(25),
+        };
+        select_ir.cache_result_global_ranking(&hash_to_hex(&sha), &ranking);
+
+        select_ir.set_skin_scroll_rate(
+            Some(sha),
+            None,
+            bmz_render::skin::IrScopeBinding::Global,
+            0.5,
+        );
+        let middle = select_ir.snapshot_for(&ir_config(true), Some(sha));
+        assert_eq!(middle.scroll_offset, 8);
+        assert_eq!(middle.scroll_max, 15);
+        assert_eq!(middle.entries[0].rank, Some(9));
+        assert_eq!(middle.entries[9].rank, Some(18));
+
+        select_ir.set_skin_scroll_rate(
+            Some(sha),
+            None,
+            bmz_render::skin::IrScopeBinding::Global,
+            1.0,
+        );
+        let end = select_ir.snapshot_for(&ir_config(true), Some(sha));
+        assert_eq!(end.scroll_offset, 15);
+        assert_eq!(end.entries[0].rank, Some(16));
+        assert_eq!(end.entries[9].rank, Some(25));
+    }
+
+    #[test]
     fn course_fetch_result_populates_select_skin_ranking_rows() {
         let mut select_ir = SelectIrRanking::default();
         let target = SelectCourseIrTarget {
@@ -588,24 +649,30 @@ mod tests {
                     rule: None,
                     ranking: IrCourseRankingBody {
                         scope: IrRankingScope::Global,
-                        entries: vec![IrCourseRankingEntry {
-                            rank: 1,
-                            player: IrRankingPlayer {
-                                id: "player-1".to_string(),
-                                display_name: "CourseTop".to_string(),
-                            },
-                            score: IrCourseRankingScore {
-                                course_score_id: "course-score-1".to_string(),
-                                clear: "Hard".to_string(),
-                                course_clear: true,
-                                ex_score: 4321,
-                                max_combo: 999,
-                                bp: 12,
-                                device_type: None,
-                                played_at: None,
-                                verification: None,
-                            },
-                        }],
+                        entries: (1..=15)
+                            .map(|rank| IrCourseRankingEntry {
+                                rank,
+                                player: IrRankingPlayer {
+                                    id: format!("player-{rank}"),
+                                    display_name: if rank == 1 {
+                                        "CourseTop".to_string()
+                                    } else {
+                                        format!("Course{rank}")
+                                    },
+                                },
+                                score: IrCourseRankingScore {
+                                    course_score_id: format!("course-score-{rank}"),
+                                    clear: "Hard".to_string(),
+                                    course_clear: true,
+                                    ex_score: 4321 - rank,
+                                    max_combo: 999,
+                                    bp: 12,
+                                    device_type: None,
+                                    played_at: None,
+                                    verification: None,
+                                },
+                            })
+                            .collect(),
                     },
                 }),
             ))
@@ -616,10 +683,22 @@ mod tests {
         let snapshot = select_ir.course_snapshot_for(&ir_config(true), Some(&target));
 
         assert_eq!(snapshot.state, SkinIrState::Loaded);
-        assert_eq!(snapshot.total_player, Some(1));
+        assert_eq!(snapshot.total_player, Some(15));
         assert_eq!(snapshot.entries[0].rank, Some(1));
-        assert_eq!(snapshot.entries[0].ex_score, Some(4321));
+        assert_eq!(snapshot.entries[0].ex_score, Some(4320));
         assert_eq!(snapshot.entries[0].player_name.as_str(), "CourseTop");
+
+        select_ir.set_skin_scroll_rate(
+            None,
+            Some(&target),
+            bmz_render::skin::IrScopeBinding::Global,
+            1.0,
+        );
+        let end = select_ir.course_snapshot_for(&ir_config(true), Some(&target));
+        assert_eq!(end.scroll_offset, 5);
+        assert_eq!(end.scroll_max, 5);
+        assert_eq!(end.entries[0].rank, Some(6));
+        assert_eq!(end.entries[0].player_name.as_str(), "Course6");
     }
 
     #[test]
@@ -639,7 +718,11 @@ mod tests {
                     previous_rank: None,
                     ..Default::default()
                 },
+                global_ranking: None,
+                global_scroll_offset: 0,
                 self_and_rivals: None,
+                self_and_rivals_ranking: None,
+                self_and_rivals_scroll_offset: 0,
                 rival: Some(SelectRivalSnapshot {
                     display_name: "RivalOne".to_string(),
                     ex_score: 1500,

@@ -59,11 +59,29 @@ impl SelectIrRanking {
         let mut snapshot = self
             .cache
             .get(&sha256)
-            .and_then(|entry| match scope {
-                SelectIrRankingScope::Global => Some(entry.global.clone()),
-                SelectIrRankingScope::SelfAndRivals => entry.self_and_rivals.clone(),
-            })
-            .map(|mut snapshot| {
+            .and_then(|entry| {
+                let mut snapshot = match scope {
+                    SelectIrRankingScope::Global => entry
+                        .global_ranking
+                        .as_ref()
+                        .map(|ranking| {
+                            result_ir_ranking_to_skin_snapshot_at(
+                                ranking,
+                                entry.global_scroll_offset,
+                            )
+                        })
+                        .unwrap_or_else(|| entry.global.clone()),
+                    SelectIrRankingScope::SelfAndRivals => entry
+                        .self_and_rivals_ranking
+                        .as_ref()
+                        .map(|ranking| {
+                            result_ir_ranking_to_skin_snapshot_at(
+                                ranking,
+                                entry.self_and_rivals_scroll_offset,
+                            )
+                        })
+                        .or_else(|| entry.self_and_rivals.clone())?,
+                };
                 let entry = &self.cache[&sha256];
                 match snapshot.state {
                     SkinIrState::Loaded => {
@@ -74,7 +92,7 @@ impl SelectIrRanking {
                     }
                     _ => {}
                 }
-                snapshot
+                Some(snapshot)
             })
             .unwrap_or_else(|| {
                 let begin_ms = self
@@ -155,6 +173,57 @@ impl SelectIrRanking {
             }
     }
 
+    /// Select skin の changeable slider type 8 からランキングの表示位置を更新する。
+    pub fn set_skin_scroll_rate(
+        &mut self,
+        selected_chart: Option<[u8; 32]>,
+        selected_course: Option<&SelectCourseIrTarget>,
+        binding: bmz_render::skin::IrScopeBinding,
+        value: f32,
+    ) {
+        if let Some(target) = selected_course {
+            let Some(entry) = self.course_cache.get_mut(target) else {
+                return;
+            };
+            let Some(ranking) = entry.ranking.as_ref() else {
+                return;
+            };
+            entry.scroll_offset = skin_scroll_offset_from_rate(value, ranking.entries.len());
+            return;
+        }
+
+        let Some(sha256) = selected_chart else {
+            return;
+        };
+        let Some(entry) = self.cache.get_mut(&sha256) else {
+            return;
+        };
+        let scope = match binding {
+            bmz_render::skin::IrScopeBinding::Global => SelectIrRankingScope::Global,
+            bmz_render::skin::IrScopeBinding::Active
+                if self.active_scope == SelectIrRankingScope::SelfAndRivals
+                    && entry.self_and_rivals_ranking.is_some() =>
+            {
+                SelectIrRankingScope::SelfAndRivals
+            }
+            bmz_render::skin::IrScopeBinding::Active => SelectIrRankingScope::Global,
+        };
+        match scope {
+            SelectIrRankingScope::Global => {
+                if let Some(ranking) = entry.global_ranking.as_ref() {
+                    entry.global_scroll_offset =
+                        skin_scroll_offset_from_rate(value, ranking.entries.len());
+                }
+            }
+            SelectIrRankingScope::SelfAndRivals => {
+                if let Some(ranking) = entry.self_and_rivals_ranking.as_ref() {
+                    entry.self_and_rivals_scroll_offset =
+                        skin_scroll_offset_from_rate(value, ranking.entries.len());
+                }
+            }
+        }
+    }
+
     pub fn course_snapshot_for(
         &self,
         ir_config: &IrConfig,
@@ -170,7 +239,13 @@ impl SelectIrRanking {
             .course_cache
             .get(target)
             .map(|entry| {
-                let mut snapshot = entry.ir.clone();
+                let mut snapshot = entry
+                    .ranking
+                    .as_ref()
+                    .map(|ranking| {
+                        result_ir_ranking_to_skin_snapshot_at(ranking, entry.scroll_offset)
+                    })
+                    .unwrap_or_else(|| entry.ir.clone());
                 match snapshot.state {
                     SkinIrState::Loaded => {
                         snapshot.connect_success_ms = Some(elapsed_since_ms(entry.completed_at));
@@ -341,4 +416,10 @@ fn snapshot_with_provider(
     snapshot.user_name =
         bmz_render::scene::ResultIrRankingName::from_display_name(&provider.account_display_name);
     snapshot
+}
+
+fn skin_scroll_offset_from_rate(value: f32, entry_count: usize) -> usize {
+    let max = entry_count.saturating_sub(bmz_render::scene::IR_RANKING_ENTRY_SLOTS);
+    let rate = if value.is_finite() { value.clamp(0.0, 1.0) } else { 0.0 };
+    ((rate * max as f32).round() as usize).min(max)
 }
