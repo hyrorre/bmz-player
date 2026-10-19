@@ -8,13 +8,14 @@ impl WinitApp {
         select_exit_hold_due(&mut self.select.select_exit_hold_started_at, allowed, Instant::now())
     }
 
-    pub(super) fn select_exit_hold_progress(&self) -> f32 {
-        let Some(started) = self.select.select_exit_hold_started_at else {
-            return 0.0;
-        };
-        let elapsed = started.elapsed().as_secs_f32();
-        let total = SELECT_EXIT_HOLD_DURATION.as_secs_f32();
-        (elapsed / total).clamp(0.0, 1.0)
+    pub(super) fn select_exit_hold_snapshot(&self) -> ExitHoldSnapshot {
+        ExitHoldSnapshot {
+            elapsed_ms: self
+                .select
+                .select_exit_hold_started_at
+                .map(|started| started.elapsed().as_millis().min(i32::MAX as u128) as i32),
+            duration_ms: SELECT_EXIT_HOLD_DURATION.as_millis() as i32,
+        }
     }
 
     pub(super) fn select_time(&self) -> TimeUs {

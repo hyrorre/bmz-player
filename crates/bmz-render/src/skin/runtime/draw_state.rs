@@ -234,6 +234,8 @@ pub struct SkinDrawState {
     pub bpm_change_preview: crate::snapshot::BpmChangePreviewSnapshot,
     /// `bmzBpmChangePreview.leadMs`。未宣言なら予告option/timerは常にOFF。
     pub bpm_change_preview_lead_ms: Option<i32>,
+    /// Select ESC hold-to-exit state (BMZ `19070..=19074`)。
+    pub exit_hold: crate::snapshot::ExitHoldSnapshot,
     /// BMS `#TEXT` の表示文字列が空でないか (BMZ option 20101)。
     pub chart_text_visible: bool,
     /// 直近のチャネル #99 イベントからの経過 ms (BMZ timer 20102)。
@@ -638,6 +640,7 @@ impl Default for SkinDrawState {
             has_bpm_stop: false,
             bpm_change_preview: Default::default(),
             bpm_change_preview_lead_ms: None,
+            exit_hold: Default::default(),
             chart_text_visible: false,
             chart_text_event_ms: None,
             chart_miss_text_ms: None,

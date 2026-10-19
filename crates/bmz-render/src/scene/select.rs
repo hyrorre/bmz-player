@@ -109,8 +109,8 @@ pub struct SelectSnapshot {
     pub current_folder: String,
     pub key_hint: String,
     pub option_hint: String,
-    /// ESC 長押しによるアプリ終了の進捗 (0.0..=1.0)。0.0 のときは未押下。
-    pub exit_hold_progress: f32,
+    /// ESC 長押しによるアプリ終了の状態。
+    pub exit_hold: ExitHoldSnapshot,
     /// 右下に常時表示するオーバーレイ文字列。
     pub overlay: OverlaySnapshot,
     /// `#STAGEFILE` テクスチャがロード済みなら true。
@@ -340,7 +340,7 @@ impl Default for SelectSnapshot {
             current_folder: String::new(),
             key_hint: String::new(),
             option_hint: String::new(),
-            exit_hold_progress: 0.0,
+            exit_hold: ExitHoldSnapshot::default(),
             overlay: OverlaySnapshot::default(),
             stage_background: false,
             stage_image_size: None,

@@ -6,6 +6,13 @@ BMZはbeatoraja JSON / Lua skinの互換を基本にします。既存beatoraja 
 JSON / Lua / LR2 skinの対応範囲と残課題は[skin-compatibility.md](skin-compatibility.md)を参照してください。
 この文書ではIDや各機能の動作契約を管理します。
 
+## 画像の拡大縮小
+
+画像destinationの`filter=0`（既定）は最近傍、非0は線形補間を使います。
+最近傍では切り出し範囲のpixel境界を保持し、整数倍表示でも各画素を同じ幅で描きます。
+線形補間では、隣の素材が混ざらないよう切り出し範囲の内側に半画素の余白を設けます。
+通常画像・回転画像に共通です。
+
 ## Destinationのクリッピング
 
 JSON / Luaのdestinationの各`dst`に`clip_x` / `clip_y` / `clip_w` / `clip_h`を指定すると、
@@ -1301,13 +1308,13 @@ v1・Numbers・Closeを宣言します。旧timer 22表示のみを置換し、2
 | 19300 | CURSORです。表示順の0-based位置 |
 | 19301 | ITEM_COUNTです。全項目数 |
 | 19302 | ITEM_IDです。表示順と独立した安定ID |
-| 19303 | CATEGORY_IDです。1=LANE、2=GAUGE、3=HI-SPEED、4=LONG NOTE、5=ASSIST / MODIFIER、6=BGA、7=JUDGE |
+| 19303 | CATEGORY_IDです。1=LANE / HI-SPEED、2=GAUGE、4=LONG NOTE、5=ASSIST / MODIFIER、6=BGA、7=JUDGE。3（旧HI-SPEED）は欠番 |
 | 19304 | SCOPEです。0=profile共通、4/5/6/7/8/9/10/14=編集対象キーモード、-1=未解決 |
 | 19305 | VALUEです。保存設定の値です。boolは0/1、enumは下記の明示コード、numberは数値そのもの |
 | 19306 | VALUE_INDEXです。bool/enumの0-based選択肢indexです。number、未取得、候補外値は-1 |
 | 19307 | CHOICE_COUNTです。boolは2、enumは候補数、numberは0 |
 | 19308 / 19309 / 19310 | numberのMIN / MAX / STEPです。他の型は-1 |
-| 19311 | VIEWPORT_STARTです。環状配置の仮想slot 0に対応する0-based位置です。`(CURSOR + ITEM_COUNT - 3 % ITEM_COUNT) % ITEM_COUNT`（0項目時は0） |
+| 19311 | VIEWPORT_STARTです。環状配置の仮想slot 0に対応する0-based位置です。停止時は`(CURSOR + ITEM_COUNT - 3 % ITEM_COUNT) % ITEM_COUNT`（0項目時は0）。移動中は整数列分の残り変位を引いた表示窓に対応します |
 | 19312 | ROW_SLOTSです。v1は7（項目数の上限ではない） |
 
 enumのVALUEは、GAS下限: `0=ASSIST EASY,1=EASY,2=NORMAL`、HS CONFIG:
@@ -1375,7 +1382,7 @@ slot `s=0..6`の基底は`19400 + 10*s`です。各名前空間で次を解決�
 | 0 | item_id | label | valid |
 | 1 | category_id | value_label | selected |
 | 2 | value | 状態ラベル（編集不可 / 非適用 / 空文字） | editable |
-| 3 | scope | 空文字 | effective |
+| 3 | scope | 大分類の英語表記（`LANE / HI-SPEED`等。言語設定によらず英語） | effective |
 | 4 | CHOICE_COUNT | 空文字 | enumの候補外値（VALUE_INDEX=-1）です。numberではfalse |
 | 5 | VALUE_INDEX | 空文字 | 数値型 |
 | 6 | 数値MIN（他の型は-1） | 空文字 | 数値の減少が可能（editableかつ現在値>MIN） |
@@ -1385,12 +1392,13 @@ slot `s=0..6`の基底は`19400 + 10*s`です。各名前空間で次を解決�
 
 空き行・非表示行はnumber=-1、text空、全option=falseです。
 viewportは環状で、項目がある場合に中央slot 3だけselected=trueになります。
-7項目以上ではslot 0..6が選択項目の前後3項目を含み、indexは`(VIEWPORT_START+s)%ITEM_COUNT`です。
+7項目以上ではslot 0..6が表示窓中央の前後3項目を含み、indexは`(VIEWPORT_START+s)%ITEM_COUNT`です。
+停止時の中央はCURSORです。移動中は表示窓が選択先へ追従するため、slot 3とCURSORが異なる場合があります。
 7項目未満では重複表示せず、`3-floor((ITEM_COUNT-1)/2)`からITEM_COUNT個のslotだけvalidにします。
 例えば1項目ならslot 3、2項目ならslot 3と4、3項目ならslot 2..4が有効です。
 配列の末尾で打ち切らず、validと各slotのrefを使います。
 枠外の補助slot 7 / 8も同じ形式で公開します（19470..19489）。7項目を超える場合のみvalidで、
-slot 7は選択項目の4つ前（描画位置はslot -1）、slot 8は4つ後（描画位置はslot 7）です。
+slot 7は表示窓中央の4つ前（描画位置はslot -1）、slot 8は4つ後（描画位置はslot 7）です。
 常にselected=falseです。移動途中の端を途切れさせないため、各側1列を枠外に描画してマスクします。
 ROW_SLOTSは可視枠の数なので7のままです。8項目だけの時は両補助slotが同じ項目を指すが、
 見えるのは移動方向側だけです。7項目以下の補助slotは未取得値を返します。
@@ -1405,8 +1413,11 @@ destinationの`"bmzDetailScroll": [dx, dy]`に1項目分の移動量（skin canv
 列の背景・文字・候補・クリック領域には同じ指定を付け、中央カーソルには付けません。
 列が枠外へ出る部分はスキン側で不透明なマスクを置き、`act:0, clickable:true`等で
 マスクの背後のクリックも消費します（E2のeventフィルターが0を除外する）。
-時間は選曲と同じ低速/高速スクロール設定を使用し、移動中の再入力では高速設定を使います。
-表示位置だけを補間し、ref/option/eventが参照する項目・設定値は入力直後のsnapshotに一致します。
+選曲バーと同じ三次Hermite補間で、追加入力時の表示位置と速度を引き継いで終点速度を0にします。
+ホイール・鍵の単発移動は選曲の低速設定、アナログは1項目120ms・複数項目30msを使います。
+複数列の残り変位も保持し、整数列分をVIEWPORT_STARTへ、小数列分を`bmzDetailScroll`へ反映します。
+選択先のref 19300帯と説明・値変更は入力直後のCURSORを参照し、行ref・行eventは表示窓の項目を参照します。
+クリックは判定に使用したsnapshotの行へ適用するため、移動中も見えている項目を操作できます。
 
 #### 全選択肢セル（横並び表示用の追加API）
 
@@ -1770,6 +1781,45 @@ Lua skinはロード結果のtableに同じキーを設定します。`leadMs`�
 `19064`と`19065` / `19066`で、FAST / SLOW数と同じ青・赤の数字画像による「変化前 » 変化後」を切り替えます。
 レーン外に置く場合は、レーン側の数字の桁数を`draw: "number(19062) >= 10 && number(19062) < 100"`
 のような条件で判定し、「»」と反対側の数字の位置を変えてレーン側の数字をレーンへ寄せます。
+
+### BMZ Exit Hold Refs
+
+選曲画面のルートでEscapeを長押しして終了するときの進捗を、選曲skinが自前のデザインで
+表示するためのBMZ拡張です。既定では本体が画面左上に「HOLD ESC TO EXIT」のパネルと
+進捗バーを重ねます。skinが次の宣言をすると、本体の表示を出さずにskinの表示だけを使います。
+
+```json
+{ "bmzExitHold": { "builtin": false } }
+```
+
+Lua skinはロード結果のtableに同じキー（`bmzExitHold = { builtin = false }`）を設定します。
+`builtin`の省略時と宣言自体がない場合は`true`で、本体の表示を残します。
+次のref / option / timerは宣言に関係なく返すため、本体の表示に重ねる演出にも使えます。
+
+| ID | kind | meaning |
+| ---: | --- | --- |
+| 19070 | number / graph | 進捗です。numberは`0..100`（切り捨て）、graphの`type`では`0.0..1.0` |
+| 19071 | number | 終了までの残りms。長押ししていない間は`0` |
+| 19072 | number | 終了に必要な長押し時間ms（現在は1200） |
+| 19073 | option | Escapeを終了に向けて長押ししている |
+| 19074 | timer | 長押し開始からの経過ms。長押ししていない間はOFF |
+
+- 長押しの開始・取消の条件は操作仕様（[controls.md](controls.md)）と同じです。
+  フォルダ内のEscapeやパネル表示中は進みません。
+- 宣言はjson / Lua skinだけが対象です。LR2 CSVには宣言の手段がないため、本体の表示を残します
+  （refは利用できます）。
+
+```json
+{
+  "bmzExitHold": { "builtin": false },
+  "graph": [{ "id": "exit_bar", "src": "parts", "x": 0, "y": 0, "w": 400, "h": 8, "type": 19070, "angle": 0 }],
+  "destination": [
+    { "id": "exit_bar", "op": [19073], "timer": 19074, "loop": 150,
+      "dst": [{ "time": 0, "x": 40, "y": 40, "w": 400, "h": 8, "a": 0 },
+              { "time": 150, "x": 40, "y": 40, "w": 400, "h": 8, "a": 255 }] }
+  ]
+}
+```
 
 ### BMZ Chart Text Refs
 

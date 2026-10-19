@@ -90,6 +90,16 @@ pub const SKIN_TIMER_BMZ_BPM_CHANGE_PREVIEW: i32 = 19_068;
 pub const SKIN_TIMER_BMZ_BPM_CHANGED: i32 = 19_069;
 /// Upper bound for `bmzBpmChangePreview.leadMs`.
 pub const SKIN_BMZ_BPM_CHANGE_PREVIEW_MAX_LEAD_MS: i32 = 10_000;
+/// BMZ extension: select ESC hold-to-exit progress (`0..=100`); graph type uses `0.0..=1.0`.
+pub const SKIN_REF_BMZ_EXIT_HOLD_PERCENT: i32 = 19_070;
+/// BMZ extension: milliseconds left until the ESC hold exits (`0` while not held).
+pub const SKIN_REF_BMZ_EXIT_HOLD_REMAINING_MS: i32 = 19_071;
+/// BMZ extension: total ESC hold duration required to exit.
+pub const SKIN_REF_BMZ_EXIT_HOLD_DURATION_MS: i32 = 19_072;
+/// BMZ extension: ESC is being held toward exit.
+pub const SKIN_OPTION_BMZ_EXIT_HOLD_ACTIVE: i32 = 19_073;
+/// BMZ extension: elapsed milliseconds since the ESC hold started. OFF while not held.
+pub const SKIN_TIMER_BMZ_EXIT_HOLD: i32 = 19_074;
 /// BMZ extension: generic daily statistics number refs.
 pub const SKIN_REF_BMZ_DAILY_BASE: i32 = 1930;
 pub const SKIN_REF_BMZ_DAILY_LAST: i32 = 1946;

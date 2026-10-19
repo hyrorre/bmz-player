@@ -59,6 +59,8 @@ mod document;
 mod ecfn_detail_options;
 #[path = "tests/ecfn_extensions.rs"]
 mod ecfn_extensions;
+#[path = "tests/exit_hold.rs"]
+mod exit_hold;
 #[path = "tests/lr2.rs"]
 mod lr2;
 #[path = "tests/lua.rs"]

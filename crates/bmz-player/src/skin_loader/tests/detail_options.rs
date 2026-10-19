@@ -65,7 +65,7 @@ fn detail_experimental_off_keeps_legacy_and_on_shows_numbers_without_buttons() {
         let mut renderer = Renderer::default();
         install_decoded_skin(&mut renderer, old, bmz_render::skin::default_skin_manifest())
             .unwrap();
-        let mut s = snapshot(AppLocale::En, 8);
+        let mut s = snapshot(AppLocale::En, cursor_of(304));
         s.time = TimeUs(2_000_000);
         renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
         assert!(!renderer.last_plan().unwrap().commands.iter().any(|command| matches!(command,
@@ -74,7 +74,7 @@ fn detail_experimental_off_keeps_legacy_and_on_shows_numbers_without_buttons() {
         assert!(new.document.bmz_detail_options_numbers);
         install_decoded_skin(&mut renderer, new, bmz_render::skin::default_skin_manifest())
             .unwrap();
-        for cursor in [8, 12] {
+        for cursor in [cursor_of(304), cursor_of(702)] {
             s = snapshot(AppLocale::En, cursor);
             s.time = TimeUs(2_000_000);
             renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
@@ -103,6 +103,97 @@ fn detail_experimental_off_keeps_legacy_and_on_shows_numbers_without_buttons() {
             }
         }
     }
+}
+
+/// Asserts that number rows show their value in an unselected button: the centre
+/// column of a numeric item draws nothing from the cursor `region` of the source
+/// whose id or path is `source`, while a choice row there still does.
+pub(super) fn assert_number_values_unselected(
+    decoded: DecodedSkin,
+    source: &str,
+    region: (f32, f32, f32, f32),
+) {
+    let texture = bmz_render::plan::TextureId(
+        decoded
+            .sources
+            .iter()
+            .find(|s| s.source_id == source || s.path.ends_with(source))
+            .unwrap()
+            .texture
+            .0,
+    );
+    let mut renderer = Renderer::default();
+    install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
+        .unwrap();
+    for (id, highlighted) in [(304, false), (702, false), (101, true)] {
+        let s =
+            SelectSnapshot { time: TimeUs(2_000_000), ..snapshot(AppLocale::Ja, cursor_of(id)) };
+        renderer.prepare_scene(AppSceneSnapshot::Select(s));
+        let drawn = renderer.last_plan().unwrap().commands.iter().any(|command| {
+            let DrawCommand::Image { texture: t, rect, uv, source_size: Some(size), .. } = command
+            else {
+                return false;
+            };
+            let (x0, y0) = (uv.x * size.width, uv.y * size.height);
+            let (x1, y1) = (x0 + uv.width * size.width, y0 + uv.height * size.height);
+            // The centre column starts at 831; its glow may reach 19 px further left.
+            *t == texture
+                && (820.0..1100.0).contains(&(rect.x * 1920.0))
+                && x0 >= region.0 - 0.5
+                && y0 >= region.1 - 0.5
+                && x1 <= region.2 + 0.5
+                && y1 <= region.3 + 0.5
+        });
+        assert_eq!(drawn, highlighted, "item {id}");
+    }
+}
+
+/// Asserts that every visible column draws its left frame piece (`size` in
+/// 1920x1080 canvas pixels, at the column's left edge) from the source that
+/// `source_x` assigns to the row's category, and that all categories appear.
+pub(super) fn assert_frames_follow_categories(
+    renderer: &mut Renderer,
+    cases: Vec<(i64, SelectSnapshot)>,
+    size: (f32, f32),
+    source_x: impl Fn(i64) -> f32,
+) {
+    let mut seen = std::collections::BTreeSet::new();
+    for (id, s) in cases {
+        renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
+        let commands = &renderer.last_plan().unwrap().commands;
+        let panel =
+            s.detail_options.as_ref().or(s.detail_options_closing.as_ref().map(|c| &c.panel));
+        for slot in 0..7 {
+            let category = panel.unwrap().row(slot).unwrap().category_id;
+            seen.insert(category);
+            let mut sources: Vec<_> = commands
+                .iter()
+                .filter_map(|command| match command {
+                    DrawCommand::Image { rect, uv, source_size: Some(source), .. }
+                        if (rect.width * 1920.0 - size.0).abs() < 0.1
+                            && (rect.height * 1080.0 - size.1).abs() < 0.1
+                            && (rect.x * 1920.0 - (9.0 + 274.0 * slot as f32)).abs() < 0.5 =>
+                    {
+                        Some(uv.x * source.width)
+                    }
+                    _ => None,
+                })
+                .collect();
+            // Skins may layer a dim and a bright rim of the same colour.
+            sources.dedup();
+            assert_eq!(
+                sources,
+                [source_x(category)],
+                "item {id}, slot {slot}, category {category}"
+            );
+        }
+    }
+    assert_eq!(seen.into_iter().collect::<Vec<_>>(), [1, 2, 4, 5, 6, 7]);
+}
+
+/// Display index of a stable item ID, so tests survive catalog reordering.
+pub(super) fn cursor_of(id: i64) -> usize {
+    CATALOG.iter().position(|item| item.id == id).unwrap()
 }
 
 pub(super) fn snapshot(locale: AppLocale, cursor: usize) -> SelectSnapshot {
@@ -252,7 +343,7 @@ fn detail_undeclared_skins_keep_legacy_panel_and_events_without_overlay() {
         );
         // Even stale active/closing data after a skin switch cannot replace the old UI.
         for closing in [false, true] {
-            let mut s = snapshot(AppLocale::Ja, 14);
+            let mut s = snapshot(AppLocale::Ja, cursor_of(501));
             if closing {
                 s.detail_options_closing =
                     Some(bmz_render::scene::detail_options::DetailOptionsClosingSnapshot {
@@ -283,7 +374,7 @@ fn detail_undeclared_skins_keep_legacy_panel_and_events_without_overlay() {
 #[test]
 fn detail_unskinned_path_keeps_native_legacy_assist_panel() {
     let mut renderer = Renderer::default();
-    let s = snapshot(AppLocale::Ja, 14);
+    let s = snapshot(AppLocale::Ja, cursor_of(501));
     renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
     let commands = &renderer.last_plan().unwrap().commands;
     assert!(
@@ -311,7 +402,7 @@ fn detail_carousel_draw_and_click_positions_follow_the_same_animation() {
     let decoded = detail_options::decode_experimental(&path, SkinKind::Select).unwrap();
     install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
         .unwrap();
-    for cursor in [0, 14] {
+    for cursor in [cursor_of(101), cursor_of(501)] {
         let mut s = snapshot(AppLocale::En, cursor);
         let selected_label = s.detail_options.as_ref().unwrap().selected().unwrap().label.clone();
         let mut rest_x = 0.0;
@@ -384,12 +475,12 @@ fn detail_options_gpu_previews() {
                 .set_default_font_search_paths(vec![test_app_paths().resource_dir.join("fonts")]);
             renderer.attach_offscreen(bmz_render::renderer::SurfaceSize { width, height }).unwrap();
             for (locale, cursor, scroll) in [
-                (AppLocale::Ja, 0, 0.0),
-                (AppLocale::Ja, 12, 0.0),
-                (AppLocale::En, 12, 0.0),
-                (AppLocale::En, 14, 0.0),
-                (AppLocale::Ja, 0, 0.5),
-                (AppLocale::En, 14, -0.5),
+                (AppLocale::Ja, cursor_of(101), 0.0),
+                (AppLocale::Ja, cursor_of(702), 0.0),
+                (AppLocale::En, cursor_of(702), 0.0),
+                (AppLocale::En, cursor_of(501), 0.0),
+                (AppLocale::Ja, cursor_of(101), 0.5),
+                (AppLocale::En, cursor_of(501), -0.5),
             ] {
                 let mut s = snapshot(locale, cursor);
                 s.detail_options_scroll = scroll;

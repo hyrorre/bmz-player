@@ -1,6 +1,67 @@
 use super::*;
 
 #[test]
+#[ignore = "requires a GPU; run explicitly for sliced image sampling changes"]
+fn nearest_sliced_images_match_an_unsliced_image_when_scaled() {
+    let id = TextureId(902);
+    let pixels: Vec<_> = (0..16).flat_map(|x| [x * 15, 255 - x * 15, 70, 255]).collect();
+    for scale in [1, 2, 3] {
+        let mut renderer = Renderer::default();
+        let width = 12 * scale;
+        renderer.attach_offscreen(SurfaceSize { width, height: 2 }).unwrap();
+        renderer.upsert_rgba_texture_ref(id, 16, 1, &pixels).unwrap();
+        let image = |start: f32, len: f32, row: f32, rotated| {
+            let rect = Rect { x: start / 12.0, y: row / 2.0, width: len / 12.0, height: 0.5 };
+            let uv = UvRect { x: (start + 2.0) / 16.0, y: 0.0, width: len / 16.0, height: 1.0 };
+            let source_size = Some(SkinImageSize { width: 16.0, height: 1.0 });
+            if rotated {
+                DrawCommand::RotatedImage {
+                    rect,
+                    uv,
+                    source_size,
+                    texture: id,
+                    tint: Color::rgb(1.0, 1.0, 1.0),
+                    blend: BlendMode::Normal,
+                    linear_filter: false,
+                    angle_rad: 0.0,
+                    center: Point { x: 0.5, y: 0.5 },
+                    post_scale: Point { x: 1.0, y: 1.0 },
+                }
+            } else {
+                DrawCommand::Image {
+                    rect,
+                    uv,
+                    source_size,
+                    texture: id,
+                    tint: Color::rgb(1.0, 1.0, 1.0),
+                    blend: BlendMode::Normal,
+                    linear_filter: false,
+                }
+            }
+        };
+        renderer.last_plan = Some(DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![
+                image(0.0, 12.0, 0.0, false),
+                image(0.0, 5.0, 1.0, false),
+                image(5.0, 7.0, 1.0, true),
+            ],
+        });
+        renderer.render_last_plan().unwrap();
+        let rgba = renderer.read_offscreen_rgba().unwrap();
+        let stride = width as usize * 4;
+        let expected: Vec<_> = pixels[8..56]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|pixel| std::iter::repeat_n(pixel, scale as usize).flatten().copied())
+            .collect();
+        assert_eq!(&rgba[..stride], expected, "source pixels at scale {scale}");
+        assert_eq!(&rgba[..stride], &rgba[stride..], "scale {scale}");
+    }
+}
+
+#[test]
 #[ignore = "requires a GPU; run explicitly for LR2 blending changes"]
 fn subtractive_skin_image_darkens_pixels_and_preserves_alpha_on_gpu() {
     let mut renderer = Renderer::default();

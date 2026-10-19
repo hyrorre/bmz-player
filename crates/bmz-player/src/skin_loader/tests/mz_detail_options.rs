@@ -1,7 +1,13 @@
+use super::detail_options::cursor_of;
 use super::*;
+
 use crate::i18n::AppLocale;
 use crate::select_detail_options::CATALOG;
 use bmz_render::skin::SkinClickTarget;
+
+// First choice of the panel2-style card: 50 px cells stacked from y = 245.
+const CHOICE_Y: f32 = 270.0;
+const CHOICE_PITCH: f32 = 50.0;
 
 fn skin_path() -> PathBuf {
     let path = test_app_paths().resource_dir.join("skins/mz-select/music_select.luaskin");
@@ -62,7 +68,7 @@ fn close_panel(s: &mut SelectSnapshot, elapsed_ms: i64) {
 }
 
 fn switching_panel(from: u8, to: u8, elapsed: i64) -> SelectSnapshot {
-    let mut s = snapshot(AppLocale::Ja, 0);
+    let mut s = snapshot(AppLocale::Ja, cursor_of(101));
     if from == 2 {
         close_panel(&mut s, elapsed);
     } else if to != 2 {
@@ -158,7 +164,7 @@ fn mz_detail_options_switch_plays_both_exit_and_entrance_and_routes_current_pane
             if to != 2 {
                 for x in [100.0, 960.0, 1800.0] {
                     assert!(
-                        !event_at(&renderer, &s, x, 299.0)
+                        !event_at(&renderer, &s, x, CHOICE_Y)
                             .is_some_and(bmz_render::skin::is_detail_options_event)
                     );
                 }
@@ -172,7 +178,7 @@ fn mz_detail_options_exit_keeps_labels_and_scroll_but_blocks_all_clicks() {
     let mut renderer = renderer();
     for locale in [AppLocale::Ja, AppLocale::En] {
         for scroll in [-0.5, 0.0, 0.5] {
-            let mut s = snapshot(locale, 0);
+            let mut s = snapshot(locale, cursor_of(101));
             s.detail_options_scroll = scroll;
             close_panel(&mut s, 0);
             for elapsed in [0, 75, 150, 225, 299, 300, 500] {
@@ -193,7 +199,7 @@ fn mz_detail_options_exit_keeps_labels_and_scroll_but_blocks_all_clicks() {
                     assert!(x.is_none(), "expired close snapshot still drawn");
                 }
                 for x in [80.0, 450.0, 960.0, 1840.0] {
-                    for y in [60.0, 299.0, 700.0, 960.0] {
+                    for y in [60.0, CHOICE_Y, 700.0, 960.0] {
                         if elapsed < 300 {
                             assert_eq!(event_at(&renderer, &s, x, y), None);
                             assert!(
@@ -219,7 +225,7 @@ fn mz_detail_options_exit_keeps_labels_and_scroll_but_blocks_all_clicks() {
 
 #[test]
 fn mz_detail_options_closing_data_requires_explicit_opt_in() {
-    let mut s = snapshot(AppLocale::Ja, 0);
+    let mut s = snapshot(AppLocale::Ja, cursor_of(101));
     close_panel(&mut s, 100);
     let mut decoded = detail_options::decode_experimental(&skin_path(), SkinKind::Select).unwrap();
     decoded.document.bmz_detail_options_close = false;
@@ -253,7 +259,7 @@ fn mz_detail_options_reuses_option_artwork_and_version_font() {
     // Keep the exact snapshot strings, including LN MODE parentheses that the
     // version atlas lacks. Only these two glyphs use the existing profile atlas.
     for locale in [AppLocale::Ja, AppLocale::En] {
-        let s = snapshot(locale, 0);
+        let s = snapshot(locale, cursor_of(101));
         for row in s.detail_options.unwrap().items.iter() {
             for choice in row.choices.iter() {
                 for c in choice.label.chars() {
@@ -263,10 +269,18 @@ fn mz_detail_options_reuses_option_artwork_and_version_font() {
         }
     }
     let decoded = detail_options::decode_experimental(&path, SkinKind::Select).unwrap();
-    for (id, source) in
+    for (part, source) in
         [("mz_detail_button", "mz_detail_panel"), ("mz_detail_value_selected", "mz_detail_cursor")]
     {
-        assert!(decoded.document.image.iter().any(|i| i.id == id && i.src == source));
+        for side in ["l", "m", "r"] {
+            let id = format!("{part}_{side}");
+            assert!(decoded.document.image.iter().any(|i| i.id == id && i.src == source), "{id}");
+        }
+    }
+    // Three-slicing never samples the button's baked label (x 390..441 in panel2).
+    for image in decoded.document.image.iter().filter(|i| i.id.starts_with("mz_detail_button_")) {
+        let (x, w) = (image.x, image.w);
+        assert!(x + w <= 390 || x >= 442, "{} samples the baked label", image.id);
     }
     assert!(
         decoded
@@ -290,7 +304,7 @@ fn mz_detail_options_reuses_option_artwork_and_version_font() {
 #[test]
 fn mz_detail_options_entrance_uses_legacy_easing_and_moving_hit_regions() {
     let mut renderer = renderer();
-    let mut s = snapshot(AppLocale::Ja, 0);
+    let mut s = snapshot(AppLocale::Ja, cursor_of(101));
     for elapsed in [0, 75, 150, 225, 300, 500] {
         s.option_panel_time = TimeUs(elapsed * 1000);
         renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
@@ -311,12 +325,18 @@ fn mz_detail_options_entrance_uses_legacy_easing_and_moving_hit_regions() {
         for slot in 0..7 {
             let x = 138.0 + slot as f32 * 274.0 + offset;
             if (0.0..1920.0).contains(&x) {
-                assert_eq!(event_at(&renderer, &s, x, 299.0), Some(19500 + slot * 64));
+                // Number rows have no choice cell; their value box selects the column.
+                let number = matches!(
+                    s.detail_options.as_ref().unwrap().row(slot as usize).unwrap().kind,
+                    bmz_render::scene::detail_options::DetailValueKind::Number { .. }
+                );
+                let expected = if number { 19310 + slot } else { 19500 + slot * 64 };
+                assert_eq!(event_at(&renderer, &s, x, CHOICE_Y), Some(expected));
             }
         }
         // No right overscan column flashes into view while the panel enters.
         if elapsed < 300 {
-            assert_eq!(event_at(&renderer, &s, 1900.0, 299.0), None);
+            assert_eq!(event_at(&renderer, &s, 1900.0, CHOICE_Y), None);
         }
         assert_eq!(event_at(&renderer, &s, 960.0, 60.0), None);
         assert_eq!(event_at(&renderer, &s, 960.0, 960.0), None);
@@ -360,7 +380,7 @@ fn mz_detail_options_all_items_choices_and_animated_clicks() {
                     for (index, choice) in row.choices.iter().enumerate() {
                         assert!(has_text(&choice.label));
                         assert_eq!(
-                            event_at(&renderer, &s, x, 299.0 + index as f32 * 52.0),
+                            event_at(&renderer, &s, x, CHOICE_Y + index as f32 * CHOICE_PITCH),
                             Some(19500 + slot as i32 * 64 + index as i32 * 4)
                         );
                     }
@@ -391,10 +411,43 @@ fn mz_detail_options_all_items_choices_and_animated_clicks() {
 }
 
 #[test]
+fn mz_detail_options_number_values_use_an_unselected_button() {
+    let decoded = detail_options::decode_experimental(&skin_path(), SkinKind::Select).unwrap();
+    detail_options::assert_number_values_unselected(
+        decoded,
+        "mz_detail_cursor",
+        (616.0, 500.0, 786.0, 550.0),
+    );
+}
+
+#[test]
+fn mz_detail_options_frames_follow_row_categories() {
+    // Source x of each option card: panel2 blue for LANE / HI-SPEED and JUDGE;
+    // panel3 green GAUGE, orange LONG NOTE, red BGA and pink ASSIST / MODIFIER.
+    let rim_x = |category| match category {
+        1 | 7 => 325.0,
+        2 => 552.0,
+        4 => 118.0,
+        6 => 452.0,
+        5 => 692.0,
+        _ => panic!("unexpected category {category}"),
+    };
+    let mut cases: Vec<_> = [101, 201, 601, 501]
+        .map(|id| (id, snapshot(AppLocale::Ja, cursor_of(id))))
+        .into_iter()
+        .collect();
+    // The exit starts from the settled columns with the rows it froze.
+    let mut closing = snapshot(AppLocale::Ja, cursor_of(601));
+    close_panel(&mut closing, 0);
+    cases.push((0, closing));
+    detail_options::assert_frames_follow_categories(&mut renderer(), cases, (3.0, 544.0), rim_x);
+}
+
+#[test]
 fn mz_detail_options_small_catalogue_inactive_locked_and_external_values() {
     let mut renderer = renderer();
     for count in [0, 1, 3, 6] {
-        let mut s = snapshot(AppLocale::Ja, 0);
+        let mut s = snapshot(AppLocale::Ja, cursor_of(101));
         let panel = std::sync::Arc::make_mut(s.detail_options.as_mut().unwrap());
         panel.items = panel.items[..count].to_vec().into();
         renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
@@ -405,9 +458,9 @@ fn mz_detail_options_small_catalogue_inactive_locked_and_external_values() {
             assert_eq!(event_at(&renderer, &s, x, 220.0), valid.then_some(19310 + slot as i32));
         }
     }
-    let mut s = snapshot(AppLocale::Ja, 8);
+    let mut s = snapshot(AppLocale::Ja, cursor_of(304));
     let panel = std::sync::Arc::make_mut(s.detail_options.as_mut().unwrap());
-    let row = &mut std::sync::Arc::make_mut(&mut panel.items)[8];
+    let row = &mut std::sync::Arc::make_mut(&mut panel.items)[cursor_of(304)];
     row.value = 2;
     row.value_index = -1;
     row.value_label = "ADD".into();
@@ -421,10 +474,10 @@ fn mz_detail_options_small_catalogue_inactive_locked_and_external_values() {
             DrawCommand::Text { text, .. } if text == label)));
     }
     // A disabled value cannot fire its choice event, but its column stays selectable.
-    assert_eq!(event_at(&renderer, &s, 960.0, 299.0), Some(19313));
-    let s = snapshot(AppLocale::Ja, 3);
+    assert_eq!(event_at(&renderer, &s, 960.0, CHOICE_Y), Some(19313));
+    let s = snapshot(AppLocale::Ja, cursor_of(201));
     assert!(!s.detail_options.as_ref().unwrap().selected().unwrap().effective);
-    assert_eq!(event_at(&renderer, &s, 960.0, 299.0), Some(19692));
+    assert_eq!(event_at(&renderer, &s, 960.0, CHOICE_Y), Some(19692));
 }
 
 #[test]
@@ -518,23 +571,23 @@ fn mz_detail_options_gpu_previews() {
         renderer.set_default_font_search_paths(vec![test_app_paths().resource_dir.join("fonts")]);
         renderer.attach_offscreen(bmz_render::renderer::SurfaceSize { width, height }).unwrap();
         for (locale, cursor, scroll, elapsed) in [
-            (AppLocale::Ja, 0, 0.0, 500),
-            (AppLocale::En, 7, 0.0, 500),
-            (AppLocale::Ja, 3, 0.0, 500),
-            (AppLocale::Ja, 8, 0.0, 500),
-            (AppLocale::Ja, 12, 0.0, 500),
-            (AppLocale::En, 12, 0.0, 500),
-            (AppLocale::En, 14, -0.5, 500),
-            (AppLocale::Ja, 0, 0.5, 500),
-            (AppLocale::Ja, 0, 0.0, 0),
-            (AppLocale::Ja, 0, 0.0, 75),
-            (AppLocale::Ja, 0, 0.0, 150),
-            (AppLocale::Ja, 0, 0.0, 225),
-            (AppLocale::Ja, 0, 0.0, -1),
-            (AppLocale::Ja, 0, 0.0, -76),
-            (AppLocale::En, 7, 0.0, -151),
-            (AppLocale::Ja, 0, 0.5, -226),
-            (AppLocale::Ja, 0, 0.0, -301),
+            (AppLocale::Ja, cursor_of(101), 0.0, 500),
+            (AppLocale::En, cursor_of(303), 0.0, 500),
+            (AppLocale::Ja, cursor_of(201), 0.0, 500),
+            (AppLocale::Ja, cursor_of(304), 0.0, 500),
+            (AppLocale::Ja, cursor_of(702), 0.0, 500),
+            (AppLocale::En, cursor_of(702), 0.0, 500),
+            (AppLocale::En, cursor_of(501), -0.5, 500),
+            (AppLocale::Ja, cursor_of(101), 0.5, 500),
+            (AppLocale::Ja, cursor_of(101), 0.0, 0),
+            (AppLocale::Ja, cursor_of(101), 0.0, 75),
+            (AppLocale::Ja, cursor_of(101), 0.0, 150),
+            (AppLocale::Ja, cursor_of(101), 0.0, 225),
+            (AppLocale::Ja, cursor_of(101), 0.0, -1),
+            (AppLocale::Ja, cursor_of(101), 0.0, -76),
+            (AppLocale::En, cursor_of(303), 0.0, -151),
+            (AppLocale::Ja, cursor_of(101), 0.5, -226),
+            (AppLocale::Ja, cursor_of(101), 0.0, -301),
         ] {
             let mut s = snapshot(locale, cursor);
             s.detail_options_scroll = scroll;

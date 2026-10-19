@@ -59,6 +59,7 @@ pub struct DetailOptionRow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DetailOptionsSnapshot {
     pub cursor: usize,
+    /// First displayed item. During scrolling this can lag behind `cursor`.
     pub viewport_start: usize,
     pub items: Arc<[DetailOptionRow]>,
     pub title: String,
@@ -73,8 +74,16 @@ impl DetailOptionsSnapshot {
     }
 
     pub fn row(&self, slot: usize) -> Option<&DetailOptionRow> {
-        detail_options_row_index(self.cursor, self.items.len(), slot)
-            .and_then(|index| self.items.get(index))
+        self.row_index(slot).and_then(|index| self.items.get(index))
+    }
+
+    pub fn row_index(&self, slot: usize) -> Option<usize> {
+        let count = self.items.len();
+        if self.cursor >= count {
+            return None;
+        }
+        let center = (self.viewport_start % count + DETAIL_OPTION_CENTER) % count;
+        detail_options_row_index(center, count, slot)
     }
 }
 
@@ -173,6 +182,20 @@ pub fn number(id: i32, panel: Option<&DetailOptionsSnapshot>) -> Option<i64> {
     })
 }
 
+/// English caption of a CATEGORY_ID for card subtitles. Skin API: it stays English
+/// in every locale, like the captions printed on the skins' normal option cards.
+pub fn detail_options_category_caption(category_id: i64) -> &'static str {
+    match category_id {
+        1 => "LANE / HI-SPEED",
+        2 => "GAUGE",
+        4 => "LONG NOTE",
+        5 => "ASSIST / MODIFIER",
+        6 => "BGA",
+        7 => "JUDGE",
+        _ => "",
+    }
+}
+
 pub fn text(id: i32, panel: Option<&DetailOptionsSnapshot>) -> Option<&str> {
     use bmz_skin_document::*;
     if let Some((slot, choice, field)) = detail_options_choice_slot(id) {
@@ -192,6 +215,7 @@ pub fn text(id: i32, panel: Option<&DetailOptionsSnapshot>) -> Option<&str> {
                     0 => r.label.as_str(),
                     1 => &r.value_label,
                     2 => &r.status,
+                    3 => detail_options_category_caption(r.category_id),
                     _ => "",
                 })
                 .unwrap_or(""),
@@ -352,6 +376,30 @@ mod tests {
         assert_eq!(number(19470, Some(&p)), Some(211));
         assert_eq!(option(19471, Some(&p)), Some(false));
         assert_eq!(option(19481, Some(&p)), Some(false));
+    }
+
+    #[test]
+    fn scrolling_rows_follow_the_displayed_window_while_footer_keeps_the_target() {
+        let mut p = panel(15, 2);
+        for center in [14, 0, 1, 2, 5] {
+            p.viewport_start = detail_options_viewport(center, p.items.len());
+            for slot in 0..DETAIL_OPTION_DRAW_SLOTS {
+                let expected = detail_options_row_index(center, p.items.len(), slot).unwrap();
+                assert_eq!(p.row_index(slot), Some(expected));
+                assert_eq!(
+                    number(19400 + slot as i32 * 10, Some(&p)),
+                    Some(p.items[expected].item_id)
+                );
+                assert_eq!(
+                    text(19400 + slot as i32 * 10, Some(&p)),
+                    Some(p.items[expected].label.as_str())
+                );
+            }
+            assert_eq!(number(19300, Some(&p)), Some(2));
+            assert_eq!(number(19302, Some(&p)), Some(p.items[2].item_id));
+            assert_eq!(text(19300, Some(&p)), Some("item 2"));
+            assert_eq!(p.row_index(DETAIL_OPTION_DRAW_SLOTS), None);
+        }
     }
 
     #[test]

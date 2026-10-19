@@ -34,6 +34,9 @@ pub struct SkinDocument {
     /// BMZ play extension: preview window for upcoming BPM changes.
     #[serde(default, rename = "bmzBpmChangePreview")]
     pub bmz_bpm_change_preview: Option<SkinBpmChangePreviewDef>,
+    /// BMZ select extension: how the skin presents the ESC hold-to-exit progress.
+    #[serde(default, rename = "bmzExitHold")]
+    pub bmz_exit_hold: Option<SkinExitHoldDef>,
     #[serde(default = "default_skin_canvas_width")]
     pub w: u32,
     #[serde(default = "default_skin_canvas_height")]
@@ -207,6 +210,18 @@ impl SkinBpmChangePreviewDef {
 
 fn default_bpm_change_preview_lead_ms() -> i32 {
     2_000
+}
+
+/// BMZ select extension declared by skins that draw their own ESC hold-to-exit progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct SkinExitHoldDef {
+    /// Whether BMZ still draws its built-in indicator over the skin.
+    #[serde(default = "default_exit_hold_builtin")]
+    pub builtin: bool,
+}
+
+fn default_exit_hold_builtin() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]

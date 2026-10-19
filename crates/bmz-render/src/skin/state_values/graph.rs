@@ -5,6 +5,7 @@ pub(super) fn graph_value(graph_type: i32, state: &SkinDrawState) -> f32 {
     match graph_type {
         101 => state.play_progress, // BARGRAPH_MUSIC_PROGRESS: elapsed / total playtime
         102 => 1.0,                 // BARGRAPH_LOAD_PROGRESS: always complete during play
+        SKIN_REF_BMZ_EXIT_HOLD_PERCENT => state.exit_hold.progress(),
         110 => {
             // BARGRAPH_SCORERATE: ex_score / max_ex_score
             let max = (state.total_notes * 2) as f32;

@@ -33,8 +33,8 @@ use bmz_render::scene::{
 use bmz_render::skin::{SkinImageSize, SkinTextureId};
 use bmz_render::skin_offset::{SkinOffsetValue, SkinOffsetValues};
 use bmz_render::snapshot::{
-    CourseStageMarker, DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
-    SkinLogicalInputSnapshot,
+    CourseStageMarker, DisplayJudgeCounts, ExitHoldSnapshot, FastSlowJudgeCounts, OverlaySnapshot,
+    RenderSnapshot, SkinLogicalInputSnapshot,
 };
 use bmz_video::VideoBgaDecoder;
 use winit::application::ApplicationHandler;

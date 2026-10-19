@@ -10,8 +10,8 @@ use crate::chart_graph::BpmGraphSegment;
 use crate::skin::SkinImageSize;
 use crate::skin_offset::SkinOffsetValues;
 use crate::snapshot::{
-    DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot, SkinAttemptState,
-    SkinLogicalInputSnapshot,
+    DisplayJudgeCounts, ExitHoldSnapshot, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
+    SkinAttemptState, SkinLogicalInputSnapshot,
 };
 
 #[derive(Debug, Clone, PartialEq)]

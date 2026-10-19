@@ -2,7 +2,7 @@ use super::*;
 use crate::select_detail_options::{CATALOG, DetailContext, DetailEffects, DetailOptionDef};
 use bmz_render::scene::detail_options::{
     DETAIL_OPTIONS_CLOSE_MS, DetailOptionsClosingSnapshot, DetailOptionsSnapshot, DetailValueKind,
-    detail_options_row_index, detail_options_viewport,
+    detail_options_viewport,
 };
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -15,9 +15,7 @@ pub(super) struct DetailOptionsState {
     pub dirty: bool,
     pub closing: Option<DetailOptionsClosingSnapshot>,
     repeat_value: Option<(DeviceId, String, i32, Instant)>,
-    scroll_started: Option<Instant>,
-    scroll_duration: Duration,
-    scroll_from: f32,
+    scroll: SelectBarScroll,
     cache: RefCell<Option<(DetailOptionsCacheKey, Arc<DetailOptionsSnapshot>)>>,
 }
 
@@ -54,27 +52,22 @@ impl DetailOptionsState {
         *next = now + Duration::from_millis(60);
         Some(*direction)
     }
-    fn scroll_offset(&self, now: Instant) -> f32 {
-        let Some(started) = self.scroll_started else { return 0.0 };
-        if self.scroll_duration.is_zero() {
-            return 0.0;
-        }
-        let elapsed = now.saturating_duration_since(started);
-        self.scroll_from
-            * (1.0 - elapsed.as_secs_f32() / self.scroll_duration.as_secs_f32()).clamp(0.0, 1.0)
+    fn scroll_frame(&self, now: Instant) -> (usize, f32) {
+        let remaining = self.scroll.remaining_at(now);
+        (
+            select_scroll_center_index(self.cursor, CATALOG.len(), remaining),
+            select_scroll_fraction(remaining) * remaining.signum() as f32,
+        )
     }
 
-    fn move_cursor(&mut self, direction: i32, now: Instant, low: Duration, high: Duration) {
+    fn move_cursor(&mut self, direction: i32, now: Instant, duration: Duration) {
         if direction == 0 {
             return;
         }
         self.repeat_value = None;
-        let remaining = self.scroll_offset(now);
         self.cursor =
             (self.cursor as i64 + i64::from(direction)).rem_euclid(CATALOG.len() as i64) as usize;
-        self.scroll_duration = if remaining == 0.0 { low } else { high };
-        self.scroll_from = (remaining + direction as f32).clamp(-1.0, 1.0);
-        self.scroll_started = Some(now);
+        self.scroll.move_by(direction, now, duration);
     }
 
     fn input_edge(
@@ -110,13 +103,23 @@ impl DetailOptionsState {
 
 impl WinitApp {
     pub(super) fn execute_detail_options_event(&mut self, id: i32, arg: i32) {
+        if let (Some(panel), _) = self.detail_options_frame() {
+            self.execute_detail_options_panel_event(id, arg, &panel);
+        }
+    }
+
+    pub(super) fn execute_detail_options_panel_event(
+        &mut self,
+        id: i32,
+        arg: i32,
+        panel: &DetailOptionsSnapshot,
+    ) {
         use bmz_render::skin::*;
         if !self.detail_options_active() {
             return;
         }
         if let Some((slot, direction)) = detail_options_numeric_event(id) {
-            if let Some(index) =
-                detail_options_row_index(self.select.detail_options.cursor, CATALOG.len(), slot)
+            if let Some(index) = panel.row_index(slot)
                 && matches!(
                     CATALOG[index].kind,
                     bmz_render::scene::detail_options::DetailValueKind::Number { .. }
@@ -130,8 +133,7 @@ impl WinitApp {
         if let Some((slot, choice, field)) = detail_options_choice_slot(id) {
             if field == 0
                 && choice < SKIN_DETAIL_OPTIONS_CHOICES
-                && let Some(index) =
-                    detail_options_row_index(self.select.detail_options.cursor, CATALOG.len(), slot)
+                && let Some(index) = panel.row_index(slot)
                 && let Some(item) = CATALOG.get(index).copied()
                 && (choice as i64) < item.choices
             {
@@ -151,11 +153,7 @@ impl WinitApp {
                 } else if (SKIN_EVENT_DETAIL_OPTIONS_ROW_BASE..=SKIN_EVENT_DETAIL_OPTIONS_ROW_LAST)
                     .contains(&id)
                 {
-                    detail_options_row_index(
-                        self.select.detail_options.cursor,
-                        CATALOG.len(),
-                        (id - SKIN_EVENT_DETAIL_OPTIONS_ROW_BASE) as usize,
-                    )
+                    panel.row_index((id - SKIN_EVENT_DETAIL_OPTIONS_ROW_BASE) as usize)
                 } else {
                     None
                 };
@@ -213,10 +211,8 @@ impl WinitApp {
         {
             return None;
         }
-        Some(DetailOptionsClosingSnapshot {
-            panel: self.detail_options_snapshot()?,
-            scroll: self.detail_options_scroll(),
-        })
+        let (panel, scroll) = self.detail_options_frame();
+        Some(DetailOptionsClosingSnapshot { panel: panel?, scroll })
     }
 
     pub(super) fn detail_options_mode(&self) -> KeyMode {
@@ -233,7 +229,7 @@ impl WinitApp {
     pub(super) fn reset_detail_options_input(&mut self) {
         self.select.detail_options.repeat_value = None;
         self.select.detail_options.closing = None;
-        self.select.detail_options.scroll_started = None;
+        self.select.detail_options.scroll.reset();
         self.select.detail_options.value_latched = self.detail_value_keys_held();
         self.select.detail_options.blocked_controls = self
             .input
@@ -365,13 +361,14 @@ impl WinitApp {
     }
 
     pub(super) fn move_detail_options(&mut self, direction: i32) {
+        self.move_detail_options_with_scroll(direction, self.select_scroll_duration_low());
+    }
+
+    pub(super) fn move_detail_options_with_scroll(&mut self, direction: i32, duration: Duration) {
         if !self.detail_options_active() || direction == 0 {
             return;
         }
-        self.select.detail_options.repeat_value = None;
-        let low = self.select_scroll_duration_low();
-        let high = self.select_scroll_duration_high();
-        self.select.detail_options.move_cursor(direction, Instant::now(), low, high);
+        self.select.detail_options.move_cursor(direction, Instant::now(), duration);
         self.select.detail_options.value_latched = self.detail_value_keys_held();
         self.play_system_sound(crate::system_sound::SoundType::Scratch);
     }
@@ -383,12 +380,15 @@ impl WinitApp {
         self.select.detail_options.value_latched = self.detail_value_keys_held();
     }
 
-    pub(super) fn detail_options_scroll(&self) -> f32 {
-        if self.detail_options_active() {
-            self.select.detail_options.scroll_offset(Instant::now())
-        } else {
-            0.0
-        }
+    pub(super) fn detail_options_frame(&self) -> (Option<Arc<DetailOptionsSnapshot>>, f32) {
+        self.detail_options_frame_at(Instant::now())
+    }
+
+    fn detail_options_frame_at(&self, now: Instant) -> (Option<Arc<DetailOptionsSnapshot>>, f32) {
+        let (cursor, scroll) = self.select.detail_options.scroll_frame(now);
+        let panel = self.detail_options_snapshot(cursor);
+        let scroll = if panel.is_some() { scroll } else { 0.0 };
+        (panel, scroll)
     }
 
     pub(super) fn change_detail_options_value(&mut self, direction: i32) {
@@ -458,7 +458,10 @@ impl WinitApp {
         );
     }
 
-    pub(super) fn detail_options_snapshot(&self) -> Option<Arc<DetailOptionsSnapshot>> {
+    fn detail_options_snapshot(
+        &self,
+        displayed_cursor: usize,
+    ) -> Option<Arc<DetailOptionsSnapshot>> {
         if !self.detail_options_active() {
             return None;
         }
@@ -482,10 +485,14 @@ impl WinitApp {
             amounts: [p.lane.sudden, p.lane.hidden, p.lane.lift],
             active_mode: p.active_play_mode,
         };
+        let viewport_start = detail_options_viewport(displayed_cursor, CATALOG.len());
         let mut cache = self.select.detail_options.cache.borrow_mut();
-        if let Some((previous, snapshot)) = cache.as_ref()
+        if let Some((previous, snapshot)) = cache.as_mut()
             && *previous == key
         {
+            if snapshot.viewport_start != viewport_start {
+                Arc::make_mut(snapshot).viewport_start = viewport_start;
+            }
             return Some(snapshot.clone());
         }
         let text = Localizer::new(p.ui.locale());
@@ -500,7 +507,7 @@ impl WinitApp {
         };
         let snapshot = Arc::new(DetailOptionsSnapshot {
             cursor,
-            viewport_start: detail_options_viewport(cursor, items.len()),
+            viewport_start,
             items,
             title: text.text("detail-options-title"),
             scope_label,
@@ -594,7 +601,7 @@ mod tests {
         assert_eq!(state.repeat_step(t + Duration::from_millis(459), true), None);
         assert_eq!(state.repeat_step(t + Duration::from_secs(2), true), Some(1));
         assert_eq!(state.repeat_step(t + Duration::from_secs(2), true), None);
-        state.move_cursor(1, t, Duration::ZERO, Duration::ZERO);
+        state.move_cursor(1, t, Duration::ZERO);
         assert_eq!(state.repeat_step(t + Duration::from_secs(3), true), None);
         state.repeat_value = Some((W_KEYBOARD_DEVICE_ID, "KeyZ".into(), -1, t));
         assert_eq!(state.repeat_step(t, false), None);
@@ -744,14 +751,14 @@ mod tests {
         let mut p = ProfileConfig::new_default("test", "Test", 0);
         p.activate_play_mode(KeyMode::K9);
         let original = toml::to_string(&p.lane).unwrap();
-        assert!(CATALOG[0].select_choice(&mut p, Some(target), 1));
+        assert!(DetailOptionDef::by_id(101).unwrap().select_choice(&mut p, Some(target), 1));
         let edited = toml::to_string(&p.lane).unwrap();
         p.activate_play_mode(KeyMode::K9);
         assert_eq!(toml::to_string(&p.lane).unwrap(), original);
         let mut loaded: ProfileConfig = toml::from_str(&toml::to_string(&p).unwrap()).unwrap();
         loaded.activate_play_mode(KeyMode::K7);
         assert_eq!(toml::to_string(&loaded.lane).unwrap(), edited);
-        let row = CATALOG[0].row(
+        let row = DetailOptionDef::by_id(101).unwrap().row(
             &loaded,
             DetailContext {
                 mode: Some(target),
@@ -766,29 +773,180 @@ mod tests {
     }
 
     #[test]
-    fn detail_scroll_wraps_and_uses_select_timing_without_changing_values() {
+    fn detail_scroll_eases_wraps_and_resets_without_changing_values() {
         let mut state = DetailOptionsState { cursor: CATALOG.len() - 1, ..Default::default() };
         let now = Instant::now();
         let low = Duration::from_millis(120);
-        let high = Duration::from_millis(40);
-        state.move_cursor(1, now, low, high);
+        state.move_cursor(1, now, low);
         assert_eq!(state.cursor, 0);
-        assert_eq!(state.scroll_offset(now), 1.0);
-        assert_eq!(state.scroll_offset(now + low / 2), 0.5);
-        assert_eq!(state.scroll_offset(now + low), 0.0);
+        assert_eq!(state.scroll_frame(now), (CATALOG.len() - 1, 0.0));
+        assert_eq!(state.scroll_frame(now + low / 4), (0, 0.84375));
+        assert_eq!(state.scroll_frame(now + low / 2), (0, 0.5));
+        assert_eq!(state.scroll_frame(now + low), (0, 0.0));
         // Reversing mid-animation preserves the visual position instead of
         // snapping a whole column in the opposite direction.
-        state.move_cursor(-1, now + low / 2, low, high);
+        state.move_cursor(-1, now + low / 2, low);
         assert_eq!(state.cursor, CATALOG.len() - 1);
-        assert_eq!(state.scroll_duration, high);
-        assert_eq!(state.scroll_offset(now + low / 2), -0.5);
-        assert_eq!(state.scroll_offset(now + low / 2 + high), 0.0);
-        state.scroll_started = None; // closing, E1+E2, focus loss
-        assert_eq!(state.scroll_offset(now), 0.0);
-        state.move_cursor(1, now, Duration::ZERO, Duration::ZERO);
+        assert_eq!(state.scroll_frame(now + low / 2), (CATALOG.len() - 1, -0.5));
+        assert_eq!(state.scroll_frame(now + low / 2 + low), (CATALOG.len() - 1, 0.0));
+        state.scroll.reset(); // closing, E1+E2, focus loss
+        assert_eq!(state.scroll_frame(now), (CATALOG.len() - 1, 0.0));
+        state.move_cursor(1, now, Duration::ZERO);
         assert_eq!(state.cursor, 0);
-        assert_eq!(state.scroll_offset(now), 0.0);
+        assert_eq!(state.scroll_frame(now), (0, 0.0));
         assert!(!state.dirty);
+    }
+
+    #[test]
+    fn detail_repeated_wheel_and_batched_analog_match_song_bar_motion() {
+        let now = Instant::now();
+        let mut state = DetailOptionsState { cursor: CATALOG.len() - 1, ..Default::default() };
+        let mut bar = SelectBarScroll::default();
+        let mut target = state.cursor as f64;
+        for (elapsed_ms, direction, duration) in [
+            (0, 1, Duration::from_millis(300)),
+            (20, 1, Duration::from_millis(300)),
+            (40, 1, Duration::from_millis(300)),
+            (45, 3, select_analog_scroll_duration(3)),
+            (50, -2, select_analog_scroll_duration(-2)),
+            (80, -1, select_analog_scroll_duration(-1)),
+        ] {
+            let moved_at = now + Duration::from_millis(elapsed_ms);
+            let before = target - state.scroll.remaining_at(moved_at);
+            state.move_cursor(direction, moved_at, duration);
+            bar.move_by(direction, moved_at, duration);
+            target += f64::from(direction);
+            assert!((target - state.scroll.remaining_at(moved_at) - before).abs() < 1e-9);
+            for elapsed in [0, 1, 4, 10, 20, 30, 60, 120, 300] {
+                let sample_at = moved_at + Duration::from_millis(elapsed);
+                let residual = bar.remaining_at(sample_at);
+                assert_eq!(state.scroll.remaining_at(sample_at), residual);
+                let (center, fraction) = state.scroll_frame(sample_at);
+                assert!(fraction.abs() < 1.0);
+                let visible =
+                    (center as f64 - f64::from(fraction)).rem_euclid(CATALOG.len() as f64);
+                let expected = (target - residual).rem_euclid(CATALOG.len() as f64);
+                assert!((visible - expected).abs() < 1e-6, "{visible} != {expected}");
+            }
+        }
+        assert!(!state.dirty);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "creates a Winit event loop; run alone with --ignored"]
+    fn detail_scroll_input_routes_snapshot_cache_and_click_use_the_displayed_window() {
+        use winit::platform::windows::EventLoopBuilderExtWindows;
+
+        let event_loop =
+            EventLoop::<AppUserEvent>::with_user_event().with_any_thread(true).build().unwrap();
+        let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+        let mut boot = data.boot();
+        boot.app_config.input.gamepad_enabled = false;
+        boot.app_config.select.experimental_detail_options = true;
+        boot.app_config.select.scroll_duration_low_ms = 1000;
+        boot.app_config.select.scroll_duration_high_ms = 10;
+        let (maintenance_tx, _) = tokio::sync::watch::channel(false);
+        let mut app = WinitApp::new(
+            boot,
+            AppOptions { viewer_play: true, ..Default::default() },
+            Instant::now(),
+            None,
+            None,
+            Arc::new(AtomicBool::new(false)),
+            event_loop.create_proxy(),
+            LogBuffer::default(),
+            maintenance_tx,
+            None,
+        )
+        .unwrap();
+        app.viewer_mode = false;
+        crate::skin_loader::set_decoded_skin_context(
+            &mut app.renderer,
+            crate::skin_loader::SkinKind::Select,
+            bmz_render::skin::default_skin_manifest(),
+            serde_json::from_value(serde_json::json!({
+                "type": 5, "bmzDetailOptions": 1,
+                "bmzDetailOptionsNumbers": true, "bmzDetailOptionsClose": true
+            }))
+            .unwrap(),
+            None,
+            vec![],
+            false,
+        );
+        app.select.select_option_panel = 2;
+        assert!(app.detail_options_active());
+
+        // Exercise the actual wheel and analog routes, including their durations.
+        for rows in [1, -1, 3, -3] {
+            app.select.detail_options = DetailOptionsState::default();
+            let before = Instant::now();
+            let duration = if rows == 1 {
+                app.route_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -1.0));
+                app.select_scroll_duration_low()
+            } else {
+                app.select.select_analog_scroll_buffer =
+                    rows * app.boot.profile_config.input.analog_ticks_per_scroll.max(1) as i32;
+                app.advance_select_analog_scroll();
+                select_analog_scroll_duration(rows)
+            };
+            let after = Instant::now();
+            assert_eq!(
+                app.select.detail_options.cursor,
+                rows.rem_euclid(CATALOG.len() as i32) as usize
+            );
+            assert_eq!(app.select.select_analog_scroll_buffer, 0);
+            let sample = after + duration / 2;
+            let bounds = [before, after].map(|start| {
+                let mut bar = SelectBarScroll::default();
+                bar.move_by(rows, start, duration);
+                bar.remaining_at(sample)
+            });
+            let actual = app.select.detail_options.scroll.remaining_at(sample);
+            assert!(actual >= bounds[0].min(bounds[1]) - 1e-9);
+            assert!(actual <= bounds[0].max(bounds[1]) + 1e-9);
+        }
+
+        // Both the viewport and fractional displacement use one sample. Rebasing
+        // the window shares item strings and never mutates an earlier snapshot.
+        app.select.detail_options =
+            DetailOptionsState { cursor: CATALOG.len() - 1, ..Default::default() };
+        let now = Instant::now();
+        let duration = Duration::from_millis(300);
+        app.select.detail_options.move_cursor(3, now, duration);
+        let (first, fraction) = app.detail_options_frame_at(now);
+        let first = first.unwrap();
+        assert_eq!(fraction, 0.0);
+        assert_eq!(first.row_index(3), Some(CATALOG.len() - 1));
+        assert_eq!(first.cursor, 2);
+        let (settled, fraction) = app.detail_options_frame_at(now + duration);
+        let settled = settled.unwrap();
+        assert_eq!(fraction, 0.0);
+        assert_eq!(settled.row_index(3), Some(2));
+        assert!(Arc::ptr_eq(&first.items, &settled.items));
+        assert_eq!(first.row_index(3), Some(CATALOG.len() - 1));
+
+        // Even an event delivered after rebasing resolves against its hit snapshot.
+        app.execute_detail_options_panel_event(19313, 1, &first);
+        assert_eq!(app.select.detail_options.cursor, CATALOG.len() - 1);
+        let frozen = app.capture_detail_options_close().unwrap();
+        app.reset_detail_options_input();
+        assert_eq!(app.select.detail_options.scroll_frame(Instant::now()).1, 0.0);
+        assert_eq!(frozen.panel.cursor, CATALOG.len() - 1);
+        assert!(!app.select.detail_options.dirty);
+
+        // Choice and numeric events use the displayed item too, rather than the
+        // same slot in the target-centered window.
+        assert_eq!(first.row_index(4), Some(0));
+        let choice = 1 - CATALOG[0].value(&app.boot.profile_config);
+        app.execute_detail_options_panel_event(19500 + 4 * 64 + choice as i32 * 4, 1, &first);
+        assert_eq!(app.select.detail_options.cursor, 0);
+        assert_eq!(CATALOG[0].value(&app.boot.profile_config), choice);
+        assert_eq!(first.row_index(5), Some(1));
+        let before = CATALOG[1].value(&app.boot.profile_config);
+        app.execute_detail_options_panel_event(19320 + 5 * 2 + 1, 1, &first);
+        assert_eq!(app.select.detail_options.cursor, 1);
+        assert_eq!(CATALOG[1].value(&app.boot.profile_config), before + 1);
     }
 
     #[test]

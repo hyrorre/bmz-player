@@ -1,8 +1,13 @@
+use super::detail_options::cursor_of;
 use super::*;
 use crate::i18n::AppLocale;
 use crate::select_detail_options::CATALOG;
 use bmz_render::scene::detail_options::{DetailOptionsClosingSnapshot, detail_options_column};
 use bmz_render::skin::SkinClickTarget;
+
+// First choice of the normal-panel layout: 37 px buttons every 42 px from y = 244.
+const CHOICE_Y: f32 = 262.0;
+const CHOICE_PITCH: f32 = 42.0;
 
 // ECFN is a separately installed skin, not a bundled submodule. These tests are
 // explicitly opt-in and fail if the real ADFX02 assets are absent.
@@ -56,7 +61,7 @@ pub(super) fn event_at(renderer: &Renderer, s: &SelectSnapshot, x: f32, y: f32) 
 }
 
 pub(super) fn switching(from: u8, to: u8, elapsed: i64) -> SelectSnapshot {
-    let mut s = snapshot(AppLocale::Ja, 0);
+    let mut s = snapshot(AppLocale::Ja, cursor_of(101));
     if from == 2 {
         s.detail_options_closing = Some(DetailOptionsClosingSnapshot {
             panel: s.detail_options.take().unwrap(),
@@ -107,7 +112,7 @@ fn ecfn_detail_options_all_items_and_scrolling_hits() {
                     for (index, choice) in row.choices.iter().enumerate() {
                         assert!(has_text(&choice.label));
                         assert_eq!(
-                            event_at(&renderer, &s, x, 296.0 + index as f32 * 52.0),
+                            event_at(&renderer, &s, x, CHOICE_Y + index as f32 * CHOICE_PITCH),
                             Some(19500 + slot as i32 * 64 + index as i32 * 4)
                         );
                     }
@@ -135,7 +140,7 @@ fn ecfn_detail_options_all_items_and_scrolling_hits() {
 fn ecfn_detail_options_empty_locked_external_and_inactive_values() {
     let mut renderer = renderer();
     for count in [0, 1, 3, 6] {
-        let mut s = snapshot(AppLocale::Ja, 0);
+        let mut s = snapshot(AppLocale::Ja, cursor_of(101));
         let panel = std::sync::Arc::make_mut(s.detail_options.as_mut().unwrap());
         panel.items = panel.items[..count].to_vec().into();
         renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
@@ -147,9 +152,9 @@ fn ecfn_detail_options_empty_locked_external_and_inactive_values() {
             );
         }
     }
-    let mut s = snapshot(AppLocale::Ja, 14);
+    let mut s = snapshot(AppLocale::Ja, cursor_of(501));
     let panel = std::sync::Arc::make_mut(s.detail_options.as_mut().unwrap());
-    let row = &mut std::sync::Arc::make_mut(&mut panel.items)[14];
+    let row = &mut std::sync::Arc::make_mut(&mut panel.items)[cursor_of(501)];
     row.value = 2;
     row.value_index = -1;
     row.value_label = "ADD".into();
@@ -161,10 +166,10 @@ fn ecfn_detail_options_empty_locked_external_and_inactive_values() {
         assert!(renderer.last_plan().unwrap().commands.iter().any(|cmd| matches!(cmd,
             DrawCommand::Text { text, .. } if text == label)));
     }
-    assert_eq!(event_at(&renderer, &s, 960.0, 296.0), Some(19313));
-    let s = snapshot(AppLocale::Ja, 3);
+    assert_eq!(event_at(&renderer, &s, 960.0, CHOICE_Y), Some(19313));
+    let s = snapshot(AppLocale::Ja, cursor_of(201));
     assert!(!s.detail_options.as_ref().unwrap().selected().unwrap().effective);
-    assert_eq!(event_at(&renderer, &s, 960.0, 296.0), Some(19692));
+    assert_eq!(event_at(&renderer, &s, 960.0, CHOICE_Y), Some(19692));
 }
 
 #[test]
@@ -342,7 +347,7 @@ fn ecfn_detail_options_parallel_fades_and_single_shade() {
             );
             if to != 2 {
                 assert!(
-                    !event_at(&renderer, &s, 960.0, 296.0)
+                    !event_at(&renderer, &s, 960.0, CHOICE_Y)
                         .is_some_and(bmz_render::skin::is_detail_options_event)
                 );
             }
@@ -371,6 +376,75 @@ fn ecfn_detail_options_parallel_fades_and_single_shade() {
 }
 
 #[test]
+#[ignore = "requires separately installed ADFX02/ECFN assets"]
+fn ecfn_detail_options_number_values_use_an_unselected_button() {
+    detail_options::assert_number_values_unselected(
+        decode(true),
+        "option.png",
+        (933.0, 1147.0, 1108.0, 1184.0),
+    );
+}
+
+#[test]
+#[ignore = "requires separately installed ADFX02/ECFN assets"]
+fn ecfn_detail_options_frames_follow_row_categories() {
+    // Source x of each normal-panel frame: blue for LANE / HI-SPEED and JUDGE,
+    // green GAUGE, orange LONG NOTE, red BGA, pink ASSIST / MODIFIER.
+    let frame_x = |category| match category {
+        1 | 7 => 1563.0,
+        2 => 1143.0,
+        4 => 933.0,
+        6 => 1773.0,
+        5 => 1353.0,
+        _ => panic!("unexpected category {category}"),
+    };
+    let mut renderer = renderer();
+    let mut cases: Vec<_> = [101, 201, 601, 501]
+        .map(|id| (id, snapshot(AppLocale::Ja, cursor_of(id))))
+        .into_iter()
+        .collect();
+    // The frozen exit snapshot must keep the colours of the rows it shows.
+    cases.push((0, switching(2, 0, 100)));
+    detail_options::assert_frames_follow_categories(&mut renderer, cases, (6.0, 528.0), frame_x);
+}
+
+#[test]
+#[ignore = "requires separately installed ADFX02/ECFN assets"]
+fn ecfn_detail_options_value_boxes_never_draw_baked_off_text() {
+    // option.png bakes "OFF" into the gray value button at (1581,290,175,37).
+    // A translucent fill over it leaked that text during every panel fade.
+    let (text_x, text_y) = (1581.0 + 87.5, 290.0 + 18.5);
+    let mut renderer = renderer();
+    for (from, to) in [(0, 2), (2, 0), (1, 2), (2, 1)] {
+        for elapsed in [0, 50, 100, 150, 199, 300] {
+            renderer.prepare_scene(AppSceneSnapshot::Select(switching(from, to, elapsed)));
+            let commands = &renderer.last_plan().unwrap().commands;
+            let mut rims = 0;
+            for command in commands {
+                let DrawCommand::Image { rect, uv, source_size: Some(size), .. } = command else {
+                    continue;
+                };
+                let (w, h) = (rect.width * 1920.0, rect.height * 1080.0);
+                if (w - 224.0).abs() < 0.1 && (h - 2.0).abs() < 0.1 {
+                    rims += 1;
+                }
+                let (x0, y0) = (uv.x * size.width, uv.y * size.height);
+                let (x1, y1) = (x0 + uv.width * size.width, y0 + uv.height * size.height);
+                assert!(
+                    !((w - 224.0).abs() < 0.1
+                        && (x0..x1).contains(&text_x)
+                        && (y0..y1).contains(&text_y)),
+                    "{from}->{to} {elapsed}ms draws the baked OFF button: {command:?}"
+                );
+            }
+            if to == 2 || elapsed < 200 {
+                assert!(rims > 0, "{from}->{to} {elapsed}ms has no value box rims");
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires ADFX02/ECFN assets and a GPU; writes previews to a temporary directory"]
 fn ecfn_detail_options_gpu_previews() {
     let output = unique_test_dir("bmz-ecfn-detail-preview");
@@ -381,13 +455,13 @@ fn ecfn_detail_options_gpu_previews() {
         renderer.attach_offscreen(bmz_render::renderer::SurfaceSize { width, height }).unwrap();
         let mut scenes = Vec::new();
         for (locale, cursor, scroll) in [
-            (AppLocale::Ja, 0, 0.0),
-            (AppLocale::En, 7, 0.0),
-            (AppLocale::Ja, 3, 0.0),
-            (AppLocale::Ja, 8, 0.0),
-            (AppLocale::Ja, 12, 0.0),
-            (AppLocale::En, 12, 0.0),
-            (AppLocale::En, 14, -0.5),
+            (AppLocale::Ja, cursor_of(101), 0.0),
+            (AppLocale::En, cursor_of(303), 0.0),
+            (AppLocale::Ja, cursor_of(201), 0.0),
+            (AppLocale::Ja, cursor_of(304), 0.0),
+            (AppLocale::Ja, cursor_of(702), 0.0),
+            (AppLocale::En, cursor_of(702), 0.0),
+            (AppLocale::En, cursor_of(501), -0.5),
         ] {
             let mut s = snapshot(locale, cursor);
             s.detail_options_scroll = scroll;

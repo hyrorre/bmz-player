@@ -156,9 +156,10 @@ fn plan_geometry_applies_canvas_viewport_to_images() {
 
 #[test]
 fn sampling_uv_insets_subregions_by_half_texel() {
-    let uv = sampling_uv_with_half_texel_inset(
+    let uv = sampling_uv_for_filter(
         UvRect { x: 0.25, y: 0.5, width: 0.125, height: 0.25 },
         Some(SkinImageSize { width: 256.0, height: 128.0 }),
+        true,
     );
 
     assert_approx(uv.x, 0.25 + 0.5 / 256.0);
@@ -169,9 +170,10 @@ fn sampling_uv_insets_subregions_by_half_texel() {
 
 #[test]
 fn sampling_uv_keeps_full_texture_axes_unchanged() {
-    let uv = sampling_uv_with_half_texel_inset(
+    let uv = sampling_uv_for_filter(
         UvRect { x: 0.0, y: 0.25, width: 1.0, height: 0.5 },
         Some(SkinImageSize { width: 256.0, height: 128.0 }),
+        true,
     );
 
     assert_approx(uv.x, 0.0);
@@ -182,15 +184,27 @@ fn sampling_uv_keeps_full_texture_axes_unchanged() {
 
 #[test]
 fn sampling_uv_does_not_collapse_single_texel_regions() {
-    let uv = sampling_uv_with_half_texel_inset(
+    let uv = sampling_uv_for_filter(
         UvRect { x: 0.25, y: 0.5, width: 1.0 / 256.0, height: 1.0 / 128.0 },
         Some(SkinImageSize { width: 256.0, height: 128.0 }),
+        true,
     );
 
     assert_approx(uv.x, 0.25);
     assert_approx(uv.y, 0.5);
     assert_approx(uv.width, 1.0 / 256.0);
     assert_approx(uv.height, 1.0 / 128.0);
+}
+
+#[test]
+fn nearest_sampling_preserves_source_pixel_bounds_including_flips() {
+    for width in [0.125, -0.125] {
+        let uv = UvRect { x: 0.25, y: 0.5, width, height: 0.25 };
+        assert_eq!(
+            sampling_uv_for_filter(uv, Some(SkinImageSize { width: 256.0, height: 128.0 }), false),
+            uv
+        );
+    }
 }
 
 #[test]
