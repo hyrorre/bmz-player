@@ -411,6 +411,16 @@ fn mz_detail_options_all_items_choices_and_animated_clicks() {
 }
 
 #[test]
+fn mz_detail_options_number_values_use_an_unselected_button() {
+    let decoded = detail_options::decode_experimental(&skin_path(), SkinKind::Select).unwrap();
+    detail_options::assert_number_values_unselected(
+        decoded,
+        "mz_detail_cursor",
+        (616.0, 500.0, 786.0, 550.0),
+    );
+}
+
+#[test]
 fn mz_detail_options_frames_follow_row_categories() {
     // Source x of each option card: panel2 blue for LANE / HI-SPEED and JUDGE;
     // panel3 green GAUGE, orange LONG NOTE, red BGA and pink ASSIST / MODIFIER.

@@ -105,6 +105,49 @@ fn detail_experimental_off_keeps_legacy_and_on_shows_numbers_without_buttons() {
     }
 }
 
+/// Asserts that number rows show their value in an unselected button: the centre
+/// column of a numeric item draws nothing from the cursor `region` of the source
+/// whose id or path is `source`, while a choice row there still does.
+pub(super) fn assert_number_values_unselected(
+    decoded: DecodedSkin,
+    source: &str,
+    region: (f32, f32, f32, f32),
+) {
+    let texture = bmz_render::plan::TextureId(
+        decoded
+            .sources
+            .iter()
+            .find(|s| s.source_id == source || s.path.ends_with(source))
+            .unwrap()
+            .texture
+            .0,
+    );
+    let mut renderer = Renderer::default();
+    install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
+        .unwrap();
+    for (id, highlighted) in [(304, false), (702, false), (101, true)] {
+        let s =
+            SelectSnapshot { time: TimeUs(2_000_000), ..snapshot(AppLocale::Ja, cursor_of(id)) };
+        renderer.prepare_scene(AppSceneSnapshot::Select(s));
+        let drawn = renderer.last_plan().unwrap().commands.iter().any(|command| {
+            let DrawCommand::Image { texture: t, rect, uv, source_size: Some(size), .. } = command
+            else {
+                return false;
+            };
+            let (x0, y0) = (uv.x * size.width, uv.y * size.height);
+            let (x1, y1) = (x0 + uv.width * size.width, y0 + uv.height * size.height);
+            // The centre column starts at 831; its glow may reach 19 px further left.
+            *t == texture
+                && (820.0..1100.0).contains(&(rect.x * 1920.0))
+                && x0 >= region.0 - 0.5
+                && y0 >= region.1 - 0.5
+                && x1 <= region.2 + 0.5
+                && y1 <= region.3 + 0.5
+        });
+        assert_eq!(drawn, highlighted, "item {id}");
+    }
+}
+
 /// Asserts that every visible column draws its left frame piece (`size` in
 /// 1920x1080 canvas pixels, at the column's left edge) from the source that
 /// `source_x` assigns to the row's category, and that all categories appear.

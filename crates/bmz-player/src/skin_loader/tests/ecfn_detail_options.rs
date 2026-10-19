@@ -377,6 +377,16 @@ fn ecfn_detail_options_parallel_fades_and_single_shade() {
 
 #[test]
 #[ignore = "requires separately installed ADFX02/ECFN assets"]
+fn ecfn_detail_options_number_values_use_an_unselected_button() {
+    detail_options::assert_number_values_unselected(
+        decode(true),
+        "option.png",
+        (933.0, 1147.0, 1108.0, 1184.0),
+    );
+}
+
+#[test]
+#[ignore = "requires separately installed ADFX02/ECFN assets"]
 fn ecfn_detail_options_frames_follow_row_categories() {
     // Source x of each normal-panel frame: blue for LANE / HI-SPEED and JUDGE,
     // green GAUGE, orange LONG NOTE, red BGA, pink ASSIST / MODIFIER.
@@ -415,13 +425,13 @@ fn ecfn_detail_options_value_boxes_never_draw_baked_off_text() {
                     continue;
                 };
                 let (w, h) = (rect.width * 1920.0, rect.height * 1080.0);
-                if (w - 236.0).abs() < 0.1 && (h - 2.0).abs() < 0.1 {
+                if (w - 224.0).abs() < 0.1 && (h - 2.0).abs() < 0.1 {
                     rims += 1;
                 }
                 let (x0, y0) = (uv.x * size.width, uv.y * size.height);
                 let (x1, y1) = (x0 + uv.width * size.width, y0 + uv.height * size.height);
                 assert!(
-                    !((w - 236.0).abs() < 0.1
+                    !((w - 224.0).abs() < 0.1
                         && (x0..x1).contains(&text_x)
                         && (y0..y1).contains(&text_y)),
                     "{from}->{to} {elapsed}ms draws the baked OFF button: {command:?}"

@@ -341,6 +341,9 @@ impl DetailOptionDef {
             text.text("detail-options-unavailable")
         } else if (0..self.choices).contains(&value) {
             self.choice_label(value as usize, text)
+        } else if self.setting == SettingsEntryId::VisualOffsetMs && value > 0 {
+            // Signed like the FAST / SLOW guidance: SLOW is corrected in the + direction.
+            format!("+{}", format_settings_value(p, self.setting))
         } else {
             format_settings_value(p, self.setting)
         };
@@ -687,6 +690,22 @@ mod tests {
                 assert!(item.adjust(&mut panel, None, 1));
                 assert_eq!(legacy.play.assist, panel.play.assist);
             }
+        }
+    }
+
+    #[test]
+    fn positive_visual_offset_shows_its_sign() {
+        let mut p = profile();
+        let context = DetailContext {
+            mode: Some(KeyMode::K7),
+            gas: GaugeAutoShiftConfig::Off,
+            practice: false,
+            course: false,
+        };
+        for (offset_ms, label) in [(12, "+12 ms"), (0, "0 ms"), (-7, "-7 ms")] {
+            p.judge.visual_offset_us = offset_ms * 1000;
+            let row = def(702).row(&p, context, &Localizer::new(AppLocale::En));
+            assert_eq!(row.value_label, label);
         }
     }
 

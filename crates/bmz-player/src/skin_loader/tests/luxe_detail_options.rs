@@ -276,6 +276,16 @@ fn luxe_detail_options_uses_existing_artwork_and_fonts_with_complete_labels() {
 }
 
 #[test]
+fn luxe_detail_options_number_values_use_an_unselected_button() {
+    let decoded = detail_options::decode_experimental(&skin_path(), SkinKind::Select).unwrap();
+    detail_options::assert_number_values_unselected(
+        decoded,
+        "luxe_detail_cursor",
+        (0.0, 500.0, 213.0, 576.0),
+    );
+}
+
+#[test]
 fn luxe_detail_options_frames_follow_row_categories() {
     // Left edge of each rounded option card with the purple card's corners:
     // blue LANE / HI-SPEED and JUDGE, green GAUGE, orange LONG NOTE, red BGA and
