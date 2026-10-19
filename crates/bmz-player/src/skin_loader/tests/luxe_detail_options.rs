@@ -306,7 +306,7 @@ fn luxe_detail_options_frames_follow_row_categories() {
     let mut closing = snapshot(AppLocale::Ja, cursor_of(601));
     close(&mut closing, 0, 0);
     cases.push((0, closing));
-    detail_options::assert_frames_follow_categories(&mut renderer(), cases, (7.0, 502.0), card_x);
+    detail_options::assert_frames_follow_categories(&mut renderer(), cases, (7.0, 480.0), card_x);
 }
 
 #[test]
@@ -520,9 +520,14 @@ fn luxe_detail_options_replaces_only_e2_after_successful_part_load() {
 #[test]
 #[ignore = "requires a GPU adapter; writes Luxez Flat panel previews to a temporary directory"]
 fn luxe_detail_options_gpu_previews() {
-    let output = unique_test_dir("bmz-luxe-detail-preview");
+    let temporary = unique_test_dir("bmz-luxe-detail-preview");
+    let output = std::env::var_os("BMZ_SKIN_PREVIEW_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| temporary.to_path_buf());
     std::fs::create_dir_all(&output).unwrap();
-    for (width, height) in [(1920, 1080), (1280, 720), (960, 540), (1024, 768), (2560, 1080)] {
+    for (width, height) in
+        [(1920, 1080), (3840, 2160), (1280, 720), (960, 540), (1024, 768), (2560, 1080)]
+    {
         let mut renderer = renderer();
         renderer.set_default_font_search_paths(vec![test_app_paths().resource_dir.join("fonts")]);
         renderer.attach_offscreen(bmz_render::renderer::SurfaceSize { width, height }).unwrap();
@@ -567,4 +572,86 @@ fn luxe_detail_options_gpu_previews() {
         }
     }
     println!("Luxez Flat DETAIL OPTIONS previews: {}", output.display());
+}
+
+#[test]
+#[ignore = "requires a GPU adapter; verifies rounded cards and button matte at native and doubled size"]
+fn luxe_detail_options_gpu_corners_match_the_original_card() {
+    let decoded = detail_options::decode_experimental(&skin_path(), SkinKind::Select).unwrap();
+    let cards = [
+        (1, "luxe_detail_panel3", 483, 712, 690, 957),
+        (2, "luxe_detail_panel1", 749, 334, 956, 702),
+        (4, "luxe_detail_panel3", 414, 133, 671, 460),
+        (5, "luxe_detail_panel", 607, 172, 814, 355),
+        (6, "luxe_detail_panel3", 713, 713, 920, 917),
+    ];
+    let assets: Vec<_> = cards
+        .iter()
+        .map(|(_, id, ..)| {
+            decoded.sources.iter().find(|s| s.source_id == *id).unwrap().asset.clone().unwrap()
+        })
+        .collect();
+    for scale in [1, 2] {
+        let mut renderer = Renderer::default();
+        install_decoded_skin(
+            &mut renderer,
+            detail_options::decode_experimental(&skin_path(), SkinKind::Select).unwrap(),
+            bmz_render::skin::default_skin_manifest(),
+        )
+        .unwrap();
+        renderer
+            .attach_offscreen(bmz_render::renderer::SurfaceSize {
+                width: 1920 * scale,
+                height: 1080 * scale,
+            })
+            .unwrap();
+        for ((category, _, l, t, r, b), asset) in cards.iter().zip(&assets) {
+            let mut s = snapshot(AppLocale::Ja, cursor_of(702));
+            let panel = std::sync::Arc::make_mut(s.detail_options.as_mut().unwrap());
+            std::sync::Arc::make_mut(&mut panel.items)[cursor_of(702)].category_id = *category;
+            renderer.render_scene(AppSceneSnapshot::Select(s)).unwrap();
+            let rgba = renderer.read_offscreen_rgba().unwrap();
+            let pixel = |x: u32, y: u32| {
+                let offset = ((y * 1920 * scale + x) * 4) as usize;
+                &rgba[offset..offset + 4]
+            };
+            // No cursor glows over this numeric field. Its matte must reproduce
+            // the body underneath at both ends and on both rows of a 2x texel.
+            for x in [847, 1072] {
+                for dx in 0..scale {
+                    for y in [244 * scale, 282 * scale - 1] {
+                        assert_eq!(
+                            pixel(x * scale + dx, y),
+                            pixel(x * scale + dx, 400 * scale),
+                            "button matte: category {category}, scale {scale}, x {x}, y {y}"
+                        );
+                    }
+                }
+            }
+            // Each coloured corner pixel must retain the source's bevel and
+            // curved inner glow, including the bottom's own shading.
+            for right in [false, true] {
+                for bottom in [false, true] {
+                    for y in 0..24 {
+                        for x in 0..24 {
+                            let sx = if right { r - 1 - x } else { l + x };
+                            let sy = if bottom { b - 2 - y } else { t + 1 + y };
+                            let offset = ((sy * asset.width + sx) * 4) as usize;
+                            let expected = &asset.pixels[offset..offset + 4];
+                            if expected[3] != 255 || expected[..3].iter().all(|v| *v < 6) {
+                                continue;
+                            }
+                            let dx = if right { 1088 - x } else { 831 + x };
+                            let dy = if bottom { 729 - y } else { 180 + y };
+                            assert_eq!(
+                                pixel(dx * scale, dy * scale),
+                                expected,
+                                "corner: category {category}, scale {scale}, right {right}, bottom {bottom}, ({x}, {y})"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

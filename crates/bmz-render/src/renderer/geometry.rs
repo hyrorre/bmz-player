@@ -500,7 +500,7 @@ pub(super) fn encode_plan_geometry_into(
                 if !visible_rect(rect) || !visible_alpha(tint.a) {
                     continue;
                 }
-                let sampling_uv = sampling_uv_with_half_texel_inset(*uv, *source_size);
+                let sampling_uv = sampling_uv_for_filter(*uv, *source_size, *linear_filter);
                 encode_image_instance(
                     images,
                     &rect,
@@ -530,7 +530,7 @@ pub(super) fn encode_plan_geometry_into(
                 if !visible_rect(rect) || !visible_alpha(tint.a) {
                     continue;
                 }
-                let sampling_uv = sampling_uv_with_half_texel_inset(*uv, *source_size);
+                let sampling_uv = sampling_uv_for_filter(*uv, *source_size, *linear_filter);
                 encode_image_instance(
                     images,
                     &rect,
@@ -592,10 +592,18 @@ pub(super) fn visible_alpha(alpha: f32) -> bool {
     alpha.is_finite() && alpha > 0.0
 }
 
-pub(super) fn sampling_uv_with_half_texel_inset(
+pub(super) fn sampling_uv_for_filter(
     uv: UvRect,
     source_size: Option<SkinImageSize>,
+    linear_filter: bool,
 ) -> UvRect {
+    // Nearest sampling already stays within the pixel bounds. Shrinking its UVs
+    // changes pixel widths on enlargement, so adjacent/overlapping atlas slices
+    // no longer reproduce the same gradient. Only linear sampling needs a guard
+    // against neighbouring texels outside the source rectangle.
+    if !linear_filter {
+        return uv;
+    }
     let Some(source_size) = source_size else {
         return uv;
     };

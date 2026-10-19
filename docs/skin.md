@@ -6,6 +6,13 @@ BMZはbeatoraja JSON / Lua skinの互換を基本にします。既存beatoraja 
 JSON / Lua / LR2 skinの対応範囲と残課題は[skin-compatibility.md](skin-compatibility.md)を参照してください。
 この文書ではIDや各機能の動作契約を管理します。
 
+## 画像の拡大縮小
+
+画像destinationの`filter=0`（既定）は最近傍、非0は線形補間を使います。
+最近傍では切り出し範囲のpixel境界を保持し、整数倍表示でも各画素を同じ幅で描きます。
+線形補間では、隣の素材が混ざらないよう切り出し範囲の内側に半画素の余白を設けます。
+通常画像・回転画像に共通です。
+
 ## Destinationのクリッピング
 
 JSON / Luaのdestinationの各`dst`に`clip_x` / `clip_y` / `clip_w` / `clip_h`を指定すると、
