@@ -9,12 +9,13 @@ pub(super) fn chart_asset_folder(chart: &PlayableChart) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+/// Uploads the still image (an animation's first frame) and returns its size and path.
 pub(super) fn load_chart_meta_texture(
     renderer: &mut Renderer,
     texture_id: TextureId,
     folder_path: &str,
     relative: &str,
-) -> Option<SkinImageSize> {
+) -> Option<(SkinImageSize, PathBuf)> {
     let path = crate::chart_asset::resolve_chart_asset_path(folder_path, relative)?;
     match load_static_rgba_image(&path) {
         Ok(image) => {
@@ -22,7 +23,8 @@ pub(super) fn load_chart_meta_texture(
                 tracing::warn!(path = %path.display(), %error, "failed to upload chart meta image");
                 None
             } else {
-                Some(SkinImageSize { width: image.width as f32, height: image.height as f32 })
+                let size = SkinImageSize { width: image.width as f32, height: image.height as f32 };
+                Some((size, path))
             }
         }
         Err(error) => {

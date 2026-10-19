@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -8,7 +9,7 @@ use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
 use bmz_audio::loader::SampleLoader;
 use bmz_audio::loudness::analyze_preview_loudness;
 use bmz_audio::sample::DecodedSample;
-use bmz_render::assets::{RgbaImageAsset, load_static_rgba_image};
+use bmz_render::assets::{AnimatedImage, RgbaImageAsset, load_chart_image};
 use bmz_render::skin::SkinImageSize;
 
 use crate::chart_preview::SelectChartPreview;
@@ -23,6 +24,9 @@ use windows_sys::Win32::System::Threading::{
 
 pub(super) const SELECT_PREVIEW_FADE_DURATION: Duration = Duration::from_millis(150);
 const SELECT_PREVIEW_CACHE_LIMIT: usize = 8;
+/// Decoded animation frames kept in the meta image cache; older animations keep their
+/// first frame only.
+const SELECT_META_ANIMATION_CACHE_LIMIT_BYTES: u64 = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SelectMetaImageSlot {
@@ -33,15 +37,22 @@ pub(super) enum SelectMetaImageSlot {
 
 enum SelectMetaImageCacheEntry {
     Loading,
-    Ready(RgbaImageAsset),
+    Ready(SelectMetaImage),
     Missing,
+}
+
+/// A STAGEFILE / BACKBMP / BANNER image: its still (first) frame and animation, if any.
+#[derive(Clone)]
+pub(super) struct SelectMetaImage {
+    pub(super) first: RgbaImageAsset,
+    pub(super) animation: Option<Arc<AnimatedImage>>,
 }
 
 struct SelectMetaImageResult {
     slot: SelectMetaImageSlot,
     key: String,
     path: Option<PathBuf>,
-    result: std::result::Result<RgbaImageAsset, String>,
+    result: std::result::Result<SelectMetaImage, String>,
 }
 
 enum SelectPreviewCacheEntry {
@@ -112,7 +123,7 @@ pub(super) enum SelectPreviewSyncAction {
 
 pub(super) struct SelectMetaImageUpload {
     pub(super) slot: SelectMetaImageSlot,
-    pub(super) image: RgbaImageAsset,
+    pub(super) image: SelectMetaImage,
 }
 
 #[derive(Debug, Default)]
@@ -138,6 +149,8 @@ pub(super) struct SelectAssetRuntime {
     library_db_path: PathBuf,
     cache_dir: PathBuf,
     meta_image_cache: HashMap<String, SelectMetaImageCacheEntry>,
+    /// Cache keys holding animations, oldest first, with their decoded size.
+    meta_image_animations: VecDeque<(String, u64)>,
     meta_image_tx: mpsc::Sender<SelectMetaImageResult>,
     meta_image_rx: Receiver<SelectMetaImageResult>,
     preview_cache: HashMap<String, SelectPreviewCacheEntry>,
@@ -174,6 +187,7 @@ impl SelectAssetRuntime {
             library_db_path,
             cache_dir,
             meta_image_cache: HashMap::new(),
+            meta_image_animations: VecDeque::new(),
             meta_image_tx,
             meta_image_rx,
             preview_cache: HashMap::new(),
@@ -235,8 +249,7 @@ impl SelectAssetRuntime {
                             image: image.clone(),
                         });
                     }
-                    self.meta_image_cache
-                        .insert(result.key, SelectMetaImageCacheEntry::Ready(image));
+                    self.insert_meta_image_cache(result.key, image);
                 }
                 Err(error) => {
                     if let Some(path) = result.path {
@@ -288,7 +301,7 @@ impl SelectAssetRuntime {
         &mut self,
         slot: SelectMetaImageSlot,
         cache_key: Option<String>,
-    ) -> Option<RgbaImageAsset> {
+    ) -> Option<SelectMetaImage> {
         if cache_key.as_deref() == self.meta_image_source(slot).as_deref() {
             if self.meta_image_loaded(slot) {
                 return None;
@@ -311,6 +324,38 @@ impl SelectAssetRuntime {
             None => {
                 self.spawn_meta_image_load(slot, key);
                 None
+            }
+        }
+    }
+
+    /// Uploads the cached image again after another scene overwrote the shared texture.
+    pub(super) fn invalidate_meta_image_upload(&mut self, slot: SelectMetaImageSlot) {
+        self.set_meta_image_loaded(slot, false);
+    }
+
+    fn insert_meta_image_cache(&mut self, key: String, image: SelectMetaImage) {
+        self.insert_meta_image_cache_within(key, image, SELECT_META_ANIMATION_CACHE_LIMIT_BYTES);
+    }
+
+    fn insert_meta_image_cache_within(
+        &mut self,
+        key: String,
+        image: SelectMetaImage,
+        animation_limit_bytes: u64,
+    ) {
+        if let Some(animation) = &image.animation {
+            self.meta_image_animations.push_back((key.clone(), animation.rgba_bytes()));
+        }
+        self.meta_image_cache.insert(key, SelectMetaImageCacheEntry::Ready(image));
+        let mut total: u64 = self.meta_image_animations.iter().map(|(_, bytes)| bytes).sum();
+        while total > animation_limit_bytes
+            && let Some((key, bytes)) = self.meta_image_animations.pop_front()
+        {
+            total -= bytes;
+            if let Some(SelectMetaImageCacheEntry::Ready(image)) =
+                self.meta_image_cache.get_mut(&key)
+            {
+                image.animation = None;
             }
         }
     }
@@ -523,7 +568,15 @@ impl SelectAssetRuntime {
             let resolved = crate::chart_asset::resolve_cached_asset(&key, &cache_dir, false);
             let path = resolved.as_ref().ok().and_then(Clone::clone);
             let result = match path.as_ref() {
-                Some(path) => load_static_rgba_image(path).map_err(|error| error.to_string()),
+                Some(path) => load_chart_image(
+                    path,
+                    &super::meta_image_animation::META_IMAGE_ANIMATION_LIMITS,
+                )
+                .map(|decoded| SelectMetaImage {
+                    first: decoded.first_frame().clone(),
+                    animation: decoded.animation().cloned(),
+                })
+                .map_err(|error| error.to_string()),
                 None => Err(resolved.err().map_or_else(
                     || "select meta image file not found".to_string(),
                     |e| format!("{e:#}"),
@@ -634,6 +687,35 @@ fn lower_current_thread_priority() {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meta_image_cache_drops_the_oldest_animations_beyond_the_budget() {
+        let mut runtime = SelectAssetRuntime::new(None, PathBuf::new(), PathBuf::new());
+        let image = || {
+            let frames = [0, 255]
+                .map(|color| {
+                    let frame = RgbaImageAsset { width: 1, height: 1, pixels: vec![color; 4] };
+                    (frame, Duration::from_millis(100))
+                })
+                .into();
+            SelectMetaImage {
+                first: RgbaImageAsset { width: 1, height: 1, pixels: vec![0; 4] },
+                animation: Some(Arc::new(AnimatedImage::new(frames, None).unwrap())),
+            }
+        };
+        // Each animation holds two 1x1 RGBA frames (8 bytes); the budget keeps two.
+        for key in ["a", "b", "c"] {
+            runtime.insert_meta_image_cache_within(key.to_string(), image(), 16);
+        }
+
+        let animated = |key: &str| match runtime.meta_image_cache.get(key) {
+            Some(SelectMetaImageCacheEntry::Ready(image)) => image.animation.is_some(),
+            _ => panic!("{key} is not cached"),
+        };
+        assert!(!animated("a"));
+        assert!(animated("b"));
+        assert!(animated("c"));
+    }
 
     #[test]
     fn runtime_initializes_preview_and_worker_state() {

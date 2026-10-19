@@ -525,6 +525,7 @@ impl WinitApp {
                 cursor_visible: true,
             },
             course_editor_cache: course_editor::CourseEditorDataCache::default(),
+            meta_animations: Default::default(),
         });
         if options.boot_result_sample {
             tracing::info!("booting directly into synthetic result screen");

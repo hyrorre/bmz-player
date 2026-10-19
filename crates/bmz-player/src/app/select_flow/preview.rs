@@ -4,7 +4,7 @@ impl WinitApp {
     pub(super) fn poll_select_asset_loads(&mut self) {
         let (image_uploads, previews) = self.select.select_assets.poll_loads();
         for upload in image_uploads {
-            self.upload_select_meta_image(upload.slot, &upload.image);
+            self.upload_select_meta_image(upload.slot, upload.image);
         }
         for prepared in previews {
             if self.play_select_preview_sample(prepared, 0.0) {
@@ -106,26 +106,33 @@ impl WinitApp {
             }),
             _ => None,
         };
+        // Decide / Play share the texture; upload the cached image again after they wrote it.
+        if let Some(key) = cache_key.as_deref()
+            && self.select.select_assets.meta_image_source(slot).as_deref() == Some(key)
+            && self.meta_animations.key(select_meta_image_texture(slot)) != Some(key)
+        {
+            self.select.select_assets.invalidate_meta_image_upload(slot);
+        }
         if let Some(image) = self.select.select_assets.sync_meta_image(slot, cache_key) {
-            self.upload_select_meta_image(slot, &image);
+            self.upload_select_meta_image(slot, image);
         }
     }
 
     pub(super) fn upload_select_meta_image(
         &mut self,
         slot: SelectMetaImageSlot,
-        image: &RgbaImageAsset,
+        image: SelectMetaImage,
     ) -> bool {
-        let texture_id = match slot {
-            SelectMetaImageSlot::Stage => SELECT_STAGE_TEXTURE,
-            SelectMetaImageSlot::Backbmp => PLAY_BACKBMP_TEXTURE,
-            SelectMetaImageSlot::Banner => SELECT_BANNER_TEXTURE,
-        };
-        if let Err(error) = self.renderer.upsert_image_asset(texture_id, image) {
+        let texture_id = select_meta_image_texture(slot);
+        let key = self.select.select_assets.meta_image_source(slot).clone().unwrap_or_default();
+        let SelectMetaImage { first: image, animation } = image;
+        if let Err(error) = self.renderer.upsert_image_asset(texture_id, &image) {
             tracing::warn!(%error, "failed to upload select meta image");
+            self.meta_animations.forget(texture_id);
             self.select.select_assets.finish_meta_image_upload(slot, None);
             false
         } else {
+            self.meta_animations.replace(texture_id, &key, animation);
             self.select.select_assets.finish_meta_image_upload(
                 slot,
                 Some(SkinImageSize { width: image.width as f32, height: image.height as f32 }),
@@ -194,6 +201,14 @@ fn uses_generated_preview(folder: &str, preview: &str, missing: bool) -> bool {
         false
     } else {
         should_use_generated_preview(preview, missing)
+    }
+}
+
+fn select_meta_image_texture(slot: SelectMetaImageSlot) -> TextureId {
+    match slot {
+        SelectMetaImageSlot::Stage => SELECT_STAGE_TEXTURE,
+        SelectMetaImageSlot::Backbmp => PLAY_BACKBMP_TEXTURE,
+        SelectMetaImageSlot::Banner => SELECT_BANNER_TEXTURE,
     }
 }
 

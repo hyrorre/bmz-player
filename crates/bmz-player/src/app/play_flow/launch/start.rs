@@ -178,14 +178,31 @@ impl WinitApp {
     }
 
     pub(super) fn clear_play_stagefile_state(&mut self) {
-        self.play.play_stagefile_source = None;
+        let source = self.play.play_stagefile_source.take();
+        self.forget_play_meta_animation(SELECT_STAGE_TEXTURE, source);
         self.play.play_stagefile_loaded = false;
         self.play.play_stagefile_size = None;
     }
 
     pub(super) fn clear_play_backbmp_state(&mut self) {
-        self.play.play_backbmp_source = None;
+        let source = self.play.play_backbmp_source.take();
+        self.forget_play_meta_animation(PLAY_BACKBMP_TEXTURE, source);
         self.play.play_backbmp_loaded = false;
+    }
+
+    /// Stops the animation this scene started; another scene may already own the texture.
+    fn forget_play_meta_animation(&mut self, texture: TextureId, source: Option<String>) {
+        if source.is_some() && self.meta_animations.key(texture) == source.as_deref() {
+            self.meta_animations.forget(texture);
+        }
+    }
+
+    /// Records the uploaded still image and decodes its animation in the background.
+    fn track_play_meta_animation(&mut self, texture: TextureId, key: &str, path: Option<PathBuf>) {
+        match path.filter(|path| bmz_render::assets::may_animate(path)) {
+            Some(path) => self.meta_animations.request(texture, key, path),
+            None => self.meta_animations.replace(texture, key, None),
+        }
     }
 
     pub(super) fn prepare_play_meta_image_textures(&mut self, chart_id: i64) {
@@ -216,24 +233,40 @@ impl WinitApp {
 
     pub(super) fn sync_play_stagefile_texture(&mut self, folder: &str, relative: &str) {
         let stagefile_key = format!("{folder}|{relative}");
-        if self.play.play_stagefile_source.as_deref() == Some(stagefile_key.as_str()) {
+        // Select may have written another image to the shared texture since.
+        if self.play.play_stagefile_source.as_deref() == Some(stagefile_key.as_str())
+            && self.meta_animations.key(SELECT_STAGE_TEXTURE) == Some(stagefile_key.as_str())
+        {
             return;
         }
-        self.play.play_stagefile_source = Some(stagefile_key);
-        self.play.play_stagefile_size =
+        let loaded =
             load_chart_meta_texture(&mut self.renderer, SELECT_STAGE_TEXTURE, folder, relative);
-        self.play.play_stagefile_loaded = self.play.play_stagefile_size.is_some();
+        self.play.play_stagefile_size = loaded.as_ref().map(|(size, _)| *size);
+        self.play.play_stagefile_loaded = loaded.is_some();
+        self.track_play_meta_animation(
+            SELECT_STAGE_TEXTURE,
+            &stagefile_key,
+            loaded.map(|(_, path)| path),
+        );
+        self.play.play_stagefile_source = Some(stagefile_key);
     }
 
     pub(super) fn sync_play_backbmp_texture(&mut self, folder: &str, relative: &str) {
         let backbmp_key = format!("{folder}|{relative}");
-        if self.play.play_backbmp_source.as_deref() == Some(backbmp_key.as_str()) {
+        if self.play.play_backbmp_source.as_deref() == Some(backbmp_key.as_str())
+            && self.meta_animations.key(PLAY_BACKBMP_TEXTURE) == Some(backbmp_key.as_str())
+        {
             return;
         }
+        let loaded =
+            load_chart_meta_texture(&mut self.renderer, PLAY_BACKBMP_TEXTURE, folder, relative);
+        self.play.play_backbmp_loaded = loaded.is_some();
+        self.track_play_meta_animation(
+            PLAY_BACKBMP_TEXTURE,
+            &backbmp_key,
+            loaded.map(|(_, path)| path),
+        );
         self.play.play_backbmp_source = Some(backbmp_key);
-        self.play.play_backbmp_loaded =
-            load_chart_meta_texture(&mut self.renderer, PLAY_BACKBMP_TEXTURE, folder, relative)
-                .is_some();
     }
 
     pub(super) fn enter_play_scene(

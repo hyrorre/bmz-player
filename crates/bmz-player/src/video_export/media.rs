@@ -17,6 +17,14 @@ pub struct Media {
     skin_videos: Vec<SkinVideo>,
     document: bmz_render::skin::SkinDocument,
     animated_bga: crate::animated_bga::AnimatedBgaState,
+    /// Animated STAGEFILE / BACKBMP / BANNER, played from Play entry (scene time 0).
+    meta_animations: Vec<MetaAnimation>,
+}
+
+struct MetaAnimation {
+    texture: TextureId,
+    image: std::sync::Arc<bmz_render::assets::AnimatedImage>,
+    uploaded: Option<usize>,
 }
 
 struct SkinVideo {
@@ -54,6 +62,7 @@ impl Media {
             stagefile_size: None,
             backbmp: false,
             animated_bga: Default::default(),
+            meta_animations: Vec::new(),
         };
         let mut animation_budget = crate::animated_bga::AnimatedBgaBudget::default();
         let folder = chart_path.parent().context("chart has no parent folder")?.to_string_lossy();
@@ -63,9 +72,20 @@ impl Media {
             (bmz_render::plan::SELECT_BANNER_TEXTURE, &chart.metadata.banner_file),
         ] {
             if let Some(path) = crate::chart_asset::resolve_chart_asset_path(&folder, relative)
-                && let Ok(image) = bmz_render::assets::load_static_rgba_image(&path)
+                && let Ok(decoded) = bmz_render::assets::load_chart_image(
+                    &path,
+                    &bmz_render::assets::AnimatedImageLimits::CHART,
+                )
             {
-                renderer.upsert_image_asset(id, &image)?;
+                let image = decoded.first_frame();
+                renderer.upsert_image_asset(id, image)?;
+                if let Some(animation) = decoded.animation() {
+                    media.meta_animations.push(MetaAnimation {
+                        texture: id,
+                        image: animation.clone(),
+                        uploaded: Some(0),
+                    });
+                }
                 if id == bmz_render::plan::SELECT_STAGE_TEXTURE {
                     media.stagefile_size = Some(bmz_render::skin::SkinImageSize {
                         width: image.width as f32,
@@ -165,6 +185,20 @@ impl Media {
                     frame.height,
                     &frame.rgba,
                 )?;
+            }
+        }
+        let meta_elapsed_us = u64::try_from(scene_us).unwrap_or(0);
+        for meta in &mut self.meta_animations {
+            let index = meta.image.frame_index(meta_elapsed_us);
+            if meta.uploaded != Some(index) {
+                let frame = meta.image.frame(index);
+                renderer.upsert_rgba_texture_ref(
+                    meta.texture,
+                    frame.width,
+                    frame.height,
+                    &frame.pixels,
+                )?;
+                meta.uploaded = Some(index);
             }
         }
         let judgements = &snapshot.recent_judgements;
