@@ -2,17 +2,90 @@
 //!
 //! beatoraja packs every frame of an animated skin image into one texture and leaves the
 //! animation to the image's `divx` / `divy` / `cycle`. The grid depends on the maximum
-//! texture size, so BMZ fixes it to a common GPU limit instead of the adapter's value:
-//! skins decode before the GPU exists, and the same skin must always get the same grid.
+//! texture size (`GL_MAX_TEXTURE_SIZE` in beatoraja). Skins decode their frames before a
+//! GPU device may exist, so the sheet is built right before upload, with the
+//! `max_texture_dimension_2d` of the device that receives it.
 
 use anyhow::{Result, ensure};
 
 use super::RgbaImageAsset;
 use super::animated::AnimatedImage;
 
-/// Maximum texture size used to choose the grid (GL_MAX_TEXTURE_SIZE on common GPUs).
-pub const SPRITE_SHEET_MAX_TEXTURE_DIMENSION: u32 = 16_384;
+/// Only sizes a source before any GPU device exists. The sheet is rebuilt for the device's
+/// own limit when it attaches.
+pub const PROVISIONAL_SPRITE_SHEET_TEXTURE_DIMENSION: u32 = 16_384;
 const MAX_SPRITE_SHEET_RGBA_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Grid and pixel size of a sprite sheet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpriteSheetLayout {
+    pub columns: u32,
+    pub rows: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// beatoraja's grid for `frames` frames of `frame_width` x `frame_height` under a maximum
+/// texture size, without checking that the sheet fits.
+pub fn sprite_sheet_grid_for_limit(
+    frames: u32,
+    frame_width: u32,
+    frame_height: u32,
+    max_texture_dimension: u32,
+) -> (u32, u32) {
+    let max_columns = (max_texture_dimension / frame_width.max(1)).max(1);
+    let max_rows = (max_texture_dimension / frame_height.max(1)).max(1);
+    beatoraja_sprite_sheet_grid(frames, frame_width, frame_height, max_columns, max_rows)
+}
+
+/// The sheet `animation` gets under `max_texture_dimension`. Fails when no layout fits the
+/// texture size or the RGBA size budget; nothing is allocated either way.
+pub fn sprite_sheet_layout(
+    animation: &AnimatedImage,
+    max_texture_dimension: u32,
+) -> Result<SpriteSheetLayout> {
+    sprite_sheet_layout_for(
+        u32::try_from(animation.frames().len())?,
+        animation.width(),
+        animation.height(),
+        max_texture_dimension,
+    )
+}
+
+/// [`sprite_sheet_layout`] for `frame_count` frames of `frame_width` x `frame_height`.
+pub fn sprite_sheet_layout_for(
+    frame_count: u32,
+    frame_width: u32,
+    frame_height: u32,
+    max_texture_dimension: u32,
+) -> Result<SpriteSheetLayout> {
+    let (columns, rows) =
+        sprite_sheet_grid_for_limit(frame_count, frame_width, frame_height, max_texture_dimension);
+    let width = u64::from(frame_width) * u64::from(columns);
+    let height = u64::from(frame_height) * u64::from(rows);
+    ensure!(
+        width <= u64::from(max_texture_dimension) && height <= u64::from(max_texture_dimension),
+        "sprite sheet {width}x{height} ({frame_count} frames) exceeds texture size \
+         {max_texture_dimension}"
+    );
+    ensure!(
+        width.saturating_mul(height).saturating_mul(4) <= MAX_SPRITE_SHEET_RGBA_BYTES,
+        "sprite sheet {width}x{height} exceeds the RGBA size budget"
+    );
+    Ok(SpriteSheetLayout { columns, rows, width: width as u32, height: height as u32 })
+}
+
+/// Pixel size of the provisional sheet used before a GPU device exists.
+pub fn provisional_sprite_sheet_size(animation: &AnimatedImage) -> (u32, u32) {
+    let frame_count = u32::try_from(animation.frames().len()).unwrap_or(u32::MAX);
+    let (columns, rows) = sprite_sheet_grid_for_limit(
+        frame_count,
+        animation.width(),
+        animation.height(),
+        PROVISIONAL_SPRITE_SHEET_TEXTURE_DIMENSION,
+    );
+    (animation.width().saturating_mul(columns), animation.height().saturating_mul(rows))
+}
 
 /// Port of beatoraja `PixmapResourcePool.getSpriteSheetGrid`. Returns `(columns, rows)`.
 pub fn beatoraja_sprite_sheet_grid(
@@ -68,23 +141,8 @@ pub fn build_sprite_sheet(
     max_texture_dimension: u32,
 ) -> Result<(RgbaImageAsset, (u32, u32))> {
     let (frame_width, frame_height) = (animation.width(), animation.height());
-    let frame_count = u32::try_from(animation.frames().len())?;
-    let max_columns = (max_texture_dimension / frame_width.max(1)).max(1);
-    let max_rows = (max_texture_dimension / frame_height.max(1)).max(1);
-    let (columns, rows) =
-        beatoraja_sprite_sheet_grid(frame_count, frame_width, frame_height, max_columns, max_rows);
-    let width = u64::from(frame_width) * u64::from(columns);
-    let height = u64::from(frame_height) * u64::from(rows);
-    ensure!(
-        width <= u64::from(max_texture_dimension) && height <= u64::from(max_texture_dimension),
-        "sprite sheet {width}x{height} ({frame_count} frames) exceeds texture size \
-         {max_texture_dimension}"
-    );
-    ensure!(
-        width * height * 4 <= MAX_SPRITE_SHEET_RGBA_BYTES,
-        "sprite sheet {width}x{height} exceeds the RGBA size budget"
-    );
-    let (width, height) = (width as u32, height as u32);
+    let SpriteSheetLayout { columns, rows, width, height } =
+        sprite_sheet_layout(animation, max_texture_dimension)?;
     let mut pixels = vec![0_u8; width as usize * height as usize * 4];
     let sheet_row_bytes = width as usize * 4;
     let frame_row_bytes = frame_width as usize * 4;
@@ -140,6 +198,27 @@ mod tests {
         assert_eq!(grid(7, 10, 10, 50), (3, 3));
         assert_eq!(grid(100, 10, 10, 50), (5, 20));
         assert_eq!(grid(3, 100, 10, 50), (1, 3));
+    }
+
+    #[test]
+    fn layout_uses_the_device_texture_limit() {
+        let layout = |limit| sprite_sheet_layout_for(60, 512, 512, limit);
+        // 6x10 needs 5120 px, so a 4096 px GPU gets beatoraja's 8x8 fallback instead.
+        let small = layout(4096).unwrap();
+        assert_eq!((small.columns, small.rows, small.width, small.height), (8, 8, 4096, 4096));
+        for limit in [8192, 16_384] {
+            let large = layout(limit).unwrap();
+            assert_eq!((large.columns, large.rows, large.width, large.height), (6, 10, 3072, 5120));
+        }
+        // No 512 px layout of 60 frames fits 2048 px.
+        assert!(layout(2048).is_err());
+    }
+
+    #[test]
+    fn layout_keeps_the_rgba_budget() {
+        // 6 frames of 4096 x 4096 fit 16384 px as 2x3 but need 384 MiB.
+        assert!(sprite_sheet_layout_for(6, 4096, 4096, 16_384).is_err());
+        assert!(sprite_sheet_layout_for(4, 4096, 4096, 16_384).is_ok());
     }
 
     #[test]

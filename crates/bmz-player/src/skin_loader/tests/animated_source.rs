@@ -50,11 +50,36 @@ fn json_skin_sources_turn_animations_into_beatoraja_sprite_sheets() {
             .unwrap_or_else(|| panic!("source {id} was not decoded"));
         (source.size.width, source.size.height)
     };
-    // Two 2x2 frames stack into one column; three frames into a 1x3 grid.
+    // Animated sources keep their frames; the sheet is laid out for the GPU at upload, and
+    // the provisional size already matches it for small frames. Two 2x2 frames stack into
+    // one column; three frames into a 1x3 grid.
     assert_eq!(size("gif"), (2.0, 4.0));
     assert_eq!(size("webp"), (2.0, 6.0));
     assert_eq!(size("apng"), (2.0, 6.0));
     assert_eq!(size("still"), (2.0, 2.0));
+    for source in &decoded.sources {
+        let animated = source.source_id != "still";
+        assert_eq!(source.animation.is_some(), animated, "{}", source.source_id);
+        assert_eq!(source.asset.is_none(), animated, "{}", source.source_id);
+    }
+    assert_eq!(
+        decoded
+            .sources
+            .iter()
+            .find(|source| source.source_id == "webp")
+            .unwrap()
+            .animation
+            .as_ref()
+            .unwrap()
+            .frames()
+            .len(),
+        3
+    );
+
+    // Without a GPU the sheet waits for the device; the skin still installs every source.
+    let mut renderer = Renderer::default();
+    install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
+        .unwrap();
 }
 
 #[test]

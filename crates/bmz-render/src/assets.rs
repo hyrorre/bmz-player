@@ -66,35 +66,37 @@ pub fn load_static_rgba_image_with_color_key(
     }
 }
 
-/// Skin source image. Animated GIF / WebP / APNG become a beatoraja sprite sheet that the
-/// skin animates with `divx` / `divy` / `cycle`; other files load as still images.
-pub fn load_skin_source_rgba_image_with_color_key(
+/// Skin source image. Animated GIF / WebP / APNG keep their frames; build the beatoraja
+/// sprite sheet with [`build_skin_sprite_sheet`] once the receiving GPU's texture limit is
+/// known. Other files load as still images.
+pub fn load_skin_source_image_with_color_key(
     path: &Path,
     color_key: Option<[u8; 3]>,
-) -> Result<RgbaImageAsset> {
+) -> Result<DecodedImage> {
     if !may_animate(path) {
-        return load_static_rgba_image_with_color_key(path, color_key);
+        return load_static_rgba_image_with_color_key(path, color_key).map(DecodedImage::Static);
     }
-    match animated::decode_image_frames(path, color_key, &AnimatedImageLimits::SKIN)? {
-        DecodedImage::Static(image) => Ok(image),
-        DecodedImage::Animated(animation) => {
-            let (sheet, (columns, rows)) = sprite_sheet::build_sprite_sheet(
-                &animation,
-                sprite_sheet::SPRITE_SHEET_MAX_TEXTURE_DIMENSION,
-            )
-            .with_context(|| format!("animated skin image: {}", path.display()))?;
-            tracing::info!(
-                path = %path.display(),
-                frames = animation.frames().len(),
-                columns,
-                rows,
-                width = sheet.width,
-                height = sheet.height,
-                "loaded animated skin image as a sprite sheet"
-            );
-            Ok(sheet)
-        }
-    }
+    animated::decode_image_frames(path, color_key, &AnimatedImageLimits::SKIN)
+}
+
+/// The sprite sheet a skin animates with `divx` / `divy` / `cycle`, laid out for a device
+/// whose `max_texture_dimension_2d` is `max_texture_dimension`.
+pub fn build_skin_sprite_sheet(
+    animation: &AnimatedImage,
+    max_texture_dimension: u32,
+) -> Result<RgbaImageAsset> {
+    let (sheet, (columns, rows)) =
+        sprite_sheet::build_sprite_sheet(animation, max_texture_dimension)?;
+    tracing::info!(
+        frames = animation.frames().len(),
+        columns,
+        rows,
+        width = sheet.width,
+        height = sheet.height,
+        max_texture_dimension,
+        "built animated skin image sprite sheet"
+    );
+    Ok(sheet)
 }
 
 /// `#STAGEFILE` / `#BANNER` / `#BACKBMP` image with its animation, if any.
@@ -541,21 +543,26 @@ mod tests {
     fn load_skin_source_builds_beatoraja_sprite_sheets_for_animations() {
         let root = repo_root().join("data/songs/bga-compat");
 
+        let sheet = |file_name: &str| {
+            let decoded = load_skin_source_image_with_color_key(&root.join(file_name), None);
+            let animation = decoded.unwrap().animation().cloned().expect("animated");
+            build_skin_sprite_sheet(&animation, 4096).unwrap()
+        };
         // Two 2x2 frames: 1x2 and 2x1 tie, so beatoraja keeps one column.
-        let gif =
-            load_skin_source_rgba_image_with_color_key(&root.join("animated.gif"), None).unwrap();
+        let gif = sheet("animated.gif");
         assert_eq!((gif.width, gif.height), (2, 4));
         assert_eq!(&gif.pixels[..4], &[255, 0, 0, 255]);
         assert_eq!(&gif.pixels[2 * 2 * 4..2 * 2 * 4 + 4], &[0, 0, 255, 255]);
 
         for file_name in ["webp_anim.webp", "apng_anim.png"] {
-            let sheet =
-                load_skin_source_rgba_image_with_color_key(&root.join(file_name), None).unwrap();
+            let sheet = sheet(file_name);
             assert_eq!((sheet.width, sheet.height), (2, 6), "{file_name}");
         }
         for file_name in ["webp_still.webp", "apng_single.png", "small.png"] {
-            let still =
-                load_skin_source_rgba_image_with_color_key(&root.join(file_name), None).unwrap();
+            let decoded = load_skin_source_image_with_color_key(&root.join(file_name), None);
+            let DecodedImage::Static(still) = decoded.unwrap() else {
+                panic!("{file_name} is a still image");
+            };
             let expected = load_static_rgba_image(&root.join(file_name)).unwrap();
             assert_eq!(still, expected, "{file_name}");
         }

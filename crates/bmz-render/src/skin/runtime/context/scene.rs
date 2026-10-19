@@ -77,6 +77,36 @@ impl SkinContext {
         }
     }
 
+    /// Size of the installed source `source_id`.
+    pub fn source_size(&self, source_id: &str) -> Option<SkinImageSize> {
+        self.document_sources.get(source_id).map(|source| source.source_size)
+    }
+
+    /// Corrects the size of every source drawn from `texture`, for example after a sprite
+    /// sheet was laid out for a GPU that attached after the skin was installed.
+    pub fn update_texture_source_size(&mut self, texture: SkinTextureId, size: SkinImageSize) {
+        let mut changed = false;
+        for source in self.document_sources.values_mut() {
+            if source.texture == texture && source.source_size != size {
+                source.source_size = size;
+                changed = true;
+            }
+        }
+        if let Ok(mut sources) = self.runtime_document_sources.lock() {
+            for source in sources.values_mut() {
+                if source.texture == texture && source.source_size != size {
+                    source.source_size = size;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            // Cached render items were laid out with the provisional size.
+            self.select_render_cache = Arc::new(Mutex::new(SelectRenderCache::default()));
+            self.result_render_cache = Arc::new(Mutex::new(ResultRenderCache::default()));
+        }
+    }
+
     pub fn texture_ids(&self) -> Vec<SkinTextureId> {
         let mut ids: Vec<_> = self.document_sources.values().map(|source| source.texture).collect();
         if let Ok(sources) = self.runtime_document_sources.lock() {

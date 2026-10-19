@@ -87,8 +87,8 @@ pub use canvas::{RenderFrameTimings, RenderSurfaceStatus, Renderer, SurfaceSize}
 pub use state::PreparedTexture;
 use state::{
     InternalSceneTarget, OFFSCREEN_RECT_BATCH_TEXTURE_BASE,
-    OFFSCREEN_RECT_BATCH_TEXTURE_MAX_ENTRIES, OffscreenRectBatchTextureKey, PendingTexture,
-    WgpuRenderer,
+    OFFSCREEN_RECT_BATCH_TEXTURE_MAX_ENTRIES, OffscreenRectBatchTextureKey, PendingSpriteSheet,
+    PendingTexture, WgpuRenderer,
 };
 #[cfg(test)]
 use surface::resolve_maximum_frame_latency;

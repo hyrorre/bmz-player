@@ -104,6 +104,7 @@ fn decode_source_task(
                 source_id,
                 path,
                 asset: Some(asset),
+                animation: None,
                 size,
                 is_video: false,
                 cached_texture: None,
@@ -160,10 +161,8 @@ fn decode_file_source(
             texture_status,
         ));
     }
-    match load_source_asset_with_cache_key(cache_key.clone(), source_cache, || {
-        bmz_render::assets::load_skin_source_rgba_image_with_color_key(&path, color_key)
-    }) {
-        Ok((asset, source_status)) => Some(asset_source_result(
+    match load_skin_file_source(&path, color_key, cache_key.clone(), source_cache) {
+        Ok(LoadedSkinFileSource::Still(asset, source_status)) => Some(asset_source_result(
             index,
             source_id,
             path,
@@ -173,6 +172,24 @@ fn decode_file_source(
             source_status,
             texture_status,
         )),
+        Ok(LoadedSkinFileSource::Animated(animation)) => {
+            let (width, height) =
+                bmz_render::assets::sprite_sheet::provisional_sprite_sheet_size(&animation);
+            Some(DecodedSourceResult {
+                texture_lease: None,
+                index,
+                source_id,
+                path,
+                asset: None,
+                animation: Some(animation),
+                size: SkinImageSize { width: width as f32, height: height as f32 },
+                is_video: false,
+                cached_texture: None,
+                cache_key,
+                source_status: Some(SourceCacheStatus::Uncacheable),
+                texture_status: Some(texture_status),
+            })
+        }
         Err(error) => {
             if warn_missing_required && required_sources.contains(&source_id) {
                 tracing::warn!(
@@ -239,6 +256,51 @@ fn decode_video_source(
     }
 }
 
+enum LoadedSkinFileSource {
+    Still(RgbaImageAsset, SourceCacheStatus),
+    Animated(Arc<bmz_render::assets::AnimatedImage>),
+}
+
+/// Loads a still image through the CPU source cache. Animated frames skip that cache:
+/// their sprite sheet depends on the GPU that receives it.
+fn load_skin_file_source(
+    path: &Path,
+    color_key: Option<[u8; 3]>,
+    cache_key: Option<SkinSourceAssetCacheKey>,
+    source_cache: Option<&SharedSkinSourceAssetCache>,
+) -> Result<LoadedSkinFileSource> {
+    if !bmz_render::assets::may_animate(path) {
+        return load_source_asset_with_cache_key(cache_key, source_cache, || {
+            bmz_render::assets::load_static_rgba_image_with_color_key(path, color_key)
+        })
+        .map(|(asset, status)| LoadedSkinFileSource::Still(asset, status));
+    }
+    if let (Some(cache), Some(key)) = (source_cache, cache_key.as_ref())
+        && let Ok(cache) = cache.lock()
+        && let Some(asset) = cache.get(key)
+    {
+        return Ok(LoadedSkinFileSource::Still(asset, SourceCacheStatus::Hit));
+    }
+    match bmz_render::assets::load_skin_source_image_with_color_key(path, color_key)? {
+        bmz_render::assets::DecodedImage::Animated(animation) => {
+            Ok(LoadedSkinFileSource::Animated(animation))
+        }
+        bmz_render::assets::DecodedImage::Static(asset) => {
+            let status = match (source_cache, cache_key) {
+                (None, _) => SourceCacheStatus::Disabled,
+                (Some(_), None) => SourceCacheStatus::Uncacheable,
+                (Some(cache), Some(key)) => {
+                    if let Ok(mut cache) = cache.lock() {
+                        cache.insert(key, asset.clone());
+                    }
+                    SourceCacheStatus::Miss
+                }
+            };
+            Ok(LoadedSkinFileSource::Still(asset, status))
+        }
+    }
+}
+
 fn cached_source_result(
     index: usize,
     source_id: String,
@@ -253,6 +315,7 @@ fn cached_source_result(
         source_id,
         path,
         asset: None,
+        animation: None,
         size: cached.size,
         is_video,
         cached_texture: Some(cached.texture),
@@ -279,6 +342,7 @@ fn asset_source_result(
         source_id,
         path,
         asset: Some(asset),
+        animation: None,
         size,
         is_video,
         cached_texture: None,

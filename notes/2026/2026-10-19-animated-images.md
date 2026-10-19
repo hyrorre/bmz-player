@@ -34,9 +34,10 @@ PlayのSTAGEFILEは、未マージのPR #20 commit `0404fb6`（Kaleid LOADINGFIL
 
 判断した点:
 
-- 格子の上限は16384px固定。スキンの初回decodeはGPU生成前に走るため、実機の値を使うと
-  同じスキンでも格子が変わりうる。上限未満のGPUでシートが収まらない場合は既存の巨大PNGと同じく
-  source skip。
+- 格子の上限は当初16384px固定としたが、レビューで4096 / 8192pxのGPUに収まる画像まで
+  読み込めなくなる点を指摘された（2026-10-20追記）。decodeとシート生成を分け、uploadする
+  デバイスの`max_texture_dimension_2d`で格子を決めるように変更した。GPU生成前にinstallした
+  スキンは、デバイス接続時にシートを組み立ててsourceサイズを更新する。
 - delayは10ms未満を10msとする（0404fbの規則）。ループは総再生回数に揃える。GIFは
   `image`の`loop_count`がNETSCAPE拡張なし（`Finite(0)`）を無限に潰すため、`gif` crateで読む。
 - 1フレームの画像は静止画経路のままとし、STAGEFILEの待機も追加しない。既存譜面の1フレームGIFに

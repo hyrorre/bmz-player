@@ -832,9 +832,11 @@ JSON / Lua / LR2 CSV / PMcharaのsourceはすべて同じ規則で読み込み�
 - 1フレームの画像と、既定画像以外に1フレームしか持たないAPNGは従来どおり静止画です。
   16bit APNGはアニメーションを展開できないため、既定画像を使います。
 
-beatorajaは格子をGPUの`GL_MAX_TEXTURE_SIZE`で決めます。BMZはスキンをGPUの初期化前にも
-decodeするため、同じスキンが常に同じ格子になるよう16384pxに固定して計算します。
-上限が16384px未満のGPUでシートが収まらない場合は、大きすぎるPNGと同じく警告して
+beatorajaは格子をGPUの`GL_MAX_TEXTURE_SIZE`で決めます。BMZも、シートを受け取るwgpuデバイスの
+`max_texture_dimension_2d`で格子を決めます。decode時はフレームだけを保持し、シートはGPUへ
+uploadする直前に組み立てます。起動直後などGPUの生成前にinstallしたスキンは、デバイスが
+接続された時点でシートを組み立て、スキンのsourceサイズを更新します。
+どの配置でもデバイスの上限に収まらないシートと、展開後256MiBを超えるシートは、警告して
 そのsourceを読み込みません。展開の上限（ファイル64MiB、canvas 8192px、4096フレーム、
 展開後256MiB、decode 10秒）を超えた場合も読み込みエラーです。
 
