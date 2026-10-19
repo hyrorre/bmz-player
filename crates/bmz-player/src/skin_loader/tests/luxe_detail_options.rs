@@ -8,16 +8,29 @@ use bmz_render::skin::SkinClickTarget;
 // First choice of the normal-card layout: 1:1 38 px buttons every 41 px from y = 244.
 const CHOICE_Y: f32 = 263.0;
 const CHOICE_PITCH: f32 = 41.0;
-// The selected item's centre column (slot 3) is raised by this much.
+// The column at the centre (drawing column 3) is raised by this much, scaled
+// down linearly to 0 one column away while the carousel scrolls.
 const SELECTED_RAISE: f32 = 24.0;
 
+fn raise_at(column: f32) -> f32 {
+    (SELECTED_RAISE * (1.0 - (column - 3.0).abs()).max(0.0)).round()
+}
+
 fn choice_y(centre: bool) -> f32 {
-    CHOICE_Y - if centre { SELECTED_RAISE } else { 0.0 }
+    choice_y_at(if centre { 3.0 } else { 0.0 })
+}
+
+fn choice_y_at(column: f32) -> f32 {
+    CHOICE_Y - raise_at(column)
 }
 
 /// A point in a column's header, clear of its first choice.
 fn header_y(centre: bool) -> f32 {
-    220.0 - if centre { SELECTED_RAISE } else { 0.0 }
+    header_y_at(if centre { 3.0 } else { 0.0 })
+}
+
+fn header_y_at(column: f32) -> f32 {
+    220.0 - raise_at(column)
 }
 const RAISE: u32 = SELECTED_RAISE as u32;
 
@@ -95,14 +108,15 @@ fn luxe_detail_options_all_items_choices_and_moving_hits() {
                 assert!(commands.iter().any(|cmd| matches!(cmd, DrawCommand::Rect { rect, color }
                     if rect.width == 1.0 && rect.height == 1.0 && color.a > 0.0 && color.a < 1.0)));
                 for slot in 0..9 {
-                    let x = 138.0 + (detail_options_column(slot) as f32 + scroll) * 274.0;
+                    let column = detail_options_column(slot) as f32 + scroll;
+                    let x = 138.0 + column * 274.0;
                     if !(0.0..1920.0).contains(&x) {
                         continue;
                     }
                     let row = panel.row(slot).unwrap();
                     assert!(has_text(&row.label), "missing {}", row.item_id);
                     assert_eq!(
-                        event_at(&renderer, &s, x, header_y(slot == 3)),
+                        event_at(&renderer, &s, x, header_y_at(column)),
                         Some(19310 + slot as i32)
                     );
                     for (index, choice) in row.choices.iter().enumerate() {
@@ -112,7 +126,7 @@ fn luxe_detail_options_all_items_choices_and_moving_hits() {
                                 &renderer,
                                 &s,
                                 x,
-                                choice_y(slot == 3) + index as f32 * CHOICE_PITCH
+                                choice_y_at(column) + index as f32 * CHOICE_PITCH
                             ),
                             Some(19500 + slot as i32 * 64 + index as i32 * 4)
                         );

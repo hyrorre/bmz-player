@@ -174,6 +174,15 @@ pub(super) fn apply_skin_offset_to_frame_inner(
         frame.x += x;
         frame.y += y;
         frame.clip.offset(x as f32, y as f32, 0.0, 0.0);
+        let [column, raise] = destination.bmz_detail_raise;
+        if raise != 0 {
+            // The column currently shown at `column + scroll`; full raise at the centre.
+            let centre = crate::scene::detail_options::DETAIL_OPTION_CENTER as f32;
+            let weight = (1.0 - (column as f32 + scroll - centre).abs()).max(0.0);
+            let y = (raise as f32 * weight).round() as i32;
+            frame.y += y;
+            frame.clip.offset(0.0, y as f32, 0.0, 0.0);
+        }
     }
 }
 

@@ -1392,6 +1392,12 @@ destinationの`"bmzDetailScroll": [dx, dy]`に1項目分の移動量（skin canv
 選択先のref 19300帯と説明・値変更は入力直後のCURSORを参照し、行ref・行eventは表示窓の項目を参照します。
 クリックは判定に使用したsnapshotの行へ適用するため、移動中も見えている項目を操作できます。
 
+`"bmzDetailRaise": [column, dy]`は、そのdestinationの描画列`column`（中央が3、枠外の左は-1、右は7）が
+中央にある間だけ`dy`（skin canvasのpixel、左下原点なので正で上）持ち上げます。
+見かけの列位置`column + scroll`（scrollは上記の小数列分）と中央との距離をdとして、変位は`dy * max(0, 1 - d)`です。
+中央へ入る列は徐々に上がり、出ていく列は徐々に下がります。描画とクリック判定の両方へ適用し、
+退場表示中は解放時のscrollで固定します。未指定・`dy = 0`は無効で、E2非表示時も変位しません。
+
 #### 全選択肢セル（横並び表示用の追加API）
 
 可視項目slot `s=0..6`と枠外補助slot `s=7,8`、選択肢index `c=0..7`の基底IDは`19500 + 64*s + 4*c`です。

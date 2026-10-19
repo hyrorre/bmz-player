@@ -230,6 +230,11 @@ pub struct SkinDestinationDef {
     /// drawing and hit testing with the remaining select scroll interpolation.
     #[serde(default, rename = "bmzDetailScroll")]
     pub bmz_detail_scroll: [i32; 2],
+    /// BMZ E2 carousel: `[column, dy]` raises a destination by `dy` skin pixels
+    /// while its drawing column (centre 3) is at the centre, scaled down linearly
+    /// to 0 one column away as the scroll interpolation moves it. `dy = 0` is off.
+    #[serde(default, rename = "bmzDetailRaise")]
+    pub bmz_detail_raise: [i32; 2],
     #[serde(default = "default_stretch")]
     pub stretch: i32,
     #[serde(default, deserialize_with = "deserialize_op_codes")]

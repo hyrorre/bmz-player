@@ -159,6 +159,7 @@ fn grade_diff_destinations_use_the_fixed_next_rank_in_select_and_result() {
             offset: 0,
             offsets: Vec::new(),
             bmz_detail_scroll: [0, 0],
+            bmz_detail_raise: [0, 0],
             stretch: default_stretch(),
             op: vec![op],
             op_expr: Box::default(),

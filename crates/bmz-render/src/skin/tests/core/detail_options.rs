@@ -151,3 +151,58 @@ fn detail_options_resolvers_and_lua_text_share_the_snapshot() {
     snapshot.detail_options = Some(panel);
     assert!(snapshot.closing_detail_options().is_none());
 }
+
+#[test]
+fn detail_raise_follows_the_column_through_the_scroll_interpolation() {
+    let panel = std::sync::Arc::new(DetailOptionsSnapshot {
+        cursor: 0,
+        viewport_start: 0,
+        items: Vec::new().into(),
+        title: String::new(),
+        scope_label: String::new(),
+        guide: String::new(),
+        position: String::new(),
+    });
+    let raised_y = |column: i32, scroll: f32| {
+        let destination: SkinDestinationDef = serde_json::from_value(serde_json::json!({
+            "id": "column", "bmzDetailRaise": [column, 24], "dst": [{"x": 0, "y": 100, "w": 10, "h": 10}]
+        }))
+        .unwrap();
+        let state = SkinDrawState {
+            detail_options: Some(panel.clone()),
+            detail_options_scroll: scroll,
+            ..Default::default()
+        };
+        let mut frame = ResolvedSkinFrame { y: 100, ..Default::default() };
+        apply_skin_offset_to_frame_inner(&destination, &mut frame, &state, false, false);
+        frame.y - 100
+    };
+    // The centre column stands fully raised; neighbours rise as they slide in.
+    for (column, scroll, expected) in [
+        (3, 0.0, 24),
+        (2, 0.0, 0),
+        (4, 0.0, 0),
+        (3, 0.5, 12),
+        (2, 0.5, 12),
+        (4, -0.5, 12),
+        (3, -1.0, 0),
+        (2, 1.0, 24),
+        (1, 0.5, 0),
+    ] {
+        assert_eq!(raised_y(column, scroll), expected, "column {column}, scroll {scroll}");
+    }
+    // Without the E2 panel nothing moves.
+    let destination: SkinDestinationDef = serde_json::from_value(serde_json::json!({
+        "id": "column", "bmzDetailRaise": [3, 24], "dst": [{"x": 0, "y": 100, "w": 10, "h": 10}]
+    }))
+    .unwrap();
+    let mut frame = ResolvedSkinFrame { y: 100, ..Default::default() };
+    apply_skin_offset_to_frame_inner(
+        &destination,
+        &mut frame,
+        &SkinDrawState::default(),
+        false,
+        false,
+    );
+    assert_eq!(frame.y, 100);
+}
