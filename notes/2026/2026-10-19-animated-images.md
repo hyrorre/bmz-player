@@ -80,6 +80,7 @@ PlayのSTAGEFILEは、未マージのPR #20 commit `0404fb6`（Kaleid LOADINGFIL
   - `scan_song_roots_skips_unreadable_subdirectory_and_keeps_accessible_files`：
     rootで実行したため、読めないフォルダを作れない。
   - `tar_path_traversal_and_cross_platform_escapes_are_rejected`：楽曲ダウンロードのtarパス検証。
+  - 変更前のcommit `59e456a0`でも同じ環境で同じ6件が失敗することを確認した。
 - 主な追加テスト：格子計算と配置、3形式のフレーム・delay・総再生回数、上限とpolicy、
   skin sourceのシート寸法（JSON / LR2）、BGAのフレーム切替とPOOR優先、メタ画像の起点・
   scene reset・keyの照合、Selectのcache上限、PlayのSTAGEFILE待機と再生、
