@@ -6,6 +6,13 @@ use anyhow::{Context, Result, bail};
 use flate2::read::ZlibDecoder;
 use image::ImageReader;
 
+pub mod animated;
+pub mod sprite_sheet;
+
+pub use animated::{
+    AnimatedImage, AnimatedImageLimits, DecodedImage, FrameLayout, LimitPolicy, may_animate,
+};
+
 const CIM_HEADER_LEN: usize = 12;
 const MAX_CIM_RGBA_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -51,7 +58,7 @@ pub fn load_static_rgba_image_with_color_key(
         .unwrap_or_default()
         .to_ascii_lowercase();
     match extension.as_str() {
-        "png" | "bmp" | "jpg" | "jpeg" | "gif" | "tga" => {
+        "png" | "bmp" | "jpg" | "jpeg" | "gif" | "tga" | "webp" => {
             load_image_rgba_with_color_key(path, color_key)
         }
         "cim" => load_cim_rgba(path),
@@ -59,8 +66,60 @@ pub fn load_static_rgba_image_with_color_key(
     }
 }
 
+/// Skin source image. Animated GIF / WebP / APNG keep their frames; build the beatoraja
+/// sprite sheet with [`build_skin_sprite_sheet`] once the receiving GPU's texture limit is
+/// known. Other files load as still images.
+pub fn load_skin_source_image_with_color_key(
+    path: &Path,
+    color_key: Option<[u8; 3]>,
+) -> Result<DecodedImage> {
+    if !may_animate(path) {
+        return load_static_rgba_image_with_color_key(path, color_key).map(DecodedImage::Static);
+    }
+    animated::decode_image_frames(path, color_key, &AnimatedImageLimits::SKIN)
+}
+
+/// The sprite sheet a skin animates with `divx` / `divy` / `cycle`, laid out for a device
+/// whose `max_texture_dimension_2d` is `max_texture_dimension`.
+pub fn build_skin_sprite_sheet(
+    animation: &AnimatedImage,
+    max_texture_dimension: u32,
+) -> Result<RgbaImageAsset> {
+    let (sheet, (columns, rows)) =
+        sprite_sheet::build_sprite_sheet(animation, max_texture_dimension)?;
+    tracing::info!(
+        frames = animation.frames().len(),
+        columns,
+        rows,
+        width = sheet.width,
+        height = sheet.height,
+        max_texture_dimension,
+        "built animated skin image sprite sheet"
+    );
+    Ok(sheet)
+}
+
+/// `#STAGEFILE` / `#BANNER` / `#BACKBMP` image with its animation, if any.
+pub fn load_chart_image(path: &Path, limits: &AnimatedImageLimits) -> Result<DecodedImage> {
+    if may_animate(path) {
+        animated::decode_image_frames(path, None, limits)
+    } else {
+        load_static_rgba_image(path).map(DecodedImage::Static)
+    }
+}
+
 pub fn load_chart_bga_image(path: &Path) -> Result<RgbaImageAsset> {
     load_static_rgba_image(path).map(pad_small_bga_like_beatoraja)
+}
+
+/// BGA image with its animation, if any. Small images are padded per frame like
+/// [`load_chart_bga_image`], and `limits` apply to the padded frames.
+pub fn load_chart_bga_frames(path: &Path, limits: &AnimatedImageLimits) -> Result<DecodedImage> {
+    if may_animate(path) {
+        animated::decode_image_frames_with_layout(path, None, limits, FrameLayout::BeatorajaBgaPad)
+    } else {
+        load_chart_bga_image(path).map(DecodedImage::Static)
+    }
 }
 
 fn load_image_rgba(path: &Path) -> Result<RgbaImageAsset> {
@@ -83,6 +142,14 @@ fn load_image_rgba_with_color_key(
     decode_image_rgba(reader, path, color_key)
 }
 
+fn read_image_bytes(path: &Path) -> Result<Vec<u8>> {
+    if path.is_file() {
+        std::fs::read(path).with_context(|| format!("failed to read image: {}", path.display()))
+    } else {
+        bmz_skin_assets::read(path)
+    }
+}
+
 fn decode_image_rgba(
     reader: ImageReader<impl std::io::BufRead + std::io::Seek>,
     path: &Path,
@@ -96,17 +163,21 @@ fn decode_image_rgba(
     let has_alpha = image.color().has_alpha();
     let mut rgba = image.to_rgba8();
     if !has_alpha && let Some(color_key) = color_key {
-        for pixel in rgba.pixels_mut() {
-            if pixel.0[..3] == color_key {
-                pixel.0[3] = 0;
-            }
-        }
+        apply_lr2_color_key(&mut rgba, color_key);
     }
     let width = rgba.width();
     let height = rgba.height();
     let asset = RgbaImageAsset { width, height, pixels: rgba.into_raw() };
     asset.validate()?;
     Ok(asset)
+}
+
+fn apply_lr2_color_key(rgba: &mut image::RgbaImage, color_key: [u8; 3]) {
+    for pixel in rgba.pixels_mut() {
+        if pixel.0[..3] == color_key {
+            pixel.0[3] = 0;
+        }
+    }
 }
 
 /// libGDX `PixmapIO.writeCIM` 形式を RGBA8 へ展開する。
@@ -217,23 +288,27 @@ fn load_cim_rgba(path: &Path) -> Result<RgbaImageAsset> {
     Ok(asset)
 }
 
+/// beatoraja pads BGA images up to this size onto a canvas of this size.
+const BGA_PAD_SIZE: u32 = 256;
+
 fn pad_small_bga_like_beatoraja(asset: RgbaImageAsset) -> RgbaImageAsset {
     let source_width = asset.width as usize;
     let source_height = asset.height as usize;
-    if source_width.max(source_height) > 256 {
+    let pad = BGA_PAD_SIZE as usize;
+    if source_width.max(source_height) > pad {
         return asset;
     }
 
-    let mut pixels = vec![0; 256 * 256 * 4];
-    let offset_x = (256usize.saturating_sub(source_width)) / 2;
+    let mut pixels = vec![0; pad * pad * 4];
+    let offset_x = (pad.saturating_sub(source_width)) / 2;
     let row_bytes = source_width * 4;
     for row in 0..source_height {
         let src_start = row * row_bytes;
-        let dst_start = (row * 256 + offset_x) * 4;
+        let dst_start = (row * pad + offset_x) * 4;
         pixels[dst_start..dst_start + row_bytes]
             .copy_from_slice(&asset.pixels[src_start..src_start + row_bytes]);
     }
-    RgbaImageAsset { width: 256, height: 256, pixels }
+    RgbaImageAsset { width: BGA_PAD_SIZE, height: BGA_PAD_SIZE, pixels }
 }
 
 #[cfg(test)]
@@ -396,7 +471,15 @@ mod tests {
     fn load_chart_bga_image_decodes_data_song_fixture_images() {
         let root = repo_root().join("data/songs/bga-compat");
 
-        for file_name in ["small.png", "still.gif", "tga_only.tga", "animated.gif"] {
+        for file_name in [
+            "small.png",
+            "still.gif",
+            "tga_only.tga",
+            "animated.gif",
+            "webp_still.webp",
+            "webp_anim.webp",
+            "apng_anim.png",
+        ] {
             let asset = load_chart_bga_image(&root.join(file_name))
                 .unwrap_or_else(|error| panic!("failed to decode {file_name}: {error}"));
 
@@ -413,6 +496,76 @@ mod tests {
 
         let first_source_pixel = ((127usize) * 4)..((128usize) * 4);
         assert_eq!(&asset.pixels[first_source_pixel], &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn load_static_rgba_image_decodes_webp_and_first_animation_frames() {
+        let root = repo_root().join("data/songs/bga-compat");
+
+        let still = load_static_rgba_image(&root.join("webp_still.webp")).unwrap();
+        assert_eq!((still.width, still.height), (2, 2));
+        assert_eq!(&still.pixels[..4], &[12, 34, 56, 255]);
+        for (file_name, first) in [
+            ("webp_anim.webp", [255, 0, 0, 255]),
+            ("apng_anim.png", [255, 0, 0, 255]),
+            ("apng_single.png", [255, 255, 255, 255]),
+        ] {
+            let asset = load_static_rgba_image(&root.join(file_name)).unwrap();
+            assert_eq!(&asset.pixels[..4], &first, "{file_name}");
+        }
+    }
+
+    #[test]
+    fn load_chart_bga_frames_pads_every_animated_frame() {
+        let root = repo_root().join("data/songs/bga-compat");
+
+        let decoded =
+            load_chart_bga_frames(&root.join("animated.gif"), &AnimatedImageLimits::CHART).unwrap();
+
+        let animation = decoded.animation().expect("animated.gif has two frames");
+        assert_eq!((animation.width(), animation.height()), (256, 256));
+        assert_eq!(animation.frames().len(), 2);
+        assert_eq!(animation.plays(), None);
+        // GIF delays are 0 ms and 100 ms; 0 ms is raised to 10 ms.
+        assert_eq!(animation.first_cycle_us(), 110_000);
+        let first_source_pixel = (127usize * 4)..(128usize * 4);
+        assert_eq!(&animation.frame(0).pixels[first_source_pixel.clone()], &[255, 0, 0, 255]);
+        assert_eq!(&animation.frame(1).pixels[first_source_pixel], &[0, 0, 255, 255]);
+        assert_eq!(&animation.frame(1).pixels[..4], &[0, 0, 0, 0]);
+
+        let still =
+            load_chart_bga_frames(&root.join("small.png"), &AnimatedImageLimits::CHART).unwrap();
+        assert!(still.animation().is_none());
+        assert_eq!((still.first_frame().width, still.first_frame().height), (256, 256));
+    }
+
+    #[test]
+    fn load_skin_source_builds_beatoraja_sprite_sheets_for_animations() {
+        let root = repo_root().join("data/songs/bga-compat");
+
+        let sheet = |file_name: &str| {
+            let decoded = load_skin_source_image_with_color_key(&root.join(file_name), None);
+            let animation = decoded.unwrap().animation().cloned().expect("animated");
+            build_skin_sprite_sheet(&animation, 4096).unwrap()
+        };
+        // Two 2x2 frames: 1x2 and 2x1 tie, so beatoraja keeps one column.
+        let gif = sheet("animated.gif");
+        assert_eq!((gif.width, gif.height), (2, 4));
+        assert_eq!(&gif.pixels[..4], &[255, 0, 0, 255]);
+        assert_eq!(&gif.pixels[2 * 2 * 4..2 * 2 * 4 + 4], &[0, 0, 255, 255]);
+
+        for file_name in ["webp_anim.webp", "apng_anim.png"] {
+            let sheet = sheet(file_name);
+            assert_eq!((sheet.width, sheet.height), (2, 6), "{file_name}");
+        }
+        for file_name in ["webp_still.webp", "apng_single.png", "small.png"] {
+            let decoded = load_skin_source_image_with_color_key(&root.join(file_name), None);
+            let DecodedImage::Static(still) = decoded.unwrap() else {
+                panic!("{file_name} is a still image");
+            };
+            let expected = load_static_rgba_image(&root.join(file_name)).unwrap();
+            assert_eq!(still, expected, "{file_name}");
+        }
     }
 
     /// The name only carried a timestamp, so equal stamps (coarse clocks, or another test

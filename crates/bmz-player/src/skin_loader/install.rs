@@ -406,8 +406,37 @@ pub fn upload_decoded_skin_with_texture_cache(
         .into_iter()
         .filter_map(|source| {
             upload_stats.source_count += 1;
-            let DecodedSource { source_id, path, texture, asset, size, cache_key, is_video, texture_lease } =
-                source;
+            let DecodedSource {
+                source_id,
+                path,
+                texture,
+                asset,
+                animation,
+                size,
+                cache_key,
+                is_video,
+                texture_lease,
+            } = source;
+            // Lay out animated sheets for this device; the frames are dropped right after.
+            let (asset, size) = match animation {
+                Some(animation) => {
+                    let limit = uploader.max_texture_dimension_2d();
+                    match bmz_render::assets::build_skin_sprite_sheet(&animation, limit) {
+                        Ok(sheet) => {
+                            let size = SkinImageSize {
+                                width: sheet.width as f32,
+                                height: sheet.height as f32,
+                            };
+                            (Some(sheet), size)
+                        }
+                        Err(error) => {
+                            tracing::warn!(%source_id, path = %path.display(), error = %format!("{error:#}"), "skipping animated skin texture that does not fit the GPU");
+                            return None;
+                        }
+                    }
+                }
+                None => (asset, size),
+            };
             let Some(asset) = asset else {
                 upload_stats.texture_cache_hits += 1;
                 if is_video {
@@ -606,11 +635,27 @@ pub fn install_decoded_source(
         path,
         texture,
         asset,
+        animation,
         size,
         cache_key: _,
         is_video: _,
         texture_lease: _texture_lease,
     } = source;
+    if let Some(animation) = animation {
+        return match renderer.upsert_skin_sprite_sheet(TextureId(texture.0), animation) {
+            Ok(source_size) => Some(SkinDocumentTexture { source_id, texture, source_size }),
+            Err(error) => {
+                tracing::warn!(
+                    source_id = %source_id,
+                    texture_id = texture.0,
+                    path = %path.display(),
+                    error = %format!("{error:#}"),
+                    "skipping animated skin texture that does not fit the GPU"
+                );
+                None
+            }
+        };
+    }
     let Some(asset) = asset else {
         tracing::debug!(
             source_id = %source_id,

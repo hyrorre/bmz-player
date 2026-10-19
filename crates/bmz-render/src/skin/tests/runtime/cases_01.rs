@@ -499,6 +499,45 @@ fn play_destination_negative_image_id_renders_runtime_stagefile_source() {
 }
 
 #[test]
+fn presentation_source_overrides_only_play_and_updates_dimensions() {
+    let document: SkinDocument = serde_json::from_str(
+        r#"{
+        "type":0,"w":100,"h":100,"destination":[
+            {"id":"-100","op":[191],"dst":[{"x":0,"y":0,"w":40,"h":20}]}
+        ]
+    }"#,
+    )
+    .unwrap();
+    let context = SkinContext::from_manifest_and_document(default_skin_manifest(), document, []);
+    for (play, width, texture) in [
+        (true, 32.0, crate::plan::PLAY_PRESENTATION_TEXTURE.0),
+        (true, 64.0, crate::plan::PLAY_PRESENTATION_TEXTURE.0),
+        (false, 400.0, SELECT_STAGE_TEXTURE.0),
+    ] {
+        let state = SkinDrawState {
+            play_screen: play,
+            has_stagefile: true,
+            stagefile_image_size: (!play).then_some(SkinImageSize { width: 400.0, height: 200.0 }),
+            stagefile_override: Some(SkinBgaFrame::opaque(
+                SkinTextureId(crate::plan::PLAY_PRESENTATION_TEXTURE.0),
+                SkinImageSize { width, height: 16.0 },
+            )),
+            ..SkinDrawState::default()
+        };
+        let (behind, front, overlay) = context.static_document_play_items_split_for_state_and_text(
+            &state,
+            &SkinTextState::default(),
+            &[],
+            &[],
+        );
+        assert!(behind.iter().chain(&front).chain(&overlay).any(|item| matches!(
+            item, SkinRenderItem::Image { texture: actual, source_size: Some(size), .. }
+                if actual.0 == texture && size.width == width
+        )));
+    }
+}
+
+#[test]
 fn skin_document_resolves_end_of_note_timer_destinations() {
     let document: SkinDocument = serde_json::from_str(
         r#"

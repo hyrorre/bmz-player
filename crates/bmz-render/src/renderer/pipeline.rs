@@ -129,6 +129,11 @@ pub struct GpuUploader {
 }
 
 impl GpuUploader {
+    /// The device's `max_texture_dimension_2d`, read from this device (never cached).
+    pub fn max_texture_dimension_2d(&self) -> u32 {
+        self.device.limits().max_texture_dimension_2d
+    }
+
     /// RGBA8 バイト列を GPU テクスチャへアップロードして `PreparedTexture` を返す。
     pub fn upload(&self, width: u32, height: u32, rgba: &[u8]) -> Result<PreparedTexture> {
         create_rgba_texture(&self.device, &self.queue, TextureId(0), width, height, rgba)

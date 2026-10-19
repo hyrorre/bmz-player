@@ -12,6 +12,7 @@ pub(in crate::skin_loader) struct DecodedSourceResult {
     pub(in crate::skin_loader) source_id: String,
     pub(in crate::skin_loader) path: PathBuf,
     pub(in crate::skin_loader) asset: Option<RgbaImageAsset>,
+    pub(in crate::skin_loader) animation: Option<Arc<bmz_render::assets::AnimatedImage>>,
     pub(in crate::skin_loader) size: SkinImageSize,
     pub(in crate::skin_loader) is_video: bool,
     pub(in crate::skin_loader) cached_texture: Option<SkinTextureId>,

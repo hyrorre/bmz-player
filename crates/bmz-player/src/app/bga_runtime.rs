@@ -1,13 +1,15 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
 use bmz_chart::model::{BgaAssetId, BgaAssetKind, BgaAssetRef};
-use bmz_render::assets::load_chart_bga_image;
+use bmz_render::assets::AnimatedImage;
 use bmz_render::plan::TextureId;
 use bmz_render::renderer::{GpuUploader, PreparedTexture};
 
+use crate::animated_bga::{AnimatedBgaBudget, BgaAnimationCatalog};
 use crate::screens::play_snapshot::{BgaFrameCatalog, bga_texture_id};
 
 pub(super) const RESOURCE_LOAD_PROGRESS_SCALE: u32 = 1_000_000;
@@ -24,6 +26,8 @@ pub(super) struct PendingBgaImage {
     pub(super) decode_us: u128,
     pub(super) upload_us: u128,
     pub(super) prepared: PreparedTexture,
+    /// Frames of an animated image; `prepared` holds its first frame.
+    pub(super) animation: Option<Arc<AnimatedImage>>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -32,6 +36,7 @@ pub(super) struct BgaImageLoadStats {
     pub(super) static_assets: u32,
     pub(super) skipped_non_static: u32,
     pub(super) loaded_assets: u32,
+    pub(super) animated_assets: u32,
     pub(super) failed_assets: u32,
     pub(super) total_file_bytes: u64,
     pub(super) loaded_file_bytes: u64,
@@ -110,6 +115,7 @@ pub(super) struct BgaPreloadRuntime {
     pub(super) completed_assets: u32,
     pub(super) total_assets: u32,
     pub(super) frames: BgaFrameCatalog,
+    pub(super) animations: BgaAnimationCatalog,
     pub(super) assets: Option<Vec<BgaAssetRef>>,
     workers: Vec<JoinHandle<()>>,
 }
@@ -124,6 +130,7 @@ impl Default for BgaPreloadRuntime {
             completed_assets: 0,
             total_assets: 0,
             frames: BgaFrameCatalog::new(),
+            animations: BgaAnimationCatalog::new(),
             assets: None,
             workers: Vec::new(),
         }
@@ -168,6 +175,7 @@ impl BgaPreloadRuntime {
         self.chart_id = Some(chart_id);
         self.rx = None;
         self.frames.clear();
+        self.animations.clear();
         self.total_assets = assets.as_deref().map(static_asset_count).unwrap_or_default();
         self.assets = assets;
         self.completed_assets = 0;
@@ -183,6 +191,7 @@ impl BgaPreloadRuntime {
         self.completed_assets = 0;
         self.total_assets = 0;
         self.frames.clear();
+        self.animations.clear();
         self.assets = None;
     }
 
@@ -190,6 +199,7 @@ impl BgaPreloadRuntime {
         &mut self,
         chart_id: i64,
         frames: BgaFrameCatalog,
+        animations: BgaAnimationCatalog,
         assets: Vec<BgaAssetRef>,
     ) -> u64 {
         self.generation = self.generation.wrapping_add(1);
@@ -197,6 +207,7 @@ impl BgaPreloadRuntime {
         self.rx = None;
         self.status = BgaImageLoadStatus::ready(self.generation, chart_id);
         self.frames = frames;
+        self.animations = animations;
         self.total_assets = static_asset_count(&assets);
         self.completed_assets = self.total_assets;
         self.assets = Some(assets);
@@ -307,6 +318,7 @@ pub(super) fn load_worker(
 ) {
     let total_start = Instant::now();
     let mut stats = BgaImageLoadStats::default();
+    let mut animation_budget = AnimatedBgaBudget::default();
     for asset in assets {
         stats.chart_bga_assets += 1;
         let path = asset.path;
@@ -319,12 +331,16 @@ pub(super) fn load_worker(
         stats.static_assets += 1;
 
         let decode_start = Instant::now();
-        match load_chart_bga_image(&path) {
-            Ok(image) => {
+        match animation_budget.load(&path) {
+            Ok(decoded) => {
                 let image_decode_us = decode_start.elapsed().as_micros();
                 stats.decode_us += image_decode_us;
                 let texture_id = TextureId(bga_texture_id(asset.id));
-                let image_rgba_bytes = image.pixels.len() as u64;
+                let animation = decoded.animation().cloned();
+                let image = decoded.first_frame();
+                let image_rgba_bytes = animation
+                    .as_ref()
+                    .map_or(image.pixels.len() as u64, |animation| animation.rgba_bytes());
                 let upload_start = Instant::now();
                 let prepared = match uploader.upload(image.width, image.height, &image.pixels) {
                     Ok(prepared) => prepared,
@@ -349,6 +365,7 @@ pub(super) fn load_worker(
                 let image_upload_us = upload_start.elapsed().as_micros();
                 stats.upload_us += image_upload_us;
                 stats.loaded_assets += 1;
+                stats.animated_assets += u32::from(animation.is_some());
                 stats.loaded_file_bytes = stats.loaded_file_bytes.saturating_add(file_bytes);
                 stats.rgba_bytes = stats.rgba_bytes.saturating_add(image_rgba_bytes);
                 let result = PendingBgaImageResult::Loaded(PendingBgaImage {
@@ -363,6 +380,7 @@ pub(super) fn load_worker(
                     decode_us: image_decode_us,
                     upload_us: image_upload_us,
                     prepared,
+                    animation,
                 });
                 if tx.send(result).is_err() {
                     return;
@@ -526,12 +544,32 @@ mod tests {
         assert_eq!(runtime.total_assets, 1);
         assert!(runtime.matches_chart(42, &assets));
 
-        assert_eq!(runtime.apply_reused(42, BgaFrameCatalog::new(), assets), 2);
+        let animation = Arc::new(
+            AnimatedImage::new(
+                [10, 20]
+                    .map(|color| {
+                        let frame = bmz_render::assets::RgbaImageAsset {
+                            width: 1,
+                            height: 1,
+                            pixels: vec![color; 4],
+                        };
+                        (frame, std::time::Duration::from_millis(100))
+                    })
+                    .into(),
+                None,
+            )
+            .unwrap(),
+        );
+        let animations = BgaAnimationCatalog::from([(BgaAssetId(0), animation)]);
+        assert_eq!(runtime.apply_reused(42, BgaFrameCatalog::new(), animations, assets.clone()), 2);
         assert!(runtime.ready_for(Some(42), true));
         assert_eq!(runtime.progress(Some(42)), 1.0);
+        assert_eq!(runtime.animations.len(), 1);
 
+        runtime.begin_chart(42, assets);
+        assert!(runtime.animations.is_empty());
         runtime.invalidate();
-        assert_eq!(runtime.generation, 3);
+        assert_eq!(runtime.generation, 4);
         assert_eq!(runtime.chart_id, None);
         assert_eq!(runtime.status, BgaImageLoadStatus::Idle);
         assert!(runtime.assets.is_none());

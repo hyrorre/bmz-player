@@ -15,6 +15,9 @@
 #BMP03 still.gif
 #BMP04 tga_only.tga
 #BMP05 animated.gif
+#BMP06 webp_anim.bmp
+#BMP07 apng_anim.png
 
 #00004:0102030405
 #00011:01
+#00104:0607

@@ -389,6 +389,7 @@ impl WinitApp {
                 play_entry_presentation: PlayEntryPresentation::Normal,
                 play_scene_started_at: now,
                 play_ready_sound_started_at: None,
+                presentation: Default::default(),
                 viewer_ready_timer_offset: TimeUs(0),
                 play_ready_last_control_hold_at: None,
                 decide_sound_stopped_for_chart_start: false,
@@ -525,6 +526,7 @@ impl WinitApp {
                 cursor_visible: true,
             },
             course_editor_cache: course_editor::CourseEditorDataCache::default(),
+            meta_animations: Default::default(),
         });
         if options.boot_result_sample {
             tracing::info!("booting directly into synthetic result screen");

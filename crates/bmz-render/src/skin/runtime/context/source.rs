@@ -50,10 +50,16 @@ pub(in crate::skin) fn static_runtime_document_sources<'a>(
         base_sources,
         "100",
         state
-            .has_stagefile
-            .then_some(state.stagefile_image_size)
-            .flatten()
-            .map(|size| (SELECT_STAGE_TEXTURE, size)),
+            .stagefile_override
+            .filter(|_| state.play_screen)
+            .map(|frame| (TextureId(frame.texture.0), frame.source_size))
+            .or_else(|| {
+                state
+                    .has_stagefile
+                    .then_some(state.stagefile_image_size)
+                    .flatten()
+                    .map(|size| (SELECT_STAGE_TEXTURE, size))
+            }),
     );
     update_runtime_document_source(
         &mut sources,

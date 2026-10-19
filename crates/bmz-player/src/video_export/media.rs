@@ -16,6 +16,18 @@ pub struct Media {
     backbmp: bool,
     skin_videos: Vec<SkinVideo>,
     document: bmz_render::skin::SkinDocument,
+    animated_bga: crate::animated_bga::AnimatedBgaState,
+    /// Animated BACKBMP / BANNER, played from Play entry (scene time 0).
+    meta_animations: Vec<MetaAnimation>,
+    /// Animated STAGEFILE with live play's Loading / READY waits.
+    presentation: crate::play_presentation::PresentationPlayback,
+    ready_us: i64,
+}
+
+struct MetaAnimation {
+    texture: TextureId,
+    image: std::sync::Arc<bmz_render::assets::AnimatedImage>,
+    uploaded: Option<usize>,
 }
 
 struct SkinVideo {
@@ -30,6 +42,20 @@ struct SkinVideo {
 }
 
 impl Media {
+    /// Applies the animated STAGEFILE waits and fixes its offline origins.
+    pub fn presentation_timing(
+        &mut self,
+        timing: simulation::SceneTiming,
+    ) -> simulation::SceneTiming {
+        let timing = timing.with_presentation(
+            self.presentation.images.loading_us(),
+            self.presentation.images.ready_us(),
+        );
+        self.ready_us = timing.ready_us;
+        self.presentation.set_offline_origins(timing.ready_us);
+        timing
+    }
+
     pub fn load(
         chart: &PlayableChart,
         chart_path: &Path,
@@ -52,7 +78,12 @@ impl Media {
             output_texture_base: max_texture.checked_add(16).context("texture ID overflow")?,
             stagefile_size: None,
             backbmp: false,
+            animated_bga: Default::default(),
+            meta_animations: Vec::new(),
+            presentation: Default::default(),
+            ready_us: 0,
         };
+        let mut animation_budget = crate::animated_bga::AnimatedBgaBudget::default();
         let folder = chart_path.parent().context("chart has no parent folder")?.to_string_lossy();
         for (id, relative) in [
             (bmz_render::plan::SELECT_STAGE_TEXTURE, &chart.metadata.stage_file),
@@ -60,9 +91,28 @@ impl Media {
             (bmz_render::plan::SELECT_BANNER_TEXTURE, &chart.metadata.banner_file),
         ] {
             if let Some(path) = crate::chart_asset::resolve_chart_asset_path(&folder, relative)
-                && let Ok(image) = bmz_render::assets::load_static_rgba_image(&path)
+                && let Ok(decoded) = bmz_render::assets::load_chart_image(
+                    &path,
+                    &bmz_render::assets::AnimatedImageLimits::CHART,
+                )
             {
-                renderer.upsert_image_asset(id, &image)?;
+                let image = decoded.first_frame();
+                renderer.upsert_image_asset(id, image)?;
+                match decoded.animation() {
+                    Some(animation) if id == bmz_render::plan::SELECT_STAGE_TEXTURE => {
+                        media.presentation = crate::play_presentation::PresentationPlayback::new(
+                            crate::play_presentation::PresentationImages::from_stagefile(Some(
+                                animation.clone(),
+                            )),
+                        );
+                    }
+                    Some(animation) => media.meta_animations.push(MetaAnimation {
+                        texture: id,
+                        image: animation.clone(),
+                        uploaded: Some(0),
+                    }),
+                    None => {}
+                }
                 if id == bmz_render::plan::SELECT_STAGE_TEXTURE {
                     media.stagefile_size = Some(bmz_render::skin::SkinImageSize {
                         width: image.width as f32,
@@ -74,19 +124,27 @@ impl Media {
                 }
             }
         }
+        // Resolve GPU failures before calculating the offline start deadline.
+        media.presentation.draw(renderer, 0, false);
+        media.presentation.draw(renderer, 0, true);
+        media.presentation.reset();
         for asset in &chart.bga_assets {
             match asset.kind {
                 BgaAssetKind::Video => {
                     media.videos.insert(asset.id, asset.path.clone());
                     media.catalog.insert(asset.id, display_video_bga_frame(asset.id, 1, 1));
                 }
-                _ => match bmz_render::assets::load_static_rgba_image(&asset.path) {
-                    Ok(image) => {
-                        renderer.upsert_image_asset(TextureId(bga_texture_id(asset.id)), &image)?;
+                _ => match animation_budget.load_unpadded(&asset.path) {
+                    Ok(decoded) => {
+                        let image = decoded.first_frame();
+                        renderer.upsert_image_asset(TextureId(bga_texture_id(asset.id)), image)?;
                         media.catalog.insert(
                             asset.id,
                             display_bga_frame(asset.id, image.width, image.height),
                         );
+                        if let Some(animation) = decoded.animation() {
+                            media.animated_bga.insert_uploaded_first(asset.id, animation.clone());
+                        }
                     }
                     Err(error) => {
                         tracing::warn!(path = %asset.path.display(), %error, "BGA image unavailable")
@@ -160,6 +218,24 @@ impl Media {
                 )?;
             }
         }
+        snapshot.stagefile_override =
+            self.presentation.draw(renderer, scene_us, scene_us >= self.ready_us);
+        let meta_elapsed_us = u64::try_from(scene_us).unwrap_or(0);
+        for meta in &mut self.meta_animations {
+            let index = meta.image.frame_index(meta_elapsed_us);
+            if meta.uploaded != Some(index) {
+                let frame = meta.image.frame(index);
+                renderer.upsert_rgba_texture_ref(
+                    meta.texture,
+                    frame.width,
+                    frame.height,
+                    &frame.pixels,
+                )?;
+                meta.uploaded = Some(index);
+            }
+        }
+        let judgements = &snapshot.recent_judgements;
+        let mut animated_channels = Vec::new();
         for (channel, (kind, selected)) in [
             (BgaEventKind::Base, &mut snapshot.bga_base),
             (BgaEventKind::Layer, &mut snapshot.bga_layer),
@@ -173,33 +249,29 @@ impl Media {
                 self.active_bga[channel] = None;
                 continue;
             };
+            if let Some(&id) = self
+                .animated_bga
+                .catalog
+                .keys()
+                .find(|id| bga_texture_id(**id) == display.texture_id)
+            {
+                self.active_bga[channel] = None;
+                if let Some(start) = bga_event_start(chart, judgements, kind, id, chart_us) {
+                    animated_channels.push(crate::video_bga::ActiveBgaChannel {
+                        kind,
+                        asset_id: id,
+                        origin: bmz_core::time::TimeUs(start),
+                    });
+                }
+                continue;
+            }
             let Some((&id, path)) =
                 self.videos.iter().find(|(id, _)| bga_texture_id(**id) == display.texture_id)
             else {
                 self.active_bga[channel] = None;
                 continue;
             };
-            let event_time = if kind == BgaEventKind::Poor {
-                snapshot
-                    .recent_judgements
-                    .iter()
-                    .rev()
-                    .find(|j| {
-                        matches!(
-                            j.judge,
-                            bmz_core::judge::Judge::Bad | bmz_core::judge::Judge::Poor
-                        )
-                    })
-                    .map(|j| j.time.0)
-            } else {
-                chart
-                    .bga_events
-                    .iter()
-                    .rev()
-                    .find(|e| e.kind == kind && e.asset == Some(id) && e.time.0 <= chart_us)
-                    .map(|e| e.time.0)
-            };
-            let Some(start) = event_time else {
+            let Some(start) = bga_event_start(chart, judgements, kind, id, chart_us) else {
                 continue;
             };
             if !self.active_bga[channel]
@@ -221,6 +293,55 @@ impl Media {
                 display.height = frame.height as f32;
             }
         }
-        Ok(())
+        // Same channel priority and texture assignment as live play.
+        let animated_channels = crate::animated_bga::prioritized(animated_channels);
+        let mut upload_error = None;
+        let mut released = Vec::new();
+        let separate = self.animated_bga.update(
+            &animated_channels,
+            bmz_core::time::TimeUs(chart_us),
+            |texture_id, frame| match renderer.upsert_rgba_texture_ref(
+                TextureId(texture_id),
+                frame.width,
+                frame.height,
+                &frame.pixels,
+            ) {
+                Ok(()) => true,
+                Err(error) => {
+                    upload_error.get_or_insert(error);
+                    false
+                }
+            },
+            |texture_id| released.push(texture_id),
+        );
+        for texture_id in released {
+            renderer.remove_image_texture(TextureId(texture_id));
+        }
+        crate::animated_bga::apply_channel_textures(snapshot, &separate);
+        upload_error.map_or(Ok(()), Err)
+    }
+}
+
+/// Chart time a BGA channel started: its event, or the latest Bad / Poor for POOR.
+fn bga_event_start(
+    chart: &PlayableChart,
+    judgements: &[bmz_render::snapshot::DisplayJudgement],
+    kind: BgaEventKind,
+    id: BgaAssetId,
+    chart_us: i64,
+) -> Option<i64> {
+    if kind == BgaEventKind::Poor {
+        judgements
+            .iter()
+            .rev()
+            .find(|j| matches!(j.judge, bmz_core::judge::Judge::Bad | bmz_core::judge::Judge::Poor))
+            .map(|j| j.time.0)
+    } else {
+        chart
+            .bga_events
+            .iter()
+            .rev()
+            .find(|e| e.kind == kind && e.asset == Some(id) && e.time.0 <= chart_us)
+            .map(|e| e.time.0)
     }
 }

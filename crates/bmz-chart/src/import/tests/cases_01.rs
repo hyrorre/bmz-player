@@ -170,11 +170,11 @@ fn imports_data_song_bga_compat_fixture() {
     assert_eq!(result.chart.metadata.banner_file, "banner.jpg");
     assert_eq!(result.chart.metadata.backbmp_file, "back.bmp");
     assert_eq!(result.chart.sounds.len(), 1);
-    assert_eq!(result.chart.bga_assets.len(), 5);
-    assert_eq!(result.chart.bga_events.len(), 5);
+    assert_eq!(result.chart.bga_assets.len(), 7);
+    assert_eq!(result.chart.bga_events.len(), 7);
 
     assert_eq!(
-        [1, 2, 3, 4, 5]
+        [1, 2, 3, 4, 5, 6, 7]
             .into_iter()
             .map(|key| bga_asset_path_for_key(&result.chart, key))
             .collect::<Vec<_>>(),
@@ -184,6 +184,9 @@ fn imports_data_song_bga_compat_fixture() {
             (BgaAssetKind::Static, "data/songs/bga-compat/still.gif".to_string()),
             (BgaAssetKind::Static, "data/songs/bga-compat/tga_only.tga".to_string()),
             (BgaAssetKind::Static, "data/songs/bga-compat/animated.gif".to_string()),
+            // A missing declared image falls back to WebP after beatoraja's extensions.
+            (BgaAssetKind::Static, "data/songs/bga-compat/webp_anim.webp".to_string()),
+            (BgaAssetKind::Static, "data/songs/bga-compat/apng_anim.png".to_string()),
         ]
     );
 }
