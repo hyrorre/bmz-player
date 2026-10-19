@@ -471,6 +471,9 @@ impl WinitApp {
                 &active_play.running.session.chart,
             )
         };
+        active_play.running.animated_bga = crate::animated_bga::AnimatedBgaState::from_catalog(
+            self.play.bga_preload.animations.clone(),
+        );
         if let Some(cache) = self.play.play_media_cache.as_mut()
             && cache.chart_id == chart_id
         {

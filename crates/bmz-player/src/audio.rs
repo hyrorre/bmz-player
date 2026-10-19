@@ -157,6 +157,7 @@ pub struct RunningPlaySession {
     pub render_snapshot_cache: PlayRenderSnapshotCache,
     pub video_bga_decoders: HashMap<BgaAssetId, ActiveVideoBgaDecoder>,
     pub failed_video_bga: HashSet<BgaAssetId>,
+    pub animated_bga: crate::animated_bga::AnimatedBgaState,
 }
 
 impl std::ops::Deref for RunningPlaySession {
@@ -562,6 +563,7 @@ pub fn open_prepared_play_audio(
         bga_frames: BgaFrameCatalog::new(),
         video_bga_decoders: HashMap::new(),
         failed_video_bga: HashSet::new(),
+        animated_bga: Default::default(),
     }
 }
 

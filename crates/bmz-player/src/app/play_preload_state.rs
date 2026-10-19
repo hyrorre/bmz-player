@@ -42,6 +42,7 @@ pub(super) struct PlayMediaCache {
     pub(super) prepared_chart: Option<PreparedPlayChart>,
     pub(super) chart_normalization_gain: f32,
     pub(super) bga_frames: BgaFrameCatalog,
+    pub(super) bga_animations: crate::animated_bga::BgaAnimationCatalog,
     pub(super) bga_assets: Vec<BgaAssetRef>,
     pub(super) video_bga_decoders: crate::video_bga::VideoBgaDecoderMap,
 }
@@ -73,6 +74,7 @@ impl PlayMediaCache {
             prepared_chart,
             chart_normalization_gain: running.session.audio_mix.chart_normalization_gain,
             bga_frames: running.bga_frames.clone(),
+            bga_animations: running.animated_bga.catalog.clone(),
             bga_assets: running.session.chart.bga_assets.clone(),
             video_bga_decoders: std::mem::take(&mut running.video_bga_decoders),
         }

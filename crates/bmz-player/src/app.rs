@@ -21,7 +21,7 @@ use bmz_gameplay::input::backend::{
 use bmz_gameplay::input::binding::LaneBinding;
 use bmz_gameplay::rule::RuleMode;
 use bmz_gameplay::session::{FloatingPolicy, HispeedMode, PlaySkinOffset};
-use bmz_render::assets::{RgbaImageAsset, load_chart_bga_image, load_static_rgba_image};
+use bmz_render::assets::{RgbaImageAsset, load_static_rgba_image};
 use bmz_render::plan::{
     PLAY_BACKBMP_TEXTURE, Rect, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextureId,
 };

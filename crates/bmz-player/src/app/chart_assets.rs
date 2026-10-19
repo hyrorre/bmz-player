@@ -35,6 +35,7 @@ pub(super) fn load_chart_meta_texture(
 pub(super) fn load_chart_bga_textures(
     renderer: &mut Renderer,
     chart: &PlayableChart,
+    animations: &mut crate::animated_bga::BgaAnimationCatalog,
 ) -> BgaFrameCatalog {
     use bmz_chart::model::BgaAssetKind;
 
@@ -50,6 +51,7 @@ pub(super) fn load_chart_bga_textures(
     let mut decode_us = 0u128;
     let mut upload_us = 0u128;
     let mut frames = BgaFrameCatalog::new();
+    let mut animation_budget = crate::animated_bga::AnimatedBgaBudget::default();
     for asset in &chart.bga_assets {
         considered_assets += 1;
         let path = &asset.path;
@@ -67,15 +69,18 @@ pub(super) fn load_chart_bga_textures(
         static_assets += 1;
 
         let decode_start = Instant::now();
-        match load_chart_bga_image(path) {
-            Ok(image) => {
+        match animation_budget.load(path) {
+            Ok(decoded) => {
                 let image_decode_us = decode_start.elapsed().as_micros();
                 decode_us += image_decode_us;
                 let texture_id = TextureId(bga_texture_id(asset.id));
+                let image = decoded.first_frame();
                 let frame = display_bga_frame(asset.id, image.width, image.height);
-                let image_rgba_bytes = image.pixels.len() as u64;
+                let animation = decoded.animation();
+                let image_rgba_bytes =
+                    animation.map_or(image.pixels.len() as u64, |animation| animation.rgba_bytes());
                 let upload_start = Instant::now();
-                if let Err(error) = renderer.upsert_image_asset(texture_id, &image) {
+                if let Err(error) = renderer.upsert_image_asset(texture_id, image) {
                     let image_upload_us = upload_start.elapsed().as_micros();
                     upload_us += image_upload_us;
                     failed_assets += 1;
@@ -109,6 +114,9 @@ pub(super) fn load_chart_bga_textures(
                         "loaded BGA image"
                     );
                     frames.insert(asset.id, frame);
+                    if let Some(animation) = animation {
+                        animations.insert(asset.id, animation.clone());
+                    }
                 }
             }
             Err(error) => {

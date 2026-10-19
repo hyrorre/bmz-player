@@ -73,6 +73,11 @@ impl WinitApp {
                     &mut active_play.running,
                     snapshot.time,
                 );
+                crate::animated_bga::update_animated_bga_frames(
+                    &mut self.renderer,
+                    &mut active_play.running,
+                    snapshot.time,
+                );
                 crate::video_bga::resolve_snapshot_textures(
                     &mut snapshot,
                     &active_play.running.bga_frames,
@@ -1073,6 +1078,11 @@ impl WinitApp {
 
         let video_update_time = active_play.running.session.audio_clock.now();
         crate::video_bga::update_video_bga_frames(
+            &mut self.renderer,
+            &mut active_play.running,
+            video_update_time,
+        );
+        crate::animated_bga::update_animated_bga_frames(
             &mut self.renderer,
             &mut active_play.running,
             video_update_time,
