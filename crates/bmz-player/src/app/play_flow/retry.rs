@@ -171,14 +171,18 @@ impl WinitApp {
         &mut self,
         chart_id: i64,
         bga_frames: BgaFrameCatalog,
+        bga_animations: crate::animated_bga::BgaAnimationCatalog,
         bga_assets: Vec<BgaAssetRef>,
     ) {
         let bga_frame_count = bga_frames.len();
-        let bga_generation = self.play.bga_preload.apply_reused(chart_id, bga_frames, bga_assets);
+        let bga_animation_count = bga_animations.len();
+        let bga_generation =
+            self.play.bga_preload.apply_reused(chart_id, bga_frames, bga_animations, bga_assets);
         tracing::info!(
             chart_id,
             bga_generation,
             bga_frames = bga_frame_count,
+            bga_animations = bga_animation_count,
             "reused static BGA preload"
         );
     }
@@ -210,7 +214,12 @@ impl WinitApp {
                 }
             }
         };
-        self.apply_reused_bga_preload(chart_id, cache.bga_frames.clone(), cache.bga_assets.clone());
+        self.apply_reused_bga_preload(
+            chart_id,
+            cache.bga_frames.clone(),
+            cache.bga_animations.clone(),
+            cache.bga_assets.clone(),
+        );
         self.play.play_media_cache = Some(cache);
         let mut session_options =
             play_session_options_from_start(&self.play_session_app_config(), options);

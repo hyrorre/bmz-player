@@ -8,6 +8,7 @@ pub struct Renderer {
     pub(super) result_skin_context: SkinContext,
     pub(super) last_plan_canvas_policy: CanvasRenderPolicy,
     pub(super) pending_textures: Vec<PendingTexture>,
+    pub(super) pending_sprite_sheets: Vec<PendingSpriteSheet>,
     pub(super) fonts: HashMap<String, FontArc>,
     pub(super) bitmap_fonts: HashMap<String, BitmapFont>,
     pub(super) gpu: Option<WgpuRenderer>,

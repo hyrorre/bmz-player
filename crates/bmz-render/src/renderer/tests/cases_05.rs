@@ -177,6 +177,81 @@ fn renderer_queues_texture_assets_before_surface_attach() {
     assert_eq!(renderer.pending_textures[0].id, crate::plan::TextureId(9));
 }
 
+fn animated_frames(count: usize, size: u32) -> std::sync::Arc<crate::assets::AnimatedImage> {
+    let frames = (0..count)
+        .map(|index| {
+            let frame = crate::assets::RgbaImageAsset {
+                width: size,
+                height: size,
+                pixels: vec![index as u8; (size * size * 4) as usize],
+            };
+            (frame, std::time::Duration::from_millis(100))
+        })
+        .collect();
+    std::sync::Arc::new(crate::assets::AnimatedImage::new(frames, None).unwrap())
+}
+
+#[test]
+fn sprite_sheets_wait_for_a_device_and_take_its_layout() {
+    use crate::skin::{SkinDocumentTexture, SkinImageSize, SkinTextureId};
+
+    let id = crate::plan::TextureId(10_000);
+    let mut renderer = Renderer::default();
+    // 60 frames of 64 px: 6x10 under the provisional 16384 px, 8x8 on a 512 px GPU.
+    let provisional = renderer.upsert_skin_sprite_sheet(id, animated_frames(60, 64)).unwrap();
+    assert_eq!(provisional, SkinImageSize { width: 384.0, height: 640.0 });
+    assert_eq!(renderer.pending_sprite_sheets.len(), 1);
+    assert!(renderer.pending_textures.is_empty());
+    let document: crate::skin::SkinDocument =
+        serde_json::from_str(r#"{"type":0,"w":100,"h":100}"#).unwrap();
+    renderer.set_skin_context(SkinContext::from_manifest_and_document(
+        crate::skin::default_skin_manifest(),
+        document,
+        [SkinDocumentTexture {
+            source_id: "anim".to_string(),
+            texture: SkinTextureId(id.0),
+            source_size: provisional,
+        }],
+    ));
+
+    renderer.layout_pending_sprite_sheets(512);
+
+    assert!(renderer.pending_sprite_sheets.is_empty());
+    let texture = renderer.pending_textures.iter().find(|texture| texture.id == id).unwrap();
+    assert_eq!((texture.width, texture.height), (512, 512));
+    assert_eq!(
+        renderer.play_skin_context.source_size("anim"),
+        Some(SkinImageSize { width: 512.0, height: 512.0 })
+    );
+}
+
+#[test]
+fn sprite_sheets_that_fit_no_layout_are_skipped() {
+    let id = crate::plan::TextureId(10_001);
+    let mut renderer = Renderer::default();
+    renderer.upsert_skin_sprite_sheet(id, animated_frames(60, 64)).unwrap();
+
+    // 64 px frames: 60 frames need more than one 100 px row or column.
+    renderer.layout_pending_sprite_sheets(100);
+
+    assert!(renderer.pending_sprite_sheets.is_empty());
+    assert!(renderer.pending_textures.iter().all(|texture| texture.id != id));
+}
+
+#[test]
+fn a_still_upload_replaces_a_pending_sprite_sheet() {
+    let id = crate::plan::TextureId(10_002);
+    let mut renderer = Renderer::default();
+    renderer.upsert_skin_sprite_sheet(id, animated_frames(2, 2)).unwrap();
+    let still = crate::assets::RgbaImageAsset { width: 1, height: 1, pixels: vec![0; 4] };
+
+    renderer.upsert_image_asset(id, &still).unwrap();
+    renderer.layout_pending_sprite_sheets(4096);
+
+    assert_eq!(renderer.pending_textures.len(), 1);
+    assert_eq!(renderer.pending_textures[0].width, 1);
+}
+
 #[test]
 fn installing_vector_font_replaces_stale_bitmap_font_with_same_id() {
     let Some(font) = load_default_font() else { return };

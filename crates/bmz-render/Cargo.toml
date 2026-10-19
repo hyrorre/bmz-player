@@ -9,6 +9,7 @@ anyhow.workspace = true
 ab_glyph.workspace = true
 bytemuck.workspace = true
 image.workspace = true
+gif.workspace = true
 flate2.workspace = true
 encoding_rs.workspace = true
 serde.workspace = true

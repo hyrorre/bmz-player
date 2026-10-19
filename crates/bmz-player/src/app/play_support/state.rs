@@ -434,14 +434,14 @@ pub(in crate::app) const fn floating_policy_config(policy: FloatingPolicy) -> Fl
 }
 
 pub(in crate::app) fn update_pre_ready_play_snapshot_options_for_runtime(
-    ready_sound_started_at: Option<Instant>,
     last_play_snapshot: &mut Option<RenderSnapshot>,
     runtime: &crate::gameplay_runtime::GameplayClient,
     applied_arrange: &AppliedArrange,
 ) {
+    // A prepared session has not started gameplay, including during an extended READY.
     if let Some(session) = runtime.prepared_session() {
         update_pre_ready_play_snapshot_options_for_session(
-            ready_sound_started_at,
+            None,
             last_play_snapshot,
             session,
             applied_arrange,

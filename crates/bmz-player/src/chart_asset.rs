@@ -194,7 +194,8 @@ fn archive_asset_entry(
         .map(|(candidate, _)| candidate.name.clone()))
 }
 
-const CHART_IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "gif", "bmp", "png", "tga"];
+/// beatoraja's image order, then WebP as a BMZ extension.
+const CHART_IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "gif", "bmp", "png", "tga", "webp"];
 const PREVIEW_AUDIO_EXTENSIONS: &[&str] = &["wav", "ogg", "mp3", "flac"];
 
 #[cfg(test)]
@@ -351,6 +352,23 @@ mod tests {
         let got = resolve_chart_asset_path(dir.to_str().unwrap(), "stage.bmp");
 
         assert_eq!(got.as_deref(), Some(stage.as_path()));
+    }
+
+    #[test]
+    fn resolves_chart_meta_image_to_webp_after_beatoraja_extensions() {
+        let temp = temp_dir("meta-image-webp");
+        let dir = temp.path().to_path_buf();
+        let stage = dir.join("stage.webp");
+        fs::write(&stage, b"webp").unwrap();
+        fs::write(dir.join("banner.webp"), b"webp").unwrap();
+        let banner = dir.join("banner.png");
+        fs::write(&banner, b"png").unwrap();
+
+        let stage_got = resolve_chart_asset_path(dir.to_str().unwrap(), "stage.bmp");
+        let banner_got = resolve_chart_asset_path(dir.to_str().unwrap(), "banner.jpg");
+
+        assert_eq!(stage_got.as_deref(), Some(stage.as_path()));
+        assert_eq!(banner_got.as_deref(), Some(banner.as_path()));
     }
 
     #[test]

@@ -54,7 +54,6 @@ impl WinitApp {
             );
         }) {
             update_pre_ready_play_snapshot_options_for_runtime(
-                self.play.play_ready_sound_started_at,
                 &mut self.play.last_play_snapshot,
                 &active_play.running.gameplay,
                 &active_play.running.applied_arrange,

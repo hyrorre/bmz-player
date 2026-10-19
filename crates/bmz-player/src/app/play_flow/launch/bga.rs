@@ -22,7 +22,11 @@ impl WinitApp {
         }
         let Some(uploader) = self.renderer.gpu_uploader() else {
             tracing::warn!("loading BGA images synchronously because GPU uploader is unavailable");
-            let frames = load_chart_bga_textures(&mut self.renderer, chart);
+            let frames = load_chart_bga_textures(
+                &mut self.renderer,
+                chart,
+                &mut self.play.bga_preload.animations,
+            );
             self.play.bga_preload.completed_assets = self.play.bga_preload.total_assets;
             self.play.bga_preload.status = BgaImageLoadStatus::ready(generation, chart_id);
             return frames;
@@ -64,6 +68,17 @@ impl WinitApp {
                             display_bga_frame(image.asset_id, image.width, image.height),
                         );
                     }
+                    let frames =
+                        image.animation.as_ref().map_or(1, |animation| animation.frames().len());
+                    if let Some(animation) = image.animation {
+                        self.play.bga_preload.animations.insert(image.asset_id, animation.clone());
+                        if let Some(active_play) = &mut self.play.active_play {
+                            active_play
+                                .running
+                                .animated_bga
+                                .insert_uploaded_first(image.asset_id, animation);
+                        }
+                    }
                     tracing::info!(
                         asset_id = image.asset_id.0,
                         texture_id = image.texture_id.0,
@@ -71,6 +86,7 @@ impl WinitApp {
                         height = image.height,
                         file_bytes = image.file_bytes,
                         rgba_bytes = image.rgba_bytes,
+                        frames,
                         decode_us = image.decode_us,
                         upload_us = image.upload_us,
                         async_load = true,
@@ -113,6 +129,7 @@ impl WinitApp {
                             static_assets = stats.static_assets,
                             skipped_non_static = stats.skipped_non_static,
                             loaded_assets = stats.loaded_assets,
+                            animated_assets = stats.animated_assets,
                             failed_assets = stats.failed_assets,
                             total_file_bytes = stats.total_file_bytes,
                             loaded_file_bytes = stats.loaded_file_bytes,

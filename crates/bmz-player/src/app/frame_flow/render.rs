@@ -25,12 +25,18 @@ impl WinitApp {
         }
         self.start_scene_timers_before_snapshot(select_view, result_view);
         let snapshot_start = Instant::now();
-        let scene = self.scene_snapshot();
+        let mut scene = self.scene_snapshot();
+        if let AppSceneSnapshot::Play(snapshot) = &mut scene {
+            snapshot.stagefile_override = self.draw_play_presentation(
+                snapshot.ready_elapsed_time.is_some() || snapshot.seamless_play_entry,
+            );
+        }
         let snapshot_us = snapshot_start.elapsed().as_micros();
         let scene_kind = scene_kind(&scene);
         let plan_start = Instant::now();
         self.renderer.prepare_scene(scene);
         let plan_us = plan_start.elapsed().as_micros();
+        self.update_meta_image_animations(scene_kind);
         let video_start = Instant::now();
         let video_profile = self.update_current_skin_video_sources(
             profiling_select || profiling_decide || profiling_play || profiling_result,

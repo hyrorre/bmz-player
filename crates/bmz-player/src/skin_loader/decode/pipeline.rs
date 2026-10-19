@@ -270,6 +270,11 @@ pub fn decode_beatoraja_skin_request(
             stats.decoded_source_bytes =
                 stats.decoded_source_bytes.saturating_add(asset.pixels.len());
         }
+        if let Some(animation) = &decoded.animation {
+            stats.decoded_source_bytes = stats
+                .decoded_source_bytes
+                .saturating_add(usize::try_from(animation.rgba_bytes()).unwrap_or(usize::MAX));
+        }
         if matches!(decoded.texture_status, Some(TextureCacheStatus::Hit)) {
             stats.source_texture_cache_hits += 1;
             let bytes = (decoded.size.width.max(0.0) as usize)
@@ -334,6 +339,7 @@ pub fn decode_beatoraja_skin_request(
                 path: decoded.path,
                 texture,
                 asset: decoded.asset,
+                animation: decoded.animation,
                 size: decoded.size,
                 cache_key: decoded.cache_key,
                 is_video: decoded.is_video,

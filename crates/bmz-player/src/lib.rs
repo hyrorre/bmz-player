@@ -18,6 +18,7 @@ macro_rules! eprintln {
     };
 }
 
+pub mod animated_bga;
 pub mod app;
 pub mod assist;
 pub mod audio;
@@ -47,6 +48,7 @@ pub mod ln_policy;
 pub mod logging;
 pub mod obs;
 pub mod paths;
+mod play_presentation;
 pub mod practice_ui;
 pub mod profile_cmd;
 mod random_index;

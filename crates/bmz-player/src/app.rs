@@ -21,7 +21,7 @@ use bmz_gameplay::input::backend::{
 use bmz_gameplay::input::binding::LaneBinding;
 use bmz_gameplay::rule::RuleMode;
 use bmz_gameplay::session::{FloatingPolicy, HispeedMode, PlaySkinOffset};
-use bmz_render::assets::{RgbaImageAsset, load_chart_bga_image, load_static_rgba_image};
+use bmz_render::assets::load_static_rgba_image;
 use bmz_render::plan::{
     PLAY_BACKBMP_TEXTURE, Rect, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextureId,
 };
@@ -224,6 +224,7 @@ mod input_runtime;
 mod integration_support;
 mod integrations;
 mod maintenance;
+mod meta_image_animation;
 mod pending_state;
 mod play_control;
 #[path = "app/play_flow/audio.rs"]
@@ -247,6 +248,7 @@ mod play_preload;
 mod play_preload_state;
 mod play_support;
 mod play_transition_state;
+mod presentation;
 mod profile_switch;
 #[path = "app/result_flow/ending.rs"]
 mod result_flow_ending;
@@ -379,8 +381,8 @@ use scene_input::{
     select_action as scene_select_action,
 };
 use select_assets::{
-    PreparedSelectPreview, SelectAssetRuntime, SelectMetaImageSlot, SelectPreviewFade,
-    SelectPreviewSyncAction, select_preview_fade_factor,
+    PreparedSelectPreview, SelectAssetRuntime, SelectMetaImage, SelectMetaImageSlot,
+    SelectPreviewFade, SelectPreviewSyncAction, select_preview_fade_factor,
 };
 use select_folder_summary::SelectFolderSummaryRuntime;
 use select_search::{SearchInputAction, SelectSearchRuntime};
@@ -769,6 +771,8 @@ struct WinitApp {
     /// 正常終了させ、cpal/ASIO ストリームの Drop(停止・後処理)を確実に走らせる。
     shutdown_requested: Arc<AtomicBool>,
     renderer: Box<Renderer>,
+    /// STAGEFILE / BANNER / BACKBMP textureのアニメーション再生状態。
+    meta_animations: meta_image_animation::MetaImageAnimations,
     /// device共通の押下集合とkeyboard bounce状態。
     input: AppInputRuntime,
     /// 実行中に Raw Input backend を生成し直すための常設 message bridge。

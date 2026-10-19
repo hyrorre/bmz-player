@@ -70,6 +70,12 @@ pub(super) const OFFSCREEN_RECT_BATCH_TEXTURE_BASE: u32 = 0xF000_0000;
 pub(super) const OFFSCREEN_RECT_BATCH_TEXTURE_MAX_ENTRIES: usize = 64;
 
 #[derive(Debug, Clone)]
+/// Animated skin source waiting for a GPU device to lay out its sprite sheet.
+pub(super) struct PendingSpriteSheet {
+    pub(super) id: TextureId,
+    pub(super) animation: std::sync::Arc<crate::assets::AnimatedImage>,
+}
+
 pub(super) struct PendingTexture {
     pub(super) id: TextureId,
     pub(super) width: u32,

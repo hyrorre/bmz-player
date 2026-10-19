@@ -5,7 +5,7 @@ pub(in crate::skin_loader) fn is_skin_video_source_extension(extension: &str) ->
 }
 
 pub(in crate::skin_loader) fn is_skin_static_source_extension(extension: &str) -> bool {
-    matches!(extension, "png" | "bmp" | "jpg" | "jpeg" | "gif" | "tga" | "cim")
+    matches!(extension, "png" | "bmp" | "jpg" | "jpeg" | "gif" | "tga" | "webp" | "cim")
 }
 
 pub(in crate::skin_loader) fn load_source_asset_with_cache<F>(

@@ -14,6 +14,7 @@ impl Renderer {
             gpu.upsert_rgba_texture(texture.id, texture.width, texture.height, &texture.rgba)?;
         }
         self.gpu = Some(gpu);
+        self.install_pending_sprite_sheets();
         Ok(())
     }
 
@@ -63,7 +64,74 @@ impl Renderer {
             }
         }
         self.gpu = Some(gpu);
+        self.install_pending_sprite_sheets();
         Ok(())
+    }
+
+    /// `max_texture_dimension_2d` of the attached device, or `None` without a GPU.
+    pub fn max_texture_dimension_2d(&self) -> Option<u32> {
+        self.gpu.as_ref().map(|gpu| gpu.device.limits().max_texture_dimension_2d)
+    }
+
+    /// Uploads an animated skin source as a beatoraja sprite sheet laid out for the attached
+    /// device and returns its size. Without a GPU the frames wait until a device attaches;
+    /// the returned provisional size is then corrected in every installed skin context.
+    pub fn upsert_skin_sprite_sheet(
+        &mut self,
+        id: TextureId,
+        animation: std::sync::Arc<crate::assets::AnimatedImage>,
+    ) -> Result<SkinImageSize> {
+        let Some(limit) = self.max_texture_dimension_2d() else {
+            self.pending_textures.retain(|texture| texture.id != id);
+            self.pending_sprite_sheets.retain(|sheet| sheet.id != id);
+            let (width, height) =
+                crate::assets::sprite_sheet::provisional_sprite_sheet_size(&animation);
+            self.pending_sprite_sheets.push(PendingSpriteSheet { id, animation });
+            return Ok(SkinImageSize { width: width as f32, height: height as f32 });
+        };
+        self.upsert_skin_sprite_sheet_for_limit(id, &animation, limit)
+    }
+
+    fn upsert_skin_sprite_sheet_for_limit(
+        &mut self,
+        id: TextureId,
+        animation: &crate::assets::AnimatedImage,
+        limit: u32,
+    ) -> Result<SkinImageSize> {
+        let sheet = crate::assets::build_skin_sprite_sheet(animation, limit)?;
+        self.upsert_image_asset(id, &sheet)?;
+        Ok(SkinImageSize { width: sheet.width as f32, height: sheet.height as f32 })
+    }
+
+    /// Lays out sprite sheets that waited for a device and fixes the source sizes the skin
+    /// contexts got before it existed.
+    fn install_pending_sprite_sheets(&mut self) {
+        if let Some(limit) = self.max_texture_dimension_2d() {
+            self.layout_pending_sprite_sheets(limit);
+        }
+    }
+
+    pub(super) fn layout_pending_sprite_sheets(&mut self, limit: u32) {
+        for PendingSpriteSheet { id, animation } in std::mem::take(&mut self.pending_sprite_sheets)
+        {
+            // The frames are dropped as soon as their sheet exists.
+            let size = match self.upsert_skin_sprite_sheet_for_limit(id, &animation, limit) {
+                Ok(size) => size,
+                Err(error) => {
+                    tracing::warn!(texture_id = id.0, error = %format!("{error:#}"), "skipping animated skin texture that does not fit the GPU");
+                    self.remove_image_texture(id);
+                    continue;
+                }
+            };
+            for context in [
+                &mut self.play_skin_context,
+                &mut self.select_skin_context,
+                &mut self.decide_skin_context,
+                &mut self.result_skin_context,
+            ] {
+                context.update_texture_source_size(crate::skin::SkinTextureId(id.0), size);
+            }
+        }
     }
 
     /// Drop GPU resources that depend on the window surface while the app still
@@ -87,6 +155,7 @@ impl Renderer {
         if let Some(gpu) = &mut self.gpu {
             gpu.upsert_rgba_texture(id, width, height, &rgba)?;
         } else {
+            self.pending_sprite_sheets.retain(|sheet| sheet.id != id);
             self.pending_textures.push(PendingTexture { id, width, height, rgba });
         }
         Ok(())
@@ -103,6 +172,7 @@ impl Renderer {
         if let Some(gpu) = &mut self.gpu {
             gpu.upsert_rgba_texture(id, width, height, rgba)?;
         } else {
+            self.pending_sprite_sheets.retain(|sheet| sheet.id != id);
             self.pending_textures.push(PendingTexture { id, width, height, rgba: rgba.to_vec() });
         }
         Ok(())
@@ -153,6 +223,7 @@ impl Renderer {
             return;
         }
         self.pending_textures.retain(|texture| texture.id != id);
+        self.pending_sprite_sheets.retain(|sheet| sheet.id != id);
         if let Some(gpu) = &mut self.gpu {
             gpu.image_textures.remove(&id);
             gpu.image_bind_group_cache.retain(|(texture, _), _| *texture != id);

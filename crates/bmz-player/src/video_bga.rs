@@ -45,6 +45,54 @@ pub fn resolve_snapshot_textures(
 /// `restart`) on the first activation after install / quick retry.
 pub const REUSED_VIDEO_EVENT_START: TimeUs = TimeUs(i64::MIN);
 
+/// BGA asset on screen and the chart time its playback started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActiveBgaChannel {
+    pub kind: BgaEventKind,
+    pub asset_id: BgaAssetId,
+    pub origin: TimeUs,
+}
+
+/// Assets shown at `chart_now`, in Base / Layer / Layer2 / Poor order.
+/// Base と Layer は BGA イベント時刻、Poor は直近の Bad/Poor 判定時刻を開始時刻とする。
+pub fn active_bga_channels(
+    session: &crate::gameplay_runtime::PlaySessionObservation,
+    chart_now: TimeUs,
+) -> Vec<ActiveBgaChannel> {
+    let chart = &session.chart;
+    let mut channels = Vec::with_capacity(4);
+    for kind in [BgaEventKind::Base, BgaEventKind::Layer, BgaEventKind::Layer2] {
+        if let Some(event) =
+            chart.bga_events.iter().rev().find(|e| e.time <= chart_now && e.kind == kind)
+            && let Some(asset_id) = event.asset
+        {
+            channels.push(ActiveBgaChannel { kind, asset_id, origin: event.time });
+        }
+    }
+
+    let poor_duration_us = session.poor_bga_duration_us;
+    if poor_duration_us > 0
+        && let Some(judgement) = session.recent_judgements.iter().rev().find(|j| {
+            matches!(j.judge, Judge::Bad | Judge::Poor)
+                && chart_now.0 >= j.time.0
+                && chart_now.0 < j.time.0 + poor_duration_us
+        })
+        && let Some(event) = chart
+            .bga_events
+            .iter()
+            .rev()
+            .find(|e| e.time <= judgement.time && e.kind == BgaEventKind::Poor)
+        && let Some(asset_id) = event.asset
+    {
+        channels.push(ActiveBgaChannel {
+            kind: BgaEventKind::Poor,
+            asset_id,
+            origin: judgement.time,
+        });
+    }
+    channels
+}
+
 /// 表示オフセットを含まない chart_now 時刻でアクティブな動画BGAのテクスチャを更新する。
 /// bga_frames カタログを更新して幅・高さも最新に保つ。
 pub fn update_video_bga_frames(
@@ -63,74 +111,24 @@ pub fn update_video_bga_frames(
     let chart = &session.chart;
     let mut active_video_assets = HashSet::new();
 
-    // Base と Layer は BGA イベント時刻をビデオ開始時刻とする
-    for kind in [BgaEventKind::Base, BgaEventKind::Layer, BgaEventKind::Layer2] {
-        let Some(event) =
-            chart.bga_events.iter().rev().find(|e| e.time <= chart_now && e.kind == kind)
-        else {
-            continue;
-        };
-
-        let Some(asset_id) = event.asset else {
-            continue;
-        };
-        let Some(asset) = chart.bga_assets.iter().find(|a| a.id == asset_id) else {
+    for channel in active_bga_channels(session, chart_now) {
+        let Some(asset) = chart.bga_assets.iter().find(|a| a.id == channel.asset_id) else {
             continue;
         };
         if asset.kind != BgaAssetKind::Video {
             continue;
         }
-        active_video_assets.insert(asset_id);
-
-        let video_offset_us = chart_now.0 - event.time.0;
+        active_video_assets.insert(channel.asset_id);
         update_single_video(
             renderer,
             video_bga_decoders,
             failed_video_bga,
             bga_frames,
-            asset_id,
+            channel.asset_id,
             &asset.path,
-            event.time,
-            video_offset_us,
+            channel.origin,
+            chart_now.0 - channel.origin.0,
         );
-    }
-
-    // Poor は直近の Bad/Poor 判定時刻をビデオ開始時刻とする
-    let poor_duration_us = session.poor_bga_duration_us;
-    if poor_duration_us > 0 {
-        let judgement = session.recent_judgements.iter().rev().find(|j| {
-            matches!(j.judge, Judge::Bad | Judge::Poor)
-                && chart_now.0 >= j.time.0
-                && chart_now.0 < j.time.0 + poor_duration_us
-        });
-
-        if let Some(judgement) = judgement {
-            let judge_time = judgement.time;
-            let poor_event = chart
-                .bga_events
-                .iter()
-                .rev()
-                .find(|e| e.time <= judge_time && e.kind == BgaEventKind::Poor);
-
-            if let Some(event) = poor_event
-                && let Some(asset_id) = event.asset
-                && let Some(asset) = chart.bga_assets.iter().find(|a| a.id == asset_id)
-                && asset.kind == BgaAssetKind::Video
-            {
-                active_video_assets.insert(asset_id);
-                let video_offset_us = chart_now.0 - judge_time.0;
-                update_single_video(
-                    renderer,
-                    video_bga_decoders,
-                    failed_video_bga,
-                    bga_frames,
-                    asset_id,
-                    &asset.path,
-                    judge_time,
-                    video_offset_us,
-                );
-            }
-        }
     }
 
     // Drop only decoders that are no longer part of this chart's video assets.

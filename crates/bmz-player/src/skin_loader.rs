@@ -272,6 +272,9 @@ pub struct DecodedSource {
     pub path: PathBuf,
     pub texture: SkinTextureId,
     pub asset: Option<RgbaImageAsset>,
+    /// Frames of an animated source. The sprite sheet is laid out for the GPU that
+    /// receives it, so `asset` is `None` and `size` is provisional until upload.
+    pub animation: Option<Arc<bmz_render::assets::AnimatedImage>>,
     pub size: SkinImageSize,
     pub cache_key: Option<SkinSourceAssetCacheKey>,
     pub is_video: bool,

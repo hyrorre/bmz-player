@@ -6,6 +6,8 @@ pub const BEATORAJA_BGA_VIDEO_EXTENSIONS: &[&str] =
     &["mp4", "wmv", "m4v", "webm", "mpg", "mpeg", "m1v", "m2v", "avi"];
 pub const BMZ_EXTRA_BGA_VIDEO_EXTENSIONS: &[&str] = &["mkv", "mov"];
 pub const BEATORAJA_BGA_IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "gif", "bmp", "png", "tga"];
+/// beatoraja reads a declared `.webp` as-is but never substitutes it for another extension.
+pub const BMZ_EXTRA_BGA_IMAGE_EXTENSIONS: &[&str] = &["webp"];
 
 pub fn bga_asset_kind(path: &Path) -> BgaAssetKind {
     match path.extension().and_then(|extension| extension.to_str()) {
@@ -49,6 +51,7 @@ pub fn resolve_bga_asset_path(base_dir: &Path, declared: &Path) -> Option<PathBu
     resolve_same_stem_with_extensions(&stem_base, BEATORAJA_BGA_VIDEO_EXTENSIONS)
         .or_else(|| resolve_same_stem_with_extensions(&stem_base, BMZ_EXTRA_BGA_VIDEO_EXTENSIONS))
         .or_else(|| resolve_same_stem_with_extensions(&stem_base, BEATORAJA_BGA_IMAGE_EXTENSIONS))
+        .or_else(|| resolve_same_stem_with_extensions(&stem_base, BMZ_EXTRA_BGA_IMAGE_EXTENSIONS))
 }
 
 fn is_beatoraja_video_extension(extension: &str) -> bool {
@@ -142,6 +145,24 @@ mod tests {
         let resolved = resolve_bga_asset_path(&dir, Path::new("asset.bmp"));
 
         assert_eq!(resolved.as_deref(), Some(dir.join("asset.webm").as_path()));
+    }
+
+    #[test]
+    fn resolves_missing_declared_image_to_webp_after_beatoraja_images() {
+        let temp = temp_dir("webp-fallback");
+        let dir = temp.path().to_path_buf();
+        std::fs::write(dir.join("bga.webp"), b"webp").unwrap();
+        std::fs::write(dir.join("both.webp"), b"webp").unwrap();
+        std::fs::write(dir.join("both.tga"), b"tga").unwrap();
+
+        let webp = resolve_bga_asset_path(&dir, Path::new("bga.bmp"));
+        let beatoraja_first = resolve_bga_asset_path(&dir, Path::new("both.bmp"));
+        let declared = resolve_bga_asset_path(&dir, Path::new("both.webp"));
+
+        assert_eq!(webp.as_deref(), Some(dir.join("bga.webp").as_path()));
+        assert_eq!(beatoraja_first.as_deref(), Some(dir.join("both.tga").as_path()));
+        assert_eq!(declared.as_deref(), Some(dir.join("both.webp").as_path()));
+        assert_eq!(bga_asset_kind(Path::new("bga.webp")), BgaAssetKind::Static);
     }
 
     #[test]
