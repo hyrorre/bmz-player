@@ -49,6 +49,7 @@ ECFNの小見出しは、前回の「項目名と近すぎる」という指摘�
 Luxez-Flatは、見出しの下にキー操作の案内行がない分、最初のボタンが20px上にある。
 測定中、別の作業がLuxez-Flatの`parts.lua`・テストと`bmz-render`のgeometryを編集していたため、
 衝突を避けてLuxez-Flatは変更せず、ユーザーへ報告した。
+ユーザーの判断により、Luxez-Flatの最初のボタン位置（枠の上端から65px）は現状のままとする。
 
 `cargo test -p bmz-player --locked mz_detail_options`（10成功）と、ECFNのテスト（`--ignored`、7成功）を実行した。
 別作業の未コミット変更がビルドに含まれた状態での確認で、全テストは再実行していない。
