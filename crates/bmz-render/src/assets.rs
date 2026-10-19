@@ -6,6 +6,11 @@ use anyhow::{Context, Result, bail};
 use flate2::read::ZlibDecoder;
 use image::ImageReader;
 
+pub mod animated;
+pub mod sprite_sheet;
+
+pub use animated::{AnimatedImage, AnimatedImageLimits, DecodedImage, LimitPolicy, may_animate};
+
 const CIM_HEADER_LEN: usize = 12;
 const MAX_CIM_RGBA_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -51,7 +56,7 @@ pub fn load_static_rgba_image_with_color_key(
         .unwrap_or_default()
         .to_ascii_lowercase();
     match extension.as_str() {
-        "png" | "bmp" | "jpg" | "jpeg" | "gif" | "tga" => {
+        "png" | "bmp" | "jpg" | "jpeg" | "gif" | "tga" | "webp" => {
             load_image_rgba_with_color_key(path, color_key)
         }
         "cim" => load_cim_rgba(path),
@@ -59,8 +64,59 @@ pub fn load_static_rgba_image_with_color_key(
     }
 }
 
+/// Skin source image. Animated GIF / WebP / APNG become a beatoraja sprite sheet that the
+/// skin animates with `divx` / `divy` / `cycle`; other files load as still images.
+pub fn load_skin_source_rgba_image_with_color_key(
+    path: &Path,
+    color_key: Option<[u8; 3]>,
+) -> Result<RgbaImageAsset> {
+    if !may_animate(path) {
+        return load_static_rgba_image_with_color_key(path, color_key);
+    }
+    match animated::decode_image_frames(path, color_key, &AnimatedImageLimits::SKIN)? {
+        DecodedImage::Static(image) => Ok(image),
+        DecodedImage::Animated(animation) => {
+            let (sheet, (columns, rows)) = sprite_sheet::build_sprite_sheet(
+                &animation,
+                sprite_sheet::SPRITE_SHEET_MAX_TEXTURE_DIMENSION,
+            )
+            .with_context(|| format!("animated skin image: {}", path.display()))?;
+            tracing::info!(
+                path = %path.display(),
+                frames = animation.frames().len(),
+                columns,
+                rows,
+                width = sheet.width,
+                height = sheet.height,
+                "loaded animated skin image as a sprite sheet"
+            );
+            Ok(sheet)
+        }
+    }
+}
+
+/// `#STAGEFILE` / `#BANNER` / `#BACKBMP` image with its animation, if any.
+pub fn load_chart_image(path: &Path, limits: &AnimatedImageLimits) -> Result<DecodedImage> {
+    if may_animate(path) {
+        animated::decode_image_frames(path, None, limits)
+    } else {
+        load_static_rgba_image(path).map(DecodedImage::Static)
+    }
+}
+
 pub fn load_chart_bga_image(path: &Path) -> Result<RgbaImageAsset> {
     load_static_rgba_image(path).map(pad_small_bga_like_beatoraja)
+}
+
+/// BGA image with its animation, if any. Small images are padded per frame like
+/// [`load_chart_bga_image`].
+pub fn load_chart_bga_frames(path: &Path, limits: &AnimatedImageLimits) -> Result<DecodedImage> {
+    Ok(match load_chart_image(path, limits)? {
+        DecodedImage::Static(image) => DecodedImage::Static(pad_small_bga_like_beatoraja(image)),
+        DecodedImage::Animated(animation) => DecodedImage::Animated(std::sync::Arc::new(
+            std::sync::Arc::unwrap_or_clone(animation).map_frames(pad_small_bga_like_beatoraja),
+        )),
+    })
 }
 
 fn load_image_rgba(path: &Path) -> Result<RgbaImageAsset> {
@@ -83,6 +139,14 @@ fn load_image_rgba_with_color_key(
     decode_image_rgba(reader, path, color_key)
 }
 
+fn read_image_bytes(path: &Path) -> Result<Vec<u8>> {
+    if path.is_file() {
+        std::fs::read(path).with_context(|| format!("failed to read image: {}", path.display()))
+    } else {
+        bmz_skin_assets::read(path)
+    }
+}
+
 fn decode_image_rgba(
     reader: ImageReader<impl std::io::BufRead + std::io::Seek>,
     path: &Path,
@@ -96,17 +160,21 @@ fn decode_image_rgba(
     let has_alpha = image.color().has_alpha();
     let mut rgba = image.to_rgba8();
     if !has_alpha && let Some(color_key) = color_key {
-        for pixel in rgba.pixels_mut() {
-            if pixel.0[..3] == color_key {
-                pixel.0[3] = 0;
-            }
-        }
+        apply_lr2_color_key(&mut rgba, color_key);
     }
     let width = rgba.width();
     let height = rgba.height();
     let asset = RgbaImageAsset { width, height, pixels: rgba.into_raw() };
     asset.validate()?;
     Ok(asset)
+}
+
+fn apply_lr2_color_key(rgba: &mut image::RgbaImage, color_key: [u8; 3]) {
+    for pixel in rgba.pixels_mut() {
+        if pixel.0[..3] == color_key {
+            pixel.0[3] = 0;
+        }
+    }
 }
 
 /// libGDX `PixmapIO.writeCIM` 形式を RGBA8 へ展開する。
@@ -396,7 +464,15 @@ mod tests {
     fn load_chart_bga_image_decodes_data_song_fixture_images() {
         let root = repo_root().join("data/songs/bga-compat");
 
-        for file_name in ["small.png", "still.gif", "tga_only.tga", "animated.gif"] {
+        for file_name in [
+            "small.png",
+            "still.gif",
+            "tga_only.tga",
+            "animated.gif",
+            "webp_still.webp",
+            "webp_anim.webp",
+            "apng_anim.png",
+        ] {
             let asset = load_chart_bga_image(&root.join(file_name))
                 .unwrap_or_else(|error| panic!("failed to decode {file_name}: {error}"));
 
@@ -413,6 +489,71 @@ mod tests {
 
         let first_source_pixel = ((127usize) * 4)..((128usize) * 4);
         assert_eq!(&asset.pixels[first_source_pixel], &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn load_static_rgba_image_decodes_webp_and_first_animation_frames() {
+        let root = repo_root().join("data/songs/bga-compat");
+
+        let still = load_static_rgba_image(&root.join("webp_still.webp")).unwrap();
+        assert_eq!((still.width, still.height), (2, 2));
+        assert_eq!(&still.pixels[..4], &[12, 34, 56, 255]);
+        for (file_name, first) in [
+            ("webp_anim.webp", [255, 0, 0, 255]),
+            ("apng_anim.png", [255, 0, 0, 255]),
+            ("apng_single.png", [255, 255, 255, 255]),
+        ] {
+            let asset = load_static_rgba_image(&root.join(file_name)).unwrap();
+            assert_eq!(&asset.pixels[..4], &first, "{file_name}");
+        }
+    }
+
+    #[test]
+    fn load_chart_bga_frames_pads_every_animated_frame() {
+        let root = repo_root().join("data/songs/bga-compat");
+
+        let decoded =
+            load_chart_bga_frames(&root.join("animated.gif"), &AnimatedImageLimits::CHART).unwrap();
+
+        let animation = decoded.animation().expect("animated.gif has two frames");
+        assert_eq!((animation.width(), animation.height()), (256, 256));
+        assert_eq!(animation.frames().len(), 2);
+        assert_eq!(animation.plays(), None);
+        // GIF delays are 0 ms and 100 ms; 0 ms is raised to 10 ms.
+        assert_eq!(animation.first_cycle_us(), 110_000);
+        let first_source_pixel = (127usize * 4)..(128usize * 4);
+        assert_eq!(&animation.frame(0).pixels[first_source_pixel.clone()], &[255, 0, 0, 255]);
+        assert_eq!(&animation.frame(1).pixels[first_source_pixel], &[0, 0, 255, 255]);
+        assert_eq!(&animation.frame(1).pixels[..4], &[0, 0, 0, 0]);
+
+        let still =
+            load_chart_bga_frames(&root.join("small.png"), &AnimatedImageLimits::CHART).unwrap();
+        assert!(still.animation().is_none());
+        assert_eq!((still.first_frame().width, still.first_frame().height), (256, 256));
+    }
+
+    #[test]
+    fn load_skin_source_builds_beatoraja_sprite_sheets_for_animations() {
+        let root = repo_root().join("data/songs/bga-compat");
+
+        // Two 2x2 frames: 1x2 and 2x1 tie, so beatoraja keeps one column.
+        let gif =
+            load_skin_source_rgba_image_with_color_key(&root.join("animated.gif"), None).unwrap();
+        assert_eq!((gif.width, gif.height), (2, 4));
+        assert_eq!(&gif.pixels[..4], &[255, 0, 0, 255]);
+        assert_eq!(&gif.pixels[2 * 2 * 4..2 * 2 * 4 + 4], &[0, 0, 255, 255]);
+
+        for file_name in ["webp_anim.webp", "apng_anim.png"] {
+            let sheet =
+                load_skin_source_rgba_image_with_color_key(&root.join(file_name), None).unwrap();
+            assert_eq!((sheet.width, sheet.height), (2, 6), "{file_name}");
+        }
+        for file_name in ["webp_still.webp", "apng_single.png", "small.png"] {
+            let still =
+                load_skin_source_rgba_image_with_color_key(&root.join(file_name), None).unwrap();
+            let expected = load_static_rgba_image(&root.join(file_name)).unwrap();
+            assert_eq!(still, expected, "{file_name}");
+        }
     }
 
     /// The name only carried a timestamp, so equal stamps (coarse clocks, or another test
