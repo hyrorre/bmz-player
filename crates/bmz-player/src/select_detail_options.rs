@@ -89,7 +89,7 @@ const fn number(
 /// 1 = SUDDEN+, 2 = HIDDEN+, 4 = LIFT. The three toggles keep their own amounts.
 pub const LANE_COVER_ID: i64 = 104;
 const LANE_COVER_CHOICES: [&str; 8] =
-    ["OFF", "SUDDEN+", "HIDDEN+", "SUD+ & HID+", "LIFT", "LIFT & SUD+", "LIFT & HID+", "ALL"];
+    ["OFF", "SUDDEN+", "HIDDEN+", "SUD+/HID+", "LIFT", "LIFT/SUD+", "LIFT/HID+", "ALL"];
 
 /// Display order. Category IDs are stable: LANE and HI-SPEED share 1 and 3 is retired.
 /// The separate SUDDEN+ / HIDDEN+ / LIFT items (101..103) are retired in favour of 104.

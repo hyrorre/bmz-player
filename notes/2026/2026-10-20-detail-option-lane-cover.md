@@ -28,3 +28,9 @@ OFF、SUDDEN+、HIDDEN+、SUD+ & HID+、LIFT、LIFT & SUD+、LIFT & HID+、ALL�
 - `cargo clippy -p bmz-player --all-targets --locked -- -D warnings`、`cargo fmt --check`が成功。
 - WindowsのGPU offscreenで3スキンの中央列（LANE COVER）を目視した。画像は確認後に削除した。
 - 通常ウィンドウでの操作は未確認。試行のため、元の3項目へ戻す場合はこの変更を戻す。
+
+## 追補: 区切りを`/`へ変更
+
+mz-selectの選択肢フォントにある記号は`+ - . / : =`だけで、`&`は別フォントから補った字形だった。
+ユーザーの判断で、組み合わせの区切りを`/`に変更した（`SUD+/HID+`、`LIFT/SUD+`、`LIFT/HID+`）。
+`choices.fnt`への`&`の追加は戻し、mz-selectの素材は元の状態に戻した。
