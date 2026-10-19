@@ -9,7 +9,9 @@ use image::ImageReader;
 pub mod animated;
 pub mod sprite_sheet;
 
-pub use animated::{AnimatedImage, AnimatedImageLimits, DecodedImage, LimitPolicy, may_animate};
+pub use animated::{
+    AnimatedImage, AnimatedImageLimits, DecodedImage, FrameLayout, LimitPolicy, may_animate,
+};
 
 const CIM_HEADER_LEN: usize = 12;
 const MAX_CIM_RGBA_BYTES: u64 = 256 * 1024 * 1024;
@@ -109,14 +111,13 @@ pub fn load_chart_bga_image(path: &Path) -> Result<RgbaImageAsset> {
 }
 
 /// BGA image with its animation, if any. Small images are padded per frame like
-/// [`load_chart_bga_image`].
+/// [`load_chart_bga_image`], and `limits` apply to the padded frames.
 pub fn load_chart_bga_frames(path: &Path, limits: &AnimatedImageLimits) -> Result<DecodedImage> {
-    Ok(match load_chart_image(path, limits)? {
-        DecodedImage::Static(image) => DecodedImage::Static(pad_small_bga_like_beatoraja(image)),
-        DecodedImage::Animated(animation) => DecodedImage::Animated(std::sync::Arc::new(
-            std::sync::Arc::unwrap_or_clone(animation).map_frames(pad_small_bga_like_beatoraja),
-        )),
-    })
+    if may_animate(path) {
+        animated::decode_image_frames_with_layout(path, None, limits, FrameLayout::BeatorajaBgaPad)
+    } else {
+        load_chart_bga_image(path).map(DecodedImage::Static)
+    }
 }
 
 fn load_image_rgba(path: &Path) -> Result<RgbaImageAsset> {
@@ -285,23 +286,27 @@ fn load_cim_rgba(path: &Path) -> Result<RgbaImageAsset> {
     Ok(asset)
 }
 
+/// beatoraja pads BGA images up to this size onto a canvas of this size.
+const BGA_PAD_SIZE: u32 = 256;
+
 fn pad_small_bga_like_beatoraja(asset: RgbaImageAsset) -> RgbaImageAsset {
     let source_width = asset.width as usize;
     let source_height = asset.height as usize;
-    if source_width.max(source_height) > 256 {
+    let pad = BGA_PAD_SIZE as usize;
+    if source_width.max(source_height) > pad {
         return asset;
     }
 
-    let mut pixels = vec![0; 256 * 256 * 4];
-    let offset_x = (256usize.saturating_sub(source_width)) / 2;
+    let mut pixels = vec![0; pad * pad * 4];
+    let offset_x = (pad.saturating_sub(source_width)) / 2;
     let row_bytes = source_width * 4;
     for row in 0..source_height {
         let src_start = row * row_bytes;
-        let dst_start = (row * 256 + offset_x) * 4;
+        let dst_start = (row * pad + offset_x) * 4;
         pixels[dst_start..dst_start + row_bytes]
             .copy_from_slice(&asset.pixels[src_start..src_start + row_bytes]);
     }
-    RgbaImageAsset { width: 256, height: 256, pixels }
+    RgbaImageAsset { width: BGA_PAD_SIZE, height: BGA_PAD_SIZE, pixels }
 }
 
 #[cfg(test)]

@@ -40,7 +40,14 @@ impl Default for AnimatedBgaBudget {
 }
 
 impl AnimatedBgaBudget {
+    /// A budget of `total_bytes` for one chart (tests use small budgets).
+    pub fn with_total(total_bytes: u64) -> Self {
+        Self { remaining: total_bytes }
+    }
+
     /// Decodes a BGA image padded like beatoraja, keeping its frames if the budget allows.
+    /// The limits apply to the padded frames while they are decoded, so an animation over
+    /// the budget is never fully allocated; it falls back to its first frame with a warning.
     pub fn load(&mut self, path: &Path) -> anyhow::Result<DecodedImage> {
         self.load_with(path, load_chart_bga_frames)
     }
@@ -148,6 +155,71 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    /// Writes a looping GIF of `count` 16x16 frames, 1 MiB per 4 frames once padded.
+    fn write_small_gif(dir: &Path, name: &str, count: usize) -> std::path::PathBuf {
+        let path = dir.join(name);
+        let mut encoder =
+            image::codecs::gif::GifEncoder::new(std::fs::File::create(&path).unwrap());
+        encoder.set_repeat(image::codecs::gif::Repeat::Infinite).unwrap();
+        for index in 0..count {
+            let color = if index % 2 == 0 { [255, 0, 0, 255] } else { [0, 0, 255, 255] };
+            encoder
+                .encode_frame(image::Frame::from_parts(
+                    image::RgbaImage::from_pixel(16, 16, image::Rgba(color)),
+                    0,
+                    0,
+                    image::Delay::from_numer_denom_ms(100, 1),
+                ))
+                .unwrap();
+        }
+        path
+    }
+
+    #[test]
+    fn chart_budget_counts_padded_frames_and_falls_back_once_spent() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths: Vec<_> = (0..3)
+            .map(|index| write_small_gif(dir.path(), &format!("bga{index}.gif"), 4))
+            .collect();
+        // Each animation holds 4 x 256 KiB padded frames; the budget fits two and a half.
+        let mut budget = AnimatedBgaBudget::with_total(5 * 512 * 1024);
+
+        let loaded: Vec<_> = paths.iter().map(|path| budget.load(path).unwrap()).collect();
+
+        for decoded in &loaded[..2] {
+            let animation = decoded.animation().expect("within the chart budget");
+            assert_eq!(animation.frames().len(), 4);
+            assert_eq!(animation.rgba_bytes(), 1024 * 1024);
+        }
+        assert!(loaded[2].animation().is_none(), "the third animation exceeds the budget");
+        let first = loaded[2].first_frame();
+        assert_eq!((first.width, first.height), (256, 256));
+        assert_eq!(&first.pixels[120 * 4..121 * 4], &[255, 0, 0, 255]);
+        assert_eq!(budget.remaining, 512 * 1024);
+    }
+
+    #[test]
+    fn playback_and_video_export_share_frames_and_timing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_small_gif(dir.path(), "bga.gif", 3);
+
+        let play = AnimatedBgaBudget::default().load(&path).unwrap();
+        let export = AnimatedBgaBudget::default().load_unpadded(&path).unwrap();
+
+        let (play, export) = (play.animation().unwrap(), export.animation().unwrap());
+        assert_eq!((play.width(), export.width()), (256, 16));
+        assert_eq!(play.frames().len(), export.frames().len());
+        assert_eq!(play.first_cycle_us(), export.first_cycle_us());
+        for elapsed_us in [0, 99_999, 100_000, 250_000, 1_000_000] {
+            let index = play.frame_index(elapsed_us);
+            assert_eq!(index, export.frame_index(elapsed_us));
+            assert_eq!(
+                &play.frame(index).pixels[120 * 4..121 * 4],
+                &export.frame(index).pixels[..4]
+            );
+        }
+    }
 
     fn animation(colors: &[u8]) -> Arc<AnimatedImage> {
         let frames = colors

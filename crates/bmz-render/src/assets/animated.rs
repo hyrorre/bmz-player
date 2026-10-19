@@ -63,6 +63,43 @@ impl AnimatedImageLimits {
     }
 }
 
+/// How decoded frames are stored. The memory limits apply to the stored size, and each
+/// frame is converted right after it is decoded, so a transform that enlarges frames can
+/// never exceed the budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FrameLayout {
+    /// Frames keep the canvas size.
+    #[default]
+    Canvas,
+    /// beatoraja BGA: images up to 256 px are placed on a transparent 256x256 canvas.
+    BeatorajaBgaPad,
+}
+
+impl FrameLayout {
+    /// Size of one stored frame for a `width` x `height` canvas.
+    pub fn stored_size(self, width: u32, height: u32) -> (u32, u32) {
+        match self {
+            Self::BeatorajaBgaPad if width.max(height) <= super::BGA_PAD_SIZE => {
+                (super::BGA_PAD_SIZE, super::BGA_PAD_SIZE)
+            }
+            _ => (width, height),
+        }
+    }
+
+    /// RGBA bytes of one stored frame, or `None` if the size does not fit in `u64`.
+    pub fn stored_frame_bytes(self, width: u32, height: u32) -> Option<u64> {
+        let (width, height) = self.stored_size(width, height);
+        u64::from(width).checked_mul(u64::from(height))?.checked_mul(4)
+    }
+
+    fn apply(self, frame: RgbaImageAsset) -> RgbaImageAsset {
+        match self {
+            Self::Canvas => frame,
+            Self::BeatorajaBgaPad => super::pad_small_bga_like_beatoraja(frame),
+        }
+    }
+}
+
 /// Canvas-sized RGBA frames with their display end times.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnimatedImage {
@@ -125,7 +162,9 @@ impl AnimatedImage {
     }
 
     pub fn rgba_bytes(&self) -> u64 {
-        self.frames.iter().map(|frame| frame.pixels.len() as u64).sum()
+        self.frames
+            .iter()
+            .fold(0_u64, |total, frame| total.saturating_add(frame.pixels.len() as u64))
     }
 
     /// Frame shown `elapsed_us` after the animation started. After the final play of a
@@ -136,12 +175,6 @@ impl AnimatedImage {
             return self.frames.len() - 1;
         }
         self.frame_ends_us.partition_point(|end| *end <= elapsed_us % cycle_us)
-    }
-
-    /// Applies the same size-deterministic transform (such as BGA padding) to every frame.
-    pub(crate) fn map_frames(self, mut map: impl FnMut(RgbaImageAsset) -> RgbaImageAsset) -> Self {
-        let frames: Vec<_> = self.frames.into_iter().map(&mut map).collect();
-        Self { width: frames[0].width, height: frames[0].height, frames, ..self }
     }
 }
 
@@ -183,8 +216,18 @@ pub fn decode_image_frames(
     color_key: Option<[u8; 3]>,
     limits: &AnimatedImageLimits,
 ) -> Result<DecodedImage> {
+    decode_image_frames_with_layout(path, color_key, limits, FrameLayout::Canvas)
+}
+
+/// [`decode_image_frames`] storing every frame (and the still fallback) in `layout`.
+pub fn decode_image_frames_with_layout(
+    path: &Path,
+    color_key: Option<[u8; 3]>,
+    limits: &AnimatedImageLimits,
+    layout: FrameLayout,
+) -> Result<DecodedImage> {
     let bytes = super::read_image_bytes(path)?;
-    decode_image_bytes(&bytes, path, color_key, limits)
+    decode_image_bytes(&bytes, path, color_key, limits, layout)
 }
 
 fn decode_image_bytes(
@@ -192,12 +235,14 @@ fn decode_image_bytes(
     path: &Path,
     color_key: Option<[u8; 3]>,
     limits: &AnimatedImageLimits,
+    layout: FrameLayout,
 ) -> Result<DecodedImage> {
     let started = Instant::now();
+    let decode = FrameDecode { color_key, limits, layout, started };
     let animation = match image::guess_format(bytes).ok() {
-        Some(ImageFormat::Png) => decode_apng(bytes, color_key, limits, started),
-        Some(ImageFormat::WebP) => decode_animated_webp(bytes, color_key, limits, started),
-        Some(ImageFormat::Gif) => decode_animated_gif(bytes, limits, started),
+        Some(ImageFormat::Png) => decode_apng(bytes, &decode),
+        Some(ImageFormat::WebP) => decode_animated_webp(bytes, &decode),
+        Some(ImageFormat::Gif) => decode_animated_gif(bytes, &decode),
         _ => Ok(None),
     };
     match animation {
@@ -212,7 +257,16 @@ fn decode_image_bytes(
             "using the first frame of an animated image"
         ),
     }
-    decode_still_bytes(bytes, path, color_key).map(DecodedImage::Static)
+    decode_still_bytes(bytes, path, color_key)
+        .map(|still| DecodedImage::Static(layout.apply(still)))
+}
+
+/// Settings shared by the per-format frame decoders.
+struct FrameDecode<'a> {
+    color_key: Option<[u8; 3]>,
+    limits: &'a AnimatedImageLimits,
+    layout: FrameLayout,
+    started: Instant,
 }
 
 fn decode_still_bytes(
@@ -227,48 +281,33 @@ fn decode_still_bytes(
     super::decode_image_rgba(reader, path, color_key)
 }
 
-fn decode_apng(
-    bytes: &[u8],
-    color_key: Option<[u8; 3]>,
-    limits: &AnimatedImageLimits,
-    started: Instant,
-) -> Result<Option<AnimatedImage>> {
+fn decode_apng(bytes: &[u8], decode: &FrameDecode<'_>) -> Result<Option<AnimatedImage>> {
     let decoder = PngDecoder::new(Cursor::new(bytes))?;
     if !decoder.is_apng()? {
         return Ok(None);
     }
     let (width, height) = decoder.dimensions();
-    check_container(bytes, width, height, limits)?;
+    check_container(bytes, width, height, decode.limits)?;
     let has_alpha = decoder.color_type().has_alpha();
     let decoder = decoder.apng()?;
     let plays = total_plays(decoder.loop_count());
-    let frames = decoder.into_frames();
-    collect_frames(frames, (width, height), has_alpha, color_key, plays, limits, started)
+    collect_frames(decoder.into_frames(), (width, height), has_alpha, plays, decode)
 }
 
-fn decode_animated_webp(
-    bytes: &[u8],
-    color_key: Option<[u8; 3]>,
-    limits: &AnimatedImageLimits,
-    started: Instant,
-) -> Result<Option<AnimatedImage>> {
+fn decode_animated_webp(bytes: &[u8], decode: &FrameDecode<'_>) -> Result<Option<AnimatedImage>> {
     let decoder = WebPDecoder::new(Cursor::new(bytes))?;
     if !decoder.has_animation() {
         return Ok(None);
     }
     let (width, height) = decoder.dimensions();
-    check_container(bytes, width, height, limits)?;
+    check_container(bytes, width, height, decode.limits)?;
     let has_alpha = decoder.color_type().has_alpha();
     let plays = total_plays(decoder.loop_count());
-    let frames = decoder.into_frames();
-    collect_frames(frames, (width, height), has_alpha, color_key, plays, limits, started)
+    collect_frames(decoder.into_frames(), (width, height), has_alpha, plays, decode)
 }
 
-fn decode_animated_gif(
-    bytes: &[u8],
-    limits: &AnimatedImageLimits,
-    started: Instant,
-) -> Result<Option<AnimatedImage>> {
+fn decode_animated_gif(bytes: &[u8], decode: &FrameDecode<'_>) -> Result<Option<AnimatedImage>> {
+    let FrameDecode { limits, started, .. } = *decode;
     // image's loop_count maps the missing NETSCAPE extension (Finite(0)) to infinite.
     // Read the container directly to keep once / finite / infinite apart.
     let mut options = gif::DecodeOptions::new();
@@ -285,9 +324,13 @@ fn decode_animated_gif(
         return Ok(None);
     }
     check_container(bytes, width, height, limits)?;
-    let frame_bytes = u64::from(width) * u64::from(height) * 4;
+    // The frame count is known, so reject an over-budget animation before decoding pixels.
+    let total_bytes = decode
+        .layout
+        .stored_frame_bytes(width, height)
+        .and_then(|frame_bytes| frame_bytes.checked_mul(frame_count as u64));
     check_limit(
-        frame_bytes.saturating_mul(frame_count as u64) <= limits.max_rgba_bytes,
+        total_bytes.is_some_and(|bytes| bytes <= limits.max_rgba_bytes),
         "animation exceeds the decoded size budget",
     )?;
     let plays = match metadata.repeat() {
@@ -296,7 +339,7 @@ fn decode_animated_gif(
     };
     // GIF frames always decode to RGBA, so the LR2 color key never applies (as for stills).
     let frames = GifDecoder::new(Cursor::new(bytes))?.into_frames();
-    collect_frames(frames, (width, height), true, None, plays, limits, started)
+    collect_frames(frames, (width, height), true, plays, decode)
 }
 
 fn total_plays(loop_count: LoopCount) -> Option<NonZeroU32> {
@@ -323,18 +366,20 @@ fn collect_frames(
     frames: Frames<'_>,
     (width, height): (u32, u32),
     has_alpha: bool,
-    color_key: Option<[u8; 3]>,
     plays: Option<NonZeroU32>,
-    limits: &AnimatedImageLimits,
-    started: Instant,
+    decode: &FrameDecode<'_>,
 ) -> Result<Option<AnimatedImage>> {
-    let frame_bytes = u64::from(width) * u64::from(height) * 4;
+    let FrameDecode { color_key, limits, layout, started } = *decode;
+    let frame_bytes = layout.stored_frame_bytes(width, height);
     let mut collected = Vec::new();
     for frame in frames {
         check_limit(started.elapsed() <= limits.max_decode_time, "animation decode timed out")?;
         check_limit(collected.len() < limits.max_frames, "too many animation frames")?;
+        // Checked before the stored frame exists; only one canvas-sized frame is in flight.
+        let stored_bytes =
+            frame_bytes.and_then(|bytes| bytes.checked_mul(collected.len() as u64 + 1));
         check_limit(
-            frame_bytes.saturating_mul(collected.len() as u64 + 1) <= limits.max_rgba_bytes,
+            stored_bytes.is_some_and(|bytes| bytes <= limits.max_rgba_bytes),
             "animation exceeds the decoded size budget",
         )?;
         let frame = frame?;
@@ -348,7 +393,8 @@ fn collect_frames(
         if !has_alpha && let Some(color_key) = color_key {
             super::apply_lr2_color_key(&mut rgba, color_key);
         }
-        collected.push((RgbaImageAsset { width, height, pixels: rgba.into_raw() }, delay));
+        let frame = RgbaImageAsset { width, height, pixels: rgba.into_raw() };
+        collected.push((layout.apply(frame), delay));
     }
     if collected.len() < 2 {
         return Ok(None);
@@ -408,7 +454,37 @@ mod tests {
     }
 
     fn decode(bytes: &[u8], name: &str, limits: &AnimatedImageLimits) -> Result<DecodedImage> {
-        decode_image_bytes(bytes, Path::new(name), None, limits)
+        decode_image_bytes(bytes, Path::new(name), None, limits, FrameLayout::Canvas)
+    }
+
+    /// `count` frames of `size` x `size` px, 10 ms each, looping forever.
+    fn square_gif(size: u16, count: usize) -> Vec<u8> {
+        let colors = [[255, 0, 0, 255], [0, 0, 255, 255]];
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = GifEncoder::new(&mut bytes);
+            encoder.set_repeat(Repeat::Infinite).unwrap();
+            for index in 0..count {
+                let image = image::RgbaImage::from_pixel(
+                    u32::from(size),
+                    u32::from(size),
+                    image::Rgba(colors[index % 2]),
+                );
+                encoder
+                    .encode_frame(image::Frame::from_parts(
+                        image,
+                        0,
+                        0,
+                        Delay::from_numer_denom_ms(10, 1),
+                    ))
+                    .unwrap();
+            }
+        }
+        bytes
+    }
+
+    fn decode_padded(bytes: &[u8], limits: &AnimatedImageLimits) -> Result<DecodedImage> {
+        decode_image_bytes(bytes, Path::new("bga.gif"), None, limits, FrameLayout::BeatorajaBgaPad)
     }
 
     fn animated(bytes: &[u8], name: &str) -> Arc<AnimatedImage> {
@@ -572,6 +648,63 @@ mod tests {
         assert!(decode(&bytes, "big.gif", &budget).is_err());
         let canvas = AnimatedImageLimits { max_canvas_dimension: 1, ..AnimatedImageLimits::SKIN };
         assert!(decode(&bytes, "big.gif", &canvas).is_err());
+    }
+
+    #[test]
+    fn padded_layout_stores_every_small_frame_on_a_256_canvas() {
+        let bytes = square_gif(16, 300);
+
+        let decoded = decode_padded(&bytes, &AnimatedImageLimits::CHART).unwrap();
+
+        let animation = decoded.animation().expect("75 MiB of padded frames fit 256 MiB");
+        assert_eq!((animation.width(), animation.height()), (256, 256));
+        assert_eq!(animation.frames().len(), 300);
+        assert_eq!(animation.rgba_bytes(), 300 * 256 * 256 * 4);
+        // Centered horizontally, top-aligned: column 120..136 holds the source.
+        assert_eq!(&animation.frame(1).pixels[120 * 4..121 * 4], &[0, 0, 255, 255]);
+        assert_eq!(&animation.frame(1).pixels[..4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn padded_size_decides_the_budget_and_falls_back_to_the_padded_first_frame() {
+        // 40 frames: 40 KiB as 16x16 canvases, 10 MiB once padded to 256x256.
+        let bytes = square_gif(16, 40);
+        let limits = AnimatedImageLimits::CHART.with_max_rgba_bytes(1024 * 1024);
+
+        assert!(decode(&bytes, "canvas.gif", &limits).unwrap().animation().is_some());
+        let DecodedImage::Static(first) = decode_padded(&bytes, &limits).unwrap() else {
+            panic!("padded frames exceed the budget");
+        };
+        assert_eq!((first.width, first.height), (256, 256));
+        assert_eq!(&first.pixels[120 * 4..121 * 4], &[255, 0, 0, 255]);
+
+        let error_policy = AnimatedImageLimits { on_limit: LimitPolicy::Error, ..limits };
+        assert!(decode_padded(&bytes, &error_policy).is_err());
+    }
+
+    #[test]
+    fn frame_budget_is_checked_before_each_frame_is_stored() {
+        // Animated WebP has no frame count up front; the budget still stops at frame 2.
+        let bytes = fixture("webp_anim.webp");
+        let one_frame = AnimatedImageLimits::CHART.with_max_rgba_bytes(256 * 256 * 4);
+        let decoded = decode_image_bytes(
+            &bytes,
+            Path::new("anim.webp"),
+            None,
+            &one_frame,
+            FrameLayout::BeatorajaBgaPad,
+        )
+        .unwrap();
+        assert!(decoded.animation().is_none());
+        assert_eq!((decoded.first_frame().width, decoded.first_frame().height), (256, 256));
+    }
+
+    #[test]
+    fn stored_frame_bytes_never_overflow() {
+        assert_eq!(FrameLayout::Canvas.stored_frame_bytes(u32::MAX, u32::MAX), None);
+        assert_eq!(FrameLayout::Canvas.stored_frame_bytes(300, 2), Some(2400));
+        assert_eq!(FrameLayout::BeatorajaBgaPad.stored_frame_bytes(2, 2), Some(256 * 256 * 4));
+        assert_eq!(FrameLayout::BeatorajaBgaPad.stored_frame_bytes(257, 1), Some(257 * 4));
     }
 
     #[test]
