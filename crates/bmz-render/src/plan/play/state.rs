@@ -170,8 +170,12 @@ pub(in crate::plan) fn build_play_skin_state(
             .and_then(|document| document.bmz_bpm_change_preview)
             .map(|preview| preview.clamped_lead_ms()),
         bga_enabled: snapshot.bga_enabled,
-        has_stagefile: snapshot.stagefile_background,
-        stagefile_image_size: snapshot.stagefile_image_size,
+        has_stagefile: snapshot.stagefile_override.is_some() || snapshot.stagefile_background,
+        stagefile_image_size: snapshot
+            .stagefile_override
+            .map(|frame| frame.source_size)
+            .or(snapshot.stagefile_image_size),
+        stagefile_override: snapshot.stagefile_override,
         has_backbmp: snapshot.backbmp_background,
         bga_base: snapshot.bga_base.map(skin_bga_frame_from_display),
         bga_layer: snapshot.bga_layer.map(skin_bga_frame_from_display),

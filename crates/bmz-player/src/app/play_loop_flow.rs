@@ -11,11 +11,14 @@ impl WinitApp {
             }
             return;
         }
-        if self.viewer_mode && self.viewer_paused && self.play.play_ready_sound_started_at.is_some()
+        if self.viewer_mode
+            && self.viewer_paused
+            && self.play.active_play.as_ref().is_some_and(|play| play.running.gameplay.is_running())
         {
             self.update_viewer_paused_snapshot();
             return;
         }
+        self.restore_presentation_playback_rate();
         self.sync_autoplay_replay_playback_rate();
         self.poll_pending_finished_play();
         if self.play.play_ending.is_some() {
@@ -37,7 +40,7 @@ impl WinitApp {
         }
         self.maybe_start_ready_phase();
         self.stop_decide_system_sound_after_chart_start();
-        if self.play.play_ready_sound_started_at.is_none() {
+        if !self.play.active_play.as_ref().is_some_and(|play| play.running.gameplay.is_running()) {
             self.update_pre_ready_play_state();
             self.update_pending_play_snapshot_timers();
             return;
@@ -337,13 +340,13 @@ impl WinitApp {
     }
 
     pub(super) fn maybe_start_ready_phase(&mut self) {
-        if self.play.play_ready_sound_started_at.is_some() {
+        if self.play.active_play.as_ref().is_some_and(|play| play.running.gameplay.is_running()) {
             return;
         }
         let shows_ready_presentation = self.play.play_entry_presentation.shows_ready_presentation();
         let seamless_play_entry = !shows_ready_presentation;
         let now = Instant::now();
-        if shows_ready_presentation {
+        if shows_ready_presentation && self.play.play_ready_sound_started_at.is_none() {
             self.sync_play_control_holds_from_pressed_controls();
             if play_ready_blocked_by_control_holds(self.play.play_e1_held, self.play.play_e2_held) {
                 self.play.play_ready_last_control_hold_at = Some(now);
@@ -371,6 +374,54 @@ impl WinitApp {
             return;
         };
         if !self.play.bga_preload.ready_for(chart_id, active_play.running.session.bga_enabled) {
+            return;
+        }
+        // An animated STAGEFILE decodes in the background; its cycle decides the waits.
+        if !self.sync_play_presentation() {
+            return;
+        }
+        if self.play.play_ready_sound_started_at.is_none() {
+            if shows_ready_presentation {
+                self.draw_play_presentation(false);
+                if !self.play.presentation.playback.loading_complete(self.play_elapsed_time().0) {
+                    return;
+                }
+            }
+            self.draw_play_presentation(true);
+            let now = Instant::now();
+            let cycle_us = if shows_ready_presentation {
+                self.play.presentation.playback.images.ready_us()
+            } else {
+                0
+            };
+            let skin_us = -self.play_skin_playstart_offset().0;
+            let wait_us = crate::play_presentation::ready_wait_us(skin_us, cycle_us);
+            // An explicit Viewer position starts immediately at that position;
+            // unlike normal/Practice playback it has no built-in READY countdown.
+            let direct_viewer_start =
+                self.viewer_mode && self.play.practice_chart_zero_time.is_some();
+            self.play.presentation.extra_ready_hold_us =
+                if cycle_us > 0 && direct_viewer_start { wait_us } else { wait_us - skin_us };
+            self.play.play_ready_sound_started_at = Some(now);
+            if cycle_us > 0
+                // Practice already compensates its start position for its fixed rate.
+                && self.play.practice_session.is_none()
+                && let Some(active) = &mut self.play.active_play
+            {
+                self.play.presentation.rate_restore = Some((
+                    now + Duration::from_micros(wait_us.max(0) as u64),
+                    active.running.playback_rate_percent,
+                ));
+                active.running.set_playback_rate_percent(100);
+            }
+            if shows_ready_presentation {
+                self.play_system_sound(crate::system_sound::SoundType::PlayReady);
+            }
+            self.update_pending_play_snapshot_timers();
+        }
+        if self.play.play_ready_sound_started_at.is_some_and(|start| {
+            start.elapsed().as_micros() < self.play.presentation.extra_ready_hold_us.max(0) as u128
+        }) {
             return;
         }
         let chart_zero_time = self
@@ -410,16 +461,13 @@ impl WinitApp {
             crate::system_sound::SoundType::Decide,
             decide_fade_out_frames,
         );
-        self.play.play_ready_sound_started_at = Some(Instant::now());
         self.play.pending_play_start = None;
-        if shows_ready_presentation {
-            self.play_system_sound(crate::system_sound::SoundType::PlayReady);
-        }
+        let ready_elapsed = self.play.play_ready_sound_started_at.map(elapsed_since);
         if let Some(snapshot) = &mut self.play.last_play_snapshot {
             snapshot.play_elapsed_time = play_elapsed_time;
             snapshot.ready_elapsed_time = play_ready_skin_elapsed_time(
                 self.play.play_entry_presentation,
-                Some(TimeUs(0)),
+                ready_elapsed,
                 self.play.viewer_ready_timer_offset,
             );
             snapshot.seamless_play_entry = seamless_play_entry;
@@ -631,7 +679,6 @@ impl WinitApp {
             "adjusted play lane settings"
         );
         update_pre_ready_play_snapshot_options_for_runtime(
-            self.play.play_ready_sound_started_at,
             &mut self.play.last_play_snapshot,
             &active_play.running.gameplay,
             &active_play.running.applied_arrange,
@@ -856,6 +903,11 @@ impl WinitApp {
         {
             return;
         }
+        // The READY hold runs at 1x; the requested rate applies once it ends.
+        if let Some((_, requested_rate)) = &mut self.play.presentation.rate_restore {
+            *requested_rate = rate;
+            return;
+        }
         if active_play.running.playback_rate_percent != rate {
             active_play.running.set_playback_rate_percent(rate);
         }
@@ -906,7 +958,6 @@ impl WinitApp {
                 .gameplay
                 .edit(move |session| session.lane_cover_changing = changing);
             update_pre_ready_play_snapshot_options_for_runtime(
-                self.play.play_ready_sound_started_at,
                 &mut self.play.last_play_snapshot,
                 &active_play.running.gameplay,
                 &active_play.running.applied_arrange,

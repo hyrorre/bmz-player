@@ -105,6 +105,17 @@ impl MetaImageAnimations {
         }
     }
 
+    pub(super) fn is_pending(&self, texture: TextureId, key: &str) -> bool {
+        self.key(texture) == Some(key) && self.pending.contains_key(&texture)
+    }
+
+    pub(super) fn animation(&self, texture: TextureId, key: &str) -> Option<&Arc<AnimatedImage>> {
+        (self.key(texture) == Some(key))
+            .then(|| self.slots.get(&texture))
+            .flatten()
+            .map(|slot| &slot.image)
+    }
+
     pub(super) fn forget(&mut self, texture: TextureId) {
         self.keys.remove(&texture);
         self.slots.remove(&texture);

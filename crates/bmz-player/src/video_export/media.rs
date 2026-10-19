@@ -17,8 +17,11 @@ pub struct Media {
     skin_videos: Vec<SkinVideo>,
     document: bmz_render::skin::SkinDocument,
     animated_bga: crate::animated_bga::AnimatedBgaState,
-    /// Animated STAGEFILE / BACKBMP / BANNER, played from Play entry (scene time 0).
+    /// Animated BACKBMP / BANNER, played from Play entry (scene time 0).
     meta_animations: Vec<MetaAnimation>,
+    /// Animated STAGEFILE with live play's Loading / READY waits.
+    presentation: crate::play_presentation::PresentationPlayback,
+    ready_us: i64,
 }
 
 struct MetaAnimation {
@@ -39,6 +42,20 @@ struct SkinVideo {
 }
 
 impl Media {
+    /// Applies the animated STAGEFILE waits and fixes its offline origins.
+    pub fn presentation_timing(
+        &mut self,
+        timing: simulation::SceneTiming,
+    ) -> simulation::SceneTiming {
+        let timing = timing.with_presentation(
+            self.presentation.images.loading_us(),
+            self.presentation.images.ready_us(),
+        );
+        self.ready_us = timing.ready_us;
+        self.presentation.set_offline_origins(timing.ready_us);
+        timing
+    }
+
     pub fn load(
         chart: &PlayableChart,
         chart_path: &Path,
@@ -63,6 +80,8 @@ impl Media {
             backbmp: false,
             animated_bga: Default::default(),
             meta_animations: Vec::new(),
+            presentation: Default::default(),
+            ready_us: 0,
         };
         let mut animation_budget = crate::animated_bga::AnimatedBgaBudget::default();
         let folder = chart_path.parent().context("chart has no parent folder")?.to_string_lossy();
@@ -79,12 +98,20 @@ impl Media {
             {
                 let image = decoded.first_frame();
                 renderer.upsert_image_asset(id, image)?;
-                if let Some(animation) = decoded.animation() {
-                    media.meta_animations.push(MetaAnimation {
+                match decoded.animation() {
+                    Some(animation) if id == bmz_render::plan::SELECT_STAGE_TEXTURE => {
+                        media.presentation = crate::play_presentation::PresentationPlayback::new(
+                            crate::play_presentation::PresentationImages::from_stagefile(Some(
+                                animation.clone(),
+                            )),
+                        );
+                    }
+                    Some(animation) => media.meta_animations.push(MetaAnimation {
                         texture: id,
                         image: animation.clone(),
                         uploaded: Some(0),
-                    });
+                    }),
+                    None => {}
                 }
                 if id == bmz_render::plan::SELECT_STAGE_TEXTURE {
                     media.stagefile_size = Some(bmz_render::skin::SkinImageSize {
@@ -97,6 +124,10 @@ impl Media {
                 }
             }
         }
+        // Resolve GPU failures before calculating the offline start deadline.
+        media.presentation.draw(renderer, 0, false);
+        media.presentation.draw(renderer, 0, true);
+        media.presentation.reset();
         for asset in &chart.bga_assets {
             match asset.kind {
                 BgaAssetKind::Video => {
@@ -187,6 +218,8 @@ impl Media {
                 )?;
             }
         }
+        snapshot.stagefile_override =
+            self.presentation.draw(renderer, scene_us, scene_us >= self.ready_us);
         let meta_elapsed_us = u64::try_from(scene_us).unwrap_or(0);
         for meta in &mut self.meta_animations {
             let index = meta.image.frame_index(meta_elapsed_us);

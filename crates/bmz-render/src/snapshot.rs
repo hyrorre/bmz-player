@@ -492,6 +492,8 @@ pub struct RenderSnapshot {
     pub stagefile_background: bool,
     /// ロード済み `#STAGEFILE` の画像サイズ。
     pub stagefile_image_size: Option<crate::skin::SkinImageSize>,
+    /// Play中だけruntime image 100を置き換える画像。他のシーンは `#STAGEFILE` のまま。
+    pub stagefile_override: Option<crate::skin::SkinBgaFrame>,
     /// `#BACKBMP` テクスチャがロード済みなら true (BGA より下に描画)。
     pub backbmp_background: bool,
     /// BMS `#TEXT` / チャネル #99 で表示する譜面テキスト (BMZ text 20100)。
