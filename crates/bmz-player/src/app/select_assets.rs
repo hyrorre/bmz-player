@@ -37,8 +37,34 @@ pub(super) enum SelectMetaImageSlot {
 
 enum SelectMetaImageCacheEntry {
     Loading,
-    Ready(SelectMetaImage),
+    Ready(CachedMetaImage),
     Missing,
+}
+
+/// A cached still image and the state of its animation frames.
+struct CachedMetaImage {
+    first: RgbaImageAsset,
+    animation: MetaAnimationState,
+}
+
+enum MetaAnimationState {
+    /// The file has no animation.
+    Still,
+    Loaded(Arc<AnimatedImage>),
+    /// Frames were dropped to stay within the cache budget; decode again when shown.
+    Evicted,
+    /// A background decode is restoring the evicted frames.
+    Reloading,
+}
+
+impl CachedMetaImage {
+    fn image(&self) -> SelectMetaImage {
+        let animation = match &self.animation {
+            MetaAnimationState::Loaded(animation) => Some(animation.clone()),
+            _ => None,
+        };
+        SelectMetaImage { first: self.first.clone(), animation }
+    }
 }
 
 /// A STAGEFILE / BACKBMP / BANNER image: its still (first) frame and animation, if any.
@@ -149,8 +175,11 @@ pub(super) struct SelectAssetRuntime {
     library_db_path: PathBuf,
     cache_dir: PathBuf,
     meta_image_cache: HashMap<String, SelectMetaImageCacheEntry>,
-    /// Cache keys holding animations, oldest first, with their decoded size.
+    /// Cache keys holding loaded animations, least recently shown first, with their size.
     meta_image_animations: VecDeque<(String, u64)>,
+    /// Sum of `meta_image_animations` sizes.
+    meta_image_animation_bytes: u64,
+    meta_image_animation_limit_bytes: u64,
     meta_image_tx: mpsc::Sender<SelectMetaImageResult>,
     meta_image_rx: Receiver<SelectMetaImageResult>,
     preview_cache: HashMap<String, SelectPreviewCacheEntry>,
@@ -188,6 +217,8 @@ impl SelectAssetRuntime {
             cache_dir,
             meta_image_cache: HashMap::new(),
             meta_image_animations: VecDeque::new(),
+            meta_image_animation_bytes: 0,
+            meta_image_animation_limit_bytes: SELECT_META_ANIMATION_CACHE_LIMIT_BYTES,
             meta_image_tx,
             meta_image_rx,
             preview_cache: HashMap::new(),
@@ -257,6 +288,13 @@ impl SelectAssetRuntime {
                     } else {
                         tracing::debug!(%error, "skipping select meta image");
                     }
+                    // A failed animation reload keeps the cached still image.
+                    if let Some(SelectMetaImageCacheEntry::Ready(cached)) =
+                        self.meta_image_cache.get_mut(&result.key)
+                    {
+                        cached.animation = MetaAnimationState::Still;
+                        continue;
+                    }
                     if is_current {
                         self.set_meta_image_loaded(result.slot, false);
                     }
@@ -303,13 +341,11 @@ impl SelectAssetRuntime {
         cache_key: Option<String>,
     ) -> Option<SelectMetaImage> {
         if cache_key.as_deref() == self.meta_image_source(slot).as_deref() {
+            // The texture keeps playing the animation it was given; nothing to restore.
             if self.meta_image_loaded(slot) {
                 return None;
             }
-            return cache_key.as_deref().and_then(|key| match self.meta_image_cache.get(key) {
-                Some(SelectMetaImageCacheEntry::Ready(image)) => Some(image.clone()),
-                _ => None,
-            });
+            return cache_key.and_then(|key| self.cached_meta_image_for_display(slot, key));
         }
 
         self.set_meta_image_source(slot, cache_key.clone());
@@ -317,7 +353,9 @@ impl SelectAssetRuntime {
         self.set_meta_image_size(slot, None);
         let key = cache_key?;
         match self.meta_image_cache.get(&key) {
-            Some(SelectMetaImageCacheEntry::Ready(image)) => Some(image.clone()),
+            Some(SelectMetaImageCacheEntry::Ready(_)) => {
+                self.cached_meta_image_for_display(slot, key)
+            }
             Some(SelectMetaImageCacheEntry::Loading) | Some(SelectMetaImageCacheEntry::Missing) => {
                 None
             }
@@ -328,34 +366,86 @@ impl SelectAssetRuntime {
         }
     }
 
+    /// The cached image to upload now. Evicted animations are decoded again in the
+    /// background while the still frame is shown.
+    fn cached_meta_image_for_display(
+        &mut self,
+        slot: SelectMetaImageSlot,
+        key: String,
+    ) -> Option<SelectMetaImage> {
+        let Some(SelectMetaImageCacheEntry::Ready(cached)) = self.meta_image_cache.get_mut(&key)
+        else {
+            return None;
+        };
+        let image = cached.image();
+        match cached.animation {
+            MetaAnimationState::Evicted => {
+                cached.animation = MetaAnimationState::Reloading;
+                self.spawn_meta_image_decode(slot, key);
+            }
+            MetaAnimationState::Loaded(_) => self.touch_meta_animation(&key),
+            MetaAnimationState::Still | MetaAnimationState::Reloading => {}
+        }
+        Some(image)
+    }
+
     /// Uploads the cached image again after another scene overwrote the shared texture.
     pub(super) fn invalidate_meta_image_upload(&mut self, slot: SelectMetaImageSlot) {
         self.set_meta_image_loaded(slot, false);
     }
 
     fn insert_meta_image_cache(&mut self, key: String, image: SelectMetaImage) {
-        self.insert_meta_image_cache_within(key, image, SELECT_META_ANIMATION_CACHE_LIMIT_BYTES);
+        // A key registered again replaces its old frames and their accounted size.
+        self.forget_meta_animation(&key);
+        let animation = match image.animation {
+            Some(animation) => {
+                let bytes = animation.rgba_bytes();
+                self.meta_image_animations.push_back((key.clone(), bytes));
+                self.meta_image_animation_bytes =
+                    self.meta_image_animation_bytes.saturating_add(bytes);
+                MetaAnimationState::Loaded(animation)
+            }
+            None => MetaAnimationState::Still,
+        };
+        self.meta_image_cache.insert(
+            key.clone(),
+            SelectMetaImageCacheEntry::Ready(CachedMetaImage { first: image.first, animation }),
+        );
+        self.evict_meta_animations(&key);
     }
 
-    fn insert_meta_image_cache_within(
-        &mut self,
-        key: String,
-        image: SelectMetaImage,
-        animation_limit_bytes: u64,
-    ) {
-        if let Some(animation) = &image.animation {
-            self.meta_image_animations.push_back((key.clone(), animation.rgba_bytes()));
-        }
-        self.meta_image_cache.insert(key, SelectMetaImageCacheEntry::Ready(image));
-        let mut total: u64 = self.meta_image_animations.iter().map(|(_, bytes)| bytes).sum();
-        while total > animation_limit_bytes
-            && let Some((key, bytes)) = self.meta_image_animations.pop_front()
+    /// Moves a loaded animation to the most recently shown end.
+    fn touch_meta_animation(&mut self, key: &str) {
+        if let Some(index) = self.meta_image_animations.iter().position(|(cached, _)| cached == key)
+            && let Some(entry) = self.meta_image_animations.remove(index)
         {
-            total -= bytes;
-            if let Some(SelectMetaImageCacheEntry::Ready(image)) =
+            self.meta_image_animations.push_back(entry);
+        }
+    }
+
+    fn forget_meta_animation(&mut self, key: &str) {
+        if let Some(index) = self.meta_image_animations.iter().position(|(cached, _)| cached == key)
+            && let Some((_, bytes)) = self.meta_image_animations.remove(index)
+        {
+            self.meta_image_animation_bytes = self.meta_image_animation_bytes.saturating_sub(bytes);
+        }
+    }
+
+    /// Drops the least recently shown animations beyond the budget, except `keep`.
+    fn evict_meta_animations(&mut self, keep: &str) {
+        while self.meta_image_animation_bytes > self.meta_image_animation_limit_bytes {
+            let Some(index) = self.meta_image_animations.iter().position(|(key, _)| key != keep)
+            else {
+                break;
+            };
+            let Some((key, bytes)) = self.meta_image_animations.remove(index) else {
+                break;
+            };
+            self.meta_image_animation_bytes = self.meta_image_animation_bytes.saturating_sub(bytes);
+            if let Some(SelectMetaImageCacheEntry::Ready(cached)) =
                 self.meta_image_cache.get_mut(&key)
             {
-                image.animation = None;
+                cached.animation = MetaAnimationState::Evicted;
             }
         }
     }
@@ -562,6 +652,11 @@ impl SelectAssetRuntime {
 
     fn spawn_meta_image_load(&mut self, slot: SelectMetaImageSlot, key: String) {
         self.meta_image_cache.insert(key.clone(), SelectMetaImageCacheEntry::Loading);
+        self.spawn_meta_image_decode(slot, key);
+    }
+
+    /// Decodes `key` off the select thread; `poll_loads` installs the result.
+    fn spawn_meta_image_decode(&self, slot: SelectMetaImageSlot, key: String) {
         let tx = self.meta_image_tx.clone();
         let cache_dir = self.cache_dir.clone();
         thread::spawn(move || {
@@ -688,33 +783,175 @@ fn lower_current_thread_priority() {}
 mod tests {
     use super::*;
 
-    #[test]
-    fn meta_image_cache_drops_the_oldest_animations_beyond_the_budget() {
-        let mut runtime = SelectAssetRuntime::new(None, PathBuf::new(), PathBuf::new());
-        let image = || {
-            let frames = [0, 255]
-                .map(|color| {
-                    let frame = RgbaImageAsset { width: 1, height: 1, pixels: vec![color; 4] };
-                    (frame, Duration::from_millis(100))
-                })
-                .into();
-            SelectMetaImage {
-                first: RgbaImageAsset { width: 1, height: 1, pixels: vec![0; 4] },
-                animation: Some(Arc::new(AnimatedImage::new(frames, None).unwrap())),
+    fn animated_image(color: u8) -> SelectMetaImage {
+        let frames = [color, 255 - color]
+            .map(|color| {
+                let frame = RgbaImageAsset { width: 1, height: 1, pixels: vec![color; 4] };
+                (frame, Duration::from_millis(100))
+            })
+            .into();
+        SelectMetaImage {
+            first: RgbaImageAsset { width: 1, height: 1, pixels: vec![color; 4] },
+            animation: Some(Arc::new(AnimatedImage::new(frames, None).unwrap())),
+        }
+    }
+
+    fn animation_state(runtime: &SelectAssetRuntime, key: &str) -> &'static str {
+        match runtime.meta_image_cache.get(key) {
+            Some(SelectMetaImageCacheEntry::Ready(cached)) => match cached.animation {
+                MetaAnimationState::Still => "still",
+                MetaAnimationState::Loaded(_) => "loaded",
+                MetaAnimationState::Evicted => "evicted",
+                MetaAnimationState::Reloading => "reloading",
+            },
+            Some(SelectMetaImageCacheEntry::Loading) => "loading",
+            Some(SelectMetaImageCacheEntry::Missing) => "missing",
+            None => "absent",
+        }
+    }
+
+    /// Copies a GIF of `count` `size` x `size` frames and returns its cache key.
+    fn write_gif(dir: &std::path::Path, name: &str, size: u32, count: usize) -> String {
+        let path = dir.join(name);
+        let mut encoder =
+            image::codecs::gif::GifEncoder::new(std::fs::File::create(&path).unwrap());
+        for index in 0..count {
+            let color = if index % 2 == 0 { [255, 0, 0, 255] } else { [0, 0, 255, 255] };
+            encoder
+                .encode_frame(image::Frame::from_parts(
+                    image::RgbaImage::from_pixel(size, size, image::Rgba(color)),
+                    0,
+                    0,
+                    image::Delay::from_numer_denom_ms(100, 1),
+                ))
+                .unwrap();
+        }
+        crate::chart_asset::asset_cache_key(&dir.to_string_lossy(), name)
+    }
+
+    /// Polls worker results until `done` holds or 10 s pass, collecting uploads.
+    fn poll_until(
+        runtime: &mut SelectAssetRuntime,
+        mut done: impl FnMut(&SelectAssetRuntime, &[SelectMetaImageUpload]) -> bool,
+    ) -> Vec<SelectMetaImageUpload> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut uploads = Vec::new();
+        while Instant::now() < deadline {
+            uploads.extend(runtime.poll_loads().0);
+            if done(runtime, &uploads) {
+                return uploads;
             }
-        };
+            thread::sleep(Duration::from_millis(5));
+        }
+        panic!("select meta image worker did not finish");
+    }
+
+    /// Selects `key` in the STAGEFILE slot and returns the image uploaded immediately.
+    fn select(runtime: &mut SelectAssetRuntime, key: &str) -> Option<SelectMetaImage> {
+        let image = runtime.sync_meta_image(SelectMetaImageSlot::Stage, Some(key.to_string()));
+        runtime.finish_meta_image_upload(
+            SelectMetaImageSlot::Stage,
+            image.as_ref().map(|_| SkinImageSize { width: 1.0, height: 1.0 }),
+        );
+        image
+    }
+
+    #[test]
+    fn meta_image_cache_evicts_least_recently_shown_animations_beyond_the_budget() {
+        let mut runtime = SelectAssetRuntime::new(None, PathBuf::new(), PathBuf::new());
         // Each animation holds two 1x1 RGBA frames (8 bytes); the budget keeps two.
-        for key in ["a", "b", "c"] {
-            runtime.insert_meta_image_cache_within(key.to_string(), image(), 16);
+        runtime.meta_image_animation_limit_bytes = 16;
+        runtime.insert_meta_image_cache("a".to_string(), animated_image(10));
+        runtime.insert_meta_image_cache("b".to_string(), animated_image(20));
+        // Showing "a" again makes "b" the least recently shown.
+        assert!(select(&mut runtime, "a").unwrap().animation.is_some());
+        runtime.insert_meta_image_cache("c".to_string(), animated_image(30));
+
+        assert_eq!(animation_state(&runtime, "a"), "loaded");
+        assert_eq!(animation_state(&runtime, "b"), "evicted");
+        assert_eq!(animation_state(&runtime, "c"), "loaded");
+        assert_eq!(runtime.meta_image_animation_bytes, 16);
+    }
+
+    #[test]
+    fn registering_a_key_again_replaces_its_accounted_size() {
+        let mut runtime = SelectAssetRuntime::new(None, PathBuf::new(), PathBuf::new());
+        for _ in 0..3 {
+            runtime.insert_meta_image_cache("a".to_string(), animated_image(10));
+        }
+        assert_eq!(runtime.meta_image_animations.len(), 1);
+        assert_eq!(runtime.meta_image_animation_bytes, 8);
+
+        let still = SelectMetaImage { animation: None, ..animated_image(10) };
+        runtime.insert_meta_image_cache("a".to_string(), still);
+        assert!(runtime.meta_image_animations.is_empty());
+        assert_eq!(runtime.meta_image_animation_bytes, 0);
+        assert_eq!(animation_state(&runtime, "a"), "still");
+    }
+
+    #[test]
+    fn still_images_never_decode_their_animation_again() {
+        let mut runtime = SelectAssetRuntime::new(None, PathBuf::new(), PathBuf::new());
+        let still = SelectMetaImage { animation: None, ..animated_image(10) };
+        runtime.insert_meta_image_cache("still".to_string(), still);
+
+        for key in ["still", "other", "still"] {
+            runtime.sync_meta_image(SelectMetaImageSlot::Stage, Some(key.to_string()));
         }
 
-        let animated = |key: &str| match runtime.meta_image_cache.get(key) {
-            Some(SelectMetaImageCacheEntry::Ready(image)) => image.animation.is_some(),
-            _ => panic!("{key} is not cached"),
-        };
-        assert!(!animated("a"));
-        assert!(animated("b"));
-        assert!(animated("c"));
+        assert_eq!(animation_state(&runtime, "still"), "still");
+    }
+
+    #[test]
+    fn evicted_animation_is_decoded_again_when_shown() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write_gif(dir.path(), "a.gif", 2, 2);
+        let b = write_gif(dir.path(), "b.gif", 3, 2);
+        let mut runtime = SelectAssetRuntime::new(None, PathBuf::new(), dir.path().into());
+        runtime.meta_image_animation_limit_bytes = 2 * 2 * 4 * 2;
+
+        assert!(select(&mut runtime, &a).is_none());
+        let uploads = poll_until(&mut runtime, |_, uploads| !uploads.is_empty());
+        assert!(uploads[0].image.animation.is_some());
+        select(&mut runtime, &b);
+        poll_until(&mut runtime, |runtime, _| animation_state(runtime, &b) == "loaded");
+        assert_eq!(animation_state(&runtime, &a), "evicted");
+
+        // Showing "a" again uploads its still frame now and restores the frames later.
+        let still = select(&mut runtime, &a).unwrap();
+        assert!(still.animation.is_none());
+        assert_eq!(animation_state(&runtime, &a), "reloading");
+        // Selecting it again while reloading does not start a second decode.
+        select(&mut runtime, &b);
+        assert_eq!(animation_state(&runtime, &b), "loaded");
+        select(&mut runtime, &a);
+        let uploads =
+            poll_until(&mut runtime, |runtime, _| animation_state(runtime, &a) == "loaded");
+        let restored = uploads.iter().find(|upload| upload.image.first.width == 2).unwrap();
+        assert_eq!(restored.image.animation.as_ref().unwrap().frames().len(), 2);
+        assert_eq!(animation_state(&runtime, &b), "evicted");
+    }
+
+    #[test]
+    fn reload_finishing_after_selection_moved_does_not_replace_the_current_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write_gif(dir.path(), "a.gif", 2, 2);
+        let b = write_gif(dir.path(), "b.gif", 3, 2);
+        let mut runtime = SelectAssetRuntime::new(None, PathBuf::new(), dir.path().into());
+        runtime.meta_image_animation_limit_bytes = 2 * 2 * 4 * 2;
+        select(&mut runtime, &a);
+        poll_until(&mut runtime, |runtime, _| animation_state(runtime, &a) == "loaded");
+        select(&mut runtime, &b);
+        poll_until(&mut runtime, |runtime, _| animation_state(runtime, &b) == "loaded");
+
+        select(&mut runtime, &a);
+        assert_eq!(animation_state(&runtime, &a), "reloading");
+        select(&mut runtime, &b);
+        let uploads =
+            poll_until(&mut runtime, |runtime, _| animation_state(runtime, &a) == "loaded");
+
+        assert!(uploads.iter().all(|upload| upload.image.first.width != 2), "stale upload");
+        assert_eq!(runtime.meta_image_source(SelectMetaImageSlot::Stage).as_deref(), Some(&*b));
     }
 
     #[test]
