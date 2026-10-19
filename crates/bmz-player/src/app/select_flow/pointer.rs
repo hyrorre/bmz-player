@@ -121,8 +121,15 @@ impl WinitApp {
         }
         if self.detail_options_active() {
             let snapshot = self.select_snapshot();
-            if let Some(hit) = self.renderer.select_skin_click_hit(&snapshot, x, y) {
-                self.handle_select_skin_click(hit, button, x, y);
+            if let Some(panel) = snapshot.detail_options.as_ref()
+                && let Some(hit) = self.renderer.select_skin_click_hit(&snapshot, x, y)
+                && let SkinClickTarget::Event { event_id, click } = hit.target
+                && select_skin_click_allowed(event_id, button)
+                && let Some(arg) = select_click_event_arg(click, button, hit.rect, x, y)
+            {
+                // Resolve slot events against the exact window used for hit testing,
+                // even if the animation crosses a column boundary during this call.
+                self.execute_detail_options_panel_event(event_id, arg, panel);
             }
             return;
         }

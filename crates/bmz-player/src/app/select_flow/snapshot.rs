@@ -310,6 +310,7 @@ impl WinitApp {
             }
             Some(displayed_rows)
         };
+        let (detail_options, detail_options_scroll) = self.detail_options_frame();
         SelectSnapshot {
             screen_size: [0, 0],
             time: self.select_time(),
@@ -328,8 +329,8 @@ impl WinitApp {
                 .option_panel_off_started_at
                 .map(|started_at| started_at.map(elapsed_since)),
             option_panel: self.select.select_option_panel,
-            detail_options: self.detail_options_snapshot(),
-            detail_options_scroll: self.detail_options_scroll(),
+            detail_options,
+            detail_options_scroll,
             detail_options_closing: self.detail_options_closing_snapshot(),
             chart_count: if self.select.ir_battle.active {
                 battle_choices.len()

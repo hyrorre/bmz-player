@@ -447,7 +447,7 @@ impl WinitApp {
             return;
         }
         if self.detail_options_active() {
-            self.move_detail_options(mov);
+            self.move_detail_options_with_scroll(mov, select_analog_scroll_duration(mov));
             return;
         }
         if self.select.select_option_panel > 1 {

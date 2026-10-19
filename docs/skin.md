@@ -1286,7 +1286,7 @@ v1・Numbers・Closeを宣言します。旧timer 22表示のみを置換し、2
 | 19306 | VALUE_INDEXです。bool/enumの0-based選択肢indexです。number、未取得、候補外値は-1 |
 | 19307 | CHOICE_COUNTです。boolは2、enumは候補数、numberは0 |
 | 19308 / 19309 / 19310 | numberのMIN / MAX / STEPです。他の型は-1 |
-| 19311 | VIEWPORT_STARTです。環状配置の仮想slot 0に対応する0-based位置です。`(CURSOR + ITEM_COUNT - 3 % ITEM_COUNT) % ITEM_COUNT`（0項目時は0） |
+| 19311 | VIEWPORT_STARTです。環状配置の仮想slot 0に対応する0-based位置です。停止時は`(CURSOR + ITEM_COUNT - 3 % ITEM_COUNT) % ITEM_COUNT`（0項目時は0）。移動中は整数列分の残り変位を引いた表示窓に対応します |
 | 19312 | ROW_SLOTSです。v1は7（項目数の上限ではない） |
 
 enumのVALUEは、GAS下限: `0=ASSIST EASY,1=EASY,2=NORMAL`、HS CONFIG:
@@ -1364,12 +1364,13 @@ slot `s=0..6`の基底は`19400 + 10*s`です。各名前空間で次を解決�
 
 空き行・非表示行はnumber=-1、text空、全option=falseです。
 viewportは環状で、項目がある場合に中央slot 3だけselected=trueになります。
-7項目以上ではslot 0..6が選択項目の前後3項目を含み、indexは`(VIEWPORT_START+s)%ITEM_COUNT`です。
+7項目以上ではslot 0..6が表示窓中央の前後3項目を含み、indexは`(VIEWPORT_START+s)%ITEM_COUNT`です。
+停止時の中央はCURSORです。移動中は表示窓が選択先へ追従するため、slot 3とCURSORが異なる場合があります。
 7項目未満では重複表示せず、`3-floor((ITEM_COUNT-1)/2)`からITEM_COUNT個のslotだけvalidにします。
 例えば1項目ならslot 3、2項目ならslot 3と4、3項目ならslot 2..4が有効です。
 配列の末尾で打ち切らず、validと各slotのrefを使います。
 枠外の補助slot 7 / 8も同じ形式で公開します（19470..19489）。7項目を超える場合のみvalidで、
-slot 7は選択項目の4つ前（描画位置はslot -1）、slot 8は4つ後（描画位置はslot 7）です。
+slot 7は表示窓中央の4つ前（描画位置はslot -1）、slot 8は4つ後（描画位置はslot 7）です。
 常にselected=falseです。移動途中の端を途切れさせないため、各側1列を枠外に描画してマスクします。
 ROW_SLOTSは可視枠の数なので7のままです。8項目だけの時は両補助slotが同じ項目を指すが、
 見えるのは移動方向側だけです。7項目以下の補助slotは未取得値を返します。
@@ -1384,8 +1385,11 @@ destinationの`"bmzDetailScroll": [dx, dy]`に1項目分の移動量（skin canv
 列の背景・文字・候補・クリック領域には同じ指定を付け、中央カーソルには付けません。
 列が枠外へ出る部分はスキン側で不透明なマスクを置き、`act:0, clickable:true`等で
 マスクの背後のクリックも消費します（E2のeventフィルターが0を除外する）。
-時間は選曲と同じ低速/高速スクロール設定を使用し、移動中の再入力では高速設定を使います。
-表示位置だけを補間し、ref/option/eventが参照する項目・設定値は入力直後のsnapshotに一致します。
+選曲バーと同じ三次Hermite補間で、追加入力時の表示位置と速度を引き継いで終点速度を0にします。
+ホイール・鍵の単発移動は選曲の低速設定、アナログは1項目120ms・複数項目30msを使います。
+複数列の残り変位も保持し、整数列分をVIEWPORT_STARTへ、小数列分を`bmzDetailScroll`へ反映します。
+選択先のref 19300帯と説明・値変更は入力直後のCURSORを参照し、行ref・行eventは表示窓の項目を参照します。
+クリックは判定に使用したsnapshotの行へ適用するため、移動中も見えている項目を操作できます。
 
 #### 全選択肢セル（横並び表示用の追加API）
 
