@@ -717,7 +717,7 @@ mod tests {
                 profile.sync_active_play_mode();
                 profile.activate_play_mode(mode);
                 let original = profile.play_mode_config(converted_mode);
-                for id in [101, 304, 702] {
+                for id in [crate::select_detail_options::LANE_COVER_ID, 304, 702] {
                     let item = CATALOG.iter().find(|item| item.id == id).unwrap();
                     let before = item.value(&profile);
                     assert!(item.adjust(&mut profile, Some(mode), 1));
@@ -751,14 +751,18 @@ mod tests {
         let mut p = ProfileConfig::new_default("test", "Test", 0);
         p.activate_play_mode(KeyMode::K9);
         let original = toml::to_string(&p.lane).unwrap();
-        assert!(DetailOptionDef::by_id(101).unwrap().select_choice(&mut p, Some(target), 1));
+        assert!(
+            DetailOptionDef::by_id(crate::select_detail_options::LANE_COVER_ID)
+                .unwrap()
+                .select_choice(&mut p, Some(target), 1)
+        );
         let edited = toml::to_string(&p.lane).unwrap();
         p.activate_play_mode(KeyMode::K9);
         assert_eq!(toml::to_string(&p.lane).unwrap(), original);
         let mut loaded: ProfileConfig = toml::from_str(&toml::to_string(&p).unwrap()).unwrap();
         loaded.activate_play_mode(KeyMode::K7);
         assert_eq!(toml::to_string(&loaded.lane).unwrap(), edited);
-        let row = DetailOptionDef::by_id(101).unwrap().row(
+        let row = DetailOptionDef::by_id(crate::select_detail_options::LANE_COVER_ID).unwrap().row(
             &loaded,
             DetailContext {
                 mode: Some(target),

@@ -61,7 +61,7 @@ pub(super) fn event_at(renderer: &Renderer, s: &SelectSnapshot, x: f32, y: f32) 
 }
 
 pub(super) fn switching(from: u8, to: u8, elapsed: i64) -> SelectSnapshot {
-    let mut s = snapshot(AppLocale::Ja, cursor_of(101));
+    let mut s = snapshot(AppLocale::Ja, cursor_of(104));
     if from == 2 {
         s.detail_options_closing = Some(DetailOptionsClosingSnapshot {
             panel: s.detail_options.take().unwrap(),
@@ -140,7 +140,7 @@ fn ecfn_detail_options_all_items_and_scrolling_hits() {
 fn ecfn_detail_options_empty_locked_external_and_inactive_values() {
     let mut renderer = renderer();
     for count in [0, 1, 3, 6] {
-        let mut s = snapshot(AppLocale::Ja, cursor_of(101));
+        let mut s = snapshot(AppLocale::Ja, cursor_of(104));
         let panel = std::sync::Arc::make_mut(s.detail_options.as_mut().unwrap());
         panel.items = panel.items[..count].to_vec().into();
         renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
@@ -305,7 +305,7 @@ fn ecfn_detail_options_parallel_fades_and_single_shade() {
                             Some(tint.a)
                         }
                         DrawCommand::Text { text, style, .. }
-                            if panel == 2 && text == "SUDDEN+" =>
+                            if panel == 2 && text == "LANE COVER" =>
                         {
                             Some(style.color.a)
                         }
@@ -369,7 +369,7 @@ fn ecfn_detail_options_parallel_fades_and_single_shade() {
             .commands
             .iter()
             .filter(|cmd| matches!(cmd,
-        DrawCommand::Text { text, .. } if text == "SUDDEN+"))
+        DrawCommand::Text { text, .. } if text == "LANE COVER"))
             .count(),
         1
     );
@@ -399,7 +399,7 @@ fn ecfn_detail_options_frames_follow_row_categories() {
         _ => panic!("unexpected category {category}"),
     };
     let mut renderer = renderer();
-    let mut cases: Vec<_> = [101, 201, 601, 501]
+    let mut cases: Vec<_> = [104, 201, 601, 501]
         .map(|id| (id, snapshot(AppLocale::Ja, cursor_of(id))))
         .into_iter()
         .collect();
@@ -455,7 +455,7 @@ fn ecfn_detail_options_gpu_previews() {
         renderer.attach_offscreen(bmz_render::renderer::SurfaceSize { width, height }).unwrap();
         let mut scenes = Vec::new();
         for (locale, cursor, scroll) in [
-            (AppLocale::Ja, cursor_of(101), 0.0),
+            (AppLocale::Ja, cursor_of(104), 0.0),
             (AppLocale::En, cursor_of(303), 0.0),
             (AppLocale::Ja, cursor_of(201), 0.0),
             (AppLocale::Ja, cursor_of(304), 0.0),

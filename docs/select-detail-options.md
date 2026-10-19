@@ -36,24 +36,22 @@ E1 hold=通常、E2 hold=Assist、E1+E2 hold=旧詳細で、短押し固定表�
 |1|701 / judge-auto|JUDGE|VisualOffsetAutoAdjust|OFF / ON|profile共通|
 |2|702 / visual-offset|JUDGE|VisualOffsetMs|-500..500 ms、刻み1|キーモード|
 |3|703 / judge-algorithm|JUDGE|JudgeAlgorithm|COMBO / DURATION / LOWEST|profile共通|
-|4|101 / sudden|LANE / HI-SPEED|SuddenEnabled|OFF / ON|キーモード|
-|5|102 / hidden|LANE / HI-SPEED|HiddenEnabled|OFF / ON|キーモード|
-|6|103 / lift|LANE / HI-SPEED|LiftEnabled|OFF / ON|キーモード|
-|7|301 / hs-auto|LANE / HI-SPEED|HispeedAutoAdjust|OFF / ON|キーモード|
-|8|302 / hs-config|LANE / HI-SPEED|HispeedMode|NORMAL / CLASSIC / FLOATING / NORMAL+FLOATING / CLASSIC+FLOATING / LR2|キーモード|
-|9|303 / constant|LANE / HI-SPEED|Constant|OFF / ON|キーモード|
-|10|304 / green-number|LANE / HI-SPEED|TargetGreenNumber|1..6000、刻み1|キーモード|
-|11|201 / gas-bottom|GAUGE|BottomShiftableGauge|ASSIST EASY / EASY / NORMAL|profile共通|
-|12|202 / gas-mode|GAUGE|GaugeAutoShift|OFF / CONTINUE / HARD TO GROOVE / BEST CLEAR / SELECT TO UNDER|profile共通|
-|13|401 / ln-mode|LONG NOTE|LnModePolicy|AUTO(LN/CN/HCN) / FORCE(LN/CN/HCN)|profile共通|
-|14|601 / bga|BGA|BgaMode|ON / AUTO / OFF|profile共通|
-|15|501 / scroll-modifier|ASSIST / MODIFIER|AssistScrollMode|OFF / REMOVE|profile共通|
-|16|502 / ln-modifier|ASSIST / MODIFIER|AssistLongNoteMode|OFF / REMOVE|profile共通|
-|17|503 / mine-modifier|ASSIST / MODIFIER|AssistMineMode|OFF / REMOVE|profile共通|
-|18|504 / expand-judge|ASSIST / MODIFIER|AssistExpandJudge|OFF / ON|profile共通|
-|19|505 / judge-area|ASSIST / MODIFIER|AssistJudgeArea|OFF / ON|profile共通|
-|20|506 / mark-note|ASSIST / MODIFIER|AssistMarkNote|OFF / ON|profile共通|
-|21|507 / bpm-guide|ASSIST / MODIFIER|AssistBpmGuide|OFF / ON|profile共通|
+|4|104 / lane-cover|LANE / HI-SPEED|SuddenEnabled / HiddenEnabled / LiftEnabled|OFF / SUDDEN+ / HIDDEN+ / SUD+ & HID+ / LIFT / LIFT & SUD+ / LIFT & HID+ / ALL|キーモード|
+|5|301 / hs-auto|LANE / HI-SPEED|HispeedAutoAdjust|OFF / ON|キーモード|
+|6|302 / hs-config|LANE / HI-SPEED|HispeedMode|NORMAL / CLASSIC / FLOATING / NORMAL+FLOATING / CLASSIC+FLOATING / LR2|キーモード|
+|7|303 / constant|LANE / HI-SPEED|Constant|OFF / ON|キーモード|
+|8|304 / green-number|LANE / HI-SPEED|TargetGreenNumber|1..6000、刻み1|キーモード|
+|9|201 / gas-bottom|GAUGE|BottomShiftableGauge|ASSIST EASY / EASY / NORMAL|profile共通|
+|10|202 / gas-mode|GAUGE|GaugeAutoShift|OFF / CONTINUE / HARD TO GROOVE / BEST CLEAR / SELECT TO UNDER|profile共通|
+|11|401 / ln-mode|LONG NOTE|LnModePolicy|AUTO(LN/CN/HCN) / FORCE(LN/CN/HCN)|profile共通|
+|12|601 / bga|BGA|BgaMode|ON / AUTO / OFF|profile共通|
+|13|501 / scroll-modifier|ASSIST / MODIFIER|AssistScrollMode|OFF / REMOVE|profile共通|
+|14|502 / ln-modifier|ASSIST / MODIFIER|AssistLongNoteMode|OFF / REMOVE|profile共通|
+|15|503 / mine-modifier|ASSIST / MODIFIER|AssistMineMode|OFF / REMOVE|profile共通|
+|16|504 / expand-judge|ASSIST / MODIFIER|AssistExpandJudge|OFF / ON|profile共通|
+|17|505 / judge-area|ASSIST / MODIFIER|AssistJudgeArea|OFF / ON|profile共通|
+|18|506 / mark-note|ASSIST / MODIFIER|AssistMarkNote|OFF / ON|profile共通|
+|19|507 / bpm-guide|ASSIST / MODIFIER|AssistBpmGuide|OFF / ON|profile共通|
 
 LANEとHI-SPEEDは1つの大分類にまとめ、CATEGORY_IDは1を使います。旧HI-SPEEDの3は欠番です。
 安定IDと保存先は変更していません。
@@ -74,8 +72,10 @@ UI追加に伴ってscore / replay / IRの分類を変えないための範囲�
 既存eventのADD選択は維持します。外部経路で設定されたADD値はそのまま表示し、
 VALUE_INDEX=-1とします。新E2で変更した時だけOFF / REMOVEへ移ります。
 
-SUDDEN/HIDDENは`with_*_enabled`で他方を保持します。LIFTも独立です。OFF時も量は保存します。
-量0でONはONと表示します。選択項目の補助情報で保存量を示します。
+SUDDEN+・HIDDEN+・LIFTは試験的に1項目「LANE COVER」（安定ID 104）へまとめ、8通りの組み合わせから選びます。
+選択肢の番号は1=SUDDEN+、2=HIDDEN+、4=LIFTのビット和で、表示順はOFF、SUDDEN+、HIDDEN+、SUD+ & HID+、
+LIFT、LIFT & SUD+、LIFT & HID+、ALLです。保存先は従来の3つの有効フラグのままで、OFF時も量は保存します。
+補助情報で3つの保存量を示します。旧項目の101〜103は欠番です。
 キーモードはプレイ開始と同じ変換後の設定対象を使い、BATTLEの描画用DPモードと区別します。
 RANDOM MIXの候補抽出とSkin APIのsource modeは変換前の譜面モードを使います。
 設定参照・編集・保存用のmodeとは分離し、実験機能OFFでもこの区別を維持します。
@@ -201,7 +201,7 @@ MARK NOTE、BPM GUIDE、NO MINEを切り替えます。旧名CONSTANTは表示�
 描画は同じ読み取り専用snapshotを使い、7可視行と選択項目の情報を公開します。
 デフォルト選曲スキンでは、この7スロットを横並びの列として描画します。
 各列の下にその項目の全選択肢を縦並びで表示し、編集中の列は「▼」、設定中の値は「●」で
-区別します。21項目のうち選択項目と前後3項目が横へスクロールします。最初の4項目の順序は維持します。
+区別します。19項目のうち選択項目と前後3項目が横へスクロールします。最初の4項目の順序は維持します。
 列見出しのクリックで項目選択、選択肢のクリックで直接設定します。現在と同じ値はno-opとし、
 異なる値へ直接変更しても共通の設定変更処理と副作用は1回だけ通します。
 destination拡張`bmzDetailScroll: [dx,dy]`で同じ補間を適用し、クリック判定も移動後の位置を使います。
@@ -279,7 +279,7 @@ BMZ以外では新部品は何も返さず、旧Assistを表示します。
 ### Luxez-Flat
 
 `select_skinparts/default_detailoptions/parts.lua`を`default_optionpanel`の後、シャッターの前に追加します。
-項目・入力・保存は本体の既存21項目と変更経路を共用し、Luaはsnapshotの描画とeventの配置だけを担当します。
+項目・入力・保存は本体の既存19項目と変更経路を共用し、Luaはsnapshotの描画とeventの配置だけを担当します。
 新規Skin APIやスキン独自の設定値は追加しません。表示順、7K fallback、GASの適用条件も共通です。
 
 7可視列＋補助2列を横に並べ、選択項目を中央へ循環・補間します。幅1920のcanvas内を使い、
@@ -340,7 +340,7 @@ BMZ以外では新部品がnilを返し、元のUIを維持します。
 実験的な詳細オプションがOFFの場合、部品の欠落・例外、BMZ以外では3パネル方式をそのまま使います。
 構築中は配列をコピーして元データを変更せず、途中の失敗で旧Assistだけが消える状態を防ぎます。
 旧timer 22のdestinationのみ置き換え、基本表示拡張適用後の通常パネルと旧サブオプションの定義、
-固定event、ランク表示のruntime callbackは保持します。入力・保存・適用条件は共通21項目の本体処理を使います。
+固定event、ランク表示のruntime callbackは保持します。入力・保存・適用条件は共通19項目の本体処理を使います。
 先に独立ロードする`bmz_select_extensions.lua`は通常パネルの12種類の配置、動的キーモード名、
 FORCEバッジを提供し、experimental OFFでも有効です。一方の部品が欠落・失敗しても他方の拡張は維持します。
 
@@ -392,7 +392,7 @@ snapshot/resolver、viewport、対応宣言・旧skinフォールバックをデ
 2. 「BMZ メニュー → 選曲 → 実験的な詳細オプション」をONにします。再読込後、E1短押し（200ms未満）で通常が固定表示され、次のE1押下で閉じることを確認します。
 3. E1を200ms以上保持して離すと閉じること、固定中 / 保持中どちらでもE2を押すたびに通常↔詳細が切り替わり、E2解放では変わらないことを確認します。
 4. E2だけでは開かないこと、E2を保持してからE1を押しても通常から開くこと、同時押し・解放順・OSリピート・フォーカス喪失で暴発しないことを確認します。
-5. スクラッチ / 左右で21項目を一周し、選択式を奇数 / 下と偶数 / 上で変更します。SP/DPの奇偶、9Kの独立矢印、マウスも確認します。選択項目は中央へ循環・補間します。
+5. スクラッチ / 左右で19項目を一周し、選択式を奇数 / 下と偶数 / 上で変更します。SP/DPの奇偶、9Kの独立矢印、マウスも確認します。選択項目は中央へ循環・補間します。
 6. 緑数字と表示オフセットで奇数鍵 / 上が増加、偶数鍵 / 下が減少することを確認します。400ms後から60ms間隔でリピートし、端で停止し、項目を移動すると止まること、＋ / −ボタンと旧クリック領域がないことも確認します。判定表示オフセットにはFAST / SLOWに応じた調整方向を表示します。
 7. 保存量を持つSUDDEN/HIDDEN/LIFTを独立にOFF/ONにします。GAS OFF中に下限を編集し、同じパネルでGAS方式を変えます。BGA、判定自動調整、アルゴリズム、LN MODEも変更し、次のプレイ・再起動後に値が戻らないことを確認します。
 8. キーモード未解決行では7K、解決済み行では譜面変換後のモードを編集し、他モードが変わらないことを確認します。スキン表示・選曲スコア・リプレイ対象も確認します。

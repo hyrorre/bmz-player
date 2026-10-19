@@ -48,7 +48,7 @@ fn close(s: &mut SelectSnapshot, next: u8, elapsed: i64) {
 }
 
 fn switching(from: u8, to: u8, elapsed: i64) -> SelectSnapshot {
-    let mut s = snapshot(AppLocale::Ja, cursor_of(101));
+    let mut s = snapshot(AppLocale::Ja, cursor_of(104));
     if from == 2 {
         close(&mut s, to, elapsed);
     } else if to != 2 {
@@ -122,7 +122,7 @@ fn luxe_detail_options_uses_existing_artwork_and_fonts_with_complete_labels() {
         )
         .unwrap();
         for locale in [AppLocale::Ja, AppLocale::En] {
-            let s = snapshot(locale, cursor_of(101));
+            let s = snapshot(locale, cursor_of(104));
             for row in s.detail_options.unwrap().items.iter() {
                 for label in [
                     &row.label,
@@ -238,7 +238,7 @@ fn luxe_detail_options_uses_existing_artwork_and_fonts_with_complete_labels() {
     let mut renderer = Renderer::default();
     install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
         .unwrap();
-    renderer.prepare_scene(AppSceneSnapshot::Select(snapshot(AppLocale::Ja, cursor_of(101))));
+    renderer.prepare_scene(AppSceneSnapshot::Select(snapshot(AppLocale::Ja, cursor_of(104))));
     // Both rounded caps of the centre column's first button are really drawn.
     for x in [831.0 + 16.0, 831.0 + 16.0 + 226.0 - 15.0] {
         assert!(
@@ -401,7 +401,7 @@ fn luxe_detail_options_frames_follow_row_categories() {
         5 => 607.0,
         _ => panic!("unexpected category {category}"),
     };
-    let mut cases: Vec<_> = [101, 201, 601, 501]
+    let mut cases: Vec<_> = [104, 201, 601, 501]
         .map(|id| (id, snapshot(AppLocale::Ja, cursor_of(id))))
         .into_iter()
         .collect();
@@ -416,7 +416,7 @@ fn luxe_detail_options_frames_follow_row_categories() {
 fn luxe_detail_options_handles_empty_locked_inactive_and_external_rows() {
     let mut renderer = renderer();
     for count in [0, 1, 3, 6] {
-        let mut s = snapshot(AppLocale::Ja, cursor_of(101));
+        let mut s = snapshot(AppLocale::Ja, cursor_of(104));
         let panel = std::sync::Arc::make_mut(s.detail_options.as_mut().unwrap());
         panel.items = panel.items[..count].to_vec().into();
         renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
@@ -481,7 +481,7 @@ fn luxe_detail_options_enter_exit_and_other_panels_animate_together() {
                 };
                 let (actual, expected) = if panel == 2 {
                     let x = commands.iter().find_map(|cmd| match cmd {
-                        DrawCommand::Text { text, origin, .. } if text == "SUDDEN+" => {
+                        DrawCommand::Text { text, origin, .. } if text == "LANE COVER" => {
                             Some(origin.x * 1920.0)
                         }
                         _ => None,
@@ -636,7 +636,7 @@ fn luxe_detail_options_gpu_previews() {
         renderer.attach_offscreen(bmz_render::renderer::SurfaceSize { width, height }).unwrap();
         let mut scenes = Vec::new();
         for (locale, cursor, scroll) in [
-            (AppLocale::Ja, cursor_of(101), 0.0),
+            (AppLocale::Ja, cursor_of(104), 0.0),
             (AppLocale::En, cursor_of(303), 0.0),
             (AppLocale::Ja, cursor_of(201), 0.0),
             (AppLocale::Ja, cursor_of(401), 0.0),
@@ -773,9 +773,9 @@ fn luxe_detail_options_gpu_glow_reaches_neighboring_button_corners() {
             })
             .unwrap();
         let scene = |index: i64| {
-            let mut s = snapshot(AppLocale::Ja, cursor_of(101));
+            let mut s = snapshot(AppLocale::Ja, cursor_of(104));
             let panel = std::sync::Arc::make_mut(s.detail_options.as_mut().unwrap());
-            let row = &mut std::sync::Arc::make_mut(&mut panel.items)[cursor_of(101)];
+            let row = &mut std::sync::Arc::make_mut(&mut panel.items)[cursor_of(104)];
             row.value_index = index;
             row.value = if index < 0 { -999 } else { row.choices[index as usize].value };
             s

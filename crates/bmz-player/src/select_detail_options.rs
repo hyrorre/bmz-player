@@ -85,14 +85,19 @@ const fn number(
     def
 }
 
+/// One item for SUDDEN+ / HIDDEN+ / LIFT. Its choice index is a bit set:
+/// 1 = SUDDEN+, 2 = HIDDEN+, 4 = LIFT. The three toggles keep their own amounts.
+pub const LANE_COVER_ID: i64 = 104;
+const LANE_COVER_CHOICES: [&str; 8] =
+    ["OFF", "SUDDEN+", "HIDDEN+", "SUD+ & HID+", "LIFT", "LIFT & SUD+", "LIFT & HID+", "ALL"];
+
 /// Display order. Category IDs are stable: LANE and HI-SPEED share 1 and 3 is retired.
+/// The separate SUDDEN+ / HIDDEN+ / LIFT items (101..103) are retired in favour of 104.
 pub const CATALOG: &[DetailOptionDef] = &[
     item(701, "judge-auto", 7, SettingsEntryId::VisualOffsetAutoAdjust, false, 0),
     number(702, "visual-offset", 7, SettingsEntryId::VisualOffsetMs, -500, 500),
     item(703, "judge-algorithm", 7, SettingsEntryId::JudgeAlgorithm, false, 3),
-    item(101, "sudden", 1, SettingsEntryId::SuddenEnabled, true, 0),
-    item(102, "hidden", 1, SettingsEntryId::HiddenEnabled, true, 0),
-    item(103, "lift", 1, SettingsEntryId::LiftEnabled, true, 0),
+    item(LANE_COVER_ID, "lane-cover", 1, SettingsEntryId::SuddenEnabled, true, 8),
     item(301, "hs-auto", 1, SettingsEntryId::HispeedAutoAdjust, true, 0),
     item(302, "hs-config", 1, SettingsEntryId::HispeedMode, true, 6),
     item(303, "constant", 1, SettingsEntryId::Constant, true, 0),
@@ -147,6 +152,11 @@ impl DetailOptionDef {
     }
     pub fn value(self, p: &ProfileConfig) -> i64 {
         use SettingsEntryId::*;
+        if self.id == LANE_COVER_ID {
+            return i64::from(p.play.lane_effect.sudden_enabled())
+                | i64::from(p.play.lane_effect.hidden_enabled()) << 1
+                | i64::from(p.lane.lift_enabled) << 2;
+        }
         match self.setting {
             SuddenEnabled => i64::from(p.play.lane_effect.sudden_enabled()),
             HiddenEnabled => i64::from(p.play.lane_effect.hidden_enabled()),
@@ -238,6 +248,13 @@ impl DetailOptionDef {
         if self.value(p) == next {
             return false;
         }
+        if self.id == LANE_COVER_ID {
+            // Same fields as the three registry toggles; their amounts stay untouched.
+            p.play.lane_effect = LaneEffectConfig::from_enabled(next & 1 != 0, next & 2 != 0);
+            p.lane.lift_enabled = next & 4 != 0;
+            p.sync_active_play_mode();
+            return true;
+        }
         if matches!(self.kind, DetailValueKind::Number { .. }) {
             let delta = (next - self.value(p)) as i32;
             let changed = adjust_settings_value(p, self.setting, delta);
@@ -268,6 +285,9 @@ impl DetailOptionDef {
         };
         if self.kind == DetailValueKind::Bool {
             return text.text(if index == 0 { "detail-options-off" } else { "detail-options-on" });
+        }
+        if self.id == LANE_COVER_ID {
+            return LANE_COVER_CHOICES[index].into();
         }
         match self.setting {
             SettingsEntryId::GaugeAutoShift => {
@@ -348,6 +368,13 @@ impl DetailOptionDef {
             format_settings_value(p, self.setting)
         };
         let auxiliary = match self.setting {
+            _ if self.id == LANE_COVER_ID && editable => format!(
+                "{}: SUDDEN+ {} / HIDDEN+ {} / LIFT {} (/ 1000)",
+                text.text("detail-options-saved-amount"),
+                p.lane.sudden,
+                p.lane.hidden,
+                p.lane.lift
+            ),
             SettingsEntryId::SuddenEnabled
             | SettingsEntryId::HiddenEnabled
             | SettingsEntryId::LiftEnabled
@@ -399,6 +426,7 @@ impl DetailOptionDef {
             value_label,
             category: text.text(&format!("detail-options-category-{}", self.category)),
             description: text.text(match self.setting {
+                _ if self.id == LANE_COVER_ID => "detail-options-lane-cover-description",
                 SettingsEntryId::AssistScrollMode => "detail-options-scroll-description",
                 SettingsEntryId::AssistLongNoteMode => "detail-options-ln-description",
                 SettingsEntryId::AssistMineMode => "detail-options-mine-description",
@@ -439,7 +467,7 @@ mod tests {
         assert!(CATALOG.len() > 7);
         assert_eq!(
             CATALOG[..4].iter().map(|item| item.id).collect::<Vec<_>>(),
-            [701, 702, 703, 101]
+            [701, 702, 703, LANE_COVER_ID]
         );
         let ids: std::collections::HashSet<_> = CATALOG.iter().map(|item| item.id).collect();
         assert_eq!(ids.len(), CATALOG.len());
@@ -497,7 +525,7 @@ mod tests {
     }
 
     #[test]
-    fn independent_lane_toggles_preserve_amount_and_other_modes() {
+    fn lane_cover_combines_toggles_and_preserves_amounts_and_other_modes() {
         let mut p = profile();
         let k7 = p.play_mode_config(KeyMode::K7);
         p.activate_play_mode(KeyMode::K14);
@@ -506,31 +534,40 @@ mod tests {
         p.lane.hidden = 0;
         p.lane.lift = 120;
         p.lane.lift_enabled = false;
-        for item in [101, 102, 103].map(def) {
-            item.adjust(&mut p, Some(KeyMode::K14), 1);
+        let item = def(LANE_COVER_ID);
+        let context = DetailContext {
+            mode: Some(KeyMode::K14),
+            gas: GaugeAutoShiftConfig::Off,
+            practice: false,
+            course: false,
+        };
+        let text = Localizer::new(AppLocale::En);
+        let labels: Vec<_> =
+            item.row(&p, context, &text).choices.iter().map(|c| c.label.clone()).collect();
+        assert_eq!(labels, LANE_COVER_CHOICES);
+        // Choice index is the bit set 1 = SUDDEN+, 2 = HIDDEN+, 4 = LIFT.
+        for index in [1, 2, 3, 4, 5, 6, 7, 0] {
+            assert!(item.select_choice(&mut p, Some(KeyMode::K14), index));
+            assert_eq!(p.play.lane_effect.sudden_enabled(), index & 1 != 0);
+            assert_eq!(p.play.lane_effect.hidden_enabled(), index & 2 != 0);
+            assert_eq!(p.lane.lift_enabled, index & 4 != 0);
+            let row = item.row(&p, context, &text);
+            assert_eq!(
+                (row.value, row.value_label.as_str()),
+                (index as i64, LANE_COVER_CHOICES[index])
+            );
         }
-        assert!(p.play.lane_effect.sudden_enabled());
-        assert!(p.play.lane_effect.hidden_enabled());
-        assert!(p.lane.lift_enabled);
-        assert_eq!(
-            def(102)
-                .row(
-                    &p,
-                    DetailContext {
-                        mode: Some(KeyMode::K14),
-                        gas: GaugeAutoShiftConfig::Off,
-                        practice: false,
-                        course: false
-                    },
-                    &Localizer::new(AppLocale::En)
-                )
-                .value_label,
-            "ON"
+        assert!(!item.select_choice(&mut p, Some(KeyMode::K14), 0));
+        // Stepping cycles through all eight combinations in order.
+        for (direction, expected) in
+            [(1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7), (1, 0), (-1, 7)]
+        {
+            assert!(item.adjust(&mut p, Some(KeyMode::K14), direction));
+            assert_eq!(item.value(&p), expected);
+        }
+        assert!(
+            item.row(&p, context, &text).auxiliary.contains("SUDDEN+ 300 / HIDDEN+ 0 / LIFT 120")
         );
-        def(101).adjust(&mut p, Some(KeyMode::K14), -1);
-        assert!(p.play.lane_effect.hidden_enabled());
-        def(102).adjust(&mut p, Some(KeyMode::K14), -1);
-        def(103).adjust(&mut p, Some(KeyMode::K14), -1);
         assert_eq!((p.lane.sudden, p.lane.hidden, p.lane.lift), (300, 0, 120));
         assert_eq!(p.play_mode_config(KeyMode::K7), k7);
         let saved = toml::to_string(&p).unwrap();
@@ -667,7 +704,7 @@ mod tests {
             assert!(!item.select_choice(&mut p, context.mode, usize::MAX));
         }
         let mut p = profile();
-        assert!(!def(101).select_choice(&mut p, None, 1));
+        assert!(!def(LANE_COVER_ID).select_choice(&mut p, None, 1));
         p.play.assist.scroll_mode = AssistScrollMode::Add;
         assert!(
             DetailOptionDef::for_setting(SettingsEntryId::AssistScrollMode)

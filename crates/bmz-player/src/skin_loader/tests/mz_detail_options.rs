@@ -68,7 +68,7 @@ fn close_panel(s: &mut SelectSnapshot, elapsed_ms: i64) {
 }
 
 fn switching_panel(from: u8, to: u8, elapsed: i64) -> SelectSnapshot {
-    let mut s = snapshot(AppLocale::Ja, cursor_of(101));
+    let mut s = snapshot(AppLocale::Ja, cursor_of(104));
     if from == 2 {
         close_panel(&mut s, elapsed);
     } else if to != 2 {
@@ -117,7 +117,7 @@ fn mz_detail_options_switch_plays_both_exit_and_entrance_and_routes_current_pane
             for (panel, entering) in [(from, false), (to, true)] {
                 let (actual, expected) = if panel == 2 {
                     let x = commands.iter().find_map(|cmd| match cmd {
-                        DrawCommand::Text { text, origin, .. } if text == "SUDDEN+" => {
+                        DrawCommand::Text { text, origin, .. } if text == "LANE COVER" => {
                             Some(origin.x * 1920.0)
                         }
                         _ => None,
@@ -178,7 +178,7 @@ fn mz_detail_options_exit_keeps_labels_and_scroll_but_blocks_all_clicks() {
     let mut renderer = renderer();
     for locale in [AppLocale::Ja, AppLocale::En] {
         for scroll in [-0.5, 0.0, 0.5] {
-            let mut s = snapshot(locale, cursor_of(101));
+            let mut s = snapshot(locale, cursor_of(104));
             s.detail_options_scroll = scroll;
             close_panel(&mut s, 0);
             for elapsed in [0, 75, 150, 225, 299, 300, 500] {
@@ -186,7 +186,7 @@ fn mz_detail_options_exit_keeps_labels_and_scroll_but_blocks_all_clicks() {
                 renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
                 let commands = &renderer.last_plan().unwrap().commands;
                 let x = commands.iter().find_map(|cmd| match cmd {
-                    DrawCommand::Text { text, origin, .. } if text == "SUDDEN+" => {
+                    DrawCommand::Text { text, origin, .. } if text == "LANE COVER" => {
                         Some(origin.x * 1920.0)
                     }
                     _ => None,
@@ -217,7 +217,7 @@ fn mz_detail_options_exit_keeps_labels_and_scroll_but_blocks_all_clicks() {
                 s.option_panel = panel;
                 renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
                 assert!(renderer.last_plan().unwrap().commands.iter().any(|cmd| matches!(cmd,
-                    DrawCommand::Text { text, .. } if text == "SUDDEN+")));
+                    DrawCommand::Text { text, .. } if text == "LANE COVER")));
             }
         }
     }
@@ -225,7 +225,7 @@ fn mz_detail_options_exit_keeps_labels_and_scroll_but_blocks_all_clicks() {
 
 #[test]
 fn mz_detail_options_closing_data_requires_explicit_opt_in() {
-    let mut s = snapshot(AppLocale::Ja, cursor_of(101));
+    let mut s = snapshot(AppLocale::Ja, cursor_of(104));
     close_panel(&mut s, 100);
     let mut decoded = detail_options::decode_experimental(&skin_path(), SkinKind::Select).unwrap();
     decoded.document.bmz_detail_options_close = false;
@@ -234,7 +234,7 @@ fn mz_detail_options_closing_data_requires_explicit_opt_in() {
         .unwrap();
     renderer.prepare_scene(AppSceneSnapshot::Select(s));
     assert!(!renderer.last_plan().unwrap().commands.iter().any(|cmd| matches!(cmd,
-        DrawCommand::Text { text, .. } if text == "SUDDEN+")));
+        DrawCommand::Text { text, .. } if text == "LANE COVER")));
 }
 
 #[test]
@@ -259,7 +259,7 @@ fn mz_detail_options_reuses_option_artwork_and_version_font() {
     // Keep the exact snapshot strings, including LN MODE parentheses that the
     // version atlas lacks. Only these two glyphs use the existing profile atlas.
     for locale in [AppLocale::Ja, AppLocale::En] {
-        let s = snapshot(locale, cursor_of(101));
+        let s = snapshot(locale, cursor_of(104));
         for row in s.detail_options.unwrap().items.iter() {
             for choice in row.choices.iter() {
                 for c in choice.label.chars() {
@@ -304,7 +304,7 @@ fn mz_detail_options_reuses_option_artwork_and_version_font() {
 #[test]
 fn mz_detail_options_entrance_uses_legacy_easing_and_moving_hit_regions() {
     let mut renderer = renderer();
-    let mut s = snapshot(AppLocale::Ja, cursor_of(101));
+    let mut s = snapshot(AppLocale::Ja, cursor_of(104));
     for elapsed in [0, 75, 150, 225, 300, 500] {
         s.option_panel_time = TimeUs(elapsed * 1000);
         renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
@@ -314,7 +314,7 @@ fn mz_detail_options_entrance_uses_legacy_easing_and_moving_hit_regions() {
         let x = commands
             .iter()
             .find_map(|cmd| match cmd {
-                DrawCommand::Text { text, origin, .. } if text == "SUDDEN+" => {
+                DrawCommand::Text { text, origin, .. } if text == "LANE COVER" => {
                     Some(origin.x * 1920.0)
                 }
                 _ => None,
@@ -432,7 +432,7 @@ fn mz_detail_options_frames_follow_row_categories() {
         5 => 692.0,
         _ => panic!("unexpected category {category}"),
     };
-    let mut cases: Vec<_> = [101, 201, 601, 501]
+    let mut cases: Vec<_> = [104, 201, 601, 501]
         .map(|id| (id, snapshot(AppLocale::Ja, cursor_of(id))))
         .into_iter()
         .collect();
@@ -447,7 +447,7 @@ fn mz_detail_options_frames_follow_row_categories() {
 fn mz_detail_options_small_catalogue_inactive_locked_and_external_values() {
     let mut renderer = renderer();
     for count in [0, 1, 3, 6] {
-        let mut s = snapshot(AppLocale::Ja, cursor_of(101));
+        let mut s = snapshot(AppLocale::Ja, cursor_of(104));
         let panel = std::sync::Arc::make_mut(s.detail_options.as_mut().unwrap());
         panel.items = panel.items[..count].to_vec().into();
         renderer.prepare_scene(AppSceneSnapshot::Select(s.clone()));
@@ -571,23 +571,23 @@ fn mz_detail_options_gpu_previews() {
         renderer.set_default_font_search_paths(vec![test_app_paths().resource_dir.join("fonts")]);
         renderer.attach_offscreen(bmz_render::renderer::SurfaceSize { width, height }).unwrap();
         for (locale, cursor, scroll, elapsed) in [
-            (AppLocale::Ja, cursor_of(101), 0.0, 500),
+            (AppLocale::Ja, cursor_of(104), 0.0, 500),
             (AppLocale::En, cursor_of(303), 0.0, 500),
             (AppLocale::Ja, cursor_of(201), 0.0, 500),
             (AppLocale::Ja, cursor_of(304), 0.0, 500),
             (AppLocale::Ja, cursor_of(702), 0.0, 500),
             (AppLocale::En, cursor_of(702), 0.0, 500),
             (AppLocale::En, cursor_of(501), -0.5, 500),
-            (AppLocale::Ja, cursor_of(101), 0.5, 500),
-            (AppLocale::Ja, cursor_of(101), 0.0, 0),
-            (AppLocale::Ja, cursor_of(101), 0.0, 75),
-            (AppLocale::Ja, cursor_of(101), 0.0, 150),
-            (AppLocale::Ja, cursor_of(101), 0.0, 225),
-            (AppLocale::Ja, cursor_of(101), 0.0, -1),
-            (AppLocale::Ja, cursor_of(101), 0.0, -76),
+            (AppLocale::Ja, cursor_of(104), 0.5, 500),
+            (AppLocale::Ja, cursor_of(104), 0.0, 0),
+            (AppLocale::Ja, cursor_of(104), 0.0, 75),
+            (AppLocale::Ja, cursor_of(104), 0.0, 150),
+            (AppLocale::Ja, cursor_of(104), 0.0, 225),
+            (AppLocale::Ja, cursor_of(104), 0.0, -1),
+            (AppLocale::Ja, cursor_of(104), 0.0, -76),
             (AppLocale::En, cursor_of(303), 0.0, -151),
-            (AppLocale::Ja, cursor_of(101), 0.5, -226),
-            (AppLocale::Ja, cursor_of(101), 0.0, -301),
+            (AppLocale::Ja, cursor_of(104), 0.5, -226),
+            (AppLocale::Ja, cursor_of(104), 0.0, -301),
         ] {
             let mut s = snapshot(locale, cursor);
             s.detail_options_scroll = scroll;

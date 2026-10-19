@@ -125,7 +125,7 @@ pub(super) fn assert_number_values_unselected(
     let mut renderer = Renderer::default();
     install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
         .unwrap();
-    for (id, highlighted) in [(304, false), (702, false), (101, true)] {
+    for (id, highlighted) in [(304, false), (702, false), (104, true)] {
         let s =
             SelectSnapshot { time: TimeUs(2_000_000), ..snapshot(AppLocale::Ja, cursor_of(id)) };
         renderer.prepare_scene(AppSceneSnapshot::Select(s));
@@ -402,7 +402,7 @@ fn detail_carousel_draw_and_click_positions_follow_the_same_animation() {
     let decoded = detail_options::decode_experimental(&path, SkinKind::Select).unwrap();
     install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
         .unwrap();
-    for cursor in [cursor_of(101), cursor_of(501)] {
+    for cursor in [cursor_of(104), cursor_of(501)] {
         let mut s = snapshot(AppLocale::En, cursor);
         let selected_label = s.detail_options.as_ref().unwrap().selected().unwrap().label.clone();
         let mut rest_x = 0.0;
@@ -475,11 +475,11 @@ fn detail_options_gpu_previews() {
                 .set_default_font_search_paths(vec![test_app_paths().resource_dir.join("fonts")]);
             renderer.attach_offscreen(bmz_render::renderer::SurfaceSize { width, height }).unwrap();
             for (locale, cursor, scroll) in [
-                (AppLocale::Ja, cursor_of(101), 0.0),
+                (AppLocale::Ja, cursor_of(104), 0.0),
                 (AppLocale::Ja, cursor_of(702), 0.0),
                 (AppLocale::En, cursor_of(702), 0.0),
                 (AppLocale::En, cursor_of(501), 0.0),
-                (AppLocale::Ja, cursor_of(101), 0.5),
+                (AppLocale::Ja, cursor_of(104), 0.5),
                 (AppLocale::En, cursor_of(501), -0.5),
             ] {
                 let mut s = snapshot(locale, cursor);

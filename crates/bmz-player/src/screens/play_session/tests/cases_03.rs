@@ -532,13 +532,15 @@ fn detail_options_survive_save_reload_and_next_play() {
     profile.lane.lift = 120;
     profile.lane.lift_enabled = false;
     profile.normalize_play_mode_configs();
-    for setting in [
-        SettingsEntryId::SuddenEnabled,
-        SettingsEntryId::HiddenEnabled,
-        SettingsEntryId::LiftEnabled,
-        SettingsEntryId::Constant,
-        SettingsEntryId::BottomShiftableGauge,
-    ] {
+    // LANE COVER "ALL" turns on SUDDEN+, HIDDEN+ and LIFT together.
+    assert!(
+        DetailOptionDef::by_id(crate::select_detail_options::LANE_COVER_ID).unwrap().select_choice(
+            &mut profile,
+            Some(KeyMode::K7),
+            7
+        )
+    );
+    for setting in [SettingsEntryId::Constant, SettingsEntryId::BottomShiftableGauge] {
         assert!(DetailOptionDef::for_setting(setting).unwrap().adjust(
             &mut profile,
             Some(KeyMode::K7),

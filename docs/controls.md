@@ -136,7 +136,7 @@ E1 hold＝通常、E2 hold＝アシスト、E1+E2 hold＝詳細の3パネル方�
 「BMZ メニュー → 選曲 → 実験的な詳細オプション」は既定でOFFです。
 ONにすると、`bmzDetailOptions: 1`と`bmzDetailOptionsNumbers: true`で対応を宣言したスキン（default、mz-select、Luxez-Flat、拡張済みのADFX02 / ECFN）では、通常 / 詳細の2パネルに切り替わります。
 OFFの場合、対応していないスキン、スキンがない場合は、上の3パネル方式で操作します。
-全21項目・スコープ・適用条件は[詳細プレイオプション](select-detail-options.md)を参照してください。
+全19項目・スコープ・適用条件は[詳細プレイオプション](select-detail-options.md)を参照してください。
 
 | 操作 | 動作 |
 | --- | --- |
