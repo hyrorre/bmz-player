@@ -16,3 +16,14 @@
 38 ignored（別途startup 2 ignored）。制限環境では一時ファイル・localhost等で失敗したため停止し、
 通常権限で再実行して成功した。ログ: `.local/client-refactor-1-tests-unrestricted.log`。
 実画面・実演奏・各OS/backendの確認は未実施。性能の改善量は計測していない。
+
+## 2. IRランキング取得の共通化
+
+- 単曲・コースのクエリ型とprovider別通信を`ir/ranking.rs`へ移動した。
+  Select/Resultは同じコース取得処理を呼び、画面側にはdebounce、世代、cache、
+  submission attemptと表示用変換を残した。
+- provider別の認証要否、hash、取得件数、scope、rule/LN条件は維持する。
+- 既存の通信・認証・古い応答破棄・コース表示テストを利用する。
+
+検証: fmt、check、all-targets Clippy成功。IR関連419 test成功。
+ログ: `.local/client-refactor-2-tests.log`。実サーバー通信は未実施。

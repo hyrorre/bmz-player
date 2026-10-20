@@ -9,6 +9,7 @@ rianIRとの互換は[rianIR互換プロバイダー](rian-ir.md)、アシスト
 - 公式IRサーバーは、Nuxt + NuxtHub DB（Cloudflare D1）/ Drizzle ORMで実装しています。リプレイの本体はR2（NuxtHub blob）に保存します。
 - BMZ Playerは公式IR APIに直接依存せず、IRごとのprovider実装を通して送信・取得します。公式IRもrianIR・BMS-IRも、同じqueueとproviderの仕組みで扱います。
 - スコアは有効なすべてのIRへ送ります。ランキング・ライバル・難易度表の取得とIRページを開く操作は、primary providerだけで行います。
+- クライアントの単曲・コースランキング通信は`ir/ranking.rs`に集約し、SelectとResultで共有します。画面ごとのキャッシュ・取得タイミング・表示状態は各画面で管理します。
 - 譜面はSHA-256を主キーにします。MD5はbeatoraja系との互換と外部IRとの連携のために保持します。
 - ランキングの主軸はEXスコアです。
 - スコアを分ける単位（score identity）は`chart_sha256` / `ln_policy` / `double_option` / `rule_mode` / `scoring`です。`gauge`はプレイ設定・表示用に保存しますが、ランキングを分ける条件にはしません。

@@ -630,134 +630,23 @@ pub(super) async fn fetch_result_ranking(
             if scope != IrRankingScope::Global {
                 anyhow::bail!("course IR ranking supports global scope only");
             }
-            if crate::ir::rian_ir::is_rian_ir_provider(&query.provider) {
-                return crate::ir::rian_ir::RianIrClient::new(&query.base_url)?
-                    .fetch_course_ranking(
-                        rian_course_hash_v1,
-                        crate::ir::rian_ir::body_for_rule_mode(*rule_mode),
-                        crate::ir::rian_ir::RIAN_IR_RANKING_LIMIT,
-                    )
-                    .await
-                    .map(|ranking| course_ranking_to_result_ir_ranking(&ranking));
-            }
-            if crate::ir::bms_ir::is_bms_ir_provider(&query.provider) {
-                let credentials = ensure_fresh_credentials(
-                    &query.profile_root,
-                    &query.provider,
-                    &query.base_url,
-                    now_unix_seconds(),
-                )
-                .await?;
-                return crate::ir::bms_ir::BmsIrClient::new(&query.base_url)?
-                    .fetch_course_ranking(
-                        course_hash,
-                        bms_ir_course_key.as_deref().unwrap_or(""),
-                        &IrCourseRankingRequest {
-                            gauge: gauge.clone(),
-                            ln_policy: ln_policy.clone(),
-                            limit: 20,
-                        },
-                        *rule_mode,
-                        &credentials.account_id,
-                        &credentials.access_token,
-                    )
-                    .await
-                    .map(|ranking| course_ranking_to_result_ir_ranking(&ranking));
-            }
-            let client = BmzOfficialIrClient::anonymous(&query.base_url)?;
-            let ranking = client
-                .fetch_course_ranking(
-                    course_hash,
-                    &IrCourseRankingRequest {
-                        gauge: gauge.clone(),
-                        ln_policy: ln_policy.clone(),
-                        limit: 20,
-                    },
-                )
-                .await?;
+            let ranking = crate::ir::ranking::fetch_course_ranking(
+                &query.profile_root,
+                &query.provider,
+                &query.base_url,
+                &crate::ir::ranking::CourseRankingTarget {
+                    course_hash: course_hash.clone(),
+                    rian_course_hash_v1: rian_course_hash_v1.clone(),
+                    bms_ir_course_key: bms_ir_course_key.clone(),
+                    gauge: gauge.clone(),
+                    ln_policy: ln_policy.clone(),
+                    rule_mode: *rule_mode,
+                },
+            )
+            .await?;
             Ok(course_ranking_to_result_ir_ranking(&ranking))
         }
     }
-}
-
-pub(crate) async fn fetch_ranking(
-    query: &ResultIrQuery,
-    scope: IrRankingScope,
-) -> anyhow::Result<IrRankingResult> {
-    let limit = result_ranking_limit(&query.provider);
-    fetch_ranking_with_limit(query, scope, limit).await
-}
-
-pub(super) fn result_ranking_limit(provider: &str) -> u32 {
-    if crate::ir::rian_ir::is_rian_ir_provider(provider) {
-        crate::ir::rian_ir::RIAN_IR_RANKING_LIMIT
-    } else {
-        crate::ir::types::default_ranking_limit()
-    }
-}
-
-pub(crate) async fn fetch_ranking_with_limit(
-    query: &ResultIrQuery,
-    scope: IrRankingScope,
-    limit: u32,
-) -> anyhow::Result<IrRankingResult> {
-    let now = now_unix_seconds();
-    if crate::ir::rian_ir::is_rian_ir_provider(&query.provider) {
-        let credentials =
-            ensure_fresh_credentials(&query.profile_root, &query.provider, &query.base_url, now)
-                .await
-                .ok();
-        return crate::ir::rian_ir::RianIrClient::new(&query.base_url)?
-            .fetch_ranking(
-                &query.chart_sha256_hex,
-                crate::ir::rian_ir::body_for_rule_mode(query.rule_mode),
-                scope,
-                limit.min(crate::ir::rian_ir::RIAN_IR_RANKING_LIMIT),
-                credentials.as_ref().map(|credentials| credentials.account_id.as_str()),
-            )
-            .await;
-    }
-    if crate::ir::bms_ir::is_bms_ir_provider(&query.provider) {
-        let credentials =
-            ensure_fresh_credentials(&query.profile_root, &query.provider, &query.base_url, now)
-                .await?;
-        return crate::ir::bms_ir::BmsIrClient::new(&query.base_url)?
-            .fetch_ranking(
-                &query.chart_sha256_hex,
-                &IrRankingRequest {
-                    scope,
-                    ln_policy: query.ln_policy.as_str().to_string(),
-                    double_option: query.double_option,
-                    rule_mode: query.rule_mode,
-                    limit,
-                    offset: 0,
-                },
-                &credentials.account_id,
-                &credentials.access_token,
-            )
-            .await;
-    }
-    let mut client = BmzOfficialIrClient::anonymous(&query.base_url)?;
-    // self / rivals scope は認証必須。global は匿名でも可。
-    match ensure_fresh_credentials(&query.profile_root, &query.provider, &query.base_url, now).await
-    {
-        Ok(credentials) => client.set_access_token(credentials.access_token),
-        Err(error) if scope != IrRankingScope::Global => return Err(error),
-        Err(_) => {}
-    }
-    client
-        .fetch_ranking(
-            &query.chart_sha256_hex,
-            &IrRankingRequest {
-                scope,
-                ln_policy: query.ln_policy.as_str().to_string(),
-                double_option: query.double_option,
-                rule_mode: query.rule_mode,
-                limit,
-                offset: 0,
-            },
-        )
-        .await
 }
 
 pub(super) fn now_unix_seconds() -> i64 {

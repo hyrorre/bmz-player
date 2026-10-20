@@ -19,26 +19,23 @@ pub(super) fn spawn_fetch(
     tracing::debug!(chart = %query.chart_sha256_hex, "fetching select IR ranking");
     tokio::spawn(async move {
         let result = async {
-            let global = crate::screens::result_ir::fetch_ranking_with_limit(
-                &query,
-                IrRankingScope::Global,
-                200,
-            )
-            .await?;
+            let global =
+                crate::ir::ranking::fetch_ranking_with_limit(&query, IrRankingScope::Global, 200)
+                    .await?;
             // Self-and-Rivals / Rivals scope は要認証。未ログイン等で失敗しても
             // グローバルランキング表示は維持する。
             let (self_and_rivals, rivals) =
                 if crate::ir::rian_ir::is_rian_ir_provider(&query.provider) {
                     (None, None)
                 } else {
-                    let self_and_rivals = crate::screens::result_ir::fetch_ranking_with_limit(
+                    let self_and_rivals = crate::ir::ranking::fetch_ranking_with_limit(
                         &query,
                         IrRankingScope::SelfAndRivals,
                         200,
                     )
                     .await
                     .ok();
-                    let rivals = crate::screens::result_ir::fetch_ranking_with_limit(
+                    let rivals = crate::ir::ranking::fetch_ranking_with_limit(
                         &query,
                         IrRankingScope::Rivals,
                         200,
@@ -65,53 +62,10 @@ pub(super) fn spawn_course_fetch(
     sender: Sender<CourseFetchResult>,
 ) {
     tokio::spawn(async move {
-        let result = async {
-            if crate::ir::rian_ir::is_rian_ir_provider(&provider) {
-                return crate::ir::rian_ir::RianIrClient::new(&base_url)?
-                    .fetch_course_ranking(
-                        &target.rian_course_hash_v1,
-                        crate::ir::rian_ir::body_for_rule_mode(target.rule_mode),
-                        crate::ir::rian_ir::RIAN_IR_RANKING_LIMIT,
-                    )
-                    .await;
-            }
-            if crate::ir::bms_ir::is_bms_ir_provider(&provider) {
-                let credentials = crate::ir::sync::ensure_fresh_credentials(
-                    &profile_root,
-                    &provider,
-                    &base_url,
-                    now_unix_seconds(),
-                )
-                .await?;
-                return crate::ir::bms_ir::BmsIrClient::new(&base_url)?
-                    .fetch_course_ranking(
-                        &target.course_hash,
-                        target.bms_ir_course_key.as_deref().unwrap_or(""),
-                        &IrCourseRankingRequest {
-                            gauge: target.gauge.clone(),
-                            ln_policy: target.ln_policy.clone(),
-                            limit: 20,
-                        },
-                        target.rule_mode,
-                        &credentials.account_id,
-                        &credentials.access_token,
-                    )
-                    .await;
-            }
-            let client = BmzOfficialIrClient::anonymous(&base_url)?;
-            client
-                .fetch_course_ranking(
-                    &target.course_hash,
-                    &IrCourseRankingRequest {
-                        gauge: target.gauge.clone(),
-                        ln_policy: target.ln_policy.clone(),
-                        limit: 20,
-                    },
-                )
+        let result =
+            crate::ir::ranking::fetch_course_ranking(&profile_root, &provider, &base_url, &target)
                 .await
-        }
-        .await
-        .map_err(|error| format!("{error:#}"));
+                .map_err(|error| format!("{error:#}"));
         let _ = sender.send((context, target, requested_at, result));
     });
 }

@@ -12,6 +12,7 @@ pub mod manual_job;
 pub mod payload;
 pub mod provider;
 pub mod provider_key;
+pub mod ranking;
 pub mod rian_ir;
 pub mod secret_store;
 pub mod sync;

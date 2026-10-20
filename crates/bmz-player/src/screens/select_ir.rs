@@ -16,13 +16,13 @@ use bmz_render::scene::{
 };
 
 use crate::config::profile_config::{IrConfig, ProfileConfig, RivalSourceConfig};
-use crate::ir::bmz_official::{BmzOfficialIrClient, IrCourseRankingRequest};
+use crate::ir::ranking::ChartRankingQuery as ResultIrQuery;
 use crate::ir::types::{IrCourseRankingResult, IrRankingResult, IrRankingScope};
 use crate::ln_policy::LnScorePolicy;
 use crate::screens::result_ir::{
-    ResultIrQuery, ResultIrRanking, chart_ranking_to_result_ir_ranking,
-    course_ranking_to_result_ir_ranking, ranking_to_ir_snapshot,
-    result_ir_ranking_to_skin_snapshot, result_ir_ranking_to_skin_snapshot_at,
+    ResultIrRanking, chart_ranking_to_result_ir_ranking, course_ranking_to_result_ir_ranking,
+    ranking_to_ir_snapshot, result_ir_ranking_to_skin_snapshot,
+    result_ir_ranking_to_skin_snapshot_at,
 };
 use crate::select_options::DoubleOptionScoreBucket;
 use crate::select_options::{ResolvedTarget, TargetOption};
@@ -141,15 +141,7 @@ pub fn rian_ln_mode_for_chart(
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SelectCourseIrTarget {
-    pub course_hash: String,
-    pub rian_course_hash_v1: String,
-    pub bms_ir_course_key: Option<String>,
-    pub gauge: String,
-    pub ln_policy: String,
-    pub rule_mode: RuleMode,
-}
+pub use crate::ir::ranking::CourseRankingTarget as SelectCourseIrTarget;
 
 /// カーソル譜面ごとのキャッシュ済み IR 表示データ。
 #[derive(Debug, Clone)]

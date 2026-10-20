@@ -13,10 +13,9 @@ use std::time::{Duration, Instant};
 use bmz_gameplay::rule::RuleMode;
 
 use crate::config::profile_config::IrConfig;
-use crate::ir::bmz_official::{BmzOfficialIrClient, IrCourseRankingRequest, IrRankingRequest};
 use crate::ir::sync::{
-    IR_SYNC_BATCH_LIMIT, IrSyncJobFilter, IrSyncReport, IrSyncThrottle, ensure_fresh_credentials,
-    sync_pending_ir_jobs, sync_pending_ir_jobs_filtered,
+    IR_SYNC_BATCH_LIMIT, IrSyncJobFilter, IrSyncReport, IrSyncThrottle, sync_pending_ir_jobs,
+    sync_pending_ir_jobs_filtered,
 };
 use crate::ir::types::{IrCourseRankingResult, IrRankingResult, IrRankingScope, IrSubmitResponse};
 use crate::ln_policy::LnScorePolicy;
@@ -84,17 +83,7 @@ pub struct ResultIrLoadedChartRanking {
     pub ranking: ResultIrRanking,
 }
 
-/// ランキング照会に必要なクエリ条件。タブ遅延取得でも使い回す。
-#[derive(Debug, Clone)]
-pub struct ResultIrQuery {
-    pub profile_root: PathBuf,
-    pub provider: String,
-    pub base_url: String,
-    pub chart_sha256_hex: String,
-    pub ln_policy: LnScorePolicy,
-    pub double_option: DoubleOptionScoreBucket,
-    pub rule_mode: RuleMode,
-}
+pub use crate::ir::ranking::ChartRankingQuery as ResultIrQuery;
 
 #[derive(Debug, Clone)]
 pub enum ResultIrTarget {
@@ -493,9 +482,11 @@ pub(crate) use snapshot::{
     chart_ranking_to_result_ir_ranking, course_ranking_to_result_ir_ranking,
     result_ir_ranking_to_skin_snapshot, result_ir_ranking_to_skin_snapshot_at,
 };
-pub(crate) use task::fetch_ranking_with_limit;
 pub use task::{spawn_course_result_ir_task, spawn_result_ir_task};
 
+use crate::ir::ranking::fetch_ranking;
+#[cfg(test)]
+use crate::ir::ranking::result_ranking_limit;
 use snapshot::*;
 use task::*;
 #[cfg(test)]
