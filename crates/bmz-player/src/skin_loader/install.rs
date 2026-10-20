@@ -591,7 +591,8 @@ pub fn install_decoded_skin(
 
 /// 1 個のフォントを renderer に登録する。フレーム分散インストールから呼ばれる。
 pub fn install_decoded_font(renderer: &mut Renderer, font: DecodedFont) -> bool {
-    let DecodedFont { stored_id, path, data, cache_key: _ } = font;
+    let DecodedFont { stored_id, path, data, cache_key: _, fallbacks } = font;
+    renderer.set_font_fallbacks(stored_id.clone(), fallbacks);
     let Some(data) = data else {
         tracing::debug!(
             font_id = %stored_id,

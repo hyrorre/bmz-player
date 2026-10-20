@@ -221,22 +221,51 @@ pub(super) fn shape_bitmap_text(text: &str, fonts: BitmapFontSet<'_>) -> ShapedT
 }
 
 impl<'a> BitmapFontSet<'a> {
+    /// beatoraja と同じく主フォント → fallback .fnt の順に探し、無ければ
+    /// 〜(U+301C) と ～(U+FF5E) を相互に代用する。それも無ければベクターの
+    /// fallback・OS フォントの実グリフを使う（BMZ 拡張）。
     fn bitmap_glyph(self, ch: char) -> Option<(f32, ShapedGlyph)> {
-        // beatoraja と同じく、文字が無ければ 〜(U+301C) と ～(U+FF5E) を相互に代用する。
         let equivalent = match ch {
             WAVE_DASH => Some(FULLWIDTH_TILDE),
             FULLWIDTH_TILDE => Some(WAVE_DASH),
             _ => None,
         };
-        std::iter::once(ch).chain(equivalent).find_map(|key| self.glyph_of(key))
+        std::iter::once(ch).chain(equivalent).find_map(|key| self.glyph_of(key)).or_else(|| {
+            let (index, face) = self.faces.find(|face| face.has_glyph(ch))?;
+            Some(self.vector_glyph(index, face, face.glyph_id(ch)))
+        })
     }
 
     fn glyph_of(self, ch: char) -> Option<(f32, ShapedGlyph)> {
-        let glyph = self.primary.glyphs.get(&ch)?;
-        Some((
-            glyph.xadvance as f32,
-            ShapedGlyph { x: 0.0, y: 0.0, source: GlyphSource::Bitmap { font: 0, ch } },
-        ))
+        self.fonts.iter().enumerate().find_map(|(index, entry)| {
+            let glyph = entry.font.glyphs.get(&ch)?;
+            Some((
+                glyph.xadvance as f32,
+                ShapedGlyph {
+                    x: 0.0,
+                    y: 0.0,
+                    source: GlyphSource::Bitmap { font: index as u16, ch },
+                },
+            ))
+        })
+    }
+
+    /// ベクター face のグリフを、ビットマップの設計サイズを em として基準線へ置く。
+    fn vector_glyph(self, index: u16, face: &TextFace, glyph: GlyphId) -> (f32, ShapedGlyph) {
+        let metrics = face.metrics();
+        let units = self.design_size() / metrics.units_per_em;
+        (
+            face.h_advance_unscaled(glyph) * units,
+            ShapedGlyph {
+                x: 0.0,
+                y: self.cap_height(),
+                source: GlyphSource::Vector {
+                    face: index,
+                    glyph,
+                    face_scale: units * metrics.height(),
+                },
+            },
+        )
     }
 
     fn missing_glyph(self) -> (f32, ShapedGlyph) {
@@ -244,14 +273,18 @@ impl<'a> BitmapFontSet<'a> {
             return found;
         }
         // 文字上端（大文字の高さ）から基準線までの矩形にする。
-        let font = self.primary;
+        generated_tofu(self.cap_height(), 0.0)
+    }
+
+    /// 描画原点（大文字上端）から基準線までの設計単位。
+    fn cap_height(self) -> f32 {
+        let font = self.primary();
         let cap_height = font.base as f32 - font.ascent;
-        let height = if cap_height > 0.0 { cap_height } else { self.design_size() * 0.7 };
-        generated_tofu(height, 0.0)
+        if cap_height > 0.0 { cap_height } else { self.design_size() * 0.7 }
     }
 
     pub(super) fn design_size(self) -> f32 {
-        let font = self.primary;
+        let font = self.primary();
         (if font.size > 0 { font.size } else { font.line_height.max(1) }) as f32
     }
 }

@@ -65,6 +65,7 @@ fn continued_assets_keep_slots_paths_color_keys_and_font_definitions() {
                 id: "lr2font-0".into(),
                 path: "C:/previous/font.lr2font".into(),
                 font_type: 1,
+                fallback: Vec::new(),
             },
         )]),
         system_fonts: vec![bmz_skin_document::SkinLr2SystemFontDef {

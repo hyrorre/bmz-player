@@ -113,7 +113,7 @@ fn missing_glyph_uses_question_mark_candidate_before_generated_box() {
 #[test]
 fn missing_glyph_candidates_follow_beatoraja_order_across_faces() {
     let faces = [latin(), symbols()];
-    let fonts = VectorFontSet { id: "chain", faces: &faces };
+    let fonts = VectorFontSet { id: "chain", faces: faces_only(&faces) };
     // ☀ はどの face にも無いため、□（U+25A1）を後続 face から探す。
     let shaped = shape_vector_text("A☀", fonts);
     let GlyphSource::Vector { face, glyph, .. } = shaped.glyphs(&shaped.clusters[1])[0].source
@@ -126,7 +126,7 @@ fn missing_glyph_candidates_follow_beatoraja_order_across_faces() {
 #[test]
 fn actual_symbol_glyph_wins_over_placeholder() {
     let faces = [latin(), symbols()];
-    let fonts = VectorFontSet { id: "chain", faces: &faces };
+    let fonts = VectorFontSet { id: "chain", faces: faces_only(&faces) };
     let shaped = shape_vector_text("A✡B\u{FFFD}", fonts);
     assert_eq!(tofu_glyphs(&shaped), 0);
     for (index, ch) in [(1, '✡'), (3, '\u{FFFD}')] {
@@ -142,7 +142,7 @@ fn actual_symbol_glyph_wins_over_placeholder() {
 #[test]
 fn fallback_face_glyphs_use_primary_em_size() {
     let faces = [latin(), symbols()];
-    let fonts = VectorFontSet { id: "chain", faces: &faces };
+    let fonts = VectorFontSet { id: "chain", faces: faces_only(&faces) };
     let shaped = shape_vector_text("✡", fonts);
     // symbols は em 2048、✡ の送り幅は1em。latin の em（1000/1000）と揃う。
     assert_approx(shaped.clusters[0].advance, fonts.em());
@@ -335,7 +335,7 @@ fn bitmap_quads(text: &str, font: &BitmapFont) -> Vec<TextQuad> {
         &Point { x: 0.1, y: 0.1 },
         text,
         style,
-        BitmapFontSet { id: "bitmap", primary: font },
+        bitmap_set(&bitmap_entries(&[font])),
         SURFACE,
     );
     builder.quads
@@ -344,7 +344,7 @@ fn bitmap_quads(text: &str, font: &BitmapFont) -> Vec<TextQuad> {
 #[test]
 fn missing_bitmap_glyph_is_not_skipped_silently() {
     let font = test_bitmap_font();
-    let shaped = shape_bitmap_text("A✡A", BitmapFontSet { id: "bitmap", primary: &font });
+    let shaped = shape_bitmap_text("A✡A", bitmap_set(&bitmap_entries(&[&font])));
     assert_eq!(tofu_glyphs(&shaped), 1);
     assert!(shaped.clusters[1].advance > 0.0);
 
@@ -365,7 +365,7 @@ fn missing_bitmap_glyph_is_not_skipped_silently() {
 #[test]
 fn bitmap_missing_glyph_uses_box_candidate_from_font() {
     let font = bitmap_font_with(&[('\u{25A2}', 3), ('?', 2)]);
-    let shaped = shape_bitmap_text("A✡", BitmapFontSet { id: "bitmap", primary: &font });
+    let shaped = shape_bitmap_text("A✡", bitmap_set(&bitmap_entries(&[&font])));
     assert_eq!(
         shaped.glyphs(&shaped.clusters[1])[0].source,
         GlyphSource::Bitmap { font: 0, ch: '\u{25A2}' }
@@ -376,7 +376,7 @@ fn bitmap_missing_glyph_uses_box_candidate_from_font() {
 #[test]
 fn bitmap_wave_dash_and_fullwidth_tilde_substitute_each_other() {
     let font = bitmap_font_with(&[('\u{FF5E}', 4)]);
-    let shaped = shape_bitmap_text("\u{301C}", BitmapFontSet { id: "bitmap", primary: &font });
+    let shaped = shape_bitmap_text("\u{301C}", bitmap_set(&bitmap_entries(&[&font])));
     assert_eq!(
         shaped.glyphs(&shaped.clusters[0])[0].source,
         GlyphSource::Bitmap { font: 0, ch: '\u{FF5E}' }
@@ -386,10 +386,8 @@ fn bitmap_wave_dash_and_fullwidth_tilde_substitute_each_other() {
 #[test]
 fn bitmap_spaces_and_controls_are_not_placeholders() {
     let font = test_bitmap_font();
-    let shaped = shape_bitmap_text(
-        "A \u{3000}\u{200D}\u{FE0F}A",
-        BitmapFontSet { id: "bitmap", primary: &font },
-    );
+    let shaped =
+        shape_bitmap_text("A \u{3000}\u{200D}\u{FE0F}A", bitmap_set(&bitmap_entries(&[&font])));
     assert_eq!(tofu_glyphs(&shaped), 0);
     assert_eq!(bitmap_quads("A \u{3000}\u{200D}A", &font).len(), 2);
 }
@@ -409,7 +407,7 @@ fn bitmap_truncate_keeps_placeholder_clusters_whole() {
         &Point { x: 0.1, y: 0.1 },
         "AA✡A",
         style,
-        BitmapFontSet { id: "bitmap", primary: &font },
+        bitmap_set(&bitmap_entries(&[&font])),
         SURFACE,
     );
     assert_eq!(builder.quads.len(), 2);
@@ -474,4 +472,142 @@ fn skin_texts_keep_every_visible_character_across_font_kinds() {
         );
         assert_eq!(frame.command_quad_counts, vec![expected], "{font:?} lr2={lr2}");
     }
+}
+
+fn glyph_face(shaped: &ShapedText, cluster: usize) -> Option<u16> {
+    match shaped.glyphs(&shaped.clusters[cluster]).first()?.source {
+        GlyphSource::Vector { face, .. } => Some(face),
+        _ => None,
+    }
+}
+
+#[test]
+fn skin_font_fallbacks_are_searched_before_system_fonts() {
+    let mut renderer = Renderer::default();
+    renderer.insert_vector_font("skin:main".into(), latin());
+    renderer.insert_vector_font("skin:main#fallback0".into(), symbols());
+    renderer.set_font_fallbacks("skin:main", vec!["skin:main#fallback0".into()]);
+    // OS 側にも ✡ を持つ face があっても、スキンの fallback を先に使う。
+    let system = FontFallbackChain {
+        faces: vec![latin(), fixture_face("bmz-test-color.ttf")],
+        default_len: 1,
+    };
+    let plan = DrawPlan {
+        clear: Color::rgb(0.0, 0.0, 0.0),
+        commands: vec![text_command("A✡", text_style(Some("skin:main")))],
+    };
+    let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    let frame =
+        build_text_frame_with_font_sets(&plan, &system, &renderer.font_sets, SURFACE, &mut atlas);
+    assert_eq!(frame.command_quad_counts, vec![2]);
+    let ids: Vec<_> = atlas.glyphs.keys().map(|key| key.font_id.to_string()).collect();
+    assert!(ids.contains(&"bmz-test-latin.ttf".to_string()));
+    assert!(ids.contains(&"bmz-test-symbols.ttf".to_string()), "{ids:?}");
+    assert!(!ids.contains(&"bmz-test-color.ttf".to_string()));
+
+    // fallback 指定を外すと OS 側の face を使う。同じ指定の再設定は何もしない。
+    renderer.set_font_fallbacks("skin:main", vec!["skin:main#fallback0".into()]);
+    renderer.set_font_fallbacks("skin:main", Vec::new());
+    assert!(renderer.font_fallbacks.is_empty());
+    let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    build_text_frame_with_font_sets(&plan, &system, &renderer.font_sets, SURFACE, &mut atlas);
+    let ids: Vec<_> = atlas.glyphs.keys().map(|key| key.font_id.to_string()).collect();
+    assert!(ids.contains(&"bmz-test-color.ttf".to_string()), "{ids:?}");
+}
+
+#[test]
+fn system_symbol_faces_follow_default_and_skin_faces() {
+    let system = FontFallbackChain { faces: vec![latin(), symbols()], default_len: 1 };
+    let default_set = VectorFontSet { id: DEFAULT_TEXT_FONT_ID, faces: system.default_faces() };
+    let shaped = shape_vector_text("A✡☀", default_set);
+    assert_eq!(glyph_face(&shaped, 0), Some(0));
+    assert_eq!(glyph_face(&shaped, 1), Some(1));
+    // どこにも無い ☀ は □ の候補（記号 face）で表示する。
+    assert_eq!(tofu_glyphs(&shaped), 0);
+    assert_eq!(glyph_face(&shaped, 2), Some(1));
+
+    let skin = [fixture_face("bmz-test-question.ttf")];
+    let skin_set = VectorFontSet { id: "skin:q", faces: system.after(&skin) };
+    let shaped = shape_vector_text("A✡", skin_set);
+    // スキン → 既定（latin） → 記号の順。A はスキン、✡ は記号 face（通し番号2）。
+    assert_eq!(glyph_face(&shaped, 0), Some(0));
+    assert_eq!(glyph_face(&shaped, 1), Some(2));
+}
+
+#[test]
+fn font_sets_ignore_self_references_duplicates_and_unknown_ids() {
+    let mut fonts = HashMap::new();
+    fonts.insert("a".to_string(), latin());
+    fonts.insert("b".to_string(), symbols());
+    let mut bitmap_fonts = HashMap::new();
+    bitmap_fonts.insert("fnt".to_string(), test_bitmap_font());
+    bitmap_fonts.insert("fnt2".to_string(), bitmap_font_with(&[('✡', 2)]));
+    let fallbacks = HashMap::from([
+        ("a".to_string(), vec!["a".into(), "b".into(), "b".into(), "missing".into(), "fnt".into()]),
+        ("fnt".to_string(), vec!["fnt2".into(), "b".into()]),
+    ]);
+    let sets = SkinFontSets::new(&fonts, &bitmap_fonts, &fallbacks);
+    let vector: Vec<_> = sets.vector["a"].iter().map(|face| face.cache_id().to_string()).collect();
+    assert_eq!(vector, ["bmz-test-latin.ttf", "bmz-test-symbols.ttf"]);
+    let bitmap = &sets.bitmap["fnt"];
+    let ids: Vec<_> = bitmap.fonts.iter().map(|entry| entry.id.to_string()).collect();
+    assert_eq!(ids, ["fnt", "fnt2"]);
+    assert_eq!(bitmap.faces.len(), 1);
+}
+
+#[test]
+fn bitmap_text_uses_fallback_fnt_then_vector_faces_before_placeholders() {
+    let primary = test_bitmap_font();
+    let fallback = bitmap_font_with(&[('♠', 3)]);
+    let entries = bitmap_entries(&[&primary, &fallback]);
+    let faces = [symbols()];
+    let fonts = BitmapFontSet { id: "bitmap", fonts: &entries, faces: faces_only(&faces) };
+    let shaped = shape_bitmap_text("A♠✡☀", fonts);
+    assert_eq!(
+        shaped.glyphs(&shaped.clusters[1])[0].source,
+        GlyphSource::Bitmap { font: 1, ch: '♠' }
+    );
+    // .fnt に無い ✡ はベクター face の実グリフで、基準線（大文字上端+cap高）に置く。
+    let star = shaped.glyphs(&shaped.clusters[2])[0];
+    assert!(matches!(star.source, GlyphSource::Vector { face: 0, .. }));
+    assert_approx(star.y, primary.base as f32 - primary.ascent);
+    // ✡ の送り幅は .fnt の設計サイズを1emとした値。
+    assert_approx(shaped.clusters[2].advance, primary.size as f32);
+    // どこにも無い ☀ は .fnt の候補が無いため生成矩形。
+    assert!(matches!(shaped.glyphs(&shaped.clusters[3])[0].source, GlyphSource::Tofu { .. }));
+
+    let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    atlas.begin_frame();
+    let mut builder = CachedTextFrameBuilder::new(&mut atlas);
+    let mut style = text_style(Some("bitmap"));
+    style.size = 0.05;
+    builder.push_bitmap_text(&Point { x: 0.1, y: 0.1 }, "A♠✡☀", style, fonts, SURFACE);
+    assert_eq!(builder.quads.len(), 4);
+}
+
+/// OS に ✡ を持つ記号フォントがある環境では、スキンフォントに無くても実グリフで描く。
+#[test]
+fn os_symbol_fonts_render_solomon_star_when_installed() {
+    let system = load_default_font_fallbacks(bmz_font::FontCoverage::Japanese, &[]);
+    if !system.faces.iter().any(|face| face.has_glyph('✡')) {
+        return;
+    }
+    let skin = [latin()];
+    let shaped =
+        shape_vector_text("Solomon ✡ 12", VectorFontSet { id: "skin", faces: system.after(&skin) });
+    assert_eq!(tofu_glyphs(&shaped), 0);
+    let star = shaped.clusters.iter().position(|cluster| cluster.text == (8..11)).unwrap();
+    let face = glyph_face(&shaped, star).unwrap();
+    assert!(face > 0, "the star must come from a system face");
+}
+
+/// 輪郭を持たないカラー画像専用フォント（sbix / CBDT）は輪郭描画の候補にしない。
+#[test]
+fn image_only_faces_are_not_used_for_outline_glyphs() {
+    let sbix = fixture_face("bmz-test-sbix.ttf");
+    assert_ne!(sbix.glyph_id('😀').0, 0);
+    assert!(!sbix.has_glyph('😀'));
+    let faces = [latin(), sbix];
+    let shaped = shape_vector_text("😀", VectorFontSet { id: "chain", faces: faces_only(&faces) });
+    assert_eq!(tofu_glyphs(&shaped), 1);
 }

@@ -15,10 +15,23 @@ struct GlyphLine {
     surface: SurfaceSize,
 }
 
+/// cluster のグリフ番号が指すフォント。
 #[derive(Clone, Copy)]
-enum GlyphFonts<'a> {
-    Vector(VectorFontSet<'a>),
-    Bitmap(BitmapFontSet<'a>),
+struct GlyphFonts<'a> {
+    faces: FaceList<'a>,
+    bitmaps: &'a [BitmapFontEntry],
+}
+
+impl<'a> From<VectorFontSet<'a>> for GlyphFonts<'a> {
+    fn from(fonts: VectorFontSet<'a>) -> Self {
+        Self { faces: fonts.faces, bitmaps: &[] }
+    }
+}
+
+impl<'a> From<BitmapFontSet<'a>> for GlyphFonts<'a> {
+    fn from(fonts: BitmapFontSet<'a>) -> Self {
+        Self { faces: fonts.faces, bitmaps: fonts.fonts }
+    }
 }
 
 impl<'a> CachedTextFrameBuilder<'a> {
@@ -128,7 +141,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
             color: style.color,
             surface,
         };
-        self.push_clusters(&shaped, clusters, line, GlyphFonts::Bitmap(fonts));
+        self.push_clusters(&shaped, clusters, line, fonts.into());
 
         if let Some(key) = layout_key {
             self.atlas.insert_layout(key, &self.quads[quads_before..]);
@@ -211,7 +224,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
                     color: style.color,
                     surface,
                 };
-                self.push_clusters(&shaped, clusters, line, GlyphFonts::Vector(fonts));
+                self.push_clusters(&shaped, clusters, line, fonts.into());
             }
             return;
         }
@@ -249,7 +262,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
             color: style.color,
             surface,
         };
-        self.push_clusters(&shaped, clusters, line, GlyphFonts::Vector(fonts));
+        self.push_clusters(&shaped, clusters, line, fonts.into());
 
         if let Some(key) = layout_key {
             self.atlas.insert_layout(key, &self.quads[quads_before..]);
@@ -274,32 +287,32 @@ impl<'a> CachedTextFrameBuilder<'a> {
     fn push_glyph(&mut self, glyph: &ShapedGlyph, line: GlyphLine, fonts: GlyphFonts<'_>) {
         let x = line.pen_x + glyph.x * line.scale.x;
         let y = line.line_y + glyph.y * line.scale.y;
-        let cached = match (glyph.source, fonts) {
-            (GlyphSource::Vector { face, glyph, face_scale }, GlyphFonts::Vector(fonts)) => {
-                let Some(face) = fonts.face(face) else { return };
+        let cached = match glyph.source {
+            GlyphSource::Vector { face, glyph, face_scale } => {
+                let Some(face) = fonts.faces.get(face) else { return };
                 let scale = PxScale { x: line.scale.x * face_scale, y: line.scale.y * face_scale };
                 self.atlas.cached_vector_glyph(face, glyph, scale)
             }
-            (GlyphSource::Bitmap { font, ch }, GlyphFonts::Bitmap(fonts)) => {
-                let Some((font_id, font)) = fonts.font(font) else { return };
-                let Some(bitmap_glyph) = font.glyphs.get(&ch) else { return };
+            GlyphSource::Bitmap { font, ch } => {
+                let Some(entry) = fonts.bitmaps.get(usize::from(font)) else { return };
+                let Some(bitmap_glyph) = entry.font.glyphs.get(&ch) else { return };
                 if bitmap_glyph.width == 0 || bitmap_glyph.height == 0 {
                     return;
                 }
-                let Some(page) = font.pages.get(&bitmap_glyph.page) else { return };
+                let Some(page) = entry.font.pages.get(&bitmap_glyph.page) else { return };
+                // fallback .fnt も自身の ascent で大文字上端を揃え、主フォントと同じ倍率で描く。
                 Some(self.atlas.cached_bitmap_glyph(
-                    Arc::from(font_id),
+                    entry.id.clone(),
                     ch,
                     *bitmap_glyph,
                     page,
-                    font,
+                    &entry.font,
                     line.scale,
                 ))
             }
-            (GlyphSource::Tofu { width, height }, _) => {
+            GlyphSource::Tofu { width, height } => {
                 self.atlas.cached_tofu_glyph(width * line.scale.x, height * line.scale.y)
             }
-            _ => None,
         };
         let Some(cached) = cached else { return };
         let surface = line.surface;

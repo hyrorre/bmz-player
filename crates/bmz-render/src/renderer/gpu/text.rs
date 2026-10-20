@@ -25,18 +25,16 @@ impl WgpuRenderer {
     pub(in crate::renderer) fn build_text_frame(
         &mut self,
         plan: &DrawPlan,
-        fonts: &HashMap<String, TextFace>,
-        bitmap_fonts: &HashMap<String, BitmapFont>,
+        font_sets: &SkinFontSets,
         surface: SurfaceSize,
     ) -> TextFrame {
         if !surface.is_drawable() {
             return TextFrame::default();
         }
-        build_text_frame_with_fallback_cache(
+        build_text_frame_with_font_sets(
             plan,
             &self.default_fonts,
-            fonts,
-            bitmap_fonts,
+            font_sets,
             surface,
             &mut self.text_atlas,
         )

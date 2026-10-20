@@ -10,6 +10,10 @@ pub(super) fn load_default_font_fallbacks(
     font_roots: &[PathBuf],
 ) -> FontFallbackChain {
     let started_at = std::time::Instant::now();
+    // OS の記号・絵文字フォントの解決（初回のみ）を CJK フォントの読込と並行させる。
+    let symbol_fonts = std::thread::Builder::new()
+        .name("bmz-symbol-fonts".into())
+        .spawn(bmz_font::symbol_font_fallbacks);
     let mut resolved = bmz_font::resolve_font_fallbacks(preferred, font_roots);
     if let Some(general) = bmz_font::resolve_system_font(false)
         && !resolved.iter().any(|(_, font)| font == &general)
@@ -40,13 +44,41 @@ pub(super) fn load_default_font_fallbacks(
         );
     }
 
+    let default_len = faces.len();
+    let symbol_fonts = symbol_fonts
+        .ok()
+        .and_then(|thread| thread.join().ok())
+        .unwrap_or_else(bmz_font::symbol_font_fallbacks);
+    faces.extend(load_symbol_faces(symbol_fonts));
+
     tracing::info!(
         ?preferred,
-        font_count = faces.len(),
+        font_count = default_len,
+        symbol_font_count = faces.len() - default_len,
         font_load_ms = started_at.elapsed().as_millis(),
         "default render font fallbacks loaded"
     );
-    FontFallbackChain { faces }
+    FontFallbackChain { faces, default_len }
+}
+
+/// 記号・絵文字の OS フォントを、memory map したバイト列のまま face にする。
+pub(super) fn load_symbol_faces(fonts: &'static [bmz_font::SymbolFont]) -> Vec<TextFace> {
+    fonts
+        .iter()
+        .filter_map(|symbol| {
+            match ab_glyph::FontRef::try_from_slice_and_index(symbol.data(), symbol.font_index()) {
+                Ok(font) => Some(TextFace::new(
+                    format!("<symbol>:{}:{}", symbol.family(), symbol.font_index()),
+                    FontArc::new(font),
+                    symbol.font_index(),
+                )),
+                Err(error) => {
+                    tracing::warn!(%error, source = symbol.source(), "failed to load symbol font");
+                    None
+                }
+            }
+        })
+        .collect()
 }
 
 pub(super) fn load_font_from_resolved(resolved: &bmz_font::ResolvedFont) -> Option<FontArc> {

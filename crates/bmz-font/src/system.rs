@@ -10,6 +10,8 @@ use font_kit::source::{Source, SystemSource};
 
 mod bundled;
 use bundled::BundledFonts;
+mod symbols;
+pub use symbols::{SYMBOL_FONT_FAMILIES, SymbolFont, symbol_font_fallbacks};
 
 /// font-kit が解決した OS フォントの実ファイル位置またはメモリ上のバイト列。
 ///
@@ -518,6 +520,40 @@ mod tests {
         let resolved = sources.resolve(FontCoverage::Japanese);
         assert!(sources.system.get().is_some());
         assert_eq!(resolved, resolve_system_font_for_coverage(FontCoverage::Japanese));
+    }
+
+    #[test]
+    fn symbol_fonts_require_matching_family_names_and_are_deduplicated() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../bmz-render/testdata/fonts");
+        let temp = tempfile::Builder::new().prefix("bmz-font-symbols-").tempdir().unwrap();
+        for name in ["bmz-test-symbols.ttf", "bmz-test-latin.ttf"] {
+            fs::copy(fixtures.join(name), temp.path().join(name)).unwrap();
+        }
+        let source = BundledFonts::new(&[temp.path().to_path_buf()]);
+        let fonts = symbols::resolve_symbol_fonts(
+            &source,
+            &["Missing Symbols", "BMZ Test Symbols", "BMZ Test Latin", "BMZ Test Symbols"],
+        );
+        let families: Vec<_> = fonts.iter().map(SymbolFont::family).collect();
+        assert_eq!(families, ["BMZ Test Symbols", "BMZ Test Latin"]);
+        let face = ttf_parser::Face::parse(fonts[0].data(), fonts[0].font_index()).unwrap();
+        assert!(face.glyph_index('\u{2721}').is_some());
+
+        let symbols = fs::read(fixtures.join("bmz-test-symbols.ttf")).unwrap();
+        assert!(symbols::face_has_family(&symbols, 0, "bmz test symbols"));
+        assert!(!symbols::face_has_family(&symbols, 0, "Segoe UI Symbol"));
+        assert!(!symbols::face_has_family(&[], 0, "BMZ Test Symbols"));
+    }
+
+    #[test]
+    fn os_symbol_fonts_match_their_requested_families() {
+        for font in symbol_font_fallbacks() {
+            assert!(SYMBOL_FONT_FAMILIES.contains(&font.family()));
+            assert!(
+                symbols::face_has_family(font.data(), font.font_index(), font.family()),
+                "{font:?}"
+            );
+        }
     }
 
     /// `FsSource` 経由の fixture で path/index 抽出を検証する。

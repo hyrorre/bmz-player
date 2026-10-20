@@ -11,6 +11,10 @@ pub struct Renderer {
     pub(super) pending_sprite_sheets: Vec<PendingSpriteSheet>,
     pub(super) fonts: HashMap<String, TextFace>,
     pub(super) bitmap_fonts: HashMap<String, BitmapFont>,
+    /// スキンフォント ID ごとの beatoraja `font.fallback`（登録済みフォント ID）。
+    pub(super) font_fallbacks: HashMap<String, Vec<String>>,
+    /// `fonts` / `bitmap_fonts` / `font_fallbacks` から作った描画用の優先順。
+    pub(super) font_sets: SkinFontSets,
     pub(super) gpu: Option<WgpuRenderer>,
     pub(super) pending_egui: Option<EguiFrame>,
     pub(super) pending_screenshot: Option<ScreenshotRequest>,

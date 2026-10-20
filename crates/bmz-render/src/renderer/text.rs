@@ -1,9 +1,13 @@
 use super::*;
 
-/// 未指定テキスト用の既定フォント列（CJK coverage 順）。
+/// 既定テキストのフォント列と、全テキスト共通の補完用 OS フォント。
+///
+/// `faces[..default_len]` は CJK coverage 順の既定フォント、残りは記号・絵文字の
+/// OS フォント。スキン指定フォントでは全体をスキンの fallback の後ろに続ける。
 #[derive(Clone, Default)]
 pub(super) struct FontFallbackChain {
     pub(super) faces: Vec<TextFace>,
+    pub(super) default_len: usize,
 }
 
 impl FontFallbackChain {
@@ -14,12 +18,56 @@ impl FontFallbackChain {
 
     #[cfg(test)]
     pub(super) fn select(&self, ch: char) -> Option<&TextFace> {
-        self.faces.iter().find(|face| face.has_glyph(ch))
+        self.faces[..self.default_len].iter().find(|face| face.has_glyph(ch))
     }
 
     #[cfg(test)]
-    fn single(font: TextFace) -> Self {
-        Self { faces: vec![font] }
+    pub(super) fn single(font: TextFace) -> Self {
+        Self { faces: vec![font], default_len: 1 }
+    }
+
+    /// 未指定テキストの face 列。
+    pub(super) fn default_faces(&self) -> FaceList<'_> {
+        let default_len = self.default_len.min(self.faces.len());
+        FaceList { preferred: &self.faces[..default_len], system: &self.faces[default_len..] }
+    }
+
+    /// スキン指定フォントの後ろに続ける face 列。
+    pub(super) fn after<'a>(&'a self, preferred: &'a [TextFace]) -> FaceList<'a> {
+        FaceList { preferred, system: &self.faces }
+    }
+}
+
+/// 優先 face（スキン指定・既定フォント）とその後ろの OS fallback face。
+///
+/// 番号は `preferred` から通しで振る。cluster の解決結果はこの番号を保持する。
+#[derive(Clone, Copy)]
+pub(super) struct FaceList<'a> {
+    pub(super) preferred: &'a [TextFace],
+    pub(super) system: &'a [TextFace],
+}
+
+impl<'a> FaceList<'a> {
+    pub(super) fn first(self) -> Option<&'a TextFace> {
+        self.preferred.first().or_else(|| self.system.first())
+    }
+
+    pub(super) fn get(self, index: u16) -> Option<&'a TextFace> {
+        let index = usize::from(index);
+        self.preferred.get(index).or_else(|| self.system.get(index - self.preferred.len()))
+    }
+
+    pub(super) fn find(
+        self,
+        mut predicate: impl FnMut(&TextFace) -> bool,
+    ) -> Option<(u16, &'a TextFace)> {
+        self.preferred
+            .iter()
+            .chain(self.system)
+            .enumerate()
+            .take(usize::from(u16::MAX))
+            .find(|(_, face)| predicate(face))
+            .map(|(index, face)| (index as u16, face))
     }
 }
 
@@ -30,7 +78,7 @@ impl FontFallbackChain {
 #[derive(Clone, Copy)]
 pub(super) struct VectorFontSet<'a> {
     pub(super) id: &'a str,
-    pub(super) faces: &'a [TextFace],
+    pub(super) faces: FaceList<'a>,
 }
 
 impl<'a> VectorFontSet<'a> {
@@ -39,19 +87,14 @@ impl<'a> VectorFontSet<'a> {
     }
 
     pub(super) fn face(self, index: u16) -> Option<&'a TextFace> {
-        self.faces.get(usize::from(index))
+        self.faces.get(index)
     }
 
     pub(super) fn find_face(
         self,
-        mut predicate: impl FnMut(&TextFace) -> bool,
+        predicate: impl FnMut(&TextFace) -> bool,
     ) -> Option<(u16, &'a TextFace)> {
-        self.faces
-            .iter()
-            .enumerate()
-            .take(usize::from(u16::MAX))
-            .find(|(_, face)| predicate(face))
-            .map(|(index, face)| (index as u16, face))
+        self.faces.find(predicate)
     }
 
     /// face の1フォント単位あたりの設計単位。
@@ -78,24 +121,92 @@ impl<'a> VectorFontSet<'a> {
     }
 }
 
-/// 1つのテキスト描画で使うビットマップフォント。
+/// スキンが登録したビットマップフォント。
+#[derive(Clone)]
+pub(super) struct BitmapFontEntry {
+    pub(super) id: Arc<str>,
+    pub(super) font: BitmapFont,
+}
+
+/// 1つのテキスト描画で使うビットマップフォントと、その後ろのベクター face。
+///
+/// `fonts[0]` が主フォント、以降は `font.fallback` の .fnt。
 #[derive(Clone, Copy)]
 pub(super) struct BitmapFontSet<'a> {
     pub(super) id: &'a str,
-    pub(super) primary: &'a BitmapFont,
+    pub(super) fonts: &'a [BitmapFontEntry],
+    pub(super) faces: FaceList<'a>,
 }
 
 impl<'a> BitmapFontSet<'a> {
-    pub(super) fn font(self, index: u16) -> Option<(&'a str, &'a BitmapFont)> {
-        (index == 0).then_some((self.id, self.primary))
+    pub(super) fn primary(self) -> &'a BitmapFont {
+        &self.fonts[0].font
     }
 }
 
-pub(super) fn build_text_frame_with_fallback_cache(
+/// スキンフォントごとに解決した優先順（主フォント＋`font.fallback`）。
+///
+/// フォントの登録・fallback 指定が変わるたびに作り直し、描画時は参照するだけにする。
+#[derive(Clone, Default)]
+pub(super) struct SkinFontSets {
+    pub(super) vector: HashMap<String, Vec<TextFace>>,
+    pub(super) bitmap: HashMap<String, BitmapFontChain>,
+}
+
+#[derive(Clone)]
+pub(super) struct BitmapFontChain {
+    pub(super) fonts: Vec<BitmapFontEntry>,
+    pub(super) faces: Vec<TextFace>,
+}
+
+impl SkinFontSets {
+    /// beatoraja と同じく、ベクター主フォントはベクターの fallback だけを使う。
+    /// ビットマップ主フォントは .fnt の fallback を先に、ベクターの fallback を後に探す。
+    pub(super) fn new(
+        fonts: &HashMap<String, TextFace>,
+        bitmap_fonts: &HashMap<String, BitmapFont>,
+        fallbacks: &HashMap<String, Vec<String>>,
+    ) -> Self {
+        let fallback_ids = |id: &str| {
+            let mut ids: Vec<&str> = Vec::new();
+            for fallback in fallbacks.get(id).into_iter().flatten() {
+                if fallback != id && !ids.contains(&fallback.as_str()) {
+                    ids.push(fallback);
+                }
+            }
+            ids
+        };
+        let vector = fonts
+            .iter()
+            .map(|(id, face)| {
+                let faces = std::iter::once(face.clone())
+                    .chain(fallback_ids(id).into_iter().filter_map(|id| fonts.get(id).cloned()))
+                    .collect();
+                (id.clone(), faces)
+            })
+            .collect();
+        let bitmap = bitmap_fonts
+            .iter()
+            .map(|(id, font)| {
+                let ids = fallback_ids(id);
+                let entries = std::iter::once((id.as_str(), font))
+                    .chain(ids.iter().filter_map(|id| {
+                        bitmap_fonts.get_key_value(*id).map(|(id, font)| (id.as_str(), font))
+                    }))
+                    .map(|(id, font)| BitmapFontEntry { id: Arc::from(id), font: font.clone() })
+                    .collect();
+                let faces = ids.iter().filter_map(|id| fonts.get(*id).cloned()).collect();
+                (id.clone(), BitmapFontChain { fonts: entries, faces })
+            })
+            .collect();
+        Self { vector, bitmap }
+    }
+}
+
+pub(super) fn build_text_frame_with_font_sets(
     plan: &DrawPlan,
-    default_fonts: &FontFallbackChain,
-    fonts: &HashMap<String, TextFace>,
-    bitmap_fonts: &HashMap<String, BitmapFont>,
+    system_fonts: &FontFallbackChain,
+    font_sets: &SkinFontSets,
     surface: SurfaceSize,
     atlas: &mut TextAtlasCache,
 ) -> TextFrame {
@@ -113,9 +224,13 @@ pub(super) fn build_text_frame_with_fallback_cache(
         };
         let quads_before = builder.quads.len();
         if let Some(font_id) = style.font_id.as_deref()
-            && let Some(bitmap_font) = bitmap_fonts.get(font_id)
+            && let Some(chain) = font_sets.bitmap.get(font_id)
         {
-            let fonts = BitmapFontSet { id: font_id, primary: bitmap_font };
+            let fonts = BitmapFontSet {
+                id: font_id,
+                fonts: &chain.fonts,
+                faces: system_fonts.after(&chain.faces),
+            };
             builder.push_bitmap_text(origin, text, style.clone(), fonts, surface);
             scale_text_quads(&mut builder.quads[quads_before..], *origin, *post_scale);
             command_caret_rects.push(
@@ -131,11 +246,15 @@ pub(super) fn build_text_frame_with_fallback_cache(
                 .font_id
                 .as_deref()
                 .and_then(|font_id| {
-                    fonts
+                    font_sets
+                        .vector
                         .get_key_value(font_id)
-                        .map(|(id, face)| VectorFontSet { id, faces: std::slice::from_ref(face) })
+                        .map(|(id, faces)| VectorFontSet { id, faces: system_fonts.after(faces) })
                 })
-                .unwrap_or(VectorFontSet { id: DEFAULT_TEXT_FONT_ID, faces: &default_fonts.faces });
+                .unwrap_or(VectorFontSet {
+                    id: DEFAULT_TEXT_FONT_ID,
+                    faces: system_fonts.default_faces(),
+                });
             builder.push_text(origin, text, style.clone(), vector_fonts, surface);
             scale_text_quads(&mut builder.quads[quads_before..], *origin, *post_scale);
             command_caret_rects.push(
@@ -150,6 +269,20 @@ pub(super) fn build_text_frame_with_fallback_cache(
         command_quad_counts.push(builder.quads.len() - quads_before);
     }
     builder.finish(command_quad_counts, command_caret_rects)
+}
+
+/// fallback 指定なしのフォント表でフレームを組む（テスト用）。
+#[cfg(test)]
+pub(super) fn build_text_frame_with_fallback_cache(
+    plan: &DrawPlan,
+    default_fonts: &FontFallbackChain,
+    fonts: &HashMap<String, TextFace>,
+    bitmap_fonts: &HashMap<String, BitmapFont>,
+    surface: SurfaceSize,
+    atlas: &mut TextAtlasCache,
+) -> TextFrame {
+    let font_sets = SkinFontSets::new(fonts, bitmap_fonts, &HashMap::new());
+    build_text_frame_with_font_sets(plan, default_fonts, &font_sets, surface, atlas)
 }
 
 pub(super) fn scale_text_quads(quads: &mut [TextQuad], origin: Point, scale: Point) {

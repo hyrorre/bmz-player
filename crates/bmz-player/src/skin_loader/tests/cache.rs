@@ -1436,3 +1436,66 @@ fn skin_gpu_texture_cache_reuses_inserted_video_textures_separately() {
     assert_eq!(cached.texture, allocated);
     assert_eq!(cached.size, size);
 }
+
+/// beatoraja `font.fallback` を JSON / Lua の両方から別フォントとして解決し、
+/// 主フォントに優先順を関連付ける。存在しない fallback は無視する。
+#[test]
+fn skin_font_fallbacks_decode_from_json_and_lua_skins() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../bmz-render/testdata/fonts");
+    let root = unique_test_dir("bmz-font-fallback");
+    std::fs::create_dir_all(root.join("font")).unwrap();
+    for name in ["bmz-test-latin.ttf", "bmz-test-symbols.ttf", "bmz-test-color.ttf"] {
+        std::fs::copy(fixtures.join(name), root.join("font").join(name)).unwrap();
+    }
+    std::fs::write(
+        root.join("skin.json"),
+        r#"{ "type": 0, "font": [
+            { "id": "main", "path": "font/bmz-test-latin.ttf", "fallback": [
+                { "path": "font/bmz-test-symbols.ttf", "type": 0 },
+                "font/missing.ttf",
+                "font/bmz-test-color.ttf"
+            ] }
+        ] }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("skin.luaskin"),
+        r#"return { type = 0, font = {
+            { id = "main", path = "font/bmz-test-latin.ttf", fallback = {
+                { path = "font/bmz-test-symbols.ttf", type = 0 },
+                "font/missing.ttf",
+                "font/bmz-test-color.ttf",
+            } },
+        } }"#,
+    )
+    .unwrap();
+
+    for skin in ["skin.json", "skin.luaskin"] {
+        let decoded = decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
+            &root.join(skin),
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let font = |id: &str| decoded.fonts.iter().find(|font| font.stored_id == id);
+        let main = font("play:main").unwrap_or_else(|| panic!("{skin}: main font"));
+        assert_eq!(main.fallbacks, ["play:main#fallback0", "play:main#fallback2"], "{skin}");
+        for (id, file) in [
+            ("play:main#fallback0", "bmz-test-symbols.ttf"),
+            ("play:main#fallback2", "bmz-test-color.ttf"),
+        ] {
+            let fallback = font(id).unwrap_or_else(|| panic!("{skin}: {id}"));
+            assert!(fallback.path.ends_with(file));
+            assert!(matches!(fallback.data, Some(DecodedFontData::Vector(_))));
+            assert!(fallback.fallbacks.is_empty());
+        }
+        assert_eq!(decoded.fonts.len(), 3, "{skin}");
+    }
+}

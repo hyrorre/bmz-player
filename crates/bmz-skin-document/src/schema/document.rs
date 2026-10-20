@@ -358,6 +358,63 @@ pub struct SkinFontDef {
     pub path: String,
     #[serde(default, rename = "type")]
     pub font_type: i32,
+    /// beatoraja `JsonSkin.Font.fallback`。主フォントに無い文字を先頭から順に探す。
+    #[serde(default, deserialize_with = "deserialize_font_fallbacks")]
+    pub fallback: Vec<SkinFontFallbackDef>,
+}
+
+/// beatoraja `JsonSkin.FontFallback`。パスはフォント定義と同じ規則で解決する。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SkinFontFallbackDef {
+    pub path: String,
+    pub font_type: i32,
+}
+
+/// beatoraja `FontFallbackSerializer` と同じく、文字列・`{path,type}`・`{value}` を受け付ける。
+/// Lua変換で単一の値になった場合も1件として扱い、パスの無い要素は無視する。
+fn deserialize_font_fallbacks<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<SkinFontFallbackDef>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        Path(String),
+        Object {
+            #[serde(default)]
+            path: Option<String>,
+            #[serde(default)]
+            value: Option<String>,
+            #[serde(default, rename = "type")]
+            font_type: Option<f64>,
+        },
+        Other(serde::de::IgnoredAny),
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entries {
+        Many(Vec<Entry>),
+        One(Entry),
+    }
+
+    let entries = match Entries::deserialize(deserializer)? {
+        Entries::Many(entries) => entries,
+        Entries::One(entry) => vec![entry],
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| match entry {
+            Entry::Path(path) => Some(SkinFontFallbackDef { path, font_type: 0 }),
+            Entry::Object { path, value, font_type } => path.or(value).map(|path| {
+                SkinFontFallbackDef { path, font_type: font_type.unwrap_or(0.0) as i32 }
+            }),
+            Entry::Other(_) => None,
+        })
+        .filter(|fallback| !fallback.path.is_empty())
+        .collect())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

@@ -285,11 +285,40 @@ impl Renderer {
     pub(super) fn insert_vector_font(&mut self, id: String, font: TextFace) {
         self.bitmap_fonts.remove(&id);
         self.fonts.insert(id, font);
+        self.rebuild_font_sets();
     }
 
     pub(super) fn insert_bitmap_font_entry(&mut self, id: String, font: BitmapFont) {
         self.fonts.remove(&id);
         self.bitmap_fonts.insert(id, font);
+        self.rebuild_font_sets();
+    }
+
+    /// スキンフォントの beatoraja `font.fallback` を、登録済みフォント ID の順で設定する。
+    ///
+    /// 主フォントに無い文字は fallback を先頭から探し、その後に BMZ が解決した
+    /// OS フォント、最後に欠字表示を使う。未登録の ID は登録された時点で有効になる。
+    /// 変更が無ければ何もしない。
+    pub fn set_font_fallbacks(&mut self, id: impl Into<String>, fallbacks: Vec<String>) {
+        let id = id.into();
+        let changed = if fallbacks.is_empty() {
+            self.font_fallbacks.remove(&id).is_some()
+        } else if self.font_fallbacks.get(&id) == Some(&fallbacks) {
+            false
+        } else {
+            self.font_fallbacks.insert(id, fallbacks);
+            true
+        };
+        if changed {
+            self.rebuild_font_sets();
+            if let Some(gpu) = &mut self.gpu {
+                gpu.reset_text_atlas();
+            }
+        }
+    }
+
+    fn rebuild_font_sets(&mut self) {
+        self.font_sets = SkinFontSets::new(&self.fonts, &self.bitmap_fonts, &self.font_fallbacks);
     }
 
     pub fn set_skin_context(&mut self, skin_context: SkinContext) {
@@ -726,8 +755,7 @@ impl Renderer {
             plan,
             self.last_plan_canvas_policy,
             self.internal_resolution_mode,
-            &self.fonts,
-            &self.bitmap_fonts,
+            &self.font_sets,
             egui.as_ref(),
             screenshot.as_ref(),
             notify,

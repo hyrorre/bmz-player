@@ -66,8 +66,28 @@ fn font_supports_japanese(font: &TextFace) -> bool {
     font.has_glyph('あ') && font.has_glyph('日')
 }
 
+fn faces_only(faces: &[TextFace]) -> FaceList<'_> {
+    FaceList { preferred: faces, system: &[] }
+}
+
 fn single_font_set<'a>(id: &'a str, face: &'a TextFace) -> VectorFontSet<'a> {
-    VectorFontSet { id, faces: std::slice::from_ref(face) }
+    VectorFontSet { id, faces: faces_only(std::slice::from_ref(face)) }
+}
+
+fn bitmap_entries(fonts: &[&BitmapFont]) -> Vec<BitmapFontEntry> {
+    fonts
+        .iter()
+        .enumerate()
+        .map(|(index, font)| BitmapFontEntry {
+            id: Arc::from(if index == 0 { "bitmap".to_string() } else { format!("bitmap{index}") }),
+            font: (*font).clone(),
+        })
+        .collect()
+}
+
+/// フォールバック無しのビットマップフォントセット。
+fn bitmap_set(entries: &[BitmapFontEntry]) -> BitmapFontSet<'_> {
+    BitmapFontSet { id: "bitmap", fonts: entries, faces: faces_only(&[]) }
 }
 
 /// 単一フォントで解決した文字列の px 幅。

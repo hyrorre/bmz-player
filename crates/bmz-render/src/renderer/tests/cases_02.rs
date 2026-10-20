@@ -433,7 +433,7 @@ fn cached_decorated_skin_text_tracks_alpha_for_vector_and_bitmap_fonts() {
                     origin,
                     text,
                     style.clone(),
-                    BitmapFontSet { id: "bitmap", primary: &bitmap },
+                    bitmap_set(&bitmap_entries(&[&bitmap])),
                     surface,
                 );
             } else {

@@ -13,6 +13,10 @@ struct TextFaceInner {
     font: FontArc,
     index: u32,
     metrics: FaceMetrics,
+    /// glyf / CFF / CFF2 の輪郭を持つか。カラー画像だけのフォントは輪郭で描けない。
+    outlines: bool,
+    /// sbix / CBDT / EBDT のグリフ画像を持つか。空の glyf を併せ持つことがある。
+    images: bool,
 }
 
 /// ab_glyph と同じ定義の未スケール寸法。
@@ -48,7 +52,23 @@ impl TextFace {
             descent: font.descent_unscaled(),
             line_gap: font.line_gap_unscaled(),
         };
-        Self(Arc::new(TextFaceInner { cache_id: cache_id.into(), font, index, metrics }))
+        let (outlines, images) = ttf_parser::Face::parse(font.font_data(), index)
+            .map(|face| {
+                let tables = face.tables();
+                (
+                    tables.glyf.is_some() || tables.cff.is_some() || tables.cff2.is_some(),
+                    tables.sbix.is_some() || tables.cbdt.is_some() || tables.ebdt.is_some(),
+                )
+            })
+            .unwrap_or((false, false));
+        Self(Arc::new(TextFaceInner {
+            cache_id: cache_id.into(),
+            font,
+            index,
+            metrics,
+            outlines,
+            images,
+        }))
     }
 
     pub(crate) fn from_vec(
@@ -88,8 +108,13 @@ impl TextFace {
         self.0.font.glyph_id(ch)
     }
 
+    /// 輪郭グリフとして描ける文字か。
+    ///
+    /// 画像フォントの空の輪郭（Apple Color Emoji の glyf 等）は描けないものとして扱う。
+    /// 通常のフォントでは空の輪郭も有効なグリフ（空白類）とみなす。
     pub(crate) fn has_glyph(&self, ch: char) -> bool {
-        self.glyph_id(ch).0 != 0
+        let glyph = self.glyph_id(ch);
+        glyph.0 != 0 && self.0.outlines && (!self.0.images || self.0.font.outline(glyph).is_some())
     }
 
     pub(super) fn h_advance_unscaled(&self, glyph: GlyphId) -> f32 {

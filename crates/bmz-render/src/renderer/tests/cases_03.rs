@@ -256,7 +256,7 @@ fn default_font_fallback_uses_selected_face_in_glyph_and_layout_cache_keys() {
 }
 
 #[test]
-fn explicit_vector_font_does_not_use_default_fallback_faces() {
+fn explicit_vector_font_uses_system_faces_only_for_missing_glyphs() {
     let default_fonts = load_default_font_fallbacks(bmz_font::FontCoverage::Japanese, &[]);
     let Some(primary) = default_fonts.primary() else { return };
     let fallback_char = bmz_font::ALL_FONT_COVERAGES
@@ -270,6 +270,7 @@ fn explicit_vector_font_does_not_use_default_fallback_faces() {
     let Some(fallback_char) = fallback_char else {
         return;
     };
+    let selected_id = default_fonts.select(fallback_char).unwrap().cache_id().clone();
     let custom_id = "skin:custom";
     let mut custom_fonts = HashMap::new();
     custom_fonts.insert(
@@ -281,7 +282,7 @@ fn explicit_vector_font_does_not_use_default_fallback_faces() {
         clear: Color::rgb(0.0, 0.0, 0.0),
         commands: vec![DrawCommand::Text {
             origin: Point { x: 0.1, y: 0.1 },
-            text: fallback_char.to_string(),
+            text: format!("A{fallback_char}"),
             caret: None,
             post_scale: Point { x: 1.0, y: 1.0 },
             style: TextStyle {
@@ -310,7 +311,10 @@ fn explicit_vector_font_does_not_use_default_fallback_faces() {
         &mut atlas,
     );
 
-    assert!(atlas.glyphs.keys().all(|key| &*key.font_id == custom_id));
+    // 主フォントにある文字は主フォント、無い文字だけ既定の OS フォントで描く。
+    let keys: Vec<_> = atlas.glyphs.keys().map(|key| key.font_id.clone()).collect();
+    assert!(keys.iter().any(|id| &**id == custom_id));
+    assert!(keys.contains(&selected_id));
     assert!(atlas.layouts.entries.keys().all(|key| key.font_id == custom_id));
 }
 
