@@ -173,11 +173,13 @@ impl TextFace {
     /// 複数コードポイントの cluster を GSUB / GPOS / morx でシェーピングする。
     ///
     /// ZWJ・異体字セレクタ等の Default_Ignorable は取り除く。face に無い文字が残る場合は None。
+    /// cluster 番号は文字単位で付け、合字に統合された文字だけが同じ番号になる。
     pub(super) fn shape_cluster(&self, text: &str) -> Option<Vec<FaceShapedGlyph>> {
         let face = rustybuzz::Face::from_slice(self.data(), self.index())?;
         let mut buffer = rustybuzz::UnicodeBuffer::new();
         buffer.push_str(text);
         buffer.set_flags(rustybuzz::BufferFlags::REMOVE_DEFAULT_IGNORABLES);
+        buffer.set_cluster_level(rustybuzz::BufferClusterLevel::Characters);
         buffer.guess_segment_properties();
         let output = rustybuzz::shape(&face, &[], buffer);
         let glyphs: Vec<_> = output
@@ -186,6 +188,7 @@ impl TextFace {
             .zip(output.glyph_positions())
             .map(|(info, position)| FaceShapedGlyph {
                 glyph: GlyphId(info.glyph_id as u16),
+                cluster: info.cluster,
                 x_advance: position.x_advance as f32,
                 x_offset: position.x_offset as f32,
                 y_offset: position.y_offset as f32,
@@ -203,6 +206,8 @@ impl TextFace {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct FaceShapedGlyph {
     pub(super) glyph: GlyphId,
+    /// 元文字列のバイト位置。合字は構成文字のうち最初の位置になる。
+    pub(super) cluster: u32,
     pub(super) x_advance: f32,
     pub(super) x_offset: f32,
     pub(super) y_offset: f32,

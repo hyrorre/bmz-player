@@ -221,6 +221,11 @@ def main() -> None:
         "u1F44D": ([rect(200, 0, 800, 800)], 1000),
         "u1F3FB": ([rect(300, 0, 700, 400)], 1000),
         "thumbs_light": ([rect(200, 0, 800, 800)], 1000),
+        "u1F4BB": ([rect(100, 100, 900, 500)], 1000),
+        "woman_technologist": ([rect(100, 0, 900, 800)], 1000),
+        "u0031": ([rect(400, 0, 600, 700)], 1000),
+        "u20E3": ([rect(50, -100, 950, 0)], 1000),
+        "keycap_1": ([rect(50, 0, 950, 800)], 1000),
     }
     color_cmap = {int(name[1:], 16): name for name in color if name.startswith("u")}
     features = """
@@ -229,6 +234,8 @@ feature ccmp {
     sub u1F468 u200D u1F469 u200D u1F467 u200D u1F466 by family;
     sub u1F1EF u1F1F5 by flag_jp;
     sub u1F44D u1F3FB by thumbs_light;
+    sub u1F469 u200D u1F4BB by woman_technologist;
+    sub u0031 uFE0F u20E3 by keycap_1;
 } ccmp;
 """
 
@@ -254,6 +261,8 @@ feature ccmp {
             "u2721": [("u2721", 4)],
             "family": [("family", 4)],
             "thumbs_light": [("thumbs_light", 5)],
+            "woman_technologist": [("woman_technologist", 2)],
+            "keycap_1": [("keycap_1", 4)],
         }
         colr = dict(v0)
         colr.update(
@@ -317,6 +326,51 @@ feature ccmp {
         empty_base,
         empty_base_cmap,
         setup=setup_empty_base_colr,
+    )
+
+    # Color glyphs for the parts of emoji sequences, without any ligature, so
+    # the sequences can only be drawn as separate pieces.
+    parts = {
+        name: value
+        for name, value in color.items()
+        if name.startswith("u")
+        and name not in ("u20E3", "u1F600", "u1F3B5", "u2721")
+    }
+    parts_cmap = {int(name[1:], 16): name for name in parts}
+
+    def setup_parts_colr(fb: FontBuilder) -> None:
+        fb.setupCPAL([[(0.9, 0.0, 0.1, 1.0)]])
+        layers = {
+            name: [(name, 0)] for name, (contours, _) in parts.items() if contours
+        }
+        fb.font["COLR"] = buildCOLR(layers, glyphMap=fb.font.getReverseGlyphMap())
+
+    build_font(
+        OUT / "bmz-test-emoji-parts.ttf",
+        "BMZ Test Emoji Parts",
+        1000,
+        900,
+        -200,
+        parts,
+        parts_cmap,
+        setup=setup_parts_colr,
+    )
+
+    # A text font that draws a keycap as a digit followed by the combining
+    # enclosing keycap (U+20E3), positioned as a mark instead of a ligature.
+    build_font(
+        OUT / "bmz-test-keycap-mark.ttf",
+        "BMZ Test Keycap Mark",
+        1000,
+        900,
+        -200,
+        {
+            "u0031": ([rect(400, 0, 600, 700)], 1000),
+            # Like GNU FreeFont, the combining keycap has no advance and is drawn
+            # to the left of the pen, over the preceding digit.
+            "u20E3": ([rect(-950, -100, -50, 800), list(reversed(rect(-900, -50, -100, 750)))], 0),
+        },
+        {0x31: "u0031", 0x20E3: "u20E3"},
     )
 
     # sbix PNG strike only (no outlines) for U+1F600.

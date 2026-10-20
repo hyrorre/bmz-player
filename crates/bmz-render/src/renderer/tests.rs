@@ -153,5 +153,7 @@ mod cases_05;
 mod clip;
 #[path = "tests/unicode_fallback.rs"]
 mod unicode_fallback;
+#[path = "tests/unicode_sequences.rs"]
+mod unicode_sequences;
 #[path = "tests/unicode_text.rs"]
 mod unicode_text;

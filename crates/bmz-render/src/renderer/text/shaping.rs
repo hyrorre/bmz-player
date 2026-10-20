@@ -165,6 +165,63 @@ impl ClusterChars {
     }
 }
 
+/// 複数文字の cluster を1つの face で描くときに、シェーピング結果へ求める条件。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SequenceKind {
+    /// 結合文字など。各文字のグリフを並べた複数グリフのままでよい。
+    Plain,
+    /// キーキャップ。合字か、送り幅を持たない囲み記号（U+20E3）を数字に重ねて描く。
+    Keycap,
+    /// ZWJ・国旗・肌色・タグのシーケンス。部品が1つの合字へ置換された場合だけ描く。
+    Ligature,
+}
+
+impl ClusterChars {
+    fn sequence_kind(&self) -> SequenceKind {
+        let count = |range: std::ops::RangeInclusive<u32>| {
+            self.chars.iter().filter(|ch| range.contains(&(**ch as u32))).count()
+        };
+        let components = self.required.len();
+        let ligature = count(0xE0020..=0xE007E) > 0
+            || (components >= 2 && count(0x200D..=0x200D) > 0)
+            || count(0x1F1E6..=0x1F1FF) >= 2
+            || (components >= 2 && count(0x1F3FB..=0x1F3FF) > 0);
+        if ligature {
+            SequenceKind::Ligature
+        } else if count(0x20E3..=0x20E3) > 0 {
+            SequenceKind::Keycap
+        } else {
+            SequenceKind::Plain
+        }
+    }
+}
+
+impl SequenceKind {
+    /// シェーピング結果が、このシーケンスの描き方として成立しているか。
+    ///
+    /// 合字は、全グリフが同じ cluster 番号（構成文字が統合された）で、かつ各文字の
+    /// cmap のグリフをそのまま並べただけではないことで判定する。後者はタグのように
+    /// 構成文字が1つで、タグ文字が Default_Ignorable として取り除かれる場合に必要。
+    fn is_formed(self, face: &TextFace, required: &[char], glyphs: &[FaceShapedGlyph]) -> bool {
+        let ligature = || {
+            glyphs.iter().all(|glyph| glyph.cluster == glyphs[0].cluster)
+                && !glyphs
+                    .iter()
+                    .map(|glyph| glyph.glyph)
+                    .eq(required.iter().map(|ch| face.glyph_id(*ch)))
+        };
+        match self {
+            Self::Plain => true,
+            Self::Ligature => ligature(),
+            Self::Keycap => {
+                ligature()
+                    || (glyphs.len() == required.len()
+                        && glyphs[1..].iter().all(|glyph| glyph.x_advance == 0.0))
+            }
+        }
+    }
+}
+
 pub(super) fn is_variation_selector(ch: char) -> bool {
     matches!(ch as u32, 0xFE00..=0xFE0F | 0xE0100..=0xE01EF)
 }
@@ -237,12 +294,16 @@ fn resolve_char<'a>(
 }
 
 /// 複数文字の cluster を1つの face でシェーピングできるか、表示形式の優先順で探す。
+///
+/// 構成文字のグリフがあっても、シーケンスに必要な合字・置換が無い face は使わない。
 fn resolve_cluster<'a>(
     faces: FaceList<'a>,
     cluster: &str,
-    required: &[char],
+    parts: &ClusterChars,
     presentation: Presentation,
 ) -> Option<(u16, &'a TextFace, Vec<FaceShapedGlyph>, GlyphPaint)> {
+    let kind = parts.sequence_kind();
+    let required = parts.required.as_slice();
     presentation.paints().into_iter().find_map(|paint| {
         faces
             .find_map(|face| {
@@ -250,7 +311,9 @@ fn resolve_cluster<'a>(
                     return None;
                 }
                 let glyphs = face.shape_cluster(cluster)?;
-                glyphs.iter().all(|glyph| face.paints(glyph.glyph, paint)).then_some(glyphs)
+                (kind.is_formed(face, required, &glyphs)
+                    && glyphs.iter().all(|glyph| face.paints(glyph.glyph, paint)))
+                .then_some(glyphs)
             })
             .map(|(index, face, glyphs)| (index, face, glyphs, paint))
     })
@@ -280,7 +343,7 @@ pub(super) fn shape_vector_text(text: &str, fonts: VectorFontSet<'_>) -> ShapedT
             required => {
                 let presentation =
                     Presentation::of(required[0], parts.selector, parts.is_emoji_sequence());
-                let shaped_cluster = resolve_cluster(fonts.faces, cluster, required, presentation)
+                let shaped_cluster = resolve_cluster(fonts.faces, cluster, &parts, presentation)
                     .map(|(index, face, glyphs, paint)| {
                         let units = fonts.units_scale(index);
                         place_face_glyphs(
@@ -534,7 +597,7 @@ impl<'a> BitmapFontSet<'a> {
         let presentation =
             Presentation::of(parts.required[0], parts.selector, parts.is_emoji_sequence());
         let (index, face, glyphs, paint) =
-            resolve_cluster(self.faces, cluster, &parts.required, presentation)?;
+            resolve_cluster(self.faces, cluster, parts, presentation)?;
         let units = self.design_size() / face.metrics().units_per_em;
         Some(place_face_glyphs(
             index,
