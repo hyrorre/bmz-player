@@ -803,6 +803,7 @@ impl WinitApp {
             self.play.play_media_cache = None;
         }
         self.sync_changed_gamepad_analog_config_from_profile(&before.input);
+        self.sync_changed_select_input_mode_from_profile(&before.input);
         if profile_lane_settings_changed(&before.lane, &self.boot.profile_config.lane)
             || before.play.lane_effect != self.boot.profile_config.play.lane_effect
         {

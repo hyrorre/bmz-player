@@ -122,9 +122,9 @@ E1 hold＝通常、E2 hold＝アシスト、E1+E2 hold＝詳細の3パネル方�
 | 2P KEY5 | 決定 / 開く / 曲開始 | HS-FIX次 | MARK NOTE | VISUAL OFFSET -1ms |
 | 2P KEY6 | 戻る / 閉じる | DP OPTION次 | BPM GUIDE | GREEN NUMBER +1 |
 | 2P KEY7 | 決定 / 開く / 曲開始 | SESSION MODE次 | MINE REMOVE | VISUAL OFFSET +1ms |
-| Scratch Up | カーソル上 | TARGET前 | - | - |
-| Scratch Down | カーソル下 | TARGET次 | - | - |
-| Up / Down | カーソル移動 | TARGET前 / 次 | - | - |
+| Scratch Up | カーソル上 | TARGET次 | - | - |
+| Scratch Down | カーソル下 | TARGET前 | - | - |
+| Up / Down | カーソル上 / 下 | TARGET次 / 前 | - | - |
 
 - 選曲の決定には、キーモード別の鍵盤の割り当てを使います。BGAの切り替えはKEY1の割り当てを使います。
 - 7K/14Kのキーボード操作で、7Kと14Kの2P側に同じキーを割り当てた場合は、7K側を優先します。
@@ -182,22 +182,25 @@ ECFNは既存のデザインに合わせた200msのフェード、ほかの2つ�
 
 ### 鍵盤での操作（9K）
 
-「選曲画面の 設定 → INPUT」（`SELECT INPUT`）で`7K/14K`または`9K`を選べます。既定は`7K/14K`です。
+「選曲画面の 設定 → INPUT」（`SELECT INPUT`）、または「BMZ メニュー → 入力デバイス → 選曲入力デバイス」で`7K/14K`または`9K`を選べます。既定は`7K/14K`です。
+どちらで変更しても、選曲画面の操作にすぐ反映します。
 
 | キー | 通常 | E1 hold | E2 hold | E1+E2 hold |
 | --- | --- | --- | --- | --- |
-| KEY1 | - | 1P RANDOM次 | EXPAND JUDGE | BGA切り替え |
+| KEY1 | カーソルを5つ上へ | 1P RANDOM次 | EXPAND JUDGE | BGA切り替え |
 | KEY2 | - | 1P RANDOM前 | SCROLL REMOVE | GAUGE AUTO SHIFT切り替え |
 | KEY3 | 戻る / 閉じる | GAUGE次 | JUDGE AREA | JUDGE AUTO ADJUST切り替え |
-| KEY4 | カーソル下（120ms長押しでG-BATTLEの相手選択） | GAUGE前 | LN REMOVE | GREEN NUMBER -1 |
+| KEY4 | カーソル上 | GAUGE前 | LN REMOVE | GREEN NUMBER -1 |
 | KEY5 | 決定 / 開く / 曲開始 | HS-FIX次 | MARK NOTE | VISUAL OFFSET -1ms |
-| KEY6 | カーソル上 | DP OPTION次 | BPM GUIDE | GREEN NUMBER +1 |
+| KEY6 | カーソル下 | DP OPTION次 | BPM GUIDE | GREEN NUMBER +1 |
 | KEY7 | 決定 / 開く / 曲開始 | SESSION MODE次 | MINE REMOVE | VISUAL OFFSET +1ms |
-| KEY8 | - | TARGET前 | - | - |
-| KEY9 | - | TARGET次 | - | - |
-| Up / Down | カーソル移動 | TARGET前 / 次 | - | - |
+| KEY8 | 120ms長押しでG-BATTLEの相手選択 | TARGET前 | - | - |
+| KEY9 | カーソルを5つ下へ | TARGET次 | - | - |
+| Up / Down | カーソル上 / 下 | TARGET次 / 前 | - | - |
 
-9Kでは、プレイの鍵盤と既定のUI操作に同じキーを割り当てている場合、9K側の意味を優先します。
+- KEY1 / KEY9は、カーソル上 / 下を一度に5回押したときと同じ移動とアニメーションです。押し続けると、ほかのカーソル移動と同じ間隔で繰り返します。
+- 9Kでは、プレイの鍵盤と既定のUI操作に同じキーを割り当てている場合、9K側の意味を優先します。
+- コントローラーに割り当てた9Kの鍵盤でも、同じ操作になります。
 
 ### LR2選曲スキン
 
@@ -325,9 +328,9 @@ LR2のリザルトスキンでは、次のように進みます。
 
 ### G-BATTLE
 
-曲の行を選択中にKEY4を120ms以上長押しすると、SESSION MODEに関係なく、LR2と同様に曲リストがG-BATTLEの相手選択へ一時的に切り替わります。
+曲の行を選択中にKEY4（9K選曲入力ではKEY8）を120ms以上長押しすると、SESSION MODEに関係なく、LR2と同様に曲リストがG-BATTLEの相手選択へ一時的に切り替わります。
 
-- 短く押した場合は、そのキーモードでの通常のKEY4の操作になります。
+- 短く押した場合は、そのキーの通常の操作になります。9KのKEY8を短く押した場合は何もしません。
 - 長押しした後にキーを離すと、元の曲リストへ戻ります。
 - Tabで固定表示できます。もう一度Tab、戻る操作、Escapeで閉じます。
 

@@ -41,6 +41,8 @@ fn select_move_scroll_rows_matches_row_movement() {
     assert_eq!(select_move_scroll_rows(SelectMove::Next), 1);
     assert_eq!(select_move_scroll_rows(SelectMove::PagePrevious), -7);
     assert_eq!(select_move_scroll_rows(SelectMove::PageNext), 7);
+    assert_eq!(select_move_scroll_rows(SelectMove::JumpPrevious), -5);
+    assert_eq!(select_move_scroll_rows(SelectMove::JumpNext), 5);
     assert_eq!(select_move_scroll_rows(SelectMove::First), 0);
     assert_eq!(select_move_scroll_rows(SelectMove::Last), 0);
 }

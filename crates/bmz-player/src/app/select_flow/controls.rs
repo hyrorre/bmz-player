@@ -526,9 +526,7 @@ impl WinitApp {
     ) {
         self.sync_select_play_options_from_profile_if_needed(entry_id);
         if entry_id == SettingsEntryId::SelectInputMode {
-            self.select.select_keys =
-                SelectKeyBindings::from_profile(&self.boot.profile_config.input);
-            self.sync_select_holds_from_pressed_controls();
+            self.rebuild_select_key_bindings();
         }
         if matches!(
             entry_id,
@@ -555,6 +553,21 @@ impl WinitApp {
         {
             egui.set_show_fps(self.boot.profile_config.ui.show_fps);
         }
+    }
+
+    /// The select input device takes effect immediately, whichever UI changed it.
+    pub(super) fn sync_changed_select_input_mode_from_profile(
+        &mut self,
+        before: &ProfileInputConfig,
+    ) {
+        if before.select_input_mode != self.boot.profile_config.input.select_input_mode {
+            self.rebuild_select_key_bindings();
+        }
+    }
+
+    fn rebuild_select_key_bindings(&mut self) {
+        self.select.select_keys = SelectKeyBindings::from_profile(&self.boot.profile_config.input);
+        self.sync_select_holds_from_pressed_controls();
     }
 
     pub(super) fn sync_changed_gamepad_analog_config_from_profile(
@@ -1031,6 +1044,8 @@ impl WinitApp {
                             | SelectMove::Next
                             | SelectMove::PagePrevious
                             | SelectMove::PageNext
+                            | SelectMove::JumpPrevious
+                            | SelectMove::JumpNext
                     ) && let Some(control) = hold_control
                     {
                         self.start_select_hold_move(select_move, control.to_string());
@@ -1079,6 +1094,8 @@ impl WinitApp {
                         | SelectMove::Next
                         | SelectMove::PagePrevious
                         | SelectMove::PageNext
+                        | SelectMove::JumpPrevious
+                        | SelectMove::JumpNext
                 ) && let Some(control) = hold_control
                 {
                     self.start_select_hold_move(select_move, control.to_string());

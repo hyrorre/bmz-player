@@ -536,7 +536,7 @@ impl WinitApp {
         if !pressed {
             if matches!(self.view_state(), AppViewState::Select)
                 && self.select.select_option_panel == 0
-                && self.select.select_keys.is_ui_key4(button)
+                && self.select.select_keys.is_ir_battle_hold(button)
                 && self.finish_select_ir_battle_hold(button)
             {
                 return;
@@ -673,7 +673,7 @@ impl WinitApp {
         }
 
         if self.select.select_option_panel == 0
-            && self.select.select_keys.is_ui_key4(button)
+            && self.select.select_keys.is_ir_battle_hold(button)
             && self.begin_select_ir_battle_hold(
                 button,
                 scene_select_action(control_event, &self.select.select_keys),

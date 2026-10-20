@@ -10,6 +10,8 @@ use crate::config::profile_config::{
 };
 
 pub(super) struct SelectKeyBindings {
+    /// 9K select input: KEY8 / KEY9 are 9K lanes, not the 2P side of 14K.
+    nine_key: bool,
     start: Vec<String>,
     e_action_controls: Vec<(InputActionConfig, String)>,
     e2_action_controls: Vec<String>,
@@ -36,6 +38,8 @@ pub(super) struct SelectKeyBindings {
     select_scratch_down_controls: Vec<String>,
     select_previous_controls: Vec<String>,
     select_next_controls: Vec<String>,
+    select_jump_previous_controls: Vec<String>,
+    select_jump_next_controls: Vec<String>,
     target_previous_controls: Vec<String>,
     target_next_controls: Vec<String>,
     favorite_song_controls: Vec<String>,
@@ -362,6 +366,7 @@ impl SelectKeyBindings {
         );
 
         Self {
+            nine_key: false,
             start,
             e_action_controls,
             e2_action_controls,
@@ -388,6 +393,8 @@ impl SelectKeyBindings {
             select_scratch_down_controls,
             select_previous_controls: Vec::new(),
             select_next_controls: Vec::new(),
+            select_jump_previous_controls: Vec::new(),
+            select_jump_next_controls: Vec::new(),
             target_previous_controls: Vec::new(),
             target_next_controls: Vec::new(),
             favorite_song_controls,
@@ -514,6 +521,8 @@ impl SelectKeyBindings {
             merge_select_controls(common_actions_for(InputActionConfig::E2), key3_controls.clone());
         let select_previous_controls = key4_controls.clone();
         let select_next_controls = key6_controls.clone();
+        let select_jump_previous_controls = key1_controls.clone();
+        let select_jump_next_controls = key9_controls.clone();
         let target_previous_controls = key8_controls.clone();
         let target_next_controls = key9_controls.clone();
         let e_action_controls: Vec<(InputActionConfig, String)> = [
@@ -567,9 +576,9 @@ impl SelectKeyBindings {
             .or_else(|| input.start_key.clone())
             .unwrap_or_else(|| start.first().cloned().unwrap_or_else(|| "Q".to_string()));
         let up_str =
-            kb_keys_for(LaneConfig::Key6).into_iter().next().unwrap_or_else(|| "KEY6".to_string());
-        let down_str =
             kb_keys_for(LaneConfig::Key4).into_iter().next().unwrap_or_else(|| "KEY4".to_string());
+        let down_str =
+            kb_keys_for(LaneConfig::Key6).into_iter().next().unwrap_or_else(|| "KEY6".to_string());
         let enter_str =
             merge_select_controls(kb_keys_for(LaneConfig::Key5), kb_keys_for(LaneConfig::Key7));
         let enter_str =
@@ -579,8 +588,12 @@ impl SelectKeyBindings {
             .next()
             .or_else(|| kb_actions_for(InputActionConfig::E2).into_iter().next())
             .unwrap_or_else(|| "KEY3".to_string());
+        let jump_up_str =
+            kb_keys_for(LaneConfig::Key1).into_iter().next().unwrap_or_else(|| "KEY1".to_string());
+        let jump_down_str =
+            kb_keys_for(LaneConfig::Key9).into_iter().next().unwrap_or_else(|| "KEY9".to_string());
         let key_hint = format!(
-            "UP {up_str}  DOWN {down_str}  RIGHT{enter_str}:ENTER  LEFT/{back_str}:BACK  ENTER {start_str}"
+            "UP {up_str}  DOWN {down_str}  UP5 {jump_up_str}  DOWN5 {jump_down_str}  RIGHT{enter_str}:ENTER  LEFT/{back_str}:BACK  ENTER {start_str}"
         );
         let bga_str =
             kb_keys_for(LaneConfig::Key1).into_iter().next().unwrap_or_else(|| "?".to_string());
@@ -613,6 +626,7 @@ impl SelectKeyBindings {
         );
 
         Self {
+            nine_key: true,
             start,
             e_action_controls,
             e2_action_controls,
@@ -639,6 +653,8 @@ impl SelectKeyBindings {
             select_scratch_down_controls: Vec::new(),
             select_previous_controls,
             select_next_controls,
+            select_jump_previous_controls,
+            select_jump_next_controls,
             target_previous_controls,
             target_next_controls,
             favorite_song_controls,
@@ -773,11 +789,11 @@ impl SelectKeyBindings {
     }
 
     pub(super) fn is_ui_key1(&self, control: &str) -> bool {
-        self.is_key1(control) || self.is_key8(control)
+        self.is_key1(control) || (!self.nine_key && self.is_key8(control))
     }
 
     pub(super) fn is_ui_key2(&self, control: &str) -> bool {
-        self.is_key2(control) || self.is_key9(control)
+        self.is_key2(control) || (!self.nine_key && self.is_key9(control))
     }
 
     pub(super) fn is_ui_key3(&self, control: &str) -> bool {
@@ -852,12 +868,26 @@ impl SelectKeyBindings {
         contains(&self.select_next_controls, control) || self.is_select_scratch_down(control)
     }
 
+    pub(super) fn is_select_jump_previous(&self, control: &str) -> bool {
+        contains(&self.select_jump_previous_controls, control)
+    }
+
+    pub(super) fn is_select_jump_next(&self, control: &str) -> bool {
+        contains(&self.select_jump_next_controls, control)
+    }
+
+    /// Lane keys only; scratch keeps its own direction in `target_cycle_from_control`.
     pub(super) fn is_target_previous(&self, control: &str) -> bool {
-        contains(&self.target_previous_controls, control) || self.is_select_scratch_up(control)
+        contains(&self.target_previous_controls, control)
     }
 
     pub(super) fn is_target_next(&self, control: &str) -> bool {
-        contains(&self.target_next_controls, control) || self.is_select_scratch_down(control)
+        contains(&self.target_next_controls, control)
+    }
+
+    /// KEY4 (9K: KEY8) opens the G-BATTLE ghost list on a 120 ms hold.
+    pub(super) fn is_ir_battle_hold(&self, control: &str) -> bool {
+        if self.nine_key { self.is_key8(control) } else { self.is_ui_key4(control) }
     }
 
     pub(super) fn is_favorite_song(&self, control: &str) -> bool {

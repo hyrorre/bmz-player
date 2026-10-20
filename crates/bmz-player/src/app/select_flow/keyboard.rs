@@ -455,7 +455,7 @@ impl WinitApp {
         if matches!(self.view_state(), AppViewState::Select)
             && self.select.select_option_panel == 0
             && let Some(control) = physical_key_name(event.physical_key)
-            && self.select.select_keys.is_ui_key4(&control)
+            && self.select.select_keys.is_ir_battle_hold(&control)
         {
             match event.state {
                 ElementState::Pressed if !event.repeat => {

@@ -687,6 +687,10 @@ fn moved_select_index_moves_by_single_page_and_wraps_edges() {
     assert_eq!(moved_select_index(8, 10, SelectMove::PagePrevious), 1);
     assert_eq!(moved_select_index(4, 10, SelectMove::PagePrevious), 7);
     assert_eq!(moved_select_index(7, 10, SelectMove::PageNext), 4);
+    assert_eq!(moved_select_index(2, 10, SelectMove::JumpPrevious), 7);
+    assert_eq!(moved_select_index(7, 10, SelectMove::JumpNext), 2);
+    assert_eq!(moved_select_index(1, 3, SelectMove::JumpNext), 0);
+    assert_eq!(moved_select_index(1, 3, SelectMove::JumpPrevious), 2);
     assert_eq!(moved_select_index(0, 10, SelectMove::Last), 9);
     assert_eq!(moved_select_index(9, 10, SelectMove::First), 0);
 }

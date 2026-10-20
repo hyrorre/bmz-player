@@ -134,6 +134,22 @@ mod tests {
     }
 
     #[test]
+    fn jump_matches_five_simultaneous_single_moves() {
+        let now = Instant::now();
+        let duration = Duration::from_millis(100);
+        let mut jump = SelectBarScroll::default();
+        jump.move_by(5, now, duration);
+        let mut presses = SelectBarScroll::default();
+        for _ in 0..5 {
+            presses.move_by(1, now, duration);
+        }
+        for ms in [0, 10, 40, 70, 99, 100] {
+            let at = now + Duration::from_millis(ms);
+            assert!((jump.remaining_at(at) - presses.remaining_at(at)).abs() < 1e-9);
+        }
+    }
+
+    #[test]
     fn held_moves_connect_without_unbounded_backlog() {
         let now = Instant::now();
         let duration = Duration::from_millis(50);

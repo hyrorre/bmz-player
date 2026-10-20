@@ -32,6 +32,9 @@ pub(super) enum SelectMove {
     Next,
     PagePrevious,
     PageNext,
+    /// 9K KEY1 / KEY9: five rows at once, animated like five quick presses.
+    JumpPrevious,
+    JumpNext,
     First,
     Last,
 }
@@ -118,6 +121,16 @@ fn keyboard_select_action(control: &str, bindings: &SelectKeyBindings) -> Option
     } else if bindings.is_select_next(control) {
         Some(SelectAction::Move(SelectMove::Next))
     } else {
+        select_jump_action(control, bindings)
+    }
+}
+
+fn select_jump_action(control: &str, bindings: &SelectKeyBindings) -> Option<SelectAction> {
+    if bindings.is_select_jump_previous(control) {
+        Some(SelectAction::Move(SelectMove::JumpPrevious))
+    } else if bindings.is_select_jump_next(control) {
+        Some(SelectAction::Move(SelectMove::JumpNext))
+    } else {
         None
     }
 }
@@ -167,8 +180,12 @@ fn gamepad_select_action(control: &str, bindings: &SelectKeyBindings) -> Option<
         Some(SelectAction::ReplayCycle)
     } else if bindings.is_replay_play(control) {
         Some(SelectAction::ReplayPlay)
+    } else if bindings.is_select_previous(control) {
+        Some(SelectAction::Move(SelectMove::Previous))
+    } else if bindings.is_select_next(control) {
+        Some(SelectAction::Move(SelectMove::Next))
     } else {
-        None
+        select_jump_action(control, bindings)
     }
 }
 

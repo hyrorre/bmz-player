@@ -94,8 +94,8 @@ impl WinitApp {
         true
     }
 
-    /// KEY4 press is deferred while a usable IR ranking is present. A short
-    /// press retains the normal back action; a 120 ms hold temporarily swaps
+    /// KEY4 (9K: KEY8) press is deferred while a usable IR ranking is present.
+    /// A short press retains the key's normal action; a 120 ms hold temporarily swaps
     /// the song list for the ranking, matching LR2's interaction.
     pub(super) fn begin_select_ir_battle_hold(
         &mut self,

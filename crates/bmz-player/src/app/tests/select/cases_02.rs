@@ -40,8 +40,81 @@ fn key9_select_input_maps_configured_lane_keys() {
         select_action(PhysicalKey::Code(KeyCode::KeyX), ElementState::Pressed, false, &keys),
         Some(SelectAction::ExitFolder)
     );
-    assert_eq!(target_cycle_from_control("G", &keys), Some(TargetCycle::Next));
-    assert_eq!(target_cycle_from_control("B", &keys), Some(TargetCycle::Previous));
+    assert_eq!(
+        select_action(PhysicalKey::Code(KeyCode::KeyZ), ElementState::Pressed, false, &keys),
+        Some(SelectAction::Move(SelectMove::JumpPrevious))
+    );
+    assert_eq!(
+        select_action(PhysicalKey::Code(KeyCode::KeyB), ElementState::Pressed, false, &keys),
+        Some(SelectAction::Move(SelectMove::JumpNext))
+    );
+    // KEY8 has no short-press action; its 120 ms hold opens the G-BATTLE list.
+    assert_eq!(
+        select_action(PhysicalKey::Code(KeyCode::KeyG), ElementState::Pressed, false, &keys),
+        None
+    );
+    assert!(keys.is_ir_battle_hold("G"));
+    assert!(!keys.is_ir_battle_hold("D"));
+    // E1 hold: KEY8 / KEY9 cycle TARGET backward / forward like beatoraja POPN_9K.
+    assert_eq!(target_cycle_from_control("G", &keys), Some(TargetCycle::Previous));
+    assert_eq!(target_cycle_from_control("B", &keys), Some(TargetCycle::Next));
+}
+
+#[test]
+fn key9_select_input_keeps_key8_and_key9_out_of_2p_option_keys() {
+    let keys = select_keys_9k();
+
+    // E1+E2: KEY8 / KEY9 must not alias the 14K 2P KEY1 / KEY2 (BGA / GAUGE AUTO SHIFT).
+    assert!(keys.is_ui_key1("Z"));
+    assert!(!keys.is_ui_key1("G"));
+    assert!(keys.is_ui_key2("S"));
+    assert!(!keys.is_ui_key2("B"));
+    assert_eq!(keys.ui_lane_for_control("G"), None);
+    assert_eq!(keys.ui_lane_for_control("B"), None);
+
+    let keys_7k = default_select_keys();
+    assert!(keys_7k.is_ir_battle_hold("D"));
+}
+
+#[test]
+fn key9_select_input_moves_with_controller_lane_buttons() {
+    let mut input = crate::config::play_input::default_profile_input();
+    input.select_input_mode = SelectInputModeConfig::Key9;
+    let play9 = input.play.entry(KeyMode::K9.play_map_key().to_string()).or_default();
+    play9.bindings = [
+        ("Button21", LaneConfig::Key1),
+        ("Button24", LaneConfig::Key4),
+        ("Button26", LaneConfig::Key6),
+        ("Button29", LaneConfig::Key9),
+    ]
+    .into_iter()
+    .map(|(control, lane)| crate::config::profile_config::BindingConfigEntry {
+        device: "gamepad".to_string(),
+        control: control.to_string(),
+        keyboard_slot: None,
+        lane: Some(lane),
+        action: None,
+        scratch: None,
+    })
+    .collect();
+    let keys = SelectKeyBindings::from_profile(&input);
+
+    assert_eq!(
+        select_control_action("Button24", &keys),
+        Some(SelectAction::Move(SelectMove::Previous))
+    );
+    assert_eq!(
+        select_control_action("Button26", &keys),
+        Some(SelectAction::Move(SelectMove::Next))
+    );
+    assert_eq!(
+        select_control_action("Button21", &keys),
+        Some(SelectAction::Move(SelectMove::JumpPrevious))
+    );
+    assert_eq!(
+        select_control_action("Button29", &keys),
+        Some(SelectAction::Move(SelectMove::JumpNext))
+    );
 }
 
 #[test]

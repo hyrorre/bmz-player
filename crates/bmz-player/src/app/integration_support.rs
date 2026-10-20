@@ -152,9 +152,16 @@ pub(super) fn target_cycle_from_control(
     control: &str,
     bindings: &SelectKeyBindings,
 ) -> Option<TargetCycle> {
-    if control == "ScratchUp" || bindings.is_target_previous(control) {
+    // Scratch up cycles forward; 9K KEY8 / KEY9 follow beatoraja POPN_9K.
+    if control == "ScratchUp"
+        || bindings.is_select_scratch_up(control)
+        || bindings.is_target_next(control)
+    {
         Some(TargetCycle::Next)
-    } else if control == "ScratchDown" || bindings.is_target_next(control) {
+    } else if control == "ScratchDown"
+        || bindings.is_select_scratch_down(control)
+        || bindings.is_target_previous(control)
+    {
         Some(TargetCycle::Previous)
     } else {
         None

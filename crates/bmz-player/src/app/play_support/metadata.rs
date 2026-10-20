@@ -122,6 +122,10 @@ pub(in crate::app) fn moved_select_index(
         SelectMove::Next => (current_index + 1) % row_count,
         SelectMove::PagePrevious => (current_index + row_count - (7 % row_count)) % row_count,
         SelectMove::PageNext => (current_index + 7) % row_count,
+        SelectMove::JumpPrevious => {
+            (current_index + row_count - (SELECT_JUMP_ROWS as usize % row_count)) % row_count
+        }
+        SelectMove::JumpNext => (current_index + SELECT_JUMP_ROWS as usize) % row_count,
         SelectMove::First => 0,
         SelectMove::Last => row_count - 1,
     }
@@ -133,7 +137,12 @@ pub(in crate::app) fn select_move_scroll_rows(select_move: SelectMove) -> i32 {
         SelectMove::Next => 1,
         SelectMove::PagePrevious => -7,
         SelectMove::PageNext => 7,
+        SelectMove::JumpPrevious => -SELECT_JUMP_ROWS,
+        SelectMove::JumpNext => SELECT_JUMP_ROWS,
         SelectMove::First | SelectMove::Last => 0,
     }
 }
+
+/// Rows moved by one 9K KEY1 / KEY9 press.
+pub(in crate::app) const SELECT_JUMP_ROWS: i32 = 5;
 use super::*;
