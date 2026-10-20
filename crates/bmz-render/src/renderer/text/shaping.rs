@@ -11,8 +11,8 @@ const WAVE_DASH: char = '\u{301C}';
 const FULLWIDTH_TILDE: char = '\u{FF5E}';
 
 /// 代替グリフも無いときに生成する欠字矩形の高さ（em比）と縦横比。
-const TOFU_HEIGHT_EM: f32 = 0.8;
-const TOFU_WIDTH_RATIO: f32 = 0.75;
+pub(super) const TOFU_HEIGHT_EM: f32 = 0.8;
+pub(super) const TOFU_WIDTH_RATIO: f32 = 0.75;
 /// beatoraja の生成矩形と同じく、線幅は高さの1/12とする。
 const TOFU_STROKE_RATIO: f32 = 1.0 / 12.0;
 
@@ -95,7 +95,8 @@ pub(super) fn char_class(ch: char) -> CharClass {
         '\n' => CharClass::Newline,
         '\t' => CharClass::Space,
         _ if ch.is_control() || is_default_ignorable(ch) => CharClass::Invisible,
-        _ if ch.is_whitespace() => CharClass::Space,
+        // 点字の空白（U+2800）も、描画画素を持たない文字として空白と同じに扱う。
+        _ if ch.is_whitespace() || ch == '\u{2800}' => CharClass::Space,
         _ => CharClass::Visible,
     }
 }
@@ -209,19 +210,10 @@ impl Presentation {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum GlyphPaint {
     Outline,
     Color,
-}
-
-impl TextFace {
-    pub(super) fn paints(&self, glyph: GlyphId, paint: GlyphPaint) -> bool {
-        match paint {
-            GlyphPaint::Outline => self.renders_outline(glyph),
-            GlyphPaint::Color => color_glyph_kind(self, glyph).is_some(),
-        }
-    }
 }
 
 /// 文字（＋異体字セレクタ）を描ける face・グリフ・形式を、表示形式の優先順で探す。
@@ -326,15 +318,15 @@ fn push_vector_char(
     match char_class(ch) {
         CharClass::Newline => shaped.push_empty(range, true),
         CharClass::Invisible => shaped.push_empty(range, false),
-        class => {
+        // 空白は描画画素を持たないので、送り幅だけを持つ。
+        CharClass::Space => shaped.push(range, fonts.space_advance(ch), &[]),
+        CharClass::Visible => {
             if let Some((index, face, glyph, paint)) =
                 resolve_char(fonts.faces, ch, selector, &presentation.paints())
             {
                 let (advance, glyph) =
                     fonts.vector_glyph(index, face, glyph, paint == GlyphPaint::Color);
                 shaped.push(range, advance, &[glyph]);
-            } else if class == CharClass::Space {
-                shaped.push(range, fonts.missing_space_advance(ch), &[]);
             } else {
                 let (advance, glyph) = fonts.missing_glyph();
                 shaped.push(range, advance, &[glyph]);
@@ -399,11 +391,15 @@ impl<'a> VectorFontSet<'a> {
         generated_tofu(self.em() * TOFU_HEIGHT_EM, -self.em() * TOFU_HEIGHT_EM)
     }
 
-    fn missing_space_advance(self, ch: char) -> f32 {
+    /// 空白の送り幅。文字を持つ最初の face の幅、無ければ半角空白か em から決める。
+    fn space_advance(self, ch: char) -> f32 {
+        if let Some((index, face)) = self.find_face(|face| face.has_spacing_glyph(ch)) {
+            return self.vector_glyph(index, face, face.glyph_id(ch), false).0;
+        }
         if ch == IDEOGRAPHIC_SPACE {
             return self.em();
         }
-        self.find_face(|face| face.has_glyph(' '))
+        self.find_face(|face| face.has_spacing_glyph(' '))
             .map(|(index, face)| self.vector_glyph(index, face, face.glyph_id(' '), false).0)
             .unwrap_or(self.em() * 0.25)
     }
@@ -457,12 +453,21 @@ fn push_bitmap_char(
     match class {
         CharClass::Newline => shaped.push_empty(range, true),
         CharClass::Invisible => shaped.push_empty(range, false),
-        _ => {
-            if let Some((advance, glyph)) = fonts.bitmap_glyph(ch, selector, presentation) {
+        CharClass::Space => {
+            if let Some((advance, glyph)) = fonts.glyph_of(ch) {
                 shaped.push(range, advance, &[glyph]);
-            } else if class == CharClass::Space {
+            } else if let Some((index, face)) = fonts.faces.find(|face| face.has_spacing_glyph(ch))
+            {
+                let (advance, _) = fonts.vector_glyph(index, face, face.glyph_id(ch), false);
+                shaped.push(range, advance, &[]);
+            } else {
                 // 空白を持たない.fntは従来どおり幅0で詰める（欠字表示はしない）。
                 shaped.push_empty(range, false);
+            }
+        }
+        CharClass::Visible => {
+            if let Some((advance, glyph)) = fonts.bitmap_glyph(ch, selector, presentation) {
+                shaped.push(range, advance, &[glyph]);
             } else {
                 let (advance, glyph) = fonts.missing_glyph();
                 shaped.push(range, advance, &[glyph]);

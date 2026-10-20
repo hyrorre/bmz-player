@@ -9,4 +9,7 @@
 | `bmz-test-question.ttf` | latinに`?`を追加 |
 | `bmz-test-symbols.ttf` | ✡ □ ♠ ♡ ♫ ∞ �。em 2048で、latinと異なるascent/descent |
 | `bmz-test-color.ttf` | COLR v0（😀 ❤ 🇯🇵）・COLR v1（✡ 🎵 家族 👍🏻）、✡と❤のモノクロ輪郭、ZWJ/国旗/肌色のGSUB合字 |
+| `bmz-test-colr-empty-base.ttf` | glyf表を持つが、✡ ❤ 😀の基底グリフは空でCOLRレイヤーだけを持つ。★は空グリフでカラーもない。空白あり |
 | `bmz-test-sbix.ttf` | 😀のsbix PNG（左半分赤・右半分青、輪郭なし） |
+
+生成時の`head`の日時は固定しているため、再生成しても内容が同じなら差分は出ません。

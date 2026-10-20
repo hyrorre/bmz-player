@@ -1,3 +1,5 @@
+use std::sync::Mutex;
+
 use super::*;
 
 /// スキン文字描画で使うベクターフォント face。
@@ -19,6 +21,9 @@ struct TextFaceInner {
     images: bool,
     /// COLR / CPAL のカラーグリフを持つか。
     colr: bool,
+    /// グリフ・描画形式ごとの描画可否。シェーピングのたびに輪郭やカラー表を
+    /// 読み直さないよう、face（の複製）間で共有する。
+    capabilities: Mutex<HashMap<(u16, GlyphPaint), bool>>,
 }
 
 /// ab_glyph と同じ定義の未スケール寸法。
@@ -72,6 +77,7 @@ impl TextFace {
             outlines,
             images,
             colr,
+            capabilities: Mutex::default(),
         }))
     }
 
@@ -110,17 +116,47 @@ impl TextFace {
         self.0.font.glyph_id(ch)
     }
 
-    /// 輪郭グリフとして描ける文字か。
+    /// 輪郭グリフとして描ける（画素を持つ）文字か。
     pub(crate) fn has_glyph(&self, ch: char) -> bool {
-        self.renders_outline(self.glyph_id(ch))
+        self.paints(self.glyph_id(ch), GlyphPaint::Outline)
     }
 
-    /// 輪郭グリフとして描けるか。
+    /// 空白類の送り幅に使えるグリフを持つか。
     ///
-    /// 画像フォントの空の輪郭（Apple Color Emoji の glyf 等）は描けないものとして扱う。
-    /// 通常のフォントでは空の輪郭も有効なグリフ（空白類）とみなす。
-    pub(super) fn renders_outline(&self, glyph: GlyphId) -> bool {
-        glyph.0 != 0 && self.0.outlines && (!self.0.images || self.0.font.outline(glyph).is_some())
+    /// 空白は輪郭を持たないため、cmap の対応と輪郭表の有無だけで判断する。
+    /// 画像フォント（Apple Color Emoji 等）の空白は従来どおり使わない。
+    pub(super) fn has_spacing_glyph(&self, ch: char) -> bool {
+        self.glyph_id(ch).0 != 0 && self.0.outlines && !self.0.images
+    }
+
+    /// グリフを `paint` の形式で描けるか。
+    ///
+    /// 輪郭はグリフ自体の輪郭の有無で判断する。COLR フォントの glyf 表に含まれる
+    /// 空の基底グリフや、画像フォントの空の glyf は輪郭として描けない。
+    /// カラーは `color_glyph_kind` がラスタライズと同じ条件で判断する。
+    pub(super) fn paints(&self, glyph: GlyphId, paint: GlyphPaint) -> bool {
+        if glyph.0 == 0 {
+            return false;
+        }
+        let key = (glyph.0, paint);
+        if let Some(paints) = self.capabilities().get(&key) {
+            return *paints;
+        }
+        let paints = match paint {
+            GlyphPaint::Outline => self.0.outlines && self.0.font.outline(glyph).is_some(),
+            GlyphPaint::Color => color_glyph_kind(self, glyph).is_some(),
+        };
+        self.capabilities().insert(key, paints);
+        paints
+    }
+
+    fn capabilities(&self) -> std::sync::MutexGuard<'_, HashMap<(u16, GlyphPaint), bool>> {
+        self.0.capabilities.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    #[cfg(test)]
+    pub(super) fn cached_capabilities(&self) -> usize {
+        self.capabilities().len()
     }
 
     /// カラーグリフの表（COLR / CPAL、sbix / CBDT）を持つか。

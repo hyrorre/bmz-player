@@ -343,22 +343,45 @@ impl<'a> CachedTextFrameBuilder<'a> {
 
     fn push_glyph(&mut self, glyph: &ShapedGlyph, line: GlyphLine, fonts: GlyphFonts<'_>) {
         let x = line.pen_x + glyph.x * line.scale.x;
-        let y = line.line_y + glyph.y * line.scale.y;
+        let mut y = line.line_y + glyph.y * line.scale.y;
         let mut quad_color = line.color;
         let cached = match glyph.source {
             GlyphSource::Vector { face, glyph, face_scale, color } => {
                 let Some(face) = fonts.faces.get(face) else { return };
                 let scale = PxScale { x: line.scale.x * face_scale, y: line.scale.y * face_scale };
-                if color {
+                let color_glyph = || {
                     // カラーグリフはフォントの色を保ち、スキンの透明度だけを掛ける。
                     // 影・縁取りでは輪郭と同じく指定色のシルエットにする。
-                    let cached = self.atlas.cached_color_glyph(face, glyph, scale, line.decoration);
-                    if !line.decoration {
-                        quad_color = Color::rgba(1.0, 1.0, 1.0, line.color.a);
-                    }
-                    cached
+                    let tint = (!line.decoration).then(|| Color::rgba(1.0, 1.0, 1.0, line.color.a));
+                    (GlyphPaint::Color, tint)
+                };
+                let paints = if color {
+                    [color_glyph(), (GlyphPaint::Outline, None)]
                 } else {
-                    self.atlas.cached_vector_glyph(face, glyph, scale)
+                    [(GlyphPaint::Outline, None), color_glyph()]
+                };
+                // 解決時に選んだ形式で描けなければ、もう一方の形式、最後に欠字枠で描く。
+                let drawn = paints.into_iter().find_map(|(paint, tint)| {
+                    let cached = match paint {
+                        GlyphPaint::Color => {
+                            self.atlas.cached_color_glyph(face, glyph, scale, line.decoration)
+                        }
+                        GlyphPaint::Outline => self.atlas.cached_vector_glyph(face, glyph, scale),
+                    }?;
+                    Some((cached, tint))
+                });
+                match drawn {
+                    Some((cached, tint)) => {
+                        quad_color = tint.unwrap_or(quad_color);
+                        Some(cached)
+                    }
+                    None => {
+                        let metrics = face.metrics();
+                        let em = scale.y * metrics.units_per_em / metrics.height();
+                        let height = em * TOFU_HEIGHT_EM;
+                        y -= height;
+                        self.atlas.cached_tofu_glyph(height * TOFU_WIDTH_RATIO, height)
+                    }
                 }
             }
             GlyphSource::Bitmap { font, ch } => {
@@ -394,6 +417,27 @@ impl<'a> CachedTextFrameBuilder<'a> {
             glyph_height: cached.height,
             color: quad_color,
         });
+    }
+
+    /// 解決済みグリフを1行に並べる（描画 fallback のテスト用）。
+    #[cfg(test)]
+    pub(super) fn push_resolved_glyphs(
+        &mut self,
+        glyphs: &[ShapedGlyph],
+        fonts: VectorFontSet<'_>,
+        surface: SurfaceSize,
+    ) {
+        let line = GlyphLine {
+            pen_x: 10.0,
+            line_y: 50.0,
+            scale: PxScale::from(20.0),
+            color: Color::rgb(1.0, 1.0, 1.0),
+            surface,
+            decoration: false,
+        };
+        for glyph in glyphs {
+            self.push_glyph(glyph, line, fonts.into());
+        }
     }
 
     pub(super) fn finish(

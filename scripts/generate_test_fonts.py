@@ -27,6 +27,9 @@ OUT = Path(__file__).resolve().parent.parent / "crates/bmz-render/testdata/fonts
 
 Point = tuple[float, float]
 
+# 2026-01-01T00:00:00Z（1904-01-01 起点の秒数）。
+FIXED_TIMESTAMP = 3850070400
+
 
 def polygon_glyph(contours: list[list[Point]]):
     pen = TTGlyphPen(None)
@@ -101,6 +104,10 @@ def build_font(
         sCapHeight=int(ascent * 0.85),
     )
     fb.setupPost()
+    # 再生成で差分が出ないよう、head の日時を固定する。
+    fb.font["head"].created = FIXED_TIMESTAMP
+    fb.font["head"].modified = FIXED_TIMESTAMP
+    fb.font.recalcTimestamp = False
     if features:
         fb.addOpenTypeFeatures(features)
     if setup:
@@ -268,6 +275,48 @@ feature ccmp {
         color_cmap,
         features=features,
         setup=setup_colr,
+    )
+
+    # COLR fonts often keep a glyf table whose base glyphs are empty, with the
+    # artwork only in the color layers. U+2605 maps to an empty glyph with no
+    # color layers at all, and the space glyph is intentionally blank.
+    empty_base = {
+        "space": ([], 300),
+        "u2721": ([], 1000),
+        "u2764": ([], 1000),
+        "u1F600": ([], 1000),
+        "u2605": ([], 1000),
+        "star_layer": (star_of_david(500, 400, 400), 1000),
+        "heart_layer": ([octagon(500, 400, 400)], 1000),
+        "face_layer": ([face], 1000),
+        "eyes": ([rect(300, 450, 400, 600), rect(600, 450, 700, 600)], 1000),
+    }
+    empty_base_cmap = {0x20: "space"}
+    empty_base_cmap.update(
+        {int(name[1:], 16): name for name in empty_base if name.startswith("u")}
+    )
+
+    def setup_empty_base_colr(fb: FontBuilder) -> None:
+        fb.setupCPAL([[(0.0, 0.3, 1.0, 1.0), (0.9, 0.0, 0.1, 1.0), (1.0, 0.8, 0.0, 1.0),
+                       (0.1, 0.1, 0.1, 1.0)]])
+        fb.font["COLR"] = buildCOLR(
+            {
+                "u2721": [("star_layer", 0)],
+                "u2764": [("heart_layer", 1)],
+                "u1F600": [("face_layer", 2), ("eyes", 3)],
+            },
+            glyphMap=fb.font.getReverseGlyphMap(),
+        )
+
+    build_font(
+        OUT / "bmz-test-colr-empty-base.ttf",
+        "BMZ Test COLR Empty Base",
+        1000,
+        900,
+        -200,
+        empty_base,
+        empty_base_cmap,
+        setup=setup_empty_base_colr,
     )
 
     # sbix PNG strike only (no outlines) for U+1F600.

@@ -449,6 +449,8 @@ pub(super) struct TextAtlasCache {
     row_height: u32,
     pixels: Vec<u8>,
     pub(super) glyphs: HashMap<TextGlyphKey, CachedGlyph>,
+    /// ラスタライズできなかったグリフ。毎フレーム同じ失敗を繰り返さない。
+    pub(super) failed: std::collections::HashSet<TextGlyphKey>,
     pub(super) layouts: TextLayoutCache,
     /// 欠字・fallback の解決結果。atlas 画素とは独立なので高さ上限のリセットでは残す。
     pub(super) shapes: TextShapeCache,
@@ -464,6 +466,7 @@ impl TextAtlasCache {
             row_height: 0,
             pixels: Vec::new(),
             glyphs: HashMap::new(),
+            failed: Default::default(),
             layouts: TextLayoutCache::new(),
             shapes: TextShapeCache::default(),
             dirty_regions: Vec::new(),
@@ -485,6 +488,7 @@ impl TextAtlasCache {
         self.row_height = 0;
         self.pixels.clear();
         self.glyphs.clear();
+        self.failed.clear();
         self.layouts.clear();
         self.dirty_regions.clear();
     }
@@ -527,45 +531,23 @@ impl TextAtlasCache {
         if let Some(glyph) = self.glyphs.get(&key) {
             return Some(glyph.clone());
         }
-
-        let font = face.font();
-        let raster_scale = PxScale {
-            x: scale.x * VECTOR_TEXT_SUPERSAMPLE_SCALE,
-            y: scale.y * VECTOR_TEXT_SUPERSAMPLE_SCALE,
-        };
-        let scaled_font = font.as_scaled(raster_scale);
-        let baseline_y = scaled_font.ascent();
-        let glyph = Glyph { id: glyph_id, scale: raster_scale, position: point(0.0, baseline_y) };
-        let outlined = font.outline_glyph(glyph)?;
-        let bounds = outlined.px_bounds();
-        let width = bounds.width().ceil().max(0.0) as u32;
-        let height = bounds.height().ceil().max(0.0) as u32;
-        if width == 0 || height == 0 {
+        if self.failed.contains(&key) {
             return None;
         }
-
-        let mut pixels = vec![0; (width * height * 4) as usize];
-        outlined.draw(|x, y, coverage| {
-            let index = ((y * width + x) * 4) as usize;
-            let coverage_u8 = (coverage * 255.0).clamp(0.0, 255.0) as u8;
-            if let Some(pixel) = pixels.get_mut(index..index + 4)
-                && coverage_u8 >= pixel[3]
-            {
-                pixel[0] = 255;
-                pixel[1] = 255;
-                pixel[2] = 255;
-                pixel[3] = coverage_u8;
-            }
-        });
-
+        let Some((width, height, offset_x, offset_y, pixels)) =
+            rasterize_outline_glyph(face, glyph_id, scale)
+        else {
+            self.failed.insert(key);
+            return None;
+        };
         Some(self.insert_glyph_pixels(
             key,
             width,
             height,
             width as f32 / VECTOR_TEXT_SUPERSAMPLE_SCALE,
             height as f32 / VECTOR_TEXT_SUPERSAMPLE_SCALE,
-            bounds.min.x / VECTOR_TEXT_SUPERSAMPLE_SCALE,
-            (bounds.min.y - baseline_y) / VECTOR_TEXT_SUPERSAMPLE_SCALE,
+            offset_x,
+            offset_y,
             pixels,
         ))
     }
@@ -588,11 +570,17 @@ impl TextAtlasCache {
         if let Some(glyph) = self.glyphs.get(&key) {
             return Some(glyph.clone());
         }
+        if self.failed.contains(&key) {
+            return None;
+        }
         let raster_scale = PxScale {
             x: scale.x * VECTOR_TEXT_SUPERSAMPLE_SCALE,
             y: scale.y * VECTOR_TEXT_SUPERSAMPLE_SCALE,
         };
-        let mut raster = rasterize_color_glyph(face, glyph_id, raster_scale)?;
+        let Some(mut raster) = rasterize_color_glyph(face, glyph_id, raster_scale) else {
+            self.failed.insert(key);
+            return None;
+        };
         if silhouette {
             for pixel in raster.pixels.chunks_exact_mut(4) {
                 pixel[..3].fill(255);
@@ -609,7 +597,53 @@ impl TextAtlasCache {
             raster.pixels,
         ))
     }
+}
 
+/// 輪郭グリフの白い被覆率画像と、表示 px での位置。
+fn rasterize_outline_glyph(
+    face: &TextFace,
+    glyph_id: GlyphId,
+    scale: PxScale,
+) -> Option<(u32, u32, f32, f32, Vec<u8>)> {
+    let font = face.font();
+    let raster_scale = PxScale {
+        x: scale.x * VECTOR_TEXT_SUPERSAMPLE_SCALE,
+        y: scale.y * VECTOR_TEXT_SUPERSAMPLE_SCALE,
+    };
+    let scaled_font = font.as_scaled(raster_scale);
+    let baseline_y = scaled_font.ascent();
+    let glyph = Glyph { id: glyph_id, scale: raster_scale, position: point(0.0, baseline_y) };
+    let outlined = font.outline_glyph(glyph)?;
+    let bounds = outlined.px_bounds();
+    let width = bounds.width().ceil().max(0.0) as u32;
+    let height = bounds.height().ceil().max(0.0) as u32;
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let mut pixels = vec![0; (width * height * 4) as usize];
+    outlined.draw(|x, y, coverage| {
+        let index = ((y * width + x) * 4) as usize;
+        let coverage_u8 = (coverage * 255.0).clamp(0.0, 255.0) as u8;
+        if let Some(pixel) = pixels.get_mut(index..index + 4)
+            && coverage_u8 >= pixel[3]
+        {
+            pixel[0] = 255;
+            pixel[1] = 255;
+            pixel[2] = 255;
+            pixel[3] = coverage_u8;
+        }
+    });
+    Some((
+        width,
+        height,
+        bounds.min.x / VECTOR_TEXT_SUPERSAMPLE_SCALE,
+        (bounds.min.y - baseline_y) / VECTOR_TEXT_SUPERSAMPLE_SCALE,
+        pixels,
+    ))
+}
+
+impl TextAtlasCache {
     /// 代替グリフが無い欠字の枠。`width` / `height` は表示px。
     pub(super) fn cached_tofu_glyph(&mut self, width: f32, height: f32) -> Option<CachedGlyph> {
         if !(width > 0.0 && height > 0.0) {

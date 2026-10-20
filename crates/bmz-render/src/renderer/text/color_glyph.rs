@@ -33,27 +33,73 @@ pub(super) enum ColorGlyphKind {
     Bitmap,
 }
 
-/// グリフが COLR か PNG / BGRA のビットマップ strike を持つか。
+/// グリフを描けるカラー形式。
+///
+/// ラスタライズと同じ条件で判定する。COLR は描画範囲が求まり paint graph を
+/// 最後まで辿れること、ビットマップは PNG の寸法か BGRA の画素数が読めること。
+/// 結果は `TextFace::paints` が face ごとにキャッシュする。
 pub(super) fn color_glyph_kind(face: &TextFace, glyph: GlyphId) -> Option<ColorGlyphKind> {
     if glyph.0 == 0 || !face.has_color_tables() {
         return None;
     }
     let font = skrifa::FontRef::from_index(face.data(), face.index()).ok()?;
     let glyph_id = skrifa::GlyphId::new(u32::from(glyph.0));
-    if font.color_glyphs().get(glyph_id).is_some() {
-        return Some(ColorGlyphKind::Colr);
+    if let Some(color) = font.color_glyphs().get(glyph_id) {
+        let bounds = colr_bounds(face, &color)?;
+        let mut painter = BoundsPainter::new(face);
+        color.paint(skrifa::instance::LocationRef::default(), &mut painter).ok()?;
+        return (bounds.x_min < bounds.x_max && bounds.y_min < bounds.y_max)
+            .then_some(ColorGlyphKind::Colr);
     }
-    let strikes = skrifa::bitmap::BitmapStrikes::new(&font);
-    strikes
+    color_bitmap_for_size(&font, glyph_id, f32::MAX).map(|_| ColorGlyphKind::Bitmap)
+}
+
+/// COLR グリフの描画範囲（フォント単位）。v1 の ClipBox、無ければ clip の和集合。
+fn colr_bounds(face: &TextFace, color: &skrifa::color::ColorGlyph<'_>) -> Option<BoundingBox<f32>> {
+    let location = skrifa::instance::LocationRef::default();
+    color.bounding_box(location, skrifa::instance::Size::unscaled()).or_else(|| {
+        let mut painter = BoundsPainter::new(face);
+        color.paint(location, &mut painter).ok()?;
+        painter.bounds
+    })
+}
+
+/// PNG / BGRA を読める strike のうち、`ppem` と同じか直上、無ければ直下のもの。
+///
+/// skrifa の `glyph_for_size` と同じ優先順だが、単色マスクや壊れた画像の strike は選ばない。
+fn color_bitmap_for_size<'a>(
+    font: &skrifa::FontRef<'a>,
+    glyph_id: skrifa::GlyphId,
+    ppem: f32,
+) -> Option<skrifa::bitmap::BitmapGlyph<'a>> {
+    skrifa::bitmap::BitmapStrikes::new(font)
         .iter()
-        .find_map(|strike| strike.get(glyph_id))
-        .filter(|bitmap| {
-            matches!(
-                bitmap.data,
-                skrifa::bitmap::BitmapData::Png(_) | skrifa::bitmap::BitmapData::Bgra(_)
-            )
+        .filter_map(|strike| strike.get(glyph_id).filter(readable_color_bitmap))
+        .fold(None, |best: Option<skrifa::bitmap::BitmapGlyph<'a>>, bitmap| match best {
+            Some(best)
+                if !((bitmap.ppem_y >= ppem && bitmap.ppem_y < best.ppem_y)
+                    || (best.ppem_y < ppem && bitmap.ppem_y > best.ppem_y)) =>
+            {
+                Some(best)
+            }
+            _ => Some(bitmap),
         })
-        .map(|_| ColorGlyphKind::Bitmap)
+}
+
+fn readable_color_bitmap(bitmap: &skrifa::bitmap::BitmapGlyph<'_>) -> bool {
+    match bitmap.data {
+        skrifa::bitmap::BitmapData::Png(data) => {
+            image::ImageReader::with_format(std::io::Cursor::new(data), image::ImageFormat::Png)
+                .into_dimensions()
+                .is_ok_and(|(width, height)| width > 0 && height > 0)
+        }
+        skrifa::bitmap::BitmapData::Bgra(data) => {
+            bitmap.width > 0
+                && bitmap.height > 0
+                && data.len() as u64 >= u64::from(bitmap.width) * u64::from(bitmap.height) * 4
+        }
+        skrifa::bitmap::BitmapData::Mask(_) => false,
+    }
 }
 
 /// `scale` は ab_glyph と同じ `PxScale`（ascent - descent を px で表した値）。
@@ -82,12 +128,7 @@ fn rasterize_colr(
     units: (f32, f32),
 ) -> Option<ColorRaster> {
     let location = skrifa::instance::LocationRef::default();
-    let bounds =
-        color.bounding_box(location, skrifa::instance::Size::unscaled()).or_else(|| {
-            let mut painter = BoundsPainter::new(face);
-            color.paint(location, &mut painter).ok()?;
-            painter.bounds
-        })?;
+    let bounds = colr_bounds(face, color)?;
     let left = (bounds.x_min * units.0).floor();
     let top = (-bounds.y_max * units.1).floor();
     let width = ((bounds.x_max * units.0).ceil() - left).clamp(0.0, COLOR_GLYPH_MAX_EXTENT);
@@ -128,14 +169,14 @@ fn rasterize_bitmap(
     units: (f32, f32),
 ) -> Option<ColorRaster> {
     let ppem = units.1 * metrics.units_per_em;
-    let strikes = skrifa::bitmap::BitmapStrikes::new(font);
-    let bitmap = strikes.glyph_for_size(skrifa::instance::Size::new(ppem), glyph_id)?;
+    let bitmap = color_bitmap_for_size(font, glyph_id, ppem)?;
     let image = match bitmap.data {
         skrifa::bitmap::BitmapData::Png(data) => {
             image::load_from_memory_with_format(data, image::ImageFormat::Png).ok()?.to_rgba8()
         }
         skrifa::bitmap::BitmapData::Bgra(data) => {
-            let mut rgba = data.to_vec();
+            let len = (bitmap.width * bitmap.height * 4) as usize;
+            let mut rgba = data.get(..len)?.to_vec();
             for pixel in rgba.chunks_exact_mut(4) {
                 // CBDT の BGRA は premultiplied。
                 pixel.swap(0, 2);

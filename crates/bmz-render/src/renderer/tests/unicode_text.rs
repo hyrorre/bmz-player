@@ -1,20 +1,20 @@
 use super::*;
 
-fn fixture_face(name: &str) -> TextFace {
+pub(super) fn fixture_face(name: &str) -> TextFace {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/fonts").join(name);
     let bytes = std::fs::read(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     TextFace::from_vec(name, bytes, 0).expect("fixture font should parse")
 }
 
-fn latin() -> TextFace {
+pub(super) fn latin() -> TextFace {
     fixture_face("bmz-test-latin.ttf")
 }
 
-fn symbols() -> TextFace {
+pub(super) fn symbols() -> TextFace {
     fixture_face("bmz-test-symbols.ttf")
 }
 
-fn text_style(font_id: Option<&str>) -> TextStyle {
+pub(super) fn text_style(font_id: Option<&str>) -> TextStyle {
     TextStyle {
         font_id: font_id.map(str::to_string),
         size: 0.1,
@@ -30,7 +30,7 @@ fn text_style(font_id: Option<&str>) -> TextStyle {
     }
 }
 
-fn text_command(text: &str, style: TextStyle) -> DrawCommand {
+pub(super) fn text_command(text: &str, style: TextStyle) -> DrawCommand {
     DrawCommand::Text {
         origin: Point { x: 0.1, y: 0.1 },
         text: text.to_string(),
@@ -40,10 +40,10 @@ fn text_command(text: &str, style: TextStyle) -> DrawCommand {
     }
 }
 
-const SURFACE: SurfaceSize = SurfaceSize { width: 400, height: 200 };
+pub(super) const SURFACE: SurfaceSize = SurfaceSize { width: 400, height: 200 };
 
 /// 1つの明示フォントで組んだ quad。
-fn vector_quads(text: &str, face: &TextFace, style: TextStyle) -> Vec<TextQuad> {
+pub(super) fn vector_quads(text: &str, face: &TextFace, style: TextStyle) -> Vec<TextQuad> {
     let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
     atlas.begin_frame();
     let mut builder = CachedTextFrameBuilder::new(&mut atlas);
@@ -57,7 +57,7 @@ fn vector_quads(text: &str, face: &TextFace, style: TextStyle) -> Vec<TextQuad> 
     builder.quads
 }
 
-fn tofu_glyphs(shaped: &ShapedText) -> usize {
+pub(super) fn tofu_glyphs(shaped: &ShapedText) -> usize {
     shaped
         .clusters
         .iter()
@@ -614,11 +614,11 @@ fn image_only_faces_are_not_used_for_outline_glyphs() {
     assert_eq!(glyph_paint(&shaped, 0), (1, true));
 }
 
-fn color_font() -> TextFace {
+pub(super) fn color_font() -> TextFace {
     fixture_face("bmz-test-color.ttf")
 }
 
-fn cluster_texts<'a>(text: &'a str, shaped: &ShapedText) -> Vec<&'a str> {
+pub(super) fn cluster_texts<'a>(text: &'a str, shaped: &ShapedText) -> Vec<&'a str> {
     shaped.clusters.iter().map(|cluster| &text[cluster.text.clone()]).collect()
 }
 
@@ -735,12 +735,12 @@ fn mixed_script_and_emoji_text_never_loses_a_cluster() {
     }
 }
 
-fn sbix_font() -> TextFace {
+pub(super) fn sbix_font() -> TextFace {
     fixture_face("bmz-test-sbix.ttf")
 }
 
 /// cluster の最初のグリフ（face, color）。
-fn glyph_paint(shaped: &ShapedText, cluster: usize) -> (u16, bool) {
+pub(super) fn glyph_paint(shaped: &ShapedText, cluster: usize) -> (u16, bool) {
     match shaped.glyphs(&shaped.clusters[cluster])[0].source {
         GlyphSource::Vector { face, color, .. } => (face, color),
         other => panic!("vector glyph expected, got {other:?}"),
@@ -748,7 +748,7 @@ fn glyph_paint(shaped: &ShapedText, cluster: usize) -> (u16, bool) {
 }
 
 /// RGBA の不透明画素を、色ごとに粗く量子化して数える。
-fn opaque_colors(pixels: &[u8]) -> std::collections::BTreeSet<[u8; 3]> {
+pub(super) fn opaque_colors(pixels: &[u8]) -> std::collections::BTreeSet<[u8; 3]> {
     pixels
         .chunks_exact(4)
         .filter(|pixel| pixel[3] >= 250)
@@ -942,7 +942,7 @@ fn color_glyphs_are_rasterized_once_and_reused() {
 }
 
 /// TextFrame の quad を atlas から CPU で合成する（最近傍サンプリング、straight alpha）。
-fn composite_text(
+pub(super) fn composite_text(
     frame: &TextFrame,
     atlas: &TextAtlasCache,
     surface: SurfaceSize,
