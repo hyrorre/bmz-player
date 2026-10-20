@@ -60,6 +60,7 @@ pub use screenshot::ScreenshotClipboard;
 use screenshot::*;
 use text::*;
 use text_cached_builder::*;
+use text_face::FaceShapedGlyph;
 pub(crate) use text_face::TextFace;
 use text_layout::*;
 use text_shaping::*;

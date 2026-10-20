@@ -89,13 +89,11 @@ impl TextFace {
     }
 
     /// TTC/OTC 内の face index。
-    #[allow(dead_code)]
     pub(crate) fn index(&self) -> u32 {
         self.0.index
     }
 
     /// フォントファイル全体のバイト列。
-    #[allow(dead_code)]
     pub(crate) fn data(&self) -> &[u8] {
         self.0.font.font_data()
     }
@@ -109,15 +107,58 @@ impl TextFace {
     }
 
     /// 輪郭グリフとして描ける文字か。
+    pub(crate) fn has_glyph(&self, ch: char) -> bool {
+        self.renders_outline(self.glyph_id(ch))
+    }
+
+    /// 輪郭グリフとして描けるか。
     ///
     /// 画像フォントの空の輪郭（Apple Color Emoji の glyf 等）は描けないものとして扱う。
     /// 通常のフォントでは空の輪郭も有効なグリフ（空白類）とみなす。
-    pub(crate) fn has_glyph(&self, ch: char) -> bool {
-        let glyph = self.glyph_id(ch);
+    pub(super) fn renders_outline(&self, glyph: GlyphId) -> bool {
         glyph.0 != 0 && self.0.outlines && (!self.0.images || self.0.font.outline(glyph).is_some())
+    }
+
+    /// cmap format 14 の異体字シーケンス（例: U+2764 U+FE0F）のグリフ。
+    pub(super) fn variation_glyph(&self, ch: char, selector: char) -> Option<GlyphId> {
+        let face = ttf_parser::Face::parse(self.data(), self.index()).ok()?;
+        face.glyph_variation_index(ch, selector).map(|glyph| GlyphId(glyph.0))
+    }
+
+    /// 複数コードポイントの cluster を GSUB / GPOS / morx でシェーピングする。
+    ///
+    /// ZWJ・異体字セレクタ等の Default_Ignorable は取り除く。face に無い文字が残る場合は None。
+    pub(super) fn shape_cluster(&self, text: &str) -> Option<Vec<FaceShapedGlyph>> {
+        let face = rustybuzz::Face::from_slice(self.data(), self.index())?;
+        let mut buffer = rustybuzz::UnicodeBuffer::new();
+        buffer.push_str(text);
+        buffer.set_flags(rustybuzz::BufferFlags::REMOVE_DEFAULT_IGNORABLES);
+        buffer.guess_segment_properties();
+        let output = rustybuzz::shape(&face, &[], buffer);
+        let glyphs: Vec<_> = output
+            .glyph_infos()
+            .iter()
+            .zip(output.glyph_positions())
+            .map(|(info, position)| FaceShapedGlyph {
+                glyph: GlyphId(info.glyph_id as u16),
+                x_advance: position.x_advance as f32,
+                x_offset: position.x_offset as f32,
+                y_offset: position.y_offset as f32,
+            })
+            .collect();
+        (!glyphs.is_empty() && glyphs.iter().all(|glyph| glyph.glyph.0 != 0)).then_some(glyphs)
     }
 
     pub(super) fn h_advance_unscaled(&self, glyph: GlyphId) -> f32 {
         self.0.font.h_advance_unscaled(glyph)
     }
+}
+
+/// シェーピング結果（フォント単位、y は上向き）。
+#[derive(Debug, Clone, Copy)]
+pub(super) struct FaceShapedGlyph {
+    pub(super) glyph: GlyphId,
+    pub(super) x_advance: f32,
+    pub(super) x_offset: f32,
+    pub(super) y_offset: f32,
 }

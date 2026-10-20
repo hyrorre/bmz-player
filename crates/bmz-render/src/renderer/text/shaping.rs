@@ -1,3 +1,5 @@
+use unicode_segmentation::UnicodeSegmentation;
+
 use super::*;
 
 /// beatoraja の `MISSING_GLYPH_CANDIDATES` と同じ欠字代替候補（□, ▢, ☐, ■, ?）。
@@ -123,30 +125,144 @@ pub(super) fn is_default_ignorable(ch: char) -> bool {
     )
 }
 
+/// 1つの grapheme cluster の構成。
+struct ClusterChars {
+    chars: Vec<char>,
+    /// 描画対象の文字（Default_Ignorable・制御文字を除く）。
+    required: Vec<char>,
+    /// 異体字セレクタ（U+FE00..FE0F, U+E0100..E01EF）。
+    selector: Option<char>,
+}
+
+impl ClusterChars {
+    fn new(cluster: &str) -> Self {
+        let chars: Vec<char> = cluster.chars().collect();
+        let required = chars
+            .iter()
+            .copied()
+            .filter(|ch| matches!(char_class(*ch), CharClass::Visible | CharClass::Space))
+            .collect();
+        let selector = chars.iter().copied().find(|ch| is_variation_selector(*ch));
+        Self { chars, required, selector }
+    }
+
+    fn has_newline(&self) -> bool {
+        self.chars.contains(&'\n')
+    }
+
+    /// ZWJ・国旗・肌色・キーキャップ・絵文字異体字・タグを含む絵文字シーケンス。
+    ///
+    /// 1つの face で描けない場合は部品へ分解せず、cluster 単位で欠字表示する。
+    fn is_emoji_sequence(&self) -> bool {
+        self.chars.iter().any(|ch| {
+            matches!(
+                *ch as u32,
+                0x200D | 0x20E3 | 0xFE0F | 0x1F1E6..=0x1F1FF | 0x1F3FB..=0x1F3FF | 0xE0020..=0xE007F
+            )
+        })
+    }
+}
+
+pub(super) fn is_variation_selector(ch: char) -> bool {
+    matches!(ch as u32, 0xFE00..=0xFE0F | 0xE0100..=0xE01EF)
+}
+
 pub(super) fn shape_vector_text(text: &str, fonts: VectorFontSet<'_>) -> ShapedText {
     let mut shaped = ShapedText::default();
     if fonts.primary().is_none() {
         return shaped;
     }
-    for (start, ch) in text.char_indices() {
-        let range = start..start + ch.len_utf8();
-        match char_class(ch) {
-            CharClass::Newline => shaped.push_empty(range, true),
-            CharClass::Invisible => shaped.push_empty(range, false),
-            class => {
-                if let Some((index, face)) = fonts.find_face(|face| face.has_glyph(ch)) {
-                    let (advance, glyph) = fonts.vector_glyph(index, face, face.glyph_id(ch));
-                    shaped.push(range, advance, &[glyph]);
-                } else if class == CharClass::Space {
-                    shaped.push(range, fonts.missing_space_advance(ch), &[]);
-                } else {
+    for (start, cluster) in text.grapheme_indices(true) {
+        let range = start..start + cluster.len();
+        let mut chars = cluster.chars();
+        if let (Some(ch), None) = (chars.next(), chars.next()) {
+            push_vector_char(&mut shaped, range, ch, None, fonts);
+            continue;
+        }
+        let parts = ClusterChars::new(cluster);
+        match parts.required.as_slice() {
+            _ if parts.has_newline() => shaped.push_empty(range, true),
+            [] => shaped.push_empty(range, false),
+            [ch] => push_vector_char(&mut shaped, range, *ch, parts.selector, fonts),
+            required => {
+                let shaped_cluster = fonts
+                    .find_face(|face| required.iter().all(|ch| face.has_glyph(*ch)))
+                    .and_then(|(index, face)| {
+                        let glyphs = face.shape_cluster(cluster)?;
+                        let units = fonts.units_scale(index);
+                        Some(place_face_glyphs(
+                            index,
+                            &glyphs,
+                            units,
+                            units * face.metrics().height(),
+                            0.0,
+                        ))
+                    });
+                if let Some((advance, glyphs)) = shaped_cluster {
+                    shaped.push(range, advance, &glyphs);
+                } else if parts.is_emoji_sequence() {
                     let (advance, glyph) = fonts.missing_glyph();
                     shaped.push(range, advance, &[glyph]);
+                } else {
+                    // 結合文字を描ける face が無ければ基底文字だけを描く。
+                    push_vector_char(&mut shaped, range, required[0], None, fonts);
                 }
             }
         }
     }
     shaped
+}
+
+fn push_vector_char(
+    shaped: &mut ShapedText,
+    range: Range<usize>,
+    ch: char,
+    selector: Option<char>,
+    fonts: VectorFontSet<'_>,
+) {
+    match char_class(ch) {
+        CharClass::Newline => shaped.push_empty(range, true),
+        CharClass::Invisible => shaped.push_empty(range, false),
+        class => {
+            if let Some((index, face)) = fonts.find_face(|face| face.has_glyph(ch)) {
+                let glyph = selector
+                    .and_then(|selector| face.variation_glyph(ch, selector))
+                    .filter(|glyph| face.renders_outline(*glyph))
+                    .unwrap_or_else(|| face.glyph_id(ch));
+                let (advance, glyph) = fonts.vector_glyph(index, face, glyph);
+                shaped.push(range, advance, &[glyph]);
+            } else if class == CharClass::Space {
+                shaped.push(range, fonts.missing_space_advance(ch), &[]);
+            } else {
+                let (advance, glyph) = fonts.missing_glyph();
+                shaped.push(range, advance, &[glyph]);
+            }
+        }
+    }
+}
+
+/// シェーピング結果を設計単位へ変換する。`baseline_y` は行基準から基準線までの距離。
+fn place_face_glyphs(
+    face: u16,
+    glyphs: &[FaceShapedGlyph],
+    units: f32,
+    face_scale: f32,
+    baseline_y: f32,
+) -> (f32, Vec<ShapedGlyph>) {
+    let mut pen = 0.0;
+    let placed = glyphs
+        .iter()
+        .map(|glyph| {
+            let placed = ShapedGlyph {
+                x: (pen + glyph.x_offset) * units,
+                y: baseline_y - glyph.y_offset * units,
+                source: GlyphSource::Vector { face, glyph: glyph.glyph, face_scale },
+            };
+            pen += glyph.x_advance;
+            placed
+        })
+        .collect();
+    (pen * units, placed)
 }
 
 impl<'a> VectorFontSet<'a> {
@@ -198,26 +314,50 @@ fn generated_tofu(height: f32, top: f32) -> (f32, ShapedGlyph) {
 
 pub(super) fn shape_bitmap_text(text: &str, fonts: BitmapFontSet<'_>) -> ShapedText {
     let mut shaped = ShapedText::default();
-    for (start, ch) in text.char_indices() {
-        let range = start..start + ch.len_utf8();
-        let class = char_class(ch);
-        match class {
-            CharClass::Newline => shaped.push_empty(range, true),
-            CharClass::Invisible => shaped.push_empty(range, false),
-            _ => {
-                if let Some((advance, glyph)) = fonts.bitmap_glyph(ch) {
-                    shaped.push(range, advance, &[glyph]);
-                } else if class == CharClass::Space {
-                    // 空白を持たない.fntは従来どおり幅0で詰める（欠字表示はしない）。
-                    shaped.push_empty(range, false);
-                } else {
+    for (start, cluster) in text.grapheme_indices(true) {
+        let range = start..start + cluster.len();
+        let mut chars = cluster.chars();
+        if let (Some(ch), None) = (chars.next(), chars.next()) {
+            push_bitmap_char(&mut shaped, range, ch, fonts);
+            continue;
+        }
+        let parts = ClusterChars::new(cluster);
+        match parts.required.as_slice() {
+            _ if parts.has_newline() => shaped.push_empty(range, true),
+            [] => shaped.push_empty(range, false),
+            [ch] => push_bitmap_char(&mut shaped, range, *ch, fonts),
+            required => {
+                if let Some((advance, glyphs)) = fonts.cluster_glyphs(cluster, &parts) {
+                    shaped.push(range, advance, &glyphs);
+                } else if parts.is_emoji_sequence() {
                     let (advance, glyph) = fonts.missing_glyph();
                     shaped.push(range, advance, &[glyph]);
+                } else {
+                    push_bitmap_char(&mut shaped, range, required[0], fonts);
                 }
             }
         }
     }
     shaped
+}
+
+fn push_bitmap_char(shaped: &mut ShapedText, range: Range<usize>, ch: char, fonts: BitmapFontSet) {
+    let class = char_class(ch);
+    match class {
+        CharClass::Newline => shaped.push_empty(range, true),
+        CharClass::Invisible => shaped.push_empty(range, false),
+        _ => {
+            if let Some((advance, glyph)) = fonts.bitmap_glyph(ch) {
+                shaped.push(range, advance, &[glyph]);
+            } else if class == CharClass::Space {
+                // 空白を持たない.fntは従来どおり幅0で詰める（欠字表示はしない）。
+                shaped.push_empty(range, false);
+            } else {
+                let (advance, glyph) = fonts.missing_glyph();
+                shaped.push(range, advance, &[glyph]);
+            }
+        }
+    }
 }
 
 impl<'a> BitmapFontSet<'a> {
@@ -234,6 +374,42 @@ impl<'a> BitmapFontSet<'a> {
             let (index, face) = self.faces.find(|face| face.has_glyph(ch))?;
             Some(self.vector_glyph(index, face, face.glyph_id(ch)))
         })
+    }
+
+    /// 複数文字の cluster。.fnt が全文字を持てば順に並べ（結合文字等）、
+    /// 無ければ全文字を持つベクター face でシェーピングする。
+    fn cluster_glyphs(
+        self,
+        cluster: &str,
+        parts: &ClusterChars,
+    ) -> Option<(f32, Vec<ShapedGlyph>)> {
+        if !parts.is_emoji_sequence() {
+            let glyphs: Option<Vec<_>> =
+                parts.required.iter().map(|ch| self.glyph_of(*ch)).collect();
+            if let Some(glyphs) = glyphs {
+                let mut pen = 0.0;
+                let placed = glyphs
+                    .into_iter()
+                    .map(|(advance, glyph)| {
+                        let placed = ShapedGlyph { x: pen, ..glyph };
+                        pen += advance;
+                        placed
+                    })
+                    .collect();
+                return Some((pen, placed));
+            }
+        }
+        let (index, face) =
+            self.faces.find(|face| parts.required.iter().all(|ch| face.has_glyph(*ch)))?;
+        let glyphs = face.shape_cluster(cluster)?;
+        let units = self.design_size() / face.metrics().units_per_em;
+        Some(place_face_glyphs(
+            index,
+            &glyphs,
+            units,
+            units * face.metrics().height(),
+            self.cap_height(),
+        ))
     }
 
     fn glyph_of(self, ch: char) -> Option<(f32, ShapedGlyph)> {

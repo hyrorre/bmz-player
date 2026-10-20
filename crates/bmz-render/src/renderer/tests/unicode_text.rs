@@ -611,3 +611,124 @@ fn image_only_faces_are_not_used_for_outline_glyphs() {
     let shaped = shape_vector_text("😀", VectorFontSet { id: "chain", faces: faces_only(&faces) });
     assert_eq!(tofu_glyphs(&shaped), 1);
 }
+
+fn color_font() -> TextFace {
+    fixture_face("bmz-test-color.ttf")
+}
+
+fn cluster_texts<'a>(text: &'a str, shaped: &ShapedText) -> Vec<&'a str> {
+    shaped.clusters.iter().map(|cluster| &text[cluster.text.clone()]).collect()
+}
+
+#[test]
+fn emoji_sequences_shape_as_single_clusters_with_ligatures() {
+    let faces = [latin(), color_font()];
+    let fonts = VectorFontSet { id: "chain", faces: faces_only(&faces) };
+    let color = &faces[1];
+    for (text, ligature) in [
+        ("A👨\u{200D}👩\u{200D}👧\u{200D}👦B", "family"),
+        ("A🇯🇵B", "flag_jp"),
+        ("A👍🏻B", "thumbs_light"),
+    ] {
+        let shaped = shape_vector_text(text, fonts);
+        assert_eq!(shaped.clusters.len(), 3, "{text}: {:?}", cluster_texts(text, &shaped));
+        let glyphs = shaped.glyphs(&shaped.clusters[1]);
+        assert_eq!(glyphs.len(), 1, "{text} should become the {ligature} ligature");
+        let GlyphSource::Vector { face, glyph, .. } = glyphs[0].source else { panic!("vector") };
+        assert_eq!(face, 1);
+        assert!(
+            !color.font().codepoint_ids().any(|(id, _)| id == glyph),
+            "{ligature} is not mapped"
+        );
+        assert_approx(shaped.clusters[1].advance, fonts.em());
+    }
+}
+
+#[test]
+fn variation_selectors_and_zwj_are_never_separate_placeholders() {
+    let faces = [latin(), color_font()];
+    let fonts = VectorFontSet { id: "chain", faces: faces_only(&faces) };
+    for text in ["A✡\u{FE0E}B", "A✡\u{FE0F}B", "A❤\u{FE0F}B", "A\u{200D}B", "A\u{FE0F}B"] {
+        let shaped = shape_vector_text(text, fonts);
+        assert_eq!(tofu_glyphs(&shaped), 0, "{text}");
+        let glyph_count: usize =
+            shaped.clusters.iter().map(|cluster| shaped.glyphs(cluster).len()).sum();
+        let visible = text.chars().filter(|ch| char_class(*ch) == CharClass::Visible).count();
+        assert_eq!(glyph_count, visible, "{text}: {:?}", cluster_texts(text, &shaped));
+    }
+}
+
+#[test]
+fn unsupported_emoji_sequence_is_one_cluster_placeholder() {
+    let face = latin();
+    for text in ["A👨\u{200D}👩\u{200D}👧\u{200D}👦B", "A🇯🇵B", "A👍🏻B", "A1\u{FE0F}\u{20E3}B"]
+    {
+        let shaped = shape_vector_text(text, single_font_set("latin", &face));
+        assert_eq!(shaped.clusters.len(), 3, "{text}");
+        assert_eq!(tofu_glyphs(&shaped), 1, "{text} must not explode into per-codepoint boxes");
+        assert_eq!(shaped.glyphs(&shaped.clusters[1]).len(), 1);
+    }
+}
+
+#[test]
+fn combining_marks_fall_back_to_the_base_character() {
+    let face = latin();
+    let shaped = shape_vector_text("A\u{0301}B", single_font_set("latin", &face));
+    assert_eq!(cluster_texts("A\u{0301}B", &shaped), ["A\u{0301}", "B"]);
+    assert_eq!(tofu_glyphs(&shaped), 0);
+    let plain = shape_vector_text("A", single_font_set("latin", &face));
+    assert_approx(shaped.clusters[0].advance, plain.clusters[0].advance);
+}
+
+#[test]
+fn truncate_and_caret_keep_emoji_clusters_whole() {
+    let faces = [latin(), color_font()];
+    let fonts = VectorFontSet { id: "chain", faces: faces_only(&faces) };
+    let text = "A👨\u{200D}👩\u{200D}👧\u{200D}👦B";
+    let shaped = shape_vector_text(text, fonts);
+    let a_width = shaped.clusters[0].advance;
+    // A + 家族の途中までの幅では家族全体を落とす。
+    assert_eq!(truncated_cluster_count(&shaped.clusters, 1.0, a_width + fonts.em() * 0.5), 1);
+    // cluster の途中を指す caret は cluster の前に置く。
+    let inside = "A👨\u{200D}".len();
+    assert_approx(prefix_width_px(&shaped.clusters, inside, 1.0), a_width);
+    let after = text.len() - 1;
+    assert_approx(prefix_width_px(&shaped.clusters, after, 1.0), a_width + fonts.em());
+}
+
+#[test]
+fn bitmap_text_shapes_sequences_with_vector_faces_or_one_placeholder() {
+    let primary = test_bitmap_font();
+    let entries = bitmap_entries(&[&primary]);
+    let text = "A🇯🇵A";
+    let shaped = shape_bitmap_text(text, bitmap_set(&entries));
+    assert_eq!(shaped.clusters.len(), 3);
+    assert_eq!(tofu_glyphs(&shaped), 1);
+
+    let faces = [color_font()];
+    let fonts = BitmapFontSet { id: "bitmap", fonts: &entries, faces: faces_only(&faces) };
+    let shaped = shape_bitmap_text(text, fonts);
+    let glyphs = shaped.glyphs(&shaped.clusters[1]);
+    assert_eq!(glyphs.len(), 1);
+    assert!(matches!(glyphs[0].source, GlyphSource::Vector { face: 0, .. }));
+    assert_approx(shaped.clusters[1].advance, primary.size as f32);
+}
+
+#[test]
+fn mixed_script_and_emoji_text_never_loses_a_cluster() {
+    let mut system = load_default_font_fallbacks(bmz_font::FontCoverage::Japanese, &[]);
+    if system.faces.is_empty() {
+        return;
+    }
+    system.faces.push(color_font());
+    let text = "日本語✡한글😀中文";
+    let shaped = shape_vector_text(
+        text,
+        VectorFontSet { id: DEFAULT_TEXT_FONT_ID, faces: system.default_faces() },
+    );
+    assert_eq!(shaped.clusters.len(), text.chars().count());
+    for cluster in &shaped.clusters {
+        assert!(cluster.advance > 0.0);
+        assert_eq!(shaped.glyphs(cluster).len(), 1, "{}", &text[cluster.text.clone()]);
+    }
+}
