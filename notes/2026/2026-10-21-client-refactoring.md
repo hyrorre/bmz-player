@@ -27,3 +27,10 @@
 
 検証: fmt、check、all-targets Clippy成功。IR関連419 test成功。
 ログ: `.local/client-refactor-2-tests.log`。実サーバー通信は未実施。
+
+## 4. 通常ResultとCourse Resultの入力共通化
+
+- IRページ対象と終了actionを`ResultControlKind`で区別し、入力処理を一か所にした。
+  IR操作、panel、graph、終了の優先順とpress/repeat/入力受付条件を維持する。
+- fmt、check、all-targets Clippy成功。Result関連61成功・2 ignored、コース関連21成功。
+  既存回帰を利用した。実画面の操作は未実施。

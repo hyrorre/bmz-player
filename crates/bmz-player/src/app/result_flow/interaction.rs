@@ -1,5 +1,20 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+enum ResultControlKind {
+    Chart,
+    Course,
+}
+
+impl ResultControlKind {
+    const fn exit_action(self) -> ResultExitAction {
+        match self {
+            Self::Chart => ResultExitAction::HeldLanes,
+            Self::Course => ResultExitAction::HeldCourseLanes,
+        }
+    }
+}
+
 impl WinitApp {
     /// Key5/Key7 の現在の押下状態を記録する。フェードアウト中も含めて
     /// 常に呼び、終了アニメーション終了時に retry arrange を決める。
@@ -18,7 +33,45 @@ impl WinitApp {
         repeat: bool,
         synthesized_analog_axis: bool,
     ) -> bool {
-        if self.handle_result_open_ir_control(control, pressed, repeat, false) {
+        self.handle_result_control_for(
+            ResultControlKind::Chart,
+            control,
+            pressed,
+            repeat,
+            synthesized_analog_axis,
+        )
+    }
+
+    pub(super) fn handle_course_result_control(
+        &mut self,
+        control: &PhysicalControl,
+        pressed: bool,
+        repeat: bool,
+        synthesized_analog_axis: bool,
+    ) -> bool {
+        self.handle_result_control_for(
+            ResultControlKind::Course,
+            control,
+            pressed,
+            repeat,
+            synthesized_analog_axis,
+        )
+    }
+
+    fn handle_result_control_for(
+        &mut self,
+        kind: ResultControlKind,
+        control: &PhysicalControl,
+        pressed: bool,
+        repeat: bool,
+        synthesized_analog_axis: bool,
+    ) -> bool {
+        if self.handle_result_open_ir_control(
+            control,
+            pressed,
+            repeat,
+            matches!(kind, ResultControlKind::Course),
+        ) {
             return true;
         }
         if self.handle_result_ir_scroll_control(control, pressed, repeat, synthesized_analog_axis) {
@@ -64,65 +117,7 @@ impl WinitApp {
             // フェードアウト終了時の Key5/Key7 押下状態で retry か選曲へ戻るかを決める。
             lane if lane_starts_result_exit(lane) => {
                 if pressed && !repeat && self.result_input_ready() {
-                    self.begin_result_exit(ResultExitAction::HeldLanes);
-                }
-                true
-            }
-            _ => false,
-        }
-    }
-
-    pub(super) fn handle_course_result_control(
-        &mut self,
-        control: &PhysicalControl,
-        pressed: bool,
-        repeat: bool,
-        synthesized_analog_axis: bool,
-    ) -> bool {
-        if self.handle_result_open_ir_control(control, pressed, repeat, true) {
-            return true;
-        }
-        if self.handle_result_ir_scroll_control(control, pressed, repeat, synthesized_analog_axis) {
-            return true;
-        }
-        if pressed
-            && !repeat
-            && self.result_input_ready()
-            && self.result.result_panel == 1
-            && self.result_ir_scope_toggle_is_e1()
-            && self.is_result_ir_scope_toggle_control(control)
-            && self.toggle_result_ir_scope()
-        {
-            return true;
-        }
-        if pressed
-            && !repeat
-            && self.result_input_ready()
-            && self.select_result_panel_for_control(control)
-        {
-            return true;
-        }
-        if pressed
-            && !repeat
-            && self.result_input_ready()
-            && self.is_result_panel_toggle_control(control)
-            && self.toggle_result_panel()
-        {
-            return true;
-        }
-        let Some(lane) = self.result_lane_for_control(control) else {
-            return false;
-        };
-        match lane {
-            Lane::Key6 => {
-                if pressed && !repeat && self.result_input_ready() {
-                    self.cycle_result_gauge_graph_type();
-                }
-                true
-            }
-            lane if lane_starts_result_exit(lane) => {
-                if pressed && !repeat && self.result_input_ready() {
-                    self.begin_result_exit(ResultExitAction::HeldCourseLanes);
+                    self.begin_result_exit(kind.exit_action());
                 }
                 true
             }
