@@ -453,13 +453,19 @@ pub(super) struct TextAtlasCache {
     pub(super) glyphs: HashMap<TextGlyphKey, CachedGlyph>,
     /// ラスタライズできなかったグリフ。毎フレーム同じ失敗を繰り返さない。
     pub(super) failed: std::collections::HashSet<TextGlyphKey>,
+    /// atlas の空きが足りず格納を見送ったグリフ。作り直した atlas で再試行する。
+    pub(super) deferred: std::collections::HashSet<TextGlyphKey>,
+    /// 空き不足でグリフを返せなかった回数の累計。欠けたレイアウトをキャッシュしない判定に使う。
+    capacity_misses: u64,
     pub(super) layouts: TextLayoutCache,
-    /// 欠字・fallback の解決結果。atlas 画素とは独立なので高さ上限のリセットでは残す。
+    /// 欠字・fallback の解決結果。atlas 画素とは独立なので作り直しでは残す。
     pub(super) shapes: TextShapeCache,
     pub(super) dirty_regions: Vec<TextAtlasDirtyRegion>,
-    /// このフレームで高さが足りずに格納できなかったグリフがある。
+    /// 作り直した。GPU テクスチャに残る古い画素（パディングを含む）ごと書き直す。
+    rebuilt: bool,
+    /// 空きが足りずに格納できなかったグリフがある。作り直すまで立てたまま。
     overflowed: bool,
-    /// 作り直してから始まったフレーム数。
+    /// 作り直してから始まったフレーム数。まだ作り直していなければ `u32::MAX`。
     frames_since_clear: u32,
     /// 作り直しを見送る残りフレーム数（1フレームの文字が atlas に収まらない場合）。
     clear_delay: u32,
@@ -487,11 +493,14 @@ impl TextAtlasCache {
             pixels: Vec::new(),
             glyphs: HashMap::new(),
             failed: Default::default(),
+            deferred: Default::default(),
+            capacity_misses: 0,
             layouts: TextLayoutCache::new(),
             shapes: TextShapeCache::default(),
             dirty_regions: Vec::new(),
+            rebuilt: false,
             overflowed: false,
-            frames_since_clear: 0,
+            frames_since_clear: u32::MAX,
             clear_delay: 0,
         }
     }
@@ -515,6 +524,32 @@ impl TextAtlasCache {
         self.failed.insert(key);
     }
 
+    /// 空き不足で見送ったグリフなら、作り直すまで再試行せずに欠けたことだけを記録する。
+    fn is_deferred(&mut self, key: &TextGlyphKey) -> bool {
+        if !self.deferred.contains(key) {
+            return false;
+        }
+        self.capacity_misses += 1;
+        true
+    }
+
+    fn defer(&mut self, key: TextGlyphKey) {
+        if self.deferred.len() >= TEXT_LAYOUT_CACHE_MAX_ENTRIES {
+            self.deferred.clear();
+        }
+        self.deferred.insert(key);
+        self.capacity_misses += 1;
+    }
+
+    pub(super) fn capacity_misses(&self) -> u64 {
+        self.capacity_misses
+    }
+
+    /// 作り直した後の最初の取り出しで true。GPU 側はテクスチャ全体を書き直す。
+    pub(super) fn take_rebuilt(&mut self) -> bool {
+        std::mem::take(&mut self.rebuilt)
+    }
+
     /// 1グリフの画素の上限。これを超えるグリフは表示寸法を保ったまま解像度を下げる。
     pub(super) fn max_glyph_extent(&self) -> u32 {
         self.width.min(self.max_height).saturating_sub(TEXT_ATLAS_PADDING * 2).max(1)
@@ -522,19 +557,19 @@ impl TextAtlasCache {
 
     pub(super) fn begin_frame(&mut self) {
         self.dirty_regions.clear();
-        // アトラス高さが上限に達したか、格納できないグリフがあればキャッシュを捨てて
-        // 作り直す。フレーム描画前に行うので、このフレームのグリフは新しいアトラスへ
-        // 再ラスタライズされる。作り直した直後のフレームでも溢れた場合は、1フレームの
-        // 文字が atlas に収まらないので、毎フレーム全グリフを作り直さないよう間を空ける。
-        if self.overflowed || self.atlas_height() >= self.max_height {
+        // 空きが足りずに格納できないグリフがあった場合だけ、キャッシュを捨てて作り直す。
+        // 高さが上限に達しただけなら登録済みのグリフは描けるので、そのまま使い続ける。
+        // フレーム描画前に行うので、このフレームのグリフは新しい atlas へ格納し直される。
+        if self.overflowed {
+            // 作り直した直後のフレームでも溢れた場合は、1フレームの文字が atlas に
+            // 収まらない。すぐ作り直しても同じグリフしか入らないので、間を空ける。
+            if self.frames_since_clear == 1 && self.clear_delay == 0 {
+                self.clear_delay = TEXT_ATLAS_OVERFLOW_RETRY_FRAMES;
+            }
             if self.clear_delay > 0 {
                 self.clear_delay -= 1;
             } else {
-                let thrashing = self.overflowed && self.frames_since_clear <= 1;
                 self.clear();
-                if thrashing {
-                    self.clear_delay = TEXT_ATLAS_OVERFLOW_RETRY_FRAMES;
-                }
             }
         }
         self.frames_since_clear = self.frames_since_clear.saturating_add(1);
@@ -547,8 +582,10 @@ impl TextAtlasCache {
         self.pixels.clear();
         self.glyphs.clear();
         self.failed.clear();
+        self.deferred.clear();
         self.layouts.clear();
         self.dirty_regions.clear();
+        self.rebuilt = true;
         self.overflowed = false;
         self.frames_since_clear = 0;
     }
@@ -591,7 +628,7 @@ impl TextAtlasCache {
         if let Some(glyph) = self.glyphs.get(&key) {
             return Some(glyph.clone());
         }
-        if self.failed.contains(&key) {
+        if self.failed.contains(&key) || self.is_deferred(&key) {
             return None;
         }
         let Some(raster) = rasterize_outline_glyph(face, glyph_id, scale, self.max_glyph_extent())
@@ -629,7 +666,7 @@ impl TextAtlasCache {
         if let Some(glyph) = self.glyphs.get(&key) {
             return Some(glyph.clone());
         }
-        if self.failed.contains(&key) {
+        if self.failed.contains(&key) || self.is_deferred(&key) {
             return None;
         }
         let raster_scale = PxScale {
@@ -742,6 +779,9 @@ impl TextAtlasCache {
         if let Some(glyph) = self.glyphs.get(&key) {
             return Some(glyph.clone());
         }
+        if self.is_deferred(&key) {
+            return None;
+        }
         let max = self.max_glyph_extent() as f32;
         let pixels_per_px = VECTOR_TEXT_SUPERSAMPLE_SCALE.min(max / width.max(height));
         let pixel_width = (width * pixels_per_px).round().clamp(2.0, max.max(2.0)) as u32;
@@ -769,7 +809,7 @@ impl TextAtlasCache {
         if let Some(glyph) = self.glyphs.get(&key) {
             return Some(glyph.clone());
         }
-        if self.failed.contains(&key) {
+        if self.failed.contains(&key) || self.is_deferred(&key) {
             return None;
         }
 
@@ -807,8 +847,13 @@ impl TextAtlasCache {
         pixels: Vec<u8>,
     ) -> Option<CachedGlyph> {
         let Some(atlas_origin) = self.reserve(width, height) else {
-            // 次のフレームで atlas を作り直すまで、同じグリフを再試行しない。
-            self.mark_failed(key);
+            // 空きが無いだけなら、作り直した atlas で再試行する。どちらの場合も、
+            // atlas を作り直すまでは同じグリフを再試行しない。
+            if self.fits_empty_atlas(width, height) {
+                self.defer(key);
+            } else {
+                self.mark_failed(key);
+            }
             return None;
         };
         self.blit_region(atlas_origin, width, height, &pixels);
@@ -832,11 +877,11 @@ impl TextAtlasCache {
 
     /// パディングを含めて atlas の幅と高さの上限に収まる位置。収まらなければ None。
     pub(super) fn reserve(&mut self, glyph_width: u32, glyph_height: u32) -> Option<(u32, u32)> {
-        let padded_width = glyph_width.checked_add(TEXT_ATLAS_PADDING * 2)?;
-        let padded_height = glyph_height.checked_add(TEXT_ATLAS_PADDING * 2)?;
-        if padded_width > self.width || padded_height > self.max_height {
+        if !self.fits_empty_atlas(glyph_width, glyph_height) {
             return None;
         }
+        let padded_width = glyph_width + TEXT_ATLAS_PADDING * 2;
+        let padded_height = glyph_height + TEXT_ATLAS_PADDING * 2;
         let (mut pen_x, mut pen_y, mut row_height) = (self.pen_x, self.pen_y, self.row_height);
         if pen_x + padded_width > self.width {
             pen_x = 0;
@@ -855,6 +900,14 @@ impl TextAtlasCache {
         self.row_height = row_height;
         self.ensure_height(self.pen_y + self.row_height);
         Some(origin)
+    }
+
+    /// パディングを含めて空の atlas に収まる寸法か。
+    fn fits_empty_atlas(&self, glyph_width: u32, glyph_height: u32) -> bool {
+        let fits = |extent: u32, limit: u32| {
+            extent.checked_add(TEXT_ATLAS_PADDING * 2).is_some_and(|padded| padded <= limit)
+        };
+        fits(glyph_width, self.width) && fits(glyph_height, self.max_height)
     }
 
     fn ensure_height(&mut self, height: u32) {

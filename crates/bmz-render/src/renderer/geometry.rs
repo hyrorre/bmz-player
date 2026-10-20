@@ -65,6 +65,8 @@ pub(super) struct TextFrame {
     pub(super) size: AtlasSize,
     #[cfg(test)]
     pub(super) pixels: Vec<u8>,
+    /// atlas を作り直した。`dirty_regions` ではなくテクスチャ全体を書き直す。
+    pub(super) atlas_rebuilt: bool,
     pub(super) dirty_regions: Vec<TextAtlasDirtyRegion>,
     pub(super) instances: Vec<u8>,
     /// `DrawCommand::Text` ごとに生成された quad 数を、commands 内の出現順で持つ。

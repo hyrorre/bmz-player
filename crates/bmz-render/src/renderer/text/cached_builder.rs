@@ -129,6 +129,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
             return;
         }
         let quads_before = self.quads.len();
+        let capacity_misses = self.atlas.capacity_misses();
 
         let shaped = self.shaped_bitmap_text(text, fonts);
         let design_size = fonts.design_size();
@@ -172,7 +173,10 @@ impl<'a> CachedTextFrameBuilder<'a> {
         };
         self.push_clusters(&shaped, clusters, line, fonts.into());
 
-        if let Some(key) = layout_key {
+        // atlas の空き不足で欠けたグリフがあれば、作り直した後に組み直す。
+        if let Some(key) = layout_key
+            && self.atlas.capacity_misses() == capacity_misses
+        {
             self.atlas.insert_layout(key, &self.quads[quads_before..]);
         }
     }
@@ -249,6 +253,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
             return;
         }
         let quads_before = self.quads.len();
+        let capacity_misses = self.atlas.capacity_misses();
 
         let Some(primary) = fonts.primary() else {
             return;
@@ -321,7 +326,10 @@ impl<'a> CachedTextFrameBuilder<'a> {
         };
         self.push_clusters(&shaped, clusters, line, fonts.into());
 
-        if let Some(key) = layout_key {
+        // atlas の空き不足で欠けたグリフがあれば、作り直した後に組み直す。
+        if let Some(key) = layout_key
+            && self.atlas.capacity_misses() == capacity_misses
+        {
             self.atlas.insert_layout(key, &self.quads[quads_before..]);
         }
     }
@@ -361,15 +369,24 @@ impl<'a> CachedTextFrameBuilder<'a> {
                     [(GlyphPaint::Outline, None), color_glyph()]
                 };
                 // 解決時に選んだ形式で描けなければ、もう一方の形式、最後に欠字枠で描く。
-                let drawn = paints.into_iter().find_map(|(paint, tint)| {
+                // atlas の空き不足は描けないのではないので、作り直すまで代わりの形で描かない。
+                let capacity_misses = self.atlas.capacity_misses();
+                let mut drawn = None;
+                for (paint, tint) in paints {
                     let cached = match paint {
                         GlyphPaint::Color => {
                             self.atlas.cached_color_glyph(face, glyph, scale, line.decoration)
                         }
                         GlyphPaint::Outline => self.atlas.cached_vector_glyph(face, glyph, scale),
-                    }?;
-                    Some((cached, tint))
-                });
+                    };
+                    if let Some(cached) = cached {
+                        drawn = Some((cached, tint));
+                        break;
+                    }
+                    if self.atlas.capacity_misses() != capacity_misses {
+                        return;
+                    }
+                }
                 match drawn {
                     Some((cached, tint)) => {
                         quad_color = tint.unwrap_or(quad_color);
@@ -451,6 +468,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
             size,
             #[cfg(test)]
             pixels: Vec::new(),
+            atlas_rebuilt: self.atlas.take_rebuilt(),
             dirty_regions: std::mem::take(&mut self.atlas.dirty_regions),
             instances,
             command_quad_counts,

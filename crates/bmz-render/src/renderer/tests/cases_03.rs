@@ -87,7 +87,7 @@ fn vector_text_shrink_preserves_height_by_default_and_supports_uniform_mode() {
 }
 
 #[test]
-fn text_atlas_resets_when_height_reaches_limit() {
+fn text_atlas_resets_after_a_glyph_overflows_the_height_limit() {
     let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
     // 収まらなくなるまで行を積み、アトラス高さを上限まで成長させる。
     let glyph_height = 64;
@@ -95,7 +95,7 @@ fn text_atlas_resets_when_height_reaches_limit() {
     assert!(atlas.atlas_height() <= TEXT_ATLAS_MAX_HEIGHT);
     assert!(atlas.atlas_height() + glyph_height + TEXT_ATLAS_PADDING * 2 > TEXT_ATLAS_MAX_HEIGHT);
 
-    // フレーム境界でリセットされ、GPU テクスチャ上限を超えない高さに戻る。
+    // 収まらないグリフがあったので、フレーム境界でリセットされ、高さが戻る。
     atlas.begin_frame();
     assert_eq!(atlas.pen_y, 0);
     assert_eq!(atlas.pen_x, 0);
