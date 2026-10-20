@@ -155,6 +155,8 @@ mod clip;
 mod text_atlas;
 #[path = "tests/unicode_fallback.rs"]
 mod unicode_fallback;
+#[path = "tests/unicode_regression.rs"]
+mod unicode_regression;
 #[path = "tests/unicode_sequences.rs"]
 mod unicode_sequences;
 #[path = "tests/unicode_text.rs"]

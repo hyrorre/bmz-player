@@ -302,7 +302,7 @@ fn generated_placeholder_pixels_are_an_opaque_frame() {
     assert_eq!(pixel(glyph.width / 2, glyph.height / 2), 0, "the box must stay hollow");
 }
 
-fn bitmap_font_with(chars: &[(char, i32)]) -> BitmapFont {
+pub(super) fn bitmap_font_with(chars: &[(char, i32)]) -> BitmapFont {
     let mut font = test_bitmap_font();
     let mut glyphs = (*font.glyphs).clone();
     for (ch, advance) in chars {
