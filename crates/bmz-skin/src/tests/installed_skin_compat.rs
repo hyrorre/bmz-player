@@ -12,7 +12,10 @@
 //! ```
 //!
 //! `BMZ_SKIN_COMPAT_FILTER` limits entries to relative paths containing the
-//! given text. Without a baseline only the snapshot is written.
+//! given text. `BMZ_SKIN_COMPAT_OPTIONS` / `BMZ_SKIN_COMPAT_FILES` select
+//! non-default skin options and files (JSON objects). Several baseline runs
+//! can be given separated by `;`. Without a baseline only the snapshot is
+//! written.
 
 use super::*;
 use serde_json::{Value as JsonValue, json};
@@ -410,6 +413,17 @@ fn variant_load_state(variant: &str) -> LuaLoadRuntimeState {
     state
 }
 
+/// Optional skin selections applied to every entry, as a JSON object of
+/// `{"option or filepath name": "selected item"}` (combine with the filter).
+fn configured_selections(variable: &str) -> BTreeMap<String, String> {
+    std::env::var(variable)
+        .ok()
+        .map(|json| {
+            serde_json::from_str(&json).unwrap_or_else(|error| panic!("{variable}: {error}"))
+        })
+        .unwrap_or_default()
+}
+
 fn snapshot_document(
     normalizer: &PathNormalizer,
     context: &SkinPathContext,
@@ -417,8 +431,8 @@ fn snapshot_document(
 ) -> JsonValue {
     let loaded = match lua::load_lua_skin_value_with_path_context(
         context,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
+        &configured_selections("BMZ_SKIN_COMPAT_OPTIONS"),
+        &configured_selections("BMZ_SKIN_COMPAT_FILES"),
         runtime_state,
         &BTreeMap::new(),
     ) {

@@ -242,6 +242,8 @@ mod custom_timers;
 mod destination_clip;
 #[path = "tests/installed_skin_compat.rs"]
 mod installed_skin_compat;
+#[path = "tests/installed_skin_patterns.rs"]
+mod installed_skin_patterns;
 #[path = "tests/lua_api_baseline.rs"]
 mod lua_api_baseline;
 #[path = "tests/lua_api_extensions.rs"]
