@@ -55,6 +55,7 @@ fn test_bitmap_font() -> BitmapFont {
         scale_height: 1,
         pages: pages.into(),
         glyphs: glyphs.into(),
+        fallback_style: None,
     }
 }
 
@@ -139,6 +140,8 @@ fn sample_text() -> DrawCommand {
 
 #[path = "tests/ambient.rs"]
 mod ambient;
+#[path = "tests/bitmap_fallback_style.rs"]
+mod bitmap_fallback_style;
 #[path = "tests/cases_01.rs"]
 mod cases_01;
 #[path = "tests/cases_02.rs"]

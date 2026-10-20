@@ -356,6 +356,28 @@ pub(super) struct TextGlyphKey {
     pub(super) glyph: u32,
     scale_x_bits: u32,
     scale_y_bits: u32,
+    /// 種類ごとの追加の識別値。`StyledFallback` では基準線の位置。
+    detail_bits: u32,
+}
+
+impl TextGlyphKey {
+    /// 画像フォント文中の欠字を補うベクターグリフ。`set_id` はビットマップの主フォント。
+    pub(super) fn styled_fallback(
+        set_id: Arc<str>,
+        face_index: u16,
+        glyph_id: GlyphId,
+        scale: PxScale,
+        baseline: f32,
+    ) -> Self {
+        Self {
+            kind: TextGlyphKind::StyledFallback,
+            font_id: set_id,
+            glyph: (u32::from(face_index) << 16) | u32::from(glyph_id.0),
+            scale_x_bits: scale.x.to_bits(),
+            scale_y_bits: scale.y.to_bits(),
+            detail_bits: baseline.to_bits(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -366,6 +388,8 @@ pub(super) enum TextGlyphKind {
     Color,
     /// カラーグリフの alpha だけを持つ白いシルエット（影・縁取り用）。
     ColorSilhouette,
+    /// .fnt から推定した塗り・縁取りで描いた、画像フォント文中のベクターグリフ。
+    StyledFallback,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -517,7 +541,7 @@ impl TextAtlasCache {
 
     /// ラスタライズ・格納できなかったグリフを記録する。拡大縮小し続ける文字で
     /// 際限なく増えないよう、上限を超えたら記録をやり直す。
-    fn mark_failed(&mut self, key: TextGlyphKey) {
+    pub(super) fn mark_failed(&mut self, key: TextGlyphKey) {
         if self.failed.len() >= TEXT_LAYOUT_CACHE_MAX_ENTRIES {
             self.failed.clear();
         }
@@ -525,7 +549,7 @@ impl TextAtlasCache {
     }
 
     /// 空き不足で見送ったグリフなら、作り直すまで再試行せずに欠けたことだけを記録する。
-    fn is_deferred(&mut self, key: &TextGlyphKey) -> bool {
+    pub(super) fn is_deferred(&mut self, key: &TextGlyphKey) -> bool {
         if !self.deferred.contains(key) {
             return false;
         }
@@ -624,6 +648,7 @@ impl TextAtlasCache {
             glyph: u32::from(glyph_id.0),
             scale_x_bits: scale.x.to_bits(),
             scale_y_bits: scale.y.to_bits(),
+            detail_bits: 0,
         };
         if let Some(glyph) = self.glyphs.get(&key) {
             return Some(glyph.clone());
@@ -662,6 +687,7 @@ impl TextAtlasCache {
             glyph: u32::from(glyph_id.0),
             scale_x_bits: scale.x.to_bits(),
             scale_y_bits: scale.y.to_bits(),
+            detail_bits: 0,
         };
         if let Some(glyph) = self.glyphs.get(&key) {
             return Some(glyph.clone());
@@ -700,19 +726,19 @@ impl TextAtlasCache {
 }
 
 /// 輪郭グリフの白い被覆率画像。
-struct OutlineRaster {
-    width: u32,
-    height: u32,
+pub(super) struct OutlineRaster {
+    pub(super) width: u32,
+    pub(super) height: u32,
     /// 表示 1px あたりの画素数。通常は超解像の倍率で、大きなグリフでは小さくなる。
-    pixels_per_px: f32,
+    pub(super) pixels_per_px: f32,
     /// pen 位置・基準線からの左上（表示 px）。
-    offset_x: f32,
-    offset_y: f32,
-    pixels: Vec<u8>,
+    pub(super) offset_x: f32,
+    pub(super) offset_y: f32,
+    pub(super) pixels: Vec<u8>,
 }
 
 /// 超解像の倍率でラスタライズする。1辺が `max_extent` を超える場合は倍率を下げる。
-fn rasterize_outline_glyph(
+pub(super) fn rasterize_outline_glyph(
     face: &TextFace,
     glyph_id: GlyphId,
     scale: PxScale,
@@ -775,6 +801,7 @@ impl TextAtlasCache {
             glyph: 0,
             scale_x_bits: width.to_bits(),
             scale_y_bits: height.to_bits(),
+            detail_bits: 0,
         };
         if let Some(glyph) = self.glyphs.get(&key) {
             return Some(glyph.clone());
@@ -805,6 +832,7 @@ impl TextAtlasCache {
             glyph: u32::from(ch),
             scale_x_bits: scale.x.to_bits(),
             scale_y_bits: scale.y.to_bits(),
+            detail_bits: 0,
         };
         if let Some(glyph) = self.glyphs.get(&key) {
             return Some(glyph.clone());
@@ -835,7 +863,7 @@ impl TextAtlasCache {
         )
     }
 
-    fn insert_glyph_pixels(
+    pub(super) fn insert_glyph_pixels(
         &mut self,
         key: TextGlyphKey,
         width: u32,

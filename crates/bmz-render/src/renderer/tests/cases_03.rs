@@ -475,6 +475,7 @@ fn bitmap_font_text_uses_registered_font() {
             scale_height: 1,
             pages: pages.into(),
             glyphs: glyphs.into(),
+            fallback_style: None,
         },
     );
     let plan = DrawPlan {
@@ -587,6 +588,7 @@ fn bitmap_font_text_positions_glyphs_from_destination_baseline() {
             scale_height: 1,
             pages: pages.into(),
             glyphs: glyphs.into(),
+            fallback_style: None,
         },
     );
     let plan = DrawPlan {
@@ -662,6 +664,7 @@ fn bitmap_font_shrink_selects_horizontal_or_uniform_scaling() {
             scale_height: 10,
             pages: pages.into(),
             glyphs: glyphs.into(),
+            fallback_style: None,
         },
     );
     let render = |overflow| {
@@ -761,6 +764,7 @@ fn bitmap_font_text_uses_bitmap_size_for_scale() {
             scale_height: 1,
             pages: pages.into(),
             glyphs: glyphs.into(),
+            fallback_style: None,
         },
     );
     let plan = DrawPlan {

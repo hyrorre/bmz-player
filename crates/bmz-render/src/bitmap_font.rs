@@ -7,6 +7,9 @@ use encoding_rs::SHIFT_JIS;
 
 use crate::assets::{RgbaImageAsset, load_static_rgba_image};
 
+mod fallback_style;
+pub use fallback_style::{BitmapFallbackOutline, BitmapFallbackStyle};
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct BitmapFont {
     pub size: i32,
@@ -19,6 +22,9 @@ pub struct BitmapFont {
     // must not duplicate their pixels when a cached font is installed again.
     pub pages: Arc<HashMap<i32, BitmapFontPage>>,
     pub glyphs: Arc<HashMap<char, BitmapFontGlyph>>,
+    /// ページ画像から推定した、欠字をベクターフォントで描くときの塗りと縁取り。
+    /// スキンの文字色で塗る白いフォントや推定できないフォントでは None。
+    pub fallback_style: Option<Arc<BitmapFallbackStyle>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -187,6 +193,7 @@ fn parse_lr2_bitmap_font(text: &str, base_dir: &Path) -> Result<BitmapFont> {
         pages.insert(id, BitmapFontPage { id, path, image });
     }
 
+    let fallback_style = fallback_style::estimate_fallback_style(&glyphs, &pages).map(Arc::new);
     Ok(BitmapFont {
         size,
         line_height,
@@ -196,6 +203,7 @@ fn parse_lr2_bitmap_font(text: &str, base_dir: &Path) -> Result<BitmapFont> {
         scale_height,
         pages: pages.into(),
         glyphs: glyphs.into(),
+        fallback_style,
     })
 }
 
@@ -282,6 +290,7 @@ fn parse_bitmap_font(text: &str, base_dir: &Path) -> Result<BitmapFont> {
         pages.insert(id, BitmapFontPage { id, path, image });
     }
 
+    let fallback_style = fallback_style::estimate_fallback_style(&glyphs, &pages).map(Arc::new);
     Ok(BitmapFont {
         size,
         line_height,
@@ -291,6 +300,7 @@ fn parse_bitmap_font(text: &str, base_dir: &Path) -> Result<BitmapFont> {
         scale_height,
         pages: pages.into(),
         glyphs: glyphs.into(),
+        fallback_style,
     })
 }
 

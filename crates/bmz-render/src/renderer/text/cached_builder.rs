@@ -354,9 +354,35 @@ impl<'a> CachedTextFrameBuilder<'a> {
         let mut y = line.line_y + glyph.y * line.scale.y;
         let mut quad_color = line.color;
         let cached = match glyph.source {
-            GlyphSource::Vector { face, glyph, face_scale, color } => {
-                let Some(face) = fonts.faces.get(face) else { return };
+            GlyphSource::Vector { face: face_index, glyph: glyph_id, face_scale, color } => {
+                let Some(face) = fonts.faces.get(face_index) else { return };
                 let scale = PxScale { x: line.scale.x * face_scale, y: line.scale.y * face_scale };
+                // 画像フォントの文中では、.fnt から推定した塗り・縁取りで描く（BMZ 拡張）。
+                // 画像フォントのグリフと同じく文字色を掛ける。カラーグリフはフォントの色を保つ。
+                if !color
+                    && let Some(entry) = fonts.bitmaps.first()
+                    && let Some(style) = entry.font.fallback_style.as_deref()
+                {
+                    let capacity_misses = self.atlas.capacity_misses();
+                    let styled = self.atlas.cached_styled_fallback_glyph(StyledFallbackGlyph {
+                        set_id: &entry.id,
+                        face_index,
+                        face,
+                        glyph: glyph_id,
+                        scale,
+                        font_scale: line.scale,
+                        baseline: entry.font.ascent + glyph.y,
+                        style,
+                    });
+                    if let Some(cached) = styled {
+                        self.push_quad(x, y, &cached, quad_color, line.surface);
+                        return;
+                    }
+                    if self.atlas.capacity_misses() != capacity_misses {
+                        return;
+                    }
+                }
+                let glyph = glyph_id;
                 let color_glyph = || {
                     // カラーグリフはフォントの色を保ち、スキンの透明度だけを掛ける。
                     // 影・縁取りでは輪郭と同じく指定色のシルエットにする。
@@ -423,7 +449,17 @@ impl<'a> CachedTextFrameBuilder<'a> {
             }
         };
         let Some(cached) = cached else { return };
-        let surface = line.surface;
+        self.push_quad(x, y, &cached, quad_color, line.surface);
+    }
+
+    fn push_quad(
+        &mut self,
+        x: f32,
+        y: f32,
+        cached: &CachedGlyph,
+        color: Color,
+        surface: SurfaceSize,
+    ) {
         self.quads.push(TextQuad {
             x: (x + cached.offset_x) / surface.width as f32,
             y: (y + cached.offset_y) / surface.height as f32,
@@ -432,7 +468,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
             atlas_origin: cached.atlas_origin,
             glyph_width: cached.width,
             glyph_height: cached.height,
-            color: quad_color,
+            color,
         });
     }
 

@@ -59,7 +59,7 @@ BMZ固有のIDや詳細な動作契約は[skin.md](skin.md)、互換修正の方
 | Mine sprite | JSON / Luaの`note.mine`を使い、指定がない場合はデフォルトtextureへfallbackします。[note描画](../crates/bmz-render/src/skin/document_render/play/note.rs)、[plan](../crates/bmz-render/src/plan/play/document.rs) |
 | RANDOM gauge animation | `type=0`のanimationをシーンごとのruntime stateで更新します。[GaugeAnimationRuntime](../crates/bmz-render/src/skin/runtime/gauge_animation.rs)です。parts・flashの一致確認は下記の未検証項目を参照 |
 | text / font | align、overflow、wrapping、shadow/outline、TTF/OTF/TTC、bitmap font等です。beatorajaの`font.fallback`と欠字の代替候補（□ ▢ ☐ ■ ?）に対応します。文字atlas cacheを利用します。[仕様](skin.md#フォントのfallbackと欠字表示)、[text renderer](../crates/bmz-render/src/renderer/text/)、[GPU側cache利用](../crates/bmz-render/src/renderer/gpu/text.rs) |
-| フォント解決 | 同梱フォントを優先し、OSフォントへfallbackします。スキンが指定したフォントに無い文字も、既定フォントとOSの記号・絵文字フォントで補います（BMZ拡張）。path / memory bytes / TTC indexを扱います。[bmz-font](../crates/bmz-font/src/system.rs) |
+| フォント解決 | 同梱フォントを優先し、OSフォントへfallbackします。スキンが指定したフォントに無い文字も、既定フォントとOSの記号・絵文字フォントで補います（BMZ拡張）。ビットマップフォント文中の補った文字は、ページ画像から推定した塗りと縁取りで描きます（BMZ拡張、[仕様](skin.md#ビットマップフォント文中のベクター文字の見た目)）。path / memory bytes / TTC indexを扱います。[bmz-font](../crates/bmz-font/src/system.rs) |
 | Unicode・カラー絵文字 | BMZ拡張です。書記素クラスタ、ZWJ・国旗・肌色修飾、異体字セレクタ、COLR v0/v1・CBDT・sbixのカラーグリフを描きます。OpenType SVGは未対応です。[仕様](skin.md#カラー絵文字)、[テスト](../crates/bmz-render/src/renderer/tests/unicode_text.rs) |
 | SCROLL / SPEED | SCROLLの区間積分と、SPEEDイベント間の線形補間を実装します。見かけ距離にはnote位置のSPEED倍率を適用します。[scroll.rs](../crates/bmz-player/src/screens/play_snapshot/scroll.rs)、[snapshotテスト](../crates/bmz-player/src/screens/play_snapshot/tests/cases_03.rs) |
 

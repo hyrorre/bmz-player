@@ -47,6 +47,8 @@ mod text_face;
 mod text_layout;
 #[path = "renderer/text/shaping.rs"]
 mod text_shaping;
+#[path = "renderer/text/styled_fallback.rs"]
+mod text_styled_fallback;
 
 pub use font::{
     SystemFontData, load_cjk_font_fallback_data, load_font_bytes_for_coverage,
@@ -67,6 +69,7 @@ pub(crate) use text_face::TextFace;
 use text_face::{FaceMetrics, FaceShapedGlyph};
 use text_layout::*;
 use text_shaping::*;
+use text_styled_fallback::*;
 
 mod ambient;
 mod api;
