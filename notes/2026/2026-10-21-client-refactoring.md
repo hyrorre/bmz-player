@@ -34,3 +34,13 @@
   IR操作、panel、graph、終了の優先順とpress/repeat/入力受付条件を維持する。
 - fmt、check、all-targets Clippy成功。Result関連61成功・2 ignored、コース関連21成功。
   既存回帰を利用した。実画面の操作は未実施。
+
+## 3. 設定変更後の反映経路
+
+- `ProfileSettingsSnapshot`と共通反映処理を追加し、eguiとSelect設定の編集・確定・
+  キャンセル・保存失敗時の復元から利用する。入力再構築、一覧更新、lane、
+  score context、音量・連携の反映先を一か所へ揃えた。
+- Selectのplay設定はprofile一式を反映し、eguiは変更されたplay項目だけをmergeする
+  既存の違いを維持する。無関係な一時オプション保持と編集/復元の回帰を追加した。
+- fmt、check、all-targets Clippy成功。設定関連116 test成功。
+  ログ: `.local/client-refactor-3-tests.log`。実画面の設定操作は未実施。

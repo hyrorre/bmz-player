@@ -7,11 +7,7 @@ mod render;
 struct EguiProfileBefore {
     experimental_detail_options: bool,
     app_input: GlobalInputConfig,
-    locale: crate::i18n::AppLocale,
-    random_select: [bool; 8],
-    play: PlayDefaultsConfig,
-    lane: LaneViewConfig,
-    input: ProfileInputConfig,
+    settings: ProfileSettingsSnapshot,
 }
 
 fn egui_scene_name(scene_kind: AppSceneKind) -> &'static str {
@@ -243,11 +239,7 @@ impl WinitApp {
         let profile_before = EguiProfileBefore {
             experimental_detail_options: self.boot.app_config.select.experimental_detail_options,
             app_input: self.boot.app_config.input.clone(),
-            locale: self.boot.profile_config.ui.locale(),
-            random_select: self.boot.profile_config.select.random_select_flags(),
-            play: self.boot.profile_config.play.clone(),
-            lane: self.boot.profile_config.lane.clone(),
-            input: self.boot.profile_config.input.clone(),
+            settings: ProfileSettingsSnapshot::capture(&self.boot.profile_config),
         };
         let output = egui.run(
             &window,
@@ -662,7 +654,13 @@ impl WinitApp {
         profile_before: EguiProfileBefore,
     ) {
         self.reconcile_rian_table_identity();
-        self.apply_egui_profile_changes(&profile_before);
+        if profile_before.experimental_detail_options
+            != self.boot.app_config.select.experimental_detail_options
+        {
+            self.cancel_select_option_session();
+            self.reload_skins(SkinReloadRequest { select: true, ..Default::default() });
+        }
+        self.apply_profile_settings_changes(&profile_before.settings, None);
         self.apply_egui_input_config(window, &profile_before.app_input);
         self.renderer.set_egui_frame(output.frame);
         if let Some(action) = output.key_config_action {
@@ -766,51 +764,6 @@ impl WinitApp {
         if let Some(action) = output.profile_action {
             self.request_profile_change(action);
         }
-    }
-
-    fn apply_egui_profile_changes(&mut self, before: &EguiProfileBefore) {
-        if before.experimental_detail_options
-            != self.boot.app_config.select.experimental_detail_options
-        {
-            self.cancel_select_option_session();
-            self.reload_skins(SkinReloadRequest { select: true, ..Default::default() });
-        }
-        let locale = self.boot.profile_config.ui.locale();
-        self.renderer.set_default_font_coverage(locale.font_coverage());
-        let locale_changed = locale != before.locale;
-        if locale_changed {
-            self.select.search.clear_message();
-        }
-        if locale_changed
-            || before.random_select != self.boot.profile_config.select.random_select_flags()
-        {
-            if self.current_scene_kind() == AppSceneKind::Select {
-                self.reload_select_items();
-            } else {
-                self.jobs.pending_locale_refresh = true;
-            }
-        }
-        self.sync_changed_select_play_options_from_profile(&before.play);
-        self.sync_changed_select_score_context(SelectScoreContext::from_play(&before.play));
-        if before.play.key_mode_conversion != self.boot.profile_config.play.key_mode_conversion
-            || before.play.seven_to_nine_pattern
-                != self.boot.profile_config.play.seven_to_nine_pattern
-            || before.play.seven_to_nine_type != self.boot.profile_config.play.seven_to_nine_type
-            || before.play.seven_to_nine_rule_mode
-                != self.boot.profile_config.play.seven_to_nine_rule_mode
-        {
-            self.invalidate_play_preload();
-            self.play.play_media_cache = None;
-        }
-        self.sync_changed_gamepad_analog_config_from_profile(&before.input);
-        self.sync_changed_select_input_mode_from_profile(&before.input);
-        if profile_lane_settings_changed(&before.lane, &self.boot.profile_config.lane)
-            || before.play.lane_effect != self.boot.profile_config.play.lane_effect
-        {
-            self.sync_active_play_lane_settings_from_profile(&before.lane, before.play.lane_effect);
-        }
-        self.sync_realtime_profile_settings();
-        self.sync_discord_presence_config();
     }
 
     pub(super) fn apply_egui_video_config(&mut self, window: &Window) {

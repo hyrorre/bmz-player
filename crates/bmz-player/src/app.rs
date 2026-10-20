@@ -817,8 +817,10 @@ mod key_config_flow;
 mod lifecycle;
 #[path = "app/platform.rs"]
 mod platform;
+mod profile_settings;
 #[path = "app/runtime_config.rs"]
 mod runtime_config;
+use profile_settings::ProfileSettingsSnapshot;
 #[path = "app/runtime_helpers.rs"]
 mod runtime_helpers;
 #[path = "app/scene_state.rs"]

@@ -299,11 +299,9 @@ impl WinitApp {
         match session {
             SelectSettingsEditSession::Profile(session) => {
                 let entry_id = session.entry_id();
-                let score_context_before =
-                    SelectScoreContext::from_profile(&self.boot.profile_config);
+                let before = ProfileSettingsSnapshot::capture(&self.boot.profile_config);
                 session.restore(&mut self.boot.profile_config);
-                self.sync_select_settings_from_profile_if_needed(entry_id);
-                self.sync_changed_select_score_context(score_context_before);
+                self.apply_profile_settings_changes(&before, Some(entry_id));
                 tracing::info!(?entry_id, "settings edit cancelled");
             }
             SelectSettingsEditSession::App(session) => {
@@ -331,21 +329,20 @@ impl WinitApp {
 
     fn commit_profile_settings_edit(&mut self, session: SettingsEditSession) {
         let entry_id = session.entry_id();
+        let before = ProfileSettingsSnapshot::capture(&self.boot.profile_config);
         self.boot.profile_config.updated_at = now_unix_seconds();
         match save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
         {
             Ok(()) => {
-                self.sync_select_settings_from_profile_if_needed(entry_id);
+                self.apply_profile_settings_changes(&before, Some(entry_id));
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
                 tracing::info!(?entry_id, "settings edit saved");
             }
             Err(error) => {
                 tracing::error!(%error, ?entry_id, "failed to save settings");
-                let score_context_before =
-                    SelectScoreContext::from_profile(&self.boot.profile_config);
+                let before = ProfileSettingsSnapshot::capture(&self.boot.profile_config);
                 session.restore(&mut self.boot.profile_config);
-                self.sync_select_settings_from_profile_if_needed(entry_id);
-                self.sync_changed_select_score_context(score_context_before);
+                self.apply_profile_settings_changes(&before, Some(entry_id));
             }
         }
     }
@@ -496,8 +493,8 @@ impl WinitApp {
             SelectSettingsEditSession::Profile(session) => Some(session.entry_id()),
             SelectSettingsEditSession::App(_) => None,
         };
-        let score_context_before =
-            profile_entry.map(|_| SelectScoreContext::from_profile(&self.boot.profile_config));
+        let before =
+            profile_entry.map(|_| ProfileSettingsSnapshot::capture(&self.boot.profile_config));
         let changed = match session {
             SelectSettingsEditSession::Profile(session) => {
                 let delta = direction
@@ -512,47 +509,12 @@ impl WinitApp {
             return;
         }
         if let Some(entry_id) = profile_entry {
-            self.sync_select_settings_from_profile_if_needed(entry_id);
-            self.sync_changed_select_score_context(
-                score_context_before.expect("profile edit captured score context"),
+            self.apply_profile_settings_changes(
+                before.as_ref().expect("profile edit captured settings"),
+                Some(entry_id),
             );
         }
         self.play_system_sound(crate::system_sound::SoundType::OptionChange);
-    }
-
-    pub(super) fn sync_select_settings_from_profile_if_needed(
-        &mut self,
-        entry_id: SettingsEntryId,
-    ) {
-        self.sync_select_play_options_from_profile_if_needed(entry_id);
-        if entry_id == SettingsEntryId::SelectInputMode {
-            self.rebuild_select_key_bindings();
-        }
-        if matches!(
-            entry_id,
-            SettingsEntryId::AnalogScratch1P
-                | SettingsEntryId::AnalogScratchSensitivity1P
-                | SettingsEntryId::AnalogScratchThreshold1P
-                | SettingsEntryId::AnalogScratch2P
-                | SettingsEntryId::AnalogScratchSensitivity2P
-                | SettingsEntryId::AnalogScratchThreshold2P
-        ) {
-            self.apply_gamepad_analog_config();
-        }
-        if SettingsEntryId::VOLUME_ENTRIES.contains(&entry_id) {
-            self.sync_realtime_profile_settings();
-        }
-        if entry_id == SettingsEntryId::Language {
-            self.reload_select_items();
-        }
-        if entry_id == SettingsEntryId::HispeedMode {
-            self.reload_select_items();
-        }
-        if entry_id == SettingsEntryId::ShowFps
-            && let Some(egui) = self.ui.egui.as_mut()
-        {
-            egui.set_show_fps(self.boot.profile_config.ui.show_fps);
-        }
     }
 
     /// The select input device takes effect immediately, whichever UI changed it.
@@ -596,37 +558,9 @@ impl WinitApp {
         self.clear_result_ir_scroll_input();
     }
 
-    pub(super) fn sync_select_play_options_from_profile_if_needed(
-        &mut self,
-        entry_id: SettingsEntryId,
-    ) {
-        if !entry_id.is_play_setting() {
-            return;
-        }
-        self.sync_select_play_options_from_profile();
-        self.invalidate_play_preload();
-        self.play.play_media_cache = None;
-    }
-
     pub(super) fn sync_select_play_options_from_profile(&mut self) {
         let options = select_play_options_from_profile(&self.boot.profile_config.play);
         self.set_select_play_options(options);
-    }
-
-    pub(super) fn sync_changed_select_play_options_from_profile(
-        &mut self,
-        before: &PlayDefaultsConfig,
-    ) {
-        let current = self.current_select_play_options();
-        let next = merge_changed_select_play_options_from_profile(
-            current,
-            before,
-            &self.boot.profile_config.play,
-        );
-        if next != current {
-            self.set_select_play_options(next);
-            tracing::info!("applied profile play settings to select options");
-        }
     }
 
     pub(super) fn sync_changed_select_score_context(&mut self, before: SelectScoreContext) {
