@@ -940,3 +940,229 @@ fn color_glyphs_are_rasterized_once_and_reused() {
     );
     assert!(second.dirty_regions.is_empty(), "cached color glyphs must not be uploaded again");
 }
+
+/// TextFrame の quad を atlas から CPU で合成する（最近傍サンプリング、straight alpha）。
+fn composite_text(
+    frame: &TextFrame,
+    atlas: &TextAtlasCache,
+    surface: SurfaceSize,
+) -> Vec<[f32; 4]> {
+    let atlas_size = atlas.size();
+    let atlas_pixels = atlas.pixels_for_size(atlas_size);
+    let mut canvas = vec![[0.0f32, 0.0, 0.0, 1.0]; (surface.width * surface.height) as usize];
+    for instance in frame.instances.chunks_exact(TEXT_INSTANCE_BYTES) {
+        let f: Vec<f32> = instance
+            .chunks_exact(4)
+            .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect();
+        let (x0, y0) = (f[0] * surface.width as f32, f[1] * surface.height as f32);
+        let (w, h) = (f[2] * surface.width as f32, f[3] * surface.height as f32);
+        for py in (y0.floor().max(0.0) as u32)..((y0 + h).ceil() as u32).min(surface.height) {
+            for px in (x0.floor().max(0.0) as u32)..((x0 + w).ceil() as u32).min(surface.width) {
+                let u = ((px as f32 + 0.5 - x0) / w).clamp(0.0, 0.999);
+                let v = ((py as f32 + 0.5 - y0) / h).clamp(0.0, 0.999);
+                let ax = ((f[4] + u * f[6]) * atlas_size.width as f32) as u32;
+                let ay = ((f[5] + v * f[7]) * atlas_size.height as f32) as u32;
+                let index = ((ay * atlas_size.width + ax) * 4) as usize;
+                let texel = [0, 1, 2, 3].map(|i| atlas_pixels[index + i] as f32 / 255.0);
+                let color = [0, 1, 2, 3].map(|i| texel[i] * f[8 + i]);
+                let dst = &mut canvas[(py * surface.width + px) as usize];
+                for i in 0..3 {
+                    dst[i] = color[i] * color[3] + dst[i] * (1.0 - color[3]);
+                }
+            }
+        }
+    }
+    canvas
+}
+
+/// 依頼された検証文字列をスキンフォント（記号・絵文字なし）＋テスト用 fallback で描き、
+/// どの行も文字が消えず、カラー絵文字の行に複数色が出ることを画像で確かめる。
+/// `BMZ_TEXT_PREVIEW=<path.png>` を指定すると合成結果を保存する。
+#[test]
+fn unicode_test_strings_render_visible_pixels() {
+    const LINES: [&str; 12] = [
+        "Solomon ✡ 12",
+        "A✡B",
+        "A✡\u{FE0E}B",
+        "A✡\u{FE0F}B",
+        "A♠♡♫∞B",
+        "A😀B",
+        "A🎵B",
+        "A❤\u{FE0F}B",
+        "A👍🏻B",
+        "A🇯🇵B",
+        "A👨\u{200D}👩\u{200D}👧\u{200D}👦B",
+        "日本語✡한글😀中文",
+    ];
+    let surface = SurfaceSize { width: 480, height: 40 * LINES.len() as u32 };
+    let mut renderer = Renderer::default();
+    renderer.insert_vector_font("skin:latin".into(), latin());
+    renderer.insert_vector_font("skin:latin#fallback0".into(), symbols());
+    renderer.insert_vector_font("skin:latin#fallback1".into(), color_font());
+    renderer.set_font_fallbacks(
+        "skin:latin",
+        vec!["skin:latin#fallback0".into(), "skin:latin#fallback1".into()],
+    );
+    let system = load_default_font_fallbacks(bmz_font::FontCoverage::Japanese, &[]);
+    let mut style = text_style(Some("skin:latin"));
+    style.size = 24.0 / surface.height as f32;
+    style.color = Color::rgb(0.2, 1.0, 0.2);
+    let commands = LINES
+        .iter()
+        .enumerate()
+        .map(|(index, line)| DrawCommand::Text {
+            origin: Point { x: 0.02, y: (index as f32 * 40.0 + 8.0) / surface.height as f32 },
+            text: line.to_string(),
+            caret: None,
+            post_scale: Point { x: 1.0, y: 1.0 },
+            style: style.clone(),
+        })
+        .collect();
+    let plan = DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands };
+    let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    let frame =
+        build_text_frame_with_font_sets(&plan, &system, &renderer.font_sets, surface, &mut atlas);
+    let canvas = composite_text(&frame, &atlas, surface);
+    if let Ok(path) = std::env::var("BMZ_TEXT_PREVIEW") {
+        let bytes: Vec<u8> = canvas
+            .iter()
+            .flat_map(|pixel| pixel.map(|value| (value.clamp(0.0, 1.0) * 255.0) as u8))
+            .collect();
+        image::RgbaImage::from_raw(surface.width, surface.height, bytes)
+            .unwrap()
+            .save(path)
+            .unwrap();
+    }
+    for (index, line) in LINES.iter().enumerate() {
+        let shaped = shape_vector_text(
+            line,
+            VectorFontSet {
+                id: "skin:latin",
+                faces: system.after(&renderer.font_sets.vector["skin:latin"]),
+            },
+        );
+        let visible = shaped.clusters.iter().filter(|cluster| {
+            !shaped.glyphs(cluster).is_empty()
+                && !line[cluster.text.clone()].chars().all(char::is_whitespace)
+        });
+        assert_eq!(visible.count(), frame.command_quad_counts[index], "{line}");
+        let rows = (index as u32 * 40)..(index as u32 * 40 + 40);
+        let lit: Vec<[f32; 4]> = rows
+            .flat_map(|y| (0..surface.width).map(move |x| (x, y)))
+            .map(|(x, y)| canvas[(y * surface.width + x) as usize])
+            .filter(|pixel| pixel[0] + pixel[1] + pixel[2] > 0.5)
+            .collect();
+        assert!(lit.len() > 100, "{line} must leave visible pixels");
+        let has_emoji = line
+            .chars()
+            .any(|ch| Presentation::of(ch, None, false) == Presentation::Emoji || ch == '\u{FE0F}');
+        // 文字色は (0.2, 1, 0.2)。赤・青の比率がそれより高い画素はフォント由来の色。
+        let font_colored =
+            lit.iter().any(|pixel| pixel[0] > pixel[1] * 0.5 || pixel[2] > pixel[1] * 0.5);
+        assert_eq!(font_colored, has_emoji, "{line}");
+    }
+}
+
+/// 同じ文字列でもフォントセットごとに解決結果を分け、別セットの結果を流用しない。
+#[test]
+fn shape_cache_is_isolated_per_font_set() {
+    let mut renderer = Renderer::default();
+    renderer.insert_vector_font("skin:plain".into(), latin());
+    renderer.insert_vector_font("skin:symbols".into(), latin());
+    renderer.insert_vector_font("skin:symbols#fallback0".into(), symbols());
+    renderer.set_font_fallbacks("skin:symbols", vec!["skin:symbols#fallback0".into()]);
+    let system = FontFallbackChain::default();
+    let plan = DrawPlan {
+        clear: Color::rgb(0.0, 0.0, 0.0),
+        commands: vec![
+            text_command("✡", text_style(Some("skin:plain"))),
+            text_command("✡", text_style(Some("skin:symbols"))),
+        ],
+    };
+    let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    build_text_frame_with_font_sets(&plan, &system, &renderer.font_sets, SURFACE, &mut atlas);
+    assert_eq!(atlas.shapes.len(), 2);
+    let kinds: Vec<_> =
+        atlas.glyphs.keys().map(|key| (key.kind, key.font_id.to_string())).collect();
+    assert!(kinds.contains(&(TextGlyphKind::Tofu, String::new())), "{kinds:?}");
+    assert!(kinds.contains(&(TextGlyphKind::Vector, "bmz-test-symbols.ttf".into())), "{kinds:?}");
+}
+
+/// 長い曲名・難易度表名を毎フレーム描いても、2フレーム目以降は解決・ラスタライズ・
+/// atlas 転送をやり直さない（影付きでレイアウトキャッシュが効かない場合も含む）。
+#[test]
+fn long_mixed_titles_do_not_reshape_or_rerasterize_every_frame() {
+    let faces = [latin(), symbols(), color_font()];
+    let mut renderer = Renderer::default();
+    renderer.insert_vector_font("skin:latin".into(), faces[0].clone());
+    renderer.insert_vector_font("skin:latin#fallback0".into(), faces[1].clone());
+    renderer.insert_vector_font("skin:latin#fallback1".into(), faces[2].clone());
+    renderer.set_font_fallbacks(
+        "skin:latin",
+        vec!["skin:latin#fallback0".into(), "skin:latin#fallback1".into()],
+    );
+    let title = "Solomon ✡ 12 ♠♡♫∞ 😀🎵❤\u{FE0F}👍🏻🇯🇵 ☀ ".repeat(8);
+    let mut shadowed = text_style(Some("skin:latin"));
+    shadowed.shadow = Some(crate::plan::TextShadow {
+        color: Color::rgba(0.0, 0.0, 0.0, 1.0),
+        offset: Point { x: 0.002, y: 0.002 },
+    });
+    let plan = DrawPlan {
+        clear: Color::rgb(0.0, 0.0, 0.0),
+        commands: vec![
+            text_command(&title, text_style(Some("skin:latin"))),
+            text_command(&title, shadowed),
+        ],
+    };
+    let system = FontFallbackChain::default();
+    let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    let first =
+        build_text_frame_with_font_sets(&plan, &system, &renderer.font_sets, SURFACE, &mut atlas);
+    let glyphs = atlas.glyphs.len();
+    let shapes = atlas.shapes.len();
+    for _ in 0..3 {
+        let next = build_text_frame_with_font_sets(
+            &plan,
+            &system,
+            &renderer.font_sets,
+            SURFACE,
+            &mut atlas,
+        );
+        assert!(next.dirty_regions.is_empty());
+        assert_eq!(next.instances, first.instances);
+    }
+    assert_eq!(atlas.glyphs.len(), glyphs);
+    assert_eq!(atlas.shapes.len(), shapes);
+}
+
+/// 解像度を変えても、カラーグリフと周囲の文字の相対的な大きさ・位置は変わらない。
+#[test]
+fn color_glyphs_scale_with_surface_like_outline_glyphs() {
+    let faces = [latin(), color_font()];
+    let layout = |surface: SurfaceSize| {
+        let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+        atlas.begin_frame();
+        let mut builder = CachedTextFrameBuilder::new(&mut atlas);
+        builder.push_text(
+            &Point { x: 0.1, y: 0.1 },
+            "A😀B",
+            text_style(None),
+            VectorFontSet { id: "chain", faces: faces_only(&faces) },
+            surface,
+        );
+        builder
+            .quads
+            .iter()
+            .map(|quad| (quad.x, quad.y, quad.width, quad.height))
+            .collect::<Vec<_>>()
+    };
+    let small = layout(SurfaceSize { width: 400, height: 200 });
+    let large = layout(SurfaceSize { width: 1600, height: 800 });
+    assert_eq!(small.len(), 3);
+    for (a, b) in small.iter().zip(&large) {
+        // 画素の丸め分（小さい方の1px前後）だけ許容する。
+        assert!((a.0 - b.0).abs() < 0.004 && (a.1 - b.1).abs() < 0.008, "{a:?} {b:?}");
+        assert!((a.2 - b.2).abs() < 0.004 && (a.3 - b.3).abs() < 0.008, "{a:?} {b:?}");
+    }
+}
