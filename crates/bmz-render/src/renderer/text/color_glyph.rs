@@ -190,7 +190,7 @@ fn rasterize_bitmap(
         skrifa::bitmap::BitmapData::Bgra(data) => {
             let len = (bitmap.width * bitmap.height * 4) as usize;
             let mut rgba = data.get(..len)?.to_vec();
-            for pixel in rgba.chunks_exact_mut(4) {
+            for pixel in rgba.as_chunks_mut::<4>().0 {
                 // CBDT の BGRA は premultiplied。
                 pixel.swap(0, 2);
                 let alpha = pixel[3] as f32 / 255.0;

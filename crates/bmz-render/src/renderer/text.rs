@@ -706,7 +706,7 @@ impl TextAtlasCache {
             return None;
         };
         if silhouette {
-            for pixel in raster.pixels.chunks_exact_mut(4) {
+            for pixel in raster.pixels.as_chunks_mut::<4>().0 {
                 pixel[..3].fill(255);
             }
         }

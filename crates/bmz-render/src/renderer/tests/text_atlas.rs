@@ -11,11 +11,9 @@ fn assert_quads_inside_atlas(quads: &[TextQuad], atlas: &TextAtlasCache) {
         assert!(quad.atlas_origin.1 + quad.glyph_height <= size.height, "{quad:?} / {size:?}");
     }
     let instances = encode_text_quads(quads, size.width, size.height);
-    for instance in instances.chunks_exact(TEXT_INSTANCE_BYTES) {
-        let f: Vec<f32> = instance
-            .chunks_exact(4)
-            .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
-            .collect();
+    for instance in instances.as_chunks::<TEXT_INSTANCE_BYTES>().0 {
+        let f: Vec<f32> =
+            instance.as_chunks::<4>().0.iter().map(|bytes| f32::from_le_bytes(*bytes)).collect();
         assert!(f[4] >= 0.0 && f[4] + f[6] <= 1.0 + f32::EPSILON, "u {:?}", &f[4..8]);
         assert!(f[5] >= 0.0 && f[5] + f[7] <= 1.0 + f32::EPSILON, "v {:?}", &f[4..8]);
     }

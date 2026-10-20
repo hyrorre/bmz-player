@@ -276,8 +276,10 @@ fn placeholder_scales_with_surface_and_is_cached_once() {
     assert_eq!(atlas.shapes.len(), 1);
     let quad_size = |frame: &TextFrame| {
         let floats: Vec<f32> = frame.instances[..TEXT_INSTANCE_BYTES]
-            .chunks_exact(4)
-            .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| f32::from_le_bytes(*bytes))
             .collect();
         (floats[2], floats[3])
     };
@@ -750,7 +752,9 @@ pub(super) fn glyph_paint(shaped: &ShapedText, cluster: usize) -> (u16, bool) {
 /// RGBA の不透明画素を、色ごとに粗く量子化して数える。
 pub(super) fn opaque_colors(pixels: &[u8]) -> std::collections::BTreeSet<[u8; 3]> {
     pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| pixel[3] >= 250)
         .map(|pixel| [pixel[0] / 32, pixel[1] / 32, pixel[2] / 32])
         .collect()
@@ -951,11 +955,9 @@ pub(super) fn composite_text(
     let atlas_size = atlas.size();
     let atlas_pixels = atlas.pixels_for_size(atlas_size);
     let mut canvas = vec![[0.0f32, 0.0, 0.0, 1.0]; (surface.width * surface.height) as usize];
-    for instance in frame.instances.chunks_exact(TEXT_INSTANCE_BYTES) {
-        let f: Vec<f32> = instance
-            .chunks_exact(4)
-            .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
-            .collect();
+    for instance in frame.instances.as_chunks::<TEXT_INSTANCE_BYTES>().0 {
+        let f: Vec<f32> =
+            instance.as_chunks::<4>().0.iter().map(|bytes| f32::from_le_bytes(*bytes)).collect();
         let (x0, y0) = (f[0] * surface.width as f32, f[1] * surface.height as f32);
         let (w, h) = (f[2] * surface.width as f32, f[3] * surface.height as f32);
         for py in (y0.floor().max(0.0) as u32)..((y0 + h).ceil() as u32).min(surface.height) {

@@ -65,6 +65,7 @@ HieroのGradientEffectがグリフではなく行（ascent）を基準にする�
 - `cargo clippy --workspace --all-targets --locked -- -D warnings`は、今回触れていない既存コード8か所の
   `clippy::chunks_exact_to_as_chunks`（rustc 1.98のclippy）で失敗します。mainでも同じ8件です。
   このlintだけを許可した実行では警告はありませんでした。
+  （2026-10-21追記: 8か所を`as_chunks` / `as_chunks_mut`へ置き換え、`-D warnings`で警告なしになりました。）
 
 未実施:
 
