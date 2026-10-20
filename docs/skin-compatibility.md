@@ -57,8 +57,9 @@ BMZ固有のIDや詳細な動作契約は[skin.md](skin.md)、互換修正の方
 | Playターゲットスコア | 数値ref `121/151`は最終値、`153`は進行値との差分です。グラフ`114`は進行値、`115`は最終値を最大EX SCOREに対する割合で返します。value / text / Luaの共通処理で解決します。[仕様](skin.md#play-target-score-refs)、[回帰テスト](../crates/bmz-render/src/skin/tests/graphs_more.rs) |
 | Mine sprite | JSON / Luaの`note.mine`を使い、指定がない場合はデフォルトtextureへfallbackします。[note描画](../crates/bmz-render/src/skin/document_render/play/note.rs)、[plan](../crates/bmz-render/src/plan/play/document.rs) |
 | RANDOM gauge animation | `type=0`のanimationをシーンごとのruntime stateで更新します。[GaugeAnimationRuntime](../crates/bmz-render/src/skin/runtime/gauge_animation.rs)です。parts・flashの一致確認は下記の未検証項目を参照 |
-| text / font | align、overflow、wrapping、shadow/outline、TTF/OTF/TTC、bitmap font等です。文字atlas cacheを利用します。[text renderer](../crates/bmz-render/src/renderer/text/)、[GPU側cache利用](../crates/bmz-render/src/renderer/gpu/text.rs) |
-| フォント解決 | 同梱フォントを優先し、OSフォントへfallbackします。path / memory bytes / TTC indexを扱います。[bmz-font](../crates/bmz-font/src/system.rs) |
+| text / font | align、overflow、wrapping、shadow/outline、TTF/OTF/TTC、bitmap font等です。beatorajaの`font.fallback`と欠字の代替候補（□ ▢ ☐ ■ ?）に対応します。文字atlas cacheを利用します。[仕様](skin.md#フォントのfallbackと欠字表示)、[text renderer](../crates/bmz-render/src/renderer/text/)、[GPU側cache利用](../crates/bmz-render/src/renderer/gpu/text.rs) |
+| フォント解決 | 同梱フォントを優先し、OSフォントへfallbackします。スキンが指定したフォントに無い文字も、既定フォントとOSの記号・絵文字フォントで補います（BMZ拡張）。path / memory bytes / TTC indexを扱います。[bmz-font](../crates/bmz-font/src/system.rs) |
+| Unicode・カラー絵文字 | BMZ拡張です。書記素クラスタ、ZWJ・国旗・肌色修飾、異体字セレクタ、COLR v0/v1・CBDT・sbixのカラーグリフを描きます。OpenType SVGは未対応です。[仕様](skin.md#カラー絵文字)、[テスト](../crates/bmz-render/src/renderer/tests/unicode_text.rs) |
 | SCROLL / SPEED | SCROLLの区間積分と、SPEEDイベント間の線形補間を実装します。見かけ距離にはnote位置のSPEED倍率を適用します。[scroll.rs](../crates/bmz-player/src/screens/play_snapshot/scroll.rs)、[snapshotテスト](../crates/bmz-player/src/screens/play_snapshot/tests/cases_03.rs) |
 
 destinationの`clip_x` / `clip_y` / `clip_w` / `clip_h`は、継承・補間・offsetを含めて

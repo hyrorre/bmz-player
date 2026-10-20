@@ -144,6 +144,19 @@ Release packages must preserve the font unchanged and install its `LICENSE` as
 `resources/licenses/NotoSansCJK-OFL-1.1.txt` (or the corresponding location in
 a macOS app bundle / Flatpak resource directory).
 
+## System Symbol and Emoji Fonts
+
+Skin text falls back to symbol and color emoji fonts that are already installed
+on the user's system (for example Segoe UI Symbol / Segoe UI Emoji on Windows,
+Apple Symbols / Apple Color Emoji on macOS, and Noto Sans Symbols / Noto Color
+Emoji on Linux). BMZ Player maps these files read-only at runtime and does not
+copy, modify, or redistribute them, so release packages must not bundle them.
+See `docs/skin.md` for the lookup order.
+
+The fonts under `crates/bmz-render/testdata/fonts/` are generated from simple
+polygons by `scripts/generate_test_fonts.py`. They contain no third-party font
+data, are used only by tests, and are not part of release artifacts.
+
 ## Bundled Skins
 
 `data/skins/default` is BMZ Player's first-party minimal skin.
