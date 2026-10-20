@@ -106,7 +106,7 @@ fn missing_glyph_uses_question_mark_candidate_before_generated_box() {
     let glyph = shaped.glyphs(&shaped.clusters[1])[0];
     assert_eq!(
         glyph.source,
-        GlyphSource::Vector { face: 0, glyph: face.glyph_id('?'), face_scale: 1.0 }
+        GlyphSource::Vector { face: 0, glyph: face.glyph_id('?'), face_scale: 1.0, color: false }
     );
 }
 
@@ -601,7 +601,8 @@ fn os_symbol_fonts_render_solomon_star_when_installed() {
     assert!(face > 0, "the star must come from a system face");
 }
 
-/// 輪郭を持たないカラー画像専用フォント（sbix / CBDT）は輪郭描画の候補にしない。
+/// 輪郭を持たないカラー画像専用フォント（sbix / CBDT）は輪郭描画の候補にせず、
+/// カラーグリフとして描く。
 #[test]
 fn image_only_faces_are_not_used_for_outline_glyphs() {
     let sbix = fixture_face("bmz-test-sbix.ttf");
@@ -609,7 +610,8 @@ fn image_only_faces_are_not_used_for_outline_glyphs() {
     assert!(!sbix.has_glyph('😀'));
     let faces = [latin(), sbix];
     let shaped = shape_vector_text("😀", VectorFontSet { id: "chain", faces: faces_only(&faces) });
-    assert_eq!(tofu_glyphs(&shaped), 1);
+    assert_eq!(tofu_glyphs(&shaped), 0);
+    assert_eq!(glyph_paint(&shaped, 0), (1, true));
 }
 
 fn color_font() -> TextFace {
@@ -731,4 +733,210 @@ fn mixed_script_and_emoji_text_never_loses_a_cluster() {
         assert!(cluster.advance > 0.0);
         assert_eq!(shaped.glyphs(cluster).len(), 1, "{}", &text[cluster.text.clone()]);
     }
+}
+
+fn sbix_font() -> TextFace {
+    fixture_face("bmz-test-sbix.ttf")
+}
+
+/// cluster の最初のグリフ（face, color）。
+fn glyph_paint(shaped: &ShapedText, cluster: usize) -> (u16, bool) {
+    match shaped.glyphs(&shaped.clusters[cluster])[0].source {
+        GlyphSource::Vector { face, color, .. } => (face, color),
+        other => panic!("vector glyph expected, got {other:?}"),
+    }
+}
+
+/// RGBA の不透明画素を、色ごとに粗く量子化して数える。
+fn opaque_colors(pixels: &[u8]) -> std::collections::BTreeSet<[u8; 3]> {
+    pixels
+        .chunks_exact(4)
+        .filter(|pixel| pixel[3] >= 250)
+        .map(|pixel| [pixel[0] / 32, pixel[1] / 32, pixel[2] / 32])
+        .collect()
+}
+
+#[test]
+fn text_symbols_stay_monochrome_unless_emoji_presentation_is_requested() {
+    let faces = [latin(), color_font()];
+    let fonts = VectorFontSet { id: "chain", faces: faces_only(&faces) };
+    for (text, color) in [
+        ("✡", false),
+        ("✡\u{FE0E}", false),
+        ("✡\u{FE0F}", true),
+        ("❤", false),
+        ("❤\u{FE0F}", true),
+        ("😀", true),
+        ("🎵", true),
+    ] {
+        let shaped = shape_vector_text(text, fonts);
+        assert_eq!(shaped.clusters.len(), 1, "{text}");
+        assert_eq!(glyph_paint(&shaped, 0), (1, color), "{text}");
+    }
+}
+
+#[test]
+fn emoji_presentation_falls_back_to_outline_and_text_to_color_only_glyphs() {
+    // ♠ はカラーグリフを持たないため、VS16 でも記号 face の輪郭を使う。
+    let faces = [latin(), symbols()];
+    let shaped =
+        shape_vector_text("♠\u{FE0F}", VectorFontSet { id: "a", faces: faces_only(&faces) });
+    assert_eq!(glyph_paint(&shaped, 0), (1, false));
+    // 輪郭を持たない sbix の 😀 は、VS15 でも欠字ではなくカラーで描く。
+    let faces = [latin(), sbix_font()];
+    let shaped =
+        shape_vector_text("😀\u{FE0E}", VectorFontSet { id: "b", faces: faces_only(&faces) });
+    assert_eq!(glyph_paint(&shaped, 0), (1, true));
+}
+
+#[test]
+fn emoji_sequences_prefer_color_ligatures() {
+    let faces = [latin(), color_font()];
+    let fonts = VectorFontSet { id: "chain", faces: faces_only(&faces) };
+    for text in ["👨\u{200D}👩\u{200D}👧\u{200D}👦", "🇯🇵", "👍🏻"] {
+        let shaped = shape_vector_text(text, fonts);
+        assert_eq!(shaped.glyphs(&shaped.clusters[0]).len(), 1, "{text}");
+        assert_eq!(glyph_paint(&shaped, 0), (1, true), "{text}");
+    }
+}
+
+fn raster(face: &TextFace, ch: char, px: f32) -> ColorRaster {
+    rasterize_color_glyph(face, face.glyph_id(ch), PxScale::from(px)).expect("color glyph")
+}
+
+#[test]
+fn colr_v0_layers_keep_their_palette_colors() {
+    let face = color_font();
+    assert_eq!(color_glyph_kind(&face, face.glyph_id('😀')), Some(ColorGlyphKind::Colr));
+    let raster = raster(&face, '😀', 64.0);
+    let colors = opaque_colors(&raster.pixels);
+    // 黄色の顔（1.0, 0.8, 0.0）と暗い目（0.1, 0.1, 0.1）。
+    assert!(colors.contains(&[7, 6, 0]), "{colors:?}");
+    assert!(colors.contains(&[0, 0, 0]), "{colors:?}");
+    // 基準線より上に置かれ、em の範囲に収まる。
+    assert!(raster.offset_y < 0.0);
+    assert!(raster.width as f32 <= 64.0 && raster.height as f32 <= 64.0);
+}
+
+#[test]
+fn colr_v1_linear_gradient_blends_between_stops() {
+    let face = color_font();
+    let raster = raster(&face, '🎵', 96.0);
+    let colors = opaque_colors(&raster.pixels);
+    // 赤（0.9, 0, 0.1）から青（0, 0.3, 1）へ変化する。
+    assert!(colors.iter().any(|[r, _, b]| *r >= 6 && *b <= 1), "{colors:?}");
+    assert!(colors.iter().any(|[r, _, b]| *r <= 1 && *b >= 6), "{colors:?}");
+    assert!(colors.len() >= 4, "gradient should produce intermediate colors: {colors:?}");
+}
+
+#[test]
+fn sbix_png_strike_is_scaled_and_placed() {
+    let face = sbix_font();
+    assert_eq!(color_glyph_kind(&face, face.glyph_id('😀')), Some(ColorGlyphKind::Bitmap));
+    // 32ppem の strike を 2倍へ拡大する（em = PxScale × upem / height）。
+    let em_px = 64.0;
+    let metrics = face.metrics();
+    let raster = raster(&face, '😀', em_px * metrics.height() / metrics.units_per_em);
+    assert_eq!((raster.width, raster.height), (64, 64));
+    let pixel = |x: u32, y: u32| {
+        let index = ((y * raster.width + x) * 4) as usize;
+        [
+            raster.pixels[index],
+            raster.pixels[index + 1],
+            raster.pixels[index + 2],
+            raster.pixels[index + 3],
+        ]
+    };
+    assert_eq!(pixel(16, 32), [255, 0, 0, 255]);
+    assert_eq!(pixel(48, 32), [0, 0, 255, 255]);
+    assert_eq!(pixel(2, 2)[3], 0);
+    // sbix は左下原点。glyf の yMin = 0 なので画像の下端が基準線。
+    assert_approx(raster.offset_y, -64.0);
+}
+
+/// OS の CBDT カラー絵文字（Linux の Noto Color Emoji）が入っていれば実際の色で描く。
+#[test]
+fn os_cbdt_color_emoji_renders_multiple_colors_when_installed() {
+    let Some(symbol) =
+        bmz_font::symbol_font_fallbacks().iter().find(|font| font.family() == "Noto Color Emoji")
+    else {
+        return;
+    };
+    let faces = load_symbol_faces(std::slice::from_ref(symbol));
+    let face = &faces[0];
+    if color_glyph_kind(face, face.glyph_id('😀')) != Some(ColorGlyphKind::Bitmap) {
+        return;
+    }
+    let raster = raster(face, '😀', 48.0);
+    assert!(opaque_colors(&raster.pixels).len() >= 3);
+}
+
+#[test]
+fn color_glyphs_keep_font_colors_with_skin_alpha_and_silhouette_decorations() {
+    let faces = [latin(), color_font()];
+    let fonts = VectorFontSet { id: "chain", faces: faces_only(&faces) };
+    let mut style = text_style(None);
+    style.color = Color::rgba(1.0, 0.0, 0.0, 0.5);
+    style.shadow = Some(crate::plan::TextShadow {
+        color: Color::rgba(0.0, 0.0, 1.0, 0.25),
+        offset: Point { x: 0.01, y: 0.01 },
+    });
+    let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    atlas.begin_frame();
+    let mut builder = CachedTextFrameBuilder::new(&mut atlas);
+    builder.push_text(&Point { x: 0.1, y: 0.1 }, "A😀", style, fonts, SURFACE);
+    let quads = builder.quads.clone();
+    assert_eq!(quads.len(), 4);
+    // 影は文字色ではなく影色。カラーグリフの影もシルエット。
+    for quad in &quads[..2] {
+        assert_eq!(quad.color, Color::rgba(0.0, 0.0, 1.0, 0.25));
+    }
+    assert_eq!(quads[2].color, Color::rgba(1.0, 0.0, 0.0, 0.5));
+    assert_eq!(quads[3].color, Color::rgba(1.0, 1.0, 1.0, 0.5));
+    let kinds: Vec<_> = atlas.glyphs.keys().map(|key| key.kind).collect();
+    assert!(kinds.contains(&TextGlyphKind::Color));
+    assert!(kinds.contains(&TextGlyphKind::ColorSilhouette));
+    let silhouette =
+        atlas.glyphs.iter().find(|(key, _)| key.kind == TextGlyphKind::ColorSilhouette);
+    let (_, silhouette) = silhouette.unwrap();
+    let pixels = atlas.pixels_for_size(atlas.size());
+    let row = (silhouette.atlas_origin.1 + silhouette.height / 2) * TEXT_ATLAS_WIDTH;
+    let index = ((row + silhouette.atlas_origin.0 + silhouette.width / 2) * 4) as usize;
+    assert_eq!(&pixels[index..index + 4], &[255, 255, 255, 255]);
+}
+
+#[test]
+fn color_glyphs_are_rasterized_once_and_reused() {
+    let face = color_font();
+    let mut fonts = HashMap::new();
+    fonts.insert("skin:color".to_string(), face.clone());
+    let plan = DrawPlan {
+        clear: Color::rgb(0.0, 0.0, 0.0),
+        commands: vec![
+            text_command("😀😀🎵", text_style(Some("skin:color"))),
+            text_command("A😀", text_style(Some("skin:color"))),
+        ],
+    };
+    let system = FontFallbackChain::single(latin());
+    let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    let first = build_text_frame_with_fallback_cache(
+        &plan,
+        &system,
+        &fonts,
+        &HashMap::new(),
+        SURFACE,
+        &mut atlas,
+    );
+    assert_eq!(first.command_quad_counts, vec![3, 2]);
+    let color_keys = atlas.glyphs.keys().filter(|key| key.kind == TextGlyphKind::Color).count();
+    assert_eq!(color_keys, 2);
+    let second = build_text_frame_with_fallback_cache(
+        &plan,
+        &system,
+        &fonts,
+        &HashMap::new(),
+        SURFACE,
+        &mut atlas,
+    );
+    assert!(second.dirty_regions.is_empty(), "cached color glyphs must not be uploaded again");
 }

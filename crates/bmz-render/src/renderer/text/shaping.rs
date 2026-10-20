@@ -50,7 +50,8 @@ pub(super) struct ShapedGlyph {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum GlyphSource {
     /// フォントセット内 `face` 番目のグリフ。`face_scale` は face 固有の `PxScale` 倍率。
-    Vector { face: u16, glyph: GlyphId, face_scale: f32 },
+    /// `color` はフォント由来の色で描くカラーグリフ。
+    Vector { face: u16, glyph: GlyphId, face_scale: f32, color: bool },
     /// ビットマップフォントセット内 `font` 番目のグリフ。
     Bitmap { font: u16, ch: char },
     /// 代替グリフも無いときに描画側で生成する欠字矩形（設計単位）。
@@ -167,6 +168,102 @@ pub(super) fn is_variation_selector(ch: char) -> bool {
     matches!(ch as u32, 0xFE00..=0xFE0F | 0xE0100..=0xE01EF)
 }
 
+const TEXT_PRESENTATION_SELECTOR: char = '\u{FE0E}';
+const EMOJI_PRESENTATION_SELECTOR: char = '\u{FE0F}';
+
+/// 文字・cluster の表示形式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Presentation {
+    Text,
+    Emoji,
+}
+
+impl Presentation {
+    /// VS15 / VS16 を優先し、無ければ絵文字シーケンスか Emoji_Presentation の既定値を使う。
+    ///
+    /// ✡（U+2721）や ❤（U+2764）のように既定がテキスト表示の記号は、VS16 が無い限り
+    /// 通常の記号として扱う。
+    pub(super) fn of(base: char, selector: Option<char>, emoji_sequence: bool) -> Self {
+        use unicode_properties::{EmojiStatus, UnicodeEmoji};
+        match selector {
+            Some(EMOJI_PRESENTATION_SELECTOR) => return Self::Emoji,
+            Some(TEXT_PRESENTATION_SELECTOR) => return Self::Text,
+            _ => {}
+        }
+        let emoji_default = matches!(
+            base.emoji_status(),
+            EmojiStatus::EmojiPresentation
+                | EmojiStatus::EmojiPresentationAndModifierBase
+                | EmojiStatus::EmojiPresentationAndEmojiComponent
+                | EmojiStatus::EmojiPresentationAndModifierAndEmojiComponent
+        );
+        if emoji_sequence || emoji_default { Self::Emoji } else { Self::Text }
+    }
+
+    /// 探す描画形式の順。絵文字はカラー → 輪郭、テキストは輪郭 → カラー。
+    fn paints(self) -> [GlyphPaint; 2] {
+        match self {
+            Self::Emoji => [GlyphPaint::Color, GlyphPaint::Outline],
+            Self::Text => [GlyphPaint::Outline, GlyphPaint::Color],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GlyphPaint {
+    Outline,
+    Color,
+}
+
+impl TextFace {
+    pub(super) fn paints(&self, glyph: GlyphId, paint: GlyphPaint) -> bool {
+        match paint {
+            GlyphPaint::Outline => self.renders_outline(glyph),
+            GlyphPaint::Color => color_glyph_kind(self, glyph).is_some(),
+        }
+    }
+}
+
+/// 文字（＋異体字セレクタ）を描ける face・グリフ・形式を、表示形式の優先順で探す。
+fn resolve_char<'a>(
+    faces: FaceList<'a>,
+    ch: char,
+    selector: Option<char>,
+    paints: &[GlyphPaint],
+) -> Option<(u16, &'a TextFace, GlyphId, GlyphPaint)> {
+    paints.iter().find_map(|paint| {
+        faces
+            .find_map(|face| {
+                let variation = selector.and_then(|selector| face.variation_glyph(ch, selector));
+                variation
+                    .into_iter()
+                    .chain([face.glyph_id(ch)])
+                    .find(|glyph| face.paints(*glyph, *paint))
+            })
+            .map(|(index, face, glyph)| (index, face, glyph, *paint))
+    })
+}
+
+/// 複数文字の cluster を1つの face でシェーピングできるか、表示形式の優先順で探す。
+fn resolve_cluster<'a>(
+    faces: FaceList<'a>,
+    cluster: &str,
+    required: &[char],
+    presentation: Presentation,
+) -> Option<(u16, &'a TextFace, Vec<FaceShapedGlyph>, GlyphPaint)> {
+    presentation.paints().into_iter().find_map(|paint| {
+        faces
+            .find_map(|face| {
+                if !required.iter().all(|ch| face.glyph_id(*ch).0 != 0) {
+                    return None;
+                }
+                let glyphs = face.shape_cluster(cluster)?;
+                glyphs.iter().all(|glyph| face.paints(glyph.glyph, paint)).then_some(glyphs)
+            })
+            .map(|(index, face, glyphs)| (index, face, glyphs, paint))
+    })
+}
+
 pub(super) fn shape_vector_text(text: &str, fonts: VectorFontSet<'_>) -> ShapedText {
     let mut shaped = ShapedText::default();
     if fonts.primary().is_none() {
@@ -176,27 +273,32 @@ pub(super) fn shape_vector_text(text: &str, fonts: VectorFontSet<'_>) -> ShapedT
         let range = start..start + cluster.len();
         let mut chars = cluster.chars();
         if let (Some(ch), None) = (chars.next(), chars.next()) {
-            push_vector_char(&mut shaped, range, ch, None, fonts);
+            let presentation = Presentation::of(ch, None, false);
+            push_vector_char(&mut shaped, range, ch, None, presentation, fonts);
             continue;
         }
         let parts = ClusterChars::new(cluster);
         match parts.required.as_slice() {
             _ if parts.has_newline() => shaped.push_empty(range, true),
             [] => shaped.push_empty(range, false),
-            [ch] => push_vector_char(&mut shaped, range, *ch, parts.selector, fonts),
+            [ch] => {
+                let presentation = Presentation::of(*ch, parts.selector, parts.is_emoji_sequence());
+                push_vector_char(&mut shaped, range, *ch, parts.selector, presentation, fonts);
+            }
             required => {
-                let shaped_cluster = fonts
-                    .find_face(|face| required.iter().all(|ch| face.has_glyph(*ch)))
-                    .and_then(|(index, face)| {
-                        let glyphs = face.shape_cluster(cluster)?;
+                let presentation =
+                    Presentation::of(required[0], parts.selector, parts.is_emoji_sequence());
+                let shaped_cluster = resolve_cluster(fonts.faces, cluster, required, presentation)
+                    .map(|(index, face, glyphs, paint)| {
                         let units = fonts.units_scale(index);
-                        Some(place_face_glyphs(
+                        place_face_glyphs(
                             index,
                             &glyphs,
                             units,
                             units * face.metrics().height(),
                             0.0,
-                        ))
+                            paint == GlyphPaint::Color,
+                        )
                     });
                 if let Some((advance, glyphs)) = shaped_cluster {
                     shaped.push(range, advance, &glyphs);
@@ -205,7 +307,7 @@ pub(super) fn shape_vector_text(text: &str, fonts: VectorFontSet<'_>) -> ShapedT
                     shaped.push(range, advance, &[glyph]);
                 } else {
                     // 結合文字を描ける face が無ければ基底文字だけを描く。
-                    push_vector_char(&mut shaped, range, required[0], None, fonts);
+                    push_vector_char(&mut shaped, range, required[0], None, presentation, fonts);
                 }
             }
         }
@@ -218,18 +320,18 @@ fn push_vector_char(
     range: Range<usize>,
     ch: char,
     selector: Option<char>,
+    presentation: Presentation,
     fonts: VectorFontSet<'_>,
 ) {
     match char_class(ch) {
         CharClass::Newline => shaped.push_empty(range, true),
         CharClass::Invisible => shaped.push_empty(range, false),
         class => {
-            if let Some((index, face)) = fonts.find_face(|face| face.has_glyph(ch)) {
-                let glyph = selector
-                    .and_then(|selector| face.variation_glyph(ch, selector))
-                    .filter(|glyph| face.renders_outline(*glyph))
-                    .unwrap_or_else(|| face.glyph_id(ch));
-                let (advance, glyph) = fonts.vector_glyph(index, face, glyph);
+            if let Some((index, face, glyph, paint)) =
+                resolve_char(fonts.faces, ch, selector, &presentation.paints())
+            {
+                let (advance, glyph) =
+                    fonts.vector_glyph(index, face, glyph, paint == GlyphPaint::Color);
                 shaped.push(range, advance, &[glyph]);
             } else if class == CharClass::Space {
                 shaped.push(range, fonts.missing_space_advance(ch), &[]);
@@ -248,6 +350,7 @@ fn place_face_glyphs(
     units: f32,
     face_scale: f32,
     baseline_y: f32,
+    color: bool,
 ) -> (f32, Vec<ShapedGlyph>) {
     let mut pen = 0.0;
     let placed = glyphs
@@ -256,7 +359,7 @@ fn place_face_glyphs(
             let placed = ShapedGlyph {
                 x: (pen + glyph.x_offset) * units,
                 y: baseline_y - glyph.y_offset * units,
-                source: GlyphSource::Vector { face, glyph: glyph.glyph, face_scale },
+                source: GlyphSource::Vector { face, glyph: glyph.glyph, face_scale, color },
             };
             pen += glyph.x_advance;
             placed
@@ -272,6 +375,7 @@ impl<'a> VectorFontSet<'a> {
         index: u16,
         face: &TextFace,
         glyph: GlyphId,
+        color: bool,
     ) -> (f32, ShapedGlyph) {
         let units = self.units_scale(index);
         let face_scale = units * face.metrics().height();
@@ -280,7 +384,7 @@ impl<'a> VectorFontSet<'a> {
             ShapedGlyph {
                 x: 0.0,
                 y: 0.0,
-                source: GlyphSource::Vector { face: index, glyph, face_scale },
+                source: GlyphSource::Vector { face: index, glyph, face_scale, color },
             },
         )
     }
@@ -289,7 +393,7 @@ impl<'a> VectorFontSet<'a> {
     pub(super) fn missing_glyph(self) -> (f32, ShapedGlyph) {
         for candidate in MISSING_GLYPH_CANDIDATES {
             if let Some((index, face)) = self.find_face(|face| face.has_glyph(candidate)) {
-                return self.vector_glyph(index, face, face.glyph_id(candidate));
+                return self.vector_glyph(index, face, face.glyph_id(candidate), false);
             }
         }
         generated_tofu(self.em() * TOFU_HEIGHT_EM, -self.em() * TOFU_HEIGHT_EM)
@@ -300,7 +404,7 @@ impl<'a> VectorFontSet<'a> {
             return self.em();
         }
         self.find_face(|face| face.has_glyph(' '))
-            .map(|(index, face)| self.vector_glyph(index, face, face.glyph_id(' ')).0)
+            .map(|(index, face)| self.vector_glyph(index, face, face.glyph_id(' '), false).0)
             .unwrap_or(self.em() * 0.25)
     }
 }
@@ -318,14 +422,14 @@ pub(super) fn shape_bitmap_text(text: &str, fonts: BitmapFontSet<'_>) -> ShapedT
         let range = start..start + cluster.len();
         let mut chars = cluster.chars();
         if let (Some(ch), None) = (chars.next(), chars.next()) {
-            push_bitmap_char(&mut shaped, range, ch, fonts);
+            push_bitmap_char(&mut shaped, range, ch, None, fonts);
             continue;
         }
         let parts = ClusterChars::new(cluster);
         match parts.required.as_slice() {
             _ if parts.has_newline() => shaped.push_empty(range, true),
             [] => shaped.push_empty(range, false),
-            [ch] => push_bitmap_char(&mut shaped, range, *ch, fonts),
+            [ch] => push_bitmap_char(&mut shaped, range, *ch, parts.selector, fonts),
             required => {
                 if let Some((advance, glyphs)) = fonts.cluster_glyphs(cluster, &parts) {
                     shaped.push(range, advance, &glyphs);
@@ -333,7 +437,7 @@ pub(super) fn shape_bitmap_text(text: &str, fonts: BitmapFontSet<'_>) -> ShapedT
                     let (advance, glyph) = fonts.missing_glyph();
                     shaped.push(range, advance, &[glyph]);
                 } else {
-                    push_bitmap_char(&mut shaped, range, required[0], fonts);
+                    push_bitmap_char(&mut shaped, range, required[0], None, fonts);
                 }
             }
         }
@@ -341,13 +445,20 @@ pub(super) fn shape_bitmap_text(text: &str, fonts: BitmapFontSet<'_>) -> ShapedT
     shaped
 }
 
-fn push_bitmap_char(shaped: &mut ShapedText, range: Range<usize>, ch: char, fonts: BitmapFontSet) {
+fn push_bitmap_char(
+    shaped: &mut ShapedText,
+    range: Range<usize>,
+    ch: char,
+    selector: Option<char>,
+    fonts: BitmapFontSet,
+) {
     let class = char_class(ch);
+    let presentation = Presentation::of(ch, selector, false);
     match class {
         CharClass::Newline => shaped.push_empty(range, true),
         CharClass::Invisible => shaped.push_empty(range, false),
         _ => {
-            if let Some((advance, glyph)) = fonts.bitmap_glyph(ch) {
+            if let Some((advance, glyph)) = fonts.bitmap_glyph(ch, selector, presentation) {
                 shaped.push(range, advance, &[glyph]);
             } else if class == CharClass::Space {
                 // 空白を持たない.fntは従来どおり幅0で詰める（欠字表示はしない）。
@@ -364,16 +475,32 @@ impl<'a> BitmapFontSet<'a> {
     /// beatoraja と同じく主フォント → fallback .fnt の順に探し、無ければ
     /// 〜(U+301C) と ～(U+FF5E) を相互に代用する。それも無ければベクターの
     /// fallback・OS フォントの実グリフを使う（BMZ 拡張）。
-    fn bitmap_glyph(self, ch: char) -> Option<(f32, ShapedGlyph)> {
+    ///
+    /// 絵文字表示の文字は、カラーグリフを持つベクター face を .fnt より先に探す。
+    fn bitmap_glyph(
+        self,
+        ch: char,
+        selector: Option<char>,
+        presentation: Presentation,
+    ) -> Option<(f32, ShapedGlyph)> {
+        let vector = |paints: &[GlyphPaint]| {
+            let (index, face, glyph, paint) = resolve_char(self.faces, ch, selector, paints)?;
+            Some(self.vector_glyph(index, face, glyph, paint == GlyphPaint::Color))
+        };
+        if presentation == Presentation::Emoji
+            && let Some(found) = vector(&[GlyphPaint::Color])
+        {
+            return Some(found);
+        }
         let equivalent = match ch {
             WAVE_DASH => Some(FULLWIDTH_TILDE),
             FULLWIDTH_TILDE => Some(WAVE_DASH),
             _ => None,
         };
-        std::iter::once(ch).chain(equivalent).find_map(|key| self.glyph_of(key)).or_else(|| {
-            let (index, face) = self.faces.find(|face| face.has_glyph(ch))?;
-            Some(self.vector_glyph(index, face, face.glyph_id(ch)))
-        })
+        std::iter::once(ch)
+            .chain(equivalent)
+            .find_map(|key| self.glyph_of(key))
+            .or_else(|| vector(&presentation.paints()))
     }
 
     /// 複数文字の cluster。.fnt が全文字を持てば順に並べ（結合文字等）、
@@ -399,9 +526,10 @@ impl<'a> BitmapFontSet<'a> {
                 return Some((pen, placed));
             }
         }
-        let (index, face) =
-            self.faces.find(|face| parts.required.iter().all(|ch| face.has_glyph(*ch)))?;
-        let glyphs = face.shape_cluster(cluster)?;
+        let presentation =
+            Presentation::of(parts.required[0], parts.selector, parts.is_emoji_sequence());
+        let (index, face, glyphs, paint) =
+            resolve_cluster(self.faces, cluster, &parts.required, presentation)?;
         let units = self.design_size() / face.metrics().units_per_em;
         Some(place_face_glyphs(
             index,
@@ -409,6 +537,7 @@ impl<'a> BitmapFontSet<'a> {
             units,
             units * face.metrics().height(),
             self.cap_height(),
+            paint == GlyphPaint::Color,
         ))
     }
 
@@ -427,7 +556,13 @@ impl<'a> BitmapFontSet<'a> {
     }
 
     /// ベクター face のグリフを、ビットマップの設計サイズを em として基準線へ置く。
-    fn vector_glyph(self, index: u16, face: &TextFace, glyph: GlyphId) -> (f32, ShapedGlyph) {
+    fn vector_glyph(
+        self,
+        index: u16,
+        face: &TextFace,
+        glyph: GlyphId,
+        color: bool,
+    ) -> (f32, ShapedGlyph) {
         let metrics = face.metrics();
         let units = self.design_size() / metrics.units_per_em;
         (
@@ -439,6 +574,7 @@ impl<'a> BitmapFontSet<'a> {
                     face: index,
                     glyph,
                     face_scale: units * metrics.height(),
+                    color,
                 },
             },
         )

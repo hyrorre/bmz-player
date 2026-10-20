@@ -61,13 +61,19 @@ impl<'a> FaceList<'a> {
         self,
         mut predicate: impl FnMut(&TextFace) -> bool,
     ) -> Option<(u16, &'a TextFace)> {
+        self.find_map(|face| predicate(face).then_some(())).map(|(index, face, ())| (index, face))
+    }
+
+    pub(super) fn find_map<T>(
+        self,
+        mut f: impl FnMut(&TextFace) -> Option<T>,
+    ) -> Option<(u16, &'a TextFace, T)> {
         self.preferred
             .iter()
             .chain(self.system)
             .enumerate()
             .take(usize::from(u16::MAX))
-            .find(|(_, face)| predicate(face))
-            .map(|(index, face)| (index as u16, face))
+            .find_map(|(index, face)| f(face).map(|value| (index as u16, face, value)))
     }
 }
 
@@ -357,6 +363,9 @@ pub(super) enum TextGlyphKind {
     Vector,
     Bitmap,
     Tofu,
+    Color,
+    /// カラーグリフの alpha だけを持つ白いシルエット（影・縁取り用）。
+    ColorSilhouette,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -379,6 +388,7 @@ pub(super) struct TextLayoutStyleKey {
     align: u8,
     max_width_bits: u32,
     overflow: u8,
+    decoration: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -560,6 +570,46 @@ impl TextAtlasCache {
         ))
     }
 
+    /// カラーグリフの RGBA。`silhouette` では色を白にして alpha だけを残す。
+    pub(super) fn cached_color_glyph(
+        &mut self,
+        face: &TextFace,
+        glyph_id: GlyphId,
+        scale: PxScale,
+        silhouette: bool,
+    ) -> Option<CachedGlyph> {
+        let key = TextGlyphKey {
+            kind: if silhouette { TextGlyphKind::ColorSilhouette } else { TextGlyphKind::Color },
+            font_id: face.cache_id().clone(),
+            glyph: u32::from(glyph_id.0),
+            scale_x_bits: scale.x.to_bits(),
+            scale_y_bits: scale.y.to_bits(),
+        };
+        if let Some(glyph) = self.glyphs.get(&key) {
+            return Some(glyph.clone());
+        }
+        let raster_scale = PxScale {
+            x: scale.x * VECTOR_TEXT_SUPERSAMPLE_SCALE,
+            y: scale.y * VECTOR_TEXT_SUPERSAMPLE_SCALE,
+        };
+        let mut raster = rasterize_color_glyph(face, glyph_id, raster_scale)?;
+        if silhouette {
+            for pixel in raster.pixels.chunks_exact_mut(4) {
+                pixel[..3].fill(255);
+            }
+        }
+        Some(self.insert_glyph_pixels(
+            key,
+            raster.width,
+            raster.height,
+            raster.width as f32 / VECTOR_TEXT_SUPERSAMPLE_SCALE,
+            raster.height as f32 / VECTOR_TEXT_SUPERSAMPLE_SCALE,
+            raster.offset_x / VECTOR_TEXT_SUPERSAMPLE_SCALE,
+            raster.offset_y / VECTOR_TEXT_SUPERSAMPLE_SCALE,
+            raster.pixels,
+        ))
+    }
+
     /// 代替グリフが無い欠字の枠。`width` / `height` は表示px。
     pub(super) fn cached_tofu_glyph(&mut self, width: f32, height: f32) -> Option<CachedGlyph> {
         if !(width > 0.0 && height > 0.0) {
@@ -719,6 +769,7 @@ pub(super) fn text_layout_key(
     text: &str,
     style: &TextStyle,
     surface: SurfaceSize,
+    decoration: bool,
 ) -> Option<TextLayoutKey> {
     if style.wrapping || style.outline.is_some() || style.shadow.is_some() {
         return None;
@@ -743,6 +794,7 @@ pub(super) fn text_layout_key(
             align: text_align_key(style.align),
             max_width_bits: style.max_width.to_bits(),
             overflow: text_overflow_key(style.overflow),
+            decoration,
         },
     })
 }

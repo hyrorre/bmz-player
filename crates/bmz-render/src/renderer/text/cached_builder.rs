@@ -13,6 +13,8 @@ struct GlyphLine {
     scale: PxScale,
     color: Color,
     surface: SurfaceSize,
+    /// 影・縁取りの描画。カラーグリフも文字色で塗ったシルエットにする。
+    decoration: bool,
 }
 
 /// cluster のグリフ番号が指すフォント。
@@ -63,6 +65,18 @@ impl<'a> CachedTextFrameBuilder<'a> {
         fonts: BitmapFontSet<'_>,
         surface: SurfaceSize,
     ) {
+        self.push_bitmap_text_pass(origin, text, style, fonts, surface, false);
+    }
+
+    fn push_bitmap_text_pass(
+        &mut self,
+        origin: &Point,
+        text: &str,
+        style: TextStyle,
+        fonts: BitmapFontSet<'_>,
+        surface: SurfaceSize,
+        decoration: bool,
+    ) {
         if let Some(shadow) = style.shadow.filter(|shadow| shadow.color.a > 0.0) {
             let mut shadow_style = style.clone();
             shadow_style.color = shadow.color;
@@ -70,7 +84,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
             shadow_style.shadow = None;
             let shadow_origin =
                 Point { x: origin.x + shadow.offset.x, y: origin.y + shadow.offset.y };
-            self.push_bitmap_text(&shadow_origin, text, shadow_style, fonts, surface);
+            self.push_bitmap_text_pass(&shadow_origin, text, shadow_style, fonts, surface, true);
         }
         if let Some(outline) = style.outline.filter(|outline| outline.color.a > 0.0) {
             let mut outline_style = style.clone();
@@ -90,12 +104,26 @@ impl<'a> CachedTextFrameBuilder<'a> {
                 (outline_x, outline_y),
             ] {
                 let outline_origin = Point { x: origin.x + offset_x, y: origin.y + offset_y };
-                self.push_bitmap_text(&outline_origin, text, outline_style.clone(), fonts, surface);
+                self.push_bitmap_text_pass(
+                    &outline_origin,
+                    text,
+                    outline_style.clone(),
+                    fonts,
+                    surface,
+                    true,
+                );
             }
         }
 
-        let layout_key =
-            text_layout_key(TextGlyphKind::Bitmap, fonts.id, origin, text, &style, surface);
+        let layout_key = text_layout_key(
+            TextGlyphKind::Bitmap,
+            fonts.id,
+            origin,
+            text,
+            &style,
+            surface,
+            decoration,
+        );
         if let Some(cached) = layout_key.as_ref().and_then(|key| self.atlas.cached_layout(key)) {
             self.quads.extend_from_slice(cached);
             return;
@@ -140,6 +168,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
             scale,
             color: style.color,
             surface,
+            decoration,
         };
         self.push_clusters(&shaped, clusters, line, fonts.into());
 
@@ -156,6 +185,18 @@ impl<'a> CachedTextFrameBuilder<'a> {
         fonts: VectorFontSet<'_>,
         surface: SurfaceSize,
     ) {
+        self.push_text_pass(origin, text, style, fonts, surface, false);
+    }
+
+    fn push_text_pass(
+        &mut self,
+        origin: &Point,
+        text: &str,
+        style: TextStyle,
+        fonts: VectorFontSet<'_>,
+        surface: SurfaceSize,
+        decoration: bool,
+    ) {
         if let Some(shadow) = style.shadow.filter(|shadow| shadow.color.a > 0.0) {
             let mut shadow_style = style.clone();
             shadow_style.color = shadow.color;
@@ -163,7 +204,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
             shadow_style.shadow = None;
             let shadow_origin =
                 Point { x: origin.x + shadow.offset.x, y: origin.y + shadow.offset.y };
-            self.push_text(&shadow_origin, text, shadow_style, fonts, surface);
+            self.push_text_pass(&shadow_origin, text, shadow_style, fonts, surface, true);
         }
         if let Some(outline) = style.outline.filter(|outline| outline.color.a > 0.0) {
             let mut outline_style = style.clone();
@@ -183,12 +224,26 @@ impl<'a> CachedTextFrameBuilder<'a> {
                 (outline_x, outline_y),
             ] {
                 let outline_origin = Point { x: origin.x + offset_x, y: origin.y + offset_y };
-                self.push_text(&outline_origin, text, outline_style.clone(), fonts, surface);
+                self.push_text_pass(
+                    &outline_origin,
+                    text,
+                    outline_style.clone(),
+                    fonts,
+                    surface,
+                    true,
+                );
             }
         }
 
-        let layout_key =
-            text_layout_key(TextGlyphKind::Vector, fonts.id, origin, text, &style, surface);
+        let layout_key = text_layout_key(
+            TextGlyphKind::Vector,
+            fonts.id,
+            origin,
+            text,
+            &style,
+            surface,
+            decoration,
+        );
         if let Some(cached) = layout_key.as_ref().and_then(|key| self.atlas.cached_layout(key)) {
             self.quads.extend_from_slice(cached);
             return;
@@ -223,6 +278,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
                     scale,
                     color: style.color,
                     surface,
+                    decoration,
                 };
                 self.push_clusters(&shaped, clusters, line, fonts.into());
             }
@@ -261,6 +317,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
             scale,
             color: style.color,
             surface,
+            decoration,
         };
         self.push_clusters(&shaped, clusters, line, fonts.into());
 
@@ -287,11 +344,22 @@ impl<'a> CachedTextFrameBuilder<'a> {
     fn push_glyph(&mut self, glyph: &ShapedGlyph, line: GlyphLine, fonts: GlyphFonts<'_>) {
         let x = line.pen_x + glyph.x * line.scale.x;
         let y = line.line_y + glyph.y * line.scale.y;
+        let mut quad_color = line.color;
         let cached = match glyph.source {
-            GlyphSource::Vector { face, glyph, face_scale } => {
+            GlyphSource::Vector { face, glyph, face_scale, color } => {
                 let Some(face) = fonts.faces.get(face) else { return };
                 let scale = PxScale { x: line.scale.x * face_scale, y: line.scale.y * face_scale };
-                self.atlas.cached_vector_glyph(face, glyph, scale)
+                if color {
+                    // カラーグリフはフォントの色を保ち、スキンの透明度だけを掛ける。
+                    // 影・縁取りでは輪郭と同じく指定色のシルエットにする。
+                    let cached = self.atlas.cached_color_glyph(face, glyph, scale, line.decoration);
+                    if !line.decoration {
+                        quad_color = Color::rgba(1.0, 1.0, 1.0, line.color.a);
+                    }
+                    cached
+                } else {
+                    self.atlas.cached_vector_glyph(face, glyph, scale)
+                }
             }
             GlyphSource::Bitmap { font, ch } => {
                 let Some(entry) = fonts.bitmaps.get(usize::from(font)) else { return };
@@ -324,7 +392,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
             atlas_origin: cached.atlas_origin,
             glyph_width: cached.width,
             glyph_height: cached.height,
-            color: line.color,
+            color: quad_color,
         });
     }
 

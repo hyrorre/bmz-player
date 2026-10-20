@@ -735,6 +735,7 @@ name = "bmz-render"
 version = "0.4.3"
 dependencies = [
  "ab_glyph",
+ "ab_glyph_rasterizer",
  "anyhow",
  "arboard",
  "bmz-chart",
@@ -756,6 +757,7 @@ dependencies = [
  "rustybuzz",
  "serde",
  "serde_json",
+ "skrifa",
  "tempfile",
  "tracing",
  "ttf-parser",

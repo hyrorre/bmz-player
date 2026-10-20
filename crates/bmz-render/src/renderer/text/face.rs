@@ -17,6 +17,8 @@ struct TextFaceInner {
     outlines: bool,
     /// sbix / CBDT / EBDT のグリフ画像を持つか。空の glyf を併せ持つことがある。
     images: bool,
+    /// COLR / CPAL のカラーグリフを持つか。
+    colr: bool,
 }
 
 /// ab_glyph と同じ定義の未スケール寸法。
@@ -52,15 +54,16 @@ impl TextFace {
             descent: font.descent_unscaled(),
             line_gap: font.line_gap_unscaled(),
         };
-        let (outlines, images) = ttf_parser::Face::parse(font.font_data(), index)
+        let (outlines, images, colr) = ttf_parser::Face::parse(font.font_data(), index)
             .map(|face| {
                 let tables = face.tables();
                 (
                     tables.glyf.is_some() || tables.cff.is_some() || tables.cff2.is_some(),
                     tables.sbix.is_some() || tables.cbdt.is_some() || tables.ebdt.is_some(),
+                    tables.colr.is_some(),
                 )
             })
-            .unwrap_or((false, false));
+            .unwrap_or((false, false, false));
         Self(Arc::new(TextFaceInner {
             cache_id: cache_id.into(),
             font,
@@ -68,6 +71,7 @@ impl TextFace {
             metrics,
             outlines,
             images,
+            colr,
         }))
     }
 
@@ -117,6 +121,11 @@ impl TextFace {
     /// 通常のフォントでは空の輪郭も有効なグリフ（空白類）とみなす。
     pub(super) fn renders_outline(&self, glyph: GlyphId) -> bool {
         glyph.0 != 0 && self.0.outlines && (!self.0.images || self.0.font.outline(glyph).is_some())
+    }
+
+    /// カラーグリフの表（COLR / CPAL、sbix / CBDT）を持つか。
+    pub(super) fn has_color_tables(&self) -> bool {
+        self.0.colr || self.0.images
     }
 
     /// cmap format 14 の異体字シーケンス（例: U+2764 U+FE0F）のグリフ。

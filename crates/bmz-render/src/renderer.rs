@@ -39,6 +39,8 @@ mod texture_upload;
 use texture_upload::TextureUploads;
 #[path = "renderer/text/cached_builder.rs"]
 mod text_cached_builder;
+#[path = "renderer/text/color_glyph.rs"]
+mod text_color_glyph;
 #[path = "renderer/text/face.rs"]
 mod text_face;
 #[path = "renderer/text/layout.rs"]
@@ -46,13 +48,13 @@ mod text_layout;
 #[path = "renderer/text/shaping.rs"]
 mod text_shaping;
 
-#[cfg(test)]
-use font::load_default_font;
 pub use font::{
     SystemFontData, load_cjk_font_fallback_data, load_font_bytes_for_coverage,
     load_japanese_font_bytes, load_system_font_data_for_coverage,
 };
 use font::{block_on, load_default_font_fallbacks};
+#[cfg(test)]
+use font::{load_default_font, load_symbol_faces};
 use geometry::*;
 pub use pipeline::GpuUploader;
 use pipeline::*;
@@ -60,8 +62,9 @@ pub use screenshot::ScreenshotClipboard;
 use screenshot::*;
 use text::*;
 use text_cached_builder::*;
-use text_face::FaceShapedGlyph;
+use text_color_glyph::*;
 pub(crate) use text_face::TextFace;
+use text_face::{FaceMetrics, FaceShapedGlyph};
 use text_layout::*;
 use text_shaping::*;
 
