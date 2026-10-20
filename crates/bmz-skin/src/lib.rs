@@ -212,6 +212,15 @@ pub trait LuaMainState {
     fn timer(&self, id: i32) -> Option<i32>;
     fn event_index(&self, id: i32) -> i32;
     fn gauge_type(&self) -> i32;
+
+    /// Current gauge value for `main_state.gauge()`.
+    ///
+    /// beatoraja returns the play gauge only while `BMSPlayer` is active and
+    /// zero in other scenes. The default keeps existing adapters compiling.
+    fn gauge(&self) -> f64 {
+        0.0
+    }
+
     fn time_us(&self) -> i32;
 
     /// Scene clock in microseconds without the legacy i32 clock limit.

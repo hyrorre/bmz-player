@@ -500,6 +500,12 @@ impl LuaRuntimeStateScope {
                         14 => Value::Integer(state.score_date_sec_time()),
                         16 => Value::Integer(i64::from(state.screen_size()[0])),
                         17 => Value::Integer(i64::from(state.screen_size()[1])),
+                        18 => Value::Number(state.float(111)),
+                        19 => Value::Number(state.float(112)),
+                        20 => Value::Number(state.float(115)),
+                        21 => Value::Integer(state.number(150)),
+                        22 => Value::Integer(state.number(121)),
+                        23 => Value::Number(state.gauge()),
                         15 => {
                             let id = id()?;
                             if !(10_000..=19_999).contains(&id) {
@@ -570,8 +576,16 @@ pub(super) fn install_runtime_main_state_dispatch(lua: &Lua) -> mlua::Result<Tab
     ]
     .into_iter()
     .enumerate()
-    .chain([(16, "screen_width"), (17, "screen_height")])
-    {
+    .chain([
+        (16, "screen_width"),
+        (17, "screen_height"),
+        (18, "rate"),
+        (19, "rate_best"),
+        (20, "rate_rival"),
+        (21, "exscore_best"),
+        (22, "exscore_rival"),
+        (23, "gauge"),
+    ]) {
         let original: Function =
             main_state.get(if field == "float" { "float_number" } else { field })?;
         let dispatch_slot = dispatch_slot.clone();

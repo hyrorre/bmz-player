@@ -70,6 +70,7 @@ struct TestLuaMainState {
     score_date: i64,
     now_us: i64,
     result_panel: Option<i32>,
+    gauge: f64,
 }
 
 impl LuaMainState for TestLuaMainState {
@@ -107,6 +108,10 @@ impl LuaMainState for TestLuaMainState {
 
     fn gauge_type(&self) -> i32 {
         0
+    }
+
+    fn gauge(&self) -> f64 {
+        self.gauge
     }
 
     fn time_us(&self) -> i32 {
@@ -239,6 +244,8 @@ mod destination_clip;
 mod installed_skin_compat;
 #[path = "tests/lua_api_baseline.rs"]
 mod lua_api_baseline;
+#[path = "tests/lua_api_extensions.rs"]
+mod lua_api_extensions;
 #[path = "tests/property_names.rs"]
 mod property_names;
 #[path = "tests/read_helpers.rs"]

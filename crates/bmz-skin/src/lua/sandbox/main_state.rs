@@ -122,6 +122,48 @@ pub(super) fn create_main_state_stub(
                 .number(71))
         })?,
     )?;
+    // beatoraja ScoreDataProperty accessors. They use the equivalent RateType /
+    // IntegerProperty IDs, so load-time dependencies, inference and runtime
+    // values follow `float_number(id)` / `number(id)` exactly.
+    for (field, ref_id) in [("rate", 111), ("rate_best", 112), ("rate_rival", 115)] {
+        let probe = probe.clone();
+        table.set(
+            field,
+            lua.create_function(move |_, ()| {
+                Ok(probe
+                    .lock()
+                    .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
+                    .float_number(ref_id))
+            })?,
+        )?;
+    }
+    for (field, ref_id) in [("exscore_best", 150), ("exscore_rival", 121)] {
+        let probe = probe.clone();
+        table.set(
+            field,
+            lua.create_function(move |_, ()| {
+                Ok(probe
+                    .lock()
+                    .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
+                    .number(ref_id))
+            })?,
+        )?;
+    }
+    let probe_for_gauge = probe.clone();
+    table.set(
+        "gauge",
+        lua.create_function(move |_, ()| {
+            let probe = probe_for_gauge
+                .lock()
+                .map_err(|_| mlua::Error::runtime("main_state probe lock poisoned"))?;
+            // No ref expresses the live gauge; keep gauge-dependent callbacks
+            // on the runtime VM instead of folding the neutral load value.
+            if probe.inferring {
+                return Err(mlua::Error::runtime("gauge value requires runtime evaluation"));
+            }
+            Ok(0.0)
+        })?,
+    )?;
     let probe_for_judge = probe.clone();
     table.set(
         "judge",
@@ -256,6 +298,10 @@ pub(super) fn create_main_state_stub(
     table.set("set_volume_sys", lua.create_function(|_, _: Value| Ok(true))?)?;
     table.set("set_volume_key", lua.create_function(|_, _: Value| Ok(true))?)?;
     table.set("set_volume_bg", lua.create_function(|_, _: Value| Ok(true))?)?;
+    // Skin audio is decoded from the declared actions, so explicit preload and
+    // disposal have nothing to do; beatoraja returns true for both.
+    table.set("audio_preload", lua.create_function(|_, _: Value| Ok(true))?)?;
+    table.set("audio_dispose", lua.create_function(|_, _: Value| Ok(true))?)?;
     let probe_for_audio_play = probe.clone();
     table.set(
         "audio_play",
@@ -357,6 +403,8 @@ pub(super) fn lua_audio_path_and_volume(path: Value, volume: Value) -> Option<(S
     let volume = match volume {
         Value::Integer(volume) => volume as f64,
         Value::Number(volume) if volume.is_finite() => volume,
+        // beatoraja and LR2oraja Endless Dream both play an omitted volume at 1.0.
+        Value::Nil => 1.0,
         _ => return None,
     };
     Some((path.to_str().ok()?.to_string(), volume))

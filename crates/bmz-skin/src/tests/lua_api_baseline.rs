@@ -395,7 +395,8 @@ fn pre_extension_load_time_lua_api_surface_and_values_are_preserved() {
                 "timer:function,turn_off:function,turn_on:function,turn_on_reset:function",
             ),
             ("timer_util.passive_initial", "[integer=-2147483648]"),
-            ("timer_util.passive_returns", "[][][]"),
+            // Intentional: beatoraja / LR2oraja ED `TimerUtility` return true (was nothing).
+            ("timer_util.passive_returns", "[boolean=true][boolean=true][boolean=true]"),
             ("timer_util.passive_after_off", "[integer=-2147483648]"),
             ("timer_util.observe_false", "[integer=-2147483648]"),
             ("event_util.turn_true", "[boolean=true][boolean=true]1"),
@@ -405,7 +406,8 @@ fn pre_extension_load_time_lua_api_surface_and_values_are_preserved() {
             ("skin_config.option", "[integer=902;nil=nil]"),
             ("skin_config.option_raw", "[nil=nil;nil=nil]"),
             ("skin_config.option_pairs", "Mode=902"),
-            ("skin_config.enabled_options", "nil"),
+            // Added: beatoraja / LR2oraja ED `skin_config.enabled_options`.
+            ("skin_config.enabled_options", "table"),
             ("bmz.option", "[string=B;string=B;string=fallback;string=]"),
             ("package", "[string=string;string=;nil=nil;nil=nil]"),
             ("lua_version", "Lua 5.4"),
@@ -473,6 +475,7 @@ fn pre_extension_runtime_lua_api_surface_and_values_are_preserved() {
         score_date: 1_700_000_000,
         now_us: 9_000_000,
         result_panel: None,
+        ..Default::default()
     };
     runtime.begin_frame();
     let text = runtime.evaluate_text(callback, &state).unwrap();

@@ -24,5 +24,7 @@ mod ir_missing_scores;
 mod result_grade;
 #[path = "lua/result_panels.rs"]
 mod result_panels;
+#[path = "lua/score_accessors.rs"]
+mod score_accessors;
 #[path = "lua/screen_size.rs"]
 mod screen_size;

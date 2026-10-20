@@ -139,6 +139,12 @@ pub(super) fn create_luajava_stub(lua: &Lua) -> mlua::Result<Value> {
             create_luajava_object_stub(lua)
         })?,
     )?;
+    // LuaJ's `luajava.new(class, ...)` takes a bound class instead of a name.
+    // It returns the same inert stub; no Java object or file is created.
+    table.set(
+        "new",
+        lua.create_function(|lua, _: Variadic<Value>| create_luajava_object_stub(lua))?,
+    )?;
     table.set(
         "createProxy",
         lua.create_function(|lua, _: Variadic<Value>| create_luajava_object_stub(lua))?,
@@ -307,6 +313,7 @@ pub(super) fn create_timer_util_module(
                         .timer_value)
                 })?,
             )?;
+            // beatoraja `TimerUtility` returns true from every control function.
             let state_for_turn_on = state.clone();
             passive.set(
                 "turn_on",
@@ -318,7 +325,7 @@ pub(super) fn create_timer_util_module(
                     if state.timer_value == i64::from(TIMER_OFF_VALUE) {
                         state.timer_value = now;
                     }
-                    Ok(())
+                    Ok(true)
                 })?,
             )?;
             let state_for_turn_on_reset = state.clone();
@@ -330,7 +337,7 @@ pub(super) fn create_timer_util_module(
                         .lock()
                         .map_err(|_| mlua::Error::external("passive timer lock poisoned"))?
                         .timer_value = now;
-                    Ok(())
+                    Ok(true)
                 })?,
             )?;
             passive.set(
@@ -340,7 +347,7 @@ pub(super) fn create_timer_util_module(
                         .lock()
                         .map_err(|_| mlua::Error::external("passive timer lock poisoned"))?
                         .timer_value = i64::from(TIMER_OFF_VALUE);
-                    Ok(())
+                    Ok(true)
                 })?,
             )?;
             Ok(passive)

@@ -141,6 +141,8 @@ pub(super) fn execute_lua_skin(
         virtual_io_files,
         Some(dependencies.clone()),
     )?;
+    let skin_enabled_options = skin_config_enabled_options_from_header(&header_json, &skin_options);
+    install_skin_config_enabled_options(&lua, &skin_enabled_options, Some(dependencies.clone()))?;
     let value = lua
         .load(&source)
         .set_name(input.to_string_lossy().as_ref())
@@ -295,6 +297,7 @@ pub(super) fn execute_lua_skin(
             source: &source,
             options,
             skin_config_options: &skin_options,
+            skin_config_enabled_options: &skin_enabled_options,
             skin_files: &skin_files,
             skin_file_dependency_names: &skin_file_dependency_names_from_header(&header_json),
             skin_offsets: &skin_offsets,
@@ -333,6 +336,7 @@ pub(super) struct LuaSkinRuntimeRequest<'a> {
     pub(super) source: &'a str,
     pub(super) options: &'a BTreeMap<String, String>,
     pub(super) skin_config_options: &'a BTreeMap<String, i64>,
+    pub(super) skin_config_enabled_options: &'a [i64],
     pub(super) skin_files: &'a BTreeMap<String, String>,
     pub(super) skin_file_dependency_names: &'a BTreeMap<String, String>,
     pub(super) skin_offsets: &'a BTreeMap<String, LuaSkinOffsetValue>,
@@ -348,6 +352,7 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
         source,
         options,
         skin_config_options,
+        skin_config_enabled_options,
         skin_files,
         skin_file_dependency_names,
         skin_offsets,
@@ -373,6 +378,7 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
     )?;
     runtime_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?.clean_runtime =
         true;
+    install_skin_config_enabled_options(&lua, skin_config_enabled_options, None)?;
     let main_state_dispatch = install_runtime_main_state_dispatch(&lua)?;
     let value = lua
         .load(source)

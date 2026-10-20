@@ -163,6 +163,11 @@ impl LuaMainState for RenderLuaMainState<'_> {
         self.state.gauge_type
     }
 
+    fn gauge(&self) -> f64 {
+        // beatoraja reads `BMSPlayer.getGauge()` only during play.
+        if self.state.play_screen { f64::from(self.state.gauge) } else { 0.0 }
+    }
+
     fn time_us(&self) -> i32 {
         self.state.elapsed_ms.saturating_mul(1_000)
     }

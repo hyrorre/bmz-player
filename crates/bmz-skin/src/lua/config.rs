@@ -35,6 +35,21 @@ pub(super) fn skin_config_options_from_header(
     result
 }
 
+/// Selected ops in header `property` order, matching beatoraja
+/// `SkinLuaAccessor`'s `enabled_options`. Duplicate names repeat their op.
+pub(super) fn skin_config_enabled_options_from_header(
+    header: &JsonValue,
+    skin_options: &BTreeMap<String, i64>,
+) -> Vec<i64> {
+    header
+        .get("property")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|property| skin_options.get(property.get("name")?.as_str()?).copied())
+        .collect()
+}
+
 pub(super) fn option_value_to_op(items: &[JsonValue], value: &str) -> Option<i64> {
     if let Ok(op) = value.parse::<i64>() {
         return items

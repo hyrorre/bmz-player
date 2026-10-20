@@ -121,6 +121,66 @@ pub(super) fn create_skin_config_option_table(
     Ok(option)
 }
 
+/// beatoraja `skin_config.enabled_options`: the selected op of every header
+/// property, 1-based in header order.
+///
+/// Like `skin_config.option`, the values are exposed through a read-only proxy
+/// so that only the ops a skin actually reads become document dependencies.
+/// Integer indexing, `#`, `ipairs`, `pairs`, `table.concat` and `table.unpack`
+/// use the metamethods; raw access sees an empty table.
+pub(super) fn install_skin_config_enabled_options(
+    lua: &Lua,
+    enabled_options: &[i64],
+    load_dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
+) -> Result<()> {
+    let Ok(skin_config) = lua.globals().get::<Table>("skin_config") else {
+        return Ok(());
+    };
+    let table = lua.create_table()?;
+    let values = Arc::<[i64]>::from(enabled_options);
+    let values_for_index = values.clone();
+    let dependencies_for_index = load_dependencies.clone();
+    let index = lua.create_function(move |_, (_table, key): (Table, Value)| {
+        let index = match key {
+            Value::Integer(index) => index,
+            Value::Number(index) if index.fract() == 0.0 => index as i64,
+            _ => return Ok(Value::Nil),
+        };
+        let Some(value) = usize::try_from(index)
+            .ok()
+            .and_then(|index| index.checked_sub(1))
+            .and_then(|index| values_for_index.get(index))
+        else {
+            return Ok(Value::Nil);
+        };
+        if let Ok(option_id) = i32::try_from(*value) {
+            record_load_dependency_option(dependencies_for_index.as_ref(), option_id, true);
+        }
+        Ok(Value::Integer(*value))
+    })?;
+    let length = values.len();
+    let len = lua.create_function(move |_, _: Table| Ok(length))?;
+    let values_for_pairs = values;
+    let pairs = lua.create_function(move |lua, _: Table| {
+        let pairs_table = lua.create_table_with_capacity(values_for_pairs.len(), 0)?;
+        for value in values_for_pairs.iter() {
+            pairs_table.raw_push(*value)?;
+            if let Ok(option_id) = i32::try_from(*value) {
+                record_load_dependency_option(load_dependencies.as_ref(), option_id, true);
+            }
+        }
+        let next = lua.globals().get::<Function>("next")?;
+        Ok((next, pairs_table, Value::Nil))
+    })?;
+    let metatable = lua.create_table()?;
+    metatable.set("__index", index)?;
+    metatable.set("__len", len)?;
+    metatable.set("__pairs", pairs)?;
+    table.set_metatable(Some(metatable));
+    skin_config.set("enabled_options", table)?;
+    Ok(())
+}
+
 pub(super) fn record_load_dependency_option(
     dependencies: Option<&Arc<Mutex<SkinLoadDependencies>>>,
     option_id: i32,
