@@ -41,7 +41,7 @@ impl OptionPanelSession {
             return false;
         }
         let Some(control) = event.name.as_deref() else { return false };
-        if !keys.is_start(control) && !keys.is_e2_action(control) && control != "Select" {
+        if !keys.is_start(control) && !keys.is_e2_action(control) {
             return false;
         }
         if !event.repeat {

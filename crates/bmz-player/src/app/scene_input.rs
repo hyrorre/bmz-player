@@ -136,17 +136,9 @@ fn select_jump_action(control: &str, bindings: &SelectKeyBindings) -> Option<Sel
 }
 
 fn gamepad_select_action(control: &str, bindings: &SelectKeyBindings) -> Option<SelectAction> {
+    // Controller buttons have no fixed meaning; everything follows the key config.
     if let Some(action) = configurable_select_shortcut_action(control, bindings) {
         return Some(action);
-    }
-    let fixed = match control {
-        "DPadUp" => Some(SelectAction::Move(SelectMove::Previous)),
-        "DPadDown" => Some(SelectAction::Move(SelectMove::Next)),
-        "Select" => Some(SelectAction::ExitFolder),
-        _ => None,
-    };
-    if fixed.is_some() {
-        return fixed;
     }
 
     if bindings.is_select_scratch_up(control) {
@@ -243,12 +235,8 @@ pub(super) fn result_action(event: &ControlInputEvent) -> Option<ResultAction> {
             "Enter" | "Escape" => Some(ResultAction::Leave),
             _ => None,
         },
-        PhysicalControl::GamepadButton(_) => match control {
-            "Start" => Some(ResultAction::Retry),
-            "Button2" | "Select" => Some(ResultAction::Leave),
-            _ => None,
-        },
-        PhysicalControl::HidButton(_) => None,
+        // Controllers leave or retry through their lane bindings only.
+        PhysicalControl::GamepadButton(_) | PhysicalControl::HidButton(_) => None,
     }
 }
 
@@ -338,10 +326,8 @@ mod tests {
             select_action(&keyboard(KeyCode::ArrowUp), &bindings),
             Some(SelectAction::Move(SelectMove::Previous))
         );
-        assert_eq!(
-            select_action(&gamepad("DPadUp"), &bindings),
-            Some(SelectAction::Move(SelectMove::Previous))
-        );
+        // No backend names a controller button like this; it has no fixed meaning.
+        assert_eq!(select_action(&gamepad("DPadUp"), &bindings), None);
         assert_eq!(
             select_action(&keyboard(KeyCode::Enter), &bindings),
             Some(SelectAction::EnterOrPlay)
@@ -374,9 +360,10 @@ mod tests {
         );
         assert_eq!(decide_action(&gamepad("Button1"), &bindings), Some(DecideAction::Confirm));
         assert_eq!(result_action(&keyboard(KeyCode::KeyR)), Some(ResultAction::Retry));
-        assert_eq!(result_action(&gamepad("Start")), Some(ResultAction::Retry));
+        assert_eq!(result_action(&gamepad("Start")), None);
         assert_eq!(result_action(&keyboard(KeyCode::Escape)), Some(ResultAction::Leave));
-        assert_eq!(result_action(&gamepad("Select")), Some(ResultAction::Leave));
+        assert_eq!(result_action(&gamepad("Select")), None);
+        assert_eq!(result_action(&gamepad("Button2")), None);
         assert_eq!(decide_action(&gamepad("Escape"), &bindings), None);
         assert_eq!(result_action(&gamepad("R")), None);
     }

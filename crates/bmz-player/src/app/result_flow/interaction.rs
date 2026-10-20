@@ -413,9 +413,8 @@ impl WinitApp {
     }
 
     pub(super) fn is_result_panel_toggle_control(&self, control: &PhysicalControl) -> bool {
-        physical_control_name(control).is_some_and(|control| {
-            control == "Select" || self.select.select_keys.is_e2_action(control)
-        })
+        physical_control_name(control)
+            .is_some_and(|control| self.select.select_keys.is_e2_action(control))
     }
 
     pub(super) fn select_result_panel_for_control(&mut self, control: &PhysicalControl) -> bool {

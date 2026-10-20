@@ -1189,8 +1189,8 @@ fn result_ir_scroll_controls_match_select_navigation() {
     let keys = default_select_keys();
     assert_eq!(result_ir_scroll_rows_for_control("ArrowUp", &keys), Some(-1));
     assert_eq!(result_ir_scroll_rows_for_control("ArrowDown", &keys), Some(1));
-    assert_eq!(result_ir_scroll_rows_for_control("DPadUp", &keys), Some(-1));
-    assert_eq!(result_ir_scroll_rows_for_control("DPadDown", &keys), Some(1));
+    assert_eq!(result_ir_scroll_rows_for_control("DPadUp", &keys), None);
+    assert_eq!(result_ir_scroll_rows_for_control("DPadDown", &keys), None);
     assert_eq!(result_ir_scroll_rows_for_control("Axis1+", &keys), Some(-1));
     assert_eq!(result_ir_scroll_rows_for_control("Axis1-", &keys), Some(1));
     assert_eq!(result_ir_scroll_rows_for_control("Button1", &keys), None);

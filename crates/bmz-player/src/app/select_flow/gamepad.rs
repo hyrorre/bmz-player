@@ -548,7 +548,7 @@ impl WinitApp {
             self.update_select_e_action_hold(button, false);
             if self.select.select_keys.is_start(button) {
                 self.set_start_held(false);
-            } else if self.select.select_keys.is_e2_action(button) || matches!(button, "Select") {
+            } else if self.select.select_keys.is_e2_action(button) {
                 self.set_select_held(false);
             }
             return;
@@ -723,7 +723,7 @@ impl WinitApp {
             return;
         }
 
-        if self.select.select_keys.is_e2_action(button) || matches!(button, "Select") {
+        if self.select.select_keys.is_e2_action(button) {
             self.set_select_held(true);
             return;
         }

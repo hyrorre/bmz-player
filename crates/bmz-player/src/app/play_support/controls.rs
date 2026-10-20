@@ -127,9 +127,7 @@ pub(in crate::app) fn select_hold_state_from_pressed_controls(
     bindings: &SelectKeyBindings,
 ) -> (bool, bool, HashSet<InputActionConfig>) {
     let start_held = pressed_controls.iter().any(|control| bindings.is_start(control));
-    let select_held = pressed_controls
-        .iter()
-        .any(|control| control == "Select" || bindings.is_e2_action(control));
+    let select_held = pressed_controls.iter().any(|control| bindings.is_e2_action(control));
     let e_action_holds = pressed_controls
         .iter()
         .filter_map(|control| bindings.e_action_for_control(control))
@@ -155,7 +153,7 @@ pub(in crate::app) fn skin_logical_input_snapshot_from_pressed_controls(
     let mut held = [false; bmz_render::skin::SKIN_BMZ_INPUT_COUNT];
     for control in pressed_controls {
         held[0] |= bindings.is_start(control);
-        held[1] |= control == "Select" || bindings.is_e2_action(control);
+        held[1] |= bindings.is_e2_action(control);
         match bindings.e_action_for_control(control) {
             Some(InputActionConfig::E1) => held[0] = true,
             Some(InputActionConfig::E2) => held[1] = true,
@@ -164,10 +162,10 @@ pub(in crate::app) fn skin_logical_input_snapshot_from_pressed_controls(
             _ => {}
         }
         match control.as_str() {
-            "ArrowLeft" | "DPadLeft" => held[4] = true,
-            "ArrowRight" | "DPadRight" => held[5] = true,
-            "ArrowUp" | "DPadUp" => held[6] = true,
-            "ArrowDown" | "DPadDown" => held[7] = true,
+            "ArrowLeft" => held[4] = true,
+            "ArrowRight" => held[5] = true,
+            "ArrowUp" => held[6] = true,
+            "ArrowDown" => held[7] = true,
             _ => {}
         }
     }

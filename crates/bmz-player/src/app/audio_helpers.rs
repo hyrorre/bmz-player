@@ -410,8 +410,8 @@ pub(super) fn settings_browse_move_control(
     select_bindings: &SelectKeyBindings,
 ) -> Option<SelectMove> {
     match control {
-        "ArrowUp" | "DPadUp" | "ScratchUp" => Some(SelectMove::Previous),
-        "ArrowDown" | "DPadDown" | "ScratchDown" => Some(SelectMove::Next),
+        "ArrowUp" | "ScratchUp" => Some(SelectMove::Previous),
+        "ArrowDown" | "ScratchDown" => Some(SelectMove::Next),
         _ if select_bindings.is_select_scratch_up(control) => Some(SelectMove::Previous),
         _ if select_bindings.is_select_scratch_down(control) => Some(SelectMove::Next),
         _ if bindings.is_increase(control) => Some(SelectMove::Next),

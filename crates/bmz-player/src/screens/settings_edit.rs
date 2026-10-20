@@ -80,13 +80,12 @@ impl SettingsBindings {
         for key in ["ArrowLeft", "Escape"] {
             back.insert(key.to_string());
         }
-        for key in ["ArrowUp", "DPadDown", "ScratchDown"] {
+        for key in ["ArrowUp", "ScratchDown"] {
             increase.insert(key.to_string());
         }
-        for key in ["ArrowDown", "DPadUp", "ScratchUp"] {
+        for key in ["ArrowDown", "ScratchUp"] {
             decrease.insert(key.to_string());
         }
-        back.insert("Select".to_string());
 
         Self { confirm, back, increase, decrease }
     }
@@ -404,6 +403,11 @@ mod tests {
             scratch: None,
         });
         assert!(!SettingsBindings::from_profile(&nine_key.input).is_confirm("Button1"));
+
+        let defaults = SettingsBindings::from_profile(&profile.input);
+        assert!(!defaults.is_back("Select"));
+        assert!(!defaults.is_increase("DPadDown"));
+        assert!(!defaults.is_decrease("DPadUp"));
     }
 
     #[test]

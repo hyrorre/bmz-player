@@ -361,14 +361,8 @@ fn settings_browse_keeps_cursor_navigation_direction() {
         settings_browse_move_control("ArrowDown", &bindings, &select_bindings),
         Some(SelectMove::Next)
     );
-    assert_eq!(
-        settings_browse_move_control("DPadUp", &bindings, &select_bindings),
-        Some(SelectMove::Previous)
-    );
-    assert_eq!(
-        settings_browse_move_control("DPadDown", &bindings, &select_bindings),
-        Some(SelectMove::Next)
-    );
+    assert_eq!(settings_browse_move_control("DPadUp", &bindings, &select_bindings), None);
+    assert_eq!(settings_browse_move_control("DPadDown", &bindings, &select_bindings), None);
     assert_eq!(
         settings_browse_move_control("LShift", &bindings, &select_bindings),
         Some(SelectMove::Previous)

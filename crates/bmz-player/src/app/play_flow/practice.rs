@@ -15,19 +15,7 @@ pub(super) fn practice_gamepad_action(
 ) -> PracticeGamepadAction {
     let Some(input) = input else { return PracticeGamepadAction::Ignore };
     let Some(resolution) = input.resolve_entry(device, control) else {
-        return match control {
-            PhysicalControl::GamepadButton(button)
-                if matches!(button.as_str(), "DPadUp" | "DPadNorth") =>
-            {
-                PracticeGamepadAction::Move(false)
-            }
-            PhysicalControl::GamepadButton(button)
-                if matches!(button.as_str(), "DPadDown" | "DPadSouth") =>
-            {
-                PracticeGamepadAction::Move(true)
-            }
-            _ => PracticeGamepadAction::Ignore,
-        };
+        return PracticeGamepadAction::Ignore;
     };
     if matches!(resolution.lane, Lane::Scratch | Lane::Scratch2) {
         if synthesized_analog_axis {

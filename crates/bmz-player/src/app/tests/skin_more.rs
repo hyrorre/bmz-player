@@ -907,9 +907,9 @@ fn skin_logical_inputs_include_all_e_actions_and_ui_directions() {
         "E".to_string(),
         "R".to_string(),
         "ArrowLeft".to_string(),
-        "DPadRight".to_string(),
+        "ArrowRight".to_string(),
         "ArrowUp".to_string(),
-        "DPadDown".to_string(),
+        "ArrowDown".to_string(),
     ]);
 
     assert_eq!(

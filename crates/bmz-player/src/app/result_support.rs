@@ -25,8 +25,8 @@ pub(super) fn result_ir_scroll_rows_for_control(
     bindings: &SelectKeyBindings,
 ) -> Option<i32> {
     match control {
-        "ArrowUp" | "DPadUp" => Some(-1),
-        "ArrowDown" | "DPadDown" => Some(1),
+        "ArrowUp" => Some(-1),
+        "ArrowDown" => Some(1),
         _ if bindings.is_select_scratch_down(control) => Some(1),
         _ if bindings.is_select_scratch_up(control) => Some(-1),
         _ => None,
