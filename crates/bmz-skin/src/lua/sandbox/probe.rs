@@ -116,7 +116,13 @@ impl MainStateProbe {
         path: String,
         volume: f64,
     ) {
-        if self.capture_audio_actions && !path.is_empty() && volume.is_finite() {
+        // Scene audio comes from the inference VM. The persistent runtime VM
+        // never drains this list, so recording there would grow every frame.
+        if self.capture_audio_actions
+            && !self.clean_runtime
+            && !path.is_empty()
+            && volume.is_finite()
+        {
             self.audio_actions.push(LuaAudioActionProbe { action, path, volume });
         }
     }
