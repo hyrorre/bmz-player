@@ -73,8 +73,9 @@ pub use table::{
     table_level_breadcrumb, table_level_folder_items,
 };
 pub use virtual_folder::{
-    VIRTUAL_FOLDER_CONFIG_FILE, VIRTUAL_FOLDER_PATH_PREFIX, load_select_items_in_virtual_folder,
-    virtual_folder_breadcrumb, virtual_folder_root_items, virtual_folder_summary,
+    VIRTUAL_FOLDER_CONFIG_FILE, VIRTUAL_FOLDER_PATH_PREFIX, VirtualFolderCatalog,
+    load_select_items_in_virtual_folder, virtual_folder_breadcrumb, virtual_folder_root_items,
+    virtual_folder_summary,
 };
 
 pub fn normalized_course_ln_policy_for_charts(

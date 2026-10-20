@@ -18,14 +18,69 @@ fn load(
     mode: SelectModeFilter,
 ) -> Result<(Vec<SelectItem>, SelectModeFilter)> {
     load_items_for_stack(
-        boot,
-        &mut SelectCollectionCache::default(),
+        SelectListContext {
+            boot,
+            collections: &mut SelectCollectionCache::default(),
+            virtual_folders: &crate::screens::select_model::VirtualFolderCatalog::load(
+                &boot.profile_paths.root_dir,
+            )
+            .map_err(|error| error.to_string()),
+        },
         stack,
         &[],
         mode,
         SelectDifficultyFilter::All,
         SelectSort::Title,
     )
+}
+
+#[test]
+fn virtual_folder_list_and_breadcrumb_share_a_definition_snapshot_until_reload() {
+    let data = ProfileTestDir::new();
+    let boot = data.boot();
+    let path = boot.profile_paths.root_dir.join("select-folders.toml");
+    let definition = |name: &str| {
+        format!("version = 1\n[[folders]]\nid = 'custom'\nname = '{name}'\nquery = 'level >= 0'\n")
+    };
+    std::fs::write(&path, definition("Before")).unwrap();
+    let catalog =
+        crate::screens::select_model::VirtualFolderCatalog::load(&boot.profile_paths.root_dir)
+            .map_err(|error| error.to_string());
+    std::fs::write(&path, "invalid [").unwrap();
+    let (items, _) = load_items_for_stack(
+        SelectListContext {
+            boot: &boot,
+            collections: &mut SelectCollectionCache::default(),
+            virtual_folders: &catalog,
+        },
+        &[],
+        &[],
+        SelectModeFilter::All,
+        SelectDifficultyFilter::All,
+        SelectSort::Title,
+    )
+    .unwrap();
+    assert!(items.iter().any(|item| matches!(item, SelectItem::Folder { path, name, .. } if path == "bmz-filter:custom" && name == "Before")));
+    assert_eq!(
+        catalog.as_ref().unwrap().breadcrumb("bmz-filter:custom").as_deref(),
+        Some("Before")
+    );
+    assert!(
+        crate::screens::select_model::VirtualFolderCatalog::load(&boot.profile_paths.root_dir)
+            .is_err()
+    );
+    std::fs::write(&path, definition("After")).unwrap();
+    let refreshed =
+        crate::screens::select_model::VirtualFolderCatalog::load(&boot.profile_paths.root_dir)
+            .unwrap();
+    assert_eq!(refreshed.breadcrumb("bmz-filter:custom").as_deref(), Some("After"));
+    let other = tempfile::tempdir().unwrap();
+    assert!(
+        crate::screens::select_model::VirtualFolderCatalog::load(other.path())
+            .unwrap()
+            .breadcrumb("bmz-filter:custom")
+            .is_none()
+    );
 }
 
 #[test]
@@ -90,8 +145,14 @@ fn root_function_folders_keep_kinds_and_favorite_follows_my_best() {
             SelectSort::Bp,
         ] {
             let (items, _) = load_items_for_stack(
-                &boot,
-                &mut SelectCollectionCache::default(),
+                SelectListContext {
+                    boot: &boot,
+                    collections: &mut SelectCollectionCache::default(),
+                    virtual_folders: &crate::screens::select_model::VirtualFolderCatalog::load(
+                        &boot.profile_paths.root_dir,
+                    )
+                    .map_err(|error| error.to_string()),
+                },
                 &[],
                 &[],
                 SelectModeFilter::All,

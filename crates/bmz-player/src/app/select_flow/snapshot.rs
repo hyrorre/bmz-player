@@ -58,49 +58,48 @@ impl WinitApp {
             "IR RANKING / G-BATTLE".to_string()
         } else {
             match self.select.folder_stack.last() {
-            None => String::new(),
-            Some(path) if path == FAVORITE_ROOT_PATH => "FAVORITE".to_string(),
-            Some(path) if path == FAVORITE_CHART_PATH => "FAVORITE CHART".to_string(),
-            Some(path) if path == FAVORITE_SONG_PATH => "FAVORITE SONG".to_string(),
-            Some(path) if parse_favorite_song_detail_path(path).is_some() => {
-                "FAVORITE SONG".to_string()
-            }
-            Some(path) if parse_course_contents_path(path).is_some() => "COURSE".to_string(),
-            Some(path) if path.starts_with(VIRTUAL_FOLDER_PATH_PREFIX) => {
-                virtual_folder_breadcrumb(&self.boot.profile_paths.root_dir, path)
-                    .unwrap_or_else(|error| {
-                        tracing::warn!(%error, path, "failed to build virtual-folder breadcrumb");
-                        None
-                    })
-                    .unwrap_or_default()
-            }
-            Some(path) if let Some(folder) = parse_same_folder_path(path) => {
-                std::path::Path::new(folder)
+                None => String::new(),
+                Some(path) if path == FAVORITE_ROOT_PATH => "FAVORITE".to_string(),
+                Some(path) if path == FAVORITE_CHART_PATH => "FAVORITE CHART".to_string(),
+                Some(path) if path == FAVORITE_SONG_PATH => "FAVORITE SONG".to_string(),
+                Some(path) if parse_favorite_song_detail_path(path).is_some() => {
+                    "FAVORITE SONG".to_string()
+                }
+                Some(path) if parse_course_contents_path(path).is_some() => "COURSE".to_string(),
+                Some(path) if path.starts_with(VIRTUAL_FOLDER_PATH_PREFIX) => self
+                    .select
+                    .virtual_folders
+                    .as_ref()
+                    .ok()
+                    .and_then(|catalog| catalog.breadcrumb(path))
+                    .unwrap_or_default(),
+                Some(path) if let Some(folder) = parse_same_folder_path(path) => {
+                    std::path::Path::new(folder)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_string()
+                }
+                Some(path) if path.starts_with(TABLE_ROOT_PATH) => match parse_table_path(path) {
+                    Some(TablePath::Root) | None => text.text("select-difficulty-tables"),
+                    Some(TablePath::Table { source_url }) => self.table_breadcrumb_name(source_url),
+                    Some(TablePath::Level { source_url, level }) => {
+                        let table = self.table_breadcrumb(source_url);
+                        crate::screens::select_model::table_level_breadcrumb(
+                            &table.name,
+                            &table.symbol,
+                            level,
+                        )
+                    }
+                },
+                Some(path) if in_settings_stack(std::slice::from_ref(path)) => {
+                    settings_breadcrumb_for_locale(path, locale)
+                }
+                Some(path) => std::path::Path::new(path)
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("")
-                    .to_string()
-            }
-            Some(path) if path.starts_with(TABLE_ROOT_PATH) => match parse_table_path(path) {
-                Some(TablePath::Root) | None => text.text("select-difficulty-tables"),
-                Some(TablePath::Table { source_url }) => self.table_breadcrumb_name(source_url),
-                Some(TablePath::Level { source_url, level }) => {
-                    let table = self.table_breadcrumb(source_url);
-                    crate::screens::select_model::table_level_breadcrumb(
-                        &table.name,
-                        &table.symbol,
-                        level,
-                    )
-                }
-            },
-            Some(path) if in_settings_stack(std::slice::from_ref(path)) => {
-                settings_breadcrumb_for_locale(path, locale)
-            }
-            Some(path) => std::path::Path::new(path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_string(),
+                    .to_string(),
             }
         };
         let (search_word, search_word_alpha, search_caret_byte_index) = self.display_search_word();

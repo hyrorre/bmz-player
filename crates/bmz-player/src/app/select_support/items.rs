@@ -1,3 +1,9 @@
+pub(in crate::app) struct SelectListContext<'a> {
+    pub boot: &'a BootstrappedApp,
+    pub collections: &'a mut crate::screens::select_model::SelectCollectionCache,
+    pub virtual_folders: &'a Result<crate::screens::select_model::VirtualFolderCatalog, String>,
+}
+
 pub(in crate::app) fn enabled_root_paths(
     app_config: &crate::config::app_config::AppConfig,
 ) -> Vec<String> {
@@ -23,15 +29,17 @@ pub(in crate::app) fn table_source_order(
 /// 自動送りする。実際に適用したモードを items と共に返すので、呼び出し側で
 /// 永続化 / 表示状態を更新できる。
 pub(in crate::app) fn load_items_for_stack(
-    boot: &crate::bootstrap::BootstrappedApp,
-    collection_cache: &mut crate::screens::select_model::SelectCollectionCache,
+    context: SelectListContext<'_>,
     stack: &[String],
     search_history: &[String],
     mode_filter: SelectModeFilter,
     difficulty_filter: SelectDifficultyFilter,
     sort: SelectSort,
 ) -> Result<(Vec<SelectItem>, SelectModeFilter)> {
-    let mut items = build_select_items_for_stack(boot, stack, search_history)?;
+    let boot = context.boot;
+    let mut items =
+        build_select_items_for_stack(boot, context.virtual_folders, stack, search_history)?;
+    let collection_cache = context.collections;
     let chart_ids = items
         .iter()
         .filter_map(|item| match item {
@@ -69,6 +77,7 @@ pub(in crate::app) fn load_items_for_stack(
 
 pub(in crate::app) fn build_select_items_for_stack(
     boot: &crate::bootstrap::BootstrappedApp,
+    virtual_folders: &Result<crate::screens::select_model::VirtualFolderCatalog, String>,
     stack: &[String],
     search_history: &[String],
 ) -> Result<Vec<SelectItem>> {
@@ -165,10 +174,9 @@ pub(in crate::app) fn build_select_items_for_stack(
             )?
         }
         Some(path) if path.starts_with(VIRTUAL_FOLDER_PATH_PREFIX) => {
-            load_select_items_in_virtual_folder(
+            virtual_folders.as_ref().map_err(|error| anyhow::anyhow!("{error}"))?.load_items(
                 &boot.library_db,
                 &boot.score_db,
-                &boot.profile_paths.root_dir,
                 path,
                 boot.profile_config.play.ln_mode_policy,
                 boot.profile_config.play.rule_mode,
@@ -233,8 +241,8 @@ pub(in crate::app) fn build_select_items_for_stack(
                     tracing::error!(%error, "failed to load difficulty table folders");
                 }
             }
-            match virtual_folder_root_items(&boot.profile_paths.root_dir) {
-                Ok(folders) => items.extend(folders),
+            match virtual_folders {
+                Ok(catalog) => items.extend(catalog.root_items()),
                 Err(error) => {
                     tracing::error!(%error, "failed to load virtual-folder catalog");
                 }

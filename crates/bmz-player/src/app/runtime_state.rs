@@ -31,6 +31,7 @@ pub(super) struct SelectRuntimeState {
     pub(super) course_builder: Option<SelectCourseBuilderState>,
     pub(super) select_items: Vec<SelectItem>,
     pub(super) collection_cache: crate::screens::select_model::SelectCollectionCache,
+    pub(super) virtual_folders: Result<crate::screens::select_model::VirtualFolderCatalog, String>,
     pub(super) replay_slot_cache: RefCell<Option<(crate::storage::score_db::ScoreKey, [bool; 4])>>,
     pub(super) select_distribution_cache: RefCell<HashMap<i64, CachedSelectChartDistribution>>,
     /// LR2 select data of the selected chart, cleared when the select list reloads.

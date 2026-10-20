@@ -56,12 +56,18 @@ impl WinitApp {
         );
         let select_sort = SelectSort::from_str_or_default(&boot.profile_config.select.sort);
         let mut collection_cache = crate::screens::select_model::SelectCollectionCache::default();
+        let virtual_folders =
+            crate::screens::select_model::VirtualFolderCatalog::load(&boot.profile_paths.root_dir)
+                .map_err(|error| format!("{error:#}"));
         let (select_items, select_mode_filter) = if viewer_mode {
             (Vec::new(), initial_mode_filter)
         } else {
             load_items_for_stack(
-                &boot,
-                &mut collection_cache,
+                SelectListContext {
+                    boot: &boot,
+                    collections: &mut collection_cache,
+                    virtual_folders: &virtual_folders,
+                },
                 &folder_stack,
                 &[],
                 initial_mode_filter,
@@ -316,6 +322,7 @@ impl WinitApp {
                 lr2_select_cache: Box::default(),
                 lr2_skin_settings: Box::default(),
                 collection_cache,
+                virtual_folders,
                 select_distributions: RefCell::new(Default::default()),
                 difficulty_tables,
                 table_breadcrumb_cache: RefCell::new(HashMap::new()),

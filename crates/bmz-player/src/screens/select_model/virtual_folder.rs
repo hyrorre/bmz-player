@@ -375,10 +375,35 @@ fn folder_item(folder: &VirtualFolderDef, parent_path: &str) -> SelectItem {
 }
 
 pub fn virtual_folder_root_items(profile_root: &Path) -> Result<Vec<SelectItem>> {
-    Ok(load_catalog(profile_root)?
-        .iter()
-        .map(|folder| folder_item(folder, VIRTUAL_FOLDER_PATH_PREFIX))
-        .collect())
+    Ok(VirtualFolderCatalog::load(profile_root)?.root_items())
+}
+
+/// Validated definitions shared by list loading and frame snapshots.
+#[derive(Debug, Clone)]
+pub struct VirtualFolderCatalog {
+    folders: Vec<VirtualFolderDef>,
+}
+
+impl VirtualFolderCatalog {
+    pub fn load(profile_root: &Path) -> Result<Self> {
+        Ok(Self { folders: load_catalog(profile_root)? })
+    }
+
+    pub fn root_items(&self) -> Vec<SelectItem> {
+        self.folders.iter().map(|folder| folder_item(folder, VIRTUAL_FOLDER_PATH_PREFIX)).collect()
+    }
+
+    pub fn breadcrumb(&self, path: &str) -> Option<String> {
+        let rest = path.strip_prefix(VIRTUAL_FOLDER_PATH_PREFIX)?;
+        let mut current = self.folders.as_slice();
+        let mut names = Vec::new();
+        for segment in rest.split('/').filter(|segment| !segment.is_empty()) {
+            let folder = current.iter().find(|folder| folder.id == segment)?;
+            names.push(folder.name.as_str());
+            current = &folder.items;
+        }
+        (!names.is_empty()).then(|| names.join(" > "))
+    }
 }
 
 fn find_folder<'a>(folders: &'a [VirtualFolderDef], path: &str) -> Option<&'a VirtualFolderDef> {
@@ -393,20 +418,7 @@ fn find_folder<'a>(folders: &'a [VirtualFolderDef], path: &str) -> Option<&'a Vi
 }
 
 pub fn virtual_folder_breadcrumb(profile_root: &Path, path: &str) -> Result<Option<String>> {
-    let folders = load_catalog(profile_root)?;
-    let Some(rest) = path.strip_prefix(VIRTUAL_FOLDER_PATH_PREFIX) else {
-        return Ok(None);
-    };
-    let mut current = folders.as_slice();
-    let mut names = Vec::new();
-    for segment in rest.split('/').filter(|segment| !segment.is_empty()) {
-        let Some(folder) = current.iter().find(|folder| folder.id == segment) else {
-            return Ok(None);
-        };
-        names.push(folder.name.as_str());
-        current = &folder.items;
-    }
-    Ok((!names.is_empty()).then(|| names.join(" > ")))
+    Ok(VirtualFolderCatalog::load(profile_root)?.breadcrumb(path))
 }
 
 pub fn load_select_items_in_virtual_folder(
@@ -418,80 +430,100 @@ pub fn load_select_items_in_virtual_folder(
     rule_mode: RuleMode,
     active_song_roots: Option<&[String]>,
 ) -> Result<Vec<SelectItem>> {
-    let folders = load_catalog(profile_root)?;
-    let folder =
-        find_folder(&folders, path).with_context(|| format!("unknown virtual folder `{path}`"))?;
-    if folder.query.is_none() {
-        return Ok(folder.items.iter().map(|child| folder_item(child, path)).collect());
-    }
-    let query_def = folder.query.as_ref().expect("query checked above");
-    let query = VirtualQuery::parse(query_def.filter())?;
-    let order_by = query_def.order_by().map(parse_order_by).transpose()?;
-
-    let mut charts = library_db.list_all_charts()?;
-    retain_active_charts(&mut charts, active_song_roots);
-    let score_keys = charts
-        .iter()
-        .map(|chart| score_key_for_chart(chart, ln_policy_setting, rule_mode))
-        .collect::<Vec<_>>();
-    let score_map = score_db
-        .best_scores_for_charts(&score_keys)?
-        .into_iter()
-        .map(|score| {
-            (
-                ScoreKey::with_options(
-                    score.chart_sha256,
-                    score.ln_policy,
-                    score.double_option,
-                    score.rule_mode,
-                ),
-                score,
-            )
-        })
-        .collect::<HashMap<_, _>>();
-    let chart_ids = charts.iter().map(|chart| chart.chart_id).collect::<Vec<_>>();
-    let mut analysis_map = library_db.chart_analysis_summaries_by_chart_ids(&chart_ids)?;
-    let first_seen_map = library_db.chart_first_seen_at_by_chart_ids(&chart_ids)?;
-    let local_days = score_db.recent_local_day_ranges(query.required_local_days().max(1))?;
-    let update_start = local_days.last().map_or(0, |range| range.0);
-    let update_map = score_db.chart_update_times_since(&score_keys, update_start)?;
-
-    let mut candidates = charts
-        .into_iter()
-        .zip(score_keys)
-        .map(|(chart, score_key)| VirtualChartCandidate {
-            analysis: analysis_map.remove(&chart.chart_id),
-            score: score_map.get(&score_key).cloned(),
-            first_seen_at: first_seen_map.get(&chart.chart_id).copied().unwrap_or(0),
-            update_times: update_map.get(&score_key).cloned().unwrap_or_default(),
-            chart,
-            score_key,
-        })
-        .filter(|candidate| query.matches(&candidate.facts(), &local_days))
-        .collect::<Vec<_>>();
-
-    if let Some(order_by) = order_by {
-        candidates.sort_by(|left, right| {
-            let ordering = compare_for_order(order_by.field, &left.facts(), &right.facts());
-            let ordering = if order_by.descending { ordering.reverse() } else { ordering };
-            ordering
-                .then_with(|| left.chart.title.cmp(&right.chart.title))
-                .then_with(|| left.chart.chart_id.cmp(&right.chart.chart_id))
-        });
-    }
-    let mut seen_sha256 = HashSet::new();
-    candidates.retain(|candidate| seen_sha256.insert(candidate.chart.sha256));
-    if let Some(limit) = query_def.limit() {
-        candidates.truncate(limit);
-    }
-
-    chart_items_without_table_enrichment(
+    VirtualFolderCatalog::load(profile_root)?.load_items(
         library_db,
         score_db,
-        candidates.into_iter().map(|candidate| candidate.chart).collect(),
+        path,
         ln_policy_setting,
         rule_mode,
+        active_song_roots,
     )
+}
+
+impl VirtualFolderCatalog {
+    pub fn load_items(
+        &self,
+        library_db: &LibraryDatabase,
+        score_db: &ScoreDatabase,
+        path: &str,
+        ln_policy_setting: LnPolicySetting,
+        rule_mode: RuleMode,
+        active_song_roots: Option<&[String]>,
+    ) -> Result<Vec<SelectItem>> {
+        let folder = find_folder(&self.folders, path)
+            .with_context(|| format!("unknown virtual folder `{path}`"))?;
+        if folder.query.is_none() {
+            return Ok(folder.items.iter().map(|child| folder_item(child, path)).collect());
+        }
+        let query_def = folder.query.as_ref().expect("query checked above");
+        let query = VirtualQuery::parse(query_def.filter())?;
+        let order_by = query_def.order_by().map(parse_order_by).transpose()?;
+
+        let mut charts = library_db.list_all_charts()?;
+        retain_active_charts(&mut charts, active_song_roots);
+        let score_keys = charts
+            .iter()
+            .map(|chart| score_key_for_chart(chart, ln_policy_setting, rule_mode))
+            .collect::<Vec<_>>();
+        let score_map = score_db
+            .best_scores_for_charts(&score_keys)?
+            .into_iter()
+            .map(|score| {
+                (
+                    ScoreKey::with_options(
+                        score.chart_sha256,
+                        score.ln_policy,
+                        score.double_option,
+                        score.rule_mode,
+                    ),
+                    score,
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let chart_ids = charts.iter().map(|chart| chart.chart_id).collect::<Vec<_>>();
+        let mut analysis_map = library_db.chart_analysis_summaries_by_chart_ids(&chart_ids)?;
+        let first_seen_map = library_db.chart_first_seen_at_by_chart_ids(&chart_ids)?;
+        let local_days = score_db.recent_local_day_ranges(query.required_local_days().max(1))?;
+        let update_start = local_days.last().map_or(0, |range| range.0);
+        let update_map = score_db.chart_update_times_since(&score_keys, update_start)?;
+
+        let mut candidates = charts
+            .into_iter()
+            .zip(score_keys)
+            .map(|(chart, score_key)| VirtualChartCandidate {
+                analysis: analysis_map.remove(&chart.chart_id),
+                score: score_map.get(&score_key).cloned(),
+                first_seen_at: first_seen_map.get(&chart.chart_id).copied().unwrap_or(0),
+                update_times: update_map.get(&score_key).cloned().unwrap_or_default(),
+                chart,
+                score_key,
+            })
+            .filter(|candidate| query.matches(&candidate.facts(), &local_days))
+            .collect::<Vec<_>>();
+
+        if let Some(order_by) = order_by {
+            candidates.sort_by(|left, right| {
+                let ordering = compare_for_order(order_by.field, &left.facts(), &right.facts());
+                let ordering = if order_by.descending { ordering.reverse() } else { ordering };
+                ordering
+                    .then_with(|| left.chart.title.cmp(&right.chart.title))
+                    .then_with(|| left.chart.chart_id.cmp(&right.chart.chart_id))
+            });
+        }
+        let mut seen_sha256 = HashSet::new();
+        candidates.retain(|candidate| seen_sha256.insert(candidate.chart.sha256));
+        if let Some(limit) = query_def.limit() {
+            candidates.truncate(limit);
+        }
+
+        chart_items_without_table_enrichment(
+            library_db,
+            score_db,
+            candidates.into_iter().map(|candidate| candidate.chart).collect(),
+            ln_policy_setting,
+            rule_mode,
+        )
+    }
 }
 
 pub fn virtual_folder_summary(

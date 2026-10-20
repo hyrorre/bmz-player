@@ -25,6 +25,10 @@ impl WinitApp {
 
     pub(in crate::app) fn change_select_list(&mut self, action: SelectListAction) -> bool {
         let started_at = Instant::now();
+        let virtual_folders = crate::screens::select_model::VirtualFolderCatalog::load(
+            &self.boot.profile_paths.root_dir,
+        )
+        .map_err(|error| format!("{error:#}"));
         let history: Vec<String> = self.select.search.history().iter().cloned().collect();
         let previous_selected_key =
             self.select.select_items.get(self.select.selected_index).map(select_item_key);
@@ -36,8 +40,11 @@ impl WinitApp {
             previous_selected_key,
             |stack| {
                 let (mut items, mut mode) = load_items_for_stack(
-                    &self.boot,
-                    &mut self.select.collection_cache,
+                    SelectListContext {
+                        boot: &self.boot,
+                        collections: &mut self.select.collection_cache,
+                        virtual_folders: &virtual_folders,
+                    },
                     stack,
                     &history,
                     self.select.select_mode_filter,
@@ -83,6 +90,7 @@ impl WinitApp {
             self.set_search_mode(false);
         }
         self.select.folder_stack = prepared.folder_stack;
+        self.select.virtual_folders = virtual_folders;
         self.select.selected_index_stack = prepared.selected_index_stack;
         self.select.selected_index = prepared.selected_index;
         // Song scans and table/course updates all converge here. Keep the editor
