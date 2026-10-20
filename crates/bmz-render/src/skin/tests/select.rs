@@ -18,5 +18,7 @@ mod cases_07;
 mod litone_properties;
 #[path = "select/lr2_slider.rs"]
 mod lr2_slider;
+#[path = "select/mode_filter_index.rs"]
+mod mode_filter_index;
 #[path = "select/scroll.rs"]
 mod scroll;
