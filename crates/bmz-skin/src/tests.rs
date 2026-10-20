@@ -248,6 +248,8 @@ mod installed_skin_patterns;
 mod lua_api_baseline;
 #[path = "tests/lua_api_extensions.rs"]
 mod lua_api_extensions;
+#[path = "tests/lua_document_conversion.rs"]
+mod lua_document_conversion;
 #[path = "tests/lua_stdlib_compat.rs"]
 mod lua_stdlib_compat;
 #[path = "tests/property_names.rs"]
