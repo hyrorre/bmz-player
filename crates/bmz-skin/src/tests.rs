@@ -235,6 +235,10 @@ mod cases_07;
 mod custom_timers;
 #[path = "tests/destination_clip.rs"]
 mod destination_clip;
+#[path = "tests/installed_skin_compat.rs"]
+mod installed_skin_compat;
+#[path = "tests/lua_api_baseline.rs"]
+mod lua_api_baseline;
 #[path = "tests/property_names.rs"]
 mod property_names;
 #[path = "tests/read_helpers.rs"]
