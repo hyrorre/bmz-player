@@ -314,6 +314,17 @@ pub(super) fn select_mode_index(mode: &str) -> usize {
     }
 }
 
+/// BMZ `ref=19250`: beatoraja indices `0..=9` plus 4K/6K/8K at `10..=12`.
+/// The published values are fixed; future modes must use new indices.
+pub(super) fn select_mode_index_extended(mode: &str) -> usize {
+    match mode {
+        "4K" => 10,
+        "6K" => 11,
+        "8K" => 12,
+        _ => select_mode_index(mode),
+    }
+}
+
 pub(super) fn select_sort_index(sort: &str) -> usize {
     match sort {
         "ARTIST" => 1,

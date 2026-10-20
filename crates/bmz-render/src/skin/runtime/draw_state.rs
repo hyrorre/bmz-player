@@ -88,7 +88,10 @@ pub struct SkinDrawState {
     /// BMZ extension: exact select session mode index.
     /// 0=NORMAL, 1=PRACTICE, 2=AUTOPLAY, 3=AUTO BATTLE, 4=G-BATTLE.
     pub select_session_mode_index: usize,
+    /// beatoraja `ref=11` key filter index. 4K/6K/8K stay ALL (0).
     pub select_mode_index: usize,
+    /// BMZ `ref=19250` key filter index with 4K/6K/8K at 10/11/12.
+    pub select_mode_extended_index: usize,
     pub select_difficulty_filter_index: usize,
     /// LR2 RANDOM MIX text refs 190..196.
     pub random_mix_options: [u32; 7],
@@ -556,6 +559,7 @@ impl Default for SkinDrawState {
             constant_enabled: false,
             select_session_mode_index: 0,
             select_mode_index: 0,
+            select_mode_extended_index: 0,
             select_difficulty_filter_index: 0,
             random_mix_options: [0, 0, 0, 10, 0, 0, 5],
             select_sort_index: 0,

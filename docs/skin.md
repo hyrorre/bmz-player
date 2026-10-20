@@ -558,6 +558,10 @@ JSONのFloatPropertyにあたる`slider.value` / `graph.value`はRateTypeだけ�
 Luaの`main_state.float_number`が扱うFloatType名へは拡張しません。
 
 Boolean名の先頭の`!`は1個ごとに否定します。未知名は否定してもtrueにしません。
+
+BMZ拡張名は`bmz_`で始まり、beatorajaの名前を上書きしません。IntegerPropertyでは
+`bmz_select_mode_index`（[`19250`](#bmz-select-key-filter-index)）を追加しています。
+beatorajaのIndexType名`mode`は従来どおり`ref=11`です。
 `op`配列は数値と文字列を混在でき、各条件をANDで評価します。
 文字列内のOR等はその条件の中で評価し、隣の条件とは結合しません。
 型付き`value`や条件の未知文字列は既存の式評価へ渡します。
@@ -1727,6 +1731,83 @@ select snapshotへ予定配置を設定します。
 `1903..1915`は、Selectでは現在の設定を適用した場合、Decide / Play / Resultでは実際に
 開始した試行の**実効key mode**を返します。SelectのSessionMode `AUTO BATTLE` / `G-BATTLE`
 は5K/7Kのまま維持し、7K→6K変換と通常のDP OPTION `BATTLE`だけを反映します。
+
+### BMZ Select Key Filter Index
+
+選曲画面のキーフィルターを画像で出し分けるための拡張参照です。beatoraja互換の`ref=11`は
+4K / 6K / 8KをALL KEYS（`0`）として返すため、これらのフィルター用の画像を選べません。
+既存スキンの表示を変えないよう`ref=11`はそのままにし、BMZ拡張の`ref=19250`を追加しています。
+
+| ref / name | kind | meaning |
+| --- | --- | --- |
+| 11 / `mode` | image・imageset ref / number | beatoraja互換のキーフィルターindex。4K / 6K / 8Kは`0` |
+| 19250 / `bmz_select_mode_index` | image・imageset ref / number / event_index / IntegerProperty | BMZ拡張のキーフィルターindex。下表の`0..12` |
+
+どちらも**現在選択しているキーフィルター**を返します。曲行の譜面のkey modeは
+[`1903`](#bmz-key-mode-refs)で参照し、キーフィルターとは連動しません。
+
+| index | filter | `ref=11` | 区分 |
+| ---: | --- | ---: | --- |
+| 0 | ALL KEYS | 0 | beatoraja |
+| 1 | 5KEYS | 1 | beatoraja |
+| 2 | 7KEYS | 2 | beatoraja |
+| 3 | 10KEYS | 3 | beatoraja |
+| 4 | 14KEYS | 4 | beatoraja |
+| 5 | 9KEYS | 5 | beatoraja |
+| 6 | 24KEYS | 6 | beatoraja |
+| 7 | 48KEYS | 7 | beatoraja |
+| 8 | SINGLE (5K+7K) | — | beatoraja予約 |
+| 9 | DOUBLE (10K+14K) | — | beatoraja予約 |
+| 10 | 4KEYS | 0 | BMZ |
+| 11 | 6KEYS | 0 | BMZ |
+| 12 | 8KEYS | 0 | BMZ |
+
+- `0..9`はbeatorajaの`ModeFilter.getSkinNumber()`と同じ値です。8 / 9はBMZにSINGLE / DOUBLE
+  フィルターが無い現在も予約とし、別の用途に使いません。
+- 番号は公開仕様として固定します。モードを追加する場合は新しい番号を割り当て、既存の番号は変更しません。
+- 新しく作るimagesetでは`images`を13個（index `0..12`）用意します。使わない枠には
+  ALL KEYS等の画像IDを重複して指定できます。
+- 画像が足りない場合は既存の範囲外処理に従います。`imageset.ref`は最後の画像、
+  `imageset.value`は先頭の画像、`image.ref`は`divy`（`len`指定時はその値）の最後の行を使います。
+- Select以外ではimage / imagesetのindexとnumberは未取得（numberは非表示、Luaの
+  `main_state.number`は`0`）、event_indexは`-1`です。
+
+既存の`ref=11`を使うスキンは修正不要で、4K / 6K / 8KではこれまでどおりALL KEYSの画像を表示します。
+4K / 6K / 8K用の画像を出す場合は、imagesetを`ref=19250`へ変更し、13個の画像を指定します。
+
+```json
+{
+  "imageset": [
+    {
+      "id": "key_mode_filter",
+      "ref": 19250,
+      "images": [
+        "all", "5k", "7k", "10k", "14k", "9k", "24k", "48k",
+        "single", "double", "4k", "6k", "8k"
+      ]
+    }
+  ]
+}
+```
+
+```lua
+skin.imageset = {
+    {
+        id = "key_mode_filter",
+        ref = 19250,
+        images = {
+            "all", "5k", "7k", "10k", "14k", "9k", "24k", "48k",
+            "single", "double", "4k", "6k", "8k"
+        }
+    }
+}
+-- main_state.number(19250) / main_state.event_index(19250) でも同じindexを取得できる。
+```
+
+画像ID（`all`、`4k`等）は例です。対応する`image`の定義は別途必要です。
+IntegerPropertyの経路を使う場合は`"value": "bmz_select_mode_index"`を指定します。
+destinationの条件式では`draw: "number(19250)==10"`のように参照できます。
+キーフィルターの切り替え操作（button / event 11）は変更しません。
 
 ### BMZ Source Chart Refs
 

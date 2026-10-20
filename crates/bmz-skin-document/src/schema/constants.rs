@@ -238,6 +238,10 @@ pub const SKIN_REF_BMZ_BEST_SCORE_ARRANGE_1P: i32 = 19_201;
 pub const SKIN_REF_BMZ_BEST_SCORE_ARRANGE_2P: i32 = 19_202;
 /// Actual DP option (OFF / FLIP / BATTLE / BATTLE AS), not the score bucket.
 pub const SKIN_REF_BMZ_BEST_SCORE_DOUBLE_OPTION: i32 = 19_203;
+/// BMZ extension: Select key filter image/number index. `0..=9` follow beatoraja
+/// `ModeFilter.getSkinNumber()` (8/9 stay reserved for SINGLE / DOUBLE), and BMZ adds
+/// `10=4K`, `11=6K`, `12=8K`. The legacy `ref=11` keeps mapping 4K/6K/8K to ALL (0).
+pub const SKIN_REF_BMZ_SELECT_MODE_INDEX: i32 = 19_250;
 /// DETAIL OPTIONS v1. Number/text/option are independent namespaces.
 pub const SKIN_REF_DETAIL_OPTIONS_BASE: i32 = 19_300;
 pub const SKIN_REF_DETAIL_OPTIONS_LAST: i32 = 19_312;
