@@ -86,7 +86,6 @@ impl SettingsBindings {
         for key in ["ArrowDown", "DPadUp", "ScratchUp"] {
             decrease.insert(key.to_string());
         }
-        confirm.insert("Button1".to_string());
         back.insert("Select".to_string());
 
         Self { confirm, back, increase, decrease }
@@ -386,6 +385,25 @@ mod tests {
         assert!(bindings.is_increase("F"));
         assert!(!bindings.is_confirm("Z"));
         assert!(!bindings.is_back("S"));
+    }
+
+    #[test]
+    fn gamepad_button1_confirms_only_through_lane_bindings() {
+        let profile = ProfileConfig::new_default("default", "Default", 0);
+        assert!(SettingsBindings::from_profile(&profile.input).is_confirm("Button1"));
+
+        let mut nine_key = profile.clone();
+        nine_key.input.select_input_mode = SelectInputModeConfig::Key9;
+        let play9 = nine_key.input.play.entry(KeyMode::K9.play_map_key().to_string()).or_default();
+        play9.bindings.push(crate::config::profile_config::BindingConfigEntry {
+            device: "gamepad".to_string(),
+            control: "Button1".to_string(),
+            keyboard_slot: None,
+            lane: Some(LaneConfig::Key1),
+            action: None,
+            scratch: None,
+        });
+        assert!(!SettingsBindings::from_profile(&nine_key.input).is_confirm("Button1"));
     }
 
     #[test]

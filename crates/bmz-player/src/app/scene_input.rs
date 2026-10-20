@@ -143,7 +143,6 @@ fn gamepad_select_action(control: &str, bindings: &SelectKeyBindings) -> Option<
         "DPadUp" => Some(SelectAction::Move(SelectMove::Previous)),
         "DPadDown" => Some(SelectAction::Move(SelectMove::Next)),
         "Select" => Some(SelectAction::ExitFolder),
-        "Button1" => Some(SelectAction::EnterOrPlay),
         _ => None,
     };
     if fixed.is_some() {
@@ -227,11 +226,7 @@ pub(super) fn decide_action(
             _ => bindings.is_enter(control).then_some(DecideAction::Confirm),
         },
         PhysicalControl::GamepadButton(_) => {
-            if control == "Button1" {
-                Some(DecideAction::Confirm)
-            } else {
-                bindings.is_enter(control).then_some(DecideAction::Confirm)
-            }
+            bindings.is_enter(control).then_some(DecideAction::Confirm)
         }
         PhysicalControl::HidButton(_) => None,
     }
@@ -249,7 +244,7 @@ pub(super) fn result_action(event: &ControlInputEvent) -> Option<ResultAction> {
             _ => None,
         },
         PhysicalControl::GamepadButton(_) => match control {
-            "Button1" | "Start" => Some(ResultAction::Retry),
+            "Start" => Some(ResultAction::Retry),
             "Button2" | "Select" => Some(ResultAction::Leave),
             _ => None,
         },
@@ -351,8 +346,22 @@ mod tests {
             select_action(&keyboard(KeyCode::Enter), &bindings),
             Some(SelectAction::EnterOrPlay)
         );
+        // Button1 confirms through its default KEY1 binding, not a fixed button name.
         assert_eq!(select_action(&gamepad("Button1"), &bindings), Some(SelectAction::EnterOrPlay));
         assert_eq!(select_action(&gamepad("ArrowUp"), &bindings), None);
+    }
+
+    #[test]
+    fn gamepad_button1_has_no_fixed_select_decide_or_result_action() {
+        // Default 9K select bindings are keyboard-only, so Button1 is unbound.
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.input.select_input_mode =
+            crate::config::profile_config::SelectInputModeConfig::Key9;
+        let keys = SelectKeyBindings::from_profile(&profile.input);
+
+        assert_eq!(select_action(&gamepad("Button1"), &keys), None);
+        assert_eq!(decide_action(&gamepad("Button1"), &keys), None);
+        assert_eq!(result_action(&gamepad("Button1")), None);
     }
 
     #[test]
