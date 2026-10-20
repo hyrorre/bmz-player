@@ -1,76 +1,100 @@
 use super::*;
 
-#[derive(Clone)]
-pub(super) struct FontFallbackFace {
-    pub(super) cache_id: String,
-    pub(super) font: FontArc,
-}
-
+/// 未指定テキスト用の既定フォント列（CJK coverage 順）。
 #[derive(Clone, Default)]
 pub(super) struct FontFallbackChain {
-    pub(super) faces: Vec<FontFallbackFace>,
+    pub(super) faces: Vec<TextFace>,
 }
 
 impl FontFallbackChain {
-    pub(super) fn primary(&self) -> Option<&FontFallbackFace> {
+    #[cfg(test)]
+    pub(super) fn primary(&self) -> Option<&TextFace> {
         self.faces.first()
     }
 
-    pub(super) fn select(&self, ch: char) -> Option<&FontFallbackFace> {
-        self.faces.iter().find(|face| face.font.glyph_id(ch).0 != 0).or_else(|| self.primary())
+    #[cfg(test)]
+    pub(super) fn select(&self, ch: char) -> Option<&TextFace> {
+        self.faces.iter().find(|face| face.has_glyph(ch))
     }
 
     #[cfg(test)]
-    fn single(font: FontArc) -> Self {
-        Self { faces: vec![FontFallbackFace { cache_id: DEFAULT_TEXT_FONT_ID.to_string(), font }] }
+    fn single(font: TextFace) -> Self {
+        Self { faces: vec![font] }
     }
 }
 
+/// 1つのテキスト描画で使うベクターフォントの優先順。
+///
+/// `id` は解決結果・レイアウトのキャッシュキーで、フォント構成が変わると
+/// atlas ごとキャッシュを作り直す。先頭 face の寸法を基準に他の face の em を揃える。
 #[derive(Clone, Copy)]
-pub(super) enum VectorFontSet<'a> {
-    Single { cache_id: &'a str, font: &'a FontArc },
-    Fallback(&'a FontFallbackChain),
+pub(super) struct VectorFontSet<'a> {
+    pub(super) id: &'a str,
+    pub(super) faces: &'a [TextFace],
 }
 
 impl<'a> VectorFontSet<'a> {
-    pub(super) fn primary(self) -> Option<(&'a str, &'a FontArc)> {
-        match self {
-            Self::Single { cache_id, font } => Some((cache_id, font)),
-            Self::Fallback(fonts) => {
-                fonts.primary().map(|face| (face.cache_id.as_str(), &face.font))
-            }
-        }
+    pub(super) fn primary(self) -> Option<&'a TextFace> {
+        self.faces.first()
     }
 
-    pub(super) fn select(self, ch: char) -> Option<(&'a str, &'a FontArc)> {
-        match self {
-            Self::Single { cache_id, font } => Some((cache_id, font)),
-            Self::Fallback(fonts) => {
-                fonts.select(ch).map(|face| (face.cache_id.as_str(), &face.font))
-            }
-        }
+    pub(super) fn face(self, index: u16) -> Option<&'a TextFace> {
+        self.faces.get(usize::from(index))
     }
 
-    pub(super) fn layout_cache_id(self, text: &str) -> String {
-        match self {
-            Self::Single { cache_id, .. } => cache_id.to_string(),
-            Self::Fallback(_) => {
-                let mut id = String::from(DEFAULT_TEXT_FONT_ID);
-                for ch in text.chars() {
-                    let selected = self.select(ch).map(|(id, _)| id).unwrap_or("<missing>");
-                    id.push('|');
-                    id.push_str(selected);
-                }
-                id
-            }
+    pub(super) fn find_face(
+        self,
+        mut predicate: impl FnMut(&TextFace) -> bool,
+    ) -> Option<(u16, &'a TextFace)> {
+        self.faces
+            .iter()
+            .enumerate()
+            .take(usize::from(u16::MAX))
+            .find(|(_, face)| predicate(face))
+            .map(|(index, face)| (index as u16, face))
+    }
+
+    /// face の1フォント単位あたりの設計単位。
+    ///
+    /// 先頭 face は ab_glyph の `PxScale`（ascent - descent が1）と一致させ、
+    /// 従来の描画寸法を保つ。他の face は先頭 face と em の大きさを揃える。
+    pub(super) fn units_scale(self, index: u16) -> f32 {
+        let Some(primary) = self.primary() else {
+            return 0.0;
+        };
+        let primary = primary.metrics();
+        if index == 0 {
+            return 1.0 / primary.height();
         }
+        let face = self.face(index).map_or(primary, TextFace::metrics);
+        primary.units_per_em / primary.height() / face.units_per_em
+    }
+
+    /// 先頭 face の1em（設計単位）。
+    pub(super) fn em(self) -> f32 {
+        self.primary()
+            .map(|face| face.metrics().units_per_em / face.metrics().height())
+            .unwrap_or(1.0)
+    }
+}
+
+/// 1つのテキスト描画で使うビットマップフォント。
+#[derive(Clone, Copy)]
+pub(super) struct BitmapFontSet<'a> {
+    pub(super) id: &'a str,
+    pub(super) primary: &'a BitmapFont,
+}
+
+impl<'a> BitmapFontSet<'a> {
+    pub(super) fn font(self, index: u16) -> Option<(&'a str, &'a BitmapFont)> {
+        (index == 0).then_some((self.id, self.primary))
     }
 }
 
 pub(super) fn build_text_frame_with_fallback_cache(
     plan: &DrawPlan,
     default_fonts: &FontFallbackChain,
-    fonts: &HashMap<String, FontArc>,
+    fonts: &HashMap<String, TextFace>,
     bitmap_fonts: &HashMap<String, BitmapFont>,
     surface: SurfaceSize,
     atlas: &mut TextAtlasCache,
@@ -91,12 +115,14 @@ pub(super) fn build_text_frame_with_fallback_cache(
         if let Some(font_id) = style.font_id.as_deref()
             && let Some(bitmap_font) = bitmap_fonts.get(font_id)
         {
-            builder.push_bitmap_text(origin, text, style.clone(), font_id, bitmap_font, surface);
+            let fonts = BitmapFontSet { id: font_id, primary: bitmap_font };
+            builder.push_bitmap_text(origin, text, style.clone(), fonts, surface);
             scale_text_quads(&mut builder.quads[quads_before..], *origin, *post_scale);
             command_caret_rects.push(
                 caret
                     .and_then(|caret| {
-                        bitmap_text_caret_rect(origin, text, style, bitmap_font, surface, caret)
+                        let shaped = builder.shaped_bitmap_text(text, fonts);
+                        bitmap_text_caret_rect(origin, &shaped, style, fonts, surface, caret)
                     })
                     .map(|caret| scale_text_rect_command(caret, *origin, *post_scale)),
             );
@@ -105,22 +131,18 @@ pub(super) fn build_text_frame_with_fallback_cache(
                 .font_id
                 .as_deref()
                 .and_then(|font_id| {
-                    fonts.get(font_id).map(|font| VectorFontSet::Single { cache_id: font_id, font })
+                    fonts
+                        .get_key_value(font_id)
+                        .map(|(id, face)| VectorFontSet { id, faces: std::slice::from_ref(face) })
                 })
-                .unwrap_or(VectorFontSet::Fallback(default_fonts));
+                .unwrap_or(VectorFontSet { id: DEFAULT_TEXT_FONT_ID, faces: &default_fonts.faces });
             builder.push_text(origin, text, style.clone(), vector_fonts, surface);
             scale_text_quads(&mut builder.quads[quads_before..], *origin, *post_scale);
             command_caret_rects.push(
                 caret
                     .and_then(|caret| {
-                        vector_text_caret_rect_with_fallback(
-                            origin,
-                            text,
-                            style,
-                            vector_fonts,
-                            surface,
-                            caret,
-                        )
+                        let shaped = builder.shaped_vector_text(text, vector_fonts);
+                        vector_text_caret_rect(origin, &shaped, style, vector_fonts, surface, caret)
                     })
                     .map(|caret| scale_text_rect_command(caret, *origin, *post_scale)),
             );
@@ -157,8 +179,8 @@ pub(super) fn scale_text_rect_command(
 #[cfg(test)]
 pub(super) fn build_text_frame_with_cache(
     plan: &DrawPlan,
-    default_font: &FontArc,
-    fonts: &HashMap<String, FontArc>,
+    default_font: &TextFace,
+    fonts: &HashMap<String, TextFace>,
     bitmap_fonts: &HashMap<String, BitmapFont>,
     surface: SurfaceSize,
     atlas: &mut TextAtlasCache,
@@ -173,13 +195,26 @@ pub(super) fn build_text_frame_with_cache(
     )
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct TextQuad {
+    pub(super) x: f32,
+    pub(super) y: f32,
+    pub(super) width: f32,
+    pub(super) height: f32,
+    pub(super) atlas_origin: (u32, u32),
+    pub(super) glyph_width: u32,
+    pub(super) glyph_height: u32,
+    pub(super) color: Color,
+}
+
 pub(super) const DEFAULT_TEXT_FONT_ID: &str = "<default>";
 
+/// atlas 内のグリフ。ベクターはグリフID、ビットマップは文字、生成矩形は寸法で識別する。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) struct TextGlyphKey {
-    kind: TextGlyphKind,
-    pub(super) font_id: String,
-    pub(super) ch: char,
+    pub(super) kind: TextGlyphKind,
+    pub(super) font_id: Arc<str>,
+    pub(super) glyph: u32,
     scale_x_bits: u32,
     scale_y_bits: u32,
 }
@@ -188,6 +223,7 @@ pub(super) struct TextGlyphKey {
 pub(super) enum TextGlyphKind {
     Vector,
     Bitmap,
+    Tofu,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -271,6 +307,8 @@ pub(super) struct TextAtlasCache {
     pixels: Vec<u8>,
     pub(super) glyphs: HashMap<TextGlyphKey, CachedGlyph>,
     pub(super) layouts: TextLayoutCache,
+    /// 欠字・fallback の解決結果。atlas 画素とは独立なので高さ上限のリセットでは残す。
+    pub(super) shapes: TextShapeCache,
     pub(super) dirty_regions: Vec<TextAtlasDirtyRegion>,
 }
 
@@ -284,6 +322,7 @@ impl TextAtlasCache {
             pixels: Vec::new(),
             glyphs: HashMap::new(),
             layouts: TextLayoutCache::new(),
+            shapes: TextShapeCache::default(),
             dirty_regions: Vec::new(),
         }
     }
@@ -331,15 +370,14 @@ impl TextAtlasCache {
 
     pub(super) fn cached_vector_glyph(
         &mut self,
-        font_id: &str,
-        ch: char,
+        face: &TextFace,
+        glyph_id: GlyphId,
         scale: PxScale,
-        font: &FontArc,
     ) -> Option<CachedGlyph> {
         let key = TextGlyphKey {
             kind: TextGlyphKind::Vector,
-            font_id: font_id.to_string(),
-            ch,
+            font_id: face.cache_id().clone(),
+            glyph: u32::from(glyph_id.0),
             scale_x_bits: scale.x.to_bits(),
             scale_y_bits: scale.y.to_bits(),
         };
@@ -347,14 +385,14 @@ impl TextAtlasCache {
             return Some(glyph.clone());
         }
 
+        let font = face.font();
         let raster_scale = PxScale {
             x: scale.x * VECTOR_TEXT_SUPERSAMPLE_SCALE,
             y: scale.y * VECTOR_TEXT_SUPERSAMPLE_SCALE,
         };
         let scaled_font = font.as_scaled(raster_scale);
         let baseline_y = scaled_font.ascent();
-        let glyph =
-            Glyph { id: font.glyph_id(ch), scale: raster_scale, position: point(0.0, baseline_y) };
+        let glyph = Glyph { id: glyph_id, scale: raster_scale, position: point(0.0, baseline_y) };
         let outlined = font.outline_glyph(glyph)?;
         let bounds = outlined.px_bounds();
         let width = bounds.width().ceil().max(0.0) as u32;
@@ -389,9 +427,39 @@ impl TextAtlasCache {
         ))
     }
 
+    /// 代替グリフが無い欠字の枠。`width` / `height` は表示px。
+    pub(super) fn cached_tofu_glyph(&mut self, width: f32, height: f32) -> Option<CachedGlyph> {
+        if !(width > 0.0 && height > 0.0) {
+            return None;
+        }
+        let key = TextGlyphKey {
+            kind: TextGlyphKind::Tofu,
+            font_id: Arc::from(""),
+            glyph: 0,
+            scale_x_bits: width.to_bits(),
+            scale_y_bits: height.to_bits(),
+        };
+        if let Some(glyph) = self.glyphs.get(&key) {
+            return Some(glyph.clone());
+        }
+        let pixel_width = (width * VECTOR_TEXT_SUPERSAMPLE_SCALE).round().max(2.0) as u32;
+        let pixel_height = (height * VECTOR_TEXT_SUPERSAMPLE_SCALE).round().max(2.0) as u32;
+        let pixels = tofu_pixels(pixel_width, pixel_height);
+        Some(self.insert_glyph_pixels(
+            key,
+            pixel_width,
+            pixel_height,
+            width,
+            height,
+            0.0,
+            0.0,
+            pixels,
+        ))
+    }
+
     pub(super) fn cached_bitmap_glyph(
         &mut self,
-        font_id: &str,
+        font_id: Arc<str>,
         ch: char,
         glyph: crate::bitmap_font::BitmapFontGlyph,
         page: &crate::bitmap_font::BitmapFontPage,
@@ -400,8 +468,8 @@ impl TextAtlasCache {
     ) -> CachedGlyph {
         let key = TextGlyphKey {
             kind: TextGlyphKind::Bitmap,
-            font_id: font_id.to_string(),
-            ch,
+            font_id,
+            glyph: u32::from(ch),
             scale_x_bits: scale.x.to_bits(),
             scale_y_bits: scale.y.to_bits(),
         };
@@ -492,6 +560,23 @@ impl TextAtlasCache {
             }
         }
     }
+}
+
+/// 線幅が高さの約1/12（表示上最低1px）の白い枠。文字色・透明度は描画時に乗算する。
+fn tofu_pixels(width: u32, height: u32) -> Vec<u8> {
+    let stroke = ((height as f32 / 12.0).round() as u32)
+        .max(VECTOR_TEXT_SUPERSAMPLE_SCALE as u32)
+        .min((width.min(height) / 2).max(1));
+    let mut pixels = vec![0; (width * height * 4) as usize];
+    for y in 0..height {
+        for x in 0..width {
+            if x < stroke || y < stroke || x + stroke >= width || y + stroke >= height {
+                let index = ((y * width + x) * 4) as usize;
+                pixels[index..index + 4].copy_from_slice(&[255, 255, 255, 255]);
+            }
+        }
+    }
+    pixels
 }
 
 pub(super) fn text_layout_key(

@@ -35,12 +35,13 @@ fn vector_text_caret_rect_uses_font_advance_without_changing_text() {
     };
     let caret = TextCaret { byte_index: "A".len(), color: Color::rgb(0.8, 0.9, 1.0) };
 
+    let fonts = single_font_set("caret", &font);
+    let shaped = shape_vector_text("AB", fonts);
     let rect =
-        vector_text_caret_rect(&Point { x: 0.1, y: 0.2 }, "AB", &style, &font, surface, caret)
+        vector_text_caret_rect(&Point { x: 0.1, y: 0.2 }, &shaped, &style, fonts, surface, caret)
             .expect("caret rect");
 
-    let scaled = font.as_scaled(PxScale::from(10.0));
-    let expected_x = (100.0 + text_width_px("A", &font, &scaled)) / 1000.0;
+    let expected_x = (100.0 + shaped_width_px("A", &font, 10.0)) / 1000.0;
     assert_approx(rect.rect.x, expected_x);
     assert_approx(rect.rect.y, 0.2);
     assert_approx(rect.rect.height, 0.1);

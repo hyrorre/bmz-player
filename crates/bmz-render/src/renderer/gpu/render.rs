@@ -6,7 +6,7 @@ impl WgpuRenderer {
         plan: &DrawPlan,
         canvas_policy: CanvasRenderPolicy,
         internal_resolution_mode: InternalResolutionMode,
-        fonts: &HashMap<String, FontArc>,
+        fonts: &HashMap<String, TextFace>,
         bitmap_fonts: &HashMap<String, BitmapFont>,
         egui: Option<&EguiFrame>,
         screenshot_request: Option<&ScreenshotRequest>,

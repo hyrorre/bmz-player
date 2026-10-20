@@ -1,10 +1,8 @@
 use super::*;
 
 #[cfg(test)]
-pub(super) fn load_default_font() -> Option<FontArc> {
-    load_default_font_fallbacks(bmz_font::FontCoverage::Japanese, &[])
-        .primary()
-        .map(|face| face.font.clone())
+pub(super) fn load_default_font() -> Option<TextFace> {
+    load_default_font_fallbacks(bmz_font::FontCoverage::Japanese, &[]).primary().cloned()
 }
 
 pub(super) fn load_default_font_fallbacks(
@@ -22,10 +20,11 @@ pub(super) fn load_default_font_fallbacks(
     let mut faces = Vec::new();
     for (index, (coverage, resolved)) in resolved.iter().enumerate() {
         if let Some(font) = load_font_from_resolved(resolved) {
-            faces.push(FontFallbackFace {
-                cache_id: format!("{DEFAULT_TEXT_FONT_ID}:{coverage:?}:{index}"),
+            faces.push(TextFace::new(
+                format!("{DEFAULT_TEXT_FONT_ID}:{coverage:?}:{index}"),
                 font,
-            });
+                resolved.font_index,
+            ));
         }
     }
 
@@ -33,7 +32,7 @@ pub(super) fn load_default_font_fallbacks(
         tracing::warn!("no default render font found; text draw commands will be skipped");
     } else if !faces
         .iter()
-        .any(|face| preferred.glyph_probes().iter().all(|ch| face.font.glyph_id(*ch).0 != 0))
+        .any(|face| preferred.glyph_probes().iter().all(|ch| face.has_glyph(*ch)))
     {
         tracing::warn!(
             ?preferred,

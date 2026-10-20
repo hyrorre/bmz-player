@@ -62,8 +62,18 @@ fn assert_approx(actual: f32, expected: f32) {
     assert!((actual - expected).abs() < 0.0001, "expected {expected}, got {actual}");
 }
 
-fn font_supports_japanese<F: Font>(font: &F) -> bool {
-    font.glyph_id('あ').0 != 0 && font.glyph_id('日').0 != 0
+fn font_supports_japanese(font: &TextFace) -> bool {
+    font.has_glyph('あ') && font.has_glyph('日')
+}
+
+fn single_font_set<'a>(id: &'a str, face: &'a TextFace) -> VectorFontSet<'a> {
+    VectorFontSet { id, faces: std::slice::from_ref(face) }
+}
+
+/// 単一フォントで解決した文字列の px 幅。
+fn shaped_width_px(text: &str, face: &TextFace, px: f32) -> f32 {
+    let shaped = shape_vector_text(text, single_font_set("width", face));
+    clusters_width_px(&shaped.clusters, px)
 }
 
 fn sample_image(texture: u32, blend: BlendMode) -> DrawCommand {
@@ -121,3 +131,5 @@ mod cases_04;
 mod cases_05;
 #[path = "tests/clip.rs"]
 mod clip;
+#[path = "tests/unicode_text.rs"]
+mod unicode_text;

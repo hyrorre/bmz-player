@@ -1,0 +1,477 @@
+use super::*;
+
+fn fixture_face(name: &str) -> TextFace {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/fonts").join(name);
+    let bytes = std::fs::read(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    TextFace::from_vec(name, bytes, 0).expect("fixture font should parse")
+}
+
+fn latin() -> TextFace {
+    fixture_face("bmz-test-latin.ttf")
+}
+
+fn symbols() -> TextFace {
+    fixture_face("bmz-test-symbols.ttf")
+}
+
+fn text_style(font_id: Option<&str>) -> TextStyle {
+    TextStyle {
+        font_id: font_id.map(str::to_string),
+        size: 0.1,
+        bitmap_size: None,
+        color: Color::rgb(1.0, 1.0, 1.0),
+        layer: crate::plan::TextLayer::Skin,
+        align: TextAlign::Left,
+        max_width: 0.0,
+        overflow: TextOverflow::Overflow,
+        wrapping: false,
+        outline: None,
+        shadow: None,
+    }
+}
+
+fn text_command(text: &str, style: TextStyle) -> DrawCommand {
+    DrawCommand::Text {
+        origin: Point { x: 0.1, y: 0.1 },
+        text: text.to_string(),
+        caret: None,
+        post_scale: Point { x: 1.0, y: 1.0 },
+        style,
+    }
+}
+
+const SURFACE: SurfaceSize = SurfaceSize { width: 400, height: 200 };
+
+/// 1つの明示フォントで組んだ quad。
+fn vector_quads(text: &str, face: &TextFace, style: TextStyle) -> Vec<TextQuad> {
+    let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    atlas.begin_frame();
+    let mut builder = CachedTextFrameBuilder::new(&mut atlas);
+    builder.push_text(
+        &Point { x: 0.1, y: 0.1 },
+        text,
+        style,
+        single_font_set("skin:test", face),
+        SURFACE,
+    );
+    builder.quads
+}
+
+fn tofu_glyphs(shaped: &ShapedText) -> usize {
+    shaped
+        .clusters
+        .iter()
+        .flat_map(|cluster| shaped.glyphs(cluster))
+        .filter(|glyph| matches!(glyph.source, GlyphSource::Tofu { .. }))
+        .count()
+}
+
+#[test]
+fn missing_vector_glyph_draws_generated_placeholder_and_keeps_width() {
+    let face = latin();
+    let shaped = shape_vector_text("A✡B", single_font_set("skin:test", &face));
+
+    assert_eq!(shaped.clusters.len(), 3);
+    assert_eq!(tofu_glyphs(&shaped), 1);
+    assert!(shaped.clusters[1].advance > 0.0, "missing glyph must keep an advance");
+
+    let with_missing = vector_quads("A✡B", &face, text_style(None));
+    let without = vector_quads("AB", &face, text_style(None));
+    assert_eq!(with_missing.len(), 3, "A, placeholder and B must all be drawn");
+    let placeholder = &with_missing[1];
+    assert!(placeholder.width > 0.0 && placeholder.height > 0.0);
+    assert!(placeholder.x > with_missing[0].x);
+    // 後続文字は欠字ぶん右へずれ、欠字の右に置かれる。
+    let shift = with_missing[2].x - without[1].x;
+    let advance_px = shaped.clusters[1].advance * 20.0 / SURFACE.width as f32;
+    assert_approx(shift, advance_px);
+    assert!(with_missing[2].x >= placeholder.x + placeholder.width);
+}
+
+#[test]
+fn solomon_table_symbol_never_disappears() {
+    let face = latin();
+    let shaped = shape_vector_text("Solomon ✡ 12", single_font_set("skin:test", &face));
+    let star = shaped.clusters.iter().find(|cluster| cluster.text == (8..11)).unwrap();
+    assert!(star.advance > 0.0);
+    assert!(matches!(shaped.glyphs(star)[0].source, GlyphSource::Tofu { .. }));
+    // 空白は欠字表示しない。
+    assert_eq!(tofu_glyphs(&shaped), 1);
+}
+
+#[test]
+fn missing_glyph_uses_question_mark_candidate_before_generated_box() {
+    let face = fixture_face("bmz-test-question.ttf");
+    let shaped = shape_vector_text("A✡B", single_font_set("skin:test", &face));
+    let glyph = shaped.glyphs(&shaped.clusters[1])[0];
+    assert_eq!(
+        glyph.source,
+        GlyphSource::Vector { face: 0, glyph: face.glyph_id('?'), face_scale: 1.0 }
+    );
+}
+
+#[test]
+fn missing_glyph_candidates_follow_beatoraja_order_across_faces() {
+    let faces = [latin(), symbols()];
+    let fonts = VectorFontSet { id: "chain", faces: &faces };
+    // ☀ はどの face にも無いため、□（U+25A1）を後続 face から探す。
+    let shaped = shape_vector_text("A☀", fonts);
+    let GlyphSource::Vector { face, glyph, .. } = shaped.glyphs(&shaped.clusters[1])[0].source
+    else {
+        panic!("candidate glyph expected");
+    };
+    assert_eq!((face, glyph), (1, faces[1].glyph_id('\u{25A1}')));
+}
+
+#[test]
+fn actual_symbol_glyph_wins_over_placeholder() {
+    let faces = [latin(), symbols()];
+    let fonts = VectorFontSet { id: "chain", faces: &faces };
+    let shaped = shape_vector_text("A✡B\u{FFFD}", fonts);
+    assert_eq!(tofu_glyphs(&shaped), 0);
+    for (index, ch) in [(1, '✡'), (3, '\u{FFFD}')] {
+        let GlyphSource::Vector { face, glyph, .. } =
+            shaped.glyphs(&shaped.clusters[index])[0].source
+        else {
+            panic!("real glyph expected");
+        };
+        assert_eq!((face, glyph), (1, faces[1].glyph_id(ch)), "{ch}");
+    }
+}
+
+#[test]
+fn fallback_face_glyphs_use_primary_em_size() {
+    let faces = [latin(), symbols()];
+    let fonts = VectorFontSet { id: "chain", faces: &faces };
+    let shaped = shape_vector_text("✡", fonts);
+    // symbols は em 2048、✡ の送り幅は1em。latin の em（1000/1000）と揃う。
+    assert_approx(shaped.clusters[0].advance, fonts.em());
+    let GlyphSource::Vector { face_scale, .. } = shaped.glyphs(&shaped.clusters[0])[0].source
+    else {
+        panic!("vector glyph expected");
+    };
+    let symbols_metrics = faces[1].metrics();
+    assert_approx(face_scale, symbols_metrics.height() / symbols_metrics.units_per_em);
+}
+
+#[test]
+fn zero_width_controls_and_spaces_are_not_drawn_as_placeholders() {
+    let face = latin();
+    let text = "A\u{200D}\u{FE0F}\u{200B}\u{00AD}\r\u{E0041}\tB \u{3000}B";
+    let shaped = shape_vector_text(text, single_font_set("skin:test", &face));
+    assert_eq!(tofu_glyphs(&shaped), 0);
+    let width = |range: std::ops::Range<usize>| -> f32 {
+        shaped.clusters.iter().filter(|c| range.contains(&c.text.start)).map(|c| c.advance).sum()
+    };
+    // ZWJ・異体字セレクタ・ZWSP・SHY・CR・タグ文字は幅0。
+    assert_eq!(width(1..text.find('\t').unwrap()), 0.0);
+    let space = face.h_advance_unscaled(face.glyph_id(' ')) / face.metrics().height();
+    let tab = shaped.clusters.iter().find(|c| &text[c.text.clone()] == "\t").unwrap();
+    assert_approx(tab.advance, space);
+    // フォントに無い全角空白は1em。
+    let ideographic = shaped.clusters.iter().find(|c| &text[c.text.clone()] == "\u{3000}").unwrap();
+    assert_approx(ideographic.advance, single_font_set("skin:test", &face).em());
+}
+
+#[test]
+fn replacement_character_is_an_ordinary_character() {
+    assert_eq!(char_class('\u{FFFD}'), CharClass::Visible);
+    let face = latin();
+    let shaped = shape_vector_text("\u{FFFD}", single_font_set("skin:test", &face));
+    // フォントに無ければ他の欠字と同じく代替表示する。
+    assert_eq!(tofu_glyphs(&shaped), 1);
+}
+
+#[test]
+fn placeholder_keeps_alignment_truncate_shrink_and_wrapping() {
+    let face = latin();
+    let quads = |text: &str, edit: &dyn Fn(&mut TextStyle)| {
+        let mut style = text_style(None);
+        style.max_width = 0.5;
+        edit(&mut style);
+        vector_quads(text, &face, style)
+    };
+    let right = |style: &mut TextStyle| style.align = TextAlign::Right;
+    let center = |style: &mut TextStyle| style.align = TextAlign::Center;
+    let shaped = shape_vector_text("A✡", single_font_set("skin:test", &face));
+    let missing_px = shaped.clusters[1].advance * 20.0 / SURFACE.width as f32;
+    assert_approx(quads("A", &right)[0].x - quads("A✡", &right)[0].x, missing_px);
+    assert_approx(quads("A", &center)[0].x - quads("A✡", &center)[0].x, missing_px / 2.0);
+
+    // 幅0.15（60px）には A(12px)×2 と欠字1つ分までしか入らない。
+    let truncate = |style: &mut TextStyle| {
+        style.max_width = 0.15;
+        style.overflow = TextOverflow::Truncate;
+    };
+    let truncated = quads("AA✡✡✡✡", &truncate);
+    let fits = 2 + ((60.0 - 24.0) / (shaped.clusters[1].advance * 20.0)) as usize;
+    assert_eq!(truncated.len(), fits);
+    let last = truncated.last().unwrap();
+    assert!((last.x + last.width) * SURFACE.width as f32 <= 0.1 * 400.0 + 60.0 + 0.01);
+
+    let shrink = |style: &mut TextStyle| {
+        style.max_width = 0.05;
+        style.overflow = TextOverflow::Shrink;
+    };
+    let shrunk = quads("A✡A", &shrink);
+    assert_eq!(shrunk.len(), 3);
+    let right_edge = shrunk.last().unwrap().x + shrunk.last().unwrap().width;
+    assert!(right_edge <= 0.1 + 0.05 + 0.001, "shrunk text must fit: {right_edge}");
+
+    let wrap = |style: &mut TextStyle| {
+        style.max_width = 0.07;
+        style.wrapping = true;
+    };
+    let wrapped = quads("A✡A✡", &wrap);
+    assert_eq!(wrapped.len(), 4);
+    assert!(wrapped[2].y > wrapped[0].y, "third cluster should move to the second line");
+    assert_approx(wrapped[2].x, wrapped[0].x);
+}
+
+#[test]
+fn placeholder_is_decorated_like_other_glyphs() {
+    let face = latin();
+    let mut style = text_style(None);
+    style.outline =
+        Some(crate::plan::TextOutline { color: Color::rgba(0.0, 0.0, 0.0, 1.0), width: 0.01 });
+    style.shadow = Some(crate::plan::TextShadow {
+        color: Color::rgba(0.0, 0.0, 0.0, 1.0),
+        offset: Point { x: 0.01, y: 0.01 },
+    });
+    assert_eq!(vector_quads("✡", &face, style.clone()).len(), 10);
+    assert_eq!(vector_quads("A", &face, style).len(), 10);
+}
+
+#[test]
+fn placeholder_scales_with_surface_and_is_cached_once() {
+    let face = latin();
+    let mut fonts = HashMap::new();
+    fonts.insert("skin:test".to_string(), face.clone());
+    let plan = DrawPlan {
+        clear: Color::rgb(0.0, 0.0, 0.0),
+        commands: vec![text_command("✡✡✡", text_style(Some("skin:test")))],
+    };
+    let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    let small =
+        build_text_frame_with_cache(&plan, &face, &fonts, &HashMap::new(), SURFACE, &mut atlas);
+    assert_eq!(small.command_quad_counts, vec![3]);
+    let tofu_keys = |atlas: &TextAtlasCache| {
+        atlas.glyphs.keys().filter(|key| key.kind == TextGlyphKind::Tofu).count()
+    };
+    assert_eq!(tofu_keys(&atlas), 1, "identical placeholders share one atlas entry");
+    assert_eq!(atlas.shapes.len(), 1);
+
+    let large_surface = SurfaceSize { width: 800, height: 400 };
+    let large = build_text_frame_with_cache(
+        &plan,
+        &face,
+        &fonts,
+        &HashMap::new(),
+        large_surface,
+        &mut atlas,
+    );
+    assert_eq!(large.command_quad_counts, vec![3]);
+    assert_eq!(tofu_keys(&atlas), 2);
+    // 解像度が変わっても解決結果は再利用する。
+    assert_eq!(atlas.shapes.len(), 1);
+    let quad_size = |frame: &TextFrame| {
+        let floats: Vec<f32> = frame.instances[..TEXT_INSTANCE_BYTES]
+            .chunks_exact(4)
+            .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect();
+        (floats[2], floats[3])
+    };
+    let (small_w, small_h) = quad_size(&small);
+    let (large_w, large_h) = quad_size(&large);
+    assert_approx(small_w, large_w);
+    assert_approx(small_h, large_h);
+}
+
+#[test]
+fn generated_placeholder_pixels_are_an_opaque_frame() {
+    let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    let glyph = atlas.cached_tofu_glyph(12.0, 16.0).unwrap();
+    let pixels = atlas.pixels_for_size(atlas.size());
+    let pixel = |x: u32, y: u32| {
+        let index = (((glyph.atlas_origin.1 + y) * TEXT_ATLAS_WIDTH + glyph.atlas_origin.0 + x) * 4)
+            as usize;
+        pixels[index + 3]
+    };
+    assert_eq!(pixel(0, 0), 255);
+    assert_eq!(pixel(glyph.width - 1, glyph.height / 2), 255);
+    assert_eq!(pixel(glyph.width / 2, glyph.height / 2), 0, "the box must stay hollow");
+}
+
+fn bitmap_font_with(chars: &[(char, i32)]) -> BitmapFont {
+    let mut font = test_bitmap_font();
+    let mut glyphs = (*font.glyphs).clone();
+    for (ch, advance) in chars {
+        glyphs.insert(
+            *ch,
+            crate::bitmap_font::BitmapFontGlyph {
+                id: *ch,
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+                xoffset: 0,
+                yoffset: 0,
+                xadvance: *advance,
+                page: 0,
+            },
+        );
+    }
+    font.glyphs = glyphs.into();
+    font
+}
+
+fn bitmap_quads(text: &str, font: &BitmapFont) -> Vec<TextQuad> {
+    let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    atlas.begin_frame();
+    let mut builder = CachedTextFrameBuilder::new(&mut atlas);
+    let mut style = text_style(Some("bitmap"));
+    style.size = 0.05;
+    builder.push_bitmap_text(
+        &Point { x: 0.1, y: 0.1 },
+        text,
+        style,
+        BitmapFontSet { id: "bitmap", primary: font },
+        SURFACE,
+    );
+    builder.quads
+}
+
+#[test]
+fn missing_bitmap_glyph_is_not_skipped_silently() {
+    let font = test_bitmap_font();
+    let shaped = shape_bitmap_text("A✡A", BitmapFontSet { id: "bitmap", primary: &font });
+    assert_eq!(tofu_glyphs(&shaped), 1);
+    assert!(shaped.clusters[1].advance > 0.0);
+
+    let quads = bitmap_quads("A✡A", &font);
+    let plain = bitmap_quads("AA", &font);
+    assert_eq!(quads.len(), 3);
+    let scale = 0.05 * SURFACE.height as f32 / font.size as f32;
+    assert_approx(
+        quads[2].x - plain[1].x,
+        shaped.clusters[1].advance * scale / SURFACE.width as f32,
+    );
+    // 生成矩形は大文字上端から基準線までの高さ。
+    let cap_height = (font.base as f32 - font.ascent) * scale / SURFACE.height as f32;
+    assert_approx(quads[1].height, cap_height);
+    assert_approx(quads[1].y, 0.1);
+}
+
+#[test]
+fn bitmap_missing_glyph_uses_box_candidate_from_font() {
+    let font = bitmap_font_with(&[('\u{25A2}', 3), ('?', 2)]);
+    let shaped = shape_bitmap_text("A✡", BitmapFontSet { id: "bitmap", primary: &font });
+    assert_eq!(
+        shaped.glyphs(&shaped.clusters[1])[0].source,
+        GlyphSource::Bitmap { font: 0, ch: '\u{25A2}' }
+    );
+    assert_eq!(shaped.clusters[1].advance, 3.0);
+}
+
+#[test]
+fn bitmap_wave_dash_and_fullwidth_tilde_substitute_each_other() {
+    let font = bitmap_font_with(&[('\u{FF5E}', 4)]);
+    let shaped = shape_bitmap_text("\u{301C}", BitmapFontSet { id: "bitmap", primary: &font });
+    assert_eq!(
+        shaped.glyphs(&shaped.clusters[0])[0].source,
+        GlyphSource::Bitmap { font: 0, ch: '\u{FF5E}' }
+    );
+}
+
+#[test]
+fn bitmap_spaces_and_controls_are_not_placeholders() {
+    let font = test_bitmap_font();
+    let shaped = shape_bitmap_text(
+        "A \u{3000}\u{200D}\u{FE0F}A",
+        BitmapFontSet { id: "bitmap", primary: &font },
+    );
+    assert_eq!(tofu_glyphs(&shaped), 0);
+    assert_eq!(bitmap_quads("A \u{3000}\u{200D}A", &font).len(), 2);
+}
+
+#[test]
+fn bitmap_truncate_keeps_placeholder_clusters_whole() {
+    let font = test_bitmap_font();
+    let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    atlas.begin_frame();
+    let mut builder = CachedTextFrameBuilder::new(&mut atlas);
+    let mut style = text_style(Some("bitmap"));
+    style.size = 0.05;
+    // A の送り幅は1px（scale 1）。2.5px に A A は入るが、続く欠字は入らない。
+    style.max_width = 0.00625;
+    style.overflow = TextOverflow::Truncate;
+    builder.push_bitmap_text(
+        &Point { x: 0.1, y: 0.1 },
+        "AA✡A",
+        style,
+        BitmapFontSet { id: "bitmap", primary: &font },
+        SURFACE,
+    );
+    assert_eq!(builder.quads.len(), 2);
+}
+
+/// JSON の TTF / .fnt 指定と LR2 system font（既定フォント）の各経路で、
+/// 難易度表の ✡ を含む文字列から文字が消えないこと。
+#[test]
+fn skin_texts_keep_every_visible_character_across_font_kinds() {
+    use crate::skin::{SkinDocumentRenderExt, SkinDrawState, SkinRenderItem, SkinTextState};
+    let latin = latin();
+    let mut fonts = HashMap::new();
+    fonts.insert("skin:latin".to_string(), latin.clone());
+    let mut bitmap_fonts = HashMap::new();
+    bitmap_fonts.insert("skin:bitmap".to_string(), test_bitmap_font());
+    let default_fonts = load_default_font_fallbacks(bmz_font::FontCoverage::Japanese, &[]);
+    for (font, lr2, text, expected) in [
+        (Some("skin:latin"), false, "Solomon ✡ 12", 10),
+        (Some("skin:bitmap"), false, "A✡A", 3),
+        (None, true, "Solomon ✡ 12", 10),
+    ] {
+        if font.is_none() && default_fonts.primary().is_none() {
+            continue;
+        }
+        let mut text_def = serde_json::json!({"id":"label", "constantText": text});
+        if let Some(font) = font {
+            text_def["font"] = font.into();
+        }
+        if lr2 {
+            text_def["lr2SystemFont"] = serde_json::json!({"size":24, "thickness":0, "type":0});
+        }
+        let document: bmz_skin_document::SkinDocument = serde_json::from_value(serde_json::json!({
+            "w":400, "h":200, "lr2": lr2,
+            "text":[text_def],
+            "destination":[{"id":"label","dst":[{"x":10,"y":10,"w":380,"h":24}]}]
+        }))
+        .unwrap();
+        let items = document.static_render_items(
+            &HashMap::new(),
+            &SkinDrawState::default(),
+            &SkinTextState::default(),
+        );
+        let SkinRenderItem::Text { origin, text, style, .. } = &items[0] else { panic!("text") };
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![DrawCommand::Text {
+                origin: *origin,
+                text: text.clone(),
+                caret: None,
+                post_scale: Point { x: 1.0, y: 1.0 },
+                style: style.clone(),
+            }],
+        };
+        let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+        let frame = build_text_frame_with_fallback_cache(
+            &plan,
+            &default_fonts,
+            &fonts,
+            &bitmap_fonts,
+            SURFACE,
+            &mut atlas,
+        );
+        assert_eq!(frame.command_quad_counts, vec![expected], "{font:?} lr2={lr2}");
+    }
+}

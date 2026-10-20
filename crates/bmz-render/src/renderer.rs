@@ -5,14 +5,14 @@ use std::future::Future;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::task::{Context as TaskContext, Poll, RawWaker, RawWakerVTable, Waker};
 use std::thread;
 #[cfg(windows)]
 use std::time::Duration;
 use std::time::Instant;
 
-use ab_glyph::{Font, FontArc, FontVec, Glyph, PxScale, ScaleFont, point};
+use ab_glyph::{Font, FontArc, FontVec, Glyph, GlyphId, PxScale, ScaleFont, point};
 use anyhow::{Context, Result, anyhow};
 use image::ImageEncoder;
 
@@ -39,10 +39,12 @@ mod texture_upload;
 use texture_upload::TextureUploads;
 #[path = "renderer/text/cached_builder.rs"]
 mod text_cached_builder;
+#[path = "renderer/text/face.rs"]
+mod text_face;
 #[path = "renderer/text/layout.rs"]
 mod text_layout;
-#[path = "renderer/text/raster_builder.rs"]
-mod text_raster_builder;
+#[path = "renderer/text/shaping.rs"]
+mod text_shaping;
 
 #[cfg(test)]
 use font::load_default_font;
@@ -58,8 +60,9 @@ pub use screenshot::ScreenshotClipboard;
 use screenshot::*;
 use text::*;
 use text_cached_builder::*;
+pub(crate) use text_face::TextFace;
 use text_layout::*;
-use text_raster_builder::*;
+use text_shaping::*;
 
 mod ambient;
 mod api;

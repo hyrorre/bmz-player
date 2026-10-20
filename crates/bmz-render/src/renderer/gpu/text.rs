@@ -25,7 +25,7 @@ impl WgpuRenderer {
     pub(in crate::renderer) fn build_text_frame(
         &mut self,
         plan: &DrawPlan,
-        fonts: &HashMap<String, FontArc>,
+        fonts: &HashMap<String, TextFace>,
         bitmap_fonts: &HashMap<String, BitmapFont>,
         surface: SurfaceSize,
     ) -> TextFrame {

@@ -239,7 +239,7 @@ impl Renderer {
         let id = id.into();
         let bytes = std::fs::read(path)
             .with_context(|| format!("failed to read font: {}", path.display()))?;
-        let font = FontArc::try_from_vec(bytes)
+        let font = TextFace::from_vec(id.as_str(), bytes, 0)
             .map_err(|error| anyhow!("failed to parse font {}: {error}", path.display()))?;
         self.insert_vector_font(id, font);
         if let Some(gpu) = &mut self.gpu {
@@ -264,9 +264,10 @@ impl Renderer {
     /// 事前に読み込んだフォントバイト列を登録する。
     /// バックグラウンドスレッドで I/O を済ませた後に main スレッドから登録する用途。
     pub fn install_font_bytes(&mut self, id: impl Into<String>, bytes: Vec<u8>) -> Result<()> {
-        let font = FontArc::try_from_vec(bytes)
+        let id = id.into();
+        let font = TextFace::from_vec(id.as_str(), bytes, 0)
             .map_err(|error| anyhow!("failed to parse font bytes: {error}"))?;
-        self.insert_vector_font(id.into(), font);
+        self.insert_vector_font(id, font);
         if let Some(gpu) = &mut self.gpu {
             gpu.reset_text_atlas();
         }
@@ -281,7 +282,7 @@ impl Renderer {
         }
     }
 
-    pub(super) fn insert_vector_font(&mut self, id: String, font: FontArc) {
+    pub(super) fn insert_vector_font(&mut self, id: String, font: TextFace) {
         self.bitmap_fonts.remove(&id);
         self.fonts.insert(id, font);
     }

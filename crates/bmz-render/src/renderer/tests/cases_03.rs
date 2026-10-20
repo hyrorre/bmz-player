@@ -4,8 +4,7 @@ use super::*;
 fn cached_vector_glyph_uses_supersampled_atlas_pixels() {
     let Some(font) = load_default_font() else { return };
     let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
-    let Some(glyph) =
-        atlas.cached_vector_glyph(DEFAULT_TEXT_FONT_ID, 'A', PxScale::from(24.0), &font)
+    let Some(glyph) = atlas.cached_vector_glyph(&font, font.glyph_id('A'), PxScale::from(24.0))
     else {
         return;
     };
@@ -19,10 +18,10 @@ fn cached_vector_glyph_distinguishes_horizontal_and_vertical_scale() {
     let Some(font) = load_default_font() else { return };
     let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
     let wide = atlas
-        .cached_vector_glyph(DEFAULT_TEXT_FONT_ID, 'A', PxScale { x: 12.0, y: 24.0 }, &font)
+        .cached_vector_glyph(&font, font.glyph_id('A'), PxScale { x: 12.0, y: 24.0 })
         .expect("glyph should render");
     let uniform = atlas
-        .cached_vector_glyph(DEFAULT_TEXT_FONT_ID, 'A', PxScale::from(12.0), &font)
+        .cached_vector_glyph(&font, font.glyph_id('A'), PxScale::from(12.0))
         .expect("glyph should render");
 
     assert!(wide.display_height > uniform.display_height);
@@ -163,7 +162,7 @@ fn default_font_fallback_chain_prefers_requested_coverage() {
             panic!("resolved {coverage:?} font should be loadable");
         };
         assert!(
-            coverage.glyph_probes().iter().all(|ch| primary.font.glyph_id(*ch).0 != 0),
+            coverage.glyph_probes().iter().all(|ch| primary.has_glyph(*ch)),
             "primary face should match requested {coverage:?} coverage"
         );
     }
@@ -195,13 +194,15 @@ fn default_font_fallback_uses_selected_face_in_glyph_and_layout_cache_keys() {
         .copied()
         .find(|ch| {
             fonts.select(*ch).is_some_and(|selected| {
-                selected.cache_id != primary.cache_id && selected.font.glyph_id(*ch).0 != 0
+                selected.cache_id() != primary.cache_id() && selected.has_glyph(*ch)
             })
         });
     let Some(fallback_char) = fallback_char else {
         return;
     };
-    let selected_id = fonts.select(fallback_char).unwrap().cache_id.clone();
+    let selected = fonts.select(fallback_char).unwrap();
+    let selected_id = selected.cache_id().clone();
+    let selected_glyph = u32::from(selected.glyph_id(fallback_char).0);
     let surface = SurfaceSize { width: 320, height: 240 };
     let text = format!("A{fallback_char}");
     let plan = DrawPlan {
@@ -239,17 +240,18 @@ fn default_font_fallback_uses_selected_face_in_glyph_and_layout_cache_keys() {
 
     assert!(!frame.instances.is_empty());
     assert!(
-        atlas.glyphs.keys().any(|key| { key.ch == fallback_char && key.font_id == selected_id })
+        atlas
+            .glyphs
+            .keys()
+            .any(|key| { key.glyph == selected_glyph && key.font_id == selected_id })
     );
-    assert!(
-        !atlas.glyphs.keys().any(|key| { key.ch == fallback_char && key.font_id != selected_id })
-    );
+    assert!(!atlas.glyphs.keys().any(|key| { key.kind == TextGlyphKind::Tofu }));
     assert!(
         atlas
             .layouts
             .entries
             .keys()
-            .any(|key| { key.text == text && key.font_id.contains(&selected_id) })
+            .any(|key| { key.text == text && key.font_id == DEFAULT_TEXT_FONT_ID })
     );
 }
 
@@ -262,17 +264,18 @@ fn explicit_vector_font_does_not_use_default_fallback_faces() {
         .flat_map(|coverage| coverage.glyph_probes())
         .copied()
         .find(|ch| {
-            primary.font.glyph_id(*ch).0 == 0
-                && default_fonts
-                    .select(*ch)
-                    .is_some_and(|selected| selected.font.glyph_id(*ch).0 != 0)
+            !primary.has_glyph(*ch)
+                && default_fonts.select(*ch).is_some_and(|selected| selected.has_glyph(*ch))
         });
     let Some(fallback_char) = fallback_char else {
         return;
     };
     let custom_id = "skin:custom";
     let mut custom_fonts = HashMap::new();
-    custom_fonts.insert(custom_id.to_string(), primary.font.clone());
+    custom_fonts.insert(
+        custom_id.to_string(),
+        TextFace::new(custom_id, primary.font().clone(), primary.index()),
+    );
     let surface = SurfaceSize { width: 320, height: 240 };
     let plan = DrawPlan {
         clear: Color::rgb(0.0, 0.0, 0.0),
@@ -307,7 +310,7 @@ fn explicit_vector_font_does_not_use_default_fallback_faces() {
         &mut atlas,
     );
 
-    assert!(atlas.glyphs.keys().all(|key| key.font_id == custom_id));
+    assert!(atlas.glyphs.keys().all(|key| &*key.font_id == custom_id));
     assert!(atlas.layouts.entries.keys().all(|key| key.font_id == custom_id));
 }
 
