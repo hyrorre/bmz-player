@@ -56,3 +56,22 @@
 検証: fmt、workspace check・all-targets Clippy・全test成功。gameplay 249成功、
 player 2,624成功（38 ignored）。既存HCN・地雷・replay・Viewer seek回帰を含む。
 ログ: `.local/client-refactor-5-tests.log`。実演奏・GPU実機は未実施。
+
+## 6. 音声backend共通の出力処理
+
+- 共通mix・出力変換・source queue・buffer・診断とnative rendererを
+  `backend/output.rs`へ移した。CPAL callbackはデバイス固有の時刻変換とstream構築を担当し、
+  WASAPIも共通出力層を直接利用する。CoreAudio IOProcの共通renderer利用も維持する。
+- 公開されているCPAL側の型はre-exportで維持する。buffer初期化を共通化し、
+  事前確保量、non-blocking lock、app側へのsource破棄委譲は変更しない。
+- 診断はbackend共通のdurationを受け取り、CPAL timestampの差分計算をcallback側へ置く。
+  既存のPCM、channel routing、buffer再利用、lock miss、deferred drop、診断の回帰を利用する。
+
+最終検証（Windows）: fmt、workspace check、all-targets Clippy、全workspace test成功。
+audio 131成功・3 ignored、gameplay 249成功、render 909成功・8 ignored、
+player 2,624成功・38 ignored（別途startup 2 ignored）。
+ログ: `.local/client-refactor-6-{check,clippy,tests}.log`。
+
+外部素材を使うテストは条件付きのため、成功件数を外部スキン全般の互換確認とは扱わない。
+ログにはWMIX_HD・Seraphic等の実素材のdecodeを含む。GPUのignored test、実画面の入力・演奏、
+実音声デバイス、macOS/Linux・CoreAudio IOProc、実IR通信、性能計測は未実施。

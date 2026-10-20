@@ -60,6 +60,9 @@ callbackには判定・入力処理を移していません。command scratchと
 callback接続前に事前確保し、callbackは
 queueとengineの`try_lock`に失敗した場合も待機しません。
 
+CPAL callbackとnative backendが共有するmix・PCM変換・buffer・診断は
+`bmz-audio/src/backend/output.rs`に置きます。デバイス固有のstream操作と時刻変換は各backendが担当します。
+
 macOSの実験用Core Audio IOProcも同じNativeOutputRenderer・source command queue・
 AudioEngineを使います。HALの出力バッファへfloat PCMを書き、出力時刻の大きな欠落は既存の
 frame座標を前進させて処理します。取得・判定・音声コマンドの所有権と旧playの取消を維持します。

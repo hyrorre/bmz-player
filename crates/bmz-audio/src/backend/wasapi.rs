@@ -34,7 +34,7 @@ use windows::Win32::System::Threading::{
 };
 use windows::core::PCWSTR;
 
-use crate::backend::cpal::callback::{NativeOutputRenderer, OutputSample};
+use crate::backend::output::{NativeOutputRenderer, OutputSample};
 
 const EXCLUSIVE_RECOVERY_INITIAL_DELAY_MS: u32 = 100;
 const EXCLUSIVE_RECOVERY_MAX_DELAY_MS: u32 = 5_000;

@@ -3,11 +3,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 #[derive(Debug, Default)]
-pub(super) struct OutputTiming {
+pub(in crate::backend) struct OutputTiming {
     epoch: AtomicU64,
     frames: AtomicLatencyHistogram,
     interval_ns: AtomicLatencyHistogram,
-    pub(super) duration_ns: AtomicLatencyHistogram,
+    pub(in crate::backend) duration_ns: AtomicLatencyHistogram,
     prediction_ns: AtomicLatencyHistogram,
     invalid_predictions: AtomicU64,
     unavailable_predictions: AtomicU64,
@@ -25,7 +25,7 @@ pub struct OutputTimingSummary {
 }
 
 impl OutputTiming {
-    pub(super) fn reset(&self) {
+    pub(in crate::backend) fn reset(&self) {
         self.frames.reset();
         self.interval_ns.reset();
         self.duration_ns.reset();
@@ -34,24 +34,9 @@ impl OutputTiming {
         self.unavailable_predictions.store(0, Ordering::Relaxed);
         self.epoch.fetch_add(1, Ordering::Release);
     }
-    pub(super) fn observe(
-        &self,
-        frames: usize,
-        now: Instant,
-        previous: Option<Instant>,
-        timestamp: cpal::OutputStreamTimestamp,
-    ) {
-        self.observe_delay(
-            frames,
-            now,
-            previous,
-            timestamp.playback.checked_duration_since(timestamp.callback),
-        );
-    }
-
     // CPAL 0.18.1's PipeWire fallback manufactures a one-period prediction and
     // provides no validity bit. Do not mix that with a server delay estimate.
-    pub(super) fn observe_unavailable(
+    pub(in crate::backend) fn observe_unavailable(
         &self,
         frames: usize,
         now: Instant,
@@ -69,7 +54,7 @@ impl OutputTiming {
     }
 
     /// The caller subtracts timestamps in the backend's own clock domain.
-    pub(super) fn observe_delay(
+    pub(in crate::backend) fn observe_delay(
         &self,
         frames: usize,
         now: Instant,
@@ -85,7 +70,7 @@ impl OutputTiming {
         }
     }
 
-    pub(super) fn summary(&self) -> OutputTimingSummary {
+    pub(in crate::backend) fn summary(&self) -> OutputTimingSummary {
         OutputTimingSummary {
             epoch: self.epoch.load(Ordering::Acquire),
             frames: self.frames.summary(),
@@ -115,16 +100,12 @@ mod tests {
     fn measures_actual_frames_and_excludes_invalid_predictions() {
         let timing = OutputTiming::default();
         let now = Instant::now();
-        for (frames, playback) in [(64, 102), (128, 99), (256, 100)] {
-            timing.observe(
-                frames,
-                now,
-                None,
-                cpal::OutputStreamTimestamp {
-                    callback: cpal::StreamInstant::from_millis(100),
-                    playback: cpal::StreamInstant::from_millis(playback),
-                },
-            );
+        for (frames, delay) in [
+            (64, Some(std::time::Duration::from_millis(2))),
+            (128, None),
+            (256, Some(std::time::Duration::ZERO)),
+        ] {
+            timing.observe_delay(frames, now, None, delay);
         }
         let summary = timing.summary();
         assert_eq!(summary.frames.count, 3);

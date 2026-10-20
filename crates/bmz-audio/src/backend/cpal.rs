@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::rc::{Rc, Weak as RcWeak};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, TryLockError};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use ::cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -12,50 +12,27 @@ use thiserror::Error;
 #[cfg(windows)]
 use crate::backend::wasapi::{WasapiExclusiveOutput, WasapiSharedPeriodGuard};
 use crate::clock::AudioClock;
-use crate::command::{AudioEngineHandle, CommandedAudioEngine};
+use crate::command::AudioEngineHandle;
+#[cfg(test)]
 use crate::engine::AudioEngine;
 
-pub(crate) mod callback;
+mod callback;
 #[cfg(target_os = "macos")]
 mod coreaudio_compat;
 mod device;
 #[cfg(all(target_os = "macos", feature = "experimental-coreaudio-ioproc"))]
 mod ioproc;
 mod source;
-mod telemetry;
-pub use telemetry::OutputTimingSummary;
 
 use callback::*;
 pub use device::{is_host_supported, list_output_device_names};
 #[cfg(test)]
 use device::{resolve_buffer_size, resolve_channel_offset};
 
-pub type SharedAudioEngine = Arc<Mutex<AudioEngine>>;
-type SharedOutputCommands = Arc<Mutex<VecDeque<CpalOutputCommand>>>;
-type RetiredOutputSources = Arc<Mutex<Vec<RenderAudioSource>>>;
-const OUTPUT_COMMAND_QUEUE_CAPACITY: usize = 256;
-const OUTPUT_SCRATCH_INITIAL_FRAMES: usize = 4096;
-const OUTPUT_SOURCE_INITIAL_CAPACITY: usize = 8;
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum CpalOutputSourceKind {
-    #[default]
-    Other,
-    System,
-    Play,
-    Draining,
-}
-
-impl CpalOutputSourceKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Other => "other",
-            Self::System => "system",
-            Self::Play => "play",
-            Self::Draining => "draining",
-        }
-    }
-}
+use super::output::*;
+pub use super::output::{
+    CpalOutputDiagnostics, CpalOutputSourceKind, OutputTimingSummary, SharedAudioEngine,
+};
 
 #[derive(Debug, Default)]
 pub struct CpalBackend;
@@ -96,52 +73,6 @@ pub enum CpalHostId {
 pub struct CpalOutput {
     _shared: CpalSharedOutput,
     source: CpalOutputSource,
-}
-
-/// Snapshot of the shared output stream diagnostics.
-///
-/// Counts are cumulative since stream creation. `peak_abs` and `max_callback_ns`
-/// are interval maxima since the previous snapshot.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct CpalOutputDiagnostics {
-    pub timing: OutputTimingSummary,
-    pub callback_count: u64,
-    pub rendered_frames: u64,
-    pub timeline_catch_up_count: u64,
-    pub timeline_catch_up_frames: u64,
-    pub stream_error_count: u64,
-    pub processor_overload_count: u64,
-    pub source_lock_miss_count: u64,
-    pub engine_lock_miss_count: u64,
-    pub engine_lock_miss_callback_count: u64,
-    pub system_engine_lock_miss_count: u64,
-    pub play_engine_lock_miss_count: u64,
-    pub draining_engine_lock_miss_count: u64,
-    pub other_engine_lock_miss_count: u64,
-    pub clipped_sample_count: u64,
-    pub peak_abs: f32,
-    pub max_callback_ns: u64,
-}
-
-#[derive(Debug, Default)]
-struct CpalOutputDiagnosticsCounters {
-    timing: telemetry::OutputTiming,
-    callback_count: AtomicU64,
-    rendered_frames: AtomicU64,
-    timeline_catch_up_count: AtomicU64,
-    timeline_catch_up_frames: AtomicU64,
-    stream_error_count: AtomicU64,
-    processor_overload_count: AtomicU64,
-    source_lock_miss_count: AtomicU64,
-    engine_lock_miss_count: AtomicU64,
-    engine_lock_miss_callback_count: AtomicU64,
-    system_engine_lock_miss_count: AtomicU64,
-    play_engine_lock_miss_count: AtomicU64,
-    draining_engine_lock_miss_count: AtomicU64,
-    other_engine_lock_miss_count: AtomicU64,
-    clipped_sample_count: AtomicU64,
-    peak_abs_bits: AtomicU32,
-    max_callback_ns: AtomicU64,
 }
 
 #[derive(Clone)]
@@ -202,25 +133,6 @@ pub struct CpalCommandedOutputSource {
     kind: CpalOutputSourceKind,
     handle: AudioEngineHandle,
     pub clock: AudioClock,
-}
-
-struct RenderAudioSource {
-    id: u64,
-    kind: CpalOutputSourceKind,
-    active: bool,
-    engine: RenderAudioEngine,
-}
-
-enum RenderAudioEngine {
-    Legacy(SharedAudioEngine),
-    Commanded(CommandedAudioEngine),
-}
-
-enum CpalOutputCommand {
-    AddLegacySource { id: u64, kind: CpalOutputSourceKind, engine: SharedAudioEngine },
-    AddCommandedSource { id: u64, kind: CpalOutputSourceKind, engine: CommandedAudioEngine },
-    RemoveSource { id: u64 },
-    SetSourceKind { id: u64, kind: CpalOutputSourceKind },
 }
 
 #[derive(Debug, Error)]
