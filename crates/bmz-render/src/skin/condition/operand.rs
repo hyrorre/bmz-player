@@ -185,6 +185,11 @@ pub(in crate::skin) fn skin_state_event_index(event_id: i32, state: &SkinDrawSta
         SKIN_REF_BMZ_SELECT_SETTINGS_ROW_KIND => {
             select_settings_row_kind_index(state.select_row_kind)
         }
+        SKIN_REF_BMZ_SELECT_MODE_INDEX if state.select_screen => {
+            state.select_mode_extended_index as i32
+        }
+        // Select-only key filter: other screens report "no index" instead of ALL.
+        SKIN_REF_BMZ_SELECT_MODE_INDEX => -1,
         SKIN_REF_BMZ_SELECT_SESSION_MODE => {
             state.skin_attempt.session_mode_index.unwrap_or(state.select_session_mode_index) as i32
         }

@@ -86,6 +86,9 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
         }
         55 => Some(state.skin_attempt.hsfix_index.unwrap_or(state.select_hs_fix_index) as i64),
         11 if state.select_screen => Some(state.select_mode_index as i64),
+        SKIN_REF_BMZ_SELECT_MODE_INDEX if state.select_screen => {
+            Some(state.select_mode_extended_index as i64)
+        }
         12 if state.select_screen && state.select_option_panel == 3 => {
             Some(state.judge_timing_offset_ms as i64)
         }

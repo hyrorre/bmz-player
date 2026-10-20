@@ -596,6 +596,7 @@ macro_rules! skin_document_render_select_render_methods {
                 constant_enabled: snapshot.constant_enabled,
                 select_session_mode_index: select_session_mode_index(&snapshot.assist),
                 select_mode_index: select_mode_index(&snapshot.select_mode),
+                select_mode_extended_index: select_mode_index_extended(&snapshot.select_mode),
                 select_difficulty_filter_index: snapshot.select_difficulty_filter as usize,
                 random_mix_options: snapshot.random_mix_options,
                 select_sort_index: select_sort_index(&snapshot.select_sort),
