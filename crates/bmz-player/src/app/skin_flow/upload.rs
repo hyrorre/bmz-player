@@ -571,6 +571,8 @@ impl WinitApp {
             if let Some(cache_key) = cache_key.as_ref()
                 && self.skin.skin_pipeline.installed_font_cache.get(&stored_id) == Some(cache_key)
             {
+                // フォント本体が同じでも fallback 指定は変わりうる。
+                self.renderer.set_font_fallbacks(stored_id, font.fallbacks);
                 font_install_skip_count += 1;
                 continue;
             }
@@ -837,6 +839,7 @@ mod deferred_upload_tests {
             path: font.clone(),
             data: None,
             cache_key: None,
+            fallbacks: Vec::new(),
         }];
         let inherited = lr2_resolved_assets(&document, &sources, &fonts);
         assert_eq!(Path::new(&inherited.sources["0"].path), image);

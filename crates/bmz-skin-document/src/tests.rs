@@ -311,3 +311,34 @@ fn bmz_exit_hold_declaration_defaults_to_the_builtin_indicator() {
         Some(SkinExitHoldDef { builtin: false })
     );
 }
+
+#[test]
+fn font_fallback_accepts_beatoraja_string_and_object_forms() {
+    let document: SkinDocument = serde_json::from_value(serde_json::json!({
+        "font": [
+            {"id":"main", "path":"font/main.ttf", "fallback":[
+                {"path":"font/symbols.ttf", "type":0},
+                "font/emoji.ttf",
+                {"value":"font/legacy.fnt", "type":1},
+                {"type":2},
+                null
+            ]},
+            {"id":"single", "path":"font/a.ttf", "fallback":"font/b.ttf"},
+            {"id":"lua-empty", "path":"font/a.ttf", "fallback":{}},
+            {"id":"none", "path":"font/a.ttf"}
+        ]
+    }))
+    .unwrap();
+    let fallback = |index: usize| document.font[index].fallback.clone();
+    assert_eq!(
+        fallback(0),
+        vec![
+            SkinFontFallbackDef { path: "font/symbols.ttf".into(), font_type: 0 },
+            SkinFontFallbackDef { path: "font/emoji.ttf".into(), font_type: 0 },
+            SkinFontFallbackDef { path: "font/legacy.fnt".into(), font_type: 1 },
+        ]
+    );
+    assert_eq!(fallback(1), vec![SkinFontFallbackDef { path: "font/b.ttf".into(), font_type: 0 }]);
+    assert!(fallback(2).is_empty());
+    assert!(fallback(3).is_empty());
+}

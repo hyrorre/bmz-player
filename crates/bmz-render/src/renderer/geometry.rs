@@ -10,11 +10,14 @@ pub(super) const TEXT_ATLAS_WIDTH: u32 = 1024;
 pub(super) const TEXT_ATLAS_PADDING: u32 = 1;
 pub(super) const VECTOR_TEXT_SUPERSAMPLE_SCALE: f32 = 2.0;
 /// グリフは永続キャッシュされるため、選曲画面のスクロールなどで文字種が増え続けると
-/// アトラス高さが単調増加する。wgpu の `max_texture_dimension_2d` (一般に 16384) を
-/// 超えると `create_texture` がパニックするので、上限に達したらフレーム境界でキャッシュを
-/// 捨てて作り直す。1 フレーム分のグリフは十分この高さに収まるため、リセットしても破綻しない。
+/// アトラス高さが単調増加する。wgpu の `max_texture_dimension_2d` を超えると
+/// `create_texture` がパニックするので、この値と GPU の上限の小さい方を超えるグリフは
+/// 格納せず、フレーム境界でキャッシュを捨てて作り直す。
 pub(super) const TEXT_ATLAS_MAX_HEIGHT: u32 = 8192;
+/// 作り直した直後のフレームでも atlas が溢れたとき、次に作り直すまで待つフレーム数。
+pub(super) const TEXT_ATLAS_OVERFLOW_RETRY_FRAMES: u32 = 60;
 pub(super) const TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 4096;
+pub(super) const TEXT_SHAPE_CACHE_MAX_ENTRIES: usize = 8192;
 
 pub(super) fn normalized_extent_to_pixels(normalized: f32, surface_extent: u32) -> u32 {
     if normalized <= f32::EPSILON || surface_extent == 0 {
@@ -62,6 +65,8 @@ pub(super) struct TextFrame {
     pub(super) size: AtlasSize,
     #[cfg(test)]
     pub(super) pixels: Vec<u8>,
+    /// atlas を作り直した。`dirty_regions` ではなくテクスチャ全体を書き直す。
+    pub(super) atlas_rebuilt: bool,
     pub(super) dirty_regions: Vec<TextAtlasDirtyRegion>,
     pub(super) instances: Vec<u8>,
     /// `DrawCommand::Text` ごとに生成された quad 数を、commands 内の出現順で持つ。
@@ -724,59 +729,18 @@ pub(super) fn push_or_extend_image(
     steps.push(DrawStep::Image { texture, blend, linear, range });
 }
 
+/// 新しい atlas で1フレームぶんの文字を組み、検証用に atlas 画素も返す。
 #[cfg(test)]
 pub(super) fn build_text_frame(
     plan: &DrawPlan,
-    default_font: &FontArc,
-    fonts: &HashMap<String, FontArc>,
+    default_font: &TextFace,
+    fonts: &HashMap<String, TextFace>,
     bitmap_fonts: &HashMap<String, BitmapFont>,
     surface: SurfaceSize,
 ) -> TextFrame {
-    if !surface.is_drawable() {
-        return TextFrame::default();
-    }
-
-    let mut builder = TextAtlasBuilder::new(TEXT_ATLAS_WIDTH);
-    // 各 Text コマンドが生成した quad 数を記録し、描画ステップへ分割できるようにする。
-    let mut command_quad_counts = Vec::new();
-    let mut command_caret_rects = Vec::new();
-    for command in &plan.commands {
-        let DrawCommand::Text { origin, text, style, caret, post_scale } = command else {
-            continue;
-        };
-        let quads_before = builder.quads.len();
-        if let Some(bitmap_font) =
-            style.font_id.as_ref().and_then(|font_id| bitmap_fonts.get(font_id))
-        {
-            builder.push_bitmap_text(origin, text, style.clone(), bitmap_font, surface);
-            scale_text_quads(&mut builder.quads[quads_before..], *origin, *post_scale);
-            command_caret_rects.push(
-                caret
-                    .and_then(|caret| {
-                        bitmap_text_caret_rect(origin, text, style, bitmap_font, surface, caret)
-                    })
-                    .map(|caret| scale_text_rect_command(caret, *origin, *post_scale)),
-            );
-        } else {
-            let font = style
-                .font_id
-                .as_ref()
-                .and_then(|font_id| fonts.get(font_id))
-                .unwrap_or(default_font);
-            builder.push_text(origin, text, style.clone(), font, surface);
-            scale_text_quads(&mut builder.quads[quads_before..], *origin, *post_scale);
-            command_caret_rects.push(
-                caret
-                    .and_then(|caret| {
-                        vector_text_caret_rect(origin, text, style, font, surface, caret)
-                    })
-                    .map(|caret| scale_text_rect_command(caret, *origin, *post_scale)),
-            );
-        }
-        command_quad_counts.push(builder.quads.len() - quads_before);
-    }
-    let mut frame = builder.finish();
-    frame.command_quad_counts = command_quad_counts;
-    frame.command_caret_rects = command_caret_rects;
+    let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    let mut frame =
+        build_text_frame_with_cache(plan, default_font, fonts, bitmap_fonts, surface, &mut atlas);
+    frame.pixels = atlas.pixels_for_size(frame.size);
     frame
 }

@@ -259,6 +259,8 @@ pub struct DecodedFont {
     pub path: PathBuf,
     pub data: Option<DecodedFontData>,
     pub cache_key: Option<SkinFontCacheKey>,
+    /// beatoraja `font.fallback` として登録した別フォントの `stored_id`（優先順）。
+    pub fallbacks: Vec<String>,
 }
 
 #[derive(Clone)]

@@ -25,18 +25,16 @@ impl WgpuRenderer {
     pub(in crate::renderer) fn build_text_frame(
         &mut self,
         plan: &DrawPlan,
-        fonts: &HashMap<String, FontArc>,
-        bitmap_fonts: &HashMap<String, BitmapFont>,
+        font_sets: &SkinFontSets,
         surface: SurfaceSize,
     ) -> TextFrame {
         if !surface.is_drawable() {
             return TextFrame::default();
         }
-        build_text_frame_with_fallback_cache(
+        build_text_frame_with_font_sets(
             plan,
             &self.default_fonts,
-            fonts,
-            bitmap_fonts,
+            font_sets,
             surface,
             &mut self.text_atlas,
         )
@@ -57,7 +55,8 @@ impl WgpuRenderer {
         let recreate_texture = self.text_texture_size != frame.size || self.text_texture.is_none();
         self.ensure_text_texture(frame.size);
         let texture = self.text_texture.as_ref().expect("text texture exists after ensure");
-        if recreate_texture {
+        // 作り直した atlas は同じ寸法でも、パディングや空き領域に古い画素が残るので全体を書く。
+        if recreate_texture || frame.atlas_rebuilt {
             let pixels = self.text_atlas.pixels_for_size(frame.size);
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -108,7 +107,8 @@ impl WgpuRenderer {
     }
 
     pub(in crate::renderer) fn reset_text_atlas(&mut self) {
-        self.text_atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+        self.text_atlas =
+            TextAtlasCache::for_texture_limit(self.device.limits().max_texture_dimension_2d);
         self.text_texture = None;
         self.text_texture_view = None;
         self.text_bind_group = None;

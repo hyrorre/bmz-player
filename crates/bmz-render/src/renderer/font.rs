@@ -1,10 +1,8 @@
 use super::*;
 
 #[cfg(test)]
-pub(super) fn load_default_font() -> Option<FontArc> {
-    load_default_font_fallbacks(bmz_font::FontCoverage::Japanese, &[])
-        .primary()
-        .map(|face| face.font.clone())
+pub(super) fn load_default_font() -> Option<TextFace> {
+    load_default_font_fallbacks(bmz_font::FontCoverage::Japanese, &[]).primary().cloned()
 }
 
 pub(super) fn load_default_font_fallbacks(
@@ -12,6 +10,10 @@ pub(super) fn load_default_font_fallbacks(
     font_roots: &[PathBuf],
 ) -> FontFallbackChain {
     let started_at = std::time::Instant::now();
+    // OS の記号・絵文字フォントの解決（初回のみ）を CJK フォントの読込と並行させる。
+    let symbol_fonts = std::thread::Builder::new()
+        .name("bmz-symbol-fonts".into())
+        .spawn(bmz_font::symbol_font_fallbacks);
     let mut resolved = bmz_font::resolve_font_fallbacks(preferred, font_roots);
     if let Some(general) = bmz_font::resolve_system_font(false)
         && !resolved.iter().any(|(_, font)| font == &general)
@@ -22,10 +24,11 @@ pub(super) fn load_default_font_fallbacks(
     let mut faces = Vec::new();
     for (index, (coverage, resolved)) in resolved.iter().enumerate() {
         if let Some(font) = load_font_from_resolved(resolved) {
-            faces.push(FontFallbackFace {
-                cache_id: format!("{DEFAULT_TEXT_FONT_ID}:{coverage:?}:{index}"),
+            faces.push(TextFace::new(
+                format!("{DEFAULT_TEXT_FONT_ID}:{coverage:?}:{index}"),
                 font,
-            });
+                resolved.font_index,
+            ));
         }
     }
 
@@ -33,7 +36,7 @@ pub(super) fn load_default_font_fallbacks(
         tracing::warn!("no default render font found; text draw commands will be skipped");
     } else if !faces
         .iter()
-        .any(|face| preferred.glyph_probes().iter().all(|ch| face.font.glyph_id(*ch).0 != 0))
+        .any(|face| preferred.glyph_probes().iter().all(|ch| face.has_glyph(*ch)))
     {
         tracing::warn!(
             ?preferred,
@@ -41,13 +44,41 @@ pub(super) fn load_default_font_fallbacks(
         );
     }
 
+    let default_len = faces.len();
+    let symbol_fonts = symbol_fonts
+        .ok()
+        .and_then(|thread| thread.join().ok())
+        .unwrap_or_else(bmz_font::symbol_font_fallbacks);
+    faces.extend(load_symbol_faces(symbol_fonts));
+
     tracing::info!(
         ?preferred,
-        font_count = faces.len(),
+        font_count = default_len,
+        symbol_font_count = faces.len() - default_len,
         font_load_ms = started_at.elapsed().as_millis(),
         "default render font fallbacks loaded"
     );
-    FontFallbackChain { faces }
+    FontFallbackChain { faces, default_len }
+}
+
+/// 記号・絵文字の OS フォントを、memory map したバイト列のまま face にする。
+pub(super) fn load_symbol_faces(fonts: &'static [bmz_font::SymbolFont]) -> Vec<TextFace> {
+    fonts
+        .iter()
+        .filter_map(|symbol| {
+            match ab_glyph::FontRef::try_from_slice_and_index(symbol.data(), symbol.font_index()) {
+                Ok(font) => Some(TextFace::new(
+                    format!("<symbol>:{}:{}", symbol.family(), symbol.font_index()),
+                    FontArc::new(font),
+                    symbol.font_index(),
+                )),
+                Err(error) => {
+                    tracing::warn!(%error, source = symbol.source(), "failed to load symbol font");
+                    None
+                }
+            }
+        })
+        .collect()
 }
 
 pub(super) fn load_font_from_resolved(resolved: &bmz_font::ResolvedFont) -> Option<FontArc> {

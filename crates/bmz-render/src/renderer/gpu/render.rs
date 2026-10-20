@@ -6,8 +6,7 @@ impl WgpuRenderer {
         plan: &DrawPlan,
         canvas_policy: CanvasRenderPolicy,
         internal_resolution_mode: InternalResolutionMode,
-        fonts: &HashMap<String, FontArc>,
-        bitmap_fonts: &HashMap<String, BitmapFont>,
+        font_sets: &SkinFontSets,
         egui: Option<&EguiFrame>,
         screenshot_request: Option<&ScreenshotRequest>,
         pre_present_notify: impl FnOnce(),
@@ -34,8 +33,7 @@ impl WgpuRenderer {
         let canvas_viewport = CanvasViewport::from_policy(render_size, canvas_policy);
 
         let text_start = Instant::now();
-        let mut text_frame =
-            self.build_text_frame(plan, fonts, bitmap_fonts, canvas_viewport.content_size());
+        let mut text_frame = self.build_text_frame(plan, font_sets, canvas_viewport.content_size());
         if !canvas_viewport.is_identity() {
             canvas_viewport.transform_text_instances(&mut text_frame.instances);
             canvas_viewport.transform_text_caret_rects(&mut text_frame.command_caret_rects);

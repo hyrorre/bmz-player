@@ -7,6 +7,12 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 ab_glyph.workspace = true
+ab_glyph_rasterizer = "0.1"
+skrifa = "0.40"
+ttf-parser = "0.25"
+rustybuzz = "0.20"
+unicode-segmentation = "1"
+unicode-properties = { version = "0.1", default-features = false, features = ["emoji", "general-category"] }
 bytemuck.workspace = true
 image.workspace = true
 gif.workspace = true

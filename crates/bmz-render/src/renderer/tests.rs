@@ -62,8 +62,38 @@ fn assert_approx(actual: f32, expected: f32) {
     assert!((actual - expected).abs() < 0.0001, "expected {expected}, got {actual}");
 }
 
-fn font_supports_japanese<F: Font>(font: &F) -> bool {
-    font.glyph_id('あ').0 != 0 && font.glyph_id('日').0 != 0
+fn font_supports_japanese(font: &TextFace) -> bool {
+    font.has_glyph('あ') && font.has_glyph('日')
+}
+
+fn faces_only(faces: &[TextFace]) -> FaceList<'_> {
+    FaceList { preferred: faces, system: &[] }
+}
+
+fn single_font_set<'a>(id: &'a str, face: &'a TextFace) -> VectorFontSet<'a> {
+    VectorFontSet { id, faces: faces_only(std::slice::from_ref(face)) }
+}
+
+fn bitmap_entries(fonts: &[&BitmapFont]) -> Vec<BitmapFontEntry> {
+    fonts
+        .iter()
+        .enumerate()
+        .map(|(index, font)| BitmapFontEntry {
+            id: Arc::from(if index == 0 { "bitmap".to_string() } else { format!("bitmap{index}") }),
+            font: (*font).clone(),
+        })
+        .collect()
+}
+
+/// フォールバック無しのビットマップフォントセット。
+fn bitmap_set(entries: &[BitmapFontEntry]) -> BitmapFontSet<'_> {
+    BitmapFontSet { id: "bitmap", fonts: entries, faces: faces_only(&[]) }
+}
+
+/// 単一フォントで解決した文字列の px 幅。
+fn shaped_width_px(text: &str, face: &TextFace, px: f32) -> f32 {
+    let shaped = shape_vector_text(text, single_font_set("width", face));
+    clusters_width_px(&shaped.clusters, px)
 }
 
 fn sample_image(texture: u32, blend: BlendMode) -> DrawCommand {
@@ -121,3 +151,13 @@ mod cases_04;
 mod cases_05;
 #[path = "tests/clip.rs"]
 mod clip;
+#[path = "tests/text_atlas.rs"]
+mod text_atlas;
+#[path = "tests/unicode_fallback.rs"]
+mod unicode_fallback;
+#[path = "tests/unicode_regression.rs"]
+mod unicode_regression;
+#[path = "tests/unicode_sequences.rs"]
+mod unicode_sequences;
+#[path = "tests/unicode_text.rs"]
+mod unicode_text;

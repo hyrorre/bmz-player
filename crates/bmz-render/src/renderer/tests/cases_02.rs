@@ -236,12 +236,11 @@ fn text_instances_are_transformed_into_canvas_viewport() {
 #[test]
 fn text_wrapping_splits_lines_by_max_width() {
     let Some(font) = load_default_font() else { return };
-    let scale = PxScale::from(16.0);
-    let scaled_font = font.as_scaled(scale);
-    let one_char_width = text_width_px("W", &font, &scaled_font);
-    let lines = wrap_text_to_width("WWW", &font, &scaled_font, one_char_width * 1.5);
+    let one_char_width = shaped_width_px("W", &font, 16.0);
+    let shaped = shape_vector_text("WWW", single_font_set("wrap", &font));
+    let lines = wrap_clusters(&shaped.clusters, 16.0, one_char_width * 1.5);
 
-    assert_eq!(lines, vec!["W", "W", "W"]);
+    assert_eq!(lines, vec![0..1, 1..2, 2..3]);
 }
 
 #[test]
@@ -430,13 +429,19 @@ fn cached_decorated_skin_text_tracks_alpha_for_vector_and_bitmap_fonts() {
             atlas.begin_frame();
             let mut builder = CachedTextFrameBuilder::new(&mut atlas);
             if bitmap_mode {
-                builder.push_bitmap_text(origin, text, style.clone(), "bitmap", &bitmap, surface);
+                builder.push_bitmap_text(
+                    origin,
+                    text,
+                    style.clone(),
+                    bitmap_set(&bitmap_entries(&[&bitmap])),
+                    surface,
+                );
             } else {
                 builder.push_text(
                     origin,
                     text,
                     style.clone(),
-                    VectorFontSet::Single { cache_id: "vector", font: &font },
+                    single_font_set("vector", &font),
                     surface,
                 );
             }
