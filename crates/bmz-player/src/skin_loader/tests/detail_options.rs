@@ -234,7 +234,7 @@ pub(super) fn snapshot(locale: AppLocale, cursor: usize) -> SelectSnapshot {
             } else {
                 text.text("detail-options-scope-global")
             },
-            guide: text.text(CATALOG[cursor].guide_key()),
+            guide: text.text(CATALOG[cursor].guide_key(false)),
             position: format!("{} / {}", cursor + 1, CATALOG.len()),
         })),
         ..Default::default()

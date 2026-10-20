@@ -136,11 +136,12 @@ pub fn stepped_value(kind: DetailValueKind, value: i64, choices: i64, direction:
 }
 
 impl DetailOptionDef {
-    pub fn guide_key(self) -> &'static str {
-        if matches!(self.kind, DetailValueKind::Number { .. }) {
-            "detail-options-guide-number"
-        } else {
-            "detail-options-guide"
+    pub fn guide_key(self, nine_key: bool) -> &'static str {
+        match (matches!(self.kind, DetailValueKind::Number { .. }), nine_key) {
+            (true, false) => "detail-options-guide-number",
+            (false, false) => "detail-options-guide",
+            (true, true) => "detail-options-guide-number-9k",
+            (false, true) => "detail-options-guide-9k",
         }
     }
 

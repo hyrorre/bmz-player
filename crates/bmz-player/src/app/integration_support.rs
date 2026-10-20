@@ -187,6 +187,13 @@ pub(super) fn select_option_lane_for_gamepad(
     device: DeviceId,
     control: &str,
 ) -> Option<Lane> {
-    crate::config::play::lane_binding_for_chart_with_slots(input, KeyMode::K14, slots)
+    // 9K select input must not resolve controller buttons through the 14K layout.
+    let mode =
+        if input.select_input_mode == crate::config::profile_config::SelectInputModeConfig::Key9 {
+            KeyMode::K9
+        } else {
+            KeyMode::K14
+        };
+    crate::config::play::lane_binding_for_chart_with_slots(input, mode, slots)
         .resolve(device, &PhysicalControl::GamepadButton(control.to_string()))
 }

@@ -65,8 +65,8 @@ pub(super) struct SelectKeyBindings {
 }
 
 impl SelectKeyBindings {
-    /// Keyboard lookup keeps the established 7K-before-14K precedence.
-    pub(super) fn detail_value_direction(&self, control: &str, nine_key: bool) -> Option<i32> {
+    /// 7K / 14K keyboard lookup keeps the established 7K-before-14K precedence.
+    pub(super) fn detail_value_direction(&self, control: &str) -> Option<i32> {
         let keys = [
             &self.key1_controls,
             &self.key2_controls,
@@ -83,10 +83,29 @@ impl SelectKeyBindings {
             &self.key13_controls,
             &self.key14_controls,
         ];
-        keys.iter().position(|keys| contains(keys, control)).map(|index| {
-            let local = if nine_key { index } else { index % 7 };
-            if local % 2 == 0 { 1 } else { -1 }
-        })
+        keys.iter()
+            .position(|keys| contains(keys, control))
+            .map(|index| if index % 7 % 2 == 0 { 1 } else { -1 })
+    }
+
+    /// The 9K lane of a control; `None` outside 9K select input.
+    pub(super) fn nine_key_lane(&self, control: &str) -> Option<Lane> {
+        if !self.nine_key {
+            return None;
+        }
+        [
+            (&self.key1_controls, Lane::Key1),
+            (&self.key2_controls, Lane::Key2),
+            (&self.key3_controls, Lane::Key3),
+            (&self.key4_controls, Lane::Key4),
+            (&self.key5_controls, Lane::Key5),
+            (&self.key6_controls, Lane::Key6),
+            (&self.key7_controls, Lane::Key7),
+            (&self.key8_controls, Lane::Key8),
+            (&self.key9_controls, Lane::Key9),
+        ]
+        .into_iter()
+        .find_map(|(keys, lane)| contains(keys, control).then_some(lane))
     }
     pub(super) fn from_profile(input: &ProfileInputConfig) -> Self {
         if input.select_input_mode == SelectInputModeConfig::Key9 {
