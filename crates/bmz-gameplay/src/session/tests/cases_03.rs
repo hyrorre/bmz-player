@@ -89,20 +89,20 @@ fn viewer_seek_prefills_display_only_battle_score_and_gauge() {
     let mut session = session_with_autoplay(chart);
     session.scored_total_notes = 1;
     session.display_only_lane_mask[Lane::Key8.index()] = true;
-    session.opponent_score = Some(ScoreState::default());
-    session.opponent_gauge = Some(session.gauge.clone());
-    let opponent_gauge_before = session.opponent_gauge.as_ref().unwrap().current().value;
+    session.opponent.score = Some(ScoreState::default());
+    session.opponent.gauge = Some(session.gauge.clone());
+    let opponent_gauge_before = session.opponent.gauge.as_ref().unwrap().current().value;
 
     prepare_viewer_seek(&mut session, TimeUs(500_000));
 
     assert_eq!(session.score.ex_score(), 2);
     assert_eq!(session.score.past_notes, 1);
-    let opponent_score = session.opponent_score.as_ref().unwrap();
+    let opponent_score = session.opponent.score.as_ref().unwrap();
     assert_eq!(opponent_score.ex_score(), 2);
     assert_eq!(opponent_score.past_notes, 1);
     assert_eq!(opponent_score.combo, 1);
-    assert!(session.opponent_gauge.as_ref().unwrap().current().value > opponent_gauge_before);
-    assert_eq!(session.opponent_full_combo_started_at, Some(TimeUs(500_000)));
+    assert!(session.opponent.gauge.as_ref().unwrap().current().value > opponent_gauge_before);
+    assert_eq!(session.opponent.full_combo_started_at, Some(TimeUs(500_000)));
 }
 
 #[test]
@@ -110,7 +110,7 @@ fn viewer_seek_prefills_independent_battle_opponent() {
     let opponent_chart = Arc::new(chart_with_keysound());
     let window = JudgeWindow::symmetric(16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000);
     let mut session = session_with_autoplay(chart_with_keysound());
-    session.battle_opponent = Some(BattleOpponentSession {
+    session.opponent.independent = Some(BattleOpponentSession {
         chart: Arc::clone(&opponent_chart),
         key_mode: opponent_chart.metadata.key_mode,
         scored_total_notes: 1,
@@ -130,11 +130,12 @@ fn viewer_seek_prefills_independent_battle_opponent() {
         lane_hcn_timer: Default::default(),
         last_hcn_gauge_at: None,
     });
-    let opponent_gauge_before = session.battle_opponent.as_ref().unwrap().gauge.current().value;
+    let opponent_gauge_before =
+        session.opponent.independent.as_ref().unwrap().gauge.current().value;
 
     prepare_viewer_seek(&mut session, TimeUs(500_000));
 
-    let opponent = session.battle_opponent.as_ref().unwrap();
+    let opponent = session.opponent.independent.as_ref().unwrap();
     assert_eq!(opponent.score.ex_score(), 2);
     assert_eq!(opponent.score.past_notes, 1);
     assert_eq!(opponent.score.combo, 1);

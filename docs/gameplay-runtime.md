@@ -5,6 +5,10 @@ Play開始後の`GameSession`は`bmz-gameplay::runtime::GameplayRuntime`が所�
 window/event-loopスレッドは入力設定、開始前準備、画面遷移、永続化、GPU、BGA upload、
 skin、egui、surface acquire / submit / presentを担当します。
 
+対戦相手のscore・gauge・timerと独立した判定セッションは`GameSession::opponent`
+（`OpponentRuntime`）に保持します。表示用の値は`display_state`から取得し、独立した
+対戦相手がある場合はその状態を優先します。各方式の判定と時計の進め方は維持します。
+
 ```text
 以前: window/event loop
   入力取得 → advance / 判定 / 発音 → snapshot → render / present [100ms 停止]

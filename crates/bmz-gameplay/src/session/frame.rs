@@ -170,7 +170,7 @@ pub fn prepare_viewer_seek(session: &mut GameSession, start_time: TimeUs) {
     if let Some(replay) = &mut session.replay_player {
         replay.skip_before(start_time);
     }
-    if let Some(opponent) = &mut session.battle_opponent {
+    if let Some(opponent) = &mut session.opponent.independent {
         opponent.judge.skip_before(&opponent.chart, start_time);
         apply_battle_opponent_viewer_pgreat_prefix(opponent, start_time);
         if let Some(autoplay) = &mut opponent.autoplay {
@@ -221,25 +221,25 @@ fn apply_viewer_pgreat_prefix(session: &mut GameSession, start_time: TimeUs) {
         session.full_combo_started_at = Some(start_time);
     }
 
-    if session.battle_opponent.is_none() {
+    if session.opponent.independent.is_none() {
         let opponent_events = viewer_pgreat_prefix_events(&session.chart, start_time, |lane| {
             display_only_lane_mask[lane.index()]
         });
         for event in opponent_events {
-            if let Some(score) = &mut session.opponent_score {
+            if let Some(score) = &mut session.opponent.score {
                 score.apply(&event);
             }
-            if let Some(gauge) = &mut session.opponent_gauge {
+            if let Some(gauge) = &mut session.opponent.gauge {
                 gauge.apply_judge(Judge::PGreat, 1.0);
             }
         }
         if session.scored_total_notes != 0
-            && session.opponent_score.as_ref().is_some_and(|score| {
+            && session.opponent.score.as_ref().is_some_and(|score| {
                 score.past_notes == session.scored_total_notes
                     && score.combo == session.scored_total_notes
             })
         {
-            session.opponent_full_combo_started_at = Some(start_time);
+            session.opponent.full_combo_started_at = Some(start_time);
         }
     }
 }
@@ -314,11 +314,12 @@ fn viewer_pgreat_prefix_events(
 }
 
 fn advance_battle_opponent(session: &mut GameSession, now: TimeUs) {
-    if session.battle_opponent.is_none() {
+    if session.opponent.independent.is_none() {
         return;
     }
     let scoring_times = session
-        .battle_opponent
+        .opponent
+        .independent
         .as_mut()
         .and_then(|opponent| opponent.replay_player.as_mut())
         .map(|replay| replay.scoring_times_until(now))
@@ -330,7 +331,7 @@ fn advance_battle_opponent(session: &mut GameSession, now: TimeUs) {
 
 fn advance_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
     let playback_rate_percent = session.audio_clock.playback_rate_percent();
-    let Some(opponent) = &mut session.battle_opponent else {
+    let Some(opponent) = &mut session.opponent.independent else {
         return;
     };
     let display_uses_primary_arrangement = opponent.display_uses_primary_arrangement;
@@ -507,17 +508,17 @@ pub(super) fn update_full_combo_timer(session: &mut GameSession, judgements: &[J
 }
 
 fn update_opponent_full_combo_timer(session: &mut GameSession, judgements: &[JudgementEvent]) {
-    let Some(score) = &session.opponent_score else {
+    let Some(score) = &session.opponent.score else {
         return;
     };
-    if session.opponent_full_combo_started_at.is_some()
+    if session.opponent.full_combo_started_at.is_some()
         || session.scored_total_notes == 0
         || score.past_notes < session.scored_total_notes
         || score.combo < session.scored_total_notes
     {
         return;
     }
-    session.opponent_full_combo_started_at = judgements
+    session.opponent.full_combo_started_at = judgements
         .iter()
         .rev()
         .find(|event| session.display_only_lane_mask[event.lane.index()] && event.note_id.is_some())

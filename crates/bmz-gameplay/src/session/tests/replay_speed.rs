@@ -41,7 +41,7 @@ fn replay_session(mode: LongNoteMode, opponent: bool) -> GameSession {
         ..Default::default()
     };
     if opponent {
-        session.battle_opponent = Some(BattleOpponentSession {
+        session.opponent.independent = Some(BattleOpponentSession {
             chart: Arc::clone(&session.chart),
             key_mode: session.primary_key_mode,
             scored_total_notes: session.scored_total_notes,
@@ -77,7 +77,7 @@ fn playback_trace(
     let mut session = replay_session(mode, opponent);
     if let Some(end_time) = end_time {
         let replay = if opponent {
-            session.battle_opponent.as_mut().unwrap().replay_player.as_mut().unwrap()
+            session.opponent.independent.as_mut().unwrap().replay_player.as_mut().unwrap()
         } else {
             session.replay_player.as_mut().unwrap()
         };
@@ -100,7 +100,7 @@ fn playback_trace(
             }
             now = (now + 6_944 * i64::from(rate) / 100).min(checkpoint);
         }
-        if let Some(opponent) = &session.battle_opponent {
+        if let Some(opponent) = &session.opponent.independent {
             let mut notes: Vec<_> = opponent.judge.judged_notes.iter().collect();
             notes.sort_by_key(|(id, _)| **id);
             trace.push(format!(
@@ -128,7 +128,7 @@ fn playback_trace(
     }
     assert!(
         if opponent {
-            session.battle_opponent.as_ref().unwrap().score.past_notes
+            session.opponent.independent.as_ref().unwrap().score.past_notes
         } else {
             session.score.past_notes
         } > 0

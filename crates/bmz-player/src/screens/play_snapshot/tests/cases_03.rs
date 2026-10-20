@@ -175,7 +175,7 @@ fn build_render_snapshot_reports_independent_opponent_skin_timers() {
             ..PlaySessionOptions::default()
         },
     );
-    let opponent = session.battle_opponent.as_mut().unwrap();
+    let opponent = session.opponent.independent.as_mut().unwrap();
     opponent.full_combo_started_at = Some(TimeUs(100_000));
     opponent.gauge_increase_started_at = Some(TimeUs(150_000));
     opponent.gauge_max_started_at = Some(TimeUs(250_000));
@@ -186,6 +186,27 @@ fn build_render_snapshot_reports_independent_opponent_skin_timers() {
     assert_eq!(opponent.full_combo_elapsed_ms, Some(300));
     assert_eq!(opponent.gauge_increase_elapsed_ms, Some(250));
     assert_eq!(opponent.gauge_max_elapsed_ms, Some(150));
+
+    // A retained display-only opponent must never override the independent one.
+    session.opponent.score = Some(session.score.clone());
+    session.opponent.score.as_mut().unwrap().combo = 999;
+    session.opponent.gauge = Some(session.gauge.clone());
+    session.opponent.full_combo_started_at = Some(TimeUs(900_000));
+    let independent = session.opponent.independent.as_mut().unwrap();
+    independent.scored_total_notes = 13;
+    independent.full_combo_started_at = Some(TimeUs(900_000));
+    let snapshot = build_render_snapshot(&session, TimeUs(400_000), &[], None);
+    let opponent = snapshot.opponent.unwrap();
+    assert_eq!(opponent.total_notes, 13);
+    assert_ne!(opponent.combo, 999);
+    assert_eq!(opponent.full_combo_elapsed_ms, Some(0));
+
+    session.opponent.independent = None;
+    let snapshot = build_render_snapshot(&session, TimeUs(400_000), &[], None);
+    let opponent = snapshot.opponent.unwrap();
+    assert_eq!(opponent.combo, 999);
+    assert_eq!(opponent.total_notes, session.scored_total_notes);
+    assert_eq!(opponent.full_combo_elapsed_ms, None);
 }
 
 #[test]

@@ -672,7 +672,7 @@ mod tests {
 
             prepare_viewer_seek(&mut session, TimeUs(2_000_000));
             assert_eq!((session.score.past_notes, session.score.ex_score()), (1, 2));
-            let opponent = session.opponent_score.as_ref().unwrap();
+            let opponent = session.opponent.score.as_ref().unwrap();
             assert_eq!((opponent.past_notes, opponent.ex_score()), (1, 2));
 
             session.audio_clock = bmz_audio::clock::AudioClock::with_position(
@@ -688,7 +688,7 @@ mod tests {
                 (session.score.past_notes, session.score.combo, session.score.ex_score()),
                 (2, 2, 4)
             );
-            let opponent = session.opponent_score.as_ref().unwrap();
+            let opponent = session.opponent.score.as_ref().unwrap();
             assert_eq!((opponent.past_notes, opponent.combo, opponent.ex_score()), (2, 2, 4));
             advance_session_frame(&mut session, &mut audio);
             assert_eq!(session.score.ex_score(), 4);

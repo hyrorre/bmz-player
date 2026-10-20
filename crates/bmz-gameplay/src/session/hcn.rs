@@ -204,12 +204,12 @@ pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) {
         if ticks > 0 {
             for _ in 0..ticks {
                 if session.display_only_lane_mask[idx] {
-                    if let Some(gauge) = &mut session.opponent_gauge {
+                    if let Some(gauge) = &mut session.opponent.gauge {
                         let previous_gauge = gauge.current().value;
                         gauge.apply_hcn_hold();
                         let current = gauge.current();
                         update_gauge_increase_timer_state(
-                            &mut session.opponent_gauge_increase_started_at,
+                            &mut session.opponent.gauge_increase_started_at,
                             previous_gauge,
                             current.value,
                             current.definition.max,
@@ -225,7 +225,7 @@ pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) {
         } else {
             for _ in 0..-ticks {
                 if session.display_only_lane_mask[idx] {
-                    if let Some(gauge) = &mut session.opponent_gauge {
+                    if let Some(gauge) = &mut session.opponent.gauge {
                         gauge.apply_hcn_drain();
                     }
                 } else {

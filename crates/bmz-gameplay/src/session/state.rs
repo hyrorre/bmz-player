@@ -172,19 +172,14 @@ pub struct GameSession {
     pub base_judge_windows: JudgeWindows,
     pub rule_mode: RuleMode,
     pub score: ScoreState,
-    /// display-only 2P opponent score. None outside battle sessions.
-    pub opponent_score: Option<ScoreState>,
-    /// G-BATTLE の相手を主プレイヤーと独立して再生・判定するランタイム。
-    /// SessionMode には含めず、任意のキーモードで通常プレイへ重ねられる。
-    pub battle_opponent: Option<BattleOpponentSession>,
+    /// All opponent scoring, timers and independent replay state.
+    pub opponent: OpponentRuntime,
     /// Course-mode display combo carry. ScoreState remains per-chart for
     /// storage; these fields only affect the rendered combo/max combo.
     pub course_combo_carry: u32,
     pub course_combo_carry_active: bool,
     pub course_max_combo: u32,
     pub gauge: GaugeState,
-    /// display-only 2P opponent gauge. None outside battle sessions.
-    pub opponent_gauge: Option<GaugeState>,
     pub replay_recorder: ReplayRecorder,
     pub replay_player: Option<ReplayPlayer>,
     /// Optional source-mode replay normalization used by presentation-only
@@ -235,14 +230,11 @@ pub struct GameSession {
     pub hit_error_ring: HitErrorRing,
     /// Gauge increase animation start time. Skin timer 42/43 uses elapsed time from here.
     pub gauge_increase_started_at: Option<TimeUs>,
-    pub opponent_gauge_increase_started_at: Option<TimeUs>,
     /// Gauge max animation start time. Skin timer 44/45 is active while the current gauge is maxed.
     pub gauge_max_started_at: Option<TimeUs>,
-    pub opponent_gauge_max_started_at: Option<TimeUs>,
     /// Full combo animation start time. Set once when all notes have been judged
     /// and the combo still matches the total note count.
     pub full_combo_started_at: Option<TimeUs>,
-    pub opponent_full_combo_started_at: Option<TimeUs>,
     pub bgm_scheduler: BgmScheduler,
     pub auto_keysound_scheduler: AutoKeysoundScheduler,
     pub offsets: PlayOffsets,

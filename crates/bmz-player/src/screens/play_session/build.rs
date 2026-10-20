@@ -558,7 +558,6 @@ pub fn build_game_session_with_input_backend(
         .then(|| result_wait_end_time(&chart));
     GameSession {
         gauge,
-        opponent_gauge,
         judge,
         base_judge_window,
         base_judge_windows,
@@ -572,8 +571,12 @@ pub fn build_game_session_with_input_backend(
         timing_map,
         input_system,
         score: ScoreState::for_rule_mode(primary_key_mode, rule_mode),
-        opponent_score,
-        battle_opponent,
+        opponent: bmz_gameplay::session::OpponentRuntime {
+            score: opponent_score,
+            gauge: opponent_gauge,
+            independent: battle_opponent,
+            ..Default::default()
+        },
         course_combo_carry: initial_course_combo,
         course_combo_carry_active: initial_course_combo > 0,
         course_max_combo: initial_course_combo,
@@ -601,11 +604,8 @@ pub fn build_game_session_with_input_backend(
         input_offset_auto_adjust_enabled,
         input_offset_auto_adjust,
         gauge_increase_started_at: None,
-        opponent_gauge_increase_started_at: None,
         gauge_max_started_at: None,
-        opponent_gauge_max_started_at: None,
         full_combo_started_at: None,
-        opponent_full_combo_started_at: None,
         bgm_scheduler: BgmScheduler::default(),
         auto_keysound_scheduler: AutoKeysoundScheduler::default(),
         offsets: play_offsets_from_profile_for_mode(profile, play_config_key_mode),

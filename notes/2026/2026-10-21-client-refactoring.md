@@ -44,3 +44,15 @@
   既存の違いを維持する。無関係な一時オプション保持と編集/復元の回帰を追加した。
 - fmt、check、all-targets Clippy成功。設定関連116 test成功。
   ログ: `.local/client-refactor-3-tests.log`。実画面の設定操作は未実施。
+
+## 5. 対戦相手の状態と表示取得口
+
+- `GameSession`内に分散していた相手のscore・gauge・timerと独立セッションを
+  `OpponentRuntime`へ集約した。gameplayの更新経路とapp側の利用箇所を追従した。
+- `display_state`で独立した相手の優先を一か所に定め、snapshotの二重変換を除去した。
+  従来方式と独立方式の判定処理は維持し、将来時刻のfull-combo timerの扱いも維持する。
+- 実セッションからsnapshotを生成し、優先順位・ノート数・両方式のtimerを確認する回帰を追加した。
+
+検証: fmt、workspace check・all-targets Clippy・全test成功。gameplay 249成功、
+player 2,624成功（38 ignored）。既存HCN・地雷・replay・Viewer seek回帰を含む。
+ログ: `.local/client-refactor-5-tests.log`。実演奏・GPU実機は未実施。

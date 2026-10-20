@@ -10,7 +10,7 @@ pub(super) fn apply_judge_outcome_with_display_time(
     mut outcome: JudgeOutcome,
     display_time: Option<TimeUs>,
 ) -> Vec<JudgementEvent> {
-    if session.battle_opponent.is_some() {
+    if session.opponent.independent.is_some() {
         // An independent battle opponent is the sole authority for 2P score
         // and judgement presentation. The primary JudgeEngine still advances
         // the cloned presentation notes, but must not publish synthetic POORs
@@ -29,15 +29,15 @@ pub(super) fn apply_judge_outcome_with_display_time(
     for event in &mut outcome.events {
         if session.display_only_lane_mask[event.lane.index()] {
             if event.affects_score {
-                if let Some(score) = &mut session.opponent_score {
+                if let Some(score) = &mut session.opponent.score {
                     score.apply(event);
                 }
-                if let Some(gauge) = &mut session.opponent_gauge {
+                if let Some(gauge) = &mut session.opponent.gauge {
                     let previous_gauge = gauge.current().value;
                     gauge.apply_judge(event.judge, 1.0);
                     let current = gauge.current();
                     update_gauge_increase_timer_state(
-                        &mut session.opponent_gauge_increase_started_at,
+                        &mut session.opponent.gauge_increase_started_at,
                         previous_gauge,
                         current.value,
                         current.definition.max,
@@ -47,14 +47,14 @@ pub(super) fn apply_judge_outcome_with_display_time(
             }
             event.affects_score = false;
             display_only_combos
-                .push(session.opponent_score.as_ref().map_or(0, |score| score.combo));
+                .push(session.opponent.score.as_ref().map_or(0, |score| score.combo));
         } else {
             display_only_combos.push(0);
         }
     }
     outcome.mine_hits.retain(|hit| {
         if session.display_only_lane_mask[hit.lane.index()] {
-            if let Some(gauge) = &mut session.opponent_gauge {
+            if let Some(gauge) = &mut session.opponent.gauge {
                 gauge.apply_mine(hit.damage);
             }
             false
@@ -207,11 +207,11 @@ pub(super) fn update_gauge_max_timer(session: &mut GameSession, now: TimeUs) {
         current.definition.max,
         now,
     );
-    if let Some(opponent_gauge) = &session.opponent_gauge {
+    if let Some(opponent_gauge) = &session.opponent.gauge {
         let current = opponent_gauge.current();
         update_gauge_max_timer_state(
-            &mut session.opponent_gauge_increase_started_at,
-            &mut session.opponent_gauge_max_started_at,
+            &mut session.opponent.gauge_increase_started_at,
+            &mut session.opponent.gauge_max_started_at,
             current.value,
             current.definition.max,
             now,

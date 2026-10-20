@@ -90,7 +90,8 @@ impl PlaySessionObservation {
             exhausted: session.judge.is_exhausted(&session.chart),
             settled: result_is_settled(session, session.audio_clock.now()),
             battle_opponent: session
-                .battle_opponent
+                .opponent
+                .independent
                 .as_ref()
                 .map(|opponent| BattleObservation { chart: Arc::clone(&opponent.chart) }),
         }

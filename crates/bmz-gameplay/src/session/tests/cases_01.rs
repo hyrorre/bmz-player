@@ -26,8 +26,8 @@ fn display_only_opponent_judgement_does_not_change_primary_score_or_gauge() {
     let mut session = session_with_autoplay(chart_with_keysound());
     session.autoplay = None;
     session.display_only_lane_mask[Lane::Key8.index()] = true;
-    session.opponent_score = Some(ScoreState::default());
-    session.opponent_gauge = Some(session.gauge.clone());
+    session.opponent.score = Some(ScoreState::default());
+    session.opponent.gauge = Some(session.gauge.clone());
     let primary_gauge = session.gauge.current().value;
 
     let events = apply_judge_outcome(
@@ -50,8 +50,8 @@ fn display_only_opponent_judgement_does_not_change_primary_score_or_gauge() {
     assert_eq!(session.score.ex_score(), 0);
     assert_eq!(session.score.past_notes, 0);
     assert_eq!(session.gauge.current().value, primary_gauge);
-    assert_eq!(session.opponent_score.as_ref().unwrap().ex_score(), 2);
-    assert_eq!(session.opponent_score.as_ref().unwrap().past_notes, 1);
+    assert_eq!(session.opponent.score.as_ref().unwrap().ex_score(), 2);
+    assert_eq!(session.opponent.score.as_ref().unwrap().past_notes, 1);
     assert!(session.pending_keysound_volumes.is_empty());
     assert!(!events[0].affects_score);
 
@@ -65,7 +65,7 @@ fn independent_battle_opponent_replay_advances_without_taking_primary_lanes() {
     let window = JudgeWindow::symmetric(16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000);
     let mut session = session_with_autoplay(chart_with_keysound());
     session.autoplay = None;
-    session.battle_opponent = Some(BattleOpponentSession {
+    session.opponent.independent = Some(BattleOpponentSession {
         chart: Arc::clone(&opponent_chart),
         key_mode: opponent_chart.metadata.key_mode,
         scored_total_notes: 1,
@@ -119,7 +119,7 @@ fn independent_battle_opponent_replay_advances_without_taking_primary_lanes() {
     advance_session_frame(&mut session, &mut audio);
 
     assert_eq!(session.score.ex_score(), 0);
-    let opponent = session.battle_opponent.as_ref().unwrap();
+    let opponent = session.opponent.independent.as_ref().unwrap();
     assert_eq!(opponent.score.ex_score(), 2);
     assert_eq!(opponent.score.past_notes, 1);
     assert_eq!(opponent.gauge_increase_started_at, None);
@@ -143,7 +143,7 @@ fn independent_battle_opponent_without_replay_uses_autoplay() {
     let mut session = session_with_autoplay(chart_with_keysound());
     session.autoplay = None;
     session.display_only_lane_mask[Lane::Key8.index()] = true;
-    session.battle_opponent = Some(BattleOpponentSession {
+    session.opponent.independent = Some(BattleOpponentSession {
         chart: Arc::clone(&opponent_chart),
         key_mode: opponent_chart.metadata.key_mode,
         scored_total_notes: 1,
@@ -167,13 +167,13 @@ fn independent_battle_opponent_without_replay_uses_autoplay() {
 
     advance_session_frame(&mut session, &mut audio);
 
-    let before_mine = session.battle_opponent.as_ref().unwrap().gauge.current().value;
+    let before_mine = session.opponent.independent.as_ref().unwrap().gauge.current().value;
     session.audio_clock =
         AudioClock::with_position(48_000, 0, 100_000, Arc::new(AtomicU64::new(0)), true);
     advance_session_frame(&mut session, &mut audio);
-    assert_eq!(session.battle_opponent.as_ref().unwrap().gauge.current().value, before_mine);
+    assert_eq!(session.opponent.independent.as_ref().unwrap().gauge.current().value, before_mine);
 
-    let opponent = session.battle_opponent.as_ref().unwrap();
+    let opponent = session.opponent.independent.as_ref().unwrap();
     assert_eq!(opponent.score.ex_score(), 2);
     assert_eq!(opponent.score.past_notes, 1);
     assert_eq!(opponent.gauge_increase_started_at, Some(TimeUs(0)));
@@ -194,7 +194,7 @@ fn independent_battle_opponent_applies_hcn_hold_and_release_ticks() {
         let chart = Arc::new(chart_with_hcn_long_note());
         let mut session = session_with_autoplay((*chart).clone());
         session.gauge = GaugeState::new(bmz_core::clear::GaugeType::Normal, 160.0, 100);
-        session.battle_opponent = Some(BattleOpponentSession {
+        session.opponent.independent = Some(BattleOpponentSession {
             chart: Arc::clone(&chart),
             key_mode: chart.metadata.key_mode,
             scored_total_notes: 2,
@@ -233,7 +233,7 @@ fn independent_battle_opponent_applies_hcn_hold_and_release_ticks() {
             session.audio_clock =
                 AudioClock::with_position(48_000, 0, now, Arc::new(AtomicU64::new(0)), true);
             advance_session_frame(&mut session, &mut audio);
-            let opponent = session.battle_opponent.as_ref().unwrap();
+            let opponent = session.opponent.independent.as_ref().unwrap();
             if now == 100_000 {
                 baseline = opponent.gauge.current().value;
             }
@@ -241,7 +241,7 @@ fn independent_battle_opponent_applies_hcn_hold_and_release_ticks() {
                 assert_eq!(opponent.gauge.current().value, session.gauge.current().value);
             }
         }
-        let opponent = session.battle_opponent.as_ref().unwrap();
+        let opponent = session.opponent.independent.as_ref().unwrap();
         if release {
             assert!(opponent.gauge.current().value < baseline);
         } else {
@@ -294,7 +294,7 @@ fn battle_judgement_display_latches_each_players_combo() {
     let mut session = session_with_autoplay(chart_with_keysound());
     session.autoplay = None;
     session.score.combo = 4;
-    session.opponent_score = Some(ScoreState { combo: 5, max_combo: 5, ..ScoreState::default() });
+    session.opponent.score = Some(ScoreState { combo: 5, max_combo: 5, ..ScoreState::default() });
     session.display_only_lane_mask[Lane::Key8.index()] = true;
 
     apply_judge_outcome(
@@ -339,7 +339,7 @@ fn display_only_opponent_hcn_updates_only_opponent_gauge() {
     let mut session = session_with_autoplay(chart_with_keysound());
     session.gauge = GaugeState::new(bmz_core::clear::GaugeType::Normal, 160.0, 200);
     session.gauge.set_initial_value(50.0);
-    session.opponent_gauge = Some(session.gauge.clone());
+    session.opponent.gauge = Some(session.gauge.clone());
     session.display_only_lane_mask[Lane::Key8.index()] = true;
     session.lane_hcn_timer[Lane::Key8.index()] =
         Some(HcnLaneTimer { inclease: true, since: TimeUs(0), passing_count_us: 0 });
@@ -348,8 +348,8 @@ fn display_only_opponent_hcn_updates_only_opponent_gauge() {
     apply_hcn_gauge(&mut session, TimeUs(500_000));
 
     assert_eq!(session.gauge.current().value, 50.0);
-    assert!(session.opponent_gauge.as_ref().unwrap().current().value > 50.0);
-    assert_eq!(session.opponent_gauge_increase_started_at, Some(TimeUs(500_000)));
+    assert!(session.opponent.gauge.as_ref().unwrap().current().value > 50.0);
+    assert_eq!(session.opponent.gauge_increase_started_at, Some(TimeUs(500_000)));
 }
 
 #[test]

@@ -119,8 +119,8 @@ fn g_battle_keeps_primary_input_offset_auto_adjust_enabled() {
 
     assert!(session.input_offset_auto_adjust.is_some());
     assert!(session.replay_lane_mask.is_none());
-    assert!(session.battle_opponent.is_some());
-    let opponent = session.battle_opponent.as_ref().unwrap();
+    assert!(session.opponent.independent.is_some());
+    let opponent = session.opponent.independent.as_ref().unwrap();
     assert!(opponent.replay_player.is_none());
     assert!(opponent.autoplay.is_some());
     assert!(opponent.display_uses_primary_arrangement);
@@ -171,9 +171,9 @@ fn battle_target_uses_battle_presentation_while_session_mode_stays_normal() {
     assert_eq!(session.session_mode_index, 0);
     assert_eq!(session.primary_key_mode, KeyMode::K7);
     assert!(session.display_only_lane_mask[Lane::Key8.index()]);
-    assert!(session.battle_opponent.is_some());
+    assert!(session.opponent.independent.is_some());
     assert_eq!(session.scored_total_notes, 1);
-    assert!(!session.battle_opponent.as_ref().unwrap().publish_display_judgements);
+    assert!(!session.opponent.independent.as_ref().unwrap().publish_display_judgements);
 }
 
 #[test]
@@ -268,7 +268,7 @@ fn autoplay_battle_keeps_genuine_double_chart_lanes_scored() {
     assert_eq!(session.primary_key_mode, KeyMode::K10);
     assert_eq!(session.scored_total_notes, 2);
     assert!(!session.display_only_lane_mask[Lane::Key8.index()]);
-    assert!(session.opponent_score.is_none());
+    assert!(session.opponent.score.is_none());
     assert!(session.autoplay.is_some());
 }
 
@@ -294,7 +294,7 @@ fn autoplay_battle_marks_only_expanded_single_play_lanes_as_display_only() {
     assert_eq!(session.primary_key_mode, KeyMode::K5);
     assert_eq!(session.scored_total_notes, 1);
     assert!(session.display_only_lane_mask[Lane::Key8.index()]);
-    assert!(session.opponent_score.is_some());
+    assert!(session.opponent.score.is_some());
 }
 
 #[test]

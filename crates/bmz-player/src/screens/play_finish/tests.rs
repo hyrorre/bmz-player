@@ -1151,7 +1151,7 @@ fn spawned_settled_session_result_persists_on_background_worker() {
 fn finish_snapshot_preserves_the_started_session_mode() {
     let mut session = session();
     session.session_mode_index = 1;
-    session.opponent_score = Some(session.score.clone());
+    session.opponent.score = Some(session.score.clone());
 
     let snapshot = FinishSessionSnapshot::from_session(
         &session,
@@ -1233,8 +1233,7 @@ fn session() -> GameSession {
         base_judge_windows: JudgeWindows::uniform(DEFAULT_JUDGE_WINDOW),
         rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
         score: Default::default(),
-        opponent_score: None,
-        battle_opponent: None,
+        opponent: Default::default(),
         course_combo_carry: 0,
         course_combo_carry_active: false,
         course_max_combo: 0,
@@ -1243,7 +1242,6 @@ fn session() -> GameSession {
             160.0,
             chart.total_notes,
         ),
-        opponent_gauge: None,
         replay_recorder: ReplayRecorder::default(),
         replay_player: None,
         replay_lane_projection: None,
@@ -1266,11 +1264,8 @@ fn session() -> GameSession {
         result_judgements: Default::default(),
         hit_error_ring: bmz_gameplay::hit_error::HitErrorRing::default(),
         gauge_increase_started_at: None,
-        opponent_gauge_increase_started_at: None,
         gauge_max_started_at: None,
-        opponent_gauge_max_started_at: None,
         full_combo_started_at: None,
-        opponent_full_combo_started_at: None,
         bgm_scheduler: BgmScheduler::default(),
         auto_keysound_scheduler: AutoKeysoundScheduler::default(),
         offsets: PlayOffsets { input_offset_us: 0, visual_offset_us: 0 },

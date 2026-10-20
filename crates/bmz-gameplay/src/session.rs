@@ -47,6 +47,7 @@ mod hcn;
 mod input;
 mod judgement;
 pub mod latency;
+mod opponent;
 mod state;
 
 pub use audio::*;
@@ -54,6 +55,7 @@ pub use frame::*;
 pub use hcn::*;
 pub use input::*;
 pub use judgement::*;
+pub use opponent::*;
 pub use state::*;
 
 #[cfg(test)]
