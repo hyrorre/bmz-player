@@ -444,6 +444,8 @@ impl TextLayoutCache {
 #[derive(Debug)]
 pub(super) struct TextAtlasCache {
     width: u32,
+    /// GPU テクスチャの上限と `TEXT_ATLAS_MAX_HEIGHT` の小さい方。
+    max_height: u32,
     pub(super) pen_x: u32,
     pub(super) pen_y: u32,
     row_height: u32,
@@ -455,12 +457,30 @@ pub(super) struct TextAtlasCache {
     /// 欠字・fallback の解決結果。atlas 画素とは独立なので高さ上限のリセットでは残す。
     pub(super) shapes: TextShapeCache,
     pub(super) dirty_regions: Vec<TextAtlasDirtyRegion>,
+    /// このフレームで高さが足りずに格納できなかったグリフがある。
+    overflowed: bool,
+    /// 作り直してから始まったフレーム数。
+    frames_since_clear: u32,
+    /// 作り直しを見送る残りフレーム数（1フレームの文字が atlas に収まらない場合）。
+    clear_delay: u32,
 }
 
 impl TextAtlasCache {
+    #[cfg(test)]
     pub(super) fn new(width: u32) -> Self {
+        Self::with_limits(width, TEXT_ATLAS_MAX_HEIGHT)
+    }
+
+    /// GPU の `max_texture_dimension_2d` に収まる atlas。上限を超えて広げることはしない。
+    pub(super) fn for_texture_limit(max_texture_dimension: u32) -> Self {
+        let limit = max_texture_dimension.max(TEXT_ATLAS_PADDING * 2 + 1);
+        Self::with_limits(TEXT_ATLAS_WIDTH.min(limit), TEXT_ATLAS_MAX_HEIGHT.min(limit))
+    }
+
+    pub(super) fn with_limits(width: u32, max_height: u32) -> Self {
         Self {
             width,
+            max_height,
             pen_x: 0,
             pen_y: 0,
             row_height: 0,
@@ -470,16 +490,54 @@ impl TextAtlasCache {
             layouts: TextLayoutCache::new(),
             shapes: TextShapeCache::default(),
             dirty_regions: Vec::new(),
+            overflowed: false,
+            frames_since_clear: 0,
+            clear_delay: 0,
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn width(&self) -> u32 {
+        self.width
+    }
+
+    #[cfg(test)]
+    pub(super) fn max_height(&self) -> u32 {
+        self.max_height
+    }
+
+    /// ラスタライズ・格納できなかったグリフを記録する。拡大縮小し続ける文字で
+    /// 際限なく増えないよう、上限を超えたら記録をやり直す。
+    fn mark_failed(&mut self, key: TextGlyphKey) {
+        if self.failed.len() >= TEXT_LAYOUT_CACHE_MAX_ENTRIES {
+            self.failed.clear();
+        }
+        self.failed.insert(key);
+    }
+
+    /// 1グリフの画素の上限。これを超えるグリフは表示寸法を保ったまま解像度を下げる。
+    pub(super) fn max_glyph_extent(&self) -> u32 {
+        self.width.min(self.max_height).saturating_sub(TEXT_ATLAS_PADDING * 2).max(1)
     }
 
     pub(super) fn begin_frame(&mut self) {
         self.dirty_regions.clear();
-        // アトラス高さが上限に達したらキャッシュを捨てて作り直す。フレーム描画前に
-        // 行うので、このフレームのグリフは新しいアトラスへ再ラスタライズされる。
-        if self.atlas_height() >= TEXT_ATLAS_MAX_HEIGHT {
-            self.clear();
+        // アトラス高さが上限に達したか、格納できないグリフがあればキャッシュを捨てて
+        // 作り直す。フレーム描画前に行うので、このフレームのグリフは新しいアトラスへ
+        // 再ラスタライズされる。作り直した直後のフレームでも溢れた場合は、1フレームの
+        // 文字が atlas に収まらないので、毎フレーム全グリフを作り直さないよう間を空ける。
+        if self.overflowed || self.atlas_height() >= self.max_height {
+            if self.clear_delay > 0 {
+                self.clear_delay -= 1;
+            } else {
+                let thrashing = self.overflowed && self.frames_since_clear <= 1;
+                self.clear();
+                if thrashing {
+                    self.clear_delay = TEXT_ATLAS_OVERFLOW_RETRY_FRAMES;
+                }
+            }
         }
+        self.frames_since_clear = self.frames_since_clear.saturating_add(1);
     }
 
     fn clear(&mut self) {
@@ -491,6 +549,8 @@ impl TextAtlasCache {
         self.failed.clear();
         self.layouts.clear();
         self.dirty_regions.clear();
+        self.overflowed = false;
+        self.frames_since_clear = 0;
     }
 
     pub(super) fn atlas_height(&self) -> u32 {
@@ -534,22 +594,21 @@ impl TextAtlasCache {
         if self.failed.contains(&key) {
             return None;
         }
-        let Some((width, height, offset_x, offset_y, pixels)) =
-            rasterize_outline_glyph(face, glyph_id, scale)
+        let Some(raster) = rasterize_outline_glyph(face, glyph_id, scale, self.max_glyph_extent())
         else {
-            self.failed.insert(key);
+            self.mark_failed(key);
             return None;
         };
-        Some(self.insert_glyph_pixels(
+        self.insert_glyph_pixels(
             key,
-            width,
-            height,
-            width as f32 / VECTOR_TEXT_SUPERSAMPLE_SCALE,
-            height as f32 / VECTOR_TEXT_SUPERSAMPLE_SCALE,
-            offset_x,
-            offset_y,
-            pixels,
-        ))
+            raster.width,
+            raster.height,
+            raster.width as f32 / raster.pixels_per_px,
+            raster.height as f32 / raster.pixels_per_px,
+            raster.offset_x,
+            raster.offset_y,
+            raster.pixels,
+        )
     }
 
     /// カラーグリフの RGBA。`silhouette` では色を白にして alpha だけを残す。
@@ -577,8 +636,10 @@ impl TextAtlasCache {
             x: scale.x * VECTOR_TEXT_SUPERSAMPLE_SCALE,
             y: scale.y * VECTOR_TEXT_SUPERSAMPLE_SCALE,
         };
-        let Some(mut raster) = rasterize_color_glyph(face, glyph_id, raster_scale) else {
-            self.failed.insert(key);
+        let Some(mut raster) =
+            rasterize_color_glyph(face, glyph_id, raster_scale, self.max_glyph_extent())
+        else {
+            self.mark_failed(key);
             return None;
         };
         if silhouette {
@@ -586,61 +647,83 @@ impl TextAtlasCache {
                 pixel[..3].fill(255);
             }
         }
-        Some(self.insert_glyph_pixels(
+        // atlas に収めるため縮小した場合も、表示 px は要求した大きさのまま。
+        let pixels_per_px = VECTOR_TEXT_SUPERSAMPLE_SCALE * raster.downscale;
+        self.insert_glyph_pixels(
             key,
             raster.width,
             raster.height,
-            raster.width as f32 / VECTOR_TEXT_SUPERSAMPLE_SCALE,
-            raster.height as f32 / VECTOR_TEXT_SUPERSAMPLE_SCALE,
-            raster.offset_x / VECTOR_TEXT_SUPERSAMPLE_SCALE,
-            raster.offset_y / VECTOR_TEXT_SUPERSAMPLE_SCALE,
+            raster.width as f32 / pixels_per_px,
+            raster.height as f32 / pixels_per_px,
+            raster.offset_x / pixels_per_px,
+            raster.offset_y / pixels_per_px,
             raster.pixels,
-        ))
+        )
     }
 }
 
-/// 輪郭グリフの白い被覆率画像と、表示 px での位置。
+/// 輪郭グリフの白い被覆率画像。
+struct OutlineRaster {
+    width: u32,
+    height: u32,
+    /// 表示 1px あたりの画素数。通常は超解像の倍率で、大きなグリフでは小さくなる。
+    pixels_per_px: f32,
+    /// pen 位置・基準線からの左上（表示 px）。
+    offset_x: f32,
+    offset_y: f32,
+    pixels: Vec<u8>,
+}
+
+/// 超解像の倍率でラスタライズする。1辺が `max_extent` を超える場合は倍率を下げる。
 fn rasterize_outline_glyph(
     face: &TextFace,
     glyph_id: GlyphId,
     scale: PxScale,
-) -> Option<(u32, u32, f32, f32, Vec<u8>)> {
+    max_extent: u32,
+) -> Option<OutlineRaster> {
     let font = face.font();
-    let raster_scale = PxScale {
-        x: scale.x * VECTOR_TEXT_SUPERSAMPLE_SCALE,
-        y: scale.y * VECTOR_TEXT_SUPERSAMPLE_SCALE,
-    };
-    let scaled_font = font.as_scaled(raster_scale);
-    let baseline_y = scaled_font.ascent();
-    let glyph = Glyph { id: glyph_id, scale: raster_scale, position: point(0.0, baseline_y) };
-    let outlined = font.outline_glyph(glyph)?;
-    let bounds = outlined.px_bounds();
-    let width = bounds.width().ceil().max(0.0) as u32;
-    let height = bounds.height().ceil().max(0.0) as u32;
-    if width == 0 || height == 0 {
-        return None;
-    }
-
-    let mut pixels = vec![0; (width * height * 4) as usize];
-    outlined.draw(|x, y, coverage| {
-        let index = ((y * width + x) * 4) as usize;
-        let coverage_u8 = (coverage * 255.0).clamp(0.0, 255.0) as u8;
-        if let Some(pixel) = pixels.get_mut(index..index + 4)
-            && coverage_u8 >= pixel[3]
-        {
-            pixel[0] = 255;
-            pixel[1] = 255;
-            pixel[2] = 255;
-            pixel[3] = coverage_u8;
+    let mut pixels_per_px = VECTOR_TEXT_SUPERSAMPLE_SCALE;
+    // 縮小後の丸めで上限を1px超える場合に備え、最大2回まで測り直す。
+    for _ in 0..3 {
+        let raster_scale = PxScale { x: scale.x * pixels_per_px, y: scale.y * pixels_per_px };
+        let baseline_y = font.as_scaled(raster_scale).ascent();
+        let glyph = Glyph { id: glyph_id, scale: raster_scale, position: point(0.0, baseline_y) };
+        let outlined = font.outline_glyph(glyph)?;
+        let bounds = outlined.px_bounds();
+        let width = bounds.width().ceil().max(0.0) as u32;
+        let height = bounds.height().ceil().max(0.0) as u32;
+        if width == 0 || height == 0 {
+            return None;
         }
-    });
-    Some((
-        width,
-        height,
-        bounds.min.x / VECTOR_TEXT_SUPERSAMPLE_SCALE,
-        (bounds.min.y - baseline_y) / VECTOR_TEXT_SUPERSAMPLE_SCALE,
-        pixels,
-    ))
+        if width.max(height) > max_extent {
+            let extent = bounds.width().max(bounds.height());
+            pixels_per_px *= (max_extent as f32 - 1.0).max(1.0) / extent;
+            continue;
+        }
+
+        let mut pixels = vec![0; (width * height * 4) as usize];
+        outlined.draw(|x, y, coverage| {
+            let index = ((y * width + x) * 4) as usize;
+            let coverage_u8 = (coverage * 255.0).clamp(0.0, 255.0) as u8;
+            if let Some(pixel) = pixels.get_mut(index..index + 4)
+                && coverage_u8 >= pixel[3]
+            {
+                pixel[0] = 255;
+                pixel[1] = 255;
+                pixel[2] = 255;
+                pixel[3] = coverage_u8;
+            }
+        });
+        return Some(OutlineRaster {
+            width,
+            height,
+            pixels_per_px,
+            offset_x: bounds.min.x / pixels_per_px,
+            offset_y: (bounds.min.y - baseline_y) / pixels_per_px,
+            pixels,
+        });
+    }
+    None
 }
 
 impl TextAtlasCache {
@@ -659,19 +742,12 @@ impl TextAtlasCache {
         if let Some(glyph) = self.glyphs.get(&key) {
             return Some(glyph.clone());
         }
-        let pixel_width = (width * VECTOR_TEXT_SUPERSAMPLE_SCALE).round().max(2.0) as u32;
-        let pixel_height = (height * VECTOR_TEXT_SUPERSAMPLE_SCALE).round().max(2.0) as u32;
+        let max = self.max_glyph_extent() as f32;
+        let pixels_per_px = VECTOR_TEXT_SUPERSAMPLE_SCALE.min(max / width.max(height));
+        let pixel_width = (width * pixels_per_px).round().clamp(2.0, max.max(2.0)) as u32;
+        let pixel_height = (height * pixels_per_px).round().clamp(2.0, max.max(2.0)) as u32;
         let pixels = tofu_pixels(pixel_width, pixel_height);
-        Some(self.insert_glyph_pixels(
-            key,
-            pixel_width,
-            pixel_height,
-            width,
-            height,
-            0.0,
-            0.0,
-            pixels,
-        ))
+        self.insert_glyph_pixels(key, pixel_width, pixel_height, width, height, 0.0, 0.0, pixels)
     }
 
     pub(super) fn cached_bitmap_glyph(
@@ -682,7 +758,7 @@ impl TextAtlasCache {
         page: &crate::bitmap_font::BitmapFontPage,
         font: &BitmapFont,
         scale: PxScale,
-    ) -> CachedGlyph {
+    ) -> Option<CachedGlyph> {
         let key = TextGlyphKey {
             kind: TextGlyphKind::Bitmap,
             font_id,
@@ -691,19 +767,28 @@ impl TextAtlasCache {
             scale_y_bits: scale.y.to_bits(),
         };
         if let Some(glyph) = self.glyphs.get(&key) {
-            return glyph.clone();
+            return Some(glyph.clone());
+        }
+        if self.failed.contains(&key) {
+            return None;
         }
 
-        let width = (glyph.width as f32 * scale.x).ceil().max(1.0) as u32;
-        let height = (glyph.height as f32 * scale.y).ceil().max(1.0) as u32;
-        let pixels = rasterized_bitmap_glyph_pixels(glyph, page, scale, width, height);
+        let display_width = (glyph.width as f32 * scale.x).ceil().max(1.0);
+        let display_height = (glyph.height as f32 * scale.y).ceil().max(1.0);
+        // atlas に収まらない倍率では、表示寸法を保ったまま標本化の解像度を下げる。
+        let max = self.max_glyph_extent() as f32;
+        let fit = (max / display_width.max(display_height)).min(1.0);
+        let raster_scale = PxScale { x: scale.x * fit, y: scale.y * fit };
+        let width = ((glyph.width as f32 * raster_scale.x).ceil().clamp(1.0, max)) as u32;
+        let height = ((glyph.height as f32 * raster_scale.y).ceil().clamp(1.0, max)) as u32;
+        let pixels = rasterized_bitmap_glyph_pixels(glyph, page, raster_scale, width, height);
 
         self.insert_glyph_pixels(
             key,
             width,
             height,
-            width as f32,
-            height as f32,
+            display_width,
+            display_height,
             glyph.xoffset as f32 * scale.x,
             (glyph.yoffset as f32 - font.ascent) * scale.y,
             pixels,
@@ -720,8 +805,12 @@ impl TextAtlasCache {
         offset_x: f32,
         offset_y: f32,
         pixels: Vec<u8>,
-    ) -> CachedGlyph {
-        let atlas_origin = self.reserve(width, height);
+    ) -> Option<CachedGlyph> {
+        let Some(atlas_origin) = self.reserve(width, height) else {
+            // 次のフレームで atlas を作り直すまで、同じグリフを再試行しない。
+            self.mark_failed(key);
+            return None;
+        };
         self.blit_region(atlas_origin, width, height, &pixels);
         self.dirty_regions.push(TextAtlasDirtyRegion {
             origin: atlas_origin,
@@ -738,23 +827,34 @@ impl TextAtlasCache {
             offset_y,
         };
         self.glyphs.insert(key, cached.clone());
-        cached
+        Some(cached)
     }
 
-    pub(super) fn reserve(&mut self, glyph_width: u32, glyph_height: u32) -> (u32, u32) {
-        let padded_width = glyph_width + TEXT_ATLAS_PADDING * 2;
-        let padded_height = glyph_height + TEXT_ATLAS_PADDING * 2;
-        if self.pen_x + padded_width > self.width {
-            self.pen_x = 0;
-            self.pen_y += self.row_height;
-            self.row_height = 0;
+    /// パディングを含めて atlas の幅と高さの上限に収まる位置。収まらなければ None。
+    pub(super) fn reserve(&mut self, glyph_width: u32, glyph_height: u32) -> Option<(u32, u32)> {
+        let padded_width = glyph_width.checked_add(TEXT_ATLAS_PADDING * 2)?;
+        let padded_height = glyph_height.checked_add(TEXT_ATLAS_PADDING * 2)?;
+        if padded_width > self.width || padded_height > self.max_height {
+            return None;
+        }
+        let (mut pen_x, mut pen_y, mut row_height) = (self.pen_x, self.pen_y, self.row_height);
+        if pen_x + padded_width > self.width {
+            pen_x = 0;
+            pen_y += row_height;
+            row_height = 0;
+        }
+        row_height = row_height.max(padded_height);
+        if pen_y + row_height > self.max_height {
+            self.overflowed = true;
+            return None;
         }
 
-        let origin = (self.pen_x + TEXT_ATLAS_PADDING, self.pen_y + TEXT_ATLAS_PADDING);
-        self.pen_x += padded_width;
-        self.row_height = self.row_height.max(padded_height);
+        let origin = (pen_x + TEXT_ATLAS_PADDING, pen_y + TEXT_ATLAS_PADDING);
+        self.pen_x = pen_x + padded_width;
+        self.pen_y = pen_y;
+        self.row_height = row_height;
         self.ensure_height(self.pen_y + self.row_height);
-        origin
+        Some(origin)
     }
 
     fn ensure_height(&mut self, height: u32) {

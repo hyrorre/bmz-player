@@ -89,14 +89,11 @@ fn vector_text_shrink_preserves_height_by_default_and_supports_uniform_mode() {
 #[test]
 fn text_atlas_resets_when_height_reaches_limit() {
     let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
-    // 上限を超える行を積み、アトラス高さを限界まで成長させる。
+    // 収まらなくなるまで行を積み、アトラス高さを上限まで成長させる。
     let glyph_height = 64;
-    while atlas.atlas_height() < TEXT_ATLAS_MAX_HEIGHT {
-        for _ in 0..(TEXT_ATLAS_WIDTH / 32) {
-            atlas.reserve(16, glyph_height);
-        }
-    }
-    assert!(atlas.atlas_height() >= TEXT_ATLAS_MAX_HEIGHT);
+    while atlas.reserve(16, glyph_height).is_some() {}
+    assert!(atlas.atlas_height() <= TEXT_ATLAS_MAX_HEIGHT);
+    assert!(atlas.atlas_height() + glyph_height + TEXT_ATLAS_PADDING * 2 > TEXT_ATLAS_MAX_HEIGHT);
 
     // フレーム境界でリセットされ、GPU テクスチャ上限を超えない高さに戻る。
     atlas.begin_frame();

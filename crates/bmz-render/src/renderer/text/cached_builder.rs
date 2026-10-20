@@ -392,14 +392,14 @@ impl<'a> CachedTextFrameBuilder<'a> {
                 }
                 let Some(page) = entry.font.pages.get(&bitmap_glyph.page) else { return };
                 // fallback .fnt も自身の ascent で大文字上端を揃え、主フォントと同じ倍率で描く。
-                Some(self.atlas.cached_bitmap_glyph(
+                self.atlas.cached_bitmap_glyph(
                     entry.id.clone(),
                     ch,
                     *bitmap_glyph,
                     page,
                     &entry.font,
                     line.scale,
-                ))
+                )
             }
             GlyphSource::Tofu { width, height } => {
                 self.atlas.cached_tofu_glyph(width * line.scale.x, height * line.scale.y)

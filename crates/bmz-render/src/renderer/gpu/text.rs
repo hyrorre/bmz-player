@@ -106,7 +106,8 @@ impl WgpuRenderer {
     }
 
     pub(in crate::renderer) fn reset_text_atlas(&mut self) {
-        self.text_atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+        self.text_atlas =
+            TextAtlasCache::for_texture_limit(self.device.limits().max_texture_dimension_2d);
         self.text_texture = None;
         self.text_texture_view = None;
         self.text_bind_group = None;

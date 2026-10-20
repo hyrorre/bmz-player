@@ -151,6 +151,8 @@ mod cases_04;
 mod cases_05;
 #[path = "tests/clip.rs"]
 mod clip;
+#[path = "tests/text_atlas.rs"]
+mod text_atlas;
 #[path = "tests/unicode_fallback.rs"]
 mod unicode_fallback;
 #[path = "tests/unicode_sequences.rs"]

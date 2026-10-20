@@ -12,9 +12,6 @@ use skrifa::raw::types::BoundingBox;
 
 use super::*;
 
-/// 1辺の上限。異常な clip box で巨大な画素を確保しない。
-const COLOR_GLYPH_MAX_EXTENT: f32 = 2048.0;
-
 /// 行基準からの位置付きのカラーグリフ画素（straight alpha の RGBA8）。
 pub(super) struct ColorRaster {
     pub(super) width: u32,
@@ -23,6 +20,8 @@ pub(super) struct ColorRaster {
     pub(super) offset_x: f32,
     /// 基準線からの上端（px、下向き正）。
     pub(super) offset_y: f32,
+    /// 要求した大きさに対する画素の倍率。`max_extent` に収めるため縮小した場合は1未満。
+    pub(super) downscale: f32,
     pub(super) pixels: Vec<u8>,
 }
 
@@ -103,19 +102,24 @@ fn readable_color_bitmap(bitmap: &skrifa::bitmap::BitmapGlyph<'_>) -> bool {
 }
 
 /// `scale` は ab_glyph と同じ `PxScale`（ascent - descent を px で表した値）。
+///
+/// 1辺が `max_extent` を超える場合は、画素を確保する前に倍率を下げて収める
+/// （切り抜かない）。縮小率は `ColorRaster::downscale` に返す。
 pub(super) fn rasterize_color_glyph(
     face: &TextFace,
     glyph: GlyphId,
     scale: PxScale,
+    max_extent: u32,
 ) -> Option<ColorRaster> {
     let font = skrifa::FontRef::from_index(face.data(), face.index()).ok()?;
     let glyph_id = skrifa::GlyphId::new(u32::from(glyph.0));
     let metrics = face.metrics();
     let units = (scale.x / metrics.height(), scale.y / metrics.height());
+    let max_extent = max_extent.max(1) as f32;
     let mut raster = if let Some(color) = font.color_glyphs().get(glyph_id) {
-        rasterize_colr(face, &font, &color, units)?
+        rasterize_colr(face, &font, &color, units, max_extent)?
     } else {
-        rasterize_bitmap(&font, glyph_id, metrics, units)?
+        rasterize_bitmap(&font, glyph_id, metrics, units, max_extent)?
     };
     bleed_transparent_edges(&mut raster);
     Some(raster)
@@ -126,14 +130,21 @@ fn rasterize_colr(
     font: &skrifa::FontRef<'_>,
     color: &skrifa::color::ColorGlyph<'_>,
     units: (f32, f32),
+    max_extent: f32,
 ) -> Option<ColorRaster> {
     let location = skrifa::instance::LocationRef::default();
     let bounds = colr_bounds(face, color)?;
+    // floor / ceil で両端が1pxずつ広がっても収まるよう、2px の余裕を見て縮小する。
+    let extent =
+        ((bounds.x_max - bounds.x_min) * units.0).max((bounds.y_max - bounds.y_min) * units.1);
+    let downscale =
+        if extent + 2.0 > max_extent { (max_extent - 2.0).max(1.0) / extent } else { 1.0 };
+    let units = (units.0 * downscale, units.1 * downscale);
     let left = (bounds.x_min * units.0).floor();
     let top = (-bounds.y_max * units.1).floor();
-    let width = ((bounds.x_max * units.0).ceil() - left).clamp(0.0, COLOR_GLYPH_MAX_EXTENT);
-    let height = ((-bounds.y_min * units.1).ceil() - top).clamp(0.0, COLOR_GLYPH_MAX_EXTENT);
-    if width < 1.0 || height < 1.0 {
+    let width = ((bounds.x_max * units.0).ceil() - left).min(max_extent);
+    let height = ((-bounds.y_min * units.1).ceil() - top).min(max_extent);
+    if !(width >= 1.0 && height >= 1.0) {
         return None;
     }
     let palettes = font.color_palettes();
@@ -158,6 +169,7 @@ fn rasterize_colr(
         height: height as u32,
         offset_x: left,
         offset_y: top,
+        downscale,
         pixels: painter.into_rgba8(),
     })
 }
@@ -167,6 +179,7 @@ fn rasterize_bitmap(
     glyph_id: skrifa::GlyphId,
     metrics: FaceMetrics,
     units: (f32, f32),
+    max_extent: f32,
 ) -> Option<ColorRaster> {
     let ppem = units.1 * metrics.units_per_em;
     let bitmap = color_bitmap_for_size(font, glyph_id, ppem)?;
@@ -193,8 +206,13 @@ fn rasterize_bitmap(
     };
     let scale_y = ppem / bitmap.ppem_y.max(1.0);
     let scale_x = units.0 * metrics.units_per_em / bitmap.ppem_x.max(1.0);
-    let width = (image.width() as f32 * scale_x).round().clamp(1.0, COLOR_GLYPH_MAX_EXTENT);
-    let height = (image.height() as f32 * scale_y).round().clamp(1.0, COLOR_GLYPH_MAX_EXTENT);
+    // 画像が `max_extent` を超える大きさでは、配置ごと縮小して収める。
+    let extent = (image.width() as f32 * scale_x).max(image.height() as f32 * scale_y);
+    let downscale = if extent > max_extent { max_extent / extent } else { 1.0 };
+    let (scale_x, scale_y) = (scale_x * downscale, scale_y * downscale);
+    let units = (units.0 * downscale, units.1 * downscale);
+    let width = (image.width() as f32 * scale_x).round().clamp(1.0, max_extent);
+    let height = (image.height() as f32 * scale_y).round().clamp(1.0, max_extent);
     // Skia の fontations 実装と同じ配置。CBDT は左上、sbix は左下が原点。
     let (offset_x, offset_y) = match bitmap.placement_origin {
         skrifa::bitmap::Origin::TopLeft => {
@@ -207,7 +225,14 @@ fn rasterize_bitmap(
         }
     };
     let pixels = resize_rgba(&image, width as u32, height as u32);
-    Some(ColorRaster { width: width as u32, height: height as u32, offset_x, offset_y, pixels })
+    Some(ColorRaster {
+        width: width as u32,
+        height: height as u32,
+        offset_x,
+        offset_y,
+        downscale,
+        pixels,
+    })
 }
 
 /// premultiplied で縮小・拡大し、透明部分の色が縁へ混ざらないようにする。

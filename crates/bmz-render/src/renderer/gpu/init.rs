@@ -218,6 +218,7 @@ impl WgpuRenderer {
         let text_pipeline = create_text_pipeline(&device, config.format, &text_bind_group_layout);
         let egui = EguiPainter::new(&device, config.format);
 
+        let max_texture_dimension_2d = device.limits().max_texture_dimension_2d;
         Ok(Self {
             device,
             queue,
@@ -257,7 +258,7 @@ impl WgpuRenderer {
             text_texture_view: None,
             text_bind_group: None,
             text_texture_size: AtlasSize::default(),
-            text_atlas: TextAtlasCache::new(TEXT_ATLAS_WIDTH),
+            text_atlas: TextAtlasCache::for_texture_limit(max_texture_dimension_2d),
             text_buffer: None,
             text_buffer_capacity: 0,
             default_fonts: load_default_font_fallbacks(

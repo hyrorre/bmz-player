@@ -10,10 +10,12 @@ pub(super) const TEXT_ATLAS_WIDTH: u32 = 1024;
 pub(super) const TEXT_ATLAS_PADDING: u32 = 1;
 pub(super) const VECTOR_TEXT_SUPERSAMPLE_SCALE: f32 = 2.0;
 /// グリフは永続キャッシュされるため、選曲画面のスクロールなどで文字種が増え続けると
-/// アトラス高さが単調増加する。wgpu の `max_texture_dimension_2d` (一般に 16384) を
-/// 超えると `create_texture` がパニックするので、上限に達したらフレーム境界でキャッシュを
-/// 捨てて作り直す。1 フレーム分のグリフは十分この高さに収まるため、リセットしても破綻しない。
+/// アトラス高さが単調増加する。wgpu の `max_texture_dimension_2d` を超えると
+/// `create_texture` がパニックするので、この値と GPU の上限の小さい方を超えるグリフは
+/// 格納せず、フレーム境界でキャッシュを捨てて作り直す。
 pub(super) const TEXT_ATLAS_MAX_HEIGHT: u32 = 8192;
+/// 作り直した直後のフレームでも atlas が溢れたとき、次に作り直すまで待つフレーム数。
+pub(super) const TEXT_ATLAS_OVERFLOW_RETRY_FRAMES: u32 = 60;
 pub(super) const TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 4096;
 pub(super) const TEXT_SHAPE_CACHE_MAX_ENTRIES: usize = 8192;
 

@@ -801,7 +801,8 @@ fn emoji_sequences_prefer_color_ligatures() {
 }
 
 fn raster(face: &TextFace, ch: char, px: f32) -> ColorRaster {
-    rasterize_color_glyph(face, face.glyph_id(ch), PxScale::from(px)).expect("color glyph")
+    rasterize_color_glyph(face, face.glyph_id(ch), PxScale::from(px), TEXT_ATLAS_WIDTH)
+        .expect("color glyph")
 }
 
 #[test]
