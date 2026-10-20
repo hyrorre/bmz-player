@@ -336,7 +336,8 @@ pub(super) fn shape_vector_text(text: &str, fonts: VectorFontSet<'_>) -> ShapedT
         match parts.required.as_slice() {
             _ if parts.has_newline() => shaped.push_empty(range, true),
             [] => shaped.push_empty(range, false),
-            [ch] => {
+            // タグシーケンスは見える文字が1つでも、cluster 全体をシェーピングする。
+            [ch] if parts.sequence_kind() != SequenceKind::Ligature => {
                 let presentation = Presentation::of(*ch, parts.selector, parts.is_emoji_sequence());
                 push_vector_char(&mut shaped, range, *ch, parts.selector, presentation, fonts);
             }
@@ -488,7 +489,9 @@ pub(super) fn shape_bitmap_text(text: &str, fonts: BitmapFontSet<'_>) -> ShapedT
         match parts.required.as_slice() {
             _ if parts.has_newline() => shaped.push_empty(range, true),
             [] => shaped.push_empty(range, false),
-            [ch] => push_bitmap_char(&mut shaped, range, *ch, parts.selector, fonts),
+            [ch] if parts.sequence_kind() != SequenceKind::Ligature => {
+                push_bitmap_char(&mut shaped, range, *ch, parts.selector, fonts)
+            }
             required => {
                 if let Some((advance, glyphs)) = fonts.cluster_glyphs(cluster, &parts) {
                     shaped.push(range, advance, &glyphs);

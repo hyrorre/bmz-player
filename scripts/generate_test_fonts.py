@@ -226,7 +226,15 @@ def main() -> None:
         "u0031": ([rect(400, 0, 600, 700)], 1000),
         "u20E3": ([rect(50, -100, 950, 0)], 1000),
         "keycap_1": ([rect(50, 0, 950, 800)], 1000),
+        "u1F3F4": ([rect(150, 0, 250, 800), rect(250, 400, 850, 800)], 1000),
+        "flag_england": ([rect(50, 50, 950, 650)], 1000),
+        "flag_scotland": ([rect(50, 50, 950, 650)], 1000),
+        "flag_wales": ([rect(50, 50, 950, 650)], 1000),
     }
+    # Unicode tag characters (U+E0020..E007F) for the subdivision flags.
+    for tag in "bcegklnstwz":
+        color[f"u{0xE0000 + ord(tag):05X}"] = ([], 0)
+    color["uE007F"] = ([], 0)
     color_cmap = {int(name[1:], 16): name for name in color if name.startswith("u")}
     features = """
 languagesystem DFLT dflt;
@@ -236,6 +244,9 @@ feature ccmp {
     sub u1F44D u1F3FB by thumbs_light;
     sub u1F469 u200D u1F4BB by woman_technologist;
     sub u0031 uFE0F u20E3 by keycap_1;
+    sub u1F3F4 uE0067 uE0062 uE0065 uE006E uE0067 uE007F by flag_england;
+    sub u1F3F4 uE0067 uE0062 uE0073 uE0063 uE0074 uE007F by flag_scotland;
+    sub u1F3F4 uE0067 uE0062 uE0077 uE006C uE0073 uE007F by flag_wales;
 } ccmp;
 """
 
@@ -263,6 +274,10 @@ feature ccmp {
             "thumbs_light": [("thumbs_light", 5)],
             "woman_technologist": [("woman_technologist", 2)],
             "keycap_1": [("keycap_1", 4)],
+            "u1F3F4": [("u1F3F4", 1)],
+            "flag_england": [("flag_england", 3), ("flag_dot", 2)],
+            "flag_scotland": [("flag_scotland", 4)],
+            "flag_wales": [("flag_wales", 2)],
         }
         colr = dict(v0)
         colr.update(
