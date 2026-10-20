@@ -246,6 +246,8 @@ mod installed_skin_compat;
 mod lua_api_baseline;
 #[path = "tests/lua_api_extensions.rs"]
 mod lua_api_extensions;
+#[path = "tests/lua_stdlib_compat.rs"]
+mod lua_stdlib_compat;
 #[path = "tests/property_names.rs"]
 mod property_names;
 #[path = "tests/read_helpers.rs"]

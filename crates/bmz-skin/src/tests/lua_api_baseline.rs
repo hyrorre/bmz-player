@@ -411,9 +411,11 @@ fn pre_extension_load_time_lua_api_surface_and_values_are_preserved() {
             ("bmz.option", "[string=B;string=B;string=fallback;string=]"),
             ("package", "[string=string;string=;nil=nil;nil=nil]"),
             ("lua_version", "Lua 5.4"),
+            // Added: LuaJ's standard `bit32` and `os.difftime`. `unpack` and
+            // `loadstring` stay absent, as in LuaJ 3.0.
             (
                 "lua5_2_names",
-                "[string=nil;string=nil;string=nil;string=function;string=function;string=function;string=nil]",
+                "[string=table;string=nil;string=nil;string=function;string=function;string=function;string=function]",
             ),
             ("integer_float", "[float=5.0;integer=3;integer=2;string=1e+15]"),
         ],

@@ -67,7 +67,13 @@ pub(super) fn create_os_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> ml
                 result.set("isdst", date.isdst)?;
                 Ok(Value::Table(result))
             } else {
-                Ok(Value::String(lua.create_string(format_lua_date(format, date))?))
+                // LuaJ prints the local zone for `%z`, including `!` formats.
+                let utc_offset = format
+                    .contains("%z")
+                    .then(|| unix_seconds_to_local_datetime(seconds).ok())
+                    .flatten()
+                    .map_or(0, |local| lua_datetime_epoch_seconds(local) - seconds);
+                Ok(Value::String(lua.create_string(format_lua_date(format, date, utc_offset))?))
             }
         })?,
     )?;
@@ -78,6 +84,8 @@ pub(super) fn create_os_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> ml
             None => Ok(lua_os_now_seconds()),
         })?,
     )?;
+    // LuaJ OsLib / Lua 5.4: both times are required and the result is a float.
+    table.set("difftime", lua.create_function(|_, (t2, t1): (f64, f64)| Ok(t2 - t1))?)?;
     Ok(Value::Table(table))
 }
 
@@ -487,7 +495,68 @@ pub(super) fn is_leap_year(year: i32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
-pub(super) fn format_lua_date(format: &str, date: LuaDateTime) -> String {
+/// Inverse of [`civil_from_days`]: days since 1970-01-01 in the proleptic
+/// Gregorian calendar.
+pub(super) fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
+    let y = i64::from(year) - i64::from(month <= 2);
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let month = i64::from(month);
+    let doy = (153 * if month > 2 { month - 3 } else { month + 9 } + 2) / 5 + i64::from(day) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// The calendar fields read back as if they were UTC; used for zone offsets.
+pub(super) fn lua_datetime_epoch_seconds(date: LuaDateTime) -> i64 {
+    days_from_civil(date.year, date.month, date.day) * 86_400
+        + i64::from(date.hour) * 3_600
+        + i64::from(date.minute) * 60
+        + i64::from(date.second)
+}
+
+/// LuaJ `OsLib.weekNumber`: weeks since the first `start_day` (0=Sunday,
+/// 1=Monday) of the year, counted from 1. Dates before that day reproduce
+/// LuaJ's previous-year computation rather than C `strftime`'s week 0.
+fn luaj_week_number(date: LuaDateTime, start_day: i64) -> i64 {
+    // Calendar.DAY_OF_WEEK: Sunday=1 .. Saturday=7.
+    let day_of_week = |days: i64| (days + 4).rem_euclid(7) + 1;
+    let first_day = |day_of_week: i64| (1 + (start_day + 8 - day_of_week) % 7) as u32;
+    let today = days_from_civil(date.year, date.month, date.day);
+    let first = first_day(day_of_week(days_from_civil(date.year, 1, 1)));
+    let mut start = days_from_civil(date.year, 1, first);
+    if start > today {
+        let previous = first_day(day_of_week(days_from_civil(date.year - 1, 1, first)));
+        start = days_from_civil(date.year - 1, 1, previous);
+    }
+    1 + (today - start) / 7
+}
+
+/// `os.date` text formats.
+///
+/// The specifiers follow LuaJ 3.0 `OsLib.date` used by beatoraja and LR2oraja
+/// Endless Dream, including its `%I` (00 at noon), `%U` / `%W` and `%z`
+/// output. Unknown specifiers stay literal instead of raising, which keeps
+/// skins written against the earlier BMZ subset loading.
+pub(super) fn format_lua_date(format: &str, date: LuaDateTime, utc_offset_seconds: i64) -> String {
+    const WEEKDAYS: [&str; 7] =
+        ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const MONTHS: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    let weekday = WEEKDAYS[(date.weekday.clamp(1, 7) - 1) as usize];
+    let month = MONTHS[(date.month.clamp(1, 12) - 1) as usize];
     let mut output = String::new();
     let mut chars = format.chars();
     while let Some(ch) = chars.next() {
@@ -503,6 +572,29 @@ pub(super) fn format_lua_date(format: &str, date: LuaDateTime) -> String {
             Some('M') => output.push_str(&format!("{:02}", date.minute)),
             Some('S') => output.push_str(&format!("{:02}", date.second)),
             Some('%') => output.push('%'),
+            Some('a') => output.push_str(&weekday[..3]),
+            Some('A') => output.push_str(weekday),
+            Some('b') => output.push_str(&month[..3]),
+            Some('B') => output.push_str(month),
+            Some('c') => {
+                output.push_str(&format_lua_date("%a %b %d %H:%M:%S %Y", date, utc_offset_seconds))
+            }
+            Some('I') => output.push_str(&format!("{:02}", date.hour % 12)),
+            Some('j') => output.push_str(&format!("{:03}", date.yearday)),
+            Some('p') => output.push_str(if date.hour < 12 { "AM" } else { "PM" }),
+            Some('U') => output.push_str(&luaj_week_number(date, 0).to_string()),
+            Some('w') => output.push_str(&(date.weekday.clamp(1, 7) - 1).to_string()),
+            Some('W') => output.push_str(&luaj_week_number(date, 1).to_string()),
+            Some('x') => output.push_str(&format_lua_date("%m/%d/%y", date, utc_offset_seconds)),
+            Some('X') => output.push_str(&format_lua_date("%H:%M:%S", date, utc_offset_seconds)),
+            // Java `String.valueOf(year).substring(2)`.
+            Some('y') => output.push_str(date.year.to_string().get(2..).unwrap_or_default()),
+            Some('z') => {
+                let minutes = utc_offset_seconds / 60;
+                let sign = if minutes >= 0 { '+' } else { '-' };
+                let minutes = minutes.abs();
+                output.push_str(&format!("{sign}{:02}{:02}", minutes / 60, minutes % 60));
+            }
             Some(other) => {
                 output.push('%');
                 output.push(other);

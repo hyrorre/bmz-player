@@ -156,6 +156,7 @@ pub(super) fn install_sandbox(
         create_io_stub(lua, path_context.entry_dir(), virtual_io_files, load_dependencies.clone())?,
     )?;
     globals.set("debug", Value::Nil)?;
+    install_bit32_library(lua)?;
     // LuaJ's standard globals expose luajava directly. Some beatoraja skins use
     // that global without calling require("luajava"), so keep both access paths
     // pointed at the same sandboxed compatibility table.

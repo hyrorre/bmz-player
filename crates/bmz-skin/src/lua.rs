@@ -32,6 +32,8 @@ use crate::{
 
 mod conversion;
 mod function_inference;
+#[path = "lua/sandbox/bit32.rs"]
+mod sandbox_bit32;
 #[path = "lua/sandbox/budget.rs"]
 mod sandbox_budget;
 #[path = "lua/sandbox/environment.rs"]
@@ -47,6 +49,7 @@ mod sandbox_probe;
 
 use conversion::*;
 use function_inference::*;
+use sandbox_bit32::*;
 use sandbox_budget::*;
 use sandbox_environment::*;
 use sandbox_event::*;
