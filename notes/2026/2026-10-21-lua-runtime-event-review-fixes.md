@@ -22,3 +22,17 @@ scene退出時のloop停止やruntimeのresetでは、今後も利用するfile�
 引数・音声効果・組み込みイベントへの転送と、循環後のdepth復元をAuto / Compatで検証する。
 追加した回帰テストは修正前に連鎖先が実行されず失敗した。
 修正後はruntimeイベント5テスト、`bmz-skin`のcheck / all-targets Clippyが成功した。
+
+## 3. 音声イベントの実行経路
+
+runtimeから除外する音声イベントを、既存のapp側が再生するResult / Course Result
+（type 7 / 15）のtimer 2だけに限定した。他のscene・timerは推論に成功していてもLuaで評価する。
+既存テストの宣言的Result音声fixtureもtype 7に揃えた。
+
+VMの回帰テストは修正前にruntime未作成で失敗した。修正後はPlay / Select / Decide /
+Result / Course Resultのtimer 1・2・10001（Resultの2を除く）をAuto / Compatで確認し、
+Resultのtimer 2はruntimeなしの既存経路に残ることも確認した。runtimeイベント全7テスト成功。
+rendererの各scene計画からappのadapterへ音声効果が届く経路も、別の回帰テストで確認した。
+scene進入から1秒後のsnapshotで各2フレーム描画し、音声効果が毎回1件だけ届くことを確認した。
+app側のruntimeイベント全4テスト成功。
+`bmz-skin`全335テスト（1 ignored）と、skin / playerのcheck / all-targets Clippyも成功した。

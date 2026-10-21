@@ -125,7 +125,7 @@ fn audio_and_volume_effects_come_from_events_and_volume_reads_are_live() {
         r#"
         local s = require('main_state')
         local timer_util = require('timer_util')
-        return {type=0,
+        return {type=7,
             customEvents={{id=1000, action=function() s.audio_play('se.wav', 0.5) end,
                 condition=function() return timer_util.is_timer_on(s.timer(2)) end}},
             image={{id='btn', src=0, x=0, y=0, w=1, h=1, act=function()
@@ -185,7 +185,7 @@ fn runtime_vm_is_built_only_for_events_that_need_it() {
         r#"
         local s = require('main_state')
         local timer_util = require('timer_util')
-        return {type=0, customEvents={{id=1000, action=function() s.audio_play('se.wav') end,
+        return {type=7, customEvents={{id=1000, action=function() s.audio_play('se.wav') end,
             condition=function() return timer_util.is_timer_on(s.timer(2)) end}}}
         "#,
         LuaSkinRuntimeMode::Auto,
@@ -251,6 +251,68 @@ fn numeric_custom_event_actions_chain_synchronously_and_bound_cycles() {
                 1,
                 "cycles fail once and leave the depth restored"
             );
+        }
+    }
+}
+
+#[test]
+fn timer_audio_events_use_runtime_without_a_declarative_scene_trigger() {
+    for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
+        for skin_type in [0, 5, 6, 7, 15] {
+            for timer in [1, 2, 10001] {
+                if matches!(skin_type, 7 | 15) && timer == 2 {
+                    continue;
+                }
+                let (_root, mut loaded) = load(
+                    &format!(
+                        r#"
+                        local s=require('main_state')
+                        local t=require('timer_util')
+                        return {{type={skin_type}, customEvents={{{{id=1000,
+                            condition=function() return t.is_timer_on(s.timer({timer})) end,
+                            action=function() s.audio_play('se.wav') end}}}}}}
+                    "#
+                    ),
+                    mode,
+                );
+                assert_eq!(loaded.document.custom_events[0].timer, timer);
+                let runtime = loaded.lua_runtime.as_mut().unwrap_or_else(|| {
+                    panic!("type={skin_type}, timer={timer}, mode={mode:?} needs a runtime")
+                });
+                let state =
+                    TestLuaMainState { timers: BTreeMap::from([(timer, 0)]), ..Default::default() };
+                runtime.begin_frame();
+                runtime.advance_custom_timers(&state);
+                runtime.advance_custom_events(&state);
+                assert!(matches!(runtime.take_effects().as_slice(), [SkinLuaEffect::Audio(_)]));
+                runtime.advance_custom_events(&state);
+                assert!(runtime.take_effects().is_empty(), "update only once in a frame");
+                assert_eq!(runtime.failure_log_count(), 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn result_fadeout_audio_keeps_its_single_declarative_trigger() {
+    for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
+        for skin_type in [7, 15] {
+            let (_root, loaded) = load(
+                &format!(
+                    r#"
+                    local s=require('main_state')
+                    local t=require('timer_util')
+                    return {{type={skin_type}, customEvents={{{{id=1000,
+                        condition=function() return t.is_timer_on(s.timer(2)) end,
+                        action=function() s.audio_play('se.wav') end}}}}}}
+                "#
+                ),
+                mode,
+            );
+            assert!(loaded.lua_runtime.is_none());
+            assert!(!loaded.dependencies.opaque);
+            assert_eq!(loaded.document.custom_events[0].timer, 2);
+            assert_eq!(loaded.document.custom_events[0].audio_actions.len(), 1);
         }
     }
 }

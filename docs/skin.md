@@ -770,8 +770,9 @@ functionの`act`と`customEvents`を永続VMで実行します。`auto` / `compa
   functionと共通の入れ子上限を適用します。
 - `main_state.event_exec(id, arg1, arg2)`はcustom event `1000..1999`だけを同期実行し、
   他のIDは無視します。入れ子は16段までです（beatorajaは上限が無くstack overflowになります）。
-- ロード時に宣言的な音声イベント（timer条件と`audioActions`）へ変換できた定義は、従来の
-  宣言的な経路で再生し、毎フレームは評価しません。`event_exec`からは実行します。
+- Result / Course Resultのtimer 2（fadeout）条件で、ロード時に`audioActions`へ変換できた定義は、
+  従来の宣言的な経路で再生し、毎フレームは評価しません。`event_exec`からは実行します。
+  他のscene・timerの音声イベントは永続VMで評価します。
 - `act` / `action` / `condition`の例外は定義ごとに1回だけログに出して無視します
   （beatorajaの`loadEvent`と同じ）。命令数・メモリの上限は描画callbackと同じです。
 - function の`act`や毎フレーム評価する`customEvents`を持つskinは永続VMを使うため、

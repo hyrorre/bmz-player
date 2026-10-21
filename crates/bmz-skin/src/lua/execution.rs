@@ -490,15 +490,18 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
     })
 }
 
-/// IDs of `customEvents` converted to declarative skin audio (an inferred
-/// timer condition with audio actions).
+/// IDs handled by the app's existing Result fadeout audio trigger. Other
+/// scenes and timers have no declarative trigger, so their events stay in Lua.
 fn declarative_custom_event_ids(json: &JsonValue) -> BTreeSet<i32> {
+    if !matches!(json.get("type").and_then(json_integer), Some(7 | 15)) {
+        return BTreeSet::new();
+    }
     json.get("customEvents")
         .and_then(JsonValue::as_array)
         .into_iter()
         .flatten()
         .filter(|event| {
-            event.get("timer").and_then(JsonValue::as_i64).is_some_and(|timer| timer != 0)
+            event.get("timer").and_then(JsonValue::as_i64) == Some(2)
                 && event
                     .get("audioActions")
                     .and_then(JsonValue::as_array)

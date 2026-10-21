@@ -223,3 +223,86 @@ fn decide_and_play_clicks_hit_only_lua_acts_of_the_last_drawn_frame() {
         assert_eq!(hit(0.05, 0.95), None, "type {skin_type}: hidden by the act");
     }
 }
+
+#[test]
+fn timer_audio_effects_reach_the_app_adapter_in_every_scene() {
+    let root = unique_test_dir("bmz-lua-timer-audio-scenes");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("se.wav"), b"").unwrap();
+    for mode in [bmz_skin::LuaSkinRuntimeMode::Auto, bmz_skin::LuaSkinRuntimeMode::Compat] {
+        for (skin_type, kind, scene) in [
+            (5, SkinKind::Select, bmz_render::sample::sample_select_scene()),
+            (
+                6,
+                SkinKind::Decide,
+                match bmz_render::sample::sample_play_scene() {
+                    AppSceneSnapshot::Play(snapshot) => AppSceneSnapshot::Decide(snapshot),
+                    _ => unreachable!(),
+                },
+            ),
+            (0, SkinKind::Play, bmz_render::sample::sample_play_scene()),
+            (7, SkinKind::Result, bmz_render::sample::sample_result_scene()),
+            (15, SkinKind::Result, bmz_render::sample::sample_result_scene()),
+        ] {
+            // The sample Play/Result scenes start at scene time zero, where
+            // STARTINPUT is still off. Exercise an entered scene instead.
+            let mut scene = scene;
+            match &mut scene {
+                AppSceneSnapshot::Play(snapshot) | AppSceneSnapshot::Decide(snapshot) => {
+                    snapshot.play_elapsed_time = TimeUs(1_000_000);
+                }
+                AppSceneSnapshot::Result(snapshot) => snapshot.elapsed_time = TimeUs(1_000_000),
+                AppSceneSnapshot::Select(_) => {}
+            }
+            let path = root.join(format!("skin{skin_type}.lua"));
+            fs::write(
+                &path,
+                format!(
+                    r#"
+                local s=require('main_state')
+                local t=require('timer_util')
+                return {{type={skin_type},w=320,h=180,
+                    customEvents={{{{id=1000,
+                        condition=function() return t.is_timer_on(s.timer(1)) end,
+                        action=function() s.audio_play('se.wav') end}}}},
+                    text={{{{id='label',size=12,constantText='AUDIO'}}}},
+                    destination={{{{id='label',dst={{{{x=0,y=0,w=100,h=20}}}}}}}}}}
+            "#
+                ),
+            )
+            .unwrap();
+            let loaded = bmz_skin::load_lua_skin_with_runtime_state(
+                &path,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &LuaLoadRuntimeState { runtime_mode: mode, ..Default::default() },
+            )
+            .unwrap();
+            let mut renderer = Renderer::default();
+            set_decoded_skin_context(
+                &mut renderer,
+                kind,
+                bmz_render::skin::default_skin_manifest(),
+                loaded.document,
+                loaded.lua_runtime,
+                vec![],
+                false,
+            );
+            let runtime_scene = match kind {
+                SkinKind::Select => bmz_render::renderer::SkinRuntimeScene::Select,
+                SkinKind::Decide => bmz_render::renderer::SkinRuntimeScene::Decide,
+                SkinKind::Play => bmz_render::renderer::SkinRuntimeScene::Play,
+                SkinKind::Result => bmz_render::renderer::SkinRuntimeScene::Result,
+            };
+            for _ in 0..2 {
+                renderer.prepare_scene(scene.clone());
+                let effects = renderer.take_skin_lua_effects(runtime_scene);
+                assert!(
+                    matches!(effects.as_slice(), [SkinLuaEffect::Audio(_)]),
+                    "type={skin_type} mode={mode:?}: {effects:?}"
+                );
+                assert!(renderer.take_skin_lua_effects(runtime_scene).is_empty());
+            }
+        }
+    }
+}
