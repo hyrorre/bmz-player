@@ -728,6 +728,12 @@ Node.js / Bunを用意し、リポジトリrootから操作します。
 コマンドの定義は[package.json](../package.json)、ディレクトリ対応とruntime設定は
 [nuxt.config.ts](../nuxt.config.ts)を確認します。
 
+- Node.jsはNuxt 4.6の要件（`^22.22.3`、`^24.15.0`、`>=26.0.0`のいずれか）を満たす版を使います。
+  `bun run` / `bunx` は `nuxt`・`wrangler`・`vue-tsc` などをPATH上の `node` で起動し、`bun test` はBunで実行します。
+- `typescript` は ^6 を明示しています。`vue-tsc` とtypescript-eslintがTypeScript 7にまだ対応していないためです。
+- 依存を更新した後は、`node_modules` を消して `bun install --frozen-lockfile` で入れ直します。
+  差分インストールでは、lockにない古い入れ子のパッケージが残り、Workerのbundleに入ることがあります。
+
 ### アプリ構成
 
 | 場所 | 責務 |
