@@ -5,17 +5,25 @@
 //! go to the explicitly requested output path.
 //!
 //! ```text
-//! BMZ_INSTALLED_SKIN_ROOT=data/skins \
-//! BMZ_SKIN_COMPAT_OUT=.local/lua-api-compat/after.json \
-//! BMZ_SKIN_COMPAT_BASELINE=.local/lua-api-compat/before.json \
+//! BMZ_INSTALLED_SKIN_ROOT=$PWD/data/skins \
+//! BMZ_SKIN_COMPAT_OUT=$PWD/.local/lua-api-compat/after.json \
+//! BMZ_SKIN_COMPAT_BASELINE=$PWD/.local/lua-api-compat/before.json \
 //! cargo test -p bmz-skin --lib installed_lua_skins -- --ignored --nocapture
 //! ```
 //!
+//! Use absolute paths: the test runs in `crates/bmz-skin`.
 //! `BMZ_SKIN_COMPAT_FILTER` limits entries to relative paths containing the
 //! given text. `BMZ_SKIN_COMPAT_OPTIONS` / `BMZ_SKIN_COMPAT_FILES` select
 //! non-default skin options and files (JSON objects). Several baseline runs
 //! can be given separated by `;`. Without a baseline only the snapshot is
 //! written.
+//!
+//! Runtime callbacks run in the renderer's destination order (see
+//! `renderer_evaluation_order`), so `callback_results` of skins that share
+//! globals between callbacks are stable between runs. Snapshots written
+//! before that change evaluated in callback-ID order. Their format is the
+//! same, but such skins may differ on frame 0 against them; take a new
+//! baseline from the base commit.
 
 use super::*;
 use serde_json::{Value as JsonValue, json};
@@ -291,9 +299,61 @@ fn snapshot_header(normalizer: &PathNormalizer, context: &SkinPathContext) -> Js
     }
 }
 
+fn callback_id(value: Option<&JsonValue>, prefix: &str) -> Option<usize> {
+    value?.as_str()?.trim().strip_prefix(prefix)?.parse().ok()
+}
+
+/// Callback IDs in the order the renderer reaches them within a frame.
+///
+/// Callback IDs follow Lua's randomized `pairs` order, so evaluating by ID let
+/// a `value` callback that sets a global run before or after the `draw` that
+/// reads it, depending on the run. Destinations are walked in document order:
+/// a Lua number `value` runs before its destination's `draw`
+/// (`SkinNumber.prepare`) and a Lua `text` after it (`SkinText.prepare`).
+/// Each callback runs once per frame, at its first use. Callbacks that no
+/// destination reaches follow in field path order.
+fn renderer_evaluation_order(document: &JsonValue, paths: &[String]) -> Vec<usize> {
+    let by_destination_id = |section: &str| -> BTreeMap<&str, usize> {
+        document[section]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|item| {
+                let id = item.get("id")?.as_str()?;
+                Some((id, callback_id(item.get("value_expr"), lua::LUA_VALUE_CALLBACK_PREFIX)?))
+            })
+            .collect()
+    };
+    let (values, texts) = (by_destination_id("value"), by_destination_id("text"));
+    let mut seen = vec![false; paths.len()];
+    let mut order = Vec::with_capacity(paths.len());
+    for destination in document["destination"].as_array().into_iter().flatten() {
+        let id = destination.get("id").and_then(JsonValue::as_str);
+        let draw = callback_id(destination.get("draw"), lua::LUA_DRAW_CALLBACK_PREFIX);
+        for callback in [
+            id.and_then(|id| values.get(id).copied()),
+            draw,
+            id.and_then(|id| texts.get(id).copied()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if seen.get(callback) == Some(&false) {
+                seen[callback] = true;
+                order.push(callback);
+            }
+        }
+    }
+    let mut rest = (0..paths.len()).filter(|&callback| !seen[callback]).collect::<Vec<_>>();
+    rest.sort_by_key(|&callback| &paths[callback]);
+    order.extend(rest);
+    order
+}
+
 fn evaluate_runtime(
     runtime: &mut LuaSkinRuntime,
     paths: &[String],
+    order: &[usize],
 ) -> (Vec<String>, Vec<String>, usize) {
     let mut results = paths.iter().map(|path| (path.clone(), Vec::new())).collect::<Vec<_>>();
     let mut timers = Vec::new();
@@ -305,7 +365,8 @@ fn evaluate_runtime(
         runtime.advance_custom_events(&state);
         let effects = runtime.take_effects();
         timers.push(format!("{values:?} effects={effects:?}"));
-        for (callback_id, (path, outputs)) in results.iter_mut().enumerate() {
+        for &callback_id in order {
+            let (path, outputs) = &mut results[callback_id];
             if runtime.callback_path(callback_id) != Some(path.as_str()) {
                 outputs.push("unregistered".to_string());
                 continue;
@@ -465,6 +526,7 @@ fn snapshot_document(
     } = loaded;
     let normalized = normalize_lua_skin_document(value);
     let parsed: Result<SkinDocument, _> = serde_path_to_error::deserialize(normalized.clone());
+    let evaluation_order = renderer_evaluation_order(&normalized, &runtime_callback_paths);
     let value = canonical_generated_ids(normalizer.json(normalized), &runtime_callback_paths);
     let mut sections = BTreeMap::new();
     let mut elements = BTreeMap::new();
@@ -510,10 +572,10 @@ fn snapshot_document(
         Err(error) => (Vec::new(), Vec::new(), Some(normalizer.text(&error.to_string()))),
     };
     let (mut callback_results, custom_timers, failure_log_count) = match lua_runtime.as_mut() {
-        Some(runtime) => evaluate_runtime(runtime, &runtime_callback_paths),
+        Some(runtime) => evaluate_runtime(runtime, &runtime_callback_paths, &evaluation_order),
         None => (Vec::new(), Vec::new(), 0),
     };
-    // Callback IDs follow Lua's randomized `pairs` order; compare by field path.
+    // Report by field path; the IDs are not stable between loads.
     callback_results.sort();
     let mut runtime_callback_paths = runtime_callback_paths;
     runtime_callback_paths.sort();

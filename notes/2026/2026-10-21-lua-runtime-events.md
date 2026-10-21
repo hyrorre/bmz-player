@@ -81,9 +81,27 @@
 
 - 比較ハーネスのcallback評価順が実行ごとに変わり、globalを共有するskinで差が揺れます。
   描画と同じdestination順など、決まった順で評価すると比較が安定します。
+  （下の追記で対応しました）
 - `event_observe_timer_off`は最初の評価で発火しない差を残しています。
 - 描画・custom timer callbackからの`audio_*`は鳴らしません。
 - Selectの曲バーのLua `draw`はクリック判定で評価しません。
 - クリック方向（`click` 2 / 3）の判定は、canvas座標の矩形とsurface座標のcursorを比べています。
   Select / Resultの既存の処理と同じで、skinの縦横比と画面が違うと中央付近で左右・上下を誤る
   可能性があります（今回の変更前からの動作）。
+
+## 追記（2026-10-21）: 比較ハーネスの評価順
+
+- [比較ハーネス](../../crates/bmz-skin/src/tests/installed_skin_compat.rs)のruntime callbackを、
+  番号順ではなく描画と同じ順で評価するようにしました。destinationを文書順にたどり、Luaの数値`value`を
+  そのdestinationの`draw`の前（beatorajaの`SkinNumber.prepare`）、Luaの`text`を後（`SkinText.prepare`）に
+  評価します。各callbackは1フレームに1回、最初に使われる位置で評価し、どのdestinationからも
+  使われないcallbackはfield path順で続けます。
+- snapshotの形式は変わりません。変更前のsnapshotと比べると、globalを共有するskinのframe 0が
+  変わることがあります。比較するときはベースラインを取り直します。
+- Luxez-Flatの3ファイルで、変更前に2回、変更後に3回ハーネスを実行しました。同じfield pathの
+  `callback_results`の差は、変更前35件、変更後0件でした。出力は`.local/lua-eval-order/`に残し、共有しません。
+- 残る揺れ: `music_select.luaskin`の`document` / `document_scene`では、`flag_score` / `scorerate`を読む
+  `draw` 28件（`$.destination[262]`等）がruntime callbackになるかどうかが実行ごとに変わります。
+  Lua-to-JSON変換はtableのkeyを`pairs`順にたどります。そのため、`value`関数が`destination`の`draw`より
+  先にprobeされるかどうかがhash seedで変わることが原因と考えられます。読み込み側の動作なので今回は変更していません。
+  ハーネスは同じ実行内の2回の読み込みで出た差を`unstable`として扱い、regressionにしません。
