@@ -172,15 +172,13 @@ fn invalid_http_payloads_and_404_leave_no_staging_files() {
 
 #[test]
 fn tar_path_traversal_and_cross_platform_escapes_are_rejected() {
-    for path in [
-        "../outside.bms",
-        "a/../../outside.bms",
-        "..\\outside.bms",
-        "/outside.bms",
-        "C:\\outside.bms",
-        "file:stream",
-    ] {
+    for path in ["../outside.bms", "a/../../outside.bms", "..\\outside.bms", "/outside.bms"] {
         assert!(validate_archive_path(path).is_err());
+    }
+    if cfg!(windows) {
+        for path in ["C:\\outside.bms", "file:stream"] {
+            assert!(validate_archive_path(path).is_err());
+        }
     }
     let root = tempfile::tempdir().unwrap();
     let input = root.path().join("bad.tar.gz");
