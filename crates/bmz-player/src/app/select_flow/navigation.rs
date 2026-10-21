@@ -547,19 +547,11 @@ impl WinitApp {
     }
 
     pub(super) fn open_same_folder_for_selected(&mut self) {
-        let selected = self.select.select_items.get(self.select.selected_index).cloned();
-        let (path, description) = match selected {
-            Some(SelectItem::Chart(row)) => {
-                let Some(chart) = row.chart else {
-                    return;
-                };
-                let folder_path = chart.folder_path;
-                (same_folder_path(&folder_path), folder_path)
-            }
-            Some(SelectItem::Course(row)) => {
-                (course_contents_path(row.course_id), row.title.clone())
-            }
-            _ => return,
+        let Some((path, description)) = same_folder_target(
+            self.select.select_items.get(self.select.selected_index),
+            &self.select.folder_stack,
+        ) else {
+            return;
         };
         if self.enter_select_folder(path) {
             tracing::info!(target = %description, "entered related chart view");
@@ -1049,6 +1041,26 @@ impl WinitApp {
         } else if self.select.course_builder.is_some() {
             self.cancel_select_course_builder();
         }
+    }
+}
+
+/// Returns the folder path and log description opened by SAME FOLDER.
+/// Like beatoraja `SHOW_SONGS_ON_SAME_FOLDER`, a chart inside a same-folder view
+/// does not open another same-folder view on top of it.
+pub(in crate::app) fn same_folder_target(
+    selected: Option<&SelectItem>,
+    folder_stack: &[String],
+) -> Option<(String, String)> {
+    match selected? {
+        SelectItem::Chart(row) => {
+            if folder_stack.last().is_some_and(|path| parse_same_folder_path(path).is_some()) {
+                return None;
+            }
+            let folder_path = &row.chart.as_ref()?.folder_path;
+            Some((same_folder_path(folder_path), folder_path.clone()))
+        }
+        SelectItem::Course(row) => Some((course_contents_path(row.course_id), row.title.clone())),
+        _ => None,
     }
 }
 

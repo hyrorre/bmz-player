@@ -568,6 +568,36 @@ fn select_skin_key_config_does_not_duplicate_current_key_config_folder() {
 }
 
 #[test]
+fn same_folder_does_not_reopen_inside_a_same_folder_view() {
+    use crate::app::select_flow_navigation::same_folder_target;
+    let mut row = select_chart_row(1);
+    row.chart.as_mut().unwrap().folder_path = "songs/a".into();
+    let chart = SelectItem::Chart(row);
+    let opened = same_folder_path("songs/a");
+
+    assert_eq!(
+        same_folder_target(Some(&chart), &["table".into()]),
+        Some((opened.clone(), "songs/a".into()))
+    );
+    // Issue #40: pressing SAME FOLDER again must not stack the same view.
+    assert_eq!(same_folder_target(Some(&chart), &["table".into(), opened.clone()]), None);
+    // A course's stage list is not a same-folder view, so its charts still open one.
+    assert_eq!(
+        same_folder_target(Some(&chart), &[course_contents_path(3)]),
+        Some((opened, "songs/a".into()))
+    );
+    let course = SelectItem::Course(select_course_row(3, 4));
+    assert_eq!(
+        same_folder_target(Some(&course), &[]),
+        Some((course_contents_path(3), "Course 3/4".into()))
+    );
+    let mut missing = select_chart_row(2);
+    missing.chart = None;
+    assert_eq!(same_folder_target(Some(&SelectItem::Chart(missing)), &[]), None);
+    assert_eq!(same_folder_target(None, &[]), None);
+}
+
+#[test]
 fn select_explorer_file_resolves_registered_copy_and_missing_files() {
     use crate::app::select_flow_navigation::select_explorer_file_path;
     let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
