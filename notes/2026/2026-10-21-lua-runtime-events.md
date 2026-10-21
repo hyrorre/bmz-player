@@ -139,3 +139,15 @@
     skin自体が`pairs`や乱数・時刻を使います。読み込み側の`pairs`はほかに3か所あり、いずれも順序に
     依存しないことを確認しました。skin側の原因は未調査です。
 - 未確認: 実機の選曲画面でのLuxez-Flatのランク画像・スコアレート表示。
+
+## 追記（2026-10-21）: ヘッダhashの揺れ
+
+- 上で未調査としたLuxez-Flat / mz-selectの`music_select`の`header.hash`の揺れは、skin自身の`load.lua`が原因でした。
+  ヘッダ読み込み（`skin_config`なし）では、各パーツの`property` / `filepath` / `offset`を追加したあと
+  `append_all(skin, parts)`も呼びます。`append_all`は`pairs(parts)`の順に値を`skin`の配列部分へ入れるため、
+  ヘッダの数値key（`"1"`以降）の中身の順序が読み込みごとに変わります。`property` / `filepath` / `offset`の
+  一覧は毎回同じです。
+- アプリはヘッダを`SkinDocument`として読み、数値keyを使いません。設定画面への影響はありません。
+- [比較ハーネス](../../crates/bmz-skin/src/tests/installed_skin_compat.rs)は、ヘッダの数値keyを除いてから
+  `header.hash`を計算するようにしました。2つのskinの`header.hash`は3回の実行で一致し、ほかの121件の
+  `header.hash`は変わりませんでした。変更前のsnapshotと比べると、この2件の`header.hash`だけが変わります。

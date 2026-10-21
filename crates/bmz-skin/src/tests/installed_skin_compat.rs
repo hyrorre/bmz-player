@@ -230,7 +230,13 @@ fn error_text(normalizer: &PathNormalizer, error: &anyhow::Error) -> String {
 fn snapshot_header(normalizer: &PathNormalizer, context: &SkinPathContext) -> JsonValue {
     match load_lua_skin_header_value_with_path_context(context) {
         Ok(loaded) => {
-            let value = normalizer.json(loaded.value);
+            let mut value = normalizer.json(loaded.value);
+            // A mixed Lua table keeps its sequence part as "1", "2", ... keys.
+            // The app's SkinDocument ignores them, and Luxe Flat / mz-select
+            // fill them in `pairs` order while loading the header.
+            if let JsonValue::Object(map) = &mut value {
+                map.retain(|key, _| key.parse::<i64>().is_err());
+            }
             let names = |key: &str, field: &str| -> Vec<String> {
                 value
                     .get(key)
