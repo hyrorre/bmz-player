@@ -254,6 +254,13 @@ callbackごとにscopeを作る場合と、描画と同じ共有scopeの場合�
 cargo run -p bmz-skin --release --locked --example lua_runtime_profile
 ```
 
+ビットマップ文中の欠字を初めて描くときのCPUラスタライズは、次で計測します。
+フォント読込・atlasへの格納・GPU uploadは計測外です。`BMZ_TEXT_PROFILE_ITERATIONS`で反復回数を変えられます。
+
+```bash
+cargo test -p bmz-render --release --locked --lib profile_styled_fallback -- --ignored --nocapture
+```
+
 実スキンの描画準備には`bmz-player`の`scene_plan_profile` / `play_plan_profile` exampleを使います。
 CPU時間とGPU・surface・presentを含む実ウィンドウの時間は別に比較します。
 条件と測定例は[スキン最適化の記録](../notes/2026/2026-10-21-skin-review-optimization.md)を参照します。

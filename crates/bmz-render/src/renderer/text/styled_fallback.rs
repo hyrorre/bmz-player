@@ -143,10 +143,14 @@ fn squared_distances(
     let mut grid: Vec<f32> = inside.iter().map(|inside| if *inside { 0.0 } else { FAR }).collect();
     let mut line = Vec::with_capacity(width.max(height));
     let mut out = Vec::with_capacity(width.max(height));
+    // Envelope workspace is shared by all rows and columns of this glyph.
+    // Each transform overwrites its active prefix; no per-line allocation is needed.
+    let mut vertices = vec![0usize; width.max(height)];
+    let mut bounds = vec![0.0f32; width.max(height) + 1];
     for x in 0..width {
         line.clear();
         line.extend((0..height).map(|y| grid[y * width + x]));
-        distance_transform_1d(&line, step_y, &mut out);
+        distance_transform_1d(&line, step_y, &mut out, &mut vertices, &mut bounds);
         for (y, distance) in out.iter().enumerate() {
             grid[y * width + x] = *distance;
         }
@@ -154,7 +158,7 @@ fn squared_distances(
     for row in grid.chunks_exact_mut(width) {
         line.clear();
         line.extend_from_slice(row);
-        distance_transform_1d(&line, step_x, &mut out);
+        distance_transform_1d(&line, step_x, &mut out, &mut vertices, &mut bounds);
         row.copy_from_slice(&out);
     }
     grid
@@ -163,7 +167,13 @@ fn squared_distances(
 /// Felzenszwalb & Huttenlocher の距離変換（放物線の下側包絡線）。
 ///
 /// `min_q (step (p - q))^2 + f(q)` を、`f / step^2` の変換結果に `step^2` を掛けて求める。
-fn distance_transform_1d(values: &[f32], step: f32, out: &mut Vec<f32>) {
+fn distance_transform_1d(
+    values: &[f32],
+    step: f32,
+    out: &mut Vec<f32>,
+    vertices: &mut [usize],
+    bounds: &mut [f32],
+) {
     let n = values.len();
     out.clear();
     if n == 0 {
@@ -171,12 +181,11 @@ fn distance_transform_1d(values: &[f32], step: f32, out: &mut Vec<f32>) {
     }
     let step_squared = step * step;
     let f = |q: usize| values[q] / step_squared;
-    let mut vertices = vec![0usize; n];
-    let mut bounds = vec![0.0f32; n + 1];
     let intersection = |q: usize, v: usize| {
         ((f(q) + (q * q) as f32) - (f(v) + (v * v) as f32)) / (2.0 * (q as f32 - v as f32))
     };
     let mut k = 0;
+    vertices[0] = 0;
     bounds[0] = f32::NEG_INFINITY;
     bounds[1] = f32::INFINITY;
     for q in 1..n {
@@ -204,6 +213,96 @@ fn distance_transform_1d(values: &[f32], step: f32, out: &mut Vec<f32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reused_distance_workspace_matches_nearest_pixel_distances() {
+        for (width, height) in [(1, 1), (1, 17), (17, 1), (3, 11), (19, 4), (12, 12)] {
+            for seed in 0..8 {
+                let mut inside: Vec<_> = (0..width * height)
+                    .map(|i| ((i % width) * 7 + (i / width) * 11 + seed) % 13 == 0)
+                    .collect();
+                inside[seed % (width * height)] = true;
+                for (step_x, step_y) in [(1.0, 1.0), (0.5, 2.0), (2.5, 0.25)] {
+                    let actual = squared_distances(&inside, width, height, step_x, step_y);
+                    for (i, distance) in actual.iter().enumerate() {
+                        let expected = inside
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, set)| **set)
+                            .map(|(j, _)| {
+                                let dx = ((i % width) as f32 - (j % width) as f32) * step_x;
+                                let dy = ((i / width) as f32 - (j / width) as f32) * step_y;
+                                dx * dx + dy * dy
+                            })
+                            .fold(f32::INFINITY, f32::min);
+                        assert!(
+                            (distance - expected).abs() < 1e-3,
+                            "{width}x{height}, seed={seed}, steps={step_x}/{step_y}, pixel={i}: {distance} != {expected}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// CPU rasterization only, excluding font loading, atlas upload and hashing.
+    /// cargo test -p bmz-render --release profile_styled_fallback -- --ignored --nocapture
+    #[test]
+    #[ignore = "release CPU performance probe"]
+    fn profile_styled_fallback_rasterization() {
+        assert!(!std::hint::black_box(cfg!(debug_assertions)), "run with --release");
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/fonts/bmz-test-symbols.ttf");
+        let face = TextFace::from_vec("symbols", std::fs::read(path).unwrap(), 0).unwrap();
+        let style = BitmapFallbackStyle {
+            fill_top: 0,
+            fill_rows: vec![[240, 220, 180]; 16],
+            outline: Some(crate::bitmap_font::BitmapFallbackOutline {
+                width: 2.0,
+                color: [20, 30, 40],
+            }),
+        };
+        let iterations = std::env::var("BMZ_TEXT_PROFILE_ITERATIONS")
+            .ok()
+            .map(|v| v.parse::<usize>().unwrap())
+            .unwrap_or(200);
+        assert!((1..=100_000).contains(&iterations));
+        for size in [24.0, 72.0, 192.0] {
+            let request = StyledFallbackGlyph {
+                set_id: &Arc::from("bitmap"),
+                face_index: 0,
+                face: &face,
+                glyph: face.font().glyph_id('✡'),
+                scale: PxScale::from(size),
+                font_scale: PxScale::from(size / 16.0),
+                baseline: 12.0,
+                style: &style,
+            };
+            let mut total = std::time::Duration::ZERO;
+            let mut last = None;
+            for i in 0..iterations + 20 {
+                let start = std::time::Instant::now();
+                let raster =
+                    std::hint::black_box(rasterize_styled_fallback_glyph(&request, 2046).unwrap());
+                let elapsed = start.elapsed();
+                if i >= 20 {
+                    total += elapsed;
+                }
+                last = Some(raster);
+            }
+            let raster = last.unwrap();
+            let mut hash = 0xcbf2_9ce4_8422_2325u64;
+            for byte in &raster.pixels {
+                hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3);
+            }
+            println!(
+                "{}",
+                serde_json::json!({"size":size,"iterations":iterations,
+                "mean_ns":total.as_nanos() as f64 / iterations as f64,
+                "width":raster.width,"height":raster.height,"pixel_hash":format!("{hash:016x}")})
+            );
+        }
+    }
 
     #[test]
     fn distance_transform_scales_each_axis() {

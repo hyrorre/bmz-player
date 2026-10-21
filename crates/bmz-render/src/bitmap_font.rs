@@ -408,8 +408,8 @@ mod tests {
 
     #[test]
     fn bitmap_font_invalid_style_samples_do_not_prevent_loading() {
-        let root = temp_dir();
-        std::fs::create_dir_all(&root).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
         image::RgbaImage::from_pixel(4, 4, image::Rgba([255; 4]))
             .save(root.join("page.png"))
             .unwrap();
@@ -425,7 +425,6 @@ mod tests {
         let font = load_bitmap_font(&path).unwrap();
         assert_eq!(font.glyphs[&'A'].yoffset, i32::MAX);
         assert!(font.fallback_style.is_none());
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
