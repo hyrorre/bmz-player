@@ -117,7 +117,8 @@ fn skin_image_texture_region_with_elapsed(
             })
             .unwrap_or(0);
         index.clamp(0, i64::from(frame_count - 1)) as i32
-    } else if image.ref_id != 0 || image.act.is_some() {
+    } else if image.ref_id != 0 || image.act.is_some_and(|id| lua_act_callback_id(id).is_none()) {
+        // A Lua `act` only handles clicks; it does not select the image row.
         let row = state
             .and_then(|s| {
                 if image.ref_id != 0 {

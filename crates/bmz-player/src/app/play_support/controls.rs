@@ -171,7 +171,7 @@ pub(in crate::app) fn skin_logical_input_snapshot_from_pressed_controls(
     }
     // Controller buttons have no libGDX keycode and are left out.
     let keyboard = bmz_skin::lua_keyboard_state(pressed_controls.iter().map(String::as_str));
-    SkinLogicalInputSnapshot { held, keyboard }
+    SkinLogicalInputSnapshot { held, keyboard, ..Default::default() }
 }
 
 pub(in crate::app) fn apply_skin_logical_input_to_scene(

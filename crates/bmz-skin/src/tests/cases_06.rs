@@ -1266,6 +1266,39 @@ fn lua_to_json_rejects_runtime_draw_callbacks() {
     assert!(error.to_string().contains("$.destination[1].draw"));
     assert!(!output.exists());
 }
+
+#[test]
+fn lua_to_json_drops_act_functions_with_a_warning() {
+    let root = unique_test_dir("bmz-skin-act-json-convert");
+    fs::create_dir_all(&root).unwrap();
+    let input = root.join("skin.luaskin");
+    let output = root.join("skin.json");
+    fs::write(
+        &input,
+        r#"
+            local open = false
+            return {
+                image = {
+                    { id = "fixed", src = 0, x = 0, y = 0, w = 1, h = 1, act = 15 },
+                    { id = "toggle", src = 0, x = 0, y = 0, w = 1, h = 1,
+                        act = function() open = not open end },
+                }
+            }
+            "#,
+    )
+    .unwrap();
+    let warnings =
+        convert_lua_skin_to_json_file(&input, &output, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&output).unwrap()).unwrap();
+    assert_eq!(json["image"][0]["act"], serde_json::json!(15));
+    assert!(json["image"][1].get("act").is_none());
+    assert!(
+        warnings.iter().any(|warning| warning.message.contains("$.image[2].act")),
+        "{:?}",
+        warnings
+    );
+}
 #[test]
 fn table_text_callbacks_preserve_content_in_auto_and_compat() {
     for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {

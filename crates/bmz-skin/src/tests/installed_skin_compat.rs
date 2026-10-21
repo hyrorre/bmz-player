@@ -301,13 +301,19 @@ fn evaluate_runtime(
         let state = CompatProbeState { frame };
         runtime.begin_frame();
         let values = runtime.advance_custom_timers(&state);
-        timers.push(format!("{values:?}"));
+        // Custom events run after the timers each frame, as in the app.
+        runtime.advance_custom_events(&state);
+        let effects = runtime.take_effects();
+        timers.push(format!("{values:?} effects={effects:?}"));
         for (callback_id, (path, outputs)) in results.iter_mut().enumerate() {
             if runtime.callback_path(callback_id) != Some(path.as_str()) {
                 outputs.push("unregistered".to_string());
                 continue;
             }
-            let output = if path.ends_with(".draw") {
+            let output = if path.ends_with(".act") {
+                // Click handlers run only when clicked.
+                "act".to_string()
+            } else if path.ends_with(".draw") {
                 runtime.evaluate_draw(callback_id, &state).to_string()
             } else if path.ends_with(".timer") {
                 "timer".to_string()
@@ -365,6 +371,16 @@ fn canonical_generated_ids(value: JsonValue, callback_paths: &[String]) -> JsonV
                     }
                 }
                 JsonValue::String(text)
+            }
+            JsonValue::Number(number)
+                if key == Some("act")
+                    && let Some(path) = number
+                        .as_i64()
+                        .and_then(|id| i32::try_from(id).ok())
+                        .and_then(bmz_skin_document::lua_act_callback_id)
+                        .and_then(|id| callbacks.get(id)) =>
+            {
+                JsonValue::String(format!("lua_act:{path}"))
             }
             JsonValue::Number(number)
                 if matches!(key, Some("timer" | "id"))

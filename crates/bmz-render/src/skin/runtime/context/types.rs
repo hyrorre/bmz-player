@@ -11,6 +11,8 @@ pub trait SkinLuaDrawRuntime: std::fmt::Debug + Send + Sync {
         false
     }
 
+    /// Once per frame before drawing: run the queued `act`s, then update the
+    /// custom timers and `customEvents`. Returns the custom timer values.
     fn advance_custom_timers(
         &self,
         _state: &SkinDrawState,
@@ -18,6 +20,17 @@ pub trait SkinLuaDrawRuntime: std::fmt::Debug + Send + Sync {
         _text_values: &BTreeMap<i32, String>,
     ) -> BTreeMap<i32, Option<i64>> {
         BTreeMap::new()
+    }
+
+    /// Queue a clicked Lua `act` (runtime callback ID). It runs at the start of
+    /// the next frame of this skin, before custom timers, events and drawing.
+    fn queue_act(&self, _callback_id: usize, _arg1: i32, _arg2: i32) -> bool {
+        false
+    }
+
+    /// Effects requested by `act` / event actions since the previous call.
+    fn take_effects(&self) -> Vec<SkinLuaEffect> {
+        Vec::new()
     }
 
     /// Run once, synchronously, with a read-only state shared by the enclosed

@@ -105,7 +105,7 @@ impl WinitApp {
                     self.apply_result_slider_hit(hit);
                     return;
                 }
-                self.handle_result_skin_click(x, y);
+                self.handle_result_skin_click(button, x, y);
             }
             return;
         }
@@ -181,16 +181,27 @@ impl WinitApp {
         self.handle_select_skin_click(hit, button, x, y);
     }
 
-    pub(super) fn handle_result_skin_click(&mut self, x: f32, y: f32) {
+    pub(super) fn handle_result_skin_click(&mut self, button: MouseButton, x: f32, y: f32) {
         let AppSceneSnapshot::Result(snapshot) = self.scene_snapshot() else {
             return;
         };
         let Some(hit) = self.renderer.result_skin_click_hit(&snapshot, x, y) else {
             return;
         };
-        let SkinClickTarget::Event { event_id, .. } = hit.target else {
+        let SkinClickTarget::Event { event_id, click } = hit.target else {
             return;
         };
+        if bmz_render::skin::lua_act_callback_id(event_id).is_some() {
+            if let Some(arg) = select_click_event_arg(click, button, hit.rect, x, y) {
+                self.renderer.queue_skin_lua_act(SkinRuntimeScene::Result, event_id, arg, 0);
+            }
+            return;
+        }
+        self.execute_result_skin_event(event_id);
+    }
+
+    /// A Result skin event from a click or a Lua custom event action.
+    pub(super) fn execute_result_skin_event(&mut self, event_id: i32) {
         match result_skin_click_action(event_id) {
             Some(ResultSkinClickAction::SetPanel(panel)) => {
                 self.set_result_panel(panel);

@@ -19,6 +19,8 @@ pub(super) enum LuaRuntimeCallbackKind {
     Draw,
     Value,
     Timer(i32),
+    /// Clicked `act` function, called with the event arguments.
+    Act,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +88,8 @@ pub struct LuaSkinRuntime {
     pub(super) custom_timers: Arc<Mutex<LuaCustomTimers>>,
     pub(super) custom_timer_callbacks: Vec<(i32, usize)>,
     pub(super) result_panel_bindings: Arc<LuaResultPanelBindings>,
+    pub(super) events: Arc<LuaRuntimeEvents>,
+    pub(super) pending_event_frame_start: bool,
 }
 
 /// The same named panel state recognized by the declarative draw/action bridge.
@@ -182,6 +186,91 @@ impl LuaSkinRuntime {
     pub fn begin_frame(&mut self) {
         self.pending_frame_start = true;
         self.pending_timer_frame_start = true;
+        self.pending_event_frame_start = true;
+    }
+
+    /// Run a clicked Lua `act` with its event arguments (beatoraja `loadEvent`).
+    /// Returns false when the callback is not an `act`.
+    pub fn execute_act(
+        &mut self,
+        callback_id: usize,
+        arg1: i32,
+        arg2: i32,
+        state: &dyn LuaMainState,
+    ) -> bool {
+        let Some(callback) = self.callbacks.get(callback_id) else { return false };
+        if callback.kind != LuaRuntimeCallbackKind::Act {
+            return false;
+        }
+        let Some(function) = callback.function.clone() else {
+            self.log_callback_failure_once(callback_id, "Lua act was not registered");
+            return true;
+        };
+        let callback = LuaEventCallback { path: callback.path.clone(), function };
+        self.begin_runtime_callback();
+        let events = self.events.clone();
+        let scope = self.state_scope();
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            scope.with_state(state, || events.call(&callback, arg1, arg2))
+        }));
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => self.log_callback_failure_once(callback_id, &error.to_string()),
+            Err(_) => self.log_callback_failure_once(callback_id, "panic while executing Lua act"),
+        }
+        true
+    }
+
+    /// Update observed `customEvents` once per frame, after the custom timers
+    /// (beatoraja `Skin.updateCustomObjects`). Events run in ID order.
+    pub fn advance_custom_events(&mut self, state: &dyn LuaMainState) {
+        if !std::mem::take(&mut self.pending_event_frame_start) {
+            return;
+        }
+        for id in self.events.observed_ids() {
+            let now_us = state.time_us_i64();
+            let Some(condition) = self.events.due_condition(id, now_us) else { continue };
+            self.begin_runtime_callback();
+            let events = self.events.clone();
+            let scope = self.state_scope();
+            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                scope.with_state(state, || {
+                    let fire = match &condition {
+                        LuaCustomEventCondition::Option(id) => {
+                            state.option(id.saturating_abs()) ^ (*id < 0)
+                        }
+                        LuaCustomEventCondition::Function(callback) => {
+                            match callback.function.call::<Value>(()) {
+                                Ok(value) => !matches!(value, Value::Nil | Value::Boolean(false)),
+                                Err(error) => {
+                                    events.log_failure_once(&callback.path, &error.to_string());
+                                    false
+                                }
+                            }
+                        }
+                    };
+                    if fire {
+                        events.execute(id, 0, 0, now_us);
+                    }
+                })
+            }));
+            if !matches!(result, Ok(Ok(()))) {
+                self.events.log_failure_once(
+                    &format!("$.customEvents[id={id}]"),
+                    "failed to bind main_state for the custom event",
+                );
+            }
+        }
+    }
+
+    /// Effects requested by `act` / event actions since the previous call.
+    pub fn take_effects(&mut self) -> Vec<SkinLuaEffect> {
+        self.events.take_effects()
+    }
+
+    /// Whether this skin has `customEvents` that are updated every frame.
+    pub fn has_custom_events(&self) -> bool {
+        self.events.has_observed_events()
     }
 
     /// Update active timers once per frame, including timers with no visible destination.
@@ -241,7 +330,7 @@ impl LuaSkinRuntime {
     /// Number of callback failures that produced a diagnostic. Repeated failures
     /// of the same callback remain log-once and do not increase this value.
     pub fn failure_log_count(&self) -> usize {
-        self.failure_log_count
+        self.failure_log_count + self.events.failure_count()
     }
 
     pub fn evaluate_draw(&mut self, callback_id: usize, state: &dyn LuaMainState) -> bool {
@@ -412,6 +501,7 @@ impl LuaSkinRuntime {
             dispatch: self.main_state_dispatch.clone(),
             custom_timers: self.custom_timers.clone(),
             result_panel_bindings: self.result_panel_bindings.clone(),
+            events: self.events.clone(),
         }
     }
 
@@ -437,6 +527,7 @@ pub struct LuaRuntimeStateScope {
     dispatch: Table,
     custom_timers: Arc<Mutex<LuaCustomTimers>>,
     result_panel_bindings: Arc<LuaResultPanelBindings>,
+    events: Arc<LuaRuntimeEvents>,
 }
 
 impl LuaRuntimeStateScope {
@@ -452,7 +543,7 @@ impl LuaRuntimeStateScope {
         let _panel = self.result_panel_bindings.bind(&self.lua, state.result_panel());
         self.lua.scope(|scope| {
             let dispatch = scope.create_function(
-                |lua, (operation, argument, timer_value): (u8, Value, Option<i64>)| {
+                |lua, (operation, argument, second, third): (u8, Value, Value, Value)| {
                     let id = || <i32 as mlua::FromLua>::from_lua(argument.clone(), lua);
                     Ok(match operation {
                         0 => {
@@ -507,6 +598,67 @@ impl LuaRuntimeStateScope {
                         22 => Value::Integer(state.number(121)),
                         23 => Value::Number(state.gauge()),
                         24 => Value::Boolean(state.key_pressed(lua_key_code(&argument))),
+                        25 => {
+                            // beatoraja runs custom events only; others are a no-op.
+                            self.events.execute(
+                                lua_to_int(&argument),
+                                lua_to_int(&second),
+                                lua_to_int(&third),
+                                state.time_us_i64(),
+                            );
+                            Value::Boolean(true)
+                        }
+                        26 | 27 => {
+                            // Only `act` / event actions reach the app, so a draw
+                            // callback never replays a sound every frame.
+                            if self.events.in_event()
+                                && let Some((path, volume)) =
+                                    lua_audio_path_and_volume(argument, second)
+                                && let Some(path) = self.events.resolve_audio_path(&path)
+                            {
+                                let action = if operation == 26 {
+                                    SkinAudioActionKind::Play
+                                } else {
+                                    SkinAudioActionKind::Loop
+                                };
+                                self.events.push_effect(SkinLuaEffect::Audio(SkinAudioActionDef {
+                                    action,
+                                    path,
+                                    volume: volume as f32,
+                                }));
+                            }
+                            Value::Boolean(true)
+                        }
+                        28 => {
+                            if self.events.in_event()
+                                && let Value::String(path) = &argument
+                                && let Some(path) =
+                                    self.events.resolve_audio_path(&path.to_string_lossy())
+                            {
+                                self.events.push_effect(SkinLuaEffect::Audio(SkinAudioActionDef {
+                                    action: SkinAudioActionKind::Stop,
+                                    path,
+                                    volume: 1.0,
+                                }));
+                            }
+                            Value::Boolean(true)
+                        }
+                        29..=31 => {
+                            let channel = match operation {
+                                29 => SkinVolumeChannel::System,
+                                30 => SkinVolumeChannel::Key,
+                                _ => SkinVolumeChannel::Bgm,
+                            };
+                            self.events.push_effect(SkinLuaEffect::SetVolume {
+                                channel,
+                                value: lua_to_float(&argument) as f32,
+                            });
+                            Value::Boolean(true)
+                        }
+                        // beatoraja reads the live audio config.
+                        32..=34 => Value::Number(
+                            state.number(57 + i32::from(operation) - 32) as f64 / 100.0,
+                        ),
                         15 => {
                             let id = id()?;
                             if !(10_000..=19_999).contains(&id) {
@@ -514,6 +666,8 @@ impl LuaRuntimeStateScope {
                                     "only custom timers are writable",
                                 ));
                             }
+                            let timer_value =
+                                <Option<i64> as mlua::FromLua>::from_lua(second, lua)?;
                             let value = timer_value.filter(|value| {
                                 *value != i64::from(TIMER_OFF_VALUE) && *value != i64::MIN
                             });
@@ -602,6 +756,13 @@ pub(super) fn install_runtime_main_state_dispatch(lua: &Lua) -> mlua::Result<Tab
         (22, "exscore_rival"),
         (23, "gauge"),
         (24, "key_pressed"),
+        (28, "audio_stop"),
+        (29, "set_volume_sys"),
+        (30, "set_volume_key"),
+        (31, "set_volume_bg"),
+        (32, "volume_sys"),
+        (33, "volume_key"),
+        (34, "volume_bg"),
     ]) {
         let original: Function =
             main_state.get(if field == "float" { "float_number" } else { field })?;
@@ -618,6 +779,30 @@ pub(super) fn install_runtime_main_state_dispatch(lua: &Lua) -> mlua::Result<Tab
         lua.create_function(move |_, (id, value): (i32, i64)| {
             match timer_dispatch.raw_get::<Value>(1)? {
                 Value::Function(dispatch) => dispatch.call::<Value>((15_u8, id, value)),
+                _ => Ok(Value::Boolean(true)),
+            }
+        })?,
+    )?;
+    for (operation, field) in [(26_u8, "audio_play"), (27, "audio_loop")] {
+        let original: Function = main_state.get(field)?;
+        let audio_dispatch = dispatch_slot.clone();
+        main_state.set(
+            field,
+            lua.create_function(move |_, (path, volume): (Value, Value)| {
+                match audio_dispatch.raw_get::<Value>(1)? {
+                    Value::Function(dispatch) => dispatch.call::<Value>((operation, path, volume)),
+                    _ => original.call::<Value>((path, volume)),
+                }
+            })?,
+        )?;
+    }
+    let event_dispatch = dispatch_slot.clone();
+    main_state.set(
+        "event_exec",
+        lua.create_function(move |_, (id, arg1, arg2): (Value, Value, Value)| {
+            match event_dispatch.raw_get::<Value>(1)? {
+                Value::Function(dispatch) => dispatch.call::<Value>((25_u8, id, arg1, arg2)),
+                // Outside a callback no custom event can run, as during skin load.
                 _ => Ok(Value::Boolean(true)),
             }
         })?,

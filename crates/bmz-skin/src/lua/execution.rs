@@ -158,6 +158,7 @@ pub(super) fn execute_lua_skin(
         actions
     };
     instruction_budget.begin_inference();
+    let root_value = value.clone();
     let mut json = lua_value_to_json(
         &lua,
         value,
@@ -288,7 +289,13 @@ pub(super) fn execute_lua_skin(
         .map_err(|_| anyhow!("main_state probe lock poisoned"))?
         .runtime_callbacks
         .clone();
-    let lua_runtime = if runtime_callbacks.is_empty() {
+    // Events converted to declarative skin audio keep that path; the others
+    // run in the runtime VM every frame.
+    let declarative_custom_event_ids = declarative_custom_event_ids(&json);
+    let runtime_custom_events =
+        lua_root_has_runtime_custom_events(&root_value, &declarative_custom_event_ids);
+    let needs_runtime = !runtime_callbacks.is_empty() || runtime_custom_events;
+    let lua_runtime = if !needs_runtime {
         None
     } else {
         match build_lua_skin_runtime(LuaSkinRuntimeRequest {
@@ -304,6 +311,7 @@ pub(super) fn execute_lua_skin(
             runtime_state,
             virtual_io_files,
             runtime_callbacks: &runtime_callbacks,
+            declarative_custom_event_ids: &declarative_custom_event_ids,
         }) {
             Ok(runtime) => Some(runtime),
             Err(error) => {
@@ -319,7 +327,7 @@ pub(super) fn execute_lua_skin(
         dependencies.lock().map_err(|_| anyhow!("lua dependency tracker lock poisoned"))?.clone();
     // A cached document cannot safely clone its sidecar VM. Keeping runtime
     // callback documents out of the document cache preserves registry/VM IDs.
-    dependencies.opaque |= !runtime_callbacks.is_empty();
+    dependencies.opaque |= needs_runtime;
     Ok(ExecutedLuaSkin {
         value: json,
         warnings,
@@ -343,6 +351,7 @@ pub(super) struct LuaSkinRuntimeRequest<'a> {
     pub(super) runtime_state: &'a LuaLoadRuntimeState,
     pub(super) virtual_io_files: &'a BTreeMap<String, String>,
     pub(super) runtime_callbacks: &'a [LuaRuntimeCallbackSpec],
+    pub(super) declarative_custom_event_ids: &'a BTreeSet<i32>,
 }
 
 pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Result<LuaSkinRuntime> {
@@ -359,6 +368,7 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
         runtime_state,
         virtual_io_files,
         runtime_callbacks,
+        declarative_custom_event_ids,
     } = request;
     let lua = Lua::new();
     let instruction_budget = install_instruction_limit(&lua);
@@ -459,6 +469,9 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
         }
     }
     let result_panel_bindings = Arc::new(LuaResultPanelBindings::new(&lua, &callbacks));
+    let custom_events = lua_custom_events_from_root(&value, declarative_custom_event_ids)
+        .with_context(|| format!("failed to read Lua customEvents: {}", input.display()))?;
+    let events = Arc::new(LuaRuntimeEvents::new(input, Some(path_context.clone()), custom_events));
     Ok(LuaSkinRuntime {
         lua,
         main_state_dispatch,
@@ -472,7 +485,28 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
         custom_timers: Arc::new(Mutex::new(timers)),
         custom_timer_callbacks,
         result_panel_bindings,
+        events,
+        pending_event_frame_start: true,
     })
+}
+
+/// IDs of `customEvents` converted to declarative skin audio (an inferred
+/// timer condition with audio actions).
+fn declarative_custom_event_ids(json: &JsonValue) -> BTreeSet<i32> {
+    json.get("customEvents")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|event| {
+            event.get("timer").and_then(JsonValue::as_i64).is_some_and(|timer| timer != 0)
+                && event
+                    .get("audioActions")
+                    .and_then(JsonValue::as_array)
+                    .is_some_and(|actions| !actions.is_empty())
+        })
+        .filter_map(|event| event.get("id").and_then(JsonValue::as_i64))
+        .filter_map(|id| i32::try_from(id).ok())
+        .collect()
 }
 
 pub(super) fn lua_value_at_field_path(mut value: Value, path: &str) -> Result<Value> {

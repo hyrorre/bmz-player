@@ -129,3 +129,26 @@ impl ResultTimingDistribution {
         Some((average_ms, variance.sqrt()))
     }
 }
+
+/// Side effect requested by Lua while running an `act` or a `customEvents` action.
+///
+/// The Lua runtime (`bmz-skin`) produces these and the app applies them after the
+/// frame, so the skin VM never touches audio devices or settings directly.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SkinLuaEffect {
+    /// A `customEvents` action given as a built-in event ID instead of a function.
+    Event { id: i32, arg1: i32, arg2: i32 },
+    /// `main_state.audio_play` / `audio_loop` / `audio_stop`. The path is relative
+    /// to the skin entry directory, like declarative skin audio.
+    Audio(crate::SkinAudioActionDef),
+    /// `main_state.set_volume_sys` / `set_volume_key` / `set_volume_bg`.
+    SetVolume { channel: SkinVolumeChannel, value: f32 },
+}
+
+/// beatoraja's three configurable volumes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkinVolumeChannel {
+    System,
+    Key,
+    Bgm,
+}

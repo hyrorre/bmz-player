@@ -80,13 +80,25 @@ pub fn convert_lua_skin_to_json_with_path_context(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
 ) -> Result<ConvertReport> {
-    let ExecutedLuaSkin { value: json, warnings, runtime_callbacks, .. } = execute_lua_skin(
-        path_context,
-        options,
-        files,
-        &LuaLoadRuntimeState::default(),
-        &BTreeMap::new(),
-    )?;
+    let ExecutedLuaSkin { value: mut json, mut warnings, runtime_callbacks, .. } =
+        execute_lua_skin(
+            path_context,
+            options,
+            files,
+            &LuaLoadRuntimeState::default(),
+            &BTreeMap::new(),
+        )?;
+    // A JSON skin cannot run Lua, so clicked `act` functions are dropped as
+    // they were before the runtime VM ran them.
+    let (acts, runtime_callbacks): (Vec<_>, Vec<_>) = runtime_callbacks
+        .into_iter()
+        .partition(|callback| callback.kind == LuaRuntimeCallbackKind::Act);
+    if !acts.is_empty() {
+        remove_lua_act_ids(&mut json);
+        warnings.extend(acts.iter().map(|act| {
+            format!("dropping Lua act function at {}; JSON skins cannot run Lua", act.path)
+        }));
+    }
     if !runtime_callbacks.is_empty() {
         bail!(
             "lua-to-json cannot serialize runtime callbacks: {}",
@@ -105,6 +117,24 @@ pub fn convert_lua_skin_to_json_with_path_context(
         .with_context(|| format!("failed to write json skin: {}", output.display()))?;
 
     Ok(ConvertReport { warnings })
+}
+
+fn remove_lua_act_ids(value: &mut JsonValue) {
+    match value {
+        JsonValue::Object(object) => {
+            if object
+                .get("act")
+                .and_then(JsonValue::as_i64)
+                .and_then(|id| i32::try_from(id).ok())
+                .is_some_and(|id| bmz_skin_document::lua_act_callback_id(id).is_some())
+            {
+                object.remove("act");
+            }
+            object.values_mut().for_each(remove_lua_act_ids);
+        }
+        JsonValue::Array(items) => items.iter_mut().for_each(remove_lua_act_ids),
+        _ => {}
+    }
 }
 
 pub(super) fn execute_lua_skin_header(

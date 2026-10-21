@@ -1,6 +1,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use bmz_render::skin::{SKIN_TEXT_BMZ_CHART_MISS_TEXT, SKIN_TEXT_BMZ_CHART_TEXT};
+use bmz_render::skin::{SKIN_TEXT_BMZ_CHART_MISS_TEXT, SKIN_TEXT_BMZ_CHART_TEXT, SkinLuaEffect};
+
+/// Clicked `act`s waiting for the skin's next frame; more are dropped.
+const LUA_PENDING_ACT_LIMIT: usize = 64;
+/// Effects waiting for the app; the oldest are kept when it falls behind.
+const LUA_PENDING_EFFECT_LIMIT: usize = 256;
 
 use super::*;
 
@@ -56,6 +61,9 @@ pub(super) struct LuaSkinDrawRuntimeAdapter {
     bound_state: Mutex<Option<RenderLuaStateKey>>,
     /// Set once a callback reads BMS chart text (20100 / 20103) via `main_state.text`.
     chart_text_read: AtomicBool,
+    /// Clicked `act` callbacks and their arguments, run on the next frame.
+    pending_acts: Mutex<Vec<(usize, i32, i32)>>,
+    effects: Mutex<Vec<SkinLuaEffect>>,
 }
 
 impl LuaSkinDrawRuntimeAdapter {
@@ -64,6 +72,8 @@ impl LuaSkinDrawRuntimeAdapter {
             runtime: Mutex::new(Some(runtime)),
             bound_state: Mutex::new(None),
             chart_text_read: AtomicBool::new(false),
+            pending_acts: Mutex::new(Vec::new()),
+            effects: Mutex::new(Vec::new()),
         }
     }
 
@@ -227,11 +237,40 @@ impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
             text_values,
             chart_text_read: &self.chart_text_read,
         };
+        // beatoraja handles clicks before `Skin.updateCustomObjects`, which
+        // updates the custom timers and then the custom events.
+        let acts = self.pending_acts.lock().map(|mut acts| std::mem::take(&mut *acts));
+        for (callback_id, arg1, arg2) in acts.unwrap_or_default() {
+            runtime.execute_act(callback_id, arg1, arg2, &provider);
+        }
+        runtime.advance_custom_timers(&provider);
+        runtime.advance_custom_events(&provider);
+        // Re-read the timers: act and event actions may have written them.
         let result = runtime.advance_custom_timers(&provider);
+        let effects = runtime.take_effects();
         if let Ok(mut slot) = self.runtime.lock() {
             *slot = Some(runtime);
         }
+        if !effects.is_empty()
+            && let Ok(mut pending) = self.effects.lock()
+        {
+            let room = LUA_PENDING_EFFECT_LIMIT.saturating_sub(pending.len());
+            pending.extend(effects.into_iter().take(room));
+        }
         result
+    }
+
+    fn queue_act(&self, callback_id: usize, arg1: i32, arg2: i32) -> bool {
+        let Ok(mut pending) = self.pending_acts.lock() else { return false };
+        if pending.len() >= LUA_PENDING_ACT_LIMIT {
+            return false;
+        }
+        pending.push((callback_id, arg1, arg2));
+        true
+    }
+
+    fn take_effects(&self) -> Vec<SkinLuaEffect> {
+        self.effects.lock().map(|mut effects| std::mem::take(&mut *effects)).unwrap_or_default()
     }
 
     fn with_state(

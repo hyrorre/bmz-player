@@ -188,6 +188,9 @@ pub(super) fn create_main_state_stub(
             Ok(0.0)
         })?,
     )?;
+    // No custom event exists while the skin loads, so beatoraja runs nothing.
+    // The runtime VM replaces this with the event dispatcher.
+    table.set("event_exec", lua.create_function(|_, _: Variadic<Value>| Ok(true))?)?;
     let probe_for_key_pressed = probe.clone();
     table.set(
         "key_pressed",

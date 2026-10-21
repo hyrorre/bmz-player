@@ -25,7 +25,7 @@ use bmz_render::assets::load_static_rgba_image;
 use bmz_render::plan::{
     PLAY_BACKBMP_TEXTURE, Rect, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextureId,
 };
-use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
+use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SkinRuntimeScene, SurfaceSize};
 use bmz_render::scene::{
     AppSceneSnapshot, DailyPlayerStatsSnapshot, PlayerStatsSnapshot, ResultSnapshot,
     SelectChartDistributionSecond, SelectRowSnapshot, SelectSnapshot,
@@ -314,6 +314,7 @@ mod skin_flow_upload;
 #[path = "app/skin_flow/video.rs"]
 mod skin_flow_video;
 mod skin_loading;
+mod skin_lua_effects;
 mod skin_options;
 mod skin_pipeline;
 mod skin_runtime_types;

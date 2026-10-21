@@ -3,6 +3,10 @@ use crate::config::profile_config::SevenToNinePattern;
 
 impl WinitApp {
     pub(super) fn execute_select_skin_event(&mut self, event_id: i32, arg: i32) {
+        // A Lua `act` function runs in the skin's runtime VM on its next frame.
+        if self.renderer.queue_skin_lua_act(SkinRuntimeScene::Select, event_id, arg, 0) {
+            return;
+        }
         if bmz_render::skin::is_detail_options_event(event_id) {
             self.execute_detail_options_event(event_id, arg);
             return;

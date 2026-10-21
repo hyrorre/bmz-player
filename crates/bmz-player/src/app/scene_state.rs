@@ -293,13 +293,14 @@ impl WinitApp {
                 })
             }
         };
-        apply_skin_logical_input_to_scene(
-            &mut scene,
-            skin_logical_input_snapshot_from_pressed_controls(
-                &self.input.pressed_controls,
-                &self.select.select_keys,
-            ),
+        let mut skin_input = skin_logical_input_snapshot_from_pressed_controls(
+            &self.input.pressed_controls,
+            &self.select.select_keys,
         );
+        let mix = &self.boot.profile_config.audio_mix;
+        skin_input.audio_volumes = [mix.master_volume, mix.key_volume, mix.bgm_volume]
+            .map(crate::config::play::volume_unit_to_f32);
+        apply_skin_logical_input_to_scene(&mut scene, skin_input);
         self.apply_operating_time_to_scene(&mut scene);
         self.apply_skin_runtime_info_to_scene(&mut scene);
         let overlay = self.build_overlay_snapshot();

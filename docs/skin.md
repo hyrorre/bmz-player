@@ -701,8 +701,8 @@ Luaの`main_state.timer(id)`はシーン基準の開始時刻（マイクロ秒�
 既存のBMZの`timer_off_value`（`-2147483648`）は変更しません。
 
 `timer_util.timer_function` / `timer_observe_boolean` / `new_passive_timer`をcustom timer内で
-使う場合も実行時の時計と状態を参照します。destinationへ直接指定した任意timer functionや
-`customEvents`の汎用runtime実行はこの対応には含まれません。
+使う場合も実行時の時計と状態を参照します。`customEvents`の`condition` / `action`も同じです。
+destinationへ直接指定した任意timer functionはこの対応には含まれません。
 
 Luaファイル全体をフレームごとに再ロードするのではなく、ロード時に作成したclosureと
 module stateを保持します。callbackからは現在フレームの`main_state`を参照できます。
@@ -716,8 +716,8 @@ Resultのパネル切替は、推論済みの`result_panel(...)`とLua runtime c
 （0=GRAPH、1=IR）を評価中に同期します。GRAPH/IRを表示しない状態では後者に2を渡します。
 `auto` / `compat`の両方で、配置設定や別のローカル変数を含む複合条件を維持します。
 Lua評価が入れ子になった場合や例外時には元のパネル値を復元し、他のclosure stateは
-リセットしません。これは既存パネル切替の互換処理であり、任意の`act` / `customEvents`
-を実行する汎用イベントruntimeではありません。
+リセットしません。これは既存パネル切替の互換処理です。それ以外の`act` / `customEvents`は
+[Lua actとcustomEventsの実行](#lua-actとcustomeventsの実行)で扱います。
 
 Lua sandboxはロード時の互換APIとして`os.clock` / `os.date` / `os.time` / `os.difftime`を提供します。
 `os.time`の日付tableは標準Luaと同様にローカル時刻として正規化し、正規化後の値を
@@ -737,6 +737,34 @@ skin catalogのJSON候補はinclude・条件・数値正規化後に数値の`ty
 候補へ混入することを防ぎます。Selectの曲行テキストIDは区切り文字を無視して`bartext`を
 照合し、`bar_text` / `folderbar_text`形式もbar textへ割り当てます。Lua skinのslider / graph
 で使う`isRefNum`はJSONのbooleanに加えて互換表現の整数`0` / `1`も受理します。
+
+### Lua actとcustomEventsの実行
+
+beatorajaの`SkinLuaAccessor.loadEvent`・`CustomEvent`・`MainState.executeEvent`と同じく、
+functionの`act`と`customEvents`を永続VMで実行します。`auto` / `compat`で共通です。
+
+- 定数の`act`と、既存の推論で組み込みイベントへ置き換えられる`act`（固定IDを返すfunction、
+  Resultパネル切替等）は組み込みイベントのままです。それ以外のfunctionはクリック時に
+  `act(arg1, arg2)`として呼びます。`arg1`は`click`に従う方向で組み込みイベントと同じ値、
+  `arg2`は0です。closureとmodule stateは描画callbackと共有します。
+- クリックはそのsceneの次フレームで、custom timer・`customEvents`の更新と描画より先に
+  実行します（beatorajaの入力処理から`Skin.updateCustomObjects`への順）。1フレームに
+  受け付けるクリックは64件までです。現在はSelectとResultのクリックを受け付けます。
+- `customEvents`は1フレーム1回、custom timerの更新後にID順で評価します。`condition`
+  （function、またはoption ID。負のIDは否定）が真で、前回の実行から`minInterval`ミリ秒以上
+  経っていれば`action`を実行します。`condition`の無い定義は`event_exec`からだけ実行します。
+  `action`が数値なら、そのsceneの組み込みイベントとして実行します（Select / Result）。
+- `main_state.event_exec(id, arg1, arg2)`はcustom event `1000..1999`だけを同期実行し、
+  他のIDは無視します。入れ子は16段までです（beatorajaは上限が無くstack overflowになります）。
+- ロード時に宣言的な音声イベント（timer条件と`audioActions`）へ変換できた定義は、従来の
+  宣言的な経路で再生し、毎フレームは評価しません。`event_exec`からは実行します。
+- `act` / `action` / `condition`の例外は定義ごとに1回だけログに出して無視します
+  （beatorajaの`loadEvent`と同じ）。命令数・メモリの上限は描画callbackと同じです。
+- function の`act`や毎フレーム評価する`customEvents`を持つskinは永続VMを使うため、
+  document cacheの対象外です。Lua-to-JSON変換は`act` functionを警告付きで除き、
+  functionの`action` / `condition`は従来どおり出力しません。
+- `act` / `action`内の`audio_play` / `audio_loop` / `audio_stop`と`set_volume_*`は、
+  まだ再生・設定へ反映しません。描画callbackからの`audio_*`は常に無視します。
 
 ### カタログとシステム音セットの走査
 
@@ -782,8 +810,9 @@ beatoraja（`.local/beatoraja`の最新版）とLR2oraja Endless Dream（beatora
 | `exscore_best()` / `exscore_rival()` | number 150 / 121と同じ整数です。ロード時の依存値と推論も同じです |
 | `gauge()` | Play中の現在ゲージです。他のsceneでは0です。ロード時は0で、推論せずruntime callbackで評価します |
 | `gauge_type()` | 現在のゲージ種別です |
-| `volume_sys` / `volume_key` / `volume_bg`、`set_volume_*` | 音量の読み取りです。`set_volume_*`は設定を変えずtrueを返します |
-| `audio_play` / `audio_loop` / `audio_stop` | 宣言的な音声命令へ変換します。音量の省略は1.0です |
+| `volume_sys` / `volume_key` / `volume_bg`、`set_volume_*` | 音量の読み取りです（0.0〜1.0）。runtime callbackでは現在の設定を読みます。`set_volume_*`は設定を変えずtrueを返します |
+| `audio_play` / `audio_loop` / `audio_stop` | ロード時の推論では宣言的な音声命令へ変換します。音量の省略は1.0です |
+| `event_exec(id, arg1, arg2)` | custom event `1000..1999`を実行してtrueを返します。ロード時は実行しません。[Lua actとcustomEventsの実行](#lua-actとcustomeventsの実行)を参照します |
 | `audio_preload` / `audio_dispose` | trueを返します。音声は宣言から読み込むため処理はありません |
 | `numbers` / `timer_is_on` / `timer_is_off` / `timer_elapsed*` / `screen_width` / `screen_height` | beatoraja最新版のAPIです |
 | `key_pressed(key)` | キーボードのキーを押しているかです。`key`はlibGDXのキーコード（数値・数値の文字列）か`Input.Keys`の名前（`"A"`、`"Space"`、`"L-Shift"`、`"Escape"`等。大文字小文字を区別）です。未知の名前・負の値はfalseです。ロード時はfalseで、推論せずruntime callbackで評価します |
@@ -801,8 +830,7 @@ beatoraja（`.local/beatoraja`の最新版）とLR2oraja Endless Dream（beatora
 `timer_util` / `event_util`はbeatorajaの`TimerUtility` / `EventUtility`相当です。
 `new_passive_timer`の`turn_on` / `turn_on_reset` / `turn_off`はtrueを返します。
 `event_observe_timer_off`は、最初の評価でtimerがOFFでも発火しません（beatorajaは発火します）。
-BMZには`customEvents`の汎用runtimeがなく、ロード時の推論が一度きりの音声イベントを
-誤って作らないようにするためです。
+ロード時の推論が一度きりの音声イベントを誤って作らないようにするためです。
 
 LuaJ（Lua 5.2系）との差:
 
@@ -829,7 +857,7 @@ BMZ独自のAPIは`bmz.option` / `bmz.get_option`、runtime VMだけの`main_sta
 （`float_number`の別名）、`total_play_counts_in_session` / `total_play_notes_in_session` /
 `score_date_sec_time`、名前付きプロパティです。
 
-beatoraja最新版の`event_exec`、`file_*`、`http_*`、`open_url`は未対応です。
+beatoraja最新版の`file_*`、`http_*`、`open_url`は未対応です。
 `io`の書き込みは永続化しません。`luajava`の`bindClass` / `newInstance` / `new` /
 `createProxy`は入力のない無害なstubを返し、Javaのオブジェクトやファイルは作りません。
 

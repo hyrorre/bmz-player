@@ -20,7 +20,8 @@ use bmz_skin_document::{
     SKIN_EXPR_GAUGE_AMOUNT_FRACTION, SKIN_EXPR_GAUGE_AMOUNT_INTEGER,
     SKIN_EXPR_GAUGE_PERCENT_FRACTION, SKIN_EXPR_GAUGE_PERCENT_INTEGER,
     SKIN_EXPR_RESULT_TABLE_TITLE, SKIN_EXPR_SELECT_TOTAL_NOTES_RATIO_FRACTION,
-    SKIN_EXPR_SELECT_TOTAL_NOTES_RATIO_INTEGER, SKIN_REF_PLAY_GAUGE_TYPE,
+    SKIN_EXPR_SELECT_TOTAL_NOTES_RATIO_INTEGER, SKIN_REF_PLAY_GAUGE_TYPE, SkinAudioActionDef,
+    SkinAudioActionKind, SkinLuaEffect, SkinVolumeChannel, lua_act_event_id,
     resolve_boolean_property_name, resolve_property_name,
 };
 
@@ -81,6 +82,7 @@ mod loading;
 mod paths;
 mod postprocess;
 mod runtime;
+mod runtime_events;
 
 use config::*;
 use execution::*;
@@ -93,6 +95,7 @@ use paths::*;
 use postprocess::*;
 use runtime::*;
 pub use runtime::{ConvertReport, LuaRuntimeStateScope, LuaSkinRuntime};
+use runtime_events::*;
 
 #[cfg(test)]
 #[path = "lua/tests.rs"]

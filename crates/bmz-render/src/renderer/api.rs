@@ -325,6 +325,35 @@ impl Renderer {
         self.set_play_skin_context(skin_context, false);
     }
 
+    fn skin_context_for(&self, scene: SkinRuntimeScene) -> &SkinContext {
+        match scene {
+            SkinRuntimeScene::Play => &self.play_skin_context,
+            SkinRuntimeScene::Select => &self.select_skin_context,
+            SkinRuntimeScene::Decide => &self.decide_skin_context,
+            SkinRuntimeScene::Result => &self.result_skin_context,
+        }
+    }
+
+    /// Queue a clicked Lua `act` event of the scene's skin. It runs at the start
+    /// of that skin's next frame. False when `event_id` is not a Lua `act`.
+    pub fn queue_skin_lua_act(
+        &self,
+        scene: SkinRuntimeScene,
+        event_id: i32,
+        arg1: i32,
+        arg2: i32,
+    ) -> bool {
+        self.skin_context_for(scene).queue_lua_act(event_id, arg1, arg2)
+    }
+
+    /// Effects requested by the scene skin's Lua `act` / event actions.
+    pub fn take_skin_lua_effects(
+        &self,
+        scene: SkinRuntimeScene,
+    ) -> Vec<bmz_skin_document::SkinLuaEffect> {
+        self.skin_context_for(scene).take_lua_effects()
+    }
+
     /// `preserve_dynamic_timers` が true のとき、プレイ中のスキン差し替え向けに
     /// `timer_observe_boolean` の経過時刻を維持する。
     pub fn set_play_skin_context(
@@ -899,3 +928,12 @@ impl Renderer {
     }
 }
 use super::*;
+
+/// The scene whose skin receives a Lua `act` or provides Lua effects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkinRuntimeScene {
+    Play,
+    Select,
+    Decide,
+    Result,
+}

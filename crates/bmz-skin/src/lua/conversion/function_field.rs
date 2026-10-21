@@ -120,7 +120,26 @@ pub(super) fn handle_function_field(
             }
             Ok(true)
         }
-        "act" => Ok(infer_act_field(lua, function, object, main_state_probe)),
+        "act" => {
+            if infer_act_field(lua, function, object, main_state_probe) {
+                return Ok(true);
+            }
+            // Other act functions run in the runtime VM when clicked, keeping
+            // their closure and module state like beatoraja's `loadEvent`.
+            let field_path = format!("{path}.act");
+            let callback_id = register_runtime_callback(
+                main_state_probe,
+                &field_path,
+                LuaRuntimeCallbackKind::Act,
+            )?;
+            let Some(event_id) = lua_act_event_id(callback_id) else {
+                warnings
+                    .push(format!("skipping Lua act beyond the callback limit at {field_path}"));
+                return Ok(true);
+            };
+            insert_number(object, "act", i64::from(event_id));
+            Ok(true)
+        }
         "action" if path.contains(".customEvents[") => {
             Ok(infer_action_field(lua, function, object, main_state_probe))
         }

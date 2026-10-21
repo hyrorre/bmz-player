@@ -77,6 +77,19 @@ impl SkinContext {
         }
     }
 
+    /// Queue a clicked Lua `act`; false when the event is not one or no runtime exists.
+    pub fn queue_lua_act(&self, event_id: i32, arg1: i32, arg2: i32) -> bool {
+        let Some(callback_id) = lua_act_callback_id(event_id) else { return false };
+        self.lua_draw_runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.queue_act(callback_id, arg1, arg2))
+    }
+
+    /// Effects requested by this skin's Lua `act` / event actions.
+    pub fn take_lua_effects(&self) -> Vec<SkinLuaEffect> {
+        self.lua_draw_runtime.as_ref().map(|runtime| runtime.take_effects()).unwrap_or_default()
+    }
+
     /// Size of the installed source `source_id`.
     pub fn source_size(&self, source_id: &str) -> Option<SkinImageSize> {
         self.document_sources.get(source_id).map(|source| source.source_size)

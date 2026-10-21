@@ -332,6 +332,24 @@ pub const SKIN_EVENT_DAILY_STATISTICS_RESET: i32 = -10_100;
 /// Lua callback から変換する runtime event の内部予約 ID 範囲。
 /// beatoraja 正数イベント ID と衝突しないよう負数を使う。
 pub const SKIN_EVENT_RUNTIME_BASE: i32 = -20_000;
+/// Lua `act` function の runtime callback を表す予約 event ID 範囲。
+/// `SKIN_EVENT_LUA_ACT_BASE - callback_id` で、callback 0..=999_999 を表す。
+pub const SKIN_EVENT_LUA_ACT_BASE: i32 = -1_000_000;
+pub const SKIN_EVENT_LUA_ACT_LAST: i32 = -1_999_999;
+
+/// Event ID for the Lua `act` runtime callback `callback_id`.
+pub fn lua_act_event_id(callback_id: usize) -> Option<i32> {
+    let offset = i32::try_from(callback_id).ok()?;
+    let id = SKIN_EVENT_LUA_ACT_BASE.checked_sub(offset)?;
+    (id >= SKIN_EVENT_LUA_ACT_LAST).then_some(id)
+}
+
+/// Runtime callback ID of a Lua `act` event, or None for any other event.
+pub fn lua_act_callback_id(event_id: i32) -> Option<usize> {
+    (SKIN_EVENT_LUA_ACT_LAST..=SKIN_EVENT_LUA_ACT_BASE)
+        .contains(&event_id)
+        .then(|| (SKIN_EVENT_LUA_ACT_BASE - event_id) as usize)
+}
 /// beatoraja `NUMBER_RANDOM_1P_1KEY..NUMBER_RANDOM_2P_SCR` (450..469).
 /// BMZではResult互換に加え、Play/Selectの確定済み固定配置にも使用する。
 pub const SKIN_RANDOM_LANE_REF_BASE: i32 = 450;

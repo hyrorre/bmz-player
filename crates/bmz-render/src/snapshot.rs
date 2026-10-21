@@ -257,11 +257,25 @@ pub struct OverlaySnapshot {
 }
 
 /// BMZ skin extension logical inputs in E1/E2/E3/E4/UI Left/Right/Up/Down order.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SkinLogicalInputSnapshot {
     pub held: [bool; bmz_skin_document::SKIN_BMZ_INPUT_COUNT],
     /// Held keyboard keys as a bit set of libGDX keycodes, for Lua `main_state.key_pressed`.
     pub keyboard: [u64; 4],
+    /// Current system / key / BGM volumes (0.0..=1.0), read by number 57..59 and
+    /// Lua `main_state.volume_*` in every scene.
+    pub audio_volumes: [f32; 3],
+}
+
+impl Default for SkinLogicalInputSnapshot {
+    fn default() -> Self {
+        Self {
+            held: [false; bmz_skin_document::SKIN_BMZ_INPUT_COUNT],
+            keyboard: [0; 4],
+            // The renderer's previous fixed value outside Select.
+            audio_volumes: [1.0; 3],
+        }
+    }
 }
 
 /// Battle session の表示専用2P状態。

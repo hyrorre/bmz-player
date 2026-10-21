@@ -50,6 +50,7 @@ mod text_shaping;
 #[path = "renderer/text/styled_fallback.rs"]
 mod text_styled_fallback;
 
+pub use api::SkinRuntimeScene;
 pub use font::{
     SystemFontData, load_cjk_font_fallback_data, load_font_bytes_for_coverage,
     load_japanese_font_bytes, load_system_font_data_for_coverage,

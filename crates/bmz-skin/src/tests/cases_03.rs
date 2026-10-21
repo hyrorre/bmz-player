@@ -437,7 +437,10 @@ fn lua_skin_preserves_constant_act_and_skips_loader_callback_fields() {
     );
     assert_eq!(loaded.value["image"][0]["act"], serde_json::json!(15));
     assert_eq!(loaded.value["image"][1]["act"], serde_json::json!(12));
-    assert!(loaded.value["image"][2].get("act").is_none());
+    // Other act functions run in the runtime VM when clicked.
+    let act = loaded.value["image"][2]["act"].as_i64().unwrap();
+    let callback_id = bmz_skin_document::lua_act_callback_id(act as i32).unwrap();
+    assert_eq!(loaded.runtime_callback_paths[callback_id], "$.image[3].act");
     assert!(loaded.value["customTimers"][0].get("timer").is_none());
 }
 
@@ -482,7 +485,8 @@ fn lua_skin_does_not_execute_mutating_act_during_conversion() {
         load_lua_skin_value(&root.join("result.luaskin"), &BTreeMap::new(), &BTreeMap::new())
             .unwrap();
 
-    assert!(loaded.value["image"][0].get("act").is_none());
+    let act = loaded.value["image"][0]["act"].as_i64().unwrap();
+    assert!(bmz_skin_document::lua_act_callback_id(act as i32).is_some());
     let mut loaded = load_lua_skin(
         &root.join("result.luaskin"),
         SkinKind::Result,
@@ -490,9 +494,21 @@ fn lua_skin_does_not_execute_mutating_act_during_conversion() {
         &BTreeMap::new(),
     )
     .unwrap();
+    // Callback IDs follow the randomized `pairs` order of each VM.
+    let act = loaded.document.image[0].act.and_then(bmz_skin_document::lua_act_callback_id);
+    let act = act.unwrap();
     let runtime = loaded.lua_runtime.as_mut().unwrap();
-    assert!(runtime.evaluate_draw(0, &TestLuaMainState::default()));
-    assert!(!runtime.evaluate_draw(1, &TestLuaMainState::default()));
+    let draw = |path: &str| {
+        (0..runtime.callback_count()).find(|&id| runtime.callback_path(id) == Some(path)).unwrap()
+    };
+    let (graph, ir) = (draw("$.destination[1].draw"), draw("$.destination[2].draw"));
+    let state = TestLuaMainState::default();
+    assert!(runtime.evaluate_draw(graph, &state));
+    assert!(!runtime.evaluate_draw(ir, &state));
+    // The click runs the act in the runtime VM.
+    assert!(runtime.execute_act(act, 0, 0, &state));
+    assert!(!runtime.evaluate_draw(graph, &state));
+    assert!(runtime.evaluate_draw(ir, &state));
 }
 
 #[test]

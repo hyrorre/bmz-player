@@ -255,6 +255,8 @@ mod lua_api_baseline;
 mod lua_api_extensions;
 #[path = "tests/lua_document_conversion.rs"]
 mod lua_document_conversion;
+#[path = "tests/lua_runtime_events.rs"]
+mod lua_runtime_events;
 #[path = "tests/lua_stdlib_compat.rs"]
 mod lua_stdlib_compat;
 #[path = "tests/property_names.rs"]

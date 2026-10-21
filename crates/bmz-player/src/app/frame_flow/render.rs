@@ -36,6 +36,7 @@ impl WinitApp {
         let plan_start = Instant::now();
         self.renderer.prepare_scene(scene);
         let plan_us = plan_start.elapsed().as_micros();
+        self.apply_skin_lua_effects(scene_kind);
         self.update_meta_image_animations(scene_kind);
         let video_start = Instant::now();
         let video_profile = self.update_current_skin_video_sources(
