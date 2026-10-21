@@ -96,7 +96,10 @@ impl WinitApp {
         };
         if matches!(self.view_state(), AppViewState::Result) {
             self.select.select_slider_dragging_type = None;
-            if button == MouseButton::Left && self.result.result_exit.is_none() {
+            if self.result.result_exit.is_some() {
+                return;
+            }
+            if button == MouseButton::Left {
                 let AppSceneSnapshot::Result(snapshot) = self.scene_snapshot() else {
                     return;
                 };
@@ -105,8 +108,8 @@ impl WinitApp {
                     self.apply_result_slider_hit(hit);
                     return;
                 }
-                self.handle_result_skin_click(button, x, y);
             }
+            self.handle_result_skin_click(button, x, y);
             return;
         }
         if let Some(scene) = match self.view_state() {
@@ -206,7 +209,9 @@ impl WinitApp {
             }
             return;
         }
-        self.execute_result_skin_event(event_id);
+        if button == MouseButton::Left {
+            self.execute_result_skin_event(event_id);
+        }
     }
 
     /// Play and Decide have no built-in click events; only Lua `act`s run.

@@ -44,3 +44,15 @@ timerの観測を進め、条件内の`event_exec`が更新した最終実行時
 100ms間隔で0 / 50 / 100msを評価する回帰テストは、修正前に50msの条件呼出しが抜けて失敗した。
 条件から同じeventを同期実行する場合も、同じフレームで二重実行しないことを検証する。
 修正後はAuto / Compatを含むruntimeイベント8テストと、skinのcheck / all-targets Clippyが成功した。
+
+## 5. Resultの右クリック
+
+Resultの入力経路でLua `act`へ左右・中央ボタンを渡す。sliderと組み込みイベントは
+左ボタンだけ、退出演出中はすべての新しいクリックを遮断する既存の契約を維持する。
+
+独立した設定・DBと非表示windowを持つWindowsのapp回帰テストを追加した。
+`route_mouse_input`からqueue、次フレームのLua実行と描画結果まで確認し、修正前は
+最初の右クリックが届かず失敗した。GPU・音声デバイスは使わない。
+Winit event loopを作るため通常の全体テストではignoredとし、単独で明示実行する。
+修正後は左右・中央の各実行回数と引数、左だけの組み込み操作・slider、退出中の遮断が成功した。
+`bmz-player`のcheck / all-targets Clippyも成功した。

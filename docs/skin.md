@@ -758,6 +758,8 @@ functionの`act`と`customEvents`を永続VMで実行します。`auto` / `compa
   実行します（beatorajaの入力処理から`Skin.updateCustomObjects`への順）。1フレームに
   受け付けるクリックは64件までです。Select / Decide / Play / Resultで受け付けます。
   Decide / Playには組み込みのクリックイベントがないため、Luaの`act`だけを実行します。
+  ResultのLua `act`は左右・中央ボタンを受け付けます。組み込みイベントとsliderは従来どおり
+  左ボタンだけで操作し、退出演出中は新しい`act`を受け付けません。
 - クリック判定は、最後に描画したフレームのLua `draw`の結果とcustom timerを使い、判定の
   ためにLuaを再実行しません（beatorajaの`mousePressed`が直前の`prepare`の状態を使うのと同じ）。
   Lua `draw`で表示を切り替えるボタンも、表示中だけクリックできます。Selectの曲バーは

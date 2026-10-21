@@ -1,5 +1,131 @@
 use super::*;
 
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "creates an isolated Winit event loop and hidden window; run alone"]
+fn result_mouse_route_delivers_lua_buttons_and_preserves_left_only_controls() {
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    let event_loop =
+        EventLoop::<AppUserEvent>::with_user_event().with_any_thread(true).build().unwrap();
+    let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+    let mut boot = data.boot();
+    boot.app_config.input.gamepad_enabled = false;
+    let (maintenance_tx, _) = tokio::sync::watch::channel(false);
+    let mut app = WinitApp::new(
+        boot,
+        AppOptions { viewer_play: true, ..Default::default() },
+        Instant::now(),
+        None,
+        None,
+        Arc::new(AtomicBool::new(false)),
+        event_loop.create_proxy(),
+        LogBuffer::default(),
+        maintenance_tx,
+        None,
+    )
+    .unwrap();
+    #[allow(deprecated)]
+    let window = event_loop
+        .create_window(
+            Window::default_attributes()
+                .with_visible(false)
+                .with_inner_size(PhysicalSize::new(200, 200)),
+        )
+        .unwrap();
+    app.window = Some(Arc::new(window));
+    app.viewer_mode = false;
+    app.viewer_waiting = false;
+    app.result.finished_play = Some(debug_boot_finished_play_session());
+    app.result.result_scene_started_at = Instant::now() - Duration::from_secs(2);
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("result.lua");
+    std::fs::write(
+        &path,
+        r#"
+        local count,last=0,'none'
+        return {type=7,w=100,h=100,input=0,
+            image={
+                {id='lua',src=0,x=0,y=0,w=1,h=1,click=0,
+                    act=function(a,b) count=count+1; last=a..':'..b end},
+                {id='builtin',src=0,x=0,y=0,w=1,h=1,act=-20000}},
+            runtimeFlag={{id=20123,initial=false}},
+            runtimeEvent={{id=-20000,toggleFlags={20123}}},
+            slider={{id='scroll',src=0,x=0,y=0,w=10,h=5,
+                angle=2,range=20,type=8,changeable=true}},
+            text={{id='last',size=10,value=function() return 'CLICK '..count..':'..last end},
+                {id='flag',size=10,constantText='BUILTIN'}},
+            destination={
+                {id='lua',dst={{x=0,y=0,w=40,h=40}}},
+                {id='builtin',dst={{x=50,y=0,w=40,h=40}}},
+                {id='scroll',dst={{x=0,y=70,w=10,h=5}}},
+                {id='last',dst={{x=0,y=90,w=80,h=10}}},
+                {id='flag',draw='runtime_flag(20123)',dst={{x=50,y=70,w=40,h=10}}}}}
+    "#,
+    )
+    .unwrap();
+    let loaded = bmz_skin::load_lua_skin_with_runtime_state(
+        &path,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &bmz_skin::LuaLoadRuntimeState::default(),
+    )
+    .unwrap();
+    crate::skin_loader::set_decoded_skin_context(
+        &mut app.renderer,
+        SkinKind::Result,
+        default_skin_manifest(),
+        loaded.document,
+        loaded.lua_runtime,
+        vec![],
+        false,
+    );
+    fn draw(app: &mut WinitApp) -> Vec<String> {
+        let scene = app.scene_snapshot();
+        app.renderer.prepare_scene(scene);
+        app.renderer
+            .last_plan()
+            .unwrap()
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                bmz_render::plan::DrawCommand::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+    fn press(app: &mut WinitApp, button: MouseButton, x: f64, y: f64) {
+        let size = app.window.as_ref().unwrap().inner_size();
+        app.ui.last_cursor_position =
+            Some(PhysicalPosition::new(x * f64::from(size.width), y * f64::from(size.height)));
+        app.route_mouse_input(ElementState::Pressed, button);
+    }
+    assert!(draw(&mut app).iter().any(|s| s == "CLICK 0:none"));
+    for (button, expected) in [
+        (MouseButton::Right, "CLICK 1:-1:0"),
+        (MouseButton::Left, "CLICK 2:1:0"),
+        (MouseButton::Middle, "CLICK 3:1:0"),
+    ] {
+        press(&mut app, button, 0.1, 0.9);
+        assert!(draw(&mut app).iter().any(|s| s == expected), "{button:?}");
+    }
+    press(&mut app, MouseButton::Right, 0.7, 0.9);
+    assert!(!draw(&mut app).iter().any(|s| s == "BUILTIN"));
+    press(&mut app, MouseButton::Left, 0.7, 0.9);
+    assert!(draw(&mut app).iter().any(|s| s == "BUILTIN"));
+    press(&mut app, MouseButton::Right, 0.05, 0.4);
+    assert_eq!(app.select.select_slider_dragging_type, None);
+    press(&mut app, MouseButton::Left, 0.05, 0.4);
+    assert_eq!(app.select.select_slider_dragging_type, Some(8));
+    app.result.result_exit = Some(ResultExit {
+        started_at: Instant::now(),
+        action: ResultExitAction::Leave,
+        skip_requested: false,
+        skip_final_frame_held: false,
+    });
+    press(&mut app, MouseButton::Right, 0.1, 0.9);
+    assert!(draw(&mut app).iter().any(|s| s == "CLICK 3:1:0"), "fadeout blocks new acts");
+}
+
 #[test]
 fn explicit_enter_replaces_plain_result_se_but_coexists_with_loop() {
     use crate::system_sound::SoundType::*;
