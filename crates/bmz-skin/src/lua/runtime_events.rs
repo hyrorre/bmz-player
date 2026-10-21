@@ -105,14 +105,18 @@ impl LuaRuntimeEvents {
             .unwrap_or_default()
     }
 
-    /// Condition of an observed event when its minimum interval has elapsed.
-    pub(super) fn due_condition(&self, id: i32, now_us: i64) -> Option<LuaCustomEventCondition> {
-        let events = self.events.lock().ok()?;
-        let event = events.get(&id)?;
-        let due = event
+    /// Conditions run every frame, including while the minimum interval waits.
+    pub(super) fn condition(&self, id: i32) -> Option<LuaCustomEventCondition> {
+        self.events.lock().ok()?.get(&id)?.condition.clone()
+    }
+
+    /// Check after the condition: it may have executed this event itself.
+    pub(super) fn is_due(&self, id: i32, now_us: i64) -> bool {
+        let Ok(events) = self.events.lock() else { return false };
+        let Some(event) = events.get(&id) else { return false };
+        event
             .last_execute_us
-            .is_none_or(|last| now_us.saturating_sub(last) / 1_000 >= event.min_interval_ms);
-        due.then(|| event.condition.clone()).flatten()
+            .is_none_or(|last| now_us.saturating_sub(last) / 1_000 >= event.min_interval_ms)
     }
 
     /// Marks one level of `act` / event execution. None at the nesting limit.

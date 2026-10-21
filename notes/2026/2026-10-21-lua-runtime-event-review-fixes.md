@@ -36,3 +36,11 @@ rendererの各scene計画からappのadapterへ音声効果が届く経路も、
 scene進入から1秒後のsnapshotで各2フレーム描画し、音声効果が毎回1件だけ届くことを確認した。
 app側のruntimeイベント全4テスト成功。
 `bmz-skin`全335テスト（1 ignored）と、skin / playerのcheck / all-targets Clippyも成功した。
+
+## 4. customEventsの条件評価順
+
+`condition`を毎フレーム評価してから`minInterval`を確認する。待機中もclosure stateと
+timerの観測を進め、条件内の`event_exec`が更新した最終実行時刻も間隔判定に反映する。
+100ms間隔で0 / 50 / 100msを評価する回帰テストは、修正前に50msの条件呼出しが抜けて失敗した。
+条件から同じeventを同期実行する場合も、同じフレームで二重実行しないことを検証する。
+修正後はAuto / Compatを含むruntimeイベント8テストと、skinのcheck / all-targets Clippyが成功した。

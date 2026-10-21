@@ -231,7 +231,7 @@ impl LuaSkinRuntime {
         }
         for id in self.events.observed_ids() {
             let now_us = state.time_us_i64();
-            let Some(condition) = self.events.due_condition(id, now_us) else { continue };
+            let Some(condition) = self.events.condition(id) else { continue };
             self.begin_runtime_callback();
             let events = self.events.clone();
             let scope = self.state_scope();
@@ -251,7 +251,7 @@ impl LuaSkinRuntime {
                             }
                         }
                     };
-                    if fire {
+                    if fire && events.is_due(id, now_us) {
                         events.execute(id, 0, 0, now_us);
                     }
                 })

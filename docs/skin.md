@@ -763,8 +763,9 @@ functionの`act`と`customEvents`を永続VMで実行します。`auto` / `compa
   Lua `draw`で表示を切り替えるボタンも、表示中だけクリックできます。Selectの曲バーは
   行ごとに条件を評価するため、このLua `draw`の結果を使いません。
 - `customEvents`は1フレーム1回、custom timerの更新後にID順で評価します。`condition`
-  （function、またはoption ID。負のIDは否定）が真で、前回の実行から`minInterval`ミリ秒以上
-  経っていれば`action`を実行します。`condition`の無い定義は`event_exec`からだけ実行します。
+  （function、またはoption ID。負のIDは否定）は`minInterval`の待機中も毎フレーム評価します。
+  条件が真で、評価後に確認した最終実行時刻から`minInterval`ミリ秒以上経っていれば
+  `action`を実行します。`condition`の無い定義は`event_exec`からだけ実行します。
   `action`が数値なら、custom event `1000..1999`は同じVM内で同期実行し、それ以外は
   そのsceneの組み込みイベントとして実行します（Select / Result）。数値による連鎖にも
   functionと共通の入れ子上限を適用します。

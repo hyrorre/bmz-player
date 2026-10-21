@@ -316,3 +316,42 @@ fn result_fadeout_audio_keeps_its_single_declarative_trigger() {
         }
     }
 }
+
+#[test]
+fn custom_event_conditions_run_during_intervals_and_recheck_nested_execution() {
+    for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
+        let (_root, mut loaded) = load(
+            r#"
+            local s=require('main_state')
+            local checks, fires=0,0
+            return {type=5,customEvents={{id=1000,minInterval=100,
+                condition=function()
+                    checks=checks+1
+                    if s.option(901) then s.event_exec(1000) end
+                    return s.option(900)
+                end,
+                action=function() fires=fires+1 end}},
+                text={{id='counts',value=function() return checks..':'..fires end}}}
+            "#,
+            mode,
+        );
+        let runtime = loaded.lua_runtime.as_mut().unwrap();
+        let text = callback(runtime, "$.text[1].value");
+        for (now_us, nested, expected) in [
+            (0, false, "1:1"),
+            (50_000, false, "2:1"),
+            (100_000, false, "3:2"),
+            (150_000, true, "4:3"),
+            (250_000, true, "5:4"),
+        ] {
+            let state = TestLuaMainState {
+                now_us,
+                options: BTreeMap::from([(900, true), (901, nested)]),
+                ..Default::default()
+            };
+            frame(runtime, &state);
+            assert_eq!(runtime.evaluate_text(text, &state).as_deref(), Some(expected), "{mode:?}");
+        }
+        assert_eq!(runtime.failure_log_count(), 0);
+    }
+}
