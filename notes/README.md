@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-22 | [IR Webのdev SSRでi18nキーがそのまま出る問題](2026/2026-10-22-ir-web-dev-ssr-i18n.md) |
 | 2026-10-21 | [Lua runtimeイベントのレビュー指摘修正](2026/2026-10-21-lua-runtime-event-review-fixes.md) |
 | 2026-10-21 | [Luaのkey_pressed・act・customEvents・音声・音量の実行時対応](2026/2026-10-21-lua-runtime-events.md) |
 | 2026-10-21 | [スキン関連レビューの修正と最適化](2026/2026-10-21-skin-review-optimization.md) |
