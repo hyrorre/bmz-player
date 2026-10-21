@@ -191,7 +191,7 @@ impl WinitApp {
             let multiplier = decide_total_notes_multiplier(source_key_mode, &options);
             snapshot.total_notes = chart.scored_total_notes(policy).saturating_mul(multiplier);
         }
-        self.reload_skin_for_scene_entry(SkinKind::Decide);
+        self.reload_decide_skin_for_chart(&snapshot);
         // Play 画面へ入ってから stagefile / backbmp の有無が切り替わると、ロード演出中に
         // 代替タイトルから曲画像へ差し替わって見える。Decide 中に先行ロードし、
         // Play の最初の snapshot から同じ runtime image 100 / 101 を使えるようにする。

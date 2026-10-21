@@ -159,7 +159,7 @@ Lua 5.3以降専用の構文・関数（`//`、ビット演算子、`goto`、`ut
 | Hub（11件） | Hubは他スキンのフォルダへ置く改造用部品です。単独では`package.path`からホストスキンを判定できず、beatorajaでも同じ箇所で失敗します |
 | ECFN / ADFX02のplay14 | 既定のスコアグラフ位置（902 / 903以外）で`graphside_x`が未定義になるスキン側の分岐です |
 | ADFX02/ADFX_02/RESULT/result2 | `destination[19]`がmapで、BMZの文書decodeが配列を要求します（Lua API以外の既存差異） |
-| ModernChic/decide | ロード時に難易度option `150..155`を読み、すべてfalseだと色tableがnilになって61行目で失敗します。appもDecideのロード状態（`lua_runtime_state_for_frontend_last_play`）に難易度を渡さないため、実際のappでも読めません（2026-10-15のログで同じエラーを確認）。beatorajaは選択曲のある状態でDecideを読むため、いずれか1つがtrueになります。ハーネスのscene状態は153をtrueにしているため読めます |
+| ModernChic/decide | ロード時に難易度option `150..155`を読み、すべてfalseだと色tableがnilになって61行目で失敗します。appもDecideのロード状態（`lua_runtime_state_for_frontend_last_play`）に難易度を渡さないため、実際のappでも読めません（2026-10-15のログで同じエラーを確認）。beatorajaは選択曲のある状態でDecideを読むため、いずれか1つがtrueになります。ハーネスのscene状態は153をtrueにしているため読めます。同日に修正しました（[追記](#追記decideのロード時の選択譜面)） |
 | WMII_FHD/result/result | `config_sys.json`と`player/<name>/config_player.json`をnil確認なしで読みます。appは全Luaスキンへ読取専用の仮想ファイル（`lua_compat_virtual_io_files`、空のキー割当）を渡すため読めますが、bmz-skinを直接呼ぶハーネスにはありません。2026-10-20のログで、appでの読込とパネル切替を確認しました |
 | ModernChic play（詳細モード有効時） | 解析ログを書き込んでから読む処理で、BMZは`io`の書込を永続化しないため読み込みに失敗します |
 
@@ -225,3 +225,37 @@ releaseビルド、Windows 11、同じ一時ベンチを変更前（`4389027d`�
 - インストール済みスキンに`font.fallback`を使うLuaスキンはありませんでした。Luaのtableから
   文書への変換（文字列・`{path, type}`・配列・空table、日本語のパス）とUnicodeの文字列は
   [回帰テスト](../../crates/bmz-skin/src/tests/lua_document_conversion.rs)で確認しています。
+
+## 追記：Decideのロード時の選択譜面
+
+2026-10-21追記。ModernChic decideがappで読めない原因（上の表）を修正しました。仕様は
+[skin.md](../../docs/skin.md#decideのロード時の選択譜面)を参照します。
+
+- 原因: appはDecide skinをプレイヤー名・IR名・option 50 / 51・最終プレイ日時だけでロードし、
+  選択譜面の難易度を渡していませんでした。beatorajaは選択曲のある状態でDecide skinを読みます。
+- 難易度optionだけを渡すと、同梱のmz-select decideが回帰することを確認しました。mz-selectは
+  ロード時に`number(96)`と`text(1003)`を連結して難易度ラベルを作ります。難易度を渡すとその分岐に
+  入り、未取得のtext 1003は文字列ref用の内部値`__BMZ_TEXT_REF_1003__`のまま表示に残ります。
+  そのため、play level（number 96）と難易度表のtext 1001..1003も合わせて渡します。
+- 修正: Decideへ入るときの再読込（`reload_decide_skin_for_chart`）で、表示するDecide snapshotから
+  難易度option 150..155、number 96、text 1001..1003をロード時の状態へ加えます。難易度とplay levelは
+  Decide描画と同じ`skin_difficulty_code` / `skin_level_number`と`lua_main_state_option` /
+  `lua_main_state_number`で評価し、Resultのロード時条件と同じ方式にしました。起動時と
+  skin設定パネルからの読込は選択曲がないため、従来どおりこれらの値を渡しません。
+- [回帰テスト](../../crates/bmz-player/src/app/tests/decide_difficulty.rs): 難易度の対応表、
+  Decide進入と同じ`reload_skin_textures`経由でdecodeまで行う経路（修正を外すと失敗することを確認）、
+  インストール済みのmz-select / ModernChic decide（存在しない場合はSKIPを出力）。
+
+インストール済みのDecide skin 18件（Lua 10件、LR2 8件、一時的な比較テストで、コミットしていません）を、
+従来の状態と新しい状態でdecode・installし、難易度6種×経過時間4点のDecide描画命令を比較しました。
+
+| skin | 結果 |
+|---|---|
+| ModernChic | 従来は全難易度で読込失敗、修正後は読めます |
+| mz-select | 難易度ラベルが`0`から`HYPER12 ★12`等になります（beatorajaと同じ。`BIGINNER`はスキン側の綴り） |
+| LITONE9 | 実時間の時計表示（ref 24..26）以外は同一です。時計は従来の状態で2回描画しても変わる行だけでした |
+| 上記以外（ADFX02 3種、ECFN、Starseeker、simple-decide、simple-play、LR2 8件） | 描画命令が同一です。WMIXなど`#IF`で難易度を分けるLR2 skinも、描画時評価と同じ結果です |
+
+検証: `cargo fmt --check`、`cargo check --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、
+`cargo test --workspace`（31バイナリ、4542 passed、0 failed、54 ignored）。Windowsのみで、
+実際のゲーム画面での目視は行っていません。

@@ -628,6 +628,16 @@ end
 選曲変更に追従する表示は`text[].value`などのcallback内で取得します。
 ロード時はそのロード要求の日時を使い、選択情報のない初期ロードは欠損です。
 
+## Decideのロード時の選択譜面
+
+Decideへ入るときのskin再読込は、選択譜面の難易度option 150..155、play level（number 96）、
+難易度表のtext 1001..1003をロード時の状態として渡します。難易度とplay levelはDecide描画と
+同じ変換で評価し、数値1..5とBEGINNER / NORMAL / HYPER / ANOTHER / INSANEを151..155へ、
+未定義を150へ対応付けます。beatorajaは選択曲のある状態でDecide skinを読むため、ModernChicや
+mz-selectのようにロード時に難易度の色やラベルを決めるLua skin、`#IF`で難易度を分けるLR2 skinが
+これに依存します。これらの値はdecode cacheの依存関係に含めます。
+起動時やskin設定パネルからの読込は選択曲を持たないため、これらの値を渡しません。
+
 ## Lua Runtime Compatibility Mode
 
 `main_state.screen_width()` / `main_state.screen_height()`は現在の描画先の物理pixel数を

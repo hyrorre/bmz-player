@@ -469,7 +469,7 @@ use select::*;
 
 pub use result::result_skin_draw_state;
 pub use result::result_skin_draw_state_for_document;
-pub use select::skin_difficulty_code;
+pub use select::{skin_difficulty_code, skin_level_number};
 
 #[cfg(test)]
 #[path = "plan/tests.rs"]

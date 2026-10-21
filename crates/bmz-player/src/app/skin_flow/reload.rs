@@ -19,6 +19,7 @@ impl WinitApp {
             self.skin.lua_runtime_mode,
             self.boot.app_config.select.experimental_detail_options,
             select_last_played_at,
+            None,
         );
         if request.select {
             self.skin.skin_pipeline.set_pending(SkinKind::Select, pending_select);
@@ -95,6 +96,22 @@ impl WinitApp {
     /// 決定的なLua documentと画像は共有cacheで再利用される一方、ロード時乱数や
     /// wildcardのRandom指定はこのdecode要求を単位として再抽選される。
     pub(super) fn reload_skin_for_scene_entry(&mut self, kind: SkinKind) {
+        self.reload_skin_for_scene_entry_with_chart(kind, None);
+    }
+
+    /// Decide進入時の再decodeへ、表示するsnapshotの選択譜面の値を渡す。
+    ///
+    /// beatorajaは選択曲のある状態でDecide skinを読むため、ロード時に難易度色などを
+    /// 決めるskinがある。起動時やskin設定パネルからのdecodeは選択曲を持たない。
+    pub(super) fn reload_decide_skin_for_chart(&mut self, snapshot: &RenderSnapshot) {
+        self.reload_skin_for_scene_entry_with_chart(SkinKind::Decide, Some(snapshot));
+    }
+
+    fn reload_skin_for_scene_entry_with_chart(
+        &mut self,
+        kind: SkinKind,
+        decide_chart: Option<&RenderSnapshot>,
+    ) {
         if matches!(kind, SkinKind::Select) {
             self.discard_cli_play_on_select();
         }
@@ -117,6 +134,7 @@ impl WinitApp {
             self.skin.lua_runtime_mode,
             self.boot.app_config.select.experimental_detail_options,
             select_last_played_at,
+            decide_chart,
         );
         let pending = match kind {
             SkinKind::Select => pending_select,

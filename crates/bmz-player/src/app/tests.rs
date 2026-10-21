@@ -228,6 +228,8 @@ mod boot_chart;
 mod course;
 #[path = "tests/course_sources.rs"]
 mod course_sources;
+#[path = "tests/decide_difficulty.rs"]
+mod decide_difficulty;
 #[path = "tests/play.rs"]
 mod play;
 #[path = "tests/play_preload.rs"]

@@ -690,6 +690,40 @@ pub(super) fn apply_skin_attempt_lua_load_state(
     }
 }
 
+/// Selected-chart values that Decide skins read while loading.
+///
+/// beatoraja loads the Decide skin with the selected song, so skins such as
+/// ModernChic and mz-select pick difficulty colors and labels at load time.
+/// The difficulty options and play level use the Decide plan's render-time
+/// rules; the table texts are the snapshot's 1001..1003 values.
+pub(super) fn apply_decide_chart_lua_load_state(
+    runtime_state: &mut bmz_skin::LuaLoadRuntimeState,
+    snapshot: &RenderSnapshot,
+) {
+    let decide_state = bmz_render::skin::SkinDrawState {
+        difficulty: bmz_render::plan::skin_difficulty_code(&snapshot.difficulty_name),
+        play_level: bmz_render::plan::skin_level_number(&snapshot.play_level),
+        ..Default::default()
+    };
+    for option in 150..=155 {
+        runtime_state
+            .option_values
+            .insert(option, bmz_render::skin::lua_main_state_option(option, &[], &decide_state));
+    }
+    runtime_state.number_values.insert(
+        96,
+        bmz_render::skin::lua_main_state_number(96, &decide_state)
+            .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+    );
+    // Without these, a skin that concatenates the table text at load would
+    // embed the unresolved text-ref sentinel instead of the table label.
+    runtime_state.text_values.extend([
+        (1001, snapshot.table_text_primary.clone()),
+        (1002, snapshot.table_text_secondary.clone()),
+        (1003, snapshot.table_text_fallback.clone()),
+    ]);
+}
+
 pub(super) fn lua_runtime_state_for_frontend(
     player_name: &str,
     ir_name: Option<&str>,

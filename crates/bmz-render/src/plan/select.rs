@@ -401,7 +401,8 @@ pub(super) fn difficulty_level_label(
     }
 }
 
-pub(super) fn skin_level_number(label: &str) -> i64 {
+/// Maps a chart level label to the play level used by number ref 96.
+pub fn skin_level_number(label: &str) -> i64 {
     let mut value = 0_i64;
     for digit in label.bytes().filter(u8::is_ascii_digit) {
         value = value.saturating_mul(10).saturating_add((digit - b'0') as i64);

@@ -247,6 +247,7 @@ pub(super) fn reload_skin_textures(
     lua_runtime_mode: bmz_skin::LuaSkinRuntimeMode,
     experimental_detail_options: bool,
     select_last_played_at: Option<i64>,
+    decide_chart: Option<&RenderSnapshot>,
 ) -> (bool, bool, bool) {
     let mut pending_select = false;
     let mut pending_decide = false;
@@ -301,6 +302,16 @@ pub(super) fn reload_skin_textures(
         };
         if is_decodable_skin_path(&path) {
             let skin_options = if trimmed.is_empty() { BTreeMap::new() } else { options.clone() };
+            let mut runtime_state = lua_runtime_state_for_frontend_last_play(
+                player_name,
+                ir_name,
+                if kind == SkinKind::Select { select_last_played_at } else { None },
+            );
+            if kind == SkinKind::Decide
+                && let Some(snapshot) = decide_chart
+            {
+                apply_decide_chart_lua_load_state(&mut runtime_state, snapshot);
+            }
             spawn_skin_decode(
                 pipeline,
                 SkinDecodeRequest::new(
@@ -314,14 +325,7 @@ pub(super) fn reload_skin_textures(
                     },
                     if trimmed.is_empty() { BTreeMap::new() } else { files.clone() },
                     lua_runtime_state_with_mode(
-                        lua_runtime_state_with_skin_offsets(
-                            lua_runtime_state_for_frontend_last_play(
-                                player_name,
-                                ir_name,
-                                if kind == SkinKind::Select { select_last_played_at } else { None },
-                            ),
-                            offsets,
-                        ),
+                        lua_runtime_state_with_skin_offsets(runtime_state, offsets),
                         lua_runtime_mode,
                     ),
                 )
