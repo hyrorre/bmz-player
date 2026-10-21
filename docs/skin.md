@@ -709,9 +709,10 @@ Lua評価が入れ子になった場合や例外時には元のパネル値を�
 リセットしません。これは既存パネル切替の互換処理であり、任意の`act` / `customEvents`
 を実行する汎用イベントruntimeではありません。
 
-Lua sandboxはロード時の互換APIとして`os.clock` / `os.date` / `os.time`を提供します。
+Lua sandboxはロード時の互換APIとして`os.clock` / `os.date` / `os.time` / `os.difftime`を提供します。
 `os.time`の日付tableは標準Luaと同様にローカル時刻として正規化し、正規化後の値を
-tableへ書き戻します。引数なしでは現在時刻を返し、`os.date`は`!` prefixでUTCを選べます。libGDXの
+tableへ書き戻します。引数なしでは現在時刻を返し、`os.date`は`!` prefixでUTCを選べます。
+`os.date`の書式は[Lua APIの互換範囲](#lua-apiの互換範囲)を参照します。libGDXの
 `Controllers.getControllers()`は入力のない空配列として`size` / `get()` / `first()`を
 提供します。`io`の書き込みstubは内容を永続化しません。初回document構築は、蓄積データを
 Luaで解析するResult skinも通せる専用の命令数上限を持ち、runtime callback単位の上限は
@@ -751,6 +752,69 @@ skin library root配下のLua skinへ公開する初期`package.path`は、過�
 パスをlibrary rootに対応付け、`require` / `dofile` / `loadfile`がroot外へ出ないことを
 別途検証します。library rootを持たない低レベルAPIは、entry directoryの絶対
 パスを使うfallbackで解決します。
+
+### Lua APIの互換範囲
+
+beatoraja（`.local/beatoraja`の最新版）とLR2oraja Endless Dream（beatoraja 0.8系の
+`MainStateAccessor`を継承）に共通するLua APIを中心に提供します。両実装の比較と
+インストール済みスキンでの検証は[作業記録](../notes/2026/2026-10-21-lua-api-compat.md)を参照します。
+既存APIの名前・引数・戻り値は変えず、追加方式で拡張します。
+
+`main_state`（`require("main_state")`）:
+
+| API | BMZの戻り値 |
+|---|---|
+| `option` / `number` / `float_number` / `text` | 数値IDと名前を受け付けます。[名前によるプロパティ参照](#名前によるプロパティ参照)を参照します |
+| `offset` / `event_index` / `judge` | 数値IDだけを受け付けます |
+| `timer` / `time` / `timer_off_value` / `set_timer` | マイクロ秒です。OFF値はBMZでは`-2147483648`です（beatorajaは`Long.MIN_VALUE`） |
+| `exscore()` | number 71と同じ整数です |
+| `rate()` / `rate_best()` / `rate_rival()` | float_number 111 / 112 / 115と同じ値です |
+| `exscore_best()` / `exscore_rival()` | number 150 / 121と同じ整数です。ロード時の依存値と推論も同じです |
+| `gauge()` | Play中の現在ゲージです。他のsceneでは0です。ロード時は0で、推論せずruntime callbackで評価します |
+| `gauge_type()` | 現在のゲージ種別です |
+| `volume_sys` / `volume_key` / `volume_bg`、`set_volume_*` | 音量の読み取りです。`set_volume_*`は設定を変えずtrueを返します |
+| `audio_play` / `audio_loop` / `audio_stop` | 宣言的な音声命令へ変換します。音量の省略は1.0です |
+| `audio_preload` / `audio_dispose` | trueを返します。音声は宣言から読み込むため処理はありません |
+| `numbers` / `timer_is_on` / `timer_is_off` / `timer_elapsed*` / `screen_width` / `screen_height` | beatoraja最新版のAPIです |
+
+整数のプロパティ（`number`、`judge`、`exscore*`）はinteger、小数のプロパティ
+（`float_number`、`rate*`、`gauge`）はfloatで返します。`number` / `option` / `text` /
+`float_number`の引数に小数を渡すと0方向へ切り捨てます。nilやbooleanはLuaエラーです
+（beatoraja最新版は0 / false / 空文字、EDはID 0として扱います）。未知のIDや名前は
+0 / false / 空文字 / 0.0です。
+
+`skin_config.enabled_options`はヘッダの`property`順に選択中のopを並べた1始まりの
+配列です。`#`、添字、`ipairs`、`pairs`、`table.concat`、`table.unpack`で読めます。
+読んだopだけを文書の依存値に記録するread-only proxyのため、`rawget` / `next`では空です。
+
+`timer_util` / `event_util`はbeatorajaの`TimerUtility` / `EventUtility`相当です。
+`new_passive_timer`の`turn_on` / `turn_on_reset` / `turn_off`はtrueを返します。
+`event_observe_timer_off`は、最初の評価でtimerがOFFでも発火しません（beatorajaは発火します）。
+BMZには`customEvents`の汎用runtimeがなく、ロード時の推論が一度きりの音声イベントを
+誤って作らないようにするためです。
+
+LuaJ（Lua 5.2系）との差:
+
+- `bit32`はLuaJと同じLua 5.2の関数群を提供します。2^32を法として扱い、非整数は0方向へ
+  切り捨てます。同名のglobalがある場合は置き換えません。
+- `math.pow` / `ldexp` / `frexp` / `cosh` / `sinh` / `tanh` / `atan2` / `log10`はLua 5.4の
+  互換関数として使えます。`unpack` / `loadstring`はLuaJ 3.0にもないため提供しません。
+- `os.date`はLuaJの`%a %A %b %B %c %d %H %I %j %m %M %p %S %U %w %W %x %X %y %Y %z %%`に
+  対応します。正午の`%I`は`00`、`%U` / `%W`はLuaJの週番号です。引数なしの既定書式
+  `%Y-%m-%d %H:%M:%S`と、未知の指定子を文字のまま返す動作は既存スキンの表示を
+  変えないため維持します（LuaJは`%c`とエラー）。`os.difftime(t2, t1)`はfloat秒です。
+- BMZはLua 5.4です。整数値のfloatは`tostring`で`5.0`になります（LuaJは`5`）。
+  `string.format("%d", 2.5)`はエラーです（LuaJは切り捨て）。標準ライブラリの動作は変更しません。
+- 数値callbackが`nil`を返すと、BMZは値を未取得として描画しません。beatoraja / EDは
+  `toint()` / `tofloat()`で0として扱います。timer callbackの`nil`はBMZも開始時刻0です。
+
+BMZ独自のAPIは`bmz.option` / `bmz.get_option`、runtime VMだけの`main_state.float`
+（`float_number`の別名）、`total_play_counts_in_session` / `total_play_notes_in_session` /
+`score_date_sec_time`、名前付きプロパティです。
+
+beatoraja最新版の`event_exec`、`key_pressed`、`file_*`、`http_*`、`open_url`は未対応です。
+`io`の書き込みは永続化しません。`luajava`の`bindClass` / `newInstance` / `new` /
+`createProxy`は入力のない無害なstubを返し、Javaのオブジェクトやファイルは作りません。
 
 ## Skin Type
 

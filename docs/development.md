@@ -216,6 +216,33 @@ cargo test -p bmz-player --locked screen_dimensions_follow_offscreen_output_and_
 ウィンドウの手動確認では、起動直後、リサイズ、高DPI環境でロード時とcallbackの
 寸法を表示し、スキン設計解像度や内部解像度へ置き換わらないことを確認します。
 
+### インストール済みLuaスキンの互換比較
+
+Lua sandboxやAPIを変更するときは、変更前のcommitでインストール済みスキンの
+スナップショットを取り、変更後と比較します。ハーネスは各`.luaskin`を初期ロード・
+代表的なscene状態・compatモードで2回ずつ読み、選択肢、文書の各セクション、
+font / source、警告、runtime callbackの評価結果を記録します。スキンrootへは書き込みません。
+スナップショットは第三者スキン由来のため`.local/`へ置き、コミットしません。
+
+```powershell
+$env:BMZ_INSTALLED_SKIN_ROOT = "$PWD\data\skins"
+# 変更前のcommit（別worktree等）で、揺れの検出用に複数回取得する
+$env:BMZ_SKIN_COMPAT_OUT = "$PWD\.local\lua-api-compat\before1.json"
+cargo test -p bmz-skin --locked --lib installed_lua_skins -- --ignored
+$env:BMZ_SKIN_COMPAT_OUT = "$PWD\.local\lua-api-compat\before2.json"
+cargo test -p bmz-skin --locked --lib installed_lua_skins -- --ignored
+# 変更後
+$env:BMZ_SKIN_COMPAT_BASELINE = "$PWD\.local\lua-api-compat\before1.json;$PWD\.local\lua-api-compat\before2.json"
+$env:BMZ_SKIN_COMPAT_OUT = "$PWD\.local\lua-api-compat\after.json"
+cargo test -p bmz-skin --locked --lib installed_lua_skins -- --ignored
+```
+
+読込失敗、選択肢・font・sourceの消失、objectの減少、新しい`ERROR`警告、runtime callback
+失敗の増加でテストが失敗し、それ以外の差分は`after.report.txt`へ確認用に出力します。
+複数のベースライン間で揺れる項目（時刻・乱数・Lua 5.4のハッシュ順による推論差）は除外します。
+`BMZ_SKIN_COMPAT_FILTER`で対象を絞り、`BMZ_SKIN_COMPAT_OPTIONS` / `BMZ_SKIN_COMPAT_FILES`
+（JSONオブジェクト）で既定外の選択肢・ファイル選択を指定できます。
+
 ## テストの一時リソースと並列実行
 
 `cargo test`は1つのテストバイナリの中で全テストを並列に動かします。さらに別のworktree、

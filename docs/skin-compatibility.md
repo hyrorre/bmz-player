@@ -86,8 +86,14 @@ closure/module stateを維持し、frameごとのmain_stateを参照します。
 | 数値ref `243..249` / `lastplay_*` | Selectの最終保存日時とResultの今回保存日時です。ローカル年月日時分秒です。欠損はLuaでINT_MIN、数字画像は非表示です。BEST日時helperとは分離します。保存条件と移行は[score-persistence.md](score-persistence.md) |
 | `main_state.timer_is_on` / `timer_is_off` / `timer_elapsed` / `timer_elapsed_ms` / `timer_elapsed_seconds` | 組み込み / custom timerの現在状態・経過時間を取得します。経過時間はOFF時-1です。custom timerの同一frame更新、開始0・未来開始、64bit時計に対応します。[回帰テスト](../crates/bmz-skin/src/tests/read_helpers.rs) |
 | `timer_util` | timer_function / timer_observe_boolean / new_passive_timer等をcustom timer内で利用可能 |
+| `main_state.rate` / `rate_best` / `rate_rival` / `exscore_best` / `exscore_rival` | beatoraja / LR2oraja ED共通のAPIです。float_number 111 / 112 / 115、number 150 / 121と同じ評価経路を使います。[回帰テスト](../crates/bmz-skin/src/tests/lua_api_extensions.rs) |
+| `main_state.gauge` | Play中の現在ゲージ、他sceneは0です。推論せずruntime callbackで評価します。[app側テスト](../crates/bmz-player/src/skin_loader/tests/lua/score_accessors.rs) |
+| `main_state.audio_*` | 宣言的な音声命令です。音量の省略は1.0です。`audio_preload` / `audio_dispose`は無作用でtrueを返します |
+| `skin_config.enabled_options` | ヘッダのproperty順の選択opです。読んだopだけを文書の依存値に記録します |
 | file / module解決 | `SkinPathContext`の許可rootに限定します。require / dofile / loadfile、source等のパス解決を扱う |
-| `os` / `io` | clock/date/time等の限定API、仮想ファイル読込・永続化しない書込stubです。任意のOS操作を許可しない |
+| `os` / `io` | clock / date / time / difftime等の限定API、仮想ファイル読込・永続化しない書込stubです。`os.date`はLuaJの書式指定子に対応します。任意のOS操作を許可しない |
+| `bit32` | LuaJ（Lua 5.2）のbit32です。[LuaJ実行結果との比較テスト](../crates/bmz-skin/src/tests/lua_stdlib_compat.rs) |
+| API面の互換性固定 | 拡張前の名前・型・戻り値を[fixture](../crates/bmz-skin/src/tests/lua_api_baseline.rs)で固定し、インストール済みスキンは[比較ハーネス](../crates/bmz-skin/src/tests/installed_skin_compat.rs)で変更前後を比較します |
 
 timerの単位・OFF値・書き込み制約・失敗時の値は[skin.md](skin.md)のLua Runtime Compatibility Modeを参照します。
 実装入口は[function変換](../crates/bmz-skin/src/lua/conversion/function_field.rs)、
@@ -102,6 +108,8 @@ timerの単位・OFF値・書き込み制約・失敗時の値は[skin.md](skin.
 | 任意のdestination timer function | custom timerのruntime対応とは別です。destinationへ直接渡す任意functionの汎用runtime評価は未対応 |
 | `act` / `customEvents` | 一部functionのロード時推論はあるが、任意のaction / conditionを永続VMで実行する汎用イベントruntimeは未対応 |
 | その他のLua function field | 汎用float writer等は上記callbackの対象外です。対応追加時はfieldと呼び出し契約を個別に定義する |
+| beatoraja最新版のLua API | `main_state.event_exec` / `key_pressed` / `file_*` / `http_*` / `open_url`は未対応です。`event_exec`は汎用イベントruntime、`key_pressed`は入力状態の供給、file / httpは書込・通信の安全性設計が必要です |
+| LuaJとLua 5.4の差 | 整数値floatの`tostring`、`string.format("%d")`の小数、`os.date`の既定書式と未知指定子は差が残ります。数値callbackの`nil`はBMZでは未取得、LuaJの`toint()` / `tofloat()`では0です。[仕様](skin.md#lua-apiの互換範囲) |
 | function診断 | field path付きwarningやcustom timerのID付き診断はあります。object ID・Lua source file / lineの一貫した提示は改善余地がある |
 | PMchara | `--`座標補間と右下pixel色によるchroma keyは未対応です。通常のalphaは対応します。[詳細仕様](skin.md) |
 
