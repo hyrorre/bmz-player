@@ -121,7 +121,7 @@ fn custom_events_follow_condition_interval_and_event_exec() {
 
 #[test]
 fn audio_and_volume_effects_come_from_events_and_volume_reads_are_live() {
-    let (_root, mut loaded) = load(
+    let (root, mut loaded) = load(
         r#"
         local s = require('main_state')
         local timer_util = require('timer_util')
@@ -129,7 +129,7 @@ fn audio_and_volume_effects_come_from_events_and_volume_reads_are_live() {
             customEvents={{id=1000, action=function() s.audio_play('se.wav', 0.5) end,
                 condition=function() return timer_util.is_timer_on(s.timer(2)) end}},
             image={{id='btn', src=0, x=0, y=0, w=1, h=1, act=function()
-                s.event_exec(1000); s.audio_loop('se.wav'); s.audio_stop('se.wav')
+                s.event_exec(1000); s.audio_loop('se.wav', 3); s.audio_stop('se.wav')
                 s.audio_play('missing.wav'); s.set_volume_sys(0.25)
             end}},
             destination={{id='noisy', draw=function() s.audio_play('se.wav'); return true end,
@@ -150,14 +150,18 @@ fn audio_and_volume_effects_come_from_events_and_volume_reads_are_live() {
     assert!(runtime.evaluate_draw(draw, &state));
     assert!(runtime.take_effects().is_empty(), "draw callbacks never play sounds");
     assert!(runtime.execute_act(act, 1, 0, &state));
+    // The app gets the checked file, not the skin-relative name.
+    let path = crate::path_context::canonicalize_skin_path(&root.join("se.wav")).unwrap();
+    let path = path.to_string_lossy().into_owned();
     let audio = |action, volume| {
-        SkinLuaEffect::Audio(SkinAudioActionDef { action, path: "se.wav".to_string(), volume })
+        SkinLuaEffect::Audio(SkinAudioActionDef { action, path: path.clone(), volume })
     };
     assert_eq!(
         runtime.take_effects(),
         vec![
             audio(SkinAudioActionKind::Play, 0.5),
-            audio(SkinAudioActionKind::Loop, 1.0),
+            // beatoraja clamps the volume to 0..=2.
+            audio(SkinAudioActionKind::Loop, 2.0),
             audio(SkinAudioActionKind::Stop, 1.0),
             SkinLuaEffect::SetVolume { channel: SkinVolumeChannel::System, value: 0.25 },
         ]

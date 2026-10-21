@@ -141,19 +141,14 @@ impl LuaRuntimeEvents {
         self.effects.lock().map(|mut effects| std::mem::take(&mut *effects)).unwrap_or_default()
     }
 
-    /// Skin-relative audio path, like declarative skin audio. None when missing.
+    /// The existing file inside the skin's allowed roots, as an absolute path
+    /// the app can decode without the path context. None when missing.
     pub(super) fn resolve_audio_path(&self, requested: &str) -> Option<String> {
         let Some(path_context) = &self.path_context else {
             return Some(requested.to_string());
         };
         match path_context.resolve_file(requested) {
-            Ok(candidate) => Some(
-                candidate
-                    .strip_prefix(path_context.entry_dir())
-                    .unwrap_or(&candidate)
-                    .to_string_lossy()
-                    .replace('\\', "/"),
-            ),
+            Ok(path) => Some(path.to_string_lossy().into_owned()),
             Err(_) => {
                 self.log_failure_once(
                     &format!("audio:{requested}"),

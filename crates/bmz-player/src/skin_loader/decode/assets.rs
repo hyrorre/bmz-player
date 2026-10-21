@@ -69,7 +69,7 @@ pub(in crate::skin_loader) fn decode_skin_audio_assets(
             };
             let mut loader = FfmpegSampleLoader::default();
             match loader.load(&resolved) {
-                Ok(sample) => Some(DecodedSkinAudio { path, sample }),
+                Ok(sample) => Some(DecodedSkinAudio { path, resolved: Some(resolved), sample }),
                 Err(error) => {
                     tracing::warn!(
                         path = %resolved.display(),

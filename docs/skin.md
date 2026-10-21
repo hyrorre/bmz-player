@@ -763,8 +763,13 @@ functionの`act`と`customEvents`を永続VMで実行します。`auto` / `compa
 - function の`act`や毎フレーム評価する`customEvents`を持つskinは永続VMを使うため、
   document cacheの対象外です。Lua-to-JSON変換は`act` functionを警告付きで除き、
   functionの`action` / `condition`は従来どおり出力しません。
-- `act` / `action`内の`audio_play` / `audio_loop` / `audio_stop`と`set_volume_*`は、
-  まだ再生・設定へ反映しません。描画callbackからの`audio_*`は常に無視します。
+- `act` / `action`内の`audio_play` / `audio_loop` / `audio_stop`は、そのsceneのskin音声として
+  鳴らします。pathはskinの許可root内の既存fileに限ります。初回はbackgroundでdecodeし、
+  decode中の命令は順に保留します。音量はbeatorajaと同じく0〜2に制限したうえで、
+  `audio_play`はシステムSE、`audio_loop`はシステムBGMの音量を掛けます（最大1.0。
+  beatorajaはどちらもシステム音量です）。sceneを離れるとloopを止め、単発の音は鳴らし切ります。
+  1 sceneで実行時に読み込むfileは64個までです。描画callbackからの`audio_*`は無視します。
+- `set_volume_*`はまだ設定へ反映しません。
 
 ### カタログとシステム音セットの走査
 
@@ -811,7 +816,7 @@ beatoraja（`.local/beatoraja`の最新版）とLR2oraja Endless Dream（beatora
 | `gauge()` | Play中の現在ゲージです。他のsceneでは0です。ロード時は0で、推論せずruntime callbackで評価します |
 | `gauge_type()` | 現在のゲージ種別です |
 | `volume_sys` / `volume_key` / `volume_bg`、`set_volume_*` | 音量の読み取りです（0.0〜1.0）。runtime callbackでは現在の設定を読みます。`set_volume_*`は設定を変えずtrueを返します |
-| `audio_play` / `audio_loop` / `audio_stop` | ロード時の推論では宣言的な音声命令へ変換します。音量の省略は1.0です |
+| `audio_play` / `audio_loop` / `audio_stop` | ロード時の推論では宣言的な音声命令へ変換し、`act` / `customEvents`内では実行時に鳴らします。音量の省略は1.0です |
 | `event_exec(id, arg1, arg2)` | custom event `1000..1999`を実行してtrueを返します。ロード時は実行しません。[Lua actとcustomEventsの実行](#lua-actとcustomeventsの実行)を参照します |
 | `audio_preload` / `audio_dispose` | trueを返します。音声は宣言から読み込むため処理はありません |
 | `numbers` / `timer_is_on` / `timer_is_off` / `timer_elapsed*` / `screen_width` / `screen_height` | beatoraja最新版のAPIです |

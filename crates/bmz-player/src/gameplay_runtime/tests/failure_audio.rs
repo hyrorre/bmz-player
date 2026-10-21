@@ -445,6 +445,7 @@ fn failed_worker_keeps_play_stop_result_and_skin_audio_available() {
         &document,
         vec![crate::skin_loader::DecodedSkinAudio {
             path: "result.ogg".into(),
+            resolved: None,
             sample: sample(0.125),
         }],
     );

@@ -558,6 +558,10 @@ impl WinitApp {
                     audio_assets,
                 )
             });
+        } else if kind != SkinKind::Result {
+            self.audio
+                .skin_lua_audio
+                .reset(super::skin_lua_effects::skin_runtime_scene_for_kind(kind));
         }
         let font_count = fonts.len();
         let font_install_start = Instant::now();

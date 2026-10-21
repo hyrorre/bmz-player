@@ -74,18 +74,16 @@ fn clicked_lua_act_runs_before_the_next_frame_draws_and_reports_effects() {
         assert!(context.take_lua_effects().is_empty(), "the act waits for the next frame");
         // The act runs before this frame's custom timers and draw.
         assert_eq!(texts(&context), ["PANEL", "TIMED", "ACTIVE", "-1:0"], "{mode:?}");
-        assert_eq!(
-            context.take_lua_effects(),
-            vec![
-                SkinLuaEffect::Audio(bmz_render::skin::SkinAudioActionDef {
-                    action: bmz_render::skin::SkinAudioActionKind::Play,
-                    path: "open.wav".to_string(),
-                    volume: 1.0,
-                }),
-                SkinLuaEffect::Event { id: 17, arg1: 2, arg2: 0 },
-            ],
-            "{mode:?}"
-        );
+        let effects = context.take_lua_effects();
+        let [SkinLuaEffect::Audio(audio), event] = effects.as_slice() else {
+            panic!("{mode:?}: {effects:?}");
+        };
+        assert_eq!(audio.action, bmz_render::skin::SkinAudioActionKind::Play);
+        assert_eq!(audio.volume, 1.0);
+        // The app decodes the checked file without the skin's path context.
+        let audio_path = Path::new(&audio.path);
+        assert!(audio_path.is_absolute() && audio_path.ends_with("open.wav"), "{audio_path:?}");
+        assert_eq!(*event, SkinLuaEffect::Event { id: 17, arg1: 2, arg2: 0 });
         assert!(context.take_lua_effects().is_empty());
         assert_eq!(texts(&context), ["PANEL", "TIMED", "ACTIVE", "-1:0"], "{mode:?}");
         assert!(context.queue_lua_act(act, 1, 0));

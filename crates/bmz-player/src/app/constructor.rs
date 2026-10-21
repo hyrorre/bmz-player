@@ -516,6 +516,7 @@ impl WinitApp {
                 pending_system_sound_normalization: None,
                 system_sound_generation: 0,
                 system_sound_normalization_generation: 0,
+                skin_lua_audio: Default::default(),
             },
             ui: UiRuntimeState {
                 egui: None,

@@ -216,6 +216,8 @@ pub struct DecodedSkin {
 
 pub struct DecodedSkinAudio {
     pub path: String,
+    /// The checked file, matched against the paths Lua `audio_*` plays at runtime.
+    pub resolved: Option<PathBuf>,
     pub sample: DecodedSample,
 }
 

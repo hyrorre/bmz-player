@@ -138,8 +138,8 @@ impl ResultTimingDistribution {
 pub enum SkinLuaEffect {
     /// A `customEvents` action given as a built-in event ID instead of a function.
     Event { id: i32, arg1: i32, arg2: i32 },
-    /// `main_state.audio_play` / `audio_loop` / `audio_stop`. The path is relative
-    /// to the skin entry directory, like declarative skin audio.
+    /// `main_state.audio_play` / `audio_loop` / `audio_stop`. The path is the
+    /// absolute file already checked against the skin's allowed roots.
     Audio(crate::SkinAudioActionDef),
     /// `main_state.set_volume_sys` / `set_volume_key` / `set_volume_bg`.
     SetVolume { channel: SkinVolumeChannel, value: f32 },

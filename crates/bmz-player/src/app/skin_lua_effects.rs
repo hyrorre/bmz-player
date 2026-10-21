@@ -1,18 +1,56 @@
 use super::*;
-use bmz_render::skin::SkinLuaEffect;
+use crate::skin_audio::SkinAudioRuntime;
+use bmz_render::skin::{SkinAudioActionDef, SkinLuaEffect};
+
+/// Lua `audio_*` of the Select / Decide / Play skins. The Result skin uses
+/// `result_skin_audio`, which also holds its declarative sounds.
+#[derive(Default)]
+pub(super) struct SkinLuaAudio {
+    select: Option<SkinAudioRuntime>,
+    decide: Option<SkinAudioRuntime>,
+    play: Option<SkinAudioRuntime>,
+    /// The scene whose skin last applied effects; its loops stop when it changes.
+    scene: Option<SkinRuntimeScene>,
+}
+
+impl SkinLuaAudio {
+    fn slot(&mut self, scene: SkinRuntimeScene) -> Option<&mut Option<SkinAudioRuntime>> {
+        match scene {
+            SkinRuntimeScene::Select => Some(&mut self.select),
+            SkinRuntimeScene::Decide => Some(&mut self.decide),
+            SkinRuntimeScene::Play => Some(&mut self.play),
+            SkinRuntimeScene::Result => None,
+        }
+    }
+
+    /// The scene's skin was replaced; the sounds its Lua VM started stop.
+    pub(super) fn reset(&mut self, scene: SkinRuntimeScene) {
+        if let Some(slot) = self.slot(scene) {
+            *slot = None;
+        }
+    }
+}
 
 impl WinitApp {
     /// Apply what the shown skin's Lua `act` / `customEvents` requested while
     /// the renderer prepared this frame.
     pub(super) fn apply_skin_lua_effects(&mut self, scene_kind: AppSceneKind) {
         let scene = skin_runtime_scene(scene_kind);
+        self.track_skin_lua_audio_scene(scene);
+        let mut audio_started = false;
         for effect in self.renderer.take_skin_lua_effects(scene) {
             match effect {
                 SkinLuaEffect::Event { id, arg1, arg2: _ } => {
                     self.execute_skin_lua_event(scene, id, arg1)
                 }
-                SkinLuaEffect::Audio(_) | SkinLuaEffect::SetVolume { .. } => {}
+                SkinLuaEffect::Audio(action) => {
+                    audio_started |= self.run_skin_lua_audio(scene, &action);
+                }
+                SkinLuaEffect::SetVolume { .. } => {}
             }
+        }
+        if audio_started {
+            self.start_audio_output_stream();
         }
     }
 
@@ -27,6 +65,36 @@ impl WinitApp {
             }
         }
     }
+
+    fn run_skin_lua_audio(&mut self, scene: SkinRuntimeScene, action: &SkinAudioActionDef) -> bool {
+        let (bgm_volume, se_volume) = self.result_skin_audio_volumes();
+        let runtime = match self.audio.skin_lua_audio.slot(scene) {
+            Some(slot) => {
+                let Some(system_audio) = &self.audio.system_audio else { return false };
+                slot.get_or_insert_with(|| SkinAudioRuntime::for_lua(system_audio.engine(), scene))
+            }
+            None => match self.result.result_skin_audio.as_mut() {
+                Some(runtime) => runtime,
+                None => return false,
+            },
+        };
+        runtime.run_lua_action(action, bgm_volume, se_volume)
+    }
+
+    /// Loops a skin started end with its scene; one-shot sounds play out.
+    fn track_skin_lua_audio_scene(&mut self, scene: SkinRuntimeScene) {
+        let Some(previous) = self.audio.skin_lua_audio.scene.replace(scene) else { return };
+        if previous == scene {
+            return;
+        }
+        let runtime = match self.audio.skin_lua_audio.slot(previous) {
+            Some(slot) => slot.as_mut(),
+            None => self.result.result_skin_audio.as_mut(),
+        };
+        if let Some(runtime) = runtime {
+            runtime.stop_loops();
+        }
+    }
 }
 
 pub(super) fn skin_runtime_scene(scene_kind: AppSceneKind) -> SkinRuntimeScene {
@@ -35,5 +103,14 @@ pub(super) fn skin_runtime_scene(scene_kind: AppSceneKind) -> SkinRuntimeScene {
         AppSceneKind::Decide => SkinRuntimeScene::Decide,
         AppSceneKind::Play => SkinRuntimeScene::Play,
         AppSceneKind::Result => SkinRuntimeScene::Result,
+    }
+}
+
+pub(super) fn skin_runtime_scene_for_kind(kind: SkinKind) -> SkinRuntimeScene {
+    match kind {
+        SkinKind::Select => SkinRuntimeScene::Select,
+        SkinKind::Decide => SkinRuntimeScene::Decide,
+        SkinKind::Play => SkinRuntimeScene::Play,
+        SkinKind::Result => SkinRuntimeScene::Result,
     }
 }

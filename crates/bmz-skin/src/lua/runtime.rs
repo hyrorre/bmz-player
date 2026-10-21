@@ -624,7 +624,8 @@ impl LuaRuntimeStateScope {
                                 self.events.push_effect(SkinLuaEffect::Audio(SkinAudioActionDef {
                                     action,
                                     path,
-                                    volume: volume as f32,
+                                    // beatoraja clamps the skin volume to 0..=2.
+                                    volume: volume.clamp(0.0, 2.0) as f32,
                                 }));
                             }
                             Value::Boolean(true)

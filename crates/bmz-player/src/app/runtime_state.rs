@@ -359,6 +359,8 @@ pub(super) struct AppAudioRuntimeState {
     /// サウンドセット再抽選や設定変更で古いworker結果を破棄する世代番号。
     pub(super) system_sound_generation: u64,
     pub(super) system_sound_normalization_generation: u64,
+    /// Select / Decide / Playのskinが`act` / `customEvents`で鳴らすLuaの`audio_*`。
+    pub(super) skin_lua_audio: super::skin_lua_effects::SkinLuaAudio,
 }
 
 pub(super) struct UiRuntimeState {
