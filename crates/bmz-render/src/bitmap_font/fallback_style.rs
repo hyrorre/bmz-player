@@ -49,6 +49,9 @@ const MAX_SAMPLE_GLYPHS: usize = 48;
 const MIN_SAMPLE_GLYPHS: usize = 8;
 /// 推定に使う不透明な画素の数の下限。
 const MIN_SAMPLE_PIXELS: usize = 64;
+/// 推定は補助機能なので、ページ画像の大きさとは別に作業量を制限する。
+const MAX_SAMPLE_PIXELS: usize = 1_048_576;
+const MAX_SAMPLE_ROWS: i64 = 16_384;
 /// 縁の色と区別する塗りの色の差（チャンネルごとの最大差）。
 const FILL_COLOR_DIFFERENCE: u8 = 48;
 /// これ以上明るい塗りだけで縁取りも無ければ、スキンの文字色で塗る白い画像フォント。
@@ -71,10 +74,10 @@ pub(super) fn estimate_fallback_style(
     glyphs: &HashMap<char, BitmapFontGlyph>,
     pages: &HashMap<i32, BitmapFontPage>,
 ) -> Option<BitmapFallbackStyle> {
-    let pixels: Vec<SamplePixel> = sample_glyphs(glyphs, pages)
-        .into_iter()
-        .flat_map(|(glyph, page)| glyph_pixels(glyph, page))
-        .collect();
+    let samples = sample_glyphs(glyphs, pages);
+    validate_samples(&samples)?;
+    let pixels: Vec<SamplePixel> =
+        samples.into_iter().flat_map(|(glyph, page)| glyph_pixels(glyph, page)).collect();
     if pixels.len() < MIN_SAMPLE_PIXELS {
         return None;
     }
@@ -110,6 +113,38 @@ pub(super) fn estimate_fallback_style(
     let plain_white = style.outline.is_none()
         && style.fill_rows.iter().flatten().all(|channel| *channel >= PLAIN_WHITE_LEVEL);
     (!plain_white).then_some(style)
+}
+
+/// 不正な矩形や極端な行座標では、フォント本体を変えず推定だけを見送る。
+fn validate_samples(samples: &[(&BitmapFontGlyph, &BitmapFontPage)]) -> Option<()> {
+    let mut pixels = 0usize;
+    let mut top = i32::MAX;
+    let mut bottom = i32::MIN;
+    for (glyph, page) in samples {
+        if glyph.x.checked_add(glyph.width)? > page.image.width
+            || glyph.y.checked_add(glyph.height)? > page.image.height
+        {
+            return None;
+        }
+        let page_bytes =
+            (page.image.width as usize).checked_mul(page.image.height as usize)?.checked_mul(4)?;
+        if page_bytes > page.image.pixels.len() {
+            return None;
+        }
+        pixels = pixels.checked_add((glyph.width as usize).checked_mul(glyph.height as usize)?)?;
+        if pixels > MAX_SAMPLE_PIXELS {
+            return None;
+        }
+        // fill_rows smooths each row with its neighbours, including y - 1.
+        glyph.yoffset.checked_sub(1)?;
+        let end = glyph.yoffset.checked_add(i32::try_from(glyph.height).ok()?)?;
+        top = top.min(glyph.yoffset);
+        bottom = bottom.max(end);
+        if i64::from(bottom) - i64::from(top) > MAX_SAMPLE_ROWS {
+            return None;
+        }
+    }
+    Some(())
 }
 
 /// 塗りの画素と、同じ行の塗り色との差（チャンネルごとの最大差）の平均。
@@ -478,6 +513,48 @@ mod tests {
                     }
                 }
             }
+        }
+        assert_eq!(fixture.estimate(), None);
+    }
+
+    #[test]
+    fn overflowing_sample_row_coordinates_skip_estimation() {
+        for offset in [i32::MAX, i32::MIN] {
+            let mut fixture = styled_font(Some(OUTLINE), gradient);
+            for glyph in fixture.glyphs.values_mut() {
+                glyph.yoffset = offset;
+            }
+            assert_eq!(fixture.estimate(), None);
+        }
+    }
+
+    #[test]
+    fn out_of_page_sample_rectangles_skip_estimation() {
+        for (x, y, width, height) in [
+            (u32::MAX, 0, 20, 24),
+            (0, u32::MAX, 20, 24),
+            (0, 0, u32::MAX, 24),
+            (0, 0, 20, u32::MAX),
+            (190, 0, 20, 24),
+            (0, 20, 20, 24),
+        ] {
+            let mut fixture = styled_font(Some(OUTLINE), gradient);
+            let glyph = fixture.glyphs.get_mut(&'H').unwrap();
+            (glyph.x, glyph.y, glyph.width, glyph.height) = (x, y, width, height);
+            assert_eq!(fixture.estimate(), None);
+        }
+    }
+
+    #[test]
+    fn sparse_sample_rows_and_excessive_pixel_work_skip_estimation() {
+        let mut fixture = styled_font(Some(OUTLINE), gradient);
+        fixture.glyphs.get_mut(&'H').unwrap().yoffset = 100_000;
+        assert_eq!(fixture.estimate(), None);
+
+        let page = fixture.pages.get_mut(&0).unwrap();
+        page.image = RgbaImageAsset { width: 512, height: 512, pixels: vec![255; 512 * 512 * 4] };
+        for glyph in fixture.glyphs.values_mut() {
+            (glyph.x, glyph.y, glyph.width, glyph.height, glyph.yoffset) = (0, 0, 512, 512, 0);
         }
         assert_eq!(fixture.estimate(), None);
     }

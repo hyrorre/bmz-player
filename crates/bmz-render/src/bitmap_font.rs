@@ -407,6 +407,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bitmap_font_invalid_style_samples_do_not_prevent_loading() {
+        let root = temp_dir();
+        std::fs::create_dir_all(&root).unwrap();
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([255; 4]))
+            .save(root.join("page.png"))
+            .unwrap();
+        let path = root.join("font.fnt");
+        std::fs::write(
+            &path,
+            "info face=review size=16\n\
+             common lineHeight=20 base=15 scaleW=4 scaleH=4 pages=1\n\
+             page id=0 file=page.png\n\
+             char id=65 x=0 y=0 width=4 height=4 xoffset=0 yoffset=2147483647 xadvance=4 page=0\n",
+        )
+        .unwrap();
+        let font = load_bitmap_font(&path).unwrap();
+        assert_eq!(font.glyphs[&'A'].yoffset, i32::MAX);
+        assert!(font.fallback_style.is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn bitmap_font_loads_pages_and_glyphs() {
         let root = temp_dir();
         std::fs::create_dir_all(&root).unwrap();

@@ -93,7 +93,12 @@ pub(super) fn install_bit32_library(lua: &Lua) -> mlua::Result<()> {
             },
         )?,
     )?;
-    globals.raw_set("bit32", table)
+    globals.raw_set("bit32", table.clone())?;
+    // LuaJ registers standard libraries in package.loaded as well as globals.
+    // The sandboxed require uses this table before looking for skin files.
+    let package: Table = globals.get("package")?;
+    let loaded: Table = package.get("loaded")?;
+    loaded.raw_set("bit32", table)
 }
 
 fn fold_bit32_args(
@@ -157,7 +162,9 @@ fn bit32_field(lua: &Lua, field: Value, width: Option<Value>) -> mlua::Result<(u
     if width <= 0 {
         return Err(mlua::Error::runtime("bad argument to 'bit32' (width must be positive)"));
     }
-    if field + width > 32 {
+    // Both inputs are positive here; bound the field before subtracting so
+    // even math.maxinteger cannot overflow the range check itself.
+    if field >= 32 || width > 32 - field {
         return Err(mlua::Error::runtime("trying to access non-existent bits"));
     }
     let mask = if width == 32 { u32::MAX } else { (1_u32 << width) - 1 };

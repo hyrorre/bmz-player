@@ -29,6 +29,32 @@ fn evaluate(expressions: &str) -> String {
 }
 
 #[test]
+fn bit32_module_is_shared_by_global_require_and_runtime_access() {
+    assert_eq!(evaluate("out(require('bit32') == bit32, require('bit32').band(7, 3))"), "true,3");
+    let root = unique_test_dir("bmz-bit32-module");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("skin.luaskin");
+    fs::write(
+        &path,
+        "local b = require('bit32'); return {type=5, text={{id='bits', value=function() \
+         return tostring(b == bit32 and require('bit32') == b) .. ':' .. b.band(7, 3) end}}}",
+    )
+    .unwrap();
+    let mut loaded = load_lua_skin_with_runtime_state(
+        &path,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &LuaLoadRuntimeState { runtime_mode: LuaSkinRuntimeMode::Compat, ..Default::default() },
+    )
+    .unwrap();
+    let runtime = loaded.lua_runtime.as_mut().unwrap();
+    let id = (0..runtime.callback_count())
+        .find(|&id| runtime.callback_path(id) == Some("$.text[1].value"))
+        .unwrap();
+    assert_eq!(runtime.evaluate_text(id, &TestLuaMainState::default()).as_deref(), Some("true:3"));
+}
+
+#[test]
 fn bit32_matches_luaj_results() {
     let lines = evaluate(
         r#"
@@ -64,6 +90,26 @@ fn bit32_matches_luaj_results() {
             "5,2",
             "true,true",
         ]
+    );
+}
+
+#[test]
+fn bit32_rejects_extreme_fields_and_widths_as_lua_errors() {
+    assert_eq!(
+        evaluate(
+            r#"(function()
+                for _, args in ipairs({{math.maxinteger, 1}, {1, math.maxinteger},
+                    {math.maxinteger, math.maxinteger}, {32, 1}, {31, 2}}) do
+                    local ok, err = pcall(bit32.extract, 1, args[1], args[2])
+                    assert(not ok and tostring(err):find('non-existent bits', 1, true))
+                    ok, err = pcall(bit32.replace, 0, 1, args[1], args[2])
+                    assert(not ok and tostring(err):find('non-existent bits', 1, true))
+                end
+                return out(bit32.extract(-1, 0, 32), bit32.extract(-1, 31, 1),
+                    bit32.replace(-1, 0, 0, 32), bit32.replace(0, 1, 31, 1))
+            end)()"#,
+        ),
+        "4294967295,1,0,2147483648"
     );
 }
 
