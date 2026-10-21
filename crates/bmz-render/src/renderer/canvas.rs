@@ -208,6 +208,21 @@ impl CanvasViewport {
         Some(((x - self.rect.x) / self.rect.width, (y - self.rect.y) / self.rect.height))
     }
 
+    /// Hit-tests a surface point on the canvas and returns the hit rect in
+    /// surface coordinates too. The app compares the cursor with the rect for
+    /// the click direction (`click` 2 / 3), so both must share one space.
+    pub(super) fn click_hit(
+        self,
+        x: f32,
+        y: f32,
+        hit_test: impl FnOnce(f32, f32) -> Option<SkinClickHit>,
+    ) -> Option<SkinClickHit> {
+        let (x, y) = self.surface_to_canvas_point(x, y)?;
+        let mut hit = hit_test(x, y)?;
+        hit.rect = self.transform_rect(hit.rect);
+        Some(hit)
+    }
+
     /// Like [`Self::surface_to_canvas_point`], with points outside the canvas
     /// moved to its nearest edge.
     pub(super) fn surface_to_canvas_point_clamped(self, x: f32, y: f32) -> (f32, f32) {

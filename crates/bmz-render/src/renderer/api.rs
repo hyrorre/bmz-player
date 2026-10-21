@@ -347,7 +347,8 @@ impl Renderer {
     }
 
     /// The Lua `act` under a click in the Play or Decide skin, tested against
-    /// the last drawn frame. Select and Result have their own hit tests.
+    /// the last drawn frame. Select and Result have their own hit tests. The
+    /// hit rect is in normalized surface coordinates, like `x` / `y`.
     pub fn skin_lua_act_click_hit(
         &self,
         scene: SkinRuntimeScene,
@@ -359,13 +360,24 @@ impl Renderer {
             SkinRuntimeScene::Decide => self.decide_skin_canvas_render_policy(),
             SkinRuntimeScene::Select | SkinRuntimeScene::Result => return None,
         };
-        let (x, y) = match self.gpu.as_ref().map(WgpuRenderer::surface_size) {
-            Some(surface) => {
-                CanvasViewport::from_policy(surface, policy).surface_to_canvas_point(x, y)?
-            }
-            None => (x, y),
-        };
-        self.skin_context_for(scene).last_frame_lua_act_hit(x, y)
+        self.skin_click_hit(policy, x, y, |x, y| {
+            self.skin_context_for(scene).last_frame_lua_act_hit(x, y)
+        })
+    }
+
+    /// Hit-tests a surface point on a skin canvas. Without a surface the two
+    /// coordinate spaces are the same.
+    fn skin_click_hit(
+        &self,
+        policy: CanvasRenderPolicy,
+        x: f32,
+        y: f32,
+        hit_test: impl FnOnce(f32, f32) -> Option<SkinClickHit>,
+    ) -> Option<SkinClickHit> {
+        match self.gpu.as_ref().map(WgpuRenderer::surface_size) {
+            Some(surface) => CanvasViewport::from_policy(surface, policy).click_hit(x, y, hit_test),
+            None => hit_test(x, y),
+        }
     }
 
     /// Effects requested by the scene skin's Lua `act` / event actions.
@@ -459,6 +471,7 @@ impl Renderer {
         self.result_skin_canvas_point(x, y)
     }
 
+    /// The hit rect is in normalized surface coordinates, like `x` / `y`.
     pub fn select_skin_click_hit(
         &self,
         snapshot: &crate::scene::SelectSnapshot,
@@ -468,13 +481,14 @@ impl Renderer {
         if snapshot.option_panel == 0 && self.select_detail_options_closing(snapshot) {
             return None;
         }
-        let (x, y) = self.select_skin_canvas_point(x, y)?;
-        if snapshot.detail_options.is_some() && self.select_uses_detail_options() {
-            return self.select_skin_context.select_click_hit(snapshot, x, y).filter(|hit| {
-                matches!(hit.target, SkinClickTarget::Event { event_id, .. } if bmz_skin_document::is_detail_options_event(event_id))
-            });
-        }
-        self.select_skin_context.select_click_hit(snapshot, x, y)
+        let detail_options_only =
+            snapshot.detail_options.is_some() && self.select_uses_detail_options();
+        self.skin_click_hit(self.select_skin_canvas_render_policy(), x, y, |x, y| {
+            self.select_skin_context.select_click_hit(snapshot, x, y).filter(|hit| {
+                !detail_options_only
+                    || matches!(hit.target, SkinClickTarget::Event { event_id, .. } if bmz_skin_document::is_detail_options_event(event_id))
+            })
+        })
     }
 
     /// Search input bounds in normalized surface coordinates, including the
@@ -492,18 +506,20 @@ impl Renderer {
         Some(viewport.transform_rect(rect))
     }
 
+    /// The hit rect is in normalized surface coordinates, like `x` / `y`.
     pub fn result_skin_click_hit(
         &self,
         snapshot: &crate::scene::ResultSnapshot,
         x: f32,
         y: f32,
     ) -> Option<SkinClickHit> {
-        let (x, y) = self.result_skin_canvas_point(x, y)?;
         let document = self.result_skin_context.document()?;
         let mut state = crate::plan::result_skin_draw_state_for_document(snapshot, document);
         state.start_input_ms =
             crate::skin::skin_start_input_elapsed_ms(state.elapsed_ms, document.input);
-        self.result_skin_context.result_click_hit(&state, x, y)
+        self.skin_click_hit(self.result_skin_canvas_render_policy(), x, y, |x, y| {
+            self.result_skin_context.result_click_hit(&state, x, y)
+        })
     }
 
     pub fn result_skin_slider_hit(

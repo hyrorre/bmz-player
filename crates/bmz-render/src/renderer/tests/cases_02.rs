@@ -68,6 +68,43 @@ fn skin_internal_resolution_keeps_surface_contain_rect_for_final_upscale() {
 }
 
 #[test]
+fn letterboxed_click_hits_return_the_rect_in_the_cursor_space() {
+    // A 16:9 canvas on a square surface: the canvas spans y 0.21875..0.78125.
+    let viewport = CanvasViewport::from_policy(
+        SurfaceSize { width: 1000, height: 1000 },
+        CanvasRenderPolicy {
+            fit_mode: CanvasFitMode::Contain,
+            canvas_size: Some(CanvasSize { width: 320, height: 180 }),
+        },
+    );
+    let button = Rect { x: 0.25, y: 0.0, width: 0.5, height: 0.5 };
+    let mut tested = None;
+    let (x, y) = (0.6, 0.30);
+    let hit = viewport
+        .click_hit(x, y, |x, y| {
+            tested = Some((x, y));
+            Some(SkinClickHit {
+                target: SkinClickTarget::Event { event_id: 15, click: 3 },
+                rect: button,
+            })
+        })
+        .unwrap();
+    // The skin is hit-tested in canvas coordinates.
+    let (canvas_x, canvas_y) = tested.unwrap();
+    assert_approx(canvas_x, 0.6);
+    assert_approx(canvas_y, (0.30 - 0.21875) / 0.5625);
+    // The rect comes back in surface coordinates, so the cursor keeps its place
+    // in it: the upper half of the button for click type 3.
+    assert_approx(hit.rect.y, 0.21875);
+    assert_approx(hit.rect.height, 0.28125);
+    assert_approx((y - hit.rect.y) / hit.rect.height, (canvas_y - button.y) / button.height);
+    assert!(y <= hit.rect.y + hit.rect.height * 0.5);
+    assert_approx((x - hit.rect.x) / hit.rect.width, (canvas_x - button.x) / button.width);
+    // The letterbox is outside the skin.
+    assert!(viewport.click_hit(0.5, 0.1, |_, _| panic!("hit-tested the letterbox")).is_none());
+}
+
+#[test]
 fn canvas_viewport_contain_same_aspect_uses_identity_transform() {
     let viewport = CanvasViewport::from_policy(
         SurfaceSize { width: 2560, height: 1440 },

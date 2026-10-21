@@ -85,9 +85,9 @@
 - `event_observe_timer_off`は最初の評価で発火しない差を残しています。
 - 描画・custom timer callbackからの`audio_*`は鳴らしません。
 - Selectの曲バーのLua `draw`はクリック判定で評価しません。
-- クリック方向（`click` 2 / 3）の判定は、canvas座標の矩形とsurface座標のcursorを比べています。
-  Select / Resultの既存の処理と同じで、skinの縦横比と画面が違うと中央付近で左右・上下を誤る
-  可能性があります（今回の変更前からの動作）。
+- クリック方向（`click` 2 / 3）の判定は、canvas座標の矩形とsurface座標のcursorを比べていました。
+  skinの縦横比と画面が違うと、中央付近で左右・上下を誤る可能性がありました（今回の変更前からの動作）。
+  同日、hit testの矩形をcursorと同じsurface座標で返すように直しました。
 
 ## 追記（2026-10-21）: 比較ハーネスの評価順
 
