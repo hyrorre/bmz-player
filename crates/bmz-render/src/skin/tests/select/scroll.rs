@@ -51,7 +51,7 @@ fn snapshot(selected: u32, remaining: f32) -> SelectSnapshot {
 
 fn row_rect(document: &SkinDocument, snapshot: &SelectSnapshot, index: u32) -> Rect {
     let sources = mock_source("source", 16.0, 16.0);
-    let hits = document.select_click_hits(&sources, snapshot, &Default::default());
+    let hits = document.select_click_hits(&sources, snapshot, &Default::default(), None);
     let rect = hits
         .iter()
         .find_map(|hit| match hit.target {

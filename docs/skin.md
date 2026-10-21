@@ -749,7 +749,12 @@ functionの`act`と`customEvents`を永続VMで実行します。`auto` / `compa
   `arg2`は0です。closureとmodule stateは描画callbackと共有します。
 - クリックはそのsceneの次フレームで、custom timer・`customEvents`の更新と描画より先に
   実行します（beatorajaの入力処理から`Skin.updateCustomObjects`への順）。1フレームに
-  受け付けるクリックは64件までです。現在はSelectとResultのクリックを受け付けます。
+  受け付けるクリックは64件までです。Select / Decide / Play / Resultで受け付けます。
+  Decide / Playには組み込みのクリックイベントがないため、Luaの`act`だけを実行します。
+- クリック判定は、最後に描画したフレームのLua `draw`の結果とcustom timerを使い、判定の
+  ためにLuaを再実行しません（beatorajaの`mousePressed`が直前の`prepare`の状態を使うのと同じ）。
+  Lua `draw`で表示を切り替えるボタンも、表示中だけクリックできます。Selectの曲バーは
+  行ごとに条件を評価するため、このLua `draw`の結果を使いません。
 - `customEvents`は1フレーム1回、custom timerの更新後にID順で評価します。`condition`
   （function、またはoption ID。負のIDは否定）が真で、前回の実行から`minInterval`ミリ秒以上
   経っていれば`action`を実行します。`condition`の無い定義は`event_exec`からだけ実行します。

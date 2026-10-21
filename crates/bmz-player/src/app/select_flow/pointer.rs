@@ -109,6 +109,15 @@ impl WinitApp {
             }
             return;
         }
+        if let Some(scene) = match self.view_state() {
+            AppViewState::Decide => Some(SkinRuntimeScene::Decide),
+            AppViewState::Play => Some(SkinRuntimeScene::Play),
+            AppViewState::Select | AppViewState::Result => None,
+        } {
+            self.select.select_slider_dragging_type = None;
+            self.handle_skin_lua_act_click(scene, button, x, y);
+            return;
+        }
         if !matches!(self.view_state(), AppViewState::Select) {
             self.select.select_slider_dragging_type = None;
             return;
@@ -198,6 +207,25 @@ impl WinitApp {
             return;
         }
         self.execute_result_skin_event(event_id);
+    }
+
+    /// Play and Decide have no built-in click events; only Lua `act`s run.
+    fn handle_skin_lua_act_click(
+        &mut self,
+        scene: SkinRuntimeScene,
+        button: MouseButton,
+        x: f32,
+        y: f32,
+    ) {
+        let Some(hit) = self.renderer.skin_lua_act_click_hit(scene, x, y) else {
+            return;
+        };
+        let SkinClickTarget::Event { event_id, click } = hit.target else {
+            return;
+        };
+        if let Some(arg) = select_click_event_arg(click, button, hit.rect, x, y) {
+            self.renderer.queue_skin_lua_act(scene, event_id, arg, 0);
+        }
     }
 
     /// A Result skin event from a click or a Lua custom event action.

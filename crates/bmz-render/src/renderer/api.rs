@@ -346,6 +346,28 @@ impl Renderer {
         self.skin_context_for(scene).queue_lua_act(event_id, arg1, arg2)
     }
 
+    /// The Lua `act` under a click in the Play or Decide skin, tested against
+    /// the last drawn frame. Select and Result have their own hit tests.
+    pub fn skin_lua_act_click_hit(
+        &self,
+        scene: SkinRuntimeScene,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinClickHit> {
+        let policy = match scene {
+            SkinRuntimeScene::Play => self.play_skin_canvas_render_policy(),
+            SkinRuntimeScene::Decide => self.decide_skin_canvas_render_policy(),
+            SkinRuntimeScene::Select | SkinRuntimeScene::Result => return None,
+        };
+        let (x, y) = match self.gpu.as_ref().map(WgpuRenderer::surface_size) {
+            Some(surface) => {
+                CanvasViewport::from_policy(surface, policy).surface_to_canvas_point(x, y)?
+            }
+            None => (x, y),
+        };
+        self.skin_context_for(scene).last_frame_lua_act_hit(x, y)
+    }
+
     /// Effects requested by the scene skin's Lua `act` / event actions.
     pub fn take_skin_lua_effects(
         &self,

@@ -14,6 +14,8 @@ impl Default for SkinContext {
             ),
             result_render_cache: Arc::new(Mutex::new(ResultRenderCache::default())),
             playfield_clip_candidate: false,
+            lua_act_clicks: false,
+            lua_act_frame_state: Arc::default(),
         }
     }
 }
@@ -32,6 +34,8 @@ impl SkinContext {
             ),
             result_render_cache: Arc::new(Mutex::new(ResultRenderCache::default())),
             playfield_clip_candidate: false,
+            lua_act_clicks: false,
+            lua_act_frame_state: Arc::default(),
         }
     }
 
@@ -46,6 +50,7 @@ impl SkinContext {
             document_sources.into_iter().map(|source| (source.source_id.clone(), source)).collect();
         let runtime_document_sources = Arc::new(Mutex::new(document_sources.clone()));
         let playfield_clip_candidate = super::play::notes_clip_candidate(&document);
+        let lua_act_clicks = document_has_lua_acts(&document);
         Self {
             manifest,
             document: Some(document),
@@ -56,6 +61,8 @@ impl SkinContext {
             select_settings_dest_index,
             result_render_cache: Arc::new(Mutex::new(ResultRenderCache::default())),
             playfield_clip_candidate,
+            lua_act_clicks,
+            lua_act_frame_state: Arc::default(),
         }
     }
 
@@ -157,7 +164,24 @@ impl SkinContext {
             enabled_options,
             text_values,
         });
+        if self.lua_act_clicks
+            && let Ok(mut frame) = self.lua_act_frame_state.lock()
+        {
+            *frame = Some(state.clone());
+        }
         state
+    }
+
+    /// The Lua `act` under a Play / Decide click, tested against the last drawn
+    /// frame. These scenes have no built-in click events, so an object with a
+    /// built-in `act` on top takes the click without an action.
+    pub fn last_frame_lua_act_hit(&self, x: f32, y: f32) -> Option<SkinClickHit> {
+        let runtime = self.lua_draw_runtime.as_ref()?;
+        let mut state = self.lua_act_frame_state.lock().ok()?.clone()?;
+        apply_last_frame_lua(&mut state, runtime);
+        let hit = self.document.as_ref()?.result_click_hit(&state, x, y)?;
+        let SkinClickTarget::Event { event_id, .. } = hit.target else { return None };
+        lua_act_callback_id(event_id).map(|_| hit)
     }
 
     pub fn set_user_selected_options(&mut self, enabled_options: Vec<i32>) -> bool {
@@ -310,10 +334,11 @@ impl SkinContext {
         y: f32,
     ) -> Option<SkinClickHit> {
         let document = self.document.as_ref()?;
-        document.select_click_hit(
+        document.select_click_hit_with_lua(
             &self.document_sources,
             snapshot,
             &self.select_settings_dest_index,
+            self.lua_draw_runtime.as_ref(),
             x,
             y,
         )
@@ -324,7 +349,13 @@ impl SkinContext {
     }
 
     pub fn result_click_hit(&self, state: &SkinDrawState, x: f32, y: f32) -> Option<SkinClickHit> {
-        self.document.as_ref()?.result_click_hit(state, x, y)
+        let document = self.document.as_ref()?;
+        let Some(runtime) = &self.lua_draw_runtime else {
+            return document.result_click_hit(state, x, y);
+        };
+        let mut state = state.clone();
+        apply_last_frame_lua(&mut state, runtime);
+        document.result_click_hit(&state, x, y)
     }
 
     pub fn result_slider_hit(
@@ -481,6 +512,18 @@ impl<T: Default> Drop for RenderCacheLease<'_, T> {
             *slot = std::mem::take(&mut self.value);
         }
     }
+}
+
+fn document_has_lua_acts(document: &SkinDocument) -> bool {
+    let lua_act = |act: Option<i32>| act.is_some_and(|id| lua_act_callback_id(id).is_some());
+    document.image.iter().any(|image| lua_act(image.act))
+        || document.imageset.iter().any(|imageset| lua_act(imageset.act))
+        || document.destination.iter().any(|entry| match entry {
+            DestinationListEntry::Single(destination) => lua_act(destination.act),
+            DestinationListEntry::Conditional { destinations, .. } => {
+                destinations.iter().any(|destination| lua_act(destination.act))
+            }
+        })
 }
 
 #[cfg(test)]

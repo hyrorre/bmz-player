@@ -33,6 +33,16 @@ pub trait SkinLuaDrawRuntime: std::fmt::Debug + Send + Sync {
         Vec::new()
     }
 
+    /// The result of this `draw` callback in the last drawn frame.
+    fn last_draw(&self, _callback_id: usize) -> Option<bool> {
+        None
+    }
+
+    /// The custom timer values of the last drawn frame.
+    fn last_custom_timers(&self) -> BTreeMap<i32, Option<i64>> {
+        BTreeMap::new()
+    }
+
     /// Run once, synchronously, with a read-only state shared by the enclosed
     /// callbacks. Callbacks using another state must still use that state.
     fn with_state(
@@ -104,6 +114,37 @@ impl std::fmt::Debug for SkinLuaRuntimeContext {
             .field("text_value_count", &self.text_values.len())
             .finish_non_exhaustive()
     }
+}
+
+/// Answers Lua `draw` callbacks with their result in the last drawn frame.
+#[derive(Debug)]
+struct LastFrameLuaDraws(Arc<dyn SkinLuaDrawRuntime>);
+
+impl SkinLuaDrawRuntime for LastFrameLuaDraws {
+    fn evaluate_draw(
+        &self,
+        callback_id: usize,
+        _state: &SkinDrawState,
+        _enabled_options: &[i32],
+        _text_values: &BTreeMap<i32, String>,
+    ) -> bool {
+        self.0.last_draw(callback_id).unwrap_or(false)
+    }
+}
+
+/// Hit tests read the Lua `draw` results and custom timers of the last drawn
+/// frame instead of running the skin's Lua again, like beatoraja's
+/// `mousePressed` reads the objects as the last `prepare` left them.
+pub(in crate::skin) fn apply_last_frame_lua(
+    state: &mut SkinDrawState,
+    runtime: &Arc<dyn SkinLuaDrawRuntime>,
+) {
+    state.lua_custom_timer_us = runtime.last_custom_timers();
+    state.lua_runtime = Some(SkinLuaRuntimeContext {
+        runtime: Arc::new(LastFrameLuaDraws(Arc::clone(runtime))),
+        enabled_options: Arc::from([]),
+        text_values: Arc::default(),
+    });
 }
 
 impl PartialEq for SkinLuaRuntimeContext {
@@ -201,6 +242,10 @@ pub struct SkinContext {
     /// Whether any option branch has a clipped `notes` destination. Destinations are
     /// fixed at load, so skins without one skip the per-frame playfield clip lookup.
     pub(in crate::skin) playfield_clip_candidate: bool,
+    /// Whether an image, imageset or destination has a Lua `act`.
+    pub(in crate::skin) lua_act_clicks: bool,
+    /// The last drawn state of a skin with Lua `act`s, for Play / Decide clicks.
+    pub(in crate::skin) lua_act_frame_state: Arc<Mutex<Option<SkinDrawState>>>,
 }
 
 impl PartialEq for SkinContext {

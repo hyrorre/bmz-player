@@ -64,6 +64,9 @@ pub(super) struct LuaSkinDrawRuntimeAdapter {
     /// Clicked `act` callbacks and their arguments, run on the next frame.
     pending_acts: Mutex<Vec<(usize, i32, i32)>>,
     effects: Mutex<Vec<SkinLuaEffect>>,
+    /// `draw` results and custom timers of the last drawn frame, for hit tests.
+    last_draws: Mutex<HashMap<usize, bool>>,
+    last_custom_timers: Mutex<BTreeMap<i32, Option<i64>>>,
 }
 
 impl LuaSkinDrawRuntimeAdapter {
@@ -74,6 +77,8 @@ impl LuaSkinDrawRuntimeAdapter {
             chart_text_read: AtomicBool::new(false),
             pending_acts: Mutex::new(Vec::new()),
             effects: Mutex::new(Vec::new()),
+            last_draws: Mutex::new(HashMap::new()),
+            last_custom_timers: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -257,7 +262,18 @@ impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
             let room = LUA_PENDING_EFFECT_LIMIT.saturating_sub(pending.len());
             pending.extend(effects.into_iter().take(room));
         }
+        if let Ok(mut last) = self.last_custom_timers.lock() {
+            last.clone_from(&result);
+        }
         result
+    }
+
+    fn last_draw(&self, callback_id: usize) -> Option<bool> {
+        self.last_draws.lock().ok()?.get(&callback_id).copied()
+    }
+
+    fn last_custom_timers(&self) -> BTreeMap<i32, Option<i64>> {
+        self.last_custom_timers.lock().map(|timers| timers.clone()).unwrap_or_default()
     }
 
     fn queue_act(&self, callback_id: usize, arg1: i32, arg2: i32) -> bool {
@@ -329,6 +345,9 @@ impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
         {
             runtime.begin_frame();
         }
+        if let Ok(mut draws) = self.last_draws.lock() {
+            draws.clear();
+        }
     }
 
     fn evaluate_draw(
@@ -354,6 +373,9 @@ impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
         };
         if let Ok(mut slot) = self.runtime.lock() {
             *slot = Some(runtime);
+        }
+        if let Ok(mut draws) = self.last_draws.lock() {
+            draws.insert(callback_id, result);
         }
         result
     }

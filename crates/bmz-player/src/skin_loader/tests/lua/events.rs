@@ -1,5 +1,5 @@
 use super::*;
-use bmz_render::skin::SkinLuaEffect;
+use bmz_render::skin::{SkinClickTarget, SkinLuaEffect};
 
 #[test]
 fn clicked_lua_act_runs_before_the_next_frame_draws_and_reports_effects() {
@@ -89,5 +89,137 @@ fn clicked_lua_act_runs_before_the_next_frame_draws_and_reports_effects() {
         assert!(context.queue_lua_act(act, 1, 0));
         assert_eq!(texts(&context), ["1:0"], "{mode:?}");
         assert_eq!(adapter.runtime.lock().unwrap().as_ref().unwrap().failure_log_count(), 0);
+    }
+}
+
+fn install_lua_skin(path: &Path, source: &str) -> (SkinContext, SkinDocument) {
+    fs::write(path, source).unwrap();
+    let loaded = bmz_skin::load_lua_skin_with_runtime_state(
+        path,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &LuaLoadRuntimeState::default(),
+    )
+    .unwrap();
+    let document = loaded.document.clone();
+    let mut context = SkinContext::from_manifest_and_document(
+        bmz_render::skin::default_skin_manifest(),
+        loaded.document,
+        [],
+    );
+    context.set_lua_draw_runtime(Some(Arc::new(LuaSkinDrawRuntimeAdapter::new(
+        loaded.lua_runtime.unwrap(),
+    ))));
+    (context, document)
+}
+
+fn image_act(document: &SkinDocument, id: &str) -> i32 {
+    document.image.iter().find(|image| image.id == id).and_then(|image| image.act).unwrap()
+}
+
+#[test]
+fn select_clicks_use_the_lua_draws_and_timers_of_the_last_drawn_frame() {
+    let root = unique_test_dir("bmz-select-lua-act-hit");
+    fs::create_dir_all(&root).unwrap();
+    let (context, document) = install_lua_skin(
+        &root.join("skin.lua"),
+        r#"
+        local s = require('main_state')
+        local open = false
+        local draws = 0
+        return {type=5, w=100, h=100,
+            customTimers={{id=10001}},
+            image={
+                {id='open', src=0, x=0, y=0, w=1, h=1, act=function()
+                    open = true; s.set_timer(10001, s.time())
+                end},
+                {id='close', src=0, x=0, y=0, w=1, h=1, act=function() open = false end}},
+            text={{id='draws', size=10, value=function() return tostring(draws) end}},
+            destination={
+                {id='open', dst={{x=0, y=0, w=10, h=10}}},
+                {id='close', timer=10001,
+                    draw=function() draws = draws + 1; return open end,
+                    dst={{x=50, y=0, w=10, h=10}}},
+                {id='draws', dst={{x=0, y=50, w=10, h=10}}}}}
+        "#,
+    );
+    let (open, close) = (image_act(&document, "open"), image_act(&document, "close"));
+    let snapshot =
+        bmz_render::scene::SelectSnapshot { time: TimeUs(5_000_000), ..Default::default() };
+    let frame = || {
+        context.begin_frame();
+        context
+            .select_document_items(&snapshot)
+            .into_iter()
+            .filter_map(|item| match item {
+                SkinRenderItem::Text { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let hit = |x, y| {
+        context.select_click_hit(&snapshot, x, y).map(|hit| match hit.target {
+            SkinClickTarget::Event { event_id, .. } => event_id,
+            other => panic!("{other:?}"),
+        })
+    };
+    assert_eq!(frame(), ["1"]);
+    assert_eq!(hit(0.05, 0.95), Some(open));
+    // The close button was not drawn, so it takes no click.
+    assert_eq!(hit(0.55, 0.95), None);
+    assert!(context.queue_lua_act(open, 1, 0));
+    assert_eq!(frame(), ["2"]);
+    // Drawn with its custom timer on in the last frame: now it is clickable.
+    assert_eq!(hit(0.55, 0.95), Some(close));
+    // Hit tests read the last frame and never run the draw callback again.
+    assert_eq!(frame(), ["3"]);
+}
+
+#[test]
+fn decide_and_play_clicks_hit_only_lua_acts_of_the_last_drawn_frame() {
+    let root = unique_test_dir("bmz-decide-lua-act-hit");
+    fs::create_dir_all(&root).unwrap();
+    for skin_type in [6, 0] {
+        let (context, document) = install_lua_skin(
+            &root.join(format!("skin{skin_type}.lua")),
+            &format!(
+                r#"
+                local shown = true
+                return {{type={skin_type}, w=100, h=100,
+                    image={{
+                        {{id='lua', src=0, x=0, y=0, w=1, h=1,
+                            act=function() shown = not shown end}},
+                        {{id='builtin', src=0, x=0, y=0, w=1, h=1, act=15}}}},
+                    destination={{
+                        {{id='lua', draw=function() return shown end,
+                            dst={{{{x=0, y=0, w=10, h=10}}}}}},
+                        {{id='lua', dst={{{{x=50, y=0, w=10, h=10}}}}}},
+                        {{id='builtin', dst={{{{x=50, y=0, w=10, h=10}}}}}}}}}}
+                "#
+            ),
+        );
+        let act = image_act(&document, "lua");
+        let state = SkinDrawState { elapsed_ms: 1_000, ..SkinDrawState::default() };
+        let frame = || {
+            context.begin_frame();
+            context.static_document_items_split_for_state_and_text(
+                &state,
+                &bmz_render::skin::SkinTextState::default(),
+            );
+        };
+        let hit = |x, y| {
+            context.last_frame_lua_act_hit(x, y).map(|hit| match hit.target {
+                SkinClickTarget::Event { event_id, .. } => event_id,
+                other => panic!("{other:?}"),
+            })
+        };
+        assert_eq!(hit(0.05, 0.95), None, "type {skin_type}: nothing drawn yet");
+        frame();
+        assert_eq!(hit(0.05, 0.95), Some(act), "type {skin_type}");
+        // A built-in act drawn on top takes the click; these scenes have no action for it.
+        assert_eq!(hit(0.55, 0.95), None, "type {skin_type}");
+        assert!(context.queue_lua_act(act, 1, 0));
+        frame();
+        assert_eq!(hit(0.05, 0.95), None, "type {skin_type}: hidden by the act");
     }
 }

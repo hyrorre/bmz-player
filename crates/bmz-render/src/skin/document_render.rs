@@ -54,6 +54,19 @@ pub trait SkinDocumentRenderExt {
         settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
         x: f32,
         y: f32,
+    ) -> Option<SkinClickHit> {
+        self.select_click_hit_with_lua(sources, snapshot, settings_dest_index, None, x, y)
+    }
+
+    /// Lua `draw` callbacks and custom timers use the last drawn frame.
+    fn select_click_hit_with_lua(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        snapshot: &SelectSnapshot,
+        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+        lua_draw_runtime: Option<&Arc<dyn SkinLuaDrawRuntime>>,
+        x: f32,
+        y: f32,
     ) -> Option<SkinClickHit>;
 
     fn result_click_hit(&self, state: &SkinDrawState, x: f32, y: f32) -> Option<SkinClickHit>;
@@ -281,6 +294,7 @@ pub(super) trait SkinDocumentRenderInternal {
         _sources: &HashMap<String, SkinDocumentTexture>,
         snapshot: &SelectSnapshot,
         settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+        lua_draw_runtime: Option<&Arc<dyn SkinLuaDrawRuntime>>,
     ) -> Vec<SkinClickHit>;
 
     fn select_songlist_click_hits(

@@ -1,14 +1,15 @@
 macro_rules! skin_document_render_select_interaction_public_methods {
     () => {
-        fn select_click_hit(
+        fn select_click_hit_with_lua(
             &self,
             sources: &HashMap<String, SkinDocumentTexture>,
             snapshot: &SelectSnapshot,
             settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+            lua_draw_runtime: Option<&Arc<dyn SkinLuaDrawRuntime>>,
             x: f32,
             y: f32,
         ) -> Option<SkinClickHit> {
-            self.select_click_hits(sources, snapshot, settings_dest_index)
+            self.select_click_hits(sources, snapshot, settings_dest_index, lua_draw_runtime)
                 .into_iter()
                 .rev()
                 .find(|hit| rect_contains(hit.rect, x, y))
@@ -223,8 +224,17 @@ macro_rules! skin_document_render_select_interaction_methods {
             _sources: &HashMap<String, SkinDocumentTexture>,
             snapshot: &SelectSnapshot,
             settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+            lua_draw_runtime: Option<&Arc<dyn SkinLuaDrawRuntime>>,
         ) -> Vec<SkinClickHit> {
-            let (state, selected_row) = self.select_draw_state(snapshot, None);
+            let (row_state, selected_row) = self.select_draw_state(snapshot, None);
+            // Songlist rows evaluate their conditions per row, which one result
+            // per callback cannot answer, so only other objects use Lua.
+            let lua_state = lua_draw_runtime.map(|runtime| {
+                let mut state = row_state.clone();
+                apply_last_frame_lua(&mut state, runtime);
+                state
+            });
+            let state = lua_state.as_ref().unwrap_or(&row_state);
             let enabled_options = self.enabled_options();
             let images: SkinImageLookup<'_> = self.image_map().into();
             let mut hits = Vec::new();
@@ -239,7 +249,7 @@ macro_rules! skin_document_render_select_interaction_methods {
                         hits.extend(self.select_songlist_click_hits(
                             snapshot,
                             &enabled_options,
-                            &state,
+                            &row_state,
                         ));
                     }
                     continue;
@@ -248,7 +258,7 @@ macro_rules! skin_document_render_select_interaction_methods {
                     settings_dest_index,
                     destination,
                     &enabled_options,
-                    &state,
+                    state,
                     snapshot,
                     selected_row,
                     eval_skin_draw_condition,
@@ -256,11 +266,11 @@ macro_rules! skin_document_render_select_interaction_methods {
                 ) {
                     continue;
                 }
-                let Some(target) = self.click_target_for_destination(destination, &images, &state)
+                let Some(target) = self.click_target_for_destination(destination, &images, state)
                 else {
                     continue;
                 };
-                let Some(rect) = self.destination_click_rect(destination, &enabled_options, &state)
+                let Some(rect) = self.destination_click_rect(destination, &enabled_options, state)
                 else {
                     continue;
                 };
