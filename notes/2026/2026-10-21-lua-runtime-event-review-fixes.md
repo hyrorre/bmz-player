@@ -56,3 +56,40 @@ Resultの入力経路でLua `act`へ左右・中央ボタンを渡す。slider�
 Winit event loopを作るため通常の全体テストではignoredとし、単独で明示実行する。
 修正後は左右・中央の各実行回数と引数、左だけの組み込み操作・slider、退出中の遮断が成功した。
 `bmz-player`のcheck / all-targets Clippyも成功した。
+
+## 修正コミット
+
+| 順序 | commit | 内容 |
+|---|---|---|
+| 1 | `54504bfb` | 破棄したskinの音声decode結果を拒否 |
+| 2 | `0f93dfbb` | 数値actionのcustom event連鎖と循環上限 |
+| 3 | `7ba25a83` | appに宣言的triggerがない音声イベントをLuaで実行 |
+| 4 | `2b995624` | 条件の毎フレーム評価と評価後の間隔判定 |
+| 5 | `36c23650` | ResultのLua actへ右・中央クリックを渡す |
+
+## 検証範囲
+
+5件とも回帰テストを追加し、修正前の失敗と修正後の成功を確認した。
+Resultの入力経路テストはWindowsで次のとおり単独実行した。
+
+```text
+cargo test -p bmz-player --lib result_mouse_route_delivers_lua --locked --offline -- --ignored --test-threads=1
+```
+
+実際のマウス機器からの操作、音声デバイスでの試聴、第三者製スキンでのGPU表示、
+macOS / Linuxでの実行は未確認。今回の修正についてFPS・CPU時間の比較計測は行わない。
+
+通常のWindows権限で、修正5件を含む`36c23650`の統合検証を実行した。
+
+- `cargo fmt --check`成功。
+- `cargo check --workspace --locked --offline`成功。
+- `cargo clippy --workspace --all-targets --locked --offline -- -D warnings`成功。
+- `cargo test --workspace --locked --offline --no-fail-fast`成功。
+  各test binary / doctestの合計は4,573成功、0失敗、56 ignored。
+  子プロセスで再実行される1件も成功した。Resultのwindowテストは上記とは別に1件成功。
+- `cargo build -p bmz-player --release --locked --offline`成功。
+
+統合検証の生ログは`.local/review-fixes-20261021/`に保存した。
+全体検証後は、この結果と条件なしcustom eventの呼出しについての文書だけを追記した。
+前半の制限環境ではincremental cacheのhard linkに失敗してcopyへ切り替えるwarningが出たが、
+check / Clippy / testはいずれも正常終了した。検証のためのwarning抑制や無関係な修正は行っていない。
