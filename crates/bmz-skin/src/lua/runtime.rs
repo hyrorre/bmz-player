@@ -506,6 +506,7 @@ impl LuaRuntimeStateScope {
                         21 => Value::Integer(state.number(150)),
                         22 => Value::Integer(state.number(121)),
                         23 => Value::Number(state.gauge()),
+                        24 => Value::Boolean(state.key_pressed(lua_key_code(&argument))),
                         15 => {
                             let id = id()?;
                             if !(10_000..=19_999).contains(&id) {
@@ -600,6 +601,7 @@ pub(super) fn install_runtime_main_state_dispatch(lua: &Lua) -> mlua::Result<Tab
         (21, "exscore_best"),
         (22, "exscore_rival"),
         (23, "gauge"),
+        (24, "key_pressed"),
     ]) {
         let original: Function =
             main_state.get(if field == "float" { "float_number" } else { field })?;

@@ -260,6 +260,8 @@ pub struct OverlaySnapshot {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SkinLogicalInputSnapshot {
     pub held: [bool; bmz_skin_document::SKIN_BMZ_INPUT_COUNT],
+    /// Held keyboard keys as a bit set of libGDX keycodes, for Lua `main_state.key_pressed`.
+    pub keyboard: [u64; 4],
 }
 
 /// Battle session の表示専用2P状態。

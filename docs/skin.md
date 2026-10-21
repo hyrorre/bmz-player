@@ -786,6 +786,7 @@ beatoraja（`.local/beatoraja`の最新版）とLR2oraja Endless Dream（beatora
 | `audio_play` / `audio_loop` / `audio_stop` | 宣言的な音声命令へ変換します。音量の省略は1.0です |
 | `audio_preload` / `audio_dispose` | trueを返します。音声は宣言から読み込むため処理はありません |
 | `numbers` / `timer_is_on` / `timer_is_off` / `timer_elapsed*` / `screen_width` / `screen_height` | beatoraja最新版のAPIです |
+| `key_pressed(key)` | キーボードのキーを押しているかです。`key`はlibGDXのキーコード（数値・数値の文字列）か`Input.Keys`の名前（`"A"`、`"Space"`、`"L-Shift"`、`"Escape"`等。大文字小文字を区別）です。未知の名前・負の値はfalseです。ロード時はfalseで、推論せずruntime callbackで評価します |
 
 整数のプロパティ（`number`、`judge`、`exscore*`）はinteger、小数のプロパティ
 （`float_number`、`rate*`、`gauge`）はfloatで返します。`number` / `option` / `text` /
@@ -819,11 +820,16 @@ LuaJ（Lua 5.2系）との差:
 - 数値callbackが`nil`を返すと、BMZは値を未取得として描画しません。beatoraja / EDは
   `toint()` / `tofloat()`で0として扱います。timer callbackの`nil`はBMZも開始時刻0です。
 
+`key_pressed`のキーコードはbeatoraja同梱のlibGDX（`lib/gdx.jar`）の`Input.Keys`です（`Escape`は131、
+`F1`〜`F12`は244〜255）。BMZはキーボードの物理キーを同じ番号へ対応付けます。テンキーの演算子とEnterは
+LWJGL版と同じく`Plus` / `-` / `*` / `/` / `.` / `Enter`の番号になります。コントローラーのボタンは対象外です。
+キー割り当てとは無関係に、ウィンドウがフォーカスを持つ間のキーボード入力だけを反映します。
+
 BMZ独自のAPIは`bmz.option` / `bmz.get_option`、runtime VMだけの`main_state.float`
 （`float_number`の別名）、`total_play_counts_in_session` / `total_play_notes_in_session` /
 `score_date_sec_time`、名前付きプロパティです。
 
-beatoraja最新版の`event_exec`、`key_pressed`、`file_*`、`http_*`、`open_url`は未対応です。
+beatoraja最新版の`event_exec`、`file_*`、`http_*`、`open_url`は未対応です。
 `io`の書き込みは永続化しません。`luajava`の`bindClass` / `newInstance` / `new` /
 `createProxy`は入力のない無害なstubを返し、Javaのオブジェクトやファイルは作りません。
 

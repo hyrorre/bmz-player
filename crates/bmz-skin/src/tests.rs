@@ -71,6 +71,7 @@ struct TestLuaMainState {
     now_us: i64,
     result_panel: Option<i32>,
     gauge: f64,
+    keys: crate::LuaKeyboardState,
 }
 
 impl LuaMainState for TestLuaMainState {
@@ -112,6 +113,10 @@ impl LuaMainState for TestLuaMainState {
 
     fn gauge(&self) -> f64 {
         self.gauge
+    }
+
+    fn key_pressed(&self, keycode: i32) -> bool {
+        crate::lua_keyboard_pressed(&self.keys, keycode)
     }
 
     fn time_us(&self) -> i32 {

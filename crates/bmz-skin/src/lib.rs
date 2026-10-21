@@ -9,10 +9,15 @@ use serde_json::Value as JsonValue;
 
 mod lr2;
 mod lua;
+mod lua_keys;
 mod path_context;
 mod pm_chara;
 mod random_file;
 
+pub use lua_keys::{
+    LUA_KEYBOARD_WORDS, LuaKeyboardState, gdx_keycode_for_bmz_key, gdx_keycode_from_name,
+    lua_keyboard_pressed, lua_keyboard_state,
+};
 pub use path_context::SkinPathContext;
 pub use pm_chara::{LoadedPmChara, load_pm_chara};
 pub use random_file::random_file_index;
@@ -252,6 +257,11 @@ pub trait LuaMainState {
 
     fn offset(&self, _id: i32) -> LuaSkinOffsetValue {
         LuaSkinOffsetValue::default()
+    }
+
+    /// `main_state.key_pressed` with a libGDX keycode (see [`gdx_keycode_from_name`]).
+    fn key_pressed(&self, _keycode: i32) -> bool {
+        false
     }
 }
 

@@ -47,6 +47,7 @@ pub(in crate::plan) fn build_play_skin_state(
         rule_mode_index: snapshot.rule_mode_index,
         ln_score_policy_index: snapshot.ln_score_policy_index,
         logical_input_held: snapshot.skin_input.held,
+        keyboard_held: snapshot.skin_input.keyboard,
         select_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
         select_arrange_2p_index: crate::skin::select_arrange_index(&snapshot.arrange_2p),
         select_target_index: crate::skin::play_target_image_index(&snapshot.target),

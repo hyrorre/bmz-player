@@ -168,6 +168,10 @@ impl LuaMainState for RenderLuaMainState<'_> {
         if self.state.play_screen { f64::from(self.state.gauge) } else { 0.0 }
     }
 
+    fn key_pressed(&self, keycode: i32) -> bool {
+        bmz_skin::lua_keyboard_pressed(&self.state.keyboard_held, keycode)
+    }
+
     fn time_us(&self) -> i32 {
         self.state.elapsed_ms.saturating_mul(1_000)
     }

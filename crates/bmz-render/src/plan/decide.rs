@@ -24,6 +24,7 @@ pub(super) fn plan_decide(
             rule_mode_index: snapshot.rule_mode_index,
             ln_score_policy_index: snapshot.ln_score_policy_index,
             logical_input_held: snapshot.skin_input.held,
+            keyboard_held: snapshot.skin_input.keyboard,
             total_notes: snapshot.total_notes,
             select_chart_total_gauge: snapshot.chart_total_gauge,
             past_notes: snapshot.past_notes,

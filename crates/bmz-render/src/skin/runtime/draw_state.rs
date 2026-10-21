@@ -22,6 +22,8 @@ pub struct SkinDrawState {
     pub runtime_flags: HashMap<i32, bool>,
     /// BMZ logical inputs in E1/E2/E3/E4/UI Left/Right/Up/Down order.
     pub logical_input_held: [bool; SKIN_BMZ_INPUT_COUNT],
+    /// Held keyboard keys as libGDX keycodes, for Lua `main_state.key_pressed`.
+    pub keyboard_held: [u64; 4],
     /// Elapsed milliseconds since the latest aggregate false-to-true press edge.
     pub logical_input_press_ms: [Option<i32>; SKIN_BMZ_INPUT_COUNT],
     /// E1/E2 aggregate timer while either input remains held.
@@ -510,6 +512,7 @@ impl Default for SkinDrawState {
             gauge_random_indices: HashMap::new(),
             runtime_flags: HashMap::new(),
             logical_input_held: [false; SKIN_BMZ_INPUT_COUNT],
+            keyboard_held: [0; 4],
             logical_input_press_ms: [None; SKIN_BMZ_INPUT_COUNT],
             e1_e2_press_ms: None,
             e1_e2_release_ms: None,

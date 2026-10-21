@@ -108,7 +108,7 @@ timerの単位・OFF値・書き込み制約・失敗時の値は[skin.md](skin.
 | 任意のdestination timer function | custom timerのruntime対応とは別です。destinationへ直接渡す任意functionの汎用runtime評価は未対応 |
 | `act` / `customEvents` | 一部functionのロード時推論はあるが、任意のaction / conditionを永続VMで実行する汎用イベントruntimeは未対応 |
 | その他のLua function field | 汎用float writer等は上記callbackの対象外です。対応追加時はfieldと呼び出し契約を個別に定義する |
-| beatoraja最新版のLua API | `main_state.event_exec` / `key_pressed` / `file_*` / `http_*` / `open_url`は未対応です。`event_exec`は汎用イベントruntime、`key_pressed`は入力状態の供給、file / httpは書込・通信の安全性設計が必要です |
+| beatoraja最新版のLua API | `main_state.event_exec` / `file_*` / `http_*` / `open_url`は未対応です。`event_exec`は汎用イベントruntime、file / httpは書込・通信の安全性設計が必要です。`key_pressed`は対応済みです（[Lua APIの互換範囲](skin.md#lua-apiの互換範囲)） |
 | LuaJとLua 5.4の差 | 整数値floatの`tostring`、`string.format("%d")`の小数、`os.date`の既定書式と未知指定子は差が残ります。数値callbackの`nil`はBMZでは未取得、LuaJの`toint()` / `tofloat()`では0です。[仕様](skin.md#lua-apiの互換範囲) |
 | function診断 | field path付きwarningやcustom timerのID付き診断はあります。object ID・Lua source file / lineの一貫した提示は改善余地がある |
 | PMchara | `--`座標補間と右下pixel色によるchroma keyは未対応です。通常のalphaは対応します。[詳細仕様](skin.md) |

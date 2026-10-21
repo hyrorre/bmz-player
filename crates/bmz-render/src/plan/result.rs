@@ -197,6 +197,7 @@ pub(super) fn build_result_skin_draw_state(
         operating_time_ms: snapshot.operating_time_ms,
         current_fps: snapshot.current_fps,
         logical_input_held: snapshot.skin_input.held,
+        keyboard_held: snapshot.skin_input.keyboard,
         skin_offsets: snapshot.skin_offsets,
         skin_attempt: snapshot.skin_attempt,
         select_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),

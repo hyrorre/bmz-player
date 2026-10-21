@@ -919,6 +919,18 @@ fn skin_logical_inputs_include_all_e_actions_and_ui_directions() {
 }
 
 #[test]
+fn skin_input_exposes_held_keyboard_keys_for_lua_key_pressed() {
+    let keys = default_select_keys();
+    let pressed = HashSet::from(["Q".to_string(), "Escape".to_string(), "Button3".to_string()]);
+    let keyboard = skin_logical_input_snapshot_from_pressed_controls(&pressed, &keys).keyboard;
+    for (code, held) in [(45, true), (131, true), (29, false)] {
+        assert_eq!(bmz_skin::lua_keyboard_pressed(&keyboard, code), held, "{code}");
+    }
+    // Controller buttons are not keyboard keys.
+    assert_eq!(keyboard, bmz_skin::lua_keyboard_state(["Q", "Escape"]));
+}
+
+#[test]
 fn loaded_skin_reset_preserves_non_skin_profile_settings() {
     let mut current = ProfileConfig::new_default("default", "Current", 1);
     current.play.random = RandomOptionConfig::SRandom;

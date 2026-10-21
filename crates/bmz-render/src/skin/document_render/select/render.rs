@@ -516,6 +516,7 @@ macro_rules! skin_document_render_select_render_methods {
                 current_fps: snapshot.current_fps,
                 operating_time_ms: snapshot.operating_time_ms,
                 logical_input_held: snapshot.skin_input.held,
+                keyboard_held: snapshot.skin_input.keyboard,
                 skin_offsets: snapshot.skin_offsets,
                 exit_hold: snapshot.exit_hold,
                 select_bar_elapsed_ms: (snapshot.selection_time.0 / 1_000)

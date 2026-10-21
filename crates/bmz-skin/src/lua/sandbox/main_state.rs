@@ -31,6 +31,30 @@ pub(super) fn lua_boolean_property(
     }
 }
 
+/// beatoraja `key_pressed`: numbers (and numeric strings) are libGDX keycodes,
+/// other values go through `Input.Keys.valueOf`, which yields -1 when unknown.
+pub(super) fn lua_key_code(value: &Value) -> i32 {
+    fn truncate(value: f64) -> i32 {
+        if value.is_finite() {
+            value.trunc().clamp(i32::MIN as f64, i32::MAX as f64) as i32
+        } else {
+            -1
+        }
+    }
+    match value {
+        Value::Integer(value) => i32::try_from(*value).unwrap_or(-1),
+        Value::Number(value) => truncate(*value),
+        Value::String(text) => {
+            let text = text.to_string_lossy();
+            match text.trim().parse::<f64>() {
+                Ok(number) => truncate(number),
+                Err(_) => crate::gdx_keycode_from_name(&text).unwrap_or(-1),
+            }
+        }
+        _ => -1,
+    }
+}
+
 pub(super) fn lua_runtime_stub_number(ref_id: i32) -> i32 {
     let now = unix_seconds_to_utc_datetime(lua_os_now_seconds());
     match ref_id {
@@ -162,6 +186,20 @@ pub(super) fn create_main_state_stub(
                 return Err(mlua::Error::runtime("gauge value requires runtime evaluation"));
             }
             Ok(0.0)
+        })?,
+    )?;
+    let probe_for_key_pressed = probe.clone();
+    table.set(
+        "key_pressed",
+        lua.create_function(move |_, _key: Value| {
+            let probe = probe_for_key_pressed
+                .lock()
+                .map_err(|_| mlua::Error::runtime("main_state probe lock poisoned"))?;
+            // Keyboard state changes every frame; never fold the load value.
+            if probe.inferring {
+                return Err(mlua::Error::runtime("key_pressed requires runtime evaluation"));
+            }
+            Ok(false)
         })?,
     )?;
     let probe_for_judge = probe.clone();

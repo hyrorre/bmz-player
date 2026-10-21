@@ -141,6 +141,47 @@ fn gauge_dependent_draw_conditions_are_not_folded_at_load() {
     assert!(!runtime.evaluate_draw(id, &TestLuaMainState { gauge: 80.0, ..Default::default() }));
 }
 
+/// beatoraja `key_pressed`: libGDX keycodes or `Input.Keys` names, false at load.
+#[test]
+fn key_pressed_reads_the_live_keyboard_by_gdx_code_or_name() {
+    let mut loaded = load(
+        r#"
+        local s = require('main_state')
+        local at_load = tostring(s.key_pressed('A'))
+        return {type=0, name=at_load, text={{id='keys', value=function()
+            return table.concat({
+                tostring(s.key_pressed(29)), tostring(s.key_pressed('A')),
+                tostring(s.key_pressed('29')), tostring(s.key_pressed(29.9)),
+                tostring(s.key_pressed('L-Shift')), tostring(s.key_pressed('Escape')),
+                tostring(s.key_pressed('LShift')), tostring(s.key_pressed(-1)),
+                tostring(s.key_pressed(nil)), tostring(s.key_pressed(4096))}, ':')
+        end}}, destination={{id='held', draw=function() return s.key_pressed('Space') end,
+            dst={{x=0, y=0, w=1, h=1}}}}}
+        "#,
+        &LuaLoadRuntimeState::default(),
+    );
+    assert_eq!(loaded.document.name, "false");
+    let runtime = loaded.lua_runtime.as_mut().expect("key_pressed keeps callbacks live");
+    let text = callback(runtime, "$.text[1].value");
+    let draw = callback(runtime, "$.destination[1].draw");
+    let released = TestLuaMainState::default();
+    assert_eq!(
+        runtime.evaluate_text(text, &released).as_deref(),
+        Some("false:false:false:false:false:false:false:false:false:false")
+    );
+    assert!(!runtime.evaluate_draw(draw, &released));
+    let held = TestLuaMainState {
+        keys: crate::lua_keyboard_state(["A", "LShift", "Space"]),
+        ..Default::default()
+    };
+    assert_eq!(
+        runtime.evaluate_text(text, &held).as_deref(),
+        Some("true:true:true:true:true:false:false:false:false:false")
+    );
+    assert!(runtime.evaluate_draw(draw, &held));
+    assert_eq!(runtime.failure_log_count(), 0);
+}
+
 #[test]
 fn omitted_audio_volume_plays_at_full_volume_like_beatoraja() {
     let loaded = load(
