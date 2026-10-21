@@ -634,7 +634,7 @@ impl WinitApp {
         }
 
         // コース（段位）リザルト: Key5/Key7 はフェードアウト後の hold 状態で
-        // retry arrange を決める。Button1/Start は同配置リトライ。
+        // retry arrange を決める。コントローラーに固定の操作はなく、鍵盤の割り当てだけで判定する。
         if self.result.finished_course.is_some() {
             let control = PhysicalControl::GamepadButton(button.to_string());
             self.track_result_lane_hold(&control, pressed);
