@@ -46,6 +46,8 @@ enum SkinAudioFileState {
     Loading(Vec<AudioEngineCommand>),
     Ready,
     Failed,
+    /// 所有するskinは破棄済み。遅いworkerのsample登録も受け付けない。
+    Cancelled,
 }
 
 impl SkinAudioRuntime {
@@ -247,7 +249,7 @@ impl SkinAudioFile {
                 pending.extend(commands);
                 true
             }
-            SkinAudioFileState::Failed => false,
+            SkinAudioFileState::Failed | SkinAudioFileState::Cancelled => false,
         }
     }
 
@@ -259,10 +261,21 @@ impl SkinAudioFile {
         }
     }
 
+    fn cancel(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            *state = SkinAudioFileState::Cancelled;
+        }
+    }
+
     /// 登録と保留中の命令を同じlock内で送り、後から届く命令との順序を保つ。
     fn decode(&self, engine: &AudioEngineHandle, path: &Path) {
         let sample = FfmpegSampleLoader::default().load(path);
         let Ok(mut state) = self.state.lock() else { return };
+        // Drop and sample submission share this lock. Once the owner is gone,
+        // an old worker cannot overwrite an ID already reused by the next skin.
+        if matches!(*state, SkinAudioFileState::Cancelled) {
+            return;
+        }
         match sample {
             Ok(sample) => {
                 let pending = match std::mem::replace(&mut *state, SkinAudioFileState::Ready) {
@@ -286,6 +299,9 @@ impl SkinAudioFile {
 
 impl Drop for SkinAudioRuntime {
     fn drop(&mut self) {
+        for file in self.files.values() {
+            file.cancel();
+        }
         self.stop_all();
     }
 }
@@ -349,8 +365,8 @@ mod tests {
         output
     }
 
-    /// 48 kHz mono 16-bit PCM of a constant half-scale sample.
-    fn write_wav(path: &Path, frames: u32) {
+    /// 48 kHz mono 16-bit PCM of a constant sample.
+    fn write_wav(path: &Path, frames: u32, value: i16) {
         let data_len = frames * 2;
         let mut bytes = Vec::with_capacity(44 + data_len as usize);
         bytes.extend_from_slice(b"RIFF");
@@ -366,7 +382,7 @@ mod tests {
         bytes.extend_from_slice(b"data");
         bytes.extend_from_slice(&data_len.to_le_bytes());
         for _ in 0..frames {
-            bytes.extend_from_slice(&16_384i16.to_le_bytes());
+            bytes.extend_from_slice(&value.to_le_bytes());
         }
         std::fs::write(path, bytes).unwrap();
     }
@@ -434,7 +450,7 @@ mod tests {
         let root = crate::test_dir::TestDir::new("bmz-skin-lua-audio");
         std::fs::create_dir_all(&*root).unwrap();
         let path = root.join("open.wav");
-        write_wav(&path, 4_800);
+        write_wav(&path, 4_800, 16_384);
         let engine = AudioEngineHandle::new(AudioEngine::default());
         let mut processor = engine.processor();
         let mut runtime = SkinAudioRuntime::for_lua(engine, SkinRuntimeScene::Select);
@@ -494,5 +510,53 @@ mod tests {
         ));
         assert_eq!(render(&mut processor, 1), vec![0.0, 0.0]);
         assert_eq!(runtime.files.len(), 1, "the declared sample is not decoded again");
+    }
+
+    #[test]
+    fn unloaded_skin_decode_cannot_overwrite_a_reused_sound_id() {
+        let root = crate::test_dir::TestDir::new("bmz-skin-stale-audio");
+        std::fs::create_dir_all(&*root).unwrap();
+        let old_path = root.join("old.wav");
+        let new_path = root.join("new.wav");
+        write_wav(&old_path, 4_800, 16_384);
+        write_wav(&new_path, 4_800, 24_576);
+        let engine = AudioEngineHandle::new(AudioEngine::default());
+        let mut processor = engine.processor();
+        let mut old = SkinAudioRuntime::for_lua(engine.clone(), SkinRuntimeScene::Select);
+        // Hold the old worker just before decode completes, without racing a thread.
+        let worker = Arc::new(SkinAudioFile {
+            id: SoundId(old.next_runtime_id),
+            state: Mutex::new(SkinAudioFileState::Loading(Vec::new())),
+        });
+        old.files.insert(old_path.clone(), Arc::clone(&worker));
+        drop(old);
+
+        let mut current = SkinAudioRuntime::for_lua(engine, SkinRuntimeScene::Select);
+        assert!(current.run_lua_action(
+            &action(SkinAudioActionKind::Loop, &new_path, 1.0),
+            1.0,
+            1.0
+        ));
+        wait_until_loaded(&current, &new_path);
+        assert_eq!(current.files[&new_path].id, worker.id, "the new skin reuses this scene's IDs");
+        assert_eq!(render(&mut processor, 1), vec![0.75, 0.75]);
+        assert!(current.stop_loops());
+        assert_eq!(render(&mut processor, 1), vec![0.0, 0.0]);
+
+        worker.decode(&current.engine, &old_path);
+        assert!(current.run_lua_action(
+            &action(SkinAudioActionKind::Play, &new_path, 1.0),
+            1.0,
+            1.0
+        ));
+        assert_eq!(render(&mut processor, 1), vec![0.75, 0.75]);
+        assert!(!worker.dispatch(
+            &current.engine,
+            vec![AudioEngineCommand::PlayNow {
+                sound_id: worker.id,
+                volume: 1.0,
+                loop_playback: false,
+            }]
+        ));
     }
 }

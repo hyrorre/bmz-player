@@ -777,7 +777,8 @@ functionの`act`と`customEvents`を永続VMで実行します。`auto` / `compa
   functionの`action` / `condition`は従来どおり出力しません。
 - `act` / `action`内の`audio_play` / `audio_loop` / `audio_stop`は、そのsceneのskin音声として
   鳴らします。pathはskinの許可root内の既存fileに限ります。初回はbackgroundでdecodeし、
-  decode中の命令は順に保留します。音量はbeatorajaと同じく0〜2に制限したうえで、
+  decode中の命令は順に保留します。skin破棄後に完了したdecodeは登録せず、次のskinの
+  音声を上書きしません。音量はbeatorajaと同じく0〜2に制限したうえで、
   `audio_play`はシステムSE、`audio_loop`はシステムBGMの音量を掛けます（最大1.0。
   beatorajaはどちらもシステム音量です）。sceneを離れるとloopを止め、単発の音は鳴らし切ります。
   1 sceneで実行時に読み込むfileは64個までです。描画callbackからの`audio_*`は無視します。
