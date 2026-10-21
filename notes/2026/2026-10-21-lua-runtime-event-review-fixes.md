@@ -14,3 +14,11 @@ scene退出時のloop停止やruntimeのresetでは、今後も利用するfile�
 修正前は新音声0.75の代わりに旧音声0.5が再生されて失敗した。
 修正後は音声runtimeの全4テストが成功した。
 `bmz-player`のcheck / all-targets Clippy（`-D warnings`）も成功。
+
+## 2. 数値actionのカスタムイベント連鎖
+
+`action=1001`等はappの組み込みイベントへ送らず、同じVM内で同期実行する。
+数値による各連鎖をfunctionの呼出しと同じ入れ子上限へ数え、数値だけの循環も16段で止める。
+引数・音声効果・組み込みイベントへの転送と、循環後のdepth復元をAuto / Compatで検証する。
+追加した回帰テストは修正前に連鎖先が実行されず失敗した。
+修正後はruntimeイベント5テスト、`bmz-skin`のcheck / all-targets Clippyが成功した。

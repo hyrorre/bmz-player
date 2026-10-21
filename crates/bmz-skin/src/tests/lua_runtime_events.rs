@@ -206,3 +206,51 @@ fn runtime_vm_is_built_only_for_events_that_need_it() {
     assert!(runtime.has_custom_events());
     assert!(observed.dependencies.opaque);
 }
+
+#[test]
+fn numeric_custom_event_actions_chain_synchronously_and_bound_cycles() {
+    for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
+        let (_root, mut loaded) = load(
+            r#"
+            local s = require('main_state')
+            local count, last = 0, ''
+            return {type=5, customEvents={
+                {id=1000, action=1001},
+                {id=1001, action=function(a,b)
+                    count=count+1; last=a..':'..b; s.audio_play('se.wav')
+                end},
+                {id=1002, action=1003}, {id=1003, action=1002},
+                {id=1004, action=17}},
+                image={{id='btn', src=0, x=0, y=0, w=1, h=1, act=function(a,b)
+                    s.event_exec(1000,a,b); s.event_exec(1002); s.event_exec(1004,a,b)
+                end}},
+                text={{id='log', value=function() return count..':'..last end}}}
+            "#,
+            mode,
+        );
+        let act = image_act(&loaded.document, "btn");
+        let runtime = loaded.lua_runtime.as_mut().unwrap();
+        let text = callback(runtime, "$.text[1].value");
+        let state = TestLuaMainState::default();
+        for (count, arg1, arg2) in [(1, -3, 7), (2, 5, 9)] {
+            runtime.begin_frame();
+            assert!(runtime.execute_act(act, arg1, arg2, &state));
+            assert_eq!(
+                runtime.evaluate_text(text, &state).unwrap(),
+                format!("{count}:{arg1}:{arg2}"),
+                "{mode:?}"
+            );
+            let effects = runtime.take_effects();
+            assert!(matches!(
+                effects.as_slice(),
+                [SkinLuaEffect::Audio(_), SkinLuaEffect::Event { id: 17, .. }]
+            ));
+            assert_eq!(effects[1], SkinLuaEffect::Event { id: 17, arg1, arg2 });
+            assert_eq!(
+                runtime.failure_log_count(),
+                1,
+                "cycles fail once and leave the depth restored"
+            );
+        }
+    }
+}

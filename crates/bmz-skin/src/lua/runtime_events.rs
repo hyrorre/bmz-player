@@ -26,7 +26,7 @@ pub(super) struct LuaEventCallback {
 #[derive(Debug, Clone)]
 pub(super) enum LuaCustomEventAction {
     Function(LuaEventCallback),
-    /// A built-in event ID, executed by the app like a clicked `act`.
+    /// An event ID: custom events stay in the VM, built-ins go to the app.
     Builtin(i32),
 }
 
@@ -224,6 +224,18 @@ impl LuaRuntimeEvents {
         };
         match action {
             Some(LuaCustomEventAction::Function(callback)) => self.call(&callback, arg1, arg2),
+            Some(LuaCustomEventAction::Builtin(event)) if LUA_CUSTOM_EVENT_IDS.contains(&event) => {
+                // EventFactory routes numeric custom IDs through MainState too.
+                // Count numeric actions as a level so all-numeric cycles are bounded.
+                let Some(_guard) = self.enter() else {
+                    self.log_failure_once(
+                        &format!("$.customEvents[id={id}].action"),
+                        "Lua event nesting limit reached",
+                    );
+                    return;
+                };
+                self.execute(event, arg1, arg2, now_us);
+            }
             Some(LuaCustomEventAction::Builtin(event)) => {
                 self.push_effect(SkinLuaEffect::Event { id: event, arg1, arg2 });
             }
