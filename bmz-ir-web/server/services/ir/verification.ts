@@ -24,8 +24,7 @@ import { IrEvidenceValidationError, LOCAL_BACKFILL_SOURCE, isRecord } from './co
 export async function resolveVerification(
   playerIdOrDb: string | unknown,
   payloadOrPlayerId:
-    | { evidence?: Record<string, unknown>; play_options?: Record<string, unknown> }
-    | string,
+    { evidence?: Record<string, unknown>; play_options?: Record<string, unknown> } | string,
   maybePayload?: { evidence?: Record<string, unknown>; play_options?: Record<string, unknown> },
 ): Promise<IrVerificationStatus> {
   const playerId = typeof playerIdOrDb === 'string' ? playerIdOrDb : String(payloadOrPlayerId)

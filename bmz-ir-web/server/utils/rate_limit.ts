@@ -4,12 +4,7 @@ import { createError, getRequestIP, setHeader, type H3Event } from 'h3'
 import { db, schema } from 'hub:db'
 
 export type RateLimitAction =
-  | 'login'
-  | 'register'
-  | 'score_submit'
-  | 'score_cleanup'
-  | 'refresh'
-  | 'replay_upload'
+  'login' | 'register' | 'score_submit' | 'score_cleanup' | 'refresh' | 'replay_upload'
 export type RateLimitScope = 'email' | 'ip' | 'user'
 
 export const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000

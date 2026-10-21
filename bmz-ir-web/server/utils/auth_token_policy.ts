@@ -1,9 +1,5 @@
 export type SessionRevocationReason =
-  | 'logout'
-  | 'rotated'
-  | 'password_changed'
-  | 'reuse_detected'
-  | 'admin'
+  'logout' | 'rotated' | 'password_changed' | 'reuse_detected' | 'admin'
 
 export function isRecentRotatedRefreshRetry(
   revokedAt: Date,

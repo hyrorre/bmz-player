@@ -47,7 +47,7 @@
     "@nuxt/eslint": "^1.17.0",
     "@types/bun": "^1.4.3",
     "drizzle-kit": "^0.31.11",
-    "prettier": "3.8.4",
+    "prettier": "3.9.10",
     "typescript": "^6.0.3",
     "vue-tsc": "^3.3.13",
     "wrangler": "^4.151.3"

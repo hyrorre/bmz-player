@@ -84,8 +84,7 @@ onMounted(async () => {
         <pre
           v-else
           class="max-h-[70vh] overflow-auto whitespace-pre-wrap p-4 font-mono text-xs leading-5 text-neutral-100"
-          >{{ licenseText }}</pre
-        >
+          >{{ licenseText }}</pre>
       </div>
     </section>
   </main>
