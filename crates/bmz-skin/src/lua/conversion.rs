@@ -143,6 +143,26 @@ pub(super) fn is_peaceful_gauge_lead_glow_destination(entries: &[(Value, Value)]
     })
 }
 
+/// Integer keys by value, then other numbers, then strings by bytes.
+fn compare_lua_keys(left: &Value, right: &Value) -> std::cmp::Ordering {
+    fn rank(key: &Value) -> u8 {
+        match key {
+            Value::Integer(_) => 0,
+            Value::Number(_) => 1,
+            Value::String(_) => 2,
+            _ => 3,
+        }
+    }
+    match (left, right) {
+        (Value::Integer(left), Value::Integer(right)) => left.cmp(right),
+        (Value::Number(left), Value::Number(right)) => left.total_cmp(right),
+        (Value::String(left), Value::String(right)) => {
+            left.as_bytes()[..].cmp(&right.as_bytes()[..])
+        }
+        _ => rank(left).cmp(&rank(right)),
+    }
+}
+
 pub(super) fn lua_table_to_json(
     lua: &Lua,
     table: Table,
@@ -157,6 +177,10 @@ pub(super) fn lua_table_to_json(
     for pair in table.pairs::<Value, Value>() {
         entries.push(pair?);
     }
+    // `pairs` order follows a per-VM hash seed. Inference calls skin functions
+    // while converting, and those calls can write globals that later probes
+    // read, so convert fields in a fixed order. It also keeps callback IDs stable.
+    entries.sort_by(|(left, _), (right, _)| compare_lua_keys(left, right));
     table_budget.consume(entries.len(), path)?;
 
     if entries.is_empty() {

@@ -41,6 +41,24 @@ fn luxe_flat_select_score_and_chart_values_use_runtime_metadata() {
         "select_score_available() and nearest_rank_label_width(3)",
         &state
     ));
+    // 2,890 / 2,996 is 96.5%: Luxe Flat's two-digit score-rate layout.
+    for (band, visible) in [("10,11", false), ("1,10", true), ("0,1", false)] {
+        assert_eq!(
+            eval_skin_draw_condition(
+                &format!("select_score_available() and score_rate_tenths({band})"),
+                &state
+            ),
+            visible,
+            "{band}"
+        );
+    }
+    let max = SkinDrawState { select_ex_score: Some(2_996), ..state.clone() };
+    assert!(eval_skin_draw_condition("score_rate_tenths(10,11)", &max));
+    assert!(!eval_skin_draw_condition("score_rate_tenths(1,10)", &max));
+    let low = SkinDrawState { select_ex_score: Some(299), ..state.clone() };
+    assert!(eval_skin_draw_condition("score_rate_tenths(0,1)", &low));
+    let tenth = SkinDrawState { select_ex_score: Some(300), ..state };
+    assert!(eval_skin_draw_condition("score_rate_tenths(1,10)", &tenth));
 }
 
 #[test]

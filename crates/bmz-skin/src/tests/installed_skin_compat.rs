@@ -305,9 +305,10 @@ fn callback_id(value: Option<&JsonValue>, prefix: &str) -> Option<usize> {
 
 /// Callback IDs in the order the renderer reaches them within a frame.
 ///
-/// Callback IDs follow Lua's randomized `pairs` order, so evaluating by ID let
-/// a `value` callback that sets a global run before or after the `draw` that
-/// reads it, depending on the run. Destinations are walked in document order:
+/// Callback IDs follow the loader's field order, not the renderer's: by ID, a
+/// `value` callback that sets a global can run after the `draw` that reads it
+/// (and before the loader fixed its order, that changed between runs).
+/// Destinations are walked in document order:
 /// a Lua number `value` runs before its destination's `draw`
 /// (`SkinNumber.prepare`) and a Lua `text` after it (`SkinText.prepare`).
 /// Each callback runs once per frame, at its first use. Callbacks that no
@@ -396,11 +397,12 @@ fn evaluate_runtime(
     )
 }
 
-/// Replaces IDs that BMZ allocates while walking Lua tables in `pairs` order.
+/// Replaces IDs that BMZ allocates while walking Lua tables.
 ///
-/// Lua 5.4 randomizes the string hash seed per VM, so these numbers can differ
-/// between two loads of the same skin. Runtime callbacks become their field
-/// path, and generated dynamic timers become their observed expression.
+/// The IDs follow the conversion order, so they shift whenever inference
+/// compiles or adds a callback (and differed between loads while the loader
+/// walked tables in `pairs` order). Runtime callbacks become their field path,
+/// and generated dynamic timers become their observed expression.
 fn canonical_generated_ids(value: JsonValue, callback_paths: &[String]) -> JsonValue {
     let dynamic_timers = value
         .get("dynamicTimer")
@@ -575,7 +577,7 @@ fn snapshot_document(
         Some(runtime) => evaluate_runtime(runtime, &runtime_callback_paths, &evaluation_order),
         None => (Vec::new(), Vec::new(), 0),
     };
-    // Report by field path; the IDs are not stable between loads.
+    // Report by field path; the IDs shift between code versions.
     callback_results.sort();
     let mut runtime_callback_paths = runtime_callback_paths;
     runtime_callback_paths.sort();

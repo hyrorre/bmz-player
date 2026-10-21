@@ -87,10 +87,20 @@ pub(in crate::lua) fn infer_select_score_available_draw_condition(
     };
     let when_unavailable = evaluate(false);
     let when_available = evaluate(true);
+    // Luxe Flat pairs the guard with `scorerate` bands written by number
+    // callbacks. Toggling only the guard would fold whatever rate an earlier
+    // probe left behind, so the result must not change with the rate either.
+    let rate_independent = LuaNumberSlot::scorerate(lua, function).is_none_or(|scorerate| {
+        let independent = [0.0, 0.5, 1.0]
+            .into_iter()
+            .all(|rate| scorerate.set(lua, function, rate) && evaluate(true) == when_available);
+        scorerate.restore(lua, function);
+        independent
+    });
     let _ = set_guard(original);
 
-    match (when_unavailable, when_available) {
-        (Some(false), Some(true)) => Some("select_score_available()".to_string()),
+    match (when_unavailable, when_available, rate_independent) {
+        (Some(false), Some(true), true) => Some("select_score_available()".to_string()),
         _ => None,
     }
 }

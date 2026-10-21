@@ -76,6 +76,7 @@ closure/module stateを維持し、frameごとのmain_stateを参照します。
 | field / API | 対応範囲 |
 |---|---|
 | destination `draw` | ロード時推論とruntime callback |
+| 推論の順序 | tableのfieldを固定順で変換し、`pairs`順に依存しません。Luxe Flat Selectのランク画像とスコアレート帯を確認します。[回帰テスト](../crates/bmz-skin/src/tests/lua_inference_order.rs) |
 | Resultのパネル状態 | `Expand_op` / callbackが直接保持する`result_mode`を現在のパネルへ同期します。Luxe FlatのGRAPHとIRの混在を防止します。通常 / compat、左右配置、WMIIの回帰確認は[作業記録](../notes/2026/2026-10-03-result-panel-lua-state.md) |
 | value / text / graph / sliderの`value` | ロード時推論とruntime callback |
 | Lua数字の状態更新 | 数字のruntime valueをdestinationごとにdraw / timer判定前に1回評価です。cache hitでも実行を維持します。Luxe FlatのResult / Course ResultでMAX+0とランク境界を確認します。[回帰テスト](../crates/bmz-player/src/skin_loader/tests/lua/result_grade.rs) |

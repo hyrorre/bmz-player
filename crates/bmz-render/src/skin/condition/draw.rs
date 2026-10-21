@@ -82,6 +82,16 @@ pub(in crate::skin) fn eval_skin_draw_term(term: &str, state: &SkinDrawState) ->
         let score = score.clamp(0, max_score);
         return Some(score * 9 >= max_score * lower && score * 9 < max_score * upper);
     }
+    if let Some((lower, upper)) = parse_score_rate_tenths_predicate(term) {
+        let score = i64::from(state.select_ex_score.unwrap_or(state.ex_score));
+        let total_notes = i64::from(state.select_total_notes.max(state.total_notes));
+        let max_score = total_notes.checked_mul(2)?;
+        if max_score <= 0 {
+            return Some(false);
+        }
+        let score = score.clamp(0, max_score);
+        return Some(score * 10 >= max_score * lower && score * 10 < max_score * upper);
+    }
     if let Some((grade, sign)) = parse_nearest_rank_predicate(term) {
         let diff = nearest_grade_diff(state)?;
         return Some(diff.grade == grade && nearest_rank_sign_matches(diff.value, sign));
@@ -181,6 +191,15 @@ pub(in crate::skin) fn parse_score_rate_band_predicate(term: &str) -> Option<(i6
     let lower = lower.trim().parse::<i64>().ok()?;
     let upper = upper.trim().parse::<i64>().ok()?;
     (0 <= lower && lower < upper && upper <= 10).then_some((lower, upper))
+}
+
+/// `[lower/10, upper/10)` of the score rate; `upper` 11 includes the maximum.
+pub(in crate::skin) fn parse_score_rate_tenths_predicate(term: &str) -> Option<(i64, i64)> {
+    let inner = term.strip_prefix("score_rate_tenths(")?.strip_suffix(')')?;
+    let (lower, upper) = inner.split_once(',')?;
+    let lower = lower.trim().parse::<i64>().ok()?;
+    let upper = upper.trim().parse::<i64>().ok()?;
+    (0 <= lower && lower < upper && upper <= 11).then_some((lower, upper))
 }
 
 pub(in crate::skin) fn parse_ir_score_rate_band_predicate(term: &str) -> Option<(i32, i64, i64)> {

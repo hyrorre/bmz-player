@@ -105,3 +105,37 @@
   Lua-to-JSON変換はtableのkeyを`pairs`順にたどります。そのため、`value`関数が`destination`の`draw`より
   先にprobeされるかどうかがhash seedで変わることが原因と考えられます。読み込み側の動作なので今回は変更していません。
   ハーネスは同じ実行内の2回の読み込みで出た差を`unstable`として扱い、regressionにしません。
+
+## 追記（2026-10-21）: Lua推論の`pairs`順依存
+
+上の「残る揺れ」の原因を調べ、読み込み側を直しました。
+
+- 原因: Lua-to-JSON変換はtableのfieldを`pairs`順に変換し、推論のためにfunctionを呼びます。
+  Luxe Flat Selectでは`scorerate`を数字の`value`だけが作ります。`value`が先にprobeされた読み込みでだけ、
+  `scorerate`が残っていました。
+  - ランク画像（`diff_rank_*`）と差分桁の配置は、`scorerate`が無いと推論を諦めてruntime callbackになります。
+    `flag_score` / `scorerate`を書き込む数字の`value`は組み込み式に推論されるため、runtimeの`draw`では
+    `flag_score`がfalseのままで、常に非表示です。
+  - スコアレート帯（`scorerate == 10/10`、`1/10`以上`10/10`未満、`1/10`未満）は、`value`の残した
+    `scorerate`を定数として`select_score_available()`だけに推論されていました。100%の帯がスコアの
+    ある曲で常に表示され、残る2帯はruntimeで常に非表示です。`value`が後なら3帯とも非表示です。
+- 修正:
+  - [変換](../../crates/bmz-skin/src/lua/conversion.rs)はfieldを固定順（整数keyは値順、文字列keyはバイト順）で
+    処理します。推論結果とruntime callback IDが読み込みごとに変わりません。
+  - Luxe Flatのランク推論は、未作成の`scorerate` globalも一時的に設定して確かめ、nilへ戻します。
+    boolean globalの`flag_score` / `rank_plus`は実在する場合だけ使います。mluaはnilを`false`として読むため、
+    mz-selectのclosure内の`flag_score`をglobalで隠していました（この修正の途中、ハーネスで見つけました）。
+  - スコアレート帯は`select_score_available() and score_rate_tenths(lower,upper)`へ推論し、
+    [描画側](../../crates/bmz-render/src/skin/condition/draw.rs)に`score_rate_tenths`を追加しました。
+    `select_score_available()`の推論は、`scorerate`を変えると結果が変わる`draw`を受け付けません。
+  - [回帰テスト](../../crates/bmz-skin/src/tests/lua_inference_order.rs)は同じskinを8回読み込みます。
+    修正前は両テストとも失敗しました。
+- ハーネス（全123件、`data/skins`）: 変更前の3回をベースラインに、変更後の3回と比べました。
+  - regression 0件。変化はLuxez-Flat `music_select`の`document` / `document_scene`のスコアレート帯だけです。
+  - 読み込み間で差が出るentryは20件から18件になりました。Luxez-Flat `music_select`の文書と
+    GenericThemeのwarning順が安定しました。Luxez-Flat / mz-selectの`music_select`の`header.hash`は
+    以前から揺れており、未調査です。
+  - 残る16件（ModernChic、PeacefulPlay、WMII_FHDのcourseResult、mz-select / simple-resultのResult等）は、
+    skin自体が`pairs`や乱数・時刻を使います。読み込み側の`pairs`はほかに3か所あり、いずれも順序に
+    依存しないことを確認しました。skin側の原因は未調査です。
+- 未確認: 実機の選曲画面でのLuxez-Flatのランク画像・スコアレート表示。

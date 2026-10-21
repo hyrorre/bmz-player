@@ -675,6 +675,13 @@ Luxe Flat Result型の`rank_diff_count` / `rank_diff_*`が共有`rank_plus`を�
 value / drawは`auto`でもLua実行を維持し、
 ランク差分の戻り値だけを組み込み式へ置き換えて`scorerate`等の更新を失わないようにします。
 
+ロード時の推論はtableのfieldを固定順（整数keyは値順、文字列keyはバイト順）で変換します。
+推論で呼ぶfunctionがglobalを書き換えても、Luaの`pairs`順（VMごとのhash seed）によって
+推論結果やcallback IDが変わりません。Luxe Flat Selectのランク画像とスコアレート帯
+（`scorerate`の10分の1刻み）の`draw`は、`scorerate`を書き込む数字の`value`より先に推論しても、
+選曲中の自スコアから評価する組み込み式へ変換します。数字の`value`も組み込み式になるため、
+これらの`draw`をruntime callbackに残すと`scorerate`が更新されず表示されないからです。
+
 custom timerは描画前に宣言順で1フレーム1回更新します。`auto`では固定遅延・別名の
 推論を維持し、推論できないtimerを永続VMへ残します。VMを使うスキンでは推論済みの
 custom timerも同じVMで更新し、先行するtimerの変更を同じフレームで参照できます。

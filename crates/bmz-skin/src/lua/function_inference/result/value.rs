@@ -284,35 +284,38 @@ fn luxe_flat_nearest_rank(
 }
 
 #[derive(Clone, Copy)]
-enum LuaNumberSlot {
-    Global(f64),
+pub(in crate::lua) enum LuaNumberSlot {
+    /// Luxe Flat's Select creates the global in a number callback, so it is
+    /// still nil when a draw is probed before that callback.
+    Global(Option<f64>),
     Upvalue(i32, f64),
 }
 
 impl LuaNumberSlot {
-    fn scorerate(lua: &Lua, function: &Function) -> Option<Self> {
+    pub(in crate::lua) fn scorerate(lua: &Lua, function: &Function) -> Option<Self> {
         if let Some((index, value)) = lua_scorerate_upvalue(lua, function) {
             return Some(Self::Upvalue(index, value));
         }
         match lua.globals().get::<Value>("scorerate").ok()? {
-            Value::Integer(value) => Some(Self::Global(value as f64)),
-            Value::Number(value) => Some(Self::Global(value)),
+            Value::Nil => Some(Self::Global(None)),
+            Value::Integer(value) => Some(Self::Global(Some(value as f64))),
+            Value::Number(value) => Some(Self::Global(Some(value))),
             _ => None,
         }
     }
 
-    fn set(self, lua: &Lua, function: &Function, value: f64) -> bool {
+    pub(in crate::lua) fn set(self, lua: &Lua, function: &Function, value: f64) -> bool {
         match self {
             Self::Global(_) => lua.globals().set("scorerate", value).is_ok(),
             Self::Upvalue(index, _) => set_lua_number_upvalue(lua, function, index, value),
         }
     }
 
-    fn restore(self, lua: &Lua, function: &Function) {
-        let value = match self {
-            Self::Global(value) | Self::Upvalue(_, value) => value,
+    pub(in crate::lua) fn restore(self, lua: &Lua, function: &Function) {
+        let _ = match self {
+            Self::Global(value) => lua.globals().set("scorerate", value).is_ok(),
+            Self::Upvalue(index, value) => set_lua_number_upvalue(lua, function, index, value),
         };
-        let _ = self.set(lua, function, value);
     }
 }
 
@@ -327,15 +330,24 @@ impl LuaBooleanSlot {
         if let Some((index, value)) = lua_rank_plus_upvalue(lua, function) {
             return Some(Self::Upvalue(index, value));
         }
-        Some(Self::Global("rank_plus", lua.globals().get::<bool>("rank_plus").ok()?))
+        Self::global(lua, "rank_plus")
     }
 
     fn flag_score(lua: &Lua, function: &Function) -> Option<Self> {
-        if let Ok(value) = lua.globals().get::<bool>("flag_score") {
-            return Some(Self::Global("flag_score", value));
+        if let Some(slot) = Self::global(lua, "flag_score") {
+            return Some(slot);
         }
         let (index, value) = lua_flag_score_upvalue(lua, function)?;
         Some(Self::Upvalue(index, value))
+    }
+
+    /// Only an existing boolean. mlua reads nil as `false`, and probing such a
+    /// slot would create the global and hide a closure's own upvalue.
+    fn global(lua: &Lua, name: &'static str) -> Option<Self> {
+        match lua.globals().get::<Value>(name).ok()? {
+            Value::Boolean(value) => Some(Self::Global(name, value)),
+            _ => None,
+        }
     }
 
     fn set(self, lua: &Lua, function: &Function, value: bool) -> bool {
@@ -360,6 +372,15 @@ pub(in crate::lua) fn infer_luxe_flat_select_score_draw(
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
 ) -> Option<String> {
     let object_id = object_id?;
+    if matches!(
+        object_id,
+        "default_playerdata_scorerate_count"
+            | "default_playerdata_scorerate_dot_count"
+            | "per_sen"
+            | "dot_sen"
+    ) {
+        return infer_luxe_flat_select_score_rate_draw(lua, function, main_state_probe);
+    }
     let rank_destination = luxe_flat_select_rank_destination(object_id);
     let layout_destination =
         matches!(object_id, "default_playerdata_diff_count" | "default_playerdata_mode_diff_count");
@@ -419,6 +440,52 @@ pub(in crate::lua) fn infer_luxe_flat_select_score_draw(
     rank_plus.restore(lua, function);
     flag_score.restore(lua, function);
     inferred
+}
+
+/// Luxe Flat places the Select score rate by tenths (`scorerate == 10/10`,
+/// `scorerate < 10/10 and scorerate >= 1/10`, `scorerate < 1/10`). The number
+/// callbacks that write `scorerate` are compiled, so the draws must be too.
+fn infer_luxe_flat_select_score_rate_draw(
+    lua: &Lua,
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    const MAX_SCORE: i32 = 40;
+    let scorerate = LuaNumberSlot::scorerate(lua, function)?;
+    let flag_score = LuaBooleanSlot::flag_score(lua, function)?;
+    let observe = |available: bool| -> Option<Vec<bool>> {
+        if !flag_score.set(lua, function, available) {
+            return None;
+        }
+        (0..=MAX_SCORE)
+            .map(|ex_score| {
+                main_state_probe.lock().ok()?.end_recording();
+                if !scorerate.set(lua, function, f64::from(ex_score) / f64::from(MAX_SCORE)) {
+                    return None;
+                }
+                function.call::<bool>(()).ok()
+            })
+            .collect()
+    };
+    let (unavailable, available) = (observe(false), observe(true));
+    scorerate.restore(lua, function);
+    flag_score.restore(lua, function);
+    if unavailable?.contains(&true) {
+        return None;
+    }
+    let available = available?;
+    // A band covering every rate is the plain score guard, inferred elsewhere.
+    (0..=10)
+        .flat_map(|lower| (lower + 1..=11).map(move |upper| (lower, upper)))
+        .filter(|&band| band != (0, 11))
+        .find(|&(lower, upper)| {
+            (0..=MAX_SCORE).zip(&available).all(|(ex_score, &shown)| {
+                shown == (ex_score * 10 >= lower * MAX_SCORE && ex_score * 10 < upper * MAX_SCORE)
+            })
+        })
+        .map(|(lower, upper)| {
+            format!("select_score_available() and score_rate_tenths({lower},{upper})")
+        })
 }
 
 fn luxe_flat_select_rank_destination(id: &str) -> Option<(&'static str, &'static str)> {
