@@ -243,6 +243,21 @@ cargo test -p bmz-skin --locked --lib installed_lua_skins -- --ignored
 `BMZ_SKIN_COMPAT_FILTER`で対象を絞り、`BMZ_SKIN_COMPAT_OPTIONS` / `BMZ_SKIN_COMPAT_FILES`
 （JSONオブジェクト）で既定外の選択肢・ファイル選択を指定できます。
 
+## スキンのCPU計測
+
+Lua API呼出しは次のrelease用probeで計測できます。ロードは計測外で、300フレームのwarmup後に
+10,000フレーム測り、500件のdraw callbackとAPIを53回読むtext callbackを出力します。
+callbackごとにscopeを作る場合と、描画と同じ共有scopeの場合を分けます。
+`BMZ_LUA_PROFILE_FRAMES`で計測フレーム数を変えられます。
+
+```bash
+cargo run -p bmz-skin --release --locked --example lua_runtime_profile
+```
+
+実スキンの描画準備には`bmz-player`の`scene_plan_profile` / `play_plan_profile` exampleを使います。
+CPU時間とGPU・surface・presentを含む実ウィンドウの時間は別に比較します。
+条件と測定例は[スキン最適化の記録](../notes/2026/2026-10-21-skin-review-optimization.md)を参照します。
+
 ## テストの一時リソースと並列実行
 
 `cargo test`は1つのテストバイナリの中で全テストを並列に動かします。さらに別のworktree、

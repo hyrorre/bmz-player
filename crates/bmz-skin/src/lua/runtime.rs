@@ -557,6 +557,21 @@ pub(super) fn install_runtime_main_state_dispatch(lua: &Lua) -> mlua::Result<Tab
     // main_state access. The borrowed dispatcher is cleared before its Lua
     // scope expires; access outside a callback uses the load-time provider.
     let dispatch_slot = lua.create_table_with_capacity(1, 0)?;
+    // Keep the stable accessor in Lua: entering Rust just to call the scoped
+    // Rust dispatcher adds a second protected call for every property read.
+    // Captured accessors still follow the private slot and its nesting guard.
+    let accessor_factory: Function = lua
+        .load(
+            r#"return function(slot, operation, original)
+                return function(argument)
+                    local dispatch = slot[1]
+                    if dispatch ~= nil then return dispatch(operation, argument) end
+                    return original(argument)
+                end
+            end"#,
+        )
+        .set_name("bmz:main_state_accessor")
+        .eval()?;
     for (operation, field) in [
         "option",
         "number",
@@ -588,18 +603,12 @@ pub(super) fn install_runtime_main_state_dispatch(lua: &Lua) -> mlua::Result<Tab
     ]) {
         let original: Function =
             main_state.get(if field == "float" { "float_number" } else { field })?;
-        let dispatch_slot = dispatch_slot.clone();
-        main_state.set(
-            field,
-            lua.create_function(move |_, argument: Value| {
-                match dispatch_slot.raw_get::<Value>(1)? {
-                    Value::Function(dispatch) => {
-                        dispatch.call::<Value>((operation as u8, argument))
-                    }
-                    _ => original.call::<Value>(argument),
-                }
-            })?,
-        )?;
+        let accessor = accessor_factory.call::<Function>((
+            dispatch_slot.clone(),
+            operation as u8,
+            original,
+        ))?;
+        main_state.set(field, accessor)?;
     }
     let timer_dispatch = dispatch_slot.clone();
     main_state.set(

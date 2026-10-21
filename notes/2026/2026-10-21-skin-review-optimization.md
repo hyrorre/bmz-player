@@ -63,3 +63,27 @@ WMIXの4条件は全描画commandのhashが一致した。ECBEの3条件は時�
 mz-selectのhashは時計のUV差を含むため一致根拠には使わない。同じ変更前実行ファイルを2回実行しても
 同じ位置の数字UVだけが変わることをplan dumpで確認した。比較中のCPU時間は採用しない。
 実験差分は`animation-experiment.patch`、最初の計測は`prototype/`、再調整後は`cpu-*.jsonl`に保存した。
+
+### 2. Lua APIの呼出経路（採用）
+
+従来は安定したRust accessorが毎回scoped Rust dispatcherを呼び、1回のプロパティ参照で
+Lua/Rust境界を2回通っていた。安定したaccessorを小さなLua closureへ置き、private slotから
+scoped dispatcherを直接呼ぶ。load時のprovider、ネスト復元、panic時のguard、
+stateful callbackの評価順・回数、命令数・メモリ上限は維持する。
+`set_timer`の引数検証とadapterの再入保護用mutexは従来のままにした。
+
+再実行用の`lua_runtime_profile` exampleを追加した。300フレームwarmup後、10,000フレームを
+変更前後で交互に3回計測した。scope準備を含むAPI/callbackのCPU時間であり、GPUや描画FPSではない。
+各実行の平均時間の3回中央値（µs）は次のとおり。
+
+| scope / workload | 変更前 | 変更後 | 短縮率 |
+|---|---:|---:|---:|
+| callbackごと / draw 500件 | 620.20 | 551.85 | 11.0% |
+| callbackごと / API 53回 | 16.23 | 6.73 | 58.5% |
+| 共有 / draw 500件 | 223.18 | 128.51 | 42.4% |
+| 共有 / API 53回 | 14.12 | 6.68 | 52.7% |
+
+全callbackの戻り値と失敗件数0をprobeで検証した。`bmz-skin`は321成功、1 ignored、
+check / all-targets Clippyも成功。既存テストで捕捉したaccessor、ネスト・panic復元、
+callback評価順、frame/callback命令数上限、20,000フレーム後のメモリ上限を確認した。
+生ログは`lua-baseline-*.jsonl` / `lua-lua-*.jsonl`。
