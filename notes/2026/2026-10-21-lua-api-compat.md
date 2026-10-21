@@ -159,8 +159,8 @@ Lua 5.3以降専用の構文・関数（`//`、ビット演算子、`goto`、`ut
 | Hub（11件） | Hubは他スキンのフォルダへ置く改造用部品です。単独では`package.path`からホストスキンを判定できず、beatorajaでも同じ箇所で失敗します |
 | ECFN / ADFX02のplay14 | 既定のスコアグラフ位置（902 / 903以外）で`graphside_x`が未定義になるスキン側の分岐です |
 | ADFX02/ADFX_02/RESULT/result2 | `destination[19]`がmapで、BMZの文書decodeが配列を要求します（Lua API以外の既存差異） |
-| ModernChic/decide（初期状態のみ） | 難易度optionがすべてfalseの中立状態で色が未定義になります。難易度を与えたscene状態では読めます |
-| WMII_FHD/result/result | app側が渡す仮想ファイル（プレイヤー設定）がハーネスにはないためです |
+| ModernChic/decide | ロード時に難易度option `150..155`を読み、すべてfalseだと色tableがnilになって61行目で失敗します。appもDecideのロード状態（`lua_runtime_state_for_frontend_last_play`）に難易度を渡さないため、実際のappでも読めません（2026-10-15のログで同じエラーを確認）。beatorajaは選択曲のある状態でDecideを読むため、いずれか1つがtrueになります。ハーネスのscene状態は153をtrueにしているため読めます |
+| WMII_FHD/result/result | `config_sys.json`と`player/<name>/config_player.json`をnil確認なしで読みます。appは全Luaスキンへ読取専用の仮想ファイル（`lua_compat_virtual_io_files`、空のキー割当）を渡すため読めますが、bmz-skinを直接呼ぶハーネスにはありません。2026-10-20のログで、appでの読込とパネル切替を確認しました |
 | ModernChic play（詳細モード有効時） | 解析ログを書き込んでから読む処理で、BMZは`io`の書込を永続化しないため読み込みに失敗します |
 
 変更前からのruntime callback失敗（件数は前後で同じ）の原因です。
