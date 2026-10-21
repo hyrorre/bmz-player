@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-21 | [Luaのkey_pressed・act・customEvents・音声・音量の実行時対応](2026/2026-10-21-lua-runtime-events.md) |
 | 2026-10-21 | [スキン関連レビューの修正と最適化](2026/2026-10-21-skin-review-optimization.md) |
 | 2026-10-21 | [LuaスキンAPIの互換性調査と拡張](2026/2026-10-21-lua-api-compat.md) |
 | 2026-10-21 | [クライアント側の責務と重複の整理](2026/2026-10-21-client-refactoring.md) |
