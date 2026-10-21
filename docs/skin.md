@@ -769,7 +769,9 @@ functionの`act`と`customEvents`を永続VMで実行します。`auto` / `compa
   `audio_play`はシステムSE、`audio_loop`はシステムBGMの音量を掛けます（最大1.0。
   beatorajaはどちらもシステム音量です）。sceneを離れるとloopを止め、単発の音は鳴らし切ります。
   1 sceneで実行時に読み込むfileは64個までです。描画callbackからの`audio_*`は無視します。
-- `set_volume_*`はまだ設定へ反映しません。
+- `set_volume_*`はプロファイルのマスター（beatorajaのシステム音量）・キー・BGM音量を
+  0〜1で変えます。Selectの音量スライダー（17〜19）と同じ扱いで、他のSelectの設定と同様に
+  プロファイルへ保存します。同じフレーム内の`volume_*`は設定した値を返します。
 
 ### カタログとシステム音セットの走査
 
@@ -815,7 +817,7 @@ beatoraja（`.local/beatoraja`の最新版）とLR2oraja Endless Dream（beatora
 | `exscore_best()` / `exscore_rival()` | number 150 / 121と同じ整数です。ロード時の依存値と推論も同じです |
 | `gauge()` | Play中の現在ゲージです。他のsceneでは0です。ロード時は0で、推論せずruntime callbackで評価します |
 | `gauge_type()` | 現在のゲージ種別です |
-| `volume_sys` / `volume_key` / `volume_bg`、`set_volume_*` | 音量の読み取りです（0.0〜1.0）。runtime callbackでは現在の設定を読みます。`set_volume_*`は設定を変えずtrueを返します |
+| `volume_sys` / `volume_key` / `volume_bg`、`set_volume_*` | 音量の読み書きです（0.0〜1.0）。runtime callbackでは現在の設定を読み、`set_volume_*`で設定を変えます。ロード時の`set_volume_*`は設定を変えずtrueを返します |
 | `audio_play` / `audio_loop` / `audio_stop` | ロード時の推論では宣言的な音声命令へ変換し、`act` / `customEvents`内では実行時に鳴らします。音量の省略は1.0です |
 | `event_exec(id, arg1, arg2)` | custom event `1000..1999`を実行してtrueを返します。ロード時は実行しません。[Lua actとcustomEventsの実行](#lua-actとcustomeventsの実行)を参照します |
 | `audio_preload` / `audio_dispose` | trueを返します。音声は宣言から読み込むため処理はありません |

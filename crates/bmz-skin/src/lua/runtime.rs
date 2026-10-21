@@ -187,6 +187,8 @@ impl LuaSkinRuntime {
         self.pending_frame_start = true;
         self.pending_timer_frame_start = true;
         self.pending_event_frame_start = true;
+        // The app applied last frame's `set_volume_*`; read it from the state.
+        self.events.clear_volumes();
     }
 
     /// Run a clicked Lua `act` with its event arguments (beatoraja `loadEvent`).
@@ -645,21 +647,27 @@ impl LuaRuntimeStateScope {
                             Value::Boolean(true)
                         }
                         29..=31 => {
-                            let channel = match operation {
-                                29 => SkinVolumeChannel::System,
-                                30 => SkinVolumeChannel::Key,
-                                _ => SkinVolumeChannel::Bgm,
-                            };
+                            let channel = usize::from(operation - 29);
+                            let value = lua_to_float(&argument);
+                            self.events.set_volume(channel, value);
                             self.events.push_effect(SkinLuaEffect::SetVolume {
-                                channel,
-                                value: lua_to_float(&argument) as f32,
+                                channel: [
+                                    SkinVolumeChannel::System,
+                                    SkinVolumeChannel::Key,
+                                    SkinVolumeChannel::Bgm,
+                                ][channel],
+                                value: value as f32,
                             });
                             Value::Boolean(true)
                         }
-                        // beatoraja reads the live audio config.
-                        32..=34 => Value::Number(
-                            state.number(57 + i32::from(operation) - 32) as f64 / 100.0,
-                        ),
+                        // beatoraja reads the live audio config, including a
+                        // value set earlier in this frame.
+                        32..=34 => {
+                            let channel = usize::from(operation - 32);
+                            Value::Number(self.events.volume(channel).unwrap_or_else(|| {
+                                state.number(57 + channel as i32) as f64 / 100.0
+                            }))
+                        }
                         15 => {
                             let id = id()?;
                             if !(10_000..=19_999).contains(&id) {

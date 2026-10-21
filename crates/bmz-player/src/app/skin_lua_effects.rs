@@ -1,6 +1,7 @@
 use super::*;
+use crate::config::profile_config::AudioMixConfig;
 use crate::skin_audio::SkinAudioRuntime;
-use bmz_render::skin::{SkinAudioActionDef, SkinLuaEffect};
+use bmz_render::skin::{SkinAudioActionDef, SkinLuaEffect, SkinVolumeChannel};
 
 /// Lua `audio_*` of the Select / Decide / Play skins. The Result skin uses
 /// `result_skin_audio`, which also holds its declarative sounds.
@@ -46,11 +47,21 @@ impl WinitApp {
                 SkinLuaEffect::Audio(action) => {
                     audio_started |= self.run_skin_lua_audio(scene, &action);
                 }
-                SkinLuaEffect::SetVolume { .. } => {}
+                SkinLuaEffect::SetVolume { channel, value } => self.set_skin_volume(channel, value),
             }
         }
         if audio_started {
             self.start_audio_output_stream();
+        }
+    }
+
+    /// beatoraja's system / key / BGM volume from a skin (Lua `set_volume_*` or
+    /// the Select volume sliders 17..=19). It is saved with the profile like the
+    /// other Select settings.
+    pub(super) fn set_skin_volume(&mut self, channel: SkinVolumeChannel, value: f32) {
+        if set_audio_mix_volume(&mut self.boot.profile_config.audio_mix, channel, value) {
+            self.sync_realtime_profile_settings();
+            tracing::info!(?channel, value, "skin changed the volume");
         }
     }
 
@@ -113,4 +124,19 @@ pub(super) fn skin_runtime_scene_for_kind(kind: SkinKind) -> SkinRuntimeScene {
         SkinKind::Play => SkinRuntimeScene::Play,
         SkinKind::Result => SkinRuntimeScene::Result,
     }
+}
+
+/// beatoraja's system volume is BMZ's master volume. Returns whether it changed.
+pub(super) fn set_audio_mix_volume(
+    mix: &mut AudioMixConfig,
+    channel: SkinVolumeChannel,
+    value: f32,
+) -> bool {
+    let value = volume_f32_to_unit(value);
+    let volume = match channel {
+        SkinVolumeChannel::System => &mut mix.master_volume,
+        SkinVolumeChannel::Key => &mut mix.key_volume,
+        SkinVolumeChannel::Bgm => &mut mix.bgm_volume,
+    };
+    std::mem::replace(volume, value) != value
 }

@@ -90,6 +90,7 @@ closure/module stateを維持し、frameごとのmain_stateを参照します。
 | `main_state.rate` / `rate_best` / `rate_rival` / `exscore_best` / `exscore_rival` | beatoraja / LR2oraja ED共通のAPIです。float_number 111 / 112 / 115、number 150 / 121と同じ評価経路を使います。[回帰テスト](../crates/bmz-skin/src/tests/lua_api_extensions.rs) |
 | `main_state.gauge` | Play中の現在ゲージ、他sceneは0です。推論せずruntime callbackで評価します。[app側テスト](../crates/bmz-player/src/skin_loader/tests/lua/score_accessors.rs) |
 | `main_state.audio_*` | ロード時は宣言的な音声命令、`act` / `customEvents`内では実行時に全sceneで鳴らします。音量の省略は1.0です。`audio_preload` / `audio_dispose`は無作用でtrueを返します。[app側テスト](../crates/bmz-player/src/skin_audio.rs) |
+| `main_state.volume_*` / `set_volume_*` | runtime VMで現在のマスター / キー / BGM音量を読み書きします。書き込みはSelectの音量スライダーと同じくプロファイルへ保存します。[runtimeテスト](../crates/bmz-skin/src/tests/lua_runtime_events.rs) |
 | `skin_config.enabled_options` | ヘッダのproperty順の選択opです。読んだopだけを文書の依存値に記録します |
 | file / module解決 | `SkinPathContext`の許可rootに限定します。require / dofile / loadfile、source等のパス解決を扱う |
 | `os` / `io` | clock / date / time / difftime等の限定API、仮想ファイル読込・永続化しない書込stubです。`os.date`はLuaJの書式指定子に対応します。任意のOS操作を許可しない |
@@ -107,7 +108,7 @@ timerの単位・OFF値・書き込み制約・失敗時の値は[skin.md](skin.
 |---|---|
 | DXA | v5以降、独自キー、アーカイブ内wildcard列挙、動画・音声・Lua/CSV includeは未対応 |
 | 任意のdestination timer function | custom timerのruntime対応とは別です。destinationへ直接渡す任意functionの汎用runtime評価は未対応 |
-| `act` / `customEvents`内の音量・クリック | `set_volume_*`は設定へまだ反映しません。Play / Decideのクリックは未対応 |
+| `act` / `customEvents`のクリック | Play / Decideのクリックは未対応 |
 | その他のLua function field | 汎用float writer等は上記callbackの対象外です。対応追加時はfieldと呼び出し契約を個別に定義する |
 | beatoraja最新版のLua API | `file_*` / `http_*` / `open_url`は未対応です。file / httpは書込・通信の安全性設計が必要です。`key_pressed`と`event_exec`は対応済みです（[Lua APIの互換範囲](skin.md#lua-apiの互換範囲)） |
 | LuaJとLua 5.4の差 | 整数値floatの`tostring`、`string.format("%d")`の小数、`os.date`の既定書式と未知指定子は差が残ります。数値callbackの`nil`はBMZでは未取得、LuaJの`toint()` / `tofloat()`では0です。[仕様](skin.md#lua-apiの互換範囲) |

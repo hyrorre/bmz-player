@@ -551,6 +551,24 @@ fn volume_f32_to_unit_clamps_and_rounds() {
 }
 
 #[test]
+fn skin_volume_channels_map_beatoraja_volumes_to_the_audio_mix() {
+    use crate::app::skin_lua_effects::set_audio_mix_volume;
+    use bmz_render::skin::SkinVolumeChannel;
+
+    let mut mix = ProfileConfig::new_default("default", "Default", 1).audio_mix;
+    mix.master_volume = 80;
+    mix.key_volume = 80;
+    mix.bgm_volume = 80;
+    // beatoraja's system volume is the master volume; values clamp to 0..=1.
+    assert!(set_audio_mix_volume(&mut mix, SkinVolumeChannel::System, 0.25));
+    assert!(set_audio_mix_volume(&mut mix, SkinVolumeChannel::Key, 1.5));
+    assert!(set_audio_mix_volume(&mut mix, SkinVolumeChannel::Bgm, -1.0));
+    assert_eq!((mix.master_volume, mix.key_volume, mix.bgm_volume), (25, 100, 0));
+    // An unchanged value (after rounding) is not a change.
+    assert!(!set_audio_mix_volume(&mut mix, SkinVolumeChannel::System, 0.251));
+}
+
+#[test]
 fn detail_option_control_maps_key5_and_key7_to_visual_offset() {
     let keys = select_keys_with_full_2p_bindings();
 

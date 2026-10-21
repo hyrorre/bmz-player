@@ -311,28 +311,9 @@ impl WinitApp {
                     hit.value,
                 );
             }
-            17..=19 => {
-                let value = volume_f32_to_unit(hit.value);
-                let mix = &mut self.boot.profile_config.audio_mix;
-                match hit.slider_type {
-                    17 if mix.master_volume != value => {
-                        mix.master_volume = value;
-                        self.sync_realtime_profile_settings();
-                        tracing::info!(value, "select skin master volume changed");
-                    }
-                    18 if mix.key_volume != value => {
-                        mix.key_volume = value;
-                        self.sync_realtime_profile_settings();
-                        tracing::info!(value, "select skin key volume changed");
-                    }
-                    19 if mix.bgm_volume != value => {
-                        mix.bgm_volume = value;
-                        self.sync_realtime_profile_settings();
-                        tracing::info!(value, "select skin bgm volume changed");
-                    }
-                    _ => {}
-                }
-            }
+            17 => self.set_skin_volume(bmz_render::skin::SkinVolumeChannel::System, hit.value),
+            18 => self.set_skin_volume(bmz_render::skin::SkinVolumeChannel::Key, hit.value),
+            19 => self.set_skin_volume(bmz_render::skin::SkinVolumeChannel::Bgm, hit.value),
             _ => {
                 tracing::debug!(slider_type = hit.slider_type, "unsupported select skin slider");
             }

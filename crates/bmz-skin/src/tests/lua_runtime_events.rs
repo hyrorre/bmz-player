@@ -134,7 +134,8 @@ fn audio_and_volume_effects_come_from_events_and_volume_reads_are_live() {
             end}},
             destination={{id='noisy', draw=function() s.audio_play('se.wav'); return true end,
                 dst={{x=0, y=0, w=1, h=1}}}},
-            text={{id='volume', value=function() return tostring(s.volume_sys()) end}}}
+            text={{id='volume', value=function() return tostring(s.volume_sys()) end},
+                {id='key', value=function() return tostring(s.volume_key()) end}}}
         "#,
         LuaSkinRuntimeMode::Compat,
     );
@@ -146,7 +147,8 @@ fn audio_and_volume_effects_come_from_events_and_volume_reads_are_live() {
     assert!(!runtime.has_custom_events());
     let draw = callback(runtime, "$.destination[1].draw");
     let text = callback(runtime, "$.text[1].value");
-    let state = TestLuaMainState { numbers: BTreeMap::from([(57, 40)]), ..Default::default() };
+    let state =
+        TestLuaMainState { numbers: BTreeMap::from([(57, 40), (58, 58)]), ..Default::default() };
     assert!(runtime.evaluate_draw(draw, &state));
     assert!(runtime.take_effects().is_empty(), "draw callbacks never play sounds");
     assert!(runtime.execute_act(act, 1, 0, &state));
@@ -168,6 +170,12 @@ fn audio_and_volume_effects_come_from_events_and_volume_reads_are_live() {
     );
     // The missing file is reported once and skipped.
     assert_eq!(runtime.failure_log_count(), 1);
+    // A volume set this frame reads back at once, like beatoraja's config.
+    let key = callback(runtime, "$.text[2].value");
+    assert_eq!(runtime.evaluate_text(text, &state).as_deref(), Some("0.25"));
+    assert_eq!(runtime.evaluate_text(key, &state).as_deref(), Some("0.58"));
+    // From the next frame on, the state carries what the app applied.
+    runtime.begin_frame();
     assert_eq!(runtime.evaluate_text(text, &state).as_deref(), Some("0.4"));
 }
 

@@ -56,6 +56,8 @@ pub(super) struct LuaRuntimeEvents {
     effects: Mutex<Vec<SkinLuaEffect>>,
     effects_overflowed: AtomicBool,
     depth: AtomicU32,
+    /// System / key / BGM volumes set this frame, until the app applies them.
+    volumes: Mutex<[Option<f64>; 3]>,
     failed: Mutex<BTreeSet<String>>,
     failure_count: AtomicUsize,
 }
@@ -83,6 +85,7 @@ impl LuaRuntimeEvents {
             effects: Mutex::new(Vec::new()),
             effects_overflowed: AtomicBool::new(false),
             depth: AtomicU32::new(0),
+            volumes: Mutex::new([None; 3]),
             failed: Mutex::new(BTreeSet::new()),
             failure_count: AtomicUsize::new(0),
         }
@@ -134,6 +137,22 @@ impl LuaRuntimeEvents {
                 limit = LUA_RUNTIME_EFFECT_LIMIT,
                 "Lua skin requested too many effects in one frame; dropping the rest"
             );
+        }
+    }
+
+    pub(super) fn set_volume(&self, channel: usize, value: f64) {
+        if let Ok(mut volumes) = self.volumes.lock() {
+            volumes[channel] = Some(value);
+        }
+    }
+
+    pub(super) fn volume(&self, channel: usize) -> Option<f64> {
+        self.volumes.lock().ok().and_then(|volumes| volumes[channel])
+    }
+
+    pub(super) fn clear_volumes(&self) {
+        if let Ok(mut volumes) = self.volumes.lock() {
+            *volumes = [None; 3];
         }
     }
 
