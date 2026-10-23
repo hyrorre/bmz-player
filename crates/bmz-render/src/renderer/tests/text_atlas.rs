@@ -588,3 +588,40 @@ fn moving_outlined_text_reuses_its_layout() {
     let positions = |quads: &[TextQuad]| quads.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>();
     assert_eq!(positions(&back), positions(&first));
 }
+
+#[test]
+fn shrunk_text_reuses_glyphs_across_widths_and_keeps_the_fitted_width() {
+    let face = latin();
+    let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    for step in 0..40 {
+        let mut style = text_style(None);
+        style.overflow = TextOverflow::Shrink;
+        style.max_width = 0.2 + step as f32 * 0.002;
+        let max_width = style.max_width;
+        atlas.begin_frame();
+        let mut builder = CachedTextFrameBuilder::new(&mut atlas);
+        builder.push_text(
+            &Point { x: 0.0, y: 0.1 },
+            "WIDE TEXT",
+            style,
+            single_font_set("skin:atlas", &face),
+            SURFACE,
+        );
+        let quads = builder.quads.clone();
+        let right = quads.iter().map(|q| q.x + q.width).fold(0.0, f32::max);
+        // 刻んだ倍率でラスタライズしても、表示は指定した幅に収める。
+        assert!(right <= max_width + 0.004, "step {step}: {right} > {max_width}");
+        assert!(right >= max_width * 0.95, "step {step}: {right} < {max_width}");
+    }
+    // 40通りの幅でも、横の倍率は16段階までしか増えない（7文字 × 16）。
+    assert!(atlas.glyphs.len() <= 7 * 16, "{} glyphs", atlas.glyphs.len());
+}
+
+#[test]
+fn shrunk_raster_scale_rounds_up_only_horizontal_shrink() {
+    let same = PxScale { x: 40.0, y: 40.0 };
+    assert_eq!(shrunk_raster_scale(same), (same, 1.0));
+    let (raster, stretch) = shrunk_raster_scale(PxScale { x: 30.1, y: 40.0 });
+    assert_eq!(raster, PxScale { x: 32.5, y: 40.0 });
+    assert!((raster.x * stretch - 30.1).abs() < 1e-4);
+}

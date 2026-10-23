@@ -389,6 +389,8 @@ impl<'a> CachedTextFrameBuilder<'a> {
                     }
                 }
                 let glyph = glyph_id;
+                // 横だけ縮めた文字は倍率を刻んでラスタライズし、表示で縮める。
+                let (raster_scale, stretch_x) = shrunk_raster_scale(scale);
                 let color_glyph = || {
                     // カラーグリフはフォントの色を保ち、スキンの透明度だけを掛ける。
                     // 影・縁取りでは輪郭と同じく指定色のシルエットにする。
@@ -406,12 +408,19 @@ impl<'a> CachedTextFrameBuilder<'a> {
                 let mut drawn = None;
                 for (paint, tint) in paints {
                     let cached = match paint {
-                        GlyphPaint::Color => {
-                            self.atlas.cached_color_glyph(face, glyph, scale, line.decoration)
+                        GlyphPaint::Color => self.atlas.cached_color_glyph(
+                            face,
+                            glyph,
+                            raster_scale,
+                            line.decoration,
+                        ),
+                        GlyphPaint::Outline => {
+                            self.atlas.cached_vector_glyph(face, glyph, raster_scale)
                         }
-                        GlyphPaint::Outline => self.atlas.cached_vector_glyph(face, glyph, scale),
                     };
-                    if let Some(cached) = cached {
+                    if let Some(mut cached) = cached {
+                        cached.display_width *= stretch_x;
+                        cached.offset_x *= stretch_x;
                         drawn = Some((cached, tint));
                         break;
                     }
@@ -518,4 +527,18 @@ impl<'a> CachedTextFrameBuilder<'a> {
             command_caret_rects,
         }
     }
+}
+
+/// 横の倍率の刻み。Shrink で文字列ごとに違う倍率になっても、同じグリフを使い回す。
+const SHRINK_RASTER_STEPS: f32 = 16.0;
+
+/// 横だけ縮めた倍率を `1 / SHRINK_RASTER_STEPS` 刻みに切り上げたラスタライズ倍率と、
+/// 表示で掛ける横の倍率。縦横同じ倍率なら、そのまま返す。
+pub(super) fn shrunk_raster_scale(scale: PxScale) -> (PxScale, f32) {
+    if scale.x >= scale.y || scale.x <= 0.0 {
+        return (scale, 1.0);
+    }
+    let ratio = ((scale.x / scale.y) * SHRINK_RASTER_STEPS).ceil() / SHRINK_RASTER_STEPS;
+    let raster = PxScale { x: scale.y * ratio.min(1.0), y: scale.y };
+    (raster, scale.x / raster.x)
 }
