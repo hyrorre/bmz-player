@@ -226,6 +226,11 @@ fn projection_matches_existing_playfield_rules_and_published_judgements() {
                     pool[0].project(&mut actual, TimeUs(now), &mut clock);
                     let expected = build_render_snapshot(&session, TimeUs(now), &[], None);
                     assert_playfield_eq(&actual, &expected);
+                    // プレイオプション更新も同じ CONSTANT/SPEED 規則で表示時間を求める。
+                    let mut updated = expected.clone();
+                    updated.note_display_duration_ms = -1;
+                    update_render_snapshot_play_options(&mut updated, &session, TimeUs(now));
+                    assert_eq!(updated.note_display_duration_ms, expected.note_display_duration_ms);
                 }
             }
         }

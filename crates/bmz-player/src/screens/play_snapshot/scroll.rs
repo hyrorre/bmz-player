@@ -39,7 +39,7 @@ impl<'a> ScrollContext<'a> {
     }
 
     /// ノートの正規化進捗（0.0=判定ライン, 1.0=画面上端）。判定ラインより手前 (delta<0)
-    /// と画面上端より奥のノートは `None`。SCROLL / SPEED 倍率を畳み込む。
+    /// と画面上端より奥のノートは `None`。SCROLL を区間積分し、SPEED を一律に掛ける。
     pub(super) fn note_y(&self, note_time: TimeUs, cursor_tick: f64) -> Option<f32> {
         let note_tick = self.timing_map.time_to_tick_f64(note_time);
         let delta = self.scroll_delta(cursor_tick, note_tick);
@@ -86,8 +86,9 @@ pub(super) fn visible_lane_notes(
 }
 
 /// Simple scroll では tick と画面上の順序が一致するため、二分探索で可視範囲へ
-/// 絞れる。SCROLL/SPEED 使用時は負値・補間で単調性を仮定できないので、既存どおり
-/// 全候補を返して表示互換を優先する。
+/// 絞れる。SPEED はレーン全体へ一律に掛かるので、正なら絞り込める。SCROLL 使用時と
+/// SPEED が 0 以下のときは単調性を仮定できないので、既存どおり全候補を返して
+/// 表示互換を優先する。
 pub(super) fn visible_bar_lines(
     bar_lines: &[BarLine],
     lower_time: TimeUs,
@@ -151,8 +152,8 @@ pub(super) fn visible_time_line_seconds(
         return 1..1;
     }
     let Some(upper_tick) = simple_tick_upper_bound else {
-        // SCROLL/SPEED は負値を含み得るため、過去の秒線が再度画面に入る。
-        // この経路は単調性を仮定せず、従来どおり全候補を評価する。
+        // SCROLL は負値を含み得るため、過去の秒線が再度画面に入る。SPEED が 0 以下の
+        // ときも同様。この経路は単調性を仮定せず、従来どおり全候補を評価する。
         return 1..end_second.saturating_add(1);
     };
     let start = ((render_now.0.max(0).saturating_add(999_999)) / 1_000_000).clamp(1, end_second);
@@ -200,20 +201,44 @@ pub(super) fn accumulate_scroll(segments: &[(f64, f64)], from_tick: f64, to_tick
     acc * sign
 }
 
+/// 緑数字・HS 計算用の現在のスクロール倍率 (SCROLL × 実効 SPEED)。
+/// 描画側の `current_scroll_multiplier_from_segments` と同じ規則で求める。
 pub(crate) fn current_scroll_multiplier(
     chart: &PlayableChart,
     timing_map: &TimingMap,
     render_now: TimeUs,
+    constant_enabled: bool,
 ) -> f32 {
     let scroll_time = scroll_render_time(render_now);
     let cursor_tick = timing_map.time_to_tick_f64(scroll_time);
     let scroll_index =
         chart.scroll_events.partition_point(|event| event.tick.0 as f64 <= cursor_tick);
     let scroll = scroll_index.checked_sub(1).map_or(1.0, |index| chart.scroll_events[index].factor);
-    let speed = current_speed_factor_at_time(&chart.speed_events, scroll_time);
+    let speed = effective_speed(constant_enabled, || {
+        speed_at_by(
+            &chart.speed_events,
+            |event| (event.time.0 as f64, event.factor),
+            scroll_time.0 as f64,
+        )
+    });
     (scroll * speed) as f32
 }
 
+/// `current_scroll_multiplier` をセッションの譜面と CONSTANT 状態で求める。
+pub(crate) fn current_scroll_multiplier_for_session(
+    session: &GameSession,
+    render_now: TimeUs,
+) -> f32 {
+    current_scroll_multiplier(
+        &session.chart,
+        &session.timing_map,
+        render_now,
+        session.constant_enabled,
+    )
+}
+
+/// 描画用キャッシュから現在のスクロール倍率 (SCROLL × 実効 SPEED) を求める。
+/// `speed` は `render_speed` で求めた実効 SPEED を渡す。
 pub(super) fn current_scroll_multiplier_from_segments(
     scroll_integral: &ScrollIntegralCache,
     speed: f64,
@@ -222,13 +247,19 @@ pub(super) fn current_scroll_multiplier_from_segments(
     (scroll_integral.factor_at(cursor_tick) * speed) as f32
 }
 
-/// beatoraja の `enableConstant` 中は SPEED を無視して 1.0 固定にする。
+/// 描画時刻の実効 SPEED。CONSTANT 中は 1.0。
 pub(super) fn render_speed(
     speed_segments: &[(f64, f64)],
     constant_enabled: bool,
     scroll_time: TimeUs,
 ) -> f64 {
-    if constant_enabled { 1.0 } else { speed_at(speed_segments, scroll_time.0 as f64) }
+    effective_speed(constant_enabled, || speed_at(speed_segments, scroll_time.0 as f64))
+}
+
+/// beatoraja の `enableConstant` 中は SPEED を無視して 1.0 固定にする。
+/// SCROLL は CONSTANT の影響を受けないため、呼び出し側で別に掛ける。
+fn effective_speed(constant_enabled: bool, speed: impl FnOnce() -> f64) -> f64 {
+    if constant_enabled { 1.0 } else { speed() }
 }
 
 #[cfg(test)]
@@ -239,35 +270,23 @@ pub(super) fn factor_before(segments: &[(f64, f64)], tick: f64) -> f64 {
         .map_or(1.0, |index| segments[index].1)
 }
 
-pub(super) fn current_speed_factor_at_time(
-    events: &[bmz_chart::model::SpeedEvent],
-    time: TimeUs,
-) -> f64 {
-    if events.is_empty() {
-        return 1.0;
-    }
-
-    let time = time.0 as f64;
-    let next_index = events.partition_point(|event| event.time.0 as f64 <= time);
-    let prev = next_index.checked_sub(1).map(|index| {
-        let event = &events[index];
-        (event.time.0 as f64, event.factor)
-    });
-    let next = events.get(next_index).map(|event| (event.time.0 as f64, event.factor));
-    interpolate_speed(prev, next, time)
-}
-
 /// 指定時刻 (μs) における SPEED の現在値を返す。beatoraja の
 /// `LaneRenderer.getCurrentSpeed` に合わせ、隣接イベント間は時間で線形補間する。
 /// 最初のイベント前は時刻 0 の 1.0 から補間し、最後のイベント以降はその値で固定。
 pub(super) fn speed_at(segments: &[(f64, f64)], time: f64) -> f64 {
-    if segments.is_empty() {
+    speed_at_by(segments, |segment| *segment, time)
+}
+
+/// `speed_at` の本体。`key` で各イベントの `(time_us, factor)` を取り出す。
+/// 描画キャッシュと譜面の `SpeedEvent` の両方で同じ補間規則を使うために共通化する。
+fn speed_at_by<T>(items: &[T], key: impl Fn(&T) -> (f64, f64), time: f64) -> f64 {
+    if items.is_empty() {
         return 1.0;
     }
     // time を挟む直前 (prev) / 直後 (next) のイベントを探す。
-    let next_index = segments.partition_point(|(event_time, _)| *event_time <= time);
-    let prev = next_index.checked_sub(1).map(|index| segments[index]);
-    let next = segments.get(next_index).copied();
+    let next_index = items.partition_point(|item| key(item).0 <= time);
+    let prev = next_index.checked_sub(1).map(|index| key(&items[index]));
+    let next = items.get(next_index).map(&key);
     interpolate_speed(prev, next, time)
 }
 

@@ -112,8 +112,12 @@ fn speed_interpolates_by_time_across_bpm_change() {
     let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
 
     // 時間比 2/3 で 1.0 + 2.0 × 2/3。tick 比 (1/2) の 2.0 にはならない。
-    let multiplier =
-        super::current_scroll_multiplier(&session.chart, &session.timing_map, TimeUs(1_000_000));
+    let multiplier = super::current_scroll_multiplier(
+        &session.chart,
+        &session.timing_map,
+        TimeUs(1_000_000),
+        false,
+    );
     assert!((multiplier - 7.0 / 3.0).abs() < 1e-4, "got {multiplier}");
 }
 

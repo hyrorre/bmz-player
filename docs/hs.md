@@ -116,6 +116,12 @@ Normalも同じ逆算式を使うが、`visible = 1.0`、目標緑数字は段�
 計算後の倍率は`0.01..=20.0`に収めます。現在位置のSCROLL/SPEED倍率が正でない
 場合は譜面先頭の正の倍率、それも利用できなければ1.0を使います。
 
+`scroll_multiplier`は現在位置のSCROLL倍率と、現在時刻のSPEED値の積です。SPEEDは
+beatorajaと同じく時間で線形補間し、初期値を省略した譜面では時刻0の1.0から
+最初の値へ補間します。CONSTANT中はbeatorajaの`enableConstant`と同じくSPEEDを
+1.0として扱い、SCROLLだけを掛けます。ノーツ描画、緑数字、HSの初期値と再計算は
+すべてこの倍率を使います。
+
 skinの`NUMBER_DURATION` (312)には導出した表示時間、
 `NUMBER_DURATION_GREEN` (313)には緑数字を渡します。CONSTANTは導出した表示時間を
 表示境界に使い、`constant_fade_ms`は`-1000..=1000ms`の範囲で境界前後を

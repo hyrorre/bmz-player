@@ -385,6 +385,9 @@ pub fn build_game_session_with_input_backend(
         crate::config::play::clamp_lane_cover_for_lift(lane_unit_to_f32(mode_config.sudden), lift)
     };
     let hsfix_base_bpm = hsfix_base_bpm_for_chart(&chart, &timing_map, hs_fix);
+    // Practice では CONSTANT を無効にする。初期 HS も実際に使う状態で求める。
+    let constant_enabled = mode_config.constant_enabled
+        && session_mode != crate::select_options::SessionMode::Practice;
     let hispeed = if speed_locked {
         1.0
     } else {
@@ -399,6 +402,7 @@ pub fn build_game_session_with_input_backend(
             &timing_map,
             hs_fix,
             options.playback_rate_percent,
+            constant_enabled,
         )
     };
 
@@ -618,8 +622,7 @@ pub fn build_game_session_with_input_backend(
             mode_config.normal_hispeed_level,
         ),
         target_green_number,
-        constant_enabled: mode_config.constant_enabled
-            && session_mode != crate::select_options::SessionMode::Practice,
+        constant_enabled,
         constant_fade_ms: mode_config.constant_fade_ms,
         guide_se_enabled: profile.play.guide_se,
         note_retention: profile.play.note_retention,
@@ -787,13 +790,18 @@ pub(super) fn initial_hispeed_for_mode(
     timing_map: &bmz_chart::timing::TimingMap,
     hs_fix: HsFixOption,
     playback_rate_percent: u16,
+    constant_enabled: bool,
 ) -> f32 {
     let now_bpm = crate::screens::play_snapshot::effective_bpm_for_playback_rate(
         hsfix_base_bpm_for_chart(chart, timing_map, hs_fix),
         playback_rate_percent,
     );
-    let scroll_multiplier =
-        crate::screens::play_snapshot::current_scroll_multiplier(chart, timing_map, TimeUs(0));
+    let scroll_multiplier = crate::screens::play_snapshot::current_scroll_multiplier(
+        chart,
+        timing_map,
+        TimeUs(0),
+        constant_enabled,
+    );
     match hispeed_mode {
         HispeedMode::Classic => crate::config::play::classic_effective_hispeed(
             mode_config.hispeed,

@@ -93,6 +93,10 @@ pub(in crate::app) fn apply_profile_lane_settings_to_session(
     if auto_adjust_changed {
         session.hispeed_auto_adjust = profile.hispeed_auto_adjust;
     }
+    // CONSTANT は実効 SPEED を変えるため、緑数字・HS を求める前に反映する。
+    if constant_changed {
+        session.constant_enabled = profile.constant_enabled && !practice_mode;
+    }
 
     let now = session.audio_clock.now();
     let lr2_hispeed = profile.base_hispeed == BaseHispeedConfig::Lr2;
@@ -142,9 +146,6 @@ pub(in crate::app) fn apply_profile_lane_settings_to_session(
     if target_green_changed {
         session.target_green_number = profile.target_green_number.max(1);
     }
-    if constant_changed {
-        session.constant_enabled = profile.constant_enabled && !practice_mode;
-    }
     if constant_fade_changed {
         session.constant_fade_ms = profile.constant_fade_ms.clamp(
             crate::config::play::CONSTANT_FADE_MIN_MS,
@@ -161,7 +162,8 @@ pub(in crate::app) fn apply_profile_lane_settings_to_session(
     }
 
     if session.hispeed_mode == HispeedMode::Normal {
-        if normal_level_changed || config_changed {
+        // CONSTANT 切替で実効 SPEED が変わるため、段階の緑数字に合わせ直す。
+        if normal_level_changed || config_changed || constant_changed {
             session.hispeed = hispeed_for_normal_level(session, session.normal_hispeed_level, now);
         }
     } else if session.hispeed_mode == HispeedMode::Floating {
@@ -171,6 +173,7 @@ pub(in crate::app) fn apply_profile_lane_settings_to_session(
         } else if target_green_changed
             || cover_changed
             || auto_adjust_changed
+            || (constant_changed && !direct_hispeed_change)
             || (config_changed && !direct_hispeed_change)
         {
             session.hispeed =
