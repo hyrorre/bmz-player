@@ -536,16 +536,19 @@ impl<'a> CachedTextFrameBuilder<'a> {
     }
 }
 
-/// 横の倍率の刻み。Shrink で文字列ごとに違う倍率になっても、同じグリフを使い回す。
-const SHRINK_RASTER_STEPS: f32 = 16.0;
+/// 横の倍率の刻み（倍率が2倍になるごとの段数）。Shrink で文字列ごとに違う倍率になっても、
+/// 同じグリフを使い回す。刻みは倍率に比例させ、表示で縮める量を1段（約4.4%）までに抑える。
+/// 一定幅で刻むと、強く縮めた文字では倍以上に縮めることになり、細い線が薄くなる。
+const SHRINK_RASTER_STEPS_PER_OCTAVE: f32 = 16.0;
 
-/// 横だけ縮めた倍率を `1 / SHRINK_RASTER_STEPS` 刻みに切り上げたラスタライズ倍率と、
+/// 横だけ縮めた倍率を、`SHRINK_RASTER_STEPS_PER_OCTAVE` の刻みに切り上げたラスタライズ倍率と、
 /// 表示で掛ける横の倍率。縦横同じ倍率なら、そのまま返す。
 pub(super) fn shrunk_raster_scale(scale: PxScale) -> (PxScale, f32) {
-    if scale.x >= scale.y || scale.x <= 0.0 {
+    if scale.x >= scale.y || scale.x <= 0.0 || !scale.x.is_finite() || !scale.y.is_finite() {
         return (scale, 1.0);
     }
-    let ratio = ((scale.x / scale.y) * SHRINK_RASTER_STEPS).ceil() / SHRINK_RASTER_STEPS;
+    let steps = ((scale.x / scale.y).log2() * SHRINK_RASTER_STEPS_PER_OCTAVE).ceil();
+    let ratio = (steps / SHRINK_RASTER_STEPS_PER_OCTAVE).exp2();
     let raster = PxScale { x: scale.y * ratio.min(1.0), y: scale.y };
     (raster, scale.x / raster.x)
 }

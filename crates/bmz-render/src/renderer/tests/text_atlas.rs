@@ -621,7 +621,18 @@ fn shrunk_text_reuses_glyphs_across_widths_and_keeps_the_fitted_width() {
 fn shrunk_raster_scale_rounds_up_only_horizontal_shrink() {
     let same = PxScale { x: 40.0, y: 40.0 };
     assert_eq!(shrunk_raster_scale(same), (same, 1.0));
-    let (raster, stretch) = shrunk_raster_scale(PxScale { x: 30.1, y: 40.0 });
-    assert_eq!(raster, PxScale { x: 32.5, y: 40.0 });
-    assert!((raster.x * stretch - 30.1).abs() < 1e-4);
+    // 表示で縮めるのは1段（2倍ごとに16段、約4.4%）まで。強く縮めた文字でも同じ。
+    let one_step = 2f32.powf(-1.0 / 16.0);
+    for x in [39.9, 30.1, 20.0, 12.0, 4.8, 2.8] {
+        let (raster, stretch) = shrunk_raster_scale(PxScale { x, y: 40.0 });
+        assert_eq!(raster.y, 40.0);
+        assert!(raster.x >= x - 1e-4 && raster.x <= 40.0, "{x}: {raster:?}");
+        assert!(stretch <= 1.0 && stretch >= one_step - 1e-6, "{x}: {stretch}");
+        assert!((raster.x * stretch - x).abs() < 1e-4);
+    }
+    // 2倍ごとの区切りの比率は、そのままの倍率でラスタライズする。
+    let (raster, stretch) = shrunk_raster_scale(PxScale { x: 20.0, y: 40.0 });
+    assert_eq!((raster.x, stretch), (20.0, 1.0));
+    let nan = PxScale { x: f32::NAN, y: 40.0 };
+    assert!(shrunk_raster_scale(nan).0.x.is_nan());
 }
