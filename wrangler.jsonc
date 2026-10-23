@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "bmz-ir-web",
+  "name": "bmz-player",
   "observability": {
     "logs": {
       "enabled": true,
