@@ -1,6 +1,6 @@
 //! atlas の部分転送で、GPU テクスチャの内容が CPU 側の atlas と食い違わないことの回帰テスト。
 //!
-//! GPU テクスチャを画素配列で再現し、`upload_text_frame` と同じ規則で転送を当てる。
+//! GPU テクスチャを画素配列で再現し、`upload_text_atlas` と同じ `write_text_atlas` で転送を当てる。
 //! テクスチャを作り直したときだけ全体を書き、それ以外は `dirty_regions` だけを書く。
 //! 使っていない領域に古い画素が残るのは許容し、格納済みのグリフとその周囲1pxを比べる。
 
@@ -22,27 +22,31 @@ impl SimulatedTexture {
         Self { size: AtlasSize::default(), pixels: Vec::new(), full_uploads: 0, region_uploads: 0 }
     }
 
-    /// `WgpuRenderer::upload_text_frame` と同じ判定で転送する。
-    fn upload(&mut self, frame: &TextFrame, atlas: &TextAtlasCache) {
-        if frame.size.width == 0 || frame.size.height == 0 {
-            return;
-        }
-        if self.size != frame.size {
+    /// `WgpuRenderer::upload_text_atlas` と同じく、寸法が変わったらテクスチャを作り直して転送する。
+    fn upload(&mut self, frame: &TextFrame, atlas: &TextAtlasCache) -> TextAtlasUploadStats {
+        let recreated = frame.size.width != 0 && frame.size.height != 0 && self.size != frame.size;
+        if recreated {
             self.size = frame.size;
-            self.pixels = atlas.pixels_for_size(frame.size);
-            self.full_uploads += 1;
-            return;
+            self.pixels = vec![0; (frame.size.width * frame.size.height * 4) as usize];
         }
-        for region in &frame.dirty_regions {
-            for y in 0..region.size.height {
-                let row = (region.size.width * 4) as usize;
-                let src = (y * region.size.width * 4) as usize;
-                let dst =
-                    (((region.origin.1 + y) * self.size.width + region.origin.0) * 4) as usize;
-                self.pixels[dst..dst + row].copy_from_slice(&region.pixels[src..src + row]);
-            }
-            self.region_uploads += 1;
-        }
+        let texture_width = self.size.width;
+        let pixels = &mut self.pixels;
+        let stats = write_text_atlas(
+            frame,
+            recreated,
+            || atlas.pixels_for_size(frame.size),
+            |origin, size, source| {
+                let row = (size.width * 4) as usize;
+                for y in 0..size.height {
+                    let src = (y * size.width * 4) as usize;
+                    let dst = (((origin.1 + y) * texture_width + origin.0) * 4) as usize;
+                    pixels[dst..dst + row].copy_from_slice(&source[src..src + row]);
+                }
+            },
+        );
+        self.full_uploads += stats.full_uploads;
+        self.region_uploads += stats.region_uploads;
+        stats
     }
 
     /// 作り直した atlas では、前の内容が古い画素として残る。比較を厳しくするため、
@@ -219,4 +223,105 @@ fn glyphs_touching_the_right_and_bottom_edges_keep_their_padding() {
     texture.upload(&frame, &atlas);
     assert_eq!(texture.full_uploads, 1, "the rebuild must not upload the whole texture");
     assert_texture_matches(&texture, &atlas, "rebuilt");
+}
+
+/// `dirty_regions` を全部書いたときの統計。
+fn region_stats(frame: &TextFrame) -> TextAtlasUploadStats {
+    TextAtlasUploadStats {
+        writes: frame.dirty_regions.len(),
+        bytes: frame.dirty_regions.iter().map(|region| region.pixels.len()).sum(),
+        full_uploads: 0,
+        region_uploads: frame.dirty_regions.len(),
+    }
+}
+
+fn plan_frame(atlas: &mut TextAtlasCache, text: &str) -> TextFrame {
+    let commands =
+        if text.is_empty() { Vec::new() } else { vec![text_command(text, text_style(None))] };
+    let plan = DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands };
+    build_text_frame_with_cache(&plan, &latin(), &HashMap::new(), &HashMap::new(), SURFACE, atlas)
+}
+
+#[test]
+fn upload_stats_count_only_atlas_texture_writes() {
+    let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    let mut texture = SimulatedTexture::new();
+
+    // 最初のフレームはテクスチャを作るので全体を1回だけ書く。部分転送は送らない。
+    let first = plan_frame(&mut atlas, "AW");
+    assert!(!first.dirty_regions.is_empty());
+    let stats = texture.upload(&first, &atlas);
+    let full_bytes = (first.size.width * first.size.height * 4) as usize;
+    assert_eq!(
+        stats,
+        TextAtlasUploadStats { writes: 1, bytes: full_bytes, full_uploads: 1, region_uploads: 0 }
+    );
+    assert_texture_matches(&texture, &atlas, "full");
+
+    // 同じ文字列ではインスタンスだけが変わり、atlas には何も書かない。
+    let same = plan_frame(&mut atlas, "AW");
+    assert!(!same.instances.is_empty());
+    assert!(same.dirty_regions.is_empty());
+    assert_eq!(texture.upload(&same, &atlas), TextAtlasUploadStats::default());
+
+    // 新しいグリフは、その領域だけを書く。
+    let more = plan_frame(&mut atlas, "AWm1");
+    assert_eq!(more.size, first.size);
+    assert!(!more.dirty_regions.is_empty());
+    assert_eq!(texture.upload(&more, &atlas), region_stats(&more));
+    assert_texture_matches(&texture, &atlas, "partial");
+
+    // 文字が無いフレームでも、atlas に変更が無ければ何も書かない。
+    let empty = plan_frame(&mut atlas, "");
+    assert!(empty.instances.is_empty());
+    assert!(empty.command_quad_counts.is_empty());
+    assert_eq!(texture.upload(&empty, &atlas), TextAtlasUploadStats::default());
+}
+
+#[test]
+fn upload_stats_after_a_rebuild_count_only_the_new_regions() {
+    let mut atlas = TextAtlasCache::with_limits(64, 64);
+    let mut texture = SimulatedTexture::new();
+    atlas.begin_frame();
+    for width in [15.0, 15.1, 15.2, 14.9] {
+        let _ = atlas.cached_tofu_glyph(width, 15.0);
+    }
+    let _ = texture.upload(&take_frame(&mut atlas), &atlas);
+    atlas.begin_frame();
+    assert!(atlas.cached_tofu_glyph(10.0, 10.0).is_none());
+    let overflowed = take_frame(&mut atlas);
+    assert_eq!(texture.upload(&overflowed, &atlas), region_stats(&overflowed));
+
+    atlas.begin_frame();
+    let _ = atlas.cached_tofu_glyph(10.0, 10.0).unwrap();
+    let rebuilt = take_frame(&mut atlas);
+    assert!(rebuilt.atlas_rebuilt);
+    assert_eq!(rebuilt.dirty_regions.len(), 1);
+    texture.stain_unused(&atlas);
+    let stats = texture.upload(&rebuilt, &atlas);
+    assert_eq!(stats, region_stats(&rebuilt));
+    assert_eq!(stats.full_uploads, 0);
+    assert_texture_matches(&texture, &atlas, "rebuilt");
+}
+
+#[test]
+fn upload_stats_are_empty_without_an_atlas() {
+    // 描けない画面ではフレームが空で、テクスチャを作る扱いでも何も書かない。
+    let stats = write_text_atlas(
+        &TextFrame::default(),
+        true,
+        || panic!("an empty atlas must not be read"),
+        |_, _, _| panic!("an empty atlas must not be written"),
+    );
+    assert_eq!(stats, TextAtlasUploadStats::default());
+}
+
+#[test]
+fn text_instance_buffer_grows_to_the_next_power_of_two() {
+    assert_eq!(grown_text_buffer_capacity(0, 0), None);
+    assert_eq!(grown_text_buffer_capacity(TEXT_INSTANCE_BYTES, 0), Some(64));
+    assert_eq!(grown_text_buffer_capacity(64, 64), None);
+    assert_eq!(grown_text_buffer_capacity(32, 64), None);
+    assert_eq!(grown_text_buffer_capacity(65, 64), Some(128));
+    assert_eq!(grown_text_buffer_capacity(TEXT_INSTANCE_BYTES * 100, 1024), Some(8192));
 }

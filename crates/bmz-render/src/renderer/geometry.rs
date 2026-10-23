@@ -90,6 +90,44 @@ pub(super) struct TextAtlasUploadStats {
     pub(super) region_uploads: usize,
 }
 
+/// 文字 atlas テクスチャへの1フレームぶんの書き込みを `write` へ渡す。
+/// テクスチャを作り直したときだけ全体を書き、それ以外は新しく格納したグリフの領域だけを書く。
+/// atlas の作り直しでは古い画素が残るが、転送領域がパディングごと上書きする。
+pub(super) fn write_text_atlas(
+    frame: &TextFrame,
+    recreated_texture: bool,
+    full_pixels: impl FnOnce() -> Vec<u8>,
+    mut write: impl FnMut((u32, u32), AtlasSize, &[u8]),
+) -> TextAtlasUploadStats {
+    let mut stats = TextAtlasUploadStats::default();
+    if frame.size.width == 0 || frame.size.height == 0 {
+        return stats;
+    }
+    if recreated_texture {
+        let pixels = full_pixels();
+        write((0, 0), frame.size, &pixels);
+        stats.writes += 1;
+        stats.bytes += pixels.len();
+        stats.full_uploads += 1;
+        return stats;
+    }
+    for region in &frame.dirty_regions {
+        if region.pixels.is_empty() || region.size.width == 0 || region.size.height == 0 {
+            continue;
+        }
+        write(region.origin, region.size, &region.pixels);
+        stats.writes += 1;
+        stats.bytes += region.pixels.len();
+        stats.region_uploads += 1;
+    }
+    stats
+}
+
+/// 文字インスタンスバッファを広げるときの新しい容量。足りていれば `None`。
+pub(super) fn grown_text_buffer_capacity(used_bytes: usize, capacity: usize) -> Option<usize> {
+    (used_bytes > capacity).then(|| used_bytes.next_power_of_two())
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct TextAtlasDirtyRegion {
     pub(super) origin: (u32, u32),

@@ -477,6 +477,7 @@ struct SceneFrameProfiler {
     rect_instances: u128,
     image_instances: u128,
     text_instances: u128,
+    text_instance_upload_us: u128,
     text_atlas_upload_us: u128,
     text_atlas_writes: u128,
     text_atlas_max_writes: usize,
@@ -587,6 +588,7 @@ impl SceneFrameProfiler {
             self.rect_instances += timings.rect_instances as u128;
             self.image_instances += timings.image_instances as u128;
             self.text_instances += timings.text_instances as u128;
+            self.text_instance_upload_us += timings.text_instance_upload_us;
             self.text_atlas_upload_us += timings.text_atlas_upload_us;
             self.text_atlas_writes += timings.text_atlas_writes as u128;
             self.text_atlas_max_writes = self.text_atlas_max_writes.max(timings.text_atlas_writes);
@@ -690,6 +692,7 @@ impl SceneFrameProfiler {
         let total_redraw_percentiles = frame_duration_percentiles(&self.total_redraw_samples_us);
         let render_percentiles = frame_duration_percentiles(&self.render_samples_us);
         let text_percentiles = frame_duration_percentiles(&self.text_samples_us);
+        let text_instance_upload_ms = fmt_profile_ms(self.text_instance_upload_us, frames);
         let text_atlas_upload_ms = fmt_profile_ms(self.text_atlas_upload_us, frames);
         let text_atlas_upload_percentiles =
             frame_duration_percentiles(&self.text_atlas_upload_samples_us);
@@ -732,6 +735,7 @@ impl SceneFrameProfiler {
                     text_ms,
                     text_p99_ms = text_percentiles.map(|value| fmt_profile_us_ms(value.p99_us)),
                     text_max_ms = text_percentiles.map(|value| fmt_profile_us_ms(value.max_us)),
+                    text_instance_upload_ms,
                     text_atlas_upload_ms,
                     text_atlas_upload_p99_ms = text_atlas_upload_percentiles
                         .map(|value| fmt_profile_us_ms(value.p99_us)),

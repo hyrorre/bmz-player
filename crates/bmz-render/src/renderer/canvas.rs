@@ -54,7 +54,10 @@ pub struct RenderFrameTimings {
     pub rect_instances: usize,
     pub image_instances: usize,
     pub text_instances: usize,
-    /// 文字 atlas の GPU 転送（`upload_us` の内数）。
+    /// 文字インスタンスバッファの確保と `write_buffer`（`upload_us` の内数）。CPU 側の時間。
+    pub text_instance_upload_us: u128,
+    /// 文字 atlas テクスチャの作成と `write_texture`（`upload_us` の内数）。CPU 側の時間で、
+    /// GPU で転送が終わるまでの時間は含まない。インスタンスバッファの転送は含まない。
     pub text_atlas_upload_us: u128,
     pub text_atlas_writes: usize,
     pub text_atlas_upload_bytes: usize,
@@ -82,6 +85,7 @@ pub(super) struct GpuRenderTimings {
     pub(super) rect_instances: usize,
     pub(super) image_instances: usize,
     pub(super) text_instances: usize,
+    pub(super) text_instance_upload_us: u128,
     pub(super) text_atlas_upload_us: u128,
     pub(super) text_atlas_writes: usize,
     pub(super) text_atlas_upload_bytes: usize,

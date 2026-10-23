@@ -40,82 +40,56 @@ impl WgpuRenderer {
         )
     }
 
-    pub(in crate::renderer) fn upload_text_frame(
-        &mut self,
-        frame: &TextFrame,
-    ) -> TextAtlasUploadStats {
-        let mut stats = TextAtlasUploadStats::default();
+    /// 文字インスタンスバッファの確保と転送。
+    pub(in crate::renderer) fn upload_text_instances(&mut self, frame: &TextFrame) {
         self.ensure_text_buffer(frame.instances.len());
         if let Some(buffer) = &self.text_buffer
             && !frame.instances.is_empty()
         {
             self.queue.write_buffer(buffer, 0, &frame.instances);
         }
+    }
 
+    /// 文字 atlas テクスチャの確保と転送。
+    pub(in crate::renderer) fn upload_text_atlas(
+        &mut self,
+        frame: &TextFrame,
+    ) -> TextAtlasUploadStats {
         if frame.size.width == 0 || frame.size.height == 0 {
-            return stats;
+            return TextAtlasUploadStats::default();
         }
 
         let recreate_texture = self.text_texture_size != frame.size || self.text_texture.is_none();
         self.ensure_text_texture(frame.size);
         let texture = self.text_texture.as_ref().expect("text texture exists after ensure");
-        // テクスチャを作り直したときだけ全体を書く。atlas の作り直しでは、古い画素が残っても
-        // 転送領域がパディングごと上書きするので、新しく格納したグリフだけを送る。
-        if recreate_texture {
-            let pixels = self.text_atlas.pixels_for_size(frame.size);
-            self.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &pixels,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(frame.size.width * 4),
-                    rows_per_image: Some(frame.size.height),
-                },
-                wgpu::Extent3d {
-                    width: frame.size.width,
-                    height: frame.size.height,
-                    depth_or_array_layers: 1,
-                },
-            );
-            stats.writes += 1;
-            stats.bytes += pixels.len();
-            stats.full_uploads += 1;
-            return stats;
-        }
-
-        for region in &frame.dirty_regions {
-            if region.pixels.is_empty() || region.size.width == 0 || region.size.height == 0 {
-                continue;
-            }
-            self.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d { x: region.origin.0, y: region.origin.1, z: 0 },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &region.pixels,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(region.size.width * 4),
-                    rows_per_image: Some(region.size.height),
-                },
-                wgpu::Extent3d {
-                    width: region.size.width,
-                    height: region.size.height,
-                    depth_or_array_layers: 1,
-                },
-            );
-            stats.writes += 1;
-            stats.bytes += region.pixels.len();
-            stats.region_uploads += 1;
-        }
-        stats
+        let atlas = &self.text_atlas;
+        let queue = &self.queue;
+        write_text_atlas(
+            frame,
+            recreate_texture,
+            || atlas.pixels_for_size(frame.size),
+            |origin, size, pixels| {
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d { x: origin.0, y: origin.1, z: 0 },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    pixels,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(size.width * 4),
+                        rows_per_image: Some(size.height),
+                    },
+                    wgpu::Extent3d {
+                        width: size.width,
+                        height: size.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            },
+        )
     }
 
     pub(in crate::renderer) fn reset_text_atlas(&mut self) {
@@ -128,11 +102,10 @@ impl WgpuRenderer {
     }
 
     pub(in crate::renderer) fn ensure_text_buffer(&mut self, used_bytes: usize) {
-        if used_bytes == 0 || used_bytes <= self.text_buffer_capacity {
+        let Some(capacity) = grown_text_buffer_capacity(used_bytes, self.text_buffer_capacity)
+        else {
             return;
-        }
-
-        let capacity = used_bytes.next_power_of_two();
+        };
         self.text_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("bmz-render text instance buffer"),
             size: capacity as u64,

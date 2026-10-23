@@ -845,6 +845,7 @@ impl Renderer {
             rect_instances: gpu_timings.rect_instances,
             image_instances: gpu_timings.image_instances,
             text_instances: gpu_timings.text_instances,
+            text_instance_upload_us: gpu_timings.text_instance_upload_us,
             text_atlas_upload_us: gpu_timings.text_atlas_upload_us,
             text_atlas_writes: gpu_timings.text_atlas_writes,
             text_atlas_upload_bytes: gpu_timings.text_atlas_upload_bytes,

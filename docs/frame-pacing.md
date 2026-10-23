@@ -46,7 +46,11 @@ $env:RUST_LOG = 'info,bmz_player::play_profile=debug,bmz_player::frame_pacing=de
 
 選曲画面は`bmz_player::select_profile=debug`で、120フレームごとに`select frame profile`を記録します。
 文字の準備時間（`text_ms` / `text_p99_ms` / `text_max_ms`）と、文字atlasのGPU転送を含みます。
-`text_atlas_upload_ms`は転送処理のCPU時間です（`upload_ms`の内数）。`text_atlas_writes`は
+`text_instance_upload_ms`は文字インスタンスバッファの確保と`write_buffer`、
+`text_atlas_upload_ms`（`text_atlas_upload_p99_ms` / `text_atlas_upload_max_ms`）は
+文字atlasテクスチャの作成と`write_texture`にかかったCPU時間で、どちらも`upload_ms`の内数です。
+GPU上で転送が終わるまでの時間は含みません。atlasに変更がないフレームでは
+`text_atlas_upload_ms`はほぼ0になります。`text_atlas_writes`は
 `write_texture`の呼び出し回数、`text_atlas_max_writes`は1フレームの最大回数です。
 `text_atlas_upload_kib`は転送量です。`text_atlas_full_uploads`はテクスチャ全体の転送、
 `text_atlas_region_uploads`はグリフごとの部分転送、`text_atlas_rebuilds`はatlasの作り直しの回数です。

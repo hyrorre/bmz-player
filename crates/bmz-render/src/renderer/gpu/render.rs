@@ -72,9 +72,12 @@ impl WgpuRenderer {
         {
             self.queue.write_buffer(buffer, 0, &geometry.images);
         }
-        let text_upload_start = Instant::now();
-        let text_upload = self.upload_text_frame(&text_frame);
-        timings.text_atlas_upload_us = text_upload_start.elapsed().as_micros();
+        let text_instance_upload_start = Instant::now();
+        self.upload_text_instances(&text_frame);
+        timings.text_instance_upload_us = text_instance_upload_start.elapsed().as_micros();
+        let text_atlas_upload_start = Instant::now();
+        let text_upload = self.upload_text_atlas(&text_frame);
+        timings.text_atlas_upload_us = text_atlas_upload_start.elapsed().as_micros();
         timings.text_atlas_writes = text_upload.writes;
         timings.text_atlas_upload_bytes = text_upload.bytes;
         timings.text_atlas_full_uploads = text_upload.full_uploads;
