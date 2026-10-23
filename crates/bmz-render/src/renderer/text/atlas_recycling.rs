@@ -65,7 +65,6 @@ impl TextAtlasCache {
         self.recycling = true;
         self.rebuilt = true;
         self.overflowed = false;
-        self.frames_since_clear = 0;
         self.recycles += 1;
         if let Some(started) = started {
             tracing::debug!(target: "bmz_render::text_atlas", frame = self.frame,

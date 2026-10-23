@@ -544,4 +544,14 @@ fn evicted_layout_is_invalidated_and_rebuilt_on_a_small_gpu() {
     assert_eq!(drawn_pixels(&back, &texture), expected);
     assert_eq!(back.dirty_regions.len(), 1, "only the evicted A needs rasterization");
     assert_eq!(atlas.size(), AtlasSize { width: 96, height: 96 });
+    // 行の回収は空のatlasを試したことにはならない。行に収まらない大きな1文字は、
+    // 60フレーム欠けたまま待たず、空のatlasで再試行できること。
+    let clears = atlas.full_clears;
+    assert!(atlas.cached_tofu_glyph(47.0, 47.0).is_none());
+    atlas.begin_frame();
+    assert_eq!(atlas.full_clears, clears + 1);
+    assert!(atlas.cached_tofu_glyph(47.0, 47.0).is_some());
+    let frame = take_frame(&mut atlas);
+    texture.upload(&frame, &atlas);
+    assert_texture_matches(&texture, &atlas, "large glyph after shelf reuse");
 }

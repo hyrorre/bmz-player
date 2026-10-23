@@ -249,11 +249,11 @@ pub(super) fn build_text_frame_with_font_sets(
             let before = atlas.capacity_misses;
             frame = build_text_frame_commands(plan, system_fonts, font_sets, surface, atlas);
             missing = atlas.capacity_misses - before;
+            atlas.frames_since_clear = 1;
         } else {
             pending_regions.append(&mut frame.dirty_regions);
             frame.dirty_regions = pending_regions;
         }
-        atlas.frames_since_clear = 1;
     }
     atlas.profile_frame(frame.atlas_rebuilt, missing);
     frame
