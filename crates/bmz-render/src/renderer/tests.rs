@@ -156,6 +156,8 @@ mod cases_05;
 mod clip;
 #[path = "tests/text_atlas.rs"]
 mod text_atlas;
+#[path = "tests/text_atlas_upload.rs"]
+mod text_atlas_upload;
 #[path = "tests/text_layout_cache.rs"]
 mod text_layout_cache;
 #[path = "tests/unicode_fallback.rs"]
