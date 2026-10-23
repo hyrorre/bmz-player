@@ -463,3 +463,61 @@ fn degenerate_scales_never_send_invalid_gradients() {
     )]));
     short.iter().for_each(assert_plain);
 }
+
+fn horizontal_text(text: &str, overflow: TextOverflow) -> Vec<Instance> {
+    let mut style = style(angled(90.0), false);
+    style.overflow = overflow;
+    style.max_width = 0.3;
+    instances(&fresh(vec![DrawCommand::Text {
+        origin: ORIGIN,
+        text: text.to_string(),
+        style,
+        caret: None,
+        post_scale: UNIT,
+    }]))
+}
+
+#[test]
+fn whitespace_does_not_widen_the_gradient() {
+    // 範囲は描画されるグリフの左端から右端。空白は quad を作らず、範囲を広げない。
+    let title = horizontal_text("TITLE", TextOverflow::Overflow);
+    assert_eq!(title.len(), 5);
+    for padded in ["TITLE ", "TITLE   ", " TITLE", "  TITLE  "] {
+        let quads = horizontal_text(padded, TextOverflow::Overflow);
+        assert_same_gradient(&quads, &title, padded);
+    }
+    // 単語の間の空白は範囲に含まれ、前後の単語を通して1つのグラデーションになる。
+    let words = horizontal_text("TITLE NAME", TextOverflow::Overflow);
+    assert_eq!(words.len(), 9);
+    let (start, end) = t_range(&words);
+    assert!(approx(start, 0.0) && approx(end, 1.0), "{start}..{end}");
+    assert!(words.windows(2).all(|pair| pair[0].gradient[0] < pair[1].gradient[0]));
+    let gap = words[5].gradient[0] - (words[4].gradient[0] + words[4].gradient[1]);
+    assert!(gap > 0.0, "the space between the words is part of the range: {gap}");
+    // 縮小・切り詰めでも、実際に描画された範囲で 0〜1 になる。
+    for overflow in [TextOverflow::Shrink, TextOverflow::ShrinkUniform, TextOverflow::Truncate] {
+        let quads = horizontal_text("TITLE NAME TITLE NAME", overflow);
+        let (start, end) = t_range(&quads);
+        assert!(approx(start, 0.0) && approx(end, 1.0), "{overflow:?}: {start}..{end}");
+    }
+}
+
+#[test]
+fn whitespace_only_text_has_no_gradient_instances() {
+    for decorated in [false, true] {
+        let frame = fresh(vec![
+            command(ORIGIN, UNIT, style(angled(90.0), decorated)),
+            DrawCommand::Text {
+                origin: ORIGIN,
+                text: "   ".to_string(),
+                style: style(angled(90.0), decorated),
+                caret: None,
+                post_scale: UNIT,
+            },
+        ]);
+        assert_finite(&frame);
+        assert_eq!(frame.command_quad_counts[1], 0, "decorated={decorated}");
+        let quads: usize = frame.command_quad_counts.iter().sum();
+        assert_eq!(frame.instances.len(), quads * TEXT_INSTANCE_BYTES);
+    }
+}
