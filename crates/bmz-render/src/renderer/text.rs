@@ -351,6 +351,13 @@ impl TextQuad {
     pub(super) fn translated(&self, x: f32, y: f32) -> Self {
         Self { x: self.x + x, y: self.y + y, ..self.clone() }
     }
+
+    pub(super) fn is_finite(&self) -> bool {
+        self.x.is_finite()
+            && self.y.is_finite()
+            && self.width.is_finite()
+            && self.height.is_finite()
+    }
 }
 
 pub(super) const DEFAULT_TEXT_FONT_ID: &str = "<default>";

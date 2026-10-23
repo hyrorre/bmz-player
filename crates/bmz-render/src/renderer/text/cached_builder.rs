@@ -58,7 +58,11 @@ impl<'a> CachedTextFrameBuilder<'a> {
     }
 
     /// キャッシュ済みのレイアウトを `origin` へ動かして並べる。
+    /// キャッシュしない位置では使わず、変更前と同じく毎回組む。
     fn extend_cached_layout(&mut self, key: Option<&TextLayoutKey>, origin: &Point) -> bool {
+        if !is_cacheable_layout_origin(origin) {
+            return false;
+        }
         let Some(cached) = key.and_then(|key| self.atlas.cached_layout(key)) else {
             return false;
         };
@@ -76,12 +80,16 @@ impl<'a> CachedTextFrameBuilder<'a> {
     ) {
         // atlas の空き不足で欠けたグリフがあれば、作り直した後に組み直す。
         let Some(key) = key else { return };
-        if self.atlas.capacity_misses() != capacity_misses {
+        if self.atlas.capacity_misses() != capacity_misses || !is_cacheable_layout_origin(origin) {
             return;
         }
         let quads = &mut self.quads[quads_before..];
         let relative: Vec<_> =
             quads.iter().map(|quad| quad.translated(-origin.x, -origin.y)).collect();
+        // 位置を外したキーは別の位置でも使うので、不正な値は残さない。
+        if !relative.iter().all(TextQuad::is_finite) {
+            return;
+        }
         // 丸め誤差で次のフレームとずれないよう、キャッシュから並べた場合と同じ座標にそろえる。
         for (quad, cached) in quads.iter_mut().zip(&relative) {
             *quad = cached.translated(origin.x, origin.y);
@@ -541,4 +549,14 @@ pub(super) fn shrunk_raster_scale(scale: PxScale) -> (PxScale, f32) {
     let ratio = ((scale.x / scale.y) * SHRINK_RASTER_STEPS).ceil() / SHRINK_RASTER_STEPS;
     let raster = PxScale { x: scale.y * ratio.min(1.0), y: scale.y };
     (raster, scale.x / raster.x)
+}
+
+/// 相対座標のレイアウトを作れる描画位置の範囲（正規化座標）。これより遠いと f32 の
+/// 精度が落ち、別の位置で使い回したときに文字がずれる。画面外の大きな値は毎回組む。
+const LAYOUT_CACHE_MAX_ORIGIN: f32 = 16.0;
+
+/// 位置に依存しないレイアウトとしてキャッシュしてよい描画位置か。
+/// NaN・無限大の位置で組んだ quad をキャッシュすると、正常な位置に戻っても使い回される。
+fn is_cacheable_layout_origin(origin: &Point) -> bool {
+    origin.x.abs() <= LAYOUT_CACHE_MAX_ORIGIN && origin.y.abs() <= LAYOUT_CACHE_MAX_ORIGIN
 }
