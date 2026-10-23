@@ -20,7 +20,7 @@ use crate::assets::{RgbaImageAsset, load_png_rgba};
 use crate::bitmap_font::{BitmapFont, load_bitmap_font};
 use crate::plan::{
     Color, DrawCommand, DrawPlan, Point, Rect, RectBatchCache, RectBatchCacheKey, RectCommand,
-    TextAlign, TextCaret, TextOverflow, TextStyle, TextureId, UvRect,
+    TextAlign, TextCaret, TextGradient, TextOverflow, TextStyle, TextureId, UvRect,
 };
 use crate::scene::AppSceneSnapshot;
 use crate::skin::{

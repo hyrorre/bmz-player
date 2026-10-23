@@ -21,6 +21,7 @@ fn vector_text_caret_rect_uses_font_advance_without_changing_text() {
     let Some(font) = load_default_font() else { return };
     let surface = SurfaceSize { width: 1000, height: 100 };
     let style = TextStyle {
+        gradient: None,
         font_id: None,
         size: 0.1,
         bitmap_size: None,
@@ -389,6 +390,8 @@ fn all_offset_post_scale_is_applied_to_text_quads_and_caret() {
         glyph_width: 1,
         glyph_height: 1,
         color: Color::rgb(1.0, 1.0, 1.0),
+        fill: true,
+        gradient: None,
     }];
     scale_text_quads(&mut quads, origin, scale);
     assert_approx(quads[0].x, 0.35);

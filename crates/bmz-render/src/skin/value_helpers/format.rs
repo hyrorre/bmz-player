@@ -36,6 +36,10 @@ impl TextStyle {
                 color: shadow.color.with_alpha(shadow.color.a * alpha),
                 ..shadow
             }),
+            gradient: self.gradient.map(|gradient| TextGradient {
+                color: gradient.color.with_alpha(gradient.color.a * alpha),
+                ..gradient
+            }),
             ..self
         }
     }

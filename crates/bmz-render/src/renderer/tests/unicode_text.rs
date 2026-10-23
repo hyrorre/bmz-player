@@ -16,6 +16,7 @@ pub(super) fn symbols() -> TextFace {
 
 pub(super) fn text_style(font_id: Option<&str>) -> TextStyle {
     TextStyle {
+        gradient: None,
         font_id: font_id.map(str::to_string),
         size: 0.1,
         bitmap_size: None,

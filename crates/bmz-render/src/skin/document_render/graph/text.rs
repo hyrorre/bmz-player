@@ -72,14 +72,19 @@ macro_rules! skin_document_render_graph_text_methods {
             if content.is_empty() && caret.is_none() {
                 return None;
             }
+            let (body_color, gradient) = match skin_text_gradient(text, color) {
+                Some((top, gradient)) => (top, Some(gradient)),
+                None => (color, None),
+            };
             Some(SkinRenderItem::Text {
                 origin: Point { x: origin_x, y: rect.y },
                 text: content,
                 style: TextStyle {
+                    gradient,
                     font_id: (!text.font.is_empty()).then(|| text.font.clone()),
                     size: frame.h.abs().max(text.size).max(1) as f32 / self.h.max(1) as f32,
                     bitmap_size: skin_text_bitmap_size(text, &self.font, self.h, frame.h),
-                    color,
+                    color: body_color,
                     layer: TextLayer::Ui,
                     align: skin_text_align(text.align),
                     max_width,

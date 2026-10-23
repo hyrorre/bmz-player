@@ -49,6 +49,7 @@ fn number_object_resolves_to_padded_text() {
         source: SkinSource::Number {
             slot: NumberSlot::ExScore,
             style: TextStyle {
+                gradient: None,
                 font_id: None,
                 size: 0.04,
                 bitmap_size: None,
@@ -90,6 +91,7 @@ fn skin_definition_resolves_context_values() {
             source: SkinSource::Text {
                 slot: TextSlot::Judge,
                 style: TextStyle {
+                    gradient: None,
                     font_id: None,
                     size: 0.04,
                     bitmap_size: None,
@@ -166,6 +168,7 @@ fn append_skin_render_items_keeps_empty_text_with_caret() {
             origin: Point { x: 0.25, y: 0.5 },
             text: String::new(),
             style: TextStyle {
+                gradient: None,
                 font_id: None,
                 size: 0.04,
                 bitmap_size: None,

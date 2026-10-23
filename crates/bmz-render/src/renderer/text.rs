@@ -245,6 +245,11 @@ pub(super) fn build_text_frame_with_font_sets(
             };
             builder.push_bitmap_text(origin, text, style.clone(), fonts, surface);
             scale_text_quads(&mut builder.quads[quads_before..], *origin, *post_scale);
+            if let Some(gradient) = style.gradient {
+                let height = style.bitmap_size.unwrap_or(style.size) * post_scale.y;
+                let body = &mut builder.quads[builder.body_start..];
+                apply_text_gradient(body, *origin, height, style.wrapping, gradient, surface);
+            }
             command_caret_rects.push(
                 caret
                     .and_then(|caret| {
@@ -269,6 +274,11 @@ pub(super) fn build_text_frame_with_font_sets(
                 });
             builder.push_text(origin, text, style.clone(), vector_fonts, surface);
             scale_text_quads(&mut builder.quads[quads_before..], *origin, *post_scale);
+            if let Some(gradient) = style.gradient {
+                let height = style.size * post_scale.y;
+                let body = &mut builder.quads[builder.body_start..];
+                apply_text_gradient(body, *origin, height, style.wrapping, gradient, surface);
+            }
             command_caret_rects.push(
                 caret
                     .and_then(|caret| {
@@ -287,6 +297,57 @@ pub(super) fn build_text_frame_with_font_sets(
         command_quad_counts.push(builder.quads.len() - quads_before);
     }
     builder.finish(command_quad_counts, command_caret_rects)
+}
+
+/// 文字本体の quad にグラデーションを掛ける。範囲は、横が本体の quad の左端から右端、
+/// 縦が文字の上端 `origin.y` から `height` まで（折り返しでは最後の行の下端まで）。
+/// 角度は画面の画素で測るので、画面の縦横比が変わっても向きは変わらない。
+pub(super) fn apply_text_gradient(
+    quads: &mut [TextQuad],
+    origin: Point,
+    height: f32,
+    wrapping: bool,
+    gradient: TextGradient,
+    surface: SurfaceSize,
+) {
+    let mut left = f32::INFINITY;
+    let mut right = f32::NEG_INFINITY;
+    let mut bottom = origin.y + height;
+    for quad in quads.iter().filter(|quad| quad.fill) {
+        left = left.min(quad.x);
+        right = right.max(quad.x + quad.width);
+        if wrapping {
+            bottom = bottom.max(quad.y + quad.height);
+        }
+    }
+    if left > right {
+        return;
+    }
+    let angle = gradient.angle_deg.to_radians();
+    let (sin, cos) = angle.sin_cos();
+    // 上から下への向きを反時計回りに回した、画素単位の向き。
+    let (dx, dy) = (sin * surface.width as f32, cos * surface.height as f32);
+    let project = |x: f32, y: f32| x * dx + y * dy;
+    let corners = [
+        project(left, origin.y),
+        project(right, origin.y),
+        project(left, bottom),
+        project(right, bottom),
+    ];
+    let start = corners.iter().copied().fold(f32::INFINITY, f32::min);
+    let end = corners.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let range = end - start;
+    if !range.is_finite() || range <= f32::EPSILON {
+        return;
+    }
+    for quad in quads.iter_mut().filter(|quad| quad.fill) {
+        quad.gradient = Some(QuadGradient {
+            color: gradient.color,
+            t0: (project(quad.x, quad.y) - start) / range,
+            du: quad.width * dx / range,
+            dv: quad.height * dy / range,
+        });
+    }
 }
 
 fn point_is_finite(point: &Point) -> bool {
@@ -374,6 +435,20 @@ pub(super) struct TextQuad {
     pub(super) glyph_width: u32,
     pub(super) glyph_height: u32,
     pub(super) color: Color,
+    /// 文字色で塗るグリフ。カラーグリフは false で、グラデーションを掛けない。
+    pub(super) fill: bool,
+    pub(super) gradient: Option<QuadGradient>,
+}
+
+/// quad に掛ける線形グラデーション。quad 内の位置 (u, v)（左上 0、右下 1）で
+/// `t = t0 + u * du + v * dv` を求め、`color` から `QuadGradient::color` へ補間する。
+/// quad 内の相対値なので、位置や拡大縮小を変えても同じ見た目になる。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct QuadGradient {
+    pub(super) color: Color,
+    pub(super) t0: f32,
+    pub(super) du: f32,
+    pub(super) dv: f32,
 }
 
 impl TextQuad {

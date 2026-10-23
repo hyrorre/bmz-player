@@ -82,6 +82,70 @@ fn decorated_text_defaults_and_transparent_decoration_colors() {
     assert!(style.shadow.is_none());
 }
 
+fn gradient_style(fields: &str) -> TextStyle {
+    let document: SkinDocument = serde_json::from_str(&format!(
+        r#"{{
+        "w":100,"h":100,
+        "text":[{{"id":"label","constantText":"TEXT"{fields}}}],
+        "destination":[{{"id":"label","dst":[{{"w":50,"h":10,"r":255,"g":102,"b":204,"a":128}}]}}]
+    }}"#
+    ))
+    .unwrap();
+    let items = document.static_render_items(
+        &HashMap::new(),
+        &SkinDrawState::default(),
+        &SkinTextState::default(),
+    );
+    let SkinRenderItem::Text { style, .. } = &items[0] else { panic!("text") };
+    style.clone()
+}
+
+fn assert_color(actual: Color, expected: [f32; 4]) {
+    for (actual, expected) in [actual.r, actual.g, actual.b, actual.a].into_iter().zip(expected) {
+        assert!(approx_eq(actual, expected), "{actual} != {expected}");
+    }
+}
+
+#[test]
+fn text_gradient_colors_are_multiplied_by_the_destination_color() {
+    let dst = [1.0, 102.0 / 255.0, 204.0 / 255.0, 128.0 / 255.0];
+    let style = gradient_style(
+        r#","colorTop":"ff8000","colorBottom":"00ff0080","gradientAngle":90,
+        "outlineWidth":1,"outlineColor":"000000ff""#,
+    );
+    assert_color(style.color, [1.0, dst[1] * 128.0 / 255.0, 0.0, dst[3]]);
+    let gradient = style.gradient.expect("gradient");
+    assert_color(gradient.color, [0.0, dst[1], 0.0, dst[3] * 128.0 / 255.0]);
+    assert_eq!(gradient.angle_deg, 90.0);
+    // 縁取りは指定色のまま、透明度だけを共有する。
+    assert_color(style.outline.unwrap().color, [0.0, 0.0, 0.0, dst[3]]);
+
+    // 片方だけなら、もう片方は文字色のまま。角度の既定は上から下。
+    let bottom_only = gradient_style(r#","colorBottom":"000000""#);
+    assert_color(bottom_only.color, dst);
+    let gradient = bottom_only.gradient.expect("gradient");
+    assert_color(gradient.color, [0.0, 0.0, 0.0, dst[3]]);
+    assert_eq!(gradient.angle_deg, 0.0);
+    let top_only = gradient_style(r#","colorTop":"00000080""#);
+    assert_color(top_only.color, [0.0, 0.0, 0.0, dst[3] * 128.0 / 255.0]);
+    assert_color(top_only.gradient.unwrap().color, dst);
+
+    // 指定が無い、または読めない色だけなら従来どおり。
+    for fields in ["", r#","gradientAngle":45"#, r#","colorTop":"red","colorBottom":"12345""#] {
+        let style = gradient_style(fields);
+        assert_eq!(style.gradient, None, "{fields}");
+        assert_color(style.color, dst);
+    }
+}
+
+#[test]
+fn text_gradient_fades_with_the_text() {
+    let style = gradient_style(r#","colorTop":"ffffff","colorBottom":"ff0000""#);
+    let faded = style.clone().with_alpha(0.5);
+    assert!(approx_eq(faded.color.a, style.color.a * 0.5));
+    assert!(approx_eq(faded.gradient.unwrap().color.a, style.gradient.unwrap().color.a * 0.5));
+}
+
 #[test]
 fn fully_transparent_destination_hides_opaque_decorations_and_clamps_alpha() {
     let document: SkinDocument = serde_json::from_str(r#"{"w":100,"h":100}"#).unwrap();

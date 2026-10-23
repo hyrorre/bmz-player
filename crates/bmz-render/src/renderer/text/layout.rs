@@ -245,6 +245,9 @@ pub(super) fn encode_text_quads(
 ) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(quads.len() * TEXT_INSTANCE_BYTES);
     for quad in quads {
+        // グラデーションの無い文字は終点も同じ色にし、t を 0 に固定する。
+        let gradient =
+            quad.gradient.unwrap_or(QuadGradient { color: quad.color, t0: 0.0, du: 0.0, dv: 0.0 });
         for value in [
             quad.x,
             quad.y,
@@ -258,6 +261,13 @@ pub(super) fn encode_text_quads(
             quad.color.g,
             quad.color.b,
             quad.color.a,
+            gradient.color.r,
+            gradient.color.g,
+            gradient.color.b,
+            gradient.color.a,
+            gradient.t0,
+            gradient.du,
+            gradient.dv,
         ] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }

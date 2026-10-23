@@ -123,6 +123,7 @@ fn sample_text() -> DrawCommand {
         caret: None,
         post_scale: Point { x: 1.0, y: 1.0 },
         style: TextStyle {
+            gradient: None,
             font_id: None,
             size: 0.1,
             bitmap_size: None,
@@ -160,6 +161,8 @@ mod shrink_raster;
 mod text_atlas;
 #[path = "tests/text_atlas_upload.rs"]
 mod text_atlas_upload;
+#[path = "tests/text_gradient.rs"]
+mod text_gradient;
 #[path = "tests/text_layout_cache.rs"]
 mod text_layout_cache;
 #[path = "tests/text_non_finite.rs"]
