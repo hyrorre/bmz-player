@@ -246,9 +246,18 @@ pub(super) fn build_text_frame_with_font_sets(
             builder.push_bitmap_text(origin, text, style.clone(), fonts, surface);
             scale_text_quads(&mut builder.quads[quads_before..], *origin, *post_scale);
             if let Some(gradient) = style.gradient {
-                let height = style.bitmap_size.unwrap_or(style.size) * post_scale.y;
+                let height = style.bitmap_size.unwrap_or(style.size);
                 let body = &mut builder.quads[builder.body_start..];
-                apply_text_gradient(body, *origin, height, style.wrapping, gradient, surface);
+                let wrapping = style.wrapping;
+                apply_text_gradient(
+                    body,
+                    *origin,
+                    height,
+                    *post_scale,
+                    wrapping,
+                    gradient,
+                    surface,
+                );
             }
             command_caret_rects.push(
                 caret
@@ -275,9 +284,17 @@ pub(super) fn build_text_frame_with_font_sets(
             builder.push_text(origin, text, style.clone(), vector_fonts, surface);
             scale_text_quads(&mut builder.quads[quads_before..], *origin, *post_scale);
             if let Some(gradient) = style.gradient {
-                let height = style.size * post_scale.y;
                 let body = &mut builder.quads[builder.body_start..];
-                apply_text_gradient(body, *origin, height, style.wrapping, gradient, surface);
+                let (height, wrapping) = (style.size, style.wrapping);
+                apply_text_gradient(
+                    body,
+                    *origin,
+                    height,
+                    *post_scale,
+                    wrapping,
+                    gradient,
+                    surface,
+                );
             }
             command_caret_rects.push(
                 caret
@@ -299,55 +316,100 @@ pub(super) fn build_text_frame_with_font_sets(
     builder.finish(command_quad_counts, command_caret_rects)
 }
 
-/// 文字本体の quad にグラデーションを掛ける。範囲は、横が本体の quad の左端から右端、
-/// 縦が文字の上端 `origin.y` から `height` まで（折り返しでは最後の行の下端まで）。
+/// 文字本体の quad にグラデーションを掛ける。範囲は、横が描画される本体のグリフの左端から右端、
+/// 縦が文字の上端 `origin.y` から `height` まで（折り返しでは最後の行の端まで）。
 /// 角度は画面の画素で測るので、画面の縦横比が変わっても向きは変わらない。
+/// `post_scale` の負の倍率で文字を反転したときは、向きも文字と一緒に反転する。
 pub(super) fn apply_text_gradient(
     quads: &mut [TextQuad],
     origin: Point,
-    height: f32,
+    line_height: f32,
+    post_scale: Point,
     wrapping: bool,
     gradient: TextGradient,
     surface: SurfaceSize,
 ) {
-    let mut left = f32::INFINITY;
-    let mut right = f32::NEG_INFINITY;
-    let mut bottom = origin.y + height;
-    for quad in quads.iter().filter(|quad| quad.fill) {
-        left = left.min(quad.x);
-        right = right.max(quad.x + quad.width);
-        if wrapping {
-            bottom = bottom.max(quad.y + quad.height);
-        }
-    }
-    if left > right {
+    let height = line_height * post_scale.y;
+    let Some(bounds) = text_gradient_bounds(quads, origin, height, wrapping) else {
         return;
-    }
+    };
     let angle = gradient.angle_deg.to_radians();
     let (sin, cos) = angle.sin_cos();
-    // 上から下への向きを反時計回りに回した、画素単位の向き。
-    let (dx, dy) = (sin * surface.width as f32, cos * surface.height as f32);
+    // 上から下への向きを反時計回りに回した、画素単位の向き。反転した軸では逆向きにする。
+    let mirror = |scale: f32| if scale < 0.0 { -1.0 } else { 1.0 };
+    let dx = sin * surface.width as f32 * mirror(post_scale.x);
+    let dy = cos * surface.height as f32 * mirror(post_scale.y);
     let project = |x: f32, y: f32| x * dx + y * dy;
     let corners = [
-        project(left, origin.y),
-        project(right, origin.y),
-        project(left, bottom),
-        project(right, bottom),
+        project(bounds.left, bounds.top),
+        project(bounds.right, bounds.top),
+        project(bounds.left, bounds.bottom),
+        project(bounds.right, bounds.bottom),
     ];
     let start = corners.iter().copied().fold(f32::INFINITY, f32::min);
     let end = corners.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     let range = end - start;
-    if !range.is_finite() || range <= f32::EPSILON {
+    // 向きに沿った長さが画素に満たない範囲（倍率0など）では、掛けずに始点の色で描く。
+    // 角度の sin / cos の丸め誤差だけで生じる長さも、ここで除く。
+    if !range.is_finite() || range < TEXT_GRADIENT_MIN_RANGE_PX {
         return;
     }
     for quad in quads.iter_mut().filter(|quad| quad.fill) {
-        quad.gradient = Some(QuadGradient {
+        let gradient = QuadGradient {
             color: gradient.color,
             t0: (project(quad.x, quad.y) - start) / range,
             du: quad.width * dx / range,
             dv: quad.height * dy / range,
-        });
+        };
+        if [gradient.t0, gradient.du, gradient.dv].iter().all(|value| value.is_finite()) {
+            quad.gradient = Some(gradient);
+        }
     }
+}
+
+/// グラデーションを掛ける向きの長さの下限（画素）。
+const TEXT_GRADIENT_MIN_RANGE_PX: f32 = 1.0 / 1024.0;
+
+/// グラデーションを掛ける範囲（正規化座標）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct TextGradientBounds {
+    pub(super) left: f32,
+    pub(super) right: f32,
+    pub(super) top: f32,
+    pub(super) bottom: f32,
+}
+
+/// 本体のグリフ（カラーグリフを除く）の範囲。quad の幅・高さは反転すると負になるので、
+/// 両端から最小・最大を求める。縦は `origin.y` から `height`（反転なら負）までの行の範囲で、
+/// 折り返しでは `origin.y` から遠い側を描画されたグリフの端まで広げる。
+/// 描画するグリフが無ければ `None`。
+pub(super) fn text_gradient_bounds(
+    quads: &[TextQuad],
+    origin: Point,
+    height: f32,
+    wrapping: bool,
+) -> Option<TextGradientBounds> {
+    let line_end = origin.y + height;
+    let mut bounds = TextGradientBounds {
+        left: f32::INFINITY,
+        right: f32::NEG_INFINITY,
+        top: origin.y.min(line_end),
+        bottom: origin.y.max(line_end),
+    };
+    for quad in quads.iter().filter(|quad| quad.fill) {
+        let (x0, x1) = (quad.x, quad.x + quad.width);
+        let (y0, y1) = (quad.y, quad.y + quad.height);
+        bounds.left = bounds.left.min(x0.min(x1));
+        bounds.right = bounds.right.max(x0.max(x1));
+        if wrapping {
+            if height < 0.0 {
+                bounds.top = bounds.top.min(y0.min(y1));
+            } else {
+                bounds.bottom = bounds.bottom.max(y0.max(y1));
+            }
+        }
+    }
+    (bounds.left <= bounds.right).then_some(bounds)
 }
 
 fn point_is_finite(point: &Point) -> bool {

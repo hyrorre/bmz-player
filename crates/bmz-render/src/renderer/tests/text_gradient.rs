@@ -303,3 +303,163 @@ fn gradient_text_renders_on_gpu() {
     let (plain, graded) = (alpha(&plain), alpha(&graded));
     assert!(graded.abs_diff(plain) * 10 < plain, "{plain} / {graded}");
 }
+
+fn angled(angle_deg: f32) -> Option<TextGradient> {
+    Some(TextGradient { color: BLUE, angle_deg })
+}
+
+fn assert_finite(frame: &TextFrame) {
+    for quad in instances(frame) {
+        let values =
+            quad.rect.iter().chain(&quad.color).chain(&quad.color_end).chain(&quad.gradient);
+        assert!(values.into_iter().all(|value| value.is_finite()), "{quad:?}");
+    }
+}
+
+/// `t` の範囲（quad の4隅で測った最小と最大）。
+fn t_range(quads: &[Instance]) -> (f32, f32) {
+    quads
+        .iter()
+        .flat_map(|quad| {
+            let [t0, du, dv] = quad.gradient;
+            [t0, t0 + du, t0 + dv, t0 + du + dv]
+        })
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), t| (min.min(t), max.max(t)))
+}
+
+fn assert_same_gradient(actual: &[Instance], expected: &[Instance], case: &str) {
+    assert_eq!(actual.len(), expected.len(), "{case}");
+    for (actual, expected) in actual.iter().zip(expected) {
+        assert_eq!(actual.color_end, expected.color_end, "{case}");
+        for (actual, expected) in actual.gradient.iter().zip(&expected.gradient) {
+            assert!(approx(*actual, *expected), "{case}: {actual} != {expected}");
+        }
+    }
+}
+
+const MIRRORS: [Point; 4] = [
+    Point { x: 1.0, y: 1.0 },
+    Point { x: -1.0, y: 1.0 },
+    Point { x: 1.0, y: -1.0 },
+    Point { x: -1.0, y: -1.0 },
+];
+
+#[test]
+fn mirrored_text_carries_its_gradient() {
+    // 反転しても、各グリフの quad 内のグラデーションは反転前と同じ（文字と一緒に反転する）。
+    for angle in [0.0, 45.0, 90.0, 180.0] {
+        for decorated in [false, true] {
+            let unscaled =
+                instances(&fresh(vec![command(ORIGIN, UNIT, style(angled(angle), decorated))]));
+            for scale in MIRRORS {
+                let frame = fresh(vec![command(ORIGIN, scale, style(angled(angle), decorated))]);
+                assert_finite(&frame);
+                let mirrored = instances(&frame);
+                let case = format!("angle={angle} decorated={decorated} scale={scale:?}");
+                assert_same_gradient(&mirrored, &unscaled, &case);
+            }
+        }
+    }
+    // 左右反転でも、左から右（90度）は文字の範囲いっぱいに 0〜1 で変わる。
+    let frame = fresh(vec![command(ORIGIN, Point { x: -1.0, y: 1.0 }, style(angled(90.0), false))]);
+    let (start, end) = t_range(&instances(&frame));
+    assert!(approx(start, 0.0) && approx(end, 1.0), "{start}..{end}");
+}
+
+#[test]
+fn mirrored_bitmap_and_wrapped_text_carry_their_gradient() {
+    let bitmap_fonts = HashMap::from([("bitmap".to_string(), test_bitmap_font())]);
+    let bitmap = |scale: Point| {
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![DrawCommand::Text {
+                origin: ORIGIN,
+                text: "AAA".to_string(),
+                style: TextStyle {
+                    font_id: Some("bitmap".to_string()),
+                    ..style(angled(90.0), true)
+                },
+                caret: None,
+                post_scale: scale,
+            }],
+        };
+        let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+        build_text_frame_with_cache(
+            &plan,
+            &latin(),
+            &HashMap::new(),
+            &bitmap_fonts,
+            SURFACE,
+            &mut atlas,
+        )
+    };
+    let mut wrapped_style = style(angled(0.0), false);
+    wrapped_style.wrapping = true;
+    wrapped_style.max_width = 0.15;
+    let wrapped = |scale: Point| {
+        fresh(vec![DrawCommand::Text {
+            origin: ORIGIN,
+            text: "AW AW AW".to_string(),
+            style: wrapped_style.clone(),
+            caret: None,
+            post_scale: scale,
+        }])
+    };
+    let lines = instances(&wrapped(UNIT));
+    let rows: std::collections::BTreeSet<_> =
+        lines.iter().map(|quad| (quad.rect[1] * 1000.0) as i32 / 50).collect();
+    assert!(rows.len() >= 2, "the text wraps: {rows:?}");
+    // 全行で1つの範囲。最初の行の上端から最後の行の下端まで。
+    let (start, end) = t_range(&lines);
+    assert!(start >= -1e-4 && approx(end, 1.0), "{start}..{end}");
+    for scale in MIRRORS {
+        let frame = bitmap(scale);
+        assert_finite(&frame);
+        assert_same_gradient(&instances(&frame), &instances(&bitmap(UNIT)), &format!("{scale:?}"));
+        let frame = wrapped(scale);
+        assert_finite(&frame);
+        assert_same_gradient(&instances(&frame), &lines, &format!("wrapped {scale:?}"));
+    }
+}
+
+#[test]
+fn degenerate_scales_never_send_invalid_gradients() {
+    for scale in [
+        Point { x: 0.0, y: 1.0 },
+        Point { x: 1.0, y: 0.0 },
+        Point { x: 0.0, y: 0.0 },
+        Point { x: -0.0, y: -0.0 },
+        Point { x: 1.0e-7, y: 1.0e-7 },
+        Point { x: -1.0e-7, y: 1.0e-7 },
+    ] {
+        for angle in [0.0, 45.0, 90.0, 180.0] {
+            let frame = fresh(vec![command(ORIGIN, scale, style(angled(angle), true))]);
+            assert_finite(&frame);
+            for quad in instances(&frame) {
+                // 範囲が無い向きではグラデーションを掛けず、始点の色で描く。
+                if quad.gradient == [0.0; 3] {
+                    assert_eq!(quad.color_end, quad.color, "{scale:?} {angle}");
+                }
+            }
+        }
+    }
+    // 横幅0では横向きのグラデーションは無効、縦向きは高さで掛かる。
+    let flat = instances(&fresh(vec![command(
+        ORIGIN,
+        Point { x: 0.0, y: 1.0 },
+        style(angled(90.0), false),
+    )]));
+    flat.iter().for_each(assert_plain);
+    let thin = instances(&fresh(vec![command(
+        ORIGIN,
+        Point { x: 0.0, y: 1.0 },
+        style(angled(0.0), false),
+    )]));
+    assert!(thin.iter().all(|quad| quad.color_end == rgba(BLUE)));
+    let short = instances(&fresh(vec![command(
+        ORIGIN,
+        Point { x: 1.0, y: 0.0 },
+        style(angled(0.0), false),
+    )]));
+    short.iter().for_each(assert_plain);
+}
