@@ -5,6 +5,8 @@ pub(super) struct CachedTextFrameBuilder<'a> {
     pub(super) quads: Vec<TextQuad>,
     /// 最後に組んだ文字列の本体（影・縁取りを除く）の先頭の quad。
     pub(super) body_start: usize,
+    /// 文字列ごとのグラデーション。quad の並び順に並ぶ。
+    pub(super) gradients: Vec<TextGradientSpan>,
 }
 
 /// 1行ぶんの描画位置。`line_y` はベクターでは基準線、ビットマップでは文字上端。
@@ -40,7 +42,7 @@ impl<'a> From<BitmapFontSet<'a>> for GlyphFonts<'a> {
 
 impl<'a> CachedTextFrameBuilder<'a> {
     pub(super) fn new(atlas: &'a mut TextAtlasCache) -> Self {
-        Self { atlas, quads: Vec::new(), body_start: 0 }
+        Self { atlas, quads: Vec::new(), body_start: 0, gradients: Vec::new() }
     }
 
     pub(super) fn shaped_vector_text(
@@ -504,7 +506,6 @@ impl<'a> CachedTextFrameBuilder<'a> {
             glyph_height: cached.height,
             color,
             fill,
-            gradient: None,
         });
     }
 
@@ -535,7 +536,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
         command_caret_rects: Vec<Option<RectCommand>>,
     ) -> TextFrame {
         let size = self.atlas.size();
-        let instances = encode_text_quads(&self.quads, size.width, size.height);
+        let instances = encode_text_quads(&self.quads, &self.gradients, size.width, size.height);
         TextFrame {
             size,
             #[cfg(test)]

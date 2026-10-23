@@ -391,7 +391,6 @@ fn all_offset_post_scale_is_applied_to_text_quads_and_caret() {
         glyph_height: 1,
         color: Color::rgb(1.0, 1.0, 1.0),
         fill: true,
-        gradient: None,
     }];
     scale_text_quads(&mut quads, origin, scale);
     assert_approx(quads[0].x, 0.35);

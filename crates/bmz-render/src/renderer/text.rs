@@ -245,20 +245,6 @@ pub(super) fn build_text_frame_with_font_sets(
             };
             builder.push_bitmap_text(origin, text, style.clone(), fonts, surface);
             scale_text_quads(&mut builder.quads[quads_before..], *origin, *post_scale);
-            if let Some(gradient) = style.gradient {
-                let height = style.bitmap_size.unwrap_or(style.size);
-                let body = &mut builder.quads[builder.body_start..];
-                let wrapping = style.wrapping;
-                apply_text_gradient(
-                    body,
-                    *origin,
-                    height,
-                    *post_scale,
-                    wrapping,
-                    gradient,
-                    surface,
-                );
-            }
             command_caret_rects.push(
                 caret
                     .and_then(|caret| {
@@ -283,19 +269,6 @@ pub(super) fn build_text_frame_with_font_sets(
                 });
             builder.push_text(origin, text, style.clone(), vector_fonts, surface);
             scale_text_quads(&mut builder.quads[quads_before..], *origin, *post_scale);
-            if let Some(gradient) = style.gradient {
-                let body = &mut builder.quads[builder.body_start..];
-                let (height, wrapping) = (style.size, style.wrapping);
-                apply_text_gradient(
-                    body,
-                    *origin,
-                    height,
-                    *post_scale,
-                    wrapping,
-                    gradient,
-                    surface,
-                );
-            }
             command_caret_rects.push(
                 caret
                     .and_then(|caret| {
@@ -305,7 +278,28 @@ pub(super) fn build_text_frame_with_font_sets(
                     .map(|caret| scale_text_rect_command(caret, *origin, *post_scale)),
             );
         }
+        let quads_drawn = builder.quads.len();
         drop_non_finite_quads(&mut builder.quads, quads_before);
+        // 不正な値を除いた文字列は位置がずれるので、グラデーションを掛けない。
+        if let Some(gradient) = style.gradient
+            && builder.quads.len() == quads_drawn
+        {
+            let bitmap =
+                style.font_id.as_deref().is_some_and(|id| font_sets.bitmap.contains_key(id));
+            let line_height =
+                if bitmap { style.bitmap_size.unwrap_or(style.size) } else { style.size };
+            let span = text_gradient_span(
+                &builder.quads,
+                builder.body_start,
+                *origin,
+                line_height,
+                *post_scale,
+                style.wrapping,
+                gradient,
+                surface,
+            );
+            builder.gradients.extend(span);
+        }
         if let Some(caret) = command_caret_rects.last_mut()
             && caret.is_some_and(|caret| !rect_is_finite(caret.rect))
         {
@@ -316,23 +310,47 @@ pub(super) fn build_text_frame_with_font_sets(
     builder.finish(command_quad_counts, command_caret_rects)
 }
 
-/// 文字本体の quad にグラデーションを掛ける。範囲は、横が描画される本体のグリフの左端から右端、
-/// 縦が文字の上端 `origin.y` から `height` まで（折り返しでは最後の行の端まで）。
+/// 1つの文字列の本体（`quads` の範囲）に掛けるグラデーション。インスタンスを書き出すときに、
+/// quad ごとの `t = t0 + u * du + v * dv`（quad 内の位置 u, v は左上 0、右下 1）を
+/// `t0 = x * x_scale + y * y_scale - offset`、`du = width * x_scale`、`dv = height * y_scale`
+/// で求める。quad には持たせないので、グラデーションを使わない文字のデータは増えない。
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct TextGradientSpan {
+    pub(super) quads: std::ops::Range<usize>,
+    pub(super) color: Color,
+    pub(super) x_scale: f32,
+    pub(super) y_scale: f32,
+    pub(super) offset: f32,
+}
+
+impl TextGradientSpan {
+    /// quad の始点の t と、quad の幅・高さあたりの t の変化。
+    pub(super) fn quad_gradient(&self, quad: &TextQuad) -> [f32; 3] {
+        [
+            quad.x * self.x_scale + quad.y * self.y_scale - self.offset,
+            quad.width * self.x_scale,
+            quad.height * self.y_scale,
+        ]
+    }
+}
+
+/// `quads[body_start..]` の文字本体に掛けるグラデーション。範囲は、横が描画される本体のグリフの
+/// 左端から右端、縦が文字の上端 `origin.y` から `line_height` まで（折り返しでは最後の行の端まで）。
 /// 角度は画面の画素で測るので、画面の縦横比が変わっても向きは変わらない。
 /// `post_scale` の負の倍率で文字を反転したときは、向きも文字と一緒に反転する。
-pub(super) fn apply_text_gradient(
-    quads: &mut [TextQuad],
+#[allow(clippy::too_many_arguments)]
+pub(super) fn text_gradient_span(
+    quads: &[TextQuad],
+    body_start: usize,
     origin: Point,
     line_height: f32,
     post_scale: Point,
     wrapping: bool,
     gradient: TextGradient,
     surface: SurfaceSize,
-) {
+) -> Option<TextGradientSpan> {
     let height = line_height * post_scale.y;
-    let Some(bounds) = text_gradient_bounds(quads, origin, height, wrapping) else {
-        return;
-    };
+    let bounds = text_gradient_bounds(&quads[body_start..], origin, height, wrapping)?;
     let angle = gradient.angle_deg.to_radians();
     let (sin, cos) = angle.sin_cos();
     // 上から下への向きを反時計回りに回した、画素単位の向き。反転した軸では逆向きにする。
@@ -352,19 +370,16 @@ pub(super) fn apply_text_gradient(
     // 向きに沿った長さが画素に満たない範囲（倍率0など）では、掛けずに始点の色で描く。
     // 角度の sin / cos の丸め誤差だけで生じる長さも、ここで除く。
     if !range.is_finite() || range < TEXT_GRADIENT_MIN_RANGE_PX {
-        return;
+        return None;
     }
-    for quad in quads.iter_mut().filter(|quad| quad.fill) {
-        let gradient = QuadGradient {
-            color: gradient.color,
-            t0: (project(quad.x, quad.y) - start) / range,
-            du: quad.width * dx / range,
-            dv: quad.height * dy / range,
-        };
-        if [gradient.t0, gradient.du, gradient.dv].iter().all(|value| value.is_finite()) {
-            quad.gradient = Some(gradient);
-        }
-    }
+    let span = TextGradientSpan {
+        quads: body_start..quads.len(),
+        color: gradient.color,
+        x_scale: dx / range,
+        y_scale: dy / range,
+        offset: start / range,
+    };
+    [span.x_scale, span.y_scale, span.offset].iter().all(|value| value.is_finite()).then_some(span)
 }
 
 /// グラデーションを掛ける向きの長さの下限（画素）。
@@ -499,18 +514,6 @@ pub(super) struct TextQuad {
     pub(super) color: Color,
     /// 文字色で塗るグリフ。カラーグリフは false で、グラデーションを掛けない。
     pub(super) fill: bool,
-    pub(super) gradient: Option<QuadGradient>,
-}
-
-/// quad に掛ける線形グラデーション。quad 内の位置 (u, v)（左上 0、右下 1）で
-/// `t = t0 + u * du + v * dv` を求め、`color` から `QuadGradient::color` へ補間する。
-/// quad 内の相対値なので、位置や拡大縮小を変えても同じ見た目になる。
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct QuadGradient {
-    pub(super) color: Color,
-    pub(super) t0: f32,
-    pub(super) du: f32,
-    pub(super) dv: f32,
 }
 
 impl TextQuad {
