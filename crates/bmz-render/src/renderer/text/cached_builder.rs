@@ -57,6 +57,46 @@ impl<'a> CachedTextFrameBuilder<'a> {
         self.atlas.shapes.bitmap(text, fonts)
     }
 
+    /// キャッシュ済みのレイアウトを `origin` へ動かして並べる。
+    /// キャッシュしない位置では使わず、変更前と同じく毎回組む。
+    fn extend_cached_layout(&mut self, key: Option<&TextLayoutKey>, origin: &Point) -> bool {
+        if !is_cacheable_layout_origin(origin) {
+            return false;
+        }
+        let Some(cached) = key.and_then(|key| self.atlas.cached_layout(key)) else {
+            return false;
+        };
+        self.quads.extend(cached.iter().map(|quad| quad.translated(origin.x, origin.y)));
+        true
+    }
+
+    /// `quads_before` 以降に組んだ quad を、`origin` からの相対座標でキャッシュする。
+    fn cache_layout(
+        &mut self,
+        key: Option<TextLayoutKey>,
+        origin: &Point,
+        quads_before: usize,
+        capacity_misses: u64,
+    ) {
+        // atlas の空き不足で欠けたグリフがあれば、作り直した後に組み直す。
+        let Some(key) = key else { return };
+        if self.atlas.capacity_misses() != capacity_misses || !is_cacheable_layout_origin(origin) {
+            return;
+        }
+        let quads = &mut self.quads[quads_before..];
+        let relative: Vec<_> =
+            quads.iter().map(|quad| quad.translated(-origin.x, -origin.y)).collect();
+        // 位置を外したキーは別の位置でも使うので、不正な値は残さない。
+        if !relative.iter().all(TextQuad::is_finite) {
+            return;
+        }
+        // 丸め誤差で次のフレームとずれないよう、キャッシュから並べた場合と同じ座標にそろえる。
+        for (quad, cached) in quads.iter_mut().zip(&relative) {
+            *quad = cached.translated(origin.x, origin.y);
+        }
+        self.atlas.insert_layout(key, relative);
+    }
+
     pub(super) fn push_bitmap_text(
         &mut self,
         origin: &Point,
@@ -115,17 +155,9 @@ impl<'a> CachedTextFrameBuilder<'a> {
             }
         }
 
-        let layout_key = text_layout_key(
-            TextGlyphKind::Bitmap,
-            fonts.id,
-            origin,
-            text,
-            &style,
-            surface,
-            decoration,
-        );
-        if let Some(cached) = layout_key.as_ref().and_then(|key| self.atlas.cached_layout(key)) {
-            self.quads.extend_from_slice(cached);
+        let layout_key =
+            text_layout_key(TextGlyphKind::Bitmap, fonts.id, text, &style, surface, decoration);
+        if self.extend_cached_layout(layout_key.as_ref(), origin) {
             return;
         }
         let quads_before = self.quads.len();
@@ -173,12 +205,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
         };
         self.push_clusters(&shaped, clusters, line, fonts.into());
 
-        // atlas の空き不足で欠けたグリフがあれば、作り直した後に組み直す。
-        if let Some(key) = layout_key
-            && self.atlas.capacity_misses() == capacity_misses
-        {
-            self.atlas.insert_layout(key, &self.quads[quads_before..]);
-        }
+        self.cache_layout(layout_key, origin, quads_before, capacity_misses);
     }
 
     pub(super) fn push_text(
@@ -239,17 +266,9 @@ impl<'a> CachedTextFrameBuilder<'a> {
             }
         }
 
-        let layout_key = text_layout_key(
-            TextGlyphKind::Vector,
-            fonts.id,
-            origin,
-            text,
-            &style,
-            surface,
-            decoration,
-        );
-        if let Some(cached) = layout_key.as_ref().and_then(|key| self.atlas.cached_layout(key)) {
-            self.quads.extend_from_slice(cached);
+        let layout_key =
+            text_layout_key(TextGlyphKind::Vector, fonts.id, text, &style, surface, decoration);
+        if self.extend_cached_layout(layout_key.as_ref(), origin) {
             return;
         }
         let quads_before = self.quads.len();
@@ -326,12 +345,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
         };
         self.push_clusters(&shaped, clusters, line, fonts.into());
 
-        // atlas の空き不足で欠けたグリフがあれば、作り直した後に組み直す。
-        if let Some(key) = layout_key
-            && self.atlas.capacity_misses() == capacity_misses
-        {
-            self.atlas.insert_layout(key, &self.quads[quads_before..]);
-        }
+        self.cache_layout(layout_key, origin, quads_before, capacity_misses);
     }
 
     fn push_clusters(
@@ -383,6 +397,8 @@ impl<'a> CachedTextFrameBuilder<'a> {
                     }
                 }
                 let glyph = glyph_id;
+                // 横だけ縮めた文字は倍率を刻んでラスタライズし、表示で縮める。
+                let (raster_scale, stretch_x) = shrunk_raster_scale(scale);
                 let color_glyph = || {
                     // カラーグリフはフォントの色を保ち、スキンの透明度だけを掛ける。
                     // 影・縁取りでは輪郭と同じく指定色のシルエットにする。
@@ -400,12 +416,19 @@ impl<'a> CachedTextFrameBuilder<'a> {
                 let mut drawn = None;
                 for (paint, tint) in paints {
                     let cached = match paint {
-                        GlyphPaint::Color => {
-                            self.atlas.cached_color_glyph(face, glyph, scale, line.decoration)
+                        GlyphPaint::Color => self.atlas.cached_color_glyph(
+                            face,
+                            glyph,
+                            raster_scale,
+                            line.decoration,
+                        ),
+                        GlyphPaint::Outline => {
+                            self.atlas.cached_vector_glyph(face, glyph, raster_scale)
                         }
-                        GlyphPaint::Outline => self.atlas.cached_vector_glyph(face, glyph, scale),
                     };
-                    if let Some(cached) = cached {
+                    if let Some(mut cached) = cached {
+                        cached.display_width *= stretch_x;
+                        cached.offset_x *= stretch_x;
                         drawn = Some((cached, tint));
                         break;
                     }
@@ -511,4 +534,31 @@ impl<'a> CachedTextFrameBuilder<'a> {
             command_caret_rects,
         }
     }
+}
+
+/// 横の倍率の刻み（倍率が2倍になるごとの段数）。Shrink で文字列ごとに違う倍率になっても、
+/// 同じグリフを使い回す。刻みは倍率に比例させ、表示で縮める量を1段（約4.4%）までに抑える。
+/// 一定幅で刻むと、強く縮めた文字では倍以上に縮めることになり、細い線が薄くなる。
+const SHRINK_RASTER_STEPS_PER_OCTAVE: f32 = 16.0;
+
+/// 横だけ縮めた倍率を、`SHRINK_RASTER_STEPS_PER_OCTAVE` の刻みに切り上げたラスタライズ倍率と、
+/// 表示で掛ける横の倍率。縦横同じ倍率なら、そのまま返す。
+pub(super) fn shrunk_raster_scale(scale: PxScale) -> (PxScale, f32) {
+    if scale.x >= scale.y || scale.x <= 0.0 || !scale.x.is_finite() || !scale.y.is_finite() {
+        return (scale, 1.0);
+    }
+    let steps = ((scale.x / scale.y).log2() * SHRINK_RASTER_STEPS_PER_OCTAVE).ceil();
+    let ratio = (steps / SHRINK_RASTER_STEPS_PER_OCTAVE).exp2();
+    let raster = PxScale { x: scale.y * ratio.min(1.0), y: scale.y };
+    (raster, scale.x / raster.x)
+}
+
+/// 相対座標のレイアウトを作れる描画位置の範囲（正規化座標）。これより遠いと f32 の
+/// 精度が落ち、別の位置で使い回したときに文字がずれる。画面外の大きな値は毎回組む。
+const LAYOUT_CACHE_MAX_ORIGIN: f32 = 16.0;
+
+/// 位置に依存しないレイアウトとしてキャッシュしてよい描画位置か。
+/// NaN・無限大の位置で組んだ quad をキャッシュすると、正常な位置に戻っても使い回される。
+fn is_cacheable_layout_origin(origin: &Point) -> bool {
+    origin.x.abs() <= LAYOUT_CACHE_MAX_ORIGIN && origin.y.abs() <= LAYOUT_CACHE_MAX_ORIGIN
 }

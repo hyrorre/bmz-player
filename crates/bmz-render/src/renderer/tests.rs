@@ -154,8 +154,16 @@ mod cases_04;
 mod cases_05;
 #[path = "tests/clip.rs"]
 mod clip;
+#[path = "tests/shrink_raster.rs"]
+mod shrink_raster;
 #[path = "tests/text_atlas.rs"]
 mod text_atlas;
+#[path = "tests/text_atlas_upload.rs"]
+mod text_atlas_upload;
+#[path = "tests/text_layout_cache.rs"]
+mod text_layout_cache;
+#[path = "tests/text_non_finite.rs"]
+mod text_non_finite;
 #[path = "tests/unicode_fallback.rs"]
 mod unicode_fallback;
 #[path = "tests/unicode_regression.rs"]

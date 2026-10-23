@@ -315,11 +315,13 @@ fn new_glyph_in_an_exactly_full_atlas_is_stored_after_one_rebuild() {
         })
         .collect();
     assert_quads_inside_atlas(&quads, &atlas);
+    // 作り直した atlas のテクスチャには古いグリフが残るので、パディングも透明で書き直す。
     let region = &atlas.dirty_regions[0];
-    assert_eq!(
-        (region.origin, region.size),
-        (new.atlas_origin, AtlasSize { width: 20, height: 20 })
-    );
+    assert_eq!((region.origin, region.size), ((0, 0), AtlasSize { width: 22, height: 22 }));
+    let alpha = |x: u32, y: u32| region.pixels[((y * 22 + x) * 4 + 3) as usize];
+    assert!((0..22).all(|i| alpha(i, 0) == 0 && alpha(i, 21) == 0));
+    assert!((0..22).all(|i| alpha(0, i) == 0 && alpha(21, i) == 0));
+    assert_eq!(alpha(1, 1), 255, "the tofu frame starts inside the padding");
 
     // 以降は同じ配置を使い続ける。
     for _ in 0..10 {
@@ -496,4 +498,141 @@ fn high_dpi_color_emoji_keeps_layout_proportions() {
         assert!((a.0 - b.0).abs() < 0.003 && (a.1 - b.1).abs() < 0.003, "{a:?} {b:?}");
         assert!((a.2 - b.2).abs() < 0.003 && (a.3 - b.3).abs() < 0.003, "{a:?} {b:?}");
     }
+}
+
+#[test]
+fn texture_grows_by_doubling_and_keeps_its_size_across_rebuilds() {
+    // 30px（表示15px）の枠は、パディング込みで1行に2つ、32px ごとに並ぶ。
+    let tofu = |atlas: &mut TextAtlasCache, index: u32| {
+        atlas.cached_tofu_glyph(15.0 - index as f32 * 0.001, 15.0)
+    };
+    let mut atlas = TextAtlasCache::with_limits(64, 1024);
+    atlas.begin_frame();
+    tofu(&mut atlas, 0).unwrap();
+    // 格納済みは1行でも、テクスチャは最小の高さで確保する。
+    assert_eq!(atlas.atlas_height(), 32);
+    assert_eq!(atlas.size(), AtlasSize { width: 64, height: TEXT_ATLAS_MIN_TEXTURE_HEIGHT });
+
+    // 行が増えてもテクスチャの高さを超えるまでは同じ寸法で、超えたら倍に広げる。
+    let mut heights = vec![atlas.size().height];
+    for index in 1..64 {
+        tofu(&mut atlas, index).unwrap();
+        let height = atlas.size().height;
+        assert!(height >= atlas.atlas_height());
+        if heights.last() != Some(&height) {
+            heights.push(height);
+        }
+    }
+    assert_eq!(heights, [256, 512, 1024]);
+    assert_eq!(atlas.atlas_height(), 1024);
+
+    // 溢れて作り直しても縮めない。GPU テクスチャを作り直して全体を転送し直さないため。
+    assert!(tofu(&mut atlas, 64).is_none());
+    atlas.begin_frame();
+    assert!(atlas.take_rebuilt());
+    assert!(atlas.glyphs.is_empty());
+    tofu(&mut atlas, 64).unwrap();
+    assert_eq!(atlas.atlas_height(), 32);
+    assert_eq!(atlas.size().height, 1024);
+}
+
+#[test]
+fn texture_height_stops_at_the_atlas_limit() {
+    let mut atlas = TextAtlasCache::with_limits(64, 300);
+    atlas.begin_frame();
+    // 9行（288px）で最小の高さを超えるが、倍の512px ではなく上限の300px に留める。
+    for index in 0..17 {
+        atlas.cached_tofu_glyph(15.0 - index as f32 * 0.001, 15.0).unwrap();
+    }
+    assert_eq!(atlas.atlas_height(), 288);
+    assert_eq!(atlas.size().height, 300);
+}
+
+/// 縁取り付きの文字列を `origin` に組んだ1フレームの quad。
+fn outlined_latin_quads(atlas: &mut TextAtlasCache, origin: Point) -> Vec<TextQuad> {
+    let face = latin();
+    let mut style = text_style(None);
+    style.outline =
+        Some(crate::plan::TextOutline { color: Color::rgb(0.0, 0.0, 0.0), width: 0.01 });
+    atlas.begin_frame();
+    let mut builder = CachedTextFrameBuilder::new(atlas);
+    builder.push_text(&origin, "AB", style, single_font_set("skin:atlas", &face), SURFACE);
+    builder.quads.clone()
+}
+
+#[test]
+fn moving_outlined_text_reuses_its_layout() {
+    let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    let first = outlined_latin_quads(&mut atlas, Point { x: 0.1, y: 0.1 });
+    // 縁取り8回と本体で9回分。縁取りは位置だけが違うので1つのレイアウトを共有する。
+    assert_eq!(first.len(), 18);
+    assert_eq!(atlas.layouts.len(), 2);
+    let glyphs = atlas.glyphs.len();
+
+    // スクロールで動いた文字列は、組み直さずにキャッシュを動かして並べる。
+    let moved = outlined_latin_quads(&mut atlas, Point { x: 0.3, y: 0.25 });
+    assert_eq!(atlas.layouts.len(), 2);
+    assert_eq!(atlas.glyphs.len(), glyphs);
+    assert!(atlas.dirty_regions.is_empty());
+    let mut uncached = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    let expected = outlined_latin_quads(&mut uncached, Point { x: 0.3, y: 0.25 });
+    assert_eq!(moved.len(), expected.len());
+    for (moved, expected) in moved.iter().zip(&expected) {
+        assert!((moved.x - expected.x).abs() < 1e-6 && (moved.y - expected.y).abs() < 1e-6);
+        assert_eq!((moved.atlas_origin, moved.width), (expected.atlas_origin, expected.width));
+        assert_eq!(moved.color, expected.color);
+    }
+
+    // 同じ位置に戻れば、最初のフレームと同じ値になる。
+    let back = outlined_latin_quads(&mut atlas, Point { x: 0.1, y: 0.1 });
+    let positions = |quads: &[TextQuad]| quads.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>();
+    assert_eq!(positions(&back), positions(&first));
+}
+
+#[test]
+fn shrunk_text_reuses_glyphs_across_widths_and_keeps_the_fitted_width() {
+    let face = latin();
+    let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    for step in 0..40 {
+        let mut style = text_style(None);
+        style.overflow = TextOverflow::Shrink;
+        style.max_width = 0.2 + step as f32 * 0.002;
+        let max_width = style.max_width;
+        atlas.begin_frame();
+        let mut builder = CachedTextFrameBuilder::new(&mut atlas);
+        builder.push_text(
+            &Point { x: 0.0, y: 0.1 },
+            "WIDE TEXT",
+            style,
+            single_font_set("skin:atlas", &face),
+            SURFACE,
+        );
+        let quads = builder.quads.clone();
+        let right = quads.iter().map(|q| q.x + q.width).fold(0.0, f32::max);
+        // 刻んだ倍率でラスタライズしても、表示は指定した幅に収める。
+        assert!(right <= max_width + 0.004, "step {step}: {right} > {max_width}");
+        assert!(right >= max_width * 0.95, "step {step}: {right} < {max_width}");
+    }
+    // 40通りの幅でも、横の倍率は16段階までしか増えない（7文字 × 16）。
+    assert!(atlas.glyphs.len() <= 7 * 16, "{} glyphs", atlas.glyphs.len());
+}
+
+#[test]
+fn shrunk_raster_scale_rounds_up_only_horizontal_shrink() {
+    let same = PxScale { x: 40.0, y: 40.0 };
+    assert_eq!(shrunk_raster_scale(same), (same, 1.0));
+    // 表示で縮めるのは1段（2倍ごとに16段、約4.4%）まで。強く縮めた文字でも同じ。
+    let one_step = 2f32.powf(-1.0 / 16.0);
+    for x in [39.9, 30.1, 20.0, 12.0, 4.8, 2.8] {
+        let (raster, stretch) = shrunk_raster_scale(PxScale { x, y: 40.0 });
+        assert_eq!(raster.y, 40.0);
+        assert!(raster.x >= x - 1e-4 && raster.x <= 40.0, "{x}: {raster:?}");
+        assert!(stretch <= 1.0 && stretch >= one_step - 1e-6, "{x}: {stretch}");
+        assert!((raster.x * stretch - x).abs() < 1e-4);
+    }
+    // 2倍ごとの区切りの比率は、そのままの倍率でラスタライズする。
+    let (raster, stretch) = shrunk_raster_scale(PxScale { x: 20.0, y: 40.0 });
+    assert_eq!((raster.x, stretch), (20.0, 1.0));
+    let nan = PxScale { x: f32::NAN, y: 40.0 };
+    assert!(shrunk_raster_scale(nan).0.x.is_nan());
 }

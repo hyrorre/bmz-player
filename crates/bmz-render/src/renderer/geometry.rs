@@ -14,6 +14,8 @@ pub(super) const VECTOR_TEXT_SUPERSAMPLE_SCALE: f32 = 2.0;
 /// `create_texture` がパニックするので、この値と GPU の上限の小さい方を超えるグリフは
 /// 格納せず、フレーム境界でキャッシュを捨てて作り直す。
 pub(super) const TEXT_ATLAS_MAX_HEIGHT: u32 = 8192;
+/// GPU テクスチャの最初の高さ。以降は格納済みの高さに合わせて倍に広げる。
+pub(super) const TEXT_ATLAS_MIN_TEXTURE_HEIGHT: u32 = 256;
 /// 作り直した直後のフレームでも atlas が溢れたとき、次に作り直すまで待つフレーム数。
 pub(super) const TEXT_ATLAS_OVERFLOW_RETRY_FRAMES: u32 = 60;
 pub(super) const TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 4096;
@@ -65,7 +67,7 @@ pub(super) struct TextFrame {
     pub(super) size: AtlasSize,
     #[cfg(test)]
     pub(super) pixels: Vec<u8>,
-    /// atlas を作り直した。`dirty_regions` ではなくテクスチャ全体を書き直す。
+    /// atlas を作り直した（統計用）。GPU には `dirty_regions` だけを転送する。
     pub(super) atlas_rebuilt: bool,
     pub(super) dirty_regions: Vec<TextAtlasDirtyRegion>,
     pub(super) instances: Vec<u8>,
@@ -74,6 +76,56 @@ pub(super) struct TextFrame {
     pub(super) command_quad_counts: Vec<usize>,
     /// `DrawCommand::Text` ごとに生成された caret 矩形。
     pub(super) command_caret_rects: Vec<Option<RectCommand>>,
+}
+
+/// 1フレームの文字 atlas の GPU 転送。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct TextAtlasUploadStats {
+    /// `queue.write_texture` の呼び出し回数。
+    pub(super) writes: usize,
+    pub(super) bytes: usize,
+    /// テクスチャを作り直して全体を書いた回数（0 か 1）。
+    pub(super) full_uploads: usize,
+    /// グリフごとの部分転送の回数。
+    pub(super) region_uploads: usize,
+}
+
+/// 文字 atlas テクスチャへの1フレームぶんの書き込みを `write` へ渡す。
+/// テクスチャを作り直したときだけ全体を書き、それ以外は新しく格納したグリフの領域だけを書く。
+/// atlas の作り直しでは古い画素が残るが、転送領域がパディングごと上書きする。
+pub(super) fn write_text_atlas(
+    frame: &TextFrame,
+    recreated_texture: bool,
+    full_pixels: impl FnOnce() -> Vec<u8>,
+    mut write: impl FnMut((u32, u32), AtlasSize, &[u8]),
+) -> TextAtlasUploadStats {
+    let mut stats = TextAtlasUploadStats::default();
+    if frame.size.width == 0 || frame.size.height == 0 {
+        return stats;
+    }
+    if recreated_texture {
+        let pixels = full_pixels();
+        write((0, 0), frame.size, &pixels);
+        stats.writes += 1;
+        stats.bytes += pixels.len();
+        stats.full_uploads += 1;
+        return stats;
+    }
+    for region in &frame.dirty_regions {
+        if region.pixels.is_empty() || region.size.width == 0 || region.size.height == 0 {
+            continue;
+        }
+        write(region.origin, region.size, &region.pixels);
+        stats.writes += 1;
+        stats.bytes += region.pixels.len();
+        stats.region_uploads += 1;
+    }
+    stats
+}
+
+/// 文字インスタンスバッファを広げるときの新しい容量。足りていれば `None`。
+pub(super) fn grown_text_buffer_capacity(used_bytes: usize, capacity: usize) -> Option<usize> {
+    (used_bytes > capacity).then(|| used_bytes.next_power_of_two())
 }
 
 #[derive(Debug, Clone)]

@@ -229,6 +229,12 @@ pub(super) fn build_text_frame_with_font_sets(
             continue;
         };
         let quads_before = builder.quads.len();
+        // 位置が不正な文字は組まずに飛ばす。コマンドごとの quad 数とキャレットの対応は保つ。
+        if !point_is_finite(origin) || !point_is_finite(post_scale) {
+            command_quad_counts.push(0);
+            command_caret_rects.push(None);
+            continue;
+        }
         if let Some(font_id) = style.font_id.as_deref()
             && let Some(chain) = font_sets.bitmap.get(font_id)
         {
@@ -272,9 +278,33 @@ pub(super) fn build_text_frame_with_font_sets(
                     .map(|caret| scale_text_rect_command(caret, *origin, *post_scale)),
             );
         }
+        drop_non_finite_quads(&mut builder.quads, quads_before);
+        if let Some(caret) = command_caret_rects.last_mut()
+            && caret.is_some_and(|caret| !rect_is_finite(caret.rect))
+        {
+            *caret = None;
+        }
         command_quad_counts.push(builder.quads.len() - quads_before);
     }
     builder.finish(command_quad_counts, command_caret_rects)
+}
+
+fn point_is_finite(point: &Point) -> bool {
+    point.x.is_finite() && point.y.is_finite()
+}
+
+fn rect_is_finite(rect: Rect) -> bool {
+    [rect.x, rect.y, rect.width, rect.height].into_iter().all(f32::is_finite)
+}
+
+/// `start` 以降の quad から、縁取りの幅や影の位置などで非有限になったものを除く。
+/// GPU のインスタンスバッファへ不正な座標を送らない。
+fn drop_non_finite_quads(quads: &mut Vec<TextQuad>, start: usize) {
+    if quads[start..].iter().all(TextQuad::is_finite) {
+        return;
+    }
+    let kept: Vec<_> = quads.drain(start..).filter(TextQuad::is_finite).collect();
+    quads.extend(kept);
 }
 
 /// fallback 指定なしのフォント表でフレームを組む（テスト用）。
@@ -346,6 +376,20 @@ pub(super) struct TextQuad {
     pub(super) color: Color,
 }
 
+impl TextQuad {
+    /// 正規化座標で `x` / `y` だけ動かした quad。
+    pub(super) fn translated(&self, x: f32, y: f32) -> Self {
+        Self { x: self.x + x, y: self.y + y, ..self.clone() }
+    }
+
+    pub(super) fn is_finite(&self) -> bool {
+        self.x.is_finite()
+            && self.y.is_finite()
+            && self.width.is_finite()
+            && self.height.is_finite()
+    }
+}
+
 pub(super) const DEFAULT_TEXT_FONT_ID: &str = "<default>";
 
 /// atlas 内のグリフ。ベクターはグリフID、ビットマップは文字、生成矩形は寸法で識別する。
@@ -397,8 +441,6 @@ pub(super) struct TextLayoutKey {
     kind: TextGlyphKind,
     pub(super) font_id: String,
     pub(super) text: String,
-    origin_x_bits: u32,
-    origin_y_bits: u32,
     surface_width: u32,
     surface_height: u32,
     style: TextLayoutStyleKey,
@@ -452,11 +494,11 @@ impl TextLayoutCache {
         self.entries.get(key).map(Vec::as_slice)
     }
 
-    fn insert(&mut self, key: TextLayoutKey, quads: &[TextQuad]) {
+    fn insert(&mut self, key: TextLayoutKey, quads: Vec<TextQuad>) {
         if self.entries.len() >= TEXT_LAYOUT_CACHE_MAX_ENTRIES {
             self.entries.clear();
         }
-        self.entries.insert(key, quads.to_vec());
+        self.entries.insert(key, quads);
     }
 
     #[cfg(test)]
@@ -485,7 +527,10 @@ pub(super) struct TextAtlasCache {
     /// 欠字・fallback の解決結果。atlas 画素とは独立なので作り直しでは残す。
     pub(super) shapes: TextShapeCache,
     pub(super) dirty_regions: Vec<TextAtlasDirtyRegion>,
-    /// 作り直した。GPU テクスチャに残る古い画素（パディングを含む）ごと書き直す。
+    /// GPU テクスチャの高さ。格納済みの高さを超えたら倍に広げ、作り直しでは縮めない。
+    /// 伸びるたびにテクスチャを作り直して全体を転送しないよう、余裕を持って確保する。
+    texture_height: u32,
+    /// 作り直した。フレームの統計に出す。
     rebuilt: bool,
     /// 空きが足りずに格納できなかったグリフがある。作り直すまで立てたまま。
     overflowed: bool,
@@ -522,6 +567,7 @@ impl TextAtlasCache {
             layouts: TextLayoutCache::new(),
             shapes: TextShapeCache::default(),
             dirty_regions: Vec::new(),
+            texture_height: 0,
             rebuilt: false,
             overflowed: false,
             frames_since_clear: u32::MAX,
@@ -569,7 +615,7 @@ impl TextAtlasCache {
         self.capacity_misses
     }
 
-    /// 作り直した後の最初の取り出しで true。GPU 側はテクスチャ全体を書き直す。
+    /// 作り直した後の最初の取り出しで true。
     pub(super) fn take_rebuilt(&mut self) -> bool {
         std::mem::take(&mut self.rebuilt)
     }
@@ -618,8 +664,9 @@ impl TextAtlasCache {
         (self.pen_y + self.row_height).max(1)
     }
 
+    /// GPU テクスチャの寸法。UV もこの寸法で正規化する。
     pub(super) fn size(&self) -> AtlasSize {
-        AtlasSize { width: self.width, height: self.atlas_height() }
+        AtlasSize { width: self.width, height: self.texture_height.max(self.atlas_height()) }
     }
 
     pub(super) fn pixels_for_size(&self, size: AtlasSize) -> Vec<u8> {
@@ -632,7 +679,7 @@ impl TextAtlasCache {
         self.layouts.cached(key)
     }
 
-    pub(super) fn insert_layout(&mut self, key: TextLayoutKey, quads: &[TextQuad]) {
+    pub(super) fn insert_layout(&mut self, key: TextLayoutKey, quads: Vec<TextQuad>) {
         self.layouts.insert(key, quads);
     }
 
@@ -885,11 +932,7 @@ impl TextAtlasCache {
             return None;
         };
         self.blit_region(atlas_origin, width, height, &pixels);
-        self.dirty_regions.push(TextAtlasDirtyRegion {
-            origin: atlas_origin,
-            size: AtlasSize { width, height },
-            pixels,
-        });
+        self.dirty_regions.push(padded_dirty_region(atlas_origin, width, height, &pixels));
         let cached = CachedGlyph {
             atlas_origin,
             width,
@@ -927,6 +970,7 @@ impl TextAtlasCache {
         self.pen_y = pen_y;
         self.row_height = row_height;
         self.ensure_height(self.pen_y + self.row_height);
+        self.grow_texture(self.pen_y + self.row_height);
         Some(origin)
     }
 
@@ -936,6 +980,15 @@ impl TextAtlasCache {
             extent.checked_add(TEXT_ATLAS_PADDING * 2).is_some_and(|padded| padded <= limit)
         };
         fits(glyph_width, self.width) && fits(glyph_height, self.max_height)
+    }
+
+    /// 格納済みの高さが GPU テクスチャを超えたら、上限まで倍々に広げる。
+    fn grow_texture(&mut self, height: u32) {
+        if height <= self.texture_height {
+            return;
+        }
+        let doubled = height.max(TEXT_ATLAS_MIN_TEXTURE_HEIGHT).next_power_of_two();
+        self.texture_height = doubled.min(self.max_height).max(height);
     }
 
     fn ensure_height(&mut self, height: u32) {
@@ -960,6 +1013,35 @@ impl TextAtlasCache {
     }
 }
 
+/// パディングを含めた転送領域。作り直した atlas では GPU テクスチャに古いグリフが残るので、
+/// 線形補間で読む周囲1pxも透明で書き直し、テクスチャ全体を転送せずに済ませる。
+fn padded_dirty_region(
+    atlas_origin: (u32, u32),
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+) -> TextAtlasDirtyRegion {
+    let padded = AtlasSize {
+        width: width + TEXT_ATLAS_PADDING * 2,
+        height: height + TEXT_ATLAS_PADDING * 2,
+    };
+    let mut region = vec![0; (padded.width * padded.height * 4) as usize];
+    let row = (width * 4) as usize;
+    for y in 0..height {
+        let src = (y * width * 4) as usize;
+        let dst = (((y + TEXT_ATLAS_PADDING) * padded.width + TEXT_ATLAS_PADDING) * 4) as usize;
+        if let (Some(dst), Some(src)) = (region.get_mut(dst..dst + row), pixels.get(src..src + row))
+        {
+            dst.copy_from_slice(src);
+        }
+    }
+    TextAtlasDirtyRegion {
+        origin: (atlas_origin.0 - TEXT_ATLAS_PADDING, atlas_origin.1 - TEXT_ATLAS_PADDING),
+        size: padded,
+        pixels: region,
+    }
+}
+
 /// 線幅が高さの約1/12（表示上最低1px）の白い枠。文字色・透明度は描画時に乗算する。
 fn tofu_pixels(width: u32, height: u32) -> Vec<u8> {
     let stroke = ((height as f32 / 12.0).round() as u32)
@@ -977,24 +1059,23 @@ fn tofu_pixels(width: u32, height: u32) -> Vec<u8> {
     pixels
 }
 
+/// 位置を含まないレイアウトのキー。quad は描画位置からの相対座標でキャッシュする。
+/// 縁取り・影の重ね描きは本体と別の色・装飾フラグで、それぞれのキーを持つ。
 pub(super) fn text_layout_key(
     kind: TextGlyphKind,
     font_id: &str,
-    origin: &Point,
     text: &str,
     style: &TextStyle,
     surface: SurfaceSize,
     decoration: bool,
 ) -> Option<TextLayoutKey> {
-    if style.wrapping || style.outline.is_some() || style.shadow.is_some() {
+    if style.wrapping {
         return None;
     }
     Some(TextLayoutKey {
         kind,
         font_id: font_id.to_string(),
         text: text.to_string(),
-        origin_x_bits: origin.x.to_bits(),
-        origin_y_bits: origin.y.to_bits(),
         surface_width: surface.width,
         surface_height: surface.height,
         style: TextLayoutStyleKey {
