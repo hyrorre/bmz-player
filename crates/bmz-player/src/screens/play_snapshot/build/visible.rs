@@ -19,7 +19,7 @@ pub(in crate::screens::play_snapshot) fn populate_visible_playfield(
         visible_lane_fraction: crate::config::play::visible_lane_fraction(0.0, session.lift),
         lookahead_ticks: TICKS_PER_MEASURE as f64,
         scroll_integral: &cache.scroll_integral,
-        speed_segments: &cache.speed_segments,
+        speed: render_speed(&cache.speed_segments, session.constant_enabled, scroll_time),
     };
     let cursor_tick = scroll.cursor_tick(scroll_time);
     let tick_upper_bound = scroll.simple_tick_upper_bound(cursor_tick);

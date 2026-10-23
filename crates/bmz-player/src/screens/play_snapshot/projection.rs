@@ -166,7 +166,11 @@ impl PlayfieldProjection {
         let cursor_tick = self.timing_map.time_to_tick_f64(scroll_render_time(lane_now));
         let multiplier = current_scroll_multiplier_from_segments(
             &self.cache.scroll_integral,
-            &self.cache.speed_segments,
+            render_speed(
+                &self.cache.speed_segments,
+                self.constant_enabled,
+                scroll_render_time(lane_now),
+            ),
             cursor_tick,
         );
         snapshot.note_display_duration_ms = display_duration_ms_for_bpm_hispeed(
