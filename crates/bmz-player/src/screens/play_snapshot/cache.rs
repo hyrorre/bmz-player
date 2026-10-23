@@ -10,6 +10,7 @@ pub struct PlayRenderSnapshotCache {
     pub(super) bpm_changes: Arc<[BpmChangePoint]>,
     pub(super) end_of_note_time: TimeUs,
     pub(super) scroll_integral: ScrollIntegralCache,
+    /// SPEED イベントの `(time_us, factor)`。beatoraja と同じく時間で補間する。
     pub(super) speed_segments: Arc<[(f64, f64)]>,
     /// `long_notes` は start tick 順であることを前提にしている。各位置までの
     /// end time 最大値を保持し、画面より前に完全に抜けた LN 群を二分探索で飛ばす。
@@ -51,7 +52,7 @@ impl PlayRenderSnapshotCache {
             chart
                 .speed_events
                 .iter()
-                .map(|event| (event.tick.0 as f64, event.factor))
+                .map(|event| (event.time.0 as f64, event.factor))
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         );

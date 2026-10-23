@@ -1,9 +1,11 @@
 use super::*;
 
 #[test]
-fn speed_at_returns_one_before_first_event() {
+fn speed_at_ramps_from_one_at_zero_before_first_event() {
+    // beatoraja は初期値省略時、時刻 0 の 1.0 から最初の SPEED まで補間する。
     let segments = [(1000.0, 2.0)];
-    assert!((super::speed_at(&segments, 500.0) - 1.0).abs() < 1e-6);
+    assert!((super::speed_at(&segments, 0.0) - 1.0).abs() < 1e-6);
+    assert!((super::speed_at(&segments, 500.0) - 1.5).abs() < 1e-6);
     assert!((super::speed_at(&segments, 1000.0) - 2.0).abs() < 1e-6);
     assert!((super::speed_at(&segments, 2000.0) - 2.0).abs() < 1e-6);
 }
@@ -61,29 +63,58 @@ fn build_render_snapshot_applies_speed_factor() {
     let y = snapshot.visible_notes[Lane::Key1.index()][0].y;
     assert!((y - 1.0).abs() < 1e-3, "expected ~1.0 with SPEED 2.0, got {y}");
     assert_eq!(snapshot.note_display_duration_ms, 1000);
+
+    // beatoraja の enableConstant と同じく、CONSTANT 中は SPEED を無視する。
+    session.constant_enabled = true;
+    let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+    assert_eq!(snapshot.note_display_duration_ms, 2000);
 }
 
 #[test]
-fn build_render_snapshot_interpolates_speed_between_events() {
+fn build_render_snapshot_applies_current_speed_to_whole_lane() {
     use bmz_chart::model::SpeedEvent;
     let mut chart = chart();
-    // BPM 120 / 4 拍 = 3840 ticks。SPEED を tick=0..3840 で 1.0→3.0 へ補間。
-    // chart() のノートは TimeUs(1_000_000) = 1920 ticks (中央) なので、
-    // 補間値は 2.0 になる。base 進捗 0.5 × SPEED 2.0 = 1.0 (画面上端)。
-    chart.speed_events = vec![
-        SpeedEvent { tick: ChartTick(0), time: TimeUs(0), factor: 1.0 },
-        SpeedEvent { tick: ChartTick(3840), time: TimeUs(2_000_000), factor: 3.0 },
-    ];
+    // 初期値を省略し、ノートと同じ 1s 地点に SPEED 3.0 だけを置く。
+    // beatoraja は現在時刻の SPEED をレーン全体に掛けるため、時刻 0 では 1.0。
+    chart.speed_events =
+        vec![SpeedEvent { tick: ChartTick(1920), time: TimeUs(1_000_000), factor: 3.0 }];
     let profile = ProfileConfig::new_default("default", "Default", 1);
     let mut session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
     session.hispeed = 1.0;
 
     let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
     let y = snapshot.visible_notes[Lane::Key1.index()][0].y;
-    assert!(
-        (y - 1.0).abs() < 1e-3,
-        "expected ~1.0 from linear interpolation (0.5 base × 2.0 mid speed), got {y}"
-    );
+    assert!((y - 0.5).abs() < 1e-3, "expected ~0.5 with SPEED 1.0 at time 0, got {y}");
+    assert_eq!(snapshot.note_display_duration_ms, 2000);
+
+    // 0.5s 地点は 1.0→3.0 の中間 2.0。残り距離 0.25 × 2.0 = 0.5。
+    let snapshot = build_render_snapshot(&session, TimeUs(500_000), &[], None);
+    let y = snapshot.visible_notes[Lane::Key1.index()][0].y;
+    assert!((y - 0.5).abs() < 1e-3, "expected ~0.5 with interpolated SPEED 2.0, got {y}");
+    assert_eq!(snapshot.note_display_duration_ms, 1000);
+}
+
+#[test]
+fn speed_interpolates_by_time_across_bpm_change() {
+    use bmz_chart::model::{SpeedEvent, TimingEvent, TimingEventKind};
+    let mut chart = chart();
+    // 1s (1920 ticks) で BPM 120→240。SPEED は 0s=1.0 → 1.5s(3840 ticks)=3.0。
+    chart.timing_events = vec![TimingEvent {
+        tick: ChartTick(1920),
+        time: TimeUs(1_000_000),
+        kind: TimingEventKind::BpmChange { bpm: 240.0 },
+    }];
+    chart.speed_events = vec![
+        SpeedEvent { tick: ChartTick(0), time: TimeUs(0), factor: 1.0 },
+        SpeedEvent { tick: ChartTick(3840), time: TimeUs(1_500_000), factor: 3.0 },
+    ];
+    let profile = ProfileConfig::new_default("default", "Default", 1);
+    let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+
+    // 時間比 2/3 で 1.0 + 2.0 × 2/3。tick 比 (1/2) の 2.0 にはならない。
+    let multiplier =
+        super::current_scroll_multiplier(&session.chart, &session.timing_map, TimeUs(1_000_000));
+    assert!((multiplier - 7.0 / 3.0).abs() < 1e-4, "got {multiplier}");
 }
 
 #[test]

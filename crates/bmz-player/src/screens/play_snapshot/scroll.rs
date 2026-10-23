@@ -19,9 +19,9 @@ pub(super) struct ScrollContext<'a> {
     /// SCROLL イベント (tick 昇順)。`(tick, factor)`。
     /// 区間ごとに factor を掛けて scroll 位置を畳む。空なら factor 1.0 固定。
     pub(super) scroll_integral: &'a ScrollIntegralCache,
-    /// SPEED イベント (tick 昇順)。隣接イベント間を線形補間し、note 位置時点の値を
-    /// 倍率として掛ける。
-    pub(super) speed_segments: &'a [(f64, f64)],
+    /// 現在時刻の SPEED 値。beatoraja の LaneRenderer と同じく、ノーツ位置ではなく
+    /// 描画時刻で求めた値をレーン全体へ一律に掛ける。
+    pub(super) speed: f64,
 }
 
 impl<'a> ScrollContext<'a> {
@@ -30,12 +30,12 @@ impl<'a> ScrollContext<'a> {
     }
 
     pub(super) fn simple_tick_upper_bound(&self, cursor_tick: f64) -> Option<f64> {
-        if !self.scroll_integral.is_empty() || !self.speed_segments.is_empty() {
+        if !self.scroll_integral.is_empty() || self.speed <= 0.0 {
             return None;
         }
         let hispeed = self.hispeed.max(crate::config::play::HISPEED_MIN) as f64;
         let visible = self.visible_lane_fraction.max(f32::EPSILON) as f64;
-        Some(cursor_tick + self.lookahead_ticks * visible / hispeed + f64::EPSILON)
+        Some(cursor_tick + self.lookahead_ticks * visible / (hispeed * self.speed) + f64::EPSILON)
     }
 
     /// ノートの正規化進捗（0.0=判定ライン, 1.0=画面上端）。判定ラインより手前 (delta<0)
@@ -47,7 +47,7 @@ impl<'a> ScrollContext<'a> {
             return None;
         }
         let progress = self.progress_from_delta(delta);
-        (progress <= 1.0).then_some(progress)
+        (0.0..=1.0).contains(&progress).then_some(progress)
     }
 
     /// `note_y` と同じ進捗のクランプしない生値。ロングノートの始端/終端で使う。
@@ -59,14 +59,14 @@ impl<'a> ScrollContext<'a> {
 
     pub(super) fn progress_from_delta(&self, delta: f64) -> f32 {
         let visible = self.visible_lane_fraction.max(f32::EPSILON) as f64;
-        (delta / (self.lookahead_ticks * visible)) as f32 * self.hispeed
+        (delta * self.speed / (self.lookahead_ticks * visible)) as f32 * self.hispeed
     }
 
-    /// `from..to` の tick 区間にわたって SCROLL の factor を畳み込み、note 位置の
-    /// SPEED 倍率を掛けた「見かけの距離」を返す。factor が負だと delta も負になり、
-    /// note_y は `None` に倒れる(= 逆スクロール時は画面外として描画対象外)。
+    /// `from..to` の tick 区間にわたって SCROLL の factor を畳み込んだ「見かけの距離」を
+    /// 返す。factor が負だと delta も負になり、note_y は `None` に倒れる
+    /// (= 逆スクロール時は画面外として描画対象外)。SPEED は `progress_from_delta` で一律に掛ける。
     pub(super) fn scroll_delta(&self, from_tick: f64, to_tick: f64) -> f64 {
-        self.scroll_integral.delta(from_tick, to_tick) * speed_at(self.speed_segments, to_tick)
+        self.scroll_integral.delta(from_tick, to_tick)
     }
 }
 
@@ -205,24 +205,30 @@ pub(crate) fn current_scroll_multiplier(
     timing_map: &TimingMap,
     render_now: TimeUs,
 ) -> f32 {
-    let cursor_tick = timing_map.time_to_tick_f64(scroll_render_time(render_now));
-    current_scroll_multiplier_for_tick(chart, cursor_tick)
-}
-
-pub(super) fn current_scroll_multiplier_for_tick(chart: &PlayableChart, cursor_tick: f64) -> f32 {
+    let scroll_time = scroll_render_time(render_now);
+    let cursor_tick = timing_map.time_to_tick_f64(scroll_time);
     let scroll_index =
         chart.scroll_events.partition_point(|event| event.tick.0 as f64 <= cursor_tick);
     let scroll = scroll_index.checked_sub(1).map_or(1.0, |index| chart.scroll_events[index].factor);
-    let speed = current_speed_factor_for_tick(&chart.speed_events, cursor_tick);
+    let speed = current_speed_factor_at_time(&chart.speed_events, scroll_time);
     (scroll * speed) as f32
 }
 
 pub(super) fn current_scroll_multiplier_from_segments(
     scroll_integral: &ScrollIntegralCache,
-    speed_segments: &[(f64, f64)],
+    speed: f64,
     cursor_tick: f64,
 ) -> f32 {
-    (scroll_integral.factor_at(cursor_tick) * speed_at(speed_segments, cursor_tick)) as f32
+    (scroll_integral.factor_at(cursor_tick) * speed) as f32
+}
+
+/// beatoraja の `enableConstant` 中は SPEED を無視して 1.0 固定にする。
+pub(super) fn render_speed(
+    speed_segments: &[(f64, f64)],
+    constant_enabled: bool,
+    scroll_time: TimeUs,
+) -> f64 {
+    if constant_enabled { 1.0 } else { speed_at(speed_segments, scroll_time.0 as f64) }
 }
 
 #[cfg(test)]
@@ -233,54 +239,52 @@ pub(super) fn factor_before(segments: &[(f64, f64)], tick: f64) -> f64 {
         .map_or(1.0, |index| segments[index].1)
 }
 
-pub(super) fn current_speed_factor_for_tick(
+pub(super) fn current_speed_factor_at_time(
     events: &[bmz_chart::model::SpeedEvent],
-    tick: f64,
+    time: TimeUs,
 ) -> f64 {
     if events.is_empty() {
         return 1.0;
     }
 
-    let next_index = events.partition_point(|event| event.tick.0 as f64 <= tick);
+    let time = time.0 as f64;
+    let next_index = events.partition_point(|event| event.time.0 as f64 <= time);
     let prev = next_index.checked_sub(1).map(|index| {
         let event = &events[index];
-        (event.tick.0 as f64, event.factor)
+        (event.time.0 as f64, event.factor)
     });
-    let next = events.get(next_index).map(|event| {
-        let event_tick = event.tick.0 as f64;
-        (event_tick, event.factor)
-    });
-    interpolate_speed(prev, next, tick)
+    let next = events.get(next_index).map(|event| (event.time.0 as f64, event.factor));
+    interpolate_speed(prev, next, time)
 }
 
-/// 指定 tick における SPEED の現在値を返す。beatoraja 仕様に合わせ、隣接イベント間は
-/// 線形補間。最初のイベント前は 1.0、最後のイベント以降はその値で固定。
-pub(super) fn speed_at(segments: &[(f64, f64)], tick: f64) -> f64 {
+/// 指定時刻 (μs) における SPEED の現在値を返す。beatoraja の
+/// `LaneRenderer.getCurrentSpeed` に合わせ、隣接イベント間は時間で線形補間する。
+/// 最初のイベント前は時刻 0 の 1.0 から補間し、最後のイベント以降はその値で固定。
+pub(super) fn speed_at(segments: &[(f64, f64)], time: f64) -> f64 {
     if segments.is_empty() {
         return 1.0;
     }
-    // tick を挟む直前 (prev) / 直後 (next) のイベントを探す。
-    let next_index = segments.partition_point(|(event_tick, _)| *event_tick <= tick);
+    // time を挟む直前 (prev) / 直後 (next) のイベントを探す。
+    let next_index = segments.partition_point(|(event_time, _)| *event_time <= time);
     let prev = next_index.checked_sub(1).map(|index| segments[index]);
     let next = segments.get(next_index).copied();
-    interpolate_speed(prev, next, tick)
+    interpolate_speed(prev, next, time)
 }
 
 pub(super) fn interpolate_speed(
     prev: Option<(f64, f64)>,
     next: Option<(f64, f64)>,
-    tick: f64,
+    time: f64,
 ) -> f64 {
-    match (prev, next) {
-        (None, _) => 1.0,
-        (Some((_, f)), None) => f,
-        (Some((t0, f0)), Some((t1, f1))) => {
-            let span = t1 - t0;
-            if span <= f64::EPSILON {
-                return f1;
-            }
-            let ratio = ((tick - t0) / span).clamp(0.0, 1.0);
-            f0 + (f1 - f0) * ratio
-        }
+    // 初期値省略時、beatoraja は時刻 0 を SPEED 1.0 の始点として扱う。
+    let (t0, f0) = prev.unwrap_or((0.0, 1.0));
+    let Some((t1, f1)) = next else {
+        return f0;
+    };
+    let span = t1 - t0;
+    if span <= f64::EPSILON {
+        return f1;
     }
+    let ratio = ((time - t0) / span).clamp(0.0, 1.0);
+    f0 + (f1 - f0) * ratio
 }

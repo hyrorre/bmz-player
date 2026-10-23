@@ -195,7 +195,11 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
     let cursor_tick = session.timing_map.time_to_tick_f64(scroll_render_time(lane_render_now));
     let scroll_multiplier = current_scroll_multiplier_from_segments(
         &cache.scroll_integral,
-        &cache.speed_segments,
+        render_speed(
+            &cache.speed_segments,
+            session.constant_enabled,
+            scroll_render_time(lane_render_now),
+        ),
         cursor_tick,
     );
     let note_display_duration_ms = note_display_duration_ms(session, now_bpm, scroll_multiplier);
