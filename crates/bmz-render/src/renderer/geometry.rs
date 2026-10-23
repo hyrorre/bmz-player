@@ -67,8 +67,7 @@ pub(super) struct TextFrame {
     pub(super) size: AtlasSize,
     #[cfg(test)]
     pub(super) pixels: Vec<u8>,
-    /// atlas を作り直した（テスト用）。GPU には `dirty_regions` だけを転送する。
-    #[cfg(test)]
+    /// atlas を作り直した（統計用）。GPU には `dirty_regions` だけを転送する。
     pub(super) atlas_rebuilt: bool,
     pub(super) dirty_regions: Vec<TextAtlasDirtyRegion>,
     pub(super) instances: Vec<u8>,
@@ -77,6 +76,18 @@ pub(super) struct TextFrame {
     pub(super) command_quad_counts: Vec<usize>,
     /// `DrawCommand::Text` ごとに生成された caret 矩形。
     pub(super) command_caret_rects: Vec<Option<RectCommand>>,
+}
+
+/// 1フレームの文字 atlas の GPU 転送。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct TextAtlasUploadStats {
+    /// `queue.write_texture` の呼び出し回数。
+    pub(super) writes: usize,
+    pub(super) bytes: usize,
+    /// テクスチャを作り直して全体を書いた回数（0 か 1）。
+    pub(super) full_uploads: usize,
+    /// グリフごとの部分転送の回数。
+    pub(super) region_uploads: usize,
 }
 
 #[derive(Debug, Clone)]

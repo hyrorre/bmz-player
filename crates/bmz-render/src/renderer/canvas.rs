@@ -54,6 +54,13 @@ pub struct RenderFrameTimings {
     pub rect_instances: usize,
     pub image_instances: usize,
     pub text_instances: usize,
+    /// 文字 atlas の GPU 転送（`upload_us` の内数）。
+    pub text_atlas_upload_us: u128,
+    pub text_atlas_writes: usize,
+    pub text_atlas_upload_bytes: usize,
+    pub text_atlas_full_uploads: usize,
+    pub text_atlas_region_uploads: usize,
+    pub text_atlas_rebuilds: usize,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -75,6 +82,12 @@ pub(super) struct GpuRenderTimings {
     pub(super) rect_instances: usize,
     pub(super) image_instances: usize,
     pub(super) text_instances: usize,
+    pub(super) text_atlas_upload_us: u128,
+    pub(super) text_atlas_writes: usize,
+    pub(super) text_atlas_upload_bytes: usize,
+    pub(super) text_atlas_full_uploads: usize,
+    pub(super) text_atlas_region_uploads: usize,
+    pub(super) text_atlas_rebuilds: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

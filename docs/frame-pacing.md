@@ -44,6 +44,14 @@ $env:RUST_LOG = 'info,bmz_player::play_profile=debug,bmz_player::frame_pacing=de
 通常プレイでTRACEは必要ありません。既存profilerのwake latenessはOSへ渡した早期wake期限に
 対する遅れなので、この変更後の描画期限の遅れそのものとは区別します。
 
+選曲画面は`bmz_player::select_profile=debug`で、120フレームごとに`select frame profile`を記録します。
+文字の準備時間（`text_ms` / `text_p99_ms` / `text_max_ms`）と、文字atlasのGPU転送を含みます。
+`text_atlas_upload_ms`は転送処理のCPU時間です（`upload_ms`の内数）。`text_atlas_writes`は
+`write_texture`の呼び出し回数、`text_atlas_max_writes`は1フレームの最大回数です。
+`text_atlas_upload_kib`は転送量です。`text_atlas_full_uploads`はテクスチャ全体の転送、
+`text_atlas_region_uploads`はグリフごとの部分転送、`text_atlas_rebuilds`はatlasの作り直しの回数です。
+回数と転送量は区間の合計です。
+
 FPS表示とアプリのpresent間隔だけでは実際の表示間隔を証明できません。
 [PresentMon](https://github.com/GameTechDev/PresentMon)の対象process限定CSVと併用します。
 Vulkanで取得できない値（NA等）はゼロ遅延として扱いません。Composed Flipから

@@ -500,8 +500,7 @@ pub(super) struct TextAtlasCache {
     /// GPU テクスチャの高さ。格納済みの高さを超えたら倍に広げ、作り直しでは縮めない。
     /// 伸びるたびにテクスチャを作り直して全体を転送しないよう、余裕を持って確保する。
     texture_height: u32,
-    /// 作り直した（テスト用）。
-    #[cfg(test)]
+    /// 作り直した。フレームの統計に出す。
     rebuilt: bool,
     /// 空きが足りずに格納できなかったグリフがある。作り直すまで立てたまま。
     overflowed: bool,
@@ -539,7 +538,6 @@ impl TextAtlasCache {
             shapes: TextShapeCache::default(),
             dirty_regions: Vec::new(),
             texture_height: 0,
-            #[cfg(test)]
             rebuilt: false,
             overflowed: false,
             frames_since_clear: u32::MAX,
@@ -588,7 +586,6 @@ impl TextAtlasCache {
     }
 
     /// 作り直した後の最初の取り出しで true。
-    #[cfg(test)]
     pub(super) fn take_rebuilt(&mut self) -> bool {
         std::mem::take(&mut self.rebuilt)
     }
@@ -628,10 +625,7 @@ impl TextAtlasCache {
         self.deferred.clear();
         self.layouts.clear();
         self.dirty_regions.clear();
-        #[cfg(test)]
-        {
-            self.rebuilt = true;
-        }
+        self.rebuilt = true;
         self.overflowed = false;
         self.frames_since_clear = 0;
     }

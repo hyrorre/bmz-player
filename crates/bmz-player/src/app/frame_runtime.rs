@@ -477,6 +477,13 @@ struct SceneFrameProfiler {
     rect_instances: u128,
     image_instances: u128,
     text_instances: u128,
+    text_atlas_upload_us: u128,
+    text_atlas_writes: u128,
+    text_atlas_max_writes: usize,
+    text_atlas_upload_bytes: u128,
+    text_atlas_full_uploads: u128,
+    text_atlas_region_uploads: u128,
+    text_atlas_rebuilds: u128,
     total_redraw_us: u128,
     input_us: u128,
     background_us: u128,
@@ -496,6 +503,8 @@ struct SceneFrameProfiler {
     last_redraw_started_at: Option<Instant>,
     total_redraw_samples_us: Vec<u64>,
     render_samples_us: Vec<u64>,
+    text_samples_us: Vec<u64>,
+    text_atlas_upload_samples_us: Vec<u64>,
     surface_samples_us: Vec<u64>,
     queue_samples_us: Vec<u64>,
     present_samples_us: Vec<u64>,
@@ -578,6 +587,18 @@ impl SceneFrameProfiler {
             self.rect_instances += timings.rect_instances as u128;
             self.image_instances += timings.image_instances as u128;
             self.text_instances += timings.text_instances as u128;
+            self.text_atlas_upload_us += timings.text_atlas_upload_us;
+            self.text_atlas_writes += timings.text_atlas_writes as u128;
+            self.text_atlas_max_writes = self.text_atlas_max_writes.max(timings.text_atlas_writes);
+            self.text_atlas_upload_bytes += timings.text_atlas_upload_bytes as u128;
+            self.text_atlas_full_uploads += timings.text_atlas_full_uploads as u128;
+            self.text_atlas_region_uploads += timings.text_atlas_region_uploads as u128;
+            self.text_atlas_rebuilds += timings.text_atlas_rebuilds as u128;
+            push_profile_sample(&mut self.text_samples_us, timings.text_us);
+            push_profile_sample(
+                &mut self.text_atlas_upload_samples_us,
+                timings.text_atlas_upload_us,
+            );
             push_profile_sample(&mut self.surface_samples_us, timings.surface_us);
             push_profile_sample(&mut self.queue_samples_us, timings.queue_us);
             push_profile_sample(&mut self.present_samples_us, timings.present_us);
@@ -668,6 +689,16 @@ impl SceneFrameProfiler {
             fmt_profile_ms(self.redraw_after_wake_us, wait_wake_samples.max(1));
         let total_redraw_percentiles = frame_duration_percentiles(&self.total_redraw_samples_us);
         let render_percentiles = frame_duration_percentiles(&self.render_samples_us);
+        let text_percentiles = frame_duration_percentiles(&self.text_samples_us);
+        let text_atlas_upload_ms = fmt_profile_ms(self.text_atlas_upload_us, frames);
+        let text_atlas_upload_percentiles =
+            frame_duration_percentiles(&self.text_atlas_upload_samples_us);
+        let text_atlas_writes = self.text_atlas_writes as u64;
+        let text_atlas_max_writes = self.text_atlas_max_writes as u64;
+        let text_atlas_upload_kib = (self.text_atlas_upload_bytes / 1024) as u64;
+        let text_atlas_full_uploads = self.text_atlas_full_uploads as u64;
+        let text_atlas_region_uploads = self.text_atlas_region_uploads as u64;
+        let text_atlas_rebuilds = self.text_atlas_rebuilds as u64;
         let surface_percentiles = frame_duration_percentiles(&self.surface_samples_us);
         let queue_percentiles = frame_duration_percentiles(&self.queue_samples_us);
         let present_percentiles = frame_duration_percentiles(&self.present_samples_us);
@@ -699,6 +730,19 @@ impl SceneFrameProfiler {
                     plan_ms,
                     draw_ms,
                     text_ms,
+                    text_p99_ms = text_percentiles.map(|value| fmt_profile_us_ms(value.p99_us)),
+                    text_max_ms = text_percentiles.map(|value| fmt_profile_us_ms(value.max_us)),
+                    text_atlas_upload_ms,
+                    text_atlas_upload_p99_ms = text_atlas_upload_percentiles
+                        .map(|value| fmt_profile_us_ms(value.p99_us)),
+                    text_atlas_upload_max_ms = text_atlas_upload_percentiles
+                        .map(|value| fmt_profile_us_ms(value.max_us)),
+                    text_atlas_writes,
+                    text_atlas_max_writes,
+                    text_atlas_upload_kib,
+                    text_atlas_full_uploads,
+                    text_atlas_region_uploads,
+                    text_atlas_rebuilds,
                     geometry_ms,
                     upload_ms,
                     submit_ms,

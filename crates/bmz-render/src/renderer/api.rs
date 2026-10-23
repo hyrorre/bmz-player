@@ -845,6 +845,12 @@ impl Renderer {
             rect_instances: gpu_timings.rect_instances,
             image_instances: gpu_timings.image_instances,
             text_instances: gpu_timings.text_instances,
+            text_atlas_upload_us: gpu_timings.text_atlas_upload_us,
+            text_atlas_writes: gpu_timings.text_atlas_writes,
+            text_atlas_upload_bytes: gpu_timings.text_atlas_upload_bytes,
+            text_atlas_full_uploads: gpu_timings.text_atlas_full_uploads,
+            text_atlas_region_uploads: gpu_timings.text_atlas_region_uploads,
+            text_atlas_rebuilds: gpu_timings.text_atlas_rebuilds,
             ..self.last_frame_timings.unwrap_or_default()
         });
         Ok(status)

@@ -40,7 +40,11 @@ impl WgpuRenderer {
         )
     }
 
-    pub(in crate::renderer) fn upload_text_frame(&mut self, frame: &TextFrame) {
+    pub(in crate::renderer) fn upload_text_frame(
+        &mut self,
+        frame: &TextFrame,
+    ) -> TextAtlasUploadStats {
+        let mut stats = TextAtlasUploadStats::default();
         self.ensure_text_buffer(frame.instances.len());
         if let Some(buffer) = &self.text_buffer
             && !frame.instances.is_empty()
@@ -49,7 +53,7 @@ impl WgpuRenderer {
         }
 
         if frame.size.width == 0 || frame.size.height == 0 {
-            return;
+            return stats;
         }
 
         let recreate_texture = self.text_texture_size != frame.size || self.text_texture.is_none();
@@ -78,7 +82,10 @@ impl WgpuRenderer {
                     depth_or_array_layers: 1,
                 },
             );
-            return;
+            stats.writes += 1;
+            stats.bytes += pixels.len();
+            stats.full_uploads += 1;
+            return stats;
         }
 
         for region in &frame.dirty_regions {
@@ -104,7 +111,11 @@ impl WgpuRenderer {
                     depth_or_array_layers: 1,
                 },
             );
+            stats.writes += 1;
+            stats.bytes += region.pixels.len();
+            stats.region_uploads += 1;
         }
+        stats
     }
 
     pub(in crate::renderer) fn reset_text_atlas(&mut self) {
