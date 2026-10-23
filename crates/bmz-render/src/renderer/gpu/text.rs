@@ -58,13 +58,15 @@ impl WgpuRenderer {
         if frame.size.width == 0 || frame.size.height == 0 {
             return TextAtlasUploadStats::default();
         }
+        let started = tracing::enabled!(target: "bmz_render::text_atlas", tracing::Level::DEBUG)
+            .then(Instant::now);
 
         let recreate_texture = self.text_texture_size != frame.size || self.text_texture.is_none();
         self.ensure_text_texture(frame.size);
         let texture = self.text_texture.as_ref().expect("text texture exists after ensure");
         let atlas = &self.text_atlas;
         let queue = &self.queue;
-        write_text_atlas(
+        let stats = write_text_atlas(
             frame,
             recreate_texture,
             || atlas.pixels_for_size(frame.size),
@@ -89,7 +91,13 @@ impl WgpuRenderer {
                     },
                 );
             },
-        )
+        );
+        if let Some(started) = started {
+            tracing::debug!(target: "bmz_render::text_atlas", frame = atlas.frame,
+                upload_us = started.elapsed().as_micros(), writes = stats.writes,
+                bytes = stats.bytes, recreate_texture, "text atlas upload");
+        }
+        stats
     }
 
     pub(in crate::renderer) fn reset_text_atlas(&mut self) {

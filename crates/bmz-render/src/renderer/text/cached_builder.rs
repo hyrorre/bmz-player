@@ -523,6 +523,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
     ) -> TextFrame {
         let size = self.atlas.size();
         let instances = encode_text_quads(&self.quads, size.width, size.height);
+        self.atlas.profile_frame();
         TextFrame {
             size,
             #[cfg(test)]
