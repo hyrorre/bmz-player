@@ -461,6 +461,16 @@ pub(super) fn create_text_pipeline(
                         shader_location: 2,
                         format: wgpu::VertexFormat::Float32x4,
                     },
+                    wgpu::VertexAttribute {
+                        offset: 48,
+                        shader_location: 3,
+                        format: wgpu::VertexFormat::Float32x4,
+                    },
+                    wgpu::VertexAttribute {
+                        offset: 64,
+                        shader_location: 4,
+                        format: wgpu::VertexFormat::Float32x3,
+                    },
                 ],
             }],
         },
@@ -644,6 +654,8 @@ struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) color_end: vec4<f32>,
+    @location(3) gradient_t: f32,
 };
 
 @vertex
@@ -652,6 +664,8 @@ fn vs_main(
     @location(0) rect: vec4<f32>,
     @location(1) uv_rect: vec4<f32>,
     @location(2) color: vec4<f32>,
+    @location(3) color_end: vec4<f32>,
+    @location(4) gradient: vec3<f32>,
 ) -> VertexOutput {
     var corners = array<vec2<f32>, 6>(
         vec2<f32>(0.0, 0.0),
@@ -668,6 +682,9 @@ fn vs_main(
     out.position = vec4<f32>(pos01.x * 2.0 - 1.0, 1.0 - pos01.y * 2.0, 0.0, 1.0);
     out.uv = uv_rect.xy + local * uv_rect.zw;
     out.color = color;
+    out.color_end = color_end;
+    // quad 内で線形なので頂点で求めて補間し、範囲外への切り詰めは画素ごとに行う。
+    out.gradient_t = gradient.x + local.x * gradient.y + local.y * gradient.z;
     return out;
 }
 
@@ -675,7 +692,9 @@ fn vs_main(
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let glyph = textureSample(text_atlas, text_sampler, input.uv);
     // RGBA atlas: bitmap font は色付きグリフを保持。TTF は (1,1,1,coverage)。
-    // tint と乗算してアルファブレンド用の最終色を出す。
-    return glyph * input.color;
+    // tint と乗算してアルファブレンド用の最終色を出す。グラデーションの無い文字は
+    // color_end が color と同じで t が 0 なので、tint は color のまま。
+    let tint = mix(input.color, input.color_end, clamp(input.gradient_t, 0.0, 1.0));
+    return glyph * tint;
 }
 "#;

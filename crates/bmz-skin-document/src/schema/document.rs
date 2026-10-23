@@ -599,6 +599,17 @@ pub struct SkinTextDef {
     pub shadow_offset_y: f32,
     #[serde(default, rename = "shadowSmoothness")]
     pub shadow_smoothness: f32,
+    /// BMZ extension: gradient start color of the text body in RRGGBB or RRGGBBAA form.
+    /// With `colorBottom`, the body changes from this color to that color.
+    #[serde(default, rename = "colorTop")]
+    pub color_top: String,
+    /// BMZ extension: gradient end color of the text body in RRGGBB or RRGGBBAA form.
+    #[serde(default, rename = "colorBottom")]
+    pub color_bottom: String,
+    /// BMZ extension: gradient direction in degrees. 0 runs from top to bottom and positive
+    /// values turn it counter-clockwise like destination `angle` (90 runs left to right).
+    #[serde(default, rename = "gradientAngle")]
+    pub gradient_angle: f32,
     /// Lua `value = function()` から変換したコース表テキスト式。空なら `ref` を使う。
     #[serde(default)]
     pub value_expr: String,

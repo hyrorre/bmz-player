@@ -3,6 +3,10 @@ use super::*;
 pub(super) struct CachedTextFrameBuilder<'a> {
     atlas: &'a mut TextAtlasCache,
     pub(super) quads: Vec<TextQuad>,
+    /// 最後に組んだ文字列の本体（影・縁取りを除く）の先頭の quad。
+    pub(super) body_start: usize,
+    /// 文字列ごとのグラデーション。quad の並び順に並ぶ。
+    pub(super) gradients: Vec<TextGradientSpan>,
 }
 
 /// 1行ぶんの描画位置。`line_y` はベクターでは基準線、ビットマップでは文字上端。
@@ -38,7 +42,7 @@ impl<'a> From<BitmapFontSet<'a>> for GlyphFonts<'a> {
 
 impl<'a> CachedTextFrameBuilder<'a> {
     pub(super) fn new(atlas: &'a mut TextAtlasCache) -> Self {
-        Self { atlas, quads: Vec::new() }
+        Self { atlas, quads: Vec::new(), body_start: 0, gradients: Vec::new() }
     }
 
     pub(super) fn shaped_vector_text(
@@ -155,6 +159,9 @@ impl<'a> CachedTextFrameBuilder<'a> {
             }
         }
 
+        if !decoration {
+            self.body_start = self.quads.len();
+        }
         let layout_key =
             text_layout_key(TextGlyphKind::Bitmap, fonts.id, text, &style, surface, decoration);
         if self.extend_cached_layout(layout_key.as_ref(), origin) {
@@ -266,6 +273,9 @@ impl<'a> CachedTextFrameBuilder<'a> {
             }
         }
 
+        if !decoration {
+            self.body_start = self.quads.len();
+        }
         let layout_key =
             text_layout_key(TextGlyphKind::Vector, fonts.id, text, &style, surface, decoration);
         if self.extend_cached_layout(layout_key.as_ref(), origin) {
@@ -367,6 +377,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
         let x = line.pen_x + glyph.x * line.scale.x;
         let mut y = line.line_y + glyph.y * line.scale.y;
         let mut quad_color = line.color;
+        let mut fill = true;
         let cached = match glyph.source {
             GlyphSource::Vector { face: face_index, glyph: glyph_id, face_scale, color } => {
                 let Some(face) = fonts.faces.get(face_index) else { return };
@@ -389,7 +400,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
                         style,
                     });
                     if let Some(cached) = styled {
-                        self.push_quad(x, y, &cached, quad_color, line.surface);
+                        self.push_quad(x, y, &cached, quad_color, true, line.surface);
                         return;
                     }
                     if self.atlas.capacity_misses() != capacity_misses {
@@ -438,6 +449,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
                 }
                 match drawn {
                     Some((cached, tint)) => {
+                        fill = tint.is_none();
                         quad_color = tint.unwrap_or(quad_color);
                         Some(cached)
                     }
@@ -472,7 +484,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
             }
         };
         let Some(cached) = cached else { return };
-        self.push_quad(x, y, &cached, quad_color, line.surface);
+        self.push_quad(x, y, &cached, quad_color, fill, line.surface);
     }
 
     fn push_quad(
@@ -481,6 +493,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
         y: f32,
         cached: &CachedGlyph,
         color: Color,
+        fill: bool,
         surface: SurfaceSize,
     ) {
         self.quads.push(TextQuad {
@@ -492,6 +505,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
             glyph_width: cached.width,
             glyph_height: cached.height,
             color,
+            fill,
         });
     }
 
@@ -522,7 +536,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
         command_caret_rects: Vec<Option<RectCommand>>,
     ) -> TextFrame {
         let size = self.atlas.size();
-        let instances = encode_text_quads(&self.quads, size.width, size.height);
+        let instances = encode_text_quads(&self.quads, &self.gradients, size.width, size.height);
         TextFrame {
             size,
             #[cfg(test)]

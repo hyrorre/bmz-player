@@ -15,8 +15,8 @@ use serde::Deserialize;
 use crate::assets::load_png_rgba;
 use crate::plan::{
     Color, DrawCommand, PLAY_BACKBMP_TEXTURE, Point, Rect, RectBatchCache, RectBatchCacheKey,
-    RectCommand, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextAlign, TextCaret, TextLayer,
-    TextOutline, TextOverflow, TextShadow, TextStyle, TextureId, UvRect,
+    RectCommand, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextAlign, TextCaret, TextGradient,
+    TextLayer, TextOutline, TextOverflow, TextShadow, TextStyle, TextureId, UvRect,
 };
 use crate::scene::{
     CourseConstraintFlags, CourseResultSkinSnapshot, DailyPlayerStatsSnapshot, PlayerStatsSnapshot,

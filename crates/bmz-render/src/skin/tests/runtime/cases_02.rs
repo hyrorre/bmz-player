@@ -644,6 +644,7 @@ fn all_offset_scales_text_and_rotated_images_after_local_layout() {
     );
     let state = SkinDrawState { skin_offsets: offsets, ..SkinDrawState::default() };
     let style = TextStyle {
+        gradient: None,
         font_id: None,
         size: 0.1,
         bitmap_size: None,

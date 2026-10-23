@@ -238,14 +238,25 @@ pub(super) fn bitmap_text_caret_rect(
     })
 }
 
+/// `gradients` は quad の並び順で、範囲が重ならないこと。
 pub(super) fn encode_text_quads(
     quads: &[TextQuad],
+    gradients: &[TextGradientSpan],
     atlas_width: u32,
     atlas_height: u32,
 ) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(quads.len() * TEXT_INSTANCE_BYTES);
-    for quad in quads {
-        for value in [
+    let mut gradients = gradients.iter().peekable();
+    for (index, quad) in quads.iter().enumerate() {
+        while gradients.next_if(|span| span.quads.end <= index).is_some() {}
+        // グラデーションの無い文字は終点も同じ色にし、t を 0 に固定する。
+        let (end_color, [t0, du, dv]) = match gradients.peek() {
+            Some(span) if quad.fill && span.quads.start <= index => {
+                (span.color, span.quad_gradient(quad))
+            }
+            _ => (quad.color, [0.0; 3]),
+        };
+        let values: [f32; TEXT_INSTANCE_FLOATS] = [
             quad.x,
             quad.y,
             quad.width,
@@ -258,9 +269,16 @@ pub(super) fn encode_text_quads(
             quad.color.g,
             quad.color.b,
             quad.color.a,
-        ] {
-            bytes.extend_from_slice(&value.to_le_bytes());
-        }
+            end_color.r,
+            end_color.g,
+            end_color.b,
+            end_color.a,
+            t0,
+            du,
+            dv,
+        ];
+        // 1つのインスタンスをまとめて書く。値ごとに書くと境界の確認が値の数だけ増える。
+        bytes.extend_from_slice(bytemuck::bytes_of(&values));
     }
     bytes
 }

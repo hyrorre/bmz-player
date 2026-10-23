@@ -110,6 +110,7 @@ pub(super) fn push_scene_overlay_text_aligned(
         caret: None,
         post_scale: Point { x: 1.0, y: 1.0 },
         style: TextStyle {
+            gradient: None,
             font_id: None,
             size: OVERLAY_FONT_SIZE_RATIO,
             bitmap_size: None,

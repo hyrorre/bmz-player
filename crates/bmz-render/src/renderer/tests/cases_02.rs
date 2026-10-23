@@ -254,7 +254,10 @@ fn text_instances_are_transformed_into_canvas_viewport() {
         },
     );
     let mut instances = Vec::new();
-    for value in [0.1_f32, 0.2, 0.3, 0.4, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0] {
+    for value in [
+        0.1_f32, 0.2, 0.3, 0.4, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0,
+        0.0, 0.0,
+    ] {
         instances.extend_from_slice(&value.to_le_bytes());
     }
 
@@ -292,6 +295,7 @@ fn text_shadow_emits_extra_text_instances() {
             caret: None,
             post_scale: Point { x: 1.0, y: 1.0 },
             style: TextStyle {
+                gradient: None,
                 font_id: None,
                 size: 0.1,
                 bitmap_size: None,
@@ -326,6 +330,7 @@ fn cached_text_frame_only_marks_new_glyphs_dirty() {
             caret: None,
             post_scale: Point { x: 1.0, y: 1.0 },
             style: TextStyle {
+                gradient: None,
                 font_id: None,
                 size: 0.1,
                 bitmap_size: None,
@@ -370,6 +375,7 @@ fn cached_text_frame_reuses_static_text_layouts() {
     let Some(font) = load_default_font() else { return };
     let surface = SurfaceSize { width: 320, height: 240 };
     let style = TextStyle {
+        gradient: None,
         font_id: None,
         size: 0.1,
         bitmap_size: None,

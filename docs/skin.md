@@ -1043,6 +1043,35 @@ beatoraja互換のtext `overflow`は次の値を使用します。
 }
 ```
 
+## Text Gradient
+
+BMZ拡張の`colorTop` / `colorBottom` / `gradientAngle`で、文字本体に線形グラデーションを掛けられます。
+JSON skinとLua skinで同じフィールドを使用できます。
+
+| field | value |
+| --- | --- |
+| `colorTop` | 始点の色（`RRGGBB` / `RRGGBBAA`）。省略時は白 |
+| `colorBottom` | 終点の色（`RRGGBB` / `RRGGBBAA`）。省略時は白 |
+| `gradientAngle` | 向き（度）。省略時は`0` |
+
+- `colorTop`と`colorBottom`のどちらかを指定すると有効になります。どちらも省略した場合や、読めない色だけの場合は、従来どおり1色で描きます。
+- 色はdestinationの`r` / `g` / `b` / `a`に乗算します。destinationのアニメーションやフェードにも追従します。
+- `gradientAngle: 0`で上から下へ変化します。正の値はdestinationの`angle`と同じく反時計回りで、`90`で左から右、`180`で下から上になります。角度は画面の画素で測ります。
+- 横の範囲は、実際に描画される文字（グリフ）の左端から右端までです。空白は範囲に含めないので、先頭や末尾に空白を足しても色の付き方は変わりません。単語の間の空白は前後の文字に挟まれるため範囲の内側になり、文字列全体で1つのグラデーションになります。`overflow`で縮小・切り詰めた場合も、描画された文字の範囲を使います。
+- 縦の範囲は、文字の上端からdestinationの高さまでです。`wrapping: true`では、行ごとに繰り返さず、最後の行の下端までを含む1つのグラデーションになります。範囲の外側は端の色になります。
+- 縁取り・影は範囲の計算に含めません。空白だけの文字列など、描画する文字が無い場合は何も描きません。
+- グラデーションは文字本体だけに掛かります。`outlineColor`の縁取り、`shadowColor`の影は指定色のままです。カラー絵文字は絵文字自身の色を保ちます。
+- TTF/OTFと画像フォント（`.fnt`）の両方で使えます。画像フォントでは、グリフ画像の色にグラデーションを乗算します。
+
+```json
+{
+  "text": [
+    { "id": "title", "size": 30, "colorTop": "ffe680", "colorBottom": "ff6600" },
+    { "id": "artist", "size": 20, "colorTop": "66ddff", "colorBottom": "cc66ff", "gradientAngle": 90 }
+  ]
+}
+```
+
 ## フォントのfallbackと欠字表示
 
 スキンのtextで、指定フォントに無い文字を描く方法を示します。
