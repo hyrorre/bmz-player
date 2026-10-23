@@ -315,11 +315,13 @@ fn new_glyph_in_an_exactly_full_atlas_is_stored_after_one_rebuild() {
         })
         .collect();
     assert_quads_inside_atlas(&quads, &atlas);
+    // 作り直した atlas のテクスチャには古いグリフが残るので、パディングも透明で書き直す。
     let region = &atlas.dirty_regions[0];
-    assert_eq!(
-        (region.origin, region.size),
-        (new.atlas_origin, AtlasSize { width: 20, height: 20 })
-    );
+    assert_eq!((region.origin, region.size), ((0, 0), AtlasSize { width: 22, height: 22 }));
+    let alpha = |x: u32, y: u32| region.pixels[((y * 22 + x) * 4 + 3) as usize];
+    assert!((0..22).all(|i| alpha(i, 0) == 0 && alpha(i, 21) == 0));
+    assert!((0..22).all(|i| alpha(0, i) == 0 && alpha(21, i) == 0));
+    assert_eq!(alpha(1, 1), 255, "the tofu frame starts inside the padding");
 
     // 以降は同じ配置を使い続ける。
     for _ in 0..10 {
@@ -496,4 +498,52 @@ fn high_dpi_color_emoji_keeps_layout_proportions() {
         assert!((a.0 - b.0).abs() < 0.003 && (a.1 - b.1).abs() < 0.003, "{a:?} {b:?}");
         assert!((a.2 - b.2).abs() < 0.003 && (a.3 - b.3).abs() < 0.003, "{a:?} {b:?}");
     }
+}
+
+#[test]
+fn texture_grows_by_doubling_and_keeps_its_size_across_rebuilds() {
+    // 30px（表示15px）の枠は、パディング込みで1行に2つ、32px ごとに並ぶ。
+    let tofu = |atlas: &mut TextAtlasCache, index: u32| {
+        atlas.cached_tofu_glyph(15.0 - index as f32 * 0.001, 15.0)
+    };
+    let mut atlas = TextAtlasCache::with_limits(64, 1024);
+    atlas.begin_frame();
+    tofu(&mut atlas, 0).unwrap();
+    // 格納済みは1行でも、テクスチャは最小の高さで確保する。
+    assert_eq!(atlas.atlas_height(), 32);
+    assert_eq!(atlas.size(), AtlasSize { width: 64, height: TEXT_ATLAS_MIN_TEXTURE_HEIGHT });
+
+    // 行が増えてもテクスチャの高さを超えるまでは同じ寸法で、超えたら倍に広げる。
+    let mut heights = vec![atlas.size().height];
+    for index in 1..64 {
+        tofu(&mut atlas, index).unwrap();
+        let height = atlas.size().height;
+        assert!(height >= atlas.atlas_height());
+        if heights.last() != Some(&height) {
+            heights.push(height);
+        }
+    }
+    assert_eq!(heights, [256, 512, 1024]);
+    assert_eq!(atlas.atlas_height(), 1024);
+
+    // 溢れて作り直しても縮めない。GPU テクスチャを作り直して全体を転送し直さないため。
+    assert!(tofu(&mut atlas, 64).is_none());
+    atlas.begin_frame();
+    assert!(atlas.take_rebuilt());
+    assert!(atlas.glyphs.is_empty());
+    tofu(&mut atlas, 64).unwrap();
+    assert_eq!(atlas.atlas_height(), 32);
+    assert_eq!(atlas.size().height, 1024);
+}
+
+#[test]
+fn texture_height_stops_at_the_atlas_limit() {
+    let mut atlas = TextAtlasCache::with_limits(64, 300);
+    atlas.begin_frame();
+    // 9行（288px）で最小の高さを超えるが、倍の512px ではなく上限の300px に留める。
+    for index in 0..17 {
+        atlas.cached_tofu_glyph(15.0 - index as f32 * 0.001, 15.0).unwrap();
+    }
+    assert_eq!(atlas.atlas_height(), 288);
+    assert_eq!(atlas.size().height, 300);
 }

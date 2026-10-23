@@ -14,6 +14,8 @@ pub(super) const VECTOR_TEXT_SUPERSAMPLE_SCALE: f32 = 2.0;
 /// `create_texture` がパニックするので、この値と GPU の上限の小さい方を超えるグリフは
 /// 格納せず、フレーム境界でキャッシュを捨てて作り直す。
 pub(super) const TEXT_ATLAS_MAX_HEIGHT: u32 = 8192;
+/// GPU テクスチャの最初の高さ。以降は格納済みの高さに合わせて倍に広げる。
+pub(super) const TEXT_ATLAS_MIN_TEXTURE_HEIGHT: u32 = 256;
 /// 作り直した直後のフレームでも atlas が溢れたとき、次に作り直すまで待つフレーム数。
 pub(super) const TEXT_ATLAS_OVERFLOW_RETRY_FRAMES: u32 = 60;
 pub(super) const TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 4096;
@@ -65,7 +67,8 @@ pub(super) struct TextFrame {
     pub(super) size: AtlasSize,
     #[cfg(test)]
     pub(super) pixels: Vec<u8>,
-    /// atlas を作り直した。`dirty_regions` ではなくテクスチャ全体を書き直す。
+    /// atlas を作り直した（テスト用）。GPU には `dirty_regions` だけを転送する。
+    #[cfg(test)]
     pub(super) atlas_rebuilt: bool,
     pub(super) dirty_regions: Vec<TextAtlasDirtyRegion>,
     pub(super) instances: Vec<u8>,

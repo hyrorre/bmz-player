@@ -55,8 +55,9 @@ impl WgpuRenderer {
         let recreate_texture = self.text_texture_size != frame.size || self.text_texture.is_none();
         self.ensure_text_texture(frame.size);
         let texture = self.text_texture.as_ref().expect("text texture exists after ensure");
-        // 作り直した atlas は同じ寸法でも、パディングや空き領域に古い画素が残るので全体を書く。
-        if recreate_texture || frame.atlas_rebuilt {
+        // テクスチャを作り直したときだけ全体を書く。atlas の作り直しでは、古い画素が残っても
+        // 転送領域がパディングごと上書きするので、新しく格納したグリフだけを送る。
+        if recreate_texture {
             let pixels = self.text_atlas.pixels_for_size(frame.size);
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {

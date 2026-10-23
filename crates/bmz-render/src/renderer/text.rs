@@ -485,7 +485,11 @@ pub(super) struct TextAtlasCache {
     /// 欠字・fallback の解決結果。atlas 画素とは独立なので作り直しでは残す。
     pub(super) shapes: TextShapeCache,
     pub(super) dirty_regions: Vec<TextAtlasDirtyRegion>,
-    /// 作り直した。GPU テクスチャに残る古い画素（パディングを含む）ごと書き直す。
+    /// GPU テクスチャの高さ。格納済みの高さを超えたら倍に広げ、作り直しでは縮めない。
+    /// 伸びるたびにテクスチャを作り直して全体を転送しないよう、余裕を持って確保する。
+    texture_height: u32,
+    /// 作り直した（テスト用）。
+    #[cfg(test)]
     rebuilt: bool,
     /// 空きが足りずに格納できなかったグリフがある。作り直すまで立てたまま。
     overflowed: bool,
@@ -522,6 +526,8 @@ impl TextAtlasCache {
             layouts: TextLayoutCache::new(),
             shapes: TextShapeCache::default(),
             dirty_regions: Vec::new(),
+            texture_height: 0,
+            #[cfg(test)]
             rebuilt: false,
             overflowed: false,
             frames_since_clear: u32::MAX,
@@ -569,7 +575,8 @@ impl TextAtlasCache {
         self.capacity_misses
     }
 
-    /// 作り直した後の最初の取り出しで true。GPU 側はテクスチャ全体を書き直す。
+    /// 作り直した後の最初の取り出しで true。
+    #[cfg(test)]
     pub(super) fn take_rebuilt(&mut self) -> bool {
         std::mem::take(&mut self.rebuilt)
     }
@@ -609,7 +616,10 @@ impl TextAtlasCache {
         self.deferred.clear();
         self.layouts.clear();
         self.dirty_regions.clear();
-        self.rebuilt = true;
+        #[cfg(test)]
+        {
+            self.rebuilt = true;
+        }
         self.overflowed = false;
         self.frames_since_clear = 0;
     }
@@ -618,8 +628,9 @@ impl TextAtlasCache {
         (self.pen_y + self.row_height).max(1)
     }
 
+    /// GPU テクスチャの寸法。UV もこの寸法で正規化する。
     pub(super) fn size(&self) -> AtlasSize {
-        AtlasSize { width: self.width, height: self.atlas_height() }
+        AtlasSize { width: self.width, height: self.texture_height.max(self.atlas_height()) }
     }
 
     pub(super) fn pixels_for_size(&self, size: AtlasSize) -> Vec<u8> {
@@ -885,11 +896,7 @@ impl TextAtlasCache {
             return None;
         };
         self.blit_region(atlas_origin, width, height, &pixels);
-        self.dirty_regions.push(TextAtlasDirtyRegion {
-            origin: atlas_origin,
-            size: AtlasSize { width, height },
-            pixels,
-        });
+        self.dirty_regions.push(padded_dirty_region(atlas_origin, width, height, &pixels));
         let cached = CachedGlyph {
             atlas_origin,
             width,
@@ -927,6 +934,7 @@ impl TextAtlasCache {
         self.pen_y = pen_y;
         self.row_height = row_height;
         self.ensure_height(self.pen_y + self.row_height);
+        self.grow_texture(self.pen_y + self.row_height);
         Some(origin)
     }
 
@@ -936,6 +944,15 @@ impl TextAtlasCache {
             extent.checked_add(TEXT_ATLAS_PADDING * 2).is_some_and(|padded| padded <= limit)
         };
         fits(glyph_width, self.width) && fits(glyph_height, self.max_height)
+    }
+
+    /// 格納済みの高さが GPU テクスチャを超えたら、上限まで倍々に広げる。
+    fn grow_texture(&mut self, height: u32) {
+        if height <= self.texture_height {
+            return;
+        }
+        let doubled = height.max(TEXT_ATLAS_MIN_TEXTURE_HEIGHT).next_power_of_two();
+        self.texture_height = doubled.min(self.max_height).max(height);
     }
 
     fn ensure_height(&mut self, height: u32) {
@@ -957,6 +974,35 @@ impl TextAtlasCache {
                 dst.copy_from_slice(src);
             }
         }
+    }
+}
+
+/// パディングを含めた転送領域。作り直した atlas では GPU テクスチャに古いグリフが残るので、
+/// 線形補間で読む周囲1pxも透明で書き直し、テクスチャ全体を転送せずに済ませる。
+fn padded_dirty_region(
+    atlas_origin: (u32, u32),
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+) -> TextAtlasDirtyRegion {
+    let padded = AtlasSize {
+        width: width + TEXT_ATLAS_PADDING * 2,
+        height: height + TEXT_ATLAS_PADDING * 2,
+    };
+    let mut region = vec![0; (padded.width * padded.height * 4) as usize];
+    let row = (width * 4) as usize;
+    for y in 0..height {
+        let src = (y * width * 4) as usize;
+        let dst = (((y + TEXT_ATLAS_PADDING) * padded.width + TEXT_ATLAS_PADDING) * 4) as usize;
+        if let (Some(dst), Some(src)) = (region.get_mut(dst..dst + row), pixels.get(src..src + row))
+        {
+            dst.copy_from_slice(src);
+        }
+    }
+    TextAtlasDirtyRegion {
+        origin: (atlas_origin.0 - TEXT_ATLAS_PADDING, atlas_origin.1 - TEXT_ATLAS_PADDING),
+        size: padded,
+        pixels: region,
     }
 }
 
