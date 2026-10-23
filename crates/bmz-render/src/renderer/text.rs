@@ -229,6 +229,12 @@ pub(super) fn build_text_frame_with_font_sets(
             continue;
         };
         let quads_before = builder.quads.len();
+        // 位置が不正な文字は組まずに飛ばす。コマンドごとの quad 数とキャレットの対応は保つ。
+        if !point_is_finite(origin) || !point_is_finite(post_scale) {
+            command_quad_counts.push(0);
+            command_caret_rects.push(None);
+            continue;
+        }
         if let Some(font_id) = style.font_id.as_deref()
             && let Some(chain) = font_sets.bitmap.get(font_id)
         {
@@ -272,9 +278,33 @@ pub(super) fn build_text_frame_with_font_sets(
                     .map(|caret| scale_text_rect_command(caret, *origin, *post_scale)),
             );
         }
+        drop_non_finite_quads(&mut builder.quads, quads_before);
+        if let Some(caret) = command_caret_rects.last_mut()
+            && caret.is_some_and(|caret| !rect_is_finite(caret.rect))
+        {
+            *caret = None;
+        }
         command_quad_counts.push(builder.quads.len() - quads_before);
     }
     builder.finish(command_quad_counts, command_caret_rects)
+}
+
+fn point_is_finite(point: &Point) -> bool {
+    point.x.is_finite() && point.y.is_finite()
+}
+
+fn rect_is_finite(rect: Rect) -> bool {
+    [rect.x, rect.y, rect.width, rect.height].into_iter().all(f32::is_finite)
+}
+
+/// `start` 以降の quad から、縁取りの幅や影の位置などで非有限になったものを除く。
+/// GPU のインスタンスバッファへ不正な座標を送らない。
+fn drop_non_finite_quads(quads: &mut Vec<TextQuad>, start: usize) {
+    if quads[start..].iter().all(TextQuad::is_finite) {
+        return;
+    }
+    let kept: Vec<_> = quads.drain(start..).filter(TextQuad::is_finite).collect();
+    quads.extend(kept);
 }
 
 /// fallback 指定なしのフォント表でフレームを組む（テスト用）。
