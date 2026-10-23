@@ -547,3 +547,44 @@ fn texture_height_stops_at_the_atlas_limit() {
     assert_eq!(atlas.atlas_height(), 288);
     assert_eq!(atlas.size().height, 300);
 }
+
+/// 縁取り付きの文字列を `origin` に組んだ1フレームの quad。
+fn outlined_latin_quads(atlas: &mut TextAtlasCache, origin: Point) -> Vec<TextQuad> {
+    let face = latin();
+    let mut style = text_style(None);
+    style.outline =
+        Some(crate::plan::TextOutline { color: Color::rgb(0.0, 0.0, 0.0), width: 0.01 });
+    atlas.begin_frame();
+    let mut builder = CachedTextFrameBuilder::new(atlas);
+    builder.push_text(&origin, "AB", style, single_font_set("skin:atlas", &face), SURFACE);
+    builder.quads.clone()
+}
+
+#[test]
+fn moving_outlined_text_reuses_its_layout() {
+    let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    let first = outlined_latin_quads(&mut atlas, Point { x: 0.1, y: 0.1 });
+    // 縁取り8回と本体で9回分。縁取りは位置だけが違うので1つのレイアウトを共有する。
+    assert_eq!(first.len(), 18);
+    assert_eq!(atlas.layouts.len(), 2);
+    let glyphs = atlas.glyphs.len();
+
+    // スクロールで動いた文字列は、組み直さずにキャッシュを動かして並べる。
+    let moved = outlined_latin_quads(&mut atlas, Point { x: 0.3, y: 0.25 });
+    assert_eq!(atlas.layouts.len(), 2);
+    assert_eq!(atlas.glyphs.len(), glyphs);
+    assert!(atlas.dirty_regions.is_empty());
+    let mut uncached = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    let expected = outlined_latin_quads(&mut uncached, Point { x: 0.3, y: 0.25 });
+    assert_eq!(moved.len(), expected.len());
+    for (moved, expected) in moved.iter().zip(&expected) {
+        assert!((moved.x - expected.x).abs() < 1e-6 && (moved.y - expected.y).abs() < 1e-6);
+        assert_eq!((moved.atlas_origin, moved.width), (expected.atlas_origin, expected.width));
+        assert_eq!(moved.color, expected.color);
+    }
+
+    // 同じ位置に戻れば、最初のフレームと同じ値になる。
+    let back = outlined_latin_quads(&mut atlas, Point { x: 0.1, y: 0.1 });
+    let positions = |quads: &[TextQuad]| quads.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>();
+    assert_eq!(positions(&back), positions(&first));
+}

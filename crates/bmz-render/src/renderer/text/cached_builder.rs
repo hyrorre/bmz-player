@@ -57,6 +57,38 @@ impl<'a> CachedTextFrameBuilder<'a> {
         self.atlas.shapes.bitmap(text, fonts)
     }
 
+    /// キャッシュ済みのレイアウトを `origin` へ動かして並べる。
+    fn extend_cached_layout(&mut self, key: Option<&TextLayoutKey>, origin: &Point) -> bool {
+        let Some(cached) = key.and_then(|key| self.atlas.cached_layout(key)) else {
+            return false;
+        };
+        self.quads.extend(cached.iter().map(|quad| quad.translated(origin.x, origin.y)));
+        true
+    }
+
+    /// `quads_before` 以降に組んだ quad を、`origin` からの相対座標でキャッシュする。
+    fn cache_layout(
+        &mut self,
+        key: Option<TextLayoutKey>,
+        origin: &Point,
+        quads_before: usize,
+        capacity_misses: u64,
+    ) {
+        // atlas の空き不足で欠けたグリフがあれば、作り直した後に組み直す。
+        let Some(key) = key else { return };
+        if self.atlas.capacity_misses() != capacity_misses {
+            return;
+        }
+        let quads = &mut self.quads[quads_before..];
+        let relative: Vec<_> =
+            quads.iter().map(|quad| quad.translated(-origin.x, -origin.y)).collect();
+        // 丸め誤差で次のフレームとずれないよう、キャッシュから並べた場合と同じ座標にそろえる。
+        for (quad, cached) in quads.iter_mut().zip(&relative) {
+            *quad = cached.translated(origin.x, origin.y);
+        }
+        self.atlas.insert_layout(key, relative);
+    }
+
     pub(super) fn push_bitmap_text(
         &mut self,
         origin: &Point,
@@ -115,17 +147,9 @@ impl<'a> CachedTextFrameBuilder<'a> {
             }
         }
 
-        let layout_key = text_layout_key(
-            TextGlyphKind::Bitmap,
-            fonts.id,
-            origin,
-            text,
-            &style,
-            surface,
-            decoration,
-        );
-        if let Some(cached) = layout_key.as_ref().and_then(|key| self.atlas.cached_layout(key)) {
-            self.quads.extend_from_slice(cached);
+        let layout_key =
+            text_layout_key(TextGlyphKind::Bitmap, fonts.id, text, &style, surface, decoration);
+        if self.extend_cached_layout(layout_key.as_ref(), origin) {
             return;
         }
         let quads_before = self.quads.len();
@@ -173,12 +197,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
         };
         self.push_clusters(&shaped, clusters, line, fonts.into());
 
-        // atlas の空き不足で欠けたグリフがあれば、作り直した後に組み直す。
-        if let Some(key) = layout_key
-            && self.atlas.capacity_misses() == capacity_misses
-        {
-            self.atlas.insert_layout(key, &self.quads[quads_before..]);
-        }
+        self.cache_layout(layout_key, origin, quads_before, capacity_misses);
     }
 
     pub(super) fn push_text(
@@ -239,17 +258,9 @@ impl<'a> CachedTextFrameBuilder<'a> {
             }
         }
 
-        let layout_key = text_layout_key(
-            TextGlyphKind::Vector,
-            fonts.id,
-            origin,
-            text,
-            &style,
-            surface,
-            decoration,
-        );
-        if let Some(cached) = layout_key.as_ref().and_then(|key| self.atlas.cached_layout(key)) {
-            self.quads.extend_from_slice(cached);
+        let layout_key =
+            text_layout_key(TextGlyphKind::Vector, fonts.id, text, &style, surface, decoration);
+        if self.extend_cached_layout(layout_key.as_ref(), origin) {
             return;
         }
         let quads_before = self.quads.len();
@@ -326,12 +337,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
         };
         self.push_clusters(&shaped, clusters, line, fonts.into());
 
-        // atlas の空き不足で欠けたグリフがあれば、作り直した後に組み直す。
-        if let Some(key) = layout_key
-            && self.atlas.capacity_misses() == capacity_misses
-        {
-            self.atlas.insert_layout(key, &self.quads[quads_before..]);
-        }
+        self.cache_layout(layout_key, origin, quads_before, capacity_misses);
     }
 
     fn push_clusters(

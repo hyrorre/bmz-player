@@ -346,6 +346,13 @@ pub(super) struct TextQuad {
     pub(super) color: Color,
 }
 
+impl TextQuad {
+    /// 正規化座標で `x` / `y` だけ動かした quad。
+    pub(super) fn translated(&self, x: f32, y: f32) -> Self {
+        Self { x: self.x + x, y: self.y + y, ..self.clone() }
+    }
+}
+
 pub(super) const DEFAULT_TEXT_FONT_ID: &str = "<default>";
 
 /// atlas 内のグリフ。ベクターはグリフID、ビットマップは文字、生成矩形は寸法で識別する。
@@ -397,8 +404,6 @@ pub(super) struct TextLayoutKey {
     kind: TextGlyphKind,
     pub(super) font_id: String,
     pub(super) text: String,
-    origin_x_bits: u32,
-    origin_y_bits: u32,
     surface_width: u32,
     surface_height: u32,
     style: TextLayoutStyleKey,
@@ -452,11 +457,11 @@ impl TextLayoutCache {
         self.entries.get(key).map(Vec::as_slice)
     }
 
-    fn insert(&mut self, key: TextLayoutKey, quads: &[TextQuad]) {
+    fn insert(&mut self, key: TextLayoutKey, quads: Vec<TextQuad>) {
         if self.entries.len() >= TEXT_LAYOUT_CACHE_MAX_ENTRIES {
             self.entries.clear();
         }
-        self.entries.insert(key, quads.to_vec());
+        self.entries.insert(key, quads);
     }
 
     #[cfg(test)]
@@ -643,7 +648,7 @@ impl TextAtlasCache {
         self.layouts.cached(key)
     }
 
-    pub(super) fn insert_layout(&mut self, key: TextLayoutKey, quads: &[TextQuad]) {
+    pub(super) fn insert_layout(&mut self, key: TextLayoutKey, quads: Vec<TextQuad>) {
         self.layouts.insert(key, quads);
     }
 
@@ -1023,24 +1028,23 @@ fn tofu_pixels(width: u32, height: u32) -> Vec<u8> {
     pixels
 }
 
+/// 位置を含まないレイアウトのキー。quad は描画位置からの相対座標でキャッシュする。
+/// 縁取り・影の重ね描きは本体と別の色・装飾フラグで、それぞれのキーを持つ。
 pub(super) fn text_layout_key(
     kind: TextGlyphKind,
     font_id: &str,
-    origin: &Point,
     text: &str,
     style: &TextStyle,
     surface: SurfaceSize,
     decoration: bool,
 ) -> Option<TextLayoutKey> {
-    if style.wrapping || style.outline.is_some() || style.shadow.is_some() {
+    if style.wrapping {
         return None;
     }
     Some(TextLayoutKey {
         kind,
         font_id: font_id.to_string(),
         text: text.to_string(),
-        origin_x_bits: origin.x.to_bits(),
-        origin_y_bits: origin.y.to_bits(),
         surface_width: surface.width,
         surface_height: surface.height,
         style: TextLayoutStyleKey {
