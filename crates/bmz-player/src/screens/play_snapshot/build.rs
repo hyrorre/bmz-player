@@ -574,7 +574,7 @@ pub fn update_render_snapshot_play_options(
     snapshot.note_display_duration_ms = note_display_duration_ms(
         session,
         session.timing_map.bpm_at_time(lane_render_now) as f32,
-        current_scroll_multiplier(&session.chart, &session.timing_map, lane_render_now),
+        current_scroll_multiplier_for_session(session, lane_render_now),
     );
     snapshot.hidden_cover = session.hidden_cover;
 }

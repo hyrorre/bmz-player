@@ -90,11 +90,8 @@ fn note_display_duration_ms_for_hispeed_and_lane(
         floating_hispeed_target_bpm(session, now),
         session.audio_clock.playback_rate_percent(),
     );
-    let scroll_multiplier = crate::screens::play_snapshot::current_scroll_multiplier(
-        &session.chart,
-        &session.timing_map,
-        now,
-    );
+    let scroll_multiplier =
+        crate::screens::play_snapshot::current_scroll_multiplier_for_session(session, now);
     crate::screens::play_snapshot::display_duration_ms_for_bpm_hispeed(
         now_bpm as f32,
         hispeed,
@@ -123,19 +120,13 @@ pub(in crate::app) fn hispeed_for_normal_level(
 }
 
 fn positive_scroll_multiplier(session: &bmz_gameplay::session::GameSession, now: TimeUs) -> f32 {
-    let current = crate::screens::play_snapshot::current_scroll_multiplier(
-        &session.chart,
-        &session.timing_map,
-        now,
-    );
+    let current =
+        crate::screens::play_snapshot::current_scroll_multiplier_for_session(session, now);
     if current.is_finite() && current > 0.0 {
         return current;
     }
-    let initial = crate::screens::play_snapshot::current_scroll_multiplier(
-        &session.chart,
-        &session.timing_map,
-        TimeUs(0),
-    );
+    let initial =
+        crate::screens::play_snapshot::current_scroll_multiplier_for_session(session, TimeUs(0));
     if initial.is_finite() && initial > 0.0 { initial } else { 1.0 }
 }
 
@@ -160,11 +151,8 @@ pub(in crate::app) fn hispeed_for_green_number_at_bpm(
 ) -> f32 {
     let target_green = session.target_green_number.max(1) as f32;
     let visible_max = crate::config::play::visible_lane_fraction(lane_cover, session.lift);
-    let scroll_multiplier = crate::screens::play_snapshot::current_scroll_multiplier(
-        &session.chart,
-        &session.timing_map,
-        now,
-    );
+    let scroll_multiplier =
+        crate::screens::play_snapshot::current_scroll_multiplier_for_session(session, now);
     let target_bpm = crate::screens::play_snapshot::effective_bpm_for_playback_rate(
         target_bpm,
         session.audio_clock.playback_rate_percent(),
@@ -179,11 +167,8 @@ pub(in crate::app) fn hispeed_for_green_number_without_lane_effects_at_bpm(
     now: TimeUs,
     target_bpm: f64,
 ) -> f32 {
-    let scroll_multiplier = crate::screens::play_snapshot::current_scroll_multiplier(
-        &session.chart,
-        &session.timing_map,
-        now,
-    );
+    let scroll_multiplier =
+        crate::screens::play_snapshot::current_scroll_multiplier_for_session(session, now);
     let target_bpm = crate::screens::play_snapshot::effective_bpm_for_playback_rate(
         target_bpm,
         session.audio_clock.playback_rate_percent(),
