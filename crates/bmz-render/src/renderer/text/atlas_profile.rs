@@ -11,7 +11,7 @@ pub(super) struct TextAtlasProfile {
     raster_count: usize,
     pub(super) layout_hits: usize,
     pub(super) layout_misses: usize,
-    capacity_misses: u64,
+    pub(super) capacity_misses: u64,
 }
 
 impl TextAtlasProfile {
@@ -100,15 +100,17 @@ impl TextAtlasCache {
             "text atlas inventory");
     }
 
-    pub(in crate::renderer) fn profile_frame(&self) {
+    pub(in crate::renderer) fn profile_frame(&self, rebuilt: bool, missing_glyphs: u64) {
         let Some(start) = self.profile.started else { return };
         let prepare_us = start.elapsed().as_micros();
         tracing::debug!(target: "bmz_render::text_atlas", frame = self.frame,
             prepare_us, raster_us = self.profile.raster_us, raster_count = self.profile.raster_count,
             layout_and_pack_us = prepare_us.saturating_sub(self.profile.raster_us),
             layout_hits = self.profile.layout_hits, layout_misses = self.profile.layout_misses,
-            missing_glyphs = self.capacity_misses - self.profile.capacity_misses,
-            glyphs = self.glyphs.len(), rebuilt = self.rebuilt, overflowed = self.overflowed,
+            missing_glyphs, attempted_misses = self.capacity_misses - self.profile.capacity_misses,
+            glyphs = self.glyphs.len(), rebuilt, overflowed = self.overflowed,
+            recycles = self.recycles, full_clears = self.full_clears,
+            cpu_capacity_bytes = self.pixels.capacity(),
             width = self.size().width, height = self.size().height,
             "text atlas frame");
     }
