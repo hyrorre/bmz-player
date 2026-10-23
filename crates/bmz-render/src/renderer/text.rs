@@ -1,5 +1,12 @@
 use super::*;
 
+#[path = "text/atlas_profile.rs"]
+mod atlas_profile;
+use atlas_profile::*;
+#[path = "text/atlas_recycling.rs"]
+mod atlas_recycling;
+use atlas_recycling::*;
+
 /// 既定テキストのフォント列と、全テキスト共通の補完用 OS フォント。
 ///
 /// `faces[..default_len]` は CJK coverage 順の既定フォント、残りは記号・絵文字の
@@ -221,6 +228,44 @@ pub(super) fn build_text_frame_with_font_sets(
     }
 
     atlas.begin_frame();
+    let mut frame = build_text_frame_commands(plan, system_fonts, font_sets, surface, atlas);
+    let mut missing = atlas.capacity_misses - atlas.profile.capacity_misses;
+    // まだGPUへ渡していないので、このフレームのquadごと安全に組み直せる。
+    // 古い行を空けられる場合だけ1回再試行し、収まらない画面での待機は維持する。
+    if atlas.overflowed
+        && atlas.clear_delay == 0
+        && atlas.frames_since_clear > 1
+        && atlas.recycle_inactive_shelves()
+    {
+        // 行を残す場合は、最初の組立で追加した画素もそのまま残る。転送も引き継ぐ。
+        let mut pending_regions = std::mem::take(&mut frame.dirty_regions);
+        let before = atlas.capacity_misses;
+        frame = build_text_frame_commands(plan, system_fonts, font_sets, surface, atlas);
+        missing = atlas.capacity_misses - before;
+        if atlas.overflowed {
+            // 画面の切替等で直近の文字と新しい文字が同時に収まらなかった場合。
+            // 古い文字を残したせいで欠けたまま待機しないよう、従来の空atlasでも1回試す。
+            atlas.clear();
+            let before = atlas.capacity_misses;
+            frame = build_text_frame_commands(plan, system_fonts, font_sets, surface, atlas);
+            missing = atlas.capacity_misses - before;
+            atlas.frames_since_clear = 1;
+        } else {
+            pending_regions.append(&mut frame.dirty_regions);
+            frame.dirty_regions = pending_regions;
+        }
+    }
+    atlas.profile_frame(frame.atlas_rebuilt, missing);
+    frame
+}
+
+fn build_text_frame_commands(
+    plan: &DrawPlan,
+    system_fonts: &FontFallbackChain,
+    font_sets: &SkinFontSets,
+    surface: SurfaceSize,
+    atlas: &mut TextAtlasCache,
+) -> TextFrame {
     let mut builder = CachedTextFrameBuilder::new(atlas);
     let mut command_quad_counts = Vec::new();
     let mut command_caret_rects = Vec::new();
@@ -467,6 +512,7 @@ pub(super) struct ColorKey {
 
 #[derive(Debug, Clone)]
 pub(super) struct CachedGlyph {
+    pub(super) last_used_frame: u64,
     pub(super) atlas_origin: (u32, u32),
     pub(super) width: u32,
     pub(super) height: u32,
@@ -478,7 +524,13 @@ pub(super) struct CachedGlyph {
 
 #[derive(Debug)]
 pub(super) struct TextLayoutCache {
-    pub(super) entries: HashMap<TextLayoutKey, Vec<TextQuad>>,
+    pub(super) entries: HashMap<TextLayoutKey, CachedTextLayout>,
+}
+
+#[derive(Debug)]
+pub(super) struct CachedTextLayout {
+    quads: Vec<TextQuad>,
+    last_used_frame: u64,
 }
 
 impl TextLayoutCache {
@@ -490,15 +542,17 @@ impl TextLayoutCache {
         self.entries.clear();
     }
 
-    fn cached(&self, key: &TextLayoutKey) -> Option<&[TextQuad]> {
-        self.entries.get(key).map(Vec::as_slice)
+    fn cached(&mut self, key: &TextLayoutKey, frame: u64) -> Option<&[TextQuad]> {
+        let entry = self.entries.get_mut(key)?;
+        entry.last_used_frame = frame;
+        Some(&entry.quads)
     }
 
-    fn insert(&mut self, key: TextLayoutKey, quads: Vec<TextQuad>) {
+    fn insert(&mut self, key: TextLayoutKey, quads: Vec<TextQuad>, frame: u64) {
         if self.entries.len() >= TEXT_LAYOUT_CACHE_MAX_ENTRIES {
             self.entries.clear();
         }
-        self.entries.insert(key, quads);
+        self.entries.insert(key, CachedTextLayout { quads, last_used_frame: frame });
     }
 
     #[cfg(test)]
@@ -509,6 +563,14 @@ impl TextLayoutCache {
 
 #[derive(Debug)]
 pub(super) struct TextAtlasCache {
+    recycling: bool,
+    shelves: Vec<TextAtlasShelf>,
+    pub(super) recycles: u64,
+    pub(super) full_clears: u64,
+    #[cfg(test)]
+    pub(super) recycling_enabled: bool,
+    pub(super) frame: u64,
+    profile: TextAtlasProfile,
     width: u32,
     /// GPU テクスチャの上限と `TEXT_ATLAS_MAX_HEIGHT` の小さい方。
     max_height: u32,
@@ -554,6 +616,14 @@ impl TextAtlasCache {
 
     pub(super) fn with_limits(width: u32, max_height: u32) -> Self {
         Self {
+            recycling: false,
+            shelves: Vec::new(),
+            recycles: 0,
+            full_clears: 0,
+            #[cfg(test)]
+            recycling_enabled: true,
+            frame: 0,
+            profile: TextAtlasProfile::default(),
             width,
             max_height,
             pen_x: 0,
@@ -626,6 +696,8 @@ impl TextAtlasCache {
     }
 
     pub(super) fn begin_frame(&mut self) {
+        self.frame += 1;
+        self.profile = TextAtlasProfile::begin(self.capacity_misses);
         self.dirty_regions.clear();
         // 空きが足りずに格納できないグリフがあった場合だけ、キャッシュを捨てて作り直す。
         // 高さが上限に達しただけなら登録済みのグリフは描けるので、そのまま使い続ける。
@@ -639,6 +711,8 @@ impl TextAtlasCache {
             if self.clear_delay > 0 {
                 self.clear_delay -= 1;
             } else {
+                // 描画前の行再利用で救えなかった溢れは、従来どおり空のatlasで再試行する。
+                self.profile_inventory();
                 self.clear();
             }
         }
@@ -646,6 +720,9 @@ impl TextAtlasCache {
     }
 
     fn clear(&mut self) {
+        self.recycling = false;
+        self.shelves.clear();
+        self.full_clears += 1;
         self.pen_x = 0;
         self.pen_y = 0;
         self.row_height = 0;
@@ -675,12 +752,26 @@ impl TextAtlasCache {
         pixels
     }
 
-    pub(super) fn cached_layout(&self, key: &TextLayoutKey) -> Option<&[TextQuad]> {
-        self.layouts.cached(key)
+    pub(super) fn cached_layout(&mut self, key: &TextLayoutKey) -> Option<&[TextQuad]> {
+        let cached = self.layouts.cached(key, self.frame);
+        if self.profile.started.is_some() {
+            self.profile.layout_hits += usize::from(cached.is_some());
+            self.profile.layout_misses += usize::from(cached.is_none());
+        }
+        cached
     }
 
     pub(super) fn insert_layout(&mut self, key: TextLayoutKey, quads: Vec<TextQuad>) {
-        self.layouts.insert(key, quads);
+        if self.layouts.entries.len() >= TEXT_LAYOUT_CACHE_MAX_ENTRIES {
+            // レイアウト上限で参照情報も消える前に、最近使ったグリフへ参照日を引き継ぐ。
+            let recent = self.recent_origins();
+            for glyph in self.glyphs.values_mut() {
+                if recent.contains(&glyph.atlas_origin) {
+                    glyph.last_used_frame = self.frame;
+                }
+            }
+        }
+        self.layouts.insert(key, quads, self.frame);
     }
 
     pub(super) fn cached_vector_glyph(
@@ -697,13 +788,14 @@ impl TextAtlasCache {
             scale_y_bits: scale.y.to_bits(),
             detail_bits: 0,
         };
-        if let Some(glyph) = self.glyphs.get(&key) {
+        if let Some(glyph) = self.glyphs.get_mut(&key) {
+            glyph.last_used_frame = self.frame;
             return Some(glyph.clone());
         }
         if self.failed.contains(&key) || self.is_deferred(&key) {
             return None;
         }
-        let Some(raster) = rasterize_outline_glyph(face, glyph_id, scale, self.max_glyph_extent())
+        let Some(raster) = self.raster(|max| rasterize_outline_glyph(face, glyph_id, scale, max))
         else {
             self.mark_failed(key);
             return None;
@@ -736,7 +828,8 @@ impl TextAtlasCache {
             scale_y_bits: scale.y.to_bits(),
             detail_bits: 0,
         };
-        if let Some(glyph) = self.glyphs.get(&key) {
+        if let Some(glyph) = self.glyphs.get_mut(&key) {
+            glyph.last_used_frame = self.frame;
             return Some(glyph.clone());
         }
         if self.failed.contains(&key) || self.is_deferred(&key) {
@@ -747,7 +840,7 @@ impl TextAtlasCache {
             y: scale.y * VECTOR_TEXT_SUPERSAMPLE_SCALE,
         };
         let Some(mut raster) =
-            rasterize_color_glyph(face, glyph_id, raster_scale, self.max_glyph_extent())
+            self.raster(|max| rasterize_color_glyph(face, glyph_id, raster_scale, max))
         else {
             self.mark_failed(key);
             return None;
@@ -850,7 +943,8 @@ impl TextAtlasCache {
             scale_y_bits: height.to_bits(),
             detail_bits: 0,
         };
-        if let Some(glyph) = self.glyphs.get(&key) {
+        if let Some(glyph) = self.glyphs.get_mut(&key) {
+            glyph.last_used_frame = self.frame;
             return Some(glyph.clone());
         }
         if self.is_deferred(&key) {
@@ -860,7 +954,7 @@ impl TextAtlasCache {
         let pixels_per_px = VECTOR_TEXT_SUPERSAMPLE_SCALE.min(max / width.max(height));
         let pixel_width = (width * pixels_per_px).round().clamp(2.0, max.max(2.0)) as u32;
         let pixel_height = (height * pixels_per_px).round().clamp(2.0, max.max(2.0)) as u32;
-        let pixels = tofu_pixels(pixel_width, pixel_height);
+        let pixels = self.raster(|_| tofu_pixels(pixel_width, pixel_height));
         self.insert_glyph_pixels(key, pixel_width, pixel_height, width, height, 0.0, 0.0, pixels)
     }
 
@@ -881,7 +975,8 @@ impl TextAtlasCache {
             scale_y_bits: scale.y.to_bits(),
             detail_bits: 0,
         };
-        if let Some(glyph) = self.glyphs.get(&key) {
+        if let Some(glyph) = self.glyphs.get_mut(&key) {
+            glyph.last_used_frame = self.frame;
             return Some(glyph.clone());
         }
         if self.failed.contains(&key) || self.is_deferred(&key) {
@@ -896,7 +991,8 @@ impl TextAtlasCache {
         let raster_scale = PxScale { x: scale.x * fit, y: scale.y * fit };
         let width = ((glyph.width as f32 * raster_scale.x).ceil().clamp(1.0, max)) as u32;
         let height = ((glyph.height as f32 * raster_scale.y).ceil().clamp(1.0, max)) as u32;
-        let pixels = rasterized_bitmap_glyph_pixels(glyph, page, raster_scale, width, height);
+        let pixels = self
+            .raster(|_| rasterized_bitmap_glyph_pixels(glyph, page, raster_scale, width, height));
 
         self.insert_glyph_pixels(
             key,
@@ -931,9 +1027,16 @@ impl TextAtlasCache {
             }
             return None;
         };
-        self.blit_region(atlas_origin, width, height, &pixels);
-        self.dirty_regions.push(padded_dirty_region(atlas_origin, width, height, &pixels));
+        let region = padded_dirty_region(atlas_origin, width, height, &pixels);
+        if self.recycling {
+            // 再利用した領域の周囲にも古い画素がある。CPU側も透明なpaddingごと上書きする。
+            self.blit_region(region.origin, region.size.width, region.size.height, &region.pixels);
+        } else {
+            self.blit_region(atlas_origin, width, height, &pixels);
+        }
+        self.dirty_regions.push(region);
         let cached = CachedGlyph {
+            last_used_frame: self.frame,
             atlas_origin,
             width,
             height,
@@ -953,6 +1056,19 @@ impl TextAtlasCache {
         }
         let padded_width = glyph_width + TEXT_ATLAS_PADDING * 2;
         let padded_height = glyph_height + TEXT_ATLAS_PADDING * 2;
+        if self.recycling {
+            if let Some(shelf) = self
+                .shelves
+                .iter_mut()
+                .find(|s| padded_height <= s.height && s.pen_x + padded_width <= self.width)
+            {
+                let origin = (shelf.pen_x + TEXT_ATLAS_PADDING, shelf.y + TEXT_ATLAS_PADDING);
+                shelf.pen_x += padded_width;
+                return Some(origin);
+            }
+            self.overflowed = true;
+            return None;
+        }
         let (mut pen_x, mut pen_y, mut row_height) = (self.pen_x, self.pen_y, self.row_height);
         if pen_x + padded_width > self.width {
             pen_x = 0;

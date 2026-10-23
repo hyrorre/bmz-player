@@ -32,14 +32,14 @@ impl TextAtlasCache {
             request.scale,
             request.baseline,
         );
-        if let Some(glyph) = self.glyphs.get(&key) {
+        if let Some(glyph) = self.glyphs.get_mut(&key) {
+            glyph.last_used_frame = self.frame;
             return Some(glyph.clone());
         }
         if self.failed.contains(&key) || self.is_deferred(&key) {
             return None;
         }
-        let Some(raster) = rasterize_styled_fallback_glyph(&request, self.max_glyph_extent())
-        else {
+        let Some(raster) = self.raster(|max| rasterize_styled_fallback_glyph(&request, max)) else {
             self.mark_failed(key);
             return None;
         };

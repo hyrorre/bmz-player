@@ -56,6 +56,47 @@ GPU上で転送が終わるまでの時間は含みません。atlasに変更が
 `text_atlas_region_uploads`はグリフごとの部分転送、`text_atlas_rebuilds`はatlasの作り直しの回数です。
 回数と転送量は区間の合計です。
 
+文字atlasの空きがなくなった場合は、現在と過去3フレームにグリフまたはレイアウトから参照した
+行を残し、古い行だけを空けて再利用します。残すグリフの座標・RGBA画素は変えず、
+画素コピーや再転送はしません。追い出した行を含むレイアウトだけを無効にします。
+新しい転送領域は、CPU側もGPU側も透明な1pxのパディングごと上書きします。
+GPUテクスチャの寸法・倍々の確保・部分転送・Shrink倍率の量子化は変えません。
+
+古い行を空けられた場合だけ、GPUへ渡す前にそのフレームを組み直します。
+最初の組立で追加した文字の転送も引き継ぎます。新しい文字も収まらなければ空のatlasでも試します。
+救えなかった溢れは従来どおり次のフレームで全消去し、1フレーム分が収まらない場合の
+60フレームの再試行待ちを維持します。`text_atlas_rebuilds`は行の回収と全消去の合計です。
+
+満杯の原因を調べるときは、通常の選曲profileに
+`bmz_render::text_atlas=debug`を加えます。個別の時計と全グリフの集計は、この診断を
+有効にしたときだけ動きます。診断ありの値と診断なしの値は分けて比較してください。
+
+```powershell
+$env:RUST_LOG = 'info,bmz_player::select_profile=debug,bmz_render::text_atlas=debug'
+```
+
+- `text atlas inventory`: 満杯時のグリフ数、font数、font内glyph IDの組の数
+  （`characters`。Unicode文字数ではありません）、縦横倍率の組の数、種類別の数、
+  装飾用レイアウト数、パディングを含む格納面積と現在・過去3フレームの参照面積。
+  `kinds`はvector / bitmap / tofu / color / color silhouette / styled fallbackの順です。
+  通常の縁取り・影はvector画素を共有し、別グリフにはしません。
+- `text atlas frame`: フレーム番号、準備・ラスタライズ時間と回数、layout hit/miss、
+  行の回収（`recycles`）・全消去（`full_clears`）の累計、atlas寸法、CPU画素バッファの確保容量。
+  `layout_and_pack_us`は準備時間からラスタライズ時間を引いた値で、配置、行の回収、
+  インスタンスの符号化、診断の時間も含みます。純粋なlayout時間ではありません。
+  `missing_glyphs`は最終的に返すフレームの容量不足による未描画要求数、
+  `attempted_misses`は救済前を含む要求数です。影・縁取りの重複を含み、文字数ではありません。
+- `text atlas recycling`: 行の回収時間、追い出したグリフ数、保持したグリフ数、
+  行の総数と直近に参照された行の数。
+- `text atlas upload`: 同じフレーム番号で転送CPU時間、書き込み回数、転送量、
+  GPUテクスチャ再作成の有無。GPU上で転送が終わるまでの時間は含みません。
+
+さらに`bmz_render::text_atlas=trace`では満杯時に個々のグリフキー（font内glyph ID、
+倍率のfloat bits、種類）と寸法を記録します。`bmz_player::select_profile=trace`では
+各フレームのrender内訳も記録します。ログ出力の負荷が増えるため、通常の性能比較では
+debugの区間集計を使います。Windowsの比較条件と検証限界は
+[2026-10-24の計測記録](../notes/2026/2026-10-24-text-atlas-recycling.md)にあります。
+
 FPS表示とアプリのpresent間隔だけでは実際の表示間隔を証明できません。
 [PresentMon](https://github.com/GameTechDev/PresentMon)の対象process限定CSVと併用します。
 Vulkanで取得できない値（NA等）はゼロ遅延として扱いません。Composed Flipから
