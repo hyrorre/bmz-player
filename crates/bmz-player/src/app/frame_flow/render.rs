@@ -62,6 +62,10 @@ impl WinitApp {
         });
         let render_us = plan_us + render_start.elapsed().as_micros();
         let frame_timings = self.renderer.last_frame_timings();
+        if profiling_select {
+            tracing::trace!(target: "bmz_player::select_profile", render_us,
+                ?frame_timings, "select frame timings");
+        }
         let surface_status = render_status.as_ref().ok().copied();
         self.frame.record_surface_status(Instant::now(), surface_status);
         if surface_status == Some(RenderSurfaceStatus::Rendered) && !self.smoke.first_present_logged

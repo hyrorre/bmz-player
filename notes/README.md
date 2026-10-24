@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-24 | [文字atlas満杯時のスパイクの調査・行の再利用](2026/2026-10-24-text-atlas-recycling.md) |
 | 2026-10-22 | [IR Webのnpmパッケージ更新（Nuxt 4.6）](2026/2026-10-22-ir-web-npm-upgrade.md) |
 | 2026-10-22 | [IR WebのNode.js 26移行の影響調査](2026/2026-10-22-ir-web-node26.md) |
 | 2026-10-22 | [IR Webのdev SSRでi18nキーがそのまま出る問題](2026/2026-10-22-ir-web-dev-ssr-i18n.md) |

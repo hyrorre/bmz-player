@@ -328,3 +328,233 @@ fn text_instance_buffer_grows_to_the_next_power_of_two() {
     assert_eq!(grown_text_buffer_capacity(65, 64), Some(128));
     assert_eq!(grown_text_buffer_capacity(TEXT_INSTANCE_BYTES * 100, 1024), Some(8192));
 }
+
+/// UVが指すグリフ画素そのものを読む。CPUとGPUが同じ間違いをしてもfreshとの比較で検出する。
+fn drawn_pixels(frame: &TextFrame, texture: &SimulatedTexture) -> Vec<Vec<u8>> {
+    frame
+        .instances
+        .as_chunks::<TEXT_INSTANCE_BYTES>()
+        .0
+        .iter()
+        .map(|bytes| {
+            let floats: Vec<_> =
+                bytes.as_chunks::<4>().0.iter().map(|v| f32::from_le_bytes(*v)).collect();
+            let x = (floats[4] * texture.size.width as f32).round() as u32;
+            let y = (floats[5] * texture.size.height as f32).round() as u32;
+            let w = (floats[6] * texture.size.width as f32).round() as u32;
+            let h = (floats[7] * texture.size.height as f32).round() as u32;
+            let mut pixels = Vec::new();
+            for row in y..y + h {
+                let offset = ((row * texture.size.width + x) * 4) as usize;
+                pixels.extend_from_slice(&texture.pixels[offset..offset + (w * 4) as usize]);
+            }
+            pixels
+        })
+        .collect()
+}
+
+fn scrolling_plan(index: usize, mixed: bool) -> DrawPlan {
+    let mut style = text_style(None);
+    // ホイールの行ごとのサイズも入れ替わる。横倍率だけの有限集合で飽和させない。
+    style.size = 0.08 + (index % 53) as f32 * 0.00031;
+    style.overflow = TextOverflow::Shrink;
+    style.max_width = 0.04 + (index % 37) as f32 * 0.0035;
+    let title = format!("{}W", "A".repeat(3 + index % 41));
+    let mut commands = vec![text_command(&title, style)];
+    if mixed {
+        let mut style = text_style(None);
+        style.size = 0.035;
+        style.outline =
+            Some(crate::plan::TextOutline { color: Color::rgb(0.0, 0.0, 0.0), width: 0.0035 });
+        style.shadow = Some(crate::plan::TextShadow {
+            color: Color::rgba(0.1, 0.2, 0.3, 0.5),
+            offset: Point { x: 0.01, y: 0.01 },
+        });
+        commands.push(text_command("AW", style.clone()));
+        style.font_id = Some("emoji".into());
+        commands.push(text_command("😀", style.clone()));
+        style.font_id = Some("bitmap".into());
+        commands.push(text_command("AW", style));
+    }
+    DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands }
+}
+
+fn scroll_frames(enabled: bool, mixed: bool) -> (u64, u64, usize) {
+    let face = latin();
+    let fonts = HashMap::from([("emoji".into(), color_font())]);
+    let mut bitmap = test_bitmap_font();
+    bitmap.fallback_style = Some(Arc::new(crate::bitmap_font::BitmapFallbackStyle {
+        fill_top: 0,
+        fill_rows: vec![[120, 180, 240]; 10],
+        outline: Some(crate::bitmap_font::BitmapFallbackOutline {
+            width: 0.7,
+            color: [30, 40, 50],
+        }),
+    }));
+    let bitmaps = HashMap::from([("bitmap".into(), bitmap)]);
+    let mut atlas = TextAtlasCache::with_limits(128, 256);
+    atlas.recycling_enabled = enabled;
+    let mut texture = SimulatedTexture::new();
+    let mut missing = 0;
+    let mut kinds = std::collections::HashSet::new();
+    for index in 0..320 {
+        let plan = scrolling_plan(index, mixed);
+        let frame =
+            build_text_frame_with_cache(&plan, &face, &fonts, &bitmaps, SURFACE, &mut atlas);
+        texture.upload(&frame, &atlas);
+        kinds.extend(atlas.glyphs.keys().map(|key| key.kind));
+        assert_texture_matches(&texture, &atlas, &format!("scroll {index}"));
+        // 汚れた未使用領域へ再配置することを次のフレームで検証する。
+        texture.stain_unused(&atlas);
+        let mut fresh = TextAtlasCache::with_limits(128, 8192);
+        let expected =
+            build_text_frame_with_cache(&plan, &face, &fonts, &bitmaps, SURFACE, &mut fresh);
+        let mut expected_texture = SimulatedTexture::new();
+        expected_texture.upload(&expected, &fresh);
+        let actual = drawn_pixels(&frame, &texture);
+        let expected = drawn_pixels(&expected, &expected_texture);
+        missing += expected.len().saturating_sub(actual.len());
+        if enabled {
+            assert_eq!(actual, expected, "scroll {index}: layout points to the wrong pixels");
+        }
+    }
+    if mixed {
+        for kind in [
+            TextGlyphKind::Vector,
+            TextGlyphKind::Bitmap,
+            TextGlyphKind::Color,
+            TextGlyphKind::ColorSilhouette,
+            TextGlyphKind::StyledFallback,
+        ] {
+            assert!(kinds.contains(&kind), "fixture did not exercise {kind:?}");
+        }
+    }
+    (atlas.full_clears, atlas.recycles, missing)
+}
+
+#[test]
+fn scrolling_recycles_history_instead_of_clearing_and_does_not_drop_more_glyphs() {
+    let legacy = scroll_frames(false, false);
+    let recycled = scroll_frames(true, false);
+    assert!(legacy.0 >= 3, "legacy must exercise repeated full clears: {legacy:?}");
+    assert!(recycled.1 >= 3, "must exercise repeated recycling: {recycled:?}");
+    assert!(recycled.0 < legacy.0, "{recycled:?} / {legacy:?}");
+    assert!(recycled.2 <= legacy.2, "{recycled:?} / {legacy:?}");
+}
+
+#[test]
+fn mixed_cached_layouts_and_padding_keep_their_pixels_after_shelf_reuse() {
+    let result = scroll_frames(true, true);
+    assert!(result.1 >= 3, "must reuse shelves repeatedly: {result:?}");
+    assert_eq!(result.2, 0);
+}
+
+#[test]
+fn retry_keeps_the_delay_when_a_single_frame_exceeds_a_small_gpu_atlas() {
+    let face = latin();
+    let mut atlas = TextAtlasCache::for_texture_limit(96);
+    let mut texture = SimulatedTexture::new();
+    let commands = (0..30)
+        .map(|index| {
+            let mut style = text_style(None);
+            style.size = 0.08 + index as f32 * 0.001;
+            text_command("AW", style)
+        })
+        .collect();
+    let plan = DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands };
+    for index in 0..120 {
+        let frame = build_text_frame_with_cache(
+            &plan,
+            &face,
+            &HashMap::new(),
+            &HashMap::new(),
+            SURFACE,
+            &mut atlas,
+        );
+        texture.upload(&frame, &atlas);
+        assert_texture_matches(&texture, &atlas, &format!("oversized frame {index}"));
+        assert!(frame.command_quad_counts.iter().sum::<usize>() < 60);
+    }
+    assert_eq!(atlas.size(), AtlasSize { width: 96, height: 96 });
+    assert!(atlas.full_clears <= 3, "{} full clears", atlas.full_clears);
+    assert_eq!(atlas.recycles, 0, "all resident glyphs are still in use");
+}
+
+#[test]
+fn dropping_the_layout_cache_does_not_lose_recent_glyph_references() {
+    let mut atlas = TextAtlasCache::with_limits(128, 256);
+    let mut texture = SimulatedTexture::new();
+    let first = plan_frame(&mut atlas, "AW");
+    texture.upload(&first, &atlas);
+    let expected = drawn_pixels(&first, &texture);
+    let mut key = atlas.layouts.entries.keys().next().unwrap().clone();
+    for index in 0..20 {
+        atlas.cached_tofu_glyph(3.0 + index as f32 * 0.001, 3.0).unwrap();
+    }
+    texture.upload(&take_frame(&mut atlas), &atlas);
+    for _ in 0..4 {
+        let frame = plan_frame(&mut atlas, "AW");
+        texture.upload(&frame, &atlas);
+    }
+    // グリフhitを通らずレイアウトhitだけで使っていた文字。キャッシュ上限で参照を失わせる。
+    for index in 0..TEXT_LAYOUT_CACHE_MAX_ENTRIES {
+        key.text = format!("empty {index}");
+        atlas.insert_layout(key.clone(), Vec::new());
+    }
+    assert!(atlas.recycle_inactive_shelves());
+    assert!(atlas.glyphs.len() < 22, "stale rows must be evicted");
+    assert_eq!(atlas.glyphs.keys().filter(|k| k.kind == TextGlyphKind::Vector).count(), 2);
+    let moved = take_frame(&mut atlas);
+    texture.stain_unused(&atlas);
+    texture.upload(&moved, &atlas);
+    assert_texture_matches(&texture, &atlas, "layout cache pressure");
+    let frame = plan_frame(&mut atlas, "AW");
+    texture.upload(&frame, &atlas);
+    assert_eq!(drawn_pixels(&frame, &texture), expected);
+    assert!(frame.dirty_regions.is_empty(), "retained glyphs must not be rasterized again");
+}
+
+#[test]
+fn evicted_layout_is_invalidated_and_rebuilt_on_a_small_gpu() {
+    let mut atlas = TextAtlasCache::for_texture_limit(96);
+    let mut texture = SimulatedTexture::new();
+    let seed = plan_frame(&mut atlas, "A");
+    texture.upload(&seed, &atlas);
+    let a = atlas.glyphs.values().next().unwrap();
+    let remaining = 96 - a.atlas_origin.0 - a.width - TEXT_ATLAS_PADDING;
+    atlas.cached_tofu_glyph((remaining - 2) as f32 / 2.0, 2.0).unwrap();
+    texture.upload(&take_frame(&mut atlas), &atlas);
+    let first = plan_frame(&mut atlas, "AW");
+    texture.upload(&first, &atlas);
+    let expected = drawn_pixels(&first, &texture);
+    let old_key = atlas.layouts.entries.keys().find(|k| k.text == "AW").unwrap().clone();
+    for _ in 0..4 {
+        let frame = plan_frame(&mut atlas, "");
+        texture.upload(&frame, &atlas);
+    }
+    let recent = plan_frame(&mut atlas, "W");
+    texture.upload(&recent, &atlas);
+    assert!(atlas.recycle_inactive_shelves());
+    assert_eq!(atlas.glyphs.len(), 1);
+    assert!(!atlas.layouts.entries.contains_key(&old_key), "AW references the evicted A");
+    let moved = take_frame(&mut atlas);
+    texture.stain_unused(&atlas);
+    let stats = texture.upload(&moved, &atlas);
+    assert_eq!(stats.full_uploads, 0);
+    assert_texture_matches(&texture, &atlas, "small GPU relocation");
+    let back = plan_frame(&mut atlas, "AW");
+    texture.upload(&back, &atlas);
+    assert_eq!(drawn_pixels(&back, &texture), expected);
+    assert_eq!(back.dirty_regions.len(), 1, "only the evicted A needs rasterization");
+    assert_eq!(atlas.size(), AtlasSize { width: 96, height: 96 });
+    // 行の回収は空のatlasを試したことにはならない。行に収まらない大きな1文字は、
+    // 60フレーム欠けたまま待たず、空のatlasで再試行できること。
+    let clears = atlas.full_clears;
+    assert!(atlas.cached_tofu_glyph(47.0, 47.0).is_none());
+    atlas.begin_frame();
+    assert_eq!(atlas.full_clears, clears + 1);
+    assert!(atlas.cached_tofu_glyph(47.0, 47.0).is_some());
+    let frame = take_frame(&mut atlas);
+    texture.upload(&frame, &atlas);
+    assert_texture_matches(&texture, &atlas, "large glyph after shelf reuse");
+}
