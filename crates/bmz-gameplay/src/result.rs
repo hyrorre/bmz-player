@@ -195,6 +195,131 @@ mod tests {
         assert_eq!(result.gauge_value, 82.0);
     }
 
+    fn judged_score(judge: Judge) -> ScoreState {
+        let mut score = ScoreState::default();
+        score.apply(&JudgementEvent {
+            note_id: Some(NoteId(1)),
+            lane: Lane::Key1,
+            judge,
+            side: TimingSide::Slow,
+            delta: TimeUs(0),
+            time: TimeUs(0),
+            affects_score: true,
+        });
+        score
+    }
+
+    fn assist_easy_gauge(value: f32) -> GaugeState {
+        let mut gauge = GaugeState::new(GaugeType::AssistEasy, 160.0, 1000);
+        gauge.set_initial_value(value);
+        gauge
+    }
+
+    /// GAS の全ゲージを 0 にしてから、指定ゲージだけをクリア値にする。
+    fn auto_shift_gauge_with_only(qualified: GaugeType, bottom: GaugeType) -> GaugeState {
+        let mut gauge = GaugeState::new_auto_shift(160.0, 1000);
+        gauge.set_bottom_shiftable_gauge(bottom);
+        for gauge in &mut gauge.gauges {
+            gauge.value = 0.0;
+        }
+        gauge
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == qualified)
+            .unwrap()
+            .value = 100.0;
+        gauge.selected = bottom;
+        gauge
+    }
+
+    #[test]
+    fn assist_easy_gauge_clear_uses_light_assist_lamp() {
+        let chart = chart();
+        // 1ノーツを見逃して FC を切る。
+        let not_full_combo = judged_score(Judge::Poor);
+
+        let result = PlayResult::from_states(
+            &chart,
+            &not_full_combo,
+            &assist_easy_gauge(100.0),
+            PlayState::Finished,
+            false,
+        );
+
+        assert_eq!(result.clear_type, ClearType::LightAssistEasy);
+        assert_eq!(result.gauge_type, GaugeType::AssistEasy);
+    }
+
+    #[test]
+    fn assist_easy_gauge_keeps_combo_lamps_and_failed() {
+        let chart = chart();
+        let gauge = assist_easy_gauge(100.0);
+        for (judge, expected) in [
+            (Judge::Good, ClearType::FullCombo),
+            (Judge::Great, ClearType::Perfect),
+            (Judge::PGreat, ClearType::Max),
+        ] {
+            let result = PlayResult::from_states(
+                &chart,
+                &judged_score(judge),
+                &gauge,
+                PlayState::Finished,
+                false,
+            );
+            assert_eq!(result.clear_type, expected, "{judge:?}");
+        }
+
+        let below_border = PlayResult::from_states(
+            &chart,
+            &judged_score(Judge::Poor),
+            &assist_easy_gauge(10.0),
+            PlayState::Finished,
+            false,
+        );
+        assert_eq!(below_border.clear_type, ClearType::Failed);
+        let closed = PlayResult::from_states(
+            &chart,
+            &judged_score(Judge::PGreat),
+            &gauge,
+            PlayState::Failed,
+            false,
+        );
+        assert_eq!(closed.clear_type, ClearType::Failed);
+    }
+
+    #[test]
+    fn auto_shift_clear_lamp_follows_final_result_gauge() {
+        let chart = chart();
+        let score = judged_score(Judge::Poor);
+        for (qualified, expected) in [
+            (GaugeType::AssistEasy, ClearType::LightAssistEasy),
+            (GaugeType::Easy, ClearType::Easy),
+            (GaugeType::Normal, ClearType::Normal),
+            (GaugeType::Hard, ClearType::Hard),
+            (GaugeType::ExHard, ClearType::ExHard),
+        ] {
+            let gauge = auto_shift_gauge_with_only(qualified, GaugeType::AssistEasy);
+
+            let result =
+                PlayResult::from_states(&chart, &score, &gauge, PlayState::Finished, false);
+
+            assert_eq!(result.clear_type, expected, "{qualified:?}");
+            assert_eq!(result.gauge_type, qualified);
+        }
+    }
+
+    #[test]
+    fn auto_shift_bottom_gauge_still_blocks_assist_easy_lamp() {
+        let chart = chart();
+        let score = judged_score(Judge::Poor);
+        let gauge = auto_shift_gauge_with_only(GaugeType::AssistEasy, GaugeType::Easy);
+
+        let result = PlayResult::from_states(&chart, &score, &gauge, PlayState::Finished, false);
+
+        assert_eq!(result.clear_type, ClearType::Failed);
+        assert_eq!(result.gauge_type, GaugeType::Easy);
+    }
+
     fn chart() -> PlayableChart {
         PlayableChart {
             identity: compute_chart_identity(b"chart"),

@@ -63,7 +63,7 @@ pub(super) fn gauge_definition_table(property: GaugeProperty) -> [GaugeDefinitio
         GaugeProperty::FiveKeys => [
             def(
                 GaugeType::AssistEasy,
-                Some(ClearType::AssistEasy),
+                Some(ClearType::LightAssistEasy),
                 GaugeModifier::Total,
                 2.0,
                 100.0,
@@ -164,7 +164,7 @@ pub(super) fn gauge_definition_table(property: GaugeProperty) -> [GaugeDefinitio
         GaugeProperty::SevenKeys => [
             def(
                 GaugeType::AssistEasy,
-                Some(ClearType::AssistEasy),
+                Some(ClearType::LightAssistEasy),
                 GaugeModifier::Total,
                 2.0,
                 100.0,
@@ -265,7 +265,7 @@ pub(super) fn gauge_definition_table(property: GaugeProperty) -> [GaugeDefinitio
         GaugeProperty::Pms => [
             def(
                 GaugeType::AssistEasy,
-                Some(ClearType::AssistEasy),
+                Some(ClearType::LightAssistEasy),
                 GaugeModifier::Total,
                 2.0,
                 120.0,
@@ -366,7 +366,7 @@ pub(super) fn gauge_definition_table(property: GaugeProperty) -> [GaugeDefinitio
         GaugeProperty::Keyboard => [
             def(
                 GaugeType::AssistEasy,
-                Some(ClearType::AssistEasy),
+                Some(ClearType::LightAssistEasy),
                 GaugeModifier::Total,
                 2.0,
                 100.0,
@@ -467,7 +467,7 @@ pub(super) fn gauge_definition_table(property: GaugeProperty) -> [GaugeDefinitio
         GaugeProperty::Lr2 => [
             def(
                 GaugeType::AssistEasy,
-                Some(ClearType::AssistEasy),
+                Some(ClearType::LightAssistEasy),
                 GaugeModifier::Total,
                 2.0,
                 100.0,

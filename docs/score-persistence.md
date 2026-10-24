@@ -42,6 +42,33 @@ BMZはプレイ終了時に次の順で保存可否を決めます。
 
 アシストを有効にしていても`Failed` / `NoPlay`はassist lampへ昇格しません。
 
+### ASSIST EASYゲージ
+
+ASSIST EASYゲージのみの使用は実効アシスト扱いとせず、通常の数値スコア保存とIR送信の
+対象になります。クリアランプは`LightAssistEasy`（L-ASSIST）とします。beatoraja /
+LR2oraja Endless Dreamの`ClearType.getClearTypeByGauge(ASSISTEASY)`と同じです。
+Gauge Auto Shiftで最終的なクリア判定ゲージがASSIST EASYになった場合も同じ扱いです。
+
+`AssistEasy`（ASSIST）は、EXPAND JUDGEなどの実効Assistを使ったプレイ専用のランプです。
+ゲージ選択だけでは付きません。
+
+| 条件 | ランプ | 数値スコア保存 | IR送信 |
+| --- | --- | --- | --- |
+| ASSIST EASYゲージのみ | `LightAssistEasy` | 可 | 可 |
+| GASでASSIST EASYに移行 | `LightAssistEasy` | 可 | 可 |
+| BPM GUIDEなどの実効Light Assist | `LightAssistEasy` | 不可（clear-only） | 不可 |
+| EXPAND JUDGEなどの実効Assist | `AssistEasy` | 不可（clear-only） | 不可 |
+
+判定の優先順位はbeatoraja互換です。FAILED、実効アシスト、FULL COMBO以上
+（`FullCombo` / `Perfect` / `Max`）、ゲージのクリア種別の順に決めます。したがって
+ASSIST EASYゲージでもFULL COMBO以上はそのコンボランプになり、実効アシストがあれば
+FULL COMBOでも`LightAssistEasy` / `AssistEasy`になります。
+
+ランプの比較順は既存のID順（`AssistEasy = 2` < `LightAssistEasy = 3` < `Easy = 4`）の
+ままです。修正前にASSIST EASYゲージで保存された`AssistEasy`ランプは、本来の実効Assist
+由来のランプと区別できないため、自動では書き換えません。次にASSIST EASYゲージで
+クリアした時点で`LightAssistEasy`へ通常どおり更新されます。
+
 `BATTLE AS`のscratch autoplayは部分autoplayであり、BMZのfull autoplay判定には
 なりません。したがって現状は`BattleAutoScratch` bucketへ通常スコアを保存します。
 

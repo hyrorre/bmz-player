@@ -273,7 +273,7 @@ fn course_result_clear_type(result: &CourseResultSummary) -> bmz_core::clear::Cl
     }
 
     match result.final_gauge_type {
-        GaugeType::AssistEasy => ClearType::AssistEasy,
+        GaugeType::AssistEasy => ClearType::LightAssistEasy,
         GaugeType::Easy => ClearType::Easy,
         GaugeType::Normal | GaugeType::Class => ClearType::Normal,
         GaugeType::Hard | GaugeType::ExClass => ClearType::Hard,
@@ -637,6 +637,65 @@ mod tests {
 
         assert_eq!(payload["result"]["clear"], json!("Failed"));
         assert_eq!(payload["result"]["bp"], json!(789));
+    }
+
+    #[test]
+    fn course_submission_maps_assist_easy_gauge_to_light_assist_lamp() {
+        let definition = IrCourseDefinition {
+            charts: vec!["ab".repeat(32)],
+            constraints: json!({}),
+            title: "Course 1".to_string(),
+            kind: "course".to_string(),
+        };
+        let result = CourseResultSummary {
+            course_id: 1,
+            course_score_id: None,
+            course_played_at: None,
+            ln_policy: LnScorePolicy::AutoLn,
+            rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
+            title: "Course 1".to_string(),
+            kind: CourseKind::Dan,
+            course_titles: Default::default(),
+            entry_summaries: vec![stage_summary(ClearType::NoPlay, 0.0)],
+            entry_arranges: Vec::new(),
+            total_ex_score: 1234,
+            max_ex_score: 2000,
+            total_notes: 1000,
+            course_ln_mode: None,
+            bp: 12,
+            final_clear_type: ClearType::LightAssistEasy,
+            final_gauge_type: GaugeType::AssistEasy,
+            final_gauge_value: 72.0,
+            course_max_combo: 456,
+            judge_counts: ResultJudgeCounts::default(),
+            trophy_results: Vec::new(),
+            course_clear: true,
+            course_failed: false,
+            total_entries: 1,
+            played_entries: 1,
+            replay_slots: [false; 4],
+            saved_replay_slots: [false; 4],
+            best_score: None,
+            previous_best_score: None,
+        };
+
+        let payload = build_course_submission(
+            &definition,
+            &result,
+            &IrCourseSubmissionContext {
+                played_at: 1_767_225_600,
+                ln_policy: LnScorePolicy::AutoLn.as_str().to_string(),
+                rule_mode: "Beatoraja".to_string(),
+                gauge: "AssistEasy".to_string(),
+                device_type: InputDeviceKind::Keyboard,
+                arrange: "NORMAL".to_string(),
+                random_seed: None,
+                idempotency_key: "course-assist-easy".to_string(),
+                bms_ir_course_key: Some("ab".repeat(32)),
+            },
+        );
+
+        assert_eq!(payload["result"]["clear"], json!("LightAssistEasy"));
     }
 
     fn stage_summary(clear_type: ClearType, gauge_value: f32) -> ResultSummary {

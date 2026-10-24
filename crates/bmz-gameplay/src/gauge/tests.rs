@@ -656,3 +656,55 @@ fn auto_shift_result_respects_bottom_shiftable_gauge() {
     assert_eq!(result_gauge.definition.gauge_type, GaugeType::Normal);
     assert!(!result_gauge.is_qualified());
 }
+
+#[test]
+fn assist_easy_gauge_clears_with_light_assist_lamp_in_every_definition_table() {
+    // beatoraja `ClearType.getClearTypeByGauge(ASSISTEASY)` は LightAssistEasy。
+    // ゲージ選択だけで AssistEasy (実効Assist用のランプ) にはしない。
+    let mut tables = Vec::new();
+    for property in [
+        GaugeProperty::FiveKeys,
+        GaugeProperty::SevenKeys,
+        GaugeProperty::Pms,
+        GaugeProperty::Keyboard,
+        GaugeProperty::Lr2,
+    ] {
+        tables.push((format!("{property:?}"), gauge_definitions_for(property)));
+    }
+    for rule_mode in [RuleMode::Beatoraja, RuleMode::Lr2Oraja, RuleMode::Dx] {
+        for key_mode in [KeyMode::K7, KeyMode::K9] {
+            tables.push((
+                format!("{rule_mode:?}/{key_mode:?}"),
+                gauge_definitions_for_rule_mode_and_keymode(
+                    GaugeProperty::SevenKeys,
+                    rule_mode,
+                    key_mode,
+                ),
+            ));
+        }
+    }
+
+    for (label, definitions) in tables {
+        let clear_type_of = |gauge_type: GaugeType| {
+            definitions
+                .iter()
+                .find(|definition| definition.gauge_type == gauge_type)
+                .and_then(|definition| definition.clear_type)
+        };
+        assert_eq!(
+            clear_type_of(GaugeType::AssistEasy),
+            Some(ClearType::LightAssistEasy),
+            "{label}"
+        );
+        assert_eq!(clear_type_of(GaugeType::Easy), Some(ClearType::Easy), "{label}");
+        assert_eq!(clear_type_of(GaugeType::Normal), Some(ClearType::Normal), "{label}");
+        assert_eq!(clear_type_of(GaugeType::Hard), Some(ClearType::Hard), "{label}");
+        assert_eq!(clear_type_of(GaugeType::ExHard), Some(ClearType::ExHard), "{label}");
+        assert!(
+            definitions
+                .iter()
+                .all(|definition| definition.clear_type != Some(ClearType::AssistEasy)),
+            "{label}"
+        );
+    }
+}

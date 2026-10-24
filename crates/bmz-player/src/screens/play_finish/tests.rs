@@ -258,6 +258,22 @@ fn play_result_uses_assist_clear_lamp_for_successful_play() {
 }
 
 #[test]
+fn assist_easy_gauge_lamp_depends_only_on_effective_assist_level() {
+    let mut session = session();
+    session.gauge =
+        bmz_gameplay::gauge::GaugeState::new(bmz_core::clear::GaugeType::AssistEasy, 160.0, 1);
+    session.gauge.set_initial_value(100.0);
+    // 1ノーツを見逃した (FCではない) 完走。
+    session.score.past_notes = 1;
+    // ゲージ選択だけでは実効アシストにならない。
+    assert_eq!(play_result_from_session(&session).clear_type, ClearType::LightAssistEasy);
+    session.assist.level = bmz_gameplay::session::AssistLevel::LightAssist;
+    assert_eq!(play_result_from_session(&session).clear_type, ClearType::LightAssistEasy);
+    session.assist.level = bmz_gameplay::session::AssistLevel::Assist;
+    assert_eq!(play_result_from_session(&session).clear_type, ClearType::AssistEasy);
+}
+
+#[test]
 fn effective_assist_persists_clear_lamp_counts_and_player_stats() {
     let root = make_temp_dir("finish-assist");
     let paths = ProfilePaths {
@@ -1377,4 +1393,255 @@ fn make_temp_dir(label: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("bmz-player-{label}-{}-{stamp}", std::process::id()));
     std::fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn open_score_db() -> ScoreDatabase {
+    let mut conn = Connection::open_in_memory().unwrap();
+    configure_connection(&conn).unwrap();
+    run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+    ScoreDatabase::from_connection(conn)
+}
+
+fn profile_paths(root: &std::path::Path) -> ProfilePaths {
+    ProfilePaths {
+        root_dir: root.to_path_buf(),
+        profile_toml: root.join("profile.toml"),
+        collection_db: root.join("collection.db"),
+        score_db: root.join("score.db"),
+        network_db: root.join("network.db"),
+        replay_dir: root.join("replay"),
+    }
+}
+
+/// BMZ IR / rianIR / BMS-IR をすべて有効にした送信設定。
+fn all_ir_providers() -> IrConfig {
+    let providers =
+        [IrProviderConfig::bmz_ir(), IrProviderConfig::rian_ir(), IrProviderConfig::bms_ir()]
+            .into_iter()
+            .map(|mut provider| {
+                provider.provider_key = provider.provider.clone();
+                provider.enabled = true;
+                provider.account_id = "account-1".to_string();
+                provider
+            })
+            .collect();
+    IrConfig { primary_provider: "bms-ir".to_string(), providers, ..IrConfig::default() }
+}
+
+/// 1ノーツをPGREAT、1ノーツを見逃した、FCではないASSIST EASY完走。
+fn assist_easy_session(gauge: bmz_gameplay::gauge::GaugeState) -> GameSession {
+    use bmz_core::judge::{Judge, TimingSide};
+    use bmz_gameplay::judge::model::JudgementEvent;
+
+    let mut session = session();
+    Arc::get_mut(&mut session.chart).unwrap().metadata.source_format =
+        bmz_chart::model::ChartSourceFormat::Bms;
+    session.gauge = gauge;
+    for (note, judge) in [(1, Judge::PGreat), (2, Judge::Poor)] {
+        session.score.apply(&JudgementEvent {
+            note_id: Some(NoteId(note)),
+            lane: Lane::Key1,
+            judge,
+            side: TimingSide::Slow,
+            delta: TimeUs(0),
+            time: TimeUs(0),
+            affects_score: true,
+        });
+    }
+    session
+}
+
+fn assist_easy_gauge() -> bmz_gameplay::gauge::GaugeState {
+    let mut gauge =
+        bmz_gameplay::gauge::GaugeState::new(bmz_core::clear::GaugeType::AssistEasy, 160.0, 1);
+    gauge.set_initial_value(100.0);
+    gauge
+}
+
+/// GASで上位ゲージがすべて落ち、ASSIST EASYだけが最終クリアゲージになった状態。
+fn auto_shift_to_assist_easy_gauge() -> bmz_gameplay::gauge::GaugeState {
+    let mut gauge = bmz_gameplay::gauge::GaugeState::new_auto_shift(160.0, 1);
+    for gauge in &mut gauge.gauges {
+        gauge.value = 0.0;
+    }
+    gauge
+        .gauges
+        .iter_mut()
+        .find(|gauge| gauge.definition.gauge_type == bmz_core::clear::GaugeType::AssistEasy)
+        .unwrap()
+        .value = 100.0;
+    gauge.selected = bmz_core::clear::GaugeType::AssistEasy;
+    gauge
+}
+
+fn finish_with_all_providers(
+    score_db: &mut ScoreDatabase,
+    network_db: &mut NetworkDatabase,
+    paths: &ProfilePaths,
+    session: &GameSession,
+    played_at: i64,
+) -> FinishedPlaySession {
+    finish_session_result(
+        score_db,
+        network_db,
+        FinishSessionResultRequest {
+            profile_paths: paths,
+            replay_config: &ReplayConfig {
+                auto_save: false,
+                compress: false,
+                slot_rules: crate::config::profile_config::default_slot_rules(),
+            },
+            ir_config: &all_ir_providers(),
+            session,
+            source_ln_profile: ChartLnProfile::from_chart(&session.chart),
+            chart_length_ms: None,
+            play_duration_ms: None,
+            played_at,
+            applied_arrange: &AppliedArrange::default(),
+            target_ex_score: None,
+            score_key: score_key(session),
+            practice_mode: false,
+            finish_mode: FinishResultMode::Normal,
+        },
+    )
+    .unwrap()
+}
+
+fn assert_assist_easy_gauge_play_is_saved_and_submitted(label: &str, session: GameSession) {
+    let root = make_temp_dir(label);
+    let paths = profile_paths(&root);
+    let mut score_db = open_score_db();
+    let mut network_db = open_network_db();
+
+    let finished =
+        finish_with_all_providers(&mut score_db, &mut network_db, &paths, &session, 1_700_000_200);
+
+    assert_eq!(finished.result.clear_type, ClearType::LightAssistEasy, "{label}");
+    assert_eq!(finished.summary.clear_type, ClearType::LightAssistEasy, "{label}");
+    assert!(finished.score_data_changed, "{label}");
+    assert!(finished.stored.score_history_id > 0, "{label}");
+    let best = score_db.best_scores_for_charts(&[score_key(&session)]).unwrap().pop().unwrap();
+    assert_eq!(best.clear_type, "LightAssistEasy", "{label}");
+    assert_eq!(best.gauge_type, "AssistEasy", "{label}");
+    assert_eq!(best.ex_score, 2, "{label}");
+    assert_eq!(best.play_count, 1, "{label}");
+    assert_eq!(best.clear_count, 1, "{label}");
+    let history = score_db.recent_history(10, 0).unwrap();
+    assert_eq!(history.len(), 1, "{label}");
+    assert_eq!(history[0].clear_type, "LightAssistEasy", "{label}");
+    assert_eq!(history[0].ex_score, 2, "{label}");
+    let stats = score_db.player_stats().unwrap();
+    assert_eq!((stats.play_count, stats.clear_count), (1, 1), "{label}");
+
+    assert_eq!(finished.summary.ir_queued_jobs, 3, "{label}");
+    let jobs = network_db.pending_ir_score_jobs(1_700_000_200, 10).unwrap();
+    let mut providers: Vec<_> = jobs.iter().map(|job| job.provider.as_str()).collect();
+    providers.sort_unstable();
+    assert_eq!(providers, ["bms-ir", "bmz", "rian-ir"], "{label}");
+    for job in &jobs {
+        let payload: crate::ir::types::IrScoreSubmission =
+            serde_json::from_str(&job.payload_json).unwrap();
+        assert_eq!(payload.result.clear, "LightAssistEasy", "{label}");
+        assert_eq!(payload.rule.gauge, "AssistEasy", "{label}");
+        assert!(!payload.play_options.contains_key("assist_mask"), "{label}");
+        if job.provider == "bms-ir" {
+            crate::ir::bms_ir::ensure_score_payload_supported(&payload).unwrap();
+        }
+    }
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn assist_easy_gauge_play_saves_numeric_score_and_enqueues_every_ir() {
+    assert_assist_easy_gauge_play_is_saved_and_submitted(
+        "finish-assist-easy-gauge",
+        assist_easy_session(assist_easy_gauge()),
+    );
+}
+
+#[test]
+fn auto_shift_to_assist_easy_saves_numeric_score_and_enqueues_every_ir() {
+    assert_assist_easy_gauge_play_is_saved_and_submitted(
+        "finish-gas-assist-easy",
+        assist_easy_session(auto_shift_to_assist_easy_gauge()),
+    );
+}
+
+#[test]
+fn effective_assist_with_assist_easy_gauge_stays_clear_only_without_ir() {
+    for (level, mask, lamp) in [
+        (
+            bmz_gameplay::session::AssistLevel::LightAssist,
+            crate::assist::BPM_GUIDE_MASK,
+            "LightAssistEasy",
+        ),
+        (
+            bmz_gameplay::session::AssistLevel::Assist,
+            crate::assist::EXPAND_JUDGE_MASK,
+            "AssistEasy",
+        ),
+    ] {
+        let root = make_temp_dir("finish-assist-easy-effective-assist");
+        let paths = profile_paths(&root);
+        let mut score_db = open_score_db();
+        let mut network_db = open_network_db();
+        let mut session = assist_easy_session(assist_easy_gauge());
+        session.assist.level = level;
+        session.assist.configured_mask = mask;
+        session.assist.effective_mask = mask;
+
+        let finished = finish_with_all_providers(
+            &mut score_db,
+            &mut network_db,
+            &paths,
+            &session,
+            1_700_000_300,
+        );
+
+        assert_eq!(finished.result.clear_type.as_str(), lamp, "{level:?}");
+        assert_eq!(finished.stored.score_history_id, 0, "{level:?}");
+        let best = score_db.best_scores_for_charts(&[score_key(&session)]).unwrap().pop().unwrap();
+        assert_eq!(best.clear_type, lamp, "{level:?}");
+        assert_eq!(best.ex_score, 0, "{level:?}");
+        assert_eq!((best.play_count, best.clear_count), (1, 1), "{level:?}");
+        assert!(score_db.recent_history(10, 0).unwrap().is_empty(), "{level:?}");
+        assert_eq!(finished.summary.ir_queued_jobs, 0, "{level:?}");
+        assert!(network_db.pending_ir_score_jobs(1_700_000_300, 10).unwrap().is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn assist_easy_gauge_lamp_ranks_between_assist_and_easy() {
+    let root = make_temp_dir("finish-assist-easy-rank");
+    let paths = profile_paths(&root);
+    let mut score_db = open_score_db();
+    let mut network_db = open_network_db();
+
+    // 旧実装でASSIST EASYゲージから保存されたAssistEasyランプは上書きで改善される。
+    let mut assisted = assist_easy_session(assist_easy_gauge());
+    assisted.assist.level = bmz_gameplay::session::AssistLevel::Assist;
+    assisted.assist.configured_mask = crate::assist::EXPAND_JUDGE_MASK;
+    finish_with_all_providers(&mut score_db, &mut network_db, &paths, &assisted, 1_700_000_400);
+    let session = assist_easy_session(assist_easy_gauge());
+    finish_with_all_providers(&mut score_db, &mut network_db, &paths, &session, 1_700_000_401);
+    let best = score_db.best_scores_for_charts(&[score_key(&session)]).unwrap().pop().unwrap();
+    assert_eq!(best.clear_type, "LightAssistEasy");
+
+    // Easyランプは後からのASSIST EASYクリアで下がらない。
+    let mut easy_gauge =
+        bmz_gameplay::gauge::GaugeState::new(bmz_core::clear::GaugeType::Easy, 160.0, 1);
+    easy_gauge.set_initial_value(100.0);
+    let easy = assist_easy_session(easy_gauge);
+    finish_with_all_providers(&mut score_db, &mut network_db, &paths, &easy, 1_700_000_402);
+    finish_with_all_providers(&mut score_db, &mut network_db, &paths, &session, 1_700_000_403);
+    let best = score_db.best_scores_for_charts(&[score_key(&session)]).unwrap().pop().unwrap();
+    assert_eq!(best.clear_type, "Easy");
+    assert_eq!(best.play_count, 4);
+    assert_eq!(best.clear_count, 4);
+    let stats = score_db.player_stats().unwrap();
+    assert_eq!((stats.play_count, stats.clear_count), (4, 4));
+
+    std::fs::remove_dir_all(root).unwrap();
 }
