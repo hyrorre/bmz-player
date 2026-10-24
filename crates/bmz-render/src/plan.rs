@@ -171,6 +171,17 @@ pub struct TextStyle {
     pub wrapping: bool,
     pub outline: Option<TextOutline>,
     pub shadow: Option<TextShadow>,
+    /// 文字本体のグラデーション。`color` から `gradient.color` へ変える。
+    pub gradient: Option<TextGradient>,
+}
+
+/// 文字本体の線形グラデーション（BMZ 拡張）。縁取り・影・カラーグリフには掛けない。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextGradient {
+    /// 終点側の色。始点側は `TextStyle::color`。
+    pub color: Color,
+    /// 向きの角度（度）。0 で上から下、正の値で反時計回りに回す（90 で左から右）。
+    pub angle_deg: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -289,6 +300,7 @@ fn push_exit_hold_indicator(commands: &mut Vec<DrawCommand>, progress: f32) {
         caret: None,
         post_scale: Point { x: 1.0, y: 1.0 },
         style: TextStyle {
+            gradient: None,
             font_id: None,
             size: LABEL_SIZE,
             bitmap_size: None,

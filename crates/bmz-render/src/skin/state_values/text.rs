@@ -65,6 +65,25 @@ pub(super) fn skin_text_outline(text: &SkinTextDef, skin_height: u32) -> Option<
     Some(TextOutline { color, width: text.outline_width / skin_height.max(1) as f32 })
 }
 
+/// `colorTop` / `colorBottom` のグラデーション。片方だけなら、もう片方は白（文字色のまま）。
+/// どちらも指定が無いか読めなければ `None`。色は文字色 `color` に掛ける。
+pub(super) fn skin_text_gradient(
+    text: &SkinTextDef,
+    color: Color,
+) -> Option<(Color, TextGradient)> {
+    let top = skin_hex_color(&text.color_top);
+    let bottom = skin_hex_color(&text.color_bottom);
+    if top.is_none() && bottom.is_none() {
+        return None;
+    }
+    let tint = |value: Option<Color>| {
+        let value = value.unwrap_or(Color::rgb(1.0, 1.0, 1.0));
+        Color::rgba(value.r * color.r, value.g * color.g, value.b * color.b, value.a * color.a)
+    };
+    let angle_deg = if text.gradient_angle.is_finite() { text.gradient_angle } else { 0.0 };
+    Some((tint(top), TextGradient { color: tint(bottom), angle_deg }))
+}
+
 pub(super) fn skin_hex_color(value: &str) -> Option<Color> {
     let hex = value.trim().trim_start_matches('#');
     if hex.len() != 6 && hex.len() != 8 {

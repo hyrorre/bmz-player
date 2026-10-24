@@ -319,7 +319,10 @@ fn upload_stats_are_empty_without_an_atlas() {
 #[test]
 fn text_instance_buffer_grows_to_the_next_power_of_two() {
     assert_eq!(grown_text_buffer_capacity(0, 0), None);
-    assert_eq!(grown_text_buffer_capacity(TEXT_INSTANCE_BYTES, 0), Some(64));
+    assert_eq!(
+        grown_text_buffer_capacity(TEXT_INSTANCE_BYTES, 0),
+        Some(TEXT_INSTANCE_BYTES.next_power_of_two())
+    );
     assert_eq!(grown_text_buffer_capacity(64, 64), None);
     assert_eq!(grown_text_buffer_capacity(32, 64), None);
     assert_eq!(grown_text_buffer_capacity(65, 64), Some(128));

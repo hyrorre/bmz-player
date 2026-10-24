@@ -31,6 +31,7 @@ pub fn push_text_command(commands: &mut Vec<DrawCommand>, text: &str, style: Bit
         caret: None,
         post_scale: Point { x: 1.0, y: 1.0 },
         style: TextStyle {
+            gradient: None,
             font_id: None,
             size: style.cell * GLYPH_HEIGHT as f32,
             bitmap_size: None,

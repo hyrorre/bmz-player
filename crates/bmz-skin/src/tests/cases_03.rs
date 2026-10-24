@@ -26,6 +26,32 @@ fn lua_skin_preserves_text_shrink_mode() {
 }
 
 #[test]
+fn lua_skin_preserves_text_gradient() {
+    let root = unique_test_dir("bmz-skin-text-gradient");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("select.luaskin");
+    fs::write(
+        &path,
+        r#"
+            return {
+                type = 0,
+                text = {
+                    { id = "title", size = 24, colorTop = "ffcc00", colorBottom = "ff3300ff", gradientAngle = 15.5 }
+                }
+            }
+            "#,
+    )
+    .unwrap();
+
+    let loaded =
+        load_lua_skin(&path, SkinKind::Select, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+
+    assert_eq!(loaded.document.text[0].color_top, "ffcc00");
+    assert_eq!(loaded.document.text[0].color_bottom, "ff3300ff");
+    assert_eq!(loaded.document.text[0].gradient_angle, 15.5);
+}
+
+#[test]
 fn lua_skin_luajava_stub_loads_legacy_sound_helper() {
     let root = unique_test_dir("bmz-skin-lua");
     fs::create_dir_all(&root).unwrap();

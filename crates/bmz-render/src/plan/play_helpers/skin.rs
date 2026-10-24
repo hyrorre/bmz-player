@@ -223,6 +223,7 @@ pub(super) fn default_play_skin(snapshot: &RenderSnapshot) -> SkinDefinition {
             source: SkinSource::Number {
                 slot: NumberSlot::Combo,
                 style: TextStyle {
+                    gradient: None,
                     font_id: None,
                     size: 0.05,
                     bitmap_size: None,
@@ -247,6 +248,7 @@ pub(super) fn default_play_skin(snapshot: &RenderSnapshot) -> SkinDefinition {
             source: SkinSource::Text {
                 slot: TextSlot::Judge,
                 style: TextStyle {
+                    gradient: None,
                     font_id: None,
                     size: 0.03,
                     bitmap_size: None,

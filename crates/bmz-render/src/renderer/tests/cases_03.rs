@@ -41,6 +41,7 @@ fn vector_text_shrink_preserves_height_by_default_and_supports_uniform_mode() {
                 caret: Some(TextCaret { byte_index: 4, color: Color::rgb(1.0, 1.0, 1.0) }),
                 post_scale: Point { x: 1.0, y: 1.0 },
                 style: TextStyle {
+                    gradient: None,
                     font_id: None,
                     size: 0.2,
                     bitmap_size: None,
@@ -116,6 +117,7 @@ fn text_outline_emits_surrounding_text_instances() {
             caret: None,
             post_scale: Point { x: 1.0, y: 1.0 },
             style: TextStyle {
+                gradient: None,
                 font_id: None,
                 size: 0.1,
                 bitmap_size: None,
@@ -210,6 +212,7 @@ fn default_font_fallback_uses_selected_face_in_glyph_and_layout_cache_keys() {
             caret: None,
             post_scale: Point { x: 1.0, y: 1.0 },
             style: TextStyle {
+                gradient: None,
                 font_id: None,
                 size: 0.1,
                 bitmap_size: None,
@@ -283,6 +286,7 @@ fn explicit_vector_font_uses_system_faces_only_for_missing_glyphs() {
             caret: None,
             post_scale: Point { x: 1.0, y: 1.0 },
             style: TextStyle {
+                gradient: None,
                 font_id: Some(custom_id.to_string()),
                 size: 0.1,
                 bitmap_size: None,
@@ -329,6 +333,7 @@ fn explicit_vector_font_renders_without_default_fallback() {
             caret: None,
             post_scale: Point { x: 1.0, y: 1.0 },
             style: TextStyle {
+                gradient: None,
                 font_id: Some("skin:custom".to_string()),
                 size: 0.1,
                 bitmap_size: None,
@@ -368,6 +373,7 @@ fn text_without_any_font_is_skipped_without_default_fallback() {
             caret: None,
             post_scale: Point { x: 1.0, y: 1.0 },
             style: TextStyle {
+                gradient: None,
                 font_id: None,
                 size: 0.1,
                 bitmap_size: None,
@@ -412,6 +418,7 @@ fn japanese_text_emits_glyph_quads_with_default_font() {
             caret: None,
             post_scale: Point { x: 1.0, y: 1.0 },
             style: TextStyle {
+                gradient: None,
                 font_id: None,
                 size: 0.1,
                 bitmap_size: None,
@@ -486,6 +493,7 @@ fn bitmap_font_text_uses_registered_font() {
             caret: None,
             post_scale: Point { x: 1.0, y: 1.0 },
             style: TextStyle {
+                gradient: None,
                 font_id: Some("bitmap".to_string()),
                 size: 0.1,
                 bitmap_size: None,
@@ -599,6 +607,7 @@ fn bitmap_font_text_positions_glyphs_from_destination_baseline() {
             caret: None,
             post_scale: Point { x: 1.0, y: 1.0 },
             style: TextStyle {
+                gradient: None,
                 font_id: Some("bitmap".to_string()),
                 size: 0.3,
                 bitmap_size: None,
@@ -676,6 +685,7 @@ fn bitmap_font_shrink_selects_horizontal_or_uniform_scaling() {
                 caret: Some(TextCaret { byte_index: 4, color: Color::rgb(1.0, 1.0, 1.0) }),
                 post_scale: Point { x: 1.0, y: 1.0 },
                 style: TextStyle {
+                    gradient: None,
                     font_id: Some("bitmap".to_string()),
                     size: 0.2,
                     bitmap_size: None,
@@ -775,6 +785,7 @@ fn bitmap_font_text_uses_bitmap_size_for_scale() {
             caret: None,
             post_scale: Point { x: 1.0, y: 1.0 },
             style: TextStyle {
+                gradient: None,
                 font_id: Some("bitmap".to_string()),
                 size: 0.3,
                 bitmap_size: Some(0.1),
