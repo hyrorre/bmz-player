@@ -699,6 +699,7 @@ payloadと署名は次のとおりです。
 - BMS / PMSはMD5、BMSONはBMS-IR互換のSHA hashで照合します。
 - 送信の対象は、Beatoraja / LR2orajaのルール、実際のLN / CN / HCN、Off / Flip / Battle / Battle ASの、4 / 5 / 6 / 7 / 8 / 9 / 10 / 14 / 24 / 48Kです。BattleとBattle ASは別の区分、G-BATTLEは通常の区分を使います。4 / 6 / 8KもBMS-IRの正規のキーモードとして送ります。
 - DX、full autoplay、リプレイ再生、プラクティス、実効アシスト、リプレイファイルの送受信、local backfillは対象外です。
+- クリアは`Failed` / `Easy` / `Normal` / `Hard` / `ExHard` / `FullCombo` / `Perfect` / `Max`と、`gauge`が`AssistEasy`の`LightAssistEasy`を送ります。後者はASSIST EASYゲージ（GASの最終ゲージを含む）のクリアで、実効アシストのプレイはqueueに入りません。実効Assistのランプである`AssistEasy`は送りません。ランプを`Easy`などへ置き換えて送ることもしません。
 - コース中の単曲のスコアには`course_stage=true`を付け、保存時と同じくNoPlay / FullCombo / Perfect / Maxへ丸めたランプだけを送ります。数値のスコアと判定は単曲の結果のままです。最後のコース / 段位のscoreは別のjobとして送ります。
 - ローカルでの結合確認用のビルドだけは、`cargo build`の時に`BMZ_BMS_IR_BASE_URL`を指定すると、固定のendpointを差し替えられます。通常のビルドでは本番のURLに固定で、プロファイルの設定からgame tokenの送信先を変えることはできません。
 
