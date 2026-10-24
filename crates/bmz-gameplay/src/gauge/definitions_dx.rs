@@ -4,7 +4,7 @@ pub(super) fn dx_gauge_definition_table() -> [GaugeDefinition; 9] {
     [
         def(
             GaugeType::AssistEasy,
-            Some(ClearType::AssistEasy),
+            Some(ClearType::LightAssistEasy),
             GaugeModifier::Iidx,
             2.0,
             100.0,
@@ -108,7 +108,7 @@ pub(super) fn dx_pop_gauge_definition_table() -> [GaugeDefinition; 9] {
     [
         def(
             GaugeType::AssistEasy,
-            Some(ClearType::AssistEasy),
+            Some(ClearType::LightAssistEasy),
             GaugeModifier::Pop,
             2.0,
             120.0,

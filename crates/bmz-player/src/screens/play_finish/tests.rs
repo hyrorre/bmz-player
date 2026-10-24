@@ -258,6 +258,22 @@ fn play_result_uses_assist_clear_lamp_for_successful_play() {
 }
 
 #[test]
+fn assist_easy_gauge_lamp_depends_only_on_effective_assist_level() {
+    let mut session = session();
+    session.gauge =
+        bmz_gameplay::gauge::GaugeState::new(bmz_core::clear::GaugeType::AssistEasy, 160.0, 1);
+    session.gauge.set_initial_value(100.0);
+    // 1ノーツを見逃した (FCではない) 完走。
+    session.score.past_notes = 1;
+    // ゲージ選択だけでは実効アシストにならない。
+    assert_eq!(play_result_from_session(&session).clear_type, ClearType::LightAssistEasy);
+    session.assist.level = bmz_gameplay::session::AssistLevel::LightAssist;
+    assert_eq!(play_result_from_session(&session).clear_type, ClearType::LightAssistEasy);
+    session.assist.level = bmz_gameplay::session::AssistLevel::Assist;
+    assert_eq!(play_result_from_session(&session).clear_type, ClearType::AssistEasy);
+}
+
+#[test]
 fn effective_assist_persists_clear_lamp_counts_and_player_stats() {
     let root = make_temp_dir("finish-assist");
     let paths = ProfilePaths {
