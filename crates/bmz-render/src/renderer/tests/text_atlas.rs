@@ -10,7 +10,7 @@ fn assert_quads_inside_atlas(quads: &[TextQuad], atlas: &TextAtlasCache) {
         assert!(quad.atlas_origin.0 + quad.glyph_width <= size.width, "{quad:?} / {size:?}");
         assert!(quad.atlas_origin.1 + quad.glyph_height <= size.height, "{quad:?} / {size:?}");
     }
-    let instances = encode_text_quads(quads, size.width, size.height);
+    let instances = encode_text_quads(quads, &[], size.width, size.height);
     for instance in instances.as_chunks::<TEXT_INSTANCE_BYTES>().0 {
         let f: Vec<f32> =
             instance.as_chunks::<4>().0.iter().map(|bytes| f32::from_le_bytes(*bytes)).collect();
@@ -87,6 +87,7 @@ fn oversized_outline_bitmap_and_placeholder_glyphs_fit_the_atlas() {
             glyph_width: cached.width,
             glyph_height: cached.height,
             color: Color::rgb(1.0, 1.0, 1.0),
+            fill: true,
         })
         .collect();
     assert_quads_inside_atlas(&quads, &atlas);
@@ -312,6 +313,7 @@ fn new_glyph_in_an_exactly_full_atlas_is_stored_after_one_rebuild() {
             glyph_width: cached.width,
             glyph_height: cached.height,
             color: Color::rgb(1.0, 1.0, 1.0),
+            fill: true,
         })
         .collect();
     assert_quads_inside_atlas(&quads, &atlas);

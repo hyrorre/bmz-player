@@ -49,9 +49,9 @@ fn assert_valid(frame: &TextFrame) {
     let quads: usize = frame.command_quad_counts.iter().sum();
     assert_eq!(frame.instances.len(), quads * TEXT_INSTANCE_BYTES);
     assert_eq!(frame.command_quad_counts.len(), frame.command_caret_rects.len());
-    for instance in frame.instances.chunks_exact(TEXT_INSTANCE_BYTES) {
-        for value in instance[..16].chunks_exact(4) {
-            let value = f32::from_le_bytes(value.try_into().unwrap());
+    for instance in frame.instances.as_chunks::<TEXT_INSTANCE_BYTES>().0 {
+        for value in instance[..16].as_chunks::<4>().0 {
+            let value = f32::from_le_bytes(*value);
             assert!(value.is_finite(), "{value}");
         }
     }

@@ -143,6 +143,7 @@ fn push_bpm_guide_label(
         origin: Point { x: board.x + 0.004, y: play_object_y(board, lift, line.y) - 0.003 },
         text: line.label.clone(),
         style: TextStyle {
+            gradient: None,
             font_id: None,
             size: 0.018,
             bitmap_size: None,
@@ -258,6 +259,9 @@ pub(super) fn apply_draw_command_alpha(commands: &mut [DrawCommand], alpha: f32)
                 if let Some(shadow) = &mut style.shadow {
                     shadow.color.a *= alpha;
                 }
+                if let Some(gradient) = &mut style.gradient {
+                    gradient.color.a *= alpha;
+                }
                 if let Some(caret) = caret {
                     caret.color.a *= alpha;
                 }
@@ -335,6 +339,7 @@ mod tests {
             origin: crate::plan::Point { x: 0.0, y: 0.0 },
             text: "TEXT".into(),
             style: crate::plan::TextStyle {
+                gradient: None,
                 color: Color::rgba(1.0, 1.0, 1.0, a),
                 outline: Some(crate::plan::TextOutline {
                     color: Color::rgba(1.0, 0.0, 0.0, 0.5 * a),
