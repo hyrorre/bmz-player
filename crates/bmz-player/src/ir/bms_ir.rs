@@ -6,6 +6,7 @@
 
 use anyhow::{Context, Result, bail};
 use bmz_chart::model::ChartSourceFormat;
+use bmz_core::clear::GaugeType;
 use bmz_gameplay::rule::RuleMode;
 use reqwest::{StatusCode, Url};
 use serde::Serialize;
@@ -160,10 +161,16 @@ pub fn ensure_score_payload_supported(payload: &IrScoreSubmission) -> Result<()>
     let clear_supported = if course_stage {
         matches!(payload.result.clear.as_str(), "NoPlay" | "FullCombo" | "Perfect" | "Max")
     } else {
-        matches!(
-            payload.result.clear.as_str(),
-            "Failed" | "Easy" | "Normal" | "Hard" | "ExHard" | "FullCombo" | "Perfect" | "Max"
-        )
+        match payload.result.clear.as_str() {
+            "Failed" | "Easy" | "Normal" | "Hard" | "ExHard" | "FullCombo" | "Perfect" | "Max" => {
+                true
+            }
+            // 実効アシストのプレイはqueueに入らないため、ここに来るLightAssistEasyは
+            // ASSIST EASYゲージ (GASの最終ゲージを含む) のクリアだけ。
+            // AssistEasyは実効Assistのランプなので送らない。
+            "LightAssistEasy" => payload.rule.gauge == GaugeType::AssistEasy.as_str(),
+            _ => false,
+        }
     };
     if !clear_supported {
         bail!("BMS-IR clear type is not supported");
@@ -923,6 +930,66 @@ mod tests {
 
         payload.result.clear = "Normal".to_string();
         assert!(ensure_score_payload_supported(&payload).is_err());
+    }
+
+    fn assist_easy_gauge_payload() -> IrScoreSubmission {
+        let mut payload = sample_score_payload();
+        payload.rule.gauge = "AssistEasy".to_string();
+        payload.result.clear = "LightAssistEasy".to_string();
+        payload
+    }
+
+    #[test]
+    fn light_assist_easy_is_accepted_only_for_assist_easy_gauge_clear() {
+        let payload = assist_easy_gauge_payload();
+        assert!(ensure_score_payload_supported(&payload).is_ok());
+
+        // LightAssistEasy with another gauge can only come from an effective Light Assist.
+        let mut other_gauge = assist_easy_gauge_payload();
+        other_gauge.rule.gauge = "Normal".to_string();
+        assert!(ensure_score_payload_supported(&other_gauge).is_err());
+
+        let mut course_stage = assist_easy_gauge_payload();
+        course_stage.play_options.insert("course_stage".to_string(), serde_json::json!(true));
+        assert!(ensure_score_payload_supported(&course_stage).is_err());
+
+        let mut assisted = assist_easy_gauge_payload();
+        assisted.play_options.insert("assist_mask".to_string(), serde_json::json!(1));
+        assert!(ensure_score_payload_supported(&assisted).is_err());
+    }
+
+    #[test]
+    fn assist_easy_lamp_stays_rejected() {
+        for gauge in ["AssistEasy", "Normal"] {
+            let mut payload = sample_score_payload();
+            payload.rule.gauge = gauge.to_string();
+            payload.result.clear = "AssistEasy".to_string();
+            assert!(ensure_score_payload_supported(&payload).is_err(), "{gauge}");
+        }
+    }
+
+    #[test]
+    fn assist_easy_gauge_keeps_combo_and_failed_lamps_submittable() {
+        for clear in ["Failed", "FullCombo", "Perfect", "Max"] {
+            let mut payload = assist_easy_gauge_payload();
+            payload.result.clear = clear.to_string();
+            assert!(ensure_score_payload_supported(&payload).is_ok(), "{clear}");
+        }
+    }
+
+    #[tokio::test]
+    async fn light_assist_easy_score_request_keeps_clear_and_gauge() {
+        let (base_url, requests) = spawn_mock_server(vec![ok(
+            r#"{"accepted":true,"score_id":"score-1","best_updated":true}"#,
+        )]);
+        let client =
+            BmsIrClient::new_with_timeout(&base_url, std::time::Duration::from_secs(2)).unwrap();
+
+        client.submit_score(&assist_easy_gauge_payload(), "123", "token", false).await.unwrap();
+
+        let request = request_json(&requests.recv().unwrap());
+        assert_eq!(request["score"]["result"]["clear"], "LightAssistEasy");
+        assert_eq!(request["score"]["rule"]["gauge"], "AssistEasy");
     }
 
     #[test]
