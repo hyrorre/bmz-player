@@ -33,7 +33,6 @@ use crate::system_sound::{ResolvedSystemSound, SoundSetSelection, SoundType};
 /// BMS の `#WAVxx` は base-36 で最大 1296 個なので、100_000 オフセットなら衝突しない。
 const SYSTEM_SOUND_BASE: u32 = 100_000;
 const VOLUME_EPSILON: f32 = 0.000_1;
-const MAX_SCRATCH_VOICES: usize = 3;
 const SYSTEM_BGM_LOUDNESS_CACHE_FILE: &str = "system-bgm-loudness-v1.json";
 const SYSTEM_BGM_LOUDNESS_CACHE_FORMAT_VERSION: u32 = 1;
 const SYSTEM_BGM_LOUDNESS_ANALYSIS_VERSION: u32 = 2;
@@ -528,15 +527,10 @@ impl SystemSoundManager {
         if sound_type.is_scene_music() {
             commands.push(AudioEngineCommand::StopSound { id });
         }
-        commands.push(if sound_type == SoundType::Scratch {
-            AudioEngineCommand::PlayNowWithVoiceLimit {
-                sound_id: id,
-                volume: master_volume,
-                loop_playback,
-                max_voices: MAX_SCRATCH_VOICES,
-            }
-        } else {
-            AudioEngineCommand::PlayNow { sound_id: id, volume: master_volume, loop_playback }
+        commands.push(AudioEngineCommand::PlayNow {
+            sound_id: id,
+            volume: master_volume,
+            loop_playback,
         });
         if self.engine.push_commands(commands) {
             self.master_gain.set(gain);
