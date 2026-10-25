@@ -11,9 +11,9 @@ use bmz_chart::text::chart_text_event_at_time;
 pub(super) struct ChartMissTextClock {
     /// Chart time of the latest BAD / POOR, the same judgements as the misslayer.
     pub(super) last_miss: Option<TimeUs>,
-    /// Chart time of the latest PGREAT / GREAT / GOOD when the profile hides the
-    /// misslayer on GOOD; `None` otherwise.
-    pub(super) last_good: Option<TimeUs>,
+    /// Chart time of the first PGREAT / GREAT / GOOD processed after the latest
+    /// miss when the profile hides the misslayer on GOOD; `None` otherwise.
+    pub(super) hidden_by_good: Option<TimeUs>,
     /// Profile misslayer duration. `0` never shows the miss message.
     pub(super) duration_us: i64,
 }
@@ -22,9 +22,9 @@ impl ChartMissTextClock {
     pub(super) fn from_session(session: &GameSession) -> Self {
         Self {
             last_miss: session.last_miss_judgement_time,
-            last_good: session
+            hidden_by_good: session
                 .hide_misslayer_on_good
-                .then_some(session.last_good_judgement_time)
+                .then_some(session.miss_hidden_by_good_time)
                 .flatten(),
             duration_us: session.poor_bga_duration_us,
         }
@@ -34,7 +34,7 @@ impl ChartMissTextClock {
     /// a GOOD or better reached after the miss hides it when the profile asks so.
     fn elapsed_us(self, now: TimeUs) -> Option<i64> {
         let last_miss = self.last_miss?;
-        if self.last_good.is_some_and(|good| good > last_miss && good <= now) {
+        if self.hidden_by_good.is_some_and(|good| good <= now) {
             return None;
         }
         let elapsed = now.0.checked_sub(last_miss.0)?;

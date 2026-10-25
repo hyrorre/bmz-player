@@ -507,8 +507,6 @@ fn text00_hides_on_a_later_good_only_when_the_misslayer_does() {
         let mut session = miss_session(Some("MISS!!"), 500_000);
         session.hide_misslayer_on_good = hide_on_good;
         session.last_miss_judgement_time = Some(TimeUs(1_200_000));
-        // An earlier GOOD never hides a later miss.
-        session.last_good_judgement_time = Some(TimeUs(1_100_000));
         let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
         let shown = |session: &GameSession, now: i64| {
             base(session, TimeUs(now), &cache).chart_miss_text_elapsed_ms.is_some()
@@ -516,7 +514,7 @@ fn text00_hides_on_a_later_good_only_when_the_misslayer_does() {
         assert!(shown(&session, 1_300_000), "hide_on_good={hide_on_good}");
 
         // A GOOD after the miss hides it from that time, like the misslayer BGA.
-        session.last_good_judgement_time = Some(TimeUs(1_400_000));
+        session.miss_hidden_by_good_time = Some(TimeUs(1_400_000));
         assert!(shown(&session, 1_399_999), "hide_on_good={hide_on_good}");
         assert_eq!(shown(&session, 1_400_000), !hide_on_good);
         let text = base(&session, TimeUs(1_450_000), &cache).chart_text.to_string();
@@ -524,7 +522,35 @@ fn text00_hides_on_a_later_good_only_when_the_misslayer_does() {
 
         // The next miss shows it again.
         session.last_miss_judgement_time = Some(TimeUs(1_500_000));
+        session.miss_hidden_by_good_time = None;
         assert!(shown(&session, 1_500_000), "hide_on_good={hide_on_good}");
+    }
+}
+
+#[test]
+fn text00_hiding_follows_the_order_of_same_time_judgements() {
+    let event = |judge| JudgementEvent {
+        note_id: Some(NoteId(1)),
+        lane: Lane::Key1,
+        judge,
+        side: TimingSide::Slow,
+        delta: TimeUs(0),
+        time: TimeUs(1_500_000),
+        affects_score: true,
+    };
+    // LR2oraja / DX multi-BAD: one input emits BAD then GOOD at the same time,
+    // which hides the miss message; GOOD then BAD keeps it.
+    for (order, hidden) in [([Judge::Bad, Judge::Good], true), ([Judge::Good, Judge::Bad], false)] {
+        let mut session = miss_session(Some("MISS!!"), 500_000);
+        session.hide_misslayer_on_good = true;
+        bmz_gameplay::session::update_recent_judgements(
+            &mut session,
+            &order.map(event),
+            TimeUs(1_500_000),
+        );
+        let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+        let elapsed = base(&session, TimeUs(1_600_000), &cache).chart_miss_text_elapsed_ms;
+        assert_eq!(elapsed, (!hidden).then_some(100), "{order:?}");
     }
 }
 

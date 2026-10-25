@@ -31,19 +31,42 @@ fn chart_miss_text_tracks_the_latest_misslayer_judgement() {
 }
 
 #[test]
-fn chart_miss_text_tracks_the_latest_good_or_better_for_hiding() {
+fn chart_miss_text_tracks_the_first_good_or_better_after_the_miss_for_hiding() {
     let mut session = session_with_autoplay(chart_with_keysound());
     let mut update = |events: &[JudgementEvent], now: i64| {
         update_recent_judgements(&mut session, events, TimeUs(now));
-        session.last_good_judgement_time
+        session.miss_hidden_by_good_time
     };
+    // A GOOD before any miss has nothing to hide.
+    assert_eq!(update(&[event_at(Judge::Good, 5_000, true)], 5_000), None);
     assert_eq!(update(&[event_at(Judge::Bad, 10_000, true)], 10_000), None);
     assert_eq!(update(&[event_at(Judge::EmptyPoor, 11_000, true)], 11_000), None);
     // Display-only events are ignored, as for the miss time.
     assert_eq!(update(&[event_at(Judge::Good, 12_000, false)], 12_000), None);
-    let hits = [event_at(Judge::Great, 30_000, true), event_at(Judge::PGreat, 20_000, true)];
-    assert_eq!(update(&hits, 30_000), Some(TimeUs(30_000)));
-    assert_eq!(update(&[event_at(Judge::Good, 40_000, true)], 40_000), Some(TimeUs(40_000)));
+    // An older GOOD delivered after the miss does not hide it.
+    assert_eq!(update(&[event_at(Judge::Great, 9_000, true)], 12_000), None);
+    let hits = [event_at(Judge::PGreat, 20_000, true), event_at(Judge::Great, 30_000, true)];
+    assert_eq!(update(&hits, 30_000), Some(TimeUs(20_000)));
+    // The next miss shows the message again until a later GOOD.
+    assert_eq!(update(&[event_at(Judge::Poor, 40_000, true)], 40_000), None);
+    assert_eq!(update(&[event_at(Judge::Good, 50_000, true)], 50_000), Some(TimeUs(50_000)));
+}
+
+#[test]
+fn chart_miss_text_hiding_follows_the_order_of_same_time_judgements() {
+    // LR2oraja / DX multi-BAD emits BAD then GOOD for one input at the same time.
+    let mut session = session_with_autoplay(chart_with_keysound());
+    let multi_bad = [event_at(Judge::Bad, 10_000, true), event_at(Judge::Good, 10_000, true)];
+    update_recent_judgements(&mut session, &multi_bad, TimeUs(10_000));
+    assert_eq!(session.last_miss_judgement_time, Some(TimeUs(10_000)));
+    assert_eq!(session.miss_hidden_by_good_time, Some(TimeUs(10_000)));
+
+    // GOOD then BAD at the same time keeps the miss visible.
+    let mut session = session_with_autoplay(chart_with_keysound());
+    let reversed = [event_at(Judge::Good, 10_000, true), event_at(Judge::Bad, 10_000, true)];
+    update_recent_judgements(&mut session, &reversed, TimeUs(10_000));
+    assert_eq!(session.last_miss_judgement_time, Some(TimeUs(10_000)));
+    assert_eq!(session.miss_hidden_by_good_time, None);
 }
 
 #[test]

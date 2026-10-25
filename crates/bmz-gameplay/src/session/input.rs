@@ -43,15 +43,17 @@ pub fn update_recent_judgements(session: &mut GameSession, events: &[JudgementEv
             continue;
         }
         session.hit_error_ring.push_judgement(event.judge, event.delta.0);
-        let latest = if is_misslayer_judge(event.judge) {
-            Some(&mut session.last_miss_judgement_time)
-        } else if matches!(event.judge, Judge::PGreat | Judge::Great | Judge::Good) {
-            Some(&mut session.last_good_judgement_time)
-        } else {
-            None
-        };
-        if let Some(latest) = latest {
-            *latest = Some(latest.map_or(event.time, |last| last.max(event.time)));
+        if is_misslayer_judge(event.judge) {
+            // An older miss delivered later never replaces the latest one.
+            if session.last_miss_judgement_time.is_none_or(|last| last <= event.time) {
+                session.last_miss_judgement_time = Some(event.time);
+                session.miss_hidden_by_good_time = None;
+            }
+        } else if matches!(event.judge, Judge::PGreat | Judge::Great | Judge::Good)
+            && session.miss_hidden_by_good_time.is_none()
+            && session.last_miss_judgement_time.is_some_and(|last| last <= event.time)
+        {
+            session.miss_hidden_by_good_time = Some(event.time);
         }
     }
     session.recent_judgements.extend(

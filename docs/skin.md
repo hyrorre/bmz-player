@@ -2346,6 +2346,8 @@ nanasiでは`#TEXT00`をミス時に表示します。対象判定や表示時�
 - 表示時間はプロフィール設定のミスレイヤー表示時間（`play.misslayer_duration_ms`、
   MISSLAYER）を使います。0msでは表示しません。MISSLAYER GOOD CLEAR（`play.hide_misslayer_on_good`）が
   ONのときは、ミスレイヤーと同じく、ミスより後のPGREAT・GREAT・GOODで表示を消します。
+  前後は判定の処理順で決めます。multi-BADのように一つの入力から同時刻のBAD→GOODが出た場合は消し、
+  同時刻のGOOD→BADでは表示します。
 - 表示中は20100が`#TEXT00`を返し、20101もその文字列で判定します。チャンネル99のイベントは
   裏で進み、timer 20102もミスでは再始動しません。表示が終わると、その時点の通常テキストへ戻ります。
 - 表示中の次のミスで表示時間を延長し、timer 20105を0msへ戻します。
