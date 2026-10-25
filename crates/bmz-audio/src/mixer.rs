@@ -56,7 +56,12 @@ impl MixerState {
                     if max_voices == 0 {
                         continue;
                     }
-                    limit_same_sound(&mut self.voices, sound.sound_id, max_voices);
+                    limit_same_sound(
+                        &mut self.voices,
+                        sound.sound_id,
+                        max_voices,
+                        voice_steal_fade_out_frames(self.output_sample_rate),
+                    );
                 }
                 RestartPolicy::Overlap => {}
             }
@@ -234,19 +239,48 @@ impl MixerState {
     }
 }
 
+/// 同時発音数の上限で押し出した voice を止めるまでのフェード時間(10ms)。
+/// 波形途中で 0 にするとクリックノイズが出るため、短く絞ってから止める。
+fn voice_steal_fade_out_frames(output_sample_rate: u32) -> u32 {
+    (output_sample_rate / 100).max(1)
+}
+
 fn limit_same_sound(
     voices: &mut Vec<ActiveVoice>,
     sound_id: bmz_core::ids::SoundId,
     max_voices: usize,
+    fade_out_frames: u32,
 ) {
+    // voice は古い順に並んでいる。`swap_remove` は順序を崩すため使わない。
+    let is_active =
+        |voice: &ActiveVoice| voice.sound.sound_id == sound_id && voice.fade_out.is_none();
+    let mut active_count = voices.iter().filter(|voice| is_active(voice)).count();
+    while active_count >= max_voices {
+        let Some(index) = voices.iter().position(is_active) else {
+            break;
+        };
+        if voices[index].started {
+            // 最古の音はフェードアウト後に mix_stereo が破棄する。
+            voices[index].fade_out = Some(ActiveVoiceFadeOut {
+                started_output_frames: voices[index].played_output_frames,
+                frames: fade_out_frames,
+            });
+        } else {
+            // まだ鳴っていない voice は即時に破棄してもノイズにならない。
+            voices.remove(index);
+        }
+        active_count -= 1;
+    }
+
+    // フェード中の voice も含めた総数が際限なく増えないよう、上限の 2 倍で古いものから破棄する。
+    let hard_limit = max_voices.saturating_mul(2);
     let mut same_sound_count =
         voices.iter().filter(|voice| voice.sound.sound_id == sound_id).count();
-    while same_sound_count >= max_voices {
+    while same_sound_count >= hard_limit {
         let Some(index) = voices.iter().position(|voice| voice.sound.sound_id == sound_id) else {
             break;
         };
-        // voice は古い順に追加されるため、最新の音を残して最古のものを落とす。
-        voices.swap_remove(index);
+        voices.remove(index);
         same_sound_count -= 1;
     }
 }
@@ -648,6 +682,93 @@ mod tests {
         mixer.mix_stereo(&bank, 0, &mut output);
 
         assert_eq!(output, vec![3.0, 3.0]);
+    }
+
+    #[test]
+    fn limit_same_sound_policy_fades_out_oldest_started_voice() {
+        let mut bank = SampleBank::default();
+        bank.insert(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0; 2_000] },
+        );
+        let mut mixer = MixerState::default();
+        let fade_frames = voice_steal_fade_out_frames(mixer.output_sample_rate) as usize;
+        for _ in 0..3 {
+            mixer.push_scheduled([scheduled_sound(0, 1, 1.0, RestartPolicy::LimitSameSound(3))]);
+            mixer.mix_stereo(&bank, 0, &mut [0.0; 2]);
+        }
+
+        mixer.push_scheduled([scheduled_sound(0, 1, 1.0, RestartPolicy::LimitSameSound(3))]);
+
+        // 押し出された最古の voice は即時に消えず、フェードアウトしながら残る。
+        assert_eq!(mixer.voices.len(), 4);
+        assert!(mixer.voices[0].fade_out.is_some());
+        assert!(mixer.voices[1..].iter().all(|voice| voice.fade_out.is_none()));
+
+        let mut output = vec![0.0; (fade_frames + 1) * 2];
+        mixer.mix_stereo(&bank, 0, &mut output);
+
+        assert_eq!(output[0], 4.0);
+        let midpoint = output[fade_frames];
+        assert!(midpoint > 3.0 && midpoint < 4.0, "midpoint gain was {midpoint}");
+        assert_eq!(output[fade_frames * 2], 3.0);
+        assert_eq!(mixer.voices.len(), 3);
+    }
+
+    #[test]
+    fn limit_same_sound_policy_steals_in_start_order_around_other_sounds() {
+        let mut bank = SampleBank::default();
+        for id in [1, 2] {
+            bank.insert(
+                SoundId(id),
+                DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0; 2_000] },
+            );
+        }
+        let mut mixer = MixerState::default();
+        // 音量を voice の識別子に使う。[A1, X, A2, A3] の並びを作る。
+        for (sound_id, volume, policy) in [
+            (1, 0.1, RestartPolicy::LimitSameSound(3)),
+            (2, 1.0, RestartPolicy::Overlap),
+            (1, 0.2, RestartPolicy::LimitSameSound(3)),
+            (1, 0.3, RestartPolicy::LimitSameSound(3)),
+            (1, 0.4, RestartPolicy::LimitSameSound(3)),
+            (1, 0.5, RestartPolicy::LimitSameSound(3)),
+        ] {
+            mixer.push_scheduled([scheduled_sound(0, sound_id, volume, policy)]);
+            mixer.mix_stereo(&bank, 0, &mut [0.0; 2]);
+        }
+
+        let fading = mixer
+            .voices
+            .iter()
+            .filter(|voice| voice.sound.sound_id == SoundId(1) && voice.fade_out.is_some())
+            .map(|voice| voice.sound.volume)
+            .collect::<Vec<_>>();
+        let active = mixer
+            .voices
+            .iter()
+            .filter(|voice| voice.sound.sound_id == SoundId(1) && voice.fade_out.is_none())
+            .map(|voice| voice.sound.volume)
+            .collect::<Vec<_>>();
+        assert_eq!(fading, vec![0.1, 0.2]);
+        assert_eq!(active, vec![0.3, 0.4, 0.5]);
+    }
+
+    #[test]
+    fn limit_same_sound_policy_caps_fading_voices() {
+        let mut bank = SampleBank::default();
+        bank.insert(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0; 2_000] },
+        );
+        let mut mixer = MixerState::default();
+        for _ in 0..10 {
+            mixer.push_scheduled([scheduled_sound(0, 1, 1.0, RestartPolicy::LimitSameSound(3))]);
+            mixer.mix_stereo(&bank, 0, &mut [0.0; 2]);
+        }
+
+        assert_eq!(mixer.voices.len(), 6);
+        assert_eq!(mixer.voices.iter().filter(|voice| voice.fade_out.is_none()).count(), 3);
     }
 
     #[test]
