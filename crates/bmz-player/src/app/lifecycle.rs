@@ -148,14 +148,19 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     self.update_select_option_panel();
                     return;
                 }
-                // ESC は BMZ メニューを閉じる操作を、フォルダを閉じる・長押し終了より優先する。
+                // ESC は BMZ メニュー (とメニュー内ポップアップ) を閉じる操作を、
+                // フォルダを閉じる・長押し終了より優先する。
                 // プレイ中は ESC がプレイ中断なので、メニュー表示中もプレイ側へ渡す。
                 if event.physical_key == PhysicalKey::Code(KeyCode::Escape)
                     && event.state == ElementState::Pressed
                     && !event.repeat
                     && !has_play_context
                     && !practice_overlay
-                    && self.ui.egui.as_mut().is_some_and(|egui| egui.close_on_escape(egui_consumed))
+                    && self
+                        .ui
+                        .egui
+                        .as_mut()
+                        .is_some_and(|egui| egui.close_on_escape(egui_consumed).handled())
                 {
                     self.update_select_option_panel();
                     return;

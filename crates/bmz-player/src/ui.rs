@@ -130,10 +130,11 @@ pub use model::{
     SkinReloadRequest, SongScanRequest, UpdateDialog, UpdateDialogAction,
 };
 use runtime::AudioDevicePickerState;
+pub use runtime::MenuEscape;
 #[cfg(test)]
 use runtime::{
     blocks_game_input_for_modal_state, egui_consumed_game_input, egui_frame_needs_full_state,
-    escape_closes_menu,
+    menu_escape_action,
 };
 
 #[cfg(test)]

@@ -218,15 +218,21 @@ fn escape_closes_the_menu_only_after_text_input_and_popups_are_done() {
     for _ in 0..3 {
         frame(Vec::new());
     }
-    assert!(escape_closes_menu(true, ctx.egui_wants_keyboard_input(), ctx.any_popup_open()));
-    assert!(!escape_closes_menu(false, false, false));
+    assert_eq!(
+        menu_escape_action(true, ctx.egui_wants_keyboard_input(), ctx.any_popup_open()),
+        MenuEscape::ClosedMenu
+    );
+    assert_eq!(menu_escape_action(false, false, false), MenuEscape::NotHandled);
 
     // 文字入力中の ESC は egui が消費して入力欄を抜けるだけにする。
     focus_text.set(true);
     frame(Vec::new());
     frame(Vec::new());
     assert!(ctx.egui_wants_keyboard_input());
-    assert!(!escape_closes_menu(true, ctx.egui_wants_keyboard_input(), ctx.any_popup_open()));
+    assert_eq!(
+        menu_escape_action(true, ctx.egui_wants_keyboard_input(), ctx.any_popup_open()),
+        MenuEscape::NotHandled
+    );
     ctx.memory_mut(|memory| memory.stop_text_input());
     frame(Vec::new());
 
@@ -242,7 +248,12 @@ fn escape_closes_the_menu_only_after_text_input_and_popups_are_done() {
     frame(vec![click(false)]);
     frame(Vec::new());
     assert!(ctx.any_popup_open());
-    assert!(!escape_closes_menu(true, ctx.egui_wants_keyboard_input(), ctx.any_popup_open()));
+    // ComboBox はキーボードフォーカスを取らないため、egui-winit は ESC を未消費と
+    // 報告する。それでもメニュー側で止め、選曲のフォルダ移動へ伝播させない。
+    assert!(!ctx.egui_wants_keyboard_input());
+    let action = menu_escape_action(true, ctx.egui_wants_keyboard_input(), ctx.any_popup_open());
+    assert_eq!(action, MenuEscape::KeptForPopup);
+    assert!(action.handled());
 }
 
 #[test]
