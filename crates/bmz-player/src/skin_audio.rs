@@ -34,6 +34,8 @@ pub struct SkinAudioRuntime {
     scene_audio: Vec<SkinAudioActionDef>,
     custom_events: Vec<SkinCustomEventDef>,
     fired_once_events: HashSet<i32>,
+    /// 動画出力はsample時計で進むため、Luaが鳴らすfileを呼び出し元でdecodeする。
+    decode_inline: bool,
 }
 
 struct SkinAudioFile {
@@ -96,7 +98,15 @@ impl SkinAudioRuntime {
             scene_audio: Vec::new(),
             custom_events: Vec::new(),
             fired_once_events: HashSet::new(),
+            decode_inline: false,
         }
+    }
+
+    /// Luaの`audio_*`が初めて鳴らすfileを、background workerではなく呼び出し元でdecodeする。
+    /// 命令の結果が実時間に依存しないため、offlineの動画出力で使う。
+    pub fn decode_inline(mut self) -> Self {
+        self.decode_inline = true;
+        self
     }
 
     pub fn reset(&mut self) {
@@ -216,6 +226,10 @@ impl SkinAudioRuntime {
             state: Mutex::new(SkinAudioFileState::Loading(Vec::new())),
         });
         self.files.insert(path.clone(), Arc::clone(&file));
+        if self.decode_inline {
+            file.decode(&self.engine, &path);
+            return Some(file);
+        }
         let engine = self.engine.clone();
         let worker = Arc::clone(&file);
         let spawned = std::thread::Builder::new()
@@ -443,6 +457,21 @@ mod tests {
         assert_eq!(render(&mut processor, 1), vec![0.1, 0.1]);
         assert!(!runtime.trigger_timer(2, 0.5, 0.8));
         assert_eq!(render(&mut processor, 1), vec![0.0, 0.0]);
+    }
+
+    #[test]
+    fn inline_decode_registers_lua_files_before_the_next_render() {
+        let root = crate::test_dir::TestDir::new("bmz-skin-lua-audio-inline");
+        std::fs::create_dir_all(&*root).unwrap();
+        let path = root.join("open.wav");
+        write_wav(&path, 4_800, 16_384);
+        let engine = AudioEngineHandle::new(AudioEngine::default());
+        let mut processor = engine.processor();
+        let mut runtime = SkinAudioRuntime::for_lua(engine, SkinRuntimeScene::Play).decode_inline();
+
+        assert!(runtime.run_lua_action(&action(SkinAudioActionKind::Play, &path, 1.0), 1.0, 0.5));
+        assert!(matches!(*runtime.files[&path].state.lock().unwrap(), SkinAudioFileState::Ready));
+        assert_eq!(render(&mut processor, 1), vec![0.25, 0.25]);
     }
 
     #[test]

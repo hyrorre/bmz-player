@@ -127,7 +127,7 @@ pub(super) fn skin_runtime_scene_for_kind(kind: SkinKind) -> SkinRuntimeScene {
 }
 
 /// beatoraja's system volume is BMZ's master volume. Returns whether it changed.
-pub(super) fn set_audio_mix_volume(
+pub(crate) fn set_audio_mix_volume(
     mix: &mut AudioMixConfig,
     channel: SkinVolumeChannel,
     value: f32,

@@ -314,6 +314,7 @@ mod skin_flow_upload;
 mod skin_flow_video;
 mod skin_loading;
 mod skin_lua_effects;
+pub(crate) use skin_lua_effects::set_audio_mix_volume;
 mod skin_options;
 mod skin_pipeline;
 mod skin_runtime_types;

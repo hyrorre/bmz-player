@@ -279,6 +279,33 @@ impl Simulation {
     pub fn acknowledge_frame(&mut self) {
         self.skin_events.clear();
     }
+    /// Applies what the Play skin's Lua `customEvents` requested while the frame
+    /// was drawn, like live play does after `prepare_scene`. Sounds start at the
+    /// current sample cursor; volume changes stay in this export's profile copy.
+    pub fn apply_skin_lua_effects(&mut self, effects: Vec<bmz_render::skin::SkinLuaEffect>) {
+        use bmz_render::skin::SkinLuaEffect;
+        for effect in effects {
+            match effect {
+                SkinLuaEffect::Audio(action) => {
+                    let (bgm_volume, se_volume) = (self.system_bgm_volume(), self.system_volume());
+                    self.skin_audio.run_lua_action(&action, bgm_volume, se_volume);
+                }
+                SkinLuaEffect::SetVolume { channel, value } => {
+                    let profile = &mut self.prepared.profile;
+                    if crate::app::set_audio_mix_volume(&mut profile.audio_mix, channel, value) {
+                        let session = &mut self.prepared.play.session;
+                        session.audio_mix =
+                            crate::config::play::audio_mix_from_profile_with_chart_gain(
+                                profile,
+                                session.audio_mix.chart_normalization_gain,
+                            );
+                    }
+                }
+                // Play has no built-in event for a Lua event action, as in live play.
+                SkinLuaEffect::Event { .. } => {}
+            }
+        }
+    }
     pub fn snapshot(
         &self,
         scene_us: i64,

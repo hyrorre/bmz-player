@@ -98,7 +98,8 @@ impl Fixture {
         let document =
             serde_json::from_str("{\"type\":0,\"name\":\"test\",\"w\":320,\"h\":180}").unwrap();
         let skin_audio =
-            crate::skin_audio::SkinAudioRuntime::install(engine.clone(), &document, Vec::new());
+            crate::skin_audio::SkinAudioRuntime::install(engine.clone(), &document, Vec::new())
+                .decode_inline();
         simulation::Simulation::new(
             prepared,
             simulation::SceneTiming {
@@ -250,6 +251,96 @@ fn fps_and_consumer_stalls_do_not_change_pcm_or_judgements() {
         }
         assert!(!fixture.paths.library_db.exists());
         assert!(!fixture.root.join("profiles/default/score.db").exists());
+    }
+    assert_eq!(
+        profile_before,
+        fs::read(fixture.root.join("profiles/default/profile.toml")).unwrap()
+    );
+}
+
+/// 48 kHz mono 16-bit PCM of a constant sample.
+fn write_constant_wav(path: &Path, frames: u32, value: i16) {
+    let data_len = frames * 2;
+    let mut wav = Vec::with_capacity(44 + data_len as usize);
+    wav.extend(b"RIFF");
+    wav.extend((36 + data_len).to_le_bytes());
+    wav.extend(b"WAVEfmt ");
+    wav.extend(16_u32.to_le_bytes());
+    wav.extend(1_u16.to_le_bytes());
+    wav.extend(1_u16.to_le_bytes());
+    wav.extend(48000_u32.to_le_bytes());
+    wav.extend(96000_u32.to_le_bytes());
+    wav.extend(2_u16.to_le_bytes());
+    wav.extend(16_u16.to_le_bytes());
+    wav.extend(b"data");
+    wav.extend(data_len.to_le_bytes());
+    for _ in 0..frames {
+        wav.extend(value.to_le_bytes());
+    }
+    fs::write(path, wav).unwrap();
+}
+
+#[test]
+fn play_skin_lua_audio_and_volume_effects_reach_pcm_at_any_fps() {
+    use bmz_render::skin::{
+        SkinAudioActionDef, SkinAudioActionKind, SkinLuaEffect, SkinVolumeChannel,
+    };
+    let fixture = Fixture::new();
+    let profile_before = fs::read(fixture.root.join("profiles/default/profile.toml")).unwrap();
+    let se = fixture.root.join("se.wav");
+    // 0.1 s, so the one-shot at 1.2 s ends before the window closes.
+    write_constant_wav(&se, 4800, 8192);
+    let audio = |action| {
+        SkinLuaEffect::Audio(SkinAudioActionDef {
+            action,
+            path: se.to_string_lossy().into_owned(),
+            volume: 1.0,
+        })
+    };
+    // Effects a Lua time condition would emit on the frame drawn at these scene times.
+    let effects_at = |scene_ms: u64| match scene_ms {
+        0 => vec![
+            SkinLuaEffect::SetVolume { channel: SkinVolumeChannel::Key, value: 0.0 },
+            SkinLuaEffect::SetVolume { channel: SkinVolumeChannel::Bgm, value: 0.0 },
+        ],
+        500 => vec![audio(SkinAudioActionKind::Loop)],
+        800 => vec![audio(SkinAudioActionKind::Stop)],
+        1200 => vec![audio(SkinAudioActionKind::Play)],
+        _ => Vec::new(),
+    };
+    let mut reference = None;
+    for fps in [30, 60, 120] {
+        let mut simulation = fixture.simulation();
+        let mut pcm = Vec::new();
+        for frame in 0..=fps * 3 / 2 {
+            simulation
+                .advance_to(frame * 48000 / fps, |block| {
+                    pcm.extend_from_slice(block);
+                    Ok(())
+                })
+                .unwrap();
+            let scene_us = frame * 1_000_000 / fps;
+            simulation.acknowledge_frame();
+            if scene_us % 1000 == 0 {
+                simulation.apply_skin_lua_effects(effects_at(scene_us / 1000));
+            }
+        }
+        assert_eq!(simulation.prepared.profile.audio_mix.key_volume, 0);
+        assert_eq!(simulation.prepared.play.session.audio_mix.key_volume, 0.0);
+        let window = |from_ms: usize, to_ms: usize| &pcm[from_ms * 96..to_ms * 96];
+        let silent = |samples: &[f32]| samples.iter().all(|value| value.abs() < 1e-6);
+        let audible = |samples: &[f32]| samples.iter().all(|value| value.abs() > 0.01);
+        // The chart's keysounds (0.9 s onward) stay silent after the key volume change.
+        assert!(silent(window(0, 500)));
+        assert!(audible(window(501, 800)), "audio_loop must sound until audio_stop");
+        assert!(silent(window(810, 1200)), "audio_stop and key volume 0 must silence");
+        assert!(audible(window(1201, 1300)), "audio_play must sound once");
+        assert!(silent(window(1310, 1500)));
+        if let Some(reference) = &reference {
+            assert_eq!(reference, &pcm, "{fps} fps changed the PCM");
+        } else {
+            reference = Some(pcm);
+        }
     }
     assert_eq!(
         profile_before,

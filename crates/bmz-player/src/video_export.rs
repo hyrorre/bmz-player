@@ -87,7 +87,8 @@ pub fn run(options: VideoExportOptions, paths: &AppPaths, profile_id: Option<&st
         system_handle.clone(),
         &decoded.document,
         std::mem::take(&mut decoded.audio_assets),
-    );
+    )
+    .decode_inline();
     let timing =
         media.presentation_timing(simulation::SceneTiming::from_document(&decoded.document));
     crate::skin_loader::install_decoded_skin(&mut renderer, decoded, manifest)?;
@@ -152,6 +153,9 @@ pub fn run(options: VideoExportOptions, paths: &AppPaths, profile_id: Option<&st
         )?;
         renderer.render_scene(AppSceneSnapshot::Play(snapshot))?;
         simulation.acknowledge_frame();
+        simulation.apply_skin_lua_effects(
+            renderer.take_skin_lua_effects(bmz_render::renderer::SkinRuntimeScene::Play),
+        );
         encoder.frame(&renderer.read_offscreen_rgba()?)?;
         frame += 1;
         if last_progress.elapsed().as_secs() >= 1 {
