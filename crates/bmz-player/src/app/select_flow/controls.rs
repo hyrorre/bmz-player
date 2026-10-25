@@ -943,7 +943,10 @@ impl WinitApp {
             delta_ms,
         );
         if changed {
-            self.finish_selected_play_mode_edit();
+            // visual offsetはpreload一致条件に含まれず、install時にprofileから適用される。
+            // LOAD中にpreloadを無効化するとPlay開始が止まるため、ここでは無効化しない。
+            self.boot.profile_config.sync_active_play_mode();
+            self.boot.profile_config.updated_at = now_unix_seconds();
             self.sync_realtime_profile_settings();
             tracing::info!(
                 visual_offset_ms = self.boot.profile_config.judge.visual_offset_us / 1_000,

@@ -233,6 +233,54 @@ fn visual_offset_runtime_mode_updates_only_actual_mode_and_roundtrips() {
     assert_eq!(restored.play_mode_config(KeyMode::K9).visual_offset_us, 3_000);
 }
 
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "creates a Winit event loop; run alone with --ignored"]
+fn visual_offset_change_during_play_load_keeps_play_preload() {
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+
+    let event_loop =
+        EventLoop::<AppUserEvent>::with_user_event().with_any_thread(true).build().unwrap();
+    let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+    let mut boot = data.boot();
+    boot.app_config.input.gamepad_enabled = false;
+    let (maintenance_tx, _) = tokio::sync::watch::channel(false);
+    let mut app = WinitApp::new(
+        boot,
+        AppOptions { viewer_play: true, ..Default::default() },
+        Instant::now(),
+        None,
+        None,
+        Arc::new(AtomicBool::new(false)),
+        event_loop.create_proxy(),
+        LogBuffer::default(),
+        maintenance_tx,
+        None,
+    )
+    .unwrap();
+    app.viewer_mode = false;
+    app.boot.profile_config.activate_play_mode(KeyMode::K7);
+    app.boot.profile_config.judge.visual_offset_us = 0;
+    app.boot.profile_config.sync_active_play_mode();
+    app.play.pending_play_start = Some(PendingPlayStart::from_snapshot(
+        1,
+        Default::default(),
+        &RenderSnapshot::default(),
+        &app.boot.profile_config,
+        KeyMode::K7,
+        KeyMode::K7,
+        Default::default(),
+    ));
+    let generation = app.play.play_preload_generation;
+
+    // LOAD中 (active_play 前) の変更でpreloadを捨てると、Play開始が永久に止まる。
+    assert!(app.adjust_visual_offset_ms(1));
+
+    assert_eq!(app.play.play_preload_generation, generation);
+    assert!(app.play.pending_play_start.is_some());
+    assert_eq!(app.boot.profile_config.play_mode_config(KeyMode::K7).visual_offset_us, 1_000);
+}
+
 #[test]
 fn result_panel_direct_selection_matches_tab_availability() {
     assert_eq!(selected_result_panel(1, 2, true, true), Some(2));
