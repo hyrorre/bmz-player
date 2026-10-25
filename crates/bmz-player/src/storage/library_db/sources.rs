@@ -20,19 +20,30 @@ impl ChartSource {
         ChartLocator::parse(&self.path)
     }
     fn active(&self, roots: &scope::SongRootScope) -> bool {
-        if roots.is_unrestricted() {
-            return true;
-        }
-        let path = self.path.to_string_lossy();
-        roots.contains_file_in_enabled_root(&path)
-            || (!roots.contains_file(&path)
-                && (self.root_id.is_none() || roots.contains_file_in_partial_scan(&path)))
+        file_active(&self.path, self.root_id, roots)
     }
 
     fn readable(&self) -> bool {
-        self.locator().is_ok_and(|locator| locator.readable())
+        file_readable(&self.path)
     }
 }
+
+fn file_active(path: &Path, root_id: Option<i64>, roots: &scope::SongRootScope) -> bool {
+    if roots.is_unrestricted() {
+        return true;
+    }
+    let path = path.to_string_lossy();
+    roots.contains_file_in_enabled_root(&path)
+        || (!roots.contains_file(&path)
+            && (root_id.is_none() || roots.contains_file_in_partial_scan(&path)))
+}
+
+fn file_readable(path: &Path) -> bool {
+    ChartLocator::parse(path).is_ok_and(|locator| locator.readable())
+}
+
+/// A file linked to a listed chart: (path, root id, chart import version).
+type OwnChartFile = (PathBuf, Option<i64>, i64);
 
 pub(crate) fn prime_archive_generations(conn: &Connection) -> Result<()> {
     let mut stmt = conn.prepare("SELECT path, stamp, generation FROM song_archive_fingerprints")?;
@@ -96,6 +107,39 @@ impl LibraryDatabase {
 
     /// Use the last successful scan's file registrations, without touching song disks.
     /// Missing registrations are pruned by complete scans; playback still verifies files.
+    /// Files linked to each listed chart, in the order the hash lookup prefers a chart's
+    /// own copies.
+    fn own_chart_files(
+        &self,
+        charts: &[&ChartListItem],
+    ) -> Result<HashMap<i64, Vec<OwnChartFile>>> {
+        crate::storage::common::fill_temp_values(
+            &self.conn,
+            "requested_chart_ids",
+            charts.iter().map(|chart| chart.chart_id),
+        )?;
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT l.chart_id, f.path, f.root_id, c.import_version
+             FROM temp.requested_chart_ids r
+             JOIN chart_file_links l ON l.chart_id = r.value
+             JOIN chart_files f ON f.id = l.chart_file_id
+             JOIN charts c ON c.id = l.chart_id
+             ORDER BY l.chart_id, f.path COLLATE NOCASE",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                (PathBuf::from(row.get::<_, String>(1)?), row.get(2)?, row.get(3)?),
+            ))
+        })?;
+        let mut files: HashMap<i64, Vec<OwnChartFile>> = HashMap::with_capacity(charts.len());
+        for row in rows {
+            let (chart_id, file) = row?;
+            files.entry(chart_id).or_default().push(file);
+        }
+        Ok(files)
+    }
+
     pub fn registered_chart_sources(
         &self,
         charts: &[&ChartListItem],
@@ -112,6 +156,39 @@ impl LibraryDatabase {
             return Ok(HashMap::new());
         }
         let roots = scope::SongRootScope::load(&self.conn)?;
+        let mut readable = HashMap::new();
+        let mut resolved = HashMap::new();
+        // A listed chart is almost always its own active copy. Reading only its file rows
+        // avoids re-reading every chart row by hash (68k charts: ~1.3 s); the hash lookup
+        // below remains for charts whose own copy is inactive or unreadable.
+        let own_files = self.own_chart_files(charts)?;
+        let mut remaining = Vec::new();
+        for chart in charts {
+            let own =
+                own_files.get(&chart.chart_id).into_iter().flatten().find(|(path, root_id, _)| {
+                    file_active(path, *root_id, &roots)
+                        && (!verify_files
+                            || *readable.entry(path.clone()).or_insert_with(|| file_readable(path)))
+                });
+            match own {
+                Some((path, root_id, import_version)) => {
+                    resolved.insert(
+                        chart.chart_id,
+                        ChartSource {
+                            chart: (*chart).clone(),
+                            path: path.clone(),
+                            import_version: *import_version,
+                            root_id: *root_id,
+                        },
+                    );
+                }
+                None => remaining.push(*chart),
+            }
+        }
+        if remaining.is_empty() {
+            return Ok(resolved);
+        }
+        let charts = remaining.as_slice();
         let mut hashes: Vec<_> = charts.iter().map(|chart| hash_to_hex(&chart.sha256)).collect();
         hashes.sort_unstable();
         hashes.dedup();
@@ -141,8 +218,6 @@ impl LibraryDatabase {
                 }
             }
         }
-        let mut readable = HashMap::new();
-        let mut resolved = HashMap::new();
         for chart in charts {
             if let Some(sources) = candidates.get(&chart.sha256) {
                 // Preserve each requested copy's assets, even for identical hashes.

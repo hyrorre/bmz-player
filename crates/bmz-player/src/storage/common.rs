@@ -14,6 +14,35 @@ pub fn configure_connection(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Recreates the per-connection temp table `table(value PRIMARY KEY)` holding `values`, for
+/// one join over a large select list. Read-only connections can still write `temp`.
+/// `table` must be a fixed identifier.
+pub(crate) fn fill_temp_values<T: rusqlite::ToSql>(
+    conn: &Connection,
+    table: &str,
+    values: impl IntoIterator<Item = T>,
+) -> Result<()> {
+    debug_assert!(table.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'));
+    conn.execute_batch(&format!(
+        "SAVEPOINT fill_{table};
+         DROP TABLE IF EXISTS temp.{table};
+         CREATE TEMP TABLE {table}(value PRIMARY KEY) WITHOUT ROWID;"
+    ))?;
+    let filled = (|| -> Result<()> {
+        let mut insert =
+            conn.prepare_cached(&format!("INSERT OR IGNORE INTO temp.{table} VALUES (?1)"))?;
+        for value in values {
+            insert.execute([value])?;
+        }
+        Ok(())
+    })();
+    if filled.is_err() {
+        let _ = conn.execute_batch(&format!("ROLLBACK TO fill_{table}"));
+    }
+    conn.execute_batch(&format!("RELEASE fill_{table}"))?;
+    filled
+}
+
 /// Encode a byte slice as a lowercase hex string.
 ///
 /// 全テーブルのハッシュ列（`charts.md5/sha256`, `chart_files.md5/sha256`,
