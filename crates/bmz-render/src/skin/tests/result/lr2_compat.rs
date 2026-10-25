@@ -83,6 +83,26 @@ fn lr2_played_gauge_button_folds_gauges_missing_from_lr2() {
 }
 
 #[test]
+fn lr2_played_gauge_button_hides_course_stage_lamp_rounded_to_no_play() {
+    use bmz_core::clear::ClearType;
+    // A passed course stage keeps option 90 but its lamp is rounded to NoPlay.
+    let stage = |clear: ClearType, failed: bool| SkinDrawState {
+        gauge_type: 6,
+        opponent_gauge_type: Some(6),
+        select_clear_index: clear as i64,
+        result_failed: Some(failed),
+        ..Default::default()
+    };
+    let button = |state: &SkinDrawState| skin_state_event_index(LR2_BUTTON_BASE + 40, state);
+    assert_eq!(button(&stage(ClearType::NoPlay, false)), -1);
+    assert_eq!(skin_state_event_index(LR2_BUTTON_BASE + 41, &stage(ClearType::NoPlay, false)), 1);
+    assert_eq!(button(&stage(ClearType::FullCombo, false)), 1);
+    assert_eq!(button(&stage(ClearType::Hard, false)), 1);
+    assert_eq!(button(&stage(ClearType::Failed, true)), 1);
+    assert_eq!(button(&SkinDrawState { gauge_type: 6, ..Default::default() }), 1);
+}
+
+#[test]
 fn first_play_update_options_compare_with_empty_score_on_result_only() {
     let mut state = SkinDrawState {
         ex_score: 10,

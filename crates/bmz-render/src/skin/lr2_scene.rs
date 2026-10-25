@@ -33,6 +33,7 @@ pub(super) fn button_index(button: i32, state: &SkinDrawState) -> i32 {
     match button {
         1..=8 => i32::from(i32::from(state.select_option_panel) == button),
         40 if state.select_screen => optional(lr2_gauge_index(state.select_gauge_index)),
+        40 if result_lamp_rounded_to_no_play(state) => -1,
         40 => lr2_played_gauge_cell(state.gauge_type),
         41 => state.opponent_gauge_type.map_or(-1, lr2_played_gauge_cell),
         42 => optional(lr2_arrange_index(state.select_extended_arrange_index)),
@@ -85,6 +86,14 @@ pub(super) fn button_index(button: i32, state: &SkinDrawState) -> i32 {
         13..=19 | 57 | 58 => 0,
         _ => -1,
     }
+}
+
+/// A passed course stage whose Result lamp is rounded to NoPlay. LR2 Result skins
+/// (e.g. W-mix) draw the current lamp as "gauge button 40 + CLEAR" under option 90,
+/// which follows the actual outcome, so the button is hidden instead.
+fn result_lamp_rounded_to_no_play(state: &SkinDrawState) -> bool {
+    state.result_failed == Some(false)
+        && state.select_clear_index == bmz_core::clear::ClearType::NoPlay as i64
 }
 
 /// Button 40 / 41 cell of the gauge played on Play / Result. LR2 has only GROOVE /
