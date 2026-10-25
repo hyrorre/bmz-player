@@ -75,14 +75,30 @@ pub fn build_audio_engine_for_chart(
     (audio, sample_report)
 }
 
+/// Keysound decode threads for play loading. The audio output thread and the window keep a
+/// core each; more threads stop paying off as decoding becomes memory bound.
+fn play_sample_decode_threads() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .saturating_sub(2)
+        .clamp(1, MAX_PLAY_SAMPLE_DECODE_THREADS)
+}
+const MAX_PLAY_SAMPLE_DECODE_THREADS: usize = 8;
+
+/// Decodes the chart's keysounds on [`play_sample_decode_threads`] threads.
 pub(super) fn build_audio_engine_for_chart_with_progress(
     chart: &PlayableChart,
     sample_rate: u32,
-    loader: &mut dyn SampleLoader,
     on_progress: impl FnMut(usize, usize),
 ) -> (AudioEngine, Vec<LoadedSampleReport>) {
     let mut audio = AudioEngine::new(sample_rate);
-    let sample_report = load_chart_samples_with_progress(&mut audio, chart, loader, on_progress);
+    let make_loader = || Box::new(FfmpegSampleLoader::default()) as Box<dyn SampleLoader + Send>;
+    let sample_report = load_chart_samples_parallel_with_progress(
+        &mut audio,
+        chart,
+        ParallelSampleDecode { threads: play_sample_decode_threads(), make_loader: &make_loader },
+        on_progress,
+    );
     (audio, sample_report)
 }
 
@@ -271,12 +287,10 @@ pub fn preload_play_session_for_chart_with_callbacks(
         "play preload parsed and prepared chart"
     );
     on_chart(&prepared_chart);
-    let mut loader = FfmpegSampleLoader::default();
     let audio_load_started_at = Instant::now();
     let (audio, sample_report) = build_audio_engine_for_chart_with_progress(
         &prepared_chart.chart,
         options.sample_rate,
-        &mut loader,
         on_progress,
     );
     let audio_load_elapsed = audio_load_started_at.elapsed();
@@ -357,10 +371,9 @@ pub fn preload_play_session_reloading_audio_with_progress(
         archive_resources,
     } = prepared_chart;
     let sound_counts = sound_preload_counts(&chart);
-    let mut loader = FfmpegSampleLoader::default();
     let audio_load_started_at = Instant::now();
     let (audio, sample_report) =
-        build_audio_engine_for_chart_with_progress(&chart, sample_rate, &mut loader, on_progress);
+        build_audio_engine_for_chart_with_progress(&chart, sample_rate, on_progress);
     tracing::info!(
         audio_load_elapsed_ms = audio_load_started_at.elapsed().as_millis(),
         sound_sources = sound_counts.source_count,

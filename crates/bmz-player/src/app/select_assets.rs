@@ -13,13 +13,9 @@ use bmz_render::assets::{AnimatedImage, RgbaImageAsset, load_chart_image};
 use bmz_render::skin::SkinImageSize;
 
 use crate::chart_preview::SelectChartPreview;
+use crate::generated_preview::lower_current_thread_priority;
 use crate::generated_preview::{
     parse_generated_preview_cache_key, render_generated_preview_for_chart,
-};
-
-#[cfg(windows)]
-use windows_sys::Win32::System::Threading::{
-    GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
 };
 
 pub(super) const SELECT_PREVIEW_FADE_DURATION: Duration = Duration::from_millis(150);
@@ -764,18 +760,6 @@ pub(super) fn select_preview_fade_factor(fade: SelectPreviewFade, now: Instant) 
     }
     .clamp(0.0, 1.0)
 }
-
-#[cfg(windows)]
-fn lower_current_thread_priority() {
-    // 生成中の FFmpeg decode が短い ASIO callback の実行期限を奪わないようにする。
-    let updated = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) };
-    if updated == 0 {
-        tracing::debug!("failed to lower generated preview worker priority");
-    }
-}
-
-#[cfg(not(windows))]
-fn lower_current_thread_priority() {}
 
 #[cfg(test)]
 mod tests {

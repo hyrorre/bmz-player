@@ -4,7 +4,10 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use bmz_audio::engine::AudioEngine;
 use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
-use bmz_audio::loader::{LoadedSampleStatus, SampleLoader, load_chart_samples};
+use bmz_audio::loader::{
+    LoadedSampleStatus, ParallelSampleDecode, SampleLoader, load_chart_samples,
+    load_chart_samples_parallel_with_progress,
+};
 use bmz_audio::queue::{RestartPolicy, ScheduledSound};
 use bmz_audio::sample::DecodedSample;
 use bmz_chart::model::{NoteKind, PlayableChart};
@@ -27,6 +30,11 @@ const GENERATED_PREVIEW_BGM_EARLY_GRACE_MS: i64 = 2_000;
 const GENERATED_PREVIEW_BGM_DURATION_PROBE_CANDIDATES: usize = 8;
 /// 生成専用 worker は decode 中にも実行権を譲り、短い ASIO バッファを優先する。
 const GENERATED_PREVIEW_DECODE_YIELD_INTERVAL_PACKETS: usize = 8;
+/// Keysound decode threads for a Select preview: low-priority, and a quarter of the cores
+/// (1..=4) since the Select screen keeps playing audio and scrolling meanwhile.
+fn generated_preview_decode_threads() -> usize {
+    std::thread::available_parallelism().map_or(1, |cores| (cores.get() / 4).clamp(1, 4))
+}
 const RENDER_CHUNK_FRAMES: usize = 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -150,15 +158,24 @@ pub fn render_generated_preview_for_chart(
         Ok(())
     };
     check_generation()?;
-    let mut loader = FfmpegSampleLoader::with_packet_yield_interval(
-        GENERATED_PREVIEW_DECODE_YIELD_INTERVAL_PACKETS,
-    );
+    let make_loader = || {
+        // Decode threads start here; keep them behind the audio callback like this worker.
+        lower_current_thread_priority();
+        Box::new(FfmpegSampleLoader::with_packet_yield_interval(
+            GENERATED_PREVIEW_DECODE_YIELD_INTERVAL_PACKETS,
+        )) as Box<dyn SampleLoader + Send>
+    };
+    let mut loader = make_loader();
     let sample = render_generated_preview_sample(
         &import.chart,
         start_ms,
         GENERATED_PREVIEW_DURATION_MS,
         sample_rate,
-        &mut loader,
+        &mut *loader,
+        Some(ParallelSampleDecode {
+            threads: generated_preview_decode_threads(),
+            make_loader: &make_loader,
+        }),
     )?;
     check_generation()?;
     Ok(sample)
@@ -170,6 +187,7 @@ pub(crate) fn render_generated_preview_sample(
     duration_ms: i64,
     sample_rate: u32,
     loader: &mut dyn SampleLoader,
+    parallel: Option<ParallelSampleDecode<'_>>,
 ) -> Result<DecodedSample> {
     if sample_rate == 0 {
         bail!("generated preview sample rate must be non-zero");
@@ -210,7 +228,15 @@ pub(crate) fn render_generated_preview_sample(
     filtered_chart.sounds.retain(|sound| sound_ids.contains(&sound.id));
 
     let mut engine = AudioEngine::new(sample_rate);
-    let reports = load_chart_samples(&mut engine, &filtered_chart, loader);
+    let reports = match parallel {
+        Some(parallel) => load_chart_samples_parallel_with_progress(
+            &mut engine,
+            &filtered_chart,
+            parallel,
+            |_, _| {},
+        ),
+        None => load_chart_samples(&mut engine, &filtered_chart, loader),
+    };
     if reports.iter().all(|report| matches!(report.status, LoadedSampleStatus::Failed(_))) {
         let failures = reports
             .iter()
@@ -484,6 +510,21 @@ fn peak_abs(frames: &[f32]) -> f32 {
     frames.iter().fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
 }
 
+/// Keeps a background FFmpeg decode from taking short ASIO callback deadlines.
+#[cfg(windows)]
+pub(crate) fn lower_current_thread_priority() {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+    };
+    let updated = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) };
+    if updated == 0 {
+        tracing::debug!("failed to lower generated preview worker priority");
+    }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn lower_current_thread_priority() {}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -599,7 +640,7 @@ mod tests {
         );
 
         let sample =
-            render_generated_preview_sample(&chart, 1_000, 1_000, sample_rate, &mut loader)
+            render_generated_preview_sample(&chart, 1_000, 1_000, sample_rate, &mut loader, None)
                 .unwrap();
 
         assert_eq!(sample.channels, 2);
@@ -660,7 +701,8 @@ mod tests {
         );
 
         let sample =
-            render_generated_preview_sample(&chart, 0, 1_000, sample_rate, &mut loader).unwrap();
+            render_generated_preview_sample(&chart, 0, 1_000, sample_rate, &mut loader, None)
+                .unwrap();
 
         assert!((sample.frames[500 * 2] - 0.25).abs() < 0.001);
         assert!(loader.loaded_paths.contains(&tap_path));
@@ -721,7 +763,7 @@ mod tests {
         });
 
         let sample =
-            render_generated_preview_sample(&chart, 50_000, 1_000, sample_rate, &mut loader)
+            render_generated_preview_sample(&chart, 50_000, 1_000, sample_rate, &mut loader, None)
                 .unwrap();
 
         assert!(sample.frames[500 * 2] > 0.5);

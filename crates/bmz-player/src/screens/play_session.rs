@@ -3,7 +3,8 @@ use bmz_audio::clock::AudioClock;
 use bmz_audio::engine::AudioEngine;
 use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
 use bmz_audio::loader::{
-    LoadedSampleReport, SampleLoader, load_chart_samples, load_chart_samples_with_progress,
+    LoadedSampleReport, ParallelSampleDecode, SampleLoader, load_chart_samples,
+    load_chart_samples_parallel_with_progress,
 };
 use bmz_audio::loudness::{
     LoudnessAnalysis, analyze_chart_loudness, play_normalization_gain_for_analysis_with_output_gain,

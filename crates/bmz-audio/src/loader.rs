@@ -1,4 +1,4 @@
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -78,11 +78,111 @@ pub fn load_chart_samples_with_progress(
     loader: &mut dyn SampleLoader,
     mut on_progress: impl FnMut(usize, usize),
 ) -> Vec<LoadedSampleReport> {
+    on_progress(0, chart.sounds.len());
+    load_chart_samples_in_order(
+        engine,
+        chart,
+        loader,
+        HashMap::new(),
+        HashMap::new(),
+        0,
+        on_progress,
+    )
+}
+
+/// Decodes sound files on several threads before [`load_chart_samples_with_progress`]'s
+/// ordered pass. Each worker builds its own loader; a worker can also adjust its thread,
+/// e.g. lower its priority while the Select screen plays audio.
+pub struct ParallelSampleDecode<'a> {
+    pub threads: usize,
+    pub make_loader: &'a (dyn Fn() -> Box<dyn SampleLoader + Send> + Sync),
+}
+
+/// [`load_chart_samples_with_progress`] with the first candidate of every declared sound
+/// decoded in parallel. The ordered pass then installs the same regions and decodes later
+/// candidates only where the first one failed, so the result matches the sequential load.
+pub fn load_chart_samples_parallel_with_progress(
+    engine: &mut AudioEngine,
+    chart: &PlayableChart,
+    decode: ParallelSampleDecode<'_>,
+    mut on_progress: impl FnMut(usize, usize),
+) -> Vec<LoadedSampleReport> {
+    let total = chart.sounds.len();
+    on_progress(0, total);
+    let volwav = volwav_factor(chart.metadata.volwav_percent);
+    let output_rate = engine.output_sample_rate();
+    let mut candidates_by_declared_path = HashMap::<PathBuf, Vec<PathBuf>>::new();
+    for asset in &chart.sounds {
+        candidates_by_declared_path
+            .entry(asset.path.clone())
+            .or_insert_with(|| sound_asset_candidates(&asset.path));
+    }
+    let mut seen = HashSet::new();
+    let first_candidates: Vec<&PathBuf> = chart
+        .sounds
+        .iter()
+        .filter_map(|asset| candidates_by_declared_path[&asset.path].first())
+        .filter(|path| seen.insert(*path))
+        .collect();
+    let mut decoded_by_path = HashMap::<PathBuf, CachedDecode>::new();
+    let mut progress = 0;
+    let threads = decode.threads.min(first_candidates.len());
+    if threads > 1 {
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            for _ in 0..threads {
+                let sender = sender.clone();
+                let (next, first_candidates) = (&next, &first_candidates);
+                scope.spawn(move || {
+                    let mut loader = (decode.make_loader)();
+                    loop {
+                        let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(path) = first_candidates.get(index) else {
+                            break;
+                        };
+                        let decoded = decode_for_engine(&mut *loader, path, volwav, output_rate);
+                        if sender.send(((*path).clone(), decoded)).is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            drop(sender);
+            // Report decode progress in sound units; the ordered pass continues from here.
+            for (done, (path, decoded)) in receiver.iter().enumerate() {
+                decoded_by_path.insert(path, decoded);
+                let reached = (done + 1) * total / first_candidates.len();
+                if reached > progress && reached < total {
+                    progress = reached;
+                    on_progress(progress, total);
+                }
+            }
+        });
+    }
+    let mut fallback = (decode.make_loader)();
+    load_chart_samples_in_order(
+        engine,
+        chart,
+        &mut *fallback,
+        candidates_by_declared_path,
+        decoded_by_path,
+        progress,
+        on_progress,
+    )
+}
+
+fn load_chart_samples_in_order(
+    engine: &mut AudioEngine,
+    chart: &PlayableChart,
+    loader: &mut dyn SampleLoader,
+    mut candidates_by_declared_path: HashMap<PathBuf, Vec<PathBuf>>,
+    mut decoded_by_path: HashMap<PathBuf, CachedDecode>,
+    reported: usize,
+    mut on_progress: impl FnMut(usize, usize),
+) -> Vec<LoadedSampleReport> {
     let volwav = volwav_factor(chart.metadata.volwav_percent);
     let total = chart.sounds.len();
-    let mut candidates_by_declared_path = HashMap::<PathBuf, Vec<PathBuf>>::new();
-    let mut decoded_by_path = HashMap::<PathBuf, CachedDecode>::new();
-    on_progress(0, total);
     chart
         .sounds
         .iter()
@@ -96,10 +196,36 @@ pub fn load_chart_samples_with_progress(
                 &mut candidates_by_declared_path,
                 &mut decoded_by_path,
             );
-            on_progress(index + 1, total);
+            if index + 1 > reported {
+                on_progress(index + 1, total);
+            }
             report
         })
         .collect()
+}
+
+/// Decodes one file into the engine's form: sanitized PCM with VOLWAV applied once and
+/// resampled to the output rate.
+fn decode_for_engine(
+    loader: &mut dyn SampleLoader,
+    path: &Path,
+    volwav: f32,
+    output_rate: u32,
+) -> CachedDecode {
+    match loader.load(path) {
+        Ok(mut sample) => {
+            // Also protects custom SampleLoader implementations.
+            sample.sanitize_pcm(path);
+            sample.apply_gain(volwav);
+            let sample = if sample.sample_rate == output_rate {
+                sample
+            } else {
+                sample.resampled_to(output_rate)
+            };
+            CachedDecode::Loaded(Arc::new(sample))
+        }
+        Err(error) => CachedDecode::Failed(error.to_string()),
+    }
 }
 
 fn load_asset(
@@ -138,28 +264,21 @@ fn load_asset(
                     continue;
                 }
             },
-            Entry::Vacant(entry) => match loader.load(path) {
-                Ok(mut sample) => {
-                    // Also protects custom SampleLoader implementations.
-                    sample.sanitize_pcm(path);
-                    // 同一pathの VOLWAV 適用・出力レート化は最初の1回だけ行う。
-                    sample.apply_gain(volwav);
-                    let sample = if sample.sample_rate == engine.output_sample_rate() {
-                        sample
-                    } else {
-                        sample.resampled_to(engine.output_sample_rate())
-                    };
-                    let sample = Arc::new(sample);
-                    entry.insert(CachedDecode::Loaded(sample.clone()));
-                    sample
+            // 同一pathの VOLWAV 適用・出力レート化は最初の1回だけ行う。
+            Entry::Vacant(entry) => {
+                match entry.insert(decode_for_engine(
+                    loader,
+                    path,
+                    volwav,
+                    engine.output_sample_rate(),
+                )) {
+                    CachedDecode::Loaded(sample) => sample.clone(),
+                    CachedDecode::Failed(error) => {
+                        last_error = Some(error.clone());
+                        continue;
+                    }
                 }
-                Err(error) => {
-                    let error = error.to_string();
-                    entry.insert(CachedDecode::Failed(error.clone()));
-                    last_error = Some(error);
-                    continue;
-                }
-            },
+            }
         };
 
         let (start_frame, end_frame) = asset
@@ -360,6 +479,94 @@ mod tests {
         assert!(matches!(report[1].status, LoadedSampleStatus::Failed(_)));
         assert!(engine.samples.get(SoundId(1)).is_some());
         assert!(engine.samples.get(SoundId(2)).is_none());
+    }
+
+    #[test]
+    fn parallel_load_matches_sequential_with_fallbacks_and_failures() {
+        let temp = temp_dir("parallel");
+        let dir = temp.path().to_path_buf();
+        let mut sounds = Vec::new();
+        let mut samples = HashMap::new();
+        let mut failures = HashMap::new();
+        for index in 0..40 {
+            let path = dir.join(format!("s{index}.wav"));
+            std::fs::write(&path, b"dummy").unwrap();
+            samples.insert(
+                path.clone(),
+                DecodedSample {
+                    channels: 1,
+                    sample_rate: 24_000,
+                    frames: vec![index as f32 / 40.0; 8],
+                },
+            );
+            sounds.push(SoundAssetRef { id: SoundId(index), path, slice: None });
+        }
+        // The declared WAV fails to decode and the OGG of the same stem stands in.
+        let broken = dir.join("broken.wav");
+        let fallback = dir.join("broken.ogg");
+        std::fs::write(&broken, b"dummy").unwrap();
+        std::fs::write(&fallback, b"dummy").unwrap();
+        failures.insert(broken.clone(), "corrupt".to_string());
+        samples.insert(
+            fallback.clone(),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.25; 4] },
+        );
+        sounds.push(SoundAssetRef { id: SoundId(100), path: broken, slice: None });
+        sounds.push(SoundAssetRef { id: SoundId(101), path: dir.join("missing.wav"), slice: None });
+        // A region sharing a source with an earlier sound.
+        sounds.push(SoundAssetRef {
+            id: SoundId(102),
+            path: dir.join("s3.wav"),
+            slice: Some(SoundSlice { start_us: 0, duration_us: Some(10) }),
+        });
+        let mut chart = chart_with_sounds(sounds);
+        chart.metadata.volwav_percent = 50;
+        let make = || {
+            Box::new(TestLoader {
+                samples: samples.clone(),
+                failures: failures.clone(),
+                attempts: Vec::new(),
+            }) as Box<dyn SampleLoader + Send>
+        };
+
+        let mut sequential = AudioEngine::new(48_000);
+        let sequential_reports = load_chart_samples(&mut sequential, &chart, &mut *make());
+        let mut parallel = AudioEngine::new(48_000);
+        let mut progress = Vec::new();
+        let parallel_reports = load_chart_samples_parallel_with_progress(
+            &mut parallel,
+            &chart,
+            ParallelSampleDecode { threads: 4, make_loader: &make },
+            |loaded, total| progress.push((loaded, total)),
+        );
+
+        let summary = |reports: &[LoadedSampleReport]| {
+            reports
+                .iter()
+                .map(|report| {
+                    (report.path.clone(), matches!(report.status, LoadedSampleStatus::Loaded))
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(summary(&parallel_reports), summary(&sequential_reports));
+        assert_eq!(parallel_reports[40].path, fallback);
+        for sound in &chart.sounds {
+            let left = sequential.samples.get(sound.id).map(|sample| {
+                (0..sample.frame_count())
+                    .map(|frame| sample.sample_stereo(frame))
+                    .collect::<Vec<_>>()
+            });
+            let right = parallel.samples.get(sound.id).map(|sample| {
+                (0..sample.frame_count())
+                    .map(|frame| sample.sample_stereo(frame))
+                    .collect::<Vec<_>>()
+            });
+            assert_eq!(left, right, "{:?}", sound.id);
+        }
+        let total = chart.sounds.len();
+        assert_eq!(progress.first(), Some(&(0, total)));
+        assert_eq!(progress.last(), Some(&(total, total)));
+        assert!(progress.windows(2).all(|pair| pair[0].0 < pair[1].0));
     }
 
     #[test]
