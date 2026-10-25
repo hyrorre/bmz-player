@@ -147,6 +147,49 @@ fn archive_asset_workers_resolve_fallbacks_and_confine_shared_resources() {
 }
 
 #[test]
+fn archive_root_chart_resolves_images_and_explicit_preview() {
+    let fixture = ArchiveFixture::new();
+    let archive = fixture.root.join("root.zip");
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, bytes) in [
+        (
+            "chart.bms",
+            b"#TITLE Root
+#STAGEFILE stage.png
+#PREVIEW intro.wav
+"
+            .as_slice(),
+        ),
+        ("stage.png", b"png fixture path only".as_slice()),
+        ("banner.png", b"png fixture path only".as_slice()),
+        ("intro.wav", b"wav fixture path only".as_slice()),
+        ("preview.wav", b"wav fixture path only".as_slice()),
+    ] {
+        zip.start_file(name, options).unwrap();
+        zip.write_all(bytes).unwrap();
+    }
+    zip.finish().unwrap();
+    let cache = fixture.root.join("cache");
+    // Both the chart entry and the bare container stand for the archive root.
+    for folder in [format!("{}!/chart.bms", archive.display()), format!("{}!", archive.display())] {
+        let resolve = |file: &str, preview| {
+            resolve_cached_asset(&asset_cache_key(&folder, file), &cache, preview).unwrap().unwrap()
+        };
+        assert_eq!(resolve("stage.png", false).file_name().unwrap(), "stage.png");
+        assert_eq!(resolve("banner.bmp", false).file_name().unwrap(), "banner.png");
+        assert_eq!(resolve("intro.wav", true).file_name().unwrap(), "intro.wav");
+        assert_eq!(resolve("intro.ogg", true).file_name().unwrap(), "intro.wav");
+        assert_eq!(resolve("", true).file_name().unwrap(), "preview.wav");
+        assert!(
+            resolve_cached_asset(&asset_cache_key(&folder, "../escape.png"), &cache, false)
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn archive_asset_only_update_invalidates_images_and_both_preview_keys() {
     let fixture = ArchiveFixture::new();
     let cache = fixture.root.join("cache");

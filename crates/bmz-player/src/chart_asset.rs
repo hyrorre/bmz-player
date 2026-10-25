@@ -158,7 +158,10 @@ fn archive_asset_entry(
                 && !relative.starts_with(['/', '\\']),
             "unsafe archive asset: {relative}"
         );
-        let name = crate::chart_source::normalize_entry(&format!("{folder}/{relative}"))?;
+        // A chart at the archive root has an empty folder; "/name" would read as absolute.
+        let joined =
+            if folder.is_empty() { relative.to_owned() } else { format!("{folder}/{relative}") };
+        let name = crate::chart_source::normalize_entry(&joined)?;
         if exists(&name) {
             return Ok(Some(name));
         }
