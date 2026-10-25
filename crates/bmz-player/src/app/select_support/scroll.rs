@@ -8,6 +8,8 @@ pub(in crate::app) struct SelectBarScroll {
     duration: Duration,
     remaining: f64,
     remaining_velocity: f64,
+    /// The current segment started from rest, so its velocity is the start velocity.
+    from_rest: bool,
 }
 
 impl SelectBarScroll {
@@ -36,9 +38,21 @@ impl SelectBarScroll {
     }
 
     pub(in crate::app) fn move_by(&mut self, rows: i32, now: Instant, duration: Duration) {
-        let (remaining, velocity) = self.sample_at(now);
-        self.remaining = remaining + f64::from(rows);
+        let (remaining, carried) = self.sample_at(now);
+        let remaining = remaining + f64::from(rows);
+        // Only a move from rest gets an initial velocity; retargeting keeps the
+        // carried velocity so held and reversed moves stay continuous. Moves
+        // batched at the start instant re-derive it, matching a single jump.
+        let from_rest = carried == 0.0 || (self.from_rest && self.started_at == Some(now));
+        let seconds = duration.as_secs_f64();
+        let velocity = if from_rest && seconds > 0.0 {
+            -START_TANGENT_PER_DISTANCE * remaining / seconds
+        } else {
+            carried
+        };
+        self.remaining = remaining;
         self.remaining_velocity = velocity;
+        self.from_rest = from_rest;
         self.started_at = Some(now);
         self.duration = bounded_scroll_duration(self.remaining, velocity, duration);
     }
@@ -47,6 +61,9 @@ impl SelectBarScroll {
         *self = Self::default();
     }
 }
+
+/// Hermite start tangent in distance units: 0 is smoothstep, 3 is easeOutCubic.
+const START_TANGENT_PER_DISTANCE: f64 = 1.5;
 
 fn bounded_scroll_duration(remaining: f64, velocity: f64, requested: Duration) -> Duration {
     if requested.is_zero() || velocity == 0.0 {
@@ -106,7 +123,9 @@ mod tests {
         let again = now + Duration::from_millis(60);
         let before = 1.0 - scroll.remaining_at(again);
         scroll.move_by(1, again, duration);
-        assert!((scroll.remaining_at(again) - 1.352).abs() < 1e-9);
+        let rest = 0.4_f64;
+        let expected = 1.0 + rest * rest * (2.2 - START_TANGENT_PER_DISTANCE * 0.6);
+        assert!((scroll.remaining_at(again) - expected).abs() < 1e-9);
         assert!((2.0 - scroll.remaining_at(again) - before).abs() < 1e-9);
         let reverse = again + Duration::from_millis(10);
         let before = 2.0 - scroll.remaining_at(reverse);
@@ -178,7 +197,8 @@ mod tests {
             for frame in 0..=hz {
                 let elapsed = Duration::from_secs_f64(f64::from(frame) / f64::from(hz));
                 let u = elapsed.as_secs_f64();
-                let expected = 7.0 * (1.0 - u).powi(2) * (1.0 + 2.0 * u);
+                let expected =
+                    7.0 * (1.0 - u).powi(2) * (1.0 + (2.0 - START_TANGENT_PER_DISTANCE) * u);
                 assert!((scroll.remaining_at(now + elapsed) - expected).abs() < 1e-8);
             }
         }
@@ -199,31 +219,43 @@ mod tests {
             target += f64::from(rows);
             let (remaining, after_velocity) = scroll.sample_at(now);
             assert!((target - remaining - position).abs() < 1e-9);
-            assert!((after_velocity - velocity).abs() < 1e-9);
+            if velocity == 0.0 {
+                let start_velocity = -START_TANGENT_PER_DISTANCE * remaining
+                    / Duration::from_millis(duration_ms).as_secs_f64();
+                assert!((after_velocity - start_velocity).abs() < 1e-9);
+            } else {
+                assert!((after_velocity - velocity).abs() < 1e-9);
+            }
             let epsilon = Duration::from_nanos(1);
             let difference =
                 (scroll.remaining_at(now + epsilon) - remaining) / epsilon.as_secs_f64();
             assert!(
-                (difference - velocity).abs() < 0.01,
+                (difference - after_velocity).abs() < 0.01,
                 "time={elapsed_ms}, difference={difference}, velocity={velocity}"
             );
         }
     }
 
     #[test]
-    fn arrival_is_exact_and_starts_and_stops_at_rest() {
+    fn arrival_is_exact_and_rest_starts_with_initial_velocity() {
         let start = Instant::now();
         let duration = Duration::from_millis(100);
+        let seconds = duration.as_secs_f64();
         let mut scroll = SelectBarScroll::default();
         scroll.move_by(7, start, duration);
-        assert_eq!(scroll.sample_at(start), (7.0, 0.0));
-        assert_eq!(scroll.remaining_at(start + duration / 2), 3.5);
+        let (remaining, velocity) = scroll.sample_at(start);
+        assert_eq!(remaining, 7.0);
+        assert!((velocity + START_TANGENT_PER_DISTANCE * 7.0 / seconds).abs() < 1e-9);
+        let half = 7.0 * 0.25 * (2.0 - START_TANGENT_PER_DISTANCE * 0.5);
+        assert!((scroll.remaining_at(start + duration / 2) - half).abs() < 1e-9);
         assert_eq!(scroll.sample_at(start + duration), (0.0, 0.0));
         assert_eq!(scroll.sample_at(start + duration * 2), (0.0, 0.0));
         let (_, velocity) = scroll.sample_at(start + duration - Duration::from_nanos(1));
         assert!(velocity.abs() < 1e-5);
         scroll.move_by(-1, start + duration, duration);
-        assert_eq!(scroll.sample_at(start + duration), (-1.0, 0.0));
+        let (remaining, velocity) = scroll.sample_at(start + duration);
+        assert_eq!(remaining, -1.0);
+        assert!((velocity - START_TANGENT_PER_DISTANCE / seconds).abs() < 1e-9);
     }
 
     #[test]
@@ -256,7 +288,7 @@ mod tests {
         let start = Instant::now();
         let mut scroll = SelectBarScroll::default();
         scroll.move_by(2, start, Duration::from_millis(100));
-        let again = start + Duration::from_millis(40);
+        let again = start + Duration::from_millis(20);
         let (remaining, velocity) = scroll.sample_at(again);
         scroll.move_by(-1, again, Duration::from_millis(300));
         assert!(scroll.duration < Duration::from_millis(300));
@@ -275,10 +307,16 @@ mod tests {
     #[test]
     fn zero_distance_retarget_brakes_then_returns_and_reset_discards_velocity() {
         let start = Instant::now();
-        let mut scroll = SelectBarScroll::default();
-        scroll.move_by(2, start, Duration::from_millis(100));
+        // A carried smoothstep segment exactly one row from its target midway.
+        let mut scroll = SelectBarScroll {
+            started_at: Some(start),
+            duration: Duration::from_millis(100),
+            remaining: 2.0,
+            ..Default::default()
+        };
         let again = start + Duration::from_millis(50);
         let velocity = scroll.sample_at(again).1;
+        assert!(velocity != 0.0);
         scroll.move_by(-1, again, Duration::from_millis(300));
         assert_eq!(scroll.sample_at(again), (0.0, velocity));
         assert!(scroll.remaining_at(again + scroll.duration / 3) < 0.0);
@@ -287,7 +325,9 @@ mod tests {
         scroll.reset();
         assert_eq!(scroll.sample_at(again), (0.0, 0.0));
         scroll.move_by(-7, again, Duration::from_millis(100));
-        assert_eq!(scroll.sample_at(again), (-7.0, 0.0));
+        let (remaining, velocity) = scroll.sample_at(again);
+        assert_eq!(remaining, -7.0);
+        assert!((velocity - START_TANGENT_PER_DISTANCE * 7.0 / 0.1).abs() < 1e-9);
         scroll.move_by(1, again + Duration::from_millis(10), Duration::ZERO);
         assert_eq!(scroll.sample_at(again + Duration::from_millis(10)), (0.0, 0.0));
     }

@@ -818,14 +818,22 @@ mod tests {
         state.move_cursor(1, now, low);
         assert_eq!(state.cursor, 0);
         assert_eq!(state.scroll_frame(now), (CATALOG.len() - 1, 0.0));
-        assert_eq!(state.scroll_frame(now + low / 4), (0, 0.84375));
-        assert_eq!(state.scroll_frame(now + low / 2), (0, 0.5));
+        // The move from rest starts with the Hermite k=1.5 initial velocity.
+        let frame_near = |at, center, fraction: f32| {
+            let (actual_center, actual_fraction) = state.scroll_frame(at);
+            assert_eq!(actual_center, center);
+            assert!((actual_fraction - fraction).abs() < 1e-6, "{actual_fraction} != {fraction}");
+        };
+        frame_near(now + low / 4, 0, 0.632_812_5);
+        frame_near(now + low / 2, 0, 0.3125);
         assert_eq!(state.scroll_frame(now + low), (0, 0.0));
         // Reversing mid-animation preserves the visual position instead of
         // snapping a whole column in the opposite direction.
         state.move_cursor(-1, now + low / 2, low);
         assert_eq!(state.cursor, CATALOG.len() - 1);
-        assert_eq!(state.scroll_frame(now + low / 2), (CATALOG.len() - 1, -0.5));
+        let (center, fraction) = state.scroll_frame(now + low / 2);
+        assert_eq!(center, CATALOG.len() - 1);
+        assert!((fraction + 0.6875).abs() < 1e-6, "{fraction}");
         assert_eq!(state.scroll_frame(now + low / 2 + low), (CATALOG.len() - 1, 0.0));
         state.scroll.reset(); // closing, E1+E2, focus loss
         assert_eq!(state.scroll_frame(now), (CATALOG.len() - 1, 0.0));
