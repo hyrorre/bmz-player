@@ -507,7 +507,7 @@ profile-display-hispeed-mode = HS設定
 profile-display-normal-hispeed = Normal HS
 profile-display-classic-hispeed-step = Classic HS変更刻み
 profile-display-floating-hispeed-step = Floating HS変更刻み
-profile-display-step-range = HS変更刻みの範囲: 0.05..=1.00
+profile-display-step-range = HS変更刻みの範囲: Classic 0.01..=1.00 / Floating 0.05..=1.00
 profile-display-sudden-enabled = SUDDEN+を有効にする
 profile-display-lift-enabled = LIFTを有効にする
 profile-display-auto-adjust-hispeed = レーンカバー変更時に現在BPMへHSを自動調整

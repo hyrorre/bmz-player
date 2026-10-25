@@ -395,8 +395,7 @@ pub(in crate::app) fn apply_lane_state_to_profile(
 pub(in crate::app) fn clamp_hispeed_for_profile(hispeed: f32, mode: HispeedMode, step: f32) -> f32 {
     let clamped = clamp_hispeed(hispeed);
     if mode == HispeedMode::Classic
-        && (normalize_hispeed_step(step, default_classic_hispeed_step()) - 0.25).abs()
-            < f32::EPSILON
+        && (normalize_classic_hispeed_step(step) - 0.25).abs() < f32::EPSILON
     {
         clamp_hispeed((clamped * 4.0).round() / 4.0)
     } else {

@@ -508,7 +508,7 @@ profile-display-hispeed-mode = HS 設定
 profile-display-normal-hispeed = Normal HS
 profile-display-classic-hispeed-step = Classic HS 調整步長
 profile-display-floating-hispeed-step = Floating HS 調整步長
-profile-display-step-range = HS 調整步長範圍：0.05..=1.00
+profile-display-step-range = HS 調整步長範圍：Classic 0.01..=1.00 / Floating 0.05..=1.00
 profile-display-sudden-enabled = 啟用 SUDDEN+
 profile-display-lift-enabled = 啟用 LIFT
 profile-display-auto-adjust-hispeed = 軌道遮罩變更時依目前 BPM 自動調整 HS

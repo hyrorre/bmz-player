@@ -510,7 +510,7 @@ profile-display-hispeed-mode = HS configuration
 profile-display-normal-hispeed = Normal HS
 profile-display-classic-hispeed-step = Classic HS adjustment step
 profile-display-floating-hispeed-step = Floating HS adjustment step
-profile-display-step-range = HS adjustment step range: 0.05..=1.00
+profile-display-step-range = HS adjustment step range: Classic 0.01..=1.00 / Floating 0.05..=1.00
 profile-display-sudden-enabled = Enable SUDDEN+
 profile-display-lift-enabled = Enable LIFT
 profile-display-auto-adjust-hispeed = Adjust HS to the current BPM when lane cover changes

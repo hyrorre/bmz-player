@@ -1280,7 +1280,12 @@ pub const fn default_normal_hispeed_level() -> u8 {
     18
 }
 
-pub const HISPEED_STEP_MIN: f32 = 0.05;
+/// Classic / LR2のHS変更刻みは0.01単位で0.01まで下げられる。
+pub const CLASSIC_HISPEED_STEP_MIN: f32 = 0.01;
+pub const CLASSIC_HISPEED_STEP_UNIT: f32 = 0.01;
+/// FloatingのHS変更刻みは0.05単位。
+pub const FLOATING_HISPEED_STEP_MIN: f32 = 0.05;
+pub const FLOATING_HISPEED_STEP_UNIT: f32 = 0.05;
 pub const HISPEED_STEP_MAX: f32 = 1.0;
 
 pub fn default_classic_hispeed_step() -> f32 {
@@ -1291,6 +1296,14 @@ pub fn default_floating_hispeed_step() -> f32 {
     0.50
 }
 
-pub fn normalize_hispeed_step(value: f32, default: f32) -> f32 {
-    if value.is_finite() { value.clamp(HISPEED_STEP_MIN, HISPEED_STEP_MAX) } else { default }
+pub fn normalize_classic_hispeed_step(value: f32) -> f32 {
+    normalize_hispeed_step(value, CLASSIC_HISPEED_STEP_MIN, default_classic_hispeed_step())
+}
+
+pub fn normalize_floating_hispeed_step(value: f32) -> f32 {
+    normalize_hispeed_step(value, FLOATING_HISPEED_STEP_MIN, default_floating_hispeed_step())
+}
+
+fn normalize_hispeed_step(value: f32, min: f32, default: f32) -> f32 {
+    if value.is_finite() { value.clamp(min, HISPEED_STEP_MAX) } else { default }
 }

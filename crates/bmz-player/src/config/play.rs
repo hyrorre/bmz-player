@@ -79,6 +79,15 @@ pub fn clamp_hispeed(hispeed: f32) -> f32 {
     hispeed.clamp(HISPEED_MIN, HISPEED_MAX)
 }
 
+/// HS操作の結果を0.01刻みへ揃える。f32の加算を繰り返すと `2.30` が
+/// `2.2999995` のようになり、表示が0.01下位へずれるため。
+pub fn quantize_hispeed(hispeed: f32) -> f32 {
+    if !hispeed.is_finite() {
+        return clamp_hispeed(hispeed);
+    }
+    clamp_hispeed(((f64::from(hispeed) * 100.0).round() / 100.0) as f32)
+}
+
 /// LR2のHS-FIXが倍率の基準にするBPM。
 pub const CLASSIC_HSFIX_REFERENCE_BPM: f64 = 150.0;
 
@@ -98,13 +107,13 @@ pub fn classic_effective_hispeed(display_hispeed: f32, scale: f32) -> f32 {
 }
 
 /// 実効倍率からBPM150基準のHS値を求める。往復時の誤差で表示値が
-/// 0.01刻みの下位桁へ落ちないよう、小数4桁で丸める。
+/// 0.01刻みの下位桁へ落ちないよう、0.01で丸める。
 pub fn classic_display_hispeed(effective_hispeed: f32, scale: f32) -> f32 {
     if !(scale.is_finite() && scale > 0.0) {
-        return clamp_hispeed(effective_hispeed);
+        return quantize_hispeed(effective_hispeed);
     }
     let display = f64::from(effective_hispeed) / f64::from(scale);
-    clamp_hispeed(((display * 10_000.0).round() / 10_000.0) as f32)
+    clamp_hispeed(((display * 100.0).round() / 100.0) as f32)
 }
 
 pub const fn duration_ms_from_green_number(green_number: u32) -> u32 {

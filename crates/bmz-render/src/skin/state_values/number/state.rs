@@ -178,15 +178,15 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
         104 => Some(state.combo as i64),
         107 => Some(state.gauge.floor() as i64),
         SKIN_REF_BMZ_LR2_GAUGE_2P => state.opponent_gauge.map(|gauge| gauge.floor() as i64),
-        SKIN_REF_BMZ_LR2_HISPEED => Some((displayed_hispeed(state) * 100.0) as i64),
+        SKIN_REF_BMZ_LR2_HISPEED => Some(displayed_hispeed_hundredths(state)),
         407 => Some(gauge_after_dot(state.gauge) as i64),
         163 => Some((state.timeleft_ms / 60_000) as i64),
         164 => Some(((state.timeleft_ms / 1_000) % 60) as i64),
         165 => Some((state.resource_load_progress.clamp(0.0, 1.0) * 100.0) as i64),
         1163 => Some(result_or_select_length_ms(state) / 60_000),
         1164 => Some((result_or_select_length_ms(state) / 1_000) % 60),
-        310 => Some(displayed_hispeed(state).floor() as i64),
-        311 => Some(((displayed_hispeed(state) * 100.0) as i64) % 100),
+        310 => Some(displayed_hispeed_hundredths(state) / 100),
+        311 => Some(displayed_hispeed_hundredths(state) % 100),
         1900 => Some(skin_hispeed_mode_index(state) as i64),
         1901 => Some(i64::from(skin_hispeed_mode_is_floating(state))),
         1902 => Some(skin_target_green_number(state)),
@@ -493,4 +493,9 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
 /// skinに表示するHS値。Classic + HS-FIXではBPM150基準の値になる。
 fn displayed_hispeed(state: &SkinDrawState) -> f32 {
     state.hispeed_display.unwrap_or(state.hispeed)
+}
+
+/// HS値の0.01単位。f32の `2.2999995` を `2.29` へ切り捨てないよう丸める。
+fn displayed_hispeed_hundredths(state: &SkinDrawState) -> i64 {
+    (f64::from(displayed_hispeed(state)) * 100.0).round().max(0.0) as i64
 }

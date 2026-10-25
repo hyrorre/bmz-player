@@ -337,6 +337,19 @@ fn lr2_hispeed_bridge_scales_both_sides_without_changing_decimal_refs() {
 }
 
 #[test]
+fn hispeed_refs_round_f32_error_to_hundredths() {
+    // f32の加算誤差で 2.30 が 2.2999995 になっても 2.29 と表示しない。
+    let state = SkinDrawState { hispeed: 2.299_999_5, ..Default::default() };
+    assert_eq!(skin_state_number(310, &state), Some(2));
+    assert_eq!(skin_state_number(311, &state), Some(30));
+    assert_eq!(skin_state_number(SKIN_REF_BMZ_LR2_HISPEED, &state), Some(230));
+
+    let state = SkinDrawState { hispeed: 2.999_999_5, ..Default::default() };
+    assert_eq!(skin_state_number(310, &state), Some(3));
+    assert_eq!(skin_state_number(311, &state), Some(0));
+}
+
+#[test]
 fn hispeed_refs_show_display_value_while_durations_use_effective_hispeed() {
     // Classic + HS-FIX MAX BPM 300: 表示HS 3.00、実効倍率 1.50。
     let state = SkinDrawState {

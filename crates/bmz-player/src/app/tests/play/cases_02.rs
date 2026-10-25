@@ -195,6 +195,39 @@ fn adjusted_hispeed_uses_configured_step_and_clamps_range() {
 }
 
 #[test]
+fn repeated_hispeed_steps_stay_on_hundredths_grid() {
+    // HS-FIXなし: f32の0.05加算を繰り返しても0.01グリッドから外れない。
+    let mut hispeed = 1.0_f32;
+    for count in 1..=40 {
+        hispeed = adjust_hispeed_in_display_units(hispeed, HispeedMode::Classic, 1.0, |value| {
+            adjusted_hispeed(value, HispeedChange::Up, 0.05)
+        });
+        assert_eq!(hispeed, crate::config::play::quantize_hispeed(1.0 + 0.05 * count as f32));
+    }
+
+    // LR2 + HS-FIX: 表示値を基準に刻むため、実効倍率との往復でずれない。
+    for base_bpm in [133.0, 173.0, 199.0, 300.0] {
+        let scale = crate::config::play::classic_hsfix_scale(base_bpm);
+        let mut hispeed = crate::config::play::classic_effective_hispeed(2.0, scale);
+        for count in 1..=40_i32 {
+            let change = if count <= 30 { HispeedChange::Up } else { HispeedChange::Down };
+            hispeed =
+                adjust_hispeed_in_display_units(hispeed, HispeedMode::Classic, scale, |value| {
+                    adjusted_hispeed(value, change, 0.05)
+                });
+            let expected_hundredths = 200 + 5 * if count <= 30 { count } else { 60 - count };
+            let display = crate::config::play::classic_display_hispeed(hispeed, scale);
+            assert_eq!(
+                (f64::from(display) * 100.0).round() as i32,
+                expected_hundredths,
+                "bpm={base_bpm} count={count}"
+            );
+            assert_eq!(display, expected_hundredths as f32 / 100.0, "bpm={base_bpm}");
+        }
+    }
+}
+
+#[test]
 fn pending_hispeed_changes_use_displayed_mode_without_mutating_profile() {
     let profile = ProfileConfig::new_default("default", "Default", 1);
     let profile_hispeed = profile.lane.hispeed;

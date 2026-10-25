@@ -196,14 +196,12 @@ pub(in crate::app) fn green_number_change_step(change: GreenNumberChange) -> i32
 
 pub(in crate::app) fn hispeed_step_for_profile(profile: &ProfileConfig, mode: HispeedMode) -> f32 {
     match mode {
-        HispeedMode::Normal | HispeedMode::Classic => normalize_hispeed_step(
-            profile.lane.classic_hispeed_step,
-            default_classic_hispeed_step(),
-        ),
-        HispeedMode::Floating => normalize_hispeed_step(
-            profile.lane.floating_hispeed_step,
-            default_floating_hispeed_step(),
-        ),
+        HispeedMode::Normal | HispeedMode::Classic => {
+            normalize_classic_hispeed_step(profile.lane.classic_hispeed_step)
+        }
+        HispeedMode::Floating => {
+            normalize_floating_hispeed_step(profile.lane.floating_hispeed_step)
+        }
     }
 }
 
@@ -223,10 +221,11 @@ pub(in crate::app) fn adjusted_hispeed(current: f32, change: HispeedChange, step
         HispeedChange::Down => -step,
         HispeedChange::Up => step,
     };
-    clamp_hispeed(current + delta)
+    crate::config::play::quantize_hispeed(current + delta)
 }
 
 /// Classic + HS-FIXでは、実効倍率ではなくBPM150基準のHS値に対して操作する。
+/// 操作後の表示値は0.01刻みへ揃える。
 pub(in crate::app) fn adjust_hispeed_in_display_units(
     hispeed: f32,
     mode: HispeedMode,
@@ -234,9 +233,10 @@ pub(in crate::app) fn adjust_hispeed_in_display_units(
     adjust: impl FnOnce(f32) -> f32,
 ) -> f32 {
     if mode != HispeedMode::Classic || classic_hsfix_scale == 1.0 {
-        return adjust(hispeed);
+        return crate::config::play::quantize_hispeed(adjust(hispeed));
     }
     let display = crate::config::play::classic_display_hispeed(hispeed, classic_hsfix_scale);
-    crate::config::play::classic_effective_hispeed(adjust(display), classic_hsfix_scale)
+    let display = crate::config::play::quantize_hispeed(adjust(display));
+    crate::config::play::classic_effective_hispeed(display, classic_hsfix_scale)
 }
 use super::*;

@@ -507,7 +507,7 @@ profile-display-hispeed-mode = HS 설정
 profile-display-normal-hispeed = Normal HS
 profile-display-classic-hispeed-step = Classic HS 변경 단위
 profile-display-floating-hispeed-step = Floating HS 변경 단위
-profile-display-step-range = HS 변경 단위 범위: 0.05..=1.00
+profile-display-step-range = HS 변경 단위 범위: Classic 0.01..=1.00 / Floating 0.05..=1.00
 profile-display-sudden-enabled = SUDDEN+ 사용
 profile-display-lift-enabled = LIFT 사용
 profile-display-auto-adjust-hispeed = 레인 커버 변경 시 현재 BPM에 맞춰 HS 자동 조정

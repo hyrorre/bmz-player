@@ -36,10 +36,8 @@ pub(in crate::ui::profile_panel) fn build_profile_display_section(
                 );
             }
             if preset.supports_classic() {
-                let hispeed_step = normalize_hispeed_step(
-                    profile.lane.classic_hispeed_step,
-                    default_classic_hispeed_step(),
-                );
+                let hispeed_step =
+                    normalize_classic_hispeed_step(profile.lane.classic_hispeed_step);
                 ui.add(
                     egui::Slider::new(
                         &mut profile.lane.hispeed,
@@ -51,9 +49,9 @@ pub(in crate::ui::profile_panel) fn build_profile_display_section(
                 ui.add(
                     egui::Slider::new(
                         &mut profile.lane.classic_hispeed_step,
-                        HISPEED_STEP_MIN..=HISPEED_STEP_MAX,
+                        CLASSIC_HISPEED_STEP_MIN..=HISPEED_STEP_MAX,
                     )
-                    .step_by(0.05)
+                    .step_by(0.01)
                     .text(tr!(text, "profile-display-classic-hispeed-step")),
                 );
             }
@@ -61,7 +59,7 @@ pub(in crate::ui::profile_panel) fn build_profile_display_section(
                 ui.add(
                     egui::Slider::new(
                         &mut profile.lane.floating_hispeed_step,
-                        HISPEED_STEP_MIN..=HISPEED_STEP_MAX,
+                        FLOATING_HISPEED_STEP_MIN..=HISPEED_STEP_MAX,
                     )
                     .step_by(0.05)
                     .text(tr!(text, "profile-display-floating-hispeed-step")),

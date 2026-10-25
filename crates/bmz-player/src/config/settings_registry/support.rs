@@ -43,19 +43,25 @@ pub(super) fn adjust_offset_ms(value: &mut i64, delta: i32) -> bool {
     *value != before
 }
 
-pub(super) fn adjust_hispeed(value: &mut f32, delta: i32, step: f32, default_step: f32) -> bool {
+pub(super) fn adjust_hispeed(value: &mut f32, delta: i32, step: f32) -> bool {
     let before = *value;
-    let step = normalize_hispeed_step(step, default_step);
-    *value = clamp_hispeed(*value + step * delta.signum() as f32);
+    *value = quantize_hispeed(*value + step * delta.signum() as f32);
     (*value - before).abs() > f32::EPSILON
 }
 
-pub(super) fn adjust_hispeed_step(value: &mut f32, delta: i32) -> bool {
+/// 正規化済みのHS変更刻み `current` を、`unit` 単位で `min..=HISPEED_STEP_MAX` の範囲に増減する。
+pub(super) fn adjust_hispeed_step(
+    value: &mut f32,
+    current: f32,
+    delta: i32,
+    unit: f32,
+    min: f32,
+) -> bool {
     let before = *value;
-    let current = normalize_hispeed_step(*value, 0.25);
-    let next = ((current / 0.05).round() as i32 + delta)
-        .clamp((HISPEED_STEP_MIN / 0.05).round() as i32, (HISPEED_STEP_MAX / 0.05).round() as i32);
-    *value = next as f32 / 20.0;
+    let units_per_one = (1.0 / unit).round() as i32;
+    let next = ((current / unit).round() as i32 + delta)
+        .clamp((min / unit).round() as i32, (HISPEED_STEP_MAX / unit).round() as i32);
+    *value = next as f32 / units_per_one as f32;
     (*value - before).abs() > f32::EPSILON
 }
 

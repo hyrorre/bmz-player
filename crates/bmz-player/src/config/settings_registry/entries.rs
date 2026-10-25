@@ -637,8 +637,7 @@ define_settings! {
         adjust: |profile, delta| adjust_hispeed(
             &mut profile.lane.hispeed,
             delta,
-            profile.lane.classic_hispeed_step,
-            default_classic_hispeed_step(),
+            normalize_classic_hispeed_step(profile.lane.classic_hispeed_step),
         ),
         format: |profile| format!("{:.2}", profile.lane.hispeed),
     }
@@ -672,14 +671,28 @@ define_settings! {
     ClassicHispeedStep(f32) {
         value: [field lane.classic_hispeed_step],
         adjust: |profile, delta| {
-            adjust_hispeed_step(&mut profile.lane.classic_hispeed_step, delta)
+            let current = normalize_classic_hispeed_step(profile.lane.classic_hispeed_step);
+            adjust_hispeed_step(
+                &mut profile.lane.classic_hispeed_step,
+                current,
+                delta,
+                CLASSIC_HISPEED_STEP_UNIT,
+                CLASSIC_HISPEED_STEP_MIN,
+            )
         },
         format: |profile| format!("{:.2}", profile.lane.classic_hispeed_step),
     }
     FloatingHispeedStep(f32) {
         value: [field lane.floating_hispeed_step],
         adjust: |profile, delta| {
-            adjust_hispeed_step(&mut profile.lane.floating_hispeed_step, delta)
+            let current = normalize_floating_hispeed_step(profile.lane.floating_hispeed_step);
+            adjust_hispeed_step(
+                &mut profile.lane.floating_hispeed_step,
+                current,
+                delta,
+                FLOATING_HISPEED_STEP_UNIT,
+                FLOATING_HISPEED_STEP_MIN,
+            )
         },
         format: |profile| {
             format!("{:.2}", profile.lane.floating_hispeed_step)

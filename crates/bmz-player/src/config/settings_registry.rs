@@ -1,16 +1,17 @@
 use super::play::{
     CONSTANT_FADE_MAX_MS, CONSTANT_FADE_MIN_MS, TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN,
-    clamp_hispeed,
+    quantize_hispeed,
 };
 use super::profile_config::{
     AssistLongNoteMode, AssistMineMode, AssistOptionConfig, AssistScrollMode, BgaExpandConfig,
-    BgaModeConfig, BottomShiftableGaugeConfig, DifficultyTableLevelDisplay, DoubleOptionConfig,
-    FastSlowDisplayScope, GaugeAutoShiftConfig, GaugeTypeConfig, HISPEED_STEP_MAX,
-    HISPEED_STEP_MIN, HispeedConfigPreset, HispeedDirectionConfig, HsFixConfig,
+    BgaModeConfig, BottomShiftableGaugeConfig, CLASSIC_HISPEED_STEP_MIN, CLASSIC_HISPEED_STEP_UNIT,
+    DifficultyTableLevelDisplay, DoubleOptionConfig, FLOATING_HISPEED_STEP_MIN,
+    FLOATING_HISPEED_STEP_UNIT, FastSlowDisplayScope, GaugeAutoShiftConfig, GaugeTypeConfig,
+    HISPEED_STEP_MAX, HispeedConfigPreset, HispeedDirectionConfig, HsFixConfig,
     JudgeAlgorithmConfig, KeyModeConversionConfig, LaneConfig, ProfileConfig,
     RELEASE_BOUNCE_MS_MAX, RandomOptionConfig, ReplaySlotRule, SelectInputModeConfig,
     SevenToNinePattern, SevenToNineRuleMode, SevenToNineType, TargetOptionConfig,
-    default_classic_hispeed_step, normalize_hispeed_step,
+    normalize_classic_hispeed_step, normalize_floating_hispeed_step,
 };
 use bmz_core::lane::KeyMode;
 use bmz_gameplay::rule::RuleMode;
@@ -552,15 +553,32 @@ mod tests {
     }
 
     #[test]
-    fn adjust_hispeed_step_settings_increments_by_five_hundredths() {
+    fn adjust_hispeed_step_settings_use_classic_hundredths_and_floating_five_hundredths() {
         let mut profile = ProfileConfig::new_default("default", "Default", 0);
         assert_eq!(format_settings_value(&profile, SettingsEntryId::ClassicHispeedStep), "0.25");
         assert_eq!(format_settings_value(&profile, SettingsEntryId::FloatingHispeedStep), "0.50");
 
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::ClassicHispeedStep, 1));
-        assert!((profile.lane.classic_hispeed_step - 0.30).abs() < f32::EPSILON);
+        assert!((profile.lane.classic_hispeed_step - 0.26).abs() < f32::EPSILON);
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::FloatingHispeedStep, -1));
         assert!((profile.lane.floating_hispeed_step - 0.45).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn classic_hispeed_step_reaches_hundredth_but_floating_stays_at_five_hundredths() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        profile.lane.classic_hispeed_step = 0.02;
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::ClassicHispeedStep, -1));
+        assert_eq!(profile.lane.classic_hispeed_step, 0.01);
+        assert!(!adjust_settings_value(&mut profile, SettingsEntryId::ClassicHispeedStep, -1));
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::ClassicHispeedStep), "0.01");
+
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::Hispeed, 1));
+        assert_eq!(profile.lane.hispeed, 2.01);
+
+        profile.lane.floating_hispeed_step = 0.05;
+        assert!(!adjust_settings_value(&mut profile, SettingsEntryId::FloatingHispeedStep, -1));
+        assert_eq!(profile.lane.floating_hispeed_step, 0.05);
     }
 
     #[test]

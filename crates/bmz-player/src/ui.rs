@@ -30,13 +30,13 @@ use crate::config::key_config::{KeyBindingSlot, KeyBindingTarget};
 use crate::config::play::{TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN};
 use crate::config::profile_config::{
     AssistLongNoteMode, AssistMineMode, AssistScrollMode, BUILTIN_IR_PROVIDER_COUNT,
-    BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig, DifficultyTableLevelDisplay,
-    DoubleOptionConfig, FastSlowDisplayScope, GaugeAutoShiftConfig, GaugeTypeConfig,
-    HISPEED_STEP_MAX, HISPEED_STEP_MIN, HispeedConfigPreset, HsFixConfig, IrConfig,
-    IrCredentialStoreConfig, IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig,
-    JudgeAlgorithmConfig, ProfileConfig, RELEASE_BOUNCE_MS_MAX, RandomOptionConfig, ReplaySlotRule,
-    SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
-    default_classic_hispeed_step, normalize_hispeed_step, normalized_ir_base_url,
+    BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig, CLASSIC_HISPEED_STEP_MIN,
+    DifficultyTableLevelDisplay, DoubleOptionConfig, FLOATING_HISPEED_STEP_MIN,
+    FastSlowDisplayScope, GaugeAutoShiftConfig, GaugeTypeConfig, HISPEED_STEP_MAX,
+    HispeedConfigPreset, HsFixConfig, IrConfig, IrCredentialStoreConfig, IrProviderConfig,
+    IrProviderRoleConfig, IrSendPolicyConfig, JudgeAlgorithmConfig, ProfileConfig,
+    RELEASE_BOUNCE_MS_MAX, RandomOptionConfig, ReplaySlotRule, SkinConfig, SkinHistoryEntryConfig,
+    SkinOffsetConfig, TargetOptionConfig, normalize_classic_hispeed_step, normalized_ir_base_url,
 };
 use crate::config::settings_registry::SettingsEntryId;
 use crate::i18n::{AppLocale, FluentArgs, Localizer};
