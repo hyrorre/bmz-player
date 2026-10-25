@@ -103,6 +103,52 @@ pub(in crate::lua) fn collect_option_calls(
     (!calls.is_empty()).then_some(calls)
 }
 
+/// optionの真偽で戻り値が変わる数値functionか。推論用VMのoptionは常にfalseのため、
+/// 単一経路の推論ではoption ON時の分岐（例: BMZ Floating中だけ`number(1902)`を返す）を失う。
+pub(in crate::lua) fn value_depends_on_option(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> bool {
+    let Some(mut options) = collect_option_calls(function, main_state_probe) else {
+        return false;
+    };
+    options.sort_unstable();
+    options.dedup();
+    if options.len() > 12 {
+        return false;
+    }
+    let base_refs = collect_number_refs(function, main_state_probe).unwrap_or_default();
+    options.iter().any(|&option_id| {
+        let mut refs = base_refs.clone();
+        refs.extend(
+            collect_number_refs_with_option(function, main_state_probe, option_id)
+                .unwrap_or_default(),
+        );
+        // 0では `0.6*number(a)` と `number(b)` が一致するため、refごとに異なる値で比べる。
+        let values = refs
+            .into_iter()
+            .map(|ref_id| (ref_id, ref_id.rem_euclid(97) + 3))
+            .collect::<BTreeMap<_, _>>();
+        let off = call_number_float_with_values_and_options(
+            function,
+            main_state_probe,
+            values.clone(),
+            BTreeMap::new(),
+        );
+        let on = call_number_float_with_values_and_options(
+            function,
+            main_state_probe,
+            values,
+            BTreeMap::from([(option_id, true)]),
+        );
+        match (off, on) {
+            (Some(off), Some(on)) => !approx_float_eq(off, on),
+            (None, None) => false,
+            _ => true,
+        }
+    })
+}
+
 pub(in crate::lua) fn infer_value_float_expr(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -269,6 +315,29 @@ pub(in crate::lua) fn infer_option_weighted_number_sum(
     }
 
     Some(terms.join("+"))
+}
+
+/// `infer_option_weighted_number_sum` は1つのoptionだけがONの状態で係数を求める。
+/// 全option OFFでは式が0になるため、実際の戻り値も0の場合だけ採用する。
+pub(in crate::lua) fn infer_option_weighted_number_sum_with_all_off(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let expr = infer_option_weighted_number_sum(function, main_state_probe)?;
+    let refs = collect_number_refs(function, main_state_probe)?;
+    for sample in [1, 3, 7] {
+        let values = refs.iter().copied().map(|ref_id| (ref_id, sample)).collect();
+        let actual = call_number_float_with_values_and_options(
+            function,
+            main_state_probe,
+            values,
+            BTreeMap::new(),
+        )?;
+        if !approx_float_eq(actual, 0.0) {
+            return None;
+        }
+    }
+    Some(expr)
 }
 
 pub(in crate::lua) fn evaluate_option_weighted_number_terms(

@@ -657,7 +657,10 @@ runtime callback内でだけ読むskinは再decodeせず、closure stateを維�
 単独のheader走査・変換など描画先のない用途では0も扱えるように記述してください。
 
 通常の`auto`モードはLua functionをロード時に宣言的なref/式へ変換し、推論できない
-対応済みfieldだけ永続Lua VMのruntime callbackへ残します。スキン開発・beatoraja比較では
+対応済みfieldだけ永続Lua VMのruntime callbackへ残します。推論用VMの`main_state.option`は
+falseを返すため、数字の`value`がoptionの真偽で戻り値を変える場合は、OFF側の経路だけを
+式にしません。1つのoptionだけがONになる重み付き和（全option OFFで0）として表せる場合を除き、
+runtime callbackで評価します。スキン開発・beatoraja比較では
 `--lua-skin-runtime compat`を指定すると、次のfunction fieldを推論せず実行時に評価します。
 
 - destination `draw`

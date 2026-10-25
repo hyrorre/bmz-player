@@ -679,15 +679,9 @@ fn rmz_play7_lanecover_green_renders_green_number_when_available() {
         .iter()
         .find(|value| value.id == "lanecover-green")
         .expect("Rmz lanecover green value should decode");
-    assert_eq!(
-        lanecover_green_value.value_expr, "0.6*number(312)",
-        "decoded value: {lanecover_green_value:?}"
-    );
-    let source = decoded
-        .sources
-        .iter()
-        .find(|source| source.source_id == "play_system_src")
-        .expect("Rmz play system source should decode");
+    // Floating中だけ固定目標緑数字 (1902) を返すため、option分岐を残すruntime callbackになる。
+    let lanecover_green_callback = lua_value_callback_id(&lanecover_green_value.value_expr)
+        .unwrap_or_else(|| panic!("decoded value: {lanecover_green_value:?}"));
     let sources = decoded
         .sources
         .iter()
@@ -726,45 +720,44 @@ fn rmz_play7_lanecover_green_renders_green_number_when_available() {
             ),
             "FHS mark should stay hidden while NHS is active"
         );
-    let digit_width = 20.0;
-    let source_candidates = items
-        .iter()
-        .filter_map(|item| {
-            if let bmz_render::skin::SkinRenderItem::Image { texture, rect, uv, .. } = item
-                && *texture == source.texture
-            {
-                Some((
-                    (rect.x * 1920.0).round() as i32,
-                    (rect.y * 1080.0).round() as i32,
-                    (uv.x * source.size.width / digit_width).round() as i32,
-                    (uv.y * source.size.height).round() as i32,
-                ))
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-    let mut digits = items
-        .iter()
-        .filter_map(|item| {
-            if let bmz_render::skin::SkinRenderItem::Image { texture, rect, uv, .. } = item
-                && *texture == source.texture
-                && (rect.y * 1080.0 - 10.0).abs() < 2.0
-                && (rect.x * 1920.0 - 849.0).abs() < 80.0
-            {
-                let digit = (uv.x * source.size.width / digit_width).round() as i32;
-                Some(((rect.x * 1920.0).round() as i32, digit))
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-    digits.sort_by_key(|(x, _)| *x);
-    let digits = digits.into_iter().map(|(_, digit)| digit).collect::<Vec<_>>();
+    let mut lua_runtime = decoded.lua_runtime.expect("Rmz value callback runtime");
+    let text_values = BTreeMap::new();
+    let evaluate = |lua_runtime: &mut LuaSkinRuntime,
+                    state: &bmz_render::skin::SkinDrawState,
+                    callback_id: usize| {
+        let provider = RenderLuaMainState {
+            state,
+            enabled_options: &[],
+            text_values: &text_values,
+            chart_text_read: &AtomicBool::new(false),
+        };
+        lua_runtime.begin_frame();
+        lua_runtime.evaluate_number(callback_id, &provider)
+    };
+    // CHS/NHSは従来どおり表示時間×0.6。500msは緑数字300。
+    assert_eq!(evaluate(&mut lua_runtime, &state, lanecover_green_callback), Some(300.0));
 
-    assert_eq!(digits, vec![3, 0, 0], "source candidates: {source_candidates:?}");
-
-    let fhs_state = bmz_render::skin::SkinDrawState { hispeed_mode_index: 1, ..state.clone() };
+    // Floatingでは目標緑数字302がそのまま出る。表示時間503ms×0.6=301.8にはしない。
+    let fhs_state = bmz_render::skin::SkinDrawState {
+        hispeed_mode_index: 1,
+        target_green_number: 302,
+        total_duration_ms: 503,
+        duration_green_ms: Some(302),
+        ..state.clone()
+    };
+    assert_eq!(evaluate(&mut lua_runtime, &fhs_state, lanecover_green_callback), Some(302.0));
+    for (id, expected) in [("relative-num", 302.0), ("relative-adot-num", 30_200.0)] {
+        // 既定のHi-Speed TypeはRelative。
+        let value = decoded
+            .document
+            .value
+            .iter()
+            .find(|value| value.id == id)
+            .unwrap_or_else(|| panic!("Rmz {id} value should decode"));
+        let callback_id = lua_value_callback_id(&value.value_expr)
+            .unwrap_or_else(|| panic!("decoded value: {value:?}"));
+        assert_eq!(evaluate(&mut lua_runtime, &fhs_state, callback_id), Some(expected), "{id}");
+    }
     let fhs_items = decoded.document.static_render_items(
         &sources,
         &fhs_state,
@@ -776,4 +769,8 @@ fn rmz_play7_lanecover_green_renders_green_number_when_available() {
             ),
             "FHS mark should render while FHS is active"
         );
+}
+
+fn lua_value_callback_id(value_expr: &str) -> Option<usize> {
+    value_expr.strip_prefix("bmz:lua_value_callback:")?.parse().ok()
 }

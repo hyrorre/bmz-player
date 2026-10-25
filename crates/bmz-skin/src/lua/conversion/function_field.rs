@@ -209,8 +209,11 @@ fn infer_value_field(
         insert_expr(object, "value_expr", value_expr);
         return true;
     }
-    if !is_graph && infer_non_graph_value_field(function, object_id, object, main_state_probe) {
-        return true;
+    if !is_graph
+        && let Some(inferred) =
+            infer_non_graph_value_field(function, object_id, object, main_state_probe)
+    {
+        return inferred;
     }
     if is_graph
         && let Some(value_expr) =
@@ -271,27 +274,39 @@ fn has_shared_result_rank_state(lua: &Lua, function: &Function, object_id: Optio
     }) && lua_rank_plus_upvalue(lua, function).is_some()
 }
 
+/// `Some(true)` は推論済み、`Some(false)` はruntime callbackへ残す、`None` は後続の推論へ進む。
 fn infer_non_graph_value_field(
     function: &Function,
     object_id: Option<&str>,
     object: &mut JsonMap<String, JsonValue>,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
-) -> bool {
+) -> Option<bool> {
     let value_expr = infer_nearest_rank_diff_value_expr(function, object_id, main_state_probe)
         .or_else(|| infer_ir_ranking_score_diff_value_expr(function, object_id, main_state_probe))
         .or_else(|| infer_ir_ranking_score_rate_value_expr(function, object_id, main_state_probe))
         .or_else(|| infer_bmz_builtin_value_expr(function, object_id, main_state_probe));
     if let Some(value_expr) = value_expr {
         insert_expr(object, "value_expr", value_expr);
-        return true;
+        return Some(true);
+    }
+    if value_depends_on_option(function, main_state_probe) {
+        // option依存の分岐は、option付きの線形和で表せる場合だけ式へ置き換える。
+        // それ以外はruntime callbackへ残し、option OFFの経路だけに固定しない。
+        if let Some(value_expr) =
+            infer_option_weighted_number_sum_with_all_off(function, main_state_probe)
+        {
+            insert_expr(object, "value_expr", value_expr);
+            return Some(true);
+        }
+        return Some(false);
     }
     if let Some(ref_id) = infer_gated_number_ref(function, main_state_probe)
         .or_else(|| infer_main_state_number_ref(function, main_state_probe))
     {
         insert_number(object, "ref", ref_id);
-        return true;
+        return Some(true);
     }
-    false
+    None
 }
 
 fn infer_act_field(

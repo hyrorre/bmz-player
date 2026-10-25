@@ -980,6 +980,37 @@ fn lua_numeric_closure_keeps_mutable_state_in_runtime() {
 }
 
 #[test]
+fn lua_option_branched_number_stays_runtime_instead_of_off_path_expr() {
+    // 推論用VMのoptionはfalseのため、`0.6*number(312)` へ固定するとoption ON時の分岐を失う。
+    let mut loaded = load_runtime_value_fixture(
+        "bmz-skin-option-branched-number",
+        LuaSkinRuntimeMode::Auto,
+        r#"
+            local number_value = function()
+                if main_state.option(1901) then
+                    return main_state.number(1902)
+                end
+                return main_state.number(312) * 0.6
+            end
+            local text_value = "unused"
+        "#,
+    );
+    let expr = &loaded.document.value[0].value_expr;
+    assert!(expr.starts_with("bmz:lua_value_callback:"), "{expr}");
+    let callback = expr.rsplit(':').next().unwrap().parse::<usize>().unwrap();
+    let runtime = loaded.lua_runtime.as_mut().unwrap();
+    let mut state = TestLuaMainState::default();
+    state.numbers.insert(312, 503);
+    state.numbers.insert(1902, 302);
+    runtime.begin_frame();
+    let off = runtime.evaluate_number(callback, &state).unwrap();
+    assert!((off - 301.8).abs() < 1e-9, "{off}");
+    state.options.insert(1901, true);
+    runtime.begin_frame();
+    assert_eq!(runtime.evaluate_number(callback, &state), Some(302.0));
+}
+
+#[test]
 fn wmii_beatoraja_branch_next_rank_updates_when_available() {
     let library = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins");
     if !library.join("WMII_FHD/play/play7ac.luaskin").is_file() {
