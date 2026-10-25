@@ -68,7 +68,7 @@ pub fn import_chart_with_random_source(
     random_source: BmsRandomSource,
     check_resource_existence: bool,
 ) -> Result<ImportResult, ImportError> {
-    let bytes = std::fs::read(path)
+    let bytes = bmz_song_resource::read_file(path)
         .map_err(|source| ImportError::Io { path: path.to_path_buf(), source })?;
     import_chart_bytes_with_random_source(path, &bytes, random_source, check_resource_existence)
 }

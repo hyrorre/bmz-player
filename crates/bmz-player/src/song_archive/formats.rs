@@ -65,6 +65,35 @@ impl Backend {
         }
     }
 
+    /// Whether a member's data depends on decoding the members before it.
+    pub(super) fn solid(&self) -> bool {
+        match self {
+            Self::Zip(_) => false,
+            // The same conservative test rars applies before refusing to skip a member.
+            Self::Rar(rars::Archive::Rar13(archive)) => archive.main.is_solid(),
+            Self::Rar(rars::Archive::Rar15To40(archive)) => {
+                archive.main.is_solid() || archive.files().any(|file| file.is_solid())
+            }
+            Self::Rar(rars::Archive::Rar50Plus(archive)) => {
+                archive.main.is_solid()
+                    || archive.files().any(|file| file.compression_info & 0x40 != 0)
+            }
+            Self::Rar(_) => true,
+            Self::SevenZ(archive) => {
+                let mut seen = std::collections::HashSet::new();
+                archive
+                    .archive()
+                    .stream_map
+                    .file_block_index
+                    .iter()
+                    .flatten()
+                    .any(|block| !seen.insert(*block))
+            }
+        }
+    }
+
+    /// Visits the selected entries. Unselected members are skipped where the format allows,
+    /// and reading stops once every selected entry has been written.
     pub(super) fn extract(
         &mut self,
         entries: &[ArchiveEntry],
@@ -72,11 +101,17 @@ impl Backend {
         selected: Selection<'_>,
         open: &mut dyn FnMut(&ArchiveEntry) -> Result<Box<dyn Write>>,
     ) -> Result<()> {
+        let mut remaining = entries.iter().filter(|entry| selected.includes(entry)).count();
+        let solid = self.solid();
         match self {
             Self::Zip(archive) => {
                 for (index, entry) in entries.iter().enumerate() {
+                    if remaining == 0 {
+                        break;
+                    }
                     control.check()?;
                     if selected.includes(entry) {
+                        remaining -= 1;
                         let mut source = archive.by_index(index)?;
                         let mut writer = open(entry)?;
                         std::io::copy(&mut source, &mut writer)?;
@@ -89,6 +124,9 @@ impl Backend {
                 archive.extract_with_control(rar_options(control), |_| {
                     let result = (|| -> Result<_> {
                         control.check()?;
+                        if remaining == 0 {
+                            return Ok(rars::ExtractionDecision::Stop);
+                        }
                         let entry = entries
                             .get(index)
                             .ok_or_else(|| anyhow::anyhow!("RAR entry index changed"))?;
@@ -96,38 +134,79 @@ impl Backend {
                         if entry.is_directory {
                             return Ok(rars::ExtractionDecision::Skip);
                         }
-                        // Even unselected files must be decoded to preserve solid history and quotas.
+                        if selected.includes(entry) {
+                            remaining -= 1;
+                        } else if !solid {
+                            return Ok(rars::ExtractionDecision::Skip);
+                        }
+                        // Unselected solid members are still decoded to keep the history.
                         Ok(rars::ExtractionDecision::Extract(open(entry)?))
                     })();
                     result.map_err(|error| rars::Error::from(std::io::Error::other(error)))
                 })?;
-                ensure!(index == entries.len(), "RAR extraction omitted entries");
             }
             Self::SevenZ(archive) => {
                 // The library visits solid streams before streamless entries, not index order.
                 let names: std::collections::HashMap<_, _> =
                     entries.iter().map(|entry| (entry.name.as_str(), entry)).collect();
+                // A block can be abandoned once none of its remaining entries is selected.
+                let mut block_of = std::collections::HashMap::new();
+                let mut pending = std::collections::HashMap::<usize, usize>::new();
+                let info = archive.archive();
+                for (file_index, raw) in info.files.iter().enumerate() {
+                    let name = safety::normalize_name(&raw.name, raw.is_directory)?;
+                    let block = info.stream_map.file_block_index[file_index];
+                    if let (Some(block), Some(entry)) = (block, names.get(name.as_str()))
+                        && selected.includes(entry)
+                    {
+                        *pending.entry(block).or_default() += 1;
+                    }
+                    block_of.insert(name, block);
+                }
                 let mut visited = std::collections::HashSet::new();
                 archive.for_each_entries(|raw, source| {
                     let result = (|| -> Result<bool> {
                         control.check()?;
+                        if remaining == 0 {
+                            return Ok(false);
+                        }
                         let name = safety::normalize_name(&raw.name, raw.is_directory)?;
                         let entry = names
                             .get(name.as_str())
                             .ok_or_else(|| anyhow::anyhow!("7z entry index changed"))?;
+                        let block = block_of.get(&name).copied().flatten();
                         ensure!(visited.insert(name), "7z entry visited twice");
-                        if !entry.is_directory {
-                            let mut writer = open(entry)?;
-                            std::io::copy(source, &mut writer)?;
-                            writer.flush()?;
+                        if entry.is_directory {
+                            return Ok(true);
                         }
+                        if selected.includes(entry) {
+                            remaining -= 1;
+                            if let Some(count) = block.and_then(|block| pending.get_mut(&block)) {
+                                *count -= 1;
+                            }
+                        } else {
+                            match block {
+                                // Streamless entries have nothing to decode.
+                                None => return Ok(true),
+                                // Returning false leaves the rest of this block undecoded;
+                                // the next block or the streamless entries follow.
+                                Some(block) if pending.get(&block).copied().unwrap_or(0) == 0 => {
+                                    return Ok(false);
+                                }
+                                // A later entry of this solid block is selected.
+                                Some(_) => {}
+                            }
+                        }
+                        let mut writer = open(entry)?;
+                        std::io::copy(source, &mut writer)?;
+                        writer.flush()?;
                         Ok(true)
                     })();
                     result.map_err(|error| sevenz_rust2::Error::from(std::io::Error::other(error)))
                 })?;
-                ensure!(visited.len() == entries.len(), "7z extraction omitted entries");
             }
         }
+        ensure!(remaining == 0, "archive extraction omitted selected entries");
         Ok(())
     }
 }

@@ -602,7 +602,6 @@ impl SelectAssetRuntime {
         if let Some(generated) = parse_generated_preview_cache_key(&key) {
             self.generated_preview_loading = true;
             let library_db_path = self.library_db_path.clone();
-            let cache_dir = self.cache_dir.clone();
             let sample_rate = self.output_sample_rate().unwrap_or(48_000);
             let result_key = key.clone();
             if let Err(error) = thread::Builder::new()
@@ -611,7 +610,6 @@ impl SelectAssetRuntime {
                     lower_current_thread_priority();
                     let result = render_generated_preview_for_chart(
                         &library_db_path,
-                        &cache_dir,
                         generated.chart_id,
                         generated.start_ms,
                         sample_rate,

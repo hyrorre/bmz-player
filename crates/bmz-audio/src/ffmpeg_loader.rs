@@ -80,8 +80,24 @@ fn try_load_native_wav(path: &Path) -> Result<Option<DecodedSample>, SampleLoadE
     }
 }
 
+/// Opens a file, or an archive entry already read into memory, without a temporary file.
+fn open_input(path: &Path) -> Result<format::context::Input, String> {
+    let opened = match bmz_song_resource::read(path) {
+        Some(bytes) => {
+            let bytes = bytes.map_err(|e| format!("failed to read input: {e}"))?;
+            let io = format::context::StreamIo::from_read_seek(std::io::Cursor::new(bytes))
+                .map_err(|e| format!("failed to create input stream: {e}"))?;
+            // The name only hints the demuxer, like the extension of a real file.
+            let name = path.file_name().and_then(|name| name.to_str());
+            format::input_from_stream(io, name, None)
+        }
+        None => format::input(path),
+    };
+    opened.map_err(|e| format!("failed to open input: {e}"))
+}
+
 fn probe_audio_duration_ms(path: &Path) -> Result<i64, String> {
-    let ictx = format::input(path).map_err(|e| format!("failed to open input: {e}"))?;
+    let ictx = open_input(path)?;
     let stream = ictx
         .streams()
         .best(media::Type::Audio)
@@ -104,7 +120,7 @@ fn decode_audio(
     path: &Path,
     packet_yield_interval: Option<usize>,
 ) -> Result<DecodedSample, String> {
-    let mut ictx = format::input(path).map_err(|e| format!("failed to open input: {e}"))?;
+    let mut ictx = open_input(path)?;
 
     let stream = ictx
         .streams()

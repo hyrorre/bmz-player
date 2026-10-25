@@ -21,10 +21,25 @@ pub struct DecodedFrame {
     pub height: u32,
 }
 
+/// Opens a video file, or a song archive entry already read into memory. Seeking and
+/// reopening work on the in-memory bytes, so BGA loops never need a temporary file.
+pub(crate) fn open_input(path: &Path) -> Result<ffmpeg_next::format::context::Input> {
+    match bmz_song_resource::read(path) {
+        Some(bytes) => {
+            let io = ffmpeg_next::format::context::StreamIo::from_read_seek(std::io::Cursor::new(
+                bytes?,
+            ))?;
+            let name = path.file_name().and_then(|name| name.to_str());
+            Ok(ffmpeg_next::format::input_from_stream(io, name, None)?)
+        }
+        None => Ok(ffmpeg_next::format::input(path)?),
+    }
+}
+
 /// Container/stream duration used as an exact loop period during offline export.
 pub fn video_duration_us(path: &Path) -> Result<i64> {
     bmz_ffmpeg::ensure_init().map_err(|e| anyhow::anyhow!(e))?;
-    let input = ffmpeg_next::format::input(path)?;
+    let input = open_input(path)?;
     let selected = select_video_stream(&input)?;
     let stream =
         input.stream(selected.index).ok_or_else(|| anyhow::anyhow!("video stream missing"))?;
@@ -428,7 +443,7 @@ impl Drop for VideoBgaDecoder {
 pub fn decode_first_frame(path: &Path) -> Result<DecodedFrame> {
     bmz_ffmpeg::ensure_init().map_err(|e| anyhow::anyhow!(e))?;
 
-    let mut ictx = ffmpeg_next::format::input(path)?;
+    let mut ictx = open_input(path)?;
     let selected = select_video_stream(&ictx)?;
     let mut decoder = open_video_decoder(&selected)?;
     let mut decoded = ffmpeg_next::frame::Video::empty();

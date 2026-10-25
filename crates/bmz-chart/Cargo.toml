@@ -15,6 +15,7 @@ strict-num-extended = "0.5"
 serde_json = "1"
 
 bmz-core = { path = "../bmz-core" }
+bmz-song-resource = { path = "../bmz-song-resource" }
 
 [dev-dependencies]
 tempfile = "3"

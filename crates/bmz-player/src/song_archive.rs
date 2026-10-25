@@ -16,7 +16,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub use cache::{materialize, materialize_entry};
+pub use cache::materialize_entry;
 use formats::Backend;
 use safety::{MeteredWriter, validate_entries};
 
@@ -167,17 +167,14 @@ impl ArchiveEntry {
 pub struct ArchiveIndex {
     pub generation: ArchiveGeneration,
     pub entries: Vec<ArchiveEntry>,
+    /// Reading one entry decodes the entries before it (solid RAR / 7z). ZIP and non-solid
+    /// RAR read any entry directly.
+    pub solid: bool,
 }
 
 #[derive(Debug)]
 pub struct ArchiveChart {
     pub bytes: Vec<u8>,
-    pub generation: ArchiveGeneration,
-}
-
-#[derive(Debug, Clone)]
-pub struct MaterializedArchive {
-    pub root: PathBuf,
     pub generation: ArchiveGeneration,
 }
 
@@ -226,6 +223,45 @@ pub fn scan_charts(
     Ok(opened.index)
 }
 
+/// Reads the picked file entries into memory, decoding no more of the archive than needed:
+/// unpicked members are skipped where the format allows and reading stops after the last pick.
+pub fn read_entries(
+    path: &Path,
+    expected: Option<&ArchiveGeneration>,
+    control: &ArchiveControl,
+    pick: &dyn Fn(&ArchiveEntry) -> bool,
+) -> Result<(ArchiveIndex, Vec<(String, Vec<u8>)>)> {
+    let mut opened = Opened::new(path, control)?;
+    if let Some(expected) = expected {
+        ensure!(opened.index.generation == *expected, "song archive generation changed");
+    }
+    let collected = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));
+    opened.extract(control, Selection::Pick(pick), &mut |entry| {
+        let capacity = entry.size.min(control.limits.chart_bytes) as usize;
+        collected.lock().unwrap().push((entry.name.clone(), Vec::with_capacity(capacity)));
+        Ok(Box::new(EntryWriter(collected.clone())))
+    })?;
+    opened.verify_unchanged(path, control)?;
+    let canonical = std::fs::canonicalize(path)?;
+    cache::remember_index(canonical, opened.stamp, control.limits.clone(), opened.index.clone());
+    let entries = std::mem::take(&mut *collected.lock().unwrap());
+    Ok((opened.index, entries))
+}
+
+/// Appends to the entry most recently opened by [`read_entries`].
+struct EntryWriter(Arc<Mutex<Vec<(String, Vec<u8>)>>>);
+impl Write for EntryWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let mut entries = self.0.lock().unwrap();
+        let (_, current) = entries.last_mut().expect("entry opened before writing");
+        current.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 pub fn read_chart(path: &Path, entry: &str, control: &ArchiveControl) -> Result<ArchiveChart> {
     let mut opened = Opened::new(path, control)?;
     let selected = opened
@@ -258,17 +294,17 @@ impl Write for ChartWriter {
 
 #[derive(Clone, Copy)]
 enum Selection<'a> {
-    All,
     Charts,
     One(&'a str),
+    Pick(&'a dyn Fn(&ArchiveEntry) -> bool),
 }
 impl Selection<'_> {
     fn includes(self, entry: &ArchiveEntry) -> bool {
         !entry.is_directory
             && match self {
-                Self::All => true,
                 Self::Charts => entry.is_chart(),
                 Self::One(name) => entry.name == name,
+                Self::Pick(pick) => pick(entry),
             }
     }
 }
@@ -303,7 +339,8 @@ impl Opened {
         validate_entries(&entries, &control.limits)?;
         ensure!(metadata_stamp(path)? == before, "archive changed while reading index");
         cache::remember_generation(canonical, token, generation.clone());
-        Ok(Self { backend, index: ArchiveIndex { generation, entries }, stamp: before })
+        let solid = backend.solid();
+        Ok(Self { backend, index: ArchiveIndex { generation, entries, solid }, stamp: before })
     }
 
     fn extract(

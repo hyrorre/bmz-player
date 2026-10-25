@@ -37,7 +37,7 @@ pub(crate) fn decode_video_following_playback_time(
     stop_decode: Arc<AtomicBool>,
     restart_decode: Arc<AtomicBool>,
 ) -> Result<()> {
-    let mut ictx = ffmpeg_next::format::input(path)?;
+    let mut ictx = crate::open_input(path)?;
     let selected = select_video_stream(&ictx)?;
     let mut decoder = open_video_decoder(&selected)?;
     let mut decoded = ffmpeg_next::frame::Video::empty();

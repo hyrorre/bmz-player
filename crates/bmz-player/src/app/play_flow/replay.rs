@@ -133,7 +133,7 @@ impl WinitApp {
             next_scoring_time: None,
         };
         let options = PlayStartOptions {
-            archive_cache_dir: Some(self.boot.app_paths.cache_dir.clone()),
+            read_archive_assets: true,
             session_mode: SessionMode::Normal,
             autoplay: false,
             key_mode_conversion: self.boot.profile_config.play.key_mode_conversion,
@@ -259,7 +259,7 @@ impl WinitApp {
             next_scoring_time: None,
         };
         let options = PlayStartOptions {
-            archive_cache_dir: Some(self.boot.app_paths.cache_dir.clone()),
+            read_archive_assets: true,
             session_mode: SessionMode::Normal,
             autoplay: false,
             key_mode_conversion: self.boot.profile_config.play.key_mode_conversion,

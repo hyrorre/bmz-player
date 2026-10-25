@@ -48,7 +48,7 @@ pub(super) fn build_bga_table(
             if bmp.path.is_absolute() { bmp.path.clone() } else { base_dir.join(&bmp.path) };
         let path = crate::bga_asset::resolve_bga_asset_path(base_dir, &bmp.path)
             .unwrap_or_else(|| unresolved.clone());
-        if check_resource_existence && !path.exists() {
+        if check_resource_existence && !bmz_song_resource::file_exists(&path) {
             warnings.push(ImportWarning::MissingBmpFile { path: path.clone() });
         }
         by_bmp_key.insert(bmp.key, id);

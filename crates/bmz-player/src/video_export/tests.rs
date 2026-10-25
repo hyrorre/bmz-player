@@ -12,21 +12,17 @@ fn archive_export_prepare_resolves_media_and_replay_by_internal_chart_hash() {
     assert!(prepared.replay.is_some());
     assert!(prepared.play.audio.samples.source_count() > 0);
     let chart = &prepared.play.session.chart;
-    let canonical_cache = fixture.paths.cache_dir.canonicalize().unwrap();
-    assert!(
-        chart.sounds.iter().all(|asset| asset
-            .path
-            .canonicalize()
-            .unwrap()
-            .starts_with(&canonical_cache))
-    );
-    assert!(
-        chart.bga_assets.iter().all(|asset| asset
-            .path
-            .canonicalize()
-            .unwrap()
-            .starts_with(&canonical_cache))
-    );
+    // Media comes from the archive in memory; nothing is extracted to the cache.
+    let in_archive = |path: &Path| {
+        matches!(
+            bmz_song_resource::SongPath::parse(path),
+            bmz_song_resource::SongPath::Archive { .. }
+        ) && bmz_song_resource::is_file(path)
+    };
+    assert!(chart.sounds.iter().all(|asset| in_archive(&asset.path)));
+    assert!(chart.bga_assets.iter().all(|asset| in_archive(&asset.path)));
+    assert!(prepared.play.archive_resources.is_some());
+    assert!(!fixture.paths.cache_dir.join("song-archives").exists());
     assert!(Path::new(&chart.metadata.stage_file).is_absolute());
 }
 

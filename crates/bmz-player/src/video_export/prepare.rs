@@ -46,7 +46,7 @@ pub fn prepare(
     profile.activate_play_mode(imported.chart.metadata.key_mode);
     profile.set_cli_play(options.play_overrides.clone());
     let mut play_options = crate::app::offline_play_options(&profile);
-    play_options.archive_cache_dir = Some(paths.cache_dir.clone());
+    play_options.read_archive_assets = true;
     play_options.bms_random_seed = Some(seed);
     play_options.arrange_seed = Some((seed & 0xff_ffff) as i64);
     play_options.arrange_seed_2p = Some(((seed >> 24) & 0xff_ffff) as i64);

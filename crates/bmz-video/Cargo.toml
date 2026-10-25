@@ -11,3 +11,4 @@ tracing.workspace = true
 ffmpeg-next.workspace = true
 
 bmz-ffmpeg = { path = "../bmz-ffmpeg" }
+bmz-song-resource = { path = "../bmz-song-resource" }

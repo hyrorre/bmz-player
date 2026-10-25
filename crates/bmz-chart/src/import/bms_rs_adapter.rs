@@ -128,7 +128,7 @@ pub fn import_bms_to_intermediate_with_random_source(
     bms_switch_choices: &mut Vec<u64>,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
-    let bytes = std::fs::read(source_path)
+    let bytes = bmz_song_resource::read_file(source_path)
         .map_err(|source| ImportError::Io { path: source_path.to_path_buf(), source })?;
     import_bms_bytes_to_intermediate(
         source_path,
@@ -180,7 +180,7 @@ pub fn import_pms_to_intermediate_with_random_source(
     bms_switch_choices: &mut Vec<u64>,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
-    let bytes = std::fs::read(source_path)
+    let bytes = bmz_song_resource::read_file(source_path)
         .map_err(|source| ImportError::Io { path: source_path.to_path_buf(), source })?;
     import_pms_bytes_to_intermediate(
         source_path,

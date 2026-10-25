@@ -102,8 +102,9 @@ impl SRandomScheme {
 
 #[derive(Debug, Clone)]
 pub struct PlaySessionOptions {
-    /// Explicit disposable resource cache used by archive playback workers.
-    pub archive_cache_dir: Option<std::path::PathBuf>,
+    /// Preload workers read archive chart assets into memory. Other callers import only the
+    /// chart, so the window thread never decodes an archive.
+    pub read_archive_assets: bool,
     /// Per-key presentation settings use the source chart mode. This differs
     /// from `chart.metadata.key_mode` after BATTLE expands 5K/7K to 10K/14K.
     pub play_config_key_mode: Option<KeyMode>,
@@ -303,6 +304,9 @@ pub struct PreparedPlaySession {
     pub practice_mode: bool,
     pub score_save_disabled: bool,
     pub playback_rate_percent: u16,
+    /// In-memory entries of an archive chart. Held for the whole play so video BGA, which
+    /// opens at its event, and retry read the same generation without touching the archive.
+    pub archive_resources: Option<Arc<bmz_song_resource::SongResourceSet>>,
 }
 
 /// 譜面 parse・オプション適用までが完了し、WAV/BMP ロードを開始できる状態。
@@ -321,6 +325,9 @@ pub struct PreparedPlayChart {
     pub assist_runtime: AssistRuntime,
     pub score_save_disabled: bool,
     pub opponent_chart: Option<Arc<PlayableChart>>,
+    /// In-memory entries of an archive chart. Held for the whole play so video BGA, which
+    /// opens at its event, and retry read the same generation without touching the archive.
+    pub archive_resources: Option<Arc<bmz_song_resource::SongResourceSet>>,
 }
 
 pub struct PreloadedPlaySession {
@@ -337,6 +344,9 @@ pub struct PreloadedPlaySession {
     pub assist_runtime: AssistRuntime,
     pub score_save_disabled: bool,
     pub opponent_chart: Option<Arc<PlayableChart>>,
+    /// In-memory entries of an archive chart. Held for the whole play so video BGA, which
+    /// opens at its event, and retry read the same generation without touching the archive.
+    pub archive_resources: Option<Arc<bmz_song_resource::SongResourceSet>>,
 }
 
 impl PreloadedPlaySession {
@@ -352,6 +362,7 @@ impl PreloadedPlaySession {
             assist_runtime: self.assist_runtime,
             score_save_disabled: self.score_save_disabled,
             opponent_chart: self.opponent_chart.clone(),
+            archive_resources: self.archive_resources.clone(),
         }
     }
 
@@ -376,6 +387,7 @@ impl PreloadedPlaySession {
             assist_runtime: self.assist_runtime,
             score_save_disabled: self.score_save_disabled,
             opponent_chart: self.opponent_chart.clone(),
+            archive_resources: self.archive_resources.clone(),
         }
     }
 }
@@ -383,7 +395,7 @@ impl PreloadedPlaySession {
 impl Default for PlaySessionOptions {
     fn default() -> Self {
         Self {
-            archive_cache_dir: None,
+            read_archive_assets: false,
             play_config_key_mode: None,
             session_mode: SessionMode::Normal,
             autoplay: false,
@@ -484,3 +496,7 @@ use preload::*;
 #[cfg(test)]
 #[path = "play_session/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "play_session/archive_bench.rs"]
+mod archive_bench;

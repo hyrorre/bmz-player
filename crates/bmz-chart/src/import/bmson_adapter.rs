@@ -30,7 +30,7 @@ pub fn import_bmson_to_intermediate(
     source_path: &Path,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
-    let bytes = std::fs::read(source_path)
+    let bytes = bmz_song_resource::read_file(source_path)
         .map_err(|source| ImportError::Io { path: source_path.to_path_buf(), source })?;
     import_bmson_bytes_to_intermediate(source_path, &bytes, warnings)
 }

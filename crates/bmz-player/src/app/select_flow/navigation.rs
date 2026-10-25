@@ -319,24 +319,39 @@ impl WinitApp {
             return;
         };
         let folder = PathBuf::from(&chart.folder_path);
-        if let Ok(locator) = crate::chart_source::ChartLocator::parse(&folder)
-            && locator.is_archive()
+        if let Ok(crate::chart_source::ChartLocator::Archive { container, entry: folder }) =
+            crate::chart_source::ChartLocator::parse(&folder)
         {
             let cache_dir = self.boot.app_paths.cache_dir.clone();
-            // Document extraction/opening must not stall the window thread.
+            // Document extraction/opening must not stall the window thread. An external app
+            // needs a real file, so only the folder's text entries are extracted.
             thread::spawn(move || {
                 let result = (|| -> Result<()> {
-                    let source = locator.materialize(&cache_dir)?;
-                    for entry in std::fs::read_dir(&source.path)? {
-                        let path = entry?.path();
-                        if path
-                            .extension()
-                            .and_then(|ext| ext.to_str())
-                            .is_some_and(|ext| ext.eq_ignore_ascii_case("txt"))
+                    let control = crate::song_archive::ArchiveControl::default();
+                    let index = crate::song_archive::inspect(&container, &control)?;
+                    let prefix =
+                        if folder.is_empty() { String::new() } else { format!("{folder}/") };
+                    for candidate in &index.entries {
+                        let Some(name) = candidate.name.strip_prefix(&prefix) else {
+                            continue;
+                        };
+                        if candidate.is_directory
+                            || name.contains('/')
+                            || !Path::new(name)
+                                .extension()
+                                .and_then(|ext| ext.to_str())
+                                .is_some_and(|ext| ext.eq_ignore_ascii_case("txt"))
                         {
-                            source.validate_asset_path(&path)?;
-                            open_file_with_default_app(&path)?;
+                            continue;
                         }
+                        let path = crate::song_archive::materialize_entry(
+                            &container,
+                            &index.generation,
+                            &candidate.name,
+                            &cache_dir,
+                            &control,
+                        )?;
+                        open_file_with_default_app(&path)?;
                     }
                     Ok(())
                 })();

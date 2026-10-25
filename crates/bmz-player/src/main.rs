@@ -41,6 +41,8 @@ async fn main() -> ExitCode {
         bmz_player::stdio::stderr_line(format_args!("Warning: {warning}"));
     }
     let command = invocation.command;
+    // Song archive entries that no chart load read into memory are read on demand.
+    bmz_player::archive_resources::install_fallback();
     if let Command::AudioProbe(options) = &command {
         return match bmz_player::cli::audio_probe::run(options) {
             Ok(()) => ExitCode::SUCCESS,

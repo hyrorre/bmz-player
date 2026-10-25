@@ -31,6 +31,7 @@ fn retry_audio_reload_preserves_bgm_and_keysound_asset_mapping() {
             assist_runtime: Default::default(),
             opponent_chart: None,
             score_save_disabled: false,
+            archive_resources: None,
         },
         48_000,
         0.75,

@@ -68,6 +68,7 @@ impl PlayMediaCache {
             score_key: running.score_key,
             assist_runtime: running.session.assist,
             score_save_disabled: running.score_save_disabled,
+            archive_resources: running.archive_resources.clone(),
         });
         Self {
             chart_id,

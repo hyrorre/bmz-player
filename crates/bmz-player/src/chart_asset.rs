@@ -63,24 +63,12 @@ pub(crate) fn resolve_cached_asset(
         );
         return Ok(path);
     }
-    let resolved = locator.materialize(cache_root)?;
-    // Validate the requested name before any file probing, then validate extension fallback too.
-    let requested = resolved.resolve_asset(file.trim())?;
-    let asset_name = if resolved.archive_root.is_some() && !file.trim().is_empty() {
-        requested.to_string_lossy().into_owned()
+    let folder = locator.container_path();
+    Ok(if preview {
+        resolve_preview_file(folder, &file)
     } else {
-        file.clone()
-    };
-    let path = if preview {
-        resolve_preview_file(&resolved.path, &asset_name)
-    } else {
-        resolve_chart_asset_path(&resolved.path.to_string_lossy(), &asset_name)
-    };
-    if let Some(path) = &path {
-        resolved.validate_asset_path(path)?;
-    }
-    anyhow::ensure!(asset_cache_key(&folder, &file) == key, "archive changed during asset load");
-    Ok(path)
+        resolve_chart_asset_path(&folder.to_string_lossy(), &file)
+    })
 }
 
 /// Concurrent Select asset extractions; each may decode a solid archive prefix.
@@ -205,6 +193,7 @@ const PREVIEW_AUDIO_EXTENSIONS: &[&str] = &["wav", "ogg", "mp3", "flac"];
 pub(crate) mod archive_tests;
 
 /// BMS ヘッダで指定された相対パスを曲フォルダ基準で解決する。
+/// 書庫内の譜面では、読み込み済みの書庫一覧から仮想パスを返す。
 pub fn resolve_chart_asset_path(folder_path: &str, relative: &str) -> Option<PathBuf> {
     let relative = relative.trim();
     if relative.is_empty() {
@@ -213,7 +202,7 @@ pub fn resolve_chart_asset_path(folder_path: &str, relative: &str) -> Option<Pat
     let path = Path::new(relative);
     let resolved =
         if path.is_absolute() { path.to_path_buf() } else { Path::new(folder_path).join(path) };
-    if resolved.is_file() {
+    if bmz_song_resource::is_file(&resolved) {
         return Some(resolved);
     }
     resolve_same_stem_image_file(Path::new(folder_path), path)
@@ -233,7 +222,7 @@ pub fn resolve_preview_file(folder: &Path, preview_file: &str) -> Option<PathBuf
     if !preview_file.is_empty() {
         let path = Path::new(preview_file);
         let resolved = if path.is_absolute() { path.to_path_buf() } else { folder.join(path) };
-        if resolved.is_file() {
+        if bmz_song_resource::is_file(&resolved) {
             return Some(resolved);
         }
         if let Some(path) = resolve_same_stem_audio_file(folder, path) {
@@ -249,11 +238,11 @@ fn resolve_same_stem_audio_file(folder: &Path, relative: &Path) -> Option<PathBu
     let parent = base.parent().unwrap_or(folder);
     for extension in PREVIEW_AUDIO_EXTENSIONS {
         let candidate = parent.join(format!("{stem}.{extension}"));
-        if candidate.is_file() {
+        if bmz_song_resource::is_file(&candidate) {
             return Some(candidate);
         }
         let candidate = parent.join(format!("{stem}.{}", extension.to_ascii_uppercase()));
-        if candidate.is_file() {
+        if bmz_song_resource::is_file(&candidate) {
             return Some(candidate);
         }
     }
@@ -266,11 +255,11 @@ fn resolve_same_stem_image_file(folder: &Path, relative: &Path) -> Option<PathBu
     let parent = base.parent().unwrap_or(folder);
     for extension in CHART_IMAGE_EXTENSIONS {
         let candidate = parent.join(format!("{stem}.{extension}"));
-        if candidate.is_file() {
+        if bmz_song_resource::is_file(&candidate) {
             return Some(candidate);
         }
         let candidate = parent.join(format!("{stem}.{}", extension.to_ascii_uppercase()));
-        if candidate.is_file() {
+        if bmz_song_resource::is_file(&candidate) {
             return Some(candidate);
         }
     }

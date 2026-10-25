@@ -325,17 +325,19 @@ impl LibraryDatabase {
         })
     }
 
-    pub fn load_chart_source_with_cache(
+    /// Import with assets ready to load. Archive charts read the chart and every asset it uses
+    /// into memory; the returned source keeps those entries alive.
+    pub fn load_chart_source_with_assets(
         &self,
         chart_id: i64,
         random: BmsRandomSource,
-        cache_root: &Path,
     ) -> Result<(ChartSource, ResolvedChartSource, ImportResult)> {
         let (source, (resolved, import)) = self.load_source_using(chart_id, |source| {
-            let resolved = source.locator()?.materialize(cache_root)?;
+            let resolved = source.locator()?.resolve()?;
             let import = import_bms_chart_with_random_source(&resolved.path, random.clone(), true)?;
             verify_import(source, &import)?;
             resolved.validate_chart_assets(&import.chart)?;
+            resolved.load_chart_assets(&import.chart)?;
             Ok((resolved, import))
         })?;
         Ok((source, resolved, import))

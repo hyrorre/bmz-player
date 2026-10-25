@@ -251,8 +251,7 @@ fn archive_preload_preserves_identity_and_copy_assets_for_practice_replay_and_co
     );
     assert!(load_source_chart_for_chart(&db, a.chart_id, None).is_ok());
     assert!(!cache.exists());
-    let options =
-        PlaySessionOptions { archive_cache_dir: Some(cache.clone()), ..Default::default() };
+    let options = PlaySessionOptions { read_archive_assets: true, ..Default::default() };
     db.write_chart_normalization_analysis(
         a.chart_id,
         crate::storage::library_db::ChartNormalizationAnalysis {
@@ -293,19 +292,23 @@ fn archive_preload_preserves_identity_and_copy_assets_for_practice_replay_and_co
     assert!(b_play.audio.samples.source_count() > 0);
     assert_eq!(a_play.score_key, b_play.score_key);
     assert_ne!(a_play.chart.sounds[0].path, b_play.chart.sounds[0].path);
+    // Each copy plays its own archive's assets, read into memory without extraction.
     assert_ne!(
-        std::fs::read(&a_play.chart.sounds[0].path).unwrap(),
-        std::fs::read(&b_play.chart.sounds[0].path).unwrap()
+        bmz_song_resource::read_file(&a_play.chart.sounds[0].path).unwrap(),
+        bmz_song_resource::read_file(&b_play.chart.sounds[0].path).unwrap()
     );
     assert!(Path::new(&a_play.chart.metadata.stage_file).is_absolute());
-    let canonical_cache = cache.canonicalize().unwrap();
-    assert!(
-        a_play.chart.bga_assets.iter().all(|asset| asset
-            .path
-            .canonicalize()
-            .unwrap()
-            .starts_with(&canonical_cache))
-    );
+    let in_archive = |path: &Path, archive: &Path| {
+        matches!(
+            bmz_song_resource::SongPath::parse(path),
+            bmz_song_resource::SongPath::Archive { container, .. }
+                if container == Path::new(&crate::paths::normalize_library_path(
+                    &archive.to_string_lossy()
+                ))
+        )
+    };
+    assert!(a_play.chart.bga_assets.iter().all(|asset| in_archive(&asset.path, &first.archive)));
+    assert!(a_play.archive_resources.is_some());
     assert!(
         a_play
             .chart
@@ -326,10 +329,13 @@ fn archive_preload_preserves_identity_and_copy_assets_for_practice_replay_and_co
         Box::new(bmz_gameplay::input::backend::NullInputBackend),
     );
     assert_eq!(practice.session.chart.identity, a.chart.identity);
-    std::fs::remove_dir_all(&cache).unwrap();
+    assert!(practice.archive_resources.is_some());
+    // An evicted set is read again on the next load.
+    bmz_song_resource::clear();
     let reloaded = preload_play_session_for_chart(&db, a.chart_id, options.clone(), 1.0).unwrap();
     assert!(reloaded.audio.samples.source_count() > 0);
-    assert!(reloaded.chart.sounds[0].path.is_file());
+    assert!(bmz_song_resource::is_file(&reloaded.chart.sounds[0].path));
+    assert!(!cache.exists());
     std::fs::remove_file(&first.archive).unwrap();
     let error = preload_play_session_for_chart(&db, a.chart_id, options, 1.0).err().unwrap();
     assert!(error.to_string().contains("chart source changed"));
@@ -343,7 +349,6 @@ fn archive_generated_preview_decodes_current_resource_generation() {
     };
     let fixture = ArchiveFixture::new();
     let db_path = fixture.root.join("library.db");
-    let cache = fixture.root.join("cache");
     let mut db = LibraryDatabase::open(&db_path).unwrap();
     run_migrations(db.conn_mut(), LIBRARY_MIGRATIONS).unwrap();
     let imported =
@@ -357,7 +362,6 @@ fn archive_generated_preview_decodes_current_resource_generation() {
     );
     let first = crate::generated_preview::render_generated_preview_for_chart(
         &db_path,
-        &cache,
         imported.chart_id,
         0,
         48_000,
@@ -370,7 +374,6 @@ fn archive_generated_preview_decodes_current_resource_generation() {
     assert!(
         crate::generated_preview::render_generated_preview_for_chart(
             &db_path,
-            &cache,
             imported.chart_id,
             0,
             48_000,
@@ -385,7 +388,6 @@ fn archive_generated_preview_decodes_current_resource_generation() {
     );
     let updated = crate::generated_preview::render_generated_preview_for_chart(
         &db_path,
-        &cache,
         imported.chart_id,
         0,
         48_000,

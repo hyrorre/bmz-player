@@ -260,6 +260,7 @@ pub fn preload_play_session_for_chart_with_callbacks(
         assist_runtime: imported.assist_runtime,
         score_save_disabled: imported.score_save_disabled,
         opponent_chart,
+        archive_resources: imported.archive_resources,
     };
     let sound_counts = sound_preload_counts(&prepared_chart.chart);
     tracing::info!(
@@ -326,6 +327,7 @@ pub fn preload_play_session_for_chart_with_callbacks(
         assist_runtime: prepared_chart.assist_runtime,
         score_save_disabled: prepared_chart.score_save_disabled,
         opponent_chart: prepared_chart.opponent_chart,
+        archive_resources: prepared_chart.archive_resources,
     })
 }
 
@@ -352,6 +354,7 @@ pub fn preload_play_session_reloading_audio_with_progress(
         assist_runtime,
         score_save_disabled,
         opponent_chart,
+        archive_resources,
     } = prepared_chart;
     let sound_counts = sound_preload_counts(&chart);
     let mut loader = FfmpegSampleLoader::default();
@@ -380,11 +383,13 @@ pub fn preload_play_session_reloading_audio_with_progress(
         assist_runtime,
         score_save_disabled,
         opponent_chart,
+        archive_resources,
     }
 }
 
 pub(super) struct TransformedPlayChart {
     pub(super) archive_source: bool,
+    pub(super) archive_resources: Option<Arc<bmz_song_resource::SongResourceSet>>,
     pub(super) chart: PlayableChart,
     pub(super) source_ln_profile: ChartLnProfile,
     pub(super) applied_arrange: AppliedArrange,
@@ -402,19 +407,27 @@ pub fn load_source_chart_for_chart(
     Ok(library_db.load_chart_source_bytes(chart_id, BmsRandomSource::Seed(random_seed))?.1.chart)
 }
 
+/// A chart import for play and, for archive charts, the in-memory entries its assets read.
+pub(super) struct PlayChartImport {
+    pub(super) import: ImportResult,
+    pub(super) archive_source: bool,
+    pub(super) archive_resources: Option<Arc<bmz_song_resource::SongResourceSet>>,
+}
+
 pub(super) fn load_source_chart_import_for_play(
     library_db: &LibraryDatabase,
     chart_id: i64,
     options: &PlaySessionOptions,
-) -> Result<(ImportResult, bool)> {
+) -> Result<PlayChartImport> {
     let random = bms_random_source_for_chart(options);
-    let (source, import) = if let Some(cache_dir) = &options.archive_cache_dir {
+    let mut archive_resources = None;
+    let (source, import) = if options.read_archive_assets {
         let (source, resolved, mut import) =
-            library_db.load_chart_source_with_cache(chart_id, random, cache_dir)?;
-        if resolved.archive_root.is_some() {
-            // Consumers outside the worker must never resolve virtual paths or
-            // trigger extraction. Keep DB metadata unchanged, but freeze this
-            // play's metadata assets to the same immutable resource generation.
+            library_db.load_chart_source_with_assets(chart_id, random)?;
+        if let Some(resources) = resolved.resources() {
+            // Keep DB metadata unchanged, but give this play's metadata assets the virtual
+            // paths of the same in-memory archive generation as its sounds and BGA.
+            archive_resources = Some(resources.clone());
             for relative in [
                 &mut import.chart.metadata.stage_file,
                 &mut import.chart.metadata.backbmp_file,
@@ -437,7 +450,11 @@ pub(super) fn load_source_chart_import_for_play(
         "chart source changed during preload; retry to use {}",
         source.path.display()
     );
-    Ok((import, source.locator()?.is_archive()))
+    Ok(PlayChartImport {
+        import,
+        archive_source: source.locator()?.is_archive(),
+        archive_resources,
+    })
 }
 
 pub(super) fn load_transformed_chart_for_play(
@@ -445,10 +462,10 @@ pub(super) fn load_transformed_chart_for_play(
     chart_id: i64,
     options: &PlaySessionOptions,
 ) -> Result<TransformedPlayChart> {
-    let (import, archive_source) =
-        load_source_chart_import_for_play(library_db, chart_id, options)?;
-    let mut transformed = transform_chart_import(import, options)?;
-    transformed.archive_source = archive_source;
+    let loaded = load_source_chart_import_for_play(library_db, chart_id, options)?;
+    let mut transformed = transform_chart_import(loaded.import, options)?;
+    transformed.archive_source = loaded.archive_source;
+    transformed.archive_resources = loaded.archive_resources;
     Ok(transformed)
 }
 
@@ -599,6 +616,7 @@ fn transform_chart_import(
 
     Ok(TransformedPlayChart {
         archive_source: false,
+        archive_resources: None,
         chart,
         source_ln_profile,
         applied_arrange,
@@ -760,6 +778,7 @@ pub fn build_practice_prepared_from_preloaded(
         practice_mode,
         score_save_disabled,
         playback_rate_percent,
+        archive_resources: preloaded.archive_resources,
     }
 }
 
@@ -853,6 +872,7 @@ pub fn build_prepared_play_session_from_preloaded(
         practice_mode,
         score_save_disabled,
         playback_rate_percent,
+        archive_resources: preloaded.archive_resources,
     }
 }
 

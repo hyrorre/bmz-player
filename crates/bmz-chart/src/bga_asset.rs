@@ -28,7 +28,7 @@ pub fn resolve_bga_asset_path(base_dir: &Path, declared: &Path) -> Option<PathBu
         if declared.is_absolute() { declared.to_path_buf() } else { base_dir.join(declared) };
     let extension = declared.extension().and_then(|extension| extension.to_str());
 
-    if base.exists()
+    if bmz_song_resource::file_exists(&base)
         && let Some(extension) = extension
     {
         if is_beatoraja_video_extension(extension) {
@@ -77,7 +77,7 @@ fn resolve_same_stem_with_extensions(
 ) -> Option<PathBuf> {
     for extension in extensions {
         let candidate = base_without_extension.with_extension(extension);
-        if candidate.exists() {
+        if bmz_song_resource::file_exists(&candidate) {
             return Some(candidate);
         }
     }

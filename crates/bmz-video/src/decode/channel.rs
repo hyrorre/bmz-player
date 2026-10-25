@@ -9,7 +9,7 @@ pub(crate) fn decode_video_restartable(
     playback_target_us: Arc<AtomicI64>,
     decode_generation: Arc<AtomicU64>,
 ) -> Result<()> {
-    let mut ictx = ffmpeg_next::format::input(path)?;
+    let mut ictx = crate::open_input(path)?;
     let mut selected = select_video_stream(&ictx)?;
     let mut decoder = open_video_decoder(&selected)?;
     let mut scaler = None;
@@ -40,7 +40,7 @@ pub(crate) fn decode_video_restartable(
                         );
                         // A failed avformat seek may leave the input context latched at EOF.
                         // Reopen both demuxer and decoder so the sequential fallback is reliable.
-                        ictx = ffmpeg_next::format::input(path)?;
+                        ictx = crate::open_input(path)?;
                         selected = select_video_stream(&ictx)?;
                         decoder = open_video_decoder(&selected)?;
                         scaler = None;

@@ -6,10 +6,10 @@ pub const BEATORAJA_SOUND_EXTENSIONS: &[&str] = &["wav", "flac", "ogg", "mp3"];
 /// `#WAV` 指定パスから、存在する音声候補を beatoraja と同じ順で返す。
 ///
 /// 指定ファイルが存在する場合も先頭候補に入れ、その後に同じ stem の別拡張子を
-/// `wav -> flac -> ogg -> mp3` で追加する。
+/// `wav -> flac -> ogg -> mp3` で追加する。書庫内のパスは読み込み済みの書庫一覧で判定する。
 pub fn sound_asset_candidates(path: &Path) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
-    if path.exists() {
+    if bmz_song_resource::file_exists(path) {
         candidates.push(path.to_path_buf());
     }
 
@@ -19,7 +19,7 @@ pub fn sound_asset_candidates(path: &Path) -> Vec<PathBuf> {
             continue;
         }
         let candidate = path.with_extension(candidate_ext);
-        if candidate.exists() {
+        if bmz_song_resource::file_exists(&candidate) {
             candidates.push(candidate);
         }
     }

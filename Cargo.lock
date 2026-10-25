@@ -595,6 +595,7 @@ dependencies = [
  "bmz-chart",
  "bmz-core",
  "bmz-ffmpeg",
+ "bmz-song-resource",
  "cpal",
  "ffmpeg-next",
  "mach2 0.6.0",
@@ -613,6 +614,7 @@ version = "0.4.3"
 dependencies = [
  "bms-rs",
  "bmz-core",
+ "bmz-song-resource",
  "encoding_rs",
  "md5",
  "serde",
@@ -677,6 +679,7 @@ dependencies = [
  "bmz-render",
  "bmz-skin",
  "bmz-skin-assets",
+ "bmz-song-resource",
  "bmz-updater",
  "bmz-video",
  "cc",
@@ -744,6 +747,7 @@ dependencies = [
  "bmz-gameplay",
  "bmz-skin-assets",
  "bmz-skin-document",
+ "bmz-song-resource",
  "bytemuck",
  "clipboard-win",
  "egui",
@@ -812,6 +816,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "bmz-song-resource"
+version = "0.4.3"
+
+[[package]]
 name = "bmz-updater"
 version = "0.4.3"
 dependencies = [
@@ -833,6 +841,7 @@ version = "0.4.3"
 dependencies = [
  "anyhow",
  "bmz-ffmpeg",
+ "bmz-song-resource",
  "ffmpeg-next",
  "tracing",
 ]

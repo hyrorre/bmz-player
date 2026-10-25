@@ -322,7 +322,7 @@ pub(super) fn load_worker(
     for asset in assets {
         stats.chart_bga_assets += 1;
         let path = asset.path;
-        let file_bytes = std::fs::metadata(&path).map(|metadata| metadata.len()).unwrap_or(0);
+        let file_bytes = bmz_song_resource::file_len(&path).unwrap_or(0);
         stats.total_file_bytes = stats.total_file_bytes.saturating_add(file_bytes);
         if asset.kind != BgaAssetKind::Static {
             stats.skipped_non_static += 1;

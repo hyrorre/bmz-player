@@ -119,7 +119,7 @@ impl BootstrappedApp {
         chart_id: i64,
         mut options: PlayStartOptions,
     ) -> Result<crate::audio::RunningPlaySession> {
-        options.archive_cache_dir = Some(self.app_paths.cache_dir.clone());
+        options.read_archive_assets = true;
         start_running_play_session_for_chart(
             &self.library_db,
             &self.score_db,
@@ -136,7 +136,7 @@ impl BootstrappedApp {
         mut options: PlayStartOptions,
         input_backend: Box<dyn InputBackend>,
     ) -> Result<crate::audio::RunningPlaySession> {
-        options.archive_cache_dir = Some(self.app_paths.cache_dir.clone());
+        options.read_archive_assets = true;
         start_running_play_session_for_chart_with_input_backend(
             &self.library_db,
             &self.score_db,
@@ -153,7 +153,7 @@ impl BootstrappedApp {
         chart_id: i64,
         mut options: PlayStartOptions,
     ) -> Result<StartedInputPlaySession> {
-        options.archive_cache_dir = Some(self.app_paths.cache_dir.clone());
+        options.read_archive_assets = true;
         start_running_play_session_for_chart_with_winit_input(
             &self.library_db,
             &self.score_db,

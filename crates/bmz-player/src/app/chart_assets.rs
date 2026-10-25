@@ -57,7 +57,7 @@ pub(super) fn load_chart_bga_textures(
     for asset in &chart.bga_assets {
         considered_assets += 1;
         let path = &asset.path;
-        let file_bytes = std::fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0);
+        let file_bytes = bmz_song_resource::file_len(path).unwrap_or(0);
         total_file_bytes = total_file_bytes.saturating_add(file_bytes);
         if asset.kind != BgaAssetKind::Static {
             skipped_non_static += 1;

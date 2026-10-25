@@ -28,6 +28,7 @@ BMZ Player の継続開発で常に参照する作業方針です。機能の詳
 | [bmz-ffmpeg](crates/bmz-ffmpeg/src/lib.rs) | プロセス単位のFFmpeg初期化・ログレベル調整 |
 | [bmz-font](crates/bmz-font/src/lib.rs) | 同梱フォント優先・OS fallbackの解決。path/memory bytes/TTC indexを扱う |
 | [bmz-video](crates/bmz-video/src/lib.rs) | FFmpegによるBGA decodeとフレーム供給 |
+| [bmz-song-resource](crates/bmz-song-resource/src/lib.rs) | 書庫内譜面の資源をメモリに置くregistry。`pack.zip!/entry` パスの判定と読み込み |
 | [bmz-skin-document](crates/bmz-skin-document/src/lib.rs) | SkinDocumentのschema、JSON load/include、runtime値型 |
 | [bmz-skin](crates/bmz-skin/src/lib.rs) | JSON / Lua / LR2 skin decode、sandbox、Lua推論・runtime callback |
 | [bmz-skin-convert](crates/bmz-skin-convert/src/main.rs) | bmz-skinを呼ぶLua-to-JSON CLI |
@@ -53,6 +54,9 @@ BMZ Player の継続開発で常に参照する作業方針です。機能の詳
 - eguiのContext・イベント・UI状態はapp側、paint primitivesの描画はrenderer側に置きます。
 - `bmz-ffmpeg` は初期化の共通化に留め、音声・動画decodeの型と処理は利用側crateに置きます。
   `bmz-video` にBMSや判定の責務を持ち込まず、`bmz-updater` に音声・GPU依存を追加しません。
+- 書庫内譜面の資源は `pack.zip!/entry` の仮想パスのまま扱い、再生のために書庫を展開しません。
+  ファイルを読むcrateは `bmz-song-resource` を先に確認します。書庫の読み取りと読み込み計画は
+  `bmz-player` の `song_archive` / `archive_resources` に置きます。詳細は [archive-songs.md](docs/archive-songs.md) を確認します。
 - Play開始後のGameSessionはgameplay専用スレッドが更新します。
   window threadはsnapshotを受け取り、描画・画面遷移・永続化を担当します。
   入力取得、判定、audio callbackの所有権と時計は [gameplay-runtime.md](docs/gameplay-runtime.md) を確認します。

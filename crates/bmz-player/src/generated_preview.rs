@@ -125,7 +125,6 @@ pub fn fallback_preview_start_ms(
 
 pub fn render_generated_preview_for_chart(
     library_db_path: &Path,
-    cache_root: &Path,
     chart_id: i64,
     start_ms: i64,
     sample_rate: u32,
@@ -133,11 +132,9 @@ pub fn render_generated_preview_for_chart(
 ) -> Result<DecodedSample> {
     let db = LibraryDatabase::open(library_db_path)
         .with_context(|| format!("open library db {}", library_db_path.display()))?;
-    let (source, _, import) = db.load_chart_source_with_cache(
-        chart_id,
-        bmz_chart::import::BmsRandomSource::Seed(None),
-        cache_root,
-    )?;
+    // Archive entries stay in memory while `_resolved` lives, through the render below.
+    let (source, _resolved, import) =
+        db.load_chart_source_with_assets(chart_id, bmz_chart::import::BmsRandomSource::Seed(None))?;
     anyhow::ensure!(source.chart.chart_id == chart_id, "chart source changed during preview load");
     let check_generation = || -> Result<()> {
         if let Some(expected) = expected_cache_key {
@@ -377,8 +374,7 @@ fn preview_bgm_event_indices(
         let Some(resolved_path) = sound_asset_candidates(path).into_iter().next() else {
             continue;
         };
-        let file_bytes =
-            std::fs::metadata(&resolved_path).ok().map(|metadata| metadata.len()).unwrap_or(0);
+        let file_bytes = bmz_song_resource::file_len(&resolved_path).unwrap_or(0);
         duration_candidates.push((file_bytes, index, resolved_path));
     }
     duration_candidates.sort_unstable_by(

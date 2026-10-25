@@ -69,6 +69,14 @@ fn zip(path: &Path, entries: &[(&[u8], &[u8], u32)]) {
     std::fs::write(path, bytes).unwrap();
 }
 
+/// Every file entry read into memory, as a play reads the entries it picks.
+fn read_all(
+    path: &Path,
+    control: &ArchiveControl,
+) -> Result<std::collections::HashMap<String, Vec<u8>>> {
+    Ok(read_entries(path, None, control, &|_| true)?.1.into_iter().collect())
+}
+
 fn crc32(bytes: &[u8]) -> u32 {
     let mut crc = !0u32;
     for byte in bytes {
@@ -92,12 +100,7 @@ fn cp932_names_decode_before_slash_normalization_in_zip_and_rar() {
         let index = inspect(&path, &control).unwrap();
         assert_eq!(index.entries[0].name, "ソ/譜面.bms");
         assert_eq!(read_chart(&path, "ソ/譜面.bms", &control).unwrap().bytes, b"#TITLE CP932\n");
-        let materialized =
-            materialize(&path, &index.generation, &temp.path("cache"), &control).unwrap();
-        assert_eq!(
-            std::fs::read(materialized.root.join("ソ/譜面.bms")).unwrap(),
-            b"#TITLE CP932\n"
-        );
+        assert_eq!(read_all(&path, &control).unwrap()["ソ/譜面.bms"], b"#TITLE CP932\n");
     }
 }
 
@@ -119,15 +122,16 @@ fn rar4_and_rar5_solid_decode_prefix_once_and_publish_all_assets() {
         assert_eq!(index.entries.len(), 6);
         assert_eq!(charts.len(), 1);
         assert_eq!(charts[0].0, "曲/譜面.bms");
-        let result =
-            materialize(&path, &index.generation, &temp.path("cache"), &ArchiveControl::default())
-                .unwrap();
-        assert_eq!(
-            std::fs::read(result.root.join("曲/音声01.wav")).unwrap(),
-            std::fs::read(result.root.join("曲/音声02.wav")).unwrap()
-        );
-        assert_eq!(std::fs::read(result.root.join("曲/譜面.bms")).unwrap(), charts[0].1);
-        assert_eq!(std::fs::metadata(result.root.join("empty.txt")).unwrap().len(), 0);
+        assert!(index.solid);
+        let control = ArchiveControl::default();
+        let all = read_all(&path, &control).unwrap();
+        assert_eq!(all["曲/音声01.wav"], all["曲/音声02.wav"]);
+        assert_eq!(all["曲/譜面.bms"], charts[0].1);
+        assert!(all["empty.txt"].is_empty());
+        // A picked later entry still decodes the solid history before it.
+        let pick = |entry: &ArchiveEntry| entry.name == "曲/音声02.wav";
+        let (_, picked) = read_entries(&path, Some(&index.generation), &control, &pick).unwrap();
+        assert_eq!(picked, [("曲/音声02.wav".to_owned(), all["曲/音声02.wav"].clone())]);
     }
 }
 
@@ -193,96 +197,78 @@ fn limits_apply_before_extracting_and_cancel_during_scan() {
 }
 
 #[test]
-fn corruption_and_cancel_never_publish_partial_cache() {
+fn corruption_and_cancel_fail_reads_and_never_publish_an_entry() {
     let temp = Temp::new();
     let path = temp.path("bad.zip");
     zip(&path, &[(b"chart.bms", b"valid content", 0o100644)]);
     let mut bytes = std::fs::read(&path).unwrap();
     bytes[30 + b"chart.bms".len()] ^= 1;
     std::fs::write(&path, bytes).unwrap();
-    let index = inspect(&path, &ArchiveControl::default()).unwrap();
-    assert!(
-        materialize(&path, &index.generation, &temp.path("cache"), &ArchiveControl::default())
-            .is_err()
-    );
-    let source_root = std::fs::read_dir(temp.path("cache/song-archives"))
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    assert_eq!(std::fs::read_dir(source_root).unwrap().count(), 0);
-    let control = ArchiveControl {
+    let control = ArchiveControl::default();
+    let index = inspect(&path, &control).unwrap();
+    assert!(read_all(&path, &control).is_err());
+    let cache = temp.path("cache");
+    assert!(materialize_entry(&path, &index.generation, "chart.bms", &cache, &control).is_err());
+    let source_root =
+        std::fs::read_dir(cache.join("song-archive-assets")).unwrap().next().unwrap().unwrap();
+    let generation_root = source_root.path().join(&index.generation.fingerprint);
+    assert_eq!(std::fs::read_dir(generation_root).unwrap().count(), 0);
+    let cancelled = ArchiveControl {
         cancelled: Some(Arc::new(AtomicBool::new(true))),
         ..ArchiveControl::default()
     };
-    assert!(materialize(&path, &index.generation, &temp.path("cancel"), &control).is_err());
-    assert!(!temp.path("cancel").exists());
+    assert!(read_all(&path, &cancelled).is_err());
+    let cancel = temp.path("cancel");
+    assert!(materialize_entry(&path, &index.generation, "chart.bms", &cancel, &cancelled).is_err());
+    assert!(!cancel.exists());
 }
 
 #[test]
-fn concurrent_materialize_coalesces_and_generations_keep_old_assets() {
+fn concurrent_entry_extraction_coalesces_and_stale_generations_fail() {
     let temp = Temp::new();
     let path = temp.path("song.zip");
     zip(&path, &[(b"chart.bms", b"#TITLE old", 0o100644)]);
-    let generation = inspect(&path, &ArchiveControl::default()).unwrap().generation;
+    let control = ArchiveControl::default();
+    let cache = temp.path("cache");
+    let generation = inspect(&path, &control).unwrap().generation;
     let paths = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..6)
             .map(|_| {
                 scope.spawn(|| {
-                    materialize(&path, &generation, &temp.path("cache"), &ArchiveControl::default())
-                        .unwrap()
-                        .root
+                    materialize_entry(&path, &generation, "chart.bms", &cache, &control).unwrap()
                 })
             })
             .collect();
         handles.into_iter().map(|handle| handle.join().unwrap()).collect::<Vec<_>>()
     });
     assert!(paths.iter().all(|path| path == &paths[0]));
-    assert_eq!(std::fs::read_dir(paths[0].parent().unwrap().parent().unwrap()).unwrap().count(), 1);
     zip(&path, &[(b"chart.bms", b"#TITLE new generation", 0o100644)]);
-    let next = inspect(&path, &ArchiveControl::default()).unwrap().generation;
+    let next = inspect(&path, &control).unwrap().generation;
     assert_ne!(next, generation);
-    assert!(
-        materialize(&path, &generation, &temp.path("cache"), &ArchiveControl::default()).is_err()
-    );
-    let newer = materialize(&path, &next, &temp.path("cache"), &ArchiveControl::default()).unwrap();
-    assert_eq!(std::fs::read(paths[0].join("chart.bms")).unwrap(), b"#TITLE old");
-    assert_eq!(std::fs::read(newer.root.join("chart.bms")).unwrap(), b"#TITLE new generation");
+    assert!(read_entries(&path, Some(&generation), &control, &|_| true).is_err());
+    assert!(materialize_entry(&path, &generation, "chart.bms", &cache, &control).is_err());
+    let newer = materialize_entry(&path, &next, "chart.bms", &cache, &control).unwrap();
+    assert_eq!(std::fs::read(&newer).unwrap(), b"#TITLE new generation");
     let copy = temp.path("copy.zip");
     std::fs::copy(&path, &copy).unwrap();
-    let copied =
-        materialize(&copy, &next, &temp.path("cache"), &ArchiveControl::default()).unwrap();
-    assert_ne!(copied.root, newer.root);
+    let copied = materialize_entry(&copy, &next, "chart.bms", &cache, &control).unwrap();
+    assert_ne!(copied, newer);
 }
 
 #[test]
-fn damaged_private_cache_is_rebuilt() {
+fn damaged_entry_cache_is_rebuilt() {
     let temp = Temp::new();
     let path = temp.path("song.zip");
     zip(&path, &[(b"chart.bms", b"#TITLE song", 0o100644)]);
     let control = ArchiveControl::default();
     let generation = inspect(&path, &control).unwrap().generation;
-    let result = materialize(&path, &generation, &temp.path("cache"), &control).unwrap();
-    std::fs::write(result.root.parent().unwrap().join("complete.json"), b"broken json").unwrap();
-    let repaired = materialize(&path, &generation, &temp.path("cache"), &control).unwrap();
-    assert_eq!(std::fs::read(repaired.root.join("chart.bms")).unwrap(), b"#TITLE song");
-    std::fs::remove_dir_all(&repaired.root).unwrap();
-    assert!(
-        materialize(&path, &generation, &temp.path("cache"), &control)
-            .unwrap()
-            .root
-            .join("chart.bms")
-            .is_file()
-    );
-    std::fs::remove_file(result.root.join("chart.bms")).unwrap();
-    assert!(
-        materialize(&path, &generation, &temp.path("cache"), &control)
-            .unwrap()
-            .root
-            .join("chart.bms")
-            .is_file()
-    );
+    let cache = temp.path("cache");
+    let extract = || materialize_entry(&path, &generation, "chart.bms", &cache, &control);
+    let result = extract().unwrap();
+    std::fs::write(&result, b"short").unwrap();
+    assert_eq!(std::fs::read(extract().unwrap()).unwrap(), b"#TITLE song");
+    std::fs::remove_file(&result).unwrap();
+    assert_eq!(std::fs::read(extract().unwrap()).unwrap(), b"#TITLE song");
 }
 
 #[test]
@@ -338,10 +324,15 @@ fn sevenz_solid_streams_assets_and_multiple_charts_with_dictionary_limit() {
     .unwrap();
     assert_eq!(names, ["曲/a.bms", "曲/b.bms"]);
     assert_eq!(read_chart(&path, "曲/b.bms", &control).unwrap().bytes, b"#TITLE second");
-    let output = materialize(&path, &index.generation, &temp.path("cache"), &control).unwrap();
-    assert_eq!(std::fs::read(output.root.join("曲/ソ.wav")).unwrap(), payload);
-    assert!(output.root.join("empty").is_dir());
-    assert_eq!(std::fs::metadata(output.root.join("empty.txt")).unwrap().len(), 0);
+    assert!(index.solid);
+    let all = read_all(&path, &control).unwrap();
+    assert_eq!(all["曲/ソ.wav"], payload);
+    assert!(!all.contains_key("empty"));
+    assert!(all["empty.txt"].is_empty());
+    // Reading stops after the last pick instead of decoding the rest of the archive.
+    let pick = |entry: &ArchiveEntry| entry.name == "曲/a.bms";
+    let (_, picked) = read_entries(&path, None, &control, &pick).unwrap();
+    assert_eq!(picked, [("曲/a.bms".to_owned(), b"#TITLE first".to_vec())]);
     let tiny = ArchiveControl {
         limits: ArchiveLimits { dictionary_bytes: 1, ..ArchiveLimits::default() },
         ..ArchiveControl::default()
@@ -463,10 +454,11 @@ fn cached_generation_rejects_links_instead_of_following_them() {
     zip(&path, &[(b"chart.bms", b"#TITLE song", 0o100644)]);
     let control = ArchiveControl::default();
     let generation = inspect(&path, &control).unwrap().generation;
-    let result = materialize(&path, &generation, &temp.path("cache"), &control).unwrap();
+    let cache = temp.path("cache");
+    let result = materialize_entry(&path, &generation, "chart.bms", &cache, &control).unwrap();
     let outside = temp.path("outside.bms");
     std::fs::write(&outside, b"#TITLE song").unwrap();
-    let link = result.root.join("extra.bms");
+    let link = result.with_file_name("extra.bms");
     #[cfg(windows)]
     let created = std::os::windows::fs::symlink_file(&outside, &link);
     #[cfg(not(windows))]
@@ -475,10 +467,10 @@ fn cached_generation_rejects_links_instead_of_following_them() {
         eprintln!("cache symlink fixture unavailable: {error}");
         return;
     }
-    std::fs::remove_file(result.root.join("chart.bms")).unwrap();
-    std::fs::rename(link, result.root.join("chart.bms")).unwrap();
+    std::fs::remove_file(&result).unwrap();
+    std::fs::rename(link, &result).unwrap();
     assert!(
-        materialize(&path, &generation, &temp.path("cache"), &control)
+        materialize_entry(&path, &generation, "chart.bms", &cache, &control)
             .unwrap_err()
             .to_string()
             .contains("link")

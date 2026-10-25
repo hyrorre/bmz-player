@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::app_config::{AppConfig, PathEntry};
+use crate::song_archive::ArchiveGeneration;
 use crate::storage::library_db::LibraryDatabase;
 use crate::storage::migration::{LIBRARY_MIGRATIONS, run_migrations};
 use crate::storage::scan::{ScanReport, scan_song_roots};
@@ -101,6 +102,7 @@ fn archive_preview_metadata_uses_declared_extension_fallback_before_prefix() {
                 is_directory: false,
             })
             .collect(),
+        solid: false,
     };
     assert_eq!(archive_preview_file(&index, "folder/song.bms", "custom.wav"), "custom.ogg");
 }
@@ -177,28 +179,27 @@ fn hidden_archive_members_obey_scan_setting_and_appledouble_is_always_excluded()
 }
 
 #[test]
-fn archive_cache_rebuild_keeps_hash_copy_assets_and_root_scope() {
+fn archive_assets_load_from_memory_and_keep_hash_copy_and_root_scope() {
     let mut f = Fixture::new();
     for (archive, audio) in [("a.zip", b"copy a".as_slice()), ("b.zip", b"copy b".as_slice())] {
         f.zip(archive, &[("chart/song.bms", BMS), ("shared/key.wav", audio)]);
     }
     f.scan();
     let id = f.id("a.zip", "chart/song.bms");
-    let cache = f.dir.join("cache");
     let (source, resolved, import) =
-        f.db.load_chart_source_with_cache(id, BmsRandomSource::Seed(None), &cache).unwrap();
+        f.db.load_chart_source_with_assets(id, BmsRandomSource::Seed(None)).unwrap();
     assert_eq!(source.chart.chart_id, id);
     assert_eq!(
         import.chart.identity.file_sha256,
         bmz_chart::hash::compute_chart_identity(BMS).file_sha256
     );
-    assert_eq!(std::fs::read(&import.chart.sounds[0].path).unwrap(), b"copy a");
+    let sound = &import.chart.sounds[0].path;
+    assert_eq!(&*bmz_song_resource::read(sound).unwrap().unwrap(), b"copy a");
     assert_eq!(resolved.locator.to_path_buf(), source.path);
-    std::fs::remove_dir_all(&cache).unwrap();
+    assert_eq!(resolved.path, source.path);
+    // Nothing is extracted next to the archives.
+    assert_eq!(std::fs::read_dir(&f.dir).unwrap().count(), 2);
     assert!(f.db.available_chart_source(id).unwrap().is_some());
-    let (_, regenerated, _) =
-        f.db.load_chart_source_with_cache(id, BmsRandomSource::Seed(None), &cache).unwrap();
-    assert!(regenerated.path.is_file());
     std::fs::remove_file(f.dir.join("a.zip")).unwrap();
     assert_eq!(
         f.db.verified_chart_source(id).unwrap().chart.chart_id,
@@ -279,29 +280,28 @@ fn asset_only_update_invalidates_generation_without_changing_chart_identity() {
     f.roots[0].path = f.dir.canonicalize().unwrap().to_string_lossy().into_owned();
     f.zip("songs.zip", &[("chart/song.bms", BMS), ("shared/key.wav", b"old")]);
     f.scan();
-    let cache = f.dir.join("cache");
     let id = f.id("songs.zip", "chart/song.bms");
     let (_, old, old_import) =
-        f.db.load_chart_source_with_cache(id, BmsRandomSource::Seed(None), &cache).unwrap();
+        f.db.load_chart_source_with_assets(id, BmsRandomSource::Seed(None)).unwrap();
     f.zip("songs.zip", &[("chart/song.bms", BMS), ("shared/key.wav", b"new audio")]);
     assert_eq!(f.scan().summary.imported, 1);
     let (_, new, new_import) =
-        f.db.load_chart_source_with_cache(id, BmsRandomSource::Seed(None), &cache).unwrap();
-    assert_ne!(old.generation, new.generation);
+        f.db.load_chart_source_with_assets(id, BmsRandomSource::Seed(None)).unwrap();
+    let generation =
+        |source: &ResolvedChartSource| source.resources().unwrap().generation().to_owned();
+    assert_ne!(generation(&old), generation(&new));
     assert_eq!(old_import.chart.identity, new_import.chart.identity);
-    assert_eq!(std::fs::read(&new_import.chart.sounds[0].path).unwrap(), b"new audio");
+    let sound = &new_import.chart.sounds[0].path;
+    assert_eq!(&*bmz_song_resource::read(sound).unwrap().unwrap(), b"new audio");
 }
 
 #[test]
 fn archive_asset_resolution_allows_shared_parent_but_rejects_external_paths() {
     let f = Fixture::new();
     f.zip("songs.zip", &[("chart/song.bms", BMS), ("shared/key.wav", b"audio")]);
-    let resolved =
-        f.locator("songs.zip", "chart/song.bms").materialize(&f.dir.join("cache")).unwrap();
-    assert_eq!(
-        std::fs::read(resolved.resolve_asset("../shared/key.wav").unwrap()).unwrap(),
-        b"audio"
-    );
+    let resolved = f.locator("songs.zip", "chart/song.bms").resolve().unwrap();
+    let shared = resolved.resolve_asset("../shared/key.wav").unwrap();
+    assert_eq!(&*bmz_song_resource::read(&shared).unwrap().unwrap(), b"audio");
     for relative in [
         "../../outside.wav",
         "/outside.wav",
@@ -311,8 +311,8 @@ fn archive_asset_resolution_allows_shared_parent_but_rejects_external_paths() {
     ] {
         assert!(resolved.resolve_asset(relative).is_err(), "{relative}");
     }
-    let folder = f.locator("songs.zip", "chart").materialize(&f.dir.join("cache")).unwrap();
-    assert!(folder.resolve_asset("../shared/key.wav").unwrap().is_file());
+    let folder = f.locator("songs.zip", "chart").resolve().unwrap();
+    assert_eq!(folder.resolve_asset("../shared/key.wav").unwrap(), shared);
 }
 
 #[test]
@@ -347,10 +347,8 @@ fn archive_chart_assets_cannot_escape_after_normal_import() {
     assert_eq!(f.scan().summary.imported, 3);
     for name in ["sound.zip", "bga.zip", "stage.zip"] {
         let id = f.id(name, "sub/song.bms");
-        let error = f
-            .db
-            .load_chart_source_with_cache(id, BmsRandomSource::Seed(None), &f.dir.join("cache"))
-            .unwrap_err();
+        let error =
+            f.db.load_chart_source_with_assets(id, BmsRandomSource::Seed(None)).unwrap_err();
         assert!(format!("{error:#}").contains("escapes archive root"), "{name}: {error:#}");
     }
 }

@@ -89,6 +89,7 @@ fn preloaded_play_session(chart: PlayableChart) -> PreloadedPlaySession {
         assist_runtime: AssistRuntime::default(),
         score_save_disabled: false,
         opponent_chart: None,
+        archive_resources: None,
     }
 }
 

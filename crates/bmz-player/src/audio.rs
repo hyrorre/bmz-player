@@ -155,6 +155,8 @@ pub struct RunningPlaySession {
     pub playback_rate_percent: u16,
     pub bga_frames: BgaFrameCatalog,
     pub render_snapshot_cache: PlayRenderSnapshotCache,
+    /// Keeps an archive chart's in-memory entries for video BGA opened during play.
+    pub archive_resources: Option<Arc<bmz_song_resource::SongResourceSet>>,
     pub video_bga_decoders: HashMap<BgaAssetId, ActiveVideoBgaDecoder>,
     pub failed_video_bga: HashSet<BgaAssetId>,
     pub animated_bga: crate::animated_bga::AnimatedBgaState,
@@ -536,6 +538,7 @@ pub fn open_prepared_play_audio(
 
     RunningPlaySession {
         render_snapshot_cache: prepared.render_snapshot_cache,
+        archive_resources: prepared.archive_resources,
         gameplay: GameplayClient::new(session),
         skin_attempt: prepared.skin_attempt,
         source_ln_profile: prepared.source_ln_profile,

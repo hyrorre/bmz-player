@@ -20,6 +20,7 @@ macro_rules! eprintln {
 
 pub mod animated_bga;
 pub mod app;
+pub mod archive_resources;
 pub mod assist;
 pub mod audio;
 pub mod bootstrap;

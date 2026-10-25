@@ -131,7 +131,7 @@ fn load_image_rgba_with_color_key(
     color_key: Option<[u8; 3]>,
 ) -> Result<RgbaImageAsset> {
     if !path.is_file() {
-        let bytes = bmz_skin_assets::read(path)?;
+        let bytes = read_image_bytes(path)?;
         // TGA has no reliable magic. Keep the extension hint, as ImageReader::open does.
         let reader =
             ImageReader::with_format(Cursor::new(bytes), image::ImageFormat::from_path(path)?);
@@ -142,11 +142,17 @@ fn load_image_rgba_with_color_key(
     decode_image_rgba(reader, path, color_key)
 }
 
-fn read_image_bytes(path: &Path) -> Result<Vec<u8>> {
+/// A file, a song archive entry read into memory, or a skin DX archive entry.
+fn read_image_bytes(path: &Path) -> Result<std::sync::Arc<[u8]>> {
+    if let Some(bytes) = bmz_song_resource::read(path) {
+        return bytes.with_context(|| format!("failed to read image: {}", path.display()));
+    }
     if path.is_file() {
-        std::fs::read(path).with_context(|| format!("failed to read image: {}", path.display()))
+        std::fs::read(path)
+            .map(Into::into)
+            .with_context(|| format!("failed to read image: {}", path.display()))
     } else {
-        bmz_skin_assets::read(path)
+        bmz_skin_assets::read(path).map(Into::into)
     }
 }
 
@@ -192,7 +198,7 @@ fn load_cim_rgba(path: &Path) -> Result<RgbaImageAsset> {
                 .with_context(|| format!("failed to open CIM image: {}", path.display()))?,
         )
     } else {
-        Box::new(Cursor::new(bmz_skin_assets::read(path)?))
+        Box::new(Cursor::new(read_image_bytes(path)?))
     };
     let mut decoder = ZlibDecoder::new(file);
     let mut header = [0_u8; CIM_HEADER_LEN];

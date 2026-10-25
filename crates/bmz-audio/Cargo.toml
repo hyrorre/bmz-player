@@ -13,6 +13,7 @@ ffmpeg-next.workspace = true
 bmz-core = { path = "../bmz-core" }
 bmz-chart = { path = "../bmz-chart" }
 bmz-ffmpeg = { path = "../bmz-ffmpeg" }
+bmz-song-resource = { path = "../bmz-song-resource" }
 
 [target.'cfg(not(windows))'.dependencies]
 cpal.workspace = true

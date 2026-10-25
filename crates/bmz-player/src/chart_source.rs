@@ -1,11 +1,12 @@
-//! Stable song locations are independent of disposable materialized archive paths.
+//! Stable song locations. Archive charts keep virtual `archive!/entry` paths and read their
+//! assets from memory, so no extracted path ever identifies a song.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use bmz_chart::model::PlayableChart;
 
-use crate::song_archive::{self, ArchiveControl, ArchiveGeneration};
+use crate::song_archive::{self, ArchiveControl};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ChartLocator {
@@ -96,45 +97,56 @@ impl ChartLocator {
         }
     }
 
-    /// No default cache location: callers must explicitly supply their AppPaths/test root.
-    pub fn materialize(&self, cache_root: &Path) -> Result<ResolvedChartSource> {
+    /// Opens the chart for loading. Archive charts keep their virtual `archive!/entry` path
+    /// and read the chart and its assets from memory; nothing is extracted to disk.
+    pub fn resolve(&self) -> Result<ResolvedChartSource> {
         match self {
-            Self::File(path) => Ok(ResolvedChartSource {
-                locator: self.clone(),
-                path: path.clone(),
-                archive_root: None,
-                generation: None,
-            }),
+            Self::File(path) => {
+                Ok(ResolvedChartSource { locator: self.clone(), path: path.clone(), archive: None })
+            }
             Self::Archive { container, entry } => {
-                let control = ArchiveControl::default();
-                let index = song_archive::inspect(container, &control)?;
-                let materialized =
-                    song_archive::materialize(container, &index.generation, cache_root, &control)?;
-                let resolved = ResolvedChartSource {
+                let opened = crate::archive_resources::open_chart(
+                    container,
+                    entry,
+                    &ArchiveControl::default(),
+                )?;
+                Ok(ResolvedChartSource {
                     locator: self.clone(),
-                    path: materialized.root.join(entry),
-                    archive_root: Some(materialized.root),
-                    generation: Some(materialized.generation),
-                };
-                resolved.validate_asset_path(&resolved.path)?;
-                Ok(resolved)
+                    path: self.to_path_buf(),
+                    archive: Some(opened),
+                })
             }
         }
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct ResolvedChartSource {
     pub locator: ChartLocator,
+    /// The chart file, or its virtual `archive!/entry` path.
     pub path: PathBuf,
-    pub archive_root: Option<PathBuf>,
-    pub generation: Option<ArchiveGeneration>,
+    archive: Option<crate::archive_resources::OpenedChart>,
+}
+
+impl std::fmt::Debug for ResolvedChartSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolvedChartSource")
+            .field("locator", &self.locator)
+            .field("path", &self.path)
+            .field("resources", &self.resources())
+            .finish()
+    }
 }
 
 impl ResolvedChartSource {
-    /// Resolve relative to a materialized directory or the parent of a chart/asset file.
+    /// The in-memory archive entries behind the virtual paths. The play keeps this alive.
+    pub fn resources(&self) -> Option<&std::sync::Arc<bmz_song_resource::SongResourceSet>> {
+        self.archive.as_ref().map(|opened| &opened.resources)
+    }
+
+    /// Resolve relative to the chart's folder (or a folder locator itself), inside its
+    /// archive for archive charts.
     pub fn resolve_asset(&self, relative: &str) -> Result<PathBuf> {
-        if self.archive_root.is_some() {
+        if self.archive.is_some() {
             ensure!(
                 !relative.contains(':')
                     && !relative.contains('\0')
@@ -142,45 +154,36 @@ impl ResolvedChartSource {
                 "unsafe archive asset: {relative}"
             );
         }
-        let base = if self.path.is_dir() {
-            self.path.as_path()
-        } else {
-            self.path.parent().unwrap_or(Path::new(""))
+        let folder = match (&self.locator, &self.archive) {
+            (ChartLocator::Archive { entry, .. }, Some(opened)) => {
+                !opened.resources.contains(entry)
+            }
+            _ => self.path.is_dir(),
         };
+        let base =
+            if folder { self.path.as_path() } else { self.path.parent().unwrap_or(Path::new("")) };
         let path = base.join(relative.replace('\\', "/"));
         self.validate_asset_path(&path)?;
         Ok(path)
     }
 
+    /// Archive chart assets must stay inside their own archive.
     pub fn validate_asset_path(&self, path: &Path) -> Result<()> {
-        let Some(root) = &self.archive_root else {
+        let ChartLocator::Archive { container, .. } = &self.locator else {
             return Ok(());
         };
-        let root = lexical_absolute(root)?;
-        let path = lexical_absolute(path)?;
-        ensure!(path.starts_with(&root), "song asset escapes archive root: {}", path.display());
-        ensure!(
-            !path.strip_prefix(&root)?.to_string_lossy().contains(':'),
-            "unsafe archive asset: {}",
-            path.display()
-        );
-        // Also reject a replaced cache path containing a symlink/junction. Missing assets
-        // are allowed here so normal extension fallback and missing-resource warnings work.
-        let canonical_root = root.canonicalize().context("resolve archive cache root")?;
-        let mut existing = path.as_path();
-        while !existing.try_exists()? {
-            existing = existing.parent().context("archive asset has no existing ancestor")?;
+        match bmz_song_resource::SongPath::parse(path) {
+            bmz_song_resource::SongPath::Archive { container: parsed, .. }
+                if parsed == crate::paths::normalize_library_path(&container.to_string_lossy()) =>
+            {
+                Ok(())
+            }
+            _ => bail!("song asset escapes archive root: {}", path.display()),
         }
-        ensure!(
-            existing.canonicalize()?.starts_with(canonical_root),
-            "song asset escapes archive cache through a link: {}",
-            path.display()
-        );
-        Ok(())
     }
 
     pub fn validate_chart_assets(&self, chart: &PlayableChart) -> Result<()> {
-        if self.archive_root.is_none() {
+        if self.archive.is_none() {
             return Ok(());
         }
         for path in chart
@@ -190,12 +193,6 @@ impl ResolvedChartSource {
             .chain(chart.bga_assets.iter().map(|asset| &asset.path))
         {
             self.validate_asset_path(path)?;
-        }
-        // Audio decode can fall back to another extension after the declared path.
-        for sound in &chart.sounds {
-            for candidate in bmz_chart::sound_asset::sound_asset_candidates(&sound.path) {
-                self.validate_asset_path(&candidate)?;
-            }
         }
         for relative in [
             &chart.metadata.stage_file,
@@ -208,6 +205,19 @@ impl ResolvedChartSource {
             }
         }
         Ok(())
+    }
+
+    /// Reads the archive entries `chart` uses into memory. Files need nothing.
+    pub fn load_chart_assets(&self, chart: &PlayableChart) -> Result<()> {
+        match &self.archive {
+            Some(opened) => crate::archive_resources::load_chart_assets(
+                opened,
+                &self.path,
+                chart,
+                &ArchiveControl::default(),
+            ),
+            None => Ok(()),
+        }
     }
 }
 
@@ -298,23 +308,6 @@ pub(crate) fn normalize_entry(entry: &str) -> Result<String> {
         }
     }
     Ok(components.join("/"))
-}
-
-fn lexical_absolute(path: &Path) -> Result<PathBuf> {
-    let absolute = std::path::absolute(path)?;
-    let mut clean = PathBuf::new();
-    for component in absolute.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !clean.pop() {
-                    bail!("path escapes filesystem root: {}", path.display());
-                }
-            }
-            other => clean.push(other.as_os_str()),
-        }
-    }
-    Ok(clean)
 }
 
 #[cfg(test)]

@@ -38,7 +38,7 @@ pub struct WavSampleLoader;
 
 impl SampleLoader for WavSampleLoader {
     fn load(&mut self, path: &Path) -> Result<DecodedSample, SampleLoadError> {
-        let bytes = std::fs::read(path)
+        let bytes = bmz_song_resource::read_file(path)
             .map_err(|source| SampleLoadError::Io { path: path.to_path_buf(), source })?;
         let mut sample = decode_wav(path, &bytes)?;
         sample.sanitize_pcm(path);
