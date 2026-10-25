@@ -307,6 +307,7 @@ fn system_sound_normalization_poll_preserves_set_load_and_rejects_stale_results(
         title: "test".into(),
         kind: bmz_core::course::CourseKind::Dan,
         course_titles: Default::default(),
+        stage_charts: Vec::new(),
         entry_summaries: Vec::new(),
         entry_arranges: Vec::new(),
         total_ex_score: 0,

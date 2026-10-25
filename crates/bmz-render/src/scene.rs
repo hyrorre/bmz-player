@@ -75,7 +75,10 @@ pub struct CourseStageResultSkinSnapshot {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct CourseResultSkinSnapshot {
+    /// Stages played in this attempt.
     pub stage_count: u32,
+    /// Stages in the course definition (LR2 options 580..589).
+    pub definition_stage_count: u32,
     pub stages: [CourseStageResultSkinSnapshot; bmz_skin_document::SKIN_BMZ_COURSE_STAGE_COUNT],
 }
 

@@ -178,6 +178,7 @@ fn course_result_summary_for_skin_uses_aggregate_course_values() {
             String::new(),
             String::new(),
         ],
+        stage_charts: Vec::new(),
         entry_summaries: vec![
             entry_summary(120, 100, 80, 1_000),
             entry_summary(200, 120, 90, 2_000),
@@ -340,15 +341,23 @@ fn course_result_summary_for_skin_uses_aggregate_course_values() {
     apply_result_summary_lua_load_state(&mut runtime_state, &summary, "Table", "★12", "Table ★12");
     assert_eq!(runtime_state.text_values.get(&1).map(String::as_str), Some("RANK AAA"));
     assert_eq!(runtime_state.text_values.get(&3).map(String::as_str), Some("RANK AAA"));
-    course.entry_summaries[0].play_level = "12".to_string();
-    course.entry_summaries[0].difficulty_name = "ANOTHER".to_string();
+    // Stage 3 was left unplayed after a FAILED; LR2 still shows its level.
+    course.total_entries = 3;
+    course.stage_charts = [("12", "ANOTHER"), ("", ""), ("9", "HYPER")]
+        .map(|(play_level, difficulty_name)| crate::screens::course_session::CourseStageChartInfo {
+            play_level: play_level.to_string(),
+            difficulty_name: difficulty_name.to_string(),
+        })
+        .to_vec();
     apply_course_result_lua_load_state(&mut runtime_state, &course);
-    assert_eq!(course_stage_levels(&course)[..3], [Some(12), None, None]);
+    assert_eq!(course_stage_levels(&course)[..4], [Some(12), None, Some(9), None]);
     // LR2 courseresult: stage count 580.., stage difficulty 700.. (0 = undefined).
     let option = |id: i32| runtime_state.option_values.get(&id).copied();
-    assert_eq!([option(580), option(581), option(582)], [Some(true), Some(true), Some(false)]);
+    assert_eq!([option(581), option(582), option(583)], [Some(true), Some(true), Some(false)]);
     assert_eq!([option(700), option(704), option(705)], [Some(false), Some(true), Some(false)]);
-    assert_eq!([option(710), option(714), option(720)], [Some(true), Some(false), Some(true)]);
+    assert_eq!([option(710), option(720), option(723)], [Some(true), Some(false), Some(true)]);
+    assert_eq!(course_result_skin_snapshot(&course).definition_stage_count, 3);
+    course.total_entries = 2;
     assert_eq!(runtime_state.text_values.get(&10).map(String::as_str), Some("Course Title"));
     assert_eq!(runtime_state.text_values.get(&12).map(String::as_str), Some("Course Title"));
     assert_eq!(runtime_state.text_values.get(&1003).map(String::as_str), Some("Table ★12"));

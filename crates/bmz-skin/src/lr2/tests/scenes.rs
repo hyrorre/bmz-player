@@ -150,6 +150,21 @@ fn wmix_course_result_emits_stage_levels_from_course_options() {
     let level = |stage: i32| bmz_skin_document::LR2_NUMBER_BASE + 250 + stage;
     assert!(refs.contains(&level(0)) && refs.contains(&level(1)), "{refs:?}");
     assert!(!refs.contains(&level(2)) && !refs.contains(&250), "{refs:?}");
+    // The "1st".."5th" stage labels are drawn on the LR2 stage-count options.
+    let ops = loaded
+        .document
+        .destination
+        .iter()
+        .flat_map(|entry| match entry {
+            bmz_skin_document::DestinationListEntry::Single(destination) => destination.op.clone(),
+            bmz_skin_document::DestinationListEntry::Conditional { destinations, .. } => {
+                destinations.iter().flat_map(|destination| destination.op.clone()).collect()
+            }
+        })
+        .collect::<BTreeSet<_>>();
+    for stage in 0..5 {
+        assert!(ops.contains(&(bmz_skin_document::LR2_OPTION_BASE + 580 + stage)), "{ops:?}");
+    }
 }
 
 #[test]

@@ -7,6 +7,8 @@ const LR2_CLEAR_FROM_BEATORAJA: [i64; 11] = [0, 1, 2, 2, 2, 3, 4, 4, 5, 5, 5];
 /// Definitions follow LR2's `GetOptionFlag_dst`.
 pub(super) fn lr2_option(id: i32, state: &SkinDrawState) -> bool {
     match id {
+        // The course has more than N stages; LR2 counts the selected course's stages.
+        580..=589 => state.course_result.definition_stage_count > (id - 580) as u32,
         100..=105 if state.result_failed.is_some() => {
             let clear = state.best_clear_index.unwrap_or(state.select_clear_index);
             LR2_CLEAR_FROM_BEATORAJA.get(usize::try_from(clear).unwrap_or(0))

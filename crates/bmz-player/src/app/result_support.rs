@@ -273,11 +273,11 @@ pub(super) fn apply_course_mode_lua_options(
     }
 }
 
-/// LR2 course stage levels (number 250..259) of the played stages, as Select
-/// shows them for the course. Unplayed stages after a FAILED stay empty.
+/// LR2 course stage levels (number 250..259). Like LR2, which reads the selected
+/// course, stages left unplayed after a FAILED keep their library level.
 pub(super) fn course_stage_levels(course: &CourseResultSummary) -> [Option<u16>; 10] {
     std::array::from_fn(|stage| {
-        course.entry_summaries.get(stage).and_then(|summary| summary.play_level.trim().parse().ok())
+        course.stage_charts.get(stage).and_then(|chart| chart.play_level.trim().parse().ok())
     })
 }
 
@@ -292,9 +292,9 @@ fn insert_lr2_course_stage_options(
     }
     for stage in 0..5 {
         let difficulty = course
-            .entry_summaries
+            .stage_charts
             .get(stage)
-            .map_or(0, |summary| bmz_render::plan::skin_difficulty_code(&summary.difficulty_name));
+            .map_or(0, |chart| bmz_render::plan::skin_difficulty_code(&chart.difficulty_name));
         for code in 0..=5 {
             runtime_state
                 .option_values

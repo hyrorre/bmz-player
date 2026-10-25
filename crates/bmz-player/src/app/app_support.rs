@@ -26,6 +26,8 @@ pub(super) struct CourseLibrarySnapshot {
     pub(super) metrics: CoursePlayMetrics,
     pub(super) first_chart: ChartListItem,
     pub(super) titles: HashMap<i64, String>,
+    /// Level / difficulty of each definition entry, in course order.
+    pub(super) stage_charts: Vec<crate::screens::course_session::CourseStageChartInfo>,
     pub(super) has_score_disabling_key_mode_conversion: bool,
 }
 
@@ -182,12 +184,24 @@ pub(super) fn course_play_metrics_from_chart_metadata(
         ln_policy_setting,
         entry_start_options,
     );
+    let stage_charts = chart_ids
+        .iter()
+        .map(|chart_id| {
+            charts_by_id.get(chart_id).map_or_else(Default::default, |chart| {
+                crate::screens::course_session::CourseStageChartInfo {
+                    play_level: chart.play_level.clone(),
+                    difficulty_name: chart.difficulty_name.clone(),
+                }
+            })
+        })
+        .collect();
     let titles =
         charts_by_id.into_iter().map(|(chart_id, chart)| (chart_id, chart.title)).collect();
     Ok(CourseLibrarySnapshot {
         metrics,
         first_chart,
         titles,
+        stage_charts,
         has_score_disabling_key_mode_conversion,
     })
 }

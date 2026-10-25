@@ -121,6 +121,8 @@ pub(super) fn lr2_option_ref(skin_type: i32, op: i32) -> Option<i32> {
         || is_lr2_auto_scratch_option(id)
         || is_lr2_song_scene_option(skin_type, id)
         || (is_result(skin_type) && matches!(id, 100..=105 | 340..=347))
+        // Course stage count, drawn per stage label (e.g. W-mix "1st".."5th").
+        || (skin_type == 15 && matches!(id, 580..=589))
         // Win / lose / draw against the 2P player, which is the target ghost in single play.
         || (is_play(skin_type) && matches!(id, 352..=354));
     divergent.then(|| op.signum() * (LR2_OPTION_BASE + id))

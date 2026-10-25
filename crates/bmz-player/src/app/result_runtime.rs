@@ -152,6 +152,7 @@ pub(super) fn course_result_skin_snapshot(
     }
     CourseResultSkinSnapshot {
         stage_count: course.entry_summaries.len().min(stages.len()) as u32,
+        definition_stage_count: u32::try_from(course.total_entries).unwrap_or(u32::MAX),
         stages,
     }
 }

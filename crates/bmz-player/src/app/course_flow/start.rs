@@ -167,6 +167,7 @@ impl WinitApp {
             current_index: 0,
             entry_results: Vec::new(),
             entry_start_options,
+            stage_charts: library_snapshot.stage_charts.clone(),
             replay_stage_limit: None,
             auto_advance_intermediate_results,
         });
@@ -427,6 +428,7 @@ impl WinitApp {
             current_index: 0,
             entry_results: Vec::new(),
             entry_start_options,
+            stage_charts: library_snapshot.stage_charts.clone(),
             replay_stage_limit: Some(queued.len()),
             auto_advance_intermediate_results,
         });

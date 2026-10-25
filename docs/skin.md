@@ -179,9 +179,9 @@ option `94_000+ID`、否定は符号を維持）です。意味が一致する�
 | option | 70..79 | Select / Decide | 各難易度のレベルが点滅しきい値以下（70..74）/ 超過（75..79）です。しきい値はLR2の既定値（5 / 10鍵9、7 / 14鍵12、9鍵42） |
 | bargraph | 105..109 | Select | 各難易度のレベル ÷ 点滅しきい値（LR2のアニメーションは省略） |
 | option | 118..149 | Select / Decide | 選択中の譜面を過去にクリアしたオプション（LR2の`op_history`）です。スコア履歴のオート以外のクリアから、NORMAL以上はゲージ（118..123）とRANDOM（126..131）、EASY系はEASYゲージ（121）、アシスト付きは142だけを立てます。HIDDEN / SUDDEN（134..141）は記録が無いため立ちません。BMZではアシスト付き（AUTO SCRATCHを含む）とH-RANDOM / ALL-SCRのクリアはランプだけを更新し、スコア履歴に残りません（[スコア保存](score-persistence.md)）。そのため142とH-RANDOM / ALL-SCRのbit（130 / 131）も実際には立たない |
-| number | 250..259 | Select / Decide / Course Result | 選択中のコース（Course Resultでは今回のコース）の各ステージのレベルです。未解決のステージと、FAILEDで未プレイのステージは非表示 |
-| option | 580..589 | Course Result | コースのステージ数がN+1以上（`580 + N`）です。`#IF`はロード時に評価する |
-| option | 700..745 | Course Result | 各ステージの難易度（`700 + 10 × ステージ + 難易度`、0は未定義、1..5はBEGINNER..INSANE）です。未プレイのステージは0。`#IF`はロード時に評価する |
+| number | 250..259 | Select / Decide / Course Result | 選択中のコース（Course Resultでは今回のコース）の各ステージのレベルです。Course ResultではFAILEDで未プレイのステージも、コース開始時のライブラリのレベルを表示します。未解決のステージは非表示 |
+| option | 580..589 | Course Result | コース定義のステージ数がN+1以上（`580 + N`）です。FAILEDで未プレイのステージも数えます。`#IF`はロード時、DSTの条件は描画時に評価する |
+| option | 700..745 | Course Result | 各ステージの難易度（`700 + 10 × ステージ + 難易度`、0は未定義、1..5はBEGINNER..INSANE）です。未プレイのステージはライブラリの難易度を使います。`#IF`はロード時に評価する |
 | number | 70 / 73 | Select / Decide | 選択中の曲の自己ベストのLR2式スコア / レート（%） |
 | number | 210..219 | Select / Decide | IRのFAILED / EASY / CLEAR / HARD / FULLCOMBOの人数と率です。ASSIST系はEASY、EX-HARDはHARD、PERFECT / MAXはFULLCOMBOへ畳む |
 | number | 212 / 214 / 216 | Result / Course Result | 拡張LR2のFAST / SLOW / コンボブレイク数（Playの210 / 212 / 214と同じ扱い） |

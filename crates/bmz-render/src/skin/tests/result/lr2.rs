@@ -621,6 +621,22 @@ fn lr2_course_stage_levels() {
 }
 
 #[test]
+fn lr2_course_stage_count_options_follow_course_definition() {
+    // Two stages were played before a FAILED; the course has four.
+    let state = SkinDrawState {
+        result_failed: Some(true),
+        course_result: crate::scene::CourseResultSkinSnapshot {
+            stage_count: 2,
+            definition_stage_count: 4,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let op = |id: i32| test_skin_ops(&[LR2_OPTION_BASE + id], &[], &state);
+    assert!(op(580) && op(583) && !op(584) && !op(589));
+}
+
+#[test]
 fn lr2_embedded_skin_settings_texts_buttons_and_scroll_slider() {
     let settings = crate::scene::Lr2SkinSettingsSnapshot {
         target_button: 175,

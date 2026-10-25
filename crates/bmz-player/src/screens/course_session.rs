@@ -9,6 +9,14 @@ use crate::screens::play_session::AppliedArrange;
 use crate::screens::play_start::PlayStartOptions;
 use crate::screens::result_model::{ResultJudgeCounts, ResultSummary};
 
+/// Library level and difficulty of one course stage. LR2 Course Result skins show
+/// every stage of the course, including stages left unplayed after a FAILED.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CourseStageChartInfo {
+    pub play_level: String,
+    pub difficulty_name: String,
+}
+
 #[derive(Clone)]
 pub struct ActiveCourseSession {
     pub course_id: i64,
@@ -32,6 +40,8 @@ pub struct ActiveCourseSession {
     /// コース開始時に全エントリ分を確定した開始条件。source chart の事前集計と
     /// 実プレイで同じ LN / DOUBLE / RANDOM 条件を使うため、曲間で作り直さない。
     pub entry_start_options: Vec<PlayStartOptions>,
+    /// Library metadata of each definition entry, captured at course start.
+    pub stage_charts: Vec<CourseStageChartInfo>,
     /// Replay attempts may end before the full definition after a failed
     /// stage. This bound prevents playback from falling through into normal
     /// interactive play when no later replay was recorded.
@@ -58,6 +68,8 @@ pub struct CourseResultSummary {
     pub title: String,
     pub kind: CourseKind,
     pub course_titles: [String; 10],
+    /// Every definition stage; played stages use the played chart's metadata.
+    pub stage_charts: Vec<CourseStageChartInfo>,
     pub entry_summaries: Vec<ResultSummary>,
     /// Per-entry applied arrange (seed/pattern) of this attempt, in play order.
     /// Used to retry the whole course with the same arrangement.
@@ -248,6 +260,7 @@ impl ActiveCourseSession {
             self.entry_results.iter().map(|r| r.finished.applied_arrange.clone()).collect();
         let course_titles =
             course_titles_from_results(&self.definition.entries, &self.entry_results);
+        let stage_charts = stage_charts_from_results(&self.stage_charts, &self.entry_results);
         let entry_summaries = self.entry_results.into_iter().map(|r| r.finished.summary).collect();
 
         CourseResultSummary {
@@ -259,6 +272,7 @@ impl ActiveCourseSession {
             title: self.definition.title,
             kind: self.definition.kind,
             course_titles,
+            stage_charts,
             entry_summaries,
             entry_arranges,
             total_ex_score,
@@ -309,6 +323,25 @@ fn course_titles_from_results(
         }
     }
     titles
+}
+
+fn stage_charts_from_results(
+    stage_charts: &[CourseStageChartInfo],
+    results: &[CourseEntryResult],
+) -> Vec<CourseStageChartInfo> {
+    let mut stage_charts = stage_charts.to_vec();
+    for (index, result) in results.iter().enumerate() {
+        let summary = &result.finished.summary;
+        let played = CourseStageChartInfo {
+            play_level: summary.play_level.clone(),
+            difficulty_name: summary.difficulty_name.clone(),
+        };
+        match stage_charts.get_mut(index) {
+            Some(stage) => *stage = played,
+            None => stage_charts.push(played),
+        }
+    }
+    stage_charts
 }
 
 #[cfg(test)]
@@ -497,6 +530,7 @@ mod tests {
             current_index: 0,
             entry_results,
             entry_start_options: Vec::new(),
+            stage_charts: Vec::new(),
             replay_stage_limit: None,
             auto_advance_intermediate_results: false,
         }
@@ -687,6 +721,7 @@ mod tests {
             current_index: 0,
             entry_results,
             entry_start_options: Vec::new(),
+            stage_charts: Vec::new(),
             replay_stage_limit: None,
             auto_advance_intermediate_results: false,
         }
@@ -696,19 +731,28 @@ mod tests {
     fn failed_chart_aborts_course_and_blocks_trophy() {
         use bmz_core::clear::ClearType;
         // 4-entry course, only first 2 played, second is Failed.
-        let session = make_partial_session(
+        let mut session = make_partial_session(
             4,
             vec![
                 (make_score(100, 0), 100, ClearType::Normal),
                 (make_score(0, 100), 100, ClearType::Failed),
             ],
         );
+        let library = |level: &str| CourseStageChartInfo {
+            play_level: level.to_string(),
+            difficulty_name: "ANOTHER".to_string(),
+        };
+        session.stage_charts = vec![library("1"), library("2"), library("3"), library("4")];
+        session.entry_results[0].finished.summary.play_level = "11".to_string();
         let result = session.into_result();
         assert!(result.course_failed);
         assert_eq!(result.final_clear_type, ClearType::Failed);
         assert!(!result.course_clear);
         assert_eq!(result.played_entries, 2);
         assert_eq!(result.total_entries, 4);
+        // Played stages use the played chart; unplayed ones keep the library metadata.
+        let levels = result.stage_charts.iter().map(|chart| chart.play_level.as_str());
+        assert_eq!(levels.collect::<Vec<_>>(), ["11", "", "3", "4"]);
         // Trophies are blocked when course_failed even if numeric thresholds pass.
         assert!(!result.trophy_results[0].achieved);
     }
