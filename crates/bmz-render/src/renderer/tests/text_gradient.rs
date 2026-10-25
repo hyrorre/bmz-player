@@ -20,7 +20,9 @@ struct Instance {
 fn instances(frame: &TextFrame) -> Vec<Instance> {
     frame
         .instances
-        .chunks_exact(TEXT_INSTANCE_BYTES)
+        .as_chunks::<TEXT_INSTANCE_BYTES>()
+        .0
+        .iter()
         .map(|bytes| {
             let value = |index: usize| {
                 f32::from_le_bytes(bytes[index * 4..index * 4 + 4].try_into().unwrap())
@@ -280,7 +282,7 @@ fn gradient_text_renders_on_gpu() {
     // 上下それぞれの、文字が塗られた画素の赤と青の合計。
     let halves = |pixels: &[u8]| {
         let mut sums = [[0u64; 2]; 2];
-        for (index, pixel) in pixels.chunks_exact(4).enumerate() {
+        for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
             let half = usize::from(index / surface.width as usize >= surface.height as usize / 2);
             sums[half][0] += u64::from(pixel[0]);
             sums[half][1] += u64::from(pixel[2]);
@@ -298,7 +300,7 @@ fn gradient_text_renders_on_gpu() {
     assert!(bottom[1] > bottom[0] * 2, "bottom is mostly blue: {bottom:?}");
     // 文字の形（アルファ）は変わらない。
     let alpha = |pixels: &[u8]| {
-        pixels.chunks_exact(4).map(|p| u64::from(p[0]) + u64::from(p[2])).sum::<u64>()
+        pixels.as_chunks::<4>().0.iter().map(|p| u64::from(p[0]) + u64::from(p[2])).sum::<u64>()
     };
     let (plain, graded) = (alpha(&plain), alpha(&graded));
     assert!(graded.abs_diff(plain) * 10 < plain, "{plain} / {graded}");
