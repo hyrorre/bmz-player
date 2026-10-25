@@ -472,10 +472,13 @@ fn archive_with_one_inner_folder_lists_like_the_extracted_folder() {
 #[test]
 fn archive_level_stays_when_it_has_several_folders_or_its_own_charts() {
     let several = folder_listing(&["/bms/set.7z!/x/a.bms", "/bms/set.7z!/y/b.bms"], "/bms");
-    assert_eq!(listing_shape(&several), ["folder set.7z! /bms/set.7z!"]);
+    // The archive level shows like the extracted folder, without the extension and `!`.
+    assert_eq!(listing_shape(&several), ["folder set /bms/set.7z!"]);
 
     let own_charts = folder_listing(&["/bms/set.zip!/a.bms", "/bms/set.zip!/x/b.bms"], "/bms");
-    assert_eq!(listing_shape(&own_charts), ["folder set.zip! /bms/set.zip!"]);
+    assert_eq!(listing_shape(&own_charts), ["folder set /bms/set.zip!"]);
+    let dotted = folder_listing(&["/bms/v1.2.RAR!/x/a.bms", "/bms/v1.2.RAR!/y/b.bms"], "/bms");
+    assert_eq!(listing_shape(&dotted), ["folder v1.2 /bms/v1.2.RAR!"]);
 
     // An ordinary folder ending with `!` is not an archive.
     let folder = folder_listing(&["/bms/Wow!/song/a.bms"], "/bms");

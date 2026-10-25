@@ -107,6 +107,7 @@ pub fn load_select_items_in_folder_for_rule_mode_with_filters(
             has_grandchild = inner_deeper;
         }
         if has_grandchild {
+            let name = archive_display_name(&name).map_or(name.clone(), str::to_owned);
             non_leaf_folders.push((child_path, name));
         } else {
             leaf_folder_paths.push(child_path);
@@ -150,6 +151,18 @@ pub fn load_select_items_in_folder_for_rule_mode_with_filters(
 fn is_archive_folder_name(name: &str) -> bool {
     name.strip_suffix('!')
         .is_some_and(|archive| crate::chart_source::is_archive_file(std::path::Path::new(archive)))
+}
+
+/// 選曲画面に残る書庫フォルダは、展開したフォルダと同じく拡張子と `!` を除いて表示する。
+fn archive_display_name(name: &str) -> Option<&str> {
+    if !is_archive_folder_name(name) {
+        return None;
+    }
+    let archive = name.strip_suffix('!')?;
+    std::path::Path::new(archive)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
 }
 
 /// 書庫フォルダの直下に譜面が無く、フォルダが1つだけなら、その名前と、
