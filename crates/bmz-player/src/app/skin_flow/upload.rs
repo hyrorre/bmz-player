@@ -156,7 +156,7 @@ impl WinitApp {
             }
         }?;
         let candidates: Vec<PathBuf> =
-            lr2_play_skin_candidates(&self.skin.skin_catalog, summary.key_mode)
+            lr2_play_skin_candidates(self.skin.skin_catalog.get(), summary.key_mode)
                 .into_iter()
                 .filter_map(|path| self.boot.app_paths.resolve_path_ref(path).ok())
                 .collect();

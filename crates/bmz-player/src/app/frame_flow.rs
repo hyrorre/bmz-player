@@ -252,7 +252,7 @@ impl WinitApp {
                 profile_config: &mut self.boot.profile_config,
                 random_trainer: &mut self.select.random_trainer,
                 skin_meta: &skin_meta,
-                skin_catalog: &self.skin.skin_catalog,
+                skin_catalog: self.skin.skin_catalog.get(),
                 course_result,
                 course_preview: course_preview.as_ref(),
                 course_editor,
@@ -335,7 +335,8 @@ impl WinitApp {
 
     fn egui_skin_meta(&mut self) -> SkinConfigMeta {
         if self.ui.egui.as_ref().is_some_and(|egui| egui.take_skin_catalog_refresh()) {
-            self.skin.skin_catalog = scan_skin_catalog(&self.boot.app_paths);
+            self.skin.skin_catalog =
+                SkinCatalogState::ready(scan_skin_catalog(&self.boot.app_paths));
             self.skin.skin_defs_cache.clear();
             self.skin.skin_header_checks.clear();
         }

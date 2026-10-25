@@ -86,7 +86,7 @@ impl WinitApp {
         let target = self.select.lr2_skin_settings.target;
         if !target.cycle_skin(
             &mut self.boot.profile_config.skin,
-            &self.skin.skin_catalog,
+            self.skin.skin_catalog.get(),
             direction,
         ) {
             return false;

@@ -353,6 +353,21 @@ pub(super) fn load_lr2_csv_skin_value_with_inherited_assets(
     })
 }
 
+/// `#INFORMATION` of an LR2 skin without building its document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lr2SkinInfo {
+    pub skin_type: i32,
+    pub name: String,
+    pub author: String,
+}
+
+/// Reads only the header commands, for skin lists. The type and name are the ones a full
+/// load reports, but the skin body is not processed.
+pub fn load_lr2_csv_skin_info(path: &Path) -> Result<Lr2SkinInfo> {
+    let LoadedHeader { header, .. } = load_header(path, &BTreeMap::new())?;
+    Ok(Lr2SkinInfo { skin_type: header.skin_type, name: header.name, author: header.author })
+}
+
 pub fn load_lr2_csv_skin_dependency_option_values(
     path: &Path,
     options: &BTreeMap<String, String>,

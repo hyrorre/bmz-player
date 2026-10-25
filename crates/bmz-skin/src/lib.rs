@@ -403,6 +403,8 @@ fn decode_lr2_skin_value(path: &Path, loaded: LoadedLuaSkinValue) -> Result<Load
     })
 }
 
+pub use lr2::{Lr2SkinInfo, load_lr2_csv_skin_info};
+
 pub fn load_lr2_csv_skin_dependency_option_values(
     path: &Path,
     options: &BTreeMap<String, String>,

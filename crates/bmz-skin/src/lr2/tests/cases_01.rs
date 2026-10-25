@@ -233,6 +233,28 @@ fn lr2_resolution_inference_counts_only_active_branches() {
 }
 
 #[test]
+fn lr2_skin_info_matches_the_full_document_without_processing_the_body() {
+    let root = unique_test_dir("bmz-lr2-skin-info");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("select.lr2skin");
+    fs::write(
+        &path,
+        "#INFORMATION,5,Info test,BMZ
+#CUSTOMOPTION,Layout,920,SD,HD
+         #SRC_IMAGE,0,111,0,0,1,1,1,1,0,0
+         #DST_IMAGE,0,0,0,0,640,480,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+",
+    )
+    .unwrap();
+    let info = load_lr2_csv_skin_info(&path).unwrap();
+    let document =
+        load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap().value;
+    assert_eq!(json!(info.skin_type), document["type"]);
+    assert_eq!(json!(info.name), document["name"]);
+    assert_eq!(info.author, "BMZ");
+}
+
+#[test]
 fn lr2_resolution_override_keeps_open_lr2_effect_mode() {
     let root = unique_test_dir("bmz-lr2-resolution-override-play");
     fs::create_dir_all(&root).unwrap();

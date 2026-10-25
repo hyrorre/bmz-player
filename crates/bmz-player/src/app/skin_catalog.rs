@@ -1,4 +1,55 @@
 use super::*;
+use rayon::prelude::*;
+
+/// The skin list, scanned off the window thread. Startup does not wait for it; the settings
+/// UI and LR2 skin switching join the scan when they first need the list.
+pub(super) struct SkinCatalogState {
+    ready: OnceLock<SkinCatalog>,
+    worker: std::sync::Mutex<Option<thread::JoinHandle<(SkinCatalog, u128)>>>,
+}
+
+impl SkinCatalogState {
+    pub(super) fn ready(catalog: SkinCatalog) -> Self {
+        let ready = OnceLock::new();
+        let _ = ready.set(catalog);
+        Self { ready, worker: std::sync::Mutex::new(None) }
+    }
+
+    pub(super) fn scan(app_paths: crate::paths::AppPaths) -> Result<Self> {
+        let worker = thread::Builder::new()
+            .name("skin-catalog".into())
+            .spawn(move || {
+                let started_at = Instant::now();
+                let catalog = scan_skin_catalog(&app_paths);
+                let catalog_ms = started_at.elapsed().as_millis();
+                tracing::info!(catalog_ms, "skin catalog scanned");
+                (catalog, catalog_ms)
+            })
+            .context("failed to spawn skin catalog worker")?;
+        Ok(Self { ready: OnceLock::new(), worker: std::sync::Mutex::new(Some(worker)) })
+    }
+
+    pub(super) fn get(&self) -> &SkinCatalog {
+        self.ready.get_or_init(|| {
+            let started_at = Instant::now();
+            let worker = self.worker.lock().unwrap_or_else(|e| e.into_inner()).take();
+            let (catalog, catalog_ms) = match worker.map(thread::JoinHandle::join) {
+                Some(Ok(scanned)) => scanned,
+                Some(Err(_)) => {
+                    tracing::error!("skin catalog worker panicked");
+                    (SkinCatalog::default(), 0)
+                }
+                None => (SkinCatalog::default(), 0),
+            };
+            tracing::info!(
+                catalog_ms,
+                wait_ms = started_at.elapsed().as_millis(),
+                "skin catalog ready"
+            );
+            catalog
+        })
+    }
+}
 
 pub(super) fn scan_skin_catalog(app_paths: &crate::paths::AppPaths) -> SkinCatalog {
     let mut catalog = SkinCatalog::default();
@@ -32,22 +83,40 @@ pub(super) fn scan_skin_catalog_dir(
     origin: SkinCandidateOrigin,
     catalog: &mut SkinCatalog,
 ) {
-    scan_skin_catalog_dir_once(
-        root,
+    let mut paths = Vec::new();
+    collect_skin_candidate_files(
         dir,
-        library_roots,
-        origin,
-        catalog,
+        &mut paths,
         &mut crate::directory_scan::DirectoryScan::default(),
     );
+    // Headers are independent; Lua headers run their own VM. Collecting in directory order
+    // keeps the result identical to a sequential scan before sorting.
+    let candidates: Vec<_> = paths
+        .par_iter()
+        .map(|path| {
+            let started_at = Instant::now();
+            let candidate =
+                load_skin_candidate_with_library_roots(root, path, library_roots, origin);
+            tracing::debug!(
+                target: "bmz_player::startup_profile",
+                path = %path.display(),
+                header_us = started_at.elapsed().as_micros(),
+                "startup skin catalog candidate"
+            );
+            if candidate.is_none() {
+                tracing::debug!(path = %path.display(), "skipping skin candidate without readable header");
+            }
+            candidate
+        })
+        .collect();
+    for (skin_type, candidate) in candidates.into_iter().flatten() {
+        push_skin_candidate(catalog, skin_type, candidate);
+    }
 }
 
-fn scan_skin_catalog_dir_once(
-    root: &Path,
+fn collect_skin_candidate_files(
     dir: &Path,
-    library_roots: &[PathBuf],
-    origin: SkinCandidateOrigin,
-    catalog: &mut SkinCatalog,
+    paths: &mut Vec<PathBuf>,
     scan: &mut crate::directory_scan::DirectoryScan,
 ) {
     let Some(entries) = scan.read_dir_once(dir) else {
@@ -56,25 +125,9 @@ fn scan_skin_catalog_dir_once(
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            scan_skin_catalog_dir_once(root, &path, library_roots, origin, catalog, scan);
-            continue;
-        }
-        if !is_skin_candidate_file(&path) {
-            continue;
-        }
-        let started_at = Instant::now();
-        let candidate = load_skin_candidate_with_library_roots(root, &path, library_roots, origin);
-        tracing::debug!(
-            target: "bmz_player::startup_profile",
-            path = %path.display(),
-            header_us = started_at.elapsed().as_micros(),
-            "startup skin catalog candidate"
-        );
-        match candidate {
-            Some((skin_type, candidate)) => push_skin_candidate(catalog, skin_type, candidate),
-            None => {
-                tracing::debug!(path = %path.display(), "skipping skin candidate without readable header")
-            }
+            collect_skin_candidate_files(&path, paths, scan);
+        } else if is_skin_candidate_file(&path) {
+            paths.push(path);
         }
     }
 }
@@ -162,19 +215,31 @@ pub(super) fn load_skin_candidate_with_library_roots(
     library_roots: &[PathBuf],
     origin: SkinCandidateOrigin,
 ) -> Option<(i32, SkinCandidate)> {
-    let document = load_skin_header_document_with_library_roots(path, library_roots)?;
+    // A list only needs the type and name. LR2 skins report them in `#INFORMATION`, so
+    // building their whole document (~30 ms each) is skipped.
+    let (skin_type, name) = if path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("lr2skin"))
+    {
+        let info = bmz_skin::load_lr2_csv_skin_info(path).ok()?;
+        (info.skin_type, info.name)
+    } else {
+        let document = load_skin_header_document_with_library_roots(path, library_roots)?;
+        (document.skin_type, document.name)
+    };
     let relative = path.strip_prefix(root).unwrap_or(path);
-    let name = if document.name.trim().is_empty() {
+    let name = if name.trim().is_empty() {
         relative.file_stem().and_then(|name| name.to_str()).unwrap_or("").to_string()
     } else {
-        document.name
+        name
     };
     let stable_path = match origin {
         SkinCandidateOrigin::Bundled => format!("resource:skins/{}", path_to_slash(relative)),
         SkinCandidateOrigin::User => format!("data:skins/{}", path_to_slash(relative)),
         SkinCandidateOrigin::External => path.to_string_lossy().replace('\\', "/"),
     };
-    Some((document.skin_type, SkinCandidate { name, path: stable_path, origin }))
+    Some((skin_type, SkinCandidate { name, path: stable_path, origin }))
 }
 
 pub(super) fn same_path(a: &Path, b: &Path) -> bool {

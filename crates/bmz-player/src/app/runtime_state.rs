@@ -315,7 +315,7 @@ pub(super) struct SmokeRuntime {
 
 pub(super) struct SkinRuntimeState {
     pub(super) lua_runtime_mode: bmz_skin::LuaSkinRuntimeMode,
-    pub(super) skin_catalog: SkinCatalog,
+    pub(super) skin_catalog: SkinCatalogState,
     pub(super) skin_defs_cache: BTreeMap<(String, bool), SceneSkinDefs>,
     pub(super) skin_header_checks: BTreeMap<String, Result<(), String>>,
     pub(super) default_skin_manifest: Option<SkinManifest>,
