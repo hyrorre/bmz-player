@@ -56,6 +56,8 @@ rianIRはBMZ公式IRとは別providerとします。credential、送信queue、�
 - 既存IR queueを使った単曲・course送信
 - 選曲・リザルト・CLIのglobal単曲ランキング取得
 - 選曲・リザルトのglobal courseランキング取得
+- コースランキングの表示は上位100件までとし、自分の順位と参加人数は取得した全行から求めます。
+  自分が101件目以降でもCourse Resultへ順位を渡します。未参加・未ログイン時は自分の順位を付けません。
 - BMZ内部hashと分離した`rian_course_hash_v1`によるcourse送信・ランキング取得
 - 元譜面のLN構成と実際に適用したLN種別を分離した`canonical-v1`送信
 - 正規化後のAuto/Force LN/CN/HCNすべてに対応するprovider別eligibility

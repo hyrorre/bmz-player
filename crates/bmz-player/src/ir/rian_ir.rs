@@ -680,6 +680,35 @@ mod tests {
     }
 
     #[test]
+    fn course_ranking_preserves_self_outside_the_visible_limit() {
+        for (player, expected_rank) in [
+            (Some("login-100"), Some(100)),
+            (Some("login-101"), Some(101)),
+            (Some("login-103"), Some(103)),
+            (Some("missing"), None),
+            (None, None),
+        ] {
+            let resources = (1..=103)
+                .map(|rank| RianRankingResource {
+                    id: format!("course-score-{rank}"),
+                    attributes: serde_json::from_value(json!({
+                        "player_name": format!("login-{rank}"),
+                        "ex_score": 3000 - rank,
+                    }))
+                    .unwrap(),
+                })
+                .collect();
+            let result =
+                convert_course_ranking(&"ab".repeat(32), resources, RIAN_IR_RANKING_LIMIT, player);
+            assert_eq!(result.ranking.entries.len(), 100);
+            assert_eq!(result.ranking.entries.last().unwrap().rank, 100);
+            assert_eq!(result.ranking.self_summary.map(|own| own.rank), expected_rank);
+            assert_eq!(result.ranking.pagination.unwrap().total, Some(103));
+            assert!(result.ranking.pagination.unwrap().has_more);
+        }
+    }
+
+    #[test]
     fn ranking_conversion_uses_competition_ranks_for_ties() {
         let resources = [2000, 1900, 1900, 1800]
             .into_iter()

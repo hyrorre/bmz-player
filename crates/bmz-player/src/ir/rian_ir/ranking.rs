@@ -131,6 +131,14 @@ pub(super) fn convert_course_ranking(
     self_player_id: Option<&str>,
 ) -> IrCourseRankingResult {
     let total = resources.len() as u32;
+    // The server returns all rows. Only the visible entries are limited; self
+    // may be outside that window and still needs a rank on Course Result.
+    let self_summary = self_player_id.and_then(|player_id| {
+        resources
+            .iter()
+            .position(|resource| string_attr(&resource.attributes, "player_name") == player_id)
+            .map(|index| IrRankingSelfRef { rank: index as u32 + 1, score_id: None })
+    });
     let entries: Vec<_> = resources
         .into_iter()
         .take(limit as usize)
@@ -157,12 +165,6 @@ pub(super) fn convert_course_ranking(
             }
         })
         .collect();
-    let self_summary = self_player_id.and_then(|player_id| {
-        entries
-            .iter()
-            .find(|entry| entry.player.id == player_id)
-            .map(|entry| IrRankingSelfRef { rank: entry.rank, score_id: None })
-    });
     IrCourseRankingResult {
         course: IrCourseRankingCourseRef { course_hash: course_hash.to_string() },
         rule: None,
