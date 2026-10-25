@@ -1575,7 +1575,7 @@ mod tests {
     }
 
     #[test]
-    fn play_scratch_limits_overlapping_voices_to_three() {
+    fn play_scratch_does_not_limit_overlapping_voices() {
         let (engine, mut processor) = test_engine();
         let scratch_id = SoundId(SYSTEM_SOUND_BASE);
         let mut id_map = HashMap::new();
@@ -1592,7 +1592,7 @@ mod tests {
             manager.play(SoundType::Scratch, 1.0);
         }
 
-        assert_eq!(render(&mut processor, 0, 1), vec![3.0, 3.0]);
+        assert_eq!(render(&mut processor, 0, 1), vec![5.0, 5.0]);
     }
 
     #[test]
