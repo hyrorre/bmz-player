@@ -113,11 +113,6 @@ impl WinitApp {
         if self.route_select_option_session_event(&control_event) {
             return;
         }
-        if matches!(self.view_state(), AppViewState::Select)
-            && self.option_panel_exit_blocks_input()
-        {
-            return;
-        }
         if self.route_detail_options_input(&control_event) {
             return;
         }
@@ -317,7 +312,6 @@ impl WinitApp {
     /// 選曲画面のアナログスクラッチ tick を蓄積する。回転量比例スクロール用。
     pub(super) fn accumulate_select_analog_ticks(&mut self, axis: &str, ticks: i32) {
         if !matches!(self.view_state(), AppViewState::Select)
-            || self.option_panel_exit_blocks_input()
             || self.play.active_play.is_some()
             || self.play.pending_decide.is_some()
             || self.play.pending_play_start.is_some()

@@ -385,8 +385,11 @@ fn ecfn_detail_options_parallel_fades_and_single_shade() {
                 );
             }
             if to == 0 && from == 2 && elapsed < 300 {
-                assert_eq!(event_at(&renderer, &s, 130.0, 60.0), None);
-                assert!(renderer.select_skin_slider_hit(&s, 0.5, 0.3).is_none());
+                super::detail_options::assert_exit_passes_pointer_input(
+                    &renderer,
+                    &s,
+                    &[(130.0 / 1920.0, 60.0 / 1080.0), (0.5, 0.3)],
+                );
             }
         }
     }

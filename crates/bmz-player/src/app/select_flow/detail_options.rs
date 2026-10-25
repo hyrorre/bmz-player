@@ -985,6 +985,27 @@ mod tests {
         app.execute_detail_options_panel_event(19320 + 5 * 2 + 1, 1, &first);
         assert_eq!(app.select.detail_options.cursor, 1);
         assert_eq!(CATALOG[1].value(&app.boot.profile_config), before + 1);
+
+        // The exit animation never holds back input; controller scratch and the
+        // wheel already move the select bar while the detail panel slides out.
+        let closed_at = Instant::now();
+        app.select.detail_options.closing = app.capture_detail_options_close();
+        assert!(transition_select_option_panel(
+            &mut app.select.select_option_panel,
+            &mut app.select.option_panel_started_at,
+            &mut app.select.option_panel_off_started_at,
+            &mut app.select.select_exit_hold_started_at,
+            0,
+            closed_at,
+        ));
+        assert!(app.detail_options_closing_snapshot().is_some());
+        app.reset_select_analog_scroll();
+        let ticks = app.boot.profile_config.input.analog_ticks_per_scroll.max(1) as i32;
+        app.accumulate_select_analog_ticks("Axis1", -ticks);
+        assert_eq!(app.select.select_analog_scroll_buffer, ticks);
+        let cursor = app.select.detail_options.cursor;
+        app.route_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -1.0));
+        assert_eq!(app.select.detail_options.cursor, cursor, "the exiting panel stays inert");
     }
 
     #[test]

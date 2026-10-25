@@ -93,15 +93,6 @@ impl OptionPanelSession {
 }
 
 impl WinitApp {
-    pub(super) fn option_panel_exit_blocks_input(&self) -> bool {
-        panel_exit_blocks_input(
-            self.detail_options_enabled() && self.detail_options_available(),
-            self.select.select_option_panel,
-            &self.select.option_panel_off_started_at,
-            Instant::now(),
-        )
-    }
-
     pub(super) fn route_select_option_session_event(&mut self, event: &ControlInputEvent) -> bool {
         if !self.detail_options_enabled() || !matches!(self.view_state(), AppViewState::Select) {
             return false;
@@ -136,20 +127,6 @@ impl WinitApp {
     pub(super) fn reset_option_session_for_modal(&mut self) {
         self.select.option_session.cancel(self.input.start_held, self.input.select_held);
     }
-}
-
-fn panel_exit_blocks_input(
-    available: bool,
-    panel: u8,
-    off_started_at: &[Option<Instant>; 6],
-    now: Instant,
-) -> bool {
-    available
-        && panel == 0
-        && off_started_at[..2]
-            .iter()
-            .flatten()
-            .any(|started| now.saturating_duration_since(*started) < Duration::from_millis(300))
 }
 
 #[cfg(test)]
@@ -239,22 +216,6 @@ mod tests {
             assert_eq!(session.lr2_panel_for_holds(e1, e2), 0);
             assert_eq!(session.lr2_panel_for_holds(false, false), 0);
             assert_eq!(session.lr2_panel_for_holds(true, false), 1);
-        }
-    }
-
-    #[test]
-    fn panel_exit_animation_never_blocks_modal_input() {
-        let base = Instant::now();
-        for slot in [0, 1] {
-            let mut off = [None; 6];
-            off[slot] = Some(base);
-            assert!(panel_exit_blocks_input(true, 0, &off, base));
-            assert!(
-                !panel_exit_blocks_input(false, 0, &off, base),
-                "search/settings own input immediately"
-            );
-            assert!(!panel_exit_blocks_input(true, 1, &off, base));
-            assert!(!panel_exit_blocks_input(true, 0, &off, base + Duration::from_millis(300)));
         }
     }
 

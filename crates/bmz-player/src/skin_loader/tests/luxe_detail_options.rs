@@ -560,8 +560,11 @@ fn luxe_detail_options_enter_exit_and_other_panels_animate_together() {
                         .is_some_and(bmz_render::skin::is_detail_options_event)
                 );
                 if to == 0 && elapsed < 300 {
-                    assert!(renderer.select_skin_slider_hit(&s, 0.5, 0.3).is_none());
-                    assert_eq!(event_at(&renderer, &s, 1520.0, 558.0), None);
+                    super::detail_options::assert_exit_passes_pointer_input(
+                        &renderer,
+                        &s,
+                        &[(0.5, 0.3), (1520.0 / 1920.0, 558.0 / 1080.0)],
+                    );
                 }
             }
             if to == 3 && elapsed == 300 {

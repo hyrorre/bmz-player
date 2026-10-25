@@ -43,11 +43,6 @@ impl WinitApp {
         if self.route_select_option_session_event(&control_event) {
             return;
         }
-        if matches!(self.view_state(), AppViewState::Select)
-            && self.option_panel_exit_blocks_input()
-        {
-            return;
-        }
         let play_control = control_event.name.as_deref();
         let play_physical_control = control_event.physical.as_ref();
         let has_play_control_context =

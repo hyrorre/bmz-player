@@ -198,17 +198,16 @@ fn mz_detail_options_exit_keeps_labels_and_scroll_but_blocks_all_clicks() {
                 } else {
                     assert!(x.is_none(), "expired close snapshot still drawn");
                 }
-                for x in [80.0, 450.0, 960.0, 1840.0] {
-                    for y in [60.0, CHOICE_Y, 700.0, 960.0] {
-                        if elapsed < 300 {
-                            assert_eq!(event_at(&renderer, &s, x, y), None);
-                            assert!(
-                                renderer
-                                    .select_skin_slider_hit(&s, x / 1920.0, y / 1080.0)
-                                    .is_none()
-                            );
-                        }
-                    }
+                if elapsed < 300 {
+                    let points: Vec<_> = [80.0, 450.0, 960.0, 1840.0]
+                        .into_iter()
+                        .flat_map(|x| {
+                            [60.0, CHOICE_Y, 700.0, 960.0].map(|y| (x / 1920.0, y / 1080.0))
+                        })
+                        .collect();
+                    let hits =
+                        detail_options::assert_exit_passes_pointer_input(&renderer, &s, &points);
+                    assert!(hits.iter().any(Option::is_some), "select screen under the exit");
                 }
             }
             // Switching to another panel preserves the E2 exit alongside its entrance.

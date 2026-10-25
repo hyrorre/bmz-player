@@ -200,6 +200,32 @@ pub(super) fn assert_frames_follow_categories(
 }
 
 /// Display index of a stable item ID, so tests survive catalog reordering.
+/// The exiting detail panel is only drawn: clicks and sliders hit the select
+/// screen exactly as they would once the panel has gone. Returns the click hits.
+pub(super) fn assert_exit_passes_pointer_input(
+    renderer: &Renderer,
+    s: &SelectSnapshot,
+    points: &[(f32, f32)],
+) -> Vec<Option<bmz_render::skin::SkinClickHit>> {
+    assert!(s.closing_detail_options().is_some());
+    let closed = SelectSnapshot { detail_options_closing: None, ..s.clone() };
+    points
+        .iter()
+        .map(|&(x, y)| {
+            let hit = renderer.select_skin_click_hit(s, x, y);
+            assert_eq!(hit, renderer.select_skin_click_hit(&closed, x, y));
+            assert!(!hit.is_some_and(|hit| matches!(hit.target,
+                bmz_render::skin::SkinClickTarget::Event { event_id, .. }
+                    if bmz_render::skin::is_detail_options_event(event_id))));
+            assert_eq!(
+                renderer.select_skin_slider_hit(s, x, y),
+                renderer.select_skin_slider_hit(&closed, x, y)
+            );
+            hit
+        })
+        .collect()
+}
+
 pub(super) fn cursor_of(id: i64) -> usize {
     CATALOG.iter().position(|item| item.id == id).unwrap()
 }

@@ -478,9 +478,8 @@ impl Renderer {
         x: f32,
         y: f32,
     ) -> Option<SkinClickHit> {
-        if snapshot.option_panel == 0 && self.select_detail_options_closing(snapshot) {
-            return None;
-        }
+        let closed = self.select_without_detail_options_exit(snapshot);
+        let snapshot = closed.as_ref().unwrap_or(snapshot);
         let detail_options_only =
             snapshot.detail_options.is_some() && self.select_uses_detail_options();
         self.skin_click_hit(self.select_skin_canvas_render_policy(), x, y, |x, y| {
@@ -542,13 +541,12 @@ impl Renderer {
         x: f32,
         y: f32,
     ) -> Option<SkinSliderHit> {
-        if (snapshot.detail_options.is_some() && self.select_uses_detail_options())
-            || (snapshot.option_panel == 0 && self.select_detail_options_closing(snapshot))
-        {
+        if snapshot.detail_options.is_some() && self.select_uses_detail_options() {
             return None;
         }
         let (x, y) = self.select_skin_canvas_point(x, y)?;
-        self.select_skin_context.select_slider_hit(snapshot, x, y)
+        let closed = self.select_without_detail_options_exit(snapshot);
+        self.select_skin_context.select_slider_hit(closed.as_ref().unwrap_or(snapshot), x, y)
     }
 
     /// Moves a slider held since the press. Outside the canvas the cursor is
@@ -577,10 +575,21 @@ impl Renderer {
         })
     }
 
-    fn select_detail_options_closing(&self, snapshot: &crate::scene::SelectSnapshot) -> bool {
-        self.select_skin_document()
-            .is_some_and(|doc| doc.uses_detail_options() && doc.bmz_detail_options_close)
-            && snapshot.closing_detail_options().is_some()
+    /// The exiting detail panel is only drawn. Clicks and sliders hit the select
+    /// screen as if the panel had already closed.
+    fn select_without_detail_options_exit(
+        &self,
+        snapshot: &crate::scene::SelectSnapshot,
+    ) -> Option<crate::scene::SelectSnapshot> {
+        let closing = snapshot.option_panel == 0
+            && self
+                .select_skin_document()
+                .is_some_and(|doc| doc.uses_detail_options() && doc.bmz_detail_options_close)
+            && snapshot.closing_detail_options().is_some();
+        closing.then(|| crate::scene::SelectSnapshot {
+            detail_options_closing: None,
+            ..snapshot.clone()
+        })
     }
 
     fn select_uses_detail_options(&self) -> bool {
