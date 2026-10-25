@@ -176,6 +176,7 @@ impl RianIrClient {
         course_hash: &str,
         body: &str,
         limit: u32,
+        self_player_id: Option<&str>,
     ) -> Result<IrCourseRankingResult> {
         let mut url = self.endpoint("score/get_course_score.php")?;
         url.query_pairs_mut().append_pair("course_sha256", course_hash).append_pair("body", body);
@@ -186,7 +187,7 @@ impl RianIrClient {
         }
         let decoded: RianRankingResponse =
             decode_response(response, "rianIR course ranking").await?;
-        Ok(convert_course_ranking(course_hash, decoded.data, limit))
+        Ok(convert_course_ranking(course_hash, decoded.data, limit, self_player_id))
     }
 
     pub async fn fetch_rival_scores(

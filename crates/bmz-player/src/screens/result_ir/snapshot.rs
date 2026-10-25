@@ -102,9 +102,13 @@ pub(crate) fn course_ranking_to_result_ir_ranking(
             .collect(),
         clear_rate: None,
         clear_counts: None,
-        self_rank: None,
+        self_rank: ranking.ranking.self_summary.as_ref().map(|own| own.rank),
         previous_rank: None,
-        total: Some(ranking.ranking.entries.len() as u32),
+        total: ranking
+            .ranking
+            .pagination
+            .and_then(|pagination| pagination.total)
+            .or(Some(ranking.ranking.entries.len() as u32)),
     }
 }
 

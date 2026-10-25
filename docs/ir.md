@@ -491,7 +491,7 @@ rank=7, scope_rank=2  ライバル
 - score identityは`course_hash + gauge + ln_policy + rule_mode + scoring`です。段位（class系の制約）ではゲージが制約で決まりますが、通常のコースではユーザーが選ぶため、gaugeを含めます。`ln_policy`は、コース内の全譜面のLN情報とコースのLN制約から、単曲と同じ規則で正規化します。
 - bestは、EXスコア、クリア、BP（小さいほうが良い）、最大コンボの順で比べます。
 - 同じプレイヤー・同じ`idempotency_key`の重複投稿には、既存の`course_score_id`を返し、bestは再計算せず`best_updated=false`にします。
-- `GET /api/v1/courses/{course_hash}/ranking`はglobalだけで、`gauge` / `ln_policy` / `rule_mode`（それぞれ`ALL`で全体）と`limit`（1〜200、既定100）で絞り込めます。
+- `GET /api/v1/courses/{course_hash}/ranking`はglobalだけで、`gauge` / `ln_policy` / `rule_mode`（それぞれ`ALL`で全体）と`limit`（1〜200、既定100）で絞り込めます。認証付きの取得では、`limit`の範囲外でも`ranking.self`に自分の順位を返します。`ranking.pagination.total`は条件に合う全プレイヤー数です。BMZ Playerは、ログイン済みならコースランキングも認証付きで取得し、Course Resultの自分の順位と参加人数に使います。
 - BMZ Playerは、コースの終了時に`CourseResultSummary`からpayloadを作り、`ir_score_jobs`へ`kind=course`のjobを入れます。`local_score_id`にはローカルのcourse score ID、`chart_sha256`にはcourse hashを入れます。
 - 未登録の譜面がコースに含まれる場合は、metadataなしでSHA-256だけを登録します。
 - 難易度表（tables）の専用の実装は、まだありません。

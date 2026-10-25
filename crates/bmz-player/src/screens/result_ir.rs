@@ -602,16 +602,26 @@ mod tests {
                         verification: Some("signed".to_string()),
                     },
                 }],
+                self_summary: None,
+                pagination: None,
             },
         };
 
         let display = course_ranking_to_result_ir_ranking(&ranking);
 
-        assert_eq!(display.total, Some(1));
+        // Without self / pagination (old servers), the total falls back to the entries.
+        assert_eq!((display.self_rank, display.total), (None, Some(1)));
         assert_eq!(display.entries[0].rank, 2);
         assert_eq!(display.entries[0].player_name, "course-player");
         assert_eq!(display.entries[0].ex_score, 1234);
         assert_eq!(display.entries[0].bp, 7);
+
+        let mut ranking = ranking;
+        ranking.ranking.self_summary = Some(IrRankingSelfRef { rank: 31, score_id: None });
+        ranking.ranking.pagination =
+            Some(IrRankingPagination { limit: 20, offset: 0, total: Some(45), has_more: true });
+        let display = course_ranking_to_result_ir_ranking(&ranking);
+        assert_eq!((display.self_rank, display.total), (Some(31), Some(45)));
     }
 
     #[test]

@@ -665,6 +665,8 @@ mod tests {
                                 },
                             })
                             .collect(),
+                        self_summary: None,
+                        pagination: None,
                     },
                 }),
             ))

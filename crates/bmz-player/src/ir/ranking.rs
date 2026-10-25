@@ -34,23 +34,21 @@ pub(crate) async fn fetch_course_ranking(
     base_url: &str,
     target: &CourseRankingTarget,
 ) -> anyhow::Result<IrCourseRankingResult> {
+    let now = now_unix_seconds();
     if crate::ir::rian_ir::is_rian_ir_provider(provider) {
+        let credentials =
+            ensure_fresh_credentials(profile_root, provider, base_url, now).await.ok();
         return crate::ir::rian_ir::RianIrClient::new(base_url)?
             .fetch_course_ranking(
                 &target.rian_course_hash_v1,
                 crate::ir::rian_ir::body_for_rule_mode(target.rule_mode),
                 crate::ir::rian_ir::RIAN_IR_RANKING_LIMIT,
+                credentials.as_ref().map(|credentials| credentials.account_id.as_str()),
             )
             .await;
     }
     if crate::ir::bms_ir::is_bms_ir_provider(provider) {
-        let credentials = crate::ir::sync::ensure_fresh_credentials(
-            profile_root,
-            provider,
-            base_url,
-            now_unix_seconds(),
-        )
-        .await?;
+        let credentials = ensure_fresh_credentials(profile_root, provider, base_url, now).await?;
         return crate::ir::bms_ir::BmsIrClient::new(base_url)?
             .fetch_course_ranking(
                 &target.course_hash,
@@ -66,7 +64,12 @@ pub(crate) async fn fetch_course_ranking(
             )
             .await;
     }
-    let client = BmzOfficialIrClient::anonymous(base_url)?;
+    let mut client = BmzOfficialIrClient::anonymous(base_url)?;
+    // Global course ranking works anonymously; a signed-in request also returns
+    // the player's own rank and the total.
+    if let Ok(credentials) = ensure_fresh_credentials(profile_root, provider, base_url, now).await {
+        client.set_access_token(credentials.access_token);
+    }
     client
         .fetch_course_ranking(
             &target.course_hash,

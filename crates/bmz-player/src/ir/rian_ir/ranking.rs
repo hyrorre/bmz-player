@@ -128,8 +128,10 @@ pub(super) fn convert_course_ranking(
     course_hash: &str,
     resources: Vec<RianRankingResource>,
     limit: u32,
+    self_player_id: Option<&str>,
 ) -> IrCourseRankingResult {
-    let entries = resources
+    let total = resources.len() as u32;
+    let entries: Vec<_> = resources
         .into_iter()
         .take(limit as usize)
         .enumerate()
@@ -155,10 +157,26 @@ pub(super) fn convert_course_ranking(
             }
         })
         .collect();
+    let self_summary = self_player_id.and_then(|player_id| {
+        entries
+            .iter()
+            .find(|entry| entry.player.id == player_id)
+            .map(|entry| IrRankingSelfRef { rank: entry.rank, score_id: None })
+    });
     IrCourseRankingResult {
         course: IrCourseRankingCourseRef { course_hash: course_hash.to_string() },
         rule: None,
-        ranking: IrCourseRankingBody { scope: IrRankingScope::Global, entries },
+        ranking: IrCourseRankingBody {
+            scope: IrRankingScope::Global,
+            entries,
+            self_summary,
+            pagination: Some(IrRankingPagination {
+                limit,
+                offset: 0,
+                total: Some(total),
+                has_more: (limit as usize) < total as usize,
+            }),
+        },
     }
 }
 
@@ -184,7 +202,12 @@ pub(super) fn empty_course_ranking(course_hash: &str) -> IrCourseRankingResult {
     IrCourseRankingResult {
         course: IrCourseRankingCourseRef { course_hash: course_hash.to_string() },
         rule: None,
-        ranking: IrCourseRankingBody { scope: IrRankingScope::Global, entries: Vec::new() },
+        ranking: IrCourseRankingBody {
+            scope: IrRankingScope::Global,
+            entries: Vec::new(),
+            self_summary: None,
+            pagination: None,
+        },
     }
 }
 

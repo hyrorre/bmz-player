@@ -471,6 +471,11 @@ pub struct IrCourseRankingBody {
     pub scope: IrRankingScope,
     #[serde(default)]
     pub entries: Vec<IrCourseRankingEntry>,
+    /// The signed-in player's rank, also when outside `entries`.
+    #[serde(rename = "self", default)]
+    pub self_summary: Option<IrRankingSelfRef>,
+    #[serde(default)]
+    pub pagination: Option<IrRankingPagination>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -618,6 +623,29 @@ mod tests {
             global.data.as_ref().unwrap().ranking.pagination.as_ref().unwrap().total,
             Some(1)
         );
+    }
+
+    #[test]
+    fn course_ranking_decodes_self_and_pagination_from_bmz_ir() {
+        let ranking: IrCourseRankingResult = serde_json::from_value(serde_json::json!({
+            "course": { "course_hash": "abc" },
+            "ranking": {
+                "scope": "global",
+                "entries": [],
+                "self": { "rank": 31, "score_id": "course-score", "included_in_entries": false },
+                "pagination": { "limit": 20, "offset": 0, "total": 45, "has_more": true }
+            }
+        }))
+        .unwrap();
+        assert_eq!(ranking.ranking.self_summary.unwrap().rank, 31);
+        assert_eq!(ranking.ranking.pagination.unwrap().total, Some(45));
+
+        let old: IrCourseRankingResult = serde_json::from_value(serde_json::json!({
+            "course": { "course_hash": "abc" },
+            "ranking": { "scope": "global", "entries": [] }
+        }))
+        .unwrap();
+        assert!(old.ranking.self_summary.is_none() && old.ranking.pagination.is_none());
     }
 
     #[test]

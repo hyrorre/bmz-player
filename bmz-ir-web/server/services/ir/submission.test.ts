@@ -13,7 +13,7 @@ mock.module('hub:db', () => ({ db, schema }))
 const { submitScore, prepareBestScoreUpsert } = await import('./submission')
 const { IrIdempotencyCollisionError } = await import('./idempotency')
 const { submitCourseScore, computeCourseHash } = await import('../course_ir')
-const { fetchCourseRankingRows } = await import('../course_ranking')
+const { fetchCourseRankingRows, rankCourseRows } = await import('../course_ranking')
 const migrations = new URL('../../../../server/db/migrations/sqlite/', import.meta.url)
 for (const name of (await readdir(migrations)).filter((name) => name.endsWith('.sql')).sort()) {
   await client.executeMultiple(await readFile(new URL(name, migrations), 'utf8'))
@@ -134,6 +134,17 @@ describe('score submission idempotency', () => {
       ['player', 200],
       ['second', 100],
     ])
+    // Self rank and total include players outside the returned entries.
+    const ranked = rankCourseRows(
+      await fetchCourseRankingRows([
+        eq(schema.courseScores.courseHash, payload.course.course_hash),
+      ]),
+      'second',
+      1,
+    )
+    expect(ranked.entries.map(({ rank, row }) => [rank, row.player_id])).toEqual([[1, 'player']])
+    expect(ranked.self && [ranked.self.rank, ranked.self.row.player_id]).toEqual([2, 'second'])
+    expect(ranked.total).toBe(2)
   })
   test('concurrent prepared best updates preserve independent maxima and their source IDs', async () => {
     const high = submission()

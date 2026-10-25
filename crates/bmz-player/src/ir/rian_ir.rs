@@ -659,6 +659,27 @@ mod tests {
     }
 
     #[test]
+    fn course_ranking_conversion_reports_self_and_total() {
+        let resources = (1..=3)
+            .map(|rank| RianRankingResource {
+                id: format!("course-score-{rank}"),
+                attributes: serde_json::from_value(json!({
+                    "player_name": format!("login-{rank}"),
+                    "ex_score": 3000 - rank,
+                }))
+                .unwrap(),
+            })
+            .collect();
+
+        let ranking = convert_course_ranking(&"ab".repeat(32), resources, 2, Some("login-2"));
+
+        assert_eq!(ranking.ranking.entries.len(), 2);
+        assert_eq!(ranking.ranking.self_summary.as_ref().unwrap().rank, 2);
+        assert_eq!(ranking.ranking.pagination.unwrap().total, Some(3));
+        assert!(ranking.ranking.pagination.unwrap().has_more);
+    }
+
+    #[test]
     fn ranking_conversion_uses_competition_ranks_for_ties() {
         let resources = [2000, 1900, 1900, 1800]
             .into_iter()
