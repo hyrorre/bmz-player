@@ -297,6 +297,7 @@ fn result_plan_renders_gaugegraph_from_result_graph_data() {
         stagefile_background: false,
         stagefile_image_size: None,
         course_titles: Default::default(),
+        course_levels: [None; 10],
         course_result: Default::default(),
         graph: std::sync::Arc::new(ResultGraphSnapshot {
             gauge_points: vec![
@@ -464,6 +465,7 @@ fn result_plan_renders_timing_distribution_from_result_graph_data() {
         stagefile_background: false,
         stagefile_image_size: None,
         course_titles: Default::default(),
+        course_levels: [None; 10],
         course_result: Default::default(),
         graph: std::sync::Arc::new(ResultGraphSnapshot {
             timing_distribution,

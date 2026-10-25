@@ -270,6 +270,7 @@ pub(super) fn build_result_skin_draw_state(
         target_bp: snapshot.target_bp,
         target_clear_index: snapshot.target_clear_type.map(|c| c as i64),
         select_clear_index: snapshot.clear_type as i64,
+        select_course_levels: snapshot.course_levels,
         result_failed: Some(snapshot.result_failed),
         last_played_at: snapshot.last_played_at,
         autoplay: snapshot.autoplay,

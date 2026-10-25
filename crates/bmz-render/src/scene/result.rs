@@ -278,6 +278,8 @@ pub struct ResultSnapshot {
     pub stagefile_image_size: Option<SkinImageSize>,
     /// beatoraja STRING_COURSE1_TITLE..10_TITLE (150..159) for course results.
     pub course_titles: [String; 10],
+    /// LR2 course stage levels (number 250..259) for course results.
+    pub course_levels: [Option<u16>; 10],
     pub course_result: CourseResultSkinSnapshot,
     /// Result 画面の graph 系 skin object に渡すプレイ中の推移データ。
     pub graph: Arc<crate::snapshot::ResultGraphSnapshot>,

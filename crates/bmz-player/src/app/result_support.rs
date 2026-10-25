@@ -273,6 +273,36 @@ pub(super) fn apply_course_mode_lua_options(
     }
 }
 
+/// LR2 course stage levels (number 250..259) of the played stages, as Select
+/// shows them for the course. Unplayed stages after a FAILED stay empty.
+pub(super) fn course_stage_levels(course: &CourseResultSummary) -> [Option<u16>; 10] {
+    std::array::from_fn(|stage| {
+        course.entry_summaries.get(stage).and_then(|summary| summary.play_level.trim().parse().ok())
+    })
+}
+
+/// LR2 course options: 580..589 (the course has more than N stages) and
+/// 700..745 (stage N's difficulty, 0 = undefined, 1..5 = BEGINNER..INSANE).
+fn insert_lr2_course_stage_options(
+    runtime_state: &mut bmz_skin::LuaLoadRuntimeState,
+    course: &CourseResultSummary,
+) {
+    for stage in 0..10 {
+        runtime_state.option_values.insert(580 + stage as i32, course.total_entries > stage);
+    }
+    for stage in 0..5 {
+        let difficulty = course
+            .entry_summaries
+            .get(stage)
+            .map_or(0, |summary| bmz_render::plan::skin_difficulty_code(&summary.difficulty_name));
+        for code in 0..=5 {
+            runtime_state
+                .option_values
+                .insert(700 + 10 * stage as i32 + code as i32, difficulty == code);
+        }
+    }
+}
+
 pub(super) fn apply_course_result_lua_load_state(
     runtime_state: &mut bmz_skin::LuaLoadRuntimeState,
     course: &CourseResultSummary,
@@ -280,6 +310,7 @@ pub(super) fn apply_course_result_lua_load_state(
     for (index, title) in course.course_titles.iter().enumerate() {
         runtime_state.text_values.insert(150 + index as i32, title.clone());
     }
+    insert_lr2_course_stage_options(runtime_state, course);
     let course_result = course_result_skin_snapshot(course);
     runtime_state.number_values.insert(
         bmz_render::skin::SKIN_REF_BMZ_COURSE_STAGE_COUNT,

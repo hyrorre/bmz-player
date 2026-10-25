@@ -353,6 +353,7 @@ fn result_plan_uses_skin_document_for_result_and_course_result_types() {
             stagefile_background: false,
             stagefile_image_size: None,
             course_titles: Default::default(),
+            course_levels: [None; 10],
             course_result: Default::default(),
             graph: std::sync::Arc::new(ResultGraphSnapshot {
                 gauge_points: vec![
@@ -599,6 +600,7 @@ fn result_plan_supplies_result_judge_graph_data_to_skin_document() {
         stagefile_background: false,
         stagefile_image_size: None,
         course_titles: Default::default(),
+        course_levels: [None; 10],
         course_result: Default::default(),
         graph: std::sync::Arc::new(ResultGraphSnapshot {
             judge_graph_density: vec![1, 3, 2],
@@ -716,4 +718,14 @@ fn result_skin_state_maps_effective_long_note_state() {
     assert_eq!(state.rule_mode_index, 1);
     assert_eq!(state.ln_score_policy_index, Some(5));
     assert_eq!(state.note_judge_window, Some(window));
+}
+
+#[test]
+fn course_result_skin_state_supplies_lr2_course_stage_levels() {
+    let AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene() else {
+        panic!("sample result scene");
+    };
+    snapshot.course_levels[0] = Some(12);
+    let state = build_result_skin_draw_state(&snapshot, 0);
+    assert_eq!(state.select_course_levels[..2], [Some(12), None]);
 }

@@ -102,6 +102,9 @@ fn result_lr2_only_refs_and_flat_buttons_are_converted() {
         assert_eq!(lr2_number_ref(7, id), Some(bmz_skin_document::LR2_NUMBER_BASE + id));
         assert_eq!(lr2_number_ref(0, id), None);
     }
+    // Course stage levels are LR2-only on the Course Result; single results keep 250.
+    assert_eq!(lr2_number_ref(15, 250), Some(bmz_skin_document::LR2_NUMBER_BASE + 250));
+    assert_eq!(lr2_number_ref(7, 250), None);
     assert_eq!(lr2_option_ref(7, 105), Some(bmz_skin_document::LR2_OPTION_BASE + 105));
 }
 

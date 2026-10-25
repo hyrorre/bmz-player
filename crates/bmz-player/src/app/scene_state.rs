@@ -275,6 +275,11 @@ impl WinitApp {
                         .as_ref()
                         .map(|course| course.course_titles.clone())
                         .unwrap_or_default(),
+                    course_levels: self
+                        .result
+                        .finished_course
+                        .as_ref()
+                        .map_or([None; 10], course_stage_levels),
                     course_result: self
                         .result
                         .finished_course

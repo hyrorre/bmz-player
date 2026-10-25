@@ -40,7 +40,7 @@ BMZ固有のIDや詳細な動作契約は[skin.md](skin.md)、互換修正の方
 | LR2 PlayのSRC/DSTと分岐 | 種類別のSRC保持、既定画像の条件付き置換、ロード時の通常 / AUTO等の分岐、複合ELSEの否定を保持します。[仕様](skin.md#lr2のplay描画)、[変換テスト](../crates/bmz-skin/src/lr2/tests/play_compat.rs) |
 | LR2 wildcard include | CUSTOMFILE適用後に残るCSVファイル名の単一`*`から抽選します。解像度推定と本変換で選択を共有します。ディレクトリwildcard・DXA内CSVは対象外 |
 | LR2数値のセル配置 | 10 / 11 / 24セル単位のcycle、6×4 / 4×6 / 24×1の符号付き素材、空き桁・揃え・桁あふれをLR2用に評価します。[描画テスト](../crates/bmz-render/src/skin/tests/play/lr2_compat.rs) |
-| LR2 ResultのCLEAR TYPE・TARGET・DURATION | buttonのセルを横縦共通で選択し、更新後のランプ条件、MAXへの負の差、SPターゲットの最終EX、譜面・コース長を表示します。Playからの`IMAGE` / `LR2FONT`のCONTINUEとResult再読込・Course Resultへの引継ぎに対応します。[仕様](skin.md#lr2のselect--result)、[描画テスト](../crates/bmz-render/src/skin/tests/result/lr2_compat.rs) |
+| LR2 ResultのCLEAR TYPE・TARGET・DURATION | buttonのセルを横縦共通で選択し、更新後のランプ条件、MAXへの負の差、SPターゲットの最終EX、譜面・コース長を表示します。コース曲間でNoPlayに丸めたランプは、ゲージ種別button 40を描かずに表します。Course Resultの各ステージのレベル（number 250..259、option 580..589 / 700..745）とIR順位・人数に対応します。Playからの`IMAGE` / `LR2FONT`のCONTINUEとResult再読込・Course Resultへの引継ぎに対応します。[仕様](skin.md#lr2のselect--result)、[描画テスト](../crates/bmz-render/src/skin/tests/result/lr2_compat.rs) |
 | LR2 ResultのCONTINUE補完 | BMZ独自です。PlayがLua / JSONまたは別テーマのLR2スキンなら、Resultと同じテーマのLR2 Playスキンの素材（自己ベストのランプ、ゲージ画像、LR2FONT）で引継ぎを補います。RED_BELTとDecide経由は対象外です。[仕様](skin.md#lr2のselect--result)、[回帰テスト](../crates/bmz-player/src/app/tests/skin.rs) |
 | LR2 Resultの入力段階 | グラフスキップ→ランク表示→更新演出（timer 152）→退出です。timer 152を使わないW-MIX / ECSE等とランク表示時間0のスキンは更新演出の入力を挟みません。[仕様](skin.md#lr2のselect--result)、[段階テスト](../crates/bmz-skin-document/src/lr2.rs) |
 | LR2 Decideのスキップ | OpenLR2の`ProcI_Decide`に合わせ、スキップはtimer 3を開始して`#CLOSE`（無ければ`#FADEOUT`）だけ待ちます。キャンセルと時間切れはtimer 2です。いずれもシーン時計を末尾へ進めません。[仕様](skin.md#lr2のselect--result) |

@@ -31,6 +31,8 @@ fn is_song_scene(skin_type: i32) -> bool {
 pub(super) fn lr2_number_ref(skin_type: i32, id: i32) -> Option<i32> {
     match id {
         154 | 163 | 164 if is_result(skin_type) => Some(LR2_NUMBER_BASE + id),
+        // Course stage levels; the Course Result shows the played course's stages.
+        250..=259 if skin_type == 15 => Some(LR2_NUMBER_BASE + id),
         // 1P score, gauge, target diff, next rank diff, POOR including empty POOR,
         // and the best / target ghost EX and rates at the current progress.
         100 | 107 | 108 | 109 | 114 | 150 | 151 | 155..=158 if is_play(skin_type) => {

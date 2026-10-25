@@ -126,6 +126,33 @@ fn lr2_3r_stray_quotes_resolve_existing_play_images_when_available() {
 }
 
 #[test]
+fn wmix_course_result_emits_stage_levels_from_course_options() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../data/skins/WMIX_HD/courseresult/courseresult.lr2skin");
+    if !path.is_file() {
+        eprintln!("SKIP missing WMIX_HD courseresult");
+        return;
+    }
+    // Two stages: ANOTHER, then an undefined difficulty.
+    let runtime_state = crate::LuaLoadRuntimeState {
+        option_values: [(580, true), (581, true), (704, true), (710, true)].into(),
+        ..Default::default()
+    };
+    let loaded = crate::load_lr2_csv_skin_with_runtime_state(
+        &path,
+        crate::SkinKind::Result,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &runtime_state,
+    )
+    .unwrap();
+    let refs = loaded.document.value.iter().map(|value| value.ref_id).collect::<BTreeSet<_>>();
+    let level = |stage: i32| bmz_skin_document::LR2_NUMBER_BASE + 250 + stage;
+    assert!(refs.contains(&level(0)) && refs.contains(&level(1)), "{refs:?}");
+    assert!(!refs.contains(&level(2)) && !refs.contains(&250), "{refs:?}");
+}
+
+#[test]
 fn lr2_scene_assets_decode_when_available() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins");
     for (relative, kind) in [
