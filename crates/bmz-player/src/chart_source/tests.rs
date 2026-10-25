@@ -196,7 +196,14 @@ fn archive_assets_load_from_memory_and_keep_hash_copy_and_root_scope() {
     let sound = &import.chart.sounds[0].path;
     assert_eq!(&*bmz_song_resource::read(sound).unwrap().unwrap(), b"copy a");
     assert_eq!(resolved.locator.to_path_buf(), source.path);
-    assert_eq!(resolved.path, source.path);
+    assert_eq!(
+        bmz_song_resource::SongPath::parse(&resolved.path),
+        bmz_song_resource::SongPath::parse(&source.path),
+    );
+    assert_ne!(
+        resolved.path, source.path,
+        "runtime path pins the resource set, DB path stays stable"
+    );
     // Nothing is extracted next to the archives.
     assert_eq!(std::fs::read_dir(&f.dir).unwrap().count(), 2);
     assert!(f.db.available_chart_source(id).unwrap().is_some());
@@ -293,6 +300,11 @@ fn asset_only_update_invalidates_generation_without_changing_chart_identity() {
     assert_eq!(old_import.chart.identity, new_import.chart.identity);
     let sound = &new_import.chart.sounds[0].path;
     assert_eq!(&*bmz_song_resource::read(sound).unwrap().unwrap(), b"new audio");
+    // Audio/video loaders read by path, not directly through the retained set.
+    assert_eq!(
+        &*bmz_song_resource::read(&old_import.chart.sounds[0].path).unwrap().unwrap(),
+        b"old"
+    );
 }
 
 #[test]

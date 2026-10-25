@@ -4,11 +4,14 @@
 //! `C:/songs/pack.zip!/song/kick.wav`. The app reads the entries a chart needs into a
 //! [`SongResourceSet`] and [`install`]s it; chart import, audio, image and video loaders ask
 //! [`exists`] / [`read`] before touching the file system, so no archive is extracted to disk.
+//! Playback uses [`SongResourceSet::path`] to bind those reads to the loaded set.
+//! Its runtime-only tag is never stored in the library or replay metadata.
 //! Ordinary paths are not handled here and callers keep their own file system access.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
 /// Archive formats whose entries can appear in a virtual path.
@@ -35,27 +38,46 @@ pub enum SongPath {
 }
 
 impl SongPath {
+    /// Classifies stable and set-bound paths, returning the original container/entry.
+    /// Runtime set tags are private to the resource readers.
     pub fn parse(path: &Path) -> Self {
-        let text = normalize_separators(&path.to_string_lossy());
-        let lower = text.to_ascii_lowercase();
-        for (index, _) in text.match_indices('!') {
-            let rest = &text[index + 1..];
-            if !rest.is_empty() && !rest.starts_with('/') {
-                continue;
-            }
-            let is_archive = ARCHIVE_EXTENSIONS
-                .iter()
-                .any(|extension| lower[..index].ends_with(&format!(".{extension}")));
-            if !is_archive {
-                continue;
-            }
-            return match normalize_entry(rest) {
-                Some(entry) => Self::Archive { container: PathBuf::from(&text[..index]), entry },
-                None => Self::Invalid,
-            };
-        }
-        Self::File
+        parse_path(path).0
     }
+}
+
+/// Runtime paths use `pack.zip!@<set id>/entry`. The tag is outside the entry so
+/// `..` cannot escape it, and never forms part of a persisted chart locator.
+fn parse_path(path: &Path) -> (SongPath, Option<u64>) {
+    let text = normalize_separators(&path.to_string_lossy());
+    let lower = text.to_ascii_lowercase();
+    for (index, _) in text.match_indices('!') {
+        let rest = &text[index + 1..];
+        if !rest.is_empty() && !rest.starts_with(['/', '@']) {
+            continue;
+        }
+        let is_archive = ARCHIVE_EXTENSIONS
+            .iter()
+            .any(|extension| lower[..index].ends_with(&format!(".{extension}")));
+        if !is_archive {
+            continue;
+        }
+        let (rest, id) = if let Some(tagged) = rest.strip_prefix('@') {
+            let (tag, entry) = tagged.split_once('/').unwrap_or((tagged, ""));
+            let Ok(id) = u64::from_str_radix(tag, 16) else {
+                return (SongPath::Invalid, None);
+            };
+            (entry, Some(id))
+        } else {
+            (rest, None)
+        };
+        return match normalize_entry(rest) {
+            Some(entry) => {
+                (SongPath::Archive { container: PathBuf::from(&text[..index]), entry }, id)
+            }
+            None => (SongPath::Invalid, None),
+        };
+    }
+    (SongPath::File, None)
 }
 
 /// `\` to `/`, without Windows verbatim prefixes, as the library stores paths.
@@ -97,11 +119,13 @@ type Fetch = dyn Fn(&[String]) -> io::Result<Vec<(String, Vec<u8>)>> + Send + Sy
 
 /// The entry names of one archive generation and the entries read into memory.
 pub struct SongResourceSet {
+    id: u64,
     container: PathBuf,
     generation: String,
     exact: HashSet<Arc<str>>,
     folded: HashMap<String, Arc<str>>,
     files: RwLock<HashMap<Arc<str>, Arc<[u8]>>>,
+    loaded_bytes: AtomicU64,
     fetch: Option<Box<Fetch>>,
 }
 
@@ -123,14 +147,17 @@ impl SongResourceSet {
         generation: impl Into<String>,
         names: impl IntoIterator<Item = String>,
     ) -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         let exact: HashSet<Arc<str>> = names.into_iter().map(Arc::from).collect();
         let folded = exact.iter().map(|name| (fold(name), name.clone())).collect();
         Self {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             container: container.into(),
             generation: generation.into(),
             exact,
             folded,
             files: RwLock::new(HashMap::new()),
+            loaded_bytes: AtomicU64::new(0),
             fetch: None,
         }
     }
@@ -153,6 +180,13 @@ impl SongResourceSet {
         &self.generation
     }
 
+    /// A runtime-only path bound to this exact set, including after another
+    /// generation is installed. Keep the set alive until its decoders finish.
+    pub fn path(&self, entry: &str) -> PathBuf {
+        let container = normalize_separators(&self.container.to_string_lossy());
+        PathBuf::from(format!("{container}!@{:x}/{entry}", self.id))
+    }
+
     /// The archive's own name for `entry`. BMS authors rely on case-insensitive file
     /// systems, so an exact match wins and a case-folded match follows.
     pub fn entry_name(&self, entry: &str) -> Option<&str> {
@@ -165,7 +199,16 @@ impl SongResourceSet {
 
     pub fn insert(&self, entry: &str, bytes: Vec<u8>) {
         if let Some(name) = self.exact.get(entry).cloned() {
-            self.files.write().unwrap_or_else(|e| e.into_inner()).insert(name, bytes.into());
+            let mut files = self.files.write().unwrap_or_else(|e| e.into_inner());
+            let added = bytes.len() as u64;
+            let removed = files.insert(name, bytes.into()).map_or(0, |old| old.len() as u64);
+            self.loaded_bytes.store(
+                self.loaded_bytes.load(Ordering::Relaxed) - removed + added,
+                Ordering::Relaxed,
+            );
+            // Registry operations never run under the files lock.
+            drop(files);
+            with_registry(|registry| registry.enforce_limits(RECENT_BYTES_LIMIT));
         }
     }
 
@@ -191,16 +234,30 @@ impl SongResourceSet {
 
     /// Keeps only the loaded entries `keep` accepts, to free what a chart turned out not to use.
     pub fn retain_loaded(&self, mut keep: impl FnMut(&str) -> bool) {
-        self.files.write().unwrap_or_else(|e| e.into_inner()).retain(|name, _| keep(name));
+        let mut files = self.files.write().unwrap_or_else(|e| e.into_inner());
+        files.retain(|name, _| keep(name));
+        self.loaded_bytes
+            .store(files.values().map(|bytes| bytes.len() as u64).sum(), Ordering::Relaxed);
+    }
+
+    /// A concurrent play/preview may still need entries outside this chart's
+    /// plan. Only discard them when the caller and the cache are the sole owners.
+    pub fn retain_loaded_if_unshared(self: &Arc<Self>, keep: impl FnMut(&str) -> bool) {
+        with_registry(|registry| {
+            let cache_owners = registry
+                .recent
+                .iter()
+                .chain(&registry.fallback_sets)
+                .filter(|(_, set)| Arc::ptr_eq(set, self))
+                .count();
+            if Arc::strong_count(self) == cache_owners + 1 {
+                self.retain_loaded(keep);
+            }
+        });
     }
 
     pub fn loaded_bytes(&self) -> u64 {
-        self.files
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .values()
-            .map(|bytes| bytes.len() as u64)
-            .sum()
+        self.loaded_bytes.load(Ordering::Relaxed)
     }
 
     pub fn loaded_count(&self) -> usize {
@@ -243,7 +300,7 @@ type Fallback = dyn Fn(&Path) -> io::Result<Arc<SongResourceSet>> + Send + Sync;
 struct Registry {
     recent: VecDeque<(String, Arc<SongResourceSet>)>,
     /// Every installed set, found again while an owner such as a running play holds it.
-    held: Vec<(String, Weak<SongResourceSet>)>,
+    held: Vec<(String, u64, Weak<SongResourceSet>)>,
     fallback_sets: VecDeque<(String, Arc<SongResourceSet>)>,
     fallback: Option<Arc<Fallback>>,
 }
@@ -261,16 +318,10 @@ pub fn install(set: Arc<SongResourceSet>) {
     with_registry(|registry| {
         registry.recent.retain(|(other, _)| *other != key);
         registry.fallback_sets.retain(|(other, _)| *other != key);
-        registry.held.retain(|(other, held)| *other != key && held.strong_count() > 0);
-        registry.held.push((key.clone(), Arc::downgrade(&set)));
+        registry.held.retain(|(_, id, held)| *id != set.id && held.strong_count() > 0);
+        registry.held.push((key.clone(), set.id, Arc::downgrade(&set)));
         registry.recent.push_front((key, set));
-        let mut bytes = 0;
-        let mut kept = 0;
-        registry.recent.retain(|(_, set)| {
-            bytes += set.loaded_bytes();
-            kept += 1;
-            kept == 1 || (kept <= RECENT_SET_LIMIT && bytes <= RECENT_BYTES_LIMIT)
-        });
+        registry.enforce_limits(RECENT_BYTES_LIMIT);
     });
 }
 
@@ -281,10 +332,40 @@ pub fn find(container: &Path) -> Option<Arc<SongResourceSet>> {
 }
 
 impl Registry {
+    fn enforce_limits(&mut self, byte_limit: u64) {
+        let mut bytes = 0;
+        let mut kept = 0;
+        self.recent.retain(|(_, set)| {
+            bytes += set.loaded_bytes();
+            kept += 1;
+            kept == 1 || (kept <= RECENT_SET_LIMIT && bytes <= byte_limit)
+        });
+        // Fallbacks may also fetch bytes after registration. They do not get
+        // the newest-play exception and share the same total byte budget.
+        self.fallback_sets.retain(|(_, set)| {
+            bytes += set.loaded_bytes();
+            bytes <= byte_limit
+        });
+        self.held.retain(|(_, _, held)| held.strong_count() > 0);
+    }
+
     fn installed(&self, key: &str) -> Option<Arc<SongResourceSet>> {
         self.recent.iter().find(|(other, _)| other == key).map(|(_, set)| set.clone()).or_else(
-            || self.held.iter().find(|(other, _)| other == key).and_then(|(_, set)| set.upgrade()),
+            || {
+                self.held
+                    .iter()
+                    .rev()
+                    .find(|(other, _, _)| other == key)
+                    .and_then(|(_, _, set)| set.upgrade())
+            },
         )
+    }
+
+    fn pinned(&self, key: &str, id: u64) -> Option<Arc<SongResourceSet>> {
+        self.held
+            .iter()
+            .find(|(other, set_id, _)| other == key && *set_id == id)
+            .and_then(|(_, _, set)| set.upgrade())
     }
 }
 
@@ -301,13 +382,19 @@ pub fn set_fallback(
 pub fn clear() {
     with_registry(|registry| {
         registry.recent.clear();
-        registry.held.retain(|(_, held)| held.strong_count() > 0);
+        registry.held.retain(|(_, _, held)| held.strong_count() > 0);
         registry.fallback_sets.clear();
     });
 }
 
-fn resolve(container: &Path) -> io::Result<Arc<SongResourceSet>> {
+fn resolve(container: &Path, id: Option<u64>) -> io::Result<Arc<SongResourceSet>> {
     let key = container_key(container);
+    if let Some(id) = id {
+        // An expired pinned path must never fall back to the current archive.
+        return with_registry(|registry| registry.pinned(&key, id)).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "song archive resource set expired")
+        });
+    }
     let fallback = with_registry(|registry| {
         let found = registry.installed(&key).or_else(|| {
             registry
@@ -337,31 +424,34 @@ fn resolve(container: &Path) -> io::Result<Arc<SongResourceSet>> {
         registry.fallback_sets.retain(|(other, _)| *other != key);
         registry.fallback_sets.push_front((key, set.clone()));
         registry.fallback_sets.truncate(FALLBACK_SET_LIMIT);
+        registry.enforce_limits(RECENT_BYTES_LIMIT);
     });
     Ok(set)
 }
 
 /// Whether `path` names an existing archive entry. `None` for ordinary paths.
 pub fn exists(path: &Path) -> Option<bool> {
-    match SongPath::parse(path) {
+    let (path, id) = parse_path(path);
+    match path {
         SongPath::File => None,
         SongPath::Invalid => Some(false),
         SongPath::Archive { container, entry } => {
-            Some(resolve(&container).is_ok_and(|set| set.contains(&entry)))
+            Some(resolve(&container, id).is_ok_and(|set| set.contains(&entry)))
         }
     }
 }
 
 /// Bytes of an archive entry. `None` for ordinary paths.
 pub fn read(path: &Path) -> Option<io::Result<Arc<[u8]>>> {
-    match SongPath::parse(path) {
+    let (parsed, id) = parse_path(path);
+    match parsed {
         SongPath::File => None,
         SongPath::Invalid => Some(Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("song asset escapes its archive: {}", path.display()),
         ))),
         SongPath::Archive { container, entry } => {
-            Some(resolve(&container).and_then(|set| set.read(&entry)))
+            Some(resolve(&container, id).and_then(|set| set.read(&entry)))
         }
     }
 }
@@ -383,11 +473,17 @@ pub fn read_file(path: &Path) -> io::Result<Arc<[u8]>> {
 
 /// Size for diagnostics: loaded archive bytes, or file metadata.
 pub fn file_len(path: &Path) -> Option<u64> {
-    match SongPath::parse(path) {
+    let (parsed, id) = parse_path(path);
+    match parsed {
         SongPath::File => std::fs::metadata(path).ok().map(|metadata| metadata.len()),
         SongPath::Invalid => None,
         SongPath::Archive { container, entry } => {
-            find(&container)?.loaded(&entry).map(|bytes| bytes.len() as u64)
+            let set = if let Some(id) = id {
+                with_registry(|registry| registry.pinned(&container_key(&container), id))
+            } else {
+                find(&container)
+            }?;
+            set.loaded(&entry).map(|bytes| bytes.len() as u64)
         }
     }
 }

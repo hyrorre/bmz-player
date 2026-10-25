@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-26 | [書庫資源の世代固定と容量制限のレビュー修正](2026/2026-10-26-archive-resource-generation-fixes.md) |
 | 2026-10-25 | [書庫内楽曲を展開せずにメモリから再生する](2026/2026-10-25-archive-direct-playback.md) |
 | 2026-10-24 | [文字atlas満杯時のスパイクの調査・行の再利用](2026/2026-10-24-text-atlas-recycling.md) |
 | 2026-10-22 | [IR Webのnpmパッケージ更新（Nuxt 4.6）](2026/2026-10-22-ir-web-npm-upgrade.md) |

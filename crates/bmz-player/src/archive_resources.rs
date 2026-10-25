@@ -114,7 +114,9 @@ pub fn load_chart_assets(
     }
     let speculative: HashSet<&str> = opened.speculative.iter().map(String::as_str).collect();
     let trim = resources.loaded_bytes() > SET_TRIM_BYTES;
-    resources.retain_loaded(|name| used.contains(name) || (!trim && !speculative.contains(name)));
+    resources.retain_loaded_if_unshared(|name| {
+        used.contains(name) || (!trim && !speculative.contains(name))
+    });
     let missing: HashSet<String> =
         resources.unloaded(used.iter().map(String::as_str)).into_iter().collect();
     if !missing.is_empty() {

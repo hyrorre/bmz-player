@@ -97,8 +97,8 @@ impl ChartLocator {
         }
     }
 
-    /// Opens the chart for loading. Archive charts keep their virtual `archive!/entry` path
-    /// and read the chart and its assets from memory; nothing is extracted to disk.
+    /// Opens the chart with a runtime virtual path bound to its resource set.
+    /// The stable locator stays unchanged; nothing is extracted to disk.
     pub fn resolve(&self) -> Result<ResolvedChartSource> {
         match self {
             Self::File(path) => {
@@ -112,7 +112,7 @@ impl ChartLocator {
                 )?;
                 Ok(ResolvedChartSource {
                     locator: self.clone(),
-                    path: self.to_path_buf(),
+                    path: opened.resources.path(entry),
                     archive: Some(opened),
                 })
             }
@@ -122,7 +122,8 @@ impl ChartLocator {
 
 pub struct ResolvedChartSource {
     pub locator: ChartLocator,
-    /// The chart file, or its virtual `archive!/entry` path.
+    /// The chart file, or a runtime virtual path pinned to its archive resource set.
+    /// Persist `locator`, never this runtime path.
     pub path: PathBuf,
     archive: Option<crate::archive_resources::OpenedChart>,
 }

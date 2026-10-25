@@ -53,6 +53,90 @@ fn unloaded_entries_are_fetched_once_and_kept() {
     assert_eq!(set.loaded_bytes(), 5);
     set.retain_loaded(|_| false);
     assert_eq!(set.loaded_count(), 0);
+    assert_eq!(set.loaded_bytes(), 0);
+}
+
+#[test]
+fn pinned_paths_keep_their_set_across_reloads_and_expire_without_fallback() {
+    let _serial = REGISTRY_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let container = "C:/registry-generations/pack.zip";
+    let old = Arc::new(set(container, &["song/a.wav", "song/removed.wav"]));
+    old.insert("song/a.wav", b"old".to_vec());
+    old.insert("song/removed.wav", b"removed".to_vec());
+    install(old.clone());
+    let old_path = old.path("song/sub/../A.wav");
+    let removed_path = old.path("song/removed.wav");
+    assert_eq!(
+        SongPath::parse(&old_path),
+        SongPath::Archive { container: container.into(), entry: "song/A.wav".into() }
+    );
+    let new = Arc::new(SongResourceSet::new(container, "new", ["song/a.wav".into()]));
+    new.insert("song/a.wav", b"new".to_vec());
+    install(new.clone());
+    assert_eq!(&*read(&new.path("song/a.wav")).unwrap().unwrap(), b"new");
+    // A stale worker installing its earlier set must not redirect a newer play.
+    install(old.clone());
+    assert_eq!(&*read(&new.path("song/a.wav")).unwrap().unwrap(), b"new");
+    install(new.clone());
+    assert_eq!(&*read(&old_path).unwrap().unwrap(), b"old");
+    assert_eq!(&*read(&removed_path).unwrap().unwrap(), b"removed");
+    assert_eq!(file_len(&old_path), Some(3));
+    assert!(read(&old.path("../outside.wav")).unwrap().is_err());
+    // Old entries stay available even after all cache-owned references are dropped.
+    clear();
+    assert_eq!(&*read(&old_path).unwrap().unwrap(), b"old");
+    drop(old);
+    assert_eq!(exists(&old_path), Some(false));
+    assert!(read(&old_path).unwrap().is_err());
+    assert_eq!(&*read(&new.path("song/a.wav")).unwrap().unwrap(), b"new");
+}
+
+#[test]
+fn an_existing_owner_prevents_another_chart_from_trimming_its_assets() {
+    let _serial = REGISTRY_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let play = Arc::new(set("C:/registry-sharing/pack.zip", &["a.wav", "b.wav"]));
+    play.insert("a.wav", b"a".to_vec());
+    play.insert("b.wav", b"b".to_vec());
+    install(play.clone());
+    let other_chart = find(play.container()).unwrap();
+    other_chart.retain_loaded_if_unshared(|name| name == "b.wav");
+    assert_eq!(&*read(&play.path("a.wav")).unwrap().unwrap(), b"a");
+    // Removing the cache owner must not let one of two active charts trim the other.
+    clear();
+    other_chart.retain_loaded_if_unshared(|name| name == "b.wav");
+    assert!(play.loaded("a.wav").is_some());
+    drop(play);
+    other_chart.retain_loaded_if_unshared(|name| name == "b.wav");
+    assert!(other_chart.loaded("a.wav").is_none());
+    assert_eq!(other_chart.loaded_bytes(), 1);
+}
+
+#[test]
+fn registry_enforces_byte_budget_after_insert_and_lazy_fetch() {
+    let _serial = REGISTRY_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let bytes = (RECENT_BYTES_LIMIT / 2 + 1) as usize;
+    let first = Arc::new(set("C:/registry-growing/first.zip", &["a"]));
+    install(first.clone());
+    first.insert("a", vec![0; bytes]);
+    let weak = Arc::downgrade(&first);
+    let first_path = first.path("a");
+    let second = Arc::new(
+        set("C:/registry-growing/second.zip", &["a"])
+            .with_fetch(move |_| Ok(vec![("a".into(), vec![0; bytes])])),
+    );
+    install(second.clone());
+    // Lazy fetch inserts bytes into a set that was empty at install time.
+    drop(read(&second.path("a")).unwrap().unwrap());
+    assert_eq!(second.loaded_bytes(), bytes as u64);
+    // Eviction releases the cache reference, but never the running play's owner.
+    assert_eq!(file_len(&first_path), Some(bytes as u64));
+    drop(first);
+    assert!(weak.upgrade().is_none());
+    assert!(find(Path::new("C:/registry-growing/first.zip")).is_none());
+    assert!(find(second.container()).is_some());
+    // Replacing an entry updates the byte accounting instead of accumulating it.
+    second.insert("a", vec![1; 3]);
+    assert_eq!(second.loaded_bytes(), 3);
 }
 
 #[test]

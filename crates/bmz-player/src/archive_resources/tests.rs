@@ -128,7 +128,7 @@ fn reloading_an_unchanged_archive_reuses_its_set_and_a_rewrite_replaces_it() {
     let temp = Temp::new("reuse");
     let path = temp.0.join("song.zip");
     write_zip(&path, &entries(CHART));
-    let (first, _) = load(&path);
+    let (first, first_chart) = load(&path);
     let (second, _) = load(&path);
     assert!(Arc::ptr_eq(first.resources().unwrap(), second.resources().unwrap()));
 
@@ -139,8 +139,14 @@ fn reloading_an_unchanged_archive_reuses_its_set_and_a_rewrite_replaces_it() {
     assert!(!Arc::ptr_eq(first.resources().unwrap(), third.resources().unwrap()));
     let kick = sound(&chart, "KICK.wav");
     assert_eq!(&*bmz_song_resource::read(&kick).unwrap().unwrap(), b"kick v2");
-    // The earlier play keeps reading its own generation.
-    assert_eq!(&*first.resources().unwrap().read("song/kick.WAV").unwrap(), b"kick");
+    // Use the same path-based API as the decoders, including delayed opens on another thread.
+    let old_kick = sound(&first_chart, "KICK.wav");
+    assert_eq!(
+        &*std::thread::spawn(move || bmz_song_resource::read(&old_kick).unwrap().unwrap())
+            .join()
+            .unwrap(),
+        b"kick"
+    );
 }
 
 #[test]
@@ -155,4 +161,77 @@ fn chart_assets_outside_the_archive_are_rejected() {
             .unwrap();
     assert!(resolved.validate_chart_assets(&import.chart).is_err());
     assert!(bmz_song_resource::read(&import.chart.sounds[0].path).unwrap().is_err());
+}
+
+#[test]
+fn delayed_audio_image_and_video_decodes_keep_the_loaded_archive_generation() {
+    use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
+    use bmz_audio::loader::SampleLoader;
+    let temp = Temp::new("decode-generations");
+    let path = temp.0.join("song.zip");
+    let chart = b"#TITLE Pinned\n#BPM 120\n#STAGEFILE bga.png\n#WAV01 kick.bin\n#BMP01 bga.png\n#BMP02 clip.y4m\n#00111:01\n#00104:01\n#00107:02\n";
+    let write = |value: i16, color: [u8; 4]| {
+        let mut wav = b"RIFF".to_vec();
+        wav.extend(132_u32.to_le_bytes());
+        wav.extend(b"WAVEfmt ");
+        wav.extend(16_u32.to_le_bytes());
+        wav.extend(1_u16.to_le_bytes());
+        wav.extend(1_u16.to_le_bytes());
+        wav.extend(48_000_u32.to_le_bytes());
+        wav.extend(96_000_u32.to_le_bytes());
+        wav.extend(2_u16.to_le_bytes());
+        wav.extend(16_u16.to_le_bytes());
+        wav.extend(b"data");
+        wav.extend(96_u32.to_le_bytes());
+        for _ in 0..48 {
+            wav.extend(value.to_le_bytes());
+        }
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(2, 2, image::Rgba(color))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        // The same raw-video fixture format used by bmz-video's decoder tests.
+        let mut video = b"YUV4MPEG2 W2 H2 F10:1 Ip A1:1 C420jpeg\nFRAME\n".to_vec();
+        let luma = if value > 0 { 16 } else { 235 };
+        video.extend([luma, luma, luma, luma, 128, 128]);
+        write_zip(
+            &path,
+            &[
+                ("song/chart.bms", chart),
+                ("song/kick.bin", &wav),
+                ("song/bga.png", png.get_ref()),
+                ("song/clip.y4m", &video),
+            ],
+        );
+    };
+    write(8192, [255, 0, 0, 255]);
+    let (old, old_chart) = load(&path);
+    write(-8192, [0, 0, 255, 255]);
+    let (new, new_chart) = load(&path);
+    let worker = std::thread::spawn(move || {
+        for (source, chart, sample, color, video_color) in [
+            (old, old_chart, 0.25, [255, 0, 0, 255], [0, 0, 0, 255]),
+            (new, new_chart, -0.25, [0, 0, 255, 255], [255, 255, 255, 255]),
+        ] {
+            // The non-WAV extension exercises the FFmpeg memory input too.
+            let decoded = FfmpegSampleLoader::default().load(&chart.sounds[0].path).unwrap();
+            assert!(!decoded.frames.is_empty());
+            assert!((decoded.frames[0] - sample).abs() < 0.001);
+            let stage = source.resolve_asset(&chart.metadata.stage_file).unwrap();
+            let image = bmz_render::assets::load_static_rgba_image(&stage).unwrap();
+            assert_eq!(&image.pixels[..4], &color);
+            let video = &chart
+                .bga_assets
+                .iter()
+                .find(|asset| asset.path.ends_with("clip.y4m"))
+                .unwrap()
+                .path;
+            // Delayed video opening and reopening must use the same old/new bytes.
+            for _ in 0..2 {
+                let frame = bmz_video::decode_first_frame(video).unwrap();
+                assert_eq!(&frame.rgba[..4], &video_color);
+            }
+        }
+    });
+    worker.join().unwrap();
 }
