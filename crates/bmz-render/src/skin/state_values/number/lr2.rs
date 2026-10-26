@@ -135,10 +135,19 @@ pub(in crate::skin) fn lr2_2p_ex(state: &SkinDrawState) -> Option<i64> {
     }
 }
 
-/// Result retains the single-player ghost's EX, but not invented judge counts.
+/// The Result's other side. In single play it is an empty 2P player that only knows the
+/// chart's notes, as on LR2's Course Result (BMZ shows the same on the song Result).
+/// AUTO BATTLE / G-BATTLE keep the target ghost's EX, but not invented judge counts.
 pub(in crate::skin) fn lr2_result_other_number(id: i32, state: &SkinDrawState) -> Option<i64> {
     if state.lr2_opponent.is_some() {
         return Some(lr2_opponent_number(SKIN_REF_BMZ_LR2_2P_BASE + id - 100, state));
+    }
+    if !matches!(state.skin_attempt.session_mode_index, Some(3 | 4)) {
+        let empty = crate::snapshot::OpponentRenderSnapshot {
+            total_notes: state.total_notes,
+            ..Default::default()
+        };
+        return Some(lr2_player_number(&empty, id + 20, state));
     }
     let ex = lr2_target_ghost_ex(state)?;
     let max = i64::from(state.total_notes) * 2;
@@ -226,13 +235,22 @@ pub(in crate::skin) fn lr2_opponent_number(ref_id: i32, state: &SkinDrawState) -
         });
     let empty = crate::snapshot::OpponentRenderSnapshot::default();
     let opponent = state.lr2_opponent.as_ref().or(ghost.as_ref()).unwrap_or(&empty);
+    lr2_player_number(opponent, ref_id - SKIN_REF_BMZ_LR2_2P_BASE + 120, state)
+}
+
+/// LR2's 2P number 120..136 for `opponent`.
+fn lr2_player_number(
+    opponent: &crate::snapshot::OpponentRenderSnapshot,
+    number: i32,
+    state: &SkinDrawState,
+) -> i64 {
     let ex = i64::from(opponent.ex_score);
     let total = i64::from(opponent.total_notes) * 2;
     let current = i64::from(opponent.past_notes) * 2;
     let current_rate = if current > 0 { ex * 10_000 / current } else { 0 };
     let final_rate = if total > 0 { ex * 10_000 / total } else { 0 };
     let counts = opponent.judge_counts;
-    match ref_id - SKIN_REF_BMZ_LR2_2P_BASE + 120 {
+    match number {
         120 => lr2_point_score(
             counts.pgreat,
             counts.great,

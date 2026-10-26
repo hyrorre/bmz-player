@@ -164,6 +164,7 @@ fn lr2_result_flip_uses_player_values_without_fabricating_an_opponent() {
         ex_score: 1234,
         target_ex_score: Some(2345),
         result_failed: Some(false),
+        skin_attempt: SkinAttemptState { session_mode_index: Some(4), ..Default::default() },
         ..Default::default()
     };
     assert_eq!(skin_state_number(LR2_RESULT_NUMBER_BASE + 1, &state), Some(1234));

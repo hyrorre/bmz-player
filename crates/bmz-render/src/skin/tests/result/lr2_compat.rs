@@ -12,6 +12,8 @@ fn lr2_result_target_rank_duration_and_clear_conditions_are_consistent() {
         best_clear_index: Some(10),
         previous_best_clear_index: Some(8),
         result_duration_ms: 131000,
+        // G-BATTLE keeps the target ghost on the other side.
+        skin_attempt: SkinAttemptState { session_mode_index: Some(4), ..Default::default() },
         ..Default::default()
     };
     assert_eq!(skin_state_number(LR2_NUMBER_BASE + 154, &state), Some(-28));
@@ -34,6 +36,31 @@ fn lr2_result_target_rank_duration_and_clear_conditions_are_consistent() {
     assert_eq!(skin_state_number(LR2_RESULT_NUMBER_BASE + 1, &state), None);
     state.ex_score = 2076;
     assert_eq!(skin_state_number(LR2_NUMBER_BASE + 154, &state), Some(0));
+}
+
+#[test]
+fn lr2_result_other_side_is_an_empty_player_in_single_play() {
+    let mut state = SkinDrawState {
+        ex_score: 2048,
+        total_notes: 1038,
+        result_failed: Some(false),
+        target_ex_score: Some(1846),
+        target_max_combo: Some(1038),
+        ..Default::default()
+    };
+    let other =
+        |id: i32, state: &SkinDrawState| skin_state_number(LR2_RESULT_NUMBER_BASE + id, state);
+    // EX, rate, max combo and judge counts are 0; the notes stay; the EX diff and the
+    // next-rank diff follow LR2's formulas for an EX of 0.
+    for id in [20, 21, 22, 23, 25, 27, 30, 31, 32, 33, 34, 35, 36] {
+        assert_eq!(other(id, &state), Some(0), "{}", id + 100);
+    }
+    assert_eq!(other(26, &state), Some(1038));
+    assert_eq!(other(28, &state), Some(-2048));
+    assert_eq!(other(29, &state), Some(-461));
+    state.lr2_result_flip = true;
+    assert_eq!(other(1, &state), Some(0));
+    assert_eq!(other(21, &state), Some(2048));
 }
 
 #[test]
