@@ -128,6 +128,7 @@ pub(super) fn course_result_summary_for_skin(course: &CourseResultSummary) -> Re
         },
         difficulty_name: String::new(),
         play_level: String::new(),
+        battle_opponent: None,
         graph: Arc::new(aggregate_course_result_graph(&course.entry_summaries)),
     }
 }
@@ -392,6 +393,7 @@ pub(super) fn debug_boot_result_summary() -> ResultSummary {
         genre: "DEBUG".to_string(),
         difficulty_name: "ANOTHER".to_string(),
         play_level: "12".to_string(),
+        battle_opponent: None,
         graph: Arc::new(debug_boot_result_graph(duration_ms)),
     }
 }

@@ -78,6 +78,8 @@ pub struct ResultSummary {
     pub genre: String,
     pub difficulty_name: String,
     pub play_level: String,
+    /// The battle opponent's final score (AUTO BATTLE / G-BATTLE), shown as LR2's 2P.
+    pub battle_opponent: Option<bmz_render::snapshot::OpponentRenderSnapshot>,
     pub graph: Arc<ResultGraphSnapshot>,
 }
 
@@ -216,6 +218,7 @@ impl ResultSummary {
             genre: metadata.genre.clone(),
             difficulty_name: metadata.difficulty_name.clone(),
             play_level: metadata.play_level.clone(),
+            battle_opponent: None,
             graph: Arc::new(ResultGraphSnapshot::default()),
         }
     }

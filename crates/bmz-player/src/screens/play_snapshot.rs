@@ -57,6 +57,16 @@ pub use build::{
 };
 pub use cache::PlayRenderSnapshotCache;
 pub use display::apply_fast_slow_display_filter;
+
+/// The battle opponent's final score and gauge for the Result (AUTO BATTLE / G-BATTLE).
+pub(crate) fn final_opponent_render_snapshot(
+    session: &GameSession,
+) -> Option<OpponentRenderSnapshot> {
+    session
+        .opponent
+        .display_state(session.scored_total_notes)
+        .map(|opponent| display::opponent_render_snapshot(&opponent))
+}
 pub(crate) use scroll::{current_scroll_multiplier, current_scroll_multiplier_for_session};
 pub use visuals::{
     refresh_pending_play_input_visuals, refresh_play_skin_visuals,

@@ -239,18 +239,7 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         })
         .collect();
     let opponent = session.opponent.display_state(session.scored_total_notes).map(|opponent| {
-        let gauge = opponent.gauge.current();
         OpponentRenderSnapshot {
-            combo: opponent.score.combo,
-            max_combo: opponent.score.max_combo,
-            ex_score: opponent.score.ex_score(),
-            total_notes: opponent.total_notes,
-            past_notes: opponent.score.past_notes,
-            judge_counts: display_judge_counts_for_score(opponent.score),
-            gauge: gauge.value,
-            gauge_type: gauge.definition.gauge_type as i32,
-            gauge_max: gauge.definition.max,
-            gauge_border: gauge.definition.border,
             full_combo_elapsed_ms: opponent.full_combo_elapsed_ms(chart_now),
             end_of_note_elapsed_ms: end_of_note_elapsed_ms(chart_now, cache.end_of_note_time),
             gauge_increase_elapsed_ms: optional_skin_timer_elapsed_ms(
@@ -261,6 +250,7 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
                 chart_now,
                 opponent.gauge_max_started_at,
             ),
+            ..opponent_render_snapshot(&opponent)
         }
     });
     let mut snapshot = RenderSnapshot {

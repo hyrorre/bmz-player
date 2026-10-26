@@ -354,6 +354,7 @@ fn result_plan_uses_skin_document_for_result_and_course_result_types() {
             stagefile_image_size: None,
             course_titles: Default::default(),
             course_levels: [None; 10],
+            battle_opponent: None,
             course_result: Default::default(),
             graph: std::sync::Arc::new(ResultGraphSnapshot {
                 gauge_points: vec![
@@ -601,6 +602,7 @@ fn result_plan_supplies_result_judge_graph_data_to_skin_document() {
         stagefile_image_size: None,
         course_titles: Default::default(),
         course_levels: [None; 10],
+        battle_opponent: None,
         course_result: Default::default(),
         graph: std::sync::Arc::new(ResultGraphSnapshot {
             judge_graph_density: vec![1, 3, 2],

@@ -280,6 +280,8 @@ pub struct ResultSnapshot {
     pub course_titles: [String; 10],
     /// LR2 course stage levels (number 250..259) for course results.
     pub course_levels: [Option<u16>; 10],
+    /// AUTO BATTLE / G-BATTLE opponent's final score, LR2's 2P on the Result.
+    pub battle_opponent: Option<crate::snapshot::OpponentRenderSnapshot>,
     pub course_result: CourseResultSkinSnapshot,
     /// Result 画面の graph 系 skin object に渡すプレイ中の推移データ。
     pub graph: Arc<crate::snapshot::ResultGraphSnapshot>,

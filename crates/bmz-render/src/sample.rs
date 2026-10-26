@@ -323,6 +323,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         stagefile_image_size: None,
         course_titles: Default::default(),
         course_levels: [None; 10],
+        battle_opponent: None,
         course_result: Default::default(),
         graph: std::sync::Arc::new(crate::snapshot::ResultGraphSnapshot::default()),
         overlay: OverlaySnapshot::default(),

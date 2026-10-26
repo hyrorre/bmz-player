@@ -1179,6 +1179,39 @@ fn finish_snapshot_preserves_the_started_session_mode() {
 }
 
 #[test]
+fn battle_result_keeps_the_opponent_final_score_for_lr2_2p() {
+    let single = FinishSessionSnapshot::from_session(
+        &session(),
+        ChartLnProfile::default(),
+        &AppliedArrange::default(),
+    );
+    assert_eq!(single.battle_opponent, None);
+
+    let mut session = session();
+    session.session_mode_index = 4;
+    let mut score =
+        bmz_gameplay::score::ScoreState { combo: 3, max_combo: 7, ..Default::default() };
+    score.judges.fast_pgreat = 5;
+    score.judges.slow_great = 2;
+    score.judges.fast_poor = 1;
+    session.opponent.score = Some(score);
+    session.opponent.gauge = Some(session.gauge.clone());
+    let snapshot = FinishSessionSnapshot::from_session(
+        &session,
+        ChartLnProfile::default(),
+        &AppliedArrange::default(),
+    );
+    let opponent = snapshot.battle_opponent.expect("battle opponent");
+    assert_eq!((opponent.ex_score, opponent.max_combo), (12, 7));
+    assert_eq!(
+        (opponent.judge_counts.pgreat, opponent.judge_counts.great, opponent.judge_counts.poor),
+        (5, 2, 1)
+    );
+    assert_eq!(opponent.total_notes, session.scored_total_notes);
+    assert_eq!(opponent.gauge, session.gauge.current().value);
+}
+
+#[test]
 fn battle_result_keeps_the_primary_key_mode_for_skin_state() {
     for session_mode_index in [0, 4] {
         let mut session = session();

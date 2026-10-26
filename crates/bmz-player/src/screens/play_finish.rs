@@ -247,6 +247,7 @@ pub struct FinishSessionSnapshot {
     result_judgements: HashMap<NoteId, ResultJudgementDetail>,
     failed_gauge: Option<GaugeState>,
     assist: AssistRuntime,
+    battle_opponent: Option<bmz_render::snapshot::OpponentRenderSnapshot>,
 }
 
 impl FinishSessionSnapshot {
@@ -344,6 +345,7 @@ impl FinishSessionSnapshot {
             result_judgements: session.result_judgements.clone(),
             failed_gauge: (session.state == PlayState::Failed).then(|| session.gauge.clone()),
             assist: session.assist,
+            battle_opponent: crate::screens::play_snapshot::final_opponent_render_snapshot(session),
         }
     }
 }
@@ -517,6 +519,7 @@ fn finish_session_snapshot_result(
     summary.arrange = applied_arrange.arrange.as_str().to_string();
     summary.arrange_2p = applied_arrange.arrange_2p.as_str().to_string();
     summary.lane_shuffle_pattern = applied_arrange.pattern.clone().unwrap_or_default();
+    summary.battle_opponent = snapshot.battle_opponent.clone();
     summary.target_ex_score = target_ex_score;
     summary.saved_replay_slots = stored.slot_paths.each_ref().map(Option::is_some);
     if let Some(best) = &previous_best {

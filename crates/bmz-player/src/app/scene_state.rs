@@ -275,6 +275,7 @@ impl WinitApp {
                         .as_ref()
                         .map(|course| course.course_titles.clone())
                         .unwrap_or_default(),
+                    battle_opponent: summary.battle_opponent.clone(),
                     course_levels: self
                         .result
                         .finished_course

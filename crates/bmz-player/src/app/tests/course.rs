@@ -132,6 +132,7 @@ fn course_result_summary_for_skin_uses_aggregate_course_values() {
             genre: String::new(),
             difficulty_name: String::new(),
             play_level: String::new(),
+            battle_opponent: None,
             graph: Arc::new(bmz_render::snapshot::ResultGraphSnapshot {
                 gauge_points: vec![bmz_render::snapshot::ResultGaugeGraphPoint {
                     time_ms: duration_ms,

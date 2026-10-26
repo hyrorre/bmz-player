@@ -64,6 +64,45 @@ fn lr2_result_other_side_is_an_empty_player_in_single_play() {
 }
 
 #[test]
+fn lr2_result_other_side_shows_the_battle_opponent_final_score() {
+    let mut state = SkinDrawState {
+        ex_score: 2048,
+        total_notes: 1038,
+        result_failed: Some(false),
+        target_ex_score: Some(1846),
+        skin_attempt: SkinAttemptState { session_mode_index: Some(4), ..Default::default() },
+        lr2_opponent: Some(crate::snapshot::OpponentRenderSnapshot {
+            ex_score: 1500,
+            max_combo: 321,
+            total_notes: 1038,
+            past_notes: 1038,
+            judge_counts: DisplayJudgeCounts {
+                pgreat: 600,
+                great: 300,
+                bad: 7,
+                ..Default::default()
+            },
+            gauge: 77.3,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let other =
+        |id: i32, state: &SkinDrawState| skin_state_number(LR2_RESULT_NUMBER_BASE + id, state);
+    assert_eq!(other(21, &state), Some(1500));
+    assert_eq!(other(25, &state), Some(321));
+    assert_eq!(other(27, &state), Some(76));
+    assert_eq!(
+        (other(30, &state), other(31, &state), other(33, &state)),
+        (Some(600), Some(300), Some(7))
+    );
+    assert_eq!(other(35, &state), Some(72));
+    state.lr2_result_flip = true;
+    assert_eq!(other(1, &state), Some(1500));
+    assert_eq!(other(21, &state), Some(2048));
+}
+
+#[test]
 fn lr2_buttons_select_flat_cells_while_json_buttons_keep_row_selection() {
     for (divx, divy, index, expected_x, expected_y) in
         [(4, 1, 2, 0.5, 0.0), (1, 6, 2, 0.0, 2.0 / 6.0), (2, 3, 2, 0.0, 1.0 / 3.0)]

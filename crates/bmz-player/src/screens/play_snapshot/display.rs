@@ -18,6 +18,26 @@ pub(super) fn display_judge_counts_for_score(
     }
 }
 
+/// The battle opponent's score and gauge, without the Play scene's timers.
+pub(super) fn opponent_render_snapshot(
+    opponent: &bmz_gameplay::session::OpponentDisplayState<'_>,
+) -> OpponentRenderSnapshot {
+    let gauge = opponent.gauge.current();
+    OpponentRenderSnapshot {
+        combo: opponent.score.combo,
+        max_combo: opponent.score.max_combo,
+        ex_score: opponent.score.ex_score(),
+        total_notes: opponent.total_notes,
+        past_notes: opponent.score.past_notes,
+        judge_counts: display_judge_counts_for_score(opponent.score),
+        gauge: gauge.value,
+        gauge_type: gauge.definition.gauge_type as i32,
+        gauge_max: gauge.definition.max,
+        gauge_border: gauge.definition.border,
+        ..Default::default()
+    }
+}
+
 pub(super) fn ghost_ex_score_at_progress(ghost: &[u8], past_notes: u32) -> u32 {
     ghost.iter().take(past_notes as usize).map(|&judge| ghost_ex_value(judge)).sum()
 }

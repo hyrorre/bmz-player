@@ -758,6 +758,7 @@ mod tests {
             genre: String::new(),
             difficulty_name: String::new(),
             play_level: String::new(),
+            battle_opponent: None,
             graph: Default::default(),
         }
     }
