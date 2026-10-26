@@ -22,7 +22,9 @@ COPY build-ffmpeg.sh /opt/build-ffmpeg.sh
 RUN bash /opt/build-ffmpeg.sh
 COPY build-pipewire.sh /opt/build-pipewire.sh
 RUN bash /opt/build-pipewire.sh
-RUN apt-get update && apt-get install -y --no-install-recommends patchelf
+# The Linux idle-inhibition tests start a private bus as the unprivileged test user.
+RUN apt-get update && apt-get install -y --no-install-recommends patchelf dbus \
+    && runuser -u nobody -- dbus-daemon --version
 ENV PKG_CONFIG_PATH=/opt/ffmpeg/lib/pkgconfig:/opt/pipewire/lib/pkgconfig
 ENV LD_LIBRARY_PATH=/opt/ffmpeg/lib:/opt/pipewire/lib
 WORKDIR /work
