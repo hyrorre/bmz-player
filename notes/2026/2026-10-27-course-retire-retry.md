@@ -43,3 +43,23 @@ beatorajaの参照ソースは開始前キャンセルでSelectへ戻ります�
   別途実行した上記の遷移テスト1件も成功しています。startup stackの実機テスト2件はignoredのままです。
 - `cargo fmt --check`、`git diff --check`に成功しました。最終検証ログは`.local/course-retire-*.log`です。
 - 実入力・実音声・GPU上の演出、macOS / Linuxでの手動確認は未実施です。
+
+## 2026-10-27追記: 開始前リタイアでCLEARとFAILEDが重なる問題
+
+`5e31d9e0`の変更後、コース側でFAILEDのSEを開始した直後に、Play → Resultの
+共通シーン遷移が直前のクリア済みステージを使って通常ResultのCLEAR音も開始していました。
+共通シーン遷移でコース全体の結果を優先し、Result → Course Resultで同じシーンに留まる場合だけ
+コース側から直接音を開始するようにしました。入場SEや専用BGMを後から止めてしまう処理も避けます。
+
+遷移テストへ、CLEARを左チャンネル、FAILEDを右チャンネルへ登録した合成PCMの検証を追加しました。
+従来のコースSE、通常Result SEへの補完、明示的な入場SEと専用BGMの3構成で、
+Playからの直接入場と曲別Resultからの入場、コース成功と失敗の12通りを確認しました。
+既存の開始待ち中断36通りのうち、コースリザルトへ進む経路でも、実際のシーン遷移による音声出力まで確認しています。
+
+- 修正前はFAILEDだけを期待するPCMが`[0.125, 0.125]`となり、CLEARの混入を再現しました。
+  修正後は`[0.0, 0.125]`となり、入場SEとBGMの併用ではFAILED側だけが加算されます。
+- 追加PCM検証を含むWindows専用の遷移テスト、fmt、check、all-targetsの厳格Clippyが成功しました。
+- `cargo test -p bmz-player --locked`もライブラリ2,696件成功、失敗0件、44件ignoredでした。
+  Windows専用の遷移テストは別途成功し、startup stackの実機テスト2件はignoredのままです。
+- 仕様書と記録のPrettier、`git diff --check`に成功しました。ログは`.local/course-result-sound-*.log`です。
+- 実音源を使った聴取、実入力での画面操作、macOS / Linuxでの確認は未実施です。

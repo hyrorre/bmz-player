@@ -42,6 +42,81 @@ fn active_course(
     }
 }
 
+/// CLEAR is left-only and FAILED is right-only, so a mixed outcome is audible in PCM.
+fn result_sound_processor(
+    app: &mut WinitApp,
+    variant: usize,
+) -> bmz_audio::command::CommandedAudioEngine {
+    use crate::system_sound::SoundType::*;
+    let sounds = match variant {
+        0 => vec![ResultClear, ResultFail, CourseClear, CourseFail],
+        1 => vec![ResultClear, ResultFail],
+        _ => vec![
+            ResultClear,
+            ResultFail,
+            CourseClear,
+            CourseFail,
+            ResultEnterClear,
+            ResultEnterFail,
+            ResultBgmClear,
+            ResultBgmFail,
+            CourseEnterClear,
+            CourseEnterFail,
+            CourseBgmClear,
+            CourseBgmFail,
+        ],
+    };
+    let mut engine = bmz_audio::engine::AudioEngine::new(48_000);
+    let ids = sounds
+        .into_iter()
+        .enumerate()
+        .map(|(index, sound)| {
+            let id = bmz_core::ids::SoundId(index as u32 + 1);
+            let failed = matches!(
+                sound,
+                ResultFail
+                    | CourseFail
+                    | ResultEnterFail
+                    | ResultBgmFail
+                    | CourseEnterFail
+                    | CourseBgmFail
+            );
+            let frame = if failed { [0.0, 0.125] } else { [0.125, 0.0] };
+            engine.insert_sample(
+                id,
+                bmz_audio::sample::DecodedSample {
+                    channels: 2,
+                    sample_rate: 48_000,
+                    frames: frame.repeat(64),
+                },
+            );
+            (sound, id)
+        })
+        .collect();
+    let handle = bmz_audio::command::AudioEngineHandle::new(engine);
+    let processor = handle.processor();
+    app.audio.system_sound =
+        Some(crate::system_sound_manager::SystemSoundManager::with_id_map(handle, ids));
+    let mix = &mut app.boot.profile_config.audio_mix;
+    mix.master_volume = 100;
+    mix.system_bgm_volume = 100;
+    mix.system_se_volume = 100;
+    processor
+}
+
+fn assert_result_pcm(
+    processor: &mut bmz_audio::command::CommandedAudioEngine,
+    frame: u64,
+    failed: bool,
+    variant: usize,
+) {
+    let amplitude = if variant == 2 { 0.25 } else { 0.125 };
+    let expected = if failed { [0.0, amplitude] } else { [amplitude, 0.0] };
+    let mut pcm = [0.0; 2];
+    assert!(processor.render_stereo(frame, &mut pcm));
+    assert_eq!(pcm, expected, "only the course outcome's SE and optional course BGM may play");
+}
+
 #[test]
 #[ignore = "requires an isolated Winit event loop and offscreen GPU; run alone with --ignored"]
 fn course_retirement_and_retry_preserve_results_and_cancel_pending_launches() {
@@ -104,6 +179,9 @@ fn course_retirement_and_retry_preserve_results_and_cancel_pending_launches() {
     for mode in 0..3 {
         for completed in 0..3 {
             for gesture in 0..4 {
+                let sound_variant = gesture % 3;
+                let mut sound_processor = result_sound_processor(&mut app, sound_variant);
+                app.integrations.last_scene_kind = Some(AppSceneKind::Play);
                 app.clear_finished_course();
                 app.result.finished_play = None;
                 let mut course = active_course(course_id, &definition, completed);
@@ -197,6 +275,8 @@ fn course_retirement_and_retry_preserve_results_and_cancel_pending_launches() {
                 );
                 app.poll_play_preload();
                 app.finish_play_ending();
+                let scene = app.current_scene_kind();
+                app.update_window_title_for_scene(scene);
                 assert!(app.play.active_course.is_none());
                 assert!(app.play.pending_play_start.is_none());
                 assert!(app.play.pending_course_stage_launch.is_none());
@@ -205,6 +285,7 @@ fn course_retirement_and_retry_preserve_results_and_cancel_pending_launches() {
                     assert_eq!(app.view_state(), AppViewState::Select);
                     assert!(app.result.finished_course.is_none());
                 } else {
+                    assert_result_pcm(&mut sound_processor, 0, true, sound_variant);
                     assert_eq!(app.view_state(), AppViewState::Result);
                     let result = app.result.finished_course.as_ref().unwrap();
                     assert_eq!(result.played_entries, completed);
@@ -265,5 +346,23 @@ fn course_retirement_and_retry_preserve_results_and_cancel_pending_launches() {
         assert!(options.initial_gauge_values.is_none());
         assert!(options.initial_course_combo.is_none());
         app.abort_pending_play_start();
+    }
+
+    // The final course result can follow either Play directly or a stage Result.
+    for previous in [AppSceneKind::Play, AppSceneKind::Result] {
+        for completed in [1, 3] {
+            for variant in 0..3 {
+                app.clear_finished_course();
+                app.result.finished_play = None;
+                app.play.active_course = Some(active_course(course_id, &definition, completed));
+                app.integrations.last_scene_kind = Some(previous);
+                let mut processor = result_sound_processor(&mut app, variant);
+                app.finish_active_course();
+                app.update_window_title_for_scene(AppSceneKind::Result);
+                assert_result_pcm(&mut processor, 0, completed < 3, variant);
+                app.update_window_title_for_scene(AppSceneKind::Result);
+                assert_result_pcm(&mut processor, 1, completed < 3, variant);
+            }
+        }
     }
 }

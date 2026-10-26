@@ -200,6 +200,10 @@ impl WinitApp {
             AppSceneKind::Decide => self.play_system_sound(SoundType::Decide),
             AppSceneKind::Play => {}
             AppSceneKind::Result => {
+                if let Some(course) = self.result.finished_course.as_ref() {
+                    self.play_course_result_entry_sound(course.final_clear_type);
+                    return;
+                }
                 let Some(finished) = self.result.finished_play.as_ref() else {
                     return;
                 };

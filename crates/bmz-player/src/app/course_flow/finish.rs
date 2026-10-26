@@ -439,7 +439,11 @@ impl WinitApp {
             .as_ref()
             .map(|course| course.final_clear_type)
             .unwrap_or(bmz_core::clear::ClearType::Failed);
-        self.play_course_result_entry_sound(clear_type);
+        // Result -> Course Result stays in the same app scene. A direct entry
+        // from Play instead lets the scene transition start the course audio once.
+        if self.integrations.last_scene_kind == Some(AppSceneKind::Result) {
+            self.play_course_result_entry_sound(clear_type);
+        }
     }
 }
 
