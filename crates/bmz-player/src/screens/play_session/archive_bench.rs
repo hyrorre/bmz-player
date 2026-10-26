@@ -2,11 +2,13 @@
 //!
 //! ```text
 //! BMZ_ARCHIVE_BENCH_ROOT=<dir with archives> BMZ_ARCHIVE_BENCH_ITER=3 \
-//!   cargo test -p bmz-player --release --lib archive_bench -- --ignored --nocapture
+//!   cargo test -p bmz-player --release --lib --locked \
+//!   screens::play_session::archive_bench::archive_bench -- --exact --ignored --nocapture
 //! ```
 //!
 //! `BMZ_ARCHIVE_BENCH_FILTER` selects song folders by a substring of their path.
-//! Each process starts cold, so the first iteration includes archive reading.
+//! Each process starts without the resource cache, so the first iteration includes
+//! archive reading. This does not flush the operating system's file cache.
 use super::*;
 use crate::config::app_config::{AppConfig, PathEntry, ScanConfig};
 use crate::storage::migration::{LIBRARY_MIGRATIONS, run_migrations};
@@ -22,6 +24,11 @@ fn archive_bench() {
     let Ok(root) = std::env::var("BMZ_ARCHIVE_BENCH_ROOT") else {
         return;
     };
+    let _ = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_test_writer()
+        .with_max_level(tracing::Level::INFO)
+        .try_init();
     let filter = std::env::var("BMZ_ARCHIVE_BENCH_FILTER").unwrap_or_default();
     let iterations = std::env::var("BMZ_ARCHIVE_BENCH_ITER")
         .ok()
@@ -52,6 +59,20 @@ fn archive_bench() {
     }
     crate::archive_resources::install_fallback();
     for (folder, chart_id) in folders {
+        if std::env::var_os("BMZ_ARCHIVE_BENCH_PREFETCH").is_some() {
+            let source = db.available_chart_source(chart_id).unwrap().unwrap();
+            if let crate::chart_source::ChartLocator::Archive { container, entry } =
+                source.locator().unwrap()
+            {
+                let started = Instant::now();
+                crate::archive_resources::prefetch_chart(&container, &entry, &Default::default())
+                    .unwrap();
+                println!(
+                    "bench prefetch folder={folder} elapsed_ms={}",
+                    started.elapsed().as_millis()
+                );
+            }
+        }
         for iteration in 0..iterations {
             let options =
                 PlaySessionOptions { read_archive_assets: true, ..PlaySessionOptions::default() };
@@ -99,6 +120,83 @@ fn archive_bench() {
                  resident_bytes={resident}",
                 preloaded.audio.samples.source_count(),
             );
+        }
+    }
+}
+
+#[test]
+#[ignore = "needs BMZ_LOAD_BENCH_DB pointing to an isolated library snapshot"]
+fn native_load_latency_bench() {
+    let Ok(path) = std::env::var("BMZ_LOAD_BENCH_DB") else {
+        return;
+    };
+    let _ = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_test_writer()
+        .with_max_level(tracing::Level::INFO)
+        .try_init();
+    let db = LibraryDatabase::open(Path::new(&path)).unwrap();
+    let ids = std::env::var("BMZ_LOAD_BENCH_CHART_IDS").unwrap_or_else(|_| "29721,36102".into());
+    for id in ids.split(',').map(|id| id.parse::<i64>().unwrap()) {
+        let mut chart_for_audio = None;
+        for iteration in 0..4 {
+            let started = Instant::now();
+            let preloaded = preload_play_session_for_chart(
+                &db,
+                id,
+                PlaySessionOptions {
+                    sample_rate: 44_100,
+                    read_archive_assets: true,
+                    ..Default::default()
+                },
+                1.0,
+            )
+            .unwrap();
+            println!(
+                "native bench chart_id={id} iteration={iteration} preload_ms={} sources={} failed_sounds={}",
+                started.elapsed().as_millis(),
+                preloaded.audio.samples.source_count(),
+                preloaded
+                    .sample_report
+                    .iter()
+                    .filter(|report| matches!(report.status, LoadedSampleStatus::Failed(_)))
+                    .count()
+            );
+            chart_for_audio = Some(preloaded.chart.clone());
+        }
+        let chart = chart_for_audio.unwrap();
+        for iteration in 0..4 {
+            for cached in if iteration % 2 == 0 { [false, true] } else { [true, false] } {
+                let started = Instant::now();
+                let (engine, report) = if cached {
+                    build_audio_engine_for_chart_with_progress(&chart, 44_100, |_, _| {})
+                } else {
+                    let mut engine = bmz_audio::engine::AudioEngine::new(44_100);
+                    let make = || {
+                        Box::new(bmz_audio::ffmpeg_loader::FfmpegSampleLoader::default())
+                            as Box<dyn bmz_audio::loader::SampleLoader + Send>
+                    };
+                    let report = bmz_audio::loader::load_chart_samples_parallel_with_progress(
+                        &mut engine,
+                        &chart,
+                        bmz_audio::loader::ParallelSampleDecode {
+                            threads: play_sample_decode_threads(),
+                            make_loader: &make,
+                        },
+                        |_, _| {},
+                    );
+                    (engine, report)
+                };
+                println!(
+                    "audio bench chart_id={id} cached={cached} iteration={iteration} elapsed_ms={} sources={} failed_sounds={}",
+                    started.elapsed().as_millis(),
+                    engine.samples.source_count(),
+                    report
+                        .iter()
+                        .filter(|report| matches!(report.status, LoadedSampleStatus::Failed(_)))
+                        .count()
+                );
+            }
         }
     }
 }

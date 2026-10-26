@@ -150,12 +150,14 @@ use crate::screens::settings_model::{
 use crate::select_options::{
     ArrangeOption, DoubleOption, HsFixOption, ResolvedTarget, SessionMode, TargetOption,
 };
+#[cfg(test)]
+use crate::skin_loader::install_decoded_skin;
 use crate::skin_loader::{
     BeatorajaSkinDecodeRequest, DecodedSkin, PreparedSource, SharedSkinGpuTextureCache,
     SkinFontCacheKey, SkinKind, UploadedSkin, decode_beatoraja_skin_request,
     default_play_skin_document_path_from_paths, default_skin_document_path_from_paths,
-    enabled_options_from_selections, install_decoded_font, install_decoded_skin,
-    is_decodable_skin_path, is_json_skin_path, is_lr2_skin_path, is_lua_skin_path,
+    enabled_options_from_selections, install_decoded_font, is_decodable_skin_path,
+    is_json_skin_path, is_lr2_skin_path, is_lua_skin_path,
     load_default_skin_into_renderer_from_paths, play_skin_selection_for_session,
     set_decoded_skin_context, upload_decoded_skin_with_texture_cache,
 };
@@ -263,6 +265,7 @@ mod result_timing_support;
 mod rival_sync;
 mod runtime_state;
 mod scene_input;
+mod select_archive_preload;
 mod select_assets;
 #[path = "app/select_course_builder.rs"]
 mod select_course_builder;

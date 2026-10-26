@@ -150,6 +150,68 @@ fn reloading_an_unchanged_archive_reuses_its_set_and_a_rewrite_replaces_it() {
 }
 
 #[test]
+fn select_prefetch_reuses_the_play_set_and_still_drops_unused_entries() {
+    let temp = Temp::new("prefetch");
+    let path = temp.0.join("song.7z");
+    write_7z(&path, &entries(CHART));
+    prefetch_chart(&path, "song/chart.bms", &Default::default()).unwrap();
+    let prefetched = bmz_song_resource::find(&path).unwrap();
+    assert!(prefetched.loaded("song/unused.wav").is_some());
+    let pinned = prefetched.path("song/chart.bms");
+    drop(prefetched);
+    let (resolved, _) = load(&path);
+    assert_eq!(resolved.path, pinned);
+    assert!(resolved.resources().unwrap().loaded("song/unused.wav").is_none());
+    assert!(resolved.resources().unwrap().loaded("song/kick.WAV").is_some());
+}
+
+#[test]
+fn concurrent_first_archive_loads_share_one_set() {
+    let temp = Temp::new("concurrent");
+    let path = temp.0.join("song.7z");
+    write_7z(&path, &entries(CHART));
+    let barrier = std::sync::Barrier::new(8);
+    let opened = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                scope.spawn(|| {
+                    barrier.wait();
+                    open_chart(&path, "song/chart.bms", &Default::default()).unwrap()
+                })
+            })
+            .collect();
+        workers.into_iter().map(|worker| worker.join().unwrap()).collect::<Vec<_>>()
+    });
+    assert!(opened.iter().all(|item| Arc::ptr_eq(&item.resources, &opened[0].resources)));
+}
+
+#[test]
+fn a_prefetch_waiting_for_an_archive_reader_can_be_cancelled() {
+    let temp = Temp::new("cancel-prefetch");
+    let path = temp.0.join("song.zip");
+    write_zip(&path, &entries(CHART));
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        let held_path = &path;
+        let held = scope.spawn(move || {
+            prefetch::with_load_lock(held_path, &Default::default(), || {
+                ready_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(())
+            })
+            .unwrap()
+        });
+        ready_rx.recv().unwrap();
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let control = ArchiveControl { cancelled: Some(cancel), ..Default::default() };
+        assert!(prefetch::with_load_lock(&path, &control, || Ok(())).is_err());
+        release_tx.send(()).unwrap();
+        held.join().unwrap();
+    });
+}
+
+#[test]
 fn chart_assets_outside_the_archive_are_rejected() {
     let temp = Temp::new("escape");
     let path = temp.0.join("song.zip");

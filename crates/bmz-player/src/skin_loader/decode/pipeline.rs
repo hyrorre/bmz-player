@@ -212,32 +212,33 @@ pub fn decode_beatoraja_skin_request(
         required_skin_source_ids(&document).into_iter().map(str::to_string).collect();
     let warn_missing_required = kind.warn_missing_required_sources();
 
-    tracing::debug!(?kind, font_count = document.font.len(), "skin decode fonts begin");
-    let decoded_fonts = decode_skin_fonts(
-        &document,
-        &skin_root,
-        &resolved_files,
-        path_context.as_ref(),
-        font_namespace,
-        font_cache.as_ref(),
-        installed_fonts.as_ref(),
-    );
-    tracing::debug!(
-        ?kind,
-        decoded_font_count = decoded_fonts.fonts.len(),
-        "skin decode fonts complete"
-    );
-
-    tracing::debug!(?kind, source_count = document.source.len(), "skin decode sources begin");
-    let decoded_sources = decode_skin_sources(
-        &document,
-        &skin_root,
-        &resolved_files,
-        path_context.as_ref(),
-        &required_sources,
-        warn_missing_required,
-        source_cache.as_ref(),
-        texture_cache.as_ref(),
+    // Both stages only read the document. Keep Lua construction and random file
+    // selection ahead of this join, then decode independent pixel/font payloads
+    // together on the same bounded Rayon pool.
+    let (decoded_fonts, decoded_sources) = rayon::join(
+        || {
+            decode_skin_fonts(
+                &document,
+                &skin_root,
+                &resolved_files,
+                path_context.as_ref(),
+                font_namespace,
+                font_cache.as_ref(),
+                installed_fonts.as_ref(),
+            )
+        },
+        || {
+            decode_skin_sources(
+                &document,
+                &skin_root,
+                &resolved_files,
+                path_context.as_ref(),
+                &required_sources,
+                warn_missing_required,
+                source_cache.as_ref(),
+                texture_cache.as_ref(),
+            )
+        },
     );
     tracing::debug!(
         ?kind,

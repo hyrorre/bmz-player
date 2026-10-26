@@ -172,7 +172,7 @@ CLI引数・サブコマンドの一覧は`--help`と[cli.rs](../crates/bmz-play
 
 ### Windows debug起動のスタック回帰と調査ログ
 
-次のテストは別プロセスでdebug実行ファイルを起動し、LR2 Selectスキンの同期ロードと
+次のテストは別プロセスでdebug実行ファイルを起動し、LR2 Selectスキンの初回ロードと
 3フレーム描画・正常終了を確認します。GPU・音声デバイスとウィンドウ表示が必要なため、
 通常のテスト実行ではignoreします。設定・DBは一時ディレクトリに作成します。
 合成スキンは常に検証し、WMIXは`data/skins/WMIX_HD`に素材がある場合に検証します。
@@ -181,7 +181,10 @@ CLI引数・サブコマンドの一覧は`--help`と[cli.rs](../crates/bmz-play
 cargo test -p bmz-player --locked --test startup_stack -- --ignored --test-threads=1
 ```
 
-通常のinfoログにはdefault manifestのロード・同期decode・installの開始と完了を記録します。
+Selectの初回decodeはworkerで行い、ウィンドウ・GPU初期化と並行させます。
+最初の描画前にinstall完了を待ち、画面寸法に依存したLuaの再要求も完了させます。
+infoログの`startup select skin ready before first frame`は、その時点で残っていた待機時間です。
+constructorの`skins_ms`は要求の投入時間であり、decode全体の所要時間ではありません。
 JSON変換やフォント・画像処理の段階まで調べる場合は、PowerShellで次を使います。
 `RUST_LOG`は設定ファイルのログレベルより優先されます。
 
@@ -189,7 +192,7 @@ JSON変換やフォント・画像処理の段階まで調べる場合は、Powe
 New-Item -ItemType Directory -Force .local | Out-Null
 $bmzPreviousRustLog = $env:RUST_LOG
 try {
-    $env:RUST_LOG = 'info,bmz_skin=debug,bmz_player::skin_loader=debug'
+    $env:RUST_LOG = 'info,bmz_skin=debug,bmz_player::skin_loader=debug,bmz_player::app::skin_flow_upload=debug'
     cargo run -p bmz-player 2>&1 | Tee-Object .local/startup-console.log
 } finally {
     $env:RUST_LOG = $bmzPreviousRustLog
@@ -201,6 +204,29 @@ LR2のコマンド単位の追跡は`bmz_skin::lr2=trace`、個々のフォン�
 解析済みコマンドの番号です。並列workerのログが混在するため、スキンのpathと
 ファイルログのthread名・IDも合わせて確認します。
 原因と修正時の計測は[debug起動のスタックオーバーフロー調査](../notes/2026/2026-10-14-debug-startup-stack-overflow.md)に記録しています。
+
+### Playロードの比較計測
+
+Playの候補ファイル確認・decode・VOLWAV・出力レート変換は最大8 workerで処理します。
+Decideでは音源とPlay skinの先読みを始めてから、画像準備とDecide skinの完了を待ちます。
+Select / Decideの再要求では、同じファイル状態の適用済みフォントを再デコードしません。
+フォントとsource画像も並行してdecodeするため、個別の`*_decode_us`を合計して壁時計時間にしません。
+スキンの`loadstart` / `loadend` / `playstart`による演出時間とは分けて確認します。
+
+通常ファイルは、隔離したライブラリDBと存在する譜面IDを指定して比較します。
+音量解析キャッシュを書き込むため、普段使うDBを直接指定しないでください。
+
+```powershell
+$env:BMZ_LOAD_BENCH_DB = 'C:/bench/data/library.db'
+$env:BMZ_LOAD_BENCH_CHART_IDS = '123,456'
+cargo test -p bmz-player --release --lib --locked screens::play_session::archive_bench::native_load_latency_bench -- --exact --ignored --nocapture
+```
+
+書庫は`BMZ_ARCHIVE_BENCH_ROOT`に書庫を置いたディレクトリを指定し、
+同じ書式で`...::archive_bench`を完全一致で実行します。
+`BMZ_ARCHIVE_BENCH_PREFETCH=1`を設定すると、選曲中の資源先読みを先に実行します。
+この場合も先読み自体の時間を別に記録し、初回処理全体が短くなったとは扱いません。
+比較条件と結果は[ロードの追加最適化](../notes/2026/2026-10-26-load-latency-followup.md)を参照してください。
 
 IR Webの環境・DB・検証コマンドは[ir.md](ir.md)の「開発環境と実装の入口」を参照します。
 

@@ -191,15 +191,11 @@ impl WinitApp {
             let multiplier = decide_total_notes_multiplier(source_key_mode, &options);
             snapshot.total_notes = chart.scored_total_notes(policy).saturating_mul(multiplier);
         }
+        // Begin chart/audio work before waiting for the Decide skin or loading
+        // presentation images. The options and source copy are fixed above.
+        let preparation_started_at = Instant::now();
+        self.start_play_preload(chart_id, options.clone());
         self.reload_decide_skin_for_chart(&snapshot);
-        // Play 画面へ入ってから stagefile / backbmp の有無が切り替わると、ロード演出中に
-        // 代替タイトルから曲画像へ差し替わって見える。Decide 中に先行ロードし、
-        // Play の最初の snapshot から同じ runtime image 100 / 101 を使えるようにする。
-        if let Some(chart) = &chart_metadata {
-            self.prepare_play_meta_image_textures_from_chart(chart);
-        } else {
-            self.prepare_play_meta_image_textures(chart_id);
-        }
         // Play スキンは裏で decode+upload を進めるが、Decide 入場では待たない。
         // 実際の Play 入場で `ensure_skin_ready` が保険として残る。
         let play_skin_key_mode = chart_metadata
@@ -233,11 +229,23 @@ impl WinitApp {
             play_skin_key_mode,
             &mut play_skin_runtime_state,
         );
-        self.start_play_preload(chart_id, options.clone());
         self.spawn_play_skin_decode_for(
             play_skin_key_mode,
             options.session_mode,
             play_skin_runtime_state,
+        );
+        // All workers now run while STAGEFILE/BACKBMP are prepared. Keep the
+        // initial Play snapshot stable and wait for Decide before scene entry.
+        if let Some(chart) = &chart_metadata {
+            self.prepare_play_meta_image_textures_from_chart(chart);
+        } else {
+            self.prepare_play_meta_image_textures(chart_id);
+        }
+        self.ensure_skin_ready(SkinKind::Decide);
+        tracing::info!(
+            chart_id,
+            presentation_prepare_ms = preparation_started_at.elapsed().as_millis(),
+            "decide presentation prepared while play preload runs"
         );
         let now = Instant::now();
         self.play.pending_decide = Some(Box::new(DecideTransition {

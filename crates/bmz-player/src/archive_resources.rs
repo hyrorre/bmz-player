@@ -17,6 +17,9 @@ use crate::song_archive::{self, ArchiveControl, ArchiveEntry, ArchiveGeneration,
 /// A set holding more than this drops the entries the next chart does not use.
 const SET_TRIM_BYTES: u64 = 1 << 30;
 
+mod prefetch;
+pub(crate) use prefetch::prefetch_chart;
+
 /// Lets loaders read an archive no chart load installed, e.g. a Select image or an
 /// evicted set. Entries are then read one at a time.
 pub fn install_fallback() {
@@ -57,19 +60,27 @@ pub struct OpenedChart {
 /// archive is unchanged. Solid archives also read the chart's folder in the same pass, since
 /// every later read decodes the archive from the start again.
 pub fn open_chart(container: &Path, chart: &str, control: &ArchiveControl) -> Result<OpenedChart> {
+    prefetch::with_load_lock(container, control, || open_chart_locked(container, chart, control))
+}
+
+fn open_chart_locked(
+    container: &Path,
+    chart: &str,
+    control: &ArchiveControl,
+) -> Result<OpenedChart> {
     let index = song_archive::inspect(container, control)?;
     let resources = match bmz_song_resource::find(container) {
         Some(set) if set.generation() == index.generation.fingerprint => set,
         _ => Arc::new(new_set(container, &index)),
     };
-    let mut speculative = Vec::new();
+    let mut speculative = prefetch::take_speculative(&resources);
     // A folder locator has no chart entry to read.
     if resources.contains(chart) && resources.loaded(chart).is_none() {
         let folder = chart.rsplit_once('/').map_or("", |(folder, _)| folder);
         let solid = index.solid;
         let pick =
             |entry: &ArchiveEntry| entry.name == chart || (solid && in_folder(&entry.name, folder));
-        speculative = load(&resources, container, &index.generation, control, &pick)?;
+        speculative.extend(load(&resources, container, &index.generation, control, &pick)?);
         speculative.retain(|name| name != chart);
     }
     bmz_song_resource::install(resources.clone());
@@ -100,6 +111,17 @@ fn load(
 /// Reads every entry `chart` uses that is not in memory yet in one pass: sound candidates in
 /// beatoraja's fallback order, BGA files and the STAGEFILE / BACKBMP / BANNER images.
 pub fn load_chart_assets(
+    opened: &OpenedChart,
+    chart_path: &Path,
+    chart: &PlayableChart,
+    control: &ArchiveControl,
+) -> Result<()> {
+    prefetch::with_load_lock(opened.resources.container(), control, || {
+        load_chart_assets_locked(opened, chart_path, chart, control)
+    })
+}
+
+fn load_chart_assets_locked(
     opened: &OpenedChart,
     chart_path: &Path,
     chart: &PlayableChart,

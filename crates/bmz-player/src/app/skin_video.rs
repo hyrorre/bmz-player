@@ -112,6 +112,7 @@ fn skin_video_texture_visible_in_command(
     }
 }
 
+#[cfg(test)]
 pub(super) fn skin_video_sources_from_decoded(decoded: &DecodedSkin) -> Vec<ActiveSkinVideoSource> {
     let enabled_options = decoded.document.enabled_options();
     decoded

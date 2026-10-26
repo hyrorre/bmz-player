@@ -74,11 +74,17 @@ fn assert_startup(select: &Path) {
     };
     let log = std::fs::read_to_string(console).unwrap();
     assert!(status.success(), "startup failed: {status}\n{log}");
-    assert!(
-        log.contains("startup synchronous skin install complete"),
-        "Select install missing: {log}"
-    );
+    let ready = log
+        .lines()
+        .find(|line| line.contains("startup select skin ready before first frame"))
+        .unwrap_or_else(|| panic!("Select readiness missing: {log}"));
+    assert!(ready.contains("select_installed=true"), "Select install missing: {log}");
     assert!(log.contains("first surface frame presented"), "first present missing: {log}");
+    assert!(
+        log.find("startup select skin ready before first frame").unwrap()
+            < log.find("first surface frame presented").unwrap(),
+        "Select must precede first present: {log}"
+    );
     assert!(log.contains("smoke exit frame count reached"), "smoke exit missing: {log}");
 }
 

@@ -55,6 +55,24 @@ impl WinitApp {
     }
 
     pub(super) fn sync_select_preview_audio(&mut self) {
+        let archive_target =
+            self.select.select_items.get(self.select.selected_index).and_then(|item| {
+                let SelectItem::Chart(row) = item else {
+                    return None;
+                };
+                let chart = row.chart.as_ref()?;
+                (chart.folder_path.contains('!')
+                    && matches!(
+                        bmz_song_resource::SongPath::parse(Path::new(&chart.folder_path)),
+                        bmz_song_resource::SongPath::Archive { .. }
+                    ))
+                .then_some((chart.chart_id, chart.folder_path.as_str()))
+            });
+        self.select.select_assets.archive_preload.update(
+            archive_target,
+            self.select.select_bar_started_at.elapsed() >= SELECT_PREVIEW_START_DELAY,
+            &self.boot.app_paths.library_db,
+        );
         if self.selected_chart_needs_generated_preview_distribution() {
             self.ensure_visible_select_chart_distributions(25);
         }

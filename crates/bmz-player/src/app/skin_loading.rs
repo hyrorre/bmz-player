@@ -2,11 +2,11 @@ use super::*;
 
 /// 起動時のスキンロード処理。
 ///
-/// - default skin は必ず一度だけ renderer にアップロードする。
-/// - select の JSON skin は同期デコード+install（Select 画面を最短で表示するためクリティカルパス）。
-/// - decide / result の JSON skin はバックグラウンドスレッドで Phase A (decode) を実行。
+/// - default skin は必ず一度だけ renderer にインストールする。
+/// - select skin はwindow/surface初期化と並行してdecodeし、初回描画前にinstallする。
+/// - decide / result skin はバックグラウンドスレッドで Phase A (decode) を実行。
 ///   完了したものは main thread の `try_recv` で順次 Phase B (install) する。
-/// - select/decide/result の各パスが JSON 以外 (空文字または非対応) の場合は警告ログのみ。
+/// - 空パスは同梱スキンを使い、非対応のパスは警告ログのみ。
 /// - プレイスキンは決定画面でチャートの key_mode から個別に decode するためここでは扱わない。
 pub(super) fn load_initial_skin_textures(
     renderer: &mut Renderer,
@@ -21,12 +21,12 @@ pub(super) fn load_initial_skin_textures(
     experimental_detail_options: bool,
 ) -> (Option<SkinManifest>, HashMap<SkinKind, Vec<ActiveSkinVideoSource>>, bool, bool, bool) {
     tracing::info!("startup initial skin texture load begin");
-    // Decide / Result の JSON skin は Select の同期ロードより**前**に decode スレッドを起動して
-    // CPU をフル活用する。Select の sync 処理 (PNG GPU upload など) と並列に decode が進む。
-    let pending_select = false;
+    // Frontend payload decoding overlaps window/surface initialization. The
+    // initial Select is installed before the first frame in ensure_window.
+    let mut pending_select = false;
     let mut pending_decide = false;
     let mut pending_result = false;
-    let mut skin_video_sources = HashMap::new();
+    let skin_video_sources = HashMap::new();
 
     let decide_trimmed = skin.decide.trim().to_string();
     let result_trimmed = skin.result.trim().to_string();
@@ -150,7 +150,7 @@ pub(super) fn load_initial_skin_textures(
         "startup default skin manifest load complete"
     );
 
-    // Select skin (クリティカルパス: 起動直後に表示される)
+    // Select payload decoding overlaps window creation and surface attachment.
     let select_trimmed = skin.select.trim();
     if load_frontend_skins {
         let select_path = if select_trimmed.is_empty() {
@@ -171,28 +171,27 @@ pub(super) fn load_initial_skin_textures(
                 tracing::info!(
                     kind = ?SkinKind::Select,
                     path = %path.display(),
-                    "startup synchronous skin load begin"
+                    "startup asynchronous select skin load begin"
                 );
-                let video_sources = apply_json_skin_sync(
-                    renderer,
+                spawn_skin_decode(
                     pipeline,
-                    app_paths,
-                    &path,
-                    SkinKind::Select,
-                    default_manifest.as_ref(),
-                    &active_select_options,
-                    active_select_files,
-                    &lua_runtime_state_with_mode(
-                        lua_runtime_state_with_skin_offsets(
-                            lua_runtime_state_for_frontend(player_name, ir_name),
-                            &skin.select_offsets,
+                    SkinDecodeRequest::new(
+                        generation,
+                        path,
+                        SkinKind::Select,
+                        active_select_options,
+                        active_select_files.clone(),
+                        lua_runtime_state_with_mode(
+                            lua_runtime_state_with_skin_offsets(
+                                lua_runtime_state_for_frontend(player_name, ir_name),
+                                &skin.select_offsets,
+                            ),
+                            lua_runtime_mode,
                         ),
-                        lua_runtime_mode,
-                    ),
+                    )
+                    .with_library_roots(app_paths.skin_library_roots()),
                 );
-                if !video_sources.is_empty() {
-                    skin_video_sources.insert(SkinKind::Select, video_sources);
-                }
+                pending_select = true;
             }
             Ok(path) => {
                 tracing::warn!(
@@ -329,7 +328,8 @@ pub(super) fn reload_skin_textures(
                         lua_runtime_mode,
                     ),
                 )
-                .with_library_roots(app_paths.skin_library_roots()),
+                .with_library_roots(app_paths.skin_library_roots())
+                .reuse_installed_fonts(pipeline),
             );
             match kind {
                 SkinKind::Select => pending_select = true,
@@ -359,6 +359,7 @@ pub(super) fn select_skin_options(
     options
 }
 
+#[cfg(test)]
 pub(super) fn apply_json_skin_sync(
     renderer: &mut Renderer,
     pipeline: &SkinPipelineRuntime,
@@ -462,3 +463,7 @@ pub(super) fn apply_json_skin_sync(
     pipeline.record_screen_dependencies(kind, load_dependencies);
     video_sources
 }
+
+#[cfg(test)]
+#[path = "skin_loading/startup_tests.rs"]
+mod startup_tests;

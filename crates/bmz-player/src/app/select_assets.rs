@@ -160,6 +160,7 @@ struct SelectMetaImageState {
 /// GPU texture upload、profile 音量の解釈、audio stream 起動は `WinitApp` に残す。
 /// worker、CPU cache、ロードキュー、選択変更とfadeの状態遷移は本runtimeが所有する。
 pub(super) struct SelectAssetRuntime {
+    pub(super) archive_preload: super::select_archive_preload::SelectArchivePreload,
     stage: SelectMetaImageState,
     backbmp: SelectMetaImageState,
     banner: SelectMetaImageState,
@@ -201,6 +202,7 @@ impl SelectAssetRuntime {
         let (meta_image_tx, meta_image_rx) = mpsc::channel();
         let (preview_tx, preview_rx) = mpsc::channel();
         Self {
+            archive_preload: Default::default(),
             stage: SelectMetaImageState::default(),
             backbmp: SelectMetaImageState::default(),
             banner: SelectMetaImageState::default(),

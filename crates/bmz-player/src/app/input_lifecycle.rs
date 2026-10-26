@@ -508,6 +508,18 @@ impl WinitApp {
                 ));
                 self.window = Some(window);
                 self.refresh_skin_screen_size();
+                // Decode overlaps native/GPU/font initialization. Complete the
+                // selected skin before presenting anything, including screen-size
+                // dependency retries handled by the ordinary upload pipeline.
+                if !self.first_frame_startup_completed && !self.viewer_mode {
+                    let started = Instant::now();
+                    self.ensure_skin_ready(SkinKind::Select);
+                    tracing::info!(
+                        wait_ms = started.elapsed().as_millis(),
+                        select_installed = self.renderer.select_skin_document().is_some(),
+                        "startup select skin ready before first frame"
+                    );
+                }
             }
             Err(error) => {
                 tracing::error!(%error, "failed to create window");

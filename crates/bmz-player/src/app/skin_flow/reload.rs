@@ -97,12 +97,15 @@ impl WinitApp {
     /// wildcardのRandom指定はこのdecode要求を単位として再抽選される。
     pub(super) fn reload_skin_for_scene_entry(&mut self, kind: SkinKind) {
         self.reload_skin_for_scene_entry_with_chart(kind, None);
+        self.ensure_skin_ready(kind);
     }
 
     /// Decide進入時の再decodeへ、表示するsnapshotの選択譜面の値を渡す。
     ///
     /// beatorajaは選択曲のある状態でDecide skinを読むため、ロード時に難易度色などを
     /// 決めるskinがある。起動時やskin設定パネルからのdecodeは選択曲を持たない。
+    /// Queue only: the caller starts Play decoding and prepares presentation
+    /// images before waiting for this Decide skin.
     pub(super) fn reload_decide_skin_for_chart(&mut self, snapshot: &RenderSnapshot) {
         self.reload_skin_for_scene_entry_with_chart(SkinKind::Decide, Some(snapshot));
     }
@@ -142,7 +145,6 @@ impl WinitApp {
             SkinKind::Play | SkinKind::Result => unreachable!(),
         };
         self.skin.skin_pipeline.set_pending(kind, pending);
-        self.ensure_skin_ready(kind);
     }
 
     pub(super) fn apply_active_play_skin_options_fast_path(
