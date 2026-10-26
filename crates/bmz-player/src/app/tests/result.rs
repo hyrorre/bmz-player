@@ -498,7 +498,7 @@ fn result_auto_exit_uses_scene_when_positive() {
 #[test]
 fn pre_play_abort_starts_fadeout_and_returns_to_select_without_result() {
     let started_at = Instant::now();
-    let ending = pre_play_abort_ending(started_at);
+    let ending = pre_play_abort_ending(started_at, false);
 
     assert_eq!(ending.started_at, started_at);
     assert!(!ending.failed);
@@ -507,6 +507,18 @@ fn pre_play_abort_starts_fadeout_and_returns_to_select_without_result() {
     assert!(ending.finished.is_none());
     assert_eq!(ending.fadeout_started_at, Some(started_at));
     assert!(ending.full_combo_elapsed_at_finish_ms.is_none());
+}
+
+#[test]
+fn pre_play_abort_preserves_completed_course_stages_for_result() {
+    let started_at = Instant::now();
+    let ending = pre_play_abort_ending(started_at, true);
+
+    assert_eq!(ending.completion, PlayEndingCompletion::RetiredCourse);
+    assert!(!ending.failed);
+    assert!(ending.finished.is_none());
+    assert!(ending.music_end_started_at.is_none());
+    assert_eq!(ending.fadeout_started_at, Some(started_at));
 }
 
 #[test]

@@ -755,7 +755,13 @@ impl WinitApp {
             self.clear_play_control_holds();
             self.stop_system_sound(crate::system_sound::SoundType::PlayReady);
             self.notify_obs_play_ended();
-            self.play.play_ending = Some(pre_play_abort_ending(Instant::now()));
+            let has_completed_course_stage = self
+                .play
+                .active_course
+                .as_ref()
+                .is_some_and(|course| !course.entry_results.is_empty());
+            self.play.play_ending =
+                Some(pre_play_abort_ending(Instant::now(), has_completed_course_stage));
             self.update_play_ending_snapshot();
             return true;
         }

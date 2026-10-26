@@ -250,6 +250,10 @@ Light Assistだけなら`LightAssistEasy`になります。この優先順位は
 | autoplay / replay playback / key mode変換 | course attempt自体を保存せず、IRなし |
 | FAILED | 未プレイ譜面を含めたBPで`Failed` attemptを保存します。非アシストなら通常の数値保存・IR候補 |
 
+コース2曲目以降の開始前に手動で中断した場合も、完了済みステージだけで`Failed` attemptを保存します。
+未開始曲のstage結果・プレイ回数・replayは追加せず、コース全体のノーツ数と未プレイ分のBPを使います。
+1曲目の開始前キャンセルではcourse attemptを作りません。Autoplay / Replay等の保存除外条件は上表に従います。
+
 BMZのコースIRはproviderの単曲`send_policy`を参照せず、course definitionが
 `release=true`でprovider条件を満たせばenqueueします。beatorajaもCourseResultの
 `CompleteSong` / `UpdateScore`分岐が実質無効で、`updateCourseScore`とreleaseのみで

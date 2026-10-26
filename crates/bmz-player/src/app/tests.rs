@@ -228,6 +228,9 @@ mod boot_chart;
 mod course;
 #[path = "tests/course_sources.rs"]
 mod course_sources;
+#[cfg(target_os = "windows")]
+#[path = "tests/course_transitions.rs"]
+mod course_transitions;
 #[path = "tests/decide_difficulty.rs"]
 mod decide_difficulty;
 #[path = "tests/play.rs"]

@@ -61,6 +61,23 @@ impl WinitApp {
         arrange_overrides: Vec<AppliedArrange>,
         auto_advance_intermediate_results: bool,
     ) {
+        if let Err(error) = self.try_start_course_with_arrange(
+            course_id,
+            arrange_overrides,
+            auto_advance_intermediate_results,
+        ) {
+            tracing::error!(%error, course_id, "failed to start course");
+            self.show_play_load_error(&format!("{error:#}"));
+        }
+    }
+
+    /// Validate every stage before replacing the previous course result.
+    pub(super) fn try_start_course_with_arrange(
+        &mut self,
+        course_id: i64,
+        arrange_overrides: Vec<AppliedArrange>,
+        auto_advance_intermediate_results: bool,
+    ) -> Result<()> {
         let started_at = Instant::now();
         let course_load_started_at = Instant::now();
         match self.boot.library_db.repair_course_entry_chart_links_for_course(course_id) {
@@ -72,17 +89,12 @@ impl WinitApp {
                 tracing::warn!(%error, course_id, "failed to repair course links before course start");
             }
         }
-        let stored = match self.boot.library_db.course_by_id(course_id) {
-            Ok(course) => course,
-            Err(error) => {
-                tracing::error!(%error, course_id, "failed to load course for start_course");
-                return;
-            }
-        };
-        let Some(stored) = stored else {
-            tracing::warn!(course_id, "course not found");
-            return;
-        };
+        let stored = self
+            .boot
+            .library_db
+            .course_by_id(course_id)
+            .context("failed to load course")?
+            .with_context(|| format!("course {course_id} not found"))?;
         let course_load_elapsed = course_load_started_at.elapsed();
         let mut definition = stored.definition;
         if definition.entries.is_empty()
@@ -90,25 +102,11 @@ impl WinitApp {
         {
             let resolved =
                 definition.entries.iter().filter(|entry| entry.chart_id.is_some()).count();
-            tracing::warn!(
-                course_id,
-                resolved,
-                total = definition.entries.len(),
-                "course is missing entries"
-            );
-            return;
+            bail!("course has unresolved entries ({resolved}/{})", definition.entries.len());
         }
-        if let Err(error) =
-            resolve_course_chart_sources(&self.boot.library_db, &mut definition, None)
-        {
-            tracing::warn!(%error, course_id, "failed to resolve course chart sources");
-            return;
-        }
-        let first_chart_id = definition.entries.first().and_then(|e| e.chart_id);
-        let Some(first_chart_id) = first_chart_id else {
-            tracing::warn!(course_id, "no resolved chart in course");
-            return;
-        };
+        resolve_course_chart_sources(&self.boot.library_db, &mut definition, None)?;
+        let first_chart_id =
+            definition.entries[0].chart_id.context("no resolved chart in course")?;
         tracing::info!(
             course_id,
             title = %definition.title,
@@ -130,18 +128,13 @@ impl WinitApp {
         let ln_policy_setting = self.boot.profile_config.play.ln_mode_policy;
         let rule_mode = self.boot.profile_config.play.rule_mode;
         let metadata_started_at = Instant::now();
-        let library_snapshot = match course_play_metrics_from_library_metadata(
+        let library_snapshot = course_play_metrics_from_library_metadata(
             &self.boot.library_db,
             &definition,
             ln_policy_setting,
             &entry_start_options,
-        ) {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                tracing::error!(%error, course_id, "failed to load course chart metadata");
-                return;
-            }
-        };
+        )
+        .context("failed to load course chart metadata")?;
         let metadata_elapsed = metadata_started_at.elapsed();
         let score_save_disabled = library_snapshot.has_score_disabling_key_mode_conversion
             || self.boot.profile_config.cli_auto_scratch();
@@ -155,6 +148,12 @@ impl WinitApp {
         let course_title = definition.title.clone();
         let course_metrics = library_snapshot.metrics;
         let first_chart = library_snapshot.first_chart;
+        // All fallible preparation above leaves the current Result intact.
+        self.clear_finished_course();
+        self.result.finished_play = None;
+        self.result.result_exit = None;
+        self.result.result_key5_held = false;
+        self.result.result_key7_held = false;
         self.play.active_course = Some(ActiveCourseSession {
             course_id,
             definition,
@@ -187,6 +186,7 @@ impl WinitApp {
             select_to_decide_elapsed_ms = started_at.elapsed().as_millis(),
             "course decide transition scheduled"
         );
+        Ok(())
     }
 
     /// Start a course in replay mode, replaying the saved per-chart inputs of

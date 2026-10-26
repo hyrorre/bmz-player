@@ -831,6 +831,28 @@ mod tests {
     }
 
     #[test]
+    fn retirement_before_next_stage_keeps_only_completed_results() {
+        for completed in 1..4 {
+            let mut session =
+                make_partial_session(4, vec![(make_score(100, 0), 100, ClearType::Max); completed]);
+            session.current_index = completed;
+            session.course_total_notes = 400;
+            let result = session.into_result();
+
+            assert_eq!(result.played_entries, completed);
+            assert_eq!(result.entry_summaries.len(), completed);
+            assert_eq!(result.entry_arranges.len(), completed);
+            assert_eq!(result.total_ex_score, completed as u32 * 200);
+            assert_eq!(result.max_ex_score, 800);
+            assert_eq!(result.bp, (4 - completed) as u32 * 100);
+            assert_eq!(result.final_clear_type, ClearType::Failed);
+            assert!(result.course_failed);
+            assert!(!result.course_clear);
+            assert!(result.trophy_results.iter().all(|trophy| !trophy.achieved));
+        }
+    }
+
+    #[test]
     fn failed_course_keeps_course_total_notes_as_score_rate_denominator() {
         use bmz_core::clear::ClearType;
 

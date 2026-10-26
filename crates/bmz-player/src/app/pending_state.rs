@@ -75,6 +75,7 @@ pub(super) struct PlayEndingTransition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PlayEndingCompletion {
     Result,
+    RetiredCourse,
     ViewerWait,
     ViewerExit,
     Select,
@@ -94,14 +95,21 @@ pub(super) fn viewer_exit_ending(started_at: Instant) -> PlayEndingTransition {
     }
 }
 
-pub(super) fn pre_play_abort_ending(started_at: Instant) -> PlayEndingTransition {
+pub(super) fn pre_play_abort_ending(
+    started_at: Instant,
+    has_completed_course_stage: bool,
+) -> PlayEndingTransition {
     PlayEndingTransition {
         started_at,
         music_end_started_at: None,
         fadeout_started_at: Some(started_at),
         finished: None,
         failed: false,
-        completion: PlayEndingCompletion::Select,
+        completion: if has_completed_course_stage {
+            PlayEndingCompletion::RetiredCourse
+        } else {
+            PlayEndingCompletion::Select
+        },
         full_combo_elapsed_at_finish_ms: None,
     }
 }

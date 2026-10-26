@@ -42,17 +42,23 @@ impl WinitApp {
             return;
         };
         let course_id = course.course_id;
+        let clear_type = course.final_clear_type;
         let arrange_overrides = match mode {
             ResultRetryMode::SameArrange => course.entry_arranges.clone(),
             ResultRetryMode::DifferentArrange => Vec::new(),
         };
         tracing::info!(course_id, entries = arrange_overrides.len(), ?mode, "retrying course");
-        self.clear_finished_course();
-        self.result.finished_play = None;
-        self.result.result_exit = None;
-        self.result.result_key5_held = false;
-        self.result.result_key7_held = false;
-        self.start_course_with_arrange(course_id, arrange_overrides, false);
+        if let Err(error) = self.try_start_course_with_arrange(course_id, arrange_overrides, false)
+        {
+            tracing::warn!(%error, course_id, "failed to retry course; restoring result");
+            self.result.result_exit = None;
+            self.result.result_key5_held = false;
+            self.result.result_key7_held = false;
+            self.result.result_scene_started_at = Instant::now();
+            self.ensure_result_skin_ready_for_entry(ResultSkinSlot::Course);
+            self.play_course_result_entry_sound(clear_type);
+            self.show_play_load_error(&format!("{error:#}"));
+        }
     }
 
     pub(super) fn result_retry_same_arrange_options(&self) -> PlayStartOptions {

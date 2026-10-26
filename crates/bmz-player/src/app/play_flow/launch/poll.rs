@@ -13,7 +13,9 @@ impl WinitApp {
         if self.play.play_ending.as_ref().is_some_and(|ending| {
             matches!(
                 ending.completion,
-                PlayEndingCompletion::Select | PlayEndingCompletion::ViewerExit
+                PlayEndingCompletion::Select
+                    | PlayEndingCompletion::RetiredCourse
+                    | PlayEndingCompletion::ViewerExit
             )
         }) {
             return;
@@ -291,16 +293,21 @@ impl WinitApp {
             return false;
         }
         self.abort_pending_play_start();
+        self.show_play_load_error(error);
+        true
+    }
+
+    pub(super) fn show_play_load_error(&mut self, error: &str) {
         let text = Localizer::new(self.boot.profile_config.ui.locale());
         let mut args = FluentArgs::new();
         // The overlay has no automatic wrapping. Put error-chain contexts on
         // separate lines so the path and OS error remain readable.
         args.set("error", error.replace(": ", ":\n"));
         self.show_left_overlay_toast(text.format("toast-play-load-failed", &args));
-        true
     }
 
-    pub(super) fn abort_pending_play_start(&mut self) {
+    /// Cancel the unstarted chart without discarding completed course stages.
+    pub(super) fn clear_pending_play_start(&mut self) {
         if !self.commit_active_play_lane_state_to_profile() {
             self.commit_pending_play_lane_state_to_profile();
         }
@@ -326,6 +333,11 @@ impl WinitApp {
             self.clear_play_meta_image_state();
             self.play.last_play_snapshot = None;
         }
+        self.play.play_media_cache = None;
+    }
+
+    pub(super) fn abort_pending_play_start(&mut self) {
+        self.clear_pending_play_start();
         // An audio-open / audio-start failure bounces the user back to the
         // select screen.  If they were in a course at the time, the course
         // session is no longer valid — otherwise the next chart they pick
@@ -333,7 +345,6 @@ impl WinitApp {
         // through advance_course_after_finish with mismatched chart_id).
         self.clear_active_course_state();
         self.select.autoplay_folder = None;
-        self.play.play_media_cache = None;
         // Result から Retry した直後は、前回結果の score DB 更新を
         // SelectItem がまだ取り込んでいない。曲開始前退出でも必ず再取得する。
         if self.viewer_mode {

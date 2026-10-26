@@ -65,6 +65,13 @@ impl WinitApp {
                 self.abort_pending_play_start();
                 return;
             }
+            PlayEndingCompletion::RetiredCourse => {
+                tracing::info!("course retired before the next chart started");
+                self.clear_pending_play_start();
+                self.audio.draining_audio = None;
+                self.finish_active_course();
+                return;
+            }
             PlayEndingCompletion::PracticeConfig => {
                 tracing::info!("practice play transition completed; returning to configuration");
                 self.finish_practice_round();

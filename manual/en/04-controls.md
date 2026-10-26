@@ -107,6 +107,12 @@ While you hold **1 / 2 / 3 / 4** on the number row, playback speed becomes 25% /
 
 With supported skins, **E2** switches between the IR ranking and the graph.
 
+## Courses
+
+If you quit before the second or a later song starts, the course result shows FAILED using only completed songs. Unstarted songs do not gain a play count. Quitting before the first song starts returns to song select.
+On results between songs, R, KEY5, and KEY7 advance to the next song. Retrying from the final course result starts again from the first song. If the charts cannot be verified, the original result stays available with an error message.
+Quick retry during the failure animation is unavailable in courses.
+
 ## Practice
 
 Set the play type to practice on the song select screen and confirm a song to open the practice settings.
