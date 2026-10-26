@@ -101,6 +101,26 @@ pub(super) fn spawn_skin_decode(pipeline: &SkinPipelineRuntime, mut request: Ski
                     ),
                 }
             }
+            for provider in lr2_continue_theme_providers(&path, &library_roots) {
+                match crate::skin_loader::resolve_lr2_continue_assets(
+                    &provider,
+                    &bmz_skin::LuaLoadRuntimeState::default(),
+                    Some(document_cache.clone()),
+                ) {
+                    Ok(assets) => {
+                        runtime_state.lr2_continue_assets = fill_empty_lr2_continue_assets(
+                            assets,
+                            &runtime_state.lr2_continue_assets,
+                        )
+                        .into();
+                    }
+                    Err(error) => tracing::warn!(
+                        provider = %provider.display(),
+                        error = %format_error_chain(&error),
+                        "failed to resolve same-theme LR2 CONTINUE assets"
+                    ),
+                }
+            }
             let result = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
                 pinned_sources: Some(&pinned_sources),
                 skin_path: &path,

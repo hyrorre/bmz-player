@@ -397,8 +397,25 @@ ECSE・W-MIXの自己ベスト（更新前）のランプ、W-MIXのゲージ画
 スキン設定は既定値、op 100..105はPlay読込時と同じく保存前の自己ベストのクリア種別とします。
 画像・フォントは読み込まず、パスだけを解決します。補完元の空の`CONTINUE`番号は元の引継ぎ素材を残します。
 同じテーマのLR2 Playで遊んだ場合と、同じテーマにLR2 Playスキンが無い場合は補完しません。
-Course Resultはこの補完を含むステージResultを引き継ぎます。RED_BELT（OA_DX+のPlayが前提）と
-Decide経由の引継ぎ（コースモードのランプ等）は対象外です。
+Course Resultはこの補完を含むステージResultを引き継ぎます。
+
+LR2の画像スロットは全シーンで共有され、`CONTINUE`は以前の場面が読み込んだ素材を使います。
+BMZは直前の場面以外を保持しないため、BMZ独自の補完として、Decide / Play / Result / Course Resultの
+LR2スキンでまだ空の`CONTINUE`番号を、同じテーマのLR2スキンの素材で埋めます。
+参照する種別はLR2で直前に通る場面の順です。
+
+| 読み込む場面 | 補完元（先に見つかった素材を使う） |
+|---|---|
+| Decide | Select、Result、Play |
+| Play | Decide、Select、Result、Course Result |
+| Result | Decide、Select（Playは上の補完で扱う） |
+| Course Result | Result、Play、Decide、Select |
+
+各種別はテーマ内のパス順で最初のLR2スキンを、既定のスキン設定で解決します。直前の場面から引き継いだ素材を優先し、
+補完元でも`CONTINUE`の番号や、存在しないファイル（`dummy`等）は使いません。
+W-MIXのPlay開始とCourse Resultのシャッター（W-MIX Resultの画像28）、ECSEのPlayのフェード（ECSE Resultの画像27）、
+3R / ECSEのDecideのレベル数字（Selectの画像0）、RED_BELT ResultのクリアマークがDecideから補われます。
+別テーマを前提とするOA_DX+（RED_BELTの選曲・決定）と、テーマ内に素材の無いPLATINUMの画像27は補完しません。
 
 LR2ではop 30/31（BGA Size）がグローバル設定として全画面で有効なため、
 Play以外のLR2スキンにもスキンオプション`BGA Size`（Normal / Extend、既定Normal）を追加します。

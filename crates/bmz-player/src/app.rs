@@ -390,7 +390,10 @@ use select_support::*;
 use skin_catalog::*;
 use skin_loading::*;
 use skin_options::*;
-use skin_pipeline::{Lr2ContinueFallback, SkinPipelineRuntime, merge_lr2_continue_assets};
+use skin_pipeline::{
+    Lr2ContinueFallback, SkinPipelineRuntime, fill_empty_lr2_continue_assets,
+    merge_lr2_continue_assets,
+};
 use skin_video::*;
 use skin_workers::*;
 use table_fetch_runtime::{

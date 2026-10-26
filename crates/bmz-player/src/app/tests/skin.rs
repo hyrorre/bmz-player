@@ -670,3 +670,86 @@ fn installed_lr2_play_skins_resolve_result_continue_assets_when_available() {
         assert!(Path::new(&assets.sources["24"].path).is_file());
     }
 }
+
+#[test]
+fn lr2_continue_theme_fill_keeps_inherited_and_skips_unusable_provider_slots() {
+    let temp = tempfile::tempdir().unwrap();
+    let shutter = temp.path().join("shutter.png");
+    std::fs::write(&shutter, b"png").unwrap();
+    let source = |path: &str| bmz_render::skin::SkinSourceDef {
+        id: String::new(),
+        path: path.into(),
+        lr2_color_key: None,
+    };
+    let current = bmz_skin::Lr2ContinueAssets {
+        sources: BTreeMap::from([
+            ("23".into(), source("played/clear.png")),
+            ("28".into(), source("bmz://lr2/empty")),
+        ]),
+        ..Default::default()
+    };
+    let provider = bmz_skin::Lr2ContinueAssets {
+        sources: BTreeMap::from([
+            ("23".into(), source("theme/other.png")),
+            ("27".into(), source(&temp.path().join(".dummy").to_string_lossy())),
+            ("28".into(), source(&shutter.to_string_lossy())),
+            ("29".into(), source("bmz://lr2/empty")),
+        ]),
+        ..Default::default()
+    };
+    let filled = fill_empty_lr2_continue_assets(provider, &current);
+    assert_eq!(filled.sources["23"].path, "played/clear.png");
+    assert_eq!(Path::new(&filled.sources["28"].path), shutter);
+    assert!(!filled.sources.contains_key("27") && !filled.sources.contains_key("29"));
+}
+
+#[test]
+fn same_theme_lr2_skins_fill_continue_slots_left_by_other_scenes_when_available() {
+    let skins = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins");
+    let roots = [skins.clone()];
+    let load_with_theme_fill = |relative: &str| {
+        let path = skins.join(relative);
+        let mut state = bmz_skin::LuaLoadRuntimeState::default();
+        for provider in lr2_continue_theme_providers(&path, &roots) {
+            let assets = crate::skin_loader::resolve_lr2_continue_assets(
+                &provider,
+                &bmz_skin::LuaLoadRuntimeState::default(),
+                None,
+            )
+            .unwrap_or_else(|error| panic!("{}: {error:#}", provider.display()));
+            state.lr2_continue_assets =
+                fill_empty_lr2_continue_assets(assets, &state.lr2_continue_assets).into();
+        }
+        bmz_skin::load_lr2_csv_skin_with_runtime_state(
+            &path,
+            bmz_skin::SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &state,
+        )
+        .unwrap_or_else(|error| panic!("{relative}: {error:#}"))
+        .document
+    };
+    // Image slots each skin draws from CONTINUE and the file LR2 would still hold there.
+    for (skin, slot, expected) in [
+        // W-MIX Course Result / Play shutters come from the W-MIX Result.
+        ("WMIX_HD/courseresult/courseresult.lr2skin", "28", "select/shutter"),
+        ("WMIX_HD/play/HDPLAY_W.lr2skin", "28", "select/shutter"),
+        // ECSE Play fades with the shutter its Result loads.
+        ("EndlessCirculation/Play/play_SESP.lr2skin", "27", "Shutter"),
+        // RED_BELT Result clear marks come from its Decide (Play in between).
+        ("RED_BELT/Result/result.lr2skin", "24", "RED_BELT"),
+        // ECSE / 3R Decide level numbers come from their Select.
+        ("EndlessCirculation/SE-Decide/decide.lr2skin", "0", "SE-Select"),
+        ("3R/Decide/decide_simple.lr2skin", "0", "Select"),
+    ] {
+        if !skins.join(skin).is_file() {
+            eprintln!("SKIP missing {skin}");
+            continue;
+        }
+        let document = load_with_theme_fill(skin);
+        let source = document.source.iter().find(|source| source.id == slot).unwrap();
+        let path = source.path.replace('\\', "/");
+        assert!(path.contains(expected) && Path::new(&source.path).is_file(), "{skin}: {path}");
+    }
+}

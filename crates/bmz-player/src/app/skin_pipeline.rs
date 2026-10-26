@@ -91,6 +91,35 @@ pub(super) fn merge_lr2_continue_assets(
     merged
 }
 
+/// Fills the CONTINUE slots that are still empty from a same-theme provider skin,
+/// as LR2's shared slots would still hold them (BMZ extension). Assets already
+/// inherited win, and the provider's own empty or missing images are skipped.
+pub(super) fn fill_empty_lr2_continue_assets(
+    provider: bmz_skin::Lr2ContinueAssets,
+    current: &bmz_skin::Lr2ContinueAssets,
+) -> bmz_skin::Lr2ContinueAssets {
+    let mut filled = current.clone();
+    for (id, source) in provider.sources {
+        let usable = if source.path.starts_with("bmz://") {
+            source.path != "bmz://lr2/empty"
+        } else {
+            std::path::Path::new(&source.path).is_file()
+        };
+        let empty =
+            filled.sources.get(&id).is_none_or(|existing| existing.path == "bmz://lr2/empty");
+        if usable && empty {
+            filled.sources.insert(id, source);
+        }
+    }
+    for (id, font) in provider.fonts {
+        filled.fonts.entry(id).or_insert(font);
+    }
+    if filled.system_fonts.is_empty() {
+        filled.system_fonts = provider.system_fonts;
+    }
+    filled
+}
+
 /// skin decode (CPU) と upload (GPU) workerをつなぐchannel、共有cache、世代状態。
 ///
 /// Rendererへのinstallとscene固有のskin選択は `WinitApp` に残し、この型は

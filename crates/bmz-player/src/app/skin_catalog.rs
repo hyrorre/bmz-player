@@ -338,6 +338,82 @@ pub(super) fn skin_theme_dir(path: &Path, library_roots: &[PathBuf]) -> Option<P
     })
 }
 
+const LR2_PLAY_SKIN_TYPES: &[i32] = &[0, 1, 2, 3, 4, 12, 13];
+
+/// LR2 skin types whose images stay in LR2's shared slots before a scene of
+/// `skin_type`, nearest scene first (Select, Decide, Play, Result, Course Result).
+fn lr2_continue_provider_types(skin_type: i32) -> &'static [&'static [i32]] {
+    const SELECT: &[i32] = &[5];
+    const DECIDE: &[i32] = &[6];
+    const RESULT: &[i32] = &[7];
+    const COURSE_RESULT: &[i32] = &[15];
+    match skin_type {
+        6 => &[SELECT, RESULT, LR2_PLAY_SKIN_TYPES],
+        0..=4 | 12 | 13 => &[DECIDE, SELECT, RESULT, COURSE_RESULT],
+        7 => &[DECIDE, SELECT],
+        15 => &[RESULT, LR2_PLAY_SKIN_TYPES, DECIDE, SELECT],
+        _ => &[],
+    }
+}
+
+fn collect_lr2_skin_paths(dir: &Path, depth: usize, paths: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if depth < 4 {
+                collect_lr2_skin_paths(&path, depth + 1, paths);
+            }
+        } else if is_lr2_skin_path(&path) {
+            paths.push(path);
+        }
+    }
+}
+
+/// Same-theme LR2 skins standing in for the scenes that fill LR2's shared image slots
+/// before `skin_path` (BMZ extension). One skin per provider type, first by path.
+pub(super) fn lr2_continue_theme_providers(
+    skin_path: &Path,
+    library_roots: &[PathBuf],
+) -> Vec<PathBuf> {
+    if !is_lr2_skin_path(skin_path) {
+        return Vec::new();
+    }
+    let Ok(info) = bmz_skin::load_lr2_csv_skin_info(skin_path) else {
+        return Vec::new();
+    };
+    let groups = lr2_continue_provider_types(info.skin_type);
+    let Some(theme) =
+        (!groups.is_empty()).then(|| skin_theme_dir(skin_path, library_roots)).flatten()
+    else {
+        return Vec::new();
+    };
+    let absolute = |path: &Path| std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let own = absolute(skin_path);
+    let mut paths = Vec::new();
+    collect_lr2_skin_paths(&theme, 0, &mut paths);
+    paths.sort();
+    let typed: Vec<(PathBuf, i32)> = paths
+        .into_iter()
+        .filter(|path| absolute(path) != own)
+        .filter_map(|path| {
+            let skin_type = bmz_skin::load_lr2_csv_skin_info(&path).ok()?.skin_type;
+            Some((path, skin_type))
+        })
+        .collect();
+    groups
+        .iter()
+        .filter_map(|types| {
+            typed
+                .iter()
+                .find(|(_, skin_type)| types.contains(skin_type))
+                .map(|(path, _)| path.clone())
+        })
+        .collect()
+}
+
 /// The LR2 Play skin whose CONTINUE assets stand in for the attempt's Play skin
 /// (BMZ extension). `None` when the Play skin was an LR2 skin of the Result's theme,
 /// or the theme has no LR2 Play skin.
