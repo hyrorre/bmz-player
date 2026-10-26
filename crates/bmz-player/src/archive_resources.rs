@@ -69,10 +69,25 @@ fn open_chart_locked(
     control: &ArchiveControl,
 ) -> Result<OpenedChart> {
     let index = song_archive::inspect(container, control)?;
-    let resources = match bmz_song_resource::find(container) {
+    let resources = resources_for_index(container, &index);
+    open_indexed_chart(chart, control, &index, resources)
+}
+
+fn resources_for_index(container: &Path, index: &ArchiveIndex) -> Arc<SongResourceSet> {
+    match bmz_song_resource::find(container) {
         Some(set) if set.generation() == index.generation.fingerprint => set,
-        _ => Arc::new(new_set(container, &index)),
-    };
+        _ => Arc::new(new_set(container, index)),
+    }
+}
+
+/// The caller holds the container load lock. Prefetch checks its budget against
+/// this same index/set before opening, without changing the ordinary Play path.
+fn open_indexed_chart(
+    chart: &str,
+    control: &ArchiveControl,
+    index: &ArchiveIndex,
+    resources: Arc<SongResourceSet>,
+) -> Result<OpenedChart> {
     let mut speculative = prefetch::take_speculative(&resources);
     // A folder locator has no chart entry to read.
     if resources.contains(chart) && resources.loaded(chart).is_none() {
@@ -80,7 +95,13 @@ fn open_chart_locked(
         let solid = index.solid;
         let pick =
             |entry: &ArchiveEntry| entry.name == chart || (solid && in_folder(&entry.name, folder));
-        speculative.extend(load(&resources, container, &index.generation, control, &pick)?);
+        speculative.extend(load(
+            &resources,
+            resources.container(),
+            &index.generation,
+            control,
+            &pick,
+        )?);
         speculative.retain(|name| name != chart);
     }
     bmz_song_resource::install(resources.clone());

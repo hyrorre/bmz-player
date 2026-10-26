@@ -60,6 +60,15 @@ pub(crate) fn prefetch_chart(
     chart: &str,
     control: &ArchiveControl,
 ) -> Result<bool> {
+    prefetch_chart_with_byte_limit(container, chart, control, SET_TRIM_BYTES)
+}
+
+pub(super) fn prefetch_chart_with_byte_limit(
+    container: &Path,
+    chart: &str,
+    control: &ArchiveControl,
+    byte_limit: u64,
+) -> Result<bool> {
     with_load_lock(container, control, || {
         let index = song_archive::inspect(container, control)?;
         if !index.solid {
@@ -77,7 +86,42 @@ pub(crate) fn prefetch_chart(
         if bytes > MAX_PREFETCH_FOLDER_BYTES {
             return Ok(false);
         }
-        let opened = open_chart_locked(container, chart, control)?;
+        let resources = resources_for_index(container, &index);
+        // A cached chart makes open_indexed_chart reuse the set without adding
+        // its folder again, including when an actual Play exceeded this budget.
+        let additional_bytes = if resources.loaded(chart).is_some() {
+            0
+        } else {
+            let missing: HashSet<String> = resources
+                .unloaded(
+                    index
+                        .entries
+                        .iter()
+                        .filter(|entry| !entry.is_directory && in_folder(&entry.name, folder))
+                        .map(|entry| entry.name.as_str()),
+                )
+                .into_iter()
+                .collect();
+            index
+                .entries
+                .iter()
+                .filter(|entry| missing.contains(&entry.name))
+                .map(|entry| entry.size)
+                .fold(0u64, u64::saturating_add)
+        };
+        let loaded_bytes = resources.loaded_bytes();
+        if additional_bytes > 0 && loaded_bytes.saturating_add(additional_bytes) > byte_limit {
+            tracing::debug!(
+                path = %container.display(),
+                chart,
+                loaded_bytes,
+                additional_bytes,
+                byte_limit,
+                "selected archive prefetch exceeds resource budget"
+            );
+            return Ok(false);
+        }
+        let opened = open_indexed_chart(chart, control, &index, resources)?;
         if !opened.speculative.is_empty() {
             let mut sets = SPECULATIVE.get_or_init(Mutex::default).lock().unwrap();
             sets.retain(|(set, _)| set.strong_count() > 0);

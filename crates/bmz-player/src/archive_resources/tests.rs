@@ -4,6 +4,9 @@ use bmz_chart::import::{BmsRandomSource, import_bms_chart_with_random_source};
 use std::io::Write;
 use std::path::PathBuf;
 
+#[path = "tests/prefetch_budget.rs"]
+mod prefetch_budget;
+
 const CHART: &[u8] = b"#TITLE Direct\n#BPM 120\n#STAGEFILE stage.png\n\
 #WAV01 KICK.wav\n#WAV02 snare.wav\n#WAV03 ../shared/key.wav\n#BMP01 bga.bmp\n\
 #00111:01\n#00112:02\n#00113:03\n#00104:01\n";
