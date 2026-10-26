@@ -8,27 +8,30 @@ pub const BEATORAJA_SOUND_EXTENSIONS: &[&str] = &["wav", "flac", "ogg", "mp3"];
 /// 指定ファイルが存在する場合も先頭候補に入れ、その後に同じ stem の別拡張子を
 /// `wav -> flac -> ogg -> mp3` で追加する。書庫内のパスは読み込み済みの書庫一覧で判定する。
 pub fn sound_asset_candidates(path: &Path) -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    if bmz_song_resource::file_exists(path) {
-        candidates.push(path.to_path_buf());
-    }
+    existing_candidates(path).collect()
+}
 
+/// Finds the first candidate without stat-ing later fallbacks. A decoder that
+/// fails must then request the full list to retain beatoraja's fallback order.
+pub fn first_sound_asset_candidate(path: &Path) -> Option<PathBuf> {
+    existing_candidates(path).next()
+}
+
+fn existing_candidates(path: &Path) -> impl Iterator<Item = PathBuf> + '_ {
     let original_ext = path.extension().and_then(|ext| ext.to_str());
-    for candidate_ext in BEATORAJA_SOUND_EXTENSIONS {
-        if original_ext == Some(*candidate_ext) {
-            continue;
-        }
-        let candidate = path.with_extension(candidate_ext);
-        if bmz_song_resource::file_exists(&candidate) {
-            candidates.push(candidate);
-        }
-    }
-
-    candidates
+    std::iter::once(path.to_path_buf())
+        .chain(
+            BEATORAJA_SOUND_EXTENSIONS
+                .iter()
+                .copied()
+                .filter(move |extension| original_ext != Some(*extension))
+                .map(move |extension| path.with_extension(extension)),
+        )
+        .filter(|candidate| bmz_song_resource::file_exists(candidate))
 }
 
 pub fn sound_asset_exists(path: &Path) -> bool {
-    !sound_asset_candidates(path).is_empty()
+    first_sound_asset_candidate(path).is_some()
 }
 
 #[cfg(test)]
@@ -47,6 +50,7 @@ mod tests {
         std::fs::write(&flac, b"dummy").unwrap();
         std::fs::write(&mp3, b"dummy").unwrap();
 
+        assert_eq!(first_sound_asset_candidate(&requested), Some(flac.clone()));
         assert_eq!(sound_asset_candidates(&requested), vec![flac, ogg, mp3]);
     }
 
@@ -59,6 +63,7 @@ mod tests {
         std::fs::write(&requested, b"dummy").unwrap();
         std::fs::write(&wav, b"dummy").unwrap();
 
+        assert_eq!(first_sound_asset_candidate(&requested), Some(requested.clone()));
         assert_eq!(sound_asset_candidates(&requested), vec![requested, wav]);
     }
 

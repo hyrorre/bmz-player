@@ -24,6 +24,15 @@ skin、egui、surface acquire / submit / presentを担当します。
   window/event loop ───────────────── render / present [100ms 停止]
 ```
 
+## Play前のロード
+
+Play前のキー音は、同じ実ファイル・出力レート・VOLWAVのデコード済みPCMを再利用します。
+通常ファイルのサイズ・更新日時・作成日時（Unixではinode / ctimeも）、書庫で読み込んだbytesの
+同一性を確認し、変更・削除・読み込み失敗を次のロードへ反映します。
+PCMとキャッシュが保持する書庫bytesは合計512MiB・4,096件までで、古いものから退避します。
+再生中のsample bankはArcで所有し、退避しても影響しません。リトライでも新しいaudio engineを作り、
+region・scheduler・判定状態は引き継ぎません。cacheはプロセス内だけで、音声callbackは操作しません。
+
 ## 入力と時計
 
 - Windowsキーボードは入力専用スレッドのmessage-only windowでRaw Inputを受け取ります。

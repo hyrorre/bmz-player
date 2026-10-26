@@ -77,13 +77,21 @@ pub fn build_audio_engine_for_chart(
 
 /// Keysound decode threads for play loading. The audio output thread and the window keep a
 /// core each; more threads stop paying off as decoding becomes memory bound.
-fn play_sample_decode_threads() -> usize {
+pub(super) fn play_sample_decode_threads() -> usize {
     std::thread::available_parallelism()
         .map_or(1, std::num::NonZeroUsize::get)
         .saturating_sub(2)
         .clamp(1, MAX_PLAY_SAMPLE_DECODE_THREADS)
 }
 const MAX_PLAY_SAMPLE_DECODE_THREADS: usize = 8;
+
+fn play_sample_cache() -> &'static Arc<std::sync::Mutex<bmz_audio::sample_cache::SampleCache>> {
+    static CACHE: std::sync::OnceLock<Arc<std::sync::Mutex<bmz_audio::sample_cache::SampleCache>>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        Arc::new(std::sync::Mutex::new(bmz_audio::sample_cache::SampleCache::new(512 << 20)))
+    })
+}
 
 /// Decodes the chart's keysounds on [`play_sample_decode_threads`] threads.
 pub(super) fn build_audio_engine_for_chart_with_progress(
@@ -92,13 +100,28 @@ pub(super) fn build_audio_engine_for_chart_with_progress(
     on_progress: impl FnMut(usize, usize),
 ) -> (AudioEngine, Vec<LoadedSampleReport>) {
     let mut audio = AudioEngine::new(sample_rate);
-    let make_loader = || Box::new(FfmpegSampleLoader::default()) as Box<dyn SampleLoader + Send>;
+    let make_loader = || {
+        Box::new(bmz_audio::sample_cache::CachedSampleLoader::new(
+            FfmpegSampleLoader::default(),
+            play_sample_cache().clone(),
+        )) as Box<dyn SampleLoader + Send>
+    };
+    let before = play_sample_cache().lock().ok().map(|cache| cache.stats());
     let sample_report = load_chart_samples_parallel_with_progress(
         &mut audio,
         chart,
         ParallelSampleDecode { threads: play_sample_decode_threads(), make_loader: &make_loader },
         on_progress,
     );
+    if let (Some(before), Ok(cache)) = (before, play_sample_cache().lock()) {
+        let after = cache.stats();
+        tracing::info!(
+            cache_hits = after.hits.saturating_sub(before.hits),
+            cache_misses = after.misses.saturating_sub(before.misses),
+            retained_bytes = after.retained_bytes,
+            "play keysound PCM cache"
+        );
+    }
     (audio, sample_report)
 }
 
