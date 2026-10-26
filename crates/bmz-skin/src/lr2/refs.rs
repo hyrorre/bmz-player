@@ -30,7 +30,11 @@ fn is_song_scene(skin_type: i32) -> bool {
 /// `LR2_RESULT_NUMBER_BASE` and reach the same definitions after the flip.
 pub(super) fn lr2_number_ref(skin_type: i32, id: i32) -> Option<i32> {
     match id {
-        154 | 163 | 164 if is_result(skin_type) => Some(LR2_NUMBER_BASE + id),
+        // 154: the next-rank diff; 163 / 164: the chart length; 173..178: the pre-update
+        // best max combo / miss count and their diffs, counted from 0 on a first play.
+        154 | 163 | 164 | 173 | 175 | 176 | 178 if is_result(skin_type) => {
+            Some(LR2_NUMBER_BASE + id)
+        }
         // Course stage levels; the Course Result shows the played course's stages.
         250..=259 if skin_type == 15 => Some(LR2_NUMBER_BASE + id),
         // 1P score, gauge, target diff, next rank diff, POOR including empty POOR,

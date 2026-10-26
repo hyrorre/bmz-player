@@ -11,6 +11,20 @@ pub(in crate::skin) fn lr2_number(id: i32, state: &SkinDrawState) -> Option<i64>
         164 if state.result_failed.is_some() => {
             Some(result_or_select_length_ms(state) / 1_000 % 60)
         }
+        // The pre-update best max combo / miss count and the diffs from them. LR2 starts a
+        // song without a best at 0 instead of hiding them like beatoraja.
+        173 if state.result_failed.is_some() => {
+            Some(i64::from(state.previous_best_max_combo.unwrap_or(0)))
+        }
+        175 if state.result_failed.is_some() => {
+            Some(i64::from(state.max_combo) - i64::from(state.previous_best_max_combo.unwrap_or(0)))
+        }
+        176 if state.result_failed.is_some() => {
+            Some(i64::from(result_mybest_bp(state).unwrap_or(0)))
+        }
+        178 if state.result_failed.is_some() => {
+            Some(i64::from(current_bp(state)) - i64::from(result_mybest_bp(state).unwrap_or(0)))
+        }
         // LR2 shows the judge timing here even while the sort is changed.
         12 => Some(i64::from(state.judge_timing_offset_ms)),
         // Levels of the song's difficulties in its folder. Without the folder data

@@ -98,7 +98,7 @@ fn result_lr2_only_refs_and_flat_buttons_are_converted() {
         .execute(&parse_csv_line("#SRC_BUTTON,0,0,0,0,328,16,4,1,0,0,40,0,0,0").unwrap())
         .unwrap();
     assert_eq!(builder.images[0]["lr2Button"], true);
-    for id in [154, 163, 164] {
+    for id in [154, 163, 164, 173, 175, 176, 178] {
         assert_eq!(lr2_number_ref(7, id), Some(bmz_skin_document::LR2_NUMBER_BASE + id));
         assert_eq!(lr2_number_ref(0, id), None);
     }

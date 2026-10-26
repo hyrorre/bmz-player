@@ -169,6 +169,7 @@ option `94_000+ID`、否定は符号を維持）です。意味が一致する�
 | number | 100 / 107 / 108 / 109 / 114 | Play、Result（1P / 反転後の自分側） | LR2式スコア、2%刻みのゲージ、2P（SPではターゲットの現在進捗）とのEX差、次ランクまでの差（負値、MAXは0）、POOR＋空POOR |
 | number | 154 | Result / Course Result | 自分のEX − 次ランクの整数境界です。AAAではMAXとの差を負値で表示し、MAXは0です。JSON/Luaの同番号の正値とは別 |
 | number | 163 / 164 | Result / Course Result | 終了した譜面・コースの長さの分 / 秒です。Playの残り時間とは別 |
+| number | 173 / 175 / 176 / 178 | Result / Course Result | 更新前の自己ベストの最大コンボ / 今回との差、最小BP（MISS COUNT）/ 今回との差です。自己ベストが無い初回は0として表示し、差は今回の値になります（beatoraja / JSON / Luaの同番号は非表示） |
 | option | 100..105 | Result / Course Result | 更新後の自己ベストのクリア種別（未取得なら今回のクリア）です。ASSIST系をEASY、EX-HARDをHARD、PERFECT / MAXをFULLCOMBOへ畳む |
 | button | 40 | Result | 今回のゲージ種別です。コース曲間リザルトでランプがNoPlayに丸められた場合（FULLCOMBO未満で通過）は非表示です。option 90 / 91は実際のクリア / 失敗のまま |
 | number | 92 / 93 / 94 / 95 | Select / Decide | 選択中の曲のIR順位、参加人数、EASY以上のクリア率、ライバルとのEX差です。フォルダでは非表示 |

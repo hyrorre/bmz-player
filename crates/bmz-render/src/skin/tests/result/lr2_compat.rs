@@ -103,6 +103,25 @@ fn lr2_result_other_side_shows_the_battle_opponent_final_score() {
 }
 
 #[test]
+fn lr2_result_best_combo_and_miss_count_start_from_zero_without_a_best() {
+    let mut state = SkinDrawState {
+        max_combo: 1833,
+        result_bp: Some(68),
+        result_failed: Some(false),
+        ..Default::default()
+    };
+    let lr2 = |id: i32, state: &SkinDrawState| skin_state_number(LR2_NUMBER_BASE + id, state);
+    // First play: LR2 shows 0 and diffs from 0; beatoraja's refs stay hidden.
+    assert_eq!((lr2(173, &state), lr2(175, &state)), (Some(0), Some(1833)));
+    assert_eq!((lr2(176, &state), lr2(178, &state)), (Some(0), Some(68)));
+    assert_eq!((skin_state_number(173, &state), skin_state_number(176, &state)), (None, None));
+    state.previous_best_max_combo = Some(1500);
+    state.previous_best_bp = Some(80);
+    assert_eq!((lr2(173, &state), lr2(175, &state)), (Some(1500), Some(333)));
+    assert_eq!((lr2(176, &state), lr2(178, &state)), (Some(80), Some(-12)));
+}
+
+#[test]
 fn lr2_buttons_select_flat_cells_while_json_buttons_keep_row_selection() {
     for (divx, divy, index, expected_x, expected_y) in
         [(4, 1, 2, 0.5, 0.0), (1, 6, 2, 0.0, 2.0 / 6.0), (2, 3, 2, 0.0, 1.0 / 3.0)]
