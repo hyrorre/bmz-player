@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use bmz_gameplay::input::backend::{DeviceId, DeviceInputEvent, PhysicalControl};
+use bmz_gameplay::input::backend::{
+    DeviceId, DeviceInputEvent, DeviceTimestamp, PhysicalControl, monotonic_timestamp_ns,
+};
 use bmz_gameplay::input::bounce::{InputBounceConfig, InputBounceFilter};
 use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::PhysicalKey;
@@ -18,6 +20,7 @@ pub(super) struct ControlInputEvent {
     pub(super) physical: Option<PhysicalControl>,
     pub(super) pressed: bool,
     pub(super) repeat: bool,
+    pub(super) timestamp: DeviceTimestamp,
     pub(super) synthesized_analog_axis: bool,
 }
 
@@ -42,6 +45,7 @@ impl ControlInputEvent {
             physical,
             pressed: state == ElementState::Pressed,
             repeat,
+            timestamp: DeviceTimestamp::MonotonicNs(monotonic_timestamp_ns()),
             synthesized_analog_axis: false,
         }
     }
@@ -53,6 +57,7 @@ impl ControlInputEvent {
             physical: Some(PhysicalControl::GamepadButton(name.to_string())),
             pressed,
             repeat: false,
+            timestamp: DeviceTimestamp::MonotonicNs(monotonic_timestamp_ns()),
             synthesized_analog_axis: false,
         }
     }
@@ -60,6 +65,7 @@ impl ControlInputEvent {
     pub(super) fn gamepad_button(event: &crate::input::gamepad::GamepadButtonEvent) -> Self {
         Self {
             synthesized_analog_axis: event.synthesized_analog_axis,
+            timestamp: event.timestamp,
             ..Self::gamepad(event.device_id, &event.name, event.pressed)
         }
     }

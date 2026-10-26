@@ -382,6 +382,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 self.reconcile_keyboard_modifier_releases();
                 self.consume_captured_gamepad_events();
                 if !self.viewer_waiting {
+                    self.advance_select_option_session();
                     self.update_select_option_panel();
                     self.advance_select_hold_move();
                     self.advance_select_ir_battle_hold();

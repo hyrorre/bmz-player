@@ -107,12 +107,11 @@ impl WinitApp {
         ) {
             device_event.bounce_policy = InputBouncePolicy::Bypass;
         }
-        let Some(device_event) = self.filter_app_input_bounce(device_event) else {
-            return;
-        };
-        if self.route_select_option_session_event(&control_event) {
+        let device_event = self.filter_app_input_bounce(device_event);
+        if self.route_select_option_session_event(&control_event, device_event.is_some()) {
             return;
         }
+        let Some(device_event) = device_event else { return };
         if self.route_detail_options_input(&control_event) {
             return;
         }

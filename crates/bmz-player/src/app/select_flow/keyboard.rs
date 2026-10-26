@@ -31,16 +31,13 @@ impl WinitApp {
             }
             return;
         }
-        if !event.repeat
-            && let Some(device_event) = key_event_to_device_input(event)
-            && self.filter_app_input_bounce(device_event).is_none()
-        {
+        let accepted = event.repeat
+            || key_event_to_device_input(event)
+                .is_none_or(|device_event| self.filter_app_input_bounce(device_event).is_some());
+        if accepted && self.route_viewer_keyboard(event) {
             return;
         }
-        if self.route_viewer_keyboard(event) {
-            return;
-        }
-        if self.route_select_option_session_event(&control_event) {
+        if self.route_select_option_session_event(&control_event, accepted) || !accepted {
             return;
         }
         let play_control = control_event.name.as_deref();
