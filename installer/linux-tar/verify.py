@@ -69,6 +69,11 @@ data = home / ".local/share/bmz-player"
 
 # Real startup decodes the packaged skin/font/sample on software Vulkan and a
 # null PulseAudio sink. This tests packaging, not hardware performance or sound.
+# cpal's PulseAudio client finds the socket only via PULSE_SERVER/PULSE_RUNTIME_PATH/
+# XDG_RUNTIME_DIR, unlike libpulse; a container has no login session to set it.
+runtime_dir = home / "runtime"
+runtime_dir.mkdir(mode=0o700)
+os.environ["XDG_RUNTIME_DIR"] = str(runtime_dir)
 run("pulseaudio", "--start", "--exit-idle-time=-1")
 run("pactl", "load-module", "module-null-sink")
 probe = run(str(launcher), "audio-probe", "pulse", "256", "48000", "4",
