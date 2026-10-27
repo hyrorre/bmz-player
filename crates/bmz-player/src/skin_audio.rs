@@ -506,8 +506,13 @@ mod tests {
         // A file that fails to decode is skipped afterwards.
         let broken = root.join("broken.wav");
         std::fs::write(&broken, b"not audio").unwrap();
-        assert!(runtime.run_lua_action(&action(SkinAudioActionKind::Play, &broken, 1.0), 1.0, 1.0));
+        // The decode thread may fail before the first command is queued, so its result varies.
+        runtime.run_lua_action(&action(SkinAudioActionKind::Play, &broken, 1.0), 1.0, 1.0);
         wait_until_loaded(&runtime, &broken);
+        assert!(matches!(
+            *runtime.files[&broken].state.lock().unwrap(),
+            SkinAudioFileState::Failed
+        ));
         assert!(!runtime.run_lua_action(
             &action(SkinAudioActionKind::Play, &broken, 1.0),
             1.0,
