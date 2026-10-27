@@ -78,10 +78,11 @@ run("pulseaudio", "--start", "--exit-idle-time=-1")
 run("pactl", "load-module", "module-null-sink")
 probe = run(str(launcher), "audio-probe", "pulse", "256", "48000", "4",
             env=dict(os.environ, BMZ_LATENCY_DIAGNOSTICS="1"), capture_output=True).stdout
+print(probe, flush=True)
 samples = [json.loads(line.split("BMZ_LATENCY_JSON ", 1)[1]) for line in probe.splitlines()
            if "BMZ_LATENCY_JSON " in line]
-assert samples[-1]["stream"]["actual_host"] == "PulseAudio"
-assert samples[-1]["frames"]["count"] > 0
+assert samples[-1]["stream"]["actual_host"] == "PulseAudio", samples[-1]
+assert samples[-1]["frames"]["count"] > 0, samples[-1]
 trace = home / "resource-access.trace"
 run("timeout", "120", "xvfb-run", "-a", "strace", "-f", "-e", "trace=openat",
     "-e", "status=successful",
