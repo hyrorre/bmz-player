@@ -8,6 +8,8 @@ import shutil
 import subprocess
 import sys
 
+from source_packages import download_sources
+
 
 def output(*args):
     return subprocess.check_output(args, text=True)
@@ -26,7 +28,6 @@ for plugin in plugins:
     subprocess.run(["patchelf", "--set-rpath", "$ORIGIN/" + relative, str(plugin)], check=True)
 if "not found" in listing:
     raise RuntimeError(listing)
-sources = set()
 notices = package / "resources/licenses/ubuntu"
 notices.mkdir()
 shutil.copytree("/usr/share/common-licenses", notices / "common-licenses")
@@ -65,20 +66,13 @@ for line in listing.splitlines():
     source, version, binary_version = output(
         "dpkg-query", "-W", "-f=${source:Package}\t${source:Version}\t${Version}", owner
     ).split("\t")
-    sources.add((source, version))
     copyright_path = Path("/usr/share/doc") / owner.split(":")[0] / "copyright"
     shutil.copy2(copyright_path, notices / (owner.replace(":", "_") + ".txt"))
     provenance.append(f"{name}\t{owner}={binary_version}\t{source}={version}")
     packages.append(dict(library=name, binary_package=owner, binary_version=binary_version,
                          source_package=source, source_version=version))
 
-for source, version in sorted(sources):
-    directory = source_root / "ubuntu" / source
-    directory.mkdir(parents=True)
-    subprocess.run(
-        ["apt-get", "source", "--download-only", f"{source}={version}"],
-        cwd=directory, check=True,
-    )
+download_sources(packages, source_root)
 (notices / "packages.txt").write_text("\n".join(provenance) + "\n")
 (notices / "packages.json").write_text(json.dumps(packages, indent=2) + "\n")
 subprocess.run(["patchelf", "--set-rpath", "$ORIGIN/../lib", str(package / "bin/bmz-player")], check=True)

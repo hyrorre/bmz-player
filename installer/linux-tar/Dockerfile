@@ -1,10 +1,13 @@
 FROM ubuntu:22.04 AS tools
 ENV DEBIAN_FRONTEND=noninteractive
 RUN sed -i 's/^# deb-src /deb-src /' /etc/apt/sources.list \
-    && apt-get update && apt-get install -y --no-install-recommends \
+    && apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
        build-essential ca-certificates curl git pkg-config clang libclang-dev \
        nasm xz-utils python3 dpkg-dev meson ninja-build libasound2-dev libpulse-dev libudev-dev \
-       libfontconfig1-dev libdbus-1-dev libxkbcommon-dev zlib1g-dev libbz2-dev
+       libfontconfig1-dev libdbus-1-dev libxkbcommon-dev zlib1g-dev libbz2-dev \
+    && apt list --upgradable && apt-mark showhold
 RUN curl --fail --location --retry 3 https://sh.rustup.rs -o /tmp/rustup.sh \
     && sh /tmp/rustup.sh -y --profile minimal --default-toolchain stable
 ENV PATH="/root/.cargo/bin:${PATH}"
