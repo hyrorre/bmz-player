@@ -11,7 +11,12 @@ import subprocess
 
 def run(*args, **kwargs):
     print("+", *map(str, args), flush=True)
-    return subprocess.run(args, check=True, text=True, **kwargs)
+    try:
+        return subprocess.run(args, check=True, text=True, **kwargs)
+    except subprocess.CalledProcessError as error:
+        # Captured output is otherwise lost from the CI log on failure.
+        print(error.stdout or "", error.stderr or "", sep="\n", flush=True)
+        raise
 
 
 package = Path("/opt/BMZ Player")
