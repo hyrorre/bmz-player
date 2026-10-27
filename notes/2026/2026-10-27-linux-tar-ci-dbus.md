@@ -33,3 +33,33 @@ Windows上のパッケージテスト19件中15件が成功し、追加した4�
 既存の4件は上記と同じパス区切りの違いで失敗した。Dockerは利用できず、
 Ubuntu・FedoraのWSLは仮想ディスクを開けなかったため、イメージの更新、実際の
 対応ソース取得、Linux tar全体、および修正後のCIは未検証。
+
+## 同日の検証段階の失敗と修正後のCI
+
+`d2d87a89` へ付け直したタグの
+[run 40429034335](https://github.com/hyrorre/bmz-player/actions/runs/40429034335)では
+対応ソース取得は通過し、展開後パッケージの検証 (`installer/linux-tar/verify.py`) で
+v0.5.0から追加された `audio-probe pulse` が終了コード1で失敗した。出力を
+`capture_output` で取得していたためログに原因が残らず、失敗時に表示するよう変更した。
+`claude/linux-tar-verify-output` での
+[Optional Linux tar.gz](../../.github/workflows/linux-tar.yml) の実行で、次の3件を順に修正した。
+
+- `PulseAudio is not available`: cpal 0.18.1のPulseAudio hostは純Rustの
+  `pulseaudio` crateで、ソケットを `PULSE_SERVER` / `PULSE_RUNTIME_PATH` /
+  `XDG_RUNTIME_DIR` からしか探さない。検証コンテナにはログインセッションがなく
+  `XDG_RUNTIME_DIR` が未設定のため、libpulseの `pactl` は接続できてもBMZは
+  接続できなかった。PulseAudio起動前に専用のruntime dir (0700) を設定した。
+  通常のデスクトップセッションでは設定済みのため、テスト環境側の問題と判断した。
+- `frames.count` が0: null sinkでは最初のcallbackが約2秒止まり、1秒超の間隔で
+  timing計測がリセットされて2秒のwarmupをやり直す。4秒のprobeでは計測区間が残らなかった
+  (callback 361回、96545 frame描画済み)。probeを8秒にし、`rendered_frames` も確認する。
+- `skin_audio::tests::lua_actions_decode_new_files_in_the_background_and_keep_their_order`
+  が1回失敗した。decodeスレッドは命令の登録前に開始するため、壊れたファイルの
+  decode失敗が先に確定すると最初のPlayがfalseを返す。テストの競合であり、
+  最初の戻り値ではなく `Failed` 状態と以後のスキップを確認するよう変更した。
+
+修正後の[run 40460946767](https://github.com/hyrorre/bmz-player/actions/runs/40460946767)で
+build、workspace test、対応ソース取得、展開後パッケージの検証がすべて成功した。
+macOSでは `cargo fmt --check`、skin_audioのテスト、`bmz-player` のall-targets Clippy、
+`installer/linux-tar` の回帰テスト19件が成功した。実機のPulseAudio / PipeWire環境での
+再生は未確認。
