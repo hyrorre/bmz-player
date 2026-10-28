@@ -27,7 +27,7 @@ pub fn scan_song_roots_with_progress(
         root_id: i64,
         root_num: usize,
         entries: Vec<ChartFileEntry>,
-        archives: Vec<PathBuf>,
+        archives: Vec<super::discovery::DiscoveredArchive>,
         discovery_complete: bool,
         root_readable: bool,
         recursive: bool,
@@ -127,9 +127,35 @@ pub fn scan_song_roots_with_progress(
     }
     on_progress(ScanProgress { done: 0, total: files_total });
 
+    // Discovery precedes all writes. Preserve positive evidence from every root,
+    // including incomplete scans, until all imports have finished.
+    let discovered_any: HashSet<String> = discovered_roots
+        .iter()
+        .flat_map(|root| root.entries.iter().map(|entry| library_path_key(&entry.path)))
+        .collect();
+    let root_key = |path: &Path| {
+        let key = library_path_key(path);
+        #[cfg(windows)]
+        let key = key.to_lowercase();
+        key.trim_end_matches('/').to_string()
+    };
+    let scanned_keys: HashSet<String> =
+        discovered_roots.iter().map(|root| root_key(&root.root_path)).collect();
+    let mut protected_roots: Vec<PathEntry> = db
+        .retained_song_root_entries()?
+        .into_iter()
+        .filter(|root| !scanned_keys.contains(&root_key(Path::new(&root.path))))
+        .collect();
+    let mut pending_prune = Vec::new();
+
     let mut progress_done = 0_u32;
     for mut root in discovered_roots {
         if !root.root_readable {
+            protected_roots.push(PathEntry {
+                path: library_path_key(&root.root_path),
+                enabled: true,
+                recursive: root.recursive,
+            });
             continue;
         }
 
@@ -156,20 +182,28 @@ pub fn scan_song_roots_with_progress(
         let skip_start = Instant::now();
         let mut to_import: Vec<FileTodo> = Vec::new();
         let mut unchanged_count = 0_u32;
-        let mut archives: HashMap<PathBuf, Vec<&ChartFileEntry>> = root
+        let mut archives: HashMap<
+            PathBuf,
+            (crate::song_archive::ArchiveGeneration, Vec<&ChartFileEntry>),
+        > = root
             .archives
-            .into_iter()
-            .map(|path| {
+            .iter()
+            .map(|archive| {
                 // Use the same spelling as virtual chart entries, including removal
                 // of Windows extended-length prefixes, to avoid an empty alias group.
-                (PathBuf::from(library_path_key(&path)), Vec::new())
+                (
+                    PathBuf::from(library_path_key(&archive.path)),
+                    (archive.generation.clone(), Vec::new()),
+                )
             })
             .collect();
         for entry in &entries {
             if let Ok(crate::chart_source::ChartLocator::Archive { container, .. }) =
                 crate::chart_source::ChartLocator::parse(&entry.path)
             {
-                archives.entry(container).or_default().push(entry);
+                if let Some((_, entries)) = archives.get_mut(&container) {
+                    entries.push(entry);
+                }
                 continue;
             }
             let key = library_path_key(&entry.path);
@@ -196,7 +230,7 @@ pub fn scan_song_roots_with_progress(
         on_progress(ScanProgress { done: progress_done, total: files_total });
 
         let mut failed_archives = std::collections::HashSet::new();
-        for (container, archive_entries) in archives {
+        for (container, (generation, archive_entries)) in archives {
             let count = usize_to_u32(archive_entries.len());
             match super::archive::import_archive(
                 db,
@@ -206,6 +240,7 @@ pub fn scan_song_roots_with_progress(
                 force,
                 &fingerprints,
                 &archive_entries,
+                &generation,
             ) {
                 Ok(archive) => {
                     report.summary.imported += archive.summary.imported;
@@ -369,19 +404,81 @@ pub fn scan_song_roots_with_progress(
         );
 
         if root.discovery_complete {
-            // Everything results may lag the file system; there only the file system decides.
-            let discovered: Option<HashSet<String>> = (root.backend
-                != ScanDiscoveryBackend::Everything)
-                .then(|| entries.iter().map(|entry| library_path_key(&entry.path)).collect());
-            report.summary.removed_files +=
-                db.prune_missing_chart_files(root_path, root.recursive, discovered.as_ref())?;
-            db.update_root_scanned_at(root.root_id, scanned_at)?;
+            if root.backend == ScanDiscoveryBackend::Everything {
+                protected_roots.push(PathEntry {
+                    path: library_path_key(root_path),
+                    enabled: true,
+                    recursive: root.recursive,
+                });
+            }
+            pending_prune.push((
+                root.root_path.clone(),
+                root.root_id,
+                root.recursive,
+                root.backend,
+                entries.iter().map(|entry| library_path_key(&entry.path)).collect::<HashSet<_>>(),
+                root.archives,
+            ));
         } else {
+            protected_roots.push(PathEntry {
+                path: library_path_key(root_path),
+                enabled: true,
+                recursive: root.recursive,
+            });
             tracing::warn!(
                 root = %root_path.display(),
                 "song root discovery was incomplete; last_scan_at was not updated"
             );
         }
+    }
+
+    let mut validated = Vec::new();
+    for (root_path, root_id, recursive, backend, discovered, archives) in pending_prune {
+        let mut valid = true;
+        for archive in &archives {
+            match crate::song_archive::inspect(&archive.path, &Default::default()) {
+                Ok(index) if index.generation == archive.generation => {}
+                Err(_) if matches!(archive.path.try_exists(), Ok(false)) => {}
+                _ => {
+                    valid = false;
+                    report.summary.discovery_skipped =
+                        report.summary.discovery_skipped.saturating_add(1);
+                    record_discovery_issue(
+                        &mut report.discovery_issues,
+                        &root_path,
+                        &archive.path,
+                        ScanDiscoveryOperation::ReadArchive,
+                        io::Error::other("archive changed or became unreadable after discovery"),
+                    );
+                    report.failures.push(ScanFailure {
+                        path: archive.path.clone(),
+                        message: "archive changed or became unreadable after discovery; existing registrations retained".to_string(),
+                    });
+                }
+            }
+        }
+        if !valid {
+            protected_roots.push(PathEntry {
+                path: library_path_key(&root_path),
+                enabled: true,
+                recursive,
+            });
+            continue;
+        }
+        validated.push((root_path, root_id, recursive, backend, discovered));
+    }
+    for (root_path, root_id, recursive, backend, discovered) in validated {
+        // Everything results may lag and do not establish absence from scope.
+        let discovered = (backend != ScanDiscoveryBackend::Everything).then_some(&discovered);
+        report.summary.removed_files += db.prune_missing_chart_files(
+            &root_path,
+            recursive,
+            scan.skip_hidden,
+            discovered,
+            &discovered_any,
+            &protected_roots,
+        )?;
+        db.update_root_scanned_at(root_id, scanned_at)?;
     }
 
     on_progress(ScanProgress { done: files_total, total: files_total });

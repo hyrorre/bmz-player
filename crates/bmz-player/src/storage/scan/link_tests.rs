@@ -43,6 +43,7 @@ fn roots(root: &Path, recursive: bool) -> Vec<PathEntry> {
 }
 
 /// Discovered paths relative to `root`, sorted, with `/` separators.
+#[cfg(unix)]
 fn discovered(root: &Path, recursive: bool, config: &ScanConfig) -> (Vec<String>, ChartDiscovery) {
     let discovery = discover_chart_files_with_progress(root, recursive, config, |_| {});
     let mut paths: Vec<String> = discovery
@@ -401,6 +402,198 @@ fn write_zip(path: &Path, entries: &[(&str, &str)]) {
         writer.write_all(text.as_bytes()).unwrap();
     }
     writer.finish().unwrap();
+}
+
+#[test]
+fn archive_rewritten_after_discovery_keeps_prior_registration() {
+    let base = temp();
+    let root = base.path().join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let pack = root.join("pack.zip");
+    let old = "#TITLE Old\n#BPM 120\n#00011:01\n";
+    write_zip(&pack, &[("old.bms", old)]);
+    let mut db = db();
+    scan_song_roots(&mut db, &roots(&root, true), &config(true), 1, false).unwrap();
+    write_zip(&pack, &[("temporary-longer-name.bms", old)]);
+    let mut replaced = false;
+    let report = scan_song_roots_with_progress(
+        &mut db,
+        &roots(&root, true),
+        &config(true),
+        2,
+        false,
+        |progress| {
+            if !replaced && progress.done == 0 && progress.total == 1 {
+                write_zip(&pack, &[("old.bms", old)]);
+                replaced = true;
+            }
+        },
+    )
+    .unwrap();
+    assert!(replaced);
+    assert!(!report.failures.is_empty());
+    assert_eq!(report.summary.removed_files, 0);
+    assert_eq!(registered(&db, &root), ["pack.zip!/old.bms"]);
+    let last: Option<i64> =
+        db.conn().query_row("SELECT last_scan_at FROM roots", [], |row| row.get(0)).unwrap();
+    assert_eq!(last, Some(1));
+}
+
+#[test]
+fn archive_rewritten_after_import_keeps_prior_registration() {
+    let base = temp();
+    let root = base.path().join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let pack = root.join("pack.zip");
+    let text = "#TITLE Song\n#BPM 120\n#00011:01\n";
+    write_zip(&pack, &[("a.bms", text), ("b.bms", text)]);
+    let mut db = db();
+    scan_song_roots(&mut db, &roots(&root, true), &config(true), 1, false).unwrap();
+    write_zip(&pack, &[("a.bms", text)]);
+    let mut replaced = false;
+    let report = scan_song_roots_with_progress(
+        &mut db,
+        &roots(&root, true),
+        &config(true),
+        2,
+        false,
+        |progress| {
+            if !replaced && progress.done == 1 && progress.total == 1 {
+                write_zip(&pack, &[("a.bms", text), ("b.bms", text)]);
+                replaced = true;
+            }
+        },
+    )
+    .unwrap();
+    assert!(replaced);
+    assert!(!report.failures.is_empty());
+    assert_eq!(report.summary.removed_files, 0);
+    assert_eq!(registered(&db, &root), ["pack.zip!/a.bms", "pack.zip!/b.bms"]);
+    let last: Option<i64> =
+        db.conn().query_row("SELECT last_scan_at FROM roots", [], |row| row.get(0)).unwrap();
+    assert_eq!(last, Some(1));
+}
+
+#[cfg(any(unix, windows))]
+fn link_dir(target: &Path, link: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).unwrap();
+    #[cfg(windows)]
+    {
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .status()
+            .unwrap();
+        assert!(status.success(), "failed to create junction");
+    }
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn overlapping_roots_preserve_links_in_either_order_and_partial_scans() {
+    let base = temp();
+    let root = base.path().join("root");
+    let child = root.join("child");
+    let actual = root.join("actual");
+    chart(&actual.join("song.bms"), "Shared");
+    std::fs::create_dir_all(&child).unwrap();
+    link_dir(&actual, &child.join("link"));
+    let parent_root = roots(&root, true).remove(0);
+    let child_root = roots(&child, true).remove(0);
+    let mut db = db();
+    db.set_configured_song_roots(&[child_root.clone(), parent_root.clone()]).unwrap();
+    for (time, entries) in [
+        (1, vec![child_root.clone(), parent_root.clone()]),
+        (2, vec![parent_root.clone(), child_root.clone()]),
+        (3, vec![parent_root.clone()]),
+    ] {
+        scan_song_roots(&mut db, &entries, &config(true), time, false).unwrap();
+        assert_eq!(registered(&db, &root), ["actual/song.bms", "child/link/song.bms"]);
+    }
+    std::fs::remove_file(actual.join("song.bms")).unwrap();
+    scan_song_roots(&mut db, std::slice::from_ref(&parent_root), &config(true), 4, false).unwrap();
+    assert_eq!(registered(&db, &root), ["child/link/song.bms"]);
+    scan_song_roots(&mut db, &[parent_root, child_root], &config(true), 5, false).unwrap();
+    assert!(registered(&db, &root).is_empty());
+}
+
+#[test]
+fn unavailable_overlapping_root_preserves_its_registrations() {
+    let base = temp();
+    let root = base.path().join("root");
+    let child = root.join("child");
+    chart(&child.join("song.bms"), "Song");
+    let parent_root = roots(&root, true).remove(0);
+    let child_root = roots(&child, true).remove(0);
+    let both = [parent_root, child_root];
+    let mut db = db();
+    db.set_configured_song_roots(&both).unwrap();
+    scan_song_roots(&mut db, &both, &config(true), 1, false).unwrap();
+    std::fs::rename(&child, base.path().join("offline")).unwrap();
+    let report = scan_song_roots(&mut db, &both, &config(true), 2, false).unwrap();
+    assert_eq!(report.summary.roots_unreadable, 1);
+    assert_eq!(registered(&db, &root), ["child/song.bms"]);
+    std::fs::rename(base.path().join("offline"), &child).unwrap();
+    std::fs::remove_file(child.join("song.bms")).unwrap();
+    scan_song_roots(&mut db, &both, &config(true), 3, false).unwrap();
+    assert!(registered(&db, &root).is_empty());
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn hidden_setting_preserves_existing_files_but_removes_missing_files() {
+    let base = temp();
+    let root = base.path().join("root");
+    #[cfg(windows)]
+    let (folder, file) = (root.join("hidden-folder"), root.join("hidden.bms"));
+    #[cfg(not(windows))]
+    let (folder, file) = (root.join(".hidden-folder"), root.join(".hidden.bms"));
+    chart(&folder.join("song.bms"), "Inside");
+    chart(&file, "Hidden");
+    let mut cfg = config(true);
+    cfg.skip_hidden = false;
+    let mut db = db();
+    scan_song_roots(&mut db, &roots(&root, true), &cfg, 1, false).unwrap();
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_HIDDEN, SetFileAttributesW};
+        for path in [&folder, &file] {
+            let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+            assert_ne!(unsafe { SetFileAttributesW(wide.as_ptr(), FILE_ATTRIBUTE_HIDDEN) }, 0);
+        }
+    }
+    cfg.skip_hidden = true;
+    let report = scan_song_roots(&mut db, &roots(&root, true), &cfg, 2, false).unwrap();
+    assert_eq!(report.summary.files_seen, 0);
+    assert_eq!(count(&db, "chart_files"), 2);
+    std::fs::remove_file(folder.join("song.bms")).unwrap();
+    std::fs::remove_file(&file).unwrap();
+    scan_song_roots(&mut db, &roots(&root, true), &cfg, 3, false).unwrap();
+    assert_eq!(count(&db, "chart_files"), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn hidden_archive_entry_is_retained_only_while_it_exists() {
+    let base = temp();
+    let root = base.path().join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let pack = root.join("pack.zip");
+    let text = "#TITLE Hidden\n#BPM 120\n#00011:01\n";
+    write_zip(&pack, &[(".hidden/song.bms", text)]);
+    let mut cfg = config(true);
+    cfg.skip_hidden = false;
+    let mut db = db();
+    scan_song_roots(&mut db, &roots(&root, true), &cfg, 1, false).unwrap();
+    cfg.skip_hidden = true;
+    scan_song_roots(&mut db, &roots(&root, true), &cfg, 2, false).unwrap();
+    assert_eq!(count(&db, "chart_files"), 1);
+    write_zip(&pack, &[]);
+    scan_song_roots(&mut db, &roots(&root, true), &cfg, 3, false).unwrap();
+    assert_eq!(count(&db, "chart_files"), 0);
 }
 
 #[test]

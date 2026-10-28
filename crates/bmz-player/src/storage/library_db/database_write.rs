@@ -5,9 +5,9 @@ impl LibraryDatabase {
     /// Do not infer deletion from timestamps: unchanged imports keep old timestamps.
     ///
     /// With `discovered`, the [`library_path_key`]s of a complete native discovery,
-    /// that set defines the scope: a registration it lacks is out of scope (an alias
-    /// through a link that was not chosen, a hidden or unlinked path) or was already
-    /// gone. Registrations it holds are confirmed again here, right before the commit,
+    /// that set helps define the scope: a registration it lacks may be an unchosen
+    /// alias or already gone. Hidden entries and other root scopes can still retain it.
+    /// Registrations it holds are confirmed again here, right before the commit,
     /// so a chart deleted after discovery is removed as well. Only `Ok(false)` from the
     /// file system proves absence; an access error keeps the row. Without `discovered`
     /// (an index such as Everything may lag), only that check decides.
@@ -15,7 +15,10 @@ impl LibraryDatabase {
         &mut self,
         root: &Path,
         recursive: bool,
+        skip_hidden: bool,
         discovered: Option<&std::collections::HashSet<String>>,
+        discovered_any: &std::collections::HashSet<String>,
+        protected_roots: &[crate::config::app_config::PathEntry],
     ) -> Result<usize> {
         use rayon::prelude::*;
 
@@ -40,7 +43,68 @@ impl LibraryDatabase {
             if !song_root_contains_file(&root, &path) {
                 continue;
             }
-            if discovered.is_some_and(|discovered| !discovered.contains(&path)) {
+            let omitted = discovered.is_some_and(|discovered| !discovered.contains(&path));
+            let protected_scope = protected_roots.iter().any(|other| {
+                // A root cannot protect its own omitted entries.
+                let own = library_path_key(Path::new(&root.path));
+                let other_key = library_path_key(Path::new(&other.path));
+                #[cfg(windows)]
+                let same_root = own.eq_ignore_ascii_case(&other_key);
+                #[cfg(not(windows))]
+                let same_root = own == other_key;
+                !same_root && song_root_contains_file(other, &path)
+            });
+            if protected_scope {
+                // An offline, disabled, or unscanned root cannot prove absence.
+                continue;
+            }
+            if omitted && !discovered_any.contains(&path) {
+                // The hidden setting only restricts new discovery. Keep existing
+                // hidden files, as before this scan optimization.
+                if skip_hidden
+                    && let Ok(locator) = crate::chart_source::ChartLocator::parse(Path::new(&path))
+                {
+                    let container = locator.container_path();
+                    match container.try_exists() {
+                        Err(_) => continue,
+                        Ok(true) => {
+                            if crate::storage::scan::hidden_path_in_root(
+                                Path::new(&root.path),
+                                container,
+                            ) != Some(false)
+                            {
+                                continue;
+                            }
+                            if let crate::chart_source::ChartLocator::Archive { entry, .. } =
+                                &locator
+                            {
+                                let hidden = !cfg!(windows)
+                                    && entry.split('/').any(|part| part.starts_with('.'));
+                                if hidden {
+                                    let current = crate::song_archive::inspect(
+                                        container,
+                                        &Default::default(),
+                                    )
+                                    .ok();
+                                    let generation: Option<String> = self.conn.query_row(
+                                            "SELECT generation FROM song_archive_scans WHERE path = ?1",
+                                            [library_path_key(container)], |row| row.get(0),
+                                        ).ok();
+                                    if current.as_ref().is_none_or(|index| {
+                                        generation.as_deref()
+                                            != Some(index.generation.fingerprint.as_str())
+                                            || index.entries.iter().any(|item| {
+                                                !item.is_directory && item.name == *entry
+                                            })
+                                    }) {
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                        Ok(false) => {}
+                    }
+                }
                 missing.push(id);
                 continue;
             }

@@ -8,10 +8,16 @@ pub struct ChartFileEntry {
     pub has_document: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct DiscoveredArchive {
+    pub(super) path: PathBuf,
+    pub(super) generation: crate::song_archive::ArchiveGeneration,
+}
+
 #[derive(Debug, Default)]
 pub(super) struct ChartDiscovery {
     pub(super) entries: Vec<ChartFileEntry>,
-    pub(super) archives: Vec<PathBuf>,
+    pub(super) archives: Vec<DiscoveredArchive>,
     pub(super) issues: Vec<ScanDiscoveryIssue>,
     pub(super) complete: bool,
     pub(super) root_readable: bool,
@@ -253,8 +259,10 @@ impl DiscoveryWalk<'_> {
             }
             let entries = if file.archive {
                 match discover_archive_charts(&file.link, self.skip_hidden) {
-                    Ok(entries) => {
-                        discovery.archives.push(file.link.clone());
+                    Ok((entries, generation)) => {
+                        discovery
+                            .archives
+                            .push(DiscoveredArchive { path: file.link.clone(), generation });
                         entries
                     }
                     Err(error) => {
@@ -423,8 +431,8 @@ impl DiscoveryWalk<'_> {
                     listing.regular_files.push(parent.join(&file_name));
                 }
                 match discover_archive_charts(&path, self.skip_hidden) {
-                    Ok(entries) => {
-                        listing.archives.push(path.clone());
+                    Ok((entries, generation)) => {
+                        listing.archives.push(DiscoveredArchive { path: path.clone(), generation });
                         listing.entries.extend(entries);
                     }
                     Err(error) => {
@@ -486,7 +494,7 @@ struct DirectoryListing {
     readable: bool,
     complete: bool,
     entries: Vec<ChartFileEntry>,
-    archives: Vec<PathBuf>,
+    archives: Vec<DiscoveredArchive>,
     issues: Vec<ScanDiscoveryIssue>,
     subdirs: Vec<DirectoryUnit>,
     linked_dirs: Vec<LinkedDirectory>,
@@ -538,14 +546,14 @@ pub(super) fn unresolvable_link_reason(error: &io::Error) -> Option<&'static str
 pub(super) fn discover_archive_charts(
     path: &Path,
     skip_hidden: bool,
-) -> Result<Vec<ChartFileEntry>> {
+) -> Result<(Vec<ChartFileEntry>, crate::song_archive::ArchiveGeneration)> {
     let index = crate::song_archive::inspect(path, &Default::default())?;
     let modified_at = std::fs::metadata(path)?
         .modified()
         .ok()
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
         .map_or(0, |time| time.as_secs() as i64);
-    Ok(index
+    let entries = index
         .entries
         .iter()
         .filter(|entry| {
@@ -566,7 +574,8 @@ pub(super) fn discover_archive_charts(
             modified_at,
             has_document: crate::chart_source::archive_folder_has_document(&index, &entry.name),
         })
-        .collect())
+        .collect();
+    Ok((entries, index.generation))
 }
 
 pub(super) fn record_discovery_issue(
@@ -654,5 +663,37 @@ pub(super) fn is_hidden_metadata(metadata: &std::fs::Metadata) -> bool {
     {
         let _ = metadata;
         false
+    }
+}
+
+/// Check the entry and ancestors below the root without following links.
+/// An inaccessible component is unknown and must not justify pruning.
+pub(crate) fn hidden_path_in_root(root: &Path, path: &Path) -> Option<bool> {
+    let key = |path: &Path| {
+        let key = crate::paths::normalize_library_path(&path.to_string_lossy());
+        #[cfg(windows)]
+        let key = key.to_lowercase();
+        key.trim_end_matches('/').to_string()
+    };
+    let root_key = key(root);
+    let mut current = path.to_path_buf();
+    loop {
+        if key(&current) == root_key {
+            return Some(false);
+        }
+        if is_hidden_name(current.file_name()?) {
+            return Some(true);
+        }
+        if cfg!(any(windows, target_os = "macos")) {
+            match std::fs::symlink_metadata(&current) {
+                Ok(metadata) if is_hidden_metadata(&metadata) => return Some(true),
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Some(false),
+                Err(_) => return None,
+            }
+        }
+        if !current.pop() {
+            return None;
+        }
     }
 }

@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use everything_ipc::wm::{EverythingClient, FileInfo, RequestFlags};
 
 use super::discovery::{
-    ChartDiscovery, ChartFileEntry, discover_archive_charts, is_chart_file_name,
+    ChartDiscovery, ChartFileEntry, DiscoveredArchive, discover_archive_charts, is_chart_file_name,
     is_document_file_name, is_hidden_metadata, record_discovery_issue, usize_to_u32,
 };
 use super::{ScanConfig, ScanDiscoveryBackend, ScanDiscoveryOperation};
@@ -105,9 +105,9 @@ pub(super) fn discover_chart_files_everything(
             // Like native discovery, one unreadable archive is an issue, not a reason to
             // abandon the whole root and fall back to a much slower directory walk.
             match discover_archive_charts(&output_path, scan.skip_hidden) {
-                Ok(entries) => {
+                Ok((entries, generation)) => {
                     chart_entries.extend(entries);
-                    archives.push(output_path);
+                    archives.push(DiscoveredArchive { path: output_path, generation });
                 }
                 Err(error) => record_discovery_issue(
                     &mut issues,

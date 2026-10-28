@@ -124,6 +124,7 @@ mod import;
 mod link_tests;
 
 pub(crate) use discovery::folder_has_document;
+pub(crate) use discovery::hidden_path_in_root;
 pub use discovery::{ChartFileEntry, discover_chart_files};
 pub use import::{scan_song_roots, scan_song_roots_with_progress};
 
