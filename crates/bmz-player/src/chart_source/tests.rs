@@ -167,7 +167,7 @@ fn hidden_archive_members_obey_scan_setting_and_appledouble_is_always_excluded()
             ("._song.bms", BMS),
         ],
     );
-    assert_eq!(f.scan().summary.imported, 1);
+    assert_eq!(f.scan().summary.imported, if cfg!(windows) { 3 } else { 1 });
     let scan = crate::config::app_config::ScanConfig {
         use_everything: false,
         skip_hidden: false,

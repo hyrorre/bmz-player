@@ -327,6 +327,25 @@ impl DiscoveryWalk<'_> {
                 continue;
             }
             let path = entry.path();
+            // Windows/macOS hidden attributes belong to the directory entry itself;
+            // do not follow a link before deciding whether to skip it.
+            if self.skip_hidden && cfg!(any(windows, target_os = "macos")) {
+                match entry.metadata() {
+                    Ok(metadata) if is_hidden_metadata(&metadata) => continue,
+                    Ok(_) => {}
+                    Err(error) => {
+                        listing.complete = false;
+                        record_discovery_issue(
+                            &mut listing.issues,
+                            root,
+                            &path,
+                            ScanDiscoveryOperation::ReadMetadata,
+                            error,
+                        );
+                        continue;
+                    }
+                }
+            }
             let file_type = match entry.file_type() {
                 Ok(file_type) => file_type,
                 Err(error) => {
@@ -534,7 +553,7 @@ pub(super) fn discover_archive_charts(
                 && !entry.name.split('/').any(|part| {
                     part == "__MACOSX"
                         || part.starts_with("._")
-                        || (skip_hidden && part.starts_with('.'))
+                        || (skip_hidden && is_hidden_name(std::ffi::OsStr::new(part)))
                 })
         })
         .map(|entry| ChartFileEntry {
@@ -610,5 +629,30 @@ pub(super) fn is_chart_file_name(name: &std::ffi::OsStr) -> bool {
 }
 
 pub(super) fn is_hidden_name(name: &std::ffi::OsStr) -> bool {
+    #[cfg(windows)]
+    {
+        let _ = name;
+        false
+    }
+    #[cfg(not(windows))]
     name.to_str().map(|name| name.starts_with('.')).unwrap_or(false)
+}
+
+pub(super) fn is_hidden_metadata(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
+        metadata.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::macos::fs::MetadataExt;
+        metadata.st_flags() & libc::UF_HIDDEN != 0
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = metadata;
+        false
+    }
 }

@@ -250,6 +250,7 @@ CLIの`songs load` / `songs reload`も、対象を指定しない場合は全体
 - 全体の同期の後も残したい場所は、`songs add <PATH>`で設定に登録してください。
 
 曲root内のZIP / RAR / 7zは、展開せずにスキャンできます。
+隠しファイルの判定はOSごとに異なります。詳しくは[曲の取得元とスキャン](song-sources.md#走査と更新)を参照してください。
 展開の時期、キャッシュ、対応形式と制限は[書庫内譜面の直接再生](archive-songs.md)を参照してください。
 Windowsでの高速なファイル探索は[Everything連携](everything.md)を参照してください。
 

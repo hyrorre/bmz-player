@@ -204,11 +204,90 @@ mod tests {
         let shallow = discover_chart_files(&root, false, &scan_config()).unwrap();
         let deep = discover_chart_files(&root, true, &scan_config()).unwrap();
 
-        assert_eq!(shallow.len(), 1);
-        assert_eq!(deep.len(), 2);
+        assert_eq!(shallow.len(), if cfg!(windows) { 2 } else { 1 });
+        assert_eq!(deep.len(), if cfg!(windows) { 3 } else { 2 });
         assert!(shallow[0].has_document);
         assert!(deep.iter().any(|entry| entry.has_document));
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn scan_filters_platform_hidden_files_and_folders() {
+        let root = make_temp_dir("platform-hidden");
+        let hidden_dir = root.join("hidden-dir");
+        let dot_dir = root.join(".dot-dir");
+        std::fs::create_dir_all(&hidden_dir).unwrap();
+        std::fs::create_dir_all(&dot_dir).unwrap();
+        write_file(&hidden_dir.join("inside.bms"), "#TITLE Hidden\n");
+        write_file(&dot_dir.join("inside.bms"), "#TITLE Dot\n");
+        let hidden_file = root.join("hidden.bms");
+        write_file(&hidden_file, "#TITLE Hidden file\n");
+        write_file(&root.join("visible.bms"), "#TITLE Visible\n");
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            use windows_sys::Win32::Storage::FileSystem::{
+                FILE_ATTRIBUTE_HIDDEN, SetFileAttributesW,
+            };
+            for path in [&hidden_dir, &hidden_file] {
+                let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+                assert_ne!(unsafe { SetFileAttributesW(wide.as_ptr(), FILE_ATTRIBUTE_HIDDEN) }, 0);
+            }
+        }
+        #[cfg(target_os = "macos")]
+        for path in [&hidden_dir, &hidden_file] {
+            assert!(
+                std::process::Command::new("chflags")
+                    .arg("hidden")
+                    .arg(path)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+
+        for follow_symlinks in [false, true] {
+            let mut config = scan_config();
+            config.follow_symlinks = follow_symlinks;
+            let found = discover_chart_files(&root, true, &config).unwrap();
+            assert!(found.iter().any(|entry| entry.path == root.join("visible.bms")));
+            assert!(
+                !found
+                    .iter()
+                    .any(|entry| entry.path == hidden_file || entry.path.starts_with(&hidden_dir))
+            );
+            assert_eq!(found.iter().any(|entry| entry.path.starts_with(&dot_dir)), cfg!(windows));
+            config.skip_hidden = false;
+            assert_eq!(discover_chart_files(&root, true, &config).unwrap().len(), 4);
+        }
+
+        #[cfg(windows)]
+        {
+            let mut cache = std::collections::HashMap::new();
+            assert!(
+                super::everything::has_hidden_component(
+                    &root,
+                    Path::new("hidden-dir/inside.bms"),
+                    &mut cache
+                )
+                .unwrap()
+            );
+            assert!(
+                super::everything::has_hidden_component(&root, Path::new("hidden.bms"), &mut cache)
+                    .unwrap()
+            );
+            assert!(
+                !super::everything::has_hidden_component(
+                    &root,
+                    Path::new(".dot-dir/inside.bms"),
+                    &mut cache
+                )
+                .unwrap()
+            );
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 

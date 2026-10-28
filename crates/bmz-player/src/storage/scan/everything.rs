@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -7,7 +7,7 @@ use everything_ipc::wm::{EverythingClient, FileInfo, RequestFlags};
 
 use super::discovery::{
     ChartDiscovery, ChartFileEntry, discover_archive_charts, is_chart_file_name,
-    is_document_file_name, record_discovery_issue, usize_to_u32,
+    is_document_file_name, is_hidden_metadata, record_discovery_issue, usize_to_u32,
 };
 use super::{ScanConfig, ScanDiscoveryBackend, ScanDiscoveryOperation};
 
@@ -71,6 +71,7 @@ pub(super) fn discover_chart_files_everything(
     let mut archives = Vec::new();
     let mut issues = Vec::new();
     let mut document_folders = HashSet::new();
+    let mut hidden_cache = HashMap::new();
     for item in results.iter() {
         let parent = item
             .get_str(RequestFlags::Path)
@@ -86,7 +87,9 @@ pub(super) fn discover_chart_files_everything(
         {
             continue;
         }
-        if scan.skip_hidden && has_dot_prefixed_component(&relative_path) {
+        if scan.skip_hidden
+            && has_hidden_component(&absolute_root, &relative_path, &mut hidden_cache)?
+        {
             continue;
         }
 
@@ -193,11 +196,31 @@ fn path_relative_to_root(path: &Path, root: &Path) -> Option<PathBuf> {
     Some(PathBuf::from(suffix.trim_start_matches('\\')))
 }
 
-fn has_dot_prefixed_component(path: &Path) -> bool {
-    path.components().any(|component| match component {
-        Component::Normal(name) => name.to_str().is_some_and(|name| name.starts_with('.')),
-        _ => false,
-    })
+pub(super) fn has_hidden_component(
+    root: &Path,
+    path: &Path,
+    cache: &mut HashMap<PathBuf, bool>,
+) -> Result<bool> {
+    let mut current = root.to_path_buf();
+    for component in path.components() {
+        if let Component::Normal(name) = component {
+            current.push(name);
+            let hidden = if let Some(hidden) = cache.get(&current) {
+                *hidden
+            } else {
+                let metadata = std::fs::symlink_metadata(&current).with_context(|| {
+                    format!("failed to inspect attributes: {}", current.display())
+                })?;
+                let hidden = is_hidden_metadata(&metadata);
+                cache.insert(current.clone(), hidden);
+                hidden
+            };
+            if hidden {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 fn filetime_to_unix_seconds(filetime: u64) -> i64 {
@@ -229,13 +252,6 @@ mod tests {
             path_relative_to_root(Path::new(r"G:\BMS-old\song.bms"), Path::new(r"G:\BMS")),
             None
         );
-    }
-
-    #[test]
-    fn hidden_filter_checks_every_relative_component() {
-        assert!(has_dot_prefixed_component(Path::new(r".root.bms")));
-        assert!(has_dot_prefixed_component(Path::new(r"folder\.cache\song.bms")));
-        assert!(!has_dot_prefixed_component(Path::new(r"folder\song.bms")));
     }
 
     #[test]
