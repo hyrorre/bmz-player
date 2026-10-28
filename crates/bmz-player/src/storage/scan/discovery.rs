@@ -119,7 +119,7 @@ fn discover_chart_files_native(
         skip_hidden: scan.skip_hidden,
         follow_links: root_canonical.is_some(),
         trees: root_canonical.iter().cloned().collect(),
-        tree_set: root_canonical.iter().cloned().collect(),
+        root_canonical: root_canonical.clone(),
         regular_files: HashSet::new(),
         linked_files: Vec::new(),
         discovered_count: 0,
@@ -130,7 +130,8 @@ fn discover_chart_files_native(
         linked_dirs.sort_by(|a, b| link_order(&a.link, &b.link));
         units = Vec::new();
         for link in linked_dirs {
-            if let Some(tree) = walk.trees.iter().find(|tree| link.target.starts_with(tree)) {
+            // Ancestors, not a scan of every tree: thousands of links stay linear.
+            if let Some(tree) = link.target.ancestors().find(|dir| walk.trees.contains(*dir)) {
                 tracing::debug!(
                     link = %link.link.display(),
                     target = %link.target.display(),
@@ -139,7 +140,7 @@ fn discover_chart_files_native(
                 );
                 continue;
             }
-            if walk.trees.first().is_some_and(|root| root.starts_with(&link.target)) {
+            if walk.root_canonical.as_ref().is_some_and(|root| root.starts_with(&link.target)) {
                 tracing::debug!(
                     link = %link.link.display(),
                     target = %link.target.display(),
@@ -147,8 +148,7 @@ fn discover_chart_files_native(
                 );
                 continue;
             }
-            walk.trees.push(link.target.clone());
-            walk.tree_set.insert(link.target.clone());
+            walk.trees.insert(link.target.clone());
             units.push(DirectoryUnit { path: link.link, canonical: Some(link.target) });
         }
     }
@@ -161,10 +161,9 @@ struct DiscoveryWalk<'a> {
     recursive: bool,
     skip_hidden: bool,
     follow_links: bool,
-    /// Canonical paths of the root and every adopted link target, root first.
-    trees: Vec<PathBuf>,
-    /// [`Self::trees`] for lookups while reading directories.
-    tree_set: HashSet<PathBuf>,
+    root_canonical: Option<PathBuf>,
+    /// Canonical paths of the root and every adopted link target.
+    trees: HashSet<PathBuf>,
     /// Canonical paths of chart and archive files read through real directories.
     regular_files: HashSet<PathBuf>,
     linked_files: Vec<LinkedFile>,
@@ -396,7 +395,7 @@ impl DiscoveryWalk<'_> {
                 }
                 let canonical = unit.canonical.as_ref().map(|parent| parent.join(&file_name));
                 // Another tree of this scan reads that directory under its own path.
-                if canonical.as_ref().is_some_and(|canonical| self.tree_set.contains(canonical)) {
+                if canonical.as_ref().is_some_and(|canonical| self.trees.contains(canonical)) {
                     continue;
                 }
                 listing.subdirs.push(DirectoryUnit { path, canonical });
