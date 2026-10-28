@@ -121,6 +121,20 @@ fn song_root_path_contains_file(root_path: &str, recursive: bool, path: &str) ->
 }
 
 impl LibraryDatabase {
+    /// Configured and partial scopes that a different scan must not invalidate.
+    pub(crate) fn retained_song_root_entries(&self) -> Result<Vec<PathEntry>> {
+        Ok(SongRootScope::load(&self.conn)?
+            .roots
+            .unwrap_or_default()
+            .into_iter()
+            .flat_map(|root| {
+                let canonical =
+                    root.canonical_path.map(|path| PathEntry { path, ..root.entry.clone() });
+                std::iter::once(root.entry).chain(canonical)
+            })
+            .collect())
+    }
+
     pub fn configured_song_roots(&self) -> Result<Option<Vec<PathEntry>>> {
         configured_song_roots(&self.conn)
     }

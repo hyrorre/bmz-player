@@ -2,7 +2,7 @@ use super::*;
 use crate::storage::library_db::library_path_key;
 
 /// 1回のバッチで並列パースするファイル数
-const IMPORT_BATCH_SIZE: usize = 256;
+pub(super) const IMPORT_BATCH_SIZE: usize = 256;
 
 pub fn scan_song_roots(
     db: &mut LibraryDatabase,
@@ -27,10 +27,11 @@ pub fn scan_song_roots_with_progress(
         root_id: i64,
         root_num: usize,
         entries: Vec<ChartFileEntry>,
-        archives: Vec<PathBuf>,
+        archives: Vec<super::discovery::DiscoveredArchive>,
         discovery_complete: bool,
         root_readable: bool,
         recursive: bool,
+        backend: ScanDiscoveryBackend,
     }
 
     struct FileTodo {
@@ -121,13 +122,40 @@ pub fn scan_song_roots_with_progress(
             discovery_complete: discovery.complete,
             root_readable: discovery.root_readable,
             recursive: root.recursive,
+            backend: discovery.backend,
         });
     }
     on_progress(ScanProgress { done: 0, total: files_total });
 
+    // Discovery precedes all writes. Preserve positive evidence from every root,
+    // including incomplete scans, until all imports have finished.
+    let discovered_any: HashSet<String> = discovered_roots
+        .iter()
+        .flat_map(|root| root.entries.iter().map(|entry| library_path_key(&entry.path)))
+        .collect();
+    let root_key = |path: &Path| {
+        let key = library_path_key(path);
+        #[cfg(windows)]
+        let key = key.to_lowercase();
+        key.trim_end_matches('/').to_string()
+    };
+    let scanned_keys: HashSet<String> =
+        discovered_roots.iter().map(|root| root_key(&root.root_path)).collect();
+    let mut protected_roots: Vec<PathEntry> = db
+        .retained_song_root_entries()?
+        .into_iter()
+        .filter(|root| !scanned_keys.contains(&root_key(Path::new(&root.path))))
+        .collect();
+    let mut pending_prune = Vec::new();
+
     let mut progress_done = 0_u32;
     for mut root in discovered_roots {
         if !root.root_readable {
+            protected_roots.push(PathEntry {
+                path: library_path_key(&root.root_path),
+                enabled: true,
+                recursive: root.recursive,
+            });
             continue;
         }
 
@@ -154,20 +182,28 @@ pub fn scan_song_roots_with_progress(
         let skip_start = Instant::now();
         let mut to_import: Vec<FileTodo> = Vec::new();
         let mut unchanged_count = 0_u32;
-        let mut archives: HashMap<PathBuf, Vec<&ChartFileEntry>> = root
+        let mut archives: HashMap<
+            PathBuf,
+            (crate::song_archive::ArchiveGeneration, Vec<&ChartFileEntry>),
+        > = root
             .archives
-            .into_iter()
-            .map(|path| {
+            .iter()
+            .map(|archive| {
                 // Use the same spelling as virtual chart entries, including removal
                 // of Windows extended-length prefixes, to avoid an empty alias group.
-                (PathBuf::from(library_path_key(&path)), Vec::new())
+                (
+                    PathBuf::from(library_path_key(&archive.path)),
+                    (archive.generation.clone(), Vec::new()),
+                )
             })
             .collect();
         for entry in &entries {
             if let Ok(crate::chart_source::ChartLocator::Archive { container, .. }) =
                 crate::chart_source::ChartLocator::parse(&entry.path)
             {
-                archives.entry(container).or_default().push(entry);
+                if let Some((_, entries)) = archives.get_mut(&container) {
+                    entries.push(entry);
+                }
                 continue;
             }
             let key = library_path_key(&entry.path);
@@ -194,7 +230,7 @@ pub fn scan_song_roots_with_progress(
         on_progress(ScanProgress { done: progress_done, total: files_total });
 
         let mut failed_archives = std::collections::HashSet::new();
-        for (container, archive_entries) in archives {
+        for (container, (generation, archive_entries)) in archives {
             let count = usize_to_u32(archive_entries.len());
             match super::archive::import_archive(
                 db,
@@ -204,6 +240,7 @@ pub fn scan_song_roots_with_progress(
                 force,
                 &fingerprints,
                 &archive_entries,
+                &generation,
             ) {
                 Ok(archive) => {
                     report.summary.imported += archive.summary.imported;
@@ -239,98 +276,112 @@ pub fn scan_song_roots_with_progress(
             "skip check complete"
         );
 
-        // Phase 3+4: バッチごとに並列パース → 1トランザクションでまとめて書き込み
+        // Phase 3+4: バッチごとに並列パースし、1トランザクションでまとめて書き込む。
+        // パースは別スレッドで次のバッチへ進み、SQLiteへの書き込みと重ねる。
+        // 容量0のチャネルで受け渡すため、メモリ上のバッチは書き込み中とパース中の
+        // 高々2つ。書き込みが遅ければパース側は受け取りを待つ。書き込みが失敗すると
+        // 受信側が破棄され、パース側の送信が失敗して終了してから scope が戻る。
         let mut last_log = std::time::Instant::now();
         let log_interval = std::time::Duration::from_secs(2);
-
-        for (batch_idx, chunk) in to_import.chunks(IMPORT_BATCH_SIZE).enumerate() {
-            let batch_done = batch_idx * IMPORT_BATCH_SIZE;
-            let now = std::time::Instant::now();
-            if now.duration_since(last_log) >= log_interval || batch_idx == 0 {
-                last_log = now;
-                let pct = batch_done * 100 / new_total.max(1);
-                tracing::info!(
-                    pct,
-                    done = batch_done,
-                    total = new_total,
-                    root = %root_path.display(),
-                    "importing"
-                );
-            }
-
-            // 並列パース
-            let parse_start = std::time::Instant::now();
-            let parsed: Vec<ParsedFile> = chunk
-                .par_iter()
-                .map(|todo| ParsedFile {
-                    path: todo.path.clone(),
-                    file_size: todo.file_size,
-                    modified_at: todo.modified_at,
-                    result: import_bms_chart_catching_unwind(&todo.path),
-                })
-                .collect();
-            let parse_ms = parse_start.elapsed().as_millis();
-            report.timing.parse_ms += parse_ms;
-
-            // 1トランザクションでバッチ書き込み
-            let write_start = std::time::Instant::now();
-            {
-                let tx = db.conn_mut().transaction()?;
-                for p in &parsed {
-                    match &p.result {
-                        Ok(import_result) => {
-                            let record = ChartImportRecord {
-                                root_id: Some(root.root_id),
-                                file_path: &p.path,
-                                file_size: p.file_size,
-                                modified_at: p.modified_at,
-                                scanned_at,
-                                chart: &import_result.chart,
-                            };
-                            let (_, chart_file_id) =
-                                LibraryDatabase::write_chart_import(&tx, &record)?;
-                            let warnings_written = LibraryDatabase::write_import_warnings(
-                                &tx,
-                                chart_file_id,
-                                &import_result.warnings,
-                                scanned_at,
-                            )?;
-                            report.summary.imported += 1;
-                            report.summary.warnings += warnings_written as u32;
-                        }
-                        Err(error) => {
-                            let message = error.to_string();
-                            LibraryDatabase::write_failed_chart(
-                                &tx,
-                                Some(root.root_id),
-                                &p.path,
-                                p.file_size,
-                                p.modified_at,
-                                scanned_at,
-                                &message,
-                            )?;
-                            report.summary.failed += 1;
-                            report.failures.push(ScanFailure { path: p.path.clone(), message });
-                        }
+        let (parsed_tx, parsed_rx) = std::sync::mpsc::sync_channel(0);
+        std::thread::scope(|scope| -> Result<()> {
+            let to_import = &to_import;
+            scope.spawn(move || {
+                for chunk in to_import.chunks(IMPORT_BATCH_SIZE) {
+                    let parse_start = std::time::Instant::now();
+                    let parsed: Vec<ParsedFile> = chunk
+                        .par_iter()
+                        .map(|todo| ParsedFile {
+                            path: todo.path.clone(),
+                            file_size: todo.file_size,
+                            modified_at: todo.modified_at,
+                            result: import_bms_chart_catching_unwind(&todo.path),
+                        })
+                        .collect();
+                    // A closed receiver means the writer failed; stop parsing.
+                    if parsed_tx.send((parsed, parse_start.elapsed().as_millis())).is_err() {
+                        break;
                     }
                 }
-                tx.commit()?;
-            }
-            let write_ms = write_start.elapsed().as_millis();
-            report.timing.write_ms += write_ms;
+            });
 
-            tracing::info!(
-                batch = batch_idx,
-                files = chunk.len(),
-                parse_ms,
-                write_ms,
-                root = %root_path.display(),
-                "batch timing"
-            );
-            progress_done =
-                progress_done.saturating_add(usize_to_u32(parsed.len())).min(files_total);
-            on_progress(ScanProgress { done: progress_done, total: files_total });
-        }
+            for (batch_idx, (parsed, parse_ms)) in parsed_rx.into_iter().enumerate() {
+                let batch_done = batch_idx * IMPORT_BATCH_SIZE;
+                let now = std::time::Instant::now();
+                if now.duration_since(last_log) >= log_interval || batch_idx == 0 {
+                    last_log = now;
+                    let pct = batch_done * 100 / new_total.max(1);
+                    tracing::info!(
+                        pct,
+                        done = batch_done,
+                        total = new_total,
+                        root = %root_path.display(),
+                        "importing"
+                    );
+                }
+                report.timing.parse_ms += parse_ms;
+
+                // 1トランザクションでバッチ書き込み
+                let write_start = std::time::Instant::now();
+                {
+                    let tx = db.conn_mut().transaction()?;
+                    for p in &parsed {
+                        match &p.result {
+                            Ok(import_result) => {
+                                let record = ChartImportRecord {
+                                    root_id: Some(root.root_id),
+                                    file_path: &p.path,
+                                    file_size: p.file_size,
+                                    modified_at: p.modified_at,
+                                    scanned_at,
+                                    chart: &import_result.chart,
+                                };
+                                let (_, chart_file_id) =
+                                    LibraryDatabase::write_chart_import(&tx, &record)?;
+                                let warnings_written = LibraryDatabase::write_import_warnings(
+                                    &tx,
+                                    chart_file_id,
+                                    &import_result.warnings,
+                                    scanned_at,
+                                )?;
+                                report.summary.imported += 1;
+                                report.summary.warnings += warnings_written as u32;
+                            }
+                            Err(error) => {
+                                let message = error.to_string();
+                                LibraryDatabase::write_failed_chart(
+                                    &tx,
+                                    Some(root.root_id),
+                                    &p.path,
+                                    p.file_size,
+                                    p.modified_at,
+                                    scanned_at,
+                                    &message,
+                                )?;
+                                report.summary.failed += 1;
+                                report.failures.push(ScanFailure { path: p.path.clone(), message });
+                            }
+                        }
+                    }
+                    tx.commit()?;
+                }
+                let write_ms = write_start.elapsed().as_millis();
+                report.timing.write_ms += write_ms;
+
+                tracing::info!(
+                    batch = batch_idx,
+                    files = parsed.len(),
+                    parse_ms,
+                    write_ms,
+                    root = %root_path.display(),
+                    "batch timing"
+                );
+                progress_done =
+                    progress_done.saturating_add(usize_to_u32(parsed.len())).min(files_total);
+                on_progress(ScanProgress { done: progress_done, total: files_total });
+            }
+            Ok(())
+        })?;
 
         // Discovery already enumerated every song directory. Persist the shared
         // folder flag even when every chart was skipped as unchanged.
@@ -353,15 +404,81 @@ pub fn scan_song_roots_with_progress(
         );
 
         if root.discovery_complete {
-            report.summary.removed_files +=
-                db.prune_missing_chart_files(root_path, root.recursive)?;
-            db.update_root_scanned_at(root.root_id, scanned_at)?;
+            if root.backend == ScanDiscoveryBackend::Everything {
+                protected_roots.push(PathEntry {
+                    path: library_path_key(root_path),
+                    enabled: true,
+                    recursive: root.recursive,
+                });
+            }
+            pending_prune.push((
+                root.root_path.clone(),
+                root.root_id,
+                root.recursive,
+                root.backend,
+                entries.iter().map(|entry| library_path_key(&entry.path)).collect::<HashSet<_>>(),
+                root.archives,
+            ));
         } else {
+            protected_roots.push(PathEntry {
+                path: library_path_key(root_path),
+                enabled: true,
+                recursive: root.recursive,
+            });
             tracing::warn!(
                 root = %root_path.display(),
                 "song root discovery was incomplete; last_scan_at was not updated"
             );
         }
+    }
+
+    let mut validated = Vec::new();
+    for (root_path, root_id, recursive, backend, discovered, archives) in pending_prune {
+        let mut valid = true;
+        for archive in &archives {
+            match crate::song_archive::inspect(&archive.path, &Default::default()) {
+                Ok(index) if index.generation == archive.generation => {}
+                Err(_) if matches!(archive.path.try_exists(), Ok(false)) => {}
+                _ => {
+                    valid = false;
+                    report.summary.discovery_skipped =
+                        report.summary.discovery_skipped.saturating_add(1);
+                    record_discovery_issue(
+                        &mut report.discovery_issues,
+                        &root_path,
+                        &archive.path,
+                        ScanDiscoveryOperation::ReadArchive,
+                        io::Error::other("archive changed or became unreadable after discovery"),
+                    );
+                    report.failures.push(ScanFailure {
+                        path: archive.path.clone(),
+                        message: "archive changed or became unreadable after discovery; existing registrations retained".to_string(),
+                    });
+                }
+            }
+        }
+        if !valid {
+            protected_roots.push(PathEntry {
+                path: library_path_key(&root_path),
+                enabled: true,
+                recursive,
+            });
+            continue;
+        }
+        validated.push((root_path, root_id, recursive, backend, discovered));
+    }
+    for (root_path, root_id, recursive, backend, discovered) in validated {
+        // Everything results may lag and do not establish absence from scope.
+        let discovered = (backend != ScanDiscoveryBackend::Everything).then_some(&discovered);
+        report.summary.removed_files += db.prune_missing_chart_files(
+            &root_path,
+            recursive,
+            scan.skip_hidden,
+            discovered,
+            &discovered_any,
+            &protected_roots,
+        )?;
+        db.update_root_scanned_at(root_id, scanned_at)?;
     }
 
     on_progress(ScanProgress { done: files_total, total: files_total });

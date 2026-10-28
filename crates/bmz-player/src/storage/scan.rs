@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -120,8 +120,11 @@ mod discovery;
 #[cfg(windows)]
 mod everything;
 mod import;
+#[cfg(test)]
+mod link_tests;
 
 pub(crate) use discovery::folder_has_document;
+pub(crate) use discovery::hidden_path_in_root;
 pub use discovery::{ChartFileEntry, discover_chart_files};
 pub use import::{scan_song_roots, scan_song_roots_with_progress};
 

@@ -13,9 +13,11 @@ pub(super) fn import_archive(
     force: bool,
     fingerprints: &HashMap<String, super::super::library_db::ChartFileFingerprint>,
     entries: &[&ChartFileEntry],
+    expected: &song_archive::ArchiveGeneration,
 ) -> Result<ScanReport> {
     let control = ArchiveControl::default();
     let index = song_archive::inspect(container, &control)?;
+    anyhow::ensure!(index.generation == *expected, "archive changed after discovery");
     if let Some(record) = song_archive::generation_record(container) {
         db.store_archive_generation(&record)?;
     }

@@ -8,10 +8,16 @@ pub struct ChartFileEntry {
     pub has_document: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct DiscoveredArchive {
+    pub(super) path: PathBuf,
+    pub(super) generation: crate::song_archive::ArchiveGeneration,
+}
+
 #[derive(Debug, Default)]
 pub(super) struct ChartDiscovery {
     pub(super) entries: Vec<ChartFileEntry>,
-    pub(super) archives: Vec<PathBuf>,
+    pub(super) archives: Vec<DiscoveredArchive>,
     pub(super) issues: Vec<ScanDiscoveryIssue>,
     pub(super) complete: bool,
     pub(super) root_readable: bool,
@@ -72,6 +78,20 @@ pub(super) fn discover_chart_files_with_progress(
     discover_chart_files_native(root, recursive, scan, on_discovered)
 }
 
+/// Directories read in parallel before their results are merged.
+const DISCOVERY_DIRECTORY_CHUNK: usize = 256;
+
+/// Native discovery in rounds. A round reads whole directory trees breadth-first in
+/// parallel and only collects the symbolic links it meets; the links are then adopted
+/// one by one in a fixed order, so the chosen paths never depend on rayon scheduling
+/// or on `read_dir` order. Adopted link targets form the next round.
+///
+/// Every tree is identified by its canonical path. A real subdirectory's canonical
+/// path is its parent's plus its name, so only links and the root cost a canonicalize.
+/// A link is adopted only when its target lies outside every tree adopted so far and
+/// does not contain the root; a target that contains an earlier tree is read with
+/// that tree excluded. Each directory is therefore read at most once, real paths
+/// under the root win over links, and the walk ends even with cyclic links.
 fn discover_chart_files_native(
     root: &Path,
     recursive: bool,
@@ -79,40 +99,231 @@ fn discover_chart_files_native(
     mut on_discovered: impl FnMut(u32),
 ) -> ChartDiscovery {
     let mut discovery = ChartDiscovery { complete: true, ..Default::default() };
-    let mut dirs = vec![root.to_path_buf()];
-    let mut discovered_count = 0_u32;
-
-    while let Some(dir) = dirs.pop() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => {
-                if dir == root {
-                    discovery.root_readable = true;
-                }
-                entries
-            }
+    let root_canonical = if scan.follow_symlinks {
+        match root.canonicalize() {
+            Ok(canonical) => Some(canonical),
+            // `read_dir` below reports a missing root.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => {
                 discovery.complete = false;
                 record_discovery_issue(
                     &mut discovery.issues,
                     root,
-                    &dir,
-                    ScanDiscoveryOperation::OpenDirectory,
+                    root,
+                    ScanDiscoveryOperation::ReadMetadata,
                     error,
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let mut walk = DiscoveryWalk {
+        root,
+        recursive,
+        skip_hidden: scan.skip_hidden,
+        follow_links: root_canonical.is_some(),
+        trees: root_canonical.iter().cloned().collect(),
+        root_canonical: root_canonical.clone(),
+        regular_files: HashSet::new(),
+        linked_files: Vec::new(),
+        discovered_count: 0,
+    };
+    let mut units = vec![DirectoryUnit { path: root.to_path_buf(), canonical: root_canonical }];
+    while !units.is_empty() {
+        let mut linked_dirs = walk.read_trees(units, &mut discovery, &mut on_discovered);
+        linked_dirs.sort_by(|a, b| link_order(&a.link, &b.link));
+        units = Vec::new();
+        for link in linked_dirs {
+            // Ancestors, not a scan of every tree: thousands of links stay linear.
+            if let Some(tree) = link.target.ancestors().find(|dir| walk.trees.contains(*dir)) {
+                tracing::debug!(
+                    link = %link.link.display(),
+                    target = %link.target.display(),
+                    scanned_as = %tree.display(),
+                    "skipping song folder link into an already scanned folder"
                 );
                 continue;
             }
+            if walk.root_canonical.as_ref().is_some_and(|root| root.starts_with(&link.target)) {
+                tracing::debug!(
+                    link = %link.link.display(),
+                    target = %link.target.display(),
+                    "skipping song folder link that contains the song root"
+                );
+                continue;
+            }
+            walk.trees.insert(link.target.clone());
+            units.push(DirectoryUnit { path: link.link, canonical: Some(link.target) });
+        }
+    }
+    walk.adopt_linked_files(&mut discovery, &mut on_discovered);
+    discovery
+}
+
+struct DiscoveryWalk<'a> {
+    root: &'a Path,
+    recursive: bool,
+    skip_hidden: bool,
+    follow_links: bool,
+    root_canonical: Option<PathBuf>,
+    /// Canonical paths of the root and every adopted link target.
+    trees: HashSet<PathBuf>,
+    /// Canonical paths of chart and archive files read through real directories.
+    regular_files: HashSet<PathBuf>,
+    linked_files: Vec<LinkedFile>,
+    discovered_count: u32,
+}
+
+struct DirectoryUnit {
+    /// Path as the library stores it, below the configured root or a link.
+    path: PathBuf,
+    /// Present only while links are followed.
+    canonical: Option<PathBuf>,
+}
+
+struct LinkedDirectory {
+    link: PathBuf,
+    target: PathBuf,
+}
+
+struct LinkedFile {
+    link: PathBuf,
+    target: PathBuf,
+    metadata: std::fs::Metadata,
+    archive: bool,
+    has_document: bool,
+}
+
+/// Shallower links first, then by path, so the same tree always picks the same link.
+fn link_order(a: &Path, b: &Path) -> std::cmp::Ordering {
+    a.components().count().cmp(&b.components().count()).then_with(|| a.cmp(b))
+}
+
+impl DiscoveryWalk<'_> {
+    fn read_trees(
+        &mut self,
+        mut level: Vec<DirectoryUnit>,
+        discovery: &mut ChartDiscovery,
+        on_discovered: &mut impl FnMut(u32),
+    ) -> Vec<LinkedDirectory> {
+        let mut linked_dirs = Vec::new();
+        // Breadth-first, one directory level at a time: every directory of a level is
+        // independent, so slow stat/readdir calls overlap across rayon workers.
+        while !level.is_empty() {
+            let mut next_level = Vec::new();
+            for chunk in level.chunks(DISCOVERY_DIRECTORY_CHUNK) {
+                let listings: Vec<DirectoryListing> =
+                    chunk.par_iter().map(|unit| self.list_directory(unit)).collect();
+                for (unit, listing) in chunk.iter().zip(listings) {
+                    if unit.path == self.root && listing.readable {
+                        discovery.root_readable = true;
+                    }
+                    discovery.complete &= listing.complete;
+                    for entry in listing.entries {
+                        discovery.entries.push(entry);
+                        self.discovered_count = self.discovered_count.saturating_add(1);
+                        on_discovered(self.discovered_count);
+                    }
+                    discovery.archives.extend(listing.archives);
+                    discovery.issues.extend(listing.issues);
+                    next_level.extend(listing.subdirs);
+                    linked_dirs.extend(listing.linked_dirs);
+                    self.linked_files.extend(listing.linked_files);
+                    self.regular_files.extend(listing.regular_files);
+                }
+            }
+            level = next_level;
+        }
+        linked_dirs
+    }
+
+    /// Linked chart and archive files are kept unless their target was already read
+    /// through a real directory or an earlier link, in [`link_order`].
+    fn adopt_linked_files(
+        &mut self,
+        discovery: &mut ChartDiscovery,
+        on_discovered: &mut impl FnMut(u32),
+    ) {
+        let mut linked_files = std::mem::take(&mut self.linked_files);
+        linked_files.sort_by(|a, b| link_order(&a.link, &b.link));
+        for file in linked_files {
+            if !self.regular_files.insert(file.target.clone()) {
+                tracing::debug!(
+                    link = %file.link.display(),
+                    target = %file.target.display(),
+                    "skipping chart link to an already scanned file"
+                );
+                continue;
+            }
+            let entries = if file.archive {
+                match discover_archive_charts(&file.link, self.skip_hidden) {
+                    Ok((entries, generation)) => {
+                        discovery
+                            .archives
+                            .push(DiscoveredArchive { path: file.link.clone(), generation });
+                        entries
+                    }
+                    Err(error) => {
+                        discovery.complete = false;
+                        record_discovery_issue(
+                            &mut discovery.issues,
+                            self.root,
+                            &file.link,
+                            ScanDiscoveryOperation::ReadArchive,
+                            io::Error::other(format!("{error:#}")),
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                vec![chart_file_entry(file.link, &file.metadata, file.has_document)]
+            };
+            for entry in entries {
+                discovery.entries.push(entry);
+                self.discovered_count = self.discovered_count.saturating_add(1);
+                on_discovered(self.discovered_count);
+            }
+        }
+    }
+
+    /// Reads one directory. Only chart files and links are stat-ed: on Unix
+    /// `DirEntry::metadata` is an extra syscall per entry, while `file_type` comes
+    /// from the directory listing itself.
+    fn list_directory(&self, unit: &DirectoryUnit) -> DirectoryListing {
+        let root = self.root;
+        let dir = unit.path.as_path();
+        let mut listing = DirectoryListing { complete: true, ..Default::default() };
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => {
+                listing.readable = true;
+                entries
+            }
+            Err(error) => {
+                listing.complete = false;
+                record_discovery_issue(
+                    &mut listing.issues,
+                    root,
+                    dir,
+                    ScanDiscoveryOperation::OpenDirectory,
+                    error,
+                );
+                return listing;
+            }
         };
         let mut charts_in_dir = Vec::new();
+        let mut linked_files_in_dir = Vec::new();
         let mut has_document = false;
         for entry in entries {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(error) => {
-                    discovery.complete = false;
+                    listing.complete = false;
                     record_discovery_issue(
-                        &mut discovery.issues,
+                        &mut listing.issues,
                         root,
-                        &dir,
+                        dir,
                         ScanDiscoveryOperation::ReadEntry,
                         error,
                     );
@@ -120,20 +331,20 @@ fn discover_chart_files_native(
                 }
             };
             let file_name = entry.file_name();
-            if scan.skip_hidden && is_hidden_name(&file_name) {
+            if self.skip_hidden && is_hidden_name(&file_name) {
                 continue;
             }
             let path = entry.path();
-
-            let (file_type, meta_opt) = if scan.follow_symlinks
-                || (scan.skip_hidden && cfg!(any(windows, target_os = "macos")))
-            {
-                let meta = match entry.metadata() {
-                    Ok(meta) => meta,
+            // Windows/macOS hidden attributes belong to the directory entry itself;
+            // do not follow a link before deciding whether to skip it.
+            if self.skip_hidden && cfg!(any(windows, target_os = "macos")) {
+                match entry.metadata() {
+                    Ok(metadata) if is_hidden_metadata(&metadata) => continue,
+                    Ok(_) => {}
                     Err(error) => {
-                        discovery.complete = false;
+                        listing.complete = false;
                         record_discovery_issue(
-                            &mut discovery.issues,
+                            &mut listing.issues,
                             root,
                             &path,
                             ScanDiscoveryOperation::ReadMetadata,
@@ -141,69 +352,93 @@ fn discover_chart_files_native(
                         );
                         continue;
                     }
-                };
-                if scan.skip_hidden && is_hidden_metadata(&meta) {
+                }
+            }
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(error) => {
+                    listing.complete = false;
+                    record_discovery_issue(
+                        &mut listing.issues,
+                        root,
+                        &path,
+                        ScanDiscoveryOperation::ReadFileType,
+                        error,
+                    );
                     continue;
                 }
-                let ft = if scan.follow_symlinks {
-                    meta.file_type()
-                } else {
-                    match entry.file_type() {
-                        Ok(file_type) => file_type,
-                        Err(error) => {
-                            discovery.complete = false;
-                            record_discovery_issue(
-                                &mut discovery.issues,
-                                root,
-                                &path,
-                                ScanDiscoveryOperation::ReadFileType,
-                                error,
-                            );
-                            continue;
-                        }
-                    }
-                };
-                (ft, Some(meta))
-            } else {
-                let file_type = match entry.file_type() {
-                    Ok(file_type) => file_type,
+            };
+
+            if file_type.is_symlink() {
+                if !self.follow_links {
+                    continue;
+                }
+                let target = match std::fs::metadata(&path) {
+                    Ok(target) => target,
                     Err(error) => {
-                        discovery.complete = false;
-                        record_discovery_issue(
-                            &mut discovery.issues,
-                            root,
-                            &path,
-                            ScanDiscoveryOperation::ReadFileType,
-                            error,
-                        );
+                        listing.link_failed(root, &path, error);
                         continue;
                     }
                 };
-                (file_type, None)
-            };
+                if target.is_dir() {
+                    if !self.recursive {
+                        continue;
+                    }
+                    match path.canonicalize() {
+                        Ok(target) => {
+                            listing.linked_dirs.push(LinkedDirectory { link: path, target })
+                        }
+                        Err(error) => listing.link_failed(root, &path, error),
+                    }
+                } else if target.is_file() {
+                    if is_document_file_name(&file_name) {
+                        has_document = true;
+                    }
+                    let archive = crate::chart_source::is_archive_file(&path);
+                    if !archive && !is_chart_file_name(&file_name) {
+                        continue;
+                    }
+                    match path.canonicalize() {
+                        Ok(canonical) => linked_files_in_dir.push(LinkedFile {
+                            link: path,
+                            target: canonical,
+                            metadata: target,
+                            archive,
+                            has_document: false,
+                        }),
+                        Err(error) => listing.link_failed(root, &path, error),
+                    }
+                }
+                continue;
+            }
 
             if file_type.is_file() && is_document_file_name(&file_name) {
                 has_document = true;
             }
 
             if file_type.is_dir() {
-                if recursive {
-                    dirs.push(path);
+                if !self.recursive {
+                    continue;
                 }
+                let canonical = unit.canonical.as_ref().map(|parent| parent.join(&file_name));
+                // Another tree of this scan reads that directory under its own path.
+                if canonical.as_ref().is_some_and(|canonical| self.trees.contains(canonical)) {
+                    continue;
+                }
+                listing.subdirs.push(DirectoryUnit { path, canonical });
             } else if file_type.is_file() && crate::chart_source::is_archive_file(&path) {
-                match discover_archive_charts(&path, scan.skip_hidden) {
-                    Ok(entries) => {
-                        discovery.archives.push(path.clone());
-                        for entry in entries {
-                            discovery.entries.push(entry);
-                            discovered_count = discovered_count.saturating_add(1);
-                            on_discovered(discovered_count);
-                        }
+                if let Some(parent) = &unit.canonical {
+                    listing.regular_files.push(parent.join(&file_name));
+                }
+                match discover_archive_charts(&path, self.skip_hidden) {
+                    Ok((entries, generation)) => {
+                        listing.archives.push(DiscoveredArchive { path: path.clone(), generation });
+                        listing.entries.extend(entries);
                     }
                     Err(error) => {
-                        discovery.complete = false;
+                        listing.complete = false;
                         record_discovery_issue(
-                            &mut discovery.issues,
+                            &mut listing.issues,
                             root,
                             &path,
                             ScanDiscoveryOperation::ReadArchive,
@@ -212,57 +447,113 @@ fn discover_chart_files_native(
                     }
                 }
             } else if file_type.is_file() && is_chart_file_name(&file_name) {
-                let metadata = match meta_opt {
-                    Some(metadata) => metadata,
-                    None => match entry.metadata() {
-                        Ok(metadata) => metadata,
-                        Err(error) => {
-                            discovery.complete = false;
-                            record_discovery_issue(
-                                &mut discovery.issues,
-                                root,
-                                &path,
-                                ScanDiscoveryOperation::ReadMetadata,
-                                error,
-                            );
-                            continue;
-                        }
-                    },
+                let metadata = match entry.metadata() {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        listing.complete = false;
+                        record_discovery_issue(
+                            &mut listing.issues,
+                            root,
+                            &path,
+                            ScanDiscoveryOperation::ReadMetadata,
+                            error,
+                        );
+                        continue;
+                    }
                 };
-                let modified_at = metadata
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-                charts_in_dir.push(ChartFileEntry {
-                    path,
-                    file_size: metadata.len(),
-                    modified_at,
-                    has_document: false,
-                });
-                discovered_count = discovered_count.saturating_add(1);
-                on_discovered(discovered_count);
+                if let Some(parent) = &unit.canonical {
+                    listing.regular_files.push(parent.join(&file_name));
+                }
+                charts_in_dir.push(chart_file_entry(path, &metadata, false));
             }
         }
         charts_in_dir.iter_mut().for_each(|entry| entry.has_document = has_document);
-        discovery.entries.extend(charts_in_dir);
+        listing.entries.extend(charts_in_dir);
+        linked_files_in_dir.iter_mut().for_each(|file| file.has_document = has_document);
+        listing.linked_files = linked_files_in_dir;
+        listing
     }
-
-    discovery
 }
 
+fn chart_file_entry(
+    path: PathBuf,
+    metadata: &std::fs::Metadata,
+    has_document: bool,
+) -> ChartFileEntry {
+    let modified_at = metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    ChartFileEntry { path, file_size: metadata.len(), modified_at, has_document }
+}
+
+#[derive(Default)]
+struct DirectoryListing {
+    readable: bool,
+    complete: bool,
+    entries: Vec<ChartFileEntry>,
+    archives: Vec<DiscoveredArchive>,
+    issues: Vec<ScanDiscoveryIssue>,
+    subdirs: Vec<DirectoryUnit>,
+    linked_dirs: Vec<LinkedDirectory>,
+    linked_files: Vec<LinkedFile>,
+    regular_files: Vec<PathBuf>,
+}
+
+impl DirectoryListing {
+    /// A link whose target no longer exists, or that resolves through itself, can hold
+    /// no charts, so it does not make the scan incomplete. Any other failure, such as a
+    /// denied target, might hide charts and blocks pruning like an unreadable folder.
+    fn link_failed(&mut self, root: &Path, link: &Path, error: io::Error) {
+        if let Some(reason) = unresolvable_link_reason(&error) {
+            tracing::debug!(
+                root = %root.display(),
+                link = %link.display(),
+                reason,
+                error = %error,
+                "skipping unresolvable song link"
+            );
+            return;
+        }
+        self.complete = false;
+        record_discovery_issue(
+            &mut self.issues,
+            root,
+            link,
+            ScanDiscoveryOperation::ReadMetadata,
+            error,
+        );
+    }
+}
+
+pub(super) fn unresolvable_link_reason(error: &io::Error) -> Option<&'static str> {
+    if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory) {
+        return Some("dangling");
+    }
+    #[cfg(unix)]
+    if error.raw_os_error() == Some(libc::ELOOP) {
+        return Some("loop");
+    }
+    // ERROR_CANT_RESOLVE_FILENAME: the reparse points form a loop.
+    #[cfg(windows)]
+    if error.raw_os_error() == Some(1921) {
+        return Some("loop");
+    }
+    None
+}
 pub(super) fn discover_archive_charts(
     path: &Path,
     skip_hidden: bool,
-) -> Result<Vec<ChartFileEntry>> {
+) -> Result<(Vec<ChartFileEntry>, crate::song_archive::ArchiveGeneration)> {
     let index = crate::song_archive::inspect(path, &Default::default())?;
     let modified_at = std::fs::metadata(path)?
         .modified()
         .ok()
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
         .map_or(0, |time| time.as_secs() as i64);
-    Ok(index
+    let entries = index
         .entries
         .iter()
         .filter(|entry| {
@@ -283,7 +574,8 @@ pub(super) fn discover_archive_charts(
             modified_at,
             has_document: crate::chart_source::archive_folder_has_document(&index, &entry.name),
         })
-        .collect())
+        .collect();
+    Ok((entries, index.generation))
 }
 
 pub(super) fn record_discovery_issue(
@@ -371,5 +663,37 @@ pub(super) fn is_hidden_metadata(metadata: &std::fs::Metadata) -> bool {
     {
         let _ = metadata;
         false
+    }
+}
+
+/// Check the entry and ancestors below the root without following links.
+/// An inaccessible component is unknown and must not justify pruning.
+pub(crate) fn hidden_path_in_root(root: &Path, path: &Path) -> Option<bool> {
+    let key = |path: &Path| {
+        let key = crate::paths::normalize_library_path(&path.to_string_lossy());
+        #[cfg(windows)]
+        let key = key.to_lowercase();
+        key.trim_end_matches('/').to_string()
+    };
+    let root_key = key(root);
+    let mut current = path.to_path_buf();
+    loop {
+        if key(&current) == root_key {
+            return Some(false);
+        }
+        if is_hidden_name(current.file_name()?) {
+            return Some(true);
+        }
+        if cfg!(any(windows, target_os = "macos")) {
+            match std::fs::symlink_metadata(&current) {
+                Ok(metadata) if is_hidden_metadata(&metadata) => return Some(true),
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Some(false),
+                Err(_) => return None,
+            }
+        }
+        if !current.pop() {
+            return None;
+        }
     }
 }
