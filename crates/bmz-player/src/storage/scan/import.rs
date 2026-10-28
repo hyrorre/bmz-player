@@ -243,9 +243,12 @@ pub fn scan_song_roots_with_progress(
 
         // Phase 3+4: バッチごとに並列パースし、1トランザクションでまとめて書き込む。
         // パースは別スレッドで次のバッチへ進み、SQLiteへの書き込みと重ねる。
+        // 容量0のチャネルで受け渡すため、メモリ上のバッチは書き込み中とパース中の
+        // 高々2つ。書き込みが遅ければパース側は受け取りを待つ。書き込みが失敗すると
+        // 受信側が破棄され、パース側の送信が失敗して終了してから scope が戻る。
         let mut last_log = std::time::Instant::now();
         let log_interval = std::time::Duration::from_secs(2);
-        let (parsed_tx, parsed_rx) = std::sync::mpsc::sync_channel(1);
+        let (parsed_tx, parsed_rx) = std::sync::mpsc::sync_channel(0);
         std::thread::scope(|scope| -> Result<()> {
             let to_import = &to_import;
             scope.spawn(move || {
