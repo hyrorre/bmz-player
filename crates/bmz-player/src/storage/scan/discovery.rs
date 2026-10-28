@@ -125,7 +125,9 @@ fn discover_chart_files_native(
             }
             let path = entry.path();
 
-            let (file_type, meta_opt) = if scan.follow_symlinks {
+            let (file_type, meta_opt) = if scan.follow_symlinks
+                || (scan.skip_hidden && cfg!(any(windows, target_os = "macos")))
+            {
                 let meta = match entry.metadata() {
                     Ok(meta) => meta,
                     Err(error) => {
@@ -140,7 +142,27 @@ fn discover_chart_files_native(
                         continue;
                     }
                 };
-                let ft = meta.file_type();
+                if scan.skip_hidden && is_hidden_metadata(&meta) {
+                    continue;
+                }
+                let ft = if scan.follow_symlinks {
+                    meta.file_type()
+                } else {
+                    match entry.file_type() {
+                        Ok(file_type) => file_type,
+                        Err(error) => {
+                            discovery.complete = false;
+                            record_discovery_issue(
+                                &mut discovery.issues,
+                                root,
+                                &path,
+                                ScanDiscoveryOperation::ReadFileType,
+                                error,
+                            );
+                            continue;
+                        }
+                    }
+                };
                 (ft, Some(meta))
             } else {
                 let file_type = match entry.file_type() {
@@ -248,7 +270,7 @@ pub(super) fn discover_archive_charts(
                 && !entry.name.split('/').any(|part| {
                     part == "__MACOSX"
                         || part.starts_with("._")
-                        || (skip_hidden && part.starts_with('.'))
+                        || (skip_hidden && is_hidden_name(std::ffi::OsStr::new(part)))
                 })
         })
         .map(|entry| ChartFileEntry {
@@ -324,5 +346,30 @@ pub(super) fn is_chart_file_name(name: &std::ffi::OsStr) -> bool {
 }
 
 pub(super) fn is_hidden_name(name: &std::ffi::OsStr) -> bool {
+    #[cfg(windows)]
+    {
+        let _ = name;
+        false
+    }
+    #[cfg(not(windows))]
     name.to_str().map(|name| name.starts_with('.')).unwrap_or(false)
+}
+
+pub(super) fn is_hidden_metadata(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
+        metadata.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::macos::fs::MetadataExt;
+        metadata.st_flags() & libc::UF_HIDDEN != 0
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = metadata;
+        false
+    }
 }
