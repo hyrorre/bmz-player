@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -120,6 +120,8 @@ mod discovery;
 #[cfg(windows)]
 mod everything;
 mod import;
+#[cfg(test)]
+mod link_tests;
 
 pub(crate) use discovery::folder_has_document;
 pub use discovery::{ChartFileEntry, discover_chart_files};
@@ -460,48 +462,6 @@ mod tests {
         assert_eq!(last_scan_at, None);
 
         std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn discover_chart_files_follows_linked_directories_once() {
-        let base = make_temp_dir("discover-links");
-        let root = base.join("root");
-        let outside = base.join("outside");
-        std::fs::create_dir_all(root.join("inner")).unwrap();
-        std::fs::create_dir_all(&outside).unwrap();
-        write_file(&root.join("inner").join("a.bms"), "#TITLE A\n#BPM 120\n");
-        write_file(&outside.join("b.bms"), "#TITLE B\n#BPM 120\n");
-        let link = |target: &Path, link: &Path| std::os::unix::fs::symlink(target, link).unwrap();
-        link(&outside, &root.join("linked"));
-        link(&outside, &root.join("linked-again"));
-        link(&root.join("inner"), &root.join("alias"));
-        link(&root, &outside.join("back-to-root"));
-        link(&outside.join("b.bms"), &root.join("c.bms"));
-
-        let mut config = scan_config();
-        config.follow_symlinks = true;
-        let mut found: Vec<_> = discover_chart_files(&root, true, &config)
-            .unwrap()
-            .into_iter()
-            .map(|entry| entry.path.strip_prefix(&root).unwrap().to_path_buf())
-            .collect();
-        found.sort();
-        let linked = if found.contains(&PathBuf::from("linked/b.bms")) {
-            "linked/b.bms"
-        } else {
-            "linked-again/b.bms"
-        };
-        assert_eq!(
-            found,
-            [PathBuf::from("c.bms"), PathBuf::from("inner/a.bms"), PathBuf::from(linked)]
-        );
-
-        config.follow_symlinks = false;
-        let plain = discover_chart_files(&root, true, &config).unwrap();
-        assert_eq!(plain.len(), 1);
-
-        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
