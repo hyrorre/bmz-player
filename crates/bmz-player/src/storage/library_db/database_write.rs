@@ -3,14 +3,22 @@ use super::*;
 impl LibraryDatabase {
     /// Only remove confirmed missing files within a successfully scanned scope.
     /// Do not infer deletion from timestamps: unchanged imports keep old timestamps.
-    /// `discovered` holds the scan's [`library_path_key`]s; only other paths are checked
-    /// against the file system, so an unchanged library needs no further stat calls.
+    ///
+    /// With `discovered`, the [`library_path_key`]s of a complete native discovery,
+    /// that set defines the scope: a registration it lacks is out of scope (an alias
+    /// through a link that was not chosen, a hidden or unlinked path) or was already
+    /// gone. Registrations it holds are confirmed again here, right before the commit,
+    /// so a chart deleted after discovery is removed as well. Only `Ok(false)` from the
+    /// file system proves absence; an access error keeps the row. Without `discovered`
+    /// (an index such as Everything may lag), only that check decides.
     pub fn prune_missing_chart_files(
         &mut self,
         root: &Path,
         recursive: bool,
-        discovered: &std::collections::HashSet<String>,
+        discovered: Option<&std::collections::HashSet<String>>,
     ) -> Result<usize> {
+        use rayon::prelude::*;
+
         let root = crate::config::app_config::PathEntry {
             path: library_path_key(root),
             enabled: true,
@@ -21,40 +29,79 @@ impl LibraryDatabase {
             stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
+        let mut missing = Vec::new();
+        let mut files_to_check = Vec::new();
         // Only a successfully decoded generation may prove that an entry vanished.
         // Rechecking the generation also protects against rewrites after the scan.
         let mut archive_entries: HashMap<PathBuf, Option<std::collections::HashSet<String>>> =
             HashMap::new();
-        let missing: Vec<_> = candidates
-            .into_iter()
-            .filter(|(_, path)| {
-                song_root_contains_file(&root, path)
-                    && !discovered.contains(path)
-                    && match crate::chart_source::ChartLocator::parse(Path::new(path)) {
-                        Ok(crate::chart_source::ChartLocator::File(file)) => {
-                            matches!(file.try_exists(), Ok(false))
-                        }
-                        Ok(crate::chart_source::ChartLocator::Archive { container, entry }) => {
-                            matches!(container.try_exists(), Ok(false))
-                                || archive_entries.entry(container.clone()).or_insert_with(|| {
-                                    let index = crate::song_archive::inspect(&container, &Default::default()).ok()?;
-                                    let generation: String = self.conn.query_row(
-                                        "SELECT generation FROM song_archive_scans WHERE path = ?1", [library_path_key(&container)],
+        let mut containers_gone: HashMap<PathBuf, bool> = HashMap::new();
+        for (id, path) in candidates {
+            if !song_root_contains_file(&root, &path) {
+                continue;
+            }
+            if discovered.is_some_and(|discovered| !discovered.contains(&path)) {
+                missing.push(id);
+                continue;
+            }
+            match crate::chart_source::ChartLocator::parse(Path::new(&path)) {
+                Ok(crate::chart_source::ChartLocator::File(file)) => {
+                    files_to_check.push((id, file))
+                }
+                Ok(crate::chart_source::ChartLocator::Archive { container, entry }) => {
+                    let gone = *containers_gone
+                        .entry(container.clone())
+                        .or_insert_with(|| matches!(container.try_exists(), Ok(false)));
+                    // A complete discovery already decoded this archive's index.
+                    let vanished = gone
+                        || (discovered.is_none()
+                            && archive_entries
+                                .entry(container.clone())
+                                .or_insert_with(|| {
+                                    let index = crate::song_archive::inspect(
+                                        &container,
+                                        &Default::default(),
+                                    )
+                                    .ok()?;
+                                    let generation: String = self
+                                    .conn
+                                    .query_row(
+                                        "SELECT generation FROM song_archive_scans WHERE path = ?1",
+                                        [library_path_key(&container)],
                                         |row| row.get(0),
-                                    ).ok()?;
-                                    (generation == index.generation.fingerprint).then(|| index.entries.into_iter()
-                                        .filter(|entry| !entry.is_directory).map(|entry| entry.name).collect())
-                                }).as_ref().is_some_and(|entries| !entries.contains(&entry))
-                        }
-                        Err(_) => false,
+                                    )
+                                    .ok()?;
+                                    (generation == index.generation.fingerprint).then(|| {
+                                        index
+                                            .entries
+                                            .into_iter()
+                                            .filter(|entry| !entry.is_directory)
+                                            .map(|entry| entry.name)
+                                            .collect()
+                                    })
+                                })
+                                .as_ref()
+                                .is_some_and(|entries| !entries.contains(&entry)));
+                    if vanished {
+                        missing.push(id);
                     }
-            })
-            .map(|(id, _)| id)
-            .collect();
+                }
+                Err(_) => {}
+            }
+        }
+        // One stat per registered chart, in parallel for slow or remote volumes.
+        missing.extend(
+            files_to_check
+                .par_iter()
+                .filter(|(_, file)| matches!(file.try_exists(), Ok(false)))
+                .map(|(id, _)| *id)
+                .collect::<Vec<_>>(),
+        );
         if missing.is_empty() {
             return Ok(0);
         }
         let tx = self.conn.transaction()?;
+        inherit_first_seen_at(&tx, &missing)?;
         delete_chart_files(&tx, &missing)?;
         tx.commit()?;
         Ok(missing.len())
@@ -150,6 +197,24 @@ impl LibraryDatabase {
             .optional()
             .map_err(Into::into)
     }
+}
+
+/// A chart that moved, or whose alias path was replaced by the chosen one, keeps its
+/// place in "new songs": remaining files with the same hash take the earliest
+/// `first_seen_at` of the removed ones.
+fn inherit_first_seen_at(tx: &Connection, removed_file_ids: &[i64]) -> Result<()> {
+    let mut stmt = tx.prepare_cached(
+        "UPDATE chart_files
+         SET first_seen_at = removed.first_seen_at
+         FROM (SELECT sha256, first_seen_at FROM chart_files WHERE id = ?1) AS removed
+         WHERE chart_files.sha256 = removed.sha256
+           AND removed.sha256 <> ''
+           AND chart_files.first_seen_at > removed.first_seen_at",
+    )?;
+    for &file_id in removed_file_ids {
+        stmt.execute([file_id])?;
+    }
+    Ok(())
 }
 
 pub(super) fn delete_chart_files(tx: &Connection, file_ids: &[i64]) -> Result<()> {

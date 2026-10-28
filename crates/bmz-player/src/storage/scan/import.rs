@@ -2,7 +2,7 @@ use super::*;
 use crate::storage::library_db::library_path_key;
 
 /// 1回のバッチで並列パースするファイル数
-const IMPORT_BATCH_SIZE: usize = 256;
+pub(super) const IMPORT_BATCH_SIZE: usize = 256;
 
 pub fn scan_song_roots(
     db: &mut LibraryDatabase,
@@ -31,6 +31,7 @@ pub fn scan_song_roots_with_progress(
         discovery_complete: bool,
         root_readable: bool,
         recursive: bool,
+        backend: ScanDiscoveryBackend,
     }
 
     struct FileTodo {
@@ -121,6 +122,7 @@ pub fn scan_song_roots_with_progress(
             discovery_complete: discovery.complete,
             root_readable: discovery.root_readable,
             recursive: root.recursive,
+            backend: discovery.backend,
         });
     }
     on_progress(ScanProgress { done: 0, total: files_total });
@@ -364,10 +366,12 @@ pub fn scan_song_roots_with_progress(
         );
 
         if root.discovery_complete {
-            let discovered: std::collections::HashSet<String> =
-                entries.iter().map(|entry| library_path_key(&entry.path)).collect();
+            // Everything results may lag the file system; there only the file system decides.
+            let discovered: Option<HashSet<String>> = (root.backend
+                != ScanDiscoveryBackend::Everything)
+                .then(|| entries.iter().map(|entry| library_path_key(&entry.path)).collect());
             report.summary.removed_files +=
-                db.prune_missing_chart_files(root_path, root.recursive, &discovered)?;
+                db.prune_missing_chart_files(root_path, root.recursive, discovered.as_ref())?;
             db.update_root_scanned_at(root.root_id, scanned_at)?;
         } else {
             tracing::warn!(
