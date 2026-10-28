@@ -239,98 +239,109 @@ pub fn scan_song_roots_with_progress(
             "skip check complete"
         );
 
-        // Phase 3+4: バッチごとに並列パース → 1トランザクションでまとめて書き込み
+        // Phase 3+4: バッチごとに並列パースし、1トランザクションでまとめて書き込む。
+        // パースは別スレッドで次のバッチへ進み、SQLiteへの書き込みと重ねる。
         let mut last_log = std::time::Instant::now();
         let log_interval = std::time::Duration::from_secs(2);
-
-        for (batch_idx, chunk) in to_import.chunks(IMPORT_BATCH_SIZE).enumerate() {
-            let batch_done = batch_idx * IMPORT_BATCH_SIZE;
-            let now = std::time::Instant::now();
-            if now.duration_since(last_log) >= log_interval || batch_idx == 0 {
-                last_log = now;
-                let pct = batch_done * 100 / new_total.max(1);
-                tracing::info!(
-                    pct,
-                    done = batch_done,
-                    total = new_total,
-                    root = %root_path.display(),
-                    "importing"
-                );
-            }
-
-            // 並列パース
-            let parse_start = std::time::Instant::now();
-            let parsed: Vec<ParsedFile> = chunk
-                .par_iter()
-                .map(|todo| ParsedFile {
-                    path: todo.path.clone(),
-                    file_size: todo.file_size,
-                    modified_at: todo.modified_at,
-                    result: import_bms_chart_catching_unwind(&todo.path),
-                })
-                .collect();
-            let parse_ms = parse_start.elapsed().as_millis();
-            report.timing.parse_ms += parse_ms;
-
-            // 1トランザクションでバッチ書き込み
-            let write_start = std::time::Instant::now();
-            {
-                let tx = db.conn_mut().transaction()?;
-                for p in &parsed {
-                    match &p.result {
-                        Ok(import_result) => {
-                            let record = ChartImportRecord {
-                                root_id: Some(root.root_id),
-                                file_path: &p.path,
-                                file_size: p.file_size,
-                                modified_at: p.modified_at,
-                                scanned_at,
-                                chart: &import_result.chart,
-                            };
-                            let (_, chart_file_id) =
-                                LibraryDatabase::write_chart_import(&tx, &record)?;
-                            let warnings_written = LibraryDatabase::write_import_warnings(
-                                &tx,
-                                chart_file_id,
-                                &import_result.warnings,
-                                scanned_at,
-                            )?;
-                            report.summary.imported += 1;
-                            report.summary.warnings += warnings_written as u32;
-                        }
-                        Err(error) => {
-                            let message = error.to_string();
-                            LibraryDatabase::write_failed_chart(
-                                &tx,
-                                Some(root.root_id),
-                                &p.path,
-                                p.file_size,
-                                p.modified_at,
-                                scanned_at,
-                                &message,
-                            )?;
-                            report.summary.failed += 1;
-                            report.failures.push(ScanFailure { path: p.path.clone(), message });
-                        }
+        let (parsed_tx, parsed_rx) = std::sync::mpsc::sync_channel(1);
+        std::thread::scope(|scope| -> Result<()> {
+            let to_import = &to_import;
+            scope.spawn(move || {
+                for chunk in to_import.chunks(IMPORT_BATCH_SIZE) {
+                    let parse_start = std::time::Instant::now();
+                    let parsed: Vec<ParsedFile> = chunk
+                        .par_iter()
+                        .map(|todo| ParsedFile {
+                            path: todo.path.clone(),
+                            file_size: todo.file_size,
+                            modified_at: todo.modified_at,
+                            result: import_bms_chart_catching_unwind(&todo.path),
+                        })
+                        .collect();
+                    // A closed receiver means the writer failed; stop parsing.
+                    if parsed_tx.send((parsed, parse_start.elapsed().as_millis())).is_err() {
+                        break;
                     }
                 }
-                tx.commit()?;
-            }
-            let write_ms = write_start.elapsed().as_millis();
-            report.timing.write_ms += write_ms;
+            });
 
-            tracing::info!(
-                batch = batch_idx,
-                files = chunk.len(),
-                parse_ms,
-                write_ms,
-                root = %root_path.display(),
-                "batch timing"
-            );
-            progress_done =
-                progress_done.saturating_add(usize_to_u32(parsed.len())).min(files_total);
-            on_progress(ScanProgress { done: progress_done, total: files_total });
-        }
+            for (batch_idx, (parsed, parse_ms)) in parsed_rx.into_iter().enumerate() {
+                let batch_done = batch_idx * IMPORT_BATCH_SIZE;
+                let now = std::time::Instant::now();
+                if now.duration_since(last_log) >= log_interval || batch_idx == 0 {
+                    last_log = now;
+                    let pct = batch_done * 100 / new_total.max(1);
+                    tracing::info!(
+                        pct,
+                        done = batch_done,
+                        total = new_total,
+                        root = %root_path.display(),
+                        "importing"
+                    );
+                }
+                report.timing.parse_ms += parse_ms;
+
+                // 1トランザクションでバッチ書き込み
+                let write_start = std::time::Instant::now();
+                {
+                    let tx = db.conn_mut().transaction()?;
+                    for p in &parsed {
+                        match &p.result {
+                            Ok(import_result) => {
+                                let record = ChartImportRecord {
+                                    root_id: Some(root.root_id),
+                                    file_path: &p.path,
+                                    file_size: p.file_size,
+                                    modified_at: p.modified_at,
+                                    scanned_at,
+                                    chart: &import_result.chart,
+                                };
+                                let (_, chart_file_id) =
+                                    LibraryDatabase::write_chart_import(&tx, &record)?;
+                                let warnings_written = LibraryDatabase::write_import_warnings(
+                                    &tx,
+                                    chart_file_id,
+                                    &import_result.warnings,
+                                    scanned_at,
+                                )?;
+                                report.summary.imported += 1;
+                                report.summary.warnings += warnings_written as u32;
+                            }
+                            Err(error) => {
+                                let message = error.to_string();
+                                LibraryDatabase::write_failed_chart(
+                                    &tx,
+                                    Some(root.root_id),
+                                    &p.path,
+                                    p.file_size,
+                                    p.modified_at,
+                                    scanned_at,
+                                    &message,
+                                )?;
+                                report.summary.failed += 1;
+                                report.failures.push(ScanFailure { path: p.path.clone(), message });
+                            }
+                        }
+                    }
+                    tx.commit()?;
+                }
+                let write_ms = write_start.elapsed().as_millis();
+                report.timing.write_ms += write_ms;
+
+                tracing::info!(
+                    batch = batch_idx,
+                    files = parsed.len(),
+                    parse_ms,
+                    write_ms,
+                    root = %root_path.display(),
+                    "batch timing"
+                );
+                progress_done =
+                    progress_done.saturating_add(usize_to_u32(parsed.len())).min(files_total);
+                on_progress(ScanProgress { done: progress_done, total: files_total });
+            }
+            Ok(())
+        })?;
 
         // Discovery already enumerated every song directory. Persist the shared
         // folder flag even when every chart was skipped as unchanged.
@@ -353,8 +364,10 @@ pub fn scan_song_roots_with_progress(
         );
 
         if root.discovery_complete {
+            let discovered: std::collections::HashSet<String> =
+                entries.iter().map(|entry| library_path_key(&entry.path)).collect();
             report.summary.removed_files +=
-                db.prune_missing_chart_files(root_path, root.recursive)?;
+                db.prune_missing_chart_files(root_path, root.recursive, &discovered)?;
             db.update_root_scanned_at(root.root_id, scanned_at)?;
         } else {
             tracing::warn!(

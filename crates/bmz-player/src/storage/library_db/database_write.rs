@@ -3,7 +3,14 @@ use super::*;
 impl LibraryDatabase {
     /// Only remove confirmed missing files within a successfully scanned scope.
     /// Do not infer deletion from timestamps: unchanged imports keep old timestamps.
-    pub fn prune_missing_chart_files(&mut self, root: &Path, recursive: bool) -> Result<usize> {
+    /// `discovered` holds the scan's [`library_path_key`]s; only other paths are checked
+    /// against the file system, so an unchanged library needs no further stat calls.
+    pub fn prune_missing_chart_files(
+        &mut self,
+        root: &Path,
+        recursive: bool,
+        discovered: &std::collections::HashSet<String>,
+    ) -> Result<usize> {
         let root = crate::config::app_config::PathEntry {
             path: library_path_key(root),
             enabled: true,
@@ -22,6 +29,7 @@ impl LibraryDatabase {
             .into_iter()
             .filter(|(_, path)| {
                 song_root_contains_file(&root, path)
+                    && !discovered.contains(path)
                     && match crate::chart_source::ChartLocator::parse(Path::new(path)) {
                         Ok(crate::chart_source::ChartLocator::File(file)) => {
                             matches!(file.try_exists(), Ok(false))
