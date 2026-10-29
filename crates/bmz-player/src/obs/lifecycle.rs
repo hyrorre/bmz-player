@@ -13,6 +13,10 @@ impl ObsLifecycle {
             return self.end_play();
         }
         if self.scene == Some(scene) {
+            if scene == ObsEventKey::Play && self.play_ended {
+                self.play_ended = false;
+                return vec![ObsTrigger::PlayStart];
+            }
             return Vec::new();
         }
         let mut events = self.end_scene();

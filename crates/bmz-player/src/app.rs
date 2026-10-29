@@ -564,6 +564,10 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
     tracing::info!("starting winit event loop");
     let result = event_loop.run_app(app.as_mut()).context("winit event loop failed");
     let startup_error = app.startup_error.take();
+    if let Some(obs) = app.integrations.obs_controller.take() {
+        // The game loop has ended; yield asynchronously while MAIN_END drains.
+        obs.shutdown().await;
+    }
     drop(app);
     drop(viewer_cleanup);
     result?;
