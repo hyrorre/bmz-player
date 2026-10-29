@@ -9,6 +9,12 @@ pub(super) enum ConnectionAction {
 }
 
 pub async fn load_scenes(config: ObsConfig) -> Result<ObsSceneList> {
+    tokio::time::timeout(LOAD_SCENES_TIMEOUT, load_scenes_inner(config))
+        .await
+        .context("OBS scene load timed out")?
+}
+
+async fn load_scenes_inner(config: ObsConfig) -> Result<ObsSceneList> {
     let url = obs_ws_url(&config);
     let timeout = tokio::time::sleep(LOAD_SCENES_TIMEOUT);
     tokio::pin!(timeout);
@@ -115,10 +121,9 @@ pub async fn load_scenes(config: ObsConfig) -> Result<ObsSceneList> {
                                 }
                                 if let (Some(version), Some(scenes), Some(recording_active)) =
                                     (version.clone(), scenes.clone(), recording_active)
+                                    && outstanding.is_empty()
                                 {
-                                    if outstanding.is_empty() {
-                                        return Ok(ObsSceneList { version, scenes, recording_active, sources });
-                                    }
+                                    return Ok(ObsSceneList { version, scenes, recording_active, sources });
                                 }
                             }
                             _ => {}
@@ -248,8 +253,11 @@ pub(super) async fn connect_with_pending_commands(
 ) -> std::result::Result<Option<ObsWebSocket>, Box<TungsteniteError>> {
     let connection = connect_async(url);
     tokio::pin!(connection);
+    let timeout = tokio::time::sleep(LOAD_SCENES_TIMEOUT);
+    tokio::pin!(timeout);
     loop {
         tokio::select! {
+            _ = &mut timeout => return Err(Box::new(TungsteniteError::Io(std::io::Error::new(ErrorKind::TimedOut, "OBS connect timeout")))),
             result = &mut connection => {
                 return result.map(|(ws, _)| Some(ws)).map_err(Box::new);
             }
@@ -306,10 +314,23 @@ pub(super) async fn run_connected(
         }
     }
     loop {
-        if let Some(deadline) = state.pending_stop_deadline {
+        let deadline =
+            [state.pending_stop_deadline, state.pending_restart.map(|(deadline, _)| deadline)]
+                .into_iter()
+                .flatten()
+                .min();
+        if let Some(deadline) = deadline {
             tokio::select! {
                 _ = tokio::time::sleep_until(deadline) => {
-                    state.flush_pending_stop(&mut sink).await?;
+                    if state.pending_stop_deadline.is_some_and(|d| d <= TokioInstant::now()) {
+                        state.flush_pending_stop(&mut sink).await?;
+                    }
+                    if state.pending_restart.is_some_and(|(d, _)| d <= TokioInstant::now())
+                        && let Some((_, generation)) = state.pending_restart.take()
+                        && generation == state.scene_request_generation
+                        && state.lifecycle.scene == Some(ObsEventKey::Play) {
+                        state.send_request(&mut sink, "StartRecord", None).await?;
+                    }
                 }
                 command = rx.recv() => {
                     if matches!(handle_command(state, &mut sink, tx.clone(), command).await?, ConnectionAction::Shutdown) {
@@ -445,6 +466,13 @@ pub(super) async fn handle_command(
         ObsCommand::RetryPlay => {
             state.lifecycle.retry();
             state.retry_play(sink, tx).await?;
+        }
+        ObsCommand::RetryPlayStart { generation } => {
+            if generation == state.scene_request_generation
+                && state.lifecycle.scene == Some(ObsEventKey::Play)
+            {
+                state.apply_event(sink, ObsEventKey::Play).await?;
+            }
         }
         ObsCommand::SaveLastRecording(reason) => state.save_last_recording(reason),
         ObsCommand::Shutdown | ObsCommand::Close => return Ok(ConnectionAction::Shutdown),

@@ -695,9 +695,6 @@ impl WinitApp {
             return;
         }
         self.integrations.exit_prepared = true;
-        if let Some(obs) = &self.integrations.obs_controller {
-            obs.request_shutdown();
-        }
         #[cfg(target_os = "linux")]
         {
             self.ui.idle_inhibitor = None;
@@ -718,6 +715,10 @@ impl WinitApp {
         self.flush_pending_screenshots("app exit");
         self.save_configs_for_exit(self.active_hispeed(), "game exit");
         self.wait_for_pending_play_result_on_exit();
+        // Queue screenshot/replay retention decisions before closing the OBS worker.
+        if let Some(obs) = &self.integrations.obs_controller {
+            obs.request_shutdown();
+        }
         self.release_audio_for_process_exit();
         self.skin.skin_pipeline.shutdown_workers();
         self.play.bga_preload.shutdown_workers();
