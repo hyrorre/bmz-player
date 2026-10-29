@@ -1,6 +1,64 @@
 use super::*;
 
 #[test]
+fn obs_rules_preserve_legacy_empty_and_ordered_settings() {
+    let mut old: ObsConfig = toml::from_str(
+        "[scenes]\nPLAY = 'Gameplay'\n[actions]\nPLAY = 'StartRecord'\nPLAY_ENDED = 'StopRecord'\n",
+    )
+    .unwrap();
+    assert!(old.rules.is_none());
+    assert!(!toml::to_string(&old).unwrap().contains("rules"));
+    let migrated = old.effective_rules();
+    assert_eq!(migrated.len(), 3);
+    assert_eq!(migrated[0].trigger, ObsTrigger::PlayStart);
+    assert!(matches!(migrated[0].action, ObsRuleAction::SwitchScene { .. }));
+    assert_eq!(migrated[1].action, ObsRuleAction::StartRecord);
+    old.migrate_rules();
+    assert_eq!(old.effective_rules(), migrated);
+    let loaded: ObsConfig = toml::from_str(&toml::to_string(&old).unwrap()).unwrap();
+    assert_eq!(loaded, old);
+    old.migrate_rules().clear();
+    let loaded: ObsConfig = toml::from_str(&toml::to_string(&old).unwrap()).unwrap();
+    assert_eq!(loaded.rules, Some(vec![]));
+    assert!(loaded.effective_rules().is_empty());
+    assert!(!loaded.scenes.is_empty());
+}
+
+#[test]
+fn obs_rules_reject_unknown_variants_and_validate_names() {
+    assert!(
+        toml::from_str::<ObsConfig>("[[rules]]\ntrigger = 'INVALID'\naction = 'StartRecord'")
+            .is_err()
+    );
+    assert!(
+        toml::from_str::<ObsConfig>(
+            "[[rules]]\ntrigger = 'PLAY_START'\naction = 'ExecuteAnything'"
+        )
+        .is_err()
+    );
+    assert!(
+        !ObsRuleAction::ShowSource { scene_name: "Scene".into(), source_name: " ".into() }
+            .is_valid()
+    );
+    for trigger in ObsTrigger::ALL {
+        let config = ObsConfig {
+            rules: Some(vec![ObsRule {
+                trigger,
+                action: ObsRuleAction::HideSource {
+                    scene_name: "Overlay".into(),
+                    source_name: "Playing".into(),
+                },
+            }]),
+            ..ObsConfig::default()
+        };
+        assert_eq!(
+            toml::from_str::<ObsConfig>(&toml::to_string(&config).unwrap()).unwrap(),
+            config
+        );
+    }
+}
+
+#[test]
 fn app_config_ignores_removed_linux_gamepad_poll_setting() {
     let mut config = AppConfig::default();
     config.input.keyboard_enabled = false;

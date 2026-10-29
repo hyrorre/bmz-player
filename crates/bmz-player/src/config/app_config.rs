@@ -241,6 +241,119 @@ pub struct ObsConfig {
     pub scenes: BTreeMap<String, String>,
     #[serde(default)]
     pub actions: BTreeMap<String, ObsActionConfig>,
+    /// None uses legacy mappings; Some(empty) deliberately disables all commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules: Option<Vec<ObsRule>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ObsTrigger {
+    MainStart,
+    MainEnd,
+    #[serde(rename = "MUSICSELECT_START")]
+    MusicSelectStart,
+    #[serde(rename = "MUSICSELECT_END")]
+    MusicSelectEnd,
+    DecideStart,
+    DecideEnd,
+    PlayStart,
+    PlayEnd,
+    ResultStart,
+    ResultEnd,
+    #[serde(rename = "COURSERESULT_START")]
+    CourseResultStart,
+    #[serde(rename = "COURSERESULT_END")]
+    CourseResultEnd,
+}
+
+impl ObsTrigger {
+    pub const ALL: [Self; 12] = [
+        Self::MainStart,
+        Self::MainEnd,
+        Self::MusicSelectStart,
+        Self::MusicSelectEnd,
+        Self::DecideStart,
+        Self::DecideEnd,
+        Self::PlayStart,
+        Self::PlayEnd,
+        Self::ResultStart,
+        Self::ResultEnd,
+        Self::CourseResultStart,
+        Self::CourseResultEnd,
+    ];
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObsRule {
+    pub trigger: ObsTrigger,
+    #[serde(flatten)]
+    pub action: ObsRuleAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action")]
+pub enum ObsRuleAction {
+    SwitchScene { scene_name: String },
+    ShowSource { scene_name: String, source_name: String },
+    HideSource { scene_name: String, source_name: String },
+    StartRecord,
+    StopRecord,
+}
+
+impl ObsRuleAction {
+    pub fn is_visual(&self) -> bool {
+        matches!(self, Self::SwitchScene { .. } | Self::ShowSource { .. } | Self::HideSource { .. })
+    }
+
+    pub fn is_valid(&self) -> bool {
+        match self {
+            Self::SwitchScene { scene_name } => !scene_name.trim().is_empty(),
+            Self::ShowSource { scene_name, source_name }
+            | Self::HideSource { scene_name, source_name } => {
+                !scene_name.trim().is_empty() && !source_name.trim().is_empty()
+            }
+            Self::StartRecord | Self::StopRecord => true,
+        }
+    }
+}
+
+impl ObsConfig {
+    pub fn effective_rules(&self) -> Vec<ObsRule> {
+        if let Some(rules) = &self.rules {
+            return rules.clone();
+        }
+        let mut rules = Vec::new();
+        for (key, trigger) in [
+            ("MUSICSELECT", ObsTrigger::MusicSelectStart),
+            ("DECIDE", ObsTrigger::DecideStart),
+            ("PLAY", ObsTrigger::PlayStart),
+            ("PLAY_ENDED", ObsTrigger::PlayEnd),
+            ("RESULT", ObsTrigger::ResultStart),
+            ("COURSERESULT", ObsTrigger::CourseResultStart),
+        ] {
+            if let Some(scene) = self.scenes.get(key).filter(|scene| !scene.trim().is_empty()) {
+                rules.push(ObsRule {
+                    trigger,
+                    action: ObsRuleAction::SwitchScene { scene_name: scene.trim().to_owned() },
+                });
+            }
+            let action = match self.actions.get(key).copied().unwrap_or_default() {
+                ObsActionConfig::None => continue,
+                ObsActionConfig::StartRecord => ObsRuleAction::StartRecord,
+                ObsActionConfig::StopRecord => ObsRuleAction::StopRecord,
+            };
+            rules.push(ObsRule { trigger, action });
+        }
+        rules
+    }
+
+    pub fn migrate_rules(&mut self) -> &mut Vec<ObsRule> {
+        if self.rules.is_none() {
+            self.rules = Some(self.effective_rules());
+        }
+        self.rules.as_mut().expect("rules initialized above")
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -272,6 +385,7 @@ impl Default for ObsConfig {
             recording_mode: ObsRecordingMode::KeepAll,
             scenes: BTreeMap::new(),
             actions: BTreeMap::new(),
+            rules: None,
         }
     }
 }
