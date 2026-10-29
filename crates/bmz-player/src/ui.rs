@@ -23,8 +23,8 @@ use winit::window::Window;
 use crate::config::app_config::{
     AppConfig, AudioBackend, AudioBufferSizeMode, AudioOutputMode, AudioSampleRateMode,
     DifficultyTableSource, FrameLatencyModeConfig, GamepadBackendKind, InputBackendKind,
-    InternalResolutionModeConfig, LogLevel, ObsActionConfig, ObsRecordingMode, PathEntry,
-    RendererBackend, UpdateChannelConfig, VsyncModeConfig, WindowMode,
+    InternalResolutionModeConfig, LogLevel, ObsRecordingMode, PathEntry, RendererBackend,
+    UpdateChannelConfig, VsyncModeConfig, WindowMode,
 };
 use crate::config::key_config::{KeyBindingSlot, KeyBindingTarget};
 use crate::config::play::{TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN};
