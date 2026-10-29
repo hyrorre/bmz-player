@@ -16,23 +16,79 @@ fn build_judge_region_state_tracks_signed_timing_per_region() {
     };
     // 1P 側 FAST 3ms、2P 側 SLOW 7ms。
     let judgements = [judgement(Lane::Key1, -3_000, false), judgement(Lane::Key8, 7_000, false)];
-    let state = build_judge_region_state(&judgements, 2_000, 2);
+    let state = build_judge_region_state(&judgements, 2_000, KeyMode::K14, 2);
     assert_eq!(state.judge_timing_ms[0], Some(-3));
     assert_eq!(state.judge_timing_ms[1], Some(7));
     assert_eq!(state.judge_timing_ms[2], None);
 
     // 閾値フィルタで抑制された判定は ±ms を領域ごと隠す。
     let suppressed = [judgement(Lane::Key1, -3_000, true)];
-    let state = build_judge_region_state(&suppressed, 2_000, 2);
+    let state = build_judge_region_state(&suppressed, 2_000, KeyMode::K14, 2);
     assert_eq!(state.judge_timing_ms[0], None);
 }
 
 #[test]
 fn lane_judge_region_maps_14k_sides() {
-    assert_eq!(lane_judge_region(0, 16, 2), 0);
-    assert_eq!(lane_judge_region(7, 16, 2), 0);
-    assert_eq!(lane_judge_region(8, 16, 2), 1);
-    assert_eq!(lane_judge_region(15, 16, 2), 1);
+    assert_eq!(lane_judge_region(Lane::Scratch, KeyMode::K14, 2), 0);
+    assert_eq!(lane_judge_region(Lane::Key7, KeyMode::K14, 2), 0);
+    assert_eq!(lane_judge_region(Lane::Key8, KeyMode::K14, 2), 1);
+    assert_eq!(lane_judge_region(Lane::Scratch2, KeyMode::K14, 2), 1);
+    assert_eq!(lane_judge_region(Lane::Scratch, KeyMode::K10, 2), 0);
+    assert_eq!(lane_judge_region(Lane::Key8, KeyMode::K10, 2), 1);
+}
+
+#[test]
+fn lane_judge_region_splits_9k_into_three_regions() {
+    // beatoraja は lane / (9 / 3) で KEY1-3 / KEY4-6 / KEY7-9 に分ける。
+    let regions = [
+        Lane::Key1,
+        Lane::Key2,
+        Lane::Key3,
+        Lane::Key4,
+        Lane::Key5,
+        Lane::Key6,
+        Lane::Key7,
+        Lane::Key8,
+        Lane::Key9,
+    ]
+    .map(|lane| lane_judge_region(lane, KeyMode::K9, 3));
+    assert_eq!(regions, [0, 0, 0, 1, 1, 1, 2, 2, 2]);
+    // 1領域は全レーン共通。2領域では 9 / 2 = 4 レーンずつで、余った KEY9 は右へ寄せる。
+    assert_eq!(lane_judge_region(Lane::Key9, KeyMode::K9, 1), 0);
+    assert_eq!(lane_judge_region(Lane::Key4, KeyMode::K9, 2), 0);
+    assert_eq!(lane_judge_region(Lane::Key5, KeyMode::K9, 2), 1);
+    assert_eq!(lane_judge_region(Lane::Key9, KeyMode::K9, 2), 1);
+    assert_eq!(lane_judge_region(Lane::Scratch, KeyMode::K7, 1), 0);
+}
+
+#[test]
+fn judge_runtime_lights_the_right_9k_region_timer() {
+    use crate::snapshot::DisplayJudgement;
+
+    let document: SkinDocument =
+        serde_json::from_str(r#"{ "type": 0, "w": 1, "h": 1, "destination": [] }"#).unwrap();
+    let mut runtime = DynamicTimerRuntime::default();
+    let mut state = SkinDrawState::default();
+    runtime.ingest_judge_lane_state(
+        &[DisplayJudgement {
+            lane: Lane::Key8,
+            judge: bmz_core::judge::Judge::Great,
+            side: None,
+            text: String::new(),
+            combo: 3,
+            delta_us: 0,
+            time: TimeUs(1_000),
+            is_miss: false,
+            timing_ms_suppressed: false,
+        }],
+        KeyMode::K9,
+        3,
+        11_000,
+    );
+    runtime.advance(&document, &mut state, 11);
+    // timer 247 (3P 判定) は領域2の値を読む。
+    assert_eq!(state.judge_ms, [None, None, Some(10)]);
+    assert_eq!(state.judge_combo[2], 3);
 }
 
 #[test]
@@ -56,6 +112,7 @@ fn judge_runtime_keeps_each_dp_combo_after_recent_history_expires() {
     let mut state = SkinDrawState::default();
     runtime.ingest_judge_lane_state(
         &[judgement(Lane::Key1, 5, 1_000), judgement(Lane::Key8, 6, 2_000)],
+        KeyMode::K14,
         2,
         3_000,
     );
@@ -64,13 +121,13 @@ fn judge_runtime_keeps_each_dp_combo_after_recent_history_expires() {
 
     let mut break_judgement = judgement(Lane::Key8, 0, 4_000);
     break_judgement.judge = bmz_core::judge::Judge::Bad;
-    runtime.ingest_judge_lane_state(&[break_judgement], 2, 5_000);
+    runtime.ingest_judge_lane_state(&[break_judgement], KeyMode::K14, 2, 5_000);
     runtime.advance(&document, &mut state, 5);
     assert_eq!(&state.judge_combo[..2], &[5, 0]);
 
     // session 側の recent_judgements (800ms) が空になっても、SkinJudge の
     // destination timer が終わるまで左右の最新値を保持する。
-    runtime.ingest_judge_lane_state(&[], 2, 1_000_000);
+    runtime.ingest_judge_lane_state(&[], KeyMode::K14, 2, 1_000_000);
     runtime.advance(&document, &mut state, 1_000);
     assert_eq!(&state.judge_combo[..2], &[5, 0]);
     assert_eq!(state.judge_ms[0], Some(999));

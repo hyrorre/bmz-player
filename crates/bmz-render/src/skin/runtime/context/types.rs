@@ -166,19 +166,23 @@ pub struct JudgeRegionState {
     pub judge_timing_ms: [Option<i32>; MAX_JUDGE_REGIONS],
 }
 
-/// レーン index から判定領域 index へ (beatoraja `JudgeManager.updateMicro` 同式)。
-pub fn lane_judge_region(lane_index: usize, lane_count: usize, region_count: usize) -> usize {
-    if lane_count == 0 || region_count == 0 {
+/// レーンから判定領域 index へ (beatoraja `JudgeManager.updateMicro` 同式)。
+/// beatoraja はキーモード内のレーン番号を `レーン数 / 領域数` で割る。
+/// 9KEYS の3領域は KEY1-3 / KEY4-6 / KEY7-9 になる。
+pub fn lane_judge_region(lane: Lane, key_mode: KeyMode, region_count: usize) -> usize {
+    if region_count == 0 {
         return 0;
     }
-    let region = lane_index * region_count / lane_count;
-    region.min(region_count.saturating_sub(1))
+    let lanes_per_region = (key_mode.lane_count() / region_count).max(1);
+    let region = crate::skin::beatoraja_note_index(lane, key_mode) / lanes_per_region;
+    region.min(region_count - 1)
 }
 
 /// `recent_judgements` から領域別の判定 timer / 画像 index を構築する。
 pub fn build_judge_region_state(
     recent_judgements: &[crate::snapshot::DisplayJudgement],
     render_now_us: i64,
+    key_mode: KeyMode,
     region_count: usize,
 ) -> JudgeRegionState {
     let mut judge_ms = [None; MAX_JUDGE_REGIONS];
@@ -188,7 +192,7 @@ pub fn build_judge_region_state(
     let mut judge_timing_ms = [None; MAX_JUDGE_REGIONS];
     let region_count = region_count.min(MAX_JUDGE_REGIONS);
     for judgement in recent_judgements.iter().rev() {
-        let region = lane_judge_region(judgement.lane.index(), LANE_COUNT, region_count);
+        let region = lane_judge_region(judgement.lane, key_mode, region_count);
         if judge_ms[region].is_some() {
             continue;
         }

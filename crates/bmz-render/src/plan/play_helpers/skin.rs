@@ -119,11 +119,8 @@ pub(super) fn push_default_play_skin(
     let judge_text = recent_judgement.map(|judgement| judgement.text.clone()).unwrap_or_default();
     let judge_image = recent_judgement.and_then(|judgement| {
         let region_count = skin_context.document().map(|d| d.judge_region_count()).unwrap_or(1);
-        let region = crate::skin::lane_judge_region(
-            judgement.lane.index(),
-            bmz_core::lane::LANE_COUNT,
-            region_count,
-        );
+        let region =
+            crate::skin::lane_judge_region(judgement.lane, snapshot.key_mode, region_count);
         skin_context.document_judge_items(
             &judgement.text,
             snapshot.combo,

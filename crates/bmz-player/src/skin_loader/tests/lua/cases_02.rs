@@ -359,8 +359,8 @@ fn ecfn_play14_judge1_combo_is_right_of_judge_with_score_graph_when_available() 
     );
 
     let region = bmz_render::skin::lane_judge_region(
-        Lane::Key8.index(),
-        bmz_core::lane::LANE_COUNT,
+        Lane::Key8,
+        bmz_core::lane::KeyMode::K14,
         decoded.document.judge_region_count(),
     );
     assert_eq!(region, 1);

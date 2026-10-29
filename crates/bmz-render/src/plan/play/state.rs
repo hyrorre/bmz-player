@@ -15,6 +15,7 @@ pub(in crate::plan) fn build_play_skin_state(
     let judge_region_state = crate::skin::build_judge_region_state(
         &snapshot.recent_judgements,
         snapshot.time.0,
+        snapshot.key_mode,
         judge_region_count,
     );
     let ready_timer_ms = snapshot

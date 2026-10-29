@@ -55,6 +55,7 @@ fn bmz_split_judge_runtime_keeps_scratch_and_keys_independent_past_800ms() {
                 false,
             ),
         ],
+        KeyMode::K14,
         2,
         700_000,
     );
@@ -76,7 +77,7 @@ fn bmz_split_judge_runtime_keeps_scratch_and_keys_independent_past_800ms() {
 
     // 標準の800msリストが空になっても、標準・拡張の両チャンネルを
     // renderer runtime に残し、各 destination の終端で表示を止める。
-    runtime.ingest_judge_lane_state(&[], 2, 1_800_000);
+    runtime.ingest_judge_lane_state(&[], KeyMode::K14, 2, 1_800_000);
     runtime.advance(&document, &mut state, 1_800);
     assert_eq!(skin_timer_elapsed_ms(Some(19_010), &state), Some(1_700));
     assert_eq!(skin_timer_elapsed_ms(Some(19_011), &state), Some(1_400));
@@ -95,6 +96,7 @@ fn bmz_split_judge_runtime_preserves_fast_slow_filter_and_resets_on_rewind() {
 
     runtime.ingest_judge_lane_state(
         &[split_judgement(Lane::Key1, Judge::PGreat, None, -3_000, 1_000_000, true)],
+        KeyMode::K7,
         1,
         1_000_000,
     );
@@ -104,7 +106,7 @@ fn bmz_split_judge_runtime_preserves_fast_slow_filter_and_resets_on_rewind() {
     assert!(!test_skin_op(19_041, &[], &state));
     assert_eq!(skin_state_number(19_051, &state), None);
 
-    runtime.ingest_judge_lane_state(&[], 1, 0);
+    runtime.ingest_judge_lane_state(&[], KeyMode::K7, 1, 0);
     runtime.advance(&document, &mut state, 0);
     assert_eq!(skin_timer_elapsed_ms(Some(19_011), &state), None);
     assert!(!test_skin_op(19_021, &[], &state));
@@ -169,6 +171,7 @@ fn bmz_split_judge_runtime_maps_third_region_scratch_and_keys() {
                 false,
             ),
         ],
+        KeyMode::K14,
         3,
         200_000,
     );

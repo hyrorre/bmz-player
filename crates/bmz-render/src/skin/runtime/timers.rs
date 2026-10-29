@@ -274,10 +274,11 @@ impl DynamicTimerRuntime {
     pub(crate) fn ingest_judge_lane_state(
         &mut self,
         judgements: &[crate::snapshot::DisplayJudgement],
+        key_mode: KeyMode,
         region_count: usize,
         now_us: i64,
     ) {
-        self.judge_lane.ingest(judgements, region_count, now_us);
+        self.judge_lane.ingest(judgements, key_mode, region_count, now_us);
     }
 
     fn advance_keybeam(&mut self, state: &mut SkinDrawState, now_ms: i32) {
@@ -311,6 +312,7 @@ impl JudgeLaneRuntime {
     fn ingest(
         &mut self,
         judgements: &[crate::snapshot::DisplayJudgement],
+        key_mode: KeyMode,
         region_count: usize,
         now_us: i64,
     ) {
@@ -325,7 +327,7 @@ impl JudgeLaneRuntime {
 
         // recent_judgements は発生順なので、同時刻の同一チャンネルは後の判定を採用する。
         for judgement in judgements {
-            let region = lane_judge_region(judgement.lane.index(), LANE_COUNT, region_count);
+            let region = lane_judge_region(judgement.lane, key_mode, region_count);
             if self.region_started_us[region].is_none_or(|last| judgement.time.0 >= last) {
                 self.region_started_us[region] = Some(judgement.time.0);
                 self.region_judge_index[region] =

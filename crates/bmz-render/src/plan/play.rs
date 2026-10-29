@@ -53,6 +53,7 @@ pub(super) fn plan_play(
         skin.document().map(|document| document.judge_region_count()).unwrap_or(1);
     dynamic_timers.ingest_judge_lane_state(
         &snapshot.recent_judgements,
+        key_mode,
         judge_region_count,
         snapshot.time.0,
     );
