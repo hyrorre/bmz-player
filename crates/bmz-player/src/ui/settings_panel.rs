@@ -45,13 +45,26 @@ pub(super) struct SettingsPanelState<'a> {
 pub(super) struct ObsScenePickerState {
     busy: bool,
     scenes: Vec<String>,
+    sources: std::collections::HashMap<String, Vec<String>>,
     message: String,
     error: String,
     receiver: Option<std::sync::mpsc::Receiver<Result<crate::obs::ObsSceneList, String>>>,
+    connection: Option<(String, u16, String)>,
 }
 
 impl ObsScenePickerState {
-    fn poll(&mut self, text: Localizer) {
+    fn poll(&mut self, text: Localizer, config: &crate::config::app_config::ObsConfig) {
+        if self.connection.as_ref().is_some_and(|(host, port, password)| {
+            host != &config.host || *port != config.port || password != &config.password
+        }) {
+            self.receiver = None;
+            self.connection = None;
+            self.busy = false;
+            self.scenes.clear();
+            self.sources.clear();
+            self.message.clear();
+            self.error.clear();
+        }
         let Some(receiver) = &self.receiver else {
             return;
         };
@@ -63,6 +76,7 @@ impl ObsScenePickerState {
         match result {
             Ok(list) => {
                 self.scenes = list.scenes;
+                self.sources = list.sources;
                 self.error.clear();
                 self.message = tr!(
                     text,
@@ -80,6 +94,7 @@ impl ObsScenePickerState {
     }
 
     fn start_load(&mut self, config: crate::config::app_config::ObsConfig) {
+        self.connection = Some((config.host.clone(), config.port, config.password.clone()));
         let (sender, receiver) = std::sync::mpsc::channel();
         self.receiver = Some(receiver);
         self.busy = true;

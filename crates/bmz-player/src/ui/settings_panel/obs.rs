@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::app_config::{ObsRule, ObsRuleAction, ObsTrigger};
 
 pub(in crate::ui) fn build_obs_settings_section(
     ui: &mut egui::Ui,
@@ -7,7 +8,7 @@ pub(in crate::ui) fn build_obs_settings_section(
     connection_status: &crate::obs::ObsConnectionStatus,
     text: Localizer,
 ) -> bool {
-    state.poll(text);
+    state.poll(text, &config.obs);
     let mut enabled_changed = false;
     SettingsSection::new(SettingsPage::Integration, "OBS WebSocket")
         .scope(tr!(text, "settings-scope-app"))
@@ -99,77 +100,7 @@ pub(in crate::ui) fn build_obs_settings_section(
             }
 
             ui.separator();
-            ui.strong(tr!(text, "settings-obs-state-settings"));
-            egui::Grid::new("obs_state_mapping_grid").striped(true).show(ui, |ui| {
-                ui.label(tr!(text, "settings-obs-state"));
-                ui.label(tr!(text, "settings-obs-scene"));
-                ui.label(tr!(text, "settings-obs-action"));
-                ui.end_row();
-                for event in crate::obs::ObsEventKey::ALL {
-                    let key = event.config_key();
-                    ui.label(obs_event_label(event, text));
-
-                    let mut scene = config.obs.scenes.get(key).cloned().unwrap_or_default();
-                    let selected_scene = if scene.is_empty() {
-                        tr!(text, "settings-obs-no-change")
-                    } else {
-                        scene.clone()
-                    };
-                    egui::ComboBox::from_id_salt(("obs_scene", key))
-                        .selected_text(selected_scene)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut scene,
-                                String::new(),
-                                tr!(text, "settings-obs-no-change"),
-                            );
-                            if !scene.is_empty() && !state.scenes.iter().any(|name| name == &scene)
-                            {
-                                let current_scene = scene.clone();
-                                ui.selectable_value(
-                                    &mut scene,
-                                    current_scene.clone(),
-                                    current_scene,
-                                );
-                            }
-                            for candidate in &state.scenes {
-                                ui.selectable_value(&mut scene, candidate.clone(), candidate);
-                            }
-                        });
-                    if scene.is_empty() {
-                        config.obs.scenes.remove(key);
-                    } else {
-                        config.obs.scenes.insert(key.to_string(), scene);
-                    }
-
-                    let mut action = config.obs.actions.get(key).copied().unwrap_or_default();
-                    egui::ComboBox::from_id_salt(("obs_action", key))
-                        .selected_text(obs_action_label(action, text))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut action,
-                                ObsActionConfig::None,
-                                obs_action_label(ObsActionConfig::None, text),
-                            );
-                            ui.selectable_value(
-                                &mut action,
-                                ObsActionConfig::StartRecord,
-                                obs_action_label(ObsActionConfig::StartRecord, text),
-                            );
-                            ui.selectable_value(
-                                &mut action,
-                                ObsActionConfig::StopRecord,
-                                obs_action_label(ObsActionConfig::StopRecord, text),
-                            );
-                        });
-                    if action == ObsActionConfig::None {
-                        config.obs.actions.remove(key);
-                    } else {
-                        config.obs.actions.insert(key.to_string(), action);
-                    }
-                    ui.end_row();
-                }
-            });
+            build_obs_command_editor(ui, &mut config.obs, state, text);
         });
     enabled_changed
 }
@@ -211,14 +142,6 @@ pub(in crate::ui) fn obs_recording_mode_label(mode: ObsRecordingMode, text: Loca
     }
 }
 
-pub(in crate::ui) fn obs_action_label(action: ObsActionConfig, text: Localizer) -> String {
-    match action {
-        ObsActionConfig::None => tr!(text, "settings-obs-action-none"),
-        ObsActionConfig::StartRecord => tr!(text, "settings-obs-action-start"),
-        ObsActionConfig::StopRecord => tr!(text, "settings-obs-action-stop"),
-    }
-}
-
 pub(in crate::ui) fn obs_event_label(event: crate::obs::ObsEventKey, text: Localizer) -> String {
     match event {
         crate::obs::ObsEventKey::MusicSelect => tr!(text, "settings-obs-event-select"),
@@ -227,5 +150,246 @@ pub(in crate::ui) fn obs_event_label(event: crate::obs::ObsEventKey, text: Local
         crate::obs::ObsEventKey::PlayEnded => tr!(text, "settings-obs-event-play-ended"),
         crate::obs::ObsEventKey::Result => tr!(text, "settings-obs-event-result"),
         crate::obs::ObsEventKey::CourseResult => tr!(text, "settings-obs-event-course-result"),
+    }
+}
+
+fn trigger_label(trigger: ObsTrigger, text: Localizer) -> String {
+    use crate::obs::ObsEventKey;
+    let (screen, end) = match trigger {
+        ObsTrigger::MainStart => (tr!(text, "settings-obs-main"), false),
+        ObsTrigger::MainEnd => (tr!(text, "settings-obs-main"), true),
+        ObsTrigger::MusicSelectStart => (obs_event_label(ObsEventKey::MusicSelect, text), false),
+        ObsTrigger::MusicSelectEnd => (obs_event_label(ObsEventKey::MusicSelect, text), true),
+        ObsTrigger::DecideStart => (obs_event_label(ObsEventKey::Decide, text), false),
+        ObsTrigger::DecideEnd => (obs_event_label(ObsEventKey::Decide, text), true),
+        ObsTrigger::PlayStart => (obs_event_label(ObsEventKey::Play, text), false),
+        ObsTrigger::PlayEnd => (obs_event_label(ObsEventKey::Play, text), true),
+        ObsTrigger::ResultStart => (obs_event_label(ObsEventKey::Result, text), false),
+        ObsTrigger::ResultEnd => (obs_event_label(ObsEventKey::Result, text), true),
+        ObsTrigger::CourseResultStart => (obs_event_label(ObsEventKey::CourseResult, text), false),
+        ObsTrigger::CourseResultEnd => (obs_event_label(ObsEventKey::CourseResult, text), true),
+    };
+    tr!(text, "settings-obs-trigger", "screen" => screen, "edge" => if end {tr!(text, "settings-obs-end")} else {tr!(text, "settings-obs-start")})
+}
+
+fn action_kind(action: &ObsRuleAction) -> usize {
+    match action {
+        ObsRuleAction::SwitchScene { .. } => 0,
+        ObsRuleAction::ShowSource { .. } => 1,
+        ObsRuleAction::HideSource { .. } => 2,
+        ObsRuleAction::StartRecord => 3,
+        ObsRuleAction::StopRecord => 4,
+    }
+}
+
+fn action_label(kind: usize, text: Localizer) -> String {
+    text.text(
+        [
+            "settings-obs-switch-scene",
+            "settings-obs-show-source",
+            "settings-obs-hide-source",
+            "settings-obs-action-start",
+            "settings-obs-action-stop",
+        ][kind],
+    )
+}
+
+fn name_picker(ui: &mut egui::Ui, name: &mut String, candidates: &[String], text: Localizer) {
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(name).desired_width(150.0));
+        egui::ComboBox::from_id_salt("candidates")
+            .width(60.0)
+            .selected_text(tr!(text, "settings-obs-choose"))
+            .show_ui(ui, |ui| {
+                for candidate in candidates {
+                    ui.selectable_value(name, candidate.clone(), candidate);
+                }
+            });
+    });
+}
+
+fn build_obs_command_editor(
+    ui: &mut egui::Ui,
+    config: &mut crate::config::app_config::ObsConfig,
+    state: &ObsScenePickerState,
+    text: Localizer,
+) {
+    ui.strong(tr!(text, "settings-obs-commands"));
+    ui.label(tr!(text, "settings-obs-command-help"));
+    // Viewing never migrates settings. The first edit materializes the legacy list.
+    let mut rules = config.effective_rules();
+    let before = rules.clone();
+    let mut edited = false;
+    ui.horizontal(|ui| {
+        if ui.add_enabled(rules.len() < 512, egui::Button::new(tr!(text, "common-add"))).clicked() {
+            rules.push(ObsRule {
+                trigger: ObsTrigger::PlayStart,
+                action: ObsRuleAction::SwitchScene { scene_name: String::new() },
+            });
+            edited = true;
+        }
+        if ui.button(tr!(text, "settings-obs-clear-commands")).clicked() {
+            rules.clear();
+            edited = true;
+        }
+    });
+    let count = rules.len();
+    let mut operation = None;
+    for (index, rule) in rules.iter_mut().enumerate() {
+        ui.push_id(("obs_rule", index), |ui| {
+            ui.group(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    egui::ComboBox::from_id_salt("trigger")
+                        .selected_text(trigger_label(rule.trigger, text))
+                        .show_ui(ui, |ui| {
+                            for trigger in ObsTrigger::ALL {
+                                ui.selectable_value(
+                                    &mut rule.trigger,
+                                    trigger,
+                                    trigger_label(trigger, text),
+                                );
+                            }
+                        });
+                    let mut kind = action_kind(&rule.action);
+                    egui::ComboBox::from_id_salt("action")
+                        .selected_text(action_label(kind, text))
+                        .show_ui(ui, |ui| {
+                            for candidate in 0..5 {
+                                ui.selectable_value(
+                                    &mut kind,
+                                    candidate,
+                                    action_label(candidate, text),
+                                );
+                            }
+                        });
+                    if kind != action_kind(&rule.action) {
+                        let (scene_name, source_name) = match &rule.action {
+                            ObsRuleAction::SwitchScene { scene_name } => {
+                                (scene_name.clone(), String::new())
+                            }
+                            ObsRuleAction::ShowSource { scene_name, source_name }
+                            | ObsRuleAction::HideSource { scene_name, source_name } => {
+                                (scene_name.clone(), source_name.clone())
+                            }
+                            _ => (String::new(), String::new()),
+                        };
+                        rule.action = match kind {
+                            0 => ObsRuleAction::SwitchScene { scene_name },
+                            1 => ObsRuleAction::ShowSource { scene_name, source_name },
+                            2 => ObsRuleAction::HideSource { scene_name, source_name },
+                            3 => ObsRuleAction::StartRecord,
+                            _ => ObsRuleAction::StopRecord,
+                        };
+                    }
+                    if ui
+                        .add_enabled(index > 0, egui::Button::new(tr!(text, "common-move-up")))
+                        .clicked()
+                    {
+                        operation = Some(SettingsListAction::MoveUp(index));
+                    }
+                    if ui
+                        .add_enabled(
+                            index + 1 < count,
+                            egui::Button::new(tr!(text, "common-move-down")),
+                        )
+                        .clicked()
+                    {
+                        operation = Some(SettingsListAction::MoveDown(index));
+                    }
+                    if ui.button(tr!(text, "settings-obs-remove-command")).clicked() {
+                        operation = Some(SettingsListAction::Remove(index));
+                    }
+                });
+                match &mut rule.action {
+                    ObsRuleAction::SwitchScene { scene_name } => {
+                        ui.label(tr!(text, "settings-obs-scene"));
+                        ui.push_id("scene", |ui| name_picker(ui, scene_name, &state.scenes, text));
+                    }
+                    ObsRuleAction::ShowSource { scene_name, source_name }
+                    | ObsRuleAction::HideSource { scene_name, source_name } => {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(tr!(text, "settings-obs-scene"));
+                            ui.push_id("scene", |ui| {
+                                name_picker(ui, scene_name, &state.scenes, text)
+                            });
+                            ui.label(tr!(text, "settings-obs-source"));
+                            let candidates = state
+                                .sources
+                                .get(scene_name)
+                                .map(Vec::as_slice)
+                                .unwrap_or_default();
+                            ui.push_id("source", |ui| {
+                                name_picker(ui, source_name, candidates, text)
+                            });
+                        });
+                    }
+                    _ => {}
+                }
+                if !rule.action.is_valid() {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        tr!(text, "settings-obs-command-incomplete"),
+                    );
+                }
+            });
+        });
+    }
+    if let Some(operation) = operation {
+        match operation {
+            SettingsListAction::MoveUp(index) => rules.swap(index, index - 1),
+            SettingsListAction::MoveDown(index) => rules.swap(index, index + 1),
+            SettingsListAction::Remove(index) => {
+                rules.remove(index);
+            }
+            _ => {}
+        }
+        edited = true;
+    }
+    if edited || rules != before {
+        config.rules = Some(rules);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::i18n::AppLocale;
+
+    #[test]
+    fn viewing_disconnected_commands_preserves_legacy_and_missing_names() {
+        let mut config = crate::config::app_config::ObsConfig::default();
+        config.scenes.insert("PLAY".into(), "Missing scene".into());
+        let ctx = egui::Context::default();
+        let picker = ObsScenePickerState::default();
+        let before = config.clone();
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            build_obs_command_editor(ui, &mut config, &picker, Localizer::new(AppLocale::En));
+        });
+        assert_eq!(config, before);
+        config.rules = Some(vec![ObsRule {
+            trigger: ObsTrigger::MainEnd,
+            action: ObsRuleAction::HideSource {
+                scene_name: "Removed".into(),
+                source_name: "Removed source".into(),
+            },
+        }]);
+        let before = config.clone();
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            build_obs_command_editor(ui, &mut config, &picker, Localizer::new(AppLocale::En));
+        });
+        assert_eq!(config, before);
+    }
+
+    #[test]
+    fn obs_editor_labels_resolve_for_every_supported_locale() {
+        for locale in AppLocale::SUPPORTED {
+            let text = Localizer::new(locale);
+            for trigger in ObsTrigger::ALL {
+                assert!(!trigger_label(trigger, text).contains("settings-obs-"));
+            }
+            for kind in 0..5 {
+                assert!(!action_label(kind, text).contains("settings-obs-"));
+            }
+        }
     }
 }
