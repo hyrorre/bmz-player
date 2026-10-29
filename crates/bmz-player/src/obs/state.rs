@@ -12,6 +12,7 @@ impl ObsConnectionState {
             save_requested: false,
             last_output_path: None,
             pending_stop_deadline: None,
+            pending_restart: None,
             pending_scene_requests: HashMap::new(),
             pending_requests: HashMap::new(),
             scene_request_generation: 0,
@@ -26,6 +27,7 @@ impl ObsConnectionState {
         self.last_disconnect = None;
         self.pending_scene_requests.clear();
         self.pending_requests.clear();
+        self.pending_restart = None;
         if self.config.rules.is_some() {
             self.restart_recording = false;
             self.pending_stop_deadline = None;
@@ -155,9 +157,10 @@ impl ObsConnectionState {
             self.send_request(sink, "StopRecord", None).await?;
         }
         self.apply_event(sink, ObsEventKey::MusicSelect).await?;
+        let generation = self.scene_request_generation;
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(1000)).await;
-            let _ = tx.send(ObsCommand::ApplyEvent(ObsEventKey::Play));
+            let _ = tx.send(ObsCommand::RetryPlayStart { generation });
         });
         Ok(())
     }
@@ -171,7 +174,7 @@ impl ObsConnectionState {
 
     pub(super) async fn handle_response(
         &mut self,
-        sink: &mut ObsSink,
+        _sink: &mut ObsSink,
         data: &Value,
         status_tx: &watch::Sender<ObsConnectionStatus>,
         tx: mpsc::UnboundedSender<ObsCommand>,
@@ -284,8 +287,10 @@ impl ObsConnectionState {
                     response_data.get("outputActive").and_then(Value::as_bool).unwrap_or(false);
             }
             "StopRecord" if self.restart_recording && !self.is_recording => {
-                tokio::time::sleep(RESTART_RECORDING_DELAY).await;
-                self.send_request(sink, "StartRecord", None).await?;
+                self.pending_restart = Some((
+                    TokioInstant::now() + RESTART_RECORDING_DELAY,
+                    self.scene_request_generation,
+                ));
             }
             _ => {}
         }
@@ -320,7 +325,7 @@ impl ObsConnectionState {
 
     pub(super) async fn handle_record_state_changed(
         &mut self,
-        sink: &mut ObsSink,
+        _sink: &mut ObsSink,
         data: &Value,
     ) -> Result<()> {
         let state = data.get("outputState").and_then(Value::as_str).unwrap_or_default();
@@ -350,8 +355,10 @@ impl ObsConnectionState {
                 if self.config.rules.is_some() {
                     return Ok(());
                 }
-                tokio::time::sleep(RESTART_RECORDING_DELAY).await;
-                self.send_request(sink, "StartRecord", None).await?;
+                self.pending_restart = Some((
+                    TokioInstant::now() + RESTART_RECORDING_DELAY,
+                    self.scene_request_generation,
+                ));
                 return Ok(());
             }
             if !output_path.is_empty() {

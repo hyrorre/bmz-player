@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-30 | [OBSコマンド登録と画面ライフサイクル](2026/2026-10-30-obs-command-rules.md) |
 | 2026-10-29 | [曲スキャンの書庫世代と重複root](2026/2026-10-29-scan-generation-overlapping-roots.md) |
 | 2026-10-28 | [曲スキャンの隠しファイル判定](2026/2026-10-28-scan-hidden-files.md) |
 | 2026-10-27 | [v0.5.0 Linux tar CIのD-Bus依存](2026/2026-10-27-linux-tar-ci-dbus.md) |

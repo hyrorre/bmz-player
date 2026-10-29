@@ -199,6 +199,7 @@ enum ObsCommand {
     ApplyEvent(ObsEventKey),
     RetryScene { key: ObsEventKey, retry_count: u8, generation: u64 },
     RetryPlay,
+    RetryPlayStart { generation: u64 },
     SaveLastRecording(ObsRecordingSaveReason),
     Shutdown,
     Close,
@@ -214,6 +215,7 @@ struct ObsConnectionState {
     save_requested: bool,
     last_output_path: Option<PathBuf>,
     pending_stop_deadline: Option<TokioInstant>,
+    pending_restart: Option<(TokioInstant, u64)>,
     pending_scene_requests: HashMap<String, PendingSceneRequest>,
     pending_requests: HashMap<String, String>,
     scene_request_generation: u64,
@@ -247,3 +249,6 @@ use protocol::*;
 #[cfg(test)]
 #[path = "obs/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod integration_tests;
