@@ -47,10 +47,17 @@ impl RuleQueue {
         state.pending_stop_deadline = None;
         if state.is_recording {
             events.retain(|event| *event != ObsTrigger::PlayStart);
+            state.lifecycle.defer_play_start();
             self.retry = Some(RetryRecording::DrainEnd);
             state.restart_recording = true;
         }
         self.enqueue(&state.config, &events, false);
+    }
+
+    fn start_deferred_play(&mut self, state: &mut ObsConnectionState) {
+        if state.lifecycle.start_deferred_play() {
+            self.enqueue(&state.config, &[ObsTrigger::PlayStart], false);
+        }
     }
 
     fn advance(&mut self) {
@@ -121,7 +128,7 @@ impl RuleQueue {
                 // A missing STOPPED event must not hold the command queue forever.
                 state.restart_recording = false;
                 self.retry = None;
-                self.enqueue(&state.config, &[ObsTrigger::PlayStart], false);
+                self.start_deferred_play(state);
             }
             Some(RetryRecording::RestartAt(deadline)) if deadline > TokioInstant::now() => {
                 return Ok(());
@@ -201,7 +208,10 @@ impl RuleQueue {
                     }
                 }
                 ObsRuleAction::StopRecord => {
-                    let delay = if self.shutdown.is_some() {
+                    // A later screen event already arrived (e.g. while the initial
+                    // GetRecordStatus held the queue), so the stop wait is over.
+                    let superseded = rule.generation.is_some_and(|g| g != self.generation);
+                    let delay = if self.shutdown.is_some() || superseded {
                         0
                     } else {
                         state.config.record_stop_wait_ms.min(10_000)
@@ -241,7 +251,7 @@ impl RuleQueue {
             && pending.request_type == "StartRecord";
         if restarting {
             self.retry = None;
-            self.enqueue(&state.config, &[ObsTrigger::PlayStart], false);
+            self.start_deferred_play(state);
         }
         if data["requestStatus"]["result"].as_bool() != Some(true) {
             if restarting {
@@ -410,7 +420,7 @@ pub(super) async fn run_rules_connected(
                         rule_error(status_tx, format!("{}: timeout", pending.request_type));
                         if matches!(queue.retry, Some(RetryRecording::Starting)) {
                             queue.retry = None;
-                            queue.enqueue(&state.config, &[ObsTrigger::PlayStart], false);
+                            queue.start_deferred_play(state);
                             queue.queue.retain(|r| r.generation != Some(queue.generation) || r.action != ObsRuleAction::StartRecord);
                         }
                 }
