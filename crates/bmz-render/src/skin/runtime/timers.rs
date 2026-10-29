@@ -34,7 +34,9 @@ pub(in crate::skin) struct KeyLoggerRuntime {
     chattering_started_us: [Option<i64>; LANE_COUNT],
     judge_counts: [[u32; 4]; LANE_COUNT],
     fast_slow_counts: [[u32; 3]; LANE_COUNT],
-    event_started_ms: [[Option<i32>; 16]; LANE_COUNT],
+    /// 押下の chart time。経過時間も `ingest` の chart time から求める
+    /// (`advance` の play scene 経過時間とは READY 前の分だけずれる)。
+    event_started_us: [[Option<i64>; 16]; LANE_COUNT],
     event_judge: [[u8; 16]; LANE_COUNT],
     event_fast_slow: [[u8; 16]; LANE_COUNT],
     next_event_slot: [usize; LANE_COUNT],
@@ -177,7 +179,7 @@ impl DynamicTimerRuntime {
         state.e1_e2_release_ms =
             self.e1_e2_release_started_at_ms.map(|start| now_ms.saturating_sub(start));
         self.advance_keybeam(state, now_ms);
-        self.key_logger.write_state(state, now_ms);
+        self.key_logger.write_state(state);
         self.judge_lane.write_state(state);
         state.keylogger_exclude_cool = !document.graph.iter().any(|graph| {
             graph.id.starts_with("keylogger-graph-judge-") && graph.id.ends_with("-cool")
@@ -422,8 +424,7 @@ impl KeyLoggerRuntime {
                     self.last_press_us[lane] = Some(input.time.0);
                     self.press_history_us.push_back(input.time.0);
                     let slot = self.next_event_slot[lane];
-                    self.event_started_ms[lane][slot] =
-                        Some((input.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32);
+                    self.event_started_us[lane][slot] = Some(input.time.0);
                     self.event_judge[lane][slot] = 0;
                     self.event_fast_slow[lane][slot] = 0;
                     self.next_event_slot[lane] = (slot + 1) % 16;
@@ -475,7 +476,7 @@ impl KeyLoggerRuntime {
         }
     }
 
-    pub(in crate::skin) fn write_state(&self, state: &mut SkinDrawState, now_ms: i32) {
+    pub(in crate::skin) fn write_state(&self, state: &mut SkinDrawState) {
         state.keylogger_nps = self.cached_nps;
         state.keylogger_judge_counts = self.judge_counts;
         state.keylogger_fast_slow_counts = self.fast_slow_counts;
@@ -490,7 +491,10 @@ impl KeyLoggerRuntime {
         for lane in 0..LANE_COUNT {
             for slot in 0..16 {
                 state.keylogger_event_ms[lane][slot] =
-                    self.event_started_ms[lane][slot].map(|started| now_ms.saturating_sub(started));
+                    self.event_started_us[lane][slot].and_then(|started| {
+                        let elapsed_us = self.last_now_us?.saturating_sub(started);
+                        Some((elapsed_us / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+                    });
             }
         }
     }

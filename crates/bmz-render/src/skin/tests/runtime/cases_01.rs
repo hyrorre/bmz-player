@@ -45,7 +45,7 @@ fn keylogger_runtime_consumes_sequences_and_builds_nps_and_lane_counts() {
     runtime.ingest(&[input.clone(), judgement.clone()], KeyMode::K9, 500_000, 50_000);
     runtime.ingest(&[input, judgement], KeyMode::K9, 500_000, 50_000);
     let mut state = SkinDrawState::default();
-    runtime.write_state(&mut state, 500);
+    runtime.write_state(&mut state);
 
     // PeacefulPlay は初回更新では計測開始時刻だけを記録し、表示値はまだ0。
     assert_eq!(state.keylogger_nps, 0);
@@ -66,29 +66,50 @@ fn keylogger_runtime_consumes_sequences_and_builds_nps_and_lane_counts() {
     );
 
     runtime.ingest(&[], KeyMode::K9, 1_499_999, 50_000);
-    runtime.write_state(&mut state, 1_499);
+    runtime.write_state(&mut state);
     assert_eq!(state.keylogger_nps, 0);
 
     runtime.ingest(&[], KeyMode::K9, 1_500_000, 50_000);
-    runtime.write_state(&mut state, 1_500);
+    runtime.write_state(&mut state);
     assert_eq!(state.keylogger_nps, 1);
 
     // 1秒窓の内容は毎フレーム変わっても、表示は次の1秒更新まで保持する。
     runtime.ingest(&[], KeyMode::K9, 2_000_001, 50_000);
-    runtime.write_state(&mut state, 2_000);
+    runtime.write_state(&mut state);
     assert_eq!(state.keylogger_nps, 1);
     runtime.ingest(&[], KeyMode::K9, 2_500_000, 50_000);
-    runtime.write_state(&mut state, 2_500);
+    runtime.write_state(&mut state);
     assert_eq!(state.keylogger_nps, 0);
 
     let next_session_input = keylogger_input(0, Lane::Key2, InputKind::Press, 0);
     runtime.ingest(&[next_session_input], KeyMode::K9, 0, 50_000);
-    runtime.write_state(&mut state, 0);
+    runtime.write_state(&mut state);
 
     assert_eq!(state.keylogger_nps, 0);
     assert_eq!(state.keylogger_judge_counts, [[0; 4]; LANE_COUNT]);
     assert_eq!(state.keylogger_event_ms[0], [None; 16]);
     assert_eq!(state.keylogger_event_ms[1][0], Some(0));
+}
+
+#[test]
+fn keylogger_event_timer_uses_chart_time_not_play_scene_elapsed_time() {
+    let document: SkinDocument = serde_json::from_str("{}").unwrap();
+    let mut runtime = DynamicTimerRuntime::default();
+    let mut state = SkinDrawState::default();
+
+    // 押下は chart time 500ms。play scene の経過時間は READY 前の分だけ先に進んでいる。
+    runtime.ingest_skin_events(
+        Some(&document),
+        &[keylogger_input(1, Lane::Key1, InputKind::Press, 500_000)],
+        KeyMode::K9,
+        500_000,
+    );
+    runtime.advance(&document, &mut state, 3_500);
+    assert_eq!(state.keylogger_event_ms[0][0], Some(0));
+
+    runtime.ingest_skin_events(Some(&document), &[], KeyMode::K9, 800_000);
+    runtime.advance(&document, &mut state, 3_800);
+    assert_eq!(state.keylogger_event_ms[0][0], Some(300));
 }
 
 #[test]
@@ -113,7 +134,7 @@ fn keylogger_count_graph_counts_once_per_press_and_ignores_non_press_judgements(
     let mut runtime = KeyLoggerRuntime::default();
     runtime.ingest(&events, KeyMode::K9, 5_000, 50_000);
     let mut state = SkinDrawState::default();
-    runtime.write_state(&mut state, 5);
+    runtime.write_state(&mut state);
 
     assert_eq!(state.keylogger_judge_counts[0], [0, 1, 0, 0]);
     assert_eq!(state.keylogger_fast_slow_counts[0], [0, 1, 0]);
@@ -156,7 +177,7 @@ fn keylogger_chattering_uses_selected_threshold_and_two_second_timer() {
         10_000,
     );
     let mut state = SkinDrawState::default();
-    runtime.write_state(&mut state, 109);
+    runtime.write_state(&mut state);
     assert_eq!(state.keylogger_chattering_ms[0], Some(0));
     assert_eq!(state.keylogger_chattering_ms[1], None);
 
@@ -167,7 +188,7 @@ fn keylogger_chattering_uses_selected_threshold_and_two_second_timer() {
         200_000,
         10_000,
     );
-    runtime.write_state(&mut state, 200);
+    runtime.write_state(&mut state);
     assert_eq!(state.keylogger_chattering_ms[0], Some(90));
 
     // 再び短時間で押すと2秒タイマーを再始動する。
@@ -177,7 +198,7 @@ fn keylogger_chattering_uses_selected_threshold_and_two_second_timer() {
         205_000,
         10_000,
     );
-    runtime.write_state(&mut state, 205);
+    runtime.write_state(&mut state);
     let destination: SkinDestinationDef = serde_json::from_str(
         r#"{"id":"keylogger-chattering-alert-1","timer_expr":"bmz:keylogger_chattering:1","dst":[]}"#,
     )
@@ -185,10 +206,10 @@ fn keylogger_chattering_uses_selected_threshold_and_two_second_timer() {
     assert_eq!(destination_timer_elapsed_ms(&destination, &state), Some(0));
 
     runtime.ingest(&[], KeyMode::K9, 2_205_000, 10_000);
-    runtime.write_state(&mut state, 2_205);
+    runtime.write_state(&mut state);
     assert_eq!(destination_timer_elapsed_ms(&destination, &state), Some(2_000));
     runtime.ingest(&[], KeyMode::K9, 2_205_001, 10_000);
-    runtime.write_state(&mut state, 2_205);
+    runtime.write_state(&mut state);
     assert_eq!(destination_timer_elapsed_ms(&destination, &state), None);
 
     let mut boundary = KeyLoggerRuntime::default();
@@ -201,7 +222,7 @@ fn keylogger_chattering_uses_selected_threshold_and_two_second_timer() {
         110_000,
         10_000,
     );
-    boundary.write_state(&mut state, 110);
+    boundary.write_state(&mut state);
     assert_eq!(state.keylogger_chattering_ms[0], None);
 }
 
