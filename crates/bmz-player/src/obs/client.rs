@@ -21,6 +21,8 @@ pub async fn load_scenes(config: ObsConfig) -> Result<ObsSceneList> {
     let mut version = None;
     let mut scenes = None;
     let mut recording_active = None;
+    let mut sources = HashMap::new();
+    let mut outstanding: HashMap<String, (String, Option<String>)> = HashMap::new();
 
     loop {
         tokio::select! {
@@ -40,9 +42,11 @@ pub async fn load_scenes(config: ObsConfig) -> Result<ObsSceneList> {
                                 send_json(&mut sink, identify_message(&state.config, hello)).await?;
                             }
                             2 => {
-                                state.send_request(&mut sink, "GetVersion", None).await?;
-                                state.send_request(&mut sink, "GetSceneList", None).await?;
-                                state.send_request(&mut sink, "GetRecordStatus", None).await?;
+                                for request in ["GetVersion", "GetSceneList", "GetRecordStatus"] {
+                                    let id = state.next_request_id(request);
+                                    outstanding.insert(id.clone(), (request.to_owned(), None));
+                                    send_json(&mut sink, request_message(request, &id, None)).await?;
+                                }
                             }
                             7 => {
                                 let data = value.get("d").unwrap_or(&Value::Null);
@@ -50,6 +54,9 @@ pub async fn load_scenes(config: ObsConfig) -> Result<ObsSceneList> {
                                     .get("requestType")
                                     .and_then(Value::as_str)
                                     .unwrap_or_default();
+                                let id = data["requestId"].as_str().unwrap_or_default();
+                                let Some((expected, scene)) = outstanding.remove(id) else { continue; };
+                                if expected != request_type { continue; }
                                 let status = data.get("requestStatus").unwrap_or(&Value::Null);
                                 if !status.get("result").and_then(Value::as_bool).unwrap_or(false) {
                                     let comment = status
@@ -77,7 +84,27 @@ pub async fn load_scenes(config: ObsConfig) -> Result<ObsSceneList> {
                                             format!("{obs_version} / obs-websocket {ws_version}")
                                         });
                                     }
-                                    "GetSceneList" => scenes = Some(parse_scene_names(response_data)),
+                                    "GetSceneList" => {
+                                        let names = parse_scene_names(response_data);
+                                        for name in &names {
+                                            let id = state.next_request_id("GetSceneItemList");
+                                            outstanding.insert(id.clone(), ("GetSceneItemList".into(), Some(name.clone())));
+                                            send_json(&mut sink, request_message("GetSceneItemList", &id, Some(json!({ "sceneName": name })))).await?;
+                                        }
+                                        scenes = Some(names);
+                                    }
+                                    "GetSceneItemList" => {
+                                        if let Some(scene) = scene {
+                                            let mut names = Vec::new();
+                                            for item in response_data["sceneItems"].as_array().into_iter().flatten() {
+                                                if let Some(name) = item["sourceName"].as_str()
+                                                    && !names.iter().any(|n| n == name) {
+                                                    names.push(name.to_owned());
+                                                }
+                                            }
+                                            sources.insert(scene, names);
+                                        }
+                                    }
                                     "GetRecordStatus" => {
                                         recording_active = Some(response_data
                                             .get("outputActive")
@@ -89,7 +116,9 @@ pub async fn load_scenes(config: ObsConfig) -> Result<ObsSceneList> {
                                 if let (Some(version), Some(scenes), Some(recording_active)) =
                                     (version.clone(), scenes.clone(), recording_active)
                                 {
-                                    return Ok(ObsSceneList { version, scenes, recording_active });
+                                    if outstanding.is_empty() {
+                                        return Ok(ObsSceneList { version, scenes, recording_active, sources });
+                                    }
                                 }
                             }
                             _ => {}
@@ -109,10 +138,12 @@ pub(super) async fn run_obs_client(
     mut rx: mpsc::UnboundedReceiver<ObsCommand>,
     tx: mpsc::UnboundedSender<ObsCommand>,
     status_tx: watch::Sender<ObsConnectionStatus>,
+    startup: bool,
 ) {
     let mut reconnect_delay = INITIAL_RECONNECT_DELAY;
     // Keep recording retention and queued app events across WebSocket reconnects.
     let mut state = ObsConnectionState::new(config);
+    state.main_started = !startup;
     let mut pending_commands = VecDeque::new();
     let mut last_reported_issue = None;
     loop {
@@ -224,8 +255,8 @@ pub(super) async fn connect_with_pending_commands(
             }
             command = rx.recv() => {
                 match command {
-                    Some(ObsCommand::Shutdown) | None => return Ok(None),
-                    Some(command) => pending_commands.push_back(command),
+                    Some(ObsCommand::Shutdown | ObsCommand::Close) | None => return Ok(None),
+                    Some(command) => queue_offline_command(pending_commands, command),
                 }
             }
         }
@@ -240,12 +271,32 @@ pub(super) async fn run_connected(
     pending_commands: &mut VecDeque<ObsCommand>,
     status_tx: &watch::Sender<ObsConnectionStatus>,
 ) -> Result<ConnectionAction> {
+    if state.config.rules.is_some() {
+        return rules::run_rules_connected(state, ws, rx, tx, pending_commands, status_tx).await;
+    }
+    let reconnect = state.was_identified;
     let (mut sink, mut stream) = ws.split();
     match wait_for_identified(state, &mut sink, &mut stream, rx, pending_commands, status_tx)
         .await?
     {
         ConnectionAction::Continue => {}
         action => return Ok(action),
+    }
+    if reconnect {
+        while let Some(command) = pending_commands.pop_front() {
+            match command {
+                ObsCommand::ApplyEvent(key) if key != ObsEventKey::PlayEnded => {
+                    state.lifecycle.transition(key);
+                }
+                ObsCommand::SaveLastRecording(reason) => state.save_last_recording(reason),
+                ObsCommand::Shutdown | ObsCommand::Close => return Ok(ConnectionAction::Shutdown),
+                _ => {}
+            }
+        }
+        if let Some(key) = state.lifecycle.scene {
+            state.scene_request_generation = state.scene_request_generation.wrapping_add(1);
+            state.apply_scene_for_event(&mut sink, key, 0, state.scene_request_generation).await?;
+        }
     }
     match flush_pending_commands(state, &mut sink, tx.clone(), pending_commands).await? {
         ConnectionAction::Continue => {}
@@ -300,12 +351,15 @@ pub(super) async fn wait_for_identified(
     pending_commands: &mut VecDeque<ObsCommand>,
     status_tx: &watch::Sender<ObsConnectionStatus>,
 ) -> Result<ConnectionAction> {
+    let timeout = tokio::time::sleep(LOAD_SCENES_TIMEOUT);
+    tokio::pin!(timeout);
     loop {
         tokio::select! {
+            _ = &mut timeout => bail!("OBS Identify timeout"),
             command = rx.recv() => {
                 match command {
-                    Some(ObsCommand::Shutdown) | None => return Ok(ConnectionAction::Shutdown),
-                    Some(command) => pending_commands.push_back(command),
+                    Some(ObsCommand::Shutdown | ObsCommand::Close) | None => return Ok(ConnectionAction::Shutdown),
+                    Some(command) => queue_offline_command(pending_commands, command),
                 }
             }
             message = stream.next() => {
@@ -393,7 +447,7 @@ pub(super) async fn handle_command(
             state.retry_play(sink, tx).await?;
         }
         ObsCommand::SaveLastRecording(reason) => state.save_last_recording(reason),
-        ObsCommand::Shutdown => return Ok(ConnectionAction::Shutdown),
+        ObsCommand::Shutdown | ObsCommand::Close => return Ok(ConnectionAction::Shutdown),
     }
     Ok(ConnectionAction::Continue)
 }
@@ -471,10 +525,26 @@ pub(super) async fn wait_for_reconnect_or_shutdown(
             _ = &mut sleep => return false,
             command = rx.recv() => {
                 match command {
-                    Some(ObsCommand::Shutdown) | None => return true,
-                    Some(command) => pending_commands.push_back(command),
+                    Some(ObsCommand::Shutdown | ObsCommand::Close) | None => return true,
+                    Some(command) => queue_offline_command(pending_commands, command),
                 }
             }
         }
+    }
+}
+
+fn queue_offline_command(pending: &mut VecDeque<ObsCommand>, command: ObsCommand) {
+    match command {
+        ObsCommand::ApplyEvent(key) if key != ObsEventKey::PlayEnded => {
+            pending.retain(|c| !matches!(c, ObsCommand::ApplyEvent(_)));
+            pending.push_back(ObsCommand::ApplyEvent(key));
+        }
+        ObsCommand::SaveLastRecording(reason) => {
+            pending.retain(
+                |c| !matches!(c, ObsCommand::SaveLastRecording(existing) if *existing == reason),
+            );
+            pending.push_back(ObsCommand::SaveLastRecording(reason));
+        }
+        _ => {}
     }
 }

@@ -282,11 +282,14 @@ pub(super) fn connection_action_for_close(
 }
 
 pub(super) async fn wait_for_shutdown(rx: &mut mpsc::UnboundedReceiver<ObsCommand>) {
-    while !matches!(rx.recv().await, Some(ObsCommand::Shutdown) | None) {}
+    while !matches!(rx.recv().await, Some(ObsCommand::Shutdown | ObsCommand::Close) | None) {}
 }
 
 pub(super) async fn send_json(sink: &mut ObsSink, value: Value) -> Result<()> {
-    sink.send(Message::Text(value.to_string())).await.map_err(Into::into)
+    tokio::time::timeout(Duration::from_secs(2), sink.send(Message::Text(value.to_string())))
+        .await
+        .context("OBS send timeout")?
+        .map_err(Into::into)
 }
 
 pub(super) fn identify_message(config: &ObsConfig, hello: &Value) -> Value {

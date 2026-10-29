@@ -121,7 +121,7 @@ impl WinitApp {
         }
         self.integrations.applied_obs_config = self.boot.app_config.obs.clone();
         self.integrations.obs_controller =
-            crate::obs::ObsController::spawn(self.integrations.applied_obs_config.clone());
+            crate::obs::ObsController::spawn_updated(self.integrations.applied_obs_config.clone());
         self.integrations.last_obs_event_key = None;
         self.notify_obs_scene(self.current_scene_kind());
         tracing::info!(

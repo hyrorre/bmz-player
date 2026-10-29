@@ -83,6 +83,7 @@ pub struct ObsSceneList {
     pub version: String,
     pub scenes: Vec<String>,
     pub recording_active: bool,
+    pub sources: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,14 +126,22 @@ impl Default for ObsConnectionStatus {
     }
 }
 
-#[derive(Clone)]
 pub struct ObsController {
     tx: mpsc::UnboundedSender<ObsCommand>,
     status: watch::Receiver<ObsConnectionStatus>,
+    task: tokio::task::JoinHandle<()>,
 }
 
 impl ObsController {
     pub fn spawn(config: ObsConfig) -> Option<Self> {
+        Self::spawn_inner(config, true)
+    }
+
+    pub fn spawn_updated(config: ObsConfig) -> Option<Self> {
+        Self::spawn_inner(config, false)
+    }
+
+    fn spawn_inner(config: ObsConfig, startup: bool) -> Option<Self> {
         if !config.enabled {
             return None;
         }
@@ -143,8 +152,8 @@ impl ObsController {
             last_error: None,
             retry_in_ms: None,
         });
-        tokio::spawn(run_obs_client(config, rx, tx.clone(), status_tx));
-        Some(Self { tx, status })
+        let task = tokio::spawn(run_obs_client(config, rx, tx.clone(), status_tx, startup));
+        Some(Self { tx, status, task })
     }
 
     pub fn scene(&self, key: ObsEventKey) {
@@ -166,11 +175,22 @@ impl ObsController {
     pub fn status(&self) -> ObsConnectionStatus {
         self.status.borrow().clone()
     }
+
+    pub fn request_shutdown(&self) {
+        let _ = self.tx.send(ObsCommand::Shutdown);
+    }
+
+    pub async fn shutdown(mut self) {
+        self.request_shutdown();
+        if tokio::time::timeout(Duration::from_secs(3), &mut self.task).await.is_err() {
+            self.task.abort();
+        }
+    }
 }
 
 impl Drop for ObsController {
     fn drop(&mut self) {
-        let _ = self.tx.send(ObsCommand::Shutdown);
+        let _ = self.tx.send(ObsCommand::Close);
     }
 }
 
@@ -181,9 +201,11 @@ enum ObsCommand {
     RetryPlay,
     SaveLastRecording(ObsRecordingSaveReason),
     Shutdown,
+    Close,
 }
 
 struct ObsConnectionState {
+    main_started: bool,
     lifecycle: lifecycle::ObsLifecycle,
     config: ObsConfig,
     request_counter: u64,
@@ -193,6 +215,7 @@ struct ObsConnectionState {
     last_output_path: Option<PathBuf>,
     pending_stop_deadline: Option<TokioInstant>,
     pending_scene_requests: HashMap<String, PendingSceneRequest>,
+    pending_requests: HashMap<String, String>,
     scene_request_generation: u64,
     was_identified: bool,
     identified_this_connection: bool,
@@ -215,6 +238,7 @@ struct PendingSceneRequest {
 mod client;
 mod lifecycle;
 mod protocol;
+mod rules;
 mod state;
 
 pub use client::*;

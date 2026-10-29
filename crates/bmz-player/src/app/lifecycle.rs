@@ -695,6 +695,9 @@ impl WinitApp {
             return;
         }
         self.integrations.exit_prepared = true;
+        if let Some(obs) = &self.integrations.obs_controller {
+            obs.request_shutdown();
+        }
         #[cfg(target_os = "linux")]
         {
             self.ui.idle_inhibitor = None;

@@ -3,6 +3,7 @@ use super::*;
 impl ObsConnectionState {
     pub(super) fn new(config: ObsConfig) -> Self {
         Self {
+            main_started: false,
             lifecycle: lifecycle::ObsLifecycle::default(),
             config,
             request_counter: 0,
@@ -12,6 +13,7 @@ impl ObsConnectionState {
             last_output_path: None,
             pending_stop_deadline: None,
             pending_scene_requests: HashMap::new(),
+            pending_requests: HashMap::new(),
             scene_request_generation: 0,
             was_identified: false,
             identified_this_connection: false,
@@ -23,6 +25,11 @@ impl ObsConnectionState {
         self.identified_this_connection = false;
         self.last_disconnect = None;
         self.pending_scene_requests.clear();
+        self.pending_requests.clear();
+        if self.config.rules.is_some() {
+            self.restart_recording = false;
+            self.pending_stop_deadline = None;
+        }
     }
 
     pub(super) fn mark_identified(&mut self) {
@@ -46,6 +53,10 @@ impl ObsConnectionState {
         request_data: Option<Value>,
     ) -> Result<()> {
         let request_id = self.next_request_id(request_type);
+        if self.pending_requests.len() >= 1024 {
+            self.pending_requests.clear();
+        }
+        self.pending_requests.insert(request_id.clone(), request_type.to_owned());
         send_json(sink, request_message(request_type, &request_id, request_data)).await
     }
 
@@ -168,6 +179,11 @@ impl ObsConnectionState {
         let request_type = data.get("requestType").and_then(Value::as_str).unwrap_or_default();
         let request_id = data.get("requestId").and_then(Value::as_str).unwrap_or_default();
         let scene_request = self.pending_scene_requests.remove(request_id);
+        if scene_request.is_none()
+            && self.pending_requests.remove(request_id).as_deref() != Some(request_type)
+        {
+            return Ok(());
+        }
         let status = data.get("requestStatus").unwrap_or(&Value::Null);
         if !status.get("result").and_then(Value::as_bool).unwrap_or(false) {
             let code = status.get("code").and_then(Value::as_i64).unwrap_or_default();
@@ -331,6 +347,9 @@ impl ObsConnectionState {
                     self.config.recording_mode,
                     "retry recording",
                 );
+                if self.config.rules.is_some() {
+                    return Ok(());
+                }
                 tokio::time::sleep(RESTART_RECORDING_DELAY).await;
                 self.send_request(sink, "StartRecord", None).await?;
                 return Ok(());
