@@ -208,10 +208,38 @@ fn name_picker(ui: &mut egui::Ui, name: &mut String, candidates: &[String], text
     });
 }
 
+/// Returns true once the user confirms removing every command.
+fn confirm_clear_commands(
+    ctx: &egui::Context,
+    state: &mut ObsScenePickerState,
+    text: Localizer,
+) -> bool {
+    let mut confirmed = false;
+    let mut close = false;
+    let response = egui::Modal::new(egui::Id::new("obs_clear_commands_confirm")).show(ctx, |ui| {
+        ui.set_width(400.0);
+        ui.heading(tr!(text, "settings-obs-clear-commands-confirm-title"));
+        ui.label(tr!(text, "settings-obs-clear-commands-confirm-body"));
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button(tr!(text, "settings-obs-clear-commands")).clicked() {
+                confirmed = true;
+            }
+            if ui.button(tr!(text, "common-cancel")).clicked() {
+                close = true;
+            }
+        });
+    });
+    if confirmed || close || response.should_close() {
+        state.confirm_clear_commands = false;
+    }
+    confirmed
+}
+
 fn build_obs_command_editor(
     ui: &mut egui::Ui,
     config: &mut crate::config::app_config::ObsConfig,
-    state: &ObsScenePickerState,
+    state: &mut ObsScenePickerState,
     text: Localizer,
 ) {
     ui.strong(tr!(text, "settings-obs-commands"));
@@ -228,11 +256,20 @@ fn build_obs_command_editor(
             });
             edited = true;
         }
-        if ui.button(tr!(text, "settings-obs-clear-commands")).clicked() {
-            rules.clear();
-            edited = true;
+        if ui
+            .add_enabled(
+                !rules.is_empty(),
+                egui::Button::new(tr!(text, "settings-obs-clear-commands")),
+            )
+            .clicked()
+        {
+            state.confirm_clear_commands = true;
         }
     });
+    if state.confirm_clear_commands && confirm_clear_commands(ui.ctx(), state, text) {
+        rules.clear();
+        edited = true;
+    }
     let count = rules.len();
     let mut operation = None;
     for (index, rule) in rules.iter_mut().enumerate() {
@@ -360,10 +397,10 @@ mod tests {
         let mut config = crate::config::app_config::ObsConfig::default();
         config.scenes.insert("PLAY".into(), "Missing scene".into());
         let ctx = egui::Context::default();
-        let picker = ObsScenePickerState::default();
+        let mut picker = ObsScenePickerState::default();
         let before = config.clone();
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            build_obs_command_editor(ui, &mut config, &picker, Localizer::new(AppLocale::En));
+            build_obs_command_editor(ui, &mut config, &mut picker, Localizer::new(AppLocale::En));
         });
         assert_eq!(config, before);
         config.rules = Some(vec![ObsRule {
@@ -375,9 +412,28 @@ mod tests {
         }]);
         let before = config.clone();
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            build_obs_command_editor(ui, &mut config, &picker, Localizer::new(AppLocale::En));
+            build_obs_command_editor(ui, &mut config, &mut picker, Localizer::new(AppLocale::En));
         });
         assert_eq!(config, before);
+    }
+
+    #[test]
+    fn clear_commands_waits_for_confirmation() {
+        let mut config = crate::config::app_config::ObsConfig {
+            rules: Some(vec![ObsRule {
+                trigger: ObsTrigger::PlayStart,
+                action: ObsRuleAction::StartRecord,
+            }]),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut picker = ObsScenePickerState { confirm_clear_commands: true, ..Default::default() };
+        let before = config.clone();
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            build_obs_command_editor(ui, &mut config, &mut picker, Localizer::new(AppLocale::En));
+        });
+        assert_eq!(config, before);
+        assert!(picker.confirm_clear_commands);
     }
 
     #[test]
@@ -389,6 +445,12 @@ mod tests {
             }
             for kind in 0..5 {
                 assert!(!action_label(kind, text).contains("settings-obs-"));
+            }
+            for key in [
+                "settings-obs-clear-commands-confirm-title",
+                "settings-obs-clear-commands-confirm-body",
+            ] {
+                assert!(!text.text(key).contains("settings-obs-"));
             }
         }
     }

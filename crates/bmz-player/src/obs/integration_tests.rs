@@ -315,3 +315,113 @@ async fn shutdown_discards_queued_starts_and_gives_main_end_a_send_opportunity()
     );
     Ok(())
 }
+
+async fn record_stopped(server: &mut MockSocket) -> Result<()> {
+    server
+        .send(Message::Text(
+            json!({ "op": 5, "d": {
+                "eventType": "RecordStateChanged",
+                "eventData": { "outputState": "OBS_WEBSOCKET_OUTPUT_STOPPED", "outputPath": "" },
+            }})
+            .to_string(),
+        ))
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn legacy_retry_restarts_recording_when_stop_finishes_after_half_the_select_hop() -> Result<()>
+{
+    let mut cfg = ObsConfig::default();
+    cfg.scenes.insert("MUSICSELECT".into(), "Select".into());
+    cfg.scenes.insert("PLAY".into(), "Play".into());
+    let mut state = ObsConnectionState::new(cfg);
+    state.lifecycle.transition(ObsEventKey::Play);
+    // RetryPlay may race the GetRecordStatus response inside the worker.
+    state.is_recording = true;
+    let (tx, worker, mut server) = start(state, VecDeque::new(), true).await?;
+    tx.send(ObsCommand::RetryPlay)?;
+    let stop = request(&mut server).await?;
+    assert_eq!(stop["d"]["requestType"], "StopRecord");
+    let select = request(&mut server).await?;
+    assert_eq!(select["d"]["requestData"]["sceneName"], "Select");
+    respond(&mut server, &select, json!({})).await?;
+    // STOPPED lands after 500 ms, so the restart deadline passes the 1 s Play hop.
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    respond(&mut server, &stop, json!({})).await?;
+    record_stopped(&mut server).await?;
+    let play = request(&mut server).await?;
+    assert_eq!(play["d"]["requestData"]["sceneName"], "Play");
+    respond(&mut server, &play, json!({})).await?;
+    let restart = request(&mut server).await?;
+    assert_eq!(restart["d"]["requestType"], "StartRecord");
+    tx.send(ObsCommand::Close)?;
+    worker.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn leaving_play_before_retry_restart_does_not_repeat_play_end() -> Result<()> {
+    let mut state = ObsConnectionState::new(config(vec![
+        scene_rule(ObsTrigger::PlayStart),
+        scene_rule(ObsTrigger::PlayEnd),
+        scene_rule(ObsTrigger::MusicSelectStart),
+    ]));
+    state.main_started = true;
+    state.lifecycle.transition(ObsEventKey::Play);
+    let (tx, worker, mut server) = start(state, VecDeque::new(), true).await?;
+    tx.send(ObsCommand::RetryPlay)?;
+    expect_scene(&mut server, ObsTrigger::PlayEnd).await?;
+    let stop = request(&mut server).await?;
+    assert_eq!(stop["d"]["requestType"], "StopRecord");
+    respond(&mut server, &stop, json!({})).await?;
+    tx.send(ObsCommand::ApplyEvent(ObsEventKey::MusicSelect))?;
+    // The deferred attempt never emitted PLAY_START, so it must not emit PLAY_END.
+    expect_scene(&mut server, ObsTrigger::MusicSelectStart).await?;
+    assert!(tokio::time::timeout(Duration::from_millis(700), server.next()).await.is_err());
+    tx.send(ObsCommand::Close)?;
+    worker.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn scene_picker_keeps_scenes_when_one_source_list_fails() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let cfg =
+        ObsConfig { host: format!("ws://{}", listener.local_addr()?), ..ObsConfig::default() };
+    let task = tokio::spawn(load_scenes(cfg));
+    let (tcp, _) = tokio::time::timeout(Duration::from_secs(4), listener.accept()).await??;
+    let mut server = accept_async(tcp).await?;
+    server.send(Message::Text(json!({"op": 0, "d": {}}).to_string())).await?;
+    server.next().await.context("Identify missing")??;
+    server.send(Message::Text(json!({"op": 2, "d": {}}).to_string())).await?;
+    for _ in 0..5 {
+        let req = request(&mut server).await?;
+        let data = match req["d"]["requestType"].as_str().unwrap() {
+            "GetVersion" => json!({"obsVersion": "mock"}),
+            "GetSceneList" => json!({"scenes": [{"sceneName": "A"}, {"sceneName": "Gone"}]}),
+            "GetRecordStatus" => json!({"outputActive": false}),
+            "GetSceneItemList" if req["d"]["requestData"]["sceneName"] == "Gone" => {
+                server
+                    .send(Message::Text(
+                        json!({ "op": 7, "d": {
+                            "requestId": req["d"]["requestId"],
+                            "requestType": "GetSceneItemList",
+                            "requestStatus": { "result": false, "code": 600, "comment": "missing" },
+                        }})
+                        .to_string(),
+                    ))
+                    .await?;
+                continue;
+            }
+            "GetSceneItemList" => json!({"sceneItems": [{"sourceName": "Overlay"}]}),
+            other => bail!("unexpected request {other}"),
+        };
+        respond(&mut server, &req, data).await?;
+    }
+    let list = task.await??;
+    assert_eq!(list.scenes, ["Gone", "A"]);
+    assert_eq!(list.sources["A"], ["Overlay"]);
+    assert!(!list.sources.contains_key("Gone"));
+    Ok(())
+}

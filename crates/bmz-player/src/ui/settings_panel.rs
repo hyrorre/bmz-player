@@ -50,6 +50,7 @@ pub(super) struct ObsScenePickerState {
     error: String,
     receiver: Option<std::sync::mpsc::Receiver<Result<crate::obs::ObsSceneList, String>>>,
     connection: Option<(String, u16, String)>,
+    confirm_clear_commands: bool,
 }
 
 impl ObsScenePickerState {
