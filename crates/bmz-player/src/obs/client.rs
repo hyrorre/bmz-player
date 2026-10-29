@@ -64,15 +64,21 @@ async fn load_scenes_inner(config: ObsConfig) -> Result<ObsSceneList> {
                                 let Some((expected, scene)) = outstanding.remove(id) else { continue; };
                                 if expected != request_type { continue; }
                                 let status = data.get("requestStatus").unwrap_or(&Value::Null);
-                                if !status.get("result").and_then(Value::as_bool).unwrap_or(false) {
+                                let succeeded = status.get("result").and_then(Value::as_bool).unwrap_or(false);
+                                if !succeeded {
                                     let comment = status
                                         .get("comment")
                                         .and_then(Value::as_str)
                                         .unwrap_or("OBS request failed");
-                                    bail!("{request_type}: {comment}");
+                                    // A scene removed after GetSceneList only loses its source candidates.
+                                    if request_type != "GetSceneItemList" {
+                                        bail!("{request_type}: {comment}");
+                                    }
+                                    tracing::warn!(?scene, comment, "OBS scene source list failed");
                                 }
                                 let response_data = data.get("responseData").unwrap_or(&Value::Null);
                                 match request_type {
+                                    _ if !succeeded => {}
                                     "GetVersion" => {
                                         let obs_version = response_data
                                             .get("obsVersion")
@@ -328,7 +334,8 @@ pub(super) async fn run_connected(
                     if state.pending_restart.is_some_and(|(d, _)| d <= TokioInstant::now())
                         && let Some((_, generation)) = state.pending_restart.take()
                         && generation == state.scene_request_generation
-                        && state.lifecycle.scene == Some(ObsEventKey::Play) {
+                        && state.lifecycle.scene == Some(ObsEventKey::Play)
+                        && !state.is_recording {
                         state.send_request(&mut sink, "StartRecord", None).await?;
                     }
                 }
@@ -472,6 +479,13 @@ pub(super) async fn handle_command(
                 && state.lifecycle.scene == Some(ObsEventKey::Play)
             {
                 state.apply_event(sink, ObsEventKey::Play).await?;
+                // The pseudo Select -> Play hop belongs to the same retry. Keep a
+                // restart scheduled before it valid for the new Play generation.
+                if let Some((_, restart_generation)) = &mut state.pending_restart
+                    && *restart_generation == generation
+                {
+                    *restart_generation = state.scene_request_generation;
+                }
             }
         }
         ObsCommand::SaveLastRecording(reason) => state.save_last_recording(reason),
