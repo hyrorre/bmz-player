@@ -17,7 +17,7 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::{Error as TungsteniteError, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
-use crate::config::app_config::{ObsActionConfig, ObsConfig, ObsRecordingMode};
+use crate::config::app_config::{ObsActionConfig, ObsConfig, ObsRecordingMode, ObsTrigger};
 
 const INITIAL_RECONNECT_DELAY: Duration = Duration::from_millis(2000);
 const MAX_RECONNECT_DELAY: Duration = Duration::from_millis(15000);
@@ -184,6 +184,7 @@ enum ObsCommand {
 }
 
 struct ObsConnectionState {
+    lifecycle: lifecycle::ObsLifecycle,
     config: ObsConfig,
     request_counter: u64,
     is_recording: bool,
@@ -212,6 +213,7 @@ struct PendingSceneRequest {
 }
 
 mod client;
+mod lifecycle;
 mod protocol;
 mod state;
 

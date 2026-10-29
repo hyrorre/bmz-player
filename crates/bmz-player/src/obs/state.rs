@@ -3,6 +3,7 @@ use super::*;
 impl ObsConnectionState {
     pub(super) fn new(config: ObsConfig) -> Self {
         Self {
+            lifecycle: lifecycle::ObsLifecycle::default(),
             config,
             request_counter: 0,
             is_recording: false,
