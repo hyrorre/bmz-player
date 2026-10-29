@@ -373,11 +373,25 @@ pub(super) async fn handle_command(
         return Ok(ConnectionAction::Shutdown);
     };
     match command {
-        ObsCommand::ApplyEvent(key) => state.apply_event(sink, key).await?,
+        ObsCommand::ApplyEvent(key) => {
+            let events = state.lifecycle.transition(key);
+            if key == ObsEventKey::PlayEnded && events.is_empty() {
+                return Ok(ConnectionAction::Continue);
+            }
+            // Legacy mappings have only START and PLAY_ENDED. Other END events
+            // are retained by the lifecycle model for the command executor.
+            if key != ObsEventKey::PlayEnded && events.contains(&ObsTrigger::PlayEnd) {
+                state.apply_event(sink, ObsEventKey::PlayEnded).await?;
+            }
+            state.apply_event(sink, key).await?;
+        }
         ObsCommand::RetryScene { key, retry_count, generation } => {
             state.retry_scene(sink, key, retry_count, generation).await?
         }
-        ObsCommand::RetryPlay => state.retry_play(sink, tx).await?,
+        ObsCommand::RetryPlay => {
+            state.lifecycle.retry();
+            state.retry_play(sink, tx).await?;
+        }
         ObsCommand::SaveLastRecording(reason) => state.save_last_recording(reason),
         ObsCommand::Shutdown => return Ok(ConnectionAction::Shutdown),
     }
