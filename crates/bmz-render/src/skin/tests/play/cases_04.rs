@@ -117,31 +117,51 @@ fn pms_note_expansion_uses_quarter_note_elapsed_time() {
     assert!(approx_eq(finished.1, 1.0));
 }
 
-#[test]
-fn pms_missed_note_falls_toward_dst2() {
-    let document: SkinDocument = serde_json::from_str(
-        r#"
-            {
-                "w": 100, "h": 100,
-                "note": {
-                    "id": "notes",
-                    "note": ["n1"],
-                    "size": [10],
-                    "dst2": 90,
-                    "dst": [{ "time": 0, "x": 10, "y": 20, "w": 30, "h": 60 }]
-                }
-            }
-            "#,
-    )
+fn pms_missed_note_skin(dst2: i32) -> SkinContext {
+    let document: SkinDocument = serde_json::from_value(serde_json::json!({
+        "w": 100, "h": 100,
+        "note": {
+            "id": "notes",
+            "note": ["n1"],
+            "size": [10],
+            "dst2": dst2,
+            "dst": [{ "time": 0, "x": 10, "y": 20, "w": 30, "h": 60 }]
+        }
+    }))
     .unwrap();
-    let skin = SkinContext::from_manifest_and_document(default_skin_manifest(), document, []);
+    SkinContext::from_manifest_and_document(default_skin_manifest(), document, [])
+}
+
+fn missed_note_bottom(skin: &SkinContext, fall: f32, state: &SkinDrawState) -> Option<f32> {
+    skin.missed_note_rect_for_fall(Lane::Key1, KeyMode::K9, fall, 0.1, state)
+        .map(|rect| rect.y + rect.height)
+}
+
+#[test]
+fn pms_missed_note_falls_one_lane_height_per_measure_until_dst2() {
+    let skin = pms_missed_note_skin(5);
     let state = SkinDrawState::default();
 
-    let start = skin.missed_note_rect_for_fall(Lane::Key1, KeyMode::K9, 0.0, 0.1, &state).unwrap();
-    let end = skin.missed_note_rect_for_fall(Lane::Key1, KeyMode::K9, 1.0, 0.1, &state).unwrap();
+    // レーンは 0.2..0.8。1小節で判定ラインから上端までの 0.6 ぶん落ち、DST_NOTE2 (0.95) で消える。
+    assert!(approx_eq(missed_note_bottom(&skin, 0.0, &state).unwrap(), 0.8));
+    assert!(approx_eq(missed_note_bottom(&skin, 0.2, &state).unwrap(), 0.92));
+    assert_eq!(missed_note_bottom(&skin, 0.3, &state), None);
 
-    assert!(approx_eq(start.y + start.height, 0.8));
-    assert!(approx_eq(end.y + end.height, 0.1));
+    // LIFT 中は持ち上げた判定ラインから、短くなったレーン高さの速度で落ちる。
+    let lifted = SkinDrawState { offset_lift_px: 20, ..SkinDrawState::default() };
+    assert!(approx_eq(missed_note_bottom(&skin, 0.0, &lifted).unwrap(), 0.6));
+    assert!(approx_eq(missed_note_bottom(&skin, 0.5, &lifted).unwrap(), 0.8));
+}
+
+#[test]
+fn pms_missed_note_target_is_clamped_to_the_judge_line() {
+    // PeacefulPlay は DST_NOTE2 を判定ラインに置き、落下を始めた時点で消す。
+    for dst2 in [20, 90] {
+        let skin = pms_missed_note_skin(dst2);
+        let state = SkinDrawState::default();
+        assert!(approx_eq(missed_note_bottom(&skin, 0.0, &state).unwrap(), 0.8));
+        assert_eq!(missed_note_bottom(&skin, 0.01, &state), None);
+    }
 }
 
 #[test]

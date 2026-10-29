@@ -352,6 +352,7 @@ fn destination_clip_wraps_the_whole_playfield_and_preserves_line_child_bypass() 
         alpha: 1.0,
         kind: NoteVisualKind::Tap,
         processed_judge: None,
+        pms_miss_fall: None,
     });
     snapshot.visible_mines[Lane::Key1.index()].push(VisibleMine {
         lane: Lane::Key1,

@@ -85,15 +85,17 @@ fn populate_visible_notes(
                 continue;
             };
             let processed_judge = session.judge.judged_notes.get(&note.id).copied();
-            let retained_at_judge_line = session.note_retention
+            // beatoraja LaneRenderer の PMS 見逃し POOR 描画と同じく、state 0 と BAD/POOR を対象にする。
+            let pms_missed = snapshot.key_mode == KeyMode::K9
+                && note.kind == NoteKind::Tap
+                && matches!(processed_judge, None | Some(Judge::Bad | Judge::Poor))
+                && note.time < lane_render_now;
+            let retained_at_judge_line = !pms_missed
+                && session.note_retention
                 && note.kind == NoteKind::Tap
                 && processed_judge.is_none()
                 && note.time < lane_render_now;
-            let falling_pms_poor = snapshot.key_mode == KeyMode::K9
-                && note.kind == NoteKind::Tap
-                && processed_judge == Some(Judge::Poor)
-                && note.time < lane_render_now;
-            if note.time < lane_render_now && !retained_at_judge_line && !falling_pms_poor {
+            if note.time < lane_render_now && !retained_at_judge_line && !pms_missed {
                 continue;
             }
             match note.kind {
@@ -110,15 +112,19 @@ fn populate_visible_notes(
                     }
                 }
                 NoteKind::Tap => {
-                    let y = visible_tap_y(
-                        session,
-                        scroll,
-                        cursor_tick,
-                        note,
-                        lane_render_now,
-                        retained_at_judge_line,
-                        falling_pms_poor,
-                    );
+                    let pms_miss_fall = if pms_missed {
+                        let Some(fall) = pms_missed_tap_fall(session, note, lane_render_now) else {
+                            continue;
+                        };
+                        Some(fall)
+                    } else {
+                        None
+                    };
+                    let y = match pms_miss_fall {
+                        Some(fall) => Some(-fall),
+                        None if retained_at_judge_line => Some(0.0),
+                        None => scroll.note_y(note.time, cursor_tick),
+                    };
                     if let Some(y) = y {
                         snapshot.visible_notes[lane.index()].push(VisibleNote {
                             lane,
@@ -127,6 +133,7 @@ fn populate_visible_notes(
                             alpha,
                             kind: NoteVisualKind::Tap,
                             processed_judge,
+                            pms_miss_fall,
                         });
                     }
                 }
@@ -135,29 +142,24 @@ fn populate_visible_notes(
     }
 }
 
-fn visible_tap_y(
+/// 見逃しノーツを snapshot に残す落下量の上限。消える位置は skin の `DST_NOTE2` で
+/// 決まるため、ここでは十分に落ち切ったノーツだけを除く。
+const PMS_MISSED_NOTE_MAX_FALL_MEASURES: f32 = 8.0;
+
+fn pms_missed_tap_fall(
     session: &PlayfieldView<'_>,
-    scroll: &ScrollContext<'_>,
-    cursor_tick: f64,
     note: &NoteEvent,
     lane_render_now: TimeUs,
-    retained_at_judge_line: bool,
-    falling_pms_poor: bool,
 ) -> Option<f32> {
-    if retained_at_judge_line {
-        Some(0.0)
-    } else if falling_pms_poor {
-        Some(-pms_missed_note_fall_progress(
-            session.timing_map,
-            note.tick,
-            note.time,
-            session.judge.window_set.note.bad_slow_us.max(0),
-            lane_render_now,
-        ))
-        .filter(|fall| *fall >= -1.0)
-    } else {
-        scroll.note_y(note.time, cursor_tick)
-    }
+    // beatoraja は遅い側の空POOR境界 (PMS 175ms) まで判定ライン上に留め、その後に落とす。
+    let fall = pms_missed_note_fall_progress(
+        session.timing_map,
+        note.tick,
+        note.time,
+        session.judge.window_set.note.empty_poor_slow_us.max(0),
+        lane_render_now,
+    );
+    (fall <= PMS_MISSED_NOTE_MAX_FALL_MEASURES).then_some(fall)
 }
 
 fn populate_visible_guide_lines(

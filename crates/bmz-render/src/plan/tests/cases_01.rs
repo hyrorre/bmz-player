@@ -124,6 +124,7 @@ fn play_plan_includes_lanes_notes_and_bar_lines() {
         alpha: 1.0,
         kind: NoteVisualKind::Tap,
         processed_judge: None,
+        pms_miss_fall: None,
     });
     snapshot.bar_lines.push(VisibleBarLine {
         time: TimeUs(900),
@@ -152,6 +153,7 @@ fn play_plan_applies_constant_fade_alpha_to_notes() {
         alpha: 0.25,
         kind: NoteVisualKind::Tap,
         processed_judge: None,
+        pms_miss_fall: None,
     });
 
     let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));
@@ -179,6 +181,7 @@ fn play_plan_renders_judge_area_and_processed_note_fallback() {
         alpha: 1.0,
         kind: NoteVisualKind::Tap,
         processed_judge: Some(Judge::PGreat),
+        pms_miss_fall: None,
     });
 
     let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));
@@ -203,6 +206,7 @@ fn play_plan_uses_note_textures_by_lane() {
         alpha: 1.0,
         kind: NoteVisualKind::Tap,
         processed_judge: None,
+        pms_miss_fall: None,
     });
     snapshot.visible_notes[Lane::Key1.index()].push(VisibleNote {
         lane: Lane::Key1,
@@ -211,6 +215,7 @@ fn play_plan_uses_note_textures_by_lane() {
         alpha: 1.0,
         kind: NoteVisualKind::Tap,
         processed_judge: None,
+        pms_miss_fall: None,
     });
     snapshot.visible_notes[Lane::Key2.index()].push(VisibleNote {
         lane: Lane::Key2,
@@ -219,6 +224,7 @@ fn play_plan_uses_note_textures_by_lane() {
         alpha: 1.0,
         kind: NoteVisualKind::Tap,
         processed_judge: None,
+        pms_miss_fall: None,
     });
 
     let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));

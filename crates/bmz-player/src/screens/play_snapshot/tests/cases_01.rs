@@ -50,7 +50,7 @@ fn quarter_note_timer_tracks_real_milliseconds_since_latest_quarter() {
 }
 
 #[test]
-fn pms_missed_note_fall_waits_for_late_bad_and_uses_no_speed_rate() {
+fn pms_missed_note_fall_waits_for_delay_and_uses_no_speed_rate() {
     use bmz_chart::timing::{TickTimingEvent, TickTimingEventKind, build_timing_map};
 
     let constant = build_timing_map(120.0, Vec::new());
@@ -89,6 +89,28 @@ fn pms_missed_note_fall_waits_for_late_bad_and_uses_no_speed_rate() {
             TimeUs(1_700_000),
         ),
         0.25,
+    ));
+}
+
+#[test]
+fn pms_missed_note_fall_pauses_during_later_stops() {
+    use bmz_chart::timing::{TickTimingEvent, TickTimingEventKind, build_timing_map};
+
+    // 落下開始後の 0.5s 地点から 1s の STOP。beatoraja は STOP 中の落下を止める。
+    let later_stop = build_timing_map(
+        120.0,
+        vec![TickTimingEvent {
+            tick: ChartTick(960),
+            kind: TickTimingEventKind::StopRaw { value: 96 },
+        }],
+    );
+    assert!(approx_eq(
+        pms_missed_note_fall_progress(&later_stop, ChartTick(0), TimeUs(0), 0, TimeUs(1_500_000)),
+        0.25,
+    ));
+    assert!(approx_eq(
+        pms_missed_note_fall_progress(&later_stop, ChartTick(0), TimeUs(0), 0, TimeUs(2_000_000)),
+        0.5,
     ));
 }
 
@@ -572,26 +594,53 @@ fn build_render_snapshot_culls_past_and_far_future_notes() {
 }
 
 #[test]
-fn build_render_snapshot_keeps_k9_poor_note_while_falling() {
+fn build_render_snapshot_keeps_k9_missed_tap_on_judge_line_then_falls() {
     let mut chart = chart();
     chart.metadata.key_mode = KeyMode::K9;
     chart.lane_notes[Lane::Key1.index()] = vec![tap_note(1, Lane::Key1, 0, 0)];
-    let mut profile = ProfileConfig::new_default("default", "Default", 1);
-    profile.play.note_retention = true;
+    let profile = ProfileConfig::new_default("default", "Default", 1);
     let mut session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
     session.hispeed = 1.0;
-    session.judge.judged_notes.insert(NoteId(1), Judge::Poor);
-    let bad_slow_us = session.judge.window_set.note.bad_slow_us.max(0);
+    assert!(!session.note_retention);
+    let delay_us = session.judge.window_set.note.empty_poor_slow_us;
+    assert_eq!(delay_us, 175_000);
 
-    let falling =
-        build_render_snapshot(&session, TimeUs(bad_slow_us.saturating_add(500_000)), &[], None);
+    // POOR 確定前でも、判定時刻を過ぎた未判定ノーツは判定ライン上に残る。
+    let waiting = build_render_snapshot(&session, TimeUs(100_000), &[], None);
+    let notes = &waiting.visible_notes[Lane::Key1.index()];
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].pms_miss_fall, Some(0.0));
+    assert_eq!(notes[0].y, 0.0);
+
+    session.judge.judged_notes.insert(NoteId(1), Judge::Poor);
+    let falling = build_render_snapshot(&session, TimeUs(delay_us + 500_000), &[], None);
     let notes = &falling.visible_notes[Lane::Key1.index()];
     assert_eq!(notes.len(), 1);
-    assert!(notes[0].y < 0.0);
+    assert_eq!(notes[0].processed_judge, Some(Judge::Poor));
+    assert!(approx_eq(notes[0].pms_miss_fall.unwrap(), 0.25));
+    assert!(approx_eq(notes[0].y, -0.25));
 
-    let finished =
-        build_render_snapshot(&session, TimeUs(bad_slow_us.saturating_add(2_500_000)), &[], None);
+    let finished = build_render_snapshot(&session, TimeUs(delay_us + 17_000_000), &[], None);
     assert!(finished.visible_notes[Lane::Key1.index()].is_empty());
+}
+
+#[test]
+fn build_render_snapshot_leaves_k9_hit_notes_to_the_skin() {
+    let mut chart = chart();
+    chart.metadata.key_mode = KeyMode::K9;
+    let profile = ProfileConfig::new_default("default", "Default", 1);
+    let mut session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+    session.hispeed = 1.0;
+    session.judge.judged_notes.insert(NoteId(1), Judge::Great);
+
+    // 早押しのノーツは判定時刻まで通常の位置で渡し、DST_NOTE2 による非表示は描画側で決める。
+    let early = build_render_snapshot(&session, TimeUs(990_000), &[], None);
+    let notes = &early.visible_notes[Lane::Key1.index()];
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].pms_miss_fall, None);
+
+    let after = build_render_snapshot(&session, TimeUs(1_000_001), &[], None);
+    assert!(after.visible_notes[Lane::Key1.index()].is_empty());
 }
 
 #[test]

@@ -362,8 +362,10 @@ impl SkinContext {
         let area = note_lane_area_for_state(document, lane, key_mode, &enabled_options, state)?;
         let canvas_h = document.h.max(1) as f32;
         let judge_bottom = note_judge_bottom_y(area, state, canvas_h);
-        let target_bottom = (canvas_h - note.dst2 as f32) / canvas_h;
-        let bottom_y = judge_bottom + (target_bottom - judge_bottom) * fall.clamp(0.0, 1.0);
+        let bottom_y = missed_note_bottom_y(area, judge_bottom, fall);
+        if bottom_y > missed_note_target_bottom_y(area, judge_bottom, note.dst2, canvas_h) {
+            return None;
+        }
         let rect =
             Rect { x: area.x, y: bottom_y - note_height, width: area.width, height: note_height };
         Some(document.apply_notes_offset_to_rect(rect, state))

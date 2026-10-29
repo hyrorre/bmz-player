@@ -147,6 +147,7 @@ fn main() -> Result<()> {
                     alpha: 1.0,
                     kind: NoteVisualKind::Tap,
                     processed_judge: None,
+                    pms_miss_fall: None,
                 });
             }
         }

@@ -273,6 +273,23 @@ pub(super) fn note_judge_bottom_y(area: Rect, state: &SkinDrawState, canvas_h: f
     (area.y + area.height - lift_norm).max(scroll_top)
 }
 
+/// beatoraja LaneRenderer の PMS 見逃し POOR と同じく、1小節で判定ラインから
+/// レーン上端までの高さぶん落とす。`fall` は落下開始からの小節数。
+pub(super) fn missed_note_bottom_y(area: Rect, judge_bottom: f32, fall: f32) -> f32 {
+    judge_bottom + fall.max(0.0) * (judge_bottom - area.y)
+}
+
+/// 見逃しノーツが消える下端。beatoraja は `DST_NOTE2` を -レーン高さ〜判定ラインに収める。
+pub(super) fn missed_note_target_bottom_y(
+    area: Rect,
+    judge_bottom: f32,
+    dst2: i32,
+    canvas_h: f32,
+) -> f32 {
+    let canvas_h = canvas_h.max(1.0);
+    ((canvas_h - dst2 as f32) / canvas_h).min(1.0 + area.height).max(judge_bottom)
+}
+
 /// 小節線 (`note.group`) 向けオフセット適用。Notes offset (30) はノーツ専用のため除外する。
 pub(super) fn apply_bar_line_skin_offsets_to_frame(
     destination: &SkinDestinationDef,

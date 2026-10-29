@@ -161,6 +161,7 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
             alpha: 1.0,
             kind: NoteVisualKind::Tap,
             processed_judge: None,
+            pms_miss_fall: None,
         });
     }
     snapshot.visible_notes[Lane::Key2.index()].push(VisibleNote {
@@ -170,6 +171,7 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
         alpha: 1.0,
         kind: NoteVisualKind::Tap,
         processed_judge: None,
+        pms_miss_fall: None,
     });
     snapshot.bar_lines.push(VisibleBarLine {
         time: TimeUs(12_000_000),

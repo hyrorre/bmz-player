@@ -1,5 +1,7 @@
 use super::*;
 use crate::skin::{PreparedNoteLayout, SkinImageScale, TextureRegion};
+use crate::snapshot::VisibleNote;
+use bmz_core::judge::Judge;
 
 pub(super) fn push_document_playfield(
     commands: &mut Vec<DrawCommand>,
@@ -103,24 +105,27 @@ fn push_document_lane(
     let note_height = notes.note_height(lane).unwrap_or(NOTE_HEIGHT);
     for note in &snapshot.visible_notes[lane_index] {
         let start = commands.len();
-        let Some(mut rect) = document_note_rect(notes, lane, note.y, note_height) else {
+        if hidden_by_missed_note_target(notes, note) {
+            continue;
+        }
+        let Some(mut rect) = document_note_rect(notes, lane, note, note_height) else {
             continue;
         };
         if snapshot.key_mode == KeyMode::K9 {
             apply_note_expansion(&mut rect, skin.document_note_expansion_scale(skin_state));
         }
+        // beatoraja は見逃しノーツを markprocessednote によらず通常画像で描く。
+        let processed = snapshot.mark_processed_note
+            && note.processed_judge.is_some()
+            && note.pms_miss_fall.is_none();
         let item = match note.kind {
             NoteVisualKind::LnStart => notes.cap_item(lane, rect, LongNoteMode::Ln, false),
             NoteVisualKind::LnEnd => notes.cap_item(lane, rect, LongNoteMode::Ln, true),
-            NoteVisualKind::Tap => notes.tap_item(
-                lane,
-                rect,
-                snapshot.mark_processed_note && note.processed_judge.is_some(),
-            ),
+            NoteVisualKind::Tap => notes.tap_item(lane, rect, processed),
         };
         if let Some(item) = item {
             append_document_item(commands, skin, skin_state, item);
-        } else if snapshot.mark_processed_note && note.processed_judge.is_some() {
+        } else if processed {
             push_processed_note_fallback(commands, rect);
         }
         apply_draw_command_alpha_offset(&mut commands[start..], notes.alpha_offset());
@@ -157,16 +162,24 @@ fn push_document_lane(
     }
 }
 
+/// beatoraja LaneRenderer は `DST_NOTE2` がある skin で、判定時刻前でも
+/// PG/GR/GD のノーツをその場で消す (BAD/POOR は残す)。
+fn hidden_by_missed_note_target(notes: &PreparedNoteLayout<'_>, note: &VisibleNote) -> bool {
+    note.kind == NoteVisualKind::Tap
+        && note.pms_miss_fall.is_none()
+        && notes.has_missed_note_target()
+        && matches!(note.processed_judge, Some(Judge::PGreat | Judge::Great | Judge::Good))
+}
+
 fn document_note_rect(
     notes: &PreparedNoteLayout<'_>,
     lane: Lane,
-    progress: f32,
+    note: &VisibleNote,
     note_height: f32,
 ) -> Option<Rect> {
-    if progress < 0.0 {
-        notes.missed_rect(lane, -progress, note_height)
-    } else {
-        notes.note_rect(lane, progress, note_height)
+    match note.pms_miss_fall {
+        Some(fall) => notes.missed_rect(lane, fall, note_height),
+        None => notes.note_rect(lane, note.y, note_height),
     }
 }
 

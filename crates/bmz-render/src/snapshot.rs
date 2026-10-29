@@ -624,6 +624,10 @@ pub struct VisibleNote {
     pub kind: NoteVisualKind,
     /// beatoraja の `Note.state` 相当。判定済みでも本来の時刻までは描画に残す。
     pub processed_judge: Option<Judge>,
+    /// PMS の見逃しノーツ。判定時刻を過ぎた未判定/BAD/POOR の Tap で、
+    /// 落下開始からの小節数 (0 以上。落下開始前は 0) を持つ。
+    /// 描画は skin の `DST_NOTE2` で決め、`y` は既定 skin 用に `-fall` を入れる。
+    pub pms_miss_fall: Option<f32>,
 }
 
 /// 画面上に見えている Mine ノーツ。座標系は [`VisibleNote`] と同じ。

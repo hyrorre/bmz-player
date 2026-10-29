@@ -184,6 +184,7 @@ fn play_skin_document_places_hit_timing_note_bottom_on_judge_line() {
         alpha: 1.0,
         kind: NoteVisualKind::Tap,
         processed_judge: None,
+        pms_miss_fall: None,
     });
 
     let plan = DrawPlan::from_scene_with_skin(
@@ -257,6 +258,7 @@ fn play_skin_document_applies_notes_alpha_offset_before_note_fade() {
         alpha: 0.5,
         kind: NoteVisualKind::Tap,
         processed_judge: None,
+        pms_miss_fall: None,
     });
 
     let plan = DrawPlan::from_scene_with_skin(
@@ -348,6 +350,7 @@ fn play_skin_document_applies_notes_alpha_to_long_mine_and_processed_fallbacks()
         alpha: 0.6,
         kind: NoteVisualKind::Tap,
         processed_judge: Some(Judge::PGreat),
+        pms_miss_fall: None,
     });
 
     let plan = DrawPlan::from_scene_with_skin(
@@ -382,6 +385,100 @@ fn play_skin_document_applies_notes_alpha_to_long_mine_and_processed_fallbacks()
         )
     });
     assert_eq!(processed_fallback_borders.count(), 4);
+}
+
+fn pms_missed_note_plan(dst2: Option<i32>) -> DrawPlan {
+    let mut note = serde_json::json!({
+        "note": ["note"],
+        "dst": [{"x": 10, "y": 20, "w": 5, "h": 60}]
+    });
+    if let Some(dst2) = dst2 {
+        note["dst2"] = dst2.into();
+    }
+    let document: crate::skin::SkinDocument = serde_json::from_value(serde_json::json!({
+        "type": 0, "w": 100, "h": 100,
+        "source": [{"id": 1, "path": "note.png"}],
+        "image": [{"id": "note", "src": 1, "x": 0, "y": 0, "w": 1, "h": 1}],
+        "note": note,
+        "destination": [{"id": "notes"}]
+    }))
+    .unwrap();
+    let skin = SkinContext::from_manifest_and_document(
+        SkinManifest::default(),
+        document,
+        [crate::skin::SkinDocumentTexture {
+            source_id: "1".to_string(),
+            texture: SkinTextureId(78),
+            source_size: crate::skin::SkinImageSize { width: 1.0, height: 1.0 },
+        }],
+    );
+    let mut snapshot = RenderSnapshot {
+        key_mode: KeyMode::K9,
+        mark_processed_note: true,
+        ..RenderSnapshot::default()
+    };
+    // 早押し GREAT (alpha 0.3) と、落下中の見逃し POOR (alpha 0.6)。
+    snapshot.visible_notes[Lane::Key1.index()].push(VisibleNote {
+        lane: Lane::Key1,
+        time: TimeUs(2_000),
+        y: 0.5,
+        alpha: 0.3,
+        kind: NoteVisualKind::Tap,
+        processed_judge: Some(Judge::Great),
+        pms_miss_fall: None,
+    });
+    snapshot.visible_notes[Lane::Key1.index()].push(VisibleNote {
+        lane: Lane::Key1,
+        time: TimeUs(1_000),
+        y: -0.1,
+        alpha: 0.6,
+        kind: NoteVisualKind::Tap,
+        processed_judge: Some(Judge::Poor),
+        pms_miss_fall: Some(0.1),
+    });
+    DrawPlan::from_scene_with_skin(
+        &AppSceneSnapshot::Play(snapshot),
+        &skin,
+        &mut crate::skin::DynamicTimerRuntime::default(),
+    )
+}
+
+fn commands_with_alpha(plan: &DrawPlan, alpha: f32) -> (usize, usize) {
+    let note_images = plan
+        .commands
+        .iter()
+        .filter(|command| {
+            matches!(
+                command,
+                DrawCommand::Image { texture, tint, .. }
+                    if *texture == TextureId(78) && approx_eq(tint.a, alpha)
+            )
+        })
+        .count();
+    let fallback_rects = plan
+        .commands
+        .iter()
+        .filter(|command| {
+            matches!(command, DrawCommand::Rect { color, .. } if approx_eq(color.a, alpha))
+        })
+        .count();
+    (note_images, fallback_rects)
+}
+
+#[test]
+fn pms_skin_draws_missed_notes_with_normal_image_and_hides_early_hits() {
+    let plan = pms_missed_note_plan(Some(5));
+    // beatoraja は DST_NOTE2 がある skin で PG/GR/GD をその場で消し、
+    // 見逃しノーツは markprocessednote によらず通常画像で描く。
+    assert_eq!(commands_with_alpha(&plan, 0.3), (0, 0));
+    assert_eq!(commands_with_alpha(&plan, 0.6), (1, 0));
+}
+
+#[test]
+fn skin_without_dst2_keeps_early_hits_and_skips_missed_notes() {
+    let plan = pms_missed_note_plan(None);
+    assert_eq!(commands_with_alpha(&plan, 0.3), (0, 4));
+    assert_eq!(commands_with_alpha(&plan, 0.6), (0, 0));
 }
 
 #[test]
@@ -827,6 +924,7 @@ fn play_plan_maps_normalized_note_y_to_distinct_screen_positions() {
         alpha: 1.0,
         kind: NoteVisualKind::Tap,
         processed_judge: None,
+        pms_miss_fall: None,
     });
     snapshot.visible_notes[Lane::Key1.index()].push(VisibleNote {
         lane: Lane::Key1,
@@ -835,6 +933,7 @@ fn play_plan_maps_normalized_note_y_to_distinct_screen_positions() {
         alpha: 1.0,
         kind: NoteVisualKind::Tap,
         processed_judge: None,
+        pms_miss_fall: None,
     });
 
     let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));

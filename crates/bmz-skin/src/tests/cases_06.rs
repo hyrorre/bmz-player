@@ -454,6 +454,22 @@ fn peaceful_play_integral_property_ops_are_selectable_when_available() {
     }
     assert!(loaded.warnings.is_empty(), "warnings: {:?}", loaded.warnings);
     assert!(loaded.lua_runtime.is_some());
+    // DST_NOTE2 は各レーンの下端 (判定ライン) にあり、見逃しノーツは落下を始めた時点で消える。
+    let note = loaded.document.note.as_ref().expect("PeacefulPlay should define notes");
+    let lane_bottoms = note
+        .dst
+        .iter()
+        .filter_map(|entry| match entry {
+            bmz_skin_document::SkinDstEntry::Frame(frame) => frame.y,
+            bmz_skin_document::SkinDstEntry::Conditional { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(lane_bottoms.len(), 9);
+    assert!(
+        lane_bottoms.iter().all(|y| *y == note.dst2),
+        "dst2 {} lane bottoms {lane_bottoms:?}",
+        note.dst2
+    );
     let gauge_lead_glow = loaded
         .document
         .destination

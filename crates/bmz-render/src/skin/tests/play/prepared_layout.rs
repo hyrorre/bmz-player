@@ -37,7 +37,10 @@ fn lr2_horizontal_scroll_aligns_notes_long_bodies_lines_and_lift() {
             assert!(approx_eq(body.x + body.width, tail.x));
             assert_eq!(body.height, head.height);
             assert!(approx_eq(notes.note_rect(lane, 1.0, height).unwrap().x, 1.0));
-            assert!(approx_eq(notes.missed_rect(lane, 1.0, height).unwrap().x, -0.02));
+            let missed = notes.missed_rect(lane, 0.1, height).unwrap();
+            assert!(approx_eq(missed.x, head.x - 0.1 * (900 - lift) as f32 / 1000.0));
+            assert_eq!(missed.y, head.y);
+            assert_eq!(notes.missed_rect(lane, 1.0, height), None);
             assert_eq!(
                 Some(tail),
                 skin.note_rect_for_progress(lane, KeyMode::K7, 0.5, height, &state)

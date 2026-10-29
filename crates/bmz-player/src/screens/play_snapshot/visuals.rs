@@ -93,29 +93,32 @@ pub(super) fn quarter_note_elapsed_ms(
     Some(((now.0 - quarter_time.0) / 1_000).clamp(0, i32::MAX as i64) as i32)
 }
 
-/// beatoraja TIMER_RHYTHM と同じく、実時間を区間 BPM / 60 倍して進める。
-/// STOP 中も現在 BPM で進行するため、tick 差ではなく時間区間を積分する。
-pub(super) fn bpm_normalized_elapsed_us(timing_map: &TimingMap, start: TimeUs, end: TimeUs) -> f64 {
+/// 実時間を区間 BPM / 60 倍して進める。STOP 中 (次の区間の開始より前) は進めない。
+fn bpm_normalized_moving_elapsed_us(timing_map: &TimingMap, start: TimeUs, end: TimeUs) -> f64 {
     let mut cursor = start.0.max(0).min(end.0);
     let end = end.0.max(cursor);
     let mut elapsed_us = 0.0;
     while cursor < end {
         let segment = timing_map.find_segment_by_time(TimeUs(cursor));
-        let boundary =
-            if segment.start_time.0 > cursor { segment.start_time.0 } else { segment.end_time.0 };
+        let in_stop = segment.start_time.0 > cursor;
+        let boundary = if in_stop { segment.start_time.0 } else { segment.end_time.0 };
         let next = end.min(boundary.max(cursor.saturating_add(1)));
-        let bpm = if segment.bpm.is_finite() && segment.bpm > 0.0 { segment.bpm } else { 1.0 };
-        elapsed_us += (next - cursor) as f64 * bpm / 60.0;
+        if !in_stop {
+            let bpm = if segment.bpm.is_finite() && segment.bpm > 0.0 { segment.bpm } else { 1.0 };
+            elapsed_us += (next - cursor) as f64 * bpm / 60.0;
+        }
         cursor = next;
     }
     elapsed_us
 }
 
+/// beatoraja LaneRenderer の PMS 見逃し POOR と同じく、ノーツの STOP 終了から
+/// `delay_us` 後に、ハイスピードによらず1小節でレーン高さぶん落とす。STOP 中は止める。
 pub(super) fn pms_missed_note_fall_progress(
     timing_map: &TimingMap,
     note_tick: ChartTick,
     note_time: TimeUs,
-    bad_slow_us: i64,
+    delay_us: i64,
     now: TimeUs,
 ) -> f32 {
     let stop_end = timing_map
@@ -125,8 +128,8 @@ pub(super) fn pms_missed_note_fall_progress(
         .map(|segment| segment.start_time.0)
         .max()
         .unwrap_or(note_time.0);
-    let fall_start = TimeUs(stop_end.saturating_add(bad_slow_us.max(0)));
-    (bpm_normalized_elapsed_us(timing_map, fall_start, now) / 4_000_000.0) as f32
+    let fall_start = TimeUs(stop_end.saturating_add(delay_us.max(0)));
+    (bpm_normalized_moving_elapsed_us(timing_map, fall_start, now) / 4_000_000.0) as f32
 }
 
 pub(super) fn lane_key_timer_ms(

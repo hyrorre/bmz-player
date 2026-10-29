@@ -521,6 +521,7 @@ fn play_plan_uses_supplied_skin_context() {
         alpha: 1.0,
         kind: NoteVisualKind::Tap,
         processed_judge: None,
+        pms_miss_fall: None,
     });
 
     let plan = DrawPlan::from_scene_with_skin(

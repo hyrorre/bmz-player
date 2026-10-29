@@ -217,20 +217,30 @@ impl PreparedNoteLayout<'_> {
         Some(self.rect_at_bottom(area, bottom, height))
     }
 
+    pub(crate) fn has_missed_note_target(&self) -> bool {
+        self.dst2 != i32::MIN
+    }
+
+    /// PMS 見逃しノーツの矩形。`fall` は落下開始からの小節数で、`DST_NOTE2` を越えたら `None`。
     pub(crate) fn missed_rect(&self, lane: Lane, fall: f32, height: f32) -> Option<Rect> {
-        if self.dst2 == i32::MIN {
+        if !self.has_missed_note_target() {
             return None;
         }
         let area = self.areas[lane.index()]?;
+        let fall = fall.max(0.0);
         if self.horizontal {
+            // 縦と同じく、1小節で判定位置からレーン端までの長さぶん進める。
             let mut rect = self.note_rect(lane, 0.0, height)?;
-            let target = self.dst2 as f32 / self.canvas_w;
-            rect.x += (target - rect.x) * fall.clamp(0.0, 1.0);
-            return Some(rect);
+            let target = (self.dst2 as f32 / self.canvas_w).min(rect.x);
+            let lane_length_px =
+                self.scroll_distances_px[lane.index()] - self.horizontal_lift_px(lane);
+            rect.x -= fall * lane_length_px / self.canvas_w;
+            return (rect.x >= target).then_some(rect);
         }
         let judge = note_judge_bottom_y(area, self.state, self.canvas_h);
-        let target = (self.canvas_h - self.dst2 as f32) / self.canvas_h;
-        Some(self.rect_at_bottom(area, judge + (target - judge) * fall.clamp(0.0, 1.0), height))
+        let bottom = missed_note_bottom_y(area, judge, fall);
+        (bottom <= missed_note_target_bottom_y(area, judge, self.dst2, self.canvas_h))
+            .then(|| self.rect_at_bottom(area, bottom, height))
     }
 
     fn rect_at_bottom(&self, area: Rect, bottom: f32, height: f32) -> Rect {
@@ -245,8 +255,12 @@ impl PreparedNoteLayout<'_> {
 
     fn horizontal_scroll_px(&self, lane: Lane, progress: f32) -> f32 {
         let distance = self.scroll_distances_px[lane.index()];
-        let lift = (self.state.offset_lift_px as f32).clamp(0.0, distance);
+        let lift = self.horizontal_lift_px(lane);
         lift + progress.clamp(0.0, 1.0) * (distance - lift)
+    }
+
+    fn horizontal_lift_px(&self, lane: Lane) -> f32 {
+        (self.state.offset_lift_px as f32).clamp(0.0, self.scroll_distances_px[lane.index()])
     }
 
     pub(crate) fn body_rect(&self, lane: Lane, head: f32, tail: f32) -> Option<Rect> {
