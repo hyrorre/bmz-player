@@ -428,6 +428,89 @@ fn select_hold_state_rebuilds_from_pressed_controls() {
 }
 
 #[test]
+fn select_hold_move_follows_the_physical_control_across_devices() {
+    let mut input = AppInputRuntime::default();
+    assert!(!select_hold_control_released(None, &input.pressed_controls));
+
+    // 9KEYS コントローラーの KEY4 (前へ) を2台で押し、1台ずつ離す。
+    input.track_control(&ControlInputEvent::gamepad(DeviceId(2), "Button24", true));
+    input.track_control(&ControlInputEvent::gamepad(DeviceId(3), "Button24", true));
+    assert!(!select_hold_control_released(Some("Button24"), &input.pressed_controls));
+    input.track_control(&ControlInputEvent::gamepad(DeviceId(2), "Button24", false));
+    assert!(!select_hold_control_released(Some("Button24"), &input.pressed_controls));
+    input.track_control(&ControlInputEvent::gamepad(DeviceId(3), "Button24", false));
+    assert!(select_hold_control_released(Some("Button24"), &input.pressed_controls));
+
+    // キーボードも同じ入力名で追跡する。
+    input.track_control(&ControlInputEvent::keyboard_parts(
+        PhysicalKey::Code(KeyCode::ArrowDown),
+        ElementState::Pressed,
+        false,
+    ));
+    assert!(!select_hold_control_released(Some("ArrowDown"), &input.pressed_controls));
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "creates a Winit event loop; run alone with --ignored"]
+fn key9_gamepad_release_stops_select_hold_move() {
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+
+    let event_loop =
+        EventLoop::<AppUserEvent>::with_user_event().with_any_thread(true).build().unwrap();
+    let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+    let mut boot = data.boot();
+    boot.app_config.input.gamepad_enabled = false;
+    boot.profile_config.input.select_input_mode = SelectInputModeConfig::Key9;
+    let play9 =
+        boot.profile_config.input.play.entry(KeyMode::K9.play_map_key().to_string()).or_default();
+    play9.bindings = vec![crate::config::profile_config::BindingConfigEntry {
+        device: "gamepad".to_string(),
+        control: "Button24".to_string(),
+        keyboard_slot: None,
+        lane: Some(LaneConfig::Key4),
+        action: None,
+        scratch: None,
+    }];
+    let (maintenance_tx, _) = tokio::sync::watch::channel(false);
+    let mut app = WinitApp::new(
+        boot,
+        AppOptions { viewer_play: true, ..Default::default() },
+        Instant::now(),
+        None,
+        None,
+        Arc::new(AtomicBool::new(false)),
+        event_loop.create_proxy(),
+        LogBuffer::default(),
+        maintenance_tx,
+        None,
+    )
+    .unwrap();
+    app.viewer_mode = false;
+    app.select.select_keys = SelectKeyBindings::from_profile(&app.boot.profile_config.input);
+    let button = |pressed| crate::input::gamepad::GamepadButtonEvent {
+        name: "Button24".into(),
+        device_id: DeviceId(2),
+        pressed,
+        timestamp: bmz_gameplay::input::backend::DeviceTimestamp::MonotonicNs(0),
+        synthesized_analog_axis: false,
+    };
+
+    // G-BATTLE 一覧も別経路で長押し移動を始める。
+    for (ir_battle, bounce_ms) in [(false, 0), (false, 20), (true, 0)] {
+        app.select.ir_battle.active = ir_battle;
+        app.boot.profile_config.input.controller_release_bounce_ms = bounce_ms;
+        app.route_gamepad_button_event(&button(true));
+        assert_eq!(app.select.select_hold_move, Some(SelectMove::Previous));
+        // bounce filter が同時刻の release を捨てても、物理状態で止める。
+        app.route_gamepad_button_event(&button(false));
+        assert_eq!(app.select.select_hold_move, None, "battle {ir_battle} bounce {bounce_ms}ms");
+        app.advance_select_hold_move();
+        assert_eq!(app.select.select_hold_move, None);
+    }
+}
+
+#[test]
 fn select_analog_scroll_delta_maps_scratch_bindings() {
     let gamepad_keys =
         SelectKeyBindings::from_profile(&ProfileConfig::new_default("default", "Default", 1).input);

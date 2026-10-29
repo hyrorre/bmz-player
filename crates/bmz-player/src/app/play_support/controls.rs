@@ -135,6 +135,14 @@ pub(in crate::app) fn select_hold_state_from_pressed_controls(
     (start_held, select_held, e_action_holds)
 }
 
+/// 長押し移動を始めた入力が、どのデバイスでも押されていなければ true。
+pub(in crate::app) fn select_hold_control_released(
+    hold_control: Option<&str>,
+    pressed_controls: &HashSet<String>,
+) -> bool {
+    hold_control.is_some_and(|control| !pressed_controls.contains(control))
+}
+
 pub(in crate::app) fn reconcile_select_holds_from_pressed_controls(
     input: &mut AppInputRuntime,
     bindings: &SelectKeyBindings,

@@ -137,6 +137,7 @@ impl WinitApp {
 
     pub(super) fn sync_select_holds_from_pressed_controls(&mut self) {
         self.reconcile_select_holds_from_pressed_controls();
+        self.release_select_hold_without_pressed_control();
         self.update_select_option_panel();
     }
 
