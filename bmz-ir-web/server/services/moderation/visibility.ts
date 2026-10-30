@@ -1,6 +1,6 @@
-import { sql, type SQL } from 'drizzle-orm'
+import { and, eq, sql, type SQL } from 'drizzle-orm'
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core'
-import { schema } from 'hub:db'
+import { db, schema } from 'hub:db'
 import { NON_PUBLIC_CHART_STATUSES } from '../../../shared/constants/moderation'
 
 /**
@@ -44,4 +44,53 @@ export function publicCourseCondition(courseHash: AnySQLiteColumn | SQL): SQL {
   return sql`not exists (select 1 from ${courses}, json_each(${courses.charts}) as course_chart
     inner join ${moderation} on ${moderation.chartSha256} = course_chart.value
     where ${courses.courseHash} = ${courseHash} and ${moderation.status} in (${nonPublicChartStatuses}))`
+}
+
+export async function isPublicPlayer(playerId: string): Promise<boolean> {
+  const rows = await db
+    .select({ id: schema.profiles.id })
+    .from(schema.profiles)
+    .where(and(eq(schema.profiles.id, playerId), publicPlayerCondition(schema.profiles.id)))
+    .limit(1)
+  return rows.length > 0
+}
+
+/** 譜面が公開状態か。charts に未登録でも hidden / blocked でなければ true。 */
+export async function isPublicChart(chartSha256: string): Promise<boolean> {
+  const rows = await db
+    .select({ status: schema.chartModeration.status })
+    .from(schema.chartModeration)
+    .where(eq(schema.chartModeration.chartSha256, chartSha256))
+    .limit(1)
+  const status = rows[0]?.status
+  return !status || !(NON_PUBLIC_CHART_STATUSES as readonly string[]).includes(status)
+}
+
+/** 登録済みコースの構成譜面がすべて公開状態か。未登録のコースは false。 */
+export async function isPublicCourse(courseHash: string): Promise<boolean> {
+  const rows = await db
+    .select({ hash: schema.irCourses.courseHash })
+    .from(schema.irCourses)
+    .where(
+      and(
+        eq(schema.irCourses.courseHash, courseHash),
+        publicCourseCondition(schema.irCourses.courseHash),
+      ),
+    )
+    .limit(1)
+  return rows.length > 0
+}
+
+/**
+ * スコア詳細・リプレイの公開可否。BAN済みプレイヤーや非公開譜面のスコアは、
+ * 本人以外には存在しないものとして扱う。BAN済みの本人は認証できないため閲覧できない。
+ */
+export async function isScoreVisibleTo(
+  score: { playerId: string; chartSha256: string },
+  viewerId: string | null,
+): Promise<boolean> {
+  if (viewerId === score.playerId) {
+    return true
+  }
+  return (await isPublicPlayer(score.playerId)) && (await isPublicChart(score.chartSha256))
 }

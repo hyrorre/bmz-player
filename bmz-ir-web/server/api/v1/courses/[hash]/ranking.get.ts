@@ -2,6 +2,7 @@ import { eq, inArray } from 'drizzle-orm'
 import { getQuery } from 'h3'
 import { db, schema } from 'hub:db'
 import { asRuleMode, normalizeGaugeName, requireHex } from '../../../../services/ir'
+import { isPublicCourse, publicPlayerCondition } from '../../../../services/moderation/visibility'
 import { resolveIrUser } from '../../../../utils/auth'
 import {
   fetchCourseRankingRows,
@@ -16,6 +17,9 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'course hash is required' })
   }
   requireHex(courseHash, 64, 'course hash')
+  if (!(await isPublicCourse(courseHash))) {
+    throw createError({ statusCode: 404, statusMessage: 'Course not found' })
+  }
   const user = await resolveIrUser(event)
 
   const query = getQuery(event)
@@ -36,6 +40,8 @@ export default defineEventHandler(async (event) => {
     eq(schema.courseScores.courseHash, courseHash),
     eq(schema.courseScores.accepted, true),
     eq(schema.courseScores.scoring, 'bms_ex_score_v1'),
+    // 順位付けの前に除外し、順位と total に BAN 済みプレイヤーを混ぜない。
+    publicPlayerCondition(schema.courseScores.playerId),
   ]
   if (gauge) {
     conditions.push(eq(schema.courseScores.gauge, gauge))

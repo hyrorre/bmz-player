@@ -1,6 +1,7 @@
 import { and, eq, inArray, sql } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
 import { requireHex } from '../../../../services/ir'
+import { isPublicCourse, publicPlayerCondition } from '../../../../services/moderation/visibility'
 
 export default defineEventHandler(async (event) => {
   const courseHash = getRouterParam(event, 'hash')
@@ -15,7 +16,7 @@ export default defineEventHandler(async (event) => {
     .where(eq(schema.irCourses.courseHash, courseHash))
     .limit(1)
   const course = courses[0]
-  if (!course) {
+  if (!course || !(await isPublicCourse(courseHash))) {
     throw createError({ statusCode: 404, statusMessage: 'Course not found' })
   }
 
@@ -23,7 +24,11 @@ export default defineEventHandler(async (event) => {
     .select({ play_count: sql<number>`count(*)` })
     .from(schema.courseScores)
     .where(
-      and(eq(schema.courseScores.courseHash, courseHash), eq(schema.courseScores.accepted, true)),
+      and(
+        eq(schema.courseScores.courseHash, courseHash),
+        eq(schema.courseScores.accepted, true),
+        publicPlayerCondition(schema.courseScores.playerId),
+      ),
     )
 
   const courseCharts =

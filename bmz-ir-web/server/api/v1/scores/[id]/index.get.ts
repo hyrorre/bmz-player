@@ -1,6 +1,8 @@
 import { eq } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
 import { arrangeOptionsFromPlayOptions } from '../../../../services/ir'
+import { isScoreVisibleTo } from '../../../../services/moderation/visibility'
+import { resolveIrUser } from '../../../../utils/auth'
 
 /**
  * スコア詳細。ランキングに公開されている情報の単票ビュー。
@@ -47,7 +49,14 @@ export default defineEventHandler(async (event) => {
     .where(eq(schema.scores.id, scoreId))
     .limit(1)
   const score = scores[0]
-  if (!score) {
+  const viewer = score ? await resolveIrUser(event) : null
+  if (
+    !score ||
+    !(await isScoreVisibleTo(
+      { playerId: score.player_id, chartSha256: score.chart_sha256 },
+      viewer?.id ?? null,
+    ))
+  ) {
     throw createError({ statusCode: 404, statusMessage: 'Score not found' })
   }
 
