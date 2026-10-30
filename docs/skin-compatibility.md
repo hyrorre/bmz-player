@@ -80,6 +80,7 @@ closure/module stateを維持し、frameごとのmain_stateを参照します。
 |---|---|
 | Luaヘッダのproperty型変換 | `item[].op`の数値文字列・小数・非数値と、数値・booleanの`def`をbeatorajaの`toint()` / `tojstring()`に合わせます。SocialSkinのSelect / Result / Course Resultの一覧登録を確認します。[回帰テスト](../crates/bmz-skin/src/tests/lua_header_compat.rs) |
 | destination `draw` | ロード時推論とruntime callback |
+| Lua文字列の`act` / `timer` | act script、関数・数値を返すtimer式を永続VMへ保持します。destinationの任意timer関数も描画時に評価し、クリックは最後の結果を参照します。[回帰テスト](../crates/bmz-player/src/skin_loader/tests/lua/events.rs) |
 | Lua destinationの入れ子`op` | beatorajaと同じく入れ子table・booleanを条件から除外し、他の条件を維持します。ORには解釈しません。SocialSkinのSelectにある条件の合成fixtureと7K Playのロードを確認します。[回帰テスト](../crates/bmz-skin/src/tests/lua_document_conversion.rs) |
 | 推論の順序 | tableのfieldを固定順で変換し、`pairs`順に依存しません。Luxe Flat Selectのランク画像とスコアレート帯を確認します。[回帰テスト](../crates/bmz-skin/src/tests/lua_inference_order.rs) |
 | Resultのパネル状態 | `Expand_op` / callbackが直接保持する`result_mode`を現在のパネルへ同期します。Luxe FlatのGRAPHとIRの混在を防止します。通常 / compat、左右配置、WMIIの回帰確認は[作業記録](../notes/2026/2026-10-03-result-panel-lua-state.md) |
@@ -114,7 +115,6 @@ timerの単位・OFF値・書き込み制約・失敗時の値は[skin.md](skin.
 | 項目 | 残っている範囲 |
 |---|---|
 | DXA | v5以降、独自キー、アーカイブ内wildcard列挙、動画・音声・Lua/CSV includeは未対応 |
-| 任意のdestination timer function | custom timerのruntime対応とは別です。destinationへ直接渡す任意functionの汎用runtime評価は未対応 |
 | Selectの曲バーのLua `draw` | クリック判定では評価しません。行ごとに条件を評価するため、最後のフレームの結果を使えません |
 | その他のLua function field | 汎用float writer等は上記callbackの対象外です。対応追加時はfieldと呼び出し契約を個別に定義する |
 | beatoraja最新版のLua API | `file_*` / `http_*` / `open_url`は未対応です。file / httpは書込・通信の安全性設計が必要です。`key_pressed`と`event_exec`は対応済みです（[Lua APIの互換範囲](skin.md#lua-apiの互換範囲)） |

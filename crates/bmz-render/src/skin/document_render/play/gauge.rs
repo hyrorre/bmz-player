@@ -57,7 +57,7 @@ macro_rules! skin_document_render_play_gauge_methods {
             prepared_frame: Option<ResolvedSkinFrame>,
         ) -> Option<Vec<SkinRenderItem>> {
             let gauge_def = self.skin_gauge_for_destination(destination)?;
-            let elapsed_ms = skin_timer_elapsed_ms(destination.timer, state)?;
+            let elapsed_ms = destination_timer_elapsed_ms(destination, state)?;
             let mut frame = if let Some(frame) = prepared_frame {
                 frame
             } else {

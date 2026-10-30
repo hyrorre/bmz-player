@@ -66,6 +66,7 @@ pub(super) struct LuaSkinDrawRuntimeAdapter {
     effects: Mutex<Vec<SkinLuaEffect>>,
     /// `draw` results and custom timers of the last drawn frame, for hit tests.
     last_draws: Mutex<HashMap<usize, bool>>,
+    last_timer_values: Mutex<HashMap<usize, Option<i64>>>,
     last_custom_timers: Mutex<BTreeMap<i32, Option<i64>>>,
 }
 
@@ -78,6 +79,7 @@ impl LuaSkinDrawRuntimeAdapter {
             pending_acts: Mutex::new(Vec::new()),
             effects: Mutex::new(Vec::new()),
             last_draws: Mutex::new(HashMap::new()),
+            last_timer_values: Mutex::new(HashMap::new()),
             last_custom_timers: Mutex::new(BTreeMap::new()),
         }
     }
@@ -276,6 +278,10 @@ impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
         self.last_custom_timers.lock().map(|timers| timers.clone()).unwrap_or_default()
     }
 
+    fn last_timer(&self, callback_id: usize) -> Option<i64> {
+        self.last_timer_values.lock().ok()?.get(&callback_id).copied().flatten()
+    }
+
     fn queue_act(&self, callback_id: usize, arg1: i32, arg2: i32) -> bool {
         let Ok(mut pending) = self.pending_acts.lock() else { return false };
         if pending.len() >= LUA_PENDING_ACT_LIMIT {
@@ -348,6 +354,9 @@ impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
         if let Ok(mut draws) = self.last_draws.lock() {
             draws.clear();
         }
+        if let Ok(mut values) = self.last_timer_values.lock() {
+            values.clear();
+        }
     }
 
     fn evaluate_draw(
@@ -376,6 +385,34 @@ impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
         }
         if let Ok(mut draws) = self.last_draws.lock() {
             draws.insert(callback_id, result);
+        }
+        result
+    }
+
+    fn evaluate_timer(
+        &self,
+        callback_id: usize,
+        state: &SkinDrawState,
+        enabled_options: &[i32],
+        text_values: &BTreeMap<i32, String>,
+    ) -> Option<i64> {
+        let mut runtime = self.runtime.lock().ok().and_then(|mut slot| slot.take())?;
+        let provider = RenderLuaMainState {
+            state,
+            enabled_options,
+            text_values,
+            chart_text_read: &self.chart_text_read,
+        };
+        let result = if self.state_is_bound(state, enabled_options, text_values) {
+            runtime.evaluate_timer_in_scope(callback_id)
+        } else {
+            runtime.evaluate_timer(callback_id, &provider)
+        };
+        if let Ok(mut slot) = self.runtime.lock() {
+            *slot = Some(runtime);
+        }
+        if let Ok(mut values) = self.last_timer_values.lock() {
+            values.insert(callback_id, result);
         }
         result
     }

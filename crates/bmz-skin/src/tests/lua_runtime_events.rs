@@ -34,6 +34,38 @@ fn frame(runtime: &mut LuaSkinRuntime, state: &TestLuaMainState) {
 }
 
 #[test]
+fn string_act_and_timer_properties_share_the_clean_runtime_vm() {
+    for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
+        let (_root, mut loaded) = load(
+            r#"
+            local s = require('main_state')
+            local opened, ticks = false, 0
+            function switchMenu() opened = not opened end
+            function timerValue() return opened and s.time() - 250000 or s.timer_off_value end
+            function update() ticks = ticks + 1; return 0 end
+            return {type=5, customTimers={{id=10001, timer='update'}},
+                image={{id='btn', act='switchMenu()'}},
+                destination={{id='panel', timer='timerValue', dst={{x=0,y=0,w=10,h=10}}}},
+                text={{id='ticks', value=function() return tostring(ticks) end}}}
+        "#,
+            mode,
+        );
+        let act = image_act(&loaded.document, "btn");
+        let runtime = loaded.lua_runtime.as_mut().unwrap();
+        let timer = callback(runtime, "$.destination[1].timer");
+        let ticks = callback(runtime, "$.text[1].value");
+        let state = TestLuaMainState { now_us: 5_000_000_000, ..Default::default() };
+        assert_eq!(runtime.evaluate_timer(timer, &state), None);
+        runtime.begin_frame();
+        runtime.advance_custom_timers(&state);
+        assert_eq!(runtime.evaluate_text(ticks, &state).as_deref(), Some("1"));
+        assert!(runtime.execute_act(act, 1, 0, &state));
+        assert_eq!(runtime.evaluate_timer(timer, &state), Some(4_999_750_000));
+        assert_eq!(runtime.failure_log_count(), 0);
+    }
+}
+
+#[test]
 fn act_function_runs_in_the_runtime_vm_with_click_arguments() {
     let (_root, mut loaded) = load(
         r#"

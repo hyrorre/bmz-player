@@ -372,6 +372,20 @@ pub(in crate::skin) fn destination_timer_elapsed_ms(
     destination: &SkinDestinationDef,
     state: &SkinDrawState,
 ) -> Option<i32> {
+    if let Some(id) = destination.timer_expr.strip_prefix("bmz:lua_timer_callback:") {
+        let callback_id = id.parse::<usize>().ok()?;
+        let context = state.lua_runtime.as_ref()?;
+        let start = context.runtime.evaluate_timer(
+            callback_id,
+            state,
+            &context.enabled_options,
+            &context.text_values,
+        )?;
+        return Some(
+            (i64::from(state.elapsed_ms).saturating_mul(1_000).saturating_sub(start) / 1_000)
+                .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+        );
+    }
     if let Some(rest) = destination.timer_expr.strip_prefix("bmz:keylogger_chattering:") {
         let lane = rest.parse::<usize>().ok()?.checked_sub(1)?;
         return state.keylogger_chattering_ms.get(lane).copied().flatten();

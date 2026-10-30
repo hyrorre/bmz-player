@@ -414,13 +414,10 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
     let mut callbacks = Vec::with_capacity(runtime_callbacks.len());
     for (callback_id, spec) in runtime_callbacks.iter().enumerate() {
         let path = &spec.path;
-        let callback =
-            lua_value_at_field_path(value.clone(), path).ok().and_then(|value| match value {
-                // Keep the rooted handle instead of looking it up and creating
-                // a temporary Function handle again on every callback call.
-                Value::Function(function) => Some(function),
-                _ => None,
-            });
+        let callback = lua_value_at_field_path(value.clone(), path).ok().and_then(|value| {
+            let field = path.rsplit('.').next().unwrap_or("");
+            lua_script_field_function(&lua, value, field).ok().flatten()
+        });
         if callback.is_some() {
             tracing::debug!(
                 skin = %input.display(),
@@ -463,7 +460,9 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
             // The last definition for an id wins, including passive definitions.
             timers.active.remove(&id);
             custom_timer_callbacks.retain(|(existing, _)| *existing != id);
-            if let Ok(function) = definition.get::<Function>("timer") {
+            if let Some(function) =
+                lua_script_field_function(&lua, definition.get::<Value>("timer")?, "timer")?
+            {
                 timers.active.insert(id);
                 let path = format!("$.customTimers[{}].timer", index + 1);
                 let callback_id = callbacks

@@ -210,7 +210,7 @@ pub struct SkinDestinationDef {
     pub ambient_blur: f32,
     #[serde(default)]
     pub timer: Option<i32>,
-    /// BMZ限定のruntime timer式。PeacefulPlay key loggerの反復event timerに使う。
+    /// Lua destination timer callback、またはPeacefulPlay key loggerのruntime式。
     #[serde(default)]
     pub timer_expr: String,
     /// `loop` フィールド。未指定(None)は0時刻へループバックする。

@@ -103,7 +103,7 @@ macro_rules! skin_document_render_play_lane_methods {
                 {
                     continue;
                 }
-                let Some(elapsed) = skin_timer_elapsed_ms(destination.timer, state) else {
+                let Some(elapsed) = destination_timer_elapsed_ms(destination, state) else {
                     continue;
                 };
                 let Some(mut frame) =

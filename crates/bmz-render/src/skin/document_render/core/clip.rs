@@ -12,7 +12,7 @@ macro_rules! skin_document_render_core_clip_methods {
         if state.result_failed.is_none() || destination.id != "judge_graph" {
             return None;
         }
-        let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
+        let elapsed = destination_timer_elapsed_ms(destination, state)?;
         let mut frame = resolve_destination_frame(destination, elapsed, enabled_options, state)?;
         let image = skin_image_for_destination_id(destination.id.as_str(), images)?;
         let is_hidden_cover_destination = self

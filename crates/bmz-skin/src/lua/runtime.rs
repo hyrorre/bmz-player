@@ -19,6 +19,7 @@ pub(super) enum LuaRuntimeCallbackKind {
     Draw,
     Value,
     Timer(i32),
+    DestinationTimer,
     /// Clicked `act` function, called with the event arguments.
     Act,
 }
@@ -323,6 +324,49 @@ impl LuaSkinRuntime {
 
     pub fn callback_count(&self) -> usize {
         self.callbacks.len()
+    }
+
+    /// A destination TimerProperty returns its start time in microseconds.
+    pub fn evaluate_timer(&mut self, callback_id: usize, state: &dyn LuaMainState) -> Option<i64> {
+        self.evaluate_timer_inner(callback_id, Some(state))
+    }
+
+    pub fn evaluate_timer_in_scope(&mut self, callback_id: usize) -> Option<i64> {
+        self.evaluate_timer_inner(callback_id, None)
+    }
+
+    fn evaluate_timer_inner(
+        &mut self,
+        callback_id: usize,
+        state: Option<&dyn LuaMainState>,
+    ) -> Option<i64> {
+        self.begin_runtime_callback();
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            self.evaluate_callback_inner(
+                callback_id,
+                LuaRuntimeCallbackKind::DestinationTimer,
+                state,
+            )
+        }));
+        let value = match result {
+            Ok(Ok(LuaRuntimeEvaluatedValue::Nil)) => 0,
+            Ok(Ok(LuaRuntimeEvaluatedValue::Integer(value))) => value,
+            Ok(Ok(LuaRuntimeEvaluatedValue::Number(value)))
+                if value.is_finite() && value >= i64::MIN as f64 && value < -(i64::MIN as f64) =>
+            {
+                value as i64
+            }
+            other => {
+                let error = match other {
+                    Ok(Err(error)) => error.to_string(),
+                    Err(_) => "panic while executing Lua destination timer".to_string(),
+                    _ => "Lua destination timer must return a number or nil".to_string(),
+                };
+                self.log_callback_failure_once(callback_id, &error);
+                return None;
+            }
+        };
+        (value != i64::from(TIMER_OFF_VALUE) && value != i64::MIN).then_some(value)
     }
 
     pub fn callback_path(&self, callback_id: usize) -> Option<&str> {

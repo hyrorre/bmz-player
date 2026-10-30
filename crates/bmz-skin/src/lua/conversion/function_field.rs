@@ -526,6 +526,15 @@ fn infer_timer_field(
         insert_number(object, "timer", timer_id);
         return Ok(true);
     }
+    if path.contains(".destination[") {
+        let callback_id = register_runtime_callback(
+            main_state_probe,
+            &format!("{path}.timer"),
+            LuaRuntimeCallbackKind::DestinationTimer,
+        )?;
+        insert_expr(object, "timer_expr", format!("bmz:lua_timer_callback:{callback_id}"));
+        return Ok(true);
+    }
     Ok(false)
 }
 

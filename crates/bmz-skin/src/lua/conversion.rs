@@ -270,6 +270,23 @@ pub(super) fn lua_table_to_json(
             tracing::debug!(field_path = %format!("{path}.{key}"), classification = "STATIC", "classified Lua draw condition");
             continue;
         }
+        let value = if matches!(key.as_str(), "act" | "timer") && matches!(value, Value::String(_))
+        {
+            if let Some(number) = lua.coerce_number(value.clone())? {
+                Value::Integer(i64::from(number as i32))
+            } else {
+                match lua_script_field_function(lua, value, &key) {
+                    Ok(Some(function)) => Value::Function(function),
+                    Ok(None) => continue,
+                    Err(error) => {
+                        warnings.push(format!("invalid Lua script at {path}.{key}: {error}"));
+                        continue;
+                    }
+                }
+            }
+        } else {
+            value
+        };
         if let Value::Function(function) = &value
             && handle_function_field(
                 lua,
@@ -328,4 +345,33 @@ fn is_lua_index_path(path: &str, prefix: &str) -> bool {
 fn is_lua_property_item_path(path: &str) -> bool {
     let Some((property, item)) = path.split_once(".item[") else { return false };
     is_lua_index_path(property, "$.property[") && is_lua_index_path(item, "")
+}
+
+/// The same script forms as SkinLuaAccessor.loadEvent / loadTimerProperty.
+/// Called independently in the conversion and clean runtime VMs.
+pub(super) fn lua_script_field_function(
+    lua: &Lua,
+    value: Value,
+    field: &str,
+) -> mlua::Result<Option<Function>> {
+    match value {
+        Value::Function(function) => Ok(Some(function)),
+        Value::String(script) if lua.coerce_number(Value::String(script.clone()))?.is_some() => {
+            Ok(None)
+        }
+        Value::String(script) if field == "act" => {
+            lua.load(script.to_str()?.as_ref()).set_name("Lua act script").into_function().map(Some)
+        }
+        Value::String(script) if field == "timer" => {
+            let function = lua
+                .load(format!("return {}", script.to_str()?))
+                .set_name("Lua timer script")
+                .into_function()?;
+            match function.call::<Value>(())? {
+                Value::Function(timer) => Ok(Some(timer)),
+                _ => Ok(Some(function)),
+            }
+        }
+        _ => Ok(None),
+    }
 }

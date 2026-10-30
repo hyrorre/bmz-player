@@ -371,7 +371,8 @@ macro_rules! skin_document_render_select_render_methods {
                             |graph| graph.id == destination.id,
                         ),
                     ) {
-                        let Some(elapsed) = skin_timer_elapsed_ms(destination.timer, &state) else {
+                        let Some(elapsed) = destination_timer_elapsed_ms(destination, &state)
+                        else {
                             continue;
                         };
                         let Some(mut frame) = resolve_destination_frame(

@@ -73,6 +73,21 @@ pub trait SkinLuaDrawRuntime: std::fmt::Debug + Send + Sync {
         None
     }
 
+    /// Start time in microseconds for a destination TimerProperty.
+    fn evaluate_timer(
+        &self,
+        _callback_id: usize,
+        _state: &SkinDrawState,
+        _enabled_options: &[i32],
+        _text_values: &BTreeMap<i32, String>,
+    ) -> Option<i64> {
+        None
+    }
+
+    fn last_timer(&self, _callback_id: usize) -> Option<i64> {
+        None
+    }
+
     fn evaluate_text(
         &self,
         _callback_id: usize,
@@ -121,6 +136,16 @@ impl std::fmt::Debug for SkinLuaRuntimeContext {
 struct LastFrameLuaDraws(Arc<dyn SkinLuaDrawRuntime>);
 
 impl SkinLuaDrawRuntime for LastFrameLuaDraws {
+    fn evaluate_timer(
+        &self,
+        callback_id: usize,
+        _state: &SkinDrawState,
+        _enabled_options: &[i32],
+        _text_values: &BTreeMap<i32, String>,
+    ) -> Option<i64> {
+        self.0.last_timer(callback_id)
+    }
+
     fn evaluate_draw(
         &self,
         callback_id: usize,

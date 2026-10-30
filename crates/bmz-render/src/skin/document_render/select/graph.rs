@@ -18,7 +18,7 @@ macro_rules! skin_document_render_select_graph_methods {
             {
                 return Vec::new();
             }
-            let Some(elapsed) = skin_timer_elapsed_ms(destination.timer, state) else {
+            let Some(elapsed) = destination_timer_elapsed_ms(destination, state) else {
                 return Vec::new();
             };
             let Some(mut frame) =

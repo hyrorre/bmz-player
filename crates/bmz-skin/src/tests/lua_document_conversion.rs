@@ -2,6 +2,7 @@
 //! `font.fallback` forms and Unicode strings.
 
 use super::*;
+use bmz_skin_document::SkinFontFallbackDef;
 
 #[test]
 fn lua_destination_options_ignore_nested_tables_like_beatoraja() {
@@ -53,13 +54,25 @@ fn installed_social_play_document_decodes_when_available() {
 }
 
 #[test]
-fn installed_social_decide_decodes_when_available() {
+fn installed_social_documents_decode_when_available() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins");
     let state = LuaLoadRuntimeState {
         number_values: BTreeMap::from([(74, 1000), (71, 1500), (150, 1400), (121, 1450)]),
         ..Default::default()
     };
-    for name in ["decide"] {
+    for name in [
+        "select",
+        "play_7",
+        "decide",
+        "decide2",
+        "result",
+        "result_course",
+        "result_simple",
+        "result_course_simple",
+        "result2",
+        "result2_course",
+        "result3",
+    ] {
         let entry = root.join(format!("SocialSkin/lua/{name}.luaskin"));
         if !entry.is_file() {
             continue;
@@ -76,7 +89,6 @@ fn installed_social_decide_decodes_when_available() {
         assert!(!loaded.document.destination.is_empty());
     }
 }
-use bmz_skin_document::SkinFontFallbackDef;
 
 #[test]
 fn lua_font_fallback_forms_and_unicode_strings_reach_the_document() {

@@ -92,6 +92,46 @@ fn clicked_lua_act_runs_before_the_next_frame_draws_and_reports_effects() {
     }
 }
 
+#[test]
+fn lua_string_act_and_destination_timer_render_and_keep_last_frame_values() {
+    let root = unique_test_dir("bmz-lua-script-properties");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("skin.luaskin");
+    let (context, document) = install_lua_skin(
+        &path,
+        r#"
+        local s = require('main_state')
+        local opened = false
+        function switchMenu() opened = not opened end
+        function panelTimer() return opened and s.time() - 250000 or s.timer_off_value end
+        return {type=5, w=100, h=100, image={{id='btn', act='switchMenu()'}},
+            text={{id='panel', size=10, constantText='PANEL'}},
+            destination={{id='panel', act='switchMenu()', timer='panelTimer', loop=1000,
+                dst={{time=0,x=0,y=0,w=20,h=10},{time=1000,x=80}}}}}
+    "#,
+    );
+    let snapshot =
+        bmz_render::scene::SelectSnapshot { time: TimeUs(5_000_000), ..Default::default() };
+    context.begin_frame();
+    assert!(context.select_document_items(&snapshot).is_empty());
+    assert!(context.queue_lua_act(document.image[0].act.unwrap(), 1, 0));
+    context.begin_frame();
+    let items = context.select_document_items(&snapshot);
+    let panel = items
+        .iter()
+        .find_map(|item| {
+            if let SkinRenderItem::Text { origin, text, .. } = item {
+                (text == "PANEL").then_some(origin)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert!((panel.x - 0.2).abs() < 0.001);
+    let hit = context.select_click_hit(&snapshot, 0.25, 0.95);
+    assert!(hit.is_some(), "the timer-gated panel uses its last rendered start time");
+}
+
 fn install_lua_skin(path: &Path, source: &str) -> (SkinContext, SkinDocument) {
     fs::write(path, source).unwrap();
     let loaded = bmz_skin::load_lua_skin_with_runtime_state(

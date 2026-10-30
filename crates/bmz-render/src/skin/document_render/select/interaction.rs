@@ -132,7 +132,7 @@ macro_rules! skin_document_render_select_interaction_public_methods {
                 {
                     continue;
                 }
-                let Some(elapsed) = skin_timer_elapsed_ms(destination.timer, &state) else {
+                let Some(elapsed) = destination_timer_elapsed_ms(destination, &state) else {
                     continue;
                 };
                 let Some(mut frame) =
@@ -450,7 +450,7 @@ macro_rules! skin_document_render_select_interaction_methods {
             enabled_options: &[i32],
             state: &SkinDrawState,
         ) -> Option<Rect> {
-            let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
+            let elapsed = destination_timer_elapsed_ms(destination, state)?;
             let mut frame =
                 resolve_destination_frame(destination, elapsed, enabled_options, state)?;
             apply_skin_offset_to_frame(destination, &mut frame, state, false);
@@ -474,7 +474,7 @@ macro_rules! skin_document_render_select_interaction_methods {
             if !slider.changeable || !matches!(slider.slider_type, 1 | 7 | 8 | 17..=19) {
                 return None;
             }
-            let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
+            let elapsed = destination_timer_elapsed_ms(destination, state)?;
             let mut frame =
                 resolve_destination_frame(destination, elapsed, enabled_options, state)?;
             apply_skin_offset_to_frame(destination, &mut frame, state, false);

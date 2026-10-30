@@ -599,7 +599,7 @@ macro_rules! skin_document_render_core_resolve_methods {
             {
                 return None;
             }
-            let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
+            let elapsed = destination_timer_elapsed_ms(destination, state)?;
             let mut frame =
                 resolve_destination_frame(destination, elapsed, enabled_options, state)?;
             frame.x += offset.0;

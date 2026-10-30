@@ -927,6 +927,12 @@ Luaのdestination `op`に入れ子のtableやbooleanが混ざる場合、beatora
 `DestinationOption`と同じくその要素は条件にしません。入れ子をOR条件とは解釈せず、
 残りの数値・名前付き条件を維持します。通常のJSONでの不正な入れ子は引き続きエラーです。
 
+Luaの`act`は関数に加え`"switchMenu()"`のようなscript文字列を受け付け、クリック時に
+永続VMで実行します。`customTimers[].timer`とdestination `timer`の文字列は
+`return <文字列>`として評価し、関数が返ればその関数、それ以外は式を毎回評価します。
+destinationの任意timer関数も描画時に開始時刻（microseconds）を取得し、OFF値・nil・
+64bit時計はcustom timerと同じ規約です。クリック判定は最後の描画結果を使い、再実行しません。
+
 `timer_util` / `event_util`はbeatorajaの`TimerUtility` / `EventUtility`相当です。
 `new_passive_timer`の`turn_on` / `turn_on_reset` / `turn_off`はtrueを返します。
 `event_observe_timer_off`は、最初の評価でtimerがOFFでも発火しません（beatorajaは発火します）。

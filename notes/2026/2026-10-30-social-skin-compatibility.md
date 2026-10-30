@@ -47,3 +47,18 @@ snapshotの`ok`だけで一覧登録や実際のResult互換性を判定しな�
   `destination[755].timer = "resultRankGaugeTimer"`で次の型エラーとなる。
   actと合わせて文字列callbackの対応で修正する。
 - 検証: fmt、bmz-skinのcheck / all-targets Clippy / test（349成功・1 ignored）が成功。
+
+## 4. 文字列act / timerとdestination timer callback
+
+- `SkinLuaAccessor.loadEvent(String)`はscriptをクリック時に実行する。
+  `loadTimerProperty(String)`は`return <script>`を試行し、関数ならその関数を保持し、
+  その他は式を毎回実行する。SocialSkinはメニューのactと多くのcustom timerにこの形式を使う。
+- 同じ変換をロードVMとclean runtime VMで行い、closure / module stateを維持する。
+  destination timerは描画時にi64の開始時刻を取得し、クリックは最後の描画時刻で判定する。
+  任意timerを描画cacheの対象にしない。Luaの実ファイル書き込みやJava実行は追加しない。
+- 実在する11定義すべての型付きロードが成功した（ノーツ数1000、EX1500等のResult値を供給）。
+  素材なしでの早期returnではなく、配置済みのSocialSkinを使用した。
+- 検証: workspace check / all-targets Clippyが成功。workspace testは通常権限では
+  既存のjunction作成テストが拒否されたため、bmz-playerを必要な権限で再実行し
+  2743成功・46 ignoredを確認。他crateは通常実行で成功（bmz-render 974、bmz-skin 350等）。
+  新規の描画・クリック回帰テストも成功。GPU上の見た目と実操作は未確認。
