@@ -32,6 +32,41 @@ fn bar_sources() -> HashMap<String, SkinDocumentTexture> {
 }
 
 #[test]
+fn lr2_select_folder_graph_commands_reach_the_distribution_renderer() {
+    let document = bar_document(concat!(
+        "#SRC_BAR_GRAPH,0,0,0,60,22,2,22,2,200,11\n",
+        "#DST_BAR_GRAPH,9,0,5,0,80,10,0,255,255,255,255,1,0,0,0\n"
+    ));
+    let mut counts = [0; 11];
+    counts[0] = 1;
+    counts[10] = 3;
+    let snapshot = SelectSnapshot {
+        time: TimeUs(175_000),
+        selection_time: TimeUs(75_000),
+        rows: vec![SelectRowSnapshot {
+            is_folder: true,
+            kind: SelectRowKind::Folder,
+            folder_lamp_counts: counts,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let graphs = document
+        .select_render_items(&bar_sources(), &snapshot)
+        .into_iter()
+        .filter_map(|item| match item {
+            SkinRenderItem::Image { uv, rect, .. } if (uv.y - 0.6).abs() < 1e-6 => Some((uv, rect)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(graphs.len(), 2);
+    assert!((graphs[0].0.x - 0.21).abs() < 1e-6);
+    assert!((graphs[1].0.x - 0.11).abs() < 1e-6);
+    assert!((graphs[0].1.width - 60.0 / 640.0).abs() < 1e-6);
+    assert!((graphs[1].1.width - 20.0 / 640.0).abs() < 1e-6);
+}
+
+#[test]
 fn lr2_select_trophies_use_course_achievements_and_hide_unowned_rows() {
     let mut parts = String::new();
     for index in 0..3 {

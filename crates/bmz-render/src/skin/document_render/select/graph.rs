@@ -13,6 +13,9 @@ macro_rules! skin_document_render_select_graph_methods {
             let Some(source) = sources.get(&graph.src) else {
                 return Vec::new();
             };
+            if graph.lr2_distribution && !select_row_shows_folder_distribution(row) {
+                return Vec::new();
+            }
             if !destination_ops_match(destination, enabled_options, state)
                 || !eval_skin_draw_condition(&destination.draw, state)
             {
@@ -32,18 +35,38 @@ macro_rules! skin_document_render_select_graph_methods {
 
             let source_w = source.source_size.width.max(1.0);
             let source_h = source.source_size.height.max(1.0);
-            let cell_w = skin_grid_cell_size(graph.w, graph.divx.max(11));
-            let cell_h = skin_grid_cell_size(graph.h, graph.divy);
+            let columns =
+                if graph.lr2_distribution { graph.divx.max(1) } else { graph.divx.max(11) };
+            let rows = graph.divy.max(1);
+            let width =
+                if graph.lr2_distribution && graph.w == -1 { source_w as i32 } else { graph.w };
+            let height =
+                if graph.lr2_distribution && graph.h == -1 { source_h as i32 } else { graph.h };
+            let cell_w = skin_grid_cell_size(width, columns);
+            let cell_h = skin_grid_cell_size(height, rows);
             if cell_w <= 0 || cell_h <= 0 {
                 return Vec::new();
             }
-            let animation_rows = graph.divy.max(1);
-            let animation_row = if graph.cycle > 0 && animation_rows > 1 {
-                (elapsed.rem_euclid(graph.cycle) * animation_rows / graph.cycle)
-                    .min(animation_rows - 1)
+            let animation_frames = if graph.lr2_distribution {
+                i64::from(columns) * i64::from(rows) / 11
             } else {
-                0
+                i64::from(rows)
             };
+            if animation_frames == 0 {
+                return Vec::new();
+            }
+            let source_elapsed = if graph.lr2_distribution {
+                skin_timer_elapsed_ms(graph.timer.filter(|timer| *timer > 0), state)
+                    .unwrap_or(0)
+                    .max(0)
+            } else {
+                elapsed
+            };
+            let animation_frame = skin_source_image_animation_frame_index(
+                animation_frames,
+                graph.cycle,
+                source_elapsed,
+            );
             let tint = Color::rgba(
                 frame.r as f32 / 255.0,
                 frame.g as f32 / 255.0,
@@ -51,8 +74,15 @@ macro_rules! skin_document_render_select_graph_methods {
                 frame.a as f32 / 255.0,
             );
             let cell = |lamp_index: usize, rect: Rect| {
-                let source_x = graph.x + cell_w * lamp_index as i32;
-                let source_y = graph.y + cell_h * animation_row;
+                let index = animation_frame
+                    * if graph.lr2_distribution { 11 } else { i64::from(columns) }
+                    + lamp_index as i64;
+                let source_x = graph
+                    .x
+                    .saturating_add(cell_w.saturating_mul((index % i64::from(columns)) as i32));
+                let source_y = graph
+                    .y
+                    .saturating_add(cell_h.saturating_mul((index / i64::from(columns)) as i32));
                 SkinRenderItem::Image {
                     texture: source.texture,
                     rect,
@@ -63,11 +93,16 @@ macro_rules! skin_document_render_select_graph_methods {
                         height: cell_h as f32 / source_h,
                     },
                     tint,
-                    blend: BlendMode::Normal,
+                    blend: if graph.lr2_distribution {
+                        frame.blend(skin_blend_mode(destination.blend))
+                    } else {
+                        BlendMode::Normal
+                    },
                     scale: SkinImageScale::Stretch,
                     border: None,
                     source_size: Some(source.source_size),
-                    linear_filter: false,
+                    linear_filter: graph.lr2_distribution
+                        && frame.linear_filter(destination.filter != 0),
                 }
             };
 

@@ -95,10 +95,32 @@
 - 検証: fmt、workspace check / all-targets Clippy / testが成功。
   ログ: `.local/performance/litone5-drawing-trophy-*.log`。
 
+## 6. フォルダーのクリアランプ分布
+
+- `SRC/DST_BAR_GRAPH`のtype 0を既存のフォルダー分布描画へ接続する。
+  beatorajaの`LR2SelectSkinLoader`と`SkinDistributionGraph`の画像配列変換に合わせ、
+  SRC格子を行順に11セルずつアニメーションフレームへ分ける。
+  11列以外の格子も扱い、DSTのindexはbeatorajaと同じく単一グラフとして無視する。
+- `SkinGraphDef`に内部変換用`lr2Distribution`を追加する。SRCの正のtimerを使い、
+  OFF / 開始前は先頭フレームとする。0以下は未指定として画面の経過時間を使う。
+  DSTの移動・条件・合成・補間とは独立に扱う。
+  既存JSON / Luaの分布画像とダウンロードメーターの処理は維持する。
+- ランプ10→0の順・曲数比率で配置し、空フォルダーやダウンロード中を含む通常の曲バーには出さない。
+  type 1の28種類のランク分布は今回の対象外で、警告して以前のtype 0を流用しない。
+- 合成CSVの格子・時刻・DST、22列×2行の画像と2つの時刻、SRC timer OFF / 開始前 / 負のID、比率、
+  空フォルダー・通常曲をテストする。appの変換から描画までの接続も確認する。
+  LITONE5 Selectの2つのノーツ分布、5ラベル、3トロフィー、1ランプ分布が読み込まれ、
+  未対応命令の警告が無いことを検証する。
+- 検証: fmt、workspace check / all-targets Clippy / test、Windows debug buildが成功。
+  player 2,750件・render 978件・skin 365件が成功し、GPU等を要する既存のignoredテストは未実行。
+  実アセットの全9定義を再確認し、Selectの変換警告は0件だった（素材欠如によるskipなし）。
+  ログ: `.local/performance/litone5-drawing-final-{check,clippy,test,installed,build}.log`。
+
 ## 確認範囲と残る表示差
 
 - 全9定義の読み込み成功は、全描画命令の対応や見た目の一致を意味しない。
-  SelectのBAR_GRAPHは未対応命令の警告が残る。
+  今回調べた4系統は対応済みで、配置済みSelectの既定設定で読み込み警告が無い。
+  BAR_GRAPH type 1は未対応だが同スキンはtype 0を使う。
   Result / Course Resultのsource 21未定義や、Decideが参照する未配置の`Select/font/bar`も
   今回の読み込み停止とは別の課題。外部CSVや画像の書き換えは行っていない。
 - beatorajaの実画面との比較、GPU画面の見た目・操作、macOS / Linuxは未確認。

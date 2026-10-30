@@ -33,6 +33,7 @@ fn lr2_bar_part(kind: &str, index: i32) -> Option<JsonValue> {
         "RIVAL" => ("lr2rival", vec![index]),
         "LABEL" => ("label", vec![index]),
         "TROPHY" => ("trophy", vec![index]),
+        "GRAPH" => ("graph", vec![0]),
         "FLASH" => ("flash", vec![0]),
         _ => return None,
     };
@@ -74,10 +75,11 @@ impl CsvBuilder<'_> {
                 | "RIVAL"
                 | "LABEL"
                 | "TROPHY"
+                | "GRAPH"
         ) {
             return false;
         }
-        let index = values[1].clamp(0, 29);
+        let index = if kind == "GRAPH" { 0 } else { values[1].clamp(0, 29) };
         if (kind == "LABEL" && !(0..5).contains(&values[1]))
             || (kind == "TROPHY" && !(0..3).contains(&values[1]))
         {
@@ -116,6 +118,11 @@ impl CsvBuilder<'_> {
                         number["ref"] = json!(96);
                     }
                 }
+                "GRAPH" => {
+                    self.select.sources.remove(&(kind.to_string(), 0));
+                    self.select.destinations.remove(&(kind.to_string(), 0));
+                    self.add_select_distribution_graph(line);
+                }
                 _ => self.add_image(line),
             }
             if let Some(current) = self.current.take() {
@@ -123,7 +130,7 @@ impl CsvBuilder<'_> {
             }
         } else {
             self.select.marker = true;
-            if matches!(kind, "LABEL" | "TROPHY") {
+            if matches!(kind, "LABEL" | "TROPHY" | "GRAPH") {
                 for (position, size) in [(3, 5), (4, 6)] {
                     if values[size] < 0 {
                         values[position] = values[position].saturating_add(values[size]);
@@ -231,6 +238,27 @@ impl CsvBuilder<'_> {
             "flash": slots("FLASH", &[0]),
             "label": slots("LABEL", &[0, 1, 2, 3, 4]),
             "trophy": slots("TROPHY", &[0, 1, 2]),
+            "graph": slots("GRAPH", &[0]),
         })
+    }
+
+    fn add_select_distribution_graph(&mut self, line: &CsvLine) {
+        let values = parse_values(line);
+        if values[1] != 0 {
+            self.warn(format!("unsupported lr2 folder distribution type: {}", values[1]));
+            return;
+        }
+        let Some(region) = self.source_region(&values) else { return };
+        if i64::from(region.divx) * i64::from(region.divy) < 11 {
+            self.warn("lr2 folder distribution needs at least eleven source cells".to_string());
+            return;
+        }
+        let id = self.alloc_id("lr2-folder-graph");
+        self.graphs.push(json!({
+            "id":id,"src":region.src,"x":region.x,"y":region.y,"w":region.w,"h":region.h,
+            "divx":region.divx,"divy":region.divy,"timer":region.timer,"cycle":region.cycle,
+            "type":-1,"angle":0,"lr2Distribution":true,
+        }));
+        self.set_current(id);
     }
 }

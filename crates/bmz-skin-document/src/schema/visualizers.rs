@@ -2,6 +2,9 @@ use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SkinGraphDef {
+    /// LR2 BAR_GRAPH: eleven lamp cells per animation frame in source-grid order.
+    #[serde(default, rename = "lr2Distribution")]
+    pub lr2_distribution: bool,
     #[serde(default, deserialize_with = "deserialize_skin_id")]
     pub id: String,
     #[serde(default, deserialize_with = "deserialize_skin_id")]

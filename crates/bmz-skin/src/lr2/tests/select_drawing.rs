@@ -1,6 +1,54 @@
 use super::*;
 
 #[test]
+fn lr2_select_rank_distribution_does_not_reuse_a_clear_distribution() {
+    let root = unique_test_dir("lr2-select-rank-distribution");
+    let path = root.join("select.lr2skin");
+    fs::write(
+        &path,
+        concat!(
+            "#INFORMATION,5,test,test\n#RESOLUTION,640,480\n#IMAGE,atlas.png\n",
+            "#SRC_BAR_GRAPH,0,0,0,0,11,1,11,1,0,0\n",
+            "#SRC_BAR_GRAPH,1,0,0,0,28,1,28,1,0,0\n",
+            "#DST_BAR_GRAPH,0,0,0,0,100,10,0,255,255,255,255,1,0,0,0\n"
+        ),
+    )
+    .unwrap();
+    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    assert_eq!(loaded.warnings.len(), 1);
+    assert!(loaded.warnings[0].message.contains("distribution type: 1"));
+    assert_eq!(loaded.value["songlist"]["graph"][0]["id"], "lr2-missing-bar-part");
+}
+
+#[test]
+fn lr2_select_folder_graph_preserves_grid_timer_and_ignores_dst_index() {
+    let root = unique_test_dir("lr2-select-folder-graph");
+    let path = root.join("select.lr2skin");
+    fs::write(
+        &path,
+        concat!(
+            "#INFORMATION,5,test,test\n#RESOLUTION,640,480\n#IMAGE,atlas.png\n",
+            "#SRC_BAR_GRAPH,0,0,10,20,220,20,22,2,200,11\n",
+            "#DST_BAR_GRAPH,7,0,30,40,100,10,0,255,255,255,255,2,1,0,0\n"
+        ),
+    )
+    .unwrap();
+    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    let graph = &loaded.value["graph"][0];
+    assert_eq!(graph["lr2Distribution"], true);
+    assert_eq!(graph["divx"], 22);
+    assert_eq!(graph["divy"], 2);
+    assert_eq!(graph["timer"], 11);
+    assert_eq!(graph["cycle"], 200);
+    let destination = &loaded.value["songlist"]["graph"][0];
+    assert_eq!(destination["id"], graph["id"]);
+    assert_eq!(destination["lr2BarPart"]["part"], "graph");
+    assert_eq!(destination["lr2BarPart"]["indices"], json!([0]));
+    assert_eq!(destination["dst"][0]["y"], -50);
+}
+
+#[test]
 fn lr2_select_trophies_keep_slots_and_normalize_negative_extents() {
     let root = unique_test_dir("lr2-select-trophies");
     let path = root.join("select.lr2skin");
@@ -117,6 +165,9 @@ fn litone5_select_installed_drawing_definitions_load_when_available() {
     assert_eq!(loaded.document.judgegraph.len(), 2);
     assert_eq!(loaded.document.songlist.as_ref().unwrap().label.len(), 5);
     assert_eq!(loaded.document.songlist.as_ref().unwrap().trophy.len(), 3);
+    assert_eq!(loaded.document.graph.iter().filter(|graph| graph.lr2_distribution).count(), 1);
+    assert_eq!(loaded.document.songlist.as_ref().unwrap().graph.len(), 1);
+    assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
     assert!(!loaded.warnings.iter().any(|w| w.message.contains("BAR_TROPHY")));
     assert!(!loaded.warnings.iter().any(|w| w.message.contains("BAR_LABEL")));
     assert!(!loaded.warnings.iter().any(|w| w.message.contains("NOTECHART")));

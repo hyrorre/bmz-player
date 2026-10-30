@@ -1,6 +1,75 @@
 use super::*;
 
 #[test]
+fn lr2_folder_distribution_uses_source_clock_and_row_major_animation_frames() {
+    let mut document: SkinDocument = serde_json::from_value(serde_json::json!({
+        "type":5,"w":100,"h":100,
+        "graph":[{"id":"graph","src":"atlas","x":0,"y":0,"w":220,"h":20,"divx":22,"divy":2,"timer":11,"cycle":200,"lr2Distribution":true}],
+        "songlist":{"id":"bars","liston":[{"id":"body","dst":[{"x":0,"y":40,"w":100,"h":20}]}],"graph":[{"id":"graph","blend":2,"filter":1,"dst":[{"x":0,"y":0,"w":80,"h":10}]}]},
+        "destination":[{"id":"bars"}]
+    })).unwrap();
+    let sources = HashMap::from([(
+        "atlas".into(),
+        SkinDocumentTexture {
+            source_id: "atlas".into(),
+            texture: SkinTextureId(1),
+            source_size: SkinImageSize { width: 220.0, height: 20.0 },
+        },
+    )]);
+    let mut counts = [0; 11];
+    counts[0] = 1;
+    counts[10] = 3;
+    let mut snapshot = SelectSnapshot {
+        time: TimeUs(175_000),
+        selection_time: TimeUs(75_000),
+        rows: vec![SelectRowSnapshot {
+            is_folder: true,
+            kind: SelectRowKind::Folder,
+            folder_lamp_counts: counts,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    for (time, selection_time, x, y) in
+        [(175_000, 75_000, 21.0 / 22.0, 0.0), (225_000, 125_000, 10.0 / 22.0, 0.5)]
+    {
+        snapshot.time = TimeUs(time);
+        snapshot.selection_time = TimeUs(selection_time);
+        let items = document.select_render_items(&sources, &snapshot);
+        assert_eq!(items.len(), 2, "{items:?}");
+        let SkinRenderItem::Image { uv, rect, linear_filter, .. } = &items[0] else {
+            panic!("{:?}", items[0])
+        };
+        assert!(approx_eq(uv.x, x) && approx_eq(uv.y, y), "{uv:?}");
+        assert!(approx_eq(rect.width, 0.6));
+        assert!(*linear_filter);
+        let SkinRenderItem::Image { rect, .. } = &items[1] else { panic!() };
+        assert!(approx_eq(rect.width, 0.2));
+    }
+    document.graph[0].timer = Some(999999);
+    let items = document.select_render_items(&sources, &snapshot);
+    let SkinRenderItem::Image { uv, .. } = &items[0] else { panic!() };
+    assert!(approx_eq(uv.x, 10.0 / 22.0) && approx_eq(uv.y, 0.0));
+    document.graph[0].timer = Some(-1);
+    snapshot.time = TimeUs(275_000);
+    let items = document.select_render_items(&sources, &snapshot);
+    let SkinRenderItem::Image { uv, .. } = &items[0] else { panic!() };
+    assert!(approx_eq(uv.x, 21.0 / 22.0) && approx_eq(uv.y, 0.0));
+    document.graph[0].timer = Some(11);
+    snapshot.selection_time = TimeUs(-1_000);
+    let items = document.select_render_items(&sources, &snapshot);
+    let SkinRenderItem::Image { uv, .. } = &items[0] else { panic!() };
+    assert!(approx_eq(uv.x, 10.0 / 22.0) && approx_eq(uv.y, 0.0));
+    snapshot.rows[0].folder_lamp_counts = [0; 11];
+    assert!(document.select_render_items(&sources, &snapshot).is_empty());
+    snapshot.rows[0].is_folder = false;
+    snapshot.rows[0].kind = SelectRowKind::Song;
+    snapshot.rows[0].download_progress =
+        Some(crate::scene::SelectRowDownloadProgress { fraction: 0.5, lamp: 1 });
+    assert!(document.select_render_items(&sources, &snapshot).is_empty());
+}
+
+#[test]
 fn select_trophy_follows_course_definition_priority() {
     let mut row = SelectRowSnapshot {
         course_trophy_names: vec!["goldmedal".into(), "bronzemedal".into()],
