@@ -24,3 +24,5 @@ mod lr2_slider;
 mod mode_filter_index;
 #[path = "select/scroll.rs"]
 mod scroll;
+#[path = "select/session_mode.rs"]
+mod session_mode;

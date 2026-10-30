@@ -123,8 +123,8 @@ pub const SKIN_OPTION_BMZ_IR_SCOPE_GLOBAL_SUPPORTED: i32 = 1967;
 pub const SKIN_OPTION_BMZ_IR_SCOPE_RIVAL_SUPPORTED: i32 = 1968;
 /// BMZ extension: number of players in the displayed IR scope.
 pub const SKIN_REF_BMZ_IR_SCOPE_TOTAL: i32 = 1969;
-/// BMZ extension: select session mode (`0=NORMAL`, `1=AUTOPLAY`,
-/// `2=AUTO BATTLE`, `3=BATTLE`, `4=PRACTICE`).
+/// BMZ extension: session mode (`0=NORMAL`, `1=PRACTICE`, `2=AUTOPLAY`,
+/// `3=AUTO BATTLE`, `4=G-BATTLE`).
 pub const SKIN_REF_BMZ_SELECT_SESSION_MODE: i32 = 1970;
 /// Deprecated BMZ extension: the removed grade difference display setting.
 ///
@@ -323,6 +323,8 @@ pub const SKIN_EVENT_RESULT_PANEL_GRAPH: i32 = -10_002;
 pub const SKIN_EVENT_IR_SCOPE_GLOBAL: i32 = -10_003;
 pub const SKIN_EVENT_IR_SCOPE_RIVAL: i32 = -10_004;
 pub const SKIN_EVENT_IR_SCOPE_TOGGLE: i32 = -10_005;
+/// Cycle Select session mode by argument sign without starting playback (zero is a no-op).
+pub const SKIN_EVENT_SELECT_SESSION_MODE: i32 = -10_006;
 /// Backward-compatible Rust aliases for the initial Result-only names.
 pub const SKIN_EVENT_RESULT_IR_SCOPE_GLOBAL: i32 = SKIN_EVENT_IR_SCOPE_GLOBAL;
 pub const SKIN_EVENT_RESULT_IR_SCOPE_RIVAL: i32 = SKIN_EVENT_IR_SCOPE_RIVAL;

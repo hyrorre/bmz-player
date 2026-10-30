@@ -304,6 +304,7 @@ fn skin_image_index_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         SKIN_REF_BMZ_SELECT_MODE_INDEX if state.select_screen => {
             Some(state.select_mode_extended_index as i64)
         }
+        SKIN_REF_BMZ_SELECT_SESSION_MODE => skin_state_number(ref_id, state),
         12 if state.select_screen => Some(state.select_sort_index as i64),
         221 if state.select_screen => Some(state.select_difficulty_filter_index as i64),
         // beatoraja's `gaugetype_1p` image index is state-dependent: MusicSelector

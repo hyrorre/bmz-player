@@ -14,3 +14,5 @@ mod cases_05;
 mod lr2_buttons;
 #[path = "select/navigation.rs"]
 mod navigation;
+#[path = "select/session_mode.rs"]
+mod session_mode;

@@ -576,6 +576,23 @@ mod tests {
     }
 
     #[test]
+    fn session_mode_cycles_backwards_in_select_order() {
+        let modes = [
+            SessionMode::Normal,
+            SessionMode::Practice,
+            SessionMode::Autoplay,
+            SessionMode::AutoplayBattle,
+            SessionMode::GBattle,
+        ];
+        assert_eq!(SessionMode::VALUES, modes);
+        for (index, mode) in modes.into_iter().enumerate() {
+            assert_eq!(mode.cycle(), modes[(index + 1) % 5]);
+            assert_eq!(mode.cycle_prev(), modes[(index + 4) % 5]);
+            assert_eq!(mode.cycle().cycle_prev(), mode);
+        }
+    }
+
+    #[test]
     fn legacy_ghost_battle_profile_value_migrates_to_normal() {
         #[derive(serde::Deserialize)]
         struct LegacyProfile {
@@ -598,6 +615,16 @@ impl SessionMode {
             Self::Autoplay => Self::AutoplayBattle,
             Self::AutoplayBattle => Self::GBattle,
             Self::GBattle => Self::Normal,
+        }
+    }
+
+    pub fn cycle_prev(self) -> Self {
+        match self {
+            Self::Normal => Self::GBattle,
+            Self::Practice => Self::Normal,
+            Self::Autoplay => Self::Practice,
+            Self::AutoplayBattle => Self::Autoplay,
+            Self::GBattle => Self::AutoplayBattle,
         }
     }
 

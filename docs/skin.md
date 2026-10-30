@@ -1421,10 +1421,79 @@ beatoraja互換のassist `ref` / `event_index` `73`はbeatorajaと同じ2値を�
 既存skinの2行option panelを崩しません。
 
 BMZ対応skinで5種類を区別する場合は、BMZ拡張ref `1970`を使います。
-`number(1970)` / `event_index(1970)`は`0=NORMAL`, `1=PRACTICE`, `2=AUTOPLAY`,
-`3=AUTO BATTLE`, `4=G-BATTLE`を返します。BMZデフォルトスキンのplay mode panelも
-このrefを使用します。Selectではこれから開始するモード、Decide / Play / Resultでは
-試行開始時に固定したモードを返します。
+`number(1970)` / `event_index(1970)` / `image.ref=1970` / `imageset.ref=1970`は
+次の同じインデックスを返します。BMZデフォルトスキンのplay mode panelもこのrefを使用します。
+選曲画面ではこれから開始するモードを返します。
+決定画面 / プレイ画面 / リザルト画面では試行開始時に固定したモードを返します。
+
+| 値 | SESSION MODE |
+| ---: | --- |
+| 0 | NORMAL |
+| 1 | PRACTICE |
+| 2 | AUTOPLAY |
+| 3 | AUTO BATTLE（画面上の表記はAUTOPLAY BATTLE） |
+| 4 | G-BATTLE |
+
+縦に5分割したスプライトシートは、`image`に`divy=5, len=5, ref=1970`を指定すると
+現在のモードに対応する行を表示します。`imageset`では`ref=1970`と、上表の順序の5つの
+画像IDを`images`へ指定します。JSON / Luaで同じ値を使えます。
+
+選曲画面の`act=-10006`は、引数が正なら次、負なら前のSESSION MODEへ切り替えます。
+引数0では変更しません。NORMAL → PRACTICE → AUTOPLAY → AUTO BATTLE → G-BATTLE → NORMAL
+の順に循環し、逆方向も循環します。画像を切り替える`ref`と操作する`act`は別に指定します。
+このイベントはモードだけを変更し、曲の決定や再生開始は行いません。
+キーボードと同じ処理で選曲状態とプロファイルの`session_mode` / `auto_play`を更新します。
+モードの変更は次の描画に反映します。
+設定の保存タイミングと、モード設定後に再生を開始する既存の`act=15/16/315`は変わりません。
+
+`image` / `imageset`の`click`は既存のbeatoraja互換ルールに従います。
+
+| click | 次へ（引数+1） | 前へ（引数-1） |
+| ---: | --- | --- |
+| 0 | 左クリック | 右クリック |
+| 1 | 右クリック | 左クリック |
+| 2 | 画像の右半分 | 画像の左半分 |
+| 3 | 画像の上半分 | 画像の下半分 |
+| 4 | クリック無効 | クリック無効 |
+
+`click=2/3`では、左右どちらのマウスボタンでもクリックした領域で方向を決めます。
+`click=3`はbeatorajaおよび既存BMZと同じく、上半分が正方向です。
+
+Luaの`image`定義例です。描画用の`source` / `destination`は通常どおり定義します。
+
+```lua
+{
+    id = "session_mode", src = "src_session_mode",
+    x = 0, y = 0, w = 210, h = 250,
+    divy = 5, len = 5,
+    ref = 1970, act = -10006, click = 0
+}
+```
+
+この例は左クリックで次、右クリックで前へ進みます。`click=2`に変えると画像の左半分で前、
+右半分で次へ進み、どちらの方法でも現在のモードの画像を表示します。
+
+`act=1970`はBMZ組み込みイベントとして採用しません。beatorajaのLua `customEvents`が使う
+`1000..1999`と衝突するためです。`ref=1970`は状態参照用であり、同じ番号のイベントを
+BMZが横取りすることはありません。Luaカスタムイベントとfunctionの`act`の実行順も維持します。
+
+### BMZの負数イベント
+
+以下の公開イベントはJSON / Lua skinの`act`へ直接指定できます。
+
+| ID | 区分 | 用途 |
+| ---: | --- | --- |
+| -10003 | 公開 | 対応する選曲 / リザルトスキンのIR scopeをRANKINGへ変更 |
+| -10004 | 公開 | 同IR scopeをRIVALへ変更 |
+| -10005 | 公開 | 同IR scopeを切り替え |
+| -10006 | 公開 | 選曲画面のSESSION MODEを引数の符号で前後へ切り替え |
+| -10100 | 公開 | 表示上の日次集計をリセット（score historyは削除しない） |
+| -10001 / -10002 | 内部専用 | Lua Result skinの`Expand_op`操作をIR / graph panel切り替えへ変換 |
+| -20000から減少 | 内部専用 | Lua変換時に生成するruntime flag操作 |
+| -1000000..-1999999 | 内部専用 | Luaのfunction / string `act`を永続VMのcallbackへ接続 |
+
+内部専用IDはBMZが生成するため、skinへ直接ハードコードしないでください。
+公開イベントの`-10006`はLua callback用IDと重ならず、既存の負数イベントも維持します。
 
 ### Practice Configuration Position
 
