@@ -253,6 +253,9 @@ pub struct GameSession {
     pub guide_se_enabled: bool,
     /// 未処理の通常ノートを判定ラインへ滞留させる表示設定。
     pub note_retention: bool,
+    /// プレイスキンが `DST_NOTE2` を持つ。beatoraja と同じく、キーモードによらず
+    /// 見逃しノーツを判定ラインに留めてから落として描く。
+    pub missed_note_fall: bool,
     /// Floating hispeed の曲開始前基準 BPM。曲開始後は現在 BPM で再計算する。
     pub hsfix_base_bpm: f64,
     /// HS CONFIG = LR2。Classic倍率をHS-FIXの基準BPMに対するBPM150基準の値として扱う。

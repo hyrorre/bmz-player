@@ -225,6 +225,7 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
         constant_fade_ms: 100,
         guide_se_enabled: false,
         note_retention: false,
+        missed_note_fall: false,
         hsfix_base_bpm: 120.0,
         lr2_hispeed: false,
         lift: 0.0,

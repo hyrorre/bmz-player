@@ -625,6 +625,32 @@ fn build_render_snapshot_keeps_k9_missed_tap_on_judge_line_then_falls() {
 }
 
 #[test]
+fn build_render_snapshot_keeps_k7_missed_tap_only_for_dst2_skins() {
+    // PeacefulPlay の 7 to 9 版のように、7KEYS でも DST_NOTE2 を持つ skin がある。
+    let mut chart = chart();
+    chart.lane_notes[Lane::Key1.index()] = vec![tap_note(1, Lane::Key1, 0, 0)];
+    let profile = ProfileConfig::new_default("default", "Default", 1);
+    let mut session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+    session.hispeed = 1.0;
+    assert_eq!(session.chart.metadata.key_mode, KeyMode::K7);
+    let delay_us = session.judge.window_set.note.empty_poor_slow_us;
+    assert!(delay_us > 100_000);
+
+    let without_dst2 = build_render_snapshot(&session, TimeUs(100_000), &[], None);
+    assert!(without_dst2.visible_notes[Lane::Key1.index()].is_empty());
+
+    session.missed_note_fall = true;
+    let waiting = build_render_snapshot(&session, TimeUs(100_000), &[], None);
+    assert_eq!(waiting.visible_notes[Lane::Key1.index()][0].pms_miss_fall, Some(0.0));
+
+    session.judge.judged_notes.insert(NoteId(1), Judge::Poor);
+    let falling = build_render_snapshot(&session, TimeUs(delay_us + 500_000), &[], None);
+    let notes = &falling.visible_notes[Lane::Key1.index()];
+    assert_eq!(notes.len(), 1);
+    assert!(approx_eq(notes[0].pms_miss_fall.unwrap(), 0.25));
+}
+
+#[test]
 fn build_render_snapshot_leaves_k9_hit_notes_to_the_skin() {
     let mut chart = chart();
     chart.metadata.key_mode = KeyMode::K9;

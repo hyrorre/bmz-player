@@ -71,7 +71,9 @@ fn populate_visible_notes(
     cursor_tick: f64,
     tick_upper_bound: Option<f64>,
 ) {
-    let note_lower_time = (snapshot.key_mode != KeyMode::K9).then_some(lane_render_now);
+    // 9KEYS は既定 skin も見逃しノーツを落とす。それ以外は skin の DST_NOTE2 がある場合だけ残す。
+    let keep_missed_notes = snapshot.key_mode == KeyMode::K9 || session.missed_note_fall;
+    let note_lower_time = (!keep_missed_notes).then_some(lane_render_now);
     for lane in Lane::ALL {
         let retention_lower_index =
             session.note_retention.then_some(session.judge.lanes[lane.index()].next_note_index);
@@ -86,7 +88,7 @@ fn populate_visible_notes(
             };
             let processed_judge = session.judge.judged_notes.get(&note.id).copied();
             // beatoraja LaneRenderer の PMS 見逃し POOR 描画と同じく、state 0 と BAD/POOR を対象にする。
-            let pms_missed = snapshot.key_mode == KeyMode::K9
+            let pms_missed = keep_missed_notes
                 && note.kind == NoteKind::Tap
                 && matches!(processed_judge, None | Some(Judge::Bad | Judge::Poor))
                 && note.time < lane_render_now;

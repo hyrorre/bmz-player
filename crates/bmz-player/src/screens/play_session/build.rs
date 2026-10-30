@@ -626,6 +626,8 @@ pub fn build_game_session_with_input_backend(
         constant_fade_ms: mode_config.constant_fade_ms,
         guide_se_enabled: profile.play.guide_se,
         note_retention: profile.play.note_retention,
+        // プレイスキンの確定後に app 側で設定する。
+        missed_note_fall: false,
         hsfix_base_bpm,
         lr2_hispeed: !speed_locked && mode_config.base_hispeed == BaseHispeedConfig::Lr2,
         lift,

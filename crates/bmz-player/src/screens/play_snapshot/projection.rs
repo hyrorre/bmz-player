@@ -19,6 +19,7 @@ pub(super) struct PlayfieldView<'a> {
     pub hispeed: f32,
     pub lift: f32,
     pub note_retention: bool,
+    pub missed_note_fall: bool,
     pub constant_enabled: bool,
     pub constant_fade_ms: i32,
     pub target_green_number: u32,
@@ -38,6 +39,7 @@ impl<'a> From<&'a GameSession> for PlayfieldView<'a> {
             hispeed: session.hispeed,
             lift: session.lift,
             note_retention: session.note_retention,
+            missed_note_fall: session.missed_note_fall,
             constant_enabled: session.constant_enabled,
             constant_fade_ms: session.constant_fade_ms,
             target_green_number: session.target_green_number,
@@ -58,6 +60,7 @@ pub(crate) struct PlayfieldProjection {
     hispeed: f32,
     lift: f32,
     note_retention: bool,
+    missed_note_fall: bool,
     constant_enabled: bool,
     constant_fade_ms: i32,
     target_green_number: u32,
@@ -84,6 +87,7 @@ impl PlayfieldProjection {
                 hispeed: session.hispeed,
                 lift: session.lift,
                 note_retention: session.note_retention,
+                missed_note_fall: session.missed_note_fall,
                 constant_enabled: session.constant_enabled,
                 constant_fade_ms: session.constant_fade_ms,
                 target_green_number: session.target_green_number,
@@ -108,6 +112,7 @@ impl PlayfieldProjection {
         self.hispeed = session.hispeed;
         self.lift = session.lift;
         self.note_retention = session.note_retention;
+        self.missed_note_fall = session.missed_note_fall;
         self.constant_enabled = session.constant_enabled;
         self.constant_fade_ms = session.constant_fade_ms;
         self.target_green_number = session.target_green_number;
@@ -144,6 +149,7 @@ impl PlayfieldProjection {
             hispeed: self.hispeed,
             lift: self.lift,
             note_retention: self.note_retention,
+            missed_note_fall: self.missed_note_fall,
             constant_enabled: self.constant_enabled,
             constant_fade_ms: self.constant_fade_ms,
             target_green_number: self.target_green_number,

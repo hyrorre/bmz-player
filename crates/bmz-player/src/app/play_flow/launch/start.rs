@@ -157,6 +157,14 @@ impl WinitApp {
         TimeUs(-i64::from(playstart_ms.max(0)) * 1_000)
     }
 
+    /// beatoraja は `DST_NOTE2` (`note.dst2`) があるプレイスキンで見逃しノーツを落として描く。
+    pub(super) fn play_skin_has_missed_note_target(&self) -> bool {
+        self.renderer
+            .play_skin_document()
+            .and_then(|document| document.note.as_ref())
+            .is_some_and(|note| note.dst2 != i32::MIN)
+    }
+
     pub(super) fn play_skin_ready_delay(&self) -> Duration {
         let ready_delay_ms = self.renderer.play_skin_document().map_or(0, |document| {
             document.loadstart.max(0).saturating_add(document.loadend.max(0))
@@ -488,7 +496,11 @@ impl WinitApp {
             });
         }
         let changing = self.play_lane_value_changing();
-        active_play.running.gameplay.edit(move |session| session.lane_cover_changing = changing);
+        let missed_note_fall = self.play_skin_has_missed_note_target();
+        active_play.running.gameplay.edit(move |session| {
+            session.lane_cover_changing = changing;
+            session.missed_note_fall = missed_note_fall;
+        });
         let active_bga_assets = &active_play.running.session.chart.bga_assets;
         let preload_matches_active_chart =
             self.play.bga_preload.matches_chart(chart_id, active_bga_assets);

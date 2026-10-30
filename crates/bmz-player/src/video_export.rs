@@ -37,7 +37,7 @@ pub fn run(options: VideoExportOptions, paths: &AppPaths, profile_id: Option<&st
     );
     let ffmpeg_version = encoder::preflight(&options)?;
     crate::stdio::stderr_line(format_args!("Preparing offline Play export..."));
-    let prepared = prepare::prepare(&options, paths, profile_id)?;
+    let mut prepared = prepare::prepare(&options, paths, profile_id)?;
     let mut renderer = Renderer::default();
     renderer.attach_offscreen(SurfaceSize { width: options.width, height: options.height })?;
     let manifest =
@@ -92,6 +92,11 @@ pub fn run(options: VideoExportOptions, paths: &AppPaths, profile_id: Option<&st
     let timing =
         media.presentation_timing(simulation::SceneTiming::from_document(&decoded.document));
     crate::skin_loader::install_decoded_skin(&mut renderer, decoded, manifest)?;
+    // 実プレイと同じく、DST_NOTE2 を持つプレイスキンでは見逃しノーツを落として描く。
+    prepared.play.session.missed_note_fall = renderer
+        .play_skin_document()
+        .and_then(|document| document.note.as_ref())
+        .is_some_and(|note| note.dst2 != i32::MIN);
     let fadeout_ms = renderer
         .play_skin_document()
         .map_or(0, |d| d.fadeout)
