@@ -1,7 +1,7 @@
 <script setup lang="ts">
 const { t } = useI18n()
 const { user } = useUserSession()
-const { account, isAdmin } = useIrAccount()
+const { account, failed, isAdmin } = useIrAccount()
 const tab = ref<'users' | 'charts' | 'audit'>('users')
 
 const tabItems = computed(() => [
@@ -29,6 +29,7 @@ useSeoMeta({ title: () => t('admin.title'), robots: 'noindex, nofollow' })
         icon="i-lucide-shield-alert"
         :description="t('admin.forbidden')"
       />
+      <UAlert v-else-if="!account && failed" color="error" :description="t('admin.loadFailed')" />
       <p v-else-if="!account" class="text-sm text-muted">{{ t('common.loading') }}</p>
       <template v-else>
         <UTabs v-model="tab" :items="tabItems" :content="false" class="mb-6" />
