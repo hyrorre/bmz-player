@@ -322,6 +322,13 @@ impl<'a> CsvBuilder<'a> {
             let file_path = file.path.clone();
             let file_default = file.default.clone();
             self.file_dependencies.insert(file_name.clone());
+            let selected = self.files.get(&file_name).filter(|selected| !selected.is_empty());
+            if file_path.contains('|')
+                && selected.map_or(file_default.as_str(), String::as_str) == "Random"
+                && let Some(selected_path) = self.random_skin_file_for_definition(&file_path)
+            {
+                return substitute_wildcard(&normalized, &file_path, &selected_path);
+            }
             if let Some(selected) =
                 self.files.get(&file_name).filter(|selected| !selected.is_empty())
                 && let Some(selected_path) =
@@ -396,7 +403,7 @@ impl<'a> CsvBuilder<'a> {
         } else {
             normalize_selected_skin_file(&selected)?
         };
-        if self.skin_file_dir.join(&selected).is_file() {
+        if self.skin_file_dir.join(&selected).exists() {
             return Some(selected);
         }
         if selected.contains('/') {
@@ -406,7 +413,45 @@ impl<'a> CsvBuilder<'a> {
         let prefix = &definition[..star];
         let slash = prefix.rfind('/').map(|index| index + 1).unwrap_or(0);
         let candidate = format!("{}{selected}", &prefix[..slash]);
-        self.skin_file_dir.join(&candidate).is_file().then_some(candidate)
+        self.skin_file_dir.join(&candidate).exists().then_some(candidate)
+    }
+
+    fn random_skin_file_for_definition(&mut self, definition: &str) -> Option<String> {
+        if let Some(selected) = self.custom_file_choices.get(definition) {
+            return Some(selected.clone());
+        }
+        let pattern = strip_lr2_asset_tag(definition);
+        let (prefix, suffix) = pattern.split_once('*')?;
+        if suffix.contains('*') || suffix.contains('/') {
+            return None;
+        }
+        let slash = prefix.rfind('/').map_or(0, |index| index + 1);
+        let (directory, prefix) = prefix.split_at(slash);
+        let mut candidates = fs::read_dir(self.skin_file_dir.join(directory))
+            .ok()?
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name().into_string().ok()?;
+                (name.len() >= prefix.len() + suffix.len()
+                    && name.starts_with(prefix)
+                    && name.ends_with(suffix))
+                .then(|| format!("{directory}{name}"))
+            })
+            .collect::<Vec<_>>();
+        candidates.sort();
+        if candidates.is_empty() {
+            return None;
+        }
+        let index = match crate::random_file_index(candidates.len()) {
+            Ok(index) => index,
+            Err(error) => {
+                self.warn(format!("lr2 customfile randomness: {error}"));
+                return None;
+            }
+        };
+        let selected = candidates.swap_remove(index);
+        self.custom_file_choices.insert(definition.to_string(), selected.clone());
+        Some(selected)
     }
 
     pub(super) fn relative_source_path(&self, normalized: &str) -> String {

@@ -531,6 +531,11 @@ pub(super) fn normalize_selected_skin_file(selected: &str) -> Option<String> {
 }
 
 pub(super) fn same_wildcard_prefix(a: &str, b: &str) -> bool {
+    // Tags distinguish CUSTOMFILE entries sharing one directory (e.g. 1P/2P).
+    // beatoraja matches the complete definition before removing its tag.
+    if a.contains('|') || b.contains('|') {
+        return b.starts_with(a);
+    }
     let Some((a_prefix, _)) = a.split_once('*') else {
         return false;
     };
@@ -541,6 +546,7 @@ pub(super) fn same_wildcard_prefix(a: &str, b: &str) -> bool {
 }
 
 pub(super) fn substitute_wildcard(asset_path: &str, definition: &str, selected: &str) -> String {
+    let asset_path = strip_lr2_asset_tag(asset_path);
     let Some((asset_prefix, asset_suffix)) = asset_path.split_once('*') else {
         return selected.replace('\\', "/");
     };
@@ -551,6 +557,7 @@ pub(super) fn substitute_wildcard(asset_path: &str, definition: &str, selected: 
 }
 
 pub(super) fn selected_wildcard_value(definition: &str, selected: &str) -> Option<String> {
+    let definition = strip_lr2_asset_tag(definition);
     let (def_prefix, def_suffix) = definition.split_once('*')?;
     let selected = selected.replace('\\', "/");
     let stripped = selected.strip_prefix(def_prefix)?;
@@ -563,6 +570,7 @@ pub(super) fn substitute_wildcard_default(
     definition: &str,
     default: &str,
 ) -> String {
+    let asset_path = strip_lr2_asset_tag(asset_path);
     let Some((asset_prefix, asset_suffix)) = asset_path.split_once('*') else {
         return asset_path.to_string();
     };
@@ -570,6 +578,14 @@ pub(super) fn substitute_wildcard_default(
         return asset_path.to_string();
     }
     format!("{asset_prefix}{default}{asset_suffix}")
+}
+
+pub(super) fn strip_lr2_asset_tag(path: &str) -> String {
+    let Some(first) = path.find('|') else {
+        return path.to_string();
+    };
+    let last = path.rfind('|').unwrap();
+    format!("{}{}", &path[..first], &path[last + 1..])
 }
 
 pub(super) fn parse_values(line: &CsvLine) -> [i32; 22] {

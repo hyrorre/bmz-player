@@ -59,6 +59,7 @@ impl<'a> CsvBuilder<'a> {
             file_dependencies: BTreeSet::new(),
             loaded_file_dependencies: BTreeMap::new(),
             include_choices: HashMap::new(),
+            custom_file_choices: HashMap::new(),
         }
     }
 

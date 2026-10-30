@@ -218,6 +218,7 @@ struct CsvBuilder<'a> {
     file_dependencies: BTreeSet<String>,
     loaded_file_dependencies: BTreeMap<PathBuf, SkinLoadedFileDependency>,
     include_choices: HashMap<PathBuf, PathBuf>,
+    custom_file_choices: HashMap<String, String>,
 }
 
 #[derive(Default)]
@@ -335,7 +336,8 @@ pub(super) fn load_lr2_csv_skin_value_with_inherited_assets(
     dependencies.loaded_files.extend(builder.loaded_file_dependencies.clone());
     // A fresh load must draw a new random include. Asset caches can still reuse
     // the decoded images, but the constructed document is attempt-specific.
-    dependencies.opaque |= !builder.include_choices.is_empty();
+    dependencies.opaque |=
+        !builder.include_choices.is_empty() || !builder.custom_file_choices.is_empty();
     let warnings = builder.warnings.clone();
     let internal_enabled_options = builder.internal_enabled_options();
     tracing::debug!(path = %path.display(), "lr2 skin document finalization begin");

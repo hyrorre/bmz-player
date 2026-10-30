@@ -91,6 +91,8 @@ fn lr2_added_scene_assets_decode_through_app_when_available() {
         ("WMIX_HD/select/select.lr2skin", SkinKind::Select),
         ("Seraphic/Select/[+]select.lr2skin", SkinKind::Select),
         ("ECBE/Select/select.lr2skin", SkinKind::Select),
+        ("LITONE5/Select/select.lr2skin", SkinKind::Select),
+        ("LITONE5/Play/AC9.lr2skin", SkinKind::Play),
         ("LR2/Result/result.lr2skin", SkinKind::Result),
         ("WMIX_HD/result/WMIX_RESULT.lr2skin", SkinKind::Result),
         ("WMIX_HD/courseresult/courseresult.lr2skin", SkinKind::Result),
