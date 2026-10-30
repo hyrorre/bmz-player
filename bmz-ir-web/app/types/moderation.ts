@@ -136,3 +136,9 @@ export interface AdminAuditLog {
   reason: string
   metadata: Record<string, unknown>
 }
+
+/** ユーザー詳細の「スコアを送った譜面」の行。 */
+export interface AdminUserChartItem extends AdminChartListItem {
+  user_score_count: number
+  last_played_at: string
+}
