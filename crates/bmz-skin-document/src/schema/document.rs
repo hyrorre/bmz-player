@@ -129,6 +129,9 @@ pub struct SkinDocument {
     /// Lua `customTimers` のうち、既存タイマー開始時刻へ固定 delay を加える定義。
     #[serde(default, rename = "fixedDelayTimer")]
     pub fixed_delay_timers: Vec<SkinFixedDelayTimerDef>,
+    /// キーロガーの表示列と key-on timer の対応。空ならキーモードのレーン順を使う。
+    #[serde(default, rename = "keyloggerLane")]
+    pub keylogger_lanes: Vec<SkinKeyloggerLaneDef>,
     /// Lua skin callback をロード時に変換した、初期値を持つ内部フラグ。
     #[serde(default, rename = "runtimeFlag")]
     pub runtime_flags: Vec<SkinRuntimeFlagDef>,

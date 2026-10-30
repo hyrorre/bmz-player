@@ -408,6 +408,15 @@ pub struct SkinFixedDelayTimerDef {
     pub delay_ms: i32,
 }
 
+/// PeacefulPlay 互換のキーロガーで、表示列 (1 始まり) が読む key-on timer。
+/// Lua の `keylogger-button-on-<lane>` の draw callback から推論する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct SkinKeyloggerLaneDef {
+    pub lane: usize,
+    #[serde(rename = "keyonTimer")]
+    pub keyon_timer: i32,
+}
+
 /// 描画ランタイムで保持する bool フラグの初期値。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SkinRuntimeFlagDef {

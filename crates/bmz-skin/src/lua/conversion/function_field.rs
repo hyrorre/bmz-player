@@ -5,6 +5,7 @@ pub(super) struct ObjectFunctionMetadata {
     gauge_lead_glow: Option<(String, bool, usize)>,
     keylogger: Option<KeyloggerMetadata>,
     keylogger_chattering_lane: Option<usize>,
+    keylogger_button_lane: Option<usize>,
 }
 
 struct KeyloggerMetadata {
@@ -54,7 +55,17 @@ impl ObjectFunctionMetadata {
         );
         let keylogger_chattering_lane =
             object_id.as_deref().and_then(parse_keylogger_chattering_destination_id);
-        Self { object_id, gauge_lead_glow, keylogger, keylogger_chattering_lane }
+        let keylogger_button_lane = object_id
+            .as_deref()
+            .filter(|_| path.contains(".destination["))
+            .and_then(parse_keylogger_button_destination_id);
+        Self {
+            object_id,
+            gauge_lead_glow,
+            keylogger,
+            keylogger_chattering_lane,
+            keylogger_button_lane,
+        }
     }
 }
 
@@ -147,6 +158,9 @@ pub(super) fn handle_function_field(
             Ok(infer_condition_field(function, object, main_state_probe))
         }
         "draw" => {
+            if let Some(lane) = metadata.keylogger_button_lane {
+                record_keylogger_lane_keyon_timer(function, lane, main_state_probe);
+            }
             infer_draw_field(lua, function, path, metadata, object, main_state_probe)?;
             Ok(true)
         }
@@ -154,6 +168,25 @@ pub(super) fn handle_function_field(
             infer_timer_field(lua, function, path, metadata, object, warnings, main_state_probe)
         }
         _ => Ok(false),
+    }
+}
+
+/// キーロガーのボタン点灯が読む key-on timer を、表示列の入力レーンとして記録する。
+/// PeacefulPlay の 7 to 9 版はレーン割り当てに応じて表示列と入力レーンの対応が変わる。
+fn record_keylogger_lane_keyon_timer(
+    function: &Function,
+    lane: usize,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) {
+    let Some(timers) = collect_timer_refs(function, main_state_probe) else {
+        return;
+    };
+    let keyon_timers =
+        timers.into_iter().filter(|timer| (100..=117).contains(timer)).collect::<Vec<_>>();
+    if let [timer] = keyon_timers.as_slice()
+        && let Ok(mut probe) = main_state_probe.lock()
+    {
+        probe.keylogger_lane_keyon_timers.insert(lane, *timer);
     }
 }
 

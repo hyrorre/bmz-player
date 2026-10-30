@@ -44,7 +44,9 @@ pub(in crate::skin) struct KeyLoggerRuntime {
 
 #[derive(Debug, Clone, Copy)]
 struct PendingKeyLoggerPress {
+    /// キーロガーの列 (0 始まり)。
     lane: usize,
+    input_lane: Lane,
     time_us: i64,
     slot: usize,
     classification: Option<KeyLoggerClassification>,
@@ -54,6 +56,24 @@ struct PendingKeyLoggerPress {
 struct KeyLoggerClassification {
     judge: usize,
     side: Option<usize>,
+}
+
+/// 入力レーンを書き込むキーロガーの列 (0 始まり)。skin が表示列ごとの key-on timer を
+/// 持てばその対応に従い (PeacefulPlay の 7 to 9 版のレーン割り当て)、無ければキーモードの
+/// レーン順を使う。
+fn keylogger_column(
+    lane: Lane,
+    key_mode: KeyMode,
+    skin_lanes: &[SkinKeyloggerLaneDef],
+) -> Option<usize> {
+    if skin_lanes.is_empty() {
+        return key_mode.active_lanes().iter().position(|candidate| *candidate == lane);
+    }
+    skin_lanes
+        .iter()
+        .find(|def| keybeam_lane_for_keyon_timer(def.keyon_timer) == Some(lane.index()))
+        .and_then(|def| def.lane.checked_sub(1))
+        .filter(|column| *column < LANE_COUNT)
 }
 
 const KEYLOGGER_NPS_UPDATE_INTERVAL_US: i64 = 1_000_000;
@@ -268,6 +288,7 @@ impl DynamicTimerRuntime {
         self.key_logger.ingest(
             events,
             key_mode,
+            document.map_or(&[], |document| document.keylogger_lanes.as_slice()),
             now_us,
             keylogger_chattering_threshold_us(document),
         );
@@ -391,6 +412,7 @@ impl KeyLoggerRuntime {
         &mut self,
         events: &[SkinRuntimeEvent],
         key_mode: KeyMode,
+        skin_lanes: &[SkinKeyloggerLaneDef],
         now_us: i64,
         chattering_threshold_us: i64,
     ) {
@@ -398,7 +420,6 @@ impl KeyLoggerRuntime {
             *self = Self::default();
         }
         self.last_now_us = Some(now_us);
-        let active_lanes = key_mode.active_lanes();
         // GameSession は各 Input の直後へ、その入力で生じた Judgement を順序付きで
         // 格納する。この境界ごとに確定して event_index 相当を1回だけ集計する。
         let mut pending_press = None;
@@ -410,9 +431,7 @@ impl KeyLoggerRuntime {
             match &event.kind {
                 SkinRuntimeEventKind::Input(input) if input.kind == InputKind::Press => {
                     self.commit_pending_press(pending_press.take());
-                    let Some(lane) =
-                        active_lanes.iter().position(|candidate| *candidate == input.lane)
-                    else {
+                    let Some(lane) = keylogger_column(input.lane, key_mode, skin_lanes) else {
                         continue;
                     };
                     if self.last_press_us[lane].is_some_and(|last| {
@@ -430,6 +449,7 @@ impl KeyLoggerRuntime {
                     self.next_event_slot[lane] = (slot + 1) % 16;
                     pending_press = Some(PendingKeyLoggerPress {
                         lane,
+                        input_lane: input.lane,
                         time_us: input.time.0,
                         slot,
                         classification: None,
@@ -439,9 +459,7 @@ impl KeyLoggerRuntime {
                     let Some(pending) = pending_press.as_mut() else {
                         continue;
                     };
-                    if active_lanes.get(pending.lane) != Some(&judgement.lane)
-                        || pending.time_us != judgement.time.0
-                    {
+                    if pending.input_lane != judgement.lane || pending.time_us != judgement.time.0 {
                         continue;
                     }
                     if !judgement.affects_score {

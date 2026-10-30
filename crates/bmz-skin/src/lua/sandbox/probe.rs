@@ -38,6 +38,8 @@ pub(super) struct MainStateProbe {
     pub(super) capture_audio_actions: bool,
     pub(super) audio_actions: Vec<LuaAudioActionProbe>,
     pub(super) keylogger_destination_occurrences: BTreeMap<String, usize>,
+    /// キーロガーの表示列 (1 始まり) と、そのボタン表示が読む key-on timer。
+    pub(super) keylogger_lane_keyon_timers: BTreeMap<usize, i32>,
     pub(super) gauge_lead_glow_occurrences: BTreeMap<String, usize>,
     pub(super) gauge_value_destination_occurrences: BTreeMap<String, usize>,
     pub(super) gauge_value_overlay_mode: Option<&'static str>,
@@ -86,6 +88,7 @@ impl Default for MainStateProbe {
             capture_audio_actions: true,
             audio_actions: Vec::new(),
             keylogger_destination_occurrences: BTreeMap::new(),
+            keylogger_lane_keyon_timers: BTreeMap::new(),
             gauge_lead_glow_occurrences: BTreeMap::new(),
             gauge_value_destination_occurrences: BTreeMap::new(),
             gauge_value_overlay_mode: None,

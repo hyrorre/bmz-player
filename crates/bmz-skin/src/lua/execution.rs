@@ -216,6 +216,20 @@ pub(super) fn execute_lua_skin(
             });
             root.insert("fixedDelayTimer".to_string(), JsonValue::Array(entries.collect()));
         }
+        let keylogger_lanes = main_state_probe
+            .lock()
+            .ok()
+            .map(|probe| probe.keylogger_lane_keyon_timers.clone())
+            .unwrap_or_default();
+        if !keylogger_lanes.is_empty() {
+            let entries = keylogger_lanes.into_iter().map(|(lane, keyon_timer)| {
+                JsonValue::Object(JsonMap::from_iter([
+                    ("lane".to_string(), JsonValue::Number(JsonNumber::from(lane))),
+                    ("keyonTimer".to_string(), JsonValue::Number(JsonNumber::from(keyon_timer))),
+                ]))
+            });
+            root.insert("keyloggerLane".to_string(), JsonValue::Array(entries.collect()));
+        }
         let runtime_flags = main_state_probe
             .lock()
             .ok()

@@ -172,6 +172,12 @@ pub(in crate::lua) fn parse_keylogger_destination_id(
     Some(("plain", lane, None))
 }
 
+/// PeacefulPlay のキーロガーのボタン点灯 `keylogger-button-on-<表示列>`。
+pub(in crate::lua) fn parse_keylogger_button_destination_id(id: &str) -> Option<usize> {
+    let lane = id.strip_prefix("keylogger-button-on-")?.parse::<usize>().ok()?;
+    (1..=9).contains(&lane).then_some(lane)
+}
+
 pub(in crate::lua) fn parse_keylogger_chattering_destination_id(id: &str) -> Option<usize> {
     let lane = id.strip_prefix("keylogger-chattering-alert-")?.parse::<usize>().ok()?;
     (1..=9).contains(&lane).then_some(lane)

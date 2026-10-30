@@ -310,6 +310,47 @@ fn rmz_skin_play4_enlarge_uses_wide_note_lanes_when_available() {
 }
 
 #[test]
+fn peaceful_play_key_logger_columns_follow_lane_assignment_when_available() {
+    let skin_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/PeacefulPlay");
+    if !skin_dir.join("play7_9lane.luaskin").is_file() {
+        return;
+    }
+    let columns = |file: &str, options: BTreeMap<String, String>| {
+        let loaded =
+            load_lua_skin(&skin_dir.join(file), SkinKind::Play, &options, &BTreeMap::new())
+                .expect("PeacefulPlay should decode");
+        let note = loaded.document.note.as_ref().expect("PeacefulPlay should define notes");
+        assert_ne!(note.dst2, i32::MIN, "{file} should keep DST_NOTE2 for missed notes");
+        loaded
+            .document
+            .keylogger_lanes
+            .iter()
+            .map(|def| (def.lane, def.keyon_timer))
+            .collect::<Vec<_>>()
+    };
+
+    // 9key 版は表示列 N が KEY N (timer 100+N)。
+    assert_eq!(
+        columns("play9.luaskin", BTreeMap::new()),
+        (1..=9).map(|lane| (lane, 100 + lane as i32)).collect::<Vec<_>>()
+    );
+    // 7 to 9 版は割り当てに従い、皿は timer 100、KEY1〜KEY7 は 101〜107 を読む。
+    let assign = |item: &str| BTreeMap::from([("割り当て assign".to_string(), item.to_string())]);
+    assert_eq!(
+        columns("play7_9lane.luaskin", BTreeMap::new()),
+        (1..=8).map(|lane| (lane, 99 + lane as i32)).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        columns("play7_9lane.luaskin", assign("SC1 KEY3-9")),
+        [(1, 100), (3, 101), (4, 102), (5, 103), (6, 104), (7, 105), (8, 106), (9, 107)]
+    );
+    assert_eq!(
+        columns("play7_9lane.luaskin", assign("SC9 KEY1-7")),
+        [(1, 101), (2, 102), (3, 103), (4, 104), (5, 105), (6, 106), (7, 107), (9, 100)]
+    );
+}
+
+#[test]
 fn peaceful_play_integral_property_ops_are_selectable_when_available() {
     let skin_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/PeacefulPlay/play9.luaskin");
