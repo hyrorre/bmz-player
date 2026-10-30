@@ -3,6 +3,7 @@ import { submitCourseScore, validateCourseScoreSubmission } from '../../services
 import { IrEvidenceValidationError } from '../../services/ir'
 import { IrIdempotencyCollisionError } from '../../services/ir/idempotency'
 import { requireIrUser } from '../../utils/auth'
+import { IrModerationError, moderationHttpError } from '../../services/moderation/enforcement'
 import { SCORE_SUBMIT_RATE_LIMIT, checkUserRateLimit } from '../../utils/rate_limit'
 
 export default defineEventHandler(async (event) => {
@@ -21,6 +22,9 @@ export default defineEventHandler(async (event) => {
   try {
     return await submitCourseScore(user, payload)
   } catch (error) {
+    if (error instanceof IrModerationError) {
+      throw moderationHttpError(error.code)
+    }
     if (error instanceof IrIdempotencyCollisionError) {
       throw createError({ statusCode: 409, statusMessage: error.message })
     }

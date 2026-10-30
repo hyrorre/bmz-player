@@ -1,6 +1,10 @@
 import { and, desc, eq, inArray } from 'drizzle-orm'
 import { getQuery } from 'h3'
 import { db, schema } from 'hub:db'
+import {
+  publicChartCondition,
+  publicPlayerCondition,
+} from '../../../../services/moderation/visibility'
 import { resolveIrUser } from '../../../../utils/auth'
 
 export default defineEventHandler(async (event) => {
@@ -19,7 +23,7 @@ export default defineEventHandler(async (event) => {
       bio: schema.profiles.bio,
     })
     .from(schema.profiles)
-    .where(eq(schema.profiles.id, playerId))
+    .where(and(eq(schema.profiles.id, playerId), publicPlayerCondition(schema.profiles.id)))
     .limit(1)
   const profile = profiles[0]
   if (!profile) {
@@ -75,7 +79,12 @@ export default defineEventHandler(async (event) => {
       server_received_at: schema.bestScores.serverReceivedAt,
     })
     .from(schema.bestScores)
-    .where(eq(schema.bestScores.playerId, playerId))
+    .where(
+      and(
+        eq(schema.bestScores.playerId, playerId),
+        publicChartCondition(schema.bestScores.chartSha256),
+      ),
+    )
     .orderBy(desc(schema.bestScores.serverReceivedAt))
     .limit(limit)
 

@@ -119,12 +119,16 @@ impl JobCompletion<'_> {
             response,
             &message,
         );
-        self.network_db.mark_ir_score_job_failed(
-            self.job.id,
-            self.now,
-            &message,
-            retry_after_seconds_from_error(&error),
-        )?;
+        if matches!(class, IrSyncFailureClass::Moderated(_)) {
+            self.network_db.mark_ir_score_job_rejected(self.job.id, self.now, &message)?;
+        } else {
+            self.network_db.mark_ir_score_job_failed(
+                self.job.id,
+                self.now,
+                &message,
+                retry_after_seconds_from_error(&error),
+            )?;
+        }
         self.report.record_failure(self.job.id, class, format!("job {}: {message}", self.job.id));
         tracing::warn!(job_id = self.job.id, provider = self.job.provider, %message, "{event}");
         Ok(())
@@ -225,6 +229,10 @@ mod tests;
 
 /// 送信エラーを、手動一括送信が続行できるかどうかの観点で分類する。
 pub(super) fn classify_submission_error(error: &anyhow::Error) -> IrSyncFailureClass {
+    // 403でもサーバーが制限コードを返した場合は、ログインし直しても解消しない。
+    if let Some(code) = crate::ir::http_error::moderation_code_from_error(error) {
+        return IrSyncFailureClass::Moderated(code);
+    }
     let status = crate::ir::http_error::status_code_from_error(error).or_else(|| {
         error.chain().find_map(|cause| cause.downcast_ref::<reqwest::Error>()?.status())
     });

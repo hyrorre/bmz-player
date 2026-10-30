@@ -1,5 +1,10 @@
 import { sql } from 'drizzle-orm'
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
+import {
+  CHART_MODERATION_STATUSES,
+  MODERATION_ACTIONS,
+  USER_MODERATION_STATUSES,
+} from '../../shared/constants/moderation'
 
 const jsonText = <T>(name: string, fallback: string) =>
   text(name, { mode: 'json' })
@@ -549,5 +554,65 @@ export const bestCourseScores = sqliteTable(
       table.scoring,
       table.exScore,
     ),
+  ],
+)
+
+// モデレーション状態は専用テーブルに置く。行が無いユーザー・譜面は active として扱い、
+// 既存の users / charts 行と migration に触れずに導入・解除できるようにする。
+
+export const userModeration = sqliteTable(
+  'user_moderation',
+  {
+    userId: text('user_id')
+      .primaryKey()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    status: text('status', { enum: USER_MODERATION_STATUSES }).notNull().default('active'),
+    // 管理者向けの理由。一般公開APIや本人向けの応答には含めない。
+    reason: text('reason').notNull().default(''),
+    // 楽観的ロック用。行の作成時に1、状態変更ごとに1ずつ増える。
+    revision: integer('revision').notNull().default(1),
+    // 直近の変更を一意に識別し、同じbatchの監査ログ・セッション失効を条件付きにする。
+    lastChangeId: text('last_change_id').notNull(),
+    updatedBy: text('updated_by').notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [index('idx_user_moderation_status').on(table.status)],
+)
+
+export const chartModeration = sqliteTable(
+  'chart_moderation',
+  {
+    // 未登録の譜面も事前にブロックできるよう、charts への外部キーは張らない。
+    chartSha256: text('chart_sha256').primaryKey(),
+    status: text('status', { enum: CHART_MODERATION_STATUSES }).notNull().default('active'),
+    reason: text('reason').notNull().default(''),
+    note: text('note').notNull().default(''),
+    revision: integer('revision').notNull().default(1),
+    lastChangeId: text('last_change_id').notNull(),
+    updatedBy: text('updated_by').notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [index('idx_chart_moderation_status').on(table.status)],
+)
+
+export const moderationAuditLogs = sqliteTable(
+  'moderation_audit_logs',
+  {
+    id: text('id').primaryKey(),
+    // 管理者・対象のアカウント削除後も履歴を残すため、外部キーは張らない。
+    actorUserId: text('actor_user_id').notNull(),
+    targetType: text('target_type', { enum: ['user', 'chart'] }).notNull(),
+    targetId: text('target_id').notNull(),
+    action: text('action', { enum: MODERATION_ACTIONS }).notNull(),
+    previousStatus: text('previous_status').notNull(),
+    newStatus: text('new_status').notNull(),
+    reason: text('reason').notNull().default(''),
+    metadata: jsonText<Record<string, unknown>>('metadata', '{}'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    index('idx_moderation_audit_logs_created').on(table.createdAt, table.id),
+    index('idx_moderation_audit_logs_target').on(table.targetType, table.targetId, table.createdAt),
+    index('idx_moderation_audit_logs_actor').on(table.actorUserId, table.createdAt),
   ],
 )

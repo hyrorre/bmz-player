@@ -1,4 +1,5 @@
 import { additional, withAdditional } from './additional'
+import { moderation } from './moderation'
 
 export default defineI18nLocale(() =>
   withAdditional(
@@ -118,7 +119,9 @@ export default defineI18nLocale(() =>
         replayNotAvailable: '리플레이를 사용할 수 없습니다.',
         sessionNotFound: '세션을 찾을 수 없습니다.',
         deviceKeyNotFound: '서명 키를 찾을 수 없거나 이미 폐기되었습니다.',
+        ...moderation.ko.apiErrors,
       },
+      admin: moderation.ko.admin,
     },
     additional.ko,
   ),

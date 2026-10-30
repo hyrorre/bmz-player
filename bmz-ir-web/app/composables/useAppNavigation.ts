@@ -19,6 +19,7 @@ export function useAppNavigation() {
   const localePath = useLocalePath()
   const { t } = useI18n()
   const { pages: manualPageList, pagePath: manualPagePath } = useManual()
+  const { isAdmin } = useIrAccount()
 
   const logout = async () => {
     await $fetch('/api/v1/auth/logout', { method: 'POST' })
@@ -54,6 +55,15 @@ export function useAppNavigation() {
               { label: t('nav.rivals'), to: localePath('/rivals'), icon: 'i-lucide-users-round' },
               { label: t('nav.profile'), to: localePath('/profile'), icon: 'i-lucide-user-pen' },
               { label: t('nav.settings'), to: localePath('/settings'), icon: 'i-lucide-settings' },
+              ...(isAdmin.value
+                ? [
+                    {
+                      label: t('admin.nav'),
+                      to: localePath('/admin/moderation'),
+                      icon: 'i-lucide-shield',
+                    },
+                  ]
+                : []),
               {
                 label: t('nav.logout'),
                 icon: 'i-lucide-log-out',

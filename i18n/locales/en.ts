@@ -1,4 +1,5 @@
 import { additional, withAdditional } from './additional'
+import { moderation } from './moderation'
 
 export default defineI18nLocale(() =>
   withAdditional(
@@ -123,7 +124,9 @@ export default defineI18nLocale(() =>
         replayNotAvailable: 'Replay is not available.',
         sessionNotFound: 'Session not found.',
         deviceKeyNotFound: 'The signing key was not found or has already been revoked.',
+        ...moderation.en.apiErrors,
       },
+      admin: moderation.en.admin,
     },
     additional.en,
   ),

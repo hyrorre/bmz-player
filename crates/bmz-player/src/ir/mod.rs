@@ -7,6 +7,7 @@ pub mod credentials;
 pub mod device_key;
 pub mod download;
 mod http_error;
+pub use http_error::IrModerationCode;
 pub mod manual;
 pub mod manual_job;
 pub mod payload;

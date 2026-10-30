@@ -1,6 +1,11 @@
-import { desc, inArray, sql } from 'drizzle-orm'
+import { and, desc, inArray, sql, type SQL } from 'drizzle-orm'
 import { getQuery } from 'h3'
 import { db, schema } from 'hub:db'
+import {
+  publicChartCondition,
+  publicCourseCondition,
+  publicPlayerCondition,
+} from '../../../services/moderation/visibility'
 
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
@@ -8,7 +13,15 @@ export default defineEventHandler(async (event) => {
   const offset = Math.max(0, Number(query.offset ?? 0) || 0)
   const search = typeof query.q === 'string' ? query.q.trim() : ''
 
-  let request = db
+  const conditions: SQL[] = [publicPlayerCondition(schema.profiles.id)]
+  if (search) {
+    const pattern = `%${escapeLikePattern(search)}%`
+    conditions.push(
+      sql`(${schema.profiles.displayName} like ${pattern} escape '\\' or ${schema.profiles.id} like ${pattern} escape '\\')`,
+    )
+  }
+
+  const request = db
     .select({
       id: schema.profiles.id,
       display_name: schema.profiles.displayName,
@@ -16,21 +29,14 @@ export default defineEventHandler(async (event) => {
       updated_at: schema.profiles.updatedAt,
     })
     .from(schema.profiles)
+    .where(and(...conditions))
     .orderBy(desc(schema.profiles.updatedAt))
     .limit(limit)
     .offset(offset)
-    .$dynamic()
-  let countRequest = db
+  const countRequest = db
     .select({ total: sql<number>`count(*)` })
     .from(schema.profiles)
-    .$dynamic()
-
-  if (search) {
-    const pattern = `%${escapeLikePattern(search)}%`
-    const condition = sql`${schema.profiles.displayName} like ${pattern} escape '\\' or ${schema.profiles.id} like ${pattern} escape '\\'`
-    request = request.where(condition)
-    countRequest = countRequest.where(condition)
-  }
+    .where(and(...conditions))
 
   const [profiles, countRows] = await Promise.all([request, countRequest])
   const total = Number(countRows[0]?.total ?? 0)
@@ -45,7 +51,12 @@ export default defineEventHandler(async (event) => {
             last_score_at: sql<number | null>`max(${schema.bestScores.serverReceivedAt})`,
           })
           .from(schema.bestScores)
-          .where(inArray(schema.bestScores.playerId, playerIds))
+          .where(
+            and(
+              inArray(schema.bestScores.playerId, playerIds),
+              publicChartCondition(schema.bestScores.chartSha256),
+            ),
+          )
           .groupBy(schema.bestScores.playerId)
       : []
 
@@ -60,7 +71,12 @@ export default defineEventHandler(async (event) => {
             >`max(${schema.bestCourseScores.serverReceivedAt})`,
           })
           .from(schema.bestCourseScores)
-          .where(inArray(schema.bestCourseScores.playerId, playerIds))
+          .where(
+            and(
+              inArray(schema.bestCourseScores.playerId, playerIds),
+              publicCourseCondition(schema.bestCourseScores.courseHash),
+            ),
+          )
           .groupBy(schema.bestCourseScores.playerId)
       : []
 

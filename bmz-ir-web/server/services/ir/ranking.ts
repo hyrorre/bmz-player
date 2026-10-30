@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm'
 import type { BatchItem } from 'drizzle-orm/batch'
 import { db, schema } from 'hub:db'
 import { isUniqueConstraintError } from '../../utils/db_errors'
+import { publicChartCondition, publicPlayerCondition } from '../moderation/visibility'
 import type {
   IrAppliedDoubleOption,
   IrChartLnProfile,
@@ -154,6 +155,9 @@ export async function fetchRankingBestRows(
     eq(schema.bestScores.chartSha256, sha256),
     eq(schema.bestScores.scoring, query.scoring),
     eq(schema.bestScores.doubleOption, query.doubleOption),
+    // BAN・非公開譜面は順位付けの前に除外し、順位・件数・クリア率に混ぜない。
+    publicPlayerCondition(schema.bestScores.playerId),
+    publicChartCondition(schema.bestScores.chartSha256),
   ]
   if (query.lnPolicy) {
     conditions.push(eq(schema.bestScores.lnPolicy, query.lnPolicy))
@@ -242,6 +246,8 @@ export async function fetchRankingBestRowsFromHistory(
     eq(schema.scores.scoring, query.scoring),
     eq(schema.scores.doubleOption, query.doubleOption),
     eq(schema.scores.accepted, true),
+    publicPlayerCondition(schema.scores.playerId),
+    publicChartCondition(schema.scores.chartSha256),
   ]
   if (query.lnPolicy) {
     conditions.push(eq(schema.scores.lnPolicy, query.lnPolicy))

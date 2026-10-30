@@ -1,5 +1,6 @@
 import { and, eq, sql } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
+import { isPublicChart, publicPlayerCondition } from '../../../../services/moderation/visibility'
 import { resolveIrUser } from '../../../../utils/auth'
 
 export default defineEventHandler(async (event) => {
@@ -15,7 +16,7 @@ export default defineEventHandler(async (event) => {
     .where(eq(schema.charts.sha256, sha256))
     .limit(1)
   const chart = charts[0]
-  if (!chart) {
+  if (!chart || !(await isPublicChart(sha256))) {
     throw createError({ statusCode: 404, statusMessage: 'Chart not found' })
   }
 
@@ -35,6 +36,8 @@ async function scoreStats(sha256: string, playerId?: string) {
   const filters = [eq(schema.scores.chartSha256, sha256), eq(schema.scores.accepted, true)]
   if (playerId) {
     filters.push(eq(schema.scores.playerId, playerId))
+  } else {
+    filters.push(publicPlayerCondition(schema.scores.playerId))
   }
 
   const rows = await db

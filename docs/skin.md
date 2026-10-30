@@ -213,7 +213,7 @@ option `94_000+ID`、否定は符号を維持）です。意味が一致する�
 | option | 20 | Select / Decide | オプションパネルを開いていません。描画時に評価する |
 | option | 10 / 11 / 12 | Select / Decide | STYLEフィルターのDP / BATTLE / DPまたはBATTLEです。14 / 10鍵フィルター、またはBATTLEがD-BATTLE / SP-TO-DPのとき10と12がtrueです。選択譜面の鍵盤数からは判定しません。2人対戦BATTLEはBMZ未対応のため11はfalseです。`#IF`内も描画時に評価する |
 | option | 21..29 | Select / Decide | 対応するオプションパネルを開いています。`#IF`内も描画時に評価する |
-| option | 600..608 | Select / Decide | LR2の単一の`IRstatus`です。常にどれか1つだけが成立します。IR未設定・非対象の行は600、取得待ちは606、取得中は607（LR2の接続中）、取得済みで参加者ありは602、参加者0人（未登録の譜面を含む）は603、取得失敗は604です。BMZに無い一時読み込み（601）、BAN曲（605）、IRビジー（608）はfalseです。beatoraja / JSON / Luaの600..608は従来どおりです（0人で602と603、失敗で604と608が同時に成立する）。`#IF`内も描画時に評価する |
+| option | 600..608 | Select / Decide | LR2の単一の`IRstatus`です。常にどれか1つだけが成立します。IR未設定・非対象の行は600、取得待ちは606、取得中は607（LR2の接続中）、取得済みで参加者ありは602、参加者0人（未登録の譜面を含む）は603、取得失敗は604です。BAN曲（605）は、BMZ IRが非公開・ブロック中の譜面への送信を拒否したリザルトでだけ成立します（BMZ IRの[アカウント・譜面の制限](ir.md#アカウント譜面の制限)）。BMZに無い一時読み込み（601）とIRビジー（608）はfalseです。beatoraja / JSON / Luaの600..608は従来どおりです（0人で602と603、失敗で604と608が同時に成立する。譜面の制限はbeatorajaに対応するpropertyが無いため604と608で表す）。`#IF`内も描画時に評価する |
 | option | 571 / 572 | Select / Decide | コース作成中 / コース作成中ではありません。BMZにコース編集画面が無いため571はfalse、572はtrueです。572を条件とする選曲スコアバーも表示する |
 | option | 62..66 | Select / Decide | 現在の設定で取れる最高ランプ（クリア不可 / EASY / NORMAL / HARD / FULLCOMBO）です。オート・練習はクリア不可、H-RANDOM / ALL-SCR / 等速はEASYまでです。ゲージはA-EASY / EASY→EASY、HARD / EX-HARD→HARD、HAZARD→FULLCOMBO |
 | option | 640..645 / 650..657 | Select / Decide | 選択中ライバルのクリアランプ（5段階）とランク |
