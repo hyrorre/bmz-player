@@ -233,6 +233,21 @@ pub(super) fn lua_table_to_json(
         if matches!(value, Value::Nil) {
             continue;
         }
+        // LuaSkinLoader maps these header fields through LuaValue.toint() /
+        // tojstring(). Keep this coercion at the Lua boundary so ordinary JSON
+        // documents remain strict, and header and full-document loads agree.
+        if key == "op" && is_lua_property_item_path(path) {
+            let number = lua.coerce_number(value.clone())?.unwrap_or(0.0) as i32;
+            object.insert(key, JsonValue::from(number));
+            continue;
+        }
+        if key == "def"
+            && ["$.property[", "$.filepath["].iter().any(|prefix| is_lua_index_path(path, prefix))
+            && matches!(value, Value::Integer(_) | Value::Number(_) | Value::Boolean(_))
+        {
+            object.insert(key, JsonValue::String(lua_value_to_log_string(&value)));
+            continue;
+        }
         if key == "draw"
             && let Value::Boolean(value) = &value
         {
@@ -294,4 +309,15 @@ pub(super) fn lua_table_to_json(
     }
     repair_result_table_title_text(path, &mut object);
     Ok(JsonValue::Object(object))
+}
+
+fn is_lua_index_path(path: &str, prefix: &str) -> bool {
+    path.strip_prefix(prefix)
+        .and_then(|index| index.strip_suffix(']'))
+        .is_some_and(|index| !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+fn is_lua_property_item_path(path: &str) -> bool {
+    let Some((property, item)) = path.split_once(".item[") else { return false };
+    is_lua_index_path(property, "$.property[") && is_lua_index_path(item, "")
 }

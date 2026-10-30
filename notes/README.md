@@ -40,6 +40,7 @@
 | 日付 | 記録 |
 |---|---|
 | 2026-10-30 | [譜面ダウンロードのスクロールバーの間隔](2026/2026-10-30-download-scrollbars.md) |
+| 2026-10-30 | [SocialSkinの読み込みとLua互換性](2026/2026-10-30-social-skin-compatibility.md) |
 | 2026-10-30 | [9KEYSの選曲カーソルとPeacefulPlay表示の修正](2026/2026-10-30-9key-play-fixes.md) |
 | 2026-10-30 | [OBSコマンド登録と画面ライフサイクル](2026/2026-10-30-obs-command-rules.md) |
 | 2026-10-29 | [曲スキャンの書庫世代と重複root](2026/2026-10-29-scan-generation-overlapping-roots.md) |

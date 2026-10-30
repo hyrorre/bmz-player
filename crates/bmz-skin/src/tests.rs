@@ -255,6 +255,8 @@ mod lua_api_baseline;
 mod lua_api_extensions;
 #[path = "tests/lua_document_conversion.rs"]
 mod lua_document_conversion;
+#[path = "tests/lua_header_compat.rs"]
+mod lua_header_compat;
 #[path = "tests/lua_inference_order.rs"]
 mod lua_inference_order;
 #[path = "tests/lua_runtime_events.rs"]

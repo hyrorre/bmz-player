@@ -78,6 +78,7 @@ closure/module stateを維持し、frameごとのmain_stateを参照します。
 
 | field / API | 対応範囲 |
 |---|---|
+| Luaヘッダのproperty型変換 | `item[].op`の数値文字列・小数・非数値と、数値・booleanの`def`をbeatorajaの`toint()` / `tojstring()`に合わせます。SocialSkinのSelect / Result / Course Resultの一覧登録を確認します。[回帰テスト](../crates/bmz-skin/src/tests/lua_header_compat.rs) |
 | destination `draw` | ロード時推論とruntime callback |
 | 推論の順序 | tableのfieldを固定順で変換し、`pairs`順に依存しません。Luxe Flat Selectのランク画像とスコアレート帯を確認します。[回帰テスト](../crates/bmz-skin/src/tests/lua_inference_order.rs) |
 | Resultのパネル状態 | `Expand_op` / callbackが直接保持する`result_mode`を現在のパネルへ同期します。Luxe FlatのGRAPHとIRの混在を防止します。通常 / compat、左右配置、WMIIの回帰確認は[作業記録](../notes/2026/2026-10-03-result-panel-lua-state.md) |

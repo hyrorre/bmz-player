@@ -918,6 +918,11 @@ beatoraja（`.local/beatoraja`の最新版）とLR2oraja Endless Dream（beatora
 配列です。`#`、添字、`ipairs`、`pairs`、`table.concat`、`table.unpack`で読めます。
 読んだopだけを文書の依存値に記録するread-only proxyのため、`rawget` / `next`では空です。
 
+Luaのヘッダはbeatorajaの`LuaSkinLoader`と同じ型変換を使います。`property[].item[].op`は
+数値文字列を含め0方向へ切り捨て、数値に変換できない値は0です。`property[].def`と
+`filepath[].def`の数値・booleanは文字列へ変換します。数値の`def`をop指定とは扱わず、
+項目名に一致しない既定値は先頭項目へ戻します。通常のJSONスキンの型検査は維持します。
+
 `timer_util` / `event_util`はbeatorajaの`TimerUtility` / `EventUtility`相当です。
 `new_passive_timer`の`turn_on` / `turn_on_reset` / `turn_off`はtrueを返します。
 `event_observe_timer_off`は、最初の評価でtimerがOFFでも発火しません（beatorajaは発火します）。

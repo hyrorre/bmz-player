@@ -63,6 +63,25 @@ fn litone_select_builds_online_ranker_lamps_when_available() {
 }
 
 #[test]
+fn skin_catalog_accepts_lua_property_scalar_coercions() {
+    let root = crate::test_dir::TestDir::new("bmz-catalog-lua-coercions");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("select.luaskin");
+    std::fs::write(
+        &path,
+        r#"return {type=5, name='Compatible Lua', property={
+            {name='Direction', item={{name='Reverse', op='縦'}}},
+            {name='Label', item={{name='Bottom', op=955}}, def=955}
+        }}"#,
+    )
+    .unwrap();
+    let (skin_type, candidate) =
+        load_skin_candidate(&root, &path, SkinCandidateOrigin::User).unwrap();
+    assert_eq!(skin_type, 5);
+    assert_eq!(candidate.name, "Compatible Lua");
+}
+
+#[test]
 fn skin_catalog_refresh_finds_restored_skin_and_reports_invalid_headers() {
     let root = std::env::temp_dir().join(format!(
         "bmz-skin-refresh-{}-{}",
