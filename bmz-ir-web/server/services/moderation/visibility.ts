@@ -1,5 +1,5 @@
 import { and, eq, sql, type SQL } from 'drizzle-orm'
-import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core'
+import { alias, type AnySQLiteColumn } from 'drizzle-orm/sqlite-core'
 import { db, schema } from 'hub:db'
 import { NON_PUBLIC_CHART_STATUSES } from '../../../shared/constants/moderation'
 
@@ -38,10 +38,18 @@ export function publicChartCondition(chartSha256: AnySQLiteColumn | SQL): SQL {
  * 保存済みの ir_courses.charts を json_each で展開して判定し、コース hash だけでは
  * 回避できないようにする。
  */
+const MODERATED_COURSE = 'moderated_course'
+const moderatedCourse = alias(schema.irCourses, MODERATED_COURSE)
+
 export function publicCourseCondition(courseHash: AnySQLiteColumn | SQL): SQL {
-  const courses = schema.irCourses
+  // 呼び出し元が ir_courses の列を渡しても内側の同名テーブルに解決されないよう、
+  // サブクエリ側の ir_courses には別名を付ける（付けないと相関が常に真になり、
+  // 非公開の譜面を含むコースが1つあるだけで全コースが除外される）。
+  const courses = moderatedCourse
   const moderation = schema.chartModeration
-  return sql`not exists (select 1 from ${courses}, json_each(${courses.charts}) as course_chart
+  // sql テンプレートに alias を埋め込むと別名だけが出力されるため、FROM は明示的に書く。
+  return sql`not exists (select 1 from ${schema.irCourses} as ${sql.identifier(MODERATED_COURSE)},
+    json_each(${courses.charts}) as course_chart
     inner join ${moderation} on ${moderation.chartSha256} = course_chart.value
     where ${courses.courseHash} = ${courseHash} and ${moderation.status} in (${nonPublicChartStatuses}))`
 }

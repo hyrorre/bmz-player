@@ -83,6 +83,8 @@ const replayHandler = (await import('../../api/v1/scores/[id]/replay/index.get')
 const courseRankingHandler = (await import('../../api/v1/courses/[hash]/ranking.get'))
   .default as Handler
 const coursesIndexHandler = (await import('../../api/v1/courses/index.get')).default as Handler
+const courseDetailHandler = (await import('../../api/v1/courses/[hash]/index.get'))
+  .default as Handler
 const userStatusHandler = (await import('../../api/v1/admin/moderation/users/[id]/status.post'))
   .default as Handler
 const chartStatusHandler = (await import('../../api/v1/admin/moderation/charts/status.post'))
@@ -774,6 +776,152 @@ describe('rankings, courses, and aggregates', () => {
       'bob',
       'carol',
     ])
+  })
+})
+
+describe('course visibility with several courses', () => {
+  const sha = (digit: string) => digit.repeat(64)
+
+  async function seedCourse(charts: string[], players: Array<[string, number]>) {
+    for (const [player, exScore] of players) {
+      await submitCourseScore(
+        { id: player },
+        coursePayload(charts, `course-${charts.join('-')}-${player}`, exScore),
+      )
+    }
+    return computeCourseHash(charts, {})
+  }
+
+  async function publicCourseHashes() {
+    const list = await coursesIndexHandler(event({ path: '/api/v1/courses' }))
+    return {
+      hashes: list.courses.map((course: { course_hash: string }) => course.course_hash).sort(),
+      total: list.pagination.total,
+    }
+  }
+
+  async function rankingOf(hash: string) {
+    const response = await courseRankingHandler(
+      event({ path: `/api/v1/courses/${hash}/ranking`, params: { hash } }),
+    )
+    return {
+      entries: response.ranking.entries.map((entry) => [entry.player.id, entry.rank]),
+      total: response.ranking.pagination.total,
+    }
+  }
+
+  function bestCourseCount(players: { players: Array<{ id: string }> }, id: string) {
+    return (players.players.find((player) => player.id === id) as
+      { best_course_score_count: number } | undefined)!.best_course_score_count
+  }
+
+  test('a blocked chart hides only the courses that contain it', async () => {
+    const courseA = await seedCourse(
+      [sha('1'), sha('2')],
+      [
+        ['alice', 300],
+        ['bob', 200],
+      ],
+    )
+    const courseB = await seedCourse(
+      [sha('3'), sha('4')],
+      [
+        ['alice', 250],
+        ['bob', 350],
+      ],
+    )
+    const scoresBefore = await db.select().from(schema.courseScores)
+    const bestBefore = await db.select().from(schema.bestCourseScores)
+
+    await setChartStatus(sha('1'), 'blocked')
+
+    expect(await publicCourseHashes()).toEqual({ hashes: [courseB], total: 1 })
+    await expectHttpError(
+      courseDetailHandler(event({ path: `/api/v1/courses/${courseA}`, params: { hash: courseA } })),
+      404,
+    )
+    const detail = await courseDetailHandler(
+      event({ path: `/api/v1/courses/${courseB}`, params: { hash: courseB } }),
+    )
+    expect(detail.course.course_hash).toBe(courseB)
+    expect(detail.stats.play_count).toBe(2)
+    expect(await rankingOf(courseB)).toEqual({
+      entries: [
+        ['bob', 1],
+        ['alice', 2],
+      ],
+      total: 2,
+    })
+    // コースAの分だけがプレイヤーのベストコース数から外れる。
+    const players = await playersIndexHandler(event({ path: '/api/v1/players' }))
+    expect(bestCourseCount(players, 'alice')).toBe(1)
+    expect(bestCourseCount(players, 'bob')).toBe(1)
+    // 保存済みのコーススコアとベストは変更しない。
+    expect(await db.select().from(schema.courseScores)).toEqual(scoresBefore)
+    expect(await db.select().from(schema.bestCourseScores)).toEqual(bestBefore)
+
+    // 解除すると再計算なしで元に戻る。
+    await setChartStatus(sha('1'), 'active')
+    expect(await publicCourseHashes()).toEqual({ hashes: [courseA, courseB].sort(), total: 2 })
+    expect(await rankingOf(courseA)).toEqual({
+      entries: [
+        ['alice', 1],
+        ['bob', 2],
+      ],
+      total: 2,
+    })
+    const restored = await playersIndexHandler(event({ path: '/api/v1/players' }))
+    expect(bestCourseCount(restored, 'alice')).toBe(2)
+    expect(await db.select().from(schema.bestCourseScores)).toEqual(bestBefore)
+  })
+
+  test('courses sharing a hidden chart are hidden while unrelated courses stay public', async () => {
+    const courseA = await seedCourse([sha('5'), sha('6')], [['alice', 100]])
+    const courseB = await seedCourse([sha('5'), sha('7')], [['alice', 100]])
+    const courseC = await seedCourse([sha('8')], [['alice', 100]])
+
+    await setChartStatus(sha('5'), 'hidden')
+    expect(await publicCourseHashes()).toEqual({ hashes: [courseC], total: 1 })
+    await expectHttpError(
+      courseRankingHandler(
+        event({ path: `/api/v1/courses/${courseB}/ranking`, params: { hash: courseB } }),
+      ),
+      404,
+    )
+
+    await setChartStatus(sha('5'), 'active')
+    expect(await publicCourseHashes()).toEqual({
+      hashes: [courseA, courseB, courseC].sort(),
+      total: 3,
+    })
+  })
+
+  test('banned players leave the ranking of a public course without hiding the course', async () => {
+    const courseA = await seedCourse([sha('9'), sha('a')], [['alice', 100]])
+    const courseB = await seedCourse(
+      [sha('b'), sha('c')],
+      [
+        ['alice', 400],
+        ['bob', 300],
+        ['carol', 200],
+      ],
+    )
+    await setChartStatus(sha('9'), 'blocked')
+    await setUserStatus('alice', 'banned')
+
+    expect(await publicCourseHashes()).toEqual({ hashes: [courseB], total: 1 })
+    expect(await rankingOf(courseB)).toEqual({
+      entries: [
+        ['bob', 1],
+        ['carol', 2],
+      ],
+      total: 2,
+    })
+
+    await setUserStatus('alice', 'active')
+    await setChartStatus(sha('9'), 'active')
+    expect((await rankingOf(courseB)).entries[0]).toEqual(['alice', 1])
+    expect(await publicCourseHashes()).toEqual({ hashes: [courseA, courseB].sort(), total: 2 })
   })
 })
 
