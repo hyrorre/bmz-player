@@ -19,6 +19,7 @@ const appliedSearch = ref('')
 const statusFilter = ref<'all' | UserModerationStatus>('all')
 const page = ref(1)
 const pageSize = 30
+const soleOnlyCharts = ref(false)
 
 const statusItems = computed(() => [
   { label: t('admin.allStatuses'), value: 'all' as const },
@@ -295,6 +296,14 @@ function formatOptionalDate(value: string | null) {
             {{ t('admin.users.viewProfile') }}
           </UButton>
         </div>
+
+        <AdminModerationUserChartsSection
+          :key="detail.user.id"
+          v-model:sole-only="soleOnlyCharts"
+          :user-id="detail.user.id"
+          class="mb-6"
+          @changed="reloadDetail"
+        />
 
         <h3 class="mb-2 font-semibold">{{ t('admin.users.latestScores') }}</h3>
         <p v-if="!detail.latest_scores.length" class="text-sm text-muted">

@@ -1,5 +1,19 @@
 import { randomUUID } from 'node:crypto'
-import { and, count, desc, eq, inArray, isNull, or, sql, type like, type SQL } from 'drizzle-orm'
+import {
+  and,
+  count,
+  desc,
+  eq,
+  inArray,
+  isNull,
+  ne,
+  notExists,
+  or,
+  sql,
+  type like,
+  type SQL,
+} from 'drizzle-orm'
+import { alias } from 'drizzle-orm/sqlite-core'
 import type { BatchItem } from 'drizzle-orm/batch'
 import { db, schema } from 'hub:db'
 import { banSessionStatements } from '../../utils/auth_tokens'
@@ -825,6 +839,104 @@ export async function searchCharts(input: {
       score_count: stats.get(row.sha256)?.score_count ?? 0,
     })),
     pagination: pagination(input.limit, input.offset, total),
+  }
+}
+
+/**
+ * ユーザーがスコアを送った譜面の一覧。1人のユーザーが大量に登録した譜面を、ユーザー詳細から
+ * まとめて制限するために使う。`soleOnly` ではそのユーザーしかスコアを送っていない譜面に絞る。
+ * 各行の revision は譜面一覧と同じく、一括操作の楽観ロックに使う。
+ */
+export async function listUserCharts(input: {
+  userId: string
+  soleOnly: boolean
+  limit: number
+  offset: number
+}) {
+  const scores = schema.scores
+  const others = alias(scores, 'other_player_score')
+  const where = and(
+    eq(scores.playerId, input.userId),
+    input.soleOnly
+      ? notExists(
+          db
+            .select({ id: others.id })
+            .from(others)
+            .where(
+              and(eq(others.chartSha256, scores.chartSha256), ne(others.playerId, input.userId)),
+            ),
+        )
+      : undefined,
+  )
+  const lastPlayedAt = sql<number>`max(${scores.serverReceivedAt})`
+  const [played, totals] = await Promise.all([
+    db
+      .select({
+        sha256: scores.chartSha256,
+        user_score_count: count(),
+        last_played_at: lastPlayedAt,
+      })
+      .from(scores)
+      .where(where)
+      .groupBy(scores.chartSha256)
+      .orderBy(desc(lastPlayedAt), scores.chartSha256)
+      .limit(input.limit)
+      .offset(input.offset),
+    db
+      .select({ total: sql<number>`count(distinct ${scores.chartSha256})` })
+      .from(scores)
+      .where(where),
+  ])
+  const shaList = played.map((row) => row.sha256)
+  const [chartRows, stats] = await Promise.all([
+    inChunks(shaList, (chunk) =>
+      db
+        .select({
+          sha256: schema.charts.sha256,
+          md5: schema.charts.md5,
+          title: schema.charts.title,
+          subtitle: schema.charts.subtitle,
+          artist: schema.charts.artist,
+          mode: schema.charts.mode,
+          level: schema.charts.level,
+          status: schema.chartModeration.status,
+          reason: schema.chartModeration.reason,
+          revision: schema.chartModeration.revision,
+          moderation_updated_at: schema.chartModeration.updatedAt,
+        })
+        .from(schema.charts)
+        .leftJoin(
+          schema.chartModeration,
+          eq(schema.chartModeration.chartSha256, schema.charts.sha256),
+        )
+        .where(inArray(schema.charts.sha256, chunk)),
+    ),
+    chartScoreStats(shaList),
+  ])
+  const charts = new Map(chartRows.map((row) => [row.sha256, row]))
+  return {
+    charts: played.map((row) => {
+      const chart = charts.get(row.sha256)
+      return {
+        sha256: row.sha256,
+        registered: Boolean(chart),
+        md5: chart?.md5 ?? null,
+        title: chart?.title ?? '',
+        subtitle: chart?.subtitle ?? null,
+        artist: chart?.artist ?? null,
+        mode: chart?.mode ?? null,
+        level: chart?.level ?? null,
+        status: chart?.status ?? 'active',
+        reason: chart?.reason ?? '',
+        revision: chart?.revision ?? 0,
+        moderation_updated_at: chart?.moderation_updated_at?.toISOString() ?? null,
+        player_count: stats.get(row.sha256)?.player_count ?? 0,
+        score_count: stats.get(row.sha256)?.score_count ?? 0,
+        user_score_count: Number(row.user_score_count),
+        last_played_at: new Date(Number(row.last_played_at)).toISOString(),
+      }
+    }),
+    pagination: pagination(input.limit, input.offset, Number(totals[0]?.total ?? 0)),
   }
 }
 

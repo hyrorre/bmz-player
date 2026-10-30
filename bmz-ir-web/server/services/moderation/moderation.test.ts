@@ -96,6 +96,8 @@ const userStatusHandler = (await import('../../api/v1/admin/moderation/users/[id
   .default as Handler
 const chartStatusHandler = (await import('../../api/v1/admin/moderation/charts/status.post'))
   .default as Handler
+const userChartsHandler = (await import('../../api/v1/admin/moderation/users/[id]/charts.get'))
+  .default as Handler
 const auditLogsHandler = (await import('../../api/v1/admin/moderation/audit-logs.get'))
   .default as Handler
 const meHandler = (await import('../../api/v1/me.get')).default as Handler
@@ -1632,6 +1634,76 @@ describe('course visibility with several courses', () => {
 })
 
 describe('administrator operations and audit logs', () => {
+  test('charts of a user can be listed, narrowed to sole uploads, and blocked together', async () => {
+    const admin = await createAuthTokens('admin')
+    const regular = await createAuthTokens('alice')
+    const CHART_C = 'c'.repeat(64)
+    await submitScore({ id: 'alice' }, submission(), [], 10)
+    await submitScore({ id: 'alice' }, submission({ sha256: CHART_B, key: 'b1' }), [], 10)
+    await submitScore(
+      { id: 'alice' },
+      submission({ sha256: CHART_B, key: 'b2', exScore: 300 }),
+      [],
+      10,
+    )
+    await submitScore({ id: 'alice' }, submission({ sha256: CHART_C, key: 'c1' }), [], 10)
+    await submitScore({ id: 'bob' }, submission({ key: 'bob-a' }), [], 10)
+
+    const list = (params: Record<string, string>, query = '') =>
+      userChartsHandler(event({ params, path: `/charts${query}`, token: admin.accessToken }))
+    const all = await list({ id: 'alice' })
+    expect(all.pagination.total).toBe(3)
+    expect(new Set(all.charts.map((c: { sha256: string }) => c.sha256))).toEqual(
+      new Set([CHART_A, CHART_B, CHART_C]),
+    )
+    expect(all.charts.find((c: { sha256: string }) => c.sha256 === CHART_B)).toMatchObject({
+      user_score_count: 2,
+      player_count: 1,
+      status: 'active',
+      revision: 0,
+    })
+    expect(all.charts.find((c: { sha256: string }) => c.sha256 === CHART_A)).toMatchObject({
+      user_score_count: 1,
+      player_count: 2,
+    })
+
+    // 他のユーザーもスコアを送った譜面（CHART_A）は除く。
+    const sole = await list({ id: 'alice' }, '?sole=1')
+    expect(sole.pagination.total).toBe(2)
+    expect(sole.charts.map((c: { sha256: string }) => c.sha256).sort()).toEqual([CHART_B, CHART_C])
+
+    // 一覧の revision で、譜面タブと同じ一括操作 API に送れる。
+    const result = await chartStatusHandler(
+      event({
+        method: 'POST',
+        body: {
+          items: sole.charts.map((c: { sha256: string; revision: number }) => ({
+            sha256: c.sha256,
+            expected_revision: c.revision,
+          })),
+          status: 'blocked',
+          reason: 'illegal uploads',
+        },
+        token: admin.accessToken,
+      }),
+    )
+    expect(result.results.map((r: { result: string }) => r.result)).toEqual(['changed', 'changed'])
+    const after = await list({ id: 'alice' }, '?sole=1')
+    expect(
+      after.charts.every(
+        (c: { status: string; revision: number }) => c.status === 'blocked' && c.revision === 1,
+      ),
+    ).toBeTrue()
+    expect((await list({ id: 'bob' })).charts.map((c: { status: string }) => c.status)).toEqual([
+      'active',
+    ])
+
+    await expectHttpError(
+      userChartsHandler(event({ params: { id: 'alice' }, token: regular.accessToken })),
+      403,
+    )
+  })
+
   test('ban, restore, chart block, and bulk changes are audited atomically', async () => {
     const admin = await createAuthTokens('admin')
     const bobSession = await createAuthTokens('bob')
