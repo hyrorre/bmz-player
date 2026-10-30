@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
 import { blob } from 'hub:blob'
 import { db, schema } from 'hub:db'
+import { requireScoreWriteAllowed } from '../../../../../services/moderation/enforcement'
 import { requireIrUser } from '../../../../../utils/auth'
 import { REPLAY_UPLOAD_RATE_LIMIT, checkUserRateLimit } from '../../../../../utils/rate_limit'
 
@@ -19,6 +20,8 @@ export default defineEventHandler(async (event) => {
   if (!scoreId) {
     throw createError({ statusCode: 400, statusMessage: 'score id is required' })
   }
+  // 送信停止・BAN・非公開譜面のスコアにはリプレイを追加しない。
+  await requireScoreWriteAllowed(user.id, scoreId)
 
   const replay = await db.query.replayObjects.findFirst({
     columns: { id: true, objectPath: true, hash: true, status: true },

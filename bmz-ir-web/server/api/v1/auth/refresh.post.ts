@@ -1,4 +1,5 @@
 import { readBody, createError } from 'h3'
+import { moderationHttpError } from '../../../services/moderation/enforcement'
 import { rotateRefreshToken } from '../../../utils/auth_tokens'
 import { irProviderKeyForEvent } from '../../../utils/provider_key'
 import { checkIpRateLimit } from '../../../utils/rate_limit'
@@ -19,6 +20,9 @@ export default defineEventHandler(async (event) => {
   const refreshed = await rotateRefreshToken(body.refresh_token)
   if (!refreshed) {
     throw createError({ statusCode: 401, statusMessage: 'Invalid refresh token' })
+  }
+  if ('banned' in refreshed) {
+    throw moderationHttpError('ACCOUNT_BANNED')
   }
   if ('reuseDetected' in refreshed) {
     throw createError({ statusCode: 401, statusMessage: 'Invalid refresh token' })

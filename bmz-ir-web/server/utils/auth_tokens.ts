@@ -1,6 +1,8 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { and, eq, gt, isNull, or } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
+import type { UserModerationStatus } from '../../shared/constants/moderation'
+import { publicPlayerCondition } from '../services/moderation/visibility'
 import { isRecentRotatedRefreshRetry, type SessionRevocationReason } from './auth_token_policy'
 
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60
@@ -87,6 +89,8 @@ export async function findUserByWebSession(
         eq(schema.sessions.kind, 'refresh'),
         isNull(schema.sessions.revokedAt),
         gt(schema.sessions.expiresAt, new Date(now)),
+        // BAN時のセッション失効だけに頼らず、毎回現在の状態を確認する。
+        publicPlayerCondition(schema.users.id),
       ),
     )
     .limit(1)
@@ -107,16 +111,23 @@ export async function revokeWebSession(userId: string, sessionGroupId: string) {
     )
 }
 
+/**
+ * access token からユーザーを引く。BAN済みユーザーは `moderationStatus: 'banned'` で返し、
+ * 呼び出し側で識別可能なエラーにする。BAN時にtokenは失効させるが、失効と同時に
+ * 発行されたtokenが残る競合でも、ここで現在の状態を確認する。
+ */
 export async function findUserByAccessToken(token: string, now = Date.now()) {
   const rows = await db
     .select({
       id: schema.users.id,
       email: schema.users.email,
       displayName: schema.profiles.displayName,
+      moderationStatus: schema.userModeration.status,
     })
     .from(schema.sessions)
     .innerJoin(schema.users, eq(schema.sessions.userId, schema.users.id))
     .leftJoin(schema.profiles, eq(schema.profiles.id, schema.users.id))
+    .leftJoin(schema.userModeration, eq(schema.userModeration.userId, schema.users.id))
     .where(
       and(
         eq(schema.sessions.tokenHash, hashToken(token)),
@@ -127,8 +138,15 @@ export async function findUserByAccessToken(token: string, now = Date.now()) {
     )
     .limit(1)
 
-  const user = rows[0] ?? null
-  if (user) {
+  const row = rows[0] ?? null
+  if (!row) {
+    return null
+  }
+  const user = {
+    ...row,
+    moderationStatus: (row.moderationStatus ?? 'active') as UserModerationStatus,
+  }
+  if (user.moderationStatus !== 'banned') {
     await db
       .update(schema.sessions)
       .set({ lastUsedAt: new Date(now) })
@@ -157,6 +175,17 @@ export async function rotateRefreshToken(token: string, now = Date.now()) {
 
   if (!session) {
     return null
+  }
+
+  // tokenの所持を確認した後、失効状態より先にBANを判定して識別可能な応答にする。
+  // BAN済みならtokenを新しく発行せず、残っているセッションもすべて失効させる。
+  const moderation = await db.query.userModeration.findFirst({
+    columns: { status: true },
+    where: eq(schema.userModeration.userId, session.userId),
+  })
+  if (moderation?.status === 'banned') {
+    await revokeUserSessions(session.userId, 'admin', now)
+    return { banned: true as const }
   }
 
   if (session.revokedAt) {
