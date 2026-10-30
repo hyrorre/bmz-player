@@ -88,3 +88,5 @@ mod cases_05;
 mod chart_text;
 #[path = "tests/exit_hold.rs"]
 mod exit_hold;
+#[path = "tests/missed_notes.rs"]
+mod missed_notes;

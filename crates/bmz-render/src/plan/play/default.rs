@@ -1,4 +1,5 @@
 use super::*;
+use crate::snapshot::VisibleNote;
 
 pub(super) fn push_default_playfield(
     commands: &mut Vec<DrawCommand>,
@@ -97,13 +98,18 @@ fn push_lane(
 
     push_long_notes(commands, snapshot, manifest, layout, x, lane);
     for note in &snapshot.visible_notes[lane_index] {
+        let Some(rect) = visible_note_rect(layout, snapshot.lift, x, note) else {
+            continue;
+        };
         let start = commands.len();
-        let rect = note_rect(layout, snapshot.lift, x, note.y);
         match note.kind {
             NoteVisualKind::LnStart => push_ln_start_skin(manifest, commands, lane, rect),
             NoteVisualKind::LnEnd => push_ln_end_skin(manifest, commands, lane, rect),
             NoteVisualKind::Tap => {
-                if snapshot.mark_processed_note && note.processed_judge.is_some() {
+                if snapshot.mark_processed_note
+                    && note.processed_judge.is_some()
+                    && note.pms_miss_fall.is_none()
+                {
                     push_processed_note_fallback(commands, rect);
                 } else {
                     push_default_note_skin(manifest, commands, lane, rect);
@@ -173,6 +179,29 @@ fn note_rect(layout: PlayfieldLayout<'_>, lift: f32, x: f32, progress: f32) -> R
         width: layout.lane_width * 0.84,
         height: NOTE_HEIGHT,
     }
+}
+
+fn visible_note_rect(
+    layout: PlayfieldLayout<'_>,
+    lift: f32,
+    x: f32,
+    note: &VisibleNote,
+) -> Option<Rect> {
+    let mut rect = note_rect(layout, lift, x, note.y);
+    if let Some(fall) = note.pms_miss_fall {
+        let fall = fall.max(0.0);
+        let judge = judge_line_y(layout.board, lift);
+        let lane_height = judge - layout.board.y;
+        let bottom = judge + fall * lane_height;
+        // 内蔵skinはレーン下端で消す。LIFTで奥行きが0なら待機終了時に消す。
+        if bottom > layout.board.y + layout.board.height
+            || (lane_height <= f32::EPSILON && fall > 0.0)
+        {
+            return None;
+        }
+        rect.y = bottom - rect.height;
+    }
+    Some(rect)
 }
 
 fn push_lane_cover(commands: &mut Vec<DrawCommand>, snapshot: &RenderSnapshot, board: Rect) {

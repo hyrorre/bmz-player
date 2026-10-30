@@ -220,3 +220,28 @@ cargo test -p bmz-player --release --locked --lib profile_missed_note_snapshot_h
 `cargo test -p bmz-player --locked --quiet` に成功しました（2,741件成功、46件ignored）。
 上記のrelease計測用ignoredテストも単独実行で成功しました。
 実プレイ・GPU/present待ち・macOS/Linuxの確認は未実施です。
+
+## 追記: 内蔵9KEYスキンの見逃しノーツ（2026-10-30）
+
+レビューの残り1件である、内蔵9KEYスキンで見逃しノーツが約16秒残る問題を修正しました。
+現在の仕様は[skin.md](../../docs/skin.md#playの見逃しノーツと判定領域)を参照してください。
+
+内蔵描画でも `VisibleNote::pms_miss_fall` を使い、判定ラインからレーン上端までの
+奥行きぶんを1小節で落下するようにしました。ノーツ下端がレーン下端を越えたら描きません。
+LIFT時は短くなった奥行きで速度を求め、奥行き0の場合は待機終了後に消します。
+見逃しノーツは処理済み表示設定にかかわらず通常画像を使い、元のalphaを維持します。
+
+回帰テスト2件は修正前に失敗することを確認しました。
+通常・LIFTありの待機位置、落下位置、2小節/8小節後の非表示、
+処理済み表示ON/OFFでの通常画像とalpha、奥行き0での消滅を確認しました。
+
+追加2件は修正後に成功しました。
+`cargo fmt --check`、`cargo check --workspace --locked`、
+`cargo clippy --workspace --all-targets --locked -- -D warnings`、
+`cargo test --workspace --locked --no-fail-fast --quiet` に成功しました。
+主な成功件数はbmz-player 2,741件（46件ignored）、bmz-render 974件（11件ignored）、
+bmz-skin 342件（1件ignored）、bmz-gameplay 255件です。
+既存のゲージ期待値の修正を含め、ローカルにある外部スキンも読み込んで検証しました。
+ログは `.local/peaceful-default-before.log`、`.local/peaceful-default-after.log`、
+`.local/peaceful-final-*.log` に置き、共有しません。
+実プレイの目視、物理コントローラー、macOS/Linuxでの確認は未実施です。
