@@ -1,13 +1,15 @@
 export type SessionRevocationReason =
   'logout' | 'rotated' | 'password_changed' | 'reuse_detected' | 'admin'
 
+/** rotation 直後の並行リトライとして、拒否するだけにする期間。 */
+export const ROTATED_REFRESH_RETRY_WINDOW_MS = 5 * 60 * 1000
+
 export function isRecentRotatedRefreshRetry(
   revokedAt: Date,
   revokedReason: SessionRevocationReason | null,
   now: number,
 ) {
-  const benignRetryWindowMs = 5 * 60 * 1000
-  return revokedReason === 'rotated' && revokedAt.getTime() >= now - benignRetryWindowMs
+  return revokedReason === 'rotated' && revokedAt.getTime() >= now - ROTATED_REFRESH_RETRY_WINDOW_MS
 }
 
 /**

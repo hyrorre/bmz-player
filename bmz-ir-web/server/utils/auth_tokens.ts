@@ -1,11 +1,15 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { and, eq, gt, inArray, isNull, or, sql, type SQL } from 'drizzle-orm'
+import { and, eq, exists, gt, inArray, isNull, lt, or, sql, type SQL } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/sqlite-core'
 import { db, schema } from 'hub:db'
 import type { UserModerationStatus } from '../../shared/constants/moderation'
 import { moderationHttpError } from '../services/moderation/enforcement'
 import { publicPlayerCondition } from '../services/moderation/visibility'
-import { revokedRefreshTokenAction, type SessionRevocationReason } from './auth_token_policy'
+import {
+  ROTATED_REFRESH_RETRY_WINDOW_MS,
+  revokedRefreshTokenAction,
+  type SessionRevocationReason,
+} from './auth_token_policy'
 
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60
 const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30
@@ -219,8 +223,9 @@ export async function rotateRefreshToken(token: string, now = Date.now()) {
     if (action !== 'reuse_detected') {
       return null
     }
-    await revokeUserSessions(session.userId, 'reuse_detected', now)
-    return { reuseDetected: true as const }
+    // 読み取った後に、ログアウト・BAN・パスワード変更などで失効理由が付け替わることがある。
+    // 再利用の根拠を書き込み時点で確かめ、成立した場合だけ全セッションを失効させる。
+    return (await revokeSessionsOnReuse(session, now)) ? { reuseDetected: true as const } : null
   }
 
   if (session.expiresAt <= new Date(now)) {
@@ -279,6 +284,53 @@ export async function rotateRefreshToken(token: string, now = Date.now()) {
       displayName: user.displayName ?? '',
     },
   }
+}
+
+/**
+ * 失効済みの refresh token が再利用されたとき、そのユーザーの有効なセッションをすべて失効させる。
+ *
+ * 根拠（提示された token が今も `reuse_detected`、または猶予を過ぎた `rotated` であること）を
+ * 失効の UPDATE 自体の条件にする。読み取りの後で明示的な失効によって `logout` /
+ * `password_changed` / `admin` に付け替わっていれば何も変更しない。UPDATE と根拠の確認は
+ * 同じ batch（D1 では1つの transaction）で行い、根拠が成立したかどうかを返す。
+ */
+async function revokeSessionsOnReuse(
+  presented: { tokenHash: string; userId: string },
+  now: number,
+) {
+  const sessions = schema.sessions
+  const source = alias(sessions, 'reused_session')
+  const reuseEvidence = db
+    .select({ tokenHash: source.tokenHash })
+    .from(source)
+    .where(
+      and(
+        eq(source.tokenHash, presented.tokenHash),
+        eq(source.userId, presented.userId),
+        eq(source.kind, 'refresh'),
+        or(
+          eq(source.revokedReason, 'reuse_detected'),
+          and(
+            eq(source.revokedReason, 'rotated'),
+            lt(source.revokedAt, new Date(now - ROTATED_REFRESH_RETRY_WINDOW_MS)),
+          ),
+        ),
+      ),
+    )
+  const [, evidence] = await db.batch([
+    db
+      .update(sessions)
+      .set({ revokedAt: new Date(now), revokedReason: 'reuse_detected' })
+      .where(
+        and(
+          eq(sessions.userId, presented.userId),
+          isNull(sessions.revokedAt),
+          exists(reuseEvidence),
+        ),
+      ),
+    reuseEvidence,
+  ])
+  return evidence.length > 0
 }
 
 /**
