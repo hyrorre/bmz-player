@@ -209,3 +209,183 @@ fn completion_failure_keeps_remote_response_without_counting_success() {
     assert_eq!(logs[0]["response"]["accepted"], true);
     assert_eq!(logs[0]["payload"]["request"], true);
 }
+
+fn moderation_error(code: &str) -> anyhow::Error {
+    crate::ir::http_error::http_response_error(
+        "BMZ IR score submission",
+        reqwest::StatusCode::FORBIDDEN,
+        &serde_json::json!({
+            "statusCode": 403,
+            "statusMessage": "Score submission is blocked for this chart",
+            "data": { "code": code },
+        })
+        .to_string(),
+        None,
+    )
+    .context("failed to submit IR score")
+}
+
+#[test]
+fn moderation_rejections_are_permanent_and_not_login_errors() {
+    use crate::ir::IrModerationCode;
+    for (code, expected) in [
+        ("ACCOUNT_SUSPENDED", IrModerationCode::AccountSuspended),
+        ("ACCOUNT_BANNED", IrModerationCode::AccountBanned),
+        ("CHART_HIDDEN", IrModerationCode::ChartHidden),
+        ("CHART_BLOCKED", IrModerationCode::ChartBlocked),
+    ] {
+        let error = moderation_error(code);
+        assert_eq!(classify_submission_error(&error), IrSyncFailureClass::Moderated(expected));
+        // 保存されるエラー文字列からも制限コードを読み戻せる。
+        assert_eq!(IrModerationCode::from_error_message(&format!("{error:#}")), Some(expected));
+    }
+    // 未知のコード・403以外・他provider形式のbodyは従来どおりの分類。
+    assert_eq!(
+        classify_submission_error(&moderation_error("SOMETHING_ELSE")),
+        IrSyncFailureClass::Unauthorized
+    );
+    let not_forbidden = crate::ir::http_error::http_response_error(
+        "test",
+        reqwest::StatusCode::BAD_REQUEST,
+        r#"{"data":{"code":"CHART_BLOCKED"}}"#,
+        None,
+    );
+    assert_eq!(classify_submission_error(&not_forbidden), IrSyncFailureClass::Job);
+    assert_eq!(IrModerationCode::from_error_message("403 Forbidden [maybe]"), None);
+}
+
+#[test]
+fn moderated_jobs_keep_local_data_and_leave_automatic_retry() {
+    let data = ProfileTestDir::new();
+    let mut boot = data.boot();
+    let mut report = IrSyncReport::default();
+    let job = claimed_job(&mut boot.network_db, IrJobKind::Score, "bmz");
+    JobCompletion {
+        network_db: &mut boot.network_db,
+        report: &mut report,
+        logs_dir: &data.paths.logs_dir,
+        job: &job,
+        now: 200,
+    }
+    .fail(moderation_error("CHART_BLOCKED"), FailureStage::Submission)
+    .unwrap();
+
+    let saved = boot.network_db.ir_score_jobs_for_local_score(IrJobKind::Score, 42).unwrap();
+    assert_eq!(saved[0].status, "failed");
+    assert_eq!(saved[0].payload_json, "{}");
+    assert_eq!(saved[0].next_attempt_at, crate::storage::network_db::IR_JOB_NO_AUTO_RETRY_AT);
+    assert!(saved[0].last_error.ends_with("[CHART_BLOCKED]"));
+    assert_eq!(
+        report.failures[0].class,
+        IrSyncFailureClass::Moderated(crate::ir::IrModerationCode::ChartBlocked)
+    );
+    // 常駐同期・リザルト画面の自動送信（backoff尊重）は、何年経っても取り直さない。
+    let far_future = 200 + 100 * 365 * 24 * 60 * 60;
+    assert!(boot.network_db.claim_pending_ir_score_jobs(far_future, 10, false).unwrap().is_empty());
+    // 制限解除後の手動再送（backoff無視）では送り直せる。
+    let retried = boot.network_db.claim_pending_ir_score_jobs(201, 10, true).unwrap();
+    assert_eq!(retried.iter().map(|job| job.id).collect::<Vec<_>>(), vec![job.id]);
+}
+
+/// refreshに `ACCOUNT_BANNED` を1回だけ返し、その後は接続を受け付けないIRサーバー。
+fn spawn_banned_refresh_server() -> (String, std::thread::JoinHandle<String>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        let mut request = [0; 8192];
+        let read = stream.read(&mut request).unwrap();
+        let body = r#"{"statusCode":403,"statusMessage":"This account is banned from BMZ IR","data":{"code":"ACCOUNT_BANNED"}}"#;
+        write!(
+            stream,
+            "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        String::from_utf8_lossy(&request[..read]).into_owned()
+    });
+    (format!("http://{address}"), server)
+}
+
+#[tokio::test]
+async fn banned_account_stops_the_batch_without_repeating_refresh() {
+    let data = ProfileTestDir::new();
+    let mut boot = data.boot();
+    let (base_url, server) = spawn_banned_refresh_server();
+    let mut provider = IrProviderConfig::bmz_ir();
+    provider.provider_key = "bmz-moderation-test".into();
+    provider.base_url = base_url;
+    provider.enabled = true;
+    provider.account_id = "account".into();
+    let provider_key =
+        crate::ir::provider_key::configured_provider_key(&provider).unwrap().to_string();
+    let profile_root = boot.profile_paths.root_dir.clone();
+    save_credentials(
+        &profile_root,
+        &IrStoredCredentials {
+            provider: provider_key.clone(),
+            account_id: "account".into(),
+            display_name: String::new(),
+            access_token: "expired".into(),
+            refresh_token: "refresh".into(),
+            expires_at: Some(1),
+        },
+    )
+    .unwrap();
+    for local_score_id in [1, 2, 3] {
+        boot.network_db
+            .enqueue_ir_score_job(&NewIrScoreJob {
+                provider: provider_key.clone(),
+                account_id: "account".into(),
+                kind: IrJobKind::Score,
+                local_score_id,
+                chart_sha256: [7; 32],
+                ln_policy: LnScorePolicy::AutoLn,
+                payload_json: "{}".into(),
+                now: 100,
+            })
+            .unwrap();
+    }
+    let ir_config = IrConfig {
+        primary_provider: provider_key.clone(),
+        providers: vec![provider],
+        ..IrConfig::default()
+    };
+
+    let report = sync_pending_ir_jobs(
+        &mut boot.network_db,
+        &boot.profile_paths.score_db,
+        &profile_root,
+        &data.paths.logs_dir,
+        &ir_config,
+        1_000,
+        10,
+        false,
+        IrSyncThrottle::none(),
+    )
+    .await
+    .unwrap();
+
+    let request = server.join().unwrap();
+    assert!(request.starts_with("POST /api/v1/auth/refresh "));
+    assert_eq!((report.submitted, report.failed), (0, 3));
+    assert!(report.failures.iter().all(|failure| failure.class
+        == IrSyncFailureClass::Moderated(crate::ir::IrModerationCode::AccountBanned)));
+    let breaker_stop = crate::ir::manual::IrFailureBreaker::default().record(&report);
+    assert_eq!(
+        breaker_stop,
+        Some(crate::ir::manual::IrManualStop::AccountRestricted { banned: true })
+    );
+    for local_score_id in [1, 2, 3] {
+        let job = boot
+            .network_db
+            .ir_score_jobs_for_local_score(IrJobKind::Score, local_score_id)
+            .unwrap()
+            .remove(0);
+        assert_eq!(job.status, "failed");
+        assert_eq!(job.next_attempt_at, crate::storage::network_db::IR_JOB_NO_AUTO_RETRY_AT);
+        assert!(job.last_error.ends_with("[ACCOUNT_BANNED]"), "{}", job.last_error);
+    }
+}
