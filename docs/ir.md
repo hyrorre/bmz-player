@@ -26,7 +26,7 @@ rianIRとの互換は[rianIR互換プロバイダー](rian-ir.md)、アシスト
 POST   /api/v1/auth/register
 POST   /api/v1/auth/login                      # email + password → provider_key + access / refresh token
 POST   /api/v1/auth/refresh                    # refresh tokenのrotation + provider_key
-POST   /api/v1/auth/logout
+POST   /api/v1/auth/logout                     # 提示した有効なtokenのセッショングループをログアウト
 GET    /api/v1/me
 GET    /api/v1/profile
 PUT    /api/v1/profile                         # display_name / bio / daily_boundary_minutes
@@ -583,6 +583,9 @@ rank=7, scope_rank=2  ライバル
 - BANで失効したsessionとrefresh tokenは復元しません。解除後に、ユーザーがログインし直します。
 - 失効済みのrefresh tokenが使われた場合、全セッションを失効させる（再利用検知）のは、rotation済みのtokenが5分の猶予を過ぎて使われたときと、再利用検知で失効したtokenが使われたときだけです。ログアウト・パスワード変更・BANで失効したtokenは拒否するだけで、その後のログインで作られたセッションには影響しません。ログアウト・個別のセッション失効では対象のセッショングループ、パスワード変更・BANではそのユーザーの全セッションについて、それより前にrotation済み（または再利用検知済み）のtokenも同じ失効理由に付け替えます。そのため、古い世代のtokenが後から使われても拒否されるだけで、その後のログインで作られたセッションや、対象外の端末のセッションは失効しません。その後に発行されたtokenと、対象外のセッショングループでは、再利用検知が通常どおり働きます。失効済みのtokenを提示したログアウトでは付け替えません。
 - refreshでは、旧tokenのrotationを「旧tokenが有効でユーザーがBANされていない」ことを条件にした1文で、新しいtokenの組の追加を「旧tokenがこのrotationの結果のまま残っていてBANされていない」ことを条件にした1文で行います。D1は書き込みを1文ずつ原子的に適用するため、BANがどの時点に割り込んでも、BAN後に有効なtokenは残らず、BANによる失効をrotationで上書きしません。同じtokenでの並行refreshは1つだけが成功します。新しいtokenの追加に失敗した場合はtokenを返さず、ユーザーはログインし直します。
+- ログイン・登録のtokenの組も、「ユーザーがBANされていない」ことを条件にした1文で追加します。BANの確認の後にBANが確定した場合はtokenを発行せず`ACCOUNT_BANNED`を返し、追加の後にBANが確定した場合はBANがそのtokenを失効させます。
+- BANによるセッションの失効と付け替えは、書き込み時点でもユーザーがBAN中の場合だけ行います。refreshがBANを読み取った後に解除・再ログインがあっても、解除後のセッションは失効しません（そのrefreshには、読み取った時点の結果として403を返します）。
+- ログアウト（`POST /api/v1/auth/logout`）は、Bearerのaccess token、bodyの`refresh_token`、Webのcookie sessionのうち、有効（失効しておらず期限内）なものが属するセッショングループ全体を失効させます。グループはサーバー側でtokenから求め、他の端末のセッションには触れません。refreshと同時に実行されても、refreshが先なら新しいtokenも同じグループとして失効し、rotationと新しいtokenの追加の間にログアウトが確定すれば追加が成立しません。失効済み・期限切れのtokenだけを提示した場合は何も変更しませんが、クライアントがローカルのtokenを破棄できるよう、応答は常に成功です。
 - 制限の判定とscoreの保存は、同じrequestの中で続けて行いますが、1つのtransactionではありません。判定の直後に制限した場合、そのrequestのscoreは保存されることがあります。そのscoreは制限より前に送られたものと同じ扱いになり、制限中は公開の表示から除外され、解除後に表示されます。
 - 公開APIの応答には、制限の理由・メモ・管理者のIDやメールアドレスを含めません。制限中の対象は「存在しない」（404）として扱います。
 

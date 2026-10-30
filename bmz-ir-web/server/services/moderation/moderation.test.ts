@@ -38,6 +38,7 @@ Object.assign(globalThis, {
   setUserSession: async () => undefined,
   clearUserSession: async () => undefined,
   verifyPassword: async (hash: string, password: string) => hash === `hash:${password}`,
+  hashPassword: async (password: string) => `hash:${password}`,
 })
 
 const migrations = new URL('../../../../server/db/migrations/sqlite/', import.meta.url)
@@ -76,6 +77,8 @@ const {
 } = await import('./admin')
 const loginHandler = (await import('../../api/v1/auth/login.post')).default as Handler
 const refreshHandler = (await import('../../api/v1/auth/refresh.post')).default as Handler
+const logoutHandler = (await import('../../api/v1/auth/logout.post')).default as Handler
+const registerHandler = (await import('../../api/v1/auth/register.post')).default as Handler
 const scoresPostHandler = (await import('../../api/v1/scores.post')).default as Handler
 const chartsIndexHandler = (await import('../../api/v1/charts/index.get')).default as Handler
 const chartDetailHandler = (await import('../../api/v1/charts/[sha256]/index.get'))
@@ -334,8 +337,25 @@ describe('account moderation and authentication', () => {
       401,
     )
 
-    // BAN と同時に発行された token が残る競合でも、現在の状態で拒否する。
-    const raced = await createAuthTokens('alice')
+    // BAN中は token の組を追加しない。
+    await expectHttpError(createAuthTokens('alice'), 403, 'ACCOUNT_BANNED')
+    expect(await activeSessions('alice')).toHaveLength(0)
+    // 何らかの理由で有効な token が残っていても、現在の状態で拒否する。
+    const raced = {
+      accessToken: 'raced-access',
+      refreshToken: 'raced-refresh',
+      sessionGroupId: 'raced',
+    }
+    await db.insert(schema.sessions).values(
+      (['access', 'refresh'] as const).map((kind) => ({
+        tokenHash: hashToken(kind === 'access' ? raced.accessToken : raced.refreshToken),
+        sessionGroupId: raced.sessionGroupId,
+        userId: 'alice',
+        kind,
+        clientType: 'web' as const,
+        expiresAt: new Date(Date.now() + 3600_000),
+      })),
+    )
     await expectHttpError(requireIrUser(event({ token: raced.accessToken })), 403, 'ACCOUNT_BANNED')
     expect(await rotateRefreshToken(raced.refreshToken)).toEqual({ banned: true })
     expect(await findUserByWebSession('alice', raced.sessionGroupId)).toBeNull()
@@ -591,12 +611,20 @@ describe('account moderation and authentication', () => {
 })
 
 /**
- * 次に呼ばれる `db.insert` などの実行直前に、別のリクエストの処理を割り込ませる。
+ * 次に呼ばれる sessions への `db.insert` などの実行直前に、別のリクエストの処理を割り込ませる。
  * refresh の読み取りと書き込みの間に BAN や並行 refresh が確定する順序を再現するために使う。
  */
-function interruptBefore(method: 'insert' | 'update', hook: () => Promise<unknown>) {
+function interruptBefore(
+  method: 'insert' | 'update',
+  hook: () => Promise<unknown>,
+  table: unknown = schema.sessions,
+) {
   const original = db[method]
   db[method] = ((...args: Parameters<typeof original>) => {
+    // 対象のテーブル以外（レート制限など）への書き込みはそのまま通す。
+    if (args[0] !== table) {
+      return (original as (...a: unknown[]) => object).apply(db, args)
+    }
     db[method] = original
     return deferExecution((original as (...a: unknown[]) => object).apply(db, args), hook)
   }) as never
@@ -754,6 +782,163 @@ describe('refresh token races with bans', () => {
     }
     expect(await db.select().from(schema.sessions)).toHaveLength(2)
     expect(await activeSessions('alice')).toHaveLength(1)
+  })
+})
+
+describe('login, refresh, ban, and logout races', () => {
+  const loginAlice = () =>
+    loginHandler(
+      event({
+        method: 'POST',
+        body: {
+          email: 'alice@example.invalid',
+          password: 'alice-password',
+          client_type: 'desktop',
+        },
+      }),
+    ) as Promise<{ access_token: string; refresh_token: string }>
+  const logout = (accessToken: string | undefined, refreshToken?: string) =>
+    logoutHandler(
+      event({
+        method: 'POST',
+        token: accessToken,
+        body: refreshToken ? { refresh_token: refreshToken } : {},
+      }),
+    )
+  const groupSessions = async (sessionGroupId: string) =>
+    (await activeSessions('alice')).filter((row) => row.sessionGroupId === sessionGroupId)
+
+  test('a refresh that read a ban lifted before it revokes leaves the restored session alone', async () => {
+    const now = Date.now()
+    const old = await createAuthTokens('alice', { clientType: 'desktop', now })
+    await setUserStatus('alice', 'banned')
+    let restored: Awaited<ReturnType<typeof createAuthTokens>> | undefined
+    // 古い refresh が banned を読んだ後、失効させる前に、解除と再ログインが確定する。
+    interruptAfterModerationRead(async () => {
+      await setUserStatus('alice', 'active')
+      restored = await createAuthTokens('alice', { clientType: 'desktop', now })
+    })
+
+    expect(await rotateRefreshToken(old.refreshToken, now)).toEqual({ banned: true })
+    expect(await sessionRow(restored!.refreshToken)).toMatchObject({
+      revokedAt: null,
+      revokedReason: null,
+    })
+    expect(await findUserByAccessToken(restored!.accessToken, now)).toMatchObject({ id: 'alice' })
+    expect(await rotateRefreshToken(restored!.refreshToken, now)).toMatchObject({
+      tokens: expect.any(Object),
+    })
+    // 古い token からは何も発行されない。
+    expect(await rotateRefreshToken(old.refreshToken, now + 10 * 60_000)).toBeNull()
+    expect(await reuseDetectedCount()).toBe(0)
+  })
+
+  test('a ban confirmed after the login checked the account leaves no valid token', async () => {
+    interruptBefore('insert', () => setUserStatus('alice', 'banned'))
+    await expectHttpError(loginAlice(), 403, 'ACCOUNT_BANNED')
+    expect(await db.select().from(schema.sessions)).toHaveLength(0)
+
+    await setUserStatus('alice', 'active')
+    expect(await activeSessions('alice')).toHaveLength(0)
+    const login = await loginAlice()
+    expect(await requireIrUser(event({ token: login.access_token }))).toMatchObject({ id: 'alice' })
+  })
+
+  test('tokens issued by a login that finished before the ban never come back', async () => {
+    const login = await loginAlice()
+    await setUserStatus('alice', 'banned')
+    expect(await activeSessions('alice')).toHaveLength(0)
+    await setUserStatus('alice', 'active')
+    expect(await findUserByAccessToken(login.access_token)).toBeNull()
+    expect(await rotateRefreshToken(login.refresh_token)).toBeNull()
+  })
+
+  test('registration still issues a working token pair', async () => {
+    const registered = (await registerHandler(
+      event({
+        method: 'POST',
+        body: {
+          email: 'dave@example.invalid',
+          display_name: 'dave',
+          password: 'dave-password-123',
+          client_type: 'desktop',
+        },
+      }),
+    )) as { access_token: string; refresh_token: string; player: { id: string } }
+    expect(await requireIrUser(event({ token: registered.access_token }))).toMatchObject({
+      id: registered.player.id,
+    })
+    expect(await rotateRefreshToken(registered.refresh_token)).toMatchObject({
+      tokens: expect.any(Object),
+    })
+  })
+
+  test('a logout confirmed between rotation and issuing new tokens issues nothing', async () => {
+    const now = Date.now()
+    const device = await createAuthTokens('alice', { clientType: 'desktop', now })
+    const other = await createAuthTokens('alice', { clientType: 'desktop', now })
+    // クライアントは rotation 中の古い組でログアウトする。
+    interruptBefore('insert', () => logout(device.accessToken, device.refreshToken))
+
+    expect(await rotateRefreshToken(device.refreshToken, now)).toBeNull()
+    expect(await groupSessions(device.sessionGroupId)).toHaveLength(0)
+    expect(await sessionRow(device.refreshToken)).toMatchObject({ revokedReason: 'logout' })
+    expect(await groupSessions(other.sessionGroupId)).toHaveLength(2)
+    expect(await reuseDetectedCount()).toBe(0)
+  })
+
+  test('logging out after a refresh also revokes the tokens that refresh issued', async () => {
+    const now = Date.now()
+    const { t1, t2 } = await rotatedPair('alice', now)
+    // refresh の応答を受け取る前の access token でも、同じセッションをログアウトできる。
+    await logout(t1.accessToken)
+    expect(await findUserByAccessToken(t2.accessToken, now)).toBeNull()
+    expect(await rotateRefreshToken(t2.refreshToken, now)).toBeNull()
+    expect(await groupSessions(t1.sessionGroupId)).toHaveLength(0)
+  })
+
+  test('a refresh after logout issues nothing and leaves other devices alone', async () => {
+    const now = Date.now()
+    const later = now + 10 * 60_000
+    const device = await createAuthTokens('alice', { clientType: 'desktop', now })
+    const other = await rotatedPair('alice', now)
+    await logout(device.accessToken, device.refreshToken)
+
+    expect(await rotateRefreshToken(device.refreshToken, now)).toBeNull()
+    expect(await findUserByAccessToken(other.t2.accessToken, now)).toMatchObject({ id: 'alice' })
+    // 別の端末の再利用検知は従来どおり働く。
+    expect(await rotateRefreshToken(other.t1.refreshToken, later)).toEqual({ reuseDetected: true })
+    const relogin = await loginAlice()
+    expect(await requireIrUser(event({ token: relogin.access_token }))).toMatchObject({
+      id: 'alice',
+    })
+  })
+
+  test('revoked or expired tokens cannot log out any session', async () => {
+    const now = Date.now()
+    const { t1, t2 } = await rotatedPair('alice', now)
+    // rotation 済みの古い token だけでは、どのグループも操作できない。
+    await logout(undefined, t1.refreshToken)
+    expect(await findUserByAccessToken(t2.accessToken, now)).toMatchObject({ id: 'alice' })
+    // 期限切れの token でも操作できない（旧 access token と新しい組の3件が残る）。
+    await revokeToken(t2.refreshToken, 'refresh', 'logout', now + 31 * 86400_000)
+    expect(await groupSessions(t2.sessionGroupId)).toHaveLength(3)
+  })
+
+  test('a web cookie logout during a refresh leaves the session logged out', async () => {
+    const now = Date.now()
+    const web = await createAuthTokens('alice', { now })
+    const session = { user: { id: 'alice' }, secure: { sessionGroupId: web.sessionGroupId } }
+    const originalGetUserSession = (globalThis as Record<string, unknown>).getUserSession
+    Object.assign(globalThis, { getUserSession: async () => session })
+    try {
+      interruptBefore('insert', () => logout(undefined))
+      expect(await rotateRefreshToken(web.refreshToken, now)).toBeNull()
+    } finally {
+      Object.assign(globalThis, { getUserSession: originalGetUserSession })
+    }
+    expect(await findUserByWebSession('alice', web.sessionGroupId, now)).toBeNull()
+    expect(await groupSessions(web.sessionGroupId)).toHaveLength(0)
   })
 })
 

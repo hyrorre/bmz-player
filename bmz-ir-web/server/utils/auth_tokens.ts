@@ -3,6 +3,7 @@ import { and, eq, gt, inArray, isNull, or, sql, type SQL } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/sqlite-core'
 import { db, schema } from 'hub:db'
 import type { UserModerationStatus } from '../../shared/constants/moderation'
+import { moderationHttpError } from '../services/moderation/enforcement'
 import { publicPlayerCondition } from '../services/moderation/visibility'
 import { revokedRefreshTokenAction, type SessionRevocationReason } from './auth_token_policy'
 
@@ -41,38 +42,62 @@ export function hashToken(token: string) {
   return createHash('sha256').update(token).digest('hex')
 }
 
+/**
+ * ログイン・登録で新しいセッションを作る。ユーザーがBANされていないことを条件にした1文で
+ * access / refresh token の組を追加するため、BAN確認の後にBANが確定しても有効なtokenは残らない
+ * （追加の後にBANが確定した場合は、BANがこのtokenを失効させる）。追加されなかった場合は
+ * ACCOUNT_BANNED を投げ、tokenを返さない。
+ */
 export async function createAuthTokens(
   userId: string,
   options: CreateAuthTokensOptions = {},
 ): Promise<AuthTokenPair> {
   const now = options.now ?? Date.now()
-  const clientType = options.clientType ?? 'web'
-  const sessionGroupId = options.sessionGroupId ?? randomUUID()
+  const tokens = await insertTokenPair(
+    {
+      userId,
+      clientType: options.clientType ?? 'web',
+      sessionGroupId: options.sessionGroupId ?? randomUUID(),
+    },
+    now,
+    publicPlayerCondition(sql`${userId}`),
+  )
+  if (!tokens) {
+    throw moderationHttpError('ACCOUNT_BANNED')
+  }
+  return tokens
+}
+
+/**
+ * access / refresh token の組を、`condition` が成立する場合だけ1文の INSERT で追加する。
+ * 片方だけ保存されることはなく、追加されなかった場合と DB エラーの場合（例外）は token を返さない。
+ */
+async function insertTokenPair(
+  session: { userId: string; clientType: ClientType; sessionGroupId: string },
+  now: number,
+  condition: SQL,
+): Promise<AuthTokenPair | null> {
+  const sessions = schema.sessions
   const accessToken = randomToken()
   const refreshToken = randomToken()
   const accessExpiresAt = Math.floor(now / 1000) + ACCESS_TOKEN_TTL_SECONDS
   const refreshExpiresAt = now + REFRESH_TOKEN_TTL_SECONDS * 1000
-
-  await db.insert(schema.sessions).values([
-    {
-      tokenHash: hashToken(accessToken),
-      sessionGroupId,
-      userId,
-      kind: 'access',
-      clientType,
-      expiresAt: new Date(accessExpiresAt * 1000),
-    },
-    {
-      tokenHash: hashToken(refreshToken),
-      sessionGroupId,
-      userId,
-      kind: 'refresh',
-      clientType,
-      expiresAt: new Date(refreshExpiresAt),
-    },
-  ])
-
-  return { sessionGroupId, accessToken, refreshToken, accessExpiresAt }
+  const row = (tokenHash: string, kind: SessionKind, expiresAt: number) =>
+    sql`select ${tokenHash}, ${session.sessionGroupId}, ${session.userId}, ${kind},
+      ${session.clientType}, ${expiresAt}, null, null, null, ${now}
+    where ${condition}`
+  // insert().select() の SELECT の列順は sessions の列定義順。
+  const inserted = await db
+    .insert(sessions)
+    .select(
+      sql`${row(hashToken(accessToken), 'access', accessExpiresAt * 1000)}
+        union all ${row(hashToken(refreshToken), 'refresh', refreshExpiresAt)}`,
+    )
+    .returning({ tokenHash: sessions.tokenHash })
+  if (inserted.length !== 2) {
+    return null
+  }
+  return { sessionGroupId: session.sessionGroupId, accessToken, refreshToken, accessExpiresAt }
 }
 
 export async function findUserByWebSession(
@@ -256,7 +281,11 @@ export async function rotateRefreshToken(token: string, now = Date.now()) {
   }
 }
 
-/** BAN済みユーザーのrefreshを拒否し、残っているセッションを打ち切る。 */
+/**
+ * BAN済みユーザーのrefreshを拒否し、残っているセッションを打ち切る。失効は書き込み時点でも
+ * BAN中の場合だけ行うため、BANを読み取った後に解除・再ログインされても、新しいセッションは
+ * 失効させない（その場合も、このrequestにはBANを読み取った時点の結果として403を返す）。
+ */
 async function refuseBannedRefresh(userId: string, now: number) {
   const [revokeActive, retireRevoked] = banSessionStatements(userId, new Date(now))
   await db.batch([revokeActive, retireRevoked])
@@ -277,10 +306,10 @@ async function refreshLostRace(userId: string, now: number) {
 
 /**
  * rotation 後の access / refresh token の組を、旧tokenがこの rotation の結果のまま残っていて、
- * ユーザーがBANされていない場合だけ追加する。1文の INSERT なので片方だけ保存されることはない。
- * 追加されなかった場合と、DBエラーの場合（例外）はtokenを返さない。
+ * ユーザーがBANされていない場合だけ追加する。rotation の後に BAN・ログアウト・パスワード変更・
+ * 個別失効が確定すると、旧tokenはその失効理由に付け替わるため、何も追加されない。
  */
-async function insertRotatedTokens(
+function insertRotatedTokens(
   session: {
     tokenHash: string
     sessionGroupId: string | null
@@ -288,33 +317,21 @@ async function insertRotatedTokens(
     clientType: ClientType
   },
   now: number,
-): Promise<AuthTokenPair | null> {
+) {
   const sessions = schema.sessions
-  const sessionGroupId = session.sessionGroupId ?? randomUUID()
-  const accessToken = randomToken()
-  const refreshToken = randomToken()
-  const accessExpiresAt = Math.floor(now / 1000) + ACCESS_TOKEN_TTL_SECONDS
-  const refreshExpiresAt = now + REFRESH_TOKEN_TTL_SECONDS * 1000
   const stillRotated = sql`exists (select 1 from ${sessions} as rotated_session
     where rotated_session.token_hash = ${session.tokenHash}
       and rotated_session.revoked_reason = 'rotated'
       and rotated_session.revoked_at = ${now})`
-  const row = (tokenHash: string, kind: SessionKind, expiresAt: number) =>
-    sql`select ${tokenHash}, ${sessionGroupId}, ${session.userId}, ${kind}, ${session.clientType},
-      ${expiresAt}, null, null, null, ${now}
-    where ${stillRotated} and ${publicPlayerCondition(sql`${session.userId}`)}`
-  // insert().select() の SELECT の列順は sessions の列定義順。
-  const inserted = await db
-    .insert(sessions)
-    .select(
-      sql`${row(hashToken(accessToken), 'access', accessExpiresAt * 1000)}
-        union all ${row(hashToken(refreshToken), 'refresh', refreshExpiresAt)}`,
-    )
-    .returning({ tokenHash: sessions.tokenHash })
-  if (inserted.length !== 2) {
-    return null
-  }
-  return { sessionGroupId, accessToken, refreshToken, accessExpiresAt }
+  return insertTokenPair(
+    {
+      userId: session.userId,
+      clientType: session.clientType,
+      sessionGroupId: session.sessionGroupId ?? randomUUID(),
+    },
+    now,
+    sql`${stillRotated} and ${publicPlayerCondition(sql`${session.userId}`)}`,
+  )
 }
 
 export async function listUserSessions(
@@ -424,53 +441,44 @@ export async function revokeUserSessionById(
   return true
 }
 
+/**
+ * 提示された token が有効（失効しておらず期限内）な場合だけ、その token が属するセッション
+ * グループ全体を失効させる（ログアウト）。グループはサーバー側で token から求め、request で
+ * user ID やグループを指定させない。失効済み・期限切れの token を提示しても何も変更しないため、
+ * 盗まれた古い token で他のセッションを操作することはできない。
+ *
+ * グループ単位で失効させるのは、同じグループで並行している refresh を残さないため。refresh が
+ * 先に確定していれば新しい token もこのグループに入って失効し、rotation と新しい token の追加の
+ * 間にログアウトが確定すれば、旧 token が付け替わって追加が成立しない。
+ */
 export async function revokeToken(
   token: string,
   kind?: SessionKind,
   reason: ExplicitRevocationReason = 'logout',
   now = Date.now(),
 ) {
-  const filters = [
-    eq(schema.sessions.tokenHash, hashToken(token)),
-    isNull(schema.sessions.revokedAt),
-  ]
-  if (kind) {
-    filters.push(eq(schema.sessions.kind, kind))
-  }
-
-  const revoke = db
-    .update(schema.sessions)
-    .set({ revokedAt: new Date(now), revokedReason: reason })
-    .where(and(...filters))
-  if (kind !== 'refresh') {
-    await revoke
-    return
-  }
-
-  // 有効なrefresh tokenを失効させるときは、同じセッショングループで過去に rotation された
-  // tokenも同じ理由に付け替える（revokeSessionsStatements と同じ理由）。失効済みのtokenを
-  // 提示しても付け替えないよう、提示されたtokenが有効なことを条件にし、失効より先に実行する。
   const sessions = schema.sessions
   const presented = alias(sessions, 'presented_session')
+  const presentedFilter = and(
+    eq(presented.tokenHash, hashToken(token)),
+    kind ? eq(presented.kind, kind) : undefined,
+    isNull(presented.revokedAt),
+    gt(presented.expiresAt, new Date(now)),
+  )
   const presentedGroup = db
     .select({ sessionGroupId: presented.sessionGroupId })
     .from(presented)
-    .where(
-      and(
-        eq(presented.tokenHash, hashToken(token)),
-        eq(presented.kind, 'refresh'),
-        isNull(presented.revokedAt),
-      ),
-    )
-  const retire = db
-    .update(sessions)
-    .set({ revokedReason: reason })
-    .where(
-      and(
-        inArray(sessions.sessionGroupId, presentedGroup),
-        inArray(sessions.revokedReason, RETIRABLE_REASONS),
-      ),
-    )
+    .where(presentedFilter)
+  const presentedToken = db
+    .select({ tokenHash: presented.tokenHash })
+    .from(presented)
+    .where(presentedFilter)
+  // session_group_id が無い古い行は、その token だけを対象にする。
+  const scope = or(
+    inArray(sessions.sessionGroupId, presentedGroup),
+    inArray(sessions.tokenHash, presentedToken),
+  )
+  const [retire, revoke] = revokeSessionsStatements(scope, reason, new Date(now))
   await db.batch([retire, revoke])
 }
 
@@ -484,11 +492,15 @@ export async function revokeToken(
  *    付け替えは BAN を境に単調に進み、時刻の比較に頼らない。解除後に発行・rotation された
  *    token には触れないため、解除後の再利用検知はそのまま働く。
  *
+ * どちらも書き込み時点でユーザーがBAN中の場合だけ行う。
  * `condition` は管理操作が実際に適用された場合だけ実行するための条件。
  */
 export function banSessionStatements(userId: string, now: Date, condition?: SQL) {
+  // 書き込み時点でBAN中であることを条件にする。BANを読み取った後に解除された場合、解除後の
+  // ログインで作られたセッションを失効させない。
+  const stillBanned = sql`not ${publicPlayerCondition(sql`${userId}`)}`
   const [retireRevoked, revokeActive] = revokeSessionsStatements(
-    and(eq(schema.sessions.userId, userId), condition),
+    and(eq(schema.sessions.userId, userId), stillBanned, condition),
     'admin',
     now,
   )
