@@ -94,6 +94,7 @@ pub(super) fn quarter_note_elapsed_ms(
 }
 
 /// 実時間を区間 BPM / 60 倍して進める。STOP 中 (次の区間の開始より前) は進めない。
+#[cfg(test)]
 fn bpm_normalized_moving_elapsed_us(timing_map: &TimingMap, start: TimeUs, end: TimeUs) -> f64 {
     let mut cursor = start.0.max(0).min(end.0);
     let end = end.0.max(cursor);
@@ -114,6 +115,7 @@ fn bpm_normalized_moving_elapsed_us(timing_map: &TimingMap, start: TimeUs, end: 
 
 /// beatoraja LaneRenderer の PMS 見逃し POOR と同じく、ノーツの STOP 終了から
 /// `delay_us` 後に、ハイスピードによらず1小節でレーン高さぶん落とす。STOP 中は止める。
+#[cfg(test)]
 pub(super) fn pms_missed_note_fall_progress(
     timing_map: &TimingMap,
     note_tick: ChartTick,

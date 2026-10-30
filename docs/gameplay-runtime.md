@@ -99,6 +99,13 @@ consumerは取得したAudioClockの現在時刻で、ノーツ・Mine・LN端�
 STOP、SCROLL/SPEED、CONSTANT、note retention、PMS見逃し表示の計算は準備画面と共通です。
 consumerの投影はgameplayのadvance、入力判定、audio enqueueを呼ばず、交換lockの外で行います。
 
+PMS見逃しノーツの落下計算は、譜面準備時に作る`MissedNoteFallCache`を共有します。
+BPMごとの累積落下量（STOP中は一定）と各ノーツのSTOP終了時刻を保持し、
+現在時刻と落下開始時刻の累積値の差で位置を求めます。判定幅は現在のwindowから適用します。
+レーンごとのSTOP終了・予定時刻のprefix最大値を二分探索し、8小節の保持上限を超えた範囲を
+走査前に除きます。`note_retention`でも期限切れの範囲を広げません。
+cacheは不変で、時刻の巻き戻しにも対応し、フレームごとの履歴追加や再積分は行いません。
+
 入力・判定のpresentation eventは既存sequenceとgame timeを保持します。
 consumerが受領したsequenceまでをacknowledgementで破棄します。
 skin runtimeは既読sequenceを再処理せず、timerはイベントの元時刻から評価します。

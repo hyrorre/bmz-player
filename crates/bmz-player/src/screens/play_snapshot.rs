@@ -41,6 +41,7 @@ mod build;
 mod cache;
 mod chart_text;
 mod display;
+mod missed_notes;
 mod projection;
 mod scroll;
 mod state;

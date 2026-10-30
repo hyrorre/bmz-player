@@ -10,6 +10,7 @@ pub struct PlayRenderSnapshotCache {
     pub(super) bpm_changes: Arc<[BpmChangePoint]>,
     pub(super) end_of_note_time: TimeUs,
     pub(super) scroll_integral: ScrollIntegralCache,
+    pub(super) missed_notes: super::missed_notes::MissedNoteFallCache,
     /// SPEED イベントの `(time_us, factor)`。beatoraja と同じく時間で補間する。
     pub(super) speed_segments: Arc<[(f64, f64)]>,
     /// `long_notes` は start tick 順であることを前提にしている。各位置までの
@@ -69,6 +70,9 @@ impl PlayRenderSnapshotCache {
                 .into_boxed_slice(),
         );
         let bga_events = BgaEventCache::from_chart(chart);
+        let timing =
+            TimingMap::from_chart_timing_events(chart.metadata.initial_bpm, &chart.timing_events);
+        let missed_notes = super::missed_notes::MissedNoteFallCache::new(chart, &timing);
         Self {
             judge_graph_density,
             bpm_graph_segments,
@@ -78,6 +82,7 @@ impl PlayRenderSnapshotCache {
             bpm_changes,
             end_of_note_time,
             scroll_integral,
+            missed_notes,
             speed_segments,
             long_note_prefix_max_end_times,
             bga_events,

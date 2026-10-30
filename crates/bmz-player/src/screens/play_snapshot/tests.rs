@@ -200,3 +200,5 @@ mod cases_04;
 mod cases_05;
 #[path = "tests/input_offset.rs"]
 mod input_offset;
+#[path = "tests/missed_notes.rs"]
+mod missed_notes;

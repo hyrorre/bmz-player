@@ -42,6 +42,7 @@ pub(in crate::screens::play_snapshot) fn populate_visible_playfield(
         &scroll,
         cursor_tick,
         tick_upper_bound,
+        cache,
     );
     populate_visible_guide_lines(
         snapshot,
@@ -70,19 +71,28 @@ fn populate_visible_notes(
     scroll: &ScrollContext<'_>,
     cursor_tick: f64,
     tick_upper_bound: Option<f64>,
+    cache: &PlayRenderSnapshotCache,
 ) {
     // 9KEYS は既定 skin も見逃しノーツを落とす。それ以外は skin の DST_NOTE2 がある場合だけ残す。
     let keep_missed_notes = snapshot.key_mode == KeyMode::K9 || session.missed_note_fall;
     let note_lower_time = (!keep_missed_notes).then_some(lane_render_now);
+    let missed = keep_missed_notes.then(|| {
+        cache.missed_notes.frame(lane_render_now, session.judge.window_set.note.empty_poor_slow_us)
+    });
     for lane in Lane::ALL {
-        let retention_lower_index =
-            session.note_retention.then_some(session.judge.lanes[lane.index()].next_note_index);
-        for note in visible_lane_notes(
-            session.chart.notes_for_lane(lane),
+        let first_note = missed.map_or(0, |frame| frame.first_note(lane));
+        // PMS落下はnote_retentionより優先するため、保持設定で期限切れの範囲を広げない。
+        let retention_lower_index = (!keep_missed_notes && session.note_retention)
+            .then_some(session.judge.lanes[lane.index()].next_note_index);
+        for (relative_index, note) in visible_lane_notes(
+            &session.chart.notes_for_lane(lane)[first_note..],
             note_lower_time,
             retention_lower_index,
             tick_upper_bound,
-        ) {
+        )
+        .iter()
+        .enumerate()
+        {
             let Some(alpha) = constant_object_alpha(session, lane_render_now, note.time) else {
                 continue;
             };
@@ -115,7 +125,9 @@ fn populate_visible_notes(
                 }
                 NoteKind::Tap => {
                     let pms_miss_fall = if pms_missed {
-                        let Some(fall) = pms_missed_tap_fall(session, note, lane_render_now) else {
+                        let Some(fall) = missed
+                            .and_then(|frame| frame.progress(lane, first_note + relative_index))
+                        else {
                             continue;
                         };
                         Some(fall)
@@ -142,26 +154,6 @@ fn populate_visible_notes(
             }
         }
     }
-}
-
-/// 見逃しノーツを snapshot に残す落下量の上限。消える位置は skin の `DST_NOTE2` で
-/// 決まるため、ここでは十分に落ち切ったノーツだけを除く。
-const PMS_MISSED_NOTE_MAX_FALL_MEASURES: f32 = 8.0;
-
-fn pms_missed_tap_fall(
-    session: &PlayfieldView<'_>,
-    note: &NoteEvent,
-    lane_render_now: TimeUs,
-) -> Option<f32> {
-    // beatoraja は遅い側の空POOR境界 (PMS 175ms) まで判定ライン上に留め、その後に落とす。
-    let fall = pms_missed_note_fall_progress(
-        session.timing_map,
-        note.tick,
-        note.time,
-        session.judge.window_set.note.empty_poor_slow_us.max(0),
-        lane_render_now,
-    );
-    (fall <= PMS_MISSED_NOTE_MAX_FALL_MEASURES).then_some(fall)
 }
 
 fn populate_visible_guide_lines(

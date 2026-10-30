@@ -176,3 +176,47 @@ Windowsの権限エラーが発生し、bmz-playerのテストプロセスも終
 Windows専用の `key9_gamepad_release_stops_select_hold_move` も `--ignored` で単独実行し、成功しました。
 ログは `.local/peaceful-review-tests.log` と `.local/peaceful-review-player-tests.log` に置き、共有しません。
 実プレイの目視、物理コントローラー、macOS/Linuxでの確認は未実施です。
+
+## 追記: 過去ノーツの再計算を減らす（2026-10-30）
+
+レビュー指摘のうち、7 to 9版で過去全体の再走査・再積分が増え続ける問題を修正しました。
+現在の責務は[gameplay-runtime.md](../../docs/gameplay-runtime.md)を参照してください。
+
+- `PlayRenderSnapshotCache`に共有する不変の`MissedNoteFallCache`を追加しました。
+  BPM・STOPを反映した累積落下量と、各ノーツのSTOP終了時刻を譜面準備時に作ります。
+  フレームごとは現在の累積値を1回求め、候補ノーツの開始時刻の累積値との差を使います。
+  各開始時刻の検索は二分探索で、timing segmentの全走査・区間ごとの再積分をしません。
+- 判定幅はcacheへ焼き込まず、現在のwindowから適用します。
+  Practiceの速度変更等で判定幅が異なっても、古い落下開始条件を使いません。
+- レーンごとのSTOP終了・予定時刻のprefix最大値を二分探索し、8小節を超えた範囲を先に除外します。
+  `note_retention`がONでも期限切れノーツを戻しません。
+  時刻の巻き戻しでは同じcacheから範囲を再計算でき、フレームごとのcache更新は不要です。
+
+回帰テストでは、従来の積分式をテスト用の比較基準として残し、BPM変化・連続STOP・
+同一公開tick内の複数時刻・保持上限の境界・判定幅変更・時刻の巻き戻し・
+7KEYS/9KEYSのnote_retentionと再生速度50/100/200%を確認しました。
+長い譜面でも期限内の候補数に絞られることを、時間に依存しないテストで確認しました。
+
+性能比較にはignoredテスト`profile_missed_note_snapshot_history`を使います。
+合成7KEYS譜面（7鍵へ分散した10,000 Tap、500回のBPM変更、10%がPOOR）、
+準備済みcacheを再利用し、各3回のwarmup後100回のsnapshot作成をreleaseビルドで測ります。
+対象はCPU処理時間で、実プレイFPSやGPU/present待ちではありません。
+
+```powershell
+cargo test -p bmz-player --release --locked --lib profile_missed_note_snapshot_history -- --ignored --nocapture
+```
+
+| 地点 | 修正前 中央値 / p95 (ms) | 修正後 中央値 / p95 (ms) |
+|---|---|---|
+| 曲10% | 0.084500 / 0.088300 | 0.010800 / 0.012100 |
+| 曲90% | 4.839700 / 5.680800 | 0.019400 / 0.020300 |
+
+落下表示OFFの対照条件は、中央値が曲10%で0.004100→0.004100ms、
+曲90%で0.012800→0.012700msでした。
+ログは `.local/peaceful-miss-before.log` と `.local/peaceful-miss-after.log` に置き、共有しません。
+
+`cargo fmt --check`、`cargo check -p bmz-player --locked`、
+`cargo clippy -p bmz-player --all-targets --locked -- -D warnings`、
+`cargo test -p bmz-player --locked --quiet` に成功しました（2,741件成功、46件ignored）。
+上記のrelease計測用ignoredテストも単独実行で成功しました。
+実プレイ・GPU/present待ち・macOS/Linuxの確認は未実施です。
