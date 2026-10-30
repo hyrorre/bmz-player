@@ -92,11 +92,45 @@ LR2横スクロールの落下先Xも、1小節で判定位置から右端まで
   （bmz-player 2,735件、bmz-render 971件成功）。ログは`.local/9key-fixes/`に置き、共有しません。
 - PeacefulPlayを使った実プレイの目視確認と、9KEYSコントローラー実機での確認は未実施です。
 
-## 残課題
+## 追記: 7 to 9版の見逃しノーツとKEY LOGGER列（2026-10-30）
 
-- 9KEYS以外のキーモードで`dst2`を持つスキン（PeacefulPlayの7 to 9版を7KEYSで使う場合など）では、
-  見逃しノーツの落下を描きません。snapshotがK9だけで過去ノーツを残すためです。
-- PeacefulPlayの7 to 9版のKEY LOGGERは、BMZが7KEYSのレーン順（皿を含む）で列を数えます。
-  スキンは表示レーン順で数えるため、既定以外のレーン割り当てでは別の列に表示されます。
+上の修正で残した、PeacefulPlayの7 to 9版（`play7_9lane.luaskin`、7KEYS譜面を9レーン外観で遊ぶ版）の2件を直しました。
+
+### 見逃しノーツ（`1b141063`）
+
+beatorajaのPMS見逃しPOOR描画は、キーモードではなくskinの`dst2`で有効になります。
+BMZのsnapshotは9KEYSのときだけ過去ノーツを残していたため、7 to 9版では落下を描いていませんでした。
+`GameSession::missed_note_fall`にプレイスキンが`note.dst2`を持つかを保持し、
+9KEYSまたはこのフラグがあるときに過去の未判定・BAD・POORのTapを残すようにしました。
+フラグは`install_active_play`（通常・コース・Practiceの開始）と動画出力で、読み込んだプレイスキンから設定します。
+
+### KEY LOGGER列
+
+7 to 9版は、レーン割り当て（`割り当て assign`）に応じて皿と鍵盤を表示列へ並べます。
+スキンのtrackerは表示列ごとに`main_state.timer(100 + skin offset)`を読みますが、
+BMZは7KEYSのレーン順（皿が先頭）で列を数えていました。既定の「SC1 KEY2-8」だけが偶然一致し、
+他の5種類では別の列に表示されていました。
+
+`keylogger-button-on-<列>`のdraw callbackは、その列のkey-on timerだけを読みます。
+ロード時にこのcallbackが読むtimerを記録し、documentの`keyloggerLane`として保持します。
+`KeyLoggerRuntime`はこの対応で入力レーンを列へ割り当て、対応が無いスキンでは従来のレーン順を使います。
+実スキンから求めた対応は、9key版が列N→timer 100+N、7 to 9版の「SC1 KEY3-9」が
+列1→100（皿）・列3〜9→101〜107、「SC9 KEY1-7」が列1〜7→101〜107・列9→100で、
+スキンの`lane_map`と一致しました。
+
+### 追記分の検証
+
+- `cargo check --workspace --locked`と`cargo clippy --workspace --all-targets --locked -- -D warnings`に成功しました。
+- `cargo test --workspace --locked --no-fail-fast`の失敗は、既存の`gauge-lead-glow-*`の1件だけでした
+  （bmz-player 2,736件、bmz-render 972件、bmz-skin 340件、bmz-gameplay 255件成功）。
+- 追加したテスト:
+  - 7KEYSで`missed_note_fall`があるときだけ見逃しノーツを残して落とす（snapshot）。
+  - 「SC1 KEY3-9」の対応で、皿・KEY1・KEY7の押下と判定数が列1・3・9に入る（runtime）。
+  - 実スキンの9key版と7 to 9版3種類で、`dst2`と列の対応を確認する（decode）。
+- 7 to 9版を使った実プレイの目視確認は未実施です。
+
+### 追記時点の残課題
+
 - `peaceful_play_integral_property_ops_are_selectable_when_available`の`gauge-lead-glow-*`の期待値を、
   現在のPeacefulPlayの版に合わせて見直す必要があります。
+  このテストは途中で失敗するため、7 to 9版の確認は別のテストに分けました。
