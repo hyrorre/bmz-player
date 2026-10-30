@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn lr2_continue_provider_accepts_single_custom_offset() {
+    let root = unique_test_dir("bmz-lr2-continue-single-offset");
+    let select_dir = root.join("Select");
+    fs::create_dir_all(&select_dir).unwrap();
+    fs::write(select_dir.join("background.png"), []).unwrap();
+    let path = select_dir.join("select.lr2skin");
+    fs::write(
+        &path,
+        "#INFORMATION,5,test,test\n#CUSTOMOFFSET,Position,40,1,1,0,0,0,0\n#IMAGE,background.png\n",
+    )
+    .unwrap();
+    let assets = resolve_lr2_continue_assets(&path, &LuaLoadRuntimeState::default(), None).unwrap();
+    let source = &assets.sources["0"];
+    assert!(Path::new(&source.path).is_file(), "{}", source.path);
+}
+
+#[test]
 fn lr2_result_cache_follows_clear_assets_and_canvas_selection() {
     let root = unique_test_dir("bmz-lr2-result-cache");
     fs::create_dir_all(&root).unwrap();

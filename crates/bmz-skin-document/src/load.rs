@@ -173,8 +173,8 @@ pub fn normalize_json_skin_integer_value(value: JsonValue) -> JsonValue {
 /// `normalize_json_skin_integer_numbers` (JSON skin ファイル向け) との違いは、
 /// Lua 変換が `x = {10}` のような長さ 1 の配列を作ることがあるため、
 /// スカラー期待の整数キー (`op` / `offsets` / `time` 以外) では配列を
-/// アンラップしてスカラーへ畳み込む点。旧 bmz-skin 内の重複実装を
-/// 挙動そのままここへ移した。
+/// アンラップしてスカラーへ畳み込む点。`offset` は定義の配列にも使うため、
+/// オブジェクトや配列を含む場合は1件でも配列を維持する。
 pub fn normalize_lua_json_skin_integer_numbers(value: JsonValue) -> JsonValue {
     normalize_lua_json_skin_integer_numbers_for_key(None, value)
 }
@@ -185,7 +185,9 @@ fn normalize_lua_json_skin_integer_numbers_for_key(
 ) -> JsonValue {
     match value {
         JsonValue::Array(mut values)
-            if is_json_skin_scalar_integer_key(key) && values.len() == 1 =>
+            if is_json_skin_scalar_integer_key(key)
+                && values.len() == 1
+                && !matches!(values[0], JsonValue::Object(_) | JsonValue::Array(_)) =>
         {
             normalize_lua_json_skin_integer_value(values.remove(0))
         }

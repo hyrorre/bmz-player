@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-30 | [LITONE5の読み込み互換性](2026/2026-10-30-litone5-load-compatibility.md) |
 | 2026-10-30 | [譜面ダウンロードのスクロールバーの間隔](2026/2026-10-30-download-scrollbars.md) |
 | 2026-10-30 | [SocialSkinの読み込みとLua互換性](2026/2026-10-30-social-skin-compatibility.md) |
 | 2026-10-30 | [9KEYSの選曲カーソルとPeacefulPlay表示の修正](2026/2026-10-30-9key-play-fixes.md) |

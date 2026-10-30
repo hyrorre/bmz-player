@@ -4,6 +4,28 @@
 use super::*;
 
 #[test]
+fn lua_numeric_normalization_preserves_singleton_offset_definitions() {
+    for count in 0..=2 {
+        let offsets = (0..count)
+            .map(|id| serde_json::json!({"id":id,"name":"Position","x":true}))
+            .collect::<Vec<_>>();
+        let value = normalize_lua_json_skin_integer_numbers(serde_json::json!({
+            "offset": offsets,
+            "value": [{"id":"number","offset":[{"ref":[42.0]}]}],
+            "note": {"offset":[3.0]},
+            "destination": [{"id":"image","dst":[{"x":[10.5]}]}]
+        }));
+        assert!(value["offset"].is_array(), "count: {count}, {value}");
+        assert!(value["value"][0]["offset"].is_array());
+        assert_eq!(value["note"]["offset"], 3);
+        assert_eq!(value["destination"][0]["dst"][0]["x"], 11);
+        let document: SkinDocument = serde_json::from_value(value).unwrap();
+        assert_eq!(document.offset.len(), count);
+        assert_eq!(document.value[0].offset[0].ref_id, 42);
+    }
+}
+
+#[test]
 fn destination_clip_fields_decode_through_json_and_lua_numeric_normalization() {
     let frame = serde_json::json!({"clip_x":1.5,"clip_y":2.0,"clip_w":30.0,"clip_h":40.0});
     for value in [
