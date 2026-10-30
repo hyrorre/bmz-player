@@ -19,7 +19,6 @@ const appliedSearch = ref('')
 const statusFilter = ref<'all' | UserModerationStatus>('all')
 const page = ref(1)
 const pageSize = 30
-const selectedId = ref<string | null>(null)
 
 const statusItems = computed(() => [
   { label: t('admin.allStatuses'), value: 'all' as const },
@@ -48,18 +47,17 @@ const {
 )
 
 const {
-  data: detail,
-  pending: detailPending,
+  selectedId,
+  detail,
+  loading: detailLoading,
   error: detailError,
-  refresh: refreshDetail,
-} = await useFetch<AdminUserDetail>(
-  () => `/api/v1/admin/moderation/users/${encodeURIComponent(selectedId.value ?? '')}`,
-  { immediate: false, watch: false },
+  select: selectUser,
+  reload: reloadDetail,
+} = useModerationTarget(
+  (id) => $fetch<AdminUserDetail>(`/api/v1/admin/moderation/users/${encodeURIComponent(id)}`),
+  (value) => value.user.id,
 )
 
-watch(selectedId, (id) => {
-  if (id) refreshDetail()
-})
 watch(statusFilter, () => {
   page.value = 1
 })
@@ -88,37 +86,59 @@ const availableActions = computed(() => {
   return USER_MODERATION_STATUSES.filter((status) => status !== detail.value!.moderation.status)
 })
 
+/** 確認ダイアログで確定する操作。開いた時点の対象と revision を固定し、送信まで変えない。 */
+interface PendingUserAction {
+  readonly userId: string
+  readonly label: string
+  readonly revision: number
+  readonly status: UserModerationStatus
+}
+
 const confirmOpen = ref(false)
-const confirmStatus = ref<UserModerationStatus>('active')
+const pendingAction = shallowRef<PendingUserAction | null>(null)
 const submitting = ref(false)
+const actionsDisabled = computed(() => detailLoading.value || submitting.value || !detail.value)
 
 function openConfirm(status: UserModerationStatus) {
-  confirmStatus.value = status
+  const target = detail.value
+  if (!target || actionsDisabled.value) return
+  pendingAction.value = Object.freeze({
+    userId: target.user.id,
+    label: `${target.user.display_name} (${target.user.id})`,
+    revision: target.moderation.revision,
+    status,
+  })
   confirmOpen.value = true
 }
 
+watch(confirmOpen, (open) => {
+  if (!open && !submitting.value) pendingAction.value = null
+})
+
 async function applyStatus({ reason }: { reason: string }) {
-  if (!detail.value) return
+  const action = pendingAction.value
+  if (!action || submitting.value) return
   submitting.value = true
   try {
     const result = await $fetch<ModerationChangeResult<UserModerationStatus>>(
-      `/api/v1/admin/moderation/users/${encodeURIComponent(detail.value.user.id)}/status`,
+      `/api/v1/admin/moderation/users/${encodeURIComponent(action.userId)}/status`,
       {
         method: 'POST',
-        body: {
-          status: confirmStatus.value,
-          reason,
-          expected_revision: detail.value.moderation.revision,
-        },
+        body: { status: action.status, reason, expected_revision: action.revision },
       },
     )
     notifyResults([result])
-    confirmOpen.value = false
   } catch (error) {
     notifyError(error)
   } finally {
     submitting.value = false
-    await Promise.all([refreshList(), refreshDetail()])
+    confirmOpen.value = false
+    pendingAction.value = null
+    // 操作中に別の対象を選んでいれば、その対象の詳細はそのまま残す。
+    await Promise.all([
+      refreshList(),
+      selectedId.value === action.userId ? reloadDetail() : Promise.resolve(),
+    ])
   }
 }
 
@@ -163,7 +183,7 @@ function formatOptionalDate(value: string | null) {
             type="button"
             class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-elevated"
             :class="{ 'bg-elevated': selectedId === user.id }"
-            @click="selectedId = user.id"
+            @click="selectUser(user.id)"
           >
             <div class="min-w-0">
               <p class="truncate font-medium">{{ user.display_name || user.id }}</p>
@@ -190,7 +210,7 @@ function formatOptionalDate(value: string | null) {
         color="error"
         :description="translateApiError(detailError, 'admin.loadFailed')"
       />
-      <p v-else-if="detailPending && !detail" class="text-sm text-muted">
+      <p v-else-if="detailLoading" class="text-sm text-muted">
         {{ t('common.loading') }}
       </p>
       <template v-else-if="detail">
@@ -260,6 +280,7 @@ function formatOptionalDate(value: string | null) {
             :key="status"
             :color="actionColor(status)"
             variant="subtle"
+            :disabled="actionsDisabled"
             @click="openConfirm(status)"
           >
             {{ t(`admin.userActions.${status}`) }}
@@ -313,8 +334,8 @@ function formatOptionalDate(value: string | null) {
 
     <AdminModerationConfirmModal
       v-model:open="confirmOpen"
-      :status-label="t(`admin.userStatus.${confirmStatus}`)"
-      :targets="detail ? [`${detail.user.display_name} (${detail.user.id})`] : []"
+      :status-label="pendingAction ? t(`admin.userStatus.${pendingAction.status}`) : ''"
+      :targets="pendingAction ? [pendingAction.label] : []"
       :pending="submitting"
       @confirm="applyStatus"
     />

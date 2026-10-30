@@ -891,6 +891,7 @@ export async function getChartModerationDetail(sha256: string) {
   if (!chart && !moderation) {
     // 未登録・未管理の譜面も事前ブロックできるよう、空の詳細を返す。
     return {
+      sha256,
       chart: null,
       moderation: emptyChartModeration(),
       stats: { player_count: 0, score_count: 0 },
@@ -915,6 +916,7 @@ export async function getChartModerationDetail(sha256: string) {
     : []
   const actorNames = await displayNames(moderation ? [moderation.updatedBy] : [])
   return {
+    sha256,
     chart: chart
       ? {
           sha256: chart.sha256,

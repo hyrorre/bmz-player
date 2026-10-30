@@ -25,9 +25,9 @@ const field = ref<SearchField>('any')
 const statusFilter = ref<'all' | ChartModerationStatus>('all')
 const page = ref(1)
 const pageSize = 50
-const detailSha = ref<string | null>(null)
-// 一括操作の対象。ページを移動しても選択と表示用の情報を保持する。
-const selected = ref(new Map<string, { label: string; revision: number }>())
+// 一括操作の対象。ページを移動しても、選択した時点の revision を保持する。
+const bulk = useBulkChartSelection()
+const { selected, conflicts } = bulk
 
 const fieldItems = computed(() =>
   (['any', 'sha256', 'md5', 'title', 'artist'] as const).map((value) => ({
@@ -63,18 +63,17 @@ const {
 )
 
 const {
-  data: detail,
-  pending: detailPending,
+  selectedId: detailSha,
+  detail,
+  loading: detailLoading,
   error: detailError,
-  refresh: refreshDetail,
-} = await useFetch<AdminChartDetail>(
-  () => `/api/v1/admin/moderation/charts/${detailSha.value ?? ''}`,
-  { immediate: false, watch: false },
+  select: selectChart,
+  reload: reloadDetail,
+} = useModerationTarget(
+  (sha256) => $fetch<AdminChartDetail>(`/api/v1/admin/moderation/charts/${sha256}`),
+  (value) => value.sha256,
 )
 
-watch(detailSha, (sha) => {
-  if (sha) refreshDetail()
-})
 watch(statusFilter, () => {
   page.value = 1
 })
@@ -89,75 +88,72 @@ function chartLabel(chart: { title: string; sha256: string }) {
   return `${chart.title || t('admin.charts.unregistered')} (${chart.sha256.slice(0, 12)}…)`
 }
 
-function isSelected(sha256: string) {
-  return selected.value.has(sha256)
-}
-
 function toggle(chart: AdminChartListItem, value: boolean | 'indeterminate') {
-  const next = new Map(selected.value)
-  if (value === true) next.set(chart.sha256, { label: chartLabel(chart), revision: chart.revision })
-  else next.delete(chart.sha256)
-  selected.value = next
+  if (value === true) bulk.select(chart, chartLabel(chart))
+  else bulk.deselect(chart.sha256)
 }
 
 const pageAllSelected = computed(
-  () => Boolean(list.value?.charts.length) && list.value!.charts.every((c) => isSelected(c.sha256)),
+  () => Boolean(list.value?.charts.length) && list.value!.charts.every((c) => bulk.has(c.sha256)),
 )
 
 function togglePage(value: boolean | 'indeterminate') {
-  const next = new Map(selected.value)
-  for (const chart of list.value?.charts ?? []) {
-    if (value === true)
-      next.set(chart.sha256, { label: chartLabel(chart), revision: chart.revision })
-    else next.delete(chart.sha256)
-  }
-  selected.value = next
+  for (const chart of list.value?.charts ?? []) toggle(chart, value)
 }
-
-// 一覧を再取得したら、選択中の譜面の revision を最新に合わせる。
-watch(list, (value) => {
-  if (!value) return
-  const next = new Map(selected.value)
-  for (const chart of value.charts) {
-    const entry = next.get(chart.sha256)
-    if (entry) next.set(chart.sha256, { ...entry, revision: chart.revision })
-  }
-  selected.value = next
-})
 
 const overLimit = computed(() => selected.value.size > MAX_CHART_MODERATION_BATCH_SIZE)
 
+/** 確認ダイアログで確定する操作。開いた時点の対象と revision を固定し、送信まで変えない。 */
+interface PendingChartAction {
+  readonly status: ChartModerationStatus
+  readonly targets: ReadonlyArray<Readonly<{ sha256: string; label: string; revision: number }>>
+  readonly initialNote: string
+  readonly fromSelection: boolean
+}
+
 const confirmOpen = ref(false)
-const confirmStatus = ref<ChartModerationStatus>('blocked')
-const confirmTargets = ref<Array<{ sha256: string; label: string; revision: number }>>([])
-const confirmInitialNote = ref('')
+const pendingAction = shallowRef<PendingChartAction | null>(null)
 const submitting = ref(false)
+const detailActionsDisabled = computed(
+  () => detailLoading.value || submitting.value || !detail.value,
+)
 
 function openBulkConfirm(status: ChartModerationStatus) {
-  confirmStatus.value = status
-  confirmTargets.value = [...selected.value.entries()].map(([sha256, entry]) => ({
-    sha256,
-    ...entry,
-  }))
-  confirmInitialNote.value = ''
+  if (submitting.value || selected.value.size === 0 || overLimit.value) return
+  pendingAction.value = Object.freeze({
+    status,
+    targets: Object.freeze(bulk.snapshot().map((target) => Object.freeze(target))),
+    initialNote: '',
+    fromSelection: true,
+  })
   confirmOpen.value = true
 }
 
 function openDetailConfirm(status: ChartModerationStatus) {
-  if (!detail.value || !detailSha.value) return
-  confirmStatus.value = status
-  confirmTargets.value = [
-    {
-      sha256: detailSha.value,
-      label: chartLabel({ title: detail.value.chart?.title ?? '', sha256: detailSha.value }),
-      revision: detail.value.moderation.revision,
-    },
-  ]
-  confirmInitialNote.value = detail.value.moderation.note
+  const target = detail.value
+  if (!target || detailActionsDisabled.value) return
+  pendingAction.value = Object.freeze({
+    status,
+    targets: Object.freeze([
+      Object.freeze({
+        sha256: target.sha256,
+        label: chartLabel({ title: target.chart?.title ?? '', sha256: target.sha256 }),
+        revision: target.moderation.revision,
+      }),
+    ]),
+    initialNote: target.moderation.note,
+    fromSelection: false,
+  })
   confirmOpen.value = true
 }
 
+watch(confirmOpen, (open) => {
+  if (!open && !submitting.value) pendingAction.value = null
+})
+
 async function applyStatus({ reason, note }: { reason: string; note?: string }) {
+  const action = pendingAction.value
+  if (!action || submitting.value) return
   submitting.value = true
   try {
     const response = await $fetch<{
@@ -165,28 +161,29 @@ async function applyStatus({ reason, note }: { reason: string; note?: string }) 
     }>('/api/v1/admin/moderation/charts/status', {
       method: 'POST',
       body: {
-        items: confirmTargets.value.map((target) => ({
+        items: action.targets.map((target) => ({
           sha256: target.sha256,
           expected_revision: target.revision,
         })),
-        status: confirmStatus.value,
+        status: action.status,
         reason,
         note,
       },
     })
     notifyResults(response.results)
-    // 適用済み・同じ状態の譜面は選択から外し、競合した譜面だけ残す。
-    const next = new Map(selected.value)
-    for (const result of response.results) {
-      if (result.result !== 'conflict') next.delete(result.sha256)
-    }
-    selected.value = next
-    confirmOpen.value = false
+    // 詳細からの単独操作でも、同じ譜面を一括選択していれば選択の revision は古くなる。
+    bulk.applyResults(
+      response.results.filter((result) => action.fromSelection || bulk.has(result.sha256)),
+      new Map(action.targets.map((target) => [target.sha256, target.label])),
+    )
   } catch (error) {
     notifyError(error)
   } finally {
     submitting.value = false
-    await Promise.all([refreshList(), detailSha.value ? refreshDetail() : Promise.resolve()])
+    confirmOpen.value = false
+    pendingAction.value = null
+    const touchedDetail = action.targets.some((target) => target.sha256 === detailSha.value)
+    await Promise.all([refreshList(), touchedDetail ? reloadDetail() : Promise.resolve()])
   }
 }
 
@@ -247,7 +244,7 @@ const detailActions = computed(() =>
           size="xs"
           color="neutral"
           variant="ghost"
-          @click="selected = new Map()"
+          @click="bulk.clear()"
         >
           {{ t('admin.charts.clearSelection') }}
         </UButton>
@@ -258,7 +255,7 @@ const detailActions = computed(() =>
             size="xs"
             :color="actionColor(status)"
             variant="subtle"
-            :disabled="selected.size === 0 || overLimit"
+            :disabled="selected.size === 0 || overLimit || submitting"
             @click="openBulkConfirm(status)"
           >
             {{ t(`admin.chartActions.${status}`) }}
@@ -269,6 +266,31 @@ const detailActions = computed(() =>
         </p>
       </div>
 
+      <UAlert
+        v-if="conflicts.size"
+        color="warning"
+        variant="subtle"
+        class="mb-3"
+        :title="t('admin.charts.conflictTitle', { count: conflicts.size })"
+        :description="t('admin.charts.conflictDescription')"
+        close
+        @update:open="(open) => !open && bulk.dismissConflicts()"
+      >
+        <template #actions>
+          <div class="flex flex-wrap gap-1">
+            <UButton
+              v-for="[sha256, entry] in conflicts"
+              :key="sha256"
+              size="xs"
+              color="warning"
+              variant="outline"
+              @click="selectChart(sha256)"
+            >
+              {{ entry.label }}
+            </UButton>
+          </div>
+        </template>
+      </UAlert>
       <UAlert
         v-if="listError"
         color="error"
@@ -287,11 +309,11 @@ const detailActions = computed(() =>
         >
           <UCheckbox
             class="mt-1"
-            :model-value="isSelected(chart.sha256)"
+            :model-value="bulk.has(chart.sha256)"
             :aria-label="chartLabel(chart)"
             @update:model-value="(value) => toggle(chart, value)"
           />
-          <button type="button" class="min-w-0 flex-1 text-left" @click="detailSha = chart.sha256">
+          <button type="button" class="min-w-0 flex-1 text-left" @click="selectChart(chart.sha256)">
             <p class="truncate font-medium">
               {{ chart.title || t('admin.charts.unregistered') }}
               <span v-if="chart.subtitle" class="text-muted">{{ chart.subtitle }}</span>
@@ -328,7 +350,7 @@ const detailActions = computed(() =>
         color="error"
         :description="translateApiError(detailError, 'admin.loadFailed')"
       />
-      <p v-else-if="detailPending && !detail" class="text-sm text-muted">
+      <p v-else-if="detailLoading" class="text-sm text-muted">
         {{ t('common.loading') }}
       </p>
       <template v-else-if="detail">
@@ -380,6 +402,7 @@ const detailActions = computed(() =>
             :key="status"
             :color="actionColor(status)"
             variant="subtle"
+            :disabled="detailActionsDisabled"
             @click="openDetailConfirm(status)"
           >
             {{ t(`admin.chartActions.${status}`) }}
@@ -408,7 +431,7 @@ const detailActions = computed(() =>
               <button
                 type="button"
                 class="min-w-0 truncate text-left hover:underline"
-                @click="detailSha = chart.sha256"
+                @click="selectChart(chart.sha256)"
               >
                 {{ chart.title || chart.sha256 }}
               </button>
@@ -446,10 +469,10 @@ const detailActions = computed(() =>
 
     <AdminModerationConfirmModal
       v-model:open="confirmOpen"
-      :status-label="t(`admin.chartStatus.${confirmStatus}`)"
-      :targets="confirmTargets.map((target) => target.label)"
+      :status-label="pendingAction ? t(`admin.chartStatus.${pendingAction.status}`) : ''"
+      :targets="pendingAction ? pendingAction.targets.map((target) => target.label) : []"
       :pending="submitting"
-      :initial-note="confirmInitialNote"
+      :initial-note="pendingAction?.initialNote ?? ''"
       with-note
       @confirm="applyStatus"
     />

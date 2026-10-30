@@ -81,6 +81,8 @@ export interface AdminChartListItem {
 }
 
 export interface AdminChartDetail {
+  /** 詳細を要求した譜面の SHA-256。未登録の譜面でも入る。 */
+  sha256: string
   chart: {
     sha256: string
     md5: string | null

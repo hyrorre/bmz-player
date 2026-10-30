@@ -62,8 +62,14 @@ const {
 const { resolveIrUser, requireIrUser } = await import('../../utils/auth')
 const { requireIrAdmin } = await import('../../utils/admin')
 const { IrModerationError, assertCanSubmit } = await import('./enforcement')
-const { changeChartModeration, changeUserModeration, listAuditLogs, searchCharts, searchUsers } =
-  await import('./admin')
+const {
+  changeChartModeration,
+  changeUserModeration,
+  getChartModerationDetail,
+  listAuditLogs,
+  searchCharts,
+  searchUsers,
+} = await import('./admin')
 const loginHandler = (await import('../../api/v1/auth/login.post')).default as Handler
 const refreshHandler = (await import('../../api/v1/auth/refresh.post')).default as Handler
 const scoresPostHandler = (await import('../../api/v1/scores.post')).default as Handler
@@ -514,6 +520,13 @@ describe('chart moderation', () => {
     expect(
       await db.select().from(schema.charts).where(eq(schema.charts.sha256, unregistered)),
     ).toHaveLength(0)
+    // 管理画面は応答の SHA-256 で選択中の譜面と照合する。未登録の譜面でも返す。
+    expect(await getChartModerationDetail(unregistered)).toMatchObject({
+      sha256: unregistered,
+      chart: null,
+      moderation: { status: 'blocked' },
+    })
+    expect((await getChartModerationDetail(CHART_B)).sha256).toBe(CHART_B)
 
     const charts = [CHART_A, CHART_B]
     await expectModerationError(
