@@ -923,6 +923,29 @@ impl NetworkDatabase {
         Ok(())
     }
 
+    /// サーバーが恒久的に拒否したjob（アカウント停止・BAN、譜面の非公開・ブロック）を記録する。
+    ///
+    /// ローカルスコアとjobは残すが、`next_attempt_at` を自動再試行が届かない時刻にして
+    /// 常駐同期やリザルト画面からの再送を止める。制限解除後は手動の再送で送り直せる。
+    pub fn mark_ir_score_job_rejected(
+        &mut self,
+        job_id: i64,
+        now: i64,
+        last_error: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE ir_score_jobs
+             SET status = 'failed',
+                 attempt_count = attempt_count + 1,
+                 next_attempt_at = ?3,
+                 last_error = ?4,
+                 updated_at = ?2
+             WHERE id = ?1",
+            params![job_id, now, IR_JOB_NO_AUTO_RETRY_AT, last_error],
+        )?;
+        Ok(())
+    }
+
     pub fn insert_ir_score_submission(&mut self, record: &NewIrScoreSubmission) -> Result<i64> {
         let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(

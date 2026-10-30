@@ -116,6 +116,7 @@ pub(super) fn spawn_result_ir_task_for_target(
         global: RankingLoadState::NotRequested,
         self_and_rivals: RankingLoadState::NotRequested,
         active_tab: ResultRankingTab::Global,
+        chart_restricted: false,
         ir_connect_begin_at: Some(Instant::now()),
         ir_connect_success_at: None,
         ir_connect_fail_at: None,

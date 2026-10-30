@@ -495,11 +495,17 @@ fn build_ir_queue(
                         ui.label(truncate_chars(&chart, 36)).on_hover_text(chart);
                         ui.label(job_status_label(&job.status, text));
                         ui.label(job.attempt_count.to_string());
-                        ui.label(if job.status == "failed" {
-                            format_optional_timestamp(Some(job.next_attempt_at))
-                        } else {
-                            "-".to_string()
-                        });
+                        // 恒久拒否されたjobは自動再試行しないため、再試行時刻を出さない。
+                        ui.label(
+                            if job.status == "failed"
+                                && job.next_attempt_at
+                                    < crate::storage::network_db::IR_JOB_NO_AUTO_RETRY_AT
+                            {
+                                format_optional_timestamp(Some(job.next_attempt_at))
+                            } else {
+                                "-".to_string()
+                            },
+                        );
                         let error = job.last_error.trim();
                         if error.is_empty() {
                             ui.label("-");

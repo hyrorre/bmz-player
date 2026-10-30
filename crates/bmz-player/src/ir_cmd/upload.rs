@@ -58,6 +58,11 @@ fn ensure_upload_stop_success(report: &IrManualUploadReport, all: bool) -> Resul
             "{operation} stopped because the IR account is not authorized ({} submitted); run `bmz ir login` and rerun",
             report.submitted
         ),
+        IrManualStop::AccountRestricted { banned } => bail!(
+            "{operation} stopped because the IR account is {} ({} submitted); local scores stay queued, contact the IR administrator",
+            if banned { "banned" } else { "suspended from score submission" },
+            report.submitted
+        ),
         IrManualStop::RateLimited { retry_after_seconds } => bail!(
             "{operation} stopped because the IR server is rate limiting submissions ({} submitted); rerun{}",
             report.submitted,

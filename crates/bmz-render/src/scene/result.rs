@@ -154,6 +154,10 @@ pub enum ResultIrState {
     Loaded,
     /// 取得失敗 (OPTION_IR_FAILED=604)。
     Failed,
+    /// IR がこの譜面への送信・公開を制限している（BMZ IR の譜面非公開・ブロック）。
+    /// LR2 の IRstatus では BAN 曲 (605)。beatoraja には対応 property がないため
+    /// beatoraja 系スキンでは従来どおり取得失敗 (604) として扱う。
+    Restricted,
 }
 
 #[derive(Debug, Clone, PartialEq)]

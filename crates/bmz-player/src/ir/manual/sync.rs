@@ -40,7 +40,7 @@ pub enum IrManualSyncRetry {
 
 /// 送信失敗の続き方から、一括送信を打ち切るか判定する。
 ///
-/// 認証エラーと429は以降のjobも同じ理由で失敗するため即座に止める。
+/// 認証エラー・アカウント停止/BAN・429は以降のjobも同じ理由で失敗するため即座に止める。
 /// それ以外の失敗は次のjobへ進み、`IR_MANUAL_CONSECUTIVE_FAILURE_LIMIT` 件続いたら止める。
 #[derive(Debug, Clone, Default)]
 pub struct IrFailureBreaker {
@@ -56,6 +56,13 @@ impl IrFailureBreaker {
         for failure in &report.failures {
             match failure.class {
                 IrSyncFailureClass::Unauthorized => return Some(IrManualStop::Unauthorized),
+                IrSyncFailureClass::Moderated(code) if code.is_account_level() => {
+                    return Some(IrManualStop::AccountRestricted {
+                        banned: code == crate::ir::IrModerationCode::AccountBanned,
+                    });
+                }
+                // 譜面単位の拒否はサーバー障害ではないため、連続失敗には数えない。
+                IrSyncFailureClass::Moderated(_) => {}
                 IrSyncFailureClass::RateLimited { retry_after_seconds } => {
                     return Some(IrManualStop::RateLimited { retry_after_seconds });
                 }

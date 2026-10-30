@@ -397,11 +397,18 @@ pub(in crate::skin) fn test_skin_op(
             matches!(state.ir_ranking.state, crate::scene::ResultIrState::Loaded)
                 && state.ir_ranking.total_player == Some(0)
         }
-        604 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Failed),
+        // 譜面制限 (Restricted) は beatoraja に property が無いため FAILED と同じ表示にする。
+        604 => matches!(
+            state.ir_ranking.state,
+            crate::scene::ResultIrState::Failed | crate::scene::ResultIrState::Restricted
+        ),
         // beatoraja MusicSelector: ranking object生成前はWAITING。
         606 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Waiting),
         // BooleanPropertyFactory のIR_BUSYは現行beatorajaでFAILと同条件。
-        608 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Failed),
+        608 => matches!(
+            state.ir_ranking.state,
+            crate::scene::ResultIrState::Failed | crate::scene::ResultIrState::Restricted
+        ),
         // BANNED / ACCESSING は現行beatorajaにもproperty実装がない。
         605 | 607 => false,
         // OPTION_DIFFICULTY0..5. 0 は UNKNOWN/OTHER、1..5 は BMS #DIFFICULTY。
