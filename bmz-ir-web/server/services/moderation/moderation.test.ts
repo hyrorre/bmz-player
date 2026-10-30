@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { createClient } from '@libsql/client'
 import { drizzle } from 'drizzle-orm/libsql'
-import { eq } from 'drizzle-orm'
+import { and, eq, isNull } from 'drizzle-orm'
 import { SQLiteRaw } from 'drizzle-orm/sqlite-core/query-builders/raw'
 import * as h3 from 'h3'
 import type { H3Event } from 'h3'
@@ -56,8 +56,11 @@ const {
   findUserByAccessToken,
   findUserByWebSession,
   hashToken,
+  listUserSessions,
   revokeToken,
+  revokeUserSessionById,
   revokeUserSessions,
+  revokeWebSession,
   rotateRefreshToken,
 } = await import('../../utils/auth_tokens')
 const { resolveIrUser, requireIrUser } = await import('../../utils/auth')
@@ -584,6 +587,267 @@ describe('account moderation and authentication', () => {
       }),
     ).rejects.toMatchObject({ statusCode: 403 })
     expect(await db.select().from(schema.userModeration)).toHaveLength(0)
+  })
+})
+
+/**
+ * 次に呼ばれる `db.insert` などの実行直前に、別のリクエストの処理を割り込ませる。
+ * refresh の読み取りと書き込みの間に BAN や並行 refresh が確定する順序を再現するために使う。
+ */
+function interruptBefore(method: 'insert' | 'update', hook: () => Promise<unknown>) {
+  const original = db[method]
+  db[method] = ((...args: Parameters<typeof original>) => {
+    db[method] = original
+    return deferExecution((original as (...a: unknown[]) => object).apply(db, args), hook)
+  }) as never
+  return () => {
+    db[method] = original
+  }
+}
+
+function deferExecution<T extends object>(builder: T, hook: () => Promise<unknown>): T {
+  return new Proxy(builder, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver)
+      if (typeof value !== 'function') return value
+      if (property === 'then') {
+        return (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) =>
+          hook().then(() => value.call(target, resolve, reject), reject)
+      }
+      return (...args: unknown[]) => {
+        const result = value.apply(target, args)
+        return result && typeof result === 'object' && 'then' in result
+          ? deferExecution(result, hook)
+          : result
+      }
+    },
+  })
+}
+
+/** refresh がユーザーの状態を読み取った直後に、別の処理を割り込ませる。 */
+function interruptAfterModerationRead(hook: () => Promise<unknown>) {
+  const query = db.query.userModeration
+  const original = query.findFirst
+  query.findFirst = ((...args: Parameters<typeof original>) => {
+    query.findFirst = original
+    return original.apply(query, args).then(async (row) => {
+      await hook()
+      return row
+    })
+  }) as typeof original
+}
+
+async function sessionRow(token: string) {
+  return db.query.sessions.findFirst({ where: eq(schema.sessions.tokenHash, hashToken(token)) })
+}
+
+async function activeSessions(userId: string) {
+  return db
+    .select()
+    .from(schema.sessions)
+    .where(and(eq(schema.sessions.userId, userId), isNull(schema.sessions.revokedAt)))
+}
+
+async function reuseDetectedCount() {
+  const rows = await db
+    .select()
+    .from(schema.sessions)
+    .where(eq(schema.sessions.revokedReason, 'reuse_detected'))
+  return rows.length
+}
+
+/** T1 を発行して rotation し、T2 を返す。 */
+async function rotatedPair(userId: string, now: number, clientType: 'web' | 'desktop' = 'desktop') {
+  const t1 = await createAuthTokens(userId, { clientType, now })
+  const rotated = await rotateRefreshToken(t1.refreshToken, now)
+  if (!rotated || !('tokens' in rotated)) throw new Error('rotation failed')
+  return { t1, t2: rotated.tokens }
+}
+
+describe('refresh token races with bans', () => {
+  test('a ban confirmed after the refresh read its state leaves no valid session', async () => {
+    const now = Date.now()
+    const t1 = await createAuthTokens('alice', { clientType: 'desktop', now })
+    interruptAfterModerationRead(() => setUserStatus('alice', 'banned'))
+
+    expect(await rotateRefreshToken(t1.refreshToken, now)).toEqual({ banned: true })
+    // BAN による失効を rotated で上書きせず、新しい token も作らない。
+    expect(await sessionRow(t1.refreshToken)).toMatchObject({ revokedReason: 'admin' })
+    expect(await activeSessions('alice')).toHaveLength(0)
+
+    await setUserStatus('alice', 'active')
+    const later = now + 10 * 60_000
+    expect(await rotateRefreshToken(t1.refreshToken, later)).toBeNull()
+    expect(await activeSessions('alice')).toHaveLength(0)
+    const relogin = await createAuthTokens('alice', { clientType: 'desktop', now: later })
+    expect(await rotateRefreshToken(t1.refreshToken, later + 1000)).toBeNull()
+    expect(await findUserByAccessToken(relogin.accessToken, later + 1000)).toMatchObject({
+      id: 'alice',
+    })
+    expect(await reuseDetectedCount()).toBe(0)
+  })
+
+  test('a ban confirmed between rotating the old token and issuing new ones issues nothing', async () => {
+    const now = Date.now()
+    const t1 = await createAuthTokens('alice', { clientType: 'desktop', now })
+    interruptBefore('insert', () => setUserStatus('alice', 'banned'))
+
+    expect(await rotateRefreshToken(t1.refreshToken, now)).toEqual({ banned: true })
+    // rotation 済みの旧 token は BAN で admin に付け替わり、片方だけの token の組も残らない。
+    expect(await sessionRow(t1.refreshToken)).toMatchObject({ revokedReason: 'admin' })
+    expect(await db.select().from(schema.sessions)).toHaveLength(2)
+    expect(await activeSessions('alice')).toHaveLength(0)
+
+    await setUserStatus('alice', 'active')
+    expect(await rotateRefreshToken(t1.refreshToken, now + 10 * 60_000)).toBeNull()
+    expect(await reuseDetectedCount()).toBe(0)
+  })
+
+  test('tokens issued by a refresh that finished before the ban are revoked by it', async () => {
+    const now = Date.now()
+    const { t1, t2 } = await rotatedPair('alice', now)
+    await setUserStatus('alice', 'banned')
+    expect(await sessionRow(t2.refreshToken)).toMatchObject({ revokedReason: 'admin' })
+    expect(await findUserByAccessToken(t2.accessToken, now)).toBeNull()
+
+    await setUserStatus('alice', 'active')
+    const later = now + 10 * 60_000
+    expect(await rotateRefreshToken(t2.refreshToken, later)).toBeNull()
+    expect(await rotateRefreshToken(t1.refreshToken, later)).toBeNull()
+    expect(await activeSessions('alice')).toHaveLength(0)
+    expect(await reuseDetectedCount()).toBe(0)
+  })
+
+  test('concurrent refreshes with one token issue a single token pair and keep the grace period', async () => {
+    const now = Date.now()
+    const t1 = await createAuthTokens('alice', { clientType: 'desktop', now })
+    let second: Awaited<ReturnType<typeof rotateRefreshToken>> | undefined
+    // 1つ目が読み取った後、書き込む前に、同じ token の2つ目の refresh が完了する。
+    interruptAfterModerationRead(async () => {
+      second = await rotateRefreshToken(t1.refreshToken, now)
+    })
+    const first = await rotateRefreshToken(t1.refreshToken, now)
+
+    expect(second && 'tokens' in second).toBe(true)
+    expect(first).toBeNull()
+    // 旧 access token と、新しい組の1つだけが有効（refresh token は1つだけ）。
+    expect(await db.select().from(schema.sessions)).toHaveLength(4)
+    const active = await activeSessions('alice')
+    expect(active.filter((row) => row.kind === 'refresh')).toHaveLength(1)
+    expect(await sessionRow(t1.refreshToken)).toMatchObject({ revokedReason: 'rotated' })
+    // 敗れた側の再送は猶予内なので、成功した側のセッションを失効させない。
+    expect(await rotateRefreshToken(t1.refreshToken, now + 60_000)).toBeNull()
+    expect(await activeSessions('alice')).toHaveLength(3)
+    expect(await reuseDetectedCount()).toBe(0)
+  })
+
+  test('a failed insert returns no tokens and leaves no half-issued session', async () => {
+    const now = Date.now()
+    const t1 = await createAuthTokens('alice', { clientType: 'desktop', now })
+    const restore = interruptBefore('insert', async () => {
+      throw new Error('D1 write failed')
+    })
+    try {
+      await expect(rotateRefreshToken(t1.refreshToken, now)).rejects.toThrow('D1 write failed')
+    } finally {
+      restore()
+    }
+    expect(await db.select().from(schema.sessions)).toHaveLength(2)
+    expect(await activeSessions('alice')).toHaveLength(1)
+  })
+})
+
+describe('explicitly revoked token generations', () => {
+  test('rotated tokens of a logged-out desktop session are only rejected', async () => {
+    const now = Date.now()
+    const later = now + 10 * 60_000
+    const { t1, t2 } = await rotatedPair('alice', now)
+    const otherDevice = await createAuthTokens('alice', { clientType: 'desktop', now })
+    await revokeToken(t2.accessToken, 'access', 'logout', now)
+    await revokeToken(t2.refreshToken, 'refresh', 'logout', now)
+    const t3 = await createAuthTokens('alice', { clientType: 'desktop', now: later })
+
+    expect(await rotateRefreshToken(t1.refreshToken, later)).toBeNull()
+    expect(await rotateRefreshToken(t2.refreshToken, later)).toBeNull()
+    expect(await sessionRow(t1.refreshToken)).toMatchObject({ revokedReason: 'logout' })
+    expect(await findUserByAccessToken(t3.accessToken, later)).toMatchObject({ id: 'alice' })
+    expect(await findUserByAccessToken(otherDevice.accessToken, later)).toMatchObject({
+      id: 'alice',
+    })
+    expect(await rotateRefreshToken(t3.refreshToken, later)).toMatchObject({
+      tokens: expect.any(Object),
+    })
+    expect(await reuseDetectedCount()).toBe(0)
+  })
+
+  test('logging out with a stale token keeps reuse detection for that session', async () => {
+    const now = Date.now()
+    const later = now + 10 * 60_000
+    const { t1, t2 } = await rotatedPair('alice', now)
+    // 盗まれた古い token でログアウトしても、そのグループの再利用検知は外れない。
+    await revokeToken(t1.refreshToken, 'refresh', 'logout', now)
+    expect(await sessionRow(t1.refreshToken)).toMatchObject({ revokedReason: 'rotated' })
+    expect(await rotateRefreshToken(t1.refreshToken, later)).toEqual({ reuseDetected: true })
+    expect(await findUserByAccessToken(t2.accessToken, later)).toBeNull()
+  })
+
+  test('web logout retires rotated tokens of that cookie session only', async () => {
+    const now = Date.now()
+    const later = now + 10 * 60_000
+    const { t1, t2 } = await rotatedPair('alice', now, 'web')
+    const other = await rotatedPair('alice', now, 'desktop')
+    await revokeWebSession('alice', t2.sessionGroupId)
+    const t3 = await createAuthTokens('alice', { clientType: 'web', now: later })
+
+    expect(await rotateRefreshToken(t1.refreshToken, later)).toBeNull()
+    expect(await findUserByAccessToken(t3.accessToken, later)).toMatchObject({ id: 'alice' })
+    expect(await findUserByAccessToken(other.t2.accessToken, later)).toMatchObject({ id: 'alice' })
+    // 対象外の端末では、猶予後の再利用を従来どおり検知する。
+    expect(await rotateRefreshToken(other.t1.refreshToken, later)).toEqual({ reuseDetected: true })
+    expect(await findUserByAccessToken(t3.accessToken, later)).toBeNull()
+  })
+
+  test('revoking one session from the session list leaves the other sessions alone', async () => {
+    const now = Date.now()
+    const later = now + 10 * 60_000
+    const target = await rotatedPair('alice', now)
+    const [targetSession] = await listUserSessions('alice', now)
+    const other = await rotatedPair('alice', now)
+    expect(await revokeUserSessionById('alice', targetSession!.id, 'logout', now)).toBeTrue()
+    const relogin = await createAuthTokens('alice', { clientType: 'desktop', now: later })
+
+    expect(await rotateRefreshToken(target.t1.refreshToken, later)).toBeNull()
+    expect(await rotateRefreshToken(target.t2.refreshToken, later)).toBeNull()
+    expect(await findUserByAccessToken(other.t2.accessToken, later)).toMatchObject({ id: 'alice' })
+    expect(await findUserByAccessToken(relogin.accessToken, later)).toMatchObject({ id: 'alice' })
+    expect(await reuseDetectedCount()).toBe(0)
+    // 別のグループの rotation と再利用検知はそのまま働く。
+    expect(await rotateRefreshToken(other.t2.refreshToken, later)).toMatchObject({
+      tokens: expect.any(Object),
+    })
+    expect(await rotateRefreshToken(other.t1.refreshToken, later)).toEqual({ reuseDetected: true })
+  })
+
+  test('tokens rotated before a password change never revoke later sessions', async () => {
+    const now = Date.now()
+    const later = now + 10 * 60_000
+    const { t1, t2 } = await rotatedPair('alice', now)
+    const otherDevice = await createAuthTokens('alice', { clientType: 'desktop', now })
+    await revokeUserSessions('alice', 'password_changed', now)
+    expect(await activeSessions('alice')).toHaveLength(0)
+    const t3 = await createAuthTokens('alice', { clientType: 'desktop', now: later })
+
+    expect(await rotateRefreshToken(t1.refreshToken, later)).toBeNull()
+    expect(await rotateRefreshToken(t2.refreshToken, later)).toBeNull()
+    expect(await rotateRefreshToken(otherDevice.refreshToken, later)).toBeNull()
+    expect(await findUserByAccessToken(t3.accessToken, later)).toMatchObject({ id: 'alice' })
+
+    // パスワード変更後に発行された token の再利用は、従来どおり検知する。
+    const t4 = await rotateRefreshToken(t3.refreshToken, later)
+    expect(t4 && 'tokens' in t4).toBe(true)
+    expect(await rotateRefreshToken(t3.refreshToken, later + 10 * 60_000)).toEqual({
+      reuseDetected: true,
+    })
   })
 })
 

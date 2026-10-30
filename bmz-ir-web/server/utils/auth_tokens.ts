@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { and, eq, gt, inArray, isNull, or, type SQL } from 'drizzle-orm'
+import { and, eq, gt, inArray, isNull, or, sql, type SQL } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/sqlite-core'
 import { db, schema } from 'hub:db'
 import type { UserModerationStatus } from '../../shared/constants/moderation'
 import { publicPlayerCondition } from '../services/moderation/visibility'
@@ -10,6 +11,8 @@ const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30
 type SessionKind = 'access' | 'refresh'
 type ClientType = 'web' | 'desktop'
 type RevocationReason = SessionRevocationReason
+/** 利用者・管理者による明示的な失効。rotation と再利用検知以外。 */
+type ExplicitRevocationReason = Exclude<RevocationReason, 'rotated' | 'reuse_detected'>
 
 export interface AuthTokenPair {
   sessionGroupId: string
@@ -98,17 +101,16 @@ export async function findUserByWebSession(
 }
 
 export async function revokeWebSession(userId: string, sessionGroupId: string) {
-  await db
-    .update(schema.sessions)
-    .set({ revokedAt: new Date(), revokedReason: 'logout' })
-    .where(
-      and(
-        eq(schema.sessions.userId, userId),
-        eq(schema.sessions.sessionGroupId, sessionGroupId),
-        eq(schema.sessions.clientType, 'web'),
-        isNull(schema.sessions.revokedAt),
-      ),
-    )
+  const [retire, revoke] = revokeSessionsStatements(
+    and(
+      eq(schema.sessions.userId, userId),
+      eq(schema.sessions.sessionGroupId, sessionGroupId),
+      eq(schema.sessions.clientType, 'web'),
+    ),
+    'logout',
+    new Date(),
+  )
+  await db.batch([retire, revoke])
 }
 
 /**
@@ -184,9 +186,7 @@ export async function rotateRefreshToken(token: string, now = Date.now()) {
     where: eq(schema.userModeration.userId, session.userId),
   })
   if (moderation?.status === 'banned') {
-    const [revokeActive, retireRevoked] = banSessionStatements(session.userId, new Date(now))
-    await db.batch([revokeActive, retireRevoked])
-    return { banned: true as const }
+    return await refuseBannedRefresh(session.userId, now)
   }
 
   if (session.revokedAt) {
@@ -217,23 +217,104 @@ export async function rotateRefreshToken(token: string, now = Date.now()) {
     return null
   }
 
-  await db
+  // ここまでの読み取りと以降の書き込みの間に、BAN・ログアウト・同じtokenでの並行refreshが
+  // 割り込み得る。各書き込みは、その時点の状態を条件に含む1文として実行する（D1は書き込みを
+  // 1文ずつ直列に実行し、1文は原子的に適用される）。
+  //
+  // 1. 旧tokenが有効で、ユーザーがBANされていない場合だけ rotated にする。BANなどで失効済みの
+  //    tokenを rotated で上書きせず、並行refreshでは片方だけが成功する。
+  const rotated = await db
     .update(schema.sessions)
     .set({ revokedAt: new Date(now), revokedReason: 'rotated' })
-    .where(eq(schema.sessions.tokenHash, session.tokenHash))
+    .where(
+      and(
+        eq(schema.sessions.tokenHash, session.tokenHash),
+        isNull(schema.sessions.revokedAt),
+        publicPlayerCondition(schema.sessions.userId),
+      ),
+    )
+    .returning({ tokenHash: schema.sessions.tokenHash })
+  if (rotated.length === 0) {
+    return await refreshLostRace(session.userId, now)
+  }
+
+  // 2. 新しいtokenの組を1文で追加する。1と2の間にBANが確定すると、BANは旧tokenを admin に
+  //    付け替えるため、この条件で何も追加されない。2の後にBANが確定した場合は、BANが新しい
+  //    tokenを失効させる。どちらの順でも、BAN後に有効なtokenは残らない。
+  const tokens = await insertRotatedTokens(session, now)
+  if (!tokens) {
+    return await refreshLostRace(session.userId, now)
+  }
 
   return {
-    tokens: await createAuthTokens(session.userId, {
-      clientType: session.clientType,
-      now,
-      sessionGroupId: session.sessionGroupId ?? randomUUID(),
-    }),
+    tokens,
     user: {
       id: session.userId,
       email: user.email,
       displayName: user.displayName ?? '',
     },
   }
+}
+
+/** BAN済みユーザーのrefreshを拒否し、残っているセッションを打ち切る。 */
+async function refuseBannedRefresh(userId: string, now: number) {
+  const [revokeActive, retireRevoked] = banSessionStatements(userId, new Date(now))
+  await db.batch([revokeActive, retireRevoked])
+  return { banned: true as const }
+}
+
+/**
+ * rotation の書き込みが競合で成立しなかった。BANが割り込んだなら ACCOUNT_BANNED、
+ * それ以外（並行refresh・ログアウトなど）は、tokenを発行せず拒否だけする。
+ */
+async function refreshLostRace(userId: string, now: number) {
+  const moderation = await db.query.userModeration.findFirst({
+    columns: { status: true },
+    where: eq(schema.userModeration.userId, userId),
+  })
+  return moderation?.status === 'banned' ? await refuseBannedRefresh(userId, now) : null
+}
+
+/**
+ * rotation 後の access / refresh token の組を、旧tokenがこの rotation の結果のまま残っていて、
+ * ユーザーがBANされていない場合だけ追加する。1文の INSERT なので片方だけ保存されることはない。
+ * 追加されなかった場合と、DBエラーの場合（例外）はtokenを返さない。
+ */
+async function insertRotatedTokens(
+  session: {
+    tokenHash: string
+    sessionGroupId: string | null
+    userId: string
+    clientType: ClientType
+  },
+  now: number,
+): Promise<AuthTokenPair | null> {
+  const sessions = schema.sessions
+  const sessionGroupId = session.sessionGroupId ?? randomUUID()
+  const accessToken = randomToken()
+  const refreshToken = randomToken()
+  const accessExpiresAt = Math.floor(now / 1000) + ACCESS_TOKEN_TTL_SECONDS
+  const refreshExpiresAt = now + REFRESH_TOKEN_TTL_SECONDS * 1000
+  const stillRotated = sql`exists (select 1 from ${sessions} as rotated_session
+    where rotated_session.token_hash = ${session.tokenHash}
+      and rotated_session.revoked_reason = 'rotated'
+      and rotated_session.revoked_at = ${now})`
+  const row = (tokenHash: string, kind: SessionKind, expiresAt: number) =>
+    sql`select ${tokenHash}, ${sessionGroupId}, ${session.userId}, ${kind}, ${session.clientType},
+      ${expiresAt}, null, null, null, ${now}
+    where ${stillRotated} and ${publicPlayerCondition(sql`${session.userId}`)}`
+  // insert().select() の SELECT の列順は sessions の列定義順。
+  const inserted = await db
+    .insert(sessions)
+    .select(
+      sql`${row(hashToken(accessToken), 'access', accessExpiresAt * 1000)}
+        union all ${row(hashToken(refreshToken), 'refresh', refreshExpiresAt)}`,
+    )
+    .returning({ tokenHash: sessions.tokenHash })
+  if (inserted.length !== 2) {
+    return null
+  }
+  return { sessionGroupId, accessToken, refreshToken, accessExpiresAt }
 }
 
 export async function listUserSessions(
@@ -313,7 +394,7 @@ export async function listUserSessions(
 export async function revokeUserSessionById(
   userId: string,
   sessionId: string,
-  reason: RevocationReason = 'logout',
+  reason: ExplicitRevocationReason = 'logout',
   now = Date.now(),
 ) {
   const rows = await db.query.sessions.findMany({
@@ -331,23 +412,22 @@ export async function revokeUserSessionById(
     return false
   }
 
-  await db
-    .update(schema.sessions)
-    .set({ revokedAt: new Date(now), revokedReason: reason })
-    .where(
-      and(
-        eq(schema.sessions.userId, userId),
-        isNull(schema.sessions.revokedAt),
-        or(eq(schema.sessions.sessionGroupId, groupKey), eq(schema.sessions.tokenHash, groupKey)),
-      ),
-    )
+  const [retire, revoke] = revokeSessionsStatements(
+    and(
+      eq(schema.sessions.userId, userId),
+      or(eq(schema.sessions.sessionGroupId, groupKey), eq(schema.sessions.tokenHash, groupKey)),
+    ),
+    reason,
+    new Date(now),
+  )
+  await db.batch([retire, revoke])
   return true
 }
 
 export async function revokeToken(
   token: string,
   kind?: SessionKind,
-  reason: RevocationReason = 'logout',
+  reason: ExplicitRevocationReason = 'logout',
   now = Date.now(),
 ) {
   const filters = [
@@ -358,10 +438,40 @@ export async function revokeToken(
     filters.push(eq(schema.sessions.kind, kind))
   }
 
-  await db
+  const revoke = db
     .update(schema.sessions)
     .set({ revokedAt: new Date(now), revokedReason: reason })
     .where(and(...filters))
+  if (kind !== 'refresh') {
+    await revoke
+    return
+  }
+
+  // 有効なrefresh tokenを失効させるときは、同じセッショングループで過去に rotation された
+  // tokenも同じ理由に付け替える（revokeSessionsStatements と同じ理由）。失効済みのtokenを
+  // 提示しても付け替えないよう、提示されたtokenが有効なことを条件にし、失効より先に実行する。
+  const sessions = schema.sessions
+  const presented = alias(sessions, 'presented_session')
+  const presentedGroup = db
+    .select({ sessionGroupId: presented.sessionGroupId })
+    .from(presented)
+    .where(
+      and(
+        eq(presented.tokenHash, hashToken(token)),
+        eq(presented.kind, 'refresh'),
+        isNull(presented.revokedAt),
+      ),
+    )
+  const retire = db
+    .update(sessions)
+    .set({ revokedReason: reason })
+    .where(
+      and(
+        inArray(sessions.sessionGroupId, presentedGroup),
+        inArray(sessions.revokedReason, RETIRABLE_REASONS),
+      ),
+    )
+  await db.batch([retire, revoke])
 }
 
 /**
@@ -377,20 +487,45 @@ export async function revokeToken(
  * `condition` は管理操作が実際に適用された場合だけ実行するための条件。
  */
 export function banSessionStatements(userId: string, now: Date, condition?: SQL) {
+  const [retireRevoked, revokeActive] = revokeSessionsStatements(
+    and(eq(schema.sessions.userId, userId), condition),
+    'admin',
+    now,
+  )
+  return [revokeActive, retireRevoked] as const
+}
+
+/** 明示的な失効操作で付け替える対象。再利用検知の根拠になる失効理由。 */
+const RETIRABLE_REASONS = ['rotated', 'reuse_detected'] satisfies RevocationReason[]
+
+/**
+ * ログアウト・パスワード変更・個別失効など、利用者が範囲を指定してセッションを打ち切る更新。
+ * 呼び出し側が同じ batch で実行する。
+ *
+ * 1. 範囲内で、過去に rotation・再利用検知で失効した token を今回の失効理由に付け替える。
+ *    付け替えないと、打ち切った後に古い token が提示されたとき再利用検知になり、その後の
+ *    ログインで作られた正常なセッションまで失効させてしまう。範囲内の token はこの操作で
+ *    すべて無効になるため、そこから再利用を検知して守るべきセッションは残っていない。
+ * 2. 範囲内の有効な token を失効させる。
+ *
+ * 範囲外（別のセッショングループ）の token には触れないため、そこでの再利用検知はそのまま働く。
+ * 再利用検知そのもの（`reuse_detected`）では付け替えない。
+ */
+export function revokeSessionsStatements(
+  scope: SQL | undefined,
+  reason: ExplicitRevocationReason,
+  now: Date,
+) {
   const sessions = schema.sessions
-  const scoped = (filter: SQL | undefined) =>
-    condition
-      ? and(eq(sessions.userId, userId), filter, condition)
-      : and(eq(sessions.userId, userId), filter)
   return [
     db
       .update(sessions)
-      .set({ revokedAt: now, revokedReason: 'admin' })
-      .where(scoped(isNull(sessions.revokedAt))),
+      .set({ revokedReason: reason })
+      .where(and(scope, inArray(sessions.revokedReason, RETIRABLE_REASONS))),
     db
       .update(sessions)
-      .set({ revokedReason: 'admin' })
-      .where(scoped(inArray(sessions.revokedReason, ['rotated', 'reuse_detected']))),
+      .set({ revokedAt: now, revokedReason: reason })
+      .where(and(scope, isNull(sessions.revokedAt))),
   ] as const
 }
 
@@ -399,10 +534,16 @@ export async function revokeUserSessions(
   reason: RevocationReason = 'logout',
   now = Date.now(),
 ) {
-  await db
-    .update(schema.sessions)
-    .set({ revokedAt: new Date(now), revokedReason: reason })
-    .where(and(eq(schema.sessions.userId, userId), isNull(schema.sessions.revokedAt)))
+  const scope = eq(schema.sessions.userId, userId)
+  if (reason === 'rotated' || reason === 'reuse_detected') {
+    await db
+      .update(schema.sessions)
+      .set({ revokedAt: new Date(now), revokedReason: reason })
+      .where(and(scope, isNull(schema.sessions.revokedAt)))
+    return
+  }
+  const [retire, revoke] = revokeSessionsStatements(scope, reason, new Date(now))
+  await db.batch([retire, revoke])
 }
 
 function randomToken() {
