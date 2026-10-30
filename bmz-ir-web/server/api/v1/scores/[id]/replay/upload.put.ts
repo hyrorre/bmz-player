@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm'
 import { blob } from 'hub:blob'
 import { db, schema } from 'hub:db'
+import { requireScoreWriteAllowed } from '../../../../../services/moderation/enforcement'
 import { requireIrUser } from '../../../../../utils/auth'
 import { REPLAY_UPLOAD_RATE_LIMIT, checkUserRateLimit } from '../../../../../utils/rate_limit'
 import { MAX_REPLAY_BYTES } from '../../../../../../shared/constants/ir'
@@ -20,6 +21,8 @@ export default defineEventHandler(async (event) => {
   if (!scoreId) {
     throw createError({ statusCode: 400, statusMessage: 'score id is required' })
   }
+  // 送信停止・BAN・非公開譜面のスコアにはリプレイを追加しない。
+  await requireScoreWriteAllowed(user.id, scoreId)
 
   // body をメモリへ読む前に Content-Length で先に拒否する。
   const declaredLength = Number(getHeader(event, 'content-length') ?? 0)

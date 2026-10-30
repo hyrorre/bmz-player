@@ -7,6 +7,7 @@ import {
   validateScoreSubmission,
 } from '../../services/ir'
 import { requireIrUser } from '../../utils/auth'
+import { IrModerationError, moderationHttpError } from '../../services/moderation/enforcement'
 import { SCORE_SUBMIT_RATE_LIMIT, checkUserRateLimit } from '../../utils/rate_limit'
 import type { IrRankingScope } from '../../../shared/types/ir'
 
@@ -27,6 +28,9 @@ export default defineEventHandler(async (event) => {
   try {
     return await submitScore(user, payload, rankingScopes, rankingLimit)
   } catch (error) {
+    if (error instanceof IrModerationError) {
+      throw moderationHttpError(error.code)
+    }
     if (error instanceof IrIdempotencyCollisionError) {
       throw createError({ statusCode: 409, statusMessage: error.message })
     }

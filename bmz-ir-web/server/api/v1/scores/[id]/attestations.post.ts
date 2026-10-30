@@ -6,6 +6,7 @@ import {
   validateScoreAttestation,
 } from '../../../../services/ir'
 import { requireIrUser } from '../../../../utils/auth'
+import { IrModerationError, moderationHttpError } from '../../../../services/moderation/enforcement'
 import { SCORE_SUBMIT_RATE_LIMIT, checkUserRateLimit } from '../../../../utils/rate_limit'
 
 export default defineEventHandler(async (event) => {
@@ -19,6 +20,9 @@ export default defineEventHandler(async (event) => {
     const payload = validateScoreAttestation(await readBody(event))
     return await attestScore(user, scoreId, payload)
   } catch (error) {
+    if (error instanceof IrModerationError) {
+      throw moderationHttpError(error.code)
+    }
     if (error instanceof IrScoreNotFoundError) {
       throw createError({ statusCode: 404, statusMessage: error.message })
     }

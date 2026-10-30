@@ -1,4 +1,5 @@
 import { additional, withAdditional } from './additional'
+import { moderation } from './moderation'
 
 export default defineI18nLocale(() =>
   withAdditional(
@@ -120,7 +121,9 @@ export default defineI18nLocale(() =>
         replayNotAvailable: 'リプレイを利用できません。',
         sessionNotFound: 'セッションが見つかりません。',
         deviceKeyNotFound: '署名鍵が見つからないか、すでに失効しています。',
+        ...moderation.ja.apiErrors,
       },
+      admin: moderation.ja.admin,
     },
     additional.ja,
   ),

@@ -12,6 +12,14 @@ const apiErrorKeys: Record<string, string> = {
   'Replay is not available': 'apiErrors.replayNotAvailable',
   'Session not found': 'apiErrors.sessionNotFound',
   'Device key not found or already revoked': 'apiErrors.deviceKeyNotFound',
+  'Score submission is suspended for this account': 'apiErrors.accountSuspended',
+  'This account is banned from BMZ IR': 'apiErrors.accountBanned',
+  'Score submission is temporarily disabled for this chart': 'apiErrors.chartHidden',
+  'Score submission is blocked for this chart': 'apiErrors.chartBlocked',
+  'Administrator access required': 'apiErrors.administratorRequired',
+  'Moderation status was changed by another operation': 'apiErrors.moderationConflict',
+  'Administrators cannot change their own account status': 'apiErrors.cannotChangeOwnStatus',
+  'Administrator accounts cannot be restricted': 'apiErrors.cannotRestrictAdministrator',
 }
 
 function extractApiMessage(error: unknown): string | undefined {

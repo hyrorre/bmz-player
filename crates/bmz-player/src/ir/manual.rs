@@ -120,6 +120,11 @@ pub enum IrManualStop {
     },
     /// 認証・ログイン状態の問題で、以降のjobも送れないため打ち切った。
     Unauthorized,
+    /// IRがアカウントの送信停止（`banned == false`）またはBANを返したため打ち切った。
+    /// 再ログインでは解消しない。ローカルスコアと送信キューは残る。
+    AccountRestricted {
+        banned: bool,
+    },
     /// サーバーが送信を制限している（429）ため打ち切った。
     RateLimited {
         retry_after_seconds: Option<u64>,

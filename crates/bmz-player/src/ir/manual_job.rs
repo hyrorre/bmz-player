@@ -147,6 +147,10 @@ pub enum IrManualOutcomeStatus {
     },
     /// IRの認証に失敗したため一括送信を打ち切った。
     Unauthorized,
+    /// IRアカウントが送信停止またはBANされているため一括送信を打ち切った。
+    AccountRestricted {
+        banned: bool,
+    },
     /// IRサーバーが送信を制限したため一括送信を打ち切った。
     RateLimited,
     /// 他のsending jobが解消せず、待機の上限に達した。
@@ -723,6 +727,12 @@ async fn run_op_async(
                     IrManualStop::Unauthorized => {
                         return Ok(outcome(IrManualOutcomeStatus::Unauthorized, messages));
                     }
+                    IrManualStop::AccountRestricted { banned } => {
+                        return Ok(outcome(
+                            IrManualOutcomeStatus::AccountRestricted { banned },
+                            messages,
+                        ));
+                    }
                     IrManualStop::RateLimited { .. } => {
                         return Ok(outcome(IrManualOutcomeStatus::RateLimited, messages));
                     }
@@ -929,6 +939,12 @@ pub fn outcome_message(text: Localizer, outcome: &IrManualOutcome) -> String {
             text.format("toast-ir-manual-consecutive-failures", &args)
         }
         IrManualOutcomeStatus::Unauthorized => text.text("toast-ir-manual-unauthorized"),
+        IrManualOutcomeStatus::AccountRestricted { banned: false } => {
+            text.text("toast-ir-manual-account-suspended")
+        }
+        IrManualOutcomeStatus::AccountRestricted { banned: true } => {
+            text.text("toast-ir-manual-account-banned")
+        }
         IrManualOutcomeStatus::RateLimited => text.text("toast-ir-manual-rate-limited"),
         IrManualOutcomeStatus::FailedJobs { failed } if !resend => {
             args.set("failed", i64::from(*failed));

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
 import { isUniqueConstraintError } from '../utils/db_errors'
+import { assertCanSubmit } from './moderation/enforcement'
 import { IrIdempotencyCollisionError } from './ir/idempotency'
 import {
   asRuleMode,
@@ -212,6 +213,9 @@ export async function submitCourseScore(
   user: IrRequestUser,
   payload: CourseScoreSubmission,
 ): Promise<CourseSubmitResponse> {
+  // course_hash は course.charts から計算され、validate で一致を確認済み。
+  // 構成譜面のいずれかが hidden / blocked なら、再送も含めて登録しない。
+  await assertCanSubmit(user.id, payload.course.charts)
   const clearRank = CLEAR_RANK[payload.result.clear] ?? 0
   const verification = await resolveVerification(user.id, payload)
 

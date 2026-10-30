@@ -789,6 +789,7 @@ fn lr2_ir_status_options_are_exclusive() {
         (ResultIrState::Loaded, Some(1), 602),
         (ResultIrState::Loaded, Some(25), 602),
         (ResultIrState::Failed, None, 604),
+        (ResultIrState::Restricted, None, 605),
     ] {
         assert_eq!(lr2(&state(ir_state, total)), vec![expected], "{ir_state:?} {total:?}");
     }
@@ -807,6 +808,8 @@ fn lr2_ir_status_options_are_exclusive() {
     };
     assert_eq!(shared(&state(ResultIrState::Loaded, Some(0))), vec![602, 603]);
     assert_eq!(shared(&state(ResultIrState::Failed, None)), vec![604, 608]);
+    // beatoraja has no banned-song property, so a restricted chart keeps the failure display.
+    assert_eq!(shared(&state(ResultIrState::Restricted, None)), vec![604, 608]);
 }
 
 #[test]

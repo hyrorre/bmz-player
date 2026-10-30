@@ -187,6 +187,8 @@ pub struct ResultIrState {
     pub global: RankingLoadState,
     pub self_and_rivals: RankingLoadState,
     pub active_tab: ResultRankingTab,
+    /// primary provider が譜面の非公開・ブロックを理由に送信を拒否した。
+    chart_restricted: bool,
     ir_connect_begin_at: Option<Instant>,
     ir_connect_success_at: Option<Instant>,
     ir_connect_fail_at: Option<Instant>,
@@ -227,6 +229,11 @@ impl ResultIrState {
         while let Ok(event) = self.receiver.try_recv() {
             match event {
                 ResultIrEvent::Submit { provider, submitted, failed, message } => {
+                    let restricted_chart = failed > 0
+                        && message
+                            .as_deref()
+                            .and_then(crate::ir::IrModerationCode::from_error_message)
+                            .is_some_and(|code| !code.is_account_level());
                     let state = IrSubmitState::Done { submitted, failed, message };
                     if let Some(provider_state) = self
                         .provider_submissions
@@ -236,6 +243,9 @@ impl ResultIrState {
                         provider_state.state = state.clone();
                     }
                     if provider == self.query.provider {
+                        // 譜面の非公開・ブロックで拒否された場合、ランキングは取得できない。
+                        // スキンには取得失敗ではなく制限中 (LR2 IRstatus 605) として渡す。
+                        self.chart_restricted = restricted_chart;
                         self.submit = state;
                         self.update_submit_timer(submitted, failed, self.submit_message_is_error());
                     }
@@ -359,6 +369,9 @@ impl ResultIrState {
         let snapshot = match self.state_for_tab(tab) {
             RankingLoadState::NotRequested | RankingLoadState::Loading => {
                 ResultIrSnapshot { state: SkinIrState::Loading, ..Default::default() }
+            }
+            RankingLoadState::Failed(_) if self.chart_restricted => {
+                ResultIrSnapshot { state: SkinIrState::Restricted, ..Default::default() }
             }
             RankingLoadState::Failed(_) => {
                 ResultIrSnapshot { state: SkinIrState::Failed, ..Default::default() }
@@ -699,6 +712,7 @@ mod tests {
                 12,
             )),
             active_tab: ResultRankingTab::Global,
+            chart_restricted: false,
             ir_connect_begin_at: None,
             ir_connect_success_at: None,
             ir_connect_fail_at: None,
@@ -808,6 +822,32 @@ mod tests {
             .unwrap();
         state.poll();
         assert_eq!(state.skin_snapshot().scroll_offset, 89);
+
+        // 譜面のブロックで送信が拒否されると、ランキング取得失敗は制限中として渡す。
+        let send_rejection = |code: &str| {
+            event_sender
+                .send(ResultIrEvent::Submit {
+                    provider: "bmz-official".to_string(),
+                    submitted: 0,
+                    failed: 1,
+                    message: Some(format!("job 1: BMZ IR score submission failed: 403 [{code}]")),
+                })
+                .unwrap();
+            event_sender
+                .send(ResultIrEvent::Ranking {
+                    provider: "bmz-official".to_string(),
+                    scope: IrRankingScope::Global,
+                    result: Err("BMZ IR ranking failed: 404".to_string()),
+                })
+                .unwrap();
+        };
+        send_rejection("CHART_BLOCKED");
+        state.poll();
+        assert_eq!(state.skin_snapshot().state, bmz_render::scene::ResultIrState::Restricted);
+        // アカウント単位の制限は譜面のBANではないため、従来どおり取得失敗。
+        send_rejection("ACCOUNT_SUSPENDED");
+        state.poll();
+        assert_eq!(state.skin_snapshot().state, bmz_render::scene::ResultIrState::Failed);
     }
 
     #[test]

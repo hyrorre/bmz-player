@@ -3,6 +3,10 @@ import { eq } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
 import { normalizeEmail, readPassword } from '../../../utils/auth_input'
 import { checkAuthRateLimit } from '../../../utils/auth_rate_limit'
+import {
+  getUserModerationStatus,
+  moderationHttpError,
+} from '../../../services/moderation/enforcement'
 import { createAuthTokens } from '../../../utils/auth_tokens'
 import { irProviderKeyForEvent } from '../../../utils/provider_key'
 
@@ -35,6 +39,10 @@ export default defineEventHandler(async (event) => {
   const user = rows[0]
   if (!user || !(await verifyPassword(user.passwordHash, password))) {
     throw createError({ statusCode: 401, statusMessage: 'Invalid credentials' })
+  }
+  // パスワード確認後にだけ状態を返し、BANの有無をメールアドレスから推測させない。
+  if ((await getUserModerationStatus(user.id)) === 'banned') {
+    throw moderationHttpError('ACCOUNT_BANNED')
   }
 
   const tokens = await createAuthTokens(user.id, { clientType: body.client_type ?? 'web' })

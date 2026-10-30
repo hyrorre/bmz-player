@@ -50,6 +50,9 @@ impl IrSyncReport {
 /// 送信失敗の性質。手動の一括送信が次のjobへ進むか止まるかの判断に使う。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IrSyncFailureClass {
+    /// IR がアカウントまたは譜面の制限で送信を拒否した（恒久拒否）。
+    /// jobは自動再試行の対象から外し、アカウント単位なら同じアカウントのjobを送らない。
+    Moderated(crate::ir::IrModerationCode),
     /// そのjobの内容に起因する失敗（4xxの検証エラー、payload不正など）。他のjobは送れる見込みがある。
     Job,
     /// 通信障害・5xx・ローカル保存の失敗など、時間を置けば解消し得る失敗。

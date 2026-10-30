@@ -3,6 +3,7 @@ import { alias } from 'drizzle-orm/sqlite-core'
 import { db, schema } from 'hub:db'
 import type { IrRivalComparison, IrRivalsResponse, LnScorePolicy } from '../../shared/types/ir'
 import { lookupDifficultyLabels } from './difficulty_tables'
+import { publicChartCondition, publicPlayerCondition } from './moderation/visibility'
 import {
   buildRivalComparisonRow,
   type RivalComparisonScoreRow,
@@ -16,7 +17,7 @@ export async function rivalTargetExists(playerId: string): Promise<boolean> {
   const rows = await db
     .select({ id: schema.profiles.id })
     .from(schema.profiles)
-    .where(eq(schema.profiles.id, playerId))
+    .where(and(eq(schema.profiles.id, playerId), publicPlayerCondition(schema.profiles.id)))
     .limit(1)
   return rows.length > 0
 }
@@ -66,6 +67,7 @@ export async function loadRivalLists(playerId: string): Promise<IrRivalsResponse
         and(
           eq(schema.rivalRelationships.ownerPlayerId, playerId),
           eq(schema.rivalRelationships.relationType, 'rival'),
+          publicPlayerCondition(schema.rivalRelationships.targetPlayerId),
         ),
       )
       .orderBy(desc(schema.rivalRelationships.createdAt)),
@@ -83,6 +85,7 @@ export async function loadRivalLists(playerId: string): Promise<IrRivalsResponse
         and(
           eq(schema.rivalRelationships.targetPlayerId, playerId),
           eq(schema.rivalRelationships.relationType, 'rival'),
+          publicPlayerCondition(schema.rivalRelationships.ownerPlayerId),
         ),
       )
       .orderBy(desc(schema.rivalRelationships.createdAt)),
@@ -108,6 +111,7 @@ export async function loadRivalComparison(
         eq(schema.rivalRelationships.ownerPlayerId, ownerPlayerId),
         eq(schema.rivalRelationships.targetPlayerId, targetPlayerId),
         eq(schema.rivalRelationships.relationType, 'rival'),
+        publicPlayerCondition(schema.rivalRelationships.targetPlayerId),
       ),
     )
     .limit(1)
@@ -195,9 +199,16 @@ async function loadRivalComparisonSummary(ownerPlayerId: string, targetPlayerId:
     })
     .from(selfBestScores)
     .innerJoin(rivalBestScores, matchedRivalScoreIdentity())
-    .where(
-      and(eq(selfBestScores.playerId, ownerPlayerId), eq(rivalBestScores.playerId, targetPlayerId)),
-    )
+    .where(rivalComparisonCondition(ownerPlayerId, targetPlayerId))
+}
+
+function rivalComparisonCondition(ownerPlayerId: string, targetPlayerId: string) {
+  return and(
+    eq(selfBestScores.playerId, ownerPlayerId),
+    eq(rivalBestScores.playerId, targetPlayerId),
+    // 比較の件数・勝敗と一覧の両方から非公開譜面を除く。
+    publicChartCondition(selfBestScores.chartSha256),
+  )
 }
 
 async function loadRivalComparisonPage(
@@ -230,9 +241,7 @@ async function loadRivalComparisonPage(
     .from(selfBestScores)
     .innerJoin(rivalBestScores, matchedRivalScoreIdentity())
     .innerJoin(schema.charts, eq(schema.charts.sha256, selfBestScores.chartSha256))
-    .where(
-      and(eq(selfBestScores.playerId, ownerPlayerId), eq(rivalBestScores.playerId, targetPlayerId)),
-    )
+    .where(rivalComparisonCondition(ownerPlayerId, targetPlayerId))
     .orderBy(
       sql`${schema.charts.level} is null`,
       desc(schema.charts.level),

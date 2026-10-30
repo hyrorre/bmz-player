@@ -7,6 +7,9 @@ interface LogoutBody {
 
 export default defineEventHandler(async (event) => {
   const body = ((await readBody(event).catch(() => undefined)) ?? {}) as LogoutBody
+  // 提示された有効な token が属するセッショングループ全体をログアウトする（他の端末には触れない）。
+  // 失効済み・期限切れの token では何も変更しないが、クライアントがローカルの token を破棄できる
+  // よう、応答は常に成功を返す。
   const accessToken = getBearerToken(event)
   if (accessToken) {
     await revokeToken(accessToken, 'access')

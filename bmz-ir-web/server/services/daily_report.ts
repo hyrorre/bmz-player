@@ -2,6 +2,7 @@ import { and, eq, gte, inArray, isNotNull, isNull, lt, or } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
 import type { IrDailyMode, IrDailyReport } from '../../shared/types/ir'
 import { buildDailyReport, dailyDateRange, type DailyReportScoreRow } from './daily_report_core'
+import { publicChartCondition, publicPlayerCondition } from './moderation/visibility'
 import { lookupDifficultyLabels } from './difficulty_tables'
 
 const BASELINE_CHART_CHUNK_SIZE = 50
@@ -47,7 +48,7 @@ export async function loadDailyReport(input: {
       boundaryMinutes: schema.profiles.dailyBoundaryMinutes,
     })
     .from(schema.profiles)
-    .where(eq(schema.profiles.id, input.playerId))
+    .where(and(eq(schema.profiles.id, input.playerId), publicPlayerCondition(schema.profiles.id)))
     .limit(1)
   const profile = profiles[0]
   if (!profile) {
@@ -76,6 +77,7 @@ export async function loadDailyReport(input: {
       and(
         eq(schema.scores.playerId, input.playerId),
         eq(schema.scores.accepted, true),
+        publicChartCondition(schema.scores.chartSha256),
         occurredDuringDay,
       ),
     )) as DailyReportScoreRow[]
@@ -96,6 +98,7 @@ export async function loadDailyReport(input: {
         and(
           eq(schema.scores.playerId, input.playerId),
           eq(schema.scores.accepted, true),
+          publicChartCondition(schema.scores.chartSha256),
           inArray(schema.scores.chartSha256, chunk),
           occurredBeforeDay,
         ),

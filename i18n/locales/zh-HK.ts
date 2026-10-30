@@ -1,4 +1,5 @@
 import { additional, withAdditional } from './additional'
+import { moderation } from './moderation'
 
 export default defineI18nLocale(() =>
   withAdditional(
@@ -115,7 +116,9 @@ export default defineI18nLocale(() =>
         replayNotAvailable: '無可用的重播。',
         sessionNotFound: '找不到作業階段。',
         deviceKeyNotFound: '找不到簽署密鑰或密鑰已撤銷。',
+        ...moderation['zh-HK'].apiErrors,
       },
+      admin: moderation['zh-HK'].admin,
     },
     additional['zh-HK'],
   ),

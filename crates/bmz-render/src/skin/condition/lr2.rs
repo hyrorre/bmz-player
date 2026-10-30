@@ -149,7 +149,8 @@ pub(super) fn lr2_option(id: i32, state: &SkinDrawState) -> bool {
 /// The option of LR2's `IRstatus` for BMZ's ranking state. LR2 moves from waiting
 /// (3, option 606) to connecting (4, 607) and then to a ranking with players (2, 602),
 /// no players (-1, 603) or a connection failure (-3, 604); 0 (600) is no IR target.
-/// BMZ has no momentary reading (601), banned song (605) or rate-limit busy (608).
+/// A chart that BMZ IR hides or blocks maps to LR2's banned song (605).
+/// BMZ has no momentary reading (601) or rate-limit busy (608).
 fn lr2_ir_status(state: &SkinDrawState) -> i32 {
     use crate::scene::ResultIrState;
     match state.ir_ranking.state {
@@ -159,6 +160,7 @@ fn lr2_ir_status(state: &SkinDrawState) -> i32 {
         ResultIrState::Loaded if state.ir_ranking.total_player == Some(0) => 603,
         ResultIrState::Loaded => 602,
         ResultIrState::Failed => 604,
+        ResultIrState::Restricted => 605,
     }
 }
 

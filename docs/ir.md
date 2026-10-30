@@ -26,7 +26,7 @@ rianIRとの互換は[rianIR互換プロバイダー](rian-ir.md)、アシスト
 POST   /api/v1/auth/register
 POST   /api/v1/auth/login                      # email + password → provider_key + access / refresh token
 POST   /api/v1/auth/refresh                    # refresh tokenのrotation + provider_key
-POST   /api/v1/auth/logout
+POST   /api/v1/auth/logout                     # 提示した有効なtokenのセッショングループをログアウト
 GET    /api/v1/me
 GET    /api/v1/profile
 PUT    /api/v1/profile                         # display_name / bio / daily_boundary_minutes
@@ -82,6 +82,13 @@ POST   /api/v1/rivals                          # { target_player_id, action: add
 DELETE /api/v1/rivals/{player_id}
 GET    /api/v1/rivals/{player_id}/comparison   # score identityごとのEX / BP比較
 POST   /api/v1/admin/difficulty-tables/sync    # 管理者による難易度表の即時同期
+GET    /api/v1/admin/moderation/users          # 管理者: ユーザー検索（?q=&status=&limit=&offset=）
+GET    /api/v1/admin/moderation/users/{id}     # 管理者: ユーザーの状態・直近の監査ログ
+POST   /api/v1/admin/moderation/users/{id}/status   # 管理者: 送信停止・BAN・解除
+GET    /api/v1/admin/moderation/charts         # 管理者: 譜面検索（?q=&field=&status=&limit=&offset=）
+GET    /api/v1/admin/moderation/charts/{sha256}     # 管理者: 譜面の状態・同じMD5の参考情報
+POST   /api/v1/admin/moderation/charts/status  # 管理者: 確認中・非公開・ブロック・解除（最大50件）
+GET    /api/v1/admin/moderation/audit-logs     # 管理者: 監査ログ（?target_type=&target_id=&actor_id=&limit=&offset=）
 ```
 
 `PUT /api/v1/charts/{sha256}`と、難易度表を公開・管理するAPIはありません。譜面はscore submitの中で登録します。
@@ -318,12 +325,13 @@ POST /api/v1/scores?include=rankings&ranking_scopes=global,self_and_rivals&ranki
 
 1. access tokenと送信の制限を確認する
 2. payloadを検証する
-3. `idempotency_key`を確認する（重複なら既存のscoreを使う）
-4. 譜面を登録・確認する
-5. scoreを保存する
-6. bestを更新するか判定する
-7. `include=rankings`ならランキングを取得する
-8. 応答を返す
+3. アカウントと譜面の制限を確認する（[アカウント・譜面の制限](#アカウント譜面の制限)。拒否した場合はscore・譜面を作らない）
+4. `idempotency_key`を確認する（重複なら既存のscoreを使う）
+5. 譜面を登録・確認する
+6. scoreを保存する
+7. bestを更新するか判定する
+8. `include=rankings`ならランキングを取得する
+9. 応答を返す
 
 ## ランキング
 
@@ -541,6 +549,99 @@ rank=7, scope_rank=2  ライバル
 - Cronと管理APIが重なった場合は、D1の期限付きのロックで片方を`already_running`としてスキップします。
 - 同期の失敗は、Cloudflare LogsへURLと原因を最大10件、各500文字まで記録します。全件が失敗した場合は、最初の原因を管理APIの502エラーにも含めます。
 
+## アカウント・譜面の制限
+
+不正なスコアの送信者や、公開に問題がある譜面を、管理者がサーバー側で制限する仕組みです。
+制限はすべてサーバーで判定し、クライアントの表示や設定に頼りません。自動検出・通報・外部DBとの連携はまだありません。
+
+### 状態
+
+ユーザー（`user_moderation`）と譜面（`chart_moderation`）は、行が無ければ`active`として扱います。既存のテーブルには列を足していません。
+
+| 対象 | 状態 | 新規送信 | ログイン・token | 公開の表示 |
+| --- | --- | --- | --- | --- |
+| ユーザー | `active` | 可 | 可 | 表示 |
+| ユーザー | `submit_suspended` | 403 `ACCOUNT_SUSPENDED` | 可 | 表示（過去のスコアは残る） |
+| ユーザー | `banned` | 403 `ACCOUNT_BANNED` | login / refreshは403、既存のsessionとrefresh tokenは失効 | ランキング・プレイヤー一覧・プロフィール・統計・ライバル比較から除外 |
+| 譜面 | `active` | 可 | - | 表示 |
+| 譜面 | `under_review` | 可 | - | 表示（管理者の確認用の印） |
+| 譜面 | `hidden` | 403 `CHART_HIDDEN` | - | 譜面一覧・詳細・MD5検索・ランキング・プロフィールのbest・日次成果・ライバル比較から除外 |
+| 譜面 | `blocked` | 403 `CHART_BLOCKED` | - | `hidden`と同じ |
+
+- 送信の判定は、score submit・course score・attestation・replayのupload-url / upload / verifyで行います。ユーザーを先に、次に譜面を確認し、複数の譜面が該当すると`blocked`を優先します。
+- 判定は`idempotency_key`の照合より前に行います。制限中に同じ内容を再送しても、以前に受理されたscoreの応答は返しません。拒否したrequestでは譜面もscoreも作りません。
+- コーススコアは、コースに含まれる譜面のどれかが`hidden` / `blocked`なら拒否します。単曲の制限をコース経由で回避できません。非公開の譜面を含むコースは、コースの一覧・詳細・ランキングからも除外します。
+- MD5だけを根拠に、別のSHA-256の譜面を自動で制限することはしません。管理画面では、同じMD5の別の譜面を参考情報として表示するだけです。タイトル・アーティストによる自動の制限もありません。
+- 本人は、自分の送信履歴（`/api/v1/me/scores`、self-scores）とscoreの詳細・リプレイを、制限中も閲覧できます。他のユーザーには404を返します。
+- 管理者のアカウントは制限できず、管理者は自分の状態を変更できません。
+- IPアドレスでの恒久的なBANや、端末のfingerprintは使いません。既存の送信の制限（429）とCSRFの対策はそのまま有効です。
+
+### 非公開データの扱いと復元
+
+- 制限は読み取り時の条件（`NOT EXISTS`の相関subquery）で反映し、`scores` / `best_scores`の行は変更・削除しません。順位・件数・クリア率・ページングは、除外した後の結果で計算します。
+- 解除（`active`へ戻す）すると、再計算をせずに以前のスコアとランキングがそのまま表示に戻ります。`accepted`とは別の扱いのため、元から不受理だったスコアは解除後も表示しません。
+- BANで失効したsessionとrefresh tokenは復元しません。解除後に、ユーザーがログインし直します。
+- 失効済みのrefresh tokenが使われた場合、全セッションを失効させる（再利用検知）のは、rotation済みのtokenが5分の猶予を過ぎて使われたときと、再利用検知で失効したtokenが使われたときだけです。ログアウト・パスワード変更・BANで失効したtokenは拒否するだけで、その後のログインで作られたセッションには影響しません。ログアウト・個別のセッション失効では対象のセッショングループ、パスワード変更・BANではそのユーザーの全セッションについて、それより前にrotation済み（または再利用検知済み）のtokenも同じ失効理由に付け替えます。そのため、古い世代のtokenが後から使われても拒否されるだけで、その後のログインで作られたセッションや、対象外の端末のセッションは失効しません。その後に発行されたtokenと、対象外のセッショングループでは、再利用検知が通常どおり働きます。失効済みのtokenを提示したログアウトでは付け替えません。再利用検知による全セッションの失効は、「提示されたtokenが今も`reuse_detected`、または猶予を過ぎた`rotated`である」ことを条件にした1文のUPDATEで行います。tokenを読み取った後にログアウト・BAN・パスワード変更で失効理由が付け替わっていれば、何も失効させず拒否だけします。
+- refreshでは、旧tokenのrotationを「旧tokenが有効でユーザーがBANされていない」ことを条件にした1文で、新しいtokenの組の追加を「旧tokenがこのrotationの結果のまま残っていてBANされていない」ことを条件にした1文で行います。D1は書き込みを1文ずつ原子的に適用するため、BANがどの時点に割り込んでも、BAN後に有効なtokenは残らず、BANによる失効をrotationで上書きしません。同じtokenでの並行refreshは1つだけが成功します。新しいtokenの追加に失敗した場合はtokenを返さず、ユーザーはログインし直します。
+- ログイン・登録のtokenの組も、「ユーザーがBANされていない」ことを条件にした1文で追加します。BANの確認の後にBANが確定した場合はtokenを発行せず`ACCOUNT_BANNED`を返し、追加の後にBANが確定した場合はBANがそのtokenを失効させます。
+- BANによるセッションの失効と付け替えは、書き込み時点でもユーザーがBAN中の場合だけ行います。refreshがBANを読み取った後に解除・再ログインがあっても、解除後のセッションは失効しません（そのrefreshには、読み取った時点の結果として403を返します）。
+- ログアウト（`POST /api/v1/auth/logout`）は、Bearerのaccess token、bodyの`refresh_token`、Webのcookie sessionのうち、有効（失効しておらず期限内）なものが属するセッショングループ全体を失効させます。グループはサーバー側でtokenから求め、他の端末のセッションには触れません。refreshと同時に実行されても、refreshが先なら新しいtokenも同じグループとして失効し、rotationと新しいtokenの追加の間にログアウトが確定すれば追加が成立しません。失効済み・期限切れのtokenだけを提示した場合は何も変更しませんが、クライアントがローカルのtokenを破棄できるよう、応答は常に成功です。
+- 制限の判定とscoreの保存は、同じrequestの中で続けて行いますが、1つのtransactionではありません。判定の直後に制限した場合、そのrequestのscoreは保存されることがあります。そのscoreは制限より前に送られたものと同じ扱いになり、制限中は公開の表示から除外され、解除後に表示されます。
+- 公開APIの応答には、制限の理由・メモ・管理者のIDやメールアドレスを含めません。制限中の対象は「存在しない」（404）として扱います。
+
+### エラーコード
+
+制限による拒否は、どれもHTTP 403で、応答bodyの`data.code`に次のコードを入れます。`statusMessage`は英語の固定文です。
+
+| `data.code` | `statusMessage` |
+| --- | --- |
+| `ACCOUNT_SUSPENDED` | Score submission is suspended for this account |
+| `ACCOUNT_BANNED` | This account is banned from BMZ IR |
+| `CHART_HIDDEN` | Score submission is temporarily disabled for this chart |
+| `CHART_BLOCKED` | Score submission is blocked for this chart |
+
+`data.code`の無い403（権限不足など）と、401は、従来どおり認証のエラーです。
+
+### 管理者の設定と管理画面
+
+- 管理者は、サーバーの`NUXT_IR_ADMIN_USER_IDS`（カンマ区切りのユーザーID、runtime configの`ir.adminUserIds`）だけで決めます。未設定の場合は全員を拒否します。requestのbodyやqueryにある操作者のIDは使いません。
+- 管理APIは未ログインに401、管理者以外に403を返します。`/api/v1/me`は`is_admin`と`account_status`を返し、Webのナビゲーションに管理画面を出すかどうかだけに使います。
+- Webの`/admin/moderation`（noindex）には、ユーザー・譜面・監査ログのタブがあります。
+  - ユーザー: ID・表示名・メールアドレスで検索し、送信停止・BAN・解除を行います。
+  - 譜面: SHA-256・MD5・タイトル・アーティストで検索し、確認中・非公開・ブロック・解除を行います。未登録のSHA-256も、先に制限できます。ページをまたいで選択し、最大50件をまとめて変更できます。結果は譜面ごとに`changed` / `unchanged` / `conflict`で表示します。選択した譜面は、選択した時点の`revision`で送ります。一覧を読み込み直しても`revision`は更新せず、他の管理者が先に変更した譜面は`conflict`として選択から外し、最新の状態を確認して選択し直すまで送りません。
+  - 監査ログ: 対象の種別・ID・操作者で絞り込みます。
+- 変更には理由（最大1000文字）が必須で、確認ダイアログを経由します。ダイアログを開いた時点の対象と`revision`を固定し、詳細の読み込み中や送信中は操作できません。選択を切り替えると古い詳細は破棄し、最後に選んだ対象の応答だけを表示します。譜面には内部向けのメモ（最大2000文字）も付けられます。
+- 各行は`revision`を持ち、画面が読んだ`expected_revision`と現在値が違う場合は409（譜面の一括変更では`conflict`）で上書きを防ぎます。同じ状態への変更は`unchanged`で、監査ログを増やしません。同じrequestの再送は安全です。
+
+運用の手順は次のとおりです。
+
+1. 管理者にするユーザーのIDを`NUXT_IR_ADMIN_USER_IDS`へ設定してdeployする
+2. 管理者のアカウントでWebにログインし、`/admin/moderation`を開く
+3. 対象を検索し、状態と理由を入力して確定する（BANはそのユーザーのsessionを即時に失効させる）
+4. 解除は同じ画面で「解除（active）」を選ぶ。表示はすぐに元に戻る
+5. 経緯は監査ログのタブで確認する
+
+### 監査ログ
+
+`moderation_audit_logs`は追記専用で、SQLiteのtriggerがUPDATE / DELETEを拒否します。
+
+- 1件の状態変更ごとに、操作者、対象の種別とID、操作（`user_suspend` / `user_ban` / `user_restore` / `chart_review` / `chart_hide` / `chart_block` / `chart_restore`）、変更前後の状態、理由、metadata（一括変更の`batch_id`、譜面のメモなど）、時刻を記録します。
+- 状態の更新、監査ログの追加、BAN時のsessionの失効は、D1の`batch`で同時に適用します。どれかが失敗した場合は、どれも適用しません。並行した変更では、`revision`の条件で片方だけが成功し、ログも1件だけ残ります。
+- 監査ログのAPIは、操作者と対象の表示名を返しますが、メールアドレスは返しません。
+
+### migration
+
+`server/db/migrations/sqlite/0015_moderation.sql`は、`user_moderation` / `chart_moderation` / `moderation_audit_logs`の3つのテーブル、index、追記専用のtriggerを追加します。既存のテーブルとデータは変更しません。
+
+- ローカルでは`bun run db:migrate`で適用します。
+- 本番のD1への適用は、運用者が承認した上で既存のmigrationの手順で行います。適用の前に`bun run db:export:remote`などでbackupを取り、適用後に3つのテーブルが空で作られたことを確認します。全ユーザー・全譜面は`active`のまま始まります。
+- migrationより先に新しいWorkerをdeployすると、制限の判定と公開APIの条件が存在しないテーブルを参照して失敗します。migrationを先に適用します。
+- rollbackが必要な場合も、既存のテーブルには影響しません。新しいテーブルを削除するとすべての制限が解除されますが、監査ログも失われるため、先にexportします。
+
+### ユーザーへの案内
+
+制限されたユーザーには、BMZ PlayerとWebで「送信が停止されている」「BANされている」ことだけを表示し、理由は表示しません。問い合わせ先は、運用側で決めたBMZ IRの窓口を案内します。ローカルのスコアは保持されるため、解除された後に手動で再送できます。
+
 ## BMZ Playerのクライアント
 
 ### CLI
@@ -562,6 +663,9 @@ jobの状態は`pending` / `sending` / `succeeded` / `failed`です。
 - `sending`は通常はworkerが処理中であることを示しますが、プロセスの終了などで残ることがあるため、`updated_at`から300秒（lease）を過ぎたものは再び送信の対象にします。
 - 再試行の間隔は、1分 → 5分 → 30分 → 2時間 → 以降24時間です。429が`Retry-After`を返した場合は、通常のbackoffより優先してその時刻まで待ちます。
 - 成功したjobはpayloadを空にし、同期の後に、30日以内または最新の500件だけを残します。未送信・失敗・送信中のjobは削除しません。
+- サーバーが制限のコード（[エラーコード](#エラーコード)）で拒否したjobは、`failed`のまま`next_attempt_at`を自動再試行が届かない時刻（`IR_JOB_NO_AUTO_RETRY_AT`、9999年末）にし、`last_error`の末尾に`[CHART_BLOCKED]`などのコードを残します。payloadとローカルのスコアは消しません。送信キューの画面では再試行の時刻を表示しません。
+- アカウントの停止・BANを受けたバッチでは、同じprovider / accountの残りのjobを送らずに同じ扱いにします。token refreshがBANで拒否された場合も、ログインし直しを促す認証エラーではなく、制限として扱います。5xx・通信障害・429は、従来どおりbackoffで再試行します。
+- 制限が解除された後は、送信キューの再送（個別・失敗分の一括）で送り直せます。再送はbackoffを無視するため、制限中のjobも対象になります。
 
 成功の判定とremote score IDの紐付けは、jobとログの保持期間とは別に、成功台帳（`ir_score_success_ledger`）にも保存します。
 
@@ -649,7 +753,7 @@ payloadと署名は次のとおりです。
 - 対象はprimary providerだけです。ローカルスコアの一括送信はBMZ IRだけ（BMS-IR / rianIRは非対応）、スコアの取得はrianIR以外が対象です。未ログインやアカウントが決まっていない間は、ボタンを無効にします。
 - 「ローカルスコアを一括送信」は`ir upload-local --all`と同じ完走モードで、`include_replay`と`include_course_stages`はCLIの既定値（どちらもfalse）です。
 - 確認画面を開くと、dry-runと同じ方法で候補の件数を数え（送信待ちの既存のjobも加えます）、`件数 × IR_CLI_SYNC_JOB_SPACING_MS`を最短時間の目安として表示します。
-- 失敗したjobの扱いと打ち切りの条件は`--all`と同じです。leaseの待ちから再開しても同じ実行開始時刻を使い、その実行で失敗したjobは再送しません。失敗が残った完了・連続の失敗・認証エラー・送信制限は、それぞれ別のトーストで通知します。
+- 失敗したjobの扱いと打ち切りの条件は`--all`と同じです。leaseの待ちから再開しても同じ実行開始時刻を使い、その実行で失敗したjobは再送しません。失敗が残った完了・連続の失敗・認証エラー・送信制限・アカウントの送信停止 / BANは、それぞれ別のトーストで通知します。アカウントの制限では即座に止め、譜面単位の拒否は連続の失敗に数えずに次のjobへ進みます。
 - 「IRからスコアを取得」は`ir download-scores`と同じで、CLIの既定の上限（200件）を付けず、全件を対象にします。取り込み済みのscoreは除くため、中断した後の再実行は続きから進みます。
 - 新しいscoreを保存した場合は、完了・中断・エラーの通知時に、選曲画面の一覧、フォルダの集計、player statsを更新します。既存の履歴へのリンクだけで新しい保存がない場合は更新しません。取得結果には取り込み・紐付け・失敗の件数を表示し、一部の失敗は通常の完了と区別します。
 - 送信は`IR_CLI_SYNC_BATCH_LIMIT`（100）件ずつ、job間は`IR_CLI_SYNC_JOB_SPACING_MS`（200ms）です。中断は、job間・batch間・送信間隔の待ちの間に確認し、処理中の1件は終えてから止まります。
@@ -676,7 +780,7 @@ payloadと署名は次のとおりです。
 
 ### スキンとプレイへの反映
 
-- リザルト・選曲スキンでは、`NUMBER_IR_RANK(179)` / `NUMBER_IR_TOTALPLAYER(180/200)` / `NUMBER_IR_CLEARRATE(181)` / `OPTION_IR_LOADING/LOADED/NOPLAYER/FAILED(601..604)`を使えます。LR2 CSVの選曲・決定スキンでは、600..608を1つの状態として排他的に評価します（[スキン仕様](skin.md)の600..608を参照してください）。
+- リザルト・選曲スキンでは、`NUMBER_IR_RANK(179)` / `NUMBER_IR_TOTALPLAYER(180/200)` / `NUMBER_IR_CLEARRATE(181)` / `OPTION_IR_LOADING/LOADED/NOPLAYER/FAILED(601..604)`を使えます。LR2 CSVの選曲・決定スキンでは、600..608を1つの状態として排他的に評価します（[スキン仕様](skin.md)の600..608を参照してください）。BMZ IRが非公開・ブロック中の譜面への送信を拒否したリザルトでは、ランキングの取得失敗をLR2の`IRstatus`のBAN曲（605）として渡します。beatoraja系のスキンには対応するpropertyが無いため、従来どおり取得失敗（604 / 608）で表示し、組み込みのリザルトは`IR RESTRICTED`と表示します。
 - 選曲スキンでは、`STRING_RIVAL(1)` / `NUMBER_RIVAL_SCORE(271)` / `NUMBER_RIVAL_MAXCOMBO(275)` / `NUMBER_RIVAL_MISSCOUNT(276)` / `OPTION_(NOT_)COMPARE_RIVAL(624/625)`を使えます。
 - リザルト画面には、eguiのオーバーレイも表示します。
 - `TARGET: RIVAL`（`TargetOption::Rival`）は、選曲時に選んだIRライバルのベストEXを、プレイ中のゴーストとリザルトでの差分に使います。

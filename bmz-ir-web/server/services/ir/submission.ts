@@ -4,6 +4,7 @@ import type { BatchItem } from 'drizzle-orm/batch'
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core'
 import { db, schema } from 'hub:db'
 import { isUniqueConstraintError } from '../../utils/db_errors'
+import { assertCanSubmit, assertCanWriteScore } from '../moderation/enforcement'
 import { assertIdempotentSubmission } from './idempotency'
 import type {
   IrChartLnProfile,
@@ -50,6 +51,7 @@ export async function attestScore(
   if (payload.score_id !== scoreId) {
     throw new IrEvidenceValidationError('score_id does not match the request path')
   }
+  await assertCanWriteScore(user.id, scoreId)
   const attestationVerification = await resolveVerification(user.id, payload)
   if (attestationVerification === 'unverified') {
     throw new IrEvidenceValidationError('score attestation evidence is required')
@@ -87,6 +89,10 @@ export async function submitScore(
   const { doubleOption, appliedDoubleOption, sourceKind } = scoreSubmissionMetadata(
     payload.play_options,
   )
+
+  // ユーザー・譜面の状態は idempotency key の確認より先に判定する。BAN・ブロック前に
+  // 保存済みのスコアを再送しても、成功応答やランキングを返さない。
+  await assertCanSubmit(user.id, [payload.chart.sha256])
 
   // 同一 idempotency key の再送は、当時の evidence 形式がすでに廃止されていても
   // 保存済み score を成功として返す。初回送信の検証・保存には到達させない。

@@ -7,6 +7,53 @@ pub(crate) struct IrHttpResponseError {
     summary: String,
     status: StatusCode,
     retry_after_seconds: Option<u64>,
+    moderation_code: Option<IrModerationCode>,
+}
+
+/// BMZ IR がアカウント・譜面の制限で送信を拒否したときに返す `data.code`。
+///
+/// どれもサーバー側の判断で、時間を置いて同じ内容を再送しても受理されない。
+/// 送信キューはこれを恒久拒否として扱い、自動再試行や再ログインを繰り返さない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IrModerationCode {
+    AccountSuspended,
+    AccountBanned,
+    ChartHidden,
+    ChartBlocked,
+}
+
+impl IrModerationCode {
+    pub fn from_code(code: &str) -> Option<Self> {
+        match code {
+            "ACCOUNT_SUSPENDED" => Some(Self::AccountSuspended),
+            "ACCOUNT_BANNED" => Some(Self::AccountBanned),
+            "CHART_HIDDEN" => Some(Self::ChartHidden),
+            "CHART_BLOCKED" => Some(Self::ChartBlocked),
+            _ => None,
+        }
+    }
+
+    pub const fn as_code(self) -> &'static str {
+        match self {
+            Self::AccountSuspended => "ACCOUNT_SUSPENDED",
+            Self::AccountBanned => "ACCOUNT_BANNED",
+            Self::ChartHidden => "CHART_HIDDEN",
+            Self::ChartBlocked => "CHART_BLOCKED",
+        }
+    }
+
+    /// `http_response_error` が summary の末尾に付けた `[CODE]` を、保存済みの
+    /// エラー文字列（送信キューの last_error、送信結果のメッセージ）から読む。
+    pub fn from_error_message(message: &str) -> Option<Self> {
+        let start = message.rfind('[')?;
+        let code = message[start + 1..].trim_end().strip_suffix(']')?;
+        Self::from_code(code)
+    }
+
+    /// アカウント単位の制限。同じアカウントの他のjobも同じ理由で拒否される。
+    pub const fn is_account_level(self) -> bool {
+        matches!(self, Self::AccountSuspended | Self::AccountBanned)
+    }
 }
 
 impl fmt::Display for IrHttpResponseError {
@@ -23,6 +70,12 @@ pub(crate) fn retry_after_seconds_from_error(error: &anyhow::Error) -> Option<u6
     })
 }
 
+pub(crate) fn moderation_code_from_error(error: &anyhow::Error) -> Option<IrModerationCode> {
+    error.chain().find_map(|cause| {
+        cause.downcast_ref::<IrHttpResponseError>().and_then(|error| error.moderation_code)
+    })
+}
+
 pub(crate) fn status_code_from_error(error: &anyhow::Error) -> Option<StatusCode> {
     error
         .chain()
@@ -35,11 +88,37 @@ pub(crate) fn http_response_error(
     body: &str,
     retry_after: Option<&str>,
 ) -> anyhow::Error {
+    let moderation_code =
+        (status == StatusCode::FORBIDDEN).then(|| moderation_code_from_body(body)).flatten();
+    let mut summary =
+        format!("{label} failed: {}", response_error_summary(status, body, retry_after));
+    if let Some(code) = moderation_code {
+        // 送信キューの last_error に残し、後から制限による拒否だと判別できるようにする。
+        summary.push_str(" [");
+        summary.push_str(code.as_code());
+        summary.push(']');
+    }
     anyhow::Error::new(IrHttpResponseError {
-        summary: format!("{label} failed: {}", response_error_summary(status, body, retry_after)),
+        summary,
         status,
         retry_after_seconds: retry_after.and_then(parse_retry_after_seconds),
+        moderation_code,
     })
+}
+
+/// `{"data":{"code":"ACCOUNT_BANNED"}}` の形のエラーbodyから制限コードを読む。
+/// 未知のコードや他のproviderの403は通常の認証エラーとして扱う。
+fn moderation_code_from_body(body: &str) -> Option<IrModerationCode> {
+    #[derive(serde::Deserialize)]
+    struct ErrorBody {
+        data: Option<ErrorData>,
+    }
+    #[derive(serde::Deserialize)]
+    struct ErrorData {
+        code: Option<String>,
+    }
+    let code = serde_json::from_str::<ErrorBody>(body).ok()?.data?.code?;
+    IrModerationCode::from_code(&code)
 }
 
 pub(crate) fn parse_retry_after_seconds(value: &str) -> Option<u64> {
