@@ -384,10 +384,10 @@ pub fn build_game_session_with_input_backend(
     } else {
         crate::config::play::clamp_lane_cover_for_lift(lane_unit_to_f32(mode_config.sudden), lift)
     };
-    let hsfix_base_bpm = hsfix_base_bpm_for_chart(&chart, &timing_map, hs_fix);
     // Practice では CONSTANT を無効にする。初期 HS も実際に使う状態で求める。
     let constant_enabled = mode_config.constant_enabled
         && session_mode != crate::select_options::SessionMode::Practice;
+    let hsfix_base_bpm = hsfix_base_bpm_for_chart(&chart, &timing_map, hs_fix, constant_enabled);
     let hispeed = if speed_locked {
         1.0
     } else {
@@ -795,15 +795,20 @@ pub(super) fn initial_hispeed_for_mode(
     constant_enabled: bool,
 ) -> f32 {
     let now_bpm = crate::screens::play_snapshot::effective_bpm_for_playback_rate(
-        hsfix_base_bpm_for_chart(chart, timing_map, hs_fix),
+        hsfix_base_bpm_for_chart(chart, timing_map, hs_fix, constant_enabled),
         playback_rate_percent,
     );
-    let scroll_multiplier = crate::screens::play_snapshot::current_scroll_multiplier(
-        chart,
-        timing_map,
-        TimeUs(0),
-        constant_enabled,
-    );
+    // MAIN はノーツ位置の SCROLL / SPEED を含むため、倍率を重ねて掛けない。
+    let scroll_multiplier = if hs_fix == HsFixOption::MainBpm {
+        1.0
+    } else {
+        crate::screens::play_snapshot::current_scroll_multiplier(
+            chart,
+            timing_map,
+            TimeUs(0),
+            constant_enabled,
+        )
+    };
     match hispeed_mode {
         HispeedMode::Classic => crate::config::play::classic_effective_hispeed(
             mode_config.hispeed,
@@ -840,6 +845,7 @@ pub(super) fn hsfix_base_bpm_for_chart(
     chart: &PlayableChart,
     timing_map: &bmz_chart::timing::TimingMap,
     hs_fix: HsFixOption,
+    constant_enabled: bool,
 ) -> f64 {
     match hs_fix {
         HsFixOption::Off | HsFixOption::StartBpm => chart.metadata.initial_bpm,
@@ -859,13 +865,14 @@ pub(super) fn hsfix_base_bpm_for_chart(
                 TimingEventKind::Stop { .. } => None,
             })
             .fold(chart.metadata.initial_bpm, f64::max),
-        HsFixOption::MainBpm => main_bpm_for_chart(chart, timing_map),
+        HsFixOption::MainBpm => main_bpm_for_chart(chart, timing_map, constant_enabled),
     }
 }
 
-pub(super) fn main_bpm_for_chart(
+pub(crate) fn main_bpm_for_chart(
     chart: &PlayableChart,
     timing_map: &bmz_chart::timing::TimingMap,
+    constant_enabled: bool,
 ) -> f64 {
     let mut counted = std::collections::HashSet::new();
     let mut counts = std::collections::HashMap::<u64, u32>::new();
@@ -880,7 +887,11 @@ pub(super) fn main_bpm_for_chart(
         }
         let bpm = timing_map.bpm_at_time(time);
         let scroll = crate::screens::play_snapshot::scroll_factor_at(chart, tick.0 as f64);
-        let speed = crate::screens::play_snapshot::speed_at(&speed_segments, time.0 as f64);
+        let speed = if constant_enabled {
+            1.0
+        } else {
+            crate::screens::play_snapshot::speed_at(&speed_segments, time.0 as f64)
+        };
         if !bpm.is_finite()
             || bpm <= 0.0
             || !scroll.is_finite()

@@ -595,7 +595,10 @@ fn main_bpm_uses_bpm_with_most_notes() {
         &bpm_chart.timing_events,
     );
 
-    assert_eq!(hsfix_base_bpm_for_chart(&bpm_chart, &timing_map, HsFixOption::MainBpm), 180.0);
+    assert_eq!(
+        hsfix_base_bpm_for_chart(&bpm_chart, &timing_map, HsFixOption::MainBpm, false),
+        180.0
+    );
 }
 
 #[test]
@@ -678,7 +681,10 @@ fn main_bpm_counts_only_taps_and_long_starts_with_positive_scroll() {
         &bpm_chart.timing_events,
     );
 
-    assert_eq!(hsfix_base_bpm_for_chart(&bpm_chart, &timing_map, HsFixOption::MainBpm), 240.0);
+    assert_eq!(
+        hsfix_base_bpm_for_chart(&bpm_chart, &timing_map, HsFixOption::MainBpm, false),
+        240.0
+    );
 }
 
 #[test]
@@ -702,7 +708,10 @@ fn main_bpm_ignores_invisible_notes() {
         &bpm_chart.timing_events,
     );
 
-    assert_eq!(hsfix_base_bpm_for_chart(&bpm_chart, &timing_map, HsFixOption::MainBpm), 180.0);
+    assert_eq!(
+        hsfix_base_bpm_for_chart(&bpm_chart, &timing_map, HsFixOption::MainBpm, false),
+        180.0
+    );
 }
 
 #[test]
@@ -719,7 +728,7 @@ fn min_bpm_preserves_positive_values_below_one() {
         &bpm_chart.timing_events,
     );
 
-    assert_eq!(hsfix_base_bpm_for_chart(&bpm_chart, &timing_map, HsFixOption::MinBpm), 0.96);
+    assert_eq!(hsfix_base_bpm_for_chart(&bpm_chart, &timing_map, HsFixOption::MinBpm, false), 0.96);
 }
 
 #[test]

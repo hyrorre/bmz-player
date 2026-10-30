@@ -470,7 +470,9 @@ pub use arrange_pipeline::{apply_arrange, apply_arrange_pair, generate_arrange_s
 pub use build::{
     apply_placeholder_session_visuals, build_game_session, build_game_session_with_input_backend,
 };
-pub(crate) use build::{effective_primary_key_mode, judge_algorithm_from_config};
+pub(crate) use build::{
+    effective_primary_key_mode, judge_algorithm_from_config, main_bpm_for_chart,
+};
 pub use preload::{
     ScoredChartMetrics, build_audio_engine_for_chart, build_practice_prepared_from_preloaded,
     build_prepared_play_session_from_preloaded, load_game_session_for_chart,
