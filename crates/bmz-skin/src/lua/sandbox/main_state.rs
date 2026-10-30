@@ -383,8 +383,32 @@ pub(super) fn create_main_state_stub(
             Ok(true)
         })?,
     )?;
+    install_disabled_http_api(lua, &table)?;
     install_main_state_read_helpers(lua, &table)?;
     Ok(Value::Table(table))
+}
+
+/// Match SkinRuntimeLuaApiExporter(enabled=false). Advertising an inert Java
+/// Thread as a real worker otherwise leaves legacy HTTP wrappers pending forever.
+/// These APIs never create a request, worker, socket, or external effect.
+fn install_disabled_http_api(lua: &Lua, table: &Table) -> mlua::Result<()> {
+    table.set(
+        "http_get_async",
+        lua.create_function(|_, _: Variadic<Value>| Ok((Value::Nil, "HTTP disabled")))?,
+    )?;
+    table.set(
+        "http_poll",
+        lua.create_function(|lua, _: Value| {
+            let response = lua.create_table()?;
+            response.set("status", "failed")?;
+            response.set("status_code", 0)?;
+            response.set("error", "HTTP disabled")?;
+            response.set("lines", lua.create_table()?)?;
+            Ok(response)
+        })?,
+    )?;
+    table.set("http_cancel", lua.create_function(|_, _: Value| Ok(false))?)?;
+    Ok(())
 }
 
 /// Capture the current accessors, rather than a snapshot of their values. The

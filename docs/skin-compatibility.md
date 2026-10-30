@@ -118,7 +118,7 @@ timerの単位・OFF値・書き込み制約・失敗時の値は[skin.md](skin.
 | DXA | v5以降、独自キー、アーカイブ内wildcard列挙、動画・音声・Lua/CSV includeは未対応 |
 | Selectの曲バーのLua `draw` | クリック判定では評価しません。行ごとに条件を評価するため、最後のフレームの結果を使えません |
 | その他のLua function field | 上記以外のwriter等はcallbackの対象外です。対応追加時はfieldと呼び出し契約を個別に定義する |
-| beatoraja最新版のLua API | `file_*` / `http_*` / `open_url`は未対応です。file / httpは書込・通信の安全性設計が必要です。`key_pressed`と`event_exec`は対応済みです（[Lua APIの互換範囲](skin.md#lua-apiの互換範囲)） |
+| beatoraja最新版のLua API | `file_*` / HTTP通信 / `open_url`は未対応です。非同期HTTPの`http_get_async` / `http_poll` / `http_cancel`はbeatorajaの通信無効時と同じ失敗値を返し、SocialSkinの無限待ちを防ぎます。実通信・実書込は追加していません。[Lua APIの互換範囲](skin.md#lua-apiの互換範囲)、[回帰テスト](../crates/bmz-skin/src/tests/lua_disabled_http.rs) |
 | LuaJとLua 5.4の差 | 整数値floatの`tostring`、`string.format("%d")`の小数、`os.date`の既定書式と未知指定子は差が残ります。数値callbackの`nil`はBMZでは未取得、LuaJの`toint()` / `tofloat()`では0です。[仕様](skin.md#lua-apiの互換範囲) |
 | function診断 | field path付きwarningやcustom timerのID付き診断はあります。object ID・Lua source file / lineの一貫した提示は改善余地がある |
 | PMchara | `--`座標補間と右下pixel色によるchroma keyは未対応です。通常のalphaは対応します。[詳細仕様](skin.md) |

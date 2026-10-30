@@ -971,7 +971,11 @@ BMZ独自のAPIは`bmz.option` / `bmz.get_option`、runtime VMだけの`main_sta
 （`float_number`の別名）、`total_play_counts_in_session` / `total_play_notes_in_session` /
 `score_date_sec_time`、名前付きプロパティです。
 
-beatoraja最新版の`file_*`、`http_*`、`open_url`は未対応です。
+beatoraja最新版の`file_*`、HTTP通信、`open_url`は未対応です。
+`http_get_async`は`nil, "HTTP disabled"`、`http_poll`は`status="failed"`・`status_code=0`・
+空の`lines`・`error="HTTP disabled"`、`http_cancel`はfalseを返します。
+beatorajaの通信無効時と同じ応答により、SocialSkin等がJava互換stubを実ワーカーと
+誤認して待ち続けることを防ぎます。実際の通信は開始しません。
 `io`の書き込みは永続化しません。`luajava`の`bindClass` / `newInstance` / `new` /
 `createProxy`は入力のない無害なstubを返し、Javaのオブジェクトやファイルは作りません。
 

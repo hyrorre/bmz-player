@@ -76,3 +76,19 @@ snapshotの`ok`だけで一覧登録や実際のResult互換性を判定しな�
 - 検証: workspace check / all-targets Clippy / testが成功。bmz-playerは2744成功・46 ignored。
   位置のfloat維持、hidden時のhit抑制、2本のtype=0 sliderのドラッグ識別とclosure更新を確認。
   画面上のヘルプ操作は未確認。
+
+## 6. 通信無効時の終了処理
+
+- SocialSkinのHTTP wrapperは、非同期APIがない場合にJava Threadへfallbackする。
+  BMZのluajava stubはtruthyな空オブジェクトを返すため、`thread:isAlive()`もtruthyとなり
+  `request.isConnecting`が解除されない。
+- `.local/beatoraja/.../SkinRuntimeLuaApiExporter`の`enabled=false`と同じ3 APIを提供する。
+  submitは`nil, "HTTP disabled"`、pollはfailed / status_code 0 / 空lines、cancelはfalse。
+  実通信・Java worker・実ファイル書き込みは追加しない。
+- 実在するHTTP wrapperとcompat moduleを一時fixtureへコピーし、失敗callbackが一度だけ
+  呼ばれて待ち状態が解消することを検証する。第三者ソースはコミットへ含めない。
+- 独自経験値等の永続化と実HTTP、カスタムゲージ画像の保存は引き続き未対応。
+  Luaの非永続化とOS操作を許可しない既存方針を維持する。
+- 検証: bmz-skin check / all-targets Clippy / test（353成功・1 ignored）、fmt、
+  Windows debug buildが成功。直前の共有変更ではworkspace全体のcheck / Clippy / testが成功済み。
+  HTTP無効APIのロード・runtimeの戻り値と、実在wrapperの一度だけの失敗通知を確認した。
