@@ -923,6 +923,10 @@ Luaのヘッダはbeatorajaの`LuaSkinLoader`と同じ型変換を使います�
 `filepath[].def`の数値・booleanは文字列へ変換します。数値の`def`をop指定とは扱わず、
 項目名に一致しない既定値は先頭項目へ戻します。通常のJSONスキンの型検査は維持します。
 
+Luaのdestination `op`に入れ子のtableやbooleanが混ざる場合、beatorajaの
+`DestinationOption`と同じくその要素は条件にしません。入れ子をOR条件とは解釈せず、
+残りの数値・名前付き条件を維持します。通常のJSONでの不正な入れ子は引き続きエラーです。
+
 `timer_util` / `event_util`はbeatorajaの`TimerUtility` / `EventUtility`相当です。
 `new_passive_timer`の`turn_on` / `turn_on_reset` / `turn_off`はtrueを返します。
 `event_observe_timer_off`は、最初の評価でtimerがOFFでも発火しません（beatorajaは発火します）。

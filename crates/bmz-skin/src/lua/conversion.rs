@@ -209,6 +209,14 @@ pub(super) fn lua_table_to_json(
             _ => i64::MAX,
         });
         for (index, (_, value)) in entries.into_iter().enumerate() {
+            // LuaSkinLoader's DestinationOption serializer ignores non-scalar
+            // entries (a nested table is not an OR group). In particular, do
+            // not let SocialSkin's legacy nested options reject the document.
+            if path.ends_with(".op")
+                && matches!(value, Value::Table(_) | Value::Boolean(_) | Value::Nil)
+            {
+                continue;
+            }
             values.push(lua_value_to_json(
                 lua,
                 value,

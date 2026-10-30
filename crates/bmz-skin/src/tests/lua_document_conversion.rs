@@ -2,6 +2,55 @@
 //! `font.fallback` forms and Unicode strings.
 
 use super::*;
+
+#[test]
+fn lua_destination_options_ignore_nested_tables_like_beatoraja() {
+    let root = TestDir::created("bmz-lua-nested-destination-options");
+    let path = root.join("skin.luaskin");
+    fs::write(
+        &path,
+        r#"return {type=5, destination={
+            {id='rank', op={{2, 3}, 200}, dst={{x=0, y=0, w=10, h=10}}},
+            {id='cover', op={80, {270}, {271}, false}, dst={{x=0, y=0, w=10, h=10}}},
+            {id='mask', op={{190, 191}, 2, 975}, dst={{x=0, y=0, w=10, h=10}}}
+        }}"#,
+    )
+    .unwrap();
+    let loaded =
+        load_lua_skin(&path, SkinKind::Select, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let options = loaded.document.all_destinations(&[200, 80, 2, 975]);
+    assert_eq!(options[0].op, [200]);
+    assert_eq!(options[1].op, [80]);
+    assert_eq!(options[2].op, [2, 975]);
+    // The Lua compatibility rule must not make ordinary JSON accept bad ops.
+    assert!(
+        serde_json::from_value::<SkinDocument>(serde_json::json!({
+            "destination": [{"id":"bad", "op":[[2, 3], 200]}]
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn installed_social_play_document_decodes_when_available() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins");
+    for name in ["play_7"] {
+        let entry = root.join(format!("SocialSkin/lua/{name}.luaskin"));
+        if !entry.is_file() {
+            continue;
+        }
+        let context = SkinPathContext::new(&entry, [root.clone()]).unwrap();
+        let loaded = load_lua_skin_with_path_context(
+            &context,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(!loaded.document.destination.is_empty());
+    }
+}
 use bmz_skin_document::SkinFontFallbackDef;
 
 #[test]

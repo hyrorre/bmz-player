@@ -23,3 +23,15 @@
 `.local/performance/socialskin-current.json` / `socialskin-typed.txt`に保存した。
 汎用snapshotはヘッダの型付きdecodeを行わず、Result2へ必要なnumber 74も未設定のため、
 snapshotの`ok`だけで一覧登録や実際のResult互換性を判定しない。
+
+## 2. destinationの入れ子op
+
+- Selectは`destination[29]`、7K Playは`destination[98]`の入れ子opでdecodeに失敗していた。
+- `.local/beatoraja`の`LuaSkinLoader`は数値・文字列・関数だけを条件にし、table / booleanは
+  `DestinationOption`の無条件（id 0、property null）として除外する。
+  したがって`{{2,3},200}`は`{200}`、`{80,{270},{271}}`は`{80}`となる。
+- Lua変換時に無効要素を除外する。ORへの解釈やJSON全体の型制約緩和は行わない。
+  合成fixtureと実在する7K Playのロードを検証する。
+- Selectは入れ子opを通過した後、`image[470].act = "switchMenu()"`の文字列eventで
+  次の型エラーとなった。文字列eventは別の修正で対応する。
+- 検証: fmt、bmz-skinのcheck / all-targets Clippy / test（346成功・1 ignored）が成功。
