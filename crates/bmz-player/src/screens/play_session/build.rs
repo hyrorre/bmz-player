@@ -384,10 +384,10 @@ pub fn build_game_session_with_input_backend(
     } else {
         crate::config::play::clamp_lane_cover_for_lift(lane_unit_to_f32(mode_config.sudden), lift)
     };
-    let hsfix_base_bpm = hsfix_base_bpm_for_chart(&chart, &timing_map, hs_fix);
     // Practice では CONSTANT を無効にする。初期 HS も実際に使う状態で求める。
     let constant_enabled = mode_config.constant_enabled
         && session_mode != crate::select_options::SessionMode::Practice;
+    let hsfix_base_bpm = hsfix_base_bpm_for_chart(&chart, &timing_map, hs_fix, constant_enabled);
     let hispeed = if speed_locked {
         1.0
     } else {
@@ -795,15 +795,20 @@ pub(super) fn initial_hispeed_for_mode(
     constant_enabled: bool,
 ) -> f32 {
     let now_bpm = crate::screens::play_snapshot::effective_bpm_for_playback_rate(
-        hsfix_base_bpm_for_chart(chart, timing_map, hs_fix),
+        hsfix_base_bpm_for_chart(chart, timing_map, hs_fix, constant_enabled),
         playback_rate_percent,
     );
-    let scroll_multiplier = crate::screens::play_snapshot::current_scroll_multiplier(
-        chart,
-        timing_map,
-        TimeUs(0),
-        constant_enabled,
-    );
+    // MAIN はノーツ位置の SCROLL / SPEED を含むため、倍率を重ねて掛けない。
+    let scroll_multiplier = if hs_fix == HsFixOption::MainBpm {
+        1.0
+    } else {
+        crate::screens::play_snapshot::current_scroll_multiplier(
+            chart,
+            timing_map,
+            TimeUs(0),
+            constant_enabled,
+        )
+    };
     match hispeed_mode {
         HispeedMode::Classic => crate::config::play::classic_effective_hispeed(
             mode_config.hispeed,
@@ -840,6 +845,7 @@ pub(super) fn hsfix_base_bpm_for_chart(
     chart: &PlayableChart,
     timing_map: &bmz_chart::timing::TimingMap,
     hs_fix: HsFixOption,
+    constant_enabled: bool,
 ) -> f64 {
     match hs_fix {
         HsFixOption::Off | HsFixOption::StartBpm => chart.metadata.initial_bpm,
@@ -859,47 +865,70 @@ pub(super) fn hsfix_base_bpm_for_chart(
                 TimingEventKind::Stop { .. } => None,
             })
             .fold(chart.metadata.initial_bpm, f64::max),
-        HsFixOption::MainBpm => main_bpm_for_chart(chart, timing_map),
+        HsFixOption::MainBpm => main_bpm_for_chart(chart, timing_map, constant_enabled),
     }
 }
 
-pub(super) fn main_bpm_for_chart(
+pub(crate) fn main_bpm_for_chart(
     chart: &PlayableChart,
     timing_map: &bmz_chart::timing::TimingMap,
+    constant_enabled: bool,
 ) -> f64 {
     let mut counted = std::collections::HashSet::new();
-    let mut counts: Vec<(f64, u32)> = Vec::new();
-    for note in chart.lane_notes.iter().flatten() {
-        if matches!(note.kind, NoteKind::Invisible | NoteKind::Mine) {
-            continue;
+    let mut counts = std::collections::HashMap::<u64, u32>::new();
+    let mut values = Vec::new();
+    let speed_segments: Vec<_> =
+        chart.speed_events.iter().map(|event| (event.time.0 as f64, event.factor)).collect();
+    let mut count_candidate = |note_id: bmz_core::ids::NoteId,
+                               tick: bmz_core::time::ChartTick,
+                               time: bmz_core::time::TimeUs| {
+        if !counted.insert(note_id) {
+            return;
         }
-        counted.insert(note.id);
-        let bpm = timing_map.bpm_at_time(note.time);
-        if let Some((_, count)) =
-            counts.iter_mut().find(|(value, _)| value.to_bits() == bpm.to_bits())
-        {
-            *count = count.saturating_add(1);
+        let bpm = timing_map.bpm_at_time(time);
+        let scroll = crate::screens::play_snapshot::scroll_factor_at(chart, tick.0 as f64);
+        let speed = if constant_enabled {
+            1.0
         } else {
-            counts.push((bpm, 1));
+            crate::screens::play_snapshot::speed_at(&speed_segments, time.0 as f64)
+        };
+        if !bpm.is_finite()
+            || bpm <= 0.0
+            || !scroll.is_finite()
+            || scroll <= 0.0
+            || !speed.is_finite()
+            || speed <= 0.0
+        {
+            return;
+        }
+        let value = bpm * scroll * speed;
+        if !value.is_finite() || value <= 0.0 {
+            return;
+        }
+        let key = value.to_bits();
+        match counts.entry(key) {
+            std::collections::hash_map::Entry::Occupied(mut count) => {
+                let count = count.get_mut();
+                *count = (*count).saturating_add(1);
+            }
+            std::collections::hash_map::Entry::Vacant(count) => {
+                count.insert(1);
+                values.push(value);
+            }
+        }
+    };
+    for note in chart.lane_notes.iter().flatten() {
+        if matches!(note.kind, NoteKind::Tap | NoteKind::LongStart) {
+            count_candidate(note.id, note.tick, note.time);
         }
     }
     for long in &chart.long_notes {
-        if !counted.insert(long.start_note_id) {
-            continue;
-        }
-        let bpm = timing_map.bpm_at_time(long.start_time);
-        if let Some((_, count)) =
-            counts.iter_mut().find(|(value, _)| value.to_bits() == bpm.to_bits())
-        {
-            *count = count.saturating_add(1);
-        } else {
-            counts.push((bpm, 1));
-        }
+        count_candidate(long.start_note_id, long.start_tick, long.start_time);
     }
-    counts
+    drop(count_candidate);
+    values
         .into_iter()
-        .max_by_key(|(_, count)| *count)
-        .map(|(bpm, _)| bpm)
+        .max_by_key(|value| counts[&value.to_bits()])
         .unwrap_or(chart.metadata.initial_bpm)
 }
 

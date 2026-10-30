@@ -68,7 +68,9 @@ pub(crate) fn final_opponent_render_snapshot(
         .display_state(session.scored_total_notes)
         .map(|opponent| display::opponent_render_snapshot(&opponent))
 }
-pub(crate) use scroll::{current_scroll_multiplier, current_scroll_multiplier_for_session};
+pub(crate) use scroll::{
+    current_scroll_multiplier, current_scroll_multiplier_for_session, scroll_factor_at, speed_at,
+};
 pub use visuals::{
     refresh_pending_play_input_visuals, refresh_play_skin_visuals,
     refresh_play_skin_visuals_with_input_elapsed, skin_visual_time,

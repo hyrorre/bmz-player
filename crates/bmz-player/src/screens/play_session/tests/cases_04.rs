@@ -595,7 +595,96 @@ fn main_bpm_uses_bpm_with_most_notes() {
         &bpm_chart.timing_events,
     );
 
-    assert_eq!(hsfix_base_bpm_for_chart(&bpm_chart, &timing_map, HsFixOption::MainBpm), 180.0);
+    assert_eq!(
+        hsfix_base_bpm_for_chart(&bpm_chart, &timing_map, HsFixOption::MainBpm, false),
+        180.0
+    );
+}
+
+#[test]
+fn main_bpm_counts_only_taps_and_long_starts_with_positive_scroll() {
+    let mut bpm_chart = chart();
+    bpm_chart.timing_events.push(bmz_chart::model::TimingEvent {
+        tick: bmz_core::time::ChartTick(1_000),
+        time: TimeUs(1_000_000),
+        kind: TimingEventKind::BpmChange { bpm: 180.0 },
+    });
+    bpm_chart.scroll_events = vec![
+        bmz_chart::model::ScrollEvent {
+            tick: bmz_core::time::ChartTick(0),
+            time: TimeUs(0),
+            factor: 2.0,
+        },
+        bmz_chart::model::ScrollEvent {
+            tick: bmz_core::time::ChartTick(100),
+            time: TimeUs(100_000),
+            factor: 1.5,
+        },
+        bmz_chart::model::ScrollEvent {
+            tick: bmz_core::time::ChartTick(1_000),
+            time: TimeUs(1_000_000),
+            factor: 3.0,
+        },
+        bmz_chart::model::ScrollEvent {
+            tick: bmz_core::time::ChartTick(2_000),
+            time: TimeUs(2_000_000),
+            factor: -2.0,
+        },
+        bmz_chart::model::ScrollEvent {
+            tick: bmz_core::time::ChartTick(3_000),
+            time: TimeUs(3_000_000),
+            factor: 0.0,
+        },
+    ];
+    bpm_chart.speed_events = vec![
+        bmz_chart::model::SpeedEvent {
+            tick: bmz_core::time::ChartTick(0),
+            time: TimeUs(0),
+            factor: 1.0,
+        },
+        bmz_chart::model::SpeedEvent {
+            tick: bmz_core::time::ChartTick(1_000),
+            time: TimeUs(1_000_000),
+            factor: 2.0,
+        },
+        bmz_chart::model::SpeedEvent {
+            tick: bmz_core::time::ChartTick(2_000),
+            time: TimeUs(2_000_000),
+            factor: 1.0,
+        },
+        bmz_chart::model::SpeedEvent {
+            tick: bmz_core::time::ChartTick(3_000),
+            time: TimeUs(3_000_000),
+            factor: 1.0,
+        },
+    ];
+
+    let mut long_start = note(1, Lane::Key1, 0);
+    long_start.kind = NoteKind::LongStart;
+    bpm_chart.lane_notes[Lane::Key1.index()].push(long_start);
+    bpm_chart.lane_notes[Lane::Key2.index()].push(note(2, Lane::Key2, 0));
+    bpm_chart.lane_notes[Lane::Key7.index()].push(note(3, Lane::Key7, 100_000));
+    for (id, lane) in [(10, Lane::Key3), (11, Lane::Key4), (12, Lane::Key5), (13, Lane::Key6)] {
+        let mut long_end = note(id, lane, 1_000_000);
+        long_end.kind = NoteKind::LongEnd;
+        bpm_chart.lane_notes[lane.index()].push(long_end);
+    }
+    for id in 20..25 {
+        bpm_chart.lane_notes[Lane::Key3.index()].push(note(id, Lane::Key3, 2_000_000));
+    }
+    for id in 30..36 {
+        bpm_chart.lane_notes[Lane::Key4.index()].push(note(id, Lane::Key4, 3_000_000));
+    }
+
+    let timing_map = bmz_chart::timing::TimingMap::from_chart_timing_events(
+        bpm_chart.metadata.initial_bpm,
+        &bpm_chart.timing_events,
+    );
+
+    assert_eq!(
+        hsfix_base_bpm_for_chart(&bpm_chart, &timing_map, HsFixOption::MainBpm, false),
+        240.0
+    );
 }
 
 #[test]
@@ -619,7 +708,10 @@ fn main_bpm_ignores_invisible_notes() {
         &bpm_chart.timing_events,
     );
 
-    assert_eq!(hsfix_base_bpm_for_chart(&bpm_chart, &timing_map, HsFixOption::MainBpm), 180.0);
+    assert_eq!(
+        hsfix_base_bpm_for_chart(&bpm_chart, &timing_map, HsFixOption::MainBpm, false),
+        180.0
+    );
 }
 
 #[test]
@@ -636,7 +728,7 @@ fn min_bpm_preserves_positive_values_below_one() {
         &bpm_chart.timing_events,
     );
 
-    assert_eq!(hsfix_base_bpm_for_chart(&bpm_chart, &timing_map, HsFixOption::MinBpm), 0.96);
+    assert_eq!(hsfix_base_bpm_for_chart(&bpm_chart, &timing_map, HsFixOption::MinBpm, false), 0.96);
 }
 
 #[test]

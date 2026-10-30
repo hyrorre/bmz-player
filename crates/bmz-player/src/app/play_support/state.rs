@@ -95,7 +95,21 @@ pub(in crate::app) fn apply_profile_lane_settings_to_session(
     }
     // CONSTANT は実効 SPEED を変えるため、緑数字・HS を求める前に反映する。
     if constant_changed {
+        let display_hispeed = crate::screens::play_snapshot::display_hispeed_for_session(session);
         session.constant_enabled = profile.constant_enabled && !practice_mode;
+        if session.hsfix_index == crate::skin_extension::hsfix_index(HsFixOption::MainBpm) as i32 {
+            session.hsfix_base_bpm = crate::screens::play_session::main_bpm_for_chart(
+                &session.chart,
+                &session.timing_map,
+                session.constant_enabled,
+            );
+            if session.lr2_hispeed && session.hispeed_mode == HispeedMode::Classic {
+                session.hispeed = crate::config::play::classic_effective_hispeed(
+                    display_hispeed,
+                    crate::screens::play_snapshot::classic_hsfix_scale_for_session(session),
+                );
+            }
+        }
     }
 
     let now = session.audio_clock.now();

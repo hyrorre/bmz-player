@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-10-31 | [MAIN BPMのSCROLL / SPEED集計とHSへの適用](2026/2026-10-31-main-bpm-scroll-speed.md) |
 | 2026-10-31 | [SESSION MODEの画像参照とクリック操作](2026/2026-10-31-session-mode-skin.md) |
 | 2026-10-30 | [LITONE5の読み込み互換性](2026/2026-10-30-litone5-load-compatibility.md) |
 | 2026-10-30 | [譜面ダウンロードのスクロールバーの間隔](2026/2026-10-30-download-scrollbars.md) |

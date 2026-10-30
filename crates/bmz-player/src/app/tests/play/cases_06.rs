@@ -361,3 +361,169 @@ fn charts_without_speed_keep_hispeed_for_constant_on_and_off() {
         }
     }
 }
+
+#[test]
+fn main_bpm_initial_hispeed_applies_scroll_and_effective_speed_once() {
+    for (scroll, speed) in [(2.0, 1.0), (1.0, 2.0), (2.0, 2.0)] {
+        for constant in [false, true] {
+            for (base, floating) in [
+                (BaseHispeedConfig::Normal, FloatingPolicyConfig::Disabled),
+                (BaseHispeedConfig::Classic, FloatingPolicyConfig::Locked),
+            ] {
+                let chart = speed_chart(
+                    vec![SpeedEvent { tick: ChartTick(0), time: TimeUs(0), factor: speed }],
+                    vec![ScrollEvent { tick: ChartTick(0), time: TimeUs(0), factor: scroll }],
+                );
+                let profile = lane_profile(base, floating, constant);
+                let mut session = crate::screens::play_session::build_game_session(
+                    std::sync::Arc::new(chart),
+                    &profile,
+                    crate::screens::play_session::PlaySessionOptions {
+                        hs_fix: HsFixOption::MainBpm,
+                        ..Default::default()
+                    },
+                );
+                session.offsets.visual_offset_us = 0;
+                let multiplier = scroll * if constant { 1.0 } else { speed };
+                let expected_hispeed = (4.0 / multiplier) as f32;
+                assert_eq!(session.hsfix_base_bpm, 120.0 * multiplier);
+                assert_close(session.hispeed, expected_hispeed, "initial MAIN hispeed");
+                assert_close(
+                    hispeed_for_normal_level(&session, 18, TimeUs(0)),
+                    expected_hispeed,
+                    "MAIN normal level before chart start",
+                );
+                reset_floating_hispeed_if_enabled(&mut session, false);
+                assert_close(session.hispeed, expected_hispeed, "MAIN reset before chart start");
+                assert_eq!(current_green_number(&session, TimeUs(0)), 300);
+                assert_eq!(current_full_lane_green_number(&session, TimeUs(0)), 300);
+                let snapshot = crate::screens::play_snapshot::build_render_snapshot(
+                    &session,
+                    TimeUs(0),
+                    &[],
+                    None,
+                );
+                assert_eq!(snapshot.note_display_duration_ms, 500);
+            }
+        }
+    }
+}
+
+#[test]
+fn main_bpm_cover_changes_distinguish_fixed_and_current_scroll() {
+    for auto_adjust in [false, true] {
+        let chart = speed_chart(
+            Vec::new(),
+            vec![
+                ScrollEvent { tick: ChartTick(0), time: TimeUs(0), factor: 2.0 },
+                ScrollEvent { tick: ChartTick(3840), time: TimeUs(2_000_000), factor: 3.0 },
+            ],
+        );
+        let mut profile =
+            lane_profile(BaseHispeedConfig::Classic, FloatingPolicyConfig::Locked, false);
+        profile.play.lane_effect = LaneEffectConfig::Sudden;
+        profile.lane.hispeed_auto_adjust = auto_adjust;
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(chart),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions {
+                hs_fix: HsFixOption::MainBpm,
+                ..Default::default()
+            },
+        );
+        assert_eq!(session.hsfix_base_bpm, 240.0);
+        let mut lane_target = PlayLaneTarget::Sudden;
+        apply_lane_cover_step_to_session(&mut session, &mut lane_target, -0.25, false);
+        assert_close(session.hispeed, 1.5, "MAIN cover before chart start");
+        assert_eq!(current_green_number(&session, TimeUs(0)), 300);
+
+        // ノーツのある SCROLL 2 区間から、SCROLL 3 区間へ移動する。
+        let frame = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(96_000));
+        session.audio_clock =
+            bmz_audio::clock::AudioClock::with_position(48_000, 0, 0, frame, true);
+        let now = session.audio_clock.now();
+        assert_eq!(now, TimeUs(2_000_000));
+        assert_close(
+            hispeed_for_normal_level(&session, 18, now),
+            4.0 / 3.0,
+            "normal level uses current scroll after chart start",
+        );
+        reset_floating_hispeed_if_enabled(&mut session, false);
+        assert_close(
+            session.hispeed,
+            if auto_adjust { 1.0 } else { 1.5 },
+            "MAIN reset after scroll change",
+        );
+        apply_lane_cover_step_to_session(&mut session, &mut lane_target, -0.25, false);
+        assert_close(
+            session.hispeed,
+            if auto_adjust { 2.0 / 3.0 } else { 1.0 },
+            "MAIN cover after scroll change",
+        );
+    }
+}
+
+#[test]
+fn main_bpm_constant_toggle_updates_basis_and_preserves_lr2_display_hispeed() {
+    for (base, floating) in [
+        (BaseHispeedConfig::Normal, FloatingPolicyConfig::Disabled),
+        (BaseHispeedConfig::Classic, FloatingPolicyConfig::Locked),
+        (BaseHispeedConfig::Lr2, FloatingPolicyConfig::Disabled),
+    ] {
+        for running in [false, true] {
+            let mut profile = lane_profile(base, floating, false);
+            let mut session = crate::screens::play_session::build_game_session(
+                std::sync::Arc::new(speed_2_chart()),
+                &profile,
+                crate::screens::play_session::PlaySessionOptions {
+                    hs_fix: HsFixOption::MainBpm,
+                    ..Default::default()
+                },
+            );
+            if running {
+                let frame = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+                session.audio_clock =
+                    bmz_audio::clock::AudioClock::with_position(48_000, 0, 0, frame, true);
+            }
+            for (constant, expected_bpm) in [(false, 240.0), (true, 120.0), (false, 240.0)] {
+                if session.constant_enabled != constant {
+                    toggle_constant(&mut session, &mut profile, constant);
+                }
+                assert_eq!(session.hsfix_base_bpm, expected_bpm);
+                if base == BaseHispeedConfig::Lr2 {
+                    assert_close(session.hispeed, (150.0 / expected_bpm) as f32, "LR2 MAIN");
+                    assert_close(
+                        crate::screens::play_snapshot::display_hispeed_for_session(&session),
+                        1.0,
+                        "LR2 display hispeed across CONSTANT toggle",
+                    );
+                } else {
+                    assert_close(
+                        session.hispeed,
+                        if constant { 4.0 } else { 2.0 },
+                        "MAIN CONSTANT hispeed",
+                    );
+                    assert_eq!(current_green_number(&session, TimeUs(0)), 300);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn practice_main_bpm_counts_speed_when_constant_is_requested() {
+    let profile = lane_profile(BaseHispeedConfig::Classic, FloatingPolicyConfig::Locked, true);
+    let session = session_at(
+        speed_2_chart(),
+        &profile,
+        crate::screens::play_session::PlaySessionOptions {
+            hs_fix: HsFixOption::MainBpm,
+            session_mode: SessionMode::Practice,
+            ..Default::default()
+        },
+        0,
+    );
+    assert!(!session.constant_enabled);
+    assert_eq!(session.hsfix_base_bpm, 240.0);
+    assert_close(session.hispeed, 2.0, "practice MAIN hispeed");
+}

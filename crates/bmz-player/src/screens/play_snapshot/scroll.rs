@@ -211,9 +211,7 @@ pub(crate) fn current_scroll_multiplier(
 ) -> f32 {
     let scroll_time = scroll_render_time(render_now);
     let cursor_tick = timing_map.time_to_tick_f64(scroll_time);
-    let scroll_index =
-        chart.scroll_events.partition_point(|event| event.tick.0 as f64 <= cursor_tick);
-    let scroll = scroll_index.checked_sub(1).map_or(1.0, |index| chart.scroll_events[index].factor);
+    let scroll = scroll_factor_at(chart, cursor_tick);
     let speed = effective_speed(constant_enabled, || {
         speed_at_by(
             &chart.speed_events,
@@ -222,6 +220,12 @@ pub(crate) fn current_scroll_multiplier(
         )
     });
     (scroll * speed) as f32
+}
+
+/// 指定tickで有効なSCROLL倍率。イベント前は1.0。
+pub(crate) fn scroll_factor_at(chart: &PlayableChart, tick: f64) -> f64 {
+    let scroll_index = chart.scroll_events.partition_point(|event| event.tick.0 as f64 <= tick);
+    scroll_index.checked_sub(1).map_or(1.0, |index| chart.scroll_events[index].factor)
 }
 
 /// `current_scroll_multiplier` をセッションの譜面と CONSTANT 状態で求める。
@@ -273,7 +277,7 @@ pub(super) fn factor_before(segments: &[(f64, f64)], tick: f64) -> f64 {
 /// 指定時刻 (μs) における SPEED の現在値を返す。beatoraja の
 /// `LaneRenderer.getCurrentSpeed` に合わせ、隣接イベント間は時間で線形補間する。
 /// 最初のイベント前は時刻 0 の 1.0 から補間し、最後のイベント以降はその値で固定。
-pub(super) fn speed_at(segments: &[(f64, f64)], time: f64) -> f64 {
+pub(crate) fn speed_at(segments: &[(f64, f64)], time: f64) -> f64 {
     speed_at_by(segments, |segment| *segment, time)
 }
 

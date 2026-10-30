@@ -125,8 +125,8 @@ Normalも同じ逆算式を使うが、`visible = 1.0`、目標緑数字は段�
 `scroll_multiplier`は現在位置のSCROLL倍率と、現在時刻のSPEED値の積です。SPEEDは
 beatorajaと同じく時間で線形補間し、初期値を省略した譜面では時刻0の1.0から
 最初の値へ補間します。CONSTANT中はbeatorajaの`enableConstant`と同じくSPEEDを
-1.0として扱い、SCROLLだけを掛けます。ノーツ描画、緑数字、HSの初期値と再計算は
-すべてこの倍率を使います。
+1.0として扱い、SCROLLだけを掛けます。SCROLL/SPEEDの解釈は、ノーツ描画、緑数字、
+HSの初期値と再計算で共通です。
 
 skinの`NUMBER_DURATION` (312)には導出した表示時間、
 `NUMBER_DURATION_GREEN` (313)には緑数字を渡します。CONSTANTは導出した表示時間を
@@ -148,8 +148,12 @@ HS-FIXの選択肢とBPM基準は次のとおりです。
 | `OFF` | 初期BPM |
 | `START BPM` | 初期BPM |
 | `MAX BPM` | 初期BPMとBPM変化イベントの最大BPM |
-| `MAIN BPM` | ノート数が最も多いBPM |
+| `MAIN BPM` | Tap / LN始点ごとの`BPM × SCROLL × SPEED`が最も多い値 |
 | `MIN BPM` | 初期BPMとBPM変化イベントの最小BPM |
+
+MAIN BPMの集計対象はTapとLN始点です。ノーツ位置の`SCROLL`が正のものだけを数え、負値と0は除外します。
+BPM、SCROLL、SPEED、および積が有限かつ正でないノーツも除外します。SPEEDはノーツ時刻で評価します。
+CONSTANT有効時は集計でもSPEEDを1.0として扱い、CONSTANTを切り替えたときはMAINの基準値を更新します。
 
 `FLOATING`はHS-FIXにかかわらずFloatingで開始します。Floating無効の`NORMAL`、`CLASSIC`、
 `LR2`は常に基準方式で開始します。切替可能な2設定は、HS-FIXが`OFF`なら
@@ -159,6 +163,10 @@ Floatingの再計算は、READY前と曲タイマー開始前には選択したH
 曲開始後には現在BPMを使います。Normalの初期倍率は開始時の基準BPM、段階操作時は
 その時点のBPMを使います。LR2は基準BPMから求めた実効倍率をプレイ中に固定し、
 BPM変化では再計算しません（前述のLR2を参照）。
+
+MAINの基準値にはSCROLL / SPEEDを含むため、MAINを基準に初期HSやカバー変更後のHSを
+求めるときは、現在位置のSCROLL / SPEEDを追加で掛けません。
+曲開始後に現在BPMを基準として再計算するときは、その位置のSCROLL / 実効SPEEDを掛けます。
 
 設定UIと選曲中の巡回順は次のとおりです。
 
