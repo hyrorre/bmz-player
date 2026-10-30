@@ -39,8 +39,14 @@ const { submitCourseScore, computeCourseHash } = await import('../course_ir')
 const { loadDailyReport } = await import('../daily_report')
 const { loadRivalComparison, loadRivalLists, rivalTargetExists } = await import('../rivals')
 const { lookupChartSha256ByMd5 } = await import('../charts')
-const { createAuthTokens, findUserByWebSession, rotateRefreshToken } =
-  await import('../../utils/auth_tokens')
+const {
+  createAuthTokens,
+  findUserByAccessToken,
+  findUserByWebSession,
+  revokeToken,
+  revokeUserSessions,
+  rotateRefreshToken,
+} = await import('../../utils/auth_tokens')
 const { resolveIrUser, requireIrUser } = await import('../../utils/auth')
 const { requireIrAdmin } = await import('../../utils/admin')
 const { IrModerationError, assertCanSubmit } = await import('./enforcement')
@@ -320,6 +326,82 @@ describe('account moderation and authentication', () => {
     expect(await requireIrUser(event({ token: login.access_token }))).toMatchObject({ id: 'alice' })
     // 失効済みのセッションは復活させない。
     expect(await findUserByWebSession('alice', web.sessionGroupId)).toBeNull()
+  })
+
+  test('a refresh token revoked by a ban never revokes sessions created after the ban is lifted', async () => {
+    // BAN前に別端末へ残っていた refresh token。
+    const oldDevice = await createAuthTokens('alice', { clientType: 'desktop' })
+    await setUserStatus('alice', 'banned')
+    // BAN中は refresh も login も拒否する。
+    await expectHttpError(
+      refreshHandler(event({ method: 'POST', body: { refresh_token: oldDevice.refreshToken } })),
+      403,
+      'ACCOUNT_BANNED',
+    )
+    await setUserStatus('alice', 'active')
+    const login = await loginHandler(
+      event({
+        method: 'POST',
+        body: { email: 'alice@example.invalid', password: 'alice-password' },
+      }),
+    )
+
+    // 古い token は解除後も復活しないが、再利用検知として新しいセッションを巻き込まない。
+    expect(await rotateRefreshToken(oldDevice.refreshToken)).toBeNull()
+    await expectHttpError(
+      refreshHandler(event({ method: 'POST', body: { refresh_token: oldDevice.refreshToken } })),
+      401,
+    )
+    expect(await findUserByAccessToken(oldDevice.accessToken)).toBeNull()
+    expect(await requireIrUser(event({ token: login.access_token }))).toMatchObject({ id: 'alice' })
+    const rotated = await rotateRefreshToken(login.refresh_token)
+    expect(rotated && 'tokens' in rotated).toBe(true)
+  })
+
+  test('only rotated-token reuse revokes every session; logout and password changes just reject', async () => {
+    const now = Date.now()
+    const current = await createAuthTokens('alice', { clientType: 'desktop', now })
+
+    const loggedOut = await createAuthTokens('alice', { clientType: 'desktop', now })
+    await revokeToken(loggedOut.refreshToken, 'refresh', 'logout', now)
+    expect(await rotateRefreshToken(loggedOut.refreshToken, now + 1000)).toBeNull()
+
+    const passwordChanged = await createAuthTokens('alice', { clientType: 'desktop', now })
+    await revokeToken(passwordChanged.refreshToken, 'refresh', 'password_changed', now)
+    expect(await rotateRefreshToken(passwordChanged.refreshToken, now + 1000)).toBeNull()
+    expect(await findUserByAccessToken(current.accessToken, now + 1000)).toMatchObject({
+      id: 'alice',
+    })
+
+    // rotation 直後の並行リトライは、拒否するだけで他のセッションを残す。
+    const rotating = await createAuthTokens('alice', { clientType: 'desktop', now })
+    const next = await rotateRefreshToken(rotating.refreshToken, now)
+    expect(next && 'tokens' in next).toBe(true)
+    expect(await rotateRefreshToken(rotating.refreshToken, now + 60_000)).toBeNull()
+    expect(await findUserByAccessToken(current.accessToken, now + 60_000)).toMatchObject({
+      id: 'alice',
+    })
+
+    // 猶予を過ぎた rotation 済み token の再利用は盗用として全セッションを失効させる。
+    expect(await rotateRefreshToken(rotating.refreshToken, now + 10 * 60_000)).toEqual({
+      reuseDetected: true,
+    })
+    expect(await findUserByAccessToken(current.accessToken, now + 10 * 60_000)).toBeNull()
+    const nextTokens = next && 'tokens' in next ? next.tokens : null
+    expect(await rotateRefreshToken(nextTokens!.refreshToken, now + 10 * 60_000)).toEqual({
+      reuseDetected: true,
+    })
+
+    // 管理者が失効させたセッションも、新しいログインを巻き込まない。
+    const fresh = await createAuthTokens('alice', { clientType: 'desktop', now })
+    const revokedByAdmin = await createAuthTokens('bob', { clientType: 'desktop', now })
+    await revokeUserSessions('bob', 'admin', now)
+    const bob = await createAuthTokens('bob', { clientType: 'desktop', now })
+    expect(await rotateRefreshToken(revokedByAdmin.refreshToken, now + 1000)).toBeNull()
+    expect(await findUserByAccessToken(bob.accessToken, now + 1000)).toMatchObject({ id: 'bob' })
+    expect(await findUserByAccessToken(fresh.accessToken, now + 1000)).toMatchObject({
+      id: 'alice',
+    })
   })
 
   test('administrator APIs reject anonymous, regular, and unconfigured access', async () => {

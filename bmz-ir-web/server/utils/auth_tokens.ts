@@ -3,7 +3,7 @@ import { and, eq, gt, isNull, or } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
 import type { UserModerationStatus } from '../../shared/constants/moderation'
 import { publicPlayerCondition } from '../services/moderation/visibility'
-import { isRecentRotatedRefreshRetry, type SessionRevocationReason } from './auth_token_policy'
+import { revokedRefreshTokenAction, type SessionRevocationReason } from './auth_token_policy'
 
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60
 const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30
@@ -189,7 +189,8 @@ export async function rotateRefreshToken(token: string, now = Date.now()) {
   }
 
   if (session.revokedAt) {
-    if (isRecentRotatedRefreshRetry(session.revokedAt, session.revokedReason, now)) {
+    const action = revokedRefreshTokenAction(session.revokedAt, session.revokedReason, now)
+    if (action !== 'reuse_detected') {
       return null
     }
     await revokeUserSessions(session.userId, 'reuse_detected', now)
