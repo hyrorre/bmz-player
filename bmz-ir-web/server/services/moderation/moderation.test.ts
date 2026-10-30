@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { createClient } from '@libsql/client'
 import { drizzle } from 'drizzle-orm/libsql'
 import { eq } from 'drizzle-orm'
+import { SQLiteRaw } from 'drizzle-orm/sqlite-core/query-builders/raw'
 import * as h3 from 'h3'
 import type { H3Event } from 'h3'
 import { readdir, readFile } from 'node:fs/promises'
@@ -11,6 +12,17 @@ import type { IrScoreSubmission } from '../../../shared/types/ir'
 // 実際の migration を適用した in-memory SQLite で、認証・送信・公開読み取り・管理操作を通して確認する。
 const client = createClient({ url: 'file::memory:' })
 const db = drizzle(client, { schema })
+// 本番の D1 の batch は、bind できるクエリビルダーしか受け付けない。libsql は `db.run(sql)` の
+// raw query も batch に載せられてしまうため、テストでも D1 と同じ制約を課す。
+const libsqlBatch = db.batch.bind(db)
+db.batch = ((statements: Parameters<typeof db.batch>[0]) => {
+  for (const statement of statements) {
+    if (statement instanceof SQLiteRaw) {
+      throw new TypeError('D1 batch cannot bind raw SQL statements')
+    }
+  }
+  return libsqlBatch(statements)
+}) as typeof db.batch
 mock.module('hub:db', () => ({ db, schema }))
 
 const runtimeConfig = { ir: { adminUserIds: 'admin', providerKey: 'bmz-test' } }

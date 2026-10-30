@@ -488,16 +488,14 @@ function auditInsertStatement(entry: {
 }) {
   const logs = schema.moderationAuditLogs
   // INSERT ... SELECT ... WHERE で、状態変更が実際に適用された場合だけ記録する。
-  return db.run(sql`insert into ${logs}
-    (${sql.identifier(logs.id.name)}, ${sql.identifier(logs.actorUserId.name)},
-     ${sql.identifier(logs.targetType.name)}, ${sql.identifier(logs.targetId.name)},
-     ${sql.identifier(logs.action.name)}, ${sql.identifier(logs.previousStatus.name)},
-     ${sql.identifier(logs.newStatus.name)}, ${sql.identifier(logs.reason.name)},
-     ${sql.identifier(logs.metadata.name)}, ${sql.identifier(logs.createdAt.name)})
-    select ${entry.id}, ${entry.actorUserId}, ${entry.targetType}, ${entry.targetId},
+  // D1 の batch はクエリビルダーしか受け付けない（`db.run(sql)` は bind できず失敗する）ため、
+  // insert().select() で組み立てる。SELECT の列順は moderation_audit_logs の列定義順。
+  return db.insert(logs).select(
+    sql`select ${entry.id}, ${entry.actorUserId}, ${entry.targetType}, ${entry.targetId},
       ${entry.action}, ${entry.previousStatus}, ${entry.newStatus}, ${entry.reason},
       ${JSON.stringify(entry.metadata)}, ${entry.createdAt.getTime()}
-    where ${entry.condition}`)
+    where ${entry.condition}`,
+  )
 }
 
 // ---------------------------------------------------------------------------
