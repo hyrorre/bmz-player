@@ -242,6 +242,9 @@ CSVの引用符はフィールド先頭で開きます。引用されていな�
 
 選曲は`BAR_BODY_ON/OFF`、`BAR_TITLE`、`BAR_LEVEL`、`BAR_LAMP`、
 `BAR_MY_LAMP`、`BAR_RIVAL_LAMP`、`BAR_RIVAL`、`BAR_FLASH`、`BAR_CENTER`、`BAR_AVAILABLE`を変換します。
+Selectの`SRC_NOTECHART` / `DST_NOTECHART`は既存のノーツ分布グラフへ変換します。
+幅・高さはSRCの指定を使い、DSTのY座標はbeatorajaと同じくグラフの下端として変換します。
+表示遅延・背景・積み上げ順・隙間、条件・timer・offsetも保持します。
 子部品はバーの左下を原点とし、スロット番号は条件分岐でずらしません。
 バー本体はLR2の番号を保持し、コースは`SRC_BAR_BODY`の8、ランダムコースは9を使います。
 コース一覧フォルダは6、NEW COURSEは7を使います。通常の曲フォルダは1、

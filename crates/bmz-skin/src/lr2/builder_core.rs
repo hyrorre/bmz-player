@@ -137,6 +137,8 @@ impl<'a> CsvBuilder<'a> {
             "DST_BARGRAPH" => self.add_destination(line),
             "SRC_NOTECHART_1P" => self.add_note_chart(line),
             "DST_NOTECHART_1P" => self.add_destination(line),
+            "SRC_NOTECHART" if self.header.skin_type == 5 => self.add_note_chart(line),
+            "DST_NOTECHART" if self.header.skin_type == 5 => self.add_destination(line),
             "SRC_BPMCHART" => self.add_bpm_chart(line),
             "DST_BPMCHART" => self.add_destination(line),
             "SRC_TIMING_1P" => self.add_timing_visualizer(line),

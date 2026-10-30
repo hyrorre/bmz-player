@@ -18,6 +18,8 @@ mod scenes;
 mod select_bar_order;
 #[path = "lr2/select_conditions.rs"]
 mod select_conditions;
+#[path = "lr2/select_drawing.rs"]
+mod select_drawing;
 #[path = "lr2/select_ir_status.rs"]
 mod select_ir_status;
 #[path = "lr2/select_scroll.rs"]

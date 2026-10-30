@@ -14,3 +14,4 @@ mod play_compat;
 mod refs;
 mod result_compat;
 mod scenes;
+mod select_drawing;

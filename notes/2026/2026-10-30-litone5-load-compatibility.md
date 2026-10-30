@@ -55,10 +55,22 @@
   ログは`litone5-tagged-workspace-{check,clippy,test}.log`、`litone5-preload-rerun.log`、
   `litone5-player-rerun.log`、`litone5-windows-build.log`。
 
+## 3. Selectのノーツ分布
+
+- beatorajaの`LR2SelectSkinLoader`は`SRC_NOTECHART`の幅・高さ・delay等を使い、
+  `DST_NOTECHART`のYを`src.height - y`へ変換する。BMZの`NOTECHART_1P`と同じ変換を
+  Selectの命令名にも接続する。SRC/DST間に別種の部品があっても対象を保持する。
+- SRCの寸法、2つのDSTキーフレーム、offsetの維持と、LITONE5にある2つのグラフを確認する。
+  app経由の描画計画で位置・表示遅延と、解析未完了の別の曲へ切り替えた際の非表示を検証する。
+  外部スキンへ変更は加えない。
+- ログ: `.local/performance/litone5-drawing-notechart*.log`。
+- 検証: fmt、bmz-skin check / all-targets Clippy / test（361成功・1 ignored）と
+  app側のノーツ分布描画回帰テストが成功。実画面の比較は未実施。
+
 ## 確認範囲と残る表示差
 
 - 全9定義の読み込み成功は、全描画命令の対応や見た目の一致を意味しない。
-  SelectのBAR_TROPHY / BAR_GRAPH / BAR_LABEL / NOTECHARTは未対応命令の警告が残る。
+  SelectのBAR_TROPHY / BAR_GRAPH / BAR_LABELは未対応命令の警告が残る。
   Result / Course Resultのsource 21未定義や、Decideが参照する未配置の`Select/font/bar`も
   今回の読み込み停止とは別の課題。外部CSVや画像の書き換えは行っていない。
 - beatorajaの実画面との比較、GPU画面の見た目・操作、macOS / Linuxは未確認。
