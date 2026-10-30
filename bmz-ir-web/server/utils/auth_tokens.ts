@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { and, eq, gt, isNull, or } from 'drizzle-orm'
+import { and, eq, gt, inArray, isNull, or, type SQL } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
 import type { UserModerationStatus } from '../../shared/constants/moderation'
 import { publicPlayerCondition } from '../services/moderation/visibility'
@@ -184,7 +184,8 @@ export async function rotateRefreshToken(token: string, now = Date.now()) {
     where: eq(schema.userModeration.userId, session.userId),
   })
   if (moderation?.status === 'banned') {
-    await revokeUserSessions(session.userId, 'admin', now)
+    const [revokeActive, retireRevoked] = banSessionStatements(session.userId, new Date(now))
+    await db.batch([revokeActive, retireRevoked])
     return { banned: true as const }
   }
 
@@ -361,6 +362,36 @@ export async function revokeToken(
     .update(schema.sessions)
     .set({ revokedAt: new Date(now), revokedReason: reason })
     .where(and(...filters))
+}
+
+/**
+ * BAN でユーザーのセッションを打ち切る更新。呼び出し側が同じ batch で実行する。
+ *
+ * 1. 有効なセッションを `admin` で失効させる。
+ * 2. BAN より前に rotation・再利用検知で失効していた token も `admin` に付け替える。
+ *    これらは失効済みのまま残り、解除後に古い端末が提示すると、再利用検知として解除後の
+ *    新しいセッションまで失効させてしまう。`admin` にしておけば拒否するだけになる。
+ *    付け替えは BAN を境に単調に進み、時刻の比較に頼らない。解除後に発行・rotation された
+ *    token には触れないため、解除後の再利用検知はそのまま働く。
+ *
+ * `condition` は管理操作が実際に適用された場合だけ実行するための条件。
+ */
+export function banSessionStatements(userId: string, now: Date, condition?: SQL) {
+  const sessions = schema.sessions
+  const scoped = (filter: SQL | undefined) =>
+    condition
+      ? and(eq(sessions.userId, userId), filter, condition)
+      : and(eq(sessions.userId, userId), filter)
+  return [
+    db
+      .update(sessions)
+      .set({ revokedAt: now, revokedReason: 'admin' })
+      .where(scoped(isNull(sessions.revokedAt))),
+    db
+      .update(sessions)
+      .set({ revokedReason: 'admin' })
+      .where(scoped(inArray(sessions.revokedReason, ['rotated', 'reuse_detected']))),
+  ] as const
 }
 
 export async function revokeUserSessions(

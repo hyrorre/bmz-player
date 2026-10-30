@@ -55,6 +55,7 @@ const {
   createAuthTokens,
   findUserByAccessToken,
   findUserByWebSession,
+  hashToken,
   revokeToken,
   revokeUserSessions,
   rotateRefreshToken,
@@ -422,6 +423,112 @@ describe('account moderation and authentication', () => {
     expect(await findUserByAccessToken(fresh.accessToken, now + 1000)).toMatchObject({
       id: 'alice',
     })
+  })
+
+  test('a token rotated before a ban never revokes sessions created after the ban is lifted', async () => {
+    const later = Date.now() + 10 * 60_000
+    const t1 = await createAuthTokens('alice', { clientType: 'desktop' })
+    const rotated = await rotateRefreshToken(t1.refreshToken)
+    const t2 = rotated && 'tokens' in rotated ? rotated.tokens : null
+    expect(t2).not.toBeNull()
+
+    await setUserStatus('alice', 'banned')
+    await setUserStatus('alice', 'active')
+    const t3 = await createAuthTokens('alice', { clientType: 'desktop' })
+
+    // 猶予を過ぎた BAN 前の rotation 済み token は拒否するだけ。
+    expect(await rotateRefreshToken(t1.refreshToken, later)).toBeNull()
+    // BAN で失効した T2 も復活しない。
+    expect(await rotateRefreshToken(t2!.refreshToken, later)).toBeNull()
+    expect(await findUserByAccessToken(t3.accessToken, later)).toMatchObject({ id: 'alice' })
+    const t3Session = await db.query.sessions.findFirst({
+      where: eq(schema.sessions.tokenHash, hashToken(t3.refreshToken)),
+    })
+    expect(t3Session?.revokedAt).toBeNull()
+    const t4 = await rotateRefreshToken(t3.refreshToken, later)
+    expect(t4 && 'tokens' in t4).toBe(true)
+    expect(
+      await db
+        .select()
+        .from(schema.sessions)
+        .where(eq(schema.sessions.revokedReason, 'reuse_detected')),
+    ).toHaveLength(0)
+  })
+
+  test('token reuse after the ban is lifted is still detected', async () => {
+    await createAuthTokens('alice', { clientType: 'desktop' })
+    await setUserStatus('alice', 'banned')
+    await setUserStatus('alice', 'active')
+    const now = Date.now()
+    const fresh = await createAuthTokens('alice', { clientType: 'desktop', now })
+    const other = await createAuthTokens('alice', { clientType: 'desktop', now })
+    expect(await rotateRefreshToken(fresh.refreshToken, now)).toMatchObject({
+      tokens: expect.any(Object),
+    })
+    expect(await rotateRefreshToken(fresh.refreshToken, now + 60_000)).toBeNull()
+    expect(await rotateRefreshToken(fresh.refreshToken, now + 10 * 60_000)).toEqual({
+      reuseDetected: true,
+    })
+    expect(await findUserByAccessToken(other.accessToken, now + 10 * 60_000)).toBeNull()
+  })
+
+  test('repeated bans keep every older token generation from reviving or revoking new sessions', async () => {
+    const later = Date.now() + 10 * 60_000
+    const first = await createAuthTokens('alice', { clientType: 'desktop' })
+    await rotateRefreshToken(first.refreshToken)
+    await setUserStatus('alice', 'banned')
+    await setUserStatus('alice', 'active')
+
+    const second = await createAuthTokens('alice', { clientType: 'desktop' })
+    const secondNext = await rotateRefreshToken(second.refreshToken)
+    await setUserStatus('alice', 'banned')
+    // BAN中は login も refresh も拒否する。
+    await expectHttpError(
+      loginHandler(
+        event({
+          method: 'POST',
+          body: { email: 'alice@example.invalid', password: 'alice-password' },
+        }),
+      ),
+      403,
+      'ACCOUNT_BANNED',
+    )
+    await setUserStatus('alice', 'active')
+    const latest = await createAuthTokens('alice', { clientType: 'desktop' })
+
+    for (const token of [
+      first.refreshToken,
+      second.refreshToken,
+      secondNext && 'tokens' in secondNext ? secondNext.tokens.refreshToken : '',
+    ]) {
+      expect(await rotateRefreshToken(token, later)).toBeNull()
+    }
+    expect(await findUserByAccessToken(second.accessToken, later)).toBeNull()
+    expect(await findUserByAccessToken(latest.accessToken, later)).toMatchObject({ id: 'alice' })
+    const refreshed = await rotateRefreshToken(latest.refreshToken, later)
+    expect(refreshed && 'tokens' in refreshed).toBe(true)
+  })
+
+  test('a ban seen during refresh also retires earlier rotated tokens', async () => {
+    const later = Date.now() + 10 * 60_000
+    const t1 = await createAuthTokens('alice', { clientType: 'desktop' })
+    const next = await rotateRefreshToken(t1.refreshToken)
+    // 管理操作を通さずに BAN 状態だけが先に見える場合（refresh 経路でのセッション失効）。
+    await db.insert(schema.userModeration).values({
+      userId: 'alice',
+      status: 'banned',
+      reason: 'direct',
+      lastChangeId: 'direct',
+      updatedBy: 'admin',
+      updatedAt: new Date(),
+    })
+    expect(
+      await rotateRefreshToken(next && 'tokens' in next ? next.tokens.refreshToken : ''),
+    ).toEqual({ banned: true })
+    await db.delete(schema.userModeration)
+    const t3 = await createAuthTokens('alice', { clientType: 'desktop' })
+    expect(await rotateRefreshToken(t1.refreshToken, later)).toBeNull()
+    expect(await findUserByAccessToken(t3.accessToken, later)).toMatchObject({ id: 'alice' })
   })
 
   test('administrator APIs reject anonymous, regular, and unconfigured access', async () => {

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { and, count, desc, eq, inArray, isNull, or, sql, type like, type SQL } from 'drizzle-orm'
 import type { BatchItem } from 'drizzle-orm/batch'
 import { db, schema } from 'hub:db'
+import { banSessionStatements } from '../../utils/auth_tokens'
 import {
   CHART_MODERATION_STATUSES,
   MAX_CHART_MODERATION_BATCH_SIZE,
@@ -292,18 +293,7 @@ export async function changeUserModeration(
     }),
   ]
   if (input.status === 'banned') {
-    statements.push(
-      db
-        .update(schema.sessions)
-        .set({ revokedAt: now, revokedReason: 'admin' })
-        .where(
-          and(
-            eq(schema.sessions.userId, input.userId),
-            isNull(schema.sessions.revokedAt),
-            appliedByThisChange,
-          ),
-        ),
-    )
+    statements.push(...banSessionStatements(input.userId, now, appliedByThisChange))
   }
   await db.batch(statements)
 
