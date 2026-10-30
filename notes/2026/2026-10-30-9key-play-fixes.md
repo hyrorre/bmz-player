@@ -134,3 +134,45 @@ BMZは7KEYSのレーン順（皿が先頭）で列を数えていました。既
 - `peaceful_play_integral_property_ops_are_selectable_when_available`の`gauge-lead-glow-*`の期待値を、
   現在のPeacefulPlayの版に合わせて見直す必要があります。
   このテストは途中で失敗するため、7 to 9版の確認は別のテストに分けました。
+
+## 追記: コミットレビューと現行ゲージのテスト（2026-10-30）
+
+`96ac57dd..3b0441d9` の8コミットをレビューしました。
+今回変更したのはゲージのテスト期待値だけで、次の2点は未修正のレビュー指摘です。
+
+- 内蔵9KEYスキンは `pms_miss_fall` を扱わず、負の `note.y` を判定ラインへ丸めます。
+  snapshotの保持上限が1小節から8小節へ延びたため、見逃しノーツが落下せず、
+  BPM120では約16秒残ります。0秒のPOORを0.675秒と4.175秒で描画すると、
+  落下量が0.25と2.0でも、矩形はどちらも `y=0.806, height=0.018` でした。
+  内蔵描画にも落下・消滅の処理が必要です。
+- `missed_note_fall` のある7KEYSスキンでは、`visible_lane_notes` の下限がなくなり、
+  既に表示期間を過ぎたBAD/POORも毎フレーム再走査します。
+  各ノーツでtiming segment全体の走査と落下時間の積分を行い、8小節の打ち切りもその後です。
+  表示期間の下限による候補の絞り込みと、積分結果の再利用が必要です。
+  合成7KEYS譜面（10,000 Tap、500回のBPM変更、10%がPOOR、cache再利用、各10回）の
+  debugビルドで、snapshot作成の中央値は曲10%地点で0.592ms、90%地点で25.534msでした。
+  フラグOFFではそれぞれ0.020ms、0.061msです。これはCPU処理時間の確認であり、
+  releaseビルドの実プレイFPSやGPU/present待ちを測った値ではありません。
+  調査用の一時テストは削除しました。
+
+現行PeacefulPlayの `play9main.lua` は、旧版の `gauge-lead-glow-*` destinationではなく、
+`gauge-main` の36枚のnode画像で先端の発光を表します。
+古い216件の期待値と7 to 9版の旧destinationへの期待値を削除し、独立したテストで次を確認します。
+
+- 9key版・7 to 9版ともに24粒、36枚のnode画像、1500ms周期を保持する。
+- 発光ONは `type=3` と発光画像、OFFは `type=1, range=0` と通常画像を使う。
+- ゲージ種別ごとの画像切り出しと、ボーダー上下の先端画像が正しく解決される。
+- `gauge-main` のdestinationは1つで、旧版の `gauge-lead-glow-*` は生成されない。
+
+`cargo fmt --check`、`cargo check -p bmz-skin --locked`、
+`cargo clippy -p bmz-skin --all-targets --locked -- -D warnings` に成功しました。
+`cargo test -p bmz-skin --locked` は342件成功、1件ignoredです。
+ローカルのPeacefulPlay 1.3.1を実際に読み込んで確認しており、素材未配置によるskipではありません。
+`cargo test --workspace --locked --no-fail-fast --quiet` は、bmz-playerのリンク作成テストで
+Windowsの権限エラーが発生し、bmz-playerのテストプロセスも終了コード3で途中終了しました。
+ほかのworkspace targetは成功しました（bmz-render 972件、bmz-gameplay 255件成功）。
+必要な実行権限で `cargo test -p bmz-player --locked --lib --quiet` を再実行し、
+2,736件成功、45件ignoredを確認しました。全体をまとめた再実行はしていません。
+Windows専用の `key9_gamepad_release_stops_select_hold_move` も `--ignored` で単独実行し、成功しました。
+ログは `.local/peaceful-review-tests.log` と `.local/peaceful-review-player-tests.log` に置き、共有しません。
+実プレイの目視、物理コントローラー、macOS/Linuxでの確認は未実施です。

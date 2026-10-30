@@ -511,41 +511,6 @@ fn peaceful_play_integral_property_ops_are_selectable_when_available() {
         "dst2 {} lane bottoms {lane_bottoms:?}",
         note.dst2
     );
-    let gauge_lead_glow = loaded
-        .document
-        .destination
-        .iter()
-        .filter_map(|entry| match entry {
-            bmz_skin_document::DestinationListEntry::Single(destination)
-                if destination.id.starts_with("gauge-lead-glow-") =>
-            {
-                Some(destination)
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(gauge_lead_glow.len(), 216);
-    assert!(
-        gauge_lead_glow
-            .iter()
-            .all(|destination| { destination.draw.starts_with("gauge_lead_glow(") }),
-        "unexpected gauge predicates: {:?}",
-        gauge_lead_glow
-            .iter()
-            .filter(|destination| !destination.draw.starts_with("gauge_lead_glow("))
-            .map(|destination| (&destination.id, &destination.draw))
-            .collect::<Vec<_>>()
-    );
-    let sevenkeys_path = skin_path.with_file_name("play7_9lane.luaskin");
-    let sevenkeys =
-        load_lua_skin(&sevenkeys_path, SkinKind::Play, &BTreeMap::new(), &BTreeMap::new())
-            .expect("PeacefulPlay play7_9lane should decode");
-    assert!(sevenkeys.document.destination.iter().any(|entry| matches!(
-        entry,
-        bmz_skin_document::DestinationListEntry::Single(destination)
-            if destination.id == "gauge-lead-glow-groove-below"
-                && destination.draw.starts_with("gauge_lead_glow(groove,")
-    )));
     assert_eq!(
         loaded.document.fixed_delay_timers,
         vec![bmz_skin_document::SkinFixedDelayTimerDef {
@@ -555,6 +520,58 @@ fn peaceful_play_integral_property_ops_are_selectable_when_available() {
         }],
         "only PeacefulPlay's end-of-note fixed-delay timer should be inferred"
     );
+}
+
+#[test]
+fn peaceful_play_gauge_tip_glow_uses_builtin_nodes_when_available() {
+    let skin_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/PeacefulPlay");
+    for file in ["play9.luaskin", "play7_9lane.luaskin"] {
+        let skin_path = skin_dir.join(file);
+        if !skin_path.is_file() {
+            continue;
+        }
+        for (glow, gauge_type, above_x, below_x) in [("ON", 3, 78, 52), ("OFF", 1, 26, 0)] {
+            let options =
+                BTreeMap::from([("ゲージ先端の発光 Gauge Tip Glow".to_string(), glow.to_string())]);
+            let loaded = load_lua_skin(&skin_path, SkinKind::Play, &options, &BTreeMap::new())
+                .expect("PeacefulPlay gauge tip should decode");
+            assert!(loaded.warnings.is_empty(), "{file} {glow}: {:?}", loaded.warnings);
+            let gauge = loaded.document.gauge.as_ref().expect("PeacefulPlay should define a gauge");
+            assert_eq!(gauge.id, "gauge-main");
+            assert_eq!(
+                (gauge.parts, gauge.gauge_type, gauge.range, gauge.cycle),
+                (24, gauge_type, 0, 1500)
+            );
+            assert_eq!(
+                gauge.nodes,
+                (1..=36).map(|index| format!("gauge-node-{index}")).collect::<Vec<_>>()
+            );
+            // 現行版は36枚のノード画像と本体の点滅で発光し、旧版の個別destinationは使わない。
+            let destinations = loaded.document.all_destinations(&loaded.document.enabled_options());
+            assert_eq!(destinations.iter().filter(|dst| dst.id == gauge.id).count(), 1);
+            assert!(!destinations.iter().any(|dst| dst.id.starts_with("gauge-lead-glow-")));
+            for (group, nodes) in gauge.nodes.as_chunks::<6>().0.iter().enumerate() {
+                let has_border = group < 3;
+                for (slot, id) in nodes.iter().enumerate() {
+                    let image = loaded.document.image.iter().find(|image| &image.id == id).unwrap();
+                    let expected_x = match slot {
+                        1 | 3 if has_border => 0,
+                        4 => above_x,
+                        5 if has_border => below_x,
+                        5 => above_x,
+                        _ => 26,
+                    };
+                    let expected_row = if matches!(slot, 2 | 3) { 0 } else { group as i32 + 1 };
+                    assert_eq!(image.src, "src-gauge-grain");
+                    assert_eq!(
+                        (image.x, image.y, image.w, image.h),
+                        (expected_x, expected_row * 60, 26, 60),
+                        "{file} {glow} {id}"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]
