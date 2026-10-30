@@ -53,6 +53,12 @@ pub struct UploadedSkin {
 }
 
 #[derive(Debug)]
+enum PendingLuaInput {
+    Act(usize, i32, i32),
+    FloatWriter(usize, f32),
+}
+
+#[derive(Debug)]
 pub(super) struct LuaSkinDrawRuntimeAdapter {
     // `take` before evaluation makes it impossible to hold this mutex while Lua
     // executes. Renderer evaluation is single-threaded; a concurrent/reentrant
@@ -62,7 +68,7 @@ pub(super) struct LuaSkinDrawRuntimeAdapter {
     /// Set once a callback reads BMS chart text (20100 / 20103) via `main_state.text`.
     chart_text_read: AtomicBool,
     /// Clicked `act` callbacks and their arguments, run on the next frame.
-    pending_acts: Mutex<Vec<(usize, i32, i32)>>,
+    pending_acts: Mutex<Vec<PendingLuaInput>>,
     effects: Mutex<Vec<SkinLuaEffect>>,
     /// `draw` results and custom timers of the last drawn frame, for hit tests.
     last_draws: Mutex<HashMap<usize, bool>>,
@@ -247,8 +253,15 @@ impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
         // beatoraja handles clicks before `Skin.updateCustomObjects`, which
         // updates the custom timers and then the custom events.
         let acts = self.pending_acts.lock().map(|mut acts| std::mem::take(&mut *acts));
-        for (callback_id, arg1, arg2) in acts.unwrap_or_default() {
-            runtime.execute_act(callback_id, arg1, arg2, &provider);
+        for input in acts.unwrap_or_default() {
+            match input {
+                PendingLuaInput::Act(callback_id, arg1, arg2) => {
+                    runtime.execute_act(callback_id, arg1, arg2, &provider);
+                }
+                PendingLuaInput::FloatWriter(callback_id, value) => {
+                    runtime.execute_float_writer(callback_id, value, &provider);
+                }
+            }
         }
         runtime.advance_custom_timers(&provider);
         runtime.advance_custom_events(&provider);
@@ -287,7 +300,19 @@ impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
         if pending.len() >= LUA_PENDING_ACT_LIMIT {
             return false;
         }
-        pending.push((callback_id, arg1, arg2));
+        pending.push(PendingLuaInput::Act(callback_id, arg1, arg2));
+        true
+    }
+
+    fn queue_float_writer(&self, callback_id: usize, value: f32) -> bool {
+        if !value.is_finite() {
+            return false;
+        }
+        let Ok(mut pending) = self.pending_acts.lock() else { return false };
+        if pending.len() >= LUA_PENDING_ACT_LIMIT {
+            return false;
+        }
+        pending.push(PendingLuaInput::FloatWriter(callback_id, value.clamp(0.0, 1.0)));
         true
     }
 

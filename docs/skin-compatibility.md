@@ -85,6 +85,7 @@ closure/module stateを維持し、frameごとのmain_stateを参照します。
 | 推論の順序 | tableのfieldを固定順で変換し、`pairs`順に依存しません。Luxe Flat Selectのランク画像とスコアレート帯を確認します。[回帰テスト](../crates/bmz-skin/src/tests/lua_inference_order.rs) |
 | Resultのパネル状態 | `Expand_op` / callbackが直接保持する`result_mode`を現在のパネルへ同期します。Luxe FlatのGRAPHとIRの混在を防止します。通常 / compat、左右配置、WMIIの回帰確認は[作業記録](../notes/2026/2026-10-03-result-panel-lua-state.md) |
 | value / text / graph / sliderの`value` | ロード時推論とruntime callback |
+| Select / Result sliderの`event` | Lua FloatWriterへ0〜1のfloat位置を渡します。actとの入力順序、最後の描画状態によるhit判定とドラッグ対象の区別を維持します。SocialSkinのヘルプ操作に必要です。[回帰テスト](../crates/bmz-player/src/skin_loader/tests/lua/events.rs) |
 | Lua数字の状態更新 | 数字のruntime valueをdestinationごとにdraw / timer判定前に1回評価です。cache hitでも実行を維持します。Luxe FlatのResult / Course ResultでMAX+0とランク境界を確認します。[回帰テスト](../crates/bmz-player/src/skin_loader/tests/lua/result_grade.rs) |
 | `customTimers[].timer` | ID `10000..19999`です。推論とruntime callbackです。宣言順で1フレーム1回更新 |
 | `main_state.set_timer` | 受動custom timerのON/OFFです。組み込みtimerや能動timerへの書き込みには制約がある |
@@ -116,7 +117,7 @@ timerの単位・OFF値・書き込み制約・失敗時の値は[skin.md](skin.
 |---|---|
 | DXA | v5以降、独自キー、アーカイブ内wildcard列挙、動画・音声・Lua/CSV includeは未対応 |
 | Selectの曲バーのLua `draw` | クリック判定では評価しません。行ごとに条件を評価するため、最後のフレームの結果を使えません |
-| その他のLua function field | 汎用float writer等は上記callbackの対象外です。対応追加時はfieldと呼び出し契約を個別に定義する |
+| その他のLua function field | 上記以外のwriter等はcallbackの対象外です。対応追加時はfieldと呼び出し契約を個別に定義する |
 | beatoraja最新版のLua API | `file_*` / `http_*` / `open_url`は未対応です。file / httpは書込・通信の安全性設計が必要です。`key_pressed`と`event_exec`は対応済みです（[Lua APIの互換範囲](skin.md#lua-apiの互換範囲)） |
 | LuaJとLua 5.4の差 | 整数値floatの`tostring`、`string.format("%d")`の小数、`os.date`の既定書式と未知指定子は差が残ります。数値callbackの`nil`はBMZでは未取得、LuaJの`toint()` / `tofloat()`では0です。[仕様](skin.md#lua-apiの互換範囲) |
 | function診断 | field path付きwarningやcustom timerのID付き診断はあります。object ID・Lua source file / lineの一貫した提示は改善余地がある |

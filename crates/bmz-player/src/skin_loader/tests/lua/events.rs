@@ -132,6 +132,59 @@ fn lua_string_act_and_destination_timer_render_and_keep_last_frame_values() {
     assert!(hit.is_some(), "the timer-gated panel uses its last rendered start time");
 }
 
+#[test]
+fn lua_slider_events_drag_the_selected_writer_with_last_frame_visibility() {
+    let root = unique_test_dir("bmz-lua-slider-writer");
+    fs::create_dir_all(&root).unwrap();
+    let (context, document) = install_lua_skin(
+        &root.join("skin.luaskin"),
+        r#"
+        local shown, a, b = false, 0, 0
+        return {type=5, w=100, h=100,
+            image={{id='open', act=function() shown = not shown end}},
+            slider={
+                {id='a', range=80, angle=1, value=function() return a end, event=function(v) a=v end},
+                {id='b', range=80, angle=1, value=function() return b end, event=function(v) b=v end}},
+            text={{id='values', size=10, value=function() return string.format('%.2f:%.2f',a,b) end}},
+            destination={
+                {id='a', draw=function() return shown end, dst={{x=10,y=0,w=10,h=10}}},
+                {id='b', draw=function() return shown end, dst={{x=10,y=20,w=10,h=10}}},
+                {id='values', dst={{x=0,y=40,w=100,h=10}}}}}
+    "#,
+    );
+    let snapshot =
+        bmz_render::scene::SelectSnapshot { time: TimeUs(5_000_000), ..Default::default() };
+    let frame = || {
+        context.begin_frame();
+        context
+            .select_document_items(&snapshot)
+            .into_iter()
+            .find_map(
+                |item| if let SkinRenderItem::Text { text, .. } = item { Some(text) } else { None },
+            )
+            .unwrap()
+    };
+    assert_eq!(frame(), "0.00:0.00");
+    assert!(context.select_slider_hit(&snapshot, 0.30, 0.95).is_none());
+    assert!(context.queue_lua_act(document.image[0].act.unwrap(), 1, 0));
+    frame();
+    let first = context.select_slider_hit(&snapshot, 0.30, 0.95).unwrap();
+    assert!((first.value - 0.25).abs() < 0.0001);
+    assert!(context.queue_lua_float_writer(first.slider_type, first.value));
+    assert_eq!(frame(), "0.25:0.00");
+    assert!(
+        context.select_slider_drag(&snapshot, first.slider_type, 0.70, 0.75).is_none(),
+        "dragging one writer must not target another slider with the same type"
+    );
+    let second = context.select_slider_hit(&snapshot, 0.70, 0.75).unwrap();
+    assert_ne!(first.slider_type, second.slider_type);
+    assert!(context.queue_lua_float_writer(second.slider_type, second.value));
+    assert_eq!(frame(), "0.25:0.75");
+    assert!(context.queue_lua_act(document.image[0].act.unwrap(), 1, 0));
+    frame();
+    assert!(context.select_slider_hit(&snapshot, 0.70, 0.75).is_none());
+}
+
 fn install_lua_skin(path: &Path, source: &str) -> (SkinContext, SkinDocument) {
     fs::write(path, source).unwrap();
     let loaded = bmz_skin::load_lua_skin_with_runtime_state(

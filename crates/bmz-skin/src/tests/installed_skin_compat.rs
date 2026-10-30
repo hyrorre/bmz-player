@@ -378,7 +378,7 @@ fn evaluate_runtime(
                 outputs.push("unregistered".to_string());
                 continue;
             }
-            let output = if path.ends_with(".act") {
+            let output = if path.ends_with(".act") || path.ends_with(".event") {
                 // Click handlers run only when clicked.
                 "act".to_string()
             } else if path.ends_with(".draw") {

@@ -676,6 +676,9 @@ pub struct SkinSliderDef {
     /// beatoraja JSON FloatProperty uses the Rate family.
     #[serde(default)]
     pub value: Option<SkinPropertyValue>,
+    /// FloatWriter ID, or an encoded Lua slider event callback.
+    #[serde(default)]
+    pub event: Option<i32>,
 }
 
 /// beatoraja `judgegraph[]` 要素。

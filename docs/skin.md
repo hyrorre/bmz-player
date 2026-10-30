@@ -933,6 +933,11 @@ Luaの`act`は関数に加え`"switchMenu()"`のようなscript文字列を受�
 destinationの任意timer関数も描画時に開始時刻（microseconds）を取得し、OFF値・nil・
 64bit時計はcustom timerと同じ規約です。クリック判定は最後の描画結果を使い、再実行しません。
 
+Select / Resultの`slider[].event`のLua関数はFloatWriterとして扱い、トラック上の押下・
+ドラッグ位置（0.0〜1.0のfloat）を次のフレームのcustom timer更新前に渡します。
+関数はactと同じ永続VMで動き、入力順序を維持します。表示条件とtimerは最後の描画結果で
+判定し、同じ`type`を持つ複数のLua sliderもドラッグ開始時の関数を区別します。
+
 `timer_util` / `event_util`はbeatorajaの`TimerUtility` / `EventUtility`相当です。
 `new_passive_timer`の`turn_on` / `turn_on_reset` / `turn_off`はtrueを返します。
 `event_observe_timer_off`は、最初の評価でtimerがOFFでも発火しません（beatorajaは発火します）。

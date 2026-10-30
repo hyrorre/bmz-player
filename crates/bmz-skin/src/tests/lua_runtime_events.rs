@@ -34,6 +34,44 @@ fn frame(runtime: &mut LuaSkinRuntime, state: &TestLuaMainState) {
 }
 
 #[test]
+fn slider_event_receives_a_float_and_preserves_closure_state() {
+    for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
+        let (_root, mut loaded) = load(
+            r#"
+            local s = require('main_state')
+            local position = 0
+            return {type=5, slider={{id='drag', range=100, value=function() return position end,
+                event=function(value)
+                    assert(math.type(value) == 'float')
+                    position = value
+                    s.set_volume_key(value)
+                end}}, text={{id='position', value=function() return tostring(position) end}}}
+        "#,
+            mode,
+        );
+        assert!(
+            !loaded
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("unsupported field `event`"))
+        );
+        let writer = lua_act_callback_id(loaded.document.slider[0].event.unwrap()).unwrap();
+        let runtime = loaded.lua_runtime.as_mut().unwrap();
+        let text = callback(runtime, "$.text[1].value");
+        let state = TestLuaMainState::default();
+        assert!(!runtime.execute_act(writer, 1, 0, &state));
+        assert!(!runtime.execute_float_writer(writer, f32::NAN, &state));
+        assert!(runtime.execute_float_writer(writer, 0.375, &state));
+        assert_eq!(runtime.evaluate_text(text, &state).as_deref(), Some("0.375"));
+        assert_eq!(
+            runtime.take_effects(),
+            [SkinLuaEffect::SetVolume { channel: SkinVolumeChannel::Key, value: 0.375 }]
+        );
+        assert_eq!(runtime.failure_log_count(), 0);
+    }
+}
+
+#[test]
 fn string_act_and_timer_properties_share_the_clean_runtime_vm() {
     for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
         let (_root, mut loaded) = load(

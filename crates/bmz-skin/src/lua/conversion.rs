@@ -270,7 +270,9 @@ pub(super) fn lua_table_to_json(
             tracing::debug!(field_path = %format!("{path}.{key}"), classification = "STATIC", "classified Lua draw condition");
             continue;
         }
-        let value = if matches!(key.as_str(), "act" | "timer") && matches!(value, Value::String(_))
+        let value = if (matches!(key.as_str(), "act" | "timer")
+            || (key == "event" && path.starts_with("$.slider[")))
+            && matches!(value, Value::String(_))
         {
             if let Some(number) = lua.coerce_number(value.clone())? {
                 Value::Integer(i64::from(number as i32))
@@ -359,7 +361,7 @@ pub(super) fn lua_script_field_function(
         Value::String(script) if lua.coerce_number(Value::String(script.clone()))?.is_some() => {
             Ok(None)
         }
-        Value::String(script) if field == "act" => {
+        Value::String(script) if matches!(field, "act" | "event") => {
             lua.load(script.to_str()?.as_ref()).set_name("Lua act script").into_function().map(Some)
         }
         Value::String(script) if field == "timer" => {

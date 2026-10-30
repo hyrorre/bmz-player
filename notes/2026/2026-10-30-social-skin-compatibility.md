@@ -62,3 +62,17 @@ snapshotの`ok`だけで一覧登録や実際のResult互換性を判定しな�
   既存のjunction作成テストが拒否されたため、bmz-playerを必要な権限で再実行し
   2743成功・46 ignoredを確認。他crateは通常実行で成功（bmz-render 974、bmz-skin 350等）。
   新規の描画・クリック回帰テストも成功。GPU上の見た目と実操作は未確認。
+
+## 5. ヘルプ一覧のslider event
+
+- SocialSkinの`helpOperationSliderEvent(value)`はFloatWriter。beatorajaの
+  `SkinSlider.mousePressed`は方向別のトラック位置を0〜1としてwriterへ渡す。
+  BMZは関数を破棄していたため、一覧ドラッグの処理に到達しなかった。
+- eventを永続VMのcallbackへ保持し、floatのまま入力順で次フレームへ渡す。
+  Select / Resultで最後のdraw / timer値を使い、複数のtype=0 sliderをcallback IDで区別する。
+  通常のスクロール・音量sliderは既存の処理経路を使う。
+- MainControllerの`mousePressed` / `mouseDragged`と入力processorを照合した。
+  beatorajaも押下・移動イベントを消費してwriterを呼ぶため、静止中の毎フレーム再実行は追加しない。
+- 検証: workspace check / all-targets Clippy / testが成功。bmz-playerは2744成功・46 ignored。
+  位置のfloat維持、hidden時のhit抑制、2本のtype=0 sliderのドラッグ識別とclosure更新を確認。
+  画面上のヘルプ操作は未確認。

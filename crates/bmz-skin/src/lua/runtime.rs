@@ -22,6 +22,7 @@ pub(super) enum LuaRuntimeCallbackKind {
     DestinationTimer,
     /// Clicked `act` function, called with the event arguments.
     Act,
+    FloatWriter,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -220,6 +221,42 @@ impl LuaSkinRuntime {
             Ok(Ok(())) => {}
             Ok(Err(error)) => self.log_callback_failure_once(callback_id, &error.to_string()),
             Err(_) => self.log_callback_failure_once(callback_id, "panic while executing Lua act"),
+        }
+        true
+    }
+
+    /// A slider FloatWriter receives a floating-point position in 0..=1.
+    pub fn execute_float_writer(
+        &mut self,
+        callback_id: usize,
+        value: f32,
+        state: &dyn LuaMainState,
+    ) -> bool {
+        let Some(callback) = self.callbacks.get(callback_id) else { return false };
+        if callback.kind != LuaRuntimeCallbackKind::FloatWriter || !value.is_finite() {
+            return false;
+        }
+        let Some(function) = callback.function.clone() else {
+            self.log_callback_failure_once(callback_id, "Lua slider event was not registered");
+            return true;
+        };
+        self.begin_runtime_callback();
+        let events = self.events.clone();
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            self.state_scope().with_state(state, || {
+                let _guard = events
+                    .enter()
+                    .ok_or_else(|| mlua::Error::runtime("Lua event nesting limit reached"))?;
+                function.call::<()>(f64::from(value.clamp(0.0, 1.0)))
+            })
+        }));
+        match result {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(error)) | Err(error)) => {
+                self.log_callback_failure_once(callback_id, &error.to_string())
+            }
+            Err(_) => self
+                .log_callback_failure_once(callback_id, "panic while executing Lua slider event"),
         }
         true
     }

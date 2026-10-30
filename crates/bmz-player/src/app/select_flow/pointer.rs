@@ -270,7 +270,9 @@ impl WinitApp {
             let AppSceneSnapshot::Result(snapshot) = self.scene_snapshot() else {
                 return;
             };
-            if let Some(hit) = self.renderer.result_skin_slider_hit(&snapshot, x, y) {
+            if let Some(hit) = self.renderer.result_skin_slider_hit(&snapshot, x, y)
+                && Some(hit.slider_type) == self.select.select_slider_dragging_type
+            {
                 self.apply_result_slider_hit(hit);
             }
             return;
@@ -314,6 +316,14 @@ impl WinitApp {
     }
 
     pub(super) fn apply_select_slider_hit(&mut self, hit: SkinSliderHit) {
+        if bmz_render::skin::lua_act_callback_id(hit.slider_type).is_some() {
+            self.renderer.queue_skin_lua_float_writer(
+                SkinRuntimeScene::Select,
+                hit.slider_type,
+                hit.value,
+            );
+            return;
+        }
         match hit.slider_type {
             1 => self.apply_select_scroll_slider(hit.value),
             7 => self.set_lr2_skin_settings_scroll(hit.value),
@@ -342,6 +352,14 @@ impl WinitApp {
     }
 
     pub(super) fn apply_result_slider_hit(&mut self, hit: SkinSliderHit) {
+        if bmz_render::skin::lua_act_callback_id(hit.slider_type).is_some() {
+            self.renderer.queue_skin_lua_float_writer(
+                SkinRuntimeScene::Result,
+                hit.slider_type,
+                hit.value,
+            );
+            return;
+        }
         if hit.slider_type == 8 {
             if let Some(result_ir) = &mut self.result.result_ir {
                 result_ir.set_skin_scroll_rate(hit.value);

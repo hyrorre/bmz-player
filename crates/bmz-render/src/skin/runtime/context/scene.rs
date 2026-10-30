@@ -92,6 +92,13 @@ impl SkinContext {
             .is_some_and(|runtime| runtime.queue_act(callback_id, arg1, arg2))
     }
 
+    pub fn queue_lua_float_writer(&self, event_id: i32, value: f32) -> bool {
+        let Some(callback_id) = lua_act_callback_id(event_id) else { return false };
+        self.lua_draw_runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.queue_float_writer(callback_id, value))
+    }
+
     /// Effects requested by this skin's Lua `act` / event actions.
     pub fn take_lua_effects(&self) -> Vec<SkinLuaEffect> {
         self.lua_draw_runtime.as_ref().map(|runtime| runtime.take_effects()).unwrap_or_default()
@@ -364,7 +371,12 @@ impl SkinContext {
         x: f32,
         y: f32,
     ) -> Option<SkinSliderHit> {
-        self.document.as_ref()?.result_slider_hit(state, x, y)
+        let document = self.document.as_ref()?;
+        let mut state = state.clone();
+        if let Some(runtime) = &self.lua_draw_runtime {
+            apply_last_frame_lua(&mut state, runtime);
+        }
+        document.result_slider_hit(&state, x, y)
     }
 
     pub fn select_slider_hit(
@@ -374,7 +386,14 @@ impl SkinContext {
         y: f32,
     ) -> Option<SkinSliderHit> {
         let document = self.document.as_ref()?;
-        document.select_slider_hit(snapshot, &self.select_settings_dest_index, x, y)
+        document.select_slider_value(
+            snapshot,
+            &self.select_settings_dest_index,
+            None,
+            self.lua_draw_runtime.as_ref(),
+            x,
+            y,
+        )
     }
 
     pub fn select_slider_drag(
@@ -385,7 +404,14 @@ impl SkinContext {
         y: f32,
     ) -> Option<SkinSliderHit> {
         let document = self.document.as_ref()?;
-        document.select_slider_drag(snapshot, &self.select_settings_dest_index, slider_type, x, y)
+        document.select_slider_value(
+            snapshot,
+            &self.select_settings_dest_index,
+            Some(slider_type),
+            self.lua_draw_runtime.as_ref(),
+            x,
+            y,
+        )
     }
 
     /// Whether the point is over the embedded skin settings of an LR2 select skin.

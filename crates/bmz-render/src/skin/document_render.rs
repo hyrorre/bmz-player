@@ -347,6 +347,7 @@ pub(super) trait SkinDocumentRenderInternal {
         snapshot: &SelectSnapshot,
         settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
         dragging: Option<i32>,
+        lua_draw_runtime: Option<&Arc<dyn SkinLuaDrawRuntime>>,
         x: f32,
         y: f32,
     ) -> Option<SkinSliderHit>;

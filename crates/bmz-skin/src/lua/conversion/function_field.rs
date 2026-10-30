@@ -131,6 +131,22 @@ pub(super) fn handle_function_field(
             }
             Ok(true)
         }
+        "event" if path.starts_with("$.slider[") => {
+            let field_path = format!("{path}.event");
+            let callback_id = register_runtime_callback(
+                main_state_probe,
+                &field_path,
+                LuaRuntimeCallbackKind::FloatWriter,
+            )?;
+            if let Some(event_id) = lua_act_event_id(callback_id) {
+                insert_number(object, "event", i64::from(event_id));
+            } else {
+                warnings.push(format!(
+                    "skipping Lua slider event beyond callback limit at {field_path}"
+                ));
+            }
+            Ok(true)
+        }
         "act" => {
             if infer_act_field(lua, function, object, main_state_probe) {
                 return Ok(true);

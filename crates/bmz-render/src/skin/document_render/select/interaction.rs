@@ -51,7 +51,7 @@ macro_rules! skin_document_render_select_interaction_public_methods {
                 })
                 .filter_map(|destination| {
                     let slider = self.slider.iter().find(|slider| slider.id == destination.id)?;
-                    (slider.slider_type == 8).then_some(())?;
+                    (slider.slider_type == 8 || slider.event.is_some()).then_some(())?;
                     self.destination_slider_hit(
                         slider,
                         destination,
@@ -72,7 +72,7 @@ macro_rules! skin_document_render_select_interaction_public_methods {
             x: f32,
             y: f32,
         ) -> Option<SkinSliderHit> {
-            self.select_slider_value(snapshot, settings_dest_index, None, x, y)
+            self.select_slider_value(snapshot, settings_dest_index, None, None, x, y)
         }
 
         fn select_slider_drag(
@@ -83,7 +83,7 @@ macro_rules! skin_document_render_select_interaction_public_methods {
             x: f32,
             y: f32,
         ) -> Option<SkinSliderHit> {
-            self.select_slider_value(snapshot, settings_dest_index, Some(slider_type), x, y)
+            self.select_slider_value(snapshot, settings_dest_index, Some(slider_type), None, x, y)
         }
 
         fn select_lr2_skin_settings_contains(
@@ -182,10 +182,14 @@ macro_rules! skin_document_render_select_interaction_methods {
             snapshot: &SelectSnapshot,
             settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
             dragging: Option<i32>,
+            lua_draw_runtime: Option<&Arc<dyn SkinLuaDrawRuntime>>,
             x: f32,
             y: f32,
         ) -> Option<SkinSliderHit> {
-            let (state, selected_row) = self.select_draw_state(snapshot, None);
+            let (mut state, selected_row) = self.select_draw_state(snapshot, None);
+            if let Some(runtime) = lua_draw_runtime {
+                apply_last_frame_lua(&mut state, runtime);
+            }
             let enabled_options = self.enabled_options();
             self.all_destinations(&enabled_options)
                 .into_iter()
@@ -203,7 +207,9 @@ macro_rules! skin_document_render_select_interaction_methods {
                         return None;
                     }
                     let slider = self.slider.iter().find(|slider| slider.id == destination.id)?;
-                    if dragging.is_some_and(|slider_type| slider_type != slider.slider_type) {
+                    if dragging.is_some_and(|slider_type| {
+                        slider_type != slider.event.unwrap_or(slider.slider_type)
+                    }) {
                         return None;
                     }
                     self.destination_slider_hit(
@@ -471,7 +477,10 @@ macro_rules! skin_document_render_select_interaction_methods {
             y: f32,
             dragging: bool,
         ) -> Option<SkinSliderHit> {
-            if !slider.changeable || !matches!(slider.slider_type, 1 | 7 | 8 | 17..=19) {
+            let writer = slider.event.unwrap_or(slider.slider_type);
+            if !slider.changeable
+                || !(matches!(writer, 1 | 7 | 8 | 17..=19) || lua_act_callback_id(writer).is_some())
+            {
                 return None;
             }
             let elapsed = destination_timer_elapsed_ms(destination, state)?;
@@ -485,12 +494,12 @@ macro_rules! skin_document_render_select_interaction_methods {
             let mouse_y = (1.0 - y.clamp(0.0, 1.0)) * self.h as f32;
             let value = if self.lr2 {
                 lr2_slider_value_at(slider, frame, mouse_x, mouse_y, dragging)?
-            } else if slider.slider_type == 1 {
+            } else if writer == 1 {
                 scroll_slider_value_at(slider, frame, mouse_x, mouse_y)?
             } else {
                 slider_value_at(slider, frame, mouse_x, mouse_y)?
             };
-            Some(SkinSliderHit { slider_type: slider.slider_type, value })
+            Some(SkinSliderHit { slider_type: writer, value })
         }
     };
 }

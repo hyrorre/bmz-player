@@ -28,6 +28,10 @@ pub trait SkinLuaDrawRuntime: std::fmt::Debug + Send + Sync {
         false
     }
 
+    fn queue_float_writer(&self, _callback_id: usize, _value: f32) -> bool {
+        false
+    }
+
     /// Effects requested by `act` / event actions since the previous call.
     fn take_effects(&self) -> Vec<SkinLuaEffect> {
         Vec::new()
@@ -253,6 +257,7 @@ pub struct SkinClickHit {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SkinSliderHit {
+    /// Built-in writer type, or encoded Lua FloatWriter callback ID.
     pub slider_type: i32,
     pub value: f32,
 }

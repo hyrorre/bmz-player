@@ -346,6 +346,15 @@ impl Renderer {
         self.skin_context_for(scene).queue_lua_act(event_id, arg1, arg2)
     }
 
+    pub fn queue_skin_lua_float_writer(
+        &self,
+        scene: SkinRuntimeScene,
+        event_id: i32,
+        value: f32,
+    ) -> bool {
+        self.skin_context_for(scene).queue_lua_float_writer(event_id, value)
+    }
+
     /// The Lua `act` under a click in the Play or Decide skin, tested against
     /// the last drawn frame. Select and Result have their own hit tests. The
     /// hit rect is in normalized surface coordinates, like `x` / `y`.
