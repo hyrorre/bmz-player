@@ -94,11 +94,13 @@ pub(super) fn build_task_list(
             view.refreshed = None;
         }
     });
-    egui::ScrollArea::vertical().id_salt("chart_download_tasks").max_height(400.0).show_rows(
-        ui,
-        78.0,
-        view.indices.len(),
-        |ui, range| {
+    // Keep the nested scrollbar clear of the page scrollbar, including its hover width.
+    let scrollbar_gap = ui.spacing().scroll.bar_width + ui.spacing().item_spacing.x;
+    egui::ScrollArea::vertical()
+        .id_salt("chart_download_tasks")
+        .max_width((ui.available_width() - scrollbar_gap).max(0.0))
+        .max_height(400.0)
+        .show_rows(ui, 78.0, view.indices.len(), |ui, range| {
             for row in range {
                 let Some(task) = manager.tasks().get(view.indices[row]) else {
                     continue;
@@ -184,8 +186,7 @@ pub(super) fn build_task_list(
                     ui.separator();
                 });
             }
-        },
-    );
+        });
     if finished < total {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
     }
