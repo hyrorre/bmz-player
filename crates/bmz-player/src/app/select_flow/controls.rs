@@ -793,11 +793,7 @@ impl WinitApp {
             );
             true
         } else if self.select.select_keys.is_ui_key7(control) {
-            self.set_session_mode(self.select.session_mode.cycle());
-            tracing::info!(
-                session_mode = self.select.session_mode.as_str(),
-                "session mode changed"
-            );
+            self.cycle_select_session_mode(1);
             true
         } else {
             false
@@ -873,6 +869,16 @@ impl WinitApp {
         if let Some(event_id) = event_id {
             self.execute_select_skin_event(event_id, 1);
         }
+    }
+
+    pub(super) fn cycle_select_session_mode(&mut self, arg: i32) {
+        let next = match arg.cmp(&0) {
+            std::cmp::Ordering::Greater => self.select.session_mode.cycle(),
+            std::cmp::Ordering::Less => self.select.session_mode.cycle_prev(),
+            std::cmp::Ordering::Equal => return,
+        };
+        self.set_session_mode(next);
+        tracing::info!(session_mode = next.as_str(), "session mode changed");
     }
 
     pub(super) fn set_session_mode(&mut self, session_mode: SessionMode) {

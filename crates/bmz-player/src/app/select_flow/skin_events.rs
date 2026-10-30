@@ -36,6 +36,7 @@ impl WinitApp {
                 self.toggle_select_ir_scope();
             }
             SKIN_EVENT_DAILY_STATISTICS_RESET => self.reset_daily_statistics(),
+            SKIN_EVENT_SELECT_SESSION_MODE => self.cycle_select_session_mode(arg),
             // beatoraja EventFactory: open key configuration.
             13 => self.open_key_config_from_select(),
             // beatoraja EventFactory: play / autoplay / practice.

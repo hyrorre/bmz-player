@@ -30,3 +30,5 @@ mod result_panels;
 mod score_accessors;
 #[path = "lua/screen_size.rs"]
 mod screen_size;
+#[path = "lua/session_mode.rs"]
+mod session_mode;

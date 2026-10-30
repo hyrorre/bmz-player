@@ -191,11 +191,11 @@ use crate::window_config::{monitor_config_name, select_monitor};
 use bmz_render::skin::{
     DestinationListEntry, SKIN_EVENT_DAILY_STATISTICS_RESET, SKIN_EVENT_IR_SCOPE_GLOBAL,
     SKIN_EVENT_IR_SCOPE_RIVAL, SKIN_EVENT_IR_SCOPE_TOGGLE, SKIN_EVENT_RESULT_PANEL_GRAPH,
-    SKIN_EVENT_RESULT_PANEL_IR, SKIN_OPTION_BMZ_DOUBLE_PLAY, SKIN_OPTION_BMZ_KEY_MODE_BASE,
-    SKIN_OPTION_BMZ_KEY_MODE_COUNT, SKIN_OPTION_BMZ_NO_SCRATCH, SKIN_OPTION_BMZ_SINGLE_PLAY,
-    SKIN_REF_BMZ_ACTIVE_LANE_COUNT, SKIN_REF_BMZ_KEY_MODE, SkinAnimationDef, SkinClickHit,
-    SkinClickTarget, SkinContext, SkinDestinationDef, SkinDocument, SkinDocumentRenderExt,
-    SkinDocumentTexture, SkinDstEntry, SkinManifest, SkinSliderHit,
+    SKIN_EVENT_RESULT_PANEL_IR, SKIN_EVENT_SELECT_SESSION_MODE, SKIN_OPTION_BMZ_DOUBLE_PLAY,
+    SKIN_OPTION_BMZ_KEY_MODE_BASE, SKIN_OPTION_BMZ_KEY_MODE_COUNT, SKIN_OPTION_BMZ_NO_SCRATCH,
+    SKIN_OPTION_BMZ_SINGLE_PLAY, SKIN_REF_BMZ_ACTIVE_LANE_COUNT, SKIN_REF_BMZ_KEY_MODE,
+    SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinContext, SkinDestinationDef, SkinDocument,
+    SkinDocumentRenderExt, SkinDocumentTexture, SkinDstEntry, SkinManifest, SkinSliderHit,
 };
 
 mod app_support;
