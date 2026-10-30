@@ -51,6 +51,31 @@ fn installed_social_play_document_decodes_when_available() {
         assert!(!loaded.document.destination.is_empty());
     }
 }
+
+#[test]
+fn installed_social_decide_decodes_when_available() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins");
+    let state = LuaLoadRuntimeState {
+        number_values: BTreeMap::from([(74, 1000), (71, 1500), (150, 1400), (121, 1450)]),
+        ..Default::default()
+    };
+    for name in ["decide"] {
+        let entry = root.join(format!("SocialSkin/lua/{name}.luaskin"));
+        if !entry.is_file() {
+            continue;
+        }
+        let context = SkinPathContext::new(&entry, [root.clone()]).unwrap();
+        let loaded = load_lua_skin_with_path_context(
+            &context,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &state,
+            &BTreeMap::new(),
+        )
+        .unwrap_or_else(|error| panic!("{name}: {error:#}"));
+        assert!(!loaded.document.destination.is_empty());
+    }
+}
 use bmz_skin_document::SkinFontFallbackDef;
 
 #[test]

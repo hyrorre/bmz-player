@@ -168,3 +168,58 @@ fn os_difftime_returns_float_seconds() {
     );
     assert_eq!(lines.lines().collect::<Vec<_>>(), ["6.0,1.25,float", "true"]);
 }
+
+#[test]
+fn math_random_bounds_match_luaj_integer_conversion() {
+    assert_eq!(
+        evaluate(
+            r#"
+            out(math.random(1.9), math.random(-1.9, -1.1), math.random('2.9', '2.1')),
+            out(math.random(0, 0), math.random(1, 1, 1), math.random('0x1', '0x1')),
+            out(pcall(math.random, 0) == false, pcall(math.random, 2, 1) == false,
+                pcall(math.random, false) == false, pcall(math.random, nil) == false),
+            out(pcall(math.random, 0, 2147483647) == false,
+                math.random(-2147483648, -2147483648)),
+            (function()
+                for i=1,100 do
+                    local v = math.random(0, 2 * math.pi * 314)
+                    assert(v >= 0 and v <= 1972 and v % 1 == 0)
+                    local t = math.random(0, 500 / 7)
+                    assert(t >= 0 and t <= 71)
+                end
+                return 'fractional ranges OK'
+            end)()
+        "#
+        ),
+        "1,-1,2\n0,1,1\ntrue,true,true,true\ntrue,-2147483648\nfractional ranges OK"
+    );
+}
+
+#[test]
+fn fractional_random_bounds_work_in_runtime_callbacks_and_mark_loads_opaque() {
+    let root = TestDir::created("bmz-luaj-runtime-random");
+    let path = root.join("skin.luaskin");
+    fs::write(
+        &path,
+        r#"
+        if skin_config then local n = math.random(0, 500 / 7) end
+        return {type=5, text={{id='random', value=function()
+            return tostring(math.random(1.9))
+        end}}}
+    "#,
+    )
+    .unwrap();
+    let mut loaded = load_lua_skin_with_runtime_state(
+        &path,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &LuaLoadRuntimeState { runtime_mode: LuaSkinRuntimeMode::Compat, ..Default::default() },
+    )
+    .unwrap();
+    assert!(loaded.dependencies.opaque);
+    let runtime = loaded.lua_runtime.as_mut().unwrap();
+    let id = (0..runtime.callback_count())
+        .find(|&id| runtime.callback_path(id) == Some("$.text[1].value"))
+        .unwrap();
+    assert_eq!(runtime.evaluate_text(id, &TestLuaMainState::default()).as_deref(), Some("1"));
+}

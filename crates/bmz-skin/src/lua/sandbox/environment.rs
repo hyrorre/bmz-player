@@ -137,19 +137,7 @@ pub(super) fn install_sandbox(
         skin_config.set("get_path", get_path)?;
         globals.set("skin_config", skin_config)?;
     }
-    if let Some(dependencies_for_random) = load_dependencies.clone() {
-        let math: Table = globals.get("math")?;
-        let original_random: Function = math.get("random")?;
-        let original_random_key = lua.create_registry_value(original_random)?;
-        let random = lua.create_function(move |lua, args: Variadic<Value>| {
-            // Lua がロード時に選んだ値を document へ埋め込む場合、runtime state や
-            // ファイル更新だけではcache keyを再現できない。
-            mark_load_dependency_opaque(Some(&dependencies_for_random));
-            let original_random: Function = lua.registry_value(&original_random_key)?;
-            original_random.call::<Value>(args)
-        })?;
-        math.set("random", random)?;
-    }
+    install_luaj_random(lua, load_dependencies.clone())?;
     globals.set("os", create_os_stub(lua, main_state_probe.clone())?)?;
     globals.set(
         "io",
@@ -295,4 +283,46 @@ pub(super) fn install_sandbox(
     globals.set("bmz_timer_fn_map", timer_fn_map)?;
 
     Ok(main_state_probe)
+}
+
+/// LuaJ MathLib accepts fractional bounds via checkint() and ignores arguments
+/// after the second. Use Lua's own PRNG, with LuaJ's integer/range conversion.
+fn install_luaj_random(
+    lua: &Lua,
+    dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
+) -> mlua::Result<()> {
+    let math: Table = lua.globals().get("math")?;
+    let original: Function = math.get("random")?;
+    let original = lua.create_registry_value(original)?;
+    math.set(
+        "random",
+        lua.create_function(move |lua, args: Variadic<Value>| {
+            // Random values embedded while loading cannot be replayed from the
+            // ordinary cache key. Keep the existing dependency tracking.
+            mark_load_dependency_opaque(dependencies.as_ref());
+            let original: Function = lua.registry_value(&original)?;
+            if args.is_empty() {
+                return original.call::<Value>(());
+            }
+            let bound = |index: usize| -> mlua::Result<i32> {
+                lua.coerce_number(args[index].clone())?.map(|number| number as i32).ok_or_else(
+                    || {
+                        mlua::Error::runtime(format!(
+                            "bad argument #{} to 'random' (number expected)",
+                            index + 1
+                        ))
+                    },
+                )
+            };
+            let (lower, upper) =
+                if args.len() == 1 { (1, bound(0)?) } else { (bound(0)?, bound(1)?) };
+            // Java Random.nextInt receives this 32-bit expression in MathLib.
+            let width = upper.wrapping_sub(lower).wrapping_add(1);
+            if width <= 0 {
+                return Err(mlua::Error::runtime("bad argument to 'random' (interval is empty)"));
+            }
+            let offset = original.call::<i32>((0, width - 1))?;
+            Ok(Value::Integer(i64::from(lower.wrapping_add(offset))))
+        })?,
+    )
 }

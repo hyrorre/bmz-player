@@ -101,6 +101,7 @@ closure/module stateを維持し、frameごとのmain_stateを参照します。
 | file / module解決 | `SkinPathContext`の許可rootに限定します。require / dofile / loadfile、source等のパス解決を扱う |
 | `os` / `io` | clock / date / time / difftime等の限定API、仮想ファイル読込・永続化しない書込stubです。`os.date`はLuaJの書式指定子に対応します。任意のOS操作を許可しない |
 | `bit32` | LuaJ（Lua 5.2）のbit32です。[LuaJ実行結果との比較テスト](../crates/bmz-skin/src/tests/lua_stdlib_compat.rs) |
+| `math.random`の小数引数 | LuaJと同じ整数変換と区間幅検査をロード・runtime両方へ適用します。SocialSkinのDecide / Resultで使う小数範囲に対応します。乱数列自体はLua 5.4です。[比較テスト](../crates/bmz-skin/src/tests/lua_stdlib_compat.rs) |
 | API面の互換性固定 | 拡張前の名前・型・戻り値を[fixture](../crates/bmz-skin/src/tests/lua_api_baseline.rs)で固定し、インストール済みスキンは[比較ハーネス](../crates/bmz-skin/src/tests/installed_skin_compat.rs)で変更前後を比較します |
 
 timerの単位・OFF値・書き込み制約・失敗時の値は[skin.md](skin.md)のLua Runtime Compatibility Modeを参照します。

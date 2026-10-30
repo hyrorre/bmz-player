@@ -939,6 +939,9 @@ LuaJ（Lua 5.2系）との差:
   置き換えません。`extract` / `replace`の範囲外のfield / widthはLuaエラーにします。
 - `math.pow` / `ldexp` / `frexp` / `cosh` / `sinh` / `tanh` / `atan2` / `log10`はLua 5.4の
   互換関数として使えます。`unpack` / `loadstring`はLuaJ 3.0にもないため提供しません。
+- `math.random`の引数はLuaJと同じく32bit整数へ0方向に切り捨てます。数値文字列も受け付け、
+  第3引数以降は無視します。`random(0)`や32bitの区間幅が正でない範囲はエラーです。
+  乱数生成器自体はLua 5.4のものなので、同じseedでLuaJと同じ列になる保証はありません。
 - `os.date`はLuaJの`%a %A %b %B %c %d %H %I %j %m %M %p %S %U %w %W %x %X %y %Y %z %%`に
   対応します。正午の`%I`は`00`、`%U` / `%W`はLuaJの週番号です。引数なしの既定書式
   `%Y-%m-%d %H:%M:%S`と、未知の指定子を文字のまま返す動作は既存スキンの表示を

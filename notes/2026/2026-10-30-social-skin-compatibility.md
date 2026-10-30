@@ -35,3 +35,15 @@ snapshotの`ok`だけで一覧登録や実際のResult互換性を判定しな�
 - Selectは入れ子opを通過した後、`image[470].act = "switchMenu()"`の文字列eventで
   次の型エラーとなった。文字列eventは別の修正で対応する。
 - 検証: fmt、bmz-skinのcheck / all-targets Clippy / test（346成功・1 ignored）が成功。
+
+## 3. math.randomの小数引数
+
+- beatoraja同梱の`luaj-jse-3.0.2-custom.jar`で小数・数値文字列・無効範囲・第3引数を
+  実行して比較した。`random(1.9)=1`、`random(-1.9,-1.1)=-1`、第3引数は無視。
+  `random(0)`と`random(0,2147483647)`はエラーになる。
+- header / load / runtime全VMでLuaJの整数変換と32bit区間幅の計算を行い、乱数生成は
+  Lua 5.4のPRNGを使う。ロード時のopaque依存記録を維持する。
+- Decideの定義読み込みが成功。Resultは乱数を通過後、
+  `destination[755].timer = "resultRankGaugeTimer"`で次の型エラーとなる。
+  actと合わせて文字列callbackの対応で修正する。
+- 検証: fmt、bmz-skinのcheck / all-targets Clippy / test（349成功・1 ignored）が成功。
