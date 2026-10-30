@@ -222,17 +222,21 @@ pub(super) fn select_row_replay_index(
 }
 
 pub(super) fn select_row_trophy_index(row: &SelectRowSnapshot) -> Option<usize> {
-    let mut trophy_index = None;
-    for name in &row.achieved_trophy_names {
-        let rank = match name.as_str() {
-            "bronzemedal" => 0,
-            "silvermedal" => 1,
-            "goldmedal" => 2,
-            _ => continue,
-        };
-        trophy_index = Some(trophy_index.map_or(rank, |current: usize| current.max(rank)));
+    let medal_index = |name: &str| match name {
+        "bronzemedal" => Some(0),
+        "silvermedal" => Some(1),
+        "goldmedal" => Some(2),
+        _ => None,
+    };
+    if !row.course_trophy_names.is_empty() {
+        return row
+            .course_trophy_names
+            .iter()
+            .rev()
+            .find(|name| row.achieved_trophy_names.contains(name))
+            .and_then(|name| medal_index(name));
     }
-    trophy_index
+    row.achieved_trophy_names.iter().filter_map(|name| medal_index(name)).max()
 }
 
 pub(super) fn select_row_label_indices(

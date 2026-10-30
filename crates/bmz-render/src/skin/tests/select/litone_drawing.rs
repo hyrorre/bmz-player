@@ -1,5 +1,20 @@
 use super::*;
 
+#[test]
+fn select_trophy_follows_course_definition_priority() {
+    let mut row = SelectRowSnapshot {
+        course_trophy_names: vec!["goldmedal".into(), "bronzemedal".into()],
+        achieved_trophy_names: vec!["bronzemedal".into(), "goldmedal".into()],
+        ..Default::default()
+    };
+    assert_eq!(select_row_trophy_index(&row), Some(0));
+    row.course_trophy_names.push("custom-trophy".into());
+    row.achieved_trophy_names.push("custom-trophy".into());
+    assert!(select_row_trophy_index(&row).is_none());
+    row.achieved_trophy_names.clear();
+    assert!(select_row_trophy_index(&row).is_none());
+}
+
 fn label_document(cn_image: bool, cn_hidden: bool) -> SkinDocument {
     let mut images = (0..5).filter(|&index| index != 3 || cn_image).map(|index| {
         serde_json::json!({"id":format!("label{index}"),"src":"atlas","x":index * 10,"y":0,"w":10,"h":10})

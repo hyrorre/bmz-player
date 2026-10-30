@@ -82,10 +82,23 @@
 - 検証: fmt、workspace check / all-targets Clippy / testが成功。
   bmz-player 2748成功・46 ignored。ログは`.local/performance/litone5-drawing-label-*.log`。
 
+## 5. コーストロフィー
+
+- `SRC/DST_BAR_TROPHY`の0..2を既存のcourse trophy描画へ接続する。
+  無効indexを無視し、負の幅・高さはbeatorajaのSelect loaderと同じく正の矩形へ移す。
+  同じ処理をBAR_LABELにも適用する。
+- `GradeBar.getTrophy`はコース定義を末尾から調べるため、宣言順をsnapshotにも保持する。
+  先に見つかった達成済みの名前が独自名ならメダルを表示しない点も維持する。
+  定義順を持たない旧snapshotでは既存の銅・銀・金の最高達成を使う。
+- SRC/DSTと宣言位置、負の寸法、達成銅・銀・金、独自名、未所持、曲バーでの非表示を確認する。
+  メダル順と異なるコース定義順でもbeatorajaの優先順を使うテストを追加する。
+- 検証: fmt、workspace check / all-targets Clippy / testが成功。
+  ログ: `.local/performance/litone5-drawing-trophy-*.log`。
+
 ## 確認範囲と残る表示差
 
 - 全9定義の読み込み成功は、全描画命令の対応や見た目の一致を意味しない。
-  SelectのBAR_TROPHY / BAR_GRAPHは未対応命令の警告が残る。
+  SelectのBAR_GRAPHは未対応命令の警告が残る。
   Result / Course Resultのsource 21未定義や、Decideが参照する未配置の`Select/font/bar`も
   今回の読み込み停止とは別の課題。外部CSVや画像の書き換えは行っていない。
 - beatorajaの実画面との比較、GPU画面の見た目・操作、macOS / Linuxは未確認。

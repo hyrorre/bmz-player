@@ -437,6 +437,7 @@ fn select_course_snapshot(index: usize, row: &SelectCourseRow) -> SelectRowSnaps
             .exists_all_songs()
             .then(|| crate::skin_extension::source_ln_profile_bits(ln_profile)),
         achieved_trophy_names: row.achieved_trophy_names.clone(),
+        course_trophy_names: row.trophy_names.clone(),
         course_titles: course_titles_from_entries(
             row.entry_previews.iter().map(|entry| (entry.title.as_str(), entry.resolved)),
         ),

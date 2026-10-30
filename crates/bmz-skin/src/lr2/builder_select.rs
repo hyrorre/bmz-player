@@ -32,6 +32,7 @@ fn lr2_bar_part(kind: &str, index: i32) -> Option<JsonValue> {
         ),
         "RIVAL" => ("lr2rival", vec![index]),
         "LABEL" => ("label", vec![index]),
+        "TROPHY" => ("trophy", vec![index]),
         "FLASH" => ("flash", vec![0]),
         _ => return None,
     };
@@ -72,11 +73,14 @@ impl CsvBuilder<'_> {
                 | "RANK"
                 | "RIVAL"
                 | "LABEL"
+                | "TROPHY"
         ) {
             return false;
         }
         let index = values[1].clamp(0, 29);
-        if kind == "LABEL" && !(0..5).contains(&values[1]) {
+        if (kind == "LABEL" && !(0..5).contains(&values[1]))
+            || (kind == "TROPHY" && !(0..3).contains(&values[1]))
+        {
             self.current = None;
             return true;
         }
@@ -119,6 +123,14 @@ impl CsvBuilder<'_> {
             }
         } else {
             self.select.marker = true;
+            if matches!(kind, "LABEL" | "TROPHY") {
+                for (position, size) in [(3, 5), (4, 6)] {
+                    if values[size] < 0 {
+                        values[position] = values[position].saturating_add(values[size]);
+                        values[size] = values[size].saturating_neg();
+                    }
+                }
+            }
             let body = kind.starts_with("BODY_");
             let variants = if body {
                 vec![CurrentObjectVariant {
@@ -218,6 +230,7 @@ impl CsvBuilder<'_> {
             "lr2rival": slots("RIVAL", &[0, 1, 2, 3, 4, 5]),
             "flash": slots("FLASH", &[0]),
             "label": slots("LABEL", &[0, 1, 2, 3, 4]),
+            "trophy": slots("TROPHY", &[0, 1, 2]),
         })
     }
 }

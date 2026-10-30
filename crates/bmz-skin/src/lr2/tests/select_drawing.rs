@@ -1,6 +1,40 @@
 use super::*;
 
 #[test]
+fn lr2_select_trophies_keep_slots_and_normalize_negative_extents() {
+    let root = unique_test_dir("lr2-select-trophies");
+    let path = root.join("select.lr2skin");
+    let mut csv = String::from("#INFORMATION,5,test,test\n#RESOLUTION,640,480\n");
+    for index in [0, 2, 1, -1, 3] {
+        csv.push_str(&format!(
+            "#SRC_BAR_TROPHY,{index},111,0,0,10,10,1,1,0,0\n#DST_BAR_TROPHY,{index},0,80,30,-20,-10,0,255,255,255,255,1,0,0,0\n"
+        ));
+    }
+    fs::write(&path, csv).unwrap();
+    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    let trophies = loaded.value["songlist"]["trophy"].as_array().unwrap();
+    assert_eq!(trophies.len(), 3);
+    let order = loaded.value["destination"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|destination| {
+            assert_eq!(destination["lr2BarPart"]["part"], "trophy");
+            destination["lr2BarPart"]["indices"][0].as_i64().unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(order, [0, 2, 1]);
+    for trophy in trophies {
+        let frame = &trophy["dst"][0];
+        assert_eq!(frame["x"], 60);
+        assert_eq!(frame["y"], -30);
+        assert_eq!(frame["w"], 20);
+        assert_eq!(frame["h"], 10);
+    }
+}
+
+#[test]
 fn lr2_select_labels_preserve_slots_and_declaration_order() {
     let root = unique_test_dir("lr2-select-labels");
     let path = root.join("select.lr2skin");
@@ -82,6 +116,8 @@ fn litone5_select_installed_drawing_definitions_load_when_available() {
     .unwrap();
     assert_eq!(loaded.document.judgegraph.len(), 2);
     assert_eq!(loaded.document.songlist.as_ref().unwrap().label.len(), 5);
+    assert_eq!(loaded.document.songlist.as_ref().unwrap().trophy.len(), 3);
+    assert!(!loaded.warnings.iter().any(|w| w.message.contains("BAR_TROPHY")));
     assert!(!loaded.warnings.iter().any(|w| w.message.contains("BAR_LABEL")));
     assert!(!loaded.warnings.iter().any(|w| w.message.contains("NOTECHART")));
     eprintln!("LITONE5 Select: both note density graphs loaded");

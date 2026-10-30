@@ -32,6 +32,45 @@ fn bar_sources() -> HashMap<String, SkinDocumentTexture> {
 }
 
 #[test]
+fn lr2_select_trophies_use_course_achievements_and_hide_unowned_rows() {
+    let mut parts = String::new();
+    for index in 0..3 {
+        parts.push_str(&format!("#SRC_BAR_TROPHY,{index},0,{},40,10,10,1,1,0,0\n#DST_BAR_TROPHY,{index},0,0,0,10,10,0,255,255,255,255,1,0,0,0\n",index*10));
+    }
+    let document = bar_document(&parts);
+    for (kind, owned, names, expected) in [
+        (SelectRowKind::Course, true, vec!["bronzemedal"], Some(0)),
+        (SelectRowKind::Course, true, vec!["silvermedal"], Some(1)),
+        (SelectRowKind::Course, true, vec!["bronzemedal", "goldmedal"], Some(2)),
+        (SelectRowKind::Course, true, vec!["custom-trophy"], None),
+        (SelectRowKind::Course, false, vec!["goldmedal"], None),
+        (SelectRowKind::Song, true, vec!["goldmedal"], None),
+    ] {
+        let snapshot = SelectSnapshot {
+            time: TimeUs(1_000_000),
+            rows: vec![SelectRowSnapshot {
+                kind,
+                in_library: owned,
+                achieved_trophy_names: names.into_iter().map(str::to_string).collect(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let trophies = document
+            .select_render_items(&bar_sources(), &snapshot)
+            .into_iter()
+            .filter_map(|item| match item {
+                SkinRenderItem::Image { uv, .. } if (uv.y - 0.4).abs() < 1e-6 => {
+                    Some((uv.x * 10.0).round() as i32)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(trophies, expected.into_iter().collect::<Vec<_>>(), "{kind:?}, owned={owned}");
+    }
+}
+
+#[test]
 fn lr2_select_label_commands_reach_the_cn_image() {
     let mut parts = String::new();
     for index in 0..5 {

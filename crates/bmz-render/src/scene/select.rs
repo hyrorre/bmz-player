@@ -464,6 +464,8 @@ pub struct SelectRowSnapshot {
     /// `songlist.trophy` の描画判定で `SelectRowSnapshot` から直接参照する。
     /// `SkinDrawState` には載せない (Copy であるため Vec を抱えられない)。
     pub achieved_trophy_names: Vec<String>,
+    /// Course definition order; the last achieved trophy has priority, as in beatoraja.
+    pub course_trophy_names: Vec<String>,
     /// beatoraja STRING_COURSE1_TITLE..10_TITLE (150..159) for course rows.
     /// Empty for non-course rows.
     pub course_titles: [String; 10],
@@ -560,6 +562,7 @@ impl Default for SelectRowSnapshot {
             kind: SelectRowKind::default(),
             in_library: true,
             achieved_trophy_names: Vec::new(),
+            course_trophy_names: Vec::new(),
             course_titles: Default::default(),
             course_levels: [None; 10],
             course_constraints: CourseConstraintFlags::default(),

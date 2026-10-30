@@ -596,6 +596,7 @@ fn select_snapshot_rows_exposes_effective_bms_scale_total() {
 #[test]
 fn select_snapshot_rows_copies_course_best_score_summary() {
     let mut row = select_course_row(2, 2);
+    row.trophy_names = vec!["goldmedal".into(), "bronzemedal".into()];
     row.best_score = Some(crate::storage::score_db::CourseBestScore {
         last_played_at: None,
         course_score_id: 99,
@@ -649,6 +650,7 @@ fn select_snapshot_rows_copies_course_best_score_summary() {
     assert_eq!(snapshot_rows[0].play_count, 42);
     assert_eq!(snapshot_rows[0].clear_count, 31);
     assert_eq!(snapshot_rows[0].replay_slots, [true, false, true, false]);
+    assert_eq!(snapshot_rows[0].course_trophy_names, ["goldmedal", "bronzemedal"]);
 }
 
 #[test]
