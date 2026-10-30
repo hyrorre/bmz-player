@@ -868,38 +868,56 @@ pub(super) fn main_bpm_for_chart(
     timing_map: &bmz_chart::timing::TimingMap,
 ) -> f64 {
     let mut counted = std::collections::HashSet::new();
-    let mut counts: Vec<(f64, u32)> = Vec::new();
-    for note in chart.lane_notes.iter().flatten() {
-        if matches!(note.kind, NoteKind::Invisible | NoteKind::Mine) {
-            continue;
+    let mut counts = std::collections::HashMap::<u64, u32>::new();
+    let mut values = Vec::new();
+    let speed_segments: Vec<_> =
+        chart.speed_events.iter().map(|event| (event.time.0 as f64, event.factor)).collect();
+    let mut count_candidate = |note_id: bmz_core::ids::NoteId,
+                               tick: bmz_core::time::ChartTick,
+                               time: bmz_core::time::TimeUs| {
+        if !counted.insert(note_id) {
+            return;
         }
-        counted.insert(note.id);
-        let bpm = timing_map.bpm_at_time(note.time);
-        if let Some((_, count)) =
-            counts.iter_mut().find(|(value, _)| value.to_bits() == bpm.to_bits())
+        let bpm = timing_map.bpm_at_time(time);
+        let scroll = crate::screens::play_snapshot::scroll_factor_at(chart, tick.0 as f64);
+        let speed = crate::screens::play_snapshot::speed_at(&speed_segments, time.0 as f64);
+        if !bpm.is_finite()
+            || bpm <= 0.0
+            || !scroll.is_finite()
+            || scroll <= 0.0
+            || !speed.is_finite()
+            || speed <= 0.0
         {
-            *count = count.saturating_add(1);
-        } else {
-            counts.push((bpm, 1));
+            return;
+        }
+        let value = bpm * scroll * speed;
+        if !value.is_finite() || value <= 0.0 {
+            return;
+        }
+        let key = value.to_bits();
+        match counts.entry(key) {
+            std::collections::hash_map::Entry::Occupied(mut count) => {
+                let count = count.get_mut();
+                *count = (*count).saturating_add(1);
+            }
+            std::collections::hash_map::Entry::Vacant(count) => {
+                count.insert(1);
+                values.push(value);
+            }
+        }
+    };
+    for note in chart.lane_notes.iter().flatten() {
+        if matches!(note.kind, NoteKind::Tap | NoteKind::LongStart) {
+            count_candidate(note.id, note.tick, note.time);
         }
     }
     for long in &chart.long_notes {
-        if !counted.insert(long.start_note_id) {
-            continue;
-        }
-        let bpm = timing_map.bpm_at_time(long.start_time);
-        if let Some((_, count)) =
-            counts.iter_mut().find(|(value, _)| value.to_bits() == bpm.to_bits())
-        {
-            *count = count.saturating_add(1);
-        } else {
-            counts.push((bpm, 1));
-        }
+        count_candidate(long.start_note_id, long.start_tick, long.start_time);
     }
-    counts
+    drop(count_candidate);
+    values
         .into_iter()
-        .max_by_key(|(_, count)| *count)
-        .map(|(bpm, _)| bpm)
+        .max_by_key(|value| counts[&value.to_bits()])
         .unwrap_or(chart.metadata.initial_bpm)
 }
 

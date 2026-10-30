@@ -148,8 +148,11 @@ HS-FIXの選択肢とBPM基準は次のとおりです。
 | `OFF` | 初期BPM |
 | `START BPM` | 初期BPM |
 | `MAX BPM` | 初期BPMとBPM変化イベントの最大BPM |
-| `MAIN BPM` | ノート数が最も多いBPM |
+| `MAIN BPM` | Tap / LN始点ごとの`BPM × SCROLL × SPEED`が最も多い値 |
 | `MIN BPM` | 初期BPMとBPM変化イベントの最小BPM |
+
+MAIN BPMの集計対象はTapとLN始点です。ノーツ位置の`SCROLL`が正のものだけを数え、負値と0は除外します。
+BPM、SCROLL、SPEED、および積が有限かつ正でないノーツも除外します。SPEEDはノーツ時刻で評価します。
 
 `FLOATING`はHS-FIXにかかわらずFloatingで開始します。Floating無効の`NORMAL`、`CLASSIC`、
 `LR2`は常に基準方式で開始します。切替可能な2設定は、HS-FIXが`OFF`なら
