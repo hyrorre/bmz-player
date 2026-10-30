@@ -160,7 +160,7 @@ fn antique_bpm_preview_types_use_fast_slow_digits_and_place_parts_when_available
                 for destination in &destinations {
                     let draw = destination.draw.as_str();
                     if destination.id.starts_with("num_bpm_preview_from") {
-                        assert!(draw.is_empty());
+                        assert_eq!(draw, "number(19062) >= 0 && number(19061) >= 0");
                     } else {
                         assert!(draw.contains("number(19062)"), "{}: {draw}", destination.id);
                     }
@@ -227,11 +227,103 @@ fn antique_bpm_preview_digit_variants_are_exclusive_when_available() {
         arrows,
         vec![
             // x = lane edge + digits * width + gap (9) + half arrow box (10).
-            ("number(19062) < 10".to_string(), 601 + DIGIT_W + 19),
-            ("number(19062) >= 10 && number(19062) < 100".to_string(), 601 + DIGIT_W * 2 + 19),
-            ("number(19062) >= 100".to_string(), 601 + DIGIT_W * 3 + 19),
+            ("number(19062) >= 0 && number(19061) >= 0 && number(19062) < 10".to_string(), 601 + DIGIT_W + 19),
+            ("number(19062) >= 0 && number(19061) >= 0 && number(19062) >= 10 && number(19062) < 100".to_string(), 601 + DIGIT_W * 2 + 19),
+            ("number(19062) >= 0 && number(19061) >= 0 && number(19062) >= 100".to_string(), 601 + DIGIT_W * 3 + 19),
         ]
     );
+}
+
+#[test]
+fn antique_effective_bpm_preview_draws_zero_and_signed_values_without_duplicate_parts_when_available()
+ {
+    use bmz_render::snapshot::{BpmChangePreviewSnapshot, RenderSnapshot, UpcomingBpmChange};
+    if !antique_path().is_file() {
+        return;
+    }
+    for (type_label, layout) in [
+        ("TYPE A (判定文字の上)", None),
+        ("TYPE C (レーン外・判定文字の横)", None),
+        ("TYPE C (レーン外・判定文字の横)", Some("BGA/グラフ/レーン")),
+    ] {
+        let mut options =
+            BTreeMap::from([("BPM変化予告 (BMZ)".to_string(), type_label.to_string())]);
+        if let Some(layout) = layout {
+            options.insert("配置".to_string(), layout.to_string());
+        }
+        let mut decoded = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+            pinned_sources: None,
+            skin_path: &antique_path(),
+            kind: SkinKind::Play,
+            options: &options,
+            files: &BTreeMap::new(),
+            runtime_state: &LuaLoadRuntimeState::default(),
+            library_roots: &[Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins")],
+            document_cache: None,
+            source_cache: None,
+            texture_cache: None,
+            font_cache: None,
+            installed_fonts: None,
+        })
+        .unwrap();
+        decoded.document.destination = decoded
+            .document
+            .all_destinations(&decoded.document.enabled_options())
+            .into_iter()
+            .filter(|destination| destination.id.contains("bpm_preview"))
+            .cloned()
+            .map(|destination| {
+                bmz_render::skin::DestinationListEntry::Single(Box::new(destination))
+            })
+            .collect();
+        let mut renderer = Renderer::default();
+        install_decoded_skin(&mut renderer, decoded, SkinManifest::default()).unwrap();
+        for (from_bpm, to_bpm) in [
+            (-7.0, 0.0),
+            (0.0, -85.0),
+            (-155.0, -85.0),
+            (-155.0, -205.0),
+            (155.0, -85.0),
+            (-155.0, 85.0),
+            (155.0, 0.0),
+            (0.0, 155.0),
+        ] {
+            renderer.prepare_scene(AppSceneSnapshot::Play(RenderSnapshot {
+                time: TimeUs(10_000_000),
+                play_elapsed_time: TimeUs(15_000_000),
+                ready_elapsed_time: Some(TimeUs(12_000_000)),
+                resources_loaded: true,
+                key_mode: KeyMode::K7,
+                bpm_change_preview: BpmChangePreviewSnapshot {
+                    next: Some(UpcomingBpmChange { remaining_ms: 500, from_bpm, to_bpm }),
+                    since_last_change_ms: None,
+                },
+                ..Default::default()
+            }));
+            let commands = &renderer.last_plan().unwrap().commands;
+            let text_count = |expected: &str| {
+                commands.iter().filter(|command| {
+                matches!(command, DrawCommand::Text { text, .. } if text == expected)
+            }).count()
+            };
+            assert_eq!(text_count("»"), 1, "{type_label} {layout:?}: {from_bpm} -> {to_bpm}");
+            assert_eq!(text_count("−"), usize::from(from_bpm < 0.0) + usize::from(to_bpm < 0.0));
+            let image_count = commands
+                .iter()
+                .filter(|command| {
+                    matches!(command, DrawCommand::Image { rect, .. }
+                    if (rect.width * 1920.0 - 13.0).abs() < 0.5
+                        && (rect.height * 1080.0 - 13.0).abs() < 0.5)
+                })
+                .count();
+            let digits = |value: f32| (value.abs() as u32).to_string().len();
+            assert_eq!(
+                image_count,
+                digits(from_bpm) + digits(to_bpm),
+                "{type_label} {layout:?}: {from_bpm} -> {to_bpm}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -286,6 +378,10 @@ fn antique_bpm_preview_gpu_draws_colored_digits_only_inside_the_lead_window() {
             ("before", 2_500, 153.0, 156.0),
             ("increase", 500, 98.0, 150.0),
             ("decrease", 500, 155.0, 85.0),
+            ("stop", 500, 155.0, 0.0),
+            ("negative-to", 500, 155.0, -85.0),
+            ("negative-from", 500, -155.0, 85.0),
+            ("negative-both", 500, -155.0, -85.0),
         ] {
             renderer.prepare_scene(AppSceneSnapshot::Play(RenderSnapshot {
                 time: TimeUs(10_000_000),
@@ -312,6 +408,19 @@ fn antique_bpm_preview_gpu_draws_colored_digits_only_inside_the_lead_window() {
                     image::ColorType::Rgba8,
                 )
                 .unwrap();
+                let image = image::RgbaImage::from_raw(1920, 1080, pixels.clone()).unwrap();
+                let x = (left - 30).max(0) as u32;
+                let y = (1080 - top - 10).max(0) as u32;
+                image::imageops::crop_imm(
+                    &image,
+                    x,
+                    y,
+                    (right + 30).min(1920) as u32 - x,
+                    (1080 - bottom + 10).min(1080) as u32 - y,
+                )
+                .to_image()
+                .save(directory.join(format!("{name}-{case}-crop.png")))
+                .unwrap();
             }
             frames.push(pixels);
         }
@@ -334,6 +443,12 @@ fn antique_bpm_preview_gpu_draws_colored_digits_only_inside_the_lead_window() {
         let red = |pixel: &[u8]| pixel[0] > 230 && pixel[2] < 225 && pixel[0] - pixel[2] > 30;
         assert!(matching_columns(&frames[0], blue).is_empty(), "{name}: hidden before lead");
         assert!(matching_columns(&frames[0], red).is_empty(), "{name}: hidden before lead");
+        for (index, matches) in [(3, red as fn(&[u8]) -> bool), (4, red), (5, blue), (6, blue)] {
+            assert!(
+                matching_columns(&frames[index], matches).len() > 20,
+                "{name}: zero/signed preview color at case {index}"
+            );
+        }
         for (frame, matches, color) in
             [(&frames[1], blue as fn(&[u8]) -> bool, "blue"), (&frames[2], red, "red")]
         {

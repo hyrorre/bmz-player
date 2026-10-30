@@ -7,8 +7,10 @@ pub(super) fn bpm_change_number(ref_id: i32, state: &SkinDrawState) -> Option<i6
         SKIN_REF_BMZ_BPM_CHANGE_REMAINING_MS => Some(i64::from(next.remaining_ms.max(0))),
         SKIN_REF_BMZ_BPM_CHANGE_NEXT_BPM => Some(next.to_bpm.round() as i64),
         SKIN_REF_BMZ_BPM_CHANGE_PREVIOUS_BPM => Some(next.from_bpm.round() as i64),
-        SKIN_REF_BMZ_BPM_CHANGE_RATIO_PERCENT => (next.from_bpm > 0.0)
-            .then(|| (f64::from(next.to_bpm) * 100.0 / f64::from(next.from_bpm)).round() as i64),
+        SKIN_REF_BMZ_BPM_CHANGE_RATIO_PERCENT => {
+            (next.from_bpm.is_finite() && next.to_bpm.is_finite() && next.from_bpm != 0.0)
+                .then(|| (f64::from(next.to_bpm) * 100.0 / f64::from(next.from_bpm)).round() as i64)
+        }
         _ => None,
     }
 }

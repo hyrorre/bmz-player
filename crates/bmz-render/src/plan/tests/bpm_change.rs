@@ -96,3 +96,28 @@ fn bpm_change_preview_without_next_change_hides_values() {
     assert_eq!(lua_main_state_timer(SKIN_TIMER_BMZ_BPM_CHANGE_PREVIEW, &state), None);
     assert_eq!(lua_main_state_timer(SKIN_TIMER_BMZ_BPM_CHANGED, &state), None);
 }
+
+#[test]
+fn effective_bpm_preview_keeps_signed_values_and_numeric_color_direction() {
+    let skin = skin(r#"{"bmzBpmChangePreview":{"leadMs":2000}}"#);
+    for (from, to, increase, ratio) in [
+        (150.0, 0.0, false, 0),
+        (0.0, 150.0, true, 0),
+        (0.0, -150.0, false, 0),
+        (-150.0, 0.0, true, 0),
+        (-150.0, -300.0, false, 200),
+        (-300.0, -150.0, true, 50),
+        (-150.0, 150.0, true, -100),
+    ] {
+        let state = build_play_skin_state(&snapshot(500, from, to), &skin, 0);
+        assert!(op(SKIN_OPTION_BMZ_BPM_CHANGE_PREVIEW_ACTIVE, &state));
+        assert_eq!(
+            lua_main_state_number(SKIN_REF_BMZ_BPM_CHANGE_PREVIOUS_BPM, &state),
+            from as i64
+        );
+        assert_eq!(lua_main_state_number(SKIN_REF_BMZ_BPM_CHANGE_NEXT_BPM, &state), to as i64);
+        assert_eq!(op(SKIN_OPTION_BMZ_BPM_CHANGE_INCREASE, &state), increase);
+        assert_eq!(op(SKIN_OPTION_BMZ_BPM_CHANGE_DECREASE, &state), !increase);
+        assert_eq!(lua_main_state_number(SKIN_REF_BMZ_BPM_CHANGE_RATIO_PERCENT, &state), ratio);
+    }
+}

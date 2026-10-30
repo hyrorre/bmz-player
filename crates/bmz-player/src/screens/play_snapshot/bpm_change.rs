@@ -1,8 +1,7 @@
 use super::*;
 use bmz_render::snapshot::{BpmChangePreviewSnapshot, UpcomingBpmChange};
 
-/// Lane-clock time where the effective BPM changes. STOP markers and repeated
-/// BPM values are excluded so skins only see changes in scroll speed.
+/// Lane-clock time where BPM × SCROLL changes by at least one. STOP is zero.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct BpmChangePoint {
     pub(super) time: TimeUs,
@@ -10,32 +9,71 @@ pub(super) struct BpmChangePoint {
     pub(super) to_bpm: f64,
 }
 
-/// Uses the same timing map construction as `GameSession`, so the change time
-/// matches the moment `now_bpm` switches.
+#[derive(Debug, Clone, Copy)]
+enum PreviewEvent {
+    Bpm(f64),
+    Scroll(f64),
+    StopStart,
+    StopEnd,
+}
+
+/// Merge changes on the same lane clock used by rendering. Timing-map gaps
+/// between STOP markers and following segments are the actual stopped intervals.
 pub(super) fn build_bpm_change_points(chart: &PlayableChart) -> Vec<BpmChangePoint> {
     let timing_map =
         TimingMap::from_chart_timing_events(chart.metadata.initial_bpm, &chart.timing_events);
-    let mut points: Vec<BpmChangePoint> = Vec::new();
-    let mut current_bpm = timing_map.initial_bpm.max(1.0);
+    let mut events = Vec::new();
     for segment in &timing_map.segments {
-        if segment.bpm == current_bpm {
-            continue;
+        events.push((segment.start_time, PreviewEvent::Bpm(segment.bpm)));
+    }
+    for pair in timing_map.segments.windows(2) {
+        let start = pair[0].end_time;
+        let end = pair[1].start_time;
+        if start < end {
+            events.push((start, PreviewEvent::StopStart));
+            events.push((end, PreviewEvent::StopEnd));
         }
-        match points.last_mut() {
-            // Zero-length segments can stack several values on one instant.
-            Some(last) if last.time == segment.start_time => {
-                last.to_bpm = segment.bpm;
-                if last.to_bpm == last.from_bpm {
-                    points.pop();
-                }
+    }
+    for event in &chart.scroll_events {
+        // SCROLL switches when the rendering cursor reaches its public tick.
+        // This also handles legacy charts whose event.time was left at zero.
+        events.push((timing_map.tick_to_time(event.tick), PreviewEvent::Scroll(event.factor)));
+    }
+    events.sort_by_key(|(time, _)| *time);
+
+    let mut points = Vec::new();
+    let mut bpm = timing_map.initial_bpm.max(1.0);
+    let mut scroll = 1.0;
+    let mut stops = 0usize;
+    let effective_bpm = |bpm: f64, scroll: f64, stops: usize| {
+        if stops > 0 { 0.0 } else { bpm * scroll }
+    };
+    let mut index = 0;
+    while let Some(&(time, _)) = events.get(index) {
+        let from_bpm = effective_bpm(bpm, scroll, stops);
+        // Compare the state before and after all simultaneous events, including
+        // adjacent STOP end/start pairs and BPM/SCROLL changes that cancel out.
+        while let Some(&(event_time, event)) = events.get(index) {
+            if event_time != time {
+                break;
             }
-            _ => points.push(BpmChangePoint {
-                time: segment.start_time,
-                from_bpm: current_bpm,
-                to_bpm: segment.bpm,
-            }),
+            match event {
+                PreviewEvent::Bpm(value) => bpm = value,
+                PreviewEvent::Scroll(value) => scroll = value,
+                PreviewEvent::StopStart => stops = stops.saturating_add(1),
+                PreviewEvent::StopEnd => stops = stops.saturating_sub(1),
+            }
+            index += 1;
         }
-        current_bpm = segment.bpm;
+        let to_bpm = effective_bpm(bpm, scroll, stops);
+        // Preview snapshots use f32. Never publish an unrepresentable value,
+        // and compare before rounding the numbers shown by skins.
+        if (from_bpm as f32).is_finite()
+            && (to_bpm as f32).is_finite()
+            && (to_bpm - from_bpm).abs() >= 1.0
+        {
+            points.push(BpmChangePoint { time, from_bpm, to_bpm });
+        }
     }
     points
 }

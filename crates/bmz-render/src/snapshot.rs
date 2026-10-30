@@ -121,13 +121,15 @@ impl SkinAttemptState {
     }
 }
 
-/// Upcoming BPM change on the lane clock, measured in real time.
+/// Upcoming BPM × SCROLL change on the lane clock, with STOP represented by zero.
 /// Millisecond fields keep `RenderSnapshot` (held inline by the app) compact.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct UpcomingBpmChange {
     /// Real-time milliseconds until the change (playback rate applied).
     pub remaining_ms: i32,
+    /// Signed effective BPM immediately before the change (SPEED excluded).
     pub from_bpm: f32,
+    /// Signed effective BPM immediately after the change (SPEED excluded).
     pub to_bpm: f32,
 }
 
