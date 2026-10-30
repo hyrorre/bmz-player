@@ -282,6 +282,10 @@ pub(super) fn build_select_course_row(
                     ln_policy_setting,
                     stored.definition.constraints.ln,
                 ),
+                has_long_notes: chart.has_long_notes,
+                ln_profile: chart.ln_profile,
+                has_mines: chart.has_mines,
+                has_random: chart.has_bms_random,
                 resolved: sources.contains_key(&chart.chart_id),
             },
             None => CourseEntryPreview {
@@ -290,6 +294,10 @@ pub(super) fn build_select_course_row(
                 play_level: String::new(),
                 difficulty_name: String::new(),
                 total_notes: 0,
+                has_long_notes: false,
+                ln_profile: ChartLnProfile::default(),
+                has_mines: false,
+                has_random: false,
                 resolved: false,
             },
         })

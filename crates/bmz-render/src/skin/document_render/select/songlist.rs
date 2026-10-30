@@ -252,7 +252,25 @@ macro_rules! skin_document_render_select_songlist_methods {
                             .map(tag("level", level_index, &row_state)),
                         );
                     }
-                    for label_index in select_row_label_indices(row) {
+                    for mut label_index in
+                        select_row_label_indices(row, snapshot.ln_policy_setting_index % 3)
+                    {
+                        if label_index >= 3
+                            && !songlist.label.get(label_index).is_some_and(|entry| match entry {
+                                DestinationListEntry::Single(destination) => images
+                                    .get(&destination.id)
+                                    .is_some_and(|image| sources.contains_key(&image.src)),
+                                DestinationListEntry::Conditional { destinations, .. } => {
+                                    destinations.iter().any(|destination| {
+                                        images
+                                            .get(&destination.id)
+                                            .is_some_and(|image| sources.contains_key(&image.src))
+                                    })
+                                }
+                            })
+                        {
+                            label_index = 0;
+                        }
                         items.extend(
                             self.select_songlist_child_items_by_index(
                                 &songlist.label,

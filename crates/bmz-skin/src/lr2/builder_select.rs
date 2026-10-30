@@ -31,6 +31,7 @@ fn lr2_bar_part(kind: &str, index: i32) -> Option<JsonValue> {
                 .collect(),
         ),
         "RIVAL" => ("lr2rival", vec![index]),
+        "LABEL" => ("label", vec![index]),
         "FLASH" => ("flash", vec![0]),
         _ => return None,
     };
@@ -70,10 +71,15 @@ impl CsvBuilder<'_> {
                 | "FLASH"
                 | "RANK"
                 | "RIVAL"
+                | "LABEL"
         ) {
             return false;
         }
         let index = values[1].clamp(0, 29);
+        if kind == "LABEL" && !(0..5).contains(&values[1]) {
+            self.current = None;
+            return true;
+        }
         if kind == "RANK" {
             if command.starts_with("SRC_") {
                 self.warn(format!("unsupported lr2 song bar decoration: #{command}"));
@@ -211,6 +217,7 @@ impl CsvBuilder<'_> {
             "rivallamp": slots("RIVAL_LAMP", &lamps),
             "lr2rival": slots("RIVAL", &[0, 1, 2, 3, 4, 5]),
             "flash": slots("FLASH", &[0]),
+            "label": slots("LABEL", &[0, 1, 2, 3, 4]),
         })
     }
 }

@@ -652,6 +652,41 @@ fn select_snapshot_rows_copies_course_best_score_summary() {
 }
 
 #[test]
+fn select_snapshot_course_labels_combine_resolved_stage_features() {
+    let mut row = select_course_row(2, 2);
+    row.entry_previews[0].has_long_notes = true;
+    row.entry_previews[0].ln_profile.has_undefined_ln = true;
+    row.entry_previews[0].has_mines = true;
+    row.entry_previews[1].has_long_notes = true;
+    row.entry_previews[1].ln_profile.has_defined_hcn = true;
+    row.entry_previews[1].has_random = true;
+    let profile = ProfileConfig::new_default("test", "Test", 0);
+    let snapshot = select_snapshot_rows(
+        &[SelectItem::Course(row.clone())],
+        0,
+        1,
+        &profile,
+        None,
+        &HashMap::new(),
+    );
+    assert!(snapshot[0].has_long_notes && snapshot[0].has_mines && snapshot[0].has_random);
+    assert_eq!(
+        snapshot[0].source_ln_profile_bits,
+        Some(
+            bmz_render::snapshot::SKIN_SOURCE_LN_UNDEFINED_BIT
+                | bmz_render::snapshot::SKIN_SOURCE_LN_DEFINED_HCN_BIT
+        )
+    );
+    row.entry_previews[1].resolved = false;
+    row.resolved_count = 1;
+    let snapshot =
+        select_snapshot_rows(&[SelectItem::Course(row)], 0, 1, &profile, None, &HashMap::new());
+    assert!(!snapshot[0].in_library);
+    assert!(!snapshot[0].has_random);
+    assert!(snapshot[0].source_ln_profile_bits.is_none());
+}
+
+#[test]
 fn select_snapshot_rows_wraps_near_edges() {
     let rows: Vec<SelectItem> = (0..4).map(|i| SelectItem::Chart(select_chart_row(i))).collect();
 

@@ -170,6 +170,10 @@ fn select_course_row(resolved_count: usize, entry_count: usize) -> SelectCourseR
             play_level: String::new(),
             difficulty_name: String::new(),
             total_notes: 0,
+            has_long_notes: false,
+            ln_profile: crate::ln_policy::ChartLnProfile::default(),
+            has_mines: false,
+            has_random: false,
             resolved: index < resolved_count,
         })
         .collect();

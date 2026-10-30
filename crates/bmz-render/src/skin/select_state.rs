@@ -235,16 +235,28 @@ pub(super) fn select_row_trophy_index(row: &SelectRowSnapshot) -> Option<usize> 
     trophy_index
 }
 
-pub(super) fn select_row_label_indices(row: &SelectRowSnapshot) -> Vec<usize> {
+pub(super) fn select_row_label_indices(
+    row: &SelectRowSnapshot,
+    undefined_ln_mode: usize,
+) -> Vec<usize> {
     let mut indices = Vec::new();
     if row.has_long_notes {
-        indices.push(0);
-    }
-    if row.has_random {
-        indices.push(1);
+        let bits = row.source_ln_profile_bits.unwrap_or(0);
+        let mut mode =
+            if bits & SKIN_SOURCE_LN_UNDEFINED_BIT != 0 { undefined_ln_mode.min(2) } else { 0 };
+        if bits & SKIN_SOURCE_LN_DEFINED_CN_BIT != 0 {
+            mode = mode.max(1);
+        }
+        if bits & SKIN_SOURCE_LN_DEFINED_HCN_BIT != 0 {
+            mode = 2;
+        }
+        indices.push([0, 3, 4][mode]);
     }
     if row.has_mines {
         indices.push(2);
+    }
+    if row.has_random {
+        indices.push(1);
     }
     indices
 }

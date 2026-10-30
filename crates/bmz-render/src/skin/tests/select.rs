@@ -14,6 +14,8 @@ mod cases_05;
 mod cases_06;
 #[path = "select/cases_07.rs"]
 mod cases_07;
+#[path = "select/litone_drawing.rs"]
+mod litone_drawing;
 #[path = "select/litone_properties.rs"]
 mod litone_properties;
 #[path = "select/lr2_slider.rs"]

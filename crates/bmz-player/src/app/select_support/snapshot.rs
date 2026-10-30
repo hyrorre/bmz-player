@@ -397,6 +397,13 @@ fn lr2_new_title(added_at: Option<i64>, hours: u32, now: i64) -> bool {
 
 fn select_course_snapshot(index: usize, row: &SelectCourseRow) -> SelectRowSnapshot {
     let score = row.best_score.as_ref();
+    let ln_profile = row
+        .entry_previews
+        .iter()
+        .filter(|entry| entry.resolved)
+        .fold(crate::ln_policy::ChartLnProfile::default(), |profile, entry| {
+            profile.merge(entry.ln_profile)
+        });
     SelectRowSnapshot {
         index: index as u32,
         title: row.title.clone(),
@@ -420,6 +427,15 @@ fn select_course_snapshot(index: usize, row: &SelectCourseRow) -> SelectRowSnaps
         replay_slots: row.replay_slots,
         kind: bmz_render::scene::SelectRowKind::Course,
         in_library: row.exists_all_songs(),
+        has_long_notes: row
+            .entry_previews
+            .iter()
+            .any(|entry| entry.resolved && entry.has_long_notes),
+        has_mines: row.entry_previews.iter().any(|entry| entry.resolved && entry.has_mines),
+        has_random: row.entry_previews.iter().any(|entry| entry.resolved && entry.has_random),
+        source_ln_profile_bits: row
+            .exists_all_songs()
+            .then(|| crate::skin_extension::source_ln_profile_bits(ln_profile)),
         achieved_trophy_names: row.achieved_trophy_names.clone(),
         course_titles: course_titles_from_entries(
             row.entry_previews.iter().map(|entry| (entry.title.as_str(), entry.resolved)),

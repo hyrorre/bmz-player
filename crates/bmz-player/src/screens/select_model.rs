@@ -7,7 +7,9 @@ use bmz_gameplay::rule::RuleMode;
 use bmz_render::scene::{SelectRowKind, SelectSameFolderDifficulty};
 
 use crate::i18n::{AppLocale, FluentArgs, Localizer};
-use crate::ln_policy::{LnPolicySetting, LnScorePolicy, course_score_ln_policy, score_ln_policy};
+use crate::ln_policy::{
+    ChartLnProfile, LnPolicySetting, LnScorePolicy, course_score_ln_policy, score_ln_policy,
+};
 use crate::screens::settings_model::{AppConfigSelectRow, ConfigSelectRow, KeyBindingSelectRow};
 use crate::song_download::ChartDownloadMetadata;
 use crate::storage::collection_db::{CollectionDatabase, FavoriteChartRecord, FavoriteSongRecord};
@@ -320,6 +322,10 @@ pub struct CourseEntryPreview {
     pub play_level: String,
     pub difficulty_name: String,
     pub total_notes: u32,
+    pub has_long_notes: bool,
+    pub ln_profile: ChartLnProfile,
+    pub has_mines: bool,
+    pub has_random: bool,
     /// True when this entry has an active file registration in the local library.
     pub resolved: bool,
 }

@@ -67,10 +67,25 @@
 - 検証: fmt、bmz-skin check / all-targets Clippy / test（361成功・1 ignored）と
   app側のノーツ分布描画回帰テストが成功。実画面の比較は未実施。
 
+## 4. 曲・コースバーのラベル
+
+- `SRC/DST_BAR_LABEL`の0..4をsonglistのlabelスロットへ接続する。
+  欠けたスロットを詰めず、画像とDSTの宣言位置を保持する。
+- beatorajaの`BarRenderer`と同じく、宣言済みLN / CN / HCNと未定義LNのユーザー設定から
+  最も強い種別を選ぶ。専用のCN / HCN画像・textureが無い場合はLN画像を使い、
+  専用ラベルの表示条件が偽なだけの場合はfallbackしない。
+  譜面特性の表示なので、BMZ独自のFORCE判定設定は宣言済みの表示種別を上書きしない。
+- コースのentry previewに既存library情報を渡し、解決済みの構成譜面の特性を集約する。
+  全曲を所持していないコースは描画対象にしない。DB/configの変更は無い。
+- 合成CSVの0..4の対応・無効index・座標・宣言順、CN画像の選択、fallbackと非表示条件、
+  コースの特性集約・未所持への切替をテストする。LITONE5の5つのラベル定義も読み込む。
+- 検証: fmt、workspace check / all-targets Clippy / testが成功。
+  bmz-player 2748成功・46 ignored。ログは`.local/performance/litone5-drawing-label-*.log`。
+
 ## 確認範囲と残る表示差
 
 - 全9定義の読み込み成功は、全描画命令の対応や見た目の一致を意味しない。
-  SelectのBAR_TROPHY / BAR_GRAPH / BAR_LABELは未対応命令の警告が残る。
+  SelectのBAR_TROPHY / BAR_GRAPHは未対応命令の警告が残る。
   Result / Course Resultのsource 21未定義や、Decideが参照する未配置の`Select/font/bar`も
   今回の読み込み停止とは別の課題。外部CSVや画像の書き換えは行っていない。
 - beatorajaの実画面との比較、GPU画面の見た目・操作、macOS / Linuxは未確認。

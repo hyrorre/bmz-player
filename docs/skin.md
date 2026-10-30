@@ -242,6 +242,11 @@ CSVの引用符はフィールド先頭で開きます。引用されていな�
 
 選曲は`BAR_BODY_ON/OFF`、`BAR_TITLE`、`BAR_LEVEL`、`BAR_LAMP`、
 `BAR_MY_LAMP`、`BAR_RIVAL_LAMP`、`BAR_RIVAL`、`BAR_FLASH`、`BAR_CENTER`、`BAR_AVAILABLE`を変換します。
+`BAR_LABEL`は0=LN、1=ランダム分岐、2=地雷、3=CN、4=HCNです。
+譜面の宣言と未定義LNのユーザー設定からHCN / CN / LNの順で選び、専用画像がなければ
+LN画像を使います。これは譜面の特性表示であり、BMZのFORCE設定による判定変更とは区別します。
+コースは所持している全構成譜面の特性を集約し、未所持の曲・コースにはラベルを出しません。
+ラベルも最初のDST位置に従って描画し、スクロールとバーの座標へ追従します。
 Selectの`SRC_NOTECHART` / `DST_NOTECHART`は既存のノーツ分布グラフへ変換します。
 幅・高さはSRCの指定を使い、DSTのY座標はbeatorajaと同じくグラフの下端として変換します。
 表示遅延・背景・積み上げ順・隙間、条件・timer・offsetも保持します。

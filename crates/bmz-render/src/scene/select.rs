@@ -432,7 +432,7 @@ pub struct SelectRowSnapshot {
     pub has_long_notes: bool,
     pub has_mines: bool,
     pub has_random: bool,
-    /// BMZ source LN profile bit mask. None for non-chart rows.
+    /// Source LN profile bit mask; course rows combine all resolved stages.
     pub source_ln_profile_bits: Option<u8>,
     /// beatoraja SongInformation-derived chart details for selected song rows.
     pub chart_normal_notes: u32,
