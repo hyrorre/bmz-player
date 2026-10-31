@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-01 | [EC:FN / Starseekerの負の実効BPM予告](2026/2026-11-01-adfx02-signed-bpm-preview.md) |
 | 2026-10-31 | [BPM × SCROLLとSTOPによるBPM変化予告](2026/2026-10-31-effective-bpm-change-preview.md) |
 | 2026-10-31 | [MAIN BPMのSCROLL / SPEED集計とHSへの適用](2026/2026-10-31-main-bpm-scroll-speed.md) |
 | 2026-10-31 | [SESSION MODEの画像参照とクリック操作](2026/2026-10-31-session-mode-skin.md) |

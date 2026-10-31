@@ -106,6 +106,149 @@ fn adfx02_bpm_preview_defaults_off_and_adds_bmz_options() {
 
 #[test]
 #[ignore = "requires separately installed ADFX02 assets"]
+fn adfx02_bpm_preview_signed_values_have_only_negative_signs_and_correct_digit_spacing() {
+    use bmz_render::snapshot::{BpmChangePreviewSnapshot, RenderSnapshot, UpcomingBpmChange};
+    for skin in [Skin::Ecfn, Skin::Starseeker] {
+        for side in ["1P", "2P"] {
+            for type_label in TYPES {
+                let options = BTreeMap::from([
+                    ("プレーサイド".to_string(), side.to_string()),
+                    ("BPM変化予告 (BMZ)".to_string(), type_label.to_string()),
+                ]);
+                let mut decoded = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+                    pinned_sources: None,
+                    skin_path: &skin.path(),
+                    kind: SkinKind::Play,
+                    options: &options,
+                    files: &BTreeMap::new(),
+                    runtime_state: &LuaLoadRuntimeState::default(),
+                    library_roots: &test_app_paths().skin_library_roots(),
+                    document_cache: None,
+                    source_cache: None,
+                    texture_cache: None,
+                    font_cache: None,
+                    installed_fonts: None,
+                })
+                .unwrap();
+                decoded.document.destination = decoded
+                    .document
+                    .all_destinations(&decoded.document.enabled_options())
+                    .into_iter()
+                    .filter(|destination| destination.op.contains(&19064))
+                    .cloned()
+                    .map(|destination| {
+                        bmz_render::skin::DestinationListEntry::Single(Box::new(destination))
+                    })
+                    .collect();
+                let mut renderer = Renderer::default();
+                install_decoded_skin(&mut renderer, decoded, SkinManifest::default()).unwrap();
+                for (from_bpm, to_bpm) in [
+                    (98.0, 150.0),
+                    (155.0, 85.0),
+                    (155.0, -85.0),
+                    (-155.0, 85.0),
+                    (-155.0, -85.0),
+                    (-155.0, -205.0),
+                    (155.0, 0.0),
+                    (0.0, 155.0),
+                    (0.0, -85.0),
+                    (-85.0, 0.0),
+                    (-9.0, -10.0),
+                    (-99.0, -100.0),
+                    (-10.0, -9.0),
+                    (-100.0, -99.0),
+                ] {
+                    renderer.prepare_scene(AppSceneSnapshot::Play(RenderSnapshot {
+                        time: TimeUs(10_000_000),
+                        play_elapsed_time: TimeUs(15_000_000),
+                        ready_elapsed_time: Some(TimeUs(12_000_000)),
+                        resources_loaded: true,
+                        key_mode: KeyMode::K7,
+                        bpm_change_preview: BpmChangePreviewSnapshot {
+                            next: Some(UpcomingBpmChange { remaining_ms: 500, from_bpm, to_bpm }),
+                            since_last_change_ms: None,
+                        },
+                        ..Default::default()
+                    }));
+                    let label =
+                        format!("{} {side} {type_label}: {from_bpm} -> {to_bpm}", skin.atlas());
+                    let commands = &renderer.last_plan().unwrap().commands;
+                    let texts = commands
+                        .iter()
+                        .filter_map(|command| match command {
+                            DrawCommand::Text { text, .. } => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(texts, vec!["»"], "{label}: positive/zero have no plus sign");
+                    let digits = commands
+                        .iter()
+                        .filter_map(|command| match command {
+                            DrawCommand::Image { rect, .. }
+                                if (rect.width * 1920.0 - 16.0).abs() < 0.01
+                                    && (rect.height * 1080.0 - 16.0).abs() < 0.01 =>
+                            {
+                                Some(rect)
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        digits.len(),
+                        (from_bpm.abs() as u32).to_string().len()
+                            + (to_bpm.abs() as u32).to_string().len(),
+                        "{label}"
+                    );
+                    let mut bars = Vec::new();
+                    for command in commands {
+                        match command {
+                            DrawCommand::Rect { rect, color } => bars.push((*rect, *color)),
+                            DrawCommand::RectBatch { rects, .. } => {
+                                bars.extend(rects.iter().map(|item| (item.rect, item.color)))
+                            }
+                            _ => {}
+                        }
+                    }
+                    let negative_count = usize::from(from_bpm < 0.0) + usize::from(to_bpm < 0.0);
+                    assert_eq!(bars.len(), negative_count * 2, "{label}");
+                    let (fill, rim) = if to_bpm > from_bpm {
+                        ((73, 156, 229), (4, 8, 12))
+                    } else {
+                        ((248, 79, 79), (30, 12, 12))
+                    };
+                    for (bar, color) in bars {
+                        let foreground = (bar.height * 1080.0 - 1.0).abs() < 0.01;
+                        let (width, height, rgb) =
+                            if foreground { (7.0, 1.0, fill) } else { (11.0, 5.0, rim) };
+                        assert!((bar.width * 1920.0 - width).abs() < 0.01, "{label}");
+                        assert!((bar.height * 1080.0 - height).abs() < 0.01, "{label}");
+                        assert_eq!(
+                            (color.r, color.g, color.b, color.a),
+                            (rgb.0 as f32 / 255.0, rgb.1 as f32 / 255.0, rgb.2 as f32 / 255.0, 1.0),
+                            "{label}"
+                        );
+                        if foreground {
+                            let next_digit = digits
+                                .iter()
+                                .filter(|digit| digit.x > bar.x)
+                                .min_by(|a, b| a.x.total_cmp(&b.x))
+                                .unwrap();
+                            let gap = (next_digit.x - bar.x - bar.width) * 1920.0;
+                            assert!((gap - 4.0).abs() < 0.01, "{label}: minus/digit gap {gap}");
+                            assert!(
+                                ((bar.y - next_digit.y) * 1080.0 - 8.0).abs() < 0.01,
+                                "{label}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires separately installed ADFX02 assets"]
 fn adfx02_bpm_preview_uses_pgreat_ms_digits_and_places_each_type() {
     // Both skins: 1P lane x=76..515, 2P lane x=1413..1852, judge text y=470.., judge line y=357.
     for skin in [Skin::Ecfn, Skin::Starseeker] {
@@ -218,9 +361,15 @@ fn adfx02_bpm_preview_gpu_draws_colored_digits_next_to_the_lane() {
     renderer.attach_offscreen(SurfaceSize { width: 1920, height: 1080 }).unwrap();
     let preview_dir = std::env::var_os("BMZ_BPM_PREVIEW_DIR").map(PathBuf::from);
     for skin in [Skin::Ecfn, Skin::Starseeker] {
-        for (side, type_index, lane_edge) in
-            [("1P", 0, None), ("1P", 1, None), ("1P", 2, Some(532)), ("2P", 3, Some(1396))]
-        {
+        for (side, type_index, lane_edge) in ["1P", "2P"].into_iter().flat_map(|side| {
+            (0..4).map(move |index| {
+                (
+                    side,
+                    index,
+                    if index < 2 { None } else { Some(if side == "1P" { 532 } else { 1396 }) },
+                )
+            })
+        }) {
             let option_pairs = [("プレーサイド", side), ("BPM変化予告 (BMZ)", TYPES[type_index])];
             let name = format!("{}-{side}-{}", skin.atlas(), (b'a' + type_index as u8) as char);
             let (left, right, bottom, top) =
@@ -249,6 +398,13 @@ fn adfx02_bpm_preview_gpu_draws_colored_digits_next_to_the_lane() {
                 ("before", 2_500, 153.0, 156.0),
                 ("increase", 500, 98.0, 150.0),
                 ("decrease", 500, 155.0, 85.0),
+                ("negative-to", 500, 155.0, -85.0),
+                ("negative-from", 500, -155.0, 85.0),
+                ("negative-both", 500, -155.0, -85.0),
+                ("negative-decrease", 500, -155.0, -205.0),
+                ("stop", 500, 155.0, 0.0),
+                ("resume", 500, 0.0, 155.0),
+                ("zero-negative", 500, 0.0, -85.0),
             ] {
                 renderer.prepare_scene(AppSceneSnapshot::Play(RenderSnapshot {
                     time: TimeUs(10_000_000),
@@ -275,6 +431,19 @@ fn adfx02_bpm_preview_gpu_draws_colored_digits_next_to_the_lane() {
                         image::ColorType::Rgba8,
                     )
                     .unwrap();
+                    let image = image::RgbaImage::from_raw(1920, 1080, pixels.clone()).unwrap();
+                    let x = (left - 32).max(0) as u32;
+                    let y = (1080 - top - 64).max(0) as u32;
+                    image::imageops::crop_imm(
+                        &image,
+                        x,
+                        y,
+                        (right + 32).min(1920) as u32 - x,
+                        (1080 - bottom + 64).min(1080) as u32 - y,
+                    )
+                    .to_image()
+                    .save(directory.join(format!("{name}-{case}-crop.png")))
+                    .unwrap();
                 }
                 frames.push(pixels);
             }
@@ -298,6 +467,20 @@ fn adfx02_bpm_preview_gpu_draws_colored_digits_next_to_the_lane() {
             let red = |p: &[u8]| p[0] > 200 && p[2] < 120 && p[0] as i32 - p[2] as i32 > 80;
             assert!(matching(&frames[0], blue).is_empty(), "{name}: hidden before lead");
             assert!(matching(&frames[0], red).is_empty(), "{name}: hidden before lead");
+            for (index, matches) in [
+                (3, red as fn(&[u8]) -> bool),
+                (4, blue),
+                (5, blue),
+                (6, red),
+                (7, red),
+                (8, blue),
+                (9, red),
+            ] {
+                assert!(
+                    matching(&frames[index], matches).len() > 30,
+                    "{name}: signed/zero color at {index}"
+                );
+            }
             for (frame, matches, color) in
                 [(&frames[1], blue as fn(&[u8]) -> bool, "blue"), (&frames[2], red, "red")]
             {
@@ -443,7 +626,11 @@ fn adfx02_bpm_preview_judge_detail_screenshots() {
                 timing_ms_suppressed: false,
             }],
             bpm_change_preview: BpmChangePreviewSnapshot {
-                next: Some(UpcomingBpmChange { remaining_ms: 500, from_bpm: 155.0, to_bpm: 202.0 }),
+                next: Some(UpcomingBpmChange {
+                    remaining_ms: 500,
+                    from_bpm: -155.0,
+                    to_bpm: -85.0,
+                }),
                 since_last_change_ms: None,
             },
             ..Default::default()
@@ -546,6 +733,42 @@ fn adfx02_bpm_preview_custom_offset_adjusts_position_size_and_alpha() {
             document.text.iter().find(|text| text.id == "txt_bpm_preview_arrow_dec").unwrap().size
         };
         assert_eq!(size(&adjusted), size(&base) * 2);
+        let bars = |document: &SkinDocument| {
+            document
+                .all_destinations(&document.enabled_options())
+                .into_iter()
+                .filter(|destination| destination.id == "-111" && destination.op.contains(&19064))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let base_bars = bars(&base);
+        let adjusted_bars = bars(&adjusted);
+        assert!(!base_bars.is_empty());
+        assert_eq!(base_bars.len(), adjusted_bars.len());
+        for (base_bar, adjusted_bar) in base_bars.iter().zip(&adjusted_bars) {
+            let (base_frame, adjusted_frame) = (frame(base_bar), frame(adjusted_bar));
+            let expected = if base_frame.h == Some(1) {
+                assert_eq!(base_frame.w, Some(7));
+                (Some(14), Some(2))
+            } else {
+                assert_eq!((base_frame.w, base_frame.h), (Some(11), Some(5)));
+                (Some(22), Some(10))
+            };
+            assert_eq!((adjusted_frame.w, adjusted_frame.h), expected);
+            assert_eq!(
+                adjusted_frame.x.unwrap() - arrow.x.unwrap(),
+                (base_frame.x.unwrap() - base_arrow.x.unwrap()) * 2
+            );
+            assert_eq!(
+                adjusted_frame.y.unwrap() - to.y.unwrap(),
+                (base_frame.y.unwrap() - base_to.y.unwrap()) * 2
+            );
+            assert_eq!(base_bar.offsets, adjusted_bar.offsets);
+            let SkinDstEntry::Frame(last) = adjusted_bar.dst.last().unwrap() else {
+                panic!("frame")
+            };
+            assert_eq!(last.a, Some(200));
+        }
     }
 }
 
