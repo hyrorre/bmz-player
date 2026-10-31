@@ -92,3 +92,18 @@ Windowsで以下が成功した。
 修正後のTYPE Aとレーン外配置の画像でも、負号が数字から離れていることを確認した。
 全体テストのログは`.local/performance/antique-preview-minus-bar-tests.log`。
 実譜面の手動プレイとmacOS / Linuxでの確認は未実施。
+
+### 同日追記: 既存画像と同じ負号の形に統一
+
+ユーザー指定に合わせ、矩形の横棒を既存画像と同じ11×3pxへ変更する。
+13×13pxの文字枠内で左右各1px・上下各5pxの余白を取り、倍拡大時は22×6pxになる。
+描画方法・青／赤・拡縮・既存設定への追従は、上記の矩形実装を引き継ぐ。
+テストの寸法・余白の期待値と、現在の設定仕様も更新する。
+GPU描画の出力先は`.local/performance/antique-preview-minus-atlas-shape/`。
+
+開始点は本体`a4101b2d`、mz-select `28301aa`。mz-selectの修正commitは`d67d7ef`。
+Windowsでfmt、bmz-playerのcheck・全targetのClippy・全テストを再実行し、すべて成功した。
+全テストは2,769件成功・47件ignored。実スキンの対象テスト8件と、明示実行したGPU描画42ケースも成功した。
+保存したTYPE A・レーン外配置の画像で形と配置を確認した。
+全体テストのログは`.local/performance/antique-preview-minus-atlas-shape-tests.log`。
+実譜面の手動プレイとmacOS / Linuxは未確認。

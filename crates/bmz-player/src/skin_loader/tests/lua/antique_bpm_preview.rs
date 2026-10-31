@@ -332,7 +332,7 @@ fn antique_effective_bpm_preview_draws_zero_and_signed_values_without_duplicate_
                 .collect::<Vec<_>>();
             assert_eq!(bars.len(), usize::from(from_bpm < 0.0) + usize::from(to_bpm < 0.0));
             for (bar, color) in bars {
-                assert!((bar.width * 1920.0 - 7.0).abs() < 0.01);
+                assert!((bar.width * 1920.0 - 11.0).abs() < 0.01);
                 assert!((bar.height * 1080.0 - 3.0).abs() < 0.01);
                 let next_digit = digit_rects
                     .iter()
@@ -340,7 +340,7 @@ fn antique_effective_bpm_preview_draws_zero_and_signed_values_without_duplicate_
                     .min_by(|a, b| a.x.total_cmp(&b.x))
                     .unwrap();
                 let gap = (next_digit.x - bar.x - bar.width) * 1920.0;
-                assert!((gap - 3.0).abs() < 0.01, "{type_label}: minus/digit gap {gap}");
+                assert!((gap - 1.0).abs() < 0.01, "{type_label}: minus/digit gap {gap}");
                 let center_delta =
                     (bar.y + bar.height / 2.0 - next_digit.y - next_digit.height / 2.0) * 1080.0;
                 assert!(center_delta.abs() < 0.01);
@@ -630,8 +630,8 @@ fn antique_bpm_preview_custom_offset_adjusts_position_size_and_alpha_when_availa
     assert_eq!(base_bars.len(), adjusted_bars.len());
     for (base_bar, adjusted_bar) in base_bars.iter().zip(&adjusted_bars) {
         let (base_frame, adjusted_frame) = (frame(base_bar), frame(adjusted_bar));
-        assert_eq!((base_frame.w, base_frame.h), (Some(7), Some(3)));
-        assert_eq!((adjusted_frame.w, adjusted_frame.h), (Some(14), Some(6)));
+        assert_eq!((base_frame.w, base_frame.h), (Some(11), Some(3)));
+        assert_eq!((adjusted_frame.w, adjusted_frame.h), (Some(22), Some(6)));
         assert_eq!(
             adjusted_frame.x.unwrap() - arrow.x.unwrap(),
             (base_frame.x.unwrap() - base_arrow.x.unwrap()) * 2
