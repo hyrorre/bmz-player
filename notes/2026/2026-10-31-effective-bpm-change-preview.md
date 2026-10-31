@@ -30,7 +30,8 @@ SCROLLの切替時刻は描画カーソルがイベントtickに達する時刻�
 
 ## 同梱antique
 
-既存の符号なし数字画像は絶対値を描くため、負号を同じ色のテキストとして別途描く。
+既存の符号なし数字画像は絶対値を描くため、初回実装では負号を同じ色のテキストとして別途描いた。
+2026-11-01に、下記の矩形表示へ変更した。
 符号の有無で表示を排他的に切り替え、レーン内中央・レーン外の左右配置に負号1桁分の幅を含める。
 既存の数字画像と色、予告時間、位置・サイズ・透明度の設定を利用する。
 
@@ -61,3 +62,33 @@ Windowsで以下が成功した。
 - 実際のantiqueの表示テスト: 8件成功。既定でignoredのGPUテストは別途明示実行し、1件（42描画ケース）成功。
 
 全体テストのログは`.local/performance/effective-bpm-preview/workspace-tests.log`に保存した。
+
+## 2026-11-01: antiqueの負号を短い矩形へ変更
+
+作業ブランチは`codex/antique-preview-minus-bar`。開始点は本体`8ee7c425`、mz-select `6151f30`。
+mz-selectの修正commitは`28301aa`。
+
+初回の負号は、13pxの文字枠に矢印用の32pxフォントと縁取りを使ったため、横に長く、数字に接していた。
+既存の差分スコア用負号も確認した。`number_common_s.png`の`x=143, y=39`にある13×13pxのセルで、
+実際の横棒は11×3px、左右各1px・上下各5pxの透明な余白を持つ。色は`#FFCCCC`。
+
+太さ3pxを参考に、予告の負号は7×3pxの矩形へ変更する。
+13pxの文字枠とレイアウトを保ち、横棒を中央に置いて左右各3px・上下各5pxの余白を確保する。
+描画は既存の白矩形ID `-111`を使い、数字と同じ青／赤を設定する。フォント・縁取り・追加画像は使わない。
+数字のw/h設定に比例して横棒も拡縮し、最小寸法は1px。位置・LIFT・判定位置・透明度・予告時間は既存設定に従う。
+
+既存の実スキン表示テストを更新し、負号の数・寸法・色・数字との3pxの間隔・垂直中央揃えを確認する。
+拡縮テストでは14×6pxへの倍拡大と、位置・透明度の設定を確認する。
+GPU描画の出力先は`.local/performance/antique-preview-minus-bar/`。
+
+Windowsで以下が成功した。
+
+- `cargo fmt --check`
+- `cargo check -p bmz-player --locked`
+- `cargo clippy -p bmz-player --all-targets --locked -- -D warnings`
+- `cargo test -p bmz-player --locked -- --quiet`: 2,769件成功、47件ignored。
+- 実際のantiqueを使う対象テスト8件、および明示実行したGPUテスト1件（42描画ケース）。
+
+修正後のTYPE Aとレーン外配置の画像でも、負号が数字から離れていることを確認した。
+全体テストのログは`.local/performance/antique-preview-minus-bar-tests.log`。
+実譜面の手動プレイとmacOS / Linuxでの確認は未実施。

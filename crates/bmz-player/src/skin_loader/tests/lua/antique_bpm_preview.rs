@@ -270,7 +270,10 @@ fn antique_effective_bpm_preview_draws_zero_and_signed_values_without_duplicate_
             .document
             .all_destinations(&decoded.document.enabled_options())
             .into_iter()
-            .filter(|destination| destination.id.contains("bpm_preview"))
+            .filter(|destination| {
+                destination.id.contains("bpm_preview")
+                    || (destination.id == "-111" && destination.op.contains(&19064))
+            })
             .cloned()
             .map(|destination| {
                 bmz_render::skin::DestinationListEntry::Single(Box::new(destination))
@@ -307,18 +310,54 @@ fn antique_effective_bpm_preview_draws_zero_and_signed_values_without_duplicate_
             }).count()
             };
             assert_eq!(text_count("»"), 1, "{type_label} {layout:?}: {from_bpm} -> {to_bpm}");
-            assert_eq!(text_count("−"), usize::from(from_bpm < 0.0) + usize::from(to_bpm < 0.0));
-            let image_count = commands
+            assert_eq!(text_count("−"), 0);
+            let digit_rects = commands
                 .iter()
-                .filter(|command| {
-                    matches!(command, DrawCommand::Image { rect, .. }
-                    if (rect.width * 1920.0 - 13.0).abs() < 0.5
-                        && (rect.height * 1080.0 - 13.0).abs() < 0.5)
+                .filter_map(|command| match command {
+                    DrawCommand::Image { rect, .. }
+                        if (rect.width * 1920.0 - 13.0).abs() < 0.5
+                            && (rect.height * 1080.0 - 13.0).abs() < 0.5 =>
+                    {
+                        Some(rect)
+                    }
+                    _ => None,
                 })
-                .count();
+                .collect::<Vec<_>>();
+            let bars = commands
+                .iter()
+                .filter_map(|command| match command {
+                    DrawCommand::Rect { rect, color } => Some((rect, color)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(bars.len(), usize::from(from_bpm < 0.0) + usize::from(to_bpm < 0.0));
+            for (bar, color) in bars {
+                assert!((bar.width * 1920.0 - 7.0).abs() < 0.01);
+                assert!((bar.height * 1080.0 - 3.0).abs() < 0.01);
+                let next_digit = digit_rects
+                    .iter()
+                    .filter(|digit| digit.x > bar.x)
+                    .min_by(|a, b| a.x.total_cmp(&b.x))
+                    .unwrap();
+                let gap = (next_digit.x - bar.x - bar.width) * 1920.0;
+                assert!((gap - 3.0).abs() < 0.01, "{type_label}: minus/digit gap {gap}");
+                let center_delta =
+                    (bar.y + bar.height / 2.0 - next_digit.y - next_digit.height / 2.0) * 1080.0;
+                assert!(center_delta.abs() < 0.01);
+                let expected = if to_bpm > from_bpm { (204, 204, 255) } else { (255, 204, 204) };
+                assert_eq!(
+                    (color.r, color.g, color.b, color.a),
+                    (
+                        expected.0 as f32 / 255.0,
+                        expected.1 as f32 / 255.0,
+                        expected.2 as f32 / 255.0,
+                        1.0
+                    )
+                );
+            }
             let digits = |value: f32| (value.abs() as u32).to_string().len();
             assert_eq!(
-                image_count,
+                digit_rects.len(),
                 digits(from_bpm) + digits(to_bpm),
                 "{type_label} {layout:?}: {from_bpm} -> {to_bpm}"
             );
@@ -576,6 +615,36 @@ fn antique_bpm_preview_custom_offset_adjusts_position_size_and_alpha_when_availa
         document.text.iter().find(|text| text.id == "txt_bpm_preview_arrow_dec").unwrap().size
     };
     assert_eq!(size(&adjusted), size(&base) * 2);
+    // Minus bars stay centered in their digit cells and scale with w/h.
+    let minus_destinations = |document: &SkinDocument| {
+        document
+            .all_destinations(&document.enabled_options())
+            .into_iter()
+            .filter(|destination| destination.id == "-111" && destination.op.contains(&19064))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let base_bars = minus_destinations(&base);
+    let adjusted_bars = minus_destinations(&adjusted);
+    assert!(!base_bars.is_empty());
+    assert_eq!(base_bars.len(), adjusted_bars.len());
+    for (base_bar, adjusted_bar) in base_bars.iter().zip(&adjusted_bars) {
+        let (base_frame, adjusted_frame) = (frame(base_bar), frame(adjusted_bar));
+        assert_eq!((base_frame.w, base_frame.h), (Some(7), Some(3)));
+        assert_eq!((adjusted_frame.w, adjusted_frame.h), (Some(14), Some(6)));
+        assert_eq!(
+            adjusted_frame.x.unwrap() - arrow.x.unwrap(),
+            (base_frame.x.unwrap() - base_arrow.x.unwrap()) * 2
+        );
+        assert_eq!(
+            adjusted_frame.y.unwrap() - to.y.unwrap(),
+            (base_frame.y.unwrap() - base_to.y.unwrap()) * 2
+        );
+        assert_eq!(adjusted_bar.offsets, base_bar.offsets);
+        assert_eq!(adjusted_bar.timer, base_bar.timer);
+        let SkinDstEntry::Frame(last) = adjusted_bar.dst.last().unwrap() else { panic!("frame") };
+        assert_eq!(last.a, Some(200));
+    }
     // The far number is laid out after the doubled arrow and gap.
     assert_eq!(to.x.unwrap() - arrow.x.unwrap(), (base_to.x.unwrap() - base_arrow.x.unwrap()) * 2);
     let offset_def =
