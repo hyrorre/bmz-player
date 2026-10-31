@@ -234,10 +234,7 @@ pub(super) fn folder_summary_for_song_folder(
     ln_policy_setting: LnPolicySetting,
     rule_mode: RuleMode,
 ) -> Result<SelectFolderSummary> {
-    let folder_key = folder_path.replace('\\', "/");
-    let mut paths = Vec::new();
-    paths.push(folder_key.clone());
-    paths.extend(library_db.list_descendant_folder_paths(&folder_key)?);
+    let paths = reachable_chart_folders(library_db, folder_path)?;
     let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
     folder_summary_for_charts(
         score_db,

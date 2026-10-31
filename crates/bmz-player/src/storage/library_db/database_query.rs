@@ -571,6 +571,18 @@ impl LibraryDatabase {
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Returns whether any chart has `folder_path` exactly as its folder.
+    pub fn folder_has_charts(&self, folder_path: &str) -> Result<bool> {
+        let folder_path = to_folder_key(folder_path);
+        self.conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM charts WHERE folder_path = ?1)",
+                params![folder_path],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
+
     /// Returns charts whose title / subtitle / artist / subartist / genre contain
     /// `query` as a case-insensitive substring. Equivalent to beatoraja
     /// `SQLiteSongDatabaseAccessor.getSongDatasByText`.

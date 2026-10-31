@@ -494,13 +494,14 @@ impl WinitApp {
             self.show_left_overlay_toast(text.text("toast-folder-autoplay-only-normal-folder"));
             return;
         }
-        let mut folder_paths = vec![path.clone()];
-        match self.boot.library_db.list_descendant_folder_paths(&path) {
-            Ok(descendants) => folder_paths.extend(descendants),
+        // 選曲画面でこのフォルダから辿れる譜面だけを流す。
+        let folder_paths = match reachable_chart_folders(&self.boot.library_db, &path) {
+            Ok(folder_paths) => folder_paths,
             Err(error) => {
-                tracing::warn!(folder = %path, %error, "failed to list autoplay folder descendants");
+                tracing::warn!(folder = %path, %error, "failed to list autoplay folder charts");
+                vec![path.clone()]
             }
-        }
+        };
         let folder_refs: Vec<&str> = folder_paths.iter().map(String::as_str).collect();
         let charts = match self.boot.library_db.list_charts_in_folders(&folder_refs) {
             Ok(charts) => charts,

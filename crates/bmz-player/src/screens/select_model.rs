@@ -45,7 +45,7 @@ pub use favorites::{
 pub use folder::{
     load_select_items_in_folder, load_select_items_in_folder_for_rule_mode,
     load_select_items_in_folder_for_rule_mode_with_filters,
-    load_select_items_in_folder_for_rule_mode_with_table_order,
+    load_select_items_in_folder_for_rule_mode_with_table_order, reachable_chart_folders,
 };
 pub(crate) use paths::chart_is_in_active_song_roots;
 pub use paths::{

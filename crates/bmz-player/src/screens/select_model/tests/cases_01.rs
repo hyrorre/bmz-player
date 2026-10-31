@@ -383,49 +383,59 @@ fn load_select_items_uses_profile_ln_policy_for_score_lookup() {
 }
 
 #[test]
-fn load_select_items_in_folder_flattens_leaf_subfolders() {
+fn load_select_items_in_folder_flattens_song_subfolders() {
     let (mut library_db, score_db) = open_in_memory_dbs();
     let chart_a = chart("A");
     let chart_b = chart("B");
 
-    // chart_b directly in /bms; chart_a is in a leaf sub-folder (no deeper nesting)
-    library_db.upsert_chart_import(&record_for_chart("/bms/genre/song_a.bms", &chart_a)).unwrap();
-    library_db.upsert_chart_import(&record_for_chart("/bms/song_b.bms", &chart_b)).unwrap();
+    library_db.upsert_chart_import(&record_for_chart("/bms/song_a/a.bms", &chart_a)).unwrap();
+    library_db.upsert_chart_import(&record_for_chart("/bms/song_b/b.bms", &chart_b)).unwrap();
 
     let items =
         load_select_items_in_folder(&library_db, &score_db, "/bms", LnPolicySetting::AutoLn)
             .unwrap();
 
-    // genre is a leaf folder so its chart appears directly, not as a Folder entry
-    assert_eq!(items.len(), 2);
-    assert!(items.iter().all(|i| matches!(i, SelectItem::Chart(_))));
-    let titles: Vec<_> = items
-        .iter()
-        .filter_map(|i| if let SelectItem::Chart(r) = i { Some(r.display_title()) } else { None })
-        .collect();
-    assert!(titles.contains(&"A"));
-    assert!(titles.contains(&"B"));
+    // Song folders are not folder entries: their charts appear directly, as in beatoraja.
+    let mut shape = listing_shape(&items);
+    shape.sort();
+    assert_eq!(shape, ["chart A", "chart B"]);
 }
 
 #[test]
-fn load_select_items_in_folder_shows_non_leaf_subfolder_as_folder() {
-    let (mut library_db, score_db) = open_in_memory_dbs();
-    let chart_a = chart("A");
-    let chart_b = chart("B");
+fn folder_with_its_own_charts_lists_only_them() {
+    // beatoraja does not scan below a folder that contains charts, so the sub-folder
+    // charts stay out of the list. The same-folder view uses this listing too.
+    let paths = ["/bms/song/a.bms", "/bms/song/sabun/b.bms", "/bms/song/extra.zip!/c.bms"];
+    assert_eq!(listing_shape(&folder_listing(&paths, "/bms/song")), ["chart 0"]);
+}
 
-    // genre/subgenre/song_a — genre has a subfolder so it is non-leaf
-    library_db
-        .upsert_chart_import(&record_for_chart("/bms/genre/subgenre/song_a.bms", &chart_a))
-        .unwrap();
-    library_db.upsert_chart_import(&record_for_chart("/bms/song_b.bms", &chart_b)).unwrap();
+#[test]
+fn song_folder_with_nested_charts_is_flattened_and_hides_the_nested_charts() {
+    // The reported case: a song folder with a sabun archive or sub-folder was shown as a
+    // folder entry. beatoraja lists its own charts in the parent and ignores the rest.
+    let paths = [
+        "/bms/event/song1/a.bms",
+        "/bms/event/song1/sabun.zip!/b.bms",
+        "/bms/event/song1/hidden/c.bms",
+        "/bms/event/song2/d.bms",
+    ];
+    let mut shape = listing_shape(&folder_listing(&paths, "/bms/event"));
+    shape.sort();
+    assert_eq!(shape, ["chart 0", "chart 3"]);
+}
 
-    let items =
-        load_select_items_in_folder(&library_db, &score_db, "/bms", LnPolicySetting::AutoLn)
-            .unwrap();
+#[test]
+fn package_folders_show_only_when_no_song_folder_is_beside_them() {
+    let packages = ["/bms/pack_a/song/a.bms", "/bms/pack_b/inner/song/b.bms"];
+    assert_eq!(
+        listing_shape(&folder_listing(&packages, "/bms")),
+        ["folder pack_a /bms/pack_a", "folder pack_b /bms/pack_b"]
+    );
 
-    assert_eq!(items.len(), 2);
-    assert!(matches!(&items[0], SelectItem::Folder { name, .. } if name == "genre"));
-    assert!(matches!(&items[1], SelectItem::Chart(r) if r.display_title() == "B"));
+    // One song folder beside them turns the level into a chart list, and beatoraja
+    // has no row for the packages there, such as a doubly nested `song/song/` folder.
+    let mixed = [packages[0], packages[1], "/bms/song_c/c.bms"];
+    assert_eq!(listing_shape(&folder_listing(&mixed, "/bms")), ["chart 2"]);
 }
 
 fn folder_listing(paths: &[&str], folder: &str) -> Vec<SelectItem> {
@@ -470,19 +480,29 @@ fn archive_with_one_inner_folder_lists_like_the_extracted_folder() {
 }
 
 #[test]
-fn archive_level_stays_when_it_has_several_folders_or_its_own_charts() {
+fn archive_level_stays_when_it_has_several_folders() {
     let several = folder_listing(&["/bms/set.7z!/x/a.bms", "/bms/set.7z!/y/b.bms"], "/bms");
     // The archive level shows like the extracted folder, without the extension and `!`.
     assert_eq!(listing_shape(&several), ["folder set /bms/set.7z!"]);
 
+    // An archive with its own charts is a song folder, like an extracted folder.
     let own_charts = folder_listing(&["/bms/set.zip!/a.bms", "/bms/set.zip!/x/b.bms"], "/bms");
-    assert_eq!(listing_shape(&own_charts), ["folder set /bms/set.zip!"]);
+    assert_eq!(listing_shape(&own_charts), ["chart 0"]);
     let dotted = folder_listing(&["/bms/v1.2.RAR!/x/a.bms", "/bms/v1.2.RAR!/y/b.bms"], "/bms");
     assert_eq!(listing_shape(&dotted), ["folder v1.2 /bms/v1.2.RAR!"]);
 
     // An ordinary folder ending with `!` is not an archive.
     let folder = folder_listing(&["/bms/Wow!/song/a.bms"], "/bms");
     assert_eq!(listing_shape(&folder), ["folder Wow! /bms/Wow!"]);
+}
+
+#[test]
+fn archive_contents_have_no_folder_entries() {
+    // beatoraja registers an archive as one folder, so songs nested two levels below
+    // the archive root have no folder row to open.
+    let paths = ["/bms/set.7z!/group_a/x/a.bms", "/bms/set.7z!/group_b/y/b.bms"];
+    assert_eq!(listing_shape(&folder_listing(&paths, "/bms")), ["folder set /bms/set.7z!"]);
+    assert!(folder_listing(&paths, "/bms/set.7z!").is_empty());
 }
 
 #[test]
@@ -523,17 +543,31 @@ fn select_folder_summary_counts_recursive_folder_lamps() {
     let normal = chart("Normal");
     let hard = chart("Hard");
     let unplayed = chart("Unplayed");
+    let nested = chart("Nested");
     let outside = chart("Outside");
-    library_db.upsert_chart_import(&record_for_chart("/songs/folder/normal.bms", &normal)).unwrap();
-    library_db.upsert_chart_import(&record_for_chart("/songs/folder/sub/hard.bms", &hard)).unwrap();
+    // `/songs/folder` holds two packages; the summary follows them down to their songs.
     library_db
-        .upsert_chart_import(&record_for_chart("/songs/folder/sub/unplayed.bms", &unplayed))
+        .upsert_chart_import(&record_for_chart("/songs/folder/pack_a/song/normal.bms", &normal))
+        .unwrap();
+    library_db
+        .upsert_chart_import(&record_for_chart("/songs/folder/pack_b/song/hard.bms", &hard))
+        .unwrap();
+    library_db
+        .upsert_chart_import(&record_for_chart("/songs/folder/pack_b/song/unplayed.bms", &unplayed))
+        .unwrap();
+    // Charts below a song folder cannot be opened from the folder, so they are not counted.
+    library_db
+        .upsert_chart_import(&record_for_chart(
+            "/songs/folder/pack_b/song/sabun/nested.bms",
+            &nested,
+        ))
         .unwrap();
     library_db.upsert_chart_import(&record_for_chart("/songs/outside.bms", &outside)).unwrap();
     score_db.insert_score(&score_for_chart(normal.identity.file_sha256)).unwrap();
     let mut hard_score = score_for_chart(hard.identity.file_sha256);
     hard_score.clear_type = ClearType::Hard;
     score_db.insert_score(&hard_score).unwrap();
+    score_db.insert_score(&score_for_chart(nested.identity.file_sha256)).unwrap();
     score_db.insert_score(&score_for_chart(outside.identity.file_sha256)).unwrap();
 
     let summary = select_folder_summary(

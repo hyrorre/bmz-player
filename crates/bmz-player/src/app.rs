@@ -135,9 +135,9 @@ use crate::screens::select_model::{
     load_select_items_in_table_level_for_rule_mode, new_course_item_for_locale,
     parse_course_contents_path, parse_favorite_song_detail_path, parse_same_folder_path,
     parse_search_query, parse_table_path, random_mix_item, random_select_items_from_items,
-    root_folder_items, same_folder_path, search_history_folder_items_for_locale,
-    song_scan_path_from_context, table_folder_items_for_active_sources, table_level_folder_items,
-    table_source_url_from_context,
+    reachable_chart_folders, root_folder_items, same_folder_path,
+    search_history_folder_items_for_locale, song_scan_path_from_context,
+    table_folder_items_for_active_sources, table_level_folder_items, table_source_url_from_context,
 };
 use crate::screens::settings_edit::{
     AppSettingsEditSession, SelectSettingsEditSession, SettingsBindings, SettingsEditSession,
