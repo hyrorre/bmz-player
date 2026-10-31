@@ -301,7 +301,7 @@ fn dx_mode_uses_iidx_window_without_rank_scaling() {
     assert_eq!(window.great_us, 33_333);
     assert_eq!(window.good_us, 116_666);
     assert_eq!(window.bad_fast_us, 200_000);
-    assert_eq!(window.empty_poor_fast_us, 1_000_000);
+    assert_eq!(window.empty_poor_fast_us, 500_000);
     assert_eq!(window.empty_poor_slow_us, 200_000);
 }
 

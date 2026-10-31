@@ -30,7 +30,7 @@ pub fn gauge_definitions_for_rule_mode_and_keymode(
             if key_mode == KeyMode::K9 {
                 dx_pop_gauge_definition_table().to_vec()
             } else {
-                dx_gauge_definition_table().to_vec()
+                dx_iidx_gauge_definitions()
             }
         }
     }
@@ -52,6 +52,27 @@ pub(super) fn lr2oraja_gauge_definitions() -> Vec<GaugeDefinition> {
                 definition.death = 2.0;
             }
             _ => {}
+        }
+    }
+    definitions
+}
+
+/// DX MODE（9K以外）の IIDX 用ゲージ定義。
+/// LR2oraja Endless Dream (rian) 1.5.0 で、HARD / EXHARD / HAZARD と段位系は
+/// 残量 2% 未満で 0%（閉店）になるよう death border が 2 に変更された。
+pub(super) fn dx_iidx_gauge_definitions() -> Vec<GaugeDefinition> {
+    let mut definitions = dx_gauge_definition_table().to_vec();
+    for definition in &mut definitions {
+        if matches!(
+            definition.gauge_type,
+            GaugeType::Hard
+                | GaugeType::ExHard
+                | GaugeType::Hazard
+                | GaugeType::Class
+                | GaugeType::ExClass
+                | GaugeType::ExHardClass
+        ) {
+            definition.death = 2.0;
         }
     }
     definitions

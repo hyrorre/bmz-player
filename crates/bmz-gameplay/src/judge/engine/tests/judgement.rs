@@ -330,6 +330,31 @@ fn dx_mode_adds_lr2oraja_multi_bad() {
 }
 
 #[test]
+fn dx_mode_fast_empty_poor_window_ends_at_500ms() {
+    for lane in [Lane::Key1, Lane::Scratch] {
+        let chart = chart_with_lane_tap(lane, TimeUs(1_000_000));
+
+        let mut inside = JudgeEngine::new_with_window_set(
+            crate::judge::window::dx_judge_windows(),
+            RuleMode::Dx,
+        );
+        let outcome = inside.process_input(&chart, press_lane_at(lane, TimeUs(500_000)));
+        assert_eq!(outcome.events.len(), 1, "{lane:?}");
+        assert_eq!(outcome.events[0].judge, Judge::EmptyPoor);
+        assert_eq!(outcome.events[0].side, TimingSide::Fast);
+        assert!(!outcome.consumed_input);
+
+        let mut outside = JudgeEngine::new_with_window_set(
+            crate::judge::window::dx_judge_windows(),
+            RuleMode::Dx,
+        );
+        let outcome = outside.process_input(&chart, press_lane_at(lane, TimeUs(499_999)));
+        assert!(outcome.events.is_empty(), "{lane:?}");
+        assert!(!outcome.consumed_input);
+    }
+}
+
+#[test]
 fn dx_9key_multi_bad_does_not_consume_the_bad_note() {
     let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_050_000));
     let mut engine = JudgeEngine::new_with_window_set_algorithm_and_keymode(

@@ -540,6 +540,9 @@ pub const fn lr2oraja_judge_windows() -> JudgeWindows {
 }
 
 /// LR2oraja `JudgeProperty.IIDX` NOTE window used by DX mode.
+///
+/// LR2oraja Endless Dream (rian) 1.5.0 で MISS の EARLY 側上限を 1000ms から
+/// 500ms に短縮したため、空POORの FAST 側もそれに合わせる。
 pub const fn dx_note_judge_window() -> JudgeWindow {
     JudgeWindow {
         pgreat_us: 16_666,
@@ -547,7 +550,7 @@ pub const fn dx_note_judge_window() -> JudgeWindow {
         good_us: 116_666,
         bad_fast_us: 200_000,
         bad_slow_us: 200_000,
-        empty_poor_fast_us: 1_000_000,
+        empty_poor_fast_us: 500_000,
         empty_poor_slow_us: 200_000,
         mine_hit_us: 16_000,
     }
