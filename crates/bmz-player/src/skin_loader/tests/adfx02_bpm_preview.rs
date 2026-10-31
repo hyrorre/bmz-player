@@ -53,6 +53,16 @@ fn load(skin: Skin, options: &[(&str, &str)]) -> SkinDocument {
     .document
 }
 
+fn minus_reference(skin: Skin) -> image::RgbaImage {
+    let path = skin.path();
+    let path = path.parent().unwrap().join(match skin {
+        Skin::Ecfn => "frame/SP/Default/main.png",
+        Skin::Starseeker => "system.png",
+    });
+    let atlas = image::open(path).unwrap().to_rgba8();
+    image::imageops::crop_imm(&atlas, 383, 3230, 16, 16).to_image()
+}
+
 fn preview_destinations(document: &SkinDocument) -> Vec<SkinDestinationDef> {
     document
         .all_destinations(&document.enabled_options())
@@ -109,6 +119,7 @@ fn adfx02_bpm_preview_defaults_off_and_adds_bmz_options() {
 fn adfx02_bpm_preview_signed_values_have_only_negative_signs_and_correct_digit_spacing() {
     use bmz_render::snapshot::{BpmChangePreviewSnapshot, RenderSnapshot, UpcomingBpmChange};
     for skin in [Skin::Ecfn, Skin::Starseeker] {
+        let reference = minus_reference(skin);
         for side in ["1P", "2P"] {
             for type_label in TYPES {
                 let options = BTreeMap::from([
@@ -210,35 +221,51 @@ fn adfx02_bpm_preview_signed_values_have_only_negative_signs_and_correct_digit_s
                         }
                     }
                     let negative_count = usize::from(from_bpm < 0.0) + usize::from(to_bpm < 0.0);
-                    assert_eq!(bars.len(), negative_count * 2, "{label}");
-                    let (fill, rim) = if to_bpm > from_bpm {
-                        ((73, 156, 229), (4, 8, 12))
-                    } else {
-                        ((248, 79, 79), (30, 12, 12))
-                    };
+                    let mut cells = BTreeMap::<i32, [[u8; 4]; 256]>::new();
                     for (bar, color) in bars {
-                        let foreground = (bar.height * 1080.0 - 1.0).abs() < 0.01;
-                        let (width, height, rgb) =
-                            if foreground { (7.0, 1.0, fill) } else { (11.0, 5.0, rim) };
-                        assert!((bar.width * 1920.0 - width).abs() < 0.01, "{label}");
-                        assert!((bar.height * 1080.0 - height).abs() < 0.01, "{label}");
-                        assert_eq!(
-                            (color.r, color.g, color.b, color.a),
-                            (rgb.0 as f32 / 255.0, rgb.1 as f32 / 255.0, rgb.2 as f32 / 255.0, 1.0),
-                            "{label}"
-                        );
-                        if foreground {
-                            let next_digit = digits
-                                .iter()
-                                .filter(|digit| digit.x > bar.x)
-                                .min_by(|a, b| a.x.total_cmp(&b.x))
-                                .unwrap();
-                            let gap = (next_digit.x - bar.x - bar.width) * 1920.0;
-                            assert!((gap - 4.0).abs() < 0.01, "{label}: minus/digit gap {gap}");
-                            assert!(
-                                ((bar.y - next_digit.y) * 1080.0 - 8.0).abs() < 0.01,
-                                "{label}"
-                            );
+                        assert!((bar.height * 1080.0 - 1.0).abs() < 0.01, "{label}");
+                        let next_digit = digits
+                            .iter()
+                            .filter(|digit| digit.x > bar.x)
+                            .min_by(|a, b| a.x.total_cmp(&b.x))
+                            .unwrap();
+                        let cell_x = (next_digit.x * 1920.0).round() as i32 - 16;
+                        let x = (bar.x * 1920.0).round() as i32 - cell_x;
+                        let y = ((bar.y - next_digit.y) * 1080.0).round() as usize;
+                        let width = (bar.width * 1920.0).round() as usize;
+                        assert!(x >= 0 && x as usize + width <= 16 && y < 16, "{label}");
+                        let rgba =
+                            [color.r, color.g, color.b, color.a].map(|v| (v * 255.0).round() as u8);
+                        assert_ne!(rgba[3], 0);
+                        let cell = cells.entry(cell_x).or_insert([[0; 4]; 256]);
+                        for column in x as usize..x as usize + width {
+                            assert_eq!(cell[y * 16 + column][3], 0, "{label}: overlapping runs");
+                            cell[y * 16 + column] = rgba;
+                        }
+                    }
+                    assert_eq!(cells.len(), negative_count, "{label}");
+                    for cell in cells.values() {
+                        let mut colors = std::collections::BTreeSet::new();
+                        for (index, actual) in cell.iter().enumerate() {
+                            let mut expected =
+                                reference.get_pixel((index % 16) as u32, (index / 16) as u32).0;
+                            if expected[3] == 0 {
+                                expected = [0; 4];
+                            }
+                            assert_eq!(actual[3], expected[3], "{label}: alpha at {index}");
+                            if to_bpm < from_bpm {
+                                assert_eq!(*actual, expected, "{label}: original red at {index}");
+                            } else if expected[3] != 0 {
+                                assert!(actual[0] <= 73 && actual[1] <= 156 && actual[2] <= 229);
+                                assert!(actual[0] <= actual[1] && actual[1] <= actual[2]);
+                                if expected == [248, 79, 79, 255] {
+                                    assert_eq!(*actual, [73, 156, 229, 255]);
+                                }
+                                colors.insert([actual[0], actual[1], actual[2]]);
+                            }
+                        }
+                        if to_bpm > from_bpm {
+                            assert!(colors.len() > 2, "{label}: intermediate shades");
                         }
                     }
                 }
@@ -361,6 +388,7 @@ fn adfx02_bpm_preview_gpu_draws_colored_digits_next_to_the_lane() {
     renderer.attach_offscreen(SurfaceSize { width: 1920, height: 1080 }).unwrap();
     let preview_dir = std::env::var_os("BMZ_BPM_PREVIEW_DIR").map(PathBuf::from);
     for skin in [Skin::Ecfn, Skin::Starseeker] {
+        let reference = minus_reference(skin);
         for (side, type_index, lane_edge) in ["1P", "2P"].into_iter().flat_map(|side| {
             (0..4).map(move |index| {
                 (
@@ -393,7 +421,7 @@ fn adfx02_bpm_preview_gpu_draws_colored_digits_next_to_the_lane() {
             })
             .unwrap();
             install_decoded_skin(&mut renderer, decoded, SkinManifest::default()).unwrap();
-            let mut frames = Vec::new();
+            let mut frames: Vec<Vec<u8>> = Vec::new();
             for (case, remaining_ms, from_bpm, to_bpm) in [
                 ("before", 2_500, 153.0, 156.0),
                 ("increase", 500, 98.0, 150.0),
@@ -421,6 +449,82 @@ fn adfx02_bpm_preview_gpu_draws_colored_digits_next_to_the_lane() {
                 }));
                 renderer.render_last_plan().unwrap();
                 let pixels = renderer.read_offscreen_rgba().unwrap();
+                if case == "negative-to" {
+                    let marker_rgba = reference.get_pixel(3, 5).0;
+                    let matches_marker =
+                        |rect: &bmz_render::plan::Rect, color: &bmz_render::plan::Color| {
+                            (rect.width * 1920.0 - 1.0).abs() < 0.01
+                                && (rect.height * 1080.0 - 1.0).abs() < 0.01
+                                && rect.x * 1920.0 >= (left - 16) as f32
+                                && rect.x * 1920.0 < (right + 16) as f32
+                                && [color.r, color.g, color.b, color.a]
+                                    .map(|v| (v * 255.0).round() as u8)
+                                    == marker_rgba
+                        };
+                    let marker = renderer
+                        .last_plan()
+                        .unwrap()
+                        .commands
+                        .iter()
+                        .find_map(|command| match command {
+                            DrawCommand::Rect { rect, color } if matches_marker(rect, color) => {
+                                Some(*rect)
+                            }
+                            DrawCommand::RectBatch { rects, .. } => rects
+                                .iter()
+                                .find(|item| matches_marker(&item.rect, &item.color))
+                                .map(|item| item.rect),
+                            _ => None,
+                        })
+                        .expect("red minus material marker");
+                    let (cell_x, cell_y) = (
+                        (marker.x * 1920.0).round() as usize - 3,
+                        (marker.y * 1080.0).round() as usize - 5,
+                    );
+                    let mut expected = image::RgbaImage::new(16, 16);
+                    let mut actual = image::RgbaImage::new(16, 16);
+                    let mut max_delta = 0u8;
+                    for y in 0..16usize {
+                        for x in 0..16usize {
+                            let index = ((cell_y + y) * 1920 + cell_x + x) * 4;
+                            let source = reference.get_pixel(x as u32, y as u32).0;
+                            let a = u32::from(source[3]);
+                            let mut rgba = [0u8; 4];
+                            for channel in 0..4 {
+                                let foreground =
+                                    if channel == 3 { 255 } else { u32::from(source[channel]) };
+                                rgba[channel] = ((foreground * a
+                                    + u32::from(frames[0][index + channel]) * (255 - a)
+                                    + 127)
+                                    / 255) as u8;
+                                max_delta =
+                                    max_delta.max(rgba[channel].abs_diff(pixels[index + channel]));
+                            }
+                            expected.put_pixel(x as u32, y as u32, image::Rgba(rgba));
+                            actual.put_pixel(
+                                x as u32,
+                                y as u32,
+                                image::Rgba(pixels[index..index + 4].try_into().unwrap()),
+                            );
+                        }
+                    }
+                    assert!(max_delta <= 1, "{name}: original material GPU delta {max_delta}");
+                    println!("{name}: original material GPU max channel delta = {max_delta}");
+                    if let Some(directory) = &preview_dir {
+                        let mut pair =
+                            image::RgbaImage::from_pixel(36, 16, image::Rgba([20, 20, 20, 255]));
+                        image::imageops::replace(&mut pair, &expected, 0, 0);
+                        image::imageops::replace(&mut pair, &actual, 20, 0);
+                        image::imageops::resize(
+                            &pair,
+                            288,
+                            128,
+                            image::imageops::FilterType::Nearest,
+                        )
+                        .save(directory.join(format!("{name}-material-8x.png")))
+                        .unwrap();
+                    }
+                }
                 if let Some(directory) = &preview_dir {
                     std::fs::create_dir_all(directory).unwrap();
                     image::save_buffer(
@@ -747,14 +851,11 @@ fn adfx02_bpm_preview_custom_offset_adjusts_position_size_and_alpha() {
         assert_eq!(base_bars.len(), adjusted_bars.len());
         for (base_bar, adjusted_bar) in base_bars.iter().zip(&adjusted_bars) {
             let (base_frame, adjusted_frame) = (frame(base_bar), frame(adjusted_bar));
-            let expected = if base_frame.h == Some(1) {
-                assert_eq!(base_frame.w, Some(7));
-                (Some(14), Some(2))
-            } else {
-                assert_eq!((base_frame.w, base_frame.h), (Some(11), Some(5)));
-                (Some(22), Some(10))
-            };
-            assert_eq!((adjusted_frame.w, adjusted_frame.h), expected);
+            assert_eq!(base_frame.h, Some(1));
+            assert_eq!(
+                (adjusted_frame.w, adjusted_frame.h),
+                (base_frame.w.map(|w| w * 2), Some(2))
+            );
             assert_eq!(
                 adjusted_frame.x.unwrap() - arrow.x.unwrap(),
                 (base_frame.x.unwrap() - base_arrow.x.unwrap()) * 2
@@ -764,10 +865,13 @@ fn adfx02_bpm_preview_custom_offset_adjusts_position_size_and_alpha() {
                 (base_frame.y.unwrap() - base_to.y.unwrap()) * 2
             );
             assert_eq!(base_bar.offsets, adjusted_bar.offsets);
+            let SkinDstEntry::Frame(base_last) = base_bar.dst.last().unwrap() else {
+                panic!("frame")
+            };
             let SkinDstEntry::Frame(last) = adjusted_bar.dst.last().unwrap() else {
                 panic!("frame")
             };
-            assert_eq!(last.a, Some(200));
+            assert_eq!(last.a, base_last.a.map(|a| (a * 200 + 127) / 255));
         }
     }
 }
