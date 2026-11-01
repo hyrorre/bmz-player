@@ -129,6 +129,16 @@ impl WinitApp {
         } else {
             SkinCatalogState::scan(boot.app_paths.clone())?
         };
+        // Frontend skins read the profile statistics while loading.
+        let player_stats = if viewer_mode {
+            PlayerStatsSnapshot::default()
+        } else {
+            player_stats_snapshot(
+                &boot.score_db,
+                &boot.library_db,
+                boot.profile_config.statistics.day_start_hour,
+            )
+        };
         let skins_started_at = Instant::now();
         let mut skin_pipeline = SkinPipelineRuntime::new();
         let (
@@ -142,8 +152,11 @@ impl WinitApp {
             &boot.app_paths,
             &skin_pipeline,
             0,
-            &boot.profile_config.display_name,
-            result_ir_skin_name(&boot.profile_config.ir),
+            FrontendLuaLoadInputs {
+                player_name: &boot.profile_config.display_name,
+                ir_name: result_ir_skin_name(&boot.profile_config.ir),
+                player_stats: &player_stats,
+            },
             &boot.profile_config.skin,
             !viewer_mode,
             options.lua_skin_runtime_mode,
@@ -199,15 +212,6 @@ impl WinitApp {
             boot.app_paths.cache_dir.clone(),
         );
         let audio_output_open_attempted = audio_runtime.is_some();
-        let player_stats = if viewer_mode {
-            PlayerStatsSnapshot::default()
-        } else {
-            player_stats_snapshot(
-                &boot.score_db,
-                &boot.library_db,
-                boot.profile_config.statistics.day_start_hour,
-            )
-        };
         let initial_result_skin_signature = (!viewer_mode).then(|| {
             result_skin_signature_for_config(
                 &boot.profile_config.skin,

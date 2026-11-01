@@ -755,6 +755,31 @@ pub(super) fn apply_decide_chart_lua_load_state(
     ]);
 }
 
+/// Profile-wide player statistics refs that frontend skins read while loading.
+const PLAYER_STATS_LUA_LOAD_REFS: [i32; 12] = [17, 18, 19, 30, 31, 32, 33, 34, 35, 36, 37, 333];
+
+/// beatoraja keeps the player data loaded for every scene, so skins such as
+/// mz-select's player rank panel compute exp and rank from the play time,
+/// play/clear counts and judge totals at load time. The values use the
+/// render-time rules of the same refs.
+pub(super) fn apply_player_stats_lua_load_state(
+    runtime_state: &mut bmz_skin::LuaLoadRuntimeState,
+    player_stats: &PlayerStatsSnapshot,
+) {
+    let state = bmz_render::skin::SkinDrawState {
+        player_stats: player_stats.clone(),
+        ..Default::default()
+    };
+    for ref_id in PLAYER_STATS_LUA_LOAD_REFS {
+        runtime_state.number_values.insert(
+            ref_id,
+            bmz_render::skin::lua_main_state_number(ref_id, &state)
+                .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+        );
+    }
+}
+
+#[cfg(test)]
 pub(super) fn lua_runtime_state_for_frontend(
     player_name: &str,
     ir_name: Option<&str>,

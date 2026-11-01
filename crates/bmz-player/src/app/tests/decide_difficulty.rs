@@ -82,8 +82,11 @@ fn decide_scene_entry_reload_passes_the_selected_chart_to_lua_skins() {
             &paths,
             pipeline,
             SkinReloadRequest { decide: true, ..Default::default() },
-            "Player",
-            None,
+            FrontendLuaLoadInputs {
+                player_name: "Player",
+                ir_name: None,
+                player_stats: &PlayerStatsSnapshot::default(),
+            },
             &skin,
             bmz_skin::LuaSkinRuntimeMode::Auto,
             false,

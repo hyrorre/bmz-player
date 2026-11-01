@@ -731,6 +731,19 @@ mz-selectのようにロード時に難易度の色やラベルを決めるLua s
 これに依存します。これらの値はdecode cacheの依存関係に含めます。
 起動時やskin設定パネルからの読込は選択曲を持たないため、これらの値を渡しません。
 
+## Select / Decideのロード時のプレイヤー統計
+
+Select / Decideのskin読込は、profile全体の累計プレイ時間（number 17..19）、プレイ数・クリア数・
+失敗数（30..32）、判定累計（33..37）、累計ノーツ（333）をロード時の状態として渡します。
+値は描画時の同じrefと同じ変換です。beatorajaは全sceneでプレイヤー情報を保持しているため、
+mz-selectのプレイヤーランク表示のように、ロード時に経験値やランクを計算するLua skinが
+これに依存します。これらの値はdecode cacheの依存関係に含め、プレイ後にSelectへ戻ると
+変化した値で再decodeします。profile切替では切替先profileの値を使います。
+mz-selectの「今日の成果」とプレイ曲ログは、スキンが`io`で書いたファイルを次回ロード時に
+読む仕組みです。`io`の書き込みは永続化しないため、これらは更新されません。
+
+現在日付（number 21..23）はロード時もローカル時刻です。
+
 ## Lua Runtime Compatibility Mode
 
 `main_state.screen_width()` / `main_state.screen_height()`は現在の描画先の物理pixel数を

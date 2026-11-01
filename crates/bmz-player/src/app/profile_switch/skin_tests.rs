@@ -126,6 +126,7 @@ return skin
             &mut pipeline,
             bmz_skin::LuaSkinRuntimeMode::Compat,
             false,
+            &PlayerStatsSnapshot::default(),
         )
         .unwrap();
         let result =
@@ -155,15 +156,29 @@ fn profile_select_skin_preparation_handles_default_missing_and_unsupported_paths
     let mut pipeline = SkinPipelineRuntime::new();
     let mut profile = ProfileConfig::new_default("test", "Test", 0);
     profile.skin.select.clear();
-    queue_profile_select_skin(&data.paths, &profile, &mut pipeline, Default::default(), false)
-        .unwrap();
+    queue_profile_select_skin(
+        &data.paths,
+        &profile,
+        &mut pipeline,
+        Default::default(),
+        false,
+        &PlayerStatsSnapshot::default(),
+    )
+    .unwrap();
     let result =
         pipeline.decode_rx.as_ref().unwrap().recv_timeout(Duration::from_secs(10)).unwrap();
     assert_eq!(result.path, default_path);
     assert_eq!(result.result.unwrap().document.name, "default");
     profile.skin.select = "resource:skins/missing.json".into();
-    queue_profile_select_skin(&data.paths, &profile, &mut pipeline, Default::default(), false)
-        .unwrap();
+    queue_profile_select_skin(
+        &data.paths,
+        &profile,
+        &mut pipeline,
+        Default::default(),
+        false,
+        &PlayerStatsSnapshot::default(),
+    )
+    .unwrap();
     assert!(
         pipeline
             .decode_rx
@@ -176,8 +191,15 @@ fn profile_select_skin_preparation_handles_default_missing_and_unsupported_paths
     );
     profile.skin.select = "resource:skins/unsupported.txt".into();
     assert!(
-        queue_profile_select_skin(&data.paths, &profile, &mut pipeline, Default::default(), false)
-            .is_err()
+        queue_profile_select_skin(
+            &data.paths,
+            &profile,
+            &mut pipeline,
+            Default::default(),
+            false,
+            &PlayerStatsSnapshot::default()
+        )
+        .is_err()
     );
 }
 
@@ -234,6 +256,7 @@ return skin
                 &mut pipeline,
                 Default::default(),
                 enabled,
+                &PlayerStatsSnapshot::default(),
             )
             .unwrap();
             let decoded = pipeline
@@ -261,6 +284,7 @@ return skin
                 &mut pipeline,
                 Default::default(),
                 enabled,
+                &PlayerStatsSnapshot::default(),
             )
             .unwrap();
             let decoded = pipeline

@@ -5,6 +5,9 @@ use crate::ui::ProfileManagerAction;
 pub(super) struct PreparedProfileSwitch {
     profile: PreparedProfile,
     folder_summaries: SelectFolderSummaryRuntime,
+    /// Totals for the target profile's Select skin load; the full snapshot is
+    /// refreshed when the profile is installed.
+    player_stats: PlayerStatsSnapshot,
 }
 
 enum ProfileChangeStage {
@@ -59,6 +62,7 @@ fn queue_profile_select_skin(
     pipeline: &mut SkinPipelineRuntime,
     runtime_mode: bmz_skin::LuaSkinRuntimeMode,
     experimental_detail_options: bool,
+    player_stats: &PlayerStatsSnapshot,
 ) -> Result<u64> {
     let skin = &profile.skin;
     let trimmed = skin.select.trim();
@@ -83,10 +87,12 @@ fn queue_profile_select_skin(
             if trimmed.is_empty() { BTreeMap::new() } else { skin.select_files.clone() },
             lua_runtime_state_with_mode(
                 lua_runtime_state_with_skin_offsets(
-                    lua_runtime_state_for_frontend(
-                        &profile.display_name,
-                        result_ir_skin_name(&profile.ir),
-                    ),
+                    FrontendLuaLoadInputs {
+                        player_name: &profile.display_name,
+                        ir_name: result_ir_skin_name(&profile.ir),
+                        player_stats,
+                    }
+                    .lua_runtime_state(None),
                     &skin.select_offsets,
                 ),
                 runtime_mode,
@@ -146,7 +152,14 @@ fn prepare_profile_action(
         profile.config.play.ln_mode_policy,
         profile.config.play.rule_mode,
     )?;
-    Ok(Some(PreparedProfileSwitch { profile, folder_summaries }))
+    let player_stats = match profile.score_db.player_stats() {
+        Ok(stats) => player_stats_snapshot_from_stats(&stats),
+        Err(error) => {
+            tracing::warn!(%error, "failed to load player statistics for profile switch");
+            PlayerStatsSnapshot::default()
+        }
+    };
+    Ok(Some(PreparedProfileSwitch { profile, folder_summaries, player_stats }))
 }
 
 impl WinitApp {
@@ -232,7 +245,10 @@ impl WinitApp {
         if let ProfileChangeStage::Preparing(rx) = &pending.stage {
             match rx.try_recv() {
                 Ok(Ok(Some(prepared))) => {
-                    let generation = self.queue_profile_select_skin(&prepared.profile.config);
+                    let generation = self.queue_profile_select_skin(
+                        &prepared.profile.config,
+                        &prepared.player_stats,
+                    );
                     match generation {
                         Ok(generation) => {
                             pending.stage = ProfileChangeStage::WaitingForSkin {
@@ -325,7 +341,11 @@ impl WinitApp {
         }
     }
 
-    fn queue_profile_select_skin(&mut self, profile: &ProfileConfig) -> Result<u64> {
+    fn queue_profile_select_skin(
+        &mut self,
+        profile: &ProfileConfig,
+        player_stats: &PlayerStatsSnapshot,
+    ) -> Result<u64> {
         if self.skin.default_skin_manifest.is_none() {
             bail!("default skin manifest is unavailable");
         }
@@ -339,6 +359,7 @@ impl WinitApp {
             &mut self.skin.skin_pipeline,
             self.skin.lua_runtime_mode,
             self.boot.app_config.select.experimental_detail_options,
+            player_stats,
         )
     }
 

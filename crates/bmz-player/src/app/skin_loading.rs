@@ -13,8 +13,7 @@ pub(super) fn load_initial_skin_textures(
     app_paths: &crate::paths::AppPaths,
     pipeline: &SkinPipelineRuntime,
     generation: u64,
-    player_name: &str,
-    ir_name: Option<&str>,
+    frontend: FrontendLuaLoadInputs<'_>,
     skin: &SkinConfig,
     load_frontend_skins: bool,
     lua_runtime_mode: bmz_skin::LuaSkinRuntimeMode,
@@ -66,7 +65,7 @@ pub(super) fn load_initial_skin_textures(
                     },
                     lua_runtime_state_with_mode(
                         lua_runtime_state_with_skin_offsets(
-                            lua_runtime_state_for_frontend(player_name, ir_name),
+                            frontend.lua_runtime_state(None),
                             &skin.decide_offsets,
                         ),
                         lua_runtime_mode,
@@ -114,12 +113,12 @@ pub(super) fn load_initial_skin_textures(
                         lua_runtime_state_with_skin_offsets(
                             lua_runtime_state_for_result(
                                 false,
-                                ir_name,
+                                frontend.ir_name,
                                 false,
                                 false,
                                 KeyMode::default(),
                                 BTreeMap::new(),
-                                player_name,
+                                frontend.player_name,
                             ),
                             &skin.result_offsets,
                         ),
@@ -183,7 +182,7 @@ pub(super) fn load_initial_skin_textures(
                         active_select_files.clone(),
                         lua_runtime_state_with_mode(
                             lua_runtime_state_with_skin_offsets(
-                                lua_runtime_state_for_frontend(player_name, ir_name),
+                                frontend.lua_runtime_state(None),
                                 &skin.select_offsets,
                             ),
                             lua_runtime_mode,
@@ -240,8 +239,7 @@ pub(super) fn reload_skin_textures(
     app_paths: &crate::paths::AppPaths,
     pipeline: &mut SkinPipelineRuntime,
     request: SkinReloadRequest,
-    player_name: &str,
-    ir_name: Option<&str>,
+    frontend: FrontendLuaLoadInputs<'_>,
     skin: &SkinConfig,
     lua_runtime_mode: bmz_skin::LuaSkinRuntimeMode,
     experimental_detail_options: bool,
@@ -301,11 +299,11 @@ pub(super) fn reload_skin_textures(
         };
         if is_decodable_skin_path(&path) {
             let skin_options = if trimmed.is_empty() { BTreeMap::new() } else { options.clone() };
-            let mut runtime_state = lua_runtime_state_for_frontend_last_play(
-                player_name,
-                ir_name,
-                if kind == SkinKind::Select { select_last_played_at } else { None },
-            );
+            let mut runtime_state = frontend.lua_runtime_state(if kind == SkinKind::Select {
+                select_last_played_at
+            } else {
+                None
+            });
             if kind == SkinKind::Decide
                 && let Some(snapshot) = decide_chart
             {
@@ -347,6 +345,29 @@ pub(super) fn reload_skin_textures(
     }
 
     (pending_select, pending_decide, pending_result)
+}
+
+/// Profile values that Select / Decide skins read while loading.
+#[derive(Clone, Copy)]
+pub(super) struct FrontendLuaLoadInputs<'a> {
+    pub(super) player_name: &'a str,
+    pub(super) ir_name: Option<&'a str>,
+    pub(super) player_stats: &'a PlayerStatsSnapshot,
+}
+
+impl FrontendLuaLoadInputs<'_> {
+    pub(super) fn lua_runtime_state(
+        self,
+        last_played_at: Option<i64>,
+    ) -> bmz_skin::LuaLoadRuntimeState {
+        let mut runtime_state = lua_runtime_state_for_frontend_last_play(
+            self.player_name,
+            self.ir_name,
+            last_played_at,
+        );
+        apply_player_stats_lua_load_state(&mut runtime_state, self.player_stats);
+        runtime_state
+    }
 }
 
 pub(super) fn select_skin_options(

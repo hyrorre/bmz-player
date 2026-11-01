@@ -98,6 +98,7 @@ closure/module stateを維持し、frameごとのmain_stateを参照します。
 | `main_state.set_timer` | 受動custom timerのON/OFFです。組み込みtimerや能動timerへの書き込みには制約がある |
 | `main_state.numbers` | ID / 名前を混在して複数戻り値で取得します。未知名は0、欠損sentinelは維持します。ロード時依存捕捉とruntime参照に対応 |
 | `main_state.screen_width` / `screen_height` | 全sceneの物理出力pixel寸法です。未接続は0、exportは動画出力寸法です。ロード時に読むskinのcache・resize再decodeと、runtimeだけ読むskinの状態維持に対応します。[回帰テスト](../crates/bmz-player/src/skin_loader/tests/lua/screen_size.rs) |
+| 数値ref `17..19` / `30..37` / `333`のロード時値 | Select / Decideのロード時にprofile全体の累計プレイ時間・プレイ数・判定累計・累計ノーツを渡します。mz-selectのプレイヤーランク（経験値・ランク・ゲージ）とプロフィール統計に対応します。プレイ後のSelect再入場で再decodeします。「今日の成果」とプレイ曲ログは`io`書き込みが非永続のため未対応です。[仕様](skin.md#select--decideのロード時のプレイヤー統計)、[回帰テスト](../crates/bmz-player/src/app/skin_loading/startup_tests.rs) |
 | 数値ref `243..249` / `lastplay_*` | Selectの最終保存日時とResultの今回保存日時です。ローカル年月日時分秒です。欠損はLuaでINT_MIN、数字画像は非表示です。BEST日時helperとは分離します。保存条件と移行は[score-persistence.md](score-persistence.md) |
 | `main_state.timer_is_on` / `timer_is_off` / `timer_elapsed` / `timer_elapsed_ms` / `timer_elapsed_seconds` | 組み込み / custom timerの現在状態・経過時間を取得します。経過時間はOFF時-1です。custom timerの同一frame更新、開始0・未来開始、64bit時計に対応します。[回帰テスト](../crates/bmz-skin/src/tests/read_helpers.rs) |
 | `timer_util` | timer_function / timer_observe_boolean / new_passive_timer等をcustom timer内で利用可能 |
