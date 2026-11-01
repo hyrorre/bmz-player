@@ -87,3 +87,17 @@ Luxez-Flat側の対象commitは`3b14175`。詳細オプションの枠（`196a6a
   `cargo clippy -p bmz-player --all-targets --locked -- -D warnings`: 成功。
 - `cargo test -p bmz-player --locked`: 2,782件成功、48件ignore。別のstartup smoke 2件はignore。
 - 通常起動での目視、macOS/Linuxの実機確認は未実施。
+
+## Luxez-Flatのmainへの統合（2026-11-01追記）
+
+`ffe2745`と`3b14175`はdetached HEADにあり、どのブランチにも含まれていなかった。
+upstream v1.3.1を取り込み済み（`cf09ea7`、2026-10-25）のLuxez-Flatの`main`へマージし、
+BMZ側は統合後の`7180f66`を参照する。Luxez-Flatの`main`はこの時点で未push。
+
+- v1.3.1ではResult/コースResultの左右キー判定がluajavaのGdxから`main_state.key_pressed(21/22)`へ変わる。
+  BMZはbeatoraja互換の`key_pressed`に対応済み。ほかにhelp_7.png、readme、changelogが変わる。
+- readme.txtはG-BATTLEの説明の追加と衝突した。`cf09ea7`でBMZ拡張の説明を外しているため`main`側を採用し、
+  readmeにはG-BATTLEの説明を載せない。現在の仕様は[skin.md](../../docs/skin.md#g-battle一覧の相手情報)を参照する。
+- `cargo test -p bmz-skin --locked`: 366件成功、1件ignore。
+- `cargo test -p bmz-player --locked`: 2,782件成功、48件ignore（LuxezのSelect、Result、コースResultの実素材テストを含む）。
+- Resultの左右キーによる表示切り替えの実機確認は未実施。
