@@ -55,6 +55,8 @@ mod chart_text;
 mod detail_options;
 #[path = "tests/document.rs"]
 mod document;
+#[path = "tests/ecfn_battle_info.rs"]
+mod ecfn_battle_info;
 #[path = "tests/ecfn_detail_options.rs"]
 mod ecfn_detail_options;
 #[path = "tests/ecfn_extensions.rs"]

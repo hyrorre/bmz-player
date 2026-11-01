@@ -2798,3 +2798,16 @@ result/png/random_pattern.pngの鍵盤を流用します。鍵盤はResultと同
 一覧を閉じると復帰します。元のLua callbackも維持し、無効・欠落・ロード失敗時とBMZ以外は
 従来の表示を残します。[回帰テスト](../crates/bmz-player/src/skin_loader/tests/luxe_battle_info.rs)と
 [実装記録](../notes/2026/2026-11-01-luxez-flat-gbattle-info.md)を参照してください。
+
+別途導入するADFX02のECFNは、グラフ下の空き（x=441、top=696、715×108px）に
+`G-BATTLE DATA`窓を追加します。右端はTYPE-AのIR DATA窓に揃え、既存の窓はそのまま残します。
+SCORE DATA窓の見出し帯・枠・縁の陰影を等倍で組み直し、滑らかな本文のグラデーションだけを縮めます。
+見出しと値は窓に焼き込まれた文字と同じ源暎エムゴHeavy＋黒縁、列の区切りはPLAY DATAと同じ1px線です。
+配置オプション、鍵盤順、text 86の値を3列に並べ、10K/14Kでは1P/2Pの行とDP OPTIONを分けます。
+鍵盤は同梱StarseekerのResult鍵盤を31×29px・28px間隔で流用します。画像のない8/9/Sは
+同じ鍵盤の無地部分に、ECFNの数字画像と源暎エムゴを重ねます。
+相手名・項目ラベル・ゲージ名は表示せず、NO DATA / LOADING / NOT FIXEDは
+窓の数字の淡い0と同じ50%の不透明度で表示します。
+`ECFN/select/bmz_battle_info.lua`は他のBMZ拡張と独立して読み込み、欠落・失敗時とBMZ以外は
+従来の画面のままです。[明示実行テスト](../crates/bmz-player/src/skin_loader/tests/ecfn_battle_info.rs)と
+[実装記録](../notes/2026/2026-11-01-ecfn-gbattle-info.md)を参照してください。
