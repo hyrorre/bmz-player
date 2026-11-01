@@ -254,3 +254,44 @@ fn timer_helpers_see_same_frame_custom_writes_zero_start_and_submillisecond_prec
         assert_eq!(runtime.failure_log_count(), 0);
     }
 }
+
+/// Play timers are measured on the chart clock and `main_state.time()` on the
+/// scene clock, so a start rebuilt from both moves by 1 ms between frames.
+/// ModernChic's detail mode counts a key press whenever the start changes.
+#[test]
+fn app_timer_starts_ignore_millisecond_clock_jitter_but_follow_restarts() {
+    for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
+        let mut loaded = load(
+            r#"
+            local s = require('main_state')
+            return {type=5, text={{id='bomb', value=function() return tostring(s.timer(50)) end}}}
+            "#,
+            &LuaLoadRuntimeState { runtime_mode: mode, ..Default::default() },
+        );
+        let runtime = loaded.lua_runtime.as_mut().unwrap();
+        let text = callback(runtime, "$.text[1].value");
+        let mut state = TestLuaMainState::default();
+        let mut start = |now_us: i64, elapsed_ms: Option<i32>| {
+            state.now_us = now_us;
+            state.timers = elapsed_ms.into_iter().map(|elapsed| (50, elapsed)).collect();
+            runtime.begin_frame();
+            runtime.evaluate_text(text, &state).unwrap()
+        };
+        assert_eq!(start(10_000_000, Some(1_500)), "8500000");
+        // ±1 ms frame jitter, then a 1 ms per frame drift, keep one start.
+        for (now_us, elapsed_ms) in [
+            (10_016_000, 1_515),
+            (10_033_000, 1_533),
+            (10_050_000, 1_549),
+            (10_066_000, 1_564),
+            (10_083_000, 1_580),
+        ] {
+            assert_eq!(start(now_us, Some(elapsed_ms)), "8500000", "{now_us}");
+        }
+        // A new activation moves the start by far more than the jitter.
+        assert_eq!(start(10_100_000, Some(4)), "10096000");
+        assert_eq!(start(10_116_000, None), i32::MIN.to_string());
+        assert_eq!(start(10_133_000, Some(0)), "10133000");
+        assert_eq!(runtime.failure_log_count(), 0);
+    }
+}

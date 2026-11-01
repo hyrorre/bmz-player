@@ -169,6 +169,41 @@ impl Drop for ResultPanelGuard<'_> {
 pub(super) struct LuaCustomTimers {
     pub(super) values: BTreeMap<i32, Option<i64>>,
     pub(super) active: BTreeSet<i32>,
+    /// App timer starts last returned to Lua; see [`stable_app_timer_start`].
+    pub(super) app_timer_starts: BTreeMap<i32, LuaAppTimerStart>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct LuaAppTimerStart {
+    reported: i64,
+    raw: i64,
+}
+
+/// Play timers run on the chart clock while `main_state.time()` is the scene
+/// clock, so a start rebuilt from both whole milliseconds moves by 1 ms between
+/// frames. beatoraja keeps one start per timer activation, and skins detect a
+/// new key press or judgement by comparing it with the previous one
+/// (ModernChic's detail mode and battle effects).
+const LUA_APP_TIMER_START_JITTER_US: i64 = 2_000;
+
+/// Keeps the reported start while the raw start stays within the jitter of
+/// the previous frame's raw start, so slow clock drift does not add up into a
+/// false restart. A larger change is a new activation.
+pub(super) fn stable_app_timer_start(
+    starts: &mut BTreeMap<i32, LuaAppTimerStart>,
+    id: i32,
+    raw: Option<i64>,
+) -> Option<i64> {
+    let Some(raw) = raw else {
+        starts.remove(&id);
+        return None;
+    };
+    let start = starts.entry(id).or_insert(LuaAppTimerStart { reported: raw, raw });
+    if (raw - start.raw).abs() > LUA_APP_TIMER_START_JITTER_US {
+        start.reported = raw;
+    }
+    start.raw = raw;
+    Some(start.reported)
 }
 
 impl fmt::Debug for LuaSkinRuntime {
@@ -651,18 +686,19 @@ impl LuaRuntimeStateScope {
                         ),
                         6 => {
                             let id = id()?;
-                            let custom = self
+                            let mut timers = self
                                 .custom_timers
                                 .lock()
-                                .map_err(|_| mlua::Error::runtime("custom timer lock poisoned"))?
-                                .values
-                                .get(&id)
-                                .copied();
-                            Value::Integer(
-                                custom
-                                    .unwrap_or_else(|| state.timer_start_us(id))
-                                    .unwrap_or(i64::from(TIMER_OFF_VALUE)),
-                            )
+                                .map_err(|_| mlua::Error::runtime("custom timer lock poisoned"))?;
+                            let start = match timers.values.get(&id).copied() {
+                                Some(custom) => custom,
+                                None => stable_app_timer_start(
+                                    &mut timers.app_timer_starts,
+                                    id,
+                                    state.timer_start_us(id),
+                                ),
+                            };
+                            Value::Integer(start.unwrap_or(i64::from(TIMER_OFF_VALUE)))
                         }
                         7 => Value::Integer(i64::from(state.event_index(id()?))),
                         8 => Value::Integer(i64::from(state.gauge_type())),

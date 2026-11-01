@@ -810,6 +810,14 @@ Luaの`main_state.timer(id)`はシーン基準の開始時刻（マイクロ秒�
 `main_state.timer_off_value`を使います。timer callbackのnilはbeatorajaと同じく開始時刻0、
 例外・非有限値・命令数上限超過はOFFとして扱い、失敗の診断はcallbackごとに1回出します。
 
+Play中のボム・KEYON・判定・PLAY等のtimerは譜面時刻、`main_state.time()`は画面の経過時間で
+数えるため、両者から逆算した開始時刻はフレームごとに1 ms揺れます。beatorajaは1回の起動につき
+同じ開始時刻を返し、ModernChicのプレイ状況詳細モードや攻撃演出は開始時刻の変化で打鍵・判定を
+数えます。runtime VMはtimerごとに前フレームの開始時刻を覚え、変化が2 ms以内なら前回返した値を
+返します。比較は前フレームの値と行うため、時計の緩やかなずれは誤った再起動になりません。
+2 msを超えて変われば新しい起動として返します。同じtimerが2 ms以内に再起動した場合は区別しません。
+`set_timer`等のLua custom timerはこの対象外です（[回帰テスト](../crates/bmz-skin/src/tests/read_helpers.rs)）。
+
 次の参照用helperも同じtimerと時計を使います。組み込みtimerとcustom timerの両方を扱い、
 同一フレーム内の先行callbackや`set_timer`による更新も反映します。
 
