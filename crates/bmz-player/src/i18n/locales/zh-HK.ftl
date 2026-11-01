@@ -626,6 +626,7 @@ skin-install-help = 請將包含字型、圖片和共用程式庫的完整介面
 skin-open-user-folder = 開啟額外介面資料夾
 skin-refresh-list = 重新整理介面清單
 skin-load-error = 無法讀取所選介面，因此仍顯示先前的介面。所選介面與選項已儲存。
+skin-load-error-options = 如果是介面選項導致的，在下方更改後會重新讀取。
 skin-retry = 重試載入
 skin-loaded-options-description = 已載入介面宣告的可設定項目：
 skin-no-settings = 此面板沒有設定項目。

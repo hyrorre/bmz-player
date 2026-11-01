@@ -628,6 +628,7 @@ skin-install-help = Place complete skins in the folder below, including fonts, i
 skin-open-user-folder = Open additional skins folder
 skin-refresh-list = Refresh skin list
 skin-load-error = The selected skin could not be loaded, so the previous skin is still shown. Your selection and options are kept.
+skin-load-error-options = If a skin option causes this, changing it below reloads the skin.
 skin-retry = Retry loading
 skin-loaded-options-description = Configurable items declared by loaded skins:
 skin-no-settings = This skin has no settings.

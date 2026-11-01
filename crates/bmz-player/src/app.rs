@@ -183,8 +183,8 @@ use crate::ui::{
     CourseEditorAction, CourseEditorChart, CourseEditorData, DebugInfo, EguiKeyConfigAction,
     EguiKeyConfigInput, EguiKeyConfigSection, EguiLayer, EguiRunContext, SceneSkinDefs,
     SelectCourseBuilderAction, SelectCourseBuilderData, SkinCandidate, SkinCandidateOrigin,
-    SkinCatalog, SkinConfigMeta, SkinReloadRequest, SongScanRequest, UpdateDialog,
-    UpdateDialogAction,
+    SkinCatalog, SkinConfigMeta, SkinLoadErrorMeta, SkinReloadRequest, SongScanRequest,
+    UpdateDialog, UpdateDialogAction,
 };
 use crate::update::{DownloadedUpdate, UpdateAssetKind, UpdateCandidate};
 use crate::window_config::{monitor_config_name, select_monitor};

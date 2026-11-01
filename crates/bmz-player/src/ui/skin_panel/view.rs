@@ -207,13 +207,19 @@ pub(in crate::ui) fn build_skin_panel(
             }
         }
     }
-    if let Some((path, error)) = &skin_meta.load_error
-        && path == selected_path
+    if let Some(load_error) = &skin_meta.load_error
+        && load_error.path == selected_path
     {
         ui.colored_label(ui.visuals().error_fg_color, tr!(text, "skin-load-error"));
-        ui.label(error);
-        editor.store(ui.ctx());
-        return SkinPanelActions { save: false, reset: false, reload };
+        ui.label(&load_error.error);
+        if !load_error.definitions_loaded {
+            // Without the skin's own definitions, normalizing would drop its saved options.
+            editor.store(ui.ctx());
+            return SkinPanelActions { save: false, reset: false, reload };
+        }
+        // An option can make the body fail (e.g. one that reads files the skin wrote).
+        ui.label(tr!(text, "skin-load-error-options"));
+        ui.separator();
     }
     ui.add(
         egui::TextEdit::singleline(&mut editor.search)
@@ -537,7 +543,11 @@ mod tests {
         let before = skin.clone();
         // An installed fallback's definitions must not normalize the failed skin's options.
         let meta = SkinConfigMeta {
-            load_error: Some((skin.select.clone(), "missing file".into())),
+            load_error: Some(SkinLoadErrorMeta {
+                path: skin.select.clone(),
+                error: "missing file".into(),
+                definitions_loaded: false,
+            }),
             select: SceneSkinDefs::from_play_document(None),
             ..Default::default()
         };
@@ -561,6 +571,71 @@ mod tests {
                 serde_json::to_value(&before).unwrap()
             );
         }
+    }
+
+    /// ModernChic fails to load with options that read files the skin wrote.
+    /// Its header still loads, so the options stay editable to turn them off.
+    #[test]
+    fn skin_body_failure_keeps_its_own_options_editable() {
+        let ctx = egui::Context::default();
+        SettingsNavigation::select(&ctx, SettingsPage::Skin);
+        let mut skin =
+            SkinConfig { select: "data:skins/broken/select.luaskin".into(), ..Default::default() };
+        skin.select_options.insert("Detail mode".into(), "On".into());
+        let meta = SkinConfigMeta {
+            load_error: Some(SkinLoadErrorMeta {
+                path: skin.select.clone(),
+                error: "runtime error".into(),
+                definitions_loaded: true,
+            }),
+            select: SceneSkinDefs {
+                property: vec![SkinPropertyDef {
+                    name: "Detail mode".into(),
+                    def: "Off".into(),
+                    category: String::new(),
+                    item: vec![
+                        bmz_render::skin::SkinPropertyItemDef { name: "Off".into(), op: 1 },
+                        bmz_render::skin::SkinPropertyItemDef { name: "On".into(), op: 2 },
+                    ],
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let paths =
+            AppPaths::from_dirs("resources".into(), "data".into(), "cache".into(), "logs".into());
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 1600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let actions = build_skin_panel(
+                    ui,
+                    &mut skin,
+                    &meta,
+                    &SkinCatalog::default(),
+                    &paths,
+                    &mut SkinUiPathCache::default(),
+                    Localizer::new(AppLocale::En),
+                );
+                assert!(!actions.reload.any());
+            },
+        );
+        let texts = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(texts.contains(&"runtime error"), "{texts:?}");
+        assert!(texts.contains(&"Detail mode"), "{texts:?}");
+        assert_eq!(skin.select_options["Detail mode"], "On");
     }
 
     #[test]

@@ -127,7 +127,7 @@ pub use model::{
     EguiKeyConfigAction, EguiKeyConfigInput, EguiKeyConfigSection, EguiLayer, EguiOutput,
     EguiRunContext, ProfileManagerAction, SceneSkinDefs, SelectCourseBuilderAction,
     SelectCourseBuilderData, SkinCandidate, SkinCandidateOrigin, SkinCatalog, SkinConfigMeta,
-    SkinReloadRequest, SongScanRequest, UpdateDialog, UpdateDialogAction,
+    SkinLoadErrorMeta, SkinReloadRequest, SongScanRequest, UpdateDialog, UpdateDialogAction,
 };
 use runtime::AudioDevicePickerState;
 pub use runtime::MenuEscape;

@@ -180,10 +180,20 @@ pub(super) fn bmz_play_bar_line_offset() -> SkinOffsetDef {
     }
 }
 
+/// 設定パネルで選択中のスキンの読込失敗。
+pub struct SkinLoadErrorMeta {
+    /// 失敗したスキンの設定値（パス参照）。
+    pub path: String,
+    pub error: String,
+    /// ヘッダーは読めて、本体の読込だけが失敗した。設定項目はそのスキン自身の
+    /// 定義なので、失敗の原因になったオプションを戻せるよう表示する。
+    pub definitions_loaded: bool,
+}
+
 /// 選曲 / プレイ / リザルト各スキンの設定可能項目。
 #[derive(Default)]
 pub struct SkinConfigMeta {
-    pub load_error: Option<(String, String)>,
+    pub load_error: Option<SkinLoadErrorMeta>,
     pub select: SceneSkinDefs,
     pub decide: SceneSkinDefs,
     pub play4: SceneSkinDefs,

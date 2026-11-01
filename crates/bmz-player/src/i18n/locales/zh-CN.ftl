@@ -625,6 +625,7 @@ skin-install-help = 请将包含字体、图像和共享库的完整皮肤放入
 skin-open-user-folder = 打开附加皮肤文件夹
 skin-refresh-list = 刷新皮肤列表
 skin-load-error = 无法读取所选皮肤，因此仍显示之前的皮肤。所选皮肤和选项已保存。
+skin-load-error-options = 如果是皮肤选项导致的，在下方更改后会重新读取。
 skin-retry = 重试加载
 skin-loaded-options-description = 已加载皮肤声明的可设置项目：
 skin-no-settings = 此皮肤没有设置项目。

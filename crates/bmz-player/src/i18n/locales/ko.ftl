@@ -625,6 +625,7 @@ skin-install-help = 글꼴, 이미지, 공유 라이브러리를 포함한 스�
 skin-open-user-folder = 추가 스킨 폴더 열기
 skin-refresh-list = 스킨 목록 새로고침
 skin-load-error = 선택한 스킨을 읽어 들일 수 없어 이전 스킨을 그대로 표시합니다. 선택한 스킨과 옵션은 저장되어 있습니다.
+skin-load-error-options = 스킨 옵션이 원인이라면 아래에서 변경하면 다시 읽어 들입니다.
 skin-retry = 불러오기 재시도
 skin-loaded-options-description = 불러온 스킨이 선언한 설정 가능 항목:
 skin-no-settings = 이 스킨에는 설정 항목이 없습니다.

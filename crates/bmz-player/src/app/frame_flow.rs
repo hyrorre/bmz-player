@@ -403,7 +403,9 @@ impl WinitApp {
                 .resolve_path_ref(&path)
                 .ok()
                 .and_then(|resolved| self.skin.skin_pipeline.load_error(&resolved));
-            runtime_error.or_else(|| check.as_ref().err().cloned()).map(|error| (path, error))
+            let definitions_loaded = check.is_ok();
+            let error = runtime_error.or_else(|| check.as_ref().err().cloned())?;
+            Some(SkinLoadErrorMeta { path, error, definitions_loaded })
         });
         SkinConfigMeta {
             load_error,

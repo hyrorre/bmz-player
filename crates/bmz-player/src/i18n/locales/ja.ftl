@@ -625,6 +625,7 @@ skin-install-help = 追加スキンは下のフォルダーに、フォント・
 skin-open-user-folder = 追加スキンのフォルダーを開く
 skin-refresh-list = スキン一覧を更新
 skin-load-error = 選んだスキンを読み込めませんでした。前のスキンを表示したままにしています。選んだスキンとオプションは保存されています。
+skin-load-error-options = スキンのオプションが原因の場合は、下で変更すると読み込み直します。
 skin-retry = 読み込みを再試行
 skin-loaded-options-description = 読み込み済みスキンが宣言する設定可能項目:
 skin-no-settings = このスキンには設定項目がありません。

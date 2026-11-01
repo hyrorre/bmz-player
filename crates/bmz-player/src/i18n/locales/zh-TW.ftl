@@ -626,6 +626,7 @@ skin-install-help = 請將包含字型、圖片和共用程式庫的完整面板
 skin-open-user-folder = 開啟額外面板資料夾
 skin-refresh-list = 重新整理面板清單
 skin-load-error = 無法讀取所選面板，因此仍顯示先前的面板。所選面板與選項已儲存。
+skin-load-error-options = 如果是面板選項造成的，在下方變更後會重新讀取。
 skin-retry = 重試載入
 skin-loaded-options-description = 已載入面板宣告的可設定項目：
 skin-no-settings = 此面板沒有設定項目。
