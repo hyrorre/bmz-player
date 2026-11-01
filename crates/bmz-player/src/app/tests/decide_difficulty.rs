@@ -100,11 +100,12 @@ fn decide_scene_entry_reload_passes_the_selected_chart_to_lua_skins() {
         (request.runtime_state, result.result)
     };
 
-    // Startup and skin-panel decodes have no selected chart, as before.
+    // Without a selected chart the load reads undefined difficulty (150), so the
+    // color lookup that beatoraja never runs without a song does not index nil.
     let (state, result) = decide(&mut pipeline, None);
-    assert!((150..=155).all(|option| !state.option_values.contains_key(&option)));
-    let error = format!("{:#}", result.err().expect("no difficulty: the color stays nil"));
-    assert!(error.contains("attempt to index a nil value"), "{error}");
+    assert_eq!(state.option_values.get(&150), Some(&true));
+    assert!((151..=155).all(|option| state.option_values.get(&option) == Some(&false)));
+    assert_eq!(result.unwrap().document.name, "195,195,195|UNKNOWN0 ");
 
     let hyper = decide_snapshot("HYPER", "12", "★12");
     let (state, result) = decide(&mut pipeline, Some(&hyper));
@@ -153,10 +154,16 @@ fn installed_decide_skins_load_with_the_selected_chart_when_available() {
         assert_eq!(label.constant_text, "HYPER12 ★12");
         eprintln!("mz-select decide label: {}", label.constant_text);
     }
-    if let Some((root, path)) = installed_decide("ModernChic/decide.luaskin") {
+    let mut no_chart = lua_runtime_state_for_frontend("Player", None);
+    apply_decide_chart_lua_load_state(&mut no_chart, &RenderSnapshot::default());
+    for skin in ["ModernChic", "ModernChicOld", "ModernChic471"] {
+        let Some((root, path)) = installed_decide(&format!("{skin}/decide.luaskin")) else {
+            continue;
+        };
         let frontend = lua_runtime_state_for_frontend("Player", None);
         assert!(load_installed_decide(&root, &path, &frontend).is_err());
         load_installed_decide(&root, &path, &state).unwrap();
-        eprintln!("ModernChic decide loads with the selected chart");
+        load_installed_decide(&root, &path, &no_chart).unwrap();
+        eprintln!("{skin} decide loads with the selected chart and without one");
     }
 }

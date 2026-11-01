@@ -726,7 +726,10 @@ pub(super) fn apply_skin_attempt_lua_load_state(
 /// beatoraja loads the Decide skin with the selected song, so skins such as
 /// ModernChic and mz-select pick difficulty colors and labels at load time.
 /// The difficulty options and play level use the Decide plan's render-time
-/// rules; the table texts are the snapshot's 1001..1003 values.
+/// rules; the table texts are the snapshot's 1001..1003 values. Loads without
+/// a chart (startup, a skin-panel reload on a folder) pass an empty snapshot:
+/// option 150 (undefined difficulty), level 0 and empty table texts, so
+/// ModernChic's load-time color lookup does not index nil.
 pub(super) fn apply_decide_chart_lua_load_state(
     runtime_state: &mut bmz_skin::LuaLoadRuntimeState,
     snapshot: &RenderSnapshot,

@@ -9,6 +9,7 @@ impl WinitApp {
         let skin = self.boot.profile_config.skin.clone();
         let select_last_played_at = self.select_snapshot().last_played_at;
         let texture_request = SkinReloadRequest { result: false, course_result: false, ..request };
+        let decide_chart = request.decide.then(|| self.decide_load_chart_snapshot());
         let (pending_select, pending_decide, _pending_result) = reload_skin_textures(
             &self.boot.app_paths,
             &mut self.skin.skin_pipeline,
@@ -22,7 +23,7 @@ impl WinitApp {
             self.skin.lua_runtime_mode,
             self.boot.app_config.select.experimental_detail_options,
             select_last_played_at,
-            None,
+            decide_chart.as_ref(),
         );
         if request.select {
             self.skin.skin_pipeline.set_pending(SkinKind::Select, pending_select);
@@ -106,11 +107,29 @@ impl WinitApp {
     /// Decide進入時の再decodeへ、表示するsnapshotの選択譜面の値を渡す。
     ///
     /// beatorajaは選択曲のある状態でDecide skinを読むため、ロード時に難易度色などを
-    /// 決めるskinがある。起動時やskin設定パネルからのdecodeは選択曲を持たない。
+    /// 決めるskinがある。起動時のdecodeは選択曲を持たず、難易度未定義（150）として読む。
     /// Queue only: the caller starts Play decoding and prepares presentation
     /// images before waiting for this Decide skin.
     pub(super) fn reload_decide_skin_for_chart(&mut self, snapshot: &RenderSnapshot) {
         self.reload_skin_for_scene_entry_with_chart(SkinKind::Decide, Some(snapshot));
+    }
+
+    /// Decide進入以外（skin設定パネル、profile切替等）のDecide再decodeに渡す選択譜面。
+    ///
+    /// 表示中のDecide、なければSelectのカーソル位置の譜面を使う。フォルダ等で譜面が
+    /// ない場合は空のsnapshot（難易度未定義の150）になる。
+    fn decide_load_chart_snapshot(&self) -> RenderSnapshot {
+        if let Some(decide) = &self.play.pending_decide {
+            return decide.snapshot_for_render();
+        }
+        match self.select.select_items.get(self.select.selected_index) {
+            Some(SelectItem::Chart(row)) => row
+                .chart
+                .as_ref()
+                .map(|chart| self.decide_snapshot_for_chart(chart.chart_id))
+                .unwrap_or_default(),
+            _ => RenderSnapshot::default(),
+        }
     }
 
     fn reload_skin_for_scene_entry_with_chart(

@@ -47,6 +47,8 @@ pub(super) fn load_initial_skin_textures(
             }
         };
         if !decide_path.as_os_str().is_empty() && is_decodable_skin_path(&decide_path) {
+            let mut runtime_state = frontend.lua_runtime_state(None);
+            apply_decide_chart_lua_load_state(&mut runtime_state, &RenderSnapshot::default());
             spawn_skin_decode(
                 pipeline,
                 SkinDecodeRequest::new(
@@ -64,10 +66,7 @@ pub(super) fn load_initial_skin_textures(
                         skin.decide_files.clone()
                     },
                     lua_runtime_state_with_mode(
-                        lua_runtime_state_with_skin_offsets(
-                            frontend.lua_runtime_state(None),
-                            &skin.decide_offsets,
-                        ),
+                        lua_runtime_state_with_skin_offsets(runtime_state, &skin.decide_offsets),
                         lua_runtime_mode,
                     ),
                 )
@@ -304,10 +303,12 @@ pub(super) fn reload_skin_textures(
             } else {
                 None
             });
-            if kind == SkinKind::Decide
-                && let Some(snapshot) = decide_chart
-            {
-                apply_decide_chart_lua_load_state(&mut runtime_state, snapshot);
+            if kind == SkinKind::Decide {
+                let no_chart = RenderSnapshot::default();
+                apply_decide_chart_lua_load_state(
+                    &mut runtime_state,
+                    decide_chart.unwrap_or(&no_chart),
+                );
             }
             spawn_skin_decode(
                 pipeline,

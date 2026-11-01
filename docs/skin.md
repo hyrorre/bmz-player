@@ -729,7 +729,14 @@ Decideへ入るときのskin再読込は、選択譜面の難易度option 150..1
 未定義を150へ対応付けます。beatorajaは選択曲のある状態でDecide skinを読むため、ModernChicや
 mz-selectのようにロード時に難易度の色やラベルを決めるLua skin、`#IF`で難易度を分けるLR2 skinが
 これに依存します。これらの値はdecode cacheの依存関係に含めます。
-起動時やskin設定パネルからの読込は選択曲を持たないため、これらの値を渡しません。
+
+Decide進入以外の読込（skin設定パネル、profile切替等）は、表示中のDecide、なければSelectの
+カーソル位置の譜面の値を渡します。起動時や、カーソルがフォルダ等で譜面がない場合は、
+難易度未定義（option 150）、play level 0、空の難易度表textとして読みます。
+beatorajaには選択曲のないDecideの読込がないため、これはBMZの決めごとです。
+ModernChicのDecideはロード時の難易度色をnil確認なしで参照するため、難易度optionがすべてfalseだと
+読込に失敗し、skin設定パネルにエラーが残っていました。実際のDecide表示は、従来どおり進入時に
+選択譜面の値で読み直します。
 
 ## Select / Decideのロード時のプレイヤー統計
 
