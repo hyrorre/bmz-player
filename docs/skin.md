@@ -2773,8 +2773,14 @@ IRは取得済みのランキング / ライバルスコアのメタデータを
 NORMAL / MIRROR / RANDOM / R-RANDOM / RANDOM-EX / F-RANDOM / MF-RANDOMは
 実際の配置処理と同じ乱数規則を使い、S-RANDOM等のノートごとの変換は固定配置を出しません。
 
-mz-selectは左下の独立パネルで相手名、配置オプション、鍵盤順、既存の
-CHART REPLICATION設定（text 86）を表示します。同梱mgenplus-1c-bold.ttfと
-result/keys1p.pngを使用し、HARD等のゲージ名は表示しません。
+mz-selectは左下の独立パネルで配置オプション、鍵盤順、既存の
+CHART REPLICATION設定（text 86）の値を表示します。
+既存パネル素材の約50%黒地と左の白線を流用し、タイトルは`g-battle data`です。
+英字と鍵盤番号はNETWORK / score dataと同じm_select_system.fntを使います。
+相手名とRIVAL OPTION / LANE ORDER / REPLICATIONのラベルは表示しません。
+配置オプションは既存オプション画像、鍵盤はresult/keys1p.pngを使用し、
+HARD等のゲージ名は表示しません。未取得はNO DATA、読み込み中はLOADING、
+S-RANDOM等の可変配置はNOT FIXEDと区別し、NO PLAYと同じ灰色にします。
+DPは1P/2Pの行を明示し、SP/DPの内容に合わせてパネルの高さを変えます。
 20200がtrueの間はランキング / rival data / ir dataの本文を隠し、
 閉じたら元の条件で復帰します。上部のライバル選択欄は維持します。

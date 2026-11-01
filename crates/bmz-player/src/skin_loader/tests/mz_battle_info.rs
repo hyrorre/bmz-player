@@ -7,17 +7,35 @@ fn mz_battle_info_switches_all_three_bodies_and_keeps_player_options_separate() 
     let path = test_app_paths().resource_dir.join("skins/mz-select/music_select.luaskin");
     assert!(path.exists(), "initialize mz-select to verify the actual assets");
     let decoded = decode_beatoraja_skin(&path, SkinKind::Select).unwrap();
-    let font =
-        decoded.document.font.iter().find(|font| font.id.ends_with("mz_battle_font")).unwrap();
-    assert!(font.path.ends_with("mgenplus-1c-bold.ttf"));
-    assert!(
+    let font_path = |id: &str| {
+        let text = decoded.document.text.iter().find(|text| text.id == id).unwrap();
+        let font_id = text.font.rsplit(':').next().unwrap();
+        &decoded.document.font.iter().find(|font| font.id == font_id).unwrap().path
+    };
+    assert_eq!(font_path("mz_battle_title"), font_path("default_network_network"));
+    assert!(font_path("mz_battle_title").ends_with("m_select_system.fnt"));
+    let option_texture = bmz_render::plan::TextureId(
         decoded
-            .document
-            .text
+            .sources
             .iter()
-            .filter(|text| text.id.starts_with("mz_battle_"))
-            .all(|text| text.constant_text != "HARD")
+            .find(|source| source.source_id == "mz_battle_options")
+            .unwrap()
+            .texture
+            .0,
     );
+    let panel_option_images = |renderer: &Renderer| {
+        renderer.last_plan().unwrap().commands.iter().filter(|command| matches!(command,
+            DrawCommand::Image { texture, rect, .. } if *texture == option_texture
+                && rect.x >= 350.0 / 1920.0 && rect.x < 660.0 / 1920.0 && rect.y > 615.0 / 1080.0
+        )).count()
+    };
+    assert!(decoded.document.text.iter().filter(|text| text.id.starts_with("mz_battle_")).all(
+        |text| {
+            !["HARD", "RIVAL OPTION", "LANE ORDER", "REPLICATION"]
+                .contains(&text.constant_text.as_str())
+                && text.ref_id != 20_204
+        }
+    ));
     for entry in &decoded.document.destination {
         if let DestinationListEntry::Single(destination) = entry {
             let id = destination.id.as_str();
@@ -69,8 +87,30 @@ fn mz_battle_info_switches_all_three_bodies_and_keeps_player_options_separate() 
             })
             .collect::<Vec<_>>()
     };
+    let muted_statuses = |renderer: &Renderer| {
+        let colors = renderer
+            .last_plan()
+            .unwrap()
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, style, .. }
+                    if ["NO DATA", "LOADING", "NOT FIXED"].contains(&text.as_str()) =>
+                {
+                    Some(style.color)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(!colors.is_empty());
+        assert!(colors.iter().all(|color| color.r == color.g
+            && color.g == color.b
+            && color.r > 0.0
+            && color.r < 0.6
+            && color.a == 1.0));
+    };
     let original = labels(&mut renderer, &snapshot);
-    assert!(!original.iter().any(|text| text == "G-BATTLE"));
+    assert!(!original.iter().any(|text| text == "g-battle data"));
     assert!(original.iter().any(|text| text == "rival data"));
     let mut pattern: Vec<u8> = (0..16).collect();
     pattern[1..8].copy_from_slice(&[2, 5, 3, 7, 1, 4, 6]);
@@ -82,19 +122,41 @@ fn mz_battle_info_switches_all_three_bodies_and_keeps_player_options_separate() 
         ..Default::default()
     }));
     let battle = labels(&mut renderer, &snapshot);
-    for expected in ["G-BATTLE", "実データの相手", "RANDOM", "LANE ORDER", "RIVALCHART"] {
+    for expected in ["g-battle data", "RIVALCHART"] {
         assert!(battle.iter().any(|text| text == expected), "missing {expected}: {battle:?}");
     }
+    assert!(!battle.iter().any(|text| text == "実データの相手"));
     assert!(
         !battle.iter().any(|text| ["rival data", "ir data", "ランキング"].contains(&text.as_str()))
     );
     for key in 1..=7 {
         assert!(battle.iter().any(|text| text == &key.to_string()));
     }
+    assert_eq!(panel_option_images(&renderer), 1);
     snapshot.battle = Some(Arc::new(SelectBattleSnapshot::default()));
     let missing = labels(&mut renderer, &snapshot);
-    assert!(missing.iter().any(|text| text == "オプション情報なし"));
-    assert!(!missing.iter().any(|text| text == "RANDOM"));
+    assert!(missing.iter().any(|text| text == "NO DATA"));
+    assert!(!missing.iter().any(|text| text == "NOT FIXED"));
+    muted_statuses(&renderer);
+    assert_eq!(panel_option_images(&renderer), 0);
+    snapshot.battle = Some(Arc::new(SelectBattleSnapshot {
+        arrange: Some("RANDOM".into()),
+        ..Default::default()
+    }));
+    assert!(labels(&mut renderer, &snapshot).iter().any(|text| text == "NO DATA"));
+    snapshot.battle = Some(Arc::new(SelectBattleSnapshot {
+        arrange: Some("S-RANDOM".into()),
+        ..Default::default()
+    }));
+    let variable = labels(&mut renderer, &snapshot);
+    assert!(variable.iter().any(|text| text == "NOT FIXED"));
+    assert!(!variable.iter().any(|text| text == "NO DATA"));
+    muted_statuses(&renderer);
+    snapshot.battle = Some(Arc::new(SelectBattleSnapshot { loading: true, ..Default::default() }));
+    let loading = labels(&mut renderer, &snapshot);
+    assert!(loading.iter().any(|text| text == "LOADING"));
+    assert!(!loading.iter().any(|text| text == "NO DATA" || text == "NOT FIXED"));
+    muted_statuses(&renderer);
     snapshot.battle = None;
     assert_eq!(labels(&mut renderer, &snapshot), original);
 }
