@@ -172,7 +172,7 @@ DX MODEはLR2oraja Endless Dreamの`dxMode`を参照します。custom judge rat
 - GREAT: `±33333us`
 - GOOD: `±116666us`
 - BAD: `±200000us`
-- EMPTY POOR FAST: `1000000us`
+- EMPTY POOR FAST: `500000us`（LR2oraja Endless Dream rian 1.5.0の短縮に追従）
 - EMPTY POOR SLOW: `200000us`
 
 9K以外のLN end / long scratch end:
@@ -290,6 +290,10 @@ recovery = base * iidx_total / total_notes
 ```
 
 Hard / Classは30%未満でダメージを0.5倍にします。
+
+Hard / ExHard / Hazard / Class / ExClass / ExHardClassのdeath borderは2%です。
+残量が2%未満になった時点で0%（閉店）にします（LR2oraja Endless Dream rian 1.5.0に追従）。
+9KのPOP gaugeには適用しません。
 
 9KのPOP gauge:
 

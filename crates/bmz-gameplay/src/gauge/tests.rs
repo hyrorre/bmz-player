@@ -366,6 +366,81 @@ fn dx_gauge_definitions_match_lr2oraja_iidx_mode() {
 }
 
 #[test]
+fn dx_iidx_hard_and_class_gauges_close_below_2_percent() {
+    let death_types = [
+        GaugeType::Hard,
+        GaugeType::ExHard,
+        GaugeType::Hazard,
+        GaugeType::Class,
+        GaugeType::ExClass,
+        GaugeType::ExHardClass,
+    ];
+    for gauge_type in death_types {
+        assert_eq!(definition_for_rule_mode(gauge_type, RuleMode::Dx).death, 2.0, "{gauge_type:?}");
+
+        let mut state = GaugeState::new_with_property_and_rule_mode(
+            gauge_type,
+            160.0,
+            1000,
+            GaugeProperty::SevenKeys,
+            RuleMode::Dx,
+        );
+        let gauge = state
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == gauge_type)
+            .unwrap();
+        gauge.value = 3.0;
+        gauge.apply_mine(0.9);
+        assert!((gauge.value - 2.1).abs() < 0.000_1, "{gauge_type:?}");
+        gauge.apply_mine(0.2);
+        assert_eq!(gauge.value, 0.0, "{gauge_type:?}");
+    }
+    for gauge_type in [GaugeType::AssistEasy, GaugeType::Easy, GaugeType::Normal] {
+        assert_eq!(definition_for_rule_mode(gauge_type, RuleMode::Dx).death, 0.0, "{gauge_type:?}");
+    }
+
+    // 判定によるダメージでも 2% 未満で閉店する。
+    let mut state = GaugeState::new_with_property_and_rule_mode(
+        GaugeType::ExHard,
+        160.0,
+        1000,
+        GaugeProperty::SevenKeys,
+        RuleMode::Dx,
+    );
+    let exhard = state
+        .gauges
+        .iter_mut()
+        .find(|gauge| gauge.definition.gauge_type == GaugeType::ExHard)
+        .unwrap();
+    exhard.value = 11.5;
+    exhard.apply(GaugeJudgeIndex::Bd, 1.0);
+    assert!((exhard.value - 2.5).abs() < 0.000_1);
+    exhard.value = 10.5;
+    exhard.apply(GaugeJudgeIndex::Bd, 1.0);
+    assert_eq!(exhard.value, 0.0);
+}
+
+#[test]
+fn dx_9key_pop_gauges_keep_zero_death_border() {
+    for gauge_type in [
+        GaugeType::AssistEasy,
+        GaugeType::Easy,
+        GaugeType::Normal,
+        GaugeType::Hard,
+        GaugeType::ExHard,
+        GaugeType::Hazard,
+        GaugeType::Class,
+        GaugeType::ExClass,
+        GaugeType::ExHardClass,
+    ] {
+        let definition =
+            definition_for_rule_mode_and_keymode(gauge_type, RuleMode::Dx, KeyMode::K9);
+        assert_eq!(definition.death, 0.0, "{gauge_type:?}");
+    }
+}
+
+#[test]
 fn dx_9key_gauge_definitions_match_endless_dream_pop_mode() {
     let assist =
         definition_for_rule_mode_and_keymode(GaugeType::AssistEasy, RuleMode::Dx, KeyMode::K9);
