@@ -200,6 +200,21 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
             Some(state.skin_attempt.session_mode_index.unwrap_or(state.select_session_mode_index)
                 as i64)
         }
+        SKIN_REF_BMZ_SELECT_BATTLE_KEY_MODE => state
+            .select_battle
+            .as_ref()
+            .filter(|_| state.select_screen)
+            .map(|battle| i64::from(skin_key_mode_number(battle.key_mode))),
+        SKIN_REF_BMZ_SELECT_BATTLE_LANE_BASE..=SKIN_REF_BMZ_SELECT_BATTLE_LANE_LAST => {
+            Some(if state.select_screen && state.select_battle.is_some() {
+                i64::from(
+                    state.select_battle_lane_refs
+                        [(ref_id - SKIN_REF_BMZ_SELECT_BATTLE_LANE_BASE) as usize],
+                )
+            } else {
+                0
+            })
+        }
         SKIN_REF_BMZ_RULE_MODE => Some(state.rule_mode_index as i64),
         SKIN_REF_BMZ_LN_POLICY_SETTING => state.ln_policy_setting_index.map(|index| index as i64),
         SKIN_REF_BMZ_LN_SCORE_POLICY => state.ln_score_policy_index.map(|index| index as i64),

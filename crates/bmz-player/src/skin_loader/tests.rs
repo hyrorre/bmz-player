@@ -67,6 +67,8 @@ mod lr2;
 mod lua;
 #[path = "tests/luxe_detail_options.rs"]
 mod luxe_detail_options;
+#[path = "tests/mz_battle_info.rs"]
+mod mz_battle_info;
 #[path = "tests/mz_detail_options.rs"]
 mod mz_detail_options;
 #[path = "tests/paths.rs"]

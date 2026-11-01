@@ -50,6 +50,32 @@ pub fn select_hs_fix_index(hs_fix: &str) -> usize {
     }
 }
 
+pub(crate) fn select_battle_lane_refs(
+    battle: &crate::scene::SelectBattleSnapshot,
+) -> [u8; SKIN_RANDOM_LANE_REF_COUNT] {
+    let mut pattern = battle.lane_shuffle_pattern.clone();
+    if matches!(battle.key_mode, KeyMode::K10 | KeyMode::K14) {
+        // The DP option label carries FLIP; key tiles show numbers within each
+        // source side, including patterns that moved that side across the screen.
+        for (destination, source) in pattern.iter_mut().enumerate() {
+            if destination <= 7 {
+                *source = match *source {
+                    8..=14 => *source - 7,
+                    15 => 0,
+                    other => other,
+                };
+            } else {
+                *source = match *source {
+                    1..=7 => *source + 7,
+                    0 => 15,
+                    other => other,
+                };
+            }
+        }
+    }
+    random_lane_refs(&pattern, battle.key_mode)
+}
+
 pub(crate) fn random_lane_refs(
     pattern: &[u8],
     key_mode: KeyMode,

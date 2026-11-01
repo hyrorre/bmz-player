@@ -1,5 +1,7 @@
 use super::*;
 
+#[path = "select/battle_info.rs"]
+mod battle_info;
 #[path = "select/cases_01.rs"]
 mod cases_01;
 #[path = "select/cases_02.rs"]

@@ -1,5 +1,93 @@
 use super::*;
 
+/// Compute only a fixed permutation; never draw a missing seed or import a chart.
+pub(crate) fn preview_arrange_pattern(
+    key_mode: KeyMode,
+    arrangement: &crate::screens::play_start::BattleTargetArrangement,
+) -> Option<Vec<u8>> {
+    let is_double = matches!(key_mode, KeyMode::K10 | KeyMode::K14);
+    let mut pattern = if let Some(pattern) = &arrangement.arrange_pattern {
+        let mut sorted = pattern.clone();
+        sorted.sort_unstable();
+        if sorted != (0..LANE_COUNT as u8).collect::<Vec<_>>() {
+            return None;
+        }
+        pattern.iter().map(|&lane| usize::from(lane)).collect()
+    } else {
+        let packed = arrangement
+            .packed_seed
+            .and_then(|seed| u64::try_from(seed).ok())
+            .and_then(|seed| RandomOptionSeeds::unpack(seed, is_double));
+        let seed =
+            arrangement.arrange_seed.or_else(|| packed.map(|seeds| i64::from(seeds.p1.value())));
+        let seed_2p = if arrangement.legacy_arrange_seed {
+            seed.map(|seed| seed.wrapping_add(0x9e37_79b9))
+        } else {
+            arrangement
+                .arrange_seed_2p
+                .or_else(|| packed.and_then(|seeds| seeds.p2).map(|seed| i64::from(seed.value())))
+        };
+        let mut combined: Vec<usize> = (0..LANE_COUNT).collect();
+        for (side, arrange, seed) in [
+            (ArrangeSide::P1, arrangement.arrange, seed),
+            (ArrangeSide::P2, arrangement.arrange_2p, seed_2p),
+        ] {
+            if matches!(side, ArrangeSide::P2) && !is_double {
+                continue;
+            }
+            let arrange = if arrange_requires_scratch(arrange) && !key_mode_has_scratch(key_mode) {
+                ArrangeOption::Normal
+            } else {
+                arrange
+            };
+            let groups =
+                arrange_lane_groups_for_side(key_mode, arrange == ArrangeOption::RandomEx, side);
+            let perm = match arrange {
+                ArrangeOption::Normal => (0..LANE_COUNT).collect(),
+                ArrangeOption::Mirror => mirror_lane_permutation_for_side(key_mode, side),
+                ArrangeOption::Random | ArrangeOption::RandomEx => {
+                    shuffle_lane_groups(seed?, groups, arrangement.legacy_arrange_seed)
+                }
+                ArrangeOption::RRandom => {
+                    let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
+                    let mut rng = ArrangeRng::new(seed?, arrangement.legacy_arrange_seed);
+                    for group in groups {
+                        rotate_lane_group(&mut rng, &group, &mut perm);
+                    }
+                    perm
+                }
+                ArrangeOption::FRandom | ArrangeOption::MFRandom => {
+                    f_random_lane_permutation_for_side(
+                        seed?,
+                        key_mode,
+                        arrange,
+                        side,
+                        arrangement.legacy_arrange_seed,
+                    )
+                }
+                _ => return None,
+            };
+            merge_lane_permutation(&mut combined, &perm);
+        }
+        combined
+    };
+    if is_double && arrangement.double_option == DoubleOption::Flip {
+        // FLIP is applied before the per-side arrangement during launch.
+        for lane in &mut pattern {
+            *lane = match *lane {
+                0 => 15,
+                15 => 0,
+                1..=7 => *lane + 7,
+                8..=14 => *lane - 7,
+                _ => unreachable!(),
+            };
+        }
+    } else if !matches!(arrangement.double_option, DoubleOption::Off | DoubleOption::Flip) {
+        return None;
+    }
+    Some(pattern.into_iter().map(|lane| lane as u8).collect())
+}
+
 pub fn generate_arrange_seed() -> i64 {
     i64::from(RandomOptionSeeds::fresh(false).p1.value())
 }

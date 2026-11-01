@@ -297,6 +297,7 @@ mod select_flow_snapshot;
 mod select_folder_summary;
 #[path = "app/select_ir_battle.rs"]
 mod select_ir_battle;
+mod select_ir_battle_preview;
 mod select_key_bindings;
 mod select_lr2_skin_settings;
 #[path = "app/select_random_mix.rs"]

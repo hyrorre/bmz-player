@@ -20,6 +20,7 @@ pub(super) struct SelectIrBattleRuntime {
     pub(super) generation: u64,
     pub(super) loading: bool,
     pub(super) pending: Option<Receiver<SelectIrBattleReplayResult>>,
+    pub(super) preview: super::select_ir_battle_preview::SelectBattlePreviewRuntime,
 }
 
 pub(super) struct SelectIrBattleReplayResult {
@@ -74,7 +75,7 @@ impl WinitApp {
         choices
     }
 
-    fn select_ir_battle_source(&self) -> Option<(i64, [u8; 32], KeyMode)> {
+    pub(super) fn select_ir_battle_source(&self) -> Option<(i64, [u8; 32], KeyMode)> {
         let row = self.selected_chart_row()?;
         let chart = row.chart.as_ref()?;
         Some((chart.chart_id, row.score_sha256()?, KeyMode::from_str_opt(&chart.mode)?))
@@ -221,6 +222,7 @@ impl WinitApp {
         self.select.ir_battle.hold_short_action = None;
         self.select.ir_battle.loading = false;
         self.select.ir_battle.pending = None;
+        self.select.ir_battle.preview = Default::default();
         self.select.ir_battle.generation = self.select.ir_battle.generation.wrapping_add(1);
         if was_open {
             self.restart_select_bar_timer_without_scroll(Instant::now());

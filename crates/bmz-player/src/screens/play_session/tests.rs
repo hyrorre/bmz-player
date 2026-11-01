@@ -297,6 +297,8 @@ fn wav_header(format: u16, channels: u16, sample_rate: u32, bits: u16, data_len:
     out
 }
 
+#[path = "tests/battle_preview.rs"]
+mod battle_preview;
 #[path = "tests/cases_01.rs"]
 mod cases_01;
 #[path = "tests/cases_02.rs"]

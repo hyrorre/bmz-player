@@ -401,6 +401,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 self.refresh_play_target_from_source();
                 self.poll_select_maintenance();
                 self.poll_select_ir_battle_replay();
+                self.poll_select_battle_preview();
                 let background_us = instant_elapsed_us_u64(background_start);
                 let transition_start = Instant::now();
                 self.advance_decide_transition();

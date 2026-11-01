@@ -353,6 +353,7 @@ impl WinitApp {
             } else {
                 self.selected_replay_slot_for_selected()
             },
+            battle: self.select_battle_preview(&battle_choices),
             selected_title: if self.select.ir_battle.active {
                 battle_choices
                     .get(self.select.ir_battle.cursor)

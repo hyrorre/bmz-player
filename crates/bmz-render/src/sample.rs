@@ -62,6 +62,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         lr2_skin_settings: None,
         selected_replay_slot: Some(0),
         selected_title: "Sample BMS".to_string(),
+        battle: None,
         hispeed: 2.0,
         hispeed_mode_index: 0,
         base_hispeed_index: 0,

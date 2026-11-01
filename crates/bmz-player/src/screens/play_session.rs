@@ -465,6 +465,7 @@ mod seven_to_six;
 #[path = "play_session/sp_to_dp.rs"]
 mod sp_to_dp;
 
+pub(crate) use arrange_pipeline::preview_arrange_pattern;
 pub(crate) use arrange_pipeline::second_player_lane_mask;
 pub use arrange_pipeline::{apply_arrange, apply_arrange_pair, generate_arrange_seed};
 pub use build::{

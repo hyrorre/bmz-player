@@ -97,6 +97,23 @@ pub(in crate::skin) fn test_skin_op(
         SKIN_OPTION_BMZ_BEST_SCORE_OPTIONS_AVAILABLE => {
             state.skin_attempt.best_score_options.is_some()
         }
+        SKIN_OPTION_BMZ_SELECT_BATTLE_ACTIVE => {
+            state.select_screen && state.select_battle.is_some()
+        }
+        SKIN_OPTION_BMZ_SELECT_BATTLE_OPTIONS => {
+            state.select_screen
+                && state.select_battle.as_ref().is_some_and(|battle| battle.arrange.is_some())
+        }
+        SKIN_OPTION_BMZ_SELECT_BATTLE_PATTERN => {
+            state.select_screen
+                && state
+                    .select_battle
+                    .as_ref()
+                    .is_some_and(|battle| !battle.lane_shuffle_pattern.is_empty())
+        }
+        SKIN_OPTION_BMZ_SELECT_BATTLE_LOADING => {
+            state.select_screen && state.select_battle.as_ref().is_some_and(|battle| battle.loading)
+        }
         41 => state.bga_enabled,
         1901 => skin_hispeed_mode_is_floating(state),
         SKIN_OPTION_BMZ_RESULT_IR_SCOPE_GLOBAL => {

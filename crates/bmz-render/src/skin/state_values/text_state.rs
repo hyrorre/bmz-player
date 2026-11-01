@@ -176,6 +176,18 @@ pub(super) fn skin_main_state_text(
         return value.to_string();
     }
     match ref_id {
+        SKIN_TEXT_BMZ_SELECT_BATTLE_NAME..=SKIN_TEXT_BMZ_SELECT_BATTLE_DOUBLE => draw_state
+            .filter(|state| state.select_screen)
+            .and_then(|state| state.select_battle.as_ref())
+            .map(|battle| match ref_id {
+                SKIN_TEXT_BMZ_SELECT_BATTLE_NAME => battle.name.clone(),
+                SKIN_TEXT_BMZ_SELECT_BATTLE_ARRANGE => battle.arrange.clone().unwrap_or_default(),
+                SKIN_TEXT_BMZ_SELECT_BATTLE_ARRANGE_2P => {
+                    battle.arrange_2p.clone().unwrap_or_default()
+                }
+                _ => battle.double_option.clone().unwrap_or_default(),
+            })
+            .unwrap_or_default(),
         1 => {
             if state.rival.is_empty() {
                 play_target_name(state.target, state.resolved_target_name)
@@ -390,6 +402,7 @@ pub(super) fn lua_main_state_text_values(
         SKIN_TEXT_BMZ_CHART_MISS_TEXT,
     ];
     refs.extend(120..=129);
+    refs.extend(SKIN_TEXT_BMZ_SELECT_BATTLE_NAME..=SKIN_TEXT_BMZ_SELECT_BATTLE_DOUBLE);
     refs.extend(SKIN_REF_BMZ_BEST_SCORE_ARRANGE_1P..=SKIN_REF_BMZ_BEST_SCORE_DOUBLE_OPTION);
     refs.extend(150..=159);
     refs.extend(190..=196);

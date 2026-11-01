@@ -2744,3 +2744,37 @@ profileの`[skin]`はkey modeごとにplay skin pathと設定を持ちます。
 `F-RANDOM` / `MF-RANDOM`は既存の146×19 ARRANGE sprite領域へフォントで表示します。
 Lua定義の`align=1`はdestinationの`x`を中央基準にするため、Rmz-skin側で
 sprite左端から半幅だけ中央へ移し、フォントサイズもspriteの実字高へ合わせます。
+
+## G-BATTLE一覧の相手情報
+
+BMZ拡張の`20200..20229`は選曲中のG-BATTLE一覧で選択している相手専用です。
+自分のオプションや配置（`42` / `43` / `450..469`）とは独立しています。
+
+| ID | 種類 | 内容 |
+| --- | --- | --- |
+| 20200 | option | 相手一覧が開いている。BATTLE OFF行でもtrue。SESSION MODEの1970とは独立 |
+| 20201 | option | 1Pオプションを取得済み |
+| 20202 | option | 固定配置を取得済み |
+| 20203 | option | ローカルリプレイの情報を読み込み中 |
+| 20204 | text | 選択中の相手名 / MYBEST / REPLAY名 |
+| 20205 / 20206 | text | 相手の1P / 2P配置オプション。未取得は空文字 |
+| 20207 | text | 相手のDPオプション。未取得は空文字 |
+| 20208 | number | 元譜面のキー数（4 / 5 / 6 / 7 / 8 / 9 / 10 / 14） |
+| 20210..20229 | number | 表示先鍵盤に来る元鍵盤。450..469と同じスロット順、0は未取得 |
+
+一覧を閉じた後とSelect以外ではoptionはfalse、textは空、配置numberは0です。
+配置の1Pは20210..20218、2Pは20220..20228、各皿は20219 / 20229です。
+DP FLIPではDPラベルにFLIPを示し、数字は移動元サイド内の鍵盤番号で表します。
+
+IRは取得済みのランキング / ライバルスコアのメタデータを参照し、表示目的で
+リプレイをダウンロードしません。MYBEST / REPLAYはカーソル停止120ms後に
+ローカルファイルを別処理で読み、古い譜面・カーソルへの結果は反映しません。
+情報欠損をNORMALや新しい乱数seedで補完しません。固定配置のある
+NORMAL / MIRROR / RANDOM / R-RANDOM / RANDOM-EX / F-RANDOM / MF-RANDOMは
+実際の配置処理と同じ乱数規則を使い、S-RANDOM等のノートごとの変換は固定配置を出しません。
+
+mz-selectは左下の独立パネルで相手名、配置オプション、鍵盤順、既存の
+CHART REPLICATION設定（text 86）を表示します。同梱mgenplus-1c-bold.ttfと
+result/keys1p.pngを使用し、HARD等のゲージ名は表示しません。
+20200がtrueの間はランキング / rival data / ir dataの本文を隠し、
+閉じたら元の条件で復帰します。上部のライバル選択欄は維持します。

@@ -597,6 +597,13 @@ macro_rules! skin_document_render_select_render_methods {
                 guide_se_enabled: snapshot.guide_se_enabled,
                 constant_enabled: snapshot.constant_enabled,
                 select_session_mode_index: select_session_mode_index(&snapshot.assist),
+                select_battle: snapshot.battle.clone(),
+                select_battle_lane_refs: snapshot
+                    .battle
+                    .as_ref()
+                    .map_or([0; SKIN_RANDOM_LANE_REF_COUNT], |battle| {
+                        select_battle_lane_refs(battle)
+                    }),
                 select_mode_index: select_mode_index(&snapshot.select_mode),
                 select_mode_extended_index: select_mode_index_extended(&snapshot.select_mode),
                 select_difficulty_filter_index: snapshot.select_difficulty_filter as usize,

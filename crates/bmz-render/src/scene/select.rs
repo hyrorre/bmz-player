@@ -1,5 +1,17 @@
 use super::*;
 
+/// Opponent data for the open G-BATTLE list. Missing metadata stays unknown.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SelectBattleSnapshot {
+    pub name: String,
+    pub key_mode: KeyMode,
+    pub arrange: Option<String>,
+    pub arrange_2p: Option<String>,
+    pub double_option: Option<String>,
+    pub lane_shuffle_pattern: Vec<u8>,
+    pub loading: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectSnapshot {
     /// Physical output dimensions injected by Renderer before skin evaluation.
@@ -40,6 +52,8 @@ pub struct SelectSnapshot {
     /// Currently selected replay slot (0..=3), normalized to an existing slot.
     pub selected_replay_slot: Option<u8>,
     pub selected_title: String,
+    /// Present only while the opponent list is open, including its OFF row.
+    pub battle: Option<Arc<SelectBattleSnapshot>>,
     /// Current profile hispeed shown to select skins (NUMBER_HISPEED=310/311).
     pub hispeed: f32,
     pub hispeed_mode_index: i32,
@@ -290,6 +304,7 @@ impl Default for SelectSnapshot {
             selected_chart_id: None,
             selected_replay_slot: None,
             selected_title: String::new(),
+            battle: None,
             hispeed: 0.0,
             hispeed_mode_index: 0,
             base_hispeed_index: 0,

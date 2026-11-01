@@ -64,6 +64,8 @@ pub struct SkinDrawState {
     /// Resultでは互換値、Play/SelectではBMZ拡張として、現在または開始予定の
     /// 固定レーン配置を画面共通で公開する。
     pub random_lane_refs: [u8; SKIN_RANDOM_LANE_REF_COUNT],
+    pub select_battle: Option<std::sync::Arc<crate::scene::SelectBattleSnapshot>>,
+    pub select_battle_lane_refs: [u8; SKIN_RANDOM_LANE_REF_COUNT],
     /// 現在対象の譜面にLNが含まれるか。Noneは譜面未選択・未確定。
     pub chart_has_long_notes: Option<bool>,
     /// Resultの実効LN種別imageset index (0=LN, 1=CN, 2=HCN)。
@@ -542,6 +544,8 @@ impl Default for SkinDrawState {
             result_extended_arrange_index: 0,
             result_extended_arrange_2p_index: 0,
             random_lane_refs: [0; SKIN_RANDOM_LANE_REF_COUNT],
+            select_battle: None,
+            select_battle_lane_refs: [0; SKIN_RANDOM_LANE_REF_COUNT],
             chart_has_long_notes: None,
             result_ln_mode_index: None,
             rule_mode_index: 0,

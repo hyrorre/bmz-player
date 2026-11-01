@@ -126,6 +126,19 @@ pub const SKIN_REF_BMZ_IR_SCOPE_TOTAL: i32 = 1969;
 /// BMZ extension: session mode (`0=NORMAL`, `1=PRACTICE`, `2=AUTOPLAY`,
 /// `3=AUTO BATTLE`, `4=G-BATTLE`).
 pub const SKIN_REF_BMZ_SELECT_SESSION_MODE: i32 = 1970;
+/// BMZ extension: the G-BATTLE opponent list is open (independent of session mode).
+pub const SKIN_OPTION_BMZ_SELECT_BATTLE_ACTIVE: i32 = 20_200;
+pub const SKIN_OPTION_BMZ_SELECT_BATTLE_OPTIONS: i32 = 20_201;
+pub const SKIN_OPTION_BMZ_SELECT_BATTLE_PATTERN: i32 = 20_202;
+pub const SKIN_OPTION_BMZ_SELECT_BATTLE_LOADING: i32 = 20_203;
+pub const SKIN_TEXT_BMZ_SELECT_BATTLE_NAME: i32 = 20_204;
+pub const SKIN_TEXT_BMZ_SELECT_BATTLE_ARRANGE: i32 = 20_205;
+pub const SKIN_TEXT_BMZ_SELECT_BATTLE_ARRANGE_2P: i32 = 20_206;
+pub const SKIN_TEXT_BMZ_SELECT_BATTLE_DOUBLE: i32 = 20_207;
+pub const SKIN_REF_BMZ_SELECT_BATTLE_KEY_MODE: i32 = 20_208;
+/// Destination key -> source key, matching refs 450..469; zero means unknown.
+pub const SKIN_REF_BMZ_SELECT_BATTLE_LANE_BASE: i32 = 20_210;
+pub const SKIN_REF_BMZ_SELECT_BATTLE_LANE_LAST: i32 = 20_229;
 /// Deprecated BMZ extension: the removed grade difference display setting.
 ///
 /// These IDs remain reserved for old BMZ skins. The renderer exposes a fixed
