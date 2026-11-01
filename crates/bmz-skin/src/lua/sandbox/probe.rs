@@ -53,6 +53,8 @@ pub(super) struct MainStateProbe {
     pub(super) runtime_mode: LuaSkinRuntimeMode,
     pub(super) runtime_callbacks: Vec<LuaRuntimeCallbackSpec>,
     pub(super) load_dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
+    /// Files this VM wrote over the session's; see [`LuaFileOverlay`].
+    pub(super) file_overlay: SharedLuaFileOverlay,
 }
 
 impl Default for MainStateProbe {
@@ -104,6 +106,7 @@ impl Default for MainStateProbe {
             runtime_mode: LuaSkinRuntimeMode::Auto,
             runtime_callbacks: Vec::new(),
             load_dependencies: None,
+            file_overlay: SharedLuaFileOverlay::default(),
         }
     }
 }

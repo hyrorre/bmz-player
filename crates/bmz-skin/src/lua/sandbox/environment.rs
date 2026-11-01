@@ -14,11 +14,13 @@ pub(super) fn install_sandbox(
 ) -> Result<Arc<Mutex<MainStateProbe>>> {
     lua.set_memory_limit(LUA_MEMORY_LIMIT_BYTES).context("failed to set Lua skin memory limit")?;
     let main_state_probe = Arc::new(Mutex::new(MainStateProbe::default()));
+    let file_overlay = Arc::new(Mutex::new(LuaFileOverlay::new(runtime_state.file_store.clone())));
     {
         let mut probe =
             main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
         probe.runtime_mode = runtime_state.runtime_mode;
         probe.screen_size = runtime_state.screen_size;
+        probe.file_overlay = file_overlay.clone();
     }
     if let Some(load_dependencies) = load_dependencies.clone() {
         let mut probe =
@@ -141,14 +143,30 @@ pub(super) fn install_sandbox(
     globals.set("os", create_os_stub(lua, main_state_probe.clone())?)?;
     globals.set(
         "io",
-        create_io_stub(lua, path_context.entry_dir(), virtual_io_files, load_dependencies.clone())?,
+        create_io_stub(
+            lua,
+            path_context,
+            virtual_io_files,
+            load_dependencies.clone(),
+            file_overlay.clone(),
+        )?,
     )?;
     globals.set("debug", Value::Nil)?;
     install_bit32_library(lua)?;
     // LuaJ's standard globals expose luajava directly. Some beatoraja skins use
     // that global without calling require("luajava"), so keep both access paths
     // pointed at the same sandboxed compatibility table.
-    globals.set("luajava", create_luajava_stub(lua)?)?;
+    let luajava = create_luajava_stub(lua)?;
+    if let Value::Table(luajava) = &luajava {
+        install_luajava_file_facade(
+            lua,
+            luajava,
+            path_context,
+            file_overlay.clone(),
+            load_dependencies.clone(),
+        )?;
+    }
+    globals.set("luajava", luajava)?;
     let package: Table = globals.get("package")?;
     package.set("path", path_context.initial_package_path())?;
     package.set("cpath", "")?;
@@ -214,6 +232,15 @@ pub(super) fn install_sandbox(
     globals.set("loadfile", loadfile)?;
 
     let main_state = create_main_state_stub(lua, main_state_probe.clone())?;
+    if let Value::Table(main_state) = &main_state {
+        install_main_state_file_api(
+            lua,
+            main_state,
+            path_context,
+            file_overlay,
+            load_dependencies.clone(),
+        )?;
+    }
     lua.globals().set("bmz_main_state", main_state)?;
 
     let context_for_require = path_context.clone();

@@ -405,6 +405,7 @@ pub(super) fn apply_json_skin_sync(
     let library_roots = app_paths.skin_library_roots();
     let mut runtime_state = runtime_state.clone();
     runtime_state.screen_size = renderer.render_target_size();
+    runtime_state.file_store = Some(pipeline.lua_file_store.clone());
     pipeline.record_screen_request(
         SkinDecodeRequest::new(
             pipeline.generation(kind),

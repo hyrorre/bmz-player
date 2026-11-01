@@ -160,6 +160,10 @@ pub struct LuaLoadRuntimeState {
     /// written by Java/Lua at runtime.  Keeping it in the load state makes the
     /// document cache invalidate when the supplied result data changes.
     pub virtual_io_files: BTreeMap<String, String>,
+    /// Files the skin writes through `io` / `main_state.file_*`, kept in
+    /// memory across loads. Without one, a load still reads back its own
+    /// writes, and later loads do not see them.
+    pub file_store: Option<LuaSkinFileStore>,
 }
 
 impl LuaLoadRuntimeState {
@@ -277,7 +281,7 @@ fn main_state_judge_ref(index: i32) -> Option<i32> {
     }
 }
 
-pub use lua::{LuaRuntimeStateScope, LuaSkinRuntime};
+pub use lua::{LuaRuntimeStateScope, LuaSkinFileStore, LuaSkinRuntime};
 
 pub fn load_beatoraja_json_skin(path: &Path, enabled_options: &[i32]) -> Result<SkinDocument> {
     SkinDocument::load_beatoraja_json_with_options(path, enabled_options)

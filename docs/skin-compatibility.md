@@ -112,7 +112,7 @@ closure/module stateを維持し、frameごとのmain_stateを参照します。
 | `main_state.volume_*` / `set_volume_*` | runtime VMで現在のマスター / キー / BGM音量を読み書きします。書き込みはSelectの音量スライダーと同じくプロファイルへ保存します。[runtimeテスト](../crates/bmz-skin/src/tests/lua_runtime_events.rs) |
 | `skin_config.enabled_options` | ヘッダのproperty順の選択opです。読んだopだけを文書の依存値に記録します |
 | file / module解決 | `SkinPathContext`の許可rootに限定します。require / dofile / loadfile、source等のパス解決を扱う |
-| `os` / `io` | clock / date / time / difftime等の限定API、仮想ファイル読込・永続化しない書込stubです。`os.date`はLuaJの書式指定子に対応します。任意のOS操作を許可しない |
+| `os` / `io` | clock / date / time / difftime等の限定API、仮想ファイル読込です。`io`の書き込みはディスクへ書かずメモリに残し、同じ起動中は後のロードでも読み戻せます。`os.date`はLuaJの書式指定子に対応します。任意のOS操作を許可しない。[仕様](skin.md#メモリ上のスキンファイル)、[回帰テスト](../crates/bmz-skin/src/tests/lua_skin_files.rs) |
 | `bit32` | LuaJ（Lua 5.2）のbit32です。[LuaJ実行結果との比較テスト](../crates/bmz-skin/src/tests/lua_stdlib_compat.rs) |
 | `math.random`の小数引数 | LuaJと同じ整数変換と区間幅検査をロード・runtime両方へ適用します。SocialSkinのDecide / Resultで使う小数範囲に対応します。乱数列自体はLua 5.4です。[比較テスト](../crates/bmz-skin/src/tests/lua_stdlib_compat.rs) |
 | API面の互換性固定 | 拡張前の名前・型・戻り値を[fixture](../crates/bmz-skin/src/tests/lua_api_baseline.rs)で固定し、インストール済みスキンは[比較ハーネス](../crates/bmz-skin/src/tests/installed_skin_compat.rs)で変更前後を比較します |
@@ -129,7 +129,7 @@ timerの単位・OFF値・書き込み制約・失敗時の値は[skin.md](skin.
 | DXA | v5以降、独自キー、アーカイブ内wildcard列挙、動画・音声・Lua/CSV includeは未対応 |
 | Selectの曲バーのLua `draw` | クリック判定では評価しません。行ごとに条件を評価するため、最後のフレームの結果を使えません |
 | その他のLua function field | 上記以外のwriter等はcallbackの対象外です。対応追加時はfieldと呼び出し契約を個別に定義する |
-| beatoraja最新版のLua API | `file_*` / HTTP通信 / `open_url`は未対応です。非同期HTTPの`http_get_async` / `http_poll` / `http_cancel`はbeatorajaの通信無効時と同じ失敗値を返し、SocialSkinの無限待ちを防ぎます。実通信・実書込は追加していません。[Lua APIの互換範囲](skin.md#lua-apiの互換範囲)、[回帰テスト](../crates/bmz-skin/src/tests/lua_disabled_http.rs) |
+| beatoraja最新版のLua API | `file_*`はメモリ上のスキンファイルで対応します（ModernChic Ver 4.71のローテーション等）。HTTP通信 / `open_url`は未対応です。非同期HTTPの`http_get_async` / `http_poll` / `http_cancel`はbeatorajaの通信無効時と同じ失敗値を返し、SocialSkinの無限待ちを防ぎます。実通信・ディスクへの書き込みは行いません。[Lua APIの互換範囲](skin.md#lua-apiの互換範囲)、[回帰テスト](../crates/bmz-skin/src/tests/lua_disabled_http.rs) |
 | LuaJとLua 5.4の差 | 整数値floatの`tostring`、`string.format("%d")`の小数、`os.date`の既定書式と未知指定子は差が残ります。数値callbackの`nil`はBMZでは未取得、LuaJの`toint()` / `tofloat()`では0です。[仕様](skin.md#lua-apiの互換範囲) |
 | function診断 | field path付きwarningやcustom timerのID付き診断はあります。object ID・Lua source file / lineの一貫した提示は改善余地がある |
 | PMchara | `--`座標補間と右下pixel色によるchroma keyは未対応です。通常のalphaは対応します。[詳細仕様](skin.md) |

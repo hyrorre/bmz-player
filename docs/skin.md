@@ -747,7 +747,7 @@ mz-selectのプレイヤーランク表示のように、ロード時に経験�
 これに依存します。これらの値はdecode cacheの依存関係に含め、プレイ後にSelectへ戻ると
 変化した値で再decodeします。profile切替では切替先profileの値を使います。
 mz-selectの「今日の成果」とプレイ曲ログは、beatorajaではスキンが`io`で書いたファイルを
-次回ロード時に読みます。BMZは`io`の書き込みを永続化しないため、BMZ対応版のmz-selectは
+次回ロード時に読みます。BMZは`io`の書き込みをアプリ終了後まで残さないため、BMZ対応版のmz-selectは
 `bmz`がある場合に[BMZ Daily Statistics Refs](#bmz-daily-statistics-refs)を参照し、
 リセットボタンをevent `-10100`にします。
 
@@ -859,7 +859,7 @@ Lua sandboxはロード時の互換APIとして`os.clock` / `os.date` / `os.time
 tableへ書き戻します。引数なしでは現在時刻を返し、`os.date`は`!` prefixでUTCを選べます。
 `os.date`の書式は[Lua APIの互換範囲](#lua-apiの互換範囲)を参照します。libGDXの
 `Controllers.getControllers()`は入力のない空配列として`size` / `get()` / `first()`を
-提供します。`io`の書き込みstubは内容を永続化しません。初回document構築は、蓄積データを
+提供します。`io`の書き込みは[メモリ上のスキンファイル](#メモリ上のスキンファイル)に残ります。初回document構築は、蓄積データを
 Luaで解析するResult skinも通せる専用の命令数上限を持ち、runtime callback単位の上限は
 それより小さい値とします。
 
@@ -1034,13 +1034,42 @@ BMZ独自のAPIは`bmz.option` / `bmz.get_option`、runtime VMだけの`main_sta
 （`float_number`の別名）、`total_play_counts_in_session` / `total_play_notes_in_session` /
 `score_date_sec_time`、名前付きプロパティです。
 
-beatoraja最新版の`file_*`、HTTP通信、`open_url`は未対応です。
+beatoraja最新版の`file_*`は[メモリ上のスキンファイル](#メモリ上のスキンファイル)で提供し、
+HTTP通信と`open_url`は未対応です。
 `http_get_async`は`nil, "HTTP disabled"`、`http_poll`は`status="failed"`・`status_code=0`・
 空の`lines`・`error="HTTP disabled"`、`http_cancel`はfalseを返します。
 beatorajaの通信無効時と同じ応答により、SocialSkin等がJava互換stubを実ワーカーと
 誤認して待ち続けることを防ぎます。実際の通信は開始しません。
-`io`の書き込みは永続化しません。`luajava`の`bindClass` / `newInstance` / `new` /
-`createProxy`は入力のない無害なstubを返し、Javaのオブジェクトやファイルは作りません。
+`luajava`の`bindClass` / `newInstance` / `new` / `createProxy`は入力のない無害なstubを返し、
+Javaのオブジェクトを作りません。例外は`java.io.File`で、メモリ上のスキンファイルの一覧・作成に
+対応する`listFiles` / `mkdir` / `mkdirs` / `exists` / `isDirectory` / `isFile` / `getName` /
+`getPath`を返します（ModernChic Ver 4.2系のフォルダ一覧）。
+
+### メモリ上のスキンファイル
+
+beatorajaのLua skinは`io`や`main_state.file_*`でスキンフォルダへファイルを書き、後で読み戻します
+（ModernChicのレーンカバー・背景・キャラクターのローテーション、プレイ状況詳細モード、
+プレイ履歴、Starseekerの打鍵数など）。BMZはディスクへ書かず、書いた内容をメモリに残します。
+
+- 読み込みは、appが渡す読取専用の仮想ファイル、スキンが書いたファイル、ディスク上のファイルの順に探します。
+  `skin_config.get_path`が返す絶対パスも、スキンのroot内なら読めます。相対パスは従来どおり`..`を拒否します。
+- `io.open(path, "w" | "a")`の書き込みは、閉じる前でも読み戻せます。`file:write`はファイルを返すため、
+  `io.open(path, "a"):write(text):close()`の連結も使えます。`file:read`は`*l` / `*a` / `*n`と、
+  `*`なしの形式、読み取りバイト数に対応します。
+- `main_state.file_exists` / `file_mkdir` / `file_list` / `file_read_lines` / `file_write` /
+  `file_append` / `file_clear` / `file_count_lines` / `file_delete`は、beatorajaの
+  `SkinFileLuaApiExporter`と同じ戻り値です。`file_list`はディスクの一覧と書いたファイルを合わせ、
+  パターンを正規化したパスにLuaの`string.find`で照合して一致部分を返します（beatorajaはJava正規表現に
+  変換しますが、スキンが使う`Play.+%.png`等は同じ結果です）。
+- 1回のロードではスキンを複数回実行します。後のロードへ残すのは、document VMの本体実行と、
+  `act`・描画callback等の実行時の書き込みだけです。callback推論とruntime VMの本体の再実行の
+  書き込みは、その実行の中だけで読み戻し、破棄します。ロードが失敗した場合も残しません。
+- appは1つの保存領域をアプリ終了まで共有します。そのため、ローテーションの一巡や粘着情報、
+  プレイ履歴は同じ起動中は引き継がれ、再起動すると消えます。保存領域を渡さないロード
+  （動画出力、テストハーネス等）は、そのロードの中だけで読み戻します。
+- 保存領域へ書くロード、または保存領域から読んだロードは、document cacheを使いません。
+  ロード時の書き込みを省略しないためです。ディレクトリの一覧を読んだロードも同様です。
+- 1ファイル8MiB、合計32MiBを上限とします。超える書き込みは`file:write`がnilとエラー文を返します。
 
 ## Skin Type
 

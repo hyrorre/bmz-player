@@ -155,6 +155,11 @@ pub(super) fn execute_lua_skin(
         let actions = probe.take_audio_actions();
         probe.capture_audio_actions = false;
         probe.inferring = true;
+        probe
+            .file_overlay
+            .lock()
+            .map_err(|_| anyhow!("Lua skin file overlay lock poisoned"))?
+            .begin_inference();
         actions
     };
     instruction_budget.begin_inference();
@@ -356,6 +361,14 @@ pub(super) fn execute_lua_skin(
     // A cached document cannot safely clone its sidecar VM. Keeping runtime
     // callback documents out of the document cache preserves registry/VM IDs.
     dependencies.opaque |= needs_runtime;
+    // Only a completed load changes the files later loads read back.
+    main_state_probe
+        .lock()
+        .map_err(|_| anyhow!("main_state probe lock poisoned"))?
+        .file_overlay
+        .lock()
+        .map_err(|_| anyhow!("Lua skin file overlay lock poisoned"))?
+        .commit();
     Ok(ExecutedLuaSkin {
         value: json,
         warnings,
@@ -424,6 +437,14 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
         .eval::<Value>()
         .with_context(|| format!("failed to execute runtime Lua skin: {}", input.display()))?;
     apply_lua_scene_boolean_state(&lua, runtime_state, None)?;
+    // This `main` repeated the document load's writes; callbacks write for real.
+    runtime_probe
+        .lock()
+        .map_err(|_| anyhow!("main_state probe lock poisoned"))?
+        .file_overlay
+        .lock()
+        .map_err(|_| anyhow!("Lua skin file overlay lock poisoned"))?
+        .go_live();
 
     let mut callbacks = Vec::with_capacity(runtime_callbacks.len());
     for (callback_id, spec) in runtime_callbacks.iter().enumerate() {

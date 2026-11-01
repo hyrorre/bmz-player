@@ -217,3 +217,57 @@ fn mz_select_player_rank_panel_uses_profile_player_stats() {
         });
     assert_eq!(graph_width, Some(84));
 }
+
+/// ModernChic's rotations and play history read back on the next load what
+/// an earlier load wrote; the pipeline keeps those files for the session.
+#[test]
+fn frontend_skin_loads_read_back_files_written_by_earlier_loads() {
+    let data = ProfileTestDir::new();
+    let root = data.paths.data_dir.join("skins/files");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("decide.luaskin");
+    std::fs::write(
+        &path,
+        r#"
+        if skin_config == nil then return {type = 6, name = "header"} end
+        local path = skin_config.get_path("count.txt")
+        local f = io.open(path, "r")
+        local count = f and tonumber(f:read("*l")) or 0
+        if f then f:close() end
+        io.open(path, "w"):write(count + 1):close()
+        return {type = 6, name = tostring(count)}
+        "#,
+    )
+    .unwrap();
+    let skin = SkinConfig { decide: path.to_string_lossy().into_owned(), ..Default::default() };
+    let mut pipeline = SkinPipelineRuntime::new();
+    for expected in ["0", "1", "2"] {
+        let (_, pending_decide, _) = reload_skin_textures(
+            &data.paths,
+            &mut pipeline,
+            SkinReloadRequest { decide: true, ..Default::default() },
+            FrontendLuaLoadInputs {
+                player_name: "test",
+                ir_name: None,
+                player_stats: &PlayerStatsSnapshot::default(),
+            },
+            &skin,
+            bmz_skin::LuaSkinRuntimeMode::default(),
+            false,
+            None,
+            None,
+        );
+        assert!(pending_decide);
+        let decoded = pipeline
+            .decode_rx
+            .as_ref()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .result
+            .unwrap();
+        assert_eq!(decoded.document.name, expected);
+    }
+    assert!(!root.join("count.txt").exists(), "nothing is written to disk");
+    pipeline.shutdown_workers();
+}

@@ -41,6 +41,8 @@ mod sandbox_budget;
 mod sandbox_environment;
 #[path = "lua/sandbox/event.rs"]
 mod sandbox_event;
+#[path = "lua/sandbox/files.rs"]
+mod sandbox_files;
 #[path = "lua/sandbox/io.rs"]
 mod sandbox_io;
 #[path = "lua/sandbox/main_state.rs"]
@@ -54,6 +56,7 @@ use sandbox_bit32::*;
 use sandbox_budget::*;
 use sandbox_environment::*;
 use sandbox_event::*;
+use sandbox_files::*;
 use sandbox_io::*;
 use sandbox_main_state::*;
 use sandbox_probe::*;
@@ -96,6 +99,7 @@ use postprocess::*;
 use runtime::*;
 pub use runtime::{ConvertReport, LuaRuntimeStateScope, LuaSkinRuntime};
 use runtime_events::*;
+pub use sandbox_files::LuaSkinFileStore;
 
 #[cfg(test)]
 #[path = "lua/tests.rs"]

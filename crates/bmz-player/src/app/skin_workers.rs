@@ -59,6 +59,7 @@ impl SkinDecodeRequest {
 
 pub(super) fn spawn_skin_decode(pipeline: &SkinPipelineRuntime, mut request: SkinDecodeRequest) {
     request.runtime_state.screen_size = pipeline.screen_size;
+    request.runtime_state.file_store = Some(pipeline.lua_file_store.clone());
     pipeline.record_screen_request(request.clone());
     let SkinDecodeRequest {
         pinned_sources,

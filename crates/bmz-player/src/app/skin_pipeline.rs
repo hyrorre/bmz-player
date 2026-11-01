@@ -147,6 +147,9 @@ pub(super) struct SkinPipelineRuntime {
     pub(super) gpu_texture_cache: SharedSkinGpuTextureCache,
     pending: PendingSkinKinds,
     pub(super) generations: SkinReloadGenerations,
+    /// Files Lua skins write (rotation logs, play history); beatoraja keeps
+    /// them in the skin folder, BMZ in memory until the app exits.
+    pub(super) lua_file_store: bmz_skin::LuaSkinFileStore,
 }
 
 impl SkinPipelineRuntime {
@@ -191,6 +194,7 @@ impl SkinPipelineRuntime {
             gpu_texture_cache: Arc::new(Mutex::new(SkinGpuTextureCache::default())),
             pending: PendingSkinKinds::default(),
             generations: SkinReloadGenerations::default(),
+            lua_file_store: bmz_skin::LuaSkinFileStore::default(),
         }
     }
 

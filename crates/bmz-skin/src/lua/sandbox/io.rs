@@ -89,88 +89,65 @@ pub(super) fn create_os_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> ml
     Ok(Value::Table(table))
 }
 
+/// Lua `io`: reads app-supplied virtual files, files the skin wrote and files
+/// inside the skin roots; writes stay in the [`LuaFileOverlay`].
 pub(super) fn create_io_stub(
     lua: &Lua,
-    root: &Path,
+    path_context: &SkinPathContext,
     virtual_io_files: &BTreeMap<String, String>,
     load_dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
+    file_overlay: SharedLuaFileOverlay,
 ) -> mlua::Result<Value> {
     let virtual_io_files =
         normalize_virtual_io_files(virtual_io_files).map_err(mlua::Error::external)?;
     let table = lua.create_table()?;
-    let root_for_open = root.to_path_buf();
+    let context_for_open = path_context.clone();
     let virtual_files_for_open = virtual_io_files.clone();
     let dependencies_for_open = load_dependencies.clone();
+    let overlay_for_open = file_overlay.clone();
     table.set(
         "open",
         lua.create_function(move |lua, (path, mode): (String, Option<String>)| {
             let mode = mode.unwrap_or_else(|| "r".to_string());
             if matches!(mode.as_str(), "r" | "rb") {
-                let Ok(requested) = normalize_skin_io_relative_path(&path) else {
-                    return Ok(Value::Nil);
-                };
-                let virtual_source = virtual_files_for_open.get(&requested);
-                record_virtual_io_dependency(
-                    &requested,
-                    virtual_source.map(String::as_str),
+                return match read_lua_skin_file(
+                    &context_for_open,
+                    &virtual_files_for_open,
+                    &overlay_for_open,
                     dependencies_for_open.as_ref(),
-                );
-                if let Some(source) = virtual_source {
-                    return create_read_file_stub(lua, source.clone());
-                }
-                let Ok(path) = resolve_skin_io_path(&root_for_open, &requested) else {
-                    mark_load_dependency_opaque(dependencies_for_open.as_ref());
-                    return Ok(Value::Nil);
+                    &path,
+                )? {
+                    Some(source) => create_read_file_stub(lua, source),
+                    None => Ok(Value::Nil),
                 };
-                let Ok(source) = read_skin_io_source(&path) else {
-                    mark_load_dependency_opaque(dependencies_for_open.as_ref());
-                    return Ok(Value::Nil);
-                };
-                record_lua_loaded_file_dependency(&path, dependencies_for_open.as_ref());
-                return create_read_file_stub(lua, source);
             }
             if mode.starts_with('w') || mode.starts_with('a') {
-                return create_write_file_stub(lua);
+                return create_lua_file_writer(
+                    lua,
+                    lua_file_key(&context_for_open, &path),
+                    overlay_for_open.clone(),
+                    dependencies_for_open.clone(),
+                    mode.starts_with('w'),
+                );
             }
             Ok(Value::Nil)
         })?,
     )?;
-    let root_for_lines = root.to_path_buf();
+    let context_for_lines = path_context.clone();
     let virtual_files_for_lines = virtual_io_files;
     let dependencies_for_lines = load_dependencies;
     table.set(
         "lines",
         lua.create_function(move |lua, path: String| {
-            let Ok(requested) = normalize_skin_io_relative_path(&path) else {
-                return create_lines_iterator(lua, Arc::new(Mutex::new(ReadFileState::default())));
-            };
-            let virtual_source = virtual_files_for_lines.get(&requested);
-            record_virtual_io_dependency(
-                &requested,
-                virtual_source.map(String::as_str),
+            let source = read_lua_skin_file(
+                &context_for_lines,
+                &virtual_files_for_lines,
+                &file_overlay,
                 dependencies_for_lines.as_ref(),
-            );
-            let source = if let Some(source) = virtual_source {
-                source.clone()
-            } else {
-                let Ok(path) = resolve_skin_io_path(&root_for_lines, &requested) else {
-                    mark_load_dependency_opaque(dependencies_for_lines.as_ref());
-                    return create_lines_iterator(
-                        lua,
-                        Arc::new(Mutex::new(ReadFileState::default())),
-                    );
-                };
-                let Ok(source) = read_skin_io_source(&path) else {
-                    mark_load_dependency_opaque(dependencies_for_lines.as_ref());
-                    return create_lines_iterator(
-                        lua,
-                        Arc::new(Mutex::new(ReadFileState::default())),
-                    );
-                };
-                record_lua_loaded_file_dependency(&path, dependencies_for_lines.as_ref());
-                source
-            };
-            create_lines_iterator(lua, Arc::new(Mutex::new(ReadFileState::new(source))))
+                &path,
+            )?;
+            let state = source.map(ReadFileState::new).unwrap_or_default();
+            create_lines_iterator(lua, Arc::new(Mutex::new(state)))
         })?,
     )?;
     table.set(
@@ -219,19 +196,33 @@ pub(super) fn create_read_file_stub(lua: &Lua, source: String) -> mlua::Result<V
             if state.closed {
                 return Err(mlua::Error::external("attempt to use a closed file"));
             }
-            match format {
-                "*a" | "*all" => {
+            // LuaJ accepts the `*` prefix; Lua 5.3+ also accepts the bare letter.
+            match format.strip_prefix('*').unwrap_or(format) {
+                "a" | "all" => {
                     let rest = state.source[state.cursor..].to_string();
                     state.cursor = state.source.len();
                     Ok(Value::String(lua.create_string(rest)?))
                 }
-                "*l" => match read_file_line(&mut state) {
+                "l" => match read_file_line(&mut state) {
                     Some(line) => Ok(Value::String(lua.create_string(line)?)),
                     None => Ok(Value::Nil),
                 },
-                _ => Err(mlua::Error::external(format!(
-                    "unsupported read format in Lua skin sandbox: {format}"
-                ))),
+                "n" => Ok(read_file_number(&mut state)),
+                count => match count.parse::<usize>() {
+                    Ok(count) if state.cursor < state.source.len() || count == 0 => {
+                        let mut end = state.cursor.saturating_add(count).min(state.source.len());
+                        while !state.source.is_char_boundary(end) {
+                            end += 1;
+                        }
+                        let text = state.source[state.cursor..end].to_string();
+                        state.cursor = end;
+                        Ok(Value::String(lua.create_string(text)?))
+                    }
+                    Ok(_) => Ok(Value::Nil),
+                    Err(_) => Err(mlua::Error::external(format!(
+                        "unsupported read format in Lua skin sandbox: {format}"
+                    ))),
+                },
             }
         })?,
     )?;
@@ -273,6 +264,49 @@ pub(super) fn create_lines_iterator(
     })
 }
 
+/// `file:read("*n")`: skips whitespace and reads a decimal number, or nil.
+fn read_file_number(state: &mut ReadFileState) -> Value {
+    let rest = &state.source[state.cursor..];
+    let start = rest.len() - rest.trim_start().len();
+    let token = &rest[start..];
+    let bytes = token.as_bytes();
+    let mut end = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+    let digits = |end: &mut usize| {
+        let begin = *end;
+        while bytes.get(*end).is_some_and(u8::is_ascii_digit) {
+            *end += 1;
+        }
+        *end > begin
+    };
+    let mut has_digits = digits(&mut end);
+    let mut float = false;
+    if bytes.get(end) == Some(&b'.') {
+        end += 1;
+        float = true;
+        has_digits |= digits(&mut end);
+    }
+    if has_digits && matches!(bytes.get(end), Some(b'e' | b'E')) {
+        let mut exponent = end + 1;
+        if matches!(bytes.get(exponent), Some(b'+' | b'-')) {
+            exponent += 1;
+        }
+        if digits(&mut exponent) {
+            end = exponent;
+            float = true;
+        }
+    }
+    state.cursor += start + end;
+    let text = &token[..end];
+    if !has_digits {
+        return Value::Nil;
+    }
+    match (float, text.parse::<i64>(), text.parse::<f64>()) {
+        (false, Ok(integer), _) => Value::Integer(integer),
+        (_, _, Ok(number)) => Value::Number(number),
+        _ => Value::Nil,
+    }
+}
+
 pub(super) fn read_file_line(state: &mut ReadFileState) -> Option<String> {
     if state.cursor >= state.source.len() {
         return None;
@@ -285,16 +319,6 @@ pub(super) fn read_file_line(state: &mut ReadFileState) -> Option<String> {
         state.cursor += 1;
     }
     Some(line)
-}
-
-pub(super) fn create_write_file_stub(lua: &Lua) -> mlua::Result<Value> {
-    let file = lua.create_table()?;
-    file.set(
-        "write",
-        lua.create_function(|_, (_self, _args): (Value, Variadic<Value>)| Ok(true))?,
-    )?;
-    file.set("close", lua.create_function(|_, _: Value| Ok(true))?)?;
-    Ok(Value::Table(file))
 }
 
 pub(super) fn lua_os_now_seconds() -> i64 {
