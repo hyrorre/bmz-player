@@ -739,8 +739,10 @@ Select / Decideのskin読込は、profile全体の累計プレイ時間（number
 mz-selectのプレイヤーランク表示のように、ロード時に経験値やランクを計算するLua skinが
 これに依存します。これらの値はdecode cacheの依存関係に含め、プレイ後にSelectへ戻ると
 変化した値で再decodeします。profile切替では切替先profileの値を使います。
-mz-selectの「今日の成果」とプレイ曲ログは、スキンが`io`で書いたファイルを次回ロード時に
-読む仕組みです。`io`の書き込みは永続化しないため、これらは更新されません。
+mz-selectの「今日の成果」とプレイ曲ログは、beatorajaではスキンが`io`で書いたファイルを
+次回ロード時に読みます。BMZは`io`の書き込みを永続化しないため、BMZ対応版のmz-selectは
+`bmz`がある場合に[BMZ Daily Statistics Refs](#bmz-daily-statistics-refs)を参照し、
+リセットボタンをevent `-10100`にします。
 
 現在日付（number 21..23）はロード時もローカル時刻です。
 
@@ -1383,6 +1385,8 @@ BMZ default JSONでは、digit atlasを同梱せずに既存フォントで数�
 `judgeTimingColor`, `prefix`, `suffix`を使えます。
 `numberRef`は既存の`value.ref`と同じ`SkinDrawState` number refを文字列化し、
 未取得時は空文字として扱います。外部beatoraja JSON skinの`value` sprite表示には影響しません。
+Lua skinの`text`で`value = function() return main_state.number(id) end`のように
+数値refをそのまま返す関数は、text refではなく`numberRef`へ推論します。
 `judgeRegion`は最新判定の表示領域index (通常は`0`)を文字列化し、判定タイマーが
 非アクティブなら空文字として扱います。`judgeColor`は`judgeRegion`用の表示色を判定種別で
 切り替え、PGREATは水色、GREAT / GOODは黄色、BAD / POOR / EMPTY POORは赤で表示します。
@@ -2685,6 +2689,8 @@ Selectの`RIVAL`も`self_and_rivals`を指します。既存の`STRING_RIVAL`等
 
 event `-10100`は表示上の日次集計を現在時刻でリセットします。score history自体は削除しません。
 MILLIONDOLLAR / m-selectの既存オブジェクトID特例と仮想ファイル互換経路も継続します。
+m-selectのID特例は、今日の成果を`constantText`で埋め込む旧版向けです。現行版はLua callbackで
+表示するため、BMZ対応版のmz-selectはこれらのrefを直接参照します。
 
 ### BMZ Course Result Refs
 

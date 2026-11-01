@@ -267,6 +267,34 @@ fn lua_skin_load_time_table_level_text_ref_is_preserved() {
 }
 
 #[test]
+fn lua_skin_text_returning_a_number_ref_becomes_number_ref() {
+    let root = unique_test_dir("bmz-skin-lua");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("select.luaskin"),
+        r#"
+            local main_state = require("main_state")
+            local function notes() return main_state.number(1938) end
+            return {
+                type = 5,
+                text = {{ id = "notes", font = 0, size = 24, value = notes }},
+                value = {{ id = "score", src = 0, divx = 10, digit = 4, value = notes }},
+            }
+            "#,
+    )
+    .unwrap();
+
+    let loaded =
+        load_lua_skin_value(&root.join("select.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+            .unwrap();
+
+    // A text `ref` is a StringProperty; the number is kept through `numberRef`.
+    assert_eq!(loaded.value["text"][0]["numberRef"], 1938);
+    assert!(loaded.value["text"][0].get("ref").is_none());
+    assert_eq!(loaded.value["value"][0]["ref"], 1938);
+}
+
+#[test]
 fn lua_skin_mz_select_result_title_becomes_runtime_expr() {
     let root = unique_test_dir("bmz-skin-lua-mz-select-result-title");
     fs::create_dir_all(&root).unwrap();

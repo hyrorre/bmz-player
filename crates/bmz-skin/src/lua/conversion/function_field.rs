@@ -259,8 +259,13 @@ fn infer_value_field(
         return true;
     }
     if !is_graph
-        && let Some(inferred) =
-            infer_non_graph_value_field(function, object_id, object, main_state_probe)
+        && let Some(inferred) = infer_non_graph_value_field(
+            function,
+            object_id,
+            path.contains(".text["),
+            object,
+            main_state_probe,
+        )
     {
         return inferred;
     }
@@ -327,6 +332,7 @@ fn has_shared_result_rank_state(lua: &Lua, function: &Function, object_id: Optio
 fn infer_non_graph_value_field(
     function: &Function,
     object_id: Option<&str>,
+    is_text: bool,
     object: &mut JsonMap<String, JsonValue>,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
 ) -> Option<bool> {
@@ -349,7 +355,14 @@ fn infer_non_graph_value_field(
         }
         return Some(false);
     }
-    if let Some(ref_id) = infer_gated_number_ref(function, main_state_probe)
+    // A text `ref` is a StringProperty, so a text returning a number keeps
+    // that number through BMZ's `numberRef` instead.
+    if is_text {
+        if let Some(ref_id) = infer_main_state_number_ref(function, main_state_probe) {
+            insert_number(object, "numberRef", ref_id);
+            return Some(true);
+        }
+    } else if let Some(ref_id) = infer_gated_number_ref(function, main_state_probe)
         .or_else(|| infer_main_state_number_ref(function, main_state_probe))
     {
         insert_number(object, "ref", ref_id);

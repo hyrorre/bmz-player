@@ -1254,3 +1254,63 @@ fn mz_select_lua_select_skin_keeps_local_score_availability_guards() {
     assert!(guarded.contains(&"default_playerdata_score_count"));
     assert!(guarded.contains(&"default_playerdata_scorerate_dot_count"));
 }
+
+#[test]
+fn mz_select_daily_results_read_bmz_daily_statistics() {
+    let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../data/skins/mz-select/music_select.luaskin");
+    if !skin_path.is_file() {
+        return;
+    }
+
+    let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Select).unwrap();
+    let document = &decoded.document;
+    let text = |id: &str| document.text.iter().find(|text| text.id == id).unwrap();
+    // The skin's own files are neither the source nor written on BMZ.
+    assert_eq!(text("defaultNotesProcessingCounter_rank").ref_id, 1943);
+    for index in 1..=10 {
+        let song = text(&format!("default_playSongLogger_song{index}"));
+        assert_eq!(song.ref_id, 1949 + index);
+        assert!(song.constant_text.is_empty());
+    }
+    let reset =
+        document.image.iter().find(|image| image.id == "default_playerrank2_button_reset").unwrap();
+    assert_eq!(reset.act, Some(bmz_render::skin::SKIN_EVENT_DAILY_STATISTICS_RESET));
+
+    let daily = bmz_render::scene::DailyPlayerStatsSnapshot {
+        play_count: 5,
+        clear_count: 4,
+        pgreat: 50,
+        great: 25,
+        good: 10,
+        bad: 5,
+        poor: 3,
+        empty_poor: 2,
+        ..Default::default()
+    };
+    let state = SkinDrawState {
+        player_stats: bmz_render::scene::PlayerStatsSnapshot { daily, ..Default::default() },
+        ..Default::default()
+    };
+    let adapter = LuaSkinDrawRuntimeAdapter::new(decoded.lua_runtime.unwrap());
+    let texts = BTreeMap::new();
+    // Callbacks that only return a ref are inferred as `numberRef`.
+    let value = |id: &str| {
+        if let Some(ref_id) = text(id).number_ref {
+            return bmz_render::skin::lua_main_state_number(ref_id, &state).to_string();
+        }
+        let callback = text(id)
+            .value_expr
+            .strip_prefix("bmz:lua_value_callback:")
+            .and_then(|callback| callback.parse().ok())
+            .unwrap_or_else(|| panic!("{id} is not a Lua callback"));
+        adapter.evaluate_text(callback, &state, &[], &texts).unwrap()
+    };
+    assert_eq!(value("defaultNotesProcessingCounter_pg"), "50  (55.56%)");
+    assert_eq!(value("defaultNotesProcessingCounter_bd"), "5  (5.56%)");
+    assert_eq!(value("defaultNotesProcessingCounter_notes"), "90");
+    assert_eq!(value("defaultNotesProcessingCounter_stroke"), "90");
+    assert_eq!(value("defaultNotesProcessingCounter_exscore"), "125");
+    assert_eq!(value("defaultNotesProcessingCounter_cp"), "4/5");
+    assert_eq!(value("defaultNotesProcessingCounter_rate"), "69.44");
+}
