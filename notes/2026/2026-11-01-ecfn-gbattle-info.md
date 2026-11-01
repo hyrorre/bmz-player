@@ -68,6 +68,8 @@ mz-select / Luxez-Flatと同じAPI（20200..20229、text 86）を使い、本体
 - `cargo test -p bmz-player --locked ecfn -- --ignored`: 新規2件を含む14件成功、1件失敗。
   失敗した`ecfn_extensions_mode_and_force_preserve_button_hits`（上部のALLが描かれない）は、
   今回のモジュールを外しても再現する既存の問題で、今回の変更とは別。
+  同日、キーフィルター表示名の変更に追従していなかったテストと判明し、修正後は15件成功した
+  （[ECFN基本拡張の記録](2026-10-05-ecfn-bmz-extensions.md)）。
 - Windows offscreen GPUでSP、DP（14K FLIP / 10K）、9K、RANDOM-EX、未取得、読み込み中、可変配置、
   DP未取得、一覧を閉じた画面を描画し、既存の窓と並べて目視確認した。画像はGit管理外の
   `.local/notes/2026-11-01-gbattle-layout/ecfn-implemented/`、ツールは`.local/lr2-play-audit/`に置く。

@@ -43,7 +43,18 @@ fn cursors(renderer: &Renderer) -> Vec<(f32, f32, f32)> {
 fn ecfn_extensions_mode_and_force_preserve_button_hits() {
     for experimental in [false, true] {
         let mut renderer = renderer(experimental);
-        for mode in ["ALL", "7K", "14K", "9K", "5K", "10K", "4K", "6K", "8K"] {
+        // The profile keeps "ALL" / "7K" / ...; skins show the LR2-style filter names.
+        for (mode, label) in [
+            ("ALL", "ALL KEYS"),
+            ("7K", "7KEYS"),
+            ("14K", "14KEYS"),
+            ("9K", "9KEYS"),
+            ("5K", "5KEYS"),
+            ("10K", "10KEYS"),
+            ("4K", "4KEYS"),
+            ("6K", "6KEYS"),
+            ("8K", "8KEYS"),
+        ] {
             for ln in 0..6 {
                 let s = SelectSnapshot {
                     select_mode: mode.into(),
@@ -58,10 +69,10 @@ fn ecfn_extensions_mode_and_force_preserve_button_hits() {
                     commands
                         .iter()
                         .filter(|c| matches!(c, DrawCommand::Text { text, .. }
-                        if text == mode))
+                        if text == label))
                         .count(),
                     1,
-                    "actual mode name must appear exactly once: {mode}"
+                    "actual filter name must appear exactly once: {label}"
                 );
                 assert_eq!(
                     commands

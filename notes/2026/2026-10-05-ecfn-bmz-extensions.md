@@ -91,3 +91,14 @@ GPU試験はsandbox外で実行。画像は一時ディレクトリ
 
 通常ウィンドウでの実入力・プレイ開始・再起動、実コントローラー、Windows/Linuxは未実施。
 snapshotテストとMetal offscreenを実機操作済みとは扱わない。
+
+## 2026-11-01追記: キーフィルター表示名への追従
+
+`9e204ffb`（2026-10-13）でキーフィルターの表示名がBMZ全体でALL KEYS / 7KEYS / … / 8KEYSになり、
+`bmz_select_mode`もこの表記を返す。ECFNのモードボタンも同じ表記で描かれ、118pxの欄に収まることを
+Windows offscreen GPUで確認した。明示実行テスト`ecfn_extensions_mode_and_force_preserve_button_hits`は
+旧表記ALL / 7K / …を期待したままで失敗していたため、表示名を期待するよう更新した。
+ADFX02側の`BMZ_EXTENSIONS.md`の表記も合わせた。プロフィールへ保存する値（ALL / 7K / …）は変わらない。
+
+- `cargo test -p bmz-player --locked ecfn -- --ignored`: 15件成功。
+- `cargo test -p bmz-player --locked adfx02 -- --ignored`: `BMZ_BPM_PREVIEW_DIR`を指定して9件成功。
