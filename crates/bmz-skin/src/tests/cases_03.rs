@@ -360,6 +360,7 @@ fn lua_skin_main_state_current_date_numbers_are_available_during_load() {
                 type = 5,
                 text = {
                     { id = "date", constantText = main_state.number(21) .. "/" .. main_state.number(22) .. "/" .. main_state.number(23) },
+                    { id = "local", constantText = os.date("*t").year .. "/" .. os.date("*t").month .. "/" .. os.date("*t").day },
                 },
             }
             "#,
@@ -373,7 +374,14 @@ fn lua_skin_main_state_current_date_numbers_are_available_during_load() {
     let current_year = unix_epoch_year_for_test();
 
     assert!(loaded.warnings.is_empty());
-    assert!(date.starts_with(&format!("{current_year}/")), "unexpected date: {date}");
+    // The local year can differ from the UTC year around New Year.
+    let year = date.split('/').next().and_then(|year| year.parse::<i32>().ok());
+    assert!(
+        year.is_some_and(|year| (current_year - 1..=current_year + 1).contains(&year)),
+        "unexpected date: {date}"
+    );
+    // beatoraja reads the local Calendar, like `os.date` without `!`.
+    assert_eq!(date, loaded.value["text"][1]["constantText"].as_str().unwrap_or_default());
 }
 
 #[test]

@@ -56,9 +56,11 @@ pub(super) fn lua_key_code(value: &Value) -> i32 {
 }
 
 pub(super) fn lua_runtime_stub_number(ref_id: i32) -> i32 {
-    let now = unix_seconds_to_utc_datetime(lua_os_now_seconds());
+    let seconds = lua_os_now_seconds();
+    let now = unix_seconds_to_local_datetime(seconds)
+        .unwrap_or_else(|_| unix_seconds_to_utc_datetime(seconds));
     match ref_id {
-        // beatoraja IntegerProperty: currenttime_year/month/day
+        // beatoraja IntegerProperty: currenttime_year/month/day (local Calendar)
         21 => now.year,
         22 => now.month as i32,
         23 => now.day as i32,
