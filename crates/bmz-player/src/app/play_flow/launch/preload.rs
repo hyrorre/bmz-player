@@ -205,6 +205,7 @@ impl WinitApp {
             play_skin_key_mode,
             &mut play_skin_runtime_state,
         );
+        self.apply_play_chart_lua_load_state(chart_id, &mut play_skin_runtime_state);
         self.spawn_play_skin_decode_for(
             play_skin_key_mode,
             options.session_mode,
@@ -493,6 +494,15 @@ impl WinitApp {
     ) -> Option<ScoreKey> {
         let chart = self.play_skin_chart(chart_id)?;
         Some(self.play_skin_score_key_for_chart(&chart, options))
+    }
+
+    pub(super) fn apply_play_chart_lua_load_state(
+        &self,
+        chart_id: i64,
+        state: &mut bmz_skin::LuaLoadRuntimeState,
+    ) {
+        let length_ms = self.play_skin_chart(chart_id).map_or(0, |chart| chart.length_ms);
+        apply_chart_length_lua_load_state(state, length_ms);
     }
 
     fn play_skin_chart(&self, chart_id: i64) -> Option<ChartListItem> {

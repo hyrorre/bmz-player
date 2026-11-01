@@ -1,6 +1,41 @@
 use super::*;
 
 #[test]
+fn play_chart_length_is_available_during_lua_load_and_changes_for_the_next_chart() {
+    let root = std::env::temp_dir().join(format!(
+        "bmz-play-chart-length-{}-{}",
+        std::process::id(),
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("play.luaskin");
+    std::fs::write(
+        &path,
+        r#"
+        local s = require('main_state')
+        return {type=0, text={{id='length', constantText=
+            s.number('chartlength_minute') .. ':' .. s.number('chartlength_second')}}}
+    "#,
+    )
+    .unwrap();
+    let mut state = bmz_skin::LuaLoadRuntimeState::default();
+    for (length_ms, expected) in [(183_456, "3:3"), (60_000, "1:0"), (0, "0:0"), (-1, "0:0")] {
+        apply_chart_length_lua_load_state(&mut state, length_ms);
+        let loaded = bmz_skin::load_lua_skin_with_runtime_state(
+            &path,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &state,
+        )
+        .unwrap();
+        assert_eq!(loaded.document.text[0].constant_text, expected);
+        assert_eq!(loaded.dependencies.number_values.get(&1163), state.number_values.get(&1163));
+        assert_eq!(loaded.dependencies.number_values.get(&1164), state.number_values.get(&1164));
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn play_lua_skin_load_preserves_resolved_target_names_for_rival_and_target_refs() {
     use crate::select_options::{ResolvedTarget, TargetOption};
 

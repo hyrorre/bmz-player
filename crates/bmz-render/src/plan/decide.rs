@@ -60,6 +60,7 @@ pub(super) fn plan_decide(
             hispeed_config_index: snapshot.hispeed_config_index,
             target_green_number: snapshot.target_green_number,
             total_duration_ms: snapshot.note_display_duration_ms,
+            chart_length_ms: Some(snapshot.duration.0 / 1_000),
             duration_green_ms: Some(crate::skin::duration_to_green_number_ms(
                 snapshot.note_display_duration_ms,
             )),

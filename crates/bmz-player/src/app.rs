@@ -898,7 +898,7 @@ pub(crate) fn offline_skin_load_state(
         target: play.target_option,
         ..Default::default()
     };
-    let runtime = lua_runtime_state_for_play(
+    let mut runtime = lua_runtime_state_for_play(
         &options,
         false,
         play.session.chart.metadata.key_mode,
@@ -906,6 +906,7 @@ pub(crate) fn offline_skin_load_state(
         &profile.display_name,
         play.skin_attempt,
     );
+    apply_chart_length_lua_load_state(&mut runtime, play.session.chart.end_time.0 / 1_000);
     let selection = crate::skin_loader::play_skin_selection_for_session(
         &profile.skin,
         play.session.chart.metadata.key_mode,

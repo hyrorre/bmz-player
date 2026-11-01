@@ -1,6 +1,24 @@
 use super::*;
 
 #[test]
+fn play_chart_length_is_independent_of_clock_and_note_display_duration() {
+    for (length_ms, minute, second) in [(59_999, 0, 59), (60_000, 1, 0), (183_456, 3, 3)] {
+        for time_ms in [-2_000, 0, 40_000, 200_000] {
+            let snapshot = RenderSnapshot {
+                duration: TimeUs(length_ms * 1_000),
+                time: TimeUs(time_ms * 1_000),
+                note_display_duration_ms: 500,
+                ..Default::default()
+            };
+            let state = play::build_play_skin_state(&snapshot, &SkinContext::default(), 0);
+            assert_eq!(crate::skin::lua_main_state_number(1163, &state), minute);
+            assert_eq!(crate::skin::lua_main_state_number(1164, &state), second);
+            assert_eq!(state.total_duration_ms, 500);
+        }
+    }
+}
+
+#[test]
 fn skin_level_number_extracts_digits_without_requiring_numeric_label() {
     assert_eq!(skin_level_number("12"), 12);
     assert_eq!(skin_level_number("LV 10+"), 10);

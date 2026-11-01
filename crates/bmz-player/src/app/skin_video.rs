@@ -203,6 +203,7 @@ pub(super) fn play_skin_video_draw_state(
         target_green_number: snapshot.target_green_number,
         timeleft_ms: play_skin_video_timeleft_ms(snapshot),
         total_duration_ms: snapshot.note_display_duration_ms,
+        chart_length_ms: Some(snapshot.duration.0 / 1_000),
         duration_green_ms: Some(bmz_render::skin::duration_to_green_number_ms(
             snapshot.note_display_duration_ms,
         )),

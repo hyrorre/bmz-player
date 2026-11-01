@@ -204,6 +204,8 @@ pub struct SkinDrawState {
     pub target_green_number: u32,
     /// 曲残り時間 ms (NUMBER_TIMELEFT_MINUTE=163, NUMBER_TIMELEFT_SECOND=164 に使用)。
     pub timeleft_ms: i32,
+    /// Play / Decide の譜面長 ms (number 1163 / 1164)。ノーツ表示時間とは別。
+    pub chart_length_ms: Option<i64>,
     /// ノーツ表示時間 ms (NUMBER_DURATION=312 に使用)。
     pub total_duration_ms: i32,
     /// 緑数字 ms (NUMBER_DURATION_GREEN=313 に使用)。
@@ -633,6 +635,7 @@ impl Default for SkinDrawState {
             hispeed_config_index: 4,
             target_green_number: 0,
             timeleft_ms: 0,
+            chart_length_ms: None,
             total_duration_ms: 0,
             duration_green_ms: None,
             result_duration_ms: 0,

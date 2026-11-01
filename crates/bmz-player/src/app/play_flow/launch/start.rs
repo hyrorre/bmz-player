@@ -22,6 +22,7 @@ impl WinitApp {
             play_skin_key_mode,
             &mut play_skin_runtime_state,
         );
+        self.apply_play_chart_lua_load_state(chart_id, &mut play_skin_runtime_state);
         self.spawn_play_skin_decode_for(
             play_skin_key_mode,
             options.session_mode,

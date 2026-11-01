@@ -947,6 +947,10 @@ skin library root配下のLua skinへ公開する初期`package.path`は、過�
 
 ### Lua APIの互換範囲
 
+譜面長のnumber `1163` / `1164`（`chartlength_minute` / `chartlength_second`）は、
+Playでも譜面全体の分・秒を返します。経過時刻・残り時間・ノーツ表示時間とは独立した値です。
+Playスキンのロード時にも渡すため、ロード時に固定テキストや区間ログの長さを決める処理でも使えます。
+
 beatoraja（`.local/beatoraja`の最新版）とLR2oraja Endless Dream（beatoraja 0.8系の
 `MainStateAccessor`を継承）に共通するLua APIを中心に提供します。両実装の比較と
 インストール済みスキンでの検証は[作業記録](../notes/2026/2026-10-21-lua-api-compat.md)を参照します。
