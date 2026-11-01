@@ -2784,3 +2784,17 @@ S-RANDOM等の可変配置はNOT FIXEDと区別し、NO PLAYと同じ灰色に�
 DPは1P/2Pの行を明示し、SP/DPの内容に合わせてパネルの高さを変えます。
 20200がtrueの間はランキング / rival data / ir dataの本文を隠し、
 閉じたら元の条件で復帰します。上部のライバル選択欄は維持します。
+
+Luxez-FlatはSPでは既存のRIVAL DATA欄（413×150px）、10K/14KのDPでは
+左下のIR DATA / SCORE DETAIL欄（412×284px）へ切り替えます。
+DPの1P/2Pは配置オプションと鍵盤を上下に並べ、DP OPTIONとtext 86の値を下段に表示します。
+右側のRIVAL DATA / SCORE DATAと上部のライバル選択欄は維持します。
+通常パネルの配置オプション画像、既存の角丸枠・発光・透過・フォントと、
+result/png/random_pattern.pngの鍵盤を流用します。鍵盤はResultと同じ25×35px、27px間隔です。
+画像のない8/9/Sは同じ鍵盤枠と既存bitmap fontを組み合わせます。
+ゲージ名・相手名・重複する項目ラベルは追加せず、NO DATA / LOADING / NOT FIXEDは
+既存NO PLAYのRGB(127,128,128)で表示します。
+`default_battleinfo/parts.lua`の正常ロード時だけ元のパネルを条件付きで隠し、
+一覧を閉じると復帰します。元のLua callbackも維持し、無効・欠落・ロード失敗時とBMZ以外は
+従来の表示を残します。[回帰テスト](../crates/bmz-player/src/skin_loader/tests/luxe_battle_info.rs)と
+[実装記録](../notes/2026/2026-11-01-luxez-flat-gbattle-info.md)を参照してください。

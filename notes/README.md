@@ -40,6 +40,7 @@
 | 日付 | 記録 |
 |---|---|
 | 2026-11-01 | [mz-selectのG-BATTLE相手情報](2026/2026-11-01-mz-select-gbattle-info.md) |
+| 2026-11-01 | [Luxez-FlatのG-BATTLE相手情報とSP/DP配置切り替え](2026/2026-11-01-luxez-flat-gbattle-info.md) |
 | 2026-11-01 | [選曲のフォルダ分けをbeatorajaに合わせる](2026/2026-11-01-beatoraja-folder-grouping.md) |
 | 2026-11-01 | [EC:FN / Starseekerの負の実効BPM予告](2026/2026-11-01-adfx02-signed-bpm-preview.md) |
 | 2026-10-31 | [BPM × SCROLLとSTOPによるBPM変化予告](2026/2026-10-31-effective-bpm-change-preview.md) |

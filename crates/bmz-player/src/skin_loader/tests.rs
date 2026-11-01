@@ -65,6 +65,8 @@ mod exit_hold;
 mod lr2;
 #[path = "tests/lua.rs"]
 mod lua;
+#[path = "tests/luxe_battle_info.rs"]
+mod luxe_battle_info;
 #[path = "tests/luxe_detail_options.rs"]
 mod luxe_detail_options;
 #[path = "tests/mz_battle_info.rs"]
