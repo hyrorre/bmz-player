@@ -99,6 +99,8 @@ mod tests {
     #[test]
     fn result_snapshot_detects_full_combo() {
         let snapshot = ResultSnapshot {
+            chart_md5: None,
+            chart_sha256: None,
             screen_size: [0, 0],
             last_played_at: None,
             lr2_progress: Default::default(),
@@ -199,6 +201,8 @@ mod tests {
     #[test]
     fn zero_note_result_is_not_full_combo() {
         let snapshot = ResultSnapshot {
+            chart_md5: None,
+            chart_sha256: None,
             screen_size: [0, 0],
             last_played_at: None,
             lr2_progress: Default::default(),

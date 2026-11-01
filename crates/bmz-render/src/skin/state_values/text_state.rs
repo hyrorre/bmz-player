@@ -300,11 +300,24 @@ pub(super) fn skin_main_state_text(
             }
         }
         1021 => state.ir_ranking.user_name.as_str().to_string(),
+        1030 => skin_chart_hash_text(state.chart_md5),
+        1031 => skin_chart_hash_text(state.chart_sha256),
         200..=209 => select_target_name_by_offset(state.target, ref_id - 210),
         210..=219 => select_target_name_by_offset(state.target, ref_id - 209),
         1000 => state.current_folder.to_string(),
         _ => String::new(),
     }
+}
+
+fn skin_chart_hash_text<const N: usize>(hash: Option<&[u8; N]>) -> String {
+    let Some(hash) = hash else { return String::new() };
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::with_capacity(N * 2);
+    for byte in hash {
+        text.push(HEX[usize::from(byte >> 4)] as char);
+        text.push(HEX[usize::from(byte & 15)] as char);
+    }
+    text
 }
 
 /// LR2 texts whose meaning differs from beatoraja (`LR2_TEXT_BASE + id`).
@@ -388,6 +401,8 @@ pub(super) fn lua_main_state_text_values(
         1010,
         1020,
         1021,
+        1030,
+        1031,
         1900,
         SKIN_REF_BMZ_BASE_HISPEED,
         SKIN_REF_BMZ_HISPEED_CONFIG,

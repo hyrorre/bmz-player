@@ -9,7 +9,11 @@ impl WinitApp {
         let skin = self.boot.profile_config.skin.clone();
         let select_last_played_at = self.select_snapshot().last_played_at;
         let texture_request = SkinReloadRequest { result: false, course_result: false, ..request };
-        let decide_chart = request.decide.then(|| self.decide_load_chart_snapshot());
+        let frontend_chart = if request.decide {
+            Some(self.decide_load_chart_snapshot())
+        } else {
+            request.select.then(|| self.select_load_chart_snapshot())
+        };
         let (pending_select, pending_decide, _pending_result) = reload_skin_textures(
             &self.boot.app_paths,
             &mut self.skin.skin_pipeline,
@@ -23,7 +27,7 @@ impl WinitApp {
             self.skin.lua_runtime_mode,
             self.boot.app_config.select.experimental_detail_options,
             select_last_played_at,
-            decide_chart.as_ref(),
+            frontend_chart.as_ref(),
         );
         if request.select {
             self.skin.skin_pipeline.set_pending(SkinKind::Select, pending_select);
@@ -122,12 +126,21 @@ impl WinitApp {
         if let Some(decide) = &self.play.pending_decide {
             return decide.snapshot_for_render();
         }
+        self.select_load_chart_snapshot()
+    }
+
+    fn select_load_chart_snapshot(&self) -> RenderSnapshot {
         match self.select.select_items.get(self.select.selected_index) {
-            Some(SelectItem::Chart(row)) => row
-                .chart
-                .as_ref()
-                .map(|chart| self.decide_snapshot_for_chart(chart.chart_id))
-                .unwrap_or_default(),
+            Some(SelectItem::Chart(row)) => {
+                let mut snapshot = row
+                    .chart
+                    .as_ref()
+                    .map(|chart| self.decide_snapshot_for_chart(chart.chart_id))
+                    .unwrap_or_default();
+                snapshot.chart_md5 = row.score_md5();
+                snapshot.chart_sha256 = row.score_sha256();
+                snapshot
+            }
             _ => RenderSnapshot::default(),
         }
     }
@@ -149,6 +162,10 @@ impl WinitApp {
         };
         let skin = self.boot.profile_config.skin.clone();
         let select_last_played_at = self.select_snapshot().last_played_at;
+        let frontend_chart = decide_chart.cloned().unwrap_or_else(|| match kind {
+            SkinKind::Select => self.select_load_chart_snapshot(),
+            _ => self.decide_load_chart_snapshot(),
+        });
         let (pending_select, pending_decide, _) = reload_skin_textures(
             &self.boot.app_paths,
             &mut self.skin.skin_pipeline,
@@ -162,7 +179,7 @@ impl WinitApp {
             self.skin.lua_runtime_mode,
             self.boot.app_config.select.experimental_detail_options,
             select_last_played_at,
-            decide_chart,
+            Some(&frontend_chart),
         );
         let pending = match kind {
             SkinKind::Select => pending_select,

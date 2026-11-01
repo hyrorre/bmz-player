@@ -501,8 +501,13 @@ impl WinitApp {
         chart_id: i64,
         state: &mut bmz_skin::LuaLoadRuntimeState,
     ) {
-        let length_ms = self.play_skin_chart(chart_id).map_or(0, |chart| chart.length_ms);
-        apply_chart_length_lua_load_state(state, length_ms);
+        let chart = self.play_skin_chart(chart_id);
+        apply_chart_length_lua_load_state(state, chart.as_ref().map_or(0, |chart| chart.length_ms));
+        apply_chart_hashes_lua_load_state(
+            state,
+            chart.as_ref().map(|chart| chart.md5),
+            chart.as_ref().map(|chart| chart.sha256),
+        );
     }
 
     fn play_skin_chart(&self, chart_id: i64) -> Option<ChartListItem> {

@@ -48,6 +48,8 @@ fn course_play_snapshot_uses_fallback_metadata_when_chart_row_is_absent() {
 
     assert_eq!(snapshot.title, "Resolved Song");
     assert_eq!(snapshot.subtitle, "Resolved Subtitle");
+    assert_eq!(snapshot.chart_md5, Some(chart.md5));
+    assert_eq!(snapshot.chart_sha256, Some(chart.sha256));
     assert_eq!(snapshot.total_notes, 123);
     assert_eq!(snapshot.best_ex_score, None);
 }
@@ -74,6 +76,8 @@ fn course_result_summary_for_skin_uses_aggregate_course_values() {
     fn entry_summary(ex_score: u32, notes: u32, max_combo: u32, duration_ms: i32) -> ResultSummary {
         ResultSummary {
             last_played_at: None,
+            chart_md5: None,
+            chart_sha256: None,
             clear_type: ClearType::NoPlay,
             skin_attempt: Default::default(),
             target_name: "RANK AAA".to_string(),
@@ -262,7 +266,12 @@ fn course_result_summary_for_skin_uses_aggregate_course_values() {
     );
     course.entry_summaries[0].note_judge_window = Some(first_window);
     course.entry_summaries[1].note_judge_window = Some(last_window);
+    course.entry_summaries[0].chart_md5 = Some([1; 16]);
+    course.entry_summaries[1].chart_md5 = Some([2; 16]);
+    course.entry_summaries[1].chart_sha256 = Some([3; 32]);
     let mut summary = course_result_summary_for_skin(&course);
+    assert_eq!(summary.chart_md5, Some([2; 16]));
+    assert_eq!(summary.chart_sha256, Some([3; 32]));
     assert_eq!(summary.note_judge_window, Some(last_window));
     assert_eq!(summary.title, "Course Title");
     assert_eq!(summary.genre, "DAN");

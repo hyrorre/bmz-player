@@ -77,6 +77,8 @@ pub(super) fn plan_decide(
         };
         advance_skin_dynamic_timers(skin, dynamic_timers, &mut state, play_elapsed_ms);
         let text = SkinTextState {
+            chart_md5: snapshot.chart_md5.as_ref(),
+            chart_sha256: snapshot.chart_sha256.as_ref(),
             player_name: &snapshot.player_name,
             title: &snapshot.title,
             subtitle: &snapshot.subtitle,

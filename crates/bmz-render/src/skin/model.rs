@@ -75,6 +75,8 @@ static DEFAULT_RESULT_IR_SNAPSHOT: crate::scene::ResultIrSnapshot =
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinTextState<'a> {
+    pub chart_md5: Option<&'a [u8; 16]>,
+    pub chart_sha256: Option<&'a [u8; 32]>,
     pub title: &'a str,
     /// 現在プロフィール名 (STRING_PLAYER=2)。
     pub player_name: &'a str,
@@ -133,6 +135,8 @@ pub struct SkinTextState<'a> {
 impl<'a> Default for SkinTextState<'a> {
     fn default() -> Self {
         Self {
+            chart_md5: None,
+            chart_sha256: None,
             title: "",
             player_name: "",
             subtitle: "",

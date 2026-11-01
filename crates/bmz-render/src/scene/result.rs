@@ -162,6 +162,8 @@ pub enum ResultIrState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResultSnapshot {
+    pub chart_md5: Option<[u8; 16]>,
+    pub chart_sha256: Option<[u8; 32]>,
     /// Physical output dimensions injected by Renderer before skin evaluation.
     pub screen_size: [u32; 2],
     pub last_played_at: Option<i64>,

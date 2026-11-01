@@ -69,6 +69,8 @@ macro_rules! skin_document_render_select_render_methods {
         ) -> Vec<SkinRenderItem> {
             let (mut state, selected_row) = self.select_draw_state(snapshot, dynamic_timers);
             let text = SkinTextState {
+                chart_md5: selected_row.and_then(|row| row.chart_md5.as_ref()),
+                chart_sha256: selected_row.and_then(|row| row.chart_sha256.as_ref()),
                 player_name: &snapshot.player_name,
                 title: select_detail_title(snapshot, selected_row),
                 subtitle: select_detail_subtitle(snapshot, selected_row),

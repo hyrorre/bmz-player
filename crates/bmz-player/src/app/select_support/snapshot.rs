@@ -303,6 +303,8 @@ fn select_chart_snapshot(
 
     SelectRowSnapshot {
         index: index as u32,
+        chart_md5: row.score_md5(),
+        chart_sha256: row.score_sha256(),
         title: row.display_title().to_string(),
         rival_ex_score: rival_score.map(|score| score.ex_score),
         lr2_new_title: lr2_new_title(

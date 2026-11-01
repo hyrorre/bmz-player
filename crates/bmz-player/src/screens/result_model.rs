@@ -20,6 +20,8 @@ const RESULT_GAUGE_GRAPH_SAMPLE_MS: i32 = 500;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResultSummary {
+    pub chart_md5: Option<[u8; 16]>,
+    pub chart_sha256: Option<[u8; 32]>,
     /// This saved attempt's time, not the previous best. None for unsaved modes.
     pub last_played_at: Option<i64>,
     pub clear_type: ClearType,
@@ -158,6 +160,8 @@ impl ResultSummary {
         let initial_bpm = metadata.initial_bpm as f32;
         Self {
             clear_type: result.clear_type,
+            chart_md5: Some(chart.identity.file_md5),
+            chart_sha256: Some(chart.identity.file_sha256),
             last_played_at: None,
             skin_attempt: bmz_render::snapshot::SkinAttemptState {
                 effective_key_mode: Some(metadata.key_mode),

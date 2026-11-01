@@ -907,6 +907,11 @@ pub(crate) fn offline_skin_load_state(
         play.skin_attempt,
     );
     apply_chart_length_lua_load_state(&mut runtime, play.session.chart.end_time.0 / 1_000);
+    apply_chart_hashes_lua_load_state(
+        &mut runtime,
+        Some(play.session.chart.identity.file_md5),
+        Some(play.session.chart.identity.file_sha256),
+    );
     let selection = crate::skin_loader::play_skin_selection_for_session(
         &profile.skin,
         play.session.chart.metadata.key_mode,

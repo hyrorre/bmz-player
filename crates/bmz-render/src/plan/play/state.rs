@@ -259,6 +259,8 @@ fn recent_judgement_state(
 
 pub(super) fn build_play_skin_text(snapshot: &RenderSnapshot) -> SkinTextState<'_> {
     SkinTextState {
+        chart_md5: snapshot.chart_md5.as_ref(),
+        chart_sha256: snapshot.chart_sha256.as_ref(),
         player_name: &snapshot.player_name,
         title: &snapshot.title,
         subtitle: &snapshot.subtitle,

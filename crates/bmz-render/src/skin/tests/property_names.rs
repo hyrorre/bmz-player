@@ -2,6 +2,30 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn chart_hashes_support_numeric_and_named_text_properties_without_changing_options() {
+    let document: SkinDocument = serde_json::from_value(json!({
+        "text": [{"ref":1030}, {"ref":1031}, {"value":"songhashmd5"}, {"value":"songhashsha256"}]
+    }))
+    .unwrap();
+    let md5 = [0xab; 16];
+    let sha256 = [0xcd; 32];
+    let text =
+        SkinTextState { chart_md5: Some(&md5), chart_sha256: Some(&sha256), ..Default::default() };
+    for (index, expected) in
+        [(0, "ab".repeat(16)), (1, "cd".repeat(32)), (2, "ab".repeat(16)), (3, "cd".repeat(32))]
+    {
+        assert_eq!(skin_state_text(&document.text[index], &text), expected);
+        assert_eq!(skin_state_text(&document.text[index], &SkinTextState::default()), "");
+    }
+    let state = SkinDrawState {
+        select_row_kind: crate::scene::SelectRowKind::RandomCourse,
+        ..Default::default()
+    };
+    assert!(lua_main_state_option(1031, &[], &state));
+    assert!(!lua_main_state_option(1030, &[], &state));
+}
+
+#[test]
 fn typed_integer_string_and_rate_names_follow_existing_id_evaluators() {
     let document: SkinDocument = serde_json::from_value(json!({
         "value": [{"value":"score"}, {"value":71}, {"value":"number(71) + 1"}, {"value":"unknown"}],

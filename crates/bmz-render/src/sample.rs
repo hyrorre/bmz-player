@@ -220,6 +220,8 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
 
 pub fn sample_result_scene() -> AppSceneSnapshot {
     AppSceneSnapshot::Result(ResultSnapshot {
+        chart_md5: None,
+        chart_sha256: None,
         screen_size: [0, 0],
         last_played_at: None,
         lr2_progress: Default::default(),

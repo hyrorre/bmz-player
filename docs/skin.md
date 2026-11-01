@@ -951,6 +951,13 @@ skin library root配下のLua skinへ公開する初期`package.path`は、過�
 Playでも譜面全体の分・秒を返します。経過時刻・残り時間・ノーツ表示時間とは独立した値です。
 Playスキンのロード時にも渡すため、ロード時に固定テキストや区間ログの長さを決める処理でも使えます。
 
+text `1030` / `1031`（`songhashmd5` / `songhashsha256`）は元の譜面ファイルの
+MD5 / SHA256を小文字の16進数で返します。Selectの選択譜面、Decide / Playの対象譜面、
+Resultの終了した譜面を参照します。コースResultでは最後にプレイした譜面を参照します。
+難易度表の未所持譜面も既知のハッシュを返し、譜面またはハッシュがなければ空文字です。
+ロード時に読む場合も同じ譜面情報を渡します。選曲変更に追従する処理はcallback内で取得してください。
+同じ番号のoption `1030` / `1031`（ランダム選曲 / コースバー）とは独立しています。
+
 beatoraja（`.local/beatoraja`の最新版）とLR2oraja Endless Dream（beatoraja 0.8系の
 `MainStateAccessor`を継承）に共通するLua APIを中心に提供します。両実装の比較と
 インストール済みスキンでの検証は[作業記録](../notes/2026/2026-10-21-lua-api-compat.md)を参照します。

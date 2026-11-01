@@ -1,6 +1,50 @@
 use super::*;
 
 #[test]
+fn chart_hashes_are_available_during_lua_load_and_cleared_without_a_chart() {
+    let root = std::env::temp_dir().join(format!(
+        "bmz-chart-hashes-{}-{}",
+        std::process::id(),
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("skin.luaskin");
+    std::fs::write(
+        &path,
+        r#"
+        local s = require('main_state')
+        return {type=0, text={
+            {id='md5', constantText=s.text(1030)},
+            {id='sha256', constantText=s.text('songhashsha256')}
+        }}
+    "#,
+    )
+    .unwrap();
+    let mut state = bmz_skin::LuaLoadRuntimeState::default();
+    for byte in [Some(0xab), Some(0x12), None] {
+        apply_chart_hashes_lua_load_state(&mut state, byte.map(|b| [b; 16]), byte.map(|b| [b; 32]));
+        let loaded = bmz_skin::load_lua_skin_with_runtime_state(
+            &path,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &state,
+        )
+        .unwrap();
+        assert_eq!(
+            loaded.document.text[0].constant_text,
+            byte.map(|b| format!("{b:02x}").repeat(16)).unwrap_or_default()
+        );
+        assert_eq!(
+            loaded.document.text[1].constant_text,
+            byte.map(|b| format!("{b:02x}").repeat(32)).unwrap_or_default()
+        );
+        assert_eq!(loaded.dependencies.text_values.get(&1030), state.text_values.get(&1030));
+        assert_eq!(loaded.dependencies.text_values.get(&1031), state.text_values.get(&1031));
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn play_chart_length_is_available_during_lua_load_and_changes_for_the_next_chart() {
     let root = std::env::temp_dir().join(format!(
         "bmz-play-chart-length-{}-{}",

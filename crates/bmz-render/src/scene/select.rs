@@ -396,6 +396,8 @@ pub struct SelectRowDownloadProgress {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectRowSnapshot {
     pub index: u32,
+    pub chart_md5: Option<[u8; 16]>,
+    pub chart_sha256: Option<[u8; 32]>,
     pub title: String,
     /// 選曲一覧のバー内だけに表示する文字列。空の場合は `title` を使う。
     pub bar_text: String,
@@ -517,6 +519,8 @@ impl SelectRowSnapshot {
 impl Default for SelectRowSnapshot {
     fn default() -> Self {
         Self {
+            chart_md5: None,
+            chart_sha256: None,
             index: 0,
             title: String::new(),
             bar_text: String::new(),

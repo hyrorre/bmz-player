@@ -18,6 +18,8 @@ pub(super) fn plan_result(
         );
         let grade_diff = crate::skin::result_grade_diff_label(&state).unwrap_or_default();
         let text = SkinTextState {
+            chart_md5: snapshot.chart_md5.as_ref(),
+            chart_sha256: snapshot.chart_sha256.as_ref(),
             player_name: snapshot.player_name.as_str(),
             resolved_target_name: Some(snapshot.target_name.as_str()),
             target: &snapshot.target,

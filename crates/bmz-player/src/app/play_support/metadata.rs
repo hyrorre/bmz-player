@@ -44,6 +44,8 @@ pub(in crate::app) fn apply_chart_metadata_to_snapshot(
     best_ex_score: Option<u32>,
 ) {
     snapshot.title.clone_from(&chart.title);
+    snapshot.chart_md5 = Some(chart.md5);
+    snapshot.chart_sha256 = Some(chart.sha256);
     snapshot.subtitle.clone_from(&chart.subtitle);
     snapshot.artist.clone_from(&chart.artist);
     snapshot.subartist.clone_from(&chart.subartist);
