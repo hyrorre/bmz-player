@@ -1,7 +1,35 @@
 use super::*;
 use bmz_core::lane::KeyMode;
+use bmz_render::assets::RgbaImageAsset;
 use bmz_render::plan::TextureId;
 use bmz_render::scene::{SelectBattleSnapshot, SelectRivalSnapshot, SelectRowKind};
+
+fn select_snapshot() -> SelectSnapshot {
+    SelectSnapshot {
+        time: TimeUs(3_000_000),
+        selection_time: TimeUs(3_000_000),
+        assist: "G-BATTLE".into(),
+        arrange: "S-RANDOM".into(),
+        chart_replication_mode: "RIVALCHART".into(),
+        rival_selected: true,
+        rival: Some(SelectRivalSnapshot {
+            display_name: "rival".into(),
+            ex_score: 2000,
+            clear_index: 7,
+            max_combo: 800,
+            bp: 2,
+            judge_counts: None,
+        }),
+        ir: bmz_render::scene::ResultIrSnapshot { online: true, ..Default::default() },
+        rows: vec![SelectRowSnapshot {
+            kind: SelectRowKind::Song,
+            in_library: true,
+            chart_key_mode: Some(KeyMode::K7),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
 
 fn labels(renderer: &mut Renderer, snapshot: &SelectSnapshot) -> Vec<String> {
     renderer.prepare_scene(AppSceneSnapshot::Select(snapshot.clone()));
@@ -57,6 +85,39 @@ fn key_rows(renderer: &Renderer, texture_id: TextureId, expected: &[&[u8]]) {
     }
 }
 
+/// The native pixels each panel pixel receives from the frame texture, nearest-sampled.
+fn frame_pixels(
+    renderer: &Renderer,
+    texture_id: TextureId,
+    native: &RgbaImageAsset,
+    (left, top, w, h): (f32, f32, usize, usize),
+) -> Vec<Vec<Vec<[u8; 4]>>> {
+    let mut pixels = vec![vec![Vec::new(); w]; h];
+    for command in &renderer.last_plan().unwrap().commands {
+        let DrawCommand::Image { texture, rect, uv, .. } = command else { continue };
+        if *texture != texture_id {
+            continue;
+        }
+        let (x0, y0) = (rect.x * 1920.0 - left, rect.y * 1080.0 - top);
+        let (dw, dh) = (rect.width * 1920.0, rect.height * 1080.0);
+        for y in y0.round() as i32..(y0 + dh).round() as i32 {
+            for x in x0.round() as i32..(x0 + dw).round() as i32 {
+                let (Ok(px), Ok(py)) = (usize::try_from(x), usize::try_from(y)) else { continue };
+                if px >= w || py >= h {
+                    continue;
+                }
+                let u = uv.x + (x as f32 + 0.5 - x0) / dw * uv.width;
+                let v = uv.y + (y as f32 + 0.5 - y0) / dh * uv.height;
+                let sx = (u * native.width as f32).floor() as usize;
+                let sy = (v * native.height as f32).floor() as usize;
+                let offset = (sy * native.width as usize + sx) * 4;
+                pixels[py][px].push(native.pixels[offset..offset + 4].try_into().unwrap());
+            }
+        }
+    }
+    pixels
+}
+
 #[test]
 fn luxe_battle_info_switches_sp_dp_and_restores_native_panels_in_both_lua_modes() {
     let path = test_app_paths().resource_dir.join("skins/Luxez-Flat/music_select.luaskin");
@@ -90,30 +151,7 @@ fn luxe_battle_info_switches_sp_dp_and_restores_native_panels_in_both_lua_modes(
         let mut renderer = Renderer::default();
         install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
             .unwrap();
-        let mut snapshot = SelectSnapshot {
-            time: TimeUs(3_000_000),
-            selection_time: TimeUs(3_000_000),
-            assist: "G-BATTLE".into(),
-            arrange: "S-RANDOM".into(),
-            chart_replication_mode: "RIVALCHART".into(),
-            rival_selected: true,
-            rival: Some(SelectRivalSnapshot {
-                display_name: "rival".into(),
-                ex_score: 2000,
-                clear_index: 7,
-                max_combo: 800,
-                bp: 2,
-                judge_counts: None,
-            }),
-            ir: bmz_render::scene::ResultIrSnapshot { online: true, ..Default::default() },
-            rows: vec![SelectRowSnapshot {
-                kind: SelectRowKind::Song,
-                in_library: true,
-                chart_key_mode: Some(KeyMode::K7),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+        let mut snapshot = select_snapshot();
         let original = labels(&mut renderer, &snapshot);
         assert_eq!(native_frame(&renderer, 709.0, 664.0, 413.0, 150.0), 1);
         assert_eq!(native_frame(&renderer, 302.0, 663.0, 412.0, 284.0), 1);
@@ -228,5 +266,72 @@ fn luxe_battle_info_switches_sp_dp_and_restores_native_panels_in_both_lua_modes(
         );
         assert_eq!(native_frame(&renderer, 709.0, 664.0, 413.0, 150.0), 1);
         assert_eq!(native_frame(&renderer, 302.0, 663.0, 412.0, 284.0), 1);
+    }
+}
+
+#[test]
+fn luxe_battle_info_frames_keep_the_native_edge_glow_continuous() {
+    let path = test_app_paths().resource_dir.join("skins/Luxez-Flat/music_select.luaskin");
+    assert!(path.exists(), "initialize Luxez-Flat to verify its actual assets");
+    let decoded = decode_beatoraja_skin_with_options_and_runtime_state(
+        &path,
+        SkinKind::Select,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &bmz_skin::LuaLoadRuntimeState::default(),
+    )
+    .unwrap();
+    let native = |id: &str| {
+        let source = decoded.sources.iter().find(|source| source.source_id == id).unwrap();
+        (TextureId(source.texture.0), source.asset.clone().unwrap())
+    };
+    let panels = [
+        (KeyMode::K7, native("luxe_battle_rival"), (709.0, 664.0, 413, 150)),
+        (KeyMode::K14, native("luxe_battle_detail"), (302.0, 663.0, 412, 284)),
+    ];
+    let mut renderer = Renderer::default();
+    install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
+        .unwrap();
+    for (key_mode, (texture, native), panel) in panels {
+        let snapshot = SelectSnapshot {
+            battle: Some(Arc::new(SelectBattleSnapshot {
+                key_mode,
+                arrange: Some("RANDOM".into()),
+                ..Default::default()
+            })),
+            ..select_snapshot()
+        };
+        labels(&mut renderer, &snapshot);
+        let pixels = frame_pixels(&renderer, texture, &native, panel);
+        let (w, h) = (panel.2, panel.3);
+        let at = |x: usize, y: usize| {
+            let drawn = &pixels[y][x];
+            // Overlapping translucent strips would darken; gaps would show through.
+            assert_eq!(drawn.len(), 1, "{key_mode:?} ({x}, {y}) must be drawn exactly once");
+            drawn[0]
+        };
+        let native_at = |x: usize, y: usize| {
+            let offset = (y * native.width as usize + x) * 4;
+            <[u8; 4]>::try_from(&native.pixels[offset..offset + 4]).unwrap()
+        };
+        // The DP panel is 1px narrower than its artwork; its right side keeps the artwork's.
+        let shift = native.width as usize - w;
+        for y in 0..h {
+            let header = y < 38;
+            let right = if header { w - 32 } else { w - 36 };
+            for x in 0..w {
+                let native_x = if x >= right { x + shift } else { x };
+                // The rims, the dot's glow, the right glow and the bottom corners stay
+                // unscaled, so the glow runs into the corners without a step.
+                if x < 11 || x >= right || ((header || y >= h - 19) && x < 36) {
+                    assert_eq!(at(x, y), native_at(native_x, y), "{key_mode:?} ({x}, {y})");
+                } else if x < 36 {
+                    // The labels tint the left glow, so it mirrors the clean right glow.
+                    assert_eq!(at(x, y), at(w - 1 - x, y), "{key_mode:?} ({x}, {y})");
+                } else {
+                    at(x, y);
+                }
+            }
+        }
     }
 }

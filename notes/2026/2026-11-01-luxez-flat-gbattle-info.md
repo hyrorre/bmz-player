@@ -55,3 +55,35 @@ Windowsのoffscreen GPU描画で完成画面を確認した。プレビューに
 - `cargo test -p bmz-player --locked`: 2,781件成功、48件ignore。別のstartup smoke 2件はignore。
   既存のローカルHTTPテストも実行した。詳細ログは上記ローカル画像ディレクトリのplayer-tests.log。
 - モーダル除外条件を追加後、Luxez関連を再実行し10件成功・3件ignore。完成画面も再描画した。
+
+## 枠の継ぎ目の修正（2026-11-01追記）
+
+SPのRIVAL DATAとDPのG-BATTLE INFOで、本体の左右の縁が細い1本線になり、
+下の角では縁の内側の発光が下端19pxにだけ急に現れて、色の段差が出ていた。
+
+- 元画像の左右には、外側の影、2pxの明るい縁（x=9〜10）、その内側の約25pxの発光がある。
+  旧版は左右10pxだけを残し、その内側から中央の1列を伸ばしていたため、発光が本体で消えていた。
+- 左右36px（影と縁11px、発光25px）を等倍で描き、平坦な中央の1列だけを伸ばす。
+  下端も左右の角36pxを等倍にし、中央だけを伸ばす。縦方向はどの部品も等倍のままにする。
+- 左の発光はSCORE/BREAK/LAMPの印（DPは判定ラベルの緑の印）の光で色付いている。
+  文字のない右の発光を負の幅で左右反転して置き、外側の縁11pxは元の左側をそのまま使う。
+- DPの見出しは緑の点の光がx=32で切れていたため、元のタイトル文字の直前のx=36まで等倍にした。
+  光は元のタイトル文字の下まで続くため、x=36に緑で約10段階の差が残る。
+
+Luxez-Flat側の対象commitは`3b14175`。詳細オプションの枠（`196a6ad`、`5930317`）と同じく、
+縁の発光を伸ばさず中央だけを伸ばす。
+
+### 検証
+
+- 回帰テスト`luxe_battle_info_frames_keep_the_native_edge_glow_continuous`を追加した。
+  描画コマンドから枠の各画素がどの元画素を描くかを組み直し、各画素を1回だけ描くこと、
+  縁・右の発光・下の角・見出し左端が元画像と同じ画素であること、左の発光が右の鏡像であることを確認する。
+  修正前のparts.luaでは縁の2px目（10, 38）が中央の色になって失敗することを確認した。
+- ImageMagickで同じ組み方を再現し、元画像と異なるのはラベル・印の光・区切り線だけであることを確認した。
+- Windowsのoffscreen GPU描画でSP/DPを比較し、発光が下の角までつながることを確認した。
+  一覧を閉じた画面は、修正前と比べて右上の時計以外に差がない。
+  画像とログはGit管理外の`.local/notes/2026-11-01-gbattle-layout/frame-before/`、`frame-fixed/`に置く。
+- `cargo fmt --check`、`cargo check -p bmz-player --locked`、
+  `cargo clippy -p bmz-player --all-targets --locked -- -D warnings`: 成功。
+- `cargo test -p bmz-player --locked`: 2,782件成功、48件ignore。別のstartup smoke 2件はignore。
+- 通常起動での目視、macOS/Linuxの実機確認は未実施。
