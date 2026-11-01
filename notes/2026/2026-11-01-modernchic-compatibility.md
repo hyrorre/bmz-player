@@ -152,8 +152,51 @@ ioの永続化・`file_*`（ローテーション・詳細モード・履歴）�
 ### 残課題
 
 - 詳細モードのグラフ・数値とResultの履歴表示が、beatorajaと同じかは比較していません。
-  オートプレイでは瞬間密度が100 notes/sec超と表示され、トレンドグラフの右端が白く塗られました。
-- 詳細モード有効時に`mixed lua table converted to object at $.destination[55].dst[1]`の読込警告が出ます。
-  原因は未調査です。
+  オートプレイでは瞬間密度が100 notes/sec超と表示され、トレンドグラフの右端が白く塗られました
+  （原因と修正は下の追記）。
+- 詳細モード有効時に`mixed lua table converted to object at $.destination[55].dst[1]`の読込警告が出ます
+  （原因は下の追記）。
 - Resultの再decode（IR結果の反映等）が起きると、その分も履歴へ追記されます。
 - 戦闘モードの画像`timer`は未対応のままです。
+
+## 追記：Play中のtimer開始時刻の揺れ（2026-11-02）
+
+### 原因
+
+詳細モードの数値が異常だったのは、BMZがLuaへ返すtimerの開始時刻の揺れが原因でした。
+
+- 詳細モードは、レーンごとのtimer（オートプレイはボム50..57、手動はKEYON 100..107）の開始時刻が
+  前回と異なるたびに1打鍵と数えます（`Play/lua/sp/detailinfo/bgaareainfo.lua`の`performance`の値callback）。
+- BMZのPlayのtimerはgameplay threadのsnapshotの譜面時刻からの経過ミリ秒、`main_state.time()`は
+  window threadの画面経過時間です。Luaへの開始時刻は「画面時刻のms − 経過ms」で逆算するため、
+  2つの時計の差の端数でフレームごとに1 ms揺れます。
+- ModernChicのコピー（`.local`内、診断用の`print`を追加）を実アプリで動かすと、28ノーツの
+  サンプル譜面で打鍵を597回検出しました。ボムの開始時刻は6516000 / 6517000 µs、PLAY timer（41）も
+  4516000 / 4517000 µsを交互に返していました。
+- 瞬間密度100超、トレンドグラフの白い領域（密度50以上で上限の白）、レーン密度の棒のはみ出しは、
+  すべてこの数えすぎによるものです。同じ判定方式はModernChicの攻撃演出（`attack.lua`）、
+  PeacefulPlayのkey logger（compatモード）にもあります。
+
+`mixed lua table`警告はスキン側の記述（`Play/lua/sp/keyflash.lua`の
+`dst = {{0, x = ...}}`の余分な`0`）が原因で、BMZは`0`を無視して残りのfieldを使います。
+
+### 修正と判断
+
+runtime VMがtimerごとに前フレームの開始時刻を覚え、変化が2 ms以内なら前回返した値を返します
+（[skin.md](../../docs/skin.md#lua-runtime-compatibility-mode)）。比較を前フレームの生の値と行うため、
+時計の緩やかなずれが積み重なって誤った再起動になることはありません。
+
+時計を1本にそろえる案（Playのtimerを画面時刻へ固定オフセットで写す）も検討しました。ボム・KEYON・
+判定・HCN等のsnapshot構築と描画テストに広く手が入るため、今回はLuaへの返却値だけで吸収しました。
+同じtimerが2 ms以内に再起動した場合は区別しません。全レーン共通の判定timer（46 / 47）では、
+ほぼ同時の判定が1回にまとまります。
+
+### 検証
+
+- 回帰テスト: ±1 msの揺れと1 msずつのずれでは同じ開始時刻、再起動・OFF・再ONでは新しい値
+  （[read_helpers.rs](../../crates/bmz-skin/src/tests/read_helpers.rs)）。
+- 実アプリ（診断用コピー、オートプレイ）: 打鍵の検出が597回から28回（ノーツ数と一致）になり、
+  PLAY timerも一定値になりました。表示は区間平均1.04、最大密度3.62、瞬間密度0.98、連打分布28回、
+  レーンごとの打鍵数4×7で、白い領域とはみ出しはなくなりました。
+- インストール済みLuaスキンの互換比較: 回帰0件。差分はSocialSkin Decideの乱数による揺れだけです。
+- 手動プレイ（KEYON）と戦闘モードの攻撃演出の実機確認、beatorajaとの数値比較は未実施です。
