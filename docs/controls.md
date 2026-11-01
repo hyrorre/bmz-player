@@ -365,8 +365,18 @@ LR2のリザルトスキンでは、次のように進みます。
 G-BATTLEの相手を指定したプレイでは、`CHART REPLICATION`で自分側の譜面を次のように決めます。
 
 - `RIVALCHART`：相手の譜面オプションとseedを自分側にも適用します。
+- `RIVALCHART MIRROR`：相手の譜面を左右反転して使います。
 - `RIVALOPTION`：相手の譜面オプションだけを適用し、自分側のseedを保ちます。
 - `NONE`：自分側の配置を変更しません。
+
+`RIVALCHART MIRROR`では、各サイドの鍵盤の並びを左右反転し、その並びになる通常の譜面オプションとseedでプレイします。
+スコアとリプレイはそのオプションとseedで保存され、後から同じ譜面を再現できます。
+
+- 正規とMIRROR、F-RANDOMとMF-RANDOMは互いに入れ替わります。RANDOM / RANDOM-EX / R-RANDOMは同じオプションのままです。
+- seedは、反転した並びになるbeatoraja互換のseedを0から探して使います。
+- S-RANDOM / SPIRAL / H-RANDOM / ALL-SCR / S-RANDOM-EXは反転せず、`RIVALCHART`と同じ譜面でプレイします。
+- 相手のseedが取得できない場合は、seedの要らない正規とMIRRORだけを入れ替えます。
+- 7で選択中のrianIRのライバルにも同じ規則で適用します。
 
 7で選択中のrianIRのライバルとG-BATTLEの相手が異なる場合は、そのプレイで明示したG-BATTLEの相手を優先します。
 

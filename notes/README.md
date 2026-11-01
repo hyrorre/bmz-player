@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-01 | [RIVALCHART MIRROR（相手の譜面を左右反転して借りる）](2026/2026-11-01-rival-chart-mirror.md) |
 | 2026-11-01 | [ECFNのG-BATTLE相手情報](2026/2026-11-01-ecfn-gbattle-info.md) |
 | 2026-11-01 | [mz-selectのG-BATTLE相手情報](2026/2026-11-01-mz-select-gbattle-info.md) |
 | 2026-11-01 | [Luxez-FlatのG-BATTLE相手情報とSP/DP配置切り替え](2026/2026-11-01-luxez-flat-gbattle-info.md) |

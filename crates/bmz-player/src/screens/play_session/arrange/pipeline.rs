@@ -35,38 +35,13 @@ pub(crate) fn preview_arrange_pattern(
             if matches!(side, ArrangeSide::P2) && !is_double {
                 continue;
             }
-            let arrange = if arrange_requires_scratch(arrange) && !key_mode_has_scratch(key_mode) {
-                ArrangeOption::Normal
-            } else {
-                arrange
-            };
-            let groups =
-                arrange_lane_groups_for_side(key_mode, arrange == ArrangeOption::RandomEx, side);
-            let perm = match arrange {
-                ArrangeOption::Normal => (0..LANE_COUNT).collect(),
-                ArrangeOption::Mirror => mirror_lane_permutation_for_side(key_mode, side),
-                ArrangeOption::Random | ArrangeOption::RandomEx => {
-                    shuffle_lane_groups(seed?, groups, arrangement.legacy_arrange_seed)
-                }
-                ArrangeOption::RRandom => {
-                    let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
-                    let mut rng = ArrangeRng::new(seed?, arrangement.legacy_arrange_seed);
-                    for group in groups {
-                        rotate_lane_group(&mut rng, &group, &mut perm);
-                    }
-                    perm
-                }
-                ArrangeOption::FRandom | ArrangeOption::MFRandom => {
-                    f_random_lane_permutation_for_side(
-                        seed?,
-                        key_mode,
-                        arrange,
-                        side,
-                        arrangement.legacy_arrange_seed,
-                    )
-                }
-                _ => return None,
-            };
+            let perm = fixed_side_permutation(
+                key_mode,
+                side,
+                arrange,
+                seed,
+                arrangement.legacy_arrange_seed,
+            )?;
             merge_lane_permutation(&mut combined, &perm);
         }
         combined

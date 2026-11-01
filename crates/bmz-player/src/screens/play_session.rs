@@ -450,6 +450,8 @@ impl Default for PlaySessionOptions {
 
 #[path = "play_session/arrange/algorithm.rs"]
 mod arrange_algorithm;
+#[path = "play_session/arrange/mirror.rs"]
+mod arrange_mirror;
 #[path = "play_session/arrange/permutation.rs"]
 mod arrange_permutation;
 #[path = "play_session/arrange/pipeline.rs"]
@@ -465,6 +467,7 @@ mod seven_to_six;
 #[path = "play_session/sp_to_dp.rs"]
 mod sp_to_dp;
 
+pub(crate) use arrange_mirror::{CopiedArrangement, mirror_copied_arrangement};
 pub(crate) use arrange_pipeline::preview_arrange_pattern;
 pub(crate) use arrange_pipeline::second_player_lane_mask;
 pub use arrange_pipeline::{apply_arrange, apply_arrange_pair, generate_arrange_seed};

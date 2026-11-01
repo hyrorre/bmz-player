@@ -16,7 +16,8 @@ pub struct RivalConfig {
     pub entries: Vec<RivalEntry>,
 }
 
-/// beatoraja `MusicSelector.ChartReplicationMode` のユーザー選択可能な3値。
+/// beatoraja `MusicSelector.ChartReplicationMode` のユーザー選択可能な3値と、
+/// BMZ拡張の`RIVALCHART MIRROR`。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChartReplicationModeConfig {
     #[serde(rename = "NONE")]
@@ -24,12 +25,21 @@ pub enum ChartReplicationModeConfig {
     #[default]
     #[serde(rename = "RIVALCHART")]
     RivalChart,
+    /// RIVALCHARTの譜面を左右反転し、同じ譜面を出す通常のオプションとseedで保存する。
+    #[serde(rename = "RIVALCHART MIRROR")]
+    RivalChartMirror,
     #[serde(rename = "RIVALOPTION")]
     RivalOption,
 }
 
 impl ChartReplicationModeConfig {
-    pub const CYCLE_ORDER: [Self; 3] = [Self::None, Self::RivalChart, Self::RivalOption];
+    pub const CYCLE_ORDER: [Self; 4] =
+        [Self::None, Self::RivalChart, Self::RivalChartMirror, Self::RivalOption];
+
+    /// ライバルのseedや配置まで写すかどうか。
+    pub const fn copies_chart(self) -> bool {
+        matches!(self, Self::RivalChart | Self::RivalChartMirror)
+    }
 
     pub fn cycle(self, forward: bool) -> Self {
         let index = Self::CYCLE_ORDER.iter().position(|mode| *mode == self).unwrap_or(0);
@@ -41,6 +51,7 @@ impl ChartReplicationModeConfig {
         match self {
             Self::None => "NONE",
             Self::RivalChart => "RIVALCHART",
+            Self::RivalChartMirror => "RIVALCHART MIRROR",
             Self::RivalOption => "RIVALOPTION",
         }
     }

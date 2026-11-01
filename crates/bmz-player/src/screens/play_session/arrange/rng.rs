@@ -75,6 +75,27 @@ pub(super) fn shuffle_lane_group(
     }
 }
 
+/// Whether the beatoraja shuffle above sends `lanes` to `target`, stopping at the first
+/// mismatch. Seed searches call this millions of times, so it does not allocate.
+pub(super) fn shuffle_lane_group_matches(
+    rng: &mut ArrangeRng,
+    lanes: &[usize],
+    target: &[usize],
+) -> bool {
+    let mut remaining = [0usize; LANE_COUNT];
+    remaining[..lanes.len()].copy_from_slice(lanes);
+    let mut len = lanes.len();
+    for &lane in lanes {
+        let index = rng.next_usize(len);
+        if remaining[index] != target[lane] {
+            return false;
+        }
+        remaining.copy_within(index + 1..len, index);
+        len -= 1;
+    }
+    true
+}
+
 pub(super) fn fisher_yates_shuffle(rng: &mut ArrangeRng, lanes: &[usize], perm: &mut [usize]) {
     if lanes.len() < 2 {
         return;

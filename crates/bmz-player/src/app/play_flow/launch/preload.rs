@@ -63,7 +63,6 @@ impl WinitApp {
             return;
         };
         let key_mode = KeyMode::from_str_opt(&chart.mode).unwrap_or_default();
-        use crate::config::profile_config::ChartReplicationModeConfig;
         let replication = self.boot.profile_config.rival.chart_replication_mode;
 
         // KEY4 G-BATTLE target is an explicit per-play choice and must win over
@@ -96,30 +95,7 @@ impl WinitApp {
                 Some(ResolvedTarget { name: name.to_string(), ex_score: score.ex_score });
         }
 
-        if replication == ChartReplicationModeConfig::None {
-            return;
-        }
-        let (arrange, arrange_2p, double_option) = rival_arrange_options(&score);
-        options.arrange = arrange;
-        options.arrange_2p = arrange_2p;
-        options.double_option = double_option.normalize_for_key_mode(key_mode);
-        options.arrange_pattern = None;
-        options.random_trainer_seed = None;
-
-        if replication == ChartReplicationModeConfig::RivalChart
-            && let Some(packed) = score.play_seed.and_then(|seed| u64::try_from(seed).ok())
-        {
-            let is_double = matches!(key_mode, KeyMode::K10 | KeyMode::K14);
-            if let Some(seeds) =
-                crate::random_option_seed::RandomOptionSeeds::unpack(packed, is_double)
-            {
-                options.arrange_seed = Some(i64::from(seeds.p1.value()));
-                options.arrange_seed_2p = seeds.p2.map(|seed| i64::from(seed.value()));
-                options.legacy_arrange_seed = false;
-            } else {
-                tracing::warn!(packed, ?key_mode, "ignoring invalid rival play seed");
-            }
-        }
+        apply_rival_score_replication(options, &score, replication, key_mode);
     }
 
     pub(super) fn begin_course_decide_for_chart(
@@ -788,6 +764,45 @@ pub(in crate::app) fn rival_arrange_options(
     )
 }
 
+/// KEY7: the selected rival's options, and with RIVALCHART its seeds, for this play.
+fn apply_rival_score_replication(
+    options: &mut PlayStartOptions,
+    score: &crate::storage::network_db::IrRivalScoreRecord,
+    replication: crate::config::profile_config::ChartReplicationModeConfig,
+    key_mode: KeyMode,
+) {
+    use crate::config::profile_config::ChartReplicationModeConfig;
+
+    if replication == ChartReplicationModeConfig::None {
+        return;
+    }
+    let (arrange, arrange_2p, double_option) = rival_arrange_options(score);
+    options.arrange = arrange;
+    options.arrange_2p = arrange_2p;
+    options.double_option = double_option.normalize_for_key_mode(key_mode);
+    options.arrange_pattern = None;
+    options.random_trainer_seed = None;
+
+    let mut copied_chart = false;
+    if replication.copies_chart()
+        && let Some(packed) = score.play_seed.and_then(|seed| u64::try_from(seed).ok())
+    {
+        let is_double = matches!(key_mode, KeyMode::K10 | KeyMode::K14);
+        if let Some(seeds) = crate::random_option_seed::RandomOptionSeeds::unpack(packed, is_double)
+        {
+            options.arrange_seed = Some(i64::from(seeds.p1.value()));
+            options.arrange_seed_2p = seeds.p2.map(|seed| i64::from(seed.value()));
+            options.legacy_arrange_seed = false;
+            copied_chart = true;
+        } else {
+            tracing::warn!(packed, ?key_mode, "ignoring invalid rival play seed");
+        }
+    }
+    if replication == ChartReplicationModeConfig::RivalChartMirror {
+        mirror_replicated_chart(options, key_mode, copied_chart);
+    }
+}
+
 fn apply_battle_target_replication(
     options: &mut PlayStartOptions,
     arrangement: &crate::screens::play_start::BattleTargetArrangement,
@@ -806,7 +821,7 @@ fn apply_battle_target_replication(
     options.arrange_pattern = None;
     options.random_trainer_seed = None;
 
-    if replication != ChartReplicationModeConfig::RivalChart {
+    if !replication.copies_chart() {
         return;
     }
 
@@ -846,6 +861,37 @@ fn apply_battle_target_replication(
             arrange_2p = arrangement.arrange_2p.as_str(),
             "battle target has no usable arrangement seed; keeping the local seed"
         );
+    }
+    if replication == ChartReplicationModeConfig::RivalChartMirror {
+        mirror_replicated_chart(options, key_mode, copied_chart);
+    }
+}
+
+/// RIVALCHART MIRROR: mirror the copied chart left to right on each side and keep it as
+/// an ordinary option and seed. Without the rival's seed or lanes only NORMAL and MIRROR,
+/// which need none, are swapped.
+fn mirror_replicated_chart(options: &mut PlayStartOptions, key_mode: KeyMode, copied_chart: bool) {
+    let copied = crate::screens::play_session::CopiedArrangement {
+        arrange: options.arrange,
+        arrange_2p: options.arrange_2p,
+        double_option: options.double_option,
+        seed: options.arrange_seed.filter(|_| copied_chart),
+        seed_2p: options.arrange_seed_2p.filter(|_| copied_chart),
+        legacy_seed: copied_chart && options.legacy_arrange_seed,
+        pattern: options.arrange_pattern.as_deref().filter(|_| copied_chart),
+    };
+    let Some(mirrored) = crate::screens::play_session::mirror_copied_arrangement(key_mode, &copied)
+    else {
+        return;
+    };
+    options.arrange = mirrored.arrange;
+    options.arrange_2p = mirrored.arrange_2p;
+    if copied_chart {
+        // The seeds now reproduce the mirrored lanes on their own.
+        options.arrange_seed = mirrored.seed;
+        options.arrange_seed_2p = mirrored.seed_2p;
+        options.legacy_arrange_seed = false;
+        options.arrange_pattern = None;
     }
 }
 
@@ -1212,6 +1258,99 @@ mod rival_replication_tests {
         assert_eq!(options.arrange, ArrangeOption::Mirror);
         assert_eq!(options.arrange_seed, Some(77));
         assert_eq!(options.arrange_pattern, Some(vec![0, 1]));
+    }
+
+    /// The lanes a 7K arrangement and seed produce, through the battle preview.
+    fn lanes_7k(arrange: ArrangeOption, seed: Option<i64>) -> Vec<u8> {
+        let mut arrangement = battle_arrangement();
+        arrangement.arrange = arrange;
+        arrangement.arrange_2p = ArrangeOption::Normal;
+        arrangement.double_option = DoubleOption::Off;
+        arrangement.arrange_seed = seed;
+        crate::screens::play_session::preview_arrange_pattern(KeyMode::K7, &arrangement).unwrap()
+    }
+
+    /// 7K keys 1..7 sit on lanes 1..7 and swap ends; the scratch stays.
+    fn mirrored_7k(lanes: &[u8]) -> Vec<u8> {
+        (0..lanes.len())
+            .map(|lane| lanes[if (1..=7).contains(&lane) { 8 - lane } else { lane }])
+            .collect()
+    }
+
+    #[test]
+    fn rival_chart_mirror_saves_the_mirrored_rival_chart_as_an_ordinary_seed() {
+        // KEY7 rival.
+        let mut options = PlayStartOptions { arrange_seed: Some(9), ..PlayStartOptions::default() };
+        let score = IrRivalScoreRecord { play_seed: Some(0x123456), ..rival_score(0, "random") };
+        apply_rival_score_replication(
+            &mut options,
+            &score,
+            ChartReplicationModeConfig::RivalChartMirror,
+            KeyMode::K7,
+        );
+        assert_eq!(options.arrange, ArrangeOption::Random);
+        assert!(!options.legacy_arrange_seed);
+        assert_eq!(
+            lanes_7k(options.arrange, options.arrange_seed),
+            mirrored_7k(&lanes_7k(ArrangeOption::Random, Some(0x123456)))
+        );
+
+        // KEY4 G-BATTLE: F-RANDOM mirrors into MF-RANDOM, with its own seed too.
+        let mut options = PlayStartOptions::default();
+        let mut arrangement = battle_arrangement();
+        arrangement.arrange = ArrangeOption::FRandom;
+        arrangement.arrange_2p = ArrangeOption::Normal;
+        arrangement.double_option = DoubleOption::Off;
+        arrangement.packed_seed = Some(0x2468);
+        apply_battle_target_replication(
+            &mut options,
+            &arrangement,
+            ChartReplicationModeConfig::RivalChartMirror,
+            KeyMode::K7,
+        );
+        assert_eq!(options.arrange, ArrangeOption::MFRandom);
+        assert_eq!(options.arrange_pattern, None);
+        assert_eq!(
+            lanes_7k(options.arrange, options.arrange_seed),
+            mirrored_7k(&lanes_7k(ArrangeOption::FRandom, Some(0x2468)))
+        );
+    }
+
+    #[test]
+    fn rival_chart_mirror_keeps_note_randomization_and_charts_without_a_seed() {
+        // S-RANDOM is played as RIVALCHART copies it.
+        let score = rival_score(0, "s-random");
+        let mut mirrored = PlayStartOptions::default();
+        let mut copied = PlayStartOptions::default();
+        for (options, replication) in [
+            (&mut mirrored, ChartReplicationModeConfig::RivalChartMirror),
+            (&mut copied, ChartReplicationModeConfig::RivalChart),
+        ] {
+            apply_rival_score_replication(options, &score, replication, KeyMode::K7);
+        }
+        assert_eq!(mirrored.arrange, ArrangeOption::SRandom);
+        assert_eq!(mirrored.arrange_seed, Some(42));
+        assert_eq!(mirrored.arrange_seed, copied.arrange_seed);
+
+        // Without the rival's seed RANDOM stays a fresh RANDOM; NORMAL still mirrors.
+        let mut options = PlayStartOptions { arrange_seed: Some(9), ..PlayStartOptions::default() };
+        let score = IrRivalScoreRecord { play_seed: None, ..rival_score(0, "random") };
+        apply_rival_score_replication(
+            &mut options,
+            &score,
+            ChartReplicationModeConfig::RivalChartMirror,
+            KeyMode::K7,
+        );
+        assert_eq!((options.arrange, options.arrange_seed), (ArrangeOption::Random, Some(9)));
+        let mut options = PlayStartOptions::default();
+        let score = IrRivalScoreRecord { play_seed: None, ..rival_score(0, "") };
+        apply_rival_score_replication(
+            &mut options,
+            &score,
+            ChartReplicationModeConfig::RivalChartMirror,
+            KeyMode::K7,
+        );
+        assert_eq!(options.arrange, ArrangeOption::Mirror);
     }
 }
 

@@ -67,7 +67,7 @@ rianIRはBMZ公式IRとは別providerとします。credential、送信queue、�
 - `ir rivals`によるrianIRライバル一覧のプロファイル同期
 - 選択中ライバル1人分だけの全曲ベスト取得、`network.db`キャッシュ、ETag再検証
 - 選曲中の7キー切替と、ライバルスコアのプレイ時ターゲット自動適用
-- `NONE` / `RIVALCHART` / `RIVALOPTION`の譜面再現モード
+- `NONE` / `RIVALCHART` / `RIVALCHART MIRROR` / `RIVALOPTION`の譜面再現モード
 
 初回loginは次を使います。rianIRでは`--id`がログインIDであり、表示名やメールアドレス
 ではありません。`--email`は既存CLIとの後方互換aliasとして残します。
@@ -295,13 +295,17 @@ clear / max combo / min BPだけを全履歴から集約します。ETagが一�
 
 選択ライバルが対象譜面をプレイ済みなら、そのEXスコアと表示名をターゲットにします。
 未プレイならライバルターゲットを作らず、beatorajaと同じく通常のTARGET設定を使います。
-譜面再現モードは次の3値で、既定値は`RIVALCHART`です。
+譜面再現モードは次の4値で、既定値は`RIVALCHART`です。
 
 | mode | 動作 |
 | --- | --- |
 | `NONE` | ターゲットだけ適用し、現在の配置を維持 |
 | `RIVALOPTION` | ライバルの配置種別だけ適用し、seedは新規抽選 |
 | `RIVALCHART` | ライバルの配置種別と`play_seed`を適用 |
+| `RIVALCHART MIRROR` | BMZ拡張。`RIVALCHART`の譜面を左右反転し、その譜面になる配置種別とseedを適用 |
+
+`RIVALCHART MIRROR`のスコアは反転後の配置種別とseedで保存・送信します。
+規則は[操作説明](controls.md)のG-BATTLEの項を参照してください。
 
 structured配置をlegacy `play_option`より優先するため、BMZから送信された
 F-RANDOM / MF-RANDOMも再現できます。ghostによる進行ターゲットは実装対象外です。

@@ -89,6 +89,42 @@ pub(super) fn apply_arrange_side(
     }
 }
 
+/// The lane permutation one side gets from a fixed arrangement, as during launch.
+/// `None` for per-note arrangements (S-RANDOM etc.) or a seeded one without a seed.
+pub(super) fn fixed_side_permutation(
+    key_mode: KeyMode,
+    side: ArrangeSide,
+    arrange: ArrangeOption,
+    seed: Option<i64>,
+    legacy_seed: bool,
+) -> Option<Vec<usize>> {
+    let arrange = if arrange_requires_scratch(arrange) && !key_mode_has_scratch(key_mode) {
+        ArrangeOption::Normal
+    } else {
+        arrange
+    };
+    let groups = arrange_lane_groups_for_side(key_mode, arrange == ArrangeOption::RandomEx, side);
+    Some(match arrange {
+        ArrangeOption::Normal => (0..LANE_COUNT).collect(),
+        ArrangeOption::Mirror => mirror_lane_permutation_for_side(key_mode, side),
+        ArrangeOption::Random | ArrangeOption::RandomEx => {
+            shuffle_lane_groups(seed?, groups, legacy_seed)
+        }
+        ArrangeOption::RRandom => {
+            let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
+            let mut rng = ArrangeRng::new(seed?, legacy_seed);
+            for group in groups {
+                rotate_lane_group(&mut rng, &group, &mut perm);
+            }
+            perm
+        }
+        ArrangeOption::FRandom | ArrangeOption::MFRandom => {
+            f_random_lane_permutation_for_side(seed?, key_mode, arrange, side, legacy_seed)
+        }
+        _ => return None,
+    })
+}
+
 pub(super) fn merge_lane_permutation(target: &mut [usize], source: &[usize]) {
     for (index, &source_lane) in source.iter().enumerate() {
         if source_lane != index {

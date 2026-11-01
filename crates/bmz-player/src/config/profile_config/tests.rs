@@ -49,6 +49,18 @@ fn chart_replication_mode_uses_beatoraja_names_and_defaults_to_rival_chart() {
         toml::from_str::<ModeWrapper>("mode = \"RIVALCHART\"").unwrap().mode,
         ChartReplicationModeConfig::RivalChart
     );
+    // BMZ's mirrored RIVALCHART is stored and shown under the same name.
+    let mirror = ChartReplicationModeConfig::RivalChartMirror;
+    let encoded = toml::to_string(&ModeWrapper { mode: mirror }).unwrap();
+    assert_eq!(encoded.trim(), format!("mode = \"{}\"", mirror.as_str()));
+    assert_eq!(toml::from_str::<ModeWrapper>(&encoded).unwrap().mode, mirror);
+    // It follows RIVALCHART when cycling.
+    assert_eq!(ChartReplicationModeConfig::RivalChart.cycle(true), mirror);
+    assert_eq!(mirror.cycle(true), ChartReplicationModeConfig::RivalOption);
+    assert_eq!(
+        ChartReplicationModeConfig::None.cycle(false),
+        ChartReplicationModeConfig::RivalOption
+    );
 
     let profile = ProfileConfig::new_default("default", "Player", 0);
     let mut value = toml::Value::try_from(&profile).unwrap();

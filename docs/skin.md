@@ -1674,7 +1674,7 @@ beatoraja互換の選曲イベントを次のように扱います。
 | 212 | 選択譜面または通常曲フォルダをファイルブラウザで開く |
 | 213 | 選択譜面の`url` / `appendurl`をブラウザで開く |
 | 343 | GUIDE SEを切替 |
-| 344 | `NONE → RIVALCHART → RIVALOPTION`で譜面再現モードを切替 |
+| 344 | `NONE → RIVALCHART → RIVALCHART MIRROR → RIVALOPTION`で譜面再現モードを切替 |
 | 350 | EXTRA NOTE DEPTHを4状態で巡回 |
 | 351 | MINEモディファイアを5状態で巡回 |
 | 352 | SCROLLモディファイアを3状態で巡回 |
@@ -1710,8 +1710,9 @@ Resultはプレイ時の名前とターゲット設定を保持し、リザル�
 
 譜面再現モード名はbeatoraja互換の`STRING_CHART_REPLICATION_MODE` (`ref=86`)と、
 BMZの動的text id `bmz_select_chart_replication`から`NONE` / `RIVALCHART` /
-`RIVALOPTION`として取得できます。`RIVALOPTION`は配置種別だけ、`RIVALCHART`は配置種別と
-ライバルのside別24bit seedを適用します。ghostは使用しません。
+`RIVALCHART MIRROR` / `RIVALOPTION`として取得できます。`RIVALOPTION`は配置種別だけ、
+`RIVALCHART`は配置種別とライバルのside別24bit seedを適用します。
+BMZ拡張の`RIVALCHART MIRROR`は、その譜面を左右反転した配置種別とseedを使います。ghostは使用しません。
 
 ### BMZ Dynamic Select Option Panels
 
@@ -1733,7 +1734,7 @@ skin側のスプライト行追加は不要です。
 | `bmz_select_sort` | sort |
 | `bmz_select_ln_mode` | LN mode |
 | `bmz_select_bga` | BGA |
-| `bmz_select_chart_replication` | chart replication (`NONE` / `RIVALCHART` / `RIVALOPTION`) |
+| `bmz_select_chart_replication` | chart replication (`NONE` / `RIVALCHART` / `RIVALCHART MIRROR` / `RIVALOPTION`) |
 | `bmz_select_judge_timing_auto_adjust` | judge timing auto adjust (`ON` / `OFF`) |
 
 ADFX02/ECFNの基本拡張は、上部のモードボタンに`bmz_select_mode`を使い、4K/6K/8Kも
