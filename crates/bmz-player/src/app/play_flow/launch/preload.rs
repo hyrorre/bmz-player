@@ -277,6 +277,17 @@ impl WinitApp {
     }
 
     pub(super) fn invalidate_play_preload(&mut self) {
+        if let Some(pending) = &self.play.pending_play_preload {
+            pending.skin_chart_state.finish(Err("play preload cancelled".into()));
+        }
+        if self.play.pending_play_preload.is_some()
+            || self.play.preloaded_play_session.is_some()
+            || self.play.active_play.is_none()
+        {
+            self.skin.skin_pipeline.bump_generation(SkinKind::Play);
+            self.skin.skin_pipeline.set_pending(SkinKind::Play, false);
+            self.skin.last_play_skin_signature = None;
+        }
         self.play.play_preload_generation = self.play.play_preload_generation.wrapping_add(1);
         self.play.pending_play_preload = None;
         self.play.pending_course_stage_launch = None;
@@ -502,7 +513,9 @@ impl WinitApp {
         state: &mut bmz_skin::LuaLoadRuntimeState,
     ) {
         let chart = self.play_skin_chart(chart_id);
-        apply_chart_length_lua_load_state(state, chart.as_ref().map_or(0, |chart| chart.length_ms));
+        // The worker supplies the selected, transformed chart's length before Lua runs.
+        // Keep the signature independent of whether on_chart has arrived yet.
+        apply_chart_length_lua_load_state(state, None);
         apply_chart_hashes_lua_load_state(
             state,
             chart.as_ref().map(|chart| chart.md5),

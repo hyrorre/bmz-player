@@ -952,8 +952,20 @@ skin library root配下のLua skinへ公開する初期`package.path`は、過�
 ### Lua APIの互換範囲
 
 譜面長のnumber `1163` / `1164`（`chartlength_minute` / `chartlength_second`）は、
-Playでも譜面全体の分・秒を返します。経過時刻・残り時間・ノーツ表示時間とは独立した値です。
-Playスキンのロード時にも渡すため、ロード時に固定テキストや区間ログの長さを決める処理でも使えます。
+Playでは、実際の`#RANDOM`分岐・先頭ノーツ余白・譜面変換を反映した全体長を返します。
+beatorajaの`BMSModel.getLastTime()`と同じく、ノーツ・不可視ノーツ・BGM・通常/Layer BGAの
+最終配置を含み、PoorのみのBGA、PCMの余韻、リザルト待機時間は含みません。
+BMZ追加のLayer2（0A）も曲長には含めず、終了待ちでの従来の扱いは維持します。
+Practiceは区間・速度の適用前の全体長です。経過時刻、残り時間、ノーツ表示時間、終了判定とは独立しています。
+`1163 = (length_ms / 60000) % 60`、`1164 = (length_ms / 1000) % 60`で、整数除算します。
+Playの譜面情報がまだなければLuaは`INT_MIN`、数値画像と`numberRef`テキストは非表示です。
+
+Playスキンのデコード依頼は先行できますが、Luaロードは変換済み譜面の通知を待ちます。
+同じ譜面からロード時定数、runtime callback、数値画像、`numberRef`へ値を渡します。
+通知はWAVロードより前に行い、再解析を追加しません。Retry・Replay・コース次曲も
+要求世代ごとの通知を使い、キャンセルと失敗時には待機を解除します。Offlineも同じ長さを使います。
+Select・Decide・Result・Course Resultの長さの取得元は従来どおりです。
+beatorajaとの残る画面別の差異と検証範囲は[作業記録](../notes/2026/2026-11-02-skin-runtime-properties.md#2026-11-02-pr-60追補譜面長の互換修正)に記載します。
 
 text `1030` / `1031`（`songhashmd5` / `songhashsha256`）は元の譜面ファイルの
 MD5 / SHA256を小文字の16進数で返します。Selectの選択譜面、Decide / Playの対象譜面、

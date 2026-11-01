@@ -146,7 +146,7 @@ pub(in crate::plan) fn build_play_skin_state(
             .saturating_add(1_000)
             .clamp(0, i32::MAX as i64) as i32,
         total_duration_ms: snapshot.note_display_duration_ms,
-        chart_length_ms: Some(snapshot.duration.0 / 1_000),
+        chart_length_ms: snapshot.skin_chart_length_ms,
         duration_green_ms: Some(crate::skin::duration_to_green_number_ms(
             snapshot.note_display_duration_ms,
         )),

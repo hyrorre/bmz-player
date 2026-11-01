@@ -525,7 +525,7 @@ pub(in crate::skin) fn lua_missing_number_sentinel(
     ref_id: i32,
     state: &SkinDrawState,
 ) -> Option<i64> {
-    (matches!(ref_id, 243..=249 | 380..=399)
+    (matches!(ref_id, 243..=249 | 380..=399 | 1163 | 1164)
         || (state.result_failed.is_some() && matches!(ref_id, 176 | 178)))
     .then_some(i64::from(i32::MIN))
 }

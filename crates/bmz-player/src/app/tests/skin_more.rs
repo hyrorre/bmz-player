@@ -63,7 +63,15 @@ fn play_chart_length_is_available_during_lua_load_and_changes_for_the_next_chart
     )
     .unwrap();
     let mut state = bmz_skin::LuaLoadRuntimeState::default();
-    for (length_ms, expected) in [(183_456, "3:3"), (60_000, "1:0"), (0, "0:0"), (-1, "0:0")] {
+    for (length_ms, expected) in [
+        (Some(59_999), "0:59"),
+        (Some(183_456), "3:3"),
+        (Some(60_000), "1:0"),
+        (Some(3_600_000), "0:0"),
+        (Some(0), "0:0"),
+        (Some(-1), "0:0"),
+        (None, "-2147483648:-2147483648"),
+    ] {
         apply_chart_length_lua_load_state(&mut state, length_ms);
         let loaded = bmz_skin::load_lua_skin_with_runtime_state(
             &path,

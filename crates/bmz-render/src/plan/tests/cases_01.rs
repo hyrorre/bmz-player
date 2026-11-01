@@ -2,10 +2,13 @@ use super::*;
 
 #[test]
 fn play_chart_length_is_independent_of_clock_and_note_display_duration() {
-    for (length_ms, minute, second) in [(59_999, 0, 59), (60_000, 1, 0), (183_456, 3, 3)] {
+    for (length_ms, minute, second) in
+        [(59_999, 0, 59), (60_000, 1, 0), (183_456, 3, 3), (3_600_000, 0, 0), (i64::MAX, 12, 55)]
+    {
         for time_ms in [-2_000, 0, 40_000, 200_000] {
             let snapshot = RenderSnapshot {
-                duration: TimeUs(length_ms * 1_000),
+                duration: TimeUs(70_000_000),
+                skin_chart_length_ms: Some(length_ms),
                 time: TimeUs(time_ms * 1_000),
                 note_display_duration_ms: 500,
                 ..Default::default()
@@ -14,7 +17,29 @@ fn play_chart_length_is_independent_of_clock_and_note_display_duration() {
             assert_eq!(crate::skin::lua_main_state_number(1163, &state), minute);
             assert_eq!(crate::skin::lua_main_state_number(1164, &state), second);
             assert_eq!(state.total_duration_ms, 500);
+            assert_eq!(crate::skin::lua_main_state_number(161, &state), time_ms.max(0) / 60_000);
+            assert_eq!(
+                crate::skin::lua_main_state_number(162, &state),
+                (time_ms.max(0) / 1_000) % 60
+            );
+            assert_eq!(
+                crate::skin::lua_main_state_number(163, &state),
+                (71_000 - time_ms).max(0) / 60_000
+            );
+            assert_eq!(
+                crate::skin::lua_main_state_number(164, &state),
+                ((71_000 - time_ms).max(0) / 1_000) % 60
+            );
         }
+    }
+}
+
+#[test]
+fn missing_play_chart_length_does_not_fall_back_to_duration() {
+    let snapshot = RenderSnapshot { duration: TimeUs(183_456_000), ..Default::default() };
+    let state = play::build_play_skin_state(&snapshot, &SkinContext::default(), 0);
+    for id in [1163, 1164] {
+        assert_eq!(crate::skin::lua_main_state_number(id, &state), i64::from(i32::MIN));
     }
 }
 

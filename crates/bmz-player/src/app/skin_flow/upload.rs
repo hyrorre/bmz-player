@@ -81,12 +81,24 @@ impl WinitApp {
         // Select の開始演出中でも、scene 遷移が skin を要求した場合は待機中の
         // decode 結果を直ちに GPU upload へ流す。
         self.start_skin_upload_worker();
+        let mut published_play_chart = false;
         while self.is_kind_pending_decode(kind) {
-            match self.skin.skin_pipeline.upload_rx.recv() {
+            match self.skin.skin_pipeline.upload_rx.recv_timeout(Duration::from_millis(2)) {
                 Ok(result) => {
                     let _ = self.apply_uploaded_skin(result);
                 }
-                Err(_) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if kind == SkinKind::Play && !published_play_chart {
+                        self.publish_prepared_play_chart();
+                        published_play_chart = self.play.preloaded_play_session.is_some()
+                            || self
+                                .play
+                                .pending_play_preload
+                                .as_ref()
+                                .is_some_and(|pending| pending.prepared_chart.get().is_some());
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
         if kind == SkinKind::Play {

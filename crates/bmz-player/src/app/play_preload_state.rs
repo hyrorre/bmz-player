@@ -6,6 +6,7 @@ pub(super) struct PendingPlayPreload {
     pub(super) input: SharedInputBackend,
     pub(super) audio_progress: Arc<AtomicU32>,
     pub(super) prepared_chart: Arc<OnceLock<PreparedPlayChart>>,
+    pub(super) skin_chart_state: PlaySkinChartState,
     pub(super) rx: Receiver<PlayPreloadResult>,
 }
 

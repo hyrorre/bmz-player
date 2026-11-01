@@ -276,9 +276,7 @@ impl WinitApp {
             self.play.play_preload_generation,
         );
 
-        if !self.skin.skin_pipeline.is_pending(SkinKind::Play)
-            && self.skin.last_play_skin_signature.as_ref() == Some(&signature)
-        {
+        if self.skin.last_play_skin_signature.as_ref() == Some(&signature) {
             tracing::debug!(?key_mode, "play skin reuse (signature unchanged)");
             return;
         }
@@ -317,8 +315,30 @@ impl WinitApp {
             return;
         }
 
+        let chart_state = self
+            .play
+            .pending_play_preload
+            .as_ref()
+            .filter(|pending| pending.generation == self.play.play_preload_generation)
+            .map(|pending| pending.skin_chart_state.clone())
+            .or_else(|| {
+                let length = self
+                    .play
+                    .preloaded_play_session
+                    .as_ref()
+                    .map(|play| play.preloaded.render_snapshot_cache.skin_chart_length_ms)
+                    .or_else(|| {
+                        self.play.active_play.as_ref().and_then(|_| {
+                            self.play.last_play_snapshot.as_ref()?.skin_chart_length_ms
+                        })
+                    })?;
+                let state = PlaySkinChartState::default();
+                state.finish(Ok(length));
+                Some(state)
+            });
         let request =
             SkinDecodeRequest::new(generation, path, SkinKind::Play, options, files, runtime_state)
+                .with_play_chart_state(chart_state)
                 .with_library_roots(self.boot.app_paths.skin_library_roots())
                 .reuse_installed_fonts(&self.skin.skin_pipeline);
         spawn_skin_decode(&self.skin.skin_pipeline, request);

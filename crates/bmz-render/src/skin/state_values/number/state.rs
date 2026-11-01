@@ -183,8 +183,18 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
         163 => Some((state.timeleft_ms / 60_000) as i64),
         164 => Some(((state.timeleft_ms / 1_000) % 60) as i64),
         165 => Some((state.resource_load_progress.clamp(0.0, 1.0) * 100.0) as i64),
-        1163 => Some(result_or_select_length_ms(state) / 60_000),
-        1164 => Some((result_or_select_length_ms(state) / 1_000) % 60),
+        1163 | 1164 => {
+            let length_ms = if state.play_screen || state.chart_length_ms.is_some() {
+                state.chart_length_ms
+            } else if state.select_screen || state.result_failed.is_some() {
+                Some(result_or_select_length_ms(state))
+            } else {
+                None
+            };
+            length_ms.map(|length| {
+                i64::from(chart_length_numbers(Some(length))[(ref_id - 1163) as usize])
+            })
+        }
         310 => Some(displayed_hispeed_hundredths(state) / 100),
         311 => Some(displayed_hispeed_hundredths(state) % 100),
         1900 => Some(skin_hispeed_mode_index(state) as i64),

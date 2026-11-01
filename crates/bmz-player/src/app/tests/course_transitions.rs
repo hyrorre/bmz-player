@@ -219,6 +219,7 @@ fn course_retirement_and_retry_preserve_results_and_cancel_pending_launches() {
                     input: Default::default(),
                     audio_progress: Arc::new(AtomicU32::new(0)),
                     prepared_chart: Arc::new(OnceLock::new()),
+                    skin_chart_state: Default::default(),
                     rx,
                 });
                 let before = attempts(&app);

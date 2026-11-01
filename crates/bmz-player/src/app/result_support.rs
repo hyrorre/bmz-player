@@ -565,13 +565,10 @@ pub(super) fn apply_lr2_best_clear_load_options(
 
 pub(super) fn apply_chart_length_lua_load_state(
     state: &mut bmz_skin::LuaLoadRuntimeState,
-    length_ms: i64,
+    length_ms: Option<i64>,
 ) {
-    let length_ms = length_ms.max(0);
-    state.number_values.extend([
-        (1163, i32::try_from(length_ms / 60_000).unwrap_or(i32::MAX)),
-        (1164, ((length_ms / 1_000) % 60) as i32),
-    ]);
+    let [minute, second] = bmz_render::skin::chart_length_numbers(length_ms);
+    state.number_values.extend([(1163, minute), (1164, second)]);
 }
 
 pub(super) fn apply_chart_hashes_lua_load_state(
