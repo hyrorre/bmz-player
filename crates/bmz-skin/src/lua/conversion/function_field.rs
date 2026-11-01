@@ -548,6 +548,26 @@ fn infer_timer_field(
     }
     let map: Table = lua.globals().get("bmz_timer_fn_map")?;
     if let Ok(timer_id) = map.get::<i32>(function.clone()) {
+        let mut probe =
+            main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
+        if probe.unsupported_dynamic_timers.contains(&timer_id) {
+            // The observed predicate reads Lua state (e.g. a menu flag an `act`
+            // toggles), so no expression exists. A destination timer evaluates
+            // the observed timer in the runtime VM, which shares that state.
+            if is_destination_object_path(path) {
+                probe.runtime_observed_timers.insert(timer_id);
+                drop(probe);
+                let callback_id = register_runtime_callback(
+                    main_state_probe,
+                    &format!("{path}.timer"),
+                    LuaRuntimeCallbackKind::DestinationTimer,
+                )?;
+                insert_expr(object, "timer_expr", format!("bmz:lua_timer_callback:{callback_id}"));
+                return Ok(true);
+            }
+            probe.inactive_observed_timer_uses.insert(timer_id);
+        }
+        drop(probe);
         insert_number(object, "timer", timer_id);
         return Ok(true);
     }
@@ -565,6 +585,13 @@ fn infer_timer_field(
         return Ok(true);
     }
     Ok(false)
+}
+
+/// `$.destination[N]` itself, not a nested `dst` frame.
+fn is_destination_object_path(path: &str) -> bool {
+    path.strip_prefix("$.destination[")
+        .and_then(|rest| rest.strip_suffix(']'))
+        .is_some_and(|index| index.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 fn insert_number(object: &mut JsonMap<String, JsonValue>, key: &str, value: impl Into<JsonNumber>) {

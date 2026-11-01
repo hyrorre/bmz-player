@@ -679,3 +679,108 @@ fn lua_skin_warns_when_timer_observe_callback_needs_runtime_lua() {
                 == "timer_util.timer_observe_boolean callback for generated timer 9000 could not be inferred; timer remains inactive"
         }));
 }
+
+/// ModernChic's side menu opens panels from `act` and shows each part with
+/// `timer = timer_observe_boolean(function() return isLampMenuOpen end)`.
+#[test]
+fn destination_observe_timer_over_lua_state_runs_in_the_runtime_vm() {
+    for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("select.luaskin");
+        fs::write(
+            &path,
+            r#"
+            local timer_util = require("timer_util")
+            local menu_open = false
+            local open_timer = timer_util.timer_observe_boolean(function() return menu_open end)
+            local image_timer = timer_util.timer_observe_boolean(function() return menu_open end)
+            return {
+                type = 5,
+                image = {
+                    { id = "btn", src = 0, x = 0, y = 0, w = 1, h = 1,
+                      act = function() menu_open = not menu_open end },
+                    { id = "anim", src = 0, x = 0, y = 0, w = 2, h = 1, divx = 2,
+                      cycle = 100, timer = image_timer },
+                },
+                destination = {
+                    { id = "btn", dst = { { x = 0, y = 0, w = 1, h = 1 } } },
+                    { id = "panel", timer = open_timer, loop = -1,
+                      dst = { { x = 0, y = 0, w = 1, h = 1 } } },
+                    { id = "closed", timer = timer_util.timer_observe_boolean(function()
+                        return not menu_open end), dst = { { x = 0, y = 0, w = 1, h = 1 } } },
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let state = LuaLoadRuntimeState { runtime_mode: mode, ..Default::default() };
+        let mut loaded =
+            load_lua_skin_with_runtime_state(&path, &BTreeMap::new(), &BTreeMap::new(), &state)
+                .unwrap();
+        let destination = |id: &str| {
+            loaded
+                .document
+                .destination
+                .iter()
+                .find_map(|entry| match entry {
+                    bmz_skin_document::DestinationListEntry::Single(destination)
+                        if destination.id == id =>
+                    {
+                        Some(destination.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert_eq!(destination("panel").timer, None);
+        assert!(destination("panel").timer_expr.starts_with("bmz:lua_timer_callback:"));
+        assert!(destination("closed").timer_expr.starts_with("bmz:lua_timer_callback:"));
+        // An image animation timer has no runtime callback and stays inactive.
+        let messages =
+            loaded.warnings.iter().map(|warning| warning.message.as_str()).collect::<Vec<_>>();
+        assert_eq!(
+            messages,
+            [
+                "timer_util.timer_observe_boolean callback for generated timer 9001 could not be inferred; timer remains inactive"
+            ],
+            "{mode:?}"
+        );
+        let dynamic_timers = loaded
+            .document
+            .dynamic_timers
+            .iter()
+            .map(|timer| (timer.id, timer.observe.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(dynamic_timers, [(9001, "number(0) < 0")]);
+        assert_eq!(
+            loaded.document.image.iter().find(|image| image.id == "anim").unwrap().timer,
+            Some(9001)
+        );
+
+        let act = bmz_skin_document::lua_act_callback_id(
+            loaded.document.image.iter().find(|image| image.id == "btn").unwrap().act.unwrap(),
+        )
+        .unwrap();
+        let runtime = loaded.lua_runtime.as_mut().unwrap();
+        let callback = |runtime: &LuaSkinRuntime, path: &str| {
+            (0..runtime.callback_count())
+                .find(|&id| runtime.callback_path(id) == Some(path))
+                .unwrap()
+        };
+        let panel = callback(runtime, "$.destination[2].timer");
+        let closed = callback(runtime, "$.destination[3].timer");
+        let mut state = TestLuaMainState { now_us: 1_000_000, ..Default::default() };
+        assert_eq!(runtime.evaluate_timer(panel, &state), None);
+        assert_eq!(runtime.evaluate_timer(closed, &state), Some(1_000_000));
+        state.now_us = 2_000_000;
+        assert!(runtime.execute_act(act, 1, 0, &state));
+        state.now_us = 3_000_000;
+        // The timer starts when the observed state turns on, as in beatoraja.
+        assert_eq!(runtime.evaluate_timer(panel, &state), Some(3_000_000));
+        assert_eq!(runtime.evaluate_timer(closed, &state), None);
+        state.now_us = 4_000_000;
+        assert_eq!(runtime.evaluate_timer(panel, &state), Some(3_000_000));
+        assert_eq!(runtime.failure_log_count(), 0);
+    }
+}

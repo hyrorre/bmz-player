@@ -29,6 +29,12 @@ pub(super) struct MainStateProbe {
     pub(super) dynamic_timer_ids_by_observe: BTreeMap<String, i32>,
     pub(super) fixed_delay_timers: Vec<(i32, i32, i32)>,
     pub(super) unsupported_dynamic_timers: Vec<i32>,
+    /// Unsupported observe timers used as a destination timer, which the
+    /// runtime VM evaluates as a destination timer callback.
+    pub(super) runtime_observed_timers: BTreeSet<i32>,
+    /// Unsupported observe timers also used where no runtime callback exists
+    /// (e.g. an image animation timer); those uses stay inactive.
+    pub(super) inactive_observed_timer_uses: BTreeSet<i32>,
     pub(super) load_time_constant_dynamic_timers: Vec<i32>,
     pub(super) next_runtime_flag_id: i32,
     pub(super) runtime_flags: Vec<LuaRuntimeFlagProbe>,
@@ -79,6 +85,8 @@ impl Default for MainStateProbe {
             dynamic_timer_ids_by_observe: BTreeMap::new(),
             fixed_delay_timers: Vec::new(),
             unsupported_dynamic_timers: Vec::new(),
+            runtime_observed_timers: BTreeSet::new(),
+            inactive_observed_timer_uses: BTreeSet::new(),
             load_time_constant_dynamic_timers: Vec::new(),
             next_runtime_flag_id: 0,
             runtime_flags: Vec::new(),
@@ -113,6 +121,13 @@ pub(super) enum MainStateProbeMode {
 }
 
 impl MainStateProbe {
+    /// Every use of this unsupported observe timer runs in the runtime VM, so
+    /// its inactive dynamic timer and warning are not needed.
+    pub(super) fn observed_timer_runs_only_at_runtime(&self, timer_id: i32) -> bool {
+        self.runtime_observed_timers.contains(&timer_id)
+            && !self.inactive_observed_timer_uses.contains(&timer_id)
+    }
+
     pub(super) fn record_audio_action(
         &mut self,
         action: LuaAudioActionKindProbe,

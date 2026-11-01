@@ -190,7 +190,14 @@ pub(super) fn execute_lua_skin(
         let timers = main_state_probe
             .lock()
             .ok()
-            .map(|probe| probe.dynamic_timers.clone())
+            .map(|probe| {
+                probe
+                    .dynamic_timers
+                    .iter()
+                    .filter(|(id, _)| !probe.observed_timer_runs_only_at_runtime(*id))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
         if !timers.is_empty() {
             let entries = timers.into_iter().map(|(id, observe)| {
@@ -280,7 +287,14 @@ pub(super) fn execute_lua_skin(
     let unsupported_dynamic_timers = main_state_probe
         .lock()
         .ok()
-        .map(|probe| probe.unsupported_dynamic_timers.clone())
+        .map(|probe| {
+            probe
+                .unsupported_dynamic_timers
+                .iter()
+                .copied()
+                .filter(|id| !probe.observed_timer_runs_only_at_runtime(*id))
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     warnings.extend(unsupported_dynamic_timers.into_iter().map(|id| {
         format!(

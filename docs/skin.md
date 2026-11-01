@@ -829,6 +829,16 @@ Luaの`main_state.timer(id)`はシーン基準の開始時刻（マイクロ秒�
 使う場合も実行時の時計と状態を参照します。`customEvents`の`condition` / `action`も同じです。
 destinationへ直接指定した任意timer functionはこの対応には含まれません。
 
+destinationの`timer`へ`timer_util.timer_observe_boolean`の結果を指定し、観測関数がLuaの変数
+（`act`で切り替えるメニューの開閉状態など）を読む場合は、式へ変換できません。この場合は
+runtime VMのdestination timer callbackとして観測関数を毎フレーム評価し、falseからtrueに
+変わった時刻をtimerの開始時刻とします（beatorajaの`TimerUtility`と同じ）。`act`と同じVMで
+評価するため、クリックで変えた状態を参照できます。`main_state`だけを読む観測関数は従来どおり
+`dynamicTimer`の式へ変換します。destinationの`dst`内やimageのアニメーション用`timer`など、
+runtime callbackのない位置に指定した場合は常にOFFのままで、読込警告を出します。
+ModernChicのSelectのサイドメニュー・ヘルプ、Result / Courseのメニューがこれに依存します
+（[回帰テスト](../crates/bmz-skin/src/tests/cases_03.rs)）。
+
 Luaファイル全体をフレームごとに再ロードするのではなく、ロード時に作成したclosureと
 module stateを保持します。callbackからは現在フレームの`main_state`を参照できます。
 各callbackの命令数上限、フレーム全体の命令数上限、Lua VMのメモリ上限を適用し、失敗時は
