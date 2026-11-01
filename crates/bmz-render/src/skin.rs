@@ -34,6 +34,17 @@ use bmz_chart::model::LongNoteMode;
 
 pub use bmz_skin_document::*;
 
+/// beatoraja's 1163 / 1164. Divide before modulo to avoid overflow for long charts.
+pub fn chart_length_numbers(length_ms: Option<i64>) -> [i32; 2] {
+    match length_ms {
+        Some(length_ms) => {
+            let length_ms = length_ms.max(0);
+            [((length_ms / 60_000) % 60) as i32, ((length_ms / 1_000) % 60) as i32]
+        }
+        None => [i32::MIN; 2],
+    }
+}
+
 mod condition;
 mod document_render;
 mod lr2_scene;

@@ -146,6 +146,7 @@ pub(in crate::plan) fn build_play_skin_state(
             .saturating_add(1_000)
             .clamp(0, i32::MAX as i64) as i32,
         total_duration_ms: snapshot.note_display_duration_ms,
+        chart_length_ms: snapshot.skin_chart_length_ms,
         duration_green_ms: Some(crate::skin::duration_to_green_number_ms(
             snapshot.note_display_duration_ms,
         )),
@@ -258,6 +259,8 @@ fn recent_judgement_state(
 
 pub(super) fn build_play_skin_text(snapshot: &RenderSnapshot) -> SkinTextState<'_> {
     SkinTextState {
+        chart_md5: snapshot.chart_md5.as_ref(),
+        chart_sha256: snapshot.chart_sha256.as_ref(),
         player_name: &snapshot.player_name,
         title: &snapshot.title,
         subtitle: &snapshot.subtitle,

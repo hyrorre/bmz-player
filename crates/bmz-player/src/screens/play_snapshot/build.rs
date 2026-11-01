@@ -24,6 +24,9 @@ pub fn apply_prepared_chart_to_render_snapshot(
         scored_note_count(chart)
     };
     snapshot.duration = chart.end_time;
+    snapshot.skin_chart_length_ms = Some(cache.skin_chart_length_ms);
+    snapshot.chart_md5 = Some(chart.identity.file_md5);
+    snapshot.chart_sha256 = Some(chart.identity.file_sha256);
     snapshot.title.clone_from(&chart.metadata.title);
     snapshot.subtitle.clone_from(&chart.metadata.subtitle);
     snapshot.artist.clone_from(&chart.metadata.artist);
@@ -299,6 +302,9 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         resources_loaded: true,
         resource_load_progress: 1.0,
         duration: session.chart.end_time,
+        skin_chart_length_ms: Some(cache.skin_chart_length_ms),
+        chart_md5: Some(session.chart.identity.file_md5),
+        chart_sha256: Some(session.chart.identity.file_sha256),
         title: session.chart.metadata.title.clone(),
         subtitle: session.chart.metadata.subtitle.clone(),
         artist: session.chart.metadata.artist.clone(),

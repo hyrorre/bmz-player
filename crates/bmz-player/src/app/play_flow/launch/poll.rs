@@ -152,19 +152,9 @@ impl WinitApp {
             self.open_prepared_winit_play_session(prepared)
         } else {
             tracing::warn!(chart_id, "discarding mismatched play preload");
-            if self.chart_uses_archive(chart_id) {
-                self.start_play_preload(chart_id, start_options);
-                return;
-            }
-            let app_config = self.play_session_app_config();
-            prepare_play_session_for_chart_with_winit_input(
-                &self.boot.library_db,
-                &app_config,
-                &self.boot.profile_config,
-                chart_id,
-                start_options,
-            )
-            .and_then(|prepared| self.open_prepared_winit_play_session(prepared))
+            self.start_play_preload(chart_id, start_options.clone());
+            self.begin_preloaded_play_scene(chart_id, start_options);
+            return;
         };
         match opened {
             Ok(active_play) => {
@@ -190,7 +180,7 @@ impl WinitApp {
     }
 
     /// 変換済み譜面を WAV 完了前に Play skin と BGA loader へ公開する。
-    fn publish_prepared_play_chart(&mut self) {
+    pub(in crate::app) fn publish_prepared_play_chart(&mut self) {
         let chart_id = self
             .play
             .pending_play_preload

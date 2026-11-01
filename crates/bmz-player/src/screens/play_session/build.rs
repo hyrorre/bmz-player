@@ -664,9 +664,18 @@ pub(super) fn clamp_hispeed(hispeed: f32) -> f32 {
     crate::config::play::clamp_hispeed(hispeed)
 }
 
+pub(crate) fn beatoraja_chart_last_time(chart: &PlayableChart) -> TimeUs {
+    chart_last_placement_time(chart, false)
+}
+
 fn result_wait_end_time(chart: &PlayableChart) -> TimeUs {
-    // rian BMSModel.getLastTime(): note/hidden note, BGM, base/layer BGA
-    // placements. Poor-only/timing events and PCM tails do not extend play.
+    // Preserve BMZ's existing wait for the additional BGA layer (channel 0A).
+    chart_last_placement_time(chart, true)
+}
+
+fn chart_last_placement_time(chart: &PlayableChart, include_layer2: bool) -> TimeUs {
+    // beatoraja BMSModel.getLastTime(): note/hidden note, BGM, base/layer BGA.
+    // Poor-only/timing events and PCM tails do not extend the chart length.
     chart
         .lane_notes
         .iter()
@@ -674,7 +683,12 @@ fn result_wait_end_time(chart: &PlayableChart) -> TimeUs {
         .map(|note| note.time)
         .chain(chart.bgm_events.iter().map(|event| event.time))
         .chain(chart.bga_events.iter().filter_map(|event| {
-            (!matches!(event.kind, bmz_chart::model::BgaEventKind::Poor)).then_some(event.time)
+            use bmz_chart::model::BgaEventKind;
+            match event.kind {
+                BgaEventKind::Base | BgaEventKind::Layer => Some(event.time),
+                BgaEventKind::Layer2 if include_layer2 => Some(event.time),
+                _ => None,
+            }
         }))
         .chain(std::iter::once(chart.end_time))
         .max()

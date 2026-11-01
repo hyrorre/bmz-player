@@ -113,7 +113,6 @@ use crate::screens::play_start::{
     PlayStartOptions, PreloadedInputPlaySession, PreparedInputPlaySession, StartedInputPlaySession,
     apply_arrange_override, apply_course_constraints, apply_queued_replay,
     open_prepared_winit_play_session, play_session_options_from_start,
-    prepare_play_session_for_chart_with_winit_input,
     prepare_practice_winit_play_session_from_preloaded, prepare_winit_play_session_from_preloaded,
 };
 use crate::screens::practice::{
@@ -898,13 +897,22 @@ pub(crate) fn offline_skin_load_state(
         target: play.target_option,
         ..Default::default()
     };
-    let runtime = lua_runtime_state_for_play(
+    let mut runtime = lua_runtime_state_for_play(
         &options,
         false,
         play.session.chart.metadata.key_mode,
         best,
         &profile.display_name,
         play.skin_attempt,
+    );
+    apply_chart_length_lua_load_state(
+        &mut runtime,
+        Some(play.render_snapshot_cache.skin_chart_length_ms),
+    );
+    apply_chart_hashes_lua_load_state(
+        &mut runtime,
+        Some(play.session.chart.identity.file_md5),
+        Some(play.session.chart.identity.file_sha256),
     );
     let selection = crate::skin_loader::play_skin_selection_for_session(
         &profile.skin,

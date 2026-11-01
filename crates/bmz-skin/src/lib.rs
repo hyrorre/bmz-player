@@ -281,7 +281,7 @@ fn main_state_judge_ref(index: i32) -> Option<i32> {
     }
 }
 
-pub use lua::{LuaRuntimeStateScope, LuaSkinFileStore, LuaSkinRuntime};
+pub use lua::{LuaRuntimeInput, LuaRuntimeStateScope, LuaSkinFileStore, LuaSkinRuntime};
 
 pub fn load_beatoraja_json_skin(path: &Path, enabled_options: &[i32]) -> Result<SkinDocument> {
     SkinDocument::load_beatoraja_json_with_options(path, enabled_options)

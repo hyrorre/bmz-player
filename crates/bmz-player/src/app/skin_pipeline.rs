@@ -277,6 +277,13 @@ impl SkinPipelineRuntime {
 
     /// GPU/cache を持つ worker が native driver の終了処理まで生き残らないようにする。
     pub(super) fn shutdown_workers(&mut self) {
+        // A Play decode can still be waiting for its chart worker. Release it
+        // before joining, including when the app exits during chart import.
+        for request in
+            self.screen_requests.lock().unwrap_or_else(|error| error.into_inner()).values()
+        {
+            request.cancel_play_chart_wait();
+        }
         // worker を join する前に、main が受信しなくなった bounded upload queue を
         // 切断して send 待ちの uploader を解放する。
         drop(std::mem::replace(&mut self.upload_rx, mpsc::sync_channel(1).1));

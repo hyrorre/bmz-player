@@ -540,7 +540,10 @@ impl WinitApp {
                 self.play
                     .pending_play_preload
                     .as_ref()
-                    .filter(|pending| pending.chart_id == chart_id)
+                    .filter(|pending| {
+                        pending.chart_id == chart_id
+                            && pending.generation == self.play.play_preload_generation
+                    })
                     .and_then(|pending| pending.prepared_chart.get().cloned())
             })
     }

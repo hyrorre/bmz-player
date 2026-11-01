@@ -104,6 +104,129 @@ fn repeated_runtime_api_calls_keep_lua_memory_bounded() {
 }
 
 #[test]
+fn custom_frame_lua_allocations_do_not_scale_with_callback_count() {
+    fn advance(runtime: &mut LuaSkinRuntime, frame: i64, batched: bool) {
+        runtime.begin_frame();
+        let state = RepeatState { frame };
+        if batched {
+            runtime.advance_frame(&state, &[]);
+        } else {
+            runtime.advance_custom_timers(&state);
+            runtime.advance_custom_events(&state);
+        }
+    }
+    fn measure(count: usize, batched: bool) -> usize {
+        let root = unique_skin_test_dir("custom-frame-allocation");
+        let path = root.join("skin.luaskin");
+        fs::write(&path, format!(r#"
+            local s = require('main_state')
+            local timers, events = {{}}, {{}}
+            for i = 1, {count} do
+                timers[i] = {{id=10000+i, timer=function() return s.time() end}}
+                events[i] = {{id=1000+i, condition=function() return true end, action=function() end}}
+            end
+            return {{type=0, customTimers=timers, customEvents=events}}
+        "#)).unwrap();
+        let mut loaded = load_lua_skin_value(
+            &path,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState { runtime_mode: LuaSkinRuntimeMode::Compat, ..Default::default() },
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let runtime = loaded.lua_runtime.as_mut().unwrap();
+        for frame in 0..10 {
+            advance(runtime, frame, batched);
+        }
+        runtime.lua.gc_collect().unwrap();
+        runtime.lua.gc_collect().unwrap();
+        runtime.lua.gc_stop();
+        let before = runtime.lua.used_memory();
+        let started = std::time::Instant::now();
+        for frame in 10..210 {
+            advance(runtime, frame, batched);
+        }
+        let growth = runtime.lua.used_memory().saturating_sub(before);
+        runtime.lua.gc_restart();
+        assert_eq!(runtime.failure_log_count(), 0);
+        eprintln!(
+            "batched={batched}, custom callbacks={count}+{count}, frames=200, Lua growth={growth} bytes, CPU={:?}",
+            started.elapsed()
+        );
+        fs::remove_dir_all(root).unwrap();
+        growth
+    }
+    for batched in [false, true] {
+        let one = measure(1, batched);
+        let many = measure(40, batched);
+        assert!(
+            many <= one + 128 * 1024,
+            "per-callback Lua garbage: batched={batched}, one={one} bytes, forty={many} bytes"
+        );
+    }
+}
+
+#[test]
+fn custom_frame_orders_inputs_timers_events_once_and_restores_the_outer_provider() {
+    let root = unique_skin_test_dir("custom-frame-order");
+    let path = root.join("skin.luaskin");
+    fs::write(
+        &path,
+        r#"
+        local s = require('main_state')
+        local n = 0
+        return {type=0,
+            destination={{id='button', act=function(a,b) n=n+a+b end}},
+            customTimers={{id=10001, timer=function() n=n+1; return s.time() end}},
+            customEvents={{id=1000,
+                condition=function() return s.timer(10001)==s.time() end,
+                action=function() n=n*10; s.set_timer(10002, s.time()) end}},
+            value={{id='count', value=function() return n end},
+                {id='clock', value=function() return s.time() end}}
+        }
+    "#,
+    )
+    .unwrap();
+    let mut loaded = load_lua_skin_value(
+        &path,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &LuaLoadRuntimeState { runtime_mode: LuaSkinRuntimeMode::Compat, ..Default::default() },
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let runtime = loaded.lua_runtime.as_mut().unwrap();
+    let callback = |path| {
+        (0..runtime.callback_count()).find(|&id| runtime.callback_path(id) == Some(path)).unwrap()
+    };
+    let act = callback("$.destination[1].act");
+    let count = callback("$.value[1].value");
+    let clock = callback("$.value[2].value");
+    let state = RepeatState { frame: 1 };
+    let outer = RepeatState { frame: 500 };
+    runtime.begin_frame();
+    runtime
+        .state_scope()
+        .with_state(&outer, || {
+            let timers = runtime.advance_frame(&state, &[LuaRuntimeInput::Act(act, 2, 3)]);
+            assert_eq!(timers[&10001], Some(16_667));
+            assert_eq!(timers[&10002], Some(16_667));
+            assert_eq!(runtime.evaluate_number_in_scope(count), Some(60.0));
+            assert_eq!(runtime.evaluate_number_in_scope(clock), Some(500.0 * 16_667.0));
+        })
+        .unwrap();
+    runtime.advance_frame(&state, &[]);
+    assert_eq!(runtime.evaluate_number(count, &state), Some(60.0));
+    runtime.begin_frame();
+    runtime.advance_frame(&RepeatState { frame: 2 }, &[]);
+    assert_eq!(runtime.evaluate_number(count, &state), Some(610.0));
+    assert_eq!(runtime.evaluate_number(clock, &state), Some(16_667.0));
+    assert_eq!(runtime.failure_log_count(), 0);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn bit32_never_replaces_an_existing_global() {
     let lua = Lua::new();
     let existing = lua.create_table().unwrap();

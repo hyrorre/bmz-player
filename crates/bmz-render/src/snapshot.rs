@@ -336,6 +336,11 @@ pub struct RenderSnapshot {
     /// Audio/BGA resource load progress in the beatoraja RateType 102 range (0.0..=1.0).
     pub resource_load_progress: f32,
     pub duration: TimeUs,
+    /// Full transformed Play chart length, before Practice range changes.
+    pub skin_chart_length_ms: Option<i64>,
+    /// Original chart-file hashes for skin text 1030 / 1031.
+    pub chart_md5: Option<[u8; 16]>,
+    pub chart_sha256: Option<[u8; 32]>,
     pub title: String,
     pub subtitle: String,
     pub artist: String,

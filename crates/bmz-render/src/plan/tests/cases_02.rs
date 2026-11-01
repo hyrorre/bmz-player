@@ -212,6 +212,8 @@ fn result_plan_renders_gaugegraph_from_result_graph_data() {
         std::iter::empty(),
     );
     let snapshot = ResultSnapshot {
+        chart_md5: None,
+        chart_sha256: None,
         screen_size: [0, 0],
         last_played_at: None,
         lr2_progress: Default::default(),
@@ -381,6 +383,8 @@ fn result_plan_renders_timing_distribution_from_result_graph_data() {
     timing_distribution.add(-12);
     timing_distribution.add(8);
     let snapshot = ResultSnapshot {
+        chart_md5: None,
+        chart_sha256: None,
         screen_size: [0, 0],
         last_played_at: None,
         lr2_progress: Default::default(),

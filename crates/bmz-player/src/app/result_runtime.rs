@@ -54,6 +54,8 @@ pub(super) fn course_result_summary_for_skin(course: &CourseResultSummary) -> Re
 
     ResultSummary {
         clear_type: course.final_clear_type,
+        chart_md5: last.and_then(|summary| summary.chart_md5),
+        chart_sha256: last.and_then(|summary| summary.chart_sha256),
         last_played_at: course.course_played_at.filter(|date| *date > 0),
         skin_attempt: bmz_render::snapshot::SkinAttemptState {
             // Per-chart best options do not describe an aggregate course best.
@@ -332,6 +334,8 @@ pub(super) fn debug_boot_result_summary() -> ResultSummary {
     let duration_ms = 180_000;
     ResultSummary {
         clear_type: ClearType::Failed,
+        chart_md5: None,
+        chart_sha256: None,
         last_played_at: None,
         skin_attempt: bmz_render::snapshot::SkinAttemptState {
             source_key_mode: Some(KeyMode::K7),

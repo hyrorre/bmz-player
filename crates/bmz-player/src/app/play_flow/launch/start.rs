@@ -22,6 +22,7 @@ impl WinitApp {
             play_skin_key_mode,
             &mut play_skin_runtime_state,
         );
+        self.apply_play_chart_lua_load_state(chart_id, &mut play_skin_runtime_state);
         self.spawn_play_skin_decode_for(
             play_skin_key_mode,
             options.session_mode,
@@ -90,65 +91,12 @@ impl WinitApp {
         // Decide preload を通らない direct boot / replay / retry も新しい
         // Play scene entry として必ずロード時Randomを再評価する。
         self.skin.last_play_skin_signature = None;
-        if self.chart_uses_archive(chart_id) {
-            self.play.play_media_cache = None;
-            self.start_play_preload(chart_id, options.clone());
-            self.begin_preloaded_play_scene(chart_id, options);
-            return;
-        }
-        self.prepare_play_skin_for_scene(chart_id, &options);
-        self.invalidate_play_preload();
-        if self.play.play_media_cache.as_ref().is_some_and(|cache| cache.chart_id != chart_id) {
-            self.play.play_media_cache = None;
-        }
-        self.play.play_ending = None;
-        self.result.result_exit = None;
-        self.result.result_key5_held = false;
-        self.result.result_key7_held = false;
-        self.play.play_ready_sound_started_at = None;
-        self.play.play_ready_last_control_hold_at = None;
-        self.play.decide_sound_stopped_for_chart_start = false;
-        if options.chart_zero_time == TimeUs(0) {
-            options.chart_zero_time = self.play_skin_playstart_offset();
-        }
-        // 新しいプレイの音声出力を開く前に、前曲の余韻再生を止めて出力を解放する。
-        self.audio.draining_audio = None;
-
-        // Decide 演出中に preload worker が完成させていればそれを使う。
-        // 譜面/音源は別スレッドでロード済みなので、ここでは音声出力 open 等の軽量処理だけ。
-        // バッファが無ければ (course モード / preload 不発時) 従来通り main で同期ロードする。
-        let opened = match self.play.preloaded_play_session.take() {
-            Some(preloaded) => {
-                tracing::debug!(chart_id, "using buffered play preload");
-                let prepared =
-                    prepare_winit_play_session_from_preloaded(&self.boot.profile_config, preloaded);
-                self.open_prepared_winit_play_session(prepared)
-            }
-            None => {
-                let app_config = self.play_session_app_config();
-                prepare_play_session_for_chart_with_winit_input(
-                    &self.boot.library_db,
-                    &app_config,
-                    &self.boot.profile_config,
-                    chart_id,
-                    options.clone(),
-                )
-                .and_then(|prepared| self.open_prepared_winit_play_session(prepared))
-            }
-        };
-        match opened {
-            Ok(active_play) => {
-                self.enter_play_scene(
-                    chart_id,
-                    options.clone(),
-                    self.decide_snapshot_for_chart(chart_id),
-                );
-                self.install_active_play(chart_id, active_play);
-            }
-            Err(error) => {
-                tracing::error!(chart_id, %error, "failed to start play");
-            }
-        }
+        // Direct starts use the same on_chart notification as Decide / retry /
+        // course. Lua sees the selected branch without a second parse or waiting
+        // for WAV completion, including ordinary (non-archive) charts.
+        self.play.play_media_cache = None;
+        self.start_play_preload(chart_id, options.clone());
+        self.begin_preloaded_play_scene(chart_id, options);
     }
 
     pub(super) fn play_skin_playstart_offset(&self) -> TimeUs {

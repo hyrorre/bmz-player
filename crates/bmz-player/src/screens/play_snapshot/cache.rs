@@ -2,6 +2,9 @@ use super::*;
 
 #[derive(Debug, Clone)]
 pub struct PlayRenderSnapshotCache {
+    /// SongData.length after Play transforms, retained before Practice changes.
+    /// Independent of note display duration, range end and result waiting time.
+    pub(crate) skin_chart_length_ms: i64,
     pub(super) judge_graph_density: Arc<[u8]>,
     pub(super) bpm_graph_segments: Arc<[bmz_render::chart_graph::BpmGraphSegment]>,
     pub(super) min_bpm: f32,
@@ -74,6 +77,10 @@ impl PlayRenderSnapshotCache {
             TimingMap::from_chart_timing_events(chart.metadata.initial_bpm, &chart.timing_events);
         let missed_notes = super::missed_notes::MissedNoteFallCache::new(chart, &timing);
         Self {
+            skin_chart_length_ms: crate::screens::play_session::beatoraja_chart_last_time(chart)
+                .0
+                .max(0)
+                / 1_000,
             judge_graph_density,
             bpm_graph_segments,
             min_bpm,

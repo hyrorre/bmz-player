@@ -281,7 +281,9 @@ pub(in crate::skin) fn projected_score_at_progress(final_score: u32, state: &Ski
 }
 
 pub(in crate::skin) fn result_or_select_length_ms(state: &SkinDrawState) -> i64 {
-    if state.result_failed.is_some() {
+    if let Some(length) = state.chart_length_ms {
+        length.max(0)
+    } else if state.result_failed.is_some() {
         if state.result_duration_ms > 0 {
             state.result_duration_ms as i64
         } else {

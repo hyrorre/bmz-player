@@ -99,7 +99,10 @@ closure/module stateを維持し、frameごとのmain_stateを参照します。
 | Lua数字の状態更新 | 数字のruntime valueをdestinationごとにdraw / timer判定前に1回評価です。cache hitでも実行を維持します。Luxe FlatのResult / Course ResultでMAX+0とランク境界を確認します。[回帰テスト](../crates/bmz-player/src/skin_loader/tests/lua/result_grade.rs) |
 | `customTimers[].timer` | ID `10000..19999`です。推論とruntime callbackです。宣言順で1フレーム1回更新 |
 | `main_state.set_timer` | 受動custom timerのON/OFFです。組み込みtimerや能動timerへの書き込みには制約がある |
+| Luaのフレーム更新 | 入力 → custom timer → custom eventで`main_state`の設定を共有し、callback数に比例したLua関数生成を防ぎます。状態の復元と1フレーム1回の更新を維持します。[回帰テスト](../crates/bmz-skin/src/lua/tests/runtime_resources.rs) |
 | `main_state.numbers` | ID / 名前を混在して複数戻り値で取得します。未知名は0、欠損sentinelは維持します。ロード時依存捕捉とruntime参照に対応 |
+| 譜面長のnumber `1163` / `1164` | Playは実分岐・余白・変換後、Practice区間適用前の全体長です。ロード時・callback・数値画像・`numberRef`・Offlineで共通化し、両方に`% 60`を適用します。欠損はLuaでINT_MIN、数値は非表示です。他画面の取得元は維持します。[境界値](../crates/bmz-render/src/plan/tests/cases_01.rs)、[先読み・Retry・Replay・次曲・Practice・Offline](../crates/bmz-player/src/app/tests/play_chart_length.rs) |
+| 譜面ハッシュのtext `1030` / `1031` | Select / Decide / Play / Resultで元ファイルのMD5 / SHA256を小文字の16進数で返します。ロード時にも供給し、未所持譜面は既知のハッシュ、欠損は空文字です。[全画面テスト](../crates/bmz-render/src/plan/tests/chart_hashes.rs)、[名前・数値ID](../crates/bmz-render/src/skin/tests/property_names.rs) |
 | `main_state.screen_width` / `screen_height` | 全sceneの物理出力pixel寸法です。未接続は0、exportは動画出力寸法です。ロード時に読むskinのcache・resize再decodeと、runtimeだけ読むskinの状態維持に対応します。[回帰テスト](../crates/bmz-player/src/skin_loader/tests/lua/screen_size.rs) |
 | 数値ref `17..19` / `30..37` / `333`のロード時値 | Select / Decideのロード時にprofile全体の累計プレイ時間・プレイ数・判定累計・累計ノーツを渡します。mz-selectのプレイヤーランク（経験値・ランク・ゲージ）とプロフィール統計に対応します。プレイ後のSelect再入場で再decodeします。「今日の成果」・プレイ曲ログ・リセットは、BMZ対応版のmz-selectが日次統計ref `1930..1959`とevent `-10100`を参照します。[仕様](skin.md#select--decideのロード時のプレイヤー統計)、[回帰テスト](../crates/bmz-player/src/app/skin_loading/startup_tests.rs) |
 | 数値ref `243..249` / `lastplay_*` | Selectの最終保存日時とResultの今回保存日時です。ローカル年月日時分秒です。欠損はLuaでINT_MIN、数字画像は非表示です。BEST日時helperとは分離します。保存条件と移行は[score-persistence.md](score-persistence.md) |

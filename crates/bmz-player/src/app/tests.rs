@@ -239,6 +239,8 @@ mod course_transitions;
 mod decide_difficulty;
 #[path = "tests/play.rs"]
 mod play;
+#[path = "tests/play_chart_length.rs"]
+mod play_chart_length;
 #[path = "tests/play_preload.rs"]
 mod play_preload;
 #[path = "tests/result.rs"]

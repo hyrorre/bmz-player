@@ -205,6 +205,7 @@ impl WinitApp {
             play_skin_key_mode,
             &mut play_skin_runtime_state,
         );
+        self.apply_play_chart_lua_load_state(chart_id, &mut play_skin_runtime_state);
         self.spawn_play_skin_decode_for(
             play_skin_key_mode,
             options.session_mode,
@@ -276,6 +277,17 @@ impl WinitApp {
     }
 
     pub(super) fn invalidate_play_preload(&mut self) {
+        if let Some(pending) = &self.play.pending_play_preload {
+            pending.skin_chart_state.finish(Err("play preload cancelled".into()));
+        }
+        if self.play.pending_play_preload.is_some()
+            || self.play.preloaded_play_session.is_some()
+            || self.play.active_play.is_none()
+        {
+            self.skin.skin_pipeline.bump_generation(SkinKind::Play);
+            self.skin.skin_pipeline.set_pending(SkinKind::Play, false);
+            self.skin.last_play_skin_signature = None;
+        }
         self.play.play_preload_generation = self.play.play_preload_generation.wrapping_add(1);
         self.play.pending_play_preload = None;
         self.play.pending_course_stage_launch = None;
@@ -493,6 +505,22 @@ impl WinitApp {
     ) -> Option<ScoreKey> {
         let chart = self.play_skin_chart(chart_id)?;
         Some(self.play_skin_score_key_for_chart(&chart, options))
+    }
+
+    pub(super) fn apply_play_chart_lua_load_state(
+        &self,
+        chart_id: i64,
+        state: &mut bmz_skin::LuaLoadRuntimeState,
+    ) {
+        let chart = self.play_skin_chart(chart_id);
+        // The worker supplies the selected, transformed chart's length before Lua runs.
+        // Keep the signature independent of whether on_chart has arrived yet.
+        apply_chart_length_lua_load_state(state, None);
+        apply_chart_hashes_lua_load_state(
+            state,
+            chart.as_ref().map(|chart| chart.md5),
+            chart.as_ref().map(|chart| chart.sha256),
+        );
     }
 
     fn play_skin_chart(&self, chart_id: i64) -> Option<ChartListItem> {

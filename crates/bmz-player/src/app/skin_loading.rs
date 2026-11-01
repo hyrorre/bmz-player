@@ -243,7 +243,7 @@ pub(super) fn reload_skin_textures(
     lua_runtime_mode: bmz_skin::LuaSkinRuntimeMode,
     experimental_detail_options: bool,
     select_last_played_at: Option<i64>,
-    decide_chart: Option<&RenderSnapshot>,
+    frontend_chart: Option<&RenderSnapshot>,
 ) -> (bool, bool, bool) {
     let mut pending_select = false;
     let mut pending_decide = false;
@@ -303,11 +303,18 @@ pub(super) fn reload_skin_textures(
             } else {
                 None
             });
+            if kind == SkinKind::Select {
+                apply_chart_hashes_lua_load_state(
+                    &mut runtime_state,
+                    frontend_chart.and_then(|chart| chart.chart_md5),
+                    frontend_chart.and_then(|chart| chart.chart_sha256),
+                );
+            }
             if kind == SkinKind::Decide {
                 let no_chart = RenderSnapshot::default();
                 apply_decide_chart_lua_load_state(
                     &mut runtime_state,
-                    decide_chart.unwrap_or(&no_chart),
+                    frontend_chart.unwrap_or(&no_chart),
                 );
             }
             spawn_skin_decode(

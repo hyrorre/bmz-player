@@ -373,6 +373,7 @@ pub(super) fn apply_result_summary_lua_load_state(
     table_level: &str,
     table_full: &str,
 ) {
+    apply_chart_hashes_lua_load_state(runtime_state, summary.chart_md5, summary.chart_sha256);
     // Asset #IF branches must see the finished chart and score before decoding.
     // Share difficulty conversion and rank boundaries with Result rendering.
     let result_state = bmz_render::skin::SkinDrawState {
@@ -562,6 +563,25 @@ pub(super) fn apply_lr2_best_clear_load_options(
     }
 }
 
+pub(super) fn apply_chart_length_lua_load_state(
+    state: &mut bmz_skin::LuaLoadRuntimeState,
+    length_ms: Option<i64>,
+) {
+    let [minute, second] = bmz_render::skin::chart_length_numbers(length_ms);
+    state.number_values.extend([(1163, minute), (1164, second)]);
+}
+
+pub(super) fn apply_chart_hashes_lua_load_state(
+    state: &mut bmz_skin::LuaLoadRuntimeState,
+    md5: Option<[u8; 16]>,
+    sha256: Option<[u8; 32]>,
+) {
+    state.text_values.extend([
+        (1030, md5.map(|hash| crate::storage::common::hash_to_hex(&hash)).unwrap_or_default()),
+        (1031, sha256.map(|hash| crate::storage::common::hash_to_hex(&hash)).unwrap_or_default()),
+    ]);
+}
+
 pub(super) fn lua_runtime_state_for_play(
     options: &PlayStartOptions,
     profile_autoplay: bool,
@@ -734,6 +754,7 @@ pub(super) fn apply_decide_chart_lua_load_state(
     runtime_state: &mut bmz_skin::LuaLoadRuntimeState,
     snapshot: &RenderSnapshot,
 ) {
+    apply_chart_hashes_lua_load_state(runtime_state, snapshot.chart_md5, snapshot.chart_sha256);
     let decide_state = bmz_render::skin::SkinDrawState {
         difficulty: bmz_render::plan::skin_difficulty_code(&snapshot.difficulty_name),
         play_level: bmz_render::plan::skin_level_number(&snapshot.play_level),

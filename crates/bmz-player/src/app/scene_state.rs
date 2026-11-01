@@ -134,6 +134,8 @@ impl WinitApp {
                     .map(|document| document.result_ir_scope_binding)
                     .unwrap_or_default();
                 AppSceneSnapshot::Result(ResultSnapshot {
+                    chart_md5: summary.chart_md5,
+                    chart_sha256: summary.chart_sha256,
                     screen_size: [0, 0],
                     last_played_at: summary.last_played_at,
                     lr2_progress: if self.result.lr2_result_epoch

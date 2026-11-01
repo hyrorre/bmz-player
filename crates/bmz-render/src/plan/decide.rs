@@ -60,6 +60,7 @@ pub(super) fn plan_decide(
             hispeed_config_index: snapshot.hispeed_config_index,
             target_green_number: snapshot.target_green_number,
             total_duration_ms: snapshot.note_display_duration_ms,
+            chart_length_ms: Some(snapshot.duration.0 / 1_000),
             duration_green_ms: Some(crate::skin::duration_to_green_number_ms(
                 snapshot.note_display_duration_ms,
             )),
@@ -76,6 +77,8 @@ pub(super) fn plan_decide(
         };
         advance_skin_dynamic_timers(skin, dynamic_timers, &mut state, play_elapsed_ms);
         let text = SkinTextState {
+            chart_md5: snapshot.chart_md5.as_ref(),
+            chart_sha256: snapshot.chart_sha256.as_ref(),
             player_name: &snapshot.player_name,
             title: &snapshot.title,
             subtitle: &snapshot.subtitle,

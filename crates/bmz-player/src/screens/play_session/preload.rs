@@ -779,8 +779,10 @@ pub fn build_practice_prepared_from_preloaded(
         build_game_session_with_input_backend(Arc::new(chart), profile, options, input_backend);
     session.audio_mix.chart_normalization_gain = preloaded.chart_normalization_gain;
     apply_practice_start_gauge(&mut session.gauge, property.start_gauge);
-    let render_snapshot_cache =
+    let mut render_snapshot_cache =
         crate::screens::play_snapshot::PlayRenderSnapshotCache::from_chart(&session.chart);
+    render_snapshot_cache.skin_chart_length_ms =
+        preloaded.render_snapshot_cache.skin_chart_length_ms;
     let mut skin_attempt = preloaded.skin_attempt;
     skin_attempt.session_mode_index =
         Some(crate::skin_extension::session_mode_index(SessionMode::Practice));

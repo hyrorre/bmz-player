@@ -97,7 +97,7 @@ pub use loading::{
 use paths::*;
 use postprocess::*;
 use runtime::*;
-pub use runtime::{ConvertReport, LuaRuntimeStateScope, LuaSkinRuntime};
+pub use runtime::{ConvertReport, LuaRuntimeInput, LuaRuntimeStateScope, LuaSkinRuntime};
 use runtime_events::*;
 pub use sandbox_files::LuaSkinFileStore;
 
