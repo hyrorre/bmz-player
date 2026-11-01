@@ -800,6 +800,10 @@ value / drawは`auto`でもLua実行を維持し、
 選曲中の自スコアから評価する組み込み式へ変換します。数字の`value`も組み込み式になるため、
 これらの`draw`をruntime callbackに残すと`scorerate`が更新されず表示されないからです。
 
+毎フレームの入力・custom timer・custom event更新は、同じ`main_state`の設定を共有します。
+入力、timer、eventの順に実行し、callbackごとのLua関数生成を避けます。callbackの実行回数、
+永続VMの状態、同一フレーム内のtimer書き込み、命令数制限は維持します。
+
 custom timerは描画前に宣言順で1フレーム1回更新します。`auto`では固定遅延・別名の
 推論を維持し、推論できないtimerを永続VMへ残します。VMを使うスキンでは推論済みの
 custom timerも同じVMで更新し、先行するtimerの変更を同じフレームで参照できます。

@@ -52,11 +52,7 @@ pub struct UploadedSkin {
     pub upload_stats: SkinUploadStats,
 }
 
-#[derive(Debug)]
-enum PendingLuaInput {
-    Act(usize, i32, i32),
-    FloatWriter(usize, f32),
-}
+use bmz_skin::LuaRuntimeInput as PendingLuaInput;
 
 #[derive(Debug)]
 pub(super) struct LuaSkinDrawRuntimeAdapter {
@@ -253,20 +249,7 @@ impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
         // beatoraja handles clicks before `Skin.updateCustomObjects`, which
         // updates the custom timers and then the custom events.
         let acts = self.pending_acts.lock().map(|mut acts| std::mem::take(&mut *acts));
-        for input in acts.unwrap_or_default() {
-            match input {
-                PendingLuaInput::Act(callback_id, arg1, arg2) => {
-                    runtime.execute_act(callback_id, arg1, arg2, &provider);
-                }
-                PendingLuaInput::FloatWriter(callback_id, value) => {
-                    runtime.execute_float_writer(callback_id, value, &provider);
-                }
-            }
-        }
-        runtime.advance_custom_timers(&provider);
-        runtime.advance_custom_events(&provider);
-        // Re-read the timers: act and event actions may have written them.
-        let result = runtime.advance_custom_timers(&provider);
+        let result = runtime.advance_frame(&provider, &acts.unwrap_or_default());
         let effects = runtime.take_effects();
         if let Ok(mut slot) = self.runtime.lock() {
             *slot = Some(runtime);

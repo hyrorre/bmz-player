@@ -367,9 +367,7 @@ fn evaluate_runtime(
     for frame in 0..FRAMES {
         let state = CompatProbeState { frame };
         runtime.begin_frame();
-        let values = runtime.advance_custom_timers(&state);
-        // Custom events run after the timers each frame, as in the app.
-        runtime.advance_custom_events(&state);
+        let values = runtime.advance_frame(&state, &[]);
         let effects = runtime.take_effects();
         timers.push(format!("{values:?} effects={effects:?}"));
         for &callback_id in order {

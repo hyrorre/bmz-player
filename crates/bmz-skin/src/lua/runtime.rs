@@ -94,6 +94,13 @@ pub struct LuaSkinRuntime {
     pub(super) pending_event_frame_start: bool,
 }
 
+/// Inputs queued by the app, applied before timers and observed events.
+#[derive(Debug, Clone, Copy)]
+pub enum LuaRuntimeInput {
+    Act(usize, i32, i32),
+    FloatWriter(usize, f32),
+}
+
 /// The same named panel state recognized by the declarative draw/action bridge.
 /// Retain one rooted closure per shared upvalue; never clone or fold its state.
 #[derive(Default)]
@@ -202,6 +209,16 @@ impl LuaSkinRuntime {
         arg2: i32,
         state: &dyn LuaMainState,
     ) -> bool {
+        self.execute_act_inner(callback_id, arg1, arg2, Some(state))
+    }
+
+    fn execute_act_inner(
+        &mut self,
+        callback_id: usize,
+        arg1: i32,
+        arg2: i32,
+        state: Option<&dyn LuaMainState>,
+    ) -> bool {
         let Some(callback) = self.callbacks.get(callback_id) else { return false };
         if callback.kind != LuaRuntimeCallbackKind::Act {
             return false;
@@ -213,9 +230,8 @@ impl LuaSkinRuntime {
         let callback = LuaEventCallback { path: callback.path.clone(), function };
         self.begin_runtime_callback();
         let events = self.events.clone();
-        let scope = self.state_scope();
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-            scope.with_state(state, || events.call(&callback, arg1, arg2))
+            self.with_optional_state(state, || events.call(&callback, arg1, arg2))
         }));
         match result {
             Ok(Ok(())) => {}
@@ -232,6 +248,15 @@ impl LuaSkinRuntime {
         value: f32,
         state: &dyn LuaMainState,
     ) -> bool {
+        self.execute_float_writer_inner(callback_id, value, Some(state))
+    }
+
+    fn execute_float_writer_inner(
+        &mut self,
+        callback_id: usize,
+        value: f32,
+        state: Option<&dyn LuaMainState>,
+    ) -> bool {
         let Some(callback) = self.callbacks.get(callback_id) else { return false };
         if callback.kind != LuaRuntimeCallbackKind::FloatWriter || !value.is_finite() {
             return false;
@@ -243,7 +268,7 @@ impl LuaSkinRuntime {
         self.begin_runtime_callback();
         let events = self.events.clone();
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-            self.state_scope().with_state(state, || {
+            self.with_optional_state(state, || {
                 let _guard = events
                     .enter()
                     .ok_or_else(|| mlua::Error::runtime("Lua event nesting limit reached"))?;
@@ -264,6 +289,21 @@ impl LuaSkinRuntime {
     /// Update observed `customEvents` once per frame, after the custom timers
     /// (beatoraja `Skin.updateCustomObjects`). Events run in ID order.
     pub fn advance_custom_events(&mut self, state: &dyn LuaMainState) {
+        if !self.pending_event_frame_start || !self.has_custom_events() {
+            return;
+        }
+        let scope = self.state_scope();
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            scope.with_state(state, || self.advance_custom_events_in_scope(state))
+        }));
+        if !matches!(result, Ok(Ok(()))) {
+            self.pending_event_frame_start = false;
+            self.events
+                .log_failure_once("$.customEvents", "failed to bind main_state for custom events");
+        }
+    }
+
+    fn advance_custom_events_in_scope(&mut self, state: &dyn LuaMainState) {
         if !std::mem::take(&mut self.pending_event_frame_start) {
             return;
         }
@@ -272,29 +312,26 @@ impl LuaSkinRuntime {
             let Some(condition) = self.events.condition(id) else { continue };
             self.begin_runtime_callback();
             let events = self.events.clone();
-            let scope = self.state_scope();
             let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                scope.with_state(state, || {
-                    let fire = match &condition {
-                        LuaCustomEventCondition::Option(id) => {
-                            state.option(id.saturating_abs()) ^ (*id < 0)
-                        }
-                        LuaCustomEventCondition::Function(callback) => {
-                            match callback.function.call::<Value>(()) {
-                                Ok(value) => !matches!(value, Value::Nil | Value::Boolean(false)),
-                                Err(error) => {
-                                    events.log_failure_once(&callback.path, &error.to_string());
-                                    false
-                                }
+                let fire = match &condition {
+                    LuaCustomEventCondition::Option(id) => {
+                        state.option(id.saturating_abs()) ^ (*id < 0)
+                    }
+                    LuaCustomEventCondition::Function(callback) => {
+                        match callback.function.call::<Value>(()) {
+                            Ok(value) => !matches!(value, Value::Nil | Value::Boolean(false)),
+                            Err(error) => {
+                                events.log_failure_once(&callback.path, &error.to_string());
+                                false
                             }
                         }
-                    };
-                    if fire && events.is_due(id, now_us) {
-                        events.execute(id, 0, 0, now_us);
                     }
-                })
+                };
+                if fire && events.is_due(id, now_us) {
+                    events.execute(id, 0, 0, now_us);
+                }
             }));
-            if !matches!(result, Ok(Ok(()))) {
+            if result.is_err() {
                 self.events.log_failure_once(
                     &format!("$.customEvents[id={id}]"),
                     "failed to bind main_state for the custom event",
@@ -319,6 +356,19 @@ impl LuaSkinRuntime {
         &mut self,
         state: &dyn LuaMainState,
     ) -> BTreeMap<i32, Option<i64>> {
+        if self.pending_timer_frame_start && !self.custom_timer_callbacks.is_empty() {
+            let scope = self.state_scope();
+            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                scope.with_state(state, || self.advance_custom_timers_in_scope())
+            }));
+            if !matches!(result, Ok(Ok(()))) {
+                self.fail_custom_timer_binding();
+            }
+        }
+        self.custom_timer_values()
+    }
+
+    fn advance_custom_timers_in_scope(&mut self) {
         if std::mem::take(&mut self.pending_timer_frame_start) {
             for index in 0..self.custom_timer_callbacks.len() {
                 let (id, callback_id) = self.custom_timer_callbacks[index];
@@ -327,7 +377,7 @@ impl LuaSkinRuntime {
                     self.evaluate_callback_inner(
                         callback_id,
                         LuaRuntimeCallbackKind::Timer(id),
-                        Some(state),
+                        None,
                     )
                 }));
                 let value = match result {
@@ -356,7 +406,63 @@ impl LuaSkinRuntime {
                 }
             }
         }
+    }
+
+    fn custom_timer_values(&self) -> BTreeMap<i32, Option<i64>> {
         self.custom_timers.lock().map(|timers| timers.values.clone()).unwrap_or_default()
+    }
+
+    fn fail_custom_timer_binding(&mut self) {
+        self.pending_timer_frame_start = false;
+        for index in 0..self.custom_timer_callbacks.len() {
+            let (id, callback_id) = self.custom_timer_callbacks[index];
+            self.log_callback_failure_once(
+                callback_id,
+                "failed to bind main_state for custom timers",
+            );
+            if let Ok(mut timers) = self.custom_timers.lock() {
+                timers.values.insert(id, None);
+            }
+        }
+    }
+
+    /// Apply queued input, active timers and observed events in one borrowed
+    /// main_state scope. The dispatcher allocation is independent of the number
+    /// of callbacks, and no borrowed provider survives this synchronous call.
+    pub fn advance_frame(
+        &mut self,
+        state: &dyn LuaMainState,
+        inputs: &[LuaRuntimeInput],
+    ) -> BTreeMap<i32, Option<i64>> {
+        let update_timers =
+            self.pending_timer_frame_start && !self.custom_timer_callbacks.is_empty();
+        let update_events = self.pending_event_frame_start && self.has_custom_events();
+        if inputs.is_empty() && !update_timers && !update_events {
+            return self.custom_timer_values();
+        }
+        let scope = self.state_scope();
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            scope.with_state(state, || {
+                for input in inputs {
+                    match *input {
+                        LuaRuntimeInput::Act(id, arg1, arg2) => {
+                            self.execute_act_inner(id, arg1, arg2, None);
+                        }
+                        LuaRuntimeInput::FloatWriter(id, value) => {
+                            self.execute_float_writer_inner(id, value, None);
+                        }
+                    }
+                }
+                self.advance_custom_timers_in_scope();
+                self.advance_custom_events_in_scope(state);
+            })
+        }));
+        if !matches!(result, Ok(Ok(()))) {
+            self.fail_custom_timer_binding();
+            self.pending_event_frame_start = false;
+            self.events.log_failure_once("$.frame", "failed to bind main_state for Lua frame");
+        }
+        self.custom_timer_values()
     }
 
     pub fn callback_count(&self) -> usize {
@@ -566,14 +672,23 @@ impl LuaSkinRuntime {
         let function = callback.function.as_ref().ok_or_else(|| {
             mlua::Error::runtime(format!("Lua callback was not registered at {}", callback.path))
         })?;
+        self.with_optional_state(state, || {
+            function.call::<Value>(()).and_then(LuaRuntimeEvaluatedValue::from_lua)
+        })?
+    }
+
+    fn with_optional_state<R>(
+        &self,
+        state: Option<&dyn LuaMainState>,
+        run: impl FnOnce() -> R,
+    ) -> mlua::Result<R> {
         if let Some(state) = state {
-            return self.state_scope().with_state(state, || {
-                function.call::<Value>(()).and_then(LuaRuntimeEvaluatedValue::from_lua)
-            })?;
+            self.state_scope().with_state(state, run)
+        } else {
+            // An unbound call must fail safely, never read the load-time provider.
+            let _: Function = self.main_state_dispatch.raw_get(1)?;
+            Ok(run())
         }
-        // An unbound call must fail safely, never read the load-time provider.
-        let _: Function = self.main_state_dispatch.raw_get(1)?;
-        function.call::<Value>(()).and_then(LuaRuntimeEvaluatedValue::from_lua)
     }
 
     /// Independent handle so the runtime can remain behind an adapter while a
