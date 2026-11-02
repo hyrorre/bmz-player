@@ -6,8 +6,7 @@ Windowsで、外部スキンは変更せずBMZ側を修正した。
 
 ## 曲名の予約列
 
-`DST_BAR_TITLE` のop1..3相当は予約列であり、OpenLR2の
-`AddDrawingBuffer_TextXY`も表示条件として評価しない。
+`DST_BAR_TITLE` のop1..3相当は予約列であり、LR2も表示条件として評価しない。
 通常destinationへの変換前に予約列を無効化し、外側の`#IF`条件を残した。
 回帰テストは予約列に1/2/3が入った場合と複数DSTの結合を確認する。
 
@@ -24,7 +23,7 @@ Windowsで、外部スキンは変更せずBMZ側を修正した。
 
 ## 3R Resultのロード条件
 
-レビューでは30/31をプレイ側と記述したが、参照実装の条件はBGA SizeのNormal/Extend。
+レビューでは30/31をプレイ側と記述したが、LR2の条件はBGA SizeのNormal/Extend。
 3Rはこの条件をResultの左右レイアウト選択へ流用していた。
 BMZのResultにはPlayスキンと共有するBGA Size設定がないため、ロード状態に
 30=true / 31=falseを渡してNormal側を選ぶ。通常・コースResultの先読みも同じ状態を使う。
@@ -43,7 +42,7 @@ BMZのResultにはPlayスキンと共有するBGA Size設定がないため、�
 
 Resultのロード状態へ300..308を渡し、確定したEX SCORE / 総ノート数から
 描画と同じランク条件を計算する。前回ベスト320..327や相手側310..318とは分離する。
-OpenLR2は`LoadSceneG`後に`FlipScore`を呼ぶため、ロード時条件は反転前の1Pを使う。
+LR2はスキンを読み込んだ後にスコアの左右を反転するため、ロード時条件は反転前の1Pを使う。
 
 検証:
 

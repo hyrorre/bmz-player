@@ -583,7 +583,7 @@ fn wmii_fhd_lr2skin_parse_has_no_unsupported_command_warnings_when_available() {
 }
 
 #[test]
-fn openlr2_wmii_bombs_and_key_beams_follow_lift_when_available() {
+fn wmii_lr2_bombs_and_key_beams_follow_lift_when_available() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../data/skins/WMII_FHD_LR2/play/FHDPLAY_AC_Battle.lr2skin");
     if !path.is_file() {

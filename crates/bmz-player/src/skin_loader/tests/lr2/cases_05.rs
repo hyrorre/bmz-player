@@ -86,7 +86,7 @@ fn lr2skin_decodes_native_lr2_bitmap_font() {
 }
 
 #[test]
-fn openlr2_wmii_keeps_native_lr2_bitmap_font_references_when_available() {
+fn wmii_keeps_native_lr2_bitmap_font_references_when_available() {
     let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../data/skins/WMII_FHD_LR2/play/FHDPLAY_AC.lr2skin");
     if !skin_path.is_file() {

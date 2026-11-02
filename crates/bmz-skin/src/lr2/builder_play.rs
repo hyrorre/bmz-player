@@ -1,14 +1,14 @@
 use super::*;
 
 impl<'a> CsvBuilder<'a> {
-    pub(super) fn complete_open_lr2_note_adjustment_effects(&mut self) {
+    pub(super) fn complete_lr2_note_adjustment_effects(&mut self) {
         if !self.header.explicit_resolution_dimensions {
             return;
         }
 
         for destination in &mut self.destinations {
             let offset = destination.get("offset").and_then(JsonValue::as_i64).unwrap_or(0);
-            if !open_lr2_effect_follows_note_adjustment(destination)
+            if !lr2_effect_follows_note_adjustment(destination)
                 // LR2 treats DST fields 21/22 as opt4/opt5. opt4=1/2 rotates the
                 // 1P/2P scratch image, so keep that value while adding the lift offset.
                 || !matches!(offset, 0..=2)
@@ -450,7 +450,7 @@ impl<'a> CsvBuilder<'a> {
     }
 }
 
-fn open_lr2_effect_follows_note_adjustment(destination: &JsonValue) -> bool {
+fn lr2_effect_follows_note_adjustment(destination: &JsonValue) -> bool {
     let timer = destination.get("timer").and_then(JsonValue::as_i64).unwrap_or(0);
     if (50..90).contains(&timer) {
         return true;

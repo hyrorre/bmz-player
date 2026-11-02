@@ -23,7 +23,7 @@ impl Side {
 }
 
 /// Converts 5K/7K SP charts into 10K/14K by distributing keysound groups
-/// across both player sides, following OpenLR2's SP-to-DP design.
+/// across both player sides, following LR2's SP-to-DP design.
 ///
 /// Groups are balanced per measure while retaining their previous side when
 /// possible. A measure that would otherwise occupy only one side is split by
@@ -131,7 +131,7 @@ pub fn apply_sp_to_dp(chart: &mut PlayableChart) -> bool {
         }
     }
 
-    // OpenLR2 moves Scratch to the side with fewer key notes in a 200ms
+    // LR2 moves Scratch to the side with fewer key notes in a 200ms
     // neighborhood. Preserve one side throughout Scratch long notes.
     let key_timeline = source_notes
         .iter()

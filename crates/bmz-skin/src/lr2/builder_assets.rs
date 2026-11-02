@@ -198,7 +198,7 @@ impl<'a> CsvBuilder<'a> {
                 10 | 11 => SKIN_REF_BMZ_LR2_HISPEED,
                 127 => SKIN_REF_BMZ_LR2_GAUGE_2P,
                 120..=136 => SKIN_REF_BMZ_LR2_2P_BASE + values[11] - 120,
-                // Modified LR2 / OpenLR2 FAST/SLOW extension. Keep these aliases
+                // Modified LR2 FAST/SLOW extension. Keep these aliases
                 // conversion-local because beatoraja assigns other meanings to 210/212/214.
                 210 => SKIN_REF_BMZ_LR2_FAST_SLOW_1P,
                 212 => 423,

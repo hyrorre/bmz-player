@@ -5,14 +5,14 @@ ASSISTのためにAUTO SCRATCHをプロフィール設定として新設した�
 
 ## 参照した仕様
 
-- LR2（`.local/OpenLR2`）
-  - `config.play.battle` は 0 OFF / 1 BATTLE / 2 D-BATTLE / 3 SP TO DP / 4 G-BATTLE。
+- LR2
+  - BATTLEの設定値は 0 OFF / 1 BATTLE / 2 D-BATTLE / 3 SP TO DP / 4 G-BATTLE。
   - 表記は `LR2files/Config/optionstr.csv` の `#BATTLE,OFF,BATTLE,D-BATTLE,SP-TO-DP,G-BATTLE,...` と、
     `#ASSIST,OFF,AUTOSCR.`。
-  - AUTO SCRATCH（`p1_assist`）はスコアを保存せず、クリアをイージー扱いにする（`isForceEasy`）。
-    ただし `battle == 2`（D-BATTLE）のSP譜面ではイージー扱いにしない（`LR2_bmsload.cpp`）。
+  - AUTO SCRATCHはスコアを保存せず、クリアをイージー扱いにする。
+    ただしD-BATTLEのSP譜面ではイージー扱いにしない。
   - D-BATTLEはスクラッチを自動演奏する。SP TO DPはスコアを通常保存する。
-  - 選曲のKey3は、キーフィルターがDOUBLE系ならFLIP、それ以外はBATTLEを切り替える（`Scene02_Songselect.cpp`）。
+  - 選曲のKey3は、キーフィルターがDOUBLE系ならFLIP、それ以外はBATTLEを切り替える。
   - option 10は「DPフィルター、またはbattle 2 / 3」、12は「DPフィルター、またはbattle 1..3」。
 - LR2oraja Endless Dream（`.local/lr2oraja-endlessdream`、`BMSPlayer.java`）
   - AUTO SCRATCHは全譜面オプションの適用後に掛ける。配置でスクラッチへ移ったノーツも対象にするため。

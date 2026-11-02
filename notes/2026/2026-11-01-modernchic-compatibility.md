@@ -213,10 +213,8 @@ runtime VMがtimerごとに前フレームの開始時刻を覚え、変化が2 
   詰め、それをDSTの240 pxへ引き伸ばしていたため、24 pxの選択枠が約160 px（6.7行分）に伸びていました。
 - beatoraja: `JsonSkinObjectLoader.getSourceImage`は範囲を詰めずに`TextureRegion`を作り、
   はみ出した部分はlibGDXの既定（ClampToEdge）で端の画素を引き延ばします。
-- LR2: LR2は`SRC`の範囲をそのままDxLibの`DerivationGraph`で切り出します。DxLib 3.24fと
-  [darknesswind/DxLib](https://github.com/darknesswind/DxLib)のDxLib 3.11fの`DxGraphics.cpp`は、
-  始点が画像外なら`-1`（LR2は描かない）、終点がはみ出す分は幅・高さを画像内に詰めます。
-  描画はDSTへ引き伸ばすので、BMZの従来の扱いと同じです。
+- LR2: 始点が画像外の`SRC`は描かず、終点がはみ出す分は幅・高さを画像内に詰め、
+  DSTへ引き伸ばします。BMZの従来の扱いと同じです。
 - 修正: LR2の画像に`lr2Clip`の印を付け、従来の扱いを残しました。それ以外の画像は範囲を詰めず、
   UVを0〜1の外まで渡します（スキン画像は個別テクスチャで、samplerはClampToEdge）。
 - 影響: インストール済みLuaスキンで画像からはみ出す切り出し範囲は、ModernChicのほか

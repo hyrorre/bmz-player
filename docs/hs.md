@@ -61,7 +61,7 @@ effective_hispeed = classic_hispeed * 150 / (hsfix_base_bpm * playback_rate)
   求め直します。CLASSICとLR2でHS値を共有するため、同じ値でもHS-FIX使用時の速さは変わります。
 - skinの基準方式 (1900 / 1916)はClassicと同じ`0` / `CHS`で、`1918`だけが`5=LR2`です。
 
-参照: OpenLR2 `LR2_bmsload.cpp`の`speedmultiplier = 150 / fixBPM`です。
+LR2のHS-FIXの倍率は`150 / 基準BPM`です。
 
 ## Normal
 

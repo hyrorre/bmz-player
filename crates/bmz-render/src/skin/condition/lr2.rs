@@ -4,7 +4,7 @@ use super::*;
 const LR2_CLEAR_FROM_BEATORAJA: [i64; 11] = [0, 1, 2, 2, 2, 3, 4, 4, 5, 5, 5];
 
 /// LR2 options (`LR2_OPTION_BASE + id`) whose meaning differs from beatoraja.
-/// Definitions follow LR2's `GetOptionFlag_dst`.
+/// Definitions follow LR2's option definitions.
 pub(super) fn lr2_option(id: i32, state: &SkinDrawState) -> bool {
     match id {
         // The course has more than N stages; LR2 counts the selected course's stages.
@@ -60,7 +60,7 @@ pub(super) fn lr2_option(id: i32, state: &SkinDrawState) -> bool {
         572 => true,
         // AUTO SCRATCH off / on for 1P (54 / 55) and 2P (56 / 57). Play shows the
         // scratch lanes actually played automatically; other scenes show the setting
-        // like LR2's `p1_assist`.
+        // like LR2.
         54..=57 => {
             let lane = if id < 56 { Lane::Scratch } else { Lane::Scratch2 };
             let on = if state.play_screen {

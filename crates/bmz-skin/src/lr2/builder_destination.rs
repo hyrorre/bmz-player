@@ -471,7 +471,7 @@ impl<'a> CsvBuilder<'a> {
     pub(super) fn finish(mut self) -> JsonValue {
         let songlist = self.finish_songlist();
         let result = self.finish_lr2_result();
-        self.complete_open_lr2_note_adjustment_effects();
+        self.complete_lr2_note_adjustment_effects();
         self.complete_play_lines();
         let category = json!([{ "name": "LR2", "item": ["property", "filepath", "offset"] }]);
         let property = self
@@ -592,7 +592,7 @@ impl<'a> CsvBuilder<'a> {
                 })
             })
             .collect::<Vec<_>>();
-        // LR2 SRC rectangles keep DxLib's clipping to the image.
+        // LR2 clips SRC rectangles to the image.
         let images = self
             .images
             .into_iter()

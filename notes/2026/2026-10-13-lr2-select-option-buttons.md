@@ -13,15 +13,15 @@ LR2にある設定はbuttonで直接切り替え、BMZ独自の設定はBMZ設�
 
 ## LR2の挙動の確認
 
-`.local/OpenLR2/LR2/LR2_skinobject.cpp` の `SetObjectValue_Button` と `ButtonByInput` を確認した。
+LR2のbuttonの値の変更と入力の扱いを確認した。
 
 - 値の変更は左クリックだけ。`SRC_BUTTON` のop4が1なら＋のみ、2なら−のみ、0なら左右半分で増減する。
-- 範囲外は `LoopInRange` 相当で反対端へ回る。
+- 範囲外は反対端へ回る。
 - 10 / 11 / 12（難易度・キー・ソート）はbutton側では値を変えず、
-  `Scene02_Songselect.cpp` のフィルター処理で常に次へ進む。
-- 各値の並びはOpenLR2の文字列設定・play処理と、既存の `lr2_scene::button_index` の対応から決めた。
-  EFFECTは `Scene04_Play.cpp` の可視範囲から OFF / HIDDEN / SUDDEN / HID+SUD と確認した。
-  TARGETは `SetTarget` の NO TARGET / MY BEST / AAA / AA / A / % / IR TOP / IR NEXT / IR AVERAGE。
+  選曲のフィルター処理で常に次へ進む。
+- 各値の並びはLR2の文字列設定・play処理と、既存の `lr2_scene::button_index` の対応から決めた。
+  EFFECTはLR2の可視範囲から OFF / HIDDEN / SUDDEN / HID+SUD と確認した。
+  TARGETは NO TARGET / MY BEST / AAA / AA / A / % / IR TOP / IR NEXT / IR AVERAGE。
 
 ## 実装
 

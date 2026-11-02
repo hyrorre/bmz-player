@@ -14,8 +14,8 @@ GPU依存を持たない `bmz-skin-assets` を追加し、仮想パスとアー�
 
 ## 参照
 
-- `.local/OpenLR2/LR2/LR2_skinload.cpp`: `FileRead_open` / `LoadGraph` 経由の仮想フォルダー読込。
-- `.local/OpenLR2/DXAissue.txt`: 旧アーカイブと新DXライブラリの互換差。
+- LR2の仕様: スキンのファイルはDXライブラリの仮想フォルダー経由で読み込む。
+  旧形式のアーカイブは新しいDXライブラリと互換性がない。
 - [DXライブラリ公式説明](https://dxlib.xsrv.jp/dxtec.html): 仮想フォルダーとDxaEncode/Decode。
 - [旧DXArchive 1.02ソース](https://github.com/henteko/2012TeResAI/tree/master/2012TeResAI/2012teresAI/DX%20lib/DxLib_VC/Tool/DXArchive/Source/DxArchive): v1/v2の反転、v3/v4の既定キー、索引。
 - [GARbro ArcDX.cs](https://github.com/morkt/GARbro/blob/master/ArcFormats/DxLib/ArcDX.cs): 索引とLZ展開。

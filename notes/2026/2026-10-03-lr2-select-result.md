@@ -15,8 +15,7 @@
 - CLEAR / FAILEDのロード時分岐、decode cache依存、サンプルResult直接起動時の再ロード。
 - 共通画像の兄弟ディレクトリ参照、HDスキンの明示解像度指定、小数座標の読込。
 
-ローカル参照実装の `LR2/Scene02_Songselect.cpp`、`LR2/Scene05_Result.cpp` と
-`OpcodeScript/buttonOp.txt` を基準に番号や演出段階を確認した。
+LR2の選曲・リザルトの仕様とbutton番号の定義を基準に、番号や演出段階を確認した。
 LR2に無いBMZ設定の維持・BMZパネル・解像度選択はBMZ側の仕様である。
 
 ## アセットを使った検証

@@ -16,10 +16,9 @@
 #ENDIF
 ```
 
-- OpenLR2の `ReadSkin`（`LR2/LR2_skinload.cpp`）は各 `#IF` 階層を自分の条件だけで判定し、
+- LR2は各 `#IF` 階層を自分の条件だけで判定し、
   行のスキップも最も内側の階層だけを見る。外側が偽でも、31が真ならR-R.csvを読む。
-- OpenLR2はop 0〜899を `GetOptionFlag_dst` から全画面で設定し、op 30/31は
-  `config.play.bgasize` に従う。
+- LR2はop 0〜899を全画面で設定し、op 30/31はBGA Sizeの設定に従う。
 - beatorajaは入れ子を持たず `#IF` ごとに判定し直す。この例ではLR2と同じ結果になる。
   BGA SizeはPlayスキンにだけ追加するため、beatorajaの3R Resultは30/31が両方偽になる。
 - BMZは親の条件もすべて満たすことを要求していた（2026-06のWMII FHD対応で導入）。
@@ -30,7 +29,7 @@
 
 ## 変更
 
-- `Processor` の `#IF` 判定をOpenLR2に合わせ、各階層の条件だけで判定する。
+- `Processor` の `#IF` 判定をLR2に合わせ、各階層の条件だけで判定する。
   描画時に評価するopの条件も、最も内側の階層の分だけを付ける。
 - Play以外のLR2スキンにもスキンオプション `BGA Size`（Normal / Extend、既定Normal）を追加した。
   Result選択時のapp側の30/31は、オプションを非表示にしたスキン向けのfallbackとして残す。

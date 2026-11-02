@@ -752,7 +752,7 @@ fn lr2_assist_and_battle_follow_bmz_settings() {
         SkinDrawState { play_screen: true, auto_scratch_setting: true, ..Default::default() };
     play.auto_note_lanes[Lane::Scratch.index()] = true;
     assert!(op(55, &play) && op(56, &play) && !op(57, &play));
-    // Result and other scenes show the setting, like LR2's `p1_assist`.
+    // Result and other scenes show the setting, like LR2.
     let result = SkinDrawState { auto_scratch_setting: true, ..Default::default() };
     assert!(op(55, &result) && op(57, &result) && !op(54, &result));
     assert!(op(54, &SkinDrawState::default()));

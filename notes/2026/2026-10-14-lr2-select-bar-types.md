@@ -7,8 +7,7 @@ LR2のCSV読込はバー本体の0..7をそのまま保持し、8以降を通常
 描画側はbeatorajaの番号（未所持=4、コース=3）をLR2にも適用していた。
 LR2では4がライバルフォルダ、3が新曲フォルダなので、異なる素材が選ばれていた。
 
-根拠は `.local/OpenLR2/LR2/Scene02_Songselect.cpp` の
-`src_BAR_BODY[folderType]` による描画と、
+根拠は、LR2が曲バーの本体をフォルダ種別ごとの `SRC_BAR_BODY` で描く仕様と、
 `data/skins/WMIX_HD/select/select.csv` の `SRC_BAR_BODY` 定義。
 第三者スキンのCSVや画像は編集していない。
 
@@ -58,9 +57,8 @@ BMZのLAMP UPDATE、DENSITY、FEATURE等の組み込み仮想フォルダは
 beatorajaの番号を流用していた。機能フォルダを灰色とした前の説明はLR2の分類に一致しない。
 `codex/lr2-select-row-compat` Worktreeで、LR2の行種別と実際のWMIX_HD素材を再確認した。
 
-参照したLR2コードは `LR2_songmanage.cpp` のカスタムフォルダとコース行の分類、
-`Scene02_Songselect.cpp` のバー・タイトル・ランプ・勝敗表示、
-`LR2_skinobject.cpp` の選択行条件1..5、`LR2_configsave.cpp` のtitleflash既定値。
+確認したLR2の仕様は、カスタムフォルダとコース行の分類、バー・タイトル・ランプ・勝敗表示、
+選択行条件1..5、titleflashの既定値。
 
 | BMZの行 | LR2の画像番号 | WMIX_HDでの見た目 |
 |---|---|---|

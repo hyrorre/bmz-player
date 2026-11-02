@@ -380,7 +380,7 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
         SKIN_REF_BMZ_JUDGE_LANE_DURATION_BASE..=SKIN_REF_BMZ_JUDGE_LANE_DURATION_LAST => state
             .judge_lane_timing_ms[(ref_id - SKIN_REF_BMZ_JUDGE_LANE_DURATION_BASE) as usize]
             .map(|ms| -(ms as i64)),
-        // Modified LR2 / OpenLR2 ref=210. PGREAT is always blank even when a
+        // Modified LR2 ref=210. PGREAT is always blank even when a
         // BMZ ThresholdMs setting preserves its timing side.
         SKIN_REF_BMZ_LR2_FAST_SLOW_1P => {
             if state.judge_index[0] == Some(0) {

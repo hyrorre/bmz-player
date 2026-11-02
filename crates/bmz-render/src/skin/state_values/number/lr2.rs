@@ -1,7 +1,7 @@
 use super::*;
 
 /// LR2 number refs (`LR2_NUMBER_BASE + id`) whose meaning differs from beatoraja.
-/// Definitions follow LR2's `GetNumber` for the 1P side.
+/// Definitions follow LR2's number definitions for the 1P side.
 pub(in crate::skin) fn lr2_number(id: i32, state: &SkinDrawState) -> Option<i64> {
     let counts = state.judge_counts;
     let ex = i64::from(state.ex_score);

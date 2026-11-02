@@ -4,8 +4,7 @@
 
 KCOOL 1.72の判定ラインは `time=30, loop=0`、ゲージは `time=1000, loop=0` の単一時刻。
 従来のBMZは開始判定より先に時刻を折り返すため、これらが非表示になっていた。
-ローカル参照 `.local/OpenLR2/LR2/LR2_skindraw.cpp` の `SetDSTdrawByTime` は、
-元の経過時刻で開始判定し、開始と終端が同じならその表示を保持する。
+LR2は元の経過時刻で開始判定し、開始と終端が同じならその表示を保持する。
 
 CSV変換の通常・ゲージ・コンボdestinationへ `lr2Timing` を付け、rendererで評価を分岐。
 判定表示の終端制限にもLR2の規則を適用する。JSON/Luaの既定動作は維持する。

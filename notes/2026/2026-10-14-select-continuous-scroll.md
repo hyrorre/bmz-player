@@ -4,8 +4,7 @@
 
 - BMZは選択index変更時に1行分の補間を再開始し、途中の移動残量を捨てていた。
   スクラッチの複数行入力もループで上書きし、ページ移動も1行分だけ補間していた。
-- LR2の`Scene02_Songselect.cpp`は現在の`listTopbar`を`oldBar`へ引き継ぎ、
-  `ChangeValueByTime(..., 0)`で新しい`nowBar`へ線形補間する。
+- LR2は移動中の現在位置を起点として引き継ぎ、新しい選択位置へ線形補間する。
   長押しは移動終了20ms前から次へ接続し、BAR_FLASHは中央の未補間destinationを原点にする。
 - beatorajaの`BarRenderer.java`は隣接スロット間の補間と入力用duration/angleを共有する。
   BMZの従来処理はそれを参考にしていたが、再入力・複数行入力を連続座標で保持していなかった。

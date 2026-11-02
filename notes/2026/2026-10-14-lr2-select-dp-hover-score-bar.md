@@ -7,11 +7,11 @@ STYLEへマウスを置くと発光が左へずれる。SCORE DATAのF〜AAAバ�
 第三者スキンのCSV・画像を変更せず、BMZ側の変換と条件評価を修正した。
 
 - LR2 option 10 / 11 / 12を専用namespaceへ変換し、選曲STYLEからDP条件を評価する。
-  LR2参照実装の`GetOptionFlag_dst`と同じく、選択譜面の鍵盤数からは判定しない。
+  LR2と同じく、選択譜面の鍵盤数からは判定しない。
   BMZの14 / 10鍵フィルターで10と12がtrue、未対応のBATTLEは11がfalse。
 - パネル条件20..29も描画時に評価する。`SRC_ONMOUSE`のpanel指定を局所マウス範囲と
   一緒に保持し、描画条件へ追加する。panel=0は共通、指定ありは該当パネルでだけ表示する。
-  LR2の`AddDrawingBuffer_OnMouse`に合わせ、DSTの条件とも併用する。
+  LR2と同じく、DSTの条件とも併用する。
   WMIX_HDではSTYLEがx=415、正しい発光がx=401。誤って重なったSCOREパネル用の
   発光はx=373であり、座標補正ではなくパネル制限が必要だった。
 - スコアバーのoption 572（コース作成中ではない）をtrue、571をfalseとして供給する。

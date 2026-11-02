@@ -739,7 +739,7 @@ pub(super) fn resolve_loop_elapsed(loop_point: i32, elapsed_ms: i32, cycle: i32)
     }
 }
 
-/// OpenLR2 `SetDSTdrawByTime`: gate using the original clock, then map it.
+/// LR2 DST timing: gate using the original clock, then map it.
 /// A single timestamp holds after activation; the terminal timestamp is shown
 /// before wrapping. Use wide arithmetic for the full signed skin time range.
 fn resolve_lr2_loop_elapsed(loop_point: i32, elapsed: i32, start: i32, end: i32) -> Option<i32> {

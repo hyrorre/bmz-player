@@ -107,7 +107,7 @@ fn lr2_single_timestamp_starts_then_holds_including_judge_destinations() {
 }
 
 #[test]
-fn lr2_loop_boundaries_and_activation_match_openlr2() {
+fn lr2_dst_loop_boundaries_and_activation() {
     for (loop_time, elapsed, expected) in [
         (0, 99, None),
         (0, 100, Some(100)),

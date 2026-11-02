@@ -1242,7 +1242,7 @@ fn image_past_the_source_keeps_its_rectangle_except_lr2_clipping() {
     assert!(approx_eq(uv.y, 2964.0 / 3000.0));
     assert!(approx_eq(uv.height, 240.0 / 3000.0));
 
-    // LR2's DxLib `DerivationGraph` shortens the rectangle to the image.
+    // LR2 shortens the rectangle to the image.
     let lr2 = SkinImageDef { lr2_clip: true, ..image };
     let uv = skin_image_texture_region(&lr2, size, 0);
     assert!(approx_eq(uv.y, 2964.0 / 3000.0));

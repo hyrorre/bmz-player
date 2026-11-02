@@ -34,8 +34,8 @@ pub(super) struct IncludeState {
 
 impl Processor {
     pub(super) fn begin_include_file(&mut self) -> IncludeState {
-        // A deferred caller IF still gates the whole file: LR2 would only call
-        // ReadSkin when that IF matched. Child ENDIFs cannot consume this gate.
+        // A deferred caller IF still gates the whole file: LR2 only reads the
+        // included file when that IF matched. Child ENDIFs cannot consume this gate.
         let condition = self.active_runtime_condition();
         IncludeState {
             stack: std::mem::take(&mut self.stack),
@@ -114,7 +114,7 @@ impl Processor {
                 if include.is_file() {
                     builder.record_loaded_file_dependency(&include);
                     let include_lines = read_csv_lines(&include)?;
-                    // LR2 ReadSkin owns its IF stack per file. Keep SETOPTION and
+                    // LR2 keeps an IF stack per file. Keep SETOPTION and
                     // SRC/DST state shared, but an unmatched child ENDIF must not
                     // consume the parent's branch.
                     let parent_stack = self.begin_include_file();

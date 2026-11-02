@@ -5,12 +5,12 @@
 LR2 CSVスキンのnumber / option IDをbeatorajaの参照として評価していたため、
 同じ番号で意味が違う値がずれていた。報告された例は次の2件。
 
-- リザルトのPOOR（number 114）: LR2は見逃しPOOR＋空POOR（`LR2_skinobject.cpp` の `GetNumber` case 114）。
+- リザルトのPOOR（number 114）: LR2は見逃しPOOR＋空POOR。
   BMZはbeatorajaの `NUMBER_POOR`（見逃しのみ）を表示していた。2P側の134だけは合計になっていた。
 - 選曲のINTERNET RANKING（number 92..95）: LR2は92=IR順位、93=参加人数、94=クリア率、95=ライバルとのEX差。
   BMZはbeatorajaの `NUMBER_MAINBPM`（92）として評価し、順位の位置にBPMが出ていた。93..95は空欄だった。
 
-サブエージェントで同梱・手元のLR2スキンとOpenLR2の定義を照合し、他の不一致も一覧化した。
+サブエージェントで同梱・手元のLR2スキンとLR2の定義を照合し、他の不一致も一覧化した。
 
 ## 変更
 

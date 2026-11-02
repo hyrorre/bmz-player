@@ -257,7 +257,7 @@ fn lr2_skin_info_matches_the_full_document_without_processing_the_body() {
 }
 
 #[test]
-fn lr2_resolution_override_keeps_open_lr2_effect_mode() {
+fn lr2_resolution_override_keeps_lr2_effect_mode() {
     let root = unique_test_dir("bmz-lr2-resolution-override-play");
     fs::create_dir_all(&root).unwrap();
     let path = root.join("play.lr2skin");
@@ -270,9 +270,9 @@ fn lr2_resolution_override_keeps_open_lr2_effect_mode() {
 }
 
 #[test]
-fn explicit_resolution_lr2_effects_follow_open_lr2_note_adjustment() {
+fn explicit_resolution_lr2_effects_follow_lr2_note_adjustment() {
     let files = BTreeMap::new();
-    let skin_path_dir = unique_test_dir("bmz-lr2-openlr2-effects");
+    let skin_path_dir = unique_test_dir("bmz-lr2-explicit-effects");
     let skin_path = skin_path_dir.join("play.lr2skin");
     let mut builder = CsvBuilder::new(
         &skin_path,
@@ -311,7 +311,7 @@ fn explicit_resolution_lr2_effects_follow_open_lr2_note_adjustment() {
         }),
     ];
 
-    builder.complete_open_lr2_note_adjustment_effects();
+    builder.complete_lr2_note_adjustment_effects();
 
     for id in ["bomb", "ln-bomb", "key-beam", "scratch-key-beam"] {
         let destination =
@@ -346,7 +346,7 @@ fn preset_resolution_lr2_effects_do_not_gain_lift_offsets() {
         }),
     ];
 
-    builder.complete_open_lr2_note_adjustment_effects();
+    builder.complete_lr2_note_adjustment_effects();
 
     assert!(builder.destinations.iter().all(|destination| destination.get("offsets").is_none()));
 }

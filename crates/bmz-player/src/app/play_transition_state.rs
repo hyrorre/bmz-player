@@ -102,7 +102,7 @@ pub(super) enum DecideExit {
     /// Timer 2 for the skin's `fadeout` (cancel, scene end, and skip on JSON / Lua).
     #[default]
     Fadeout,
-    /// LR2 skip (OpenLR2 `ProcI_Decide`): timer 3 for `#CLOSE`, or `#FADEOUT`
+    /// LR2 skip: timer 3 for `#CLOSE`, or `#FADEOUT`
     /// when the skin has no `#CLOSE`.
     Lr2Close,
 }

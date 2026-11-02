@@ -16,7 +16,7 @@ JSON / Lua / LR2 skinの対応範囲と残課題は[skin-compatibility.md](skin-
 JSON / Luaの`image`の切り出し範囲が元画像からはみ出す場合は、beatorajaの`TextureRegion`と同じく
 範囲を詰めず、はみ出した部分には元画像の端の画素を引き延ばします（libGDXの既定のClampToEdge）。
 ModernChicのオプション画面は、3000 pxの画像に対して240 pxの窓を下端から204 pxはみ出して切り出します。
-LR2の`SRC`は、LR2が使うDxLibの`DerivationGraph`と同じく、はみ出した分を元画像の内側に詰め、
+LR2の`SRC`はLR2の仕様どおり、はみ出した分を元画像の内側に詰め、
 残った範囲をDSTの大きさへ引き伸ばします（従来どおり）。`w` / `h`が負の場合は、どちらも始点から
 元画像の端までです。
 
@@ -146,7 +146,7 @@ Lua / LR2の数値変換で、1件だけのoffset定義や数値画像のoffset�
 
 ## LR2の条件分岐
 
-`#IF` / `#ELSEIF` / `#ELSE` / `#ENDIF`はOpenLR2の`ReadSkin`と同じく、
+`#IF` / `#ELSEIF` / `#ELSE` / `#ENDIF`はLR2と同じく、
 各階層を自分の条件だけで判定します。外側が偽のブロック内でも、内側の`#IF`が真なら実行し、
 `#ENDIF`で外側の状態へ戻ります。描画時に評価するopの条件も、最も内側の階層の分を付けます。
 閉じられていない`#IF`はファイル末尾まで有効とします。
@@ -179,7 +179,7 @@ CSVファイル名の単一wildcardが対象で、未選択のディレクトリ
 ## LR2のnumber / option
 
 LR2とbeatorajaで同じ番号の意味が違うnumber / optionは、変換時にLR2専用の参照へ移し、
-LR2の`GetNumber` / `GetOptionFlag_dst`の定義で評価する（number `93_000+ID`、
+LR2のnumber / optionの定義で評価する（number `93_000+ID`、
 option `94_000+ID`、否定は符号を維持）です。意味が一致する番号はbeatorajaの参照のまま使います。
 変換の表は[refs.rs](../crates/bmz-skin/src/lr2/refs.rs)に集約します。
 
@@ -312,7 +312,7 @@ JSON / Luaスキンのsonglistは目印を持たず、従来どおり1か所で�
 描画準備では目印一覧をdocumentの構造cacheへ保持し、`order`を持つLR2の部品は
 フレーム内で1回だけ描画位置へ振り分けます。目印の重複やclipで見えない目印も扱い、
 `order`の無い旧形式の目印は従来の部品名・indexによる照合を維持します。
-別オブジェクトのDSTをkeyframeの間へ挟み、アニメーションに応じて前後関係を変えるLR2の`sortID`補間は対象外とします。
+別オブジェクトのDSTをkeyframeの間へ挟み、アニメーションに応じて前後関係を変えるLR2の描画順の補間は対象外とします。
 表示位置が選択から複数行遅れる場合は、その位置の周囲の行を別途供給します。
 選択中の譜面・number/text/option参照・決定操作は入力直後の選択に従い、選択変更タイマーと
 補間時計は独立します。フォルダ切替や直接指定では補間を破棄します。
@@ -368,7 +368,7 @@ PRACTICE・AUTOPLAY・FLIP・7K TO 9K / 6KはLR2に無い値のため、置き�
 D-BATTLE中はFLIPがOFFとして表示されます（button 54 / text 70）。option 10 / 12はDPのキーフィルターに加え、D-BATTLE / SP-TO-DPでも成立します。
 
 ASSIST（button 44 / 45、text 67 / 68）はプロフィールのAUTO SCRATCHを切り替えます。D-BATTLE中に切り替えると、BATTLEとBATTLE ASも連動して切り替わります。
-option 54..57（1P / 2PのAUTO SCRATCH OFF / ON）は、プレイ画面では実際に自動演奏しているスクラッチレーン、選曲・リザルト等の他の画面ではLR2の`p1_assist`と同じく設定値で判定します。
+option 54..57（1P / 2PのAUTO SCRATCH OFF / ON）は、プレイ画面では実際に自動演奏しているスクラッチレーン、選曲・リザルト等の他の画面ではLR2と同じく設定値で判定します。
 option 62..66（このまま取れる最高ランプ）は、AUTO SCRATCHをD-BATTLE以外でEASY止まり、SP-TO-DPを保存なし（0）として扱います。
 
 マウスはLR2と同じく左クリックだけを受け付け、増減はbuttonの指定（plus only / minus only / 左右半分）で決めます。
@@ -396,8 +396,8 @@ LR2のsliderは、つまみを含む移動範囲全体で押下を受け付け�
 その上のマウスホイールは一覧を1行ずつスクロールし（BMZ拡張です。LR2は常に曲リストを動かす）、
 クリックは下にある曲バーへ通しません。
 customizeで表示中の選曲スキンを再読み込みしたときは、開いているパネルと画面のタイマーを維持します。
-対象のbuttonはLR2本体と同じく172を14KEYS、173を10KEYSとして扱う（LR2同梱のskinselect画像とOpenLR2の
-`op - 170`による種別番号で確認）です。ECBEは14K表示のタブに173、10K表示のタブに172を割り当てているため、
+対象のbuttonはLR2本体と同じく172を14KEYS、173を10KEYSとして扱う（LR2同梱のskinselect画像と、
+buttonの番号から170を引くLR2の種別番号で確認）です。ECBEは14K表示のタブに173、10K表示のタブに172を割り当てているため、
 LR2本体と同様にタブの表示と編集対象が入れ替わります。スキン側の割り当てであり、BMZでは補正しません。
 E1/E2のhold変化で物理操作へ戻し、modal・フォーカス喪失・画面切替では解除します。
 
@@ -412,7 +412,7 @@ Play / Resultのbutton 40 / 41（ゲージ種別）は、LR2に無いゲージ�
 Selectの設定表示では従来どおり表示しません。
 Course Resultのoption 100..105は、通常Resultと同じく今回の結果を保存した後のコースベストを使います。
 
-LR2のDecideはOpenLR2の`ProcI_Decide`に合わせ、スキップでtimer 3を開始し、`#CLOSE`の時間
+LR2のDecideはLR2と同じく、スキップでtimer 3を開始し、`#CLOSE`の時間
 （`#CLOSE`が無いスキンは`#FADEOUT`の時間）が過ぎたらPlayへ進みます。timer 2は開始しません。
 キャンセルと`#SCENETIME`の経過は従来どおりtimer 2と`#FADEOUT`を使います。LR2のDecideでは
 JSON / Lua向けのシーン末尾への時計の補正を行わず、timer 2 / 3の部品で退出演出を描きます。
@@ -471,7 +471,7 @@ Play以外のLR2スキンにもスキンオプション`BGA Size`（Normal / Ext
 ## LR2のDST時刻
 
 LR2 CSVから生成したdestinationは内部属性`lr2Timing: true`を保持し、
-OpenLR2の`SetDSTdrawByTime`に合わせて時刻を評価します。JSON/Luaの既定評価は変更しません。
+LR2と同じ規則で時刻を評価します。JSON/Luaの既定評価は変更しません。
 通常の画像、ゲージ、判定画像、コンボに共通で適用します。
 
 - ループ前の経過時刻が最初のDST時刻に達するまで非表示です。
@@ -509,7 +509,7 @@ JSON/Luaの通常buttonは従来の行選択を維持します。
 LNは両キャップ間に横長の胴体を描画し、小節線・補助線も同方向へ動かします。
 LIFT・lane cover・hidden coverのoffset（3..5）はX軸へ適用し、通常UIの座標は維持します。
 `DST_NOTE2`は横スクロール時には落下先Xとして扱います（[Playの見逃しノーツと判定領域](#playの見逃しノーツと判定領域)）。
-参照実装で縦計算が残るLN/小節線も一貫して横へ流す点はBMZの補完動作です。
+LR2で縦方向の計算が残るLN/小節線も一貫して横へ流す点はBMZの補完動作です。
 カバーの`disapearLine`による横向きcropは未対応で、縦方向の定義を使います。
 
 `#FONT`は`#LR2FONT`と別の番号表を使います。同番号のbitmap font宣言を優先し、
@@ -2679,7 +2679,7 @@ BMS側の解釈:
 
 ### Modified LR2 FAST/SLOW Refs
 
-LR2プレイスキンのdecode時に、改造LR2 / OpenLR2のFAST/SLOW拡張refを次のBMZ状態へ変換します。
+LR2プレイスキンのdecode時に、改造LR2のFAST/SLOW拡張refを次のBMZ状態へ変換します。
 JSON / Lua skinの同名refは変換せず、beatorajaの意味を維持します。
 
 | LR2 ref | decode後 | meaning |
@@ -2689,7 +2689,7 @@ JSON / Lua skinの同名refは変換せず、beatorajaの意味を維持しま�
 | 214 | 424 | SLOW合計です。GREAT / GOOD / BAD / POOR / EMPTY POORを集計 |
 
 `19170`はLR2変換専用の内部refです。`212/214`は既存のBMZ `423/424`へaliasするため、
-OpenLR2の原仕様と異なりPOOR / EMPTY POORも合計へ含みます。
+改造LR2の原仕様と異なりPOOR / EMPTY POORも合計へ含みます。
 
 ### BMZ Result IR Scope
 
