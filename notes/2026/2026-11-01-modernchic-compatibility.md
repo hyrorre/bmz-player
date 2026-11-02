@@ -200,3 +200,40 @@ runtime VMがtimerごとに前フレームの開始時刻を覚え、変化が2 
   レーンごとの打鍵数4×7で、白い領域とはみ出しはなくなりました。
 - インストール済みLuaスキンの互換比較: 回帰0件。差分はSocialSkin Decideの乱数による揺れだけです。
 - 手動プレイ（KEYON）と戦闘モードの攻撃演出の実機確認、beatorajaとの数値比較は未実施です。
+
+## 追記：オプション画面の譜面オプションとResultのIRメニュー（2026-11-02）
+
+利用者の画面写真で、2件の表示不具合が報告されました。
+
+### オプション画面の譜面オプションが6行分光る
+
+- 原因: Selectのオプション画面は、`op.png`（2000×3000）から縦に24 pxずつずらした
+  143×240の窓を切り出し、選択中の行だけを光らせます。NORMALの窓はy=2964〜3204で、
+  画像の下端を204 pxはみ出します。BMZはJSON / Luaの画像でも切り出し範囲を画像内（36 px）に
+  詰め、それをDSTの240 pxへ引き伸ばしていたため、24 pxの選択枠が約160 px（6.7行分）に伸びていました。
+- beatoraja: `JsonSkinObjectLoader.getSourceImage`は範囲を詰めずに`TextureRegion`を作り、
+  はみ出した部分はlibGDXの既定（ClampToEdge）で端の画素を引き延ばします。
+- LR2: LR2は`SRC`の範囲をそのままDxLibの`DerivationGraph`で切り出します。DxLib 3.24fと
+  [darknesswind/DxLib](https://github.com/darknesswind/DxLib)のDxLib 3.11fの`DxGraphics.cpp`は、
+  始点が画像外なら`-1`（LR2は描かない）、終点がはみ出す分は幅・高さを画像内に詰めます。
+  描画はDSTへ引き伸ばすので、BMZの従来の扱いと同じです。
+- 修正: LR2の画像に`lr2Clip`の印を付け、従来の扱いを残しました。それ以外の画像は範囲を詰めず、
+  UVを0〜1の外まで渡します（スキン画像は個別テクスチャで、samplerはClampToEdge）。
+- 影響: インストール済みLuaスキンで画像からはみ出す切り出し範囲は、ModernChicのほか
+  GenericTheme（1 px）、WMII_FHD（2 px、画像端からの開始）、SocialSkin、ADFX02等にあります。
+  いずれもbeatorajaと同じ描画になります。選択式画像は先頭候補の大きさで判定したため、一部は誤検出です。
+- 検証: 描画計画のダンプ（`scene_plan_profile select ... panel`）で選択枠のUVが
+  `y=0.988, 高さ0.08`（240 px分）になったことを確認しました。実画面での目視は未実施です。
+  始点が画像外のLR2の`SRC`は、LR2では描かれず、BMZは幅0の範囲で描きます（今回は変更していません）。
+
+### ResultでIRメニューが表示されない
+
+- 原因: ModernChicのResultは、メニューを`timer_util.timer_observe_boolean`で組み立てた後に
+  `main_state.option(51)`（オンライン）を見てIRメニューを読み込みます。`timer_observe_boolean`は
+  `main`の実行中に観測関数を推論し、推論の終わりに`main_state`の値をすべて消していました。
+  そのため以降の`option(51)`はfalseになり、IRメニューの部品（画像30、imageset 10、value 68、
+  配置約164）がまるごと組み立てられていませんでした。`option(90)`や`number` / `text`も同様に失われます。
+- 修正: 推論の前に読み込み時の値と依存関係の記録を退避し、推論後に戻します。
+- 検証: 最小構成の再現スキンと、ModernChic Old / 4.71のResultをオンライン状態で読み込み、
+  IRメニューの部品が加わることを確認しました。互換比較は回帰0件（差分はSocialSkinの乱数の揺れのみ）。
+  IR接続した実環境での表示確認は未実施です。
