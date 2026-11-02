@@ -59,9 +59,8 @@ impl Panel {
     /// blank tiles by the window digit drawn on them.
     fn lanes(&self) -> Vec<Vec<u8>> {
         let mut rows: BTreeMap<i32, Vec<(f32, u8)>> = BTreeMap::new();
-        let mut edges = 0;
         for command in &self.renderer.last_plan().unwrap().commands {
-            let DrawCommand::Image { texture, rect, uv, linear_filter, tint, .. } = command else {
+            let DrawCommand::Image { texture, rect, uv, linear_filter, .. } = command else {
                 continue;
             };
             let (x, y, w, h) =
@@ -76,19 +75,13 @@ impl Panel {
                 && (LEFT..LEFT + WIDTH as f32).contains(&x)
                 && (TOP..TOP + HEIGHT as f32).contains(&y)
             {
-                // Scaled and filtered as PLAY DATA draws them: 13 px with a black edge 1 px
-                // around, so that their top and bottom meet those of the tiles' digits.
-                assert!((w - 13.0).abs() < 0.01 && (h - 13.0).abs() < 0.01 && *linear_filter);
-                if tint.r == 0.0 && tint.g == 0.0 && tint.b == 0.0 {
-                    edges += 1;
-                    continue;
-                }
+                // Once, at 17 px 6 px below the tile top so that their top and bottom meet
+                // those of the tiles' digits, and unfiltered to keep their dark edge sharp.
+                assert!((w - 17.0).abs() < 0.01 && (h - 17.0).abs() < 0.01 && !*linear_filter);
                 let digit = ((uv.x * 1920.0 - 166.0) / 18.0).round() as u8;
-                rows.entry((y - 8.0).round() as i32).or_default().push((x - 9.0, digit));
+                rows.entry((y - 6.0).round() as i32).or_default().push((x - 7.0, digit));
             }
         }
-        let digits = rows.values().flatten().filter(|(_, label)| *label >= 8).count();
-        assert_eq!(edges, digits * 8, "every window digit has a black edge");
         rows.into_values()
             .map(|mut row| {
                 row.sort_by(|a, b| a.0.total_cmp(&b.0));
