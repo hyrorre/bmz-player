@@ -10,6 +10,10 @@ BMZ固有のIDや詳細な動作契約は[skin.md](skin.md)、互換修正の方
 
 ## 対応済みの主な範囲
 
+Resultのお気に入りは、単曲・コース曲間で`act = 89 / 90`とimage/index `ref = 89 / 90`に対応します。
+スキンにボタンがなくても選曲と共通のF8 / F9割り当てで操作できます。2状態・コース最終での制限は
+[仕様](skin.md#resultのお気に入り)、[入力・保存の回帰テスト](../crates/bmz-player/src/app/tests/result_favorites.rs)を参照してください。
+
 | 項目 | 現在の範囲・確認入口 |
 |---|---|
 | LR2選曲バーの分類・装飾 | NEW COURSE・コース一覧・機能フォルダ・検索履歴をLR2の画像番号で描画します。NEWはルートと配下を新曲、設定カテゴリ（音量・音声など）は通常フォルダ（W-MIXの青）、設定入口・戻る・閉じるはライバルフォルダ（W-MIXの赤）、その他の仮想フォルダは分類階層を含めカスタムフォルダの画像とします（BMZ表示方針）。op 1..5、新着譜面のBAR_TITLE切替、各曲のライバルEXに応じたランプとBAR_RIVAL勝敗表示に対応します。BAR_RANKとフォルダの新着タイトル判定は未対応です。[仕様](skin.md#lr2のselect--result)、[回帰テスト](../crates/bmz-render/src/skin/tests/result/lr2.rs) |

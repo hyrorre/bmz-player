@@ -251,6 +251,7 @@ pub(super) fn build_result_skin_draw_state(
         result_gauge_graph_type: Some(snapshot.result_gauge_graph_type),
         result_panel: Some(snapshot.result_panel),
         result_favorite_chart: Some(snapshot.favorite_chart),
+        result_favorite_song: Some(snapshot.favorite_song),
         hispeed_auto_adjust: snapshot.hispeed_auto_adjust,
         gauge_max,
         gauge_border,

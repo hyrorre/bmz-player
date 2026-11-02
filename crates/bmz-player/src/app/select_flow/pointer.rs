@@ -233,8 +233,11 @@ impl WinitApp {
             Some(ResultSkinClickAction::ToggleIrScope) => {
                 self.toggle_result_ir_scope();
             }
+            Some(ResultSkinClickAction::ToggleFavoriteSong) => {
+                self.toggle_result_favorite(ResultFavoriteKind::Song);
+            }
             Some(ResultSkinClickAction::ToggleFavoriteChart) => {
-                self.toggle_favorite_chart_result();
+                self.toggle_result_favorite(ResultFavoriteKind::Chart);
             }
             Some(ResultSkinClickAction::SaveReplay(slot)) => {
                 if self.result.finished_course.is_some() {

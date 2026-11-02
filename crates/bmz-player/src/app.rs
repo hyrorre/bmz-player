@@ -251,6 +251,8 @@ mod presentation;
 mod profile_switch;
 #[path = "app/result_flow/ending.rs"]
 mod result_flow_ending;
+#[path = "app/result_flow/favorites.rs"]
+mod result_flow_favorites;
 #[path = "app/result_flow/interaction.rs"]
 mod result_flow_interaction;
 #[path = "app/result_flow/timing.rs"]
@@ -371,6 +373,7 @@ use play_control::{
     keyboard_lane_action,
 };
 use play_support::*;
+use result_flow_favorites::*;
 use result_runtime::{
     course_result_skin_snapshot, course_result_summary_for_skin, debug_boot_finished_play_session,
     mark_course_replay_slot_saved, result_main_bpm, result_max_bpm, result_min_bpm,

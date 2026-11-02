@@ -370,6 +370,7 @@ fn result_plan_uses_skin_document_for_result_and_course_result_types() {
             result_gauge_graph_type: bmz_core::clear::GaugeType::Normal as i32,
             result_panel: 0,
             favorite_chart: false,
+            favorite_song: false,
             judge_counts: DisplayJudgeCounts::default(),
             fast_slow_counts: FastSlowJudgeCounts::default(),
             score_save_enabled: false,
@@ -620,6 +621,7 @@ fn result_plan_supplies_result_judge_graph_data_to_skin_document() {
         result_gauge_graph_type: bmz_core::clear::GaugeType::Normal as i32,
         result_panel: 0,
         favorite_chart: false,
+        favorite_song: false,
         judge_counts: DisplayJudgeCounts::default(),
         fast_slow_counts: FastSlowJudgeCounts::default(),
         score_save_enabled: false,
@@ -723,17 +725,20 @@ fn result_skin_state_maps_arrange_option() {
 }
 
 #[test]
-fn result_skin_state_maps_favorite_chart_as_two_state_index() {
+fn result_skin_state_maps_favorites_as_two_state_indices() {
     let AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene() else {
         panic!("sample result scene");
     };
 
     let not_favorite = build_result_skin_draw_state(&snapshot, 0);
     assert_eq!(not_favorite.result_favorite_chart, Some(false));
+    assert_eq!(not_favorite.result_favorite_song, Some(false));
 
     snapshot.favorite_chart = true;
+    snapshot.favorite_song = true;
     let favorite = build_result_skin_draw_state(&snapshot, 0);
     assert_eq!(favorite.result_favorite_chart, Some(true));
+    assert_eq!(favorite.result_favorite_song, Some(true));
 }
 
 #[test]

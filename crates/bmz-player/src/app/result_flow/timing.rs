@@ -11,6 +11,7 @@ impl WinitApp {
         self.result.finished_play = None;
         self.select.autoplay_folder = None;
         self.result.result_favorite_chart = false;
+        self.result.result_favorite_song = false;
         self.clear_active_course_state();
         self.result.result_exit = None;
         self.result.result_key5_held = false;

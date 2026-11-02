@@ -233,6 +233,8 @@ pub struct ResultSnapshot {
     pub result_panel: i32,
     /// 現在の譜面が favorite chart か。BMZ は invisible を持たないため2状態。
     pub favorite_chart: bool,
+    /// 現在曲の favorite song 状態 (image ref 89)。BMZ は2状態。
+    pub favorite_song: bool,
     pub judge_counts: DisplayJudgeCounts,
     pub fast_slow_counts: FastSlowJudgeCounts,
     /// 今回のリザルトがスコア保存対象か。

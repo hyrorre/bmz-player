@@ -412,6 +412,7 @@ impl WinitApp {
                 finished_course_ir_attempted: false,
                 finished_play: None,
                 result_favorite_chart: false,
+                result_favorite_song: false,
                 result_ir: None,
                 last_play_session_mode: SessionMode::Normal,
                 result_scene_started_at: now,

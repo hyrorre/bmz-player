@@ -107,7 +107,7 @@ impl WinitApp {
     }
 
     pub(super) fn ensure_result_skin_ready(&mut self, slot: ResultSkinSlot) {
-        self.refresh_result_favorite_chart();
+        self.refresh_result_favorites();
         self.spawn_result_skin_decode_for(slot);
         self.ensure_skin_ready(SkinKind::Result);
         self.renderer.reset_result_skin_runtime();
@@ -193,21 +193,44 @@ impl WinitApp {
         Some(Lr2ContinueFallback { play_skin, runtime_state })
     }
 
-    pub(super) fn refresh_result_favorite_chart(&mut self) {
-        let Some(sha256) =
-            self.result.finished_play.as_ref().map(|finished| finished.result.chart_sha256)
-        else {
+    pub(super) fn refresh_result_favorites(&mut self) {
+        self.result.result_favorite_song = false;
+        if self.result.finished_course.is_some() {
+            self.result.result_favorite_chart = false;
+            return;
+        }
+        let Some(finished) = self.result.finished_play.as_ref() else {
             self.result.result_favorite_chart = false;
             return;
         };
-        self.result.result_favorite_chart = match self.boot.collection_db.is_favorite_chart(sha256)
-        {
-            Ok(favorite) => favorite,
-            Err(error) => {
-                tracing::warn!(%error, "failed to load favorite chart state for result");
-                false
+        self.result.result_favorite_chart =
+            match self.boot.collection_db.is_favorite_chart(finished.result.chart_sha256) {
+                Ok(favorite) => favorite,
+                Err(error) => {
+                    tracing::warn!(%error, "failed to load favorite chart state for result");
+                    false
+                }
+            };
+        let song_favorite = (|| -> Result<bool> {
+            let hints = result_favorite_hints(
+                &self.boot.library_db,
+                finished,
+                self.play.last_started_chart_id,
+            )?;
+            if hints.folder.is_empty() {
+                return Ok(false);
             }
-        };
+            Ok(!favorite_song_representatives_for_folder(
+                &self.boot.library_db,
+                &self.boot.collection_db,
+                &hints.folder,
+            )?
+            .is_empty())
+        })();
+        match song_favorite {
+            Ok(favorite) => self.result.result_favorite_song = favorite,
+            Err(error) => tracing::warn!(%error, "failed to load favorite song state for result"),
+        }
     }
 
     pub(super) fn current_result_skin_slot(&self) -> ResultSkinSlot {

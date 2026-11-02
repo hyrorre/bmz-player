@@ -108,6 +108,9 @@ While you hold **1 / 2 / 3 / 4** on the number row, playback speed becomes 25% /
 | KEY6 | Change the gauge graph display |
 | 1 / 2 / 3 / 4 | Save the replay to slot 1 to 4 |
 | F11 | Open the played chart's IR page in your browser |
+| F8 / F9 | Add or remove the played song / chart from favorites |
+
+Use F8 for the song and F9 for the chart. These shortcuts share your song select key bindings and work even without skin buttons. You can also use them between course songs, but not on the final course result.
 
 Press KEY5 / KEY7 to advance the result exit, just like KEY1 / KEY3. Keep holding either key until the screen closes to retry; holding both keeps the same arrangement. Release both before the screen closes to return to song select.
 

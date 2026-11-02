@@ -206,33 +206,6 @@ impl WinitApp {
         }
     }
 
-    pub(super) fn toggle_favorite_chart_result(&mut self) {
-        let Some((sha256, title, artist)) = self.result.finished_play.as_ref().map(|finished| {
-            (
-                finished.result.chart_sha256,
-                finished.summary.title.clone(),
-                finished.summary.artist.clone(),
-            )
-        }) else {
-            return;
-        };
-        let hints = FavoriteHints::new(title.clone(), artist, "");
-        match self.boot.collection_db.toggle_favorite_chart(sha256, &hints, now_unix_seconds()) {
-            Ok(enabled) => {
-                self.result.result_favorite_chart = enabled;
-                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
-                let text = Localizer::new(self.boot.profile_config.ui.locale());
-                self.show_left_overlay_toast(text.text(if enabled {
-                    "toast-favorite-chart-added"
-                } else {
-                    "toast-favorite-chart-removed"
-                }));
-                tracing::info!(enabled, %title, "favorite chart toggled from result");
-            }
-            Err(error) => tracing::error!(%error, "failed to toggle favorite chart from result"),
-        }
-    }
-
     pub(super) fn handle_select_open_folder_action(&mut self) {
         let e1_held = self.input.select_e_action_holds.contains(&InputActionConfig::E1);
         let e2_held = self.input.select_e_action_holds.contains(&InputActionConfig::E2);
@@ -539,24 +512,14 @@ impl WinitApp {
         let Some(sha256) = row.score_sha256() else {
             return;
         };
-        let representatives = match row.chart.as_ref() {
-            Some(chart) => favorite_song_representatives_for_folder(
-                &self.boot.library_db,
-                &self.boot.collection_db,
-                &chart.folder_path,
-            )
-            .unwrap_or_else(|error| {
-                tracing::error!(%error, "failed to resolve favorite song folders");
-                Vec::new()
-            }),
-            None => Vec::new(),
-        };
         let hints = favorite_hints_for_row(&row);
-        let result = if representatives.is_empty() {
-            self.boot.collection_db.toggle_favorite_song(sha256, &hints, now_unix_seconds())
-        } else {
-            self.boot.collection_db.remove_favorite_songs(&representatives).map(|_| false)
-        };
+        let result = toggle_favorite_song_for_hints(
+            &self.boot.library_db,
+            &mut self.boot.collection_db,
+            sha256,
+            &hints,
+            now_unix_seconds(),
+        );
         match result {
             Ok(enabled) => {
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);

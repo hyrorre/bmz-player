@@ -201,6 +201,7 @@ impl WinitApp {
                     result_gauge_graph_type: self.result.result_gauge_graph_type,
                     result_panel: self.result.result_panel,
                     favorite_chart: self.result.result_favorite_chart,
+                    favorite_song: self.result.result_favorite_song,
                     judge_counts: DisplayJudgeCounts {
                         pgreat: summary.judge_counts.pgreat,
                         great: summary.judge_counts.great,

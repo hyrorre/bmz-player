@@ -12,6 +12,7 @@ pub(super) fn result_skin_click_action(event_id: i32) -> Option<ResultSkinClickA
         )),
         SKIN_EVENT_IR_SCOPE_TOGGLE => Some(ResultSkinClickAction::ToggleIrScope),
         SKIN_EVENT_DAILY_STATISTICS_RESET => Some(ResultSkinClickAction::ResetDailyStatistics),
+        89 => Some(ResultSkinClickAction::ToggleFavoriteSong),
         90 => Some(ResultSkinClickAction::ToggleFavoriteChart),
         19 => Some(ResultSkinClickAction::SaveReplay(0)),
         316..=318 => Some(ResultSkinClickAction::SaveReplay((event_id - 315) as u8)),

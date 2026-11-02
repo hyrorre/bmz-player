@@ -331,6 +331,8 @@ pub struct SkinDrawState {
     /// Result の favorite_chart (image ref 90)。None は Result 以外。
     /// BMZ は invisible を持たないため Some(false/true) の2状態だけを返す。
     pub result_favorite_chart: Option<bool>,
+    /// Result の favorite_song (image ref 89)。None は Result 以外。
+    pub result_favorite_song: Option<bool>,
     /// beatoraja IndexType autosave_replay1..4 (321..324) image row indices。
     pub select_replay_slot_rule_indices: [i64; 4],
     /// beatoraja ValueType folder_noplay..folder_max (320..330) 用のランプ別曲数。
@@ -697,6 +699,7 @@ impl Default for SkinDrawState {
             select_favorite_song: false,
             select_favorite_chart: false,
             result_favorite_chart: None,
+            result_favorite_song: None,
             select_replay_slot_rule_indices: [0; 4],
             select_folder_lamp_counts: [0; 11],
             select_row_kind: SelectRowKind::Song,

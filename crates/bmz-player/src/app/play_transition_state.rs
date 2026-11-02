@@ -50,6 +50,7 @@ pub(super) enum ResultSkinClickAction {
     SetPanel(i32),
     SelectIrScope(crate::screens::result_ir::ResultRankingTab),
     ToggleIrScope,
+    ToggleFavoriteSong,
     ToggleFavoriteChart,
     SaveReplay(u8),
     ResetDailyStatistics,

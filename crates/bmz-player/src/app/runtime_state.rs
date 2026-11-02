@@ -210,6 +210,8 @@ pub(super) struct ResultRuntimeState {
     /// Result skin の favorite_chart (image ref 90) に渡す現在譜面の状態。
     /// BMZ は beatoraja の invisible を持たないため false/true の2状態だけを使う。
     pub(super) result_favorite_chart: bool,
+    /// Result skin の favorite_song (image ref 89) に渡す現在曲の状態。
+    pub(super) result_favorite_song: bool,
     /// リザルト画面の IR 送信・ランキング表示状態。
     /// 通常プレイでは play ending 中に早期起動し、Result 画面まで保持する。
     pub(super) result_ir: Option<crate::screens::result_ir::ResultIrState>,

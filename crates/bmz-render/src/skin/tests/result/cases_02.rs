@@ -536,11 +536,20 @@ fn result_judge_pie_cache_keeps_animated_and_offset_segments_live() {
 
 #[test]
 fn skin_image_index_number_result_favorite_ref_has_only_two_states() {
-    let not_favorite =
-        SkinDrawState { result_favorite_chart: Some(false), ..SkinDrawState::default() };
+    let not_favorite = SkinDrawState {
+        result_favorite_chart: Some(false),
+        result_favorite_song: Some(false),
+        ..SkinDrawState::default()
+    };
+    assert_eq!(skin_image_index_number(89, &not_favorite), Some(0));
     assert_eq!(skin_image_index_number(90, &not_favorite), Some(0));
 
-    let favorite = SkinDrawState { result_favorite_chart: Some(true), ..SkinDrawState::default() };
+    let favorite = SkinDrawState {
+        result_favorite_chart: Some(true),
+        result_favorite_song: Some(true),
+        ..SkinDrawState::default()
+    };
+    assert_eq!(skin_image_index_number(89, &favorite), Some(1));
     assert_eq!(skin_image_index_number(90, &favorite), Some(1));
 }
 

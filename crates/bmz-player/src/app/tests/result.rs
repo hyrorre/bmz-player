@@ -1212,6 +1212,7 @@ fn result_gauge_graph_cycle_matches_beatoraja_order() {
 
 #[test]
 fn result_skin_event_90_toggles_favorite_without_invisible_state() {
+    assert_eq!(result_skin_click_action(89), Some(ResultSkinClickAction::ToggleFavoriteSong));
     assert_eq!(result_skin_click_action(90), Some(ResultSkinClickAction::ToggleFavoriteChart));
     assert_eq!(
         result_skin_click_action(SKIN_EVENT_DAILY_STATISTICS_RESET),

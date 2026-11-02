@@ -82,6 +82,9 @@ impl WinitApp {
         repeat: bool,
         synthesized_analog_axis: bool,
     ) -> bool {
+        if self.handle_result_favorite_control(control, pressed, repeat) {
+            return true;
+        }
         if self.handle_result_open_ir_control(
             control,
             pressed,

@@ -180,6 +180,25 @@ pub(in crate::app) fn favorite_hints_for_row(
     }
 }
 
+pub(in crate::app) fn toggle_favorite_song_for_hints(
+    library_db: &LibraryDatabase,
+    collection_db: &mut crate::storage::collection_db::CollectionDatabase,
+    sha256: [u8; 32],
+    hints: &FavoriteHints,
+    now: i64,
+) -> Result<bool> {
+    let representatives = if hints.folder.is_empty() {
+        Vec::new()
+    } else {
+        favorite_song_representatives_for_folder(library_db, collection_db, &hints.folder)?
+    };
+    if representatives.is_empty() {
+        collection_db.toggle_favorite_song(sha256, hints, now)
+    } else {
+        collection_db.remove_favorite_songs(&representatives).map(|_| false)
+    }
+}
+
 pub(in crate::app) fn restored_select_index(
     items: &[SelectItem],
     previous_selected_key: Option<&SelectItemKey>,

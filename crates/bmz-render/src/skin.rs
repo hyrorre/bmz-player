@@ -347,6 +347,9 @@ fn skin_image_index_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         90 if state.select_screen && select_chart_metadata_available(state) => {
             Some(i64::from(state.select_favorite_chart))
         }
+        89 if state.result_favorite_song.is_some() => {
+            Some(i64::from(state.result_favorite_song.unwrap_or(false)))
+        }
         90 if state.result_favorite_chart.is_some() => {
             Some(i64::from(state.result_favorite_chart.unwrap_or(false)))
         }

@@ -133,12 +133,14 @@ fn result_click_hit_uses_runtime_panel_visibility() {
                 "image": [
                     { "id": "graph", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "act": -10002 },
                     { "id": "ir", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "act": -10001 },
-                    { "id": "favorite", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "divy": 3, "ref": 90, "act": 90 }
+                    { "id": "favorite", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "divy": 3, "ref": 90, "act": 90 },
+                    { "id": "favorite_song", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "divy": 3, "ref": 89, "act": 89 }
                 ],
                 "destination": [
                     { "id": "graph", "draw": "result_panel(1)", "dst": [{ "x": 10, "y": 20, "w": 30, "h": 10 }] },
                     { "id": "ir", "draw": "result_panel(2)", "dst": [{ "x": 50, "y": 20, "w": 30, "h": 10 }] },
-                    { "id": "favorite", "dst": [{ "x": 10, "y": 40, "w": 30, "h": 10 }] }
+                    { "id": "favorite", "dst": [{ "x": 10, "y": 40, "w": 30, "h": 10 }] },
+                    { "id": "favorite_song", "dst": [{ "x": 50, "y": 40, "w": 30, "h": 10 }] }
                 ]
             }
             "#,
@@ -167,6 +169,8 @@ fn result_click_hit_uses_runtime_panel_visibility() {
 
     let favorite_hit = document.result_click_hit(&graph_panel, 0.2, 0.55).unwrap();
     assert_eq!(favorite_hit.target, SkinClickTarget::Event { event_id: 90, click: 0 });
+    let song_hit = document.result_click_hit(&graph_panel, 0.65, 0.55).unwrap();
+    assert_eq!(song_hit.target, SkinClickTarget::Event { event_id: 89, click: 0 });
 }
 
 #[test]
