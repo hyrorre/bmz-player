@@ -427,6 +427,12 @@ pub struct SkinImageDef {
     pub lr2_button: bool,
     #[serde(default, rename = "lr2Panel")]
     pub lr2_panel: Option<i32>,
+    /// LR2 SRC: DxLib's `DerivationGraph` (used by LR2) shortens a
+    /// rectangle that leaves the image to the image, and drawing stretches
+    /// the rest. beatoraja keeps the requested rectangle and samples the
+    /// edge pixels beyond the image instead.
+    #[serde(default, rename = "lr2Clip")]
+    pub lr2_clip: bool,
     #[serde(default, deserialize_with = "deserialize_skin_id")]
     pub id: String,
     #[serde(default, deserialize_with = "deserialize_skin_id")]

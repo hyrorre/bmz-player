@@ -136,6 +136,8 @@ fn lr2_omitted_resolution_uses_sd_for_included_destinations() {
         let document = loaded.value;
         assert_eq!(document["w"], 640, "resolution: {resolution:?}");
         assert_eq!(document["h"], 480, "resolution: {resolution:?}");
+        // LR2 SRC keeps DxLib's clipping to the image (`SkinImageDef::lr2_clip`).
+        assert_eq!(document["image"][0]["lr2Clip"], true);
         let background = &document["destination"][0]["dst"][0];
         assert_eq!(background["x"], 0);
         assert_eq!(background["y"], 0);

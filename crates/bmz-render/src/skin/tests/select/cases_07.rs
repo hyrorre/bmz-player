@@ -177,6 +177,7 @@ fn skin_gauge_sprite_selects_exhard_nodes_and_tip_frame() {
         .map(|index| SkinImageDef {
             lr2_button: false,
             lr2_panel: None,
+            lr2_clip: false,
             id: format!("node-{index}"),
             src: "1".to_string(),
             x: index,

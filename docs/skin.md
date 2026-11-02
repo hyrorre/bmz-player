@@ -13,6 +13,13 @@ JSON / Lua / LR2 skinの対応範囲と残課題は[skin-compatibility.md](skin-
 線形補間では、隣の素材が混ざらないよう切り出し範囲の内側に半画素の余白を設けます。
 通常画像・回転画像に共通です。
 
+JSON / Luaの`image`の切り出し範囲が元画像からはみ出す場合は、beatorajaの`TextureRegion`と同じく
+範囲を詰めず、はみ出した部分には元画像の端の画素を引き延ばします（libGDXの既定のClampToEdge）。
+ModernChicのオプション画面は、3000 pxの画像に対して240 pxの窓を下端から204 pxはみ出して切り出します。
+LR2の`SRC`は、LR2が使うDxLibの`DerivationGraph`と同じく、はみ出した分を元画像の内側に詰め、
+残った範囲をDSTの大きさへ引き伸ばします（従来どおり）。`w` / `h`が負の場合は、どちらも始点から
+元画像の端までです。
+
 ## Destinationのクリッピング
 
 JSON / Luaのdestinationの各`dst`に`clip_x` / `clip_y` / `clip_w` / `clip_h`を指定すると、

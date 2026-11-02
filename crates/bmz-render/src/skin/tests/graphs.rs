@@ -351,6 +351,7 @@ fn skin_gauge_flickering_draws_normal_tip_overlay() {
         .map(|index| SkinImageDef {
             lr2_button: false,
             lr2_panel: None,
+            lr2_clip: false,
             id: format!("node-{index}"),
             src: "1".to_string(),
             x: index,
@@ -512,6 +513,7 @@ fn skin_gauge_omitted_type_has_no_flickering_overlay() {
         .map(|index| SkinImageDef {
             lr2_button: false,
             lr2_panel: None,
+            lr2_clip: false,
             id: format!("node-{index}"),
             src: "1".to_string(),
             x: index,

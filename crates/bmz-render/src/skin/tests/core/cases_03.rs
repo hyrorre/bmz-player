@@ -229,6 +229,7 @@ fn skin_image_act_uses_event_index_for_button_frame_row() {
     let image = SkinImageDef {
         lr2_button: false,
         lr2_panel: None,
+        lr2_clip: false,
         id: "auto-judge".to_string(),
         src: "1".to_string(),
         x: 0,

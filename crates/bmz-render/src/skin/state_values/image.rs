@@ -98,7 +98,11 @@ fn skin_image_texture_region_with_elapsed(
 ) -> TextureRegion {
     let source_width = source_size.width.max(1.0);
     let source_height = source_size.height.max(1.0);
-    let (px, py, pw, ph) = resolve_skin_image_pixel_rect(pixel_rect, source_width, source_height);
+    let (px, py, pw, ph) = if image.lr2_clip {
+        resolve_skin_image_pixel_rect(pixel_rect, source_width, source_height)
+    } else {
+        resolve_beatoraja_image_pixel_rect(pixel_rect, source_width, source_height)
+    };
     let divx = image.divx.max(1);
     let divy = image.divy.max(1);
     let frame_count = divx * divy;
@@ -253,6 +257,25 @@ pub(super) fn resolve_skin_image_pixel_rect(
     let resolved_w = rect_end_x.saturating_sub(resolved_x);
     let resolved_h = rect_end_y.saturating_sub(resolved_y);
     (resolved_x, resolved_y, resolved_w, resolved_h)
+}
+
+/// beatoraja's `TextureRegion` keeps the requested rectangle even past the
+/// image; the part outside samples the image's edge pixels (libGDX's default
+/// ClampToEdge, as the renderer's sampler). ModernChic's option panel slides a
+/// 240 px window down to 204 px below its 3000 px sheet, leaving a
+/// transparent edge; clipping and stretching it instead lit six list rows.
+/// A negative size keeps the remaining extent, as [`resolve_skin_image_pixel_rect`].
+pub(super) fn resolve_beatoraja_image_pixel_rect(
+    pixel_rect: (i32, i32, i32, i32),
+    source_width: f32,
+    source_height: f32,
+) -> (i32, i32, i32, i32) {
+    let (px, py, pw, ph) = pixel_rect;
+    let source_width = source_width.round().max(0.0) as i32;
+    let source_height = source_height.round().max(0.0) as i32;
+    let width = if pw < 0 { source_width.saturating_sub(px).max(0) } else { pw };
+    let height = if ph < 0 { source_height.saturating_sub(py).max(0) } else { ph };
+    (px, py, width, height)
 }
 
 pub(super) fn gauge_after_dot(gauge: f32) -> u32 {

@@ -592,6 +592,15 @@ impl<'a> CsvBuilder<'a> {
                 })
             })
             .collect::<Vec<_>>();
+        // LR2 SRC rectangles keep DxLib's clipping to the image.
+        let images = self
+            .images
+            .into_iter()
+            .map(|mut image| {
+                image["lr2Clip"] = json!(true);
+                image
+            })
+            .collect::<Vec<_>>();
         json!({
             "type": self.header.skin_type,
             "lr2": true,
@@ -618,7 +627,7 @@ impl<'a> CsvBuilder<'a> {
             "source": self.sources,
             "font": self.fonts,
             "lr2SystemFonts": self.system_fonts,
-            "image": self.images,
+            "image": images,
             "imageset": self.imagesets,
             "value": self.values,
             "text": self.texts,

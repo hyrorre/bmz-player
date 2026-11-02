@@ -1202,6 +1202,7 @@ fn image_negative_crop_size_uses_remaining_source_extent() {
     let image = SkinImageDef {
         lr2_button: false,
         lr2_panel: None,
+        lr2_clip: false,
         id: "frame".to_string(),
         src: "src".to_string(),
         x: 10,
@@ -1225,6 +1226,27 @@ fn image_negative_crop_size_uses_remaining_source_extent() {
     assert!(approx_eq(uv.y, 20.0 / 220.0));
     assert!(approx_eq(uv.width, 100.0 / 110.0));
     assert!(approx_eq(uv.height, 200.0 / 220.0));
+}
+
+/// ModernChic's option panel slides a 240 px window from y=2964 on a 3000 px
+/// sheet. beatoraja keeps the window and samples the edge beyond the sheet;
+/// clipping it to 36 px and stretching lit six list rows instead of one.
+#[test]
+fn image_past_the_source_keeps_its_rectangle_except_lr2_clipping() {
+    let image: SkinImageDef = serde_json::from_str(
+        r#"{ "id": "selector", "src": "op", "x": 0, "y": 2964, "w": 143, "h": 240 }"#,
+    )
+    .unwrap();
+    let size = SkinImageSize { width: 2000.0, height: 3000.0 };
+    let uv = skin_image_texture_region(&image, size, 0);
+    assert!(approx_eq(uv.y, 2964.0 / 3000.0));
+    assert!(approx_eq(uv.height, 240.0 / 3000.0));
+
+    // LR2's DxLib `DerivationGraph` shortens the rectangle to the image.
+    let lr2 = SkinImageDef { lr2_clip: true, ..image };
+    let uv = skin_image_texture_region(&lr2, size, 0);
+    assert!(approx_eq(uv.y, 2964.0 / 3000.0));
+    assert!(approx_eq(uv.height, 36.0 / 3000.0));
 }
 
 #[test]
