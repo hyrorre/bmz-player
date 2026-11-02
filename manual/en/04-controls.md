@@ -85,6 +85,10 @@ The display and controls may differ depending on the skin. See [Play options](05
 | Esc | Quit the song |
 | Hold E1 and E2 | Quit the song |
 
+In 9K, hold **E1 + KEY8 / KEY9** to adjust the lane cover as with ↑ / ↓.
+Hold **E2 + KEY8 / KEY9** for adjustments of 1. Keep holding to move continuously.
+Use KEY1–KEY7 for hi-speed and green number adjustments.
+
 If you fail partway through (the gauge reaches 0), press **E1** during the failure animation to retry right away with a new arrangement, or **E2** to retry with the same arrangement.
 
 See [Play options](05-play-options.md) for hi-speed and the green number, and [Timing and latency](06-timing.md) for visual timing.

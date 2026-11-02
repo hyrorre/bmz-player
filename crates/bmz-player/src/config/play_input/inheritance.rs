@@ -197,7 +197,7 @@ pub fn resolve_play_bindings(
 /// プレイ中の E1/E2 + 鍵盤操作に使う論理レーンの方向を返す。
 ///
 /// 8K だけは profile のレーン別 override を優先し、それ以外はモード既定を使う。
-/// Scratch はレーンカバー専用なのでここでは方向を返さない。
+/// Scratchと9KのKEY8/9はレーンカバー操作なのでここでは方向を返さない。
 pub fn hispeed_direction_for_lane(
     input: &ProfileInputConfig,
     key_mode: KeyMode,
@@ -281,8 +281,8 @@ pub const fn default_hispeed_direction_for_lane(
             _ => None,
         },
         KeyMode::K9 => match lane {
-            Lane::Key1 | Lane::Key3 | Lane::Key5 | Lane::Key7 | Lane::Key9 => Some(Down),
-            Lane::Key2 | Lane::Key4 | Lane::Key6 | Lane::Key8 => Some(Up),
+            Lane::Key1 | Lane::Key3 | Lane::Key5 | Lane::Key7 => Some(Down),
+            Lane::Key2 | Lane::Key4 | Lane::Key6 => Some(Up),
             _ => None,
         },
         KeyMode::K10 => match lane {

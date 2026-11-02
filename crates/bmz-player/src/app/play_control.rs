@@ -1,5 +1,5 @@
 use crate::config::profile_config::{InputActionConfig, ProfileInputConfig};
-use bmz_gameplay::input::backend::PhysicalControl;
+use bmz_gameplay::input::backend::{DeviceId, PhysicalControl};
 
 use super::LANE_COVER_STEP;
 use super::input_runtime::ControlInputEvent;
@@ -64,6 +64,8 @@ pub(super) enum PlayOptionControl {
     ToggleHispeedMode,
     Hispeed(HispeedChange),
     LaneCover(LaneCoverChange),
+    /// カーソルキー相当の押下量。1/1000単位の符号付き変化量。
+    LaneCoverKey(i32),
     GreenNumber(GreenNumberChange),
 }
 
@@ -90,26 +92,38 @@ pub(super) const LANE_COVER_HOLD_TICK_US: u64 = 1_000_000 / 60;
 /// フレームが止まった後に一度に加える連続変化の上限 (1秒分)。
 const LANE_COVER_HOLD_MAX_TICKS_PER_UPDATE: u32 = 60;
 
-/// ↑↓ (PlayLaneCoverUp/Down) の長押し状態。OSのキーリピートには依存しない。
+/// ↑↓と9KのE1/E2 + KEY8/9の長押し状態。OSのキーリピートには依存しない。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct LaneCoverKeyHold {
-    pub(super) control: String,
+    pub(super) control: (DeviceId, PhysicalControl),
     /// `PlayLaneCoverUp` は +1、`PlayLaneCoverDown` は -1。
     pub(super) direction: i32,
     /// E2 hold中の微調整。押した時点で決める。
     pub(super) fine: bool,
+    pub(super) requires_modifier: bool,
     pub(super) started_at: std::time::Instant,
     pub(super) applied_ticks: u32,
 }
 
 impl LaneCoverKeyHold {
     pub(super) fn new(
-        control: String,
+        control: (DeviceId, PhysicalControl),
         direction: i32,
         fine: bool,
+        requires_modifier: bool,
         started_at: std::time::Instant,
     ) -> Self {
-        Self { control, direction, fine, started_at, applied_ticks: 0 }
+        Self { control, direction, fine, requires_modifier, started_at, applied_ticks: 0 }
+    }
+
+    pub(super) fn is_held(
+        &self,
+        pressed_inputs: &std::collections::HashSet<(DeviceId, PhysicalControl)>,
+        e1_held: bool,
+        e2_held: bool,
+    ) -> bool {
+        pressed_inputs.contains(&self.control)
+            && (!self.requires_modifier || (e1_held != e2_held && self.fine == e2_held))
     }
 
     /// `now` までに加えるべき連続変化のうち未適用の分を返し、適用済みにする。
@@ -333,6 +347,9 @@ pub(super) fn lane_action_from_option(
     match action {
         PlayOptionControl::ToggleHispeedMode => Some(PlayLaneAction::ToggleHispeedMode),
         PlayOptionControl::Hispeed(change) => Some(PlayLaneAction::Hispeed(change)),
+        PlayOptionControl::LaneCoverKey(units) => {
+            Some(PlayLaneAction::LaneCoverDelta(lane_cover_units_to_delta(units)))
+        }
         PlayOptionControl::LaneCover(_) if is_axis => None,
         PlayOptionControl::LaneCover(LaneCoverChange::Up) => {
             Some(PlayLaneAction::LaneCoverDelta(LANE_COVER_STEP))

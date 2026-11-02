@@ -440,6 +440,8 @@ E1とE4を同時に押している場合は、両方を離すまでE1 holdを保
 | Left / Right | Normalは20段階を下げる / 上げる。Classic / Floatingは設定の刻みで倍率を下げる / 上げる |
 | Up / Down | SUDDEN+の表示中はSUDDEN+、非表示中は有効なLIFT / HIDDEN+を調整。変化量は[レーンカバーとHS](#レーンカバーとhs)を参照 |
 | E2 hold + Up / Down | Up / Downと同じ対象を1ずつ微調整 |
+| 9KでE1 hold + KEY8 / KEY9 | Up / Downと同じ操作。設定の変化量と長押しの連続移動を使う |
+| 9KでE2 hold + KEY8 / KEY9 | E2 hold + Up / Downと同じ操作。押した瞬間も長押し中も1ずつ微調整 |
 | マウスホイール | Up / Downと同じ対象を調整。上へ回すとカバーが上がる |
 | E2 hold + マウスホイール | マウスホイールと同じ対象を、1目盛りで1ずつ微調整 |
 | E1 hold + 鍵盤 | キーモードごとのHSの方向に従い、Normalは段階、Classic / Floatingは倍率を変更 |
@@ -493,6 +495,9 @@ SUDDEN+、LIFT、HIDDEN+の有効 / 無効は、「BMZ メニュー → プロ�
 - HIDDEN+を変更対象にした場合だけ、増減の方向がSUDDEN+ / LIFTと逆になります。カーソルキーとE1 hold + ScratchのどちらでもUpでHIDDEN+の量が増え、Downで減ります。
 
 カバー量は1000でレーン全体です。カーソルキーでの変化量は次のとおりです。
+9KのE1 / E2 hold + KEY8 / KEY9も、同じ変化量・待機時間・連続移動を使います。
+KEY8はUp、KEY9はDownに対応します。鍵盤か補助ボタンを離すと連続移動を止めます。
+E1とE2を両方押している間は、この9Kの操作を受け付けません。
 
 - Up / Downを押した瞬間に、入力設定の`LANE COVER STEP`（既定10）だけ動きます。
 - `LANE COVER HOLD DELAY`（既定300ms）以上押し続けると、1/60秒ごとに`LANE COVER HOLD STEP`（既定3）ずつ動きます。OSのキーリピートは使いません。
@@ -539,11 +544,12 @@ Downはハイスピードまたは緑数字を下げ、Upは上げます。10K /
 | 6K | KEY1 / KEY3 / KEY4 / KEY6 | KEY2 / KEY5 |
 | 7K | KEY1 / KEY3 / KEY5 / KEY7 | KEY2 / KEY4 / KEY6 |
 | 8K（既定） | KEY2 / KEY4 / KEY5 / KEY7 | KEY1 / KEY3 / KEY6 / KEY8 |
-| 9K | KEY1 / KEY3 / KEY5 / KEY7 / KEY9 | KEY2 / KEY4 / KEY6 / KEY8 |
+| 9K | KEY1 / KEY3 / KEY5 / KEY7 | KEY2 / KEY4 / KEY6 |
 | 10K（1P / 2P） | KEY1 / KEY3 / KEY5 | KEY2 / KEY4 |
 | 14K（1P / 2P） | KEY1 / KEY3 / KEY5 / KEY7 | KEY2 / KEY4 / KEY6 |
 
 - 8Kの各鍵盤の方向は、「選曲画面の 設定 → 入力 → キーコンフィグ → 8K」で個別にDown / Upへ変更できます。
+- 9KのKEY8 / KEY9は、E1 / E2 hold中にカバーを操作します。変更対象とカバーがすべて無効な場合の動作も、Up / Downと同じです。
 - 譜面のレーンとしてスクラッチを持たない4K / 6K / 8K / 9Kでも、7Kのスクラッチの割り当てを使って、E1 / E2 hold中のレーンカバー・緑数字の操作ができます。このスクラッチ入力はHSの操作専用で、譜面の判定には使いません。
 - コースのNoSpeed制約中は、HS 1.0、SUDDEN / LIFT / HIDDEN 0で開始し、HS MODE・ハイスピード・緑数字・レーンカバーの操作をすべて無効にします。制約中の一時的なレーンの状態は、プロファイルへ保存しません。
 

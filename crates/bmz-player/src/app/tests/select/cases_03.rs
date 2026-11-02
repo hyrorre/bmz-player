@@ -300,11 +300,11 @@ fn play_option_control_uses_chart_mode_instead_of_select_input_mode() {
 
     assert_eq!(
         keyboard_play_option("B", true, false, &keys, &play_input, &input),
-        Some(PlayOptionControl::Hispeed(HispeedChange::Down))
+        Some(PlayOptionControl::LaneCoverKey(-10))
     );
     assert_eq!(
         keyboard_play_option("G", true, false, &keys, &play_input, &input),
-        Some(PlayOptionControl::Hispeed(HispeedChange::Up))
+        Some(PlayOptionControl::LaneCoverKey(10))
     );
 }
 

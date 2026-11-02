@@ -840,23 +840,44 @@ impl WinitApp {
         self.play.play_e2_held
     }
 
-    /// ↑↓の押下で長押し状態を開始し、同じキーの解放で終える。
+    /// ↑↓と9KのE1/E2 + KEY8/9で長押し状態を開始し、同じ入力の解放で終える。
     pub(super) fn update_lane_cover_key_hold(
         &mut self,
         event: &ControlInputEvent,
         applied_press: bool,
     ) {
-        let Some((control, direction)) =
-            keyboard_lane_cover_direction(event, &self.boot.profile_config.input)
-        else {
+        if event.repeat {
+            return;
+        }
+        let Some(physical) = event.physical.as_ref() else {
             return;
         };
+        let control = (event.device, physical.clone());
         if event.pressed {
-            self.play.lane_cover_key_hold = applied_press.then(|| {
+            let option = play_option_control_for_input(
+                event.device,
+                physical,
+                self.play.play_e1_held,
+                self.play.play_e2_held,
+                self.play.play_option_input.as_ref(),
+                &self.boot.profile_config.input,
+            );
+            let (direction, requires_modifier) =
+                if let Some(PlayOptionControl::LaneCoverKey(units)) = option {
+                    (units.signum(), true)
+                } else if let Some((_, direction)) =
+                    keyboard_lane_cover_direction(event, &self.boot.profile_config.input)
+                {
+                    (direction, false)
+                } else {
+                    return;
+                };
+            self.play.lane_cover_key_hold = (applied_press || requires_modifier).then(|| {
                 LaneCoverKeyHold::new(
                     control,
                     direction,
                     self.lane_cover_fine_adjust_held(),
+                    requires_modifier,
                     Instant::now(),
                 )
             });
@@ -932,6 +953,14 @@ impl WinitApp {
                 play_control_hold_state_from_pressed_inputs(&self.input.pressed_play_inputs, input)
             })
             .unwrap_or((false, false, false));
+        if self
+            .play
+            .lane_cover_key_hold
+            .as_ref()
+            .is_some_and(|hold| !hold.is_held(&self.input.pressed_play_inputs, e1_held, e2_held))
+        {
+            self.play.lane_cover_key_hold = None;
+        }
         let was_ready_blocked =
             play_ready_blocked_by_control_holds(self.play.play_e1_held, self.play.play_e2_held);
         if self.play.play_e1_held == e1_held

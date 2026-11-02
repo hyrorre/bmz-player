@@ -512,12 +512,12 @@ impl WinitApp {
         let play_option_control = play_option_control.flatten();
         let play_option_lane_action = play_option_control
             .and_then(|action| lane_action_from_option(action, synthesized_analog_axis));
+        if has_play_control_context {
+            self.update_lane_cover_key_hold(control_event, false);
+        }
         if pressed {
-            let lane_cover_changing = self
-                .play
-                .active_play
-                .as_ref()
-                .is_some_and(|play| play.running.session.lane_cover_changing);
+            let lane_cover_changing =
+                self.play.active_play.is_some() && self.play_lane_value_changing();
             if lane_cover_changing && play_option_control.is_some() {
                 let Some(action) = play_option_lane_action else {
                     return;

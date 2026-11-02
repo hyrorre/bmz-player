@@ -12,3 +12,5 @@ mod cases_04;
 mod cases_05;
 #[path = "play/cases_06.rs"]
 mod cases_06;
+#[path = "play/nine_key_lane_cover.rs"]
+mod nine_key_lane_cover;

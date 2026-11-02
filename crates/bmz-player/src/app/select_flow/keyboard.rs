@@ -193,12 +193,9 @@ impl WinitApp {
         fixed_play_lane_action: Option<PlayLaneAction>,
     ) {
         let play_control = control_event.name.as_deref();
-        let lane_cover_changing = self
-            .play
-            .active_play
-            .as_ref()
-            .is_some_and(|play| play.running.session.lane_cover_changing);
-        if lane_cover_changing && let Some(action) = play_option_lane_action {
+        if self.play_lane_value_changing()
+            && let Some(action) = play_option_lane_action
+        {
             self.apply_play_lane_action(action);
             // E1+lane keys should still reach gameplay input so notes are judged
             // and key beams render while changing play options.

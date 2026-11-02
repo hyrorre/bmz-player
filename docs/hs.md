@@ -191,6 +191,10 @@ play skinの`event_index(55)`は`0=OFF`, `1=START`, `2=MAX`, `3=MAIN`,
 | `E2 hold + Scratch Up/Down` | Floatingが利用可能なら緑数字を変更 |
 | `E1 double press` | SUDDEN+が有効な場合だけ表示を切替 |
 
+9Kでは、E1 hold + KEY8 / KEY9はUp / Downと同じカバー操作です。
+E2 hold + KEY8 / KEY9はE2 hold + Up / Downと同じ1刻みの微調整です。
+長押しの連続移動も共通です。詳細は[レーンカバーとHS](controls.md#レーンカバーとhs)を参照してください。
+
 HIDDEN+を操作対象にした場合は、カーソルキーと`E1 hold + Scratch Up/Down`の
 どちらでもUpで量を増やし、Downで減らします。
 

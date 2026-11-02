@@ -547,8 +547,8 @@ mod tests {
             ),
             (
                 KeyMode::K9,
-                vec![Lane::Key1, Lane::Key3, Lane::Key5, Lane::Key7, Lane::Key9],
-                vec![Lane::Key2, Lane::Key4, Lane::Key6, Lane::Key8],
+                vec![Lane::Key1, Lane::Key3, Lane::Key5, Lane::Key7],
+                vec![Lane::Key2, Lane::Key4, Lane::Key6],
             ),
             (
                 KeyMode::K10,
@@ -589,7 +589,9 @@ mod tests {
                 );
             }
             for &lane in key_mode.active_lanes() {
-                if matches!(lane, Lane::Scratch | Lane::Scratch2) {
+                if matches!(lane, Lane::Scratch | Lane::Scratch2)
+                    || (key_mode == KeyMode::K9 && matches!(lane, Lane::Key8 | Lane::Key9))
+                {
                     assert_eq!(default_hispeed_direction_for_lane(key_mode, lane), None);
                 } else {
                     assert!(default_hispeed_direction_for_lane(key_mode, lane).is_some());

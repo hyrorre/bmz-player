@@ -668,7 +668,13 @@ fn lane_cover_key_hold_waits_for_delay_then_steps_every_frame_tick() {
     let start = Instant::now();
     let tick = Duration::from_micros(LANE_COVER_HOLD_TICK_US);
     let delay = Duration::from_millis(u64::from(input.lane_cover_hold_delay_ms));
-    let mut hold = LaneCoverKeyHold::new("ArrowUp".to_string(), 1, false, start);
+    let mut hold = LaneCoverKeyHold::new(
+        (W_KEYBOARD_DEVICE_ID, PhysicalControl::KeyboardKey("ArrowUp".to_string())),
+        1,
+        false,
+        false,
+        start,
+    );
 
     assert_eq!(hold.take_due_units(start + delay - Duration::from_millis(1), &input), 0);
     // 待機時間に達した時点で1回目の連続変化。
@@ -677,7 +683,13 @@ fn lane_cover_key_hold_waits_for_delay_then_steps_every_frame_tick() {
     // 3 tick 分進むと、まとめて加える。
     assert_eq!(hold.take_due_units(start + delay + tick * 3, &input), 9);
 
-    let mut down = LaneCoverKeyHold::new("ArrowDown".to_string(), -1, true, start);
+    let mut down = LaneCoverKeyHold::new(
+        (W_KEYBOARD_DEVICE_ID, PhysicalControl::KeyboardKey("ArrowDown".to_string())),
+        -1,
+        true,
+        false,
+        start,
+    );
     // E2 hold中は1ずつ。フレームが止まっても1秒分 (60 tick) までに抑える。
     assert_eq!(down.take_due_units(start + delay + Duration::from_secs(5), &input), -60);
 }

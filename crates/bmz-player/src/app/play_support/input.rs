@@ -34,6 +34,18 @@ pub(in crate::app) fn play_option_control_for_input(
     }
 
     let resolved = resolved?;
+    if play_input.key_mode == KeyMode::K9 {
+        let direction = match resolved.lane {
+            Lane::Key8 => Some(1),
+            Lane::Key9 => Some(-1),
+            _ => None,
+        };
+        if let Some(direction) = direction {
+            return Some(PlayOptionControl::LaneCoverKey(
+                direction * lane_cover_press_step_units(profile_input, e2_held),
+            ));
+        }
+    }
     if let Some(direction) = crate::config::play_input::hispeed_direction_for_lane(
         profile_input,
         play_input.key_mode,
