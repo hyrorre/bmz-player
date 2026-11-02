@@ -2874,6 +2874,7 @@ CHART REPLICATION設定（text 86）の値を表示します。
 英字と鍵盤番号はNETWORK / score dataと同じm_select_system.fntを使います。
 相手名とRIVAL OPTION / LANE ORDER / REPLICATIONのラベルは表示しません。
 配置オプションは既存オプション画像、鍵盤はresult/keys1p.pngを使用し、
+元の鍵盤番号が偶数（8を含む）なら黒鍵、奇数と皿は白鍵の枠にします。
 HARD等のゲージ名は表示しません。未取得はNO DATA、読み込み中はLOADING、
 S-RANDOM等の可変配置はNOT FIXEDと区別し、NO PLAYと同じ灰色にします。
 DPは1P/2Pの行を明示し、SP/DPの内容に合わせてパネルの高さを変えます。
@@ -2886,7 +2887,8 @@ DPの1P/2Pは配置オプションと鍵盤を上下に並べ、DP OPTIONとtext
 右側のRIVAL DATA / SCORE DATAと上部のライバル選択欄は維持します。
 通常パネルの配置オプション画像、既存の角丸枠・発光・透過・フォントと、
 result/png/random_pattern.pngの鍵盤を流用します。鍵盤はResultと同じ25×35px、27px間隔です。
-画像のない8/9/Sは同じ鍵盤枠と既存bitmap fontを組み合わせます。
+画像のない8/9/Sは、元の鍵盤番号が奇数なら明るい1番、偶数なら暗い2番の鍵盤の枠と無地の面に、
+同梱のNoto Sans CJK Mediumで数字と同じRGB(255,168,0)・1pxの黒縁の文字を重ねます。
 ゲージ名・相手名・重複する項目ラベルは追加せず、NO DATA / LOADING / NOT FIXEDは
 既存NO PLAYのRGB(127,128,128)で表示します。
 `default_battleinfo/parts.lua`の正常ロード時だけ元のパネルを条件付きで隠し、
@@ -2900,7 +2902,8 @@ SCORE DATA窓の見出し帯・枠・縁の陰影を等倍で組み直し、滑�
 見出しと値は窓に焼き込まれた文字と同じ源暎エムゴHeavy＋黒縁、列の区切りはPLAY DATAと同じ1px線です。
 配置オプション、鍵盤順、text 86の値を3列に並べ、10K/14Kでは1P/2Pの行とDP OPTIONを分けます。
 鍵盤は同梱StarseekerのResult鍵盤を31×29px・28px間隔で流用します。画像のない8/9/Sは
-同じ鍵盤の無地部分に、ECFNの数字画像と源暎エムゴを重ねます。
+同じ鍵盤の無地部分に、ECFNの数字画像と源暎エムゴを重ねます。数字画像はPLAY DATAと同じく
+縮めて補間し、鍵盤の数字と同じ黒い縁を1px付け、縁込みの上端・下端を鍵盤の数字に揃えます。
 相手名・項目ラベル・ゲージ名は表示せず、NO DATA / LOADING / NOT FIXEDは
 窓の数字の淡い0と同じ50%の不透明度で表示します。
 `ECFN/select/bmz_battle_info.lua`は他のBMZ拡張と独立して読み込み、欠落・失敗時とBMZ以外は

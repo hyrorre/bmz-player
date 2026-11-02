@@ -160,3 +160,54 @@ fn mz_battle_info_switches_all_three_bodies_and_keeps_player_options_separate() 
     snapshot.battle = None;
     assert_eq!(labels(&mut renderer, &snapshot), original);
 }
+
+#[test]
+fn mz_battle_info_colors_keys_by_the_parity_of_their_original_lane() {
+    let path = test_app_paths().resource_dir.join("skins/mz-select/music_select.luaskin");
+    assert!(path.exists(), "initialize mz-select to verify the actual assets");
+    let decoded = decode_beatoraja_skin(&path, SkinKind::Select).unwrap();
+    let keys = decoded.sources.iter().find(|source| source.source_id == "mz_battle_keys").unwrap();
+    let (texture, width) = (bmz_render::plan::TextureId(keys.texture.0), keys.size.width);
+    let mut renderer = Renderer::default();
+    install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
+        .unwrap();
+    // White and black key frames of result/keys1p.png, left to right.
+    let mut shades = |key_mode, pattern: Vec<u8>| {
+        let snapshot = SelectSnapshot {
+            time: TimeUs(3_000_000),
+            battle: Some(Arc::new(SelectBattleSnapshot {
+                key_mode,
+                arrange: Some("RANDOM".into()),
+                lane_shuffle_pattern: pattern,
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        renderer.prepare_scene(AppSceneSnapshot::Select(snapshot));
+        let mut tiles: Vec<(f32, char)> = renderer
+            .last_plan()
+            .unwrap()
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Image { texture: drawn, rect, uv, .. } if *drawn == texture => {
+                    let source_x = (uv.x * width).round();
+                    Some((rect.x, if source_x == 243.0 { 'B' } else { 'W' }))
+                }
+                _ => None,
+            })
+            .collect();
+        tiles.sort_by(|a, b| a.0.total_cmp(&b.0));
+        tiles.into_iter().map(|tile| tile.1).collect::<String>()
+    };
+    // 9K: lane 8 is even like 2, 4 and 6; lane 9 is odd.
+    assert_eq!(
+        shades(KeyMode::K9, vec![0, 9, 5, 3, 7, 1, 8, 4, 2, 6, 10, 11, 12, 13, 14, 15]),
+        "WWWWWBBBB"
+    );
+    // A scratch moved onto a key stays white, as before.
+    let mut scratch: Vec<u8> = (0..16).collect();
+    scratch[1..8].copy_from_slice(&[2, 5, 3, 7, 1, 4, 6]);
+    scratch.swap(0, 3);
+    assert_eq!(shades(KeyMode::K7, scratch), "BWWWWBB");
+}

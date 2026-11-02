@@ -101,3 +101,15 @@ BMZ側は統合後の`7180f66`を参照する。Luxez-Flatの`main`はこの時�
 - `cargo test -p bmz-skin --locked`: 366件成功、1件ignore。
 - `cargo test -p bmz-player --locked`: 2,782件成功、48件ignore（LuxezのSelect、Result、コースResultの実素材テストを含む）。
 - Resultの左右キーによる表示切り替えの実機確認は未実施。
+
+## 9Kの鍵盤8/9（2026-11-02追記）
+
+9Kで画像のない8/9の鍵盤が両方暗く、数字も白い細字（font_sub）だった。
+代用の鍵盤は1番の鍵盤の枠の暗い線（x=3）を伸ばしていた。
+
+- 左5px・無地のx=5の1列・右6pxを、元の鍵盤番号が奇数なら1番、偶数なら2番の鍵盤から組む。
+- 8/9/Sは同梱のNoto Sans CJK Mediumを27pxで使い、数字と同じRGB(255,168,0)・1pxの黒縁にした。
+  Noto CJKは行の高さが大きく、20pxでは数字が約11pxにしかならない。27pxで塗りの上端・下端
+  （鍵盤の9〜22行目）が元の数字と一致する。縁は2pxから、ユーザー指定で1pxへ細くした。
+- 実素材テスト`luxe_battle_info_draws_lanes_8_and_9_like_the_numbered_tiles`を追加し、
+  Windows offscreen GPUで9Kを描画して確認。

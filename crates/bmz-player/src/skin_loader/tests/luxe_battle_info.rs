@@ -335,3 +335,70 @@ fn luxe_battle_info_frames_keep_the_native_edge_glow_continuous() {
         }
     }
 }
+
+#[test]
+fn luxe_battle_info_draws_lanes_8_and_9_like_the_numbered_tiles() {
+    let path = test_app_paths().resource_dir.join("skins/Luxez-Flat/music_select.luaskin");
+    assert!(path.exists(), "initialize Luxez-Flat to verify its actual assets");
+    let decoded = decode_beatoraja_skin_with_options_and_runtime_state(
+        &path,
+        SkinKind::Select,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &bmz_skin::LuaLoadRuntimeState::default(),
+    )
+    .unwrap();
+    let keys = TextureId(
+        decoded
+            .sources
+            .iter()
+            .find(|source| source.source_id == "luxe_battle_keys")
+            .unwrap()
+            .texture
+            .0,
+    );
+    let mut renderer = Renderer::default();
+    install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
+        .unwrap();
+    let snapshot = SelectSnapshot {
+        battle: Some(Arc::new(SelectBattleSnapshot {
+            key_mode: KeyMode::K9,
+            arrange: Some("RANDOM".into()),
+            lane_shuffle_pattern: vec![0, 9, 5, 3, 7, 1, 8, 4, 2, 6, 10, 11, 12, 13, 14, 15],
+            ..Default::default()
+        })),
+        ..select_snapshot()
+    };
+    labels(&mut renderer, &snapshot);
+    let commands = &renderer.last_plan().unwrap().commands;
+    // The stretched plain face of each blank tile: tile 1 (light) at x=5, tile 2 (dark) at x=30.
+    let mut faces: Vec<(f32, f32)> = commands
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Image { texture, rect, uv, .. }
+                if *texture == keys && (rect.width * 1920.0 - 14.0).abs() < 0.01 =>
+            {
+                Some((rect.x, (uv.x * 300.0).round()))
+            }
+            _ => None,
+        })
+        .collect();
+    faces.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // Lane 9 comes first and lane 8 sixth: odd is light, even is dark.
+    assert_eq!(faces.iter().map(|face| face.1).collect::<Vec<_>>(), [5.0, 30.0]);
+    for command in commands {
+        if let DrawCommand::Text { text, style, .. } = command
+            && (text == "8" || text == "9")
+        {
+            assert!(style.font_id.as_deref().is_some_and(|id| id.ends_with("luxe_battle_digits")));
+            assert_eq!(
+                (style.color.r, (style.color.g * 255.0).round(), style.color.b),
+                (1.0, 168.0, 0.0),
+                "{text}"
+            );
+            // A thin 1 px edge, like the tiles' digits.
+            let edge = style.outline.map(|outline| (outline.width * 1080.0).round());
+            assert_eq!(edge, Some(1.0), "{text}");
+        }
+    }
+}

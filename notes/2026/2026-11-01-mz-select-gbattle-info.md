@@ -81,3 +81,14 @@ GPU描画のNO DATA / LOADING / NOT FIXEDの文字面もRGB(116,116,116)で一�
 右の譜面情報パネルの背景には上端4pxの透明余白があるため、G-BATTLEパネル全体を
 4px下へ移動した。SP / DPとも、GPU描画の左右の白線が上原点619pxで始まることを確認。
 既存の実素材テストも成功。配置のみの変更で、新しいテストは追加していない。
+
+## 9Kの鍵盤8（2026-11-02追記）
+
+9Kで元の鍵盤8が白鍵の枠になっていた。黒鍵を元の鍵盤2/4/6に限っていたため、
+元の鍵盤番号が偶数なら黒鍵にした。5K/7K/DPで鍵盤に移った皿は従来どおり白鍵のまま。
+mz-selectのbitmap fontではSと5が同じ形に見えるが、今回は変えていない。
+
+- 実素材テスト`mz_battle_info_colors_keys_by_the_parity_of_their_original_lane`を追加
+  （9Kと7K RANDOM-EXの皿。修正前の判定では失敗する）。
+- Windows offscreen GPUで9Kを描画して確認。画像はGit管理外の
+  `.local/notes/2026-11-02-gbattle-9k/`に置く。
