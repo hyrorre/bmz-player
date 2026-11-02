@@ -902,7 +902,17 @@ pub(super) fn lane_starts_result_exit(lane: Lane) -> bool {
 }
 
 pub(super) fn lane_skips_result_exit(lane: Lane) -> bool {
-    matches!(lane, Lane::Key1 | Lane::Key3 | Lane::Key8 | Lane::Key10 | Lane::Key12 | Lane::Key14)
+    matches!(
+        lane,
+        Lane::Key1
+            | Lane::Key3
+            | Lane::Key5
+            | Lane::Key7
+            | Lane::Key8
+            | Lane::Key10
+            | Lane::Key12
+            | Lane::Key14
+    )
 }
 
 pub(super) fn retry_preload_kind(

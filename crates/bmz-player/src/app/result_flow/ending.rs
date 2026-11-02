@@ -274,6 +274,15 @@ impl WinitApp {
         }
         self.stop_result_exit_system_sounds();
         self.result.result_exit = None;
+        self.sync_result_lane_holds_from_pressed_controls();
+        // Enter / Escape / 自動退出でも、退出直前の Key5/7 hold を反映する。
+        let action = match action {
+            ResultExitAction::Leave if self.result.finished_course.is_some() => {
+                ResultExitAction::HeldCourseLanes
+            }
+            ResultExitAction::Leave => ResultExitAction::HeldLanes,
+            action => action,
+        };
         match action {
             ResultExitAction::Leave => self.leave_result(),
             ResultExitAction::Retry(mode) => self.retry_last_chart_with_mode(mode),

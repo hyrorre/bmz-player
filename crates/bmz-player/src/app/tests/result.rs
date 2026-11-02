@@ -1,6 +1,10 @@
 use super::*;
 
 #[cfg(target_os = "windows")]
+#[path = "result_held_retry.rs"]
+mod held_retry;
+
+#[cfg(target_os = "windows")]
 #[test]
 #[ignore = "creates an isolated Winit event loop and hidden window; run alone"]
 fn result_mouse_route_delivers_lua_buttons_and_preserves_left_only_controls() {
@@ -1153,16 +1157,23 @@ fn result_exit_without_skip_still_waits_for_skin_fadeout() {
 
 #[test]
 fn lane_skips_result_exit_matches_1p_and_2p_requested_keys() {
-    for lane in [Lane::Key1, Lane::Key3, Lane::Key8, Lane::Key10, Lane::Key12, Lane::Key14] {
+    for lane in [
+        Lane::Key1,
+        Lane::Key3,
+        Lane::Key5,
+        Lane::Key7,
+        Lane::Key8,
+        Lane::Key10,
+        Lane::Key12,
+        Lane::Key14,
+    ] {
         assert!(lane_skips_result_exit(lane), "{lane:?} should skip");
     }
     for lane in [
         Lane::Scratch,
         Lane::Key2,
         Lane::Key4,
-        Lane::Key5,
         Lane::Key6,
-        Lane::Key7,
         Lane::Key9,
         Lane::Key11,
         Lane::Key13,

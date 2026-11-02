@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-02 | [リザルト退出時のKEY5 / KEY7 hold判定](2026/2026-11-02-result-retry-hold.md) |
 | 2026-11-02 | [スキンの譜面情報供給とLuaフレーム処理（#57・#58・#59）](2026/2026-11-02-skin-runtime-properties.md) |
 | 2026-11-01 | [ModernChicの読み込みエラーと未対応要素](2026/2026-11-01-modernchic-compatibility.md) |
 | 2026-11-01 | [RIVALCHART MIRROR（相手の譜面を左右反転して借りる）](2026/2026-11-01-rival-chart-mirror.md) |

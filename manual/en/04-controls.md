@@ -105,6 +105,8 @@ While you hold **1 / 2 / 3 / 4** on the number row, playback speed becomes 25% /
 | 1 / 2 / 3 / 4 | Save the replay to slot 1 to 4 |
 | F11 | Open the played chart's IR page in your browser |
 
+Press KEY5 / KEY7 to advance the result exit, just like KEY1 / KEY3. Keep holding either key until the screen closes to retry; holding both keeps the same arrangement. Release both before the screen closes to return to song select.
+
 With supported skins, **E2** switches between the IR ranking and the graph.
 
 ## Courses

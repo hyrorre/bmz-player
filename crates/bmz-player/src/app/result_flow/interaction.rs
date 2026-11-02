@@ -26,6 +26,22 @@ impl WinitApp {
         }
     }
 
+    /// 退出直前の物理入力を参照する。複数の割り当て、focus loss、入力再同期でも
+    /// 最後に届いた単一イベントの状態をリトライ判定へ持ち越さない。
+    pub(super) fn sync_result_lane_holds_from_pressed_controls(&mut self) {
+        let mut key5_held = false;
+        let mut key7_held = false;
+        for (_, control) in &self.input.pressed_play_inputs {
+            match self.result_lane_for_control(control) {
+                Some(Lane::Key5) => key5_held = true,
+                Some(Lane::Key7) => key7_held = true,
+                _ => {}
+            }
+        }
+        self.result.result_key5_held = key5_held;
+        self.result.result_key7_held = key7_held;
+    }
+
     pub(super) fn handle_result_control(
         &mut self,
         control: &PhysicalControl,

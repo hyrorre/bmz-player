@@ -309,8 +309,16 @@ fn course_retirement_and_retry_preserve_results_and_cancel_pending_launches() {
     let retained = app.result.finished_course.clone().unwrap();
     std::fs::remove_file(&path).unwrap();
     std::fs::remove_file(&copy).unwrap();
-    for action in [ResultExitAction::RetryCourseSameArrange, ResultExitAction::HeldCourseLanes] {
-        app.result.result_key5_held = true;
+    for action in [
+        ResultExitAction::RetryCourseSameArrange,
+        ResultExitAction::HeldCourseLanes,
+        ResultExitAction::Leave,
+    ] {
+        app.input.track_control(&ControlInputEvent::keyboard_parts(
+            PhysicalKey::Code(KeyCode::KeyC),
+            ElementState::Pressed,
+            false,
+        ));
         app.result.result_exit = Some(ResultExit {
             started_at: Instant::now() - Duration::from_secs(60),
             action,
@@ -329,6 +337,11 @@ fn course_retirement_and_retry_preserve_results_and_cancel_pending_launches() {
         assert!(app.play.pending_decide.is_none());
         assert!(app.smoke.left_overlay_toast.is_some());
         assert!(!app.result.result_key5_held);
+        app.input.track_control(&ControlInputEvent::keyboard_parts(
+            PhysicalKey::Code(KeyCode::KeyC),
+            ElementState::Released,
+            false,
+        ));
     }
 
     std::fs::write(&path, "#TITLE Original\n#BPM 120\n#00011:01\n").unwrap();
