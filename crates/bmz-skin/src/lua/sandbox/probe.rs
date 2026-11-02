@@ -123,7 +123,92 @@ pub(super) enum MainStateProbeMode {
     },
 }
 
+/// The `main_state` values a load reads and the dependencies it recorded,
+/// which callback inference replaces with probe values.
+pub(super) struct MainStateProbeValues {
+    mode: MainStateProbeMode,
+    inferring: bool,
+    number_calls: Vec<i32>,
+    number_values: BTreeMap<i32, i32>,
+    option_calls: Vec<i32>,
+    option_values: BTreeMap<i32, bool>,
+    timer_calls: Vec<i32>,
+    timer_values: BTreeMap<i32, i32>,
+    event_index_calls: Vec<i32>,
+    event_index_values: BTreeMap<i32, i32>,
+    gauge_type_calls: usize,
+    gauge_type_value: i32,
+    float_number_calls: Vec<i32>,
+    float_number_values: BTreeMap<i32, f64>,
+    text_calls: Vec<i32>,
+    text_values: BTreeMap<i32, String>,
+    os_clock_calls: usize,
+    os_clock_value: Option<f64>,
+    time_value_us: i32,
+    dependencies: Option<SkinLoadDependencies>,
+}
+
 impl MainStateProbe {
+    /// `timer_util.timer_observe_boolean` infers its predicate while the
+    /// skin's `main` still runs. Inference clears the load-time values, so
+    /// the caller restores them; otherwise the rest of `main` reads probe
+    /// values (ModernChic's Result lost option 51 and its IR menu).
+    pub(super) fn save_values(&self) -> MainStateProbeValues {
+        MainStateProbeValues {
+            mode: self.mode.clone(),
+            inferring: self.inferring,
+            number_calls: self.number_calls.clone(),
+            number_values: self.number_values.clone(),
+            option_calls: self.option_calls.clone(),
+            option_values: self.option_values.clone(),
+            timer_calls: self.timer_calls.clone(),
+            timer_values: self.timer_values.clone(),
+            event_index_calls: self.event_index_calls.clone(),
+            event_index_values: self.event_index_values.clone(),
+            gauge_type_calls: self.gauge_type_calls,
+            gauge_type_value: self.gauge_type_value,
+            float_number_calls: self.float_number_calls.clone(),
+            float_number_values: self.float_number_values.clone(),
+            text_calls: self.text_calls.clone(),
+            text_values: self.text_values.clone(),
+            os_clock_calls: self.os_clock_calls,
+            os_clock_value: self.os_clock_value,
+            time_value_us: self.time_value_us,
+            // Probe reads are not load dependencies of the document.
+            dependencies: self
+                .load_dependencies
+                .as_ref()
+                .and_then(|dependencies| dependencies.lock().ok().map(|value| value.clone())),
+        }
+    }
+
+    pub(super) fn restore_values(&mut self, values: MainStateProbeValues) {
+        self.mode = values.mode;
+        self.inferring = values.inferring;
+        self.number_calls = values.number_calls;
+        self.number_values = values.number_values;
+        self.option_calls = values.option_calls;
+        self.option_values = values.option_values;
+        self.timer_calls = values.timer_calls;
+        self.timer_values = values.timer_values;
+        self.event_index_calls = values.event_index_calls;
+        self.event_index_values = values.event_index_values;
+        self.gauge_type_calls = values.gauge_type_calls;
+        self.gauge_type_value = values.gauge_type_value;
+        self.float_number_calls = values.float_number_calls;
+        self.float_number_values = values.float_number_values;
+        self.text_calls = values.text_calls;
+        self.text_values = values.text_values;
+        self.os_clock_calls = values.os_clock_calls;
+        self.os_clock_value = values.os_clock_value;
+        self.time_value_us = values.time_value_us;
+        if let (Some(saved), Some(dependencies)) = (values.dependencies, &self.load_dependencies)
+            && let Ok(mut dependencies) = dependencies.lock()
+        {
+            *dependencies = saved;
+        }
+    }
+
     /// Every use of this unsupported observe timer runs in the runtime VM, so
     /// its inactive dynamic timer and warning are not needed.
     pub(super) fn observed_timer_runs_only_at_runtime(&self, timer_id: i32) -> bool {

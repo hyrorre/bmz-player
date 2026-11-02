@@ -680,6 +680,46 @@ fn lua_skin_warns_when_timer_observe_callback_needs_runtime_lua() {
         }));
 }
 
+/// ModernChic's Result builds its menus with `timer_observe_boolean` before it
+/// checks `main_state.option(51)` (online) for the IR menu. Inferring the
+/// predicate must not leave probe values in the load state.
+#[test]
+fn observe_timer_inference_keeps_the_load_time_state_for_the_rest_of_main() {
+    let root = unique_test_dir("bmz-skin-lua");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("result.luaskin");
+    fs::write(
+        &path,
+        r#"
+        if skin_config == nil then return {type = 7} end
+        local s = require("main_state")
+        local timer_util = require("timer_util")
+        local open = false
+        local menu = timer_util.timer_observe_boolean(function() return open end)
+        local graph = timer_util.timer_observe_boolean(function() return s.option(2) and open end)
+        return {type = 7, name = tostring(s.option(51)) .. "," .. s.number(71) .. "," .. s.text(2),
+            destination = {
+                {id = "menu", timer = menu, dst = {{x = 0, y = 0, w = 1, h = 1}}},
+                {id = "graph", timer = graph, dst = {{x = 0, y = 0, w = 1, h = 1}}},
+            }}
+        "#,
+    )
+    .unwrap();
+    let state = LuaLoadRuntimeState {
+        option_values: BTreeMap::from([(2, true), (50, false), (51, true)]),
+        number_values: BTreeMap::from([(71, 1234)]),
+        text_values: BTreeMap::from([(2, "Player".to_string())]),
+        ..Default::default()
+    };
+    let loaded =
+        load_lua_skin_with_runtime_state(&path, &BTreeMap::new(), &BTreeMap::new(), &state)
+            .unwrap();
+    assert_eq!(loaded.document.name, "true,1234,Player");
+    // Probe reads during inference are not load dependencies.
+    assert_eq!(loaded.dependencies.option_values.get(&51), Some(&true));
+    assert_eq!(loaded.dependencies.number_values.get(&71), Some(&1234));
+}
+
 /// ModernChic's side menu opens panels from `act` and shows each part with
 /// `timer = timer_observe_boolean(function() return isLampMenuOpen end)`.
 #[test]

@@ -848,6 +848,12 @@ Play中のボム・KEYON・判定・PLAY等のtimerは譜面時刻、`main_state
 使う場合も実行時の時計と状態を参照します。`customEvents`の`condition` / `action`も同じです。
 destinationへ直接指定した任意timer functionはこの対応には含まれません。
 
+`timer_observe_boolean`はスキンの本体（`main`）の実行中に呼ばれ、その場で観測関数を推論します。
+推論はprobe用の値で`main_state`を差し替えるため、終わったら読み込み時の値と依存関係の記録を
+元に戻します。戻さないと、それ以降の本体が読む`main_state.option` / `number` / `text`が既定値になり、
+ModernChicのResultは`option(51)`（オンライン）がfalseになってIRメニューを組み立てませんでした
+（[回帰テスト](../crates/bmz-skin/src/tests/cases_03.rs)）。
+
 destinationの`timer`へ`timer_util.timer_observe_boolean`の結果を指定し、観測関数がLuaの変数
 （`act`で切り替えるメニューの開閉状態など）を読む場合は、式へ変換できません。この場合は
 runtime VMのdestination timer callbackとして観測関数を毎フレーム評価し、falseからtrueに

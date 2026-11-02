@@ -256,11 +256,19 @@ pub(super) fn create_timer_util_module(
             {
                 return create_observed_timer(lua, observed);
             }
+            let values = probe_for_observe
+                .lock()
+                .map_err(|_| mlua::Error::runtime("main_state probe lock poisoned"))?
+                .save_values();
             let specialized = infer_is_gauge_iidx_global_observe(lua, &observed);
             let observe = specialized
                 .clone()
                 .or_else(|| infer_runtime_boolean_field_observe(lua, &observed, &probe_for_observe))
                 .or_else(|| infer_boolean_predicate(lua, &observed, &probe_for_observe, None));
+            probe_for_observe
+                .lock()
+                .map_err(|_| mlua::Error::runtime("main_state probe lock poisoned"))?
+                .restore_values(values);
             let unsupported = observe.is_none();
             let load_time_constant = specialized.is_none()
                 && observe.as_deref().is_some_and(is_constant_boolean_condition);
