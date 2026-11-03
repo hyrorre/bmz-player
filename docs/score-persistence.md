@@ -157,15 +157,47 @@ BMZのscore identityはchart SHA-256、LN policy、DOUBLE bucket、RuleModeの�
 通常保存では全プレイを`score_history`に追加し、次の規則で`score_best`を更新します。
 
 - clear lampは数値スコアと独立して、より高い`ClearType`だけを採用します。
-- BPは最小値、CBは最小値、max comboは最大値を独立して保持します。
+- EX scoreは最高値、BPは最小値、CBは最小値、max comboは最大値を独立して保持します。
+  EX score更新時もBP / CB / comboを悪化させず、EX scoreが低いプレイからも
+  各項目の改善を採用します。等値なら既存値を維持します。
 - 判定内訳、ghost、replay path、device、`played_at`を代表する履歴は、
   `(EX score 高、BP 低、CB 低、max combo 高)`の辞書順で選びます。
 - play countは通常保存とclear-onlyの両方、clear countは`NoPlay` / `Failed`以外で増えます。
+
+代表履歴のタイブレークには`best_score_history_id`が指す実際の履歴のBP / CB / comboを
+使います。`score_best`の独立ベスト値は異なるプレイから集約されるため、比較には使いません。
+全条件が同じ場合は既存の代表履歴を維持し、判定内訳・ghostなども上書きしません。
+旧データで代表履歴が欠損している場合、同EXでの代表情報の置換は行わず、EXが上がった
+時点で新しい代表履歴を設定します。独立ベスト値とランプはその間も通常どおり更新します。
+clear-onlyだけの中立行はBP / CBの0を実績とみなさず、最初の通常保存で初期化します。
+この初期化はEX scoreが0の通常プレイにも適用します。
+
+通常プレイ、beatoraja / LR2 / LR2oraja系のインポート、IR履歴ダウンロードは同じ
+保存処理を通ります。履歴cleanup時の再集計も、独立したMIN / MAXと代表履歴の選択を
+分離します。選曲・リザルト・スキン向けBESTには、この独立ベスト値が渡されます。
 
 beatorajaはlamp、EX score、average judge、min BP、max comboをそれぞれ独立更新し、
 判定内訳とghostはstrictなEX score更新時に置き換えます。このため、同EX scoreで
 BP / CB / comboだけが改善した場合の代表判定内訳・ghost・option/seedはBMZと一致しません。
 またBMZはaverage judgeをbest項目として保存せず、代わりにCBを保持します。
+
+### 既存ユーザーの数値ベスト修復
+
+修正版の初回起動時、score DB migration v33が保存済み`score_history`から最小BP・
+最小CB・最大コンボを修復します。過去のEX更新や同点タイブレークで失われた独立ベストを、
+同じchart SHA-256 / LN policy / DOUBLE bucket / RuleMode内の
+`MIN(bp)` / `MIN(cb)` / `MAX(max_combo)`で再集計します。旧形式のRuleModeは
+既存の履歴再集計と同じBeatoraja互換bucketへ正規化します。
+
+修復はSQLiteトランザクション内で一度だけ実行し、起動ごとの全件再集計はしません。
+インポート済み履歴も対象に含み、外部IRの再ダウンロードやスコア再送信は発生しません。
+更新するのは`score_best.bp` / `cb` / `max_combo`だけです。EX score、ランプ、代表履歴ID、
+判定内訳、ghost、リプレイ、device、日時、回数、履歴とIRの送信識別情報は維持します。
+
+clear-onlyのみのキーや履歴が残っていないキーは変更しません。履歴から確認できない
+過去の記録は復元できません。これら3項目は既存スキーマで`NOT NULL`であり、
+履歴の0は有効な記録として扱います。nullableなgauge valueや旧best snapshotのNULLを
+数値ベストへ流用しません。
 
 ## 最終プレイ日時
 
