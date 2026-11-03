@@ -106,6 +106,7 @@ fn plan_rows(
             continue;
         }
         requests.push(ChartDownloadRequest {
+            keep_archive: config.http_keep_archive,
             request_id: 0,
             identity,
             action,
@@ -132,7 +133,7 @@ impl BulkDownloadBatch {
                 continue;
             }
             if let Some(result) = manager.task(*id).and_then(|task| task.result.as_ref())
-                && !directories.insert(&result.chart_dir)
+                && !directories.insert(&result.scan_path)
             {
                 shared += 1;
             }

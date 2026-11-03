@@ -93,13 +93,15 @@ pub fn resolve_song_scan_target(
         return Ok(enabled);
     };
 
-    if looks_like_path(target) {
+    if looks_like_path(target)
+        || (crate::chart_source::is_archive_file(Path::new(target)) && Path::new(target).is_file())
+    {
         let path = Path::new(target);
         if !path.exists() {
             bail!("path does not exist: {target}");
         }
-        if !path.is_dir() {
-            bail!("path is not a directory: {target}");
+        if !path.is_dir() && !(path.is_file() && crate::chart_source::is_archive_file(path)) {
+            bail!("path is not a directory or supported archive: {target}");
         }
         return Ok(vec![PathEntry { path: target.to_string(), enabled: true, recursive: true }]);
     }
@@ -293,6 +295,21 @@ fn load_songs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_archive_scan_targets_accept_every_suffix_and_reject_other_files() {
+        let root = tempfile::tempdir().unwrap();
+        for suffix in bmz_song_resource::ARCHIVE_EXTENSIONS {
+            let path = root.path().join(format!("song.{suffix}"));
+            std::fs::write(&path, b"fixture").unwrap();
+            let targets = resolve_song_scan_target(path.to_str(), &[]).unwrap();
+            assert_eq!(targets.len(), 1);
+            assert_eq!(Path::new(&targets[0].path), path);
+        }
+        let other = root.path().join("plain.gz");
+        std::fs::write(&other, b"fixture").unwrap();
+        assert!(resolve_song_scan_target(other.to_str(), &[]).is_err());
+    }
 
     #[test]
     fn explicit_partial_scan_remains_usable_across_reopen_until_full_sync() {

@@ -1,4 +1,5 @@
 use super::*;
+use std::io::Read;
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 
@@ -122,6 +123,7 @@ pub fn archive(files: &[(&str, &[u8])]) -> Vec<u8> {
 
 pub fn request(root: &Path, api: &str, number: u8) -> ChartDownloadRequest {
     ChartDownloadRequest {
+        keep_archive: false,
         request_id: number as u64,
         identity: ChartDownloadIdentity { sha256: Some([number; 32]), md5: Some([number; 16]) },
         action: MissingChartAction::Http {

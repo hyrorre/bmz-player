@@ -3,7 +3,7 @@ use super::*;
 use crate::config::app_config::{AppConfig, PathEntry};
 use crate::storage::library_db::LibraryDatabase;
 
-fn chart_identity(bytes: &[u8]) -> ChartDownloadIdentity {
+pub(super) fn chart_identity(bytes: &[u8]) -> ChartDownloadIdentity {
     let imported = bmz_chart::import::import_chart_bytes_with_random_source(
         Path::new("chart.bms"),
         bytes,
@@ -17,9 +17,15 @@ fn chart_identity(bytes: &[u8]) -> ChartDownloadIdentity {
     }
 }
 
-fn identified_request(root: &Path, api: &str, bytes: &[u8], id: u64) -> ChartDownloadRequest {
+pub(super) fn identified_request(
+    root: &Path,
+    api: &str,
+    bytes: &[u8],
+    id: u64,
+) -> ChartDownloadRequest {
     let identity = chart_identity(bytes);
     ChartDownloadRequest {
+        keep_archive: false,
         request_id: id,
         title: "Same title".into(),
         data_dir: root.into(),
@@ -59,7 +65,7 @@ fn shared_http_archive_registers_multiple_chart_hashes_before_completion() {
     wait(&mut manager, 3, |m| m.tasks().iter().all(|t| t.state() == DownloadState::Scanning));
     let scans = manager.take_scan_requests();
     assert_eq!(scans.len(), 2);
-    assert_eq!(scans[0].1.chart_dir, scans[1].1.chart_dir);
+    assert_eq!(scans[0].1.scan_path, scans[1].1.scan_path);
     let batch = BulkDownloadBatch {
         scope: BulkDownloadScope { source_url: "table".into(), level: None },
         counts: Default::default(),
@@ -70,7 +76,7 @@ fn shared_http_archive_registers_multiple_chart_hashes_before_completion() {
     crate::storage::migration::migrate_library_db(&db_path).unwrap();
     let mut db = LibraryDatabase::open(&db_path).unwrap();
     assert!(
-        !registered_download_identity(&db, &chart_identity(first), &scans[0].1.chart_dir).unwrap()
+        !registered_download_identity(&db, &chart_identity(first), &scans[0].1.scan_path).unwrap()
     );
     let mut config = AppConfig::default();
     config.scan.use_everything = false;
@@ -80,7 +86,7 @@ fn shared_http_archive_registers_multiple_chart_hashes_before_completion() {
     );
     db.set_configured_song_roots(&config.songs.roots).unwrap();
     let roots = vec![PathEntry {
-        path: scans[0].1.chart_dir.to_string_lossy().into_owned(),
+        path: scans[0].1.scan_path.to_string_lossy().into_owned(),
         enabled: true,
         recursive: true,
     }];
@@ -92,13 +98,13 @@ fn shared_http_archive_registers_multiple_chart_hashes_before_completion() {
     assert_eq!(registrations[0].task_ids.len(), 2);
     let registered = registrations[0].identities.clone();
     for (id, result) in &scans {
-        assert!(registered_download_identity(&db, &result.identity, &result.chart_dir).unwrap());
+        assert!(registered_download_identity(&db, &result.identity, &result.scan_path).unwrap());
         manager.finish_scan(*id, &registered, None);
     }
     assert_eq!(manager.task(a).unwrap().state(), DownloadState::Completed);
     assert_eq!(manager.task(b).unwrap().state(), DownloadState::Completed);
     let unknown = ChartDownloadIdentity { sha256: Some([99; 32]), md5: None };
-    assert!(!registered_download_identity(&db, &unknown, &scans[0].1.chart_dir).unwrap());
+    assert!(!registered_download_identity(&db, &unknown, &scans[0].1.scan_path).unwrap());
     // A matching title is never evidence of a successful requested download.
     let (missing, _) = manager.submit(request(root.path(), &api, 99));
     wait(&mut manager, 3, |m| m.task(missing).unwrap().state() == DownloadState::Scanning);
@@ -140,8 +146,8 @@ fn failed_http_task_does_not_stop_other_tasks_and_can_retry() {
     manager.retry(a);
     wait(&mut manager, 3, |m| m.task(a).unwrap().state() == DownloadState::Scanning);
     assert_ne!(
-        manager.task(a).unwrap().result.as_ref().unwrap().chart_dir,
-        manager.task(b).unwrap().result.as_ref().unwrap().chart_dir
+        manager.task(a).unwrap().result.as_ref().unwrap().scan_path,
+        manager.task(b).unwrap().result.as_ref().unwrap().scan_path
     );
     for entry in std::fs::read_dir(root.path().join("songs/http")).unwrap() {
         assert!(!entry.unwrap().file_name().to_string_lossy().starts_with(".bmz-"));
@@ -172,14 +178,6 @@ fn invalid_http_payloads_and_404_leave_no_staging_files() {
 
 #[test]
 fn tar_path_traversal_and_cross_platform_escapes_are_rejected() {
-    for path in ["../outside.bms", "a/../../outside.bms", "..\\outside.bms", "/outside.bms"] {
-        assert!(validate_archive_path(path).is_err());
-    }
-    if cfg!(windows) {
-        for path in ["C:\\outside.bms", "file:stream"] {
-            assert!(validate_archive_path(path).is_err());
-        }
-    }
     let root = tempfile::tempdir().unwrap();
     let input = root.path().join("bad.tar.gz");
     let mut header = tar::Header::new_gnu();
@@ -275,11 +273,7 @@ async fn timed_out_and_cancelled_requests_clean_only_their_own_staging() {
 #[test]
 fn cancellation_interrupts_archive_reader_and_stops_before_committing() {
     let control = DownloadControl::default();
-    let mut reader =
-        CancelReader { reader: std::io::Cursor::new(vec![1; 1024]), control: &control };
-    assert_eq!(reader.read(&mut [0; 128]).unwrap(), 128);
     control.cancel();
-    assert!(reader.read(&mut [0; 128]).is_err());
     let root = tempfile::tempdir().unwrap();
     let input = root.path().join("archive.tar.gz");
     std::fs::write(&input, archive(&[("chart.bms", b"#TITLE Test")])).unwrap();
@@ -313,7 +307,7 @@ fn redirected_metadata_resolves_relative_urls_from_the_final_response() {
     let (id, _) = manager.submit(request(root.path(), &format!("{}/entry/{{md5}}", server.url), 1));
     wait(&mut manager, 1, |m| m.task(id).unwrap().state() == DownloadState::Scanning);
     assert!(
-        manager.task(id).unwrap().result.as_ref().unwrap().chart_dir.join("chart.bms").is_file()
+        manager.task(id).unwrap().result.as_ref().unwrap().scan_path.join("chart.bms").is_file()
     );
     assert_eq!(server.requests.load(Ordering::Relaxed), 3);
 }
@@ -324,7 +318,7 @@ fn declared_oversized_tar_file_is_rejected_before_reading_its_contents() {
     let path = root.path().join("oversized.tar.gz");
     let mut header = tar::Header::new_gnu();
     header.set_path("large.bin").unwrap();
-    header.set_size(MAX_EXTRACTED_FILE_BYTES + 1);
+    header.set_size(crate::song_archive::ArchiveLimits::default().file_bytes + 1);
     header.set_mode(0o644);
     header.set_cksum();
     let mut encoder =
@@ -332,7 +326,7 @@ fn declared_oversized_tar_file_is_rejected_before_reading_its_contents() {
     encoder.write_all(header.as_bytes()).unwrap();
     encoder.finish().unwrap();
     let error = extract_tar_gz(&path, &root.path().join("output")).unwrap_err();
-    assert!(format!("{error:#}").contains("単一ファイル"));
+    assert!(format!("{error:#}").contains("size limit"));
     assert!(!root.path().join("output/large.bin").exists());
 }
 
@@ -400,7 +394,7 @@ fn late_download_completions_attach_without_consuming_other_scan_requests() {
         identity: ChartDownloadIdentity::default(),
         source: ChartDownloadSource::Http,
         root_dir: PathBuf::from("downloads"),
-        chart_dir: PathBuf::from(directory),
+        scan_path: PathBuf::from(directory),
     };
     let mut pending =
         vec![(1, result(1, "shared")), (2, result(2, "unrelated")), (3, result(3, "shared"))];
@@ -481,18 +475,18 @@ fn retry_of_missing_chart_refetches_an_updated_archive_without_deleting_old_song
         .unwrap();
         downloaded_chart_identities(db, dir).unwrap()
     };
-    manager.finish_scan(id, &scan(&mut db, &old.chart_dir), None);
+    manager.finish_scan(id, &scan(&mut db, &old.scan_path), None);
     assert!(manager.task(id).unwrap().registration_missing);
     updated.store(true, Ordering::Relaxed);
     manager.retry(id);
     assert!(manager.task(id).unwrap().result.is_none());
     wait(&mut manager, 1, |m| m.task(id).unwrap().state() == DownloadState::Scanning);
     let new = manager.take_scan_requests().pop().unwrap().1;
-    manager.finish_scan(id, &scan(&mut db, &new.chart_dir), None);
+    manager.finish_scan(id, &scan(&mut db, &new.scan_path), None);
     assert_eq!(manager.task(id).unwrap().state(), DownloadState::Completed);
     assert_eq!(server.requests.load(Ordering::Relaxed), 2);
-    assert_ne!(old.chart_dir, new.chart_dir);
-    assert!(old.chart_dir.join("song/chart.bms").is_file());
+    assert_ne!(old.scan_path, new.scan_path);
+    assert!(old.scan_path.join("song/chart.bms").is_file());
 }
 
 #[test]
@@ -544,9 +538,9 @@ fn retry_of_missing_chart_skips_an_unchanged_archive_until_the_source_updates() 
     assert!(!manager.task(id).unwrap().archive_unchanged);
     wait(&mut manager, 1, |m| m.task(id).unwrap().state() == DownloadState::Scanning);
     let new = manager.take_scan_requests().pop().unwrap().1;
-    assert_ne!(old.chart_dir, new.chart_dir);
+    assert_ne!(old.scan_path, new.scan_path);
     assert_ne!(old.archive_sha256, new.archive_sha256);
-    assert!(old.chart_dir.join("song/chart.bms").is_file());
+    assert!(old.scan_path.join("song/chart.bms").is_file());
     assert_eq!(std::fs::read_dir(&songs).unwrap().count(), 2);
 }
 
@@ -569,9 +563,9 @@ fn retry_extracts_the_same_archive_again_after_the_previous_folder_is_removed() 
     let old = manager.take_scan_requests().pop().unwrap().1;
     manager.finish_scan(id, &[], None);
     manager.retry(id);
-    std::fs::remove_dir_all(&old.chart_dir).unwrap();
+    std::fs::remove_dir_all(&old.scan_path).unwrap();
     wait(&mut manager, 1, |m| m.task(id).unwrap().state() == DownloadState::Scanning);
     let new = manager.take_scan_requests().pop().unwrap().1;
-    assert!(new.chart_dir.join("song/chart.bms").is_file());
+    assert!(new.scan_path.join("song/chart.bms").is_file());
     assert!(!manager.task(id).unwrap().archive_unchanged);
 }

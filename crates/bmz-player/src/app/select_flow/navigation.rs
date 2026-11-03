@@ -774,6 +774,7 @@ impl WinitApp {
             self.jobs.download_request_id += 1;
             let request_id = self.jobs.download_request_id;
             let request = ChartDownloadRequest {
+                keep_archive: self.boot.app_config.downloads.http_keep_archive,
                 request_id,
                 identity: identity.clone(),
                 action,
@@ -850,11 +851,11 @@ impl WinitApp {
                 &mut self.boot.app_config.songs.roots,
                 &result.root_dir.to_string_lossy(),
             );
-            if !self.jobs.song_scan.has_download_scan_for(&result.chart_dir)
-                && !roots.iter().any(|root: &PathEntry| Path::new(&root.path) == result.chart_dir)
+            if !self.jobs.song_scan.has_download_scan_for(&result.scan_path)
+                && !roots.iter().any(|root: &PathEntry| Path::new(&root.path) == result.scan_path)
             {
                 roots.push(PathEntry {
-                    path: result.chart_dir.to_string_lossy().into_owned(),
+                    path: result.scan_path.to_string_lossy().into_owned(),
                     enabled: true,
                     recursive: true,
                 });

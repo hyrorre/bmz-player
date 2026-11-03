@@ -49,6 +49,16 @@ pub fn template_supports_hashes(template: &str, has_md5: bool, has_sha256: bool)
 mod tests {
     use super::*;
     #[test]
+    fn legacy_download_configs_extract_and_archive_choice_roundtrips() {
+        use crate::config::app_config::ChartDownloadsConfig;
+        let mut config: ChartDownloadsConfig = toml::from_str("http_enabled = true\n").unwrap();
+        assert!(!config.http_keep_archive);
+        config.http_keep_archive = true;
+        let restored: ChartDownloadsConfig =
+            toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(restored, config);
+    }
+    #[test]
     fn source_hash_requirements_are_explicit() {
         for preset in [HttpDownloadPreset::Ginger, HttpDownloadPreset::Konmai] {
             assert!(template_supports_hashes(preset.api_url(), true, false));

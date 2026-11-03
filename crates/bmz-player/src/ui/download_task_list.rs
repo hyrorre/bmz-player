@@ -42,6 +42,7 @@ pub(super) fn build_task_list(
                     state,
                     DownloadState::Resolving
                         | DownloadState::Downloading
+                        | DownloadState::Validating
                         | DownloadState::Extracting
                         | DownloadState::Scanning
                 ),
@@ -179,7 +180,7 @@ pub(super) fn build_task_list(
                         )
                         .on_hover_text(error);
                     } else if let Some(result) = &task.result {
-                        ui.add(egui::Label::new(result.chart_dir.display().to_string()).truncate());
+                        ui.add(egui::Label::new(result.scan_path.display().to_string()).truncate());
                     } else {
                         ui.label("");
                     }
@@ -197,6 +198,7 @@ fn state_label(state: DownloadState, text: Localizer) -> String {
         DownloadState::Queued => "downloads-state-queued",
         DownloadState::Resolving => "downloads-state-resolving",
         DownloadState::Downloading => "downloads-state-downloading",
+        DownloadState::Validating => "downloads-state-validating",
         DownloadState::Extracting => "downloads-state-extracting",
         DownloadState::Scanning => "downloads-state-scanning",
         DownloadState::Completed => "downloads-state-completed",
@@ -215,6 +217,7 @@ mod tests {
         let mut manager = ChartDownloadManager::default();
         for id in 0..1000 {
             manager.submit(ChartDownloadRequest {
+                keep_archive: false,
                 request_id: id,
                 identity: ChartDownloadIdentity::default(),
                 title: format!("Chart {id}"),

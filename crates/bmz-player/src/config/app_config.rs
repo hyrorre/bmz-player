@@ -633,6 +633,8 @@ pub struct ChartDownloadsConfig {
     #[serde(default = "default_download_parallelism")]
     pub http_parallelism: u8,
     #[serde(default)]
+    pub http_keep_archive: bool,
+    #[serde(default)]
     pub ipfs_enabled: bool,
     #[serde(default)]
     pub ipfs_api_url: String,
@@ -651,6 +653,7 @@ impl Default for ChartDownloadsConfig {
         Self {
             http_source: Default::default(),
             http_parallelism: 3,
+            http_keep_archive: false,
             ipfs_enabled: false,
             ipfs_api_url: String::new(),
             http_enabled: false,

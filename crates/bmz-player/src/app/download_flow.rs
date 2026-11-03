@@ -62,6 +62,7 @@ impl WinitApp {
                 for mut request in plan.requests {
                     self.jobs.download_request_id += 1;
                     request.request_id = self.jobs.download_request_id;
+                    request.keep_archive = self.boot.app_config.downloads.http_keep_archive;
                     let identity = request.identity.clone();
                     let (id, merged) = self.jobs.chart_downloads.submit(request);
                     batch.targets.push((id, identity));
@@ -135,7 +136,10 @@ pub(super) fn download_row_progress(
             let (bytes, total) = task.control.bytes();
             (total.map_or(0.0, |total| bytes as f32 / total as f32), 4)
         }
-        DownloadState::Extracting | DownloadState::Scanning | DownloadState::Cancelled => (1.0, 4),
+        DownloadState::Validating
+        | DownloadState::Extracting
+        | DownloadState::Scanning
+        | DownloadState::Cancelled => (1.0, 4),
         DownloadState::Completed => (1.0, 6),
         DownloadState::Failed => (1.0, 1),
     };

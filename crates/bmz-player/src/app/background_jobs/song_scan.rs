@@ -90,7 +90,7 @@ impl WinitApp {
         let mut downloads = Vec::new();
         self.jobs.download_registrations.retain(|(id, result)| {
             if roots.iter().any(|root| {
-                root.enabled && root.recursive && Path::new(&root.path) == result.chart_dir
+                root.enabled && root.recursive && Path::new(&root.path) == result.scan_path
             }) {
                 downloads.push((*id, result.clone()));
                 false
@@ -99,7 +99,7 @@ impl WinitApp {
             }
         });
         let download_ids = downloads.iter().map(|(id, _)| *id).collect();
-        let download_dirs = downloads.iter().map(|(_, result)| result.chart_dir.clone()).collect();
+        let download_dirs = downloads.iter().map(|(_, result)| result.scan_path.clone()).collect();
         // Publish roots only after the FIFO admits this scan, never while an
         // earlier scan owns the SQLite writer on its background thread.
         if !downloads.is_empty()
@@ -233,7 +233,7 @@ impl WinitApp {
                     registration.task_ids.extend(
                         crate::song_download::attach_download_registrations(
                             &mut self.jobs.download_registrations,
-                            &registration.chart_dir,
+                            &registration.scan_path,
                         ),
                     );
                     for id in registration.task_ids {

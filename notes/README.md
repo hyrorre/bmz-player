@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-03 | [HTTP取得した書庫の直接登録とtar.gz / LZH対応（#63）](2026/2026-11-03-download-archive-registration.md) |
 | 2026-11-03 | [リザルトで曲・譜面をお気に入りへ登録する（#62）](2026/2026-11-03-result-favorites.md) |
 | 2026-11-02 | [リザルト退出時のKEY5 / KEY7 hold判定](2026/2026-11-02-result-retry-hold.md) |
 | 2026-11-02 | [9KEYの補助ボタンとKEY8 / KEY9によるレーンカバー操作](2026/2026-11-02-nine-key-lane-cover-controls.md) |

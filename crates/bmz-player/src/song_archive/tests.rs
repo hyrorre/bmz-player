@@ -1,5 +1,6 @@
 use super::*;
 use std::sync::atomic::AtomicU64;
+mod extra_formats;
 
 struct Temp(PathBuf);
 impl Temp {

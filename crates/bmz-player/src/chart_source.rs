@@ -23,7 +23,7 @@ impl ChartLocator {
             if !text[index + 1..].is_empty() && !text[index + 1..].starts_with('/') {
                 continue;
             }
-            if ![".zip", ".rar", ".7z"].iter().any(|ext| lower[..index].ends_with(ext)) {
+            if bmz_song_resource::archive_extension(&lower[..index]).is_none() {
                 continue;
             }
             let entry = text[index + 1..].strip_prefix('/').unwrap_or("");
@@ -223,9 +223,7 @@ impl ResolvedChartSource {
 }
 
 pub(crate) fn is_archive_file(path: &Path) -> bool {
-    path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| {
-        ["zip", "rar", "7z"].iter().any(|candidate| ext.eq_ignore_ascii_case(candidate))
-    })
+    bmz_song_resource::ArchiveFormat::from_path(path).is_some()
 }
 
 pub(crate) fn archive_folder_has_document(index: &song_archive::ArchiveIndex, entry: &str) -> bool {

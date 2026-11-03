@@ -32,4 +32,5 @@ pub(super) fn build_download_source_settings(
         egui::Slider::new(&mut config.http_parallelism, 1..=5)
             .text(tr!(text, "settings-downloads-parallelism")),
     );
+    super::super::downloads::build_archive_setting(ui, &mut config.http_keep_archive, text);
 }

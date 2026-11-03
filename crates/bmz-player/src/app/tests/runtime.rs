@@ -738,6 +738,7 @@ fn chart_download_rows_use_endless_dream_progress_cells() {
     };
     let mut manager = ChartDownloadManager::default();
     manager.submit(ChartDownloadRequest {
+        keep_archive: false,
         request_id: 1,
         identity: ChartDownloadIdentity { sha256: Some([1; 32]), md5: Some([1; 16]) },
         action: MissingChartAction::Http {

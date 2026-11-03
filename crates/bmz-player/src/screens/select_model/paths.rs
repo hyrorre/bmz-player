@@ -1,4 +1,5 @@
 use super::*;
+use std::path::Path;
 
 /// Virtual path prefix used for difficulty-table navigation.
 /// `"bmz-table:"` is the root that lists all registered tables.
@@ -156,7 +157,7 @@ pub fn song_scan_path_from_context(
     _folder_stack: &[String],
     selected: Option<&SelectItem>,
 ) -> Option<String> {
-    match selected {
+    let path = match selected {
         Some(SelectItem::Folder { path, kind, .. }) if *kind == SelectRowKind::Folder => {
             Some(path.clone())
         }
@@ -164,6 +165,12 @@ pub fn song_scan_path_from_context(
             row.chart.as_ref().map(|chart| chart.folder_path.clone())
         }
         _ => None,
+    }?;
+    match crate::chart_source::ChartLocator::parse(Path::new(&path)) {
+        Ok(crate::chart_source::ChartLocator::Archive { container, .. }) => {
+            Some(container.to_string_lossy().into_owned())
+        }
+        _ => Some(path),
     }
 }
 

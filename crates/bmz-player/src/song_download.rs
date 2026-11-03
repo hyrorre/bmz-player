@@ -1,11 +1,9 @@
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use flate2::read::GzDecoder;
 use reqwest::{Response, Url};
 use serde_json::Value;
 use sha2::Digest;
@@ -29,6 +27,8 @@ pub use registration::{
     verify_download_registrations,
 };
 #[cfg(test)]
+mod archive_tests;
+#[cfg(test)]
 mod integration_tests;
 #[cfg(test)]
 mod test_support;
@@ -41,9 +41,6 @@ use crate::config::app_config::ChartDownloadsConfig;
 
 const MAX_DOWNLOAD_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
-const MAX_ARCHIVE_ENTRIES: usize = 100_000;
-const MAX_EXTRACTED_BYTES: u64 = 16 * 1024 * 1024 * 1024;
-const MAX_EXTRACTED_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChartDownloadMetadata {
@@ -87,11 +84,18 @@ pub enum MissingChartAction {
 
 #[derive(Debug, Clone)]
 pub struct ChartDownloadRequest {
+    pub keep_archive: bool,
     pub request_id: u64,
     pub identity: ChartDownloadIdentity,
     pub action: MissingChartAction,
     pub title: String,
     pub data_dir: PathBuf,
+}
+
+impl ChartDownloadRequest {
+    fn keeps_archive(&self) -> bool {
+        self.keep_archive && matches!(self.action, MissingChartAction::Http { .. })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -103,7 +107,18 @@ pub struct ChartDownloadResult {
     pub identity: ChartDownloadIdentity,
     pub source: ChartDownloadSource,
     pub root_dir: PathBuf,
-    pub chart_dir: PathBuf,
+    /// Committed directory or archive file to scan, never the private staging path.
+    pub scan_path: PathBuf,
+}
+
+impl ChartDownloadResult {
+    fn is_present(&self) -> bool {
+        if crate::song_archive::is_archive(&self.scan_path) {
+            self.scan_path.is_file()
+        } else {
+            self.scan_path.is_dir()
+        }
+    }
 }
 
 /// File hashes, independent of the table row and the local chart registration.
@@ -145,16 +160,15 @@ impl ChartDownloadIdentity {
 pub fn registered_download_identity(
     db: &crate::storage::library_db::LibraryDatabase,
     identity: &ChartDownloadIdentity,
-    chart_dir: &Path,
+    scan_path: &Path,
 ) -> Result<bool> {
-    Ok(downloaded_chart_identities(db, chart_dir)?
+    Ok(downloaded_chart_identities(db, scan_path)?
         .iter()
         .any(|registered| identity.overlaps(registered)))
 }
 
-/// A retry fetched the same archive bytes as the attempt whose extracted
-/// folder lacked the requested chart, so extracting it again would only add a
-/// duplicate folder.
+/// A retry fetched the same archive bytes as the attempt that lacked the
+/// requested chart, so saving it again would only add a duplicate artifact.
 #[derive(Debug)]
 pub struct ArchiveUnchanged;
 
@@ -365,7 +379,8 @@ async fn download_chart_inner(
             normalize_ipfs_arg(cids.first().expect("IPFS action has at least one CID"))?
         }
         MissingChartAction::Http { api_url, md5, sha256 } => {
-            let scope = format!("{}\n{}", request.data_dir.display(), api_url);
+            let scope =
+                format!("{}\n{}\n{}", request.data_dir.display(), api_url, request.keeps_archive());
             let api_url = expand_http_api_url(api_url, md5, sha256)?;
             let response = client.get(api_url.clone()).send().await?.error_for_status()?;
             let metadata_base = response.url().clone();
@@ -381,7 +396,7 @@ async fn download_chart_inner(
             archive_url.set_fragment(None);
             let key: [u8; 32] =
                 sha2::Sha256::digest(format!("{scope}\n{archive_url}").as_bytes()).into();
-            // The first owner publishes an extracted directory. Followers keep
+            // The first owner publishes a saved directory or archive. Followers keep
             // their own hashes and verify each one after the shared partial scan.
             let mut direct_response = direct_response;
             loop {
@@ -408,7 +423,7 @@ async fn download_chart_inner(
                 ready.as_mut().enable();
                 let cached = shared.result.lock().unwrap_or_else(|e| e.into_inner()).clone();
                 match cached {
-                    Some(Ok(mut result)) if result.chart_dir.is_dir() => {
+                    Some(Ok(mut result)) if result.is_present() => {
                         result.request_id = request.request_id;
                         result.identity = request.identity;
                         return Ok(result);
@@ -452,8 +467,13 @@ async fn download_chart_inner(
                     .await
                     .context("archive extraction queue closed")?;
                 control.check()?;
-                control.set_state(DownloadState::Extracting);
-                extract_archive_controlled(&archive_path, &staging_dir, control)?;
+                if request.keeps_archive() {
+                    control.set_state(DownloadState::Validating);
+                    crate::song_archive::inspect(&archive_path, &control.archive_control())?;
+                } else {
+                    control.set_state(DownloadState::Extracting);
+                    extract_archive_controlled(&archive_path, &staging_dir, control)?;
+                }
             }
             if md5.is_empty() { sha256.clone() } else { md5.clone() }
         }
@@ -461,10 +481,19 @@ async fn download_chart_inner(
     };
 
     control.check()?;
-    let final_dir = unique_final_dir(&root_dir, &request.title, &hash_hint);
-    std::fs::rename(&staging_dir, &final_dir).with_context(|| {
-        format!("展開済みフォルダを保存できませんでした: {}", final_dir.display())
-    })?;
+    let mut final_path = unique_final_dir(&root_dir, &request.title, &hash_hint);
+    let staged = if request.keeps_archive() {
+        let extension = crate::song_archive::detect_format(&archive_path)?.extension();
+        let mut name = final_path.into_os_string();
+        name.push(".");
+        name.push(extension);
+        final_path = PathBuf::from(name);
+        &archive_path
+    } else {
+        &staging_dir
+    };
+    std::fs::rename(staged, &final_path)
+        .with_context(|| format!("取得した譜面を保存できませんでした: {}", final_path.display()))?;
     std::fs::remove_file(&archive_path).ok();
 
     let result = ChartDownloadResult {
@@ -474,7 +503,7 @@ async fn download_chart_inner(
         identity: request.identity,
         source,
         root_dir,
-        chart_dir: final_dir,
+        scan_path: final_path,
     };
     if let Some(owner) = &mut cache_owner {
         owner.shared.publish(Ok(result.clone()));
@@ -666,13 +695,12 @@ async fn save_response_with_prefix(
         }
         if !verified {
             signature.extend_from_slice(&chunk);
-            if signature.len() < 6 {
+            if signature.len() < 8 {
                 continue;
             }
             anyhow::ensure!(
-                signature.starts_with(&[0x1f, 0x8b])
-                    || signature.starts_with(&[0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]),
-                "unsupported archive signature (expected tar.gz or 7z)"
+                bmz_song_resource::ArchiveFormat::from_signature(&signature).is_some(),
+                "unsupported archive signature (expected ZIP, RAR, 7z, tar.gz or LZH)"
             );
             file.write_all(&signature)?;
             hasher.update(&signature);
@@ -697,141 +725,12 @@ fn extract_archive_controlled(
     destination: &Path,
     control: &DownloadControl,
 ) -> Result<()> {
-    let mut signature = [0_u8; 8];
-    let read = File::open(archive_path)?.read(&mut signature)?;
-    if read >= 2 && signature[..2] == [0x1f, 0x8b] {
-        extract_tar_gz_controlled(archive_path, destination, control)
-    } else if read >= 6 && signature[..6] == [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c] {
-        extract_7z(archive_path, destination, control)
-    } else {
-        bail!("対応していないアーカイブ形式です（tar.gz / 7z のみ対応）")
-    }
+    crate::song_archive::extract_to(archive_path, destination, &control.archive_control())
 }
 
 #[cfg(test)]
 fn extract_tar_gz(archive_path: &Path, destination: &Path) -> Result<()> {
-    extract_tar_gz_controlled(archive_path, destination, &DownloadControl::default())
-}
-
-fn extract_tar_gz_controlled(
-    archive_path: &Path,
-    destination: &Path,
-    control: &DownloadControl,
-) -> Result<()> {
-    std::fs::create_dir_all(destination)?;
-    let file = File::open(archive_path)?;
-    let decoder =
-        CancelReader { reader: GzDecoder::new(CancelReader { reader: file, control }), control };
-    let mut archive = tar::Archive::new(decoder);
-    archive.set_preserve_permissions(false);
-    archive.set_preserve_ownerships(false);
-    let mut count = 0_usize;
-    let mut total = 0_u64;
-    for entry in archive.entries()? {
-        control.check()?;
-        let mut entry = entry?;
-        validate_archive_path(&entry.path()?.to_string_lossy())?;
-        count += 1;
-        if count > MAX_ARCHIVE_ENTRIES {
-            bail!("アーカイブ内のファイル数が上限を超えています")
-        }
-        let entry_type = entry.header().entry_type();
-        if !(entry_type.is_file() || entry_type.is_dir()) {
-            bail!("リンクなどの非対応エントリを含むアーカイブです")
-        }
-        if entry_type.is_file() {
-            let size = entry.size();
-            if size > MAX_EXTRACTED_FILE_BYTES {
-                bail!("アーカイブ内の単一ファイルが大きすぎます")
-            }
-            total = total.saturating_add(size);
-            if total > MAX_EXTRACTED_BYTES {
-                bail!("アーカイブの展開サイズが上限を超えています")
-            }
-        }
-        if !entry.unpack_in(destination)? {
-            bail!("保存先の外へ出るアーカイブパスを拒否しました")
-        }
-    }
-    // Verify the gzip checksum after tar's end marker, bounding discarded data.
-    let trailing =
-        std::io::copy(&mut archive.into_inner().take(1024 * 1024 + 1), &mut std::io::sink())?;
-    anyhow::ensure!(trailing <= 1024 * 1024, "excessive archive trailing data");
-    Ok(())
-}
-
-fn extract_7z(archive_path: &Path, destination: &Path, control: &DownloadControl) -> Result<()> {
-    let mut count = 0_usize;
-    let mut total = 0_u64;
-    sevenz_rust2::decompress_file_with_extract_fn(
-        archive_path,
-        destination,
-        |entry, reader, path| {
-            let unix_type = (entry.windows_attributes >> 16) & 0o170000;
-            if entry.is_anti_item
-                || (entry.windows_attributes & 0x400) != 0
-                || !matches!(unix_type, 0 | 0o100000 | 0o040000)
-            {
-                return Err(sevenz_rust2::Error::Other("unsupported archive entry".into()));
-            }
-            if control.is_cancelled() {
-                return Err(sevenz_rust2::Error::Other("download cancelled".into()));
-            }
-            validate_archive_path(entry.name())
-                .map_err(|e| sevenz_rust2::Error::Other(e.to_string().into()))?;
-            count += 1;
-            if count > MAX_ARCHIVE_ENTRIES {
-                return Err(sevenz_rust2::Error::Other(std::borrow::Cow::Borrowed(
-                    "archive entry count exceeds the limit",
-                )));
-            }
-            if !entry.is_directory {
-                if entry.size > MAX_EXTRACTED_FILE_BYTES {
-                    return Err(sevenz_rust2::Error::Other(std::borrow::Cow::Borrowed(
-                        "archive entry exceeds the size limit",
-                    )));
-                }
-                total = total.saturating_add(entry.size);
-                if total > MAX_EXTRACTED_BYTES {
-                    return Err(sevenz_rust2::Error::Other(std::borrow::Cow::Borrowed(
-                        "archive extracted size exceeds the limit",
-                    )));
-                }
-            }
-            sevenz_rust2::default_entry_extract_fn(
-                entry,
-                &mut CancelReader { reader, control },
-                path,
-            )
-        },
-    )
-    .context("7zアーカイブを展開できませんでした")
-}
-
-struct CancelReader<'a, R> {
-    reader: R,
-    control: &'a DownloadControl,
-}
-impl<R: Read> Read for CancelReader<'_, R> {
-    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
-        if self.control.is_cancelled() {
-            return Err(std::io::Error::other("download cancelled"));
-        }
-        self.reader.read(bytes)
-    }
-}
-
-fn validate_archive_path(name: &str) -> Result<()> {
-    anyhow::ensure!(
-        !name.starts_with(['/', '\\'])
-            // ':' is an ordinary name character outside Windows, where it
-            // would name a drive or an alternate data stream instead.
-            && !(cfg!(windows) && name.contains(':'))
-            && !name.contains('\0')
-            && !name.split(['/', '\\']).any(|part| part == ".."),
-        "unsafe archive entry path"
-    );
-    Ok(())
+    extract_archive_controlled(archive_path, destination, &DownloadControl::default())
 }
 
 fn merge_ipfs_package(package_dir: &Path, destination: &Path) -> Result<()> {
@@ -949,14 +848,6 @@ mod tests {
     }
 
     #[test]
-    fn colons_in_archive_names_are_rejected_only_on_windows() {
-        assert_eq!(validate_archive_path("song/bgm:01.ogg").is_err(), cfg!(windows));
-        assert_eq!(validate_archive_path("C:/song/chart.bms").is_err(), cfg!(windows));
-        assert!(validate_archive_path("../chart.bms").is_err());
-        assert!(validate_archive_path("/chart.bms").is_err());
-    }
-
-    #[test]
     fn unavailable_preset_uses_existing_fallbacks_without_changing_custom_urls() {
         let mut config = ChartDownloadsConfig {
             http_source: crate::config::download_sources::HttpDownloadPreset::Wriggle,
@@ -984,6 +875,7 @@ mod tests {
     #[test]
     fn ipfs_has_priority_over_http_and_browser() {
         let config = ChartDownloadsConfig {
+            http_keep_archive: false,
             http_source: Default::default(),
             http_parallelism: 3,
             ipfs_enabled: true,
@@ -1001,6 +893,7 @@ mod tests {
     #[test]
     fn http_is_used_when_ipfs_has_no_cid() {
         let config = ChartDownloadsConfig {
+            http_keep_archive: false,
             http_source: Default::default(),
             http_parallelism: 3,
             ipfs_enabled: true,
@@ -1168,6 +1061,7 @@ mod tests {
         let requests = ["First", "Second"]
             .into_iter()
             .map(|title| ChartDownloadRequest {
+                keep_archive: false,
                 request_id: 0,
                 identity: ChartDownloadIdentity::default(),
                 action: MissingChartAction::Unavailable,

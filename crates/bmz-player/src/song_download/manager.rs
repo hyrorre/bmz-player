@@ -28,6 +28,7 @@ pub enum DownloadState {
     Completed,
     Failed,
     Cancelled,
+    Validating,
 }
 
 impl DownloadState {
@@ -38,7 +39,7 @@ impl DownloadState {
 
 #[derive(Default)]
 pub struct DownloadControl {
-    cancelled: AtomicBool,
+    cancelled: Arc<AtomicBool>,
     notify: tokio::sync::Notify,
     state: AtomicU8,
     bytes: AtomicU64,
@@ -57,6 +58,12 @@ impl DownloadControl {
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
     }
+    pub(super) fn archive_control(&self) -> crate::song_archive::ArchiveControl {
+        crate::song_archive::ArchiveControl {
+            cancelled: Some(Arc::clone(&self.cancelled)),
+            ..Default::default()
+        }
+    }
     pub fn set_state(&self, state: DownloadState) {
         self.state.store(state as u8, Ordering::Relaxed);
     }
@@ -69,7 +76,9 @@ impl DownloadControl {
             4 => DownloadState::Scanning,
             5 => DownloadState::Completed,
             6 => DownloadState::Failed,
-            _ => DownloadState::Cancelled,
+            7 => DownloadState::Cancelled,
+            8 => DownloadState::Validating,
+            _ => DownloadState::Queued,
         }
     }
     pub fn bytes(&self) -> (u64, Option<u64>) {
@@ -113,7 +122,7 @@ impl DownloadServices {
         let mut cache = self.archives.lock().unwrap_or_else(|error| error.into_inner());
         let same_result = cache.get(&key).is_some_and(|entry| {
             let entry = entry.result.lock().unwrap_or_else(|error| error.into_inner());
-            matches!(entry.as_ref(), Some(Ok(current)) if current.chart_dir == result.chart_dir)
+            matches!(entry.as_ref(), Some(Ok(current)) if current.scan_path == result.scan_path)
         });
         if same_result {
             cache.remove(&key);
@@ -131,7 +140,7 @@ impl DownloadServices {
 
 pub(super) type ArchiveResult = Option<std::result::Result<ChartDownloadResult, String>>;
 
-/// One archive URL's extraction, shared by every task that resolves to it.
+/// One archive URL's saved artifact, shared within the same storage mode.
 #[derive(Default)]
 pub(super) struct SharedArchive {
     pub(super) result: Mutex<ArchiveResult>,
@@ -159,7 +168,7 @@ pub struct DownloadTask {
     /// When the task last reached a terminal state.
     pub finished_at: Option<std::time::Instant>,
     worker: Option<mpsc::Receiver<Result<ChartDownloadResult>>>,
-    /// Archive digest and folder of the attempt that lacked the requested chart.
+    /// Archive digest and saved path of the attempt that lacked the requested chart.
     previous_archive: Option<([u8; 32], PathBuf)>,
     thread: Option<std::thread::JoinHandle<()>>,
     scan_pending: bool,
@@ -342,17 +351,17 @@ impl ChartDownloadManager {
             && task.worker.is_none()
         {
             if (task.registration_missing
-                || task.result.as_ref().is_some_and(|result| !result.chart_dir.is_dir()))
+                || task.result.as_ref().is_some_and(|result| !result.is_present()))
                 && let Some(result) = task.result.take()
             {
                 self.services.evict_archive(&result);
                 // The source may have updated the archive, so fetch it again,
-                // but never extract the same bytes into a second folder.
+                // but never save the same bytes as a second artifact.
                 if task.registration_missing {
                     task.previous_archive = result
                         .archive_sha256
-                        .filter(|_| result.chart_dir.is_dir())
-                        .map(|digest| (digest, result.chart_dir.clone()));
+                        .filter(|_| result.is_present())
+                        .map(|digest| (digest, result.scan_path.clone()));
                 }
             }
             task.control = Arc::default();
@@ -454,11 +463,11 @@ impl ChartDownloadManager {
                 let control = Arc::clone(&task.control);
                 let services = Arc::clone(&self.services);
                 let request = task.requests[0].clone();
-                // A deleted folder no longer duplicates anything; extract again.
+                // A deleted artifact no longer duplicates anything; save again.
                 let previous_archive = task
                     .previous_archive
                     .as_ref()
-                    .filter(|(_, dir)| dir.is_dir())
+                    .filter(|(_, path)| path.is_dir() || path.is_file())
                     .map(|(digest, _)| *digest);
                 let (tx, rx) = mpsc::channel();
                 match std::thread::Builder::new().name(format!("chart-download-{}", task.id)).spawn(
@@ -582,7 +591,7 @@ impl Drop for ChartDownloadManager {
 }
 
 fn requests_share_transfer(a: &ChartDownloadRequest, b: &ChartDownloadRequest) -> bool {
-    if a.data_dir != b.data_dir {
+    if a.data_dir != b.data_dir || a.keeps_archive() != b.keeps_archive() {
         return false;
     }
     let same_hash = a.identity.overlaps(&b.identity);
@@ -626,6 +635,7 @@ mod tests {
             let mut sha = [0; 32];
             sha[..8].copy_from_slice(&id.to_le_bytes());
             let request = ChartDownloadRequest {
+                keep_archive: false,
                 request_id: id,
                 identity: ChartDownloadIdentity { sha256: Some(sha), md5: None },
                 action: MissingChartAction::Http {
@@ -730,7 +740,7 @@ mod tests {
             assert!(server.maximum.load(Ordering::Relaxed) <= parallel);
             assert_eq!(manager.take_scan_requests().len(), 8);
             for task in &manager.tasks {
-                assert!(task.result.as_ref().unwrap().chart_dir.join("song/chart.bms").is_file());
+                assert!(task.result.as_ref().unwrap().scan_path.join("song/chart.bms").is_file());
             }
             let id = manager.tasks[0].id;
             manager.finish_scan(id, &[], Some("temporary database error"));
@@ -743,15 +753,15 @@ mod tests {
         }
     }
 
-    fn finished_result(task: &DownloadTask, chart_dir: &Path) -> ChartDownloadResult {
+    fn finished_result(task: &DownloadTask, scan_path: &Path) -> ChartDownloadResult {
         ChartDownloadResult {
             archive_cache_key: None,
             archive_sha256: None,
             request_id: task.requests[0].request_id,
             identity: task.requests[0].identity.clone(),
             source: ChartDownloadSource::Http,
-            root_dir: chart_dir.parent().unwrap().into(),
-            chart_dir: chart_dir.into(),
+            root_dir: scan_path.parent().unwrap().into(),
+            scan_path: scan_path.into(),
         }
     }
 
@@ -772,12 +782,12 @@ mod tests {
     #[test]
     fn transfers_finishing_after_a_cancel_are_still_registered() {
         let root = tempfile::tempdir().unwrap();
-        let chart_dir = root.path().join("songs/http/chart");
-        std::fs::create_dir_all(&chart_dir).unwrap();
+        let scan_path = root.path().join("songs/http/chart");
+        std::fs::create_dir_all(&scan_path).unwrap();
         let mut manager = ChartDownloadManager::default();
         let (id, _) = manager.submit(request(root.path(), "https://test.invalid/{md5}", 1));
         let (tx, rx) = mpsc::channel();
-        tx.send(Ok(finished_result(&manager.tasks[0], &chart_dir))).unwrap();
+        tx.send(Ok(finished_result(&manager.tasks[0], &scan_path))).unwrap();
         manager.tasks[0].worker = Some(rx);
         manager.tasks[0].control.set_state(DownloadState::Extracting);
         manager.queues[0].clear();
@@ -870,8 +880,8 @@ mod tests {
         wait(&mut manager, 3, |m| m.tasks().iter().all(|t| t.state() == DownloadState::Scanning));
         assert_eq!(archives.load(Ordering::Relaxed), 1);
         assert_eq!(
-            manager.tasks()[0].result.as_ref().unwrap().chart_dir,
-            manager.tasks()[1].result.as_ref().unwrap().chart_dir
+            manager.tasks()[0].result.as_ref().unwrap().scan_path,
+            manager.tasks()[1].result.as_ref().unwrap().scan_path
         );
         manager.submit(request(root.path(), &api, 3));
         wait(&mut manager, 3, |m| m.tasks().iter().all(|t| t.state() == DownloadState::Scanning));

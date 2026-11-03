@@ -3,6 +3,16 @@ use crate::song_download::{
     BulkDownloadCounts, BulkDownloadPreview, BulkDownloadScope, ChartDownloadManager,
 };
 
+pub(super) fn build_archive_setting(
+    ui: &mut egui::Ui,
+    keep_archive: &mut bool,
+    text: Localizer,
+) -> bool {
+    let changed = ui.checkbox(keep_archive, tr!(text, "settings-downloads-keep-archive")).changed();
+    ui.label(tr!(text, "settings-downloads-keep-archive-help"));
+    changed
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_download_page(
     ui: &mut egui::Ui,

@@ -224,10 +224,7 @@ fn archive_display_name(name: &str) -> Option<&str> {
         return None;
     }
     let archive = name.strip_suffix('!')?;
-    std::path::Path::new(archive)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .filter(|stem| !stem.is_empty())
+    bmz_song_resource::archive_stem(archive)
 }
 
 /// 書庫フォルダの直下に譜面が無く、フォルダが1つだけなら、その名前と、

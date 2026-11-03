@@ -36,10 +36,29 @@ pub(super) fn discover_chart_files_with_progress(
     root: &Path,
     recursive: bool,
     scan: &ScanConfig,
-    on_discovered: impl FnMut(u32),
+    mut on_discovered: impl FnMut(u32),
 ) -> ChartDiscovery {
-    #[cfg(windows)]
-    let mut on_discovered = on_discovered;
+    // Explicit archive targets bypass directory walkers and Everything queries.
+    if crate::chart_source::is_archive_file(root) && !root.is_dir() {
+        let mut discovery = ChartDiscovery::default();
+        match discover_archive_charts(root, scan.skip_hidden) {
+            Ok((entries, generation)) => {
+                on_discovered(usize_to_u32(entries.len()));
+                discovery.entries = entries;
+                discovery.archives.push(DiscoveredArchive { path: root.into(), generation });
+                discovery.complete = true;
+                discovery.root_readable = true;
+            }
+            Err(error) => record_discovery_issue(
+                &mut discovery.issues,
+                root,
+                root,
+                ScanDiscoveryOperation::ReadArchive,
+                io::Error::other(error),
+            ),
+        }
+        return discovery;
+    }
 
     #[cfg(windows)]
     if scan.use_everything {

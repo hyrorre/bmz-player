@@ -41,7 +41,7 @@ BMZ Player 以成为它们的后继为目标，可以直接使用 beatoraja 的�
 | BMSON（.bmson） | 支持与 BMS 相同的按键数 |
 | 其他 | 也支持 4 键、6 键、8 键的 BMS |
 
-以 ZIP、RAR、7z 发布的歌曲无需解压即可直接读取。
+以 ZIP、RAR、7z、tar.gz、LZH 发布的歌曲无需解压即可直接读取。
 
 ## 本手册的阅读方式
 

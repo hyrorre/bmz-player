@@ -41,7 +41,7 @@ Skins are bundled, so you do not need to prepare one right away.
 | BMSON (.bmson) | The same key counts as BMS |
 | Other | 4-key, 6-key, and 8-key BMS are also supported |
 
-Songs distributed as ZIP, RAR, or 7z archives can be loaded without extracting them.
+Songs distributed as ZIP, RAR, 7z, tar.gz, or LZH archives can be loaded without extracting them.
 
 ## How to read this manual
 

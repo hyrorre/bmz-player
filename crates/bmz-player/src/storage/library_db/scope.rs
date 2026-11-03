@@ -115,6 +115,9 @@ fn song_root_path_contains_file(root_path: &str, recursive: bool, path: &str) ->
         .unwrap_or_else(|_| normalize_library_path(path));
     #[cfg(windows)]
     let (root_path, path) = (root_path.to_lowercase(), path.to_lowercase());
+    if crate::chart_source::is_archive_file(Path::new(&root_path)) && root_path == path {
+        return true;
+    }
     let prefix = format!("{}/", root_path.trim_end_matches('/'));
     path.strip_prefix(&prefix)
         .is_some_and(|relative| !relative.is_empty() && (recursive || !relative.contains('/')))

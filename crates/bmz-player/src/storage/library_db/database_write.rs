@@ -54,7 +54,13 @@ impl LibraryDatabase {
                 let same_root = own == other_key;
                 !same_root && song_root_contains_file(other, &path)
             });
-            if protected_scope {
+            let exact_archive = matches!(
+                crate::chart_source::ChartLocator::parse(Path::new(&path)),
+                Ok(crate::chart_source::ChartLocator::Archive { container, .. })
+                if if cfg!(windows) { library_path_key(&container).eq_ignore_ascii_case(&root.path) }
+                    else { library_path_key(&container) == root.path }
+            );
+            if protected_scope && !exact_archive {
                 // An offline, disabled, or unscanned root cannot prove absence.
                 continue;
             }

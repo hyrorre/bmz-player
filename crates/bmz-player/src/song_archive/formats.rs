@@ -1,14 +1,19 @@
+mod lzh;
 mod sevenz;
+mod tar_gz;
 mod zip;
 
 use super::{ArchiveControl, ArchiveEntry, CheckedFile, Selection, safety};
 use anyhow::{Result, ensure};
+use bmz_song_resource::ArchiveFormat;
 use std::io::{Read, Seek, SeekFrom, Write};
 
 pub(super) enum Backend {
     Zip(::zip::ZipArchive<CheckedFile>),
     Rar(rars::Archive),
     SevenZ(Box<sevenz_rust2::ArchiveReader<CheckedFile>>),
+    TarGz(tar_gz::TarGz),
+    Lzh(lzh::Lzh),
 }
 
 impl Backend {
@@ -19,49 +24,65 @@ impl Backend {
         let mut magic = [0; 8];
         let len = file.read(&mut magic)?;
         file.seek(SeekFrom::Start(0))?;
-        if magic[..len].starts_with(b"PK\x03\x04") || magic[..len].starts_with(b"PK\x05\x06") {
-            let (archive, entries) = zip::open(file, control)?;
-            Ok((Self::Zip(archive), entries))
-        } else if magic[..len].starts_with(b"Rar!\x1a\x07") {
-            let archive =
-                rars::ArchiveReader::read_reader_with_options(file, rar_options(control))?;
-            ensure!(archive.sfx_offset() == 0, "self-extracting archives are unsupported");
-            let volume = match &archive {
-                rars::Archive::Rar13(archive) => archive.main.is_volume(),
-                rars::Archive::Rar15To40(archive) => archive.main.is_volume(),
-                rars::Archive::Rar50Plus(archive) => archive.main.is_volume(),
-                _ => anyhow::bail!("unsupported RAR archive version"),
-            };
-            ensure!(!volume, "split song archives are unsupported");
-            let mut entries = Vec::new();
-            for member in archive.members() {
-                let meta = &member.meta;
-                ensure!(!meta.is_encrypted, "encrypted song archives are unsupported");
-                ensure!(
-                    !meta.is_split_before && !meta.is_split_after,
-                    "split song archives are unsupported"
-                );
-                ensure!(!meta.is_redirection, "archive links are unsupported");
-                if matches!(meta.attr_source(), rars::AttrSource::Unix) {
-                    safety::regular_mode(meta.file_attr as u32, meta.is_directory)?;
-                } else {
-                    ensure!(meta.file_attr & 0x400 == 0, "archive reparse points are unsupported");
-                }
-                entries.push(ArchiveEntry {
-                    name: safety::normalize_name(
-                        &safety::decode_name(&meta.name, member.name_is_unicode())?,
-                        meta.is_directory,
-                    )?,
-                    size: meta.unpacked_size,
-                    is_directory: meta.is_directory,
-                });
+        let format = ArchiveFormat::from_signature(&magic[..len]).ok_or_else(|| {
+            anyhow::anyhow!("unsupported song archive signature (SFX is unsupported)")
+        })?;
+        match format {
+            ArchiveFormat::Zip => {
+                let (archive, entries) = zip::open(file, control)?;
+                Ok((Self::Zip(archive), entries))
             }
-            Ok((Self::Rar(archive), entries))
-        } else if magic[..len].starts_with(b"7z\xbc\xaf\x27\x1c") {
-            let (archive, entries) = sevenz::open(file, control)?;
-            Ok((Self::SevenZ(Box::new(archive)), entries))
-        } else {
-            anyhow::bail!("unsupported song archive signature (SFX is unsupported)")
+            ArchiveFormat::Rar => {
+                let archive =
+                    rars::ArchiveReader::read_reader_with_options(file, rar_options(control))?;
+                ensure!(archive.sfx_offset() == 0, "self-extracting archives are unsupported");
+                let volume = match &archive {
+                    rars::Archive::Rar13(archive) => archive.main.is_volume(),
+                    rars::Archive::Rar15To40(archive) => archive.main.is_volume(),
+                    rars::Archive::Rar50Plus(archive) => archive.main.is_volume(),
+                    _ => anyhow::bail!("unsupported RAR archive version"),
+                };
+                ensure!(!volume, "split song archives are unsupported");
+                let mut entries = Vec::new();
+                for member in archive.members() {
+                    let meta = &member.meta;
+                    ensure!(!meta.is_encrypted, "encrypted song archives are unsupported");
+                    ensure!(
+                        !meta.is_split_before && !meta.is_split_after,
+                        "split song archives are unsupported"
+                    );
+                    ensure!(!meta.is_redirection, "archive links are unsupported");
+                    if matches!(meta.attr_source(), rars::AttrSource::Unix) {
+                        safety::regular_mode(meta.file_attr as u32, meta.is_directory)?;
+                    } else {
+                        ensure!(
+                            meta.file_attr & 0x400 == 0,
+                            "archive reparse points are unsupported"
+                        );
+                    }
+                    entries.push(ArchiveEntry {
+                        name: safety::normalize_name(
+                            &safety::decode_name(&meta.name, member.name_is_unicode())?,
+                            meta.is_directory,
+                        )?,
+                        size: meta.unpacked_size,
+                        is_directory: meta.is_directory,
+                    });
+                }
+                Ok((Self::Rar(archive), entries))
+            }
+            ArchiveFormat::SevenZ => {
+                let (archive, entries) = sevenz::open(file, control)?;
+                Ok((Self::SevenZ(Box::new(archive)), entries))
+            }
+            ArchiveFormat::TarGz => {
+                let (archive, entries) = tar_gz::TarGz::open(file, control)?;
+                Ok((Self::TarGz(archive), entries))
+            }
+            ArchiveFormat::Lzh => {
+                let (archive, entries) = lzh::Lzh::open(file, control)?;
+                Ok((Self::Lzh(archive), entries))
+            }
         }
     }
 
@@ -69,6 +90,8 @@ impl Backend {
     pub(super) fn solid(&self) -> bool {
         match self {
             Self::Zip(_) => false,
+            Self::Lzh(_) => false,
+            Self::TarGz(_) => true,
             // The same conservative test rars applies before refusing to skip a member.
             Self::Rar(rars::Archive::Rar13(archive)) => archive.main.is_solid(),
             Self::Rar(rars::Archive::Rar15To40(archive)) => {
@@ -104,6 +127,14 @@ impl Backend {
         let mut remaining = entries.iter().filter(|entry| selected.includes(entry)).count();
         let solid = self.solid();
         match self {
+            Self::TarGz(archive) => {
+                archive.extract(entries, control, selected, open)?;
+                remaining = 0;
+            }
+            Self::Lzh(archive) => {
+                archive.extract(entries, control, selected, open)?;
+                remaining = 0;
+            }
             Self::Zip(archive) => {
                 for (index, entry) in entries.iter().enumerate() {
                     if remaining == 0 {

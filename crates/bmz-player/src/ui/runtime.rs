@@ -384,6 +384,14 @@ impl EguiLayer {
                 let profile_name = profile_config.display_name.clone();
                 build_menu_window(ctx, visible_flag, &profile_name, text, |ui| match page {
                     SettingsPage::Downloads => {
+                        ui.add_enabled_ui(settings_editable, |ui| {
+                            save_app_config |= downloads::build_archive_setting(
+                                ui,
+                                &mut app_config.downloads.http_keep_archive,
+                                text,
+                            );
+                        });
+                        ui.separator();
                         download_commands.extend(downloads::build_download_page(
                             ui,
                             downloads,

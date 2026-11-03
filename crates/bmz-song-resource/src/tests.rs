@@ -1,4 +1,27 @@
 use super::*;
+
+#[test]
+fn every_archive_suffix_supports_stable_and_generation_bound_paths() {
+    for suffix in ARCHIVE_EXTENSIONS {
+        let container = format!("C:/formats/曲.{suffix}");
+        let path = format!("{container}!/song/chart.bms");
+        assert_eq!(
+            SongPath::parse(Path::new(&path)),
+            SongPath::Archive {
+                container: container.clone().into(),
+                entry: "song/chart.bms".into()
+            }
+        );
+        let resources = set(&container, &["song/kick.wav"]);
+        assert!(
+            matches!(SongPath::parse(&resources.path("song/kick.wav")), SongPath::Archive { entry, .. } if entry == "song/kick.wav")
+        );
+        assert_eq!(
+            SongPath::parse(Path::new(&format!("{container}!/../outside.wav"))),
+            SongPath::Invalid
+        );
+    }
+}
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The registry is process-wide; tests that install sets must not evict each other's.

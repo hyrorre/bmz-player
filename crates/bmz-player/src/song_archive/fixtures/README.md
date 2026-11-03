@@ -20,3 +20,8 @@ six files to `expected/`. Both solid archives were independently decoded with
 7-Zip and compared against the original files, then read using `rars` with
 default features disabled. The product does not enable the RAR writer feature.
 ZIP and 7z test archives are generated in each test's private temporary folder.
+
+ZIP, 7z and tar.gz fixtures are built in private temporary directories by the tests.
+LZH fixtures (LH0 and deterministic single-symbol LH5 blocks, header levels 0–3)
+are generated from BMZ-owned bytes in test_support.rs and tests/extra_formats.rs.
+No third-party BMS or decoder executable is distributed with these tests.

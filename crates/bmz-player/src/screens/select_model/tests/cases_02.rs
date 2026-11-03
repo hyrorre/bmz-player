@@ -196,6 +196,20 @@ fn parse_table_path_distinguishes_root_table_and_level() {
 }
 
 #[test]
+fn song_scan_path_from_archive_folder_uses_the_container() {
+    for suffix in bmz_song_resource::ARCHIVE_EXTENSIONS {
+        let container = format!("/music/package.{suffix}");
+        let folder = SelectItem::Folder {
+            path: format!("{container}!/song"),
+            name: "song".into(),
+            kind: SelectRowKind::Folder,
+            summary: None,
+        };
+        assert_eq!(song_scan_path_from_context(&[], Some(&folder)), Some(container));
+    }
+}
+
+#[test]
 fn course_contents_path_round_trips_course_id() {
     let path = course_contents_path(42);
     assert_eq!(path, "bmz-course-contents:42");

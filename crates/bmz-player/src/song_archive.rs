@@ -167,8 +167,8 @@ impl ArchiveEntry {
 pub struct ArchiveIndex {
     pub generation: ArchiveGeneration,
     pub entries: Vec<ArchiveEntry>,
-    /// Reading one entry decodes the entries before it (solid RAR / 7z). ZIP and non-solid
-    /// RAR read any entry directly.
+    /// Reading one entry decodes the entries before it (tar.gz and solid RAR / 7z).
+    /// ZIP, LZH and non-solid RAR read any entry directly.
     pub solid: bool,
 }
 
@@ -179,9 +179,7 @@ pub struct ArchiveChart {
 }
 
 pub fn is_archive(path: &Path) -> bool {
-    path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| {
-        ["zip", "rar", "7z"].iter().any(|candidate| ext.eq_ignore_ascii_case(candidate))
-    })
+    bmz_song_resource::ArchiveFormat::from_path(path).is_some()
 }
 
 pub fn inspect(path: &Path, control: &ArchiveControl) -> Result<ArchiveIndex> {
@@ -194,6 +192,46 @@ pub fn inspect(path: &Path, control: &ArchiveControl) -> Result<ArchiveIndex> {
     let opened = Opened::new(&path, control)?;
     cache::remember_index(path, opened.stamp, control.limits.clone(), opened.index.clone());
     Ok(opened.index)
+}
+
+pub fn detect_format(path: &Path) -> Result<bmz_song_resource::ArchiveFormat> {
+    let mut magic = [0; 8];
+    let len = std::fs::File::open(path)?.read(&mut magic)?;
+    bmz_song_resource::ArchiveFormat::from_signature(&magic[..len])
+        .context("unsupported song archive signature")
+}
+
+/// Extract a private download staging directory using the same readers and checks as playback.
+pub fn extract_to(path: &Path, destination: &Path, control: &ArchiveControl) -> Result<()> {
+    let mut opened = Opened::new(path, control)?;
+    ensure_directory(destination)?;
+    for entry in &opened.index.entries {
+        if entry.is_directory {
+            ensure_directory(&destination.join(&entry.name))?;
+        }
+    }
+    opened.extract(control, Selection::Pick(&|_| true), &mut |entry| {
+        let path = destination.join(&entry.name);
+        ensure_directory(path.parent().context("archive entry has no parent")?)?;
+        let file = std::fs::OpenOptions::new().write(true).create_new(true).open(path)?;
+        Ok(Box::new(file))
+    })?;
+    opened.verify_unchanged(path, control)
+}
+
+fn ensure_directory(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => ensure!(
+            metadata.is_dir() && !metadata.file_type().is_symlink(),
+            "archive destination is not a regular directory"
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            ensure_directory(path.parent().context("archive destination has no parent")?)?;
+            std::fs::create_dir(path)?;
+        }
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
 }
 
 pub fn scan_charts(
@@ -318,7 +356,6 @@ pub(super) struct Opened {
 impl Opened {
     fn new(path: &Path, control: &ArchiveControl) -> Result<Self> {
         control.check()?;
-        ensure!(is_archive(path), "unsupported song archive extension");
         let canonical = std::fs::canonicalize(path)?;
         let mut file = CheckedFile { file: std::fs::File::open(path)?, control: control.clone() };
         let before = stamp(&file.file.metadata()?)?;
@@ -397,5 +434,7 @@ impl Seek for CheckedFile {
     }
 }
 
+#[cfg(test)]
+pub(crate) mod test_support;
 #[cfg(test)]
 mod tests;

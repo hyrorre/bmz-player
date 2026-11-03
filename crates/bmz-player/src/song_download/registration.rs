@@ -4,16 +4,27 @@ use std::collections::HashMap;
 
 pub struct DownloadScanRegistration {
     pub task_ids: Vec<DownloadTaskId>,
-    pub chart_dir: PathBuf,
+    pub scan_path: PathBuf,
     pub identities: Vec<ChartDownloadIdentity>,
 }
 
 pub fn downloaded_chart_identities(
     db: &LibraryDatabase,
-    chart_dir: &Path,
+    scan_path: &Path,
 ) -> Result<Vec<ChartDownloadIdentity>> {
-    let mut folders = db.list_descendant_folder_paths(&chart_dir.to_string_lossy())?;
-    folders.push(chart_dir.to_string_lossy().into_owned());
+    let archive_root;
+    let scan_path = if crate::song_archive::is_archive(scan_path) {
+        archive_root = crate::chart_source::ChartLocator::Archive {
+            container: scan_path.into(),
+            entry: String::new(),
+        }
+        .to_path_buf();
+        archive_root.as_path()
+    } else {
+        scan_path
+    };
+    let mut folders = db.list_descendant_folder_paths(&scan_path.to_string_lossy())?;
+    folders.push(scan_path.to_string_lossy().into_owned());
     let refs: Vec<_> = folders.iter().map(String::as_str).collect();
     Ok(db
         .list_charts_in_folders(&refs)?
@@ -22,20 +33,20 @@ pub fn downloaded_chart_identities(
         .collect())
 }
 
-/// Verify a shared directory once, then fan out its registration to every task.
+/// Verify a shared scan target once, then fan out its registration to every task.
 pub fn verify_download_registrations(
     db: &LibraryDatabase,
     downloads: Vec<(DownloadTaskId, ChartDownloadResult)>,
 ) -> Result<Vec<DownloadScanRegistration>> {
     let mut groups: HashMap<PathBuf, Vec<DownloadTaskId>> = HashMap::new();
     for (id, result) in downloads {
-        groups.entry(result.chart_dir).or_default().push(id);
+        groups.entry(result.scan_path).or_default().push(id);
     }
     groups
         .into_iter()
-        .map(|(chart_dir, task_ids)| {
-            let identities = downloaded_chart_identities(db, &chart_dir)?;
-            Ok(DownloadScanRegistration { task_ids, chart_dir, identities })
+        .map(|(scan_path, task_ids)| {
+            let identities = downloaded_chart_identities(db, &scan_path)?;
+            Ok(DownloadScanRegistration { task_ids, scan_path, identities })
         })
         .collect()
 }
@@ -43,11 +54,11 @@ pub fn verify_download_registrations(
 /// Late completions can join a scan that is already verifying this archive.
 pub fn attach_download_registrations(
     pending: &mut Vec<(DownloadTaskId, ChartDownloadResult)>,
-    chart_dir: &Path,
+    scan_path: &Path,
 ) -> Vec<DownloadTaskId> {
     let mut ids = Vec::new();
     pending.retain(|(id, result)| {
-        if result.chart_dir == chart_dir {
+        if result.scan_path == scan_path {
             ids.push(*id);
             false
         } else {

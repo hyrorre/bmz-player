@@ -1,6 +1,6 @@
 //! Song files read from archives into memory, found by their `pack.zip!/entry` path.
 //!
-//! Charts inside ZIP / RAR / 7z keep virtual asset paths such as
+//! Charts inside ZIP / RAR / 7z / tar.gz / LZH keep virtual asset paths such as
 //! `C:/songs/pack.zip!/song/kick.wav`. The app reads the entries a chart needs into a
 //! [`SongResourceSet`] and [`install`]s it; chart import, audio, image and video loaders ask
 //! [`exists`] / [`read`] before touching the file system, so no archive is extracted to disk.
@@ -8,14 +8,14 @@
 //! Its runtime-only tag is never stored in the library or replay metadata.
 //! Ordinary paths are not handled here and callers keep their own file system access.
 
+mod archive_format;
+pub use archive_format::{ARCHIVE_EXTENSIONS, ArchiveFormat, archive_extension, archive_stem};
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
-
-/// Archive formats whose entries can appear in a virtual path.
-pub const ARCHIVE_EXTENSIONS: &[&str] = &["zip", "rar", "7z"];
 
 /// Sets kept for retry, practice and the Select screen after their chart's load finished.
 /// A play holds its own set, so eviction never takes one a running play still reads.
@@ -55,9 +55,7 @@ fn parse_path(path: &Path) -> (SongPath, Option<u64>) {
         if !rest.is_empty() && !rest.starts_with(['/', '@']) {
             continue;
         }
-        let is_archive = ARCHIVE_EXTENSIONS
-            .iter()
-            .any(|extension| lower[..index].ends_with(&format!(".{extension}")));
+        let is_archive = archive_extension(&lower[..index]).is_some();
         if !is_archive {
             continue;
         }

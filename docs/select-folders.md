@@ -16,7 +16,7 @@ MY BESTを非表示にした場合は、機能フォルダ群の末尾に表示�
 FAVORITEと配下のFAVORITE CHART / FAVORITE SONGは、beatoraja系スキンではFEATURE FOLDER系、LR2スキンでは従来のカスタムフォルダとして表示します。
 同一曲フォルダは選択中の曲に対する既存のsame-folder操作を使います。
 
-曲root内のZIP / RAR / 7zもスキャン対象です。書庫内のBMS / BME / BML / PMS / BMSONを
+曲root内のZIP / RAR / 7z / tar.gz / LZHもスキャン対象です。書庫内のBMS / BME / BML / PMS / BMSONを
 通常の曲と同様に選択でき、手動展開は不要です。書庫内のフォルダは`書庫名.zip!/曲フォルダ`
 として扱い、再生・プレビュー・曲画像が必要になった時点でcacheへ展開します。
 書庫の直下に譜面が無くフォルダが1つだけなら、書庫の段を省いてそのフォルダとして表示します。
