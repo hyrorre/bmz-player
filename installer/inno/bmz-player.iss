@@ -8,7 +8,7 @@
 #endif
 
 #ifndef AppVersion
-#define AppVersion "0.5.0"
+#define AppVersion "0.5.1"
 #endif
 
 #ifndef AppArch
