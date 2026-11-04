@@ -261,7 +261,7 @@ pub(in crate::app) fn compare_select_chart_rows(
     let ordering = match sort {
         SelectSort::Title => compare_case_insensitive(a.display_title(), b.display_title()),
         SelectSort::Artist => compare_case_insensitive(a.display_artist(), b.display_artist()),
-        SelectSort::Bpm => chart_initial_bpm(a).total_cmp(&chart_initial_bpm(b)),
+        SelectSort::Bpm => chart_main_bpm(a).total_cmp(&chart_main_bpm(b)),
         SelectSort::Length => chart_length_ms(a).cmp(&chart_length_ms(b)),
         SelectSort::Level => compare_play_level(a, b),
         SelectSort::Clear => clear_rank(a).cmp(&clear_rank(b)),
@@ -275,8 +275,13 @@ pub(in crate::app) fn compare_case_insensitive(a: &str, b: &str) -> std::cmp::Or
     a.to_lowercase().cmp(&b.to_lowercase())
 }
 
-pub(in crate::app) fn chart_initial_bpm(row: &crate::screens::select_model::SelectChartRow) -> f64 {
-    row.chart.as_ref().map(|chart| chart.initial_bpm).unwrap_or(0.0)
+/// 解析済みのMAIN BPM。解析結果が無い譜面は初期BPMで代用する。
+pub(in crate::app) fn chart_main_bpm(row: &crate::screens::select_model::SelectChartRow) -> f64 {
+    row.chart_analysis
+        .as_ref()
+        .map(|analysis| analysis.main_bpm)
+        .or_else(|| row.chart.as_ref().map(|chart| chart.initial_bpm))
+        .unwrap_or(0.0)
 }
 
 pub(in crate::app) fn chart_length_ms(row: &crate::screens::select_model::SelectChartRow) -> i64 {

@@ -310,10 +310,12 @@ fn select_sort_roundtrips_through_str() {
 fn select_sort_orders_chart_rows_without_moving_folders() {
     let mut slow = select_chart_row(1);
     slow.chart.as_mut().unwrap().title = "Slow".to_string();
-    slow.chart.as_mut().unwrap().initial_bpm = 100.0;
+    slow.chart.as_mut().unwrap().initial_bpm = 200.0;
+    slow.chart_analysis.as_mut().unwrap().main_bpm = 100.0;
     let mut fast = select_chart_row(2);
     fast.chart.as_mut().unwrap().title = "Fast".to_string();
-    fast.chart.as_mut().unwrap().initial_bpm = 200.0;
+    fast.chart.as_mut().unwrap().initial_bpm = 100.0;
+    fast.chart_analysis.as_mut().unwrap().main_bpm = 200.0;
     let mut items = vec![
         SelectItem::Folder {
             path: "folder".to_string(),
@@ -330,6 +332,33 @@ fn select_sort_orders_chart_rows_without_moving_folders() {
     assert!(matches!(items[0], SelectItem::Folder { .. }));
     assert_eq!(items[1].display_name(), "Slow");
     assert_eq!(items[2].display_name(), "Fast");
+}
+
+#[test]
+fn select_bpm_sort_uses_initial_bpm_for_charts_without_analysis() {
+    let mut analyzed = select_chart_row(1);
+    analyzed.chart.as_mut().unwrap().title = "Analyzed".to_string();
+    analyzed.chart.as_mut().unwrap().initial_bpm = 100.0;
+    analyzed.chart_analysis.as_mut().unwrap().main_bpm = 200.0;
+    let mut unanalyzed = select_chart_row(2);
+    unanalyzed.chart.as_mut().unwrap().title = "Unanalyzed".to_string();
+    unanalyzed.chart.as_mut().unwrap().initial_bpm = 150.0;
+    unanalyzed.chart_analysis = None;
+    let mut missing = select_chart_row(3);
+    missing.chart = None;
+    missing.chart_analysis = None;
+    missing.fallback_title = "Missing".to_string();
+    let mut items = vec![
+        SelectItem::Chart(analyzed),
+        SelectItem::Chart(unanalyzed),
+        SelectItem::Chart(missing),
+    ];
+
+    apply_select_sort(&mut items, SelectSort::Bpm);
+
+    assert_eq!(items[0].display_name(), "Missing");
+    assert_eq!(items[1].display_name(), "Unanalyzed");
+    assert_eq!(items[2].display_name(), "Analyzed");
 }
 
 #[test]

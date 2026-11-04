@@ -376,9 +376,7 @@ fn select_chart_snapshot(
                 ) as f32
             })
             .unwrap_or(0.0),
-        chart_main_bpm: analysis
-            .map(|analysis| analysis.main_bpm as f32)
-            .unwrap_or_else(|| chart.map(|chart| chart.initial_bpm as f32).unwrap_or(0.0)),
+        chart_main_bpm: chart_main_bpm(row) as f32,
         chart_distribution: distribution
             .map(|distribution| select_chart_distribution(&distribution.notes))
             .unwrap_or_default(),
