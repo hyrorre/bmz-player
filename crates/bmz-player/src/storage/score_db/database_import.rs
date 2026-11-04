@@ -64,6 +64,23 @@ impl ScoreDatabase {
         record: &ScoreRecord,
         mode: ScoreInsertMode,
     ) -> Result<i64> {
+        self.insert_score_with_origin(record, mode, false)
+    }
+
+    /// A beatoraja-family score-table snapshot, not an individual attempt.
+    pub fn insert_imported_aggregate_score(&mut self, record: &ScoreRecord) -> Result<i64> {
+        self.insert_score_with_origin(record, ScoreInsertMode::Full, true)
+    }
+
+    fn insert_score_with_origin(
+        &mut self,
+        record: &ScoreRecord,
+        mode: ScoreInsertMode,
+        aggregate: bool,
+    ) -> Result<i64> {
+        if aggregate {
+            ensure_beatoraja_aggregate_source(record)?;
+        }
         let tx = self.conn.transaction()?;
         let previous_best = previous_best_snapshot(
             &tx,
@@ -77,6 +94,9 @@ impl ScoreDatabase {
         insert_score_history(&tx, record, previous_best.as_ref())?;
         let history_id = tx.last_insert_rowid();
         insert_score_history_ir_identity(&tx, history_id)?;
+        if aggregate {
+            mark_score_history_aggregate(&tx, history_id)?;
+        }
         if mode == ScoreInsertMode::Full {
             upsert_score_best(&tx, record, history_id)?;
             update_player_stats(&tx, record)?;
@@ -132,13 +152,45 @@ impl ScoreDatabase {
         &mut self,
         record: &ScoreRecord,
     ) -> Result<ImportedScoreReconciliation> {
+        self.reconcile_imported_score_with_origin(record, false)
+    }
+
+    /// Allow option/seed drift only for proven, uniquely matched score-table
+    /// aggregates. History logs and IR downloads keep strict attempt matching.
+    pub fn reconcile_imported_aggregate_score(
+        &mut self,
+        record: &ScoreRecord,
+    ) -> Result<ImportedScoreReconciliation> {
+        ensure_beatoraja_aggregate_source(record)?;
+        self.reconcile_imported_score_with_origin(record, true)
+    }
+
+    fn reconcile_imported_score_with_origin(
+        &mut self,
+        record: &ScoreRecord,
+        aggregate: bool,
+    ) -> Result<ImportedScoreReconciliation> {
         if record.source_kind == ScoreSourceKind::Local {
             return Ok(ImportedScoreReconciliation::Missing);
         }
         let tx = self.conn.transaction()?;
-        let Some(existing) = source_score_history_match(&tx, record)? else {
-            return Ok(ImportedScoreReconciliation::Missing);
+        let existing = if aggregate {
+            match source_aggregate_history_match(&tx, record)? {
+                SourceScoreHistoryLookup::Found(existing) => existing,
+                SourceScoreHistoryLookup::Missing => {
+                    return Ok(ImportedScoreReconciliation::Missing);
+                }
+                SourceScoreHistoryLookup::Ambiguous => {
+                    return Ok(ImportedScoreReconciliation::Ambiguous);
+                }
+            }
+        } else {
+            let Some(existing) = source_score_history_match(&tx, record)? else {
+                return Ok(ImportedScoreReconciliation::Missing);
+            };
+            existing
         };
+        let origin_added = aggregate && mark_score_history_aggregate(&tx, existing.history_id)?;
         let device_changed = existing.device_type != record.device_type;
         let source_min_bp = score_record_source_min_bp(record)
             .filter(|&next| existing.source_min_bp.is_none_or(|current| next < current));
@@ -151,14 +203,14 @@ impl ScoreDatabase {
                 params![existing.history_id],
                 |row| row.get(0),
             )?;
-        if !device_changed && !ghost_needs_backfill && source_min_bp.is_none() {
+        if !device_changed && !ghost_needs_backfill && source_min_bp.is_none() && !origin_added {
             return Ok(ImportedScoreReconciliation::Unchanged);
         }
         let ghost = ghost_needs_backfill
             .then(|| encode_beatoraja_ghost(&record.score.ghost))
             .transpose()?;
 
-        let mut corrected = false;
+        let mut corrected = origin_added;
         if let Some(source_min_bp) = source_min_bp {
             tx.execute(
                 "UPDATE score_history SET source_min_bp = ?1 WHERE id = ?2",

@@ -280,3 +280,187 @@ fn scoredatalog_only_uses_each_rows_minbp_and_keeps_judgement_bp_separate() {
     assert_eq!(history, (20, Some(20)));
     assert_eq!(import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard).skipped, 1);
 }
+
+#[test]
+fn aggregate_bp_improvement_with_seed_and_option_drift_keeps_one_history() {
+    for kind in [ScoreImportKind::Beatoraja, ScoreImportKind::Lr2Oraja, ScoreImportKind::Lr2OrajaDx]
+    {
+        let (mut library, mut db, sha, md5) = databases();
+        let source = source(kind, sha, md5);
+        let ghost = crate::storage::score_db::encode_beatoraja_ghost(&vec![1; 1100]).unwrap();
+        source
+            .execute("UPDATE score SET minbp = 20, seed = 11, option = 22, ghost = ?1", [ghost])
+            .unwrap();
+        assert_eq!(
+            import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard).imported,
+            1
+        );
+        let before = metadata(&db);
+        let origins = all_rows(&db, "score_history_sources", &[]);
+        assert_eq!(origins.len(), 1);
+
+        // Upstream changes seed and both arrange slots even without EX changes.
+        // OFF -> FLIP also changes applied_double_option, but shares the ScoreKey.
+        source.execute("UPDATE score SET seed = 22, option = 111, date = date + 10", []).unwrap();
+        let options_only = import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard);
+        assert_eq!(
+            (options_only.imported, options_only.corrected, options_only.skipped),
+            (0, 0, 1)
+        );
+        source.execute("UPDATE score SET minbp = 5", []).unwrap();
+        let corrected = import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard);
+        assert_eq!((corrected.imported, corrected.corrected, corrected.skipped), (0, 1, 0));
+        assert_eq!(best(&db, sha, kind).bp, 5);
+        assert_eq!(metadata(&db), before);
+        assert_eq!(all_rows(&db, "score_history_sources", &[]), origins);
+        assert_eq!(all_rows(&db, "score_history", &[]).len(), 1);
+        assert_eq!(best(&db, sha, kind).play_count, 1);
+        assert_eq!(best(&db, sha, kind).clear_count, 1);
+        assert_eq!(
+            import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard).skipped,
+            1
+        );
+        assert_eq!(metadata(&db), before);
+    }
+}
+
+#[test]
+fn scoredatalog_attempts_with_different_seed_and_options_stay_distinct() {
+    let kind = ScoreImportKind::Beatoraja;
+    let (mut library, mut db, sha, md5) = databases();
+    let source = source(kind, sha, md5);
+    source
+        .execute_batch(
+            "UPDATE score SET minbp = 20, seed = 11, option = 22;
+        ALTER TABLE score RENAME TO scoredatalog;",
+        )
+        .unwrap();
+    assert_eq!(import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard).imported, 1);
+    source.execute("UPDATE scoredatalog SET seed = 22, option = 111", []).unwrap();
+    assert_eq!(import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard).imported, 1);
+    assert_eq!(all_rows(&db, "score_history", &[]).len(), 2);
+    assert!(all_rows(&db, "score_history_sources", &[]).is_empty());
+    assert_eq!(best(&db, sha, kind).play_count, 2);
+}
+
+#[test]
+fn aggregate_without_proven_origin_is_skipped_until_an_exact_match_confirms_it() {
+    let kind = ScoreImportKind::Beatoraja;
+    let (mut library, mut db, sha, md5) = databases();
+    let source = source(kind, sha, md5);
+    source.execute("UPDATE score SET minbp = 20, seed = 11, option = 22", []).unwrap();
+    import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard);
+    // Emulate an old import (or a history log): its aggregate origin is unknown.
+    db.conn_mut().execute("DELETE FROM score_history_sources", []).unwrap();
+    let before = metadata(&db);
+    source.execute("UPDATE score SET minbp = 5, seed = 22, option = 111", []).unwrap();
+    let skipped = import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard);
+    assert_eq!((skipped.imported, skipped.corrected, skipped.skipped), (0, 0, 1));
+    assert_eq!(skipped.issues[0].kind, ScoreImportIssueKind::Unsupported);
+    assert_eq!(metadata(&db), before);
+    assert_eq!(best(&db, sha, kind).bp, 20);
+
+    source.execute("UPDATE score SET seed = 11, option = 22", []).unwrap();
+    assert_eq!(
+        import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard).corrected,
+        1
+    );
+    source.execute("UPDATE score SET minbp = 3, seed = 22, option = 111", []).unwrap();
+    assert_eq!(
+        import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard).corrected,
+        1
+    );
+    assert_eq!(best(&db, sha, kind).bp, 3);
+    assert_eq!(all_rows(&db, "score_history", &[]).len(), 1);
+    assert_eq!(metadata(&db), before);
+}
+
+#[test]
+fn multiple_aggregate_candidates_are_skipped_but_an_exact_match_still_wins() {
+    let kind = ScoreImportKind::Beatoraja;
+    let (mut library, mut db, sha, md5) = databases();
+    let source = source(kind, sha, md5);
+    source.execute("UPDATE score SET minbp = 20, seed = 11, option = 22", []).unwrap();
+    import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard);
+    // Preserve a distinct actual attempt, then confirm that snapshot as another
+    // aggregate through a strict match. Both origins are now proven.
+    source
+        .execute_batch(
+            "ALTER TABLE score RENAME TO scoredatalog;
+        UPDATE scoredatalog SET seed = 22, option = 11;",
+        )
+        .unwrap();
+    assert_eq!(import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard).imported, 1);
+    source.execute_batch("ALTER TABLE scoredatalog RENAME TO score;").unwrap();
+    assert_eq!(
+        import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard).corrected,
+        1
+    );
+    assert_eq!(all_rows(&db, "score_history_sources", &[]).len(), 2);
+    let before = metadata(&db);
+    source.execute("UPDATE score SET minbp = 5, seed = 33, option = 111", []).unwrap();
+    let skipped = import(&source, kind, &mut library, &mut db, InputDeviceKind::Controller);
+    assert_eq!((skipped.imported, skipped.corrected, skipped.skipped), (0, 0, 1));
+    assert_eq!(skipped.issues[0].kind, ScoreImportIssueKind::Unsupported);
+    assert_eq!(metadata(&db), before);
+    assert_eq!(best(&db, sha, kind).bp, 20);
+
+    source.execute("UPDATE score SET seed = 11, option = 22", []).unwrap();
+    assert_eq!(
+        import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard).corrected,
+        1
+    );
+    assert_eq!(best(&db, sha, kind).bp, 5);
+    assert_eq!(metadata(&db), before);
+    assert_eq!(all_rows(&db, "score_history", &[]).len(), 2);
+}
+
+#[test]
+fn unique_aggregate_is_not_confused_with_unmarked_actual_attempts() {
+    let kind = ScoreImportKind::Beatoraja;
+    let (mut library, mut db, sha, md5) = databases();
+    let source = source(kind, sha, md5);
+    source.execute("UPDATE score SET minbp = 20, seed = 11, option = 22", []).unwrap();
+    import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard);
+    source
+        .execute_batch(
+            "ALTER TABLE score RENAME TO scoredatalog;
+        UPDATE scoredatalog SET seed = 22, option = 11;",
+        )
+        .unwrap();
+    import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard);
+    source.execute_batch("ALTER TABLE scoredatalog RENAME TO score;").unwrap();
+    source.execute("UPDATE score SET minbp = 5, seed = 33, option = 111", []).unwrap();
+    let before = metadata(&db);
+    assert_eq!(
+        import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard).corrected,
+        1
+    );
+    assert_eq!(metadata(&db), before);
+    let evidence: Vec<(i64, Option<u32>)> = db
+        .conn()
+        .prepare("SELECT random_seed, source_min_bp FROM score_history ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(evidence, vec![(11, Some(5)), (22, Some(20))]);
+    assert_eq!(all_rows(&db, "score_history_sources", &[]).len(), 1);
+}
+
+#[test]
+fn aggregate_fallback_never_crosses_score_buckets_or_changed_judgements() {
+    for change in ["option = 222", "epg = 1049, egr = 2"] {
+        let kind = ScoreImportKind::Beatoraja;
+        let (mut library, mut db, sha, md5) = databases();
+        let source = source(kind, sha, md5);
+        import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard);
+        source.execute_batch(&format!("UPDATE score SET seed = 33, minbp = 3, {change};")).unwrap();
+        assert_eq!(
+            import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard).imported,
+            1
+        );
+        assert_eq!(all_rows(&db, "score_history", &[]).len(), 2);
+    }
+}

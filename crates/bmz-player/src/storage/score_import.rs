@@ -415,6 +415,11 @@ fn import_lr2_scores_with_device_type(
                 report.corrected += 1;
                 continue;
             }
+            ImportedScoreReconciliation::Ambiguous => {
+                report.skipped += 1;
+                report.issue(ScoreImportIssueKind::Unsupported, row.md5.clone());
+                continue;
+            }
         }
         score_db.insert_score(&record)?;
         report.imported += 1;
@@ -599,7 +604,12 @@ fn import_beatoraja_scores_with_device_type(
         }
         record.device_type = device_type;
         record.source_min_bp = imported_source_min_bp(row.min_bp, kind);
-        match score_db.reconcile_imported_score(&record)? {
+        let reconciliation = if table == "score" {
+            score_db.reconcile_imported_aggregate_score(&record)?
+        } else {
+            score_db.reconcile_imported_score(&record)?
+        };
+        match reconciliation {
             ImportedScoreReconciliation::Missing => {}
             ImportedScoreReconciliation::Unchanged => {
                 report.skipped += 1;
@@ -610,8 +620,23 @@ fn import_beatoraja_scores_with_device_type(
                 report.corrected += 1;
                 continue;
             }
+            ImportedScoreReconciliation::Ambiguous => {
+                report.skipped += 1;
+                report.issue(
+                    ScoreImportIssueKind::Unsupported,
+                    format!(
+                        "ambiguous aggregate history (multiple candidates or unknown origin): {}",
+                        row.sha256
+                    ),
+                );
+                continue;
+            }
         }
-        score_db.insert_score(&record)?;
+        if table == "score" {
+            score_db.insert_imported_aggregate_score(&record)?;
+        } else {
+            score_db.insert_score(&record)?;
+        }
         report.imported += 1;
     }
     Ok(report)

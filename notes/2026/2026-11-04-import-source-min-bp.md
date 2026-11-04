@@ -85,3 +85,47 @@ PR #65のv33限定テストはv33までを明示し、通常保存・cleanupテ�
 再照合の全ScoreKey条件、BP補正で代表情報・回数・IR identityを変更しないこと、
 migrationが列追加だけであることを確認した。コースの具体値を渡す型調整は保存仕様を変えず、
 既存のLR2コース取込テストも通る。通常/IR downloadのsource_min_bp既定値はNULLのまま。
+
+## レビュー指摘: BP更新とoption / seed変更
+
+指摘は妥当。[beatoraja ScoreData.update](https://github.com/exch-bms2/beatoraja/blob/9340253a866a2f0091d44c6fa9de7637ce229ef9/src/bms/player/beatoraja/ScoreData.java#L589)と
+[EDの同処理](https://github.com/seraxis/lr2oraja-endlessdream/blob/d4995153b0a759859ebc8f859dd868abae39db5a/core/src/bms/player/beatoraja/ScoreData.java#L592)は、
+EX未更新でもminbp改善時にoption / seedを更新する。初版PR #66は元の厳密照合だけを
+使っていたため、これを新しい履歴として数えた。上流調査で確認した変化を再照合へ
+反映できていなかったことが原因。
+
+beatoraja形式のscore-table importだけに明示的なAPIを設け、既存の
+score_history_sourcesへsource=score_db_aggregateの由来を保存する。
+scoredatalog-only、通常プレイ、IR download、LR2は従来の厳密照合を維持する。
+由来は新規保存時、またはscoreの厳密一致が成功した時だけ記録する。
+当初のNULL可BP列だけからはscoreとscoredatalogを区別できないため、それを
+集計由来の証拠とはしない。追加schema変更は不要で、IR側が照合するsource種別とも異なる。
+
+厳密一致に失敗した集計入力は、同じScoreKey・source kind・EX・判定内訳・BP/CB・
+combo・clear/gauge等を保ったままseed / arrange / arrange_2p / applied_double_option
+だけを緩める。確認済み集計候補が1件だけなら補正し、旧代表のseed / 配置・ghost・
+判定内訳・日時・replayは維持する。OFF/FLIPは同bucketで照合できるがBATTLEへは跨がない。
+
+厳密一致は補完照合より先に評価する。補完候補に複数の確認済み集計履歴がある場合、
+または由来不明の旧履歴しかない場合はAmbiguousとして未対応理由付きでスキップし、
+補正も追加履歴も行わない。旧履歴に同じ判定の実プレイが含まれる可能性があるため、
+EXや判定の一致だけでは集計由来と推測しない。正確な旧metadataと照合できる場合は
+由来を記録できる。確認済み集計が1件と未確認の実プレイが混在する場合は前者だけを使う。
+
+由来INSERTとBP/device/ghost補正は保存のtransaction内で実行し、失敗時は全て巻き戻す。
+履歴削除時は既存のforeign key cascadeで由来も消え、BPも残存履歴から再集計する。
+
+レビュー修正後の検証（同じ環境・除外条件）:
+
+- fmt / check / all-targets Clippy（-D warnings）: 成功。
+- score_import 45件、score_db 80件、migration 11件: 全件成功。
+- lib全体: 2843件成功、失敗0、36ignore、31filter。IR関連の既存テストも含む。
+- 追加7件: BP+seed/1P/2P配置/FLIP同時変更をbeatoraja/LR2oraja/DXで確認。
+  optionのみの変更と再実行で履歴・回数を増やさず、旧代表metadataも維持する。
+  複数集計候補、未知の旧由来、厳密一致の優先、未確認の実プレイとの混在、
+  scoredatalogのseed違い、別bucket・判定内訳違い、由来保存・補正のrollbackと削除も検証。
+
+自己レビューでは、厳密照合の既存条件を維持すること、補完照合が明示的な集計入力だけで
+呼ばれること、SELECTで全ScoreKey・source kindを制約すること、由来をEXISTSで調べて
+候補を重複させないこと、複数候補を代表優先で選ばないこと、IR照合のsourceとは別の
+由来を使うことを確認した。既存履歴のseed・配置を更新するSQLは追加していない。

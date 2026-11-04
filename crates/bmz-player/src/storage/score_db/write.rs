@@ -704,6 +704,17 @@ pub(super) fn score_record_source_min_bp(record: &ScoreRecord) -> Option<u32> {
     (record.source_kind != ScoreSourceKind::Local).then_some(record.source_min_bp).flatten()
 }
 
+pub(super) fn ensure_beatoraja_aggregate_source(record: &ScoreRecord) -> Result<()> {
+    anyhow::ensure!(
+        matches!(
+            record.source_kind,
+            ScoreSourceKind::Beatoraja | ScoreSourceKind::Lr2Oraja | ScoreSourceKind::Lr2OrajaDx
+        ),
+        "aggregate reconciliation requires a beatoraja-family score-table import"
+    );
+    Ok(())
+}
+
 /// The aggregate may use source minbp; representative ranking and history.bp
 /// must continue using the BP computed from this record's judgement counts.
 pub(super) fn score_record_best_bp(record: &ScoreRecord) -> u32 {

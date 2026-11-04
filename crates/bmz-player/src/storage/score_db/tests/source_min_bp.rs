@@ -314,3 +314,44 @@ fn migration_v34_failure_rolls_back_schema_data_and_version() {
     run_migrations(db.conn_mut(), SCORE_MIGRATIONS).unwrap();
     assert_eq!(best(&db, &play(2100, 20)).bp, 20);
 }
+
+#[test]
+fn aggregate_origin_and_fallback_corrections_are_transactional_and_cleanup_owned() {
+    let mut db = database(SCORE_MIGRATIONS.len());
+    db.insert_score(&play(2000, 10)).unwrap();
+    let mut source = imported(2100, 20, Some(20));
+    source.random_seed = Some(11);
+    db.conn
+        .execute_batch(
+            "CREATE TRIGGER fail_origin BEFORE INSERT ON score_history_sources
+        BEGIN SELECT RAISE(ABORT, 'test origin failure'); END;",
+        )
+        .unwrap();
+    let before = snapshot(&db);
+    assert!(db.insert_imported_aggregate_score(&source).is_err());
+    assert_eq!(snapshot(&db), before);
+    db.conn.execute_batch("DROP TRIGGER fail_origin;").unwrap();
+    let id = db.insert_imported_aggregate_score(&source).unwrap();
+    db.conn
+        .execute_batch(
+            "CREATE TRIGGER fail_device BEFORE UPDATE OF device_type ON score_history
+        BEGIN SELECT RAISE(ABORT, 'test fallback failure'); END;",
+        )
+        .unwrap();
+    source.random_seed = Some(22);
+    source.arrange = "Mirror".into();
+    source.source_min_bp = Some(5);
+    source.device_type = InputDeviceKind::Controller;
+    let before = snapshot(&db);
+    assert!(db.reconcile_imported_aggregate_score(&source).is_err());
+    assert_eq!(snapshot(&db), before);
+    db.conn.execute_batch("DROP TRIGGER fail_device;").unwrap();
+    assert_eq!(
+        db.reconcile_imported_aggregate_score(&source).unwrap(),
+        ImportedScoreReconciliation::Corrected
+    );
+    assert_eq!(best(&db, &source).bp, 5);
+    db.purge_score_history_ids_and_rebuild(&[id]).unwrap();
+    assert!(rows(db.conn(), "SELECT * FROM score_history_sources").is_empty());
+    assert_eq!(best(&db, &source).bp, 10);
+}
