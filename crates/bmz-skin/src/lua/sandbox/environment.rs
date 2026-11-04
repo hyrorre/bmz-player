@@ -140,17 +140,16 @@ pub(super) fn install_sandbox(
         globals.set("skin_config", skin_config)?;
     }
     install_luaj_random(lua, load_dependencies.clone())?;
-    globals.set("os", create_os_stub(lua, main_state_probe.clone())?)?;
-    globals.set(
-        "io",
-        create_io_stub(
-            lua,
-            path_context,
-            virtual_io_files,
-            load_dependencies.clone(),
-            file_overlay.clone(),
-        )?,
+    let os = create_os_stub(lua, main_state_probe.clone())?;
+    let io = create_io_stub(
+        lua,
+        path_context,
+        virtual_io_files,
+        load_dependencies.clone(),
+        file_overlay.clone(),
     )?;
+    globals.set("os", os.clone())?;
+    globals.set("io", io.clone())?;
     globals.set("debug", Value::Nil)?;
     install_bit32_library(lua)?;
     // LuaJ's standard globals expose luajava directly. Some beatoraja skins use
@@ -171,6 +170,7 @@ pub(super) fn install_sandbox(
     package.set("path", path_context.initial_package_path())?;
     package.set("cpath", "")?;
     package.set("loadlib", Value::Nil)?;
+    harden_standard_library(lua, &package, os, io)?;
 
     let print_skin_path = path_context.entry_file().to_path_buf();
     let print = lua.create_function(move |_, args: Variadic<Value>| {
@@ -211,7 +211,10 @@ pub(super) fn install_sandbox(
         };
         record_lua_loaded_file_dependency(&path, dependencies_for_dofile.as_ref());
         let source = fs::read_to_string(&path).map_err(mlua::Error::external)?;
-        lua.load(&source).set_name(path.to_string_lossy().as_ref()).eval::<Value>()
+        lua.load(&source)
+            .set_name(path.to_string_lossy().as_ref())
+            .set_mode(ChunkMode::Text)
+            .eval::<Value>()
     })?;
     globals.set("dofile", dofile)?;
 
@@ -227,7 +230,10 @@ pub(super) fn install_sandbox(
         };
         record_lua_loaded_file_dependency(&path, dependencies_for_loadfile.as_ref());
         let source = fs::read_to_string(&path).map_err(mlua::Error::external)?;
-        lua.load(&source).set_name(path.to_string_lossy().as_ref()).into_function()
+        lua.load(&source)
+            .set_name(path.to_string_lossy().as_ref())
+            .set_mode(ChunkMode::Text)
+            .into_function()
     })?;
     globals.set("loadfile", loadfile)?;
 
@@ -268,6 +274,15 @@ pub(super) fn install_sandbox(
             return Ok(value);
         }
 
+        // Lua's preload searcher comes before the file search. A preload
+        // loader is skin code, so it cannot read anything the skin cannot.
+        if let Value::Table(preload) = package.get::<Value>("preload")?
+            && let Value::Function(loader) = preload.get::<Value>(module.as_str())?
+        {
+            let value = loader.call::<Value>((module.clone(), ":preload:"))?;
+            return finish_require(&loaded, &module, value);
+        }
+
         let package_path = package.get::<String>("path")?;
         let mut attempted = Vec::new();
         let mut resolved = None;
@@ -289,17 +304,13 @@ pub(super) fn install_sandbox(
         };
         record_lua_loaded_file_dependency(&path, dependencies_for_require.as_ref());
         let source = fs::read_to_string(&path).map_err(mlua::Error::external)?;
-        let loader = lua.load(&source).set_name(path.to_string_lossy().as_ref()).into_function()?;
+        let loader = lua
+            .load(&source)
+            .set_name(path.to_string_lossy().as_ref())
+            .set_mode(ChunkMode::Text)
+            .into_function()?;
         let value = loader.call::<Value>((module.clone(), path.to_string_lossy().to_string()))?;
-        if !matches!(value, Value::Nil) {
-            loaded.set(module.as_str(), value)?;
-        }
-        let cached = loaded.get::<Value>(module.as_str())?;
-        if !matches!(cached, Value::Nil) {
-            return Ok(cached);
-        }
-        loaded.set(module, true)?;
-        Ok(Value::Boolean(true))
+        finish_require(&loaded, &module, value)
     })?;
     globals.set("require", require)?;
 
@@ -310,6 +321,63 @@ pub(super) fn install_sandbox(
     globals.set("bmz_timer_fn_map", timer_fn_map)?;
 
     Ok(main_state_probe)
+}
+
+/// Lua 5.4 `require` bookkeeping after a loader ran: a non-nil result is
+/// cached, a loader may set `package.loaded[name]` itself, and otherwise the
+/// module is recorded as `true`.
+fn finish_require(loaded: &Table, module: &str, value: Value) -> mlua::Result<Value> {
+    if !matches!(value, Value::Nil) {
+        loaded.set(module, value)?;
+    }
+    let cached = loaded.get::<Value>(module)?;
+    if !matches!(cached, Value::Nil) {
+        return Ok(cached);
+    }
+    loaded.set(module, true)?;
+    Ok(Value::Boolean(true))
+}
+
+/// Lua::new() registers the real standard libraries in `package.loaded`, and
+/// the stock searchers and `string.dump` stay reachable after the globals are
+/// replaced. Close those paths so every access route sees the sandboxed APIs.
+fn harden_standard_library(lua: &Lua, package: &Table, os: Value, io: Value) -> Result<()> {
+    // `require` consults package.loaded first, so `require('os')` and
+    // `package.loaded.io` must yield the same restricted tables as the globals.
+    let loaded: Table = package.get("loaded")?;
+    loaded.set("os", os)?;
+    loaded.set("io", io)?;
+    loaded.set("debug", Value::Nil)?;
+
+    // The stock Lua searcher reads any file named by package.path (which the
+    // skin can rewrite), and searchpath probes arbitrary paths. The sandboxed
+    // `require` resolves files itself, so only the preload searcher remains.
+    let searchers: Table = package.get("searchers")?;
+    let preload_searcher: Value = searchers.raw_get(1)?;
+    let restricted_searchers = lua.create_table()?;
+    restricted_searchers.raw_set(1, preload_searcher)?;
+    package.set("searchers", restricted_searchers)?;
+    package.set("searchpath", Value::Nil)?;
+
+    // Binary chunks bypass the bytecode verifier Lua 5.4 no longer has and can
+    // corrupt the VM. Remove the dumper and accept only text chunks in `load`.
+    let string: Table = lua.globals().get("string")?;
+    string.set("dump", Value::Nil)?;
+    let original_load: Function = lua.globals().get("load")?;
+    let original_load = lua.create_registry_value(original_load)?;
+    let text_load = lua.create_function(move |lua, mut args: Variadic<Value>| {
+        // Only the mode slot is overwritten. A 4th argument is forwarded only
+        // when the skin passed one, because an explicit nil `env` differs from
+        // an omitted one.
+        while args.len() < 3 {
+            args.push(Value::Nil);
+        }
+        args[2] = Value::String(lua.create_string("t")?);
+        let original_load: Function = lua.registry_value(&original_load)?;
+        original_load.call::<mlua::MultiValue>(args)
+    })?;
+    lua.globals().set("load", text_load)?;
+    Ok(())
 }
 
 /// LuaJ MathLib accepts fractional bounds via checkint() and ignores arguments

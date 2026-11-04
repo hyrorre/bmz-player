@@ -719,9 +719,13 @@ pub(super) fn install_luajava_file_facade(
     luajava.set(
         "new",
         lua.create_function(move |lua, args: Variadic<Value>| {
+            // Raw access: other bound classes are stubs whose `__index`
+            // returns a table for every key.
             if let Some(Value::Table(class)) = args.first()
-                && class.get::<Option<String>>(JAVA_CLASS_FIELD)?.as_deref()
-                    == Some(JAVA_FILE_CLASS)
+                && matches!(
+                    class.raw_get::<Value>(JAVA_CLASS_FIELD)?,
+                    Value::String(name) if name.as_bytes() == JAVA_FILE_CLASS.as_bytes()
+                )
                 && let Some(path) = java_file_path(lua, &args[1..])?
             {
                 return create_java_file(lua, &context, &files, &deps, path);

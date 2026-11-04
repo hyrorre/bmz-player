@@ -1026,6 +1026,16 @@ skin library root配下のLua skinへ公開する初期`package.path`は、過�
 別途検証します。library rootを持たない低レベルAPIは、entry directoryの絶対
 パスを使うfallbackで解決します。
 
+標準ライブラリの迂回経路も閉じています。`require("os")` / `require("io")` と
+`package.loaded.os` / `io` はglobalと同じ限定版を返し、`package.loaded.debug` はありません。
+`package.searchers` は `package.preload` を引く1件だけで、`package.searchpath` はありません。
+`require` は `package.loaded`、組み込みモジュール（`main_state` / `timer_util` / `event_util` / `luajava`）、
+`package.preload`、sandbox内の `package.path` の順に探します。
+`string.dump` はなく、`load` は常にテキストモード（`mode="t"`）で読み込みます。
+`dofile` / `loadfile` / `require`、文字列の`act` / `event`もバイナリチャンクを受け付けません。
+`act`の定数推論では、callbackの複製を`os` / `io` / `package` / chunk loaderを持たない
+別VMで、命令数・メモリの上限付きで実行します。
+
 ### Lua APIの互換範囲
 
 譜面長のnumber `1163` / `1164`（`chartlength_minute` / `chartlength_second`）は、

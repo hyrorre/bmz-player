@@ -1,4 +1,5 @@
 use super::*;
+use mlua::{LuaOptions, StdLib};
 
 pub(in crate::lua) fn infer_constant_number_at_load(
     lua: &Lua,
@@ -120,7 +121,7 @@ fn clone_constant_probe_function(
     if depth >= 8 || function.info().what != "Lua" {
         return None;
     }
-    let copied = lua.load(function.dump(false)).into_function().ok()?;
+    let copied = lua.load(function.dump(false)).set_mode(ChunkMode::Binary).into_function().ok()?;
     // SAFETY: helpers only read/set the specified upvalue in their call frame.
     let get = unsafe { lua.create_c_function(get_probe_upvalue).ok()? };
     let set = unsafe { lua.create_c_function(set_probe_upvalue).ok()? };
@@ -175,6 +176,31 @@ unsafe extern "C-unwind" fn set_probe_upvalue(state: *mut mlua::lua_State) -> st
     }
 }
 
+/// A VM for running a copy of a skin callback away from the skin's own state.
+///
+/// The copied bytecode binds its `_ENV` to this VM's globals, so it must not
+/// expose anything the skin sandbox withholds: only pure libraries are loaded
+/// (no `os`, `io`, `package`/`require` or `debug`), the base library's file
+/// and chunk loaders are removed, and the usual memory and instruction ceilings
+/// apply. Anything else makes inference fail and leaves the callback to runtime.
+pub(in crate::lua) fn isolated_probe_lua() -> Option<Lua> {
+    let lua = Lua::new_with(
+        StdLib::MATH | StdLib::STRING | StdLib::TABLE | StdLib::UTF8,
+        LuaOptions::new(),
+    )
+    .ok()?;
+    lua.set_memory_limit(LUA_MEMORY_LIMIT_BYTES).ok()?;
+    let _ =
+        install_instruction_limit_with_ceilings(&lua, LUA_INSTRUCTION_LIMIT, LUA_INSTRUCTION_LIMIT);
+    let globals = lua.globals();
+    for name in ["dofile", "loadfile", "load", "require", "collectgarbage"] {
+        globals.raw_set(name, Value::Nil).ok()?;
+    }
+    let string: Table = globals.raw_get("string").ok()?;
+    string.raw_set("dump", Value::Nil).ok()?;
+    Some(lua)
+}
+
 pub(in crate::lua) fn infer_constant_integer_at_load(
     function: &Function,
     _main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -183,9 +209,10 @@ pub(in crate::lua) fn infer_constant_integer_at_load(
     // can mutate globals used by later draw conversion (WMII switches Expand_op
     // from GRAPH to IR this way). Evaluate serializable constant callbacks in an
     // isolated Lua state so conversion has no observable side effects.
-    let isolated = Lua::new();
+    let isolated = isolated_probe_lua()?;
     let dumped = function.dump(true);
-    let isolated_function = isolated.load(&dumped).into_function().ok()?;
+    let isolated_function =
+        isolated.load(&dumped).set_mode(ChunkMode::Binary).into_function().ok()?;
     match isolated_function.call::<Value>(()).ok()? {
         Value::Integer(value) => Some(value),
         Value::Number(value) if value.is_finite() && value.fract() == 0.0 => Some(value as i64),
@@ -203,10 +230,11 @@ pub(in crate::lua) fn infer_result_panel_act_at_load(
     {
         // WMII の tab callback は `Expand_op = 1/2` だけを行う。元の Lua state を
         // 実行時まで保持せず、隔離 state で代入先を観測して BMZ 内部 event に変換する。
-        let isolated = Lua::new();
+        let isolated = isolated_probe_lua()?;
         isolated.globals().raw_set("Expand_op", current).ok()?;
         let dumped = function.dump(true);
-        let isolated_function = isolated.load(&dumped).into_function().ok()?;
+        let isolated_function =
+            isolated.load(&dumped).set_mode(ChunkMode::Binary).into_function().ok()?;
         if !matches!(isolated_function.call::<Value>(()).ok()?, Value::Nil) {
             return None;
         }
@@ -219,9 +247,10 @@ pub(in crate::lua) fn infer_result_panel_act_at_load(
     // its isolated copy, and observe only the resulting `result_mode` value.
     let (upvalue_index, current_mode) = lua_result_mode_upvalue(lua, function)?;
     record_local_result_panel_default(main_state_probe, current_mode)?;
-    let isolated = Lua::new();
+    let isolated = isolated_probe_lua()?;
     let dumped = function.dump(false);
-    let isolated_function = isolated.load(&dumped).into_function().ok()?;
+    let isolated_function =
+        isolated.load(&dumped).set_mode(ChunkMode::Binary).into_function().ok()?;
     if !set_lua_integer_upvalue(&isolated, &isolated_function, upvalue_index, current_mode)
         || !matches!(isolated_function.call::<Value>(()).ok()?, Value::Nil)
     {
