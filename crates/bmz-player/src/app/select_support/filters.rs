@@ -258,12 +258,6 @@ pub(in crate::app) fn compare_select_chart_rows(
     b: &crate::screens::select_model::SelectChartRow,
     sort: SelectSort,
 ) -> std::cmp::Ordering {
-    // TITLE以外のソートでは、未所持譜面を所持譜面より後ろへ送る。
-    let owned_first = if sort == SelectSort::Title {
-        std::cmp::Ordering::Equal
-    } else {
-        b.in_library().cmp(&a.in_library())
-    };
     let ordering = match sort {
         SelectSort::Title => compare_case_insensitive(a.display_title(), b.display_title()),
         SelectSort::Artist => compare_case_insensitive(a.display_artist(), b.display_artist()),
@@ -274,7 +268,9 @@ pub(in crate::app) fn compare_select_chart_rows(
         SelectSort::Score => ex_score_percent(a).total_cmp(&ex_score_percent(b)),
         SelectSort::Bp => bp(a).cmp(&bp(b)),
     };
-    owned_first
+    // 未所持譜面は、どのソートでも所持譜面より後ろへ送る。
+    b.in_library()
+        .cmp(&a.in_library())
         .then(ordering)
         .then_with(|| compare_case_insensitive(a.display_title(), b.display_title()))
 }

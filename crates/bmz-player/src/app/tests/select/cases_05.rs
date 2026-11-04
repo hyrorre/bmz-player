@@ -362,15 +362,7 @@ fn missing_select_chart_row(title: &str) -> SelectChartRow {
 
 #[test]
 fn select_sorts_place_missing_charts_last() {
-    for sort in [
-        SelectSort::Artist,
-        SelectSort::Bpm,
-        SelectSort::Length,
-        SelectSort::Level,
-        SelectSort::Clear,
-        SelectSort::Score,
-        SelectSort::Bp,
-    ] {
+    for sort in SelectSort::ORDER {
         let mut owned = select_chart_row(2);
         owned.chart.as_mut().unwrap().title = "Owned".to_string();
         let mut items =
@@ -381,19 +373,6 @@ fn select_sorts_place_missing_charts_last() {
         assert_eq!(items[0].display_name(), "Owned", "{sort:?}");
         assert_eq!(items[1].display_name(), "Missing", "{sort:?}");
     }
-}
-
-#[test]
-fn select_title_sort_keeps_missing_charts_in_title_order() {
-    let mut owned = select_chart_row(2);
-    owned.chart.as_mut().unwrap().title = "Zulu".to_string();
-    let mut items =
-        vec![SelectItem::Chart(owned), SelectItem::Chart(missing_select_chart_row("Alpha"))];
-
-    apply_select_sort(&mut items, SelectSort::Title);
-
-    assert_eq!(items[0].display_name(), "Alpha");
-    assert_eq!(items[1].display_name(), "Zulu");
 }
 
 fn scored_select_chart_row(
