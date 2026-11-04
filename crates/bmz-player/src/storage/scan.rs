@@ -122,6 +122,8 @@ mod everything;
 mod import;
 #[cfg(test)]
 mod link_tests;
+#[cfg(test)]
+mod partial_scan_tests;
 
 pub(crate) use discovery::folder_has_document;
 pub(crate) use discovery::hidden_path_in_root;
