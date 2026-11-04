@@ -344,21 +344,48 @@ fn select_bpm_sort_uses_initial_bpm_for_charts_without_analysis() {
     unanalyzed.chart.as_mut().unwrap().title = "Unanalyzed".to_string();
     unanalyzed.chart.as_mut().unwrap().initial_bpm = 150.0;
     unanalyzed.chart_analysis = None;
-    let mut missing = select_chart_row(3);
-    missing.chart = None;
-    missing.chart_analysis = None;
-    missing.fallback_title = "Missing".to_string();
-    let mut items = vec![
-        SelectItem::Chart(analyzed),
-        SelectItem::Chart(unanalyzed),
-        SelectItem::Chart(missing),
-    ];
+    let mut items = vec![SelectItem::Chart(analyzed), SelectItem::Chart(unanalyzed)];
 
     apply_select_sort(&mut items, SelectSort::Bpm);
 
-    assert_eq!(items[0].display_name(), "Missing");
-    assert_eq!(items[1].display_name(), "Unanalyzed");
-    assert_eq!(items[2].display_name(), "Analyzed");
+    assert_eq!(items[0].display_name(), "Unanalyzed");
+    assert_eq!(items[1].display_name(), "Analyzed");
+}
+
+fn missing_select_chart_row(title: &str) -> SelectChartRow {
+    let mut row = select_chart_row(1);
+    row.chart = None;
+    row.chart_analysis = None;
+    row.fallback_title = title.to_string();
+    row
+}
+
+#[test]
+fn select_song_info_sorts_place_missing_charts_last() {
+    for sort in [SelectSort::Artist, SelectSort::Bpm, SelectSort::Length, SelectSort::Level] {
+        let mut owned = select_chart_row(2);
+        owned.chart.as_mut().unwrap().title = "Owned".to_string();
+        let mut items =
+            vec![SelectItem::Chart(missing_select_chart_row("Missing")), SelectItem::Chart(owned)];
+
+        apply_select_sort(&mut items, sort);
+
+        assert_eq!(items[0].display_name(), "Owned", "{sort:?}");
+        assert_eq!(items[1].display_name(), "Missing", "{sort:?}");
+    }
+}
+
+#[test]
+fn select_title_sort_keeps_missing_charts_in_title_order() {
+    let mut owned = select_chart_row(2);
+    owned.chart.as_mut().unwrap().title = "Zulu".to_string();
+    let mut items =
+        vec![SelectItem::Chart(owned), SelectItem::Chart(missing_select_chart_row("Alpha"))];
+
+    apply_select_sort(&mut items, SelectSort::Title);
+
+    assert_eq!(items[0].display_name(), "Alpha");
+    assert_eq!(items[1].display_name(), "Zulu");
 }
 
 #[test]

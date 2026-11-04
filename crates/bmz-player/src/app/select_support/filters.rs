@@ -258,6 +258,15 @@ pub(in crate::app) fn compare_select_chart_rows(
     b: &crate::screens::select_model::SelectChartRow,
     sort: SelectSort,
 ) -> std::cmp::Ordering {
+    // beatoraja `BarSorter` と同じく、譜面情報で比べるソートでは未所持譜面を末尾へ送る。
+    let owned_first = match sort {
+        SelectSort::Artist | SelectSort::Bpm | SelectSort::Length | SelectSort::Level => {
+            b.in_library().cmp(&a.in_library())
+        }
+        SelectSort::Title | SelectSort::Clear | SelectSort::Score | SelectSort::Bp => {
+            std::cmp::Ordering::Equal
+        }
+    };
     let ordering = match sort {
         SelectSort::Title => compare_case_insensitive(a.display_title(), b.display_title()),
         SelectSort::Artist => compare_case_insensitive(a.display_artist(), b.display_artist()),
@@ -268,7 +277,9 @@ pub(in crate::app) fn compare_select_chart_rows(
         SelectSort::Score => ex_score(a).cmp(&ex_score(b)),
         SelectSort::Bp => bp(a).cmp(&bp(b)),
     };
-    ordering.then_with(|| compare_case_insensitive(a.display_title(), b.display_title()))
+    owned_first
+        .then(ordering)
+        .then_with(|| compare_case_insensitive(a.display_title(), b.display_title()))
 }
 
 pub(in crate::app) fn compare_case_insensitive(a: &str, b: &str) -> std::cmp::Ordering {
