@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-04 | [ModernChicのPlay画面に関する8項目の報告](2026/2026-11-04-modernchic-play-report.md) |
 | 2026-11-04 | [外部スコアDBの独立最小BPを保持する](2026/2026-11-04-import-source-min-bp.md) |
 | 2026-11-03 | [単曲スコアの独立ベストと既存DB修復](2026/2026-11-03-independent-score-bests.md) |
 | 2026-11-03 | [HTTP取得した書庫の直接登録とtar.gz / LZH対応（#63）](2026/2026-11-03-download-archive-registration.md) |

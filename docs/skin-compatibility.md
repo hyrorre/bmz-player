@@ -71,11 +71,13 @@ Resultのお気に入りは、単曲・コース曲間で`act = 89 / 90`とimage
 | songlistの`graph` | フォルダ行のランプ分布に加え、LR2oraja Endless Dreamと同様に譜面ダウンロード中の曲バーへ進捗を描きます。[描画](../crates/bmz-render/src/skin/document_render/select/graph.rs)、[仕様](chart-downloads.md#進捗と操作) |
 | Playターゲットスコア | 数値ref `121/151`は最終値、`153`は進行値との差分です。グラフ`114`は進行値、`115`は最終値を最大EX SCOREに対する割合で返します。value / text / Luaの共通処理で解決します。[仕様](skin.md#play-target-score-refs)、[回帰テスト](../crates/bmz-render/src/skin/tests/graphs_more.rs) |
 | Mine sprite | JSON / Luaの`note.mine`を使い、指定がない場合はデフォルトtextureへfallbackします。[note描画](../crates/bmz-render/src/skin/document_render/play/note.rs)、[plan](../crates/bmz-render/src/plan/play/document.rs) |
+| Playの`judgegraph` | ノート種別・判定・FAST/SLOWの積み上げ、現在位置の白線、`delay`に対応します。判定は最短750 ms間隔で更新します。[仕様](skin.md#playのノート分布グラフ) |
 | PMS見逃しノーツ | `note.dst2` / `DST_NOTE2`による判定ライン上の待機・落下・消滅と、処理済みノーツの即時非表示に対応します。キーモードによらず、`dst2`を持つスキンに適用します。[仕様](skin.md#playの見逃しノーツと判定領域)、[描画テスト](../crates/bmz-render/src/skin/tests/play/cases_04.rs)、[snapshotテスト](../crates/bmz-player/src/screens/play_snapshot/tests/cases_01.rs) |
 | PeacefulPlayのKEY LOGGER | 押下ノーツ・判定数グラフ・NPS・チャタリング警告を、BMZの入力履歴で描きます。表示列はボタン点灯のkey-on timerから求め、7 to 9版のレーン割り当てに従います。[仕様](skin.md#peacefulplay互換のキーロガー)、[runtimeテスト](../crates/bmz-render/src/skin/tests/runtime/cases_01.rs)、[decodeテスト](../crates/bmz-skin/src/tests/cases_06.rs) |
 | 判定領域 | judgeの`index`ごとの領域を、キーモード内のレーン番号から選びます。9KEYSの3領域はKEY1-3 / KEY4-6 / KEY7-9です。[仕様](skin.md#playの見逃しノーツと判定領域)、[回帰テスト](../crates/bmz-render/src/skin/tests/play/cases_06.rs) |
 | RANDOM gauge animation | `type=0`のanimationをシーンごとのruntime stateで更新します。[GaugeAnimationRuntime](../crates/bmz-render/src/skin/runtime/gauge_animation.rs)です。parts・flashの一致確認は下記の未検証項目を参照 |
 | text / font | align、overflow、wrapping、shadow/outline、TTF/OTF/TTC、bitmap font等です。beatorajaの`font.fallback`と欠字の代替候補（□ ▢ ☐ ■ ?）に対応します。文字atlas cacheを利用します。[仕様](skin.md#フォントのfallbackと欠字表示)、[text renderer](../crates/bmz-render/src/renderer/text/)、[GPU側cache利用](../crates/bmz-render/src/renderer/gpu/text.rs) |
+| 文字の影 | `shadowOffset`だけの指定でも、beatorajaと同じく文字色の半分の明るさで描きます。[仕様](skin.md#text-opacity) |
 | フォント解決 | 同梱フォントを優先し、OSフォントへfallbackします。スキンが指定したフォントに無い文字も、既定フォントとOSの記号・絵文字フォントで補います（BMZ拡張）。ビットマップフォント文中の補った文字は、ページ画像から推定した塗りと縁取りで描きます（BMZ拡張、[仕様](skin.md#ビットマップフォント文中のベクター文字の見た目)）。path / memory bytes / TTC indexを扱います。[bmz-font](../crates/bmz-font/src/system.rs) |
 | Unicode・カラー絵文字 | BMZ拡張です。書記素クラスタ、ZWJ・国旗・肌色修飾、異体字セレクタ、COLR v0/v1・CBDT・sbixのカラーグリフを描きます。OpenType SVGは未対応です。[仕様](skin.md#カラー絵文字)、[テスト](../crates/bmz-render/src/renderer/tests/unicode_text.rs) |
 | SCROLL / SPEED | SCROLLの区間積分と、SPEEDイベント間の線形補間を実装します。見かけ距離にはnote位置のSPEED倍率を適用します。[scroll.rs](../crates/bmz-player/src/screens/play_snapshot/scroll.rs)、[snapshotテスト](../crates/bmz-player/src/screens/play_snapshot/tests/cases_03.rs) |
@@ -93,7 +95,7 @@ closure/module stateを維持し、frameごとのmain_stateを参照します。
 | field / API | 対応範囲 |
 |---|---|
 | Luaヘッダのproperty型変換 | `item[].op`の数値文字列・小数・非数値と、数値・booleanの`def`をbeatorajaの`toint()` / `tojstring()`に合わせます。SocialSkinのSelect / Result / Course Resultの一覧登録を確認します。[回帰テスト](../crates/bmz-skin/src/tests/lua_header_compat.rs) |
-| destination `draw` | ロード時推論とruntime callback |
+| destination `draw` | ロード時推論とruntime callbackです。booleanの`draw`はbeatorajaと同じく条件なしです。[仕様](skin.md#lua-runtime-compatibility-mode) |
 | Lua文字列の`act` / `timer` | act script、関数・数値を返すtimer式を永続VMへ保持します。destinationの任意timer関数も描画時に評価し、クリックは最後の結果を参照します。[回帰テスト](../crates/bmz-player/src/skin_loader/tests/lua/events.rs) |
 | Lua destinationの入れ子`op` | beatorajaと同じく入れ子table・booleanを条件から除外し、他の条件を維持します。ORには解釈しません。SocialSkinのSelectにある条件の合成fixtureと7K Playのロードを確認します。[回帰テスト](../crates/bmz-skin/src/tests/lua_document_conversion.rs) |
 | 推論の順序 | tableのfieldを固定順で変換し、`pairs`順に依存しません。Luxe Flat Selectのランク画像とスコアレート帯を確認します。[回帰テスト](../crates/bmz-skin/src/tests/lua_inference_order.rs) |
@@ -105,6 +107,7 @@ closure/module stateを維持し、frameごとのmain_stateを参照します。
 | `main_state.set_timer` | 受動custom timerのON/OFFです。組み込みtimerや能動timerへの書き込みには制約がある |
 | Luaのフレーム更新 | 入力 → custom timer → custom eventで`main_state`の設定を共有し、callback数に比例したLua関数生成を防ぎます。状態の復元と1フレーム1回の更新を維持します。[回帰テスト](../crates/bmz-skin/src/lua/tests/runtime_resources.rs) |
 | `main_state.numbers` | ID / 名前を混在して複数戻り値で取得します。未知名は0、欠損sentinelは維持します。ロード時依存捕捉とruntime参照に対応 |
+| Playのロード時の譜面情報 | 曲名・難易度・LN・BPM・判定ランク・難易度表を、変換後の譜面の値でロード時に渡します。[仕様](skin.md#playのロード時の譜面情報) |
 | 譜面長のnumber `1163` / `1164` | Playは実分岐・余白・変換後、Practice区間適用前の全体長です。ロード時・callback・数値画像・`numberRef`・Offlineで共通化し、両方に`% 60`を適用します。欠損はLuaでINT_MIN、数値は非表示です。他画面の取得元は維持します。[境界値](../crates/bmz-render/src/plan/tests/cases_01.rs)、[先読み・Retry・Replay・次曲・Practice・Offline](../crates/bmz-player/src/app/tests/play_chart_length.rs) |
 | 譜面ハッシュのtext `1030` / `1031` | Select / Decide / Play / Resultで元ファイルのMD5 / SHA256を小文字の16進数で返します。ロード時にも供給し、未所持譜面は既知のハッシュ、欠損は空文字です。[全画面テスト](../crates/bmz-render/src/plan/tests/chart_hashes.rs)、[名前・数値ID](../crates/bmz-render/src/skin/tests/property_names.rs) |
 | `main_state.screen_width` / `screen_height` | 全sceneの物理出力pixel寸法です。未接続は0、exportは動画出力寸法です。ロード時に読むskinのcache・resize再decodeと、runtimeだけ読むskinの状態維持に対応します。[回帰テスト](../crates/bmz-player/src/skin_loader/tests/lua/screen_size.rs) |
@@ -161,6 +164,8 @@ timerの単位・OFF値・書き込み制約・失敗時の値は[skin.md](skin.
 - text outline / shadowの品質改善です。現在のoutlineには周囲8方向へ描く近似があります。
   変更時は字形・サイズ・描画負荷を比較します。
 - SDF / 距離場フォントは代替方式の検討候補です。現行のatlas cacheとは別の設計課題として扱います。
+  `font.type`（1 / 2）は読みますが描画には使わず、通常の画像フォントとして描きます。
+  ModernChic（画像フォント有効時のSelect / Decide等）とMILLIONDOLLARが該当します。
 
 ## 調査・検証の入口
 

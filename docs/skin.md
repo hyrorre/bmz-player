@@ -571,6 +571,20 @@ judgeの`index`は判定領域です。beatorajaの`JudgeManager`と同じく、
 9KEYSで3領域のスキンでは、KEY1-3・KEY4-6・KEY7-9がそれぞれ領域0〜2（timer 46 / 47 / 247）になります。
 割り切れない場合の余りのレーンは、最後の領域に含めます。
 
+## Playのノート分布グラフ
+
+Playの`judgegraph`は、beatorajaの`SkinNoteDistributionGraph`と同じく1秒ごとのbucketを積み上げます。
+`type`は0がノート種別（LN終端・LN本体・スクラッチ・通常ノート・地雷）、1が判定、2がFAST/SLOWです。
+色・`backTexOff`・`orderReverse`・`noGap`・`noGapX`はResultと同じ描画を使います。
+
+- ノート種別のbucketは譜面から1回だけ作ります。Resultと同じ集計です。
+- 判定とFAST/SLOWのbucketは、全ノートを未判定の灰色で始めます。gameplay threadが判定イベントから
+  更新し、beatorajaと同じく変化があるときに最短750 ms間隔で公開します。
+- TIMER_PLAYがONの間は、現在位置に白線を描きます。幅は1秒を5 pxとしたときの3 pxです。
+  Practiceの開始・終了カーソルはBMZの練習パネル側で表示するため、スキンのグラフには描きません。
+- `delay`の既定値はbeatorajaと同じ500 msで、この時間をかけて左から表示します。
+  bucketがない文書は従来どおり密度の単色グラフで描きます。
+
 ## PeacefulPlay互換のキーロガー
 
 PeacefulPlayのKEY LOGGERは、Luaの関数timerとtrackerで押下を表示列ごとに記録します。
@@ -760,6 +774,22 @@ ModernChicのDecideはロード時の難易度色をnil確認なしで参照す�
 読込に失敗し、skin設定パネルにエラーが残っていました。実際のDecide表示は、従来どおり進入時に
 選択譜面の値で読み直します。
 
+## Playのロード時の譜面情報
+
+beatorajaは解析済みの譜面でPlayスキンを読みます。ModernChicはロード時に曲名を連続プレーの判定キーへ
+保存し、難易度で色を決め、LNの有無でエフェクターの部品を選びます。
+
+Playスキンのdecodeは譜面ワーカーの結果を待ち、変換後の譜面の値をロード時の状態として渡します。
+
+| 種類 | 値 |
+|---|---|
+| text | 10〜16（曲名・ジャンル・アーティスト）、1001〜1003（難易度表） |
+| option | 150〜155（難易度）、172 / 173（LN）、176 / 177（BPM変化）、180〜184（判定ランク） |
+| number | 90〜92（最大・最小・主BPM）、96（play level）、1163 / 1164（譜面長） |
+
+難易度の変換はDecide、曲名と判定ランクはResultと同じ処理です。難易度表のtextは空でも値を渡すため、
+`main_state.text(1003) == ""`で判定できます。これらの値はdecode cacheの依存関係に含めます。
+
 ## Select / Decideのロード時のプレイヤー統計
 
 Select / Decideのskin読込は、profile全体の累計プレイ時間（number 17..19）、プレイ数・クリア数・
@@ -801,6 +831,11 @@ runtime callbackで評価します。スキン開発・beatoraja比較では
 - `value[]`, `text[]`, `graph[]`, `slider[]`の`value`
 - `customTimers[].timer`（ID `10000..19999`）
 
+beatorajaの`LuaSkinLoader`は関数・数値・文字列以外の`draw`をnullとして読むため、
+`draw = false`のようなbooleanは条件になりません。BMZも条件を付けず、常に描画します。
+ModernChicの`draw = not CUSTOM.OP.isMainBpm`はこれに依存し、現在のBPMを常に表示します。
+関数が返す`false`は従来どおり非表示です。
+
 数字のruntime `value`はbeatorajaの`SkinNumber.prepare`と同様、destination順に、
 その数字の`draw` / timer判定より先に評価します。同じvalueを複数destinationで使う場合も
 destinationごとに1回評価し、その結果を描画・数値画像cacheへ渡します。非表示やcache hitでも
@@ -837,11 +872,17 @@ Luaの`main_state.timer(id)`はシーン基準の開始時刻（マイクロ秒�
 例外・非有限値・命令数上限超過はOFFとして扱い、失敗の診断はcallbackごとに1回出します。
 
 Play中のボム・KEYON・判定・PLAY等のtimerは譜面時刻、`main_state.time()`は画面の経過時間で
-数えるため、両者から逆算した開始時刻はフレームごとに1 ms揺れます。beatorajaは1回の起動につき
+数えるため、両者から逆算した開始時刻はフレームごとに揺れます。beatorajaは1回の起動につき
 同じ開始時刻を返し、ModernChicのプレイ状況詳細モードや攻撃演出は開始時刻の変化で打鍵・判定を
-数えます。runtime VMはtimerごとに前フレームの開始時刻を覚え、変化が2 ms以内なら前回返した値を
-返します。比較は前フレームの値と行うため、時計の緩やかなずれは誤った再起動になりません。
-2 msを超えて変われば新しい起動として返します。同じtimerが2 ms以内に再起動した場合は区別しません。
+数えます。runtime VMはtimerごとに前フレームの値を覚え、同じ起動の間は前回の開始時刻を返します。
+
+- 判定・ボム・HOLD・KEYON・KEYOFF・HCNのtimerは、経過時間で起動を見分けます。経過時間は同じ起動の間
+  増えるだけなので、前フレームより2 msを超えて減ったときだけ再起動とします。入力オフセットが正だと
+  経過時間が0のまま続き、snapshotの古さで開始時刻が数ms動くため、開始時刻の比較では打鍵を数えすぎます。
+  前回の起動から1フレーム以内に再起動した場合は、区別できないことがあります。
+- それ以外のtimerは、前フレームの開始時刻から2 msを超えて変わったら再起動とします。
+  TIMER_PLAYやRHYTHMは再生速度やBPMで開始時刻が動くためです。
+
 `set_timer`等のLua custom timerはこの対象外です（[回帰テスト](../crates/bmz-skin/src/tests/read_helpers.rs)）。
 
 次の参照用helperも同じtimerと時計を使います。組み込みtimerとcustom timerの両方を扱い、
@@ -1113,6 +1154,8 @@ Javaのオブジェクトを作りません。例外は`java.io.File`で、メ�
 beatorajaのLua skinは`io`や`main_state.file_*`でスキンフォルダへファイルを書き、後で読み戻します
 （ModernChicのレーンカバー・背景・キャラクターのローテーション、プレイ状況詳細モード、
 プレイ履歴、Starseekerの打鍵数など）。BMZはディスクへ書かず、書いた内容をメモリに残します。
+内容はLuaJと同じくバイト列のまま保持します。ModernChicは`string.sub(title, 1, 32)`のように
+UTF-8の文字の途中で切った文字列を書き、読み戻して比較するためです。
 
 - 読み込みは、appが渡す読取専用の仮想ファイル、スキンが書いたファイル、ディスク上のファイルの順に探します。
   `skin_config.get_path`が返す絶対パスも、スキンのroot内なら読めます。相対パスは従来どおり`..`を拒否します。
@@ -1258,6 +1301,11 @@ BMZでは、解決済みdestinationの`a`を文字本体・縁取り・影に共
 `outlineColor` / `shadowColor`自身のαには、この共通透明度を乗算します。
 `a: 0`ではすべて透明になり、アニメーションやoffset、後段の画面フェードにも追従します。
 これはBMZの統一方針であり、beatorajaの距離フィールド描画と厳密に同一の挙動ではありません。
+
+`shadowOffsetX` / `shadowOffsetY`を指定した文字は、`shadowColor`が未指定や透明でも、文字色の半分の
+明るさで影を描きます。beatorajaの`SkinTextFont`と通常の`SkinTextBitmap`は`shadowColor`を読まないためです。
+読むのは距離フィールドのフォントだけで、BMZでも`font.type`が1 / 2の文字にはこの影を描きません。
+不透明な`shadowColor`はBMZでは指定色のまま使います。
 
 ## Text Overflow
 
