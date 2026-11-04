@@ -354,13 +354,17 @@ pub(super) fn lua_script_field_function(
         Value::String(script) if lua.coerce_number(Value::String(script.clone()))?.is_some() => {
             Ok(None)
         }
-        Value::String(script) if matches!(field, "act" | "event") => {
-            lua.load(script.to_str()?.as_ref()).set_name("Lua act script").into_function().map(Some)
-        }
+        Value::String(script) if matches!(field, "act" | "event") => lua
+            .load(script.to_str()?.as_ref())
+            .set_name("Lua act script")
+            .set_mode(ChunkMode::Text)
+            .into_function()
+            .map(Some),
         Value::String(script) if field == "timer" => {
             let function = lua
                 .load(format!("return {}", script.to_str()?))
                 .set_name("Lua timer script")
+                .set_mode(ChunkMode::Text)
                 .into_function()?;
             match function.call::<Value>(())? {
                 Value::Function(timer) => Ok(Some(timer)),

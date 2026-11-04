@@ -164,6 +164,7 @@ pub(super) fn execute_lua_skin_header(
     let header = lua
         .load(&source)
         .set_name(input.to_string_lossy().as_ref())
+        .set_mode(ChunkMode::Text)
         .eval::<Value>()
         .with_context(|| format!("failed to execute lua skin header: {}", input.display()))?;
     instruction_budget.begin_inference();

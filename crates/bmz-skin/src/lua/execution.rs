@@ -82,6 +82,7 @@ pub(super) fn execute_lua_skin(
     let header = header_lua
         .load(&source)
         .set_name(input.to_string_lossy().as_ref())
+        .set_mode(ChunkMode::Text)
         .eval::<Value>()
         .with_context(|| format!("failed to execute lua skin header: {}", input.display()))?;
     // Only actual header execution contributes dimensions. Header callback
@@ -146,6 +147,7 @@ pub(super) fn execute_lua_skin(
     let value = lua
         .load(&source)
         .set_name(input.to_string_lossy().as_ref())
+        .set_mode(ChunkMode::Text)
         .eval::<Value>()
         .with_context(|| format!("failed to execute lua skin: {}", input.display()))?;
     apply_lua_scene_boolean_state(&lua, &resolved_runtime_state, Some(&dependencies))?;
@@ -434,6 +436,7 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
     let value = lua
         .load(source)
         .set_name(input.to_string_lossy().as_ref())
+        .set_mode(ChunkMode::Text)
         .eval::<Value>()
         .with_context(|| format!("failed to execute runtime Lua skin: {}", input.display()))?;
     apply_lua_scene_boolean_state(&lua, runtime_state, None)?;

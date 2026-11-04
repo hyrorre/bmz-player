@@ -263,6 +263,8 @@ mod lua_header_compat;
 mod lua_inference_order;
 #[path = "tests/lua_runtime_events.rs"]
 mod lua_runtime_events;
+#[path = "tests/lua_sandbox_hardening.rs"]
+mod lua_sandbox_hardening;
 #[path = "tests/lua_skin_files.rs"]
 mod lua_skin_files;
 #[path = "tests/lua_stdlib_compat.rs"]

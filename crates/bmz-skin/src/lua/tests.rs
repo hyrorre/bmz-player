@@ -16,5 +16,7 @@ mod cases_01;
 mod cases_02;
 #[path = "tests/cases_03.rs"]
 mod cases_03;
+#[path = "tests/isolated_probe.rs"]
+mod isolated_probe;
 #[path = "tests/runtime_resources.rs"]
 mod runtime_resources;
