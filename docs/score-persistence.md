@@ -199,6 +199,41 @@ clear-onlyのみのキーや履歴が残っていないキーは変更しませ�
 履歴の0は有効な記録として扱います。nullableなgauge valueや旧best snapshotのNULLを
 数値ベストへ流用しません。
 
+### 外部スコアDBの最小BP
+
+beatoraja / LR2 / LR2oraja / LR2oraja ED系の`score`は、最高EXの判定内訳と、
+異なるプレイで達成した最小BP・最大コンボ・最高ランプを持つ集計行です。
+インポート時は`score_history.bp`を判定内訳から従来どおり計算し、元DBの`minbp`を
+nullableな`score_history.source_min_bp`へ別に保存します。判定数を変更したり、
+最小BPを達成した架空の履歴を追加したりしません。元DBに独立最小CBは無いため、
+CBは判定内訳からの計算を維持します。最大コンボとランプの取り込みも従来どおりです。
+
+通常保存と履歴cleanup後の再集計は、各履歴のBPと、判明しているsource minbpの
+両方から最小値を取ります。例えばEX 2100の判定内訳BPが20、元DBのminbpが5なら、
+履歴BPは20、source minbpは5、BEST BPは5になります。既存BMZ BEST BPが3なら3を
+維持します。代表履歴のタイブレークには履歴BPの20を使い、source minbpは使いません。
+
+ローカルプレイと不明な値は`source_min_bp = NULL`です。LR2の負の未記録値（-1）、
+beatoraja / LR2oraja系の`Integer.MAX_VALUE`、SQLのNULLは独立BPとして使いません。
+BP 0は有効な記録です。Empty Poorを含むため、BPがノーツ数を超えるという理由だけでは
+無効にしません。beatoraja形式で`score`がなく`scoredatalog`だけある場合も、既存の
+fallback経路で取り込みます。この場合のminbpは、その行のプレイに対応する元の値です。
+
+同じインポートを繰り返した場合、source minbpが未保存なら補完し、小さくなった場合は
+改善を採用します。後の元DBで悪化・不明になっても、以前確認できた値を維持します。
+BP補正だけでは履歴の追加やplay / clear countの増加、判定内訳・代表履歴ID・ghost・
+リプレイの更新を行いません。device補正・空ghost補完は既存規則に従い、BP補正と同じ
+トランザクションで行います。根拠を持つ履歴を削除すれば、その履歴だけが提供していた
+最小BPは残さず、残存履歴から再計算します。
+
+score DB migration v34は、このNULL可の列を追加します。既存のEX・ランプ・判定内訳・
+ghost・リプレイ・IR識別情報・回数・履歴値は変更せず、過去のminbpを推測して埋めません。
+**旧バージョンで失われたインポート最小BPを復旧するには、修正版で元のスコアDBを
+同じインポート種別・設定で再インポートしてください。** 対応する既存履歴へ値を補完し、
+BEST BPを改善します。外部IRへの自動送信は行いません。
+
+上流コードと形式ごとの確認範囲は[調査記録](../notes/2026/2026-11-04-import-source-min-bp.md)を参照します。
+
 ## 最終プレイ日時
 
 skin数値ref `243..249`はBESTの`played_at`と別に最終保存日時を返します。

@@ -113,3 +113,5 @@ mod cases_03;
 mod independent_bests;
 #[path = "tests/last_play.rs"]
 mod last_play;
+#[path = "tests/source_min_bp.rs"]
+mod source_min_bp;
