@@ -437,9 +437,8 @@ pub struct BestScoreSummary {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ScoreBestRank {
+struct ScoreRepresentativeRank {
     ex_score: u32,
-    clear_rank: u8,
     bp: u32,
     cb: u32,
     max_combo: u32,

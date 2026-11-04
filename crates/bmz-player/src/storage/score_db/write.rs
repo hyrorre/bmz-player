@@ -412,80 +412,110 @@ pub(super) fn upsert_score_best(
         ],
     )?;
 
-    let current = conn.query_row(
-        "SELECT ex_score, clear_type, bp, cb, max_combo
-         FROM score_best
-         WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3
-           AND rule_mode = ?4",
+    let (current_ex_score, current_clear_rank, representative, has_numeric_best) = conn.query_row(
+        "SELECT b.ex_score, b.clear_type, h.ex_score, h.bp, h.cb, h.max_combo,
+                b.best_score_history_id IS NOT NULL
+                OR b.ex_score != 0 OR b.bp != 0 OR b.cb != 0 OR b.max_combo != 0
+                OR EXISTS (
+                    SELECT 1 FROM score_history AS prior
+                    WHERE prior.chart_sha256 = b.chart_sha256
+                      AND prior.ln_policy = b.ln_policy
+                      AND prior.double_option = b.double_option
+                      AND CASE prior.rule_mode
+                          WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
+                          WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END = b.rule_mode
+                      AND prior.id != ?5
+                )
+         FROM score_best AS b
+         LEFT JOIN score_history AS h ON h.id = b.best_score_history_id
+           AND h.chart_sha256 = b.chart_sha256 AND h.ln_policy = b.ln_policy
+           AND h.double_option = b.double_option
+           AND CASE h.rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
+               WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END = b.rule_mode
+         WHERE b.chart_sha256 = ?1 AND b.ln_policy = ?2 AND b.double_option = ?3
+           AND b.rule_mode = ?4",
         params![
             hash_to_hex(&record.chart_sha256),
             record.ln_policy.as_str(),
             record.double_option.as_str(),
             rule_mode.as_str(),
+            history_id,
         ],
         |row| {
             let clear_type: String = row.get(1)?;
-            Ok(ScoreBestRank {
-                ex_score: row.get(0)?,
-                clear_rank: clear_rank_from_name(&clear_type),
-                bp: row.get(2)?,
-                cb: row.get(3)?,
-                max_combo: row.get(4)?,
-            })
+            let representative = row
+                .get::<_, Option<u32>>(2)?
+                .map(|ex_score| {
+                    Ok::<_, rusqlite::Error>(ScoreRepresentativeRank {
+                        ex_score,
+                        bp: row.get(3)?,
+                        cb: row.get(4)?,
+                        max_combo: row.get(5)?,
+                    })
+                })
+                .transpose()?;
+            Ok((
+                row.get::<_, u32>(0)?,
+                clear_rank_from_name(&clear_type),
+                representative,
+                row.get::<_, bool>(6)?,
+            ))
         },
     )?;
-    let should_update_score = score_best_should_update_score(record, current);
-    let should_update_clear = score_best_should_update_clear(record, current);
-    if !should_update_score {
+    // Aggregate extrema can come from different plays. Only the representative
+    // history supplies tie-break metrics. If legacy provenance is missing, keep
+    // its metadata on a tie rather than comparing against aggregate values.
+    let should_update_representative = representative.map_or_else(
+        || !has_numeric_best || record.score.ex_score() > current_ex_score,
+        |current| score_best_should_update_representative(record, current),
+    );
+    let should_update_clear = record.clear_type as u8 > current_clear_rank;
+    // A clear-only row has neutral zeroes, not a BP/CB best of zero. Its first
+    // numeric play initializes those fields, even if that play has EX = 0.
+    conn.execute(
+        "UPDATE score_best SET
+            bp = CASE WHEN ?8 THEN min(bp, ?2) ELSE ?2 END,
+            cb = CASE WHEN ?8 THEN min(cb, ?3) ELSE ?3 END,
+            max_combo = max(max_combo, ?4),
+            ex_score = max(ex_score, ?9)
+         WHERE chart_sha256 = ?1 AND ln_policy = ?5 AND double_option = ?6
+           AND rule_mode = ?7",
+        params![
+            hash_to_hex(&record.chart_sha256),
+            bp,
+            cb,
+            record.score.max_combo,
+            record.ln_policy.as_str(),
+            record.double_option.as_str(),
+            rule_mode.as_str(),
+            has_numeric_best,
+            record.score.ex_score(),
+        ],
+    )?;
+    if should_update_representative {
         conn.execute(
             "UPDATE score_best SET
-                bp = min(bp, ?2),
-                cb = min(cb, ?3),
-                max_combo = max(max_combo, ?4)
-             WHERE chart_sha256 = ?1 AND ln_policy = ?5 AND double_option = ?6
-               AND rule_mode = ?7",
+                fast_pgreat = ?2,
+                slow_pgreat = ?3,
+                fast_great = ?4,
+                slow_great = ?5,
+                fast_good = ?6,
+                slow_good = ?7,
+                fast_bad = ?8,
+                slow_bad = ?9,
+                fast_poor = ?10,
+                slow_poor = ?11,
+                fast_empty_poor = ?12,
+                slow_empty_poor = ?13,
+                played_at = ?14,
+                replay_path = ?15,
+                ghost = ?16,
+                device_type = ?17,
+                best_score_history_id = ?18
+             WHERE chart_sha256 = ?1 AND ln_policy = ?19 AND double_option = ?20
+               AND rule_mode = ?21",
             params![
                 hash_to_hex(&record.chart_sha256),
-                bp,
-                cb,
-                record.score.max_combo,
-                record.ln_policy.as_str(),
-                record.double_option.as_str(),
-                rule_mode.as_str(),
-            ],
-        )?;
-    } else {
-        conn.execute(
-            "UPDATE score_best SET
-                ex_score = ?2,
-                bp = ?3,
-                cb = ?4,
-                max_combo = ?5,
-                fast_pgreat = ?6,
-                slow_pgreat = ?7,
-                fast_great = ?8,
-                slow_great = ?9,
-                fast_good = ?10,
-                slow_good = ?11,
-                fast_bad = ?12,
-                slow_bad = ?13,
-                fast_poor = ?14,
-                slow_poor = ?15,
-                fast_empty_poor = ?16,
-                slow_empty_poor = ?17,
-                played_at = ?18,
-                replay_path = ?19,
-                ghost = ?20,
-                device_type = ?21,
-                best_score_history_id = ?22
-             WHERE chart_sha256 = ?1 AND ln_policy = ?23 AND double_option = ?24
-               AND rule_mode = ?25",
-            params![
-                hash_to_hex(&record.chart_sha256),
-                record.score.ex_score(),
-                bp,
-                cb,
-                record.score.max_combo,
                 judges.fast_pgreat,
                 judges.slow_pgreat,
                 judges.fast_great,
@@ -635,10 +665,12 @@ pub(super) fn is_counted_clear(clear_type: ClearType) -> bool {
     !matches!(clear_type, ClearType::NoPlay | ClearType::Failed)
 }
 
-pub(super) fn score_best_should_update_score(record: &ScoreRecord, current: ScoreBestRank) -> bool {
-    let next = ScoreBestRank {
+pub(super) fn score_best_should_update_representative(
+    record: &ScoreRecord,
+    current: ScoreRepresentativeRank,
+) -> bool {
+    let next = ScoreRepresentativeRank {
         ex_score: record.score.ex_score(),
-        clear_rank: record.clear_type as u8,
         bp: score_record_bp(record),
         cb: score_record_cb(record),
         max_combo: record.score.max_combo,
@@ -650,10 +682,6 @@ pub(super) fn score_best_should_update_score(record: &ScoreRecord, current: Scor
             std::cmp::Reverse(current.cb),
             current.max_combo,
         )
-}
-
-pub(super) fn score_best_should_update_clear(record: &ScoreRecord, current: ScoreBestRank) -> bool {
-    record.clear_type as u8 > current.clear_rank
 }
 
 pub(super) fn score_record_bp(record: &ScoreRecord) -> u32 {
