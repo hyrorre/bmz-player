@@ -489,6 +489,7 @@ impl EguiLayer {
                                 connected_gamepads,
                                 audio_stream_info,
                                 audio_open_error,
+                                data_dir: &app_paths.data_dir,
                             },
                         );
                         obs_enabled_changed |= settings_actions.obs_enabled_changed;

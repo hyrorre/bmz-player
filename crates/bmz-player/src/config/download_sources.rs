@@ -69,7 +69,10 @@ mod tests {
         assert_eq!(config.download_root(data_dir), data_dir.join("songs"));
         config.save_dir = "downloads/bms".into();
         assert_eq!(config.download_root(data_dir), data_dir.join("downloads/bms"));
-        let absolute = std::env::temp_dir().join("bmz-downloads");
+        // 空白を含むフォルダ名は、前後の空白も含めてそのまま使う。
+        config.save_dir = " My BMS ".into();
+        assert_eq!(config.download_root(data_dir), data_dir.join(" My BMS "));
+        let absolute = std::env::temp_dir().join("bmz downloads ");
         config.save_dir = absolute.to_string_lossy().into_owned();
         assert_eq!(config.download_root(data_dir), absolute);
         let restored: ChartDownloadsConfig =

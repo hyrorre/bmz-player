@@ -399,7 +399,7 @@ pub(super) fn build_library_settings_sections(
                 "sha256" => "{sha256}"
             ));
             ui.separator();
-            build_download_save_dir_setting(ui, &mut config.downloads.save_dir, text);
+            build_download_save_dir_setting(ui, &mut config.downloads, state.data_dir, text);
         });
 
     build_score_import_section(
@@ -426,10 +426,17 @@ pub(super) fn build_library_settings_sections(
     );
 }
 
-fn build_download_save_dir_setting(ui: &mut egui::Ui, save_dir: &mut String, text: Localizer) {
+fn build_download_save_dir_setting(
+    ui: &mut egui::Ui,
+    config: &mut crate::config::app_config::ChartDownloadsConfig,
+    data_dir: &std::path::Path,
+    text: Localizer,
+) {
+    let save_dir = &mut config.save_dir;
     ui.horizontal(|ui| {
         ui.label(tr!(text, "settings-downloads-save-dir"));
-        ui.add(egui::TextEdit::singleline(save_dir).desired_width(300.0).hint_text("data/songs"));
+        // 相対パスは data/ 基準なので、既定値の相対表記は `songs` になる。
+        ui.add(egui::TextEdit::singleline(save_dir).desired_width(300.0).hint_text("songs"));
     });
     ui.horizontal(|ui| {
         if ui.button(tr!(text, "common-choose-folder")).clicked()
@@ -447,10 +454,7 @@ fn build_download_save_dir_setting(ui: &mut egui::Ui, save_dir: &mut String, tex
             save_dir.clear();
         }
     });
-    let path = match save_dir.trim() {
-        "" => "data/songs",
-        path => path,
-    };
+    let path = config.download_root(data_dir).to_string_lossy().into_owned();
     ui.label(tr!(text, "settings-downloads-save-path", "path" => path));
     ui.label(tr!(text, "settings-downloads-save-dir-help"));
 }

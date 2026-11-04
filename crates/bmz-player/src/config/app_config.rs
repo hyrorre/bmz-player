@@ -670,8 +670,12 @@ impl Default for ChartDownloadsConfig {
 impl ChartDownloadsConfig {
     /// 方式別フォルダを置く保存先の基準フォルダを返す。
     pub fn download_root(&self, data_dir: &std::path::Path) -> std::path::PathBuf {
-        let save_dir = self.save_dir.trim();
-        if save_dir.is_empty() { data_dir.join("songs") } else { data_dir.join(save_dir) }
+        // 空白だけの値は未設定として扱い、それ以外は前後の空白も含めてフォルダ名として扱う。
+        if self.save_dir.trim().is_empty() {
+            data_dir.join("songs")
+        } else {
+            data_dir.join(&self.save_dir)
+        }
     }
 
     pub fn effective_http_api_url(&self) -> &str {

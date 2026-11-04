@@ -569,3 +569,169 @@ fn retry_extracts_the_same_archive_again_after_the_previous_folder_is_removed() 
     assert!(new.scan_path.join("song/chart.bms").is_file());
     assert!(!manager.task(id).unwrap().archive_unchanged);
 }
+
+/// 保存先の部分スキャンを実行し、対象ハッシュの登録確認まで進める。
+fn register_scans(
+    db_path: &Path,
+    config: &mut AppConfig,
+    manager: &mut ChartDownloadManager,
+    scans: Vec<(DownloadTaskId, ChartDownloadResult)>,
+) {
+    let mut db = LibraryDatabase::open(db_path).unwrap();
+    for (_, result) in &scans {
+        crate::songs_cmd::ensure_download_song_root(
+            &mut config.songs.roots,
+            &result.root_dir.to_string_lossy(),
+        );
+    }
+    db.set_configured_song_roots(&config.songs.roots).unwrap();
+    let roots: Vec<_> = scans
+        .iter()
+        .map(|(_, result)| PathEntry {
+            path: result.scan_path.to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        })
+        .collect();
+    crate::storage::scan::scan_song_roots(&mut db, &roots, &config.scan, 1, true).unwrap();
+    for registration in verify_download_registrations(&db, scans.clone()).unwrap() {
+        for id in &registration.task_ids {
+            manager.finish_scan(*id, &registration.identities, None);
+        }
+    }
+}
+
+#[test]
+fn custom_download_root_saves_http_and_ipfs_charts_and_registers_their_folders() {
+    let http_chart = b"#TITLE Custom root HTTP\n#BPM 120\n#00011:01\n";
+    let ipfs_chart = b"#TITLE Custom root IPFS\n#BPM 150\n#00011:01\n";
+    let http_body = archive(&[("http-song/chart.bms", http_chart)]);
+    let ipfs_body = archive(&[("chart.bms", ipfs_chart)]);
+    let server = HttpFixture::with_handler(
+        move |path| {
+            let body = if path.starts_with("/ipfs/") { &ipfs_body } else { &http_body };
+            (200, "application/octet-stream".into(), body.clone())
+        },
+        Duration::from_millis(5),
+    );
+    let root = tempfile::tempdir().unwrap();
+    // 既定の data/songs とは別の、空白を含むフォルダへ保存する。
+    let custom = root.path().join("My BMS").join("downloads");
+    let mut http =
+        identified_request(root.path(), &format!("{}/{{md5}}", server.url), http_chart, 1);
+    http.download_root = custom.clone();
+    let ipfs_identity = chart_identity(ipfs_chart);
+    let ipfs = ChartDownloadRequest {
+        keep_archive: false,
+        request_id: 2,
+        identity: ipfs_identity.clone(),
+        action: MissingChartAction::Ipfs {
+            api_url: format!("{}/ipfs/{{cid}}", server.url),
+            cids: vec!["QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG".into()],
+        },
+        title: "Custom root IPFS".into(),
+        download_root: custom.clone(),
+    };
+    let mut manager = ChartDownloadManager::default();
+    let (http_id, _) = manager.submit(http);
+    let (ipfs_id, _) = manager.submit(ipfs);
+    wait(&mut manager, 3, |m| m.tasks().iter().all(|t| t.state() == DownloadState::Scanning));
+    let scans = manager.take_scan_requests();
+    assert_eq!(scans.len(), 2);
+    for (id, result) in &scans {
+        let expected = if *id == http_id { custom.join("http") } else { custom.join("ipfs") };
+        assert_eq!(result.root_dir, expected);
+        assert!(result.scan_path.starts_with(&expected), "{:?}", result.scan_path);
+    }
+    assert!(!root.path().join("songs").exists());
+
+    let db_path = root.path().join("library.db");
+    crate::storage::migration::migrate_library_db(&db_path).unwrap();
+    let mut config = AppConfig::default();
+    config.scan.use_everything = false;
+    register_scans(&db_path, &mut config, &mut manager, scans);
+    assert_eq!(manager.task(http_id).unwrap().state(), DownloadState::Completed);
+    assert_eq!(manager.task(ipfs_id).unwrap().state(), DownloadState::Completed);
+    for folder in [custom.join("http"), custom.join("ipfs")] {
+        let folder = crate::paths::normalize_library_path(&folder.to_string_lossy());
+        assert!(
+            config.songs.roots.iter().any(|entry| {
+                entry.enabled
+                    && entry.recursive
+                    && crate::paths::normalize_library_path(&entry.path).trim_end_matches('/')
+                        == folder.trim_end_matches('/')
+            }),
+            "{folder} is not registered: {:?}",
+            config.songs.roots
+        );
+    }
+}
+
+#[test]
+fn changed_download_root_keeps_earlier_tasks_and_their_retries_on_the_original_root() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let fail = Arc::new(AtomicBool::new(true));
+    let worker_fail = Arc::clone(&fail);
+    let server = HttpFixture::with_handler(
+        move |path| {
+            if path.starts_with("/01") && worker_fail.load(Ordering::Relaxed) {
+                (500, "text/plain".into(), b"temporary failure".to_vec())
+            } else {
+                (
+                    200,
+                    "application/octet-stream".into(),
+                    archive(&[("chart.bms", b"#TITLE Fixture")]),
+                )
+            }
+        },
+        Duration::from_millis(5),
+    );
+    let root = tempfile::tempdir().unwrap();
+    let (before, after) = (root.path().join("before"), root.path().join("after"));
+    let api = format!("{}/{{md5}}", server.url);
+    let queued = |download_root: &Path, number| {
+        let mut request = request(root.path(), &api, number);
+        request.download_root = download_root.into();
+        request
+    };
+    let mut manager = ChartDownloadManager::default();
+    let (earlier, _) = manager.submit(queued(&before, 1));
+    wait(&mut manager, 3, |m| m.task(earlier).unwrap().state() == DownloadState::Failed);
+
+    // 保存先を変更した後の要求は、同じハッシュでも以前の保存先のタスクへ統合しない。
+    let (same_hash, merged) = manager.submit(queued(&after, 1));
+    assert!(!merged);
+    assert_ne!(same_hash, earlier);
+    let (later, merged) = manager.submit(queued(&after, 2));
+    assert!(!merged);
+    wait(&mut manager, 3, |m| {
+        m.task(same_hash).unwrap().state() == DownloadState::Failed
+            && m.task(later).unwrap().state() == DownloadState::Scanning
+    });
+    assert!(
+        manager
+            .task(later)
+            .unwrap()
+            .result
+            .as_ref()
+            .unwrap()
+            .scan_path
+            .starts_with(after.join("http"))
+    );
+
+    // 再試行は投入時の保存先を使う。
+    fail.store(false, Ordering::Relaxed);
+    manager.retry(earlier);
+    manager.retry(same_hash);
+    wait(&mut manager, 3, |m| {
+        [earlier, same_hash]
+            .iter()
+            .all(|id| m.task(*id).unwrap().state() == DownloadState::Scanning)
+    });
+    let result = |id| manager.task(id).unwrap().result.clone().unwrap();
+    assert_eq!(result(earlier).root_dir, before.join("http"));
+    assert!(result(earlier).scan_path.starts_with(before.join("http")));
+    assert_eq!(result(same_hash).root_dir, after.join("http"));
+    assert!(result(same_hash).scan_path.starts_with(after.join("http")));
+    assert!(!root.path().join("songs").exists());
+}
