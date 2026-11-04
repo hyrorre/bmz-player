@@ -232,6 +232,9 @@ pub struct ScoreRecord {
     pub device_type: InputDeviceKind,
     pub replay_path: String,
     pub source_kind: ScoreSourceKind,
+    /// Source DB's minbp, independent of the representative judgement counts.
+    /// Local plays and sources without this information leave it unknown.
+    pub source_min_bp: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -268,6 +271,9 @@ pub enum ImportedScoreReconciliation {
     Missing,
     Unchanged,
     Corrected,
+    /// An aggregate cannot be associated with one proven aggregate history.
+    /// The importer must skip it instead of inserting another counted play.
+    Ambiguous,
 }
 
 /// source_kind 導入前に Local として保存された外部 import の整理対象。
@@ -348,6 +354,7 @@ impl ScoreRecord {
             device_type,
             replay_path,
             source_kind,
+            source_min_bp: None,
         }
     }
 }
@@ -448,6 +455,14 @@ struct ScoreRepresentativeRank {
 struct SourceScoreHistoryMatch {
     history_id: i64,
     device_type: InputDeviceKind,
+    source_min_bp: Option<u32>,
+    is_aggregate: bool,
+}
+
+enum SourceScoreHistoryLookup {
+    Missing,
+    Found(SourceScoreHistoryMatch),
+    Ambiguous,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -239,7 +239,7 @@ fn lr2_score_state_decodes_ghost() {
         poor: 1,
         total_notes: 4,
         max_combo: 64,
-        min_bp: 3,
+        min_bp: Some(3),
         play_count: 2,
         clear_count: 1,
         ghost: "BAED".to_string(),

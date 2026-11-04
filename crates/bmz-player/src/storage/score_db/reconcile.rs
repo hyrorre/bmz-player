@@ -4,9 +4,44 @@ pub(super) fn source_score_history_match(
     conn: &Connection,
     record: &ScoreRecord,
 ) -> Result<Option<SourceScoreHistoryMatch>> {
+    Ok(source_score_history_candidates(conn, record, false, false)?.into_iter().next())
+}
+
+/// Only aggregate callers may ignore metadata which upstream updates on a BP
+/// improvement. Never select an arbitrary representative from multiple matches.
+pub(super) fn source_aggregate_history_match(
+    conn: &Connection,
+    record: &ScoreRecord,
+) -> Result<SourceScoreHistoryLookup> {
+    if let Some(exact) =
+        source_score_history_candidates(conn, record, true, false)?.into_iter().next()
+    {
+        return Ok(SourceScoreHistoryLookup::Found(exact));
+    }
+    let candidates = source_score_history_candidates(conn, record, true, true)?;
+    // Proven aggregate origins sort first. Two rows suffice to detect multiple
+    // aggregate candidates; unknown origins must never be inferred from judges.
+    match candidates.as_slice() {
+        [] => Ok(SourceScoreHistoryLookup::Missing),
+        [only, rest @ ..] if only.is_aggregate && !rest.iter().any(|row| row.is_aggregate) => {
+            Ok(SourceScoreHistoryLookup::Found(*only))
+        }
+        _ => Ok(SourceScoreHistoryLookup::Ambiguous),
+    }
+}
+
+fn source_score_history_candidates(
+    conn: &Connection,
+    record: &ScoreRecord,
+    aggregate: bool,
+    ignore_options: bool,
+) -> Result<Vec<SourceScoreHistoryMatch>> {
     let judges = &record.score.judges;
-    conn.query_row(
-        "SELECT id, device_type
+    let mut statement = conn.prepare(
+        "SELECT id, device_type, source_min_bp,
+                EXISTS (SELECT 1 FROM score_history_sources AS origin
+                        WHERE origin.score_history_id = score_history.id
+                          AND origin.source = 'score_db_aggregate') AS is_aggregate
          FROM score_history
          WHERE source_kind = ?1
            AND chart_sha256 = ?2
@@ -32,66 +67,89 @@ pub(super) fn source_score_history_match(
            AND slow_poor = ?22
            AND fast_empty_poor = ?23
            AND slow_empty_poor = ?24
-           AND random_seed IS ?25
-           AND arrange = ?26
-           AND arrange_2p = ?27
+           AND (?34 OR random_seed IS ?25)
+           AND (?34 OR arrange = ?26)
+           AND (?34 OR arrange_2p = ?27)
            AND gauge_option = ?28
            AND rule_mode = ?29
            AND assist_mask = ?30
            AND autoplay = ?31
-           AND applied_double_option = ?32
+           AND (?34 OR applied_double_option = ?32)
            AND seed_scheme = ?33
-         ORDER BY EXISTS (
+           AND (NOT ?35 OR course_score_id IS NULL)
+         ORDER BY CASE WHEN ?34 THEN is_aggregate ELSE 0 END DESC,
+         EXISTS (
             SELECT 1
             FROM score_best
             WHERE score_best.best_score_history_id = score_history.id
          ) DESC,
          id ASC
-         LIMIT 1",
-        params![
-            record.source_kind.as_str(),
-            hash_to_hex(&record.chart_sha256),
-            record.ln_policy.as_str(),
-            record.double_option.as_str(),
-            record.clear_type.as_str(),
-            gauge_type_str(record.gauge_type),
-            record.gauge_value,
-            record.total_notes,
-            record.score.ex_score(),
-            score_record_bp(record),
-            score_record_cb(record),
-            record.score.max_combo,
-            judges.fast_pgreat,
-            judges.slow_pgreat,
-            judges.fast_great,
-            judges.slow_great,
-            judges.fast_good,
-            judges.slow_good,
-            judges.fast_bad,
-            judges.slow_bad,
-            judges.fast_poor,
-            judges.slow_poor,
-            judges.fast_empty_poor,
-            judges.slow_empty_poor,
-            record.random_seed,
-            record.arrange.as_str(),
-            record.arrange_2p.as_str(),
-            record.gauge_option.as_str(),
-            record.rule_mode.as_str(),
-            record.assist_mask,
-            record.autoplay,
-            record.applied_double_option.to_persistent_str(),
-            record.seed_scheme.as_str(),
-        ],
-        |row| {
-            Ok(SourceScoreHistoryMatch {
-                history_id: row.get(0)?,
-                device_type: device_type_from_row(row, 1)?,
-            })
-        },
-    )
-    .optional()
-    .map_err(Into::into)
+         LIMIT CASE WHEN ?34 THEN 2 ELSE 1 END",
+    )?;
+    statement
+        .query_map(
+            params![
+                record.source_kind.as_str(),
+                hash_to_hex(&record.chart_sha256),
+                record.ln_policy.as_str(),
+                record.double_option.as_str(),
+                record.clear_type.as_str(),
+                gauge_type_str(record.gauge_type),
+                record.gauge_value,
+                record.total_notes,
+                record.score.ex_score(),
+                score_record_bp(record),
+                score_record_cb(record),
+                record.score.max_combo,
+                judges.fast_pgreat,
+                judges.slow_pgreat,
+                judges.fast_great,
+                judges.slow_great,
+                judges.fast_good,
+                judges.slow_good,
+                judges.fast_bad,
+                judges.slow_bad,
+                judges.fast_poor,
+                judges.slow_poor,
+                judges.fast_empty_poor,
+                judges.slow_empty_poor,
+                record.random_seed,
+                record.arrange.as_str(),
+                record.arrange_2p.as_str(),
+                record.gauge_option.as_str(),
+                record.rule_mode.as_str(),
+                record.assist_mask,
+                record.autoplay,
+                record.applied_double_option.to_persistent_str(),
+                record.seed_scheme.as_str(),
+                ignore_options,
+                aggregate,
+            ],
+            |row| {
+                Ok(SourceScoreHistoryMatch {
+                    history_id: row.get(0)?,
+                    device_type: device_type_from_row(row, 1)?,
+                    source_min_bp: row.get(2)?,
+                    is_aggregate: row.get(3)?,
+                })
+            },
+        )?
+        .collect::<rusqlite::Result<_>>()
+        .map_err(Into::into)
+}
+
+pub(super) fn mark_score_history_aggregate(conn: &Connection, history_id: i64) -> Result<bool> {
+    // Use the existing provenance table. This origin is neither an IR identity
+    // nor a submitted score; the history foreign key also removes it on cleanup.
+    Ok(conn.execute(
+        "INSERT OR IGNORE INTO score_history_sources (
+            score_history_id, source, provider, account_id, remote_score_id,
+            verification, server_received_at, imported_at
+         ) SELECT id, 'score_db_aggregate', source_kind, '', CAST(id AS TEXT),
+                  '', 0, CAST(strftime('%s', 'now') AS INTEGER)
+           FROM score_history WHERE id = ?1 AND course_score_id IS NULL",
+        [history_id],
+    )? > 0)
 }
 
 pub(super) fn update_score_best_device_type_from_history(
@@ -270,7 +328,10 @@ pub(super) fn rebuild_score_aggregates(conn: &Connection) -> Result<()> {
             gauge_type = clear_value("gauge_type"),
             gauge_value = clear_value("gauge_value"),
             ex_score = score_value("ex_score"),
-            bp = aggregate("MIN(h.bp)"),
+            bp = aggregate(
+                "MIN(CASE WHEN h.source_min_bp IS NULL THEN h.bp
+                ELSE MIN(h.bp, h.source_min_bp) END)"
+            ),
             cb = aggregate("MIN(h.cb)"),
             max_combo = aggregate("MAX(h.max_combo)"),
             fast_pgreat = score_value("fast_pgreat"),

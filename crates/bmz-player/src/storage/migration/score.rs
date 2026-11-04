@@ -1261,4 +1261,11 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
                AND score_best.rule_mode = e.rule_bucket;",
         ],
     },
+    Migration {
+        version: 34,
+        // Previously discarded external minbp cannot be inferred from judges.
+        // Retain all existing rows unchanged; re-import can backfill this value.
+        statements: &["ALTER TABLE score_history ADD COLUMN source_min_bp INTEGER
+            CHECK (source_min_bp IS NULL OR source_min_bp >= 0);"],
+    },
 ];

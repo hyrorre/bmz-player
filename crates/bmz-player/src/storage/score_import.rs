@@ -298,8 +298,16 @@ fn import_lr2_scores_with_device_type(
         // 160-char key for a 4-song course).  Resolve these to bmz courses and
         // import a course score for each canonical match (see import_lr2_course).
         if is_course_hash(&row.md5, 32) {
+            // Keep the existing course contract: it requires a concrete u32 BP.
+            // Unknown source BP is supported only for single-chart imports here.
+            let Some(min_bp) = row.min_bp.and_then(|value| u32::try_from(value).ok()) else {
+                report.failed += 1;
+                report.issue(ScoreImportIssueKind::ReadFailure, "LR2 course minbp is unknown");
+                continue;
+            };
             import_lr2_course(
                 &row,
+                min_bp,
                 &course_index,
                 score_db,
                 kind.rule_mode_enum(),
@@ -395,6 +403,7 @@ fn import_lr2_scores_with_device_type(
         record.applied_double_option = options.applied_double_option;
         record.double_option = options.applied_double_option.score_bucket();
         record.device_type = device_type;
+        record.source_min_bp = imported_source_min_bp(row.min_bp, kind);
         match score_db.reconcile_imported_score(&record)? {
             ImportedScoreReconciliation::Missing => {}
             ImportedScoreReconciliation::Unchanged => {
@@ -404,6 +413,11 @@ fn import_lr2_scores_with_device_type(
             }
             ImportedScoreReconciliation::Corrected => {
                 report.corrected += 1;
+                continue;
+            }
+            ImportedScoreReconciliation::Ambiguous => {
+                report.skipped += 1;
+                report.issue(ScoreImportIssueKind::Unsupported, row.md5.clone());
                 continue;
             }
         }
@@ -589,7 +603,13 @@ fn import_beatoraja_scores_with_device_type(
             record.seed_scheme = crate::storage::replay::SEED_SCHEME_BEATORAJA_24BIT_V1.to_string();
         }
         record.device_type = device_type;
-        match score_db.reconcile_imported_score(&record)? {
+        record.source_min_bp = imported_source_min_bp(row.min_bp, kind);
+        let reconciliation = if table == "score" {
+            score_db.reconcile_imported_aggregate_score(&record)?
+        } else {
+            score_db.reconcile_imported_score(&record)?
+        };
+        match reconciliation {
             ImportedScoreReconciliation::Missing => {}
             ImportedScoreReconciliation::Unchanged => {
                 report.skipped += 1;
@@ -600,8 +620,23 @@ fn import_beatoraja_scores_with_device_type(
                 report.corrected += 1;
                 continue;
             }
+            ImportedScoreReconciliation::Ambiguous => {
+                report.skipped += 1;
+                report.issue(
+                    ScoreImportIssueKind::Unsupported,
+                    format!(
+                        "ambiguous aggregate history (multiple candidates or unknown origin): {}",
+                        row.sha256
+                    ),
+                );
+                continue;
+            }
         }
-        score_db.insert_score(&record)?;
+        if table == "score" {
+            score_db.insert_imported_aggregate_score(&record)?;
+        } else {
+            score_db.insert_score(&record)?;
+        }
         report.imported += 1;
     }
     Ok(report)

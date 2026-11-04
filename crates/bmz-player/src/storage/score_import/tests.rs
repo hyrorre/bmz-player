@@ -11,6 +11,8 @@ use rusqlite::params;
 use super::*;
 #[path = "tests/regressions.rs"]
 mod regressions;
+#[path = "tests/source_min_bp.rs"]
+mod source_min_bp;
 use crate::select_options::DoubleOptionScoreBucket;
 use crate::storage::common::hash_to_hex;
 use crate::storage::library_db::{ChartImportRecord, LibraryDatabase};

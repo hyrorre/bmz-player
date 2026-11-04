@@ -339,6 +339,7 @@ pub fn score_record_from_ir_entry(entry: &IrOwnScoreHistoryEntry) -> Result<Scor
     };
 
     Ok(ScoreRecord {
+        source_min_bp: None,
         chart_sha256: hex_to_hash::<32>(&entry.chart_sha256)?,
         ln_policy: LnScorePolicy::from_str_opt(&entry.ln_policy)
             .with_context(|| format!("unsupported LN policy: {}", entry.ln_policy))?,

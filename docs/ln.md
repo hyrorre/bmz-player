@@ -170,6 +170,10 @@ replay slotは同じchart SHA256 / slot番号を複数policyで使うため、�
 | LR2oraja | beatoraja形式 | SHA256 | `Lr2Oraja` | 同上 |
 | LR2oraja (DX) | beatoraja形式 | SHA256 | `Dx` | 同上 |
 
+元DBの`minbp`は判定内訳由来の履歴BPと分けて保存し、独立したBEST BPへ反映します。
+旧版で失われたminbpも、修正版で同じ元DBを再インポートすると既存履歴へ補完できます。
+値の意味、未知値、再インポート・削除時の扱いは[スコア保存仕様](score-persistence.md#外部スコアdbの最小bp)を参照します。
+
 ### beatoraja / LR2oraja の `score.mode`
 
 beatoraja系の`mode`はkey modeではなくLNMODEです。

@@ -280,5 +280,15 @@ pub(super) fn imported_score_record(
         device_type: InputDeviceKind::Keyboard,
         replay_path: String::new(),
         source_kind: ScoreSourceKind::Local,
+        source_min_bp: None,
     }
+}
+
+/// Both formats store nonnegative BP, including a valid zero. LR2's -1 and
+/// beatoraja-family Integer.MAX_VALUE are unknown-value sentinels. NULL is also
+/// unknown; BP may exceed the note count because empty Poor contributes to it.
+pub(super) fn imported_source_min_bp(value: Option<i64>, kind: ScoreImportKind) -> Option<u32> {
+    value
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|&value| kind.uses_lr2_schema() || value != i32::MAX as u32)
 }

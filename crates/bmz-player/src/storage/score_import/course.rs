@@ -11,6 +11,7 @@ use super::*;
 /// not available from LR2's aggregate course row, so `charts`/`replays` are empty.
 pub(super) fn import_lr2_course(
     row: &Lr2ScoreRow,
+    min_bp: u32,
     course_index: &HashMap<Vec<[u8; 16]>, Vec<CourseImportTarget>>,
     score_db: &mut ScoreDatabase,
     rule_mode: RuleMode,
@@ -31,7 +32,7 @@ pub(super) fn import_lr2_course(
         return Ok(());
     };
     for target in targets {
-        let insert = lr2_course_score_insert(row, target, rule_mode, imported_at);
+        let insert = lr2_course_score_insert(row, min_bp, target, rule_mode, imported_at);
         score_db.insert_course_score(&insert)?;
         report.imported += 1;
     }
@@ -70,6 +71,7 @@ pub(super) struct CourseImportTarget {
 /// course identity snapshot. Per-chart breakdown is not available from LR2.
 pub(super) fn lr2_course_score_insert(
     row: &Lr2ScoreRow,
+    min_bp: u32,
     target: &CourseImportTarget,
     rule_mode: RuleMode,
     imported_at: i64,
@@ -92,7 +94,7 @@ pub(super) fn lr2_course_score_insert(
         gauge_type: GaugeType::Normal.as_str().to_string(),
         gauge_value: gauge_value_for_clear(clear_type),
         max_combo: row.max_combo,
-        bp: row.min_bp,
+        bp: min_bp,
         course_failed,
         course_clear: !course_failed,
         arrange: "Normal".to_string(),

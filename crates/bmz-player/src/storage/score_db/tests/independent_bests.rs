@@ -8,6 +8,12 @@ fn database_before_repair() -> ScoreDatabase {
     ScoreDatabase { conn }
 }
 
+fn database() -> ScoreDatabase {
+    let mut db = database_before_repair();
+    run_migrations(db.conn_mut(), SCORE_MIGRATIONS).unwrap();
+    db
+}
+
 fn play(ex: u32, bp: u32, cb: u32, combo: u32) -> ScoreRecord {
     let mut entry = record(ex, ClearType::Normal);
     entry.rule_mode = RuleMode::Beatoraja.as_str().into();
@@ -79,7 +85,7 @@ fn independent_bests_cases_a_through_e_and_combo_only() {
         ((2000, 8, 5, 800), (1900, 10, 6, 900), (2000, 8, 5, 900), false),
     ];
     for (before, next, expected, changes_representative) in cases {
-        let mut db = database_before_repair();
+        let mut db = database();
         let first = play(before.0, before.1, before.2, before.3);
         let first_id = db.insert_score(&first).unwrap();
         assert_eq!(numeric_best(&db), before); // Initial play.
@@ -138,7 +144,7 @@ fn representative_ties_use_actual_history_not_independent_extrema() {
         [play(2000, 8, 5, 800), play(1900, 8, 5, 950), play(2000, 8, 5, 900)],
     ];
     for sequence in sequences {
-        let mut db = database_before_repair();
+        let mut db = database();
         let mut last = 0;
         for entry in &sequence {
             last = db.insert_score(entry).unwrap();
@@ -160,7 +166,7 @@ fn representative_ties_use_actual_history_not_independent_extrema() {
 #[test]
 fn first_numeric_play_after_clear_only_initializes_even_zero_ex() {
     for ex in [0, 2000] {
-        let mut db = database_before_repair();
+        let mut db = database();
         let assisted = record(2200, ClearType::AssistEasy);
         db.update_score_clear_only(&assisted).unwrap();
         assert_eq!(numeric_best(&db), (0, 0, 0, 0));
@@ -181,7 +187,7 @@ fn first_numeric_play_after_clear_only_initializes_even_zero_ex() {
 
 #[test]
 fn source_download_and_reimport_keep_independent_bests_and_representative() {
-    let mut db = database_before_repair();
+    let mut db = database();
     db.insert_score(&play(2000, 5, 3, 900)).unwrap();
     let mut imported = play(2100, 20, 12, 800);
     imported.source_kind = ScoreSourceKind::Beatoraja;
@@ -269,7 +275,7 @@ fn repair_extrema_preserves_every_other_field_and_history() {
         .iter()
         .map(|table| rows(db.conn(), &format!("SELECT * FROM {table} ORDER BY rowid")))
         .collect();
-    run_migrations(db.conn_mut(), SCORE_MIGRATIONS).unwrap();
+    run_migrations(db.conn_mut(), &SCORE_MIGRATIONS[..33]).unwrap();
     assert_eq!(numeric_best(&db), (2100, 5, 3, 900));
     assert_eq!(metadata(db.conn()), before);
     assert_eq!(
@@ -282,13 +288,14 @@ fn repair_extrema_preserves_every_other_field_and_history() {
     let repaired = rows(db.conn(), "SELECT * FROM score_best");
     // The SQL is idempotent too, independently of user_version skipping it.
     let tx = db.conn_mut().transaction().unwrap();
-    for sql in SCORE_MIGRATIONS.last().unwrap().statements {
+    for sql in SCORE_MIGRATIONS.iter().find(|migration| migration.version == 33).unwrap().statements
+    {
         tx.execute_batch(sql).unwrap();
     }
     tx.commit().unwrap();
     assert_eq!(rows(db.conn(), "SELECT * FROM score_best"), repaired);
     db.conn.execute("UPDATE score_best SET bp = 44", []).unwrap();
-    run_migrations(db.conn_mut(), SCORE_MIGRATIONS).unwrap();
+    run_migrations(db.conn_mut(), &SCORE_MIGRATIONS[..33]).unwrap();
     assert_eq!(numeric_best(&db).1, 44); // Subsequent startups do not aggregate again.
 }
 
@@ -361,7 +368,7 @@ fn repair_extrema_keeps_historyless_and_clear_only_keys_and_valid_zeroes() {
     db.insert_score(&legacy).unwrap();
     db.conn.execute("DELETE FROM score_history", []).unwrap();
     let before = rows(db.conn(), "SELECT * FROM score_best ORDER BY chart_sha256");
-    run_migrations(db.conn_mut(), SCORE_MIGRATIONS).unwrap();
+    run_migrations(db.conn_mut(), &SCORE_MIGRATIONS[..33]).unwrap();
     assert_eq!(rows(db.conn(), "SELECT * FROM score_best ORDER BY chart_sha256"), before);
 
     let mut zero = play(0, 0, 0, 0);
@@ -376,7 +383,7 @@ fn repair_extrema_keeps_historyless_and_clear_only_keys_and_valid_zeroes() {
         )
         .unwrap();
     db.conn.pragma_update(None, "user_version", 32).unwrap();
-    run_migrations(db.conn_mut(), SCORE_MIGRATIONS).unwrap();
+    run_migrations(db.conn_mut(), &SCORE_MIGRATIONS[..33]).unwrap();
     let saved = db.best_scores_for_charts(&[key(zero.chart_sha256)]).unwrap().remove(0);
     assert_eq!((saved.bp, saved.cb, saved.max_combo, saved.gauge_value), (0, 0, 0, None));
 }

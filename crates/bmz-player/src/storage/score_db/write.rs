@@ -173,6 +173,14 @@ pub(super) fn insert_score_history(
             record.seed_scheme.as_str(),
         ],
     )?;
+    // Only imports carry independent source evidence. Leave ordinary histories
+    // at the nullable column's default, without changing their computed BP.
+    if let Some(source_min_bp) = score_record_source_min_bp(record) {
+        conn.execute(
+            "UPDATE score_history SET source_min_bp = ?1 WHERE id = ?2",
+            params![source_min_bp, conn.last_insert_rowid()],
+        )?;
+    }
     Ok(())
 }
 
@@ -319,7 +327,7 @@ pub(super) fn upsert_score_best(
     let judges = &record.score.judges;
     let ghost = encode_beatoraja_ghost(&record.score.ghost)?;
     let clear_increment = u32::from(is_counted_clear(record.clear_type));
-    let bp = score_record_bp(record);
+    let bp = score_record_best_bp(record);
     let cb = score_record_cb(record);
     let rule_mode = record_rule_mode(record);
     let inserted = conn.execute(
@@ -690,6 +698,28 @@ pub(super) fn score_record_bp(record: &ScoreRecord) -> u32 {
     } else {
         record.score.bp()
     }
+}
+
+pub(super) fn score_record_source_min_bp(record: &ScoreRecord) -> Option<u32> {
+    (record.source_kind != ScoreSourceKind::Local).then_some(record.source_min_bp).flatten()
+}
+
+pub(super) fn ensure_beatoraja_aggregate_source(record: &ScoreRecord) -> Result<()> {
+    anyhow::ensure!(
+        matches!(
+            record.source_kind,
+            ScoreSourceKind::Beatoraja | ScoreSourceKind::Lr2Oraja | ScoreSourceKind::Lr2OrajaDx
+        ),
+        "aggregate reconciliation requires a beatoraja-family score-table import"
+    );
+    Ok(())
+}
+
+/// The aggregate may use source minbp; representative ranking and history.bp
+/// must continue using the BP computed from this record's judgement counts.
+pub(super) fn score_record_best_bp(record: &ScoreRecord) -> u32 {
+    let bp = score_record_bp(record);
+    score_record_source_min_bp(record).map_or(bp, |source| source.min(bp))
 }
 
 pub(super) fn score_record_cb(record: &ScoreRecord) -> u32 {
