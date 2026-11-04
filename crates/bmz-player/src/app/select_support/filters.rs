@@ -258,14 +258,15 @@ pub(in crate::app) fn compare_select_chart_rows(
     b: &crate::screens::select_model::SelectChartRow,
     sort: SelectSort,
 ) -> std::cmp::Ordering {
-    // beatoraja `BarSorter` と同じく、譜面情報で比べるソートでは未所持譜面を末尾へ送る。
+    // TITLEとBPCOUNT以外のソートでは、未所持譜面を所持譜面より後ろへ送る。
     let owned_first = match sort {
-        SelectSort::Artist | SelectSort::Bpm | SelectSort::Length | SelectSort::Level => {
-            b.in_library().cmp(&a.in_library())
-        }
-        SelectSort::Title | SelectSort::Clear | SelectSort::Score | SelectSort::Bp => {
-            std::cmp::Ordering::Equal
-        }
+        SelectSort::Title | SelectSort::Bp => std::cmp::Ordering::Equal,
+        SelectSort::Artist
+        | SelectSort::Bpm
+        | SelectSort::Length
+        | SelectSort::Level
+        | SelectSort::Clear
+        | SelectSort::Score => b.in_library().cmp(&a.in_library()),
     };
     let ordering = match sort {
         SelectSort::Title => compare_case_insensitive(a.display_title(), b.display_title()),
@@ -312,15 +313,11 @@ pub(in crate::app) fn play_level_number(row: &crate::screens::select_model::Sele
     row.chart.as_ref().and_then(|chart| chart.play_level.parse::<f64>().ok()).unwrap_or(0.0)
 }
 
-pub(in crate::app) fn clear_rank(row: &crate::screens::select_model::SelectChartRow) -> i8 {
-    if !row.in_library() {
-        // 難易度表にあるがローカル未所持。NoPlay よりさらに下位へ並べる。
-        return -1;
-    }
-    // 所持済み: NoPlay / 未記録 = 0、Failed=1 .. Max=10。
+pub(in crate::app) fn clear_rank(row: &crate::screens::select_model::SelectChartRow) -> u8 {
+    // NoPlay / 未記録 = 0、Failed=1 .. Max=10。
     ClearType::rank_from_label(
         row.best_score.as_ref().map(|score| score.clear_type.as_str()).unwrap_or_default(),
-    ) as i8
+    )
 }
 
 /// EXスコア率。スコアが無い行と、ノーツ数が分からない未所持譜面は0として扱う。

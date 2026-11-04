@@ -361,8 +361,15 @@ fn missing_select_chart_row(title: &str) -> SelectChartRow {
 }
 
 #[test]
-fn select_song_info_sorts_place_missing_charts_last() {
-    for sort in [SelectSort::Artist, SelectSort::Bpm, SelectSort::Length, SelectSort::Level] {
+fn select_sorts_place_missing_charts_last() {
+    for sort in [
+        SelectSort::Artist,
+        SelectSort::Bpm,
+        SelectSort::Length,
+        SelectSort::Level,
+        SelectSort::Clear,
+        SelectSort::Score,
+    ] {
         let mut owned = select_chart_row(2);
         owned.chart.as_mut().unwrap().title = "Owned".to_string();
         let mut items =
@@ -431,20 +438,25 @@ fn select_score_sort_counts_notes_with_the_score_ln_policy() {
 }
 
 #[test]
-fn select_score_sort_treats_rows_without_a_known_rate_as_zero() {
-    let played = scored_select_chart_row(1, "Played", 100, 10);
-    let mut unplayed = select_chart_row(2);
-    unplayed.chart.as_mut().unwrap().title = "Unplayed".to_string();
-    let mut missing = missing_select_chart_row("Missing");
-    missing.best_score = Some(best_score_with_replay(1000, ""));
-    let mut items =
-        vec![SelectItem::Chart(played), SelectItem::Chart(unplayed), SelectItem::Chart(missing)];
+fn select_score_sorts_keep_unplayed_first_and_missing_last() {
+    for sort in [SelectSort::Clear, SelectSort::Score] {
+        let played = scored_select_chart_row(1, "Played", 100, 10);
+        let mut unplayed = select_chart_row(2);
+        unplayed.chart.as_mut().unwrap().title = "Unplayed".to_string();
+        let mut missing = missing_select_chart_row("Missing");
+        missing.best_score = Some(best_score_with_replay(1000, ""));
+        let mut items = vec![
+            SelectItem::Chart(missing),
+            SelectItem::Chart(played),
+            SelectItem::Chart(unplayed),
+        ];
 
-    apply_select_sort(&mut items, SelectSort::Score);
+        apply_select_sort(&mut items, sort);
 
-    assert_eq!(items[0].display_name(), "Missing");
-    assert_eq!(items[1].display_name(), "Unplayed");
-    assert_eq!(items[2].display_name(), "Played");
+        assert_eq!(items[0].display_name(), "Unplayed", "{sort:?}");
+        assert_eq!(items[1].display_name(), "Played", "{sort:?}");
+        assert_eq!(items[2].display_name(), "Missing", "{sort:?}");
+    }
 }
 
 #[test]

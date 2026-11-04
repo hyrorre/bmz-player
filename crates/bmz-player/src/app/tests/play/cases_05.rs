@@ -456,20 +456,3 @@ fn left_overlay_hides_toast_while_screenshot_pending() {
         "スクリーンショットを保存しました"
     );
 }
-
-#[test]
-fn clear_rank_separates_unowned_from_noplay() {
-    // 所持済み・スコア無し → NoPlay = 0。
-    let noplay = select_chart_row(1);
-    assert!(noplay.in_library());
-    assert_eq!(clear_rank(&noplay), 0);
-
-    // 難易度表エントリだがローカル未所持 → NoPlay より下位の -1。
-    let mut unowned = select_chart_row(2);
-    unowned.chart = None;
-    unowned.entry_sha256 = Some([2u8; 32]);
-    assert!(!unowned.in_library());
-    assert_eq!(clear_rank(&unowned), -1);
-
-    assert!(clear_rank(&unowned) < clear_rank(&noplay));
-}
