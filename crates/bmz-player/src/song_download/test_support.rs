@@ -132,7 +132,7 @@ pub fn request(root: &Path, api: &str, number: u8) -> ChartDownloadRequest {
             sha256: format!("{number:02x}").repeat(32),
         },
         title: "same title".into(),
-        data_dir: root.into(),
+        download_root: root.join("songs"),
     }
 }
 

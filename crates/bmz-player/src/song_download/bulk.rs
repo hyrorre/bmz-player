@@ -50,17 +50,17 @@ pub fn prepare_bulk_download(
     db: &LibraryDatabase,
     config: &ChartDownloadsConfig,
     scope: BulkDownloadScope,
-    data_dir: &Path,
+    download_root: &Path,
 ) -> Result<BulkDownloadPlan> {
     let rows = db.registered_table_entries_at_level(&scope.source_url, scope.level.as_deref())?;
-    Ok(plan_rows(rows, config, scope, data_dir))
+    Ok(plan_rows(rows, config, scope, download_root))
 }
 
 fn plan_rows(
     rows: Vec<TableEntryListItem>,
     config: &ChartDownloadsConfig,
     scope: BulkDownloadScope,
-    data_dir: &Path,
+    download_root: &Path,
 ) -> BulkDownloadPlan {
     let mut counts = BulkDownloadCounts { total: rows.len(), ..Default::default() };
     let mut requests = Vec::new();
@@ -111,7 +111,7 @@ fn plan_rows(
             identity,
             action,
             title: row.title,
-            data_dir: data_dir.into(),
+            download_root: download_root.into(),
         });
     }
     BulkDownloadPlan { scope, counts, requests }

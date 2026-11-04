@@ -59,6 +59,28 @@ mod tests {
         assert_eq!(restored, config);
     }
     #[test]
+    fn download_root_defaults_to_data_songs_and_resolves_relative_paths() {
+        use crate::config::app_config::ChartDownloadsConfig;
+        let data_dir = std::path::Path::new("bmz-data");
+        let mut config: ChartDownloadsConfig = toml::from_str("http_enabled = true\n").unwrap();
+        assert!(config.save_dir.is_empty());
+        assert_eq!(config.download_root(data_dir), data_dir.join("songs"));
+        config.save_dir = "  ".into();
+        assert_eq!(config.download_root(data_dir), data_dir.join("songs"));
+        config.save_dir = "downloads/bms".into();
+        assert_eq!(config.download_root(data_dir), data_dir.join("downloads/bms"));
+        // 空白を含むフォルダ名は、前後の空白も含めてそのまま使う。
+        config.save_dir = " My BMS ".into();
+        assert_eq!(config.download_root(data_dir), data_dir.join(" My BMS "));
+        let absolute = std::env::temp_dir().join("bmz downloads ");
+        config.save_dir = absolute.to_string_lossy().into_owned();
+        assert_eq!(config.download_root(data_dir), absolute);
+        let restored: ChartDownloadsConfig =
+            toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(restored, config);
+    }
+
+    #[test]
     fn source_hash_requirements_are_explicit() {
         for preset in [HttpDownloadPreset::Ginger, HttpDownloadPreset::Konmai] {
             assert!(template_supports_hashes(preset.api_url(), true, false));

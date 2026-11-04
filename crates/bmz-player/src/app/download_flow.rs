@@ -30,11 +30,11 @@ impl WinitApp {
                 }
                 let db_path = self.boot.app_paths.library_db.clone();
                 let config = self.boot.app_config.downloads.clone();
-                let data_dir = self.boot.app_paths.data_dir.clone();
+                let download_root = config.download_root(&self.boot.app_paths.data_dir);
                 let (tx, rx) = mpsc::channel();
                 match thread::Builder::new().name("chart-download-plan".into()).spawn(move || {
                     let result = LibraryDatabase::open_read_only(&db_path)
-                        .and_then(|db| prepare_bulk_download(&db, &config, scope, &data_dir));
+                        .and_then(|db| prepare_bulk_download(&db, &config, scope, &download_root));
                     let _ = tx.send(result);
                 }) {
                     Ok(_) => {
@@ -54,6 +54,8 @@ impl WinitApp {
                 let Some(plan) = self.jobs.bulk_download.plan.take() else {
                     return;
                 };
+                let download_root =
+                    self.boot.app_config.downloads.download_root(&self.boot.app_paths.data_dir);
                 let mut batch = BulkDownloadBatch {
                     scope: plan.scope,
                     counts: plan.counts,
@@ -63,6 +65,7 @@ impl WinitApp {
                     self.jobs.download_request_id += 1;
                     request.request_id = self.jobs.download_request_id;
                     request.keep_archive = self.boot.app_config.downloads.http_keep_archive;
+                    request.download_root = download_root.clone();
                     let identity = request.identity.clone();
                     let (id, merged) = self.jobs.chart_downloads.submit(request);
                     batch.targets.push((id, identity));

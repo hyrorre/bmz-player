@@ -89,7 +89,7 @@ pub struct ChartDownloadRequest {
     pub identity: ChartDownloadIdentity,
     pub action: MissingChartAction,
     pub title: String,
-    pub data_dir: PathBuf,
+    pub download_root: PathBuf,
 }
 
 impl ChartDownloadRequest {
@@ -317,7 +317,7 @@ async fn download_chart_inner(
             bail!("ダウンロード以外の取得方法が指定されました")
         }
     };
-    let root_dir = request.data_dir.join("songs").join(source.directory_name());
+    let root_dir = request.download_root.join(source.directory_name());
     std::fs::create_dir_all(&root_dir)
         .with_context(|| format!("保存先を作成できませんでした: {}", root_dir.display()))?;
 
@@ -379,8 +379,12 @@ async fn download_chart_inner(
             normalize_ipfs_arg(cids.first().expect("IPFS action has at least one CID"))?
         }
         MissingChartAction::Http { api_url, md5, sha256 } => {
-            let scope =
-                format!("{}\n{}\n{}", request.data_dir.display(), api_url, request.keeps_archive());
+            let scope = format!(
+                "{}\n{}\n{}",
+                request.download_root.display(),
+                api_url,
+                request.keeps_archive()
+            );
             let api_url = expand_http_api_url(api_url, md5, sha256)?;
             let response = client.get(api_url.clone()).send().await?.error_for_status()?;
             let metadata_base = response.url().clone();
@@ -882,6 +886,7 @@ mod tests {
             ipfs_api_url: "http://127.0.0.1:5001".to_string(),
             http_enabled: true,
             http_api_url: "https://example.com/{md5}".to_string(),
+            save_dir: String::new(),
         };
 
         assert!(matches!(
@@ -900,6 +905,7 @@ mod tests {
             ipfs_api_url: "http://127.0.0.1:5001".to_string(),
             http_enabled: true,
             http_api_url: "https://example.com/{md5}".to_string(),
+            save_dir: String::new(),
         };
         let mut metadata = metadata();
         metadata.ipfs.clear();
@@ -1066,7 +1072,7 @@ mod tests {
                 identity: ChartDownloadIdentity::default(),
                 action: MissingChartAction::Unavailable,
                 title: title.to_string(),
-                data_dir: PathBuf::new(),
+                download_root: PathBuf::new(),
             })
             .collect();
 

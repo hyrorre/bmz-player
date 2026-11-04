@@ -591,7 +591,7 @@ impl Drop for ChartDownloadManager {
 }
 
 fn requests_share_transfer(a: &ChartDownloadRequest, b: &ChartDownloadRequest) -> bool {
-    if a.data_dir != b.data_dir || a.keeps_archive() != b.keeps_archive() {
+    if a.download_root != b.download_root || a.keeps_archive() != b.keeps_archive() {
         return false;
     }
     let same_hash = a.identity.overlaps(&b.identity);
@@ -644,7 +644,7 @@ mod tests {
                     sha256: crate::storage::common::hash_to_hex(&sha),
                 },
                 title: "Chart".into(),
-                data_dir: root.path().into(),
+                download_root: root.path().join("songs"),
             };
             let (task_id, merged) = manager.submit(request.clone());
             assert!(!merged);

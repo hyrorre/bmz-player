@@ -39,6 +39,7 @@ pub(super) struct SettingsPanelState<'a> {
     pub(super) connected_gamepads: &'a [crate::input::gamepad::ConnectedGamepad],
     pub(super) audio_stream_info: Option<&'a bmz_audio::backend::cpal::CpalStreamInfo>,
     pub(super) audio_open_error: Option<&'a str>,
+    pub(super) data_dir: &'a std::path::Path,
 }
 
 #[derive(Default)]
