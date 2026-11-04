@@ -274,6 +274,15 @@ pub(super) fn install_sandbox(
             return Ok(value);
         }
 
+        // Lua's preload searcher comes before the file search. A preload
+        // loader is skin code, so it cannot read anything the skin cannot.
+        if let Value::Table(preload) = package.get::<Value>("preload")?
+            && let Value::Function(loader) = preload.get::<Value>(module.as_str())?
+        {
+            let value = loader.call::<Value>((module.clone(), ":preload:"))?;
+            return finish_require(&loaded, &module, value);
+        }
+
         let package_path = package.get::<String>("path")?;
         let mut attempted = Vec::new();
         let mut resolved = None;
@@ -301,15 +310,7 @@ pub(super) fn install_sandbox(
             .set_mode(ChunkMode::Text)
             .into_function()?;
         let value = loader.call::<Value>((module.clone(), path.to_string_lossy().to_string()))?;
-        if !matches!(value, Value::Nil) {
-            loaded.set(module.as_str(), value)?;
-        }
-        let cached = loaded.get::<Value>(module.as_str())?;
-        if !matches!(cached, Value::Nil) {
-            return Ok(cached);
-        }
-        loaded.set(module, true)?;
-        Ok(Value::Boolean(true))
+        finish_require(&loaded, &module, value)
     })?;
     globals.set("require", require)?;
 
@@ -320,6 +321,21 @@ pub(super) fn install_sandbox(
     globals.set("bmz_timer_fn_map", timer_fn_map)?;
 
     Ok(main_state_probe)
+}
+
+/// Lua 5.4 `require` bookkeeping after a loader ran: a non-nil result is
+/// cached, a loader may set `package.loaded[name]` itself, and otherwise the
+/// module is recorded as `true`.
+fn finish_require(loaded: &Table, module: &str, value: Value) -> mlua::Result<Value> {
+    if !matches!(value, Value::Nil) {
+        loaded.set(module, value)?;
+    }
+    let cached = loaded.get::<Value>(module)?;
+    if !matches!(cached, Value::Nil) {
+        return Ok(cached);
+    }
+    loaded.set(module, true)?;
+    Ok(Value::Boolean(true))
 }
 
 /// Lua::new() registers the real standard libraries in `package.loaded`, and
