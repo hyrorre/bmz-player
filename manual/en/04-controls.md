@@ -53,9 +53,11 @@ While you hold **E1**, the option panel is shown. Keep holding it and press keys
 | KEY7 | Change the play type (normal, practice, autoplay, and so on) |
 | Turntable, Up / Down | Change the target (the score you compare against) |
 
-In 5K / 7K, you can change your arrangement from either controller.
-In 10K / 14K, SP-TO-DP, and D-BATTLE, each controller changes its own side's arrangement.
-In 5K / 7K G-BATTLE / AUTOPLAY BATTLE, either controller changes your arrangement.
+In 4K / 5K / 6K / 7K / 8K / 9K SP, you can change your arrangement from either controller.
+7K→6K / 7K→9K conversions also use the SP controls.
+In 10K / 14K, SP-TO-DP (5K→10K / 7K→14K), and D-BATTLE / BATTLE AS, each controller changes its own side's arrangement.
+In SP G-BATTLE / AUTOPLAY BATTLE, either controller changes your arrangement.
+If you use the 9K select input layout, KEY8 / KEY9 control the target.
 
 Hold **E2** for assist options, or hold **E1 and E2** together for other detailed options.
 The display and controls may differ depending on the skin. See [Play options](05-play-options.md) for what each option means.

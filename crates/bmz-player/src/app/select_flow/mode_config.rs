@@ -24,6 +24,30 @@ pub(in crate::app) fn play_config_key_mode_for_runtime(
     active_play.or(pending_play)
 }
 
+/// `lane` has already been resolved using the select input layout, while
+/// `play_mode` describes the chart after conversion and battle options.
+pub(in crate::app) fn select_arrange_option_lane(
+    input_mode: SelectInputModeConfig,
+    play_mode: Option<KeyMode>,
+    lane: Lane,
+) -> Lane {
+    if input_mode == SelectInputModeConfig::Key9 {
+        return lane;
+    }
+    if matches!(
+        play_mode,
+        Some(KeyMode::K4 | KeyMode::K5 | KeyMode::K6 | KeyMode::K7 | KeyMode::K8 | KeyMode::K9)
+    ) {
+        match lane {
+            Lane::Key8 => Lane::Key1,
+            Lane::Key9 => Lane::Key2,
+            _ => lane,
+        }
+    } else {
+        lane
+    }
+}
+
 impl WinitApp {
     /// The source chart mode, before conversion (library queries and skin attempt identity).
     pub(super) fn selected_source_key_mode(&self) -> Option<KeyMode> {
@@ -42,9 +66,6 @@ impl WinitApp {
     /// Both controllers edit the player's arrangement in SP. Keep the physical
     /// side for DP and D-BATTLE; a battle session's ghost is not a second player.
     pub(super) fn selected_arrange_option_lane(&self, lane: Lane) -> Lane {
-        if self.boot.profile_config.input.select_input_mode == SelectInputModeConfig::Key9 {
-            return lane;
-        }
         let session_mode = if self.select.ir_battle.active {
             SessionMode::GBattle
         } else {
@@ -58,15 +79,7 @@ impl WinitApp {
                 self.selected_key_mode_conversion(),
             )
         });
-        if matches!(mode, Some(KeyMode::K5 | KeyMode::K7)) {
-            match lane {
-                Lane::Key8 => Lane::Key1,
-                Lane::Key9 => Lane::Key2,
-                _ => lane,
-            }
-        } else {
-            lane
-        }
+        select_arrange_option_lane(self.boot.profile_config.input.select_input_mode, mode, lane)
     }
 
     pub(super) fn selected_key_mode_conversion(&self) -> KeyModeConversionConfig {

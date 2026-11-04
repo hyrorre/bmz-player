@@ -60,3 +60,60 @@ Windowsで以下が成功しました。
 ビルド時のincremental cacheのhard link警告はコピーへのフォールバックで、ソースの警告はありません。
 
 物理コントローラー2台での操作、実ウィンドウでのスキン表示、macOS / Linuxでの動作は未確認です。
+
+## 2026-11-04追記：すべてのSPキーモードへ拡張
+
+PR #67の初回コミット`eb17d966`では、実効モードが5K / 7Kの場合だけ右側入力を1P配置へ振り替えていました。
+4K / 6K / 8K / 9Kと7K→6K / 7K→9K変換でも自分の配置を変更できるように、既存ブランチへの追加コミットで対象を広げます。
+ここから下は拡張後の仕様・検証結果です。上の節は初回対応時点の記録です。
+
+### 配置変更先の判定
+
+`select_flow/mode_config.rs`の`select_arrange_option_lane`を純粋な判定ヘルパーとして分離しました。
+入力に使う選曲配列と、選択譜面・変換・BATTLE設定から得た実効モードを別々に受け取ります。
+通常 / LR2パネルから呼ぶ`selected_arrange_option_lane`は、既存のモード解決とG-BATTLE優先処理を共用します。
+
+- 7K/14K選曲入力では、4K / 5K / 6K / 7K / 8K / 9KのSPと7K→6K / 7K→9Kを1P配置へ対応付けます。
+- 10K / 14K、5K→10K / 7K→14KのSP-TO-DP、D-BATTLE / BATTLE ASは左右独立です。
+- SPのG-BATTLE / AUTOPLAY BATTLEは、相手の表示領域があっても自分の配置を変更します。
+  IR対戦相手一覧が有効な場合はG-BATTLEを優先します。
+- 9K選曲入力のKEY8 / KEY9は振り替えず、既存のターゲット操作を保ちます。
+  7K/14K選曲入力でネイティブ9K譜面を選ぶ場合とは区別します。
+- 混合コースなどモード未確定の場合は、初回対応と同じ左右別の操作です。
+
+演奏入力、左右スロット、キーコンフィグと保存形式、配置アルゴリズム、プレイ開始時の変換処理は変更しません。
+スキンイベント42 / 43とLR2マウスの1P / 2P配置ボタンも、指定された側の配置を変更します。
+操作仕様書と6言語のマニュアルを更新しました。
+
+### 追加した回帰確認
+
+`app/tests/select/arrange_controls.rs`をOS非依存の純粋テスト2件と、Windowsのアプリ統合テストに分けました。
+純粋テストは通常のテスト実行に含め、Windows統合テストはイベントループの制約により単独で明示実行します。
+
+- 全SPモード、DP、未確定モードについて全レーンの対応を確認
+- 9K選曲入力のKEY8 / KEY9保護とターゲット・通常配置キーの対応を確認
+- 通常 / LR2パネルのキーボード・コントローラー両経路で、全SPと7K→6K / 7K→9Kの1P変更・2P保持を確認
+- 通常パネルの次 / 前、LR2の既存の配置切り替え順を確認
+- 10K / 14K、両方のSP-TO-DP、D-BATTLE / BATTLE AS、G-BATTLE / AUTOPLAY BATTLE、IR一覧の優先順位を確認
+- ALLフィルター、7K→14K→7K、混合コース、左右スロットの入れ替えと独自ボタン番号を確認
+- 9K選曲入力のアプリ操作と、スキンイベント42 / 43・LR2マウスボタンの左右独立を確認
+
+### 拡張後の検証結果
+
+Windowsで以下が成功しました。
+
+- `cargo fmt --all -- --check`
+- `cargo check -p bmz-player --locked`
+- `cargo clippy -p bmz-player --all-targets --locked -- -D warnings`
+- `cargo test -p bmz-player --locked`：2,855件成功、libの54件と起動確認の2件はignored
+- `cargo test -p bmz-player --locked --lib select_arrange_controls_follow_sp_dp_transitions_from_either_side -- --ignored --test-threads=1`：拡張したWindowsアプリ統合テスト1件成功
+- `cargo build -p bmz-player --locked`
+- `bun test bmz-ir-web/tests/manual.test.ts`：8件成功
+
+純粋テスト2件は全体テストにも含めて実行しました。
+全体テストは初回対応時に必要だったローカル通信の権限を使って実行し、
+ログをローカルの`.local/issue-64-all-sp-tests.log`に保存しました。
+incremental cacheのhard link警告はコピーへのフォールバックです。ソースの警告はありません。
+
+物理コントローラー2台、実ウィンドウでのスキン表示、macOS / Linuxでの実行は未確認です。
+Windowsアプリ統合テストの通常 / LR2スキンは外部素材を必要としない最小の定義を使っています。
