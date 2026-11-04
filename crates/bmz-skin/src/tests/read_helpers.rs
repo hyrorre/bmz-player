@@ -256,10 +256,10 @@ fn timer_helpers_see_same_frame_custom_writes_zero_start_and_submillisecond_prec
 }
 
 /// Play timers are measured on the chart clock and `main_state.time()` on the
-/// scene clock, so a start rebuilt from both moves by 1 ms between frames.
+/// scene clock, so a start rebuilt from both moves between frames.
 /// ModernChic's detail mode counts a key press whenever the start changes.
 #[test]
-fn app_timer_starts_ignore_millisecond_clock_jitter_but_follow_restarts() {
+fn app_timer_starts_ignore_clock_differences_but_follow_restarts() {
     for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
         let mut loaded = load(
             r#"
@@ -292,6 +292,40 @@ fn app_timer_starts_ignore_millisecond_clock_jitter_but_follow_restarts() {
         assert_eq!(start(10_100_000, Some(4)), "10096000");
         assert_eq!(start(10_116_000, None), i32::MIN.to_string());
         assert_eq!(start(10_133_000, Some(0)), "10133000");
+        // An input offset holds a pressed key's elapsed time at 0 for a while.
+        for now_us in [10_150_000, 10_166_000, 10_183_000] {
+            assert_eq!(start(now_us, Some(0)), "10133000", "{now_us}");
+        }
+        // The scene clock can run several ms apart from a stale snapshot.
+        for (now_us, elapsed_ms) in [(10_200_000, 9), (10_216_000, 33), (10_233_000, 38)] {
+            assert_eq!(start(now_us, Some(elapsed_ms)), "10133000", "{now_us}");
+        }
+        // A small step back is clock correction, a larger one a restart.
+        assert_eq!(start(10_250_000, Some(36)), "10133000");
+        assert_eq!(start(10_266_000, Some(33)), "10233000");
         assert_eq!(runtime.failure_log_count(), 0);
+    }
+}
+
+/// TIMER_RHYTHM runs at the BPM, so Lua keeps seeing its own elapsed time.
+#[test]
+fn rhythm_timer_start_follows_its_elapsed_time() {
+    let mut loaded = load(
+        r#"
+        local s = require('main_state')
+        return {type=5, text={{id='rhythm', value=function() return tostring(s.timer(140)) end}}}
+        "#,
+        &LuaLoadRuntimeState { runtime_mode: LuaSkinRuntimeMode::Compat, ..Default::default() },
+    );
+    let runtime = loaded.lua_runtime.as_mut().unwrap();
+    let text = callback(runtime, "$.text[1].value");
+    let mut state = TestLuaMainState::default();
+    for (now_us, elapsed_ms, expected) in
+        [(1_000_000, 100, "900000"), (1_016_000, 124, "892000"), (1_033_000, 148, "885000")]
+    {
+        state.now_us = now_us;
+        state.timers = [(140, elapsed_ms)].into_iter().collect();
+        runtime.begin_frame();
+        assert_eq!(runtime.evaluate_text(text, &state).unwrap(), expected);
     }
 }

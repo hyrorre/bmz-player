@@ -184,32 +184,52 @@ pub(super) struct LuaCustomTimers {
 pub(super) struct LuaAppTimerStart {
     reported: i64,
     raw: i64,
+    elapsed_ms: i32,
 }
 
 /// Play timers run on the chart clock while `main_state.time()` is the scene
-/// clock, so a start rebuilt from both whole milliseconds moves by 1 ms between
-/// frames. beatoraja keeps one start per timer activation, and skins detect a
-/// new key press or judgement by comparing it with the previous one
-/// (ModernChic's detail mode and battle effects).
+/// clock, so a start rebuilt from both whole milliseconds moves between frames.
+/// beatoraja keeps one start per timer activation, and skins detect a new key
+/// press or judgement by comparing it with the previous one (ModernChic's
+/// detail mode and battle effects).
 const LUA_APP_TIMER_START_JITTER_US: i64 = 2_000;
 
-/// Keeps the reported start while the raw start stays within the jitter of
-/// the previous frame's raw start, so slow clock drift does not add up into a
-/// false restart. A larger change is a new activation.
+/// How far an elapsed time may step back within one activation.
+const LUA_APP_TIMER_ELAPSED_JITTER_MS: i32 = 2;
+
+/// Timers started by a key press, a judgement or a held note. The rebuilt start
+/// says little about these: it follows the snapshot age, and it stays at the
+/// current time while an input offset holds the elapsed time at 0. Others, such
+/// as TIMER_PLAY and TIMER_RHYTHM, move their start with the playback speed.
+fn is_event_app_timer(id: i32) -> bool {
+    matches!(id, 46 | 47 | 50..=67 | 70..=87 | 100..=117 | 120..=137 | 247 | 250..=287 | 446..=448)
+}
+
+/// Keeps the reported start within one activation. An event timer's elapsed
+/// time only grows until it restarts. For other timers a change of the raw start
+/// beyond the jitter of the previous frame's is a restart, so slow clock drift
+/// does not add up into a false one.
 pub(super) fn stable_app_timer_start(
     starts: &mut BTreeMap<i32, LuaAppTimerStart>,
     id: i32,
     raw: Option<i64>,
+    elapsed_ms: Option<i32>,
 ) -> Option<i64> {
-    let Some(raw) = raw else {
+    let (Some(raw), Some(elapsed_ms)) = (raw, elapsed_ms) else {
         starts.remove(&id);
-        return None;
+        return raw;
     };
-    let start = starts.entry(id).or_insert(LuaAppTimerStart { reported: raw, raw });
-    if (raw - start.raw).abs() > LUA_APP_TIMER_START_JITTER_US {
+    let start = starts.entry(id).or_insert(LuaAppTimerStart { reported: raw, raw, elapsed_ms });
+    let restarted = if is_event_app_timer(id) {
+        elapsed_ms.saturating_add(LUA_APP_TIMER_ELAPSED_JITTER_MS) < start.elapsed_ms
+    } else {
+        (raw - start.raw).abs() > LUA_APP_TIMER_START_JITTER_US
+    };
+    if restarted {
         start.reported = raw;
     }
     start.raw = raw;
+    start.elapsed_ms = elapsed_ms;
     Some(start.reported)
 }
 
@@ -811,6 +831,7 @@ impl LuaRuntimeStateScope {
                                     &mut timers.app_timer_starts,
                                     id,
                                     state.timer_start_us(id),
+                                    state.timer(id),
                                 ),
                             };
                             Value::Integer(start.unwrap_or(i64::from(TIMER_OFF_VALUE)))
