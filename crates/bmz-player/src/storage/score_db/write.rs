@@ -173,6 +173,14 @@ pub(super) fn insert_score_history(
             record.seed_scheme.as_str(),
         ],
     )?;
+    // Only imports carry independent source evidence. Leave ordinary histories
+    // at the nullable column's default, without changing their computed BP.
+    if let Some(source_min_bp) = score_record_source_min_bp(record) {
+        conn.execute(
+            "UPDATE score_history SET source_min_bp = ?1 WHERE id = ?2",
+            params![source_min_bp, conn.last_insert_rowid()],
+        )?;
+    }
     Ok(())
 }
 
@@ -690,6 +698,10 @@ pub(super) fn score_record_bp(record: &ScoreRecord) -> u32 {
     } else {
         record.score.bp()
     }
+}
+
+pub(super) fn score_record_source_min_bp(record: &ScoreRecord) -> Option<u32> {
+    (record.source_kind != ScoreSourceKind::Local).then_some(record.source_min_bp).flatten()
 }
 
 pub(super) fn score_record_cb(record: &ScoreRecord) -> u32 {

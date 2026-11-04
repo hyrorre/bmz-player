@@ -29,6 +29,7 @@ fn score_with_ex_score(ex_score: u32) -> ScoreState {
 
 fn record(ex_score: u32, clear_type: ClearType) -> ScoreRecord {
     ScoreRecord {
+        source_min_bp: None,
         chart_sha256: [7; 32],
         ln_policy: LnScorePolicy::ForceLn,
         double_option: DoubleOptionScoreBucket::Off,

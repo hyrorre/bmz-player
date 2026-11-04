@@ -11,7 +11,7 @@ pub(super) struct Lr2ScoreRow {
     pub(super) poor: u32,
     pub(super) total_notes: u32,
     pub(super) max_combo: u32,
-    pub(super) min_bp: u32,
+    pub(super) min_bp: Option<i64>,
     pub(super) play_count: u32,
     pub(super) clear_count: u32,
     pub(super) ghost: String,
@@ -58,7 +58,7 @@ pub(super) struct BeatorajaScoreRow {
     pub(super) lms: u32,
     pub(super) total_notes: u32,
     pub(super) max_combo: u32,
-    pub(super) min_bp: u32,
+    pub(super) min_bp: Option<i64>,
     pub(super) ghost: String,
     pub(super) random_seed: Option<i64>,
     pub(super) date: i64,
@@ -94,7 +94,7 @@ pub(super) fn beatoraja_row(row: &Row<'_>) -> rusqlite::Result<BeatorajaScoreRow
 
 pub(super) fn score_state_from_lr2(row: &Lr2ScoreRow, expected_notes: u32) -> ScoreState {
     let ghost = decode_lr2_ghost(&row.ghost, expected_notes);
-    let _ = (row.min_bp, row.play_count, row.clear_count, row.total_notes);
+    let _ = (row.play_count, row.clear_count, row.total_notes);
     ScoreState {
         judges: JudgeCounts {
             fast_pgreat: row.perfect,
@@ -117,7 +117,7 @@ pub(super) fn score_state_from_beatoraja(
     expected_notes: u32,
 ) -> ScoreState {
     let ghost = decode_external_ghost(&row.ghost, expected_notes);
-    let _ = (row.min_bp, row.total_notes);
+    let _ = row.total_notes;
     ScoreState {
         judges: JudgeCounts {
             fast_pgreat: row.epg,

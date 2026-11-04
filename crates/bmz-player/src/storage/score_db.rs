@@ -232,6 +232,9 @@ pub struct ScoreRecord {
     pub device_type: InputDeviceKind,
     pub replay_path: String,
     pub source_kind: ScoreSourceKind,
+    /// Source DB's minbp, independent of the representative judgement counts.
+    /// Local plays and sources without this information leave it unknown.
+    pub source_min_bp: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -348,6 +351,7 @@ impl ScoreRecord {
             device_type,
             replay_path,
             source_kind,
+            source_min_bp: None,
         }
     }
 }

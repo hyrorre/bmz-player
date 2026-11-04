@@ -549,6 +549,7 @@ fn score_for_chart(chart_sha256: [u8; 32]) -> ScoreRecord {
     });
 
     ScoreRecord {
+        source_min_bp: None,
         chart_sha256,
         ln_policy: LnScorePolicy::ForceLn,
         double_option: crate::select_options::DoubleOptionScoreBucket::Off,
