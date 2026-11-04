@@ -770,6 +770,8 @@ impl WinitApp {
                     if matches!(action, MissingChartAction::Ipfs { .. }) { "IPFS" } else { "HTTP" }
                 })
                 .unwrap_or("HTTP");
+        let download_root =
+            self.boot.app_config.downloads.download_root(&self.boot.app_paths.data_dir);
         for (action, title, identity) in downloads {
             self.jobs.download_request_id += 1;
             let request_id = self.jobs.download_request_id;
@@ -779,7 +781,7 @@ impl WinitApp {
                 identity: identity.clone(),
                 action,
                 title,
-                data_dir: self.boot.app_paths.data_dir.clone(),
+                download_root: download_root.clone(),
             };
             let (task_id, _) = self.jobs.chart_downloads.submit(request);
             if single {

@@ -221,7 +221,7 @@ mod tests {
                 request_id: id,
                 identity: ChartDownloadIdentity::default(),
                 title: format!("Chart {id}"),
-                data_dir: PathBuf::new(),
+                download_root: PathBuf::new(),
                 action: MissingChartAction::Unavailable,
             });
         }

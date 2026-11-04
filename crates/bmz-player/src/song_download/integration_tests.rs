@@ -28,7 +28,7 @@ pub(super) fn identified_request(
         keep_archive: false,
         request_id: id,
         title: "Same title".into(),
-        data_dir: root.into(),
+        download_root: root.join("songs"),
         action: MissingChartAction::Http {
             api_url: api.into(),
             md5: crate::storage::common::hash_to_hex(&identity.md5.unwrap()),

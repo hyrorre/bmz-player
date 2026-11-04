@@ -398,7 +398,8 @@ pub(super) fn build_library_settings_sections(
                 "md5" => "{md5}",
                 "sha256" => "{sha256}"
             ));
-            ui.label(tr!(text, "settings-downloads-save-path"));
+            ui.separator();
+            build_download_save_dir_setting(ui, &mut config.downloads.save_dir, text);
         });
 
     build_score_import_section(
@@ -423,4 +424,33 @@ pub(super) fn build_library_settings_sections(
         cancel_replay_import,
         text,
     );
+}
+
+fn build_download_save_dir_setting(ui: &mut egui::Ui, save_dir: &mut String, text: Localizer) {
+    ui.horizontal(|ui| {
+        ui.label(tr!(text, "settings-downloads-save-dir"));
+        ui.add(egui::TextEdit::singleline(save_dir).desired_width(300.0).hint_text("data/songs"));
+    });
+    ui.horizontal(|ui| {
+        if ui.button(tr!(text, "common-choose-folder")).clicked()
+            && let Some(folder) = rfd::FileDialog::new().pick_folder()
+        {
+            *save_dir = folder.to_string_lossy().into_owned();
+        }
+        if ui
+            .add_enabled(
+                !save_dir.trim().is_empty(),
+                egui::Button::new(tr!(text, "common-default")),
+            )
+            .clicked()
+        {
+            save_dir.clear();
+        }
+    });
+    let path = match save_dir.trim() {
+        "" => "data/songs",
+        path => path,
+    };
+    ui.label(tr!(text, "settings-downloads-save-path", "path" => path));
+    ui.label(tr!(text, "settings-downloads-save-dir-help"));
 }

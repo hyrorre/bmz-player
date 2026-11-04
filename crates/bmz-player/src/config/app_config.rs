@@ -642,6 +642,10 @@ pub struct ChartDownloadsConfig {
     pub http_enabled: bool,
     #[serde(default)]
     pub http_api_url: String,
+    /// 取得した譜面の保存先。空なら `data/songs`、相対パスは `data/` を基準にする。
+    /// 実際の保存先はこの下の方式別フォルダ（`http` / `ipfs`）。
+    #[serde(default)]
+    pub save_dir: String,
 }
 
 fn default_download_parallelism() -> u8 {
@@ -658,11 +662,18 @@ impl Default for ChartDownloadsConfig {
             ipfs_api_url: String::new(),
             http_enabled: false,
             http_api_url: String::new(),
+            save_dir: String::new(),
         }
     }
 }
 
 impl ChartDownloadsConfig {
+    /// 方式別フォルダを置く保存先の基準フォルダを返す。
+    pub fn download_root(&self, data_dir: &std::path::Path) -> std::path::PathBuf {
+        let save_dir = self.save_dir.trim();
+        if save_dir.is_empty() { data_dir.join("songs") } else { data_dir.join(save_dir) }
+    }
+
     pub fn effective_http_api_url(&self) -> &str {
         if self.http_api_url.trim().is_empty() {
             self.http_source.api_url()

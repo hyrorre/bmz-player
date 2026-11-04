@@ -747,7 +747,7 @@ fn chart_download_rows_use_endless_dream_progress_cells() {
             sha256: "01".repeat(32),
         },
         title: "Chart".into(),
-        data_dir: PathBuf::from("data"),
+        download_root: PathBuf::from("data/songs"),
     });
     let task = &manager.tasks()[0];
     let progress = |state| {
