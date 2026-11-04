@@ -117,8 +117,7 @@ impl Field {
                     .into(),
             )),
             Self::ScoreRate => Some(Value::Number(facts.score.map_or(0.0, |score| {
-                let notes = facts.chart.scored_total_notes(facts.score_key.ln_policy);
-                if notes == 0 { 0.0 } else { f64::from(score.ex_score) * 50.0 / f64::from(notes) }
+                facts.chart.ex_score_percent(score.ex_score, facts.score_key.ln_policy)
             }))),
             Self::PlayCount => {
                 Some(Value::Number(facts.score.map_or(0.0, |score| score.play_count.into())))

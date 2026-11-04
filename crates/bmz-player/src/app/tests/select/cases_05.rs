@@ -388,6 +388,65 @@ fn select_title_sort_keeps_missing_charts_in_title_order() {
     assert_eq!(items[1].display_name(), "Zulu");
 }
 
+fn scored_select_chart_row(
+    index: usize,
+    title: &str,
+    total_notes: u32,
+    ex_score: u32,
+) -> SelectChartRow {
+    let mut row = select_chart_row(index);
+    let chart = row.chart.as_mut().unwrap();
+    chart.title = title.to_string();
+    chart.total_notes = total_notes;
+    row.best_score = Some(best_score_with_replay(ex_score, ""));
+    row
+}
+
+#[test]
+fn select_score_sort_uses_ex_score_rate() {
+    let mut items = vec![
+        SelectItem::Chart(scored_select_chart_row(1, "High Rate", 100, 180)),
+        SelectItem::Chart(scored_select_chart_row(2, "Low Rate", 1000, 1000)),
+    ];
+
+    apply_select_sort(&mut items, SelectSort::Score);
+
+    assert_eq!(items[0].display_name(), "Low Rate");
+    assert_eq!(items[1].display_name(), "High Rate");
+}
+
+#[test]
+fn select_score_sort_counts_notes_with_the_score_ln_policy() {
+    let mut force_ln = scored_select_chart_row(1, "Force LN", 100, 100);
+    force_ln.chart.as_mut().unwrap().ln_counts.undefined_ln_pairs = 100;
+    let mut force_cn = scored_select_chart_row(2, "Force CN", 100, 150);
+    force_cn.chart.as_mut().unwrap().ln_counts.undefined_ln_pairs = 100;
+    force_cn.best_score.as_mut().unwrap().ln_policy = crate::ln_policy::LnScorePolicy::ForceCn;
+    let mut items = vec![SelectItem::Chart(force_ln), SelectItem::Chart(force_cn)];
+
+    apply_select_sort(&mut items, SelectSort::Score);
+
+    assert_eq!(items[0].display_name(), "Force CN");
+    assert_eq!(items[1].display_name(), "Force LN");
+}
+
+#[test]
+fn select_score_sort_treats_rows_without_a_known_rate_as_zero() {
+    let played = scored_select_chart_row(1, "Played", 100, 10);
+    let mut unplayed = select_chart_row(2);
+    unplayed.chart.as_mut().unwrap().title = "Unplayed".to_string();
+    let mut missing = missing_select_chart_row("Missing");
+    missing.best_score = Some(best_score_with_replay(1000, ""));
+    let mut items =
+        vec![SelectItem::Chart(played), SelectItem::Chart(unplayed), SelectItem::Chart(missing)];
+
+    apply_select_sort(&mut items, SelectSort::Score);
+
+    assert_eq!(items[0].display_name(), "Missing");
+    assert_eq!(items[1].display_name(), "Unplayed");
+    assert_eq!(items[2].display_name(), "Played");
+}
+
 #[test]
 fn restored_select_index_keeps_chart_when_clear_sort_moves_after_score_update() {
     let mut played = select_chart_row(1);

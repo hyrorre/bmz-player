@@ -274,7 +274,7 @@ pub(in crate::app) fn compare_select_chart_rows(
         SelectSort::Length => chart_length_ms(a).cmp(&chart_length_ms(b)),
         SelectSort::Level => compare_play_level(a, b),
         SelectSort::Clear => clear_rank(a).cmp(&clear_rank(b)),
-        SelectSort::Score => ex_score(a).cmp(&ex_score(b)),
+        SelectSort::Score => ex_score_percent(a).total_cmp(&ex_score_percent(b)),
         SelectSort::Bp => bp(a).cmp(&bp(b)),
     };
     owned_first
@@ -323,8 +323,13 @@ pub(in crate::app) fn clear_rank(row: &crate::screens::select_model::SelectChart
     ) as i8
 }
 
-pub(in crate::app) fn ex_score(row: &crate::screens::select_model::SelectChartRow) -> u32 {
-    row.best_score.as_ref().map(|score| score.ex_score).unwrap_or(0)
+/// EXスコア率。スコアが無い行と、ノーツ数が分からない未所持譜面は0として扱う。
+pub(in crate::app) fn ex_score_percent(row: &crate::screens::select_model::SelectChartRow) -> f64 {
+    row.chart
+        .as_ref()
+        .zip(row.best_score.as_ref())
+        .map(|(chart, score)| chart.ex_score_percent(score.ex_score, score.ln_policy))
+        .unwrap_or(0.0)
 }
 
 pub(in crate::app) fn bp(row: &crate::screens::select_model::SelectChartRow) -> u32 {
