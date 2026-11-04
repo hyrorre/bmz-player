@@ -1236,4 +1236,29 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
              FROM random_ids;",
         ],
     },
+    Migration {
+        version: 33,
+        // Repair only independent extrema. Keep representative metadata, lamps,
+        // counters, history and IR identities intact. Clear-only keys and legacy
+        // bests without any history have no recoverable numeric evidence.
+        // RuleMode uses the same legacy normalization as aggregate rebuilding.
+        // Numeric history columns are NOT NULL; zero (including imported zero)
+        // is a valid value, not an unknown-value sentinel.
+        statements: &[
+            "WITH extrema AS (
+                SELECT chart_sha256, ln_policy, double_option,
+                       CASE rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
+                           WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END AS rule_bucket,
+                       MIN(bp) AS bp, MIN(cb) AS cb, MAX(max_combo) AS max_combo
+                FROM score_history
+                GROUP BY chart_sha256, ln_policy, double_option, rule_bucket
+             )
+             UPDATE score_best SET bp = e.bp, cb = e.cb, max_combo = e.max_combo
+             FROM extrema AS e
+             WHERE score_best.chart_sha256 = e.chart_sha256
+               AND score_best.ln_policy = e.ln_policy
+               AND score_best.double_option = e.double_option
+               AND score_best.rule_mode = e.rule_bucket;",
+        ],
+    },
 ];
