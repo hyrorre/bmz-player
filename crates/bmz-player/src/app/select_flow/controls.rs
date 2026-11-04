@@ -735,27 +735,13 @@ impl WinitApp {
             return false;
         }
         if self.select.select_keys.is_key1(control) {
-            self.select.arrange_option = self.select.arrange_option.cycle();
-            tracing::info!(arrange = self.select.arrange_option.as_str(), "arrange option changed");
-            true
+            self.apply_arrange_option_lane(Lane::Key1)
         } else if self.select.select_keys.is_key2(control) {
-            self.select.arrange_option = self.select.arrange_option.cycle_prev();
-            tracing::info!(arrange = self.select.arrange_option.as_str(), "arrange option changed");
-            true
+            self.apply_arrange_option_lane(Lane::Key2)
         } else if self.select.select_keys.is_key8(control) {
-            self.select.arrange_option_2p = self.select.arrange_option_2p.cycle();
-            tracing::info!(
-                arrange_2p = self.select.arrange_option_2p.as_str(),
-                "2P arrange changed"
-            );
-            true
+            self.apply_arrange_option_lane(Lane::Key8)
         } else if self.select.select_keys.is_key9(control) {
-            self.select.arrange_option_2p = self.select.arrange_option_2p.cycle_prev();
-            tracing::info!(
-                arrange_2p = self.select.arrange_option_2p.as_str(),
-                "2P arrange changed"
-            );
-            true
+            self.apply_arrange_option_lane(Lane::Key9)
         } else if self.select.select_keys.is_ui_key3(control) {
             self.select.gauge_option = cycle_gauge_option(self.select.gauge_option);
             tracing::info!(gauge = ?self.select.gauge_option, "gauge option changed");
@@ -800,6 +786,20 @@ impl WinitApp {
         }
     }
 
+    fn apply_arrange_option_lane(&mut self, lane: Lane) -> bool {
+        let lane = self.selected_arrange_option_lane(lane);
+        let (arrange, forward) = match lane {
+            Lane::Key1 => (&mut self.select.arrange_option, true),
+            Lane::Key2 => (&mut self.select.arrange_option, false),
+            Lane::Key8 => (&mut self.select.arrange_option_2p, true),
+            Lane::Key9 => (&mut self.select.arrange_option_2p, false),
+            _ => return false,
+        };
+        *arrange = if forward { arrange.cycle() } else { arrange.cycle_prev() };
+        tracing::info!(?lane, arrange = arrange.as_str(), "arrange option changed");
+        true
+    }
+
     pub(super) fn apply_gamepad_play_option_control(
         &mut self,
         device: DeviceId,
@@ -819,40 +819,10 @@ impl WinitApp {
             }
             return false;
         }
-        match lane {
-            Some(Lane::Key1) => {
-                self.select.arrange_option = self.select.arrange_option.cycle();
-                tracing::info!(
-                    arrange = self.select.arrange_option.as_str(),
-                    "arrange option changed"
-                );
-                true
-            }
-            Some(Lane::Key2) => {
-                self.select.arrange_option = self.select.arrange_option.cycle_prev();
-                tracing::info!(
-                    arrange = self.select.arrange_option.as_str(),
-                    "arrange option changed"
-                );
-                true
-            }
-            Some(Lane::Key8) => {
-                self.select.arrange_option_2p = self.select.arrange_option_2p.cycle();
-                tracing::info!(
-                    arrange_2p = self.select.arrange_option_2p.as_str(),
-                    "2P arrange changed"
-                );
-                true
-            }
-            Some(Lane::Key9) => {
-                self.select.arrange_option_2p = self.select.arrange_option_2p.cycle_prev();
-                tracing::info!(
-                    arrange_2p = self.select.arrange_option_2p.as_str(),
-                    "2P arrange changed"
-                );
-                true
-            }
-            _ => self.apply_play_option_control(control),
+        if lane.is_some_and(|lane| self.apply_arrange_option_lane(lane)) {
+            true
+        } else {
+            self.apply_play_option_control(control)
         }
     }
 

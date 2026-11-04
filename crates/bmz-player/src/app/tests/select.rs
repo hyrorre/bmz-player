@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(target_os = "windows")]
+#[path = "select/arrange_controls.rs"]
+mod arrange_controls;
 #[path = "select/cases_01.rs"]
 mod cases_01;
 #[path = "select/cases_02.rs"]

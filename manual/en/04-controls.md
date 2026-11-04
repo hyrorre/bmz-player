@@ -53,6 +53,10 @@ While you hold **E1**, the option panel is shown. Keep holding it and press keys
 | KEY7 | Change the play type (normal, practice, autoplay, and so on) |
 | Turntable, Up / Down | Change the target (the score you compare against) |
 
+In 5K / 7K, you can change your arrangement from either controller.
+In 10K / 14K, SP-TO-DP, and D-BATTLE, each controller changes its own side's arrangement.
+In 5K / 7K G-BATTLE / AUTOPLAY BATTLE, either controller changes your arrangement.
+
 Hold **E2** for assist options, or hold **E1 and E2** together for other detailed options.
 The display and controls may differ depending on the skin. See [Play options](05-play-options.md) for what each option means.
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::profile_config::SelectInputModeConfig;
 
 pub(in crate::app) fn select_item_play_mode(
     item: Option<&SelectItem>,
@@ -36,6 +37,36 @@ impl WinitApp {
     pub(super) fn selected_play_config_key_mode(&self) -> Option<KeyMode> {
         self.selected_source_key_mode()
             .map(|mode| effective_play_key_mode(mode, self.selected_key_mode_conversion()))
+    }
+
+    /// Both controllers edit the player's arrangement in SP. Keep the physical
+    /// side for DP and D-BATTLE; a battle session's ghost is not a second player.
+    pub(super) fn selected_arrange_option_lane(&self, lane: Lane) -> Lane {
+        if self.boot.profile_config.input.select_input_mode == SelectInputModeConfig::Key9 {
+            return lane;
+        }
+        let session_mode = if self.select.ir_battle.active {
+            SessionMode::GBattle
+        } else {
+            self.select.session_mode
+        };
+        let mode = self.selected_source_key_mode().map(|source| {
+            crate::skin_extension::select_effective_key_mode(
+                source,
+                self.select.double_option,
+                session_mode,
+                self.selected_key_mode_conversion(),
+            )
+        });
+        if matches!(mode, Some(KeyMode::K5 | KeyMode::K7)) {
+            match lane {
+                Lane::Key8 => Lane::Key1,
+                Lane::Key9 => Lane::Key2,
+                _ => lane,
+            }
+        } else {
+            lane
+        }
     }
 
     pub(super) fn selected_key_mode_conversion(&self) -> KeyModeConversionConfig {
