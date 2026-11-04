@@ -123,8 +123,8 @@ E1 hold＝通常、E2 hold＝アシスト、E1+E2 hold＝詳細の3パネル方�
 | KEY5 | 決定 / 開く / 曲開始 | HS-FIX次 | MARK NOTE | VISUAL OFFSET -1ms |
 | KEY6 | 戻る / 閉じる | DP OPTION次 | BPM GUIDE | GREEN NUMBER +1 |
 | KEY7 | 決定 / 開く / 曲開始 | SESSION MODE次（NORMAL → PRACTICE → AUTOPLAY → AUTOPLAY BATTLE → G-BATTLE） | MINE REMOVE | VISUAL OFFSET +1ms |
-| 2P KEY1 | 決定 / 開く / 曲開始 | 2P RANDOM次 | EXPAND JUDGE | BGA切り替え |
-| 2P KEY2 | 戻る / 閉じる | 2P RANDOM前 | SCROLL REMOVE | GAUGE AUTO SHIFT切り替え |
+| 2P KEY1 | 決定 / 開く / 曲開始 | SPなら1P RANDOM次、ほかは2P RANDOM次 | EXPAND JUDGE | BGA切り替え |
+| 2P KEY2 | 戻る / 閉じる | SPなら1P RANDOM前、ほかは2P RANDOM前 | SCROLL REMOVE | GAUGE AUTO SHIFT切り替え |
 | 2P KEY3 | 決定 / 開く / 曲開始 | GAUGE次 | JUDGE AREA | JUDGE AUTO ADJUST切り替え |
 | 2P KEY4 | 戻る / 閉じる | GAUGE前 | LN REMOVE | GREEN NUMBER -1 |
 | 2P KEY5 | 決定 / 開く / 曲開始 | HS-FIX次 | MARK NOTE | VISUAL OFFSET -1ms |
@@ -136,6 +136,14 @@ E1 hold＝通常、E2 hold＝アシスト、E1+E2 hold＝詳細の3パネル方�
 
 - 選曲の決定には、キーモード別の鍵盤の割り当てを使います。BGAの切り替えはKEY1の割り当てを使います。
 - 7K/14Kのキーボード操作で、7Kと14Kの2P側に同じキーを割り当てた場合は、7K側を優先します。
+- 選曲入力が7K/14Kの場合、4K / 5K / 6K / 7K / 8K / 9KのSPでは、左右どちらのKEY1 / KEY2でも自分の配置を変更します。
+  7K→6K / 7K→9K変換もSPとして扱います。
+  10K / 14K、SP-TO-DP（5K→10K / 7K→14K）、D-BATTLE / BATTLE ASでは左右それぞれの配置を変更します。
+  SPのG-BATTLE / AUTOPLAY BATTLEでは、右側からも自分の配置を変更します。
+  ALLフィルターでも選択譜面と適用される変換・BATTLE設定で判定します。
+  キーモードが未確定の混合コースでは、左右別の操作になります。
+  9K譜面と9K選曲入力は別です。9K選曲入力のKEY8 / KEY9は独立した鍵盤なので、KEY1 / KEY2へ振り替えません。
+  コントローラーの左右の割り当て、キーコンフィグ、演奏入力は変更しません。
 - アシストのevent・マウス操作・開閉timerも、3パネル方式の意味で扱います。
 - ECFNの通常パネルには、F-RANDOM / MF-RANDOMを含む両サイド12種類の配置を表示します。上部のLNボタンには、FORCE系の設定時にバッジを表示します。これらは実験的な詳細オプションのON / OFFとは関係ありません。
 
@@ -218,7 +226,12 @@ ECFNは既存のデザインに合わせた200msのフェード、ほかの2つ�
 ### LR2選曲スキン
 
 LR2 CSVスキンでは、E1 holdで表示する基本オプションを次の配置にします。
-2P側のKEY8〜KEY14も同じ並びで、KEY9は2Pの配置を変更します。
+7K/14K選曲入力の2P側のKEY8〜KEY14も同じ並びです。
+KEY9は4K / 5K / 6K / 7K / 8K / 9KのSPと7K→6K / 7K→9K変換では自分の配置、
+DP / SP-TO-DP / D-BATTLE / BATTLE ASでは2Pの配置を変更します。
+SPのG-BATTLE / AUTOPLAY BATTLEでは、自分の配置を変更します。
+9K選曲入力のKEY8 / KEY9には、この振り替えを適用しません。
+マウスの1P / 2P配置ボタンは、表示された側の配置を変更します。
 
 | キー | 操作 |
 | --- | --- |

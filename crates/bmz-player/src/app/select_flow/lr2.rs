@@ -155,6 +155,7 @@ impl WinitApp {
     }
 
     pub(super) fn apply_lr2_option_lane(&mut self, lane: Lane) -> bool {
+        let lane = self.selected_arrange_option_lane(lane);
         // LR2 key 3 changes FLIP under a DP key filter and BATTLE otherwise.
         let dp_filter =
             matches!(self.select.select_mode_filter, SelectModeFilter::K14 | SelectModeFilter::K10);
