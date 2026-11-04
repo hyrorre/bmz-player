@@ -617,10 +617,13 @@ fn peaceful_play_gauge_overlay_keeps_one_destination_per_integer_width() {
 }
 
 #[test]
-fn lua_static_boolean_draw_stays_static() {
-    let loaded = load_runtime_draw_fixture("bmz-skin-static-bool-draw", "local draw = true");
-    assert_eq!(only_destination_draw(&loaded), "number(0) >= 0");
-    assert!(loaded.lua_runtime.is_none());
+fn lua_boolean_draw_adds_no_condition() {
+    // beatoraja reads a Lua boolean `draw` as null, so `false` does not hide it.
+    for (name, draw) in [("true", "local draw = true"), ("false", "local draw = false")] {
+        let loaded = load_runtime_draw_fixture(&format!("bmz-skin-bool-draw-{name}"), draw);
+        assert_eq!(only_destination_draw(&loaded), "", "draw = {name}");
+        assert!(loaded.lua_runtime.is_none());
+    }
 }
 
 #[test]

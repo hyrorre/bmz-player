@@ -256,18 +256,11 @@ pub(super) fn lua_table_to_json(
             object.insert(key, JsonValue::String(lua_value_to_log_string(&value)));
             continue;
         }
-        if key == "draw"
-            && let Value::Boolean(value) = &value
-        {
-            object.insert(
-                key.clone(),
-                JsonValue::String(if *value {
-                    "number(0) >= 0".to_string()
-                } else {
-                    "number(0) < 0".to_string()
-                }),
-            );
-            tracing::debug!(field_path = %format!("{path}.{key}"), classification = "STATIC", "classified Lua draw condition");
+        // LuaSkinLoader.serializeLuaScript maps a Lua boolean to null, and a null
+        // `draw` adds no condition. ModernChic's `draw = not func` is `false` and
+        // still draws.
+        if key == "draw" && matches!(value, Value::Boolean(_)) {
+            tracing::debug!(field_path = %format!("{path}.{key}"), classification = "STATIC", "ignored Lua boolean draw");
             continue;
         }
         let value = if (matches!(key.as_str(), "act" | "timer")
