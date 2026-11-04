@@ -39,32 +39,51 @@ impl LibraryDatabase {
         let mut archive_entries: HashMap<PathBuf, Option<std::collections::HashSet<String>>> =
             HashMap::new();
         let mut containers_gone: HashMap<PathBuf, bool> = HashMap::new();
+        // A root cannot protect its own omitted entries. A root enclosing this one
+        // (a configured library above a partial scan) knows nothing about this scope
+        // that the scan did not just read, so it cannot keep a confirmed absence.
+        // Any other scope (an offline, disabled, unscanned or nested root) can.
+        let mut enclosing_roots = Vec::new();
+        let mut other_roots = Vec::new();
+        for other in protected_roots {
+            let other_key = library_path_key(Path::new(&other.path));
+            #[cfg(windows)]
+            let same_root = root.path.eq_ignore_ascii_case(&other_key);
+            #[cfg(not(windows))]
+            let same_root = root.path == other_key;
+            if same_root {
+                continue;
+            }
+            if song_root_contains_file(other, &root.path) {
+                enclosing_roots.push(other);
+            } else {
+                other_roots.push(other);
+            }
+        }
         for (id, path) in candidates {
             if !song_root_contains_file(&root, &path) {
                 continue;
             }
             let omitted = discovered.is_some_and(|discovered| !discovered.contains(&path));
-            let protected_scope = protected_roots.iter().any(|other| {
-                // A root cannot protect its own omitted entries.
-                let own = library_path_key(Path::new(&root.path));
-                let other_key = library_path_key(Path::new(&other.path));
-                #[cfg(windows)]
-                let same_root = own.eq_ignore_ascii_case(&other_key);
-                #[cfg(not(windows))]
-                let same_root = own == other_key;
-                !same_root && song_root_contains_file(other, &path)
-            });
             let exact_archive = matches!(
                 crate::chart_source::ChartLocator::parse(Path::new(&path)),
                 Ok(crate::chart_source::ChartLocator::Archive { container, .. })
                 if if cfg!(windows) { library_path_key(&container).eq_ignore_ascii_case(&root.path) }
                     else { library_path_key(&container) == root.path }
             );
-            if protected_scope && !exact_archive {
+            if !exact_archive
+                && other_roots.iter().any(|other| song_root_contains_file(other, &path))
+            {
                 // An offline, disabled, or unscanned root cannot prove absence.
                 continue;
             }
-            if omitted && !discovered_any.contains(&path) {
+            // The enclosing root's own scan may have chosen a different alias, or
+            // kept a hidden chart, so only the file system or a decoded archive
+            // index may remove its registrations, never the omission alone.
+            let enclosed = !exact_archive
+                && enclosing_roots.iter().any(|other| song_root_contains_file(other, &path));
+            let unconfirmed = omitted && !discovered_any.contains(&path);
+            if unconfirmed && !enclosed {
                 // The hidden setting only restricts new discovery. Keep existing
                 // hidden files, as before this scan optimization.
                 if skip_hidden
@@ -122,9 +141,10 @@ impl LibraryDatabase {
                     let gone = *containers_gone
                         .entry(container.clone())
                         .or_insert_with(|| matches!(container.try_exists(), Ok(false)));
-                    // A complete discovery already decoded this archive's index.
+                    // A complete discovery already decoded this archive's index,
+                    // except for entries it omitted inside an enclosing root.
                     let vanished = gone
-                        || (discovered.is_none()
+                        || ((discovered.is_none() || unconfirmed)
                             && archive_entries
                                 .entry(container.clone())
                                 .or_insert_with(|| {
