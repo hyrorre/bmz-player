@@ -601,6 +601,7 @@ pub(in crate::app) fn select_ir_battle_snapshot_rows(
         .map(|index| {
             let mut row = source_row.cloned().unwrap_or_default();
             row.level_display_override = None;
+            row.bar_text.clear();
             row.index = index as u32;
             match &choices[index] {
                 SelectBattleChoice::Ranking(entry) => {
@@ -776,6 +777,7 @@ mod tests {
     fn ranking_rows_keep_source_chart_data_and_target_score_identity() {
         let source = SelectRowSnapshot {
             title: "SOURCE TITLE".to_string(),
+            bar_text: "SOURCE TITLE SOURCE SUBTITLE".to_string(),
             subtitle: "SOURCE SUBTITLE".to_string(),
             artist: "SOURCE ARTIST".to_string(),
             genre: "SOURCE GENRE".to_string(),
@@ -815,6 +817,7 @@ mod tests {
             Some(&source),
         );
         assert_eq!(rows[0].title, "RIVAL");
+        assert_eq!(rows[0].display_bar_text(), "RIVAL");
         assert_eq!(rows[0].subtitle, "rival-id");
         assert_eq!(rows[0].artist, "EX 1234 / BP 7");
         assert_eq!(rows[0].genre, "G-BATTLE");

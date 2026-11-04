@@ -306,6 +306,11 @@ fn select_chart_snapshot(
         chart_md5: row.score_md5(),
         chart_sha256: row.score_sha256(),
         title: row.display_title().to_string(),
+        // beatoraja / LR2 draw the full title on song bars; ref 10 keeps the plain title.
+        bar_text: chart
+            .filter(|chart| !chart.subtitle.is_empty())
+            .map(|chart| format!("{} {}", row.display_title(), chart.subtitle))
+            .unwrap_or_default(),
         rival_ex_score: rival_score.map(|score| score.ex_score),
         lr2_new_title: lr2_new_title(
             row.lr2_added_at,
