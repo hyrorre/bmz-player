@@ -6,7 +6,7 @@ pub(super) fn source_score_history_match(
 ) -> Result<Option<SourceScoreHistoryMatch>> {
     let judges = &record.score.judges;
     conn.query_row(
-        "SELECT id, device_type
+        "SELECT id, device_type, source_min_bp
          FROM score_history
          WHERE source_kind = ?1
            AND chart_sha256 = ?2
@@ -87,6 +87,7 @@ pub(super) fn source_score_history_match(
             Ok(SourceScoreHistoryMatch {
                 history_id: row.get(0)?,
                 device_type: device_type_from_row(row, 1)?,
+                source_min_bp: row.get(2)?,
             })
         },
     )
@@ -270,7 +271,10 @@ pub(super) fn rebuild_score_aggregates(conn: &Connection) -> Result<()> {
             gauge_type = clear_value("gauge_type"),
             gauge_value = clear_value("gauge_value"),
             ex_score = score_value("ex_score"),
-            bp = aggregate("MIN(h.bp)"),
+            bp = aggregate(
+                "MIN(CASE WHEN h.source_min_bp IS NULL THEN h.bp
+                ELSE MIN(h.bp, h.source_min_bp) END)"
+            ),
             cb = aggregate("MIN(h.cb)"),
             max_combo = aggregate("MAX(h.max_combo)"),
             fast_pgreat = score_value("fast_pgreat"),

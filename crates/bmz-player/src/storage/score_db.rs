@@ -452,6 +452,7 @@ struct ScoreRepresentativeRank {
 struct SourceScoreHistoryMatch {
     history_id: i64,
     device_type: InputDeviceKind,
+    source_min_bp: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

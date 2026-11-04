@@ -126,7 +126,8 @@ impl ScoreDatabase {
     ///
     /// 入力デバイスは履歴を常に補正し、集計側はその履歴がEXスコアの出所である場合だけ
     /// 更新する。ghost は現在のMYBESTに紐づく履歴かつ保存値が空の場合だけ補完し、
-    /// 既存ghostや別履歴由来のMYBESTは上書きしない。
+    /// 既存ghostや別履歴由来のMYBESTは上書きしない。独立したsource minbpは
+    /// 未保存なら補完し、既存値より小さい場合だけ改善する。履歴のBPは変更しない。
     pub fn reconcile_imported_score(
         &mut self,
         record: &ScoreRecord,
@@ -134,12 +135,15 @@ impl ScoreDatabase {
         if record.source_kind == ScoreSourceKind::Local {
             return Ok(ImportedScoreReconciliation::Missing);
         }
-        let Some(existing) = source_score_history_match(&self.conn, record)? else {
+        let tx = self.conn.transaction()?;
+        let Some(existing) = source_score_history_match(&tx, record)? else {
             return Ok(ImportedScoreReconciliation::Missing);
         };
         let device_changed = existing.device_type != record.device_type;
+        let source_min_bp = score_record_source_min_bp(record)
+            .filter(|&next| existing.source_min_bp.is_none_or(|current| next < current));
         let ghost_needs_backfill = !record.score.ghost.is_empty()
-            && self.conn.query_row(
+            && tx.query_row(
                 "SELECT EXISTS (
                     SELECT 1 FROM score_best
                     WHERE best_score_history_id = ?1 AND ghost = ''
@@ -147,15 +151,37 @@ impl ScoreDatabase {
                 params![existing.history_id],
                 |row| row.get(0),
             )?;
-        if !device_changed && !ghost_needs_backfill {
+        if !device_changed && !ghost_needs_backfill && source_min_bp.is_none() {
             return Ok(ImportedScoreReconciliation::Unchanged);
         }
         let ghost = ghost_needs_backfill
             .then(|| encode_beatoraja_ghost(&record.score.ghost))
             .transpose()?;
 
-        let tx = self.conn.transaction()?;
         let mut corrected = false;
+        if let Some(source_min_bp) = source_min_bp {
+            tx.execute(
+                "UPDATE score_history SET source_min_bp = ?1 WHERE id = ?2",
+                params![source_min_bp, existing.history_id],
+            )?;
+            // Update only the independent aggregate, not representative metadata
+            // or counters. Retaining the evidence on history makes deletion and
+            // cleanup recompute from surviving contributions, even after a later
+            // source DB reports a worse value or no value at all.
+            tx.execute(
+                "UPDATE score_best SET bp = MIN(bp, ?1)
+                 WHERE chart_sha256 = ?2 AND ln_policy = ?3
+                   AND double_option = ?4 AND rule_mode = ?5",
+                params![
+                    source_min_bp,
+                    hash_to_hex(&record.chart_sha256),
+                    record.ln_policy.as_str(),
+                    record.double_option.as_str(),
+                    record_rule_mode(record).as_str(),
+                ],
+            )?;
+            corrected = true;
+        }
         if device_changed {
             tx.execute(
                 "UPDATE score_history
