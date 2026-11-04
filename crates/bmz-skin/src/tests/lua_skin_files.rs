@@ -201,6 +201,56 @@ fn skin_io_keeps_strings_cut_inside_a_utf8_character() {
     assert_eq!(load(&path, Some(&store)).unwrap().document.name, "true|true|true|second|2|2|2");
 }
 
+/// ModernChic's detail mode shows the log of consecutive plays of one chart. The
+/// key is the load-time title cut to 32 bytes, here inside a UTF-8 character.
+#[test]
+fn modern_chic_consecutive_play_log_follows_the_chart_when_available() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../data/skins/ModernChic471/play7_hw.luaskin");
+    if !path.is_file() {
+        return;
+    }
+    let options = BTreeMap::from([("プレイ状況詳細モード".to_string(), "有効".to_string())]);
+    let store = LuaSkinFileStore::default();
+    let play = |title: &str| {
+        let state = LuaLoadRuntimeState {
+            file_store: Some(store.clone()),
+            option_values: BTreeMap::from([(32, true), (33, false)]),
+            text_values: BTreeMap::from([(12, title.to_string()), (1003, String::new())]),
+            ..Default::default()
+        };
+        let mut loaded =
+            load_lua_skin_with_runtime_state(&path, &options, &BTreeMap::new(), &state).unwrap();
+        let shown =
+            loaded.document.value.iter().filter(|value| value.id.starts_with("n_count_")).count();
+        let performance = loaded
+            .document
+            .value
+            .iter()
+            .find(|value| value.id == "performance")
+            .and_then(|value| value.value_expr.strip_prefix("bmz:lua_value_callback:"))
+            .map(|id| id.parse::<usize>().unwrap())
+            .expect("detail mode is on");
+        // The end of the chart writes the log, once.
+        let mut main_state = TestLuaMainState { now_us: 60_000_000, ..Default::default() };
+        main_state.options.insert(32, true);
+        main_state.timers.insert(143, 100);
+        let runtime = loaded.lua_runtime.as_mut().unwrap();
+        runtime.begin_frame();
+        assert!(runtime.evaluate_number(performance, &main_state).is_some());
+        assert_eq!(runtime.failure_log_count(), 0);
+        shown
+    };
+
+    let first = "日本語の長い曲名テストケースその一 -ANOTHER-";
+    assert_eq!(play(first), 0);
+    assert_eq!(play(first), 1, "the second play shows the first");
+    assert_eq!(play(first), 2);
+    assert_eq!(play("別の曲"), 0, "another chart starts a new log");
+    assert_eq!(play("別の曲"), 1);
+    assert_eq!(play(first), 0);
+}
+
 #[test]
 fn skin_io_reads_numbers_from_written_files() {
     let root = skin_dir();
