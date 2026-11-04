@@ -322,18 +322,17 @@ impl WinitApp {
             .filter(|pending| pending.generation == self.play.play_preload_generation)
             .map(|pending| pending.skin_chart_state.clone())
             .or_else(|| {
-                let length = self
+                let facts = self
                     .play
                     .preloaded_play_session
                     .as_ref()
-                    .map(|play| play.preloaded.render_snapshot_cache.skin_chart_length_ms)
+                    .map(|play| &play.preloaded.render_snapshot_cache.skin_chart)
                     .or_else(|| {
-                        self.play.active_play.as_ref().and_then(|_| {
-                            self.play.last_play_snapshot.as_ref()?.skin_chart_length_ms
-                        })
+                        let play = self.play.active_play.as_ref()?;
+                        Some(&play.running.render_snapshot_cache.skin_chart)
                     })?;
                 let state = PlaySkinChartState::default();
-                state.finish(Ok(length));
+                state.finish(Ok(Arc::clone(facts)));
                 Some(state)
             });
         let request =

@@ -21,7 +21,7 @@ impl PendingPlayPreload {
         // an imported chart is published before its first audio progress update.
         if let PlayPreloadSource::Cached { chart, .. } = &source {
             let _ = prepared_chart.set(chart.as_ref().clone());
-            skin_chart_state.finish(Ok(chart.render_snapshot_cache.skin_chart_length_ms));
+            skin_chart_state.finish(Ok(Arc::clone(&chart.render_snapshot_cache.skin_chart)));
         }
         let worker_input = input.clone();
         let worker_progress = Arc::clone(&audio_progress);
@@ -81,7 +81,7 @@ impl PlayPreloadSource {
                     |chart| {
                         let _ = prepared.set(chart.clone());
                         skin_chart_state
-                            .finish(Ok(chart.render_snapshot_cache.skin_chart_length_ms));
+                            .finish(Ok(Arc::clone(&chart.render_snapshot_cache.skin_chart)));
                     },
                     report_progress,
                 )

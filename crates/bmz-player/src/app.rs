@@ -908,10 +908,7 @@ pub(crate) fn offline_skin_load_state(
         &profile.display_name,
         play.skin_attempt,
     );
-    apply_chart_length_lua_load_state(
-        &mut runtime,
-        Some(play.render_snapshot_cache.skin_chart_length_ms),
-    );
+    apply_play_chart_facts_lua_load_state(&mut runtime, &play.render_snapshot_cache.skin_chart);
     apply_chart_hashes_lua_load_state(
         &mut runtime,
         Some(play.session.chart.identity.file_md5),

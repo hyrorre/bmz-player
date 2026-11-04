@@ -7,21 +7,24 @@ pub(super) struct PlaySkinChartState(Arc<PlaySkinChartStateInner>);
 
 #[derive(Default)]
 struct PlaySkinChartStateInner {
-    length: std::sync::Mutex<Option<std::result::Result<i64, String>>>,
+    facts: std::sync::Mutex<Option<PlaySkinChartResult>>,
     ready: std::sync::Condvar,
 }
 
+type PlaySkinChartResult =
+    std::result::Result<Arc<crate::screens::play_snapshot::PlaySkinChartFacts>, String>;
+
 impl PlaySkinChartState {
-    pub(super) fn finish(&self, length: std::result::Result<i64, String>) {
-        let mut value = self.0.length.lock().unwrap_or_else(|error| error.into_inner());
+    pub(super) fn finish(&self, facts: PlaySkinChartResult) {
+        let mut value = self.0.facts.lock().unwrap_or_else(|error| error.into_inner());
         if value.is_none() {
-            *value = Some(length);
+            *value = Some(facts);
             self.0.ready.notify_all();
         }
     }
 
-    pub(super) fn wait(&self) -> std::result::Result<i64, String> {
-        let mut value = self.0.length.lock().unwrap_or_else(|error| error.into_inner());
+    pub(super) fn wait(&self) -> PlaySkinChartResult {
+        let mut value = self.0.facts.lock().unwrap_or_else(|error| error.into_inner());
         while value.is_none() {
             value = self.0.ready.wait(value).unwrap_or_else(|error| error.into_inner());
         }
@@ -126,11 +129,11 @@ pub(super) fn spawn_skin_decode(pipeline: &SkinPipelineRuntime, mut request: Ski
     let worker = thread::Builder::new()
         .name(format!("skin-decode-{:?}", kind))
         .spawn(move || {
-            let chart_length = play_chart_state.map(|state| state.wait()).transpose();
+            let chart_facts = play_chart_state.map(|state| state.wait()).transpose();
             let decode_started_at = Instant::now();
             let result = (|| {
-                if let Some(length) = chart_length.map_err(anyhow::Error::msg)? {
-                    apply_chart_length_lua_load_state(&mut runtime_state, Some(length));
+                if let Some(facts) = chart_facts.map_err(anyhow::Error::msg)? {
+                    apply_play_chart_facts_lua_load_state(&mut runtime_state, &facts);
                 }
                 if let Some(fallback) = lr2_continue_fallback {
                     match crate::skin_loader::resolve_lr2_continue_assets(

@@ -1,10 +1,29 @@
 use super::*;
 
-#[derive(Debug, Clone)]
-pub struct PlayRenderSnapshotCache {
+/// Chart values a Play skin reads while loading. beatoraja loads the Play skin
+/// with the parsed chart, so skins pick texts, colors and parts at load time.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PlaySkinChartFacts {
     /// SongData.length after Play transforms, retained before Practice changes.
     /// Independent of note display duration, range end and result waiting time.
-    pub(crate) skin_chart_length_ms: i64,
+    pub(crate) length_ms: i64,
+    pub(crate) title: String,
+    pub(crate) subtitle: String,
+    pub(crate) artist: String,
+    pub(crate) subartist: String,
+    pub(crate) genre: String,
+    pub(crate) difficulty_name: String,
+    pub(crate) play_level: String,
+    pub(crate) judge_rank: Option<i32>,
+    pub(crate) has_long_notes: bool,
+    pub(crate) min_bpm: f32,
+    pub(crate) max_bpm: f32,
+    pub(crate) main_bpm: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlayRenderSnapshotCache {
+    pub(crate) skin_chart: Arc<PlaySkinChartFacts>,
     pub(super) judge_graph_density: Arc<[u8]>,
     pub(super) bpm_graph_segments: Arc<[bmz_render::chart_graph::BpmGraphSegment]>,
     pub(super) min_bpm: f32,
@@ -77,10 +96,22 @@ impl PlayRenderSnapshotCache {
             TimingMap::from_chart_timing_events(chart.metadata.initial_bpm, &chart.timing_events);
         let missed_notes = super::missed_notes::MissedNoteFallCache::new(chart, &timing);
         Self {
-            skin_chart_length_ms: crate::screens::play_session::beatoraja_chart_last_time(chart)
-                .0
-                .max(0)
-                / 1_000,
+            skin_chart: Arc::new(PlaySkinChartFacts {
+                length_ms: crate::screens::play_session::beatoraja_chart_last_time(chart).0.max(0)
+                    / 1_000,
+                title: chart.metadata.title.clone(),
+                subtitle: chart.metadata.subtitle.clone(),
+                artist: chart.metadata.artist.clone(),
+                subartist: chart.metadata.subartist.clone(),
+                genre: chart.metadata.genre.clone(),
+                difficulty_name: chart.metadata.difficulty_name.clone(),
+                play_level: chart.metadata.play_level.clone(),
+                judge_rank: chart.metadata.judge_rank,
+                has_long_notes: !chart.long_notes.is_empty(),
+                min_bpm,
+                max_bpm,
+                main_bpm: chart.metadata.initial_bpm as f32,
+            }),
             judge_graph_density,
             bpm_graph_segments,
             min_bpm,

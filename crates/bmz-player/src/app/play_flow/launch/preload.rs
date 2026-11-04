@@ -513,9 +513,12 @@ impl WinitApp {
         state: &mut bmz_skin::LuaLoadRuntimeState,
     ) {
         let chart = self.play_skin_chart(chart_id);
-        // The worker supplies the selected, transformed chart's length before Lua runs.
+        // The worker supplies the selected, transformed chart's facts before Lua runs.
         // Keep the signature independent of whether on_chart has arrived yet.
         apply_chart_length_lua_load_state(state, None);
+        let (primary, secondary, fallback) =
+            self.table_text_context_for_chart_with_metadata(chart_id, chart.as_ref()).as_tuple();
+        state.text_values.extend([(1001, primary), (1002, secondary), (1003, fallback)]);
         apply_chart_hashes_lua_load_state(
             state,
             chart.as_ref().map(|chart| chart.md5),

@@ -82,6 +82,10 @@ fn queue(pipeline: &SkinPipelineRuntime, path: &Path, generation: u64, chart: Pl
     );
 }
 
+fn facts(length_ms: i64) -> Arc<crate::screens::play_snapshot::PlaySkinChartFacts> {
+    Arc::new(crate::screens::play_snapshot::PlaySkinChartFacts { length_ms, ..Default::default() })
+}
+
 fn receive(pipeline: &SkinPipelineRuntime) -> PendingSkinResult {
     pipeline.decode_rx.as_ref().unwrap().recv_timeout(Duration::from_secs(15)).unwrap()
 }
@@ -239,7 +243,7 @@ fn transformed_length_reaches_lua_before_audio_completion() {
                 id,
                 Default::default(),
                 1.0,
-                |chart| state.finish(Ok(chart.render_snapshot_cache.skin_chart_length_ms)),
+                |chart| state.finish(Ok(Arc::clone(&chart.render_snapshot_cache.skin_chart))),
                 |_, _| {
                     if !held.replace(true) {
                         release_rx.recv_timeout(Duration::from_secs(15)).unwrap();
@@ -264,6 +268,55 @@ fn transformed_length_reaches_lua_before_audio_completion() {
     assert_eq!(snapshot.skin_chart_length_ms, Some(181_000));
     assert_eq!(snapshot.duration, TimeUs(181_000_000));
     assert_skin(decoded.result.unwrap(), &snapshot, [3, 1]);
+}
+
+#[test]
+fn play_skin_reads_chart_facts_while_loading() {
+    let data = ProfileTestDir::new();
+    std::fs::create_dir_all(&data.paths.data_dir).unwrap();
+    let path = data.paths.data_dir.join("facts.luaskin");
+    std::fs::write(
+        &path,
+        r#"
+        local s = require('main_state')
+        local flags = {}
+        for _, id in ipairs({153, 172, 173, 176, 177, 183}) do
+            if s.option(id) then flags[#flags + 1] = id end
+        end
+        local label = table.concat({
+            s.text(12), s.text(16), s.text(13), table.concat(flags, ','),
+            s.number(90), s.number(91), s.number(92), s.number(96)
+        }, '|')
+        return {type=0, w=1280, h=720,
+            text={{id='facts', constantText=label}},
+            destination={{id='facts', dst={{x=0,y=0,w=200,h=20}}}}
+        }
+    "#,
+    )
+    .unwrap();
+    let pipeline = SkinPipelineRuntime::new();
+    let state = PlaySkinChartState::default();
+    state.finish(Ok(Arc::new(crate::screens::play_snapshot::PlaySkinChartFacts {
+        length_ms: 60_000,
+        title: "長い曲名".into(),
+        subtitle: "[HYPER]".into(),
+        artist: "作者".into(),
+        subartist: "obj".into(),
+        genre: "ジャンル".into(),
+        difficulty_name: "HYPER".into(),
+        play_level: "12".into(),
+        judge_rank: Some(90),
+        has_long_notes: true,
+        min_bpm: 120.0,
+        max_bpm: 240.0,
+        main_bpm: 150.0,
+    })));
+    queue(&pipeline, &path, 3, state);
+    let decoded = receive(&pipeline).result.unwrap();
+    assert_eq!(
+        decoded.document.text[0].constant_text,
+        "長い曲名 [HYPER]|作者 obj|ジャンル|153,173,177,183|240|120|150|12",
+    );
 }
 
 #[test]
@@ -361,8 +414,8 @@ fn random_branch_decide_retry_replay_and_course_keep_attempt_lengths_separate() 
         },
     );
     queue(&pipeline, &path, 44, course.skin_chart_state.clone());
-    pending.skin_chart_state.finish(Ok(999_000)); // Late old publication cannot replace either value.
-    assert_eq!(pending.skin_chart_state.wait().unwrap(), 241_000);
+    pending.skin_chart_state.finish(Ok(facts(999_000))); // Late old publication cannot replace either value.
+    assert_eq!(pending.skin_chart_state.wait().unwrap().length_ms, 241_000);
     let next = course.rx.recv_timeout(Duration::from_secs(15)).unwrap().result.unwrap();
     let play = build_prepared_play_session_from_preloaded(
         next.preloaded,
@@ -411,7 +464,7 @@ fn offline_and_practice_preserve_full_length_and_range_end_independently() {
     // Existing Practice range padding is preserved, independently of 1163/1164.
     assert_eq!(play.session.chart.end_time, TimeUs(45_500_000));
     assert_eq!(play.session.scored_total_notes, 1);
-    assert_eq!(play.render_snapshot_cache.skin_chart_length_ms, 241_000);
+    assert_eq!(play.render_snapshot_cache.skin_chart.length_ms, 241_000);
     let snapshot = snapshot(&play, 31_000_000);
     assert_eq!(snapshot.duration, TimeUs(45_500_000));
     let decoded = offline_decode(&skin_file(&data.paths.data_dir), &play, &boot.profile_config);
@@ -498,7 +551,7 @@ fn cancelled_and_failed_chart_preloads_release_skin_decode() {
     let cancelled = PlaySkinChartState::default();
     queue(&pipeline, &path, 1, cancelled.clone());
     cancelled.finish(Err("cancelled".into()));
-    cancelled.finish(Ok(60_000));
+    cancelled.finish(Ok(facts(60_000)));
     assert!(receive(&pipeline).result.is_err());
     let failed = PendingPlayPreload::spawn(
         2,

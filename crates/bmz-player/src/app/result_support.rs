@@ -401,36 +401,22 @@ pub(super) fn apply_result_summary_lua_load_state(
     {
         runtime_state.option_values.insert(option, true);
     }
-    let full_title = if summary.subtitle.is_empty() {
-        summary.title.clone()
-    } else {
-        format!("{} {}", summary.title, summary.subtitle)
-    };
-    let full_artist = if summary.subartist.is_empty() {
-        summary.artist.clone()
-    } else {
-        format!("{} {}", summary.artist, summary.subartist)
-    };
     runtime_state.text_values.extend([
         (1, summary.target_name.clone()),
         (3, bmz_render::skin::target_setting_name(&summary.target.as_string())),
-        (10, summary.title.clone()),
-        (11, summary.subtitle.clone()),
-        (12, full_title),
-        (13, summary.genre.clone()),
-        (14, summary.artist.clone()),
-        (15, summary.subartist.clone()),
-        (16, full_artist),
         (1001, table_primary.to_string()),
         (1002, table_level.to_string()),
         (1003, table_full.to_string()),
     ]);
-    for option in 180..=184 {
-        runtime_state.option_values.insert(option, false);
-    }
-    if let Some(option) = result_judge_rank_option_id(summary.judge_rank) {
-        runtime_state.option_values.insert(option, true);
-    }
+    apply_chart_text_lua_load_state(
+        runtime_state,
+        &summary.title,
+        &summary.subtitle,
+        &summary.genre,
+        &summary.artist,
+        &summary.subartist,
+    );
+    apply_judge_rank_lua_load_state(runtime_state, summary.judge_rank);
     runtime_state.event_index_values.insert(
         308,
         i32::try_from(result_long_note_mode_index(summary.long_note_mode)).unwrap_or_default(),
@@ -562,6 +548,94 @@ pub(super) fn apply_lr2_best_clear_load_options(
     for option in 100..=105 {
         state.option_values.insert(option, option - 100 == index);
     }
+}
+
+fn apply_chart_text_lua_load_state(
+    state: &mut bmz_skin::LuaLoadRuntimeState,
+    title: &str,
+    subtitle: &str,
+    genre: &str,
+    artist: &str,
+    subartist: &str,
+) {
+    let full = |main: &str, sub: &str| {
+        if sub.is_empty() { main.to_string() } else { format!("{main} {sub}") }
+    };
+    state.text_values.extend([
+        (10, title.to_string()),
+        (11, subtitle.to_string()),
+        (12, full(title, subtitle)),
+        (13, genre.to_string()),
+        (14, artist.to_string()),
+        (15, subartist.to_string()),
+        (16, full(artist, subartist)),
+    ]);
+}
+
+fn apply_judge_rank_lua_load_state(
+    state: &mut bmz_skin::LuaLoadRuntimeState,
+    judge_rank: Option<i32>,
+) {
+    for option in 180..=184 {
+        state.option_values.insert(option, false);
+    }
+    if let Some(option) = result_judge_rank_option_id(judge_rank) {
+        state.option_values.insert(option, true);
+    }
+}
+
+/// Difficulty options 150..155 and play level, by the Decide / Play render rules.
+fn apply_chart_difficulty_lua_load_state(
+    state: &mut bmz_skin::LuaLoadRuntimeState,
+    difficulty_name: &str,
+    play_level: &str,
+) {
+    let draw_state = bmz_render::skin::SkinDrawState {
+        difficulty: bmz_render::plan::skin_difficulty_code(difficulty_name),
+        play_level: bmz_render::plan::skin_level_number(play_level),
+        ..Default::default()
+    };
+    for option in 150..=155 {
+        state
+            .option_values
+            .insert(option, bmz_render::skin::lua_main_state_option(option, &[], &draw_state));
+    }
+    state.number_values.insert(
+        96,
+        bmz_render::skin::lua_main_state_number(96, &draw_state)
+            .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+    );
+}
+
+/// beatoraja loads the Play skin with the parsed chart. ModernChic reads the
+/// title, difficulty color and LN effect part while loading, and keeps the
+/// title it read as the key of its consecutive-play log.
+pub(super) fn apply_play_chart_facts_lua_load_state(
+    state: &mut bmz_skin::LuaLoadRuntimeState,
+    facts: &crate::screens::play_snapshot::PlaySkinChartFacts,
+) {
+    apply_chart_length_lua_load_state(state, Some(facts.length_ms));
+    apply_chart_text_lua_load_state(
+        state,
+        &facts.title,
+        &facts.subtitle,
+        &facts.genre,
+        &facts.artist,
+        &facts.subartist,
+    );
+    apply_chart_difficulty_lua_load_state(state, &facts.difficulty_name, &facts.play_level);
+    apply_judge_rank_lua_load_state(state, facts.judge_rank);
+    state.option_values.extend([
+        (172, !facts.has_long_notes),
+        (173, facts.has_long_notes),
+        (176, facts.min_bpm >= facts.max_bpm),
+        (177, facts.min_bpm < facts.max_bpm),
+    ]);
+    state.number_values.extend([
+        (90, facts.max_bpm.round() as i32),
+        (91, facts.min_bpm.round() as i32),
+        (92, facts.main_bpm.round() as i32),
+    ]);
 }
 
 pub(super) fn apply_chart_length_lua_load_state(
@@ -756,20 +830,10 @@ pub(super) fn apply_decide_chart_lua_load_state(
     snapshot: &RenderSnapshot,
 ) {
     apply_chart_hashes_lua_load_state(runtime_state, snapshot.chart_md5, snapshot.chart_sha256);
-    let decide_state = bmz_render::skin::SkinDrawState {
-        difficulty: bmz_render::plan::skin_difficulty_code(&snapshot.difficulty_name),
-        play_level: bmz_render::plan::skin_level_number(&snapshot.play_level),
-        ..Default::default()
-    };
-    for option in 150..=155 {
-        runtime_state
-            .option_values
-            .insert(option, bmz_render::skin::lua_main_state_option(option, &[], &decide_state));
-    }
-    runtime_state.number_values.insert(
-        96,
-        bmz_render::skin::lua_main_state_number(96, &decide_state)
-            .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+    apply_chart_difficulty_lua_load_state(
+        runtime_state,
+        &snapshot.difficulty_name,
+        &snapshot.play_level,
     );
     // Without these, a skin that concatenates the table text at load would
     // embed the unresolved text-ref sentinel instead of the table label.

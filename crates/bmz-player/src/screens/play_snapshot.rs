@@ -56,7 +56,7 @@ pub use build::{
     build_render_snapshot_with_bga_frames, build_render_snapshot_with_target_and_bga_frames,
     build_render_snapshot_with_target_and_bga_frames_cached, update_render_snapshot_play_options,
 };
-pub use cache::PlayRenderSnapshotCache;
+pub use cache::{PlayRenderSnapshotCache, PlaySkinChartFacts};
 pub use display::apply_fast_slow_display_filter;
 
 /// The battle opponent's final score and gauge for the Result (AUTO BATTLE / G-BATTLE).

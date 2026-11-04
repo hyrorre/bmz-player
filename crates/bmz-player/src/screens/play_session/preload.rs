@@ -781,8 +781,7 @@ pub fn build_practice_prepared_from_preloaded(
     apply_practice_start_gauge(&mut session.gauge, property.start_gauge);
     let mut render_snapshot_cache =
         crate::screens::play_snapshot::PlayRenderSnapshotCache::from_chart(&session.chart);
-    render_snapshot_cache.skin_chart_length_ms =
-        preloaded.render_snapshot_cache.skin_chart_length_ms;
+    render_snapshot_cache.skin_chart = Arc::clone(&preloaded.render_snapshot_cache.skin_chart);
     let mut skin_attempt = preloaded.skin_attempt;
     skin_attempt.session_mode_index =
         Some(crate::skin_extension::session_mode_index(SessionMode::Practice));
