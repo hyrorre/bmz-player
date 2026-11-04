@@ -188,6 +188,68 @@ fn partial_scan_below_configured_root_prunes_deleted_charts() {
     assert_consistent(&db);
 }
 
+/// Issue #69 as F5 runs it: `reload_from_select_context` scans the folder with
+/// `force`, so every remaining chart is imported again alongside the pruning.
+#[test]
+fn forced_partial_scan_below_configured_root_prunes_deleted_charts() {
+    let base = temp();
+    let bms = base.path().join("BMS");
+    let insane2 = bms.join("INSANE2");
+    chart(&bms.join("INSANE1/song_X/x.bms"), "X");
+    chart(&insane2.join("song_A/a.bms"), "A");
+    chart(&insane2.join("song_A/a.bme"), "A another");
+    chart(&insane2.join("song_B/b.bms"), "B");
+    write_zip(&insane2.join("song_C.zip"), &[("song_C/c.bms", &chart_text("C"))]);
+    write_zip(&insane2.join("song_K.zip"), &[("song_K/k.bms", &chart_text("K"))]);
+    let mut db = db();
+    configure_and_scan(&mut db, &[entry(&bms, true)]);
+    let chart_ids = |db: &LibraryDatabase| -> Vec<(String, i64)> {
+        let mut stmt = db
+            .conn()
+            .prepare(
+                "SELECT chart_files.path, chart_file_links.chart_id FROM chart_files
+                 JOIN chart_file_links ON chart_file_links.chart_file_id = chart_files.id
+                 ORDER BY chart_files.path",
+            )
+            .unwrap();
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    let before = chart_ids(&db);
+
+    std::fs::remove_dir_all(insane2.join("song_B")).unwrap();
+    std::fs::remove_file(insane2.join("song_C.zip")).unwrap();
+    let target = entry(&insane2, true);
+    let report =
+        scan_song_roots(&mut db, std::slice::from_ref(&target), &config(), 2, true).unwrap();
+    db.register_partial_song_roots(&[target]).unwrap();
+
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    assert_eq!(report.summary.imported, 3);
+    assert_eq!(report.summary.skipped, 0);
+    assert_eq!(report.summary.removed_files, 2);
+    assert_eq!(
+        registered(&db, &bms),
+        [
+            "INSANE1/song_X/x.bms",
+            "INSANE2/song_A/a.bme",
+            "INSANE2/song_A/a.bms",
+            "INSANE2/song_K.zip!/song_K/k.bms",
+        ]
+    );
+    // Re-imported charts keep their rows, so scores and favorites keep their target.
+    let expected: Vec<_> = before
+        .into_iter()
+        .filter(|(path, _)| !path.contains("/song_B/") && !path.contains("/song_C.zip!"))
+        .collect();
+    assert_eq!(chart_ids(&db), expected);
+    assert_eq!(count(&db, "SELECT COUNT(*) FROM charts"), 4);
+    assert_consistent(&db);
+    assert_eq!(last_scan_at(&db, &insane2), Some(2));
+}
+
 #[test]
 fn partial_scan_prunes_deleted_song_folder_with_several_charts() {
     let base = temp();
