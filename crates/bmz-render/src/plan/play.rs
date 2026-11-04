@@ -67,6 +67,7 @@ pub(super) fn plan_play(
             &skin_text,
             &snapshot.judge_graph_density,
             &snapshot.bpm_graph_segments,
+            &snapshot.play_note_graphs,
         );
     let behind_notes_items = skin.apply_play_skin_global_offset(behind_notes_items, &skin_state);
     append_skin_render_items(&mut commands, &behind_notes_items);

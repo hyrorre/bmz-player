@@ -697,6 +697,24 @@ pub(super) trait SkinDocumentRenderInternal {
         runtime_graphs: SkinRuntimeGraphs<'_>,
         cache: Option<&mut ResultRenderCache>,
     ) -> Vec<SkinRenderItem>;
+    fn judgegraph_bucket_items(
+        &self,
+        destination_index: usize,
+        graph: &SkinJudgeGraphDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        elapsed_ms: i32,
+        state: &SkinDrawState,
+        runtime_graphs: SkinRuntimeGraphs<'_>,
+        cache: Option<&mut ResultRenderCache>,
+    ) -> Vec<SkinRenderItem>;
+    fn play_graph_cursor_item(
+        &self,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        state: &SkinDrawState,
+        runtime_graphs: SkinRuntimeGraphs<'_>,
+    ) -> Option<SkinRenderItem>;
 
     fn density_judgegraph_render_items(
         &self,

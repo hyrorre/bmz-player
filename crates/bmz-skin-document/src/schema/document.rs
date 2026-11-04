@@ -697,7 +697,7 @@ pub struct SkinJudgeGraphDef {
     pub type_alias: i32,
     #[serde(default, rename = "backTexOff")]
     pub back_tex_off: i32,
-    #[serde(default)]
+    #[serde(default = "default_judgegraph_delay")]
     pub delay: i32,
     #[serde(default, rename = "orderReverse")]
     pub order_reverse: i32,
@@ -705,6 +705,11 @@ pub struct SkinJudgeGraphDef {
     pub no_gap: i32,
     #[serde(default, rename = "noGapX")]
     pub no_gap_x: i32,
+}
+
+/// beatoraja `JsonSkin.JudgeGraph.delay`.
+fn default_judgegraph_delay() -> i32 {
+    500
 }
 
 impl SkinJudgeGraphDef {

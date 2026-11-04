@@ -465,6 +465,7 @@ impl SkinContext {
         text: &SkinTextState<'_>,
         play_judge_graph_density: &[u8],
         play_bpm_graph_segments: &[crate::chart_graph::BpmGraphSegment],
+        play_note_graphs: &crate::snapshot::PlayNoteGraphs,
     ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
         let Some(document) = &self.document else {
             return (Vec::new(), Vec::new(), Vec::new());
@@ -486,6 +487,7 @@ impl SkinContext {
                     document,
                     play_judge_graph_density,
                     play_bpm_graph_segments,
+                    play_note_graphs,
                 ),
                 Some(&mut cache),
             );
@@ -498,6 +500,7 @@ impl SkinContext {
                 document,
                 play_judge_graph_density,
                 play_bpm_graph_segments,
+                play_note_graphs,
             ),
             None,
         )

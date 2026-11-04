@@ -15,7 +15,7 @@ use crate::screens::{
     play_snapshot::{
         BgaFrameCatalog, PlayRenderSnapshotCache, PlayfieldProjection, ProjectionClock,
     },
-    result_model::ResultGraphCollector,
+    result_model::{PlayJudgeGraphTracker, ResultGraphCollector},
 };
 use anyhow::{Result, anyhow};
 use bmz_audio::command::AudioEngineHandle;
@@ -344,6 +344,13 @@ fn run(
         effects.bind_play(stop.clone());
     }
     let mut graph = ResultGraphCollector::for_runtime(&runtime.session.chart);
+    let judge_graph_started = Instant::now();
+    let mut note_graphs = config.cache.play_note_graphs.clone();
+    let mut judge_graph = PlayJudgeGraphTracker::new(
+        &runtime.session.chart,
+        &runtime.session.result_judgements,
+        &note_graphs,
+    );
     let mut history = VecDeque::<SkinRuntimeEvent>::with_capacity(PRESENTATION_HISTORY_CAPACITY);
     let mut result = None;
     let mut terminal_result = false;
@@ -390,6 +397,7 @@ fn run(
         );
         last_time = frame.times.audio_now;
         graph.record_runtime_frame(&runtime.session, &frame);
+        judge_graph.record(&runtime.session.result_judgements, &frame.judgements);
         #[cfg(test)]
         if let Some(probe) = &config.probe {
             probe.record(&runtime.session, &audio);
@@ -459,6 +467,8 @@ fn run(
             false,
         );
         let snapshot = &mut frame.render_snapshot;
+        judge_graph.publish(judge_graph_started.elapsed(), &mut note_graphs);
+        snapshot.play_note_graphs.clone_from(&note_graphs);
         crate::screens::play_loop::apply_play_arrange_to_snapshot(
             snapshot,
             &config.applied_arrange,

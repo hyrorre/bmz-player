@@ -1,3 +1,7 @@
+use std::hash::{Hash, Hasher};
+
+use bmz_render::snapshot::{PlayNoteGraphs, ResultEarlyLateGraphBucket, ResultJudgeGraphBucket};
+
 use super::*;
 
 /// Chart values a Play skin reads while loading. beatoraja loads the Play skin
@@ -26,6 +30,8 @@ pub struct PlayRenderSnapshotCache {
     pub(crate) skin_chart: Arc<PlaySkinChartFacts>,
     pub(super) judge_graph_density: Arc<[u8]>,
     pub(super) bpm_graph_segments: Arc<[bmz_render::chart_graph::BpmGraphSegment]>,
+    /// All notes unjudged; the gameplay thread publishes later judge states.
+    pub(crate) play_note_graphs: PlayNoteGraphs,
     pub(super) min_bpm: f32,
     pub(super) max_bpm: f32,
     pub(super) has_bpm_stop: bool,
@@ -60,6 +66,7 @@ impl PlayRenderSnapshotCache {
     pub fn from_chart(chart: &PlayableChart) -> Self {
         let judge_graph_density = Arc::from(build_judge_graph_density(chart).into_boxed_slice());
         let bpm_graph_segments = Arc::from(build_bpm_graph_segments(chart).into_boxed_slice());
+        let play_note_graphs = play_note_graphs_for_chart(chart);
         let min_bpm = chart_min_bpm(chart) as f32;
         let max_bpm = chart_max_bpm(chart) as f32;
         let has_bpm_stop = chart
@@ -114,6 +121,7 @@ impl PlayRenderSnapshotCache {
             }),
             judge_graph_density,
             bpm_graph_segments,
+            play_note_graphs,
             min_bpm,
             max_bpm,
             has_bpm_stop,
@@ -125,6 +133,28 @@ impl PlayRenderSnapshotCache {
             long_note_prefix_max_end_times,
             bga_events,
         }
+    }
+}
+
+fn play_note_graphs_for_chart(chart: &PlayableChart) -> PlayNoteGraphs {
+    let seconds = bmz_render::chart_graph::note_graph_seconds(chart);
+    let notes = bmz_render::chart_graph::build_note_graph_buckets(chart, seconds);
+    let mut judge = vec![ResultJudgeGraphBucket::default(); seconds];
+    let mut early_late = vec![ResultEarlyLateGraphBucket::default(); seconds];
+    for (_, second) in bmz_render::chart_graph::judge_graph_notes(chart, seconds) {
+        judge[second].values[0] = judge[second].values[0].saturating_add(1);
+        early_late[second].values[0] = early_late[second].values[0].saturating_add(1);
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    notes.iter().for_each(|bucket| bucket.values.hash(&mut hasher));
+    judge.iter().for_each(|bucket| bucket.values.hash(&mut hasher));
+    let revision = hasher.finish();
+    PlayNoteGraphs {
+        notes: notes.into(),
+        judge: judge.into(),
+        early_late: early_late.into(),
+        notes_revision: revision,
+        judge_revision: revision,
     }
 }
 

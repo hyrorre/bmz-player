@@ -102,7 +102,63 @@ macro_rules! skin_document_render_graph_judge_methods {
             runtime_graphs: SkinRuntimeGraphs<'_>,
             cache: Option<&mut ResultRenderCache>,
         ) -> Vec<SkinRenderItem> {
+            let mut items = self.judgegraph_bucket_items(
+                destination_index,
+                graph,
+                destination,
+                frame,
+                elapsed_ms,
+                state,
+                runtime_graphs,
+                cache,
+            );
+            items.extend(self.play_graph_cursor_item(destination, frame, state, runtime_graphs));
+            items
+        }
+
+        /// The current position of `SkinNoteDistributionGraph`: a white line of
+        /// 3 texture pixels, with 5 pixels per second, while TIMER_PLAY is on.
+        fn play_graph_cursor_item(
+            &self,
+            destination: &SkinDestinationDef,
+            frame: ResolvedSkinFrame,
+            state: &SkinDrawState,
+            runtime_graphs: SkinRuntimeGraphs<'_>,
+        ) -> Option<SkinRenderItem> {
+            let notes = runtime_graphs.play_note_graphs.map_or(0, |graphs| graphs.notes.len());
+            let seconds = notes.max(runtime_graphs.play_judge_graph_density.len()) as f32;
+            let time_ms = state.play_timer_ms.filter(|_| state.play_screen && seconds > 0.0)?;
+            let position = time_ms as f32 / (seconds * 1_000.0);
+            if !(0.0..1.0).contains(&position) {
+                return None;
+            }
+            let rect = normalize_skin_frame_rect(frame, self.w, self.h);
+            Some(SkinRenderItem::Rect {
+                rect: Rect {
+                    x: rect.x + rect.width * position,
+                    y: rect.y,
+                    width: rect.width * 3.0 / (seconds * 5.0),
+                    height: rect.height,
+                },
+                color: Color::rgba(1.0, 1.0, 1.0, frame.a as f32 / 255.0),
+                blend: skin_blend_mode(destination.blend),
+            })
+        }
+
+        fn judgegraph_bucket_items(
+            &self,
+            destination_index: usize,
+            graph: &SkinJudgeGraphDef,
+            destination: &SkinDestinationDef,
+            frame: ResolvedSkinFrame,
+            elapsed_ms: i32,
+            state: &SkinDrawState,
+            runtime_graphs: SkinRuntimeGraphs<'_>,
+            cache: Option<&mut ResultRenderCache>,
+        ) -> Vec<SkinRenderItem> {
             let graph_type = graph.graph_type();
+            let notes_revision = runtime_graphs.play_note_graphs.map(|play| play.notes_revision);
+            let judge_revision = runtime_graphs.play_note_graphs.map(|play| play.judge_revision);
             let pms_colors = state.key_mode == KeyMode::K9;
             if graph_type == 0 && !runtime_graphs.result_note_graph_buckets.is_empty() {
                 let key = result_note_graph_cache_key(
@@ -113,6 +169,7 @@ macro_rules! skin_document_render_graph_judge_methods {
                     frame,
                     state,
                     elapsed_ms,
+                    notes_revision,
                 );
                 let build = || {
                     stacked_result_note_graph_rect_batch(
@@ -145,6 +202,7 @@ macro_rules! skin_document_render_graph_judge_methods {
                     frame,
                     state,
                     elapsed_ms,
+                    judge_revision,
                 );
                 let build = || {
                     stacked_result_note_graph_rect_batch(
@@ -177,6 +235,7 @@ macro_rules! skin_document_render_graph_judge_methods {
                     frame,
                     state,
                     elapsed_ms,
+                    judge_revision,
                 );
                 let build = || {
                     stacked_result_note_graph_rect_batch(

@@ -301,6 +301,17 @@ pub struct OpponentRenderSnapshot {
     pub gauge_max_elapsed_ms: Option<i32>,
 }
 
+/// Note distribution graphs while playing. Revisions identify the contents, so
+/// the renderer reuses its rectangles without hashing the buckets every frame.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PlayNoteGraphs {
+    pub notes: Arc<[ResultNoteGraphBucket]>,
+    pub judge: Arc<[ResultJudgeGraphBucket]>,
+    pub early_late: Arc<[ResultEarlyLateGraphBucket]>,
+    pub notes_revision: u64,
+    pub judge_revision: u64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RenderSnapshot {
     /// Physical output dimensions injected by Renderer before skin evaluation.
@@ -447,6 +458,8 @@ pub struct RenderSnapshot {
     pub judge_graph_density: Arc<[u8]>,
     /// プレイ用 bpmgraph 線分。
     pub bpm_graph_segments: Arc<[BpmGraphSegment]>,
+    /// プレイ用 judgegraph (ノート種別・判定・FAST/SLOW)。
+    pub play_note_graphs: PlayNoteGraphs,
     /// OPTION_AUTOPLAYON (33) / OPTION_AUTOPLAYOFF (32) 用。
     pub autoplay: bool,
     /// Partial autoplay lanes use LR2 AUTO sprites; full autoplay keeps normal sprites.

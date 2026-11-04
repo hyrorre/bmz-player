@@ -195,8 +195,13 @@ fn play_cache_preserves_stateful_callback_order_and_dynamic_items() {
         let mut state = SkinDrawState { elapsed_ms: elapsed, ..Default::default() };
         state.skin_offsets.set(30, SkinOffsetValue { x: elapsed, ..Default::default() });
         let text = SkinTextState::default();
-        let actual =
-            skin.static_document_play_items_split_for_state_and_text(&state, &text, &[], &[]);
+        let actual = skin.static_document_play_items_split_for_state_and_text(
+            &state,
+            &text,
+            &[],
+            &[],
+            &Default::default(),
+        );
         let mut reference_state = state.clone();
         reference_state.lua_runtime = Some(SkinLuaRuntimeContext {
             runtime: reference_runtime.clone(),

@@ -3,6 +3,7 @@
 //! Reports synthetic 7K workloads; these timings are not application FPS.
 //! BMZ_PLAN_PROFILE_FRAMES and BMZ_PLAN_PROFILE_NOTES_PER_LANE can select a
 //! longer, single-workload run for an external sampling profiler.
+//! BMZ_PLAN_PROFILE_GRAPH_SECONDS fills the note distribution graphs.
 
 use std::collections::BTreeMap;
 use std::hint::black_box;
@@ -17,7 +18,10 @@ use bmz_player::skin_loader::{
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer};
 use bmz_render::scene::AppSceneSnapshot;
 use bmz_render::skin::{SkinDocumentTexture, default_skin_manifest};
-use bmz_render::snapshot::{NoteVisualKind, VisibleNote};
+use bmz_render::snapshot::{
+    NoteVisualKind, PlayNoteGraphs, ResultEarlyLateGraphBucket, ResultJudgeGraphBucket,
+    ResultNoteGraphBucket, VisibleNote,
+};
 
 fn main() -> Result<()> {
     ensure!(!cfg!(debug_assertions), "run this probe with --release");
@@ -44,6 +48,10 @@ fn main() -> Result<()> {
         .transpose()?
         .unwrap_or(3000);
     ensure!((1..=1_000_000).contains(&measured_frames), "frame count must be 1..=1000000");
+    let graph_seconds = std::env::var("BMZ_PLAN_PROFILE_GRAPH_SECONDS")
+        .ok()
+        .map(|value| value.parse::<usize>())
+        .transpose()?;
     let workloads = std::env::var("BMZ_PLAN_PROFILE_NOTES_PER_LANE")
         .ok()
         .map(|value| value.parse::<usize>())
@@ -134,6 +142,22 @@ fn main() -> Result<()> {
         snapshot.resource_load_progress = 1.0;
         snapshot.duration = TimeUs(120_000_000);
         snapshot.total_notes = 2000;
+        if let Some(seconds) = graph_seconds {
+            snapshot.play_note_graphs = PlayNoteGraphs {
+                notes: vec![ResultNoteGraphBucket { values: [1, 2, 3, 1, 2, 12, 0] }; seconds]
+                    .into(),
+                judge: vec![ResultJudgeGraphBucket { values: [4, 9, 4, 2, 1, 1] }; seconds].into(),
+                early_late: vec![
+                    ResultEarlyLateGraphBucket {
+                        values: [4, 9, 2, 1, 0, 0, 2, 1, 1, 1]
+                    };
+                    seconds
+                ]
+                .into(),
+                notes_revision: 1,
+                judge_revision: 1,
+            };
+        }
         // Keep the sample's two LN/HCN bodies and two guide lines in every case.
         for notes in &mut snapshot.visible_notes {
             notes.clear();

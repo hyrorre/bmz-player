@@ -1,7 +1,117 @@
-use bmz_chart::model::{PlayableChart, TimingEventKind};
-use bmz_core::lane::KeyMode;
+use std::collections::HashMap;
+
+use bmz_chart::model::{
+    LongNoteMode, LongNotePair, NoteEvent, NoteKind, PlayableChart, TimingEventKind,
+};
+use bmz_core::ids::NoteId;
+use bmz_core::lane::{KeyMode, Lane};
+use bmz_core::time::TimeUs;
+use bmz_skin_document::ResultNoteGraphBucket;
 
 pub use bmz_skin_document::BpmGraphSegment;
+
+/// Buckets of `SkinNoteDistributionGraph`, one per second of the chart.
+pub fn note_graph_seconds(chart: &PlayableChart) -> usize {
+    (chart.end_time.0 / 1_000_000).max(0) as usize + 1
+}
+
+fn note_graph_second(time: TimeUs, seconds: usize) -> usize {
+    ((time.0 / 1_000_000).max(0) as usize).min(seconds.max(1) - 1)
+}
+
+fn sorted_graph_notes(chart: &PlayableChart) -> Vec<&NoteEvent> {
+    let mut notes: Vec<&NoteEvent> = chart
+        .lane_notes
+        .iter()
+        .flatten()
+        .filter(|note| !matches!(note.kind, NoteKind::Invisible))
+        .collect();
+    notes.sort_by_key(|note| (note.time.0, note.lane.index(), note.id.0));
+    notes
+}
+
+fn long_note_pairs(chart: &PlayableChart) -> HashMap<NoteId, &LongNotePair> {
+    chart
+        .long_notes
+        .iter()
+        .flat_map(|pair| [(pair.start_note_id, pair), (pair.end_note_id, pair)])
+        .collect()
+}
+
+fn is_ignored_long_end(
+    chart: &PlayableChart,
+    pairs: &HashMap<NoteId, &LongNotePair>,
+    note_id: NoteId,
+) -> bool {
+    let mode = pairs
+        .get(&note_id)
+        .filter(|pair| pair.end_note_id == note_id)
+        .and_then(|pair| pair.mode)
+        .unwrap_or(chart.metadata.long_note_mode);
+    mode == LongNoteMode::Ln
+}
+
+/// `SkinNoteDistributionGraph.TYPE_NORMAL`: note kinds per second.
+pub fn build_note_graph_buckets(
+    chart: &PlayableChart,
+    seconds: usize,
+) -> Vec<ResultNoteGraphBucket> {
+    let pairs = long_note_pairs(chart);
+    let mut buckets = vec![ResultNoteGraphBucket::default(); seconds];
+    for note in sorted_graph_notes(chart) {
+        let second = note_graph_second(note.time, seconds);
+        let is_scratch = matches!(note.lane, Lane::Scratch | Lane::Scratch2);
+        let body_index = if is_scratch { 1 } else { 4 };
+        match note.kind {
+            NoteKind::Tap => {
+                let index = if is_scratch { 2 } else { 5 };
+                if let Some(bucket) = buckets.get_mut(second) {
+                    bucket.values[index] = bucket.values[index].saturating_add(1);
+                }
+            }
+            NoteKind::LongStart => {
+                let end_second = pairs
+                    .get(&note.id)
+                    .filter(|pair| pair.start_note_id == note.id)
+                    .map_or(second, |pair| note_graph_second(pair.end_time, seconds));
+                for bucket in buckets.iter_mut().take(end_second.saturating_add(1)).skip(second) {
+                    bucket.values[body_index] = bucket.values[body_index].saturating_add(1);
+                }
+            }
+            NoteKind::LongEnd => {
+                let end_index = if is_scratch { 0 } else { 3 };
+                if let Some(bucket) = buckets.get_mut(second) {
+                    bucket.values[end_index] = bucket.values[end_index].saturating_add(1);
+                    if is_ignored_long_end(chart, &pairs, note.id) {
+                        // beatoraja's LN mode changes the final body cell to the LN-end color.
+                        bucket.values[body_index] = bucket.values[body_index].saturating_sub(1);
+                    }
+                }
+            }
+            NoteKind::Mine => {
+                if let Some(bucket) = buckets.get_mut(second) {
+                    bucket.values[6] = bucket.values[6].saturating_add(1);
+                }
+            }
+            NoteKind::Invisible => {}
+        }
+    }
+    buckets
+}
+
+/// Notes the judge and early/late graphs count, in chart order, with their second.
+pub fn judge_graph_notes(chart: &PlayableChart, seconds: usize) -> Vec<(&NoteEvent, usize)> {
+    let pairs = long_note_pairs(chart);
+    sorted_graph_notes(chart)
+        .into_iter()
+        .filter(|note| match note.kind {
+            NoteKind::Tap | NoteKind::LongStart => true,
+            NoteKind::LongEnd => !is_ignored_long_end(chart, &pairs, note.id),
+            NoteKind::Invisible | NoteKind::Mine => false,
+        })
+        .map(|note| (note, note_graph_second(note.time, seconds)))
+        .collect()
+}
 
 pub fn build_judge_graph_density(chart: &PlayableChart) -> Vec<u8> {
     let seconds = (chart.end_time.0 / 1_000_000).max(0) as usize + 1;

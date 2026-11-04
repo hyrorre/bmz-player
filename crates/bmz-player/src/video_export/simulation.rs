@@ -65,6 +65,8 @@ pub struct Simulation {
     ready_played: bool,
     fadeout_triggered: bool,
     skin_events: Vec<bmz_gameplay::session::SkinRuntimeEvent>,
+    judge_graph: crate::screens::result_model::PlayJudgeGraphTracker,
+    note_graphs: bmz_render::snapshot::PlayNoteGraphs,
 }
 
 impl Simulation {
@@ -122,6 +124,12 @@ impl Simulation {
                 break;
             }
         }
+        let note_graphs = prepared.play.render_snapshot_cache.play_note_graphs.clone();
+        let judge_graph = crate::screens::result_model::PlayJudgeGraphTracker::new(
+            &prepared.play.session.chart,
+            &prepared.play.session.result_judgements,
+            &note_graphs,
+        );
         let result = Self {
             prepared,
             timing,
@@ -140,6 +148,8 @@ impl Simulation {
             ready_played: false,
             fadeout_triggered: false,
             skin_events: Vec::new(),
+            judge_graph,
+            note_graphs,
         };
         let volume = result.system_volume();
         result.skin_audio.start_scene(result.system_bgm_volume(), volume);
@@ -206,6 +216,11 @@ impl Simulation {
             self.prepared.play.audio.set_sound_volume(id, volume);
         }
         self.skin_events.extend(frame.skin_events);
+        self.judge_graph.record(&self.prepared.play.session.result_judgements, &frame.judgements);
+        self.judge_graph.publish(
+            std::time::Duration::from_micros(scene_us.max(0) as u64),
+            &mut self.note_graphs,
+        );
         if !frame.mine_hits.is_empty() {
             self.sound(SoundType::Landmine)?;
         }
@@ -329,6 +344,7 @@ impl Simulation {
             &play.render_snapshot_cache,
         );
         snapshot.play_elapsed_time = TimeUs(scene_us);
+        snapshot.play_note_graphs.clone_from(&self.note_graphs);
         refresh_play_skin_visuals(&mut snapshot, session);
         snapshot.operating_time_ms = (scene_us / 1000).min(i64::from(i32::MAX)) as i32;
         snapshot.ready_elapsed_time =

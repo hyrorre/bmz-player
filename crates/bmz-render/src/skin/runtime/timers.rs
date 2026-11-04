@@ -589,6 +589,8 @@ pub(in crate::skin) struct SkinRuntimeGraphs<'a> {
     pub(in crate::skin) result_early_late_graph_buckets:
         &'a [crate::snapshot::ResultEarlyLateGraphBucket],
     pub(in crate::skin) result_timing_distribution: &'a crate::snapshot::ResultTimingDistribution,
+    /// Set while playing, where the buckets replace the Result ones.
+    pub(in crate::skin) play_note_graphs: Option<&'a crate::snapshot::PlayNoteGraphs>,
 }
 
 impl<'a> SkinRuntimeGraphs<'a> {
@@ -602,6 +604,7 @@ impl<'a> SkinRuntimeGraphs<'a> {
             result_note_graph_buckets: &document.result_note_graph_buckets,
             result_early_late_graph_buckets: &document.result_early_late_graph_buckets,
             result_timing_distribution: &document.result_timing_distribution,
+            play_note_graphs: None,
         }
     }
 
@@ -609,16 +612,18 @@ impl<'a> SkinRuntimeGraphs<'a> {
         document: &'a SkinDocument,
         play_judge_graph_density: &'a [u8],
         play_bpm_graph_segments: &'a [crate::chart_graph::BpmGraphSegment],
+        play_note_graphs: &'a crate::snapshot::PlayNoteGraphs,
     ) -> Self {
         Self {
             play_judge_graph_density,
             play_bpm_graph_segments,
             result_gauge_graph_points: &document.result_gauge_graph_points,
             result_timing_points: &document.result_timing_points,
-            result_judge_graph_buckets: &document.result_judge_graph_buckets,
-            result_note_graph_buckets: &document.result_note_graph_buckets,
-            result_early_late_graph_buckets: &document.result_early_late_graph_buckets,
+            result_judge_graph_buckets: &play_note_graphs.judge,
+            result_note_graph_buckets: &play_note_graphs.notes,
+            result_early_late_graph_buckets: &play_note_graphs.early_late,
             result_timing_distribution: &document.result_timing_distribution,
+            play_note_graphs: Some(play_note_graphs),
         }
     }
 
@@ -634,6 +639,7 @@ impl<'a> SkinRuntimeGraphs<'a> {
             result_note_graph_buckets: &graph.note_graph_buckets,
             result_early_late_graph_buckets: &graph.early_late_graph_buckets,
             result_timing_distribution: &graph.timing_distribution,
+            play_note_graphs: None,
         }
     }
 }

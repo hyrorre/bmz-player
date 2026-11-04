@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
-use bmz_chart::model::{LongNoteMode, NoteEvent, NoteKind, PlayableChart};
+use bmz_chart::model::{LongNoteMode, PlayableChart};
 use bmz_core::clear::{ClearType, GaugeType};
 use bmz_core::ids::NoteId;
 use bmz_core::lane::KeyMode;
@@ -10,8 +11,8 @@ use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::JudgeCounts;
 use bmz_gameplay::session::{FrameOutput, GameSession, ResultJudgementDetail};
 use bmz_render::snapshot::{
-    RenderSnapshot, ResultEarlyLateGraphBucket, ResultGaugeGraphPoint, ResultGraphSnapshot,
-    ResultJudgeGraphBucket, ResultNoteGraphBucket, ResultTimingDistribution, ResultTimingPoint,
+    PlayNoteGraphs, RenderSnapshot, ResultEarlyLateGraphBucket, ResultGaugeGraphPoint,
+    ResultGraphSnapshot, ResultJudgeGraphBucket, ResultTimingDistribution, ResultTimingPoint,
 };
 
 use crate::storage::play_result::StoredPlayResult;
@@ -406,26 +407,14 @@ fn populate_result_note_graphs(
     chart: &PlayableChart,
     judgements: &HashMap<NoteId, ResultJudgementDetail>,
 ) {
-    let seconds = result_graph_seconds(chart).max(graph.judge_graph_density.len()).max(1);
+    let seconds = bmz_render::chart_graph::note_graph_seconds(chart)
+        .max(graph.judge_graph_density.len())
+        .max(1);
     let mut judge_buckets = vec![ResultJudgeGraphBucket::default(); seconds];
-    let mut note_buckets = vec![ResultNoteGraphBucket::default(); seconds];
     let mut early_late_buckets = vec![ResultEarlyLateGraphBucket::default(); seconds];
     let mut timing_points = Vec::new();
 
-    let mut notes: Vec<&NoteEvent> = chart
-        .lane_notes
-        .iter()
-        .flatten()
-        .filter(|note| !matches!(note.kind, NoteKind::Invisible))
-        .collect();
-    notes.sort_by_key(|note| (note.time.0, note.lane.index(), note.id.0));
-
-    for note in notes {
-        let second = clamp_note_second(note, seconds);
-        populate_result_note_graph_bucket(&mut note_buckets, second, chart, note);
-        if !result_graph_includes_note(chart, note) {
-            continue;
-        }
+    for (note, second) in bmz_render::chart_graph::judge_graph_notes(chart, seconds) {
         let Some(detail) = judgements.get(&note.id) else {
             judge_buckets[second].values[0] = judge_buckets[second].values[0].saturating_add(1);
             early_late_buckets[second].values[0] =
@@ -448,7 +437,7 @@ fn populate_result_note_graphs(
     }
 
     graph.judge_graph_buckets = judge_buckets;
-    graph.note_graph_buckets = note_buckets;
+    graph.note_graph_buckets = bmz_render::chart_graph::build_note_graph_buckets(chart, seconds);
     graph.early_late_graph_buckets = early_late_buckets;
     graph.timing_points = timing_points;
     graph.timing_distribution = timing_distribution_from_points(&graph.timing_points);
@@ -461,94 +450,100 @@ fn populate_result_note_graphs(
     }
 }
 
-fn populate_result_note_graph_bucket(
-    buckets: &mut [ResultNoteGraphBucket],
+/// How often beatoraja redraws a judge graph while playing.
+const PLAY_JUDGE_GRAPH_UPDATE_INTERVAL: Duration = Duration::from_millis(750);
+
+#[derive(Debug, Clone, Copy)]
+struct TrackedGraphNote {
     second: usize,
-    chart: &PlayableChart,
-    note: &NoteEvent,
-) {
-    let is_scratch =
-        matches!(note.lane, bmz_core::lane::Lane::Scratch | bmz_core::lane::Lane::Scratch2);
-    let body_index = if is_scratch { 1 } else { 4 };
-    match note.kind {
-        NoteKind::Tap => {
-            let index = if is_scratch { 2 } else { 5 };
-            if let Some(bucket) = buckets.get_mut(second) {
-                bucket.values[index] = bucket.values[index].saturating_add(1);
-            }
+    state: usize,
+    early_late: usize,
+}
+
+/// Live judge and early/late buckets for Play skins. The gameplay thread updates
+/// them from the judgement events, as `populate_result_note_graphs` does at the end.
+#[derive(Debug)]
+pub(crate) struct PlayJudgeGraphTracker {
+    notes: HashMap<NoteId, TrackedGraphNote>,
+    judge: Vec<ResultJudgeGraphBucket>,
+    early_late: Vec<ResultEarlyLateGraphBucket>,
+    changed: bool,
+    published_at: Option<Duration>,
+}
+
+impl PlayJudgeGraphTracker {
+    pub(crate) fn new(
+        chart: &PlayableChart,
+        judgements: &HashMap<NoteId, ResultJudgementDetail>,
+        graphs: &PlayNoteGraphs,
+    ) -> Self {
+        let seconds = graphs.judge.len();
+        let notes = bmz_render::chart_graph::judge_graph_notes(chart, seconds)
+            .into_iter()
+            .map(|(note, second)| (note.id, TrackedGraphNote { second, state: 0, early_late: 0 }))
+            .collect();
+        let mut tracker = Self {
+            notes,
+            judge: graphs.judge.to_vec(),
+            early_late: graphs.early_late.to_vec(),
+            changed: false,
+            published_at: None,
+        };
+        // A viewer start position judges the notes before it up front.
+        for (note_id, detail) in judgements {
+            tracker.apply(*note_id, detail);
         }
-        NoteKind::LongStart => {
-            if let Some(bucket) = buckets.get_mut(second) {
-                bucket.values[body_index] = bucket.values[body_index].saturating_add(1);
-            }
-            let Some(pair) = chart.long_notes.iter().find(|pair| pair.start_note_id == note.id)
-            else {
-                return;
-            };
-            let end_second = clamp_note_second(
-                &NoteEvent {
-                    id: pair.end_note_id,
-                    lane: pair.lane,
-                    kind: NoteKind::LongEnd,
-                    tick: pair.end_tick,
-                    time: pair.end_time,
-                    sound: pair.sound,
-                    layered_sounds: Vec::new(),
-                    damage: None,
-                },
-                buckets.len(),
-            );
-            for bucket in buckets.iter_mut().take(end_second.saturating_add(1)).skip(second) {
-                bucket.values[body_index] = bucket.values[body_index].saturating_add(1);
-            }
-            if let Some(bucket) = buckets.get_mut(second) {
-                bucket.values[body_index] = bucket.values[body_index].saturating_sub(1);
-            }
-        }
-        NoteKind::LongEnd => {
-            let end_index = if is_scratch { 0 } else { 3 };
-            if let Some(bucket) = buckets.get_mut(second) {
-                bucket.values[end_index] = bucket.values[end_index].saturating_add(1);
-                if is_ignored_long_end(chart, note.id) {
-                    // beatoraja's LN mode changes the final body cell to the LN-end color.
-                    bucket.values[body_index] = bucket.values[body_index].saturating_sub(1);
-                }
-            }
-        }
-        NoteKind::Mine => {
-            if let Some(bucket) = buckets.get_mut(second) {
-                bucket.values[6] = bucket.values[6].saturating_add(1);
-            }
-        }
-        NoteKind::Invisible => {}
+        tracker
     }
-}
 
-fn result_graph_seconds(chart: &PlayableChart) -> usize {
-    (chart.end_time.0 / 1_000_000).max(0) as usize + 1
-}
-
-fn result_graph_includes_note(chart: &PlayableChart, note: &NoteEvent) -> bool {
-    match note.kind {
-        NoteKind::Tap | NoteKind::LongStart => true,
-        NoteKind::LongEnd => !is_ignored_long_end(chart, note.id),
-        NoteKind::Invisible | NoteKind::Mine => false,
+    /// `events` name the notes whose entry in `judgements` a frame changed.
+    pub(crate) fn record(
+        &mut self,
+        judgements: &HashMap<NoteId, ResultJudgementDetail>,
+        events: &[bmz_gameplay::judge::model::JudgementEvent],
+    ) {
+        for note_id in events.iter().filter_map(|event| event.note_id) {
+            if let Some(detail) = judgements.get(&note_id) {
+                self.apply(note_id, detail);
+            }
+        }
     }
-}
 
-fn is_ignored_long_end(chart: &PlayableChart, note_id: NoteId) -> bool {
-    let mode = chart
-        .long_notes
-        .iter()
-        .find(|pair| pair.end_note_id == note_id)
-        .and_then(|pair| pair.mode)
-        .unwrap_or(chart.metadata.long_note_mode);
-    mode == LongNoteMode::Ln
-}
+    fn apply(&mut self, note_id: NoteId, detail: &ResultJudgementDetail) {
+        let Some(note) = self.notes.get_mut(&note_id) else {
+            return;
+        };
+        let state = beatoraja_note_state(detail.judge);
+        let early_late = beatoraja_early_late_state(state, detail);
+        if (note.state, note.early_late) == (state, early_late) {
+            return;
+        }
+        let judge = &mut self.judge[note.second].values;
+        judge[note.state] = judge[note.state].saturating_sub(1);
+        judge[state] = judge[state].saturating_add(1);
+        let values = &mut self.early_late[note.second].values;
+        values[note.early_late] = values[note.early_late].saturating_sub(1);
+        values[early_late] = values[early_late].saturating_add(1);
+        note.state = state;
+        note.early_late = early_late;
+        self.changed = true;
+    }
 
-fn clamp_note_second(note: &NoteEvent, seconds: usize) -> usize {
-    let second = (note.time.0 / 1_000_000).max(0) as usize;
-    second.min(seconds.max(1) - 1)
+    /// Copies the buckets into `graphs` after a change, at most once per interval.
+    /// `now` is any monotonic clock, which keeps offline exports reproducible.
+    pub(crate) fn publish(&mut self, now: Duration, graphs: &mut PlayNoteGraphs) {
+        let waiting = self.published_at.is_some_and(|published_at| {
+            now.saturating_sub(published_at) < PLAY_JUDGE_GRAPH_UPDATE_INTERVAL
+        });
+        if !self.changed || waiting {
+            return;
+        }
+        graphs.judge = Arc::from(self.judge.as_slice());
+        graphs.early_late = Arc::from(self.early_late.as_slice());
+        graphs.judge_revision = graphs.judge_revision.wrapping_add(1);
+        self.changed = false;
+        self.published_at = Some(now);
+    }
 }
 
 fn beatoraja_note_state(judge: bmz_core::judge::Judge) -> usize {

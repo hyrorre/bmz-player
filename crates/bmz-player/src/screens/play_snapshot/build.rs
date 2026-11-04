@@ -61,6 +61,7 @@ pub fn apply_prepared_chart_to_render_snapshot(
     snapshot.skin_attempt.effective_key_mode = Some(primary_key_mode);
     snapshot.fs_threshold_ms = rm_skin_fs_threshold_ms(chart.metadata.judge_rank, primary_key_mode);
     snapshot.judge_graph_density = Arc::clone(&cache.judge_graph_density);
+    snapshot.play_note_graphs.clone_from(&cache.play_note_graphs);
     snapshot.bpm_graph_segments = Arc::clone(&cache.bpm_graph_segments);
 
     snapshot.note_display_duration_ms = display_duration_ms_for_bpm_hispeed(
@@ -409,6 +410,7 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         adjusted_rate_adot: adjusted_rate.map(|rate| (rate * 100.0).floor() as i32),
         judge_graph_density: Arc::clone(&cache.judge_graph_density),
         bpm_graph_segments: Arc::clone(&cache.bpm_graph_segments),
+        play_note_graphs: cache.play_note_graphs.clone(),
         autoplay: session.autoplay.as_ref().is_some_and(|autoplay| autoplay.is_full()),
         auto_note_lanes: std::array::from_fn(|index| {
             session.autoplay.as_ref().is_some_and(|autoplay| {

@@ -555,7 +555,7 @@ fn result_plan_supplies_result_judge_graph_data_to_skin_document() {
                 "name": "test",
                 "w": 100,
                 "h": 100,
-                "judgegraph": [{"id": "jg", "type": 1, "backTexOff": 1, "noGap": 1}],
+                "judgegraph": [{"id": "jg", "type": 1, "backTexOff": 1, "delay": 0, "noGap": 1}],
                 "destination": [
                     {"id": "jg", "dst": [{"x": 0, "y": 0, "w": 100, "h": 50}]}
                 ]

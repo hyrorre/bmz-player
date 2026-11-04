@@ -39,6 +39,146 @@ fn play_judgegraph_density_uses_canvas_pixel_gap() {
     }
 }
 
+fn play_graph_items(
+    graph: &str,
+    state: &SkinDrawState,
+    graphs: &crate::snapshot::PlayNoteGraphs,
+) -> Vec<SkinRenderItem> {
+    let document: SkinDocument = serde_json::from_str(&format!(
+        r#"{{
+            "type": 0, "w": 100, "h": 100,
+            "judgegraph": [{graph}],
+            "destination": [{{ "id": "graph", "dst": [{{ "x": 10, "y": 10, "w": 40, "h": 20 }}] }}]
+        }}"#,
+    ))
+    .unwrap();
+    let context = SkinContext::from_manifest_and_document(default_skin_manifest(), document, []);
+    let (behind, front, overlay) = context.static_document_play_items_split_for_state_and_text(
+        state,
+        &SkinTextState::default(),
+        &[1, 2, 3, 4],
+        &[],
+        graphs,
+    );
+    behind.into_iter().chain(front).chain(overlay).collect()
+}
+
+fn graph_rects(items: &[SkinRenderItem]) -> Vec<RectCommand> {
+    items
+        .iter()
+        .flat_map(|item| match item {
+            SkinRenderItem::RectBatch { rects, .. } => rects.to_vec(),
+            SkinRenderItem::Rect { rect, color, .. } => {
+                vec![RectCommand { rect: *rect, color: *color }]
+            }
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+fn play_note_graphs() -> crate::snapshot::PlayNoteGraphs {
+    use crate::snapshot::{
+        ResultEarlyLateGraphBucket, ResultJudgeGraphBucket, ResultNoteGraphBucket,
+    };
+    let notes = [[0, 0, 1, 0, 0, 2, 0], [0, 3, 0, 0, 0, 0, 0], [0; 7], [0; 7]];
+    let judge = [[2, 1, 0, 0, 0, 0], [0; 6], [0; 6], [0; 6]];
+    let mut early_late = [[0; 10]; 4];
+    early_late[0][6] = 1;
+    crate::snapshot::PlayNoteGraphs {
+        notes: notes.map(|values| ResultNoteGraphBucket { values }).into(),
+        judge: judge.map(|values| ResultJudgeGraphBucket { values }).into(),
+        early_late: early_late.map(|values| ResultEarlyLateGraphBucket { values }).into(),
+        notes_revision: 1,
+        judge_revision: 2,
+    }
+}
+
+fn settled_play_state() -> SkinDrawState {
+    SkinDrawState { elapsed_ms: 10_000, play_screen: true, ..SkinDrawState::default() }
+}
+
+#[test]
+fn play_judgegraph_colors_follow_each_graph_type() {
+    let state = settled_play_state();
+    let graphs = play_note_graphs();
+    let colors = |graph: &str| {
+        let mut colors = Vec::new();
+        for rect in graph_rects(&play_graph_items(graph, &state, &graphs)) {
+            let color = [rect.color.r, rect.color.g, rect.color.b];
+            if !colors.contains(&color) {
+                colors.push(color);
+            }
+        }
+        colors
+    };
+    // Scratch, normal notes and the scratch LN body have their own colors.
+    assert_eq!(
+        colors(r#"{ "id": "graph", "type": 0, "backTexOff": 1 }"#),
+        [[1.0, 0.27, 0.27], [0.80, 0.80, 0.80], [0.13, 0.53, 0.13]],
+    );
+    // Unjudged gray, then PGREAT.
+    assert_eq!(
+        colors(r#"{ "id": "graph", "type": 1, "backTexOff": 1 }"#),
+        [[0.33, 0.33, 0.33], [0.0, 0.53, 1.0]],
+    );
+    assert_eq!(colors(r#"{ "id": "graph", "type": 2, "backTexOff": 1 }"#), [[1.0, 0.53, 0.0]]);
+}
+
+#[test]
+fn play_judgegraph_cursor_follows_the_play_timer_like_beatoraja() {
+    let graph = r#"{ "id": "graph", "backTexOff": 1 }"#;
+    let graphs = play_note_graphs();
+    let white = Color::rgba(1.0, 1.0, 1.0, 1.0);
+    let cursor = |play_timer_ms| {
+        let state = SkinDrawState { play_timer_ms, ..settled_play_state() };
+        graph_rects(&play_graph_items(graph, &state, &graphs))
+            .into_iter()
+            .find(|rect| rect.color == white)
+    };
+
+    assert_eq!(cursor(None), None, "TIMER_PLAY is off before the chart starts");
+    let rect = cursor(Some(1_000)).unwrap().rect;
+    assert!((rect.x - (0.10 + 0.40 / 4.0)).abs() < 0.0001, "{rect:?}");
+    assert!((rect.width - 0.40 * 3.0 / 20.0).abs() < 0.0001, "{rect:?}");
+    assert_eq!(rect.y, 0.70);
+    assert_eq!(rect.height, 0.20);
+    assert_eq!(cursor(Some(4_000)), None, "the end of the graph");
+
+    let state = SkinDrawState {
+        play_timer_ms: Some(1_000),
+        play_screen: false,
+        ..SkinDrawState::default()
+    };
+    let items = play_graph_items(graph, &state, &graphs);
+    assert!(!graph_rects(&items).iter().any(|rect| rect.color == white), "only while playing");
+}
+
+#[test]
+fn play_judgegraph_keeps_the_density_graph_without_buckets() {
+    let state = SkinDrawState { play_timer_ms: Some(1_000), ..settled_play_state() };
+    let items = play_graph_items(r#"{ "id": "graph" }"#, &state, &Default::default());
+    // Four density bars and the cursor.
+    assert_eq!(graph_rects(&items).len(), 5);
+}
+
+#[test]
+fn judgegraph_reveals_over_the_beatoraja_default_delay() {
+    let graph: bmz_skin_document::SkinJudgeGraphDef =
+        serde_json::from_str(r#"{ "id": "graph" }"#).unwrap();
+    assert_eq!(graph.delay, 500);
+    let graphs = play_note_graphs();
+    let mut state = settled_play_state();
+    state.elapsed_ms = 250;
+    let items = play_graph_items(r#"{ "id": "graph", "backTexOff": 1 }"#, &state, &graphs);
+    // The first half: three chips of the first second and three of the second.
+    assert_eq!(graph_rects(&items).len(), 6);
+    state.elapsed_ms = 0;
+    assert!(
+        graph_rects(&play_graph_items(r#"{ "id": "graph", "backTexOff": 1 }"#, &state, &graphs))
+            .is_empty()
+    );
+}
+
 #[test]
 fn skin_document_evaluates_safe_gauge_draw_conditions() {
     let document: SkinDocument = serde_json::from_str(

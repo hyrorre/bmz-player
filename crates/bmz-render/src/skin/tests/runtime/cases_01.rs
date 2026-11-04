@@ -553,6 +553,7 @@ fn play_destination_negative_image_id_renders_runtime_stagefile_source() {
         &SkinTextState::default(),
         &[],
         &[],
+        &Default::default(),
     );
 
     assert!(behind.iter().chain(&front).chain(&overlay).any(|item| matches!(
@@ -596,6 +597,7 @@ fn presentation_source_overrides_only_play_and_updates_dimensions() {
             &SkinTextState::default(),
             &[],
             &[],
+            &Default::default(),
         );
         assert!(behind.iter().chain(&front).chain(&overlay).any(|item| matches!(
             item, SkinRenderItem::Image { texture: actual, source_size: Some(size), .. }

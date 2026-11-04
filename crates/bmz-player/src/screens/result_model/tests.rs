@@ -9,6 +9,8 @@ use bmz_gameplay::session::PlayState;
 use bmz_render::chart_graph::BpmGraphSegment;
 use bmz_render::snapshot::HitErrorRingSnapshot;
 
+use bmz_chart::model::{NoteEvent, NoteKind};
+
 use super::*;
 
 #[test]
@@ -325,6 +327,85 @@ fn result_graph_failed_tail_appends_zero_samples_until_chart_end() {
 
     assert_eq!(hard, vec![(500, 0.0), (1000, 0.0)]);
     assert_eq!(normal, vec![(500, 0.0), (1000, 0.0)]);
+}
+
+fn detail(judge: Judge, delta_us: i64) -> bmz_gameplay::session::ResultJudgementDetail {
+    bmz_gameplay::session::ResultJudgementDetail {
+        judge,
+        side: TimingSide::Slow,
+        delta: TimeUs(delta_us),
+        time: TimeUs(0),
+    }
+}
+
+fn judged(id: u32) -> JudgementEvent {
+    JudgementEvent {
+        note_id: Some(bmz_core::ids::NoteId(id)),
+        lane: Lane::Key1,
+        judge: Judge::Great,
+        side: TimingSide::Slow,
+        delta: TimeUs(0),
+        time: TimeUs(0),
+        affects_score: true,
+    }
+}
+
+#[test]
+fn play_judge_graph_tracker_publishes_at_most_every_750_ms_like_the_result_buckets() {
+    let mut chart = chart();
+    chart.end_time = TimeUs(2_000_000);
+    chart.lane_notes[Lane::Key1.index()] = vec![note(1, 0), note(2, 1_000_000), note(3, 1_000_000)];
+    let cache = crate::screens::play_snapshot::PlayRenderSnapshotCache::from_chart(&chart);
+    let mut graphs = cache.play_note_graphs.clone();
+    assert_eq!(graphs.judge.iter().map(|bucket| bucket.values[0]).collect::<Vec<_>>(), [1, 2, 0]);
+
+    let mut judgements = std::collections::HashMap::new();
+    let mut tracker = PlayJudgeGraphTracker::new(&chart, &judgements, &graphs);
+    let start = Duration::from_secs(10);
+    tracker.publish(start, &mut graphs);
+    assert_eq!(graphs, cache.play_note_graphs, "nothing to publish before a judgement");
+
+    judgements.insert(bmz_core::ids::NoteId(1), detail(Judge::Great, -5_000));
+    tracker.record(&judgements, &[judged(1)]);
+    tracker.publish(start, &mut graphs);
+    assert_eq!(graphs.judge[0].values, [0, 0, 1, 0, 0, 0]);
+    assert_eq!(graphs.early_late[0].values, [0, 0, 1, 0, 0, 0, 0, 0, 0, 0]);
+    assert_ne!(graphs.judge_revision, cache.play_note_graphs.judge_revision);
+    assert_eq!(graphs.notes_revision, cache.play_note_graphs.notes_revision);
+
+    // A late Bad waits for the interval, and the next entry moves the same note.
+    judgements.insert(bmz_core::ids::NoteId(2), detail(Judge::Bad, 40_000));
+    judgements.insert(bmz_core::ids::NoteId(1), detail(Judge::PGreat, 0));
+    tracker.record(&judgements, &[judged(2), judged(1)]);
+    tracker.publish(start + Duration::from_millis(749), &mut graphs);
+    assert_eq!(graphs.judge[1].values, [2, 0, 0, 0, 0, 0]);
+    tracker.publish(start + Duration::from_millis(750), &mut graphs);
+    assert_eq!(graphs.judge[0].values, [0, 1, 0, 0, 0, 0]);
+    assert_eq!(graphs.judge[1].values, [1, 0, 0, 0, 1, 0]);
+    assert_eq!(graphs.early_late[1].values, [1, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
+
+    // The same buckets as the Result graph once every note is judged.
+    judgements.insert(bmz_core::ids::NoteId(3), detail(Judge::Good, -30_000));
+    tracker.record(&judgements, &[judged(3)]);
+    tracker.publish(start + Duration::from_secs(2), &mut graphs);
+    let result =
+        ResultGraphCollector::default().snapshot_for_result_parts(&chart, &judgements, None);
+    assert_eq!(graphs.judge.as_ref(), result.judge_graph_buckets.as_slice());
+    assert_eq!(graphs.early_late.as_ref(), result.early_late_graph_buckets.as_slice());
+    assert_eq!(graphs.notes.as_ref(), result.note_graph_buckets.as_slice());
+}
+
+#[test]
+fn play_judge_graph_tracker_starts_from_notes_judged_before_the_first_frame() {
+    let mut chart = chart();
+    chart.end_time = TimeUs(1_000_000);
+    chart.lane_notes[Lane::Key1.index()] = vec![note(1, 0), note(2, 0)];
+    let cache = crate::screens::play_snapshot::PlayRenderSnapshotCache::from_chart(&chart);
+    let judgements =
+        std::collections::HashMap::from([(bmz_core::ids::NoteId(1), detail(Judge::PGreat, 0))]);
+    let mut graphs = cache.play_note_graphs.clone();
+    PlayJudgeGraphTracker::new(&chart, &judgements, &graphs).publish(Duration::ZERO, &mut graphs);
+    assert_eq!(graphs.judge[0].values, [1, 1, 0, 0, 0, 0]);
 }
 
 #[test]

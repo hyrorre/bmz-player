@@ -277,6 +277,7 @@ pub(super) fn result_note_graph_cache_key<const N: usize, B: ResultNoteGraphBuck
     frame: ResolvedSkinFrame,
     state: &SkinDrawState,
     elapsed_ms: i32,
+    revision: Option<u64>,
 ) -> ResultRectBatchCacheKey {
     ResultRectBatchCacheKey {
         destination_index,
@@ -285,7 +286,10 @@ pub(super) fn result_note_graph_cache_key<const N: usize, B: ResultNoteGraphBuck
         key_mode: state.key_mode,
         judge_rank: state.judge_rank,
         visible_len: result_note_graph_visible_len(buckets.len(), graph, elapsed_ms),
-        data_hash: result_note_graph_data_hash(buckets, graph),
+        data_hash: revision.map_or_else(
+            || result_note_graph_data_hash(buckets, graph),
+            |revision| note_graph_revision_hash(revision, buckets.len(), graph),
+        ),
     }
 }
 
@@ -330,21 +334,32 @@ pub(super) fn result_gauge_graph_rect_batch_cache(
     Some(RectBatchCache { key: RectBatchCacheKey(hasher.finish()), bounds })
 }
 
+fn hash_note_graph_settings(hasher: &mut DefaultHasher, graph: &SkinJudgeGraphDef, len: usize) {
+    graph.graph_type().hash(hasher);
+    graph.back_tex_off.hash(hasher);
+    graph.delay.hash(hasher);
+    graph.order_reverse.hash(hasher);
+    graph.no_gap.hash(hasher);
+    graph.no_gap_x.hash(hasher);
+    len.hash(hasher);
+}
+
 pub(super) fn result_note_graph_data_hash<const N: usize, B: ResultNoteGraphBucketValues<N>>(
     buckets: &[B],
     graph: &SkinJudgeGraphDef,
 ) -> u64 {
     let mut hasher = DefaultHasher::new();
-    graph.graph_type().hash(&mut hasher);
-    graph.back_tex_off.hash(&mut hasher);
-    graph.delay.hash(&mut hasher);
-    graph.order_reverse.hash(&mut hasher);
-    graph.no_gap.hash(&mut hasher);
-    graph.no_gap_x.hash(&mut hasher);
-    buckets.len().hash(&mut hasher);
+    hash_note_graph_settings(&mut hasher, graph, buckets.len());
     for bucket in buckets {
         bucket.values().hash(&mut hasher);
     }
+    hasher.finish()
+}
+
+fn note_graph_revision_hash(revision: u64, len: usize, graph: &SkinJudgeGraphDef) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    hash_note_graph_settings(&mut hasher, graph, len);
+    revision.hash(&mut hasher);
     hasher.finish()
 }
 

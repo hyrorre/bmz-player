@@ -48,8 +48,8 @@ fn result_judgegraphs_render_beatoraja_judge_and_early_late_series() {
                 "w": 100,
                 "h": 100,
                 "judgegraph": [
-                    { "id": "judge", "type": 1, "backTexOff": 1, "noGap": 1, "noGapX": 1 },
-                    { "id": "fs", "type": 2, "backTexOff": 1, "noGap": 1, "noGapX": 1 }
+                    { "id": "judge", "type": 1, "backTexOff": 1, "delay": 0, "noGap": 1, "noGapX": 1 },
+                    { "id": "fs", "type": 2, "backTexOff": 1, "delay": 0, "noGap": 1, "noGapX": 1 }
                 ],
                 "destination": [
                     { "id": "judge", "dst": [{ "x": 0, "y": 0, "w": 50, "h": 20, "a": 255 }] },
@@ -88,7 +88,7 @@ fn result_notes_graph_renders_note_distribution_colors() {
                 "w": 100,
                 "h": 100,
                 "judgegraph": [
-                    { "id": "note_graph", "type": 0, "backTexOff": 1, "noGap": 1, "noGapX": 1 }
+                    { "id": "note_graph", "type": 0, "backTexOff": 1, "delay": 0, "noGap": 1, "noGapX": 1 }
                 ],
                 "destination": [
                     { "id": "note_graph", "timer": 0, "dst": [{ "x": 0, "y": 0, "w": 50, "h": 20, "a": 255 }] }
