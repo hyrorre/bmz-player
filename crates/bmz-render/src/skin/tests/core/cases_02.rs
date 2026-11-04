@@ -62,6 +62,46 @@ fn decorated_text_destination_alpha_is_shared_without_accumulation() {
 }
 
 #[test]
+fn text_shadow_offset_draws_half_brightness_like_beatoraja() {
+    let shadow_of = |font: &str, text: &str| {
+        let document: SkinDocument = serde_json::from_str(&format!(
+            r#"{{
+            "w":100,"h":100,
+            "font":[{font}],
+            "text":[{text}],
+            "destination":[{{"id":"label","dst":[
+                {{"w":50,"h":10,"r":200,"g":100,"b":50,"a":128}}]}}]
+        }}"#,
+        ))
+        .unwrap();
+        let items = document.static_render_items(
+            &HashMap::new(),
+            &SkinDrawState::default(),
+            &SkinTextState::default(),
+        );
+        let SkinRenderItem::Text { style, .. } = &items[0] else { panic!("text") };
+        style.shadow
+    };
+    let vector = r#"{"id":1,"path":"font.ttf"}"#;
+    for decoration in ["", r#","shadowColor":"00000000""#] {
+        let text = format!(
+            r#"{{"id":"label","font":1,"constantText":"T","shadowOffsetX":2,"shadowOffsetY":3{decoration}}}"#
+        );
+        let shadow = shadow_of(vector, &text).expect("an offset draws a shadow");
+        assert!(approx_eq(shadow.color.r, 100.0 / 255.0));
+        assert!(approx_eq(shadow.color.g, 50.0 / 255.0));
+        assert!(approx_eq(shadow.color.b, 25.0 / 255.0));
+        assert!(approx_eq(shadow.color.a, 128.0 / 255.0));
+        assert_eq!(shadow.offset, Point { x: 0.02, y: 0.03 });
+    }
+    // Without an offset, and with distance field fonts, the color decides.
+    assert!(shadow_of(vector, r#"{"id":"label","font":1,"constantText":"T"}"#).is_none());
+    let distance_field = r#"{"id":1,"path":"font.fnt","type":1}"#;
+    let text = r#"{"id":"label","font":1,"constantText":"T","shadowOffsetX":2}"#;
+    assert!(shadow_of(distance_field, text).is_none());
+}
+
+#[test]
 fn decorated_text_defaults_and_transparent_decoration_colors() {
     let document: SkinDocument = serde_json::from_str(
         r#"{

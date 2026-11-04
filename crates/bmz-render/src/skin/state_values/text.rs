@@ -8,17 +8,21 @@ pub(super) fn skin_text_align(align: i32) -> TextAlign {
     }
 }
 
+fn skin_text_font<'a>(text: &SkinTextDef, fonts: &'a [SkinFontDef]) -> Option<&'a SkinFontDef> {
+    if text.font.is_empty() {
+        return None;
+    }
+    let font_id = text.font.rsplit_once(':').map_or(text.font.as_str(), |(_, id)| id);
+    fonts.iter().find(|font| font.id == text.font || font.id == font_id)
+}
+
 pub(super) fn skin_text_bitmap_size(
     text: &SkinTextDef,
     fonts: &[SkinFontDef],
     skin_height: u32,
     frame_h: i32,
 ) -> Option<f32> {
-    if text.font.is_empty() {
-        return None;
-    }
-    let font_id = text.font.rsplit_once(':').map_or(text.font.as_str(), |(_, id)| id);
-    let font = fonts.iter().find(|font| font.id == text.font || font.id == font_id)?;
+    let font = skin_text_font(text, fonts)?;
     let extension = Path::new(&font.path).extension()?.to_str()?;
     if !extension.eq_ignore_ascii_case("fnt") && !extension.eq_ignore_ascii_case("lr2font") {
         return None;
@@ -36,21 +40,28 @@ pub(super) fn skin_text_overflow(overflow: i32, shrink_mode: i32) -> TextOverflo
     }
 }
 
+/// beatoraja's `SkinTextFont` and standard `SkinTextBitmap` ignore `shadowColor`:
+/// any offset draws the text at half brightness, as ModernChic's Play info relies
+/// on. Only distance field fonts read the color. A visible color stays honored.
 pub(super) fn skin_text_shadow(
     text: &SkinTextDef,
+    fonts: &[SkinFontDef],
+    text_color: Color,
     skin_width: u32,
     skin_height: u32,
 ) -> Option<TextShadow> {
-    let color = skin_hex_color(&text.shadow_color)?;
-    if color.a <= 0.0 {
-        return None;
+    let offset = Point {
+        x: text.shadow_offset_x / skin_width.max(1) as f32,
+        y: text.shadow_offset_y / skin_height.max(1) as f32,
+    };
+    if let Some(color) = skin_hex_color(&text.shadow_color).filter(|color| color.a > 0.0) {
+        return Some(TextShadow { color, offset });
     }
-    Some(TextShadow {
-        color,
-        offset: Point {
-            x: text.shadow_offset_x / skin_width.max(1) as f32,
-            y: text.shadow_offset_y / skin_height.max(1) as f32,
-        },
+    let has_offset = text.shadow_offset_x != 0.0 || text.shadow_offset_y != 0.0;
+    let distance_field = skin_text_font(text, fonts).is_some_and(|font| font.font_type != 0);
+    (has_offset && !distance_field).then(|| TextShadow {
+        color: Color::rgb(text_color.r / 2.0, text_color.g / 2.0, text_color.b / 2.0),
+        offset,
     })
 }
 

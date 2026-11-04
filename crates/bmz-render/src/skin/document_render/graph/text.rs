@@ -104,10 +104,12 @@ macro_rules! skin_document_render_graph_text_methods {
                             outline.color.a *= alpha;
                             outline
                         }),
-                    shadow: skin_text_shadow(text, self.w, self.h).map(|mut shadow| {
-                        shadow.color.a *= alpha;
-                        shadow
-                    }),
+                    shadow: skin_text_shadow(text, &self.font, color, self.w, self.h).map(
+                        |mut shadow| {
+                            shadow.color.a *= alpha;
+                            shadow
+                        },
+                    ),
                 },
                 caret,
                 blend: frame.blend(BlendMode::Normal),
