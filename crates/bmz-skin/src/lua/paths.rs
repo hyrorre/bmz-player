@@ -196,12 +196,12 @@ pub(super) fn normalize_virtual_io_files(
     Ok(normalized)
 }
 
-pub(super) fn read_skin_io_source(path: &Path) -> Result<String> {
+pub(super) fn read_skin_io_source(path: &Path) -> Result<Vec<u8>> {
     let metadata = fs::metadata(path)?;
     if metadata.len() > LUA_IO_MAX_READ_BYTES as u64 {
         bail!("Lua IO file exceeds {} byte limit: {}", LUA_IO_MAX_READ_BYTES, path.display());
     }
-    let source = fs::read_to_string(path)?;
+    let source = fs::read(path)?;
     if source.len() > LUA_IO_MAX_READ_BYTES {
         bail!("Lua IO file exceeds {} byte limit: {}", LUA_IO_MAX_READ_BYTES, path.display());
     }

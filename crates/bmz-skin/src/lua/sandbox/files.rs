@@ -5,6 +5,9 @@
 //! inference in that VM, and the runtime VM's clean `main`. Only the document
 //! `main` and the runtime callbacks may change the session's files, so the
 //! other passes see their own writes but never keep them.
+//!
+//! Contents are bytes, as in LuaJ: a skin may write a string cut in the middle
+//! of a UTF-8 character and compare it with the same string after reading.
 
 use super::*;
 
@@ -14,17 +17,17 @@ const LUA_FILE_STORE_MAX_BYTES: usize = 32 * 1024 * 1024;
 #[derive(Debug, Default)]
 struct LuaFileLayer {
     /// `None` is a deletion, which also hides a file on disk.
-    files: BTreeMap<PathBuf, Option<String>>,
+    files: BTreeMap<PathBuf, Option<Vec<u8>>>,
     directories: BTreeSet<PathBuf>,
 }
 
 impl LuaFileLayer {
     fn bytes(&self) -> usize {
-        self.files.values().flatten().map(String::len).sum()
+        self.files.values().flatten().map(Vec::len).sum()
     }
 
     fn bytes_after_write(&self, key: &Path, len: usize) -> usize {
-        let previous = self.files.get(key).and_then(Option::as_ref).map_or(0, String::len);
+        let previous = self.files.get(key).and_then(Option::as_ref).map_or(0, Vec::len);
         self.bytes() - previous + len
     }
 
@@ -90,7 +93,7 @@ impl LuaFileOverlay {
     }
 
     /// `Some(None)` is a deleted file; `None` means the disk decides.
-    fn read(&self, key: &Path) -> Option<Option<String>> {
+    fn read(&self, key: &Path) -> Option<Option<Vec<u8>>> {
         if self.phase == LuaFilePhase::Inference
             && let Some(file) = self.scratch.files.get(key)
         {
@@ -119,8 +122,8 @@ impl LuaFileOverlay {
                 .is_some_and(|store| layer_has(&store))
     }
 
-    fn write(&mut self, key: PathBuf, file: Option<String>) -> Result<(), String> {
-        let len = file.as_ref().map_or(0, String::len);
+    fn write(&mut self, key: PathBuf, file: Option<Vec<u8>>) -> Result<(), String> {
+        let len = file.as_ref().map_or(0, Vec::len);
         if len > LUA_IO_MAX_READ_BYTES {
             return Err(format!("skin file exceeds {LUA_IO_MAX_READ_BYTES} bytes"));
         }
@@ -212,9 +215,9 @@ impl LuaFileOverlay {
         };
         let mut merged_bytes = store.bytes();
         for (key, file) in &self.staged.files {
-            merged_bytes = merged_bytes.saturating_sub(
-                store.files.get(key).and_then(Option::as_ref).map_or(0, String::len),
-            ) + file.as_ref().map_or(0, String::len);
+            merged_bytes = merged_bytes
+                .saturating_sub(store.files.get(key).and_then(Option::as_ref).map_or(0, Vec::len))
+                + file.as_ref().map_or(0, Vec::len);
         }
         if merged_bytes > LUA_FILE_STORE_MAX_BYTES {
             tracing::warn!(
@@ -277,13 +280,13 @@ pub(super) fn read_lua_skin_file(
     overlay: &SharedLuaFileOverlay,
     dependencies: Option<&Arc<Mutex<SkinLoadDependencies>>>,
     requested: &str,
-) -> mlua::Result<Option<String>> {
+) -> mlua::Result<Option<Vec<u8>>> {
     let relative = normalize_skin_io_relative_path(requested).ok();
     if let Some(relative) = &relative {
         let virtual_source = virtual_io_files.get(relative);
         record_virtual_io_dependency(relative, virtual_source.map(String::as_str), dependencies);
         if let Some(source) = virtual_source {
-            return Ok(Some(source.clone()));
+            return Ok(Some(source.clone().into_bytes()));
         }
     }
     if let Some(key) = lua_file_key(path_context, requested) {
@@ -312,12 +315,22 @@ pub(super) fn read_lua_skin_file(
 }
 
 /// The current content of a written or existing file; empty when missing.
-fn lua_skin_file_content(overlay: &LuaFileOverlay, key: &Path) -> String {
+fn lua_skin_file_content(overlay: &LuaFileOverlay, key: &Path) -> Vec<u8> {
     match overlay.read(key) {
         Some(file) => file.unwrap_or_default(),
         None if key.is_file() => read_skin_io_source(key).unwrap_or_default(),
-        None => String::new(),
+        None => Vec::new(),
     }
+}
+
+/// Lines without their `\n` or `\r\n`, and no empty line after the last `\n`.
+fn lua_skin_file_lines(content: &[u8]) -> impl Iterator<Item = &[u8]> {
+    content
+        .strip_suffix(b"\n")
+        .unwrap_or(content)
+        .split(|byte| *byte == b'\n')
+        .filter(move |_| !content.is_empty())
+        .map(|line| line.strip_suffix(b"\r").unwrap_or(line))
 }
 
 fn lua_skin_file_exists(overlay: &LuaFileOverlay, key: &Path) -> bool {
@@ -331,17 +344,17 @@ fn write_lua_skin_file(
     overlay: &SharedLuaFileOverlay,
     dependencies: Option<&Arc<Mutex<SkinLoadDependencies>>>,
     key: &Path,
-    text: &str,
+    text: &[u8],
     append: bool,
 ) -> mlua::Result<Result<(), String>> {
     let mut overlay = lock_overlay(overlay)?;
     note_kept_file_use(&overlay, dependencies);
     let content = if append {
         let mut content = lua_skin_file_content(&overlay, key);
-        content.push_str(text);
+        content.extend_from_slice(text);
         content
     } else {
-        text.to_string()
+        text.to_vec()
     };
     Ok(overlay.write(key.to_path_buf(), Some(content)))
 }
@@ -368,9 +381,9 @@ fn lua_skin_directory_entries(overlay: &LuaFileOverlay, directory: &Path) -> Opt
     Some(entries.into_iter().collect())
 }
 
-fn lua_text_argument(lua: &Lua, value: Value, function: &str) -> mlua::Result<String> {
+fn lua_text_argument(lua: &Lua, value: Value, function: &str) -> mlua::Result<Vec<u8>> {
     match lua.coerce_string(value)? {
-        Some(text) => Ok(text.to_string_lossy()),
+        Some(text) => Ok(text.as_bytes().to_vec()),
         None => {
             Err(mlua::Error::runtime(format!("bad argument to '{function}' (string expected)")))
         }
@@ -388,7 +401,7 @@ pub(super) fn create_lua_file_writer(
 ) -> mlua::Result<Value> {
     if truncate
         && let Some(key) = &key
-        && let Err(error) = write_lua_skin_file(&overlay, dependencies.as_ref(), key, "", false)?
+        && let Err(error) = write_lua_skin_file(&overlay, dependencies.as_ref(), key, b"", false)?
     {
         tracing::warn!(path = %key.display(), %error, "Lua skin file write rejected");
         return Ok(Value::Nil);
@@ -397,9 +410,9 @@ pub(super) fn create_lua_file_writer(
     file.set(
         "write",
         lua.create_function(move |lua, (file, args): (Table, Variadic<Value>)| {
-            let mut text = String::new();
+            let mut text = Vec::new();
             for value in args {
-                text.push_str(&lua_text_argument(lua, value, "write")?);
+                text.extend_from_slice(&lua_text_argument(lua, value, "write")?);
             }
             if let Some(key) = &key
                 && !text.is_empty()
@@ -513,8 +526,9 @@ pub(super) fn install_main_state_file_api(
             if overlay.read(&key).is_some() {
                 note_kept_file_use(&overlay, deps.as_ref());
             }
-            for (index, line) in lua_skin_file_content(&overlay, &key).lines().enumerate() {
-                lines.set(index + 1, line)?;
+            let content = lua_skin_file_content(&overlay, &key);
+            for (index, line) in lua_skin_file_lines(&content).enumerate() {
+                lines.set(index + 1, lua.create_string(line)?)?;
             }
             Ok(lines)
         })?,
@@ -529,7 +543,7 @@ pub(super) fn install_main_state_file_api(
             name,
             lua.create_function(move |lua, (path, text): (String, Value)| {
                 let Some(key) = lua_file_key(&context, &path) else { return Ok(false) };
-                let text = if clear { String::new() } else { lua_text_argument(lua, text, name)? };
+                let text = if clear { Vec::new() } else { lua_text_argument(lua, text, name)? };
                 Ok(write_lua_skin_file(&files, deps.as_ref(), &key, &text, append)?.is_ok())
             })?,
         )?;
@@ -545,7 +559,7 @@ pub(super) fn install_main_state_file_api(
             if overlay.read(&key).is_some() {
                 note_kept_file_use(&overlay, deps.as_ref());
             }
-            Ok(lua_skin_file_content(&overlay, &key).lines().count())
+            Ok(lua_skin_file_lines(&lua_skin_file_content(&overlay, &key)).count())
         })?,
     )?;
     let context = path_context.clone();

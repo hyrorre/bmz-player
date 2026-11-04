@@ -162,6 +162,45 @@ fn java_file_facade_lists_folders_for_skins_using_luajava() {
 }
 
 /// MILLIONDOLLAR reads its daily note count back with `file:read("*n")`.
+/// ModernChic keeps `string.sub(title, 1, 32)` as the key of its consecutive-play
+/// log. The cut can fall inside a UTF-8 character, and LuaJ keeps those bytes.
+#[test]
+fn skin_io_keeps_strings_cut_inside_a_utf8_character() {
+    let root = skin_dir();
+    let path = root.join("cut.luaskin");
+    fs::write(
+        &path,
+        r#"
+        if skin_config == nil then return {type = 5, name = "header"} end
+        local main_state = require("main_state")
+        local file = skin_config.get_path("io/cut.txt")
+        local cut = string.sub("日本語の曲名", 1, 4)
+        local out = io.open(file, "w")
+        out:write(cut, "\n", "second\r\n")
+        out:close()
+        local first
+        for line in io.open(file):lines() do first = first or line end
+        local read_all = io.open(file):read("*a")
+        local listed = main_state.file_read_lines(file)
+        return {
+            type = 5,
+            name = table.concat({
+                tostring(first == cut),
+                tostring(read_all == cut .. "\nsecond\r\n"),
+                tostring(listed[1] == cut),
+                listed[2],
+                tostring(#listed),
+                tostring(main_state.file_count_lines(file)),
+                tostring(string.len(io.open(file):read(2))),
+            }, "|"),
+        }
+        "#,
+    )
+    .unwrap();
+    let store = LuaSkinFileStore::default();
+    assert_eq!(load(&path, Some(&store)).unwrap().document.name, "true|true|true|second|2|2|2");
+}
+
 #[test]
 fn skin_io_reads_numbers_from_written_files() {
     let root = skin_dir();

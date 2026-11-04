@@ -171,18 +171,18 @@ pub(super) fn lua_os_clock_seconds() -> f64 {
 
 #[derive(Debug, Default)]
 pub(super) struct ReadFileState {
-    source: String,
+    source: Vec<u8>,
     cursor: usize,
     closed: bool,
 }
 
 impl ReadFileState {
-    pub(super) fn new(source: String) -> Self {
+    pub(super) fn new(source: Vec<u8>) -> Self {
         Self { source, cursor: 0, closed: false }
     }
 }
 
-pub(super) fn create_read_file_stub(lua: &Lua, source: String) -> mlua::Result<Value> {
+pub(super) fn create_read_file_stub(lua: &Lua, source: Vec<u8>) -> mlua::Result<Value> {
     let file = lua.create_table()?;
     let state = Arc::new(Mutex::new(ReadFileState::new(source)));
     let state_for_read = state.clone();
@@ -199,9 +199,9 @@ pub(super) fn create_read_file_stub(lua: &Lua, source: String) -> mlua::Result<V
             // LuaJ accepts the `*` prefix; Lua 5.3+ also accepts the bare letter.
             match format.strip_prefix('*').unwrap_or(format) {
                 "a" | "all" => {
-                    let rest = state.source[state.cursor..].to_string();
+                    let text = lua.create_string(&state.source[state.cursor..])?;
                     state.cursor = state.source.len();
-                    Ok(Value::String(lua.create_string(rest)?))
+                    Ok(Value::String(text))
                 }
                 "l" => match read_file_line(&mut state) {
                     Some(line) => Ok(Value::String(lua.create_string(line)?)),
@@ -210,13 +210,10 @@ pub(super) fn create_read_file_stub(lua: &Lua, source: String) -> mlua::Result<V
                 "n" => Ok(read_file_number(&mut state)),
                 count => match count.parse::<usize>() {
                     Ok(count) if state.cursor < state.source.len() || count == 0 => {
-                        let mut end = state.cursor.saturating_add(count).min(state.source.len());
-                        while !state.source.is_char_boundary(end) {
-                            end += 1;
-                        }
-                        let text = state.source[state.cursor..end].to_string();
+                        let end = state.cursor.saturating_add(count).min(state.source.len());
+                        let text = lua.create_string(&state.source[state.cursor..end])?;
                         state.cursor = end;
-                        Ok(Value::String(lua.create_string(text)?))
+                        Ok(Value::String(text))
                     }
                     Ok(_) => Ok(Value::Nil),
                     Err(_) => Err(mlua::Error::external(format!(
@@ -267,9 +264,8 @@ pub(super) fn create_lines_iterator(
 /// `file:read("*n")`: skips whitespace and reads a decimal number, or nil.
 fn read_file_number(state: &mut ReadFileState) -> Value {
     let rest = &state.source[state.cursor..];
-    let start = rest.len() - rest.trim_start().len();
-    let token = &rest[start..];
-    let bytes = token.as_bytes();
+    let start = rest.iter().take_while(|byte| byte.is_ascii_whitespace()).count();
+    let bytes = &rest[start..];
     let mut end = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
     let digits = |end: &mut usize| {
         let begin = *end;
@@ -295,8 +291,9 @@ fn read_file_number(state: &mut ReadFileState) -> Value {
             float = true;
         }
     }
+    // Only ASCII digits, signs and exponents were taken.
+    let text = std::str::from_utf8(&bytes[..end]).unwrap_or_default().to_owned();
     state.cursor += start + end;
-    let text = &token[..end];
     if !has_digits {
         return Value::Nil;
     }
@@ -307,15 +304,15 @@ fn read_file_number(state: &mut ReadFileState) -> Value {
     }
 }
 
-pub(super) fn read_file_line(state: &mut ReadFileState) -> Option<String> {
+pub(super) fn read_file_line(state: &mut ReadFileState) -> Option<Vec<u8>> {
     if state.cursor >= state.source.len() {
         return None;
     }
     let rest = &state.source[state.cursor..];
-    let end = rest.find('\n').unwrap_or(rest.len());
-    let line = rest[..end].strip_suffix('\r').unwrap_or(&rest[..end]).to_string();
+    let end = rest.iter().position(|byte| *byte == b'\n').unwrap_or(rest.len());
+    let line = rest[..end].strip_suffix(b"\r").unwrap_or(&rest[..end]).to_vec();
     state.cursor = state.cursor.saturating_add(end);
-    if state.cursor < state.source.len() && state.source.as_bytes()[state.cursor] == b'\n' {
+    if state.source.get(state.cursor) == Some(&b'\n') {
         state.cursor += 1;
     }
     Some(line)
