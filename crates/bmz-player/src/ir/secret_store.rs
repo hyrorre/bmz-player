@@ -14,9 +14,30 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 
 use crate::config::profile_config::IrCredentialStoreConfig;
+
+/// Server-supplied keys become filenames on every supported OS. Validate at
+/// the store boundary, including reads/deletes of keys from older profiles.
+fn validate_provider_key(provider: &str) -> Result<()> {
+    ensure!(
+        !provider.is_empty()
+            && provider.len() <= 64
+            && provider
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')),
+        "IR provider key must contain 1-64 ASCII letters, digits, hyphens or underscores"
+    );
+    let upper = provider.to_ascii_uppercase();
+    let reserved = matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || upper
+            .strip_prefix("COM")
+            .or_else(|| upper.strip_prefix("LPT"))
+            .is_some_and(|suffix| matches!(suffix.as_bytes(), [b'1'..=b'9']));
+    ensure!(!reserved, "IR provider key is a reserved Windows device name");
+    Ok(())
+}
 
 /// profile rootごとの保存先。切り替え前の通信も自身のrootに対応する方式を使う。
 /// 「現在のprofile」のグローバル値を参照すると、遅れて完了した通信が別profileの
@@ -86,6 +107,7 @@ impl<'a> SecretSlot<'a> {
 
     /// 保存済みの JSON 文字列を読む。`Os` 設定ならファイルからの移行も行う。
     pub fn load(&self) -> Result<Option<String>> {
+        validate_provider_key(self.provider)?;
         match self.store {
             IrCredentialStoreConfig::File => self.load_file(),
             IrCredentialStoreConfig::Os => {
@@ -125,6 +147,7 @@ impl<'a> SecretSlot<'a> {
     }
 
     pub fn save(&self, secret: &str) -> Result<()> {
+        validate_provider_key(self.provider)?;
         match self.store {
             IrCredentialStoreConfig::File => self.save_file(secret),
             IrCredentialStoreConfig::Os => self.save_os(secret).or_else(|error| {
@@ -138,6 +161,7 @@ impl<'a> SecretSlot<'a> {
     /// (設定切替後の取り残しを防ぐ)。`File` 設定時は OS ストアに触れない
     /// (不要な Keychain アクセスを避ける)。
     pub fn delete(&self) -> Result<bool> {
+        validate_provider_key(self.provider)?;
         let mut removed = false;
         if self.store == IrCredentialStoreConfig::Os
             && let Ok(entry) = keyring_entry(self.kind, self.provider, self.profile_root)
@@ -190,6 +214,41 @@ impl<'a> SecretSlot<'a> {
 #[cfg(test)]
 mod profile_tests {
     use super::*;
+
+    #[test]
+    fn provider_keys_are_portable_filename_components() {
+        for provider in ["bmz", "bmz-dev", "rian-ir", "bms-ir", "custom_123", "com10"] {
+            validate_provider_key(provider).unwrap();
+        }
+        validate_provider_key(&"a".repeat(64)).unwrap();
+        assert!(validate_provider_key(&"a".repeat(65)).is_err());
+        for provider in ["a.", " a", "a b", "cOn", "a/b", "a\\b", ".."] {
+            assert!(validate_provider_key(provider).is_err());
+        }
+    }
+
+    #[test]
+    fn invalid_keys_are_rejected_before_file_or_os_store_access_for_both_secret_kinds() {
+        let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+        std::fs::create_dir_all(&data.paths.profiles_dir).unwrap();
+        let victim = data.paths.profiles_dir.join("victim.json");
+        std::fs::write(&victim, "unchanged").unwrap();
+        for kind in ["ir", "ir-device-key"] {
+            for mode in [IrCredentialStoreConfig::File, IrCredentialStoreConfig::Os] {
+                let slot = SecretSlot::new(
+                    kind,
+                    "../../victim",
+                    &data.paths.profiles_dir,
+                    victim.clone(),
+                    mode,
+                );
+                assert!(slot.load().is_err());
+                assert!(slot.save("replaced").is_err());
+                assert!(slot.delete().is_err());
+                assert_eq!(std::fs::read_to_string(&victim).unwrap(), "unchanged");
+            }
+        }
+    }
 
     #[test]
     fn credential_storage_is_scoped_to_profile_even_after_switching() {

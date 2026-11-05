@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import { lt, sql } from 'drizzle-orm'
-import { createError, getRequestIP, setHeader, type H3Event } from 'h3'
+import { createError, setHeader, type H3Event } from 'h3'
 import { db, schema } from 'hub:db'
+import { rateLimitClientIp } from './client_ip'
 
 export type RateLimitAction =
   'login' | 'register' | 'score_submit' | 'score_cleanup' | 'refresh' | 'replay_upload'
@@ -25,7 +26,7 @@ export async function checkUserRateLimit(
   limits: { user: number; ip: number },
   now = Date.now(),
 ) {
-  const ip = getRequestIP(event, { xForwardedFor: true }) ?? 'unknown'
+  const ip = rateLimitClientIp(event)
   await Promise.all([
     incrementRateLimit(action, 'user', userId, limits.user, now, 'Too many requests', event),
     incrementRateLimit(action, 'ip', ip, limits.ip, now, 'Too many requests', event),
@@ -40,7 +41,7 @@ export async function checkIpRateLimit(
   limit: number,
   now = Date.now(),
 ) {
-  const ip = getRequestIP(event, { xForwardedFor: true }) ?? 'unknown'
+  const ip = rateLimitClientIp(event)
   await incrementRateLimit(action, 'ip', ip, limit, now, 'Too many requests', event)
   await pruneExpiredRateLimits(now)
 }

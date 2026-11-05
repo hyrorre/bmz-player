@@ -1,4 +1,6 @@
 // https://nuxt.com/docs/api/configuration/nuxt-config
+import { fileURLToPath } from 'node:url'
+
 export default defineNuxtConfig({
   compatibilityDate: '2025-07-15',
   devtools: { enabled: true },
@@ -46,6 +48,14 @@ export default defineNuxtConfig({
       name: 'bmz-session',
       password: process.env.NUXT_SESSION_PASSWORD || '',
       maxAge: 60 * 60 * 24 * 180, // 180 days
+    },
+  },
+  hooks: {
+    'nitro:config'(config) {
+      // Development uses Nitro's Node worker entry and the route's stream
+      // limiter. The Cloudflare entry must only replace production's adapter.
+      if (!config.dev)
+        config.entry = fileURLToPath(new URL('./bmz-ir-web/worker.ts', import.meta.url))
     },
   },
   nitro: {

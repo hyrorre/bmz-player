@@ -136,4 +136,45 @@ mod tests {
 
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn server_provider_keys_cannot_access_files_outside_the_ir_directory() {
+        let root = temp_root("untrusted-provider");
+        let profile = root.join("profile");
+        std::fs::create_dir_all(profile.join("ir")).unwrap();
+        let victim = root.join("victim.json");
+        std::fs::write(&victim, "dummy original file").unwrap();
+        let absolute = root.join("victim").to_string_lossy().into_owned();
+        for provider in [
+            "../../victim",
+            "..\\..\\victim",
+            absolute.as_str(),
+            "",
+            "a/b",
+            "a:b",
+            "CON",
+            "nul",
+            "COM1",
+            "LPT9",
+            ".",
+            "..",
+            "bad\0key",
+            "日本語",
+        ] {
+            let credentials = IrStoredCredentials {
+                provider: provider.to_string(),
+                account_id: "dummy".into(),
+                display_name: String::new(),
+                access_token: "dummy".into(),
+                refresh_token: "dummy".into(),
+                expires_at: None,
+            };
+            assert!(save_credentials(&profile, &credentials).is_err(), "{provider:?}");
+            assert!(load_credentials(&profile, provider).is_err(), "{provider:?}");
+            assert!(delete_credentials(&profile, provider).is_err(), "{provider:?}");
+            assert_eq!(std::fs::read_to_string(&victim).unwrap(), "dummy original file");
+        }
+        assert!(std::fs::read_dir(profile.join("ir")).unwrap().next().is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

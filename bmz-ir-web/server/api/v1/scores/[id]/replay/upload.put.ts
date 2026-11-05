@@ -1,10 +1,11 @@
 import { and, eq } from 'drizzle-orm'
+import { randomUUID } from 'node:crypto'
 import { blob } from 'hub:blob'
 import { db, schema } from 'hub:db'
 import { requireScoreWriteAllowed } from '../../../../../services/moderation/enforcement'
 import { requireIrUser } from '../../../../../utils/auth'
 import { REPLAY_UPLOAD_RATE_LIMIT, checkUserRateLimit } from '../../../../../utils/rate_limit'
-import { MAX_REPLAY_BYTES } from '../../../../../../shared/constants/ir'
+import { readReplayBody } from '../../../../../utils/replay_body'
 
 /**
  * リプレイ本体のアップロード。
@@ -24,12 +25,6 @@ export default defineEventHandler(async (event) => {
   // 送信停止・BAN・非公開譜面のスコアにはリプレイを追加しない。
   await requireScoreWriteAllowed(user.id, scoreId)
 
-  // body をメモリへ読む前に Content-Length で先に拒否する。
-  const declaredLength = Number(getHeader(event, 'content-length') ?? 0)
-  if (declaredLength > MAX_REPLAY_BYTES) {
-    throw createError({ statusCode: 413, statusMessage: 'Replay body is too large' })
-  }
-
   const replay = await db.query.replayObjects.findFirst({
     columns: { id: true, objectPath: true },
     where: and(
@@ -42,21 +37,33 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, statusMessage: 'Replay upload intent not found' })
   }
 
-  const body = await readRawBody(event, false)
-  if (!body || body.length === 0) {
+  if (getQuery(event).upload_id !== replay.objectPath.split('/').at(-1)) {
+    throw createError({ statusCode: 409, statusMessage: 'Replay upload intent changed' })
+  }
+  const body = await readReplayBody(event)
+  if (body.length === 0) {
     throw createError({ statusCode: 400, statusMessage: 'Replay body is required' })
   }
-  if (body.length > MAX_REPLAY_BYTES) {
-    throw createError({ statusCode: 413, statusMessage: 'Replay body is too large' })
-  }
-
-  await blob.put(replay.objectPath, body, {
+  // Concurrent PUTs must never overwrite bytes that verification has already read.
+  const objectPath = `${replay.objectPath}/${randomUUID()}`
+  await blob.put(objectPath, body, {
     contentType: 'application/octet-stream',
   })
-  await db
+  const changed = await db
     .update(schema.replayObjects)
-    .set({ status: 'uploaded', sizeBytes: body.length, updatedAt: new Date() })
-    .where(eq(schema.replayObjects.id, replay.id))
+    .set({ objectPath, status: 'uploaded', sizeBytes: body.length, updatedAt: new Date() })
+    .where(
+      and(
+        eq(schema.replayObjects.id, replay.id),
+        eq(schema.replayObjects.objectPath, replay.objectPath),
+        eq(schema.replayObjects.status, 'pending_upload'),
+      ),
+    )
+    .returning({ id: schema.replayObjects.id })
+  if (changed.length === 0) {
+    await blob.del(objectPath).catch(() => {})
+    throw createError({ statusCode: 409, statusMessage: 'Replay upload intent changed' })
+  }
 
   return { uploaded: true, size_bytes: body.length }
 })

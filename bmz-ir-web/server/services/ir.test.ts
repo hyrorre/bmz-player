@@ -290,6 +290,17 @@ describe('score submission metadata', () => {
   })
 })
 
+describe('course score bounds', () => {
+  test('rejects scores and combos above the course maximum', () => {
+    const payload = baseCourseSubmission()
+    payload.result.ex_score = payload.result.max_ex_score + 1
+    expect(() => validateCourseScoreSubmission(payload)).toThrow('exceeds')
+    payload.result.ex_score = 320
+    payload.result.max_combo = payload.result.max_ex_score / 2 + 1
+    expect(() => validateCourseScoreSubmission(payload)).toThrow('exceeds')
+  })
+})
+
 describe('score seed validation', () => {
   test('accepts signed 64-bit decimal strings and legacy safe integers', () => {
     expect(() =>
