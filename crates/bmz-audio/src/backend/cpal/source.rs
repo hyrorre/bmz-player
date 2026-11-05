@@ -17,6 +17,19 @@ impl CpalOutput {
 }
 
 impl CpalSharedOutput {
+    /// Wait on the control thread, never on an audio callback. Native WASAPI's
+    /// prefill is not evidence that the device has started consuming buffers.
+    pub fn wait_until_ready(&self, timeout: std::time::Duration) -> Result<(), &'static str> {
+        let required = if self.exclusive_buffer_frames().is_some() { 2 } else { 1 };
+        let deadline = Instant::now() + timeout;
+        while self.inner.diagnostics.callback_count.load(Ordering::Acquire) < required {
+            if Instant::now() >= deadline {
+                return Err("audio callback startup timed out");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        Ok(())
+    }
     pub fn stream_info(&self) -> &CpalStreamInfo {
         &self.inner.info
     }
@@ -240,6 +253,10 @@ impl CpalCommandedOutputSource {
         rate: u16,
     ) -> Option<crate::clock::PlaybackRateChange> {
         self.clock.set_playback_rate_percent(rate)
+    }
+
+    pub fn play_at(&mut self, chart_zero_time: TimeUs, at: Instant) {
+        self.clock.start_at(chart_zero_time, at);
     }
 
     pub fn pause(&mut self) {

@@ -41,7 +41,10 @@ pub fn schedule_keysounds(session: &mut GameSession, audio: &mut dyn AudioSchedu
         // and keeps key-press latency low (no extra buffering).
         for sound_id in note.sounds() {
             audio.schedule(ScheduledSound {
-                start_frame: session.audio_clock.time_to_output_frame(event.time),
+                start_time: None,
+                // Input offsets belong to scoring, not to output latency.
+                // Never wait for a frame derived from the old song/device anchor.
+                start_frame: 0,
                 sample_offset_frames: 0,
                 sound_id,
                 volume,

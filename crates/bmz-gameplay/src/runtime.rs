@@ -50,7 +50,12 @@ impl GameplayRuntime {
             consider(event.time.0);
         }
         if let Some(bgm) = session.chart.bgm_events.get(session.bgm_scheduler.next_index) {
-            consider(bgm.time.0.saturating_sub(crate::session::AUDIO_SCHEDULE_AHEAD_US));
+            let ahead = if session.audio_clock.schedule_ahead {
+                crate::session::AUDIO_SCHEDULE_AHEAD_US.saturating_mul(rate) / 100
+            } else {
+                0
+            };
+            consider(bgm.time.0.saturating_sub(ahead));
         }
         std::time::Duration::from_micros(next_us.max(100) as u64).min(safety)
     }

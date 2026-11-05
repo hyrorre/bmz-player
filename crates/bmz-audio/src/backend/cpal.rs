@@ -312,7 +312,7 @@ mod tests {
 
         render_output(
             &mut output,
-            OutputRenderLayout { channels: 2, channel_offset: 0, start_frame: 0 },
+            OutputRenderLayout { channels: 2, channel_offset: 0, start_frame: 0, playback: None },
             OutputRenderSources {
                 output_commands: &output_commands,
                 retired_sources: &retired_sources,
@@ -376,7 +376,7 @@ mod tests {
         let diagnostics = CpalOutputDiagnosticsCounters::default();
 
         mix_sources_stereo(
-            0,
+            (0, None),
             1,
             &output_commands,
             &retired_sources,
@@ -407,7 +407,7 @@ mod tests {
         let diagnostics = CpalOutputDiagnosticsCounters::default();
 
         mix_sources_stereo(
-            0,
+            (0, None),
             1,
             &output_commands,
             &retired_sources,

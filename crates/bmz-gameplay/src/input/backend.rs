@@ -45,7 +45,16 @@ pub struct DeviceInputEvent {
 /// function; it deliberately avoids wall-clock time so input timing is not
 /// affected by system clock changes.
 pub fn monotonic_timestamp_ns() -> u128 {
-    MONOTONIC_START.get_or_init(Instant::now).elapsed().as_nanos()
+    let start = *MONOTONIC_START.get_or_init(Instant::now);
+    Instant::now().saturating_duration_since(start).as_nanos()
+}
+
+/// The Instant and input timestamp describe the very same observation, even
+/// when the thread is preempted while the caller converts it to chart time.
+pub fn monotonic_observation() -> (Instant, u128) {
+    let start = *MONOTONIC_START.get_or_init(Instant::now);
+    let now = Instant::now();
+    (now, now.saturating_duration_since(start).as_nanos())
 }
 
 pub trait InputBackend: Send {

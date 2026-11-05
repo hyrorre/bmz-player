@@ -26,9 +26,10 @@ use super::judgement::{
     update_gauge_max_timer_state,
 };
 
-pub(super) fn sync_input_timestamp_anchor(session: &mut GameSession, audio_now: TimeUs) {
+pub(super) fn sync_input_timestamp_anchor(session: &mut GameSession, _audio_now: TimeUs) {
     session.input_timestamp_anchor = if session.audio_clock.running {
-        Some(InputTimestampAnchor { monotonic_ns: monotonic_timestamp_ns(), audio_time: audio_now })
+        let (at, monotonic_ns) = crate::input::backend::monotonic_observation();
+        Some(InputTimestampAnchor { monotonic_ns, audio_time: session.audio_clock.now_at(at) })
     } else {
         None
     };

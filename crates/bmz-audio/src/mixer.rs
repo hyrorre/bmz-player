@@ -311,6 +311,7 @@ mod tests {
         );
         let mut mixer = MixerState::default();
         mixer.push_scheduled([ScheduledSound {
+            start_time: None,
             start_frame: 10,
             sample_offset_frames: 0,
             sound_id: SoundId(1),
@@ -338,6 +339,7 @@ mod tests {
         );
         let mut mixer = MixerState { master_gain: 0.25, ..MixerState::default() };
         mixer.push_scheduled([ScheduledSound {
+            start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
             sound_id: SoundId(1),
@@ -365,6 +367,7 @@ mod tests {
         );
         let mut mixer = MixerState::default();
         mixer.push_scheduled([ScheduledSound {
+            start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
             sound_id: SoundId(1),
@@ -394,6 +397,7 @@ mod tests {
         );
         let mut mixer = MixerState::default();
         mixer.push_scheduled([ScheduledSound {
+            start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
             sound_id: SoundId(1),
@@ -420,6 +424,7 @@ mod tests {
         );
         let mut mixer = MixerState::default();
         mixer.push_scheduled([ScheduledSound {
+            start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
             sound_id: SoundId(1),
@@ -450,6 +455,7 @@ mod tests {
         );
         let mut mixer = MixerState::new(48_000);
         mixer.push_scheduled([ScheduledSound {
+            start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
             sound_id: SoundId(1),
@@ -477,6 +483,7 @@ mod tests {
         );
         let mut mixer = MixerState::default();
         mixer.push_scheduled([ScheduledSound {
+            start_time: None,
             start_frame: 10,
             sample_offset_frames: 0,
             sound_id: SoundId(1),
@@ -508,6 +515,7 @@ mod tests {
         );
         let mut mixer = MixerState::default();
         mixer.push_scheduled([ScheduledSound {
+            start_time: None,
             start_frame: 10,
             sample_offset_frames: 2,
             sound_id: SoundId(1),
@@ -535,6 +543,7 @@ mod tests {
         );
         let mut mixer = MixerState::default();
         mixer.push_scheduled([ScheduledSound {
+            start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
             sound_id: SoundId(1),
@@ -566,6 +575,7 @@ mod tests {
         );
         let mut mixer = MixerState::default();
         mixer.push_scheduled([ScheduledSound {
+            start_time: None,
             start_frame: 100,
             sample_offset_frames: 0,
             sound_id: SoundId(1),
@@ -678,6 +688,7 @@ mod tests {
         restart_policy: RestartPolicy,
     ) -> ScheduledSound {
         ScheduledSound {
+            start_time: None,
             start_frame,
             sample_offset_frames: 0,
             sound_id: SoundId(sound_id),

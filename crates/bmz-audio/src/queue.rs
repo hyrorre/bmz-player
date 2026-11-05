@@ -1,4 +1,5 @@
 use bmz_core::ids::SoundId;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RestartPolicy {
@@ -9,6 +10,9 @@ pub enum RestartPolicy {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ScheduledSound {
+    /// Live playback deadline in the system monotonic clock. Resolved only when
+    /// its output buffer is rendered; `None` retains offline frame scheduling.
+    pub start_time: Option<Instant>,
     pub start_frame: u64,
     /// Sample frame to begin reading from when this voice starts.
     ///
@@ -36,6 +40,7 @@ impl ScheduledSound {
     /// 既存呼び出し互換用: ループしない通常のスケジュール音。
     pub fn one_shot(start_frame: u64, sound_id: SoundId, volume: f32, pan: f32) -> Self {
         Self {
+            start_time: None,
             start_frame,
             sample_offset_frames: 0,
             sound_id,
@@ -55,7 +60,8 @@ pub trait AudioScheduler {
 
 #[derive(Debug, Default, Clone)]
 pub struct ScheduledSoundQueue {
-    sounds: Vec<ScheduledSound>,
+    // The second field preserves tie order without an allocating stable sort.
+    sounds: Vec<(ScheduledSound, usize)>,
 }
 
 impl ScheduledSoundQueue {
@@ -68,20 +74,24 @@ impl ScheduledSoundQueue {
     }
 
     pub fn drain_until_frame(&mut self, frame: u64) -> Vec<ScheduledSound> {
-        let split = self.sounds.partition_point(|sound| sound.start_frame <= frame);
-        self.sounds.drain(..split).collect()
+        let split = self
+            .sounds
+            .partition_point(|(sound, _)| sound.start_time.is_none() && sound.start_frame <= frame);
+        self.sounds.drain(..split).map(|(sound, _)| sound).collect()
     }
 
-    /// `drain_until_frame` のアロケーションなし版。期日到来分を `Drain` として返し、
+    /// `drain_until_frame` のアロケーションなし版。期日到来分をiteratorとして返し、
     /// 呼び出し側で直接消費する。オーディオコールバック(`render_stereo`)から
     /// 毎回呼ばれるため、中間 `Vec` を確保しない。
-    pub fn drain_due(&mut self, frame: u64) -> std::vec::Drain<'_, ScheduledSound> {
-        let split = self.sounds.partition_point(|sound| sound.start_frame <= frame);
-        self.sounds.drain(..split)
+    pub fn drain_due(&mut self, frame: u64) -> impl ExactSizeIterator<Item = ScheduledSound> + '_ {
+        let split = self
+            .sounds
+            .partition_point(|(sound, _)| sound.start_time.is_none() && sound.start_frame <= frame);
+        self.sounds.drain(..split).map(|(sound, _)| sound)
     }
 
-    pub fn drain_all(&mut self) -> std::vec::Drain<'_, ScheduledSound> {
-        self.sounds.drain(..)
+    pub fn drain_all(&mut self) -> impl ExactSizeIterator<Item = ScheduledSound> + '_ {
+        self.sounds.drain(..).map(|(sound, _)| sound)
     }
 
     pub fn len(&self) -> usize {
@@ -96,24 +106,77 @@ impl ScheduledSoundQueue {
         self.sounds.clear();
     }
 
+    /// Keep future deadlines in system time. Only this buffer's events become
+    /// device frames, so a clock-rate error cannot accumulate over the song.
+    pub fn resolve_times(&mut self, frame: u64, time: Instant, frames: usize, rate: u32) {
+        if frames == 0 || rate == 0 {
+            return;
+        }
+        let span = Duration::from_secs_f64(frames as f64 / f64::from(rate));
+        let Some(end) = time.checked_add(span) else {
+            return;
+        };
+        let mut changed = false;
+        for (sound, _) in &mut self.sounds {
+            let Some(deadline) = sound.start_time else {
+                continue;
+            };
+            // Timed entries are sorted. Do not scan the rest of the lookahead
+            // window on every small device buffer.
+            if deadline >= end {
+                break;
+            }
+            let distance = |duration: Duration| -> u64 {
+                (duration.as_nanos().saturating_mul(u128::from(rate)) / 1_000_000_000)
+                    .min(u128::from(u64::MAX)) as u64
+            };
+            sound.start_frame = if deadline >= time {
+                frame.saturating_add(distance(deadline.duration_since(time)))
+            } else {
+                frame.saturating_sub(distance(time.duration_since(deadline)))
+            };
+            sound.start_time = None;
+            changed = true;
+        }
+        if changed {
+            self.sort();
+        }
+    }
+
+    pub fn shift_times(&mut self, duration: Duration) {
+        for (sound, _) in &mut self.sounds {
+            sound.start_time =
+                sound.start_time.map(|time| time.checked_add(duration).unwrap_or(time));
+        }
+    }
+
+    fn sort(&mut self) {
+        for (index, (_, order)) in self.sounds.iter_mut().enumerate() {
+            *order = index;
+        }
+        self.sounds.sort_unstable_by_key(|(sound, order)| {
+            (sound.start_time, sound.start_frame, sound.sound_id.0, *order)
+        });
+    }
+
     pub fn shift_output_frames(&mut self, frames: u64) {
         if frames == 0 {
             return;
         }
-        for sound in &mut self.sounds {
+        for (sound, _) in &mut self.sounds {
             sound.start_frame = sound.start_frame.saturating_add(frames);
         }
     }
 
     /// 述語が `true` を返すスケジュール音だけを保持する。`stop_sound` 等で使う。
     pub fn retain(&mut self, mut keep: impl FnMut(&ScheduledSound) -> bool) {
-        self.sounds.retain(|sound| keep(sound));
+        self.sounds.retain(|(sound, _)| keep(sound));
     }
 
     /// 指定 sound_id の再生待ち音量を更新する。ループ BGM や preview の
     /// 設定変更を、次に mixer へ渡る前の queue に反映するために使う。
     pub fn set_volume_for_sound(&mut self, id: SoundId, volume: f32) {
-        for sound in &mut self.sounds {
+        for (sound, _) in &mut self.sounds {
             if sound.sound_id == id {
                 sound.volume = volume;
             }
@@ -121,10 +184,19 @@ impl ScheduledSoundQueue {
     }
 
     pub fn apply_playback_rate_change(&mut self, change: crate::clock::PlaybackRateChange) {
-        for sound in &mut self.sounds {
+        for (sound, _) in &mut self.sounds {
             sound.start_frame = retime_output_frame(sound.start_frame, change);
+            if let (Some(deadline), Some(anchor)) = (sound.start_time, change.changed_at)
+                && deadline > anchor
+            {
+                let nanos = deadline.duration_since(anchor).as_nanos()
+                    * u128::from(change.old_rate_percent)
+                    / u128::from(change.new_rate_percent);
+                sound.start_time = anchor
+                    .checked_add(Duration::from_nanos(nanos.min(u128::from(u64::MAX)) as u64));
+            }
         }
-        self.sounds.sort_by_key(|sound| (sound.start_frame, sound.sound_id.0));
+        self.sort();
     }
 }
 
@@ -140,10 +212,11 @@ pub(crate) fn retime_output_frame(frame: u64, change: crate::clock::PlaybackRate
 
 impl AudioScheduler for ScheduledSoundQueue {
     fn schedule(&mut self, sound: ScheduledSound) {
-        let index = self.sounds.partition_point(|queued| {
-            (queued.start_frame, queued.sound_id.0) <= (sound.start_frame, sound.sound_id.0)
+        let index = self.sounds.partition_point(|(queued, _)| {
+            (queued.start_time, queued.start_frame, queued.sound_id.0)
+                <= (sound.start_time, sound.start_frame, sound.sound_id.0)
         });
-        self.sounds.insert(index, sound);
+        self.sounds.insert(index, (sound, 0));
     }
 }
 
@@ -173,6 +246,7 @@ mod tests {
         queue.schedule(sound(400, 2));
 
         queue.apply_playback_rate_change(crate::clock::PlaybackRateChange {
+            changed_at: None,
             anchor_output_frame: 100,
             old_rate_percent: 100,
             new_rate_percent: 300,
@@ -188,6 +262,7 @@ mod tests {
             retime_output_frame(
                 200,
                 crate::clock::PlaybackRateChange {
+                    changed_at: None,
                     anchor_output_frame: 100,
                     old_rate_percent: 100,
                     new_rate_percent: 25,
@@ -199,6 +274,7 @@ mod tests {
 
     fn sound(start_frame: u64, sound_id: u32) -> ScheduledSound {
         ScheduledSound {
+            start_time: None,
             start_frame,
             sample_offset_frames: 0,
             sound_id: SoundId(sound_id),
@@ -208,6 +284,73 @@ mod tests {
             fade_in_frames: 0,
             catch_up: true,
             restart_policy: RestartPolicy::Overlap,
+        }
+    }
+
+    #[test]
+    fn live_deadlines_wait_for_current_buffer_and_survive_pause_and_rate_changes() {
+        let base = Instant::now();
+        let mut queue = ScheduledSoundQueue::new();
+        let mut event = sound(0, 1);
+        event.start_time = Some(base + Duration::from_millis(100));
+        queue.schedule(event);
+        queue.resolve_times(99_000, base, 480, 48_000);
+        assert!(queue.drain_until_frame(u64::MAX).is_empty());
+        queue.apply_playback_rate_change(crate::clock::PlaybackRateChange {
+            changed_at: Some(base),
+            anchor_output_frame: 99_000,
+            old_rate_percent: 100,
+            new_rate_percent: 200,
+        });
+        queue.shift_times(Duration::from_secs(10));
+        queue.resolve_times(7_000, base + Duration::from_millis(10_045), 480, 48_000);
+        let event = queue.drain_until_frame(7_479).pop().unwrap();
+        assert_eq!(event.start_frame, 7_240);
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn late_live_events_preserve_the_catch_up_policy_and_boundary_is_exclusive() {
+        let base = Instant::now();
+        let mut queue = ScheduledSoundQueue::new();
+        for (id, offset, catch_up) in [(1, 0, true), (2, 0, false), (3, 20, false)] {
+            let mut event = sound(0, id);
+            event.start_time = Some(base + Duration::from_millis(offset));
+            event.catch_up = catch_up;
+            queue.schedule(event);
+        }
+        queue.resolve_times(1000, base + Duration::from_millis(10), 480, 48_000);
+        let due = queue.drain_until_frame(u64::MAX);
+        assert_eq!(due.len(), 2);
+        assert_eq!(due[0].start_frame, 520);
+        assert!(due[0].catch_up);
+        assert!(!due[1].catch_up);
+        assert_eq!(queue.len(), 1);
+        queue.resolve_times(1480, base + Duration::from_millis(20), 480, 48_000);
+        assert_eq!(queue.drain_until_frame(1480)[0].sound_id, SoundId(3));
+    }
+
+    #[test]
+    fn resolving_tied_events_keeps_last_request_wins_order_without_stable_sort_allocation() {
+        let base = Instant::now();
+        let mut queue = ScheduledSoundQueue::new();
+        // Mixed IDs force a reorder when timed events become frame events.
+        // Same-time requests for the same WAV must retain their gain/policy order.
+        for index in 0..200 {
+            let mut event = sound(0, index % 3);
+            event.start_time = Some(base);
+            event.volume = index as f32;
+            queue.schedule(event);
+        }
+        queue.resolve_times(1000, base, 480, 48_000);
+        let events = queue.drain_until_frame(1479);
+        for id in 0..3 {
+            let volumes: Vec<_> = events
+                .iter()
+                .filter(|e| e.sound_id == SoundId(id))
+                .map(|e| e.volume as u32)
+                .collect();
+            assert_eq!(volumes, (0..200).filter(|index| index % 3 == id).collect::<Vec<_>>());
         }
     }
 }

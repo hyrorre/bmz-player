@@ -1014,3 +1014,6 @@ settings-obs-command-incomplete = シーン名と、必要な場合はソース�
 settings-downloads-keep-archive = HTTPで取得した書庫を展開せず登録する
 settings-downloads-keep-archive-help = ZIP / RAR / 7z / tar.gz / LZHをそのまま保存して再生します。次にキューへ追加する取得から反映します。IPFSは展開します。
 downloads-state-validating = 書庫を確認中
+
+settings-audio-schedule-ahead = 音声の先読み予約
+settings-audio-schedule-ahead-help = ON: BGM・自動キー音をシステム時計に合わせて先読み予約します。OFF: 発声時刻に達してから再生を要求します。押鍵に応じたキー音は常に即時に要求します。全プロファイル共通。音声設定の適用後に有効になります。

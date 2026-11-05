@@ -186,7 +186,9 @@ impl AppAudioOutput {
     }
 
     pub fn clock(&self) -> AudioClock {
-        self.source.clock()
+        let mut clock = self.source.clock();
+        clock.schedule_ahead = self.runtime.config.schedule_ahead;
+        clock
     }
 
     pub fn set_playback_rate_percent(&mut self, rate: u16) {
@@ -207,7 +209,9 @@ impl AppAudioOutput {
     }
 
     pub fn pause_playback_at(&mut self, chart_time: TimeUs) -> Result<()> {
-        if !self.engine.set_playback_paused(true) {
+        let at =
+            self.source.clock().time_to_instant(chart_time).unwrap_or_else(std::time::Instant::now);
+        if !self.engine.set_playback_paused_at(true, at) {
             bail!("playback pause was dropped by the audio command queue");
         }
         self.source.pause_at(chart_time);
@@ -215,16 +219,21 @@ impl AppAudioOutput {
     }
 
     pub fn resume_playback(&mut self, chart_time: TimeUs) -> Result<()> {
-        if !self.engine.set_playback_paused(false) {
+        let at = std::time::Instant::now();
+        if !self.engine.set_playback_paused_at(false, at) {
             bail!("playback resume was dropped by the audio command queue");
         }
-        self.source.play(chart_time);
+        self.source.play_at(chart_time, at);
         Ok(())
     }
 
     pub fn play(&mut self, chart_zero_time: TimeUs) -> Result<()> {
-        self.source.play(chart_zero_time);
         self.runtime.play().context("failed to start audio output stream")?;
+        self.runtime
+            .output
+            .wait_until_ready(std::time::Duration::from_secs(2))
+            .map_err(|message| anyhow::anyhow!(message))?;
+        self.source.play(chart_zero_time);
         Ok(())
     }
 

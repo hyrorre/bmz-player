@@ -3,21 +3,22 @@
 //! Shared low-latency mode keeps a silent period-control stream beside CPAL. Exclusive mode owns
 //! the endpoint stream and feeds the existing mixer from a dedicated event-driven worker.
 
+use std::cell::Cell;
 use std::ffi::c_void;
 use std::io;
 use std::mem::size_of;
 use std::slice;
 use std::sync::{Mutex, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use thiserror::Error;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED, AUDCLNT_SHAREMODE_EXCLUSIVE,
     AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_NOPERSIST, IAudioClient, IAudioClient3,
-    IAudioRenderClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, WAVE_FORMAT_PCM,
-    WAVEFORMATEX, WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0,
+    IAudioClock, IAudioRenderClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
+    WAVE_FORMAT_PCM, WAVEFORMATEX, WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0,
 };
 use windows::Win32::Media::KernelStreaming::{
     KSAUDIO_SPEAKER_DIRECTOUT, KSDATAFORMAT_SUBTYPE_PCM, SPEAKER_FRONT_CENTER, SPEAKER_FRONT_LEFT,
@@ -28,6 +29,7 @@ use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
     CoUninitialize,
 };
+use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::Threading::{
     AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsW, CreateEventW, INFINITE,
     SetEvent, WaitForMultipleObjects,
@@ -657,6 +659,10 @@ struct ExclusiveFormatCandidate {
 struct ExclusiveWorkerStream {
     client: IAudioClient,
     render_client: IAudioRenderClient,
+    clock: Option<(IAudioClock, u64)>,
+    qpc_frequency: u64,
+    sample_rate: u32,
+    written_frames: Cell<u64>,
     audio_event: OwnedEvent,
     buffer_frames: u32,
     channels: usize,
@@ -737,10 +743,22 @@ impl ExclusiveWorkerStream {
             minimum_period_100ns,
             period_100ns,
         };
+        // Position uses the device's clock frequency; QPC is returned in 100 ns
+        // units. Neither value has Instant's epoch.
+        let clock = unsafe { client.GetService::<IAudioClock>() }.ok().and_then(|clock| {
+            let frequency = unsafe { clock.GetFrequency() }.ok()?;
+            (frequency != 0).then_some((clock, frequency))
+        });
+        let mut qpc_frequency = 0;
+        let _ = unsafe { QueryPerformanceFrequency(&mut qpc_frequency) };
         Ok((
             Self {
                 client,
                 render_client,
+                clock,
+                qpc_frequency: qpc_frequency.max(0) as u64,
+                sample_rate,
+                written_frames: Cell::new(0),
                 audio_event,
                 buffer_frames,
                 channels: channels as usize,
@@ -808,6 +826,44 @@ impl ExclusiveWorkerStream {
         }
     }
 
+    fn next_playback_time(&self) -> Instant {
+        let before = Instant::now();
+        let Some((clock, frequency)) = &self.clock else {
+            return before;
+        };
+        if !self.started || self.qpc_frequency == 0 {
+            return before;
+        }
+        let mut counter = 0;
+        if unsafe { QueryPerformanceCounter(&mut counter) }.is_err() {
+            return before;
+        }
+        let after = Instant::now();
+        let paired = before + after.duration_since(before) / 2;
+        let mut position = 0;
+        let mut qpc_100ns = 0;
+        if unsafe { clock.GetPosition(&mut position, Some(&mut qpc_100ns)) }.is_err() {
+            return after;
+        }
+        let counter_ns = i128::from(counter) * 1_000_000_000 / i128::from(self.qpc_frequency);
+        let position_ns = i128::from(position) * 1_000_000_000 / i128::from(*frequency);
+        // An underrun can consume silence beyond the last submitted PCM. Do not
+        // retain that lost interval as a permanent scheduling offset.
+        let consumed = (u128::from(position) * u128::from(self.sample_rate)
+            / u128::from(*frequency))
+        .min(u128::from(u64::MAX)) as u64;
+        self.written_frames.set(self.written_frames.get().max(consumed));
+        let queued_ns =
+            i128::from(self.written_frames.get()) * 1_000_000_000 / i128::from(self.sample_rate);
+        let delta_ns = i128::from(qpc_100ns) * 100 - counter_ns + queued_ns - position_ns;
+        if !(-100_000_000..1_000_000_000).contains(&delta_ns) {
+            return after;
+        }
+        let distance = Duration::from_nanos(delta_ns.unsigned_abs() as u64);
+        if delta_ns < 0 { paired.checked_sub(distance) } else { paired.checked_add(distance) }
+            .unwrap_or(after)
+    }
+
     fn fill_next_buffer(&self, renderer: &mut NativeOutputRenderer) -> Result<(), String> {
         let data = unsafe {
             self.render_client
@@ -815,33 +871,41 @@ impl ExclusiveWorkerStream {
                 .map_err(|error| format!("IAudioRenderClient::GetBuffer: {error}"))?
         };
         let sample_count = self.buffer_frames as usize * self.channels;
+        let playback = self.next_playback_time();
         unsafe {
             match self.sample_format {
-                ExclusiveSampleFormat::F32 => renderer.render(
+                ExclusiveSampleFormat::F32 => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<f32>(), sample_count),
                     self.channels,
+                    playback,
                 ),
-                ExclusiveSampleFormat::I32 => renderer.render(
+                ExclusiveSampleFormat::I32 => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<i32>(), sample_count),
                     self.channels,
+                    playback,
                 ),
-                ExclusiveSampleFormat::I24In32 => renderer.render(
+                ExclusiveSampleFormat::I24In32 => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<PcmI24In32>(), sample_count),
                     self.channels,
+                    playback,
                 ),
-                ExclusiveSampleFormat::I24Packed => renderer.render(
+                ExclusiveSampleFormat::I24Packed => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<PackedI24>(), sample_count),
                     self.channels,
+                    playback,
                 ),
-                ExclusiveSampleFormat::I16 => renderer.render(
+                ExclusiveSampleFormat::I16 => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<i16>(), sample_count),
                     self.channels,
+                    playback,
                 ),
             }
             self.render_client
                 .ReleaseBuffer(self.buffer_frames, 0)
                 .map_err(|error| format!("IAudioRenderClient::ReleaseBuffer: {error}"))?;
         }
+        self.written_frames
+            .set(self.written_frames.get().saturating_add(u64::from(self.buffer_frames)));
         Ok(())
     }
 }

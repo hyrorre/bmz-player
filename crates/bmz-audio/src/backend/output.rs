@@ -159,7 +159,12 @@ impl NativeOutputRenderer {
         }
     }
 
-    pub(crate) fn render<T: OutputSample>(&mut self, data: &mut [T], channels: usize) {
+    pub(crate) fn render_at<T: OutputSample>(
+        &mut self,
+        data: &mut [T],
+        channels: usize,
+        playback: Instant,
+    ) {
         let callback_start = Instant::now();
         self.diagnostics.callback_count.fetch_add(1, Ordering::Relaxed);
         if channels == 0 {
@@ -172,7 +177,12 @@ impl NativeOutputRenderer {
         let start_frame = self.current_frame.load(Ordering::Relaxed);
         render_output(
             data,
-            OutputRenderLayout { channels, channel_offset: self.channel_offset, start_frame },
+            OutputRenderLayout {
+                channels,
+                channel_offset: self.channel_offset,
+                start_frame,
+                playback: Some(playback),
+            },
             OutputRenderSources {
                 output_commands: &self.output_commands,
                 retired_sources: &self.retired_sources,
@@ -207,6 +217,7 @@ impl NativeOutputRenderer {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct OutputRenderLayout {
+    pub(super) playback: Option<Instant>,
     pub(super) channels: usize,
     pub(super) channel_offset: usize,
     pub(super) start_frame: u64,
@@ -248,7 +259,7 @@ pub(super) fn render_output<T: OutputSample>(
 
     let frames = data.len() / layout.channels;
     mix_sources_stereo(
-        layout.start_frame,
+        (layout.start_frame, layout.playback),
         frames,
         sources.output_commands,
         sources.retired_sources,
@@ -269,7 +280,7 @@ pub(super) fn render_output<T: OutputSample>(
 }
 
 pub(super) fn mix_sources_stereo(
-    output_start_frame: u64,
+    position: (u64, Option<Instant>),
     frames: usize,
     output_commands: &SharedOutputCommands,
     retired_sources: &RetiredOutputSources,
@@ -279,6 +290,7 @@ pub(super) fn mix_sources_stereo(
     source_command_scratch: &mut Vec<CpalOutputCommand>,
     diagnostics: &CpalOutputDiagnosticsCounters,
 ) {
+    let (output_start_frame, playback) = position;
     mix.resize(frames * 2, 0.0);
     mix.fill(0.0);
 
@@ -296,13 +308,13 @@ pub(super) fn mix_sources_stereo(
         let rendered = match &mut source.engine {
             RenderAudioEngine::Legacy(engine) => match engine.try_lock() {
                 Ok(mut engine) => {
-                    engine.render_stereo(output_start_frame, source_scratch);
+                    engine.render_stereo_at(output_start_frame, source_scratch, playback);
                     true
                 }
                 Err(_) => false,
             },
             RenderAudioEngine::Commanded(engine) => {
-                engine.render_stereo(output_start_frame, source_scratch)
+                engine.render_stereo_at(output_start_frame, source_scratch, playback)
             }
         };
         if rendered {

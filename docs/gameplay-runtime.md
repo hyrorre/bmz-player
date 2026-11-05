@@ -61,8 +61,8 @@ region・scheduler・判定状態は引き継ぎません。cacheはプロセス
 safety wakeはHCNや時計の進行を補完するもので、rendererのtickに依存しません。
 
 既存の`advance_session_frame`が入力、判定、Mine、見逃し、LN/CN/HCN、ゲージ、score、
-replay recording、autoplay、終了判定を処理します。keysoundとBGMは`ScheduledSound`の
-既存frame座標を保ってAudioEngineの有界command queueへ送ります。
+replay recording、autoplay、終了判定を処理します。keysoundとBGMは`ScheduledSound`を
+AudioEngineの有界command queueへ送ります。
 送信できなかったkeysoundとHCN音量更新は次のwakeで再送します（途中FAILED時は破棄）。
 判定ガイド音、既定の地雷SE、失敗SEもgameplayが直接送信します。
 callbackには判定・入力処理を移していません。command scratchと通常再生用queue / voice領域は
@@ -71,6 +71,43 @@ queueとengineの`try_lock`に失敗した場合も待機しません。
 
 CPAL callbackとnative backendが共有するmix・PCM変換・buffer・診断は
 `bmz-audio/src/backend/output.rs`に置きます。デバイス固有のstream操作と時刻変換は各backendが担当します。
+
+### 音声予約と時計
+
+判定・描画・BGAの譜面時刻は `AudioClock` の `Instant` で進めます。デバイスの進行速度や
+タイムスタンプを判定時計へ戻しません。入力の `InputTimestampAnchor` も同じ1回の
+`Instant` 観測から単調時刻と譜面時刻を求め、別々の取得間に入るスレッド停止を除きます。
+
+本体設定 `audio.schedule_ahead`（既定 `true`）で次の2方式を選びます。
+
+| 設定 | BGM・自動キー音（フルオートを含む） | 押鍵に応じたキー音・判定ガイド音 |
+|---|---|---|
+| ON | 実時間100ms先までシステム時刻のdeadlineで予約 | 処理後に即時要求 |
+| OFF | 譜面上の時刻に達したwakeで即時要求 | 処理後に即時要求 |
+
+ONの予約は `ScheduledSound.start_time` に `Instant` のまま保持します。各callbackで
+バッファ先頭の予測出力時刻と `current_frame` を対応付け、そのバッファに入る予約だけを
+frameへ変換します。曲開始時のframeと公称レートによる固定変換をライブ予約には使いません。
+遅れたBGMは既存のcatch-up、キー音はサンプル先頭を保持します。OFFはどちらも先頭を保持します。
+先読み幅は25～300%の再生速度を考慮し、wakeの期限も同じ幅を使います。
+
+CPALでは `Stream::now()` と `Instant` を対応付け、同じAPI時計のcallback/playback値を
+変換します。WASAPI排他では `IAudioClock::GetPosition/GetFrequency` と100ns単位のQPC、
+提出済みPCM位置から次のバッファの出力時刻を求めます。Core Audio IOProcではMach host timeを
+`Instant` に対応付けます。異常値・利用不能時はcallback近傍の時刻へフォールバックするため、
+その場合は正確な出力位相を保証しません。PipeWireの合成予測値も物理出力時刻とは扱いません。
+出力時刻予測だけのジャンプをPCM欠落とはみなしません。CPAL/IOProcの既存voiceのcatch-upは、
+callback自体の停止も確認できる区間に限ります。
+
+ストリームのcallback開始を制御側で確認してから曲の原点を確定します（最大2秒でエラー）。
+WASAPI排他の開始前prefillだけで準備完了とはしません。callback内で開始待ちはしません。
+pause/resumeでは未発声deadlineも停止時間だけ移動し、速度変更時は残り時間を再計算します。
+seek/retry/終了取消は既存の予約・voice破棄を維持します。オフライン出力・テストの仮想時計は
+`start_time = None` のframe予約を使い、実時間やデバイスに依存しません。
+
+開始済みWAVの進みはデバイスのサンプル進行のままです。ASRCによる連続的な速度補正は含みません。
+また、先読み音と即時要求のガイド音には固定的なバッファ待ちの差が残ります。比較時は開始時の
+位相差と時間経過に伴う傾きを分け、PCM書込・API予測・物理発声を同一視しないでください。
 
 macOSの実験用Core Audio IOProcも同じNativeOutputRenderer・source command queue・
 AudioEngineを使います。HALの出力バッファへfloat PCMを書き、出力時刻の大きな欠落は既存の

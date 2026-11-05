@@ -506,6 +506,7 @@ impl CallbackState {
         output_time: &AudioTimeStamp,
     ) -> bool {
         let start = Instant::now();
+        let host_now = unsafe { mach2::mach_time::mach_absolute_time() };
         if buffers.len() != self.layout.len() {
             return false;
         }
@@ -543,7 +544,11 @@ impl CallbackState {
         let expected =
             Duration::from_secs_f64(self.previous_frames as f64 / f64::from(self.sample_rate));
         if let Some(gap) = gap {
-            let outage = gap.saturating_sub(expected);
+            let callback_gap = self
+                .previous_callback
+                .map(|previous| start.saturating_duration_since(previous))
+                .unwrap_or_default();
+            let outage = gap.min(callback_gap).saturating_sub(expected);
             if outage > Duration::from_millis(20).max(expected.saturating_mul(2)) {
                 self.renderer.catch_up_after_stream_outage(outage, self.sample_rate);
             }
@@ -568,7 +573,24 @@ impl CallbackState {
                 );
             }
         }
-        self.renderer.render(&mut self.interleaved[..frames * self.channels], self.channels);
+        let playback = host
+            .and_then(|out| {
+                let distance = ticks_duration(out.abs_diff(host_now), self.timebase);
+                if distance > Duration::from_secs(1) {
+                    return None;
+                }
+                if out < host_now {
+                    start.checked_sub(distance)
+                } else {
+                    start.checked_add(distance)
+                }
+            })
+            .unwrap_or(start);
+        self.renderer.render_at(
+            &mut self.interleaved[..frames * self.channels],
+            self.channels,
+            playback,
+        );
         let mut channel_offset = 0;
         for (buffer, layout) in buffers.iter().zip(&self.layout) {
             if !buffer.mData.is_null() {
@@ -997,6 +1019,7 @@ mod tests {
             AudioBuffer { mNumberChannels: 2, mDataByteSize: 128, mData: pcm.as_mut_ptr().cast() };
         assert!(state.render(&[buffer], &timestamp(1_000_000), &timestamp(2_000_000)));
         assert_eq!(pcm, [0.0; 32]);
+        state.previous_callback = Some(Instant::now() - Duration::from_millis(100));
         assert!(state.render(&[buffer], &timestamp(101_000_000), &timestamp(102_000_000)));
         let snapshot = state.renderer.diagnostics.take_snapshot();
         assert_eq!(snapshot.rendered_frames, 32);
@@ -1006,6 +1029,17 @@ mod tests {
         assert!(state.render(&[buffer], &timestamp(1_000_000), &timestamp(2_000_000)));
         assert_eq!(state.renderer.diagnostics.take_snapshot().rendered_frames, 48);
         assert_eq!(state.renderer.diagnostics.timing.summary().epoch, 1);
+    }
+
+    #[test]
+    fn output_latency_change_without_callback_outage_does_not_skip_pcm() {
+        let mut state = callback_state();
+        let mut pcm = [0.0f32; 32];
+        let buffer =
+            AudioBuffer { mNumberChannels: 2, mDataByteSize: 128, mData: pcm.as_mut_ptr().cast() };
+        assert!(state.render(&[buffer], &timestamp(1_000_000), &timestamp(2_000_000)));
+        assert!(state.render(&[buffer], &timestamp(1_333_333), &timestamp(102_000_000)));
+        assert_eq!(state.renderer.diagnostics.take_snapshot().timeline_catch_up_count, 0);
     }
 
     #[test]

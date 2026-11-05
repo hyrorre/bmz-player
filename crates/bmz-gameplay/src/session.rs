@@ -14,7 +14,6 @@ use bmz_core::time::TimeUs;
 use crate::autoplay::AutoplayController;
 use crate::gauge::GaugeState;
 use crate::hit_error::HitErrorRing;
-use crate::input::backend::monotonic_timestamp_ns;
 use crate::input::system::InputSystem;
 use crate::input::translator::{InputTimestampAnchor, InputTimingContext};
 use crate::judge::engine::JudgeEngine;

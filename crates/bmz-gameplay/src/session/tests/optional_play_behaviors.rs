@@ -22,10 +22,9 @@ fn miss_keysound_setting_preserves_score_and_uses_key_mix_without_auto_duplicate
             schedule_keysounds(&mut session, &mut audio);
             assert_eq!(audio.scheduled.len(), if enabled && !auto { 2 } else { 0 });
             for sound in audio.scheduled {
-                assert_eq!(
-                    sound.start_frame,
-                    session.audio_clock.time_to_output_frame(TimeUs(130_000))
-                );
+                assert_eq!(sound.start_frame, 0);
+                assert!(sound.start_time.is_none());
+                assert!(!sound.catch_up);
                 assert!((sound.volume - 0.2).abs() < f32::EPSILON);
                 assert_eq!(sound.restart_policy, RestartPolicy::StopSameSound);
             }

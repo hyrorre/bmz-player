@@ -13,6 +13,8 @@ pub struct AudioClock {
     pub running: bool,
     playback_rate_percent: u16,
     started_at: Option<Instant>,
+    /// App-wide policy, frozen for this play. Offline clocks use frame scheduling.
+    pub schedule_ahead: bool,
 }
 
 pub const MIN_PLAYBACK_RATE_PERCENT: u16 = 25;
@@ -20,6 +22,7 @@ pub const MAX_PLAYBACK_RATE_PERCENT: u16 = 300;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlaybackRateChange {
+    pub changed_at: Option<Instant>,
     pub anchor_output_frame: u64,
     pub old_rate_percent: u16,
     pub new_rate_percent: u16,
@@ -45,6 +48,7 @@ impl AudioClock {
             running: false,
             playback_rate_percent: 100,
             started_at: None,
+            schedule_ahead: true,
         }
     }
 
@@ -63,6 +67,7 @@ impl AudioClock {
             running,
             playback_rate_percent: 100,
             started_at: None,
+            schedule_ahead: true,
         }
     }
 
@@ -92,7 +97,12 @@ impl AudioClock {
             self.start_output_frame = anchor_output_frame;
         }
         self.playback_rate_percent = rate;
-        Some(PlaybackRateChange { anchor_output_frame, old_rate_percent, new_rate_percent: rate })
+        Some(PlaybackRateChange {
+            changed_at: self.started_at.map(|_| changed_at),
+            anchor_output_frame,
+            old_rate_percent,
+            new_rate_percent: rate,
+        })
     }
 
     pub const fn playback_rate_percent(&self) -> u16 {
@@ -175,7 +185,16 @@ impl AudioClock {
         }
     }
 
-    /// Returns hardware-paced output time elapsed since a chart timestamp.
+    pub fn time_to_instant(&self, time: TimeUs) -> Option<Instant> {
+        let origin = self.started_at?;
+        let us = (i128::from(time.0) - i128::from(self.chart_zero_time_us)) * 100
+            / i128::from(self.playback_rate_percent);
+        let duration =
+            std::time::Duration::from_micros(us.unsigned_abs().min(u128::from(u64::MAX)) as u64);
+        if us < 0 { origin.checked_sub(duration) } else { origin.checked_add(duration) }
+    }
+
+    /// Returns chart time elapsed since a timestamp, using the gameplay clock.
     ///
     /// Time before `since`, such as the READY margin before chart time zero, is excluded.
     pub fn elapsed_since(&self, since: TimeUs) -> TimeUs {
