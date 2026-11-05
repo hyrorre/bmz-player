@@ -20,6 +20,8 @@ mod cases_04;
 mod custom_timers;
 #[path = "lua/events.rs"]
 mod events;
+#[path = "lua/hit_error.rs"]
+mod hit_error;
 #[path = "lua/ir_missing_scores.rs"]
 mod ir_missing_scores;
 #[path = "lua/result_grade.rs"]

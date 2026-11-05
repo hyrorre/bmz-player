@@ -102,6 +102,8 @@ mod destination_clip;
 mod graphs;
 #[path = "tests/graphs_more.rs"]
 mod graphs_more;
+#[path = "tests/hit_error.rs"]
+mod hit_error;
 #[path = "tests/play.rs"]
 mod play;
 #[path = "tests/property_names.rs"]

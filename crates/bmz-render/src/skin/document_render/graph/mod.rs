@@ -1,9 +1,11 @@
+mod hit_error;
 mod image;
 mod judge;
 mod select;
 mod text;
 mod visualizer;
 
+pub(super) use hit_error::hiterror_visualizer_items;
 pub(super) use image::skin_document_render_graph_image_methods;
 pub(super) use judge::skin_document_render_graph_judge_methods;
 pub(super) use select::skin_document_render_graph_select_methods;

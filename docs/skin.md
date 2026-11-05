@@ -571,6 +571,26 @@ judgeの`index`は判定領域です。beatorajaの`JudgeManager`と同じく、
 9KEYSで3領域のスキンでは、KEY1-3・KEY4-6・KEY7-9がそれぞれ領域0〜2（timer 46 / 47 / 247）になります。
 割り切れない場合の余りのレーンは、最後の領域に含めます。
 
+## Playのヒットエラービジュアライザー
+
+JSON / Luaの`hiterrorvisualizer`は、直近100件のPGREAT / GREAT / GOOD / BADのタイミングを
+使います。FASTは左、SLOWは右です。`width`は内部画像の横幅、`lineWidth`はその画像内の
+線幅（1〜4）で、座標・線幅・高さをdestination全体へ拡縮します。画像の端を越えた線は
+内部画像の範囲で切り、通常画像や他のグラフの座標計算は変えません。
+
+- `hiterrorMode=1`で個別の判定線を描きます。0でも中央線とEMAは残ります。
+- `windowLength`（1〜100）は表示する履歴数、`drawDecay=1`は古い線を縦の中央へ短くします。
+- `colorMode=0`は`lineColor`を使い、古い線を薄くします。1は実際の判定幅で
+  `PGColor` / `GRColor` / `GDColor` / `BDColor` / `PRColor`を選び、`transparent=1`でPOOR領域を透過します。
+- `emaMode`は0=非表示、1=線、2=三角、3=線と三角です。`emaColor`を使います。
+  EMAは初期値0から`alpha`で平滑化し、直近判定のindexが更新されたフレームに最新値を1回だけ
+  取り込みます。BAD領域の境界・範囲外と未使用の値は取り込みません。
+  スキン再install・Play再入場・時刻巻き戻しで保持値をリセットします。
+
+`simple-play-simple`、`simple-play`、Rmz-skin、ModernChic、LITONE9等が同じ描画経路を使います。
+実スキンの配置とGPU上の影響範囲の回帰テストは
+[`hit_error.rs`](../crates/bmz-player/src/skin_loader/tests/lua/hit_error.rs)を参照してください。
+
 ## Playのノート分布グラフ
 
 Playの`judgegraph`は、beatorajaの`SkinNoteDistributionGraph`と同じく1秒ごとのbucketを積み上げます。

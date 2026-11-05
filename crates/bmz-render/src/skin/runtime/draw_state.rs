@@ -490,6 +490,8 @@ pub struct SkinDrawState {
     /// HitErrorVisualizer 用の直近判定タイミング (ms)。
     pub hit_error_ring: [i64; bmz_gameplay::hit_error::HIT_ERROR_RING_LEN],
     pub hit_error_ring_index: usize,
+    /// シーン内で保持する HitErrorVisualizer ごとの EMA (ms)。
+    pub hit_error_ema: HashMap<String, i64>,
     /// `dynamicTimer` で定義された observe タイマーの経過 ms。None は timer_off。
     pub dynamic_timer_ms: [Option<i32>; SKIN_DYNAMIC_TIMER_COUNT],
     /// Lua custom timerのうち固定delayとしてIR化できたタイマーの経過ms。
@@ -788,6 +790,7 @@ impl Default for SkinDrawState {
             hit_error_ring: [bmz_gameplay::hit_error::HIT_ERROR_EMPTY;
                 bmz_gameplay::hit_error::HIT_ERROR_RING_LEN],
             hit_error_ring_index: 0,
+            hit_error_ema: HashMap::new(),
             dynamic_timer_ms: [None; SKIN_DYNAMIC_TIMER_COUNT],
             fixed_delay_timer_ms: HashMap::new(),
             lua_custom_timer_us: BTreeMap::new(),

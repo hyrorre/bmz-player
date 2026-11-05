@@ -7,71 +7,7 @@ macro_rules! skin_document_render_graph_visualizer_methods {
             frame: ResolvedSkinFrame,
             state: &SkinDrawState,
         ) -> Vec<SkinRenderItem> {
-            if visualizer.hiterror_mode == 0 {
-                return Vec::new();
-            }
-            let rect = normalize_skin_frame_rect(frame, self.w, self.h);
-            let frame_alpha = frame.a as f32 / 255.0;
-            let blend = skin_blend_mode(destination.blend);
-            let window = visualizer.window_length.clamp(1, 100) as usize;
-            let width = visualizer.width.max(1) as f32;
-            let line_width = visualizer.line_width.clamp(1, 4) as f32;
-            let center_ms = visualizer.judge_width_millis.max(1) as f32;
-            let judge_width_rate = width / (center_ms * 2.0 + 1.0);
-            let line_color =
-                skin_hex_color(&visualizer.line_color).unwrap_or(Color::rgba(0.6, 0.8, 1.0, 0.5));
-            let center_color =
-                skin_hex_color(&visualizer.center_color).unwrap_or(Color::rgba(1.0, 1.0, 1.0, 1.0));
-            let canvas_h = rect.height.max(1.0);
-            let mut items = Vec::new();
-            let center_x = rect.x + rect.width / 2.0 - line_width / 2.0;
-            items.push(SkinRenderItem::Rect {
-                rect: Rect { x: center_x, y: rect.y, width: line_width, height: canvas_h },
-                color: center_color.with_alpha(center_color.a * frame_alpha),
-                blend,
-            });
-            let index = state.hit_error_ring_index;
-            let recent = &state.hit_error_ring;
-            for i in 1..=window {
-                let ring_index = (index as i64 - window as i64 + i as i64)
-                    .rem_euclid(bmz_gameplay::hit_error::HIT_ERROR_RING_LEN as i64)
-                    as usize;
-                let sample = recent[ring_index];
-                if sample == bmz_gameplay::hit_error::HIT_ERROR_EMPTY {
-                    continue;
-                }
-                let clamped = sample.clamp(
-                    -visualizer.judge_width_millis as i64,
-                    visualizer.judge_width_millis as i64,
-                ) as f32;
-                let x = rect.x + width / 2.0 - line_width / 2.0 - clamped * judge_width_rate;
-                let alpha = if visualizer.color_mode == 0 {
-                    line_color.a * (i as f32 / (window as f32 / 2.0)).min(1.0)
-                } else {
-                    line_color.a
-                };
-                let bar_h = if visualizer.draw_decay != 0 {
-                    canvas_h * i as f32 / window as f32
-                } else {
-                    canvas_h
-                };
-                items.push(SkinRenderItem::Rect {
-                    rect: Rect {
-                        x,
-                        y: rect.y + canvas_h - bar_h,
-                        width: line_width,
-                        height: bar_h,
-                    },
-                    color: Color::rgba(
-                        line_color.r,
-                        line_color.g,
-                        line_color.b,
-                        alpha * frame_alpha,
-                    ),
-                    blend,
-                });
-            }
-            items
+            graph::hiterror_visualizer_items(self, visualizer, destination, frame, state)
         }
 
         fn gaugegraph_render_items(
