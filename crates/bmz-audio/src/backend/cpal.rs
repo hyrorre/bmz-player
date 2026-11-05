@@ -312,7 +312,12 @@ mod tests {
 
         render_output(
             &mut output,
-            OutputRenderLayout { channels: 2, channel_offset: 0, start_frame: 0, playback: None },
+            OutputRenderLayout {
+                channels: 2,
+                channel_offset: 0,
+                start_frame: 0,
+                buffer_time: None,
+            },
             OutputRenderSources {
                 output_commands: &output_commands,
                 retired_sources: &retired_sources,

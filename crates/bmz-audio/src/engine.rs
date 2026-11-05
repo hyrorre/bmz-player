@@ -240,17 +240,17 @@ impl AudioEngine {
         &mut self,
         output_start_frame: u64,
         output: &mut [f32],
-        playback: Option<std::time::Instant>,
+        buffer_time: Option<std::time::Instant>,
     ) {
         output.fill(0.0);
         if self.playback_paused() {
             return;
         }
         let frame_count = output.len() / 2;
-        if let Some(playback) = playback {
+        if let Some(buffer_time) = buffer_time {
             self.queue.resolve_times(
                 output_start_frame,
-                playback,
+                buffer_time,
                 frame_count,
                 self.output_sample_rate(),
             );

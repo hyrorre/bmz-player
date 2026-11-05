@@ -590,6 +590,7 @@ impl CallbackState {
             &mut self.interleaved[..frames * self.channels],
             self.channels,
             playback,
+            self.sample_rate,
         );
         let mut channel_offset = 0;
         for (buffer, layout) in buffers.iter().zip(&self.layout) {

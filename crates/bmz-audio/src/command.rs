@@ -561,7 +561,7 @@ impl CommandedAudioEngine {
         &mut self,
         output_start_frame: u64,
         output: &mut [f32],
-        playback: Option<std::time::Instant>,
+        buffer_time: Option<std::time::Instant>,
     ) -> bool {
         let engine = Arc::clone(&self.engine);
         let mut engine = match engine.try_lock() {
@@ -579,7 +579,7 @@ impl CommandedAudioEngine {
         };
         self.apply_pending_commands(&mut engine, output_start_frame);
         self.apply_playback_stop(&mut engine);
-        engine.render_stereo_at(output_start_frame, output, playback);
+        engine.render_stereo_at(output_start_frame, output, buffer_time);
         self.inner.output_sample_rate.store(engine.output_sample_rate(), Ordering::Relaxed);
         self.inner.idle.store(engine.is_idle(), Ordering::Relaxed);
         true

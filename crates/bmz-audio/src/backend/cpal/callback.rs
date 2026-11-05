@@ -36,18 +36,6 @@ impl OutputPlaybackTimeline {
     }
 }
 
-fn frames_to_duration(frames: usize, sample_rate: u32) -> Duration {
-    if sample_rate == 0 {
-        return Duration::ZERO;
-    }
-    let nanos = (frames as u128)
-        .saturating_mul(1_000_000_000)
-        .checked_div(u128::from(sample_rate))
-        .unwrap_or(0)
-        .min(u128::from(u64::MAX));
-    Duration::from_nanos(nanos as u64)
-}
-
 /// Convert only through an explicit API/Instant clock pair. Callback delivery
 /// jitter does not move a valid pair; a reset/implausible timestamp rebases it.
 fn map_playback_time(
@@ -98,6 +86,7 @@ where
     let mut buffers = OutputRenderBuffers::new();
     let sample_rate = config.sample_rate;
     let mut playback_timeline = OutputPlaybackTimeline::default();
+    let mut output_phase = ScheduledOutputPhase::default();
     let timing_enabled = bmz_core::latency::diagnostics_enabled();
     // Query outside the callback. A failed host identity is unknown too.
     let prediction_available = device.id().ok().is_some_and(|id| id.host().name() != "PipeWire");
@@ -143,6 +132,8 @@ where
                     // never a fixed song-start frame or a fabricated API latency.
                     callback_start
                 };
+                let span = frames_to_duration(frames, sample_rate);
+                let buffer_time = output_phase.buffer_time(playback, callback_start, span);
                 #[cfg(any(target_os = "macos", target_os = "linux"))]
                 let resumed = timing_enabled && suspend.poll();
                 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -199,7 +190,7 @@ where
                         channels,
                         channel_offset,
                         start_frame,
-                        playback: Some(playback),
+                        buffer_time: Some(buffer_time),
                     },
                     OutputRenderSources {
                         output_commands: &output_commands,

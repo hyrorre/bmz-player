@@ -878,26 +878,31 @@ impl ExclusiveWorkerStream {
                     slice::from_raw_parts_mut(data.cast::<f32>(), sample_count),
                     self.channels,
                     playback,
+                    self.sample_rate,
                 ),
                 ExclusiveSampleFormat::I32 => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<i32>(), sample_count),
                     self.channels,
                     playback,
+                    self.sample_rate,
                 ),
                 ExclusiveSampleFormat::I24In32 => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<PcmI24In32>(), sample_count),
                     self.channels,
                     playback,
+                    self.sample_rate,
                 ),
                 ExclusiveSampleFormat::I24Packed => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<PackedI24>(), sample_count),
                     self.channels,
                     playback,
+                    self.sample_rate,
                 ),
                 ExclusiveSampleFormat::I16 => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<i16>(), sample_count),
                     self.channels,
                     playback,
+                    self.sample_rate,
                 ),
             }
             self.render_client
