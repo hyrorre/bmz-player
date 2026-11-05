@@ -341,6 +341,25 @@ mod tests {
     }
 
     #[test]
+    fn prediction_jitter_does_not_skip_a_timed_bgm_attack() {
+        use std::time::{Duration, Instant};
+        let base = Instant::now();
+        let mut engine = AudioEngine::new(48_000);
+        engine.insert_sample(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5] },
+        );
+        let mut sound = ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0);
+        sound.start_time = Some(base + Duration::from_millis(11));
+        engine.schedule(sound);
+        let mut pcm = [0.0; 960];
+        engine.render_stereo_at(100_000, &mut pcm, Some(base));
+        assert!(pcm.iter().all(|value| *value == 0.0));
+        engine.render_stereo_at(100_480, &mut pcm, Some(base + Duration::from_millis(12)));
+        assert_eq!(pcm[0], 0.5);
+    }
+
+    #[test]
     fn paused_live_deadline_retimes_from_pause_then_moves_to_resume() {
         use std::time::{Duration, Instant};
         let base = Instant::now();

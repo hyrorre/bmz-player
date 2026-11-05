@@ -123,3 +123,22 @@ $env:BMZ_RESOURCE_DIR = 'C:/Users/hyrorre/private/bmz-player/data'
 5. 手動入力も専用データで確認し、普段のoffsetやスコアを変更しない。環境変数はそのPowerShellを閉じれば残らない。
 
 固定frame対応を修正し、都度要求を比較手段として提供した。Issue全体の聴感上の解決や、すべてのdeviceの正常動作は断定しない。
+
+## 2026-11-06 追記: 予測時刻の隙間をcatch-upしない
+
+PR #75のレビューで、PCMが連続していても予測時刻の揺れだけでBGMのcatch-upが働くことを確認した。
+バッファkの予測範囲より後のdeadlineは、次のバッファの予測が先へ飛ぶと過去のframeへ変換され、先頭が削られていた。
+前のバッファの範囲外だった音はPCM上で何も失っていない。
+
+`ScheduledSoundQueue::resolve_times` が前回の予測終端と次のframeを保持するようにした。
+
+- PCMが連続する場合は前回の終端までを到達済みとする。隙間に入ったdeadlineはバッファ先頭から再生する。
+- それより前のdeadlineは本当に遅れて届いた音として、前回の終端からcatch-upする。
+- frameが飛んだ場合（出力断のcatch-up、engine lock missで描画を飛ばしたsource）は従来どおり現在のバッファから数える。
+- frameが連続するWASAPI排他の停止は、隙間が20msかつ2バッファ分を超えたら出力断として扱う。
+
+自動検証は `cargo fmt --check` と `bmz-audio` / `bmz-gameplay` のcheck・all-targets Clippy・テスト。
+追加した回帰テストは修正前に失敗し、1サンプルBGMが欠落することを確認した。
+
+上の結果の「BGM観測数」の欠落はこの隙間が原因と推定しているが、修正後の実機再計測は行っていない。
+当時の表はそのまま残す。欠落の減少と、実機で20msの閾値が適切かは未確認である。

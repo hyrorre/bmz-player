@@ -58,15 +58,21 @@ pub trait AudioScheduler {
     fn schedule(&mut self, sound: ScheduledSound);
 }
 
+/// Output-time predictions wobble between callbacks. Like the backends' outage
+/// detection, treat a smaller gap between contiguous buffers as continuous PCM.
+const MIN_OUTPUT_DISCONTINUITY: Duration = Duration::from_millis(20);
+
 #[derive(Debug, Default, Clone)]
 pub struct ScheduledSoundQueue {
     // The second field preserves tie order without an allocating stable sort.
     sounds: Vec<(ScheduledSound, usize)>,
+    /// Predicted end of the last resolved buffer and the frame following it.
+    resolved_until: Option<(Instant, u64)>,
 }
 
 impl ScheduledSoundQueue {
     pub fn new() -> Self {
-        Self { sounds: Vec::new() }
+        Self::default()
     }
 
     pub(crate) fn reserve(&mut self, additional: usize) {
@@ -116,6 +122,17 @@ impl ScheduledSoundQueue {
         let Some(end) = time.checked_add(span) else {
             return;
         };
+        // When the PCM continues from the previous buffer, a later prediction
+        // moved only the timestamp: nothing after that buffer's end was missed.
+        // A frame jump or a long gap is a real outage, so lateness counts from here.
+        let tolerance = MIN_OUTPUT_DISCONTINUITY.max(span.saturating_mul(2));
+        let reached = self
+            .resolved_until
+            .filter(|(until, next_frame)| {
+                *next_frame == frame && time.saturating_duration_since(*until) <= tolerance
+            })
+            .map_or(time, |(until, _)| until.min(time));
+        self.resolved_until = Some((end, frame.saturating_add(frames as u64)));
         let mut changed = false;
         for (sound, _) in &mut self.sounds {
             let Some(deadline) = sound.start_time else {
@@ -133,7 +150,7 @@ impl ScheduledSoundQueue {
             sound.start_frame = if deadline >= time {
                 frame.saturating_add(distance(deadline.duration_since(time)))
             } else {
-                frame.saturating_sub(distance(time.duration_since(deadline)))
+                frame.saturating_sub(distance(reached.saturating_duration_since(deadline)))
             };
             sound.start_time = None;
             changed = true;
@@ -351,6 +368,52 @@ mod tests {
                 .map(|e| e.volume as u32)
                 .collect();
             assert_eq!(volumes, (0..200).filter(|index| index % 3 == id).collect::<Vec<_>>());
+        }
+    }
+
+    fn timed_bgm(deadline: Instant) -> ScheduledSound {
+        let mut event = sound(0, 1);
+        event.start_time = Some(deadline);
+        event.catch_up = true;
+        event
+    }
+
+    #[test]
+    fn prediction_gap_between_contiguous_buffers_is_not_lateness() {
+        let base = Instant::now();
+        let mut queue = ScheduledSoundQueue::new();
+        queue.schedule(timed_bgm(base + Duration::from_millis(11)));
+        // This buffer covers 0..10 ms, so the event stays in system time.
+        queue.resolve_times(100_000, base, 480, 48_000);
+        assert!(queue.drain_until_frame(u64::MAX).is_empty());
+        // The PCM continues, but the next prediction jitters past the deadline.
+        queue.resolve_times(100_480, base + Duration::from_millis(12), 480, 48_000);
+        assert_eq!(queue.drain_until_frame(100_959)[0].start_frame, 100_480);
+    }
+
+    #[test]
+    fn event_arriving_after_its_buffer_catches_up_from_the_contiguous_end() {
+        let base = Instant::now();
+        let mut queue = ScheduledSoundQueue::new();
+        queue.resolve_times(100_000, base, 480, 48_000);
+        // Due 5 ms before the rendered end. The 2 ms jitter is not missed audio.
+        queue.schedule(timed_bgm(base + Duration::from_millis(5)));
+        queue.resolve_times(100_480, base + Duration::from_millis(12), 480, 48_000);
+        assert_eq!(queue.drain_until_frame(100_959)[0].start_frame, 100_240);
+    }
+
+    #[test]
+    fn real_output_discontinuities_keep_the_full_catch_up() {
+        let base = Instant::now();
+        // A frame jump (outage catch-up, skipped render), then a stall on a
+        // backend whose frames stay contiguous, such as WASAPI exclusive.
+        for (frame, time_ms) in [(104_000, 12), (100_480, 60)] {
+            let mut queue = ScheduledSoundQueue::new();
+            queue.schedule(timed_bgm(base + Duration::from_millis(11)));
+            queue.resolve_times(100_000, base, 480, 48_000);
+            queue.resolve_times(frame, base + Duration::from_millis(time_ms), 480, 48_000);
+            let missed = (time_ms - 11) * 48;
+            assert_eq!(queue.drain_until_frame(u64::MAX)[0].start_frame, frame - missed);
         }
     }
 }
