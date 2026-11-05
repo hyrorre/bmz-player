@@ -2,6 +2,9 @@ use super::*;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[path = "tests/lua_resource_limits.rs"]
+mod lua_resource_limits;
+
 /// A not-yet-created path inside a private `TempDir`. Drop removes the directory even when
 /// the test fails, so nothing is left in the shared temp root.
 pub(crate) struct TestDir {

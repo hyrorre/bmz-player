@@ -65,7 +65,10 @@ pub(super) fn lua_value_to_json(
                 JsonValue::Number(JsonNumber::from(0))
             }
         },
-        Value::String(value) => JsonValue::String(value.to_string_lossy()),
+        Value::String(value) => {
+            table_budget.consume_string(&value, path)?;
+            JsonValue::String(value.to_string_lossy())
+        }
         Value::Table(table) => lua_table_to_json(
             lua,
             table,
@@ -175,13 +178,13 @@ pub(super) fn lua_table_to_json(
 ) -> Result<JsonValue> {
     let mut entries = Vec::new();
     for pair in table.pairs::<Value, Value>() {
+        table_budget.consume(1, path)?;
         entries.push(pair?);
     }
     // `pairs` order follows a per-VM hash seed. Inference calls skin functions
     // while converting, and those calls can write globals that later probes
     // read, so convert fields in a fixed order. It also keeps callback IDs stable.
     entries.sort_by(|(left, _), (right, _)| compare_lua_keys(left, right));
-    table_budget.consume(entries.len(), path)?;
 
     if entries.is_empty() {
         return Ok(JsonValue::Array(Vec::new()));
@@ -237,6 +240,9 @@ pub(super) fn lua_table_to_json(
     let function_metadata = ObjectFunctionMetadata::from_entries(&entries, path, main_state_probe);
     let mut object = JsonMap::new();
     for (key, value) in entries {
+        if let Value::String(key) = &key {
+            table_budget.consume_string(key, path)?;
+        }
         let key = lua_key_to_json_key(key, path, warnings)?;
         if matches!(value, Value::Nil) {
             continue;
