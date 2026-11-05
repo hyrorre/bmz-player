@@ -163,6 +163,6 @@ fn every_pattern_api_stops_pathological_backtracking() {
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("pattern engine must be interruptible")
             .unwrap_err();
-        assert!(error.contains("instruction limit"), "{call}: {error}");
+        assert!(error.contains("pattern work limit"), "{call}: {error}");
     }
 }

@@ -1,9 +1,23 @@
 use super::*;
 
+// Work units count native matching steps/bytes, not Lua VM instructions.
+// Keep the instruction ceilings unchanged; native loops are much cheaper.
+const PATTERN_WORK_PER_INSTRUCTION: i64 = 4;
+
+unsafe extern "C-unwind" {
+    fn bmz_open_patterns(state: *mut mlua::lua_State) -> c_int;
+}
+
+#[cfg(test)]
+#[path = "pattern_budget_tests.rs"]
+mod pattern_budget_tests;
+
 #[derive(Clone)]
 pub(super) struct LuaInstructionBudget {
     total_remaining: Arc<AtomicI64>,
     callback_remaining: Arc<AtomicI64>,
+    pattern_total_remaining: Arc<AtomicI64>,
+    pattern_callback_remaining: Arc<AtomicI64>,
 }
 
 impl LuaInstructionBudget {
@@ -12,6 +26,10 @@ impl LuaInstructionBudget {
             || self.callback_remaining.load(Ordering::Relaxed) <= 0
         {
             Err(mlua::Error::runtime("lua skin instruction limit exceeded"))
+        } else if self.pattern_total_remaining.load(Ordering::Relaxed) <= 0
+            || self.pattern_callback_remaining.load(Ordering::Relaxed) <= 0
+        {
+            Err(mlua::Error::runtime("lua skin pattern work limit exceeded"))
         } else {
             Ok(())
         }
@@ -34,11 +52,17 @@ impl LuaInstructionBudget {
 
     pub(super) fn begin_inference(&self) {
         self.total_remaining.store(LUA_INFERENCE_INSTRUCTION_LIMIT, Ordering::Relaxed);
+        self.pattern_total_remaining.store(
+            LUA_INFERENCE_INSTRUCTION_LIMIT * PATTERN_WORK_PER_INSTRUCTION,
+            Ordering::Relaxed,
+        );
         self.begin_callback();
     }
 
     pub(super) fn begin_callback(&self) {
         self.callback_remaining.store(LUA_INSTRUCTION_LIMIT, Ordering::Relaxed);
+        self.pattern_callback_remaining
+            .store(LUA_INSTRUCTION_LIMIT * PATTERN_WORK_PER_INSTRUCTION, Ordering::Relaxed);
     }
 
     pub(super) fn begin_runtime_callback(&self, new_frame: bool) {
@@ -47,6 +71,10 @@ impl LuaInstructionBudget {
         // per-call allowance by creating hundreds of dynamic properties.
         if new_frame {
             self.total_remaining.store(LUA_RUNTIME_FRAME_INSTRUCTION_LIMIT, Ordering::Relaxed);
+            self.pattern_total_remaining.store(
+                LUA_RUNTIME_FRAME_INSTRUCTION_LIMIT * PATTERN_WORK_PER_INSTRUCTION,
+                Ordering::Relaxed,
+            );
         }
         self.begin_callback();
     }
@@ -68,17 +96,30 @@ pub(super) fn install_instruction_limit_with_ceilings(
     let budget = LuaInstructionBudget {
         total_remaining: Arc::new(AtomicI64::new(total_limit)),
         callback_remaining: Arc::new(AtomicI64::new(callback_limit)),
+        pattern_total_remaining: Arc::new(AtomicI64::new(
+            total_limit.saturating_mul(PATTERN_WORK_PER_INSTRUCTION),
+        )),
+        pattern_callback_remaining: Arc::new(AtomicI64::new(
+            callback_limit.saturating_mul(PATTERN_WORK_PER_INSTRUCTION),
+        )),
     };
     lua.set_hook(HookTriggers::new().every_nth_instruction(LUA_HOOK_INTERVAL), budget.hook());
 
-    // Native pattern matching can backtrack exponentially without running a VM
-    // instruction. Replace it in the existing string table (also used by string
-    // methods and package.loaded) before any skin can retain the native APIs.
-    let patterns: Table = lua
-        .load(include_str!("patterns.lua"))
-        .set_name("bmz sandbox patterns")
-        .set_mode(ChunkMode::Text)
-        .eval()?;
+    // Meter the native matcher itself. A Lua implementation magnifies ordinary
+    // CSV processing into hundreds of millions of VM instructions. Prepaid work
+    // blocks also charge calls that fail before returning to Rust normally.
+    let guard = budget.clone();
+    let charge = lua.create_function(move |_, units: i64| {
+        debug_assert!(units > 0);
+        guard.pattern_total_remaining.fetch_sub(units, Ordering::Relaxed);
+        guard.pattern_callback_remaining.fetch_sub(units, Ordering::Relaxed);
+        guard.check()
+    })?;
+    // SAFETY: compiled against the exact mlua-sys Lua headers. The module uses
+    // the public C API, owns no Rust objects and is called through mlua's
+    // protected boundary. Its checker is a normal managed mlua callback.
+    let open = unsafe { lua.create_c_function(bmz_open_patterns)? };
+    let patterns: Table = open.call(charge)?;
     let strings: Table = lua.globals().get("string")?;
     for name in ["find", "match", "gmatch", "gsub"] {
         strings.set(name, patterns.get::<Function>(name)?)?;

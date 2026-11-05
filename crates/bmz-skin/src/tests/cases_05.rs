@@ -325,6 +325,13 @@ fn m_select_lua_select_skin_loads_when_available() {
     let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../data/skins/mz-select/music_select.luaskin");
     if !skin_path.is_file() {
+        assert!(
+            std::env::var_os("BMZ_REQUIRE_MZ_SELECT").is_none(),
+            "mz-select is required: git submodule update --init data/skins/mz-select"
+        );
+        eprintln!(
+            "SKIPPED: mz-select submodule is absent (set BMZ_REQUIRE_MZ_SELECT=1 to require it)"
+        );
         return;
     }
     let loaded =

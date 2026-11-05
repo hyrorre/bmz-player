@@ -37,3 +37,30 @@ bmz-skinテストは402件成功・1件ignored。上記パターン再現例は�
 1MiBの名前を80件作る空ファイル・ディレクトリの再現例も最初の作成で拒否した。
 再現harnessは`/tmp/bmz-security-followup`に置いた一時データで、Git管理外。
 外部スキン素材・実機描画およびプレイヤー全体の検証制約は前回と同じ。
+
+## 2026-11-06: mz-selectの読み込み回帰
+
+`92cb1589`で追加した純Luaパターン実装は、照合結果の比較テストには通ったが、
+通常のCSVを既存の命令数予算内で処理できなかった。前回の素材なしテスト結果では
+この互換性回帰を検出できていなかった。
+
+- mz-selectの固定commit `a4ee0e1a`を取得し、
+  `m_select_lua_select_skin_loads_when_available`が命令数上限で失敗することを再現した。
+  `customize/advanced/test_bmsanal/parts.lua`は78,976bytes・1178行の`list.csv`を読み、
+  `%s*(.-)%s*,%s*`の`gsub`を行ごとに2回使う。
+- パターン処理をLua 5.4.7 `lstrlib.c`由来のC実装へ置き換えた。リンクするLua VMは変更せず、
+  `mlua-sys`と同じヘッダーでコンパイルする。MITライセンスと配布物用noticeを同梱した。
+- Lua命令数上限は維持し、nativeの探索・比較・コピー・バックトラックに別の共有予算を設けた。
+  1024単位を先払いするため、短い呼び出しや途中エラーで計量を免れない。
+  保護呼び出し・コルーチン・iteratorの反復にも適用し、フレーム切替後のiterator再開も検証する。
+- 80,104bytes・1178行の合成CSVを常時テストし、結果一致とLua命令数・native作業量を確認する。
+  実測時間は診断出力に留め、共有CIの速度に依存する合否条件にはしない。
+- 必須素材モード`BMZ_REQUIRE_MZ_SELECT=1`と、3 OSでsubmoduleを取得するCIを追加した。
+  必須モードでmz-selectが無い場合は、早期returnで成功扱いにしない。
+
+Linux / Rust stable 1.99.1 / C最適化O2で、実CSVの同じ分割処理はstock Lua約41ms、
+計量版約64ms、Lua命令数87,000・native作業量11,572,224だった（単発の参考値）。
+Lua側の1600万命令上限を維持した状態でmz-selectの実読み込みも成功した。
+Rmz-skin `cb08901c`、mz-select `a4ee0e1a`、Luxez-Flat `9e0d42e4`を取得した全テストは
+406件成功・2件ignored（実CSV計測は別途明示実行して成功）。fmt・check・all-targets Clippyも成功。
+Windows / macOSは追加CIでの確認待ち。GUIの実機描画とプレイヤー全体のビルドは未確認。
