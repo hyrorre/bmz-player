@@ -306,6 +306,11 @@ fn select_chart_snapshot(
         chart_md5: row.score_md5(),
         chart_sha256: row.score_sha256(),
         title: row.display_title().to_string(),
+        // beatoraja / LR2 draw the full title on song bars; ref 10 keeps the plain title.
+        bar_text: chart
+            .filter(|chart| !chart.subtitle.is_empty())
+            .map(|chart| format!("{} {}", row.display_title(), chart.subtitle))
+            .unwrap_or_default(),
         rival_ex_score: rival_score.map(|score| score.ex_score),
         lr2_new_title: lr2_new_title(
             row.lr2_added_at,
@@ -376,9 +381,7 @@ fn select_chart_snapshot(
                 ) as f32
             })
             .unwrap_or(0.0),
-        chart_main_bpm: analysis
-            .map(|analysis| analysis.main_bpm as f32)
-            .unwrap_or_else(|| chart.map(|chart| chart.initial_bpm as f32).unwrap_or(0.0)),
+        chart_main_bpm: chart_main_bpm(row) as f32,
         chart_distribution: distribution
             .map(|distribution| select_chart_distribution(&distribution.notes))
             .unwrap_or_default(),

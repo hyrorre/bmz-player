@@ -16,6 +16,7 @@ Resultのお気に入りは、単曲・コース曲間で`act = 89 / 90`とimage
 
 | 項目 | 現在の範囲・確認入口 |
 |---|---|
+| 曲バーの文字列 | beatoraja / LR2と同じく、JSON / Lua / LR2の全形式で曲バーにフルタイトル（タイトルと半角スペースとサブタイトル）を描画します。`ref=10`はタイトルのみを維持します。LR2の`disablesubtitle`相当の設定はありません。[回帰テスト](../crates/bmz-player/src/app/tests/select/cases_04.rs) |
 | LR2選曲バーの分類・装飾 | NEW COURSE・コース一覧・機能フォルダ・検索履歴をLR2の画像番号で描画します。NEWはルートと配下を新曲、設定カテゴリ（音量・音声など）は通常フォルダ（W-MIXの青）、設定入口・戻る・閉じるはライバルフォルダ（W-MIXの赤）、その他の仮想フォルダは分類階層を含めカスタムフォルダの画像とします（BMZ表示方針）。op 1..5、新着譜面のBAR_TITLE切替、各曲のライバルEXに応じたランプとBAR_RIVAL勝敗表示に対応します。BAR_RANKとフォルダの新着タイトル判定は未対応です。[仕様](skin.md#lr2のselect--result)、[回帰テスト](../crates/bmz-render/src/skin/tests/result/lr2.rs) |
 | LR2選曲バーの描画順 | 各BAR部品の最初のDST位置をinclude先も含めて保持し、通常画像・パネル・マスクと同じ宣言順で描画します。条件分岐では有効なdestination自身の位置を使います。発光の中央位置とJSON / Luaの行ごとの描画は維持します。[仕様](skin.md#lr2のselect--result)、[回帰テスト](../crates/bmz-player/src/skin_loader/tests/lr2/select_bar_order.rs) |
 | JSON / Lua / LR2読込 | JSON、`.luaskin` / `.lua`、LR2 CSV skinを読み込みます。[decode API](../crates/bmz-skin/src/lib.rs)、[app側decode](../crates/bmz-player/src/skin_loader/decode/document.rs)です。LR2全命令の完全互換を意味しない |

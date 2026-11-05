@@ -261,22 +261,31 @@ pub(in crate::app) fn compare_select_chart_rows(
     let ordering = match sort {
         SelectSort::Title => compare_case_insensitive(a.display_title(), b.display_title()),
         SelectSort::Artist => compare_case_insensitive(a.display_artist(), b.display_artist()),
-        SelectSort::Bpm => chart_initial_bpm(a).total_cmp(&chart_initial_bpm(b)),
+        SelectSort::Bpm => chart_main_bpm(a).total_cmp(&chart_main_bpm(b)),
         SelectSort::Length => chart_length_ms(a).cmp(&chart_length_ms(b)),
         SelectSort::Level => compare_play_level(a, b),
         SelectSort::Clear => clear_rank(a).cmp(&clear_rank(b)),
-        SelectSort::Score => ex_score(a).cmp(&ex_score(b)),
+        SelectSort::Score => ex_score_percent(a).total_cmp(&ex_score_percent(b)),
         SelectSort::Bp => bp(a).cmp(&bp(b)),
     };
-    ordering.then_with(|| compare_case_insensitive(a.display_title(), b.display_title()))
+    // 未所持譜面は、どのソートでも所持譜面より後ろへ送る。
+    b.in_library()
+        .cmp(&a.in_library())
+        .then(ordering)
+        .then_with(|| compare_case_insensitive(a.display_title(), b.display_title()))
 }
 
 pub(in crate::app) fn compare_case_insensitive(a: &str, b: &str) -> std::cmp::Ordering {
     a.to_lowercase().cmp(&b.to_lowercase())
 }
 
-pub(in crate::app) fn chart_initial_bpm(row: &crate::screens::select_model::SelectChartRow) -> f64 {
-    row.chart.as_ref().map(|chart| chart.initial_bpm).unwrap_or(0.0)
+/// 解析済みのMAIN BPM。解析結果が無い譜面は初期BPMで代用する。
+pub(in crate::app) fn chart_main_bpm(row: &crate::screens::select_model::SelectChartRow) -> f64 {
+    row.chart_analysis
+        .as_ref()
+        .map(|analysis| analysis.main_bpm)
+        .or_else(|| row.chart.as_ref().map(|chart| chart.initial_bpm))
+        .unwrap_or(0.0)
 }
 
 pub(in crate::app) fn chart_length_ms(row: &crate::screens::select_model::SelectChartRow) -> i64 {
@@ -296,19 +305,20 @@ pub(in crate::app) fn play_level_number(row: &crate::screens::select_model::Sele
     row.chart.as_ref().and_then(|chart| chart.play_level.parse::<f64>().ok()).unwrap_or(0.0)
 }
 
-pub(in crate::app) fn clear_rank(row: &crate::screens::select_model::SelectChartRow) -> i8 {
-    if !row.in_library() {
-        // 難易度表にあるがローカル未所持。NoPlay よりさらに下位へ並べる。
-        return -1;
-    }
-    // 所持済み: NoPlay / 未記録 = 0、Failed=1 .. Max=10。
+pub(in crate::app) fn clear_rank(row: &crate::screens::select_model::SelectChartRow) -> u8 {
+    // NoPlay / 未記録 = 0、Failed=1 .. Max=10。
     ClearType::rank_from_label(
         row.best_score.as_ref().map(|score| score.clear_type.as_str()).unwrap_or_default(),
-    ) as i8
+    )
 }
 
-pub(in crate::app) fn ex_score(row: &crate::screens::select_model::SelectChartRow) -> u32 {
-    row.best_score.as_ref().map(|score| score.ex_score).unwrap_or(0)
+/// EXスコア率。スコアが無い行と、ノーツ数が分からない未所持譜面は0として扱う。
+pub(in crate::app) fn ex_score_percent(row: &crate::screens::select_model::SelectChartRow) -> f64 {
+    row.chart
+        .as_ref()
+        .zip(row.best_score.as_ref())
+        .map(|(chart, score)| chart.ex_score_percent(score.ex_score, score.ln_policy))
+        .unwrap_or(0.0)
 }
 
 pub(in crate::app) fn bp(row: &crate::screens::select_model::SelectChartRow) -> u32 {

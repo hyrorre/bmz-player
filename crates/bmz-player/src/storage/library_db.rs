@@ -107,6 +107,12 @@ impl ChartListItem {
     pub fn scored_total_notes_for_setting(&self, setting: LnPolicySetting) -> u32 {
         self.ln_counts.scored_total_notes_for_setting(self.total_notes, setting)
     }
+
+    /// EXスコア率（0〜100）。ノーツ数が0の譜面は0を返す。
+    pub fn ex_score_percent(&self, ex_score: u32, policy: LnScorePolicy) -> f64 {
+        let notes = self.scored_total_notes(policy);
+        if notes == 0 { 0.0 } else { f64::from(ex_score) * 50.0 / f64::from(notes) }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

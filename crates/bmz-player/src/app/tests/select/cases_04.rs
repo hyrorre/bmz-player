@@ -422,6 +422,27 @@ fn select_snapshot_rows_preserves_settings_action_kinds() {
 }
 
 #[test]
+fn select_snapshot_song_bars_show_full_title_and_keep_plain_title() {
+    let profile = ProfileConfig::new_default("default", "Default", 0);
+    let mut with_subtitle = select_chart_row(1);
+    let chart = with_subtitle.chart.as_mut().unwrap();
+    chart.title = "Song".to_string();
+    chart.subtitle = "[ANOTHER]".to_string();
+    let mut without_subtitle = select_chart_row(2);
+    without_subtitle.chart.as_mut().unwrap().title = "Plain".to_string();
+    let rows = vec![SelectItem::Chart(with_subtitle), SelectItem::Chart(without_subtitle)];
+
+    let snapshot_rows = select_snapshot_rows(&rows, 0, 2, &profile, None, &HashMap::new());
+
+    let full = snapshot_rows.iter().find(|row| row.index == 0).unwrap();
+    let plain = snapshot_rows.iter().find(|row| row.index == 1).unwrap();
+    assert_eq!(full.title, "Song");
+    assert_eq!(full.subtitle, "[ANOTHER]");
+    assert_eq!(full.display_bar_text(), "Song [ANOTHER]");
+    assert_eq!(plain.display_bar_text(), "Plain");
+}
+
+#[test]
 fn select_snapshot_rows_append_values_only_to_config_bar_text() {
     let mut profile = ProfileConfig::new_default("default", "Default", 0);
     profile.audio_mix.master_volume = 37;

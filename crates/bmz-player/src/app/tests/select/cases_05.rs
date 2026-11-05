@@ -310,10 +310,12 @@ fn select_sort_roundtrips_through_str() {
 fn select_sort_orders_chart_rows_without_moving_folders() {
     let mut slow = select_chart_row(1);
     slow.chart.as_mut().unwrap().title = "Slow".to_string();
-    slow.chart.as_mut().unwrap().initial_bpm = 100.0;
+    slow.chart.as_mut().unwrap().initial_bpm = 200.0;
+    slow.chart_analysis.as_mut().unwrap().main_bpm = 100.0;
     let mut fast = select_chart_row(2);
     fast.chart.as_mut().unwrap().title = "Fast".to_string();
-    fast.chart.as_mut().unwrap().initial_bpm = 200.0;
+    fast.chart.as_mut().unwrap().initial_bpm = 100.0;
+    fast.chart_analysis.as_mut().unwrap().main_bpm = 200.0;
     let mut items = vec![
         SelectItem::Folder {
             path: "folder".to_string(),
@@ -330,6 +332,128 @@ fn select_sort_orders_chart_rows_without_moving_folders() {
     assert!(matches!(items[0], SelectItem::Folder { .. }));
     assert_eq!(items[1].display_name(), "Slow");
     assert_eq!(items[2].display_name(), "Fast");
+}
+
+#[test]
+fn select_bpm_sort_uses_initial_bpm_for_charts_without_analysis() {
+    let mut analyzed = select_chart_row(1);
+    analyzed.chart.as_mut().unwrap().title = "Analyzed".to_string();
+    analyzed.chart.as_mut().unwrap().initial_bpm = 100.0;
+    analyzed.chart_analysis.as_mut().unwrap().main_bpm = 200.0;
+    let mut unanalyzed = select_chart_row(2);
+    unanalyzed.chart.as_mut().unwrap().title = "Unanalyzed".to_string();
+    unanalyzed.chart.as_mut().unwrap().initial_bpm = 150.0;
+    unanalyzed.chart_analysis = None;
+    let mut items = vec![SelectItem::Chart(analyzed), SelectItem::Chart(unanalyzed)];
+
+    apply_select_sort(&mut items, SelectSort::Bpm);
+
+    assert_eq!(items[0].display_name(), "Unanalyzed");
+    assert_eq!(items[1].display_name(), "Analyzed");
+}
+
+fn missing_select_chart_row(title: &str) -> SelectChartRow {
+    let mut row = select_chart_row(1);
+    row.chart = None;
+    row.chart_analysis = None;
+    row.fallback_title = title.to_string();
+    row
+}
+
+#[test]
+fn select_sorts_place_missing_charts_last() {
+    for sort in SelectSort::ORDER {
+        let mut owned = select_chart_row(2);
+        owned.chart.as_mut().unwrap().title = "Owned".to_string();
+        let mut items =
+            vec![SelectItem::Chart(missing_select_chart_row("Missing")), SelectItem::Chart(owned)];
+
+        apply_select_sort(&mut items, sort);
+
+        assert_eq!(items[0].display_name(), "Owned", "{sort:?}");
+        assert_eq!(items[1].display_name(), "Missing", "{sort:?}");
+    }
+}
+
+fn scored_select_chart_row(
+    index: usize,
+    title: &str,
+    total_notes: u32,
+    ex_score: u32,
+) -> SelectChartRow {
+    let mut row = select_chart_row(index);
+    let chart = row.chart.as_mut().unwrap();
+    chart.title = title.to_string();
+    chart.total_notes = total_notes;
+    row.best_score = Some(best_score_with_replay(ex_score, ""));
+    row
+}
+
+#[test]
+fn select_score_sort_uses_ex_score_rate() {
+    let mut items = vec![
+        SelectItem::Chart(scored_select_chart_row(1, "High Rate", 100, 180)),
+        SelectItem::Chart(scored_select_chart_row(2, "Low Rate", 1000, 1000)),
+    ];
+
+    apply_select_sort(&mut items, SelectSort::Score);
+
+    assert_eq!(items[0].display_name(), "Low Rate");
+    assert_eq!(items[1].display_name(), "High Rate");
+}
+
+#[test]
+fn select_score_sort_counts_notes_with_the_score_ln_policy() {
+    let mut force_ln = scored_select_chart_row(1, "Force LN", 100, 100);
+    force_ln.chart.as_mut().unwrap().ln_counts.undefined_ln_pairs = 100;
+    let mut force_cn = scored_select_chart_row(2, "Force CN", 100, 150);
+    force_cn.chart.as_mut().unwrap().ln_counts.undefined_ln_pairs = 100;
+    force_cn.best_score.as_mut().unwrap().ln_policy = crate::ln_policy::LnScorePolicy::ForceCn;
+    let mut items = vec![SelectItem::Chart(force_ln), SelectItem::Chart(force_cn)];
+
+    apply_select_sort(&mut items, SelectSort::Score);
+
+    assert_eq!(items[0].display_name(), "Force CN");
+    assert_eq!(items[1].display_name(), "Force LN");
+}
+
+#[test]
+fn select_score_sorts_keep_unplayed_first_and_missing_last() {
+    for sort in [SelectSort::Clear, SelectSort::Score] {
+        let played = scored_select_chart_row(1, "Played", 100, 10);
+        let mut unplayed = select_chart_row(2);
+        unplayed.chart.as_mut().unwrap().title = "Unplayed".to_string();
+        let mut missing = missing_select_chart_row("Missing");
+        missing.best_score = Some(best_score_with_replay(1000, ""));
+        let mut items = vec![
+            SelectItem::Chart(missing),
+            SelectItem::Chart(played),
+            SelectItem::Chart(unplayed),
+        ];
+
+        apply_select_sort(&mut items, sort);
+
+        assert_eq!(items[0].display_name(), "Unplayed", "{sort:?}");
+        assert_eq!(items[1].display_name(), "Played", "{sort:?}");
+        assert_eq!(items[2].display_name(), "Missing", "{sort:?}");
+    }
+}
+
+#[test]
+fn select_bp_sort_places_scored_missing_charts_after_unplayed_charts() {
+    let played = scored_select_chart_row(1, "Played", 100, 10);
+    let mut unplayed = select_chart_row(2);
+    unplayed.chart.as_mut().unwrap().title = "Unplayed".to_string();
+    let mut missing = missing_select_chart_row("Missing");
+    missing.best_score = Some(best_score_with_replay(1000, ""));
+    let mut items =
+        vec![SelectItem::Chart(missing), SelectItem::Chart(unplayed), SelectItem::Chart(played)];
+
+    apply_select_sort(&mut items, SelectSort::Bp);
+
+    assert_eq!(items[0].display_name(), "Played");
+    assert_eq!(items[1].display_name(), "Unplayed");
+    assert_eq!(items[2].display_name(), "Missing");
 }
 
 #[test]
