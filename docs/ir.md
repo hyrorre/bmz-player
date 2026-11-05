@@ -108,6 +108,8 @@ GET    /api/v1/admin/moderation/audit-logs     # 管理者: 監査ログ（?targ
 - BMZ Playerは、email + passwordで`/api/v1/auth/login`へログインし、access tokenとrefresh tokenを受け取ります。Webは`nuxt-auth-utils`のcookie sessionを使います。OAuth / OIDCのdevice flowは使いません。
 - refresh tokenはrotation方式です。BMZ Player側はプロセス内のmutexでrefreshを直列化します。サーバーは直前に`rotated`になったtokenの再利用を並行retryとみなし、新しいtokenを含むsession全体の失効はしません。
 - ログインとrefreshの応答は`provider_key`を返します。BMZ Playerはこの値を、credentials・device key・`ir_score_jobs.provider`・`primary_provider`の識別子に使い、URLから推測しません。ローカルのIRは`bmz-dev`、本番のIRは`bmz`を返します。サーバー側では`NUXT_IR_PROVIDER_KEY`で明示的に変更できます。
+- Playerで秘密情報を読み書き・削除する際は、`provider_key`を1〜64文字のASCII英数字・`-`・`_`に限定し、Windowsの予約デバイス名も拒否します。独自IRのキーもこの条件を満たす必要があります。refresh応答によるキーの変更は受け付けません。
+- IP単位のレート制限は、Cloudflareの実行コンテキストがある場合だけ`CF-Connecting-IP`を使います。それ以外は接続元ソケットのIPを使い、`X-Forwarded-For`は信用しません。Nodeをリバースプロキシの背後で動かす場合はプロキシ単位の制限になります。
 
 秘密情報（refresh token・access token・署名用の秘密鍵）は、プロファイルの`[ir] credential_store`で選んだ場所に保存します。
 
@@ -276,7 +278,10 @@ POST /api/v1/scores?include=rankings&ranking_scopes=global,self_and_rivals&ranki
 - `client` / `chart` / `rule` / `result` / `play_options` / `idempotency_key`
 - `chart.sha256`（小文字の16進64桁）。`chart.md5`を送る場合は小文字の16進32桁
 - `rule.ln_policy`（`AutoLn` / `AutoCn` / `AutoHcn` / `ForceLn` / `ForceCn` / `ForceHcn`）、`rule.rule_mode`（`Beatoraja` / `Lr2Oraja` / `Dx`）、`rule.effective_ln_mode`（`ln` / `cn` / `hcn`）、`rule.scoring`（`bms_ex_score_v1`）
-- `result`の`ex_score` / `max_combo` / `notes` / `min_bp` / `min_cb`と、`judges.fast` / `judges.slow`の各判定数（0以上の整数）
+- `result`の`ex_score` / `max_combo` / `notes` / `min_bp` / `min_cb`と、`judges.fast` / `judges.slow`の各判定数（0以上の安全な整数）
+- EXは`2 × (fast/slowのPGREAT合計) + (fast/slowのGREAT合計)`と一致し、`notes × 2`以下。`max_combo`・任意の`pass_notes`・EMPTY POORを除く判定数合計は`notes`以下
+- `play_options.source_kind=lr2`では、POORに空POORが含まれるため、判定数合計の検証からPOORも除きます。PGREAT・GREAT・GOOD・BADの合計上限、EXとの一致、コンボ・処理済みノーツの上限は維持します
+- Failedの未処理ノーツ、EMPTY POOR、取り込み元が独立して保存した最小BP/CBを許容します。整合性エラーはHTTP 400を返します。コースのEX・最大コンボも`max_ex_score`・`max_ex_score / 2`以下に限定します。これらの検証はプレイの真正性を保証するものではありません
 - `play_options.device_type`（`keyboard` / `controller`）
 
 各項目の扱いは次のとおりです。
@@ -429,10 +434,12 @@ rank=7, scope_rank=2  ライバル
 1. score submitのpayloadの`replay`に、hash・形式（`bmz-replay-v1`）・`upload_intent`（現在は`later`）を入れます。
 2. 送信が成功してscore IDを受け取ったら、BMZ Playerは`kind=replay`のjobを作ります。scoreの成功履歴の保存とreplay jobの投入は、同じtransactionで確定します。
 3. `POST /api/v1/scores/{id}/replay/upload-url`でupload先を取得します。応答は`upload_url` / `path` / `required_hash`です。submitでhashを申告していないscoreには409を返します。
-4. `PUT /api/v1/scores/{id}/replay/upload`へリプレイ本体を送ります。
+4. 応答の`upload_url`（`upload_id` queryを含む）へPUTでリプレイ本体を送ります。URL発行ごとに新しい世代を作り、古いURLは拒否します。
 5. `POST /api/v1/scores/{id}/replay/verify`で、保存した実体のSHA-256と申告したhashを比べます。一致すれば`verified`、一致しなければ`rejected`になります。
 
 - リプレイの状態は`replay_objects.status`（`metadata_only` / `pending_upload` / `uploaded` / `verified` / `rejected`）で管理します。スコアの`verification`とは別です。
+- PUTごとに別のblobを保存し、現在のpending世代と一致した要求だけを`uploaded`にします。検証も読み出した保存先・hashとDBの現在値が一致するときだけ反映し、競合時は409を返します。再試行時はupload URLを取得し直します。古い世代・競合で採用されなかったblobは削除を試みます。
+- 本文は4MiBまでです。Content-Lengthの有無・申告値にかかわらずストリームを読みながら制限し、超過時は読み取りを中止して413を返します。Cloudflare WorkerではNitroが本文をbuffer化する前に、すべての要求本文へ同じ4MiB上限を適用します。
 - `GET /api/v1/scores/{id}/replay`は、`uploaded` / `verified`のリプレイについて、`download_url` / `expires_in`（300秒） / `hash` / `format` / `size_bytes` / `status`を返します。リプレイはランキングと同じく公開情報として扱います。
 - upload / verifyに失敗した場合は、replay jobだけを再試行し、成功したscoreを未送信には戻しません。
 - `bmz-player ir replay <SCORE_ID>`でダウンロードし、`bmz-player --boot-replay-file <PATH>`で再生できます。

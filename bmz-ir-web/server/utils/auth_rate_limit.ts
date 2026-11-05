@@ -1,5 +1,6 @@
-import { getRequestIP, type H3Event } from 'h3'
+import type { H3Event } from 'h3'
 import { incrementRateLimit, pruneExpiredRateLimits } from './rate_limit'
+import { rateLimitClientIp } from './client_ip'
 
 type AuthRateLimitAction = 'login' | 'register'
 
@@ -15,7 +16,7 @@ export async function checkAuthRateLimit(
   now = Date.now(),
 ) {
   const message = 'Too many authentication attempts'
-  const ip = getRequestIP(event, { xForwardedFor: true }) ?? 'unknown'
+  const ip = rateLimitClientIp(event)
   await Promise.all([
     incrementRateLimit(action, 'email', email, LIMITS[action].email, now, message, event),
     incrementRateLimit(action, 'ip', ip, LIMITS[action].ip, now, message, event),

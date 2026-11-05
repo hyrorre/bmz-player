@@ -41,6 +41,7 @@
 |---|---|
 | 2026-11-05 | [Lua sandboxの資源制限](2026/2026-11-05-lua-resource-security.md) |
 | 2026-11-05 | [スクリーンショットに曲名・クリアタイプ・フォルダ名を付ける](2026/2026-11-05-screenshot-filenames.md) |
+| 2026-11-05 | [IRの入力境界とレート制限](2026/2026-11-05-ir-security-validation.md) |
 | 2026-11-05 | [ヒットエラービジュアライザーの座標・EMA修正](2026/2026-11-05-hit-error-visualizer.md) |
 | 2026-11-04 | [SPの配置を左右どちらのコントローラーからも変更する（#64）](2026/2026-11-04-sp-arrange-controller.md) |
 | 2026-11-04 | [ModernChicのPlay画面に関する8項目の報告](2026/2026-11-04-modernchic-play-report.md) |

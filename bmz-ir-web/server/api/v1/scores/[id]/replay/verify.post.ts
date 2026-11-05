@@ -5,6 +5,8 @@ import { db, schema } from 'hub:db'
 import { requireScoreWriteAllowed } from '../../../../../services/moderation/enforcement'
 import { requireIrUser } from '../../../../../utils/auth'
 import { REPLAY_UPLOAD_RATE_LIMIT, checkUserRateLimit } from '../../../../../utils/rate_limit'
+import { MAX_REPLAY_BYTES } from '../../../../../../shared/constants/ir'
+import { readLimitedBody } from '../../../../../../shared/utils/body_limit'
 
 /**
  * アップロード済みリプレイの hash を検証する。
@@ -33,6 +35,9 @@ export default defineEventHandler(async (event) => {
   if (!replay || !replay.objectPath) {
     throw createError({ statusCode: 404, statusMessage: 'Replay upload not found' })
   }
+  if (replay.status === 'pending_upload') {
+    throw createError({ statusCode: 409, statusMessage: 'Replay object is not uploaded yet' })
+  }
 
   const stored = await blob.get(replay.objectPath)
   if (!stored) {
@@ -42,15 +47,28 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  const bytes = Buffer.from(await stored.arrayBuffer())
+  const bytes = await readLimitedBody(stored.stream(), String(stored.size), MAX_REPLAY_BYTES)
   const actualHash = createHash('sha256').update(bytes).digest('hex')
   const verified = actualHash === replay.hash
   const status = verified ? 'verified' : 'rejected'
 
-  await db
+  const changed = await db
     .update(schema.replayObjects)
     .set({ status, sizeBytes: bytes.length, updatedAt: new Date() })
-    .where(eq(schema.replayObjects.id, replay.id))
+    .where(
+      and(
+        eq(schema.replayObjects.id, replay.id),
+        eq(schema.replayObjects.objectPath, replay.objectPath),
+        eq(schema.replayObjects.hash, replay.hash),
+      ),
+    )
+    .returning({ id: schema.replayObjects.id })
+  if (changed.length === 0) {
+    throw createError({
+      statusCode: 409,
+      statusMessage: 'Replay upload changed during verification',
+    })
+  }
 
   return { status, size_bytes: bytes.length, hash: actualHash }
 })

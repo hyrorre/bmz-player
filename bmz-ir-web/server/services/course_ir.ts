@@ -118,6 +118,12 @@ export function validateCourseScoreSubmission(value: unknown): CourseScoreSubmis
   for (const field of ['ex_score', 'max_ex_score', 'max_combo', 'bp', 'played_entries'] as const) {
     requireNonNegativeInteger(payload.result[field], `result.${field}`)
   }
+  if (
+    payload.result.ex_score > payload.result.max_ex_score ||
+    payload.result.max_combo > payload.result.max_ex_score / 2
+  ) {
+    throw new Error('result score or combo exceeds result.max_ex_score')
+  }
   requireFiniteNumber(payload.result.gauge_value, 'result.gauge_value')
   if (!isRecord(payload.result.judges)) {
     throw new Error('result.judges must be an object')
