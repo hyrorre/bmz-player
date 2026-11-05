@@ -13,6 +13,13 @@ By default, KEY1 to KEY7 are **Z S X D C F V**, and E1 to E4 are **Q W E R**.
 | F1 | Open or close the BMZ Menu (settings and tools) |
 | F12 | Save a screenshot |
 
+Screenshot filenames start with the capture date and time. Decide and Play add the song title and
+subtitle; Result also adds the current clear type, such as `Hard` or `FullCombo`.
+The overall course Result uses the course title, while course Decide uses the stage's song title.
+Music Select adds the open folder's display name, omitted at the root.
+Empty subtitles are omitted. Invalid characters and long names are adjusted, and duplicate names get a number.
+Example: `20261105_203045_123_Song_[ANOTHER]_Hard.png`.
+
 ## Song select
 
 ### Choose a song

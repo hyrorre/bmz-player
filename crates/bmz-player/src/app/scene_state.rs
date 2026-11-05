@@ -343,7 +343,7 @@ impl WinitApp {
 
     pub(super) fn left_overlay_text(&self) -> String {
         resolve_left_overlay_text(
-            self.renderer.has_pending_screenshot(),
+            self.screenshots.pending.is_some() || self.renderer.has_pending_screenshot(),
             self.smoke
                 .left_overlay_toast
                 .as_ref()

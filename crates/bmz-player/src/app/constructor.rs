@@ -461,6 +461,7 @@ impl WinitApp {
                 discord_presence_config: None,
                 last_obs_event_key: None,
             },
+            screenshots: Default::default(),
             smoke: SmokeRuntime {
                 smoke_exit_after_frames: options.smoke_exit_after_frames,
                 smoke_exit_after_play_frames: options.smoke_exit_after_play_frames,

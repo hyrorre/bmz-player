@@ -311,9 +311,8 @@ pub(in crate::ui) fn format_optional_timestamp(value: Option<i64>) -> String {
 }
 
 fn format_unix_local_timestamp(seconds: i64) -> String {
-    let (year, month, day, hour, minute) = unix_seconds_to_local_datetime(seconds)
-        .unwrap_or_else(|| unix_seconds_to_utc_datetime(seconds));
-    format_datetime_minute(year, month, day, hour, minute)
+    let date = crate::datetime::local_datetime(seconds);
+    format_datetime_minute(date.year, date.month, date.day, date.hour, date.minute)
 }
 
 pub(in crate::ui) fn format_datetime_minute(
@@ -326,62 +325,4 @@ pub(in crate::ui) fn format_datetime_minute(
     format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}")
 }
 
-#[cfg(unix)]
-fn unix_seconds_to_local_datetime(seconds: i64) -> Option<(i64, u32, u32, u32, u32)> {
-    let raw_time = libc::time_t::try_from(seconds).ok()?;
-    let mut tm = std::mem::MaybeUninit::<libc::tm>::uninit();
-    // SAFETY: `raw_time` and `tm` remain valid for the duration of the call.
-    let result = unsafe { libc::localtime_r(&raw_time, tm.as_mut_ptr()) };
-    if result.is_null() {
-        return None;
-    }
-    // SAFETY: A non-null result means `tm` was initialized by `localtime_r`.
-    Some(datetime_minute_from_tm(unsafe { tm.assume_init() }))
-}
-
-#[cfg(windows)]
-fn unix_seconds_to_local_datetime(seconds: i64) -> Option<(i64, u32, u32, u32, u32)> {
-    let raw_time = libc::time_t::try_from(seconds).ok()?;
-    let mut tm = std::mem::MaybeUninit::<libc::tm>::uninit();
-    // SAFETY: `raw_time` and `tm` remain valid for the duration of the call.
-    let result = unsafe { libc::localtime_s(tm.as_mut_ptr(), &raw_time) };
-    if result != 0 {
-        return None;
-    }
-    // SAFETY: A zero result means `tm` was initialized by `localtime_s`.
-    Some(datetime_minute_from_tm(unsafe { tm.assume_init() }))
-}
-
-#[cfg(not(any(unix, windows)))]
-fn unix_seconds_to_local_datetime(_seconds: i64) -> Option<(i64, u32, u32, u32, u32)> {
-    None
-}
-
-#[cfg(any(unix, windows))]
-fn datetime_minute_from_tm(tm: libc::tm) -> (i64, u32, u32, u32, u32) {
-    (
-        i64::from(tm.tm_year) + 1900,
-        (tm.tm_mon + 1).clamp(1, 12) as u32,
-        tm.tm_mday.clamp(1, 31) as u32,
-        tm.tm_hour.clamp(0, 23) as u32,
-        tm.tm_min.clamp(0, 59) as u32,
-    )
-}
-
-fn unix_seconds_to_utc_datetime(seconds: i64) -> (i64, u32, u32, u32, u32) {
-    let days = seconds.div_euclid(86_400);
-    let seconds_of_day = seconds.rem_euclid(86_400) as u32;
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 }.div_euclid(146_097);
-    let day_of_era = z - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let mut year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_prime = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
-    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
-    year += i64::from(month <= 2);
-    (year, month as u32, day as u32, seconds_of_day / 3_600, (seconds_of_day % 3_600) / 60)
-}
 use super::*;

@@ -31,6 +31,7 @@ pub mod cli;
 pub mod config;
 pub mod course;
 pub mod course_cmd;
+mod datetime;
 pub mod difficulty_table;
 mod directory_scan;
 pub mod discord_presence;

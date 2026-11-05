@@ -832,33 +832,6 @@ impl WinitApp {
         }
     }
 
-    pub(super) fn request_manual_screenshot(&mut self) {
-        let path = next_screenshot_path(
-            &self.boot.app_config.screenshot.dir,
-            &self.boot.app_paths.data_dir,
-        );
-        let toast_message = if self.boot.app_config.screenshot.copy_to_clipboard {
-            self.renderer.request_screenshot_with_clipboard(path.clone());
-            #[cfg(target_os = "linux")]
-            if let Some(clipboard) = &self.ui.wayland_clipboard {
-                self.renderer
-                    .request_screenshot_with_clipboard_handler(path.clone(), clipboard.clone());
-            }
-            tracing::info!(
-                path = %path.display(),
-                "manual screenshot requested with clipboard copy"
-            );
-            Localizer::new(self.boot.profile_config.ui.locale()).text("screenshot-saved-clipboard")
-        } else {
-            self.renderer.request_screenshot(path.clone());
-            tracing::info!(path = %path.display(), "manual screenshot requested");
-            Localizer::new(self.boot.profile_config.ui.locale()).text("screenshot-saved")
-        };
-        // トーストは次フレーム以降に出す。撮影フレームでは has_pending_screenshot で隠す。
-        self.show_left_overlay_toast(toast_message);
-        self.notify_obs_save_recording(crate::obs::ObsRecordingSaveReason::OnScreenshot);
-    }
-
     pub(super) fn show_left_overlay_toast(&mut self, message: impl Into<String>) {
         self.smoke.left_overlay_toast =
             Some(LeftOverlayToast { message: message.into(), shown_at: Instant::now() });

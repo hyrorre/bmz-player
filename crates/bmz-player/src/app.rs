@@ -813,6 +813,7 @@ struct WinitApp {
     result: ResultRuntimeState,
     jobs: AppJobs,
     integrations: IntegrationRuntimeState,
+    screenshots: screenshot::ScreenshotRuntime,
     smoke: SmokeRuntime,
     skin: SkinRuntimeState,
     audio: AppAudioRuntimeState,
@@ -839,6 +840,7 @@ use profile_settings::ProfileSettingsSnapshot;
 mod runtime_helpers;
 #[path = "app/scene_state.rs"]
 mod scene_state;
+mod screenshot;
 #[path = "app/viewer.rs"]
 mod viewer;
 

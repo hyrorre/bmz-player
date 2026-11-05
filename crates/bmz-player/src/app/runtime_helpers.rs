@@ -16,23 +16,6 @@ pub(super) fn now_unix_millis() -> u128 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|duration| duration.as_millis()).unwrap_or(0)
 }
 
-pub(super) fn next_screenshot_path(config_dir: &str, data_dir: &Path) -> PathBuf {
-    let dir = screenshot_dir(config_dir, data_dir);
-    let stamp = now_unix_millis();
-    for index in 0..1000 {
-        let file_name = if index == 0 {
-            format!("bmz-screenshot-{stamp}.png")
-        } else {
-            format!("bmz-screenshot-{stamp}-{index}.png")
-        };
-        let path = dir.join(file_name);
-        if !path.exists() {
-            return path;
-        }
-    }
-    dir.join(format!("bmz-screenshot-{stamp}-overflow.png"))
-}
-
 /// 左上オーバーレイ文字列を決める。
 ///
 /// 撮影フレーム (`hide_toast`) ではトーストを隠し、連続撮影時の写り込みを防ぐ。

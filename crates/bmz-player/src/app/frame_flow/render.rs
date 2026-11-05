@@ -33,6 +33,7 @@ impl WinitApp {
         }
         let snapshot_us = snapshot_start.elapsed().as_micros();
         let scene_kind = scene_kind(&scene);
+        self.submit_manual_screenshot(&scene);
         let plan_start = Instant::now();
         self.renderer.prepare_scene(scene);
         let plan_us = plan_start.elapsed().as_micros();
