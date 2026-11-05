@@ -246,6 +246,25 @@ export function validateScoreSubmission(value: unknown): IrScoreSubmission {
       requireNonNegativeInteger(payload.result.judges[side][key], `result.judges.${side}.${key}`)
     }
   }
+  const result = payload.result
+  if (result.ex_score / 2 > result.notes || result.max_combo > result.notes) {
+    throw new Error('result score or combo exceeds result.notes')
+  }
+  if (result.pass_notes != null && result.pass_notes > result.notes) {
+    throw new Error('result.pass_notes exceeds result.notes')
+  }
+  const judgedNotes = ['pgreat', 'great', 'good', 'bad', 'poor'].reduce(
+    (sum, key) => sum + judgeTotal(payload, key as keyof typeof result.judges.fast),
+    0,
+  )
+  // Failed plays can leave notes unjudged; empty POOR does not consume a note.
+  if (!Number.isSafeInteger(judgedNotes) || judgedNotes > result.notes) {
+    throw new Error('result.judges exceeds result.notes')
+  }
+  const expectedExScore = 2 * judgeTotal(payload, 'pgreat') + judgeTotal(payload, 'great')
+  if (!Number.isSafeInteger(expectedExScore) || result.ex_score !== expectedExScore) {
+    throw new Error('result.ex_score does not match result.judges')
+  }
   if (!payload.idempotency_key || typeof payload.idempotency_key !== 'string') {
     throw new Error('idempotency_key is required')
   }
@@ -438,8 +457,8 @@ export function requireHex(value: unknown, length: number, label: string) {
 }
 
 export function requireNonNegativeInteger(value: unknown, label: string) {
-  if (!Number.isInteger(value) || Number(value) < 0) {
-    throw new Error(`${label} must be a non-negative integer`)
+  if (!Number.isSafeInteger(value) || Number(value) < 0) {
+    throw new Error(`${label} must be a non-negative safe integer`)
   }
 }
 

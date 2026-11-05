@@ -1,4 +1,4 @@
-import { getQuery, readBody } from 'h3'
+import { createError, getQuery, readBody } from 'h3'
 import { IrIdempotencyCollisionError } from '../../services/ir/idempotency'
 import {
   IrEvidenceValidationError,
@@ -16,8 +16,15 @@ export default defineEventHandler(async (event) => {
   // オフライン分の一括 sync (数十件程度) は許容しつつ書き込み spam を抑える。
   await checkUserRateLimit(event, 'score_submit', user.id, SCORE_SUBMIT_RATE_LIMIT)
 
-  const body = await readBody(event)
-  const payload = validateScoreSubmission(body)
+  let payload
+  try {
+    payload = validateScoreSubmission(await readBody(event))
+  } catch (error) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: error instanceof Error ? error.message : 'invalid score payload',
+    })
+  }
   const query = getQuery(event)
   const include = String(query.include ?? '')
   const rankingLimit = Math.max(1, Math.min(200, Number(query.ranking_limit ?? 100) || 100))
