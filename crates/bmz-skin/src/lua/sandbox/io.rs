@@ -146,7 +146,10 @@ pub(super) fn create_io_stub(
                 dependencies_for_lines.as_ref(),
                 &path,
             )?;
-            let state = source.map(ReadFileState::new).unwrap_or_default();
+            let state = match source {
+                Some(source) => ReadFileState::new(lua, source)?,
+                None => ReadFileState::default(),
+            };
             create_lines_iterator(lua, Arc::new(Mutex::new(state)))
         })?,
     )?;
@@ -174,17 +177,57 @@ pub(super) struct ReadFileState {
     source: Vec<u8>,
     cursor: usize,
     closed: bool,
+    reservation: Option<ReadBufferReservation>,
 }
 
 impl ReadFileState {
-    pub(super) fn new(source: Vec<u8>) -> Self {
-        Self { source, cursor: 0, closed: false }
+    pub(super) fn new(lua: &Lua, source: Vec<u8>) -> mlua::Result<Self> {
+        let reservation = ReadBufferReservation::new(lua, source.capacity())?;
+        Ok(Self { source, cursor: 0, closed: false, reservation: Some(reservation) })
+    }
+}
+
+// Rust buffers captured by Lua callbacks are not charged to Lua's allocator.
+// Bound the retained total per VM, releasing it on close or collection of the
+// last file/iterator reference. Reading one file is independently capped at 8 MiB.
+#[derive(Clone, Debug, Default)]
+struct ReadBufferBudget(Arc<Mutex<usize>>);
+
+#[derive(Debug)]
+struct ReadBufferReservation {
+    budget: ReadBufferBudget,
+    bytes: usize,
+}
+
+impl ReadBufferReservation {
+    fn new(lua: &Lua, bytes: usize) -> mlua::Result<Self> {
+        let existing = lua.app_data_ref::<ReadBufferBudget>().map(|budget| budget.clone());
+        let budget = existing.unwrap_or_else(|| {
+            let budget = ReadBufferBudget::default();
+            lua.set_app_data(budget.clone());
+            budget
+        });
+        {
+            let mut used =
+                budget.0.lock().map_err(|_| mlua::Error::runtime("lua IO buffer lock poisoned"))?;
+            *used = used
+                .checked_add(bytes)
+                .filter(|total| *total <= 32 * 1024 * 1024)
+                .ok_or_else(|| mlua::Error::runtime("lua IO retained buffer limit exceeded"))?;
+        }
+        Ok(Self { budget, bytes })
+    }
+}
+
+impl Drop for ReadBufferReservation {
+    fn drop(&mut self) {
+        *self.budget.0.lock().unwrap_or_else(|error| error.into_inner()) -= self.bytes;
     }
 }
 
 pub(super) fn create_read_file_stub(lua: &Lua, source: Vec<u8>) -> mlua::Result<Value> {
     let file = lua.create_table()?;
-    let state = Arc::new(Mutex::new(ReadFileState::new(source)));
+    let state = Arc::new(Mutex::new(ReadFileState::new(lua, source)?));
     let state_for_read = state.clone();
     file.set(
         "read",
@@ -238,6 +281,8 @@ pub(super) fn create_read_file_stub(lua: &Lua, source: Vec<u8>) -> mlua::Result<
                 .lock()
                 .map_err(|_| mlua::Error::external("io close lock poisoned"))?;
             state.closed = true;
+            state.source = Vec::new();
+            state.reservation = None;
             Ok(true)
         })?,
     )?;

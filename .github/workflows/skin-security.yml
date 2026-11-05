@@ -1,0 +1,39 @@
+name: Lua skin compatibility and resource limits
+
+on:
+  pull_request:
+    paths:
+      - 'crates/bmz-skin/**'
+      - 'crates/bmz-skin-assets/**'
+      - 'crates/bmz-skin-document/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'data/skins/**'
+      - '.github/workflows/skin-security.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  skin:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      BMZ_REQUIRE_MZ_SELECT: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Check native integration and Rust code
+        run: cargo clippy -p bmz-skin --all-targets --locked -- -D warnings
+      - name: Run security and compatibility tests with pinned skin assets
+        run: cargo test -p bmz-skin --locked

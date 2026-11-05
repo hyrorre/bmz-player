@@ -38,6 +38,16 @@ git submodule update --init --recursive data/skins/Rmz-skin data/skins/mz-select
 ライセンスは[licenses.md](licenses.md)と各submodule内のREADME / licenseを確認します。
 Git管理外の第三者製スキンは参照用であり、コミット・再配布の対象にしません。
 
+Luaの資源制限・互換性を変更したときは、固定されたsubmoduleを取得した状態で
+`BMZ_REQUIRE_MZ_SELECT=1 cargo test -p bmz-skin --locked`を実行します。
+この指定ではmz-selectが無いとテストが失敗します。PowerShellでは先に
+`$env:BMZ_REQUIRE_MZ_SELECT = "1"`を設定してください。GitHub Actionsの
+`Lua skin compatibility and resource limits`もLinux / Windows / macOSでこの検証を行います。
+通常の素材なしテストではmz-selectは早期returnするため、成功件数を互換確認済みとは扱いません。
+CSVパターン処理の合成データ回帰テストは、素材の有無にかかわらず実行します。
+実データのパターン処理時間は
+`cargo test -p bmz-skin --locked benchmark_mz_select_csv -- --ignored --nocapture`で比較できます。
+
 ## worktree用のruntime data
 
 動作確認に既存データが必要な場合だけ、元checkoutから作業用snapshotをコピーします。

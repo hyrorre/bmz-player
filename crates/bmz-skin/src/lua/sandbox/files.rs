@@ -11,29 +11,91 @@
 
 use super::*;
 
+#[cfg(test)]
+#[path = "files_tests.rs"]
+mod tests;
+
 /// Upper bound of all files a store keeps, in bytes.
 const LUA_FILE_STORE_MAX_BYTES: usize = 32 * 1024 * 1024;
+const LUA_FILE_STORE_MAX_ENTRIES: usize = 4096;
+const LUA_FILE_PATH_MAX_BYTES: usize = 4096;
+// Account for tree nodes, path storage and values even for empty files,
+// directories and tombstones. The entry ceiling also bounds tree traversals.
+const LUA_FILE_ENTRY_OVERHEAD: usize = 256;
 
 #[derive(Debug, Default)]
 struct LuaFileLayer {
     /// `None` is a deletion, which also hides a file on disk.
     files: BTreeMap<PathBuf, Option<Vec<u8>>>,
     directories: BTreeSet<PathBuf>,
+    bytes: usize,
 }
 
 impl LuaFileLayer {
-    fn bytes(&self) -> usize {
-        self.files.values().flatten().map(Vec::len).sum()
+    fn entry_bytes(key: &Path, len: usize) -> usize {
+        LUA_FILE_ENTRY_OVERHEAD + key.as_os_str().as_encoded_bytes().len() + len
     }
 
-    fn bytes_after_write(&self, key: &Path, len: usize) -> usize {
-        let previous = self.files.get(key).and_then(Option::as_ref).map_or(0, Vec::len);
-        self.bytes() - previous + len
+    fn check(&self, key: &Path, bytes: usize, entries: usize) -> Result<(), String> {
+        if key.as_os_str().as_encoded_bytes().len() > LUA_FILE_PATH_MAX_BYTES
+            || bytes > LUA_FILE_STORE_MAX_BYTES
+            || entries > LUA_FILE_STORE_MAX_ENTRIES
+        {
+            return Err("skin file store limit exceeded".to_string());
+        }
+        Ok(())
     }
 
-    fn merge_into(&mut self, target: &mut LuaFileLayer) {
+    fn write(&mut self, key: PathBuf, file: Option<Vec<u8>>) -> Result<(), String> {
+        let previous = self.files.get(&key);
+        let previous_bytes = previous
+            .map_or(0, |file| Self::entry_bytes(&key, file.as_ref().map_or(0, Vec::capacity)));
+        let bytes = self.bytes - previous_bytes
+            + Self::entry_bytes(&key, file.as_ref().map_or(0, Vec::capacity));
+        let entries = self.files.len() + self.directories.len() + usize::from(previous.is_none());
+        self.check(&key, bytes, entries)?;
+        // Normalization can leave spare path capacity; retain exactly the
+        // encoded key bytes charged above, including for short tombstones.
+        self.files.insert(key.into_boxed_path().into_path_buf(), file);
+        self.bytes = bytes;
+        Ok(())
+    }
+
+    fn create_directory(&mut self, key: PathBuf) -> Result<(), String> {
+        if self.directories.contains(&key) {
+            return Ok(());
+        }
+        let bytes = self.bytes + Self::entry_bytes(&key, 0);
+        self.check(&key, bytes, self.files.len() + self.directories.len() + 1)?;
+        self.directories.insert(key.into_boxed_path().into_path_buf());
+        self.bytes = bytes;
+        Ok(())
+    }
+
+    fn merge_into(&mut self, target: &mut LuaFileLayer) -> Result<(), String> {
+        let mut bytes = target.bytes + self.bytes;
+        let mut entries = target.files.len()
+            + target.directories.len()
+            + self.files.len()
+            + self.directories.len();
+        for key in self.files.keys() {
+            if let Some(file) = target.files.get(key) {
+                bytes -= Self::entry_bytes(key, file.as_ref().map_or(0, Vec::capacity));
+                entries -= 1;
+            }
+        }
+        for key in &self.directories {
+            if target.directories.contains(key) {
+                bytes -= Self::entry_bytes(key, 0);
+                entries -= 1;
+            }
+        }
+        self.check(Path::new(""), bytes, entries)?;
         target.files.append(&mut self.files);
         target.directories.append(&mut self.directories);
+        target.bytes = bytes;
+        self.bytes = 0;
+        Ok(())
     }
 }
 
@@ -127,43 +189,28 @@ impl LuaFileOverlay {
         if len > LUA_IO_MAX_READ_BYTES {
             return Err(format!("skin file exceeds {LUA_IO_MAX_READ_BYTES} bytes"));
         }
-        let limit_error = || format!("skin files exceed {LUA_FILE_STORE_MAX_BYTES} bytes");
         let layer = match self.phase {
             LuaFilePhase::Inference => &mut self.scratch,
             LuaFilePhase::Load => &mut self.staged,
             LuaFilePhase::Live => match &self.store {
                 Some(store) => {
                     let mut store = store.0.lock().map_err(|_| "skin file store poisoned")?;
-                    if store.bytes_after_write(&key, len) > LUA_FILE_STORE_MAX_BYTES {
-                        return Err(limit_error());
-                    }
-                    store.files.insert(key, file);
-                    return Ok(());
+                    return store.write(key, file);
                 }
                 // Without a session the VM's own layer stands in for it.
                 None => &mut self.staged,
             },
         };
-        if layer.bytes_after_write(&key, len) > LUA_FILE_STORE_MAX_BYTES {
-            return Err(limit_error());
-        }
-        layer.files.insert(key, file);
-        Ok(())
+        layer.write(key, file)
     }
 
-    fn create_directory(&mut self, key: PathBuf) {
+    fn create_directory(&mut self, key: PathBuf) -> Result<(), String> {
         match (self.phase, &self.store) {
-            (LuaFilePhase::Inference, _) => {
-                self.scratch.directories.insert(key);
-            }
+            (LuaFilePhase::Inference, _) => self.scratch.create_directory(key),
             (LuaFilePhase::Live, Some(store)) => {
-                if let Ok(mut store) = store.0.lock() {
-                    store.directories.insert(key);
-                }
+                store.0.lock().map_err(|_| "skin file store poisoned")?.create_directory(key)
             }
-            _ => {
-                self.staged.directories.insert(key);
-            }
+            _ => self.staged.create_directory(key),
         }
     }
 
@@ -213,21 +260,13 @@ impl LuaFileOverlay {
         let Ok(mut store) = store.0.lock() else {
             return;
         };
-        let mut merged_bytes = store.bytes();
-        for (key, file) in &self.staged.files {
-            merged_bytes = merged_bytes
-                .saturating_sub(store.files.get(key).and_then(Option::as_ref).map_or(0, Vec::len))
-                + file.as_ref().map_or(0, Vec::len);
-        }
-        if merged_bytes > LUA_FILE_STORE_MAX_BYTES {
+        if self.staged.merge_into(&mut store).is_err() {
             tracing::warn!(
                 limit = LUA_FILE_STORE_MAX_BYTES,
                 "discarding Lua skin file writes over the session limit"
             );
             self.staged = LuaFileLayer::default();
-            return;
         }
-        self.staged.merge_into(&mut store);
     }
 
     /// The runtime VM's clean `main` finished; its writes repeat the document
@@ -249,12 +288,16 @@ pub(super) type SharedLuaFileOverlay = Arc<Mutex<LuaFileOverlay>>;
 /// Relative paths keep the `io` rules (no `..`); absolute paths, such as
 /// `skin_config.get_path` results, must lie inside the skin roots.
 pub(super) fn lua_file_key(path_context: &SkinPathContext, requested: &str) -> Option<PathBuf> {
+    if requested.len() > LUA_FILE_PATH_MAX_BYTES {
+        return None;
+    }
     let requested = if Path::new(requested).is_absolute() {
         requested.to_string()
     } else {
         normalize_skin_io_relative_path(requested).ok()?
     };
-    path_context.resolve_path_or_missing(&requested).ok()
+    let key = path_context.resolve_path_or_missing(&requested).ok()?;
+    (key.as_os_str().as_encoded_bytes().len() <= LUA_FILE_PATH_MAX_BYTES).then_some(key)
 }
 
 fn note_kept_file_use(
@@ -347,12 +390,21 @@ fn write_lua_skin_file(
     text: &[u8],
     append: bool,
 ) -> mlua::Result<Result<(), String>> {
+    let limit_error = || format!("skin file exceeds {LUA_IO_MAX_READ_BYTES} bytes");
+    if text.len() > LUA_IO_MAX_READ_BYTES {
+        return Ok(Err(limit_error()));
+    }
     let mut overlay = lock_overlay(overlay)?;
     note_kept_file_use(&overlay, dependencies);
     let content = if append {
-        let mut content = lua_skin_file_content(&overlay, key);
-        content.extend_from_slice(text);
-        content
+        let previous = lua_skin_file_content(&overlay, key);
+        if text.len() > LUA_IO_MAX_READ_BYTES - previous.len() {
+            return Ok(Err(limit_error()));
+        }
+        let mut combined = Vec::with_capacity(previous.len() + text.len());
+        combined.extend_from_slice(&previous);
+        combined.extend_from_slice(text);
+        combined
     } else {
         text.to_vec()
     };
@@ -381,9 +433,9 @@ fn lua_skin_directory_entries(overlay: &LuaFileOverlay, directory: &Path) -> Opt
     Some(entries.into_iter().collect())
 }
 
-fn lua_text_argument(lua: &Lua, value: Value, function: &str) -> mlua::Result<Vec<u8>> {
+fn lua_text_argument(lua: &Lua, value: Value, function: &str) -> mlua::Result<mlua::String> {
     match lua.coerce_string(value)? {
-        Some(text) => Ok(text.as_bytes().to_vec()),
+        Some(text) => Ok(text),
         None => {
             Err(mlua::Error::runtime(format!("bad argument to '{function}' (string expected)")))
         }
@@ -410,9 +462,22 @@ pub(super) fn create_lua_file_writer(
     file.set(
         "write",
         lua.create_function(move |lua, (file, args): (Table, Variadic<Value>)| {
-            let mut text = Vec::new();
+            let mut strings = Vec::with_capacity(args.len());
+            let mut len = 0;
             for value in args {
-                text.extend_from_slice(&lua_text_argument(lua, value, "write")?);
+                let text = lua_text_argument(lua, value, "write")?;
+                if text.as_bytes().len() > LUA_IO_MAX_READ_BYTES - len {
+                    return Ok(mlua::MultiValue::from_vec(vec![
+                        Value::Nil,
+                        Value::String(lua.create_string("skin file write exceeds byte limit")?),
+                    ]));
+                }
+                len += text.as_bytes().len();
+                strings.push(text);
+            }
+            let mut text = Vec::with_capacity(len);
+            for string in strings {
+                text.extend_from_slice(&string.as_bytes());
             }
             if let Some(key) = &key
                 && !text.is_empty()
@@ -464,8 +529,7 @@ pub(super) fn install_main_state_file_api(
         "file_mkdir",
         lua.create_function(move |_, path: String| {
             let Some(key) = lua_file_key(&context, &path) else { return Ok(false) };
-            lock_overlay(&files)?.create_directory(key);
-            Ok(true)
+            Ok(lock_overlay(&files)?.create_directory(key).is_ok())
         })?,
     )?;
     let context = path_context.clone();
@@ -543,8 +607,13 @@ pub(super) fn install_main_state_file_api(
             name,
             lua.create_function(move |lua, (path, text): (String, Value)| {
                 let Some(key) = lua_file_key(&context, &path) else { return Ok(false) };
-                let text = if clear { Vec::new() } else { lua_text_argument(lua, text, name)? };
-                Ok(write_lua_skin_file(&files, deps.as_ref(), &key, &text, append)?.is_ok())
+                let text = if clear {
+                    lua.create_string("")?
+                } else {
+                    lua_text_argument(lua, text, name)?
+                };
+                Ok(write_lua_skin_file(&files, deps.as_ref(), &key, &text.as_bytes(), append)?
+                    .is_ok())
             })?,
         )?;
     }
@@ -639,8 +708,7 @@ fn create_java_file(
                 if lua_skin_file_exists(&overlay, key) {
                     return Ok(false);
                 }
-                overlay.create_directory(key.clone());
-                Ok(true)
+                Ok(overlay.create_directory(key.clone()).is_ok())
             })?,
         )?;
     }
