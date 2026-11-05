@@ -58,10 +58,6 @@ pub trait AudioScheduler {
     fn schedule(&mut self, sound: ScheduledSound);
 }
 
-/// Output-time predictions wobble between callbacks. Like the backends' outage
-/// detection, treat a smaller gap between contiguous buffers as continuous PCM.
-const MIN_OUTPUT_DISCONTINUITY: Duration = Duration::from_millis(20);
-
 #[derive(Debug, Default, Clone)]
 pub struct ScheduledSoundQueue {
     // The second field preserves tie order without an allocating stable sort.
@@ -110,6 +106,7 @@ impl ScheduledSoundQueue {
 
     pub fn clear(&mut self) {
         self.sounds.clear();
+        self.resolved_until = None;
     }
 
     /// Keep future deadlines in system time. Only this buffer's events become
@@ -124,13 +121,11 @@ impl ScheduledSoundQueue {
         };
         // When the PCM continues from the previous buffer, a later prediction
         // moved only the timestamp: nothing after that buffer's end was missed.
-        // A frame jump or a long gap is a real outage, so lateness counts from here.
-        let tolerance = MIN_OUTPUT_DISCONTINUITY.max(span.saturating_mul(2));
+        // Only a frame discontinuity (a backend-detected outage or a skipped
+        // engine render) is evidence of missing PCM. Prediction gaps alone are not.
         let reached = self
             .resolved_until
-            .filter(|(until, next_frame)| {
-                *next_frame == frame && time.saturating_duration_since(*until) <= tolerance
-            })
+            .filter(|(_, next_frame)| *next_frame == frame)
             .map_or(time, |(until, _)| until.min(time));
         self.resolved_until = Some((end, frame.saturating_add(frames as u64)));
         let mut changed = false;
@@ -405,9 +400,8 @@ mod tests {
     #[test]
     fn real_output_discontinuities_keep_the_full_catch_up() {
         let base = Instant::now();
-        // A frame jump (outage catch-up, skipped render), then a stall on a
-        // backend whose frames stay contiguous, such as WASAPI exclusive.
-        for (frame, time_ms) in [(104_000, 12), (100_480, 60)] {
+        // Both backend-detected outages and skipped engine renders advance frames.
+        for (frame, time_ms) in [(104_000, 12), (102_880, 60)] {
             let mut queue = ScheduledSoundQueue::new();
             queue.schedule(timed_bgm(base + Duration::from_millis(11)));
             queue.resolve_times(100_000, base, 480, 48_000);
@@ -415,5 +409,26 @@ mod tests {
             let missed = (time_ms - 11) * 48;
             assert_eq!(queue.drain_until_frame(u64::MAX)[0].start_frame, frame - missed);
         }
+    }
+
+    #[test]
+    fn large_prediction_gap_alone_does_not_skip_the_attack() {
+        let base = Instant::now();
+        let mut queue = ScheduledSoundQueue::new();
+        queue.schedule(timed_bgm(base + Duration::from_millis(11)));
+        queue.resolve_times(100_000, base, 480, 48_000);
+        queue.resolve_times(100_480, base + Duration::from_millis(60), 480, 48_000);
+        assert_eq!(queue.drain_until_frame(u64::MAX)[0].start_frame, 100_480);
+    }
+
+    #[test]
+    fn clearing_playback_discards_the_old_resolution_history() {
+        let base = Instant::now();
+        let mut queue = ScheduledSoundQueue::new();
+        queue.resolve_times(100_000, base, 480, 48_000);
+        queue.clear();
+        queue.schedule(timed_bgm(base + Duration::from_millis(11)));
+        queue.resolve_times(100_480, base + Duration::from_millis(60), 480, 48_000);
+        assert_eq!(queue.drain_until_frame(u64::MAX)[0].start_frame, 100_480 - 49 * 48);
     }
 }

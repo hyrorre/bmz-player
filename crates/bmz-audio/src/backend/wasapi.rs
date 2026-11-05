@@ -826,24 +826,24 @@ impl ExclusiveWorkerStream {
         }
     }
 
-    fn next_playback_time(&self) -> Instant {
+    fn next_playback_time(&self) -> (Option<Instant>, u64) {
         let before = Instant::now();
         let Some((clock, frequency)) = &self.clock else {
-            return before;
+            return (None, 0);
         };
         if !self.started || self.qpc_frequency == 0 {
-            return before;
+            return (None, 0);
         }
         let mut counter = 0;
         if unsafe { QueryPerformanceCounter(&mut counter) }.is_err() {
-            return before;
+            return (None, 0);
         }
         let after = Instant::now();
         let paired = before + after.duration_since(before) / 2;
         let mut position = 0;
         let mut qpc_100ns = 0;
         if unsafe { clock.GetPosition(&mut position, Some(&mut qpc_100ns)) }.is_err() {
-            return after;
+            return (None, 0);
         }
         let counter_ns = i128::from(counter) * 1_000_000_000 / i128::from(self.qpc_frequency);
         let position_ns = i128::from(position) * 1_000_000_000 / i128::from(*frequency);
@@ -852,56 +852,69 @@ impl ExclusiveWorkerStream {
         let consumed = (u128::from(position) * u128::from(self.sample_rate)
             / u128::from(*frequency))
         .min(u128::from(u64::MAX)) as u64;
-        self.written_frames.set(self.written_frames.get().max(consumed));
-        let queued_ns =
-            i128::from(self.written_frames.get()) * 1_000_000_000 / i128::from(self.sample_rate);
+        let missed_frames = consumed.saturating_sub(self.written_frames.get());
+        let written_frames = self.written_frames.get().max(consumed);
+        let queued_ns = i128::from(written_frames) * 1_000_000_000 / i128::from(self.sample_rate);
         let delta_ns = i128::from(qpc_100ns) * 100 - counter_ns + queued_ns - position_ns;
         if !(-100_000_000..1_000_000_000).contains(&delta_ns) {
-            return after;
+            return (None, 0);
         }
+        self.written_frames.set(written_frames);
         let distance = Duration::from_nanos(delta_ns.unsigned_abs() as u64);
-        if delta_ns < 0 { paired.checked_sub(distance) } else { paired.checked_add(distance) }
-            .unwrap_or(after)
+        let prediction =
+            if delta_ns < 0 { paired.checked_sub(distance) } else { paired.checked_add(distance) };
+        (prediction, missed_frames)
     }
 
     fn fill_next_buffer(&self, renderer: &mut NativeOutputRenderer) -> Result<(), String> {
+        let callback_start = Instant::now();
         let data = unsafe {
             self.render_client
                 .GetBuffer(self.buffer_frames)
                 .map_err(|error| format!("IAudioRenderClient::GetBuffer: {error}"))?
         };
         let sample_count = self.buffer_frames as usize * self.channels;
-        let playback = self.next_playback_time();
+        let (playback, missed_frames) = self.next_playback_time();
+        if missed_frames != 0 {
+            // Publish the same underrun to both active voices and timed events,
+            // exactly once. Prediction changes alone never advance this frame.
+            renderer.catch_up_output_frames(missed_frames);
+        }
         unsafe {
             match self.sample_format {
                 ExclusiveSampleFormat::F32 => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<f32>(), sample_count),
                     self.channels,
                     playback,
+                    callback_start,
                     self.sample_rate,
                 ),
                 ExclusiveSampleFormat::I32 => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<i32>(), sample_count),
                     self.channels,
                     playback,
+                    callback_start,
                     self.sample_rate,
                 ),
                 ExclusiveSampleFormat::I24In32 => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<PcmI24In32>(), sample_count),
                     self.channels,
                     playback,
+                    callback_start,
                     self.sample_rate,
                 ),
                 ExclusiveSampleFormat::I24Packed => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<PackedI24>(), sample_count),
                     self.channels,
                     playback,
+                    callback_start,
                     self.sample_rate,
                 ),
                 ExclusiveSampleFormat::I16 => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<i16>(), sample_count),
                     self.channels,
                     playback,
+                    callback_start,
                     self.sample_rate,
                 ),
             }

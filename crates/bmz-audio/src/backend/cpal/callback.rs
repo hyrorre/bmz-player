@@ -44,7 +44,7 @@ fn map_playback_time(
     playback: ::cpal::StreamInstant,
     initial: Option<(Instant, ::cpal::StreamInstant)>,
     rebased: &mut Option<(Instant, ::cpal::StreamInstant)>,
-) -> Instant {
+) -> (Option<Instant>, bool) {
     let mapped = rebased.or(initial).and_then(|(system, api)| {
         if let Some(delta) = playback.checked_duration_since(api) {
             system.checked_add(delta)
@@ -52,20 +52,20 @@ fn map_playback_time(
             system.checked_sub(api.checked_duration_since(playback)?)
         }
     });
-    mapped
-        .filter(|time| {
-            time.checked_duration_since(observed).unwrap_or_default() < Duration::from_secs(1)
-                && observed.checked_duration_since(*time).unwrap_or_default()
-                    < Duration::from_millis(100)
-        })
-        .unwrap_or_else(|| {
-            *rebased = Some((observed, callback));
-            let delay = playback
-                .checked_duration_since(callback)
-                .filter(|delay| *delay < Duration::from_secs(1))
-                .unwrap_or_default();
-            observed + delay
-        })
+    if let Some(time) = mapped.filter(|time| {
+        time.checked_duration_since(observed).unwrap_or_default() < Duration::from_secs(1)
+            && observed.checked_duration_since(*time).unwrap_or_default()
+                < Duration::from_millis(100)
+    }) {
+        (Some(time), false)
+    } else {
+        *rebased = Some((observed, callback));
+        let prediction = playback
+            .checked_duration_since(callback)
+            .filter(|delay| *delay < Duration::from_secs(1))
+            .and_then(|delay| observed.checked_add(delay));
+        (prediction, true)
+    }
 }
 
 pub(super) fn build_output_stream<T>(
@@ -119,7 +119,7 @@ where
 
                 let frames = data.len() / channels;
                 let timestamps = info.timestamp();
-                let playback = if prediction_available {
+                let (playback, rebased) = if prediction_available {
                     map_playback_time(
                         callback_start,
                         timestamps.callback,
@@ -130,10 +130,9 @@ where
                 } else {
                     // No trustworthy output position: use the current callback,
                     // never a fixed song-start frame or a fabricated API latency.
-                    callback_start
+                    (None, false)
                 };
                 let span = frames_to_duration(frames, sample_rate);
-                let buffer_time = output_phase.buffer_time(playback, callback_start, span);
                 #[cfg(any(target_os = "macos", target_os = "linux"))]
                 let resumed = timing_enabled && suspend.poll();
                 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -170,6 +169,11 @@ where
                     previous_callback = Some(callback_start);
                     previous_stream_callback = Some(info.timestamp().callback);
                 }
+                if rebased {
+                    // API epochs are not comparable across a clock rebase. Even
+                    // a concurrent late callback is not proof of lost PCM here.
+                    playback_timeline = OutputPlaybackTimeline::default();
+                }
                 let catch_up_frames = playback_timeline.catch_up_frames(
                     info.timestamp().playback,
                     frames,
@@ -184,6 +188,10 @@ where
                         .timeline_catch_up_frames
                         .fetch_add(catch_up_frames, Ordering::Relaxed);
                 }
+                if rebased || catch_up_frames != 0 {
+                    output_phase.reset();
+                }
+                let buffer_time = output_phase.buffer_time(playback, callback_start, span);
                 render_output(
                     data,
                     OutputRenderLayout {
@@ -282,7 +290,7 @@ mod playback_timeline_tests {
                     pair,
                     &mut rebased
                 ),
-                start + Duration::from_millis(20)
+                (Some(start + Duration::from_millis(20)), false)
             );
             assert!(rebased.is_none());
         }
@@ -297,7 +305,7 @@ mod playback_timeline_tests {
         let pair = Some((start, api(10_000)));
         assert_eq!(
             map_playback_time(observed, api(0), api(10), pair, &mut rebased),
-            observed + Duration::from_millis(10)
+            (Some(observed + Duration::from_millis(10)), true)
         );
         assert_eq!(
             map_playback_time(
@@ -307,9 +315,50 @@ mod playback_timeline_tests {
                 pair,
                 &mut rebased
             ),
-            observed + Duration::from_millis(20)
+            (Some(observed + Duration::from_millis(20)), false)
         );
-        assert_eq!(map_playback_time(observed, api(0), api(30_000), pair, &mut rebased), observed);
+        assert_eq!(
+            map_playback_time(observed, api(0), api(30_000), pair, &mut rebased),
+            (None, true)
+        );
+    }
+
+    #[test]
+    fn signed_api_drift_and_epoch_rebases_keep_scheduling_bounded() {
+        let start = Instant::now();
+        let span = Duration::from_millis(10);
+        for ppm in [-200_i64, -40, 40, 200] {
+            let mut phase = ScheduledOutputPhase::default();
+            let mut rebased = None;
+            let pair = Some((start, ::cpal::StreamInstant::from_nanos(0)));
+            for buffer in 0..=60_000_u32 {
+                let elapsed = u64::from(buffer) * 10_000_000;
+                let api_elapsed =
+                    (i128::from(elapsed) * i128::from(1_000_000 + ppm) / 1_000_000) as u64;
+                let observed = start + Duration::from_nanos(elapsed);
+                let (prediction, reset) = map_playback_time(
+                    observed,
+                    ::cpal::StreamInstant::from_nanos(api_elapsed),
+                    ::cpal::StreamInstant::from_nanos(api_elapsed + 10_000_000),
+                    pair,
+                    &mut rebased,
+                );
+                if reset {
+                    phase.reset();
+                }
+                let time = phase.buffer_time(prediction, observed, span);
+                let expected = observed - span / 2;
+                assert!(
+                    time.max(expected).duration_since(time.min(expected))
+                        < Duration::from_micros(500),
+                    "{ppm} ppm at {buffer}"
+                );
+            }
+            if ppm == -200 {
+                // The old pair becomes >100 ms late and is explicitly rebased.
+                assert!(rebased.is_some());
+            }
+        }
     }
 
     #[test]

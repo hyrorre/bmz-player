@@ -132,31 +132,69 @@ const OUTPUT_LEAD_SMOOTHING_SECS: f64 = 2.0;
 /// BGM ahead of key sounds and guide SEs by that whole delay.
 #[derive(Debug, Default)]
 pub(super) struct ScheduledOutputPhase {
-    lead_ns: Option<f64>,
+    // This is a clock correspondence, not a physical latency. It may be negative.
+    offset_ns: Option<f64>,
+    previous: Option<(Instant, Instant, Duration)>,
 }
 
 impl ScheduledOutputPhase {
+    pub(super) fn reset(&mut self) {
+        *self = Self::default();
+    }
+
     /// Returns the time a buffer's first frame stands for on the deadline timeline.
     ///
     /// The prediction supplies the low jitter and callback arrival the long-term
     /// reference, so an offset or a device-rate API clock cannot accumulate.
     pub(super) fn buffer_time(
         &mut self,
-        playback: Instant,
+        playback: Option<Instant>,
         callback: Instant,
         span: Duration,
     ) -> Instant {
-        let lead = playback.saturating_duration_since(callback);
-        // No lead means no prediction (PipeWire, WASAPI prefill), not zero latency.
-        if !lead.is_zero() {
-            let sample = lead.as_nanos() as f64;
-            let weight = (span.as_secs_f64() / OUTPUT_LEAD_SMOOTHING_SECS).min(1.0);
-            self.lead_ns =
-                Some(self.lead_ns.map_or(sample, |lead| lead + (sample - lead) * weight));
+        let Some(playback) = playback else {
+            // Unavailable predictions must not reuse an old offset. A valid zero
+            // or negative difference, on the other hand, participates in the filter.
+            self.reset();
+            return callback.checked_sub(span / 2).unwrap_or(callback);
+        };
+        if let Some((previous_playback, previous_callback, previous_span)) = self.previous {
+            let prediction_step = signed_duration_ns(playback, previous_playback);
+            let observed_step = signed_duration_ns(callback, previous_callback);
+            let tolerance = Duration::from_millis(20).max(previous_span.saturating_mul(2));
+            // A prediction epoch/latency jump must not consume a whole window
+            // of queued events. Callback delivery jitter alone leaves the API
+            // increment continuous and must not trigger this rebase.
+            if (prediction_step - previous_span.as_nanos() as f64).abs()
+                > tolerance.as_nanos() as f64
+                && (prediction_step - observed_step).abs() > tolerance.as_nanos() as f64
+            {
+                self.reset();
+            }
         }
-        let delay = Duration::from_nanos(self.lead_ns.unwrap_or(0.0) as u64) + span / 2;
-        playback.checked_sub(delay).unwrap_or(playback)
+        let sample = signed_duration_ns(playback, callback);
+        let weight = (span.as_secs_f64() / OUTPUT_LEAD_SMOOTHING_SECS).min(1.0);
+        let offset = self.offset_ns.map_or(sample, |offset| offset + (sample - offset) * weight);
+        self.offset_ns = Some(offset);
+        self.previous = Some((playback, callback, span));
+        // Express the signed correction relative to the observed Instant, without
+        // clamping a negative offset to zero or constructing a negative Duration.
+        shift_instant_ns(callback, sample - offset - (span / 2).as_nanos() as f64)
     }
+}
+
+fn signed_duration_ns(a: Instant, b: Instant) -> f64 {
+    if a >= b {
+        a.duration_since(b).as_nanos() as f64
+    } else {
+        -(b.duration_since(a).as_nanos() as f64)
+    }
+}
+
+fn shift_instant_ns(time: Instant, offset: f64) -> Instant {
+    let distance = Duration::from_nanos(offset.abs().round() as u64);
+    if offset < 0.0 { time.checked_sub(distance) } else { time.checked_add(distance) }
+        .unwrap_or(time)
 }
 
 pub(super) fn push_output_command(
@@ -214,10 +252,10 @@ impl NativeOutputRenderer {
         &mut self,
         data: &mut [T],
         channels: usize,
-        playback: Instant,
+        playback: Option<Instant>,
+        callback_start: Instant,
         sample_rate: u32,
     ) {
-        let callback_start = Instant::now();
         self.diagnostics.callback_count.fetch_add(1, Ordering::Relaxed);
         if channels == 0 {
             data.fill(T::from_f32(0.0));
@@ -257,15 +295,28 @@ impl NativeOutputRenderer {
     /// Advance the mixer timeline across a native-stream outage without rendering the missed
     /// interval. Gameplay keeps using its monotonic clock while the endpoint is unavailable, so
     /// resuming from the old frame would permanently delay every subsequently scheduled sound.
-    pub(crate) fn catch_up_after_stream_outage(&self, outage: Duration, sample_rate: u32) -> u64 {
+    pub(crate) fn catch_up_after_stream_outage(
+        &mut self,
+        outage: Duration,
+        sample_rate: u32,
+    ) -> u64 {
         let frames = duration_to_frames(outage, sample_rate);
+        self.catch_up_output_frames(frames);
+        frames
+    }
+
+    pub(crate) fn catch_up_output_frames(&mut self, frames: u64) {
+        self.reset_prediction();
         if frames == 0 {
-            return 0;
+            return;
         }
         self.current_frame.fetch_add(frames, Ordering::Relaxed);
         self.diagnostics.timeline_catch_up_count.fetch_add(1, Ordering::Relaxed);
         self.diagnostics.timeline_catch_up_frames.fetch_add(frames, Ordering::Relaxed);
-        frames
+    }
+
+    pub(crate) fn reset_prediction(&mut self) {
+        self.output_phase.reset();
     }
 }
 
@@ -702,7 +753,7 @@ mod tests {
                     pending.push_back(next_deadline);
                     next_deadline += Duration::from_micros(13_370);
                 }
-                let time = phase.buffer_time(playback, callback, span);
+                let time = phase.buffer_time(Some(playback), callback, span);
                 engine.render_stereo_at(u64::from(buffer) * frames as u64, &mut pcm, Some(time));
                 let onsets = pcm.as_chunks::<2>().0.iter().enumerate();
                 for (frame, _) in onsets.filter(|(_, pcm)| pcm[0] != 0.0) {
@@ -725,10 +776,10 @@ mod tests {
 
     #[test]
     fn output_without_a_prediction_gets_the_same_buffer_time() {
-        for lead in [Duration::ZERO, LEAD] {
+        for lead in [None, Some(Duration::ZERO), Some(LEAD)] {
             let callback = Instant::now();
             let mut phase = ScheduledOutputPhase::default();
-            let time = phase.buffer_time(callback + lead, callback, SPAN);
+            let time = phase.buffer_time(lead.map(|lead| callback + lead), callback, SPAN);
             assert!(distance(time, callback - SPAN / 2) < Duration::from_micros(1));
         }
     }
@@ -737,9 +788,9 @@ mod tests {
     fn prefill_before_the_stream_starts_does_not_seed_the_output_lead() {
         let callback = Instant::now();
         let mut phase = ScheduledOutputPhase::default();
-        phase.buffer_time(callback - Duration::from_micros(1), callback, SPAN);
+        phase.buffer_time(None, callback, SPAN);
         let next = callback + SPAN;
-        let time = phase.buffer_time(next + LEAD, next, SPAN);
+        let time = phase.buffer_time(Some(next + LEAD), next, SPAN);
         assert!(distance(time, next - SPAN / 2) < Duration::from_micros(1));
     }
 
@@ -747,25 +798,207 @@ mod tests {
     fn late_callback_delivery_does_not_move_the_buffer_time() {
         let callback = Instant::now();
         let mut phase = ScheduledOutputPhase::default();
-        phase.buffer_time(callback + LEAD, callback, SPAN);
+        phase.buffer_time(Some(callback + LEAD), callback, SPAN);
         let next = callback + SPAN;
-        let time = phase.buffer_time(next + LEAD, next + Duration::from_millis(3), SPAN);
+        let time = phase.buffer_time(Some(next + LEAD), next + Duration::from_millis(3), SPAN);
         assert!(distance(time, next - SPAN / 2) < Duration::from_micros(20));
     }
 
     #[test]
-    fn prediction_offset_and_drift_do_not_leave_the_system_clock() {
+    fn signed_prediction_drift_stays_bounded_for_ten_minutes() {
+        let start = Instant::now();
+        for rate in [44_100, 48_000, 96_000] {
+            for frames in [256, 480, 4096] {
+                let span = frames_to_duration(frames, rate);
+                for ppm in [-200, -40, 0, 40, 200] {
+                    let mut phase = ScheduledOutputPhase::default();
+                    let count = (600.0 / span.as_secs_f64()).ceil() as u32;
+                    for buffer in 0..=count {
+                        let elapsed = span * buffer;
+                        let callback = start + elapsed;
+                        let drift_ns = elapsed.as_nanos() as f64 * f64::from(ppm) / 1e6;
+                        let playback = shift_instant_ns(callback + LEAD, drift_ns);
+                        let time = phase.buffer_time(Some(playback), callback, span);
+                        assert!(
+                            distance(time, callback - span / 2) < Duration::from_micros(500),
+                            "{rate} Hz, {frames} frames, {ppm} ppm, {buffer}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unavailable_prediction_discards_the_old_offset_and_reseeds_on_recovery() {
         let start = Instant::now();
         let mut phase = ScheduledOutputPhase::default();
-        let mut time = start;
-        let mut callback = start;
-        for buffer in 0..6_000_u32 {
-            callback = start + SPAN * buffer;
-            // A rebased clock pair, then an API clock running 200 ppm fast.
-            let offset = if buffer < 1_000 { Duration::ZERO } else { Duration::from_millis(8) };
-            let drift = (SPAN * buffer).mul_f64(200e-6);
-            time = phase.buffer_time(callback + LEAD + offset + drift, callback, SPAN);
+        phase.buffer_time(Some(start + LEAD), start, SPAN);
+        for buffer in 1..5 {
+            let callback = start + SPAN * buffer;
+            assert_eq!(phase.buffer_time(None, callback, SPAN), callback - SPAN / 2);
         }
-        assert!(distance(time, callback - SPAN / 2) < Duration::from_micros(500));
+        let callback = start + SPAN * 5;
+        assert_eq!(phase.buffer_time(Some(callback - LEAD), callback, SPAN), callback - SPAN / 2);
+    }
+
+    #[test]
+    fn a_valid_zero_prediction_continues_the_filter() {
+        let start = Instant::now();
+        let mut phase = ScheduledOutputPhase::default();
+        phase.buffer_time(Some(start + LEAD), start, SPAN);
+        let callback = start + SPAN;
+        let first = phase.buffer_time(Some(callback), callback, SPAN);
+        for buffer in 2..2_000 {
+            let callback = start + SPAN * buffer;
+            phase.buffer_time(Some(callback), callback, SPAN);
+        }
+        let callback = start + SPAN * 2_000;
+        let last = phase.buffer_time(Some(callback), callback, SPAN);
+        assert!(distance(first, start + SPAN / 2) > Duration::from_millis(9));
+        assert!(distance(last, callback - SPAN / 2) < Duration::from_micros(1));
+    }
+
+    #[test]
+    fn prediction_jumps_do_not_skip_attacks_or_consume_future_events() {
+        let start = Instant::now();
+        for jump_ms in [-100, -40, 40, 100] {
+            let mut engine = AudioEngine::new(SAMPLE_RATE);
+            engine.insert_sample(
+                SoundId(1),
+                DecodedSample { channels: 1, sample_rate: SAMPLE_RATE, frames: vec![0.5] },
+            );
+            let mut phase = ScheduledOutputPhase::default();
+            for ms in [8, 18, 28, 38] {
+                let mut sound = ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0);
+                sound.start_time = Some(start + Duration::from_millis(ms));
+                engine.schedule(sound);
+            }
+            let mut pcm = [0.0; 960];
+            for buffer in 0..5 {
+                let callback = start + SPAN * buffer;
+                let playback = shift_instant_ns(
+                    callback + LEAD,
+                    if buffer == 0 { 0.0 } else { f64::from(jump_ms) * 1e6 },
+                );
+                let time = phase.buffer_time(Some(playback), callback, SPAN);
+                engine.render_stereo_at(100_000 + u64::from(buffer) * 480, &mut pcm, Some(time));
+                let onsets: Vec<_> = pcm
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, pcm)| pcm[0] != 0.0)
+                    .map(|(frame, _)| frame)
+                    .collect();
+                assert_eq!(
+                    onsets,
+                    if buffer == 0 { vec![] } else { vec![144] },
+                    "jump {jump_ms}, buffer {buffer}"
+                );
+            }
+            assert!(engine.is_idle());
+        }
+    }
+
+    #[test]
+    fn callback_delivery_jitter_past_the_prediction_keeps_the_api_progression() {
+        let start = Instant::now();
+        let mut phase = ScheduledOutputPhase::default();
+        phase.buffer_time(Some(start + LEAD), start, SPAN);
+        let callback = start + SPAN;
+        let time =
+            phase.buffer_time(Some(callback + LEAD), callback + Duration::from_millis(30), SPAN);
+        // No rebase to the late callback, even though the signed offset crosses zero.
+        assert!(distance(time, callback - SPAN / 2) < Duration::from_micros(200));
+    }
+
+    #[test]
+    fn device_frame_rate_error_does_not_accumulate_in_the_rendered_onset() {
+        let start = Instant::now();
+        for rate in [44_100, 48_000, 96_000] {
+            let frames = rate as usize / 100;
+            let span = frames_to_duration(frames, rate);
+            for ppm in [-200, -40, 40, 200] {
+                let mut engine = AudioEngine::new(rate);
+                engine.insert_sample(
+                    SoundId(1),
+                    DecodedSample { channels: 1, sample_rate: rate, frames: vec![0.5] },
+                );
+                let mut phase = ScheduledOutputPhase::default();
+                let mut pcm = vec![0.0; frames * 2];
+                for seconds in [0, 60, 180, 300, 600] {
+                    // Device rate changes the wall time of each frame, independently
+                    // of the API clock drift tested above. Predictions here are exact.
+                    let frame = u64::from(rate) * seconds;
+                    let elapsed = frame as f64 / (f64::from(rate) * (1.0 + f64::from(ppm) / 1e6));
+                    let callback = start + Duration::from_secs_f64(elapsed);
+                    let deadline = callback + Duration::from_millis(3);
+                    let mut sound = ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0);
+                    sound.start_time = Some(deadline);
+                    engine.schedule(sound);
+                    let time = phase.buffer_time(Some(callback + LEAD), callback, span);
+                    engine.render_stereo_at(frame, &mut pcm, Some(time));
+                    let onset =
+                        pcm.as_chunks::<2>().0.iter().position(|pcm| pcm[0] != 0.0).unwrap();
+                    let output = callback
+                        + LEAD
+                        + Duration::from_secs_f64(
+                            onset as f64 / (f64::from(rate) * (1.0 + f64::from(ppm) / 1e6)),
+                        );
+                    assert!(
+                        distance(output, deadline + LEAD + span / 2) < Duration::from_micros(30)
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(any(windows, all(target_os = "macos", feature = "experimental-coreaudio-ioproc")))]
+    #[test]
+    fn native_outage_advances_active_and_pending_sounds_only_once() {
+        let start = Instant::now();
+        let mut engine = AudioEngine::new(SAMPLE_RATE);
+        for id in [1, 2] {
+            engine.insert_sample(
+                SoundId(id),
+                DecodedSample {
+                    channels: 1,
+                    sample_rate: SAMPLE_RATE,
+                    frames: (0..10_000).map(|frame| frame as f32 / 10_000.0).collect(),
+                },
+            );
+        }
+        engine.schedule(ScheduledSound::one_shot(100_000, SoundId(1), 1.0, -1.0));
+        let mut sound = ScheduledSound::one_shot(0, SoundId(2), 1.0, 1.0);
+        sound.start_time = Some(start + Duration::from_millis(25));
+        engine.schedule(sound);
+        let frame = Arc::new(AtomicU64::new(100_000));
+        let diagnostics = Arc::new(CpalOutputDiagnosticsCounters::default());
+        let commands = Arc::new(Mutex::new(VecDeque::from([CpalOutputCommand::AddLegacySource {
+            id: 1,
+            kind: CpalOutputSourceKind::Play,
+            engine: Arc::new(Mutex::new(engine)),
+        }])));
+        let mut renderer = NativeOutputRenderer::new(
+            0,
+            commands,
+            Arc::new(Mutex::new(Vec::new())),
+            frame.clone(),
+            diagnostics.clone(),
+        );
+        let mut pcm = [0.0_f32; 960];
+        renderer.render_at(&mut pcm, 2, Some(start + LEAD), start, SAMPLE_RATE);
+        renderer.catch_up_output_frames(2_400);
+        let callback = start + Duration::from_millis(60);
+        renderer.render_at(&mut pcm, 2, Some(callback + LEAD), callback, SAMPLE_RATE);
+        assert_eq!(&pcm[..2], &[0.288, 0.144]);
+        let callback = callback + SPAN;
+        renderer.render_at(&mut pcm, 2, Some(callback + LEAD), callback, SAMPLE_RATE);
+        assert_eq!(&pcm[..2], &[0.336, 0.192]);
+        assert_eq!(frame.load(Ordering::Relaxed), 100_000 + 2_400 + 3 * 480);
+        let diagnostics = diagnostics.take_snapshot();
+        assert_eq!(diagnostics.timeline_catch_up_count, 1);
+        assert_eq!(diagnostics.timeline_catch_up_frames, 2_400);
     }
 }
