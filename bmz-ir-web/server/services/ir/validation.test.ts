@@ -34,6 +34,30 @@ function submission(): IrScoreSubmission {
 }
 
 describe('score submission consistency', () => {
+  test('accepts LR2 backfill whose POOR includes empty POOR, keeping other bounds', () => {
+    const payload = submission()
+    Object.assign(payload.result, { notes: 128, pass_notes: 128, ex_score: 222, max_combo: 64 })
+    payload.result.judges.fast = {
+      pgreat: 100,
+      great: 22,
+      good: 3,
+      bad: 2,
+      poor: 10,
+      empty_poor: 0,
+    }
+    payload.play_options.source_kind = 'lr2'
+    payload.play_options.submission_source = 'local_backfill'
+    expect(validateScoreSubmission(payload)).toBe(payload)
+    payload.play_options.source_kind = 'beatoraja'
+    expect(() => validateScoreSubmission(payload)).toThrow('judges exceeds')
+    payload.play_options.source_kind = 'lr2'
+    payload.result.judges.fast.good = 30
+    expect(() => validateScoreSubmission(payload)).toThrow('judges exceeds')
+    payload.result.judges.fast.good = 3
+    payload.result.ex_score = 223
+    expect(() => validateScoreSubmission(payload)).toThrow('does not match')
+  })
+
   test('accepts partial failed plays, empty POOR and independent imported BP/CB minima', () => {
     for (const source of ['local', 'lr2', 'beatoraja']) {
       const payload = submission()

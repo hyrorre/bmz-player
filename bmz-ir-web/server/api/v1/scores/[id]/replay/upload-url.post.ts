@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, isNull, sql } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
+import { blob } from 'hub:blob'
 import { requireScoreWriteAllowed } from '../../../../../services/moderation/enforcement'
 import { requireIrUser } from '../../../../../utils/auth'
 import { REPLAY_UPLOAD_RATE_LIMIT, checkUserRateLimit } from '../../../../../utils/rate_limit'
@@ -33,7 +34,12 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 409, statusMessage: 'Score has no declared replay hash' })
   }
 
-  const objectPath = `${user.id}/${score.id}`
+  const previous = await db.query.replayObjects.findFirst({
+    columns: { id: true, objectPath: true },
+    where: eq(schema.replayObjects.scoreId, score.id),
+  })
+  const uploadId = randomUUID()
+  const objectPath = `${user.id}/${score.id}/${uploadId}`
   const values = {
     id: randomUUID(),
     scoreId: score.id,
@@ -44,7 +50,7 @@ export default defineEventHandler(async (event) => {
     status: 'pending_upload' as const,
     updatedAt: new Date(),
   }
-  await db
+  const changed = await db
     .insert(schema.replayObjects)
     .values(values)
     .onConflictDoUpdate({
@@ -54,11 +60,32 @@ export default defineEventHandler(async (event) => {
         hash: values.hash,
         format: values.format,
         status: values.status,
+        sizeBytes: null,
         updatedAt: values.updatedAt,
       },
+      // Do not lose the path of a PUT that completed after the snapshot. It
+      // must either be cleaned up here or fail its own conditional update.
+      setWhere: previous
+        ? and(
+            eq(schema.replayObjects.id, previous.id),
+            previous.objectPath === null
+              ? isNull(schema.replayObjects.objectPath)
+              : eq(schema.replayObjects.objectPath, previous.objectPath),
+          )
+        : sql`false`,
     })
+    .returning({ id: schema.replayObjects.id })
+  if (changed.length === 0) {
+    throw createError({ statusCode: 409, statusMessage: 'Replay upload intent changed' })
+  }
+
+  if (previous?.objectPath) {
+    // Every intent and PUT uses a new path, so cleanup cannot delete a newer upload.
+    await blob.del(previous.objectPath).catch(() => {})
+  }
 
   const uploadUrl = new URL(`/api/v1/scores/${score.id}/replay/upload`, getRequestURL(event))
+  uploadUrl.searchParams.set('upload_id', uploadId)
   return {
     upload_url: uploadUrl.toString(),
     path: objectPath,

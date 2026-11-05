@@ -253,7 +253,12 @@ export function validateScoreSubmission(value: unknown): IrScoreSubmission {
   if (result.pass_notes != null && result.pass_notes > result.notes) {
     throw new Error('result.pass_notes exceeds result.notes')
   }
-  const judgedNotes = ['pgreat', 'great', 'good', 'bad', 'poor'].reduce(
+  // LR2 stores empty POOR in poor, so it is not a count of consumed notes.
+  const isLr2 = normalizeScoreSourceKind(payload.play_options?.source_kind) === 'lr2'
+  const noteJudges = isLr2
+    ? ['pgreat', 'great', 'good', 'bad']
+    : ['pgreat', 'great', 'good', 'bad', 'poor']
+  const judgedNotes = noteJudges.reduce(
     (sum, key) => sum + judgeTotal(payload, key as keyof typeof result.judges.fast),
     0,
   )
