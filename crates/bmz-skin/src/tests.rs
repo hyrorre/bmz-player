@@ -2,6 +2,8 @@ use super::*;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[path = "tests/lua_patterns.rs"]
+mod lua_patterns;
 #[path = "tests/lua_resource_limits.rs"]
 mod lua_resource_limits;
 

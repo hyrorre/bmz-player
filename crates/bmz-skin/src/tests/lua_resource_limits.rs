@@ -142,3 +142,30 @@ fn shared_lua_strings_cannot_amplify_the_converted_document_without_bound() {
     .unwrap_err();
     assert!(format!("{error:#}").contains("string byte limit"));
 }
+
+#[test]
+fn oversized_writes_fail_before_copying_shared_arguments_and_preserve_contents() {
+    let loaded = header(
+        r#"
+        local s = require('main_state')
+        local f = assert(io.open('output.txt', 'w'))
+        assert(f:write('seed'))
+        local text = string.rep('x', 4*1024*1024)
+        local args = {}
+        for i=1,48 do args[i] = text end
+        local ok, err = f:write(table.unpack(args))
+        assert(ok == nil and type(err) == 'string')
+        assert(io.open('output.txt'):read('*a') == 'seed')
+        assert(s.file_write('large.txt', text..text))
+        assert(not s.file_append('large.txt', 'x'))
+        assert(not s.file_write('large.txt', text..text..'x'))
+        assert(#io.open('large.txt'):read('*a') == 8*1024*1024)
+        assert(not s.file_clear(string.rep('x', 1024*1024)))
+        assert(not s.file_mkdir(string.rep('x', 1024*1024)))
+        return {type=5, name='ok'}
+    "#,
+        None,
+    )
+    .unwrap();
+    assert_eq!(loaded.value["name"], "ok");
+}

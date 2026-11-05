@@ -71,6 +71,19 @@ pub(super) fn install_instruction_limit_with_ceilings(
     };
     lua.set_hook(HookTriggers::new().every_nth_instruction(LUA_HOOK_INTERVAL), budget.hook());
 
+    // Native pattern matching can backtrack exponentially without running a VM
+    // instruction. Replace it in the existing string table (also used by string
+    // methods and package.loaded) before any skin can retain the native APIs.
+    let patterns: Table = lua
+        .load(include_str!("patterns.lua"))
+        .set_name("bmz sandbox patterns")
+        .set_mode(ChunkMode::Text)
+        .eval()?;
+    let strings: Table = lua.globals().get("string")?;
+    for name in ["find", "match", "gmatch", "gsub"] {
+        strings.set(name, patterns.get::<Function>(name)?)?;
+    }
+
     // Lua runs __gc finalizers with hooks disabled, including at VM teardown.
     // Reject every non-nil __gc value before Lua marks a table for finalization;
     // even an initial false value could later be replaced with a function.
