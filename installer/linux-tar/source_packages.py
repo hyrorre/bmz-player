@@ -53,9 +53,11 @@ def copy_notices(owner, destination):
     package = nevra(owner)
     # Some EL8 copyright notices are %doc instead of %license; retain both.
     licenses = output("rpm", "-q", "--licensefiles", package).splitlines()
-    if not licenses:
+    docs = output("rpm", "-q", "--docfiles", package).splitlines()
+    if not licenses and not any(Path(name).name.partition(".")[0].lower() in
+                                {"license", "licence", "copying", "copyright"} for name in docs):
         raise ValueError(f"No RPM license files for {package}")
-    files = set(licenses + output("rpm", "-q", "--docfiles", package).splitlines())
+    files = set(licenses + docs)
     # Minimal base images can have tsflags=nodocs. Restore notices from the
     # exact installed NEVRA, never from a newer binary package.
     if any(not Path(name).exists() for name in files):

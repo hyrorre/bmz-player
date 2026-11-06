@@ -11,3 +11,7 @@ Gitタグのアーカイブから`configure`を生成するにはAutoconf 2.71�
 
 macOSで公式アーカイブの`configure`、`make`、`make install`が成功し、`nasm -v`で2.16.03を確認した。
 配布用スクリプトの回帰テスト26件が成功した。
+
+[修正後の実行](https://github.com/hyrorre/bmz-player/actions/runs/42163946827)は、NASMのビルド、Rustのチェック・テスト、BMZのreleaseビルドを通過した。
+ライセンス収集は`lz4-libs-1.8.3-5.el8_10.x86_64`で停止した。公式RPMには`/usr/share/doc/lz4-libs/LICENSE`が入っており、`%doc`として登録されている。
+RPMが`%doc`に収録するライセンスも受け付け、対象バージョンにライセンス本文が見つからない場合は失敗させる。

@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from manifest import sha256
-from source_packages import check_srpm, download_sources, header, rpm_owner
+from source_packages import check_srpm, copy_notices, download_sources, header, nevra, rpm_owner
 
 spec = importlib.util.spec_from_file_location("verify_sources", Path(__file__).with_name("verify-sources.py"))
 verify_sources = importlib.util.module_from_spec(spec)
@@ -75,6 +75,32 @@ class SourcePackageTests(unittest.TestCase):
                 rpm_owner("/lib64/libmissing.so")
         with self.assertRaises(ValueError):
             header("one\ntwo")
+
+    def test_license_in_docfiles_is_restored_and_copied(self):
+        owner = dict(name="lz4-libs", epoch="0", version="1.8.3", release="5.el8_10",
+                     arch="x86_64", sourcerpm="lz4-1.8.3-5.el8_10.src.rpm")
+        license_file = self.root / "usr/share/doc/lz4-libs/LICENSE"
+        destination = self.root / "notices"
+
+        def reinstall(*args, **kwargs):
+            license_file.parent.mkdir(parents=True)
+            license_file.write_text("license text\n")
+
+        with patch("source_packages.output", side_effect=["", str(license_file)]), \
+                patch("source_packages.subprocess.run", side_effect=reinstall) as run:
+            copy_notices(owner, destination)
+
+        package = nevra(owner)
+        run.assert_called_once_with(["dnf", "-y", "--setopt=tsflags=", "reinstall", package], check=True)
+        copied = destination / package / license_file.relative_to("/")
+        self.assertEqual(copied.read_bytes(), license_file.read_bytes())
+
+    def test_unrelated_doc_does_not_replace_license(self):
+        with patch("source_packages.output", side_effect=["", "/usr/share/doc/lz4-libs/README"]), \
+                patch("source_packages.subprocess.run") as run:
+            with self.assertRaisesRegex(ValueError, "No RPM license files"):
+                copy_notices(self.owner, self.root / "notices")
+        run.assert_not_called()
 
     def test_wrong_header_and_corruption_are_rejected(self):
         path = self.root / self.owner["sourcerpm"]

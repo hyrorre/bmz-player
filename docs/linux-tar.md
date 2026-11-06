@@ -228,7 +228,7 @@ FFmpegは動的リンクし、ライブラリ名を変えずに同梱します�
 それぞれについて、次のものを用意します。
 
 - `resources/licenses/rpm/packages.{json,txt}`に記録した所有RPMとSOURCERPM
-- 元のRPMの`%license`本文と`%doc`の通知
+- 元のRPMの`%license`本文と`%doc`の通知。`lz4-libs`のように`%doc`に収録されるライセンス本文も含みます。
 - ソースのアーカイブの`srpms/`に重複なく収録した正確なSRPMと、`srpms.json`の取得URL・SHA256
 
 ソースやライセンス表記が欠けている場合は、パッケージ作成が失敗します。
