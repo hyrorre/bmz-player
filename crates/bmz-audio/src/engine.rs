@@ -248,7 +248,12 @@ impl AudioEngine {
         }
         let frame_count = output.len() / 2;
         if let Some(buffer_time) = buffer_time {
-            self.queue.resolve_times(output_start_frame, buffer_time, self.output_sample_rate());
+            self.queue.resolve_times(
+                output_start_frame,
+                buffer_time,
+                frame_count,
+                self.output_sample_rate(),
+            );
         }
         let output_end_frame = output_start_frame + frame_count.saturating_sub(1) as u64;
         // 中間 Vec を確保せず、期日到来分を直接 mixer へ流し込む(RT 安全)。

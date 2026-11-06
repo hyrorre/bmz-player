@@ -543,3 +543,26 @@ fmt、workspace check、all-targets Clippy（`-D warnings`）、Windows release 
 停止は3backendとも4回すべて検出した。ASIOの通常の測定で、以前と同じくerror通知が1件あった。記録は `.local/latency-investigation/review-7b0c02d9-runs/` に保存した。cfgの修正はコードの確認によるもので、Linux・macOSのビルドは行っていない。
 
 fmt、workspace check、all-targets Clippy（`-D warnings`）、Windows release buildは成功した。workspaceテストは音声169件、gameplay262件、動画36件が成功し、失敗はmainの `c1e28a46` と同じ導入済みスキンの22件だけだった。この22件の原因は `2b7fbbce` がLR2の許可rootを入口の親だけにしたことで、Windows固有の問題ではない。上の「Windowsで失敗している可能性」は誤りだった。
+
+### 2026-11-06 追記: 境界を挟む発声順の修正
+
+`64683289` の時刻範囲は隣接バッファ間でつながるようになったが、範囲内のdeadlineからframeへの変換は公称レートのままだった。そのため、平滑化で範囲が広がると、予約を解決したframeがバッファの終端を超えた。
+
+48kHz、480→3840→480 framesの既存の再現条件で、86.3msのAと86.5msのBを予約すると、Bが第3バッファの4frame目、Aが62frame目に鳴った。同じWAVを `StopSameSound` で再開する場合、後の要求Bを古い要求Aが停止する。BGMと自動キー音の両方が対象になる。
+
+範囲内の予約を `経過時間 × バッファframe数 / 範囲の長さ` で変換し、必ずそのバッファ内へ置くようにした。終了時刻ちょうどの予約は次のバッファへ渡し、開始時刻より前の遅刻量は従来どおり公称レートで計算する。変更はqueue内の変換とengineからのframe数の受け渡しに限り、新しい時計・履歴・復帰状態は追加していない。判定時計や開始済みPCMの速度は変えていない。
+
+回帰テストでは、同じWAVの音量を変えて再開する2要求がPCM上でA→Bの順に現れることを、`catch_up=true/false` の両方で確認する。もう1件で、広がった範囲と縮んだ範囲、範囲の先頭・中央・終端直前・終端、実際の遅刻を確認する。追加した2テストは修正前に失敗し、修正後に成功した。
+
+検証:
+
+- `cargo fmt --check`、`git diff --check`。
+- `cargo check -p bmz-audio -p bmz-player --locked`。
+- `cargo clippy -p bmz-audio --all-targets --features asio --locked -- -D warnings`。
+- `cargo test -p bmz-audio --locked`: 171件成功、3件ignore。
+- `cargo test -p bmz-gameplay -p bmz-ffmpeg --locked`: gameplay 262件成功。bmz-ffmpegのテストは0件。
+- `cargo test -p bmz-player --locked --lib screens::play_loop::tests`: 12件成功。`BMZ_DATA_DIR` は `.local/latency-investigation/frame-range-fix-data` に分離した。
+- `cargo build -p bmz-audio --release --features asio --locked`。
+- Windowsの既定デバイスで `opens_and_starts_default_wasapi_exclusive_stream` をignore解除して実行し成功。
+
+実機確認はWASAPI排他ストリームの起動まで。修正後の発声順はソフトウェア上のPCMで確認しており、物理出力・聴感・実打鍵・360fps/VSyncなしの実画面・遅延分布の再計測はしていない。Linux/macOSのビルドも未実施。今回の変更はbmz-audio内の非公開処理に限るため、workspace全テストは再実行していない。

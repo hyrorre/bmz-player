@@ -807,6 +807,45 @@ mod tests {
     }
 
     #[test]
+    fn sounds_across_a_moved_boundary_keep_their_request_order() {
+        for catch_up in [true, false] {
+            let (mut clock, mut frame, base) = settled_clock(Instant::now());
+            let mut engine = AudioEngine::new(SAMPLE_RATE);
+            engine.insert_sample(
+                SoundId(1),
+                DecodedSample { channels: 1, sample_rate: SAMPLE_RATE, frames: vec![0.5; 480] },
+            );
+            for (deadline_us, volume) in [(86_300, 1.0), (86_500, 0.5)] {
+                let mut sound = ScheduledSound::one_shot(0, SoundId(1), volume, 0.0);
+                sound.start_time = Some(base + Duration::from_micros(deadline_us));
+                sound.catch_up = catch_up;
+                sound.restart_policy = crate::queue::RestartPolicy::StopSameSound;
+                engine.schedule(sound);
+            }
+            let mut attacks = Vec::new();
+            let mut previous = 0.0;
+            // The refill ends at 86.4 ms after smoothing. The two requests
+            // straddle that boundary and must not overtake each other.
+            for (callback_ms, frames) in [(0, 480), (80, 3840), (90, 480), (100, 480)] {
+                let span = frames_to_duration(frames, SAMPLE_RATE);
+                let callback = base + Duration::from_millis(callback_ms);
+                let time = clock.buffer_time(frame, callback, span, SAMPLE_RATE);
+                let mut pcm = vec![0.0; frames * 2];
+                engine.render_stereo_at(frame, &mut pcm, Some(time));
+                for pair in pcm.as_chunks::<2>().0 {
+                    if pair[0] != 0.0 && pair[0] != previous {
+                        attacks.push(pair[0]);
+                    }
+                    previous = pair[0];
+                }
+                frame += frames as u64;
+            }
+            assert_eq!(attacks, [0.5, 0.25], "catch_up={catch_up}");
+            assert!(engine.is_idle());
+        }
+    }
+
+    #[test]
     fn a_refill_covers_its_own_span_without_widening_the_stop_margin() {
         let refill = frames_to_duration(1_056, SAMPLE_RATE);
         for (callback_ms, stopped) in [(40, false), (60, true)] {

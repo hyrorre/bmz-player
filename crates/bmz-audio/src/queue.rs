@@ -109,7 +109,17 @@ impl ScheduledSoundQueue {
 
     /// Keep future deadlines in system time. Only this buffer's events become
     /// device frames, so a clock-rate error cannot accumulate over the song.
-    pub(crate) fn resolve_times(&mut self, frame: u64, time: OutputBufferTime, rate: u32) {
+    pub(crate) fn resolve_times(
+        &mut self,
+        frame: u64,
+        time: OutputBufferTime,
+        frames: usize,
+        rate: u32,
+    ) {
+        let span_ns = time.end.saturating_duration_since(time.start).as_nanos();
+        if frames == 0 || span_ns == 0 {
+            return;
+        }
         let mut changed = false;
         for (sound, _) in &mut self.sounds {
             let Some(deadline) = sound.start_time else {
@@ -121,7 +131,11 @@ impl ScheduledSoundQueue {
                 break;
             }
             sound.start_frame = if deadline >= time.start {
-                frame.saturating_add(duration_to_frames(deadline.duration_since(time.start), rate))
+                // Smoothing changes the represented time span, not the number
+                // of PCM frames. Map the whole range into this buffer.
+                let elapsed_ns = deadline.duration_since(time.start).as_nanos();
+                let offset = elapsed_ns * frames as u128 / span_ns;
+                frame.saturating_add(offset as u64)
             } else {
                 frame.saturating_sub(duration_to_frames(time.start.duration_since(deadline), rate))
             };
@@ -278,7 +292,7 @@ mod tests {
     }
 
     fn resolve(queue: &mut ScheduledSoundQueue, frame: u64, start: Instant) {
-        queue.resolve_times(frame, OutputBufferTime::for_frames(start, 480, 48_000), 48_000);
+        queue.resolve_times(frame, OutputBufferTime::for_frames(start, 480, 48_000), 480, 48_000);
     }
 
     #[test]
@@ -322,6 +336,37 @@ mod tests {
         assert_eq!(queue.len(), 1);
         resolve(&mut queue, 1480, base + Duration::from_millis(20));
         assert_eq!(queue.drain_until_frame(1480)[0].sound_id, SoundId(3));
+    }
+
+    #[test]
+    fn adjusted_time_ranges_resolve_into_the_current_buffer() {
+        let start = Instant::now();
+        for span in [Duration::from_millis(8), Duration::from_millis(12)] {
+            let time = OutputBufferTime { start, end: start + span };
+            let mut queue = ScheduledSoundQueue::new();
+            for (id, deadline) in [
+                start - Duration::from_millis(1),
+                start,
+                start + span / 2,
+                time.end - Duration::from_nanos(1),
+                time.end,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut event = sound(0, id as u32);
+                event.start_time = Some(deadline);
+                queue.schedule(event);
+            }
+            queue.resolve_times(100_000, time, 480, 48_000);
+            let due = queue.drain_until_frame(100_479);
+            let starts: Vec<_> = due.iter().map(|event| event.start_frame).collect();
+            // Real lateness still uses the sample rate. In-range deadlines
+            // cover all 480 frames, and the end belongs to the next buffer.
+            assert_eq!(starts, [99_952, 100_000, 100_240, 100_479], "{span:?}");
+            assert_eq!(queue.len(), 1);
+            assert!(queue.drain_until_frame(u64::MAX).is_empty());
+        }
     }
 
     #[test]
