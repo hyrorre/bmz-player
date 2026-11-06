@@ -19,17 +19,23 @@ impl OutputPlaybackTimeline {
     ) -> u64 {
         let catch_up = self.previous_observed.and_then(|previous_observed| {
             let callback_gap = observed.checked_duration_since(previous_observed)?;
+            let previous_span = frames_to_duration(self.previous_frames, sample_rate);
+            let span = frames_to_duration(frames, sample_rate);
             // A variable-size callback may refill PCM accumulated since the
             // last wake. Its larger span is coverage, not missing audio.
-            let expected = frames_to_duration(self.previous_frames.max(frames), sample_rate);
-            let actual = match self.previous_playback {
-                Some(previous) => playback.checked_duration_since(previous)?,
-                None => callback_gap,
+            let callback_loss = callback_gap.saturating_sub(previous_span.max(span));
+            // Continuous buffers start one previous span apart, whatever this
+            // refill holds. A larger output buffer/latency estimate is not
+            // evidence of lost PCM, so a callback outage is required as well.
+            let loss = match self.previous_playback {
+                Some(previous) => playback
+                    .checked_duration_since(previous)?
+                    .saturating_sub(previous_span)
+                    .min(callback_loss),
+                None => callback_loss,
             };
-            // A larger output buffer/latency estimate is not evidence of lost
-            // PCM. Require a callback outage as well before skipping samples.
-            let gap = actual.min(callback_gap).saturating_sub(expected);
-            (gap > output_gap_tolerance(expected)).then(|| duration_to_frames(gap, sample_rate))
+            (loss > output_gap_tolerance(previous_span.min(span)))
+                .then(|| duration_to_frames(loss, sample_rate))
         });
         self.previous_playback = Some(playback);
         self.previous_observed = Some(observed);
@@ -41,6 +47,48 @@ impl OutputPlaybackTimeline {
     /// measured by Instant, so a real stop is still detected from it alone.
     fn rebase(&mut self) {
         self.previous_playback = None;
+    }
+}
+
+/// Outage and scheduling state of one stream, outside its closure so that the
+/// handover to the engine can be tested.
+#[derive(Debug, Default)]
+struct OutputCallbackTiming {
+    playback_timeline: OutputPlaybackTimeline,
+    output_phase: ScheduledOutputPhase,
+    schedule_timeline: OutputScheduleTimeline,
+}
+
+impl OutputCallbackTiming {
+    /// Returns the output frames to skip and the timing of this buffer.
+    fn advance(
+        &mut self,
+        api_playback: ::cpal::StreamInstant,
+        playback: Option<Instant>,
+        rebased: bool,
+        frames: usize,
+        sample_rate: u32,
+        callback_start: Instant,
+    ) -> (u64, OutputScheduleTiming) {
+        if rebased {
+            self.playback_timeline.rebase();
+        }
+        let catch_up_frames = self.playback_timeline.catch_up_frames(
+            api_playback,
+            frames,
+            sample_rate,
+            callback_start,
+        );
+        if catch_up_frames != 0 {
+            self.schedule_timeline.mark_outage();
+        }
+        let span = frames_to_duration(frames, sample_rate);
+        let stopped = self.schedule_timeline.observe(callback_start, span);
+        if rebased || catch_up_frames != 0 || stopped {
+            self.output_phase.reset();
+        }
+        let buffer_time = self.output_phase.buffer_time(playback, callback_start, span);
+        (catch_up_frames, self.schedule_timeline.timing(buffer_time))
     }
 }
 
@@ -93,9 +141,7 @@ where
     // あれば設定 UI の最大 fixed buffer と 384 kHz / 約 10 ms までを覆える。
     let mut buffers = OutputRenderBuffers::new();
     let sample_rate = config.sample_rate;
-    let mut playback_timeline = OutputPlaybackTimeline::default();
-    let mut output_phase = ScheduledOutputPhase::default();
-    let mut schedule_timeline = OutputScheduleTimeline::default();
+    let mut output_timing = OutputCallbackTiming::default();
     let timing_enabled = bmz_core::latency::diagnostics_enabled();
     // Query outside the callback. A failed host identity is unknown too.
     let prediction_available = device.id().ok().is_some_and(|id| id.host().name() != "PipeWire");
@@ -141,7 +187,6 @@ where
                     // never a fixed song-start frame or a fabricated API latency.
                     (None, false)
                 };
-                let span = frames_to_duration(frames, sample_rate);
                 #[cfg(any(target_os = "macos", target_os = "linux"))]
                 let resumed = timing_enabled && suspend.poll();
                 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -178,11 +223,10 @@ where
                     previous_callback = Some(callback_start);
                     previous_stream_callback = Some(info.timestamp().callback);
                 }
-                if rebased {
-                    playback_timeline.rebase();
-                }
-                let catch_up_frames = playback_timeline.catch_up_frames(
+                let (catch_up_frames, buffer_time) = output_timing.advance(
                     info.timestamp().playback,
+                    playback,
+                    rebased,
                     frames,
                     sample_rate,
                     callback_start,
@@ -190,24 +234,18 @@ where
                 let start_frame =
                     current_frame.load(Ordering::Relaxed).saturating_add(catch_up_frames);
                 if catch_up_frames != 0 {
-                    schedule_timeline.mark_outage();
                     diagnostics.timeline_catch_up_count.fetch_add(1, Ordering::Relaxed);
                     diagnostics
                         .timeline_catch_up_frames
                         .fetch_add(catch_up_frames, Ordering::Relaxed);
                 }
-                let schedule_stopped = schedule_timeline.observe(callback_start, span);
-                if rebased || catch_up_frames != 0 || schedule_stopped {
-                    output_phase.reset();
-                }
-                let buffer_time = output_phase.buffer_time(playback, callback_start, span);
                 render_output(
                     data,
                     OutputRenderLayout {
                         channels,
                         channel_offset,
                         start_frame,
-                        buffer_time: Some(schedule_timeline.timing(buffer_time)),
+                        buffer_time: Some(buffer_time),
                     },
                     OutputRenderSources {
                         output_commands: &output_commands,
@@ -253,6 +291,91 @@ mod playback_timeline_tests {
 
     const SAMPLE_RATE: u32 = 48_000;
     const BUFFER_FRAMES: usize = 480;
+
+    #[test]
+    fn callback_stops_reach_the_schedule_timing_without_a_frame_jump() {
+        let base = Instant::now();
+        let api = ::cpal::StreamInstant::from_millis;
+        let mut timing = OutputCallbackTiming::default();
+        let advance = |timing: &mut OutputCallbackTiming, api_ms, callback_ms, rebased| {
+            let callback = base + Duration::from_millis(callback_ms);
+            let playback = callback + Duration::from_millis(10);
+            timing.advance(
+                api(api_ms),
+                Some(playback),
+                rebased,
+                BUFFER_FRAMES,
+                SAMPLE_RATE,
+                callback,
+            )
+        };
+        assert_eq!(advance(&mut timing, 1_000, 0, false).1.outage_epoch, 0);
+        assert_eq!(advance(&mut timing, 1_010, 10, false).1.outage_epoch, 0);
+        // The API position stopped too, so no catch-up reports this stall.
+        let (catch_up_frames, stopped) = advance(&mut timing, 1_020, 70, false);
+        assert_eq!(catch_up_frames, 0);
+        assert_eq!(stopped.outage_epoch, 1);
+        assert_eq!(stopped.time, base + Duration::from_millis(65));
+        // A rebase alone resets the correspondence, not the schedule.
+        assert_eq!(advance(&mut timing, 5, 80, true).1.outage_epoch, 1);
+    }
+
+    #[test]
+    fn a_catch_up_changes_the_schedule_timing_once() {
+        let base = Instant::now();
+        let api = ::cpal::StreamInstant::from_millis;
+        let mut timing = OutputCallbackTiming::default();
+        timing.advance(api(1_000), None, false, BUFFER_FRAMES, SAMPLE_RATE, base);
+        let callback = base + Duration::from_millis(110);
+        let (catch_up_frames, buffer) =
+            timing.advance(api(1_110), None, false, BUFFER_FRAMES, SAMPLE_RATE, callback);
+        assert_eq!(catch_up_frames, 4_800);
+        let epoch = buffer.outage_epoch;
+        assert_ne!(epoch, 0);
+        let callback = callback + Duration::from_millis(10);
+        let (catch_up_frames, buffer) =
+            timing.advance(api(1_120), None, false, BUFFER_FRAMES, SAMPLE_RATE, callback);
+        assert_eq!(catch_up_frames, 0);
+        assert_eq!(buffer.outage_epoch, epoch);
+    }
+
+    #[test]
+    fn a_shared_stall_is_measured_from_the_previous_buffer() {
+        // cpal reports callback + padding. The 1056-frame endpoint held 576
+        // frames (12 ms) at the last callback, then drained during the stall.
+        let base = Instant::now();
+        let api = ::cpal::StreamInstant::from_millis;
+        for (stall_ms, silent_frames) in [(60, 1_824), (100, 3_744)] {
+            let mut timeline = OutputPlaybackTimeline::default();
+            timeline.catch_up_frames(api(1_012), BUFFER_FRAMES, SAMPLE_RATE, base);
+            assert_eq!(
+                timeline.catch_up_frames(
+                    api(1_000 + stall_ms),
+                    1_056,
+                    SAMPLE_RATE,
+                    base + Duration::from_millis(stall_ms),
+                ),
+                silent_frames
+            );
+        }
+    }
+
+    #[test]
+    fn a_refill_is_not_an_outage_even_if_the_api_latency_ignores_it() {
+        let base = Instant::now();
+        let api = ::cpal::StreamInstant::from_millis;
+        let mut timeline = OutputPlaybackTimeline::default();
+        timeline.catch_up_frames(api(1_010), BUFFER_FRAMES, SAMPLE_RATE, base);
+        assert_eq!(
+            timeline.catch_up_frames(
+                api(1_090),
+                3_840,
+                SAMPLE_RATE,
+                base + Duration::from_millis(80)
+            ),
+            0
+        );
+    }
 
     #[test]
     fn a_larger_refill_covers_callback_delay_even_during_a_clock_rebase() {

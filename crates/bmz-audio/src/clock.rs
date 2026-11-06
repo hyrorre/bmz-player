@@ -238,6 +238,7 @@ pub(crate) struct OutputScheduleTiming {
     pub outage_epoch: u64,
 }
 
+#[cfg(test)]
 impl From<Instant> for OutputScheduleTiming {
     fn from(time: Instant) -> Self {
         Self { time, outage_epoch: 0 }

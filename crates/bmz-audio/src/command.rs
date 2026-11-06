@@ -582,16 +582,7 @@ impl CommandedAudioEngine {
         self.render_stereo_at(output_start_frame, output, None)
     }
 
-    pub fn render_stereo_at(
-        &mut self,
-        output_start_frame: u64,
-        output: &mut [f32],
-        buffer_time: Option<std::time::Instant>,
-    ) -> bool {
-        self.render_stereo_with_timing(output_start_frame, output, buffer_time.map(Into::into))
-    }
-
-    pub(crate) fn render_stereo_with_timing(
+    pub(crate) fn render_stereo_at(
         &mut self,
         output_start_frame: u64,
         output: &mut [f32],
@@ -613,7 +604,7 @@ impl CommandedAudioEngine {
         };
         self.apply_pending_commands(&mut engine, output_start_frame, output.len() as u64 / 2);
         self.apply_playback_stop(&mut engine);
-        engine.render_stereo_with_timing(output_start_frame, output, buffer_time);
+        engine.render_stereo_at(output_start_frame, output, buffer_time);
         self.inner.output_sample_rate.store(engine.output_sample_rate(), Ordering::Relaxed);
         self.inner.idle.store(engine.is_idle(), Ordering::Relaxed);
         true
@@ -740,18 +731,18 @@ mod output_stop_tests {
         let handle = AudioEngineHandle::new(engine);
         let mut processor = handle.processor();
         let mut pcm = [0.0; 960];
-        assert!(processor.render_stereo_with_timing(100_000, &mut pcm, Some(base.into())));
+        assert!(processor.render_stereo_at(100_000, &mut pcm, Some(base.into())));
         let lock = handle.engine.lock().unwrap();
         let timing =
             OutputScheduleTiming { time: base + Duration::from_millis(60), outage_epoch: 1 };
-        assert!(!processor.render_stereo_with_timing(100_480, &mut pcm, Some(timing)));
+        assert!(!processor.render_stereo_at(100_480, &mut pcm, Some(timing)));
         drop(lock);
         // Hold frames contiguous deliberately: notification alone must survive.
-        assert!(processor.render_stereo_with_timing(100_480, &mut pcm, Some(timing)));
+        assert!(processor.render_stereo_at(100_480, &mut pcm, Some(timing)));
         assert_eq!(pcm[0], 0.168);
         let timing =
             OutputScheduleTiming { time: base + Duration::from_millis(70), outage_epoch: 1 };
-        assert!(processor.render_stereo_with_timing(100_960, &mut pcm, Some(timing)));
+        assert!(processor.render_stereo_at(100_960, &mut pcm, Some(timing)));
         assert_eq!(pcm[0], 0.216);
     }
 }

@@ -132,9 +132,11 @@ pub(super) struct OutputScheduleTimeline {
 impl OutputScheduleTimeline {
     pub(super) fn observe(&mut self, callback: Instant, span: Duration) -> bool {
         let stopped = self.previous.is_some_and(|(previous, previous_span)| {
-            let coverage = previous_span.max(span);
-            callback.saturating_duration_since(previous)
-                > coverage.saturating_add(output_gap_tolerance(coverage))
+            // A refill adds coverage, not timing uncertainty.
+            let limit = previous_span
+                .max(span)
+                .saturating_add(output_gap_tolerance(previous_span.min(span)));
+            callback.saturating_duration_since(previous) > limit
         });
         self.previous = Some((callback, span));
         if stopped {
@@ -457,17 +459,13 @@ pub(super) fn mix_sources_stereo(
         let rendered = match &mut source.engine {
             RenderAudioEngine::Legacy(engine) => match engine.try_lock() {
                 Ok(mut engine) => {
-                    engine.render_stereo_with_timing(
-                        output_start_frame,
-                        source_scratch,
-                        buffer_time,
-                    );
+                    engine.render_stereo_at(output_start_frame, source_scratch, buffer_time);
                     true
                 }
                 Err(_) => false,
             },
             RenderAudioEngine::Commanded(engine) => {
-                engine.render_stereo_with_timing(output_start_frame, source_scratch, buffer_time)
+                engine.render_stereo_at(output_start_frame, source_scratch, buffer_time)
             }
         };
         if rendered {
@@ -821,12 +819,27 @@ mod tests {
                     span,
                 );
                 let mut pcm = vec![0.0; frames * 2];
-                engine.render_stereo_with_timing(frame, &mut pcm, Some(timeline.timing(time)));
+                engine.render_stereo_at(frame, &mut pcm, Some(timeline.timing(time)));
                 onsets += pcm.as_chunks::<2>().0.iter().filter(|pcm| pcm[0] != 0.0).count();
                 frame += frames as u64;
             }
             assert_eq!(onsets, 1, "catch_up={catch_up}");
             assert!(engine.is_idle());
+        }
+    }
+
+    #[test]
+    fn a_refill_covers_its_own_span_without_widening_the_stop_margin() {
+        let base = Instant::now();
+        let refill = frames_to_duration(1_056, SAMPLE_RATE);
+        for (callback_ms, stopped) in [(40, false), (60, true)] {
+            let mut timeline = OutputScheduleTimeline::default();
+            timeline.observe(base, SPAN);
+            assert_eq!(
+                timeline.observe(base + Duration::from_millis(callback_ms), refill),
+                stopped,
+                "{callback_ms} ms"
+            );
         }
     }
 
@@ -871,7 +884,11 @@ mod tests {
                     next_deadline += Duration::from_micros(13_370);
                 }
                 let time = phase.buffer_time(Some(playback), callback, span);
-                engine.render_stereo_at(u64::from(buffer) * frames as u64, &mut pcm, Some(time));
+                engine.render_stereo_at(
+                    u64::from(buffer) * frames as u64,
+                    &mut pcm,
+                    Some(time.into()),
+                );
                 let onsets = pcm.as_chunks::<2>().0.iter().enumerate();
                 for (frame, _) in onsets.filter(|(_, pcm)| pcm[0] != 0.0) {
                     let deadline = pending.pop_front().unwrap();
@@ -1007,7 +1024,11 @@ mod tests {
                     if buffer == 0 { 0.0 } else { f64::from(jump_ms) * 1e6 },
                 );
                 let time = phase.buffer_time(Some(playback), callback, SPAN);
-                engine.render_stereo_at(100_000 + u64::from(buffer) * 480, &mut pcm, Some(time));
+                engine.render_stereo_at(
+                    100_000 + u64::from(buffer) * 480,
+                    &mut pcm,
+                    Some(time.into()),
+                );
                 let onsets: Vec<_> = pcm
                     .as_chunks::<2>()
                     .0
@@ -1060,7 +1081,7 @@ mod tests {
                     sound.start_time = Some(deadline);
                     engine.schedule(sound);
                     let time = phase.buffer_time(Some(callback + LEAD), callback, span);
-                    engine.render_stereo_at(frame, &mut pcm, Some(time));
+                    engine.render_stereo_at(frame, &mut pcm, Some(time.into()));
                     let onset =
                         pcm.as_chunks::<2>().0.iter().position(|pcm| pcm[0] != 0.0).unwrap();
                     let output = callback
@@ -1122,5 +1143,41 @@ mod tests {
         let diagnostics = diagnostics.take_snapshot();
         assert_eq!(diagnostics.timeline_catch_up_count, 1);
         assert_eq!(diagnostics.timeline_catch_up_frames, 2_400);
+    }
+
+    #[test]
+    fn native_callback_stop_reaches_the_engine_with_contiguous_frames() {
+        let start = Instant::now();
+        let mut engine = AudioEngine::new(SAMPLE_RATE);
+        engine.insert_sample(
+            SoundId(1),
+            DecodedSample {
+                channels: 1,
+                sample_rate: SAMPLE_RATE,
+                frames: (0..10_000).map(|frame| frame as f32 / 10_000.0).collect(),
+            },
+        );
+        let mut sound = ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0);
+        sound.start_time = Some(start + Duration::from_millis(25));
+        engine.schedule(sound);
+        let commands = Arc::new(Mutex::new(VecDeque::from([CpalOutputCommand::AddLegacySource {
+            id: 1,
+            kind: CpalOutputSourceKind::Play,
+            engine: Arc::new(Mutex::new(engine)),
+        }])));
+        let mut renderer = NativeOutputRenderer::new(
+            0,
+            commands,
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(AtomicU64::new(100_000)),
+            Arc::new(CpalOutputDiagnosticsCounters::default()),
+        );
+        let mut pcm = [0.0_f32; 960];
+        renderer.render_at(&mut pcm, 2, Some(start + LEAD), start, SAMPLE_RATE);
+        // No frame jump reports this stall: the deadline is 30 ms before the
+        // buffer time of 55 ms, not at the end of the previous buffer.
+        let callback = start + Duration::from_millis(60);
+        renderer.render_at(&mut pcm, 2, Some(callback + LEAD), callback, SAMPLE_RATE);
+        assert_eq!(pcm[0], 0.144);
     }
 }

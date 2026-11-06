@@ -675,13 +675,23 @@ struct ExclusiveOutputState {
     missed_frames: u64,
 }
 
-/// A position epoch must remain consistent with its original accepted QPC
-/// correspondence. A smooth progression after an epoch jump does not restore it.
+/// A rejected position must keep progressing smoothly this long before it
+/// replaces the accepted correspondence.
+const EXCLUSIVE_POSITION_REANCHOR: Duration = Duration::from_secs(1);
+
+/// The position is trusted while it follows the accepted QPC correspondence.
+/// After a rejection it either returns to that correspondence, or a long smooth
+/// run replaces it. `written_bias` then absorbs the difference, so that a new
+/// position epoch restores the prediction without becoming a voice skip.
 #[derive(Debug, Default, Clone, Copy)]
 struct ExclusiveClockTracker {
     accepted: Option<ExclusiveClockReading>,
+    /// PCM queued past the position, from the last reading that had any.
+    queued_frames: Option<u64>,
+    written_bias: i128,
     recovering: bool,
     recovery_candidate: Option<ExclusiveClockReading>,
+    reanchor_start: Option<ExclusiveClockReading>,
 }
 
 impl ExclusiveClockTracker {
@@ -694,10 +704,24 @@ impl ExclusiveClockTracker {
         period: Duration,
     ) -> ExclusiveOutputState {
         let unavailable = ExclusiveOutputState { next_buffer_delta_ns: None, missed_frames: 0 };
-        if !self.consistent(reading, written_frames, sample_rate, max_missed_frames, period) {
-            self.recovering = true;
-            self.recovery_candidate = None;
+        let tolerance = crate::clock::output_gap_tolerance(period).as_nanos() as i128;
+        if !exclusive_reading_is_usable(reading, sample_rate, tolerance) {
+            self.reject();
+            self.reanchor_start = None;
             return unavailable;
+        }
+        if !self.follows_accepted(
+            reading,
+            written_frames,
+            sample_rate,
+            max_missed_frames,
+            tolerance,
+        ) {
+            self.reject();
+            if !self.reanchor(reading, written_frames, sample_rate, period, tolerance) {
+                return unavailable;
+            }
+            return self.accept(reading, written_frames, sample_rate, 0);
         }
         if self.recovering {
             let Some(candidate) = self.recovery_candidate else {
@@ -710,65 +734,135 @@ impl ExclusiveClockTracker {
             {
                 return unavailable;
             }
-            self.recovering = false;
-            self.recovery_candidate = None;
+            self.finish_recovery();
         }
-        self.accepted = Some(reading);
-        exclusive_output_state(reading, written_frames, sample_rate, max_missed_frames)
+        self.accept(reading, written_frames, sample_rate, max_missed_frames)
     }
 
-    fn consistent(
+    fn reject(&mut self) {
+        self.recovering = true;
+        self.recovery_candidate = None;
+    }
+
+    fn finish_recovery(&mut self) {
+        self.recovering = false;
+        self.recovery_candidate = None;
+        self.reanchor_start = None;
+    }
+
+    fn biased_written(&self, written_frames: u64) -> u64 {
+        (i128::from(written_frames) + self.written_bias).clamp(0, i128::from(u64::MAX)) as u64
+    }
+
+    fn accept(
+        &mut self,
+        reading: ExclusiveClockReading,
+        written_frames: u64,
+        sample_rate: u32,
+        max_missed_frames: u64,
+    ) -> ExclusiveOutputState {
+        let written = self.biased_written(written_frames);
+        let queued = written.saturating_sub(exclusive_consumed_frames(reading, sample_rate));
+        if queued != 0 {
+            self.queued_frames = Some(queued);
+        }
+        self.accepted = Some(reading);
+        exclusive_output_state(reading, written, sample_rate, max_missed_frames)
+    }
+
+    fn follows_accepted(
         &self,
         reading: ExclusiveClockReading,
         written_frames: u64,
         sample_rate: u32,
         max_missed_frames: u64,
-        period: Duration,
+        tolerance: i128,
     ) -> bool {
-        if reading.frequency == 0
-            || reading.qpc_frequency == 0
-            || sample_rate == 0
-            || reading.counter < 0
-        {
-            return false;
-        }
-        let counter_ns =
-            i128::from(reading.counter) * 1_000_000_000 / i128::from(reading.qpc_frequency);
-        let age_ns = counter_ns - i128::from(reading.qpc_100ns) * 100;
-        let tolerance = crate::clock::output_gap_tolerance(period).as_nanos() as i128;
-        // GetPosition runs after QueryPerformanceCounter; a small future value
-        // can be its acquisition cost. Old/future epochs are not output gaps.
-        if !(-tolerance..=tolerance).contains(&age_ns) {
-            return false;
-        }
-        let consumed =
-            u128::from(reading.position) * u128::from(sample_rate) / u128::from(reading.frequency);
+        let consumed = u128::from(exclusive_consumed_frames(reading, sample_rate));
+        let written = u128::from(self.biased_written(written_frames));
         // Do not clip a huge untrusted deficit into many small voice skips.
         // Two frames allow integer conversion/position quantization at the edge.
-        if consumed > u128::from(written_frames) + u128::from(max_missed_frames) + 2 {
+        consumed <= written + u128::from(max_missed_frames) + 2
+            && self
+                .accepted
+                .is_none_or(|previous| exclusive_progress_matches(previous, reading, tolerance))
+    }
+
+    /// Keeps the last queued PCM depth, so that a later real underrun is still
+    /// measured from the same margin.
+    fn reanchor(
+        &mut self,
+        reading: ExclusiveClockReading,
+        written_frames: u64,
+        sample_rate: u32,
+        period: Duration,
+        tolerance: i128,
+    ) -> bool {
+        let Some(start) = self
+            .reanchor_start
+            .filter(|start| exclusive_progress_matches(*start, reading, tolerance))
+        else {
+            self.reanchor_start = Some(reading);
+            return false;
+        };
+        let elapsed = Duration::from_nanos((reading.qpc_100ns - start.qpc_100ns) * 100);
+        if elapsed < EXCLUSIVE_POSITION_REANCHOR {
             return false;
         }
-        if let Some(previous) = self.accepted {
-            if reading.frequency != previous.frequency
-                || reading.qpc_frequency != previous.qpc_frequency
-                || reading.position < previous.position
-                || reading.qpc_100ns <= previous.qpc_100ns
-                || reading.counter <= previous.counter
-            {
-                return false;
-            }
-            let elapsed_ns = i128::from(reading.qpc_100ns - previous.qpc_100ns) * 100;
-            let advance_ns = i128::from(reading.position - previous.position) * 1_000_000_000
-                / i128::from(reading.frequency);
-            // Permit ordinary device drift over missing observations, but do not
-            // eventually accept a persistent epoch shift just by waiting longer.
-            let drift_slack = (elapsed_ns / 1_000).min(20_000_000);
-            if (advance_ns - elapsed_ns).abs() > tolerance + drift_slack {
-                return false;
-            }
-        }
+        let queued = self.queued_frames.unwrap_or(duration_to_frames(period, sample_rate));
+        self.written_bias = i128::from(exclusive_consumed_frames(reading, sample_rate))
+            + i128::from(queued)
+            - i128::from(written_frames);
+        self.finish_recovery();
         true
     }
+}
+
+fn exclusive_reading_is_usable(
+    reading: ExclusiveClockReading,
+    sample_rate: u32,
+    tolerance: i128,
+) -> bool {
+    if reading.frequency == 0
+        || reading.qpc_frequency == 0
+        || sample_rate == 0
+        || reading.counter < 0
+    {
+        return false;
+    }
+    let counter_ns =
+        i128::from(reading.counter) * 1_000_000_000 / i128::from(reading.qpc_frequency);
+    let age_ns = counter_ns - i128::from(reading.qpc_100ns) * 100;
+    // GetPosition runs after QueryPerformanceCounter; a small future value
+    // can be its acquisition cost. Old/future epochs are not output gaps.
+    (-tolerance..=tolerance).contains(&age_ns)
+}
+
+fn exclusive_progress_matches(
+    previous: ExclusiveClockReading,
+    reading: ExclusiveClockReading,
+    tolerance: i128,
+) -> bool {
+    if reading.frequency != previous.frequency
+        || reading.qpc_frequency != previous.qpc_frequency
+        || reading.position < previous.position
+        || reading.qpc_100ns <= previous.qpc_100ns
+        || reading.counter <= previous.counter
+    {
+        return false;
+    }
+    let elapsed_ns = i128::from(reading.qpc_100ns - previous.qpc_100ns) * 100;
+    let advance_ns = i128::from(reading.position - previous.position) * 1_000_000_000
+        / i128::from(reading.frequency);
+    // Allow ordinary device drift across missing observations. A larger shift
+    // is not this correspondence, and can only replace it through a re-anchor.
+    let drift_slack = (elapsed_ns / 1_000).min(20_000_000);
+    (advance_ns - elapsed_ns).abs() <= tolerance + drift_slack
+}
+
+fn exclusive_consumed_frames(reading: ExclusiveClockReading, sample_rate: u32) -> u64 {
+    (u128::from(reading.position) * u128::from(sample_rate) / u128::from(reading.frequency))
+        .min(u128::from(u64::MAX)) as u64
 }
 
 /// `max_missed_frames` is how far the callback ran past its period. A buffer is
@@ -785,9 +879,7 @@ fn exclusive_output_state(
     let position_ns = i128::from(reading.position) * 1_000_000_000 / i128::from(reading.frequency);
     // An underrun can consume silence beyond the last submitted PCM. Do not
     // retain that lost interval as a permanent scheduling offset.
-    let consumed = (u128::from(reading.position) * u128::from(sample_rate)
-        / u128::from(reading.frequency))
-    .min(u128::from(u64::MAX)) as u64;
+    let consumed = exclusive_consumed_frames(reading, sample_rate);
     let missed_frames = consumed.saturating_sub(written_frames).min(max_missed_frames);
     let queued_ns = i128::from(written_frames.saturating_add(missed_frames)) * 1_000_000_000
         / i128::from(sample_rate);
@@ -1860,33 +1952,114 @@ mod tests {
                     if jitter != 0 { 4 } else { 0 },
                     period,
                 );
+                // Only the prediction returns: the jump itself never skips voices.
                 assert_eq!(
                     state,
-                    ExclusiveOutputState { next_buffer_delta_ns: None, missed_frames: 0 }
+                    ExclusiveOutputState {
+                        next_buffer_delta_ns: (tick > 100).then_some(10_000_000),
+                        missed_frames: 0
+                    },
+                    "{jump} at {tick}"
                 );
             }
-            // A return to the original correspondence needs two distinct readings.
-            let reading = reading_at(9_600 + 1001 * 480, 10_210_000);
-            let written = 10_080 + 1001 * 480;
+        }
+    }
+
+    #[test]
+    fn a_position_glitch_returns_on_two_distinct_readings() {
+        let period = Duration::from_millis(10);
+        let mut tracker = ExclusiveClockTracker::default();
+        tracker.observe(reading_at(9_600, 200_000), 10_080, 48_000, 0, period);
+        assert_eq!(
+            tracker.observe(reading_at(58_080, 210_000), 10_560, 48_000, 0, period),
+            ExclusiveOutputState { next_buffer_delta_ns: None, missed_frames: 0 }
+        );
+        let reading = reading_at(10_560, 220_000);
+        for _ in 0..2 {
             assert_eq!(
-                tracker.observe(reading, written, 48_000, 0, period).next_buffer_delta_ns,
+                tracker.observe(reading, 11_040, 48_000, 0, period).next_buffer_delta_ns,
                 None
             );
-            assert_eq!(
-                tracker.observe(reading, written, 48_000, 0, period).next_buffer_delta_ns,
-                None
-            );
+        }
+        assert_eq!(
+            tracker.observe(reading_at(11_040, 230_000), 11_520, 48_000, 0, period),
+            ExclusiveOutputState { next_buffer_delta_ns: Some(10_000_000), missed_frames: 0 }
+        );
+    }
+
+    #[test]
+    fn an_unstable_position_never_replaces_the_accepted_correspondence() {
+        let period = Duration::from_millis(10);
+        let mut tracker = ExclusiveClockTracker::default();
+        tracker.observe(reading_at(9_600, 200_000), 10_080, 48_000, 0, period);
+        for tick in 1..=1_000_u64 {
+            let jump = if tick % 2 == 0 { 48_000 } else { 96_000 };
             let state = tracker.observe(
-                reading_at(reading.position + 480, 10_220_000),
-                written + 480,
+                reading_at(9_600 + tick * 480 + jump, 200_000 + tick * 10_000),
+                10_080 + tick * 480,
                 48_000,
                 0,
                 period,
             );
             assert_eq!(
                 state,
-                ExclusiveOutputState { next_buffer_delta_ns: Some(10_000_000), missed_frames: 0 }
+                ExclusiveOutputState { next_buffer_delta_ns: None, missed_frames: 0 }
             );
+        }
+    }
+
+    #[test]
+    fn a_position_lag_regains_prediction_and_underrun_correction() {
+        for lag_ms in [25_u64, 100] {
+            let period = Duration::from_millis(10);
+            let mut tracker = ExclusiveClockTracker::default();
+            let (mut position, mut elapsed_us, mut written) = (9_600_u64, 200_000_u64, 10_080_u64);
+            tracker.observe(reading_at(position, elapsed_us), written, 48_000, 0, period);
+            // The device stopped with the callback: time passed, the PCM did not.
+            position += 480;
+            written += 480;
+            elapsed_us += 10_000 + lag_ms * 1_000;
+            let state = tracker.observe(
+                reading_at(position, elapsed_us),
+                written,
+                48_000,
+                lag_ms * 48,
+                period,
+            );
+            assert_eq!(
+                state,
+                ExclusiveOutputState { next_buffer_delta_ns: None, missed_frames: 0 }
+            );
+            for tick in 1..=100 {
+                position += 480;
+                written += 480;
+                elapsed_us += 10_000;
+                let state =
+                    tracker.observe(reading_at(position, elapsed_us), written, 48_000, 0, period);
+                assert_eq!(state.missed_frames, 0);
+                assert_eq!(state.next_buffer_delta_ns.is_some(), tick == 100, "{lag_ms} ms {tick}");
+            }
+            assert_eq!(
+                tracker
+                    .observe(
+                        reading_at(position + 480, elapsed_us + 10_000),
+                        written + 480,
+                        48_000,
+                        0,
+                        period,
+                    )
+                    .next_buffer_delta_ns,
+                Some(10_000_000)
+            );
+            // A real underrun is corrected again.
+            let state = tracker.observe(
+                reading_at(position + 1_920, elapsed_us + 40_000),
+                written + 960,
+                48_000,
+                960,
+                period,
+            );
+            assert_eq!(state.missed_frames, 480);
         }
     }
 
