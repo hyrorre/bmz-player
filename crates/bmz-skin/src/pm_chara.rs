@@ -31,7 +31,7 @@ pub fn load_pm_chara(
     } else {
         crate::SkinPathContext::for_entry(source_path)?
     };
-    load_pm_chara_with_context(source_path, &context, source_id_prefix, chara_type, color)
+    load_pm_chara_with_context(context.entry_file(), &context, source_id_prefix, chara_type, color)
 }
 
 pub fn load_pm_chara_with_context(
@@ -465,6 +465,23 @@ mod tests {
 
     fn test_dir(name: &str) -> crate::tests::TestDir {
         crate::tests::TestDir::new(name)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn loads_pm_chara_from_aliased_file_and_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("character");
+        let alias = temp.path().join("alias");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("character.png"), []).unwrap();
+        fs::write(root.join("sample.chp"), b"#CharBMP character.png\n#01 4 5 60 70\n").unwrap();
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        for source in [&alias, &alias.join("sample.chp")] {
+            let loaded = load_pm_chara(source, "pm", 1, 1).unwrap();
+            assert_eq!((loaded.runtime.canvas_width, loaded.runtime.canvas_height), (60, 70));
+            assert_eq!(loaded.sources.len(), 1);
+        }
     }
 
     #[test]

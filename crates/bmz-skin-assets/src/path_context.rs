@@ -51,8 +51,10 @@ impl SkinPathContext {
 
     /// Directory-scoped resolver for tools without an entry file.
     pub fn for_directory(directory: &Path) -> Result<Self> {
-        let directory = canonicalize_skin_path(directory)?;
-        let policy = SkinPathPolicy::new([directory.clone()])?;
+        // Retain the supplied root alias before canonicalizing it (for example
+        // macOS /var or a Windows short name). The real root stays unchanged.
+        let policy = SkinPathPolicy::new([directory.to_path_buf()])?;
+        let directory = policy.resolve(directory)?;
         Ok(Self {
             entry_file: directory.clone(),
             entry_dir: directory.clone(),

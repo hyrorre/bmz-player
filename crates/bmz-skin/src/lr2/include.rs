@@ -1,10 +1,15 @@
 use super::*;
 
+pub(super) enum ResolvedInclude {
+    File(PathBuf),
+    Missing(PathBuf),
+}
+
 pub(super) fn resolve(
     builder: &mut CsvBuilder<'_>,
     current_path: &Path,
     raw: &str,
-) -> Result<PathBuf> {
+) -> Result<ResolvedInclude> {
     let cleaned = clean_lr2_asset_path(raw);
     let normalized = normalize_lr2_asset_path(raw);
     // CUSTOMFILE is authoritative before random wildcard selection.
@@ -22,7 +27,7 @@ pub(super) fn resolve(
         if selected == normalized
             && let Some(path) = candidate(builder, themes.join(relative))
         {
-            return Ok(path);
+            return Ok(ResolvedInclude::File(path));
         }
     }
     for base in [
@@ -31,13 +36,22 @@ pub(super) fn resolve(
         current_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf(),
     ] {
         if let Some(path) = candidate(builder, base.join(&selected)) {
-            return Ok(path);
+            return Ok(ResolvedInclude::File(path));
         }
     }
-    builder
-        .path_context
-        .policy()
-        .resolve_or_missing(&current_path.parent().unwrap_or_else(|| Path::new(".")).join(selected))
+    let missing = current_path.parent().unwrap_or_else(|| Path::new(".")).join(selected);
+    let policy = builder.path_context.policy();
+    if let Some(name) = missing.file_name()
+        && name.to_string_lossy().contains('*')
+    {
+        // Windows rejects '*' in metadata queries. Validate the parent chain
+        // and keep the pattern only for diagnostics. A literal '*' file on Unix
+        // must not be opened after candidate validation has rejected it.
+        let parent =
+            policy.resolve_or_missing(missing.parent().unwrap_or_else(|| Path::new(".")))?;
+        return Ok(ResolvedInclude::Missing(parent.join(name)));
+    }
+    policy.resolve_or_missing(&missing).map(ResolvedInclude::Missing)
 }
 
 fn candidate(builder: &mut CsvBuilder<'_>, pattern: PathBuf) -> Option<PathBuf> {

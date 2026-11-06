@@ -431,7 +431,7 @@ pub(super) fn resolve_include_path(
     builder: &mut CsvBuilder<'_>,
     current_path: &Path,
     raw: &str,
-) -> Result<PathBuf> {
+) -> Result<include::ResolvedInclude> {
     include::resolve(builder, current_path, raw)
 }
 

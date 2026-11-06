@@ -56,7 +56,11 @@ impl<'a> CsvBuilder<'a> {
                 if depth >= LR2_RESOLUTION_INCLUDE_DEPTH {
                     continue;
                 }
-                let include = resolve_include_path(self, current_path, field(line, 1))?;
+                let include::ResolvedInclude::File(include) =
+                    resolve_include_path(self, current_path, field(line, 1))?
+                else {
+                    continue;
+                };
                 processor.check_file(&include)?;
                 let Ok(include_lines) = read_csv_lines(&include) else {
                     continue;

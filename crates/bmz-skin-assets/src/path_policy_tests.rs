@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn directory_context_preserves_the_supplied_root_alias() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("skin");
+    fs::create_dir(&directory).unwrap();
+    fs::write(directory.join("page.png"), b"image").unwrap();
+    fs::write(temp.path().join("outside.png"), b"private").unwrap();
+    let real = canonicalize_skin_path(&directory).unwrap();
+    // Exercise an alias on Linux too; macOS and Windows may already use an
+    // alias in the temporary directory returned by the OS.
+    #[cfg(unix)]
+    let directory = {
+        let alias = temp.path().join("alias");
+        std::os::unix::fs::symlink(&directory, &alias).unwrap();
+        alias
+    };
+    let context = SkinPathContext::for_directory(&directory).unwrap();
+    assert_eq!(context.library_roots(), std::slice::from_ref(&real));
+    assert_eq!(context.policy().resolve(&directory).unwrap(), real);
+    assert_eq!(
+        context.resolve_file(&directory.join("page.png").to_string_lossy()).unwrap(),
+        real.join("page.png")
+    );
+    assert_eq!(
+        context.resolve_path_or_missing(&directory.join("new/page.png").to_string_lossy()).unwrap(),
+        real.join("new/page.png")
+    );
+    assert!(context.resolve_file(&temp.path().join("outside.png").to_string_lossy()).is_err());
+    assert!(context.resolve_path_or_missing("../outside-missing.png").is_err());
+}
+
+#[test]
 fn discovery_never_authorizes_an_external_entry() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("skins");

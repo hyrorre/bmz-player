@@ -109,3 +109,31 @@ bmz-skin-assetsは15成功。新規5件と既存リンク境界テストの拡�
 LR2では欠損ページと重複番号の依存維持、復元時のcache更新を確認し、
 FNTの必須ページと同一番号の最終宣言を使う挙動を維持した。
 ログ: `/tmp/bmz-pr76-review-{fmt,check,clippy,tests}.log`（ローカルのみ）。
+
+## PR #76のOS別CI失敗への対応（2026-11-06）
+
+`05d11ee2`の[CI run](https://github.com/hyrorre/bmz-player/actions/runs/42149629119)は、
+Ubuntuのみ成功し、macOSのPMchara 2件、Windowsの同2件とLR2 include 1件が失敗した。
+ローカルのworkspace全テスト成功はLinuxの結果であり、全OSのCI成功ではなかった。
+
+- `SkinPathContext::for_directory`がpolicy作成前に正規化して元のroot名を失っていた。
+  policyには指定時のrootを渡し、macOSの`/var`やWindowsの短縮名を同じ実体へ対応付ける。
+  PMcharaの低水準entry APIも、contextが検査済みの正規化パスを使う。
+- LR2の未一致wildcardを`symlink_metadata`へ渡すと、WindowsではNotFoundではなく
+  ファイル名不正（os error 123）になる。未一致のファイル名wildcardは親の既存部分を検査し、
+  許可範囲内なら従来のコマンド位置付き警告へ戻す。root外・壊れた親リンクは拒否する。
+  解決結果を実ファイルと欠損に分け、欠損パターンを後段でファイルとして開かない。
+  Unixで`*`を含む名前のroot外リンクがあっても、警告用パターンからの再読み込みを防ぐ。
+- Linuxでも再現する明示リンク別名と、PMcharaのファイル／ディレクトリ指定の回帰テストを追加。
+  欠損globを解像度推定あり／なし、親ディレクトリの欠損、root逸脱、壊れたリンクで検証する。
+  3 OSのCIに`bmz-skin-assets`のClippyとテストも追加し、共通resolverを直接検証する。
+
+上記と同じLinux環境・固定submodule 3件で最終検証した。
+workspaceのfmt、check、all-targets Clippy（`-D warnings`）はすべてPASS。
+`cargo test --workspace --locked --no-fail-fast -- --test-threads=4`は
+5,043成功 / 0失敗 / 58 ignored、doctestもPASS。子プロセスの1件は重複計上しない。
+bmz-skinは411成功 / 2 ignored、bmz-skin-assetsは16成功。
+新規3件、欠損globとリンク境界の拡張ケース、mz-selectの実素材読み込みを確認した。
+OS別の結果はPRの最新CI runも参照する。CI対象はbmz-skinとbmz-skin-assetsであり、
+Windows/macOSのworkspace全体、GUI・音声/GPU実機を確認したとは扱わない。
+ログ: `/tmp/bmz-pr76-ci-{assets,skin,fmt,check,clippy,tests}.log`（ローカルのみ）。

@@ -44,8 +44,10 @@ fn json_and_lr2_includes_share_explicit_roots_and_reject_external_references() {
         );
         assert!(error.contains("escapes skin root"), "{error}");
     }
-    fs::write(&csv, "#INFORMATION,5,Outside,Author\n#INCLUDE,../../outside/part.csv\n").unwrap();
-    assert!(format!("{:#}", load_csv().unwrap_err()).contains("escapes skin root"));
+    for target in ["../../outside/part.csv", "../../outside/missing-*.csv"] {
+        fs::write(&csv, format!("#INFORMATION,5,Outside,Author\n#INCLUDE,{target}\n")).unwrap();
+        assert!(format!("{:#}", load_csv().unwrap_err()).contains("escapes skin root"));
+    }
 }
 
 #[test]
@@ -85,6 +87,7 @@ fn linked_includes_and_overlay_parents_cannot_escape() {
     fs::write(outside.join("part.json"), "{}").unwrap();
     fs::write(outside.join("part.csv"), "#IMAGE,outside.png\n").unwrap();
     symlink(&outside, root.join("escape")).unwrap();
+    symlink(outside.join("absent"), root.join("broken")).unwrap();
     let lua = root.join("skin.luaskin");
     fs::write(&lua, "local f = io.open('escape/new/log.txt', 'w'); if f then f:write('discarded'):close() end; assert(io.open('escape/new/log.txt', 'r') == nil); local ok = pcall(dofile, 'escape/secret.lua'); assert(not ok); return {type=5}").unwrap();
     let context = SkinPathContext::new(&lua, [root.clone()]).unwrap();
@@ -95,6 +98,13 @@ fn linked_includes_and_overlay_parents_cannot_escape() {
     let json_context = SkinPathContext::new(&json, [root.clone()]).unwrap();
     assert!(SkinDocument::load_beatoraja_json_with_context(&json_context, None).is_err());
     let csv = root.join("skin.lr2skin");
-    fs::write(&csv, "#INFORMATION,5,Test,Author\n#INCLUDE,escape/part.csv\n").unwrap();
-    assert!(load_lr2_csv_skin(&csv, SkinKind::Select, &BTreeMap::new(), &BTreeMap::new()).is_err());
+    for target in
+        ["escape/part.csv", "escape/missing-*.csv", "escape/new/part-*.csv", "broken/part-*.csv"]
+    {
+        fs::write(&csv, format!("#INFORMATION,5,Test,Author\n#INCLUDE,{target}\n")).unwrap();
+        assert!(
+            load_lr2_csv_skin(&csv, SkinKind::Select, &BTreeMap::new(), &BTreeMap::new()).is_err(),
+            "{target}"
+        );
+    }
 }

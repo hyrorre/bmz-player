@@ -153,25 +153,27 @@ impl Processor {
             }
             builder.apply_play_header_command(line);
             if line.command == "INCLUDE" {
-                let include = resolve_include_path(builder, current_path, field(line, 1))?;
-                if include.is_file() {
-                    self.check_file(&include)?;
-                    builder.record_loaded_file_dependency(&include);
-                    let include_lines = read_csv_lines(&include)?;
-                    // LR2 keeps an IF stack per file. Keep SETOPTION and
-                    // SRC/DST state shared, but an unmatched child ENDIF must not
-                    // consume the parent's branch.
-                    let parent_stack = self.begin_include_file();
-                    let result = self.process_lines(&include_lines, &include, builder);
-                    self.end_include_file(parent_stack);
-                    result?;
-                } else {
-                    builder.warn(format!(
-                        "lr2 include not found: {} ({}: command {})",
-                        include.display(),
-                        current_path.display(),
-                        command_index + 1
-                    ));
+                match resolve_include_path(builder, current_path, field(line, 1))? {
+                    include::ResolvedInclude::File(include) => {
+                        self.check_file(&include)?;
+                        builder.record_loaded_file_dependency(&include);
+                        let include_lines = read_csv_lines(&include)?;
+                        // LR2 keeps an IF stack per file. Keep SETOPTION and
+                        // SRC/DST state shared, but an unmatched child ENDIF must not
+                        // consume the parent's branch.
+                        let parent_stack = self.begin_include_file();
+                        let result = self.process_lines(&include_lines, &include, builder);
+                        self.end_include_file(parent_stack);
+                        result?;
+                    }
+                    include::ResolvedInclude::Missing(include) => {
+                        builder.warn(format!(
+                            "lr2 include not found: {} ({}: command {})",
+                            include.display(),
+                            current_path.display(),
+                            command_index + 1
+                        ));
+                    }
                 }
                 continue;
             }
