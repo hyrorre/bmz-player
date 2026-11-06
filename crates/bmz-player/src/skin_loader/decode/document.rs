@@ -10,8 +10,7 @@ pub(in crate::skin_loader) fn skin_document_cache_key(
     Some(SkinDocumentCacheKey {
         path,
         kind,
-        library_roots: path_context
-            .map_or_else(Vec::new, |context| context.library_roots().to_vec()),
+        library_roots: path_context.map_or_else(Vec::new, |context| context.policy().root_paths()),
         modified: metadata.modified().ok(),
         len: metadata.len(),
     })
@@ -222,7 +221,7 @@ pub(in crate::skin_loader) fn load_skin_document(
         files,
         runtime_state,
         document_cache,
-        None,
+        Some(&SkinPathContext::for_entry(skin_path)?),
     )
 }
 
@@ -235,9 +234,12 @@ pub(in crate::skin_loader) fn load_skin_document_with_path_context(
     document_cache: Option<SharedSkinDocumentCache>,
     path_context: Option<&SkinPathContext>,
 ) -> Result<LoadedSkinDocumentForDecode> {
+    let context = path_context.context("skin path context is required")?;
+    let validated_path = context.policy().resolve(skin_path)?;
+    let skin_path = validated_path.as_path();
     if is_lr2_skin_path(skin_path)
         && let Some(document_cache) = document_cache.as_ref()
-        && let Some(key) = skin_document_cache_key(skin_path, kind, None)
+        && let Some(key) = skin_document_cache_key(skin_path, kind, path_context)
     {
         if let Ok(mut cache) = document_cache.lock()
             && let Some((mut document, mut resolved_files)) =
@@ -404,7 +406,7 @@ pub(in crate::skin_loader) fn load_skin_document_uncached(
         options,
         files,
         runtime_state,
-        None,
+        Some(&SkinPathContext::for_entry(skin_path)?),
     )
 }
 
@@ -416,21 +418,16 @@ pub(in crate::skin_loader) fn load_skin_document_uncached_with_path_context(
     runtime_state: &LuaLoadRuntimeState,
     path_context: Option<&SkinPathContext>,
 ) -> Result<LoadedSkinDocumentWithDependencies> {
+    let context = path_context.context("skin path context is required")?;
+    let validated_path = context.policy().resolve(skin_path)?;
+    let skin_path = validated_path.as_path();
     let (mut document, lua_runtime, mut resolved_files, dependencies) =
         if is_lua_skin_path(skin_path) {
             // Lua スキンはオプション選択 (名前 -> 選択肢名) とファイル選択
             // (filepath 定義名 -> 相対パス) をそのまま渡す。
             let virtual_io_files = lua_virtual_io_files(runtime_state);
-            let fallback_context;
-            let path_context = match path_context {
-                Some(path_context) => path_context,
-                None => {
-                    fallback_context = SkinPathContext::for_entry(skin_path)?;
-                    &fallback_context
-                }
-            };
             let loaded = bmz_skin::load_lua_skin_with_path_context(
-                path_context,
+                context,
                 options,
                 files,
                 runtime_state,
@@ -447,9 +444,8 @@ pub(in crate::skin_loader) fn load_skin_document_uncached_with_path_context(
             }
             (loaded.document, loaded.lua_runtime, loaded.files, loaded.dependencies)
         } else if is_lr2_skin_path(skin_path) {
-            let loaded = bmz_skin::load_lr2_csv_skin_with_runtime_state(
-                skin_path,
-                decode_skin_kind(kind),
+            let loaded = bmz_skin::load_lr2_csv_skin_with_path_context(
+                context,
                 options,
                 files,
                 runtime_state,
@@ -465,7 +461,7 @@ pub(in crate::skin_loader) fn load_skin_document_uncached_with_path_context(
             }
             (loaded.document, None, BTreeMap::new(), loaded.dependencies)
         } else {
-            let document = bmz_skin::load_beatoraja_json_skin_with_defaults(skin_path)
+            let document = SkinDocument::load_beatoraja_json_with_context(context, None)
                 .with_context(|| {
                     format!("failed to load beatoraja json skin: {}", skin_path.display())
                 })?;
@@ -475,13 +471,14 @@ pub(in crate::skin_loader) fn load_skin_document_uncached_with_path_context(
                 // JSON スキンは property 定義から選択肢の op コード列を組み立て、
                 // それを有効オプションとして再デコードする。
                 let enabled = enabled_options_from_selections(&document, options);
-                let document = bmz_skin::load_beatoraja_json_skin(skin_path, &enabled)
-                    .with_context(|| {
-                        format!(
-                            "failed to load beatoraja json skin with options: {}",
-                            skin_path.display()
-                        )
-                    })?;
+                let document =
+                    SkinDocument::load_beatoraja_json_with_context(context, Some(&enabled))
+                        .with_context(|| {
+                            format!(
+                                "failed to load beatoraja json skin with options: {}",
+                                skin_path.display()
+                            )
+                        })?;
                 (document, None, BTreeMap::new(), SkinLoadDependencies::default())
             }
         };
@@ -540,15 +537,6 @@ pub(in crate::skin_loader) fn default_property_item(
         .iter()
         .find(|item| !property.def.is_empty() && item.name == property.def)
         .or_else(|| property.item.first())
-}
-
-pub(in crate::skin_loader) fn decode_skin_kind(kind: SkinKind) -> DecodeSkinKind {
-    match kind {
-        SkinKind::Play => DecodeSkinKind::Play,
-        SkinKind::Select => DecodeSkinKind::Select,
-        SkinKind::Decide => DecodeSkinKind::Decide,
-        SkinKind::Result => DecodeSkinKind::Result,
-    }
 }
 
 pub fn is_decodable_skin_path(path: &Path) -> bool {

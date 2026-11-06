@@ -49,7 +49,7 @@ use crate::random_trainer::RandomTrainerState;
 use crate::screens::course_session::CourseResultSummary;
 use crate::screens::select_model::SelectCourseRow;
 use crate::select_options::SessionMode;
-use crate::skin_loader::{RANDOM_FILE_SELECTION, is_lua_skin_path};
+use crate::skin_loader::RANDOM_FILE_SELECTION;
 use crate::songs_cmd::add_song_root_entry;
 use crate::storage::difficulty_table_db::DifficultyTableRecord;
 use crate::storage::replay_import::{ImportBeatorajaReplaysRequest, ReplayImportProgress};

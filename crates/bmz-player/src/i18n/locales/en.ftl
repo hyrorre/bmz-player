@@ -1017,3 +1017,7 @@ settings-obs-command-incomplete = Enter a scene name and, when required, a sourc
 settings-downloads-keep-archive = Register HTTP archives without extracting
 settings-downloads-keep-archive-help = Save and play ZIP / RAR / 7z / tar.gz / LZH archives directly. Applies to newly queued downloads. IPFS downloads are extracted.
 downloads-state-validating = Checking archive
+
+skin-external-allow = Allow external skin
+skin-external-revoke = Revoke external skin access
+skin-external-allow-help = Allow this skin to read its real containing folder. Additional shared folders can be specified in the profile settings.

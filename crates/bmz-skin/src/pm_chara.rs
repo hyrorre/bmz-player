@@ -26,10 +26,26 @@ pub fn load_pm_chara(
     chara_type: i32,
     color: i32,
 ) -> Result<LoadedPmChara> {
+    let context = if source_path.is_dir() {
+        crate::SkinPathContext::for_directory(source_path)?
+    } else {
+        crate::SkinPathContext::for_entry(source_path)?
+    };
+    load_pm_chara_with_context(source_path, &context, source_id_prefix, chara_type, color)
+}
+
+pub fn load_pm_chara_with_context(
+    source_path: &Path,
+    context: &crate::SkinPathContext,
+    source_id_prefix: &str,
+    chara_type: i32,
+    color: i32,
+) -> Result<LoadedPmChara> {
+    let source_path = context.policy().resolve(source_path)?;
     if !(0..=15).contains(&chara_type) {
         bail!("unsupported PMchara type: {chara_type}");
     }
-    let chp_path = find_chp_file(source_path)?;
+    let chp_path = find_chp_file(&source_path, context)?;
     let parsed = ParsedChp::load(&chp_path)?;
     let mut builder =
         RuntimeBuilder::new(source_id_prefix, chp_path.parent().unwrap_or(Path::new(".")));
@@ -60,7 +76,7 @@ pub fn load_pm_chara(
     Ok(LoadedPmChara { runtime, sources: builder.sources })
 }
 
-fn find_chp_file(source_path: &Path) -> Result<PathBuf> {
+fn find_chp_file(source_path: &Path, context: &crate::SkinPathContext) -> Result<PathBuf> {
     if source_path.is_file()
         && source_path
             .extension()
@@ -72,6 +88,7 @@ fn find_chp_file(source_path: &Path) -> Result<PathBuf> {
     let mut candidates = fs::read_dir(source_path)
         .with_context(|| format!("failed to read PMchara directory: {}", source_path.display()))?
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter_map(|path| context.policy().resolve(&path).ok())
         .filter(|path| {
             path.is_file()
                 && path

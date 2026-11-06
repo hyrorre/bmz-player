@@ -48,6 +48,22 @@ pub struct BitmapFontGlyph {
 }
 
 pub fn load_bitmap_font(path: &Path) -> Result<BitmapFont> {
+    load_bitmap_font_resolving(path, &|page| Ok(resolve_case_insensitive_path(page)))
+}
+
+/// Keep the skin resolver in the decode path, including nested page reads.
+pub fn load_bitmap_font_with_context(
+    path: &Path,
+    context: &bmz_skin_assets::SkinPathContext,
+) -> Result<BitmapFont> {
+    let path = context.resolve_asset(&path.to_string_lossy())?;
+    load_bitmap_font_resolving(&path, &|page| context.resolve_asset(&page.to_string_lossy()))
+}
+
+fn load_bitmap_font_resolving(
+    path: &Path,
+    resolve_page: &impl Fn(&Path) -> Result<PathBuf>,
+) -> Result<BitmapFont> {
     let bytes = bmz_skin_assets::read(path)
         .with_context(|| format!("failed to read bitmap font: {}", path.display()))?;
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
@@ -57,15 +73,34 @@ pub fn load_bitmap_font(path: &Path) -> Result<BitmapFont> {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("lr2font"))
     {
         let (text, _, _) = SHIFT_JIS.decode(&bytes);
-        parse_lr2_bitmap_font(&text, base_dir)
+        parse_lr2_bitmap_font(&text, base_dir, resolve_page)
     } else {
-        parse_bitmap_font(&String::from_utf8_lossy(&bytes), base_dir)
+        parse_bitmap_font(&String::from_utf8_lossy(&bytes), base_dir, resolve_page)
     }
     .with_context(|| format!("failed to parse bitmap font: {}", path.display()))
 }
 
 /// Resolve page dependencies without decoding their pixels, for cache validation.
 pub fn bitmap_font_page_paths(path: &Path) -> Result<Vec<PathBuf>> {
+    Ok(bitmap_font_raw_page_paths(path)?
+        .into_iter()
+        .map(|path| resolve_case_insensitive_path(&path))
+        .collect())
+}
+
+/// Validate every nested page before directory enumeration or image decoding.
+pub fn bitmap_font_page_paths_with_context(
+    path: &Path,
+    context: &bmz_skin_assets::SkinPathContext,
+) -> Result<Vec<PathBuf>> {
+    let path = context.resolve_asset(&path.to_string_lossy())?;
+    bitmap_font_raw_page_paths(&path)?
+        .into_iter()
+        .map(|page| context.resolve_asset(&page.to_string_lossy()))
+        .collect()
+}
+
+fn bitmap_font_raw_page_paths(path: &Path) -> Result<Vec<PathBuf>> {
     let bytes = bmz_skin_assets::read(path)?;
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
     let lr2 = path
@@ -79,7 +114,7 @@ pub fn bitmap_font_page_paths(path: &Path) -> Result<Vec<PathBuf>> {
             let fields =
                 line.trim_start_matches('\u{feff}').split(',').map(str::trim).collect::<Vec<_>>();
             if fields.first().is_some_and(|command| command.eq_ignore_ascii_case("#T"))
-                && let Some((id, path)) = lr2_page_path(&fields, base_dir)
+                && let Some((id, path)) = lr2_page_path_raw(&fields, base_dir)
             {
                 paths.insert(id, path);
             }
@@ -88,8 +123,7 @@ pub fn bitmap_font_page_paths(path: &Path) -> Result<Vec<PathBuf>> {
             let id = parse_i32(&fields, "id")?;
             let file =
                 fields.get("file").ok_or_else(|| anyhow!("bitmap font page missing file"))?;
-            paths
-                .insert(id, resolve_case_insensitive_path(&base_dir.join(file.replace('\\', "/"))));
+            paths.insert(id, base_dir.join(file.replace('\\', "/")));
         }
     }
     let mut paths: Vec<_> = paths.into_values().collect();
@@ -98,16 +132,17 @@ pub fn bitmap_font_page_paths(path: &Path) -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
-fn lr2_page_path(fields: &[&str], base_dir: &Path) -> Option<(i32, PathBuf)> {
+fn lr2_page_path_raw(fields: &[&str], base_dir: &Path) -> Option<(i32, PathBuf)> {
     let page = parse_lr2_font_i32(fields.get(1).copied())?;
     let file = fields.get(2).filter(|file| !file.is_empty())?;
-    Some((
-        page,
-        resolve_case_insensitive_path(&base_dir.join(file.trim_matches('"').replace('\\', "/"))),
-    ))
+    Some((page, base_dir.join(file.trim_matches('"').replace('\\', "/"))))
 }
 
-fn parse_lr2_bitmap_font(text: &str, base_dir: &Path) -> Result<BitmapFont> {
+fn parse_lr2_bitmap_font(
+    text: &str,
+    base_dir: &Path,
+    resolve_page: &impl Fn(&Path) -> Result<PathBuf>,
+) -> Result<BitmapFont> {
     let mut size = 0;
     let mut margin = 0;
     let mut page_paths = HashMap::new();
@@ -129,9 +164,10 @@ fn parse_lr2_bitmap_font(text: &str, base_dir: &Path) -> Result<BitmapFont> {
                 }
             }
             "T" => {
-                let Some((page, path)) = lr2_page_path(&fields, base_dir) else {
+                let Some((page, path)) = lr2_page_path_raw(&fields, base_dir) else {
                     continue;
                 };
+                let path = resolve_page(&path)?;
                 if bmz_skin_assets::is_file(&path) {
                     page_paths.insert(page, path);
                 }
@@ -228,7 +264,11 @@ fn lr2_font_chars(code: i32) -> Vec<char> {
     if had_errors { Vec::new() } else { decoded.chars().collect() }
 }
 
-fn parse_bitmap_font(text: &str, base_dir: &Path) -> Result<BitmapFont> {
+fn parse_bitmap_font(
+    text: &str,
+    base_dir: &Path,
+    resolve_page: &impl Fn(&Path) -> Result<PathBuf>,
+) -> Result<BitmapFont> {
     let mut size = 0;
     let mut pad_y = 0;
     let mut line_height = 0;
@@ -252,8 +292,7 @@ fn parse_bitmap_font(text: &str, base_dir: &Path) -> Result<BitmapFont> {
             let id = parse_i32(&fields, "id")?;
             let file =
                 fields.get("file").ok_or_else(|| anyhow!("bitmap font page missing file"))?;
-            page_paths
-                .insert(id, resolve_case_insensitive_path(&base_dir.join(file.replace('\\', "/"))));
+            page_paths.insert(id, resolve_page(&base_dir.join(file.replace('\\', "/")))?);
         } else if line.starts_with("char ") {
             let id = parse_i32(&fields, "id")?;
             let Some(ch) = char::from_u32(id as u32) else {

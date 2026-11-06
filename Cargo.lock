@@ -796,6 +796,7 @@ version = "0.5.1"
 dependencies = [
  "anyhow",
  "encoding_rs",
+ "tempfile",
 ]
 
 [[package]]
@@ -813,6 +814,7 @@ version = "0.5.1"
 dependencies = [
  "anyhow",
  "bmz-core",
+ "bmz-skin-assets",
  "serde",
  "serde_json",
  "tempfile",

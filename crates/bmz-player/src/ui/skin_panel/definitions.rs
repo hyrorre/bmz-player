@@ -34,7 +34,7 @@ pub(in crate::ui) fn build_scene_skin_defs(
     slot: SkinSlot,
     defs: &SceneSkinDefs,
     skin_path: &str,
-    app_paths: &AppPaths,
+    access: SkinUiAccess<'_>,
     path_cache: &mut SkinUiPathCache,
     options: &mut BTreeMap<String, String>,
     files: &mut BTreeMap<String, String>,
@@ -57,7 +57,7 @@ pub(in crate::ui) fn build_scene_skin_defs(
         let path_context = if defs.filepath.is_empty() {
             None
         } else {
-            path_cache.get_or_resolve(slot, app_paths, skin_path)
+            path_cache.get_or_resolve(slot, access.paths, skin_path, access.grants)
         };
         changed |= fill_missing_skin_defaults_with_context(defs, path_context, options, files);
         let any_match = defs.property.iter().any(|prop| editor.matches(&prop.name))

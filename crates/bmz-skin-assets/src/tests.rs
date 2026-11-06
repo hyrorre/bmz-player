@@ -3,6 +3,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+#[test]
+fn explicit_file_choices_keep_case_unicode_and_archive_compatibility() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("日本語.PNG"), b"image").unwrap();
+    fs::write(root.path().join("font.dxa"), archive(3, &[("page.png", b"page", false)])).unwrap();
+    let context = SkinPathContext::for_directory(root.path()).unwrap();
+    assert_eq!(context.wildcard_candidates("*.png").unwrap().len(), 1);
+    assert!(context.resolve_selected_for_pattern("*.png", "日本語.png").is_some());
+    let page = context.resolve_selected_for_pattern("font/*.png", "page.png").unwrap();
+    assert_eq!(read(&page).unwrap(), b"page");
+    assert!(context.resolve_selected_for_pattern("font/*.png", "../../outside.png").is_none());
+}
+
 fn edit_v3(bytes: &mut [u8], edit: impl FnOnce(&mut [u8])) {
     let key = [0x55, 0xaa, 0x20, 0x55, 0x55, 0x06, 0x55, 0xaa, 0x55, 0xd5, 0x7c, 0x66];
     for (i, byte) in bytes.iter_mut().enumerate() {

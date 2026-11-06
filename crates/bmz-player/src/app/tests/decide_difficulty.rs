@@ -66,7 +66,8 @@ fn decide_chart_load_state_matches_decide_rendering() {
 #[test]
 fn decide_scene_entry_reload_passes_the_selected_chart_to_lua_skins() {
     let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("decide.luaskin");
+    let path = temp.path().join("data/skins/test/decide.luaskin");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, DECIDE_DIFFICULTY_SKIN).unwrap();
     let paths = crate::paths::AppPaths::from_dirs(
         temp.path().join("resources"),

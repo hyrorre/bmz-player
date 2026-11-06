@@ -19,7 +19,7 @@ fn skin_audio_path_stays_inside_skin_root() {
     assert!(resolve_skin_audio_path(&root, "../outside.ogg").is_none());
     assert!(
         resolve_skin_audio_path(&root, root.join("parts/bgm.ogg").to_string_lossy().as_ref())
-            .is_none()
+            .is_some()
     );
 }
 

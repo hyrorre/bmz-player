@@ -98,7 +98,7 @@ fn queue_profile_select_skin(
                 runtime_mode,
             ),
         )
-        .with_library_roots(paths.skin_library_roots()),
+        .with_skin_access(paths, skin),
     );
     pipeline.set_pending(SkinKind::Select, true);
     Ok(generation)

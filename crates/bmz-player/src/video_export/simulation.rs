@@ -91,6 +91,13 @@ impl Simulation {
             .resolve_optional_path_ref(&config.bgm_dir)?
             .and_then(|path| crate::system_sound::scan_bgm_sound_sets(&path).into_iter().next());
         let selection = SoundSetSelection {
+            allowed_roots: [&config.bgm_dir, &config.se_dir, &config.default_sound_dir]
+                .into_iter()
+                .map(|path| paths.resolve_optional_path_ref(path))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .flatten()
+                .collect(),
             bgm_dir: bgm_root.as_ref().map(|root| root.dir.clone()),
             bgm_variant_dir: bgm_root.and_then(|root| root.variants.into_iter().next()),
             se_dir: paths.resolve_optional_path_ref(&config.se_dir)?.and_then(|p| {

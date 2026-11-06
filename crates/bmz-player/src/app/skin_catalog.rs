@@ -84,11 +84,11 @@ pub(super) fn scan_skin_catalog_dir(
     catalog: &mut SkinCatalog,
 ) {
     let mut paths = Vec::new();
-    collect_skin_candidate_files(
-        dir,
-        &mut paths,
-        &mut crate::directory_scan::DirectoryScan::default(),
-    );
+    let Ok(mut scan) = crate::directory_scan::DirectoryScan::new(library_roots.iter().cloned())
+    else {
+        return;
+    };
+    collect_skin_candidate_files(dir, &mut paths, &mut scan, 0);
     // Headers are independent; Lua headers run their own VM. Collecting in directory order
     // keeps the result identical to a sequential scan before sorting.
     let candidates: Vec<_> = paths
@@ -118,15 +118,15 @@ fn collect_skin_candidate_files(
     dir: &Path,
     paths: &mut Vec<PathBuf>,
     scan: &mut crate::directory_scan::DirectoryScan,
+    depth: usize,
 ) {
-    let Some(entries) = scan.read_dir_once(dir) else {
+    let Some(entries) = scan.read_dir_once(dir, depth) else {
         return;
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for path in entries {
         if path.is_dir() {
-            collect_skin_candidate_files(&path, paths, scan);
-        } else if is_skin_candidate_file(&path) {
+            collect_skin_candidate_files(&path, paths, scan, depth + 1);
+        } else if is_skin_candidate_file(&path) && scan.accept_file(&path) {
             paths.push(path);
         }
     }
@@ -134,6 +134,7 @@ fn collect_skin_candidate_files(
 
 pub(super) fn skin_defs_from_path(
     app_paths: &crate::paths::AppPaths,
+    skin: &SkinConfig,
     path: &str,
     play: bool,
 ) -> SceneSkinDefs {
@@ -142,7 +143,8 @@ pub(super) fn skin_defs_from_path(
         .then(|| app_paths.resolve_path_ref(trimmed).ok())
         .flatten()
         .and_then(|path| {
-            load_skin_header_document_with_library_roots(&path, &app_paths.skin_library_roots())
+            let context = app_paths.skin_path_context(skin, &path).ok()?;
+            read_skin_header_document_with_context(&context).ok()
         });
     if play {
         SceneSkinDefs::from_play_document(document.as_ref())
@@ -160,7 +162,8 @@ pub(super) fn is_skin_candidate_file(path: &Path) -> bool {
 
 #[cfg(test)]
 pub(super) fn load_skin_header_document(path: &Path) -> Option<SkinDocument> {
-    load_skin_header_document_with_library_roots(path, &[])
+    let context = bmz_skin::SkinPathContext::for_entry(path).ok()?;
+    load_skin_header_document_with_library_roots(path, context.library_roots())
 }
 
 pub(super) fn load_skin_header_document_with_library_roots(
@@ -174,28 +177,35 @@ pub(super) fn read_skin_header_document(
     path: &Path,
     library_roots: &[PathBuf],
 ) -> Result<SkinDocument> {
+    let path_context = bmz_skin::SkinPathContext::new(path, library_roots.iter().cloned())?;
+    read_skin_header_document_with_context(&path_context)
+}
+
+pub(super) fn read_skin_header_document_with_context(
+    path_context: &bmz_skin::SkinPathContext,
+) -> Result<SkinDocument> {
+    let path = path_context.entry_file();
     if path
         .extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("luaskin") || ext.eq_ignore_ascii_case("lua"))
     {
-        let path_context = bmz_skin::SkinPathContext::new(path, library_roots.iter().cloned())?;
-        let loaded = bmz_skin::load_lua_skin_header_value_with_path_context(&path_context)?;
+        let loaded = bmz_skin::load_lua_skin_header_value_with_path_context(path_context)?;
         Ok(serde_json::from_value::<SkinDocument>(loaded.value)?)
     } else if path
         .extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("lr2skin"))
     {
-        bmz_skin::load_lr2_csv_skin(
-            path,
-            bmz_skin::SkinKind::Play,
+        bmz_skin::load_lr2_csv_skin_with_path_context(
+            path_context,
             &BTreeMap::new(),
             &BTreeMap::new(),
+            &bmz_skin::LuaLoadRuntimeState::default(),
         )
         .map(|loaded| loaded.document)
     } else {
-        SkinDocument::load_typed_beatoraja_json(path)?
+        SkinDocument::load_typed_beatoraja_json_with_context(path_context)?
             .ok_or_else(|| anyhow::anyhow!("unsupported skin document: {}", path.display()))
     }
 }
@@ -217,12 +227,13 @@ pub(super) fn load_skin_candidate_with_library_roots(
 ) -> Option<(i32, SkinCandidate)> {
     // A list only needs the type and name. LR2 skins report them in `#INFORMATION`, so
     // building their whole document (~30 ms each) is skipped.
+    let context = bmz_skin::SkinPathContext::new(path, library_roots.iter().cloned()).ok()?;
     let (skin_type, name) = if path
         .extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("lr2skin"))
     {
-        let info = bmz_skin::load_lr2_csv_skin_info(path).ok()?;
+        let info = bmz_skin::load_lr2_csv_skin_info_with_context(&context).ok()?;
         (info.skin_type, info.name)
     } else {
         let document = load_skin_header_document_with_library_roots(path, library_roots)?;
@@ -356,22 +367,6 @@ fn lr2_continue_provider_types(skin_type: i32) -> &'static [&'static [i32]] {
     }
 }
 
-fn collect_lr2_skin_paths(dir: &Path, depth: usize, paths: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            if depth < 4 {
-                collect_lr2_skin_paths(&path, depth + 1, paths);
-            }
-        } else if is_lr2_skin_path(&path) {
-            paths.push(path);
-        }
-    }
-}
-
 /// Same-theme LR2 skins standing in for the scenes that fill LR2's shared image slots
 /// before `skin_path` (BMZ extension). One skin per provider type, first by path.
 pub(super) fn lr2_continue_theme_providers(
@@ -381,7 +376,12 @@ pub(super) fn lr2_continue_theme_providers(
     if !is_lr2_skin_path(skin_path) {
         return Vec::new();
     }
-    let Ok(info) = bmz_skin::load_lr2_csv_skin_info(skin_path) else {
+    let Ok(context) = bmz_skin::SkinPathContext::new(skin_path, library_roots.iter().cloned())
+    else {
+        return Vec::new();
+    };
+    let skin_path = context.entry_file();
+    let Ok(info) = bmz_skin::load_lr2_csv_skin_info_with_context(&context) else {
         return Vec::new();
     };
     let groups = lr2_continue_provider_types(info.skin_type);
@@ -393,13 +393,20 @@ pub(super) fn lr2_continue_theme_providers(
     let absolute = |path: &Path| std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     let own = absolute(skin_path);
     let mut paths = Vec::new();
-    collect_lr2_skin_paths(&theme, 0, &mut paths);
+    let Ok(mut scan) = crate::directory_scan::DirectoryScan::new(library_roots.iter().cloned())
+    else {
+        return Vec::new();
+    };
+    collect_skin_candidate_files(&theme, &mut paths, &mut scan, 0);
+    paths.retain(|path| is_lr2_skin_path(path));
     paths.sort();
     let typed: Vec<(PathBuf, i32)> = paths
         .into_iter()
         .filter(|path| absolute(path) != own)
         .filter_map(|path| {
-            let skin_type = bmz_skin::load_lr2_csv_skin_info(&path).ok()?.skin_type;
+            let context =
+                bmz_skin::SkinPathContext::new(&path, library_roots.iter().cloned()).ok()?;
+            let skin_type = bmz_skin::load_lr2_csv_skin_info_with_context(&context).ok()?.skin_type;
             Some((path, skin_type))
         })
         .collect();

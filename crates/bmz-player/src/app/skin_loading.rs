@@ -70,7 +70,7 @@ pub(super) fn load_initial_skin_textures(
                         lua_runtime_mode,
                     ),
                 )
-                .with_library_roots(app_paths.skin_library_roots()),
+                .with_skin_access(app_paths, skin),
             );
             pending_decide = true;
         }
@@ -124,7 +124,7 @@ pub(super) fn load_initial_skin_textures(
                         lua_runtime_mode,
                     ),
                 )
-                .with_library_roots(app_paths.skin_library_roots()),
+                .with_skin_access(app_paths, skin),
             );
             pending_result = true;
         }
@@ -187,7 +187,7 @@ pub(super) fn load_initial_skin_textures(
                             lua_runtime_mode,
                         ),
                     )
-                    .with_library_roots(app_paths.skin_library_roots()),
+                    .with_skin_access(app_paths, skin),
                 );
                 pending_select = true;
             }
@@ -334,7 +334,7 @@ pub(super) fn reload_skin_textures(
                         lua_runtime_mode,
                     ),
                 )
-                .with_library_roots(app_paths.skin_library_roots())
+                .with_skin_access(app_paths, skin)
                 .reuse_installed_fonts(pipeline),
             );
             match kind {

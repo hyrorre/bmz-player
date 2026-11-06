@@ -431,11 +431,11 @@ pub(super) fn resolve_include_path(
     builder: &mut CsvBuilder<'_>,
     current_path: &Path,
     raw: &str,
-) -> PathBuf {
+) -> Result<PathBuf> {
     include::resolve(builder, current_path, raw)
 }
 
-pub(super) fn infer_skin_root(path: &Path) -> PathBuf {
+pub(super) fn infer_skin_root(path: &Path, context: &crate::SkinPathContext) -> PathBuf {
     let mut current = path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
     if current.file_name().and_then(|name| name.to_str()).is_some_and(|name| {
         matches!(
@@ -447,6 +447,9 @@ pub(super) fn infer_skin_root(path: &Path) -> PathBuf {
         return parent.to_path_buf();
     }
     loop {
+        if context.policy().resolve(&current).is_err() {
+            return path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+        }
         let Some(name) = current.file_name().and_then(|name| name.to_str()) else {
             return path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
         };
@@ -484,11 +487,11 @@ pub(super) fn normalize_lr2_asset_path(path: &str) -> String {
     normalized
 }
 
-pub(super) fn relative_to_skin_file_parent(skin_path: &Path, normalized: &str) -> String {
-    relative_to_skin_directory(skin_path.parent().unwrap_or_else(|| Path::new(".")), normalized)
-}
-
-pub(super) fn relative_to_skin_directory(directory: &Path, normalized: &str) -> String {
+pub(super) fn relative_to_skin_directory(
+    context: &crate::SkinPathContext,
+    directory: &Path,
+    normalized: &str,
+) -> String {
     if let Some(dir_name) = directory.file_name().and_then(|name| name.to_str())
         && let Some((first, rest)) = normalized.split_once('/')
         && first.eq_ignore_ascii_case(dir_name)
@@ -503,9 +506,10 @@ pub(super) fn relative_to_skin_directory(directory: &Path, normalized: &str) -> 
             } else {
                 Path::new(prefix).parent().unwrap_or_else(|| Path::new("."))
             };
-            !prefix.as_os_str().is_empty() && base.join(prefix).is_dir()
+            !prefix.as_os_str().is_empty()
+                && context.policy().resolve(&base.join(prefix)).is_ok_and(|path| path.is_dir())
         } else {
-            bmz_skin_assets::is_file(&base.join(normalized))
+            context.resolve_asset(&base.join(normalized).to_string_lossy()).is_ok()
         }
     };
     if !exists(directory) && directory.parent().is_some_and(exists) {

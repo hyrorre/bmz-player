@@ -42,6 +42,8 @@ pub(super) struct SkinDecodeRequest {
     files: BTreeMap<String, String>,
     pub(super) runtime_state: bmz_skin::LuaLoadRuntimeState,
     library_roots: Vec<PathBuf>,
+    resolved_path: Option<PathBuf>,
+    access_error: Option<String>,
     installed_font_cache: HashMap<String, SkinFontCacheKey>,
     /// Resolved on the worker and merged into `runtime_state.lr2_continue_assets`.
     lr2_continue_fallback: Option<Lr2ContinueFallback>,
@@ -66,6 +68,8 @@ impl SkinDecodeRequest {
             files,
             runtime_state,
             library_roots: Vec::new(),
+            resolved_path: None,
+            access_error: None,
             installed_font_cache: HashMap::new(),
             lr2_continue_fallback: None,
             play_chart_state: None,
@@ -80,8 +84,21 @@ impl SkinDecodeRequest {
         self
     }
 
+    #[cfg(test)]
     pub(super) fn with_library_roots(mut self, library_roots: Vec<PathBuf>) -> Self {
         self.library_roots = library_roots;
+        self
+    }
+
+    pub(super) fn with_skin_access(mut self, paths: &AppPaths, skin: &SkinConfig) -> Self {
+        match paths.skin_path_context(skin, &self.path) {
+            Ok(context) => {
+                self.resolved_path = Some(context.entry_file().to_path_buf());
+                self.library_roots = context.policy().root_paths();
+                self.access_error = None;
+            }
+            Err(error) => self.access_error = Some(format!("{error:#}")),
+        }
         self
     }
 
@@ -115,6 +132,8 @@ pub(super) fn spawn_skin_decode(pipeline: &SkinPipelineRuntime, mut request: Ski
         files,
         mut runtime_state,
         library_roots,
+        resolved_path,
+        access_error,
         installed_font_cache,
         lr2_continue_fallback,
         play_chart_state,
@@ -132,12 +151,20 @@ pub(super) fn spawn_skin_decode(pipeline: &SkinPipelineRuntime, mut request: Ski
             let chart_facts = play_chart_state.map(|state| state.wait()).transpose();
             let decode_started_at = Instant::now();
             let result = (|| {
+                if let Some(error) = access_error {
+                    anyhow::bail!(error);
+                }
+                let skin_path = resolved_path.as_deref().unwrap_or(&path);
                 if let Some(facts) = chart_facts.map_err(anyhow::Error::msg)? {
                     apply_play_chart_facts_lua_load_state(&mut runtime_state, &facts);
                 }
                 if let Some(fallback) = lr2_continue_fallback {
-                    match crate::skin_loader::resolve_lr2_continue_assets(
+                    let context = bmz_skin::SkinPathContext::new(
                         &fallback.play_skin,
+                        library_roots.iter().cloned(),
+                    )?;
+                    match crate::skin_loader::resolve_lr2_continue_assets_with_context(
+                        &context,
                         &fallback.runtime_state,
                         Some(document_cache.clone()),
                     ) {
@@ -155,9 +182,11 @@ pub(super) fn spawn_skin_decode(pipeline: &SkinPipelineRuntime, mut request: Ski
                         ),
                     }
                 }
-                for provider in lr2_continue_theme_providers(&path, &library_roots) {
-                    match crate::skin_loader::resolve_lr2_continue_assets(
-                        &provider,
+                for provider in lr2_continue_theme_providers(skin_path, &library_roots) {
+                    let context =
+                        bmz_skin::SkinPathContext::new(&provider, library_roots.iter().cloned())?;
+                    match crate::skin_loader::resolve_lr2_continue_assets_with_context(
+                        &context,
                         &bmz_skin::LuaLoadRuntimeState::default(),
                         Some(document_cache.clone()),
                     ) {
@@ -177,7 +206,7 @@ pub(super) fn spawn_skin_decode(pipeline: &SkinPipelineRuntime, mut request: Ski
                 }
                 decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
                     pinned_sources: Some(&pinned_sources),
-                    skin_path: &path,
+                    skin_path,
                     kind,
                     options: &options,
                     files: &files,

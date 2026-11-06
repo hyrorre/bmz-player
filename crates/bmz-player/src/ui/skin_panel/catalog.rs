@@ -4,6 +4,7 @@ pub(in crate::ui) fn skin_path_combo(
     slot: SkinSlot,
     label: &str,
     candidates: &[SkinCandidate],
+    app_paths: &AppPaths,
     show_bundled_origin: bool,
     text: Localizer,
 ) -> bool {
@@ -41,7 +42,39 @@ pub(in crate::ui) fn skin_path_combo(
         *skin_slot_path_mut(skin, slot) = edited_path;
         restore_skin_slot_history(skin, slot);
     }
-    combo_changed || text_changed
+    let mut access_changed = false;
+    let selected_path = skin_slot_path(skin, slot).trim().to_string();
+    if !selected_path.is_empty()
+        && let Ok(path) = app_paths.resolve_path_ref(&selected_path)
+    {
+        let key = app_paths.skin_access_key(&path).ok();
+        let error_id = egui::Id::new(("skin_access_error", slot.path_combo_id(), &selected_path));
+        if let Some(key) = key.as_ref().filter(|key| skin.external_access.contains_key(*key)) {
+            if ui.button(tr!(text, "skin-external-revoke")).clicked() {
+                skin.external_access.remove(key);
+                access_changed = true;
+                ui.ctx().data_mut(|data| data.remove::<String>(error_id));
+            }
+        } else if ui
+            .button(tr!(text, "skin-external-allow"))
+            .on_hover_text(tr!(text, "skin-external-allow-help"))
+            .clicked()
+        {
+            match app_paths.approve_skin_path(skin, &path) {
+                Ok(()) => {
+                    access_changed = true;
+                    ui.ctx().data_mut(|data| data.remove::<String>(error_id));
+                }
+                Err(error) => {
+                    ui.ctx().data_mut(|data| data.insert_temp(error_id, format!("{error:#}")));
+                }
+            }
+        }
+        if let Some(error) = ui.ctx().data(|data| data.get_temp::<String>(error_id)) {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
+    }
+    combo_changed || text_changed || access_changed
 }
 
 pub(in crate::ui) fn skin_candidate_label(

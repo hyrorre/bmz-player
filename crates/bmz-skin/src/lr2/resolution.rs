@@ -17,16 +17,16 @@ impl<'a> CsvBuilder<'a> {
         lines: &[CsvLine],
         path: &Path,
         ops: &HashMap<i32, bool>,
-    ) -> Option<(u32, u32)> {
+    ) -> Result<Option<(u32, u32)>> {
         let mut counts = [0_usize; LR2_INFERABLE_RESOLUTIONS.len()];
         let mut processor = Processor::for_skin(ops.clone(), self.header.skin_type);
-        self.count_full_screen_destinations(lines, path, &mut processor, &mut counts, 0);
+        self.count_full_screen_destinations(lines, path, &mut processor, &mut counts, 0)?;
         let (index, count) = counts
             .iter()
             .copied()
             .enumerate()
             .fold((0, 0), |best, entry| if entry.1 > best.1 { entry } else { best });
-        (count > 0).then_some(LR2_INFERABLE_RESOLUTIONS[index])
+        Ok((count > 0).then_some(LR2_INFERABLE_RESOLUTIONS[index]))
     }
 
     fn count_full_screen_destinations(
@@ -36,7 +36,8 @@ impl<'a> CsvBuilder<'a> {
         processor: &mut Processor,
         counts: &mut [usize; LR2_INFERABLE_RESOLUTIONS.len()],
         depth: usize,
-    ) {
+    ) -> Result<()> {
+        processor.enter_file(current_path)?;
         for line in lines {
             if !processor.should_execute(line) {
                 continue;
@@ -55,7 +56,8 @@ impl<'a> CsvBuilder<'a> {
                 if depth >= LR2_RESOLUTION_INCLUDE_DEPTH {
                     continue;
                 }
-                let include = resolve_include_path(self, current_path, field(line, 1));
+                let include = resolve_include_path(self, current_path, field(line, 1))?;
+                processor.check_file(&include)?;
                 let Ok(include_lines) = read_csv_lines(&include) else {
                     continue;
                 };
@@ -67,7 +69,7 @@ impl<'a> CsvBuilder<'a> {
                     processor,
                     counts,
                     depth + 1,
-                );
+                )?;
                 processor.end_include_file(parent_stack);
                 continue;
             }
@@ -84,5 +86,7 @@ impl<'a> CsvBuilder<'a> {
                 counts[index] += 1;
             }
         }
+        processor.leave_file();
+        Ok(())
     }
 }

@@ -177,7 +177,7 @@ pub(crate) fn lr2_skin_items(
     let options = slot_options(skin, target.0);
     let files = slot_files(skin, target.0);
     let context = (!defs.filepath.is_empty())
-        .then(|| skin_root_path(app_paths, skin_slot_path(skin, target.0)))
+        .then(|| skin_root_path(app_paths, skin_slot_path(skin, target.0), &skin.external_access))
         .flatten();
     let properties = defs.property.iter().map(|prop| Lr2SkinItem {
         name: prop.name.clone(),
@@ -230,7 +230,9 @@ pub(crate) fn lr2_cycle_skin_item(
     let Some(filepath) = defs.filepath.get(index - defs.property.len()) else {
         return false;
     };
-    let Some(context) = skin_root_path(app_paths, skin_slot_path(skin, target.0)) else {
+    let Some(context) =
+        skin_root_path(app_paths, skin_slot_path(skin, target.0), &skin.external_access)
+    else {
         return false;
     };
     let candidates = glob_candidates_for_skin(&context, &filepath.path);

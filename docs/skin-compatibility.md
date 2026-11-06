@@ -123,7 +123,7 @@ closure/module stateを維持し、frameごとのmain_stateを参照します。
 | `main_state.audio_*` | ロード時は宣言的な音声命令、`act` / `customEvents`内では実行時に全sceneで鳴らします。音量の省略は1.0です。`audio_preload` / `audio_dispose`は無作用でtrueを返します。[app側テスト](../crates/bmz-player/src/skin_audio.rs) |
 | `main_state.volume_*` / `set_volume_*` | runtime VMで現在のマスター / キー / BGM音量を読み書きします。書き込みはSelectの音量スライダーと同じくプロファイルへ保存します。[runtimeテスト](../crates/bmz-skin/src/tests/lua_runtime_events.rs) |
 | `skin_config.enabled_options` | ヘッダのproperty順の選択opです。読んだopだけを文書の依存値に記録します |
-| file / module解決 | `SkinPathContext`の許可rootに限定します。require / dofile / loadfile、source等のパス解決を扱う |
+| file / module解決 | Lua / JSON / LR2共通の`SkinPathContext`の許可rootに限定します。require / dofile / loadfile、include、source、font/page、audio、PMchara、DXA、wildcardを扱う。ライブラリ外の既存指定は[entryごとの再許可](skin.md#スキンのファイル参照と外部スキンの許可)が必要 |
 | `os` / `io` | clock / date / time / difftime等の限定API、仮想ファイル読込です。`io`の書き込みはディスクへ書かずメモリに残し、同じ起動中は後のロードでも読み戻せます。`os.date`はLuaJの書式指定子に対応します。任意のOS操作を許可しない。[仕様](skin.md#メモリ上のスキンファイル)、[回帰テスト](../crates/bmz-skin/src/tests/lua_skin_files.rs) |
 | `bit32` | LuaJ（Lua 5.2）のbit32です。[LuaJ実行結果との比較テスト](../crates/bmz-skin/src/tests/lua_stdlib_compat.rs) |
 | `math.random`の小数引数 | LuaJと同じ整数変換と区間幅検査をロード・runtime両方へ適用します。SocialSkinのDecide / Resultで使う小数範囲に対応します。乱数列自体はLua 5.4です。[比較テスト](../crates/bmz-skin/src/tests/lua_stdlib_compat.rs) |

@@ -316,14 +316,30 @@ impl SkinDocument {
     }
 
     pub fn load_beatoraja_json(path: &Path) -> Result<Self> {
-        let raw = load_json_value(path)?;
-        let options = default_enabled_options(&raw);
-        Self::load_beatoraja_json_value_with_options(path, raw, &options)
+        Self::load_beatoraja_json_with_context(
+            &bmz_skin_assets::SkinPathContext::for_entry(path)?,
+            None,
+        )
     }
 
     pub fn load_beatoraja_json_with_options(path: &Path, enabled_options: &[i32]) -> Result<Self> {
-        let raw = load_json_value(path)?;
-        Self::load_beatoraja_json_value_with_options(path, raw, enabled_options)
+        Self::load_beatoraja_json_with_context(
+            &bmz_skin_assets::SkinPathContext::for_entry(path)?,
+            Some(enabled_options),
+        )
+    }
+
+    pub fn load_beatoraja_json_with_context(
+        context: &bmz_skin_assets::SkinPathContext,
+        enabled_options: Option<&[i32]>,
+    ) -> Result<Self> {
+        let raw = load_json_value(context.entry_file())?;
+        let defaults = default_enabled_options(&raw);
+        let expanded =
+            load_expanded_beatoraja_json_value(context, raw, enabled_options.unwrap_or(&defaults))?;
+        serde_json::from_value(expanded).with_context(|| {
+            format!("failed to parse skin json: {}", context.entry_file().display())
+        })
     }
 
     /// Loads a JSON skin through the normal include/condition/number pipeline,
@@ -331,9 +347,18 @@ impl SkinDocument {
     /// a numeric skin type. This is intended for catalog discovery, where an
     /// unrelated JSON object must not inherit `SkinDocument`'s type-0 default.
     pub fn load_typed_beatoraja_json(path: &Path) -> Result<Option<Self>> {
+        Self::load_typed_beatoraja_json_with_context(&bmz_skin_assets::SkinPathContext::for_entry(
+            path,
+        )?)
+    }
+
+    pub fn load_typed_beatoraja_json_with_context(
+        context: &bmz_skin_assets::SkinPathContext,
+    ) -> Result<Option<Self>> {
+        let path = context.entry_file();
         let raw = load_json_value(path)?;
         let options = default_enabled_options(&raw);
-        let expanded = load_expanded_beatoraja_json_value(path, raw, &options)?;
+        let expanded = load_expanded_beatoraja_json_value(context, raw, &options)?;
         if expanded.get("type").and_then(JsonValue::as_i64).is_none() {
             return Ok(None);
         }
@@ -341,26 +366,18 @@ impl SkinDocument {
             .with_context(|| format!("failed to parse skin json: {}", path.display()))
             .map(Some)
     }
-
-    fn load_beatoraja_json_value_with_options(
-        path: &Path,
-        raw: JsonValue,
-        enabled_options: &[i32],
-    ) -> Result<Self> {
-        let expanded = load_expanded_beatoraja_json_value(path, raw, enabled_options)?;
-        serde_json::from_value(expanded)
-            .with_context(|| format!("failed to parse skin json: {}", path.display()))
-    }
 }
 
 fn load_expanded_beatoraja_json_value(
-    path: &Path,
+    context: &bmz_skin_assets::SkinPathContext,
     raw: JsonValue,
     enabled_options: &[i32],
 ) -> Result<JsonValue> {
-    let root = path.parent().unwrap_or_else(|| Path::new("."));
-    let expanded = expand_json_skin_value(raw, root, root, enabled_options)
-        .with_context(|| format!("failed to expand skin json: {}", path.display()))?;
+    let expanded =
+        expand_json_skin_value_with_context(raw, context.entry_dir(), context, enabled_options)
+            .with_context(|| {
+                format!("failed to expand skin json: {}", context.entry_file().display())
+            })?;
     Ok(normalize_json_skin_integer_numbers(expanded))
 }
 
