@@ -18,3 +18,8 @@ RPMが`%doc`に収録するライセンスも受け付け、対象バージョ�
 
 AlmaLinux 8の公式ソースミラー一覧が`http://vault.almalinux.org/`を返すことも確認した。
 `lz4`、`systemd`、`zlib`の対応するSRPMを同じホストでHTTPSから取得できるため、このホストのURLをHTTPSに変換して取得する。
+
+[HTTPS対応後の再試行](https://github.com/hyrorre/bmz-player/actions/runs/42167281003/attempts/2)は、全18件のSRPMの取得とアーカイブの整合性検査、AlmaLinux上のELF検査とPulseAudio出力を通過した。
+サンプル再生はVulkan初期化で停止し、[wgpu 29の最小再現](https://github.com/hyrorre/bmz-player/actions/runs/42173313675)ではLavapipeが`vkCreateInstance`に`VK_ERROR_INITIALIZATION_FAILED`を返した。
+[AlmaLinuxのMesa SRPM](https://vault.almalinux.org/8.10/AppStream/Source/Packages/mesa-23.1.4-4.el8_10.alma.1.src.rpm)に含まれる`lavapipe-disable-env-var.patch`が、`RH_SW_VULKAN`未設定時にこのエラーを返す。
+AlmaLinuxの検証用コンテナで`RH_SW_VULKAN=1`を設定する。

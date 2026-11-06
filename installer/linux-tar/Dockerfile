@@ -77,7 +77,8 @@ RUN --mount=type=secret,id=proxy_ca \
     ln -s /usr/bin/python3.12 /usr/local/bin/python3
 COPY verify.py elf.py /opt/
 USER player
-ENV HOME=/home/player
+# EL8 Mesa disables lavapipe unless explicitly enabled for testing.
+ENV HOME=/home/player RH_SW_VULKAN=1
 WORKDIR /home/player
 CMD ["python3", "/opt/verify.py"]
 

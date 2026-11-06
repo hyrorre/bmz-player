@@ -163,6 +163,7 @@ releaseでは`pulseaudio,pipewire,linux-evdev`を有効にします。C/C++とRu
 
 通常ビルドと`--verify`は同じ経路で、同一SHA256の実行用tar.gzを展開し、読み取り専用で独立したAlmaLinux 8.10とUbuntu 22.04コンテナへマウントします。
 両方でネットワークなし・一般ユーザーで同じ検査を実行します。どちらにもビルド段階のファイルシステム、コンパイラ、FFmpegはありません。
+AlmaLinux 8.10の検証用コンテナでは、MesaのソフトウェアVulkanを有効にするために`RH_SW_VULKAN=1`を設定します。
 全ELF（BMZ、共有ライブラリ、PipeWire/SPAモジュール）の要求シンボルを調べ、`GLIBC_2.28`を超える要求を拒否します。
 `GLIBCXX_*`、`CXXABI_*`を含む要求を、`ldd -r`が実際に解決したライブラリの提供バージョンと照合します。
 PipeWireサーバー不在時の初期化エラーをライブラリのロード失敗と区別し、PulseAudioのnull sinkで実際のフレーム出力を確認します。
