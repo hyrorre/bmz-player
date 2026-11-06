@@ -150,7 +150,7 @@ GitHubが自動で作るソースのスナップショットには、vendorし�
 
 ビルドと対応ソースの再ビルドは公式`almalinux:8.10`を使います。
 GCC Toolset 14、Python 3.12、Meson 1.7.2、Ninja 1.11.1.4、NASM 2.16.03を両方に用意し、実際のツール・RPMのバージョンを記録します。
-NASMはハッシュを固定した上流ソースからビルドします。既存のRPMはDNFで更新します。
+NASMはSHA-256を固定した公式リリースのソースを取得し、同梱の`configure`でビルドします。既存のRPMはDNFで更新します。
 手動と正式リリースのLinux tarジョブはUbuntu 26.04 runnerから同じスクリプトを実行し、ホストUbuntuのライブラリはコピーしません。
 バージョンを固定したFFmpegのソースを、GPL / nonfreeのコーデックや自動検出した外部コーデックを含めずにビルドします。
 その後、release buildの前に`cargo fmt --check`、`cargo check`、`cargo clippy`、`cargo test`を実行します。

@@ -1,0 +1,13 @@
+# AlmaLinux 8.10のLinux tarビルド修正（#78）
+
+[Optional Linux tar.gzの初回実行](https://github.com/hyrorre/bmz-player/actions/runs/42162366948)では、
+`64cac09c`の配布用イメージを作る途中でNASM 2.16.03の`autogen.sh`が停止した。
+Gitタグのアーカイブから`configure`を生成するにはAutoconf 2.71以上が必要で、AlmaLinux 8.10のパッケージでは条件を満たさなかった。
+
+[NASM 2.16.03の公式リリース](https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/)のソースには`configure`が含まれる。
+同じNASMバージョンの公式アーカイブに切り替え、SHA-256を検証してからビルドする。
+配布用ビルドとオフライン再ビルドの両方がこのツール構成を使う。
+手順は[Linux tar配布](../../docs/linux-tar.md#ビルド段階)を参照。
+
+macOSで公式アーカイブの`configure`、`make`、`make install`が成功し、`nasm -v`で2.16.03を確認した。
+配布用スクリプトの回帰テスト26件が成功した。

@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-06 | [AlmaLinux 8.10のLinux tarビルド修正（#78）](2026/2026-11-06-linux-tar-almalinux-ci.md) |
 | 2026-11-06 | [スキンの許可root統一と循環探索対策](2026/2026-11-06-skin-root-boundaries.md) |
 | 2026-11-05 | [Lua sandboxの資源制限](2026/2026-11-05-lua-resource-security.md) |
 | 2026-11-05 | [スクリーンショットに曲名・クリアタイプ・フォルダ名を付ける](2026/2026-11-05-screenshot-filenames.md) |

@@ -9,7 +9,7 @@ RUN --mount=type=secret,id=proxy_ca \
     dnf config-manager --set-enabled powertools && \
     dnf -y update && \
     dnf -y install gcc-toolset-14-gcc gcc-toolset-14-gcc-c++ make git curl \
-      ca-certificates pkgconf-pkg-config clang clang-devel autoconf automake perl xz bzip2 \
+      ca-certificates pkgconf-pkg-config clang clang-devel perl xz bzip2 \
       python3.12 python3.12-pip binutils rpm-build cpio \
       alsa-lib-devel pulseaudio-libs-devel systemd-devel fontconfig-devel \
       dbus-devel libxkbcommon-devel zlib-devel bzip2-devel dbus-daemon && \
@@ -21,15 +21,16 @@ RUN --mount=type=secret,id=proxy_ca \
 ENV PATH="/opt/tools/bin:/opt/rh/gcc-toolset-14/root/usr/bin:/root/.cargo/bin:${PATH}"
 ENV CC=gcc CXX=g++ CFLAGS="-march=x86-64 -mtune=generic" CXXFLAGS="-march=x86-64 -mtune=generic"
 ENV RUSTFLAGS="-C target-cpu=x86-64"
+# The upstream release includes configure and builds with the EL8 tools.
 RUN --mount=type=secret,id=proxy_ca \
     if [ -f /run/secrets/proxy_ca ]; then export CURL_CA_BUNDLE=/run/secrets/proxy_ca; fi; \
     curl --fail --location --retry 3 \
-      https://github.com/netwide-assembler/nasm/archive/refs/tags/nasm-2.16.03.tar.gz \
-      -o /tmp/nasm.tar.gz && \
-    echo 'e525fa6fdc3df33cec6b499111f44afa78ce50bf260158580dcf014015a21ba9  /tmp/nasm.tar.gz' | sha256sum -c - && \
-    tar -xf /tmp/nasm.tar.gz -C /tmp && cd /tmp/nasm-nasm-2.16.03 && \
-    ./autogen.sh && ./configure --prefix=/opt/tools && make -j2 && make install && \
-    rm -rf /tmp/nasm.tar.gz /tmp/nasm-nasm-2.16.03
+      https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/nasm-2.16.03.tar.xz \
+      -o /tmp/nasm.tar.xz && \
+    echo '1412a1c760bbd05db026b6c0d1657affd6631cd0a63cddb6f73cc6d4aa616148  /tmp/nasm.tar.xz' | sha256sum -c - && \
+    tar -xf /tmp/nasm.tar.xz -C /tmp && cd /tmp/nasm-2.16.03 && \
+    ./configure --prefix=/opt/tools && make -j2 && make install && \
+    rm -rf /tmp/nasm.tar.xz /tmp/nasm-2.16.03
 RUN --mount=type=secret,id=proxy_ca \
     if [ -f /run/secrets/proxy_ca ]; then export CURL_CA_BUNDLE=/run/secrets/proxy_ca; fi; \
     curl --fail --location --retry 3 https://sh.rustup.rs -o /tmp/rustup.sh && \
