@@ -679,6 +679,12 @@ struct ExclusiveOutputState {
 /// replaces the accepted correspondence.
 const EXCLUSIVE_POSITION_REANCHOR: Duration = Duration::from_secs(1);
 
+#[derive(Debug, Clone, Copy)]
+struct ExclusiveReanchorRun {
+    first: ExclusiveClockReading,
+    last: ExclusiveClockReading,
+}
+
 /// The position is trusted while it follows the accepted QPC correspondence.
 /// After a rejection it either returns to that correspondence, or a long smooth
 /// run replaces it. `written_bias` then absorbs the difference, so that a new
@@ -686,12 +692,12 @@ const EXCLUSIVE_POSITION_REANCHOR: Duration = Duration::from_secs(1);
 #[derive(Debug, Default, Clone, Copy)]
 struct ExclusiveClockTracker {
     accepted: Option<ExclusiveClockReading>,
-    /// PCM queued past the position, from the last reading that had any.
+    /// PCM queued past the last accepted position; zero is a known empty queue.
     queued_frames: Option<u64>,
     written_bias: i128,
     recovering: bool,
     recovery_candidate: Option<ExclusiveClockReading>,
-    reanchor_start: Option<ExclusiveClockReading>,
+    reanchor_run: Option<ExclusiveReanchorRun>,
 }
 
 impl ExclusiveClockTracker {
@@ -707,7 +713,7 @@ impl ExclusiveClockTracker {
         let tolerance = crate::clock::output_gap_tolerance(period).as_nanos() as i128;
         if !exclusive_reading_is_usable(reading, sample_rate, tolerance) {
             self.reject();
-            self.reanchor_start = None;
+            self.reanchor_run = None;
             return unavailable;
         }
         if !self.follows_accepted(
@@ -723,6 +729,9 @@ impl ExclusiveClockTracker {
             }
             return self.accept(reading, written_frames, sample_rate, 0);
         }
+        // Returning to the accepted epoch interrupts the new-epoch run, even
+        // when a second reading is still needed to finish the fast recovery.
+        self.reanchor_run = None;
         if self.recovering {
             let Some(candidate) = self.recovery_candidate else {
                 self.recovery_candidate = Some(reading);
@@ -747,7 +756,7 @@ impl ExclusiveClockTracker {
     fn finish_recovery(&mut self) {
         self.recovering = false;
         self.recovery_candidate = None;
-        self.reanchor_start = None;
+        self.reanchor_run = None;
     }
 
     fn biased_written(&self, written_frames: u64) -> u64 {
@@ -763,9 +772,7 @@ impl ExclusiveClockTracker {
     ) -> ExclusiveOutputState {
         let written = self.biased_written(written_frames);
         let queued = written.saturating_sub(exclusive_consumed_frames(reading, sample_rate));
-        if queued != 0 {
-            self.queued_frames = Some(queued);
-        }
+        self.queued_frames = Some(queued);
         self.accepted = Some(reading);
         exclusive_output_state(reading, written, sample_rate, max_missed_frames)
     }
@@ -798,14 +805,15 @@ impl ExclusiveClockTracker {
         period: Duration,
         tolerance: i128,
     ) -> bool {
-        let Some(start) = self
-            .reanchor_start
-            .filter(|start| exclusive_progress_matches(*start, reading, tolerance))
-        else {
-            self.reanchor_start = Some(reading);
+        let Some(run) = self.reanchor_run.filter(|run| {
+            exclusive_progress_matches(run.last, reading, tolerance)
+                && exclusive_progress_matches(run.first, reading, tolerance)
+        }) else {
+            self.reanchor_run = Some(ExclusiveReanchorRun { first: reading, last: reading });
             return false;
         };
-        let elapsed = Duration::from_nanos((reading.qpc_100ns - start.qpc_100ns) * 100);
+        self.reanchor_run = Some(ExclusiveReanchorRun { last: reading, ..run });
+        let elapsed = Duration::from_nanos((reading.qpc_100ns - run.first.qpc_100ns) * 100);
         if elapsed < EXCLUSIVE_POSITION_REANCHOR {
             return false;
         }
@@ -2006,6 +2014,137 @@ mod tests {
                 ExclusiveOutputState { next_buffer_delta_ns: None, missed_frames: 0 }
             );
         }
+    }
+
+    #[test]
+    fn reanchoring_requires_monotonic_candidate_positions() {
+        let period = Duration::from_millis(10);
+        let mut tracker = ExclusiveClockTracker::default();
+        tracker.observe(reading_at(9_600, 200_000), 10_080, 48_000, 0, period);
+        tracker.observe(reading_at(58_080, 210_000), 10_560, 48_000, 0, period);
+        // Every reading stays within 9 ms of the new epoch, but alternate
+        // readings move backwards by 8 ms. This is not a stable clock.
+        for tick in 2..=101_u64 {
+            let jitter = if tick % 2 == 0 { 432 } else { -432 };
+            let position = (9_600 + tick * 480 + 48_000) as i64 + jitter;
+            let state = tracker.observe(
+                reading_at(position as u64, 200_000 + tick * 10_000),
+                10_080 + tick * 480,
+                48_000,
+                0,
+                period,
+            );
+            assert_eq!(state.next_buffer_delta_ns, None, "tick {tick}");
+            assert_eq!(state.missed_frames, 0);
+        }
+        // A 14 ms callback interval still leaves 6 ms of PCM queued. Accepting
+        // the unstable epoch would incorrectly skip 144 frames here.
+        let state = tracker.observe(reading_at(106_752, 1_224_000), 59_040, 48_000, 192, period);
+        assert_eq!(state.missed_frames, 0);
+        assert_eq!(state.next_buffer_delta_ns, None);
+        // A genuinely smooth run can still recover after the rejection.
+        for tick in 1..=100_u64 {
+            tracker.observe(
+                reading_at(106_752 + tick * 480, 1_224_000 + tick * 10_000),
+                59_040 + tick * 480,
+                48_000,
+                0,
+                period,
+            );
+        }
+        assert!(!tracker.recovering);
+    }
+
+    #[test]
+    fn reanchoring_requires_consistent_adjacent_progress() {
+        let period = Duration::from_millis(10);
+        let mut tracker = ExclusiveClockTracker::default();
+        tracker.observe(reading_at(9_600, 200_000), 10_080, 48_000, 0, period);
+        for tick in 1..=100_u64 {
+            // Gradually drift 19 ms behind the new correspondence.
+            let position = 9_600 + tick * 480 + 48_000 - (tick - 1) * 912 / 99;
+            let state = tracker.observe(
+                reading_at(position, 200_000 + tick * 10_000),
+                10_080 + tick * 480,
+                48_000,
+                0,
+                period,
+            );
+            assert_eq!(state.next_buffer_delta_ns, None);
+        }
+        // Now 19 ms ahead: still near the first reading, but the 38 ms jump
+        // relative to the previous reading must restart the stable interval.
+        let state = tracker.observe(reading_at(106_992, 1_210_000), 58_560, 48_000, 0, period);
+        assert_eq!(state.next_buffer_delta_ns, None);
+        assert_eq!(state.missed_frames, 0);
+    }
+
+    #[test]
+    fn reanchoring_restarts_after_returning_to_the_old_correspondence() {
+        let period = Duration::from_millis(10);
+        let mut tracker = ExclusiveClockTracker::default();
+        tracker.observe(reading_at(9_600, 200_000), 10_080, 48_000, 0, period);
+        for tick in 1..=152_u64 {
+            // One old-epoch reading interrupts the candidate run. It does not
+            // complete the two-reading recovery, nor belong to the new epoch.
+            let jump = if tick == 51 { 0 } else { 48_000 };
+            let state = tracker.observe(
+                reading_at(9_600 + tick * 480 + jump, 200_000 + tick * 10_000),
+                10_080 + tick * 480,
+                48_000,
+                0,
+                period,
+            );
+            assert_eq!(state.next_buffer_delta_ns.is_some(), tick == 152, "tick {tick}");
+            assert_eq!(state.missed_frames, 0);
+        }
+    }
+
+    #[test]
+    fn reanchoring_preserves_a_confirmed_zero_queue_depth() {
+        let period = Duration::from_millis(10);
+        let mut tracker = ExclusiveClockTracker::default();
+        tracker.observe(reading_at(9_600, 200_000), 10_080, 48_000, 0, period);
+        let state = tracker.observe(reading_at(11_520, 240_000), 10_560, 48_000, 1_440, period);
+        assert_eq!(state.missed_frames, 960);
+        // The worker adds the recovered interval to submitted PCM. The next
+        // trusted reading has no PCM queued; this is distinct from no reading.
+        let written = 10_560 + state.missed_frames + 480;
+        let state = tracker.observe(reading_at(12_000, 250_000), written, 48_000, 0, period);
+        assert_eq!(state.next_buffer_delta_ns, Some(0));
+        for tick in 0..=100_u64 {
+            let position = 12_480 + tick * 480;
+            let state = tracker.observe(
+                reading_at(position + 48_000, 260_000 + tick * 10_000),
+                position,
+                48_000,
+                0,
+                period,
+            );
+            assert_eq!(state.next_buffer_delta_ns, (tick == 100).then_some(0), "tick {tick}");
+            assert_eq!(state.missed_frames, 0);
+        }
+        // After the re-anchor, a 30 ms interval with 10 ms of newly submitted
+        // PCM loses 20 ms. A fabricated queue depth would hide half the loss.
+        let position = 12_480 + 100 * 480;
+        let written = position + 480;
+        let state = tracker.observe(
+            reading_at(position + 1_440 + 48_000, 1_290_000),
+            written,
+            48_000,
+            960,
+            period,
+        );
+        assert_eq!(state.missed_frames, 960);
+        let state = tracker.observe(
+            reading_at(position + 1_920 + 48_000, 1_300_000),
+            written + state.missed_frames + 480,
+            48_000,
+            0,
+            period,
+        );
+        assert_eq!(state.missed_frames, 0);
+        assert_eq!(state.next_buffer_delta_ns, Some(0));
     }
 
     #[test]

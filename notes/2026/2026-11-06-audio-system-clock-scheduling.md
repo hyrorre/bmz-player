@@ -374,3 +374,46 @@ WASAPI位置の25～100msの遅れは、すべて1.00秒で予測へ戻った。
 - `cargo fmt --check`、`cargo check --workspace --locked`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --locked --no-fail-fast`、`cargo build -p bmz-player --release --locked` が成功した。音声195件（3件ignore）、gameplay262件、player2,888件（56件ignore）、動画36件を含む。
 
 上の実デバイス測定はこの追記の修正より前のコードである。修正後の実機再計測は行っていない。停止中に位置も止まるデバイスが実在するかは未確認で、macOS（IOProc）とLinuxのビルドも行っていない。
+
+## 2026-11-06 追記: 再基準化候補の連続性と先行量0
+
+`0ab62990` のWASAPI復帰処理について、レビューで確認した2件を修正した。
+
+- 再基準化の候補は開始点と直前の観測の両方へ照合する。位置の逆行やQPCと整合しない増分があれば、その観測から安定期間を数え直す。旧原点に一時的に戻った場合も、新原点の安定期間を継続しない。
+- 最後に受理した先行量は0も保存する。再基準化時に古い正値を再利用せず、未観測の場合だけ従来のperiod推定値を使う。
+
+48kHz・480 framesの模擬観測を、実装から切り出した検証プログラムへ与えた結果:
+
+| 条件 | `0ab62990` | 修正後 |
+|---|---|---|
+| 原点が+1秒変化し、位置に±9msの揺れが続く（1秒間に50回逆行） | 再基準化し、その直後のcallbackで不要な144 framesをスキップ対象にする | 復帰せず、スキップ0 |
+| 先行量480→0を受理後、原点変更から復帰 | 古い480 framesを使い、予測に10msを加える | 先行量0を保持 |
+| 上の復帰後に960 framesが欠落 | 480 framesだけ補正 | 960 framesを補正し、次callbackでは二重補正しない |
+
+位置の逆行、隣接観測の増分異常、旧原点への一時復帰、先行量0の4件を回帰テストに追加し、すべて修正前に失敗、修正後に成功することを確認した。
+滑らかな観測へ戻った後の復帰、1回限りの異常からの2観測復帰、±40/±200ppm・10分相当の既存テストも成功した。
+追加状態は固定サイズで、callbackへ待ち・メモリ確保・I/Oを追加していない。判定時計、先読みON/OFF、入力・リプレイ形式は変更していない。
+
+再現プログラムと比較結果は `.local/latency-investigation/review-0ab62990/`、検証ログは `.local/latency-investigation/reanchor-fix-*.log` に保存した。
+これらはソフトウェアに模擬観測を与えた検証であり、実デバイスの異常位置を測定した結果ではない。
+
+自動検証は `cargo fmt --check`、workspace check / all-targets Clippy（`-D warnings`）/ 全テスト、Windows release buildが成功した。
+音声199件（3件ignore）、gameplay262件、player2,888件（56件ignore）、動画36件を含む。
+過去に失敗した動画の待機テストも今回は成功した。incremental cacheのhard-link失敗に伴うcopy fallbackは発生したが、コードwarningの抑制は行っていない。
+
+通常ストリームの実機確認は2026-11-06 12:11～12:13 JSTに実施した。
+Windows / WASAPI排他 / RME Babyface Pro / 48kHz / Auto実480 framesで、streamを作り直して30秒×3回。
+各回で短音を88回先読み予約し、制御側で毎秒既存の診断値を記録した。計測中にbuild・全テストは実行していない。
+
+| 回 | 記録区間のframe進行 | 位置棄却・復帰待ち | catch-up | stream error | engine lock miss | callback最大処理時間 |
+|---|---:|---:|---:|---:|---:|---:|
+| 1 | 1,440,000 | 0 | 0 | 0 | 0 | 246.2µs |
+| 2 | 1,440,000 | 0 | 0 | 0 | 0 | 210.8µs |
+| 3 | 1,440,000 | 0 | 0 | 0 | 0 | 277.3µs |
+
+これは正常な位置観測を棄却しないことの短時間の確認である。位置異常を実機へ注入しておらず、再基準化の動作は回帰テストで確認した。
+PCM開始位置・音の欠落・API予測遅延・物理発声はこの計測器では測定していない。以前のPCM/API時刻の測定を更新する結果ではない。
+実打鍵、360fps/VSyncなしの実画面、CPU高負荷、macOS/Linuxのbuild・実機は未検証。
+
+計測器は `.local/latency-investigation/reanchor-smoke.rs`、CSV・集計JSON・実行ファイルSHA256は `reanchor-smoke-runs/` に保存した。
+callbackの計測hookは追加していない。ビルドに用いた一時的なCargo example宣言は撤去済みで、既存設定・DB・IR・リプレイを開いていない。
