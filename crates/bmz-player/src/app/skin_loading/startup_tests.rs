@@ -4,8 +4,8 @@ use crate::bootstrap::profile_tests::ProfileTestDir;
 #[test]
 fn initial_select_is_queued_before_surface_and_not_installed_synchronously() {
     let data = ProfileTestDir::new();
-    std::fs::create_dir_all(&data.paths.data_dir).unwrap();
-    let path = data.paths.data_dir.join("initial-select.json");
+    std::fs::create_dir_all(data.paths.data_dir.join("skins/test")).unwrap();
+    let path = data.paths.data_dir.join("skins/test/initial-select.json");
     std::fs::write(&path, r#"{"type":5,"name":"initial asynchronous select"}"#).unwrap();
     let mut renderer = Renderer::default();
     let mut pipeline = SkinPipelineRuntime::new();
@@ -42,9 +42,9 @@ fn initial_select_is_queued_before_surface_and_not_installed_synchronously() {
 #[test]
 fn frontend_reload_reuses_installed_fonts_after_cache_eviction_and_reloads_changes() {
     let data = ProfileTestDir::new();
-    std::fs::create_dir_all(&data.paths.data_dir).unwrap();
-    let path = data.paths.data_dir.join("decide.json");
-    let font = data.paths.data_dir.join("font.ttf");
+    std::fs::create_dir_all(data.paths.data_dir.join("skins/test")).unwrap();
+    let path = data.paths.data_dir.join("skins/test/decide.json");
+    let font = data.paths.data_dir.join("skins/test/font.ttf");
     std::fs::write(&font, b"font payload").unwrap();
     std::fs::write(&path, r#"{"type":6,"font":[{"id":"shared","path":"font.ttf"}]}"#).unwrap();
     let skin = SkinConfig { decide: path.to_string_lossy().into_owned(), ..Default::default() };
@@ -160,8 +160,9 @@ fn mz_select_player_rank_panel_uses_profile_player_stats() {
         return;
     }
     let data = ProfileTestDir::new();
-    let skin =
+    let mut skin =
         SkinConfig { select: skin_path.to_string_lossy().into_owned(), ..Default::default() };
+    data.paths.approve_skin_path(&mut skin, &skin_path).unwrap();
     // exp = 1000 * 2 + 200 = 2200: rank 3 (500 + 1000 < 2200 < +1500), 700 / 1500 exp.
     let stats = PlayerStatsSnapshot {
         play_count: 12,

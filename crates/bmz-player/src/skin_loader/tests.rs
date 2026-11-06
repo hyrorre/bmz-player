@@ -75,6 +75,8 @@ mod luxe_detail_options;
 mod mz_battle_info;
 #[path = "tests/mz_detail_options.rs"]
 mod mz_detail_options;
+#[path = "tests/path_boundaries.rs"]
+mod path_boundaries;
 #[path = "tests/paths.rs"]
 mod paths;
 #[path = "tests/pm_chara.rs"]

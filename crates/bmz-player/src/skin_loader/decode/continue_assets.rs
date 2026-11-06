@@ -12,6 +12,16 @@ pub fn resolve_lr2_continue_assets(
     runtime_state: &LuaLoadRuntimeState,
     document_cache: Option<SharedSkinDocumentCache>,
 ) -> Result<bmz_skin::Lr2ContinueAssets> {
+    let context = SkinPathContext::for_entry(skin_path)?;
+    resolve_lr2_continue_assets_with_context(&context, runtime_state, document_cache)
+}
+
+pub fn resolve_lr2_continue_assets_with_context(
+    context: &SkinPathContext,
+    runtime_state: &LuaLoadRuntimeState,
+    document_cache: Option<SharedSkinDocumentCache>,
+) -> Result<bmz_skin::Lr2ContinueAssets> {
+    let skin_path = context.entry_file();
     let empty = BTreeMap::new();
     let LoadedSkinDocumentForDecode { document, files, .. } = load_skin_document_with_path_context(
         skin_path,
@@ -20,7 +30,7 @@ pub fn resolve_lr2_continue_assets(
         &empty,
         runtime_state,
         document_cache,
-        None,
+        Some(context),
     )?;
     if !document.lr2 {
         return Ok(Default::default());
@@ -36,7 +46,7 @@ pub fn resolve_lr2_continue_assets(
             if !source.path.starts_with("bmz://") {
                 let path = resolve_json_skin_source_path_with_context(
                     skin_root,
-                    None,
+                    Some(context),
                     &source.path,
                     &document,
                     &files,
@@ -52,7 +62,11 @@ pub fn resolve_lr2_continue_assets(
         .filter(|font| !font.id.is_empty() && !font.path.is_empty())
         .filter_map(|font| {
             let path = resolve_json_skin_asset_path_with_context(
-                skin_root, None, &font.path, &document, &files,
+                skin_root,
+                Some(context),
+                &font.path,
+                &document,
+                &files,
             )
             .filter(|path| is_supported_font_path(path))?;
             let mut font = font.clone();

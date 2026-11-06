@@ -141,6 +141,7 @@ impl WinitApp {
         };
         let skins_started_at = Instant::now();
         let mut skin_pipeline = SkinPipelineRuntime::new();
+        skin_pipeline.external_access.clone_from(&boot.profile_config.skin.external_access);
         let (
             default_skin_manifest,
             initial_skin_video_sources,

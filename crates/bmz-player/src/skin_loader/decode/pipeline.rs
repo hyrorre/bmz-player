@@ -90,6 +90,7 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
     font_cache: Option<SharedSkinFontCache>,
     installed_fonts: Option<HashMap<String, SkinFontCacheKey>>,
 ) -> Result<DecodedSkin> {
+    let context = SkinPathContext::for_entry(skin_path)?;
     decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
         pinned_sources: None,
         skin_path,
@@ -97,7 +98,7 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
         options,
         files,
         runtime_state,
-        library_roots: &[],
+        library_roots: context.library_roots(),
         document_cache,
         source_cache,
         texture_cache,
@@ -142,11 +143,8 @@ pub fn decode_beatoraja_skin_request(
         installed_fonts,
         library_roots,
     } = request;
-    let path_context = if is_lua_skin_path(skin_path) {
-        Some(SkinPathContext::new(skin_path, library_roots.iter().cloned())?)
-    } else {
-        None
-    };
+    let path_context = Some(SkinPathContext::new(skin_path, library_roots.iter().cloned())?);
+    let skin_path = path_context.as_ref().unwrap().entry_file();
     let document_start = Instant::now();
     tracing::debug!(
         ?kind,

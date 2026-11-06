@@ -451,6 +451,11 @@ pub(super) fn system_sound_catalog_from_boot(
         Some(PathBuf::from(&cfg.default_sound_dir))
     };
     crate::system_sound::SoundSetCatalog {
+        allowed_roots: [&cfg.bgm_dir, &cfg.se_dir, &cfg.default_sound_dir]
+            .into_iter()
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .collect(),
         bgm_roots: bgm_candidates,
         se_dirs: se_candidates,
         default_dir,

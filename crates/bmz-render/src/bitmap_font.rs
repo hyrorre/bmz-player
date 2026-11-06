@@ -48,66 +48,118 @@ pub struct BitmapFontGlyph {
 }
 
 pub fn load_bitmap_font(path: &Path) -> Result<BitmapFont> {
+    load_bitmap_font_resolving(path, &|page| Ok(Some(resolve_case_insensitive_path(page))))
+}
+
+/// Keep the skin resolver in the decode path, including nested page reads.
+pub fn load_bitmap_font_with_context(
+    path: &Path,
+    context: &bmz_skin_assets::SkinPathContext,
+) -> Result<BitmapFont> {
+    let path = context.resolve_asset(&path.to_string_lossy())?;
+    let lr2 = is_lr2_font(&path);
+    load_bitmap_font_resolving(&path, &|page| {
+        if lr2 {
+            context.resolve_optional_asset(&page.to_string_lossy())
+        } else {
+            context.resolve_asset(&page.to_string_lossy()).map(Some)
+        }
+    })
+}
+
+fn is_lr2_font(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("lr2font"))
+}
+
+fn load_bitmap_font_resolving(
+    path: &Path,
+    resolve_page: &impl Fn(&Path) -> Result<Option<PathBuf>>,
+) -> Result<BitmapFont> {
     let bytes = bmz_skin_assets::read(path)
         .with_context(|| format!("failed to read bitmap font: {}", path.display()))?;
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
-    if path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("lr2font"))
-    {
+    if is_lr2_font(path) {
         let (text, _, _) = SHIFT_JIS.decode(&bytes);
-        parse_lr2_bitmap_font(&text, base_dir)
+        parse_lr2_bitmap_font(&text, base_dir, resolve_page)
     } else {
-        parse_bitmap_font(&String::from_utf8_lossy(&bytes), base_dir)
+        parse_bitmap_font(&String::from_utf8_lossy(&bytes), base_dir, resolve_page)
     }
     .with_context(|| format!("failed to parse bitmap font: {}", path.display()))
 }
 
 /// Resolve page dependencies without decoding their pixels, for cache validation.
 pub fn bitmap_font_page_paths(path: &Path) -> Result<Vec<PathBuf>> {
+    Ok(bitmap_font_raw_page_paths(path)?
+        .into_iter()
+        .map(|path| resolve_case_insensitive_path(&path))
+        .collect())
+}
+
+/// Validate every nested page before directory enumeration or image decoding.
+pub fn bitmap_font_page_paths_with_context(
+    path: &Path,
+    context: &bmz_skin_assets::SkinPathContext,
+) -> Result<Vec<PathBuf>> {
+    let path = context.resolve_asset(&path.to_string_lossy())?;
+    let lr2 = is_lr2_font(&path);
+    let mut pages = Vec::new();
+    for page in bitmap_font_raw_page_paths(&path)? {
+        if lr2 {
+            if let Some(page) = context.resolve_optional_asset(&page.to_string_lossy())? {
+                pages.push(page);
+            }
+        } else {
+            pages.push(context.resolve_asset(&page.to_string_lossy())?);
+        }
+    }
+    Ok(pages)
+}
+
+fn bitmap_font_raw_page_paths(path: &Path) -> Result<Vec<PathBuf>> {
     let bytes = bmz_skin_assets::read(path)?;
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let lr2 = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("lr2font"));
+    let lr2 = is_lr2_font(path);
     let text = if lr2 { SHIFT_JIS.decode(&bytes).0 } else { String::from_utf8_lossy(&bytes) };
-    let mut paths = HashMap::new();
+    // Keep every declaration: a missing duplicate #T does not replace a valid
+    // earlier page in the LR2 parser, so that earlier dependency must survive.
+    let mut paths = Vec::new();
+    let mut fnt_pages = HashMap::new();
     for line in text.lines().map(str::trim) {
         if lr2 {
             let fields =
                 line.trim_start_matches('\u{feff}').split(',').map(str::trim).collect::<Vec<_>>();
             if fields.first().is_some_and(|command| command.eq_ignore_ascii_case("#T"))
-                && let Some((id, path)) = lr2_page_path(&fields, base_dir)
+                && let Some((_, path)) = lr2_page_path_raw(&fields, base_dir)
             {
-                paths.insert(id, path);
+                paths.push(path);
             }
         } else if line.starts_with("page ") {
             let fields = parse_fields(line);
             let id = parse_i32(&fields, "id")?;
             let file =
                 fields.get("file").ok_or_else(|| anyhow!("bitmap font page missing file"))?;
-            paths
-                .insert(id, resolve_case_insensitive_path(&base_dir.join(file.replace('\\', "/"))));
+            fnt_pages.insert(id, base_dir.join(file.replace('\\', "/")));
         }
     }
-    let mut paths: Vec<_> = paths.into_values().collect();
+    paths.extend(fnt_pages.into_values());
     paths.sort();
     paths.dedup();
     Ok(paths)
 }
 
-fn lr2_page_path(fields: &[&str], base_dir: &Path) -> Option<(i32, PathBuf)> {
+fn lr2_page_path_raw(fields: &[&str], base_dir: &Path) -> Option<(i32, PathBuf)> {
     let page = parse_lr2_font_i32(fields.get(1).copied())?;
     let file = fields.get(2).filter(|file| !file.is_empty())?;
-    Some((
-        page,
-        resolve_case_insensitive_path(&base_dir.join(file.trim_matches('"').replace('\\', "/"))),
-    ))
+    Some((page, base_dir.join(file.trim_matches('"').replace('\\', "/"))))
 }
 
-fn parse_lr2_bitmap_font(text: &str, base_dir: &Path) -> Result<BitmapFont> {
+fn parse_lr2_bitmap_font(
+    text: &str,
+    base_dir: &Path,
+    resolve_page: &impl Fn(&Path) -> Result<Option<PathBuf>>,
+) -> Result<BitmapFont> {
     let mut size = 0;
     let mut margin = 0;
     let mut page_paths = HashMap::new();
@@ -129,9 +181,10 @@ fn parse_lr2_bitmap_font(text: &str, base_dir: &Path) -> Result<BitmapFont> {
                 }
             }
             "T" => {
-                let Some((page, path)) = lr2_page_path(&fields, base_dir) else {
+                let Some((page, path)) = lr2_page_path_raw(&fields, base_dir) else {
                     continue;
                 };
+                let Some(path) = resolve_page(&path)? else { continue };
                 if bmz_skin_assets::is_file(&path) {
                     page_paths.insert(page, path);
                 }
@@ -228,7 +281,11 @@ fn lr2_font_chars(code: i32) -> Vec<char> {
     if had_errors { Vec::new() } else { decoded.chars().collect() }
 }
 
-fn parse_bitmap_font(text: &str, base_dir: &Path) -> Result<BitmapFont> {
+fn parse_bitmap_font(
+    text: &str,
+    base_dir: &Path,
+    resolve_page: &impl Fn(&Path) -> Result<Option<PathBuf>>,
+) -> Result<BitmapFont> {
     let mut size = 0;
     let mut pad_y = 0;
     let mut line_height = 0;
@@ -252,8 +309,9 @@ fn parse_bitmap_font(text: &str, base_dir: &Path) -> Result<BitmapFont> {
             let id = parse_i32(&fields, "id")?;
             let file =
                 fields.get("file").ok_or_else(|| anyhow!("bitmap font page missing file"))?;
-            page_paths
-                .insert(id, resolve_case_insensitive_path(&base_dir.join(file.replace('\\', "/"))));
+            let path = resolve_page(&base_dir.join(file.replace('\\', "/")))?
+                .context("bitmap font page is missing")?;
+            page_paths.insert(id, path);
         } else if line.starts_with("char ") {
             let id = parse_i32(&fields, "id")?;
             let Some(ch) = char::from_u32(id as u32) else {
@@ -405,6 +463,37 @@ fn bitmap_font_cap_height(glyphs: &HashMap<char, BitmapFontGlyph>, pad_y: i32) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lr2_missing_pages_are_optional_but_fnt_pages_are_required() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([255; 4]))
+            .save(root.join("p0.tga"))
+            .unwrap();
+        let path = root.join("font.lr2font");
+        let context = bmz_skin_assets::SkinPathContext::for_directory(root).unwrap();
+        for missing_id in [1, 0] {
+            std::fs::write(&path, format!("#S,1\n#T,0,p0.tga\n#T,{missing_id},missing.tga\n#R,65,0,0,0,1,1\n#R,66,1,0,0,1,1\n")).unwrap();
+            let legacy = load_bitmap_font(&path).unwrap();
+            let bounded = load_bitmap_font_with_context(&path, &context).unwrap();
+            assert_eq!(bounded.pages.len(), 1);
+            assert_eq!(bounded.pages[&0].image, legacy.pages[&0].image);
+            assert_eq!(bounded.glyphs, legacy.glyphs);
+            assert_eq!(
+                bitmap_font_page_paths_with_context(&path, &context).unwrap(),
+                vec![bmz_skin_assets::canonicalize_skin_path(&root.join("p0.tga")).unwrap()]
+            );
+        }
+        // A page outside the root is still an error even if it is absent.
+        std::fs::write(&path, "#S,1\n#T,0,p0.tga\n#T,1,../missing.tga\n#R,65,0,0,0,1,1\n").unwrap();
+        assert!(load_bitmap_font_with_context(&path, &context).is_err());
+        assert!(bitmap_font_page_paths_with_context(&path, &context).is_err());
+        let path = root.join("font.fnt");
+        std::fs::write(&path, "info size=1\ncommon lineHeight=1 base=1 scaleW=1 scaleH=1\npage id=0 file=missing.tga\n").unwrap();
+        assert!(load_bitmap_font_with_context(&path, &context).is_err());
+        assert!(bitmap_font_page_paths_with_context(&path, &context).is_err());
+    }
 
     #[test]
     fn bitmap_font_invalid_style_samples_do_not_prevent_loading() {

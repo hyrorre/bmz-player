@@ -47,7 +47,13 @@ pub(super) fn resolve_json_skin_asset_path(
     document: &SkinDocument,
     files: &BTreeMap<String, String>,
 ) -> Option<PathBuf> {
-    resolve_json_skin_asset_path_with_context(skin_root, None, asset_path, document, files)
+    resolve_json_skin_asset_path_with_context(
+        skin_root,
+        Some(&SkinPathContext::for_directory(skin_root).ok()?),
+        asset_path,
+        document,
+        files,
+    )
 }
 
 pub(super) fn resolve_json_skin_asset_path_with_context(
@@ -57,12 +63,15 @@ pub(super) fn resolve_json_skin_asset_path_with_context(
     document: &SkinDocument,
     files: &BTreeMap<String, String>,
 ) -> Option<PathBuf> {
+    path_context?; // Missing authority is never an unrestricted fallback.
     let normalized = asset_path.replace('\\', "/");
     if !normalized.contains('*') {
         if let Some(path_context) = path_context {
-            return path_context.resolve_asset(&normalized).ok();
+            return path_context.resolve_asset(&normalized)
+                .inspect_err(|error| tracing::debug!(path = %normalized, %error, "skin asset path rejected or unresolved"))
+                .ok();
         }
-        return Some(resolve_case_insensitive_path(&skin_root.join(normalized)));
+        return None;
     }
 
     let filepath =
@@ -97,7 +106,7 @@ pub(super) fn resolve_json_skin_asset_path_with_context(
         let candidate = if let Some(path_context) = path_context {
             path_context.resolve_asset(&substituted).ok()
         } else {
-            Some(resolve_case_insensitive_path(&skin_root.join(&substituted)))
+            None
         };
         // A default such as "default" may identify the stem of default.png.
         // If direct substitution misses, retain the sandboxed wildcard fallback.
@@ -152,24 +161,6 @@ pub(super) fn substitute_filepath_choice(
     None
 }
 
-/// ユーザ選択のスキンルート相対パスを解決する。
-/// 絶対パスやスキンルート外への脱出を含む選択は無効として `None` を返す。
-pub(super) fn resolve_selected_skin_file(skin_root: &Path, selected: &str) -> Option<PathBuf> {
-    use std::path::Component;
-
-    let relative = Path::new(selected);
-    if relative.as_os_str().is_empty()
-        || relative.is_absolute()
-        || relative.components().any(|component| {
-            matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))
-        })
-    {
-        return None;
-    }
-    let candidate = resolve_case_insensitive_path(&skin_root.join(relative));
-    candidate.is_file().then_some(candidate)
-}
-
 pub(super) fn resolve_selected_skin_file_for_pattern_with_context(
     skin_root: &Path,
     path_context: Option<&SkinPathContext>,
@@ -181,15 +172,8 @@ pub(super) fn resolve_selected_skin_file_for_pattern_with_context(
             .resolve_selected_for_pattern(pattern, selected)
             .filter(|path| path.is_file());
     }
-    if let Some(path) = resolve_selected_skin_file(skin_root, selected) {
-        return Some(path);
-    }
-    let pattern = strip_beatoraja_asset_filter(pattern).replace('\\', "/");
-    let star = pattern.find('*')?;
-    let prefix = &pattern[..star];
-    let slash = prefix.rfind('/').map(|index| index + 1).unwrap_or(0);
-    let directory = &prefix[..slash];
-    resolve_selected_skin_file(skin_root, &format!("{directory}{}", selected.replace('\\', "/")))
+    let _ = skin_root;
+    None
 }
 
 pub(super) fn resolve_wildcard_path_with_context(
@@ -223,78 +207,8 @@ pub(super) fn resolve_wildcard_path_with_context(
         }
         return choose_wildcard_candidate(candidates);
     }
-    let pattern = strip_beatoraja_asset_filter(pattern);
-    let star = pattern.find('*')?;
-    let (prefix, suffix_with_star) = pattern.split_at(star);
-    let suffix = &suffix_with_star[1..];
-    let slash = prefix.rfind('/').map(|index| index + 1).unwrap_or(0);
-    let (directory, filename_prefix) = prefix.split_at(slash);
-    let directory = skin_root.join(directory);
-
-    if let Some(suffix) = suffix.strip_prefix('/') {
-        return resolve_wildcard_directory_path(&directory, filename_prefix, suffix, preferred);
-    }
-
-    let candidates = std::fs::read_dir(directory)
-        .ok()?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.is_file())
-        .filter(|path| {
-            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-                return false;
-            };
-            starts_with_ignore_ascii_case(file_name, filename_prefix)
-                && ends_with_ignore_ascii_case(file_name, suffix)
-        })
-        .collect::<Vec<_>>();
-    if let Some(preferred) = preferred
-        && let Some(candidate) = candidates.iter().find(|path| {
-            let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
-            let stem = path.file_stem().and_then(|name| name.to_str()).unwrap_or_default();
-            file_name.eq_ignore_ascii_case(preferred) || stem.eq_ignore_ascii_case(preferred)
-        })
-    {
-        return Some(candidate.clone());
-    }
-
-    choose_wildcard_candidate(candidates)
-}
-
-pub(super) fn resolve_case_insensitive_path(path: &Path) -> PathBuf {
-    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-        return path.to_path_buf();
-    };
-    let Some(parent) = path.parent() else {
-        return path.to_path_buf();
-    };
-    let parent = resolve_case_insensitive_path(parent);
-    let Ok(entries) = std::fs::read_dir(&parent) else {
-        return parent.join(file_name);
-    };
-    entries
-        .filter_map(|entry| entry.ok())
-        .find(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(file_name))
-        })
-        .map(|entry| entry.path())
-        .unwrap_or_else(|| parent.join(file_name))
-}
-
-pub(super) fn starts_with_ignore_ascii_case(value: &str, prefix: &str) -> bool {
-    value.get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(prefix))
-}
-
-pub(super) fn ends_with_ignore_ascii_case(value: &str, suffix: &str) -> bool {
-    value
-        .get(value.len().saturating_sub(suffix.len())..)
-        .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
-}
-
-pub(super) fn strip_beatoraja_asset_filter(pattern: &str) -> &str {
-    pattern.split_once('|').map_or(pattern, |(path, _)| path)
+    let _ = skin_root;
+    None
 }
 
 /// beatoraja のファイル選択カスタマイズで「ランダム」を表す番兵値。
@@ -445,37 +359,4 @@ pub(super) fn destination_ids(document: &SkinDocument) -> HashSet<&str> {
         }
     }
     ids
-}
-
-pub(super) fn resolve_wildcard_directory_path(
-    directory: &Path,
-    directory_prefix: &str,
-    suffix: &str,
-    preferred: Option<&str>,
-) -> Option<PathBuf> {
-    let mut candidates = std::fs::read_dir(directory)
-        .ok()?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.is_dir())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with(directory_prefix))
-        })
-        .map(|path| path.join(suffix))
-        .filter(|path| path.is_file())
-        .collect::<Vec<_>>();
-    candidates.sort();
-    if let Some(preferred) = preferred
-        && let Some(candidate) = candidates.iter().find(|path| {
-            path.parent()
-                .and_then(|parent| parent.file_name())
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name == preferred)
-        })
-    {
-        return Some(candidate.clone());
-    }
-
-    choose_wildcard_candidate(candidates)
 }

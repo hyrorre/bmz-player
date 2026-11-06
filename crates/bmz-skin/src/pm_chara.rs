@@ -26,10 +26,26 @@ pub fn load_pm_chara(
     chara_type: i32,
     color: i32,
 ) -> Result<LoadedPmChara> {
+    let context = if source_path.is_dir() {
+        crate::SkinPathContext::for_directory(source_path)?
+    } else {
+        crate::SkinPathContext::for_entry(source_path)?
+    };
+    load_pm_chara_with_context(context.entry_file(), &context, source_id_prefix, chara_type, color)
+}
+
+pub fn load_pm_chara_with_context(
+    source_path: &Path,
+    context: &crate::SkinPathContext,
+    source_id_prefix: &str,
+    chara_type: i32,
+    color: i32,
+) -> Result<LoadedPmChara> {
+    let source_path = context.policy().resolve(source_path)?;
     if !(0..=15).contains(&chara_type) {
         bail!("unsupported PMchara type: {chara_type}");
     }
-    let chp_path = find_chp_file(source_path)?;
+    let chp_path = find_chp_file(&source_path, context)?;
     let parsed = ParsedChp::load(&chp_path)?;
     let mut builder =
         RuntimeBuilder::new(source_id_prefix, chp_path.parent().unwrap_or(Path::new(".")));
@@ -60,7 +76,7 @@ pub fn load_pm_chara(
     Ok(LoadedPmChara { runtime, sources: builder.sources })
 }
 
-fn find_chp_file(source_path: &Path) -> Result<PathBuf> {
+fn find_chp_file(source_path: &Path, context: &crate::SkinPathContext) -> Result<PathBuf> {
     if source_path.is_file()
         && source_path
             .extension()
@@ -72,6 +88,7 @@ fn find_chp_file(source_path: &Path) -> Result<PathBuf> {
     let mut candidates = fs::read_dir(source_path)
         .with_context(|| format!("failed to read PMchara directory: {}", source_path.display()))?
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter_map(|path| context.policy().resolve(&path).ok())
         .filter(|path| {
             path.is_file()
                 && path
@@ -448,6 +465,23 @@ mod tests {
 
     fn test_dir(name: &str) -> crate::tests::TestDir {
         crate::tests::TestDir::new(name)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn loads_pm_chara_from_aliased_file_and_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("character");
+        let alias = temp.path().join("alias");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("character.png"), []).unwrap();
+        fs::write(root.join("sample.chp"), b"#CharBMP character.png\n#01 4 5 60 70\n").unwrap();
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        for source in [&alias, &alias.join("sample.chp")] {
+            let loaded = load_pm_chara(source, "pm", 1, 1).unwrap();
+            assert_eq!((loaded.runtime.canvas_width, loaded.runtime.canvas_height), (60, 70));
+            assert_eq!(loaded.sources.len(), 1);
+        }
     }
 
     #[test]

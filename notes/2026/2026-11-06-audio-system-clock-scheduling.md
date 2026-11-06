@@ -512,3 +512,11 @@ API予測は、最も単純な `callback − S/2` より良くならず、共有
 - `cargo fmt --check`、`cargo check --workspace --locked`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --locked --no-fail-fast`、`cargo build -p bmz-player --release --locked` が成功した。音声167件（3件ignore）、gameplay262件、player2,888件（56件ignore）、動画36件を含む。
 
 実打鍵、物理ループバック、360fps/VSyncなしの実画面、CPU高負荷、macOS（IOProc）とLinuxのビルドは未確認である。IOProcの変更はコンパイルしていない。長いWAVのずれは今回も対象外である。
+
+### 2回目のmain統合
+
+`origin/main` の `c1e28a46` を取り込んだ。衝突は6言語の翻訳ファイルと `notes/README.md` の末尾への追加で、どちらも両方の項目を保持した。音声・gameplay・動画の実装は統合で変わっていない。
+
+fmt、workspace check、all-targets Clippy（`-D warnings`）、Windows release buildは成功した。workspaceテストは音声167件、gameplay262件、動画36件が成功し、`bmz-player` の13件と `bmz-skin` の9件が失敗した。すべて導入済みスキンを読むテストで、統合前の `dab20016` では成功していた。
+
+`c1e28a46` そのものでも同じ環境で同じ22件が失敗したので、この統合が原因ではない。mainの `#76` のスキンパス解決がWindowsで失敗している可能性がある。例として、`LITONE5` の `select.lr2skin` は `Select\Select\csv\select.csv` を探して読み込めていない。原因は未調査である。

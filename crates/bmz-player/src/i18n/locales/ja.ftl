@@ -1017,3 +1017,7 @@ downloads-state-validating = 書庫を確認中
 
 settings-audio-schedule-ahead = 音声の先読み予約
 settings-audio-schedule-ahead-help = ON: BGM・自動キー音をシステム時計に合わせて先読み予約します。OFF: 発声時刻に達してから再生を要求します。押鍵に応じたキー音は常に即時に要求します。全プロファイル共通。次の演奏から有効になります。
+
+skin-external-allow = この外部スキンを許可
+skin-external-revoke = 外部スキンの許可を解除
+skin-external-allow-help = 選択したスキンと、その実体があるフォルダー内の参照を許可します。共有資源の範囲はプロファイル設定で追加できます。

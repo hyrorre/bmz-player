@@ -306,7 +306,7 @@ impl WinitApp {
             files,
             runtime_state,
         )
-        .with_library_roots(self.boot.app_paths.skin_library_roots())
+        .with_skin_access(&self.boot.app_paths, &self.boot.profile_config.skin)
         .reuse_installed_fonts(&self.skin.skin_pipeline)
         .with_lr2_continue_fallback(self.skin.skin_pipeline.lr2_assets.continue_fallback.clone());
         if refresh {

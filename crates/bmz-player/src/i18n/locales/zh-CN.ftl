@@ -1017,3 +1017,7 @@ downloads-state-validating = 正在检查压缩包
 
 settings-audio-schedule-ahead = 提前调度音频
 settings-audio-schedule-ahead-help = ON：按系统时钟提前安排 BGM 和自动键音。OFF：到达播放时刻后再请求播放。按键触发的键音始终立即请求播放。所有配置共用，下一次游戏时生效。
+
+skin-external-allow = 允许此外部皮肤
+skin-external-revoke = 撤销外部皮肤权限
+skin-external-allow-help = 允许此皮肤读取其实际所在的文件夹。可在配置文件中添加共享资源文件夹。

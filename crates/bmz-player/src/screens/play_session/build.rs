@@ -939,7 +939,6 @@ pub(crate) fn main_bpm_for_chart(
     for long in &chart.long_notes {
         count_candidate(long.start_note_id, long.start_tick, long.start_time);
     }
-    drop(count_candidate);
     values
         .into_iter()
         .max_by_key(|value| counts[&value.to_bits()])

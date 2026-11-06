@@ -350,18 +350,25 @@ impl<'a> CsvBuilder<'a> {
             return path;
         }
         let fnt = format!("{}fnt", &path[..path.len() - "lr2font".len()]);
-        if self.skin_root.join(&fnt).is_file() || self.skin_file_dir.join(&fnt).is_file() {
+        if self.path_context.resolve_asset(&self.skin_root.join(&fnt).to_string_lossy()).is_ok()
+            || self.path_context.resolve_asset(&fnt).is_ok()
+        {
             return self.relative_font_path_for_skin_file(&fnt);
         }
         self.relative_font_path_for_skin_file(&path)
     }
 
     pub(super) fn relative_font_path_for_skin_file(&self, path: &str) -> String {
-        if bmz_skin_assets::is_file(&self.skin_file_dir.join(path)) {
+        if self.path_context.resolve_asset(&self.skin_file_dir.join(path).to_string_lossy()).is_ok()
+        {
             return path.to_string();
         }
         let parent_relative = format!("../{path}");
-        if bmz_skin_assets::is_file(&self.skin_file_dir.join(&parent_relative)) {
+        if self
+            .path_context
+            .resolve_asset(&self.skin_file_dir.join(&parent_relative).to_string_lossy())
+            .is_ok()
+        {
             return parent_relative;
         }
         path.to_string()
@@ -427,10 +434,15 @@ impl<'a> CsvBuilder<'a> {
         }
         let slash = prefix.rfind('/').map_or(0, |index| index + 1);
         let (directory, prefix) = prefix.split_at(slash);
-        let mut candidates = fs::read_dir(self.skin_file_dir.join(directory))
+        let directory_path = self
+            .path_context
+            .resolve_directory(&self.skin_file_dir.join(directory).to_string_lossy())
+            .ok()?;
+        let mut candidates = fs::read_dir(directory_path)
             .ok()?
             .flatten()
             .filter_map(|entry| {
+                self.path_context.policy().resolve(&entry.path()).ok()?;
                 let name = entry.file_name().into_string().ok()?;
                 (name.len() >= prefix.len() + suffix.len()
                     && name.starts_with(prefix)
@@ -455,7 +467,7 @@ impl<'a> CsvBuilder<'a> {
     }
 
     pub(super) fn relative_source_path(&self, normalized: &str) -> String {
-        relative_to_skin_directory(&self.skin_file_dir, normalized)
+        relative_to_skin_directory(&self.path_context, &self.skin_file_dir, normalized)
     }
 
     pub(super) fn alloc_id(&mut self, prefix: &str) -> String {

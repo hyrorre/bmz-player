@@ -7,6 +7,9 @@ use super::*;
 /// スキン設定。スキンはプロファイルごとに切り替えられる。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SkinConfig {
+    /// Explicit per-entry grants. Legacy path strings alone grant no access.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub external_access: BTreeMap<String, SkinAccessGrant>,
     /// 選曲画面スキンのパス。
     /// 空文字列なら bmz の固定描画を使用。
     /// `.json` / `.lr2skin` で終わるパスは beatoraja スキンとして扱う。
@@ -189,6 +192,13 @@ pub struct SkinConfig {
     /// option / filepath / offset を前回値へ戻せるように保持する。
     #[serde(default)]
     pub history: BTreeMap<String, SkinHistoryEntryConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkinAccessGrant {
+    /// Canonical file selected by the user; a retargeted link needs reapproval.
+    pub entry: String,
+    pub roots: Vec<String>,
 }
 
 impl SkinConfig {

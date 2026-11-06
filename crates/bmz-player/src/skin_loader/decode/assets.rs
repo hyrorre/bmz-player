@@ -88,7 +88,11 @@ pub(in crate::skin_loader) fn resolve_skin_audio_path(
     skin_root: &Path,
     path: &str,
 ) -> Option<PathBuf> {
-    resolve_skin_audio_path_with_context(skin_root, None, path)
+    resolve_skin_audio_path_with_context(
+        skin_root,
+        Some(&SkinPathContext::for_directory(skin_root).ok()?),
+        path,
+    )
 }
 
 pub(in crate::skin_loader) fn resolve_skin_audio_path_with_context(
@@ -96,26 +100,12 @@ pub(in crate::skin_loader) fn resolve_skin_audio_path_with_context(
     path_context: Option<&SkinPathContext>,
     path: &str,
 ) -> Option<PathBuf> {
-    if let Some(path_context) = path_context {
-        return path_context.resolve_file(path).ok();
-    }
-    let normalized = path.replace('\\', "/");
-    let relative = Path::new(&normalized);
-    if relative.is_absolute()
-        || relative.components().any(|component| {
-            matches!(
-                component,
-                std::path::Component::ParentDir
-                    | std::path::Component::RootDir
-                    | std::path::Component::Prefix(_)
-            )
-        })
-    {
-        return None;
-    }
-    let canonical_root = fs::canonicalize(skin_root).ok()?;
-    let candidate = resolve_case_insensitive_path(&skin_root.join(relative));
-    let canonical = fs::canonicalize(candidate).ok()?;
-    canonical.is_file().then_some(())?;
-    canonical.starts_with(canonical_root).then_some(canonical)
+    let _ = skin_root;
+    path_context?
+        .resolve_asset(path)
+        .inspect_err(
+            |error| tracing::debug!(path, %error, "skin audio path rejected or unresolved"),
+        )
+        .ok()
+        .filter(|path| path.is_file())
 }

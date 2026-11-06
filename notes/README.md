@@ -40,6 +40,7 @@
 | 日付 | 記録 |
 |---|---|
 | 2026-11-06 | [システム時計に基づく音声予約と都度要求（#72）](2026/2026-11-06-audio-system-clock-scheduling.md) |
+| 2026-11-06 | [スキンの許可root統一と循環探索対策](2026/2026-11-06-skin-root-boundaries.md) |
 | 2026-11-05 | [Lua sandboxの資源制限](2026/2026-11-05-lua-resource-security.md) |
 | 2026-11-05 | [スクリーンショットに曲名・クリアタイプ・フォルダ名を付ける](2026/2026-11-05-screenshot-filenames.md) |
 | 2026-11-05 | [IRの入力境界とレート制限](2026/2026-11-05-ir-security-validation.md) |

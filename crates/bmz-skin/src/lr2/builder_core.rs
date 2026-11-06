@@ -1,12 +1,42 @@
 use super::*;
 
 impl<'a> CsvBuilder<'a> {
-    pub(super) fn new(path: &'a Path, header: Header, files: &'a BTreeMap<String, String>) -> Self {
-        let skin_root = infer_skin_root(path);
+    pub(super) fn with_path_context(
+        context: &crate::SkinPathContext,
+        header: Header,
+        files: &'a BTreeMap<String, String>,
+    ) -> Self {
+        Self::build(context.entry_file(), context, header, files)
+    }
+
+    // Command conversion unit tests also model entries that have not been written.
+    #[cfg(test)]
+    pub(super) fn new(path: &Path, header: Header, files: &'a BTreeMap<String, String>) -> Self {
+        let directory = std::path::absolute(path).unwrap().parent().unwrap().to_path_buf();
+        let context = crate::SkinPathContext::for_directory(&if directory.is_dir() {
+            directory
+        } else {
+            std::env::current_dir().unwrap()
+        })
+        .unwrap();
+        Self::build(path, &context, header, files)
+    }
+
+    fn build(
+        path: &Path,
+        context: &crate::SkinPathContext,
+        header: Header,
+        files: &'a BTreeMap<String, String>,
+    ) -> Self {
+        let skin_root = context
+            .policy()
+            .resolve(&infer_skin_root(path, context))
+            .unwrap_or_else(|_| context.entry_dir().to_path_buf());
         let skin_file_dir = path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
         let remap_single_play_2p_lanes = matches!(header.skin_type, 0 | 1 | 3 | 4 | 12 | 13)
             && header.selected_ops.get(&901).copied().unwrap_or(false);
         Self {
+            path_context: context.clone(),
             result_charts: Vec::new(),
             result_flip: false,
             select: builder_select::SelectState::default(),

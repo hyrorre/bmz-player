@@ -7,6 +7,13 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 mod dxa;
+mod path_context;
+mod path_policy;
+#[cfg(test)]
+#[path = "path_policy_tests.rs"]
+mod path_policy_tests;
+pub use path_context::{SkinPathContext, canonicalize_skin_path};
+pub use path_policy::SkinPathPolicy;
 
 /// A physical file or a file inside a DX archive. The logical identity includes
 /// the entry name; the backing file supplies metadata for cache invalidation.
@@ -27,7 +34,7 @@ impl SkinAsset {
     pub fn resolve_with(path: &Path, mut allowed: impl FnMut(&Path) -> bool) -> Result<Self> {
         let normalized = ordinary_windows_path(path);
         let path = normalized.as_path();
-        let physical = case_insensitive_path(path);
+        let physical = case_insensitive_path(path, &mut allowed);
         if physical.is_file() {
             let backing = fs::canonicalize(&physical)?;
             if !allowed(&backing) {
@@ -39,7 +46,8 @@ impl SkinAsset {
             let Some(name) = directory.file_name() else { continue };
             let mut archive_name = name.to_os_string();
             archive_name.push(".dxa");
-            let archive_path = case_insensitive_path(&directory.with_file_name(archive_name));
+            let archive_path =
+                case_insensitive_path(&directory.with_file_name(archive_name), &mut allowed);
             if !archive_path.is_file() {
                 continue;
             }
@@ -54,7 +62,11 @@ impl SkinAsset {
             let logical = backing.with_extension("").join(&entry.name);
             return Ok(Self { logical, backing, entry: Some(entry) });
         }
-        bail!("skin asset not found: {}", path.display())
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("skin asset not found: {}", path.display()),
+        )
+        .into())
     }
 
     pub fn logical_path(&self) -> &Path {
@@ -121,7 +133,7 @@ fn entry_name(path: &Path) -> Result<String> {
 }
 
 /// LR2 packages commonly differ in ASCII case between CSV and disk names.
-fn case_insensitive_path(path: &Path) -> PathBuf {
+fn case_insensitive_path(path: &Path, allowed: &mut impl FnMut(&Path) -> bool) -> PathBuf {
     if path.exists() {
         return path.to_path_buf();
     }
@@ -129,8 +141,12 @@ fn case_insensitive_path(path: &Path) -> PathBuf {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return path.to_path_buf();
     };
-    let parent = case_insensitive_path(parent);
-    fs::read_dir(&parent)
+    let parent = case_insensitive_path(parent, allowed);
+    let Ok(canonical_parent) = fs::canonicalize(&parent) else { return parent.join(name) };
+    if !allowed(&canonical_parent) {
+        return parent.join(name);
+    }
+    fs::read_dir(&canonical_parent)
         .ok()
         .into_iter()
         .flatten()

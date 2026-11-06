@@ -5,8 +5,36 @@ impl WinitApp {
     ///
     /// 起動時と同じ `load_skin_textures` 経路を使い、JSON スキンは
     /// バックグラウンド decode + 段階 install パイプラインへ流す。
-    pub(super) fn reload_skins(&mut self, request: SkinReloadRequest) {
+    pub(super) fn reload_skins(&mut self, mut request: SkinReloadRequest) {
         let skin = self.boot.profile_config.skin.clone();
+        if self.skin.skin_pipeline.update_access(&skin.external_access) {
+            self.skin.skin_defs_cache.clear();
+            self.skin.skin_header_checks.clear();
+            self.select.lr2_skin_settings.clear_cache();
+            self.skin.skin_video_sources.clear();
+            self.audio.skin_lua_audio = Default::default();
+            self.result.result_skin_audio = None;
+            // Revocation drops installed Lua VMs even if the replacement fails.
+            self.renderer.set_select_skin_context(SkinContext::default());
+            self.renderer.set_decide_skin_context(SkinContext::default());
+            self.renderer.set_play_skin_context(SkinContext::default(), false);
+            self.renderer.set_result_skin_context(SkinContext::default());
+            request = SkinReloadRequest {
+                select: true,
+                decide: true,
+                result: true,
+                course_result: true,
+                play4: true,
+                play5: true,
+                play6: true,
+                play7: true,
+                play8: true,
+                play9: true,
+                play10: true,
+                play14: true,
+                offsets: true,
+            };
+        }
         let select_last_played_at = self.select_snapshot().last_played_at;
         let texture_request = SkinReloadRequest { result: false, course_result: false, ..request };
         let frontend_chart = if request.decide {
@@ -338,7 +366,7 @@ impl WinitApp {
         let request =
             SkinDecodeRequest::new(generation, path, SkinKind::Play, options, files, runtime_state)
                 .with_play_chart_state(chart_state)
-                .with_library_roots(self.boot.app_paths.skin_library_roots())
+                .with_skin_access(&self.boot.app_paths, &self.boot.profile_config.skin)
                 .reuse_installed_fonts(&self.skin.skin_pipeline);
         spawn_skin_decode(&self.skin.skin_pipeline, request);
         self.skin.skin_pipeline.set_pending(SkinKind::Play, true);
