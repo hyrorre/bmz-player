@@ -240,7 +240,7 @@ impl AudioEngine {
         &mut self,
         output_start_frame: u64,
         output: &mut [f32],
-        buffer_time: Option<crate::clock::OutputScheduleTiming>,
+        buffer_time: Option<std::time::Instant>,
     ) {
         output.fill(0.0);
         if self.playback_paused() {
@@ -302,7 +302,7 @@ mod tests {
                     sound.start_time = Some(playback + Duration::from_millis(3));
                     engine.schedule(sound);
                     let mut pcm = vec![0.0; (sample_rate / 100) as usize * 2];
-                    engine.render_stereo_at(frame, &mut pcm, Some(playback.into()));
+                    engine.render_stereo_at(frame, &mut pcm, Some(playback));
                     let onset =
                         pcm.as_chunks::<2>().0.iter().position(|sample| sample[0] != 0.0).unwrap();
                     assert_eq!(
@@ -335,32 +335,9 @@ mod tests {
             sound.catch_up = catch_up;
             engine.schedule(sound);
             let mut pcm = [0.0; 2];
-            engine.render_stereo_at(
-                10_000,
-                &mut pcm,
-                Some((base + Duration::from_millis(10)).into()),
-            );
+            engine.render_stereo_at(10_000, &mut pcm, Some(base + Duration::from_millis(10)));
             assert_eq!(pcm[0], if catch_up { 0.48 } else { 0.0 });
         }
-    }
-
-    #[test]
-    fn prediction_jitter_does_not_skip_a_timed_bgm_attack() {
-        use std::time::{Duration, Instant};
-        let base = Instant::now();
-        let mut engine = AudioEngine::new(48_000);
-        engine.insert_sample(
-            SoundId(1),
-            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5] },
-        );
-        let mut sound = ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0);
-        sound.start_time = Some(base + Duration::from_millis(11));
-        engine.schedule(sound);
-        let mut pcm = [0.0; 960];
-        engine.render_stereo_at(100_000, &mut pcm, Some(base.into()));
-        assert!(pcm.iter().all(|value| *value == 0.0));
-        engine.render_stereo_at(100_480, &mut pcm, Some((base + Duration::from_millis(12)).into()));
-        assert_eq!(pcm[0], 0.5);
     }
 
     #[test]
@@ -383,14 +360,10 @@ mod tests {
             new_rate_percent: 200,
         });
         let mut pcm = [0.0; 192];
-        engine.render_stereo_at(24_000, &mut pcm, Some((base + Duration::from_millis(500)).into()));
+        engine.render_stereo_at(24_000, &mut pcm, Some(base + Duration::from_millis(500)));
         assert!(pcm.iter().all(|value| *value == 0.0));
         engine.set_playback_paused_at(false, 48_000, base + Duration::from_secs(1));
-        engine.render_stereo_at(
-            49_872,
-            &mut pcm,
-            Some((base + Duration::from_millis(1_039)).into()),
-        );
+        engine.render_stereo_at(49_872, &mut pcm, Some(base + Duration::from_millis(1_039)));
         assert_eq!(pcm.iter().position(|value| *value != 0.0), Some(48 * 2));
         assert!(engine.is_idle());
     }

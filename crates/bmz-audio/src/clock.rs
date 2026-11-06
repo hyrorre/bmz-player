@@ -230,21 +230,6 @@ pub(crate) fn output_gap_tolerance(period: Duration) -> Duration {
     Duration::from_millis(20).max(period.saturating_mul(2))
 }
 
-/// Scheduling correspondence and callback-stop notification are independent.
-/// An epoch change resynchronizes pending deadlines; it does not advance voices.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct OutputScheduleTiming {
-    pub time: Instant,
-    pub outage_epoch: u64,
-}
-
-#[cfg(test)]
-impl From<Instant> for OutputScheduleTiming {
-    fn from(time: Instant) -> Self {
-        Self { time, outage_epoch: 0 }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

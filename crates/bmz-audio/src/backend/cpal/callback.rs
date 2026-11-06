@@ -27,13 +27,13 @@ impl OutputPlaybackTimeline {
             // Continuous buffers start one previous span apart, whatever this
             // refill holds. A larger output buffer/latency estimate is not
             // evidence of lost PCM, so a callback outage is required as well.
-            let loss = match self.previous_playback {
-                Some(previous) => playback
-                    .checked_duration_since(previous)?
-                    .saturating_sub(previous_span)
-                    .min(callback_loss),
-                None => callback_loss,
-            };
+            // An API clock that went backwards cannot be compared at all.
+            let loss = self
+                .previous_playback
+                .and_then(|previous| playback.checked_duration_since(previous))
+                .map_or(callback_loss, |step| {
+                    step.saturating_sub(previous_span).min(callback_loss)
+                });
             (loss > output_gap_tolerance(previous_span.min(span)))
                 .then(|| duration_to_frames(loss, sample_rate))
         });
@@ -41,86 +41,6 @@ impl OutputPlaybackTimeline {
         self.previous_observed = Some(observed);
         self.previous_frames = frames;
         catch_up.unwrap_or(0)
-    }
-
-    /// API times are not comparable across a clock rebase. The callback gap is
-    /// measured by Instant, so a real stop is still detected from it alone.
-    fn rebase(&mut self) {
-        self.previous_playback = None;
-    }
-}
-
-/// Outage and scheduling state of one stream, outside its closure so that the
-/// handover to the engine can be tested.
-#[derive(Debug, Default)]
-struct OutputCallbackTiming {
-    playback_timeline: OutputPlaybackTimeline,
-    output_phase: ScheduledOutputPhase,
-    schedule_timeline: OutputScheduleTimeline,
-}
-
-impl OutputCallbackTiming {
-    /// Returns the output frames to skip and the timing of this buffer.
-    fn advance(
-        &mut self,
-        api_playback: ::cpal::StreamInstant,
-        playback: Option<Instant>,
-        rebased: bool,
-        frames: usize,
-        sample_rate: u32,
-        callback_start: Instant,
-    ) -> (u64, OutputScheduleTiming) {
-        if rebased {
-            self.playback_timeline.rebase();
-        }
-        let catch_up_frames = self.playback_timeline.catch_up_frames(
-            api_playback,
-            frames,
-            sample_rate,
-            callback_start,
-        );
-        if catch_up_frames != 0 {
-            self.schedule_timeline.mark_outage();
-        }
-        let span = frames_to_duration(frames, sample_rate);
-        let stopped = self.schedule_timeline.observe(callback_start, span);
-        if rebased || catch_up_frames != 0 || stopped {
-            self.output_phase.reset();
-        }
-        let buffer_time = self.output_phase.buffer_time(playback, callback_start, span);
-        (catch_up_frames, self.schedule_timeline.timing(buffer_time))
-    }
-}
-
-/// Convert only through an explicit API/Instant clock pair. Callback delivery
-/// jitter does not move a valid pair; a reset/implausible timestamp rebases it.
-fn map_playback_time(
-    observed: Instant,
-    callback: ::cpal::StreamInstant,
-    playback: ::cpal::StreamInstant,
-    initial: Option<(Instant, ::cpal::StreamInstant)>,
-    rebased: &mut Option<(Instant, ::cpal::StreamInstant)>,
-) -> (Option<Instant>, bool) {
-    let mapped = rebased.or(initial).and_then(|(system, api)| {
-        if let Some(delta) = playback.checked_duration_since(api) {
-            system.checked_add(delta)
-        } else {
-            system.checked_sub(api.checked_duration_since(playback)?)
-        }
-    });
-    if let Some(time) = mapped.filter(|time| {
-        time.checked_duration_since(observed).unwrap_or_default() < Duration::from_secs(1)
-            && observed.checked_duration_since(*time).unwrap_or_default()
-                < Duration::from_millis(100)
-    }) {
-        (Some(time), false)
-    } else {
-        *rebased = Some((observed, callback));
-        let prediction = playback
-            .checked_duration_since(callback)
-            .filter(|delay| *delay < Duration::from_secs(1))
-            .and_then(|delay| observed.checked_add(delay));
-        (prediction, true)
     }
 }
 
@@ -141,7 +61,8 @@ where
     // あれば設定 UI の最大 fixed buffer と 384 kHz / 約 10 ms までを覆える。
     let mut buffers = OutputRenderBuffers::new();
     let sample_rate = config.sample_rate;
-    let mut output_timing = OutputCallbackTiming::default();
+    let mut playback_timeline = OutputPlaybackTimeline::default();
+    let mut frame_clock = OutputFrameClock::default();
     let timing_enabled = bmz_core::latency::diagnostics_enabled();
     // Query outside the callback. A failed host identity is unknown too.
     let prediction_available = device.id().ok().is_some_and(|id| id.host().name() != "PipeWire");
@@ -155,12 +76,7 @@ where
         suspend.poll();
     }
     let error_diagnostics = Arc::clone(&diagnostics);
-    // Pair the API clock with Instant before starting the stream. The callback
-    // converts API timestamps through this pair, not by comparing clock epochs.
-    let clock_pair = Arc::new(std::sync::OnceLock::new());
-    let callback_clock_pair = Arc::clone(&clock_pair);
-    let mut clock_pair_override: Option<(Instant, ::cpal::StreamInstant)> = None;
-    let stream = device
+    device
         .build_output_stream(
             *config,
             move |data: &mut [T], info| {
@@ -173,20 +89,6 @@ where
                 }
 
                 let frames = data.len() / channels;
-                let timestamps = info.timestamp();
-                let (playback, rebased) = if prediction_available {
-                    map_playback_time(
-                        callback_start,
-                        timestamps.callback,
-                        timestamps.playback,
-                        callback_clock_pair.get().copied(),
-                        &mut clock_pair_override,
-                    )
-                } else {
-                    // No trustworthy output position: use the current callback,
-                    // never a fixed song-start frame or a fabricated API latency.
-                    (None, false)
-                };
                 #[cfg(any(target_os = "macos", target_os = "linux"))]
                 let resumed = timing_enabled && suspend.poll();
                 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -223,10 +125,8 @@ where
                     previous_callback = Some(callback_start);
                     previous_stream_callback = Some(info.timestamp().callback);
                 }
-                let (catch_up_frames, buffer_time) = output_timing.advance(
+                let catch_up_frames = playback_timeline.catch_up_frames(
                     info.timestamp().playback,
-                    playback,
-                    rebased,
                     frames,
                     sample_rate,
                     callback_start,
@@ -239,6 +139,9 @@ where
                         .timeline_catch_up_frames
                         .fetch_add(catch_up_frames, Ordering::Relaxed);
                 }
+                let span = frames_to_duration(frames, sample_rate);
+                let buffer_time =
+                    frame_clock.buffer_time(start_frame, callback_start, span, sample_rate);
                 render_output(
                     data,
                     OutputRenderLayout {
@@ -270,12 +173,7 @@ where
             },
             None,
         )
-        .map_err(CpalBackendError::BuildStream)?;
-    let before = Instant::now();
-    let api = stream.now();
-    let after = Instant::now();
-    let _ = clock_pair.set((before + after.duration_since(before) / 2, api));
-    Ok(stream)
+        .map_err(CpalBackendError::BuildStream)
 }
 
 pub(super) fn device_name(device: &::cpal::Device) -> String {
@@ -291,53 +189,6 @@ mod playback_timeline_tests {
 
     const SAMPLE_RATE: u32 = 48_000;
     const BUFFER_FRAMES: usize = 480;
-
-    #[test]
-    fn callback_stops_reach_the_schedule_timing_without_a_frame_jump() {
-        let base = Instant::now();
-        let api = ::cpal::StreamInstant::from_millis;
-        let mut timing = OutputCallbackTiming::default();
-        let advance = |timing: &mut OutputCallbackTiming, api_ms, callback_ms, rebased| {
-            let callback = base + Duration::from_millis(callback_ms);
-            let playback = callback + Duration::from_millis(10);
-            timing.advance(
-                api(api_ms),
-                Some(playback),
-                rebased,
-                BUFFER_FRAMES,
-                SAMPLE_RATE,
-                callback,
-            )
-        };
-        assert_eq!(advance(&mut timing, 1_000, 0, false).1.outage_epoch, 0);
-        assert_eq!(advance(&mut timing, 1_010, 10, false).1.outage_epoch, 0);
-        // The API position stopped too, so no catch-up reports this stall.
-        let (catch_up_frames, stopped) = advance(&mut timing, 1_020, 70, false);
-        assert_eq!(catch_up_frames, 0);
-        assert_eq!(stopped.outage_epoch, 1);
-        assert_eq!(stopped.time, base + Duration::from_millis(65));
-        // A rebase alone resets the correspondence, not the schedule.
-        assert_eq!(advance(&mut timing, 5, 80, true).1.outage_epoch, 1);
-    }
-
-    #[test]
-    fn a_catch_up_changes_the_schedule_timing_once() {
-        let base = Instant::now();
-        let api = ::cpal::StreamInstant::from_millis;
-        let mut timing = OutputCallbackTiming::default();
-        timing.advance(api(1_000), None, false, BUFFER_FRAMES, SAMPLE_RATE, base);
-        let callback = base + Duration::from_millis(110);
-        let (catch_up_frames, buffer) =
-            timing.advance(api(1_110), None, false, BUFFER_FRAMES, SAMPLE_RATE, callback);
-        assert_eq!(catch_up_frames, 4_800);
-        let epoch = buffer.outage_epoch;
-        assert_ne!(epoch, 0);
-        let callback = callback + Duration::from_millis(10);
-        let (catch_up_frames, buffer) =
-            timing.advance(api(1_120), None, false, BUFFER_FRAMES, SAMPLE_RATE, callback);
-        assert_eq!(catch_up_frames, 0);
-        assert_eq!(buffer.outage_epoch, epoch);
-    }
 
     #[test]
     fn a_shared_stall_is_measured_from_the_previous_buffer() {
@@ -378,11 +229,10 @@ mod playback_timeline_tests {
     }
 
     #[test]
-    fn a_larger_refill_covers_callback_delay_even_during_a_clock_rebase() {
+    fn a_larger_refill_covers_callback_delay_even_when_the_api_clock_resets() {
         let base = Instant::now();
         let mut timeline = OutputPlaybackTimeline::default();
         timeline.catch_up_frames(::cpal::StreamInstant::from_millis(1_000), 480, SAMPLE_RATE, base);
-        timeline.rebase();
         assert_eq!(
             timeline.catch_up_frames(
                 ::cpal::StreamInstant::from_millis(5),
@@ -395,7 +245,7 @@ mod playback_timeline_tests {
     }
 
     #[test]
-    fn a_callback_stop_is_still_an_outage_across_a_clock_rebase() {
+    fn a_callback_stop_is_still_an_outage_when_the_api_clock_resets() {
         let base = Instant::now();
         let mut timeline = OutputPlaybackTimeline::default();
         timeline.catch_up_frames(
@@ -404,7 +254,6 @@ mod playback_timeline_tests {
             SAMPLE_RATE,
             base,
         );
-        timeline.rebase();
         // The new API epoch is not comparable. The Instant gap still is.
         assert_eq!(
             timeline.catch_up_frames(
@@ -418,7 +267,7 @@ mod playback_timeline_tests {
     }
 
     #[test]
-    fn a_clock_rebase_with_regular_callbacks_is_not_an_outage() {
+    fn an_api_clock_reset_with_regular_callbacks_is_not_an_outage() {
         let base = Instant::now();
         let mut timeline = OutputPlaybackTimeline::default();
         timeline.catch_up_frames(
@@ -427,7 +276,6 @@ mod playback_timeline_tests {
             SAMPLE_RATE,
             base,
         );
-        timeline.rebase();
         assert_eq!(
             timeline.catch_up_frames(
                 ::cpal::StreamInstant::from_millis(5),
@@ -467,92 +315,6 @@ mod playback_timeline_tests {
             ),
             0
         );
-    }
-
-    #[test]
-    fn playback_mapping_uses_api_epoch_without_callback_delivery_jitter() {
-        let start = Instant::now();
-        let api = ::cpal::StreamInstant::from_millis;
-        let mut rebased = None;
-        let pair = Some((start, api(1_000)));
-        for delivery_ms in [10, 15, 19] {
-            assert_eq!(
-                map_playback_time(
-                    start + Duration::from_millis(delivery_ms),
-                    api(1_010),
-                    api(1_020),
-                    pair,
-                    &mut rebased
-                ),
-                (Some(start + Duration::from_millis(20)), false)
-            );
-            assert!(rebased.is_none());
-        }
-    }
-
-    #[test]
-    fn playback_mapping_recovers_from_reset_and_rejects_broken_delay() {
-        let start = Instant::now();
-        let api = ::cpal::StreamInstant::from_millis;
-        let mut rebased = None;
-        let observed = start + Duration::from_secs(5);
-        let pair = Some((start, api(10_000)));
-        assert_eq!(
-            map_playback_time(observed, api(0), api(10), pair, &mut rebased),
-            (Some(observed + Duration::from_millis(10)), true)
-        );
-        assert_eq!(
-            map_playback_time(
-                observed + Duration::from_millis(10),
-                api(10),
-                api(20),
-                pair,
-                &mut rebased
-            ),
-            (Some(observed + Duration::from_millis(20)), false)
-        );
-        assert_eq!(
-            map_playback_time(observed, api(0), api(30_000), pair, &mut rebased),
-            (None, true)
-        );
-    }
-
-    #[test]
-    fn signed_api_drift_and_epoch_rebases_keep_scheduling_bounded() {
-        let start = Instant::now();
-        let span = Duration::from_millis(10);
-        for ppm in [-200_i64, -40, 40, 200] {
-            let mut phase = ScheduledOutputPhase::default();
-            let mut rebased = None;
-            let pair = Some((start, ::cpal::StreamInstant::from_nanos(0)));
-            for buffer in 0..=60_000_u32 {
-                let elapsed = u64::from(buffer) * 10_000_000;
-                let api_elapsed =
-                    (i128::from(elapsed) * i128::from(1_000_000 + ppm) / 1_000_000) as u64;
-                let observed = start + Duration::from_nanos(elapsed);
-                let (prediction, reset) = map_playback_time(
-                    observed,
-                    ::cpal::StreamInstant::from_nanos(api_elapsed),
-                    ::cpal::StreamInstant::from_nanos(api_elapsed + 10_000_000),
-                    pair,
-                    &mut rebased,
-                );
-                if reset {
-                    phase.reset();
-                }
-                let time = phase.buffer_time(prediction, observed, span);
-                let expected = observed - span / 2;
-                assert!(
-                    time.max(expected).duration_since(time.min(expected))
-                        < Duration::from_micros(500),
-                    "{ppm} ppm at {buffer}"
-                );
-            }
-            if ppm == -200 {
-                // The old pair becomes >100 ms late and is explicitly rebased.
-                assert!(rebased.is_some());
-            }
-        }
     }
 
     #[test]

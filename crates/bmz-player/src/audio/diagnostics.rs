@@ -22,7 +22,6 @@ pub fn latency_json(
         "lock_misses": snapshot.engine_lock_miss_count,
         "queue_drops": snapshot.command_dropped_count,
         "timeline_catch_ups": snapshot.timeline_catch_up_count,
-        "untrusted_positions": snapshot.untrusted_position_count,
         "stream": info.map(|i| serde_json::json!({
             "id":i.stream_id,
             "requested_host":format!("{:?}",i.requested_host),"requested_device":i.requested_device,

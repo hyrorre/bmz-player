@@ -17,8 +17,8 @@ use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_FAILED, WAIT_OBJECT_0
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED, AUDCLNT_SHAREMODE_EXCLUSIVE,
     AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_NOPERSIST, IAudioClient, IAudioClient3,
-    IAudioClock, IAudioRenderClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
-    WAVE_FORMAT_PCM, WAVEFORMATEX, WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0,
+    IAudioRenderClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, WAVE_FORMAT_PCM,
+    WAVEFORMATEX, WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0,
 };
 use windows::Win32::Media::KernelStreaming::{
     KSAUDIO_SPEAKER_DIRECTOUT, KSDATAFORMAT_SUBTYPE_PCM, SPEAKER_FRONT_CENTER, SPEAKER_FRONT_LEFT,
@@ -29,7 +29,6 @@ use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
     CoUninitialize,
 };
-use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::Threading::{
     AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsW, CreateEventW, INFINITE,
     SetEvent, WaitForMultipleObjects,
@@ -38,6 +37,7 @@ use windows::core::PCWSTR;
 
 use crate::backend::output::{
     NativeOutputRenderer, OutputSample, duration_to_frames, frames_to_duration,
+    output_gap_tolerance,
 };
 
 const EXCLUSIVE_RECOVERY_INITIAL_DELAY_MS: u32 = 100;
@@ -658,263 +658,16 @@ struct ExclusiveFormatCandidate {
     sample_format: ExclusiveSampleFormat,
 }
 
-/// One reading of the endpoint clock and the QPC counter taken beside it.
-#[derive(Debug, Clone, Copy)]
-struct ExclusiveClockReading {
-    position: u64,
-    frequency: u64,
-    qpc_100ns: u64,
-    counter: i64,
-    qpc_frequency: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ExclusiveOutputState {
-    /// Output time of the next buffer relative to the counter reading.
-    next_buffer_delta_ns: Option<i128>,
-    missed_frames: u64,
-}
-
-/// A rejected position must keep progressing smoothly this long before it
-/// replaces the accepted correspondence.
-const EXCLUSIVE_POSITION_REANCHOR: Duration = Duration::from_secs(1);
-
-#[derive(Debug, Clone, Copy)]
-struct ExclusiveReanchorRun {
-    first: ExclusiveClockReading,
-    last: ExclusiveClockReading,
-}
-
-/// The position is trusted while it follows the accepted QPC correspondence.
-/// After a rejection it either returns to that correspondence, or a long smooth
-/// run replaces it. `written_bias` then absorbs the difference, so that a new
-/// position epoch restores the prediction without becoming a voice skip.
-#[derive(Debug, Default, Clone, Copy)]
-struct ExclusiveClockTracker {
-    accepted: Option<ExclusiveClockReading>,
-    /// PCM queued past the last accepted position; zero is a known empty queue.
-    queued_frames: Option<u64>,
-    written_bias: i128,
-    recovering: bool,
-    recovery_candidate: Option<ExclusiveClockReading>,
-    reanchor_run: Option<ExclusiveReanchorRun>,
-}
-
-impl ExclusiveClockTracker {
-    fn observe(
-        &mut self,
-        reading: ExclusiveClockReading,
-        written_frames: u64,
-        sample_rate: u32,
-        max_missed_frames: u64,
-        period: Duration,
-    ) -> ExclusiveOutputState {
-        let unavailable = ExclusiveOutputState { next_buffer_delta_ns: None, missed_frames: 0 };
-        let tolerance = crate::clock::output_gap_tolerance(period).as_nanos() as i128;
-        if !exclusive_reading_is_usable(reading, sample_rate, tolerance) {
-            self.reject();
-            self.reanchor_run = None;
-            return unavailable;
-        }
-        let period_frames = duration_to_frames(period, sample_rate);
-        // A position step or delivery jitter can lead an empty queue by up to a
-        // period without any lost PCM. Only a clearly late callback can lose it.
-        let max_missed_frames = if max_missed_frames.saturating_mul(2) >= period_frames {
-            max_missed_frames
-        } else {
-            0
-        };
-        // Do not clip a huge untrusted deficit into many small voice skips.
-        let max_lead_frames = max_missed_frames.saturating_add(period_frames);
-        if !self.follows_accepted(reading, written_frames, sample_rate, max_lead_frames, tolerance)
-        {
-            self.reject();
-            if !self.reanchor(reading, written_frames, sample_rate, period, tolerance) {
-                return unavailable;
-            }
-            return self.accept(reading, written_frames, sample_rate, 0);
-        }
-        // Returning to the accepted epoch interrupts the new-epoch run, even
-        // when a second reading is still needed to finish the fast recovery.
-        self.reanchor_run = None;
-        if self.recovering {
-            let Some(candidate) = self.recovery_candidate else {
-                self.recovery_candidate = Some(reading);
-                return unavailable;
-            };
-            if reading.qpc_100ns <= candidate.qpc_100ns
-                || reading.counter <= candidate.counter
-                || reading.position < candidate.position
-            {
-                return unavailable;
-            }
-            self.finish_recovery();
-        }
-        self.accept(reading, written_frames, sample_rate, max_missed_frames)
-    }
-
-    fn reject(&mut self) {
-        self.recovering = true;
-        self.recovery_candidate = None;
-    }
-
-    fn finish_recovery(&mut self) {
-        self.recovering = false;
-        self.recovery_candidate = None;
-        self.reanchor_run = None;
-    }
-
-    fn biased_written(&self, written_frames: u64) -> u64 {
-        (i128::from(written_frames) + self.written_bias).clamp(0, i128::from(u64::MAX)) as u64
-    }
-
-    fn accept(
-        &mut self,
-        reading: ExclusiveClockReading,
-        written_frames: u64,
-        sample_rate: u32,
-        max_missed_frames: u64,
-    ) -> ExclusiveOutputState {
-        let written = self.biased_written(written_frames);
-        let queued = written.saturating_sub(exclusive_consumed_frames(reading, sample_rate));
-        self.queued_frames = Some(queued);
-        self.accepted = Some(reading);
-        exclusive_output_state(reading, written, sample_rate, max_missed_frames)
-    }
-
-    fn follows_accepted(
-        &self,
-        reading: ExclusiveClockReading,
-        written_frames: u64,
-        sample_rate: u32,
-        max_lead_frames: u64,
-        tolerance: i128,
-    ) -> bool {
-        let consumed = u128::from(exclusive_consumed_frames(reading, sample_rate));
-        let written = u128::from(self.biased_written(written_frames));
-        consumed <= written + u128::from(max_lead_frames)
-            && self
-                .accepted
-                .is_none_or(|previous| exclusive_progress_matches(previous, reading, tolerance))
-    }
-
-    /// Keeps the last queued PCM depth, so that a later real underrun is still
-    /// measured from the same margin.
-    fn reanchor(
-        &mut self,
-        reading: ExclusiveClockReading,
-        written_frames: u64,
-        sample_rate: u32,
-        period: Duration,
-        tolerance: i128,
-    ) -> bool {
-        let Some(run) = self.reanchor_run.filter(|run| {
-            exclusive_progress_matches(run.last, reading, tolerance)
-                && exclusive_progress_matches(run.first, reading, tolerance)
-        }) else {
-            self.reanchor_run = Some(ExclusiveReanchorRun { first: reading, last: reading });
-            return false;
-        };
-        self.reanchor_run = Some(ExclusiveReanchorRun { last: reading, ..run });
-        let elapsed = Duration::from_nanos((reading.qpc_100ns - run.first.qpc_100ns) * 100);
-        if elapsed < EXCLUSIVE_POSITION_REANCHOR {
-            return false;
-        }
-        let queued = self.queued_frames.unwrap_or(duration_to_frames(period, sample_rate));
-        self.written_bias = i128::from(exclusive_consumed_frames(reading, sample_rate))
-            + i128::from(queued)
-            - i128::from(written_frames);
-        self.finish_recovery();
-        true
-    }
-}
-
-fn exclusive_reading_is_usable(
-    reading: ExclusiveClockReading,
-    sample_rate: u32,
-    tolerance: i128,
-) -> bool {
-    if reading.frequency == 0
-        || reading.qpc_frequency == 0
-        || sample_rate == 0
-        || reading.counter < 0
-    {
-        return false;
-    }
-    let counter_ns =
-        i128::from(reading.counter) * 1_000_000_000 / i128::from(reading.qpc_frequency);
-    let age_ns = counter_ns - i128::from(reading.qpc_100ns) * 100;
-    // GetPosition runs after QueryPerformanceCounter; a small future value
-    // can be its acquisition cost. Old/future epochs are not output gaps.
-    (-tolerance..=tolerance).contains(&age_ns)
-}
-
-fn exclusive_progress_matches(
-    previous: ExclusiveClockReading,
-    reading: ExclusiveClockReading,
-    tolerance: i128,
-) -> bool {
-    if reading.frequency != previous.frequency
-        || reading.qpc_frequency != previous.qpc_frequency
-        || reading.position < previous.position
-        || reading.qpc_100ns < previous.qpc_100ns
-        || reading.counter <= previous.counter
-    {
-        return false;
-    }
-    // A driver may keep its position/QPC pair between updates. A repeat adds
-    // nothing, but the same QPC with another position is a contradiction.
-    if reading.qpc_100ns == previous.qpc_100ns {
-        return reading.position == previous.position;
-    }
-    let elapsed_ns = i128::from(reading.qpc_100ns - previous.qpc_100ns) * 100;
-    let advance_ns = i128::from(reading.position - previous.position) * 1_000_000_000
-        / i128::from(reading.frequency);
-    // Allow ordinary device drift across missing observations. A larger shift
-    // is not this correspondence, and can only replace it through a re-anchor.
-    let drift_slack = (elapsed_ns / 1_000).min(20_000_000);
-    (advance_ns - elapsed_ns).abs() <= tolerance + drift_slack
-}
-
-fn exclusive_consumed_frames(reading: ExclusiveClockReading, sample_rate: u32) -> u64 {
-    (u128::from(reading.position) * u128::from(sample_rate) / u128::from(reading.frequency))
-        .min(u128::from(u64::MAX)) as u64
-}
-
-/// `max_missed_frames` is how far the callback ran past its period. A buffer is
-/// queued ahead of every callback, so PCM cannot run out by more than that. A
-/// larger position is a clock glitch, which must not skip the playing voices.
-fn exclusive_output_state(
-    reading: ExclusiveClockReading,
-    written_frames: u64,
-    sample_rate: u32,
-    max_missed_frames: u64,
-) -> ExclusiveOutputState {
-    let counter_ns =
-        i128::from(reading.counter) * 1_000_000_000 / i128::from(reading.qpc_frequency);
-    let position_ns = i128::from(reading.position) * 1_000_000_000 / i128::from(reading.frequency);
-    // An underrun can consume silence beyond the last submitted PCM. Do not
-    // retain that lost interval as a permanent scheduling offset.
-    let consumed = exclusive_consumed_frames(reading, sample_rate);
-    let missed_frames = consumed.saturating_sub(written_frames).min(max_missed_frames);
-    let queued_ns = i128::from(written_frames.saturating_add(missed_frames)) * 1_000_000_000
-        / i128::from(sample_rate);
-    let delta_ns = i128::from(reading.qpc_100ns) * 100 - counter_ns + queued_ns - position_ns;
-    ExclusiveOutputState {
-        next_buffer_delta_ns: (-100_000_000..1_000_000_000).contains(&delta_ns).then_some(delta_ns),
-        missed_frames,
-    }
+/// One buffer is queued ahead of every fill, so a fill late by more than the
+/// tolerance is taken as a gap in the output. Delivery jitter is not.
+fn exclusive_missed_frames(late: Duration, period: Duration, sample_rate: u32) -> u64 {
+    if late > output_gap_tolerance(period) { duration_to_frames(late, sample_rate) } else { 0 }
 }
 
 struct ExclusiveWorkerStream {
     client: IAudioClient,
     render_client: IAudioRenderClient,
-    clock: Option<(IAudioClock, u64)>,
-    qpc_frequency: u64,
     sample_rate: u32,
-    submitted_frames: Cell<u64>,
-    recovered_frames: Cell<u64>,
-    clock_tracker: Cell<ExclusiveClockTracker>,
     previous_fill: Cell<Option<Instant>>,
     audio_event: OwnedEvent,
     buffer_frames: u32,
@@ -996,24 +749,11 @@ impl ExclusiveWorkerStream {
             minimum_period_100ns,
             period_100ns,
         };
-        // Position uses the device's clock frequency; QPC is returned in 100 ns
-        // units. Neither value has Instant's epoch.
-        let clock = unsafe { client.GetService::<IAudioClock>() }.ok().and_then(|clock| {
-            let frequency = unsafe { clock.GetFrequency() }.ok()?;
-            (frequency != 0).then_some((clock, frequency))
-        });
-        let mut qpc_frequency = 0;
-        let _ = unsafe { QueryPerformanceFrequency(&mut qpc_frequency) };
         Ok((
             Self {
                 client,
                 render_client,
-                clock,
-                qpc_frequency: qpc_frequency.max(0) as u64,
                 sample_rate,
-                submitted_frames: Cell::new(0),
-                recovered_frames: Cell::new(0),
-                clock_tracker: Cell::new(ExclusiveClockTracker::default()),
                 previous_fill: Cell::new(None),
                 audio_event,
                 buffer_frames,
@@ -1050,6 +790,8 @@ impl ExclusiveWorkerStream {
         unsafe {
             self.client.Start().map_err(|error| format!("IAudioClient::Start: {error}"))?;
         }
+        // Starting the device is not a late fill.
+        self.previous_fill.set(None);
         self.started = true;
         Ok(())
     }
@@ -1082,51 +824,6 @@ impl ExclusiveWorkerStream {
         }
     }
 
-    fn next_playback_time(&self, max_missed_frames: u64) -> (Option<Instant>, u64) {
-        let before = Instant::now();
-        let Some((clock, frequency)) = &self.clock else {
-            return (None, 0);
-        };
-        if !self.started || self.qpc_frequency == 0 {
-            return (None, 0);
-        }
-        let mut counter = 0;
-        if unsafe { QueryPerformanceCounter(&mut counter) }.is_err() {
-            return (None, 0);
-        }
-        let after = Instant::now();
-        let paired = before + after.duration_since(before) / 2;
-        let mut position = 0;
-        let mut qpc_100ns = 0;
-        if unsafe { clock.GetPosition(&mut position, Some(&mut qpc_100ns)) }.is_err() {
-            return (None, 0);
-        }
-        let reading = ExclusiveClockReading {
-            position,
-            frequency: *frequency,
-            qpc_100ns,
-            counter,
-            qpc_frequency: self.qpc_frequency,
-        };
-        let written_frames =
-            self.submitted_frames.get().saturating_add(self.recovered_frames.get());
-        let mut tracker = self.clock_tracker.get();
-        let state = tracker.observe(
-            reading,
-            written_frames,
-            self.sample_rate,
-            max_missed_frames,
-            frames_to_duration(self.buffer_frames as usize, self.sample_rate),
-        );
-        self.clock_tracker.set(tracker);
-        self.recovered_frames.set(self.recovered_frames.get().saturating_add(state.missed_frames));
-        let prediction = state.next_buffer_delta_ns.and_then(|delta_ns| {
-            let distance = Duration::from_nanos(delta_ns.unsigned_abs() as u64);
-            if delta_ns < 0 { paired.checked_sub(distance) } else { paired.checked_add(distance) }
-        });
-        (prediction, state.missed_frames)
-    }
-
     fn fill_next_buffer(&self, renderer: &mut NativeOutputRenderer) -> Result<(), String> {
         let callback_start = Instant::now();
         let data = unsafe {
@@ -1140,14 +837,9 @@ impl ExclusiveWorkerStream {
             self.previous_fill.replace(Some(callback_start)).map_or(Duration::ZERO, |previous| {
                 callback_start.saturating_duration_since(previous).saturating_sub(period)
             });
-        let (playback, missed_frames) =
-            self.next_playback_time(duration_to_frames(late, self.sample_rate));
-        if self.clock_tracker.get().recovering {
-            renderer.record_untrusted_position();
-        }
+        let missed_frames = exclusive_missed_frames(late, period, self.sample_rate);
         if missed_frames != 0 {
-            // Publish the same underrun to both active voices and timed events,
-            // exactly once. Prediction changes alone never advance this frame.
+            // Publish the same gap to both active voices and timed events.
             renderer.catch_up_output_frames(missed_frames);
         }
         unsafe {
@@ -1155,35 +847,30 @@ impl ExclusiveWorkerStream {
                 ExclusiveSampleFormat::F32 => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<f32>(), sample_count),
                     self.channels,
-                    playback,
                     callback_start,
                     self.sample_rate,
                 ),
                 ExclusiveSampleFormat::I32 => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<i32>(), sample_count),
                     self.channels,
-                    playback,
                     callback_start,
                     self.sample_rate,
                 ),
                 ExclusiveSampleFormat::I24In32 => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<PcmI24In32>(), sample_count),
                     self.channels,
-                    playback,
                     callback_start,
                     self.sample_rate,
                 ),
                 ExclusiveSampleFormat::I24Packed => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<PackedI24>(), sample_count),
                     self.channels,
-                    playback,
                     callback_start,
                     self.sample_rate,
                 ),
                 ExclusiveSampleFormat::I16 => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<i16>(), sample_count),
                     self.channels,
-                    playback,
                     callback_start,
                     self.sample_rate,
                 ),
@@ -1192,8 +879,6 @@ impl ExclusiveWorkerStream {
                 .ReleaseBuffer(self.buffer_frames, 0)
                 .map_err(|error| format!("IAudioRenderClient::ReleaseBuffer: {error}"))?;
         }
-        self.submitted_frames
-            .set(self.submitted_frames.get().saturating_add(u64::from(self.buffer_frames)));
         Ok(())
     }
 }
@@ -1927,496 +1612,12 @@ mod tests {
         assert_eq!(PcmI24In32::from_f32(-1.0), PcmI24In32(-0x7f_ff_ff_00));
     }
 
-    fn clock_reading(position: u64) -> ExclusiveClockReading {
-        ExclusiveClockReading {
-            position,
-            frequency: 48_000,
-            qpc_100ns: 1_000_000,
-            counter: 1_000_000,
-            qpc_frequency: 10_000_000,
-        }
-    }
-
-    fn reading_at(position: u64, elapsed_us: u64) -> ExclusiveClockReading {
-        ExclusiveClockReading {
-            position,
-            frequency: 48_000,
-            qpc_100ns: elapsed_us * 10,
-            counter: (elapsed_us * 10) as i64,
-            qpc_frequency: 10_000_000,
-        }
-    }
-
     #[test]
-    fn persistent_position_jump_never_turns_callback_jitter_into_voice_skips() {
-        for jump in [48_000_i64, -4_800] {
-            let mut tracker = ExclusiveClockTracker::default();
-            let period = Duration::from_millis(10);
-            assert_eq!(
-                tracker
-                    .observe(reading_at(9_600, 200_000), 10_080, 48_000, 0, period)
-                    .missed_frames,
-                0
-            );
-            for tick in 1..=1_000_u64 {
-                let jitter = if tick % 2 == 0 { 100 } else { 0 };
-                let position = (9_600 + tick as i64 * 480 + jump) as u64;
-                let state = tracker.observe(
-                    reading_at(position, 200_000 + tick * 10_000 + jitter),
-                    10_080 + tick * 480,
-                    48_000,
-                    if jitter != 0 { 4 } else { 0 },
-                    period,
-                );
-                // Only the prediction returns: the jump itself never skips voices.
-                assert_eq!(
-                    state,
-                    ExclusiveOutputState {
-                        next_buffer_delta_ns: (tick > 100).then_some(10_000_000),
-                        missed_frames: 0
-                    },
-                    "{jump} at {tick}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn a_position_glitch_returns_on_two_distinct_readings() {
+    fn only_a_fill_late_past_the_tolerance_is_a_gap_in_the_output() {
         let period = Duration::from_millis(10);
-        let mut tracker = ExclusiveClockTracker::default();
-        tracker.observe(reading_at(9_600, 200_000), 10_080, 48_000, 0, period);
-        assert_eq!(
-            tracker.observe(reading_at(58_080, 210_000), 10_560, 48_000, 0, period),
-            ExclusiveOutputState { next_buffer_delta_ns: None, missed_frames: 0 }
-        );
-        let reading = reading_at(10_560, 220_000);
-        for _ in 0..2 {
-            assert_eq!(
-                tracker.observe(reading, 11_040, 48_000, 0, period).next_buffer_delta_ns,
-                None
-            );
+        for (late_ms, frames) in [(0, 0), (9, 0), (20, 0), (21, 1_008), (90, 4_320)] {
+            let late = Duration::from_millis(late_ms);
+            assert_eq!(exclusive_missed_frames(late, period, 48_000), frames, "{late_ms} ms");
         }
-        assert_eq!(
-            tracker.observe(reading_at(11_040, 230_000), 11_520, 48_000, 0, period),
-            ExclusiveOutputState { next_buffer_delta_ns: Some(10_000_000), missed_frames: 0 }
-        );
-    }
-
-    #[test]
-    fn an_unstable_position_never_replaces_the_accepted_correspondence() {
-        let period = Duration::from_millis(10);
-        let mut tracker = ExclusiveClockTracker::default();
-        tracker.observe(reading_at(9_600, 200_000), 10_080, 48_000, 0, period);
-        for tick in 1..=1_000_u64 {
-            let jump = if tick % 2 == 0 { 48_000 } else { 96_000 };
-            let state = tracker.observe(
-                reading_at(9_600 + tick * 480 + jump, 200_000 + tick * 10_000),
-                10_080 + tick * 480,
-                48_000,
-                0,
-                period,
-            );
-            assert_eq!(
-                state,
-                ExclusiveOutputState { next_buffer_delta_ns: None, missed_frames: 0 }
-            );
-        }
-    }
-
-    #[test]
-    fn reanchoring_requires_monotonic_candidate_positions() {
-        let period = Duration::from_millis(10);
-        let mut tracker = ExclusiveClockTracker::default();
-        tracker.observe(reading_at(9_600, 200_000), 10_080, 48_000, 0, period);
-        tracker.observe(reading_at(58_080, 210_000), 10_560, 48_000, 0, period);
-        // Every reading stays within 9 ms of the new epoch, but alternate
-        // readings move backwards by 8 ms. This is not a stable clock.
-        for tick in 2..=101_u64 {
-            let jitter = if tick % 2 == 0 { 432 } else { -432 };
-            let position = (9_600 + tick * 480 + 48_000) as i64 + jitter;
-            let state = tracker.observe(
-                reading_at(position as u64, 200_000 + tick * 10_000),
-                10_080 + tick * 480,
-                48_000,
-                0,
-                period,
-            );
-            assert_eq!(state.next_buffer_delta_ns, None, "tick {tick}");
-            assert_eq!(state.missed_frames, 0);
-        }
-        // A 14 ms callback interval still leaves 6 ms of PCM queued. Accepting
-        // the unstable epoch would incorrectly skip 144 frames here.
-        let state = tracker.observe(reading_at(106_752, 1_224_000), 59_040, 48_000, 192, period);
-        assert_eq!(state.missed_frames, 0);
-        assert_eq!(state.next_buffer_delta_ns, None);
-        // A genuinely smooth run can still recover after the rejection.
-        for tick in 1..=100_u64 {
-            tracker.observe(
-                reading_at(106_752 + tick * 480, 1_224_000 + tick * 10_000),
-                59_040 + tick * 480,
-                48_000,
-                0,
-                period,
-            );
-        }
-        assert!(!tracker.recovering);
-    }
-
-    #[test]
-    fn reanchoring_requires_consistent_adjacent_progress() {
-        let period = Duration::from_millis(10);
-        let mut tracker = ExclusiveClockTracker::default();
-        tracker.observe(reading_at(9_600, 200_000), 10_080, 48_000, 0, period);
-        for tick in 1..=100_u64 {
-            // Gradually drift 19 ms behind the new correspondence.
-            let position = 9_600 + tick * 480 + 48_000 - (tick - 1) * 912 / 99;
-            let state = tracker.observe(
-                reading_at(position, 200_000 + tick * 10_000),
-                10_080 + tick * 480,
-                48_000,
-                0,
-                period,
-            );
-            assert_eq!(state.next_buffer_delta_ns, None);
-        }
-        // Now 19 ms ahead: still near the first reading, but the 38 ms jump
-        // relative to the previous reading must restart the stable interval.
-        let state = tracker.observe(reading_at(106_992, 1_210_000), 58_560, 48_000, 0, period);
-        assert_eq!(state.next_buffer_delta_ns, None);
-        assert_eq!(state.missed_frames, 0);
-    }
-
-    #[test]
-    fn reanchoring_restarts_after_returning_to_the_old_correspondence() {
-        let period = Duration::from_millis(10);
-        let mut tracker = ExclusiveClockTracker::default();
-        tracker.observe(reading_at(9_600, 200_000), 10_080, 48_000, 0, period);
-        for tick in 1..=152_u64 {
-            // One old-epoch reading interrupts the candidate run. It does not
-            // complete the two-reading recovery, nor belong to the new epoch.
-            let jump = if tick == 51 { 0 } else { 48_000 };
-            let state = tracker.observe(
-                reading_at(9_600 + tick * 480 + jump, 200_000 + tick * 10_000),
-                10_080 + tick * 480,
-                48_000,
-                0,
-                period,
-            );
-            assert_eq!(state.next_buffer_delta_ns.is_some(), tick == 152, "tick {tick}");
-            assert_eq!(state.missed_frames, 0);
-        }
-    }
-
-    /// 256-frame buffers with a position that moves in 1 ms (48 frame) steps.
-    /// A real underrun leaves no PCM queued, just before the next position step.
-    fn empty_queue_with_coarse_position() -> (ExclusiveClockTracker, u64, u64, Duration) {
-        let period = frames_to_duration(256, 48_000);
-        let reading = |exact: u64| reading_at(exact / 48 * 48, exact * 1_000 / 48);
-        let mut tracker = ExclusiveClockTracker::default();
-        tracker.observe(reading(9_647), 9_856, 48_000, 0, period);
-        let state = tracker.observe(reading(11_855), 10_112, 48_000, 1_952, period);
-        assert_eq!(state.missed_frames, 1_696);
-        (tracker, 11_855, 10_112 + 1_696, period)
-    }
-
-    #[test]
-    fn coarse_position_steps_do_not_reject_an_empty_queue() {
-        let (mut tracker, exact, written, period) = empty_queue_with_coarse_position();
-        for tick in 1..=500 {
-            let exact = exact + tick * 256;
-            let state = tracker.observe(
-                reading_at(exact / 48 * 48, exact * 1_000 / 48),
-                written + tick * 256,
-                48_000,
-                0,
-                period,
-            );
-            assert!(state.next_buffer_delta_ns.is_some(), "tick {tick}");
-            assert_eq!(state.missed_frames, 0);
-        }
-        assert!(!tracker.recovering);
-    }
-
-    #[test]
-    fn a_position_step_needs_a_clearly_late_callback_to_skip_voices() {
-        let (mut tracker, exact, written, period) = empty_queue_with_coarse_position();
-        // Delivery jitter leaves the 32 frames past the queue uncorrected.
-        let exact = exact + 256;
-        let reading = reading_at(exact / 48 * 48, exact * 1_000 / 48);
-        assert_eq!(tracker.observe(reading, written + 256, 48_000, 64, period).missed_frames, 0);
-        // A callback late by more than half a period can have lost PCM.
-        let exact = exact + 448;
-        let reading = reading_at(exact / 48 * 48, exact * 1_000 / 48);
-        assert_eq!(tracker.observe(reading, written + 512, 48_000, 192, period).missed_frames, 192);
-    }
-
-    #[test]
-    fn a_small_forward_position_jump_is_not_turned_into_voice_skips() {
-        let period = Duration::from_millis(10);
-        let mut tracker = ExclusiveClockTracker::default();
-        tracker.observe(reading_at(9_600, 200_000), 10_080, 48_000, 0, period);
-        // 15 ms ahead: inside the tolerance, and 5 ms past the submitted PCM.
-        for tick in 1..=1_000_u64 {
-            let jitter = if tick % 2 == 0 { 100 } else { 0 };
-            let state = tracker.observe(
-                reading_at(9_600 + tick * 480 + 720, 200_000 + tick * 10_000 + jitter),
-                10_080 + tick * 480,
-                48_000,
-                if jitter != 0 { 4 } else { 0 },
-                period,
-            );
-            assert!(state.next_buffer_delta_ns.is_some(), "tick {tick}");
-            assert_eq!(state.missed_frames, 0);
-        }
-    }
-
-    #[test]
-    fn a_repeated_position_pair_is_no_new_observation() {
-        let period = Duration::from_millis(3);
-        let first = reading_at(9_600, 200_000);
-        let mut tracker = ExclusiveClockTracker::default();
-        tracker.observe(first, 9_744, 48_000, 0, period);
-        // The driver keeps its pair between updates; only our counter moves.
-        let repeated = ExclusiveClockReading { counter: first.counter + 30_000, ..first };
-        assert_eq!(
-            tracker.observe(repeated, 9_888, 48_000, 0, period),
-            ExclusiveOutputState { next_buffer_delta_ns: Some(3_000_000), missed_frames: 0 }
-        );
-        // The same QPC with another position is a contradiction, not a repeat.
-        let moved =
-            ExclusiveClockReading { position: 9_648, counter: first.counter + 60_000, ..first };
-        assert_eq!(tracker.observe(moved, 10_032, 48_000, 0, period).next_buffer_delta_ns, None);
-    }
-
-    #[test]
-    fn repeated_position_pairs_do_not_restart_a_reanchor() {
-        let period = Duration::from_millis(3);
-        let mut tracker = ExclusiveClockTracker::default();
-        tracker.observe(reading_at(9_600, 200_000), 9_744, 48_000, 0, period);
-        let mut available = false;
-        for tick in 1..=400_u64 {
-            // The position changes on every second callback.
-            let update = tick / 2 * 2;
-            let reading = ExclusiveClockReading {
-                counter: ((200_000 + tick * 3_000) * 10) as i64,
-                ..reading_at(9_600 + update * 144 + 48_000, 200_000 + update * 3_000)
-            };
-            let state = tracker.observe(reading, 9_744 + tick * 144, 48_000, 0, period);
-            assert_eq!(state.missed_frames, 0);
-            available |= state.next_buffer_delta_ns.is_some();
-        }
-        assert!(available);
-    }
-
-    #[test]
-    fn reanchoring_preserves_a_confirmed_zero_queue_depth() {
-        let period = Duration::from_millis(10);
-        let mut tracker = ExclusiveClockTracker::default();
-        tracker.observe(reading_at(9_600, 200_000), 10_080, 48_000, 0, period);
-        let state = tracker.observe(reading_at(11_520, 240_000), 10_560, 48_000, 1_440, period);
-        assert_eq!(state.missed_frames, 960);
-        // The worker adds the recovered interval to submitted PCM. The next
-        // trusted reading has no PCM queued; this is distinct from no reading.
-        let written = 10_560 + state.missed_frames + 480;
-        let state = tracker.observe(reading_at(12_000, 250_000), written, 48_000, 0, period);
-        assert_eq!(state.next_buffer_delta_ns, Some(0));
-        for tick in 0..=100_u64 {
-            let position = 12_480 + tick * 480;
-            let state = tracker.observe(
-                reading_at(position + 48_000, 260_000 + tick * 10_000),
-                position,
-                48_000,
-                0,
-                period,
-            );
-            assert_eq!(state.next_buffer_delta_ns, (tick == 100).then_some(0), "tick {tick}");
-            assert_eq!(state.missed_frames, 0);
-        }
-        // After the re-anchor, a 30 ms interval with 10 ms of newly submitted
-        // PCM loses 20 ms. A fabricated queue depth would hide half the loss.
-        let position = 12_480 + 100 * 480;
-        let written = position + 480;
-        let state = tracker.observe(
-            reading_at(position + 1_440 + 48_000, 1_290_000),
-            written,
-            48_000,
-            960,
-            period,
-        );
-        assert_eq!(state.missed_frames, 960);
-        let state = tracker.observe(
-            reading_at(position + 1_920 + 48_000, 1_300_000),
-            written + state.missed_frames + 480,
-            48_000,
-            0,
-            period,
-        );
-        assert_eq!(state.missed_frames, 0);
-        assert_eq!(state.next_buffer_delta_ns, Some(0));
-    }
-
-    #[test]
-    fn a_position_lag_regains_prediction_and_underrun_correction() {
-        for lag_ms in [25_u64, 100] {
-            let period = Duration::from_millis(10);
-            let mut tracker = ExclusiveClockTracker::default();
-            let (mut position, mut elapsed_us, mut written) = (9_600_u64, 200_000_u64, 10_080_u64);
-            tracker.observe(reading_at(position, elapsed_us), written, 48_000, 0, period);
-            // The device stopped with the callback: time passed, the PCM did not.
-            position += 480;
-            written += 480;
-            elapsed_us += 10_000 + lag_ms * 1_000;
-            let state = tracker.observe(
-                reading_at(position, elapsed_us),
-                written,
-                48_000,
-                lag_ms * 48,
-                period,
-            );
-            assert_eq!(
-                state,
-                ExclusiveOutputState { next_buffer_delta_ns: None, missed_frames: 0 }
-            );
-            for tick in 1..=100 {
-                position += 480;
-                written += 480;
-                elapsed_us += 10_000;
-                let state =
-                    tracker.observe(reading_at(position, elapsed_us), written, 48_000, 0, period);
-                assert_eq!(state.missed_frames, 0);
-                assert_eq!(state.next_buffer_delta_ns.is_some(), tick == 100, "{lag_ms} ms {tick}");
-            }
-            assert_eq!(
-                tracker
-                    .observe(
-                        reading_at(position + 480, elapsed_us + 10_000),
-                        written + 480,
-                        48_000,
-                        0,
-                        period,
-                    )
-                    .next_buffer_delta_ns,
-                Some(10_000_000)
-            );
-            // A real underrun is corrected again.
-            let state = tracker.observe(
-                reading_at(position + 1_920, elapsed_us + 40_000),
-                written + 960,
-                48_000,
-                960,
-                period,
-            );
-            assert_eq!(state.missed_frames, 480);
-        }
-    }
-
-    #[test]
-    fn validated_underrun_is_accounted_once() {
-        let mut tracker = ExclusiveClockTracker::default();
-        let period = Duration::from_millis(10);
-        tracker.observe(reading_at(9_600, 200_000), 10_080, 48_000, 0, period);
-        let state = tracker.observe(reading_at(11_040, 230_000), 10_560, 48_000, 960, period);
-        assert_eq!(state.missed_frames, 480);
-        // Keep submitted PCM and the recovered interval separate, as the worker does.
-        let submitted = 10_560 + 480;
-        let recovered = state.missed_frames;
-        let state =
-            tracker.observe(reading_at(11_520, 240_000), submitted + recovered, 48_000, 0, period);
-        assert_eq!(state.missed_frames, 0);
-        assert_eq!(state.next_buffer_delta_ns, Some(0));
-    }
-
-    #[test]
-    fn stale_or_malformed_clock_readings_cannot_advance_voices() {
-        for invalid in [
-            ExclusiveClockReading { frequency: 0, ..reading_at(11_040, 230_000) },
-            ExclusiveClockReading { qpc_frequency: 0, ..reading_at(11_040, 230_000) },
-            ExclusiveClockReading { qpc_100ns: 10, ..reading_at(11_040, 230_000) },
-            ExclusiveClockReading { counter: -1, ..reading_at(11_040, 230_000) },
-        ] {
-            let mut tracker = ExclusiveClockTracker::default();
-            let period = Duration::from_millis(10);
-            tracker.observe(reading_at(9_600, 200_000), 10_080, 48_000, 0, period);
-            assert_eq!(
-                tracker.observe(invalid, 10_560, 48_000, 960, period),
-                ExclusiveOutputState { next_buffer_delta_ns: None, missed_frames: 0 }
-            );
-        }
-    }
-
-    #[test]
-    fn ordinary_device_rate_error_remains_valid_for_ten_minutes() {
-        for ppm in [-200_i64, -40, 0, 40, 200] {
-            let mut tracker = ExclusiveClockTracker::default();
-            for tick in 1..=60_000_u64 {
-                let position = (tick as i64 * 480 * (1_000_000 + ppm) / 1_000_000) as u64;
-                let state = tracker.observe(
-                    reading_at(position, tick * 10_000),
-                    position + 480,
-                    48_000,
-                    0,
-                    Duration::from_millis(10),
-                );
-                assert_eq!(state.next_buffer_delta_ns, Some(10_000_000), "{ppm} ppm at {tick}");
-                assert_eq!(state.missed_frames, 0);
-            }
-        }
-    }
-
-    #[test]
-    fn next_buffer_follows_the_frames_queued_past_the_position() {
-        assert_eq!(
-            exclusive_output_state(clock_reading(9_600), 10_080, 48_000, 0),
-            ExclusiveOutputState { next_buffer_delta_ns: Some(10_000_000), missed_frames: 0 }
-        );
-    }
-
-    #[test]
-    fn position_may_count_bytes_instead_of_frames() {
-        let mut reading = clock_reading(9_600 * 8);
-        reading.frequency = 48_000 * 8;
-        let state = exclusive_output_state(reading, 10_080, 48_000, 0);
-        assert_eq!(state.next_buffer_delta_ns, Some(10_000_000));
-    }
-
-    #[test]
-    fn an_older_position_reading_moves_the_prediction_back() {
-        let mut reading = clock_reading(9_600);
-        reading.qpc_100ns -= 20_000;
-        let state = exclusive_output_state(reading, 10_080, 48_000, 0);
-        assert_eq!(state.next_buffer_delta_ns, Some(8_000_000));
-    }
-
-    #[test]
-    fn an_underrun_within_the_late_callback_is_reported_in_full() {
-        assert_eq!(
-            exclusive_output_state(clock_reading(10_320), 10_080, 48_000, 480),
-            ExclusiveOutputState { next_buffer_delta_ns: Some(0), missed_frames: 240 }
-        );
-    }
-
-    #[test]
-    fn a_position_jump_with_regular_callbacks_does_not_skip_audio() {
-        assert_eq!(
-            exclusive_output_state(clock_reading(58_080), 10_080, 48_000, 0),
-            ExclusiveOutputState { next_buffer_delta_ns: None, missed_frames: 0 }
-        );
-    }
-
-    #[test]
-    fn a_position_jump_is_limited_to_how_late_the_callback_was() {
-        let state = exclusive_output_state(clock_reading(58_080), 10_080, 48_000, 480);
-        assert_eq!(state.missed_frames, 480);
-    }
-
-    #[test]
-    fn a_real_underrun_survives_an_unusable_prediction() {
-        let mut reading = clock_reading(10_320);
-        reading.counter += 2_000_000;
-        assert_eq!(
-            exclusive_output_state(reading, 10_080, 48_000, 480),
-            ExclusiveOutputState { next_buffer_delta_ns: None, missed_frames: 240 }
-        );
     }
 }

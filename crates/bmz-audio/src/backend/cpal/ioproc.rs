@@ -506,7 +506,6 @@ impl CallbackState {
         output_time: &AudioTimeStamp,
     ) -> bool {
         let start = Instant::now();
-        let host_now = unsafe { mach2::mach_time::mach_absolute_time() };
         if buffers.len() != self.layout.len() {
             return false;
         }
@@ -537,9 +536,6 @@ impl CallbackState {
         let host = (output_time.mFlags.0 & AudioTimeStampFlags::HostTimeValid.0 != 0)
             .then_some(output_time.mHostTime);
         let previous = self.previous_host;
-        if previous.zip(host).is_some_and(|(previous, current)| current < previous) {
-            self.renderer.reset_prediction();
-        }
         let gap = host
             .zip(previous)
             .and_then(|(current, previous)| current.checked_sub(previous))
@@ -576,17 +572,9 @@ impl CallbackState {
                 );
             }
         }
-        let playback = host.and_then(|out| {
-            let distance = ticks_duration(out.abs_diff(host_now), self.timebase);
-            if distance > Duration::from_secs(1) {
-                return None;
-            }
-            if out < host_now { start.checked_sub(distance) } else { start.checked_add(distance) }
-        });
         self.renderer.render_at(
             &mut self.interleaved[..frames * self.channels],
             self.channels,
-            playback,
             start,
             self.sample_rate,
         );

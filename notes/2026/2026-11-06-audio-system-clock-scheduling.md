@@ -453,3 +453,62 @@ callbackの計測hookは追加していない。ビルドに用いた一時的�
 `cargo fmt --check`、`cargo check --workspace --locked`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --locked --no-fail-fast`、`cargo build -p bmz-player --release --locked` が成功した。音声204件（3件ignore）、gameplay262件、player2,888件（56件ignore）、動画36件を含む。
 
 修正後の実機確認は行っていない。上の実機スモークはこの追記の修正より前のコードである。macOS（IOProc）とLinuxのビルドも行っていない。
+
+## 2026-11-06 追記: API予測を撤去し、frameと平滑化へ置き換え
+
+PR全体を見直し、過剰設計と判断した。ここまでの追記に書いたAPI予測・WASAPI位置の検証・再基準化・停止の世代番号は、すべてこの変更で削除した。
+
+`487cab07` で長期の基準がcallback時刻に変わった時点で、API予測の役割は短期の揺れの補正だけになった。その効果を測らないまま、予測に伴う問題の修正を重ねていた。`bmz-audio` の本番増分のうち約半分、テスト増分の約6割がこの予測に関わる処理だった。
+
+実機の記録で確かめると、予測は効果がなかった。`68d870df` の実機記録のcallback時刻を使い、3方式のバッファ時刻を計算し直した。値は、連続した出力の時間軸（frameと時刻の直線）からのずれのp99（ms）である。
+
+| 出力 | API予測 | `callback − S/2` | frame＋平滑化 |
+|---|---:|---:|---:|
+| WASAPI排他 | 0.13 | 0.12 | 0.03 |
+| WASAPI共有 | 10.2～10.8 | 5.6～8.6 | 1.8～2.4 |
+| ASIO | 1.2～1.3 | 0.14～0.15 | 0.01 |
+
+API予測は、最も単純な `callback − S/2` より良くならず、共有とASIOでは悪かった。これまで共有ONの開始遅れとして記録した最大約13.93msの大部分は、この予測の揺れである。
+
+変更内容:
+
+- `OutputFrameClock` がframeを時刻へ写す。「callback − S/2」とframeの公称時刻の差を時定数2秒で平滑化する。平滑化の時定数と開始時の単純平均は従来と同じで、入力だけが変わった。
+- 時刻が連続になるので、キューは隙間を判定しなくなった。`ResolvedBuffer`、`OutputScheduleTiming` の世代番号、`OutputScheduleTimeline` を削除した。停止の判定は `OutputFrameClock` の1か所にまとめ、停止時は平滑値を初期化して時刻を現在のcallbackへ合わせる。
+- `ExclusiveClockTracker`、`IAudioClock`、QPC、`untrusted_positions`、CPALの時計対応付け、IOProcの予測を削除した。
+- WASAPI排他の出力断は、callbackが周期より許容幅を超えて遅れた分をframeへ反映する。
+- CPALのcatch-upは、APIのplayback値とcallback間隔の小さい方のまま残した。API時計が戻った場合はcallback間隔だけを使う。
+
+`bmz-audio` の増分（空行とコメントを除く）は、本番が732行から274行へ、テストが1,508行から738行へ減った。
+
+失うもの: WASAPI排他では、許容幅未満の小さなunderrunは既存voiceへ反映されない。予約音は平滑化が2秒で追従する。
+
+### 実機測定
+
+2026-11-06 13:27～13:37 JST、Windowsの同じローカル環境でrelease計測器を実行した。条件は `68d870df` の測定と同じで、WASAPIはRME Babyface Pro、ASIOはASIO4ALL v2 / 256 frames、すべて48kHz、1サンプルの短音を337.013ms間隔で予約した。計測中はビルドとテストを止めた。
+
+値は、PCMに書いた開始frameを出力の時間軸へ写した時刻と、予約時刻の差の揺れ（平均を除いた絶対値、ms）である。物理発声の測定ではない。旧方式の列は `68d870df` の記録を同じ計算で処理した値である。
+
+| 出力 | 旧方式 p99 | 旧方式 最大 | 新方式 p99 | 新方式 最大 | BGM・自動キー音の開始数/予約数 |
+|---|---:|---:|---:|---:|---|
+| WASAPI排他（120秒＋60秒） | 0.13～0.15 | 0.25 | 0.03～0.04 | 0.04 | 各355/355、177/177 |
+| WASAPI共有（60秒×2） | 9.2～11.5 | 11.8 | 2.8～3.0 | 3.1 | 各177/177 |
+| ASIO（60秒×2） | 1.0～1.2 | 1.3 | 0.02 | 0.02 | 各177/177 |
+
+平均は排他−0.09ms、共有−0.3～−0.4ms、ASIO−0.01msだった。catch-up、engine lock missは0。ASIOの1回目に、以前と同じくerror通知が1件あった。種類は未取得である。
+
+停止の確認として、計測用のコピーだけに音声スレッドを60ms止める処理を入れ、5秒後から10秒毎に4回止めた。
+
+| 出力 | 停止 | catch-up | BGM・自動キー音の開始数/予約数 | 停止の前後0.5秒を除いた揺れ p99 |
+|---|---:|---:|---|---:|
+| WASAPI排他 | 4 | 4 | 各106/106 | 0.04 |
+| WASAPI共有 | 4 | 4 | 各106/106 | 1.1 |
+| ASIO | 4 | 4 | 各106/106 | 0.01 |
+
+計測器は `.local/latency-investigation/plan-a-probe.exe`、手順は `run-plan-a.ps1`、計算は `analyze-plan-a.py`、記録は `plan-a-runs/` に保存した。計測用のhookは `plan-a-build/` のコピーだけに入れ、リポジトリのコードには入れていない。
+
+自動検証:
+
+- 停止時の初期化、半周期の補正、平滑化、許容幅の計算、catch-upのAPI確認、遅刻の計算をそれぞれ壊すと、テストが失敗することを確認した。
+- `cargo fmt --check`、`cargo check --workspace --locked`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --locked --no-fail-fast`、`cargo build -p bmz-player --release --locked` が成功した。音声167件（3件ignore）、gameplay262件、player2,888件（56件ignore）、動画36件を含む。
+
+実打鍵、物理ループバック、360fps/VSyncなしの実画面、CPU高負荷、macOS（IOProc）とLinuxのビルドは未確認である。IOProcの変更はコンパイルしていない。長いWAVのずれは今回も対象外である。
