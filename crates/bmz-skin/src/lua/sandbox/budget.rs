@@ -1,19 +1,68 @@
 use super::*;
 
+// Work units count native matching steps/bytes, not Lua VM instructions.
+// Keep the instruction ceilings unchanged; native loops are much cheaper.
+const PATTERN_WORK_PER_INSTRUCTION: i64 = 4;
+
+unsafe extern "C-unwind" {
+    fn bmz_open_patterns(state: *mut mlua::lua_State) -> c_int;
+}
+
+#[cfg(test)]
+#[path = "pattern_budget_tests.rs"]
+mod pattern_budget_tests;
+
 #[derive(Clone)]
 pub(super) struct LuaInstructionBudget {
     total_remaining: Arc<AtomicI64>,
     callback_remaining: Arc<AtomicI64>,
+    pattern_total_remaining: Arc<AtomicI64>,
+    pattern_callback_remaining: Arc<AtomicI64>,
 }
 
 impl LuaInstructionBudget {
+    fn check(&self) -> mlua::Result<()> {
+        if self.total_remaining.load(Ordering::Relaxed) <= 0
+            || self.callback_remaining.load(Ordering::Relaxed) <= 0
+        {
+            Err(mlua::Error::runtime("lua skin instruction limit exceeded"))
+        } else if self.pattern_total_remaining.load(Ordering::Relaxed) <= 0
+            || self.pattern_callback_remaining.load(Ordering::Relaxed) <= 0
+        {
+            Err(mlua::Error::runtime("lua skin pattern work limit exceeded"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn hook(&self) -> impl Fn(&Lua, mlua::Debug) -> mlua::Result<VmState> + Send + 'static {
+        let budget = self.clone();
+        move |_, _| {
+            budget.charge_hook_interval()?;
+            Ok(VmState::Continue)
+        }
+    }
+
+    fn charge_hook_interval(&self) -> mlua::Result<()> {
+        let interval = i64::from(LUA_HOOK_INTERVAL);
+        self.total_remaining.fetch_sub(interval, Ordering::Relaxed);
+        self.callback_remaining.fetch_sub(interval, Ordering::Relaxed);
+        self.check()
+    }
+
     pub(super) fn begin_inference(&self) {
         self.total_remaining.store(LUA_INFERENCE_INSTRUCTION_LIMIT, Ordering::Relaxed);
+        self.pattern_total_remaining.store(
+            LUA_INFERENCE_INSTRUCTION_LIMIT * PATTERN_WORK_PER_INSTRUCTION,
+            Ordering::Relaxed,
+        );
         self.begin_callback();
     }
 
     pub(super) fn begin_callback(&self) {
         self.callback_remaining.store(LUA_INSTRUCTION_LIMIT, Ordering::Relaxed);
+        self.pattern_callback_remaining
+            .store(LUA_INSTRUCTION_LIMIT * PATTERN_WORK_PER_INSTRUCTION, Ordering::Relaxed);
     }
 
     pub(super) fn begin_runtime_callback(&self, new_frame: bool) {
@@ -22,12 +71,16 @@ impl LuaInstructionBudget {
         // per-call allowance by creating hundreds of dynamic properties.
         if new_frame {
             self.total_remaining.store(LUA_RUNTIME_FRAME_INSTRUCTION_LIMIT, Ordering::Relaxed);
+            self.pattern_total_remaining.store(
+                LUA_RUNTIME_FRAME_INSTRUCTION_LIMIT * PATTERN_WORK_PER_INSTRUCTION,
+                Ordering::Relaxed,
+            );
         }
         self.begin_callback();
     }
 }
 
-pub(super) fn install_instruction_limit(lua: &Lua) -> LuaInstructionBudget {
+pub(super) fn install_instruction_limit(lua: &Lua) -> mlua::Result<LuaInstructionBudget> {
     install_instruction_limit_with_ceilings(
         lua,
         LUA_LOAD_INSTRUCTION_LIMIT,
@@ -39,38 +92,186 @@ pub(super) fn install_instruction_limit_with_ceilings(
     lua: &Lua,
     total_limit: i64,
     callback_limit: i64,
-) -> LuaInstructionBudget {
+) -> mlua::Result<LuaInstructionBudget> {
     let budget = LuaInstructionBudget {
         total_remaining: Arc::new(AtomicI64::new(total_limit)),
         callback_remaining: Arc::new(AtomicI64::new(callback_limit)),
+        pattern_total_remaining: Arc::new(AtomicI64::new(
+            total_limit.saturating_mul(PATTERN_WORK_PER_INSTRUCTION),
+        )),
+        pattern_callback_remaining: Arc::new(AtomicI64::new(
+            callback_limit.saturating_mul(PATTERN_WORK_PER_INSTRUCTION),
+        )),
     };
-    let total_remaining = budget.total_remaining.clone();
-    let callback_remaining = budget.callback_remaining.clone();
-    lua.set_hook(HookTriggers::new().every_nth_instruction(LUA_HOOK_INTERVAL), move |_, _| {
-        let interval = i64::from(LUA_HOOK_INTERVAL);
-        if total_remaining.fetch_sub(interval, Ordering::Relaxed) <= interval
-            || callback_remaining.fetch_sub(interval, Ordering::Relaxed) <= interval
-        {
-            Err(mlua::Error::runtime("lua skin instruction limit exceeded"))
-        } else {
-            Ok(VmState::Continue)
+    lua.set_hook(HookTriggers::new().every_nth_instruction(LUA_HOOK_INTERVAL), budget.hook());
+
+    // Meter the native matcher itself. A Lua implementation magnifies ordinary
+    // CSV processing into hundreds of millions of VM instructions. Prepaid work
+    // blocks also charge calls that fail before returning to Rust normally.
+    let guard = budget.clone();
+    let charge = lua.create_function(move |_, units: i64| {
+        debug_assert!(units > 0);
+        guard.pattern_total_remaining.fetch_sub(units, Ordering::Relaxed);
+        guard.pattern_callback_remaining.fetch_sub(units, Ordering::Relaxed);
+        guard.check()
+    })?;
+    // SAFETY: compiled against the exact mlua-sys Lua headers. The module uses
+    // the public C API, owns no Rust objects and is called through mlua's
+    // protected boundary. Its checker is a normal managed mlua callback.
+    let open = unsafe { lua.create_c_function(bmz_open_patterns)? };
+    let patterns: Table = open.call(charge)?;
+    let strings: Table = lua.globals().get("string")?;
+    for name in ["find", "match", "gmatch", "gsub"] {
+        strings.set(name, patterns.get::<Function>(name)?)?;
+    }
+
+    // Lua runs __gc finalizers with hooks disabled, including at VM teardown.
+    // Reject every non-nil __gc value before Lua marks a table for finalization;
+    // even an initial false value could later be replaced with a function.
+    let setmetatable: Function = lua.globals().get("setmetatable")?;
+    let setmetatable = lua.create_registry_value(setmetatable)?;
+    lua.globals().set(
+        "setmetatable",
+        lua.create_function(move |lua, args: mlua::MultiValue| {
+            if let Some(Value::Table(metatable)) = args.get(1)
+                && !matches!(metatable.raw_get::<Value>("__gc")?, Value::Nil)
+            {
+                return Err(mlua::Error::runtime("lua skin finalizers are disabled"));
+            }
+            lua.registry_value::<Function>(&setmetatable)?.call::<mlua::MultiValue>(args)
+        })?,
+    )?;
+
+    // A hook error is otherwise an ordinary Lua error: a loop can catch it
+    // forever. Keep the original protected calls private, and propagate an
+    // exhausted budget through every protected-call boundary, including nested
+    // pcall/xpcall and an xpcall error handler.
+    // Lua disables hooks while executing a native xpcall message handler.
+    // Run the handler only after pcall has unwound, with the same budget and
+    // normal hook delivery. Lua wrappers also preserve yielding through
+    // protected calls. debug/traceback is not exposed by the sandbox.
+    let guard = budget.clone();
+    let check = lua.create_function(move |_, ()| guard.check())?;
+    let (pcall, xpcall): (Function, Function) = lua.load(r#"
+        local check, original, pack, unpack, kind, raise = ...
+        local function protected(...)
+            check()
+            local result = pack(original(...))
+            check()
+            return unpack(result, 1, result.n)
+        end
+        local function handled(f, handler, ...)
+            check()
+            if kind(handler) ~= 'function' then raise('xpcall error handler must be a function', 2) end
+            local result = pack(protected(f, ...))
+            if result[1] then return unpack(result, 1, result.n) end
+            local ok, value = protected(handler, result[2])
+            if not ok then value = 'error in error handling' end
+            return false, value
+        end
+        return protected, handled
+    "#).set_mode(ChunkMode::Text).call((
+        check,
+        lua.globals().get::<Function>("pcall")?,
+        lua.globals().get::<Table>("table")?.get::<Function>("pack")?,
+        lua.globals().get::<Table>("table")?.get::<Function>("unpack")?,
+        lua.globals().get::<Function>("type")?,
+        lua.globals().get::<Function>("error")?,
+    ))?;
+    lua.globals().set("pcall", pcall)?;
+    lua.globals().set("xpcall", xpcall)?;
+
+    // mlua 0.10's hook belongs to one thread. Lua-created coroutines inherit
+    // the native hook, but mlua removes it when the thread does not match.
+    // Switch the hook for each resume/close and restore the caller even on an
+    // error or yield. All threads share the same counters.
+    if let Ok(coroutine) = lua.globals().get::<Table>("coroutine") {
+        for name in ["resume", "close"] {
+            let original: Function = coroutine.get(name)?;
+            let original = lua.create_registry_value(original)?;
+            let guard = budget.clone();
+            coroutine.set(
+                name,
+                lua.create_function(move |lua, args: mlua::MultiValue| {
+                    guard.check()?;
+                    let Some(Value::Thread(thread)) = args.front() else {
+                        return Err(mlua::Error::runtime("coroutine thread expected"));
+                    };
+                    // Switching hooks resets Lua's interval counter. Charge a
+                    // minimum interval so short resume/yield loops cannot keep
+                    // resetting it without ever consuming the shared budget.
+                    guard.charge_hook_interval()?;
+                    thread.set_hook(
+                        HookTriggers::new().every_nth_instruction(LUA_HOOK_INTERVAL),
+                        guard.hook(),
+                    );
+                    let original: Function = lua.registry_value(&original)?;
+                    let result = original.call::<mlua::MultiValue>(args);
+                    lua.set_hook(
+                        HookTriggers::new().every_nth_instruction(LUA_HOOK_INTERVAL),
+                        guard.hook(),
+                    );
+                    guard.check()?;
+                    result
+                })?,
+            )?;
         }
-    });
-    budget
+        // The stock wrap resumes internally, bypassing coroutine.resume.
+        let wrap: Function = lua
+            .load(
+                r#"
+            local create, resume, pack, unpack, raise = ...
+            return function(f)
+                local co = create(f)
+                return function(...)
+                    local result = pack(resume(co, ...))
+                    if not result[1] then raise(result[2], 2) end
+                    return unpack(result, 2, result.n)
+                end
+            end
+        "#,
+            )
+            .set_mode(ChunkMode::Text)
+            .call((
+                coroutine.get::<Function>("create")?,
+                coroutine.get::<Function>("resume")?,
+                lua.globals().get::<Table>("table")?.get::<Function>("pack")?,
+                lua.globals().get::<Table>("table")?.get::<Function>("unpack")?,
+                lua.globals().get::<Function>("error")?,
+            ))?;
+        coroutine.set("wrap", wrap)?;
+    }
+    Ok(budget)
 }
 
 #[derive(Debug)]
 pub(super) struct TableBudget {
     remaining_entries: usize,
+    remaining_bytes: usize,
 }
 
 impl Default for TableBudget {
     fn default() -> Self {
-        Self { remaining_entries: LUA_MAX_TABLE_ENTRIES }
+        Self { remaining_entries: LUA_MAX_TABLE_ENTRIES, remaining_bytes: 64 * 1024 * 1024 }
     }
 }
 
 impl TableBudget {
+    pub(super) fn consume_string(&mut self, string: &mlua::String, path: &str) -> Result<()> {
+        // Lossy UTF-8 can expand each input byte into a three-byte replacement.
+        let bytes = string.as_bytes();
+        let count = if std::str::from_utf8(&bytes).is_ok() {
+            bytes.len()
+        } else {
+            bytes.len().saturating_mul(3)
+        };
+        if count > self.remaining_bytes {
+            bail!("lua converted string byte limit exceeded at {path}");
+        }
+        self.remaining_bytes -= count;
+        Ok(())
+    }
+
     pub(super) fn consume(&mut self, count: usize, path: &str) -> Result<()> {
         if count > self.remaining_entries {
             bail!("lua table entry limit exceeded at {path}");

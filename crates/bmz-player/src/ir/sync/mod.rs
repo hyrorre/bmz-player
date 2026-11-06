@@ -147,6 +147,7 @@ pub async fn ensure_fresh_credentials(
         .refresh(&credentials.refresh_token)
         .await
         .with_context(|| format!("failed to refresh IR token for '{provider_key}'"))?;
+    anyhow::ensure!(tokens.provider_key == provider_key, "IR refresh changed the provider key");
     let refreshed = IrStoredCredentials {
         provider: tokens.provider_key,
         account_id: tokens.player.id,

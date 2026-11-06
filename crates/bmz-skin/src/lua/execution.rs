@@ -61,7 +61,7 @@ pub(super) fn execute_lua_skin(
         .with_context(|| format!("failed to read lua skin: {}", input.display()))?;
 
     let header_lua = Lua::new();
-    let header_instruction_budget = install_instruction_limit(&header_lua);
+    let header_instruction_budget = install_instruction_limit(&header_lua)?;
     let header_dependencies = Arc::new(Mutex::new(SkinLoadDependencies::default()));
     // The header pass intentionally uses neutral main_state values, but it must
     // see the same read-only virtual filesystem as the document pass. Some
@@ -123,7 +123,7 @@ pub(super) fn execute_lua_skin(
     });
 
     let lua = Lua::new();
-    let instruction_budget = install_instruction_limit(&lua);
+    let instruction_budget = install_instruction_limit(&lua)?;
     // Header-only branches can select options/files based on output dimensions.
     // Other header main_state values remain neutral and are not propagated.
     let dependencies = Arc::new(Mutex::new(SkinLoadDependencies {
@@ -414,7 +414,7 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
         declarative_custom_event_ids,
     } = request;
     let lua = Lua::new();
-    let instruction_budget = install_instruction_limit(&lua);
+    let instruction_budget = install_instruction_limit(&lua)?;
     // This is a clean runtime VM. Installing the sandbox and evaluating the
     // skin creates closures, but no draw callback is invoked here.
     let runtime_probe = install_sandbox(

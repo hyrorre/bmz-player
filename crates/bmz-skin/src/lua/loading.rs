@@ -148,7 +148,7 @@ pub(super) fn execute_lua_skin_header(
         .with_context(|| format!("failed to read lua skin: {}", input.display()))?;
 
     let lua = Lua::new();
-    let instruction_budget = install_instruction_limit(&lua);
+    let instruction_budget = install_instruction_limit(&lua)?;
     let probe = install_sandbox(
         &lua,
         path_context,

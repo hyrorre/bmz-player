@@ -10,6 +10,16 @@ BMZ Player source code is licensed as `GPL-3.0-only`.
 - The full GPLv3 text is in `LICENSE`.
 - First-party crates under `crates/` inherit the workspace license.
 
+## Lua pattern matcher
+
+`crates/bmz-skin/native/lua_patterns.c` is derived from the pattern operations in
+Lua 5.4.7's MIT-licensed `lstrlib.c`, with work accounting added by BMZ.
+It uses the same Lua headers as `mlua-sys` and does not replace the interpreter.
+The original notice is kept in `crates/bmz-skin/native/LICENSE.lua` and in
+[THIRD-PARTY-NOTICES.txt](../THIRD-PARTY-NOTICES.txt) for binary distributions.
+When updating Lua, review the upstream matcher changes and run the differential,
+resource-limit and required skin tests described in [development.md](development.md).
+
 ## DXArchive format reader
 
 `bmz-skin-assets` reads legacy DXArchive assets without linking or bundling DxLib.

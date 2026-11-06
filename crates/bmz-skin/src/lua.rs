@@ -63,7 +63,7 @@ use sandbox_probe::*;
 
 #[cfg(test)]
 pub(crate) fn install_test_instruction_limit(lua: &Lua, total_limit: i64, callback_limit: i64) {
-    let _ = install_instruction_limit_with_ceilings(lua, total_limit, callback_limit);
+    install_instruction_limit_with_ceilings(lua, total_limit, callback_limit).unwrap();
 }
 
 const LUA_INSTRUCTION_LIMIT: i64 = 2_000_000;

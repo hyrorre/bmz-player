@@ -190,8 +190,8 @@ pub(in crate::lua) fn isolated_probe_lua() -> Option<Lua> {
     )
     .ok()?;
     lua.set_memory_limit(LUA_MEMORY_LIMIT_BYTES).ok()?;
-    let _ =
-        install_instruction_limit_with_ceilings(&lua, LUA_INSTRUCTION_LIMIT, LUA_INSTRUCTION_LIMIT);
+    install_instruction_limit_with_ceilings(&lua, LUA_INSTRUCTION_LIMIT, LUA_INSTRUCTION_LIMIT)
+        .ok()?;
     let globals = lua.globals();
     for name in ["dofile", "loadfile", "load", "require", "collectgarbage"] {
         globals.raw_set(name, Value::Nil).ok()?;

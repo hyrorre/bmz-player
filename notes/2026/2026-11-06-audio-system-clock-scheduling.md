@@ -310,7 +310,7 @@ CSV、全統計JSON、グラフは `.local/latency-investigation/review-fix-runs
 | 共有OFF（30秒） | 88/88 | 16.451 | 16.778 | 23.535 | 29.817 | 30.823 | 0 |
 | ASIO OFF（30秒） | 88/88 | 10.831 | 10.831 | 13.680 | 14.314 | 14.415 | 0 |
 
-- 全12条件で短音欠落、timeline catch-up、engine lock miss、位置棄却・復帰待ち、計測レコード破棄は0。WASAPIの正常な位置観測を今回の検証処理が棄却する現象は確認しなかった。
+- 全12条件で短音欠落、timeline catch-up、engine lock miss、計測レコード破棄は0。位置棄却・復帰待ちを数えるWASAPI排他のカウンターも0で、正常な位置観測を今回の検証処理が棄却する現象は確認しなかった。共有・ASIOはこの位置検証処理を通らない。
 - 排他はAutoで実480 frames、ASIOは256 frames。共有はAutoで実callbackが480/960/1056 framesに変動した。共有の設定上の対応periodは480 framesだが、実際のcallback長とは異なる。
 - 排他ONのframe対callback時計の傾きは38.06～38.14ppm。一方、300秒の予約開始遅延は開始10秒以降の傾きが約−0.004ppmで、frame進行差の累積がそのまま短音の予約へ乗る現象は確認しなかった。
 - 共有ONの予約基準上の開始遅れは最大約13.93ms、ASIO ONは最大約1.63ms残った。先頭の保持は、遅配や可変バッファに伴う発声時刻の揺れを解消したことを意味しない。共有のframe対callback差にはバッファ供給量による約10msの位相変動があり、短区間の回帰係数をデバイスの純粋なppm誤差として扱わない。
@@ -327,3 +327,14 @@ CSV・全統計JSON・グラフは `outage-fix-runs/`、記録OFFの比較は `o
 実打鍵、物理ループバック、360fps/VSyncなしの実画面、CPU高負荷、macOS/Linuxのbuild・実機確認は今回未実施。
 独立した設定・DBで実画面を比較する手順は `.local/latency-investigation/outage-fix-window-check.md` に保存した。
 長いWAVの速度補正も対象外で、報告された不安定さ全体の解消を示す結果ではない。
+
+### main統合後の検証
+
+音声修正を `68d870df` に記録した後、`origin/main` の `df0ac3a1` を取り込んだ。
+競合は `notes/README.md` の索引1か所で、音声・Lua・IRの記録をすべて保持した。
+取り込んだIR/Luaの実装はmainと一致し、音声・gameplayの実装は計測した修正から変更していない。
+
+- fmt、workspace check、all-targets Clippy（`-D warnings`）、Windows release buildが成功。
+- workspaceテストでは音声186件、gameplay262件、player2,888件を含め成功。動画の `clocked_decoder_holds_final_picture_until_the_next_full_loop` 1件だけが5秒の待機期限で失敗したため、全体の終了コードは101だった。動画コードはmainから変更していない。
+- 動画コードを変更せず、同じworkspaceテスト実行ファイルでの該当1件の再実行、`cargo test -p bmz-video --locked` の36件が成功した。初回失敗の原因は特定しておらず、再実行の成功で失敗記録を置き換えていない。
+- 検証ログは `.local/latency-investigation/outage-merge-*.log` に保存した。`git diff --check` のLua Cファイル末尾の空行指摘はmain由来であり、今回の音声差分には含まれない。
