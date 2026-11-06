@@ -52,6 +52,18 @@ class SourcePackageTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Exact SRPM unavailable"):
             self.download(location="https://repo.example/systemd-239-99.el8.src.rpm")
 
+    def test_official_vault_uses_https(self):
+        location = "http://vault.almalinux.org/8.10/BaseOS/Source/Packages/" + self.owner["sourcerpm"]
+        records, _, run, _ = self.download(location=location)
+        url = "https" + location.removeprefix("http")
+        self.assertEqual(records[0]["url"], url)
+        self.assertIn(url, run.call_args.args[0])
+        self.assertIn("=https", run.call_args.args[0])
+
+    def test_other_http_source_is_rejected(self):
+        with self.assertRaisesRegex(RuntimeError, "Exact SRPM unavailable"):
+            self.download(location="http://repo.example/" + self.owner["sourcerpm"])
+
     def test_unavailable_source_fails_with_owners(self):
         with patch("source_packages.output", return_value=self.url), \
                 patch("source_packages.subprocess.run", side_effect=OSError("offline")):

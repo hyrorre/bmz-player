@@ -149,16 +149,22 @@ def download_sources(packages, source_root):
         try:
             locations = output("dnf", "-q", "--showduplicates", "repoquery", "--enablerepo=*-source",
                                "--arch=src", "--location", filename[:-8]).splitlines()
-            urls = sorted({url for url in locations if
-                           unquote(urlsplit(url).path).rsplit("/", 1)[-1] == filename
-                           and urlsplit(url).scheme == "https"})
+            urls = set()
+            for location in locations:
+                url = urlsplit(location)
+                # EL8's source mirrorlists advertise the official vault over HTTP.
+                if url.scheme == "http" and url.netloc == "vault.almalinux.org":
+                    url = url._replace(scheme="https")
+                if url.scheme == "https" and unquote(url.path).rsplit("/", 1)[-1] == filename:
+                    urls.add(url.geturl())
             if not urls:
                 raise ValueError(f"Exact SRPM unavailable: {filename}")
+            url = min(urls)
             path = directory / filename
             subprocess.run(["curl", "--fail", "--location", "--retry", "3",
-                            urls[0], "-o", str(path)], check=True)
+                            "--proto-redir", "=https", url, "-o", str(path)], check=True)
             source = check_srpm(path, owners)
-            records.append(dict(filename=filename, url=urls[0], sha256=sha256(path), header=source))
+            records.append(dict(filename=filename, url=url, sha256=sha256(path), header=source))
         except (subprocess.CalledProcessError, OSError, ValueError) as error:
             raise RuntimeError(f"Failed exact SRPM {filename} for {owners}: {error}") from error
     (source_root / "srpms.json").write_text(json.dumps(records, indent=2) + "\n")
