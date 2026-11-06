@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn external_permission_rejects_ancestors_of_protected_directories() {
+    let root = tempfile::tempdir().unwrap();
+    let users = root.path().join("users");
+    let app = users.join("alice/app");
+    let paths = AppPaths::from_dirs(
+        app.join("resource"),
+        app.join("data"),
+        app.join("cache"),
+        app.join("logs"),
+    );
+    for dir in [&paths.resource_dir, &paths.data_dir] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let mut skin = SkinConfig::default();
+    for parent in [&users, &users.join("alice"), &app] {
+        let entry = parent.join("loose.lua");
+        std::fs::write(&entry, "return {}").unwrap();
+        assert!(paths.approve_skin_path(&mut skin, &entry).is_err(), "{}", parent.display());
+        assert!(skin.external_access.is_empty());
+    }
+    // Component boundaries matter, and a dedicated descendant is still valid.
+    for directory in [users.join("alice/app-other"), app.join("skins/theme")] {
+        std::fs::create_dir_all(&directory).unwrap();
+        let entry = directory.join("select.lua");
+        std::fs::write(&entry, "return {}").unwrap();
+        paths.approve_skin_path(&mut skin, &entry).unwrap();
+        assert!(paths.skin_path_context(&skin, &entry).is_ok());
+    }
+}
+
+#[test]
 fn external_permission_is_explicit_per_entry_persistent_and_revocable() {
     let root = tempfile::tempdir().unwrap();
     let paths = AppPaths::from_dirs(

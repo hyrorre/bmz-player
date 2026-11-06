@@ -84,12 +84,16 @@ fn links_are_checked_for_existing_missing_wildcard_and_archive_paths() {
     );
     for path in ["escape/secret.png", "bad.png", "broken", "loop"] {
         assert!(context.resolve_path(path).is_err(), "{path}");
+        assert!(context.resolve_optional_asset(path).is_err(), "{path}");
     }
     for path in ["escape/new/log.txt", "broken/new", "loop/new"] {
         assert!(context.resolve_path_or_missing(path).is_err(), "{path}");
     }
     assert!(context.resolve_asset("escape/private/atlas.png").is_err());
     assert!(context.resolve_asset("escape/SECRET.PNG").is_err());
+    for path in ["ESCAPE/missing.png", "escape/new/log.txt", "broken/new", "loop/new"] {
+        assert!(context.resolve_optional_asset(path).is_err(), "{path}");
+    }
     assert_eq!(
         context.wildcard_candidates("*.png").unwrap(),
         vec![canonicalize_skin_path(&root.join("inside/good.png")).unwrap()]

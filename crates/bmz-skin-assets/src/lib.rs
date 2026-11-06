@@ -62,7 +62,11 @@ impl SkinAsset {
             let logical = backing.with_extension("").join(&entry.name);
             return Ok(Self { logical, backing, entry: Some(entry) });
         }
-        bail!("skin asset not found: {}", path.display())
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("skin asset not found: {}", path.display()),
+        )
+        .into())
     }
 
     pub fn logical_path(&self) -> &Path {

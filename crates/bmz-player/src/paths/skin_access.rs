@@ -60,7 +60,7 @@ impl AppPaths {
         anyhow::ensure!(
             parent.parent().is_some()
                 && !broad.iter().any(|dir| bmz_skin_assets::canonicalize_skin_path(dir)
-                    .is_ok_and(|dir| dir == parent)),
+                    .is_ok_and(|dir| dir.starts_with(parent))),
             "place this skin in its own folder before authorizing it; the selected parent is too broad"
         );
         skin.external_access.insert(

@@ -75,4 +75,37 @@ workerの論理パス保持、全形式の共有資源、JSON/LR2 include境界�
 静的なリンク境界を対象とし、検査後の差し替えTOCTOUやOS handleによる完全隔離は保証しない。
 解除時はインストール済みVMを破棄し、実行中workerの旧世代結果とcacheを切り離す。
 開始済みのworker/OS I/Oの即時強制終了、ネイティブdecoderのプロセス隔離は対象外。
-ユーザーの指定どおりGitHubへのPR作成・コメント投稿は行わない。
+初回依頼の範囲はローカル修正・検証までとし、その後の依頼でPR #76を作成した。
+
+## PR #76の指摘対応（2026-11-06）
+
+指摘対象HEAD: `2b7fbbce`。以下の3件を修正した。
+
+- [LR2フォントの欠損ページ](https://github.com/hyrorre/bmz-player/pull/76#discussion_r4488185359):
+  NotFoundを型で区別するoptional asset resolverを追加。大小文字を解決したパスの既存親を検査し、
+  許可範囲内の欠損ページ・DXA entryだけを省く。壊れたリンク、root外参照、不正なarchiveはエラーのまま。
+  decodeとcache依存の両方で使い、欠損ページの復元時にinstalled/cache状態が更新されることを確認した。
+  欠損した同じ番号の`#T`が後にあっても、先の正常ページのcache依存を保持する。
+- [広すぎる親の祖先](https://github.com/hyrorre/bmz-player/pull/76#discussion_r4488185660):
+  HOME、resource/dataとその親、exe dirに対して、完全一致だけでなくcomponent単位の祖先も拒否する。
+  テストは一時領域内のapp階層を使い、環境変数や実ユーザーのホームを変更しない。
+- [CONTINUE補完の失敗](https://github.com/hyrorre/bmz-player/pull/76#discussion_r4488185969):
+  fallbackと同テーマproviderのcontext作成も警告・続行の経路へ入れる。
+  削除済み・未許可の補完元があってもResult本体を読み込めることをworker経由で確認した。
+
+検証環境・実素材・未検証範囲は上記と同じ。
+
+| 確認 | 結果 |
+|---|---|
+| `cargo fmt --check` | PASS |
+| `cargo check --workspace --locked` | PASS |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | PASS（警告なし） |
+| `cargo test --workspace --locked --no-fail-fast -- --test-threads=4` | PASS: 5,040成功 / 0失敗 / 58 ignored。doctestもPASS |
+
+bmz-playerは2,925成功 / 42 ignored、bmz-renderは1,002成功 / 11 ignored、
+bmz-skin-assetsは15成功。新規5件と既存リンク境界テストの拡張を含み、
+合計はテスト内部の子プロセスの1件を重複計上していない。
+`m_select_lua_select_skin_loads_when_available`も実素材付きでPASS。
+LR2では欠損ページと重複番号の依存維持、復元時のcache更新を確認し、
+FNTの必須ページと同一番号の最終宣言を使う挙動を維持した。
+ログ: `/tmp/bmz-pr76-review-{fmt,check,clippy,tests}.log`（ローカルのみ）。

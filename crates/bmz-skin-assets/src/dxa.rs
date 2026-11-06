@@ -158,7 +158,11 @@ pub(super) fn find_entry(path: &Path, requested: &str) -> Result<Entry> {
             }
         }
     }
-    bail!("DXA entry not found: {requested}")
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        format!("DXA entry not found: {requested}"),
+    )
+    .into())
 }
 
 impl Index {

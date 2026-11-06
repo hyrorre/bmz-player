@@ -159,15 +159,18 @@ pub(super) fn spawn_skin_decode(pipeline: &SkinPipelineRuntime, mut request: Ski
                     apply_play_chart_facts_lua_load_state(&mut runtime_state, &facts);
                 }
                 if let Some(fallback) = lr2_continue_fallback {
-                    let context = bmz_skin::SkinPathContext::new(
+                    let assets = bmz_skin::SkinPathContext::new(
                         &fallback.play_skin,
                         library_roots.iter().cloned(),
-                    )?;
-                    match crate::skin_loader::resolve_lr2_continue_assets_with_context(
-                        &context,
-                        &fallback.runtime_state,
-                        Some(document_cache.clone()),
-                    ) {
+                    )
+                    .and_then(|context| {
+                        crate::skin_loader::resolve_lr2_continue_assets_with_context(
+                            &context,
+                            &fallback.runtime_state,
+                            Some(document_cache.clone()),
+                        )
+                    });
+                    match assets {
                         Ok(assets) => {
                             runtime_state.lr2_continue_assets = merge_lr2_continue_assets(
                                 assets,
@@ -183,13 +186,16 @@ pub(super) fn spawn_skin_decode(pipeline: &SkinPipelineRuntime, mut request: Ski
                     }
                 }
                 for provider in lr2_continue_theme_providers(skin_path, &library_roots) {
-                    let context =
-                        bmz_skin::SkinPathContext::new(&provider, library_roots.iter().cloned())?;
-                    match crate::skin_loader::resolve_lr2_continue_assets_with_context(
-                        &context,
-                        &bmz_skin::LuaLoadRuntimeState::default(),
-                        Some(document_cache.clone()),
-                    ) {
+                    let assets =
+                        bmz_skin::SkinPathContext::new(&provider, library_roots.iter().cloned())
+                            .and_then(|context| {
+                                crate::skin_loader::resolve_lr2_continue_assets_with_context(
+                                    &context,
+                                    &bmz_skin::LuaLoadRuntimeState::default(),
+                                    Some(document_cache.clone()),
+                                )
+                            });
+                    match assets {
                         Ok(assets) => {
                             runtime_state.lr2_continue_assets = fill_empty_lr2_continue_assets(
                                 assets,

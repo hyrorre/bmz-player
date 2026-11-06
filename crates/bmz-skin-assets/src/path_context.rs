@@ -132,6 +132,32 @@ impl SkinPathContext {
         Err(failure.unwrap_or_else(|| anyhow!("skin asset not found: {requested}")))
     }
 
+    /// Optional assets may be absent, but their existing parents must still be
+    /// authorized. Broken links, root escapes and malformed archives are errors.
+    pub fn resolve_optional_asset(&self, requested: &str) -> Result<Option<PathBuf>> {
+        for candidate in self.candidate_paths(requested)? {
+            let mut allowed = |backing: &Path| {
+                canonicalize_skin_path(backing)
+                    .is_ok_and(|path| self.library_roots.iter().any(|root| path.starts_with(root)))
+            };
+            // Check the case-corrected path as well: a missing page below an
+            // outward link must not be mistaken for an ordinary missing file.
+            let physical = crate::case_insensitive_path(&candidate, &mut allowed);
+            self.policy.resolve_or_missing(&physical)?;
+            match crate::SkinAsset::resolve_with(&physical, allowed) {
+                Ok(asset) => {
+                    return Ok(Some(simplify_verbatim_path(asset.logical_path().to_path_buf())));
+                }
+                Err(error)
+                    if error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(None)
+    }
+
     /// Resolves an existing file or directory using the common path rules.
     pub fn resolve_path(&self, requested: &str) -> Result<PathBuf> {
         self.resolve_existing(requested, ExistingKind::Any)

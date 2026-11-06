@@ -4,6 +4,23 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 #[test]
+fn optional_assets_skip_only_missing_files_and_archive_entries() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("Parts")).unwrap();
+    fs::write(root.path().join("Parts/PAGE.PNG"), b"page").unwrap();
+    fs::write(root.path().join("font.dxa"), archive(3, &[("page.png", b"page", false)])).unwrap();
+    fs::write(root.path().join("corrupt.dxa"), b"corrupt").unwrap();
+    let context = SkinPathContext::for_directory(root.path()).unwrap();
+    assert!(context.resolve_optional_asset("parts/page.png").unwrap().is_some());
+    assert!(context.resolve_optional_asset("font/page.png").unwrap().is_some());
+    for path in ["missing.png", "parts/missing.png", "font/missing.png"] {
+        assert_eq!(context.resolve_optional_asset(path).unwrap(), None, "{path}");
+    }
+    assert!(context.resolve_optional_asset("../missing.png").is_err());
+    assert!(context.resolve_optional_asset("corrupt/page.png").is_err());
+}
+
+#[test]
 fn explicit_file_choices_keep_case_unicode_and_archive_compatibility() {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("日本語.PNG"), b"image").unwrap();

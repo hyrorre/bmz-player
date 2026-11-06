@@ -1,6 +1,41 @@
 use super::*;
 
 #[test]
+fn invalid_continue_fallback_does_not_abort_result_skin_decode() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("skins");
+    std::fs::create_dir(&root).unwrap();
+    let entry = root.join("result.lr2skin");
+    std::fs::write(&entry, "#INFORMATION,7,Result,Test\n#RESOLUTION,0\n").unwrap();
+    let outside = temp.path().join("outside.lr2skin");
+    std::fs::write(&outside, "#INFORMATION,0,Outside,Test\n").unwrap();
+    let deleted = root.join("deleted.lr2skin");
+    std::fs::write(&deleted, "#INFORMATION,0,Deleted,Test\n").unwrap();
+    std::fs::remove_file(&deleted).unwrap();
+    for fallback in [deleted, outside] {
+        let mut pipeline = SkinPipelineRuntime::new();
+        let request = SkinDecodeRequest::new(
+            0,
+            entry.clone(),
+            SkinKind::Result,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Default::default(),
+        )
+        .with_library_roots(vec![root.clone()])
+        .with_lr2_continue_fallback(Some(Lr2ContinueFallback {
+            play_skin: fallback,
+            runtime_state: Default::default(),
+        }));
+        spawn_skin_decode(&pipeline, request);
+        let result =
+            pipeline.decode_rx.as_ref().unwrap().recv_timeout(Duration::from_secs(10)).unwrap();
+        pipeline.shutdown_workers();
+        assert_eq!(result.result.unwrap().document.name, "Result");
+    }
+}
+
+#[test]
 #[cfg(unix)]
 fn shared_resource_and_data_root_aliases_remain_authorized() {
     let temp = tempfile::tempdir().unwrap();

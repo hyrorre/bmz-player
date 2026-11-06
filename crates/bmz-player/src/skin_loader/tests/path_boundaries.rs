@@ -1,6 +1,58 @@
 use super::*;
 
 #[test]
+fn lr2_missing_page_can_be_cached_and_reappearing_page_invalidates_it() {
+    let root = tempfile::tempdir().unwrap();
+    image::RgbaImage::from_pixel(1, 1, image::Rgba([255; 4]))
+        .save(root.path().join("p0.tga"))
+        .unwrap();
+    fs::write(
+        root.path().join("font.lr2font"),
+        "#S,1\n#T,0,p0.tga\n#T,1,missing.tga\n#R,65,0,0,0,1,1\n#R,66,1,0,0,1,1\n",
+    )
+    .unwrap();
+    let entry = root.path().join("skin.json");
+    fs::write(&entry, r#"{"type":5,"font":[{"id":"test","path":"font.lr2font"}]}"#).unwrap();
+    let cache = Arc::new(Mutex::new(SkinFontCache::default()));
+    let load = |installed| {
+        decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
+            &entry,
+            SkinKind::Select,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            None,
+            None,
+            None,
+            Some(cache.clone()),
+            installed,
+        )
+        .unwrap()
+    };
+    let first = load(None);
+    assert_eq!(first.fonts.len(), 1);
+    assert_eq!(first.stats.font_cache_misses, 1);
+    let old_key = first.fonts[0].cache_key.clone().unwrap();
+    let installed = HashMap::from([(first.fonts[0].stored_id.clone(), old_key.clone())]);
+    let Some(DecodedFontData::Bitmap(font)) = &first.fonts[0].data else { panic!("bitmap font") };
+    assert_eq!(font.pages.len(), 1);
+    assert!(!font.glyphs.contains_key(&'B'));
+    assert_eq!(load(None).stats.font_cache_hits, 1);
+    assert_eq!(load(Some(installed.clone())).stats.font_payload_skipped, 1);
+    image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 255, 0, 255]))
+        .save(root.path().join("missing.tga"))
+        .unwrap();
+    let restored = load(Some(installed));
+    assert_eq!(restored.stats.font_cache_misses, 1);
+    assert_ne!(restored.fonts[0].cache_key.as_ref(), Some(&old_key));
+    let Some(DecodedFontData::Bitmap(font)) = &restored.fonts[0].data else {
+        panic!("bitmap font")
+    };
+    assert_eq!(font.pages.len(), 2);
+    assert!(font.glyphs.contains_key(&'B'));
+}
+
+#[test]
 #[cfg(unix)]
 fn bitmap_page_decode_and_cache_use_the_validated_path() {
     let temp = tempfile::tempdir().unwrap();
