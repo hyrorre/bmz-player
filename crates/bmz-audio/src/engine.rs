@@ -240,7 +240,7 @@ impl AudioEngine {
         &mut self,
         output_start_frame: u64,
         output: &mut [f32],
-        buffer_time: Option<std::time::Instant>,
+        buffer_time: Option<crate::clock::OutputBufferTime>,
     ) {
         output.fill(0.0);
         if self.playback_paused() {
@@ -248,12 +248,7 @@ impl AudioEngine {
         }
         let frame_count = output.len() / 2;
         if let Some(buffer_time) = buffer_time {
-            self.queue.resolve_times(
-                output_start_frame,
-                buffer_time,
-                frame_count,
-                self.output_sample_rate(),
-            );
+            self.queue.resolve_times(output_start_frame, buffer_time, self.output_sample_rate());
         }
         let output_end_frame = output_start_frame + frame_count.saturating_sub(1) as u64;
         // 中間 Vec を確保せず、期日到来分を直接 mixer へ流し込む(RT 安全)。
@@ -302,7 +297,12 @@ mod tests {
                     sound.start_time = Some(playback + Duration::from_millis(3));
                     engine.schedule(sound);
                     let mut pcm = vec![0.0; (sample_rate / 100) as usize * 2];
-                    engine.render_stereo_at(frame, &mut pcm, Some(playback));
+                    let time = crate::clock::OutputBufferTime::for_frames(
+                        playback,
+                        pcm.len() / 2,
+                        sample_rate,
+                    );
+                    engine.render_stereo_at(frame, &mut pcm, Some(time));
                     let onset =
                         pcm.as_chunks::<2>().0.iter().position(|sample| sample[0] != 0.0).unwrap();
                     assert_eq!(
@@ -335,7 +335,9 @@ mod tests {
             sound.catch_up = catch_up;
             engine.schedule(sound);
             let mut pcm = [0.0; 2];
-            engine.render_stereo_at(10_000, &mut pcm, Some(base + Duration::from_millis(10)));
+            let start = base + Duration::from_millis(10);
+            let time = crate::clock::OutputBufferTime::for_frames(start, 1, 48_000);
+            engine.render_stereo_at(10_000, &mut pcm, Some(time));
             assert_eq!(pcm[0], if catch_up { 0.48 } else { 0.0 });
         }
     }
@@ -360,10 +362,14 @@ mod tests {
             new_rate_percent: 200,
         });
         let mut pcm = [0.0; 192];
-        engine.render_stereo_at(24_000, &mut pcm, Some(base + Duration::from_millis(500)));
+        let start = base + Duration::from_millis(500);
+        let time = crate::clock::OutputBufferTime::for_frames(start, 96, 48_000);
+        engine.render_stereo_at(24_000, &mut pcm, Some(time));
         assert!(pcm.iter().all(|value| *value == 0.0));
         engine.set_playback_paused_at(false, 48_000, base + Duration::from_secs(1));
-        engine.render_stereo_at(49_872, &mut pcm, Some(base + Duration::from_millis(1_039)));
+        let start = base + Duration::from_millis(1_039);
+        let time = crate::clock::OutputBufferTime::for_frames(start, 96, 48_000);
+        engine.render_stereo_at(49_872, &mut pcm, Some(time));
         assert_eq!(pcm.iter().position(|value| *value != 0.0), Some(48 * 2));
         assert!(engine.is_idle());
     }

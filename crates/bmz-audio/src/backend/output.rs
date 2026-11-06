@@ -1,5 +1,5 @@
 //! Shared real-time output state for CPAL callbacks and native audio backends.
-pub(super) use crate::clock::{duration_to_frames, output_gap_tolerance};
+pub(super) use crate::clock::{OutputBufferTime, duration_to_frames, output_gap_tolerance};
 use crate::command::CommandedAudioEngine;
 use crate::engine::AudioEngine;
 use std::collections::VecDeque;
@@ -136,14 +136,18 @@ pub(super) struct OutputFrameClock {
 }
 
 impl OutputFrameClock {
-    /// Returns the time a buffer's first frame stands for on the deadline timeline.
+    /// Returns the deadlines a buffer stands for.
+    ///
+    /// The smoothed offset moves between buffers. Each buffer ends on the new
+    /// value and the next one starts from it, so a moved offset can neither
+    /// skip a deadline nor make it late while the frames continue.
     pub(super) fn buffer_time(
         &mut self,
         frame: u64,
         callback: Instant,
         span: Duration,
         sample_rate: u32,
-    ) -> Instant {
+    ) -> OutputBufferTime {
         let stopped = self.previous.is_some_and(|(previous, previous_span)| {
             // A refill adds coverage, not timing uncertainty.
             let limit = previous_span
@@ -163,11 +167,15 @@ impl OutputFrameClock {
         // Average the first samples, so that the delivery jitter of the callback
         // after a reset does not stay in the offset for a whole smoothing period.
         self.samples = self.samples.saturating_add(1);
+        let start_offset = if self.samples == 1 { sample } else { self.offset_ns };
         let weight = (span.as_secs_f64() / OUTPUT_TIME_SMOOTHING_SECS)
             .max(1.0 / f64::from(self.samples))
             .min(1.0);
         self.offset_ns += (sample - self.offset_ns) * weight;
-        shift_instant_ns(origin, frame_ns + self.offset_ns)
+        OutputBufferTime {
+            start: shift_instant_ns(origin, frame_ns + start_offset),
+            end: shift_instant_ns(origin, frame_ns + span.as_nanos() as f64 + self.offset_ns),
+        }
     }
 }
 
@@ -305,7 +313,7 @@ impl NativeOutputRenderer {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct OutputRenderLayout {
-    pub(super) buffer_time: Option<Instant>,
+    pub(super) buffer_time: Option<OutputBufferTime>,
     pub(super) channels: usize,
     pub(super) channel_offset: usize,
     pub(super) start_frame: u64,
@@ -368,7 +376,7 @@ pub(super) fn render_output<T: OutputSample>(
 }
 
 pub(super) fn mix_sources_stereo(
-    position: (u64, Option<Instant>),
+    position: (u64, Option<OutputBufferTime>),
     frames: usize,
     output_commands: &SharedOutputCommands,
     retired_sources: &RetiredOutputSources,
@@ -751,6 +759,54 @@ mod tests {
     }
 
     #[test]
+    fn contiguous_buffers_share_their_boundary() {
+        let (mut clock, mut frame, base) = settled_clock(Instant::now());
+        let mut previous: Option<OutputBufferTime> = None;
+        for (callback_ms, frames) in [(0, 480), (80, 3840), (90, 480), (97, 480), (110, 960)] {
+            let span = frames_to_duration(frames, SAMPLE_RATE);
+            let callback = base + Duration::from_millis(callback_ms);
+            let time = clock.buffer_time(frame, callback, span, SAMPLE_RATE);
+            if let Some(previous) = previous {
+                assert!(distance(time.start, previous.end) < Duration::from_nanos(2));
+            }
+            previous = Some(time);
+            frame += frames as u64;
+        }
+    }
+
+    #[test]
+    fn a_deadline_where_the_offset_moved_keeps_the_whole_bgm() {
+        for sample_frames in [48, 480] {
+            let (mut clock, mut frame, base) = settled_clock(Instant::now());
+            let mut engine = AudioEngine::new(SAMPLE_RATE);
+            engine.insert_sample(
+                SoundId(1),
+                DecodedSample {
+                    channels: 1,
+                    sample_rate: SAMPLE_RATE,
+                    frames: vec![0.5; sample_frames],
+                },
+            );
+            let mut sound = ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0);
+            // The large refill moves the offset by about 1.4 ms past this point.
+            sound.start_time = Some(base + Duration::from_micros(5_100));
+            sound.catch_up = true;
+            engine.schedule(sound);
+            let mut rendered = 0;
+            for (callback_ms, frames) in [(0, 480), (80, 3840), (90, 480)] {
+                let span = frames_to_duration(frames, SAMPLE_RATE);
+                let callback = base + Duration::from_millis(callback_ms);
+                let time = clock.buffer_time(frame, callback, span, SAMPLE_RATE);
+                let mut pcm = vec![0.0; frames * 2];
+                engine.render_stereo_at(frame, &mut pcm, Some(time));
+                rendered += pcm.as_chunks::<2>().0.iter().filter(|pcm| pcm[0] != 0.0).count();
+                frame += frames as u64;
+            }
+            assert_eq!(rendered, sample_frames);
+        }
+    }
+
+    #[test]
     fn a_refill_covers_its_own_span_without_widening_the_stop_margin() {
         let refill = frames_to_duration(1_056, SAMPLE_RATE);
         for (callback_ms, stopped) in [(40, false), (60, true)] {
@@ -759,7 +815,7 @@ mod tests {
             let callback = next + Duration::from_millis(callback_ms);
             let time = clock.buffer_time(frame + FRAMES, callback, refill, SAMPLE_RATE);
             assert_eq!(
-                distance(time, callback - refill / 2) < Duration::from_micros(1),
+                distance(time.start, callback - refill / 2) < Duration::from_micros(1),
                 stopped,
                 "{callback_ms} ms"
             );
@@ -772,11 +828,11 @@ mod tests {
         clock.buffer_time(frame, next, SPAN, SAMPLE_RATE);
         let callback = next + Duration::from_millis(60);
         let time = clock.buffer_time(frame + FRAMES, callback, SPAN, SAMPLE_RATE);
-        assert!(distance(time, callback - SPAN / 2) < Duration::from_micros(1));
+        assert!(distance(time.start, callback - SPAN / 2) < Duration::from_micros(1));
         // The frames then continue from the new correspondence.
         let callback = callback + SPAN;
         let time = clock.buffer_time(frame + 2 * FRAMES, callback, SPAN, SAMPLE_RATE);
-        assert!(distance(time, callback - SPAN / 2) < Duration::from_micros(1));
+        assert!(distance(time.start, callback - SPAN / 2) < Duration::from_micros(1));
     }
 
     #[test]
@@ -785,7 +841,7 @@ mod tests {
         clock.buffer_time(frame, next, SPAN, SAMPLE_RATE);
         let callback = next + Duration::from_millis(60);
         let time = clock.buffer_time(frame + FRAMES + 2_400, callback, SPAN, SAMPLE_RATE);
-        assert!(distance(time, callback - SPAN / 2) < Duration::from_micros(1));
+        assert!(distance(time.start, callback - SPAN / 2) < Duration::from_micros(1));
     }
 
     #[test]
@@ -841,7 +897,7 @@ mod tests {
     fn the_first_buffer_stands_for_its_callback_minus_half_a_buffer() {
         let callback = Instant::now();
         let time = OutputFrameClock::default().buffer_time(123_456, callback, SPAN, SAMPLE_RATE);
-        assert!(distance(time, callback - SPAN / 2) < Duration::from_micros(1));
+        assert!(distance(time.start, callback - SPAN / 2) < Duration::from_micros(1));
     }
 
     #[test]
@@ -849,7 +905,7 @@ mod tests {
         let (mut clock, frame, next) = settled_clock(Instant::now());
         let late = next + Duration::from_millis(3);
         let time = clock.buffer_time(frame, late, SPAN, SAMPLE_RATE);
-        assert!(distance(time, next - SPAN / 2) < Duration::from_micros(20));
+        assert!(distance(time.start, next - SPAN / 2) < Duration::from_micros(20));
     }
 
     #[test]
@@ -861,7 +917,8 @@ mod tests {
         let (mut time, mut callback) = (start, start);
         for buffer in 1..=20 {
             callback = start + SPAN * buffer;
-            time = clock.buffer_time(u64::from(buffer) * FRAMES, callback, SPAN, SAMPLE_RATE);
+            let frame = u64::from(buffer) * FRAMES;
+            time = clock.buffer_time(frame, callback, SPAN, SAMPLE_RATE).start;
         }
         assert!(distance(time, callback - SPAN / 2) < Duration::from_micros(100));
     }
@@ -912,7 +969,7 @@ mod tests {
                         let callback = start + elapsed;
                         let time = clock.buffer_time(frame, callback, span, rate);
                         assert!(
-                            distance(time, callback - span / 2) < Duration::from_micros(500),
+                            distance(time.start, callback - span / 2) < Duration::from_micros(500),
                             "{rate} Hz, {frames} frames, {ppm} ppm, {buffer}"
                         );
                     }
@@ -961,6 +1018,7 @@ mod tests {
         }
     }
 
+    #[cfg(any(windows, all(target_os = "macos", feature = "experimental-coreaudio-ioproc")))]
     #[test]
     fn native_outage_advances_active_and_pending_sounds_only_once() {
         let start = Instant::now();
@@ -1008,6 +1066,7 @@ mod tests {
         assert_eq!(diagnostics.timeline_catch_up_frames, 2_400);
     }
 
+    #[cfg(any(windows, all(target_os = "macos", feature = "experimental-coreaudio-ioproc")))]
     #[test]
     fn native_callback_stop_reaches_the_engine_with_contiguous_frames() {
         let start = Instant::now();

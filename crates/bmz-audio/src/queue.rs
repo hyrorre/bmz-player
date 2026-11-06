@@ -1,4 +1,4 @@
-use crate::clock::duration_to_frames;
+use crate::clock::{OutputBufferTime, duration_to_frames};
 use bmz_core::ids::SoundId;
 use std::time::{Duration, Instant};
 
@@ -109,14 +109,7 @@ impl ScheduledSoundQueue {
 
     /// Keep future deadlines in system time. Only this buffer's events become
     /// device frames, so a clock-rate error cannot accumulate over the song.
-    pub(crate) fn resolve_times(&mut self, frame: u64, time: Instant, frames: usize, rate: u32) {
-        if frames == 0 || rate == 0 {
-            return;
-        }
-        let span = Duration::from_secs_f64(frames as f64 / f64::from(rate));
-        let Some(end) = time.checked_add(span) else {
-            return;
-        };
+    pub(crate) fn resolve_times(&mut self, frame: u64, time: OutputBufferTime, rate: u32) {
         let mut changed = false;
         for (sound, _) in &mut self.sounds {
             let Some(deadline) = sound.start_time else {
@@ -124,13 +117,13 @@ impl ScheduledSoundQueue {
             };
             // Timed entries are sorted. Do not scan the rest of the lookahead
             // window on every small device buffer.
-            if deadline >= end {
+            if deadline >= time.end {
                 break;
             }
-            sound.start_frame = if deadline >= time {
-                frame.saturating_add(duration_to_frames(deadline.duration_since(time), rate))
+            sound.start_frame = if deadline >= time.start {
+                frame.saturating_add(duration_to_frames(deadline.duration_since(time.start), rate))
             } else {
-                frame.saturating_sub(duration_to_frames(time.duration_since(deadline), rate))
+                frame.saturating_sub(duration_to_frames(time.start.duration_since(deadline), rate))
             };
             sound.start_time = None;
             changed = true;
@@ -284,6 +277,10 @@ mod tests {
         }
     }
 
+    fn resolve(queue: &mut ScheduledSoundQueue, frame: u64, start: Instant) {
+        queue.resolve_times(frame, OutputBufferTime::for_frames(start, 480, 48_000), 48_000);
+    }
+
     #[test]
     fn live_deadlines_wait_for_current_buffer_and_survive_pause_and_rate_changes() {
         let base = Instant::now();
@@ -291,7 +288,7 @@ mod tests {
         let mut event = sound(0, 1);
         event.start_time = Some(base + Duration::from_millis(100));
         queue.schedule(event);
-        queue.resolve_times(99_000, base, 480, 48_000);
+        resolve(&mut queue, 99_000, base);
         assert!(queue.drain_until_frame(u64::MAX).is_empty());
         queue.apply_playback_rate_change(crate::clock::PlaybackRateChange {
             changed_at: Some(base),
@@ -300,7 +297,7 @@ mod tests {
             new_rate_percent: 200,
         });
         queue.shift_times(Duration::from_secs(10));
-        queue.resolve_times(7_000, base + Duration::from_millis(10_045), 480, 48_000);
+        resolve(&mut queue, 7_000, base + Duration::from_millis(10_045));
         let event = queue.drain_until_frame(7_479).pop().unwrap();
         assert_eq!(event.start_frame, 7_240);
         assert!(queue.is_empty());
@@ -316,14 +313,14 @@ mod tests {
             event.catch_up = catch_up;
             queue.schedule(event);
         }
-        queue.resolve_times(1000, base + Duration::from_millis(10), 480, 48_000);
+        resolve(&mut queue, 1000, base + Duration::from_millis(10));
         let due = queue.drain_until_frame(u64::MAX);
         assert_eq!(due.len(), 2);
         assert_eq!(due[0].start_frame, 520);
         assert!(due[0].catch_up);
         assert!(!due[1].catch_up);
         assert_eq!(queue.len(), 1);
-        queue.resolve_times(1480, base + Duration::from_millis(20), 480, 48_000);
+        resolve(&mut queue, 1480, base + Duration::from_millis(20));
         assert_eq!(queue.drain_until_frame(1480)[0].sound_id, SoundId(3));
     }
 
@@ -339,7 +336,7 @@ mod tests {
             event.volume = index as f32;
             queue.schedule(event);
         }
-        queue.resolve_times(1000, base, 480, 48_000);
+        resolve(&mut queue, 1000, base);
         let events = queue.drain_until_frame(1479);
         for id in 0..3 {
             let volumes: Vec<_> = events
@@ -365,8 +362,8 @@ mod tests {
         for ms in [15, 25, 35] {
             queue.schedule(timed_bgm(base + Duration::from_millis(ms)));
         }
-        queue.resolve_times(100_000, base, 480, 48_000);
-        queue.resolve_times(100_480, base + Duration::from_millis(60), 480, 48_000);
+        resolve(&mut queue, 100_000, base);
+        resolve(&mut queue, 100_480, base + Duration::from_millis(60));
         let starts: Vec<_> =
             queue.drain_until_frame(u64::MAX).iter().map(|sound| sound.start_frame).collect();
         assert_eq!(starts, [100_480 - 45 * 48, 100_480 - 35 * 48, 100_480 - 25 * 48]);

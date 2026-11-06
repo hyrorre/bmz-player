@@ -586,7 +586,7 @@ impl CommandedAudioEngine {
         &mut self,
         output_start_frame: u64,
         output: &mut [f32],
-        buffer_time: Option<std::time::Instant>,
+        buffer_time: Option<crate::clock::OutputBufferTime>,
     ) -> bool {
         let engine = Arc::clone(&self.engine);
         let mut engine = match engine.try_lock() {

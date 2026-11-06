@@ -520,3 +520,26 @@ API予測は、最も単純な `callback − S/2` より良くならず、共有
 fmt、workspace check、all-targets Clippy（`-D warnings`）、Windows release buildは成功した。workspaceテストは音声167件、gameplay262件、動画36件が成功し、`bmz-player` の13件と `bmz-skin` の9件が失敗した。すべて導入済みスキンを読むテストで、統合前の `dab20016` では成功していた。
 
 `c1e28a46` そのものでも同じ環境で同じ22件が失敗したので、この統合が原因ではない。mainの `#76` のスキンパス解決がWindowsで失敗している可能性がある。例として、`LITONE5` の `select.lr2skin` は `Select\Select\csv\select.csv` を探して読み込めていない。原因は未調査である。
+
+### PR #75レビューの修正
+
+`7b0c02d9` のレビューの2件を修正した。
+
+- `OutputFrameClock` は毎callbackで平滑値を更新するので、前バッファの終端と次バッファの先頭の時刻に隙間ができた。480→3840→480 framesでは約1.4msになり、その隙間に入った `catch_up=true` のBGMは、PCMが連続していても先頭が欠けた。1msのBGMは0サンプル、10msのBGMは480サンプル中418サンプルになった。上の追記の「時刻が連続になる」は、この隙間を見落としていた。
+- `NativeOutputRenderer` を使う2件のテストに、型と同じcfg条件がなかった。LinuxとIOProc無効のmacOSでテストがコンパイルできない状態だった。
+
+キューに隙間の判定を戻すと、許容幅の追加と削除の繰り返しになる。隙間そのものが生まれないように、`OutputFrameClock` が開始時刻と終了時刻の範囲を返すようにした。平滑値の更新は終了時刻へ反映し、次のバッファはそこから始まる。frameが連続している間、範囲に隙間も重なりもできないので、キューは状態を持たないままである。
+
+回帰テストは、隣接するバッファが境界を共有すること、隙間だった位置に置いた48サンプルと480サンプルのBGMが全サンプル出力されることを確認する。修正前の時刻計算へ戻すと両方失敗し、48サンプルのBGMは0サンプルになった。
+
+実機（2026-11-06 15:15～15:22 JST、条件は上の実機測定と同じ）の揺れp99は次のとおりで、短音はすべて再生した。
+
+| 出力 | 通常（60秒） | 60msの停止を4回（36秒） |
+|---|---:|---:|
+| WASAPI排他 | 0.04ms | 0.05ms |
+| WASAPI共有 | 2.4ms | 1.6ms |
+| ASIO 256 frames | 0.01ms | 0.02ms |
+
+停止は3backendとも4回すべて検出した。ASIOの通常の測定で、以前と同じくerror通知が1件あった。記録は `.local/latency-investigation/review-7b0c02d9-runs/` に保存した。cfgの修正はコードの確認によるもので、Linux・macOSのビルドは行っていない。
+
+fmt、workspace check、all-targets Clippy（`-D warnings`）、Windows release buildは成功した。workspaceテストは音声169件、gameplay262件、動画36件が成功し、失敗はmainの `c1e28a46` と同じ導入済みスキンの22件だけだった。この22件の原因は `2b7fbbce` がLR2の許可rootを入口の親だけにしたことで、Windows固有の問題ではない。上の「Windowsで失敗している可能性」は誤りだった。

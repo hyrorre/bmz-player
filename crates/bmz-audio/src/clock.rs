@@ -230,6 +230,21 @@ pub(crate) fn output_gap_tolerance(period: Duration) -> Duration {
     Duration::from_millis(20).max(period.saturating_mul(2))
 }
 
+/// The deadlines one output buffer stands for. Contiguous buffers share their
+/// boundary, so every deadline belongs to exactly one of them.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct OutputBufferTime {
+    pub start: Instant,
+    pub end: Instant,
+}
+
+#[cfg(test)]
+impl OutputBufferTime {
+    pub(crate) fn for_frames(start: Instant, frames: usize, rate: u32) -> Self {
+        Self { start, end: start + Duration::from_secs_f64(frames as f64 / f64::from(rate)) }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
