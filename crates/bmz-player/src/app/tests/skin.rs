@@ -1,6 +1,203 @@
 use super::*;
 
 #[test]
+fn invalid_continue_fallback_does_not_abort_result_skin_decode() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("skins");
+    std::fs::create_dir(&root).unwrap();
+    let entry = root.join("result.lr2skin");
+    std::fs::write(&entry, "#INFORMATION,7,Result,Test\n#RESOLUTION,0\n").unwrap();
+    let outside = temp.path().join("outside.lr2skin");
+    std::fs::write(&outside, "#INFORMATION,0,Outside,Test\n").unwrap();
+    let deleted = root.join("deleted.lr2skin");
+    std::fs::write(&deleted, "#INFORMATION,0,Deleted,Test\n").unwrap();
+    std::fs::remove_file(&deleted).unwrap();
+    for fallback in [deleted, outside] {
+        let mut pipeline = SkinPipelineRuntime::new();
+        let request = SkinDecodeRequest::new(
+            0,
+            entry.clone(),
+            SkinKind::Result,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Default::default(),
+        )
+        .with_library_roots(vec![root.clone()])
+        .with_lr2_continue_fallback(Some(Lr2ContinueFallback {
+            play_skin: fallback,
+            runtime_state: Default::default(),
+        }));
+        spawn_skin_decode(&pipeline, request);
+        let result =
+            pipeline.decode_rx.as_ref().unwrap().recv_timeout(Duration::from_secs(10)).unwrap();
+        pipeline.shutdown_workers();
+        assert_eq!(result.result.unwrap().document.name, "Result");
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn shared_resource_and_data_root_aliases_remain_authorized() {
+    let temp = tempfile::tempdir().unwrap();
+    let resource = temp.path().join("resource");
+    let data = temp.path().join("data");
+    std::fs::create_dir_all(data.join("skins")).unwrap();
+    std::fs::create_dir_all(&resource).unwrap();
+    std::os::unix::fs::symlink(data.join("skins"), resource.join("skins")).unwrap();
+    let paths = crate::paths::AppPaths::from_dirs(
+        resource.clone(),
+        data.clone(),
+        temp.path().join("cache"),
+        temp.path().join("logs"),
+    );
+    image::RgbaImage::from_pixel(1, 1, image::Rgba([255; 4]))
+        .save(data.join("skins/page.png"))
+        .unwrap();
+    let entry = resource.join("skins/select.json");
+    std::fs::write(
+        &entry,
+        serde_json::json!({
+            "type":5,"name":"Shared roots",
+            "source":[{"id":"page","path":resource.join("skins/page.png")}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let catalog = scan_skin_catalog(&paths);
+    assert_eq!(catalog.select.len(), 1);
+    assert_eq!(catalog.select[0].path, "resource:skins/select.json");
+    let skin = SkinConfig::default();
+    for path in [&entry, &data.join("skins/select.json")] {
+        assert!(paths.skin_path_context(&skin, path).is_ok());
+    }
+    let mut pipeline = SkinPipelineRuntime::new();
+    spawn_skin_decode(
+        &pipeline,
+        SkinDecodeRequest::new(
+            0,
+            entry,
+            SkinKind::Select,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Default::default(),
+        )
+        .with_skin_access(&paths, &skin),
+    );
+    let result =
+        pipeline.decode_rx.as_ref().unwrap().recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(result.result.unwrap().sources.len(), 1);
+    pipeline.shutdown_workers();
+}
+
+#[test]
+#[cfg(unix)]
+fn explicitly_authorized_alias_keeps_its_logical_request_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::from_dirs(
+        root.path().join("resource"),
+        root.path().join("data"),
+        root.path().join("cache"),
+        root.path().join("logs"),
+    );
+    let external = root.path().join("external");
+    std::fs::create_dir(&external).unwrap();
+    std::fs::write(external.join("select.lua"), "return {type=5,name='Authorized'}").unwrap();
+    let alias = root.path().join("selected.lua");
+    std::os::unix::fs::symlink(external.join("select.lua"), &alias).unwrap();
+    let mut skin = SkinConfig::default();
+    paths.approve_skin_path(&mut skin, &alias).unwrap();
+    let request = SkinDecodeRequest::new(
+        0,
+        alias.clone(),
+        SkinKind::Select,
+        BTreeMap::new(),
+        BTreeMap::new(),
+        Default::default(),
+    )
+    .with_skin_access(&paths, &skin);
+    assert_eq!(request.path, alias);
+    let mut pipeline = SkinPipelineRuntime::new();
+    spawn_skin_decode(&pipeline, request);
+    let result =
+        pipeline.decode_rx.as_ref().unwrap().recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(result.path, alias);
+    assert_eq!(result.result.unwrap().document.name, "Authorized");
+    pipeline.shutdown_workers();
+}
+
+#[test]
+#[cfg(unix)]
+fn skin_catalog_rejects_outside_entries_before_header_evaluation() {
+    let root = tempfile::tempdir().unwrap();
+    let library = root.path().join("skins");
+    let outside = root.path().join("outside");
+    std::fs::create_dir(&library).unwrap();
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(library.join("inside.json"), r#"{"type":5,"name":"Inside"}"#).unwrap();
+    for (name, content) in [
+        ("outside.luaskin", "error('OUTSIDE EVALUATED')"),
+        ("outside.json", "invalid json"),
+        ("outside.lr2skin", "#INFORMATION,5,Outside,Test\n"),
+    ] {
+        std::fs::write(outside.join(name), content).unwrap();
+        let link = library.join(name);
+        std::os::unix::fs::symlink(outside.join(name), &link).unwrap();
+        let error = read_skin_header_document(&link, std::slice::from_ref(&library)).unwrap_err();
+        assert!(error.to_string().contains("link escapes skin root"), "{error:#}");
+        assert!(!format!("{error:#}").contains("OUTSIDE EVALUATED"));
+    }
+    std::os::unix::fs::symlink(&outside, library.join("outside-dir")).unwrap();
+    std::os::unix::fs::symlink(library.join("inside.json"), library.join("alias.json")).unwrap();
+    let paths = crate::paths::AppPaths::from_dirs(
+        root.path().to_path_buf(),
+        root.path().to_path_buf(),
+        root.path().join("cache"),
+        root.path().join("logs"),
+    );
+    let catalog = scan_skin_catalog(&paths);
+    assert_eq!(catalog.select.len(), 1);
+    assert_eq!(catalog.select[0].path, "resource:skins/inside.json");
+    assert_eq!(catalog.select[0].name, "Inside");
+    std::fs::write(library.join("module.lua"), "return {type=5,name='Alias'}").unwrap();
+    std::os::unix::fs::symlink(library.join("module.lua"), library.join("select.luaskin")).unwrap();
+    let catalog = scan_skin_catalog(&paths);
+    assert_eq!(catalog.select.len(), 2);
+    assert!(
+        catalog.select.iter().any(|candidate| candidate.path == "resource:skins/select.luaskin")
+    );
+}
+
+#[test]
+fn access_change_detaches_caches_and_invalidates_inflight_generations() {
+    let mut pipeline = SkinPipelineRuntime::new();
+    let access = BTreeMap::from([(
+        "external.lua".into(),
+        crate::config::profile_config::SkinAccessGrant {
+            entry: "external.lua".into(),
+            roots: vec!["external".into()],
+        },
+    )]);
+    assert!(pipeline.update_access(&access));
+    let document = pipeline.document_cache.clone();
+    let source = pipeline.source_asset_cache.clone();
+    let font = pipeline.font_cache.clone();
+    let texture = pipeline.gpu_texture_cache.clone();
+    let before: Vec<_> = [SkinKind::Select, SkinKind::Decide, SkinKind::Play, SkinKind::Result]
+        .into_iter()
+        .map(|kind| (kind, pipeline.generation(kind)))
+        .collect();
+    assert!(!pipeline.update_access(&access));
+    assert!(pipeline.update_access(&BTreeMap::new()));
+    assert!(!Arc::ptr_eq(&document, &pipeline.document_cache));
+    assert!(!Arc::ptr_eq(&source, &pipeline.source_asset_cache));
+    assert!(!Arc::ptr_eq(&font, &pipeline.font_cache));
+    assert!(!Arc::ptr_eq(&texture, &pipeline.gpu_texture_cache));
+    for (kind, generation) in before {
+        assert_ne!(pipeline.generation(kind), generation);
+    }
+}
+
+#[test]
 fn frontend_lua_load_exposes_ir_connection_before_building_objects() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("frontend-ir.lua");

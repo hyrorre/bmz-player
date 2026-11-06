@@ -6,6 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 mod lua_patterns;
 #[path = "tests/lua_resource_limits.rs"]
 mod lua_resource_limits;
+#[path = "tests/path_boundaries.rs"]
+mod path_boundaries;
 
 /// A not-yet-created path inside a private `TempDir`. Drop removes the directory even when
 /// the test fails, so nothing is left in the shared temp root.

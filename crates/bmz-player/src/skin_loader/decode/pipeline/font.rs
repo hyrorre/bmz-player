@@ -72,7 +72,14 @@ pub(super) fn decode_skin_fonts(
     let decoded: Vec<(DecodedFont, FontCacheStatus)> = tasks
         .into_par_iter()
         .filter_map(|(stored_id, font_path, fallbacks)| {
-            decode_skin_font(stored_id, font_path, fallbacks, font_cache, installed_fonts)
+            decode_skin_font(
+                stored_id,
+                font_path,
+                fallbacks,
+                path_context?,
+                font_cache,
+                installed_fonts,
+            )
         })
         .collect();
     let decode_us = elapsed_us(started_at);
@@ -111,9 +118,7 @@ pub(super) fn decode_skin_fonts(
 }
 
 fn validate_bitmap_font_pages(context: &SkinPathContext, path: &Path) -> Result<()> {
-    for page in bmz_render::bitmap_font::bitmap_font_page_paths(path)? {
-        context.resolve_asset(&page.to_string_lossy())?;
-    }
+    bmz_render::bitmap_font::bitmap_font_page_paths_with_context(path, context)?;
     Ok(())
 }
 
@@ -130,10 +135,11 @@ fn decode_skin_font(
     stored_id: String,
     font_path: PathBuf,
     fallbacks: Vec<String>,
+    path_context: &SkinPathContext,
     font_cache: Option<&SharedSkinFontCache>,
     installed_fonts: Option<&HashMap<String, SkinFontCacheKey>>,
 ) -> Option<(DecodedFont, FontCacheStatus)> {
-    let cache_key = skin_font_cache_key(&font_path);
+    let cache_key = skin_font_cache_key_with_context(&font_path, path_context);
     if let (Some(installed_fonts), Some(cache_key)) = (installed_fonts, cache_key.as_ref())
         && installed_fonts.get(&stored_id) == Some(cache_key)
     {
@@ -149,7 +155,7 @@ fn decode_skin_font(
         ));
     }
     tracing::trace!(font_id = %stored_id, path = %font_path.display(), "skin font decode begin");
-    match decode_font_with_cache_key(&font_path, font_cache, cache_key) {
+    match decode_font_with_cache_key(&font_path, path_context, font_cache, cache_key) {
         Ok((data, status, cache_key)) => Some((
             DecodedFont { stored_id, path: font_path, data: Some(data), cache_key, fallbacks },
             status,

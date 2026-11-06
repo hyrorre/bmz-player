@@ -1,6 +1,10 @@
 pub(in crate::ui) struct SkinUiPathContext {
-    root: PathBuf,
     package: Option<bmz_skin::SkinPathContext>,
+}
+
+pub(in crate::ui) struct SkinUiAccess<'a> {
+    pub paths: &'a AppPaths,
+    pub grants: &'a BTreeMap<String, crate::config::profile_config::SkinAccessGrant>,
 }
 
 /// スキン設定 UI で使う package-aware path context のスロット別キャッシュ。
@@ -10,6 +14,8 @@ pub(in crate::ui) struct SkinUiPathContext {
 #[derive(Default)]
 pub(in crate::ui) struct SkinUiPathCache {
     entries: BTreeMap<&'static str, (String, Option<SkinUiPathContext>)>,
+    access: BTreeMap<String, crate::config::profile_config::SkinAccessGrant>,
+    roots: Vec<PathBuf>,
 }
 
 impl SkinUiPathCache {
@@ -22,12 +28,20 @@ impl SkinUiPathCache {
         slot: SkinSlot,
         app_paths: &AppPaths,
         skin_path: &str,
+        access: &BTreeMap<String, crate::config::profile_config::SkinAccessGrant>,
     ) -> Option<&SkinUiPathContext> {
+        // Compare configured names without canonicalizing roots every frame.
+        let roots = vec![app_paths.data_dir.join("skins"), app_paths.resource_dir.join("skins")];
+        if self.access != *access || self.roots != roots {
+            self.clear();
+            self.access.clone_from(access);
+            self.roots = roots;
+        }
         let key = slot.defs_header_id();
         let needs_refresh =
             self.entries.get(key).is_none_or(|(cached_path, _)| cached_path != skin_path);
         if needs_refresh {
-            let context = skin_root_path(app_paths, skin_path);
+            let context = skin_root_path(app_paths, skin_path, access);
             self.entries.insert(key, (skin_path.to_string(), context));
         }
         self.entries.get(key).and_then(|(_, context)| context.as_ref())
@@ -37,12 +51,12 @@ impl SkinUiPathCache {
 impl SkinUiPathContext {
     #[cfg(test)]
     pub(in crate::ui) fn legacy(root: &Path) -> Self {
-        Self { root: root.to_path_buf(), package: None }
+        Self { package: bmz_skin::SkinPathContext::for_directory(root).ok() }
     }
 
     #[cfg(test)]
-    pub(in crate::ui) fn package(root: &Path, package: bmz_skin::SkinPathContext) -> Self {
-        Self { root: root.to_path_buf(), package: Some(package) }
+    pub(in crate::ui) fn package(_root: &Path, package: bmz_skin::SkinPathContext) -> Self {
+        Self { package: Some(package) }
     }
 }
 
@@ -50,19 +64,16 @@ impl SkinUiPathContext {
 pub(in crate::ui) fn skin_root_path(
     app_paths: &AppPaths,
     skin_path: &str,
+    access: &BTreeMap<String, crate::config::profile_config::SkinAccessGrant>,
 ) -> Option<SkinUiPathContext> {
     let trimmed = skin_path.trim();
     if trimmed.is_empty() {
         return None;
     }
     let path = app_paths.resolve_path_ref(trimmed).ok()?;
-    let root = if path.is_dir() { path.clone() } else { path.parent()?.to_path_buf() };
-    let package = if is_lua_skin_path(&path) {
-        bmz_skin::SkinPathContext::new(&path, app_paths.skin_library_roots()).ok()
-    } else {
-        None
-    };
-    Some(SkinUiPathContext { root, package })
+    let context = app_paths.skin_path_context_with_access(access, &path).ok()?;
+    let package = Some(context);
+    Some(SkinUiPathContext { package })
 }
 
 pub(in crate::ui) fn glob_candidates_for_skin(
@@ -71,7 +82,7 @@ pub(in crate::ui) fn glob_candidates_for_skin(
 ) -> Vec<String> {
     match &context.package {
         Some(package) => package.wildcard_candidate_values(pattern).unwrap_or_default(),
-        None => glob_candidates(&context.root, pattern),
+        None => Vec::new(),
     }
 }
 
@@ -80,32 +91,11 @@ pub(in crate::ui) fn glob_candidates_for_skin(
 ///
 /// beatoraja の `path|filter|` 形式の `|...|` 接尾辞 (lanecover などの
 /// アセット用途タグ) は対象ファイル名には含まれないので、列挙前に取り除く。
+#[cfg(test)]
 pub(in crate::ui) fn glob_candidates(root: &Path, pattern: &str) -> Vec<String> {
-    let pattern = pattern.replace('\\', "/");
-    let pattern = pattern.split_once('|').map_or(pattern.as_str(), |(path, _)| path).to_string();
-    let (dir_part, name_part) = match pattern.rfind('/') {
-        Some(index) => (&pattern[..=index], &pattern[index + 1..]),
-        None => ("", pattern.as_str()),
-    };
-    let Some((prefix, suffix)) = name_part.split_once('*') else {
-        // ワイルドカード無し: パターンそのものを唯一の候補とする。
-        return vec![pattern.clone()];
-    };
-    let dir = root.join(dir_part);
-    let mut candidates = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.len() >= prefix.len() + suffix.len()
-                && name.starts_with(prefix)
-                && name.ends_with(suffix)
-            {
-                candidates.push(format!("{dir_part}{name}"));
-            }
-        }
-    }
-    candidates.sort();
-    candidates
+    bmz_skin::SkinPathContext::for_directory(root)
+        .and_then(|context| context.wildcard_candidate_values(pattern))
+        .unwrap_or_default()
 }
 
 pub(in crate::ui) fn normalize_filepath_selection(

@@ -1015,3 +1015,7 @@ settings-obs-command-incomplete = 請輸入場景名稱，並在需要時輸入�
 settings-downloads-keep-archive = 不解壓縮，直接登錄 HTTP 下載的壓縮檔
 settings-downloads-keep-archive-help = 直接儲存並播放 ZIP / RAR / 7z / tar.gz / LZH 壓縮檔。對新加入佇列的下載生效。IPFS 下載會解壓縮。
 downloads-state-validating = 正在檢查壓縮檔
+
+skin-external-allow = 允許此外部介面主題
+skin-external-revoke = 撤銷外部介面主題權限
+skin-external-allow-help = 允許此介面主題讀取其實際所在的資料夾。可在設定檔中加入共用資源資料夾。

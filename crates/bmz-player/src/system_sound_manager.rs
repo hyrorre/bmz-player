@@ -973,6 +973,7 @@ mod tests {
         }
         write_test_wav(&parent.join("course_clear.loop.wav"), 2);
         let selection = SoundSetSelection {
+            allowed_roots: Vec::new(),
             bgm_dir: Some(parent.clone()),
             bgm_variant_dir: Some(child.clone()),
             se_dir: Some(se.clone()),
@@ -1119,6 +1120,7 @@ mod tests {
         let select = root.join("select.wav");
         write_test_wav(&select, 48_000);
         let selection = SoundSetSelection {
+            allowed_roots: Vec::new(),
             bgm_dir: Some(root.clone()),
             bgm_variant_dir: None,
             se_dir: None,
@@ -1290,6 +1292,7 @@ mod tests {
         write_test_wav(&result_bgm_path, 48_000);
         write_test_wav(&se.join("clear.wav"), 48_000);
         let selection = SoundSetSelection {
+            allowed_roots: Vec::new(),
             bgm_dir: Some(bgm),
             bgm_variant_dir: None,
             se_dir: Some(se),
@@ -1340,6 +1343,7 @@ mod tests {
         let select = root.join("select.wav");
         write_test_wav_at_rate(&select, 2, 24_000);
         let selection = SoundSetSelection {
+            allowed_roots: Vec::new(),
             bgm_dir: Some(root.clone()),
             bgm_variant_dir: None,
             se_dir: None,
@@ -1387,6 +1391,7 @@ mod tests {
         write_test_wav(&default.join("a.wav"), 6);
         std::fs::write(bgm.join("fail.wav"), b"broken").unwrap();
         let selection = SoundSetSelection {
+            allowed_roots: Vec::new(),
             bgm_dir: Some(bgm),
             bgm_variant_dir: None,
             se_dir: Some(se),
@@ -1426,6 +1431,7 @@ mod tests {
         write_test_wav(&parent.join("aaa.wav"), 5);
         write_test_wav(&se.join("clear.wav"), 6);
         let selection = SoundSetSelection {
+            allowed_roots: Vec::new(),
             bgm_dir: Some(parent.clone()),
             bgm_variant_dir: Some(child.clone()),
             se_dir: Some(se),

@@ -389,10 +389,11 @@ impl WinitApp {
                     .app_paths
                     .resolve_path_ref(&path)
                     .and_then(|resolved| {
-                        read_skin_header_document(
-                            &resolved,
-                            &self.boot.app_paths.skin_library_roots(),
-                        )
+                        let context = self
+                            .boot
+                            .app_paths
+                            .skin_path_context(&self.boot.profile_config.skin, &resolved)?;
+                        read_skin_header_document_with_context(&context)
                     })
                     .map(|_| ())
                     .map_err(|error| format!("{error:#}"))

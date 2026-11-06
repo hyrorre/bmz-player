@@ -125,6 +125,7 @@ pub(super) fn fill_empty_lr2_continue_assets(
 /// Rendererへのinstallとscene固有のskin選択は `WinitApp` に残し、この型は
 /// pipelineのライフサイクルとstale結果判定に必要な状態だけを所有する。
 pub(super) struct SkinPipelineRuntime {
+    pub(super) external_access: BTreeMap<String, crate::config::profile_config::SkinAccessGrant>,
     pub(super) screen_size: [u32; 2],
     screen_requests: Mutex<HashMap<SkinKind, SkinDecodeRequest>>,
     screen_dependencies: Mutex<HashMap<SkinKind, (u64, bmz_skin::SkinLoadDependencies)>>,
@@ -153,6 +154,36 @@ pub(super) struct SkinPipelineRuntime {
 }
 
 impl SkinPipelineRuntime {
+    pub(super) fn update_access(
+        &mut self,
+        access: &BTreeMap<String, crate::config::profile_config::SkinAccessGrant>,
+    ) -> bool {
+        if self.external_access == *access {
+            return false;
+        }
+        self.external_access.clone_from(access);
+        for kind in [SkinKind::Select, SkinKind::Decide, SkinKind::Play, SkinKind::Result] {
+            self.bump_generation(kind);
+            self.set_pending(kind, false);
+        }
+        // Detach caches: in-flight workers retain only the old cache instances
+        // and their obsolete generations can no longer be installed.
+        self.document_cache = Arc::new(Mutex::new(SkinDocumentCache::default()));
+        self.source_asset_cache = Arc::new(Mutex::new(SkinSourceAssetCache::default()));
+        self.font_cache = Arc::new(Mutex::new(SkinFontCache::default()));
+        self.gpu_texture_cache = Arc::new(Mutex::new(SkinGpuTextureCache::default()));
+        self.installed_font_cache.clear();
+        self.lua_file_store = Default::default();
+        self.lr2_assets = Default::default();
+        self.result_source_selections.clear();
+        self.result_random_file_selections.clear();
+        self.result_load_dependencies = None;
+        self.result_refresh_generation = None;
+        self.screen_requests.get_mut().unwrap_or_else(|e| e.into_inner()).clear();
+        self.screen_dependencies.get_mut().unwrap_or_else(|e| e.into_inner()).clear();
+        self.load_errors.get_mut().unwrap_or_else(|e| e.into_inner()).clear();
+        true
+    }
     /// Freeze CONTINUE slots on entry so Result refreshes cannot inherit from
     /// their own replacement document. Course Result can follow a stage Result.
     pub(super) fn begin_lr2_result_entry(&mut self, course: bool, finished: bool) {
@@ -172,6 +203,7 @@ impl SkinPipelineRuntime {
         let (decode_tx, decode_rx) = mpsc::channel();
         let (upload_tx, upload_rx) = mpsc::sync_channel(MAX_PENDING_SKIN_UPLOADS);
         Self {
+            external_access: BTreeMap::new(),
             screen_size: [0, 0],
             screen_requests: Mutex::new(HashMap::new()),
             screen_dependencies: Mutex::new(HashMap::new()),

@@ -1014,3 +1014,7 @@ settings-obs-command-incomplete = 请输入场景名称，并在需要时输入�
 settings-downloads-keep-archive = 不解压，直接注册 HTTP 下载的压缩包
 settings-downloads-keep-archive-help = 直接保存并播放 ZIP / RAR / 7z / tar.gz / LZH 压缩包。对新加入队列的下载生效。IPFS 下载仍会解压。
 downloads-state-validating = 正在检查压缩包
+
+skin-external-allow = 允许此外部皮肤
+skin-external-revoke = 撤销外部皮肤权限
+skin-external-allow-help = 允许此皮肤读取其实际所在的文件夹。可在配置文件中添加共享资源文件夹。

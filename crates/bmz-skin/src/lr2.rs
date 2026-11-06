@@ -167,6 +167,7 @@ enum NoteSlot {
 }
 
 struct CsvBuilder<'a> {
+    path_context: crate::SkinPathContext,
     result_charts: Vec<JsonValue>,
     result_flip: bool,
     select: builder_select::SelectState,
@@ -294,12 +295,30 @@ pub(super) fn load_lr2_csv_skin_value_with_inherited_assets(
     runtime_options: &BTreeMap<i32, bool>,
     inherited_assets: &crate::Lr2ContinueAssets,
 ) -> Result<LoadedLuaSkinValue> {
+    let context = crate::SkinPathContext::for_entry(path)?;
+    load_lr2_csv_skin_value_with_path_context(
+        &context,
+        options,
+        files,
+        runtime_options,
+        inherited_assets,
+    )
+}
+
+pub(super) fn load_lr2_csv_skin_value_with_path_context(
+    context: &crate::SkinPathContext,
+    options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
+    runtime_options: &BTreeMap<i32, bool>,
+    inherited_assets: &crate::Lr2ContinueAssets,
+) -> Result<LoadedLuaSkinValue> {
+    let path = context.entry_file();
     tracing::debug!(path = %path.display(), "lr2 skin header load begin");
-    let LoadedHeader { mut header, mut dependencies } = load_header(path, options)?;
+    let LoadedHeader { mut header, mut dependencies } = load_header_with_context(context, options)?;
     tracing::debug!(path = %path.display(), "lr2 skin header load complete");
     apply_default_play_header_items(&mut header);
     apply_selected_header_options(&mut header, options);
-    let mut builder = CsvBuilder::new(path, header, files);
+    let mut builder = CsvBuilder::with_path_context(context, header, files);
     builder.inherited_assets = inherited_assets.clone();
     tracing::debug!(path = %path.display(), "lr2 skin command file read begin");
     let lines = read_csv_lines(path)?;
@@ -316,7 +335,7 @@ pub(super) fn load_lr2_csv_skin_value_with_inherited_assets(
     }
     if !builder.header.resolution_fixed {
         tracing::debug!(path = %path.display(), "lr2 skin resolution inference begin");
-        if let Some((w, h)) = builder.infer_lr2_resolution(&lines, path, &ops) {
+        if let Some((w, h)) = builder.infer_lr2_resolution(&lines, path, &ops)? {
             (builder.header.w, builder.header.h) = (w, h);
         }
         tracing::debug!(
@@ -366,7 +385,13 @@ pub struct Lr2SkinInfo {
 /// Reads only the header commands, for skin lists. The type and name are the ones a full
 /// load reports, but the skin body is not processed.
 pub fn load_lr2_csv_skin_info(path: &Path) -> Result<Lr2SkinInfo> {
-    let LoadedHeader { header, .. } = load_header(path, &BTreeMap::new())?;
+    load_lr2_csv_skin_info_with_context(&crate::SkinPathContext::for_entry(path)?)
+}
+
+pub fn load_lr2_csv_skin_info_with_context(
+    context: &crate::SkinPathContext,
+) -> Result<Lr2SkinInfo> {
+    let LoadedHeader { header, .. } = load_header_with_context(context, &BTreeMap::new())?;
     Ok(Lr2SkinInfo { skin_type: header.skin_type, name: header.name, author: header.author })
 }
 
@@ -388,6 +413,14 @@ pub fn load_lr2_csv_skin_dependency_option_values(
 }
 
 fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<LoadedHeader> {
+    load_header_with_context(&crate::SkinPathContext::for_entry(path)?, options)
+}
+
+fn load_header_with_context(
+    context: &crate::SkinPathContext,
+    options: &BTreeMap<String, String>,
+) -> Result<LoadedHeader> {
+    let path = context.entry_file();
     let mut header = Header::default();
     let lines = read_csv_lines(path)?;
     let mut processor = Processor::new(HashMap::new());
@@ -455,8 +488,11 @@ fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<Loaded
             }
             "CUSTOMFILE" => {
                 let name = field(line, 1).to_string();
-                let path =
-                    relative_to_skin_file_parent(path, &normalize_lr2_asset_path(field(line, 2)));
+                let path = relative_to_skin_directory(
+                    context,
+                    path.parent().unwrap(),
+                    &normalize_lr2_asset_path(field(line, 2)),
+                );
                 let default = field(line, 3).to_string();
                 if !name.is_empty() && !path.is_empty() {
                     header.files.push(CustomFile { name, path, default });

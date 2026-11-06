@@ -10,7 +10,7 @@ use bmz_audio::loader::SampleLoader;
 use bmz_audio::sample::DecodedSample;
 use bmz_core::lane::KeyMode;
 use bmz_render::assets::RgbaImageAsset;
-use bmz_render::bitmap_font::{BitmapFont, load_bitmap_font};
+use bmz_render::bitmap_font::BitmapFont;
 use bmz_render::plan::TextureId;
 use bmz_render::renderer::{GpuUploader, PreparedTexture, Renderer};
 use bmz_render::skin::{
@@ -20,8 +20,8 @@ use bmz_render::skin::{
     lua_main_state_number, lua_main_state_option, lua_main_state_timer,
 };
 use bmz_skin::{
-    LuaLoadRuntimeState, LuaMainState, LuaSkinRuntime, SkinKind as DecodeSkinKind,
-    SkinLoadDependencies, SkinLoadedFileDependency, SkinPathContext,
+    LuaLoadRuntimeState, LuaMainState, LuaSkinRuntime, SkinLoadDependencies,
+    SkinLoadedFileDependency, SkinPathContext,
 };
 use rayon::prelude::*;
 
@@ -310,7 +310,7 @@ pub use decode::{
     decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache, default_skin_root,
     default_skin_root_from_paths, is_decodable_skin_path, is_json_skin_path, is_lr2_skin_path,
     is_lua_skin_path, load_default_skin_into_renderer, load_default_skin_into_renderer_from_paths,
-    resolve_lr2_continue_assets,
+    resolve_lr2_continue_assets, resolve_lr2_continue_assets_with_context,
 };
 pub use install::{
     PreparedSource, SkinUploadStats, UploadedSkin, install_decoded_font, install_decoded_skin,

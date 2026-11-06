@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use bmz_skin_assets::SkinPathContext;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 pub fn load_json_value(path: &Path) -> Result<JsonValue> {
@@ -318,24 +319,34 @@ pub fn expand_json_skin_value(
     root_dir: &Path,
     enabled_options: &[i32],
 ) -> Result<JsonValue> {
-    expand_json_skin_value_inner(value, current_dir, root_dir, enabled_options, &mut Vec::new(), 0)
+    let context = SkinPathContext::for_directory(root_dir)?;
+    expand_json_skin_value_with_context(value, current_dir, &context, enabled_options)
+}
+
+pub fn expand_json_skin_value_with_context(
+    value: JsonValue,
+    current_dir: &Path,
+    context: &SkinPathContext,
+    enabled_options: &[i32],
+) -> Result<JsonValue> {
+    expand_json_skin_value_inner(value, current_dir, context, enabled_options, &mut Vec::new(), 0)
 }
 
 fn expand_include(
     include: &JsonValue,
     current_dir: &Path,
-    root_dir: &Path,
+    context: &SkinPathContext,
     enabled_options: &[i32],
     active: &mut Vec<PathBuf>,
     depth: usize,
 ) -> Result<JsonValue> {
-    let path = load_included_json(include, current_dir, root_dir)?;
+    let path = load_included_json_with_context(include, current_dir, context)?;
     anyhow::ensure!(!active.contains(&path), "cyclic skin json include: {}", path.display());
     active.push(path.clone());
     let result = expand_json_skin_value_inner(
         load_json_value(&path)?,
         path.parent().unwrap_or(current_dir),
-        root_dir,
+        context,
         enabled_options,
         active,
         depth + 1,
@@ -347,7 +358,7 @@ fn expand_include(
 fn expand_json_skin_value_inner(
     value: JsonValue,
     current_dir: &Path,
-    root_dir: &Path,
+    context: &SkinPathContext,
     enabled_options: &[i32],
     active: &mut Vec<PathBuf>,
     depth: usize,
@@ -362,7 +373,7 @@ fn expand_json_skin_value_inner(
                         let included_value = expand_include(
                             include,
                             current_dir,
-                            root_dir,
+                            context,
                             enabled_options,
                             active,
                             depth,
@@ -381,7 +392,7 @@ fn expand_json_skin_value_inner(
                                 expanded.push(expand_json_skin_value_inner(
                                     value.clone(),
                                     current_dir,
-                                    root_dir,
+                                    context,
                                     enabled_options,
                                     active,
                                     depth + 1,
@@ -391,7 +402,7 @@ fn expand_json_skin_value_inner(
                                 let values = expand_json_skin_value_inner(
                                     values.clone(),
                                     current_dir,
-                                    root_dir,
+                                    context,
                                     enabled_options,
                                     active,
                                     depth + 1,
@@ -408,7 +419,7 @@ fn expand_json_skin_value_inner(
                 expanded.push(expand_json_skin_value_inner(
                     item,
                     current_dir,
-                    root_dir,
+                    context,
                     enabled_options,
                     active,
                     depth + 1,
@@ -421,7 +432,7 @@ fn expand_json_skin_value_inner(
                 return expand_include(
                     include,
                     current_dir,
-                    root_dir,
+                    context,
                     enabled_options,
                     active,
                     depth,
@@ -432,7 +443,7 @@ fn expand_json_skin_value_inner(
                     expand_json_skin_value_inner(
                         object.remove("value").unwrap_or(JsonValue::Null),
                         current_dir,
-                        root_dir,
+                        context,
                         enabled_options,
                         active,
                         depth + 1,
@@ -448,7 +459,7 @@ fn expand_json_skin_value_inner(
                     expand_json_skin_value_inner(
                         value,
                         current_dir,
-                        root_dir,
+                        context,
                         enabled_options,
                         active,
                         depth + 1,
@@ -466,21 +477,21 @@ pub fn load_included_json(
     current_dir: &Path,
     root_dir: &Path,
 ) -> Result<PathBuf> {
+    load_included_json_with_context(
+        include,
+        current_dir,
+        &SkinPathContext::for_directory(root_dir)?,
+    )
+}
+
+fn load_included_json_with_context(
+    include: &JsonValue,
+    current_dir: &Path,
+    context: &SkinPathContext,
+) -> Result<PathBuf> {
     let include =
         include.as_str().ok_or_else(|| anyhow::anyhow!("skin json include must be a string"))?;
-    let path = current_dir.join(include);
-    let canonical_root = root_dir
-        .canonicalize()
-        .with_context(|| format!("failed to canonicalize skin root: {}", root_dir.display()))?;
-    let canonical_path = path
-        .canonicalize()
-        .with_context(|| format!("failed to canonicalize skin include: {}", path.display()))?;
-    anyhow::ensure!(
-        canonical_path.starts_with(&canonical_root),
-        "skin include escapes skin root: {}",
-        path.display()
-    );
-    Ok(canonical_path)
+    context.with_base_directory(current_dir)?.resolve_file(include)
 }
 
 pub fn test_json_option(option: Option<&JsonValue>, enabled_options: &[i32]) -> bool {

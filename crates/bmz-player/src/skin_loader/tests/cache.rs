@@ -225,7 +225,7 @@ fn result_refresh_pins_resolved_wildcard_source() {
             texture_cache: None,
             font_cache: None,
             installed_fonts: None,
-            library_roots: &[],
+            library_roots: std::slice::from_ref(&root),
         })
         .unwrap();
         assert_eq!(decoded.sources.len(), 1, "pinned background must resolve");
@@ -278,7 +278,7 @@ fn result_refresh_preserves_lua_random_file_selection_before_document_constructi
             texture_cache: None,
             font_cache: None,
             installed_fonts: None,
-            library_roots: &[],
+            library_roots: std::slice::from_ref(&root),
         })
         .unwrap()
     };

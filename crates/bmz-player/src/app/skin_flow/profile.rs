@@ -120,7 +120,8 @@ impl WinitApp {
         if let Some(defs) = self.skin.skin_defs_cache.get(&key) {
             return defs.clone();
         }
-        let defs = skin_defs_from_path(&self.boot.app_paths, &key.0, play);
+        let defs =
+            skin_defs_from_path(&self.boot.app_paths, &self.boot.profile_config.skin, &key.0, play);
         self.skin.skin_defs_cache.insert(key, defs.clone());
         defs
     }

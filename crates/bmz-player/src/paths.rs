@@ -4,6 +4,9 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use bmz_updater::manifest::PackageKind;
 
+#[path = "paths/skin_access.rs"]
+mod skin_access;
+
 pub const RESOURCE_PATH_PREFIX: &str = "resource:";
 pub const DATA_PATH_PREFIX: &str = "data:";
 
@@ -203,7 +206,10 @@ impl AppPaths {
     pub fn skin_library_roots(&self) -> Vec<PathBuf> {
         let data = self.data_dir.join("skins");
         let resource = self.resource_dir.join("skins");
-        if same_path(&data, &resource) { vec![data] } else { vec![data, resource] }
+        // Keep both explicitly configured names even when they resolve to the
+        // same directory. The policy deduplicates their real authority while
+        // retaining the aliases used by resource:/data: references.
+        if data == resource { vec![data] } else { vec![data, resource] }
     }
 
     /// OS フォントがなくても UI / スキン文字列を描画できるように同梱する Noto CJK の位置。

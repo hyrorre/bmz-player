@@ -1,6 +1,11 @@
 use super::*;
 
+const MAX_LR2_INCLUDE_DEPTH: usize = 64;
+const MAX_LR2_INCLUDE_FILES: usize = 4096;
+
 pub(super) struct Processor {
+    active_files: Vec<PathBuf>,
+    processed_files: usize,
     pub(super) ops: HashMap<i32, bool>,
     skin_type: Option<i32>,
     runtime_aliases: HashMap<i32, Lr2Condition>,
@@ -33,6 +38,30 @@ pub(super) struct IncludeState {
 }
 
 impl Processor {
+    pub(super) fn check_file(&self, path: &Path) -> Result<()> {
+        anyhow::ensure!(
+            !self.active_files.iter().any(|active| active == path),
+            "cyclic LR2 include: {}",
+            path.display()
+        );
+        anyhow::ensure!(
+            self.active_files.len() < MAX_LR2_INCLUDE_DEPTH
+                && self.processed_files < MAX_LR2_INCLUDE_FILES,
+            "LR2 include limit exceeded (64 levels / 4096 files)"
+        );
+        Ok(())
+    }
+
+    pub(super) fn enter_file(&mut self, path: &Path) -> Result<()> {
+        self.check_file(path)?;
+        self.active_files.push(path.to_path_buf());
+        self.processed_files += 1;
+        Ok(())
+    }
+
+    pub(super) fn leave_file(&mut self) {
+        self.active_files.pop();
+    }
     pub(super) fn begin_include_file(&mut self) -> IncludeState {
         // A deferred caller IF still gates the whole file: LR2 only reads the
         // included file when that IF matched. Child ENDIFs cannot consume this gate.
@@ -49,6 +78,8 @@ impl Processor {
     }
     pub(super) fn new(ops: HashMap<i32, bool>) -> Self {
         Self {
+            active_files: Vec::new(),
+            processed_files: 0,
             ops,
             skin_type: None,
             runtime_aliases: HashMap::new(),
@@ -65,6 +96,18 @@ impl Processor {
     }
 
     pub(super) fn process_lines(
+        &mut self,
+        lines: &[CsvLine],
+        current_path: &Path,
+        builder: &mut CsvBuilder,
+    ) -> Result<()> {
+        self.enter_file(current_path)?;
+        let result = self.process_lines_inner(lines, current_path, builder);
+        self.leave_file();
+        result
+    }
+
+    fn process_lines_inner(
         &mut self,
         lines: &[CsvLine],
         current_path: &Path,
@@ -110,24 +153,27 @@ impl Processor {
             }
             builder.apply_play_header_command(line);
             if line.command == "INCLUDE" {
-                let include = resolve_include_path(builder, current_path, field(line, 1));
-                if include.is_file() {
-                    builder.record_loaded_file_dependency(&include);
-                    let include_lines = read_csv_lines(&include)?;
-                    // LR2 keeps an IF stack per file. Keep SETOPTION and
-                    // SRC/DST state shared, but an unmatched child ENDIF must not
-                    // consume the parent's branch.
-                    let parent_stack = self.begin_include_file();
-                    let result = self.process_lines(&include_lines, &include, builder);
-                    self.end_include_file(parent_stack);
-                    result?;
-                } else {
-                    builder.warn(format!(
-                        "lr2 include not found: {} ({}: command {})",
-                        include.display(),
-                        current_path.display(),
-                        command_index + 1
-                    ));
+                match resolve_include_path(builder, current_path, field(line, 1))? {
+                    include::ResolvedInclude::File(include) => {
+                        self.check_file(&include)?;
+                        builder.record_loaded_file_dependency(&include);
+                        let include_lines = read_csv_lines(&include)?;
+                        // LR2 keeps an IF stack per file. Keep SETOPTION and
+                        // SRC/DST state shared, but an unmatched child ENDIF must not
+                        // consume the parent's branch.
+                        let parent_stack = self.begin_include_file();
+                        let result = self.process_lines(&include_lines, &include, builder);
+                        self.end_include_file(parent_stack);
+                        result?;
+                    }
+                    include::ResolvedInclude::Missing(include) => {
+                        builder.warn(format!(
+                            "lr2 include not found: {} ({}: command {})",
+                            include.display(),
+                            current_path.display(),
+                            command_index + 1
+                        ));
+                    }
                 }
                 continue;
             }

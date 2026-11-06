@@ -1,6 +1,15 @@
 use super::*;
 
-pub(super) fn resolve(builder: &mut CsvBuilder<'_>, current_path: &Path, raw: &str) -> PathBuf {
+pub(super) enum ResolvedInclude {
+    File(PathBuf),
+    Missing(PathBuf),
+}
+
+pub(super) fn resolve(
+    builder: &mut CsvBuilder<'_>,
+    current_path: &Path,
+    raw: &str,
+) -> Result<ResolvedInclude> {
     let cleaned = clean_lr2_asset_path(raw);
     let normalized = normalize_lr2_asset_path(raw);
     // CUSTOMFILE is authoritative before random wildcard selection.
@@ -18,7 +27,7 @@ pub(super) fn resolve(builder: &mut CsvBuilder<'_>, current_path: &Path, raw: &s
         if selected == normalized
             && let Some(path) = candidate(builder, themes.join(relative))
         {
-            return path;
+            return Ok(ResolvedInclude::File(path));
         }
     }
     for base in [
@@ -27,16 +36,28 @@ pub(super) fn resolve(builder: &mut CsvBuilder<'_>, current_path: &Path, raw: &s
         current_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf(),
     ] {
         if let Some(path) = candidate(builder, base.join(&selected)) {
-            return path;
+            return Ok(ResolvedInclude::File(path));
         }
     }
-    current_path.parent().unwrap_or_else(|| Path::new(".")).join(selected)
+    let missing = current_path.parent().unwrap_or_else(|| Path::new(".")).join(selected);
+    let policy = builder.path_context.policy();
+    if let Some(name) = missing.file_name()
+        && name.to_string_lossy().contains('*')
+    {
+        // Windows rejects '*' in metadata queries. Validate the parent chain
+        // and keep the pattern only for diagnostics. A literal '*' file on Unix
+        // must not be opened after candidate validation has rejected it.
+        let parent =
+            policy.resolve_or_missing(missing.parent().unwrap_or_else(|| Path::new(".")))?;
+        return Ok(ResolvedInclude::Missing(parent.join(name)));
+    }
+    policy.resolve_or_missing(&missing).map(ResolvedInclude::Missing)
 }
 
 fn candidate(builder: &mut CsvBuilder<'_>, pattern: PathBuf) -> Option<PathBuf> {
     let name = pattern.file_name()?.to_str()?;
     let Some((prefix, suffix)) = name.split_once('*') else {
-        return pattern.is_file().then_some(pattern);
+        return builder.path_context.policy().resolve(&pattern).ok().filter(|path| path.is_file());
     };
     if suffix.contains('*') {
         return None;
@@ -46,7 +67,8 @@ fn candidate(builder: &mut CsvBuilder<'_>, pattern: PathBuf) -> Option<PathBuf> 
     }
     let prefix = prefix.to_ascii_lowercase();
     let suffix = suffix.to_ascii_lowercase();
-    let mut matches = fs::read_dir(pattern.parent()?)
+    let directory = builder.path_context.policy().resolve(pattern.parent()?).ok()?;
+    let mut matches = fs::read_dir(directory)
         .ok()?
         .flatten()
         .filter(|entry| entry.path().is_file())
@@ -56,7 +78,7 @@ fn candidate(builder: &mut CsvBuilder<'_>, pattern: PathBuf) -> Option<PathBuf> 
                 && name.starts_with(&prefix)
                 && name.ends_with(&suffix)
         })
-        .map(|entry| entry.path())
+        .filter_map(|entry| builder.path_context.policy().resolve(&entry.path()).ok())
         .collect::<Vec<_>>();
     matches.sort();
     if matches.is_empty() {

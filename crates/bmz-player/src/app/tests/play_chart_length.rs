@@ -78,7 +78,8 @@ fn queue(pipeline: &SkinPipelineRuntime, path: &Path, generation: u64, chart: Pl
             Default::default(),
             runtime,
         )
-        .with_play_chart_state(Some(chart)),
+        .with_play_chart_state(Some(chart))
+        .with_library_roots(vec![path.parent().unwrap().to_path_buf()]),
     );
 }
 

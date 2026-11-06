@@ -18,7 +18,8 @@ pub fn apply_default_skin(renderer: &mut Renderer) -> Result<()> {
 pub fn apply_default_skin_from_paths(renderer: &mut Renderer, app_paths: &AppPaths) -> Result<()> {
     let manifest = load_default_skin_into_renderer_from_paths(renderer, app_paths)?;
     let skin_path = default_play_skin_document_path_from_paths(app_paths, KeyMode::K7);
-    let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play)?;
+    let context = SkinPathContext::new(&skin_path, app_paths.skin_library_roots())?;
+    let decoded = decode_configured_play_skin(&context)?;
     install_decoded_skin(renderer, decoded, manifest)
 }
 
@@ -35,13 +36,33 @@ pub fn apply_skin_from_config(
     }
     let path = app_paths.resolve_path_ref(play_skin_path)?;
     if is_decodable_skin_path(&path) {
-        apply_beatoraja_json_skin(renderer, &path)
+        let context = SkinPathContext::new(&path, app_paths.skin_library_roots())?;
+        let decoded = decode_configured_play_skin(&context)?;
+        let manifest = load_default_skin_into_renderer_from_paths(renderer, app_paths)?;
+        install_decoded_skin(renderer, decoded, manifest)
     } else {
         anyhow::bail!(
             "unsupported skin path (BMZ TOML skin directories are no longer supported): {}",
             path.display()
         )
     }
+}
+
+fn decode_configured_play_skin(context: &SkinPathContext) -> Result<DecodedSkin> {
+    decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+        skin_path: context.entry_file(),
+        kind: SkinKind::Play,
+        options: &BTreeMap::new(),
+        files: &BTreeMap::new(),
+        runtime_state: &LuaLoadRuntimeState::default(),
+        library_roots: &context.policy().root_paths(),
+        pinned_sources: None,
+        document_cache: None,
+        source_cache: None,
+        texture_cache: None,
+        font_cache: None,
+        installed_fonts: None,
+    })
 }
 
 pub fn apply_beatoraja_json_skin(renderer: &mut Renderer, skin_path: &Path) -> Result<()> {
@@ -73,15 +94,15 @@ pub(in crate::skin_loader) fn apply_beatoraja_json_skin_for_kind(
 /// デフォルトスキンの manifest と PNG テクスチャを renderer に取り込む。
 /// 起動時に 1 回だけ呼ばれることを想定 (同じテクスチャを複数回 upsert しても害は無いが無駄)。
 pub fn load_default_skin_into_renderer(renderer: &mut Renderer) -> Result<SkinManifest> {
-    let default_root = default_skin_root();
-    load_default_skin_root_into_renderer(renderer, &default_root)
+    load_default_skin_into_renderer_from_paths(renderer, &resolve_app_paths()?)
 }
 
 pub fn load_default_skin_into_renderer_from_paths(
     renderer: &mut Renderer,
     app_paths: &AppPaths,
 ) -> Result<SkinManifest> {
-    let default_root = default_skin_root_from_paths(app_paths);
+    let default_root = bmz_skin_assets::SkinPathPolicy::new(app_paths.skin_library_roots())?
+        .resolve(&default_skin_root_from_paths(app_paths))?;
     load_default_skin_root_into_renderer(renderer, &default_root)
 }
 
@@ -90,9 +111,11 @@ pub(in crate::skin_loader) fn load_default_skin_root_into_renderer(
     default_root: &Path,
 ) -> Result<SkinManifest> {
     let manifest = default_skin_manifest_for_root(default_root);
+    let policy = bmz_skin_assets::SkinPathPolicy::new([default_root.to_path_buf()])?;
 
     for texture in manifest.resolve_textures(default_root) {
-        renderer.load_png_texture(texture.id, &texture.path).with_context(|| {
+        let path = policy.resolve(&texture.path)?;
+        renderer.load_png_texture(texture.id, &path).with_context(|| {
             format!(
                 "failed to load default skin texture {}: {}",
                 texture.id.0,

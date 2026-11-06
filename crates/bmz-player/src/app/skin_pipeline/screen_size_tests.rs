@@ -108,8 +108,8 @@ fn screen_dimensions_retry_real_lua_after_zero_height_startup_failure() {
     use crate::app::spawn_skin_decode;
     use crate::bootstrap::profile_tests::ProfileTestDir;
     let data = ProfileTestDir::new();
-    std::fs::create_dir_all(&data.paths.data_dir).unwrap();
-    let path = data.paths.data_dir.join("size.lua");
+    std::fs::create_dir_all(data.paths.data_dir.join("skins/test")).unwrap();
+    let path = data.paths.data_dir.join("skins/test/size.lua");
     std::fs::write(
         &path,
         r#"

@@ -198,13 +198,46 @@ fn custom_include_selection_is_fixed_and_missing_glob_reports_its_command() {
     let root = unique_test_dir("bmz-lr2-custom-include");
     fs::create_dir_all(root.join("preset")).unwrap();
     let path = root.join("play.lr2skin");
-    fs::write(&path,"#INFORMATION,0,test,test\n#CUSTOMFILE,PRESET,preset/*.csv,A\n#INCLUDE,preset/*.csv\n#INCLUDE,missing-*.csv\n").unwrap();
     fs::write(root.join("preset/A.csv"), "#IMAGE,A.png\n").unwrap();
     fs::write(root.join("preset/B.csv"), "#IMAGE,B.png\n").unwrap();
     let files = BTreeMap::from([("PRESET".to_string(), "preset/B.csv".to_string())]);
-    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &files).unwrap();
-    assert_eq!(loaded.value["source"][0]["path"], "B.png");
-    assert!(!loaded.dependencies.opaque);
-    assert_eq!(loaded.warnings.len(), 1);
-    assert!(loaded.warnings[0].message.contains("play.lr2skin: command"));
+    for resolution in ["", "#RESOLUTION,0\n"] {
+        fs::write(&path, format!("#INFORMATION,0,test,test\n{resolution}#CUSTOMFILE,PRESET,preset/*.csv,A\n#INCLUDE,preset/*.csv\n#INCLUDE,missing-*.csv\n#INCLUDE,missing-dir/part-*.csv\n")).unwrap();
+        let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &files).unwrap();
+        assert_eq!(loaded.value["source"][0]["path"], "B.png");
+        assert!(!loaded.dependencies.opaque);
+        assert_eq!(loaded.warnings.len(), 2);
+        assert!(
+            loaded.warnings.iter().all(|warning| warning.message.contains("play.lr2skin: command"))
+        );
+        assert!(loaded.warnings[0].message.contains("missing-*.csv"));
+        assert!(loaded.warnings[1].message.contains("part-*.csv"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn unmatched_glob_cannot_read_a_literal_star_link_outside_the_root() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("skin");
+    fs::create_dir(&root).unwrap();
+    let outside = temp.path().join("private.csv");
+    fs::write(&outside, "#IMAGE,private.png\n").unwrap();
+    let pattern = root.join("part-*.csv");
+    std::os::unix::fs::symlink(&outside, &pattern).unwrap();
+    let entry = root.join("play.lr2skin");
+    for resolution in ["", "#RESOLUTION,0\n"] {
+        fs::write(&entry, format!("#INFORMATION,0,test,test\n{resolution}#INCLUDE,part-*.csv\n"))
+            .unwrap();
+        let loaded = load_lr2_csv_skin_value(&entry, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+        assert_eq!(loaded.warnings.len(), 1);
+        assert!(loaded.warnings[0].message.contains("part-*.csv"));
+        assert!(loaded.dependencies.loaded_files.is_empty());
+    }
+    // A validated match may itself have a literal star in its filename.
+    fs::remove_file(&pattern).unwrap();
+    fs::write(&pattern, "#IMAGE,public.png\n").unwrap();
+    let loaded = load_lr2_csv_skin_value(&entry, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    assert!(loaded.warnings.is_empty());
+    assert_eq!(loaded.value["source"][0]["path"], "public.png");
 }

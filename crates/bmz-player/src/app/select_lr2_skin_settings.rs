@@ -22,6 +22,12 @@ pub(super) struct Lr2SkinSettingsRuntime {
     cache: RefCell<Option<(SettingsKey, SceneSkinDefs, Lr2SkinSettingsSnapshot)>>,
 }
 
+impl Lr2SkinSettingsRuntime {
+    pub(super) fn clear_cache(&mut self) {
+        *self.cache.get_mut() = None;
+    }
+}
+
 impl WinitApp {
     /// The embedded skin settings of the active LR2 select skin.
     pub(super) fn lr2_skin_settings_snapshot(&self) -> Option<Lr2SkinSettingsSnapshot> {
@@ -52,7 +58,7 @@ impl WinitApp {
         if cache.as_ref().is_some_and(|(cached, ..)| *cached == key) {
             return;
         }
-        let defs = skin_defs_from_path(&self.boot.app_paths, &key.1, target.is_play());
+        let defs = skin_defs_from_path(&self.boot.app_paths, skin, &key.1, target.is_play());
         let items = lr2_skin_items(target, &defs, skin, &self.boot.app_paths)
             .into_iter()
             .map(|item| (item.name, item.value))

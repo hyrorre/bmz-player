@@ -19,7 +19,7 @@ pub use lua_keys::{
     lua_keyboard_pressed, lua_keyboard_state,
 };
 pub use path_context::SkinPathContext;
-pub use pm_chara::{LoadedPmChara, load_pm_chara};
+pub use pm_chara::{LoadedPmChara, load_pm_chara, load_pm_chara_with_context};
 pub use random_file::random_file_index;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -379,14 +379,28 @@ pub fn load_lr2_csv_skin_with_runtime_state(
     files: &BTreeMap<String, String>,
     runtime_state: &LuaLoadRuntimeState,
 ) -> Result<LoadedSkinDocument> {
-    let loaded = lr2::load_lr2_csv_skin_value_with_inherited_assets(
-        path,
+    load_lr2_csv_skin_with_path_context(
+        &SkinPathContext::for_entry(path)?,
+        options,
+        files,
+        runtime_state,
+    )
+}
+
+pub fn load_lr2_csv_skin_with_path_context(
+    context: &SkinPathContext,
+    options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
+    runtime_state: &LuaLoadRuntimeState,
+) -> Result<LoadedSkinDocument> {
+    let loaded = lr2::load_lr2_csv_skin_value_with_path_context(
+        context,
         options,
         files,
         &runtime_state.option_values,
         &runtime_state.lr2_continue_assets,
     )?;
-    decode_lr2_skin_value(path, loaded)
+    decode_lr2_skin_value(context.entry_file(), loaded)
 }
 
 fn decode_lr2_skin_value(path: &Path, loaded: LoadedLuaSkinValue) -> Result<LoadedSkinDocument> {
@@ -407,7 +421,7 @@ fn decode_lr2_skin_value(path: &Path, loaded: LoadedLuaSkinValue) -> Result<Load
     })
 }
 
-pub use lr2::{Lr2SkinInfo, load_lr2_csv_skin_info};
+pub use lr2::{Lr2SkinInfo, load_lr2_csv_skin_info, load_lr2_csv_skin_info_with_context};
 
 pub fn load_lr2_csv_skin_dependency_option_values(
     path: &Path,

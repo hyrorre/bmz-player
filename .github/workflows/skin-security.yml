@@ -34,6 +34,6 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
       - name: Check native integration and Rust code
-        run: cargo clippy -p bmz-skin --all-targets --locked -- -D warnings
+        run: cargo clippy -p bmz-skin -p bmz-skin-assets --all-targets --locked -- -D warnings
       - name: Run security and compatibility tests with pinned skin assets
-        run: cargo test -p bmz-skin --locked
+        run: cargo test -p bmz-skin -p bmz-skin-assets --locked

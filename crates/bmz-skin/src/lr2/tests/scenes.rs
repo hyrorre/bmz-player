@@ -6,7 +6,14 @@ fn lr2_result_uses_separate_player_number_and_rank_references() {
     fs::create_dir_all(&root).unwrap();
     let path = root.join("result.lr2skin");
     fs::write(&path, "#INFORMATION,7,test,test\n#IMAGE,a.png\n#SRC_NUMBER,0,0,0,0,100,10,10,1,0,0,121,0,4\n#DST_NUMBER,0,0,0,0,20,10,0,255,255,255,255,0,0,0,0,0,0,314\n").unwrap();
-    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let loaded = load_lr2_csv_skin_value_with_path_context(
+        &crate::SkinPathContext::new(&path, [root.to_path_buf()]).unwrap(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &crate::Lr2ContinueAssets::default(),
+    )
+    .unwrap();
     assert_eq!(loaded.value["value"][0]["ref"], bmz_skin_document::LR2_RESULT_NUMBER_BASE + 21);
     let destinations = loaded.value["destination"].as_array().unwrap();
     assert_eq!(destinations[0]["op"][0], bmz_skin_document::LR2_RESULT_RANK_BASE + 14);
@@ -21,14 +28,27 @@ fn lr2_scene_resolves_sibling_theme_assets_and_custom_files() {
     let path = root.join("Select/select.lr2skin");
     assert!(root.join("Decide/parts.png").is_file());
     assert!(bmz_skin_assets::is_file(&root.join("Decide/parts.png")));
-    assert_eq!(relative_to_skin_file_parent(&path, "Decide/parts.png"), "../Decide/parts.png");
     fs::write(&path, "#INFORMATION,5,test,test\n#CUSTOMFILE,Shared,LR2files/Theme/test/Decide/*.png,parts\n#IMAGE,LR2files/Theme/test/Decide/parts.png\n#IMAGE,LR2files/Theme/test/Decide/*.png\n").unwrap();
-    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let loaded = load_lr2_csv_skin_value_with_path_context(
+        &crate::SkinPathContext::new(&path, [root.to_path_buf()]).unwrap(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &crate::Lr2ContinueAssets::default(),
+    )
+    .unwrap();
     assert_eq!(loaded.value["source"][0]["path"], "../Decide/parts.png");
     assert_eq!(loaded.value["source"][1]["path"], "../Decide/parts.png");
     fs::write(root.join("Decide/custom.png"), []).unwrap();
     let selected = BTreeMap::from([("Shared".into(), "../Decide/custom.png".into())]);
-    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &selected).unwrap();
+    let loaded = load_lr2_csv_skin_value_with_path_context(
+        &crate::SkinPathContext::new(&path, [root.to_path_buf()]).unwrap(),
+        &BTreeMap::new(),
+        &selected,
+        &BTreeMap::new(),
+        &crate::Lr2ContinueAssets::default(),
+    )
+    .unwrap();
     assert_eq!(loaded.value["source"][1]["path"], "../Decide/custom.png");
 }
 
@@ -47,7 +67,14 @@ fn lr2_includes_preserve_explicit_sibling_theme_and_nested_dependencies() {
     fs::write(root.join("Current/setting/common.csv"), "#IMAGE,wrong-theme.png\n").unwrap();
     fs::write(root.join("Shared/setting/common.csv"), "#INCLUDE,nested.csv\n").unwrap();
     fs::write(root.join("Shared/setting/nested.csv"), "#IMAGE,shared.png\n").unwrap();
-    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let loaded = load_lr2_csv_skin_value_with_path_context(
+        &crate::SkinPathContext::new(&path, [root.to_path_buf()]).unwrap(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &crate::Lr2ContinueAssets::default(),
+    )
+    .unwrap();
     assert_eq!(loaded.value["source"][0]["path"], "shared.png");
     for relative in ["Shared/setting/common.csv", "Shared/setting/nested.csv"] {
         assert!(loaded.dependencies.loaded_files.keys().any(|path| path.ends_with(relative)));
@@ -65,7 +92,14 @@ fn lr2_red_belt_loads_shared_settings_when_available() {
         eprintln!("SKIP missing RED_BELT or OA_DX+ settings");
         return;
     }
-    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let loaded = load_lr2_csv_skin_value_with_path_context(
+        &crate::SkinPathContext::new(&path, [root.to_path_buf()]).unwrap(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &crate::Lr2ContinueAssets::default(),
+    )
+    .unwrap();
     for name in ["yellow_gauge_setting.csv", "ghost_battle_setting.csv"] {
         assert!(
             loaded
@@ -105,7 +139,14 @@ fn lr2_3r_stray_quotes_resolve_existing_play_images_when_available() {
             eprintln!("SKIP missing {}", path.display());
             continue;
         }
-        let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+        let loaded = load_lr2_csv_skin_value_with_path_context(
+            &crate::SkinPathContext::new(&path, [root.to_path_buf()]).unwrap(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &crate::Lr2ContinueAssets::default(),
+        )
+        .unwrap();
         for part in [
             "parts/judgeline/RED.png",
             "parts/beam/DEF.png",
@@ -225,7 +266,14 @@ fn lr2_bar_sources_are_indexed_and_children_use_local_coordinates() {
     fs::create_dir_all(&root).unwrap();
     let path = root.join("select.lr2skin");
     fs::write(&path, "#INFORMATION,5,test,test\n#IMAGE,a.png\n#FONT,20,1,0\n#SRC_BAR_BODY,0,0,0,0,100,30,1,1,0,0\n#SRC_BAR_BODY,1,0,0,30,100,30,1,1,0,0\n#DST_BAR_BODY_OFF,0,0,100,200,100,30,0,255,255,255,255,0,0,0,0,0,0\n#DST_BAR_BODY_ON,0,0,100,200,100,30,0,255,255,255,255,0,0,0,0,0,0\n#SRC_BAR_TITLE,0,0,0,0\n#DST_BAR_TITLE,0,0,10,5,90,20,0,255,255,255,255,0,0,0,0,0,0\n#BAR_CENTER,0\n#BAR_AVAILABLE,0,0\n").unwrap();
-    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let loaded = load_lr2_csv_skin_value_with_path_context(
+        &crate::SkinPathContext::new(&path, [root.to_path_buf()]).unwrap(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &crate::Lr2ContinueAssets::default(),
+    )
+    .unwrap();
     assert_eq!(loaded.value["songlist"]["listoff"][0]["dst"][0]["y"], 250);
     assert_eq!(loaded.value["songlist"]["text"][0]["dst"][0]["y"], -25);
     assert_eq!(loaded.value["songlist"]["clickable"], json!([0]));
@@ -244,7 +292,14 @@ fn lr2_bar_sources_preserve_course_and_random_course_bodies() {
     }
     csv.push_str("#DST_BAR_BODY_OFF,0,0,100,200,100,30\n");
     fs::write(&path, csv).unwrap();
-    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let loaded = load_lr2_csv_skin_value_with_path_context(
+        &crate::SkinPathContext::new(&path, [root.to_path_buf()]).unwrap(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &crate::Lr2ContinueAssets::default(),
+    )
+    .unwrap();
     let bodies = loaded.value["imageset"][0]["images"].as_array().unwrap();
     assert_eq!(bodies.len(), 10);
     for (index, body) in bodies.iter().enumerate() {
@@ -277,7 +332,14 @@ fn lr2_bar_new_title_and_rival_sources_keep_distinct_slots() {
         ));
     }
     fs::write(&path, csv).unwrap();
-    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let loaded = load_lr2_csv_skin_value_with_path_context(
+        &crate::SkinPathContext::new(&path, [root.to_path_buf()]).unwrap(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &crate::Lr2ContinueAssets::default(),
+    )
+    .unwrap();
     let titles = loaded.value["songlist"]["text"].as_array().unwrap();
     assert_eq!(titles.len(), 2);
     assert_ne!(titles[0]["id"], titles[1]["id"]);
@@ -307,7 +369,14 @@ fn lr2_bar_title_ignores_reserved_options_but_preserves_if_conditions() {
          #DST_BAR_TITLE,0,100,20,5,90,20,0,255,255,255,255,0,0,0,0,0,0\n#ENDIF\n",
     )
     .unwrap();
-    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let loaded = load_lr2_csv_skin_value_with_path_context(
+        &crate::SkinPathContext::new(&path, [root.to_path_buf()]).unwrap(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &crate::Lr2ContinueAssets::default(),
+    )
+    .unwrap();
     let title = &loaded.value["songlist"]["text"][0];
     assert_eq!(title["op"], json!([32]));
     assert_eq!(title["dst"].as_array().unwrap().len(), 2);
@@ -347,7 +416,14 @@ fn lr2_bar_level_with_undefined_image_keeps_earlier_number_reference() {
          #SRC_BAR_LEVEL,0,9,0,0,110,20,11,1,0,0,0,0,2\n",
     )
     .unwrap();
-    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let loaded = load_lr2_csv_skin_value_with_path_context(
+        &crate::SkinPathContext::new(&path, [root.to_path_buf()]).unwrap(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &crate::Lr2ContinueAssets::default(),
+    )
+    .unwrap();
     let values = loaded.value["value"].as_array().unwrap();
     assert_eq!(values.len(), 1);
     assert_eq!(values[0]["ref"], 71);
