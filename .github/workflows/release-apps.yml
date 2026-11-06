@@ -663,7 +663,7 @@ jobs:
 
   build-linux-tar:
     name: Build Linux tar x64
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     needs: metadata
     timeout-minutes: 120
     env:
