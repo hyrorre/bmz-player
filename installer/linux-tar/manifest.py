@@ -68,7 +68,8 @@ def create(runtime, source):
     check_snapshot(source, snapshot)
     ffmpeg = (source / "ffmpeg/configure.txt").read_text()
     manifest = {
-        "schema": 1, "version": version(source),
+        "schema": 2, "version": version(source),
+        "glibc_baseline": "2.28",
         "commit": (source / "BUILD-COMMIT").read_text().strip(),
         "submodules": [dict(commit=line.split()[0], path=line.split()[1])
                        for line in (source / "BUILD-SUBMODULES").read_text().splitlines()],
@@ -81,14 +82,18 @@ def create(runtime, source):
         "toolchain": {tool: command(*args) for tool, args in {
             "rust": ["rustc", "-Vv"], "cargo": ["cargo", "-V"],
             "cc": ["cc", "--version"], "cxx": ["c++", "--version"],
-            "glibc": ["ldd", "--version"]}.items()},
+            "glibc": ["ldd", "--version"], "python": ["python3", "--version"],
+            "meson": ["meson", "--version"], "ninja": ["ninja", "--version"],
+            "nasm": ["nasm", "-v"], "clang": ["clang", "--version"]}.items()},
         "os_release": Path("/etc/os-release").read_text(),
         "build_image": os.environ["BMZ_BUILD_IMAGE_ID"],
         "ffmpeg": {"version": re.search(r"ffmpeg-([0-9.]+)\.tar", ffmpeg)[1],
                    "url": ffmpeg.splitlines()[0].split("=", 1)[1],
                    "sha256": ffmpeg.splitlines()[1].split("=", 1)[1],
                    "configure": ffmpeg.splitlines()[2]},
-        "ubuntu": json.loads((runtime / "resources/licenses/ubuntu/packages.json").read_text()),
+        "rpm": json.loads((runtime / "resources/licenses/rpm/packages.json").read_text()),
+        "custom_libraries": json.loads((runtime / "resources/licenses/rpm/custom-libraries.json").read_text()),
+        "srpms": json.loads((source / "srpms.json").read_text()),
         "snapshot": snapshot,
         "files": {"runtime": inventory(runtime), "sources": inventory(source)},
     }
@@ -101,7 +106,7 @@ def check_pair(runtime, source):
     manifest = json.loads((source / "build-manifest.json").read_text())
     if (runtime / "build-manifest.json").read_bytes() != (source / "build-manifest.json").read_bytes():
         raise ValueError("Runtime/source manifests do not match")
-    if manifest["schema"] != 1 or not re.fullmatch(r"[0-9a-f]{40}", manifest["commit"]):
+    if manifest["schema"] != 2 or manifest["glibc_baseline"] != "2.28" or not re.fullmatch(r"[0-9a-f]{40}", manifest["commit"]):
         raise ValueError("Invalid build identity")
     for kind, root in (("runtime", runtime), ("sources", source)):
         check_inventory(root, manifest["files"][kind])
@@ -124,8 +129,26 @@ def check_pair(runtime, source):
     pipewire_sha = pipewire.splitlines()[1].split("=", 1)[1]
     if sha256(source / "pipewire" / f"pipewire-{pipewire_version}.tar.bz2") != pipewire_sha:
         raise ValueError("PipeWire source mismatch")
-    if json.loads((runtime / "resources/licenses/ubuntu/packages.json").read_text()) != manifest["ubuntu"]:
-        raise ValueError("Ubuntu manifest mismatch")
+    if json.loads((runtime / "resources/licenses/rpm/packages.json").read_text()) != manifest["rpm"]:
+        raise ValueError("RPM manifest mismatch")
+    if json.loads((runtime / "resources/licenses/rpm/custom-libraries.json").read_text()) != manifest["custom_libraries"]:
+        raise ValueError("Custom library source mapping mismatch")
+    for name, origin in manifest["custom_libraries"].items():
+        if name not in manifest["files"]["runtime"] or origin not in ("ffmpeg", "pipewire"):
+            raise ValueError("Invalid custom library source mapping")
+    if json.loads((source / "srpms.json").read_text()) != manifest["srpms"]:
+        raise ValueError("SRPM manifest mismatch")
+    expected = {p["rpm"]["sourcerpm"] for p in manifest["rpm"]}
+    records = manifest["srpms"]
+    if len(records) != len(expected) or {p["filename"] for p in records} != expected:
+        raise ValueError("Missing/duplicate SRPM mapping")
+    if {p.name for p in (source / "srpms").glob("*")} != expected:
+        raise ValueError("Unexpected/missing SRPM files")
+    for record in records:
+        if Path(record["filename"]).name != record["filename"]:
+            raise ValueError("Unsafe SRPM filename")
+        if sha256(source / "srpms" / record["filename"]) != record["sha256"]:
+            raise ValueError("SRPM checksum mismatch")
     return manifest
 
 

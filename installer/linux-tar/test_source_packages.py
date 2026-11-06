@@ -1,19 +1,19 @@
-"""Checks for exact Ubuntu source selection and failure diagnostics."""
+"""RPM ownership, exact acquisition and offline SRPM rejection controls."""
 
-import contextlib
-import io
+import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from source_packages import download_sources
+from manifest import sha256
+from source_packages import check_srpm, copy_notices, download_sources, header, nevra, rpm_owner
 
-
-def library(name, binary, binary_version, source, source_version):
-    return dict(library=name, binary_package=binary, binary_version=binary_version,
-                source_package=source, source_version=source_version)
+spec = importlib.util.spec_from_file_location("verify_sources", Path(__file__).with_name("verify-sources.py"))
+verify_sources = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(verify_sources)
 
 
 class SourcePackageTests(unittest.TestCase):
@@ -21,53 +21,136 @@ class SourcePackageTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.one = library("libudev.so.1", "libudev1:amd64", "1.2", "systemd", "1.2")
-        self.two = library("libsystemd.so.0", "libsystemd0:amd64", "1.2", "systemd", "1.2")
+        self.owner = dict(name="systemd-libs", epoch="0", version="239", release="82.el8",
+                          arch="x86_64", sourcerpm="systemd-239-82.el8.src.rpm")
+        self.one = dict(library="libudev.so.1", rpm=self.owner)
+        self.two = dict(library="libsystemd.so.0", rpm=self.owner)
+        self.source_header = dict(self.owner, name="systemd", sourcerpm="(none)")
+        self.url = "https://repo.example/" + self.owner["sourcerpm"]
 
-    @patch("source_packages.subprocess.run")
-    def test_one_exact_download_for_shared_source(self, run):
-        log = io.StringIO()
-        with contextlib.redirect_stdout(log):
-            download_sources([self.one, self.two], self.root)
-        run.assert_called_once_with(
-            ["apt-get", "source", "--download-only", "systemd=1.2"],
-            cwd=self.root / "ubuntu" / "systemd", check=True,
-        )
-        self.assertIn("libudev.so.1: libudev1:amd64=1.2 -> systemd=1.2", log.getvalue())
-        self.assertIn("libsystemd.so.0: libsystemd0:amd64=1.2 -> systemd=1.2", log.getvalue())
+    def download(self, packages=None, location=None):
+        def fetch(args, **kwargs):
+            if args[0] == "curl":
+                Path(args[-1]).write_bytes(b"source rpm")
+        with patch("source_packages.output", return_value=location or self.url) as query, \
+                patch("source_packages.subprocess.run", side_effect=fetch) as run, \
+                patch("source_packages.check_srpm", return_value=self.source_header) as check:
+            records = download_sources(packages or [self.one, self.two], self.root)
+        return records, query, run, check
 
-    @patch("source_packages.subprocess.run")
-    def test_unavailable_source_fails_with_all_owners_and_no_fallback(self, run):
-        run.side_effect = subprocess.CalledProcessError(100, ["apt-get"])
-        with self.assertRaises(RuntimeError) as caught:
-            download_sources([self.one, self.two], self.root)
-        message = str(caught.exception)
-        for expected in ("systemd=1.2", "libudev.so.1", "libudev1:amd64=1.2",
-                         "libsystemd.so.0", "libsystemd0:amd64=1.2", "100"):
-            self.assertIn(expected, message)
+    def test_one_exact_download_for_shared_source(self):
+        records, query, run, check = self.download()
+        self.assertEqual(len(records), 1)
+        query.assert_called_once_with("dnf", "-q", "--showduplicates", "repoquery", "--enablerepo=*-source",
+                                      "--arch=src", "--location", "systemd-239-82.el8")
         self.assertEqual(run.call_count, 1)
-        self.assertIsInstance(caught.exception.__cause__, subprocess.CalledProcessError)
+        self.assertEqual(records[0]["url"], self.url)
+        self.assertEqual(records[0]["sha256"], sha256(self.root / "srpms" / self.owner["sourcerpm"]))
+        self.assertEqual(len(check.call_args.args[1]), 2)
 
-    @patch("source_packages.subprocess.run")
-    def test_spawn_error_reports_source_and_preserves_cause(self, run):
-        run.side_effect = OSError("network helper unavailable")
-        with self.assertRaises(RuntimeError) as caught:
-            download_sources([self.one], self.root)
-        self.assertIn("systemd=1.2", str(caught.exception))
-        self.assertIn("network helper unavailable", str(caught.exception))
+    def test_newer_version_is_never_a_fallback(self):
+        with self.assertRaisesRegex(RuntimeError, "Exact SRPM unavailable"):
+            self.download(location="https://repo.example/systemd-239-99.el8.src.rpm")
+
+    def test_official_vault_uses_https(self):
+        location = "http://vault.almalinux.org/8.10/BaseOS/Source/Packages/" + self.owner["sourcerpm"]
+        records, _, run, _ = self.download(location=location)
+        url = "https" + location.removeprefix("http")
+        self.assertEqual(records[0]["url"], url)
+        self.assertIn(url, run.call_args.args[0])
+        self.assertIn("=https", run.call_args.args[0])
+
+    def test_other_http_source_is_rejected(self):
+        with self.assertRaisesRegex(RuntimeError, "Exact SRPM unavailable"):
+            self.download(location="http://repo.example/" + self.owner["sourcerpm"])
+
+    def test_unavailable_source_fails_with_owners(self):
+        with patch("source_packages.output", return_value=self.url), \
+                patch("source_packages.subprocess.run", side_effect=OSError("offline")):
+            with self.assertRaisesRegex(RuntimeError, "systemd-239-82.el8.src.rpm") as caught:
+                download_sources([self.one, self.two], self.root)
+        self.assertIn("systemd-libs", str(caught.exception))
         self.assertIsInstance(caught.exception.__cause__, OSError)
 
-    @patch("source_packages.subprocess.run")
-    def test_multiple_versions_fail_before_any_download(self, run):
-        older = library("libsystemd.so.0", "libsystemd0:amd64", "1.1", "systemd", "1.1")
-        unrelated = library("libother.so", "other:amd64", "2", "other", "2")
-        with self.assertRaises(ValueError) as caught:
-            download_sources([unrelated, self.one, older], self.root)
-        message = str(caught.exception)
-        for expected in ("Multiple versions of Ubuntu source systemd", "libudev.so.1",
-                         "libudev1:amd64=1.2", "libsystemd.so.0", "libsystemd0:amd64=1.1"):
-            self.assertIn(expected, message)
+    def test_owner_queries_real_file_and_lib64_alias(self):
+        text = "systemd-libs\t0\t239\t82.el8\tx86_64\tsystemd-239-82.el8.src.rpm\n"
+        with patch("source_packages.os.path.realpath", return_value="/usr/lib64/libudev.so.1.6.11"), \
+                patch("source_packages.subprocess.run", side_effect=[
+                    subprocess.CompletedProcess([], 1, "", ""),
+                    subprocess.CompletedProcess([], 0, text, "")]) as run:
+            self.assertEqual(rpm_owner("/lib64/libudev.so.1"), self.owner)
+        self.assertEqual(run.call_args.args[0][-1], "/lib64/libudev.so.1.6.11")
+
+    def test_unknown_or_ambiguous_owner_fails(self):
+        with patch("source_packages.subprocess.run", return_value=subprocess.CompletedProcess([], 1, "", "")):
+            with self.assertRaisesRegex(ValueError, "No RPM owner"):
+                rpm_owner("/lib64/libmissing.so")
+        with self.assertRaises(ValueError):
+            header("one\ntwo")
+
+    def test_license_in_docfiles_is_restored_and_copied(self):
+        owner = dict(name="lz4-libs", epoch="0", version="1.8.3", release="5.el8_10",
+                     arch="x86_64", sourcerpm="lz4-1.8.3-5.el8_10.src.rpm")
+        license_file = self.root / "usr/share/doc/lz4-libs/LICENSE"
+        destination = self.root / "notices"
+
+        def reinstall(*args, **kwargs):
+            license_file.parent.mkdir(parents=True)
+            license_file.write_text("license text\n")
+
+        with patch("source_packages.output", side_effect=["", str(license_file)]), \
+                patch("source_packages.subprocess.run", side_effect=reinstall) as run:
+            copy_notices(owner, destination)
+
+        package = nevra(owner)
+        run.assert_called_once_with(["dnf", "-y", "--setopt=tsflags=", "reinstall", package], check=True)
+        copied = destination / package / license_file.relative_to("/")
+        self.assertEqual(copied.read_bytes(), license_file.read_bytes())
+
+    def test_unrelated_doc_does_not_replace_license(self):
+        with patch("source_packages.output", side_effect=["", "/usr/share/doc/lz4-libs/README"]), \
+                patch("source_packages.subprocess.run") as run:
+            with self.assertRaisesRegex(ValueError, "No RPM license files"):
+                copy_notices(self.owner, self.root / "notices")
         run.assert_not_called()
+
+    def test_wrong_header_and_corruption_are_rejected(self):
+        path = self.root / self.owner["sourcerpm"]
+        path.write_bytes(b"source rpm")
+        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+            check_srpm(path, [self.owner], "0" * 64)
+        with patch("source_packages.subprocess.run") as run, \
+                patch("source_packages.output", return_value="systemd\t0\t239\t99.el8\tsrc\t(none)"):
+            with self.assertRaisesRegex(ValueError, "Wrong SRPM"):
+                check_srpm(path, [self.owner])
+            self.assertEqual(run.call_count, 1)
+        with patch("source_packages.subprocess.run", side_effect=subprocess.CalledProcessError(1, ["rpm"])):
+            with self.assertRaises(subprocess.CalledProcessError):
+                check_srpm(path, [self.owner], sha256(path))
+
+    def test_missing_duplicate_mismatched_and_damaged_sources(self):
+        filename = self.owner["sourcerpm"]
+        (self.root / "srpms").mkdir()
+        path = self.root / "srpms" / filename
+        path.write_bytes(b"source rpm")
+        record = dict(filename=filename, sha256=sha256(path), url=self.url, header=self.source_header)
+        manifest = dict(rpm=[self.one, self.two], srpms=[record])
+        (self.root / "srpms.json").write_text(json.dumps([record]))
+        with patch.object(verify_sources, "check_srpm", return_value=self.source_header) as check:
+            verify_sources.check_sources(self.root, manifest)
+            self.assertEqual(check.call_count, 1)
+        with self.assertRaisesRegex(ValueError, "Missing/duplicate"):
+            verify_sources.check_sources(self.root, dict(manifest, srpms=[record, record]))
+        path.unlink()
+        with self.assertRaisesRegex(ValueError, "Missing/unexpected"):
+            verify_sources.check_sources(self.root, manifest)
+        path.write_bytes(b"corrupt")
+        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+            verify_sources.check_sources(self.root, manifest)
+        path.write_bytes(b"source rpm")
+        with patch.object(verify_sources, "check_srpm", return_value=dict(self.source_header, epoch="1")):
+            with self.assertRaisesRegex(ValueError, "header manifest mismatch"):
+                verify_sources.check_sources(self.root, manifest)
 
 
 if __name__ == "__main__":

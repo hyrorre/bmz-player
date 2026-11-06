@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a private client library on the existing Ubuntu 22.04 baseline.
+# Build a private client library on the AlmaLinux 8.10 / glibc 2.28 baseline.
 # Never install it into the host, start a server, or ship service/udev/PAM files.
 set -euo pipefail
 version=1.4.9
