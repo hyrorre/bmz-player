@@ -1,4 +1,4 @@
-"""Bundle the ELF dependency closure, with Ubuntu notices and exact source packages."""
+"""Bundle the ELF dependency closure with RPM notices and exact SRPMs."""
 
 import os
 import json
@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import sys
 
-from source_packages import download_sources
+from source_packages import copy_notices, download_sources, nevra, rpm_owner
 
 
 def output(*args):
@@ -28,11 +28,13 @@ for plugin in plugins:
     subprocess.run(["patchelf", "--set-rpath", "$ORIGIN/" + relative, str(plugin)], check=True)
 if "not found" in listing:
     raise RuntimeError(listing)
-notices = package / "resources/licenses/ubuntu"
+notices = package / "resources/licenses/rpm"
 notices.mkdir()
-shutil.copytree("/usr/share/common-licenses", notices / "common-licenses")
 provenance = []
 packages = []
+custom = {}
+for plugin in plugins:
+    custom[plugin.relative_to(package).as_posix()] = "pipewire"
 seen = set()
 for line in listing.splitlines():
     match = re.match(r"\s*(\S+) => (/\S+)", line)
@@ -48,31 +50,19 @@ for line in listing.splitlines():
     subprocess.run(["patchelf", "--set-rpath", "$ORIGIN", str(package / "lib" / name)], check=True)
     if library.startswith("/opt/ffmpeg/"):
         provenance.append(f"{name}\tFFmpeg (see ffmpeg-build.txt)")
+        custom["lib/" + name] = "ffmpeg"
         continue
     if library.startswith("/opt/pipewire/"):
         provenance.append(f"{name}\tPipeWire client (see pipewire-build.txt)")
+        custom["lib/" + name] = "pipewire"
         continue
-    # dpkg may record the pre-usrmerge spelling of a library path.
-    candidates = [library, os.path.realpath(library)]
-    candidates += [p.removeprefix("/usr") for p in candidates if p.startswith("/usr/")]
-    owner = None
-    for candidate in candidates:
-        result = subprocess.run(["dpkg-query", "-S", candidate], capture_output=True, text=True)
-        if result.returncode == 0:
-            owner = result.stdout.split(": ", 1)[0]
-            break
-    if owner is None:
-        raise RuntimeError(f"No source package owner for {library}")
-    source, version, binary_version = output(
-        "dpkg-query", "-W", "-f=${source:Package}\t${source:Version}\t${Version}", owner
-    ).split("\t")
-    copyright_path = Path("/usr/share/doc") / owner.split(":")[0] / "copyright"
-    shutil.copy2(copyright_path, notices / (owner.replace(":", "_") + ".txt"))
-    provenance.append(f"{name}\t{owner}={binary_version}\t{source}={version}")
-    packages.append(dict(library=name, binary_package=owner, binary_version=binary_version,
-                         source_package=source, source_version=version))
+    owner = rpm_owner(library)
+    copy_notices(owner, notices)
+    provenance.append(f"{name}\t{nevra(owner)}\t{owner['sourcerpm']}")
+    packages.append(dict(library=name, path=library, realpath=os.path.realpath(library), rpm=owner))
 
 download_sources(packages, source_root)
 (notices / "packages.txt").write_text("\n".join(provenance) + "\n")
 (notices / "packages.json").write_text(json.dumps(packages, indent=2) + "\n")
+(notices / "custom-libraries.json").write_text(json.dumps(custom, indent=2) + "\n")
 subprocess.run(["patchelf", "--set-rpath", "$ORIGIN/../lib", str(package / "bin/bmz-player")], check=True)

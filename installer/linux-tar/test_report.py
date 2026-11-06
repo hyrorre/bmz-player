@@ -23,6 +23,14 @@ class ReportTests(unittest.TestCase):
             "version": "0.4.0", "commit": "a" * 40,
             "files": {"runtime": {"bin/bmz-player": {"sha256": "b" * 64}}},
         }))
+        self.validation = self.root / "validation"
+        self.validation.mkdir()
+        from manifest import sha256
+        for name in ("almalinux", "ubuntu", "sources"):
+            os_release = 'ID=almalinux\nVERSION_ID="8.10"\n' if name != "ubuntu" else 'ID=ubuntu\nVERSION_ID="22.04"\n'
+            (self.validation / f"{name}.json").write_text(json.dumps(dict(
+                status="passed", commit="a" * 40, runtime_sha256=sha256(self.runtime),
+                elf_count=10, max_glibc="2.28", os_release=os_release)))
         self.env = dict(os.environ, BMZ_VERSION="0.4.0", BMZ_RELEASE_COMMIT="a" * 40,
                         GITHUB_OUTPUT=str(self.root / "outputs"),
                         GITHUB_STEP_SUMMARY=str(self.root / "summary"))
@@ -30,7 +38,7 @@ class ReportTests(unittest.TestCase):
     def run_report(self):
         return subprocess.run([
             sys.executable, str(Path(__file__).with_name("report.py")),
-            str(self.runtime), str(self.sources), str(self.metadata),
+            str(self.runtime), str(self.sources), str(self.metadata), str(self.validation),
         ], env=self.env, capture_output=True, text=True)
 
     def test_exports_verified_executable_hash_and_identity(self):
@@ -62,6 +70,25 @@ class ReportTests(unittest.TestCase):
         del self.env["BMZ_RELEASE_COMMIT"]
         result = self.run_report()
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_missing_os_or_rebuild_result_cannot_upload(self):
+        for name in ("almalinux", "ubuntu", "sources"):
+            path = self.validation / f"{name}.json"
+            content = path.read_text()
+            path.unlink()
+            self.assertNotEqual(self.run_report().returncode, 0)
+            self.assertFalse((self.root / "outputs").exists())
+            path.write_text(content)
+
+    def test_different_archive_or_new_glibc_cannot_upload(self):
+        path = self.validation / "ubuntu.json"
+        original = json.loads(path.read_text())
+        for key, value in (("runtime_sha256", "0" * 64), ("max_glibc", "2.29"),
+                           ("os_release", 'ID=ubuntu\nVERSION_ID="24.04"\n'),
+                           ("status", "failed")):
+            path.write_text(json.dumps(dict(original, **{key: value})))
+            self.assertNotEqual(self.run_report().returncode, 0)
+            self.assertFalse((self.root / "outputs").exists())
 
 
 if __name__ == "__main__":

@@ -1,84 +1,88 @@
 # Rebuild the corresponding Linux source archive
 
-PipeWire 1.4.9 client sources, checksum and configure command are in `pipewire/`.
-The offline rebuild also builds this private client library; it does not install
-or start a host audio server. Required build tools include Meson and Ninja.
-
-Extract `bmz-player-vX-linux-x64-sources.tar.gz` into any new directory.
-This directory is the BMZ workspace root: `Cargo.toml`, `Cargo.lock`, `crates/`,
-`vendor/`, `.cargo/config.toml`, and the actual bundled skin files are here.
-`build-manifest.json` identifies the version, full Git commit, submodule commits,
-toolchain, build image ID, FFmpeg configuration, and exact Ubuntu package versions.
-The runtime archive carries an identical manifest with both file inventories.
+Extract `bmz-player-vX-linux-x64-sources.tar.gz` into a new directory. This is
+the workspace root: Cargo.toml, Cargo.lock, crates/, vendor/, .cargo/config.toml
+and actual bundled skin files are included. Both archives carry identical
+schema 2 build manifests, recording the full commit, submodule commits, tool
+versions, image ID, configurations, RPM provenance and content inventories.
 
 ## Prepare tools (network required)
 
-Use Ubuntu 22.04 x86_64. Install the toolchain versions recorded in the manifest
-when comparing builds. The packaging Dockerfile's `tools` stage documents setup:
+Use official `almalinux:8.10` on x86_64. The included
+`installer/linux-tar/Dockerfile` tools stage documents the complete setup,
+including GCC Toolset 14, Clang/libclang, Python 3.12, Meson 1.7.2,
+Ninja 1.11.1.4 and checksum-pinned NASM 2.16.03. Use the Rust/tool versions
+recorded in the manifest when comparing builds. All tools are installed before
+network access is disabled and are shared by the build and clean rebuild stages.
+The x86-64 compiler flags avoid native CPU optimization.
 
-```sh
-sudo apt-get update
-sudo apt-get install build-essential ca-certificates curl git pkg-config clang \
-  libclang-dev nasm xz-utils python3 dpkg-dev meson ninja-build libasound2-dev libpulse-dev \
-  libudev-dev libfontconfig1-dev libdbus-1-dev libxkbcommon-dev zlib1g-dev libbz2-dev
-```
-
-Install Rust/Cargo with rustup (see the included Dockerfile); use the Rust release
-recorded by `toolchain.rust` in the manifest. APT and toolchain installation need
-network access. The next steps use the included FFmpeg archive and Cargo vendor,
-and run without network access. No `.git`, original checkout, `/source` mount,
-or `/tmp/bmz-source` path is required.
-
-## Build FFmpeg, the PipeWire client and BMZ (offline)
-
-From the extracted source root:
-
-```sh
-export BMZ_REBUILD_DIR="$(mktemp -d /var/tmp/bmz-rebuild.XXXXXX)"
-bash installer/linux-tar/rebuild.sh
-```
-
-The script verifies the pinned FFmpeg SHA256, extracts `ffmpeg/*.tar.xz`, builds
-the shared libraries with `installer/linux-tar/build-ffmpeg.sh`, and sets
-`PKG_CONFIG_PATH` and `LD_LIBRARY_PATH` to the new prefix. Only the install prefix
-differs from `ffmpeg/configure.txt`. It then runs:
-
-```sh
-cargo build --offline --locked --release -p bmz-player --no-default-features --features pulseaudio,pipewire,linux-evdev
-```
-
-The script uses a new Cargo cache and target directory under `BMZ_REBUILD_DIR`.
-The executable is `$BMZ_REBUILD_DIR/target/release/bmz-player`; retain the FFmpeg
-and PipeWire library paths when running it. Release verification runs the offline
-rebuild; consult the matching build's validation record. Byte-for-byte binary
-reproducibility is not claimed.
-
-## Ubuntu corresponding sources
-
-`ubuntu/<source-package>/` contains the exact `.dsc` and its upstream/Debian
-archives. `build-manifest.json` and the runtime's
-`resources/licenses/ubuntu/packages.{json,txt}` map each bundled ELF library to
-its binary package/version and source package/version. To extract one:
-
-```sh
-dpkg-source -x ubuntu/<source-package>/<file>.dsc /path/to/new/source-directory
-```
-
-The extracted `debian/control`, `debian/rules`, and `debian/patches/` describe
-package build dependencies, commands, and patches. The checker validates SHA256,
-sizes, package versions and successful extraction for every `.dsc`. It does not
-rebuild all Ubuntu libraries; preparing their build dependencies is separate.
-
-## Container verification
-
-With Docker (or Podman), from this source root:
+From this extracted source root:
 
 ```sh
 docker build --target source-verify -t bmz-source-check installer/linux-tar
 docker run --rm --network=none -v "$PWD:/archives/sources:ro" bmz-source-check
 ```
 
-Only this source directory is mounted. The image contains development tools but
-no prebuilt FFmpeg or Cargo dependency/build cache. Allow several GB of temporary
-disk space. Both archives and `SHA256SUMS.txt` must accompany redistribution;
-retain all notices and unmodified bundled assets.
+The source-verify image contains tools but no FFmpeg, PipeWire, original
+checkout or Cargo dependency/build cache. Only this source directory is mounted.
+It validates every SRPM and runs the complete offline release rebuild.
+
+## Build FFmpeg, PipeWire client and BMZ (offline)
+
+With the same tools installed, from the extracted source root:
+
+```sh
+export BMZ_REBUILD_DIR="$(mktemp -d /var/tmp/bmz-rebuild.XXXXXX)"
+bash installer/linux-tar/rebuild.sh
+```
+
+The script uses an empty CARGO_HOME and new target directory, verifies the pinned
+FFmpeg 9.0.1 and PipeWire 1.4.9 sources, rebuilds their private shared libraries,
+and runs:
+
+```sh
+cargo build --offline --locked --release -p bmz-player --no-default-features --features pulseaudio,pipewire,linux-evdev
+```
+
+Source hashes and original configure commands are in ffmpeg/ and pipewire/.
+Only the installation prefixes change. The executable is
+`$BMZ_REBUILD_DIR/target/release/bmz-player`; retain the rebuilt FFmpeg/PipeWire
+library paths when running it. No host PipeWire server is built or started.
+Byte-for-byte binary reproducibility is not claimed.
+
+## RPM corresponding sources
+
+`resources/licenses/rpm/packages.{json,txt}` in the runtime archive maps each
+distribution library's actual file (including /lib64 and /usr/lib64 aliases)
+to its owning binary RPM name, epoch, version, release, arch and exact SOURCERPM.
+The runtime also contains the original %license and %doc files.
+The manifest records these mappings and each SRPM header, URL and SHA256.
+`srpms.json` and `srpms/` contain one copy of each exact SRPM.
+No newer source version is used if the required version is unavailable.
+
+The checker verifies the archive SHA256, RPM header/payload digests, source
+name/epoch/version/release against every binary owner, and payload file sizes
+and digests, then extracts the spec, patches and upstream archives.
+To inspect an SRPM, in an empty directory:
+
+```sh
+rpm -qpi /path/to/package.src.rpm
+rpm2cpio /path/to/package.src.rpm | cpio -id
+```
+
+The spec describes build dependencies and patch application. Rebuilding all
+distribution libraries is separate from the FFmpeg/PipeWire/BMZ offline rebuild.
+
+## Runtime validation and redistribution
+
+Both normal packaging and `scripts/package-linux-tar.sh --verify RUNTIME SOURCES`
+test the same runtime SHA256 on independent AlmaLinux 8.10 and Ubuntu 22.04
+images, read-only, offline and as an unprivileged user. They check all ELF version
+requirements (maximum GLIBC 2.28 and actual GLIBCXX/CXXABI providers), ldd -r,
+software Vulkan/Xvfb sample autoplay, PulseAudio null-sink frames, missing
+PipeWire-server diagnostics, CLI/relative paths and XDG storage.
+The build's validation summary records the actual results; failed or missing
+checks cannot produce upload outputs. Containers share the host kernel.
+Physical kernels, GPUs, Wayland, audio latency and controllers require separate
+hardware testing. Keep both archives, SHA256SUMS.txt, all notices and bundled
+assets together when redistributing.

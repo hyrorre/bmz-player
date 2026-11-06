@@ -7,6 +7,10 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import select
+import sys
+
+from elf import inspect
 
 
 def run(*args, **kwargs):
@@ -32,14 +36,7 @@ for required in ("build-manifest.json", "README.md", "resources/licenses/BMZ-GPL
                  "resources/pipewire/client.conf"):
     assert (package / required).is_file(), required
 assert {p.name for p in package.iterdir()} == {"bmz-player", "bin", "lib", "resources", "README.md", "build-manifest.json"}
-glibc = re.compile(r"^lib(c|m|pthread|dl|rt|resolv|util)\.so\.[0-9]+$")
-for binary in [package / "bin/bmz-player", *sorted(p for p in (package / "lib").rglob("*") if p.is_file())]:
-    result = run("ldd", "-r", str(binary), capture_output=True).stdout
-    print(result, flush=True)
-    assert "not found" not in result
-    assert "undefined symbol" not in result
-    for name, path in re.findall(r"\s*(\S+) => (.+?) \(", result):
-        assert Path(path).resolve().parent == package / "lib" or glibc.fullmatch(name), result
+elf_result = inspect(package)
 
 # Negative control: the runtime image must not supply a missing FFmpeg library.
 isolated = Path.home() / "without-libraries/bin"
@@ -86,10 +83,25 @@ assert samples[-1]["stream"]["actual_host"] == "PulseAudio", samples[-1]
 assert samples[-1]["rendered_frames"] > 0, samples[-1]
 assert samples[-1]["frames"]["count"] > 0, samples[-1]
 trace = home / "resource-access.trace"
-run("timeout", "120", "xvfb-run", "-a", "strace", "-f", "-e", "trace=openat",
-    "-e", "status=successful",
-    "-o", str(trace), str(launcher), "--boot-play-sample", "--autoplay-on-start",
-    "--renderer", "vulkan", "--smoke-exit-after-play-frames", "3")
+# Xvfb's displayfd works on both distributions; EL8 does not ship xvfb-run.
+# Select lavapipe explicitly so the test cannot depend on a physical GPU.
+icds = list(Path("/usr/share/vulkan/icd.d").glob("lvp_icd*.json"))
+assert len(icds) == 1, icds
+os.environ["VK_ICD_FILENAMES"] = str(icds[0])
+with subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0", "1280x720x24",
+                       "-nolisten", "tcp", "-ac"], stdout=subprocess.PIPE, text=True) as xvfb:
+    try:
+        assert select.select([xvfb.stdout], [], [], 15)[0], "Xvfb startup timeout"
+        display = xvfb.stdout.readline().strip()
+        assert display.isdigit(), f"Xvfb did not start: {display}"
+        run("timeout", "120", "strace", "-f", "-e", "trace=openat",
+            "-e", "status=successful", "-o", str(trace), str(launcher),
+            "--boot-play-sample", "--autoplay-on-start", "--renderer", "vulkan",
+            "--smoke-exit-after-play-frames", "3",
+            env=dict(os.environ, DISPLAY=":" + display))
+    finally:
+        xvfb.terminate()
+        xvfb.wait(timeout=10)
 opened = [line for line in trace.read_text().splitlines() if re.search(r"= [0-9]+$", line)]
 for resource in ("skins/default/play7.json", "NotoSansCJK-Regular.ttc", "sample-playable.bms", "key.wav"):
     assert any(str(package / "resources") in line and resource in line for line in opened), resource
@@ -145,3 +157,8 @@ assert (home / "xdg-cache/bmz-player").is_dir()
 assert (home / "xdg-state/bmz-player/logs").is_dir()
 
 print("PASS: ELF closure, CLI, cwd/overrides, read-only resources, user storage, packaged play")
+if len(sys.argv) == 2:
+    manifest = json.loads((package / "build-manifest.json").read_text())
+    Path(sys.argv[1]).write_text(json.dumps(dict(
+        status="passed", commit=manifest["commit"], runtime_sha256=os.environ["BMZ_RUNTIME_SHA256"],
+        os_release=Path("/etc/os-release").read_text(), **elf_result)))

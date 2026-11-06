@@ -87,13 +87,14 @@ The [Linux tar.gz build](linux-tar.md) builds FFmpeg from a verified
 upstream source archive and includes that archive in the matching
 `bmz-player-vX-linux-x64-sources.tar.gz`. Its configure command and license notices
 also remain in the runtime archive. Both archives carry identical build manifests.
-Other bundled Ubuntu shared libraries include their package copyright notices,
-exact binary/source versions and matching APT source archives. The application
+Other bundled RPM shared libraries include their %license and %doc notices,
+exact binary RPM NEVRA, SOURCERPM and matching SRPM archives with source URLs
+and SHA256. The application
 source and vendored Cargo dependencies also accompany the binary. Keep these
 sources and notices available together when redistributing: supply both matching
 archives and `SHA256SUMS.txt` from the same build. Source contents, exact versions,
 checksums and an offline FFmpeg/PipeWire/BMZ rebuild are checked before artifact upload;
-the Ubuntu libraries' full rebuild is a separate, unperformed check.
+the RPM libraries' full rebuild is a separate, unperformed check.
 
 ## Linux PipeWire client
 

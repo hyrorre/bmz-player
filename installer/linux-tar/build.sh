@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ -f /run/proxy-ca.pem ]]; then
+  printf '\nsslcacert=/run/proxy-ca.pem\n' >> /etc/dnf/dnf.conf
+fi
 cp -a /source/. /work/
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-2}
 # Keep test linking and temporary artifacts within the hosted runner's budget.
@@ -53,7 +56,13 @@ cp /opt/ffmpeg-source/COPYING* /opt/ffmpeg-source/LICENSE.md "$package/resources
   rustc -Vv
   cargo -V
   cc --version
+  python3 --version
+  meson --version
+  ninja --version
+  nasm -v
+  clang --version
   ldd --version
+  rpm -qa --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n' | sort
   printf '\nBuild command: cargo build --locked --release -p bmz-player --no-default-features --features pulseaudio,pipewire,linux-evdev\n'
   printf '\nFFmpeg source SHA256:\n'
   sha256sum /opt/ffmpeg-source/*.tar.xz
