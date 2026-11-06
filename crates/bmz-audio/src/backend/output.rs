@@ -815,9 +815,11 @@ mod tests {
                 SoundId(1),
                 DecodedSample { channels: 1, sample_rate: SAMPLE_RATE, frames: vec![0.5; 480] },
             );
-            for (deadline_us, volume) in [(86_300, 1.0), (86_500, 0.5)] {
+            let deadlines =
+                [base + Duration::from_micros(86_300), base + Duration::from_micros(86_500)];
+            for (deadline, volume) in deadlines.into_iter().zip([1.0, 0.5]) {
                 let mut sound = ScheduledSound::one_shot(0, SoundId(1), volume, 0.0);
-                sound.start_time = Some(base + Duration::from_micros(deadline_us));
+                sound.start_time = Some(deadline);
                 sound.catch_up = catch_up;
                 sound.restart_policy = crate::queue::RestartPolicy::StopSameSound;
                 engine.schedule(sound);
@@ -830,6 +832,9 @@ mod tests {
                 let span = frames_to_duration(frames, SAMPLE_RATE);
                 let callback = base + Duration::from_millis(callback_ms);
                 let time = clock.buffer_time(frame, callback, span, SAMPLE_RATE);
+                if frames == 3840 {
+                    assert!(deadlines[0] < time.end && time.end <= deadlines[1]);
+                }
                 let mut pcm = vec![0.0; frames * 2];
                 engine.render_stereo_at(frame, &mut pcm, Some(time));
                 for pair in pcm.as_chunks::<2>().0 {
@@ -842,6 +847,34 @@ mod tests {
             }
             assert_eq!(attacks, [0.5, 0.25], "catch_up={catch_up}");
             assert!(engine.is_idle());
+        }
+    }
+
+    #[test]
+    fn a_late_sound_starts_in_a_buffer_with_an_inverted_range() {
+        for catch_up in [true, false] {
+            let (mut clock, frame, base) = settled_clock(Instant::now());
+            // After a stop the average restarts from a long refill, and the
+            // next buffer pulls it back by more than its own span.
+            let refill = frames_to_duration(3_840, SAMPLE_RATE);
+            let callback = base + Duration::from_millis(300);
+            clock.buffer_time(frame, callback, refill, SAMPLE_RATE);
+            let frame = frame + 3_840;
+            let time = clock.buffer_time(frame, callback + SPAN, SPAN, SAMPLE_RATE);
+            assert!(time.end < time.start);
+
+            let mut engine = AudioEngine::new(SAMPLE_RATE);
+            engine.insert_sample(
+                SoundId(1),
+                DecodedSample { channels: 1, sample_rate: SAMPLE_RATE, frames: vec![0.5; 4_800] },
+            );
+            let mut sound = ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0);
+            sound.start_time = Some(time.end - Duration::from_millis(1));
+            sound.catch_up = catch_up;
+            engine.schedule(sound);
+            let mut pcm = vec![0.0; FRAMES as usize * 2];
+            engine.render_stereo_at(frame, &mut pcm, Some(time));
+            assert_eq!(pcm[0], 0.5, "catch_up={catch_up}");
         }
     }
 

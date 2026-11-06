@@ -230,8 +230,12 @@ pub(crate) fn output_gap_tolerance(period: Duration) -> Duration {
     Duration::from_millis(20).max(period.saturating_mul(2))
 }
 
-/// The deadlines one output buffer stands for. Contiguous buffers share their
-/// boundary, so every deadline belongs to exactly one of them.
+/// The deadlines one output buffer stands for. Each contiguous buffer starts
+/// where the previous one ended, so no deadline falls between them.
+///
+/// Right after a stop the smoothed offset can move back by more than a buffer,
+/// which puts `end` before `start`. Such a buffer has no deadline in its range,
+/// and the next one starts from that earlier `end`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct OutputBufferTime {
     pub start: Instant,

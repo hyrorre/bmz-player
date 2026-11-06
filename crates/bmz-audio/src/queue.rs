@@ -116,10 +116,10 @@ impl ScheduledSoundQueue {
         frames: usize,
         rate: u32,
     ) {
-        let span_ns = time.end.saturating_duration_since(time.start).as_nanos();
-        if frames == 0 || span_ns == 0 {
+        if frames == 0 {
             return;
         }
+        let span_ns = time.end.saturating_duration_since(time.start).as_nanos();
         let mut changed = false;
         for (sound, _) in &mut self.sounds {
             let Some(deadline) = sound.start_time else {
@@ -132,7 +132,8 @@ impl ScheduledSoundQueue {
             }
             sound.start_frame = if deadline >= time.start {
                 // Smoothing changes the represented time span, not the number
-                // of PCM frames. Map the whole range into this buffer.
+                // of PCM frames. Map the whole range into this buffer. A deadline
+                // inside the range means `end > start`, so the span is not zero.
                 let elapsed_ns = deadline.duration_since(time.start).as_nanos();
                 let offset = elapsed_ns * frames as u128 / span_ns;
                 frame.saturating_add(offset as u64)
