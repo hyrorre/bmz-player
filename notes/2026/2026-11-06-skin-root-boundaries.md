@@ -137,3 +137,16 @@ bmz-skinは411成功 / 2 ignored、bmz-skin-assetsは16成功。
 OS別の結果はPRの最新CI runも参照する。CI対象はbmz-skinとbmz-skin-assetsであり、
 Windows/macOSのworkspace全体、GUI・音声/GPU実機を確認したとは扱わない。
 ログ: `/tmp/bmz-pr76-ci-{assets,skin,fmt,check,clippy,tests}.log`（ローカルのみ）。
+
+## Rust 1.97のClippy互換（2026-11-06）
+
+`05e3b79b`でworkspace全体のClippyを再確認すると、Rust 1.99.1はPASS、
+1.97.0は`play_session/build.rs`の`drop(count_candidate)`で`clippy::drop_non_drop`となった。
+この行はPRの元の変更範囲には含まれていなかったが、追加依頼に合わせて削除した。
+クロージャの最後の呼び出しで借用が終了するため、MAIN BPMの集計処理は変わらない。
+
+削除後、`cargo clippy --workspace --all-targets --locked -- -D warnings`は
+Rust 1.97.0と1.99.1の両方でPASS。`cargo fmt --check`もPASS。
+Clippyのみの再確認という指定を引き継ぎ、この1行削除後のローカルでのテスト再実行は行っていない。
+上記の5,043件成功は`05e3b79b`の検証結果として区別する。
+ログ: `/tmp/bmz-pr76-drop-clippy-{1.97.0,1.99.1}.log`（ローカルのみ）。
