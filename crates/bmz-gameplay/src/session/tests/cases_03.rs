@@ -833,17 +833,17 @@ fn sync_input_timestamp_anchor_tracks_running_audio_clock() {
     session.input_timestamp_anchor =
         Some(InputTimestampAnchor { monotonic_ns: 123, audio_time: TimeUs(456) });
 
-    sync_input_timestamp_anchor(&mut session, TimeUs(1_234_567));
+    sync_input_timestamp_anchor(&mut session);
 
     assert!(session.input_timestamp_anchor.is_none());
 
     session.audio_clock.running = true;
     session.audio_clock.chart_zero_time_us = 321;
-    sync_input_timestamp_anchor(&mut session, TimeUs(1_234_567));
+    sync_input_timestamp_anchor(&mut session);
 
     let anchor = session.input_timestamp_anchor.unwrap();
-    // The earlier frame observation is deliberately stale. The anchor must
-    // pair both clocks at its own observation, even after thread preemption.
+    // The anchor pairs both clocks at its own observation, even after thread
+    // preemption, so it does not depend on the frame's earlier observation.
     assert_eq!(anchor.audio_time, TimeUs(321));
     assert!(anchor.monotonic_ns <= crate::input::backend::monotonic_timestamp_ns());
 }

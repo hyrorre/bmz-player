@@ -1,7 +1,7 @@
 /// 譜面時刻でキー音を先読みする経路を使うか。
 /// `auto_keysound` 設定に加え、フルオートも同じ経路にする
 /// (判定バッチ遅延の catch_up でアタックが欠けるのを避ける)。
-pub(super) fn uses_scheduled_auto_keysounds(session: &GameSession) -> bool {
+pub(crate) fn uses_scheduled_auto_keysounds(session: &GameSession) -> bool {
     session.audio_mix.auto_keysound
         || session.autoplay.as_ref().is_some_and(AutoplayController::is_full)
 }

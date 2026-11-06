@@ -1016,4 +1016,4 @@ settings-downloads-keep-archive-help = 直接保存并播放 ZIP / RAR / 7z / ta
 downloads-state-validating = 正在检查压缩包
 
 settings-audio-schedule-ahead = 提前调度音频
-settings-audio-schedule-ahead-help = ON：按系统时钟提前安排 BGM 和自动键音。OFF：到达播放时刻后再请求播放。按键触发的键音始终立即请求播放。所有配置共用，应用音频设置后生效。
+settings-audio-schedule-ahead-help = ON：按系统时钟提前安排 BGM 和自动键音。OFF：到达播放时刻后再请求播放。按键触发的键音始终立即请求播放。所有配置共用，下一次游戏时生效。

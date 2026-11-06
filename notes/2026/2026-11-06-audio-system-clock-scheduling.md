@@ -237,3 +237,27 @@ CSV、全統計JSON、グラフは `.local/latency-investigation/review-fix-runs
 今回の実機測定では短音欠落の再発を確認しなかった。大きな予測ジャンプ・負のAPI時計差・出力断の補正は
 模擬時刻による回帰テストでの確認であり、実機でこれらを強制再現したものではない。
 長いWAVの速度差、ASIOのerror通知と予測の揺れ、物理発声・実打鍵・360FPS/VSyncなしの実画面は残る確認事項である。
+
+## 2026-11-06 追記: 再レビューの修正
+
+`6cdb4d6e` の再レビューの指摘を修正した。発生は模擬時刻のテストで確認したもので、実機で強制再現してはいない。
+
+出力断の扱い:
+
+- WASAPI排他の消費超過は、callbackが周期より遅れた時間を上限にした。毎回1バッファ分を先に提出しているので、PCMがそれ以上不足することはない。周期どおりのcallbackで位置だけが飛んでも、再生中の音を飛ばさない。
+- API時計の再対応付けと実際のcallback停止が重なった場合も、Instantのcallback間隔から出力断を検出する。API値は比較しない。
+- キューに「20msかつ2バッファ分」の隙間の上限を戻した。予測だけのジャンプは `ScheduledOutputPhase` が時刻を連続に戻すので、この上限を超える隙間はcallback自体の停止である。frameが連続したままの停止でも、その間の予約BGMを一斉に鳴らさない。自動キー音は `catch_up` がfalseなので従来どおり先頭から鳴る。
+
+その他:
+
+- 補正の初期化後は単純平均から始め、1回のcallback遅配が約2秒残らないようにした。
+- WASAPI排他の時刻計算を純粋関数に切り出してテストした。
+- `wait_until_ready` は、待ち始めた後のcallbackを確認する。2秒待っても来ない場合は警告して演奏を開始する。
+- 押鍵音など `start_frame == 0` の音は、1バッファを超えて待った分を遅刻に数える。要求時刻は診断モードでだけ記録するので、通常は0のままである。
+- OFFのwakeに自動キー音の次ノートを加えた。
+- `audio.schedule_ahead` は演奏を開く時点の保存値を使う。切り替えに音声デバイスの開き直しは不要で、次の演奏から反映する。
+- 許容幅、duration→frame変換、先読み幅を共通化し、未使用の引数を削除した。実時間に依存していたテストを決定的にした。
+
+`cargo fmt --check`、`cargo check --workspace --locked`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --locked --no-fail-fast`、`cargo build -p bmz-player --release --locked` が成功した。音声177件（3件ignore）、gameplay262件、player2,885件（56件ignore）を含む。出力断の3件と初期化の回帰テストは、修正前に失敗することを確認した。
+
+上の再計測はこの追記の修正より前のコードである。修正後の実機再計測は行っていない。macOS（IOProc）とLinuxのビルドも行っていない。

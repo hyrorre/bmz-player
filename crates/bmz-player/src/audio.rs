@@ -109,6 +109,9 @@ pub struct AppAudioOutput {
     pub engine: AudioEngineHandle,
     runtime: AudioRuntime,
     source: CpalCommandedOutputSource,
+    /// Taken from the saved settings when the play opens. It does not concern
+    /// the device, so changing it must not require reopening the stream.
+    schedule_ahead: bool,
 }
 
 #[derive(Clone)]
@@ -187,7 +190,7 @@ impl AppAudioOutput {
 
     pub fn clock(&self) -> AudioClock {
         let mut clock = self.source.clock();
-        clock.schedule_ahead = self.runtime.config.schedule_ahead;
+        clock.schedule_ahead = self.schedule_ahead;
         clock
     }
 
@@ -229,10 +232,12 @@ impl AppAudioOutput {
 
     pub fn play(&mut self, chart_zero_time: TimeUs) -> Result<()> {
         self.runtime.play().context("failed to start audio output stream")?;
-        self.runtime
-            .output
-            .wait_until_ready(std::time::Duration::from_secs(2))
-            .map_err(|message| anyhow::anyhow!(message))?;
+        // A slow device costs some silence. Refusing to start would cost the play.
+        if let Err(message) =
+            self.runtime.output.wait_until_ready(std::time::Duration::from_secs(2))
+        {
+            tracing::warn!(message, "starting play without a confirmed audio callback");
+        }
         self.source.play(chart_zero_time);
         Ok(())
     }
@@ -458,10 +463,14 @@ impl AudioRuntime {
     }
 }
 
-pub fn open_app_audio_output(runtime: &AudioRuntime, engine: AudioEngine) -> AppAudioOutput {
+pub fn open_app_audio_output(
+    runtime: &AudioRuntime,
+    engine: AudioEngine,
+    schedule_ahead: bool,
+) -> AppAudioOutput {
     let engine = AudioEngineHandle::new(engine);
     let source = runtime.add_commanded_source(engine.clone(), CpalOutputSourceKind::Play);
-    AppAudioOutput { engine, runtime: runtime.clone(), source }
+    AppAudioOutput { engine, runtime: runtime.clone(), source, schedule_ahead }
 }
 
 /// アプリ全体で常時 ON のシステム SE / BGM 出力。
@@ -515,6 +524,7 @@ pub fn open_prepared_play_audio(
     runtime: &AudioRuntime,
     prepared: PreparedPlaySession,
     score_key: ScoreKey,
+    schedule_ahead: bool,
 ) -> RunningPlaySession {
     let bgm_sample_duration_us = prepared
         .session
@@ -535,7 +545,7 @@ pub fn open_prepared_play_audio(
             Some((event.sound, duration_us))
         })
         .collect();
-    let mut audio = open_app_audio_output(runtime, prepared.audio);
+    let mut audio = open_app_audio_output(runtime, prepared.audio, schedule_ahead);
     audio.set_playback_rate_percent(prepared.playback_rate_percent);
     let mut session = prepared.session;
     session.audio_clock = audio.clock();

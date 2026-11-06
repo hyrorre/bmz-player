@@ -582,13 +582,14 @@ impl AutoKeysoundScheduler {
 
 pub fn compute_frame_times(session: &GameSession) -> FrameTimes {
     let audio_now = session.audio_clock.now();
-    let schedule_ahead_us = if session.audio_clock.schedule_ahead {
-        audio_schedule_ahead_us(session.audio_clock.playback_rate_percent())
-    } else {
-        0
-    };
-    let audio_schedule_until = TimeUs(audio_now.0.saturating_add(schedule_ahead_us));
+    let schedule_ahead = schedule_ahead_us(&session.audio_clock);
+    let audio_schedule_until = TimeUs(audio_now.0.saturating_add(schedule_ahead));
     FrameTimes { audio_now, audio_schedule_until }
+}
+
+/// Chart-time width of the scheduling window. Wake deadlines use the same width.
+pub(crate) fn schedule_ahead_us(clock: &AudioClock) -> i64 {
+    if clock.schedule_ahead { audio_schedule_ahead_us(clock.playback_rate_percent()) } else { 0 }
 }
 
 fn audio_schedule_ahead_us(playback_rate_percent: u16) -> i64 {
