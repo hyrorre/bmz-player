@@ -2,8 +2,6 @@ use std::time::Duration;
 
 use super::*;
 
-const MIN_PLAYBACK_DISCONTINUITY: Duration = Duration::from_millis(20);
-
 #[derive(Debug, Default)]
 struct OutputPlaybackTimeline {
     previous_playback: Option<::cpal::StreamInstant>,
@@ -19,20 +17,28 @@ impl OutputPlaybackTimeline {
         sample_rate: u32,
         observed: Instant,
     ) -> u64 {
-        let catch_up = self.previous_playback.and_then(|previous| {
-            let actual = playback.checked_duration_since(previous)?;
+        let catch_up = self.previous_observed.and_then(|previous_observed| {
+            let callback_gap = observed.checked_duration_since(previous_observed)?;
             let expected = frames_to_duration(self.previous_frames, sample_rate);
-            let callback_gap = observed.checked_duration_since(self.previous_observed?)?;
+            let actual = match self.previous_playback {
+                Some(previous) => playback.checked_duration_since(previous)?,
+                None => callback_gap,
+            };
             // A larger output buffer/latency estimate is not evidence of lost
             // PCM. Require a callback outage as well before skipping samples.
             let gap = actual.min(callback_gap).saturating_sub(expected);
-            let tolerance = MIN_PLAYBACK_DISCONTINUITY.max(expected.saturating_mul(2));
-            (gap > tolerance).then(|| duration_to_frames(gap, sample_rate))
+            (gap > output_gap_tolerance(expected)).then(|| duration_to_frames(gap, sample_rate))
         });
         self.previous_playback = Some(playback);
         self.previous_observed = Some(observed);
         self.previous_frames = frames;
         catch_up.unwrap_or(0)
+    }
+
+    /// API times are not comparable across a clock rebase. The callback gap is
+    /// measured by Instant, so a real stop is still detected from it alone.
+    fn rebase(&mut self) {
+        self.previous_playback = None;
     }
 }
 
@@ -170,9 +176,7 @@ where
                     previous_stream_callback = Some(info.timestamp().callback);
                 }
                 if rebased {
-                    // API epochs are not comparable across a clock rebase. Even
-                    // a concurrent late callback is not proof of lost PCM here.
-                    playback_timeline = OutputPlaybackTimeline::default();
+                    playback_timeline.rebase();
                 }
                 let catch_up_frames = playback_timeline.catch_up_frames(
                     info.timestamp().playback,
@@ -244,6 +248,51 @@ mod playback_timeline_tests {
 
     const SAMPLE_RATE: u32 = 48_000;
     const BUFFER_FRAMES: usize = 480;
+
+    #[test]
+    fn a_callback_stop_is_still_an_outage_across_a_clock_rebase() {
+        let base = Instant::now();
+        let mut timeline = OutputPlaybackTimeline::default();
+        timeline.catch_up_frames(
+            ::cpal::StreamInstant::from_millis(1_000),
+            BUFFER_FRAMES,
+            SAMPLE_RATE,
+            base,
+        );
+        timeline.rebase();
+        // The new API epoch is not comparable. The Instant gap still is.
+        assert_eq!(
+            timeline.catch_up_frames(
+                ::cpal::StreamInstant::from_millis(5),
+                BUFFER_FRAMES,
+                SAMPLE_RATE,
+                base + Duration::from_millis(110),
+            ),
+            4_800
+        );
+    }
+
+    #[test]
+    fn a_clock_rebase_with_regular_callbacks_is_not_an_outage() {
+        let base = Instant::now();
+        let mut timeline = OutputPlaybackTimeline::default();
+        timeline.catch_up_frames(
+            ::cpal::StreamInstant::from_millis(1_000),
+            BUFFER_FRAMES,
+            SAMPLE_RATE,
+            base,
+        );
+        timeline.rebase();
+        assert_eq!(
+            timeline.catch_up_frames(
+                ::cpal::StreamInstant::from_millis(5),
+                BUFFER_FRAMES,
+                SAMPLE_RATE,
+                base + Duration::from_millis(10),
+            ),
+            0
+        );
+    }
 
     #[test]
     fn output_latency_jump_alone_does_not_skip_playing_samples() {

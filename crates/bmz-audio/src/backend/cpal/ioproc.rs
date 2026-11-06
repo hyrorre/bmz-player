@@ -552,7 +552,7 @@ impl CallbackState {
                 .map(|previous| start.saturating_duration_since(previous))
                 .unwrap_or_default();
             let outage = gap.min(callback_gap).saturating_sub(expected);
-            if outage > Duration::from_millis(20).max(expected.saturating_mul(2)) {
+            if outage > crate::clock::output_gap_tolerance(expected) {
                 self.renderer.catch_up_after_stream_outage(outage, self.sample_rate);
             }
         }

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bmz_core::time::TimeUs;
 
@@ -213,6 +213,21 @@ fn scale_chart_time(wall_time_us: i64, playback_rate_percent: u16) -> i64 {
 
 pub fn frame_to_us(frame: u64, sample_rate: u32) -> i64 {
     ((frame as u128 * 1_000_000u128) / sample_rate as u128) as i64
+}
+
+pub(crate) fn duration_to_frames(duration: Duration, sample_rate: u32) -> u64 {
+    duration
+        .as_nanos()
+        .saturating_mul(u128::from(sample_rate))
+        .checked_div(1_000_000_000)
+        .unwrap_or(0)
+        .min(u128::from(u64::MAX)) as u64
+}
+
+/// Timestamps wobble between callbacks. A smaller gap between contiguous buffers
+/// is continuous PCM; every outage and prediction-jump check shares this width.
+pub(crate) fn output_gap_tolerance(period: Duration) -> Duration {
+    Duration::from_millis(20).max(period.saturating_mul(2))
 }
 
 #[cfg(test)]

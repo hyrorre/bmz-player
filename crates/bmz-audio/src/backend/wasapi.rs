@@ -36,7 +36,9 @@ use windows::Win32::System::Threading::{
 };
 use windows::core::PCWSTR;
 
-use crate::backend::output::{NativeOutputRenderer, OutputSample};
+use crate::backend::output::{
+    NativeOutputRenderer, OutputSample, duration_to_frames, frames_to_duration,
+};
 
 const EXCLUSIVE_RECOVERY_INITIAL_DELAY_MS: u32 = 100;
 const EXCLUSIVE_RECOVERY_MAX_DELAY_MS: u32 = 5_000;
@@ -656,6 +658,50 @@ struct ExclusiveFormatCandidate {
     sample_format: ExclusiveSampleFormat,
 }
 
+/// One reading of the endpoint clock and the QPC counter taken beside it.
+#[derive(Debug, Clone, Copy)]
+struct ExclusiveClockReading {
+    position: u64,
+    frequency: u64,
+    qpc_100ns: u64,
+    counter: i64,
+    qpc_frequency: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ExclusiveOutputState {
+    /// Output time of the next buffer relative to the counter reading.
+    next_buffer_delta_ns: Option<i128>,
+    missed_frames: u64,
+}
+
+/// `max_missed_frames` is how far the callback ran past its period. A buffer is
+/// queued ahead of every callback, so PCM cannot run out by more than that. A
+/// larger position is a clock glitch, which must not skip the playing voices.
+fn exclusive_output_state(
+    reading: ExclusiveClockReading,
+    written_frames: u64,
+    sample_rate: u32,
+    max_missed_frames: u64,
+) -> ExclusiveOutputState {
+    let counter_ns =
+        i128::from(reading.counter) * 1_000_000_000 / i128::from(reading.qpc_frequency);
+    let position_ns = i128::from(reading.position) * 1_000_000_000 / i128::from(reading.frequency);
+    // An underrun can consume silence beyond the last submitted PCM. Do not
+    // retain that lost interval as a permanent scheduling offset.
+    let consumed = (u128::from(reading.position) * u128::from(sample_rate)
+        / u128::from(reading.frequency))
+    .min(u128::from(u64::MAX)) as u64;
+    let missed_frames = consumed.saturating_sub(written_frames).min(max_missed_frames);
+    let queued_ns = i128::from(written_frames.saturating_add(missed_frames)) * 1_000_000_000
+        / i128::from(sample_rate);
+    let delta_ns = i128::from(reading.qpc_100ns) * 100 - counter_ns + queued_ns - position_ns;
+    ExclusiveOutputState {
+        next_buffer_delta_ns: (-100_000_000..1_000_000_000).contains(&delta_ns).then_some(delta_ns),
+        missed_frames,
+    }
+}
+
 struct ExclusiveWorkerStream {
     client: IAudioClient,
     render_client: IAudioRenderClient,
@@ -663,6 +709,7 @@ struct ExclusiveWorkerStream {
     qpc_frequency: u64,
     sample_rate: u32,
     written_frames: Cell<u64>,
+    previous_fill: Cell<Option<Instant>>,
     audio_event: OwnedEvent,
     buffer_frames: u32,
     channels: usize,
@@ -759,6 +806,7 @@ impl ExclusiveWorkerStream {
                 qpc_frequency: qpc_frequency.max(0) as u64,
                 sample_rate,
                 written_frames: Cell::new(0),
+                previous_fill: Cell::new(None),
                 audio_event,
                 buffer_frames,
                 channels: channels as usize,
@@ -826,7 +874,7 @@ impl ExclusiveWorkerStream {
         }
     }
 
-    fn next_playback_time(&self) -> (Option<Instant>, u64) {
+    fn next_playback_time(&self, max_missed_frames: u64) -> (Option<Instant>, u64) {
         let before = Instant::now();
         let Some((clock, frequency)) = &self.clock else {
             return (None, 0);
@@ -845,25 +893,22 @@ impl ExclusiveWorkerStream {
         if unsafe { clock.GetPosition(&mut position, Some(&mut qpc_100ns)) }.is_err() {
             return (None, 0);
         }
-        let counter_ns = i128::from(counter) * 1_000_000_000 / i128::from(self.qpc_frequency);
-        let position_ns = i128::from(position) * 1_000_000_000 / i128::from(*frequency);
-        // An underrun can consume silence beyond the last submitted PCM. Do not
-        // retain that lost interval as a permanent scheduling offset.
-        let consumed = (u128::from(position) * u128::from(self.sample_rate)
-            / u128::from(*frequency))
-        .min(u128::from(u64::MAX)) as u64;
-        let missed_frames = consumed.saturating_sub(self.written_frames.get());
-        let written_frames = self.written_frames.get().max(consumed);
-        let queued_ns = i128::from(written_frames) * 1_000_000_000 / i128::from(self.sample_rate);
-        let delta_ns = i128::from(qpc_100ns) * 100 - counter_ns + queued_ns - position_ns;
-        if !(-100_000_000..1_000_000_000).contains(&delta_ns) {
-            return (None, 0);
-        }
-        self.written_frames.set(written_frames);
-        let distance = Duration::from_nanos(delta_ns.unsigned_abs() as u64);
-        let prediction =
-            if delta_ns < 0 { paired.checked_sub(distance) } else { paired.checked_add(distance) };
-        (prediction, missed_frames)
+        let reading = ExclusiveClockReading {
+            position,
+            frequency: *frequency,
+            qpc_100ns,
+            counter,
+            qpc_frequency: self.qpc_frequency,
+        };
+        let written_frames = self.written_frames.get();
+        let state =
+            exclusive_output_state(reading, written_frames, self.sample_rate, max_missed_frames);
+        self.written_frames.set(written_frames.saturating_add(state.missed_frames));
+        let prediction = state.next_buffer_delta_ns.and_then(|delta_ns| {
+            let distance = Duration::from_nanos(delta_ns.unsigned_abs() as u64);
+            if delta_ns < 0 { paired.checked_sub(distance) } else { paired.checked_add(distance) }
+        });
+        (prediction, state.missed_frames)
     }
 
     fn fill_next_buffer(&self, renderer: &mut NativeOutputRenderer) -> Result<(), String> {
@@ -874,7 +919,13 @@ impl ExclusiveWorkerStream {
                 .map_err(|error| format!("IAudioRenderClient::GetBuffer: {error}"))?
         };
         let sample_count = self.buffer_frames as usize * self.channels;
-        let (playback, missed_frames) = self.next_playback_time();
+        let period = frames_to_duration(self.buffer_frames as usize, self.sample_rate);
+        let late =
+            self.previous_fill.replace(Some(callback_start)).map_or(Duration::ZERO, |previous| {
+                callback_start.saturating_duration_since(previous).saturating_sub(period)
+            });
+        let (playback, missed_frames) =
+            self.next_playback_time(duration_to_frames(late, self.sample_rate));
         if missed_frames != 0 {
             // Publish the same underrun to both active voices and timed events,
             // exactly once. Prediction changes alone never advance this frame.
@@ -1655,5 +1706,71 @@ mod tests {
         assert_eq!(PcmI24In32::from_f32(0.0), PcmI24In32(0));
         assert_eq!(PcmI24In32::from_f32(1.0), PcmI24In32(0x7f_ff_ff_00));
         assert_eq!(PcmI24In32::from_f32(-1.0), PcmI24In32(-0x7f_ff_ff_00));
+    }
+
+    fn clock_reading(position: u64) -> ExclusiveClockReading {
+        ExclusiveClockReading {
+            position,
+            frequency: 48_000,
+            qpc_100ns: 1_000_000,
+            counter: 1_000_000,
+            qpc_frequency: 10_000_000,
+        }
+    }
+
+    #[test]
+    fn next_buffer_follows_the_frames_queued_past_the_position() {
+        assert_eq!(
+            exclusive_output_state(clock_reading(9_600), 10_080, 48_000, 0),
+            ExclusiveOutputState { next_buffer_delta_ns: Some(10_000_000), missed_frames: 0 }
+        );
+    }
+
+    #[test]
+    fn position_may_count_bytes_instead_of_frames() {
+        let mut reading = clock_reading(9_600 * 8);
+        reading.frequency = 48_000 * 8;
+        let state = exclusive_output_state(reading, 10_080, 48_000, 0);
+        assert_eq!(state.next_buffer_delta_ns, Some(10_000_000));
+    }
+
+    #[test]
+    fn an_older_position_reading_moves_the_prediction_back() {
+        let mut reading = clock_reading(9_600);
+        reading.qpc_100ns -= 20_000;
+        let state = exclusive_output_state(reading, 10_080, 48_000, 0);
+        assert_eq!(state.next_buffer_delta_ns, Some(8_000_000));
+    }
+
+    #[test]
+    fn an_underrun_within_the_late_callback_is_reported_in_full() {
+        assert_eq!(
+            exclusive_output_state(clock_reading(10_320), 10_080, 48_000, 480),
+            ExclusiveOutputState { next_buffer_delta_ns: Some(0), missed_frames: 240 }
+        );
+    }
+
+    #[test]
+    fn a_position_jump_with_regular_callbacks_does_not_skip_audio() {
+        assert_eq!(
+            exclusive_output_state(clock_reading(58_080), 10_080, 48_000, 0),
+            ExclusiveOutputState { next_buffer_delta_ns: None, missed_frames: 0 }
+        );
+    }
+
+    #[test]
+    fn a_position_jump_is_limited_to_how_late_the_callback_was() {
+        let state = exclusive_output_state(clock_reading(58_080), 10_080, 48_000, 480);
+        assert_eq!(state.missed_frames, 480);
+    }
+
+    #[test]
+    fn a_real_underrun_survives_an_unusable_prediction() {
+        let mut reading = clock_reading(10_320);
+        reading.counter += 2_000_000;
+        assert_eq!(
+            exclusive_output_state(reading, 10_080, 48_000, 480),
+            ExclusiveOutputState { next_buffer_delta_ns: None, missed_frames: 240 }
+        );
     }
 }

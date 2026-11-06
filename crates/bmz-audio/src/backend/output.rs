@@ -1,4 +1,5 @@
 //! Shared real-time output state for CPAL callbacks and native audio backends.
+pub(super) use crate::clock::{duration_to_frames, output_gap_tolerance};
 use crate::command::CommandedAudioEngine;
 use crate::engine::AudioEngine;
 use std::collections::VecDeque;
@@ -101,15 +102,6 @@ pub(super) enum CpalOutputCommand {
     SetSourceKind { id: u64, kind: CpalOutputSourceKind },
 }
 
-pub(super) fn duration_to_frames(duration: Duration, sample_rate: u32) -> u64 {
-    duration
-        .as_nanos()
-        .saturating_mul(u128::from(sample_rate))
-        .checked_div(1_000_000_000)
-        .unwrap_or(0)
-        .min(u128::from(u64::MAX)) as u64
-}
-
 pub(super) fn frames_to_duration(frames: usize, sample_rate: u32) -> Duration {
     if sample_rate == 0 {
         return Duration::ZERO;
@@ -134,6 +126,7 @@ const OUTPUT_LEAD_SMOOTHING_SECS: f64 = 2.0;
 pub(super) struct ScheduledOutputPhase {
     // This is a clock correspondence, not a physical latency. It may be negative.
     offset_ns: Option<f64>,
+    samples: u32,
     previous: Option<(Instant, Instant, Duration)>,
 }
 
@@ -161,7 +154,7 @@ impl ScheduledOutputPhase {
         if let Some((previous_playback, previous_callback, previous_span)) = self.previous {
             let prediction_step = signed_duration_ns(playback, previous_playback);
             let observed_step = signed_duration_ns(callback, previous_callback);
-            let tolerance = Duration::from_millis(20).max(previous_span.saturating_mul(2));
+            let tolerance = output_gap_tolerance(previous_span);
             // A prediction epoch/latency jump must not consume a whole window
             // of queued events. Callback delivery jitter alone leaves the API
             // increment continuous and must not trigger this rebase.
@@ -173,7 +166,12 @@ impl ScheduledOutputPhase {
             }
         }
         let sample = signed_duration_ns(playback, callback);
-        let weight = (span.as_secs_f64() / OUTPUT_LEAD_SMOOTHING_SECS).min(1.0);
+        // Average the first samples, so that the delivery jitter of the callback
+        // after a reset does not stay in the offset for a whole smoothing period.
+        self.samples = self.samples.saturating_add(1);
+        let weight = (span.as_secs_f64() / OUTPUT_LEAD_SMOOTHING_SECS)
+            .max(1.0 / f64::from(self.samples))
+            .min(1.0);
         let offset = self.offset_ns.map_or(sample, |offset| offset + (sample - offset) * weight);
         self.offset_ns = Some(offset);
         self.previous = Some((playback, callback, span));
@@ -726,6 +724,16 @@ mod tests {
         a.max(b).duration_since(a.min(b))
     }
 
+    /// A filter past its first average, and the next callback time.
+    fn settled_phase(start: Instant) -> (ScheduledOutputPhase, Instant) {
+        let mut phase = ScheduledOutputPhase::default();
+        for buffer in 0..500 {
+            let callback = start + SPAN * buffer;
+            phase.buffer_time(Some(callback + LEAD), callback, SPAN);
+        }
+        (phase, start + SPAN * 500)
+    }
+
     #[test]
     fn scheduled_and_immediate_sounds_have_the_same_average_output_delay() {
         // With 4096 frames, lead plus period exceeds the 100 ms lookahead.
@@ -796,12 +804,23 @@ mod tests {
 
     #[test]
     fn late_callback_delivery_does_not_move_the_buffer_time() {
-        let callback = Instant::now();
-        let mut phase = ScheduledOutputPhase::default();
-        phase.buffer_time(Some(callback + LEAD), callback, SPAN);
-        let next = callback + SPAN;
+        let (mut phase, next) = settled_phase(Instant::now());
         let time = phase.buffer_time(Some(next + LEAD), next + Duration::from_millis(3), SPAN);
         assert!(distance(time, next - SPAN / 2) < Duration::from_micros(20));
+    }
+
+    #[test]
+    fn one_late_callback_after_a_reset_does_not_bias_the_next_seconds() {
+        let start = Instant::now();
+        let mut phase = ScheduledOutputPhase::default();
+        // The seeding callback arrives 1 ms late.
+        phase.buffer_time(Some(start + LEAD), start + Duration::from_millis(1), SPAN);
+        let (mut time, mut callback) = (start, start);
+        for buffer in 1..=20 {
+            callback = start + SPAN * buffer;
+            time = phase.buffer_time(Some(callback + LEAD), callback, SPAN);
+        }
+        assert!(distance(time, callback - SPAN / 2) < Duration::from_micros(100));
     }
 
     #[test]
@@ -844,18 +863,15 @@ mod tests {
 
     #[test]
     fn a_valid_zero_prediction_continues_the_filter() {
-        let start = Instant::now();
-        let mut phase = ScheduledOutputPhase::default();
-        phase.buffer_time(Some(start + LEAD), start, SPAN);
-        let callback = start + SPAN;
-        let first = phase.buffer_time(Some(callback), callback, SPAN);
-        for buffer in 2..2_000 {
+        let (mut phase, start) = settled_phase(Instant::now());
+        let first = phase.buffer_time(Some(start), start, SPAN);
+        for buffer in 1..2_000 {
             let callback = start + SPAN * buffer;
             phase.buffer_time(Some(callback), callback, SPAN);
         }
         let callback = start + SPAN * 2_000;
         let last = phase.buffer_time(Some(callback), callback, SPAN);
-        assert!(distance(first, start + SPAN / 2) > Duration::from_millis(9));
+        assert!(distance(first, start - SPAN / 2) > Duration::from_millis(9));
         assert!(distance(last, callback - SPAN / 2) < Duration::from_micros(1));
     }
 
@@ -903,10 +919,7 @@ mod tests {
 
     #[test]
     fn callback_delivery_jitter_past_the_prediction_keeps_the_api_progression() {
-        let start = Instant::now();
-        let mut phase = ScheduledOutputPhase::default();
-        phase.buffer_time(Some(start + LEAD), start, SPAN);
-        let callback = start + SPAN;
+        let (mut phase, callback) = settled_phase(Instant::now());
         let time =
             phase.buffer_time(Some(callback + LEAD), callback + Duration::from_millis(30), SPAN);
         // No rebase to the late callback, even though the signed offset crosses zero.

@@ -1,3 +1,4 @@
+use crate::clock::{duration_to_frames, output_gap_tolerance};
 use bmz_core::ids::SoundId;
 use std::time::{Duration, Instant};
 
@@ -121,11 +122,15 @@ impl ScheduledSoundQueue {
         };
         // When the PCM continues from the previous buffer, a later prediction
         // moved only the timestamp: nothing after that buffer's end was missed.
-        // Only a frame discontinuity (a backend-detected outage or a skipped
-        // engine render) is evidence of missing PCM. Prediction gaps alone are not.
+        // ScheduledOutputPhase keeps prediction-only jumps continuous, so a gap
+        // beyond the tolerance means the callbacks stopped. A frame jump is a
+        // backend-detected outage or a skipped engine render.
+        let tolerance = output_gap_tolerance(span);
         let reached = self
             .resolved_until
-            .filter(|(_, next_frame)| *next_frame == frame)
+            .filter(|(until, next_frame)| {
+                *next_frame == frame && time.saturating_duration_since(*until) <= tolerance
+            })
             .map_or(time, |(until, _)| until.min(time));
         self.resolved_until = Some((end, frame.saturating_add(frames as u64)));
         let mut changed = false;
@@ -138,14 +143,11 @@ impl ScheduledSoundQueue {
             if deadline >= end {
                 break;
             }
-            let distance = |duration: Duration| -> u64 {
-                (duration.as_nanos().saturating_mul(u128::from(rate)) / 1_000_000_000)
-                    .min(u128::from(u64::MAX)) as u64
-            };
             sound.start_frame = if deadline >= time {
-                frame.saturating_add(distance(deadline.duration_since(time)))
+                frame.saturating_add(duration_to_frames(deadline.duration_since(time), rate))
             } else {
-                frame.saturating_sub(distance(reached.saturating_duration_since(deadline)))
+                let late = reached.saturating_duration_since(deadline);
+                frame.saturating_sub(duration_to_frames(late, rate))
             };
             sound.start_time = None;
             changed = true;
@@ -400,8 +402,9 @@ mod tests {
     #[test]
     fn real_output_discontinuities_keep_the_full_catch_up() {
         let base = Instant::now();
-        // Both backend-detected outages and skipped engine renders advance frames.
-        for (frame, time_ms) in [(104_000, 12), (102_880, 60)] {
+        // A frame jump (outage catch-up, skipped render), then a stall on a
+        // device whose position stops too, so the frames stay contiguous.
+        for (frame, time_ms) in [(104_000, 12), (100_480, 60)] {
             let mut queue = ScheduledSoundQueue::new();
             queue.schedule(timed_bgm(base + Duration::from_millis(11)));
             queue.resolve_times(100_000, base, 480, 48_000);
@@ -412,13 +415,17 @@ mod tests {
     }
 
     #[test]
-    fn large_prediction_gap_alone_does_not_skip_the_attack() {
+    fn stall_with_contiguous_frames_does_not_pile_up_late_bgm() {
         let base = Instant::now();
         let mut queue = ScheduledSoundQueue::new();
-        queue.schedule(timed_bgm(base + Duration::from_millis(11)));
+        for ms in [15, 25, 35] {
+            queue.schedule(timed_bgm(base + Duration::from_millis(ms)));
+        }
         queue.resolve_times(100_000, base, 480, 48_000);
         queue.resolve_times(100_480, base + Duration::from_millis(60), 480, 48_000);
-        assert_eq!(queue.drain_until_frame(u64::MAX)[0].start_frame, 100_480);
+        let starts: Vec<_> =
+            queue.drain_until_frame(u64::MAX).iter().map(|sound| sound.start_frame).collect();
+        assert_eq!(starts, [100_480 - 45 * 48, 100_480 - 35 * 48, 100_480 - 25 * 48]);
     }
 
     #[test]

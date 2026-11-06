@@ -192,6 +192,31 @@ mod delivery_timing_tests {
         assert!(summary.max >= 1_000_000);
         assert_eq!(handle.diagnostics().drained, 1);
     }
+
+    fn queue_immediate_sound(handle: &AudioEngineHandle, age: std::time::Duration) {
+        handle.inner.queue.lock().unwrap().push_back(QueuedCommand {
+            enqueued: Some(std::time::Instant::now() - age),
+            command: AudioEngineCommand::Schedule(ScheduledSound::one_shot(
+                0,
+                SoundId(1),
+                1.0,
+                0.0,
+            )),
+            cancelled: None,
+        });
+    }
+
+    #[test]
+    fn immediate_sound_is_late_only_past_one_buffer_of_waiting() {
+        let handle = AudioEngineHandle::new(AudioEngine::new(48_000));
+        let mut processor = handle.processor();
+        queue_immediate_sound(&handle, std::time::Duration::from_millis(10));
+        processor.render_stereo(1_000, &mut vec![0.0; 48_000 * 2]);
+        assert_eq!(handle.diagnostics().scheduling_late_frames, 0);
+        queue_immediate_sound(&handle, std::time::Duration::from_millis(10));
+        processor.render_stereo(50_000, &mut [0.0; 240 * 2]);
+        assert!(handle.diagnostics().scheduling_late_frames >= 240);
+    }
 }
 impl QueuedCommand {
     fn is_cancelled(&self) -> bool {
@@ -577,7 +602,7 @@ impl CommandedAudioEngine {
                 return false;
             }
         };
-        self.apply_pending_commands(&mut engine, output_start_frame);
+        self.apply_pending_commands(&mut engine, output_start_frame, output.len() as u64 / 2);
         self.apply_playback_stop(&mut engine);
         engine.render_stereo_at(output_start_frame, output, buffer_time);
         self.inner.output_sample_rate.store(engine.output_sample_rate(), Ordering::Relaxed);
@@ -590,7 +615,7 @@ impl CommandedAudioEngine {
         let Ok(mut engine) = engine.lock() else {
             return;
         };
-        self.apply_pending_commands(&mut engine, 0);
+        self.apply_pending_commands(&mut engine, 0, 0);
         self.apply_playback_stop(&mut engine);
         self.inner.output_sample_rate.store(engine.output_sample_rate(), Ordering::Relaxed);
         self.inner.idle.store(engine.is_idle(), Ordering::Relaxed);
@@ -607,7 +632,12 @@ impl CommandedAudioEngine {
         }
     }
 
-    fn apply_pending_commands(&mut self, engine: &mut AudioEngine, output_frame: u64) {
+    fn apply_pending_commands(
+        &mut self,
+        engine: &mut AudioEngine,
+        output_frame: u64,
+        buffer_frames: u64,
+    ) {
         self.command_scratch.clear();
         match self.inner.queue.try_lock() {
             Ok(mut queue) => {
@@ -637,6 +667,11 @@ impl CommandedAudioEngine {
                     .enqueue_to_apply_ns
                     .record(enqueued.elapsed().as_nanos().min(u64::MAX as u128) as u64);
             }
+            // An immediate request normally waits up to one buffer for this callback.
+            let queue_wait_frames = queued.enqueued.map_or(0, |enqueued| {
+                crate::clock::duration_to_frames(enqueued.elapsed(), engine.output_sample_rate())
+                    .saturating_sub(buffer_frames)
+            });
             let command = queued.command;
             // Only atomic counters here: the audio callback must never log,
             // allocate a diagnostic buffer, or wait for the diagnostics reader.
@@ -647,11 +682,12 @@ impl CommandedAudioEngine {
             };
             for sound in sounds {
                 let late = if let Some(deadline) = sound.start_time {
-                    (deadline.elapsed().as_nanos() * u128::from(engine.output_sample_rate())
-                        / 1_000_000_000)
-                        .min(u128::from(u64::MAX)) as u64
+                    crate::clock::duration_to_frames(
+                        deadline.elapsed(),
+                        engine.output_sample_rate(),
+                    )
                 } else if sound.start_frame == 0 {
-                    0
+                    queue_wait_frames
                 } else {
                     output_frame.saturating_sub(sound.start_frame)
                 };
