@@ -19,7 +19,9 @@ impl OutputPlaybackTimeline {
     ) -> u64 {
         let catch_up = self.previous_observed.and_then(|previous_observed| {
             let callback_gap = observed.checked_duration_since(previous_observed)?;
-            let expected = frames_to_duration(self.previous_frames, sample_rate);
+            // A variable-size callback may refill PCM accumulated since the
+            // last wake. Its larger span is coverage, not missing audio.
+            let expected = frames_to_duration(self.previous_frames.max(frames), sample_rate);
             let actual = match self.previous_playback {
                 Some(previous) => playback.checked_duration_since(previous)?,
                 None => callback_gap,
@@ -93,6 +95,7 @@ where
     let sample_rate = config.sample_rate;
     let mut playback_timeline = OutputPlaybackTimeline::default();
     let mut output_phase = ScheduledOutputPhase::default();
+    let mut schedule_timeline = OutputScheduleTimeline::default();
     let timing_enabled = bmz_core::latency::diagnostics_enabled();
     // Query outside the callback. A failed host identity is unknown too.
     let prediction_available = device.id().ok().is_some_and(|id| id.host().name() != "PipeWire");
@@ -187,12 +190,14 @@ where
                 let start_frame =
                     current_frame.load(Ordering::Relaxed).saturating_add(catch_up_frames);
                 if catch_up_frames != 0 {
+                    schedule_timeline.mark_outage();
                     diagnostics.timeline_catch_up_count.fetch_add(1, Ordering::Relaxed);
                     diagnostics
                         .timeline_catch_up_frames
                         .fetch_add(catch_up_frames, Ordering::Relaxed);
                 }
-                if rebased || catch_up_frames != 0 {
+                let schedule_stopped = schedule_timeline.observe(callback_start, span);
+                if rebased || catch_up_frames != 0 || schedule_stopped {
                     output_phase.reset();
                 }
                 let buffer_time = output_phase.buffer_time(playback, callback_start, span);
@@ -202,7 +207,7 @@ where
                         channels,
                         channel_offset,
                         start_frame,
-                        buffer_time: Some(buffer_time),
+                        buffer_time: Some(schedule_timeline.timing(buffer_time)),
                     },
                     OutputRenderSources {
                         output_commands: &output_commands,
@@ -248,6 +253,23 @@ mod playback_timeline_tests {
 
     const SAMPLE_RATE: u32 = 48_000;
     const BUFFER_FRAMES: usize = 480;
+
+    #[test]
+    fn a_larger_refill_covers_callback_delay_even_during_a_clock_rebase() {
+        let base = Instant::now();
+        let mut timeline = OutputPlaybackTimeline::default();
+        timeline.catch_up_frames(::cpal::StreamInstant::from_millis(1_000), 480, SAMPLE_RATE, base);
+        timeline.rebase();
+        assert_eq!(
+            timeline.catch_up_frames(
+                ::cpal::StreamInstant::from_millis(5),
+                3_840,
+                SAMPLE_RATE,
+                base + Duration::from_millis(80)
+            ),
+            0
+        );
+    }
 
     #[test]
     fn a_callback_stop_is_still_an_outage_across_a_clock_rebase() {

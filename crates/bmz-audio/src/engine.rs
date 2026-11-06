@@ -242,13 +242,22 @@ impl AudioEngine {
         output: &mut [f32],
         buffer_time: Option<std::time::Instant>,
     ) {
+        self.render_stereo_with_timing(output_start_frame, output, buffer_time.map(Into::into));
+    }
+
+    pub(crate) fn render_stereo_with_timing(
+        &mut self,
+        output_start_frame: u64,
+        output: &mut [f32],
+        buffer_time: Option<crate::clock::OutputScheduleTiming>,
+    ) {
         output.fill(0.0);
         if self.playback_paused() {
             return;
         }
         let frame_count = output.len() / 2;
         if let Some(buffer_time) = buffer_time {
-            self.queue.resolve_times(
+            self.queue.resolve_times_with_timing(
                 output_start_frame,
                 buffer_time,
                 frame_count,

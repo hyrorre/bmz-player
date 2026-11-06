@@ -1,5 +1,5 @@
 //! Shared real-time output state for CPAL callbacks and native audio backends.
-pub(super) use crate::clock::{duration_to_frames, output_gap_tolerance};
+pub(super) use crate::clock::{OutputScheduleTiming, duration_to_frames, output_gap_tolerance};
 use crate::command::CommandedAudioEngine;
 use crate::engine::AudioEngine;
 use std::collections::VecDeque;
@@ -48,6 +48,8 @@ pub struct CpalOutputDiagnostics {
     pub rendered_frames: u64,
     pub timeline_catch_up_count: u64,
     pub timeline_catch_up_frames: u64,
+    /// WASAPI fills using the callback fallback after rejecting the position epoch.
+    pub untrusted_position_count: u64,
     pub stream_error_count: u64,
     pub processor_overload_count: u64,
     pub source_lock_miss_count: u64,
@@ -69,6 +71,7 @@ pub(super) struct CpalOutputDiagnosticsCounters {
     pub(super) rendered_frames: AtomicU64,
     pub(super) timeline_catch_up_count: AtomicU64,
     pub(super) timeline_catch_up_frames: AtomicU64,
+    pub(super) untrusted_position_count: AtomicU64,
     pub(super) stream_error_count: AtomicU64,
     pub(super) processor_overload_count: AtomicU64,
     pub(super) source_lock_miss_count: AtomicU64,
@@ -116,6 +119,38 @@ pub(super) fn frames_to_duration(frames: usize, sample_rate: u32) -> Duration {
 
 /// Long enough to ignore callback delivery jitter, short enough to follow a real change.
 const OUTPUT_LEAD_SMOOTHING_SECS: f64 = 2.0;
+
+/// Detect scheduling stalls from callback observations, never from corrected
+/// buffer times. A larger delivered buffer can cover a longer callback interval.
+/// This is a deadline resync signal, not evidence of missing physical PCM.
+#[derive(Debug, Default)]
+pub(super) struct OutputScheduleTimeline {
+    previous: Option<(Instant, Duration)>,
+    epoch: u64,
+}
+
+impl OutputScheduleTimeline {
+    pub(super) fn observe(&mut self, callback: Instant, span: Duration) -> bool {
+        let stopped = self.previous.is_some_and(|(previous, previous_span)| {
+            let coverage = previous_span.max(span);
+            callback.saturating_duration_since(previous)
+                > coverage.saturating_add(output_gap_tolerance(coverage))
+        });
+        self.previous = Some((callback, span));
+        if stopped {
+            self.mark_outage();
+        }
+        stopped
+    }
+
+    pub(super) fn mark_outage(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
+    }
+
+    pub(super) fn timing(&self, time: Instant) -> OutputScheduleTiming {
+        OutputScheduleTiming { time, outage_epoch: self.epoch }
+    }
+}
 
 /// Gives scheduled sounds the average output delay of immediately requested ones.
 ///
@@ -224,6 +259,7 @@ pub(crate) struct NativeOutputRenderer {
     pub(super) diagnostics: Arc<CpalOutputDiagnosticsCounters>,
     buffers: OutputRenderBuffers,
     output_phase: ScheduledOutputPhase,
+    schedule_timeline: OutputScheduleTimeline,
 }
 
 #[cfg(any(windows, all(target_os = "macos", feature = "experimental-coreaudio-ioproc")))]
@@ -243,6 +279,7 @@ impl NativeOutputRenderer {
             diagnostics,
             buffers: OutputRenderBuffers::new(),
             output_phase: ScheduledOutputPhase::default(),
+            schedule_timeline: OutputScheduleTimeline::default(),
         }
     }
 
@@ -264,6 +301,9 @@ impl NativeOutputRenderer {
         let frames = data.len() / channels;
         let start_frame = self.current_frame.load(Ordering::Relaxed);
         let span = frames_to_duration(frames, sample_rate);
+        if self.schedule_timeline.observe(callback_start, span) {
+            self.output_phase.reset();
+        }
         let buffer_time = self.output_phase.buffer_time(playback, callback_start, span);
         render_output(
             data,
@@ -271,7 +311,7 @@ impl NativeOutputRenderer {
                 channels,
                 channel_offset: self.channel_offset,
                 start_frame,
-                buffer_time: Some(buffer_time),
+                buffer_time: Some(self.schedule_timeline.timing(buffer_time)),
             },
             OutputRenderSources {
                 output_commands: &self.output_commands,
@@ -288,6 +328,11 @@ impl NativeOutputRenderer {
     #[cfg(windows)]
     pub(crate) fn record_stream_error(&self) {
         self.diagnostics.stream_error_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn record_untrusted_position(&self) {
+        self.diagnostics.untrusted_position_count.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Advance the mixer timeline across a native-stream outage without rendering the missed
@@ -309,6 +354,7 @@ impl NativeOutputRenderer {
             return;
         }
         self.current_frame.fetch_add(frames, Ordering::Relaxed);
+        self.schedule_timeline.mark_outage();
         self.diagnostics.timeline_catch_up_count.fetch_add(1, Ordering::Relaxed);
         self.diagnostics.timeline_catch_up_frames.fetch_add(frames, Ordering::Relaxed);
     }
@@ -320,7 +366,7 @@ impl NativeOutputRenderer {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct OutputRenderLayout {
-    pub(super) buffer_time: Option<Instant>,
+    pub(super) buffer_time: Option<OutputScheduleTiming>,
     pub(super) channels: usize,
     pub(super) channel_offset: usize,
     pub(super) start_frame: u64,
@@ -383,7 +429,7 @@ pub(super) fn render_output<T: OutputSample>(
 }
 
 pub(super) fn mix_sources_stereo(
-    position: (u64, Option<Instant>),
+    position: (u64, Option<OutputScheduleTiming>),
     frames: usize,
     output_commands: &SharedOutputCommands,
     retired_sources: &RetiredOutputSources,
@@ -411,13 +457,17 @@ pub(super) fn mix_sources_stereo(
         let rendered = match &mut source.engine {
             RenderAudioEngine::Legacy(engine) => match engine.try_lock() {
                 Ok(mut engine) => {
-                    engine.render_stereo_at(output_start_frame, source_scratch, buffer_time);
+                    engine.render_stereo_with_timing(
+                        output_start_frame,
+                        source_scratch,
+                        buffer_time,
+                    );
                     true
                 }
                 Err(_) => false,
             },
             RenderAudioEngine::Commanded(engine) => {
-                engine.render_stereo_at(output_start_frame, source_scratch, buffer_time)
+                engine.render_stereo_with_timing(output_start_frame, source_scratch, buffer_time)
             }
         };
         if rendered {
@@ -587,6 +637,7 @@ impl CpalOutputDiagnosticsCounters {
             rendered_frames: self.rendered_frames.load(Ordering::Relaxed),
             timeline_catch_up_count: self.timeline_catch_up_count.load(Ordering::Relaxed),
             timeline_catch_up_frames: self.timeline_catch_up_frames.load(Ordering::Relaxed),
+            untrusted_position_count: self.untrusted_position_count.load(Ordering::Relaxed),
             stream_error_count: self.stream_error_count.load(Ordering::Relaxed),
             processor_overload_count: self.processor_overload_count.load(Ordering::Relaxed),
             source_lock_miss_count: self.source_lock_miss_count.load(Ordering::Relaxed),
@@ -732,6 +783,64 @@ mod tests {
             phase.buffer_time(Some(callback + LEAD), callback, SPAN);
         }
         (phase, start + SPAN * 500)
+    }
+
+    #[test]
+    fn shared_padding_changes_preserve_short_bgm_and_auto_attacks() {
+        let start = Instant::now();
+        let base = start + SPAN * 500;
+        for catch_up in [true, false] {
+            let mut phase = ScheduledOutputPhase::default();
+            let mut timeline = OutputScheduleTimeline::default();
+            for tick in 0..500 {
+                let callback = start + SPAN * tick;
+                timeline.observe(callback, SPAN);
+                phase.buffer_time(Some(callback + Duration::from_millis(70)), callback, SPAN);
+            }
+            let mut engine = AudioEngine::new(SAMPLE_RATE);
+            engine.insert_sample(
+                SoundId(1),
+                DecodedSample { channels: 1, sample_rate: SAMPLE_RATE, frames: vec![0.5] },
+            );
+            let mut sound = ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0);
+            sound.start_time = Some(base + Duration::from_millis(60));
+            sound.catch_up = catch_up;
+            engine.schedule(sound);
+            // Endpoint retains 80 ms of PCM: the delayed callback consumes that
+            // padding, fills 80 ms, then the next callback needs only 10 ms.
+            let mut frame = 100_000;
+            let mut onsets = 0;
+            for (callback_ms, playback_ms, frames) in [(0, 70, 480), (80, 80, 3840), (90, 160, 480)]
+            {
+                let callback = base + Duration::from_millis(callback_ms);
+                let span = frames_to_duration(frames, SAMPLE_RATE);
+                assert!(!timeline.observe(callback, span));
+                let time = phase.buffer_time(
+                    Some(base + Duration::from_millis(playback_ms)),
+                    callback,
+                    span,
+                );
+                let mut pcm = vec![0.0; frames * 2];
+                engine.render_stereo_with_timing(frame, &mut pcm, Some(timeline.timing(time)));
+                onsets += pcm.as_chunks::<2>().0.iter().filter(|pcm| pcm[0] != 0.0).count();
+                frame += frames as u64;
+            }
+            assert_eq!(onsets, 1, "catch_up={catch_up}");
+            assert!(engine.is_idle());
+        }
+    }
+
+    #[test]
+    fn callback_stop_is_distinct_from_a_prediction_or_buffer_change() {
+        let base = Instant::now();
+        let mut timeline = OutputScheduleTimeline::default();
+        assert!(!timeline.observe(base, SPAN));
+        assert!(!timeline.observe(base + SPAN, SPAN));
+        assert_eq!(timeline.timing(base).outage_epoch, 0);
+        assert!(timeline.observe(base + Duration::from_millis(60), SPAN));
+        assert_eq!(timeline.timing(base).outage_epoch, 1);
+        assert!(!timeline.observe(base + Duration::from_millis(70), SPAN));
+        assert_eq!(timeline.timing(base).outage_epoch, 1);
     }
 
     #[test]
