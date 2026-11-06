@@ -1015,6 +1015,9 @@ settings-downloads-keep-archive = HTTP로 받은 압축 파일을 풀지 않고 
 settings-downloads-keep-archive-help = ZIP / RAR / 7z / tar.gz / LZH 파일을 그대로 저장하고 재생합니다. 새로 대기열에 추가하는 다운로드부터 적용합니다. IPFS 다운로드는 압축을 풉니다.
 downloads-state-validating = 압축 파일 확인 중
 
+settings-audio-schedule-ahead = 오디오 미리 예약
+settings-audio-schedule-ahead-help = ON: 시스템 시계를 기준으로 BGM과 자동 키음을 미리 예약합니다. OFF: 재생 시각에 도달하면 재생을 요청합니다. 입력으로 발생한 키음은 항상 즉시 요청합니다. 모든 프로필에 공통이며 다음 플레이부터 적용됩니다.
+
 skin-external-allow = 외부 스킨 허용
 skin-external-revoke = 외부 스킨 권한 해제
 skin-external-allow-help = 선택한 스킨과 실제 파일이 있는 폴더의 읽기를 허용합니다. 공유 폴더는 프로필 설정에서 추가할 수 있습니다.

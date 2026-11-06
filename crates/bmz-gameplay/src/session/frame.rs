@@ -26,9 +26,10 @@ use super::judgement::{
     update_gauge_max_timer_state,
 };
 
-pub(super) fn sync_input_timestamp_anchor(session: &mut GameSession, audio_now: TimeUs) {
+pub(super) fn sync_input_timestamp_anchor(session: &mut GameSession) {
     session.input_timestamp_anchor = if session.audio_clock.running {
-        Some(InputTimestampAnchor { monotonic_ns: monotonic_timestamp_ns(), audio_time: audio_now })
+        let (at, monotonic_ns) = crate::input::backend::monotonic_observation();
+        Some(InputTimestampAnchor { monotonic_ns, audio_time: session.audio_clock.now_at(at) })
     } else {
         None
     };
@@ -40,7 +41,7 @@ pub fn advance_session_frame(
 ) -> SessionFrame {
     super::latency::begin_advance();
     let times = compute_frame_times(session);
-    sync_input_timestamp_anchor(session, times.audio_now);
+    sync_input_timestamp_anchor(session);
     rebase_pre_ready_visual_times(session, times.audio_now);
     update_scratch_angle_phase(session, times.audio_now);
     let mut judgements = Vec::new();

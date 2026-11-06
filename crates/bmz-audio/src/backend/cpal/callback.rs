@@ -2,11 +2,10 @@ use std::time::Duration;
 
 use super::*;
 
-const MIN_PLAYBACK_DISCONTINUITY: Duration = Duration::from_millis(20);
-
 #[derive(Debug, Default)]
 struct OutputPlaybackTimeline {
     previous_playback: Option<::cpal::StreamInstant>,
+    previous_observed: Option<Instant>,
     previous_frames: usize,
 }
 
@@ -16,30 +15,33 @@ impl OutputPlaybackTimeline {
         playback: ::cpal::StreamInstant,
         frames: usize,
         sample_rate: u32,
+        observed: Instant,
     ) -> u64 {
-        let catch_up = self.previous_playback.and_then(|previous| {
-            let actual = playback.checked_duration_since(previous)?;
-            let expected = frames_to_duration(self.previous_frames, sample_rate);
-            let gap = actual.saturating_sub(expected);
-            let tolerance = MIN_PLAYBACK_DISCONTINUITY.max(expected.saturating_mul(2));
-            (gap > tolerance).then(|| duration_to_frames(gap, sample_rate))
+        let catch_up = self.previous_observed.and_then(|previous_observed| {
+            let callback_gap = observed.checked_duration_since(previous_observed)?;
+            let previous_span = frames_to_duration(self.previous_frames, sample_rate);
+            let span = frames_to_duration(frames, sample_rate);
+            // A variable-size callback may refill PCM accumulated since the
+            // last wake. Its larger span is coverage, not missing audio.
+            let callback_loss = callback_gap.saturating_sub(previous_span.max(span));
+            // Continuous buffers start one previous span apart, whatever this
+            // refill holds. A larger output buffer/latency estimate is not
+            // evidence of lost PCM, so a callback outage is required as well.
+            // An API clock that went backwards cannot be compared at all.
+            let loss = self
+                .previous_playback
+                .and_then(|previous| playback.checked_duration_since(previous))
+                .map_or(callback_loss, |step| {
+                    step.saturating_sub(previous_span).min(callback_loss)
+                });
+            (loss > output_gap_tolerance(previous_span.min(span)))
+                .then(|| duration_to_frames(loss, sample_rate))
         });
         self.previous_playback = Some(playback);
+        self.previous_observed = Some(observed);
         self.previous_frames = frames;
         catch_up.unwrap_or(0)
     }
-}
-
-fn frames_to_duration(frames: usize, sample_rate: u32) -> Duration {
-    if sample_rate == 0 {
-        return Duration::ZERO;
-    }
-    let nanos = (frames as u128)
-        .saturating_mul(1_000_000_000)
-        .checked_div(u128::from(sample_rate))
-        .unwrap_or(0)
-        .min(u128::from(u64::MAX));
-    Duration::from_nanos(nanos as u64)
 }
 
 pub(super) fn build_output_stream<T>(
@@ -60,6 +62,7 @@ where
     let mut buffers = OutputRenderBuffers::new();
     let sample_rate = config.sample_rate;
     let mut playback_timeline = OutputPlaybackTimeline::default();
+    let mut frame_clock = OutputFrameClock::default();
     let timing_enabled = bmz_core::latency::diagnostics_enabled();
     // Query outside the callback. A failed host identity is unknown too.
     let prediction_available = device.id().ok().is_some_and(|id| id.host().name() != "PipeWire");
@@ -126,6 +129,7 @@ where
                     info.timestamp().playback,
                     frames,
                     sample_rate,
+                    callback_start,
                 );
                 let start_frame =
                     current_frame.load(Ordering::Relaxed).saturating_add(catch_up_frames);
@@ -135,9 +139,17 @@ where
                         .timeline_catch_up_frames
                         .fetch_add(catch_up_frames, Ordering::Relaxed);
                 }
+                let span = frames_to_duration(frames, sample_rate);
+                let buffer_time =
+                    frame_clock.buffer_time(start_frame, callback_start, span, sample_rate);
                 render_output(
                     data,
-                    OutputRenderLayout { channels, channel_offset, start_frame },
+                    OutputRenderLayout {
+                        channels,
+                        channel_offset,
+                        start_frame,
+                        buffer_time: Some(buffer_time),
+                    },
                     OutputRenderSources {
                         output_commands: &output_commands,
                         retired_sources: &retired_sources,
@@ -179,13 +191,142 @@ mod playback_timeline_tests {
     const BUFFER_FRAMES: usize = 480;
 
     #[test]
+    fn a_shared_stall_is_measured_from_the_previous_buffer() {
+        // cpal reports callback + padding. The 1056-frame endpoint held 576
+        // frames (12 ms) at the last callback, then drained during the stall.
+        let base = Instant::now();
+        let api = ::cpal::StreamInstant::from_millis;
+        for (stall_ms, silent_frames) in [(60, 1_824), (100, 3_744)] {
+            let mut timeline = OutputPlaybackTimeline::default();
+            timeline.catch_up_frames(api(1_012), BUFFER_FRAMES, SAMPLE_RATE, base);
+            assert_eq!(
+                timeline.catch_up_frames(
+                    api(1_000 + stall_ms),
+                    1_056,
+                    SAMPLE_RATE,
+                    base + Duration::from_millis(stall_ms),
+                ),
+                silent_frames
+            );
+        }
+    }
+
+    #[test]
+    fn a_refill_is_not_an_outage_even_if_the_api_latency_ignores_it() {
+        let base = Instant::now();
+        let api = ::cpal::StreamInstant::from_millis;
+        let mut timeline = OutputPlaybackTimeline::default();
+        timeline.catch_up_frames(api(1_010), BUFFER_FRAMES, SAMPLE_RATE, base);
+        assert_eq!(
+            timeline.catch_up_frames(
+                api(1_090),
+                3_840,
+                SAMPLE_RATE,
+                base + Duration::from_millis(80)
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn a_larger_refill_covers_callback_delay_even_when_the_api_clock_resets() {
+        let base = Instant::now();
+        let mut timeline = OutputPlaybackTimeline::default();
+        timeline.catch_up_frames(::cpal::StreamInstant::from_millis(1_000), 480, SAMPLE_RATE, base);
+        assert_eq!(
+            timeline.catch_up_frames(
+                ::cpal::StreamInstant::from_millis(5),
+                3_840,
+                SAMPLE_RATE,
+                base + Duration::from_millis(80)
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn a_callback_stop_is_still_an_outage_when_the_api_clock_resets() {
+        let base = Instant::now();
+        let mut timeline = OutputPlaybackTimeline::default();
+        timeline.catch_up_frames(
+            ::cpal::StreamInstant::from_millis(1_000),
+            BUFFER_FRAMES,
+            SAMPLE_RATE,
+            base,
+        );
+        // The new API epoch is not comparable. The Instant gap still is.
+        assert_eq!(
+            timeline.catch_up_frames(
+                ::cpal::StreamInstant::from_millis(5),
+                BUFFER_FRAMES,
+                SAMPLE_RATE,
+                base + Duration::from_millis(110),
+            ),
+            4_800
+        );
+    }
+
+    #[test]
+    fn an_api_clock_reset_with_regular_callbacks_is_not_an_outage() {
+        let base = Instant::now();
+        let mut timeline = OutputPlaybackTimeline::default();
+        timeline.catch_up_frames(
+            ::cpal::StreamInstant::from_millis(1_000),
+            BUFFER_FRAMES,
+            SAMPLE_RATE,
+            base,
+        );
+        assert_eq!(
+            timeline.catch_up_frames(
+                ::cpal::StreamInstant::from_millis(5),
+                BUFFER_FRAMES,
+                SAMPLE_RATE,
+                base + Duration::from_millis(10),
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn output_latency_jump_alone_does_not_skip_playing_samples() {
+        let base = Instant::now();
+        let mut timeline = OutputPlaybackTimeline::default();
+        timeline.catch_up_frames(
+            ::cpal::StreamInstant::from_millis(1_000),
+            BUFFER_FRAMES,
+            SAMPLE_RATE,
+            base,
+        );
+        assert_eq!(
+            timeline.catch_up_frames(
+                ::cpal::StreamInstant::from_millis(1_110),
+                BUFFER_FRAMES,
+                SAMPLE_RATE,
+                base + Duration::from_millis(10)
+            ),
+            0
+        );
+        assert_eq!(
+            timeline.catch_up_frames(
+                ::cpal::StreamInstant::from_millis(1_120),
+                BUFFER_FRAMES,
+                SAMPLE_RATE,
+                base + Duration::from_millis(20)
+            ),
+            0
+        );
+    }
+
+    #[test]
     fn callback_jitter_does_not_trigger_timeline_catch_up() {
+        let base = Instant::now();
         let mut timeline = OutputPlaybackTimeline::default();
         assert_eq!(
             timeline.catch_up_frames(
                 ::cpal::StreamInstant::from_millis(1_000),
                 BUFFER_FRAMES,
                 SAMPLE_RATE,
+                base + Duration::from_millis(1_000),
             ),
             0
         );
@@ -194,6 +335,7 @@ mod playback_timeline_tests {
                 ::cpal::StreamInstant::from_millis(1_029),
                 BUFFER_FRAMES * 2,
                 SAMPLE_RATE,
+                base + Duration::from_millis(1_029),
             ),
             0
         );
@@ -202,6 +344,7 @@ mod playback_timeline_tests {
                 ::cpal::StreamInstant::from_millis(1_049),
                 BUFFER_FRAMES,
                 SAMPLE_RATE,
+                base + Duration::from_millis(1_049),
             ),
             0
         );
@@ -209,11 +352,13 @@ mod playback_timeline_tests {
 
     #[test]
     fn confirmed_playback_gap_advances_the_logical_output_frame() {
+        let base = Instant::now();
         let mut timeline = OutputPlaybackTimeline::default();
         timeline.catch_up_frames(
             ::cpal::StreamInstant::from_millis(1_000),
             BUFFER_FRAMES,
             SAMPLE_RATE,
+            base + Duration::from_millis(1_000),
         );
 
         assert_eq!(
@@ -221,6 +366,7 @@ mod playback_timeline_tests {
                 ::cpal::StreamInstant::from_millis(1_110),
                 BUFFER_FRAMES,
                 SAMPLE_RATE,
+                base + Duration::from_millis(1_110),
             ),
             4_800
         );
@@ -228,11 +374,13 @@ mod playback_timeline_tests {
 
     #[test]
     fn invalid_backward_timestamp_resets_without_correction() {
+        let base = Instant::now();
         let mut timeline = OutputPlaybackTimeline::default();
         timeline.catch_up_frames(
             ::cpal::StreamInstant::from_millis(1_000),
             BUFFER_FRAMES,
             SAMPLE_RATE,
+            base + Duration::from_millis(1_000),
         );
 
         assert_eq!(
@@ -240,6 +388,7 @@ mod playback_timeline_tests {
                 ::cpal::StreamInstant::from_millis(900),
                 BUFFER_FRAMES,
                 SAMPLE_RATE,
+                base + Duration::from_millis(900),
             ),
             0
         );
@@ -248,6 +397,7 @@ mod playback_timeline_tests {
                 ::cpal::StreamInstant::from_millis(910),
                 BUFFER_FRAMES,
                 SAMPLE_RATE,
+                base + Duration::from_millis(910),
             ),
             0
         );

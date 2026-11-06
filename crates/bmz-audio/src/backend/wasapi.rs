@@ -3,13 +3,14 @@
 //! Shared low-latency mode keeps a silent period-control stream beside CPAL. Exclusive mode owns
 //! the endpoint stream and feeds the existing mixer from a dedicated event-driven worker.
 
+use std::cell::Cell;
 use std::ffi::c_void;
 use std::io;
 use std::mem::size_of;
 use std::slice;
 use std::sync::{Mutex, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use thiserror::Error;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT};
@@ -34,7 +35,10 @@ use windows::Win32::System::Threading::{
 };
 use windows::core::PCWSTR;
 
-use crate::backend::output::{NativeOutputRenderer, OutputSample};
+use crate::backend::output::{
+    NativeOutputRenderer, OutputSample, duration_to_frames, frames_to_duration,
+    output_gap_tolerance,
+};
 
 const EXCLUSIVE_RECOVERY_INITIAL_DELAY_MS: u32 = 100;
 const EXCLUSIVE_RECOVERY_MAX_DELAY_MS: u32 = 5_000;
@@ -654,9 +658,17 @@ struct ExclusiveFormatCandidate {
     sample_format: ExclusiveSampleFormat,
 }
 
+/// One buffer is queued ahead of every fill, so a fill late by more than the
+/// tolerance is taken as a gap in the output. Delivery jitter is not.
+fn exclusive_missed_frames(late: Duration, period: Duration, sample_rate: u32) -> u64 {
+    if late > output_gap_tolerance(period) { duration_to_frames(late, sample_rate) } else { 0 }
+}
+
 struct ExclusiveWorkerStream {
     client: IAudioClient,
     render_client: IAudioRenderClient,
+    sample_rate: u32,
+    previous_fill: Cell<Option<Instant>>,
     audio_event: OwnedEvent,
     buffer_frames: u32,
     channels: usize,
@@ -741,6 +753,8 @@ impl ExclusiveWorkerStream {
             Self {
                 client,
                 render_client,
+                sample_rate,
+                previous_fill: Cell::new(None),
                 audio_event,
                 buffer_frames,
                 channels: channels as usize,
@@ -776,6 +790,8 @@ impl ExclusiveWorkerStream {
         unsafe {
             self.client.Start().map_err(|error| format!("IAudioClient::Start: {error}"))?;
         }
+        // Starting the device is not a late fill.
+        self.previous_fill.set(None);
         self.started = true;
         Ok(())
     }
@@ -809,33 +825,54 @@ impl ExclusiveWorkerStream {
     }
 
     fn fill_next_buffer(&self, renderer: &mut NativeOutputRenderer) -> Result<(), String> {
+        let callback_start = Instant::now();
         let data = unsafe {
             self.render_client
                 .GetBuffer(self.buffer_frames)
                 .map_err(|error| format!("IAudioRenderClient::GetBuffer: {error}"))?
         };
         let sample_count = self.buffer_frames as usize * self.channels;
+        let period = frames_to_duration(self.buffer_frames as usize, self.sample_rate);
+        let late =
+            self.previous_fill.replace(Some(callback_start)).map_or(Duration::ZERO, |previous| {
+                callback_start.saturating_duration_since(previous).saturating_sub(period)
+            });
+        let missed_frames = exclusive_missed_frames(late, period, self.sample_rate);
+        if missed_frames != 0 {
+            // Publish the same gap to both active voices and timed events.
+            renderer.catch_up_output_frames(missed_frames);
+        }
         unsafe {
             match self.sample_format {
-                ExclusiveSampleFormat::F32 => renderer.render(
+                ExclusiveSampleFormat::F32 => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<f32>(), sample_count),
                     self.channels,
+                    callback_start,
+                    self.sample_rate,
                 ),
-                ExclusiveSampleFormat::I32 => renderer.render(
+                ExclusiveSampleFormat::I32 => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<i32>(), sample_count),
                     self.channels,
+                    callback_start,
+                    self.sample_rate,
                 ),
-                ExclusiveSampleFormat::I24In32 => renderer.render(
+                ExclusiveSampleFormat::I24In32 => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<PcmI24In32>(), sample_count),
                     self.channels,
+                    callback_start,
+                    self.sample_rate,
                 ),
-                ExclusiveSampleFormat::I24Packed => renderer.render(
+                ExclusiveSampleFormat::I24Packed => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<PackedI24>(), sample_count),
                     self.channels,
+                    callback_start,
+                    self.sample_rate,
                 ),
-                ExclusiveSampleFormat::I16 => renderer.render(
+                ExclusiveSampleFormat::I16 => renderer.render_at(
                     slice::from_raw_parts_mut(data.cast::<i16>(), sample_count),
                     self.channels,
+                    callback_start,
+                    self.sample_rate,
                 ),
             }
             self.render_client
@@ -1573,5 +1610,14 @@ mod tests {
         assert_eq!(PcmI24In32::from_f32(0.0), PcmI24In32(0));
         assert_eq!(PcmI24In32::from_f32(1.0), PcmI24In32(0x7f_ff_ff_00));
         assert_eq!(PcmI24In32::from_f32(-1.0), PcmI24In32(-0x7f_ff_ff_00));
+    }
+
+    #[test]
+    fn only_a_fill_late_past_the_tolerance_is_a_gap_in_the_output() {
+        let period = Duration::from_millis(10);
+        for (late_ms, frames) in [(0, 0), (9, 0), (20, 0), (21, 1_008), (90, 4_320)] {
+            let late = Duration::from_millis(late_ms);
+            assert_eq!(exclusive_missed_frames(late, period, 48_000), frames, "{late_ms} ms");
+        }
     }
 }

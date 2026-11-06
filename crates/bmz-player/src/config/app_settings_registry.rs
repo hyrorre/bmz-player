@@ -11,6 +11,7 @@ const AUDIO_SAMPLE_RATES: [u32; 5] = [44_100, 48_000, 96_000, 192_000, 384_000];
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AppSettingsEntryId {
     AudioBackend,
+    AudioScheduleAhead,
     AudioOutputMode,
     AudioSampleRate,
     AudioBufferMode,
@@ -48,6 +49,7 @@ impl AppSettingsEntryId {
         matches!(
             self,
             Self::AudioBackend
+                | Self::AudioScheduleAhead
                 | Self::AudioOutputMode
                 | Self::AudioSampleRate
                 | Self::AudioBufferMode
@@ -60,6 +62,7 @@ impl AppSettingsEntryId {
 
     pub const fn label(self) -> &'static str {
         match self {
+            Self::AudioScheduleAhead => "AUDIO LOOKAHEAD",
             Self::AudioBackend => "AUDIO BACKEND",
             Self::AudioOutputMode => "OUTPUT MODE",
             Self::AudioSampleRate => "SAMPLE RATE",
@@ -83,6 +86,7 @@ impl AppSettingsEntryId {
 
     pub const fn description_key(self) -> &'static str {
         match self {
+            Self::AudioScheduleAhead => "settings-audio-schedule-ahead-help",
             Self::AudioBackend => "settings-entry-description-audio-backend",
             Self::AudioOutputMode => "settings-entry-description-audio-output-mode",
             Self::AudioSampleRate => "settings-entry-description-audio-sample-rate",
@@ -119,6 +123,9 @@ pub fn format_app_settings_value(
 ) -> String {
     let text = Localizer::new(locale);
     match entry_id {
+        AppSettingsEntryId::AudioScheduleAhead => {
+            if config.audio.schedule_ahead { "ON" } else { "OFF" }.to_string()
+        }
         AppSettingsEntryId::AudioBackend => audio_backend_label(&config.audio.backend, text),
         AppSettingsEntryId::AudioOutputMode => {
             audio_output_mode_label(&config.audio.output_mode, text)
@@ -188,6 +195,9 @@ pub fn adjust_app_settings_value(
     }
     let before = format_app_settings_value(config, entry_id, AppLocale::DEFAULT);
     match entry_id {
+        AppSettingsEntryId::AudioScheduleAhead => {
+            config.audio.schedule_ahead = !config.audio.schedule_ahead
+        }
         AppSettingsEntryId::AudioBackend => {
             if let AppSettingsChoices::AudioBackends(values) = choices {
                 cycle_value(&mut config.audio.backend, values, direction);

@@ -1,7 +1,7 @@
 /// 譜面時刻でキー音を先読みする経路を使うか。
 /// `auto_keysound` 設定に加え、フルオートも同じ経路にする
 /// (判定バッチ遅延の catch_up でアタックが欠けるのを避ける)。
-pub(super) fn uses_scheduled_auto_keysounds(session: &GameSession) -> bool {
+pub(crate) fn uses_scheduled_auto_keysounds(session: &GameSession) -> bool {
     session.audio_mix.auto_keysound
         || session.autoplay.as_ref().is_some_and(AutoplayController::is_full)
 }
@@ -41,7 +41,10 @@ pub fn schedule_keysounds(session: &mut GameSession, audio: &mut dyn AudioSchedu
         // and keeps key-press latency low (no extra buffering).
         for sound_id in note.sounds() {
             audio.schedule(ScheduledSound {
-                start_frame: session.audio_clock.time_to_output_frame(event.time),
+                start_time: None,
+                // Input offsets belong to scoring, not to output latency.
+                // Never wait for a frame derived from the old song/device anchor.
+                start_frame: 0,
                 sample_offset_frames: 0,
                 sound_id,
                 volume,

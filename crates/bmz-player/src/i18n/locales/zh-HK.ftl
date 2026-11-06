@@ -1016,6 +1016,9 @@ settings-downloads-keep-archive = 不解壓縮，直接登錄 HTTP 下載的壓�
 settings-downloads-keep-archive-help = 直接儲存並播放 ZIP / RAR / 7z / tar.gz / LZH 壓縮檔。對新加入佇列的下載生效。IPFS 下載會解壓縮。
 downloads-state-validating = 正在檢查壓縮檔
 
+settings-audio-schedule-ahead = 提前排程音訊
+settings-audio-schedule-ahead-help = ON：按系統時鐘預先安排 BGM 和自動鍵音。OFF：到達播放時間後再要求播放。按鍵觸發的鍵音一律立即要求播放。所有設定檔共用，下一次遊玩時生效。
+
 skin-external-allow = 允許此外部介面主題
 skin-external-revoke = 撤銷外部介面主題權限
 skin-external-allow-help = 允許此介面主題讀取其實際所在的資料夾。可在設定檔中加入共用資源資料夾。

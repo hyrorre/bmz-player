@@ -10,6 +10,7 @@ pub struct AudioEngine {
     pub mixer: MixerState,
     pub samples: SampleBank,
     paused_at_output_frame: Option<u64>,
+    paused_at_time: Option<std::time::Instant>,
 }
 
 impl AudioEngine {
@@ -19,6 +20,7 @@ impl AudioEngine {
             mixer: MixerState::new(output_sample_rate),
             samples: SampleBank::default(),
             paused_at_output_frame: None,
+            paused_at_time: None,
         }
     }
 
@@ -29,6 +31,7 @@ impl AudioEngine {
             mixer: MixerState::new(output_sample_rate),
             samples,
             paused_at_output_frame: None,
+            paused_at_time: None,
         }
     }
 
@@ -108,11 +111,26 @@ impl AudioEngine {
     /// callbackの出力frameを基準に、予約音と再生中voiceを同じ位置で凍結する。
     /// 再開時は停止中に進んだhardware frame分だけ絶対frameを後ろへずらす。
     pub fn set_playback_paused(&mut self, paused: bool, output_frame: u64) {
+        self.set_playback_paused_at(paused, output_frame, std::time::Instant::now());
+    }
+
+    pub fn set_playback_paused_at(
+        &mut self,
+        paused: bool,
+        output_frame: u64,
+        at: std::time::Instant,
+    ) {
         match (paused, self.paused_at_output_frame) {
-            (true, None) => self.paused_at_output_frame = Some(output_frame),
+            (true, None) => {
+                self.paused_at_output_frame = Some(output_frame);
+                self.paused_at_time = Some(at);
+            }
             (false, Some(paused_at)) => {
                 let paused_frames = output_frame.saturating_sub(paused_at);
                 self.queue.shift_output_frames(paused_frames);
+                if let Some(start) = self.paused_at_time.take() {
+                    self.queue.shift_times(at.saturating_duration_since(start));
+                }
                 self.mixer.shift_output_frames(paused_frames);
                 self.paused_at_output_frame = None;
             }
@@ -135,7 +153,12 @@ impl AudioEngine {
         self.mixer.playback_rate = f64::from(rate) / 100.0;
     }
 
-    pub fn apply_playback_rate_change(&mut self, change: crate::clock::PlaybackRateChange) {
+    pub fn apply_playback_rate_change(&mut self, mut change: crate::clock::PlaybackRateChange) {
+        if let Some(paused_at) = self.paused_at_time {
+            change.changed_at = Some(paused_at);
+            change.anchor_output_frame =
+                self.paused_at_output_frame.unwrap_or(change.anchor_output_frame);
+        }
         self.queue.apply_playback_rate_change(change);
         self.mixer.apply_playback_rate_change(change);
     }
@@ -161,6 +184,7 @@ impl AudioEngine {
         fade_in_frames: u32,
     ) {
         self.schedule(ScheduledSound {
+            start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
             sound_id,
@@ -183,6 +207,7 @@ impl AudioEngine {
     ) {
         let voice_start = self.mixer.voices.len();
         self.mixer.push_scheduled([ScheduledSound {
+            start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
             sound_id,
@@ -208,11 +233,28 @@ impl AudioEngine {
     }
 
     pub fn render_stereo(&mut self, output_start_frame: u64, output: &mut [f32]) {
+        self.render_stereo_at(output_start_frame, output, None);
+    }
+
+    pub(crate) fn render_stereo_at(
+        &mut self,
+        output_start_frame: u64,
+        output: &mut [f32],
+        buffer_time: Option<crate::clock::OutputBufferTime>,
+    ) {
         output.fill(0.0);
         if self.playback_paused() {
             return;
         }
         let frame_count = output.len() / 2;
+        if let Some(buffer_time) = buffer_time {
+            self.queue.resolve_times(
+                output_start_frame,
+                buffer_time,
+                frame_count,
+                self.output_sample_rate(),
+            );
+        }
         let output_end_frame = output_start_frame + frame_count.saturating_sub(1) as u64;
         // 中間 Vec を確保せず、期日到来分を直接 mixer へ流し込む(RT 安全)。
         self.mixer.push_scheduled(self.queue.drain_due(output_end_frame));
@@ -239,6 +281,105 @@ mod tests {
     use super::*;
 
     #[test]
+    fn system_deadlines_render_at_the_same_phase_after_ten_minutes_of_device_drift() {
+        use std::time::{Duration, Instant};
+        let base = Instant::now();
+        for sample_rate in [44_100, 48_000, 96_000] {
+            for ppm in [-200, -40, 0, 40, 200] {
+                let mut engine = AudioEngine::new(sample_rate);
+                engine.insert_sample(
+                    SoundId(1),
+                    DecodedSample { channels: 1, sample_rate, frames: vec![0.5] },
+                );
+                for second in [0, 60, 180, 300, 600] {
+                    let playback = base + Duration::from_secs(second);
+                    let frame = 10_000
+                        + (i128::from(second)
+                            * i128::from(sample_rate)
+                            * i128::from(1_000_000 + ppm)
+                            / 1_000_000) as u64;
+                    let mut sound = ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0);
+                    sound.start_time = Some(playback + Duration::from_millis(3));
+                    engine.schedule(sound);
+                    let mut pcm = vec![0.0; (sample_rate / 100) as usize * 2];
+                    let time = crate::clock::OutputBufferTime::for_frames(
+                        playback,
+                        pcm.len() / 2,
+                        sample_rate,
+                    );
+                    engine.render_stereo_at(frame, &mut pcm, Some(time));
+                    let onset =
+                        pcm.as_chunks::<2>().0.iter().position(|sample| sample[0] != 0.0).unwrap();
+                    assert_eq!(
+                        onset,
+                        (sample_rate * 3 / 1000) as usize,
+                        "{sample_rate} Hz, {ppm} ppm, {second} s"
+                    );
+                    assert!(engine.is_idle());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn timed_bgm_catches_up_but_keysound_keeps_its_attack_after_callback_delay() {
+        use std::time::{Duration, Instant};
+        let base = Instant::now();
+        for catch_up in [true, false] {
+            let mut engine = AudioEngine::new(48_000);
+            engine.insert_sample(
+                SoundId(1),
+                DecodedSample {
+                    channels: 1,
+                    sample_rate: 48_000,
+                    frames: (0..1000).map(|i| i as f32 / 1000.0).collect(),
+                },
+            );
+            let mut sound = ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0);
+            sound.start_time = Some(base);
+            sound.catch_up = catch_up;
+            engine.schedule(sound);
+            let mut pcm = [0.0; 2];
+            let start = base + Duration::from_millis(10);
+            let time = crate::clock::OutputBufferTime::for_frames(start, 1, 48_000);
+            engine.render_stereo_at(10_000, &mut pcm, Some(time));
+            assert_eq!(pcm[0], if catch_up { 0.48 } else { 0.0 });
+        }
+    }
+
+    #[test]
+    fn paused_live_deadline_retimes_from_pause_then_moves_to_resume() {
+        use std::time::{Duration, Instant};
+        let base = Instant::now();
+        let mut engine = AudioEngine::new(48_000);
+        engine.insert_sample(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5] },
+        );
+        let mut sound = ScheduledSound::one_shot(4_800, SoundId(1), 1.0, 0.0);
+        sound.start_time = Some(base + Duration::from_millis(100));
+        engine.schedule(sound);
+        engine.set_playback_paused_at(true, 960, base + Duration::from_millis(20));
+        engine.apply_playback_rate_change(crate::clock::PlaybackRateChange {
+            changed_at: None,
+            anchor_output_frame: 24_000,
+            old_rate_percent: 100,
+            new_rate_percent: 200,
+        });
+        let mut pcm = [0.0; 192];
+        let start = base + Duration::from_millis(500);
+        let time = crate::clock::OutputBufferTime::for_frames(start, 96, 48_000);
+        engine.render_stereo_at(24_000, &mut pcm, Some(time));
+        assert!(pcm.iter().all(|value| *value == 0.0));
+        engine.set_playback_paused_at(false, 48_000, base + Duration::from_secs(1));
+        let start = base + Duration::from_millis(1_039);
+        let time = crate::clock::OutputBufferTime::for_frames(start, 96, 48_000);
+        engine.render_stereo_at(49_872, &mut pcm, Some(time));
+        assert_eq!(pcm.iter().position(|value| *value != 0.0), Some(48 * 2));
+        assert!(engine.is_idle());
+    }
+
+    #[test]
     fn audio_engine_renders_queued_samples() {
         let mut engine = AudioEngine::default();
         engine.insert_sample(
@@ -246,6 +387,7 @@ mod tests {
             DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5, 0.25] },
         );
         engine.schedule(ScheduledSound {
+            start_time: None,
             start_frame: 2,
             sample_offset_frames: 0,
             sound_id: SoundId(1),
@@ -291,6 +433,7 @@ mod tests {
             DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 0.5, 0.25, 0.125] },
         );
         engine.schedule(ScheduledSound {
+            start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
             sound_id: SoundId(1),
@@ -302,6 +445,7 @@ mod tests {
             restart_policy: RestartPolicy::StopSameSound,
         });
         engine.schedule(ScheduledSound {
+            start_time: None,
             start_frame: 2,
             sample_offset_frames: 0,
             sound_id: SoundId(1),
@@ -361,6 +505,7 @@ mod tests {
         engine.insert_shared_sample_region(SoundId(2), source, 2, 4);
         engine.schedule_all([
             ScheduledSound {
+                start_time: None,
                 start_frame: 0,
                 sample_offset_frames: 0,
                 sound_id: SoundId(1),
@@ -372,6 +517,7 @@ mod tests {
                 restart_policy: RestartPolicy::Overlap,
             },
             ScheduledSound {
+                start_time: None,
                 start_frame: 2,
                 sample_offset_frames: 0,
                 sound_id: SoundId(2),
@@ -428,6 +574,7 @@ mod tests {
 
         engine.schedule_all([
             ScheduledSound {
+                start_time: None,
                 start_frame: 20,
                 sample_offset_frames: 0,
                 sound_id: SoundId(2),
@@ -439,6 +586,7 @@ mod tests {
                 restart_policy: RestartPolicy::Overlap,
             },
             ScheduledSound {
+                start_time: None,
                 start_frame: 10,
                 sample_offset_frames: 0,
                 sound_id: SoundId(1),
@@ -491,6 +639,7 @@ mod tests {
             DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5, 0.25] },
         );
         source.schedule(ScheduledSound {
+            start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
             sound_id: SoundId(1),
@@ -572,6 +721,7 @@ mod tests {
             DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0] },
         );
         engine.schedule(ScheduledSound {
+            start_time: None,
             start_frame: 2,
             sample_offset_frames: 0,
             sound_id: SoundId(1),
@@ -609,6 +759,7 @@ mod tests {
             DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5] },
         );
         engine.schedule(ScheduledSound {
+            start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
             sound_id: SoundId(1),

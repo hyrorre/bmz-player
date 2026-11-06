@@ -33,6 +33,7 @@ pub enum AudioEngineCommand {
     ClearPlayback,
     SetPlaybackPaused {
         paused: bool,
+        at: std::time::Instant,
     },
     StopSound {
         id: SoundId,
@@ -80,8 +81,8 @@ impl AudioEngineCommand {
             Self::Schedule(sound) => engine.schedule(sound),
             Self::ScheduleAll(sounds) => engine.schedule_all(sounds),
             Self::ClearPlayback => engine.clear_playback(),
-            Self::SetPlaybackPaused { paused } => {
-                engine.set_playback_paused(paused, output_frame);
+            Self::SetPlaybackPaused { paused, at } => {
+                engine.set_playback_paused_at(paused, output_frame, at);
             }
             Self::StopSound { id } => engine.stop_sound(id),
             Self::StopSoundWithFadeOut { id, fade_out_frames } => {
@@ -190,6 +191,31 @@ mod delivery_timing_tests {
         assert_eq!(summary.count, 1);
         assert!(summary.max >= 1_000_000);
         assert_eq!(handle.diagnostics().drained, 1);
+    }
+
+    fn queue_immediate_sound(handle: &AudioEngineHandle, age: std::time::Duration) {
+        handle.inner.queue.lock().unwrap().push_back(QueuedCommand {
+            enqueued: Some(std::time::Instant::now() - age),
+            command: AudioEngineCommand::Schedule(ScheduledSound::one_shot(
+                0,
+                SoundId(1),
+                1.0,
+                0.0,
+            )),
+            cancelled: None,
+        });
+    }
+
+    #[test]
+    fn immediate_sound_is_late_only_past_one_buffer_of_waiting() {
+        let handle = AudioEngineHandle::new(AudioEngine::new(48_000));
+        let mut processor = handle.processor();
+        queue_immediate_sound(&handle, std::time::Duration::from_millis(10));
+        processor.render_stereo(1_000, &mut vec![0.0; 48_000 * 2]);
+        assert_eq!(handle.diagnostics().scheduling_late_frames, 0);
+        queue_immediate_sound(&handle, std::time::Duration::from_millis(10));
+        processor.render_stereo(50_000, &mut [0.0; 240 * 2]);
+        assert!(handle.diagnostics().scheduling_late_frames >= 240);
     }
 }
 impl QueuedCommand {
@@ -339,7 +365,10 @@ impl AudioEngineHandle {
     /// 同じ command batch で登録して再開する。古い frame 基準の音が新しい再生へ漏れない。
     pub fn replace_playback(&self, sounds: Vec<ScheduledSound>) -> bool {
         let mut commands = Vec::with_capacity(usize::from(!sounds.is_empty()) + 2);
-        commands.push(AudioEngineCommand::SetPlaybackPaused { paused: false });
+        commands.push(AudioEngineCommand::SetPlaybackPaused {
+            paused: false,
+            at: std::time::Instant::now(),
+        });
         commands.push(AudioEngineCommand::ClearPlayback);
         if !sounds.is_empty() {
             commands.push(AudioEngineCommand::ScheduleAll(sounds));
@@ -351,12 +380,18 @@ impl AudioEngineHandle {
     /// 同じcallback frameを新しいpause開始点として設定する。
     pub fn replace_playback_paused(&self, sounds: Vec<ScheduledSound>) -> bool {
         let mut commands = Vec::with_capacity(usize::from(!sounds.is_empty()) + 3);
-        commands.push(AudioEngineCommand::SetPlaybackPaused { paused: false });
+        commands.push(AudioEngineCommand::SetPlaybackPaused {
+            paused: false,
+            at: std::time::Instant::now(),
+        });
         commands.push(AudioEngineCommand::ClearPlayback);
         if !sounds.is_empty() {
             commands.push(AudioEngineCommand::ScheduleAll(sounds));
         }
-        commands.push(AudioEngineCommand::SetPlaybackPaused { paused: true });
+        commands.push(AudioEngineCommand::SetPlaybackPaused {
+            paused: true,
+            at: std::time::Instant::now(),
+        });
         self.push_commands(commands)
     }
 
@@ -449,7 +484,11 @@ impl AudioEngineHandle {
     }
 
     pub fn set_playback_paused(&self, paused: bool) -> bool {
-        self.push_command(AudioEngineCommand::SetPlaybackPaused { paused })
+        self.set_playback_paused_at(paused, std::time::Instant::now())
+    }
+
+    pub fn set_playback_paused_at(&self, paused: bool, at: std::time::Instant) -> bool {
+        self.push_command(AudioEngineCommand::SetPlaybackPaused { paused, at })
     }
 
     pub fn apply_playback_rate_change(&self, change: crate::clock::PlaybackRateChange) -> bool {
@@ -540,6 +579,15 @@ impl AudioScheduler for AudioEngineHandle {
 
 impl CommandedAudioEngine {
     pub fn render_stereo(&mut self, output_start_frame: u64, output: &mut [f32]) -> bool {
+        self.render_stereo_at(output_start_frame, output, None)
+    }
+
+    pub(crate) fn render_stereo_at(
+        &mut self,
+        output_start_frame: u64,
+        output: &mut [f32],
+        buffer_time: Option<crate::clock::OutputBufferTime>,
+    ) -> bool {
         let engine = Arc::clone(&self.engine);
         let mut engine = match engine.try_lock() {
             Ok(engine) => engine,
@@ -554,9 +602,9 @@ impl CommandedAudioEngine {
                 return false;
             }
         };
-        self.apply_pending_commands(&mut engine, output_start_frame);
+        self.apply_pending_commands(&mut engine, output_start_frame, output.len() as u64 / 2);
         self.apply_playback_stop(&mut engine);
-        engine.render_stereo(output_start_frame, output);
+        engine.render_stereo_at(output_start_frame, output, buffer_time);
         self.inner.output_sample_rate.store(engine.output_sample_rate(), Ordering::Relaxed);
         self.inner.idle.store(engine.is_idle(), Ordering::Relaxed);
         true
@@ -567,7 +615,7 @@ impl CommandedAudioEngine {
         let Ok(mut engine) = engine.lock() else {
             return;
         };
-        self.apply_pending_commands(&mut engine, 0);
+        self.apply_pending_commands(&mut engine, 0, 0);
         self.apply_playback_stop(&mut engine);
         self.inner.output_sample_rate.store(engine.output_sample_rate(), Ordering::Relaxed);
         self.inner.idle.store(engine.is_idle(), Ordering::Relaxed);
@@ -584,7 +632,12 @@ impl CommandedAudioEngine {
         }
     }
 
-    fn apply_pending_commands(&mut self, engine: &mut AudioEngine, output_frame: u64) {
+    fn apply_pending_commands(
+        &mut self,
+        engine: &mut AudioEngine,
+        output_frame: u64,
+        buffer_frames: u64,
+    ) {
         self.command_scratch.clear();
         match self.inner.queue.try_lock() {
             Ok(mut queue) => {
@@ -614,6 +667,11 @@ impl CommandedAudioEngine {
                     .enqueue_to_apply_ns
                     .record(enqueued.elapsed().as_nanos().min(u64::MAX as u128) as u64);
             }
+            // An immediate request normally waits up to one buffer for this callback.
+            let queue_wait_frames = queued.enqueued.map_or(0, |enqueued| {
+                crate::clock::duration_to_frames(enqueued.elapsed(), engine.output_sample_rate())
+                    .saturating_sub(buffer_frames)
+            });
             let command = queued.command;
             // Only atomic counters here: the audio callback must never log,
             // allocate a diagnostic buffer, or wait for the diagnostics reader.
@@ -623,7 +681,16 @@ impl CommandedAudioEngine {
                 _ => &[],
             };
             for sound in sounds {
-                let late = output_frame.saturating_sub(sound.start_frame);
+                let late = if let Some(deadline) = sound.start_time {
+                    crate::clock::duration_to_frames(
+                        deadline.elapsed(),
+                        engine.output_sample_rate(),
+                    )
+                } else if sound.start_frame == 0 {
+                    queue_wait_frames
+                } else {
+                    output_frame.saturating_sub(sound.start_frame)
+                };
                 self.inner.counters.scheduled_sound_count.fetch_add(1, Ordering::Relaxed);
                 self.inner.counters.scheduling_late_frames.fetch_add(late, Ordering::Relaxed);
                 self.inner.counters.scheduling_max_late_frames.fetch_max(late, Ordering::Relaxed);
@@ -1002,11 +1069,13 @@ mod tests {
 
         for change in [
             crate::clock::PlaybackRateChange {
+                changed_at: None,
                 anchor_output_frame: 100,
                 old_rate_percent: 100,
                 new_rate_percent: 25,
             },
             crate::clock::PlaybackRateChange {
+                changed_at: None,
                 anchor_output_frame: 120,
                 old_rate_percent: 25,
                 new_rate_percent: 50,

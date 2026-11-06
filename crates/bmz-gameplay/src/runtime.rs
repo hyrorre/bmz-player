@@ -23,6 +23,7 @@ impl GameplayRuntime {
         let now = session.audio_clock.now().0;
         let mut next_us = safety.as_micros().min(i64::MAX as u128) as i64;
         let rate = i64::from(session.audio_clock.playback_rate_percent().max(1));
+        let ahead = crate::session::schedule_ahead_us(&session.audio_clock);
         let mut consider = |deadline: i64| {
             if deadline > now {
                 next_us = next_us.min(deadline.saturating_sub(now).saturating_mul(100) / rate);
@@ -50,7 +51,18 @@ impl GameplayRuntime {
             consider(event.time.0);
         }
         if let Some(bgm) = session.chart.bgm_events.get(session.bgm_scheduler.next_index) {
-            consider(bgm.time.0.saturating_sub(crate::session::AUDIO_SCHEDULE_AHEAD_US));
+            consider(bgm.time.0.saturating_sub(ahead));
+        }
+        if crate::session::uses_scheduled_auto_keysounds(session) {
+            // Judgement can already be past a note whose auto keysound is still due.
+            for lane in bmz_core::lane::Lane::ALL {
+                let next = session.auto_keysound_scheduler.next_note_index[lane.index()];
+                if !session.display_only_lane_mask[lane.index()]
+                    && let Some(note) = session.chart.notes_for_lane(lane).get(next)
+                {
+                    consider(note.time.0.saturating_sub(ahead));
+                }
+            }
         }
         std::time::Duration::from_micros(next_us.max(100) as u64).min(safety)
     }

@@ -1,6 +1,19 @@
 use super::*;
 
 #[test]
+fn audio_scheduling_is_app_wide_defaults_on_and_preserves_explicit_off() {
+    assert!(AppConfig::default().audio.schedule_ahead);
+    let mut config = AppConfig::default();
+    config.audio.schedule_ahead = false;
+    let serialized = toml::to_string(&config).unwrap();
+    let restored: AppConfig = toml::from_str(&serialized).unwrap();
+    assert!(!restored.audio.schedule_ahead);
+    let legacy = serialized.replace("schedule_ahead = false\n", "");
+    let restored: AppConfig = toml::from_str(&legacy).unwrap();
+    assert!(restored.audio.schedule_ahead);
+}
+
+#[test]
 fn obs_rules_preserve_legacy_empty_and_ordered_settings() {
     let mut old: ObsConfig = toml::from_str(
         "[scenes]\nPLAY = 'Gameplay'\n[actions]\nPLAY = 'StartRecord'\nPLAY_ENDED = 'StopRecord'\n",

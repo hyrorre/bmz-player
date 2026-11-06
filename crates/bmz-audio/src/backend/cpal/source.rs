@@ -1,5 +1,10 @@
 use super::*;
 
+/// Native WASAPI's prefill is not evidence that the device consumes buffers.
+fn required_callback_count(counted: u64, exclusive: bool) -> u64 {
+    counted.saturating_add(1).max(if exclusive { 2 } else { 1 })
+}
+
 impl CpalOutput {
     pub fn play(&mut self, chart_zero_time: TimeUs) -> Result<(), CpalBackendError> {
         self.source.play(chart_zero_time);
@@ -17,6 +22,20 @@ impl CpalOutput {
 }
 
 impl CpalSharedOutput {
+    /// Wait on the control thread, never on an audio callback, for a callback
+    /// that starts after this call. The count alone would pass a stopped stream.
+    pub fn wait_until_ready(&self, timeout: std::time::Duration) -> Result<(), &'static str> {
+        let counted = self.inner.diagnostics.callback_count.load(Ordering::Acquire);
+        let required = required_callback_count(counted, self.exclusive_buffer_frames().is_some());
+        let deadline = Instant::now() + timeout;
+        while self.inner.diagnostics.callback_count.load(Ordering::Acquire) < required {
+            if Instant::now() >= deadline {
+                return Err("audio callback startup timed out");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        Ok(())
+    }
     pub fn stream_info(&self) -> &CpalStreamInfo {
         &self.inner.info
     }
@@ -242,6 +261,10 @@ impl CpalCommandedOutputSource {
         self.clock.set_playback_rate_percent(rate)
     }
 
+    pub fn play_at(&mut self, chart_zero_time: TimeUs, at: Instant) {
+        self.clock.start_at(chart_zero_time, at);
+    }
+
     pub fn pause(&mut self) {
         self.clock.pause();
     }
@@ -264,5 +287,23 @@ impl Drop for CpalCommandedOutputSource {
             &inner.output_commands,
             CpalOutputCommand::RemoveSource { id: self.id },
         );
+    }
+}
+
+#[cfg(test)]
+mod ready_tests {
+    use super::required_callback_count;
+
+    #[test]
+    fn readiness_needs_a_callback_after_the_wait_starts() {
+        assert_eq!(required_callback_count(0, false), 1);
+        assert_eq!(required_callback_count(500, false), 501);
+    }
+
+    #[test]
+    fn exclusive_prefill_alone_is_not_ready() {
+        assert_eq!(required_callback_count(0, true), 2);
+        assert_eq!(required_callback_count(1, true), 2);
+        assert_eq!(required_callback_count(500, true), 501);
     }
 }

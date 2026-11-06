@@ -56,13 +56,13 @@ region・scheduler・判定状態は引き継ぎません。cacheはプロセス
 ## Wake と audio
 
 入力到着とcontrol commandはgameplay threadを`unpark`します。
-次のノート、見逃し期限、LN終端、auto key release、replay、BGM schedule-aheadの期限と
+次のノート、見逃し期限、LN終端、auto key release、replay、BGM・自動キー音のschedule-aheadの期限と
 2msのsafety wakeのうち早いものまで`park_timeout`で待機します。
 safety wakeはHCNや時計の進行を補完するもので、rendererのtickに依存しません。
 
 既存の`advance_session_frame`が入力、判定、Mine、見逃し、LN/CN/HCN、ゲージ、score、
-replay recording、autoplay、終了判定を処理します。keysoundとBGMは`ScheduledSound`の
-既存frame座標を保ってAudioEngineの有界command queueへ送ります。
+replay recording、autoplay、終了判定を処理します。keysoundとBGMは`ScheduledSound`を
+AudioEngineの有界command queueへ送ります。
 送信できなかったkeysoundとHCN音量更新は次のwakeで再送します（途中FAILED時は破棄）。
 判定ガイド音、既定の地雷SE、失敗SEもgameplayが直接送信します。
 callbackには判定・入力処理を移していません。command scratchと通常再生用queue / voice領域は
@@ -71,6 +71,72 @@ queueとengineの`try_lock`に失敗した場合も待機しません。
 
 CPAL callbackとnative backendが共有するmix・PCM変換・buffer・診断は
 `bmz-audio/src/backend/output.rs`に置きます。デバイス固有のstream操作と時刻変換は各backendが担当します。
+
+### 音声予約と時計
+
+判定・描画・BGAの譜面時刻は `AudioClock` の `Instant` で進めます。デバイスの進行速度や
+タイムスタンプを判定時計へ戻しません。入力の `InputTimestampAnchor` も同じ1回の
+`Instant` 観測から単調時刻と譜面時刻を求め、別々の取得間に入るスレッド停止を除きます。
+
+本体設定 `audio.schedule_ahead`（既定 `true`）で次の2方式を選びます。演奏を開く時点の保存値を使い、
+音声デバイスは開き直しません。
+
+| 設定 | BGM・自動キー音（フルオートを含む） | 押鍵に応じたキー音・判定ガイド音 |
+|---|---|---|
+| ON | 実時間100ms先までシステム時刻のdeadlineで予約 | 処理後に即時要求 |
+| OFF | 譜面上の時刻に達したwakeで即時要求 | 処理後に即時要求 |
+
+ONの予約は `ScheduledSound.start_time` に `Instant` のまま保持します。各callbackで
+バッファ先頭の時刻と `current_frame` を対応付け、そのバッファに入る予約だけを
+frameへ変換します。曲開始時のframeと公称レートによる固定変換をライブ予約には使いません。
+
+バッファ先頭の時刻は、frameをデバイスの進行に沿って時刻へ写した値です。callbackの到着は揺れますが、
+frameはデバイスの速度で進みます。「callback時刻から半周期を引いた時刻」と「frameの公称時刻」の差を
+時定数2秒で平滑化して公称時刻へ足すので、到着の揺れは消え、時計速度の差は追従残差になります
+（200ppm・2秒で約0.4ms）。半周期を引くのは、即時要求の音が次のcallbackまで平均で半周期待つためです。
+これで予約音の平均の遅れが押鍵音・判定ガイド音に揃います。
+各バッファは開始時刻と終了時刻の範囲を持ちます。平滑値の更新は終了時刻へ反映し、次のバッファはそこから始まるので、
+frameが連続している間は境界に隙間ができず、deadlineを読み飛ばしません。
+範囲内のdeadlineは、開始～終了時刻に対する割合で、そのバッファ内のframeへ変換します。
+平滑化で範囲の長さが変わっても予約が次のバッファへはみ出さず、境界を挟む発声順を維持します。
+この変換は発声開始位置だけに使い、開始時刻より前の遅刻量は公称レートで計算します。
+
+停止直後に長いバッファが来ると、次のバッファで平滑値が大きく戻り、範囲の終了が開始より前になることがあります。
+そのバッファに範囲内のdeadlineはなく、遅刻した予約だけをそのバッファの先頭から扱います。
+次のバッファは手前へ戻った終了時刻から始まりますが、予約は一度しか解決しないので二重には鳴りません。
+
+APIの出力時刻予測は使いません。実機の記録では、予測を使う方式のほうが揺れが大きくなりました
+（[検証記録](../notes/2026/2026-11-06-audio-system-clock-scheduling.md)）。
+
+callback間隔が供給範囲を許容幅より超えたら、停止として平滑値を初期化し、時刻を現在のcallbackへ合わせます。
+供給範囲は前回・今回のバッファの長い方、許容幅は短い方のバッファから求めた20msかつ2バッファ分です。
+初期化の後は単純平均から始め、1回のcallback遅配の影響を抑えます。
+
+遅れたBGMは既存のcatch-up、キー音はサンプル先頭を保持します。OFFはどちらも先頭を保持します。
+先読み幅は25～300%の再生速度を考慮し、wakeの期限も同じ幅を使います。
+
+出力が止まった区間は、既存voiceと予約音へ同じframeの前進として一度だけ反映します。欠落量の求め方はbackendごとに異なり、
+どれも許容幅を超えたときだけ補正します。CPALは、APIのplayback値の進みが前回バッファの長さを超えた分と、
+callback間隔が供給範囲を超えた分の小さい方です。API値を比較できないときはcallback間隔だけを使います。
+IOProcはMach host timeとcallback間隔の小さい方、WASAPI排他はcallbackが周期より遅れた分です。
+これらはAPIとcallback間隔による推定で、物理出力の測定ではありません。
+
+再生要求の後に始まったcallbackを制御側で確認してから曲の原点を確定します。2秒待っても来ない場合は
+警告を記録して開始します。WASAPI排他の開始前prefillだけで準備完了とはしません。callback内で開始待ちはしません。
+pause/resumeでは未発声deadlineも停止時間だけ移動し、速度変更時は残り時間を再計算します。
+seek/retry/終了取消は既存の予約・voice破棄を維持します。オフライン出力・テストの仮想時計は
+`start_time = None` のframe予約を使い、実時間やデバイスに依存しません。
+
+開始済みWAVの進みはデバイスのサンプル進行のままです。ASRCによる連続的な速度補正は含みません。
+長いWAVは、判定・ノーツ表示と、後から予約する音の両方に対して「時計差×そのWAVの経過時間」だけずれます
+（40ppmで5分なら約12ms）。旧方式の音同士は同じframe座標で揃っていたので、長いWAVと後続の音のズレは
+この方式で生じるものです。確認したbeatorajaのPortAudio経路も同じ関係です。短いWAVだけの譜面には
+影響しません。区間分割のBGMは区間ごとに戻るので、継ぎ目に「時計差×区間長」の隙間か重なりが出ます。
+
+即時要求の音には次のcallbackまでの0〜1周期の揺れがあります。先読み音との差は平均でほぼ0ですが、
+1音ごとには残ります。ここで揃えるのは音声バッファ待ちと出力先行量であり、入力受信・判定処理・
+gameplayのwakeからコマンド投入までの遅れは別に加わります。比較時は開始時の位相差と時間経過に伴う傾きを分け、PCM書込・API予測・
+物理発声を同一視しないでください。
 
 macOSの実験用Core Audio IOProcも同じNativeOutputRenderer・source command queue・
 AudioEngineを使います。HALの出力バッファへfloat PCMを書き、出力時刻の大きな欠落は既存の

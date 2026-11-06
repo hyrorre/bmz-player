@@ -1,4 +1,5 @@
 //! Shared real-time output state for CPAL callbacks and native audio backends.
+pub(super) use crate::clock::{OutputBufferTime, duration_to_frames, output_gap_tolerance};
 use crate::command::CommandedAudioEngine;
 use crate::engine::AudioEngine;
 use std::collections::VecDeque;
@@ -101,13 +102,95 @@ pub(super) enum CpalOutputCommand {
     SetSourceKind { id: u64, kind: CpalOutputSourceKind },
 }
 
-pub(super) fn duration_to_frames(duration: Duration, sample_rate: u32) -> u64 {
-    duration
-        .as_nanos()
-        .saturating_mul(u128::from(sample_rate))
-        .checked_div(1_000_000_000)
+pub(super) fn frames_to_duration(frames: usize, sample_rate: u32) -> Duration {
+    if sample_rate == 0 {
+        return Duration::ZERO;
+    }
+    let nanos = (frames as u128)
+        .saturating_mul(1_000_000_000)
+        .checked_div(u128::from(sample_rate))
         .unwrap_or(0)
-        .min(u128::from(u64::MAX)) as u64
+        .min(u128::from(u64::MAX));
+    Duration::from_nanos(nanos as u64)
+}
+
+/// Long enough to ignore callback delivery jitter, short enough to follow a real change.
+const OUTPUT_TIME_SMOOTHING_SECS: f64 = 2.0;
+
+/// Maps output frames to the deadline timeline.
+///
+/// Frames advance at the device rate, while callbacks only arrive around it.
+/// The smoothed difference between the two removes the delivery jitter and
+/// follows a clock-rate error, so neither reaches a scheduled sound.
+///
+/// The difference is taken from the callback minus half a buffer: an immediate
+/// request waits about that long for its buffer, so scheduled sounds keep the
+/// average output delay of key sounds and guide SEs.
+#[derive(Debug, Default)]
+pub(super) struct OutputFrameClock {
+    origin: Option<Instant>,
+    // This is a clock correspondence, not a physical latency. It may be negative.
+    offset_ns: f64,
+    samples: u32,
+    previous: Option<(Instant, Duration)>,
+}
+
+impl OutputFrameClock {
+    /// Returns the deadlines a buffer stands for.
+    ///
+    /// The smoothed offset moves between buffers. Each buffer ends on the new
+    /// value and the next one starts from it, so a moved offset can neither
+    /// skip a deadline nor make it late while the frames continue.
+    pub(super) fn buffer_time(
+        &mut self,
+        frame: u64,
+        callback: Instant,
+        span: Duration,
+        sample_rate: u32,
+    ) -> OutputBufferTime {
+        let stopped = self.previous.is_some_and(|(previous, previous_span)| {
+            // A refill adds coverage, not timing uncertainty.
+            let limit = previous_span
+                .max(span)
+                .saturating_add(output_gap_tolerance(previous_span.min(span)));
+            callback.saturating_duration_since(previous) > limit
+        });
+        self.previous = Some((callback, span));
+        if stopped {
+            // The output left the old correspondence at once, not gradually.
+            self.samples = 0;
+        }
+        let origin = *self.origin.get_or_insert(callback);
+        let frame_ns = frame as f64 * 1e9 / f64::from(sample_rate);
+        let center = callback.checked_sub(span / 2).unwrap_or(callback);
+        let sample = signed_duration_ns(center, origin) - frame_ns;
+        // Average the first samples, so that the delivery jitter of the callback
+        // after a reset does not stay in the offset for a whole smoothing period.
+        self.samples = self.samples.saturating_add(1);
+        let start_offset = if self.samples == 1 { sample } else { self.offset_ns };
+        let weight = (span.as_secs_f64() / OUTPUT_TIME_SMOOTHING_SECS)
+            .max(1.0 / f64::from(self.samples))
+            .min(1.0);
+        self.offset_ns += (sample - self.offset_ns) * weight;
+        OutputBufferTime {
+            start: shift_instant_ns(origin, frame_ns + start_offset),
+            end: shift_instant_ns(origin, frame_ns + span.as_nanos() as f64 + self.offset_ns),
+        }
+    }
+}
+
+fn signed_duration_ns(a: Instant, b: Instant) -> f64 {
+    if a >= b {
+        a.duration_since(b).as_nanos() as f64
+    } else {
+        -(b.duration_since(a).as_nanos() as f64)
+    }
+}
+
+fn shift_instant_ns(time: Instant, offset: f64) -> Instant {
+    let distance = Duration::from_nanos(offset.abs().round() as u64);
+    if offset < 0.0 { time.checked_sub(distance) } else { time.checked_add(distance) }
+        .unwrap_or(time)
 }
 
 pub(super) fn push_output_command(
@@ -138,6 +221,7 @@ pub(crate) struct NativeOutputRenderer {
     current_frame: Arc<AtomicU64>,
     pub(super) diagnostics: Arc<CpalOutputDiagnosticsCounters>,
     buffers: OutputRenderBuffers,
+    frame_clock: OutputFrameClock,
 }
 
 #[cfg(any(windows, all(target_os = "macos", feature = "experimental-coreaudio-ioproc")))]
@@ -156,11 +240,17 @@ impl NativeOutputRenderer {
             current_frame,
             diagnostics,
             buffers: OutputRenderBuffers::new(),
+            frame_clock: OutputFrameClock::default(),
         }
     }
 
-    pub(crate) fn render<T: OutputSample>(&mut self, data: &mut [T], channels: usize) {
-        let callback_start = Instant::now();
+    pub(crate) fn render_at<T: OutputSample>(
+        &mut self,
+        data: &mut [T],
+        channels: usize,
+        callback_start: Instant,
+        sample_rate: u32,
+    ) {
         self.diagnostics.callback_count.fetch_add(1, Ordering::Relaxed);
         if channels == 0 {
             data.fill(T::from_f32(0.0));
@@ -170,9 +260,17 @@ impl NativeOutputRenderer {
 
         let frames = data.len() / channels;
         let start_frame = self.current_frame.load(Ordering::Relaxed);
+        let span = frames_to_duration(frames, sample_rate);
+        let buffer_time =
+            self.frame_clock.buffer_time(start_frame, callback_start, span, sample_rate);
         render_output(
             data,
-            OutputRenderLayout { channels, channel_offset: self.channel_offset, start_frame },
+            OutputRenderLayout {
+                channels,
+                channel_offset: self.channel_offset,
+                start_frame,
+                buffer_time: Some(buffer_time),
+            },
             OutputRenderSources {
                 output_commands: &self.output_commands,
                 retired_sources: &self.retired_sources,
@@ -193,20 +291,29 @@ impl NativeOutputRenderer {
     /// Advance the mixer timeline across a native-stream outage without rendering the missed
     /// interval. Gameplay keeps using its monotonic clock while the endpoint is unavailable, so
     /// resuming from the old frame would permanently delay every subsequently scheduled sound.
-    pub(crate) fn catch_up_after_stream_outage(&self, outage: Duration, sample_rate: u32) -> u64 {
+    pub(crate) fn catch_up_after_stream_outage(
+        &mut self,
+        outage: Duration,
+        sample_rate: u32,
+    ) -> u64 {
         let frames = duration_to_frames(outage, sample_rate);
+        self.catch_up_output_frames(frames);
+        frames
+    }
+
+    pub(crate) fn catch_up_output_frames(&mut self, frames: u64) {
         if frames == 0 {
-            return 0;
+            return;
         }
         self.current_frame.fetch_add(frames, Ordering::Relaxed);
         self.diagnostics.timeline_catch_up_count.fetch_add(1, Ordering::Relaxed);
         self.diagnostics.timeline_catch_up_frames.fetch_add(frames, Ordering::Relaxed);
-        frames
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct OutputRenderLayout {
+    pub(super) buffer_time: Option<OutputBufferTime>,
     pub(super) channels: usize,
     pub(super) channel_offset: usize,
     pub(super) start_frame: u64,
@@ -248,7 +355,7 @@ pub(super) fn render_output<T: OutputSample>(
 
     let frames = data.len() / layout.channels;
     mix_sources_stereo(
-        layout.start_frame,
+        (layout.start_frame, layout.buffer_time),
         frames,
         sources.output_commands,
         sources.retired_sources,
@@ -269,7 +376,7 @@ pub(super) fn render_output<T: OutputSample>(
 }
 
 pub(super) fn mix_sources_stereo(
-    output_start_frame: u64,
+    position: (u64, Option<OutputBufferTime>),
     frames: usize,
     output_commands: &SharedOutputCommands,
     retired_sources: &RetiredOutputSources,
@@ -279,6 +386,7 @@ pub(super) fn mix_sources_stereo(
     source_command_scratch: &mut Vec<CpalOutputCommand>,
     diagnostics: &CpalOutputDiagnosticsCounters,
 ) {
+    let (output_start_frame, buffer_time) = position;
     mix.resize(frames * 2, 0.0);
     mix.fill(0.0);
 
@@ -296,13 +404,13 @@ pub(super) fn mix_sources_stereo(
         let rendered = match &mut source.engine {
             RenderAudioEngine::Legacy(engine) => match engine.try_lock() {
                 Ok(mut engine) => {
-                    engine.render_stereo(output_start_frame, source_scratch);
+                    engine.render_stereo_at(output_start_frame, source_scratch, buffer_time);
                     true
                 }
                 Err(_) => false,
             },
             RenderAudioEngine::Commanded(engine) => {
-                engine.render_stereo(output_start_frame, source_scratch)
+                engine.render_stereo_at(output_start_frame, source_scratch, buffer_time)
             }
         };
         if rendered {
@@ -591,5 +699,479 @@ impl OutputSample for u16 {
 impl OutputSample for i32 {
     fn from_f32(value: f32) -> Self {
         (value.clamp(-1.0, 1.0) as f64 * i32::MAX as f64) as i32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::queue::{AudioScheduler, ScheduledSound};
+    use crate::sample::DecodedSample;
+    use bmz_core::ids::SoundId;
+
+    const SAMPLE_RATE: u32 = 48_000;
+    const SPAN: Duration = Duration::from_millis(10);
+    const FRAMES: u64 = 480;
+    const LEAD: Duration = Duration::from_millis(10);
+
+    fn distance(a: Instant, b: Instant) -> Duration {
+        a.max(b).duration_since(a.min(b))
+    }
+
+    /// A clock past its first average, the next frame and its callback.
+    fn settled_clock(start: Instant) -> (OutputFrameClock, u64, Instant) {
+        let mut clock = OutputFrameClock::default();
+        for buffer in 0..500 {
+            let callback = start + SPAN * buffer;
+            clock.buffer_time(u64::from(buffer) * FRAMES, callback, SPAN, SAMPLE_RATE);
+        }
+        (clock, 500 * FRAMES, start + SPAN * 500)
+    }
+
+    #[test]
+    fn variable_buffers_preserve_short_bgm_and_auto_attacks() {
+        for catch_up in [true, false] {
+            let (mut clock, mut frame, base) = settled_clock(Instant::now());
+            let mut engine = AudioEngine::new(SAMPLE_RATE);
+            engine.insert_sample(
+                SoundId(1),
+                DecodedSample { channels: 1, sample_rate: SAMPLE_RATE, frames: vec![0.5] },
+            );
+            let mut sound = ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0);
+            sound.start_time = Some(base + Duration::from_millis(60));
+            sound.catch_up = catch_up;
+            engine.schedule(sound);
+            // Endpoint retains 80 ms of PCM: the delayed callback consumes that
+            // padding, fills 80 ms, then the next callback needs only 10 ms.
+            let mut onsets = 0;
+            for (callback_ms, frames) in [(0, 480), (80, 3840), (90, 480)] {
+                let span = frames_to_duration(frames, SAMPLE_RATE);
+                let callback = base + Duration::from_millis(callback_ms);
+                let time = clock.buffer_time(frame, callback, span, SAMPLE_RATE);
+                let mut pcm = vec![0.0; frames * 2];
+                engine.render_stereo_at(frame, &mut pcm, Some(time));
+                onsets += pcm.as_chunks::<2>().0.iter().filter(|pcm| pcm[0] != 0.0).count();
+                frame += frames as u64;
+            }
+            assert_eq!(onsets, 1, "catch_up={catch_up}");
+            assert!(engine.is_idle());
+        }
+    }
+
+    #[test]
+    fn contiguous_buffers_share_their_boundary() {
+        let (mut clock, mut frame, base) = settled_clock(Instant::now());
+        let mut previous: Option<OutputBufferTime> = None;
+        for (callback_ms, frames) in [(0, 480), (80, 3840), (90, 480), (97, 480), (110, 960)] {
+            let span = frames_to_duration(frames, SAMPLE_RATE);
+            let callback = base + Duration::from_millis(callback_ms);
+            let time = clock.buffer_time(frame, callback, span, SAMPLE_RATE);
+            if let Some(previous) = previous {
+                assert!(distance(time.start, previous.end) < Duration::from_nanos(2));
+            }
+            previous = Some(time);
+            frame += frames as u64;
+        }
+    }
+
+    #[test]
+    fn a_deadline_where_the_offset_moved_keeps_the_whole_bgm() {
+        for sample_frames in [48, 480] {
+            let (mut clock, mut frame, base) = settled_clock(Instant::now());
+            let mut engine = AudioEngine::new(SAMPLE_RATE);
+            engine.insert_sample(
+                SoundId(1),
+                DecodedSample {
+                    channels: 1,
+                    sample_rate: SAMPLE_RATE,
+                    frames: vec![0.5; sample_frames],
+                },
+            );
+            let mut sound = ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0);
+            // The large refill moves the offset by about 1.4 ms past this point.
+            sound.start_time = Some(base + Duration::from_micros(5_100));
+            sound.catch_up = true;
+            engine.schedule(sound);
+            let mut rendered = 0;
+            for (callback_ms, frames) in [(0, 480), (80, 3840), (90, 480)] {
+                let span = frames_to_duration(frames, SAMPLE_RATE);
+                let callback = base + Duration::from_millis(callback_ms);
+                let time = clock.buffer_time(frame, callback, span, SAMPLE_RATE);
+                let mut pcm = vec![0.0; frames * 2];
+                engine.render_stereo_at(frame, &mut pcm, Some(time));
+                rendered += pcm.as_chunks::<2>().0.iter().filter(|pcm| pcm[0] != 0.0).count();
+                frame += frames as u64;
+            }
+            assert_eq!(rendered, sample_frames);
+        }
+    }
+
+    #[test]
+    fn sounds_across_a_moved_boundary_keep_their_request_order() {
+        for catch_up in [true, false] {
+            let (mut clock, mut frame, base) = settled_clock(Instant::now());
+            let mut engine = AudioEngine::new(SAMPLE_RATE);
+            engine.insert_sample(
+                SoundId(1),
+                DecodedSample { channels: 1, sample_rate: SAMPLE_RATE, frames: vec![0.5; 480] },
+            );
+            let deadlines =
+                [base + Duration::from_micros(86_300), base + Duration::from_micros(86_500)];
+            for (deadline, volume) in deadlines.into_iter().zip([1.0, 0.5]) {
+                let mut sound = ScheduledSound::one_shot(0, SoundId(1), volume, 0.0);
+                sound.start_time = Some(deadline);
+                sound.catch_up = catch_up;
+                sound.restart_policy = crate::queue::RestartPolicy::StopSameSound;
+                engine.schedule(sound);
+            }
+            let mut attacks = Vec::new();
+            let mut previous = 0.0;
+            // The refill ends at 86.4 ms after smoothing. The two requests
+            // straddle that boundary and must not overtake each other.
+            for (callback_ms, frames) in [(0, 480), (80, 3840), (90, 480), (100, 480)] {
+                let span = frames_to_duration(frames, SAMPLE_RATE);
+                let callback = base + Duration::from_millis(callback_ms);
+                let time = clock.buffer_time(frame, callback, span, SAMPLE_RATE);
+                if frames == 3840 {
+                    assert!(deadlines[0] < time.end && time.end <= deadlines[1]);
+                }
+                let mut pcm = vec![0.0; frames * 2];
+                engine.render_stereo_at(frame, &mut pcm, Some(time));
+                for pair in pcm.as_chunks::<2>().0 {
+                    if pair[0] != 0.0 && pair[0] != previous {
+                        attacks.push(pair[0]);
+                    }
+                    previous = pair[0];
+                }
+                frame += frames as u64;
+            }
+            assert_eq!(attacks, [0.5, 0.25], "catch_up={catch_up}");
+            assert!(engine.is_idle());
+        }
+    }
+
+    #[test]
+    fn a_late_sound_starts_in_a_buffer_with_an_inverted_range() {
+        for catch_up in [true, false] {
+            let (mut clock, frame, base) = settled_clock(Instant::now());
+            // After a stop the average restarts from a long refill, and the
+            // next buffer pulls it back by more than its own span.
+            let refill = frames_to_duration(3_840, SAMPLE_RATE);
+            let callback = base + Duration::from_millis(300);
+            clock.buffer_time(frame, callback, refill, SAMPLE_RATE);
+            let frame = frame + 3_840;
+            let time = clock.buffer_time(frame, callback + SPAN, SPAN, SAMPLE_RATE);
+            assert!(time.end < time.start);
+
+            let mut engine = AudioEngine::new(SAMPLE_RATE);
+            engine.insert_sample(
+                SoundId(1),
+                DecodedSample { channels: 1, sample_rate: SAMPLE_RATE, frames: vec![0.5; 4_800] },
+            );
+            let mut sound = ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0);
+            sound.start_time = Some(time.end - Duration::from_millis(1));
+            sound.catch_up = catch_up;
+            engine.schedule(sound);
+            let mut pcm = vec![0.0; FRAMES as usize * 2];
+            engine.render_stereo_at(frame, &mut pcm, Some(time));
+            assert_eq!(pcm[0], 0.5, "catch_up={catch_up}");
+        }
+    }
+
+    #[test]
+    fn a_refill_covers_its_own_span_without_widening_the_stop_margin() {
+        let refill = frames_to_duration(1_056, SAMPLE_RATE);
+        for (callback_ms, stopped) in [(40, false), (60, true)] {
+            let (mut clock, frame, next) = settled_clock(Instant::now());
+            clock.buffer_time(frame, next, SPAN, SAMPLE_RATE);
+            let callback = next + Duration::from_millis(callback_ms);
+            let time = clock.buffer_time(frame + FRAMES, callback, refill, SAMPLE_RATE);
+            assert_eq!(
+                distance(time.start, callback - refill / 2) < Duration::from_micros(1),
+                stopped,
+                "{callback_ms} ms"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stop_with_contiguous_frames_moves_the_buffer_time_at_once() {
+        let (mut clock, frame, next) = settled_clock(Instant::now());
+        clock.buffer_time(frame, next, SPAN, SAMPLE_RATE);
+        let callback = next + Duration::from_millis(60);
+        let time = clock.buffer_time(frame + FRAMES, callback, SPAN, SAMPLE_RATE);
+        assert!(distance(time.start, callback - SPAN / 2) < Duration::from_micros(1));
+        // The frames then continue from the new correspondence.
+        let callback = callback + SPAN;
+        let time = clock.buffer_time(frame + 2 * FRAMES, callback, SPAN, SAMPLE_RATE);
+        assert!(distance(time.start, callback - SPAN / 2) < Duration::from_micros(1));
+    }
+
+    #[test]
+    fn a_frame_jump_with_the_stop_keeps_the_buffer_time_on_the_callback() {
+        let (mut clock, frame, next) = settled_clock(Instant::now());
+        clock.buffer_time(frame, next, SPAN, SAMPLE_RATE);
+        let callback = next + Duration::from_millis(60);
+        let time = clock.buffer_time(frame + FRAMES + 2_400, callback, SPAN, SAMPLE_RATE);
+        assert!(distance(time.start, callback - SPAN / 2) < Duration::from_micros(1));
+    }
+
+    #[test]
+    fn scheduled_and_immediate_sounds_have_the_same_average_output_delay() {
+        // With 4096 frames, lead plus period exceeds the 100 ms lookahead.
+        for (frames, lead_us) in [(256, 6_700), (480, 10_000), (4_096, 85_300)] {
+            let span = frames_to_duration(frames, SAMPLE_RATE);
+            let lead = Duration::from_micros(lead_us);
+            let start = Instant::now();
+            let mut engine = AudioEngine::new(SAMPLE_RATE);
+            engine.insert_sample(
+                SoundId(1),
+                DecodedSample { channels: 1, sample_rate: SAMPLE_RATE, frames: vec![0.5] },
+            );
+            let mut clock = OutputFrameClock::default();
+            let mut pending = VecDeque::new();
+            let mut next_deadline = start + Duration::from_millis(200);
+            let (mut scheduled, mut immediate, mut count) = (0.0, 0.0, 0_u32);
+            let mut pcm = vec![0.0; frames * 2];
+            for buffer in 0..(30_000_000 / span.as_micros()) as u32 {
+                let callback = start + span * buffer;
+                let playback = callback + lead;
+                while next_deadline < callback + Duration::from_millis(100) {
+                    let mut sound = ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0);
+                    sound.start_time = Some(next_deadline);
+                    engine.schedule(sound);
+                    pending.push_back(next_deadline);
+                    next_deadline += Duration::from_micros(13_370);
+                }
+                let frame = u64::from(buffer) * frames as u64;
+                let time = clock.buffer_time(frame, callback, span, SAMPLE_RATE);
+                engine.render_stereo_at(frame, &mut pcm, Some(time));
+                let onsets = pcm.as_chunks::<2>().0.iter().enumerate();
+                for (frame, _) in onsets.filter(|(_, pcm)| pcm[0] != 0.0) {
+                    let deadline = pending.pop_front().unwrap();
+                    let output = playback + frames_to_duration(frame, SAMPLE_RATE);
+                    scheduled += output.saturating_duration_since(deadline).as_secs_f64();
+                    // An immediate request at the deadline starts the next buffer.
+                    let elapsed = deadline.duration_since(start).as_secs_f64();
+                    let next_callback = start + span.mul_f64((elapsed / span.as_secs_f64()).ceil());
+                    immediate += (next_callback + lead).duration_since(deadline).as_secs_f64();
+                    count += 1;
+                }
+            }
+            // A one-sample BGM caught up past its start would never be rendered.
+            assert!(count > 2_000 && pending.len() < 16, "{frames}: {count}, {}", pending.len());
+            let difference = (scheduled - immediate).abs() / f64::from(count);
+            assert!(difference < span.as_secs_f64() / 50.0, "{frames}: {difference} s");
+        }
+    }
+
+    #[test]
+    fn the_first_buffer_stands_for_its_callback_minus_half_a_buffer() {
+        let callback = Instant::now();
+        let time = OutputFrameClock::default().buffer_time(123_456, callback, SPAN, SAMPLE_RATE);
+        assert!(distance(time.start, callback - SPAN / 2) < Duration::from_micros(1));
+    }
+
+    #[test]
+    fn late_callback_delivery_does_not_move_the_buffer_time() {
+        let (mut clock, frame, next) = settled_clock(Instant::now());
+        let late = next + Duration::from_millis(3);
+        let time = clock.buffer_time(frame, late, SPAN, SAMPLE_RATE);
+        assert!(distance(time.start, next - SPAN / 2) < Duration::from_micros(20));
+    }
+
+    #[test]
+    fn one_late_callback_after_a_reset_does_not_bias_the_next_seconds() {
+        let start = Instant::now();
+        let mut clock = OutputFrameClock::default();
+        // The seeding callback arrives 1 ms late.
+        clock.buffer_time(0, start + Duration::from_millis(1), SPAN, SAMPLE_RATE);
+        let (mut time, mut callback) = (start, start);
+        for buffer in 1..=20 {
+            callback = start + SPAN * buffer;
+            let frame = u64::from(buffer) * FRAMES;
+            time = clock.buffer_time(frame, callback, SPAN, SAMPLE_RATE).start;
+        }
+        assert!(distance(time, callback - SPAN / 2) < Duration::from_micros(100));
+    }
+
+    #[test]
+    fn delivery_jitter_does_not_skip_attacks_or_reorder_events() {
+        let (mut clock, mut frame, next) = settled_clock(Instant::now());
+        let mut engine = AudioEngine::new(SAMPLE_RATE);
+        engine.insert_sample(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: SAMPLE_RATE, frames: vec![0.5; 8] },
+        );
+        let deadlines = 70;
+        for index in 0..deadlines {
+            let mut sound = ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0);
+            sound.start_time = Some(next + Duration::from_micros(13_370) * index);
+            engine.schedule(sound);
+        }
+        let (mut onsets, mut previous) = (0, 0.0);
+        let mut pcm = [0.0; 960];
+        for buffer in 0..120 {
+            let jitter = Duration::from_millis(u64::from(buffer % 3) * 2);
+            let time = clock.buffer_time(frame, next + SPAN * buffer + jitter, SPAN, SAMPLE_RATE);
+            engine.render_stereo_at(frame, &mut pcm, Some(time));
+            for sample in pcm.as_chunks::<2>().0 {
+                onsets += u32::from(previous == 0.0 && sample[0] != 0.0);
+                previous = sample[0];
+            }
+            frame += FRAMES;
+        }
+        assert_eq!(onsets, deadlines);
+        assert!(engine.is_idle());
+    }
+
+    #[test]
+    fn device_rate_error_stays_bounded_for_ten_minutes() {
+        let start = Instant::now();
+        for rate in [44_100, 48_000, 96_000] {
+            for frames in [256, 480, 4096] {
+                let span = frames_to_duration(frames, rate);
+                for ppm in [-200, -40, 0, 40, 200] {
+                    let mut clock = OutputFrameClock::default();
+                    let count = (600.0 / span.as_secs_f64()).ceil() as u32;
+                    for buffer in 0..=count {
+                        let frame = u64::from(buffer) * frames as u64;
+                        // The device consumes these frames at its own rate.
+                        let elapsed = (span * buffer).mul_f64(1.0 + f64::from(ppm) / 1e6);
+                        let callback = start + elapsed;
+                        let time = clock.buffer_time(frame, callback, span, rate);
+                        assert!(
+                            distance(time.start, callback - span / 2) < Duration::from_micros(500),
+                            "{rate} Hz, {frames} frames, {ppm} ppm, {buffer}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn device_frame_rate_error_does_not_accumulate_in_the_rendered_onset() {
+        let start = Instant::now();
+        for rate in [44_100, 48_000, 96_000] {
+            let frames = rate as usize / 100;
+            let span = frames_to_duration(frames, rate);
+            for ppm in [-200, -40, 40, 200] {
+                let mut engine = AudioEngine::new(rate);
+                engine.insert_sample(
+                    SoundId(1),
+                    DecodedSample { channels: 1, sample_rate: rate, frames: vec![0.5] },
+                );
+                let mut clock = OutputFrameClock::default();
+                let mut pcm = vec![0.0; frames * 2];
+                for seconds in [0, 60, 180, 300, 600] {
+                    // Device rate changes the wall time of each frame.
+                    let frame = u64::from(rate) * seconds;
+                    let elapsed = frame as f64 / (f64::from(rate) * (1.0 + f64::from(ppm) / 1e6));
+                    let callback = start + Duration::from_secs_f64(elapsed);
+                    let deadline = callback + Duration::from_millis(3);
+                    let mut sound = ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0);
+                    sound.start_time = Some(deadline);
+                    engine.schedule(sound);
+                    let time = clock.buffer_time(frame, callback, span, rate);
+                    engine.render_stereo_at(frame, &mut pcm, Some(time));
+                    let onset =
+                        pcm.as_chunks::<2>().0.iter().position(|pcm| pcm[0] != 0.0).unwrap();
+                    let output = callback
+                        + LEAD
+                        + Duration::from_secs_f64(
+                            onset as f64 / (f64::from(rate) * (1.0 + f64::from(ppm) / 1e6)),
+                        );
+                    assert!(
+                        distance(output, deadline + LEAD + span / 2) < Duration::from_micros(30)
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(any(windows, all(target_os = "macos", feature = "experimental-coreaudio-ioproc")))]
+    #[test]
+    fn native_outage_advances_active_and_pending_sounds_only_once() {
+        let start = Instant::now();
+        let mut engine = AudioEngine::new(SAMPLE_RATE);
+        for id in [1, 2] {
+            engine.insert_sample(
+                SoundId(id),
+                DecodedSample {
+                    channels: 1,
+                    sample_rate: SAMPLE_RATE,
+                    frames: (0..10_000).map(|frame| frame as f32 / 10_000.0).collect(),
+                },
+            );
+        }
+        engine.schedule(ScheduledSound::one_shot(100_000, SoundId(1), 1.0, -1.0));
+        let mut sound = ScheduledSound::one_shot(0, SoundId(2), 1.0, 1.0);
+        sound.start_time = Some(start + Duration::from_millis(25));
+        engine.schedule(sound);
+        let frame = Arc::new(AtomicU64::new(100_000));
+        let diagnostics = Arc::new(CpalOutputDiagnosticsCounters::default());
+        let commands = Arc::new(Mutex::new(VecDeque::from([CpalOutputCommand::AddLegacySource {
+            id: 1,
+            kind: CpalOutputSourceKind::Play,
+            engine: Arc::new(Mutex::new(engine)),
+        }])));
+        let mut renderer = NativeOutputRenderer::new(
+            0,
+            commands,
+            Arc::new(Mutex::new(Vec::new())),
+            frame.clone(),
+            diagnostics.clone(),
+        );
+        let mut pcm = [0.0_f32; 960];
+        renderer.render_at(&mut pcm, 2, start, SAMPLE_RATE);
+        renderer.catch_up_output_frames(2_400);
+        let callback = start + Duration::from_millis(60);
+        renderer.render_at(&mut pcm, 2, callback, SAMPLE_RATE);
+        assert_eq!(&pcm[..2], &[0.288, 0.144]);
+        let callback = callback + SPAN;
+        renderer.render_at(&mut pcm, 2, callback, SAMPLE_RATE);
+        assert_eq!(&pcm[..2], &[0.336, 0.192]);
+        assert_eq!(frame.load(Ordering::Relaxed), 100_000 + 2_400 + 3 * 480);
+        let diagnostics = diagnostics.take_snapshot();
+        assert_eq!(diagnostics.timeline_catch_up_count, 1);
+        assert_eq!(diagnostics.timeline_catch_up_frames, 2_400);
+    }
+
+    #[cfg(any(windows, all(target_os = "macos", feature = "experimental-coreaudio-ioproc")))]
+    #[test]
+    fn native_callback_stop_reaches_the_engine_with_contiguous_frames() {
+        let start = Instant::now();
+        let mut engine = AudioEngine::new(SAMPLE_RATE);
+        engine.insert_sample(
+            SoundId(1),
+            DecodedSample {
+                channels: 1,
+                sample_rate: SAMPLE_RATE,
+                frames: (0..10_000).map(|frame| frame as f32 / 10_000.0).collect(),
+            },
+        );
+        let mut sound = ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0);
+        sound.start_time = Some(start + Duration::from_millis(25));
+        engine.schedule(sound);
+        let commands = Arc::new(Mutex::new(VecDeque::from([CpalOutputCommand::AddLegacySource {
+            id: 1,
+            kind: CpalOutputSourceKind::Play,
+            engine: Arc::new(Mutex::new(engine)),
+        }])));
+        let mut renderer = NativeOutputRenderer::new(
+            0,
+            commands,
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(AtomicU64::new(100_000)),
+            Arc::new(CpalOutputDiagnosticsCounters::default()),
+        );
+        let mut pcm = [0.0_f32; 960];
+        renderer.render_at(&mut pcm, 2, start, SAMPLE_RATE);
+        // No frame jump reports this stall: the deadline is 30 ms before the
+        // buffer time of 55 ms, not at the end of the previous buffer.
+        let callback = start + Duration::from_millis(60);
+        renderer.render_at(&mut pcm, 2, callback, SAMPLE_RATE);
+        assert_eq!(pcm[0], 0.144);
     }
 }

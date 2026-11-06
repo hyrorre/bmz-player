@@ -448,6 +448,7 @@ impl BgmScheduler {
                 Some((
                     event.time,
                     ScheduledSound {
+                        start_time: clock.time_to_instant(start_time),
                         start_frame: clock.start_output_frame,
                         sample_offset_frames,
                         sound_id: event.sound,
@@ -482,14 +483,22 @@ impl BgmScheduler {
                 bmz_chart::volume::chart_volume_at_time(&chart.bgm_volume_events, event.time),
             );
             audio.schedule(ScheduledSound {
-                start_frame: clock.time_to_output_frame(event.time),
+                start_time: clock
+                    .schedule_ahead
+                    .then(|| clock.time_to_instant(event.time))
+                    .flatten(),
+                start_frame: if clock.schedule_ahead {
+                    clock.time_to_output_frame(event.time)
+                } else {
+                    0
+                },
                 sample_offset_frames: 0,
                 sound_id: event.sound,
                 volume: (volume * chart_volume).clamp(0.0, 1.0),
                 pan: 0.0,
                 loop_playback: false,
                 fade_in_frames: 0,
-                catch_up: true,
+                catch_up: clock.schedule_ahead,
                 restart_policy: RestartPolicy::StopSameSound,
             });
 
@@ -543,7 +552,15 @@ impl AutoKeysoundScheduler {
                 );
                 for sound_id in note.sounds() {
                     audio.schedule(ScheduledSound {
-                        start_frame: clock.time_to_output_frame(note.time),
+                        start_time: clock
+                            .schedule_ahead
+                            .then(|| clock.time_to_instant(note.time))
+                            .flatten(),
+                        start_frame: if clock.schedule_ahead {
+                            clock.time_to_output_frame(note.time)
+                        } else {
+                            0
+                        },
                         sample_offset_frames: 0,
                         sound_id,
                         volume: (volume * chart_volume).clamp(0.0, 1.0),
@@ -565,9 +582,14 @@ impl AutoKeysoundScheduler {
 
 pub fn compute_frame_times(session: &GameSession) -> FrameTimes {
     let audio_now = session.audio_clock.now();
-    let schedule_ahead_us = audio_schedule_ahead_us(session.audio_clock.playback_rate_percent());
-    let audio_schedule_until = TimeUs(audio_now.0.saturating_add(schedule_ahead_us));
+    let schedule_ahead = schedule_ahead_us(&session.audio_clock);
+    let audio_schedule_until = TimeUs(audio_now.0.saturating_add(schedule_ahead));
     FrameTimes { audio_now, audio_schedule_until }
+}
+
+/// Chart-time width of the scheduling window. Wake deadlines use the same width.
+pub(crate) fn schedule_ahead_us(clock: &AudioClock) -> i64 {
+    if clock.schedule_ahead { audio_schedule_ahead_us(clock.playback_rate_percent()) } else { 0 }
 }
 
 fn audio_schedule_ahead_us(playback_rate_percent: u16) -> i64 {

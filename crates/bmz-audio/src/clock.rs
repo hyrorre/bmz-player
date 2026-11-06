@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bmz_core::time::TimeUs;
 
@@ -13,6 +13,8 @@ pub struct AudioClock {
     pub running: bool,
     playback_rate_percent: u16,
     started_at: Option<Instant>,
+    /// App-wide policy, frozen for this play. Offline clocks use frame scheduling.
+    pub schedule_ahead: bool,
 }
 
 pub const MIN_PLAYBACK_RATE_PERCENT: u16 = 25;
@@ -20,6 +22,7 @@ pub const MAX_PLAYBACK_RATE_PERCENT: u16 = 300;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlaybackRateChange {
+    pub changed_at: Option<Instant>,
     pub anchor_output_frame: u64,
     pub old_rate_percent: u16,
     pub new_rate_percent: u16,
@@ -45,6 +48,7 @@ impl AudioClock {
             running: false,
             playback_rate_percent: 100,
             started_at: None,
+            schedule_ahead: true,
         }
     }
 
@@ -63,6 +67,7 @@ impl AudioClock {
             running,
             playback_rate_percent: 100,
             started_at: None,
+            schedule_ahead: true,
         }
     }
 
@@ -92,7 +97,12 @@ impl AudioClock {
             self.start_output_frame = anchor_output_frame;
         }
         self.playback_rate_percent = rate;
-        Some(PlaybackRateChange { anchor_output_frame, old_rate_percent, new_rate_percent: rate })
+        Some(PlaybackRateChange {
+            changed_at: self.started_at.map(|_| changed_at),
+            anchor_output_frame,
+            old_rate_percent,
+            new_rate_percent: rate,
+        })
     }
 
     pub const fn playback_rate_percent(&self) -> u16 {
@@ -175,7 +185,16 @@ impl AudioClock {
         }
     }
 
-    /// Returns hardware-paced output time elapsed since a chart timestamp.
+    pub fn time_to_instant(&self, time: TimeUs) -> Option<Instant> {
+        let origin = self.started_at?;
+        let us = (i128::from(time.0) - i128::from(self.chart_zero_time_us)) * 100
+            / i128::from(self.playback_rate_percent);
+        let duration =
+            std::time::Duration::from_micros(us.unsigned_abs().min(u128::from(u64::MAX)) as u64);
+        if us < 0 { origin.checked_sub(duration) } else { origin.checked_add(duration) }
+    }
+
+    /// Returns chart time elapsed since a timestamp, using the gameplay clock.
     ///
     /// Time before `since`, such as the READY margin before chart time zero, is excluded.
     pub fn elapsed_since(&self, since: TimeUs) -> TimeUs {
@@ -194,6 +213,40 @@ fn scale_chart_time(wall_time_us: i64, playback_rate_percent: u16) -> i64 {
 
 pub fn frame_to_us(frame: u64, sample_rate: u32) -> i64 {
     ((frame as u128 * 1_000_000u128) / sample_rate as u128) as i64
+}
+
+pub(crate) fn duration_to_frames(duration: Duration, sample_rate: u32) -> u64 {
+    duration
+        .as_nanos()
+        .saturating_mul(u128::from(sample_rate))
+        .checked_div(1_000_000_000)
+        .unwrap_or(0)
+        .min(u128::from(u64::MAX)) as u64
+}
+
+/// Timestamps wobble between callbacks. A smaller gap between contiguous buffers
+/// is continuous PCM; every outage and prediction-jump check shares this width.
+pub(crate) fn output_gap_tolerance(period: Duration) -> Duration {
+    Duration::from_millis(20).max(period.saturating_mul(2))
+}
+
+/// The deadlines one output buffer stands for. Each contiguous buffer starts
+/// where the previous one ended, so no deadline falls between them.
+///
+/// Right after a stop the smoothed offset can move back by more than a buffer,
+/// which puts `end` before `start`. Such a buffer has no deadline in its range,
+/// and the next one starts from that earlier `end`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct OutputBufferTime {
+    pub start: Instant,
+    pub end: Instant,
+}
+
+#[cfg(test)]
+impl OutputBufferTime {
+    pub(crate) fn for_frames(start: Instant, frames: usize, rate: u32) -> Self {
+        Self { start, end: start + Duration::from_secs_f64(frames as f64 / f64::from(rate)) }
+    }
 }
 
 #[cfg(test)]
