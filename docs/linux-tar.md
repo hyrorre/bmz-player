@@ -6,7 +6,7 @@ Linux x86_64向けに、GitHub Releasesで実行用アーカイブと対応ソ�
 
 ## 概要
 
-- 動作の最低基準はUbuntu 22.04（glibc 2.35）です。他のディストリビューションでの動作は保証しません。Flatpak版も引き続き利用できます。
+- ビルドと全ELFの基準はAlmaLinux 8.10（glibc 2.28）、対象は汎用x86_64です。同一tarballをAlmaLinux 8.10とUbuntu 22.04のコンテナで検証します。個々のビルドの合否はActionsログと検証サマリーで確認してください。Flatpak版も引き続き利用できます。
 - 一般の利用者に必要なのは実行用アーカイブだけです。ソースのアーカイブは再ビルド用です。
 - ビルドでは`pulseaudio,pipewire,linux-evdev`を有効にします。
 - バージョンを固定したPipeWire 1.4.9のクライアント、native-protocol / client-node / adapter / metadata / rtモジュール、SPAのsupport / audioconvertプラグイン、専用のクライアント設定を同梱します。
@@ -102,7 +102,7 @@ Docker / Podmanはビルド用イメージをキャッシュします。数GBの
 `dist/linux-tar/`には次のファイルを出力します。
 
 - `bmz-player-v<version>-linux-x64.tar.gz`：実行ファイル、ライブラリ、リソース、ライセンス表記
-- `bmz-player-v<version>-linux-x64-sources.tar.gz`：対応するソースのworkspace、Cargoのvendor、FFmpegのアーカイブ、対応するUbuntuのソースパッケージ
+- `bmz-player-v<version>-linux-x64-sources.tar.gz`：対応するソースのworkspace、Cargoのvendor、FFmpegのアーカイブ、対応するRPMのSRPM
 - `SHA256SUMS.txt`：2つの圧縮ファイルのSHA256
 
 すべての確認が成功すると、実行用アーカイブの隣に`validation.md`を書き出します。
@@ -140,7 +140,7 @@ GitHubでは、手動実行の前にworkflowがリポジトリの既定ブラン
 リリースには個別のclient manifestを添付しません。rianIRは`release.json`のトップレベルの`builds`を読みます。
 詳しくは[Releaseメタデータ](release-metadata.md)を参照してください。
 対応ソースは、実行用アーカイブと同じReleaseから取得してください。
-GitHubが自動で作るソースのスナップショットには、vendorした依存関係やUbuntu / FFmpegのソースが含まれません。
+GitHubが自動で作るソースのスナップショットには、vendorした依存関係やSRPM / FFmpeg / PipeWireのソースが含まれません。
 
 `upload_to_release=false`を指定すると、workflowは検証した後、まとめたファイルを`verified-release-files`としてActionsへアップロードします。
 この場合、Releaseのassetや更新用のfeedは公開しません。
@@ -148,19 +148,25 @@ GitHubが自動で作るソースのスナップショットには、vendorし�
 
 ### ビルド段階
 
-ビルド段階はUbuntu 22.04を使い、実際のコンパイラのバージョンを記録します。
-ビルドイメージ内の既存パッケージも更新し、更新可能または保留中のパッケージをログに出します。
+ビルドと対応ソースの再ビルドは公式`almalinux:8.10`を使います。
+GCC Toolset 14、Python 3.12、Meson 1.7.2、Ninja 1.11.1.4、NASM 2.16.03を両方に用意し、実際のツール・RPMのバージョンを記録します。
+NASMはハッシュを固定した上流ソースからビルドします。既存のRPMはDNFで更新します。
+手動と正式リリースのLinux tarジョブはUbuntu 26.04 runnerから同じスクリプトを実行し、ホストUbuntuのライブラリはコピーしません。
 バージョンを固定したFFmpegのソースを、GPL / nonfreeのコーデックや自動検出した外部コーデックを含めずにビルドします。
 その後、release buildの前に`cargo fmt --check`、`cargo check`、`cargo clippy`、`cargo test`を実行します。
 テストは、既存のUI文字列とファイル権限のテストに合わせて、日本語ロケールを既定とし、権限のないユーザーで実行します。
 ビルドイメージには`dbus`を追加し、アイドル抑止テストが専用のD-Busを起動できるようにします。
 一時的なディスクとメモリの使用量を抑えるため、テストのデバッグシンボルは省きます。
-アプリは既存のPulseAudio featureを使います。ネイティブCPU向けの最適化は有効にしません。
+releaseでは`pulseaudio,pipewire,linux-evdev`を有効にします。C/C++とRustのCPU基準は`x86-64`で、runner固有の最適化は有効にしません。
 
 ### 実行用アーカイブの検証
 
-検証では、実際の実行用tar.gzを展開し、それだけを読み取り専用で別のUbuntu 22.04コンテナへマウントして、権限のないユーザーで実行します。
-このイメージには、ビルド段階のファイルシステム、コンパイラ、FFmpegがありません。
+通常ビルドと`--verify`は同じ経路で、同一SHA256の実行用tar.gzを展開し、読み取り専用で独立したAlmaLinux 8.10とUbuntu 22.04コンテナへマウントします。
+両方でネットワークなし・一般ユーザーで同じ検査を実行します。どちらにもビルド段階のファイルシステム、コンパイラ、FFmpegはありません。
+全ELF（BMZ、共有ライブラリ、PipeWire/SPAモジュール）の要求シンボルを調べ、`GLIBC_2.28`を超える要求を拒否します。
+`GLIBCXX_*`、`CXXABI_*`を含む要求を、`ldd -r`が実際に解決したライブラリの提供バージョンと照合します。
+PipeWireサーバー不在時の初期化エラーをライブラリのロード失敗と区別し、PulseAudioのnull sinkで実際のフレーム出力を確認します。
+Xvfbは両OSで直接起動し、lavapipeでVulkanの描画を確認します。
 
 - 同梱したすべてのELFの依存関係が解決できることを確認します。glibc以外の依存関係は、ホストの連携用パッケージが同じものを提供していても、アーカイブ内で解決される必要があります。
 - 対照として、ライブラリのディレクトリを除いた実行ファイルのコピーでは、FFmpegを解決できないことを確認します。
@@ -171,30 +177,32 @@ GitHubが自動で作るソースのスナップショットには、vendorし�
 
 ### ビルド情報とソースの検証
 
-両方のアーカイブには、同じ`build-manifest.json`（schema 1）が入っています。
+両方のアーカイブには、同じ`build-manifest.json`（schema 2）が入っています。
 次の内容を記録します。
 
 - バージョン、コミット、submoduleのコミット
 - target / features / コマンド、lockfileのハッシュ
-- コンパイラのバージョン、Ubuntuのリリース、ビルド用イメージのID
+- コンパイラとPython/Meson/Ninja/NASMのバージョン、AlmaLinuxのリリース、ビルド用イメージのID
 - FFmpegのURL / ハッシュ / configure設定
-- Ubuntuのバイナリパッケージとソースパッケージのバージョン
+- 実ファイルを所有するバイナリRPMのname / epoch / version / release / archと正確なSOURCERPM、SRPMの取得URL・SHA256・ヘッダー
 
 ファイルの一覧には、ハッシュ、サイズ、実行権限、シンボリックリンクの参照先を記録します。
 コミット済みのスナップショットはビルド前に一覧を作り、配置後と展開後にソースとスキンのファイルをその一覧と比較します。
 manifest自身は一覧から除きます。圧縮ファイルのハッシュは、外部のチェックサムファイルだけに記録します。
 
 ソースのアーカイブは別のパスへ展開します。
-その一覧と識別情報は、実行用アーカイブ、Cargo workspaceのバージョンとlockfile、FFmpegのソースとconfigure設定、Ubuntuのソースのバージョンと一致する必要があります。
-すべての`.dsc`の参照について、サイズとSHA256を確認し、`dpkg-source`で展開します。
-別のツール専用コンテナは、ソースのアーカイブだけをマウントし、空のCargoキャッシュでvendorの依存関係をオフラインで解決します。
-そのうえで、ネットワークを無効にしてFFmpegとBMZのreleaseを再ビルドします。
-この確認では、Ubuntuのライブラリをすべて再ビルドするわけではなく、バイト単位で同じバイナリを再現できることも保証しません。
+その一覧と識別情報は、実行用アーカイブ、Cargo workspaceのバージョンとlockfile、FFmpeg・PipeWireのソースと設定、RPMの対応関係と一致する必要があります。
+すべてのSRPMのSHA256、RPMヘッダーとペイロードのダイジェスト、ファイルごとのサイズ・ハッシュを確認し、spec・パッチ・上流ソースを展開します。
+ビルド済みFFmpeg・PipeWireや元checkoutを含まないAlmaLinux 8.10ツール専用コンテナへ、展開したソースだけを読み取り専用でマウントします。
+空のCargoキャッシュでvendorをオフライン解決し、`--network=none`でFFmpeg・PipeWireクライアント・BMZのreleaseビルドを最後まで実行します。
+両OSの実行検証と再ビルドの結果が揃うまでアップロード先を出力しません。
+検証サマリーにはOS別の結果、ELF数、要求された最大GLIBCと同一tarballのSHA256を記録します。
+全RPMライブラリの再ビルドと、バイト単位の同一バイナリ再現は確認しません。
 
 ### 検証できない項目
 
-このsmoke checkでは、実際のGPUとの互換性、Waylandでの動作、音が実際に鳴るか、タイミング・遅延、物理コントローラーへのアクセスは確認できません。
-一般向けのバイナリリリースを提案する前に、実機のUbuntu 22.04デスクトップで確認してください。
+コンテナはホストのカーネルを共有し、両OSのユーザー空間の互換性を検証します。このsmoke checkでは、実機のカーネル、GPUとの互換性、Waylandでの動作、音が実際に鳴るか、タイミング・遅延、物理コントローラーへのアクセスは確認できません。
+一般向けのバイナリリリースを提案する前に、両OSの実機デスクトップで確認してください。
 
 ## ライセンス表記と対応ソース
 
@@ -216,17 +224,18 @@ FFmpegは動的リンクし、ライブラリ名を変えずに同梱します�
 記録したconfigureコマンドと`installer/linux-tar/build-ffmpeg.sh`に、再ビルドの方法が書かれています。
 これは[FFmpegの配布チェックリスト](https://ffmpeg.org/legal.html)に従ったものです。
 
-ほかの同梱ELFライブラリは、Ubuntuのパッケージから取り出しています。
+ほかの同梱ELFライブラリは、AlmaLinuxのビルドコンテナにインストールされたRPMから取り出します。
 それぞれについて、次のものを用意します。
 
-- `resources/licenses/ubuntu/packages.txt`に記録したバイナリとソースのバージョン
-- 元の著作権表示
-- APTで取得し、ソースのアーカイブの`ubuntu/<source-package>/`に入れた`.dsc` / 上流 / Debianのソースアーカイブ
+- `resources/licenses/rpm/packages.{json,txt}`に記録した所有RPMとSOURCERPM
+- 元のRPMの`%license`本文と`%doc`の通知
+- ソースのアーカイブの`srpms/`に重複なく収録した正確なSRPMと、`srpms.json`の取得URL・SHA256
 
 ソースやライセンス表記が欠けている場合は、パッケージ作成が失敗します。
 同梱ライブラリごとのバイナリと対応ソースをログに出し、ソースが取得できない場合も
-別のバージョンに置き換えず失敗します。同じソースパッケージの複数バージョンが必要な場合も失敗します。
-パッチ適用済みのソースを展開するには、`.dsc`に対して`dpkg-source -x`を実行します。
+別のバージョンに置き換えず失敗します。所有元不明・版違い・破損も拒否します。
+SRPMは新しいディレクトリで`rpm2cpio <file>.src.rpm | cpio -id`を実行して展開できます。
+specのビルド手順とパッチを保持しており、適用・再ビルドにはRPMの開発ツールと個別の依存関係が必要です。
 ELF RUNPATHは同梱のパッケージ作成スクリプトで調整しますが、ライブラリのコードには変更を加えません。
 これらのファイルは、将来のソース提供の申し出に頼らず、バイナリと一緒に配布します。
 ホストのglibc / loaderとGPUドライバーは同梱しません。
@@ -234,10 +243,10 @@ ELF RUNPATHは同梱のパッケージ作成スクリプトで調整しますが
 ソースのアーカイブには、アプリのworkspaceがそのまま入っています。
 実際に同梱したsubmoduleのファイル、スクリプト、lockfile、Cargoのvendorも含みます。
 `.cargo/config.toml`は相対パスの`vendor`を使い、既存の設定はそのまま残します。
-開発用パッケージ、オフラインでの再ビルドのコマンド、Ubuntuのソースの展開方法は、アーカイブ内の`BUILDING.md`（リポジトリでは[`installer/linux-tar/SOURCE-README.md`](../installer/linux-tar/SOURCE-README.md)）を参照してください。
+開発用パッケージ、オフラインでの再ビルドのコマンド、SRPMの展開方法は、アーカイブ内の`BUILDING.md`（リポジトリでは[`installer/linux-tar/SOURCE-README.md`](../installer/linux-tar/SOURCE-README.md)）を参照してください。
 再配布するときは、対応する2つのアーカイブとすべてのライセンス表記をそのまま保ってください。
 同梱した依存関係のセキュリティ更新には、アーカイブの再ビルドと再検証が必要です。
-キャッシュしたイメージのレイヤーを再利用せず、Ubuntuのパッケージと安定版Rust toolchainを更新するには、先に次を実行します。
+キャッシュしたイメージのレイヤーを再利用せず、RPMと安定版Rust toolchainを更新するには、先に次を実行します。
 
 ```sh
 docker build --pull --no-cache --target build -t bmz-linux-tar-build installer/linux-tar

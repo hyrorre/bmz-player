@@ -53,8 +53,10 @@ Download `bmz-player-v<version>-linux-x64.tar.gz` from
 run `./bmz-player` from the extracted directory. Keep `bin`, `lib`, and `resources`
 together. No build or source archive is needed to play.
 
-The baseline is Ubuntu 22.04 / glibc 2.35+ on x86_64 with host graphics and audio
-support. Flatpak remains available. The separate `linux-x64-sources.tar.gz`
+The build baseline is AlmaLinux 8.10 / glibc 2.28 on generic x86_64, with runtime
+checks on AlmaLinux 8.10 and Ubuntu 22.04. Host graphics and audio support are
+required; see each build's validation summary for results. Flatpak remains available.
+The separate `linux-x64-sources.tar.gz`
 contains corresponding application and dependency sources for rebuilding.
 See [Linux tar distribution](docs/linux-tar.md) for prerequisites, storage paths,
 manual updates and source verification.

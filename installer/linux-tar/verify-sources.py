@@ -1,78 +1,62 @@
-"""Validate exact Ubuntu source sets and rebuild using only extracted sources."""
+"""Validate exact SRPM sets and rebuild using only extracted sources."""
 
 import argparse
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
 import tempfile
 
-from manifest import check_inventory, sha256
+from manifest import check_inventory
+from source_packages import check_srpm
 
 
-def dsc_fields(path):
-    # A .dsc can be clearsigned. Only parse its Debian control paragraph.
-    fields = {}
-    key = None
-    for line in path.read_text().splitlines():
-        if line.startswith("-----BEGIN PGP SIGNATURE"):
-            break
-        if line.startswith(" ") and key:
-            fields[key] += "\n" + line.strip()
-        elif re.match(r"^[A-Za-z0-9-]+:", line):
-            key, value = line.split(":", 1)
-            fields[key] = value.strip()
-        else:
-            key = None
-    return fields
+def check_sources(source, manifest):
+    records = manifest["srpms"]
+    expected = {p["rpm"]["sourcerpm"] for p in manifest["rpm"]}
+    if len(records) != len(expected) or {r["filename"] for r in records} != expected:
+        raise ValueError("Missing/duplicate SRPM mapping")
+    if json.loads((source / "srpms.json").read_text()) != records:
+        raise ValueError("SRPM manifest mismatch")
+    if {p.name for p in (source / "srpms").glob("*")} != expected:
+        raise ValueError("Missing/unexpected SRPM files")
+    for record in records:
+        if Path(record["filename"]).name != record["filename"]:
+            raise ValueError("Unsafe SRPM filename")
+        owners = [p["rpm"] for p in manifest["rpm"]
+                  if p["rpm"]["sourcerpm"] == record["filename"]]
+        actual = check_srpm(source / "srpms" / record["filename"], owners, record["sha256"])
+        if actual != record["header"]:
+            raise ValueError("SRPM header manifest mismatch")
 
 
-def check_dsc(path, package, version):
-    fields = dsc_fields(path)
-    if fields.get("Source") != package or fields.get("Version") != version:
-        raise ValueError(f"Wrong source package/version: {path}")
-    entries = fields["Checksums-Sha256"].strip().splitlines()
-    if not entries:
-        raise ValueError(f"Empty source checksums: {path}")
-    for entry in entries:
-        digest, size, name = entry.split()
-        if Path(name).name != name:
-            raise ValueError(f"Unsafe .dsc filename: {name}")
-        target = path.parent / name
-        if target.stat().st_size != int(size) or sha256(target) != digest:
-            raise ValueError(f"Source checksum mismatch: {target}")
-
-
-def verify(source, rebuild):
+def verify(source, rebuild, result):
+    assert not Path("/source").exists() and not Path("/opt/ffmpeg").exists()
+    assert not Path("/opt/pipewire").exists()
     manifest = json.loads((source / "build-manifest.json").read_text())
     check_inventory(source, manifest["files"]["sources"])
+    check_sources(source, manifest)
     with tempfile.TemporaryDirectory(prefix="bmz-source-check-") as temporary:
         work = Path(temporary)
-        for package, version in sorted({(p["source_package"], p["source_version"])
-                                        for p in manifest["ubuntu"]}):
-            descriptors = list((source / "ubuntu" / package).glob("*.dsc"))
-            if len(descriptors) != 1:
-                raise ValueError(f"Expected one .dsc for {package}={version}")
-            check_dsc(descriptors[0], package, version)
-            # Extract separately to keep peak disk usage bounded. dpkg-source
-            # validates all reference checksums and applies the Debian patches.
-            with tempfile.TemporaryDirectory(dir=work) as unpack:
-                subprocess.run(["dpkg-source", "--require-strong-checksums", "-x", str(descriptors[0]),
-                                str(Path(unpack) / "source")], check=True)
         env = dict(os.environ, CARGO_HOME=str(work / "empty-cargo-home"))
         subprocess.run(["cargo", "metadata", "--offline", "--locked", "--format-version", "1"],
                        cwd=source, env=env, stdout=subprocess.DEVNULL, check=True)
-        print("PASS: exact Ubuntu sources, .dsc extraction, empty-cache offline Cargo metadata", flush=True)
+        print("PASS: exact SRPM headers, digests, payload extraction; empty-cache offline Cargo metadata", flush=True)
         if rebuild:
             env["BMZ_REBUILD_DIR"] = str(work / "rebuild")
             subprocess.run(["bash", str(source / "installer/linux-tar/rebuild.sh")], env=env, check=True)
-            print("PASS: FFmpeg, PipeWire client and BMZ release rebuilt offline from the source archive", flush=True)
+            print("PASS: FFmpeg, PipeWire client and BMZ release rebuilt offline from source archive", flush=True)
+        if result:
+            if not rebuild:
+                raise ValueError("A validation result requires the full rebuild")
+            result.write_text(json.dumps(dict(status="passed", commit=manifest["commit"],
+                                             os_release=Path("/etc/os-release").read_text())))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("source", type=Path)
     parser.add_argument("--rebuild", action="store_true")
+    parser.add_argument("--result", type=Path)
     args = parser.parse_args()
-    verify(args.source.resolve(), args.rebuild)
+    verify(args.source.resolve(), args.rebuild, args.result)

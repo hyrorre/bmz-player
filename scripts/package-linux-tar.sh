@@ -21,6 +21,15 @@ work=$(mktemp -d "$root/dist/linux-tar/.build.XXXXXX")
 trap 'rm -rf -- "$work"' EXIT
 mkdir "$work/extracted"
 context="$root/installer/linux-tar"
+# Optional session CA for managed environments; never bake it into an image.
+build_args=()
+run_args=()
+if [[ -n "${BMZ_PROXY_CA:-}" ]]; then
+  build_args+=(--secret "id=proxy_ca,src=$BMZ_PROXY_CA")
+  run_args+=(--mount "type=bind,src=$BMZ_PROXY_CA,dst=/run/proxy-ca.pem,readonly"
+    -e CURL_CA_BUNDLE=/run/proxy-ca.pem -e CARGO_HTTP_CAINFO=/run/proxy-ca.pem
+    -e SSL_CERT_FILE=/run/proxy-ca.pem)
+fi
 if [[ -z "$archive" ]]; then
   git diff --quiet HEAD -- || { echo 'Commit tracked changes before packaging' >&2; exit 1; }
   mkdir "$work/source"
@@ -36,9 +45,9 @@ if [[ -z "$archive" ]]; then
   git rev-parse HEAD > "$work/source/BUILD-COMMIT"
   python3 installer/linux-tar/manifest.py snapshot "$work/source"
   context="$work/source/installer/linux-tar"
-  "$engine" build --target build -t bmz-linux-tar-build "$context"
+  "$engine" build "${build_args[@]}" --target build -t bmz-linux-tar-build "$context"
   image_id=$("$engine" image inspect --format '{{.Id}}' bmz-linux-tar-build)
-  "$engine" run --rm \
+  "$engine" run --rm "${run_args[@]}" \
     -e "BMZ_BUILD_IMAGE_ID=$image_id" \
     -v "$work/source:/source:ro" -v "$work:/output" \
     bmz-linux-tar-build bash /source/installer/linux-tar/build.sh
@@ -55,11 +64,21 @@ fi
 python3 "$context/archives.py" "$archive" "$sources" --extract-to "$work/extracted"
 package=$(find "$work/extracted/runtime" -mindepth 1 -maxdepth 1 -type d)
 source_package=$(find "$work/extracted/sources" -mindepth 1 -maxdepth 1 -type d)
-"$engine" build --target verify -t bmz-linux-tar-verify "$context"
+runtime_sha256=$(sha256sum "$archive" | cut -d ' ' -f 1)
+mkdir "$work/validation"
+chmod 777 "$work/validation"
+for os in almalinux ubuntu; do
+  "$engine" build "${build_args[@]}" --target "verify-$os" -t "bmz-linux-tar-verify-$os" "$context"
+  "$engine" run --rm --network=none \
+    -e "BMZ_RUNTIME_SHA256=$runtime_sha256" \
+    -v "$package:/opt/BMZ Player:ro" -v "$work/validation:/validation" \
+    "bmz-linux-tar-verify-$os" python3 /opt/verify.py "/validation/$os.json"
+done
+"$engine" build "${build_args[@]}" --target source-verify -t bmz-linux-tar-source-verify "$context"
 "$engine" run --rm --network=none \
-  -v "$package:/opt/BMZ Player:ro" bmz-linux-tar-verify
-"$engine" build --target source-verify -t bmz-linux-tar-source-verify "$context"
-"$engine" run --rm --network=none \
-  -v "$source_package:/archives/sources:ro" bmz-linux-tar-source-verify
-python3 "$context/report.py" "$archive" "$sources" "$work/extracted/verified.json"
+  -v "$source_package:/archives/sources:ro" -v "$work/validation:/validation" \
+  bmz-linux-tar-source-verify python3 /opt/verify-sources.py /archives/sources \
+  --rebuild --result /validation/sources.json
+[[ $(sha256sum "$archive" | cut -d ' ' -f 1) == "$runtime_sha256" ]]
+python3 "$context/report.py" "$archive" "$sources" "$work/extracted/verified.json" "$work/validation"
 echo "Verified archives: $archive $sources"

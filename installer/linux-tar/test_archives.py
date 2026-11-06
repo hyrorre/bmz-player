@@ -36,16 +36,18 @@ class ArchiveTests(unittest.TestCase):
         self.write(self.source, "ffmpeg/configure.txt", "url=example\nsha256=example\n./configure --enable-shared\n")
         self.write(self.runtime, "resources/licenses/ffmpeg-build.txt",
                    (self.source / "ffmpeg/configure.txt").read_text())
-        self.write(self.runtime, "resources/licenses/ubuntu/packages.json", "[]")
+        self.write(self.runtime, "resources/licenses/rpm/packages.json", "[]")
+        self.write(self.runtime, "resources/licenses/rpm/custom-libraries.json", "{}")
+        self.write(self.source, "srpms.json", "[]")
         self.write(self.source, "pipewire/pipewire-1.4.9.tar.bz2", "pipewire source")
         pipewire = "source_url=https://example/pipewire_1.4.9.orig.tar.bz2\nsource_sha256=" + sha256(self.source / "pipewire/pipewire-1.4.9.tar.bz2") + "\nmeson setup build source\n"
         self.write(self.source, "pipewire/configure.txt", pipewire)
         self.write(self.runtime, "resources/licenses/pipewire-build.txt", pipewire)
         self.write(self.runtime, "bin/bmz-player", "binary")
         self.manifest = {
-            "schema": 1, "commit": "a" * 40, "version": "0.4.0",
+            "schema": 2, "glibc_baseline": "2.28", "commit": "a" * 40, "version": "0.4.0",
             "cargo_lock_sha256": sha256(self.source / "Cargo.lock"),
-            "snapshot": self.snapshot, "ubuntu": [],
+            "snapshot": self.snapshot, "rpm": [], "srpms": [], "custom_libraries": {},
             "pipewire_client": pipewire,
             "ffmpeg": {"version": "9.0.1", "sha256": sha256(self.source / "ffmpeg/ffmpeg-9.0.1.tar.xz"),
                        "configure": "./configure --enable-shared"},
@@ -105,19 +107,13 @@ class ArchiveTests(unittest.TestCase):
         (self.source / "skin-link").symlink_to("data/skins", target_is_directory=True)
         self.assertEqual(inventory(self.source)["skin-link"], {"symlink": "data/skins"})
 
-    def test_dsc_references(self):
-        upstream = self.write(self.source, "ubuntu/example/example.tar.xz", "upstream")
-        dsc = self.write(self.source, "ubuntu/example/example.dsc",
-                         f"Source: example\nVersion: 1:2.3-4\nChecksums-Sha256:\n {sha256(upstream)} 8 example.tar.xz\n")
-        verify_sources.check_dsc(dsc, "example", "1:2.3-4")
-        with self.assertRaisesRegex(ValueError, "Wrong source"):
-            verify_sources.check_dsc(dsc, "example", "2.3-5")
-        upstream.write_text("tampered")
-        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
-            verify_sources.check_dsc(dsc, "example", "1:2.3-4")
-        upstream.unlink()
-        with self.assertRaises(FileNotFoundError):
-            verify_sources.check_dsc(dsc, "example", "1:2.3-4")
+    def test_srpm_mapping_is_required(self):
+        self.manifest["rpm"] = [dict(library="libexample.so", rpm=dict(sourcerpm="example-1-2.src.rpm"))]
+        self.write(self.runtime, "resources/licenses/rpm/packages.json", json.dumps(self.manifest["rpm"]))
+        self.manifest["files"]["runtime"] = inventory(self.runtime, ("build-manifest.json",))
+        self.save_manifest()
+        with self.assertRaisesRegex(ValueError, "Missing/duplicate SRPM"):
+            check_pair(self.runtime, self.source)
 
     def test_size_limit(self):
         archive = self.root / "oversize.tar.gz"
