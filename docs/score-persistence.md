@@ -293,7 +293,7 @@ schema versionだけを巻き戻しません。送信済みの識別情報と再
 | `send_policy` | BMZの単曲条件 | beatorajaの単曲条件 |
 | --- | --- | --- |
 | `Always` | 常に送信候補 | 常に送信候補 |
-| `CompleteSong` | 最終gauge valueが0より大きい | 最終gauge logが0より大きい |
+| `CompleteSong` | 手動中断しておらず、最終gauge valueが0より大きい | 最終gauge logが0より大きい |
 | `UpdateScore` | 初プレイ、またはEX / lamp / max combo / BP / CBのいずれか改善 | EX / lamp / max combo / min BPのいずれか改善 |
 
 BMZのCB改善だけでも`UpdateScore`が送信候補になる点が差です。これはclient側の
