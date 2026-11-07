@@ -57,7 +57,18 @@ pub fn body_for_rule_name(rule_mode: &str) -> Result<&'static str> {
     }
 }
 
-pub(super) fn ensure_score_payload_supported(payload: &IrScoreSubmission) -> Result<()> {
+pub fn ensure_score_payload_supported(payload: &IrScoreSubmission) -> Result<()> {
+    if let Some(reason) = crate::ir::kaleid::rian_ir_block_reason(&payload.chart.kaleid) {
+        bail!(reason);
+    }
+    if !score_duration_plausible(
+        &payload.result.clear,
+        payload.chart.length_ms,
+        payload.result.duration_ms,
+        payload.chart.features.random || payload.chart.kaleid.source.conditional,
+    ) {
+        bail!("rianIR duration check rejected locally");
+    }
     let double =
         payload.play_options.get("applied_double_option").and_then(Value::as_str).unwrap_or("off");
     if matches!(double, "battle" | "battle_auto_scratch" | "battle_assist") {
@@ -71,6 +82,7 @@ pub(super) fn score_request(
     player_id: &str,
     api_token: &str,
 ) -> Result<Value> {
+    ensure_score_payload_supported(payload)?;
     let judges = aggregate_judges(payload.result.judges);
     let body = body_for_rule_name(&payload.rule.rule_mode)?;
     let song_ln_mode = source_ln_mode_id(payload.chart.ln_profile);
@@ -126,7 +138,13 @@ pub(super) fn score_request(
     if let Some(length_ms) = payload.chart.length_ms {
         request["length_ms"] = json!(length_ms);
         request["play_duration_ms"] = json!(payload.result.duration_ms.unwrap_or_default());
-        request["has_random"] = json!(payload.chart.features.random);
+        request["has_random"] =
+            json!(payload.chart.features.random || payload.chart.kaleid.source.conditional);
+    }
+    if payload.chart.kaleid.version > 0 {
+        request["has_conditional"] = json!(payload.chart.kaleid.source.conditional);
+        request["has_random"] =
+            json!(payload.chart.features.random || payload.chart.kaleid.source.conditional);
     }
     request["ln_mode_format"] = Value::String("canonical-v1".to_string());
     let signature = signature(
@@ -178,11 +196,14 @@ pub(super) fn course_request(payload: &Value, player_id: &str, api_token: &str) 
         .or_else(|| result.get("max_ex_score").and_then(Value::as_u64).map(|v| v / 2))
         .unwrap_or(0);
     let ln_policy = required_str(rule, "ln_policy")?;
-    if !matches!(ln_policy, "AutoLn" | "AutoCn" | "AutoHcn" | "ForceLn" | "ForceCn" | "ForceHcn") {
+    if !matches!(
+        ln_policy,
+        "AutoLn" | "AutoCn" | "AutoHcn" | "ForceLn" | "ForceCn" | "ForceHcn" | "ForceHln"
+    ) {
         bail!("unsupported rianIR course LN policy '{ln_policy}'");
     }
     let ln_mode = match rule.get("effective_ln_mode").and_then(Value::as_u64) {
-        Some(mode @ 0..=3) => mode as u8,
+        Some(mode @ 0..=4) => mode as u8,
         Some(mode) => bail!("unsupported rianIR course effective LN mode '{mode}'"),
         None => effective_ln_mode_id_from_name(ln_policy)?,
     };
@@ -275,6 +296,7 @@ fn chart_ln_profile(profile: IrChartLnProfile) -> ChartLnProfile {
         has_defined_ln: profile.has_defined_ln,
         has_defined_cn: profile.has_defined_cn,
         has_defined_hcn: profile.has_defined_hcn,
+        has_defined_hln: profile.has_defined_hln,
     }
 }
 
@@ -284,6 +306,7 @@ fn ln_mode_id(mode: Option<LongNoteMode>) -> u8 {
         Some(LongNoteMode::Ln) => 1,
         Some(LongNoteMode::Cn) => 2,
         Some(LongNoteMode::Hcn) => 3,
+        Some(LongNoteMode::Hln) => 4,
     }
 }
 
@@ -300,6 +323,7 @@ pub(super) fn effective_ln_mode_id_from_name(policy: &str) -> Result<u8> {
         "ForceLn" => Ok(1),
         "ForceCn" => Ok(2),
         "ForceHcn" => Ok(3),
+        "ForceHln" => Ok(4),
         other => bail!("unsupported rianIR LN policy '{other}'"),
     }
 }

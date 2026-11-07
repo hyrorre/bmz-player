@@ -53,6 +53,7 @@ pub(super) async fn submit_course_job_payload(
     let mut payload: serde_json::Value =
         serde_json::from_str(payload_json).context("failed to parse stored IR course payload")?;
     normalize_legacy_course_payload(&mut payload);
+    crate::ir::kaleid::ensure_course_supported(provider, &payload)?;
     let provider_key = crate::ir::provider_key::configured_provider_key(provider)
         .context("IR provider key is not set; log in again")?;
     if crate::ir::bms_ir::is_bms_ir_config(provider) {
