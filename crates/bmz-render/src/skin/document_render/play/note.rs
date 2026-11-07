@@ -38,7 +38,16 @@ macro_rules! skin_document_render_play_note_methods {
         ) -> Option<SkinRenderItem> {
             let note = self.note.as_ref()?;
             let index = beatoraja_note_index(lane, key_mode);
-            let hcn = (mode == LongNoteMode::Hcn).then(|| note.hcnstart.get(index)).flatten();
+            let hcn = (mode == LongNoteMode::Hln)
+                .then(|| note.hlnstart.get(index))
+                .flatten()
+                .filter(|id| !id.is_empty())
+                .or_else(|| {
+                    matches!(mode, LongNoteMode::Hcn | LongNoteMode::Hln)
+                        .then(|| note.hcnstart.get(index))
+                        .flatten()
+                        .filter(|id| mode != LongNoteMode::Hln || !id.is_empty())
+                });
             let image_id =
                 hcn.or_else(|| note.lnstart.get(index)).or_else(|| note.note.get(index))?;
             self.note_part_render_item(image_id, rect, 0, sources)
@@ -57,7 +66,16 @@ macro_rules! skin_document_render_play_note_methods {
         ) -> Option<SkinRenderItem> {
             let note = self.note.as_ref()?;
             let index = beatoraja_note_index(lane, key_mode);
-            let hcn = (mode == LongNoteMode::Hcn).then(|| note.hcnend.get(index)).flatten();
+            let hcn = (mode == LongNoteMode::Hln)
+                .then(|| note.hlnend.get(index))
+                .flatten()
+                .filter(|id| !id.is_empty())
+                .or_else(|| {
+                    matches!(mode, LongNoteMode::Hcn | LongNoteMode::Hln)
+                        .then(|| note.hcnend.get(index))
+                        .flatten()
+                        .filter(|id| mode != LongNoteMode::Hln || !id.is_empty())
+                });
             let image_id =
                 hcn.or_else(|| note.lnend.get(index)).or_else(|| note.note.get(index))?;
             self.note_part_render_item(image_id, rect, 0, sources)
@@ -160,7 +178,18 @@ macro_rules! skin_document_render_play_note_methods {
         ) -> Option<SkinRenderItem> {
             let note = self.note.as_ref()?;
             let index = beatoraja_note_index(lane, key_mode);
-            let image_id = if mode == LongNoteMode::Hcn {
+            let image_id = if mode == LongNoteMode::Hln {
+                match state {
+                    LongBodyState::Processing => note.hlnbody_active.get(index),
+                    LongBodyState::Inactive => note.hlnbody.get(index),
+                    LongBodyState::HcnActive => note.hlnbody_reactive.get(index),
+                    LongBodyState::HcnDamage => note.hlnbody_miss.get(index),
+                }
+                .filter(|id| !id.is_empty())
+                .or_else(|| self.hcn_body_image_id(note, index, state))
+                .filter(|id| !id.is_empty())
+                .or_else(|| self.ln_body_image_id(note, index, state.is_processing()))
+            } else if mode == LongNoteMode::Hcn {
                 self.hcn_body_image_id(note, index, state)
             } else {
                 self.ln_body_image_id(note, index, state.is_processing())

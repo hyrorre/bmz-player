@@ -596,6 +596,13 @@ impl WinitApp {
         else {
             return;
         };
+        if crate::ir::provider_key::primary_provider_config(&self.boot.profile_config.ir)
+            .is_some_and(|provider| {
+                crate::ir::kaleid::block_reason(provider, &chart.kaleid).is_some()
+            })
+        {
+            return;
+        }
         options.resolved_target = self.select.select_ir.resolved_target_for(
             &self.boot.profile_config.ir,
             Some(chart.sha256),

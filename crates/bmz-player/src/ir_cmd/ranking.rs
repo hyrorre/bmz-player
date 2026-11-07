@@ -3,6 +3,7 @@ use super::jobs::{sync_cli_jobs, sync_cli_jobs_for_kind};
 use super::*;
 
 pub(super) async fn ranking(
+    app_paths: &AppPaths,
     profile_paths: &ProfilePaths,
     profile: &ProfileConfig,
     sha256: &str,
@@ -11,6 +12,20 @@ pub(super) async fn ranking(
     limit: u32,
 ) -> Result<()> {
     let provider = primary_provider(profile)?;
+    if crate::ir::bms_ir::is_bms_ir_config(provider)
+        || crate::ir::rian_ir::is_rian_ir_config(provider)
+    {
+        let hash = crate::storage::common::hex_to_hash::<32>(sha256)?;
+        let provenance = crate::storage::library_db::LibraryDatabase::open(&app_paths.library_db)?
+            .list_charts_by_sha256(hash)?
+            .into_iter()
+            .next()
+            .map(|chart| chart.kaleid)
+            .unwrap_or_default();
+        if let Some(reason) = crate::ir::kaleid::block_reason(provider, &provenance) {
+            bail!(reason);
+        }
+    }
     let scope = parse_scope(scope)?;
     let now = now_unix_seconds();
     if crate::ir::rian_ir::is_rian_ir_config(provider) {

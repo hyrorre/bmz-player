@@ -25,6 +25,8 @@ pub struct ScheduledSound {
     /// chart position but is still playing there. Late callback catch-up is
     /// applied on top of this offset.
     pub sample_offset_frames: u64,
+    /// Exclusive end in the decoded source, used for dynamically retimed BMSON slices.
+    pub sample_end_frames: Option<u64>,
     pub sound_id: SoundId,
     pub volume: f32,
     pub pan: f32,
@@ -55,6 +57,7 @@ impl ScheduledSound {
             start_time: None,
             start_frame,
             sample_offset_frames: 0,
+            sample_end_frames: None,
             sound_id,
             volume,
             pan,
@@ -64,6 +67,31 @@ impl ScheduledSound {
             catch_up: true,
             restart_policy: RestartPolicy::Overlap,
         }
+    }
+
+    pub fn with_chart_slice(
+        mut self,
+        chart: &bmz_chart::model::PlayableChart,
+        sample_rate: u32,
+    ) -> Self {
+        if chart.metadata.conditional.is_some()
+            && chart.metadata.source_format == bmz_chart::model::ChartSourceFormat::Bmson
+            && let Some(slice) = chart
+                .sounds
+                .iter()
+                .find(|asset| asset.id == self.sound_id)
+                .and_then(|asset| asset.slice)
+        {
+            let frame = |us: u64| {
+                (u128::from(us) * u128::from(sample_rate) / 1_000_000).min(u128::from(u64::MAX))
+                    as u64
+            };
+            self.sample_offset_frames =
+                self.sample_offset_frames.saturating_add(frame(slice.start_us));
+            self.sample_end_frames =
+                slice.duration_us.map(|duration| frame(slice.start_us.saturating_add(duration)));
+        }
+        self
     }
 }
 
@@ -336,6 +364,7 @@ mod tests {
             start_time: None,
             start_frame,
             sample_offset_frames: 0,
+            sample_end_frames: None,
             sound_id: SoundId(sound_id),
             volume: 1.0,
             pan: 0.0,

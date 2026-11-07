@@ -357,6 +357,7 @@ fn course_result_summary_for_skin_uses_aggregate_course_values() {
         .map(|(play_level, difficulty_name)| crate::screens::course_session::CourseStageChartInfo {
             play_level: play_level.to_string(),
             difficulty_name: difficulty_name.to_string(),
+            kaleid: None,
         })
         .to_vec();
     apply_course_result_lua_load_state(&mut runtime_state, &course);
@@ -561,6 +562,10 @@ fn exact_course_metrics_reuse_first_prepared_chart_without_library_access() {
             has_defined_hcn: true,
             ..Default::default()
         },
+        kaleid: bmz_chart::kaleid::KaleidProvenance {
+            diagnostics: vec!["selected RANDOM branch is partial".into()],
+            ..Default::default()
+        },
     };
 
     let metrics = course_play_metrics_for_definition_reusing_first(
@@ -576,6 +581,8 @@ fn exact_course_metrics_reuse_first_prepared_chart_without_library_access() {
 
     assert_eq!(metrics.total_notes, 321);
     assert_eq!(metrics.ln_mode, Some(bmz_chart::model::LongNoteMode::Hcn));
+    assert_eq!(metrics.entry_kaleid.len(), 1);
+    assert_eq!(metrics.entry_kaleid[0].diagnostics, ["selected RANDOM branch is partial"]);
 }
 
 #[test]

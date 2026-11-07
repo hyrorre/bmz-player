@@ -109,6 +109,16 @@ pub fn import_chart_bytes_with_random_source(
     let mut chart =
         normalize::normalize_chart(path, intermediate, &mut warnings, check_resource_existence)?;
     chart.metadata.source_format = file_format.source_format();
+    if let Some(program) = chart.metadata.conditional.clone() {
+        program.stabilize_default(&mut chart)?;
+        chart.sounds = program.all_sounds()?;
+    }
+    for message in &chart.metadata.kaleid.diagnostics {
+        warnings.push(ImportWarning::ParserDiagnostic {
+            code: "KaleidPartial".into(),
+            message: message.clone(),
+        });
+    }
     Ok(ImportResult { chart, warnings, bms_random_choices, bms_switch_choices })
 }
 

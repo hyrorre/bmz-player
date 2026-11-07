@@ -16,6 +16,9 @@ pub struct IntermediateChart {
     pub objects: Vec<IntermediateObject>,
     pub layered_note_sounds: Vec<IntermediateLayeredSound>,
     pub lnobj_wav_key: Option<u16>,
+    /// CNOBJ / HCNOBJ / HLNOBJ。種別ごとの最後の有効定義を記述順に保持する。
+    pub typed_lnobj: Vec<(u16, LongNoteMode)>,
+    pub long_end_sounds: Vec<IntermediateLayeredSound>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -29,6 +32,8 @@ pub struct IntermediateLayeredSound {
 
 #[derive(Debug, Clone, Default)]
 pub struct IntermediateMetadata {
+    pub kaleid: crate::kaleid::KaleidProvenance,
+    pub conditional: Option<std::sync::Arc<crate::conditional::ConditionalProgram>>,
     pub title: String,
     pub subtitle: String,
     pub artist: String,
@@ -69,11 +74,22 @@ pub struct IntermediateMetadata {
 
 #[derive(Debug, Clone, Default)]
 pub struct IntermediateResources {
+    /// Re-evaluated against selected BPM/STOP events for dynamic BMSON branches.
+    pub metric_sound_slices: Vec<MetricSoundSlice>,
     pub wavs: Vec<WavDef>,
     pub bmps: Vec<BmpDef>,
     pub bpm_table: Vec<BpmDef>,
     pub stop_table: Vec<StopDef>,
     pub swbga_defs: Vec<SwBgaDef>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MetricSoundSlice {
+    pub wav_key: u16,
+    pub resolution: u64,
+    pub pulse: u64,
+    pub origin: u64,
+    pub end: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -137,6 +153,19 @@ pub struct IntermediateObject {
 
 #[derive(Debug, Clone)]
 pub enum IntermediateObjectKind {
+    KaleidNote {
+        lane: Lane,
+        kind: KaleidNoteKind,
+        recovery: f64,
+        mode: Option<LongNoteMode>,
+    },
+    /// A single marker spans one quarter note; paired markers alternate start/end.
+    FreeZone {
+        lane: Lane,
+        paired: bool,
+        length_ticks: Option<u64>,
+    },
+    BarLine,
     VisibleNote {
         lane: Lane,
         wav_key: Option<u16>,
@@ -220,6 +249,15 @@ pub enum IntermediateObjectKind {
     BgaKeybound {
         swbga_key: u16,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum KaleidNoteKind {
+    Potion,
+    DummyLong,
+    DummyTap,
+    DummyMine,
+    DummyPotion,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

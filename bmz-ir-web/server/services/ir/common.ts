@@ -29,8 +29,9 @@ export const LN_POLICIES = new Set([
   'ForceLn',
   'ForceCn',
   'ForceHcn',
+  'ForceHln',
 ])
-export const EFFECTIVE_LN_MODES = new Set(['ln', 'cn', 'hcn'])
+export const EFFECTIVE_LN_MODES = new Set(['ln', 'cn', 'hcn', 'hln'])
 export const DEVICE_TYPES = new Set(['keyboard', 'controller'])
 export const RULE_MODES = new Set(['Beatoraja', 'Lr2Oraja', 'Dx'])
 export const RANKING_SCOPES = new Set([
@@ -121,7 +122,7 @@ export interface BestScoreRow extends BestScoreCandidate {
   clear_type: string
   gauge: string
   ln_policy: LnScorePolicy
-  effective_ln_mode: 'ln' | 'cn' | 'hcn'
+  effective_ln_mode: 'ln' | 'cn' | 'hcn' | 'hln'
   double_option: IrDoubleOption
   rule_mode: IrRuleMode
   scoring: 'bms_ex_score_v1'

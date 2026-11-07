@@ -12,6 +12,9 @@ impl ChartAnalysis {
             .collect::<Vec<_>>();
 
         for pair in &chart.long_notes {
+            if chart.is_dummy_long(pair) || chart.is_free_zone_inner(pair.start_note_id) {
+                continue;
+            }
             let start_sec = second_index(pair.start_time.0);
             let end_sec = second_index(pair.end_time.0).min(distribution.len().saturating_sub(1));
             for second in distribution.iter_mut().take(end_sec + 1).skip(start_sec) {
@@ -28,6 +31,9 @@ impl ChartAnalysis {
 
         for notes in &chart.lane_notes {
             for note in notes {
+                if chart.is_free_zone_inner(note.id) {
+                    continue;
+                }
                 let sec = second_index(note.time.0);
                 let Some(slot) = distribution.get_mut(sec) else {
                     continue;
@@ -35,7 +41,7 @@ impl ChartAnalysis {
                 let lane = note.lane;
                 let lane_slot = &mut lane_notes[lane.index()];
                 match note.kind {
-                    NoteKind::Tap => {
+                    NoteKind::Tap | NoteKind::FreeZoneEnd => {
                         if is_scratch_lane(lane) {
                             slot.scratch_taps = slot.scratch_taps.saturating_add(1);
                             lane_slot.normal_notes = lane_slot.normal_notes.saturating_add(1);
@@ -52,9 +58,9 @@ impl ChartAnalysis {
                         add_bpm_note_count(&mut bpm_note_counts, bpm_at(chart, note.time.0), 1);
                     }
                     NoteKind::LongEnd
-                        if long_end_modes
-                            .get(&note.id)
-                            .is_some_and(|mode| *mode != LongNoteMode::Ln) =>
+                        if long_end_modes.get(&note.id).is_some_and(|mode| {
+                            matches!(mode, LongNoteMode::Cn | LongNoteMode::Hcn)
+                        }) =>
                     {
                         add_long_head(slot, lane);
                         lane_slot.long_notes = lane_slot.long_notes.saturating_add(1);
@@ -62,6 +68,12 @@ impl ChartAnalysis {
                     }
                     NoteKind::LongEnd => {}
                     NoteKind::Invisible => {}
+                    NoteKind::Potion
+                    | NoteKind::DummyTap
+                    | NoteKind::DummyLongStart
+                    | NoteKind::DummyLongEnd
+                    | NoteKind::DummyMine
+                    | NoteKind::DummyPotion => {}
                     NoteKind::Mine => {
                         slot.mines = slot.mines.saturating_add(1);
                         lane_slot.mines = lane_slot.mines.saturating_add(1);

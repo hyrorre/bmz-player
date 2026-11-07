@@ -9,6 +9,7 @@ enum NotePart {
     End(LongNoteMode),
     Body(LongNoteMode, LongBodyState),
     Mine,
+    Potion,
 }
 
 /// Geometry and lazily resolved tap sprites shared within one draw plan. Rebuilt
@@ -132,6 +133,19 @@ impl PreparedNoteLayout<'_> {
         self.part_sprite(lane, NotePart::Mine).map(|sprite| sprite.render_item(rect))
     }
 
+    pub(crate) fn potion_item(&self, lane: Lane, rect: Rect) -> Option<SkinRenderItem> {
+        if let Some(sprite) = self.part_sprite(lane, NotePart::Potion) {
+            return Some(sprite.render_item(rect));
+        }
+        let mut item = self.mine_item(lane, rect)?;
+        if let SkinRenderItem::Image { blend, .. } | SkinRenderItem::RotatedImage { blend, .. } =
+            &mut item
+        {
+            *blend = BlendMode::InvertRgb;
+        }
+        Some(item)
+    }
+
     fn part_sprite(&self, lane: Lane, part: NotePart) -> Option<NoteSprite> {
         let document = self.skin.document.as_ref()?;
         let note = document.note.as_ref()?;
@@ -145,23 +159,49 @@ impl PreparedNoteLayout<'_> {
             let id = match part {
                 NotePart::Tap => note.note.get(index),
                 NotePart::Processed => note.processed.get(index),
-                NotePart::Start(mode) => (mode == LongNoteMode::Hcn)
-                    .then(|| note.hcnstart.get(index))
+                NotePart::Start(mode) => (mode == LongNoteMode::Hln)
+                    .then(|| note.hlnstart.get(index))
                     .flatten()
+                    .filter(|id| !id.is_empty())
+                    .or_else(|| {
+                        matches!(mode, LongNoteMode::Hcn | LongNoteMode::Hln)
+                            .then(|| note.hcnstart.get(index))
+                            .flatten()
+                            .filter(|id| !id.is_empty())
+                    })
                     .or_else(|| note.lnstart.get(index))
                     .or_else(|| note.note.get(index)),
-                NotePart::End(mode) => (mode == LongNoteMode::Hcn)
-                    .then(|| note.hcnend.get(index))
+                NotePart::End(mode) => (mode == LongNoteMode::Hln)
+                    .then(|| note.hlnend.get(index))
                     .flatten()
+                    .filter(|id| !id.is_empty())
+                    .or_else(|| {
+                        matches!(mode, LongNoteMode::Hcn | LongNoteMode::Hln)
+                            .then(|| note.hcnend.get(index))
+                            .flatten()
+                            .filter(|id| !id.is_empty())
+                    })
                     .or_else(|| note.lnend.get(index))
                     .or_else(|| note.note.get(index)),
-                NotePart::Body(mode, state) => if mode == LongNoteMode::Hcn {
+                NotePart::Body(mode, state) => if mode == LongNoteMode::Hln {
+                    match state {
+                        LongBodyState::Processing => note.hlnbody_active.get(index),
+                        LongBodyState::Inactive => note.hlnbody.get(index),
+                        LongBodyState::HcnActive => note.hlnbody_reactive.get(index),
+                        LongBodyState::HcnDamage => note.hlnbody_miss.get(index),
+                    }
+                    .filter(|id| !id.is_empty())
+                    .or_else(|| document.hcn_body_image_id(note, index, state))
+                    .filter(|id| !id.is_empty())
+                    .or_else(|| document.ln_body_image_id(note, index, state.is_processing()))
+                } else if mode == LongNoteMode::Hcn {
                     document.hcn_body_image_id(note, index, state)
                 } else {
                     document.ln_body_image_id(note, index, state.is_processing())
                 }
                 .or_else(|| note.note.get(index)),
                 NotePart::Mine => note.mine.get(index),
+                NotePart::Potion => note.potion.get(index),
             };
             id.filter(|id| !id.is_empty()).map(String::as_str)
         }
@@ -189,7 +229,10 @@ impl PreparedNoteLayout<'_> {
             frame.a = 255;
             if let Some(style) = &mut frame.lr2_style {
                 style.blend = 1;
-                if matches!(part, NotePart::Tap | NotePart::Processed | NotePart::Mine) {
+                if matches!(
+                    part,
+                    NotePart::Tap | NotePart::Processed | NotePart::Mine | NotePart::Potion
+                ) {
                     style.filter = 0;
                 }
             }

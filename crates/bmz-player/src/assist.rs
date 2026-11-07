@@ -83,9 +83,10 @@ pub fn merge_auto_scratch_assist_level(
     scratch_lanes: &[Lane],
 ) {
     let has_scratch_notes = scratch_lanes.iter().any(|lane| {
-        chart.lane_notes.get(lane.index()).is_some_and(|notes| {
-            notes.iter().any(|note| matches!(note.kind, NoteKind::Tap | NoteKind::LongStart))
-        })
+        chart
+            .lane_notes
+            .get(lane.index())
+            .is_some_and(|notes| notes.iter().any(|note| note.kind.is_scored_head()))
     });
     if has_scratch_notes {
         runtime.level = runtime.level.max(AssistLevel::Assist);
@@ -169,6 +170,10 @@ pub fn apply_chart_assists(
         mode => add_mines(chart, mode, &mut rng),
     }
 
+    if config.extra_note_depth > 0 {
+        remove_kaleid_visual_notes(chart);
+    }
+
     if config.bpm_guide && variable_bpm {
         mark_effect(&mut runtime, BPM_GUIDE_MASK, AssistLevel::LightAssist);
     }
@@ -177,7 +182,7 @@ pub fn apply_chart_assists(
         .lane_notes
         .iter()
         .flatten()
-        .filter(|note| matches!(note.kind, NoteKind::Tap | NoteKind::LongStart))
+        .filter(|note| note.kind.is_scored_head() && !chart.is_free_zone_inner(note.id))
         .count()
         .min(u32::MAX as usize) as u32;
     runtime
@@ -208,7 +213,7 @@ pub fn apply_extra_note_assist(
         .lane_notes
         .iter()
         .flatten()
-        .filter(|note| matches!(note.kind, NoteKind::Tap | NoteKind::LongStart))
+        .filter(|note| note.kind.is_scored_head() && !chart.is_free_zone_inner(note.id))
         .count()
         .min(u32::MAX as usize) as u32;
     Some(first_id)
@@ -335,6 +340,10 @@ fn retime_chart_to_constant_bpm(chart: &mut PlayableChart) {
         pair.start_tick = tick_at(pair.start_time);
         pair.end_tick = tick_at(pair.end_time);
     }
+    for zone in &mut chart.metadata.free_zones {
+        zone.start_tick = tick_at(zone.start_time);
+        zone.end_tick = tick_at(zone.end_time);
+    }
     for event in &mut chart.bgm_events {
         event.tick = tick_at(event.time);
     }
@@ -373,8 +382,20 @@ fn retime_chart_to_constant_bpm(chart: &mut PlayableChart) {
 fn remove_long_notes(chart: &mut PlayableChart, rate: f64, rng: &mut JavaRandom) -> bool {
     let mut removed = BTreeSet::new();
     let mut starts = BTreeSet::new();
+    let dummy: BTreeSet<_> = chart
+        .long_notes
+        .iter()
+        .filter(|pair| chart.is_dummy_long(pair))
+        .map(|pair| pair.start_note_id)
+        .collect();
+    let inner: BTreeSet<_> = chart
+        .metadata
+        .free_zones
+        .iter()
+        .flat_map(|zone| zone.inner_notes.iter().copied())
+        .collect();
     chart.long_notes.retain(|pair| {
-        if random_unit(rng) < rate {
+        if !inner.contains(&pair.start_note_id) && random_unit(rng) < rate {
             starts.insert(pair.start_note_id);
             removed.insert(pair.end_note_id);
             false
@@ -389,11 +410,12 @@ fn remove_long_notes(chart: &mut PlayableChart, rate: f64, rng: &mut JavaRandom)
         notes.retain(|note| !removed.contains(&note.id));
         for note in notes {
             if starts.contains(&note.id) {
-                note.kind = NoteKind::Tap;
+                note.kind =
+                    if dummy.contains(&note.id) { NoteKind::DummyTap } else { NoteKind::Tap };
             }
         }
     }
-    true
+    starts.iter().any(|id| !dummy.contains(id))
 }
 
 fn add_long_notes(
@@ -410,12 +432,18 @@ fn add_long_notes(
     let mut additions = Vec::new();
     let mut pairs = Vec::new();
     let mut assist_added = false;
+    let inner: BTreeSet<_> = chart
+        .metadata
+        .free_zones
+        .iter()
+        .flat_map(|zone| zone.inner_notes.iter().copied())
+        .collect();
     for &lane in chart.metadata.key_mode.active_lanes() {
         let lane_index = lane.index();
         let occupied: BTreeSet<TimeUs> =
             chart.lane_notes[lane_index].iter().map(|note| note.time).collect();
         for note in &mut chart.lane_notes[lane_index] {
-            if note.kind != NoteKind::Tap || random_unit(rng) >= rate {
+            if note.kind != NoteKind::Tap || inner.contains(&note.id) || random_unit(rng) >= rate {
                 continue;
             }
             let Ok(index) = timeline.binary_search_by_key(&note.time, |entry| entry.0) else {
@@ -479,9 +507,8 @@ fn add_long_notes(
 fn remove_mines(chart: &mut PlayableChart) -> bool {
     let mut removed = false;
     for notes in &mut chart.lane_notes {
-        let before = notes.len();
-        notes.retain(|note| note.kind != NoteKind::Mine);
-        removed |= notes.len() != before;
+        removed |= notes.iter().any(|note| note.kind == NoteKind::Mine);
+        notes.retain(|note| !matches!(note.kind, NoteKind::Mine | NoteKind::DummyMine));
     }
     removed
 }
@@ -523,6 +550,19 @@ fn add_mines(chart: &mut PlayableChart, mode: AssistMineMode, rng: &mut JavaRand
     }
     for notes in &mut chart.lane_notes {
         notes.sort_by_key(|note| (note.time, note.id));
+    }
+}
+
+fn remove_kaleid_visual_notes(chart: &mut PlayableChart) {
+    let dummy: BTreeSet<_> = chart
+        .long_notes
+        .iter()
+        .filter(|pair| chart.is_dummy_long(pair))
+        .map(|pair| pair.start_note_id)
+        .collect();
+    chart.long_notes.retain(|pair| !dummy.contains(&pair.start_note_id));
+    for notes in &mut chart.lane_notes {
+        notes.retain(|note| !note.kind.is_dummy() && note.kind != NoteKind::Potion);
     }
 }
 
@@ -662,6 +702,41 @@ mod tests {
             total_notes: 1,
             end_time: TimeUs(3_000_000),
         }
+    }
+
+    #[test]
+    fn visual_only_kaleid_removal_does_not_create_an_assist_or_scored_notes() {
+        let imported = bmz_chart::import::import_chart_bytes_with_random_source(
+            std::path::Path::new("visual.bmc"),
+            b"#BPM 120\n#000H1:01\n#001J2:0101\n#002L3:01\n#003F4:01\n",
+            bmz_chart::import::BmsRandomSource::Seed(Some(1)),
+            false,
+        )
+        .unwrap()
+        .chart;
+        let mut removed = imported.clone();
+        let runtime = apply_chart_assists(
+            &mut removed,
+            AssistOptionConfig {
+                long_note_mode: AssistLongNoteMode::Remove,
+                mine_mode: AssistMineMode::Remove,
+                ..Default::default()
+            },
+            1,
+        );
+        assert_eq!(runtime.level, AssistLevel::None);
+        assert!(removed.long_notes.is_empty());
+        assert!(removed.lane_notes.iter().flatten().all(|note| note.kind != NoteKind::DummyMine));
+        assert_eq!(bmz_gameplay::score::scored_note_count(&removed), 0);
+        let mut extra = imported;
+        let runtime = apply_chart_assists(
+            &mut extra,
+            AssistOptionConfig { extra_note_depth: 1, ..Default::default() },
+            1,
+        );
+        assert_eq!(runtime.level, AssistLevel::None);
+        assert!(extra.lane_notes.iter().all(Vec::is_empty));
+        assert!(extra.long_notes.is_empty());
     }
 
     #[test]

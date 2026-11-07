@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-07 | [ED-rian KaleidBeat拡張の統合](2026/2026-11-07-kaleidbeat-ed-rian.md) |
 | 2026-11-07 | [EXTRA NOTEの配置改善（#61）](2026/2026-11-07-extra-note-placement.md) |
 | 2026-11-07 | [G-BATTLEで相手の判定が自分の判定表示へ混ざる問題](2026/2026-11-07-battle-judge-regions.md) |
 | 2026-11-07 | [Codex Securityの優先度中の指摘への対応](2026/2026-11-07-medium-security-fixes.md) |

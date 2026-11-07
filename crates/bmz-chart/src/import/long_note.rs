@@ -1,9 +1,20 @@
 use bmz_core::lane::Lane;
+use bmz_core::time::ChartTick;
 
-use crate::model::LongNoteStyle;
+use crate::model::{LongNoteMode, LongNoteStyle};
 
 use super::error::ImportWarning;
 use super::intermediate::{LaneObject, LaneObjectSource, LongNotePairDraft, ResolvedLaneEvent};
+
+/// OBJの競合は宣言順によらず HLN > HCN > CN > LN とする。
+pub(crate) fn marker_priority(mode: LongNoteMode) -> u8 {
+    match mode {
+        LongNoteMode::Ln => 0,
+        LongNoteMode::Cn => 1,
+        LongNoteMode::Hcn => 2,
+        LongNoteMode::Hln => 3,
+    }
+}
 
 pub fn normalize_lane_objects(
     lane: Lane,
@@ -11,9 +22,37 @@ pub fn normalize_lane_objects(
     lnobj_wav_key: Option<u16>,
     warnings: &mut Vec<ImportWarning>,
 ) -> Vec<ResolvedLaneEvent> {
+    normalize_lane_objects_with_hln(lane, objects, lnobj_wav_key, None, warnings)
+}
+
+pub fn normalize_lane_objects_with_hln(
+    lane: Lane,
+    objects: &[LaneObject],
+    lnobj_wav_key: Option<u16>,
+    hlnobj_wav_key: Option<u16>,
+    warnings: &mut Vec<ImportWarning>,
+) -> Vec<ResolvedLaneEvent> {
+    let typed = hlnobj_wav_key.map(|id| (id, LongNoteMode::Hln)).into_iter().collect::<Vec<_>>();
+    normalize_lane_objects_with_markers(lane, objects, lnobj_wav_key, &typed, warnings)
+}
+
+pub fn normalize_lane_objects_with_markers(
+    lane: Lane,
+    objects: &[LaneObject],
+    lnobj_wav_key: Option<u16>,
+    typed_markers: &[(u16, LongNoteMode)],
+    warnings: &mut Vec<ImportWarning>,
+) -> Vec<ResolvedLaneEvent> {
     let mut out = Vec::new();
 
     out.extend(resolve_long_channel_lane(lane, objects, warnings));
+    let channel_ranges: Vec<_> = out
+        .iter()
+        .filter_map(|event| match event {
+            ResolvedLaneEvent::Long { pair } => Some((pair.start_tick, pair.end_tick)),
+            _ => None,
+        })
+        .collect();
 
     let visible: Vec<_> = objects
         .iter()
@@ -21,8 +60,15 @@ pub fn normalize_lane_objects(
         .cloned()
         .collect();
 
-    if let Some(key) = lnobj_wav_key {
-        out.extend(resolve_lnobj_lane(lane, &visible, key, warnings));
+    if lnobj_wav_key.is_some() || !typed_markers.is_empty() {
+        out.extend(resolve_marker_lane(
+            lane,
+            &visible,
+            lnobj_wav_key,
+            typed_markers,
+            &channel_ranges,
+            warnings,
+        ));
     } else {
         out.extend(visible.into_iter().map(|object| ResolvedLaneEvent::Tap {
             lane,
@@ -140,11 +186,46 @@ pub fn resolve_lnobj_lane(
     lnobj_wav_key: u16,
     warnings: &mut Vec<ImportWarning>,
 ) -> Vec<ResolvedLaneEvent> {
+    resolve_marker_lane(lane, visible, Some(lnobj_wav_key), &[], &[], warnings)
+}
+
+fn resolve_marker_lane(
+    lane: Lane,
+    visible: &[LaneObject],
+    lnobj_wav_key: Option<u16>,
+    typed_markers: &[(u16, LongNoteMode)],
+    channel_ranges: &[(ChartTick, ChartTick)],
+    warnings: &mut Vec<ImportWarning>,
+) -> Vec<ResolvedLaneEvent> {
     let mut out = Vec::new();
     let mut pending_start: Option<&LaneObject> = None;
 
     for object in visible {
-        if object.wav_key == Some(lnobj_wav_key) {
+        let mode = typed_markers
+            .iter()
+            .filter(|(key, _)| object.wav_key == Some(*key))
+            .max_by_key(|(_, mode)| marker_priority(*mode))
+            .map(|(_, mode)| *mode);
+        // 種別付きOBJでは専用LNチャネルを優先する。既存LNOBJのペア処理は維持。
+        if mode.is_some()
+            && pending_start.is_some_and(|start| {
+                channel_ranges.iter().any(|(from, to)| *from <= object.tick && start.tick <= *to)
+            })
+        {
+            let previous = pending_start.take().unwrap();
+            out.push(ResolvedLaneEvent::Tap {
+                lane,
+                tick: previous.tick,
+                time: previous.time,
+                wav_key: previous.wav_key,
+            });
+        }
+        if mode.is_some()
+            && channel_ranges.iter().any(|(from, to)| *from <= object.tick && object.tick <= *to)
+        {
+            continue;
+        }
+        if mode.is_some() || (lnobj_wav_key.is_some() && object.wav_key == lnobj_wav_key) {
             if let Some(start) = pending_start.take() {
                 out.push(ResolvedLaneEvent::Long {
                     pair: LongNotePairDraft {
@@ -156,7 +237,7 @@ pub fn resolve_lnobj_lane(
                         end_time: object.time,
                         end_wav_key: None,
                         wav_key: start.wav_key,
-                        mode: None,
+                        mode,
                     },
                 });
             } else {

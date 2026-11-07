@@ -1268,4 +1268,13 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
         statements: &["ALTER TABLE score_history ADD COLUMN source_min_bp INTEGER
             CHECK (source_min_bp IS NULL OR source_min_bp >= 0);"],
     },
+    Migration {
+        version: 35,
+        // Evidence belongs to a real play, never to a synthetic combination of best metrics.
+        // Missing rows identify legacy/imported histories with unknown interpretation.
+        statements: &["CREATE TABLE score_kaleid_plays (
+            score_history_id INTEGER PRIMARY KEY REFERENCES score_history(id) ON DELETE CASCADE,
+            evidence_json TEXT NOT NULL
+        );"],
+    },
 ];

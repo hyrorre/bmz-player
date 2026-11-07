@@ -24,7 +24,11 @@ fn sorted_graph_notes(chart: &PlayableChart) -> Vec<&NoteEvent> {
         .lane_notes
         .iter()
         .flatten()
-        .filter(|note| !matches!(note.kind, NoteKind::Invisible))
+        .filter(|note| {
+            !note.kind.is_dummy()
+                && !chart.is_free_zone_inner(note.id)
+                && !matches!(note.kind, NoteKind::Invisible | NoteKind::Potion)
+        })
         .collect();
     notes.sort_by_key(|note| (note.time.0, note.lane.index(), note.id.0));
     notes
@@ -48,7 +52,7 @@ fn is_ignored_long_end(
         .filter(|pair| pair.end_note_id == note_id)
         .and_then(|pair| pair.mode)
         .unwrap_or(chart.metadata.long_note_mode);
-    mode == LongNoteMode::Ln
+    matches!(mode, LongNoteMode::Ln | LongNoteMode::Hln)
 }
 
 /// `SkinNoteDistributionGraph.TYPE_NORMAL`: note kinds per second.
@@ -63,7 +67,7 @@ pub fn build_note_graph_buckets(
         let is_scratch = matches!(note.lane, Lane::Scratch | Lane::Scratch2);
         let body_index = if is_scratch { 1 } else { 4 };
         match note.kind {
-            NoteKind::Tap => {
+            NoteKind::Tap | NoteKind::FreeZoneEnd => {
                 let index = if is_scratch { 2 } else { 5 };
                 if let Some(bucket) = buckets.get_mut(second) {
                     bucket.values[index] = bucket.values[index].saturating_add(1);
@@ -93,7 +97,13 @@ pub fn build_note_graph_buckets(
                     bucket.values[6] = bucket.values[6].saturating_add(1);
                 }
             }
-            NoteKind::Invisible => {}
+            NoteKind::Invisible
+            | NoteKind::Potion
+            | NoteKind::DummyTap
+            | NoteKind::DummyLongStart
+            | NoteKind::DummyLongEnd
+            | NoteKind::DummyMine
+            | NoteKind::DummyPotion => {}
         }
     }
     buckets
@@ -105,9 +115,16 @@ pub fn judge_graph_notes(chart: &PlayableChart, seconds: usize) -> Vec<(&NoteEve
     sorted_graph_notes(chart)
         .into_iter()
         .filter(|note| match note.kind {
-            NoteKind::Tap | NoteKind::LongStart => true,
+            NoteKind::Tap | NoteKind::LongStart | NoteKind::FreeZoneEnd => true,
             NoteKind::LongEnd => !is_ignored_long_end(chart, &pairs, note.id),
-            NoteKind::Invisible | NoteKind::Mine => false,
+            NoteKind::Invisible
+            | NoteKind::Mine
+            | NoteKind::Potion
+            | NoteKind::DummyTap
+            | NoteKind::DummyLongStart
+            | NoteKind::DummyLongEnd
+            | NoteKind::DummyMine
+            | NoteKind::DummyPotion => false,
         })
         .map(|note| (note, note_graph_second(note.time, seconds)))
         .collect()
@@ -118,10 +135,10 @@ pub fn build_judge_graph_density(chart: &PlayableChart) -> Vec<u8> {
     let mut density = vec![0u8; seconds.max(1)];
     for lane in &chart.lane_notes {
         for note in lane {
-            if matches!(
-                note.kind,
-                bmz_chart::model::NoteKind::Invisible | bmz_chart::model::NoteKind::Mine
-            ) {
+            if note.kind.is_dummy()
+                || chart.is_free_zone_inner(note.id)
+                || matches!(note.kind, NoteKind::Invisible | NoteKind::Mine | NoteKind::Potion)
+            {
                 continue;
             }
             let sec = (note.time.0 / 1_000_000).max(0) as usize;

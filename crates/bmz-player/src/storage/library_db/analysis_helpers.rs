@@ -273,7 +273,7 @@ impl ChartStats {
             .flat_map(|notes| notes.iter())
             .any(|note| note.kind == NoteKind::Mine);
         let ln_counts = ChartLnCounts::from_chart(chart);
-        let ln_profile = ln_counts.profile();
+        let ln_profile = ChartLnProfile::from_chart(chart);
 
         Self {
             min_bpm,
@@ -285,6 +285,7 @@ impl ChartStats {
                     LongNoteMode::Ln => "Ln",
                     LongNoteMode::Cn => "Cn",
                     LongNoteMode::Hcn => "Hcn",
+                    LongNoteMode::Hln => "Hln",
                 }
             } else {
                 "LongNote"

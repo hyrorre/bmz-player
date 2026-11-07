@@ -34,7 +34,7 @@ pub(super) fn long_note_body_color(mode: LongNoteMode) -> Color {
     match mode {
         LongNoteMode::Ln => LONG_NOTE_BODY_COLOR,
         LongNoteMode::Cn => CN_BODY_COLOR,
-        LongNoteMode::Hcn => HCN_BODY_COLOR,
+        LongNoteMode::Hcn | LongNoteMode::Hln => HCN_BODY_COLOR,
     }
 }
 

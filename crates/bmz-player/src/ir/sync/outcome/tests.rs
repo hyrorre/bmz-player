@@ -96,6 +96,63 @@ fn submission_errors_are_classified_for_bulk_upload_decisions() {
 }
 
 #[tokio::test]
+async fn unsupported_course_is_terminal_before_credentials_or_network() {
+    let data = ProfileTestDir::new();
+    let mut boot = data.boot();
+    let mut provider = IrProviderConfig::bms_ir();
+    provider.provider_key = crate::ir::bms_ir::BMS_IR_PROVIDER.into();
+    provider.enabled = true;
+    provider.account_id = "account".into();
+    provider.base_url = "http://127.0.0.1:9".into();
+    let provider_key =
+        crate::ir::provider_key::configured_provider_key(&provider).unwrap().to_string();
+    let mut provenance = bmz_chart::kaleid::KaleidProvenance::imported();
+    provenance.source.conditional = true;
+    boot.network_db
+        .enqueue_ir_score_job(&NewIrScoreJob {
+            provider: provider_key.clone(),
+            account_id: "account".into(),
+            kind: IrJobKind::Course,
+            local_score_id: 42,
+            chart_sha256: [42; 32],
+            ln_policy: LnScorePolicy::AutoLn,
+            payload_json: serde_json::json!({"course":{"charts":["a"]},
+            "play_options":{"entry_kaleid":[provenance]}})
+            .to_string(),
+            now: 100,
+        })
+        .unwrap();
+    let config = IrConfig {
+        primary_provider: provider_key,
+        providers: vec![provider],
+        ..Default::default()
+    };
+    for (now, expected) in [(1000, 1), (2000, 0)] {
+        let report = crate::ir::sync::sync_pending_ir_jobs(
+            &mut boot.network_db,
+            &boot.profile_paths.score_db,
+            &boot.profile_paths.root_dir,
+            &data.paths.logs_dir,
+            &config,
+            now,
+            10,
+            false,
+            IrSyncThrottle::none(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.failed, expected);
+        assert_eq!(report.submitted, 0);
+        assert!(report.failures.iter().all(|failure| failure.class == IrSyncFailureClass::Job));
+    }
+    let job =
+        boot.network_db.ir_score_jobs_for_local_score(IrJobKind::Course, 42).unwrap().remove(0);
+    assert_eq!(job.status, "failed");
+    assert_eq!(job.next_attempt_at, crate::storage::network_db::IR_JOB_NO_AUTO_RETRY_AT);
+    assert!(job.last_error.contains("受入条件"));
+}
+
+#[tokio::test]
 async fn connection_errors_are_transient() {
     // 予約済みのdiscardポートへの接続は即座に拒否される。
     let error = reqwest::Client::new()

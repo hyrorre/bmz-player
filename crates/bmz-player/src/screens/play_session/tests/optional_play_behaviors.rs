@@ -53,6 +53,8 @@ fn optional_play_behaviors_reach_session_without_changing_score_chart_or_practic
                         },
                         autoplay,
                         replay_player: replay.then(|| ReplayPlayer {
+                            kaleid: None,
+                            branch_decisions: None,
                             events: Vec::new(),
                             next_index: 0,
                             next_scoring_time: None,

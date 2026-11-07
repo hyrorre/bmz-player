@@ -109,7 +109,10 @@ pub(super) fn materialize_tick_objects(
             | IntermediateObjectKind::SetText { .. }
             | IntermediateObjectKind::SetBgaOpacity { .. }
             | IntermediateObjectKind::SetBgaArgb { .. }
-            | IntermediateObjectKind::BgaKeybound { .. } => None,
+            | IntermediateObjectKind::BgaKeybound { .. }
+            | IntermediateObjectKind::KaleidNote { .. }
+            | IntermediateObjectKind::FreeZone { .. }
+            | IntermediateObjectKind::BarLine => None,
         };
 
         if let Some(kind) = kind {

@@ -950,4 +950,12 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             generation TEXT NOT NULL
         );"],
     },
+    Migration {
+        version: 37,
+        statements: &[
+            "ALTER TABLE charts ADD COLUMN has_defined_hln INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE charts ADD COLUMN defined_hln_pairs INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE charts ADD COLUMN kaleid_json TEXT NOT NULL DEFAULT '{}';",
+        ],
+    },
 ];

@@ -177,7 +177,7 @@ fn everything_query(root: &Path) -> Result<String> {
         .map(|extension| extension.rsplit('.').next().unwrap())
         .collect::<Vec<_>>()
         .join(";");
-    Ok(format!(r#"file: "{root}" ext:bms;bme;bml;pms;bmson;txt;{extensions}"#))
+    Ok(format!(r#"file: "{root}" ext:bms;bme;bml;bmc;pms;bmson;txt;{extensions}"#))
 }
 
 fn path_relative_to_root(path: &Path, root: &Path) -> Option<PathBuf> {
@@ -243,7 +243,7 @@ mod tests {
     fn query_quotes_root_and_adds_trailing_separator() {
         assert_eq!(
             everything_query(Path::new(r"G:\BMS")).unwrap(),
-            r#"file: "G:\BMS\" ext:bms;bme;bml;pms;bmson;txt;zip;rar;7z;7zip;gz;tgz;lzh;lha"#
+            r#"file: "G:\BMS\" ext:bms;bme;bml;bmc;pms;bmson;txt;zip;rar;7z;7zip;gz;tgz;lzh;lha"#
         );
     }
 

@@ -1265,6 +1265,7 @@ fn session() -> GameSession {
         &chart.timing_events,
     );
     GameSession {
+        conditional: Default::default(),
         session_mode_index: 0,
         chart: Arc::clone(&chart),
         play_config_key_mode: chart.metadata.key_mode,
@@ -1392,7 +1393,10 @@ fn chart() -> PlayableChart {
 
     PlayableChart {
         identity: compute_chart_identity(b"finish-session"),
-        metadata: ChartMetadata::default(),
+        metadata: ChartMetadata {
+            kaleid: bmz_chart::kaleid::KaleidProvenance::imported(),
+            ..ChartMetadata::default()
+        },
         lane_notes,
         long_notes: Vec::new(),
         bgm_events: Vec::new(),

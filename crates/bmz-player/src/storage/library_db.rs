@@ -42,9 +42,8 @@ pub(crate) fn library_path_key(path: &Path) -> String {
     path_helpers::path_key(path)
 }
 
-// v9 re-imports charts after whitespace-separated channel data and the implicit BMP00
-// miss layer changed note counts, lengths and has_bga for unchanged files.
-pub const CHART_IMPORT_VERSION: i64 = 9;
+// v10 re-imports unchanged files using the Kaleid extension interpretation.
+pub const CHART_IMPORT_VERSION: i64 = 10;
 // v4 excludes muted battle presentation lanes from chart analysis.
 pub const CHART_LOUDNESS_ANALYSIS_VERSION: i64 = 4;
 const MAX_ANALYSIS_DISTRIBUTION_SECONDS: usize = 10 * 60;
@@ -97,6 +96,7 @@ pub struct ChartListItem {
     pub bms_total: f64,
     pub ln_profile: ChartLnProfile,
     pub ln_counts: ChartLnCounts,
+    pub kaleid: bmz_chart::kaleid::KaleidProvenance,
 }
 
 impl ChartListItem {

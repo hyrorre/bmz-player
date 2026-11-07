@@ -45,6 +45,16 @@ impl WinitApp {
                     } else {
                         match result.result {
                             Ok(prepared) => {
+                                if let Some(diagnostic) =
+                                    prepared.preloaded.chart.metadata.kaleid.diagnostics.first()
+                                {
+                                    let mut args = FluentArgs::new();
+                                    args.set("detail", diagnostic.clone());
+                                    let text = Localizer::new(self.boot.profile_config.ui.locale());
+                                    self.show_left_overlay_toast(
+                                        text.format("toast-kaleid-partial", &args),
+                                    );
+                                }
                                 tracing::info!(
                                     chart_id = result.chart_id,
                                     generation = result.generation,
@@ -432,6 +442,7 @@ impl WinitApp {
                     active.running.score_key,
                     active.running.target_option,
                     active.running.best_ex_score,
+                    active.running.gameplay.session.chart.metadata.kaleid.clone(),
                 )
             })
             .or_else(|| {
@@ -444,13 +455,21 @@ impl WinitApp {
                             .best_ex_score(preloaded.preloaded.score_key)
                             .ok()
                             .flatten(),
+                        preloaded.preloaded.chart.metadata.kaleid.clone(),
                     )
                 })
             });
-        let Some((score_key, target, local_best_ex_score)) = source else {
+        let Some((score_key, target, local_best_ex_score, provenance)) = source else {
             return;
         };
         if !target.uses_ir_ranking() {
+            return;
+        }
+        if crate::ir::provider_key::primary_provider_config(&self.boot.profile_config.ir)
+            .is_some_and(|provider| {
+                crate::ir::kaleid::block_reason(provider, &provenance).is_some()
+            })
+        {
             return;
         }
         let context = select_ir_cache_context(

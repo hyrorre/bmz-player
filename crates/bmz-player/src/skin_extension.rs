@@ -40,6 +40,7 @@ pub(crate) const fn ln_score_policy_index(policy: LnScorePolicy) -> usize {
         LnScorePolicy::ForceLn => 3,
         LnScorePolicy::ForceCn => 4,
         LnScorePolicy::ForceHcn => 5,
+        LnScorePolicy::ForceHln => 6,
     }
 }
 
@@ -103,6 +104,7 @@ pub(crate) const fn long_note_mode_index(mode: LongNoteMode) -> usize {
         LongNoteMode::Ln => 0,
         LongNoteMode::Cn => 1,
         LongNoteMode::Hcn => 2,
+        LongNoteMode::Hln => 3,
     }
 }
 
@@ -115,6 +117,7 @@ pub(crate) const fn ln_score_policy_mode(policy: LnScorePolicy) -> LongNoteMode 
         LnScorePolicy::AutoLn | LnScorePolicy::ForceLn => LongNoteMode::Ln,
         LnScorePolicy::AutoCn | LnScorePolicy::ForceCn => LongNoteMode::Cn,
         LnScorePolicy::AutoHcn | LnScorePolicy::ForceHcn => LongNoteMode::Hcn,
+        LnScorePolicy::ForceHln => LongNoteMode::Hln,
     }
 }
 
@@ -123,6 +126,11 @@ pub(crate) const fn source_ln_profile_bits(profile: ChartLnProfile) -> u8 {
         | (if profile.has_defined_ln { SKIN_SOURCE_LN_DEFINED_LN_BIT } else { 0 })
         | (if profile.has_defined_cn { SKIN_SOURCE_LN_DEFINED_CN_BIT } else { 0 })
         | (if profile.has_defined_hcn { SKIN_SOURCE_LN_DEFINED_HCN_BIT } else { 0 })
+        | (if profile.has_defined_hln {
+            bmz_render::snapshot::SKIN_SOURCE_LN_DEFINED_HLN_BIT
+        } else {
+            0
+        })
 }
 
 pub(crate) const fn effective_key_mode(

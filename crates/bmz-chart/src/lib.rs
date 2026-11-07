@@ -1,8 +1,10 @@
 pub mod bga;
 pub mod bga_asset;
 pub mod bga_keybound;
+pub mod conditional;
 pub mod hash;
 pub mod import;
+pub mod kaleid;
 pub mod model;
 pub mod practice;
 pub mod sound_asset;

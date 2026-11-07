@@ -378,6 +378,9 @@ pub(super) fn apply_lane_permutation(chart: &mut PlayableChart, perm: &[usize]) 
     for ln in &mut chart.long_notes {
         ln.lane = Lane::ALL[reverse[ln.lane as usize]];
     }
+    for zone in &mut chart.metadata.free_zones {
+        zone.lane = Lane::ALL[reverse[zone.lane.index()]];
+    }
 }
 
 pub(super) fn apply_note_arrange(
@@ -419,6 +422,17 @@ pub(super) fn apply_note_arrange_for_groups(
         h_random_threshold_ms,
     );
     let mut notes: Vec<NoteEvent> = chart.lane_notes.iter_mut().flat_map(std::mem::take).collect();
+    // ED's note shuffle moves inner notes but leaves the zone itself on its lane.
+    // The virtual scoring endpoint must not consume RNG or become a key note.
+    let mut zone_ends = Vec::new();
+    notes.retain(|note| {
+        if note.kind == NoteKind::FreeZoneEnd {
+            zone_ends.push(note.clone());
+            false
+        } else {
+            true
+        }
+    });
     notes.sort_by_key(|note| (note.tick, note.time, note.lane as u8, note.id));
 
     let mut start_to_end = std::collections::HashMap::new();
@@ -446,8 +460,8 @@ pub(super) fn apply_note_arrange_for_groups(
         lane_notes.clear();
     }
     let mut start_lane = std::collections::HashMap::new();
-    for note in arranged {
-        if note.kind == NoteKind::LongStart {
+    for note in arranged.into_iter().chain(zone_ends) {
+        if matches!(note.kind, NoteKind::LongStart | NoteKind::DummyLongStart) {
             start_lane.insert(note.id, note.lane);
         }
         chart.lane_notes[note.lane.index()].push(note);
@@ -456,5 +470,8 @@ pub(super) fn apply_note_arrange_for_groups(
         if let Some(&lane) = start_lane.get(&ln.start_note_id) {
             ln.lane = lane;
         }
+    }
+    for notes in &mut chart.lane_notes {
+        notes.sort_by_key(|note| (note.time, note.id));
     }
 }

@@ -88,6 +88,39 @@ pub(super) async fn sync_pending_ir_jobs_with_filter(
             );
             continue;
         };
+        if job.kind == IrJobKind::Score
+            && (crate::ir::bms_ir::is_bms_ir_config(provider)
+                || crate::ir::rian_ir::is_rian_ir_config(provider))
+        {
+            let eligibility = serde_json::from_str::<IrScoreSubmission>(&job.payload_json)
+                .map_err(anyhow::Error::from)
+                .and_then(|payload| ensure_score_payload_allowed(provider, &payload));
+            if let Err(error) = eligibility {
+                let message = format!("{error:#}");
+                network_db.mark_ir_score_job_rejected(job.id, job_now, &message)?;
+                report.record_failure(
+                    job.id,
+                    IrSyncFailureClass::Job,
+                    format!("job {}: {message}", job.id),
+                );
+                continue;
+            }
+        }
+        if job.kind == IrJobKind::Course {
+            let eligibility = serde_json::from_str::<serde_json::Value>(&job.payload_json)
+                .map_err(anyhow::Error::from)
+                .and_then(|payload| crate::ir::kaleid::ensure_course_supported(provider, &payload));
+            if let Err(error) = eligibility {
+                let message = format!("{error:#}");
+                network_db.mark_ir_score_job_rejected(job.id, job_now, &message)?;
+                report.record_failure(
+                    job.id,
+                    IrSyncFailureClass::Job,
+                    format!("job {}: {message}", job.id),
+                );
+                continue;
+            }
+        }
         // Keep the checked token for this job: loading it again during submission
         // could pick up a different account after a concurrent login.
         let credentials =

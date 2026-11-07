@@ -113,6 +113,7 @@ fn select_chart_row(index: usize) -> SelectChartRow {
         last_played_at: None,
         lr2_added_at: None,
         chart: Some(ChartListItem {
+            kaleid: bmz_chart::kaleid::KaleidProvenance::imported(),
             chart_id: index as i64,
             md5: [0u8; 16],
             sha256: [index as u8; 32],

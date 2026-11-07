@@ -276,6 +276,7 @@ mod tests {
         max_bpm: f64,
     ) -> ChartListItem {
         ChartListItem {
+            kaleid: bmz_chart::kaleid::KaleidProvenance::imported(),
             chart_id: id,
             md5: [id as u8; 16],
             sha256: [id as u8; 32],

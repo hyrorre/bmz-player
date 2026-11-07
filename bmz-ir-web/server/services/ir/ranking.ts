@@ -328,7 +328,7 @@ export function rowToBestScoreRow(row: {
     best_min_cb_score_id: row.best_min_cb_score_id ?? row.score_id,
     scoring: 'bms_ex_score_v1',
     ln_policy: row.ln_policy as LnScorePolicy,
-    effective_ln_mode: row.effective_ln_mode as 'ln' | 'cn' | 'hcn',
+    effective_ln_mode: row.effective_ln_mode as 'ln' | 'cn' | 'hcn' | 'hln',
     double_option: row.double_option as IrDoubleOption,
     rule_mode: row.rule_mode as IrRuleMode,
     device_type: row.device_type as IrDeviceType,

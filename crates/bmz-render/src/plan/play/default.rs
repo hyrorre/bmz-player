@@ -84,6 +84,14 @@ fn push_lane(
         rect: Rect { x, y: layout.board.y, width: layout.lane_width, height: layout.board.height },
         color,
     });
+    for zone in snapshot.visible_free_zones.iter().filter(|zone| zone.lane == lane) {
+        let top = play_object_y(layout.board, snapshot.lift, zone.tail_y);
+        let bottom = play_object_y(layout.board, snapshot.lift, zone.head_y);
+        commands.push(DrawCommand::Rect {
+            rect: Rect { x, y: top, width: layout.lane_width, height: (bottom - top).max(0.0) },
+            color: Color::rgba(59.0 / 255.0, 8.0 / 255.0, 8.0 / 255.0, zone.alpha),
+        });
+    }
     if let Some(color) = lane_flash_color(snapshot, lane) {
         commands.push(DrawCommand::Rect {
             rect: Rect {
@@ -118,14 +126,18 @@ fn push_lane(
         }
         apply_draw_command_alpha(&mut commands[start..], note.alpha);
     }
-    for mine in &snapshot.visible_mines[lane_index] {
+    for (mine, potion) in snapshot.visible_mines[lane_index]
+        .iter()
+        .map(|n| (n, false))
+        .chain(snapshot.visible_potions[lane_index].iter().map(|n| (n, true)))
+    {
         commands.push(DrawCommand::Image {
             rect: note_rect(layout, snapshot.lift, x, mine.y),
             uv: UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
             source_size: None,
             texture: DEFAULT_MINE_NOTE_TEXTURE,
             tint: Color::rgba(1.0, 1.0, 1.0, mine.alpha),
-            blend: BlendMode::Normal,
+            blend: if potion { BlendMode::InvertRgb } else { BlendMode::Normal },
             linear_filter: false,
         });
     }
@@ -160,7 +172,9 @@ fn push_long_notes(
             lane,
             note_rect(layout, snapshot.lift, x, body.head_y),
         );
-        if (body.mode != LongNoteMode::Ln || snapshot.show_ln_tail_cap) && body.tail_y < 1.0 {
+        if (!matches!(body.mode, LongNoteMode::Ln | LongNoteMode::Hln) || snapshot.show_ln_tail_cap)
+            && body.tail_y < 1.0
+        {
             push_ln_end_skin(
                 manifest,
                 commands,

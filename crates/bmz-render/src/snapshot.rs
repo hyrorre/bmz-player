@@ -21,6 +21,7 @@ pub const SKIN_SOURCE_LN_UNDEFINED_BIT: u8 = 1 << 0;
 pub const SKIN_SOURCE_LN_DEFINED_LN_BIT: u8 = 1 << 1;
 pub const SKIN_SOURCE_LN_DEFINED_CN_BIT: u8 = 1 << 2;
 pub const SKIN_SOURCE_LN_DEFINED_HCN_BIT: u8 = 1 << 3;
+pub const SKIN_SOURCE_LN_DEFINED_HLN_BIT: u8 = 1 << 4;
 
 /// Options from the history row supplying the saved EX-score best.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -508,6 +509,8 @@ pub struct RenderSnapshot {
     pub visible_notes: [Vec<VisibleNote>; LANE_COUNT],
     /// Mine ノーツ。スコア対象外で、専用のスプライト（赤系）で描く。
     pub visible_mines: [Vec<VisibleMine>; LANE_COUNT],
+    pub visible_potions: [Vec<VisibleMine>; LANE_COUNT],
+    pub visible_free_zones: Vec<VisibleFreeZone>,
     pub visible_long_notes: Vec<VisibleLongNote>,
     pub recent_inputs: Vec<DisplayInput>,
     pub recent_judgements: Vec<DisplayJudgement>,
@@ -658,6 +661,14 @@ pub struct VisibleMine {
     pub y: f32,
     pub alpha: f32,
     pub damage: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VisibleFreeZone {
+    pub lane: Lane,
+    pub head_y: f32,
+    pub tail_y: f32,
+    pub alpha: f32,
 }
 
 /// ロングノート胴体の表示状態。beatoraja `drawLongNote` の longImage 選択に対応。

@@ -131,6 +131,7 @@ fn song_scan_path_from_context_reads_folder_and_chart() {
         last_played_at: None,
         lr2_added_at: None,
         chart: Some(ChartListItem {
+            kaleid: bmz_chart::kaleid::KaleidProvenance::imported(),
             chart_id: 1,
             md5: [0; 16],
             sha256: [0; 32],

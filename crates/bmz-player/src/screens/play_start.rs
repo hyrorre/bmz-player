@@ -260,11 +260,7 @@ pub fn play_session_options_from_start(
         let arrangement = target.playback.arrangement();
         let (replay_player, bms_random_choices, bms_switch_choices) = match &target.playback {
             BattleTargetPlayback::Replay(replay) => (
-                Some(ReplayPlayer {
-                    events: replay.events.clone(),
-                    next_index: 0,
-                    next_scoring_time: None,
-                }),
+                Some(replay.player()),
                 replay.bms_random_choices.clone(),
                 replay.bms_switch_choices.clone(),
             ),
@@ -423,6 +419,15 @@ pub fn start_running_play_session_for_chart_with_audio_runtime_and_input_backend
     // 表示値とFIRST_PLAY判定にはscore保存可否にかかわらず既存履歴が必要。
     let best = score_db.best_scores_for_charts(&[score_key]).ok().and_then(|mut rows| rows.pop());
     running.best_ex_score = best.as_ref().map(|best| best.ex_score);
+    let lamp = best
+        .as_ref()
+        .map(|best| bmz_core::clear::ClearType::rank_from_label(&best.clear_type))
+        .unwrap_or(0);
+    running.gameplay.configure_prepared(|session| {
+        if session.replay_player.as_ref().is_none_or(|replay| replay.kaleid.is_none()) {
+            session.conditional.best_lamp = lamp;
+        }
+    });
     running.skin_attempt.best_score_options = best.and_then(|best| best.play_options);
     if !running.score_save_disabled {
         running.best_ghost =
@@ -493,6 +498,15 @@ pub fn open_prepared_winit_play_session(
     // 表示値とFIRST_PLAY判定にはscore保存可否にかかわらず既存履歴が必要。
     let best = score_db.best_scores_for_charts(&[score_key]).ok().and_then(|mut rows| rows.pop());
     running.best_ex_score = best.as_ref().map(|best| best.ex_score);
+    let lamp = best
+        .as_ref()
+        .map(|best| bmz_core::clear::ClearType::rank_from_label(&best.clear_type))
+        .unwrap_or(0);
+    running.gameplay.configure_prepared(|session| {
+        if session.replay_player.as_ref().is_none_or(|replay| replay.kaleid.is_none()) {
+            session.conditional.best_lamp = lamp;
+        }
+    });
     running.skin_attempt.best_score_options = best.and_then(|best| best.play_options);
     if !running.score_save_disabled {
         running.best_ghost =
@@ -655,11 +669,7 @@ pub fn apply_queued_replay(
     options: &mut PlayStartOptions,
     replay: &crate::storage::replay::QueuedCourseReplay,
 ) -> Result<()> {
-    let player = bmz_gameplay::replay::ReplayPlayer {
-        events: replay.replay.events.clone(),
-        next_index: 0,
-        next_scoring_time: None,
-    };
+    let player = replay.replay.player();
     options.replay_player = Some(player);
     options.arrange = replay.replay.arrange_option();
     options.arrange_2p = replay.replay.arrange_2p_option();

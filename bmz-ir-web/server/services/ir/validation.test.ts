@@ -34,6 +34,28 @@ function submission(): IrScoreSubmission {
 }
 
 describe('score submission consistency', () => {
+  test('accepts native HLN, mixed branches and partial interpretation without relaxing score arithmetic', () => {
+    const payload = submission()
+    payload.rule.ln_policy = 'ForceHln'
+    payload.rule.effective_ln_mode = 'hln'
+    payload.chart.ln_profile = { has_defined_hln: true }
+    payload.chart.kaleid = {
+      version: 1,
+      declared: { conditional: true },
+      source: { conditional: true, hln: true },
+      effective: { conditional: true, hln: true },
+      diagnostics: ['unmatched free-zone endpoint ignored'],
+    }
+    payload.play_options.kaleid = {
+      reference_total: 10,
+      actual_total: 100,
+      branches: [{ block: 0, branch: 1, time: 1000000 }],
+    }
+    expect(validateScoreSubmission(payload)).toBe(payload)
+    payload.result.ex_score += 1
+    expect(() => validateScoreSubmission(payload)).toThrow('does not match')
+  })
+
   test('accepts LR2 backfill whose POOR includes empty POOR, keeping other bounds', () => {
     const payload = submission()
     Object.assign(payload.result, { notes: 128, pass_notes: 128, ex_score: 222, max_combo: 64 })

@@ -1,5 +1,11 @@
 # rianIR互換プロバイダー
 
+Kaleid拡張はED-rian実装と添付サーバーソースの契約に合わせます。canonical LNは
+0=なし/1=LN/2=CN/3=HCN/4=HLN、CONDITIONALはhas_conditionalを送信します。
+部分対応で同じ解釈を確認できない結果は送信を保留します。BATTLE等の既存制限は維持。
+比較ソースの識別情報・FORCE・時間検査・ランキング区分は[Kaleid拡張](kaleid.md)を参照。
+添付コードと本番デプロイの同一性、配布ビルドのclient_hash受入は実測未確認です。
+
 BMZ Playerからbeatoraja向けIRのrianIRへ接続するための設計・実装計画です。
 BMZ公式IRの設計は`docs/ir.md`、LN正規化は`docs/ln.md`、判定・ゲージの
 ruleは`docs/rule.md`、アシストを含む保存・送信条件は

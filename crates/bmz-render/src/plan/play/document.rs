@@ -16,6 +16,21 @@ pub(super) fn push_document_playfield(
     if let Some(rect) = clip {
         append_document_item(commands, skin, skin_state, SkinRenderItem::PushClip { rect });
     }
+    let notes = skin.prepare_note_layout(snapshot.key_mode, skin_state);
+    for zone in &snapshot.visible_free_zones {
+        if let Some(rect) = notes.body_rect(zone.lane, zone.head_y, zone.tail_y) {
+            append_document_item(
+                commands,
+                skin,
+                skin_state,
+                SkinRenderItem::Rect {
+                    rect,
+                    color: Color::rgba(59.0 / 255.0, 8.0 / 255.0, 8.0 / 255.0, zone.alpha),
+                    blend: BlendMode::Normal,
+                },
+            );
+        }
+    }
     for bar in &snapshot.bar_lines {
         push_play_bar_line(
             commands,
@@ -46,7 +61,6 @@ pub(super) fn push_document_playfield(
         layout.lane_width,
         layout.active_lanes,
     );
-    let notes = skin.prepare_note_layout(snapshot.key_mode, skin_state);
     push_document_long_notes(commands, snapshot, skin, skin_state, &notes);
     for &lane in layout.active_lanes {
         push_document_lane(commands, snapshot, skin, skin_state, lane, &notes);
@@ -81,7 +95,7 @@ fn push_document_long_notes(
         {
             append_document_item(commands, skin, skin_state, item);
         }
-        if (body.mode != LongNoteMode::Ln || snapshot.show_ln_tail_cap)
+        if (!matches!(body.mode, LongNoteMode::Ln | LongNoteMode::Hln) || snapshot.show_ln_tail_cap)
             && body.tail_y < 1.0
             && let Some(rect) = notes.note_rect(body.lane, body.tail_y, note_height)
             && let Some(item) = notes.cap_item(body.lane, rect, body.mode, true)
@@ -132,12 +146,17 @@ fn push_document_lane(
         apply_draw_command_alpha(&mut commands[start..], note.alpha);
     }
 
-    for mine in &snapshot.visible_mines[lane_index] {
+    for (mine, potion) in snapshot.visible_mines[lane_index]
+        .iter()
+        .map(|n| (n, false))
+        .chain(snapshot.visible_potions[lane_index].iter().map(|n| (n, true)))
+    {
         let start = commands.len();
         let Some(rect) = notes.note_rect(lane, mine.y, note_height) else {
             continue;
         };
-        if let Some(item) = notes.mine_item(lane, rect) {
+        let item = if potion { notes.potion_item(lane, rect) } else { notes.mine_item(lane, rect) };
+        if let Some(item) = item {
             append_document_item(commands, skin, skin_state, item);
         } else {
             append_document_item(
@@ -150,7 +169,7 @@ fn push_document_lane(
                     source_size: None,
                     texture: SkinTextureId(DEFAULT_MINE_NOTE_TEXTURE.0),
                     tint: Color::rgba(1.0, 1.0, 1.0, 1.0),
-                    blend: BlendMode::Normal,
+                    blend: if potion { BlendMode::InvertRgb } else { BlendMode::Normal },
                     scale: SkinImageScale::Stretch,
                     border: None,
                     linear_filter: false,

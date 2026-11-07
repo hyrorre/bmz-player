@@ -288,6 +288,54 @@ test('real score and course routes accept exact input limits and return 400 for 
 })
 
 describe('shared submission metadata', () => {
+  test('Kaleid paths share the original chart ranking while each best metric retains its source', async () => {
+    const first = submission()
+    first.rule.ln_policy = 'ForceHln'
+    first.rule.effective_ln_mode = 'hln'
+    first.chart.features = { hln: true, conditional: true }
+    first.chart.ln_profile = { has_defined_hln: true }
+    first.chart.notes = { total: 100, ln: 100, hln: 100 }
+    first.chart.kaleid = {
+      version: 1,
+      declared: {},
+      source: { hln: true, conditional: true },
+      effective: { hln: true },
+      diagnostics: [],
+    }
+    first.play_options.kaleid = { branches: [{ block: 0, branch: 0, time: 1000 }] }
+    first.result.min_bp = 10
+    first.result.min_cb = 10
+    const accepted = await submitScore(user, validateScoreSubmission(first), [], 10)
+    const second = structuredClone(first)
+    second.idempotency_key += '-second-path'
+    second.chart.notes = { total: 50, ln: 50, hln: 50 }
+    second.chart.kaleid!.diagnostics = ['partial chart']
+    second.play_options.kaleid = { branches: [{ block: 0, branch: 1, time: 1000 }] }
+    Object.assign(second.result, {
+      notes: 50,
+      pass_notes: 50,
+      ex_score: 100,
+      max_combo: 50,
+      min_bp: 0,
+      min_cb: 0,
+    })
+    second.result.judges.fast.pgreat = 50
+    const improved = await submitScore(user, validateScoreSubmission(second), [], 10)
+    const best = await db.select().from(schema.bestScores)
+    expect(best).toHaveLength(1)
+    expect(best[0]!.bestExScoreId).toBe(accepted.score_id)
+    expect(best[0]!.bestMinBpScoreId).toBe(improved.score_id)
+    const histories = await db.select().from(schema.scores)
+    expect(histories).toHaveLength(2)
+    expect(histories.map((row) => row.playOptions.kaleid)).toEqual([
+      first.play_options.kaleid,
+      second.play_options.kaleid,
+    ])
+    const charts = await db.select().from(schema.charts)
+    expect(charts).toHaveLength(1)
+    expect(charts[0]!.hasConditional).toBe(true)
+    expect(charts[0]!.hasHln).toBe(true)
+  })
   test('a second player cannot replace a registered chart and numeric conflicts are logged', async () => {
     const first = submission()
     Object.assign(first.chart, {

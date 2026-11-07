@@ -188,16 +188,24 @@ fn build_ir_chart_payload_with_ln_profile(
     let (min_bpm, max_bpm) = chart_bpm_range(chart);
     let total_notes = scored_note_count(chart);
     let gauge_total = gauge_total_for_chart(chart.metadata.total, total_notes);
-    let ln_count = chart.long_notes.len() as u32;
-    let cn_count =
-        chart.long_notes.iter().filter(|pair| pair.mode == Some(LongNoteMode::Cn)).count() as u32;
-    let hcn_count =
-        chart.long_notes.iter().filter(|pair| pair.mode == Some(LongNoteMode::Hcn)).count() as u32;
+    let pairs: Vec<_> = chart
+        .long_notes
+        .iter()
+        .filter(|pair| !chart.is_dummy_long(pair) && !chart.is_free_zone_inner(pair.start_note_id))
+        .collect();
+    let ln_count = pairs.len() as u32;
+    let cn_count = pairs.iter().filter(|pair| pair.mode == Some(LongNoteMode::Cn)).count() as u32;
+    let hcn_count = pairs.iter().filter(|pair| pair.mode == Some(LongNoteMode::Hcn)).count() as u32;
+    let hln_count = pairs
+        .iter()
+        .filter(|pair| pair.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hln)
+        .count() as u32;
     let has_mine = chart.lane_notes.iter().flatten().any(|note| note.kind == NoteKind::Mine);
     let mine_count =
         chart.lane_notes.iter().flatten().filter(|note| note.kind == NoteKind::Mine).count() as u32;
 
     IrChartPayload {
+        kaleid: chart.metadata.kaleid.clone(),
         source_format: chart.metadata.source_format.as_str().to_string(),
         sha256: hash_to_hex(&chart.identity.file_sha256),
         md5: Some(hash_to_hex(&chart.identity.file_md5)),
@@ -207,6 +215,7 @@ fn build_ir_chart_payload_with_ln_profile(
             has_defined_ln: ln_profile.has_defined_ln,
             has_defined_cn: ln_profile.has_defined_cn,
             has_defined_hcn: ln_profile.has_defined_hcn,
+            has_defined_hln: ln_profile.has_defined_hln,
         },
         title: chart.metadata.title.clone(),
         subtitle: chart.metadata.subtitle.clone(),
@@ -224,9 +233,15 @@ fn build_ir_chart_payload_with_ln_profile(
             ln: ln_count,
             cn: cn_count,
             hcn: hcn_count,
+            hln: hln_count,
             mine: mine_count,
         },
         features: IrChartFeatures {
+            hln: chart.metadata.kaleid.effective.hln,
+            conditional: chart.metadata.kaleid.source.conditional,
+            free_zone: chart.metadata.kaleid.effective.free_zone,
+            potion: chart.metadata.kaleid.effective.potion,
+            dummy: chart.metadata.kaleid.effective.dummy,
             random: chart.metadata.has_bms_random,
             stop: chart
                 .timing_events
@@ -274,6 +289,7 @@ fn effective_ln_mode_payload(mode: LongNoteMode) -> IrEffectiveLnMode {
         LongNoteMode::Ln => IrEffectiveLnMode::Ln,
         LongNoteMode::Cn => IrEffectiveLnMode::Cn,
         LongNoteMode::Hcn => IrEffectiveLnMode::Hcn,
+        LongNoteMode::Hln => IrEffectiveLnMode::Hln,
     }
 }
 

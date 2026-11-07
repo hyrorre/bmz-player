@@ -13,6 +13,42 @@ pub(super) struct EnqueueIrCourseJobRequest<'a> {
 }
 
 impl WinitApp {
+    pub(super) fn course_kaleid_provenance(
+        &self,
+        result: &crate::screens::course_session::CourseResultSummary,
+    ) -> Vec<bmz_chart::kaleid::KaleidProvenance> {
+        let Some((_, identity)) = self.course_identity_with_stored(result.course_id) else {
+            return Vec::new();
+        };
+        identity
+            .chart_sha256s
+            .iter()
+            .enumerate()
+            .map(|(index, _hash)| {
+                if let Some(summary) = result.entry_summaries.get(index) {
+                    return self
+                        .boot
+                        .score_db
+                        .kaleid_evidence(summary.score_history_id)
+                        .ok()
+                        .flatten()
+                        .map(|evidence| evidence.provenance)
+                        .unwrap_or_default();
+                }
+                // Library scans can select another static RANDOM branch. Only the
+                // source import with this attempt's seed establishes IR eligibility.
+                result
+                    .stage_charts
+                    .get(index)
+                    .and_then(|stage| stage.kaleid.clone())
+                    .unwrap_or_else(|| bmz_chart::kaleid::KaleidProvenance {
+                        diagnostics: vec!["unplayed course stage provenance unavailable".into()],
+                        ..Default::default()
+                    })
+            })
+            .collect()
+    }
+
     /// コース定義から IR / score.db 用の identity (course_hash + charts sha256 +
     /// canonical constraints) を解決する。未解決の譜面 (sha256 不明) がある
     /// コースは score 保存 / IR 送信対象外。
@@ -134,7 +170,7 @@ impl WinitApp {
         }
         let definition = &identity.definition;
         let ln_policy = course_result.ln_policy.as_str().to_string();
-        let payload = crate::ir::course_payload::build_course_submission(
+        let mut payload = crate::ir::course_payload::build_course_submission(
             definition,
             course_result,
             &crate::ir::course_payload::IrCourseSubmissionContext {
@@ -149,6 +185,8 @@ impl WinitApp {
                 bms_ir_course_key: identity.bms_ir_course_key.clone(),
             },
         );
+        let provenance = self.course_kaleid_provenance(course_result);
+        payload["play_options"]["entry_kaleid"] = serde_json::json!(provenance);
         let Ok(payload_json) = serde_json::to_string(&payload) else {
             return;
         };
@@ -159,6 +197,10 @@ impl WinitApp {
             .unwrap_or([0; 32]);
         let ln_policy = course_result.ln_policy;
         for provider in enabled {
+            if let Err(error) = crate::ir::kaleid::ensure_course_supported(&provider, &payload) {
+                tracing::info!(provider = %provider.provider, %error, "course IR unavailable; local result retained");
+                continue;
+            }
             let Some(provider_key) = crate::ir::provider_key::configured_provider_key(&provider)
             else {
                 tracing::warn!(

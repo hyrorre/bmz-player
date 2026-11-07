@@ -154,6 +154,13 @@ fn internal_parser_summary() {
                 NoteKind::LongStart => "LongStart",
                 NoteKind::LongEnd => "LongEnd",
                 NoteKind::Mine => "Mine",
+                NoteKind::Potion => "Potion",
+                NoteKind::DummyTap => "DummyTap",
+                NoteKind::DummyLongStart => "DummyLongStart",
+                NoteKind::DummyLongEnd => "DummyLongEnd",
+                NoteKind::DummyMine => "DummyMine",
+                NoteKind::DummyPotion => "DummyPotion",
+                NoteKind::FreeZoneEnd => "FreeZoneEnd",
             };
             *counts.entry(k).or_default() += 1;
         }

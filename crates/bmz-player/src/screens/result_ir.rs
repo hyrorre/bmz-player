@@ -95,6 +95,7 @@ pub enum ResultIrTarget {
         rule_mode: RuleMode,
     },
     Course {
+        entry_kaleid: Vec<bmz_chart::kaleid::KaleidProvenance>,
         local_score_id: i64,
         course_hash: String,
         rian_course_hash_v1: String,
@@ -107,6 +108,7 @@ pub enum ResultIrTarget {
 
 #[derive(Debug, Clone)]
 pub struct ResultIrCourseHashes {
+    pub entry_kaleid: Vec<bmz_chart::kaleid::KaleidProvenance>,
     pub local: String,
     pub rian_v1: String,
     pub bms_ir: Option<String>,

@@ -50,6 +50,7 @@ pub(crate) struct BmsonLongNoteExtension {
     pub start: BmsonObjectPosition,
     pub end: BmsonObjectPosition,
     pub mode: Option<LnMode>,
+    pub hln: bool,
     pub end_wav_key: Option<u16>,
     pub explicit_end_sound: bool,
 }
@@ -83,6 +84,7 @@ pub(crate) struct BmsonBgaExtension {
 
 #[derive(Debug, Default)]
 pub(crate) struct BmsonRebuildInfo {
+    pub metric_sound_slices: Vec<super::intermediate::MetricSoundSlice>,
     pub long_notes: Vec<BmsonLongNoteExtension>,
     pub sound_slices: Vec<BmsonSoundSliceExtension>,
     pub layered_sounds: Vec<BmsonLayeredSoundExtension>,
@@ -231,6 +233,7 @@ pub(crate) fn rebuild_bms_timing_from_bmson<T: KeyLayoutMapper>(
     bmson: &Bmson<'_>,
     boundaries: &MeasureBoundaries,
     lane_layout: BmsonLaneLayout,
+    hln_notes: &std::collections::HashSet<(usize, usize)>,
     warnings: &mut Vec<BmsonToBmsWarning>,
 ) -> BmsonRebuildInfo {
     let wav_by_path: HashMap<PathBuf, ObjId> =
@@ -290,7 +293,8 @@ pub(crate) fn rebuild_bms_timing_from_bmson<T: KeyLayoutMapper>(
     for sound_channel in &bmson.sound_channels {
         let wav_path = PathBuf::from(sound_channel.name.as_ref());
         let mut wav_ids = HashMap::new();
-        for (pulse, slice) in bmson_sound_slice_plan(sound_channel, &sound_slice_times) {
+        for (pulse, slice, origin, end) in bmson_sound_slice_plan(sound_channel, &sound_slice_times)
+        {
             let obj_id = wav_obj_id_issuer.next().unwrap_or_else(|| {
                 warnings.push(BmsonToBmsWarning::WavObjIdOutOfRange);
                 ObjId::null()
@@ -300,6 +304,13 @@ pub(crate) fn rebuild_bms_timing_from_bmson<T: KeyLayoutMapper>(
             rebuild_info
                 .sound_slices
                 .push(BmsonSoundSliceExtension { wav_key: obj_id.as_u16(), slice });
+            rebuild_info.metric_sound_slices.push(super::intermediate::MetricSoundSlice {
+                wav_key: obj_id.as_u16(),
+                resolution: bmson.info.resolution.get(),
+                pulse,
+                origin,
+                end,
+            });
         }
         sound_channel_wav_ids.push(wav_ids);
     }
@@ -319,7 +330,7 @@ pub(crate) fn rebuild_bms_timing_from_bmson<T: KeyLayoutMapper>(
     for (channel_index, (sound_channel, wav_ids)) in
         bmson.sound_channels.iter().zip(sound_channel_wav_ids).enumerate()
     {
-        for note in &sound_channel.notes {
+        for (note_index, note) in sound_channel.notes.iter().enumerate() {
             if note.up == Some(true) {
                 continue;
             }
@@ -362,6 +373,7 @@ pub(crate) fn rebuild_bms_timing_from_bmson<T: KeyLayoutMapper>(
                     start: bmson_object_position(time),
                     end: bmson_object_position(end_time),
                     mode: note.t,
+                    hln: hln_notes.contains(&(channel_index, note_index)),
                     end_wav_key: explicit_end_wav.map(ObjId::as_u16),
                     explicit_end_sound: explicit_end_wav.is_some(),
                 });
@@ -454,22 +466,25 @@ fn bmson_object_position(time: ObjTime) -> BmsonObjectPosition {
 fn bmson_sound_slice_plan(
     channel: &SoundChannel<'_>,
     metric_times_us: &HashMap<u64, u64>,
-) -> Vec<(u64, SoundSlice)> {
+) -> Vec<(u64, SoundSlice, u64, Option<u64>)> {
     let mut positions = channel.notes.iter().map(|note| (note.y.0, note.c)).collect::<Vec<_>>();
     positions.sort_by_key(|(pulse, _)| *pulse);
     positions.dedup_by_key(|(pulse, _)| *pulse);
 
     let mut start_us = 0_u64;
+    let mut origin = positions.first().map_or(0, |(pulse, _)| *pulse);
     let mut slices = Vec::with_capacity(positions.len());
     for (index, &(pulse, continues)) in positions.iter().enumerate() {
         if !continues {
             start_us = 0;
+            origin = pulse;
         }
         let duration_us = positions.get(index + 1).and_then(|&(next_pulse, next_continues)| {
             next_continues
                 .then(|| metric_times_us[&next_pulse].saturating_sub(metric_times_us[&pulse]))
         });
-        slices.push((pulse, SoundSlice { start_us, duration_us }));
+        let end = positions.get(index + 1).and_then(|&(next, continues)| continues.then_some(next));
+        slices.push((pulse, SoundSlice { start_us, duration_us }, origin, end));
         if let Some(duration_us) = duration_us {
             start_us = start_us.saturating_add(duration_us);
         }

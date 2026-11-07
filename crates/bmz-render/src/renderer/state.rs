@@ -13,6 +13,7 @@ pub(super) struct WgpuRenderer {
     pub(super) image_subtract_pipeline: wgpu::RenderPipeline,
     pub(super) image_premultiplied_pipeline: wgpu::RenderPipeline,
     pub(super) image_layer_pipeline: wgpu::RenderPipeline,
+    pub(super) image_invert_pipeline: wgpu::RenderPipeline,
     pub(super) image_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) image_sampler: wgpu::Sampler,
     pub(super) image_sampler_linear: wgpu::Sampler,
