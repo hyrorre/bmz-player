@@ -350,6 +350,49 @@ fn wildcard_skin_source_falls_back_when_user_selection_missing() {
 }
 
 #[test]
+fn lua_skin_does_not_borrow_missing_source_from_another_folder() {
+    let root = unique_test_dir("bmz-lua-missing-folder-source");
+    fs::create_dir_all(root.join("judge/minimal")).unwrap();
+    fs::create_dir_all(root.join("judge/per_lane")).unwrap();
+    image::RgbaImage::from_pixel(1, 1, image::Rgba([255; 4]))
+        .save(root.join("judge/per_lane/parts.png"))
+        .unwrap();
+    let entry = root.join("play.luaskin");
+    fs::write(
+        &entry,
+        r#"
+        return {
+            type = 0, w = 1280, h = 720,
+            filepath = {{name = "Judge", path = "judge/*", def = "minimal"}},
+            source = {{id = "parts", path = "judge/*/parts.png"}},
+            image = {{id = "lane_judge", src = "parts", x = 0, y = 0, w = 1, h = 1}},
+            destination = {{id = "lane_judge", dst = {{x = 0, y = 0, w = 1, h = 1}}}},
+        }
+        "#,
+    )
+    .unwrap();
+
+    for (choice, expected_sources) in [
+        (None, 0),
+        (Some("minimal"), 0),
+        (Some("judge/minimal"), 0),
+        (Some("per_lane"), 1),
+        (Some("removed"), 1),
+        (Some(RANDOM_FILE_SELECTION), 1),
+    ] {
+        let files = choice.map(|choice| ("Judge".to_string(), choice.to_string()));
+        let decoded = decode_beatoraja_skin_with_options(
+            &entry,
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &files.into_iter().collect(),
+        )
+        .unwrap();
+        assert_eq!(decoded.sources.len(), expected_sources, "Judge={choice:?}");
+    }
+}
+
+#[test]
 fn wildcard_skin_source_ignores_beatoraja_filter_suffix() {
     let root = unique_test_dir("bmz-json-source-filter");
     std::fs::create_dir_all(root.join("parts/lanecover_lift")).unwrap();

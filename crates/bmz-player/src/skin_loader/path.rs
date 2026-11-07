@@ -63,15 +63,12 @@ pub(super) fn resolve_json_skin_asset_path_with_context(
     document: &SkinDocument,
     files: &BTreeMap<String, String>,
 ) -> Option<PathBuf> {
-    path_context?; // Missing authority is never an unrestricted fallback.
+    let path_context = path_context?; // Missing authority is never an unrestricted fallback.
     let normalized = asset_path.replace('\\', "/");
     if !normalized.contains('*') {
-        if let Some(path_context) = path_context {
-            return path_context.resolve_asset(&normalized)
-                .inspect_err(|error| tracing::debug!(path = %normalized, %error, "skin asset path rejected or unresolved"))
-                .ok();
-        }
-        return None;
+        return path_context.resolve_asset(&normalized)
+            .inspect_err(|error| tracing::debug!(path = %normalized, %error, "skin asset path rejected or unresolved"))
+            .ok();
     }
 
     let filepath =
@@ -82,7 +79,12 @@ pub(super) fn resolve_json_skin_asset_path_with_context(
     if let Some(filepath) = filepath
         && files.get(&filepath.name).is_some_and(|selected| selected == RANDOM_FILE_SELECTION)
     {
-        return resolve_wildcard_path_with_context(skin_root, path_context, &normalized, None);
+        return resolve_wildcard_path_with_context(
+            skin_root,
+            Some(path_context),
+            &normalized,
+            None,
+        );
     }
 
     // 1. パスが filepath 定義と完全一致するときは、選択ファイルをそのまま使う。
@@ -90,7 +92,7 @@ pub(super) fn resolve_json_skin_asset_path_with_context(
         && let Some(selected) = files.get(&filepath.name).filter(|selected| !selected.is_empty())
         && let Some(path) = resolve_selected_skin_file_for_pattern_with_context(
             skin_root,
-            path_context,
+            Some(path_context),
             &filepath.path,
             selected,
         )
@@ -103,15 +105,19 @@ pub(super) fn resolve_json_skin_asset_path_with_context(
     //    (例: 定義 `custom/laser/*` で選択 `custom/laser/veryshort` のとき、
     //         ソース `custom/laser/*/main.png` を `custom/laser/veryshort/main.png` へ)。
     if let Some(substituted) = substitute_filepath_choice(&normalized, &document.filepath, files) {
-        let candidate = if let Some(path_context) = path_context {
-            path_context.resolve_asset(&substituted).ok()
-        } else {
-            None
-        };
-        // A default such as "default" may identify the stem of default.png.
-        // If direct substitution misses, retain the sandboxed wildcard fallback.
-        if let Some(candidate) = candidate.filter(|candidate| bmz_skin_assets::is_file(candidate)) {
+        if let Ok(candidate) = path_context.resolve_asset(&substituted)
+            && bmz_skin_assets::is_file(&candidate)
+        {
             return Some(candidate);
+        }
+        // beatoraja keeps the selected directory even when it has no copy of this child asset.
+        if let Some((_, suffix)) = normalized.split_once('*')
+            && suffix.starts_with('/')
+            && !suffix.contains('*')
+            && let Some(directory) = substituted.strip_suffix(suffix)
+            && path_context.resolve_path_with_ascii_case(directory).is_ok_and(|path| path.is_dir())
+        {
+            return None;
         }
     }
 
@@ -120,7 +126,7 @@ pub(super) fn resolve_json_skin_asset_path_with_context(
     let preferred = filepath.and_then(|filepath| {
         (!filepath.def.is_empty() && filepath.def != "Random").then_some(filepath.def.as_str())
     });
-    resolve_wildcard_path_with_context(skin_root, path_context, &normalized, preferred)
+    resolve_wildcard_path_with_context(skin_root, Some(path_context), &normalized, preferred)
 }
 
 /// filepath 定義のワイルドカードと一致するユーザ選択値を `asset_path` の
@@ -143,7 +149,9 @@ pub(super) fn substitute_filepath_choice(
         if def_prefix != asset_before {
             continue;
         }
-        let Some(selected) = files.get(&filepath.name).filter(|selected| !selected.is_empty())
+        let Some(selected) = files
+            .get(&filepath.name)
+            .filter(|selected| !selected.is_empty() && selected.as_str() != RANDOM_FILE_SELECTION)
         else {
             continue;
         };
