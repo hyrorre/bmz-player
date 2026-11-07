@@ -1,16 +1,15 @@
 use super::*;
 
+mod header;
+
 pub(super) fn open(
     mut file: CheckedFile,
     control: &ArchiveControl,
 ) -> Result<(sevenz_rust2::ArchiveReader<CheckedFile>, Vec<ArchiveEntry>)> {
-    let mut start = [0; 32];
-    file.read_exact(&mut start)?;
-    let header_size = u64::from_le_bytes(start[20..28].try_into().unwrap());
-    ensure!(header_size <= control.limits.header_bytes, "7z header bytes exceed limit");
+    // ArchiveReader::new decodes encoded headers with an unlimited memory
+    // allowance. Check their coder properties and output sizes before calling it.
+    header::preflight(&mut file, &control.limits)?;
     file.seek(SeekFrom::Start(0))?;
-    // The public decoder API decodes a compressed header before exposing coder properties.
-    // Body dictionaries are bounded below; this is not a strict header-memory sandbox.
     let mut reader = sevenz_rust2::ArchiveReader::new(file, sevenz_rust2::Password::empty())?;
     reader.set_thread_count(1);
     let archive = reader.archive();

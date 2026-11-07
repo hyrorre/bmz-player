@@ -128,3 +128,27 @@
 - `bun run test:ir` と `bun x vue-tsc --noEmit` は成功。Prettierの対象となるWebファイルの変更はない。
 - 初回の全体検証は `6-rust.log`、WAV入力確保の追加対策後の最終検証は `6-final-rust.log`、Webは `6-web.log` に保存した（いずれもGit管理外）。
 - NOT VERIFIED — 実音声デバイスでの再生、高サンプルレートの実譜面。境界は合成WAVと純粋関数のテストで確認した。
+
+## #18の保留と退避
+
+- ユーザーの指示により、接続先検査の修正方針を再検討するため#18を飛ばした。コード・テスト・docs・この記録の作業中の節を含む7ファイルを、未追跡ファイルも含めてstashへ退避した。
+- stashのcommitは `8ba6cf408c20232fcabd9f54c07f53e828f1c33e`、メッセージは `wip security #18 download destination policy deferred`。退避後にmainの作業ツリーがクリーンであることを確認した。
+- システムプロキシの自動利用を無効化する変更は加えていない。#18は未完了で、次の#12へ進む。
+
+## #12 7z圧縮ヘッダーの事前検査
+
+- 現在の `sevenz-rust2 0.22.2` の公開APIを確認した。圧縮ヘッダーのdecoderは内部の無制限メモリ設定を使い、呼び出し側から上限を渡すAPIがないため、`ArchiveReader::new` より前に検査を追加した。依存関係の追加や更新はしていない。
+- [7-Zip公式の形式](https://github.com/ip7z/7zip/blob/main/DOC/7zFormat.txt)と[method ID](https://github.com/ip7z/7zip/blob/main/DOC/Methods.txt)を参照し、圧縮ヘッダーのStreamsInfoに必要な範囲をパースする。可変長整数は最大8バイトの追加分をu64へ読み、件数・長さ・加算・位置を検査する。
+- 辞書の合計は既存の256 MiB、展開後の各段は64 MiB（設定のheader_bytesが小さければその値）までとする。LZMA / LZMA2 / Copyと単一入力・出力のBCJ系を扱い、未対応codec、壊れた構造、重複・循環・不連続のbindingを拒否する。
+- Copy等を連鎖させたdecoderの過大な入れ子も防ぐため、圧縮ヘッダーの1 folderのcoder数は32までとした。通常はcompressor 1段と任意のfilter程度であり、7-Zipが生成した検証書庫は1段だった。
+- 開始ヘッダーのCRC・位置と次ヘッダーのCRCも事前検査する。開始部分が壊れていると、ライブラリが別の圧縮ヘッダーを検索して検査を迂回するため、この復旧経路は拒否する。通常の非圧縮ヘッダーは既存の処理へ渡す。
+- 7-Zip 26.05で合成データだけの書庫を生成し、ヘッダー圧縮あり・なしを固定fixtureに追加した。大きな辞書と展開後サイズへ改変したfixtureはCRCを再計算し、圧縮データを読む前に拒否されることを検査する。
+- [書庫の制限](../../docs/archive-songs.md#対応範囲と制限)とfixtureの再生成手順を更新した。
+
+### 検証
+
+- 初回の新規テスト1件は、循環bindingを作る改変位置の誤りで失敗した。テストデータの位置を訂正し、書庫関連27テストはすべて成功した。
+- `cargo fmt --check`、`cargo check -p bmz-player --locked`、`cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。
+- `cargo test -p bmz-player --locked` は2,922成功・58 ignored（起動テスト2件を含む）、0失敗。`bun run test:ir` と `bun x vue-tsc --noEmit` も成功。Prettierの対象となるWebファイルの変更はない。
+- ログはGit管理外の `.local/validation/security-medium/12-focused.log`、`12-check.log`、`12-rust.log`、`12-web.log` に保存した。
+- NOT VERIFIED — macOS/Linuxでの実行。7-Zip実行ファイルによる生成とRustでの読込・スキャン・展開はWindowsで確認した。
