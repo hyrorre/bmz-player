@@ -64,7 +64,7 @@ export default defineNuxtConfig({
     },
     scheduledTasks: {
       '17 */6 * * *': 'difficulty-tables:sync',
-      '* * * * *': 'ir:storage-cleanup',
+      '0 0 * * *': 'ir:storage-cleanup',
     },
     compatibilityDate: '2026-03-29',
     preset: 'cloudflare_module',

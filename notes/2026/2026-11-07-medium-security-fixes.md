@@ -236,3 +236,15 @@
 - `bun run test:ir`、`bun x vue-tsc --noEmit` は成功。Webコードの変更はなく、Prettierの対象ファイルはない。
 - ログはGit管理外の `.local/validation/security-medium/18-followup-focused.log`、`18-followup-rust.log`、`18-followup-web.log` に保存した。
 - NOT VERIFIED — 実際の企業ネットワークのプロキシ、NAT64・6to4経由の通信、macOS・Linux。Windows上のDNS差し替え、子プロセスのHTTPプロキシ、アドレスの単体テストで確認した。
+
+## 追記: #11 定期清掃を1日1回へ変更
+
+- ユーザー指摘に従い、`ir:storage-cleanup`のcronを毎分から`0 0 * * *`へ変更した。CloudflareではUTC 00:00（日本時間09:00）に1日1回実行する。[Cron TriggersのUTC指定](https://developers.cloudflare.com/workers/configuration/cron-triggers/)を確認した。
+- 対象・保持期間・各段階40件の上限は維持し、残件は翌日の実行へ回す。[IR仕様](../../docs/ir.md#定期清掃)にも頻度と時刻を反映した。
+
+### 追記分の検証
+
+- `bun run test:ir`、`bun x vue-tsc --noEmit`、`bun x prettier --check nuxt.config.ts` は成功。清掃対象・期限・バッチ・同時実行制御の既存テストを含む。
+- `cargo fmt --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。`cargo test -p bmz-player --locked` は2,935成功・58 ignored（起動テスト2件を含む）、0失敗。
+- ログはGit管理外の `.local/validation/security-medium/11-followup-web.log`、`11-followup-rust.log` に保存した。
+- NOT VERIFIED — Cloudflareでの実際のscheduled実行。cronの設定とUTC基準を確認し、本番アクセス・デプロイは実施していない。
