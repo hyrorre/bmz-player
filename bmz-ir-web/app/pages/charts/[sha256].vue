@@ -92,6 +92,7 @@ const lnPolicies: LnPolicyFilter[] = [
   'ForceLn',
   'ForceCn',
   'ForceHcn',
+  'ForceHln',
 ]
 const ruleMode = ref<RuleModeFilter>('ALL')
 const ruleModes: RuleModeFilter[] = ['ALL', 'Beatoraja', 'Lr2Oraja', 'Dx']

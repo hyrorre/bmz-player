@@ -99,6 +99,7 @@ const lnPolicies: CourseLnPolicyFilter[] = [
   'ForceLn',
   'ForceCn',
   'ForceHcn',
+  'ForceHln',
 ]
 const ruleModes: CourseRuleModeFilter[] = ['ALL', 'Beatoraja', 'Lr2Oraja', 'Dx']
 

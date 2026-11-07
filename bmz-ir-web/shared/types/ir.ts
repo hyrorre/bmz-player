@@ -1,6 +1,8 @@
-export type LnScorePolicy = 'AutoLn' | 'AutoCn' | 'AutoHcn' | 'ForceLn' | 'ForceCn' | 'ForceHcn'
+// ForceHln is a canonical native-HLN score bucket, not an additional player setting.
+export type LnScorePolicy =
+  'AutoLn' | 'AutoCn' | 'AutoHcn' | 'ForceLn' | 'ForceCn' | 'ForceHcn' | 'ForceHln'
 
-export type EffectiveLnMode = 'ln' | 'cn' | 'hcn'
+export type EffectiveLnMode = 'ln' | 'cn' | 'hcn' | 'hln'
 
 export type IrRankingScope = 'global' | 'self_and_rivals' | 'rivals' | 'self' | 'around_self'
 
@@ -21,6 +23,15 @@ export interface IrChartLnProfile {
   has_defined_ln: boolean
   has_defined_cn: boolean
   has_defined_hcn: boolean
+  has_defined_hln: boolean
+}
+
+export interface KaleidProvenance {
+  version: number
+  declared: Record<string, boolean>
+  source: Record<string, boolean>
+  effective: Record<string, boolean>
+  diagnostics: string[]
 }
 
 export interface IrScoreSubmission {
@@ -33,6 +44,7 @@ export interface IrScoreSubmission {
     sha256: string
     md5?: string | null
     ln_profile?: Partial<IrChartLnProfile>
+    kaleid?: KaleidProvenance
     title?: string
     subtitle?: string | null
     genre?: string | null
@@ -52,6 +64,7 @@ export interface IrScoreSubmission {
       ln?: number
       cn?: number
       hcn?: number
+      hln?: number
       mine?: number
     }
     features?: Record<string, boolean>
