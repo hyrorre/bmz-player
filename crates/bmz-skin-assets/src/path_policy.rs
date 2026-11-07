@@ -3,6 +3,8 @@ use crate::{
     path_context::{lexical_normalize, simplify_verbatim_path},
 };
 use anyhow::{Context, Result, bail};
+use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 /// Host-supplied immutable authority shared by every skin format and traversal.
@@ -94,6 +96,45 @@ impl SkinPathPolicy {
             );
         }
         Ok(canonical)
+    }
+
+    /// Resolve one component at a time from an authorized root. Case fallback
+    /// may list only a directory already validated by the policy.
+    pub(crate) fn resolve_existing_components(
+        &self,
+        path: &Path,
+        ascii_case_fallback: bool,
+    ) -> Result<Option<PathBuf>> {
+        let candidate = self.lexical_candidate(path)?;
+        let root = self
+            .roots
+            .iter()
+            .filter(|root| candidate.starts_with(root))
+            .max_by_key(|root| root.components().count())
+            .context("skin path has no authorized root")?;
+        let mut directory = self.resolve(root)?;
+        for part in candidate.strip_prefix(root)?.components() {
+            let name = part.as_os_str();
+            let exact = directory.join(name);
+            let child = match fs::symlink_metadata(&exact) {
+                Ok(_) => exact,
+                Err(error) if error.kind() == ErrorKind::NotFound => {
+                    if !ascii_case_fallback {
+                        return Ok(None);
+                    }
+                    let Some(found) = crate::find_ascii_case_child(&directory, name) else {
+                        return Ok(None);
+                    };
+                    found
+                }
+                Err(error) if error.kind() == ErrorKind::NotADirectory => return Ok(None),
+                Err(error) => return Err(error).with_context(|| exact.display().to_string()),
+            };
+            // Validate links before touching any of their children, even when
+            // a later link could bring the final path back inside a root.
+            directory = self.resolve(&child)?;
+        }
+        Ok(Some(directory))
     }
 
     /// Names for the memory overlay, never permission to create disk files.

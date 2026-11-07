@@ -143,8 +143,8 @@ pub fn decode_beatoraja_skin_request(
         installed_fonts,
         library_roots,
     } = request;
-    let path_context = Some(SkinPathContext::new(skin_path, library_roots.iter().cloned())?);
-    let skin_path = path_context.as_ref().unwrap().entry_file();
+    let path_context = SkinPathContext::new(skin_path, library_roots.iter().cloned())?;
+    let skin_path = path_context.entry_file();
     let document_start = Instant::now();
     tracing::debug!(
         ?kind,
@@ -164,7 +164,7 @@ pub fn decode_beatoraja_skin_request(
         files,
         runtime_state,
         document_cache,
-        path_context.as_ref(),
+        Some(&path_context),
     )?;
     let document_us = elapsed_us(document_start);
     tracing::debug!(
@@ -201,10 +201,10 @@ pub fn decode_beatoraja_skin_request(
     }
     let skin_root = skin_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
     tracing::debug!(?kind, "skin decode character preparation begin");
-    prepare_pm_chara(&mut document, &skin_root, &resolved_files, path_context.as_ref());
+    prepare_pm_chara(&mut document, &path_context, &resolved_files);
     tracing::debug!(?kind, "skin decode character preparation complete");
     tracing::debug!(?kind, "skin decode audio asset preparation begin");
-    let audio_assets = decode_skin_audio_assets(kind, &skin_root, path_context.as_ref(), &document);
+    let audio_assets = decode_skin_audio_assets(kind, &skin_root, Some(&path_context), &document);
     tracing::debug!(?kind, "skin decode audio asset preparation complete");
     let required_sources: HashSet<String> =
         required_skin_source_ids(&document).into_iter().map(str::to_string).collect();
@@ -219,7 +219,7 @@ pub fn decode_beatoraja_skin_request(
                 &document,
                 &skin_root,
                 &resolved_files,
-                path_context.as_ref(),
+                Some(&path_context),
                 font_namespace,
                 font_cache.as_ref(),
                 installed_fonts.as_ref(),
@@ -230,7 +230,7 @@ pub fn decode_beatoraja_skin_request(
                 &document,
                 &skin_root,
                 &resolved_files,
-                path_context.as_ref(),
+                Some(&path_context),
                 &required_sources,
                 warn_missing_required,
                 source_cache.as_ref(),

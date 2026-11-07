@@ -2,11 +2,9 @@ use super::*;
 
 pub(super) fn prepare_pm_chara(
     document: &mut SkinDocument,
-    skin_root: &Path,
+    context: &SkinPathContext,
     resolved_files: &BTreeMap<String, String>,
-    path_context: Option<&SkinPathContext>,
 ) {
-    let Some(context) = path_context else { return };
     let mut expanded_sources = Vec::new();
     for index in 0..document.pmchara.len() {
         let (id, source_id, chara_type, color) = {
@@ -22,13 +20,9 @@ pub(super) fn prepare_pm_chara(
             tracing::warn!(pmchara_id = %id, source_id = %source_id, "PMchara source id is missing");
             continue;
         };
-        let Some(resolved) = resolve_pm_chara_source_path(
-            skin_root,
-            path_context,
-            &source_path,
-            document,
-            resolved_files,
-        ) else {
+        let Some(resolved) =
+            resolve_pm_chara_source_path(context, &source_path, document, resolved_files)
+        else {
             tracing::warn!(pmchara_id = %id, source = %source_path, "PMchara source path is missing");
             continue;
         };
@@ -52,23 +46,22 @@ pub(super) fn prepare_pm_chara(
 }
 
 fn resolve_pm_chara_source_path(
-    skin_root: &Path,
-    path_context: Option<&SkinPathContext>,
+    context: &SkinPathContext,
     source_path: &str,
     document: &SkinDocument,
     resolved_files: &BTreeMap<String, String>,
 ) -> Option<PathBuf> {
-    let normalized = source_path.replace('\\', "/");
-    let _ = skin_root;
-    let path_context = path_context?;
+    let normalized = normalize_pm_chara_path(source_path);
     if !normalized.contains('*') {
-        return path_context.resolve_path(&normalized)
+        return context.resolve_path_with_ascii_case(&normalized)
             .inspect_err(|error| tracing::debug!(path = %normalized, %error, "PMchara path rejected or unresolved"))
             .ok();
     }
 
-    let filepath =
-        document.filepath.iter().find(|filepath| filepath.path.replace('\\', "/") == normalized);
+    let filepath = document
+        .filepath
+        .iter()
+        .find(|filepath| normalize_pm_chara_path(&filepath.path) == normalized);
     let selected = filepath
         .and_then(|filepath| resolved_files.get(&filepath.name))
         .filter(|selected| !selected.is_empty() && selected.as_str() != RANDOM_FILE_SELECTION)
@@ -79,12 +72,12 @@ fn resolve_pm_chara_source_path(
                 .map(|filepath| filepath.def.as_str())
         });
     if let Some(selected) = selected
-        && let Some(path) = path_context.resolve_selected_for_pattern(&normalized, selected)
+        && let Some(path) = resolve_pm_chara_selection(context, &normalized, selected)
     {
         return Some(path);
     }
 
-    let candidates = path_context.wildcard_candidates(&normalized).ok()?;
+    let candidates = context.wildcard_candidates_with_ascii_case(&normalized).ok()?;
     if let Some(selected) = selected
         && let Some(path) = candidates.iter().find(|path| {
             path.file_name()
@@ -95,4 +88,28 @@ fn resolve_pm_chara_source_path(
         return Some(path.clone());
     }
     candidates.into_iter().next()
+}
+
+fn normalize_pm_chara_path(path: &str) -> String {
+    path.split_once('|').map_or(path, |(asset, _)| asset).replace('\\', "/")
+}
+
+fn resolve_pm_chara_selection(
+    context: &SkinPathContext,
+    pattern: &str,
+    selected: &str,
+) -> Option<PathBuf> {
+    let selected = selected.replace('\\', "/");
+    if !selected.contains('/')
+        && !Path::new(&selected).is_absolute()
+        && let Some((prefix, suffix)) = pattern.split_once('*')
+    {
+        let directory = prefix.rfind('/').map_or("", |slash| &prefix[..=slash]);
+        let nested_suffix = if suffix.starts_with('/') { suffix } else { "" };
+        let relative = format!("{directory}{selected}{nested_suffix}");
+        if let Ok(path) = context.resolve_path_with_ascii_case(&relative) {
+            return Some(path);
+        }
+    }
+    context.resolve_path_with_ascii_case(&selected).ok()
 }

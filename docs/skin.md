@@ -1406,6 +1406,8 @@ Shift_JISで読み込みます。type `0..15`、`Pattern` / `Texture` / `Layer`�
 source / destination矩形、alpha、angleを通常のskin sourceとrender itemへ展開します。
 type 0は通常・判定・曲終了状態からモーションを選び、type 1..15はbeatorajaの固定
 モーション対応を使います。filepathのユーザ選択と既定値は通常画像と同じ優先順位で解決します。
+直接指定、保存済み選択、wildcardの親ディレクトリと後続の階層では、完全一致を優先して
+ASCIIの大小文字差を補正します。探索は許可rootの内側で行い、途中のリンクの行き先も検査します。
 
 現状はPMcharaの`--`座標補間と、画像右下色を透過色にするchroma-key処理には未対応です。
 PNG等が持つalphaは通常どおり反映します。

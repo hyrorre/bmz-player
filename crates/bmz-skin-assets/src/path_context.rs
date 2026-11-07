@@ -165,6 +165,20 @@ impl SkinPathContext {
         self.resolve_existing(requested, ExistingKind::Any)
     }
 
+    /// Resolves a physical path, preferring exact spelling and correcting ASCII
+    /// case only below the configured roots and their explicit aliases.
+    pub fn resolve_path_with_ascii_case(&self, requested: &str) -> Result<PathBuf> {
+        let candidates = self.candidate_paths_with_case(requested, true)?;
+        for fallback in [false, true] {
+            for candidate in &candidates {
+                if let Some(path) = self.policy.resolve_existing_components(candidate, fallback)? {
+                    return Ok(path);
+                }
+            }
+        }
+        bail!("skin path not found: {requested}")
+    }
+
     /// Resolves a path that may not exist yet using the common sandbox rules.
     ///
     /// Existing paths are still canonicalized so symlink escapes are rejected.
@@ -211,12 +225,31 @@ impl SkinPathContext {
 
     /// Enumerates a single-wildcard path below the sandbox roots.
     pub fn wildcard_candidates(&self, requested: &str) -> Result<Vec<PathBuf>> {
+        self.wildcard_candidates_with_case(requested, false)
+    }
+
+    /// Enumerates wildcard matches with ASCII case fallback for the parent
+    /// directory and every component of a nested suffix.
+    pub fn wildcard_candidates_with_ascii_case(&self, requested: &str) -> Result<Vec<PathBuf>> {
+        self.wildcard_candidates_with_case(requested, true)
+    }
+
+    fn wildcard_candidates_with_case(
+        &self,
+        requested: &str,
+        ascii_case_fallback: bool,
+    ) -> Result<Vec<PathBuf>> {
         let requested = strip_beatoraja_asset_filter(requested).replace('\\', "/");
         if requested.contains('\0') {
             bail!("skin wildcard path contains NUL");
         }
         let Some((prefix, suffix)) = requested.split_once('*') else {
-            return self.resolve_path(&requested).map(|path| vec![path]);
+            let resolved = if ascii_case_fallback {
+                self.resolve_path_with_ascii_case(&requested)
+            } else {
+                self.resolve_path(&requested)
+            };
+            return resolved.map(|path| vec![path]);
         };
         if suffix.contains('*') {
             bail!("skin paths support only one wildcard: {requested}");
@@ -228,6 +261,7 @@ impl SkinPathContext {
         let directories = self.existing_candidates(
             if directory_request.is_empty() { "." } else { directory_request },
             ExistingKind::Directory,
+            ascii_case_fallback,
         )?;
         let suffix = suffix.trim_start_matches('/');
         let nested =
@@ -259,10 +293,15 @@ impl SkinPathContext {
                     }
                     entry.path()
                 };
-                if !candidate.exists() {
-                    continue;
-                }
-                let Ok(canonical) = self.validate_existing(&candidate, ExistingKind::Any) else {
+                let canonical = if ascii_case_fallback {
+                    self.policy.resolve_existing_components(&candidate, nested).ok().flatten()
+                } else {
+                    if !candidate.exists() {
+                        continue;
+                    }
+                    self.validate_existing(&candidate, ExistingKind::Any).ok()
+                };
+                let Some(canonical) = canonical else {
                     continue;
                 };
                 if seen.insert(canonical.clone()) {
@@ -351,22 +390,51 @@ impl SkinPathContext {
         bail!("skin path not found: {requested} (tried: {tried})")
     }
 
-    fn existing_candidates(&self, requested: &str, kind: ExistingKind) -> Result<Vec<PathBuf>> {
+    fn existing_candidates(
+        &self,
+        requested: &str,
+        kind: ExistingKind,
+        ascii_case_fallback: bool,
+    ) -> Result<Vec<PathBuf>> {
         let mut resolved = Vec::new();
         let mut seen = BTreeSet::new();
-        for candidate in self.candidate_paths(requested)? {
-            if !kind.matches(&candidate) {
-                continue;
-            }
-            let canonical = self.validate_existing(&candidate, kind)?;
-            if seen.insert(canonical.clone()) {
-                resolved.push(canonical);
+        let candidates = self.candidate_paths_with_case(requested, ascii_case_fallback)?;
+        let passes: &[_] = if ascii_case_fallback { &[false, true] } else { &[false] };
+        for &fallback in passes {
+            for candidate in &candidates {
+                let canonical = if ascii_case_fallback {
+                    let Some(path) =
+                        self.policy.resolve_existing_components(candidate, fallback)?
+                    else {
+                        continue;
+                    };
+                    if !kind.matches(&path) {
+                        continue;
+                    }
+                    path
+                } else {
+                    if !kind.matches(candidate) {
+                        continue;
+                    }
+                    self.validate_existing(candidate, kind)?
+                };
+                if seen.insert(canonical.clone()) {
+                    resolved.push(canonical);
+                }
             }
         }
         Ok(resolved)
     }
 
     fn candidate_paths(&self, requested: &str) -> Result<Vec<PathBuf>> {
+        self.candidate_paths_with_case(requested, false)
+    }
+
+    fn candidate_paths_with_case(
+        &self,
+        requested: &str,
+        ascii_case_fallback: bool,
+    ) -> Result<Vec<PathBuf>> {
         if requested.is_empty() || requested.contains('\0') {
             bail!("skin path contains NUL");
         }
@@ -388,14 +456,24 @@ impl SkinPathContext {
             if let Some((package, package_relative)) = relative.split_once('/') {
                 let entry_only =
                     self.library_roots.len() == 1 && self.library_roots[0] == self.entry_dir;
-                let exact_package_exists =
-                    self.library_roots.iter().any(|root| root.join(package).is_dir());
+                let package_exists = self.library_roots.iter().any(|root| {
+                    let path = root.join(package);
+                    if !ascii_case_fallback {
+                        return path.is_dir();
+                    }
+                    match self.policy.resolve_existing_components(&path, true) {
+                        Ok(Some(path)) => path.is_dir(),
+                        Ok(None) => false,
+                        // An invalid real package must not become a self-alias.
+                        Err(_) => true,
+                    }
+                });
                 // beatoraja skins often hard-code their original package name,
                 // even when the installed directory was renamed. Preserve that
                 // self-alias only when it cannot mask a real sibling package.
                 if entry_only {
                     paths.push(self.entry_dir.join(package_relative));
-                } else if !exact_package_exists
+                } else if !package_exists
                     && let Some(entry_package_root) = self.entry_package_root()
                 {
                     paths.push(entry_package_root.join(package_relative));

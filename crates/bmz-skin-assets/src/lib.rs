@@ -146,16 +146,19 @@ fn case_insensitive_path(path: &Path, allowed: &mut impl FnMut(&Path) -> bool) -
     if !allowed(&canonical_parent) {
         return parent.join(name);
     }
-    fs::read_dir(&canonical_parent)
-        .ok()
-        .into_iter()
-        .flatten()
-        .flatten()
-        .find(|entry| {
-            entry.file_name().to_str().is_some_and(|candidate| candidate.eq_ignore_ascii_case(name))
-        })
-        .map(|entry| entry.path())
+    find_ascii_case_child(&canonical_parent, std::ffi::OsStr::new(name))
         .unwrap_or_else(|| parent.join(name))
+}
+
+fn find_ascii_case_child(directory: &Path, name: &std::ffi::OsStr) -> Option<PathBuf> {
+    fs::read_dir(directory)
+        .ok()?
+        .flatten()
+        .filter(|entry| {
+            entry.file_name().as_encoded_bytes().eq_ignore_ascii_case(name.as_encoded_bytes())
+        })
+        .min_by_key(|entry| entry.file_name())
+        .map(|entry| entry.path())
 }
 
 #[cfg(test)]
