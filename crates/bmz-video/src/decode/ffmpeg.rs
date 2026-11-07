@@ -1,5 +1,21 @@
 use super::*;
 
+const MAX_VIDEO_DIMENSION: u32 = 8192;
+const MAX_VIDEO_PIXELS: u64 = 3840 * 2160 * 2;
+
+pub(crate) fn validate_video_dimensions(width: u32, height: u32) -> Result<()> {
+    anyhow::ensure!(
+        width <= MAX_VIDEO_DIMENSION && height <= MAX_VIDEO_DIMENSION,
+        "video dimensions {width}x{height} exceed maximum dimension ({MAX_VIDEO_DIMENSION})"
+    );
+    // A zero parameter is unknown until the first decoded frame.
+    anyhow::ensure!(
+        u64::from(width) * u64::from(height) <= MAX_VIDEO_PIXELS,
+        "video dimensions {width}x{height} exceed maximum pixels ({MAX_VIDEO_PIXELS})"
+    );
+    Ok(())
+}
+
 pub(crate) fn select_video_stream(
     ictx: &ffmpeg_next::format::context::Input,
 ) -> Result<SelectedVideoStream> {
@@ -24,6 +40,9 @@ pub(crate) fn select_video_stream(
         .into_iter()
         .find_map(|(index, _, params)| (index == selected_index).then_some((index, params)))
         .ok_or_else(|| anyhow::anyhow!("selected video stream not found"))?;
+    // SAFETY: codec_params owns the AVCodecParameters for this shared read.
+    let params = unsafe { &*codec_params.as_ptr() };
+    validate_video_dimensions(u32::try_from(params.width)?, u32::try_from(params.height)?)?;
     let stream = ictx
         .stream(stream_index)
         .ok_or_else(|| anyhow::anyhow!("selected video stream not available"))?;
@@ -104,10 +123,8 @@ pub(crate) fn timestamp_raw_to_us(
 }
 
 pub(crate) fn video_stream_bit_rate(params: &ffmpeg_next::codec::Parameters) -> usize {
-    ffmpeg_next::codec::context::Context::from_parameters(params.clone())
-        .and_then(|context| context.decoder().video())
-        .map(|decoder| decoder.bit_rate())
-        .unwrap_or(0)
+    // Stream selection must not open decoders before validating their dimensions.
+    usize::try_from(params.bit_rate()).unwrap_or(0)
 }
 
 pub(crate) fn choose_beatoraja_video_stream(
@@ -152,8 +169,15 @@ pub(crate) fn rgba_frame_from_video_with_scaler(
 ) -> Result<DecodedFrame> {
     let w = decoded.width();
     let h = decoded.height();
+    validate_video_dimensions(w, h)?;
+    anyhow::ensure!(w > 0 && h > 0, "decoded video frame has zero dimensions");
 
-    if scaler.is_none() {
+    let input = ffmpeg_next::software::scaling::context::Definition {
+        format: decoded.format(),
+        width: w,
+        height: h,
+    };
+    if scaler.as_ref().is_none_or(|scaler| scaler.input() != &input) {
         *scaler = Some(ffmpeg_next::software::scaling::context::Context::get(
             decoded.format(),
             w,

@@ -1,5 +1,60 @@
 use super::*;
 
+#[test]
+fn video_dimension_limits_accept_boundaries_and_defer_unknown_parameters() {
+    for (width, height) in [(0, 0), (0, 8192), (8192, 1), (1, 8192), (8192, 2025)] {
+        validate_video_dimensions(width, height).unwrap();
+    }
+    for (width, height) in [(8193, 1), (1, 8193), (8192, 2026), (u32::MAX, u32::MAX)] {
+        assert!(validate_video_dimensions(width, height).is_err(), "{width}x{height}");
+    }
+}
+
+#[test]
+fn oversized_frame_is_rejected_before_scaler_or_rgba_allocation() {
+    let mut decoded = ffmpeg_next::frame::Video::empty();
+    decoded.set_width(8193);
+    decoded.set_height(1);
+    let mut scaler = None;
+    let error = rgba_frame_from_video_with_scaler(&decoded, 0, &mut scaler, None).unwrap_err();
+    assert!(error.to_string().contains("maximum dimension"));
+    assert!(scaler.is_none());
+}
+
+#[test]
+fn scaler_rebuilds_when_frame_dimensions_or_pixel_format_change() {
+    bmz_ffmpeg::ensure_init().unwrap();
+    let mut scaler = None;
+    for (format, width, height) in [
+        (ffmpeg_next::format::Pixel::YUV420P, 2, 2),
+        (ffmpeg_next::format::Pixel::YUV420P, 4, 4),
+        (ffmpeg_next::format::Pixel::RGB24, 4, 4),
+    ] {
+        let mut decoded = ffmpeg_next::frame::Video::new(format, width, height);
+        for plane in 0..decoded.planes() {
+            decoded.data_mut(plane).fill(128);
+        }
+        let frame = rgba_frame_from_video_with_scaler(&decoded, 0, &mut scaler, None).unwrap();
+        assert_eq!((frame.width, frame.height), (width, height));
+        assert_eq!(frame.rgba.len(), width as usize * height as usize * 4);
+        assert_eq!(scaler.as_ref().unwrap().input().format, format);
+    }
+}
+
+#[test]
+fn oversized_y4m_stream_is_rejected_before_opening_its_decoder() {
+    let stamp =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let path =
+        std::env::temp_dir().join(format!("bmz-video-limit-{}-{stamp}.y4m", std::process::id()));
+    let mut bytes = b"YUV4MPEG2 W8194 H2 F10:1 Ip A1:1 C420jpeg\nFRAME\n".to_vec();
+    bytes.resize(bytes.len() + 8194 * 2 * 3 / 2, 128);
+    std::fs::write(&path, bytes).unwrap();
+    let result = decode_first_frame(&path);
+    std::fs::remove_file(path).unwrap();
+    assert!(result.unwrap_err().to_string().contains("maximum dimension"));
+}
+
 fn frame(pts_us: i64) -> DecodedFrame {
     DecodedFrame { pts_us, rgba: vec![pts_us as u8], width: 1, height: 1 }
 }

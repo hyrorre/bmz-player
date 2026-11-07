@@ -172,6 +172,7 @@ pub(crate) fn drain_clocked_decoder_frames(
             return Ok(ClockedDrainStatus::Stop);
         }
 
+        validate_video_dimensions(decoded.width(), decoded.height())?;
         let pts_us = decode_context
             .timestamp_normalizer
             .frame_pts_us(decoded, selected.time_base_num, selected.time_base_den)

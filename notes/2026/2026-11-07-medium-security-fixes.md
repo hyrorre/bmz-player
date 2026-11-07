@@ -67,3 +67,30 @@
 - 修正後のViewer IPC 3テストは成功。Cargo経由で50回繰り返し、150件すべて成功した（`viewer-ipc-stress.log`）。実行ファイルの直接起動はDLL検索設定が足りなかったため、検証にはCargoを使用した。
 - `cargo fmt --check` と `cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。`cargo test -p bmz-player --locked` は2,918成功、0失敗、58 ignored（起動テスト2件を含む）。
 - `bun run test:ir` と `bun x vue-tsc --noEmit` は成功。Prettierの対象となるWebファイルの変更はない。ログは `viewer-ipc-rust.log`、`viewer-ipc-web.log` に保存した。
+
+## #5 動画の解像度上限
+
+- 幅・高さ各8,192 pixel、画素数16,588,800（3840×2160×2）を名前付き定数で制限する。ストリーム選択直後のパラメータと、channel・clocked両経路の各フレームで検査する。パラメータの0は未確定として扱い、RGBA変換時の0はエラーにする。
+- ストリーム候補のbit rateはパラメータから直接取得する。上限検査より前に候補のdecoderを開く処理をなくした。
+- RGBA scalerは入力の解像度またはpixel formatが変わると再作成する。再作成とRGBA確保の前にも上限を検査する。
+- 超過時は既存のdecodeエラー経路で警告を出し、動画のデコードを中断する。譜面の読み込みとプレイは続く。
+- 上限ちょうどと超過・不明値の純粋関数テスト、未確保フレームの拒否、解像度・pixel format変更によるscaler再作成を確認した。実データのY4M（8194×2、約24 KiB）でも、decoderを開く前の上限エラーを確認した。
+- `cargo test -p bmz-video --locked` は40成功、0失敗。
+- [動画の解像度の仕様](../../docs/chart-images.md#動画の解像度)に反映した。ログはGit管理外の `.local/validation/security-medium/5-focused.log`、`5-rust.log`、`5-web.log` に保存する。
+- NOT VERIFIED — 実プレイでの動画BGA表示。自動テストはWindowsでFFmpegのデコードとフレーム変換を確認した。
+
+### 初回の検証と中断
+
+- `cargo fmt --check`、`cargo check -p bmz-video --locked`、`cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。
+- `cargo test -p bmz-video -p bmz-ffmpeg -p bmz-player --locked` は `bmz-player` のViewer IPCテスト1件で失敗した。2,916成功、1失敗、56 ignored。`viewer_ipc::tests::play_stop_and_quit_requests_round_trip_to_persistent_listener` が `viewer_ipc.rs:367` で、名前付きパイプのACKを受信する前に相手が閉じたためWindows error 233になった。
+- 同じIPCテスト・同じエラーは[優先度高の作業記録](2026-11-07-priority-security-fixes.md)にも記録されている。今回の#3再検証では成功していた。#5を外した状態での今回の再現は未確認。
+- `bmz-video` 単独の40テストは成功。一括実行はplayerの失敗で終了した。`bmz-ffmpeg` は0テストで成功。
+- `bun run test:ir` と `bun x vue-tsc --noEmit` は成功。Prettierの対象となるWebファイルの変更はない。
+- 初回は指定された停止条件に従って#5を未コミットで保持した。その後、Viewer IPCの原因を再現・修正して先にコミットし、#5の検証を再開した。
+
+### 再開後の検証
+
+- `cargo fmt --check`、`cargo check -p bmz-video --locked`、`cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。
+- `cargo test -p bmz-video -p bmz-ffmpeg -p bmz-player --locked` は成功。videoは40成功、playerは2,918成功・58 ignored（起動テスト2件を含む）、ffmpegは0テスト。すべて0失敗で、Viewer IPCの3テストも成功した。
+- `bun run test:ir` と `bun x vue-tsc --noEmit` は成功。Prettierの対象となるWebファイルの変更はない。
+- ログはGit管理外の `.local/validation/security-medium/5-resumed-rust.log` と `5-resumed-web.log` に保存した。

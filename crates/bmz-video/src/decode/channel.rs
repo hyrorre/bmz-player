@@ -150,6 +150,7 @@ pub(crate) fn decode_video_channel_pass(
                 return Ok(ChannelDecodePassEnd::Restart);
             }
 
+            validate_video_dimensions(decoded.width(), decoded.height())?;
             let pts_us = timestamp_normalizer.frame_pts_us(
                 decoded,
                 selected.time_base_num,
@@ -184,6 +185,7 @@ pub(crate) fn decode_video_channel_pass(
             return Ok(ChannelDecodePassEnd::Restart);
         }
 
+        validate_video_dimensions(decoded.width(), decoded.height())?;
         let pts_us = timestamp_normalizer.frame_pts_us(
             decoded,
             selected.time_base_num,
