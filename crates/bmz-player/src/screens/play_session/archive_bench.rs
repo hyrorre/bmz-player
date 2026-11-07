@@ -169,7 +169,7 @@ fn native_load_latency_bench() {
             for cached in if iteration % 2 == 0 { [false, true] } else { [true, false] } {
                 let started = Instant::now();
                 let (engine, report) = if cached {
-                    build_audio_engine_for_chart_with_progress(&chart, 44_100, |_, _| {})
+                    build_audio_engine_for_chart_with_progress(&chart, 44_100, |_, _| {}).unwrap()
                 } else {
                     let mut engine = bmz_audio::engine::AudioEngine::new(44_100);
                     let make = || {
@@ -184,7 +184,8 @@ fn native_load_latency_bench() {
                             make_loader: &make,
                         },
                         |_, _| {},
-                    );
+                    )
+                    .unwrap();
                     (engine, report)
                 };
                 println!(

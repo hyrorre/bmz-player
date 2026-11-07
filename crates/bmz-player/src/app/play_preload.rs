@@ -86,14 +86,14 @@ impl PlayPreloadSource {
                     report_progress,
                 )
             }
-            Self::Cached { chart, normalization_gain } => Ok(
+            Self::Cached { chart, normalization_gain } => {
                 crate::screens::play_session::preload_play_session_reloading_audio_with_progress(
                     *chart,
                     options.sample_rate,
                     normalization_gain,
                     report_progress,
-                ),
-            ),
+                )
+            }
         }
     }
 }

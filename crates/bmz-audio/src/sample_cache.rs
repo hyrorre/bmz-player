@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use crate::loader::{SampleLoadError, SampleLoader};
+use crate::loader::{ChartDecodeBudget, SampleLoadError, SampleLoader, account_sample};
 use crate::sample::DecodedSample;
 
 // Empty/very short samples still own keys and metadata.
@@ -181,15 +181,50 @@ impl<L: SampleLoader> SampleLoader for CachedSampleLoader<L> {
         volwav: f32,
         output_rate: u32,
     ) -> Result<Arc<DecodedSample>, SampleLoadError> {
+        self.load_prepared(path, volwav, output_rate, None)
+    }
+
+    fn load_for_engine_with_budget(
+        &mut self,
+        path: &Path,
+        volwav: f32,
+        output_rate: u32,
+        budget: &ChartDecodeBudget,
+    ) -> Result<Arc<DecodedSample>, SampleLoadError> {
+        self.load_prepared(path, volwav, output_rate, Some(budget))
+    }
+}
+
+impl<L: SampleLoader> CachedSampleLoader<L> {
+    fn load_prepared(
+        &mut self,
+        path: &Path,
+        volwav: f32,
+        output_rate: u32,
+        budget: Option<&ChartDecodeBudget>,
+    ) -> Result<Arc<DecodedSample>, SampleLoadError> {
+        if let Some(budget) = budget {
+            budget
+                .check()
+                .map_err(|message| SampleLoadError::Limit { path: path.into(), message })?;
+        }
         let key = Key { path: path.to_path_buf(), output_rate, gain: volwav.to_bits() };
         let before = SourceStamp::read(path);
         if let Some(stamp) = &before
             && let Ok(mut cache) = self.cache.lock()
             && let Some(sample) = cache.get(&key, stamp)
         {
-            return Ok(sample);
+            return match budget {
+                Some(budget) => account_sample(path, sample, budget),
+                None => Ok(sample),
+            };
         }
-        let sample = self.loader.load_for_engine(path, volwav, output_rate)?;
+        let sample = match budget {
+            Some(budget) => {
+                self.loader.load_for_engine_with_budget(path, volwav, output_rate, budget)?
+            }
+            None => self.loader.load_for_engine(path, volwav, output_rate)?,
+        };
         // Do not retain a decode if the source changed while it was read.
         if let (Some(before), Some(after)) = (before, SourceStamp::read(path))
             && before.matches(&after)
@@ -205,6 +240,23 @@ impl<L: SampleLoader> SampleLoader for CachedSampleLoader<L> {
 mod tests {
     use super::*;
     use crate::loader::WavSampleLoader;
+
+    #[test]
+    fn cached_pcm_still_consumes_the_chart_decode_budget() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = Arc::new(Mutex::new(SampleCache::new(1024)));
+        let mut loader = CachedSampleLoader::new(WavSampleLoader, cache.clone());
+        let paths = [directory.path().join("one.wav"), directory.path().join("two.wav")];
+        for path in &paths {
+            wav(path, &[0; 8]);
+            loader.load_for_engine(path, 1.0, 48_000).unwrap();
+        }
+        let budget = ChartDecodeBudget::new(8 * size_of::<f32>());
+        loader.load_for_engine_with_budget(&paths[0], 1.0, 48_000, &budget).unwrap();
+        assert!(loader.load_for_engine_with_budget(&paths[1], 1.0, 48_000, &budget).is_err());
+        assert!(budget.check().is_err());
+        assert_eq!(cache.lock().unwrap().stats().hits, 2);
+    }
 
     fn wav(path: &Path, samples: &[i16]) {
         let data_len = samples.len() as u32 * 2;

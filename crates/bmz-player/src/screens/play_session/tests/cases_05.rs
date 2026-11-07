@@ -36,7 +36,8 @@ fn retry_audio_reload_preserves_bgm_and_keysound_asset_mapping() {
         48_000,
         0.75,
         |loaded, total| progress.push((loaded, total)),
-    );
+    )
+    .unwrap();
 
     assert!(Arc::ptr_eq(&preloaded.chart, &chart));
     assert_eq!(preloaded.chart_length_ms, 123_456);

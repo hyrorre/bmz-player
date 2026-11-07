@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet, hash_map::Entry};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -7,6 +8,10 @@ use bmz_chart::sound_asset::{first_sound_asset_candidate, sound_asset_candidates
 use bmz_chart::volume::volwav_factor;
 use thiserror::Error;
 
+pub use crate::decode_limits::ChartDecodeBudget;
+use crate::decode_limits::{
+    AudioDecodeLimits, DecodeReservation, MAX_CHART_SAMPLE_BYTES, MAX_SAMPLE_BYTES,
+};
 use crate::engine::AudioEngine;
 use crate::sample::DecodedSample;
 
@@ -21,6 +26,12 @@ pub enum SampleLoadError {
 
     #[error("failed to decode sample file: {path}: {message}")]
     Decode { path: PathBuf, message: String },
+
+    #[error("audio decode limit exceeded: {path}: {message}")]
+    Limit { path: PathBuf, message: String },
+
+    #[error("chart decoded audio exceeds limit {limit_bytes} bytes")]
+    ChartLimit { limit_bytes: usize },
 }
 
 pub trait SampleLoader {
@@ -34,7 +45,20 @@ pub trait SampleLoader {
         volwav: f32,
         output_rate: u32,
     ) -> Result<Arc<DecodedSample>, SampleLoadError> {
-        self.load(path).map(|sample| prepare_sample(sample, path, volwav, output_rate))
+        let sample = self.load(path)?;
+        prepare_sample(sample, path, volwav, output_rate, &mut DecodeReservation::new(None))
+    }
+
+    fn load_for_engine_with_budget(
+        &mut self,
+        path: &Path,
+        volwav: f32,
+        output_rate: u32,
+        budget: &ChartDecodeBudget,
+    ) -> Result<Arc<DecodedSample>, SampleLoadError> {
+        budget.check().map_err(|message| limit_error(path, message))?;
+        let sample = self.load_for_engine(path, volwav, output_rate)?;
+        account_sample(path, sample, budget)
     }
 
     /// 音声全体をデコードせずに取得できる場合の再生時間ヒント (ms)。
@@ -44,17 +68,83 @@ pub trait SampleLoader {
     }
 }
 
+pub(crate) fn account_sample(
+    path: &Path,
+    sample: Arc<DecodedSample>,
+    budget: &ChartDecodeBudget,
+) -> Result<Arc<DecodedSample>, SampleLoadError> {
+    AudioDecodeLimits::default()
+        .check_samples(sample.channels, sample.sample_rate, sample.frames.len())
+        .map_err(|message| limit_error(path, message))?;
+    let mut reservation = DecodeReservation::new(Some(budget));
+    reservation
+        .resize(sample.frames.capacity() * size_of::<f32>())
+        .map_err(|message| limit_error(path, message))?;
+    reservation.commit();
+    Ok(sample)
+}
+
 #[derive(Debug, Default)]
 pub struct WavSampleLoader;
 
 impl SampleLoader for WavSampleLoader {
     fn load(&mut self, path: &Path) -> Result<DecodedSample, SampleLoadError> {
-        let bytes = bmz_song_resource::read_file(path)
-            .map_err(|source| SampleLoadError::Io { path: path.to_path_buf(), source })?;
-        let mut sample = decode_wav(path, &bytes)?;
+        self.load_with_limits(path, AudioDecodeLimits::default(), &mut DecodeReservation::new(None))
+    }
+
+    fn load_for_engine_with_budget(
+        &mut self,
+        path: &Path,
+        volwav: f32,
+        output_rate: u32,
+        budget: &ChartDecodeBudget,
+    ) -> Result<Arc<DecodedSample>, SampleLoadError> {
+        let mut reservation = DecodeReservation::new(Some(budget));
+        let sample = self.load_with_limits(path, AudioDecodeLimits::default(), &mut reservation)?;
+        let sample = prepare_sample(sample, path, volwav, output_rate, &mut reservation)?;
+        reservation.commit();
+        Ok(sample)
+    }
+}
+
+impl WavSampleLoader {
+    pub(crate) fn load_with_limits(
+        &mut self,
+        path: &Path,
+        limits: AudioDecodeLimits,
+        reservation: &mut DecodeReservation<'_>,
+    ) -> Result<DecodedSample, SampleLoadError> {
+        reservation.check().map_err(|message| limit_error(path, message))?;
+        // Native PCM needs at most one encoded byte per decoded f32 byte.
+        // Leave room for container metadata while bounding the initial read.
+        const MAX_NATIVE_WAV_INPUT_BYTES: usize = MAX_SAMPLE_BYTES + 16 * 1024 * 1024;
+        let bytes = read_native_wav_input(path, MAX_NATIVE_WAV_INPUT_BYTES)?;
+        let mut sample = decode_wav(path, &bytes, limits, reservation)?;
         sample.sanitize_pcm(path);
         Ok(sample)
     }
+}
+
+fn read_native_wav_input(path: &Path, limit: usize) -> Result<Arc<[u8]>, SampleLoadError> {
+    let io_error = |source| SampleLoadError::Io { path: path.into(), source };
+    let too_large = || decode_error(path, format!("native WAV input exceeds limit {limit} bytes"));
+    if bmz_song_resource::file_len(path).is_some_and(|size| size > limit as u64) {
+        return Err(too_large());
+    }
+    if let Some(bytes) = bmz_song_resource::read(path) {
+        let bytes = bytes.map_err(io_error)?;
+        return if bytes.len() <= limit { Ok(bytes) } else { Err(too_large()) };
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .map_err(io_error)?
+        .take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io_error)?;
+    if bytes.len() > limit {
+        return Err(too_large());
+    }
+    Ok(Arc::from(bytes))
 }
 
 #[derive(Debug, Clone)]
@@ -75,11 +165,23 @@ enum CachedDecode {
     Failed(String),
 }
 
+struct ChartLoadState {
+    candidates: HashMap<PathBuf, Vec<PathBuf>>,
+    decoded: HashMap<PathBuf, CachedDecode>,
+    budget: Arc<ChartDecodeBudget>,
+}
+
+impl ChartLoadState {
+    fn new(budget: Arc<ChartDecodeBudget>) -> Self {
+        Self { candidates: HashMap::new(), decoded: HashMap::new(), budget }
+    }
+}
+
 pub fn load_chart_samples(
     engine: &mut AudioEngine,
     chart: &PlayableChart,
     loader: &mut dyn SampleLoader,
-) -> Vec<LoadedSampleReport> {
+) -> Result<Vec<LoadedSampleReport>, SampleLoadError> {
     load_chart_samples_with_progress(engine, chart, loader, |_, _| {})
 }
 
@@ -88,14 +190,13 @@ pub fn load_chart_samples_with_progress(
     chart: &PlayableChart,
     loader: &mut dyn SampleLoader,
     mut on_progress: impl FnMut(usize, usize),
-) -> Vec<LoadedSampleReport> {
+) -> Result<Vec<LoadedSampleReport>, SampleLoadError> {
     on_progress(0, chart.sounds.len());
     load_chart_samples_in_order(
         engine,
         chart,
         loader,
-        HashMap::new(),
-        HashMap::new(),
+        ChartLoadState::new(Arc::new(ChartDecodeBudget::new(MAX_CHART_SAMPLE_BYTES))),
         0,
         on_progress,
     )
@@ -116,8 +217,24 @@ pub fn load_chart_samples_parallel_with_progress(
     engine: &mut AudioEngine,
     chart: &PlayableChart,
     decode: ParallelSampleDecode<'_>,
+    on_progress: impl FnMut(usize, usize),
+) -> Result<Vec<LoadedSampleReport>, SampleLoadError> {
+    load_chart_samples_parallel_with_budget(
+        engine,
+        chart,
+        decode,
+        on_progress,
+        Arc::new(ChartDecodeBudget::new(MAX_CHART_SAMPLE_BYTES)),
+    )
+}
+
+fn load_chart_samples_parallel_with_budget(
+    engine: &mut AudioEngine,
+    chart: &PlayableChart,
+    decode: ParallelSampleDecode<'_>,
     mut on_progress: impl FnMut(usize, usize),
-) -> Vec<LoadedSampleReport> {
+    budget: Arc<ChartDecodeBudget>,
+) -> Result<Vec<LoadedSampleReport>, SampleLoadError> {
     let total = chart.sounds.len();
     on_progress(0, total);
     let volwav = volwav_factor(chart.metadata.volwav_percent);
@@ -125,8 +242,7 @@ pub fn load_chart_samples_parallel_with_progress(
     let mut seen = HashSet::new();
     let paths: Vec<&PathBuf> =
         chart.sounds.iter().map(|asset| &asset.path).filter(|path| seen.insert(*path)).collect();
-    let mut candidates_by_declared_path = HashMap::<PathBuf, Vec<PathBuf>>::new();
-    let mut decoded_by_path = HashMap::<PathBuf, CachedDecode>::new();
+    let mut state = ChartLoadState::new(budget);
     let mut progress = 0;
     let threads = decode.threads.min(paths.len());
     if threads > 1 {
@@ -142,10 +258,13 @@ pub fn load_chart_samples_parallel_with_progress(
         std::thread::scope(|scope| {
             for _ in 0..threads {
                 let sender = sender.clone();
-                let (next, paths, shared) = (&next, &paths, &shared);
+                let (next, paths, shared, budget) = (&next, &paths, &shared, &state.budget);
                 scope.spawn(move || {
                     let mut loader = (decode.make_loader)();
                     loop {
+                        if budget.check().is_err() {
+                            break;
+                        }
                         let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let Some(path) = paths.get(index) else {
                             break;
@@ -156,7 +275,13 @@ pub fn load_chart_samples_parallel_with_progress(
                                 shared.lock().unwrap().entry(first.clone()).or_default().clone();
                             let decoded = cell
                                 .get_or_init(|| {
-                                    decode_for_engine(&mut *loader, &first, volwav, output_rate)
+                                    decode_for_engine(
+                                        &mut *loader,
+                                        &first,
+                                        volwav,
+                                        output_rate,
+                                        budget,
+                                    )
                                 })
                                 .clone();
                             (first, decoded)
@@ -175,9 +300,9 @@ pub fn load_chart_samples_parallel_with_progress(
             drop(sender);
             // Report decode progress in sound units; the ordered pass continues from here.
             for (done, (path, candidates, decoded)) in receiver.iter().enumerate() {
-                candidates_by_declared_path.insert(path, candidates);
+                state.candidates.insert(path, candidates);
                 if let Some((path, decoded)) = decoded {
-                    decoded_by_path.insert(path, decoded);
+                    state.decoded.insert(path, decoded);
                 }
                 let reached = (done + 1) * total / paths.len();
                 if reached > progress && reached < total {
@@ -188,47 +313,36 @@ pub fn load_chart_samples_parallel_with_progress(
         });
     }
     let mut fallback = (decode.make_loader)();
-    load_chart_samples_in_order(
-        engine,
-        chart,
-        &mut *fallback,
-        candidates_by_declared_path,
-        decoded_by_path,
-        progress,
-        on_progress,
-    )
+    load_chart_samples_in_order(engine, chart, &mut *fallback, state, progress, on_progress)
 }
 
 fn load_chart_samples_in_order(
     engine: &mut AudioEngine,
     chart: &PlayableChart,
     loader: &mut dyn SampleLoader,
-    mut candidates_by_declared_path: HashMap<PathBuf, Vec<PathBuf>>,
-    mut decoded_by_path: HashMap<PathBuf, CachedDecode>,
+    mut state: ChartLoadState,
     reported: usize,
     mut on_progress: impl FnMut(usize, usize),
-) -> Vec<LoadedSampleReport> {
+) -> Result<Vec<LoadedSampleReport>, SampleLoadError> {
     let volwav = volwav_factor(chart.metadata.volwav_percent);
     let total = chart.sounds.len();
-    chart
-        .sounds
-        .iter()
-        .enumerate()
-        .map(|(index, asset)| {
-            let report = load_asset(
-                engine,
-                asset,
-                loader,
-                volwav,
-                &mut candidates_by_declared_path,
-                &mut decoded_by_path,
-            );
-            if index + 1 > reported {
-                on_progress(index + 1, total);
-            }
-            report
-        })
-        .collect()
+    let previous_samples = engine.samples.clone();
+    let mut reports = Vec::with_capacity(total);
+    for (index, asset) in chart.sounds.iter().enumerate() {
+        if state.budget.check().is_err() {
+            break;
+        }
+        let report = load_asset(engine, asset, loader, volwav, &mut state);
+        if index + 1 > reported {
+            on_progress(index + 1, total);
+        }
+        reports.push(report);
+    }
+    if state.budget.check().is_err() {
+        engine.samples = previous_samples;
+        return Err(SampleLoadError::ChartLimit { limit_bytes: state.budget.limit() });
+    }
+    Ok(reports)
 }
 
 /// Decodes one file into the engine's form: sanitized PCM with VOLWAV applied once and
@@ -238,8 +352,9 @@ fn decode_for_engine(
     path: &Path,
     volwav: f32,
     output_rate: u32,
+    budget: &ChartDecodeBudget,
 ) -> CachedDecode {
-    match loader.load_for_engine(path, volwav, output_rate) {
+    match loader.load_for_engine_with_budget(path, volwav, output_rate, budget) {
         Ok(sample) => CachedDecode::Loaded(sample),
         Err(error) => CachedDecode::Failed(error.to_string()),
     }
@@ -250,14 +365,37 @@ pub(crate) fn prepare_sample(
     path: &Path,
     volwav: f32,
     output_rate: u32,
-) -> Arc<DecodedSample> {
+    reservation: &mut DecodeReservation<'_>,
+) -> Result<Arc<DecodedSample>, SampleLoadError> {
+    let limits = AudioDecodeLimits::default();
+    limits
+        .check_samples(sample.channels, sample.sample_rate, sample.frames.len())
+        .map_err(|message| limit_error(path, message))?;
     sample.sanitize_pcm(path);
     sample.apply_gain(volwav);
-    Arc::new(if sample.sample_rate == output_rate {
-        sample
-    } else {
-        sample.resampled_to(output_rate)
-    })
+    limits
+        .check_format(sample.channels, output_rate)
+        .map_err(|message| limit_error(path, message))?;
+    if sample.frames.is_empty() {
+        sample.sample_rate = output_rate;
+    } else if sample.sample_rate != output_rate {
+        let output_frames = (sample.frame_count() as u64).saturating_mul(u64::from(output_rate))
+            / u64::from(sample.sample_rate);
+        let samples = output_frames.max(1).saturating_mul(u64::from(sample.channels));
+        let samples =
+            usize::try_from(samples).map_err(|error| limit_error(path, error.to_string()))?;
+        limits
+            .check_samples(sample.channels, output_rate, samples)
+            .map_err(|message| limit_error(path, message))?;
+        reservation
+            .resize(sample.frames.capacity().saturating_add(samples) * size_of::<f32>())
+            .map_err(|message| limit_error(path, message))?;
+        sample = sample.resampled_to(output_rate);
+    }
+    reservation
+        .resize(sample.frames.capacity() * size_of::<f32>())
+        .map_err(|message| limit_error(path, message))?;
+    Ok(Arc::new(sample))
 }
 
 fn load_asset(
@@ -265,12 +403,12 @@ fn load_asset(
     asset: &SoundAssetRef,
     loader: &mut dyn SampleLoader,
     volwav: f32,
-    candidates_by_declared_path: &mut HashMap<PathBuf, Vec<PathBuf>>,
-    decoded_by_path: &mut HashMap<PathBuf, CachedDecode>,
+    state: &mut ChartLoadState,
 ) -> LoadedSampleReport {
     // 同じ宣言pathの各 SoundId は同じ候補列を使う。特に `stronger` の多数
     // region では、毎回 filesystem 上の候補を stat しない。
-    let candidates = candidates_by_declared_path
+    let candidates = state
+        .candidates
         .entry(asset.path.clone())
         .or_insert_with(|| sound_asset_candidates(&asset.path));
     if candidates.is_empty() {
@@ -287,8 +425,11 @@ fn load_asset(
     let mut last_error = None;
     let mut last_path = asset.path.clone();
     for path in candidates.iter() {
+        if state.budget.check().is_err() {
+            break;
+        }
         last_path = path.clone();
-        let source = match decoded_by_path.entry(path.clone()) {
+        let source = match state.decoded.entry(path.clone()) {
             Entry::Occupied(entry) => match entry.into_mut() {
                 CachedDecode::Loaded(sample) => sample.clone(),
                 CachedDecode::Failed(error) => {
@@ -303,6 +444,7 @@ fn load_asset(
                     path,
                     volwav,
                     engine.output_sample_rate(),
+                    &state.budget,
                 )) {
                     CachedDecode::Loaded(sample) => sample.clone(),
                     CachedDecode::Failed(error) => {
@@ -343,7 +485,12 @@ fn slice_frame_range(sample: &DecodedSample, slice: SoundSlice) -> (usize, usize
     (start_frame, end_frame)
 }
 
-fn decode_wav(path: &Path, bytes: &[u8]) -> Result<DecodedSample, SampleLoadError> {
+fn decode_wav(
+    path: &Path,
+    bytes: &[u8],
+    limits: AudioDecodeLimits,
+    reservation: &mut DecodeReservation<'_>,
+) -> Result<DecodedSample, SampleLoadError> {
     if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
         return Err(decode_error(path, "not a RIFF/WAVE file"));
     }
@@ -371,7 +518,26 @@ fn decode_wav(path: &Path, bytes: &[u8]) -> Result<DecodedSample, SampleLoadErro
 
     let format = format.ok_or_else(|| decode_error(path, "missing fmt chunk"))?;
     let data = data.ok_or_else(|| decode_error(path, "missing data chunk"))?;
-    let frames = decode_wav_frames(path, format, data)?;
+    let bytes_per_sample = match (format.audio_format, format.bits_per_sample) {
+        (1, 8) => 1,
+        (1, 16) => 2,
+        (3, 32) => 4,
+        _ => {
+            return Err(decode_error(
+                path,
+                format!(
+                    "unsupported WAV format {} with {} bits per sample",
+                    format.audio_format, format.bits_per_sample
+                ),
+            ));
+        }
+    };
+    let samples = data.len() / bytes_per_sample;
+    limits
+        .check_samples(format.channels, format.sample_rate, samples)
+        .map_err(|message| limit_error(path, message))?;
+    reservation.resize(samples * size_of::<f32>()).map_err(|message| limit_error(path, message))?;
+    let frames = decode_wav_frames(path, format, data, reservation)?;
     Ok(DecodedSample { channels: format.channels, sample_rate: format.sample_rate, frames })
 }
 
@@ -406,30 +572,39 @@ fn decode_wav_frames(
     path: &Path,
     format: WavFormat,
     data: &[u8],
+    reservation: &DecodeReservation<'_>,
 ) -> Result<Vec<f32>, SampleLoadError> {
     match (format.audio_format, format.bits_per_sample) {
-        (1, 8) => Ok(data.iter().map(|sample| (*sample as f32 - 128.0) / 128.0).collect()),
+        (1, 8) => collect_wav_samples(
+            path,
+            data.iter().map(|sample| (*sample as f32 - 128.0) / 128.0),
+            reservation,
+        ),
         (1, 16) => {
             if !data.len().is_multiple_of(2) {
                 return Err(decode_error(path, "16-bit PCM data length is odd"));
             }
-            Ok(data
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|sample| i16::from_le_bytes([sample[0], sample[1]]) as f32 / 32768.0)
-                .collect())
+            collect_wav_samples(
+                path,
+                data.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|sample| i16::from_le_bytes([sample[0], sample[1]]) as f32 / 32768.0),
+                reservation,
+            )
         }
         (3, 32) => {
             if !data.len().is_multiple_of(4) {
                 return Err(decode_error(path, "32-bit float data length is not divisible by 4"));
             }
-            Ok(data
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|sample| f32::from_le_bytes([sample[0], sample[1], sample[2], sample[3]]))
-                .collect())
+            collect_wav_samples(
+                path,
+                data.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|sample| f32::from_le_bytes([sample[0], sample[1], sample[2], sample[3]])),
+                reservation,
+            )
         }
         _ => Err(decode_error(
             path,
@@ -441,8 +616,27 @@ fn decode_wav_frames(
     }
 }
 
+fn collect_wav_samples(
+    path: &Path,
+    mut samples: impl ExactSizeIterator<Item = f32>,
+    reservation: &DecodeReservation<'_>,
+) -> Result<Vec<f32>, SampleLoadError> {
+    const WAV_SAMPLE_BATCH: usize = 4096;
+    let count = samples.len();
+    let mut frames = Vec::with_capacity(count);
+    while frames.len() < count {
+        reservation.check().map_err(|message| limit_error(path, message))?;
+        frames.extend(samples.by_ref().take(WAV_SAMPLE_BATCH));
+    }
+    Ok(frames)
+}
+
 fn decode_error(path: &Path, message: impl Into<String>) -> SampleLoadError {
     SampleLoadError::Decode { path: path.to_path_buf(), message: message.into() }
+}
+
+fn limit_error(path: &Path, message: impl Into<String>) -> SampleLoadError {
+    SampleLoadError::Limit { path: path.to_path_buf(), message: message.into() }
 }
 
 fn le_u16(bytes: &[u8]) -> u16 {
@@ -463,6 +657,19 @@ mod tests {
     use bmz_core::time::TimeUs;
 
     use super::*;
+
+    #[test]
+    fn native_wav_input_read_is_bounded_and_accepts_the_exact_limit() {
+        let path = write_temp_wav(&[wav_header(1, 1, 48_000, 16, 2).as_slice(), &[0; 2]]);
+        let size = std::fs::metadata(&path).unwrap().len() as usize;
+        assert_eq!(read_native_wav_input(&path, size).unwrap().len(), size);
+        assert!(
+            read_native_wav_input(&path, size - 1)
+                .unwrap_err()
+                .to_string()
+                .contains("input exceeds limit")
+        );
+    }
 
     #[derive(Default)]
     struct TestLoader {
@@ -488,6 +695,135 @@ mod tests {
     }
 
     #[test]
+    fn parallel_budget_stops_remaining_real_wav_decodes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct CountingWav(Arc<AtomicUsize>);
+        impl SampleLoader for CountingWav {
+            fn load(&mut self, path: &Path) -> Result<DecodedSample, SampleLoadError> {
+                WavSampleLoader.load(path)
+            }
+            fn load_for_engine_with_budget(
+                &mut self,
+                path: &Path,
+                gain: f32,
+                rate: u32,
+                budget: &ChartDecodeBudget,
+            ) -> Result<Arc<DecodedSample>, SampleLoadError> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                WavSampleLoader.load_for_engine_with_budget(path, gain, rate, budget)
+            }
+        }
+        let directory = temp_dir("parallel-budget");
+        let sounds = (0..32)
+            .map(|id| {
+                let path = directory.path().join(format!("{id}.wav"));
+                let mut bytes = wav_header(1, 1, 48_000, 16, 96_000);
+                bytes.resize(bytes.len() + 96_000, 0);
+                std::fs::write(&path, bytes).unwrap();
+                SoundAssetRef { id: SoundId(id), path, slice: None }
+            })
+            .collect();
+        let chart = chart_with_sounds(sounds);
+        let attempted = Arc::new(AtomicUsize::new(0));
+        let make = || Box::new(CountingWav(attempted.clone())) as Box<dyn SampleLoader + Send>;
+        let mut engine = AudioEngine::new(48_000);
+        let error = load_chart_samples_parallel_with_budget(
+            &mut engine,
+            &chart,
+            ParallelSampleDecode { threads: 4, make_loader: &make },
+            |_, _| {},
+            Arc::new(ChartDecodeBudget::new(48_000 * size_of::<f32>())),
+        )
+        .unwrap_err();
+        assert!(matches!(error, SampleLoadError::ChartLimit { .. }));
+        assert!(attempted.load(Ordering::Relaxed) <= 4);
+        assert_eq!(engine.samples.region_count(), 0);
+    }
+
+    #[test]
+    fn fallback_budget_failure_restores_the_existing_sample_bank() {
+        let directory = temp_dir("fallback-budget");
+        let paths = [directory.path().join("one.wav"), directory.path().join("two.wav")];
+        let mut loader = TestLoader::default();
+        for path in &paths {
+            std::fs::write(path, b"stub").unwrap();
+            loader.samples.insert(
+                path.clone(),
+                DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5; 2] },
+            );
+        }
+        let chart = chart_with_sounds(
+            paths
+                .into_iter()
+                .enumerate()
+                .map(|(id, path)| SoundAssetRef { id: SoundId(id as u32), path, slice: None })
+                .collect(),
+        );
+        let mut engine = AudioEngine::new(48_000);
+        engine.samples.insert(
+            SoundId(99),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.25] },
+        );
+        let error = load_chart_samples_in_order(
+            &mut engine,
+            &chart,
+            &mut loader,
+            ChartLoadState::new(Arc::new(ChartDecodeBudget::new(12))),
+            0,
+            |_, _| {},
+        )
+        .unwrap_err();
+        assert!(matches!(error, SampleLoadError::ChartLimit { .. }));
+        assert_eq!(engine.samples.region_count(), 1);
+        assert_eq!(engine.samples.get(SoundId(99)).unwrap().sample_stereo(0), (0.25, 0.25));
+        assert!(engine.samples.get(SoundId(0)).is_none());
+    }
+
+    #[test]
+    fn resampling_rejects_oversized_output_before_allocation_and_keeps_empty_samples() {
+        let directory = temp_dir("resample-budget");
+        let path = directory.path().join("low-rate.wav");
+        let mut loader = TestLoader::default();
+        loader.samples.insert(
+            path.clone(),
+            DecodedSample { channels: 1, sample_rate: 1, frames: vec![0.0; 1200] },
+        );
+        assert!(matches!(
+            loader.load_for_engine(&path, 1.0, 384_000),
+            Err(SampleLoadError::Limit { .. })
+        ));
+        loader.samples.insert(
+            path.clone(),
+            DecodedSample { channels: 1, sample_rate: 24_000, frames: Vec::new() },
+        );
+        let budget = ChartDecodeBudget::new(0);
+        let sample = loader.load_for_engine_with_budget(&path, 1.0, 48_000, &budget).unwrap();
+        assert!(sample.frames.is_empty());
+        assert_eq!(sample.sample_rate, 48_000);
+    }
+
+    #[test]
+    fn a_file_over_the_channel_limit_does_not_abort_other_keysounds() {
+        let bad = write_temp_wav(&[wav_header(1, 9, 48_000, 16, 18).as_slice(), &[0; 18]]);
+        let good = write_temp_wav(&[wav_header(1, 1, 48_000, 16, 2).as_slice(), &[0; 2]]);
+        let chart = chart_with_sounds(vec![
+            SoundAssetRef { id: SoundId(1), path: bad.to_path_buf(), slice: None },
+            SoundAssetRef { id: SoundId(2), path: good.to_path_buf(), slice: None },
+        ]);
+        let mut engine = AudioEngine::new(48_000);
+        let reports = load_chart_samples(
+            &mut engine,
+            &chart,
+            &mut crate::ffmpeg_loader::FfmpegSampleLoader::default(),
+        )
+        .unwrap();
+        assert!(matches!(reports[0].status, LoadedSampleStatus::Failed(_)));
+        assert!(matches!(reports[1].status, LoadedSampleStatus::Loaded));
+        assert!(engine.samples.get(SoundId(1)).is_none());
+        assert!(engine.samples.get(SoundId(2)).is_some());
+    }
+
+    #[test]
     fn load_chart_samples_inserts_loaded_samples_and_reports_failures() {
         let mut engine = AudioEngine::default();
         let temp = temp_dir("load-samples");
@@ -504,7 +840,7 @@ mod tests {
             .samples
             .insert(ok_path, DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0] });
 
-        let report = load_chart_samples(&mut engine, &chart, &mut loader);
+        let report = load_chart_samples(&mut engine, &chart, &mut loader).unwrap();
 
         assert_eq!(report.len(), 2);
         assert!(matches!(report[0].status, LoadedSampleStatus::Loaded));
@@ -562,7 +898,7 @@ mod tests {
         };
 
         let mut sequential = AudioEngine::new(48_000);
-        let sequential_reports = load_chart_samples(&mut sequential, &chart, &mut *make());
+        let sequential_reports = load_chart_samples(&mut sequential, &chart, &mut *make()).unwrap();
         let mut parallel = AudioEngine::new(48_000);
         let mut progress = Vec::new();
         let parallel_reports = load_chart_samples_parallel_with_progress(
@@ -570,7 +906,8 @@ mod tests {
             &chart,
             ParallelSampleDecode { threads: 4, make_loader: &make },
             |loaded, total| progress.push((loaded, total)),
-        );
+        )
+        .unwrap();
 
         let summary = |reports: &[LoadedSampleReport]| {
             reports
@@ -619,7 +956,8 @@ mod tests {
                 &chart,
                 ParallelSampleDecode { threads: 4, make_loader: &make_cached },
                 |_, _| {},
-            );
+            )
+            .unwrap();
             assert_eq!(summary(&reports), summary(&sequential_reports));
             for sound in &chart.sounds {
                 let expected = sequential.samples.get(sound.id);
@@ -671,7 +1009,8 @@ mod tests {
                 &chart,
                 ParallelSampleDecode { threads, make_loader: &make },
                 |_, _| {},
-            );
+            )
+            .unwrap();
             assert!(
                 report.iter().all(|report| matches!(report.status, LoadedSampleStatus::Loaded))
             );
@@ -699,7 +1038,8 @@ mod tests {
 
         load_chart_samples_with_progress(&mut engine, &chart, &mut loader, |loaded, total| {
             progress.push((loaded, total));
-        });
+        })
+        .unwrap();
 
         assert_eq!(progress, vec![(0, 2), (1, 2), (2, 2)]);
     }
@@ -723,7 +1063,7 @@ mod tests {
             DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, -1.0] },
         );
 
-        load_chart_samples(&mut engine, &chart, &mut loader);
+        load_chart_samples(&mut engine, &chart, &mut loader).unwrap();
 
         let sample = engine.samples.get(SoundId(1)).unwrap();
         assert_eq!(sample.sample_stereo(0), (0.5, 0.5));
@@ -759,7 +1099,7 @@ mod tests {
             },
         );
 
-        load_chart_samples(&mut engine, &chart, &mut loader);
+        load_chart_samples(&mut engine, &chart, &mut loader).unwrap();
 
         assert_eq!(loader.attempts, vec![path]);
         let first = engine.samples.get(SoundId(1)).unwrap();
@@ -795,7 +1135,7 @@ mod tests {
             DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5] },
         );
 
-        let report = load_chart_samples(&mut engine, &chart, &mut loader);
+        let report = load_chart_samples(&mut engine, &chart, &mut loader).unwrap();
 
         // 2件目は1件目で解決した候補列と decode 結果を使う。これは多数regionで
         // 同じpathを宣言する譜面でも stat/decodeを繰り返さないことを守る。
@@ -840,7 +1180,7 @@ mod tests {
             },
         );
 
-        let reports = load_chart_samples(&mut engine, &chart, &mut loader);
+        let reports = load_chart_samples(&mut engine, &chart, &mut loader).unwrap();
 
         assert_eq!(reports.len(), 2_000);
         assert_eq!(loader.attempts, vec![path]);
@@ -955,7 +1295,7 @@ mod tests {
             DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5] },
         );
 
-        let report = load_chart_samples(&mut engine, &chart, &mut loader);
+        let report = load_chart_samples(&mut engine, &chart, &mut loader).unwrap();
 
         assert_eq!(loader.attempts, vec![requested, fallback.clone()]);
         assert_eq!(report[0].path, fallback);

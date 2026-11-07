@@ -3,8 +3,14 @@ use std::path::Path;
 use ffmpeg_next::format::Sample as FfmpegSample;
 use ffmpeg_next::{codec, format, frame, media};
 
-use crate::loader::{SampleLoadError, SampleLoader, WavSampleLoader};
+use crate::decode_limits::{
+    AudioDecodeLimits, DecodeReservation, MAX_AUDIO_CHANNELS, MAX_AUDIO_SAMPLE_RATE,
+};
+use crate::loader::{
+    ChartDecodeBudget, SampleLoadError, SampleLoader, WavSampleLoader, prepare_sample,
+};
 use crate::sample::DecodedSample;
+use std::sync::Arc;
 
 /// wav/ogg/flac/mp3 等の音声ファイルをデコードするローダー。
 /// `bmz-video` の動画デコードと同じく ffmpeg-next を利用する。
@@ -28,19 +34,44 @@ impl FfmpegSampleLoader {
             packet_yield_interval: (packet_yield_interval != 0).then_some(packet_yield_interval),
         }
     }
+
+    fn load_with_limits(
+        &mut self,
+        path: &Path,
+        limits: AudioDecodeLimits,
+        reservation: &mut DecodeReservation<'_>,
+    ) -> Result<DecodedSample, SampleLoadError> {
+        reservation.check().map_err(|message| decode_error(path, message))?;
+        if let Some(sample) = try_load_native_wav(path, limits, reservation)? {
+            return Ok(sample);
+        }
+        reservation.resize(0).map_err(|message| decode_error(path, message))?;
+        if let Err(message) = bmz_ffmpeg::ensure_init() {
+            return Err(decode_error(path, message));
+        }
+        let mut sample = decode_audio(path, self.packet_yield_interval, limits, reservation)
+            .map_err(|message| decode_error(path, message))?;
+        sample.sanitize_pcm(path);
+        Ok(sample)
+    }
 }
 
 impl SampleLoader for FfmpegSampleLoader {
     fn load(&mut self, path: &Path) -> Result<DecodedSample, SampleLoadError> {
-        if let Some(sample) = try_load_native_wav(path)? {
-            return Ok(sample);
-        }
-        if let Err(message) = bmz_ffmpeg::ensure_init() {
-            return Err(decode_error(path, message));
-        }
-        let mut sample = decode_audio(path, self.packet_yield_interval)
-            .map_err(|message| decode_error(path, message))?;
-        sample.sanitize_pcm(path);
+        self.load_with_limits(path, AudioDecodeLimits::default(), &mut DecodeReservation::new(None))
+    }
+
+    fn load_for_engine_with_budget(
+        &mut self,
+        path: &Path,
+        volwav: f32,
+        output_rate: u32,
+        budget: &ChartDecodeBudget,
+    ) -> Result<Arc<DecodedSample>, SampleLoadError> {
+        let mut reservation = DecodeReservation::new(Some(budget));
+        let sample = self.load_with_limits(path, AudioDecodeLimits::default(), &mut reservation)?;
+        let sample = prepare_sample(sample, path, volwav, output_rate, &mut reservation)?;
+        reservation.commit();
         Ok(sample)
     }
 
@@ -50,7 +81,11 @@ impl SampleLoader for FfmpegSampleLoader {
     }
 }
 
-fn try_load_native_wav(path: &Path) -> Result<Option<DecodedSample>, SampleLoadError> {
+fn try_load_native_wav(
+    path: &Path,
+    limits: AudioDecodeLimits,
+    reservation: &mut DecodeReservation<'_>,
+) -> Result<Option<DecodedSample>, SampleLoadError> {
     let is_wav = path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -58,8 +93,13 @@ fn try_load_native_wav(path: &Path) -> Result<Option<DecodedSample>, SampleLoadE
     if !is_wav {
         return Ok(None);
     }
+    // Large WAVs retain incremental decoding and cancellation through FFmpeg.
+    const NATIVE_WAV_FAST_PATH_BYTES: u64 = 16 * 1024 * 1024;
+    if bmz_song_resource::file_len(path).is_some_and(|size| size > NATIVE_WAV_FAST_PATH_BYTES) {
+        return Ok(None);
+    }
 
-    match WavSampleLoader.load(path) {
+    match WavSampleLoader.load_with_limits(path, limits, reservation) {
         Ok(sample)
             if sample.channels != 0
                 && sample.frames.len().is_multiple_of(sample.channels as usize) =>
@@ -76,7 +116,7 @@ fn try_load_native_wav(path: &Path) -> Result<Option<DecodedSample>, SampleLoadE
             tracing::debug!(path = %path.display(), %message, "native WAV decode unavailable; falling back to ffmpeg");
             Ok(None)
         }
-        Err(error @ SampleLoadError::Io { .. }) => Err(error),
+        Err(error) => Err(error),
     }
 }
 
@@ -119,7 +159,10 @@ fn probe_audio_duration_ms(path: &Path) -> Result<i64, String> {
 fn decode_audio(
     path: &Path,
     packet_yield_interval: Option<usize>,
+    limits: AudioDecodeLimits,
+    reservation: &mut DecodeReservation<'_>,
 ) -> Result<DecodedSample, String> {
+    reservation.check()?;
     let mut ictx = open_input(path)?;
 
     let stream = ictx
@@ -128,33 +171,56 @@ fn decode_audio(
         .ok_or_else(|| "no audio stream found".to_string())?;
     let stream_index = stream.index();
     let codec_id = stream.parameters().id();
+    let duration = stream.duration();
+    let time_base = stream.time_base();
 
     let context = codec::context::Context::from_parameters(stream.parameters())
         .map_err(|e| format!("failed to build codec context: {e}"))?;
     let mut decoder =
         context.decoder().audio().map_err(|e| format!("failed to open audio decoder: {e}"))?;
     let decoder_channels = decoder.channels();
+    if decoder_channels > MAX_AUDIO_CHANNELS || decoder.rate() > MAX_AUDIO_SAMPLE_RATE {
+        return Err("audio stream exceeds channel count or sample rate limit".into());
+    }
 
     let mut frames: Vec<f32> = Vec::new();
+    if duration > 0 && time_base.denominator() > 0 && decoder_channels > 0 && decoder.rate() > 0 {
+        let estimate = (duration as u128)
+            .saturating_mul(time_base.numerator().max(0) as u128)
+            .saturating_mul(u128::from(decoder.rate()))
+            .saturating_mul(u128::from(decoder_channels))
+            / time_base.denominator() as u128;
+        if let Ok(estimate) = usize::try_from(estimate)
+            && limits.check_samples(decoder_channels, decoder.rate(), estimate).is_ok()
+        {
+            reservation.reserve_samples(&mut frames, estimate, limits)?;
+        }
+    }
     let mut out_channels: u16 = 0;
     let mut out_rate: u32 = 0;
 
     let receive_frames = |decoder: &mut ffmpeg_next::decoder::Audio,
                           out_channels: &mut u16,
                           out_rate: &mut u32,
-                          frames: &mut Vec<f32>|
+                          frames: &mut Vec<f32>,
+                          reservation: &mut DecodeReservation<'_>|
      -> Result<(), String> {
         let mut decoded = frame::Audio::empty();
         while decoder.receive_frame(&mut decoded).is_ok() {
             let channels = decoded.channels().max(1);
             let rate = decoded.rate();
-            if rate == 0 {
-                return Err("decoded frame reported zero sample rate".to_string());
-            }
+            limits.check_format(channels, rate)?;
             if *out_rate == 0 {
                 *out_channels = channels;
                 *out_rate = rate;
             }
+            let required = decoded
+                .samples()
+                .checked_mul(usize::from(*out_channels))
+                .and_then(|samples| frames.len().checked_add(samples))
+                .ok_or_else(|| "decoded audio sample count overflow".to_string())?;
+            limits.check_samples(*out_channels, *out_rate, required)?;
+            reservation.reserve_samples(frames, required, limits)?;
             append_frame_samples(&decoded, *out_channels, frames)?;
         }
         Ok(())
@@ -165,6 +231,7 @@ fn decode_audio(
         if stream.index() != stream_index {
             continue;
         }
+        reservation.check()?;
 
         let mut packet = packet;
         let discarded_bytes = trim_incomplete_pcm_packet(&mut packet, codec_id, decoder_channels);
@@ -180,7 +247,7 @@ fn decode_audio(
         }
 
         decoder.send_packet(&packet).map_err(|e| format!("send_packet failed: {e}"))?;
-        receive_frames(&mut decoder, &mut out_channels, &mut out_rate, &mut frames)?;
+        receive_frames(&mut decoder, &mut out_channels, &mut out_rate, &mut frames, reservation)?;
         packets_since_yield = packets_since_yield.saturating_add(1);
         if packet_yield_interval.is_some_and(|interval| packets_since_yield >= interval) {
             std::thread::yield_now();
@@ -189,7 +256,7 @@ fn decode_audio(
     }
 
     decoder.send_eof().map_err(|e| format!("send_eof failed: {e}"))?;
-    receive_frames(&mut decoder, &mut out_channels, &mut out_rate, &mut frames)?;
+    receive_frames(&mut decoder, &mut out_channels, &mut out_rate, &mut frames, reservation)?;
 
     if out_rate == 0 {
         return Err("no audio frames were decoded".to_string());
@@ -346,6 +413,64 @@ fn decode_error(path: &Path, message: impl Into<String>) -> SampleLoadError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::decode_limits::MAX_SAMPLE_BYTES;
+
+    #[test]
+    fn long_silent_wav_respects_small_native_and_ffmpeg_limits() {
+        bmz_ffmpeg::ensure_init().unwrap();
+        let path = write_pcm16_wav(&vec![0; 44_100 * 30]);
+        for limits in [
+            AudioDecodeLimits { seconds: 1, bytes: MAX_SAMPLE_BYTES },
+            AudioDecodeLimits { seconds: 60, bytes: 1024 },
+        ] {
+            let native =
+                WavSampleLoader.load_with_limits(&path, limits, &mut DecodeReservation::new(None));
+            assert!(matches!(native, Err(SampleLoadError::Limit { .. })));
+            let ffmpeg = decode_audio(&path, None, limits, &mut DecodeReservation::new(None));
+            assert!(ffmpeg.unwrap_err().contains("limit"));
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn large_valid_wav_uses_incremental_ffmpeg_and_keeps_all_samples() {
+        let count = 16 * 1024 * 1024 / size_of::<i16>() + 1;
+        let path = write_pcm16_wav(&vec![0; count]);
+        assert!(
+            try_load_native_wav(
+                &path,
+                AudioDecodeLimits::default(),
+                &mut DecodeReservation::new(None)
+            )
+            .unwrap()
+            .is_none()
+        );
+        let sample = FfmpegSampleLoader::default().load(&path).unwrap();
+        assert_eq!(sample.frames.len(), count);
+        assert!(sample.frames.iter().all(|sample| *sample == 0.0));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn native_and_ffmpeg_accept_exact_decoded_size_and_reject_one_sample_more() {
+        bmz_ffmpeg::ensure_init().unwrap();
+        let path = write_pcm16_wav(&vec![0; 44_100]);
+        let exact = AudioDecodeLimits { seconds: 1, bytes: 44_100 * size_of::<f32>() };
+        let native = WavSampleLoader
+            .load_with_limits(&path, exact, &mut DecodeReservation::new(None))
+            .unwrap();
+        let ffmpeg = decode_audio(&path, None, exact, &mut DecodeReservation::new(None)).unwrap();
+        assert_eq!(native.frames.len(), 44_100);
+        assert_eq!(ffmpeg.frames, native.frames);
+        let below = AudioDecodeLimits { bytes: exact.bytes - size_of::<f32>(), ..exact };
+        assert!(
+            WavSampleLoader
+                .load_with_limits(&path, below, &mut DecodeReservation::new(None))
+                .is_err()
+        );
+        assert!(decode_audio(&path, None, below, &mut DecodeReservation::new(None)).is_err());
+        std::fs::remove_file(path).unwrap();
+    }
 
     /// PCM16 mono WAV をメモリ上に組み立てる。
     fn write_pcm16_wav(samples: &[i16]) -> std::path::PathBuf {
@@ -422,7 +547,13 @@ mod tests {
         let path = std::path::PathBuf::from(std::env::var_os("BMZ_PCM_REGRESSION_CHART").unwrap());
         let source = path.parent().unwrap().join("bassl - Marker #8.ogg");
         bmz_ffmpeg::ensure_init().unwrap();
-        let raw = decode_audio(&source, None).unwrap();
+        let raw = decode_audio(
+            &source,
+            None,
+            AudioDecodeLimits::default(),
+            &mut DecodeReservation::new(None),
+        )
+        .unwrap();
         let raw_peak = raw.frames.iter().fold(0.0f32, |peak, v| peak.max(v.abs()));
         assert!(raw_peak > 1_000.0, "fixture must reproduce corrupt PCM: {raw_peak}");
         let repaired = FfmpegSampleLoader::default().load(&source).unwrap();
@@ -457,7 +588,8 @@ mod tests {
                     .any(|n| n.sound == Some(asset.id) || n.layered_sounds.contains(&asset.id))
         );
         let mut engine = AudioEngine::new(48_000);
-        let reports = load_chart_samples(&mut engine, &chart, &mut FfmpegSampleLoader::default());
+        let reports =
+            load_chart_samples(&mut engine, &chart, &mut FfmpegSampleLoader::default()).unwrap();
         assert!(
             reports
                 .iter()
@@ -537,7 +669,13 @@ mod tests {
     fn native_wav_fast_path_decodes_supported_pcm() {
         let path = write_pcm16_wav(&[0, 16_384, -16_384, i16::MAX]);
 
-        let sample = try_load_native_wav(&path).unwrap().unwrap();
+        let sample = try_load_native_wav(
+            &path,
+            AudioDecodeLimits::default(),
+            &mut DecodeReservation::new(None),
+        )
+        .unwrap()
+        .unwrap();
 
         assert_eq!(sample.channels, 1);
         assert_eq!(sample.sample_rate, 44_100);
@@ -550,9 +688,21 @@ mod tests {
     fn native_wav_fast_path_matches_ffmpeg_pcm_output() {
         let path = write_pcm16_wav(&[0, 16_384, -16_384, i16::MAX]);
 
-        let native = try_load_native_wav(&path).unwrap().unwrap();
+        let native = try_load_native_wav(
+            &path,
+            AudioDecodeLimits::default(),
+            &mut DecodeReservation::new(None),
+        )
+        .unwrap()
+        .unwrap();
         bmz_ffmpeg::ensure_init().unwrap();
-        let ffmpeg = decode_audio(&path, None).unwrap();
+        let ffmpeg = decode_audio(
+            &path,
+            None,
+            AudioDecodeLimits::default(),
+            &mut DecodeReservation::new(None),
+        )
+        .unwrap();
 
         assert_eq!(native.channels, ffmpeg.channels);
         assert_eq!(native.sample_rate, ffmpeg.sample_rate);
@@ -568,7 +718,15 @@ mod tests {
         let path = write_pcm16_wav_data(&[0, 0, 0xff, 0x7f, 0x12]);
         let mut loader = FfmpegSampleLoader::default();
 
-        assert!(try_load_native_wav(&path).unwrap().is_none());
+        assert!(
+            try_load_native_wav(
+                &path,
+                AudioDecodeLimits::default(),
+                &mut DecodeReservation::new(None)
+            )
+            .unwrap()
+            .is_none()
+        );
         let sample = loader.load(&path).unwrap();
 
         assert_eq!(sample.channels, 1);
@@ -584,7 +742,15 @@ mod tests {
         let path = write_pcm16_wav_data_with_channels(&[0, 0, 0xff, 0x7f, 0x12, 0x34], 2);
         let mut loader = FfmpegSampleLoader::default();
 
-        assert!(try_load_native_wav(&path).unwrap().is_none());
+        assert!(
+            try_load_native_wav(
+                &path,
+                AudioDecodeLimits::default(),
+                &mut DecodeReservation::new(None)
+            )
+            .unwrap()
+            .is_none()
+        );
         let sample = loader.load(&path).unwrap();
 
         assert_eq!(sample.channels, 2);

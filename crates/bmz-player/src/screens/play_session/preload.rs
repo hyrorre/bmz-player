@@ -69,10 +69,10 @@ pub fn build_audio_engine_for_chart(
     chart: &PlayableChart,
     sample_rate: u32,
     loader: &mut dyn SampleLoader,
-) -> (AudioEngine, Vec<LoadedSampleReport>) {
+) -> Result<(AudioEngine, Vec<LoadedSampleReport>)> {
     let mut audio = AudioEngine::new(sample_rate);
-    let sample_report = load_chart_samples(&mut audio, chart, loader);
-    (audio, sample_report)
+    let sample_report = load_chart_samples(&mut audio, chart, loader)?;
+    Ok((audio, sample_report))
 }
 
 /// Keysound decode threads for play loading. The audio output thread and the window keep a
@@ -98,7 +98,7 @@ pub(super) fn build_audio_engine_for_chart_with_progress(
     chart: &PlayableChart,
     sample_rate: u32,
     on_progress: impl FnMut(usize, usize),
-) -> (AudioEngine, Vec<LoadedSampleReport>) {
+) -> Result<(AudioEngine, Vec<LoadedSampleReport>)> {
     let mut audio = AudioEngine::new(sample_rate);
     let make_loader = || {
         Box::new(bmz_audio::sample_cache::CachedSampleLoader::new(
@@ -112,7 +112,7 @@ pub(super) fn build_audio_engine_for_chart_with_progress(
         chart,
         ParallelSampleDecode { threads: play_sample_decode_threads(), make_loader: &make_loader },
         on_progress,
-    );
+    )?;
     if let (Some(before), Ok(cache)) = (before, play_sample_cache().lock()) {
         let after = cache.stats();
         tracing::info!(
@@ -122,7 +122,7 @@ pub(super) fn build_audio_engine_for_chart_with_progress(
             "play keysound PCM cache"
         );
     }
-    (audio, sample_report)
+    Ok((audio, sample_report))
 }
 
 pub fn load_prepared_play_session_for_chart(
@@ -315,7 +315,7 @@ pub fn preload_play_session_for_chart_with_callbacks(
         &prepared_chart.chart,
         options.sample_rate,
         on_progress,
-    );
+    )?;
     let audio_load_elapsed = audio_load_started_at.elapsed();
     tracing::info!(
         chart_id,
@@ -379,7 +379,7 @@ pub fn preload_play_session_reloading_audio_with_progress(
     sample_rate: u32,
     chart_normalization_gain: f32,
     on_progress: impl FnMut(usize, usize),
-) -> PreloadedPlaySession {
+) -> Result<PreloadedPlaySession> {
     let PreparedPlayChart {
         chart,
         skin_attempt,
@@ -396,7 +396,7 @@ pub fn preload_play_session_reloading_audio_with_progress(
     let sound_counts = sound_preload_counts(&chart);
     let audio_load_started_at = Instant::now();
     let (audio, sample_report) =
-        build_audio_engine_for_chart_with_progress(&chart, sample_rate, on_progress);
+        build_audio_engine_for_chart_with_progress(&chart, sample_rate, on_progress)?;
     tracing::info!(
         audio_load_elapsed_ms = audio_load_started_at.elapsed().as_millis(),
         sound_sources = sound_counts.source_count,
@@ -405,7 +405,7 @@ pub fn preload_play_session_reloading_audio_with_progress(
         loaded_regions = audio.samples.region_count(),
         "play quick retry reloaded audio"
     );
-    PreloadedPlaySession {
+    Ok(PreloadedPlaySession {
         chart,
         skin_attempt,
         source_ln_profile,
@@ -420,7 +420,7 @@ pub fn preload_play_session_reloading_audio_with_progress(
         score_save_disabled,
         opponent_chart,
         archive_resources,
-    }
+    })
 }
 
 pub(super) struct TransformedPlayChart {

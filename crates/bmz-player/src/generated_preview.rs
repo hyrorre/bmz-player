@@ -236,7 +236,7 @@ pub(crate) fn render_generated_preview_sample(
             |_, _| {},
         ),
         None => load_chart_samples(&mut engine, &filtered_chart, loader),
-    };
+    }?;
     if reports.iter().all(|report| matches!(report.status, LoadedSampleStatus::Failed(_))) {
         let failures = reports
             .iter()

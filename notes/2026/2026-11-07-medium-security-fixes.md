@@ -94,3 +94,37 @@
 - `cargo test -p bmz-video -p bmz-ffmpeg -p bmz-player --locked` は成功。videoは40成功、playerは2,918成功・58 ignored（起動テスト2件を含む）、ffmpegは0テスト。すべて0失敗で、Viewer IPCの3テストも成功した。
 - `bun run test:ir` と `bun x vue-tsc --noEmit` は成功。Prettierの対象となるWebファイルの変更はない。
 - ログはGit管理外の `.local/validation/security-medium/5-resumed-rust.log` と `5-resumed-web.log` に保存した。
+
+## #6 音声デコードの上限
+
+### 上限を決める前の実データ計測
+
+ローカルのlibrary DBを読み取り専用で参照して譜面を選び、FFmpeg CLIで各音源をf32 packedへデコードした。出力はパイプから数えて破棄し、PCM全体をメモリへ保持しない。全WAV宣言のファイルを重複排除して計測したため、Randomの値は選択されない分岐も含む保守的な合計である。全対象で欠損・デコード失敗は0件だった。
+
+| 譜面 | 一意な音源 | 全体のbytes | 最大1ファイルのbytes | 最大レート・チャンネル |
+|---|---:|---:|---:|---|
+| 千秒女王（約1,000秒の長い譜面） | 927 | 407,061,368 | 4,153,344 | 44,100 Hz・2ch |
+| Random [DP ANOTHER]（WAV宣言6,427件） | 1,645 | 1,448,320,016 | 20,526,544 | 44,100 Hz・2ch |
+| STRONGER（約168秒の音源8本を共有するBMSON） | 8 | 516,787,904 | 64,598,488 | 48,000 Hz・2ch |
+
+- 上限は目安どおり、8ch、384,000 Hz、20分、1ファイル512 MiB、譜面全体3 GiBを採用する。計測した全体の最大は3 GiBの約45%、1ファイルの最大は512 MiBの約12%に収まった。
+- NOT VERIFIED — 高サンプルレートの実譜面。INSANE rootのWAVヘッダー20,057件を調べた範囲では48,000 Hzを超える音源を見つけられず、今回計測した譜面は最大48,000 Hzだった。
+- 元データとDBの更新は行っていない。計測用コード、生ログ、個別パスを含むJSONはGit管理外の `.local/validation/security-medium/measure_audio.py`、`6-measure.log`、`6-audio-measurements.json` に保存した。
+
+### 実装
+
+- 専用WAVとFFmpegの両方でフォーマット・長さ・f32サイズを検査する。FFmpegは各フレームの追加前、WAVは確保前に検査し、WAV変換も4,096サンプルごとに共有キャンセルを確認する。
+- durationから求めた確保量が1ファイル上限以内なら先に予約する。上限を超えるdurationヒントでは先行確保せず、実際のデコード中の検査で止める。
+- 全ワーカー・代替候補・キャッシュが共有するatomicな譜面予算を追加した。確保容量とリサンプル中の入力・出力を含めて計上し、失敗したファイルの予約を解放する。cache hitも予算に含め、共有regionは従来の一意なdecodeで重複を避ける。
+- 譜面全体の超過は `Result` で通常ロード・音声再ロード・自動試聴へ伝える。途中登録したsample bankは元へ戻し、不完全な譜面を開始しない。
+- 長い無音WAVの小さい上限、上限ちょうどと1サンプル超過、実WAVの並列中断、cache hit、途中登録の復旧、リサンプルの過大確保防止と空音源の保持を回帰テストに追加した。
+- [Play前のロードの仕様](../../docs/gameplay-runtime.md#play前のロード)に反映した。
+- 上限検査より前の入力確保も抑えるため、16 MiBを超えるWAVはFFmpegへ回して逐次処理する。専用WAVの入力読込自体も528 MiB（512 MiBとヘッダー等の余裕16 MiB）までに制限する。対応するPCM形式は格納サイズがデコード後f32以下なので、既定の512 MiB以内のPCMと通常のメタデータを収められる。大きい正常なWAVをFFmpegで全サンプル読み込めることと、入力読込の境界もテストに加えた。
+
+### 検証
+
+- `cargo fmt --check`、`cargo check --workspace --all-targets --locked`、`cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。
+- `BMZ_REQUIRE_MZ_SELECT=1` で `cargo test --workspace --locked --no-fail-fast` は全target成功。audioは188成功・3 ignored、playerは2,918成功・58 ignored（起動テスト2件を含む）。すべて0失敗。音源境界・途中キャンセル・復旧のテストを含む。
+- `bun run test:ir` と `bun x vue-tsc --noEmit` は成功。Prettierの対象となるWebファイルの変更はない。
+- 初回の全体検証は `6-rust.log`、WAV入力確保の追加対策後の最終検証は `6-final-rust.log`、Webは `6-web.log` に保存した（いずれもGit管理外）。
+- NOT VERIFIED — 実音声デバイスでの再生、高サンプルレートの実譜面。境界は合成WAVと純粋関数のテストで確認した。
