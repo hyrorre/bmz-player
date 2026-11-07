@@ -120,14 +120,7 @@ fn lr2_wmix_select_conditions_render_when_available() {
         eprintln!("SKIP missing WMIX_HD select");
         return;
     }
-    let loaded = load_skin_document_uncached(
-        &path,
-        SkinKind::Select,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        &LuaLoadRuntimeState::default(),
-    )
-    .unwrap();
-    assert_eq!((loaded.document.w, loaded.document.h), (1280, 720));
-    check_select_conditions(&loaded.document);
+    let document = load_installed_lr2_document(&path, SkinKind::Select);
+    assert_eq!((document.w, document.h), (1280, 720));
+    check_select_conditions(&document);
 }

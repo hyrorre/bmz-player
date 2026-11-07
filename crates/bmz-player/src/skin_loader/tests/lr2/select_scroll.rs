@@ -22,15 +22,7 @@ fn lr2_wmix_scroll_draw_and_click_positions_survive_continuous_input_when_availa
     if !path.is_file() {
         return;
     }
-    let loaded = load_skin_document_uncached(
-        &path,
-        SkinKind::Select,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        &LuaLoadRuntimeState::default(),
-    )
-    .unwrap();
-    let document = &loaded.document;
+    let document = load_installed_lr2_document(&path, SkinKind::Select);
     let sources: HashMap<_, _> = document
         .source
         .iter()

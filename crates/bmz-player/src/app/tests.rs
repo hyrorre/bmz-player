@@ -9,6 +9,12 @@ use crate::storage::score_db::BestScoreSummary;
 
 use super::*;
 
+fn installed_lr2_test_root() -> PathBuf {
+    std::env::var_os("BMZ_TEST_LR2_SKIN_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/skins"))
+}
+
 pub(super) fn app_test_chart() -> bmz_chart::model::PlayableChart {
     bmz_chart::model::PlayableChart {
         identity: bmz_core::chart::ChartIdentity { file_md5: [0; 16], file_sha256: [0; 32] },

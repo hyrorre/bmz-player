@@ -250,7 +250,7 @@ fn apply_skin_from_config_empty_path_uses_default_skin() {
 }
 
 #[test]
-fn apply_skin_from_config_json_path_loads_beatoraja_skin_when_available() {
+fn external_beatoraja_json_requires_explicit_selection_when_available() {
     let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../.local/beatoraja/skin/default/play7.json");
     if !skin_path.is_file() {
@@ -259,7 +259,10 @@ fn apply_skin_from_config_json_path_loads_beatoraja_skin_when_available() {
     let mut renderer = Renderer::default();
     let app_paths = test_app_paths();
 
-    apply_skin_from_config(&mut renderer, &app_paths, skin_path.to_str().unwrap()).unwrap();
+    let error =
+        apply_skin_from_config(&mut renderer, &app_paths, skin_path.to_str().unwrap()).unwrap_err();
+    assert!(error.to_string().contains("skin path escapes skin root"), "{error:#}");
+    apply_beatoraja_json_skin(&mut renderer, &skin_path).unwrap();
 }
 
 #[test]

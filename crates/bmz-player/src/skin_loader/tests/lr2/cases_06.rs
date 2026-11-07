@@ -98,7 +98,7 @@ fn kcool_decodes_all_archived_fonts_when_available() {
         assert!(root.join(format!("Font/{folder}.dxa")).is_file());
         assert!(!root.join("Font").join(folder).exists());
     }
-    let decoded = decode_beatoraja_skin(&path, SkinKind::Play).unwrap();
+    let decoded = decode_installed_lr2_play_skin(&path, &BTreeMap::new());
     assert_eq!(decoded.fonts.len(), 3);
     for font in &decoded.fonts {
         let Some(DecodedFontData::Bitmap(bitmap)) = &font.data else {
@@ -119,9 +119,7 @@ fn kcool_all_judge_sprites_reach_rendering_when_available() {
         return;
     }
     let files = BTreeMap::from([("Combo".to_owned(), "Combo-1.png".to_owned())]);
-    let decoded =
-        decode_beatoraja_skin_with_options(&path, SkinKind::Play, &BTreeMap::new(), &files)
-            .unwrap();
+    let decoded = decode_installed_lr2_play_skin(&path, &files);
     let sources = decoded
         .sources
         .iter()

@@ -7,17 +7,9 @@ fn wmii_lr2_battle_bga_inherits_profile_stretch_when_available() {
     if !path.is_file() {
         return;
     }
-    let loaded = load_skin_document_uncached(
-        &path,
-        SkinKind::Play,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        &LuaLoadRuntimeState::default(),
-    )
-    .unwrap();
-    let bga = loaded.document.bga.as_ref().expect("BATTLE skin has a BGA");
-    let destinations = loaded
-        .document
+    let document = load_installed_lr2_document(&path, SkinKind::Play);
+    let bga = document.bga.as_ref().expect("BATTLE skin has a BGA");
+    let destinations = document
         .destination
         .iter()
         .filter_map(|entry| match entry {
@@ -44,7 +36,7 @@ fn wmii_lr2_battle_renders_live_gauges_hispeed_and_opponent_score_when_available
     if !path.is_file() {
         return;
     }
-    let decoded = decode_beatoraja_skin(&path, SkinKind::Play).unwrap();
+    let decoded = decode_installed_lr2_play_skin(&path, &BTreeMap::new());
     let sources = decoded
         .sources
         .iter()

@@ -1,5 +1,41 @@
 use super::*;
 
+fn installed_lr2_roots() -> [PathBuf; 1] {
+    [Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins")]
+}
+
+fn load_installed_lr2_document(path: &Path, kind: SkinKind) -> SkinDocument {
+    let context = SkinPathContext::new(path, installed_lr2_roots()).unwrap();
+    load_skin_document_uncached_with_path_context(
+        path,
+        kind,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &LuaLoadRuntimeState::default(),
+        Some(&context),
+    )
+    .unwrap()
+    .document
+}
+
+fn decode_installed_lr2_play_skin(path: &Path, files: &BTreeMap<String, String>) -> DecodedSkin {
+    decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+        skin_path: path,
+        kind: SkinKind::Play,
+        options: &BTreeMap::new(),
+        files,
+        runtime_state: &LuaLoadRuntimeState::default(),
+        library_roots: &installed_lr2_roots(),
+        pinned_sources: None,
+        document_cache: None,
+        source_cache: None,
+        texture_cache: None,
+        font_cache: None,
+        installed_fonts: None,
+    })
+    .unwrap()
+}
+
 #[path = "lr2/cases_01.rs"]
 mod cases_01;
 #[path = "lr2/cases_02.rs"]

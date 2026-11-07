@@ -828,6 +828,7 @@ fn lr2_continue_fallback_assets_win_but_keep_inherited_empty_slots() {
 #[test]
 fn installed_lr2_play_skins_resolve_result_continue_assets_when_available() {
     let skins = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins");
+    let context = |path: &Path| bmz_skin::SkinPathContext::new(path, [skins.clone()]).unwrap();
     for (play, clear, slot, expected) in [
         ("EndlessCirculation/Play/play_Maniac.lr2skin", ClearType::Hard, "23", "HARDCLEAR.png"),
         ("EndlessCirculation/Play/play_Maniac.lr2skin", ClearType::NoPlay, "23", "NOPLAY.png"),
@@ -839,8 +840,12 @@ fn installed_lr2_play_skins_resolve_result_continue_assets_when_available() {
         }
         let mut state = bmz_skin::LuaLoadRuntimeState::default();
         apply_lr2_best_clear_load_options(&mut state, Some(clear));
-        let assets = crate::skin_loader::resolve_lr2_continue_assets(&path, &state, None)
-            .unwrap_or_else(|error| panic!("{play}: {error:#}"));
+        let assets = crate::skin_loader::resolve_lr2_continue_assets_with_context(
+            &context(&path),
+            &state,
+            None,
+        )
+        .unwrap_or_else(|error| panic!("{play}: {error:#}"));
         let source = Path::new(&assets.sources[slot].path);
         assert!(source.is_absolute(), "{play}");
         assert!(source.ends_with(expected), "{play}: {}", source.display());
@@ -857,15 +862,18 @@ fn installed_lr2_play_skins_resolve_result_continue_assets_when_available() {
     if play.is_file() && result.is_file() {
         let mut play_state = bmz_skin::LuaLoadRuntimeState::default();
         apply_lr2_best_clear_load_options(&mut play_state, Some(ClearType::Easy));
-        let fallback =
-            crate::skin_loader::resolve_lr2_continue_assets(&play, &play_state, None).unwrap();
+        let fallback = crate::skin_loader::resolve_lr2_continue_assets_with_context(
+            &context(&play),
+            &play_state,
+            None,
+        )
+        .unwrap();
         let result_state = bmz_skin::LuaLoadRuntimeState {
             lr2_continue_assets: merge_lr2_continue_assets(fallback, &Default::default()).into(),
             ..Default::default()
         };
-        let loaded = bmz_skin::load_lr2_csv_skin_with_runtime_state(
-            &result,
-            bmz_skin::SkinKind::Result,
+        let loaded = bmz_skin::load_lr2_csv_skin_with_path_context(
+            &context(&result),
             &BTreeMap::new(),
             &BTreeMap::new(),
             &result_state,
@@ -876,8 +884,8 @@ fn installed_lr2_play_skins_resolve_result_continue_assets_when_available() {
     }
     let wmix = skins.join("WMIX_HD/play/HDPLAY_AC.lr2skin");
     if wmix.is_file() {
-        let assets = crate::skin_loader::resolve_lr2_continue_assets(
-            &wmix,
+        let assets = crate::skin_loader::resolve_lr2_continue_assets_with_context(
+            &context(&wmix),
             &bmz_skin::LuaLoadRuntimeState::default(),
             None,
         )
@@ -923,12 +931,13 @@ fn lr2_continue_theme_fill_keeps_inherited_and_skips_unusable_provider_slots() {
 fn same_theme_lr2_skins_fill_continue_slots_left_by_other_scenes_when_available() {
     let skins = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins");
     let roots = [skins.clone()];
+    let context = |path: &Path| bmz_skin::SkinPathContext::new(path, roots.clone()).unwrap();
     let load_with_theme_fill = |relative: &str| {
         let path = skins.join(relative);
         let mut state = bmz_skin::LuaLoadRuntimeState::default();
         for provider in lr2_continue_theme_providers(&path, &roots) {
-            let assets = crate::skin_loader::resolve_lr2_continue_assets(
-                &provider,
+            let assets = crate::skin_loader::resolve_lr2_continue_assets_with_context(
+                &context(&provider),
                 &bmz_skin::LuaLoadRuntimeState::default(),
                 None,
             )
@@ -936,9 +945,8 @@ fn same_theme_lr2_skins_fill_continue_slots_left_by_other_scenes_when_available(
             state.lr2_continue_assets =
                 fill_empty_lr2_continue_assets(assets, &state.lr2_continue_assets).into();
         }
-        bmz_skin::load_lr2_csv_skin_with_runtime_state(
-            &path,
-            bmz_skin::SkinKind::Result,
+        bmz_skin::load_lr2_csv_skin_with_path_context(
+            &context(&path),
             &BTreeMap::new(),
             &BTreeMap::new(),
             &state,

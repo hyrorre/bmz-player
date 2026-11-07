@@ -93,21 +93,13 @@ fn wmii_keeps_native_lr2_bitmap_font_references_when_available() {
         return;
     }
 
-    let loaded = load_skin_document_uncached(
-        &skin_path,
-        SkinKind::Play,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        &LuaLoadRuntimeState::default(),
-    )
-    .unwrap();
-
-    assert!(loaded.document.font.iter().any(|font| {
+    let document = load_installed_lr2_document(&skin_path, SkinKind::Play);
+    assert!(document.font.iter().any(|font| {
         font.id.starts_with("lr2font-")
             && font.path.replace('\\', "/").ends_with("../font/songTitle/font.lr2font")
     }));
     assert!(
-        loaded.document.text.iter().any(|text| {
+        document.text.iter().any(|text| {
             text.ref_id == 12 && text.font.starts_with("lr2font-") && text.size == 0
         })
     );

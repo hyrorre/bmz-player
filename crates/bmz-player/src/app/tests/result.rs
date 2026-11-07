@@ -875,9 +875,7 @@ fn result_load_state_selects_normal_lr2_bga_layout_includes() {
 
 #[test]
 fn result_lr2_3r_loads_with_app_state_when_available() {
-    let root = std::env::var_os("BMZ_TEST_LR2_SKIN_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/skins"));
+    let root = installed_lr2_test_root();
     let path = root.join("3R/Result/result.lr2skin");
     if !path.is_file() {
         eprintln!("SKIP missing {}", path.display());
@@ -892,12 +890,21 @@ fn result_lr2_3r_loads_with_app_state_when_available() {
         BTreeMap::new(),
         "test",
     );
-    let decoded = crate::skin_loader::decode_beatoraja_skin_with_options_and_runtime_state(
-        &path,
-        SkinKind::Result,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        &runtime,
+    let decoded = crate::skin_loader::decode_beatoraja_skin_request(
+        crate::skin_loader::BeatorajaSkinDecodeRequest {
+            skin_path: &path,
+            kind: SkinKind::Result,
+            options: &BTreeMap::new(),
+            files: &BTreeMap::new(),
+            runtime_state: &runtime,
+            library_roots: &[root],
+            pinned_sources: None,
+            document_cache: None,
+            source_cache: None,
+            texture_cache: None,
+            font_cache: None,
+            installed_fonts: None,
+        },
     )
     .unwrap();
     assert!(decoded.document.destination.len() > 10);

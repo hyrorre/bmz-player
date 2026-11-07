@@ -100,10 +100,7 @@ fn result_difficulty_asset_cache_follows_app_summary_for_normal_and_course() {
 }
 
 fn wmix_result_path() -> PathBuf {
-    std::env::var_os("BMZ_TEST_LR2_SKIN_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/skins"))
-        .join("WMIX_HD/result/WMIX_RESULT.lr2skin")
+    installed_lr2_test_root().join("WMIX_HD/result/WMIX_RESULT.lr2skin")
 }
 
 fn wmix_options(side: &str) -> BTreeMap<String, String> {
@@ -133,13 +130,13 @@ fn result_difficulty_wmix_selects_labels_from_app_state_when_available() {
         eprintln!("SKIP missing {}", path.display());
         return;
     }
+    let context = bmz_skin::SkinPathContext::new(&path, [installed_lr2_test_root()]).unwrap();
     let mut summary = debug_boot_result_summary();
     for side in ["Left", "Right"] {
         for (label, y) in [("4", 496), ("ANOTHER", 496), ("5", 454), ("INSANE", 454)] {
             summary.difficulty_name = label.to_string();
-            let loaded = bmz_skin::load_lr2_csv_skin_with_runtime_state(
-                &path,
-                bmz_skin::SkinKind::Result,
+            let loaded = bmz_skin::load_lr2_csv_skin_with_path_context(
+                &context,
                 &wmix_options(side),
                 &BTreeMap::new(),
                 &difficulty_runtime(&summary),
