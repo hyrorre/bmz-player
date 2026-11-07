@@ -90,5 +90,7 @@ mod chart_hashes;
 mod chart_text;
 #[path = "tests/exit_hold.rs"]
 mod exit_hold;
+#[path = "tests/judge_regions.rs"]
+mod judge_regions;
 #[path = "tests/missed_notes.rs"]
 mod missed_notes;

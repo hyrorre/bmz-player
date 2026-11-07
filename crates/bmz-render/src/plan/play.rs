@@ -16,6 +16,22 @@ struct PlayfieldLayout<'a> {
     active_lanes: &'a [Lane],
 }
 
+fn play_judge_region_count(snapshot: &RenderSnapshot, skin: &SkinContext) -> usize {
+    // Battle presentation keeps both players even when a normal SP skin is used.
+    // Reserve the opponent's region independently of the skin's visible judges.
+    // Ordinary DP may intentionally share one region and keeps the skin's layout.
+    if snapshot.opponent.is_some()
+        && matches!(
+            (snapshot.skin_attempt.source_key_mode, snapshot.key_mode),
+            (None | Some(KeyMode::K5), KeyMode::K10) | (None | Some(KeyMode::K7), KeyMode::K14)
+        )
+    {
+        2
+    } else {
+        skin.document().map(|document| document.judge_region_count()).unwrap_or(1)
+    }
+}
+
 pub(super) fn plan_play(
     snapshot: &RenderSnapshot,
     skin: &SkinContext,
@@ -49,8 +65,7 @@ pub(super) fn plan_play(
         key_mode,
         snapshot.time.0,
     );
-    let judge_region_count =
-        skin.document().map(|document| document.judge_region_count()).unwrap_or(1);
+    let judge_region_count = play_judge_region_count(snapshot, skin);
     dynamic_timers.ingest_judge_lane_state(
         &snapshot.recent_judgements,
         key_mode,

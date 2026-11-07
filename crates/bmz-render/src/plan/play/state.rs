@@ -10,8 +10,7 @@ pub(in crate::plan) fn build_play_skin_state(
     play_elapsed_ms: i32,
 ) -> crate::skin::SkinDrawState {
     let (bomb_ms, lane_judge) = recent_judgement_state(snapshot, skin);
-    let judge_region_count =
-        skin.document().map(|document| document.judge_region_count()).unwrap_or(1);
+    let judge_region_count = play_judge_region_count(snapshot, skin);
     let judge_region_state = crate::skin::build_judge_region_state(
         &snapshot.recent_judgements,
         snapshot.time.0,

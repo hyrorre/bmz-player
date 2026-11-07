@@ -1350,6 +1350,12 @@ SessionModeのbattleは、Select上のkey modeとスキン選択キーを5K/7K�
 Play内部ではbattle skinへ2P側レーンと対戦表示を公開するが、通常のDP OPTION `BATTLE`の
 10K/14Kスキン選択とは区別します。
 
+5K/7Kの対戦表示では、判定領域をスキンの表示部品数にかかわらず1P・2Pへ分離します。
+通常スキンへフォールバックして`judge.index=0`だけを描く場合も、相手の判定で自分の
+判定文字・コンボ・FAST/SLOWやtimer 46/446を更新しません。専用スキンの
+`judge.index=1`は相手側を表示します。対戦相手のいない通常DPの共通1領域・左右2領域や、
+9KEYSの3領域はスキン定義に従います。
+
 2P側のノート、LN、key-on/off、hold、bomb、HCN、judgeは通常の2Pレーンref/timerで
 公開します。次の対になっているtimerは1P/2Pを別状態として扱います。
 
