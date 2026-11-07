@@ -70,7 +70,7 @@ fn ir_login_channel_disconnect_clears_busy_state() {
     state.receiver = Some(receiver);
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
 
-    assert!(!state.poll(&mut profile, Localizer::new(AppLocale::En)));
+    assert!(!state.poll(&mut profile, std::path::Path::new("."), Localizer::new(AppLocale::En)));
     assert!(!state.busy);
     assert!(state.busy_form_index.is_none());
     assert!(state.busy_target.is_none());

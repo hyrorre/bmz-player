@@ -14,7 +14,11 @@ use crate::storage::network_db::{
 use crate::storage::score_db::ScoreDatabase;
 
 use super::bmz_official::{BmzOfficialIrClient, retry_after_seconds_from_error};
-use super::credentials::{IrStoredCredentials, load_credentials, save_credentials};
+#[cfg(test)]
+use super::credentials::save_credentials;
+use super::credentials::{
+    IrStoredCredentials, credential_origin, load_credentials, replace_refreshed_credentials,
+};
 use crate::ir::types::{IrRankingResult, IrRankingScope, IrScoreSubmission, IrSubmitOptions};
 
 static CREDENTIAL_REFRESH_LOCK: Mutex<()> = Mutex::const_new(());
@@ -136,7 +140,7 @@ pub async fn ensure_fresh_credentials(
     now: i64,
 ) -> Result<IrStoredCredentials> {
     let _guard = CREDENTIAL_REFRESH_LOCK.lock().await;
-    let Some(credentials) = load_credentials(profile_root, provider_key)? else {
+    let Some(credentials) = load_credentials(profile_root, provider_key, base_url)? else {
         bail!("not signed in to IR provider '{provider_key}'; run `bmz ir login` first");
     };
     if !credentials.needs_refresh(now) {
@@ -150,13 +154,17 @@ pub async fn ensure_fresh_credentials(
     anyhow::ensure!(tokens.provider_key == provider_key, "IR refresh changed the provider key");
     let refreshed = IrStoredCredentials {
         provider: tokens.provider_key,
+        origin: credential_origin(base_url)?,
         account_id: tokens.player.id,
-        display_name: tokens.player.display_name.unwrap_or(credentials.display_name),
+        display_name: tokens
+            .player
+            .display_name
+            .unwrap_or_else(|| credentials.display_name.clone()),
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         expires_at: tokens.expires_at,
     };
-    save_credentials(profile_root, &refreshed)?;
+    replace_refreshed_credentials(profile_root, &credentials, &refreshed)?;
     Ok(refreshed)
 }
 
@@ -248,6 +256,52 @@ mod tests {
     use crate::ln_policy::LnScorePolicy;
 
     #[tokio::test]
+    async fn refresh_does_not_forward_tokens_to_another_origin() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let source = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let destination = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        destination.set_nonblocking(true).unwrap();
+        let base_url = format!("http://{}", source.local_addr().unwrap());
+        let other_url = format!("http://{}", destination.local_addr().unwrap());
+        let location = other_url.clone();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = source.accept().await.unwrap();
+            let mut request = [0; 4096];
+            assert!(stream.read(&mut request).await.unwrap() > 0);
+            let response = format!(
+                "HTTP/1.1 307 Temporary Redirect\r\nLocation: {location}/refresh\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        let root = tempfile::tempdir().unwrap();
+        let credentials = IrStoredCredentials {
+            provider: "test-ir".into(),
+            origin: base_url.clone(),
+            account_id: "account".into(),
+            display_name: String::new(),
+            access_token: "expired".into(),
+            refresh_token: "refresh".into(),
+            expires_at: Some(1),
+        };
+        save_credentials(root.path(), &credentials).unwrap();
+        let wrong_origin =
+            ensure_fresh_credentials(root.path(), "test-ir", &other_url, 100).await.unwrap_err();
+        assert!(wrong_origin.to_string().contains("not signed in"));
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            ensure_fresh_credentials(root.path(), "test-ir", &base_url, 100),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("IR redirect changed the origin"), "{error:#}");
+        server.await.unwrap();
+        assert_eq!(destination.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        assert_eq!(load_credentials(root.path(), "test-ir", &base_url).unwrap(), Some(credentials));
+    }
+
+    #[tokio::test]
     async fn queued_credentials_require_the_original_account() {
         let stamp =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
@@ -258,6 +312,7 @@ mod tests {
         let key = crate::ir::provider_key::configured_provider_key(&provider).unwrap();
         let mut credentials = IrStoredCredentials {
             provider: key.to_string(),
+            origin: credential_origin(&provider.base_url).unwrap(),
             account_id: "account-b".into(),
             display_name: String::new(),
             access_token: "token-b".into(),

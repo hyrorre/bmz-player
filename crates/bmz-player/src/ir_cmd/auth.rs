@@ -1,5 +1,6 @@
 use super::download::{now_unix_seconds, prompt_password};
 use super::*;
+use crate::ir::credentials::{credential_origin, validate_login_origin};
 
 pub(super) async fn login(
     profile_paths: &ProfilePaths,
@@ -12,6 +13,7 @@ pub(super) async fn login(
     let is_bms_ir = crate::ir::bms_ir::is_bms_ir_provider(provider);
     let is_rian_ir = crate::ir::rian_ir::is_rian_ir_provider(provider);
     let base_url = resolve_login_base_url(profile, provider, base_url.as_deref())?;
+    let origin = credential_origin(&base_url)?;
 
     let password = match password {
         Some(password) => password,
@@ -31,18 +33,6 @@ pub(super) async fn login(
     let bms_ir_game_token = tokens.access_token.clone();
     let now = now_unix_seconds();
 
-    save_credentials(
-        profile_paths.root_dir.as_path(),
-        &IrStoredCredentials {
-            provider: provider_key.clone(),
-            account_id: tokens.player.id.clone(),
-            display_name: display_name.clone(),
-            access_token: tokens.access_token,
-            refresh_token: tokens.refresh_token,
-            expires_at: tokens.expires_at,
-        },
-    )?;
-
     let entry_index = profile
         .ir
         .providers
@@ -56,6 +46,19 @@ pub(super) async fn login(
                 same_provider_protocol(&entry.provider, provider) && entry.base_url.is_empty()
             })
         });
+    validate_login_origin(&profile.ir, entry_index, &provider_key, &origin)?;
+    save_credentials(
+        profile_paths.root_dir.as_path(),
+        &IrStoredCredentials {
+            provider: provider_key.clone(),
+            origin,
+            account_id: tokens.player.id,
+            display_name: display_name.clone(),
+            access_token: tokens.access_token,
+            refresh_token: tokens.refresh_token,
+            expires_at: tokens.expires_at,
+        },
+    )?;
     let entry = match entry_index {
         Some(index) => &mut profile.ir.providers[index],
         None => {
@@ -74,13 +77,15 @@ pub(super) async fn login(
             profile.ir.providers.last_mut().unwrap()
         }
     };
+    let was_primary = entry.role == IrProviderRoleConfig::Primary
+        && profile.ir.primary_provider == entry.provider_key;
     entry.base_url = base_url;
     entry.provider_key = provider_key.clone();
     entry.enabled = true;
     entry.account_id = account_id.clone();
     entry.account_display_name = display_name.clone();
     entry.last_login_at = Some(now);
-    if profile.ir.primary_provider.is_empty() {
+    if profile.ir.primary_provider.is_empty() || was_primary {
         profile.ir.primary_provider = provider_key.clone();
         entry.role = IrProviderRoleConfig::Primary;
     }
@@ -154,14 +159,24 @@ pub(super) async fn logout(
     profile: &mut ProfileConfig,
     provider: &str,
 ) -> Result<()> {
-    let entry_index = profile.ir.providers.iter().position(|entry| {
-        crate::ir::provider_key::configured_provider_key(entry) == Some(provider)
-            || same_provider_protocol(&entry.provider, provider)
-    });
+    let entry_index = profile
+        .ir
+        .providers
+        .iter()
+        .position(|entry| crate::ir::provider_key::configured_provider_key(entry) == Some(provider))
+        .or_else(|| {
+            profile
+                .ir
+                .providers
+                .iter()
+                .position(|entry| same_provider_protocol(&entry.provider, provider))
+        });
     let entry = entry_index.and_then(|index| profile.ir.providers.get(index));
     let credentials = match entry {
         Some(entry) => crate::ir::provider_key::configured_provider_key(entry)
-            .map(|provider_key| load_credentials(profile_paths.root_dir.as_path(), provider_key))
+            .map(|provider_key| {
+                load_credentials(profile_paths.root_dir.as_path(), provider_key, &entry.base_url)
+            })
             .transpose()?
             .flatten(),
         None => None,
@@ -179,7 +194,9 @@ pub(super) async fn logout(
 
     let removed = match entry {
         Some(entry) => crate::ir::provider_key::configured_provider_key(entry)
-            .map(|provider_key| delete_credentials(profile_paths.root_dir.as_path(), provider_key))
+            .map(|provider_key| {
+                delete_credentials(profile_paths.root_dir.as_path(), provider_key, &entry.base_url)
+            })
             .transpose()?
             .unwrap_or(false),
         None => false,
@@ -231,7 +248,9 @@ pub(super) async fn status(profile_paths: &ProfilePaths, profile: &ProfileConfig
             entry.base_url
         );
         match provider_key
-            .map(|provider_key| load_credentials(profile_paths.root_dir.as_path(), provider_key))
+            .map(|provider_key| {
+                load_credentials(profile_paths.root_dir.as_path(), provider_key, &entry.base_url)
+            })
             .transpose()?
             .flatten()
         {
@@ -321,6 +340,54 @@ mod tests {
         assert_eq!(
             resolve_login_base_url(&profile(), "custom-provider", Some(requested)).unwrap(),
             requested
+        );
+    }
+
+    #[tokio::test]
+    async fn custom_login_cannot_store_a_builtin_provider_key() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            assert!(stream.read(&mut request).await.unwrap() > 0);
+            let body = r#"{"provider_key":"bmz-official","access_token":"a","refresh_token":"r","player":{"id":"test"}}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+        let mut boot = data.boot();
+        let origin = credential_origin(crate::ir::bmz_official::BMZ_IR_DEFAULT_BASE_URL).unwrap();
+        let original = IrStoredCredentials {
+            provider: "bmz-official".into(),
+            origin: origin.clone(),
+            account_id: "official".into(),
+            display_name: "Official".into(),
+            access_token: "original".into(),
+            refresh_token: "original-refresh".into(),
+            expires_at: None,
+        };
+        save_credentials(&boot.profile_paths.root_dir, &original).unwrap();
+        let error = login(
+            &boot.profile_paths,
+            &mut boot.profile_config,
+            "custom",
+            "test@example.test",
+            Some("dummy".into()),
+            Some(base_url),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("reserved for the built-in origin"), "{error:#}");
+        server.await.unwrap();
+        assert_eq!(
+            load_credentials(&boot.profile_paths.root_dir, "bmz-official", &origin).unwrap(),
+            Some(original)
         );
     }
 }

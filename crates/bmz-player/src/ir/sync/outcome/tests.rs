@@ -326,6 +326,7 @@ async fn banned_account_stops_the_batch_without_repeating_refresh() {
         &profile_root,
         &IrStoredCredentials {
             provider: provider_key.clone(),
+            origin: crate::ir::credentials::credential_origin(&provider.base_url).unwrap(),
             account_id: "account".into(),
             display_name: String::new(),
             access_token: "expired".into(),

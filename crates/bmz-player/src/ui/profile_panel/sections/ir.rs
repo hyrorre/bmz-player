@@ -93,6 +93,7 @@ pub(in crate::ui::profile_panel) fn build_profile_ir_section(
             );
             let mut remove_index = None;
             let mut logged_out_provider_key = None;
+            let credential_store = profile.ir.credential_store;
             for (index, provider) in profile.ir.providers.iter_mut().enumerate() {
                 ui.push_id(("ir_provider", index), |ui| {
                     ui.separator();
@@ -107,9 +108,17 @@ pub(in crate::ui::profile_panel) fn build_profile_ir_section(
                     });
                     let provider_key = crate::ir::provider_key::configured_provider_key(provider)
                         .map(str::to_string);
-                    let endpoint_editable = index >= BUILTIN_IR_PROVIDER_COUNT
-                        && provider_key.is_none()
-                        && !ir_login.busy;
+                    let logged_in = provider_key.as_deref().is_some_and(|key| {
+                        ir_login.is_signed_in(
+                            index,
+                            profile_root,
+                            key,
+                            &provider.base_url,
+                            credential_store,
+                        )
+                    });
+                    let endpoint_editable =
+                        index >= BUILTIN_IR_PROVIDER_COUNT && !logged_in && !ir_login.busy;
                     match index {
                         0..=2 => {
                             ui.horizontal(|ui| {
@@ -165,7 +174,6 @@ pub(in crate::ui::profile_panel) fn build_profile_ir_section(
                             });
                         }
                     }
-                    let logged_in = provider_key.is_some();
                     if index >= BUILTIN_IR_PROVIDER_COUNT && !endpoint_editable && logged_in {
                         ui.small(tr!(text, "profile-ir-logout-to-change"));
                     }
@@ -204,11 +212,13 @@ pub(in crate::ui::profile_panel) fn build_profile_ir_section(
                                     crate::ir::credentials::delete_credentials(
                                         profile_root,
                                         provider_key,
+                                        &provider.base_url,
                                     )
                                 })
                                 .transpose();
                             match result {
                                 Ok(_) => {
+                                    ir_login.invalidate_credential_status();
                                     provider.enabled = false;
                                     logged_out_provider_key = provider_key.clone();
                                     provider.provider_key.clear();

@@ -107,7 +107,10 @@ GET    /api/v1/admin/moderation/audit-logs     # 管理者: 監査ログ（?targ
 
 - BMZ Playerは、email + passwordで`/api/v1/auth/login`へログインし、access tokenとrefresh tokenを受け取ります。Webは`nuxt-auth-utils`のcookie sessionを使います。OAuth / OIDCのdevice flowは使いません。
 - refresh tokenはrotation方式です。BMZ Player側はプロセス内のmutexでrefreshを直列化します。サーバーは直前に`rotated`になったtokenの再利用を並行retryとみなし、新しいtokenを含むsession全体の失効はしません。
-- ログインとrefreshの応答は`provider_key`を返します。BMZ Playerはこの値を、credentials・device key・`ir_score_jobs.provider`・`primary_provider`の識別子に使い、URLから推測しません。ローカルのIRは`bmz-dev`、本番のIRは`bmz`を返します。サーバー側では`NUXT_IR_PROVIDER_KEY`で明示的に変更できます。
+- BMZ IRのログインとrefreshの応答は`provider_key`を返します。BMZ Playerはこの値を、credentials・device key・`ir_score_jobs.provider`・`primary_provider`の識別子に使います。ローカルのIRは`bmz-dev`、本番のIRは`bmz`を返します。サーバー側では`NUXT_IR_PROVIDER_KEY`で明示的に変更できます。
+- 認証情報には接続先のorigin（scheme、host、port）を保存します。設定行のoriginが保存値と異なる場合、その行は未ログインとして扱います。ログアウトで別originの認証情報を削除することはありません。
+- `bmz` / `bmz-official`、`bms-ir`、`rian-ir` はそれぞれ組み込みの既定originで使います。有効な別の設定行と同じキーを異なるoriginで使うログインも拒否します。カスタムBMZ IRには組み込みと異なる`provider_key`を設定してください。
+- originを記録していない既存の認証情報は、組み込みキーとその既定originがそろう場合だけ移行します。カスタムIRは再ログインが必要です。キーを返さないカスタムrianIRでは、クライアントがoriginごとに安定したキーを割り当てます。旧キーの送信ジョブは新しいキーへ自動で移しません。
 - Playerで秘密情報を読み書き・削除する際は、`provider_key`を1〜64文字のASCII英数字・`-`・`_`に限定し、Windowsの予約デバイス名も拒否します。独自IRのキーもこの条件を満たす必要があります。refresh応答によるキーの変更は受け付けません。
 - IP単位のレート制限は、Cloudflareの実行コンテキストがある場合だけ`CF-Connecting-IP`を使います。それ以外は接続元ソケットのIPを使い、`X-Forwarded-For`は信用しません。Nodeをリバースプロキシの背後で動かす場合はプロキシ単位の制限になります。
 

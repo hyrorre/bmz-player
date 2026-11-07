@@ -37,3 +37,19 @@
 - `cargo fmt --check`、`cargo check --workspace --locked`、`cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。
 - `cargo test -p bmz-chart -p bmz-player --locked` は `bmz-chart` が189成功・2 ignored、`bmz-player` が2,907成功・58 ignored（起動テスト2件を含む）。失敗は0件。
 - `bun run test:ir` と `bun x vue-tsc --noEmit` は成功。Prettierの対象となるWebファイルの変更はない。
+
+## #9 IR認証情報と接続先origin
+
+- scheme、host、portから求めたoriginをログイン時とrefresh時に保存する。設定と一致する認証情報だけを同期・設定UI・CLIで使い、ログアウトも一致する認証情報だけを削除する。
+- 組み込みキーを既定外のoriginへ割り当てるログインと、有効な他の設定行とのキー衝突を拒否する。大文字小文字が異なるキーもファイル名が衝突する環境を考慮する。GUIではログインの応答を反映する時点の設定を検査する。
+- originのない旧データは、組み込みキーと既定originが一致する場合に限って保存し直す。カスタムIRの旧データは再ログインまで使わない。
+- rianIR互換の応答にキーがないため、カスタムoriginではクライアントがoriginごとのキーを生成する。ファイル名とキーチェーンの命名形式は従来どおり。旧キーの送信ジョブは移さない。
+- IR HTTPクライアントは別originへのリダイレクトを拒否する。Bearer tokenを付けるリプレイのアップロード先URLもoriginを照合する。
+- 移行と再ログインの条件は [IR仕様](../../docs/ir.md) に記載した。
+
+### 検証
+
+- `cargo fmt --check`、`cargo check -p bmz-player --locked`、`cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。
+- `cargo test -p bmz-player --locked` は2,913成功、0失敗、58 ignored（起動テスト2件を含む）。ポート・schemeの違い、組み込みキーの拒否、旧データの移行、カスタムrianIRのキーを確認した。ローカルHTTPモックで、公式キーの上書き拒否とrefreshが別originへ転送されないことを確認した。
+- `bun run test:ir` と `bun x vue-tsc --noEmit` は成功。Prettierの対象となるWebファイルの変更はない。
+- NOT VERIFIED — Windows Credential Manager、macOS Keychain、Linux Secret Serviceとの実機連携と実IRへのログイン。

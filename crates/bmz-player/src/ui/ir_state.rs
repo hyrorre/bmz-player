@@ -16,6 +16,14 @@ pub(super) struct IrLoginUiState {
 pub(super) struct IrLoginForm {
     pub(super) email: String,
     pub(super) password: String,
+    credential_status: Option<IrCredentialStatus>,
+}
+
+struct IrCredentialStatus {
+    provider_key: String,
+    base_url: String,
+    store: IrCredentialStoreConfig,
+    signed_in: bool,
 }
 
 #[derive(Default)]
@@ -66,11 +74,9 @@ impl IrProviderUiMessage {
 
 /// ログインタスクから UI スレッドへ返す結果。
 pub(super) struct IrLoginOutcome {
-    pub(super) provider: String,
-    pub(super) provider_key: String,
-    pub(super) base_url: String,
-    pub(super) account_id: String,
-    pub(super) display_name: String,
+    target: IrProviderUiTarget,
+    profile_root: PathBuf,
+    credentials: IrStoredCredentials,
 }
 
 /// プロファイル設定パネルの IR device key 操作状態。
@@ -212,6 +218,44 @@ impl IrDeviceKeyUiState {
 }
 
 impl IrLoginUiState {
+    pub(super) fn is_signed_in(
+        &mut self,
+        index: usize,
+        profile_root: &Path,
+        provider_key: &str,
+        base_url: &str,
+        store: IrCredentialStoreConfig,
+    ) -> bool {
+        let form = self.provider_form_mut(index);
+        if let Some(status) = &form.credential_status
+            && status.provider_key == provider_key
+            && status.base_url == base_url
+            && status.store == store
+        {
+            return status.signed_in;
+        }
+        let signed_in = match load_credentials(profile_root, provider_key, base_url) {
+            Ok(credentials) => credentials.is_some(),
+            Err(error) => {
+                tracing::warn!(%error, "failed to check IR sign-in status");
+                false
+            }
+        };
+        form.credential_status = Some(IrCredentialStatus {
+            provider_key: provider_key.to_owned(),
+            base_url: base_url.to_owned(),
+            store,
+            signed_in,
+        });
+        signed_in
+    }
+
+    pub(super) fn invalidate_credential_status(&mut self) {
+        for form in &mut self.provider_forms {
+            form.credential_status = None;
+        }
+    }
+
     pub(super) fn provider_form_mut(&mut self, index: usize) -> &mut IrLoginForm {
         if self.provider_forms.len() <= index {
             self.provider_forms.resize_with(index + 1, IrLoginForm::default);
@@ -240,7 +284,12 @@ impl IrLoginUiState {
 
     /// ログインタスクの完了を取り込み、成功時は provider 設定を更新する。
     /// profile 設定が更新された (保存が必要な) 場合に true を返す。
-    pub(super) fn poll(&mut self, profile: &mut ProfileConfig, text: Localizer) -> bool {
+    pub(super) fn poll(
+        &mut self,
+        profile: &mut ProfileConfig,
+        profile_root: &Path,
+        text: Localizer,
+    ) -> bool {
         let Some(receiver) = &self.receiver else {
             return false;
         };
@@ -266,44 +315,56 @@ impl IrLoginUiState {
         self.busy = false;
         let form_index = self.busy_form_index.take();
         let target = self.busy_target.take();
+        let result = result.and_then(|outcome| {
+            let Some(index) = form_index.filter(|&index| {
+                outcome.profile_root == profile_root
+                    && profile.ir.providers.get(index).is_some_and(|entry| {
+                        outcome.target.matches(&entry.provider, &entry.base_url)
+                    })
+            }) else {
+                return Err("IR provider settings changed during login".into());
+            };
+            validate_login_origin(
+                &profile.ir,
+                Some(index),
+                &outcome.credentials.provider,
+                &outcome.credentials.origin,
+            )
+            .and_then(|()| save_credentials(profile_root, &outcome.credentials))
+            .map_err(|error| format!("{error:#}"))?;
+            Ok((index, outcome))
+        });
         match result {
-            Ok(outcome) => {
-                if let Some(form) = form_index.and_then(|index| self.provider_forms.get_mut(index))
-                {
+            Ok((index, outcome)) => {
+                self.invalidate_credential_status();
+                if let Some(form) = self.provider_forms.get_mut(index) {
                     form.password.clear();
                 }
-                self.message = form_index.map(|form_index| IrProviderUiMessage {
-                    provider_index: Some(form_index),
-                    target: IrProviderUiTarget::new(
-                        outcome.provider.clone(),
-                        outcome.base_url.clone(),
-                    ),
+                let credentials = outcome.credentials;
+                self.message = Some(IrProviderUiMessage {
+                    provider_index: Some(index),
+                    target: outcome.target,
                     ok: true,
                     text: tr!(
                         text,
                         "profile-ir-login-success",
-                        "display_name" => outcome.display_name.clone(),
+                        "display_name" => credentials.display_name.clone(),
                     ),
                 });
-                if let Some(entry) = form_index
-                    .and_then(|index| profile.ir.providers.get_mut(index))
-                    .filter(|entry| {
-                        entry.provider == outcome.provider && entry.base_url == outcome.base_url
-                    })
-                {
-                    entry.enabled = true;
-                    entry.provider_key = outcome.provider_key.clone();
-                    entry.account_id = outcome.account_id;
-                    entry.account_display_name = outcome.display_name;
-                    entry.last_login_at = Some(now_unix_seconds());
-                    if profile.ir.primary_provider.is_empty() {
-                        profile.ir.primary_provider = outcome.provider_key;
-                        entry.role = IrProviderRoleConfig::Primary;
-                    }
-                    sync_ir_provider_roles(&mut profile.ir);
-                    return true;
+                let entry = &mut profile.ir.providers[index];
+                let was_primary = entry.role == IrProviderRoleConfig::Primary
+                    && profile.ir.primary_provider == entry.provider_key;
+                entry.enabled = true;
+                entry.provider_key = credentials.provider.clone();
+                entry.account_id = credentials.account_id;
+                entry.account_display_name = credentials.display_name;
+                entry.last_login_at = Some(now_unix_seconds());
+                if profile.ir.primary_provider.is_empty() || was_primary {
+                    profile.ir.primary_provider = credentials.provider;
+                    entry.role = IrProviderRoleConfig::Primary;
                 }
-                false
+                sync_ir_provider_roles(&mut profile.ir);
+                true
             }
             Err(error) => {
                 self.message = target.and_then(|target| {
@@ -340,6 +401,7 @@ impl IrLoginUiState {
         self.message = None;
         tokio::spawn(async move {
             let outcome = async {
+                let origin = credential_origin(&base_url)?;
                 let tokens = if crate::ir::bms_ir::is_bms_ir_provider(&provider) {
                     crate::ir::bms_ir::BmsIrClient::new(&base_url)?.login(&email, &password).await?
                 } else if crate::ir::rian_ir::is_rian_ir_provider(&provider) {
@@ -351,26 +413,18 @@ impl IrLoginUiState {
                         .login(&email, &password)
                         .await?
                 };
-                let provider_key = tokens.provider_key.clone();
-                let display_name =
-                    tokens.player.display_name.clone().unwrap_or_else(|| email.clone());
-                crate::ir::credentials::save_credentials(
-                    &profile_root,
-                    &crate::ir::credentials::IrStoredCredentials {
-                        provider: provider_key.clone(),
-                        account_id: tokens.player.id.clone(),
-                        display_name: display_name.clone(),
+                anyhow::Ok(IrLoginOutcome {
+                    target: IrProviderUiTarget::new(provider, base_url),
+                    profile_root,
+                    credentials: IrStoredCredentials {
+                        provider: tokens.provider_key,
+                        origin,
+                        account_id: tokens.player.id,
+                        display_name: tokens.player.display_name.unwrap_or(email),
                         access_token: tokens.access_token,
                         refresh_token: tokens.refresh_token,
                         expires_at: tokens.expires_at,
                     },
-                )?;
-                anyhow::Ok(IrLoginOutcome {
-                    provider,
-                    provider_key,
-                    base_url,
-                    account_id: tokens.player.id,
-                    display_name,
                 })
             }
             .await
@@ -406,3 +460,10 @@ pub(super) fn short_public_key(public_key: &str) -> String {
     format!("{}…{}", &public_key[..8], &public_key[public_key.len() - 8..])
 }
 use super::*;
+use std::path::{Path, PathBuf};
+
+use crate::config::profile_config::IrCredentialStoreConfig;
+use crate::ir::credentials::{
+    IrStoredCredentials, credential_origin, load_credentials, save_credentials,
+    validate_login_origin,
+};

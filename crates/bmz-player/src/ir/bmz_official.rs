@@ -51,11 +51,9 @@ pub struct IrOwnScoreHistoryRequest {
 
 impl BmzOfficialIrClient {
     pub fn new(base_url: &str, access_token: impl Into<String>) -> Result<Self> {
-        Ok(Self {
-            base_url: parse_base_url(base_url)?,
-            access_token: Some(access_token.into()),
-            http: reqwest::Client::new(),
-        })
+        let mut client = Self::anonymous(base_url)?;
+        client.set_access_token(access_token);
+        Ok(client)
     }
 
     /// ログイン前 (token なし) のクライアント。`login` / `refresh` / 匿名 ranking 用。
@@ -63,7 +61,10 @@ impl BmzOfficialIrClient {
         Ok(Self {
             base_url: parse_base_url(base_url)?,
             access_token: None,
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .redirect(super::credentials::same_origin_redirects())
+                .build()
+                .context("failed to build BMZ IR HTTP client")?,
         })
     }
 
@@ -144,6 +145,11 @@ impl BmzOfficialIrClient {
     /// upload-url で得た endpoint へ replay 本体を PUT する。
     /// server 側は認証 + 所有者チェックを行うため Bearer トークンを付ける。
     pub async fn upload_replay(&self, upload_url: &str, bytes: Vec<u8>) -> Result<()> {
+        let upload_url = Url::parse(upload_url).context("invalid BMZ IR replay upload URL")?;
+        anyhow::ensure!(
+            upload_url.origin() == self.base_url.origin(),
+            "IR replay upload URL changed the origin"
+        );
         let response = self
             .http
             .put(upload_url)

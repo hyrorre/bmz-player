@@ -204,6 +204,7 @@ impl BmsIrClient {
             base_url,
             http: reqwest::Client::builder()
                 .timeout(timeout)
+                .redirect(super::credentials::same_origin_redirects())
                 .build()
                 .context("failed to build BMS-IR HTTP client")?,
         })

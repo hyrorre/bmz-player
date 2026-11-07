@@ -107,9 +107,19 @@ impl<'a> SecretSlot<'a> {
 
     /// 保存済みの JSON 文字列を読む。`Os` 設定ならファイルからの移行も行う。
     pub fn load(&self) -> Result<Option<String>> {
+        self.load_if(|_| Ok(true))
+    }
+
+    pub(super) fn load_if(&self, accepts: impl Fn(&str) -> Result<bool>) -> Result<Option<String>> {
         validate_provider_key(self.provider)?;
+        let accepted = |secret: Option<String>| -> Result<Option<String>> {
+            match secret {
+                Some(secret) if accepts(&secret)? => Ok(Some(secret)),
+                _ => Ok(None),
+            }
+        };
         match self.store {
-            IrCredentialStoreConfig::File => self.load_file(),
+            IrCredentialStoreConfig::File => accepted(self.load_file()?),
             IrCredentialStoreConfig::Os => {
                 match keyring_entry(self.kind, self.provider, self.profile_root).and_then(|entry| {
                     match entry.get_password() {
@@ -120,11 +130,11 @@ impl<'a> SecretSlot<'a> {
                         }
                     }
                 }) {
-                    Ok(Some(secret)) => Ok(Some(secret)),
+                    Ok(Some(secret)) => accepted(Some(secret)),
                     Ok(None) => {
                         // ファイル保存からの移行: 読めたら OS ストアへ書いて
                         // 元ファイルを消す。
-                        let Some(secret) = self.load_file()? else {
+                        let Some(secret) = accepted(self.load_file()?)? else {
                             return Ok(None);
                         };
                         if self.save_os(&secret).is_ok() {
@@ -139,7 +149,7 @@ impl<'a> SecretSlot<'a> {
                     }
                     Err(error) => {
                         tracing::warn!(%error, "OS credential store unavailable; falling back to file");
-                        self.load_file()
+                        accepted(self.load_file()?)
                     }
                 }
             }
@@ -175,6 +185,36 @@ impl<'a> SecretSlot<'a> {
             }
         }
         if self.file_path.exists() {
+            std::fs::remove_file(&self.file_path)?;
+            removed = true;
+        }
+        Ok(removed)
+    }
+
+    /// A fallback file and an OS entry can coexist. Check each before deleting it.
+    pub(super) fn delete_if(&self, accepts: impl Fn(&str) -> Result<bool>) -> Result<bool> {
+        validate_provider_key(self.provider)?;
+        let mut removed = false;
+        if self.store == IrCredentialStoreConfig::Os
+            && let Ok(entry) = keyring_entry(self.kind, self.provider, self.profile_root)
+        {
+            match entry.get_password() {
+                Ok(secret) if accepts(&secret)? => match entry.delete_credential() {
+                    Ok(()) => removed = true,
+                    Err(keyring::Error::NoEntry) => {}
+                    Err(error) => {
+                        tracing::warn!(%error, "failed to delete secret from OS credential store")
+                    }
+                },
+                Ok(_) | Err(keyring::Error::NoEntry) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "failed to read secret from OS credential store for deletion")
+                }
+            }
+        }
+        if let Some(secret) = self.load_file()?
+            && accepts(&secret)?
+        {
             std::fs::remove_file(&self.file_path)?;
             removed = true;
         }

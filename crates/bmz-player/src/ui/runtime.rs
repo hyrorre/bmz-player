@@ -295,7 +295,7 @@ impl EguiLayer {
         let license_notice_text = &mut self.license_notice_text;
         let mut obs_enabled_changed = false;
         let mut save_app_config = false;
-        let mut save_profile_config = self.ir_login.poll(profile_config, text);
+        let mut save_profile_config = self.ir_login.poll(profile_config, profile_root, text);
         self.ir_device_key.poll(text);
         let mut key_config_action = None;
         let mut profile_action = None;

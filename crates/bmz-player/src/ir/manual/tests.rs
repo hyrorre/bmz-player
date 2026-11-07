@@ -639,6 +639,10 @@ impl UploadFixture {
             &self.dir,
             &crate::ir::credentials::IrStoredCredentials {
                 provider: "target-a".into(),
+                origin: crate::ir::credentials::credential_origin(
+                    &self.config.providers[0].base_url,
+                )
+                .unwrap(),
                 account_id: "account-a".into(),
                 display_name: String::new(),
                 access_token: "token".into(),

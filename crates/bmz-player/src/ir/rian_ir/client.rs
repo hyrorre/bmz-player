@@ -6,6 +6,7 @@ impl RianIrClient {
             base_url: parse_base_url(base_url)?,
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(15))
+                .redirect(crate::ir::credentials::same_origin_redirects())
                 .build()
                 .context("failed to build rianIR HTTP client")?,
         })
@@ -24,7 +25,7 @@ impl RianIrClient {
             bail!("rianIR login response did not contain api_token");
         }
         Ok(IrAuthTokens {
-            provider_key: RIAN_IR_PROVIDER.to_string(),
+            provider_key: login_provider_key(&self.base_url)?,
             access_token: decoded.data.meta.api_token,
             refresh_token: String::new(),
             expires_at: None,
@@ -273,6 +274,29 @@ impl RianIrClient {
         }
         Ok(url)
     }
+}
+
+fn login_provider_key(base_url: &Url) -> Result<String> {
+    use sha2::{Digest, Sha256};
+
+    let origin = crate::ir::credentials::credential_origin(base_url.as_str())?;
+    if origin == crate::ir::credentials::credential_origin(RIAN_IR_DEFAULT_BASE_URL)? {
+        return Ok(RIAN_IR_PROVIDER.to_string());
+    }
+    // rianIR's response does not supply a provider key. Custom origins need
+    // their own stable key to coexist with the official service.
+    let hash = Sha256::digest(origin.as_bytes());
+    Ok(format!("{RIAN_IR_PROVIDER}-{}", crate::storage::common::hash_to_hex(&hash[..16])))
+}
+
+#[cfg(test)]
+#[test]
+fn custom_rian_ir_uses_a_distinct_key_for_each_origin() {
+    let key = |url| login_provider_key(&Url::parse(url).unwrap()).unwrap();
+    assert_eq!(key(RIAN_IR_DEFAULT_BASE_URL), RIAN_IR_PROVIDER);
+    assert_eq!(key("https://IR.example.test:443/api"), key("https://ir.example.test"));
+    assert_ne!(key("https://ir.example.test"), RIAN_IR_PROVIDER);
+    assert_ne!(key("https://ir.example.test"), key("https://ir.example.test:8443"));
 }
 
 pub(super) fn parse_base_url(base_url: &str) -> Result<Url> {
