@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bmz_chart::model::{
     LongNoteMode, LongNotePair, LongNoteStyle, NoteEvent, NoteKind, PlayableChart, ScrollEvent,
-    SoundEvent, TimingEventKind,
+    TimingEventKind,
 };
 use bmz_chart::timing::TimingMap;
 use bmz_core::ids::NoteId;
@@ -18,6 +18,8 @@ use crate::config::profile_config::{
 };
 use crate::random_option_seed::JavaRandom;
 use crate::select_options::ArrangeOption;
+
+mod extra_notes;
 
 pub const EXPAND_JUDGE_MASK: u32 = 1 << 0;
 pub const CONSTANT_MASK: u32 = 1 << 1;
@@ -39,6 +41,11 @@ pub fn configured_mask(config: AssistOptionConfig) -> u32 {
 
 pub fn mask_flags(mask: u32) -> [bool; 7] {
     std::array::from_fn(|index| mask & (1 << index) != 0)
+}
+
+/// EXTRA NOTE設定だけでは無効化しない。再送時もOFFと同じ成績として扱う。
+pub fn recorded_mask(runtime: AssistRuntime) -> u32 {
+    (runtime.configured_mask & !EXTRA_NOTE_MASK) | (runtime.effective_mask & EXTRA_NOTE_MASK)
 }
 
 /// beatoraja で Light Assist 扱いになる配置を、実効アシストへ合成する。
@@ -85,7 +92,7 @@ pub fn merge_auto_scratch_assist_level(
     }
 }
 
-/// 譜面依存の有効性を判定しながら、beatoraja と同じ modifier 順で適用する。
+/// EXTRA NOTE以外を、譜面依存の有効性を判定しながら適用する。
 ///
 /// 呼び出し位置は LN policy の後、DOUBLE / lane arrange の前とする。
 pub fn apply_chart_assists(
@@ -162,12 +169,6 @@ pub fn apply_chart_assists(
         mode => add_mines(chart, mode, &mut rng),
     }
 
-    if config.extra_note_depth > 0
-        && add_extra_notes(chart, config.extra_note_depth, config.extra_note_scratch)
-    {
-        mark_effect(&mut runtime, EXTRA_NOTE_MASK, AssistLevel::Assist);
-    }
-
     if config.bpm_guide && variable_bpm {
         mark_effect(&mut runtime, BPM_GUIDE_MASK, AssistLevel::LightAssist);
     }
@@ -180,6 +181,37 @@ pub fn apply_chart_assists(
         .count()
         .min(u32::MAX as usize) as u32;
     runtime
+}
+
+/// 最終配置へBGMを追加し、実際に追加できた場合だけAssistへ昇格する。
+/// 戻り値は追加ID範囲の先頭（表示専用の対戦譜面から除くために使う）。
+pub fn apply_extra_note_assist(
+    chart: &mut PlayableChart,
+    config: AssistOptionConfig,
+    runtime: &mut AssistRuntime,
+    primary_only: bool,
+) -> Option<NoteId> {
+    if config.extra_note_depth == 0 || chart.bgm_events.is_empty() {
+        return None;
+    }
+    let first_id = next_note_id(chart);
+    if !extra_notes::add_extra_notes(
+        chart,
+        config.extra_note_depth,
+        config.extra_note_scratch,
+        primary_only,
+    ) {
+        return None;
+    }
+    mark_effect(runtime, EXTRA_NOTE_MASK, AssistLevel::Assist);
+    chart.total_notes = chart
+        .lane_notes
+        .iter()
+        .flatten()
+        .filter(|note| matches!(note.kind, NoteKind::Tap | NoteKind::LongStart))
+        .count()
+        .min(u32::MAX as usize) as u32;
+    Some(first_id)
 }
 
 pub fn apply_custom_judge_windows(
@@ -494,54 +526,6 @@ fn add_mines(chart: &mut PlayableChart, mode: AssistMineMode, rng: &mut JavaRand
     }
 }
 
-fn add_extra_notes(chart: &mut PlayableChart, depth: u8, scratch: bool) -> bool {
-    let mut grouped: BTreeMap<(TimeUs, ChartTick), Vec<SoundEvent>> = BTreeMap::new();
-    for event in chart.bgm_events.drain(..) {
-        grouped.entry((event.time, event.tick)).or_default().push(event);
-    }
-    let mut next_id = next_note_id(chart);
-    let mut moved = false;
-    let mut last_offset = 0;
-    let active_lanes = chart.metadata.key_mode.active_lanes();
-    for ((time, tick), mut events) in grouped {
-        for _ in 0..depth {
-            let Some(sound) = events.first().map(|event| event.sound) else {
-                break;
-            };
-            let target = (0..active_lanes.len()).find_map(|step| {
-                let position = (last_offset + step) % active_lanes.len();
-                let lane = active_lanes[position];
-                let is_scratch = matches!(lane, Lane::Scratch | Lane::Scratch2);
-                (lane_is_blank_at(chart, lane, time) && (scratch || !is_scratch))
-                    .then_some((position, lane))
-            });
-            let Some((position, lane)) = target else {
-                break;
-            };
-            last_offset = position;
-            chart.lane_notes[lane.index()].push(NoteEvent {
-                id: next_id,
-                lane,
-                kind: NoteKind::Tap,
-                tick,
-                time,
-                sound: Some(sound),
-                layered_sounds: Vec::new(),
-                damage: None,
-            });
-            next_id.0 = next_id.0.saturating_add(1);
-            events.remove(0);
-            moved = true;
-        }
-        chart.bgm_events.extend(events);
-    }
-    chart.bgm_events.sort_by_key(|event| event.time);
-    for notes in &mut chart.lane_notes {
-        notes.sort_by_key(|note| (note.time, note.id));
-    }
-    moved
-}
-
 fn chart_timeline(chart: &PlayableChart) -> Vec<(TimeUs, ChartTick)> {
     let mut timeline = BTreeMap::new();
     for note in chart.lane_notes.iter().flatten() {
@@ -594,7 +578,7 @@ mod tests {
     use bmz_chart::model::{BarLine, ChartMetadata, TimingEvent};
     use bmz_core::ids::SoundId;
 
-    fn chart() -> PlayableChart {
+    pub(super) fn chart() -> PlayableChart {
         let start = NoteEvent {
             id: NoteId(1),
             lane: Lane::Key1,

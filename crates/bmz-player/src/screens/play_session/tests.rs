@@ -311,6 +311,8 @@ mod cases_04;
 mod cases_05;
 #[path = "tests/cases_06.rs"]
 mod cases_06;
+#[path = "tests/extra_notes.rs"]
+mod extra_notes;
 #[path = "tests/mirror.rs"]
 mod mirror;
 #[path = "tests/optional_play_behaviors.rs"]

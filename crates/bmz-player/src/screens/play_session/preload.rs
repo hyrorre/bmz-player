@@ -276,10 +276,15 @@ pub fn preload_play_session_for_chart_with_callbacks(
         && let Some(opponent) = opponent_chart.as_deref()
     {
         if options.session_mode == SessionMode::GBattle {
-            // G-BATTLE always presents the same final arrangement on both
-            // sides. The independent opponent chart remains available below
+            // G-BATTLE presents the same base arrangement on both sides;
+            // EXTRA NOTE additions belong only to the player. The opponent remains available below
             // for replay judgement or autoplay fallback.
-            let primary_display = primary_chart.clone();
+            let mut primary_display = primary_chart.clone();
+            if let Some(first) = imported.extra_note_start_id {
+                for notes in &mut primary_display.lane_notes {
+                    notes.retain(|note| note.id < first);
+                }
+            }
             apply_battle_opponent_chart(&mut primary_chart, &primary_display);
         } else {
             apply_battle_opponent_chart(&mut primary_chart, opponent);
@@ -431,6 +436,7 @@ pub(super) struct TransformedPlayChart {
     pub(super) applied_arrange: AppliedArrange,
     pub(super) score_key: ScoreKey,
     pub(super) assist_runtime: bmz_gameplay::session::AssistRuntime,
+    pub(super) extra_note_start_id: Option<bmz_core::ids::NoteId>,
     pub(super) score_save_disabled: bool,
     pub(super) source_key_mode: KeyMode,
 }
@@ -585,6 +591,19 @@ fn transform_chart_import(
     } else if sp_to_dp {
         apply_sp_to_dp(&mut chart);
     }
+    // DP BATTLE is one SP chart played twice. Select BGM additions once before
+    // cloning, then let the existing independent side arrangements act on both.
+    let extra_before_battle = applied_double_option.is_battle();
+    let mut extra_note_start_id = if extra_before_battle {
+        crate::assist::apply_extra_note_assist(
+            &mut chart,
+            options.assist,
+            &mut assist_runtime,
+            false,
+        )
+    } else {
+        None
+    };
     apply_double_option(&mut chart, applied_double_option);
     let duplicate_primary_for_battle = key_mode_conversion == KeyModeConversionConfig::Off
         && battle_presentation
@@ -631,6 +650,14 @@ fn transform_chart_import(
             options.h_random_threshold_ms.unwrap_or(125),
         );
     }
+    if !extra_before_battle {
+        extra_note_start_id = crate::assist::apply_extra_note_assist(
+            &mut chart,
+            options.assist,
+            &mut assist_runtime,
+            battle_presentation,
+        );
+    }
     // LR2oraja Endless Dream と同じく全譜面オプションの後で判定し、配置で
     // スクラッチへ移ったノーツも自動演奏の対象として数える。
     if options.assist.auto_scratch
@@ -658,6 +685,7 @@ fn transform_chart_import(
         applied_arrange,
         score_key,
         assist_runtime,
+        extra_note_start_id,
         score_save_disabled: options.score_save_disabled
             || conversion_persistence_disabled
             || crate::cli::latency_validation_enabled(),

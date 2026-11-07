@@ -96,6 +96,10 @@ FULL COMBOでも`LightAssistEasy` / `AssistEasy`になります。
 | `MINE=ADD RANDOM/NEAR/BLANK` | Mineを追加 | なし | 通常保存 |
 | AUTO SCRATCH | 全譜面オプション適用後、自分側のスクラッチレーンに採点対象ノーツがある | Assist | clear-only |
 
+EXTRA NOTEは[BMZ独自の配置制限](extra-note.md)を使います。DEPTHが正でも追加ゼロなら通常保存・IR候補です。
+その場合は履歴のassist maskにもEXTRA NOTE bitを残しません。実際に追加された場合だけ
+Assistのclear-only経路を使い、FAILEDを含むランプ・回数を保存します。
+
 AUTO SCRATCHはLR2 / LR2oraja Endless Dreamの同名オプションに合わせます。両者ともスコアを保存せず、
 クリアはイージー（Endless DreamはASSIST EASY）扱いにします。リプレイ再生では自動演奏せず、
 全体AUTOPLAYではもともと保存しません。DP OPTIONの`BATTLE`と併用した場合は`BATTLE AS`

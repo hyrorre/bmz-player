@@ -1566,6 +1566,11 @@ fn assert_assist_easy_gauge_play_is_saved_and_submitted(label: &str, session: Ga
     assert_eq!(best.clear_count, 1, "{label}");
     let history = score_db.recent_history(10, 0).unwrap();
     assert_eq!(history.len(), 1, "{label}");
+    let assist_mask: u32 = score_db
+        .conn()
+        .query_row("SELECT assist_mask FROM score_history", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(assist_mask, 0, "{label}: no-effect EXTRA NOTE must remain eligible for backfill");
     assert_eq!(history[0].clear_type, "LightAssistEasy", "{label}");
     assert_eq!(history[0].ex_score, 2, "{label}");
     let stats = score_db.player_stats().unwrap();
@@ -1596,6 +1601,68 @@ fn assist_easy_gauge_play_saves_numeric_score_and_enqueues_every_ir() {
         "finish-assist-easy-gauge",
         assist_easy_session(assist_easy_gauge()),
     );
+}
+
+#[test]
+fn extra_notes_without_an_effect_save_and_submit_like_off() {
+    let mut session = assist_easy_session(assist_easy_gauge());
+    let config = crate::config::profile_config::AssistOptionConfig {
+        extra_note_depth: 1,
+        ..Default::default()
+    };
+    let chart = Arc::make_mut(&mut session.chart);
+    chart.bgm_events.clear();
+    let mut runtime = crate::assist::apply_chart_assists(chart, config, 0);
+    assert!(crate::assist::apply_extra_note_assist(chart, config, &mut runtime, false).is_none());
+    assert_eq!(runtime.level, bmz_gameplay::session::AssistLevel::None);
+    assert_eq!(crate::assist::recorded_mask(runtime), 0);
+    session.assist = runtime;
+    assert_assist_easy_gauge_play_is_saved_and_submitted("extra-note-no-effect", session);
+}
+
+#[test]
+fn extra_notes_with_an_effect_keep_clear_only_for_clear_and_forced_failure() {
+    for failed in [false, true] {
+        let root = make_temp_dir("extra-note-effective");
+        let paths = profile_paths(&root);
+        let mut score_db = open_score_db();
+        let mut network_db = open_network_db();
+        let mut session = assist_easy_session(assist_easy_gauge());
+        let config = crate::config::profile_config::AssistOptionConfig {
+            extra_note_depth: 1,
+            ..Default::default()
+        };
+        let chart = Arc::make_mut(&mut session.chart);
+        chart.bgm_events.push(bmz_chart::model::SoundEvent {
+            time: chart.lane_notes[Lane::Key1.index()][0].time,
+            tick: ChartTick(0),
+            sound: bmz_core::ids::SoundId(1),
+        });
+        let mut runtime = crate::assist::apply_chart_assists(chart, config, 0);
+        assert!(
+            crate::assist::apply_extra_note_assist(chart, config, &mut runtime, false).is_some()
+        );
+        session.assist = runtime;
+        if failed {
+            session.state = PlayState::Failed;
+        }
+        let finished = finish_with_all_providers(
+            &mut score_db,
+            &mut network_db,
+            &paths,
+            &session,
+            1_700_000_400,
+        );
+        let best = score_db.best_scores_for_charts(&[score_key(&session)]).unwrap().pop().unwrap();
+        assert_eq!(best.clear_type, if failed { "Failed" } else { "AssistEasy" });
+        assert_eq!(best.play_count, 1);
+        assert_eq!(best.ex_score, 0);
+        assert_eq!(finished.stored.score_history_id, 0);
+        assert_eq!(finished.summary.ir_queued_jobs, 0);
+        assert!(score_db.recent_history(10, 0).unwrap().is_empty());
+        assert!(finished.stored.replay_path.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[test]
