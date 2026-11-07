@@ -246,6 +246,8 @@ pub struct FinishSessionSnapshot {
     course_max_combo: u32,
     result_judgements: HashMap<NoteId, ResultJudgementDetail>,
     failed_gauge: Option<GaugeState>,
+    /// プレイヤーの操作で曲の途中に止めたか。IR の `complete_song` 判定に使う。
+    manually_stopped: bool,
     assist: AssistRuntime,
     battle_opponent: Option<bmz_render::snapshot::OpponentRenderSnapshot>,
 }
@@ -344,6 +346,7 @@ impl FinishSessionSnapshot {
             course_max_combo: session.display_max_combo(),
             result_judgements: session.result_judgements.clone(),
             failed_gauge: (session.state == PlayState::Failed).then(|| session.gauge.clone()),
+            manually_stopped: session.manually_stopped,
             assist: session.assist,
             battle_opponent: crate::screens::play_snapshot::final_opponent_render_snapshot(session),
         }
@@ -657,7 +660,12 @@ fn enqueue_ir_jobs(
         .iter()
         .filter(|provider| {
             provider.enabled
-                && should_send_ir_score(provider.send_policy, result, previous_best)
+                && should_send_ir_score(
+                    provider.send_policy,
+                    result,
+                    snapshot.manually_stopped,
+                    previous_best,
+                )
                 && (!crate::ir::rian_ir::is_rian_ir_config(provider)
                     || crate::ir::rian_ir::score_submission_supported(
                         score_key.ln_policy,
@@ -771,7 +779,9 @@ fn enqueue_ir_jobs(
 /// 送信ポリシーによる IR ジョブ作成可否。
 ///
 /// - `Always`: 常に送る
-/// - `CompleteSong`: 最終ゲージが 0 より大きい場合だけ送る
+/// - `CompleteSong`: 途中で手動中断しておらず、最終ゲージが 0 より大きい場合だけ送る。
+///   ASSIST EASY / EASY / NORMAL はゲージ下限が 2% で 0 にならないため、
+///   ゲージだけでは Esc などによる中断を区別できない
 /// - `UpdateScore`: EX / clear / max combo / BP / CB のいずれかが
 ///   ローカルベストから改善した場合 (または初プレイ) だけ送る
 ///
@@ -780,12 +790,13 @@ fn enqueue_ir_jobs(
 fn should_send_ir_score(
     policy: crate::config::profile_config::IrSendPolicyConfig,
     result: &PlayResult,
+    manually_stopped: bool,
     previous_best: Option<&crate::storage::score_db::BestScoreSummary>,
 ) -> bool {
     use crate::config::profile_config::IrSendPolicyConfig;
     match policy {
         IrSendPolicyConfig::Always => true,
-        IrSendPolicyConfig::CompleteSong => result.gauge_value > 0.0,
+        IrSendPolicyConfig::CompleteSong => !manually_stopped && result.gauge_value > 0.0,
         IrSendPolicyConfig::UpdateScore => {
             let Some(best) = previous_best else {
                 return true;

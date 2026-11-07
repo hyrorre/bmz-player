@@ -192,13 +192,16 @@ fn should_send_ir_score_follows_policy() {
     let mut result = play_result_from_session(&session());
     result.gauge_value = 0.0;
     // Failed (ゲージ 0) は CompleteSong では送らない。
-    assert!(should_send_ir_score(IrSendPolicyConfig::Always, &result, None));
-    assert!(!should_send_ir_score(IrSendPolicyConfig::CompleteSong, &result, None));
+    assert!(should_send_ir_score(IrSendPolicyConfig::Always, &result, false, None));
+    assert!(!should_send_ir_score(IrSendPolicyConfig::CompleteSong, &result, false, None));
     result.gauge_value = 12.0;
-    assert!(should_send_ir_score(IrSendPolicyConfig::CompleteSong, &result, None));
+    assert!(should_send_ir_score(IrSendPolicyConfig::CompleteSong, &result, false, None));
+    // ゲージが残っていても、Esc などで途中に止めたプレイは CompleteSong では送らない。
+    assert!(!should_send_ir_score(IrSendPolicyConfig::CompleteSong, &result, true, None));
+    assert!(should_send_ir_score(IrSendPolicyConfig::Always, &result, true, None));
 
     // UpdateScore: ベストが無ければ送る。
-    assert!(should_send_ir_score(IrSendPolicyConfig::UpdateScore, &result, None));
+    assert!(should_send_ir_score(IrSendPolicyConfig::UpdateScore, &result, false, None));
 
     let best = BestScoreSummary {
         play_options: None,
@@ -222,11 +225,11 @@ fn should_send_ir_score_follows_policy() {
         replay_path: String::new(),
     };
     // session() の結果は EX 0 / Failed / combo 0 / BP 1 なので全項目で劣る。
-    assert!(!should_send_ir_score(IrSendPolicyConfig::UpdateScore, &result, Some(&best)));
+    assert!(!should_send_ir_score(IrSendPolicyConfig::UpdateScore, &result, false, Some(&best)));
     // EX が改善すれば送る。
     let mut improved = result.clone();
     improved.score.judges.fast_pgreat = 100;
-    assert!(should_send_ir_score(IrSendPolicyConfig::UpdateScore, &improved, Some(&best)));
+    assert!(should_send_ir_score(IrSendPolicyConfig::UpdateScore, &improved, false, Some(&best)));
 }
 
 fn open_network_db() -> NetworkDatabase {
@@ -1368,6 +1371,7 @@ fn session() -> GameSession {
         input_timestamp_anchor: None,
         pending_mine_hits: Vec::new(),
         state: PlayState::Finished,
+        manually_stopped: false,
         last_hcn_gauge_at: None,
     }
 }
@@ -1678,4 +1682,79 @@ fn assist_easy_gauge_lamp_ranks_between_assist_and_easy() {
     assert_eq!((stats.play_count, stats.clear_count), (4, 4));
 
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn complete_song_policy_skips_manually_stopped_play() {
+    for (manually_stopped, expected_jobs) in [(false, 1), (true, 0)] {
+        let root = make_temp_dir("finish-ir-complete-song");
+        let paths = ProfilePaths {
+            root_dir: root.clone(),
+            profile_toml: root.join("profile.toml"),
+            collection_db: root.join("collection.db"),
+            score_db: root.join("score.db"),
+            network_db: root.join("network.db"),
+            replay_dir: root.join("replay"),
+        };
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut score_db = ScoreDatabase::from_connection(conn);
+        let mut network_db = open_network_db();
+        let replay_config = ReplayConfig {
+            auto_save: false,
+            compress: false,
+            slot_rules: crate::config::profile_config::default_slot_rules(),
+        };
+        let ir_config = IrConfig {
+            primary_provider: "bmz-official".to_string(),
+            providers: vec![IrProviderConfig {
+                provider: "bmz-official".to_string(),
+                provider_key: "bmz-official".to_string(),
+                base_url: String::new(),
+                enabled: true,
+                account_display_name: "Player".to_string(),
+                account_id: "account-1".to_string(),
+                send_policy: crate::config::profile_config::IrSendPolicyConfig::CompleteSong,
+                role: Default::default(),
+                last_login_at: None,
+                last_success_at: None,
+            }],
+            ..IrConfig::default()
+        };
+        let mut session = session();
+        if manually_stopped {
+            // Esc 中断と同じく、ゲージを残したまま Failed で止める。
+            session.state = PlayState::Failed;
+            session.manually_stopped = true;
+        }
+        assert!(session.gauge.result_gauge().value > 0.0);
+
+        let finished = finish_session_result(
+            &mut score_db,
+            &mut network_db,
+            FinishSessionResultRequest {
+                profile_paths: &paths,
+                replay_config: &replay_config,
+                ir_config: &ir_config,
+                session: &session,
+                source_ln_profile: ChartLnProfile::from_chart(&session.chart),
+                chart_length_ms: None,
+                play_duration_ms: None,
+                played_at: 1_700_000_120,
+                applied_arrange: &AppliedArrange::default(),
+                target_ex_score: None,
+                score_key: score_key(&session),
+                practice_mode: false,
+                finish_mode: FinishResultMode::Normal,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            finished.summary.ir_queued_jobs, expected_jobs,
+            "manually_stopped={manually_stopped}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
