@@ -4,7 +4,7 @@ use std::net::{SocketAddr, TcpListener};
 
 // Separate the policy's DNS answers from the loopback-only test transport.
 // Only hosts which passed the public-address policy receive a transport override.
-fn public_services(hosts: &[&str]) -> DownloadServices {
+fn fixture_dns() -> FixtureResolver {
     let answers = [
         ("source.test".into(), vec!["8.8.8.8:0".parse().unwrap()]),
         ("cdn.test".into(), vec!["1.1.1.1:0".parse().unwrap()]),
@@ -13,9 +13,13 @@ fn public_services(hosts: &[&str]) -> DownloadServices {
     ]
     .into_iter()
     .collect();
+    FixtureResolver(answers)
+}
+
+fn public_services(hosts: &[&str]) -> DownloadServices {
     DownloadServices {
         timeout: Some(Duration::from_secs(2)),
-        resolver: Some(Arc::new(FixtureResolver(answers))),
+        resolver: Some(Arc::new(fixture_dns())),
         address_overrides: hosts
             .iter()
             .map(|host| ((*host).into(), vec!["127.0.0.1:0".parse().unwrap()]))
@@ -151,6 +155,14 @@ async fn configured_system_proxy_fixture_child() {
     let api = std::env::var("BMZ_TEST_DOWNLOAD_PROXY_API").unwrap();
     let mut services = public_services(&["source.test"]);
     services.use_system_proxy = true;
+    let mut dns = fixture_dns();
+    if std::env::var_os("BMZ_TEST_DOWNLOAD_PROXY_DNS_FAILURE").is_some() {
+        dns.0.remove("source.test");
+    }
+    if mode.starts_with("success_") {
+        dns.0.remove("cdn.test");
+    }
+    services.resolver = Some(Arc::new(dns));
     let root = tempfile::tempdir().unwrap();
     let result = download_chart_controlled(
         request(root.path(), &api, 1),
@@ -159,7 +171,7 @@ async fn configured_system_proxy_fixture_child() {
         None,
     )
     .await;
-    if mode == "success" {
+    if mode.starts_with("success") {
         assert!(result.unwrap().scan_path.join("song/chart.bms").is_file());
     } else {
         assert!(format!("{:#}", result.unwrap_err()).contains("local"));
@@ -170,20 +182,35 @@ async fn configured_system_proxy_fixture_child() {
 fn system_proxy_is_preserved_but_local_redirects_and_metadata_never_reach_it() {
     // Child-only environment changes avoid racing other tests' proxy settings.
     // A transport override also traps accidental direct connections on loopback.
-    for mode in ["success", "redirect", "metadata"] {
+    for (mode, unresolved) in [false, true].into_iter().flat_map(|unresolved| {
+        ["success", "success_redirect", "success_metadata", "redirect", "metadata"]
+            .into_iter()
+            .map(move |mode| (mode, unresolved))
+    }) {
         let direct = HttpFixture::new(Vec::new(), Duration::ZERO, 500);
         let destination = format!(
             "http://local.test:{}/private",
             Url::parse(&direct.url).unwrap().port().unwrap()
         );
         let body = archive(&[("song/chart.bms", b"#TITLE Proxy\n#BPM 120\n")]);
+        let cdn = public_url(&direct.url, "cdn.test");
         let proxy = HttpFixture::raw_request(
             move |request| {
-                assert!(request.starts_with("GET http://source.test:"), "{request}");
+                assert!(
+                    request.starts_with("GET http://source.test:")
+                        || request.starts_with("GET http://cdn.test:"),
+                    "{request}"
+                );
                 match mode {
                     "redirect" => redirect(302, &destination),
-                    "metadata" => {
-                        let body = serde_json::json!({"downloadURL": destination}).to_string();
+                    "success_redirect" if request.starts_with("GET http://source.test:") => {
+                        redirect(302, &cdn)
+                    }
+                    "metadata" | "success_metadata"
+                        if request.starts_with("GET http://source.test:") =>
+                    {
+                        let target = if mode == "metadata" { &destination } else { &cdn };
+                        let body = serde_json::json!({"downloadURL": target}).to_string();
                         format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).into_bytes()
                     }
                     _ => {
@@ -208,6 +235,11 @@ fn system_proxy_is_preserved_but_local_redirects_and_metadata_never_reach_it() {
                 format!("{}{{md5}}", public_url(&direct.url, "source.test")),
             )
             .env("HTTP_PROXY", public_url(&proxy.url, "proxy.test"));
+        if unresolved {
+            command.env("BMZ_TEST_DOWNLOAD_PROXY_DNS_FAILURE", "1");
+        } else {
+            command.env_remove("BMZ_TEST_DOWNLOAD_PROXY_DNS_FAILURE");
+        }
         for name in ["NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy"] {
             command.env_remove(name);
         }
@@ -218,7 +250,12 @@ fn system_proxy_is_preserved_but_local_redirects_and_metadata_never_reach_it() {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        assert_eq!(proxy.requests.load(Ordering::Relaxed), 1, "{mode}");
+        let expected = if mode.starts_with("success_") { 2 } else { 1 };
+        assert_eq!(
+            proxy.requests.load(Ordering::Relaxed),
+            expected,
+            "{mode}, unresolved={unresolved}"
+        );
         assert_eq!(direct.requests.load(Ordering::Relaxed), 0, "{mode}");
     }
 }

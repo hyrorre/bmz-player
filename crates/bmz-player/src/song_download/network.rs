@@ -1,6 +1,6 @@
 use super::*;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Mutex;
 
 pub(super) const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -15,6 +15,17 @@ impl Resolve for SystemResolver {
             let addresses: Vec<_> = tokio::net::lookup_host((host.as_str(), 0)).await?.collect();
             Ok(Box::new(addresses.into_iter()) as Addrs)
         })
+    }
+}
+
+// A proxy may be the only machine able to resolve the destination. Unknown
+// answers do not enable the local-endpoint exception; direct connections still
+// have to pass the strict resolver below.
+async fn preflight_addresses(resolver: &dyn Resolve, host: &str) -> Vec<SocketAddr> {
+    let Ok(name) = host.parse() else { return Vec::new() };
+    match tokio::time::timeout(CONNECT_TIMEOUT, resolver.resolve(name)).await {
+        Ok(Ok(addresses)) => addresses.collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -36,14 +47,10 @@ impl DownloadResolver {
         let host = initial.host_str().context("download URL has no host")?.to_owned();
         let addresses = match literal_ip(initial) {
             Some(ip) => vec![SocketAddr::new(ip, 0)],
-            None => tokio::time::timeout(CONNECT_TIMEOUT, resolver.resolve(host.parse()?))
-                .await
-                .context("download DNS resolution timed out")?
-                .map_err(anyhow::Error::from_boxed)?
-                .collect(),
+            None => preflight_addresses(resolver.as_ref(), &host).await,
         };
-        anyhow::ensure!(!addresses.is_empty(), "download DNS returned no addresses");
-        let allow_local = addresses.iter().all(|address| is_local_address(address.ip()));
+        let allow_local =
+            !addresses.is_empty() && addresses.iter().all(|address| is_local_address(address.ip()));
         if !allow_local
             && (is_local_hostname(&host)
                 || addresses.iter().any(|address| is_local_address(address.ip())))
@@ -79,13 +86,7 @@ impl DownloadResolver {
             }
             // This lookup runs even when a proxy would resolve the target itself.
             // SystemResolver uses tokio::net::lookup_host; tests inject DNS answers.
-            let addresses: Vec<_> =
-                tokio::time::timeout(CONNECT_TIMEOUT, self.resolver.resolve(host.parse()?))
-                    .await
-                    .context("download DNS resolution timed out")?
-                    .map_err(anyhow::Error::from_boxed)?
-                    .collect();
-            anyhow::ensure!(!addresses.is_empty(), "download DNS returned no addresses");
+            let addresses = preflight_addresses(self.resolver.as_ref(), host).await;
             if !self.allow_local && addresses.iter().any(|address| is_local_address(address.ip())) {
                 return Err(rejected_host(host).into());
             }
@@ -161,7 +162,7 @@ impl DownloadResolver {
 impl Resolve for DownloadResolver {
     fn resolve(&self, name: Name) -> Resolving {
         let host = name.as_str().to_owned();
-        if normalized_host(&host) == self.initial_host {
+        if normalized_host(&host) == self.initial_host && !self.initial_addresses.is_empty() {
             let addresses = self.initial_addresses.clone();
             return Box::pin(async move { Ok(Box::new(addresses.into_iter()) as Addrs) });
         }
@@ -221,17 +222,29 @@ fn is_local_address(address: IpAddr) -> bool {
                 || address.is_broadcast()
                 || address.is_multicast()
                 || address.octets()[0] == 0
-                || matches!(address.octets(), [100, 64..=127, _, _])
+                || matches!(
+                    address.octets(),
+                    [100, 64..=127, _, _]
+                        | [192, 0, 0, _]
+                        | [198, 18..=19, _, _]
+                        | [240..=255, _, _, _]
+                )
         }
         IpAddr::V6(address) => {
+            // RFC 6052's well-known NAT64 prefix embeds IPv4 in the last
+            // 32 bits; RFC 3056's 6to4 prefix embeds it immediately after 2002.
+            let embedded = match address.segments() {
+                [0x64, 0xff9b, 0, 0, 0, 0, high, low] | [0x2002, high, low, ..] => {
+                    Some(Ipv4Addr::new((high >> 8) as u8, high as u8, (low >> 8) as u8, low as u8))
+                }
+                _ => address.to_ipv4_mapped(),
+            };
             address.is_loopback()
                 || address.is_unspecified()
                 || address.is_unique_local()
                 || address.is_unicast_link_local()
                 || address.is_multicast()
-                || address
-                    .to_ipv4_mapped()
-                    .is_some_and(|address| is_local_address(IpAddr::V4(address)))
+                || embedded.is_some_and(|address| is_local_address(IpAddr::V4(address)))
         }
     }
 }
@@ -239,6 +252,75 @@ fn is_local_address(address: IpAddr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn unknown_initial_dns_never_enables_local_access_and_direct_dns_is_retried() {
+        use std::sync::atomic::AtomicUsize;
+        struct InitiallyUnavailable {
+            calls: AtomicUsize,
+            empty: bool,
+            recovered: Option<SocketAddr>,
+        }
+        impl Resolve for InitiallyUnavailable {
+            fn resolve(&self, _: Name) -> Resolving {
+                let initial = self.calls.fetch_add(1, Ordering::Relaxed) < 2;
+                let addresses = if initial && self.empty {
+                    Some(Vec::new())
+                } else if initial {
+                    None
+                } else {
+                    self.recovered.map(|address| vec![address])
+                };
+                Box::pin(async move {
+                    match addresses {
+                        Some(addresses) => Ok(Box::new(addresses.into_iter()) as Addrs),
+                        None => Err(Box::new(std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "fixture DNS unavailable",
+                        ))
+                            as Box<dyn std::error::Error + Send + Sync>),
+                    }
+                })
+            }
+        }
+        for empty in [false, true] {
+            for recovered in [None, Some("8.8.8.8:0"), Some("127.0.0.1:0")] {
+                let resolver = Arc::new(InitiallyUnavailable {
+                    calls: AtomicUsize::new(0),
+                    empty,
+                    recovered: recovered.map(|address| address.parse().unwrap()),
+                });
+                let url = Url::parse("http://unknown.test/api").unwrap();
+                let guarded = DownloadResolver::new(&url, resolver.clone(), Duration::from_secs(3))
+                    .await
+                    .unwrap();
+                assert!(!guarded.allow_local);
+                assert!(guarded.initial_addresses.is_empty());
+                guarded.check_url(&url).await.unwrap();
+                for local in [
+                    "http://127.0.0.1",
+                    "http://localhost.",
+                    "http://198.18.0.1",
+                    "http://192.0.0.1",
+                    "http://240.0.0.1",
+                    "http://[64:ff9b::127.0.0.1]",
+                    "http://[2002:7f00:1::1]",
+                ] {
+                    assert!(guarded.check_url(&Url::parse(local).unwrap()).await.is_err());
+                }
+                let result = guarded.resolve("unknown.test".parse().unwrap()).await;
+                if recovered == Some("8.8.8.8:0") {
+                    assert_eq!(
+                        result.unwrap().collect::<Vec<_>>(),
+                        ["8.8.8.8:0".parse::<SocketAddr>().unwrap()]
+                    );
+                } else {
+                    assert!(result.is_err(), "empty={empty}, recovered={recovered:?}");
+                }
+                assert_eq!(resolver.calls.load(Ordering::Relaxed), 3);
+            }
+        }
+    }
 
     #[test]
     fn local_hostnames_include_subdomains_case_and_trailing_dots() {
@@ -341,6 +423,13 @@ mod tests {
             "0.1.2.3",
             "255.255.255.255",
             "224.0.0.1",
+            "192.0.0.0",
+            "192.0.0.9",
+            "192.0.0.255",
+            "198.18.0.0",
+            "198.19.255.255",
+            "240.0.0.0",
+            "255.255.255.254",
             "::",
             "::1",
             "fc00::1",
@@ -351,6 +440,13 @@ mod tests {
             "::ffff:127.0.0.1",
             "::ffff:192.168.1.1",
             "::ffff:100.64.0.1",
+            "::ffff:198.18.0.1",
+            "64:ff9b::127.0.0.1",
+            "64:ff9b::192.168.1.1",
+            "64:ff9b::198.19.0.1",
+            "2002:7f00:1::1",
+            "2002:c0a8:101::1",
+            "2002:c612:1::1",
         ] {
             assert!(is_local_address(address.parse().unwrap()), "{address}");
         }
@@ -361,9 +457,14 @@ mod tests {
             "100.128.0.1",
             "172.15.255.255",
             "172.32.0.1",
+            "192.0.1.0",
+            "198.17.255.255",
+            "198.20.0.0",
             "2001:4860:4860::8888",
             "2606:4700:4700::1111",
             "::ffff:8.8.8.8",
+            "64:ff9b::8.8.8.8",
+            "2002:808:808::1",
         ] {
             assert!(!is_local_address(address.parse().unwrap()), "{address}");
         }

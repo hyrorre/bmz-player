@@ -221,3 +221,18 @@
 - `cargo fmt --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。`cargo test -p bmz-player --locked` は2,934成功・58 ignored（起動テスト2件を含む）、0失敗。
 - ログはGit管理外の `.local/validation/security-medium/11-maintenance.log`、`11-replay.log`、`11-nuxt-prepare.log`、`11-web.log`、`11-final-web.log`、`11-rust.log` に保存した。最終Webログは部分削除失敗への対策追加後のもの。
 - NOT VERIFIED — 実際のCloudflare scheduled実行、D1・R2連携。ローカルHTTP、メモリ内SQL、blobモックで確認し、本番へのアクセス・migration適用・デプロイは実施していない。
+
+## 追記: #18 DNS失敗時のプロキシ互換とアドレス判定
+
+- ユーザー指摘に従い、事前DNSの失敗・timeout・空応答を結果不明として扱い、プロキシ経由の通信を妨げないようにした。結果不明の初期接続先はallow_local=falseとし、空のall()で例外を許可しない。
+- 初期DNSのcacheはアドレスがある場合だけ使う。結果不明なら直接接続のカスタムresolverで再解決し、接続時のDNS失敗やローカルアドレスは引き続き拒否する。IPリテラル・ローカル用host名の事前拒否も維持する。
+- IPv4の192.0.0.0/24、198.18.0.0/15、240.0.0.0/4を追加した。NAT64の64:ff9b::/96と6to4の2002::/16は内包するIPv4を検査し、公開IPv4を内包する通常の経路は許可する。形式は[RFC 6052](https://www.rfc-editor.org/rfc/rfc6052.html#section-2.2)と[RFC 3056](https://www.rfc-editor.org/rfc/rfc3056.html#section-2)を参照した。
+- DNSの失敗・空応答、直接接続時の回復・失敗・ローカルへの変化を回帰テストに追加した。子プロセスのプロキシ試験も、手元で初期hostを解決できる／できない場合と、プロキシだけがredirect・metadataの取得先を解決できる場合へ拡張した。DNS不明でもローカルへのredirect・metadataは拒否し、次の通信が送られないことを確認した。
+- [曲の取得元](../../docs/song-sources.md#自動取得の接続先とプロキシ)と[譜面取得](../../docs/chart-downloads.md)を更新し、プロキシ側だけが解決できる場合にも残余リスクがあることを記載した。
+
+### 追記分の検証
+
+- `cargo fmt --check`、`cargo check -p bmz-player --locked`、`cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。`cargo test -p bmz-player --locked` は2,935成功・58 ignored（起動テスト2件を含む）、0失敗。ダウンロード関連68テストの単独実行も成功した。
+- `bun run test:ir`、`bun x vue-tsc --noEmit` は成功。Webコードの変更はなく、Prettierの対象ファイルはない。
+- ログはGit管理外の `.local/validation/security-medium/18-followup-focused.log`、`18-followup-rust.log`、`18-followup-web.log` に保存した。
+- NOT VERIFIED — 実際の企業ネットワークのプロキシ、NAT64・6to4経由の通信、macOS・Linux。Windows上のDNS差し替え、子プロセスのHTTPプロキシ、アドレスの単体テストで確認した。
