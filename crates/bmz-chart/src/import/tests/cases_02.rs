@@ -295,6 +295,35 @@ fn imports_bmson_into_playable_chart() {
 }
 
 #[test]
+fn bmson_rejects_pulses_past_the_measure_limit() {
+    let limit = crate::import::bmson_timing::MAX_BMSON_MEASURES;
+    let import_note = |pulse| {
+        let text = serde_json::json!({
+            "version": "1.0.0",
+            "info": {"title": "Late note", "artist": "Test", "genre": "Test", "level": 1,
+                "init_bpm": 120, "resolution": 240, "mode_hint": "beat-7k"},
+            "sound_channels": [{"name": "note.wav", "notes": [{"x": 1, "y": pulse, "l": 0, "c": false}]}],
+        }).to_string();
+        import_chart_bytes_with_random_source(
+            Path::new("late-note.bmson"),
+            text.as_bytes(),
+            BmsRandomSource::Seed(None),
+            false,
+        )
+    };
+
+    let result = import_note(limit * 960 - 1).unwrap();
+    assert_eq!(result.chart.total_notes, 1);
+    for pulse in [limit * 960, u64::MAX / 2] {
+        let error = import_note(pulse).unwrap_err();
+        assert!(
+            matches!(error, ImportError::Parse { ref message, .. } if message.contains("measure limit")),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn bmson_appends_chart_name_to_subtitle_and_preserves_full_level_value() {
     let json = r#"{
         "version": "1.0.0",

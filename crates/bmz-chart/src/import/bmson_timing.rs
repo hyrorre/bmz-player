@@ -18,6 +18,8 @@ use bms_rs::bmson::{BarLine, BgaId, Bmson, SoundChannel};
 
 use crate::model::SoundSlice;
 
+pub(super) const MAX_BMSON_MEASURES: u64 = 10_000;
+
 /// BMSON 小節境界 (pulse)。
 #[derive(Debug, Clone)]
 pub struct MeasureBoundaries {
@@ -157,38 +159,44 @@ pub fn build_measure_boundaries(
     lines: Option<&[BarLine]>,
     resolution: u64,
     max_pulse: u64,
-) -> MeasureBoundaries {
+) -> Result<MeasureBoundaries, String> {
     let default_step = 4_u64.saturating_mul(resolution);
-
-    match lines {
-        None | Some([]) => {
-            let mut starts = vec![0_u64];
-            while starts.last().copied().unwrap_or(0) <= max_pulse {
-                let next = starts.last().copied().unwrap_or(0).saturating_add(default_step);
-                if next == *starts.last().unwrap_or(&0) {
-                    break;
-                }
-                starts.push(next);
-            }
-            MeasureBoundaries { starts, default_step }
-        }
-        Some(lines) => {
-            let mut starts: Vec<u64> = lines.iter().map(|line| line.y.0).collect();
-            starts.sort_unstable();
-            starts.dedup();
-            if starts.first().copied() != Some(0) {
-                starts.insert(0, 0);
-            }
-            while starts.last().copied().unwrap_or(0) <= max_pulse {
-                let next = starts.last().copied().unwrap_or(0).saturating_add(default_step);
-                if next == *starts.last().unwrap_or(&0) {
-                    break;
-                }
-                starts.push(next);
-            }
-            MeasureBoundaries { starts, default_step }
-        }
+    let lines = lines.unwrap_or_default();
+    let limit_error = || format!("BMSON exceeds the {MAX_BMSON_MEASURES} measure limit");
+    if lines.len() as u64 > MAX_BMSON_MEASURES
+        || max_pulse.checked_div(default_step).is_some_and(|index| index >= MAX_BMSON_MEASURES)
+    {
+        return Err(limit_error());
     }
+
+    let mut starts: Vec<_> = lines.iter().map(|line| line.y.0).collect();
+    starts.sort_unstable();
+    starts.dedup();
+    if starts.first().copied() != Some(0) {
+        starts.insert(0, 0);
+    }
+    let mut last = starts.last().copied().unwrap_or(0);
+    // Count both explicit measures and the generated tail before extending the vector.
+    let tail = if last <= max_pulse {
+        max_pulse
+            .saturating_sub(last)
+            .checked_div(default_step)
+            .map_or(0, |index| index.saturating_add(1))
+    } else {
+        0
+    };
+    if (starts.len() as u64 - 1).saturating_add(tail) > MAX_BMSON_MEASURES {
+        return Err(limit_error());
+    }
+    for _ in 0..tail {
+        let next = last.saturating_add(default_step);
+        if next == last {
+            break;
+        }
+        starts.push(next);
+        last = next;
+    }
+    Ok(MeasureBoundaries { starts, default_step })
 }
 
 pub fn pulse_to_obj_time(pulse: u64, boundaries: &MeasureBoundaries) -> ObjTime {
@@ -604,7 +612,8 @@ mod tests {
             ]),
             240,
             1_000,
-        );
+        )
+        .unwrap();
         let time = pulse_to_obj_time(720, &boundaries);
         assert_eq!(time.track().0, 1);
         assert_eq!(time.numerator(), 0);
@@ -612,8 +621,26 @@ mod tests {
 
     #[test]
     fn build_measure_boundaries_defaults_to_common_time() {
-        let boundaries = build_measure_boundaries(None, 240, 2_000);
+        let boundaries = build_measure_boundaries(None, 240, 2_000).unwrap();
         assert_eq!(boundaries.starts, vec![0, 960, 1_920, 2_880]);
+    }
+
+    #[test]
+    fn build_measure_boundaries_limits_explicit_lines_and_generated_tail() {
+        use bms_rs::bmson::pulse::PulseNumber;
+
+        let mut lines: Vec<_> =
+            (0..=MAX_BMSON_MEASURES).map(|pulse| BarLine { y: PulseNumber(pulse) }).collect();
+        assert!(build_measure_boundaries(Some(&lines), 240, MAX_BMSON_MEASURES).is_err());
+        lines.pop();
+        assert!(build_measure_boundaries(Some(&lines), 240, MAX_BMSON_MEASURES).is_ok());
+        assert!(build_measure_boundaries(Some(&lines), 240, MAX_BMSON_MEASURES + 960).is_err());
+    }
+
+    #[test]
+    fn build_measure_boundaries_does_not_extend_zero_resolution() {
+        let boundaries = build_measure_boundaries(None, 0, u64::MAX).unwrap();
+        assert_eq!(boundaries.starts, vec![0]);
     }
 
     #[test]

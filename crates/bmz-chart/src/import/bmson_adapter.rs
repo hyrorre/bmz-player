@@ -67,7 +67,8 @@ pub(super) fn import_bmson_bytes_to_intermediate(
     let suppress_bar_lines = matches!(bmson.lines.as_ref(), Some(lines) if lines.is_empty());
     let max_pulse = max_pulse_in_bmson(&bmson);
     let boundaries =
-        build_measure_boundaries(bmson.lines.as_deref(), bmson.info.resolution.get(), max_pulse);
+        build_measure_boundaries(bmson.lines.as_deref(), bmson.info.resolution.get(), max_pulse)
+            .map_err(|message| ImportError::Parse { path: source_path.to_path_buf(), message })?;
 
     let mut converted = bms_from_bmson_headers_and_resources(&bmson, warnings);
     let mut timing_warnings = Vec::new();

@@ -24,3 +24,16 @@
 - `bun run test:ir` は成功。HTTPテストにはループバック通信を許可した。
 - `bun x vue-tsc --noEmit` は、ローカルで `nuxt prepare` を実行して生成型を更新した後に成功した。Prettierの対象となるWebファイルの変更はない。
 - NOT VERIFIED — Windowsで関連付けられたアプリが実際に起動すること。
+
+## #17 BMSONの小節数上限
+
+- 明示された `lines` の件数と、最終pulseを標準小節長で割った位置を検査する。さらに明示小節と自動補完分の合計を計算し、10,000小節を超える場合は境界の補完前に譜面の読み込みエラーを返す。
+- 最大pulseはロングノートの終端も含めて飽和演算で求める。解像度が0の場合は補完しない。
+- 上限直前のノーツの読み込み、`u64::MAX / 2` のpulseの拒否、明示小節線と補完の合計、解像度0をテストする。曲スキャンの回帰テストは、上限超過のBMSONを失敗として記録し、同じフォルダのBMSを取り込むことを確認する。
+- スキャン時の扱いは [曲の取得元とスキャン](../../docs/song-sources.md) に記載した。
+
+### 検証
+
+- `cargo fmt --check`、`cargo check --workspace --locked`、`cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。
+- `cargo test -p bmz-chart -p bmz-player --locked` は `bmz-chart` が189成功・2 ignored、`bmz-player` が2,907成功・58 ignored（起動テスト2件を含む）。失敗は0件。
+- `bun run test:ir` と `bun x vue-tsc --noEmit` は成功。Prettierの対象となるWebファイルの変更はない。

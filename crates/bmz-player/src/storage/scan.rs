@@ -588,6 +588,34 @@ mod tests {
     }
 
     #[test]
+    fn scan_song_roots_continues_after_oversized_bmson() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(
+            &root.path().join("oversized.bmson"),
+            r#"{"version":"1.0.0","info":{"title":"Oversized","artist":"Test","genre":"Test",
+                "level":1,"init_bpm":120,"resolution":240,"mode_hint":"beat-7k"},
+                "sound_channels":[{"name":"note.wav","notes":[{"x":1,"y":9223372036854775807,"l":0,"c":false}]}]}"#,
+        );
+        write_file(&root.path().join("valid.bms"), "#TITLE Valid\n#BPM 120\n#00011:01\n");
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let roots = [PathEntry {
+            path: root.path().to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        }];
+        let report =
+            scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_021, false).unwrap();
+
+        assert_eq!(report.summary.files_seen, 2);
+        assert_eq!(report.summary.imported, 1);
+        assert_eq!(report.summary.failed, 1);
+    }
+
+    #[test]
     fn scan_song_roots_skips_unchanged_imported_files() {
         let root = make_temp_dir("scan-skip");
         let path = root.join("song.bms");
