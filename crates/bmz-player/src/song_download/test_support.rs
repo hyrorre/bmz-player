@@ -3,6 +3,23 @@ use std::io::Read;
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 
+pub struct FixtureResolver(pub std::collections::HashMap<String, Vec<std::net::SocketAddr>>);
+
+impl reqwest::dns::Resolve for FixtureResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let addresses = self.0.get(name.as_str()).cloned();
+        Box::pin(async move {
+            match addresses {
+                Some(addresses) => Ok(Box::new(addresses.into_iter()) as reqwest::dns::Addrs),
+                None => Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "unknown fixture host",
+                )) as Box<dyn std::error::Error + Send + Sync>),
+            }
+        })
+    }
+}
+
 pub struct HttpFixture {
     pub url: String,
     pub requests: Arc<AtomicUsize>,
@@ -35,6 +52,16 @@ impl HttpFixture {
     }
 
     pub fn raw(handler: impl Fn(&str) -> Vec<u8> + Send + Sync + 'static, delay: Duration) -> Self {
+        Self::raw_request(
+            move |request| handler(request.split_whitespace().nth(1).unwrap_or("/")),
+            delay,
+        )
+    }
+
+    pub fn raw_request(
+        handler: impl Fn(&str) -> Vec<u8> + Send + Sync + 'static,
+        delay: Duration,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         listener.set_nonblocking(true).unwrap();
@@ -76,12 +103,8 @@ impl HttpFixture {
                     requests.fetch_add(1, Ordering::Relaxed);
                     let count = active.fetch_add(1, Ordering::Relaxed) + 1;
                     maximum.fetch_max(count, Ordering::Relaxed);
-                    let path = String::from_utf8_lossy(&buffer[..length])
-                        .split_whitespace()
-                        .nth(1)
-                        .unwrap_or("/")
-                        .to_string();
-                    let response = handler(&path);
+                    let request = String::from_utf8_lossy(&buffer[..length]);
+                    let response = handler(&request);
                     std::thread::sleep(delay);
                     let _ = stream.write_all(&response);
                     let _ = stream.flush();

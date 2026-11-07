@@ -16,6 +16,7 @@ use std::sync::{
 mod bulk;
 mod http_response;
 mod manager;
+mod network;
 mod registration;
 mod transfer_key;
 pub use bulk::{
@@ -30,6 +31,8 @@ pub use registration::{
 mod archive_tests;
 #[cfg(test)]
 mod integration_tests;
+#[cfg(test)]
+mod network_tests;
 #[cfg(test)]
 mod test_support;
 pub use manager::{
@@ -332,12 +335,33 @@ async fn download_chart_inner(
         format!("展開用フォルダを作成できませんでした: {}", staging_dir.display())
     })?;
 
+    let initial_url = match &request.action {
+        MissingChartAction::Http { api_url, md5, sha256 } => {
+            expand_http_api_url(api_url, md5, sha256)?
+        }
+        MissingChartAction::Ipfs { api_url, cids } => ipfs_download_url(
+            api_url,
+            cids.first().context("IPFS action requires at least one CID")?,
+        )?,
+        _ => unreachable!("download action was checked above"),
+    };
+    let network =
+        network::DownloadResolver::new(&initial_url, services.resolver(), services.timeout())
+            .await?;
     let client = reqwest::Client::builder()
         .user_agent(concat!("bmz-player/", env!("CARGO_PKG_VERSION")))
-        .connect_timeout(Duration::from_secs(20))
+        .connect_timeout(network::CONNECT_TIMEOUT)
         .timeout(services.timeout())
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()?;
+        .dns_resolver(Arc::clone(&network))
+        .redirect(reqwest::redirect::Policy::none());
+    #[cfg(test)]
+    let client = if services.use_system_proxy { client } else { client.no_proxy() };
+    #[cfg(test)]
+    let client = services
+        .address_overrides
+        .iter()
+        .fold(client, |client, (host, addresses)| client.resolve_to_addrs(host, addresses));
+    let client = client.build()?;
 
     let mut cache_owner = None;
     let mut archive_hasher = sha2::Sha256::new();
@@ -353,7 +377,7 @@ async fn download_chart_inner(
         MissingChartAction::Ipfs { api_url, cids } => {
             anyhow::ensure!(!cids.is_empty(), "IPFS action requires at least one CID");
             for (index, cid) in cids.iter().enumerate() {
-                let response = request_ipfs_archive(&client, api_url, cid).await?;
+                let response = request_ipfs_archive(&client, &network, api_url, cid).await?;
                 save_response_controlled(response, &archive_path, control, &mut archive_hasher)
                     .await?;
                 let package_dir = staging_dir.join(format!(".package-{index}"));
@@ -386,7 +410,11 @@ async fn download_chart_inner(
                 request.keeps_archive()
             );
             let api_url = expand_http_api_url(api_url, md5, sha256)?;
-            let response = client.get(api_url.clone()).send().await?.error_for_status()?;
+            let response = network
+                .request(&client, reqwest::Method::GET, api_url)
+                .await?
+                .error_for_status()
+                .map_err(reqwest::Error::without_url)?;
             let metadata_base = response.url().clone();
             let (mut archive_url, direct_response) = match http_response::inspect(response).await? {
                 http_response::HttpPayload::Metadata(value) => {
@@ -398,6 +426,7 @@ async fn download_chart_inner(
                 }
             };
             archive_url.set_fragment(None);
+            network.check_url(&archive_url).await?;
             let key: [u8; 32] =
                 sha2::Sha256::digest(format!("{scope}\n{archive_url}").as_bytes()).into();
             // The first owner publishes a saved directory or archive. Followers keep
@@ -448,7 +477,14 @@ async fn download_chart_inner(
             }
             let archive_response = match direct_response.take() {
                 Some(response) => response,
-                None => (client.get(archive_url).send().await?.error_for_status()?, Vec::new()),
+                None => (
+                    network
+                        .request(&client, reqwest::Method::GET, archive_url)
+                        .await?
+                        .error_for_status()
+                        .map_err(reqwest::Error::without_url)?,
+                    Vec::new(),
+                ),
             };
             anyhow::ensure!(
                 !response_is_json(&archive_response.0),
@@ -552,22 +588,23 @@ pub async fn download_charts(requests: Vec<ChartDownloadRequest>) -> ChartDownlo
 
 async fn request_ipfs_archive(
     client: &reqwest::Client,
+    network: &network::DownloadResolver,
     api_url: &str,
     cid: &str,
 ) -> Result<reqwest::Response> {
     let url = ipfs_download_url(api_url, cid)?;
     // Keep beatoraja-compatible GET endpoints and custom templates unchanged.
     // Only the generated RPC endpoint may retry a method rejection as POST.
-    let response = client.get(url.clone()).send().await?;
+    let response = network.request(client, reqwest::Method::GET, url.clone()).await?;
     let response = if response.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED
         && !api_url.contains("{cid}")
     {
         drop(response);
-        client.post(url).send().await?
+        network.request(client, reqwest::Method::POST, url).await?
     } else {
         response
     };
-    Ok(response.error_for_status()?)
+    Ok(response.error_for_status().map_err(reqwest::Error::without_url)?)
 }
 
 fn ipfs_download_url(api_url: &str, cid: &str) -> Result<Url> {
@@ -1011,7 +1048,15 @@ mod tests {
                 .timeout(Duration::from_secs(3))
                 .build()
                 .unwrap();
-            let result = request_ipfs_archive(&client, &api, &metadata().ipfs).await;
+            let initial = ipfs_download_url(&api, &metadata().ipfs).unwrap();
+            let network = network::DownloadResolver::new(
+                &initial,
+                Arc::new(network::SystemResolver),
+                Duration::from_secs(3),
+            )
+            .await
+            .unwrap();
+            let result = request_ipfs_archive(&client, &network, &api, &metadata().ipfs).await;
             if final_status == 200 {
                 assert_eq!(result.unwrap().text().await.unwrap(), "archive");
             } else {

@@ -99,6 +99,12 @@ impl DownloadControl {
 pub struct DownloadServices {
     #[cfg(test)]
     pub(super) timeout: Option<Duration>,
+    #[cfg(test)]
+    pub(super) resolver: Option<Arc<dyn reqwest::dns::Resolve>>,
+    #[cfg(test)]
+    pub(super) address_overrides: Vec<(String, Vec<std::net::SocketAddr>)>,
+    #[cfg(test)]
+    pub(super) use_system_proxy: bool,
     pub(super) extraction: tokio::sync::Semaphore,
     pub(super) archives: Mutex<std::collections::HashMap<[u8; 32], Arc<SharedArchive>>>,
 }
@@ -108,6 +114,12 @@ impl Default for DownloadServices {
         Self {
             #[cfg(test)]
             timeout: None,
+            #[cfg(test)]
+            resolver: None,
+            #[cfg(test)]
+            address_overrides: Vec::new(),
+            #[cfg(test)]
+            use_system_proxy: false,
             extraction: tokio::sync::Semaphore::new(1),
             archives: Mutex::default(),
         }
@@ -115,6 +127,14 @@ impl Default for DownloadServices {
 }
 
 impl DownloadServices {
+    pub(super) fn resolver(&self) -> Arc<dyn reqwest::dns::Resolve> {
+        #[cfg(test)]
+        if let Some(resolver) = &self.resolver {
+            return Arc::clone(resolver);
+        }
+        Arc::new(network::SystemResolver)
+    }
+
     fn evict_archive(&self, result: &ChartDownloadResult) {
         let Some(key) = result.archive_cache_key else {
             return;

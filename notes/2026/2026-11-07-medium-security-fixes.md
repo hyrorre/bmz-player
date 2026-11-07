@@ -152,3 +152,34 @@
 - `cargo test -p bmz-player --locked` は2,922成功・58 ignored（起動テスト2件を含む）、0失敗。`bun run test:ir` と `bun x vue-tsc --noEmit` も成功。Prettierの対象となるWebファイルの変更はない。
 - ログはGit管理外の `.local/validation/security-medium/12-focused.log`、`12-check.log`、`12-rust.log`、`12-web.log` に保存した。
 - NOT VERIFIED — macOS/Linuxでの実行。7-Zip実行ファイルによる生成とRustでの読込・スキャン・展開はWindowsで確認した。
+
+## #18 譜面ダウンロードの接続先検査（初回案）
+
+- HTTP APIとIPFS APIで共有するDNS resolverを追加した。公開先から始まる取得では、loopback、RFC 1918、link-local、CGNAT、未指定アドレス、multicast等への名前解決を拒否する。IPv6のULA・link-localとIPv4-mapped IPv6にも同じ判定を適用する。
+- 設定された最初の接続先がローカルアドレスだけを返す場合は、ローカルAPIとして利用を許可する。公開・ローカルを混在させたDNS応答は拒否し、最初の応答は実接続にも再利用して再解決によるすり替えを防ぐ。
+- IPリテラルはリクエスト前とリダイレクト時に検査する。API応答のURLも検査し、公開先同士のリダイレクトは従来の10回上限で維持する。
+- 拒否ログはhostだけに限定し、リクエストエラーからURLを除いてAPIキー等がエラー表示に含まれないようにした。
+- 6つの回帰テストは成功。ローカルを指すDNS・IP・mapped IPv6について、リダイレクトとAPI応答のどちらでも拒否先へのTCP接続が発生しないことを確認した。公開先同士のリダイレクトと、明示的な127.0.0.1のAPIによるダウンロードも成功した。公開DNSの判定とループバックのテスト用transportを分離して確認している。
+- ログはGit管理外の `.local/validation/security-medium/18-focused.log`、`18-rust.log`、`18-web.log` に保存する。
+- 初回案の未解決事項: 現行reqwestはシステムプロキシを自動利用する。プロキシ経由では接続先のDNSをプロキシが解決し、クライアントのresolverを迂回できる。譜面ダウンロードに限ってプロキシを無効化する案を確認したところ、ユーザーが方針を再検討するため保留した。本体のプロキシ設定は変更しなかった。
+- 現在の差分で `cargo fmt --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。`cargo test -p bmz-player --locked` は2,924成功・58 ignored（起動テスト2件を含む）、0失敗だった。
+- `bun run test:ir` と `bun x vue-tsc --noEmit` は成功。Prettierの対象となるWebファイルの変更はない。
+- NOT VERIFIED — 実際の公開配布サーバーからの取得、OSのシステムプロキシ連携。新しい接続先検査はDNSとtransportを差し替えたWindowsのローカルテストで確認した。
+
+### ユーザー指定の方針で再開
+
+- #12の検証・コミット後、stashを保持したまま復元した。共通notesの競合は、#12と#18の両方の記録を残して解決した。
+- ユーザーの指示により、システムプロキシの自動利用は維持する。`Policy::none()` と自前の最大10回のredirectループを使い、各hopの前にURLのIPリテラル、ローカル用host名、DNS応答を非同期で検査する。直接接続時のカスタムDNS resolverの検査も維持する。
+- プロキシ側の名前解決がクライアントと異なるsplit-horizon DNS等では検査をすり抜けうる。この点は残余リスクとして `docs/song-sources.md` にも記載する。
+- 最初の設定先がローカルアドレスだけを返す場合の例外を維持する。公開先から始まる取得では、localhost・そのサブドメイン・`.local`を末尾ドット付きも含めて拒否し、それ以外は `tokio::net::lookup_host` を使うSystemResolverで毎hop事前確認する。
+- 直接接続時は事前確認済みのtarget hostに対し、接続時のDNS結果にも検査を適用する。明示的に設定されたプロキシ自体の名前解決は区別し、ローカルのプロキシも利用できるようにした。
+- 301/302/303のPOST→GET、307/308のPOST保持、同originのBasic認証、origin移動時の認証除去、Refererの扱いとリクエスト全体のtimeoutを維持する。IPFSの405に対するPOST再試行も既存経路のまま使う。
+- プロキシの環境変数を子プロセス内だけに設定する回帰テストを追加した。プロキシ経由の正常取得と、ローカル宛てのredirect・API応答で2回目の通信が送られないことを検査する。テストのtransportもloopbackへ固定し、誤って直接接続する実装でも外部へは接続しない。
+- ダウンロード関連67テストはすべて成功した。DNS rebinding、末尾ドット付きのローカル用host名、10回ちょうどと11回目のredirect、POSTのメソッド変換、Basic認証とReferer、IPFSの既存POST再試行も含む。
+
+### 再開後の検証
+
+- `cargo fmt --check`、`cargo check -p bmz-player --locked`、`cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。`cargo test -p bmz-player --locked` は2,934成功・58 ignored（起動テスト2件を含む）、0失敗だった。
+- `bun run test:ir` と `bun x vue-tsc --noEmit` は成功。Prettierの対象となるWebファイルの変更はない。
+- ログはGit管理外の `.local/validation/security-medium/18-revised-focused.log`、`18-revised-rust.log`、`18-revised-web.log` に保存した。元のstashも保持している。
+- NOT VERIFIED — 実際の外部DNS・配布サーバー、Windows設定画面で指定したプロキシ、macOS/Linuxでの実行。Windows上の環境変数によるプロキシ自動利用は、子プロセスとモックプロキシで検証した。
