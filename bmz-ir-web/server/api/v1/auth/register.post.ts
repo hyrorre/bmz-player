@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { createError, readBody } from 'h3'
 import { db, schema } from 'hub:db'
-import { normalizeDisplayName, normalizeEmail, requirePassword } from '../../../utils/auth_input'
+import { normalizeEmail, requireDisplayName, requirePassword } from '../../../utils/auth_input'
 import { checkAuthRateLimit } from '../../../utils/auth_rate_limit'
 import { createAuthTokens } from '../../../utils/auth_tokens'
 
@@ -13,9 +13,9 @@ interface RegisterBody {
 }
 
 export default defineEventHandler(async (event) => {
-  const body = (await readBody(event)) as RegisterBody
+  const body = ((await readBody(event)) ?? {}) as RegisterBody
   const email = normalizeEmail(body.email)
-  const displayName = normalizeDisplayName(body.display_name)
+  const displayName = requireDisplayName(body.display_name)
 
   if (!email || !displayName) {
     throw createError({

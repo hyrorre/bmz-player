@@ -15,6 +15,12 @@ import type {
   IrVerificationStatus,
   LnScorePolicy,
 } from '../../../shared/types/ir'
+import {
+  MAX_EVIDENCE_BYTES,
+  requireJsonBytes,
+  validateChartInputLimits,
+  validateSubmissionJsonLimits,
+} from './input_limits'
 
 export const LN_POLICIES = new Set([
   'AutoLn',
@@ -213,6 +219,8 @@ export function validateScoreSubmission(value: unknown): IrScoreSubmission {
   if (!isRecord(payload.result)) {
     throw new Error('result is required')
   }
+  validateChartInputLimits(payload.chart)
+  validateSubmissionJsonLimits(payload.play_options, payload.evidence)
   requireHex(payload.chart.sha256, 64, 'chart.sha256')
   if (payload.chart.md5 != null) {
     requireHex(payload.chart.md5, 32, 'chart.md5')
@@ -309,6 +317,11 @@ export function validateScoreAttestation(value: unknown): ScoreAttestationPayloa
   }
   if (!isRecord(value.evidence)) {
     throw new IrEvidenceValidationError('score attestation evidence is required')
+  }
+  try {
+    requireJsonBytes(value.evidence, MAX_EVIDENCE_BYTES, 'evidence')
+  } catch (error) {
+    throw new IrEvidenceValidationError(error instanceof Error ? error.message : 'invalid evidence')
   }
   return {
     score_id: value.score_id,

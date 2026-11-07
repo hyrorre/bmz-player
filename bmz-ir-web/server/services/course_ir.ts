@@ -6,6 +6,13 @@ import { assertCanSubmit } from './moderation/enforcement'
 import { IrIdempotencyCollisionError } from './ir/idempotency'
 import { fillMissingMetadata } from './ir/metadata'
 import {
+  MAX_COURSE_CHARTS,
+  MAX_METADATA_CHARS,
+  MAX_URL_CHARS,
+  requireOptionalText,
+  validateSubmissionJsonLimits,
+} from './ir/input_limits'
+import {
   asRuleMode,
   CLEAR_RANK,
   isRecord,
@@ -98,9 +105,15 @@ export function validateCourseScoreSubmission(value: unknown): CourseScoreSubmis
   if (!isRecord(payload.result)) {
     throw new Error('result is required')
   }
+  requireOptionalText(payload.course.title, MAX_METADATA_CHARS, 'course.title')
+  requireOptionalText(payload.course.source_url, MAX_URL_CHARS, 'course.source_url')
+  validateSubmissionJsonLimits(payload.play_options, payload.evidence)
   requireHex(payload.course.course_hash, 64, 'course.course_hash')
   if (!Array.isArray(payload.course.charts) || payload.course.charts.length === 0) {
     throw new Error('course.charts must be a non-empty array')
+  }
+  if (payload.course.charts.length > MAX_COURSE_CHARTS) {
+    throw new Error(`course.charts exceeds ${MAX_COURSE_CHARTS} entries`)
   }
   for (const sha of payload.course.charts) {
     requireHex(sha, 64, 'course.charts[]')

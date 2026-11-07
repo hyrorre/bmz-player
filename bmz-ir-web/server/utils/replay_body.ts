@@ -6,7 +6,10 @@ import { readLimitedBody, RequestBodyTooLarge } from '../../shared/utils/body_li
 // chunk and close an oversized connection only after its 413 response is sent.
 function requestStream(event: H3Event): ReadableStream<Uint8Array> | undefined {
   const req = event.node.req
-  if (event.web?.request?.body || event._requestBody || '__unenv__' in req) {
+  if (event._requestBody) {
+    return new Response(event._requestBody).body ?? undefined
+  }
+  if (event.web?.request?.body || '__unenv__' in req) {
     return getRequestWebStream(event)
   }
   let cleanup = () => {}
@@ -48,15 +51,18 @@ function requestStream(event: H3Event): ReadableStream<Uint8Array> | undefined {
 }
 
 export async function readReplayBody(event: H3Event): Promise<Uint8Array<ArrayBuffer>> {
+  return readBoundedRequestBody(event, MAX_REPLAY_BYTES)
+}
+
+export async function readBoundedRequestBody(
+  event: H3Event,
+  maxBytes: number,
+): Promise<Uint8Array<ArrayBuffer>> {
   try {
-    return await readLimitedBody(
-      requestStream(event),
-      getHeader(event, 'content-length'),
-      MAX_REPLAY_BYTES,
-    )
+    return await readLimitedBody(requestStream(event), getHeader(event, 'content-length'), maxBytes)
   } catch (error) {
     if (error instanceof RequestBodyTooLarge) {
-      throw createError({ statusCode: 413, statusMessage: 'Replay body is too large' })
+      throw createError({ statusCode: 413, statusMessage: 'Request body is too large' })
     }
     throw error
   }

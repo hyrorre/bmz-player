@@ -1,6 +1,8 @@
 import { eq } from 'drizzle-orm'
+import { createError, readBody } from 'h3'
 import { db, schema } from 'hub:db'
 import { requireIrUser } from '../../utils/auth'
+import { requireDisplayName } from '../../utils/auth_input'
 
 interface ProfileBody {
   display_name?: string
@@ -10,17 +12,11 @@ interface ProfileBody {
 
 export default defineEventHandler(async (event) => {
   const user = await requireIrUser(event)
-  const body = (await readBody(event)) as ProfileBody
-  const displayName = body.display_name?.trim() ?? ''
+  const body = ((await readBody(event)) ?? {}) as ProfileBody
+  const displayName = requireDisplayName(body.display_name)
   const bio = body.bio?.trim() ?? ''
   const requestedBoundary = body.daily_boundary_minutes
 
-  if (!displayName) {
-    throw createError({ statusCode: 400, statusMessage: 'display_name is required' })
-  }
-  if (displayName.length > 64) {
-    throw createError({ statusCode: 400, statusMessage: 'display_name is too long' })
-  }
   if (bio.length > 1000) {
     throw createError({ statusCode: 400, statusMessage: 'bio is too long' })
   }

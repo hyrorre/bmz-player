@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test'
 import { createServer } from 'node:http'
-import { createApp, eventHandler, toNodeListener } from 'h3'
+import { createApp, eventHandler, readBody, readRawBody, toNodeListener } from 'h3'
+import requestBodyMiddleware from '../server/middleware/00.request-body'
+import { MAX_REQUEST_BODY_BYTES } from '../shared/utils/request_body_limit'
 import { readReplayBody } from '../server/utils/replay_body'
 import { readLimitedBody, RequestBodyTooLarge } from '../shared/utils/body_limit'
 import { MAX_REPLAY_BYTES } from '../shared/constants/ir'
@@ -73,6 +75,57 @@ test('the Node HTTP adapter returns 413 for chunked bodies and accepts ordinary 
     expect(response.status).toBe(413)
     const small = await fetch(`http://127.0.0.1:${address.port}`, { method: 'PUT', body: 'hello' })
     expect(await small.json()).toEqual({ size: 5 })
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})
+
+test('Node middleware applies the route limits before JSON parsing and preserves replay reads', async () => {
+  const app = createApp()
+    .use(requestBodyMiddleware)
+    .use(
+      eventHandler(async (event) => {
+        if (event.method === 'GET') return { ok: true }
+        if (event.path.startsWith('/api/v1/scores/id/replay/upload')) {
+          return { size: (await readReplayBody(event)).byteLength }
+        }
+        const bytes = await readRawBody(event, false)
+        return { size: bytes?.byteLength, value: await readBody(event) }
+      }),
+    )
+  const server = createServer(toNodeListener(app))
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address() as { port: number }
+  const root = `http://127.0.0.1:${port}`
+  try {
+    expect((await fetch(root)).status).toBe(200)
+    const exact = '{"ok":true}'.padEnd(MAX_REQUEST_BODY_BYTES, ' ')
+    const response = await fetch(`${root}/api/v1/scores`, {
+      method: 'POST',
+      body: exact,
+      headers: { 'content-type': 'application/json' },
+    })
+    expect(await response.json()).toEqual({ size: MAX_REQUEST_BODY_BYTES, value: { ok: true } })
+    for (const streamed of [false, true]) {
+      const body = exact + ' '
+      const response = await fetch(`${root}/api/v1/scores`, {
+        method: 'POST',
+        body: streamed ? new Blob([body]).stream() : body,
+        duplex: 'half',
+      } as RequestInit)
+      expect(response.status).toBe(413)
+    }
+    const replay = await fetch(`${root}/api/v1/scores/id/replay/upload?upload_id=test`, {
+      method: 'PUT',
+      body: new Uint8Array(MAX_REPLAY_BYTES),
+    })
+    expect(await replay.json()).toEqual({ size: MAX_REPLAY_BYTES })
+    const tooLarge = await fetch(`${root}/api/v1/scores/id/replay/upload`, {
+      method: 'PUT',
+      body: new Blob([new Uint8Array(MAX_REPLAY_BYTES + 1)]).stream(),
+      duplex: 'half',
+    } as RequestInit)
+    expect(tooLarge.status).toBe(413)
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }

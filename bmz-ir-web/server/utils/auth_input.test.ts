@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { normalizeDisplayName, normalizeEmail, readPassword, requirePassword } from './auth_input'
+import {
+  MAX_DISPLAY_NAME_CHARS,
+  normalizeDisplayName,
+  normalizeEmail,
+  readPassword,
+  requirePassword,
+  requireDisplayName,
+} from './auth_input'
 
 describe('auth input helpers', () => {
   test('normalizes email values', () => {
@@ -16,6 +23,30 @@ describe('auth input helpers', () => {
   test('reads password strings only', () => {
     expect(readPassword('secret')).toBe('secret')
     expect(readPassword(false)).toBe('')
+  })
+
+  test('requires 1 to 64 trimmed display-name characters without controls', () => {
+    expect(requireDisplayName(' x ')).toBe('x')
+    expect(requireDisplayName('あ'.repeat(MAX_DISPLAY_NAME_CHARS))).toHaveLength(
+      MAX_DISPLAY_NAME_CHARS,
+    )
+    for (const value of [
+      '',
+      '  ',
+      undefined,
+      'x'.repeat(MAX_DISPLAY_NAME_CHARS + 1),
+      'a\nb',
+      'a\x00b',
+      'a\x7fb',
+      'a\x85b',
+    ]) {
+      try {
+        requireDisplayName(value)
+        throw new Error('expected a validation error')
+      } catch (error) {
+        expect(error).toMatchObject({ statusCode: 400 })
+      }
+    }
   })
 
   test('requires non-empty passwords with the minimum length', () => {

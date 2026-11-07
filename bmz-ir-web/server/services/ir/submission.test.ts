@@ -3,8 +3,20 @@ import { createClient } from '@libsql/client'
 import { drizzle } from 'drizzle-orm/libsql'
 import { eq } from 'drizzle-orm'
 import { readdir, readFile } from 'node:fs/promises'
+import { createServer } from 'node:http'
+import { createApp, defineEventHandler, toNodeListener } from 'h3'
+import requestBodyMiddleware from '../../middleware/00.request-body'
 import * as schema from '../../db/schema'
 import type { IrScoreSubmission } from '../../../shared/types/ir'
+import type { CourseScoreSubmission } from '../course_ir'
+import {
+  MAX_METADATA_CHARS,
+  MAX_URL_CHARS,
+  MAX_SUBARTISTS,
+  MAX_COURSE_CHARTS,
+  MAX_PLAY_OPTIONS_BYTES,
+  MAX_EVIDENCE_BYTES,
+} from './input_limits'
 
 // Isolated in-memory SQL database: exercise the real service and atomic score/best batch.
 const client = createClient({ url: 'file::memory:' })
@@ -19,6 +31,14 @@ const db = drizzle(client, {
   },
 })
 mock.module('hub:db', () => ({ db, schema }))
+mock.module('../../utils/auth', () => ({ requireIrUser: async () => ({ id: 'player' }) }))
+mock.module('../../utils/rate_limit', () => ({
+  SCORE_SUBMIT_RATE_LIMIT: {},
+  checkUserRateLimit: async () => {},
+}))
+Object.assign(globalThis, { defineEventHandler })
+const { default: scoreHandler } = await import('../../api/v1/scores.post')
+const { default: courseHandler } = await import('../../api/v1/course-scores.post')
 const { submitScore, prepareBestScoreUpsert } = await import('./submission')
 const { validateScoreSubmission } = await import('./common')
 const { IrIdempotencyCollisionError } = await import('./idempotency')
@@ -116,6 +136,156 @@ function courseSubmission() {
     idempotency_key: 'course-test',
   }
 }
+
+function sizedJson(size: number, options = false): Record<string, string> {
+  const value: Record<string, string> = options
+    ? { device_type: 'keyboard', padding: '' }
+    : { padding: '' }
+  const remaining = size - Buffer.byteLength(JSON.stringify(value))
+  value.padding = 'あ'.repeat(Math.floor(remaining / 3)) + 'x'.repeat(remaining % 3)
+  expect(Buffer.byteLength(JSON.stringify(value))).toBe(size)
+  return value
+}
+
+test('real score and course routes accept exact input limits and return 400 for one more', async () => {
+  const app = createApp()
+    .use(requestBodyMiddleware)
+    .use('/api/v1/scores', scoreHandler)
+    .use('/api/v1/course-scores', courseHandler)
+  const server = createServer(toNodeListener(app))
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address() as { port: number }
+  let sequence = 0
+  const post = (path: string, payload: IrScoreSubmission | CourseScoreSubmission) => {
+    payload.idempotency_key = `input-limit-${sequence++}`
+    return fetch(`http://127.0.0.1:${port}${path}`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  try {
+    const scoreCases: [number, (payload: IrScoreSubmission, count: number) => void][] = []
+    for (const field of ['title', 'subtitle', 'artist', 'genre', 'difficulty'] as const) {
+      scoreCases.push([
+        MAX_METADATA_CHARS,
+        (payload, count) => {
+          payload.chart[field] = 'あ'.repeat(count)
+        },
+      ])
+    }
+    for (const field of ['source', 'append'] as const) {
+      scoreCases.push([
+        MAX_URL_CHARS,
+        (payload, count) => {
+          payload.chart.urls = { [field]: 'https://example.invalid/'.padEnd(count, 'x') }
+        },
+      ])
+    }
+    scoreCases.push(
+      [
+        MAX_SUBARTISTS,
+        (payload, count) => {
+          payload.chart.subartists = Array.from({ length: count }, () => 'artist')
+        },
+      ],
+      [
+        MAX_METADATA_CHARS,
+        (payload, count) => {
+          payload.chart.subartists = ['あ'.repeat(count)]
+        },
+      ],
+      [
+        MAX_PLAY_OPTIONS_BYTES,
+        (payload, count) => {
+          Object.assign(payload, { play_options: sizedJson(count, true) })
+        },
+      ],
+      [
+        MAX_EVIDENCE_BYTES,
+        (payload, count) => {
+          payload.evidence = sizedJson(count)
+        },
+      ],
+    )
+    for (const [maximum, set] of scoreCases) {
+      for (const extra of [0, 1]) {
+        const payload = submission()
+        set(payload, maximum + extra)
+        const response = await post('/api/v1/scores', payload)
+        expect(response.status).toBe(extra ? 400 : 200)
+      }
+    }
+    const courseCases: [number, (payload: CourseScoreSubmission, count: number) => void][] = [
+      [
+        MAX_METADATA_CHARS,
+        (payload, count) => {
+          payload.course.title = 'あ'.repeat(count)
+        },
+      ],
+      [
+        MAX_URL_CHARS,
+        (payload, count) => {
+          payload.course.source_url = 'https://example.invalid/'.padEnd(count, 'x')
+        },
+      ],
+      [
+        MAX_COURSE_CHARTS,
+        (payload, count) => {
+          payload.course.charts = Array.from({ length: count }, () => 'a'.repeat(64))
+          payload.course.course_hash = computeCourseHash(
+            payload.course.charts,
+            payload.course.constraints ?? {},
+          )
+          payload.result.played_entries = count
+          payload.result.entries = Array.from({ length: count }, () => ({}))
+        },
+      ],
+      [
+        MAX_PLAY_OPTIONS_BYTES,
+        (payload, count) => {
+          Object.assign(payload, { play_options: sizedJson(count, true) })
+        },
+      ],
+      [
+        MAX_EVIDENCE_BYTES,
+        (payload, count) => {
+          payload.evidence = sizedJson(count)
+        },
+      ],
+    ]
+    for (const [maximum, set] of courseCases) {
+      for (const extra of [0, 1]) {
+        const payload: CourseScoreSubmission = courseSubmission()
+        set(payload, maximum + extra)
+        const response = await post('/api/v1/course-scores', payload)
+        expect(response.status).toBe(extra ? 400 : 200)
+      }
+    }
+    // Current Rust course_payload.rs emits all these keys, including empty
+    // choice arrays for each entry. A 4 KiB cap would reject this valid course.
+    const payload: CourseScoreSubmission = courseSubmission()
+    payload.course.charts = Array.from({ length: MAX_COURSE_CHARTS }, () => 'a'.repeat(64))
+    payload.course.course_hash = computeCourseHash(
+      payload.course.charts,
+      payload.course.constraints ?? {},
+    )
+    payload.result.played_entries = MAX_COURSE_CHARTS
+    payload.result.entries = Array.from({ length: MAX_COURSE_CHARTS }, () => ({}))
+    payload.play_options.entry_randomizations = Array.from({ length: MAX_COURSE_CHARTS }, () => ({
+      arrange_1p: 'random',
+      arrange_2p: 'random',
+      seed: '281474976710655',
+      seed_scheme: 'beatoraja_24bit_v1',
+      bms_random_choices: [],
+      bms_switch_choices: [],
+    }))
+    expect(Buffer.byteLength(JSON.stringify(payload.play_options))).toBeGreaterThan(4096)
+    expect((await post('/api/v1/course-scores', payload)).status).toBe(200)
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})
 
 describe('shared submission metadata', () => {
   test('a second player cannot replace a registered chart and numeric conflicts are logged', async () => {

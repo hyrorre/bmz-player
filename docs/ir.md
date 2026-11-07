@@ -305,6 +305,27 @@ POST /api/v1/scores?include=rankings&ranking_scopes=global,self_and_rivals&ranki
 RANDOMが検出されていない譜面でノーツ数やBPM、譜面フラグなどが異なる場合、保存済みの値を保ち、差分の項目名をサーバーログへ記録します。
 判定数やEXスコアの上限確認には、各送信の`result.notes`を使います。
 
+### 入力の上限
+
+通常の要求本文は256 KiB、`PUT /api/v1/scores/{id}/replay/upload`だけは4 MiBまでです。
+Cloudflare WorkerではNitroが本文をbuffer化する前に、Nodeの開発用サーバーではmiddlewareで
+ストリームを制限します。Content-Lengthがない場合や申告値より大きい本文も検査し、超過は413を返します。
+
+単曲・コースのスコア送信には次の上限を適用し、超過は400を返します。
+
+| 対象 | 上限 |
+|---|---:|
+| 譜面のtitle・subtitle・artist・genre・difficulty、コースのtitle | 各1,024文字 |
+| 譜面のurlsの各値、コースのsource_url | 各2,048文字 |
+| subartists | 32件、各1,024文字 |
+| コースのcharts | 64件 |
+| play_options | JSONのUTF-8で32 KiB |
+| evidence（後からの署名も含む） | JSONのUTF-8で16 KiB |
+
+`play_options`は既存のキーを保持します。64曲の`entry_randomizations`等を含むクライアントの
+送信を受け付けるため、4 KiBより大きい上限にしています。取り込み（`local_backfill`）にも同じ上限を適用します。
+登録とプロフィール変更の表示名は、trim後に1〜64文字で、制御文字を含まない値に限定します。
+
 ### idempotency key
 
 - 新しいプレイのkeyは、queueへ入れる前に`bmz-score-v2-<UUID v4>`を一度だけ生成し、payloadに保存します。HTTPのretryでは保存済みのkeyを使います。ローカルのscore IDは、keyの一意性には使いません。
@@ -448,7 +469,7 @@ rank=7, scope_rank=2  ライバル
 
 - リプレイの状態は`replay_objects.status`（`metadata_only` / `pending_upload` / `uploaded` / `verified` / `rejected`）で管理します。スコアの`verification`とは別です。
 - PUTごとに別のblobを保存し、現在のpending世代と一致した要求だけを`uploaded`にします。検証も読み出した保存先・hashとDBの現在値が一致するときだけ反映し、競合時は409を返します。再試行時はupload URLを取得し直します。古い世代・競合で採用されなかったblobは削除を試みます。
-- 本文は4MiBまでです。Content-Lengthの有無・申告値にかかわらずストリームを読みながら制限し、超過時は読み取りを中止して413を返します。Cloudflare WorkerではNitroが本文をbuffer化する前に、すべての要求本文へ同じ4MiB上限を適用します。
+- 本文は4 MiBまでです。Content-Lengthの有無・申告値にかかわらずストリームを読みながら制限し、超過時は読み取りを中止して413を返します。Cloudflare Worker・Nodeの両方で、リプレイアップロード以外の本文は256 KiBまでに制限します。
 - `GET /api/v1/scores/{id}/replay`は、`uploaded` / `verified`のリプレイについて、`download_url` / `expires_in`（300秒） / `hash` / `format` / `size_bytes` / `status`を返します。リプレイはランキングと同じく公開情報として扱います。
 - upload / verifyに失敗した場合は、replay jobだけを再試行し、成功したscoreを未送信には戻しません。
 - `bmz-player ir replay <SCORE_ID>`でダウンロードし、`bmz-player --boot-replay-file <PATH>`で再生できます。

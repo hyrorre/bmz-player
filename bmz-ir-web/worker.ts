@@ -1,6 +1,6 @@
 import nitroWorker from 'nitropack/presets/cloudflare/runtime/cloudflare-module'
-import { MAX_REPLAY_BYTES } from './shared/constants/ir'
 import { readLimitedBody, RequestBodyTooLarge } from './shared/utils/body_limit'
+import { requestBodyLimit } from './shared/utils/request_body_limit'
 
 // Nitro's Cloudflare adapter buffers the body before H3 handlers run. Bound it
 // at the Worker entry as well, preserving the preset's scheduled/event handlers.
@@ -14,7 +14,7 @@ export default {
       const body = await readLimitedBody(
         request.body as unknown as ReadableStream<Uint8Array>,
         request.headers.get('content-length'),
-        MAX_REPLAY_BYTES,
+        requestBodyLimit(request.method, new URL(request.url).pathname),
       )
       const bounded = new Request(request as unknown as Request, { body })
       bounded.headers.delete('transfer-encoding')

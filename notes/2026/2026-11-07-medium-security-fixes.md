@@ -183,3 +183,21 @@
 - `bun run test:ir` と `bun x vue-tsc --noEmit` は成功。Prettierの対象となるWebファイルの変更はない。
 - ログはGit管理外の `.local/validation/security-medium/18-revised-focused.log`、`18-revised-rust.log`、`18-revised-web.log` に保存した。元のstashも保持している。
 - NOT VERIFIED — 実際の外部DNS・配布サーバー、Windows設定画面で指定したプロキシ、macOS/Linuxでの実行。Windows上の環境変数によるプロキシ自動利用は、子プロセスとモックプロキシで検証した。
+
+## #8 IR入力の上限
+
+- 通常の要求本文を256 KiB、リプレイのPUTだけを従来の4 MiBに分けた。Worker entryとNode/Nitroのmiddlewareで共通の経路判定を使い、Content-Lengthの有無・申告値によらずストリームを制限する。handlerが読む前に413とするため、スコア検証の400への変換に巻き込まれない。
+- Node側は既存のリプレイ用のbackpressure/cancel処理を共用し、検査後の本文をH3のcacheへ保持する。JSONのreadBodyとリプレイの再読込も回帰テストで確認した。
+- metadata各1,024文字、URL各2,048文字、subartists 32件・各1,024文字、コース64譜面、evidence 16 KiBを名前付き定数で制限する。evidenceは後からの署名にも適用する。
+- `payload.rs`、`course_payload.rs`、`backfill.rs`と`device_key.rs`を確認し、play_optionsのキーは削除しない。通常の64曲分のcourseオプションは9,984 bytesになり4 KiBでは拒否されるため、play_optionsは32 KiBへ調整した。実譜面の分岐指定も確認し、前節のRandom [DP ANOTHER]はRANDOM/SETRANDOM 28件、SWITCH 0件、両配列のJSONは保守的な値で119 bytesだった。他の計測済み2譜面は分岐なし。署名evidenceは現在のコース形式で288 bytesとなり、16 KiB以内に余裕を持って収まる。
+- 計測はクライアントの現在のキー・型と最大seedを使うJSONで行った。実譜面は非選択分岐も含めて数えた。計測スクリプトはGit管理外の `.local/validation/security-medium/measure_ir_input.py`。PythonのWindowsApps aliasが使用できなかったため、`py` launcherで実行した。
+- 表示名は登録・変更とも共通のrequireDisplayNameでtrim後1〜64文字・制御文字なしとする。新規APIテストの初回はNuxtのreadBody自動importがBun単体では存在せず失敗したため、既に変更対象のprofile handlerでH3関数を明示importして解消した。
+- 実スコア・コースAPIの各フィールドの上限ちょうど／1超過（400）、通常の64曲コース、Node/Workerの本文境界（413と4 MiBの受理）、登録・変更APIの表示名を、loopback HTTPとメモリ内SQLで検査した。
+- [入力の上限](../../docs/ir.md#入力の上限)に反映した。Cloudflareの[ストリーム処理の推奨](https://developers.cloudflare.com/workers/best-practices/workers-best-practices/#stream-request-and-response-bodies)と現行のWorkers型定義も確認した。本番へのアクセス・デプロイは行っていない。
+
+### 検証
+
+- `bun run test:ir`、`bun x vue-tsc --noEmit`、変更したWeb 16ファイルのPrettier確認はすべて成功。現在のWorkers型定義は `@cloudflare/workers-types 5.20261107.1` をGit管理外へ取得して参照した。
+- `cargo fmt --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。`cargo test -p bmz-player --locked` は2,934成功・58 ignored（起動テスト2件を含む）、0失敗。
+- ログはGit管理外の `.local/validation/security-medium/8-submission.log`、`8-body.log`、`8-typecheck.log`、`8-web.log`、`8-rust.log` に保存した。
+- NOT VERIFIED — Cloudflare実環境とNuxt開発サーバー本体での手動操作。Node HTTPアダプターとWorker entryのモックは自動テストで確認し、本番環境は確認・変更していない。
