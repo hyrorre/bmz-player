@@ -1,5 +1,9 @@
 # スキン仕様
 
+Kaleidノーツの追加定義・既存スキンへのフォールバックは[Kaleid拡張](kaleid.md)を参照。
+HLNは専用→HCN→LN画像、ポーションは通常ノーツのRGB反転（alpha維持）、
+フリーゾーンは暗赤色の領域、ダミーは対応する既存ノーツの外観を使います。
+
 BMZはbeatoraja JSON / Lua skinの互換を基本にします。既存beatoraja skin typeは
 そのまま扱い、BMZ独自のkey modeだけ拡張skin typeを予約します。
 
