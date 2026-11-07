@@ -214,7 +214,8 @@ fn reimport_repairs_v33_import_without_inventing_missing_bp_during_migration() {
     // Remove only the new column to construct the actual pre-v34 schema.
     db.conn_mut()
         .execute_batch(
-            "ALTER TABLE score_history DROP COLUMN source_min_bp;
+            "DROP TABLE score_kaleid_plays;
+        ALTER TABLE score_history DROP COLUMN source_min_bp;
         PRAGMA user_version = 33;",
         )
         .unwrap();

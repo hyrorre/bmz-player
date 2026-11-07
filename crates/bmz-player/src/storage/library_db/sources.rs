@@ -73,9 +73,9 @@ fn sources_for_hash(conn: &Connection, column: &str, hash: &str) -> Result<Vec<C
     let rows = stmt.query_map([hash], |row| {
         Ok(ChartSource {
             chart: chart_list_item_from_row(row)?,
-            path: PathBuf::from(row.get::<_, String>(36)?),
-            root_id: row.get(37)?,
-            import_version: row.get(38)?,
+            path: PathBuf::from(row.get::<_, String>("path")?),
+            root_id: row.get("root_id")?,
+            import_version: row.get("import_version")?,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
@@ -206,9 +206,9 @@ impl LibraryDatabase {
             let rows = stmt.query_map(rusqlite::params_from_iter(chunk), |row| {
                 Ok(ChartSource {
                     chart: chart_list_item_from_row(row)?,
-                    path: PathBuf::from(row.get::<_, String>(36)?),
-                    root_id: row.get(37)?,
-                    import_version: row.get(38)?,
+                    path: PathBuf::from(row.get::<_, String>("path")?),
+                    root_id: row.get("root_id")?,
+                    import_version: row.get("import_version")?,
                 })
             })?;
             for row in rows {
