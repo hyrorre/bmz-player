@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-07 | [Codex Securityの優先度中の指摘への対応](2026/2026-11-07-medium-security-fixes.md) |
 | 2026-11-07 | [選択したスキンフォルダに素材がない場合の互換性](2026/2026-11-07-skin-selected-folder-assets.md) |
 | 2026-11-07 | [Codex Securityの優先指摘への対応](2026/2026-11-07-priority-security-fixes.md) |
 | 2026-11-07 | [レビュー指摘5件の回帰修正](2026/2026-11-07-review-regressions.md) |

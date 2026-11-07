@@ -452,6 +452,7 @@ rank=7, scope_rank=2  ライバル
 - `GET /api/v1/scores/{id}/replay`は、`uploaded` / `verified`のリプレイについて、`download_url` / `expires_in`（300秒） / `hash` / `format` / `size_bytes` / `status`を返します。リプレイはランキングと同じく公開情報として扱います。
 - upload / verifyに失敗した場合は、replay jobだけを再試行し、成功したscoreを未送信には戻しません。
 - `bmz-player ir replay <SCORE_ID>`でダウンロードし、`bmz-player --boot-replay-file <PATH>`で再生できます。
+- BMZ Playerは、設定したIRと同じoriginから、最大4 MiBの公開リプレイをダウンロードします。この上限はCLIとG-BATTLEの両方に適用します。
 
 ## 改ざん検出（evidence）
 

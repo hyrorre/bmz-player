@@ -4,7 +4,6 @@ use sha2::{Digest, Sha256};
 use std::sync::mpsc::TryRecvError;
 
 const IR_BATTLE_HOLD_DURATION: Duration = Duration::from_millis(120);
-const IR_BATTLE_REPLAY_MAX_BYTES: usize = 8 * 1024 * 1024;
 const IR_BATTLE_REPLAY_MAX_EVENTS: usize = 2_000_000;
 
 #[derive(Default)]
@@ -662,18 +661,12 @@ async fn download_ir_battle_target(
     entry: crate::screens::select_ir::SelectIrBattleEntry,
 ) -> Result<crate::screens::play_start::BattleTarget> {
     let client = crate::ir::bmz_official::BmzOfficialIrClient::anonymous(base_url)?;
-    let (bytes, metadata) =
-        client.download_replay_with_metadata_limit(score_id, IR_BATTLE_REPLAY_MAX_BYTES).await?;
+    let (bytes, metadata) = client.download_replay_with_metadata(score_id).await?;
     if metadata.status.as_deref() != Some("verified") {
         anyhow::bail!("IR replay is not verified");
     }
     if metadata.format.as_deref() != Some("bmz-replay-v1") {
         anyhow::bail!("IR replay format is not supported");
-    }
-    if bytes.len() > IR_BATTLE_REPLAY_MAX_BYTES
-        || metadata.size_bytes.is_some_and(|size| size > IR_BATTLE_REPLAY_MAX_BYTES as u64)
-    {
-        anyhow::bail!("IR replay exceeds the size limit");
     }
     if metadata.size_bytes.is_some_and(|size| size != bytes.len() as u64) {
         anyhow::bail!("IR replay size does not match its metadata");

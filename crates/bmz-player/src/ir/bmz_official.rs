@@ -17,6 +17,8 @@ use super::types::{
 
 pub const BMZ_IR_PROVIDER: &str = "bmz";
 pub const BMZ_IR_DEFAULT_BASE_URL: &str = "https://bmz-player.hyrorre.workers.dev/";
+// Keep in sync with MAX_REPLAY_BYTES in bmz-ir-web/shared/constants/ir.ts.
+const MAX_REPLAY_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct BmzOfficialIrClient {
@@ -184,7 +186,7 @@ impl BmzOfficialIrClient {
         &self,
         score_id: &str,
     ) -> Result<(Vec<u8>, IrReplayDownloadTarget)> {
-        self.download_replay_with_metadata_limit(score_id, usize::MAX).await
+        self.download_replay_with_metadata_limit(score_id, MAX_REPLAY_BYTES).await
     }
 
     /// 公開リプレイを上限付きでダウンロードする。Content-Length が無い応答も
@@ -194,6 +196,7 @@ impl BmzOfficialIrClient {
         score_id: &str,
         max_bytes: usize,
     ) -> Result<(Vec<u8>, IrReplayDownloadTarget)> {
+        let max_bytes = max_bytes.min(MAX_REPLAY_BYTES);
         let url = self.base_url.join(&format!("/api/v1/scores/{score_id}/replay"))?;
         let response = self
             .http
@@ -203,12 +206,14 @@ impl BmzOfficialIrClient {
             .context("failed to request BMZ IR replay download URL")?;
         let target: IrReplayDownloadTarget =
             decode_response(response, "BMZ IR replay download URL").await?;
-        let mut body = self
-            .http
-            .get(&target.download_url)
-            .send()
-            .await
-            .context("failed to download BMZ IR replay")?;
+        let download_url =
+            Url::parse(&target.download_url).context("invalid BMZ IR replay download URL")?;
+        anyhow::ensure!(
+            download_url.origin() == self.base_url.origin(),
+            "IR replay download URL changed the origin"
+        );
+        let mut body =
+            self.http.get(download_url).send().await.context("failed to download BMZ IR replay")?;
         let status = body.status();
         if !status.is_success() {
             bail!("BMZ IR replay download failed: {status}");
@@ -545,6 +550,96 @@ fn scope_query_value(scope: &IrRankingScope) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::{TcpListener, TcpStream};
+
+    async fn replay_request(listener: &TcpListener, path: &str) -> TcpStream {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut stream = BufReader::new(stream);
+        let mut line = String::new();
+        stream.read_line(&mut line).await.unwrap();
+        assert_eq!(line, format!("GET {path} HTTP/1.1\r\n"));
+        loop {
+            line.clear();
+            assert_ne!(stream.read_line(&mut line).await.unwrap(), 0);
+            if line == "\r\n" {
+                return stream.into_inner();
+            }
+        }
+    }
+
+    async fn reply_with_replay_url(listener: &TcpListener, url: &str) {
+        let mut stream = replay_request(listener, "/api/v1/scores/test/replay").await;
+        let body = serde_json::json!({"download_url": url}).to_string();
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(reply.as_bytes()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn replay_download_rejects_a_different_origin_before_connecting() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let destination = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client =
+            BmzOfficialIrClient::anonymous(&format!("http://{}", listener.local_addr().unwrap()))
+                .unwrap();
+        let url = format!("http://{}/raw", destination.local_addr().unwrap());
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let (result, ()) = tokio::join!(
+                client.download_replay("test"),
+                reply_with_replay_url(&listener, &url),
+            );
+            assert!(result.unwrap_err().to_string().contains("changed the origin"));
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(50), destination.accept())
+                    .await
+                    .is_err()
+            );
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn replay_download_enforces_limit_with_or_without_content_length() {
+        for (chunked, size) in
+            [(false, MAX_REPLAY_BYTES + 1), (true, MAX_REPLAY_BYTES + 1), (true, MAX_REPLAY_BYTES)]
+        {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base_url = format!("http://{}", listener.local_addr().unwrap());
+            let client = BmzOfficialIrClient::anonymous(&base_url).unwrap();
+            let serve = async {
+                reply_with_replay_url(&listener, &format!("{base_url}/raw")).await;
+                let mut stream = replay_request(&listener, "/raw").await;
+                if chunked {
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{size:x}\r\n"
+                    );
+                    stream.write_all(header.as_bytes()).await.unwrap();
+                    stream.write_all(&vec![b'x'; size]).await.unwrap();
+                    // An oversized response can be dropped before the closing delimiter.
+                    let _ = stream.write_all(b"\r\n0\r\n\r\n").await;
+                } else {
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n"
+                    );
+                    stream.write_all(header.as_bytes()).await.unwrap();
+                }
+            };
+            let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                tokio::join!(client.download_replay("test"), serve)
+            })
+            .await
+            .unwrap();
+            if size > MAX_REPLAY_BYTES {
+                assert!(result.unwrap_err().to_string().contains("download size limit"));
+            } else {
+                assert_eq!(result.unwrap().0.len(), size);
+            }
+        }
+    }
 
     #[test]
     fn submit_url_includes_optional_ranking_scopes() {
