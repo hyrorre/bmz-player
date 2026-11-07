@@ -299,7 +299,6 @@ impl WinitApp {
     }
 
     pub(super) fn open_selected_chart_documents(&mut self) {
-        let text = Localizer::new(self.boot.profile_config.ui.locale());
         let Some(chart) = self.selected_chart_row().and_then(|row| row.chart.clone()) else {
             return;
         };
@@ -346,8 +345,24 @@ impl WinitApp {
             });
             return;
         }
+        #[cfg(target_os = "windows")]
+        self.spawn_shell_open(
+            move || Ok(Self::open_chart_documents_in_folder(&folder)),
+            |app, result| {
+                let opened = result.unwrap_or_else(|error| {
+                    tracing::warn!(%error, "failed to open chart documents");
+                    0
+                });
+                app.show_chart_documents_opened(opened);
+            },
+        );
+        #[cfg(not(target_os = "windows"))]
+        self.show_chart_documents_opened(Self::open_chart_documents_in_folder(&folder));
+    }
+
+    fn open_chart_documents_in_folder(folder: &Path) -> usize {
         let mut opened = 0usize;
-        match std::fs::read_dir(&folder) {
+        match std::fs::read_dir(folder) {
             Ok(entries) => {
                 for entry in entries.flatten() {
                     let path = entry.path();
@@ -364,6 +379,11 @@ impl WinitApp {
                 tracing::warn!(path = %folder.display(), %error, "failed to read chart documents");
             }
         }
+        opened
+    }
+
+    fn show_chart_documents_opened(&mut self, opened: usize) {
+        let text = Localizer::new(self.boot.profile_config.ui.locale());
         if opened == 0 {
             self.show_left_overlay_toast(text.text("toast-chart-text-not-found"));
         } else {
@@ -411,16 +431,18 @@ impl WinitApp {
                 return;
             }
         };
-        match open_external_url(&url) {
+        self.open_url_from_window(url.clone(), move |app, result| match result {
             Ok(()) => {
-                self.show_left_overlay_toast(text.text("toast-primary-ir-opened"));
+                let text = Localizer::new(app.boot.profile_config.ui.locale());
+                app.show_left_overlay_toast(text.text("toast-primary-ir-opened"));
                 tracing::info!(%url, "opened primary IR page");
             }
             Err(error) => {
                 tracing::warn!(%error, %url, "failed to open primary IR page");
-                self.show_left_overlay_toast(text.text("toast-primary-ir-open-failed"));
+                let text = Localizer::new(app.boot.profile_config.ui.locale());
+                app.show_left_overlay_toast(text.text("toast-primary-ir-open-failed"));
             }
-        }
+        });
     }
 
     pub(super) fn open_selected_chart_download_sites(&mut self) {

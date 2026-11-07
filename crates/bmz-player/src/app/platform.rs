@@ -296,10 +296,7 @@ pub(super) fn format_error_chain(error: &anyhow::Error) -> String {
 pub(super) fn open_external_url(url: &str) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .spawn()
-            .context("failed to open URL with cmd /C start")?;
+        windows_shell_open(std::ffi::OsStr::new(url)).context("failed to open URL")?;
     }
     #[cfg(target_os = "macos")]
     {
@@ -409,7 +406,7 @@ fn windows_file_browser_argument(path: &Path) -> std::ffi::OsString {
         .encode_wide()
         .map(|unit| if unit == u16::from(b'/') { u16::from(b'\\') } else { unit })
         .collect::<Vec<_>>();
-    // Explorer uses shell paths rather than Rust's canonical \\?\ paths.
+    // The shell uses normal paths rather than Rust's canonical \\?\ paths.
     let extended_unc: Vec<_> = r"\\?\UNC\".encode_utf16().collect();
     let extended: Vec<_> = r"\\?\".encode_utf16().collect();
     if native.starts_with(&extended_unc) {
@@ -423,11 +420,7 @@ fn windows_file_browser_argument(path: &Path) -> std::ffi::OsString {
 pub(super) fn open_file_with_default_app(path: &Path) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        Command::new("cmd")
-            .args(["/C", "start", ""])
-            .arg(path)
-            .spawn()
-            .context("failed to open file with cmd /C start")?;
+        windows_shell_open(&windows_file_browser_argument(path)).context("failed to open file")?;
     }
     #[cfg(target_os = "macos")]
     {
@@ -445,6 +438,84 @@ pub(super) fn open_file_with_default_app(path: &Path) -> Result<()> {
         anyhow::bail!("opening files is not supported on this platform: {}", path.display());
     }
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_shell_target(target: &std::ffi::OsStr) -> Result<Vec<u16>> {
+    use std::os::windows::ffi::OsStrExt;
+
+    let mut wide: Vec<_> = target.encode_wide().collect();
+    anyhow::ensure!(!wide.contains(&0), "shell target contains a NUL character");
+    wide.push(0);
+    Ok(wide)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_shell_open(target: &std::ffi::OsStr) -> Result<()> {
+    use std::ptr::{null, null_mut};
+    use windows_sys::Win32::System::Com::{
+        COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize,
+    };
+    use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
+
+    let target = windows_shell_target(target)?;
+    // Shell extensions can require an STA. Call this only on a worker thread.
+    let initialized = unsafe {
+        CoInitializeEx(null(), (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32)
+    };
+    anyhow::ensure!(
+        initialized >= 0,
+        "failed to initialize shell COM apartment ({initialized:#x})"
+    );
+    let result = unsafe {
+        let result = ShellExecuteW(
+            null_mut(),
+            windows_sys::w!("open"),
+            target.as_ptr(),
+            null(),
+            null(),
+            SW_SHOWNORMAL,
+        );
+        CoUninitialize();
+        result as isize
+    };
+    anyhow::ensure!(result > 32, "ShellExecuteW failed ({result})");
+    Ok(())
+}
+
+impl WinitApp {
+    #[cfg(target_os = "windows")]
+    pub(super) fn spawn_shell_open<T: Send + 'static>(
+        &mut self,
+        open: impl FnOnce() -> Result<T> + Send + 'static,
+        complete: impl FnOnce(&mut Self, Result<T>) + Send + 'static,
+    ) {
+        let proxy = self.event_proxy.clone();
+        // Retain the completion callback if the OS fails to create the worker.
+        let complete = Arc::new(std::sync::Mutex::new(Some(complete)));
+        let worker_complete = Arc::clone(&complete);
+        if let Err(error) = thread::Builder::new().name("shell-open".into()).spawn(move || {
+            let result = open();
+            let callback = worker_complete.lock().unwrap().take().unwrap();
+            let _ = proxy.send_event(AppUserEvent::ShellOpen(Box::new(move |app| {
+                callback(app, result);
+            })));
+        }) {
+            let callback = complete.lock().unwrap().take().unwrap();
+            callback(self, Err(error).context("failed to start shell worker"));
+        }
+    }
+
+    pub(super) fn open_url_from_window(
+        &mut self,
+        url: String,
+        complete: impl FnOnce(&mut Self, Result<()>) + Send + 'static,
+    ) {
+        #[cfg(target_os = "windows")]
+        self.spawn_shell_open(move || open_external_url(&url), complete);
+        #[cfg(not(target_os = "windows"))]
+        complete(self, open_external_url(&url));
+    }
 }
 
 pub(super) fn primary_ir_provider_for_profile(
@@ -488,6 +559,26 @@ pub(super) fn launch_update_installer(path: &Path) -> Result<()> {
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_shell_target_preserves_literal_url_and_path_characters() {
+        for (target, expected) in [
+            (r"\\?\C:\曲 フォルダ\read&me^100%.txt", r"C:\曲 フォルダ\read&me^100%.txt"),
+            (r"\\?\UNC\server\share\曲&^%.txt", r"\\server\share\曲&^%.txt"),
+        ] {
+            let path = windows_file_browser_argument(Path::new(target));
+            assert_eq!(
+                windows_shell_target(&path).unwrap(),
+                expected.encode_utf16().chain([0]).collect::<Vec<_>>()
+            );
+        }
+        let url = "https://example.com/曲?q=a%20b&v=^";
+        assert_eq!(
+            windows_shell_target(url.as_ref()).unwrap(),
+            url.encode_utf16().chain([0]).collect::<Vec<_>>()
+        );
+        assert!(windows_shell_target("abc\0def".as_ref()).is_err());
+    }
 
     #[test]
     fn windows_file_browser_argument_uses_native_separators() {

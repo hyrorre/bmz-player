@@ -422,16 +422,24 @@ use skin_pipeline::MAX_PENDING_SKIN_UPLOADS;
 
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
-#[derive(Debug, Clone)]
+#[cfg(target_os = "windows")]
+type ShellOpenCompletion = Box<dyn FnOnce(&mut WinitApp) + Send>;
+
 enum AppUserEvent {
     LatencyProbe(event_loop_probe::Ticket),
     ProfileChangeReady,
-    SkinUpload { sent_at: Instant },
-    SystemSoundReady { generation: u64 },
+    SkinUpload {
+        sent_at: Instant,
+    },
+    SystemSoundReady {
+        generation: u64,
+    },
     CourseLinkRepair,
     TableFetch,
     RivalSync,
     IrManual,
+    #[cfg(target_os = "windows")]
+    ShellOpen(ShellOpenCompletion),
     ViewerCommand(crate::viewer_ipc::ViewerCommand),
 }
 

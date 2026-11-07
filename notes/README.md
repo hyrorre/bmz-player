@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-07 | [Codex Securityの優先指摘への対応](2026/2026-11-07-priority-security-fixes.md) |
 | 2026-11-07 | [レビュー指摘5件の回帰修正](2026/2026-11-07-review-regressions.md) |
 | 2026-11-06 | [システム時計に基づく音声予約と都度要求（#72）](2026/2026-11-06-audio-system-clock-scheduling.md) |
 | 2026-11-06 | [AlmaLinux 8.10のLinux tarビルド修正（#78）](2026/2026-11-06-linux-tar-almalinux-ci.md) |

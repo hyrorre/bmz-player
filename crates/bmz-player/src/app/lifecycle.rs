@@ -561,6 +561,11 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 self.poll_select_maintenance();
                 self.request_redraw();
             }
+            #[cfg(target_os = "windows")]
+            AppUserEvent::ShellOpen(complete) => {
+                complete(self);
+                self.request_redraw();
+            }
             AppUserEvent::ViewerCommand(command) => match command {
                 crate::viewer_ipc::ViewerCommand::Stop => {
                     tracing::info!("external viewer playback stopped; waiting for next command");

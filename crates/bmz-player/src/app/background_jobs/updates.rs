@@ -257,22 +257,35 @@ impl WinitApp {
                         crate::update::sparkle::download();
                     }
                     _ => {
-                        if let Err(error) = open_external_url(&candidate.html_url) {
-                            tracing::warn!(%error, "failed to open release page");
-                            self.jobs.updates.prompt = Some(UpdatePrompt::Error {
-                                message: {
+                        self.open_url_from_window(
+                            candidate.html_url.clone(),
+                            move |app, result| {
+                                if let Err(error) = &result {
+                                    tracing::warn!(%error, "failed to open release page");
+                                }
+                                if cfg!(target_os = "windows")
+                                    && !matches!(app.jobs.updates.prompt.as_ref(),
+                                        Some(UpdatePrompt::Available(current)
+                                            | UpdatePrompt::Error { candidate: Some(current), .. })
+                                        if current.version == candidate.version)
+                                {
+                                    return;
+                                }
+                                if let Err(error) = result {
                                     let mut args = FluentArgs::new();
                                     args.set("error", format!("{error:#}"));
-                                    Localizer::new(self.boot.profile_config.ui.locale())
-                                        .format("update-release-open-failed", &args)
-                                },
-                                candidate: Some(candidate),
-                            });
-                        } else {
-                            self.jobs.updates.dismissed_session_version =
-                                Some(candidate.version.clone());
-                            self.jobs.updates.prompt = None;
-                        }
+                                    let text = Localizer::new(app.boot.profile_config.ui.locale());
+                                    app.jobs.updates.prompt = Some(UpdatePrompt::Error {
+                                        message: text.format("update-release-open-failed", &args),
+                                        candidate: Some(candidate),
+                                    });
+                                } else {
+                                    app.jobs.updates.dismissed_session_version =
+                                        Some(candidate.version);
+                                    app.jobs.updates.prompt = None;
+                                }
+                            },
+                        );
                     }
                 }
             }
@@ -314,9 +327,11 @@ impl WinitApp {
                     .and_then(UpdatePrompt::candidate)
                     .map(|candidate| candidate.html_url.as_str())
                     .unwrap_or(crate::update::RELEASES_PAGE_URL);
-                if let Err(error) = open_external_url(url) {
-                    tracing::warn!(%error, "failed to open release page");
-                }
+                self.open_url_from_window(url.to_owned(), |_, result| {
+                    if let Err(error) = result {
+                        tracing::warn!(%error, "failed to open release page");
+                    }
+                });
             }
         }
     }
@@ -350,8 +365,19 @@ impl WinitApp {
                 Ok(())
             }
             _ => {
-                open_external_url(&downloaded.candidate.html_url)?;
-                self.jobs.updates.prompt = None;
+                let version = downloaded.candidate.version;
+                self.open_url_from_window(downloaded.candidate.html_url, move |app, result| {
+                    if cfg!(target_os = "windows")
+                        && !matches!(app.jobs.updates.prompt.as_ref(),
+                            Some(UpdatePrompt::Ready(current)) if current.version == version)
+                    {
+                        return;
+                    }
+                    app.jobs.updates.prompt = result.err().map(|error| UpdatePrompt::Error {
+                        message: format!("{error:#}"),
+                        candidate: None,
+                    });
+                });
                 Ok(())
             }
         }
