@@ -1,6 +1,34 @@
 use super::*;
 
 #[test]
+#[ignore = "requires an offscreen GPU adapter; run explicitly for Kaleid potion rendering"]
+fn potion_rgb_inversion_preserves_source_alpha_on_gpu() {
+    let mut renderer = Renderer::default();
+    renderer.attach_offscreen(SurfaceSize { width: 3, height: 1 }).unwrap();
+    let id = TextureId(903);
+    renderer
+        .upsert_rgba_texture_ref(id, 3, 1, &[255, 0, 0, 255, 255, 0, 0, 128, 255, 0, 0, 0])
+        .unwrap();
+    renderer.last_plan = Some(DrawPlan {
+        clear: Color::rgb(0.0, 0.0, 0.0),
+        commands: vec![DrawCommand::Image {
+            rect: Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+            uv: UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+            source_size: None,
+            tint: Color::rgb(1.0, 1.0, 1.0),
+            texture: id,
+            blend: BlendMode::InvertRgb,
+            linear_filter: false,
+        }],
+    });
+    renderer.render_last_plan().unwrap();
+    let pixels = renderer.read_offscreen_rgba().unwrap();
+    assert_eq!(&pixels[..4], &[0, 255, 255, 255]);
+    assert!(pixels[4] == 0 && (127..=129).contains(&pixels[5]) && pixels[5] == pixels[6]);
+    assert_eq!(&pixels[8..12], &[0, 0, 0, 255]);
+}
+
+#[test]
 #[ignore = "requires a GPU; run explicitly for sliced image sampling changes"]
 fn nearest_sliced_images_match_an_unsliced_image_when_scaled() {
     let id = TextureId(902);

@@ -205,7 +205,22 @@ impl<'a> CsvBuilder<'a> {
             "SRC_HCN_BODY_ACTIVE" => self.add_note_source(line, NoteSlot::HcnActive),
             "SRC_HCN_DAMAGE" => self.add_note_source(line, NoteSlot::HcnDamage),
             "SRC_HCN_REACTIVE" => self.add_note_source(line, NoteSlot::HcnReactive),
+            "SRC_HLN_START" => self.add_note_source(line, NoteSlot::HlnStart),
+            "SRC_HLN_END" => self.add_note_source(line, NoteSlot::HlnEnd),
+            "SRC_HLN_BODY" => {
+                self.add_note_source_with_animation(line, NoteSlot::HlnBody, false);
+                self.add_note_source(line, NoteSlot::HlnActive);
+            }
+            "SRC_HLN_BODY_INACTIVE" => self.add_note_source(line, NoteSlot::HlnBody),
+            "SRC_HLN_BODY_ACTIVE" => self.add_note_source(line, NoteSlot::HlnActive),
+            "SRC_HLN_BODY_REACTIVE" | "SRC_HLN_REACTIVE" => {
+                self.add_note_source(line, NoteSlot::HlnReactive)
+            }
+            "SRC_HLN_BODY_DAMAGE" | "SRC_HLN_DAMAGE" => {
+                self.add_note_source(line, NoteSlot::HlnDamage)
+            }
             "SRC_MINE" | "SRC_AUTO_MINE" => self.add_note_source(line, NoteSlot::Mine),
+            "SRC_POTION" | "SRC_AUTO_POTION" => self.add_note_source(line, NoteSlot::Potion),
             "DST_NOTE" => self.add_note_destination(line),
             "HORIZONTAL" => self.note.horizontal = true,
             "DST_NOTE2" => self.note.dst2 = Some(parse_i32(line.fields.get(1))),
