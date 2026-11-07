@@ -6,6 +6,13 @@ BMZはbeatoraja JSON / Lua skinの互換を基本にします。既存beatoraja 
 JSON / Lua / LR2 skinの対応範囲と残課題は[skin-compatibility.md](skin-compatibility.md)を参照してください。
 この文書ではIDや各機能の動作契約を管理します。
 
+## JSONのinclude展開
+
+JSONスキンのincludeは、循環参照と深さ64以上の展開を読み込みエラーにします。
+1回の展開全体で、元の文書を含むファイル読み込みは4,096回、展開後のJSONは1,000,000ノードまでです。
+同じファイルの再includeも読み込み回数に数え、配列・オブジェクト・スカラーをそれぞれ1ノードと数えます。
+上限を超えた場合は読み込みを中断し、超えた上限をエラーに記録します。
+
 ## 画像の拡大縮小
 
 画像destinationの`filter=0`（既定）は最近傍、非0は線形補間を使います。

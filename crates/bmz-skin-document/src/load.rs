@@ -329,7 +329,49 @@ pub fn expand_json_skin_value_with_context(
     context: &SkinPathContext,
     enabled_options: &[i32],
 ) -> Result<JsonValue> {
-    expand_json_skin_value_inner(value, current_dir, context, enabled_options, &mut Vec::new(), 0)
+    let mut budget = ExpansionBudget { files: 1, nodes: 0 };
+    let expanded = expand_json_skin_value_inner(
+        value,
+        current_dir,
+        context,
+        enabled_options,
+        &mut Vec::new(),
+        &mut budget,
+        0,
+    )?;
+    budget.add_node()?;
+    Ok(expanded)
+}
+
+const MAX_EXPANSION_FILES: usize = 4096;
+const MAX_EXPANSION_NODES: usize = 1_000_000;
+
+struct ExpansionBudget {
+    files: usize,
+    nodes: usize,
+}
+
+impl ExpansionBudget {
+    fn add_node(&mut self) -> Result<()> {
+        anyhow::ensure!(
+            self.nodes < MAX_EXPANSION_NODES,
+            "skin json expansion exceeds maximum nodes ({MAX_EXPANSION_NODES})"
+        );
+        self.nodes += 1;
+        Ok(())
+    }
+
+    fn append_included(&mut self, output: &mut Vec<JsonValue>, value: JsonValue) -> Result<()> {
+        match value {
+            // Children are already counted. The flattened array itself is not retained.
+            JsonValue::Array(values) => output.extend(values),
+            other => {
+                self.add_node()?;
+                output.push(other);
+            }
+        }
+        Ok(())
+    }
 }
 
 fn expand_include(
@@ -338,10 +380,16 @@ fn expand_include(
     context: &SkinPathContext,
     enabled_options: &[i32],
     active: &mut Vec<PathBuf>,
+    budget: &mut ExpansionBudget,
     depth: usize,
 ) -> Result<JsonValue> {
     let path = load_included_json_with_context(include, current_dir, context)?;
     anyhow::ensure!(!active.contains(&path), "cyclic skin json include: {}", path.display());
+    anyhow::ensure!(
+        budget.files < MAX_EXPANSION_FILES,
+        "skin json expansion exceeds maximum files ({MAX_EXPANSION_FILES})"
+    );
+    budget.files += 1;
     active.push(path.clone());
     let result = expand_json_skin_value_inner(
         load_json_value(&path)?,
@@ -349,6 +397,7 @@ fn expand_include(
         context,
         enabled_options,
         active,
+        budget,
         depth + 1,
     );
     active.pop();
@@ -361,8 +410,11 @@ fn expand_json_skin_value_inner(
     context: &SkinPathContext,
     enabled_options: &[i32],
     active: &mut Vec<PathBuf>,
+    budget: &mut ExpansionBudget,
     depth: usize,
 ) -> Result<JsonValue> {
+    // Count each value's root when attaching it to its parent. This lets array
+    // includes flatten without charging a node for the discarded array wrapper.
     anyhow::ensure!(depth < 64, "skin json expansion exceeds maximum depth (64)");
     match value {
         JsonValue::Array(items) => {
@@ -376,12 +428,10 @@ fn expand_json_skin_value_inner(
                             context,
                             enabled_options,
                             active,
+                            budget,
                             depth,
                         )?;
-                        match included_value {
-                            JsonValue::Array(values) => expanded.extend(values),
-                            other => expanded.push(other),
-                        }
+                        budget.append_included(&mut expanded, included_value)?;
                         continue;
                     }
                     if object.contains_key("if")
@@ -389,14 +439,17 @@ fn expand_json_skin_value_inner(
                     {
                         if test_json_option(object.get("if"), enabled_options) {
                             if let Some(value) = object.get("value") {
-                                expanded.push(expand_json_skin_value_inner(
+                                let value = expand_json_skin_value_inner(
                                     value.clone(),
                                     current_dir,
                                     context,
                                     enabled_options,
                                     active,
+                                    budget,
                                     depth + 1,
-                                )?);
+                                )?;
+                                budget.add_node()?;
+                                expanded.push(value);
                             }
                             if let Some(values) = object.get("values") {
                                 let values = expand_json_skin_value_inner(
@@ -405,25 +458,26 @@ fn expand_json_skin_value_inner(
                                     context,
                                     enabled_options,
                                     active,
+                                    budget,
                                     depth + 1,
                                 )?;
-                                match values {
-                                    JsonValue::Array(values) => expanded.extend(values),
-                                    other => expanded.push(other),
-                                }
+                                budget.append_included(&mut expanded, values)?;
                             }
                         }
                         continue;
                     }
                 }
-                expanded.push(expand_json_skin_value_inner(
+                let value = expand_json_skin_value_inner(
                     item,
                     current_dir,
                     context,
                     enabled_options,
                     active,
+                    budget,
                     depth + 1,
-                )?);
+                )?;
+                budget.add_node()?;
+                expanded.push(value);
             }
             Ok(JsonValue::Array(expanded))
         }
@@ -435,6 +489,7 @@ fn expand_json_skin_value_inner(
                     context,
                     enabled_options,
                     active,
+                    budget,
                     depth,
                 );
             }
@@ -446,6 +501,7 @@ fn expand_json_skin_value_inner(
                         context,
                         enabled_options,
                         active,
+                        budget,
                         depth + 1,
                     )
                 } else {
@@ -454,17 +510,17 @@ fn expand_json_skin_value_inner(
             }
             let mut expanded = JsonMap::new();
             for (key, value) in object {
-                expanded.insert(
-                    key,
-                    expand_json_skin_value_inner(
-                        value,
-                        current_dir,
-                        context,
-                        enabled_options,
-                        active,
-                        depth + 1,
-                    )?,
-                );
+                let value = expand_json_skin_value_inner(
+                    value,
+                    current_dir,
+                    context,
+                    enabled_options,
+                    active,
+                    budget,
+                    depth + 1,
+                )?;
+                budget.add_node()?;
+                expanded.insert(key, value);
             }
             Ok(JsonValue::Object(expanded))
         }
@@ -560,6 +616,80 @@ pub fn default_property_option(property: &JsonValue) -> Option<i32> {
 #[cfg(test)]
 mod include_tests {
     use super::*;
+
+    #[test]
+    fn exponentially_reused_includes_exhaust_the_shared_file_budget() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        for index in 0..30 {
+            let child = format!("{}.json", index + 1);
+            std::fs::write(
+                root.path().join(format!("{index}.json")),
+                serde_json::json!([{"include": child}, {"include": child}]).to_string(),
+            )?;
+        }
+        std::fs::write(root.path().join("30.json"), "[0]")?;
+        let error = expand_json_skin_value(
+            serde_json::json!({"include": "0.json"}),
+            root.path(),
+            root.path(),
+            &[],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("maximum files (4096)"), "{error:#}");
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_includes_count_against_the_file_limit() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        std::fs::write(root.path().join("empty.json"), "[]")?;
+        let mut includes =
+            vec![serde_json::json!({"include": "empty.json"}); MAX_EXPANSION_FILES - 1];
+        assert_eq!(
+            expand_json_skin_value(
+                JsonValue::Array(includes.clone()),
+                root.path(),
+                root.path(),
+                &[],
+            )?,
+            serde_json::json!([])
+        );
+        includes.push(serde_json::json!({"include": "empty.json"}));
+        assert!(
+            expand_json_skin_value(JsonValue::Array(includes), root.path(), root.path(), &[])
+                .unwrap_err()
+                .to_string()
+                .contains("maximum files")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn expanded_node_budget_counts_retained_arrays_objects_and_scalars() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        // Each object, its array, and the scalar contribute three retained nodes.
+        let values = vec![serde_json::json!({"item": [0]}); (MAX_EXPANSION_NODES - 1) / 3];
+        std::fs::write(root.path().join("values.json"), serde_json::to_vec(&values)?)?;
+        let expanded = expand_json_skin_value(
+            serde_json::json!([{"include": "values.json"}]),
+            root.path(),
+            root.path(),
+            &[],
+        )?;
+        assert_eq!(expanded.as_array().unwrap().len(), values.len());
+        assert!(
+            expand_json_skin_value(
+                serde_json::json!([{"include": "values.json"}, null]),
+                root.path(),
+                root.path(),
+                &[],
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("maximum nodes (1000000)")
+        );
+        Ok(())
+    }
 
     #[test]
     fn includes_reject_cycles_and_depth_but_allow_reuse() {
