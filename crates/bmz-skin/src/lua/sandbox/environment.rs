@@ -163,6 +163,7 @@ pub(super) fn install_sandbox(
             path_context,
             file_overlay.clone(),
             load_dependencies.clone(),
+            JAVA_FILE_NATIVE_MAX_BYTES,
         )?;
     }
     globals.set("luajava", luajava)?;

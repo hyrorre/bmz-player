@@ -1,5 +1,117 @@
 use super::*;
 
+fn java_file_vm(budget: usize) -> (Lua, crate::tests::TestDir) {
+    let dir = crate::tests::TestDir::created("java-file-facade");
+    let entry = dir.join("skin.lua");
+    fs::write(&entry, "").unwrap();
+    let context = SkinPathContext::new(&entry, [dir.to_path_buf()]).unwrap();
+    let lua = Lua::new();
+    let Value::Table(luajava) = create_luajava_stub(&lua).unwrap() else { unreachable!() };
+    install_luajava_file_facade(
+        &lua,
+        &luajava,
+        &context,
+        SharedLuaFileOverlay::default(),
+        None,
+        budget,
+    )
+    .unwrap();
+    lua.globals().set("luajava", luajava).unwrap();
+    (lua, dir)
+}
+
+#[test]
+fn java_file_rejects_oversized_paths_before_conversion() {
+    let (lua, _) = java_file_vm(JAVA_FILE_NATIVE_MAX_BYTES);
+    lua.load(r#"
+        local File = luajava.bindClass("java.io.File")
+        local function rejects(...)
+            local ok, err = pcall(...)
+            assert(not ok and tostring(err):find("Java file path limit exceeded", 1, true))
+        end
+        rejects(luajava.new, File, string.rep("x", 4097))
+        rejects(luajava.newInstance, "java.io.File", string.rep(string.char(255), 1366))
+        local parent = string.rep("p", 2048)
+        local child = string.rep("c", 2048)
+        rejects(luajava.new, File, parent, child)
+        rejects(luajava.new, File, luajava.new(File, parent), child)
+        rejects(luajava.new, File, { getPath = function() return string.rep("x", 4097) end }, "child")
+    "#).exec().unwrap();
+}
+
+#[test]
+fn java_file_missing_paths_and_directory_listing_use_overlay() {
+    let (lua, dir) = java_file_vm(JAVA_FILE_NATIVE_MAX_BYTES);
+    lua.load(
+        r#"
+        local File = luajava.bindClass("java.io.File")
+        local parent = luajava.newInstance("java.io.File", "missing")
+        assert(parent:getName() == "missing" and not parent:exists())
+        assert(parent:mkdirs() and parent:isDirectory())
+        local child = luajava.new(File, parent, "child")
+        assert(child:mkdir() and not child:mkdir())
+        local listed = parent:listFiles()
+        assert(#listed == 1 and listed[1]:getName() == "child")
+        assert(listed[1]:getPath() == child:getPath() and listed[1]:isDirectory())
+    "#,
+    )
+    .exec()
+    .unwrap();
+    assert!(!dir.join("missing").exists());
+}
+
+#[test]
+fn java_file_budget_counts_live_methods_and_listed_children() {
+    let (lua, dir) = java_file_vm(2048);
+    fs::create_dir(dir.join("parent")).unwrap();
+    for n in 0..12 {
+        fs::write(dir.join("parent").join(format!("child-{n}")), "").unwrap();
+    }
+    lua.load(
+        r#"
+        local File = luajava.bindClass("java.io.File")
+        local held = {}
+        for i = 1, 4 do held[i] = luajava.new(File, "parent") end
+        local ok, err = pcall(luajava.newInstance, "java.io.File", string.rep("x", 800))
+        assert(not ok and tostring(err):find("native memory limit exceeded", 1, true))
+
+        -- A method can outlive its table and still retains the File.
+        local list = held[1].listFiles
+        held = nil
+        collectgarbage("collect")
+        collectgarbage("collect")
+        ok, err = pcall(list)
+        assert(not ok and tostring(err):find("native memory limit exceeded", 1, true))
+        list = nil
+        collectgarbage("collect")
+        collectgarbage("collect")
+        assert(luajava.newInstance("java.io.File", string.rep("x", 800)):getName():len() == 800)
+    "#,
+    )
+    .exec()
+    .unwrap();
+}
+
+#[test]
+fn java_file_failed_lua_allocation_returns_reservation_without_gc() {
+    let (lua, dir) = java_file_vm(JAVA_FILE_NATIVE_MAX_BYTES);
+    let facade = Arc::new(JavaFileFacade {
+        context: SkinPathContext::new(&dir.join("skin.lua"), [dir.to_path_buf()]).unwrap(),
+        overlay: SharedLuaFileOverlay::default(),
+        dependencies: None,
+        remaining: AtomicUsize::new(512),
+    });
+    lua.gc_stop();
+    lua.set_memory_limit(lua.used_memory() + 256).unwrap();
+    assert!(matches!(
+        create_java_file(&lua, &facade, "missing".into()),
+        Err(mlua::Error::MemoryError(_))
+    ));
+    lua.set_memory_limit(0).unwrap();
+    assert_eq!(facade.remaining.load(Ordering::Relaxed), 512);
+    create_java_file(&lua, &facade, "missing".into()).unwrap();
+}
+
 fn counted_bytes(layer: &LuaFileLayer) -> usize {
     layer
         .files

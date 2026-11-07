@@ -10,6 +10,7 @@
 //! of a UTF-8 character and compare it with the same string after reading.
 
 use super::*;
+use std::sync::{OnceLock, atomic::AtomicUsize};
 
 #[cfg(test)]
 #[path = "files_tests.rs"]
@@ -654,33 +655,96 @@ pub(super) fn install_main_state_file_api(
 
 const JAVA_FILE_CLASS: &str = "java.io.File";
 const JAVA_CLASS_FIELD: &str = "bmz_java_class";
+pub(super) const JAVA_FILE_NATIVE_MAX_BYTES: usize = LUA_FILE_STORE_MAX_BYTES;
+
+struct JavaFileFacade {
+    context: SkinPathContext,
+    overlay: SharedLuaFileOverlay,
+    dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
+    remaining: AtomicUsize,
+}
+
+struct JavaFileReservation {
+    facade: Arc<JavaFileFacade>,
+    bytes: usize,
+}
+
+impl Drop for JavaFileReservation {
+    fn drop(&mut self) {
+        self.facade.remaining.fetch_add(self.bytes, Ordering::Relaxed);
+    }
+}
+
+struct JavaFile {
+    path: Box<str>,
+    key: Option<Box<Path>>,
+    reservation: JavaFileReservation,
+}
+
+fn java_file_path_limit() -> mlua::Error {
+    mlua::Error::runtime("Java file path limit exceeded")
+}
+
+fn join_java_file_path(parts: &[&[u8]]) -> mlua::Result<String> {
+    let mut len = 0usize;
+    for part in parts {
+        if part.len() > LUA_FILE_PATH_MAX_BYTES {
+            return Err(java_file_path_limit());
+        }
+        for chunk in part.utf8_chunks() {
+            len = len
+                .checked_add(chunk.valid().len() + if chunk.invalid().is_empty() { 0 } else { 3 })
+                .filter(|&len| len <= LUA_FILE_PATH_MAX_BYTES)
+                .ok_or_else(java_file_path_limit)?;
+        }
+    }
+    let mut path = String::with_capacity(len);
+    for part in parts {
+        path.push_str(&String::from_utf8_lossy(part));
+    }
+    Ok(path)
+}
 
 /// A `java.io.File` for skins that list or create folders through luajava
 /// (`luajava.new(luajava.bindClass("java.io.File"), path)`), over the overlay.
-fn create_java_file(
-    lua: &Lua,
-    path_context: &SkinPathContext,
-    overlay: &SharedLuaFileOverlay,
-    dependencies: &Option<Arc<Mutex<SkinLoadDependencies>>>,
-    path: String,
-) -> mlua::Result<Value> {
+fn create_java_file(lua: &Lua, facade: &Arc<JavaFileFacade>, path: String) -> mlua::Result<Value> {
+    let key = lua_file_key(&facade.context, &path);
+    let bytes = LUA_FILE_ENTRY_OVERHEAD
+        + path.len()
+        + key.as_ref().map_or(0, |key| key.as_os_str().as_encoded_bytes().len());
+    facade
+        .remaining
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| remaining.checked_sub(bytes))
+        .map_err(|_| mlua::Error::runtime("Java file native memory limit exceeded"))?;
+    let reservation = JavaFileReservation { facade: facade.clone(), bytes };
+    // Publish native data only after all Lua allocations succeed. Partial
+    // closures can await GC without keeping the path or its reservation.
+    let data = Arc::new(OnceLock::<JavaFile>::new());
     let file = lua.create_table()?;
-    let key = lua_file_key(path_context, &path);
-    let name = Path::new(&path.replace('\\', "/"))
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let getter_data = data.clone();
+    let get_path = lua.create_function(move |lua, _: Value| {
+        lua.create_string(getter_data.get().unwrap().path.as_bytes())
+    })?;
     for getter in ["getPath", "getAbsolutePath", "toString"] {
-        let path = path.clone();
-        file.set(getter, lua.create_function(move |_, _: Value| Ok(path.clone()))?)?;
+        file.set(getter, get_path.clone())?;
     }
-    file.set("getName", lua.create_function(move |_, _: Value| Ok(name.clone()))?)?;
+    let getter_data = data.clone();
+    file.set(
+        "getName",
+        lua.create_function(move |_, _: Value| {
+            let path = getter_data.get().unwrap().path.replace('\\', "/");
+            Ok(Path::new(&path)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default())
+        })?,
+    )?;
     let exists = |check: fn(&LuaFileOverlay, &Path) -> bool| {
-        let key = key.clone();
-        let overlay = overlay.clone();
-        lua.create_function(move |_, _: Value| match &key {
-            Some(key) => Ok(check(&*lock_overlay(&overlay)?, key)),
-            None => Ok(false),
+        let data = data.clone();
+        lua.create_function(move |_, _: Value| {
+            let file = data.get().unwrap();
+            let Some(key) = &file.key else { return Ok(false) };
+            Ok(check(&*lock_overlay(&file.reservation.facade.overlay)?, key))
         })
     };
     file.set("exists", exists(lua_skin_file_exists)?)?;
@@ -697,66 +761,86 @@ fn create_java_file(
             None => key.is_file(),
         })?,
     )?;
-    for creator in ["mkdir", "mkdirs"] {
-        let key = key.clone();
-        let overlay = overlay.clone();
-        file.set(
-            creator,
-            lua.create_function(move |_, _: Value| {
-                let Some(key) = &key else { return Ok(false) };
-                let mut overlay = lock_overlay(&overlay)?;
-                if lua_skin_file_exists(&overlay, key) {
-                    return Ok(false);
-                }
-                Ok(overlay.create_directory(key.clone()).is_ok())
-            })?,
-        )?;
-    }
-    let context = path_context.clone();
-    let files = overlay.clone();
-    let deps = dependencies.clone();
-    let parent = path.clone();
+    let creator_data = data.clone();
+    let mkdir = lua.create_function(move |_, _: Value| {
+        let file = creator_data.get().unwrap();
+        let Some(key) = &file.key else { return Ok(false) };
+        let mut overlay = lock_overlay(&file.reservation.facade.overlay)?;
+        if lua_skin_file_exists(&overlay, key) {
+            return Ok(false);
+        }
+        Ok(overlay.create_directory(key.to_path_buf()).is_ok())
+    })?;
+    file.set("mkdir", mkdir.clone())?;
+    file.set("mkdirs", mkdir)?;
+    let listing_data = data.clone();
     file.set(
         "listFiles",
         lua.create_function(move |lua, _: Value| {
-            mark_load_dependency_opaque(deps.as_ref());
-            let Some(key) = &key else { return Ok(Value::Nil) };
-            let Some(entries) = lua_skin_directory_entries(&*lock_overlay(&files)?, key) else {
+            let file = listing_data.get().unwrap();
+            let facade = &file.reservation.facade;
+            mark_load_dependency_opaque(facade.dependencies.as_ref());
+            let Some(key) = &file.key else { return Ok(Value::Nil) };
+            let Some(entries) = lua_skin_directory_entries(&*lock_overlay(&facade.overlay)?, key)
+            else {
                 return Ok(Value::Nil);
             };
             let children = lua.create_table()?;
+            let parent = &file.path;
             let separator =
                 if parent.ends_with(['/', '\\']) { "" } else { std::path::MAIN_SEPARATOR_STR };
             for (index, entry) in entries.iter().enumerate() {
                 let Some(name) = entry.file_name() else { continue };
-                let child = format!("{parent}{separator}{}", name.to_string_lossy());
-                children.set(index + 1, create_java_file(lua, &context, &files, &deps, child)?)?;
+                let name = name.to_string_lossy();
+                let child = join_java_file_path(&[
+                    parent.as_bytes(),
+                    separator.as_bytes(),
+                    name.as_bytes(),
+                ])?;
+                children.set(index + 1, create_java_file(lua, facade, child)?)?;
             }
             Ok(Value::Table(children))
         })?,
     )?;
     let metatable = lua.create_table()?;
-    metatable.set("__tostring", lua.create_function(move |_, _: Value| Ok(path.clone()))?)?;
+    metatable.set("__tostring", get_path)?;
     file.set_metatable(Some(metatable));
+    assert!(
+        data.set(JavaFile {
+            path: path.into_boxed_str(),
+            key: key.map(PathBuf::into_boxed_path),
+            reservation,
+        })
+        .is_ok()
+    );
     Ok(Value::Table(file))
 }
 
 fn java_file_path(lua: &Lua, args: &[Value]) -> mlua::Result<Option<String>> {
-    let text = |value: &Value| {
-        lua.coerce_string(value.clone()).map(|text| text.map(|text| text.to_string_lossy()))
-    };
-    Ok(match args {
-        [path] => text(path)?,
+    let text = |value: &Value| lua.coerce_string(value.clone());
+    match args {
+        [path] => text(path)?.map(|path| join_java_file_path(&[&path.as_bytes()])).transpose(),
         // `new File(parent, child)` with a String or File parent.
         [parent, child] => {
             let parent = match parent {
-                Value::Table(file) => file.get::<Function>("getPath")?.call::<String>(())?,
-                other => text(other)?.unwrap_or_default(),
+                Value::Table(file) => {
+                    Some(file.get::<Function>("getPath")?.call::<mlua::String>(())?)
+                }
+                other => text(other)?,
             };
-            text(child)?.map(|child| format!("{parent}{}{child}", std::path::MAIN_SEPARATOR))
+            let parent = parent.as_ref().map(mlua::String::as_bytes);
+            text(child)?
+                .map(|child| {
+                    join_java_file_path(&[
+                        parent.as_deref().unwrap_or_default(),
+                        std::path::MAIN_SEPARATOR_STR.as_bytes(),
+                        &child.as_bytes(),
+                    ])
+                })
+                .transpose()
         }
-        _ => None,
-    })
+        _ => Ok(None),
+    }
 }
 
 /// Routes `java.io.File` through [`create_java_file`] and leaves every other
@@ -767,7 +851,14 @@ pub(super) fn install_luajava_file_facade(
     path_context: &SkinPathContext,
     overlay: SharedLuaFileOverlay,
     dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
+    native_budget: usize,
 ) -> mlua::Result<()> {
+    let facade = Arc::new(JavaFileFacade {
+        context: path_context.clone(),
+        overlay,
+        dependencies,
+        remaining: AtomicUsize::new(native_budget),
+    });
     let bind_class: Function = luajava.get("bindClass")?;
     luajava.set(
         "bindClass",
@@ -781,9 +872,7 @@ pub(super) fn install_luajava_file_facade(
         })?,
     )?;
     let new: Function = luajava.get("new")?;
-    let context = path_context.clone();
-    let files = overlay.clone();
-    let deps = dependencies.clone();
+    let new_facade = facade.clone();
     luajava.set(
         "new",
         lua.create_function(move |lua, args: Variadic<Value>| {
@@ -796,20 +885,19 @@ pub(super) fn install_luajava_file_facade(
                 )
                 && let Some(path) = java_file_path(lua, &args[1..])?
             {
-                return create_java_file(lua, &context, &files, &deps, path);
+                return create_java_file(lua, &new_facade, path);
             }
             new.call::<Value>(args)
         })?,
     )?;
     let new_instance: Function = luajava.get("newInstance")?;
-    let context = path_context.clone();
     luajava.set(
         "newInstance",
         lua.create_function(move |lua, (class_name, args): (String, Variadic<Value>)| {
             if class_name == JAVA_FILE_CLASS
                 && let Some(path) = java_file_path(lua, &args)?
             {
-                return create_java_file(lua, &context, &overlay, &dependencies, path);
+                return create_java_file(lua, &facade, path);
             }
             new_instance.call::<Value>((class_name, args))
         })?,

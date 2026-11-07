@@ -1255,6 +1255,9 @@ beatorajaの通信無効時と同じ応答により、SocialSkin等がJava互換
 Javaのオブジェクトを作りません。例外は`java.io.File`で、メモリ上のスキンファイルの一覧・作成に
 対応する`listFiles` / `mkdir` / `mkdirs` / `exists` / `isDirectory` / `isFile` / `getName` /
 `getPath`を返します（ModernChic Ver 4.2系のフォルダ一覧）。
+パスは親子を結合したUTF-8表現で4 KiBまでです。`listFiles`の子を含む`File`がRust側に保持する
+パスと管理領域には、Lua VMごとに合計32 MiBの予算があります。上限を超える生成はLuaエラーを返し、
+テーブルとそのメソッドが回収されると予算が戻ります。
 
 ### メモリ上のスキンファイル
 
