@@ -4,14 +4,14 @@ import { createError, setHeader, type H3Event } from 'h3'
 import { db, schema } from 'hub:db'
 import { rateLimitClientIp } from './client_ip'
 
-export type RateLimitAction =
-  'login' | 'register' | 'score_submit' | 'score_cleanup' | 'refresh' | 'replay_upload'
+export type RateLimitAction = (typeof schema.authRateLimits.$inferInsert)['action']
 export type RateLimitScope = 'email' | 'ip' | 'user'
 
 export const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000
 export const SCORE_SUBMIT_RATE_LIMIT = { user: 6000, ip: 12000 } as const
 export const SCORE_CLEANUP_RATE_LIMIT = { user: 6000, ip: 12000 } as const
 export const REPLAY_UPLOAD_RATE_LIMIT = { user: 900, ip: 1800 } as const
+export const DEVICE_KEY_CREATE_RATE_LIMIT = { user: 30, ip: 120 } as const
 
 /**
  * 認証済み API 向けのレート制限。user id と IP の両方で数える。

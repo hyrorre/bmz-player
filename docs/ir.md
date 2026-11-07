@@ -472,6 +472,8 @@ rank=7, scope_rank=2  ライバル
 - 本文は4 MiBまでです。Content-Lengthの有無・申告値にかかわらずストリームを読みながら制限し、超過時は読み取りを中止して413を返します。Cloudflare Worker・Nodeの両方で、リプレイアップロード以外の本文は256 KiBまでに制限します。
 - `GET /api/v1/scores/{id}/replay`は、`uploaded` / `verified`のリプレイについて、`download_url` / `expires_in`（300秒） / `hash` / `format` / `size_bytes` / `status`を返します。リプレイはランキングと同じく公開情報として扱います。
 - upload / verifyに失敗した場合は、replay jobだけを再試行し、成功したscoreを未送信には戻しません。
+- `rejected`になったblobは削除し、DBのstatus・hash等は記録として残します。削除に失敗した場合は参照を保持し、定期清掃で再試行します。
+- `pending_upload`または未検証の`uploaded`の状態で24時間を過ぎた世代は、定期清掃で`rejected`にしてblobを削除します。時刻はその状態に移った`updated_at`を使います。再送時は新しいupload URLを取得します。`verified`は定期清掃の対象外です。
 - `bmz-player ir replay <SCORE_ID>`でダウンロードし、`bmz-player --boot-replay-file <PATH>`で再生できます。
 - BMZ Playerは、設定したIRと同じoriginから、最大4 MiBの公開リプレイをダウンロードします。この上限はCLIとG-BATTLEの両方に適用します。
 
@@ -481,6 +483,8 @@ rank=7, scope_rank=2  ライバル
 - canonical formは、payloadからトップレベルの`evidence`を除き、キーを昇順に並べて空白なしで文字列化したJSONです（RFC 8785 JCSと同じ規則）。数値はECMAScriptの`JSON.stringify()`と同じ表現になるため、`160.0`と`160`は同じbytesになります。コースでは小数を送らず、ゲージを整数の%に丸めます。
 - 署名は`Ed25519(秘密鍵, SHA256(canonical form))`です。`evidence`には`schema`（単曲は`bmz-score-evidence-v1`、コースは`bmz-course-score-evidence-v1`）、`canonical_hash`、`client_signature`（base64url）、`public_key_id`を入れます。
 - サーバーは、登録済みで失効していない公開鍵で検証し、hashと署名を保存します。署名が不正な場合は保存せずに400で拒否します。
+- 有効なdevice keyは1アカウント10件までです。同じ有効な鍵の再登録は既存IDを返し、新しい鍵で上限を超える場合は409を返します。不要な鍵を失効させてから追加してください。
+- 鍵の登録APIは15分の窓でユーザー30回・IP 120回までとし、超過は429を返します。失効から90日を過ぎた鍵は定期清掃で削除します。過去のscoreとbestの検証状態は保存済みの値を維持します。
 
 スコアの`verification`は次の3つです。
 
@@ -491,6 +495,13 @@ rank=7, scope_rank=2  ライバル
 | `verified_play` | 通常のプレイ結果をdevice keyで署名した |
 
 署名のない送信済みのscoreには、`POST /api/v1/scores/{id}/attestations`（schemaは`bmz-score-attestation-v1`）で後から署名を付けられます。score本文は送り直さず、所有者のdevice keyでscore IDに署名して`verification`だけを更新します。
+
+### 定期清掃
+
+`ir:storage-cleanup`を毎分実行します。期限切れリプレイの状態変更、rejectedのblob削除、
+失効鍵の削除は、それぞれ1回40件までとし、残りは次回へ回します。D1のbind上限100に収め、
+期限付きロックで同時実行を防ぎます。世代と状態を条件付きで更新し、新しいPUT・検証済みのリプレイを保護します。
+清掃用の索引は`0016_storage_cleanup_indexes.sql`に追加しています。
 
 ## 判定・EXスコア・クリアランプ
 

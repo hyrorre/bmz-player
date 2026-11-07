@@ -62,7 +62,15 @@ export const authRateLimits = sqliteTable(
   {
     // enum は Drizzle の型レベル制約のみ (SQLite に CHECK は生成されない)。
     action: text('action', {
-      enum: ['login', 'register', 'score_submit', 'score_cleanup', 'refresh', 'replay_upload'],
+      enum: [
+        'login',
+        'register',
+        'score_submit',
+        'score_cleanup',
+        'refresh',
+        'replay_upload',
+        'device_key_create',
+      ],
     }).notNull(),
     scope: text('scope', { enum: ['email', 'ip', 'user'] }).notNull(),
     scopeHash: text('scope_hash').notNull(),
@@ -402,7 +410,11 @@ export const deviceKeys = sqliteTable(
       .notNull()
       .default(sql`(unixepoch('subsec') * 1000)`),
   },
-  (table) => [index('idx_device_keys_player').on(table.playerId)],
+  (table) => [
+    index('idx_device_keys_player').on(table.playerId),
+    index('idx_device_keys_player_revoked').on(table.playerId, table.revokedAt),
+    index('idx_device_keys_revoked').on(table.revokedAt),
+  ],
 )
 
 export const replayObjects = sqliteTable(
@@ -434,6 +446,10 @@ export const replayObjects = sqliteTable(
   (table) => [
     uniqueIndex('idx_replay_objects_score').on(table.scoreId),
     index('idx_replay_objects_player').on(table.playerId),
+    index('idx_replay_objects_status_updated').on(table.status, table.updatedAt),
+    index('idx_replay_objects_blob_cleanup')
+      .on(table.status, table.updatedAt)
+      .where(sql`${table.objectPath} IS NOT NULL`),
   ],
 )
 

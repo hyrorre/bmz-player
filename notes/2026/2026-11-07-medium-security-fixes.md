@@ -201,3 +201,23 @@
 - `cargo fmt --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。`cargo test -p bmz-player --locked` は2,934成功・58 ignored（起動テスト2件を含む）、0失敗。
 - ログはGit管理外の `.local/validation/security-medium/8-submission.log`、`8-body.log`、`8-typecheck.log`、`8-web.log`、`8-rust.log` に保存した。
 - NOT VERIFIED — Cloudflare実環境とNuxt開発サーバー本体での手動操作。Node HTTPアダプターとWorker entryのモックは自動テストで確認し、本番環境は確認・変更していない。
+
+## #11 device keyと未検証リプレイの清掃
+
+- device key登録APIへ既存のcheckUserRateLimitを追加した。鍵の作成・通常の再試行を許容する15分あたりユーザー30回・IP 120回とし、超過は429を返す。有効な鍵はアカウント10件まで。同じ有効な鍵の再登録は既存IDを返し、上限の超過は古い鍵の失効を促す409とする。
+- 件数・重複の条件とinsertを1回のSQLにまとめた。10件目の競合でも上限を超えず、同じ鍵の同時登録でも1件だけ追加する。
+- 90日を過ぎた失効鍵を削除できるか、schema、署名検証、score詳細・ランキングの経路を確認した。scoreから鍵へのFKはなく、新しい署名は失効鍵を既に拒否し、履歴表示は保存済みのverificationを参照する。実際のEd25519署名で保存したscoreの鍵を失効・削除し、詳細APIとbestのverified_playが維持されることも確認した。
+- verifyでrejectedにしたblobは直ちに削除し、DB行のstatus・hash等を残す。削除失敗時はobject_pathを残して定期清掃で再試行する。参照解除はid・path・rejected状態を条件にし、新しい世代を消さない。
+- 複数blobの削除はallSettledで全件を待ち、成功した行だけ参照を解除する。1件のストレージ障害が他の清掃対象を止めないことと、その後の再試行をテストに追加した。
+- `ir:storage-cleanup`を毎分のscheduledTasksへ登録した。24時間を過ぎたpending_upload・uploadedを、状態とupdated_atを条件に1回のSQLでrejectedにする。verifiedは対象外。検証の更新にも許可状態の条件を追加し、清掃と競合した古い検証が状態を復活させないようにした。
+- 各段は40件ずつに制限し、残りを次回へ回す。参照解除のSQLもD1のbind上限100以内にし、テストのSQL loggerですべてのqueryを検査した。既存のtask lockで同時実行を防ぎ、検索用の4索引をschemaと `0016_storage_cleanup_indexes.sql` に追加した。migrationの実行はメモリ内のテストDBだけで、本番D1・R2へはアクセスしていない。
+- 初回の型検査では新しいrate actionのschema enumへの追加漏れと、hub:dbの生成済みschema型が古いことを検出した。sourceへenumを追加し、RateLimitActionをschemaから導出し、`bun x nuxt prepare`でローカルの型だけを再生成して解消した。
+- 回帰テストでは、11件目の409、同時登録、ユーザーとIPそれぞれの429、24時間・90日の境界、40件の上限、ロック、失効鍵削除後の署名状態、rejected blobの削除と再試行、清掃と検証・PUT・新しい世代の競合を確認した。
+- [リプレイと署名の仕様](../../docs/ir.md)へ反映した。scheduledTasksは[Nitroの公式説明](https://nitro.build/docs/tasks#scheduled-tasks)、D1の上限は[公式のlimits](https://developers.cloudflare.com/d1/platform/limits/)、blob削除は現在のNuxtHub実装・型と[R2のAPI](https://developers.cloudflare.com/r2/api/workers/workers-api-reference/)を確認した。
+
+### 検証
+
+- 最終版の `bun run test:ir` はすべて成功。リプレイ競合9テスト、storage maintenance 6テストを含む。`bun x vue-tsc --noEmit`、変更したWeb 10ファイルのPrettier確認も成功した。索引のSQLはメモリ内DBのmigration実行で検証した。
+- `cargo fmt --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。`cargo test -p bmz-player --locked` は2,934成功・58 ignored（起動テスト2件を含む）、0失敗。
+- ログはGit管理外の `.local/validation/security-medium/11-maintenance.log`、`11-replay.log`、`11-nuxt-prepare.log`、`11-web.log`、`11-final-web.log`、`11-rust.log` に保存した。最終Webログは部分削除失敗への対策追加後のもの。
+- NOT VERIFIED — 実際のCloudflare scheduled実行、D1・R2連携。ローカルHTTP、メモリ内SQL、blobモックで確認し、本番へのアクセス・migration適用・デプロイは実施していない。

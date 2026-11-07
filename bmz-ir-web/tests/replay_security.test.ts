@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, expect, mock, test } from 'bun:test'
+import { afterAll, beforeEach, expect, mock, spyOn, test } from 'bun:test'
 import { createClient } from '@libsql/client'
 import { drizzle } from 'drizzle-orm/libsql'
 import { eq } from 'drizzle-orm'
@@ -17,13 +17,17 @@ mock.module('../server/utils/rate_limit', () => ({
 }))
 const objects = new Map<string, Uint8Array>()
 let onRead: (() => Promise<void>) | undefined
+let onDelete: (() => Promise<void>) | undefined
+let failDelete = false
 mock.module('hub:blob', () => ({
   blob: {
     put: async (path: string, bytes: Uint8Array) => {
       objects.set(path, bytes.slice())
     },
-    del: async (path: string) => {
-      objects.delete(path)
+    del: async (paths: string | string[]) => {
+      if (failDelete) throw new Error('fixture storage unavailable')
+      await onDelete?.()
+      for (const path of Array.isArray(paths) ? paths : [paths]) objects.delete(path)
     },
     get: async (path: string) => {
       const bytes = objects.get(path)?.slice()
@@ -45,6 +49,8 @@ Object.assign(globalThis, {
 const { default: uploadUrl } = await import('../server/api/v1/scores/[id]/replay/upload-url.post')
 const { default: upload } = await import('../server/api/v1/scores/[id]/replay/upload.put')
 const { default: verify } = await import('../server/api/v1/scores/[id]/replay/verify.post')
+const { cleanupIrStorage, UNVERIFIED_REPLAY_RETENTION_MS } =
+  await import('../server/services/storage_cleanup')
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 const good = new TextEncoder().encode('original replay')
 const bad = new TextEncoder().encode('different replay')
@@ -91,6 +97,8 @@ await db.insert(schema.scores).values({
 afterAll(() => client.close())
 beforeEach(async () => {
   onRead = undefined
+  onDelete = undefined
+  failDelete = false
   objects.clear()
   await db.delete(schema.replayObjects)
 })
@@ -166,6 +174,86 @@ test('a mismatching replay is rejected', async () => {
   await upload(event(await intent(), Promise.resolve(bad)))
   expect((await verify(event())).status).toBe('rejected')
   expect((await current())?.status).toBe('rejected')
+  expect((await current())?.objectPath).toBeNull()
+  expect(objects.size).toBe(0)
+})
+
+test('rejected deletion failures retain a reference for scheduled retry', async () => {
+  const warning = spyOn(console, 'warn').mockImplementation(() => {})
+  try {
+    await upload(event(await intent(), Promise.resolve(bad)))
+    failDelete = true
+    expect((await verify(event())).status).toBe('rejected')
+    expect((await current())?.objectPath).not.toBeNull()
+    expect(objects.size).toBe(1)
+    failDelete = false
+    expect((await cleanupIrStorage()).deleted_replay_blobs).toBe(1)
+    expect(objects.size).toBe(0)
+    expect((await current())?.status).toBe('rejected')
+    expect((await current())?.objectPath).toBeNull()
+  } finally {
+    warning.mockRestore()
+  }
+})
+
+test('expiration cannot be undone by verification already reading the old blob', async () => {
+  await upload(event(await intent()))
+  const now = new Date()
+  await db
+    .update(schema.replayObjects)
+    .set({ updatedAt: new Date(now.getTime() - UNVERIFIED_REPLAY_RETENTION_MS - 1) })
+  const snapshot = Promise.withResolvers<void>()
+  const finish = Promise.withResolvers<void>()
+  onRead = async () => {
+    snapshot.resolve()
+    await finish.promise
+  }
+  const checking = verify(event())
+  await snapshot.promise
+  expect((await cleanupIrStorage(now)).expired_replays).toBe(1)
+  finish.resolve()
+  await expect(checking).rejects.toMatchObject({ statusCode: 409 })
+  expect((await current())?.status).toBe('rejected')
+  expect(objects.size).toBe(0)
+})
+
+test('an expired pending upload rejects a late PUT and deletes its unadopted bytes', async () => {
+  const id = await intent()
+  const now = new Date()
+  await db
+    .update(schema.replayObjects)
+    .set({ updatedAt: new Date(now.getTime() - UNVERIFIED_REPLAY_RETENTION_MS - 1) })
+  const body = Promise.withResolvers<Uint8Array>()
+  const requested = Promise.withResolvers<void>()
+  const late = upload({
+    uploadId: id,
+    get body() {
+      requested.resolve()
+      return body.promise
+    },
+  } as unknown as H3Event)
+  await requested.promise
+  await cleanupIrStorage(now)
+  body.resolve(good)
+  await expect(late).rejects.toMatchObject({ statusCode: 409 })
+  expect((await current())?.status).toBe('rejected')
+  expect(objects.size).toBe(0)
+})
+
+test('cleanup cannot clear or delete a renewed generation during blob deletion', async () => {
+  await upload(event(await intent()))
+  const now = new Date()
+  await db
+    .update(schema.replayObjects)
+    .set({ updatedAt: new Date(now.getTime() - UNVERIFIED_REPLAY_RETENTION_MS - 1) })
+  onDelete = async () => {
+    onDelete = undefined
+    await upload(event(await intent()))
+  }
+  await cleanupIrStorage(now)
+  expect((await current())?.status).toBe('uploaded')
+  expect(objects.size).toBe(1)
+  expect((await verify(event())).status).toBe('verified')
 })
 
 test('a PUT from a superseded intent cannot modify the new pending generation', async () => {

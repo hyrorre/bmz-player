@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, inArray } from 'drizzle-orm'
 import { blob } from 'hub:blob'
 import { db, schema } from 'hub:db'
 import { requireScoreWriteAllowed } from '../../../../../services/moderation/enforcement'
@@ -7,6 +7,7 @@ import { requireIrUser } from '../../../../../utils/auth'
 import { REPLAY_UPLOAD_RATE_LIMIT, checkUserRateLimit } from '../../../../../utils/rate_limit'
 import { MAX_REPLAY_BYTES } from '../../../../../../shared/constants/ir'
 import { readLimitedBody } from '../../../../../../shared/utils/body_limit'
+import { deleteRejectedReplayBlobs } from '../../../../../services/storage_cleanup'
 
 /**
  * アップロード済みリプレイの hash を検証する。
@@ -60,6 +61,7 @@ export default defineEventHandler(async (event) => {
         eq(schema.replayObjects.id, replay.id),
         eq(schema.replayObjects.objectPath, replay.objectPath),
         eq(schema.replayObjects.hash, replay.hash),
+        inArray(schema.replayObjects.status, ['uploaded', 'verified']),
       ),
     )
     .returning({ id: schema.replayObjects.id })
@@ -70,5 +72,8 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  if (!verified) {
+    await deleteRejectedReplayBlobs([{ id: replay.id, objectPath: replay.objectPath }])
+  }
   return { status, size_bytes: bytes.length, hash: actualHash }
 })
