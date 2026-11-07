@@ -78,11 +78,9 @@ pub fn advance_session_frame(
                 judgements
                     .extend(super::conditional::advance_before_boundary(session, times.audio_now));
             }
-        } else if session.chart.long_notes.iter().any(|pair| {
-            pair.mode.unwrap_or(session.chart.metadata.long_note_mode) == LongNoteMode::Hln
-        }) {
-            judgements.extend(super::input::process_hln_inputs(session, times.audio_now));
         } else if session.replay_player.is_some() && session.replay_lane_mask.is_none() {
+            // Full replays, including HLN, need the fixed scoring clock for misses,
+            // mines and hold gauge updates even when there are no recorded inputs.
             drain_human_inputs(session);
             let scoring_times =
                 session.replay_player.as_mut().unwrap().scoring_times_until(times.audio_now);
@@ -98,6 +96,10 @@ pub fn advance_session_frame(
                     break;
                 }
             }
+        } else if session.chart.long_notes.iter().any(|pair| {
+            pair.mode.unwrap_or(session.chart.metadata.long_note_mode) == LongNoteMode::Hln
+        }) {
+            judgements.extend(super::input::process_hln_inputs(session, times.audio_now));
         } else {
             if session.autoplay.as_ref().is_some_and(AutoplayController::is_full) {
                 // フルオート中は人間のキー入力を判定にも視覚エフェクトにも渡さない。
@@ -223,6 +225,9 @@ pub fn prepare_viewer_seek(session: &mut GameSession, start_time: TimeUs) {
     if let Some(opponent) = &mut session.opponent.independent {
         opponent.judge.skip_before(&opponent.chart, start_time);
         apply_battle_opponent_viewer_pgreat_prefix(opponent, start_time);
+        // The prefix has already been restored above. Never run its scoring clock
+        // again from zero; leave the exact seek boundary available for inputs.
+        opponent.conditional.processed_time = Some(TimeUs(start_time.0.saturating_sub(1)));
         if let Some(autoplay) = &mut opponent.autoplay {
             autoplay.skip_before(&opponent.chart, start_time);
             for lane in Lane::ALL {
@@ -380,29 +385,20 @@ fn advance_battle_opponent(session: &mut GameSession, now: TimeUs) {
     if session.opponent.independent.is_none() {
         return;
     }
-    let scoring_times = session
+    let replay_times = session
         .opponent
         .independent
         .as_mut()
         .and_then(|opponent| opponent.replay_player.as_mut())
-        .map(|replay| replay.scoring_times_until(now))
-        .unwrap_or_else(|| {
-            let opponent = session.opponent.independent.as_ref().unwrap();
-            if uses_fixed_opponent_clock(opponent) {
-                let start = opponent
-                    .conditional
-                    .processed_time
-                    .map_or(0, |t| (t.0.div_euclid(1_000) + 1).saturating_mul(1_000));
-                let mut times: Vec<_> = (start..=now.0).step_by(1_000).map(TimeUs).collect();
-                if times.last().copied() != Some(now) {
-                    times.push(now);
-                }
-                times
-            } else {
-                vec![now]
-            }
-        });
-    for time in scoring_times {
+        .map(|replay| replay.scoring_times_until(now));
+    let mut replay_times = replay_times.map(Vec::into_iter);
+    loop {
+        let time = if let Some(times) = &mut replay_times {
+            times.next()
+        } else {
+            next_battle_opponent_time(session.opponent.independent.as_ref().unwrap(), now)
+        };
+        let Some(time) = time else { break };
         // Each player evaluates the same boundary against their own preceding score.
         // Inputs at T are consumed only after all blocks at T have selected.
         while let Some(at) = session
@@ -422,6 +418,54 @@ fn advance_battle_opponent(session: &mut GameSession, now: TimeUs) {
         }
         advance_battle_opponent_at(session, time);
     }
+}
+
+/// Preserve the fixed scoring cadence while a judgement/hold is pending, but
+/// jump across idle chart intervals. Compute lazily so a stall does not allocate
+/// one timestamp per millisecond, and newly selected branches are seen immediately.
+pub(super) fn next_battle_opponent_time(
+    opponent: &BattleOpponentSession,
+    now: TimeUs,
+) -> Option<TimeUs> {
+    let previous = opponent.conditional.processed_time.unwrap_or(TimeUs(-1));
+    if previous >= now {
+        return None;
+    }
+    if !uses_fixed_opponent_clock(opponent) {
+        return Some(now);
+    }
+    let next_tick = TimeUs(previous.0.div_euclid(1_000).saturating_add(1).saturating_mul(1_000));
+    let pending = opponent.judge.hln_body_visuals().next().is_some()
+        || opponent.lane_hcn_timer.iter().any(Option::is_some)
+        || Lane::ALL.iter().any(|lane| {
+            let state = &opponent.judge.lanes[lane.index()];
+            state.active_long.is_some()
+                || opponent.chart.notes_for_lane(*lane)[state.next_note_index..]
+                    .iter()
+                    .take_while(|note| note.time <= previous)
+                    .any(|note| {
+                        matches!(note.kind, NoteKind::Tap | NoteKind::LongStart)
+                            && !opponent.judge.judged_notes.contains_key(&note.id)
+                    })
+        });
+    if pending {
+        return Some(next_tick.min(now));
+    }
+    let next_event = opponent
+        .chart
+        .lane_notes
+        .iter()
+        .filter_map(|notes| {
+            notes.get(notes.partition_point(|note| note.time <= previous)).map(|note| note.time)
+        })
+        .chain(super::conditional::next_evaluation_for(&opponent.chart, &opponent.conditional))
+        .min()
+        .unwrap_or(now);
+    // Events were previously consumed at the following millisecond tick. Keep
+    // that rounding, while still processing a partial final frame at `now`.
+    let event_tick =
+        TimeUs(next_event.0.saturating_add(999).div_euclid(1_000).saturating_mul(1_000));
+    Some(event_tick.max(next_tick).min(now))
 }
 
 fn uses_fixed_opponent_clock(opponent: &BattleOpponentSession) -> bool {
@@ -462,6 +506,11 @@ fn advance_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
         scale_judge_windows_for_playback_rate(windows, playback_rate_percent)
     };
     opponent.judge.set_window_set(windows);
+    // The first update may jump directly to a note/zone boundary. Set this
+    // before inputs, which can themselves settle a zone at that same timestamp.
+    opponent.judge.free_zone_autoplay = std::array::from_fn(|i| {
+        opponent.autoplay.as_ref().is_some_and(|auto| auto.is_lane_enabled(Lane::ALL[i]))
+    });
 
     let mut inputs = if let Some(replay) = &mut opponent.replay_player {
         replay.poll_until(now)
@@ -492,9 +541,6 @@ fn advance_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
     }
     let mine_outcome = opponent.judge.process_mine_passes(&opponent.chart, now, &mine_keyon);
     display_judgements.extend(apply_battle_opponent_outcome(opponent, mine_outcome));
-    opponent.judge.free_zone_autoplay = std::array::from_fn(|i| {
-        opponent.autoplay.as_ref().is_some_and(|auto| auto.is_lane_enabled(Lane::ALL[i]))
-    });
     let miss_outcome = opponent.judge.process_misses(&opponent.chart, now);
     display_judgements.extend(apply_battle_opponent_outcome(opponent, miss_outcome));
     update_battle_opponent_hcn(opponent, now);
