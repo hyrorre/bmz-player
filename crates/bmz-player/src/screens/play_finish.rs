@@ -487,7 +487,7 @@ fn finish_session_snapshot_result(
                     random_seed,
                     gauge_option: String::new(),
                     rule_mode: snapshot.rule_mode.as_str().to_string(),
-                    assist_mask: snapshot.assist.configured_mask,
+                    assist_mask: crate::assist::recorded_mask(snapshot.assist),
                     replay_events: snapshot.replay_events.clone(),
                     arrange,
                     arrange_2p: applied_arrange.arrange_2p,
