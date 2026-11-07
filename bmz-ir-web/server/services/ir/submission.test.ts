@@ -288,6 +288,63 @@ test('real score and course routes accept exact input limits and return 400 for 
 })
 
 describe('shared submission metadata', () => {
+  test.each([undefined, 0])(
+    'Kaleid version %s upgrades without storing per-play chart state',
+    async (version) => {
+      const legacy = submission()
+      if (version !== undefined) {
+        legacy.chart.kaleid = { version, declared: {}, source: {}, effective: {}, diagnostics: [] }
+      }
+      await submitScore(user, validateScoreSubmission(legacy), [], 10)
+      const current = structuredClone(legacy)
+      current.idempotency_key += '-known'
+      current.chart.kaleid = {
+        version: 1,
+        declared: { conditional: true },
+        source: { conditional: true, hln: true },
+        effective: { hln: false },
+        diagnostics: ['partial selected branch'],
+      }
+      current.play_options.kaleid = { provenance: current.chart.kaleid }
+      await submitScore(secondUser, validateScoreSubmission(current), [], 10)
+      const expected = {
+        version: 1,
+        declared: current.chart.kaleid.declared,
+        source: current.chart.kaleid.source,
+      }
+      expect((await db.select().from(schema.charts))[0]!.kaleid).toEqual(expected)
+      expect(
+        (await db.select().from(schema.scores)).find((row) => row.playerId === 'second')!
+          .playOptions.kaleid,
+      ).toEqual(current.play_options.kaleid)
+      legacy.idempotency_key += '-later-legacy'
+      await submitScore(user, validateScoreSubmission(legacy), [], 10)
+      expect((await db.select().from(schema.charts))[0]!.kaleid).toEqual(expected)
+    },
+  )
+
+  test('known chart provenance omits and cleans up effective features and diagnostics', async () => {
+    const first = submission()
+    first.chart.kaleid = {
+      version: 1,
+      declared: { hln: true },
+      source: { hln: true },
+      effective: { hln: false },
+      diagnostics: ['first play'],
+    }
+    await submitScore(user, validateScoreSubmission(first), [], 10)
+    const expected = { version: 1, declared: { hln: true }, source: { hln: true } }
+    expect((await db.select().from(schema.charts))[0]!.kaleid).toEqual(expected)
+    // Rows written by the earlier implementation are cleaned when touched again.
+    await db.update(schema.charts).set({ kaleid: { ...first.chart.kaleid } })
+    const next = structuredClone(first)
+    next.idempotency_key += '-next'
+    next.chart.kaleid!.effective = { hln: true }
+    next.chart.kaleid!.diagnostics = []
+    await submitScore(secondUser, validateScoreSubmission(next), [], 10)
+    expect((await db.select().from(schema.charts))[0]!.kaleid).toEqual(expected)
+  })
+
   test('Kaleid paths share the original chart ranking while each best metric retains its source', async () => {
     const first = submission()
     first.rule.ln_policy = 'ForceHln'

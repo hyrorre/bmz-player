@@ -579,7 +579,15 @@ async function upsertChart(payload: IrScoreSubmission, doubleOption: IrDoubleOpt
     hasHcn: reported.hasHcn ?? false,
     hasHln: reported.hasHln ?? false,
     hasConditional: features.conditional ?? false,
-    kaleid: payload.chart.kaleid ? { ...payload.chart.kaleid } : {},
+    // Interpretation of the original source belongs to the chart. Selected/converted
+    // features and diagnostics belong to the signed evidence of each individual play.
+    kaleid: payload.chart.kaleid
+      ? {
+          version: payload.chart.kaleid.version,
+          declared: { ...payload.chart.kaleid.declared },
+          source: { ...payload.chart.kaleid.source },
+        }
+      : {},
     hasMine: reported.hasMine ?? false,
     sourceUrl: payload.chart.urls?.source ?? null,
     appendUrl: payload.chart.urls?.append ?? null,
@@ -620,7 +628,8 @@ async function upsertChart(payload: IrScoreSubmission, doubleOption: IrDoubleOpt
         hasConditional: sql`${charts.hasConditional} or excluded.has_conditional`,
         hasDefinedHln: sql`${charts.hasDefinedHln} or excluded.has_defined_hln`,
         hasHln: sql`${charts.hasHln} or excluded.has_hln`,
-        kaleid: sql`case when json_extract(${charts.kaleid}, '$.version') is null then excluded.kaleid else ${charts.kaleid} end`,
+        kaleid: sql`case when coalesce(json_extract(${charts.kaleid}, '$.version'), 0) = 0
+          then excluded.kaleid else json_remove(${charts.kaleid}, '$.effective', '$.diagnostics') end`,
       },
     })
     .returning({
