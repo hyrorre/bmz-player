@@ -248,3 +248,11 @@
 - `cargo fmt --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。`cargo test -p bmz-player --locked` は2,935成功・58 ignored（起動テスト2件を含む）、0失敗。
 - ログはGit管理外の `.local/validation/security-medium/11-followup-web.log`、`11-followup-rust.log` に保存した。
 - NOT VERIFIED — Cloudflareでの実際のscheduled実行。cronの設定とUTC基準を確認し、本番アクセス・デプロイは実施していない。
+
+## 追記: #11 定期清掃を1時間ごとへ変更
+
+- ユーザー指定に従い、`ir:storage-cleanup`のcronを`0 * * * *`へ変更した。毎時00分に実行し、各段階40件の上限に達した場合の残件は次の時間へ回す。[IR仕様](../../docs/ir.md#定期清掃)も更新した。
+- `bun run test:ir`、`bun x vue-tsc --noEmit`、`bun x prettier --check nuxt.config.ts` は成功。
+- `cargo fmt --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。`cargo test -p bmz-player --locked` は2,935成功・58 ignored（起動テスト2件を含む）、0失敗。
+- ログはGit管理外の `.local/validation/security-medium/11-hourly-web.log`、`11-hourly-rust.log` に保存した。
+- NOT VERIFIED — Cloudflareでの実際のscheduled実行。本番アクセス・デプロイは実施していない。
