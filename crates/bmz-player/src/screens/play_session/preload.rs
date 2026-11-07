@@ -591,6 +591,19 @@ fn transform_chart_import(
     } else if sp_to_dp {
         apply_sp_to_dp(&mut chart);
     }
+    // DP BATTLE is one SP chart played twice. Select BGM additions once before
+    // cloning, then let the existing independent side arrangements act on both.
+    let extra_before_battle = applied_double_option.is_battle();
+    let mut extra_note_start_id = if extra_before_battle {
+        crate::assist::apply_extra_note_assist(
+            &mut chart,
+            options.assist,
+            &mut assist_runtime,
+            false,
+        )
+    } else {
+        None
+    };
     apply_double_option(&mut chart, applied_double_option);
     let duplicate_primary_for_battle = key_mode_conversion == KeyModeConversionConfig::Off
         && battle_presentation
@@ -637,12 +650,14 @@ fn transform_chart_import(
             options.h_random_threshold_ms.unwrap_or(125),
         );
     }
-    let extra_note_start_id = crate::assist::apply_extra_note_assist(
-        &mut chart,
-        options.assist,
-        &mut assist_runtime,
-        battle_presentation,
-    );
+    if !extra_before_battle {
+        extra_note_start_id = crate::assist::apply_extra_note_assist(
+            &mut chart,
+            options.assist,
+            &mut assist_runtime,
+            battle_presentation,
+        );
+    }
     // LR2oraja Endless Dream と同じく全譜面オプションの後で判定し、配置で
     // スクラッチへ移ったノーツも自動演奏の対象として数える。
     if options.assist.auto_scratch

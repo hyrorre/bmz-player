@@ -39,3 +39,25 @@ G-BATTLEの相手表示・採点、実効有無によるランプ・数値・IR�
 `.local/extra-note-check.log`、`.local/extra-note-clippy.log`に保存。
 
 実機プレイとmacOS / Linuxは未確認。
+
+## DP OPTION BATTLEの複製順の修正
+
+ユーザー指定により、DP OPTIONのBATTLE / BATTLE ASではSPへEXTRA NOTEを追加してから
+両側へ複製し、その後に各側の配置設定を適用する。左右でBGM選択・追加数が異なる問題を解消する。
+1P / 2Pの別々の配置設定を維持するため、S-RANDOM等を指定した場合は追加ノーツも後段で移動する。
+通常DPとG-BATTLEは最終配置への追加を維持する。
+
+5K / 7K、BATTLE / BATTLE AS、スクラッチON/OFF、LN・地雷、2P MIRROR、
+左右別のS-RANDOM / H-RANDOMを含む3件の回帰テストを追加した。
+
+追加後の検証もWindowsで成功した。
+
+- `cargo fmt --check`
+- `cargo check -p bmz-player --locked`
+- `cargo clippy -p bmz-player --all-targets --locked -- -D warnings`
+- `cargo test -p bmz-player --locked extra_notes --lib`: 20成功・0失敗。
+- `cargo test -p bmz-player --locked --no-fail-fast`: libは2956成功・0失敗・56 ignored。
+  startup integrationは0失敗・2 ignored。localhost通信のため制限外で実行した。
+
+生ログは`.local/extra-note-battle-targeted.log`、`.local/extra-note-battle-check.log`、
+`.local/extra-note-battle-clippy.log`、`.local/extra-note-battle-test.log`。

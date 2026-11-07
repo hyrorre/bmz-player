@@ -1,9 +1,13 @@
 use super::*;
 
 fn library() -> (std::path::PathBuf, LibraryDatabase, i64) {
-    let path = write_temp_bms(
+    library_from_bms(
         "#TITLE Extra Note\n#BPM 150\n#WAV01 piano.wav\n#00111:01000100\n#00211:01000100\n#00319:01\n#00101:00010001\n#00201:00010001\n",
-    );
+    )
+}
+
+fn library_from_bms(body: &str) -> (std::path::PathBuf, LibraryDatabase, i64) {
+    let path = write_temp_bms(body);
     let imported = import_bms_chart(&path, None, true).unwrap();
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
@@ -133,5 +137,156 @@ fn extra_notes_g_battle_keeps_opponent_display_and_judgement_unmodified() {
     let opponent = preloaded.opponent_chart.unwrap();
     assert_eq!(format!("{:?}", opponent.lane_notes), format!("{:?}", base.chart.lane_notes));
     assert_eq!(opponent.bgm_events.len(), base.chart.bgm_events.len());
+    std::fs::remove_file(path).unwrap();
+}
+
+fn battle_library(mode: KeyMode) -> (std::path::PathBuf, LibraryDatabase, i64) {
+    let high_key = if mode == KeyMode::K7 { "#00319:01\n" } else { "" };
+    library_from_bms(&format!(
+        "#TITLE Extra Battle\n#BPM 150\n#WAV01 piano.wav\n#00111:01000100\n#00211:01000100\n#00152:01000100\n#002D3:0100\n#00101:00010001\n#00201:00010001\n{high_key}"
+    ))
+}
+
+/// Compare complete objects by corresponding SP lane, allowing only cloned IDs.
+fn side_objects(chart: &PlayableChart, source: KeyMode, second: bool, mirror: bool) -> Vec<String> {
+    let key_count = if source == KeyMode::K5 { 5 } else { 7 };
+    source
+        .active_lanes()
+        .iter()
+        .flat_map(|&lane| {
+            let key = if mirror && lane != Lane::Scratch {
+                key_count + 1 - lane.index()
+            } else {
+                lane.index()
+            };
+            let index =
+                if second { if key == 0 { Lane::Scratch2.index() } else { key + 7 } } else { key };
+            chart.lane_notes[index].iter().map(move |note| {
+                let mut note = note.clone();
+                note.id = NoteId(0);
+                note.lane = lane;
+                format!("{note:?}")
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn extra_notes_dp_battle_duplicates_the_completed_sp_chart_including_hazards_and_lns() {
+    for mode in [KeyMode::K5, KeyMode::K7] {
+        let (path, library, id) = battle_library(mode);
+        for scratch in [false, true] {
+            let options = PlaySessionOptions {
+                assist: AssistOptionConfig {
+                    extra_note_depth: 2,
+                    extra_note_scratch: scratch,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let sp = load_transformed_chart_for_play(&library, id, &options).unwrap();
+            assert_eq!(sp.chart.metadata.key_mode, mode);
+            assert!(sp.extra_note_start_id.is_some());
+            for double_option in [DoubleOption::Battle, DoubleOption::BattleAutoScratch] {
+                let battle = load_transformed_chart_for_play(
+                    &library,
+                    id,
+                    &PlaySessionOptions { double_option, ..options.clone() },
+                )
+                .unwrap();
+                let expected = side_objects(&sp.chart, mode, false, false);
+                assert_eq!(side_objects(&battle.chart, mode, false, false), expected);
+                assert_eq!(side_objects(&battle.chart, mode, true, false), expected);
+                assert_eq!(
+                    format!("{:?}", battle.chart.bgm_events),
+                    format!("{:?}", sp.chart.bgm_events)
+                );
+                assert_eq!(battle.chart.total_notes, 2 * sp.chart.total_notes);
+                assert_eq!(battle.chart.long_notes.len(), 2 * sp.chart.long_notes.len());
+                let ids: std::collections::BTreeSet<_> =
+                    battle.chart.lane_notes.iter().flatten().map(|n| n.id).collect();
+                assert_eq!(ids.len(), battle.chart.lane_notes.iter().map(Vec::len).sum::<usize>());
+                assert_eq!(battle.applied_arrange.double_option, double_option);
+                assert_eq!(battle.assist_runtime.effective_mask, sp.assist_runtime.effective_mask);
+            }
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
+fn extra_notes_dp_battle_applies_the_selected_second_side_mirror_after_duplication() {
+    for mode in [KeyMode::K5, KeyMode::K7] {
+        let (path, library, id) = battle_library(mode);
+        let options = PlaySessionOptions {
+            assist: AssistOptionConfig { extra_note_depth: 2, ..Default::default() },
+            ..Default::default()
+        };
+        let sp = load_transformed_chart_for_play(&library, id, &options).unwrap();
+        let battle = load_transformed_chart_for_play(
+            &library,
+            id,
+            &PlaySessionOptions {
+                double_option: DoubleOption::Battle,
+                arrange_2p: ArrangeOption::Mirror,
+                ..options
+            },
+        )
+        .unwrap();
+        let expected = side_objects(&sp.chart, mode, false, false);
+        assert_eq!(side_objects(&battle.chart, mode, false, false), expected);
+        assert_eq!(side_objects(&battle.chart, mode, true, true), expected);
+        assert_eq!(battle.applied_arrange.arrange_2p, ArrangeOption::Mirror);
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
+fn extra_notes_dp_battle_randomizes_copies_of_the_same_added_events() {
+    let (path, library, id) = battle_library(KeyMode::K7);
+    let options = PlaySessionOptions {
+        assist: AssistOptionConfig { extra_note_depth: 2, ..Default::default() },
+        ..Default::default()
+    };
+    let sp = load_transformed_chart_for_play(&library, id, &options).unwrap();
+    assert!(sp.extra_note_start_id.is_some());
+    // Discard lanes as well as IDs: independent side settings may move copies.
+    let events = |chart: &PlayableChart, second: bool| {
+        let mut result: Vec<_> = chart
+            .lane_notes
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| (*i >= 8) == second)
+            .flat_map(|(_, notes)| {
+                notes.iter().map(|note| {
+                    let mut note = note.clone();
+                    note.id = NoteId(0);
+                    note.lane = Lane::Key1;
+                    format!("{note:?}")
+                })
+            })
+            .collect();
+        result.sort();
+        result
+    };
+    for double_option in [DoubleOption::Battle, DoubleOption::BattleAutoScratch] {
+        let battle = load_transformed_chart_for_play(
+            &library,
+            id,
+            &PlaySessionOptions {
+                double_option,
+                arrange: ArrangeOption::SRandom,
+                arrange_2p: ArrangeOption::HRandom,
+                arrange_seed: Some(123),
+                arrange_seed_2p: Some(456),
+                ..options.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(events(&battle.chart, false), events(&sp.chart, false));
+        assert_eq!(events(&battle.chart, true), events(&sp.chart, false));
+        assert_eq!(battle.applied_arrange.arrange, ArrangeOption::SRandom);
+        assert_eq!(battle.applied_arrange.arrange_2p, ArrangeOption::HRandom);
+    }
     std::fs::remove_file(path).unwrap();
 }
