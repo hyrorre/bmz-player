@@ -120,7 +120,7 @@ mod platform {
         CloseHandle, ERROR_PIPE_CONNECTED, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX,
+        FILE_FLAG_FIRST_PIPE_INSTANCE, FlushFileBuffers, PIPE_ACCESS_DUPLEX,
     };
     use windows_sys::Win32::System::Pipes::{
         ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE,
@@ -223,6 +223,11 @@ mod platform {
                         Err(error) => tracing::warn!(%error, "failed to read viewer command"),
                     }
                     let handle = pipe.into_raw_handle();
+                    // DisconnectNamedPipe discards unread bytes. Wait until the client
+                    // consumes the ACK before reusing this pipe instance.
+                    if unsafe { FlushFileBuffers(handle) } == 0 {
+                        tracing::warn!(error = %io::Error::last_os_error(), "failed to flush viewer acknowledgement");
+                    }
                     unsafe {
                         DisconnectNamedPipe(handle);
                     }
@@ -367,5 +372,27 @@ mod tests {
             assert!(request(&command).unwrap());
             assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), command);
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn delayed_client_can_read_ack_before_pipe_is_disconnected() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let endpoint =
+            platform::start_listener(&private_endpoint(), move |command| tx.send(command).unwrap())
+                .unwrap();
+        let mut pipe = std::fs::OpenOptions::new().read(true).write(true).open(&endpoint).unwrap();
+        let payload = serde_json::to_vec(&ViewerCommand::Stop).unwrap();
+        pipe.write_all(&(payload.len() as u32).to_le_bytes()).unwrap();
+        pipe.write_all(&payload).unwrap();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), ViewerCommand::Stop);
+        // Let the listener finish its write while the client has not read the ACK yet.
+        std::thread::sleep(Duration::from_millis(20));
+        let mut ack = [0];
+        pipe.read_exact(&mut ack).unwrap();
+        assert_eq!(ack, [COMMAND_ACK]);
+        drop(pipe);
+        assert!(platform::request_command(&endpoint, &ViewerCommand::Quit).unwrap());
+        assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), ViewerCommand::Quit);
     }
 }

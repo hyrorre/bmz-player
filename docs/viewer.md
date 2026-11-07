@@ -99,8 +99,8 @@ BMSエディタはBMZと直接通信する必要はありません。uBMplay連�
 `bmz-player.exe -S`を別プロセスとして起動します。`-P`と`-S`の短命プロセスが、実行中
 ビューワーへ長さ付きコマンドと受信ACKを使う次のローカルIPCで要求を中継します。
 
-- Windows: 名前付きパイプ`\\.\pipe\bmz-player-viewer-v2`
-- macOS / Linux: loopback TCP `127.0.0.1:39077`
+- Windows: 名前付きパイプ`\\.\pipe\bmz-player-viewer-v3`
+- macOS / Linux: loopback TCP `127.0.0.1:39078`
 
 受信側はプロセス終了まで接続待ちを繰り返し、`Play { path, measure, battle }`と`Stop`を処理します。
 `Stop`は常駐プロセスを終了せず、現在の再生位置とPlay画面を保持して無音の待機状態へ戻します。

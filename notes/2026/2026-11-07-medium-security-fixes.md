@@ -56,3 +56,14 @@
 - `BMZ_REQUIRE_MZ_SELECT=1` で関連crateの `cargo test --locked` は成功。`bmz-skin-document` は31成功、`bmz-skin` は411成功・2 ignored、`bmz-render` は1,002成功・11 ignored、`bmz-player` は2,917成功・58 ignored（起動テスト2件を含む）。すべて0失敗。
 - 同梱default、mz-select、Rmz-skin、Luxez-Flatの実ファイルを使う読み込みテストも成功した。3つのsubmoduleが初期化済みであることを確認した。
 - `bun run test:ir` と `bun x vue-tsc --noEmit` は成功。Prettierの対象となるWebファイルの変更はない。
+
+## #5再開前のViewer IPC修正
+
+- テスト失敗で停止せず、原因調査と修正を行って継続する方針へ変更した。
+- WindowsのlistenerがACK書き込み直後に `DisconnectNamedPipe` を呼び、クライアントが読む前のACKを破棄していた。読み取りを20 ms遅らせる回帰テストを追加し、#5を退避した `32e7c69f` 上でもWindows error 233を再現した。
+- 切断前に `FlushFileBuffers` でACKが読み取られるまで待ち、同じパイプを次の接続へ再利用する。クライアントが切断した場合は警告を記録して次へ進む。
+- [Microsoftの名前付きパイプ仕様](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-operations)に記載された切断前の処理に合わせた。`docs/viewer.md` のエンドポイント表記も実装と同じパイプv3・TCPポート39078へ訂正した。
+- 再現ログはGit管理外の `.local/validation/security-medium/viewer-ipc-before.log`、修正後は `viewer-ipc-focused.log` に保存する。#5は `5-pending.patch` に退避して先にこの修正を検証する。
+- 修正後のViewer IPC 3テストは成功。Cargo経由で50回繰り返し、150件すべて成功した（`viewer-ipc-stress.log`）。実行ファイルの直接起動はDLL検索設定が足りなかったため、検証にはCargoを使用した。
+- `cargo fmt --check` と `cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。`cargo test -p bmz-player --locked` は2,918成功、0失敗、58 ignored（起動テスト2件を含む）。
+- `bun run test:ir` と `bun x vue-tsc --noEmit` は成功。Prettierの対象となるWebファイルの変更はない。ログは `viewer-ipc-rust.log`、`viewer-ipc-web.log` に保存した。
