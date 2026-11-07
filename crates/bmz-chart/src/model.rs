@@ -38,6 +38,14 @@ pub struct PlayableChart {
 
 #[derive(Debug, Clone)]
 pub struct ChartMetadata {
+    pub kaleid: crate::kaleid::KaleidProvenance,
+    pub free_zones: Vec<FreeZone>,
+    /// Isolated voices retain their original resource identity even when BMSON slices retime.
+    pub isolated_sound_sources: std::collections::BTreeMap<u32, u32>,
+    pub conditional: Option<std::sync::Arc<crate::conditional::ConditionalProgram>>,
+    pub conditional_bgm_keys: Vec<crate::conditional::BgmKey>,
+    pub conditional_evaluation_times: Vec<TimeUs>,
+    pub conditional_revision: usize,
     /// File syntax used to import the chart. Runtime transforms preserve this provenance.
     pub source_format: ChartSourceFormat,
     pub title: String,
@@ -124,11 +132,20 @@ pub enum LongNoteMode {
     Cn,
     /// CN + 押下中のゲージ増加 / 早離しペナルティ (IIDX HCN 相当)。
     Hcn,
+    /// LN の終了時総合評価と HCN の保持ゲージを組み合わせる。
+    Hln,
 }
 
 impl Default for ChartMetadata {
     fn default() -> Self {
         Self {
+            kaleid: Default::default(),
+            free_zones: Vec::new(),
+            isolated_sound_sources: Default::default(),
+            conditional: None,
+            conditional_bgm_keys: Vec::new(),
+            conditional_evaluation_times: Vec::new(),
+            conditional_revision: 0,
             source_format: ChartSourceFormat::Unknown,
             title: String::new(),
             subtitle: String::new(),
@@ -159,6 +176,13 @@ impl Default for ChartMetadata {
     }
 }
 
+impl ChartMetadata {
+    /// File-level feature, including blocks excluded by the static RANDOM selection.
+    pub fn has_conditional(&self) -> bool {
+        self.conditional.is_some() || self.bms_headers.contains_key("CONDITIONAL")
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoteKind {
     Tap,
@@ -166,6 +190,43 @@ pub enum NoteKind {
     LongEnd,
     Invisible,
     Mine,
+    Potion,
+    DummyTap,
+    DummyLongStart,
+    DummyLongEnd,
+    DummyMine,
+    DummyPotion,
+    /// One representative judgement for a merged scratch free zone.
+    FreeZoneEnd,
+}
+
+impl NoteKind {
+    pub const fn is_dummy(self) -> bool {
+        matches!(
+            self,
+            Self::DummyTap
+                | Self::DummyLongStart
+                | Self::DummyLongEnd
+                | Self::DummyMine
+                | Self::DummyPotion
+        )
+    }
+
+    pub const fn is_scored_head(self) -> bool {
+        matches!(self, Self::Tap | Self::LongStart | Self::FreeZoneEnd)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FreeZone {
+    pub note_id: NoteId,
+    pub lane: Lane,
+    pub start_tick: ChartTick,
+    pub end_tick: ChartTick,
+    pub start_time: TimeUs,
+    pub end_time: TimeUs,
+    /// Both ends of a touching LN are included, even when one end lies outside.
+    pub inner_notes: Vec<NoteId>,
 }
 
 #[derive(Debug, Clone)]
@@ -178,8 +239,7 @@ pub struct NoteEvent {
     pub sound: Option<SoundId>,
     /// 同じノート位置へ重ねられた追加キー音。BMSONの複数sound_channelで使用する。
     pub layered_sounds: Vec<SoundId>,
-    /// Mine 専用のダメージ値。BMS は D/E 系列の整数値、BMSON は浮動小数。
-    /// Mine 以外は常に None。
+    /// Mine damage or Potion recovery in gauge percentage points. Other kinds use None.
     pub damage: Option<f64>,
 }
 
@@ -376,6 +436,16 @@ pub struct BgaAssetRef {
 }
 
 impl PlayableChart {
+    pub fn is_free_zone_inner(&self, id: NoteId) -> bool {
+        self.metadata.free_zones.iter().any(|zone| zone.inner_notes.contains(&id))
+    }
+
+    pub fn is_dummy_long(&self, pair: &LongNotePair) -> bool {
+        self.lane_notes[pair.lane.index()]
+            .iter()
+            .any(|note| note.id == pair.start_note_id && note.kind.is_dummy())
+    }
+
     pub fn notes_for_lane(&self, lane: Lane) -> &[NoteEvent] {
         &self.lane_notes[lane.index()]
     }

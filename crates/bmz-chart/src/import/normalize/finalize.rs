@@ -7,6 +7,10 @@ fn compress_import_tick(tick: ChartTick) -> ChartTick {
 }
 
 pub(super) fn compress_import_ticks(draft: &mut PlayableChartDraft) {
+    for zone in &mut draft.metadata.free_zones {
+        zone.start_tick = compress_import_tick(zone.start_tick);
+        zone.end_tick = compress_import_tick(zone.end_tick);
+    }
     for notes in &mut draft.lane_notes {
         for note in notes {
             note.tick = compress_import_tick(note.tick);
@@ -76,10 +80,30 @@ pub(super) fn finalize_playable_chart(mut draft: PlayableChartDraft) -> Playable
     draft.bga_keybound_events.sort_by_key(|event| event.time);
     draft.bar_lines.sort_by_key(|line| line.time);
 
-    draft.total_notes = compute_total_notes(&draft.lane_notes);
+    let inner: std::collections::HashSet<_> = draft
+        .metadata
+        .free_zones
+        .iter()
+        .flat_map(|zone| zone.inner_notes.iter().copied())
+        .collect();
+    draft.total_notes = draft
+        .lane_notes
+        .iter()
+        .flatten()
+        .filter(|n| n.kind.is_scored_head() && !inner.contains(&n.id))
+        .count() as u32;
     let beatoraja_total_notes = beatoraja_total_note_count(
         draft.total_notes,
-        draft.long_notes.iter().map(|pair| pair.mode),
+        draft
+            .long_notes
+            .iter()
+            .filter(|pair| {
+                !inner.contains(&pair.start_note_id)
+                    && draft.lane_notes[pair.lane.index()]
+                        .iter()
+                        .any(|n| n.id == pair.start_note_id && !n.kind.is_dummy())
+            })
+            .map(|pair| pair.mode),
         draft.metadata.long_note_mode,
     );
     if draft.metadata.difficulty_name.trim().is_empty()
@@ -123,14 +147,6 @@ pub(super) fn finalize_playable_chart(mut draft: PlayableChartDraft) -> Playable
         total_notes: draft.total_notes,
         end_time: draft.end_time,
     }
-}
-
-pub(super) fn compute_total_notes(lane_notes: &[Vec<NoteEvent>; LANE_COUNT]) -> u32 {
-    lane_notes
-        .iter()
-        .flat_map(|notes| notes.iter())
-        .filter(|note| matches!(note.kind, NoteKind::Tap | NoteKind::LongStart))
-        .count() as u32
 }
 
 fn infer_beatoraja_difficulty_name(title: &str, subtitle: &str, total_notes: u32) -> &'static str {

@@ -63,6 +63,9 @@ use super::intermediate::{
 use crate::model::{JudgeRankKind, JudgeRankSpec, LongNoteMode};
 
 mod compat;
+mod kaleid;
+mod long_end;
+mod long_note_headers;
 mod metadata;
 mod objects;
 mod random;
@@ -257,7 +260,34 @@ fn import_with_layout<T: KeyLayoutMapper>(
         bms_switch_choices,
         warnings,
     );
-    let metadata_text = strip_empty_metadata_commands(&text);
+    crate::conditional::compile(&text, source_path, |text| {
+        parse_resolved_with_layout::<T>(
+            source_path,
+            layout,
+            text,
+            &raw_text,
+            has_bms_random,
+            identity.clone(),
+            random_source,
+            warnings,
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_resolved_with_layout<T: KeyLayoutMapper>(
+    source_path: &Path,
+    layout: ChartKeyLayout,
+    text: &str,
+    raw_text: &str,
+    has_bms_random: bool,
+    identity: bmz_core::chart::ChartIdentity,
+    random_source: &BmsRandomSource,
+    warnings: &mut Vec<ImportWarning>,
+) -> Result<IntermediateChart, ImportError> {
+    let (hln_parse_text, hln_mode) = long_note_headers::preprocess(text);
+    let kaleid = kaleid::extract::<T>(&hln_parse_text, layout);
+    let metadata_text = strip_empty_metadata_commands(&kaleid.text);
     let lnobj_parse_text = strip_lnobj_commands(&metadata_text);
     let bga_messages = extract_bga_message_lines(&lnobj_parse_text);
     let source_texts = extract_source_texts(&lnobj_parse_text);
@@ -291,6 +321,7 @@ fn import_with_layout<T: KeyLayoutMapper>(
     // after an undefined object.
     let source_texts = source_text_objects(&source_texts, bms_uses_base62_obj_ids(&bms), warnings);
     extra_objects.extend(source_texts.objects);
+    extra_objects.extend(kaleid.objects);
     bms.text.text_events.clear();
 
     let mut intermediate = build_intermediate_from_bms_with_extra_objects::<T>(
@@ -300,9 +331,65 @@ fn import_with_layout<T: KeyLayoutMapper>(
         warnings,
     )?;
     restore_default_poor_bga(&mut intermediate, bms.bmp.poor_bmp.as_deref());
+    intermediate.metadata.kaleid.source = kaleid.features;
+    intermediate.metadata.kaleid.declared = kaleid.features;
+    intermediate.metadata.kaleid.diagnostics = kaleid.diagnostics;
     intermediate.lnobj_wav_key =
-        extract_lnobj_wav_key(&text, bms_uses_base62_obj_ids(&bms), warnings);
-    let bms_headers = extract_bms_headers_from_text(&raw_text);
+        extract_lnobj_wav_key(text, bms_uses_base62_obj_ids(&bms), warnings);
+    intermediate.typed_lnobj =
+        long_end::typed_markers(text, bms_uses_base62_obj_ids(&bms), warnings);
+    for warning in warnings.iter() {
+        if let ImportWarning::ParserDiagnostic { code, message } = warning
+            && matches!(code.as_str(), "InvalidCnobj" | "InvalidHcnobj" | "InvalidHlnobj")
+        {
+            intermediate.metadata.kaleid.diagnostics.push(message.clone());
+        }
+    }
+    for line in text.lines() {
+        let Some(body) = line.trim().strip_prefix('#') else { continue };
+        let (command, value) = body.split_once(char::is_whitespace).unwrap_or((body, ""));
+        let command = command.to_ascii_uppercase();
+        if command == "LNMODE" && !matches!(value.trim(), "1" | "2" | "3" | "4") {
+            intermediate
+                .metadata
+                .kaleid
+                .diagnostics
+                .push(format!("invalid #LNMODE {value}; ignored"));
+        }
+        if matches!(
+            command.as_str(),
+            "BMD" | "SOUNDFONT" | "TARGETHASH" | "LOADINGFILE" | "READYFILE" | "BGAOVERFLOW"
+        ) {
+            intermediate
+                .metadata
+                .kaleid
+                .diagnostics
+                .push(format!("unsupported #{command}; ignored"));
+        }
+    }
+    intermediate.metadata.kaleid.declared.typed_end = !intermediate.typed_lnobj.is_empty();
+    intermediate.metadata.kaleid.declared.hln |=
+        intermediate.typed_lnobj.iter().any(|(_, mode)| *mode == LongNoteMode::Hln);
+    intermediate.metadata.kaleid.source.typed_end = intermediate.objects.iter().any(|object| {
+        matches!(object.kind, IntermediateObjectKind::VisibleNote { wav_key: Some(key), .. }
+            if intermediate.typed_lnobj.iter().any(|(marker, _)| *marker == key))
+    });
+    intermediate.metadata.kaleid.source.hln = intermediate.objects.iter().any(|object|
+        matches!(object.kind, IntermediateObjectKind::LongChannelNote { .. } if hln_mode)
+        || matches!(object.kind, IntermediateObjectKind::VisibleNote { wav_key: Some(key), .. }
+            if intermediate.typed_lnobj.iter().any(|(marker, mode)| *marker == key && *mode == LongNoteMode::Hln)));
+    long_end::restore_marker_overlays::<T>(
+        text,
+        layout,
+        bms_uses_base62_obj_ids(&bms),
+        &mut intermediate,
+    );
+    if hln_mode {
+        intermediate.metadata.kaleid.declared.hln = true;
+        intermediate.metadata.long_note_mode = LongNoteMode::Hln;
+        intermediate.metadata.long_note_mode_defined = true;
+    }
+    let bms_headers = extract_bms_headers_from_text(raw_text);
     intermediate.metadata.has_bms_random = has_bms_random;
     intermediate.metadata.miss_text = source_texts.miss_text;
     intermediate.metadata.bms_headers = bms_headers.clone();
@@ -363,6 +450,8 @@ fn build_intermediate_from_bms_with_extra_objects<T: KeyLayoutMapper>(
         objects,
         layered_note_sounds: Vec::new(),
         lnobj_wav_key: None, // bms-rs 側で吸収済み
+        typed_lnobj: Vec::new(),
+        long_end_sounds: Vec::new(),
     };
 
     intermediate.metadata.has_bga = intermediate
@@ -376,7 +465,9 @@ fn build_intermediate_from_bms_with_extra_objects<T: KeyLayoutMapper>(
             IntermediateObjectKind::VisibleNote { lane, .. }
             | IntermediateObjectKind::InvisibleNote { lane, .. }
             | IntermediateObjectKind::LongChannelNote { lane, .. }
-            | IntermediateObjectKind::MineNote { lane, .. } => Some(lane),
+            | IntermediateObjectKind::MineNote { lane, .. }
+            | IntermediateObjectKind::KaleidNote { lane, .. }
+            | IntermediateObjectKind::FreeZone { lane, .. } => Some(lane),
             _ => None,
         }),
     );
