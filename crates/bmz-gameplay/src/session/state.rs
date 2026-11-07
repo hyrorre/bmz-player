@@ -305,6 +305,9 @@ pub struct GameSession {
     /// `SessionFrame.mine_hits` に吸い出される（app 層が地雷 SE を鳴らす）。
     pub pending_mine_hits: Vec<MineHitEvent>,
     pub state: PlayState,
+    /// プレイヤーの操作 (Esc / START+SELECT 長押しなど) で曲の途中に止めたか。
+    /// `state` はゲージ落ちと同じ `Failed` になるため、完走判定にはこちらを使う。
+    pub manually_stopped: bool,
     /// HCN ゲージ増減の前回更新時刻。
     pub last_hcn_gauge_at: Option<TimeUs>,
 }

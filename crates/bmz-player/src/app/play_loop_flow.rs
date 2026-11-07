@@ -784,10 +784,10 @@ impl WinitApp {
                 return false;
             }
             tracing::info!(reason, "stopping active play");
-            active_play
-                .running
-                .gameplay
-                .edit(|session| session.state = bmz_gameplay::session::PlayState::Failed);
+            active_play.running.gameplay.edit(|session| {
+                session.state = bmz_gameplay::session::PlayState::Failed;
+                session.manually_stopped = true;
+            });
             true
         };
         self.clear_play_control_holds();

@@ -253,6 +253,7 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
         input_timestamp_anchor: None,
         pending_mine_hits: Vec::new(),
         state: PlayState::Ready,
+        manually_stopped: false,
         last_hcn_gauge_at: None,
     }
 }

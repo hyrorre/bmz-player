@@ -656,6 +656,7 @@ pub fn build_game_session_with_input_backend(
         pending_mine_hits: Vec::new(),
         session_mode_index: crate::skin_extension::session_mode_index(session_mode) as u8,
         state: PlayState::Ready,
+        manually_stopped: false,
         last_hcn_gauge_at: None,
     }
 }
