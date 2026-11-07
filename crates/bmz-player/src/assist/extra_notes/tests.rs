@@ -74,6 +74,25 @@ fn sounding_events(chart: &PlayableChart) -> Vec<(TimeUs, SoundId)> {
 }
 
 #[test]
+fn free_zone_reserves_its_interval_and_counts_only_the_zone_onset() {
+    let mut chart = chart(KeyMode::K7);
+    let inner = note(&mut chart, Lane::Scratch, 1_500_000, NoteKind::Tap, Some(1));
+    let end = note(&mut chart, Lane::Scratch, 2_000_000, NoteKind::FreeZoneEnd, None);
+    chart.metadata.free_zones.push(bmz_chart::model::FreeZone {
+        note_id: end,
+        lane: Lane::Scratch,
+        start_tick: ChartTick(1_000_000),
+        end_tick: ChartTick(2_000_000),
+        start_time: TimeUs(1_000_000),
+        end_time: TimeUs(2_000_000),
+        inner_notes: vec![inner],
+    });
+    let index = LaneIndex::new(&chart, Lane::Scratch, &Tempo::new(&chart));
+    assert!(index.slack(TimeUs(1_800_000), 250_000).is_none());
+    assert_eq!(index.onsets, vec![TimeUs(2_000_000)]);
+}
+
+#[test]
 fn extra_notes_preserve_all_original_objects_sounds_and_timing() {
     for mode in [
         KeyMode::K4,

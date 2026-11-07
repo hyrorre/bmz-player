@@ -295,6 +295,7 @@ fn schedule_preview_sounds(
             sound_id: event.sound,
             start_frame: time_us_to_frame(event.time.0, sample_rate),
             sample_offset_frames: 0,
+            sample_end_frames: None,
             volume,
             pan: 0.0,
             loop_playback: false,
@@ -303,6 +304,7 @@ fn schedule_preview_sounds(
             restart_policy: RestartPolicy::StopSameSound,
             catch_up: true,
         }
+        .with_chart_slice(chart, sample_rate)
     });
     engine.schedule_all(bgm_events);
 
@@ -319,19 +321,23 @@ fn schedule_preview_sounds(
                     &chart.key_volume_events,
                     note.time,
                 ));
-                note.sounds().map(move |sound_id| ScheduledSound {
-                    immediate: false,
-                    start_time: None,
-                    sound_id,
-                    start_frame: time_us_to_frame(note.time.0, sample_rate),
-                    sample_offset_frames: 0,
-                    volume,
-                    pan: 0.0,
-                    loop_playback: false,
-                    fade_in_frames: 0,
-                    fade_out_frames: 0,
-                    restart_policy: RestartPolicy::StopSameSound,
-                    catch_up: true,
+                note.sounds().map(move |sound_id| {
+                    ScheduledSound {
+                        immediate: false,
+                        start_time: None,
+                        sound_id,
+                        start_frame: time_us_to_frame(note.time.0, sample_rate),
+                        sample_offset_frames: 0,
+                        sample_end_frames: None,
+                        volume,
+                        pan: 0.0,
+                        loop_playback: false,
+                        fade_in_frames: 0,
+                        fade_out_frames: 0,
+                        restart_policy: RestartPolicy::StopSameSound,
+                        catch_up: true,
+                    }
+                    .with_chart_slice(chart, sample_rate)
                 })
             })
     });

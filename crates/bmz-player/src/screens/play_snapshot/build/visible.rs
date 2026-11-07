@@ -24,7 +24,7 @@ pub(in crate::screens::play_snapshot) fn populate_visible_playfield(
     let cursor_tick = scroll.cursor_tick(scroll_time);
     let tick_upper_bound = scroll.simple_tick_upper_bound(cursor_tick);
 
-    if snapshot.judge_area {
+    if snapshot.judge_area && !session.player_two {
         snapshot.judge_area_key_y =
             judge_area_edges(&scroll, cursor_tick, lane_render_now, session.judge.window_set.note);
         snapshot.judge_area_scratch_y = judge_area_edges(
@@ -44,14 +44,16 @@ pub(in crate::screens::play_snapshot) fn populate_visible_playfield(
         tick_upper_bound,
         cache,
     );
-    populate_visible_guide_lines(
-        snapshot,
-        session,
-        scroll_time,
-        &scroll,
-        cursor_tick,
-        tick_upper_bound,
-    );
+    if !session.player_two {
+        populate_visible_guide_lines(
+            snapshot,
+            session,
+            scroll_time,
+            &scroll,
+            cursor_tick,
+            tick_upper_bound,
+        );
+    }
     populate_visible_long_notes(
         snapshot,
         session,
@@ -80,6 +82,7 @@ fn populate_visible_notes(
         cache.missed_notes.frame(lane_render_now, session.judge.window_set.note.empty_poor_slow_us)
     });
     for lane in Lane::ALL {
+        let output_lane = session.output_lane(lane);
         let first_note = missed.map_or(0, |frame| frame.first_note(lane));
         // PMS落下はnote_retentionより優先するため、保持設定で期限切れの範囲を広げない。
         let retention_lower_index = (!keep_missed_notes && session.note_retention)
@@ -96,7 +99,9 @@ fn populate_visible_notes(
             let Some(alpha) = constant_object_alpha(session, lane_render_now, note.time) else {
                 continue;
             };
-            let processed_judge = session.judge.judged_notes.get(&note.id).copied();
+            let processed_judge = (!session.chart.is_free_zone_inner(note.id))
+                .then(|| session.judge.judged_notes.get(&note.id).copied())
+                .flatten();
             // beatoraja LaneRenderer の PMS 見逃し POOR 描画と同じく、state 0 と BAD/POOR を対象にする。
             let pms_missed = keep_missed_notes
                 && note.kind == NoteKind::Tap
@@ -111,11 +116,22 @@ fn populate_visible_notes(
                 continue;
             }
             match note.kind {
-                NoteKind::Invisible | NoteKind::LongStart | NoteKind::LongEnd => {}
-                NoteKind::Mine => {
+                NoteKind::Invisible
+                | NoteKind::LongStart
+                | NoteKind::LongEnd
+                | NoteKind::DummyLongStart
+                | NoteKind::DummyLongEnd
+                | NoteKind::FreeZoneEnd => {}
+                NoteKind::Mine | NoteKind::DummyMine | NoteKind::Potion | NoteKind::DummyPotion => {
                     if let Some(y) = scroll.note_y(note.time, cursor_tick) {
-                        snapshot.visible_mines[lane.index()].push(VisibleMine {
-                            lane,
+                        let visible =
+                            if matches!(note.kind, NoteKind::Potion | NoteKind::DummyPotion) {
+                                &mut snapshot.visible_potions[output_lane.index()]
+                            } else {
+                                &mut snapshot.visible_mines[output_lane.index()]
+                            };
+                        visible.push(VisibleMine {
+                            lane: output_lane,
                             time: note.time,
                             y,
                             alpha,
@@ -123,7 +139,7 @@ fn populate_visible_notes(
                         });
                     }
                 }
-                NoteKind::Tap => {
+                NoteKind::Tap | NoteKind::DummyTap => {
                     let pms_miss_fall = if pms_missed {
                         let Some(fall) = missed
                             .and_then(|frame| frame.progress(lane, first_note + relative_index))
@@ -140,8 +156,8 @@ fn populate_visible_notes(
                         None => scroll.note_y(note.time, cursor_tick),
                     };
                     if let Some(y) = y {
-                        snapshot.visible_notes[lane.index()].push(VisibleNote {
-                            lane,
+                        snapshot.visible_notes[output_lane.index()].push(VisibleNote {
+                            lane: output_lane,
                             time: note.time,
                             y,
                             alpha,
@@ -246,6 +262,25 @@ fn populate_visible_long_notes(
     cursor_tick: f64,
     tick_upper_bound: Option<f64>,
 ) {
+    for zone in &session.chart.metadata.free_zones {
+        if zone.end_time < scroll_time {
+            continue;
+        }
+        let head = scroll.note_progress(zone.start_time, cursor_tick);
+        let tail = scroll.note_progress(zone.end_time, cursor_tick);
+        if tail < 0.0 || head > 1.0 {
+            continue;
+        }
+        let Some(alpha) = constant_object_alpha(session, scroll_time, zone.start_time) else {
+            continue;
+        };
+        snapshot.visible_free_zones.push(bmz_render::snapshot::VisibleFreeZone {
+            lane: session.output_lane(zone.lane),
+            head_y: head.clamp(0.0, 1.0),
+            tail_y: tail.clamp(0.0, 1.0),
+            alpha,
+        });
+    }
     let tick_range = tick_upper_bound.map(|upper| (cursor_tick, upper));
     for (pair_index, long) in visible_long_notes(
         &session.chart.long_notes,
@@ -263,7 +298,7 @@ fn populate_visible_long_notes(
         }
         let mode = long.mode.unwrap_or(session.chart.metadata.long_note_mode);
         snapshot.visible_long_notes.push(VisibleLongNote {
-            lane: long.lane,
+            lane: session.output_lane(long.lane),
             mode,
             head_y: head.clamp(0.0, 1.0),
             tail_y: tail.clamp(0.0, 1.0),
@@ -310,7 +345,22 @@ fn long_body_state(
     long: &bmz_chart::model::LongNotePair,
     mode: LongNoteMode,
 ) -> LongBodyState {
+    if session.chart.is_dummy_long(long) {
+        return LongBodyState::Inactive;
+    }
     let lane_index = long.lane.index();
+    if mode == LongNoteMode::Hln {
+        return match session.judge.hln_bodies.iter().find(|body| {
+            body.pair_index == pair_index
+                && body.activated <= chart_now
+                && chart_now < long.end_time
+        }) {
+            Some(body) if !body.held => LongBodyState::HcnDamage,
+            Some(body) if body.reactive => LongBodyState::HcnActive,
+            Some(_) => LongBodyState::Processing,
+            None => LongBodyState::Inactive,
+        };
+    }
     if session.judge.lanes[lane_index]
         .active_long
         .is_some_and(|active| active.pair_index == pair_index)

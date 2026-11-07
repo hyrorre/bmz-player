@@ -500,6 +500,20 @@ pub(super) fn apply_battle_double_option(chart: &mut PlayableChart) {
         cloned_long_notes.push(cloned);
     }
     chart.long_notes.extend(cloned_long_notes);
+    let zones: Vec<_> = chart
+        .metadata
+        .free_zones
+        .iter()
+        .filter_map(|zone| {
+            let mut cloned = zone.clone();
+            cloned.lane = *source_to_dest.get(&zone.lane)?;
+            cloned.note_id = *cloned_ids.get(&zone.note_id)?;
+            cloned.inner_notes =
+                zone.inner_notes.iter().filter_map(|id| cloned_ids.get(id).copied()).collect();
+            Some(cloned)
+        })
+        .collect();
+    chart.metadata.free_zones.extend(zones);
     chart.total_notes = chart.total_notes.saturating_mul(2);
     chart.metadata.key_mode = next_mode;
 }
@@ -568,6 +582,19 @@ pub(super) fn apply_battle_opponent_chart(chart: &mut PlayableChart, opponent: &
         cloned.start_note_id = start_note_id;
         cloned.end_note_id = end_note_id;
         chart.long_notes.push(cloned);
+    }
+    // Opponent notes are display-only. Keep the semantic TOTAL NOTES owned by
+    for zone in &opponent.metadata.free_zones {
+        if let (Some(&lane), Some(&note_id)) =
+            (source_to_destination.get(&zone.lane), cloned_ids.get(&zone.note_id))
+        {
+            let mut cloned = zone.clone();
+            cloned.lane = lane;
+            cloned.note_id = note_id;
+            cloned.inner_notes =
+                zone.inner_notes.iter().filter_map(|id| cloned_ids.get(id).copied()).collect();
+            chart.metadata.free_zones.push(cloned);
+        }
     }
     // Opponent notes are display-only. Keep the semantic TOTAL NOTES owned by
     // the primary chart so preload/skin/result paths cannot observe a doubled

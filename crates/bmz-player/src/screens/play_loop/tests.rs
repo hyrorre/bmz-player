@@ -419,6 +419,7 @@ fn scheduled_sound(start_frame: u64, sound_id: u32) -> ScheduledSound {
         start_time: None,
         start_frame,
         sample_offset_frames: 0,
+        sample_end_frames: None,
         sound_id: SoundId(sound_id),
         volume: 1.0,
         pan: 0.0,

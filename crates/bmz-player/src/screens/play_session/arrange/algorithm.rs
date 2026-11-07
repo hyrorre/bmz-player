@@ -48,11 +48,13 @@ impl NoteArrangeEngine {
                     continue;
                 };
                 note.lane = Lane::ALL[dest];
-                if note.kind == NoteKind::LongStart {
+                if matches!(note.kind, NoteKind::LongStart | NoteKind::DummyLongStart) {
                     if start_to_end.contains_key(&note.id) {
                         group.active_ln.insert(source, dest);
                     }
-                } else if note.kind == NoteKind::LongEnd && end_to_start.contains_key(&note.id) {
+                } else if matches!(note.kind, NoteKind::LongEnd | NoteKind::DummyLongEnd)
+                    && end_to_start.contains_key(&note.id)
+                {
                     group.active_ln.remove(&source);
                 }
             }
@@ -207,7 +209,7 @@ impl NoteArrangeGroup {
         let mut note_lanes = Vec::new();
         let mut empty_lanes = Vec::new();
         for lane in changeable {
-            if notes.iter().any(|note| note.lane.index() == lane && note.kind != NoteKind::Mine) {
+            if notes.iter().any(|note| note.lane.index() == lane && affects_arrange_history(note)) {
                 note_lanes.push(lane);
             } else {
                 empty_lanes.push(lane);
@@ -305,7 +307,7 @@ impl NoteArrangeGroup {
         let mut note_lane = Vec::new();
         let mut empty_lane = Vec::new();
         for lane in changeable {
-            if notes.iter().any(|note| note.lane.index() == lane && note.kind != NoteKind::Mine) {
+            if notes.iter().any(|note| note.lane.index() == lane && affects_arrange_history(note)) {
                 note_lane.push(lane);
             } else {
                 empty_lane.push(lane);
@@ -355,7 +357,8 @@ impl NoteArrangeGroup {
         }
 
         for (&source, &dest) in &map {
-            if notes.iter().any(|note| note.lane.index() == source && note.kind != NoteKind::Mine) {
+            if notes.iter().any(|note| note.lane.index() == source && affects_arrange_history(note))
+            {
                 self.last_note_time.insert(dest, time);
             }
         }
@@ -404,7 +407,7 @@ impl NoteArrangeGroup {
             return;
         }
         let Some(source) = changeable.iter().copied().find(|&lane| {
-            notes.iter().any(|note| note.lane.index() == lane && note.kind != NoteKind::Mine)
+            notes.iter().any(|note| note.lane.index() == lane && affects_arrange_history(note))
         }) else {
             return;
         };
@@ -414,6 +417,11 @@ impl NoteArrangeGroup {
         self.last_note_time.insert(scratch, time);
         self.scratch_index = (self.scratch_index + 1) % self.scratch_lanes.len();
     }
+}
+
+fn affects_arrange_history(note: &NoteEvent) -> bool {
+    !note.kind.is_dummy()
+        && !matches!(note.kind, NoteKind::Mine | NoteKind::Potion | NoteKind::FreeZoneEnd)
 }
 
 fn select_lm_violation_candidates(

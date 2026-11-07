@@ -54,7 +54,9 @@ impl PlayMediaCache {
         running: &mut crate::audio::RunningPlaySession,
         mode: ResultRetryMode,
     ) -> Self {
-        let prepared_chart = (mode == ResultRetryMode::SameArrange).then(|| PreparedPlayChart {
+        let prepared_chart = (mode == ResultRetryMode::SameArrange
+            && running.session.chart.metadata.conditional.is_none())
+        .then(|| PreparedPlayChart {
             chart: Arc::clone(&running.session.chart),
             opponent_chart: running
                 .session

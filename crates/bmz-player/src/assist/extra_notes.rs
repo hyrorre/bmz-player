@@ -128,12 +128,24 @@ impl LaneIndex {
         let notes = &chart.lane_notes[lane.index()];
         let mut obstacles: Vec<_> =
             notes.iter().map(|n| (n.time, tempo.gap(n.time, lane))).collect();
-        let mut onsets: Vec<_> = notes.iter().filter(|n| scored(n)).map(|n| n.time).collect();
+        let mut onsets: Vec<_> = notes
+            .iter()
+            .filter(|n| n.kind.is_scored_head() && !chart.is_free_zone_inner(n.id))
+            .map(|n| n.time)
+            .collect();
         let mut holds: Vec<_> = chart
             .long_notes
             .iter()
             .filter(|p| p.lane == lane)
             .map(|p| (p.start_time, p.end_time))
+            .chain(
+                chart
+                    .metadata
+                    .free_zones
+                    .iter()
+                    .filter(|zone| zone.lane == lane)
+                    .map(|zone| (zone.start_time, zone.end_time)),
+            )
             .collect();
         holds.sort_unstable();
         let mut merged: Vec<(TimeUs, TimeUs)> = Vec::new();

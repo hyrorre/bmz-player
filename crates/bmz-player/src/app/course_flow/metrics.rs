@@ -54,6 +54,7 @@ impl WinitApp {
             let rule_mode = course.rule_mode;
             let first_metrics =
                 crate::screens::play_session::scored_chart_metrics_from_prepared(&prepared);
+            let first_chart_total_notes = first_metrics.total_notes;
             let library_db_path = self.boot.app_paths.library_db.clone();
             let app_config = self.play_session_app_config();
             let course_id = course.course_id;
@@ -86,7 +87,7 @@ impl WinitApp {
                     course_id,
                     first_chart_id,
                     wait_for_first_chart_ms = pending.requested_at.elapsed().as_millis(),
-                    first_chart_total_notes = first_metrics.total_notes,
+                    first_chart_total_notes,
                     "course background metrics started with reused play preload"
                 );
             }
@@ -155,6 +156,10 @@ impl WinitApp {
                 let metadata_total_notes = course.course_total_notes;
                 course.course_total_notes = metrics.total_notes;
                 course.course_ln_mode = metrics.ln_mode;
+                for (stage, provenance) in course.stage_charts.iter_mut().zip(metrics.entry_kaleid)
+                {
+                    stage.kaleid = Some(provenance);
+                }
                 if pending.update_ln_policy {
                     course.ln_policy = metrics.ln_policy;
                 }

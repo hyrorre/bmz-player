@@ -15,11 +15,12 @@ pub(super) fn select_ir_cache_context(
     )
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CoursePlayMetrics {
     pub(super) total_notes: u32,
     pub(super) ln_mode: Option<bmz_chart::model::LongNoteMode>,
     pub(super) ln_policy: crate::ln_policy::LnScorePolicy,
+    pub(super) entry_kaleid: Vec<bmz_chart::kaleid::KaleidProvenance>,
 }
 
 pub(super) struct CourseLibrarySnapshot {
@@ -44,7 +45,7 @@ fn finish_course_play_metrics(
         course_fallback,
         [source_ln_profile],
     );
-    CoursePlayMetrics { total_notes, ln_mode, ln_policy }
+    CoursePlayMetrics { total_notes, ln_mode, ln_policy, entry_kaleid: Vec::new() }
 }
 
 /// Resolve every played course copy before any skin, replay or preload uses its folder.
@@ -191,6 +192,7 @@ pub(super) fn course_play_metrics_from_chart_metadata(
                 crate::screens::course_session::CourseStageChartInfo {
                     play_level: chart.play_level.clone(),
                     difficulty_name: chart.difficulty_name.clone(),
+                    kaleid: None,
                 }
             })
         })
@@ -228,12 +230,13 @@ pub(super) fn course_play_metrics_for_definition_reusing_first(
     let mut total_notes = 0u32;
     let mut ln_mode = None;
     let mut source_ln_profile = crate::ln_policy::ChartLnProfile::default();
+    let mut entry_kaleid = Vec::with_capacity(definition.entries.len());
     for (index, (entry, start_options)) in
         definition.entries.iter().zip(entry_start_options).enumerate()
     {
         let entry_started_at = Instant::now();
         let metrics = if index == 0 {
-            first_metrics
+            first_metrics.clone()
         } else {
             let chart_id = entry
                 .chart_id
@@ -259,14 +262,17 @@ pub(super) fn course_play_metrics_for_definition_reusing_first(
         total_notes = total_notes.saturating_add(metrics.total_notes);
         ln_mode = crate::ln_policy::max_long_note_mode(ln_mode, metrics.ln_mode);
         source_ln_profile = source_ln_profile.merge(metrics.source_ln_profile);
+        entry_kaleid.push(metrics.kaleid);
     }
-    Ok(finish_course_play_metrics(
+    let mut metrics = finish_course_play_metrics(
         total_notes,
         ln_mode,
         source_ln_profile,
         ln_policy_setting,
         entry_start_options,
-    ))
+    );
+    metrics.entry_kaleid = entry_kaleid;
+    Ok(metrics)
 }
 
 pub(super) fn apply_course_entry_title_hints(
