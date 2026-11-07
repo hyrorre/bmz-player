@@ -42,6 +42,7 @@ fn replay_session(mode: LongNoteMode, opponent: bool) -> GameSession {
     };
     if opponent {
         session.opponent.independent = Some(BattleOpponentSession {
+            conditional: Default::default(),
             chart: Arc::clone(&session.chart),
             key_mode: session.primary_key_mode,
             scored_total_notes: session.scored_total_notes,

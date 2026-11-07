@@ -1,4 +1,4 @@
-use bmz_chart::model::{LongNoteMode, NoteKind, PlayableChart};
+use bmz_chart::model::{LongNoteMode, PlayableChart};
 use bmz_core::clear::ClearType;
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::{KeyMode, LANE_COUNT};
@@ -36,7 +36,7 @@ pub fn scored_note_count_excluding_lanes(
             .enumerate()
             .filter(|(lane, _)| !excluded_lanes[*lane])
             .flat_map(|(_, notes)| notes)
-            .filter(|note| matches!(note.kind, NoteKind::Tap | NoteKind::LongStart))
+            .filter(|note| note.kind.is_scored_head() && !chart.is_free_zone_inner(note.id))
             .count() as u32
     } else {
         // `total_notes` is the authoritative semantic count for an ordinary
@@ -47,6 +47,8 @@ pub fn scored_note_count_excluding_lanes(
         let mode = pair.mode.unwrap_or(chart.metadata.long_note_mode);
         count.saturating_add(u32::from(
             !excluded_lanes[pair.lane.index()]
+                && !chart.is_dummy_long(pair)
+                && !chart.is_free_zone_inner(pair.start_note_id)
                 && matches!(mode, LongNoteMode::Cn | LongNoteMode::Hcn),
         ))
     })

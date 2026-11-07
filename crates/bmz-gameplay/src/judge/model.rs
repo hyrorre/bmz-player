@@ -13,7 +13,7 @@ pub enum JudgeAlgorithm {
     Score,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct JudgeWindow {
     pub pgreat_us: i64,
     pub great_us: i64,
@@ -69,7 +69,7 @@ impl JudgeWindow {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct JudgeWindows {
     pub note: JudgeWindow,
     pub scratch: JudgeWindow,
@@ -191,8 +191,13 @@ pub struct MineHitEvent {
 
 #[derive(Debug, Clone, Default)]
 pub struct JudgeOutcome {
+    /// HLN BODY の符号付き時間積分で発生したゲージ専用イベント。
+    pub hold_ticks: Vec<HoldGaugeEvent>,
+    /// HLN 専用音声のゲート。音量係数であり、スコアには作用しない。
+    pub hold_sounds: Vec<HoldSoundEvent>,
     pub events: Vec<JudgementEvent>,
     pub mine_hits: Vec<MineHitEvent>,
+    pub potion_hits: Vec<PotionHitEvent>,
     /// Input-triggered key sounds.  This is intentionally separate from
     /// `JudgementEvent::note_id`: EmptyPoor does not consume a note, and LN mode
     /// scores the start note at the end while beatoraja plays the end note sound.
@@ -201,6 +206,38 @@ pub struct JudgeOutcome {
     /// mutes the held start sound when an LN/CN is released early badly.
     pub keysound_volumes: Vec<(bmz_core::ids::SoundId, f32)>,
     pub consumed_input: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HoldGaugeEvent {
+    pub lane: Lane,
+    pub time: TimeUs,
+    pub increase: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PotionHitEvent {
+    pub note_id: NoteId,
+    pub lane: Lane,
+    pub time: TimeUs,
+    pub recovery: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct HlnBodyVisualState {
+    pub pair_index: usize,
+    pub activated: TimeUs,
+    pub held: bool,
+    pub reactive: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct HoldSoundEvent {
+    pub note_id: NoteId,
+    pub time: TimeUs,
+    /// 初回の見逃し回復時だけ、始点からのサンプル位置で再生を開始する。
+    pub start_at: Option<TimeUs>,
+    pub audible: bool,
 }
 
 /// キー音イベントの発生要因。自動キー音モードでどれを抑制/許可するかの判定に使う。
