@@ -260,6 +260,9 @@ pub(super) fn evaluate(session: &mut GameSession, at: TimeUs) {
         crate::score::scored_note_count_excluding_lanes(&chart, &session.display_only_lane_mask);
     session.timing_map =
         TimingMap::from_chart_timing_events(chart.metadata.initial_bpm, &chart.timing_events);
+    if session.result_wait_end_time.is_some() {
+        session.result_wait_end_time = Some(chart.last_placement_time(true));
+    }
     session.chart = Arc::new(chart);
 }
 

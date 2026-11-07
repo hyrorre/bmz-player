@@ -110,6 +110,17 @@ fn viewer_seek_uses_the_selected_prefix_and_keeps_boundary_inputs_pending() {
 }
 
 #[test]
+fn selected_media_extends_the_optional_result_wait() {
+    let mut session = session_with_autoplay(imported(
+        "#00011:01\n#CONDITIONAL 1\n#WHEN AUTO==1\n#00501:01\n#DEFAULT\n#ENDCONDITIONAL",
+    ));
+    session.result_wait_end_time = Some(TimeUs(0));
+    advance(&mut session, 3_000_000, &mut ScheduledSoundQueue::new());
+    assert_eq!(session.result_wait_end_time, Some(TimeUs(10_000_000)));
+    assert!(!should_finish(&session, TimeUs(3_000_000)));
+}
+
+#[test]
 fn pending_branch_prevents_full_combo_and_result_settlement() {
     let mut s = session_with_autoplay(imported(
         "#00011:01\n#CONDITIONAL 3\n#WHEN AUTO==1\n#00411:01\n#DEFAULT\n#ENDCONDITIONAL",

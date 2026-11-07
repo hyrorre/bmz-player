@@ -225,11 +225,13 @@ impl JudgeEngine {
                     body.counter += if body.held { dt } else { -dt };
                     body.last.0 += dt;
                     if body.counter.abs() > INTERVAL_US {
-                        outcome.hold_ticks.push(HoldGaugeEvent {
-                            lane: pair.lane,
-                            time: body.last,
-                            increase: body.held,
-                        });
+                        if !chart.is_free_zone_inner(pair.start_note_id) {
+                            outcome.hold_ticks.push(HoldGaugeEvent {
+                                lane: pair.lane,
+                                time: body.last,
+                                increase: body.held,
+                            });
+                        }
                         body.counter += if body.held { -INTERVAL_US } else { INTERVAL_US };
                     }
                 }

@@ -19,6 +19,23 @@ fn free_zone_replaces_inner_judgements_with_one_score_and_display_event() {
 }
 
 #[test]
+fn free_zone_inner_hcn_and_hln_do_not_apply_body_gauge() {
+    for mode in [3, 4] {
+        let mut session = session_with_autoplay(imported(&format!(
+            "#LNMODE {mode}\n#LNOBJ ZZ\n#001SF:01\n#00116:01ZZ"
+        )));
+        session.gauge.set_initial_value(20.0);
+        let mut audio = ScheduledSoundQueue::new();
+        advance(&mut session, 2_450_000, &mut audio);
+        assert_eq!(session.gauge.current().value, 20.0, "mode {mode}");
+        assert_eq!(session.score.past_notes, 0);
+        advance(&mut session, 5_000_000, &mut audio);
+        assert_eq!(session.score.ex_score(), 2);
+        assert_eq!(session.score.past_notes, 1);
+    }
+}
+
+#[test]
 fn missed_inner_notes_do_not_add_bp_or_play_miss_keysounds() {
     let mut session = session_with_autoplay(imported("#001SF:01\n#00116:01010000"));
     session.autoplay = None;

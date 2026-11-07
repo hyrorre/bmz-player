@@ -107,6 +107,9 @@ fn hcn_timer_for_pair(
     previous: Option<HcnLaneTimer>,
     now: TimeUs,
 ) -> Option<HcnLaneTimer> {
+    if chart.is_free_zone_inner(pair.start_note_id) || chart.is_dummy_long(pair) {
+        return None;
+    }
     if pair.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hln {
         let index =
             chart.long_notes.iter().position(|other| other.start_note_id == pair.start_note_id)?;

@@ -436,6 +436,23 @@ pub struct BgaAssetRef {
 }
 
 impl PlayableChart {
+    /// Last placement, excluding poor-only BGA, timing events and PCM tails.
+    pub fn last_placement_time(&self, include_layer2: bool) -> TimeUs {
+        self.lane_notes
+            .iter()
+            .flatten()
+            .map(|note| note.time)
+            .chain(self.bgm_events.iter().map(|event| event.time))
+            .chain(self.bga_events.iter().filter_map(|event| match event.kind {
+                BgaEventKind::Base | BgaEventKind::Layer => Some(event.time),
+                BgaEventKind::Layer2 if include_layer2 => Some(event.time),
+                _ => None,
+            }))
+            .chain(std::iter::once(self.end_time))
+            .max()
+            .unwrap_or(self.end_time)
+    }
+
     pub fn is_free_zone_inner(&self, id: NoteId) -> bool {
         self.metadata.free_zones.iter().any(|zone| zone.inner_notes.contains(&id))
     }
