@@ -183,6 +183,9 @@ BMSON音声区間は採択BPM/STOPで再計算するが発音済みvoiceの終�
 分岐の直積は列挙せず、評価時に採択組合せから再構築して既判定状態を移す。
 大規模譜面の実機レイテンシは別途計測が必要。Viewer途中開始はAUTO/Replay入力で
 先行分岐を決定。同一配置リトライも前回枝をキャッシュせず同じseedのDEFAULTから開始する。
+BATTLE相手の非Replay時計は復元済みのViewer開始位置から進める。保持・見逃し待ちがない
+空白は次のノーツ／分岐まで飛ばし、全区間の1ms時刻配列を作らない。保持・判定待ちの
+区間では既存の1ms刻みを維持する。
 
 ## 永続形式と検証証拠
 
@@ -193,6 +196,9 @@ BMSON音声区間は採択BPM/STOPで再計算するが発音済みvoiceの終�
 - BMZ IR Web SQLite migration 0017: HLN構成・動的分岐・解釈情報を追加する。
 
 証拠はplay_options.kaleidにも含め、device evidenceとは別に署名対象へ入れる。
+BMZ IRのcharts.kaleidはversion・declared・sourceだけを保持し、effective・diagnosticsは
+各プレイの証拠へ残す。譜面情報の版が欠落または0なら既知版へ更新できる。
+旧実装が譜面単位へ保存したeffective・diagnosticsは次回送信時に除去する。
 旧スコアの解釈版はunknown。再スキャンで過去の証拠を補完しない。
 旧Replayは参考再生し、欠落・再計算不一致を診断する。記録枝の再生と正当性の証明は別。
 DBを戻す際は整合したbackupを使い、user_versionだけを巻き戻さない。

@@ -71,3 +71,24 @@ ED本体を同一入力で起動する比較は未実施。ED準拠という記�
 検証範囲を指し、Kaleid本体との完全互換を保証しない。
 本番IR送信・問い合わせ・サーバーデプロイは未実施。添付rianIRと本番の同一性、
 ビルドclient_hash受入、物理音声／GPUの遅延、大規模実譜面のレイテンシは未確認。
+
+## PR #82レビュー後の修正
+
+- HLNだけを含む全レーンReplayがprocess_hln_inputsへ入り、見逃し・地雷通過・保持ゲージの
+  フレーム処理を通らない問題を再現した。全レーンReplayはHLNでも既存のReplay時計を使う。
+  既存の速度・終端境界テストにHLNを追加し、全採点数の確定をassertする。
+  入力がある場合／空Replayの両方で、10秒までにPOOR確定・past=5・Finishedになることを確認する。
+- BATTLE相手のViewer seekで、復元済みprefixをprocessed_timeへ反映する。非Replayの
+  時刻列は遅延計算し、保持・判定待ちのない空白を次の配置・分岐まで飛ばす。
+  120秒seek、116秒の空白、HLN/HCNを含む125秒の一括送りと通常刻みの結果一致を検証する。
+  保持中の1ms判定周期は維持し、全ての長時間保持を定数時間化したとはみなさない。
+- charts.kaleidの欠落／version 0を既知版へ更新可能にする。譜面単位では
+  version・declared・sourceだけを保持し、effective・diagnosticsはプレイごとの証拠に残す。
+  旧方式で保存済みのフィールドは次回送信時に除去する。欠落／0→1、後続旧キューによる
+  逆戻り防止、プレイ証拠の保持、既存値の除去をSQLサービスの回帰テストで確認する。
+
+修正前のHLN終了テストとIRの3ケースで失敗を確認し、修正後に成功した。
+player全2,997件を確認した後、最初のゾーン入力より前にAUTO状態を設定する調整を加え、
+最終コードでgameplay全312件、playerのBATTLE 65件・Replay 115件を再検証した。
+対象2crateのcheck・all-targets Clippy（-D warnings）、fmt、IR Web 221件・vue-tsc・
+変更ファイルのPrettier checkも成功。本番IRへの送信・サーバー変更は行っていない。
