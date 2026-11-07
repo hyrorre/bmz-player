@@ -218,28 +218,6 @@ describe('ranking best row aggregation', () => {
   })
 })
 
-describe('chart update policy', () => {
-  test('updates existing charts for normal single-play submissions', () => {
-    expect(__test.shouldUpdateExistingChart({ device_type: 'keyboard' }, 'off')).toBe(true)
-  })
-
-  test('keeps existing chart metadata for local backfill submissions', () => {
-    expect(
-      __test.shouldUpdateExistingChart(
-        {
-          device_type: 'keyboard',
-          submission_source: 'local_backfill',
-        },
-        'off',
-      ),
-    ).toBe(false)
-  })
-
-  test('keeps existing chart metadata for double battle submissions', () => {
-    expect(__test.shouldUpdateExistingChart({ device_type: 'controller' }, 'battle')).toBe(false)
-  })
-})
-
 describe('verification status', () => {
   test('classifies signed local history separately from signed gameplay', () => {
     expect(

@@ -53,3 +53,20 @@
 - `cargo test -p bmz-player --locked` は2,913成功、0失敗、58 ignored（起動テスト2件を含む）。ポート・schemeの違い、組み込みキーの拒否、旧データの移行、カスタムrianIRのキーを確認した。ローカルHTTPモックで、公式キーの上書き拒否とrefreshが別originへ転送されないことを確認した。
 - `bun run test:ir` と `bun x vue-tsc --noEmit` は成功。Prettierの対象となるWebファイルの変更はない。
 - NOT VERIFIED — Windows Credential Manager、macOS Keychain、Linux Secret Serviceとの実機連携と実IRへのログイン。
+
+## #4 スコア送信で共有メタデータを保護
+
+- 譜面・コースは初回に登録する。既存行は `NULL` または空文字だけを補完し、非空のメタデータ、数値・フラグの `0` / `false`、登録済みの更新時刻を保持する。既存の `local_backfill` とDPのBATTLE系の空欄補完は行わない。
+- `hasRandom` は既存値と送信値のORを取る。保存後も `false` の譜面で、送信された数値やフラグが保存値と異なる場合だけ、譜面ハッシュと項目名をログに出す。スコアの整合性検査は各送信の `result.notes` を基準とする。
+- 各upsertは1文。`excluded` を使いINSERTの値を再利用する。ローカルSQLiteのテストに [D1のバインド上限](https://developers.cloudflare.com/d1/platform/limits/) と同じ100個の制約を適用した。
+- 現行の `course_hash` は譜面の順序に加えて制約も検証する。難易度表同期は別テーブルを更新するため、同期の処理は変更していない。
+- 送信時の扱いは [IR仕様](../../docs/ir.md) に記載した。
+
+### 検証
+
+- `bun run test:ir` は201成功、0失敗。追加の7件で別のプレイヤーからの上書き、空欄補完、BATTLEと取り込みの空欄保持、RANDOM分岐とフラグ保持、コース情報の保護を確認した。
+- `bun x vue-tsc --noEmit` と変更したTypeScript 6ファイルのPrettierは成功。
+- 追加のESLintでは `course_ir.ts`、`ir.test.ts`、`ir.ts` に7件の指摘が出た。直前のコミット `d397fd2b` の同ファイルでもすべて再現した。`metadata.ts`、`submission.ts`、`submission.test.ts` のESLintは成功。
+- `cargo fmt --check` と `cargo clippy --workspace --all-targets --locked -- -D warnings` は成功。最初の `cargo test -p bmz-player --locked` ではViewer IPCテスト1件が、名前付きパイプでACKを受信する前に接続が閉じられて失敗した（Windows error 233）。同テストは #17 と #9 の検証で成功しており、#4 にRustコードの差分はない。
+- 同じ条件で `cargo test -p bmz-player --locked` を再実行し、Viewer IPCを含む2,913件が成功した。失敗0件、58 ignored（起動テスト2件を含む）。初回と再実行のログはローカルの `.local/validation/security-85dc3346/4-rust-test.log` と `4-rust-retry.log` に保存した。
+- NOT VERIFIED — 本番D1での実行。検証はローカルのみで、本番データへのアクセスやデプロイは行っていない。

@@ -37,14 +37,12 @@ import {
 import {
   idempotentScoreResponse,
   partitionLocalBackfillRows,
-  shouldUpdateExistingChart,
   uniqueBestScoreKeys,
 } from './ir/submission'
 import { verificationStatusForSignedSubmission } from './ir/verification'
 
 export const __test = {
   arrangeOptionsFromPlayOptions,
-  shouldUpdateExistingChart,
   dedupeBestRowsByPlayer,
   bestRowsFromHistory,
   uniqueBestScoreKeys,

@@ -4,6 +4,7 @@ import { db, schema } from 'hub:db'
 import { isUniqueConstraintError } from '../utils/db_errors'
 import { assertCanSubmit } from './moderation/enforcement'
 import { IrIdempotencyCollisionError } from './ir/idempotency'
+import { fillMissingMetadata } from './ir/metadata'
 import {
   asRuleMode,
   CLEAR_RANK,
@@ -361,10 +362,19 @@ async function upsertCourse(payload: CourseScoreSubmission) {
     sourceUrl: payload.course.source_url ?? null,
     updatedAt: new Date(),
   }
+  const courses = schema.irCourses
   await db
-    .insert(schema.irCourses)
+    .insert(courses)
     .values(values)
-    .onConflictDoUpdate({ target: schema.irCourses.courseHash, set: values })
+    .onConflictDoUpdate({
+      target: courses.courseHash,
+      set: {
+        title: fillMissingMetadata(courses.title),
+        kind: fillMissingMetadata(courses.kind),
+        constraints: fillMissingMetadata(courses.constraints),
+        sourceUrl: fillMissingMetadata(courses.sourceUrl),
+      },
+    })
 }
 
 /**

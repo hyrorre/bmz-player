@@ -6,6 +6,7 @@ import { db, schema } from 'hub:db'
 import { isUniqueConstraintError } from '../../utils/db_errors'
 import { assertCanSubmit, assertCanWriteScore } from '../moderation/enforcement'
 import { assertIdempotentSubmission } from './idempotency'
+import { fillMissingMetadata } from './metadata'
 import type {
   IrChartLnProfile,
   IrDoubleOption,
@@ -117,7 +118,7 @@ export async function submitScore(
   }
 
   const verification = await resolveVerification(user.id, payload)
-  await upsertChart(payload, shouldUpdateExistingChart(payload.play_options, doubleOption))
+  await upsertChart(payload, doubleOption)
 
   const bp =
     judgeTotal(payload, 'bad') + judgeTotal(payload, 'poor') + judgeTotal(payload, 'empty_poor')
@@ -522,11 +523,33 @@ export function idempotentScoreResponse(
   }
 }
 
-export async function upsertChart(payload: IrScoreSubmission, allowUpdate: boolean) {
+async function upsertChart(payload: IrScoreSubmission, doubleOption: IrDoubleOption) {
   const profile: Partial<IrChartLnProfile> = payload.chart.ln_profile ?? {}
   const notes = payload.chart.notes ?? {}
   const features = payload.chart.features ?? {}
+  const reported = {
+    level: payload.chart.level,
+    total: payload.chart.total,
+    judgeRank: payload.chart.judge,
+    minBpm: payload.chart.bpm?.min,
+    maxBpm: payload.chart.bpm?.max,
+    notes: notes.total ?? payload.result.notes,
+    lnNotes: notes.ln,
+    cnNotes: notes.cn,
+    hcnNotes: notes.hcn,
+    mineNotes: notes.mine,
+    hasStop: features.stop,
+    hasUndefinedLn: profile.has_undefined_ln,
+    hasDefinedLn: profile.has_defined_ln,
+    hasDefinedCn: profile.has_defined_cn,
+    hasDefinedHcn: profile.has_defined_hcn,
+    hasLn: features.ln ?? profile.has_defined_ln ?? profile.has_undefined_ln,
+    hasCn: features.cn ?? profile.has_defined_cn,
+    hasHcn: features.hcn ?? profile.has_defined_hcn,
+    hasMine: features.mine,
+  }
   const values = {
+    ...reported,
     sha256: payload.chart.sha256,
     md5: payload.chart.md5 ?? null,
     title: payload.chart.title ?? '',
@@ -535,48 +558,92 @@ export async function upsertChart(payload: IrScoreSubmission, allowUpdate: boole
     artist: payload.chart.artist ?? null,
     subartists: payload.chart.subartists ?? [],
     mode: payload.chart.mode ?? payload.rule.key_mode ?? 'unknown',
-    level: payload.chart.level ?? null,
     difficulty: payload.chart.difficulty ?? null,
-    total: payload.chart.total ?? null,
-    judgeRank: payload.chart.judge ?? null,
-    minBpm: payload.chart.bpm?.min ?? null,
-    maxBpm: payload.chart.bpm?.max ?? null,
-    notes: notes.total ?? payload.result.notes,
-    lnNotes: notes.ln ?? 0,
-    cnNotes: notes.cn ?? 0,
-    hcnNotes: notes.hcn ?? 0,
-    mineNotes: notes.mine ?? 0,
+    lnNotes: reported.lnNotes ?? 0,
+    cnNotes: reported.cnNotes ?? 0,
+    hcnNotes: reported.hcnNotes ?? 0,
+    mineNotes: reported.mineNotes ?? 0,
     hasRandom: features.random ?? false,
-    hasStop: features.stop ?? false,
-    hasUndefinedLn: profile.has_undefined_ln ?? false,
-    hasDefinedLn: profile.has_defined_ln ?? false,
-    hasDefinedCn: profile.has_defined_cn ?? false,
-    hasDefinedHcn: profile.has_defined_hcn ?? false,
-    hasLn: features.ln ?? profile.has_defined_ln ?? profile.has_undefined_ln ?? false,
-    hasCn: features.cn ?? profile.has_defined_cn ?? false,
-    hasHcn: features.hcn ?? profile.has_defined_hcn ?? false,
-    hasMine: features.mine ?? false,
+    hasStop: reported.hasStop ?? false,
+    hasUndefinedLn: reported.hasUndefinedLn ?? false,
+    hasDefinedLn: reported.hasDefinedLn ?? false,
+    hasDefinedCn: reported.hasDefinedCn ?? false,
+    hasDefinedHcn: reported.hasDefinedHcn ?? false,
+    hasLn: reported.hasLn ?? false,
+    hasCn: reported.hasCn ?? false,
+    hasHcn: reported.hasHcn ?? false,
+    hasMine: reported.hasMine ?? false,
     sourceUrl: payload.chart.urls?.source ?? null,
     appendUrl: payload.chart.urls?.append ?? null,
     headers: {},
     updatedAt: new Date(),
   }
 
-  if (!allowUpdate) {
-    await db.insert(schema.charts).values(values).onConflictDoNothing()
-    return
-  }
-  await db
-    .insert(schema.charts)
+  const charts = schema.charts
+  const fillBlanks =
+    doubleOption === 'off' && payload.play_options.submission_source !== LOCAL_BACKFILL_SOURCE
+  const blanks = fillBlanks
+    ? {
+        md5: fillMissingMetadata(charts.md5),
+        title: fillMissingMetadata(charts.title),
+        subtitle: fillMissingMetadata(charts.subtitle),
+        genre: fillMissingMetadata(charts.genre),
+        artist: fillMissingMetadata(charts.artist),
+        subartists: fillMissingMetadata(charts.subartists),
+        mode: fillMissingMetadata(charts.mode),
+        level: fillMissingMetadata(charts.level),
+        difficulty: fillMissingMetadata(charts.difficulty),
+        total: fillMissingMetadata(charts.total),
+        judgeRank: fillMissingMetadata(charts.judgeRank),
+        minBpm: fillMissingMetadata(charts.minBpm),
+        maxBpm: fillMissingMetadata(charts.maxBpm),
+        sourceUrl: fillMissingMetadata(charts.sourceUrl),
+        appendUrl: fillMissingMetadata(charts.appendUrl),
+      }
+    : {}
+  const [stored] = await db
+    .insert(charts)
     .values(values)
-    .onConflictDoUpdate({ target: schema.charts.sha256, set: values })
-}
-
-export function shouldUpdateExistingChart(
-  playOptions: IrScoreSubmission['play_options'],
-  doubleOption: IrDoubleOption,
-): boolean {
-  return doubleOption === 'off' && playOptions.submission_source !== 'local_backfill'
+    .onConflictDoUpdate({
+      target: charts.sha256,
+      set: {
+        ...blanks,
+        hasRandom: sql`${charts.hasRandom} or excluded.has_random`,
+      },
+    })
+    .returning({
+      level: charts.level,
+      total: charts.total,
+      judgeRank: charts.judgeRank,
+      minBpm: charts.minBpm,
+      maxBpm: charts.maxBpm,
+      notes: charts.notes,
+      lnNotes: charts.lnNotes,
+      cnNotes: charts.cnNotes,
+      hcnNotes: charts.hcnNotes,
+      mineNotes: charts.mineNotes,
+      hasStop: charts.hasStop,
+      hasUndefinedLn: charts.hasUndefinedLn,
+      hasDefinedLn: charts.hasDefinedLn,
+      hasDefinedCn: charts.hasDefinedCn,
+      hasDefinedHcn: charts.hasDefinedHcn,
+      hasLn: charts.hasLn,
+      hasCn: charts.hasCn,
+      hasHcn: charts.hasHcn,
+      hasMine: charts.hasMine,
+      hasRandom: charts.hasRandom,
+    })
+  if (stored && !stored.hasRandom) {
+    const fields = (Object.keys(reported) as (keyof typeof reported)[]).filter(
+      (key) => reported[key] != null && reported[key] !== stored[key],
+    )
+    if (fields.length > 0) {
+      console.warn('IR chart metadata disagrees with stored values', {
+        sha256: values.sha256,
+        fields,
+      })
+    }
+  }
 }
 
 export async function fetchPreviousBest(

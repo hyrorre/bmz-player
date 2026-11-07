@@ -299,6 +299,12 @@ POST /api/v1/scores?include=rankings&ranking_scopes=global,self_and_rivals&ranki
 - `result.ghost`には、通常のプレイでbeatoraja形式のghostを入れます。
 - `gauge`は、保存値・返却値を`AssistEasy` / `Easy` / `Normal` / `Hard` / `ExHard` / `Hazard` / `Class` / `ExClass` / `ExHardClass`にそろえます。小文字や旧名称も受け付けます。
 
+初回のスコア送信で共有の譜面情報を登録します。既存の譜面情報は、通常の送信で`NULL`や空文字の項目だけを補います。
+`battle` / `battle_auto_scratch` と `local_backfill` は既存の空欄補完の対象外です。
+`hasRandom`は送信経路にかかわらず、一度でも`true`が届くと`true`を保持します。
+RANDOMが検出されていない譜面でノーツ数やBPM、譜面フラグなどが異なる場合、保存済みの値を保ち、差分の項目名をサーバーログへ記録します。
+判定数やEXスコアの上限確認には、各送信の`result.notes`を使います。
+
 ### idempotency key
 
 - 新しいプレイのkeyは、queueへ入れる前に`bmz-score-v2-<UUID v4>`を一度だけ生成し、payloadに保存します。HTTPのretryでは保存済みのkeyを使います。ローカルのscore IDは、keyの一意性には使いません。
@@ -505,6 +511,7 @@ rank=7, scope_rank=2  ライバル
 ## コーススコア
 
 - コースのidentityは`course_hash`です。プレイ順の譜面のSHA-256の配列と制約から`{"charts": [...], "constraints": {...}}`を作り、evidenceと同じ規則でcanonical JSONにしたもののSHA-256です。タイトルや出典URLは含めません。サーバーは受け取った定義から再計算し、一致しない場合は拒否します。
+- 初回のコーススコア送信で共有のコース情報を登録します。以降の送信は`NULL`や空文字の項目を補い、保存済みのタイトル・種別・出典URLを保持します。
 - ローカルの`courses.course_key`とは独立に計算します。BMS-IR向けには、LR2互換の長い`course_key`を`course.course_key`として一緒に送ります。BMS-IRから取得した表はサーバーが提供したkeyをそのまま使い、それ以外は標準のDan headerと譜面順のMD5から作ります。rianIR用のhashとは別です。
 - score identityは`course_hash + gauge + ln_policy + rule_mode + scoring`です。段位（class系の制約）ではゲージが制約で決まりますが、通常のコースではユーザーが選ぶため、gaugeを含めます。`ln_policy`は、コース内の全譜面のLN情報とコースのLN制約から、単曲と同じ規則で正規化します。
 - bestは、EXスコア、クリア、BP（小さいほうが良い）、最大コンボの順で比べます。
