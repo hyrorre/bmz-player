@@ -226,7 +226,9 @@ async fn recording_retention_keeps_only_requested_modes_and_defers_deletion_unti
             let mut cfg = config(vec![]);
             cfg.recording_mode = mode;
             let mut state = ObsConnectionState::new(cfg);
-            let (mut sink, _) = sockets().await?;
+            state.recording_owned = true;
+            state.record_directory = Some(std::fs::canonicalize(temp.path())?);
+            let (mut sink, _server) = sockets().await?;
             state
                 .handle_record_state_changed(
                     &mut sink,
@@ -264,6 +266,8 @@ async fn retry_discards_interrupted_recording_then_restarts_once_after_delay() -
         cfg.recording_mode = mode;
         let mut state = ObsConnectionState::new(cfg);
         state.is_recording = true;
+        state.recording_owned = true;
+        state.record_directory = Some(std::fs::canonicalize(temp.path())?);
         let mut queue = RuleQueue { retry: Some(RetryRecording::DrainEnd), ..RuleQueue::default() };
         let (mut sink, mut server) = sockets().await?;
         let (status, _) = watch::channel(ObsConnectionStatus::default());

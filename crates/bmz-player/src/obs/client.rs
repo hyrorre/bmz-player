@@ -391,6 +391,7 @@ pub(super) async fn wait_for_identified(
                                 state.send_request(sink, "GetVersion", None).await?;
                                 state.send_request(sink, "GetSceneList", None).await?;
                                 state.send_request(sink, "GetRecordStatus", None).await?;
+                                state.send_request(sink, "GetRecordDirectory", None).await?;
                                 return Ok(ConnectionAction::Continue);
                             }
                             _ => {}
@@ -504,6 +505,7 @@ pub(super) async fn handle_text_message(
             state.send_request(sink, "GetVersion", None).await?;
             state.send_request(sink, "GetSceneList", None).await?;
             state.send_request(sink, "GetRecordStatus", None).await?;
+            state.send_request(sink, "GetRecordDirectory", None).await?;
             Ok(ConnectionAction::Continue)
         }
         5 => state.handle_event(sink, data).await,

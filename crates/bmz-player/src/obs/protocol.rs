@@ -362,20 +362,51 @@ pub(super) fn output_state_stopped(state: &str) -> bool {
     state == "OBS_WEBSOCKET_OUTPUT_STOPPED" || state.ends_with("_STOPPED")
 }
 
-pub(super) fn delete_recording_file(path: PathBuf, mode: ObsRecordingMode, reason: &'static str) {
-    if mode == ObsRecordingMode::KeepAll || path.as_os_str().is_empty() {
+pub(super) fn delete_recording_file(
+    recording: RecordingFile,
+    mode: ObsRecordingMode,
+    reason: &'static str,
+) {
+    if mode == ObsRecordingMode::KeepAll {
         return;
     }
-    if !path.is_file() {
-        tracing::debug!(path = %path.display(), reason, "OBS recording cleanup skipped");
-        return;
-    }
+    let path = match recording_cleanup_path(&recording) {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::warn!(%error, reason, "OBS recording cleanup skipped");
+            return;
+        }
+    };
     match std::fs::remove_file(&path) {
         Ok(()) => tracing::info!(path = %path.display(), reason, "OBS recording deleted"),
         Err(error) => {
             tracing::warn!(path = %path.display(), %error, reason, "failed to delete OBS recording")
         }
     }
+}
+
+fn recording_cleanup_path(recording: &RecordingFile) -> Result<PathBuf> {
+    const VIDEO_EXTENSIONS: &[&str] = &["mkv", "mp4", "mov", "flv", "ts", "m2ts", "m3u8", "m4v"];
+    let directory = recording.directory.as_ref().context("OBS recording directory is unknown")?;
+    let directory =
+        std::fs::canonicalize(directory).context("OBS recording directory is unavailable")?;
+    anyhow::ensure!(directory.is_dir(), "OBS recording directory is not a directory");
+    anyhow::ensure!(
+        std::fs::symlink_metadata(&recording.path)?.file_type().is_file(),
+        "OBS recording path is not a regular file"
+    );
+    let path = std::fs::canonicalize(&recording.path)?;
+    anyhow::ensure!(
+        path.starts_with(&directory),
+        "OBS recording is outside the recording directory"
+    );
+    anyhow::ensure!(
+        path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| VIDEO_EXTENSIONS
+            .iter()
+            .any(|allowed| ext.eq_ignore_ascii_case(allowed))),
+        "OBS recording has an unsupported extension"
+    );
+    Ok(path)
 }
 
 pub(super) fn obs_ws_url(config: &ObsConfig) -> String {

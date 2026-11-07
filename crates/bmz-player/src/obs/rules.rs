@@ -107,6 +107,7 @@ impl RuleQueue {
     ) -> Result<()> {
         let request_id = state.next_request_id(request_type);
         send_json(sink, request_message(request_type, &request_id, data)).await?;
+        state.record_request_sent(request_type, &request_id);
         self.pending = Some(PendingRule {
             request_id,
             request_type,
@@ -245,6 +246,12 @@ impl RuleQueue {
         let Some(mut pending) = self.pending.take() else {
             return Ok(());
         };
+        if pending.request_type == "StartRecord" {
+            state.record_start_response(
+                &pending.request_id,
+                data["requestStatus"]["result"].as_bool() == Some(true),
+            );
+        }
         if self.stale(&pending.rule) {
             return Ok(());
         }
@@ -466,7 +473,7 @@ pub(super) async fn run_rules_connected(
                             let data = &value["d"];
                             queue.response(state, &mut sink, data, status_tx).await?;
                             // Preserve the existing recording/retention state machine.
-                            if matches!(data["requestType"].as_str(), Some("GetVersion" | "GetSceneList" | "GetRecordStatus")) {
+                            if matches!(data["requestType"].as_str(), Some("GetVersion" | "GetSceneList" | "GetRecordStatus" | "GetRecordDirectory")) {
                                 state.handle_response(&mut sink, data, status_tx, tx.clone()).await?;
                             }
                         } else {

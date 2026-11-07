@@ -112,7 +112,7 @@ async fn pending_events_wait_for_identified_before_sending_requests() -> Result<
 
         sink.send(Message::Text(json!({ "op": 2, "d": {} }).to_string())).await?;
         let mut requests = Vec::new();
-        for _ in 0..4 {
+        for _ in 0..5 {
             let message = stream.next().await.context("OBS client closed before request")??;
             let Message::Text(message) = message else {
                 bail!("expected OBS request text message");
@@ -127,7 +127,13 @@ async fn pending_events_wait_for_identified_before_sending_requests() -> Result<
         }
         assert_eq!(
             requests,
-            ["GetVersion", "GetSceneList", "GetRecordStatus", "SetCurrentProgramScene"]
+            [
+                "GetVersion",
+                "GetSceneList",
+                "GetRecordStatus",
+                "GetRecordDirectory",
+                "SetCurrentProgramScene"
+            ]
         );
 
         sink.send(Message::Close(None)).await?;
@@ -165,7 +171,7 @@ async fn scene_request_retries_when_obs_is_temporarily_not_ready() -> Result<()>
 
         sink.send(Message::Text(json!({ "op": 2, "d": {} }).to_string())).await?;
         let mut scene_request_id = None;
-        for _ in 0..4 {
+        for _ in 0..5 {
             let message = stream.next().await.context("OBS client closed before request")??;
             let Message::Text(message) = message else {
                 bail!("expected OBS request text message");

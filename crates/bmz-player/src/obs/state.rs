@@ -11,6 +11,11 @@ impl ObsConnectionState {
             restart_recording: false,
             save_requested: false,
             last_output_path: None,
+            recording_start: None,
+            recording_owned: false,
+            recording_event_started: false,
+            record_directory: None,
+            record_directory_request: None,
             pending_stop_deadline: None,
             pending_restart: None,
             pending_scene_requests: HashMap::new(),
@@ -23,6 +28,12 @@ impl ObsConnectionState {
     }
 
     pub(super) fn begin_connection(&mut self) {
+        self.recording_start = None;
+        self.recording_owned = false;
+        self.recording_event_started = false;
+        self.record_directory = None;
+        self.record_directory_request = None;
+        self.last_output_path = None;
         self.identified_this_connection = false;
         self.last_disconnect = None;
         self.pending_scene_requests.clear();
@@ -86,7 +97,35 @@ impl ObsConnectionState {
             self.pending_requests.clear();
         }
         self.pending_requests.insert(request_id.clone(), request_type.to_owned());
-        send_json(sink, request_message(request_type, &request_id, request_data)).await
+        send_json(sink, request_message(request_type, &request_id, request_data)).await?;
+        self.record_request_sent(request_type, &request_id);
+        Ok(())
+    }
+
+    pub(super) fn record_request_sent(&mut self, request_type: &str, request_id: &str) {
+        if request_type == "StartRecord" && !self.is_recording {
+            self.recording_start =
+                Some(RecordingStart { request_id: request_id.into(), accepted: false });
+            self.recording_event_started = false;
+            self.recording_owned = false;
+        }
+        if request_type == "GetRecordDirectory" {
+            self.record_directory_request = Some(request_id.into());
+        }
+    }
+
+    pub(super) fn record_start_response(&mut self, request_id: &str, accepted: bool) {
+        if let Some(start) = &mut self.recording_start
+            && start.request_id == request_id
+        {
+            if accepted {
+                start.accepted = true;
+                self.recording_owned = self.recording_event_started;
+            } else {
+                self.recording_start = None;
+                self.recording_owned = false;
+            }
+        }
     }
 
     pub(super) async fn apply_event(&mut self, sink: &mut ObsSink, key: ObsEventKey) -> Result<()> {
@@ -215,6 +254,18 @@ impl ObsConnectionState {
             return Ok(());
         }
         let status = data.get("requestStatus").unwrap_or(&Value::Null);
+        if request_type == "StartRecord" {
+            self.record_start_response(request_id, status["result"].as_bool() == Some(true));
+        }
+        if request_type == "GetRecordDirectory"
+            && self.record_directory_request.as_deref() != Some(request_id)
+        {
+            return Ok(());
+        }
+        if request_type == "GetRecordDirectory" {
+            self.record_directory_request = None;
+            self.record_directory = None;
+        }
         if !status.get("result").and_then(Value::as_bool).unwrap_or(false) {
             let code = status.get("code").and_then(Value::as_i64).unwrap_or_default();
             let comment = status.get("comment").and_then(Value::as_str).unwrap_or_default();
@@ -296,6 +347,18 @@ impl ObsConnectionState {
         );
         let response_data = data.get("responseData").unwrap_or(&Value::Null);
         match request_type {
+            "GetRecordDirectory" => {
+                self.record_directory = response_data["recordDirectory"]
+                    .as_str()
+                    .filter(|path| !path.is_empty())
+                    .and_then(|path| std::fs::canonicalize(path).ok())
+                    .filter(|path| path.is_dir());
+                if self.record_directory.is_none() {
+                    tracing::warn!(
+                        "OBS recording directory is unavailable; recording cleanup disabled"
+                    );
+                }
+            }
             "GetVersion" => {
                 let obs_version =
                     response_data.get("obsVersion").and_then(Value::as_str).unwrap_or_default();
@@ -352,33 +415,51 @@ impl ObsConnectionState {
 
     pub(super) async fn handle_record_state_changed(
         &mut self,
-        _sink: &mut ObsSink,
+        sink: &mut ObsSink,
         data: &Value,
     ) -> Result<()> {
         let state = data.get("outputState").and_then(Value::as_str).unwrap_or_default();
         let output_path = data.get("outputPath").and_then(Value::as_str).unwrap_or_default();
         if output_state_started(state) {
+            if self.recording_event_started {
+                return Ok(());
+            }
+            self.recording_event_started = true;
             self.is_recording = true;
+            self.recording_owned =
+                self.recording_start.as_ref().is_some_and(|start| start.accepted);
             if let Some(path) = self.last_output_path.take() {
                 if self.save_requested {
-                    tracing::info!(path = %path.display(), "OBS recording kept");
+                    tracing::info!(path = %path.path.display(), "OBS recording kept");
                 } else {
                     delete_recording_file(path, self.config.recording_mode, "previous recording");
                 }
             }
             self.save_requested = false;
+            self.record_directory = None;
+            self.send_request(sink, "GetRecordDirectory", None).await?;
             return Ok(());
         }
 
         if output_state_stopped(state) {
             self.is_recording = false;
+            self.recording_event_started = false;
+            let owned = std::mem::take(&mut self.recording_owned);
+            self.recording_start = None;
+            let recording = RecordingFile {
+                path: PathBuf::from(output_path),
+                directory: self.record_directory.clone(),
+            };
+            if !owned && self.config.recording_mode != ObsRecordingMode::KeepAll {
+                tracing::warn!(
+                    "OBS recording cleanup skipped: recording was not started by BMZ on this connection"
+                );
+            }
             if self.restart_recording {
                 self.restart_recording = false;
-                delete_recording_file(
-                    PathBuf::from(output_path),
-                    self.config.recording_mode,
-                    "retry recording",
-                );
+                if owned {
+                    delete_recording_file(recording, self.config.recording_mode, "retry recording");
+                }
                 if self.config.rules.is_some() {
                     return Ok(());
                 }
@@ -388,8 +469,8 @@ impl ObsConnectionState {
                 ));
                 return Ok(());
             }
-            if !output_path.is_empty() {
-                self.last_output_path = Some(PathBuf::from(output_path));
+            if owned && !output_path.is_empty() {
+                self.last_output_path = Some(recording);
             }
         }
         Ok(())

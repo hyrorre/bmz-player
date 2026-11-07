@@ -63,12 +63,13 @@ async fn identify_mock(server: &mut MockSocket, recording: bool) -> Result<()> {
         .context("Identify missing")??;
     assert_eq!(serde_json::from_str::<Value>(identify.to_text()?)?["op"], 1);
     server.send(Message::Text(json!({ "op": 2, "d": {} }).to_string())).await?;
-    for _ in 0..3 {
+    for _ in 0..4 {
         let req = request(server).await?;
         let data = match req["d"]["requestType"].as_str().unwrap() {
             "GetVersion" => json!({ "obsVersion": "mock", "obsWebSocketVersion": "5" }),
             "GetSceneList" => json!({ "scenes": [] }),
             "GetRecordStatus" => json!({ "outputActive": recording }),
+            "GetRecordDirectory" => json!({}),
             other => bail!("unexpected initial request: {other}"),
         };
         respond(server, &req, data).await?;
@@ -78,6 +79,101 @@ async fn identify_mock(server: &mut MockSocket, recording: bool) -> Result<()> {
 
 fn config(rules: Vec<ObsRule>) -> ObsConfig {
     ObsConfig { rules: Some(rules), record_stop_wait_ms: 0, ..ObsConfig::default() }
+}
+
+async fn recording_event(
+    server: &mut MockSocket,
+    state: &str,
+    path: &std::path::Path,
+) -> Result<()> {
+    server
+        .send(Message::Text(
+            json!({"op": 5, "d": {
+                "eventType": "RecordStateChanged",
+                "eventData": {"outputState": state, "outputPath": path},
+            }})
+            .to_string(),
+        ))
+        .await?;
+    Ok(())
+}
+
+async fn record_directory(
+    server: &mut MockSocket,
+    directory: Option<&std::path::Path>,
+) -> Result<()> {
+    let req = request(server).await?;
+    assert_eq!(req["d"]["requestType"], "GetRecordDirectory");
+    respond(server, &req, json!({"recordDirectory": directory})).await
+}
+
+#[tokio::test]
+async fn recording_cleanup_requires_ownership_directory_and_video_file() -> Result<()> {
+    for case in ["valid", "outside", "parent", "text", "manual", "unknown", "keep"] {
+        let temp = tempfile::tempdir()?;
+        let directory = temp.path().join("recordings");
+        std::fs::create_dir(&directory)?;
+        let path = match case {
+            "outside" => temp.path().join("victim.mp4"),
+            "parent" => directory.join("..").join("victim.mp4"),
+            "text" => directory.join("victim.txt"),
+            _ => directory.join("recording.Mp4"),
+        };
+        std::fs::write(&path, b"mock recording")?;
+        let mut cfg = config(vec![
+            ObsRule { trigger: ObsTrigger::PlayStart, action: ObsRuleAction::StartRecord },
+            ObsRule { trigger: ObsTrigger::PlayEnd, action: ObsRuleAction::StopRecord },
+            ObsRule { trigger: ObsTrigger::ResultStart, action: ObsRuleAction::StartRecord },
+        ]);
+        cfg.recording_mode =
+            if case == "keep" { ObsRecordingMode::KeepAll } else { ObsRecordingMode::OnScreenshot };
+        let (tx, worker, mut server) =
+            start(ObsConnectionState::new(cfg), VecDeque::new(), false).await?;
+        if case != "manual" {
+            tx.send(ObsCommand::ApplyEvent(ObsEventKey::Play))?;
+            expect_record_request(&mut server, "StartRecord").await?;
+        }
+        recording_event(&mut server, "OBS_WEBSOCKET_OUTPUT_STARTED", &path).await?;
+        record_directory(&mut server, (case != "unknown").then_some(directory.as_path())).await?;
+        if case == "manual" {
+            tx.send(ObsCommand::ApplyEvent(ObsEventKey::Play))?;
+        }
+        tx.send(ObsCommand::ApplyEvent(ObsEventKey::PlayEnded))?;
+        let stop = request(&mut server).await?;
+        assert_eq!(stop["d"]["requestType"], "StopRecord");
+        recording_event(&mut server, "OBS_WEBSOCKET_OUTPUT_STOPPED", &path).await?;
+        respond(&mut server, &stop, json!({"outputPath": path})).await?;
+        // The pending StopRecord serializes the next rule after the STOPPED event.
+        tx.send(ObsCommand::ApplyEvent(ObsEventKey::Result))?;
+        expect_record_request(&mut server, "StartRecord").await?;
+        recording_event(&mut server, "OBS_WEBSOCKET_OUTPUT_STARTED", &path).await?;
+        record_directory(&mut server, Some(&directory)).await?;
+        assert_eq!(path.exists(), case != "valid", "{case}");
+        tx.send(ObsCommand::Close)?;
+        let (state, _) = worker.await??;
+        assert!(state.recording_owned, "{case}: following recording belongs to BMZ");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn recording_cleanup_rejects_links_outside_the_recording_directory() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let directory = temp.path().join("recordings");
+    std::fs::create_dir(&directory)?;
+    let victim = temp.path().join("victim.mp4");
+    std::fs::write(&victim, b"keep")?;
+    let link = directory.join("link.mp4");
+    std::os::unix::fs::symlink(&victim, &link)?;
+    delete_recording_file(
+        RecordingFile { path: link.clone(), directory: Some(directory) },
+        ObsRecordingMode::OnReplay,
+        "test",
+    );
+    assert!(link.is_symlink());
+    assert_eq!(std::fs::read(victim)?, b"keep");
+    Ok(())
 }
 
 fn scene_rule(trigger: ObsTrigger) -> ObsRule {

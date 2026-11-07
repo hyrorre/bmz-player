@@ -213,7 +213,12 @@ struct ObsConnectionState {
     is_recording: bool,
     restart_recording: bool,
     save_requested: bool,
-    last_output_path: Option<PathBuf>,
+    last_output_path: Option<RecordingFile>,
+    recording_start: Option<RecordingStart>,
+    recording_owned: bool,
+    recording_event_started: bool,
+    record_directory: Option<PathBuf>,
+    record_directory_request: Option<String>,
     pending_stop_deadline: Option<TokioInstant>,
     pending_restart: Option<(TokioInstant, u64)>,
     pending_scene_requests: HashMap<String, PendingSceneRequest>,
@@ -222,6 +227,16 @@ struct ObsConnectionState {
     was_identified: bool,
     identified_this_connection: bool,
     last_disconnect: Option<ObsDisconnect>,
+}
+
+struct RecordingStart {
+    request_id: String,
+    accepted: bool,
+}
+
+struct RecordingFile {
+    path: PathBuf,
+    directory: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
