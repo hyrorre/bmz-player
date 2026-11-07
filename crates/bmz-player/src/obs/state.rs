@@ -27,11 +27,38 @@ impl ObsConnectionState {
         self.last_disconnect = None;
         self.pending_scene_requests.clear();
         self.pending_requests.clear();
+        self.scene_request_generation = self.scene_request_generation.wrapping_add(1);
         self.pending_restart = None;
-        if self.config.rules.is_some() {
-            self.restart_recording = false;
-            self.pending_stop_deadline = None;
+        self.restart_recording = false;
+        self.pending_stop_deadline = None;
+    }
+
+    /// Observe app events in order without replaying any OBS commands later.
+    pub(super) fn apply_offline_command(&mut self, command: ObsCommand) {
+        match command {
+            ObsCommand::ApplyEvent(key) => {
+                self.lifecycle.transition(key);
+            }
+            ObsCommand::RetryPlay => {
+                self.lifecycle.retry();
+            }
+            ObsCommand::SaveLastRecording(reason) => self.save_last_recording(reason),
+            _ => {}
         }
+    }
+
+    /// Consume events already queued when OBS identified the socket.
+    pub(super) fn drain_offline_commands(
+        &mut self,
+        rx: &mut mpsc::UnboundedReceiver<ObsCommand>,
+    ) -> bool {
+        while let Ok(command) = rx.try_recv() {
+            if matches!(command, ObsCommand::Shutdown | ObsCommand::Close) {
+                return true;
+            }
+            self.apply_offline_command(command);
+        }
+        false
     }
 
     pub(super) fn mark_identified(&mut self) {

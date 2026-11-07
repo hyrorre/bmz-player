@@ -140,11 +140,10 @@ async fn pending_events_wait_for_identified_before_sending_requests() -> Result<
     let mut state = ObsConnectionState::new(config);
     let (tx, mut rx) = mpsc::unbounded_channel();
     tx.send(ObsCommand::ApplyEvent(ObsEventKey::MusicSelect))?;
-    let mut pending_commands = VecDeque::new();
     let (status_tx, _) = watch::channel(ObsConnectionStatus::default());
 
     assert_eq!(
-        run_connected(&mut state, client, &mut rx, tx, &mut pending_commands, &status_tx,).await?,
+        run_connected(&mut state, client, &mut rx, tx, &status_tx).await?,
         ConnectionAction::Reconnect
     );
     server.await??;
@@ -227,11 +226,10 @@ async fn scene_request_retries_when_obs_is_temporarily_not_ready() -> Result<()>
     let mut state = ObsConnectionState::new(config);
     let (tx, mut rx) = mpsc::unbounded_channel();
     tx.send(ObsCommand::ApplyEvent(ObsEventKey::MusicSelect))?;
-    let mut pending_commands = VecDeque::new();
     let (status_tx, status_rx) = watch::channel(ObsConnectionStatus::default());
 
     assert_eq!(
-        run_connected(&mut state, client, &mut rx, tx, &mut pending_commands, &status_tx,).await?,
+        run_connected(&mut state, client, &mut rx, tx, &status_tx).await?,
         ConnectionAction::Reconnect
     );
     server.await??;
@@ -241,18 +239,17 @@ async fn scene_request_retries_when_obs_is_temporarily_not_ready() -> Result<()>
 }
 
 #[tokio::test]
-async fn reconnect_wait_preserves_pending_commands() {
+async fn reconnect_wait_observes_play_end_before_shutdown() {
     let (tx, mut rx) = mpsc::unbounded_channel();
     tx.send(ObsCommand::ApplyEvent(ObsEventKey::Play)).unwrap();
-    let mut pending_commands = VecDeque::new();
+    tx.send(ObsCommand::ApplyEvent(ObsEventKey::PlayEnded)).unwrap();
+    tx.send(ObsCommand::Shutdown).unwrap();
+    let mut state = ObsConnectionState::new(ObsConfig::default());
 
     let shutdown =
-        wait_for_reconnect_or_shutdown(&mut rx, &mut pending_commands, Duration::from_millis(1))
-            .await;
+        wait_for_reconnect_or_shutdown(&mut rx, &mut state, Duration::from_secs(1)).await;
 
-    assert!(!shutdown);
-    assert!(matches!(
-        pending_commands.pop_front(),
-        Some(ObsCommand::ApplyEvent(ObsEventKey::Play))
-    ));
+    assert!(shutdown);
+    assert_eq!(state.lifecycle.scene, Some(ObsEventKey::Play));
+    assert!(state.lifecycle.has_ended_play());
 }

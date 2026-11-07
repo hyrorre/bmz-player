@@ -152,10 +152,9 @@ pub(super) async fn run_obs_client(
     startup: bool,
 ) {
     let mut reconnect_delay = INITIAL_RECONNECT_DELAY;
-    // Keep recording retention and queued app events across WebSocket reconnects.
+    // Keep recording retention and the logical play attempt across reconnects.
     let mut state = ObsConnectionState::new(config);
     state.main_started = !startup;
-    let mut pending_commands = VecDeque::new();
     let mut last_reported_issue = None;
     loop {
         let url = obs_ws_url(&state.config);
@@ -168,20 +167,11 @@ pub(super) async fn run_obs_client(
                 None,
             ),
         );
-        match connect_with_pending_commands(&url, &mut rx, &mut pending_commands).await {
+        match connect_while_disconnected(&url, &mut rx, &mut state).await {
             Ok(Some(ws)) => {
                 state.begin_connection();
                 tracing::debug!(url, "OBS WebSocket transport connected");
-                match run_connected(
-                    &mut state,
-                    ws,
-                    &mut rx,
-                    tx.clone(),
-                    &mut pending_commands,
-                    &status_tx,
-                )
-                .await
-                {
+                match run_connected(&mut state, ws, &mut rx, tx.clone(), &status_tx).await {
                     Ok(ConnectionAction::Shutdown) => break,
                     Ok(ConnectionAction::Pause { kind, detail }) => {
                         pause_reconnect(&status_tx, kind, &url, detail, state.was_identified);
@@ -244,7 +234,7 @@ pub(super) async fn run_obs_client(
         }
 
         let should_shutdown =
-            wait_for_reconnect_or_shutdown(&mut rx, &mut pending_commands, reconnect_delay).await;
+            wait_for_reconnect_or_shutdown(&mut rx, &mut state, reconnect_delay).await;
         if should_shutdown {
             break;
         }
@@ -252,10 +242,10 @@ pub(super) async fn run_obs_client(
     }
 }
 
-pub(super) async fn connect_with_pending_commands(
+async fn connect_while_disconnected(
     url: &str,
     rx: &mut mpsc::UnboundedReceiver<ObsCommand>,
-    pending_commands: &mut VecDeque<ObsCommand>,
+    state: &mut ObsConnectionState,
 ) -> std::result::Result<Option<ObsWebSocket>, Box<TungsteniteError>> {
     let connection = connect_async(url);
     tokio::pin!(connection);
@@ -270,7 +260,7 @@ pub(super) async fn connect_with_pending_commands(
             command = rx.recv() => {
                 match command {
                     Some(ObsCommand::Shutdown | ObsCommand::Close) | None => return Ok(None),
-                    Some(command) => queue_offline_command(pending_commands, command),
+                    Some(command) => state.apply_offline_command(command),
                 }
             }
         }
@@ -282,41 +272,27 @@ pub(super) async fn run_connected(
     ws: ObsWebSocket,
     rx: &mut mpsc::UnboundedReceiver<ObsCommand>,
     tx: mpsc::UnboundedSender<ObsCommand>,
-    pending_commands: &mut VecDeque<ObsCommand>,
     status_tx: &watch::Sender<ObsConnectionStatus>,
 ) -> Result<ConnectionAction> {
     if state.config.rules.is_some() {
-        return rules::run_rules_connected(state, ws, rx, tx, pending_commands, status_tx).await;
+        return rules::run_rules_connected(state, ws, rx, tx, status_tx).await;
     }
     let reconnect = state.was_identified;
     let (mut sink, mut stream) = ws.split();
-    match wait_for_identified(state, &mut sink, &mut stream, rx, pending_commands, status_tx)
-        .await?
-    {
+    match wait_for_identified(state, &mut sink, &mut stream, rx, status_tx).await? {
         ConnectionAction::Continue => {}
         action => return Ok(action),
     }
-    if reconnect {
-        while let Some(command) = pending_commands.pop_front() {
-            match command {
-                ObsCommand::ApplyEvent(key) if key != ObsEventKey::PlayEnded => {
-                    state.lifecycle.transition(key);
-                }
-                ObsCommand::SaveLastRecording(reason) => state.save_last_recording(reason),
-                ObsCommand::Shutdown | ObsCommand::Close => return Ok(ConnectionAction::Shutdown),
-                _ => {}
-            }
-        }
-        if let Some(key) = state.lifecycle.scene {
+    if state.drain_offline_commands(rx) {
+        let _ = sink.send(Message::Close(None)).await;
+        return Ok(ConnectionAction::Shutdown);
+    }
+    if let Some(key) = state.lifecycle.scene {
+        if reconnect || state.lifecycle.has_ended_play() {
             state.scene_request_generation = state.scene_request_generation.wrapping_add(1);
             state.apply_scene_for_event(&mut sink, key, 0, state.scene_request_generation).await?;
-        }
-    }
-    match flush_pending_commands(state, &mut sink, tx.clone(), pending_commands).await? {
-        ConnectionAction::Continue => {}
-        action => {
-            let _ = sink.send(Message::Close(None)).await;
-            return Ok(action);
+        } else {
+            state.apply_event(&mut sink, key).await?;
         }
     }
     loop {
@@ -376,7 +352,6 @@ pub(super) async fn wait_for_identified(
     sink: &mut ObsSink,
     stream: &mut futures_util::stream::SplitStream<ObsWebSocket>,
     rx: &mut mpsc::UnboundedReceiver<ObsCommand>,
-    pending_commands: &mut VecDeque<ObsCommand>,
     status_tx: &watch::Sender<ObsConnectionStatus>,
 ) -> Result<ConnectionAction> {
     let timeout = tokio::time::sleep(LOAD_SCENES_TIMEOUT);
@@ -387,7 +362,7 @@ pub(super) async fn wait_for_identified(
             command = rx.recv() => {
                 match command {
                     Some(ObsCommand::Shutdown | ObsCommand::Close) | None => return Ok(ConnectionAction::Shutdown),
-                    Some(command) => queue_offline_command(pending_commands, command),
+                    Some(command) => state.apply_offline_command(command),
                 }
             }
             message = stream.next() => {
@@ -428,21 +403,6 @@ pub(super) async fn wait_for_identified(
             }
         }
     }
-}
-
-pub(super) async fn flush_pending_commands(
-    state: &mut ObsConnectionState,
-    sink: &mut ObsSink,
-    tx: mpsc::UnboundedSender<ObsCommand>,
-    pending_commands: &mut VecDeque<ObsCommand>,
-) -> Result<ConnectionAction> {
-    while let Some(command) = pending_commands.pop_front() {
-        let action = handle_command(state, sink, tx.clone(), Some(command)).await?;
-        if !matches!(action, ConnectionAction::Continue) {
-            return Ok(action);
-        }
-    }
-    Ok(ConnectionAction::Continue)
 }
 
 pub(super) async fn handle_command(
@@ -557,7 +517,7 @@ pub(super) async fn handle_text_message(
 
 pub(super) async fn wait_for_reconnect_or_shutdown(
     rx: &mut mpsc::UnboundedReceiver<ObsCommand>,
-    pending_commands: &mut VecDeque<ObsCommand>,
+    state: &mut ObsConnectionState,
     delay: Duration,
 ) -> bool {
     let sleep = tokio::time::sleep(delay);
@@ -568,25 +528,9 @@ pub(super) async fn wait_for_reconnect_or_shutdown(
             command = rx.recv() => {
                 match command {
                     Some(ObsCommand::Shutdown | ObsCommand::Close) | None => return true,
-                    Some(command) => queue_offline_command(pending_commands, command),
+                    Some(command) => state.apply_offline_command(command),
                 }
             }
         }
-    }
-}
-
-fn queue_offline_command(pending: &mut VecDeque<ObsCommand>, command: ObsCommand) {
-    match command {
-        ObsCommand::ApplyEvent(key) if key != ObsEventKey::PlayEnded => {
-            pending.retain(|c| !matches!(c, ObsCommand::ApplyEvent(_)));
-            pending.push_back(ObsCommand::ApplyEvent(key));
-        }
-        ObsCommand::SaveLastRecording(reason) => {
-            pending.retain(
-                |c| !matches!(c, ObsCommand::SaveLastRecording(existing) if *existing == reason),
-            );
-            pending.push_back(ObsCommand::SaveLastRecording(reason));
-        }
-        _ => {}
     }
 }

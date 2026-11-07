@@ -40,16 +40,17 @@ struct RuleQueue {
 }
 
 impl RuleQueue {
-    fn begin_retry(&mut self, state: &mut ObsConnectionState) {
+    fn begin_retry(&mut self, state: &mut ObsConnectionState, mut events: Vec<ObsTrigger>) {
         self.advance();
         self.retry = None;
-        let mut events = state.lifecycle.retry();
         state.pending_stop_deadline = None;
         if state.is_recording {
             events.retain(|event| *event != ObsTrigger::PlayStart);
             state.lifecycle.defer_play_start();
             self.retry = Some(RetryRecording::DrainEnd);
             state.restart_recording = true;
+        } else {
+            state.lifecycle.start_deferred_play();
         }
         self.enqueue(&state.config, &events, false);
     }
@@ -331,30 +332,15 @@ pub(super) async fn run_rules_connected(
     ws: ObsWebSocket,
     rx: &mut mpsc::UnboundedReceiver<ObsCommand>,
     tx: mpsc::UnboundedSender<ObsCommand>,
-    pending_commands: &mut VecDeque<ObsCommand>,
     status_tx: &watch::Sender<ObsConnectionStatus>,
 ) -> Result<ConnectionAction> {
     let (mut sink, mut stream) = ws.split();
-    match wait_for_identified(state, &mut sink, &mut stream, rx, pending_commands, status_tx)
-        .await?
-    {
+    match wait_for_identified(state, &mut sink, &mut stream, rx, status_tx).await? {
         ConnectionAction::Continue => {}
         action => return Ok(action),
     }
-    // Retain only the latest offline scene, never replay historical record actions.
-    while let Ok(command) = rx.try_recv() {
-        pending_commands.push_back(command);
-    }
-    let mut latest_scene = state.lifecycle.scene;
-    while let Some(command) = pending_commands.pop_front() {
-        match command {
-            ObsCommand::Shutdown | ObsCommand::Close => return Ok(ConnectionAction::Shutdown),
-            ObsCommand::ApplyEvent(key) if key != ObsEventKey::PlayEnded => {
-                latest_scene = Some(key)
-            }
-            ObsCommand::SaveLastRecording(reason) => state.save_last_recording(reason),
-            _ => {}
-        }
+    if state.drain_offline_commands(rx) {
+        return Ok(ConnectionAction::Shutdown);
     }
     let mut queue = RuleQueue::default();
     let initial = !state.main_started;
@@ -362,9 +348,12 @@ pub(super) async fn run_rules_connected(
         state.main_started = true;
         queue.enqueue(&state.config, &[ObsTrigger::MainStart], false);
     }
-    state.lifecycle.scene = latest_scene;
-    if let Some(scene) = latest_scene {
-        queue.enqueue(&state.config, &[scene.start_trigger()], !initial);
+    if let Some(scene) = state.lifecycle.scene {
+        // The old socket owned the deferred recording restart. Synchronizing
+        // this attempt's visuals completes its start for lifecycle purposes.
+        state.lifecycle.start_deferred_play();
+        let visual_only = !initial || state.lifecycle.has_ended_play();
+        queue.enqueue(&state.config, &[scene.start_trigger()], visual_only);
     }
     let status_deadline = TokioInstant::now() + REQUEST_TIMEOUT;
     let mut deferred_retry = None;
@@ -375,10 +364,10 @@ pub(super) async fn run_rules_connected(
             state.pending_requests.retain(|_, kind| kind != "GetRecordStatus");
         }
         if !waiting_status
-            && let Some(generation) = deferred_retry.take()
+            && let Some((generation, events)) = deferred_retry.take()
             && generation == queue.generation
         {
-            queue.begin_retry(state);
+            queue.begin_retry(state, events);
         }
         if !waiting_status || TokioInstant::now() >= status_deadline {
             queue.pump(state, &mut sink).await?;
@@ -429,7 +418,10 @@ pub(super) async fn run_rules_connected(
                 match command {
                     Some(ObsCommand::ApplyEvent(key)) => {
                         let events = state.lifecycle.transition(key);
-                        if !events.is_empty() {
+                        let ended_deferred_retry = key == ObsEventKey::PlayEnded
+                            && (queue.retry.is_some() || deferred_retry.is_some());
+                        if !events.is_empty() || ended_deferred_retry {
+                            deferred_retry = None;
                             queue.advance(); queue.retry = None; state.restart_recording = false;
                             if state.pending_stop_deadline.is_some() {
                                 state.pending_stop_deadline = Some(TokioInstant::now());
@@ -438,10 +430,14 @@ pub(super) async fn run_rules_connected(
                         }
                     }
                     Some(ObsCommand::RetryPlay) => {
+                        let events = state.lifecycle.retry();
                         if waiting_status {
-                            deferred_retry = Some(queue.generation);
+                            state.lifecycle.defer_play_start();
+                            // Keep the original PLAY_END if several retries
+                            // arrive before the first recording status.
+                            deferred_retry.get_or_insert((queue.generation, events));
                         } else {
-                            queue.begin_retry(state);
+                            queue.begin_retry(state, events);
                         }
                     }
                     Some(ObsCommand::SaveLastRecording(reason)) => state.save_last_recording(reason),

@@ -55,13 +55,16 @@ impl ObsLifecycle {
         self.play_start_deferred = true;
     }
 
+    pub(super) fn has_ended_play(&self) -> bool {
+        self.scene == Some(ObsEventKey::Play) && self.play_ended
+    }
+
     /// Returns whether the deferred PLAY_START should run now.
     pub(super) fn start_deferred_play(&mut self) -> bool {
         if self.scene != Some(ObsEventKey::Play) || !self.play_start_deferred {
             return false;
         }
         self.play_start_deferred = false;
-        self.play_ended = false;
         true
     }
 

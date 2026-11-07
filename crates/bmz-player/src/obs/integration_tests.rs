@@ -30,7 +30,7 @@ async fn respond(server: &mut MockSocket, request: &Value, data: Value) -> Resul
 
 async fn start(
     mut state: ObsConnectionState,
-    mut pending: VecDeque<ObsCommand>,
+    pending: VecDeque<ObsCommand>,
     recording: bool,
 ) -> Result<(mpsc::UnboundedSender<ObsCommand>, Worker, MockSocket)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -46,25 +46,34 @@ async fn start(
     let worker = tokio::spawn(async move {
         let (status, _) = watch::channel(ObsConnectionStatus::default());
         state.begin_connection();
-        let action =
-            run_connected(&mut state, client, &mut rx, worker_tx, &mut pending, &status).await?;
+        for command in pending {
+            state.apply_offline_command(command);
+        }
+        let action = run_connected(&mut state, client, &mut rx, worker_tx, &status).await?;
         Ok((state, action))
     });
+    identify_mock(&mut server, recording).await?;
+    Ok((tx, worker, server))
+}
+
+async fn identify_mock(server: &mut MockSocket, recording: bool) -> Result<()> {
     server.send(Message::Text(json!({ "op": 0, "d": {} }).to_string())).await?;
-    let identify = server.next().await.context("Identify missing")??;
+    let identify = tokio::time::timeout(Duration::from_secs(4), server.next())
+        .await?
+        .context("Identify missing")??;
     assert_eq!(serde_json::from_str::<Value>(identify.to_text()?)?["op"], 1);
     server.send(Message::Text(json!({ "op": 2, "d": {} }).to_string())).await?;
     for _ in 0..3 {
-        let req = request(&mut server).await?;
+        let req = request(server).await?;
         let data = match req["d"]["requestType"].as_str().unwrap() {
             "GetVersion" => json!({ "obsVersion": "mock", "obsWebSocketVersion": "5" }),
             "GetSceneList" => json!({ "scenes": [] }),
             "GetRecordStatus" => json!({ "outputActive": recording }),
             other => bail!("unexpected initial request: {other}"),
         };
-        respond(&mut server, &req, data).await?;
+        respond(server, &req, data).await?;
     }
-    Ok((tx, worker, server))
+    Ok(())
 }
 
 fn config(rules: Vec<ObsRule>) -> ObsConfig {
@@ -144,6 +153,156 @@ async fn reconnect_syncs_only_current_visual_rules_without_replaying_startup_or_
     tx.send(ObsCommand::Close)?;
     assert_eq!(worker.await??.1, ConnectionAction::Shutdown);
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum ReconnectPlay {
+    NewPlay,
+    SameEndedPlay,
+    EndedOffline,
+    DeferredRetry,
+    OfflineRetry,
+}
+
+async fn accept_mock(listener: &TcpListener, recording: bool) -> Result<MockSocket> {
+    let mut server = tokio::time::timeout(Duration::from_secs(5), async {
+        let (tcp, _) = listener.accept().await?;
+        Ok::<_, anyhow::Error>(accept_async(tcp).await?)
+    })
+    .await??;
+    identify_mock(&mut server, recording).await?;
+    Ok(server)
+}
+
+async fn expect_hide_play_overlay(server: &mut MockSocket) -> Result<()> {
+    let lookup = request(server).await?;
+    assert_eq!(lookup["d"]["requestType"], "GetSceneItemId");
+    assert_eq!(lookup["d"]["requestData"]["sourceName"], "Key overlay");
+    respond(server, &lookup, json!({ "sceneItemId": 42 })).await?;
+    let hide = request(server).await?;
+    assert_eq!(hide["d"]["requestType"], "SetSceneItemEnabled");
+    assert_eq!(
+        hide["d"]["requestData"],
+        json!({ "sceneName": "Play", "sceneItemId": 42, "sceneItemEnabled": false })
+    );
+    respond(server, &hide, json!({})).await
+}
+
+async fn expect_record_request(server: &mut MockSocket, kind: &str) -> Result<()> {
+    let req = request(server).await?;
+    assert_eq!(req["d"]["requestType"], kind);
+    respond(server, &req, json!({})).await
+}
+
+async fn reconnect_play(case: ReconnectPlay) -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let mut cfg = config(vec![
+        scene_rule(ObsTrigger::MainStart),
+        scene_rule(ObsTrigger::PlayStart),
+        ObsRule { trigger: ObsTrigger::PlayStart, action: ObsRuleAction::StartRecord },
+        ObsRule {
+            trigger: ObsTrigger::PlayEnd,
+            action: ObsRuleAction::HideSource {
+                scene_name: "Play".into(),
+                source_name: "Key overlay".into(),
+            },
+        },
+        ObsRule { trigger: ObsTrigger::PlayEnd, action: ObsRuleAction::StopRecord },
+        scene_rule(ObsTrigger::ResultStart),
+        scene_rule(ObsTrigger::MainEnd),
+    ]);
+    cfg.enabled = true;
+    cfg.host = format!("ws://{}", listener.local_addr()?);
+    let mut obs = ObsController::spawn(cfg).unwrap();
+    obs.scene(ObsEventKey::Play);
+    let already_recording = matches!(case, ReconnectPlay::DeferredRetry);
+    let mut server = accept_mock(&listener, already_recording).await?;
+    expect_scene(&mut server, ObsTrigger::MainStart).await?;
+    expect_scene(&mut server, ObsTrigger::PlayStart).await?;
+    if !already_recording {
+        expect_record_request(&mut server, "StartRecord").await?;
+    }
+
+    match case {
+        ReconnectPlay::DeferredRetry => {
+            obs.retry_play();
+            expect_hide_play_overlay(&mut server).await?;
+            // Disconnect before the pending StopRecord response can start
+            // the retry recording again.
+            let stop = request(&mut server).await?;
+            assert_eq!(stop["d"]["requestType"], "StopRecord");
+        }
+        ReconnectPlay::EndedOffline => {}
+        _ => {
+            obs.play_ended();
+            expect_hide_play_overlay(&mut server).await?;
+            expect_record_request(&mut server, "StopRecord").await?;
+        }
+    }
+    server.send(Message::Close(None)).await?;
+    tokio::time::timeout(Duration::from_secs(4), obs.status.wait_for(|s| s.retry_in_ms.is_some()))
+        .await??;
+    match case {
+        ReconnectPlay::NewPlay => {
+            for scene in [
+                ObsEventKey::Result,
+                ObsEventKey::MusicSelect,
+                ObsEventKey::Decide,
+                ObsEventKey::Play,
+            ] {
+                obs.scene(scene);
+            }
+        }
+        ReconnectPlay::EndedOffline => obs.play_ended(),
+        ReconnectPlay::OfflineRetry => obs.retry_play(),
+        ReconnectPlay::SameEndedPlay | ReconnectPlay::DeferredRetry => {}
+    }
+    let mut server = accept_mock(&listener, matches!(case, ReconnectPlay::EndedOffline)).await?;
+    expect_scene(&mut server, ObsTrigger::PlayStart).await?;
+    if matches!(
+        case,
+        ReconnectPlay::NewPlay | ReconnectPlay::DeferredRetry | ReconnectPlay::OfflineRetry
+    ) {
+        obs.play_ended();
+        expect_hide_play_overlay(&mut server).await?;
+        expect_record_request(&mut server, "StopRecord").await?;
+    }
+    obs.play_ended();
+    obs.scene(ObsEventKey::Result);
+    expect_scene(&mut server, ObsTrigger::ResultStart).await?;
+    obs.request_shutdown();
+    expect_scene(&mut server, ObsTrigger::MainEnd).await?;
+    let close = tokio::time::timeout(Duration::from_secs(4), server.next())
+        .await?
+        .context("shutdown did not close OBS socket")??;
+    assert!(close.is_close());
+    tokio::time::timeout(Duration::from_secs(4), &mut obs.task).await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn reconnect_ends_new_play_started_offline_once() -> Result<()> {
+    reconnect_play(ReconnectPlay::NewPlay).await
+}
+
+#[tokio::test]
+async fn reconnect_keeps_same_play_ended() -> Result<()> {
+    reconnect_play(ReconnectPlay::SameEndedPlay).await
+}
+
+#[tokio::test]
+async fn reconnect_does_not_replay_end_received_offline() -> Result<()> {
+    reconnect_play(ReconnectPlay::EndedOffline).await
+}
+
+#[tokio::test]
+async fn reconnect_syncs_deferred_retry_without_restarting_recording() -> Result<()> {
+    reconnect_play(ReconnectPlay::DeferredRetry).await
+}
+
+#[tokio::test]
+async fn reconnect_ends_play_retried_offline_once() -> Result<()> {
+    reconnect_play(ReconnectPlay::OfflineRetry).await
 }
 
 #[tokio::test]
@@ -232,6 +391,9 @@ async fn legacy_delayed_retry_start_cannot_override_a_new_result_screen() -> Res
     let mut state = ObsConnectionState::new(cfg);
     state.lifecycle.transition(ObsEventKey::Play);
     let (tx, worker, mut server) = start(state, VecDeque::new(), false).await?;
+    let play = request(&mut server).await?;
+    assert_eq!(play["d"]["requestData"]["sceneName"], "Play");
+    respond(&mut server, &play, json!({})).await?;
     tx.send(ObsCommand::RetryPlay)?;
     let select = request(&mut server).await?;
     assert_eq!(select["d"]["requestData"]["sceneName"], "Select");
@@ -340,6 +502,9 @@ async fn legacy_retry_restarts_recording_when_stop_finishes_after_half_the_selec
     // RetryPlay may race the GetRecordStatus response inside the worker.
     state.is_recording = true;
     let (tx, worker, mut server) = start(state, VecDeque::new(), true).await?;
+    let play = request(&mut server).await?;
+    assert_eq!(play["d"]["requestData"]["sceneName"], "Play");
+    respond(&mut server, &play, json!({})).await?;
     tx.send(ObsCommand::RetryPlay)?;
     let stop = request(&mut server).await?;
     assert_eq!(stop["d"]["requestType"], "StopRecord");
@@ -370,6 +535,7 @@ async fn leaving_play_before_retry_restart_does_not_repeat_play_end() -> Result<
     state.main_started = true;
     state.lifecycle.transition(ObsEventKey::Play);
     let (tx, worker, mut server) = start(state, VecDeque::new(), true).await?;
+    expect_scene(&mut server, ObsTrigger::PlayStart).await?;
     tx.send(ObsCommand::RetryPlay)?;
     expect_scene(&mut server, ObsTrigger::PlayEnd).await?;
     let stop = request(&mut server).await?;
