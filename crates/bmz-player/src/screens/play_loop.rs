@@ -251,7 +251,7 @@ fn flush_scheduled_audio_blocking(
         return Ok(());
     }
     let mut audio = audio.lock().map_err(|_| anyhow!("audio engine lock poisoned"))?;
-    audio.schedule_all(scheduled.drain_all());
+    audio.schedule_all(scheduled.drain_in_request_order());
     Ok(())
 }
 
@@ -265,7 +265,7 @@ fn flush_scheduled_audio_nonblocking(
     }
     match audio.try_lock() {
         Ok(mut audio) => {
-            audio.schedule_all(scheduled.drain_all());
+            audio.schedule_all(scheduled.drain_in_request_order());
             Ok(())
         }
         Err(TryLockError::WouldBlock) => Ok(()),
@@ -282,7 +282,7 @@ fn flush_scheduled_audio_commands(
     if scheduled.is_empty() {
         return Ok(());
     }
-    let sounds = scheduled.drain_all().collect::<Vec<_>>();
+    let sounds = scheduled.drain_in_request_order().collect::<Vec<_>>();
     match audio.try_schedule_all(sounds) {
         Ok(()) => {
             bmz_gameplay::session::latency::audio_enqueued();

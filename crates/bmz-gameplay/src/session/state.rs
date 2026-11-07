@@ -448,6 +448,7 @@ impl BgmScheduler {
                 Some((
                     event.time,
                     ScheduledSound {
+                        immediate: false,
                         start_time: clock.time_to_instant(start_time),
                         start_frame: clock.start_output_frame,
                         sample_offset_frames,
@@ -456,6 +457,7 @@ impl BgmScheduler {
                         pan: 0.0,
                         loop_playback: false,
                         fade_in_frames: 0,
+                        fade_out_frames: 0,
                         catch_up: true,
                         restart_policy: RestartPolicy::StopSameSound,
                     },
@@ -483,6 +485,7 @@ impl BgmScheduler {
                 bmz_chart::volume::chart_volume_at_time(&chart.bgm_volume_events, event.time),
             );
             audio.schedule(ScheduledSound {
+                immediate: !clock.schedule_ahead,
                 start_time: clock
                     .schedule_ahead
                     .then(|| clock.time_to_instant(event.time))
@@ -498,6 +501,7 @@ impl BgmScheduler {
                 pan: 0.0,
                 loop_playback: false,
                 fade_in_frames: 0,
+                fade_out_frames: 0,
                 catch_up: clock.schedule_ahead,
                 restart_policy: RestartPolicy::StopSameSound,
             });
@@ -552,6 +556,7 @@ impl AutoKeysoundScheduler {
                 );
                 for sound_id in note.sounds() {
                     audio.schedule(ScheduledSound {
+                        immediate: !clock.schedule_ahead,
                         start_time: clock
                             .schedule_ahead
                             .then(|| clock.time_to_instant(note.time))
@@ -567,6 +572,7 @@ impl AutoKeysoundScheduler {
                         pan: 0.0,
                         loop_playback: false,
                         fade_in_frames: 0,
+                        fade_out_frames: 0,
                         // Keysounds must start at the sample head. catch_up seek
                         // into short kick/bass WAVs sounds like a pitch change;
                         // a few ms late from-head is preferable and keeps manual

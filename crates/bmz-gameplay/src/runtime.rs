@@ -129,7 +129,7 @@ impl GameplayRuntime {
             // One ScheduleAll keeps the command-queue lock free for the WASAPI
             // callback. Per-sound Schedule on dense charts contended the queue
             // long enough to miss periods and punch silence holes.
-            let sounds = self.pending_audio.drain_all().collect::<Vec<_>>();
+            let sounds = self.pending_audio.drain_in_request_order().collect::<Vec<_>>();
             let count = sounds.len() as u64;
             match audio.try_schedule_all(sounds) {
                 Ok(()) => {

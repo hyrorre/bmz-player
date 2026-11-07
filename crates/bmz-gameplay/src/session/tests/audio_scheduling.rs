@@ -32,6 +32,7 @@ fn both_modes_use_system_time_for_bgm_and_auto_keysounds_at_every_speed() {
                 if ahead {
                     assert_eq!(audio.scheduled.len(), 2);
                     for sound in &audio.scheduled {
+                        assert!(!sound.immediate);
                         assert_eq!(sound.start_time, Some(base + Duration::from_millis(50)));
                         assert_eq!(sound.catch_up, sound.sound_id == SoundId(3));
                     }
@@ -41,12 +42,7 @@ fn both_modes_use_system_time_for_bgm_and_auto_keysounds_at_every_speed() {
                     session.audio_clock.start_at(TimeUs(0), base - Duration::from_millis(1));
                     advance_session_frame(&mut session, &mut audio);
                     assert_eq!(audio.scheduled.len(), 2);
-                    assert!(
-                        audio
-                            .scheduled
-                            .iter()
-                            .all(|s| s.start_time.is_none() && s.start_frame == 0 && !s.catch_up)
-                    );
+                    assert!(audio.scheduled.iter().all(|s| s.immediate && !s.catch_up));
                 }
                 let count = audio.scheduled.len();
                 advance_session_frame(&mut session, &mut audio);
@@ -83,10 +79,45 @@ fn pressed_keysounds_never_wait_for_old_output_frame_or_input_offset() {
         schedule_keysounds(&mut session, &mut audio);
         assert_eq!(audio.scheduled.len(), 1);
         let sound = audio.scheduled[0];
+        assert!(sound.immediate);
         assert!(sound.start_time.is_none());
         assert_eq!(sound.start_frame, 0);
         assert!(!sound.catch_up);
         assert_eq!(sound.sample_offset_frames, 0);
+    }
+}
+
+#[test]
+fn no_lookahead_plays_bgm_and_auto_or_manual_keys_from_the_head() {
+    use bmz_audio::{engine::AudioEngine, sample::DecodedSample};
+
+    for auto_keysound in [false, true] {
+        let mut chart = chart_with_keysound();
+        chart.bgm_events = chart_with_bgm().bgm_events;
+        let mut session = session_with_autoplay(chart);
+        session.autoplay = None;
+        session.audio_mix.auto_keysound = auto_keysound;
+        session.audio_mix.master_volume = 1.0;
+        session.audio_mix.key_volume = 1.0;
+        session.audio_mix.bgm_volume = 1.0;
+        session.audio_clock =
+            AudioClock::with_position(48_000, 48_000, 0, Arc::new(AtomicU64::new(48_000)), true);
+        session.audio_clock.schedule_ahead = false;
+
+        let mut engine = AudioEngine::new(48_000);
+        for (id, head) in [(3, 0.5), (7, 0.25)] {
+            engine.insert_sample(
+                SoundId(id),
+                DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![head, 0.0] },
+            );
+        }
+        if !auto_keysound {
+            process_session_input(&mut session, human_press(TimeUs(0)));
+        }
+        advance_session_frame(&mut session, &mut engine);
+        let mut pcm = [0.0; 4];
+        engine.render_stereo(48_000, &mut pcm);
+        assert_eq!(pcm, [0.75, 0.75, 0.0, 0.0], "auto_keysound={auto_keysound}");
     }
 }
 

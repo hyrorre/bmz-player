@@ -48,20 +48,21 @@ impl MixerState {
 
     pub fn push_scheduled(&mut self, sounds: impl IntoIterator<Item = ScheduledSound>) {
         for sound in sounds {
-            match sound.restart_policy {
-                RestartPolicy::StopSameSound => {
-                    stop_same_sound_at(&mut self.voices, sound.sound_id, sound.start_frame);
-                }
-                RestartPolicy::Overlap => {}
-            }
+            let stop_at_frame = match sound.restart_policy {
+                RestartPolicy::StopSameSound => restart_sound(&mut self.voices, &sound),
+                RestartPolicy::Overlap => None,
+            };
             self.voices.push(ActiveVoice {
                 next_output_frame: sound.start_frame,
                 sample_position: sound.sample_offset_frames as f64,
                 sound,
                 played_output_frames: 0,
                 started: false,
-                stop_at_frame: None,
-                fade_out: None,
+                stop_at_frame,
+                fade_out: (sound.fade_out_frames != 0).then_some(ActiveVoiceFadeOut {
+                    started_output_frames: 0,
+                    frames: sound.fade_out_frames,
+                }),
             });
         }
     }
@@ -228,17 +229,23 @@ impl MixerState {
     }
 }
 
-fn stop_same_sound_at(
-    voices: &mut [ActiveVoice],
-    sound_id: bmz_core::ids::SoundId,
-    stop_frame: u64,
-) {
+fn restart_sound(voices: &mut [ActiveVoice], sound: &ScheduledSound) -> Option<u64> {
+    let mut next_restart: Option<u64> = None;
     for voice in voices {
-        if voice.sound.sound_id == sound_id {
-            voice.stop_at_frame =
-                Some(voice.stop_at_frame.map_or(stop_frame, |existing| existing.min(stop_frame)));
+        if voice.sound.sound_id != sound.sound_id {
+            continue;
+        }
+        let stop_frame = sound.start_frame;
+        if voice.sound.start_frame <= stop_frame {
+            voice.stop_at_frame = Some(voice.stop_at_frame.unwrap_or(stop_frame).min(stop_frame));
+        } else if voice.sound.restart_policy == RestartPolicy::StopSameSound {
+            // A late command may arrive in a later buffer than a newer
+            // voice. The newer restart still cuts off this older sound.
+            let frame = voice.sound.start_frame;
+            next_restart = Some(next_restart.unwrap_or(frame).min(frame));
         }
     }
+    next_restart
 }
 
 fn advance_voice_position(
@@ -311,6 +318,7 @@ mod tests {
         );
         let mut mixer = MixerState::default();
         mixer.push_scheduled([ScheduledSound {
+            immediate: false,
             start_time: None,
             start_frame: 10,
             sample_offset_frames: 0,
@@ -319,6 +327,7 @@ mod tests {
             pan: 0.0,
             loop_playback: false,
             fade_in_frames: 0,
+            fade_out_frames: 0,
             catch_up: true,
             restart_policy: RestartPolicy::Overlap,
         }]);
@@ -339,6 +348,7 @@ mod tests {
         );
         let mut mixer = MixerState { master_gain: 0.25, ..MixerState::default() };
         mixer.push_scheduled([ScheduledSound {
+            immediate: false,
             start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
@@ -347,6 +357,7 @@ mod tests {
             pan: 0.0,
             loop_playback: false,
             fade_in_frames: 0,
+            fade_out_frames: 0,
             catch_up: false,
             restart_policy: RestartPolicy::Overlap,
         }]);
@@ -367,6 +378,7 @@ mod tests {
         );
         let mut mixer = MixerState::default();
         mixer.push_scheduled([ScheduledSound {
+            immediate: false,
             start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
@@ -375,6 +387,7 @@ mod tests {
             pan: 0.0,
             loop_playback: true,
             fade_in_frames: 0,
+            fade_out_frames: 0,
             catch_up: false,
             restart_policy: RestartPolicy::Overlap,
         }]);
@@ -397,6 +410,7 @@ mod tests {
         );
         let mut mixer = MixerState::default();
         mixer.push_scheduled([ScheduledSound {
+            immediate: false,
             start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
@@ -405,6 +419,7 @@ mod tests {
             pan: 0.0,
             loop_playback: true,
             fade_in_frames: 2,
+            fade_out_frames: 0,
             catch_up: false,
             restart_policy: RestartPolicy::Overlap,
         }]);
@@ -424,6 +439,7 @@ mod tests {
         );
         let mut mixer = MixerState::default();
         mixer.push_scheduled([ScheduledSound {
+            immediate: false,
             start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
@@ -432,6 +448,7 @@ mod tests {
             pan: 0.0,
             loop_playback: true,
             fade_in_frames: 0,
+            fade_out_frames: 0,
             catch_up: false,
             restart_policy: RestartPolicy::Overlap,
         }]);
@@ -455,6 +472,7 @@ mod tests {
         );
         let mut mixer = MixerState::new(48_000);
         mixer.push_scheduled([ScheduledSound {
+            immediate: false,
             start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
@@ -463,6 +481,7 @@ mod tests {
             pan: 0.0,
             loop_playback: false,
             fade_in_frames: 0,
+            fade_out_frames: 0,
             catch_up: true,
             restart_policy: RestartPolicy::Overlap,
         }]);
@@ -483,6 +502,7 @@ mod tests {
         );
         let mut mixer = MixerState::default();
         mixer.push_scheduled([ScheduledSound {
+            immediate: false,
             start_time: None,
             start_frame: 10,
             sample_offset_frames: 0,
@@ -491,6 +511,7 @@ mod tests {
             pan: 0.0,
             loop_playback: false,
             fade_in_frames: 0,
+            fade_out_frames: 0,
             catch_up: true,
             restart_policy: RestartPolicy::Overlap,
         }]);
@@ -515,6 +536,7 @@ mod tests {
         );
         let mut mixer = MixerState::default();
         mixer.push_scheduled([ScheduledSound {
+            immediate: false,
             start_time: None,
             start_frame: 10,
             sample_offset_frames: 2,
@@ -523,6 +545,7 @@ mod tests {
             pan: 0.0,
             loop_playback: false,
             fade_in_frames: 0,
+            fade_out_frames: 0,
             catch_up: true,
             restart_policy: RestartPolicy::Overlap,
         }]);
@@ -543,6 +566,7 @@ mod tests {
         );
         let mut mixer = MixerState::default();
         mixer.push_scheduled([ScheduledSound {
+            immediate: false,
             start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
@@ -551,6 +575,7 @@ mod tests {
             pan: 0.0,
             loop_playback: false,
             fade_in_frames: 0,
+            fade_out_frames: 0,
             catch_up: false,
             restart_policy: RestartPolicy::Overlap,
         }]);
@@ -575,6 +600,7 @@ mod tests {
         );
         let mut mixer = MixerState::default();
         mixer.push_scheduled([ScheduledSound {
+            immediate: false,
             start_time: None,
             start_frame: 100,
             sample_offset_frames: 0,
@@ -583,6 +609,7 @@ mod tests {
             pan: 0.0,
             loop_playback: false,
             fade_in_frames: 0,
+            fade_out_frames: 0,
             catch_up: false,
             restart_policy: RestartPolicy::Overlap,
         }]);
@@ -688,6 +715,7 @@ mod tests {
         restart_policy: RestartPolicy,
     ) -> ScheduledSound {
         ScheduledSound {
+            immediate: false,
             start_time: None,
             start_frame,
             sample_offset_frames: 0,
@@ -696,6 +724,7 @@ mod tests {
             pan: 0.0,
             loop_playback: false,
             fade_in_frames: 0,
+            fade_out_frames: 0,
             catch_up: false,
             restart_policy,
         }

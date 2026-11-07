@@ -218,7 +218,7 @@ impl Simulation {
         {
             session.scratch_angle_last_render_at = Some(anchor);
         }
-        self.prepared.play.audio.schedule_all(self.queue.drain_all());
+        self.prepared.play.audio.schedule_all(self.queue.drain_in_request_order());
         for (id, volume) in frame.keysound_volumes {
             self.prepared.play.audio.set_sound_volume(id, volume);
         }

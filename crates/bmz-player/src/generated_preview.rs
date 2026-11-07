@@ -290,6 +290,7 @@ fn schedule_preview_sounds(
         let volume =
             chart_channel_volume_factor(chart_volume_at_time(&chart.bgm_volume_events, event.time));
         ScheduledSound {
+            immediate: false,
             start_time: None,
             sound_id: event.sound,
             start_frame: time_us_to_frame(event.time.0, sample_rate),
@@ -298,6 +299,7 @@ fn schedule_preview_sounds(
             pan: 0.0,
             loop_playback: false,
             fade_in_frames: 0,
+            fade_out_frames: 0,
             restart_policy: RestartPolicy::StopSameSound,
             catch_up: true,
         }
@@ -318,6 +320,7 @@ fn schedule_preview_sounds(
                     note.time,
                 ));
                 note.sounds().map(move |sound_id| ScheduledSound {
+                    immediate: false,
                     start_time: None,
                     sound_id,
                     start_frame: time_us_to_frame(note.time.0, sample_rate),
@@ -326,6 +329,7 @@ fn schedule_preview_sounds(
                     pan: 0.0,
                     loop_playback: false,
                     fade_in_frames: 0,
+                    fade_out_frames: 0,
                     restart_policy: RestartPolicy::StopSameSound,
                     catch_up: true,
                 })

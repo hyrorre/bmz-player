@@ -415,6 +415,7 @@ fn chart_with_bgm() -> PlayableChart {
 
 fn scheduled_sound(start_frame: u64, sound_id: u32) -> ScheduledSound {
     ScheduledSound {
+        immediate: false,
         start_time: None,
         start_frame,
         sample_offset_frames: 0,
@@ -423,6 +424,7 @@ fn scheduled_sound(start_frame: u64, sound_id: u32) -> ScheduledSound {
         pan: 0.0,
         loop_playback: false,
         fade_in_frames: 0,
+        fade_out_frames: 0,
         catch_up: true,
         restart_policy: RestartPolicy::Overlap,
     }

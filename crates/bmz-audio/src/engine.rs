@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::mixer::{ActiveVoiceFadeOut, MixerState};
-use crate::queue::{AudioScheduler, RestartPolicy, ScheduledSound, ScheduledSoundQueue};
+use crate::mixer::MixerState;
+use crate::queue::{AudioScheduler, ScheduledSound, ScheduledSoundQueue};
 use crate::sample::{DecodedSample, SampleBank};
 
 #[derive(Debug, Default)]
@@ -170,7 +170,7 @@ impl AudioEngine {
         self.mixer.set_volume_for_sound(id, volume);
     }
 
-    /// `start_frame = 0`(=即時再生)で sound_id を 1 ショット再生する。
+    /// 次の出力バッファの先頭で sound_id を 1 ショット再生する。
     /// 必要なら `loop_playback = true` でループ再生も可能。
     pub fn play_now(&mut self, sound_id: bmz_core::ids::SoundId, volume: f32, loop_playback: bool) {
         self.play_now_with_fade_in(sound_id, volume, loop_playback, 0);
@@ -183,18 +183,7 @@ impl AudioEngine {
         loop_playback: bool,
         fade_in_frames: u32,
     ) {
-        self.schedule(ScheduledSound {
-            start_time: None,
-            start_frame: 0,
-            sample_offset_frames: 0,
-            sound_id,
-            volume: volume.clamp(0.0, 1.0),
-            pan: 0.0,
-            loop_playback,
-            fade_in_frames,
-            catch_up: false,
-            restart_policy: RestartPolicy::Overlap,
-        });
+        self.play_now_with_fade_in_and_fade_out(sound_id, volume, loop_playback, fade_in_frames, 0);
     }
 
     pub fn play_now_with_fade_in_and_fade_out(
@@ -205,25 +194,12 @@ impl AudioEngine {
         fade_in_frames: u32,
         fade_out_frames: u32,
     ) {
-        let voice_start = self.mixer.voices.len();
-        self.mixer.push_scheduled([ScheduledSound {
-            start_time: None,
-            start_frame: 0,
-            sample_offset_frames: 0,
-            sound_id,
-            volume: volume.clamp(0.0, 1.0),
-            pan: 0.0,
+        self.schedule(ScheduledSound {
             loop_playback,
             fade_in_frames,
-            catch_up: false,
-            restart_policy: RestartPolicy::Overlap,
-        }]);
-        if fade_out_frames != 0 {
-            for voice in &mut self.mixer.voices[voice_start..] {
-                voice.fade_out =
-                    Some(ActiveVoiceFadeOut { started_output_frames: 0, frames: fade_out_frames });
-            }
-        }
+            fade_out_frames,
+            ..ScheduledSound::immediate(sound_id, volume.clamp(0.0, 1.0), 0.0)
+        });
     }
 
     /// 再生待ちのスケジュール音も鳴っているボイスも無い、つまり出力を
@@ -247,14 +223,12 @@ impl AudioEngine {
             return;
         }
         let frame_count = output.len() / 2;
-        if let Some(buffer_time) = buffer_time {
-            self.queue.resolve_times(
-                output_start_frame,
-                buffer_time,
-                frame_count,
-                self.output_sample_rate(),
-            );
-        }
+        self.queue.resolve_times(
+            output_start_frame,
+            buffer_time,
+            frame_count,
+            self.output_sample_rate(),
+        );
         let output_end_frame = output_start_frame + frame_count.saturating_sub(1) as u64;
         // 中間 Vec を確保せず、期日到来分を直接 mixer へ流し込む(RT 安全)。
         self.mixer.push_scheduled(self.queue.drain_due(output_end_frame));
@@ -276,6 +250,7 @@ impl AudioScheduler for AudioEngine {
 
 #[cfg(test)]
 mod tests {
+    use crate::queue::RestartPolicy;
     use bmz_core::ids::SoundId;
 
     use super::*;
@@ -387,6 +362,7 @@ mod tests {
             DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5, 0.25] },
         );
         engine.schedule(ScheduledSound {
+            immediate: false,
             start_time: None,
             start_frame: 2,
             sample_offset_frames: 0,
@@ -395,6 +371,7 @@ mod tests {
             pan: 0.0,
             loop_playback: false,
             fade_in_frames: 0,
+            fade_out_frames: 0,
             catch_up: true,
             restart_policy: RestartPolicy::Overlap,
         });
@@ -433,6 +410,7 @@ mod tests {
             DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 0.5, 0.25, 0.125] },
         );
         engine.schedule(ScheduledSound {
+            immediate: false,
             start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
@@ -441,10 +419,12 @@ mod tests {
             pan: 0.0,
             loop_playback: false,
             fade_in_frames: 0,
+            fade_out_frames: 0,
             catch_up: true,
             restart_policy: RestartPolicy::StopSameSound,
         });
         engine.schedule(ScheduledSound {
+            immediate: false,
             start_time: None,
             start_frame: 2,
             sample_offset_frames: 0,
@@ -453,6 +433,7 @@ mod tests {
             pan: 0.0,
             loop_playback: false,
             fade_in_frames: 0,
+            fade_out_frames: 0,
             catch_up: true,
             restart_policy: RestartPolicy::StopSameSound,
         });
@@ -505,6 +486,7 @@ mod tests {
         engine.insert_shared_sample_region(SoundId(2), source, 2, 4);
         engine.schedule_all([
             ScheduledSound {
+                immediate: false,
                 start_time: None,
                 start_frame: 0,
                 sample_offset_frames: 0,
@@ -513,10 +495,12 @@ mod tests {
                 pan: 0.0,
                 loop_playback: false,
                 fade_in_frames: 0,
+                fade_out_frames: 0,
                 catch_up: false,
                 restart_policy: RestartPolicy::Overlap,
             },
             ScheduledSound {
+                immediate: false,
                 start_time: None,
                 start_frame: 2,
                 sample_offset_frames: 0,
@@ -525,6 +509,7 @@ mod tests {
                 pan: 0.0,
                 loop_playback: false,
                 fade_in_frames: 0,
+                fade_out_frames: 0,
                 catch_up: false,
                 restart_policy: RestartPolicy::Overlap,
             },
@@ -574,6 +559,7 @@ mod tests {
 
         engine.schedule_all([
             ScheduledSound {
+                immediate: false,
                 start_time: None,
                 start_frame: 20,
                 sample_offset_frames: 0,
@@ -582,10 +568,12 @@ mod tests {
                 pan: 0.0,
                 loop_playback: false,
                 fade_in_frames: 0,
+                fade_out_frames: 0,
                 catch_up: true,
                 restart_policy: RestartPolicy::Overlap,
             },
             ScheduledSound {
+                immediate: false,
                 start_time: None,
                 start_frame: 10,
                 sample_offset_frames: 0,
@@ -594,6 +582,7 @@ mod tests {
                 pan: 0.0,
                 loop_playback: false,
                 fade_in_frames: 0,
+                fade_out_frames: 0,
                 catch_up: true,
                 restart_policy: RestartPolicy::Overlap,
             },
@@ -639,6 +628,7 @@ mod tests {
             DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5, 0.25] },
         );
         source.schedule(ScheduledSound {
+            immediate: false,
             start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
@@ -647,6 +637,7 @@ mod tests {
             pan: 0.0,
             loop_playback: false,
             fade_in_frames: 0,
+            fade_out_frames: 0,
             catch_up: false,
             restart_policy: RestartPolicy::Overlap,
         });
@@ -721,6 +712,7 @@ mod tests {
             DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0] },
         );
         engine.schedule(ScheduledSound {
+            immediate: false,
             start_time: None,
             start_frame: 2,
             sample_offset_frames: 0,
@@ -729,6 +721,7 @@ mod tests {
             pan: 0.0,
             loop_playback: false,
             fade_in_frames: 0,
+            fade_out_frames: 0,
             catch_up: true,
             restart_policy: RestartPolicy::Overlap,
         });
@@ -759,6 +752,7 @@ mod tests {
             DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5] },
         );
         engine.schedule(ScheduledSound {
+            immediate: false,
             start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
@@ -767,6 +761,7 @@ mod tests {
             pan: 0.0,
             loop_playback: false,
             fade_in_frames: 0,
+            fade_out_frames: 0,
             catch_up: true,
             restart_policy: RestartPolicy::Overlap,
         });

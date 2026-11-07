@@ -196,12 +196,7 @@ mod delivery_timing_tests {
     fn queue_immediate_sound(handle: &AudioEngineHandle, age: std::time::Duration) {
         handle.inner.queue.lock().unwrap().push_back(QueuedCommand {
             enqueued: Some(std::time::Instant::now() - age),
-            command: AudioEngineCommand::Schedule(ScheduledSound::one_shot(
-                0,
-                SoundId(1),
-                1.0,
-                0.0,
-            )),
+            command: AudioEngineCommand::Schedule(ScheduledSound::immediate(SoundId(1), 1.0, 0.0)),
             cancelled: None,
         });
     }
@@ -681,13 +676,13 @@ impl CommandedAudioEngine {
                 _ => &[],
             };
             for sound in sounds {
-                let late = if let Some(deadline) = sound.start_time {
+                let late = if sound.immediate {
+                    queue_wait_frames
+                } else if let Some(deadline) = sound.start_time {
                     crate::clock::duration_to_frames(
                         deadline.elapsed(),
                         engine.output_sample_rate(),
                     )
-                } else if sound.start_frame == 0 {
-                    queue_wait_frames
                 } else {
                     output_frame.saturating_sub(sound.start_frame)
                 };
@@ -789,7 +784,161 @@ fn update_atomic_max(atomic: &AtomicU64, value: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clock::OutputBufferTime;
+    use crate::queue::RestartPolicy;
     use crate::sample::DecodedSample;
+    use std::time::{Duration, Instant};
+
+    fn restart(mut sound: ScheduledSound) -> ScheduledSound {
+        sound.restart_policy = RestartPolicy::StopSameSound;
+        sound
+    }
+
+    fn render_live(
+        processor: &mut CommandedAudioEngine,
+        frame: u64,
+        start: Instant,
+        pcm: &mut [f32],
+    ) {
+        let time = OutputBufferTime::for_frames(start, pcm.len() / 2, 48_000);
+        assert!(processor.render_stereo_at(frame, pcm, Some(time)));
+    }
+
+    #[test]
+    fn late_short_bgm_cannot_cancel_the_new_key_attack() {
+        let start = Instant::now();
+        let mut bgm = restart(ScheduledSound::one_shot(0, SoundId(1), 0.5, 0.0));
+        bgm.start_time = Some(start - Duration::from_millis(60));
+        let key = restart(ScheduledSound::immediate(SoundId(1), 1.0, 0.0));
+        for requests in [[bgm, key], [key, bgm]] {
+            let handle = AudioEngineHandle::new(AudioEngine::new(48_000));
+            assert!(handle.insert_sample(
+                SoundId(1),
+                DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.75; 1_440] },
+            ));
+            for sound in requests {
+                assert!(handle.schedule_all(vec![sound]));
+            }
+            let mut pcm = [0.0; 4];
+            render_live(&mut handle.processor(), 48_000, start, &mut pcm);
+            assert_eq!(pcm, [0.75; 4]);
+        }
+    }
+
+    #[test]
+    fn tied_deadlines_keep_request_order_across_batches_and_staging() {
+        let start = Instant::now();
+        for immediate_last in [false, true] {
+            let mut engine = AudioEngine::new(48_000);
+            for id in [1, 2] {
+                engine.insert_sample(
+                    SoundId(id),
+                    DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0] },
+                );
+            }
+            let handle = AudioEngineHandle::new(engine);
+            let immediate = restart(ScheduledSound::immediate(SoundId(1), 0.5, 0.0));
+            let mut timed = restart(ScheduledSound::one_shot(900, SoundId(1), 0.25, 0.0));
+            timed.start_time = Some(start);
+            let pair = if immediate_last { [timed, immediate] } else { [immediate, timed] };
+            let mut staging = crate::queue::ScheduledSoundQueue::new();
+            staging.schedule(pair[0]);
+            staging.schedule(ScheduledSound::one_shot(48_000, SoundId(2), 0.125, 0.0));
+            staging.schedule(pair[1]);
+            let mut requests = staging.drain_in_request_order();
+            assert!(handle.schedule_all(requests.by_ref().take(1).collect()));
+            assert!(handle.schedule_all(requests.collect()));
+            let mut pcm = [0.0; 4];
+            render_live(&mut handle.processor(), 48_000, start, &mut pcm);
+            let head = if immediate_last { 0.625 } else { 0.375 };
+            assert_eq!(pcm, [head, head, 0.0, 0.0]);
+        }
+    }
+
+    #[test]
+    fn long_bgm_catches_up_and_restarts_at_later_deadlines() {
+        let start = Instant::now();
+        let mut engine = AudioEngine::new(48_000);
+        let mut frames = vec![0.125; 4_800];
+        frames[0] = 0.75;
+        frames[2_880] = 0.5;
+        engine
+            .insert_sample(SoundId(1), DecodedSample { channels: 1, sample_rate: 48_000, frames });
+        let handle = AudioEngineHandle::new(engine);
+        let mut processor = handle.processor();
+        let mut bgm = restart(ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0));
+        bgm.start_time = Some(start - Duration::from_millis(60));
+        assert!(handle.schedule_sound(bgm));
+        let mut pcm = [0.0; 2];
+        render_live(&mut processor, 48_000, start, &mut pcm);
+        assert_eq!(pcm, [0.5; 2]);
+
+        let next = start + Duration::from_millis(1);
+        let key = restart(ScheduledSound::immediate(SoundId(1), 1.0, 0.0));
+        let mut later = bgm;
+        later.volume = 0.5;
+        later.start_time = Some(next + Duration::from_millis(1));
+        assert!(handle.schedule_all(vec![key, bgm]));
+        assert!(handle.schedule_sound(later));
+        let mut pcm = [0.0; 192];
+        render_live(&mut processor, 48_048, next, &mut pcm);
+        assert_eq!(pcm[..4], [0.75, 0.75, 0.125, 0.125]);
+        assert_eq!(pcm[94..100], [0.125, 0.125, 0.375, 0.375, 0.0625, 0.0625]);
+
+        // A separate callback receives another older BGM after the restart
+        // has already reached the mixer. The active, newer voice wins.
+        assert!(handle.schedule_sound(bgm));
+        render_live(&mut processor, 48_144, next + Duration::from_millis(2), &mut pcm);
+        assert!(pcm.iter().all(|&sample| sample == 0.0625));
+    }
+
+    #[test]
+    fn offline_frame_zero_still_catches_up_but_immediate_starts_at_head() {
+        let mut engine = AudioEngine::new(48_000);
+        let sample =
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5, 0.125, 0.25] };
+        engine.insert_sample(SoundId(1), sample.clone());
+        engine.insert_sample(SoundId(2), sample);
+        engine.schedule(ScheduledSound::one_shot(0, SoundId(1), 1.0, -1.0));
+        engine.schedule(ScheduledSound::immediate(SoundId(2), 1.0, 1.0));
+        let mut pcm = [0.0; 4];
+        engine.render_stereo(2, &mut pcm);
+        assert_eq!(pcm, [0.25, 0.5, 0.0, 0.125]);
+    }
+
+    #[test]
+    fn queued_immediate_and_timed_requests_survive_pause_and_rate_change() {
+        let start = Instant::now();
+        let mut engine = AudioEngine::new(48_000);
+        let mut frames = vec![0.125; 8_000];
+        frames[0] = 0.75;
+        engine
+            .insert_sample(SoundId(1), DecodedSample { channels: 1, sample_rate: 48_000, frames });
+        let handle = AudioEngineHandle::new(engine);
+        let mut processor = handle.processor();
+        let key = restart(ScheduledSound::immediate(SoundId(1), 0.5, 0.0));
+        let mut later = restart(ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0));
+        later.start_time = Some(start + Duration::from_millis(100));
+        assert!(handle.schedule_all(vec![key, later]));
+        assert!(handle.set_playback_paused_at(true, start));
+        let mut pcm = [0.0; 192];
+        render_live(&mut processor, 48_000, start, &mut pcm);
+        assert_eq!(pcm, [0.0; 192]);
+
+        assert!(handle.apply_playback_rate_change(crate::clock::PlaybackRateChange {
+            changed_at: Some(start + Duration::from_millis(500)),
+            anchor_output_frame: 72_000,
+            old_rate_percent: 100,
+            new_rate_percent: 200,
+        }));
+        let resume = start + Duration::from_secs(1);
+        assert!(handle.set_playback_paused_at(false, resume));
+        assert!(handle.schedule_sound(ScheduledSound { volume: 1.0, ..key }));
+        render_live(&mut processor, 96_000, resume, &mut pcm);
+        assert_eq!(pcm[..4], [0.75, 0.75, 0.125, 0.125]);
+        render_live(&mut processor, 98_352, resume + Duration::from_millis(49), &mut pcm);
+        assert_eq!(pcm[94..100], [0.125, 0.125, 0.75, 0.75, 0.125, 0.125]);
+    }
 
     #[test]
     fn terminal_stop_survives_full_queue_contention_and_worker_retirement() {
