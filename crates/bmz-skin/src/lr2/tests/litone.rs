@@ -128,7 +128,7 @@ fn lr2_single_custom_offset_loads_as_document() {
 fn litone5_installed_definitions_load_when_available() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/LITONE5");
     let mut failures = Vec::new();
-    for (relative, kind) in [
+    for (relative, _kind) in [
         ("Select/select.lr2skin", crate::SkinKind::Select),
         ("Decide/decide.lr2skin", crate::SkinKind::Decide),
         ("Result/result.lr2skin", crate::SkinKind::Result),
@@ -144,7 +144,15 @@ fn litone5_installed_definitions_load_when_available() {
             eprintln!("SKIP missing {}", path.display());
             continue;
         }
-        match crate::load_lr2_csv_skin(&path, kind, &BTreeMap::new(), &BTreeMap::new()) {
+        match crate::load_lr2_csv_skin_with_path_context(
+            &installed_skin_context(&path),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &crate::LuaLoadRuntimeState {
+                option_values: [(90, true)].into(),
+                ..Default::default()
+            },
+        ) {
             Ok(loaded) => {
                 eprintln!(
                     "LITONE5 {relative}: {} images, {} destinations, {} warnings",
@@ -175,7 +183,16 @@ fn litone5_ac9_installed_graph_selections_load_when_available() {
         return;
     }
     let load = |files: &BTreeMap<String, String>| {
-        crate::load_lr2_csv_skin(&path, crate::SkinKind::Play, &BTreeMap::new(), files).unwrap()
+        crate::load_lr2_csv_skin_with_path_context(
+            &installed_skin_context(&path),
+            &BTreeMap::new(),
+            files,
+            &crate::LuaLoadRuntimeState {
+                option_values: [(90, true)].into(),
+                ..Default::default()
+            },
+        )
+        .unwrap()
     };
     let defaults = load(&BTreeMap::new());
     let mut files = BTreeMap::new();

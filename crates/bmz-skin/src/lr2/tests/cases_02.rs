@@ -590,7 +590,14 @@ fn wmii_lr2_bombs_and_key_beams_follow_lift_when_available() {
         return;
     }
 
-    let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let loaded = load_lr2_csv_skin_value_with_path_context(
+        &installed_skin_context(&path),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::from([(90, true)]),
+        &Default::default(),
+    )
+    .unwrap();
     let destinations = loaded.value["destination"].as_array().expect("destination array");
     let mut bomb_count = 0;
     let mut key_beam_count = 0;

@@ -179,9 +179,8 @@ fn wmix_course_result_emits_stage_levels_from_course_options() {
         option_values: [(580, true), (581, true), (704, true), (710, true)].into(),
         ..Default::default()
     };
-    let loaded = crate::load_lr2_csv_skin_with_runtime_state(
-        &path,
-        crate::SkinKind::Result,
+    let loaded = crate::load_lr2_csv_skin_with_path_context(
+        &installed_skin_context(&path),
         &BTreeMap::new(),
         &BTreeMap::new(),
         &runtime_state,
@@ -226,8 +225,16 @@ fn lr2_scene_assets_decode_when_available() {
             eprintln!("SKIP missing {relative}");
             continue;
         }
-        let loaded =
-            crate::load_lr2_csv_skin(&path, kind, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+        let loaded = crate::load_lr2_csv_skin_with_path_context(
+            &installed_skin_context(&path),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &crate::LuaLoadRuntimeState {
+                option_values: [(90, true)].into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let warnings = loaded.warnings.iter().map(|w| &w.message).collect::<BTreeSet<_>>();
         eprintln!(
             "{relative}: {} images, {} destinations, {:?}",

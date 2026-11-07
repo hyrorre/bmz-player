@@ -140,7 +140,14 @@ fn installed_result_skins_detect_update_stage_when_available() {
         if !path.is_file() {
             continue;
         }
-        let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+        let loaded = load_lr2_csv_skin_value_with_path_context(
+            &installed_skin_context(&path),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::from([(90, true)]),
+            &Default::default(),
+        )
+        .unwrap();
         assert_eq!(loaded.value["lr2Result"]["update_stage"], expected, "{skin}");
     }
 }
@@ -154,11 +161,12 @@ fn wmix_play_selects_best_clear_source_before_result_continues_when_available() 
     }
     for (option, name) in [(100, "NOPLAY.png"), (104, "HARDCLEAR.png"), (105, "FULLCOMBO.png")] {
         let runtime = (100..=105).map(|id| (id, id == option)).collect();
-        let loaded = load_lr2_csv_skin_value_with_runtime_options(
-            &path,
+        let loaded = load_lr2_csv_skin_value_with_path_context(
+            &installed_skin_context(&path),
             &BTreeMap::new(),
             &BTreeMap::new(),
             &runtime,
+            &Default::default(),
         )
         .unwrap();
         assert!(loaded.value["source"][23]["path"].as_str().unwrap().ends_with(name));
@@ -176,10 +184,12 @@ fn wmix_left_and_right_load_only_their_selected_file_when_available() {
     for (side, suffix, absent) in
         [("Left", "result_L.csv", "result_R.csv"), ("Right", "result_R.csv", "result_L.csv")]
     {
-        let loaded = load_lr2_csv_skin_value(
-            &path,
+        let loaded = load_lr2_csv_skin_value_with_path_context(
+            &installed_skin_context(&path),
             &BTreeMap::from([("side".into(), side.into())]),
             &BTreeMap::new(),
+            &BTreeMap::from([(90, true)]),
+            &Default::default(),
         )
         .unwrap();
         assert!(loaded.dependencies.loaded_files.keys().any(|p| p.ends_with(suffix)));

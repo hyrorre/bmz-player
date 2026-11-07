@@ -155,11 +155,11 @@ fn litone5_select_installed_drawing_definitions_load_when_available() {
         eprintln!("SKIP missing {}", path.display());
         return;
     }
-    let loaded = crate::load_lr2_csv_skin(
-        &path,
-        crate::SkinKind::Select,
+    let loaded = crate::load_lr2_csv_skin_with_path_context(
+        &installed_skin_context(&path),
         &BTreeMap::new(),
         &BTreeMap::new(),
+        &crate::LuaLoadRuntimeState { option_values: [(90, true)].into(), ..Default::default() },
     )
     .unwrap();
     assert_eq!(loaded.document.judgegraph.len(), 2);

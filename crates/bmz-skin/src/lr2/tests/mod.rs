@@ -5,6 +5,11 @@ fn unique_test_dir(name: &str) -> crate::tests::TestDir {
     crate::tests::TestDir::created(name)
 }
 
+fn installed_skin_context(path: &Path) -> crate::SkinPathContext {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins");
+    crate::SkinPathContext::new(path, [root]).unwrap()
+}
+
 #[path = "cases_01.rs"]
 mod cases_01;
 #[path = "cases_02.rs"]
