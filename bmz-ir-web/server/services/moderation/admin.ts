@@ -17,6 +17,7 @@ import { alias } from 'drizzle-orm/sqlite-core'
 import type { BatchItem } from 'drizzle-orm/batch'
 import { db, schema } from 'hub:db'
 import { banSessionStatements } from '../../utils/auth_tokens'
+import { inChunks } from '../../utils/d1'
 import {
   CHART_MODERATION_STATUSES,
   MAX_CHART_MODERATION_BATCH_SIZE,
@@ -1146,15 +1147,6 @@ async function displayNames(ids: string[]): Promise<Map<string, string>> {
       .where(inArray(schema.profiles.id, chunk)),
   )
   return new Map(rows.map((row) => [row.id, row.display_name]))
-}
-
-// D1 は1クエリあたり bind parameter が100個まで。IN 句は分割して実行する。
-async function inChunks<T>(values: string[], run: (chunk: string[]) => Promise<T[]>) {
-  const rows: T[] = []
-  for (let offset = 0; offset < values.length; offset += 90) {
-    rows.push(...(await run(values.slice(offset, offset + 90))))
-  }
-  return rows
 }
 
 function pagination(limit: number, offset: number, total: number) {

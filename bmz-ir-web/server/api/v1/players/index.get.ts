@@ -2,10 +2,14 @@ import { and, desc, inArray, sql, type SQL } from 'drizzle-orm'
 import { getQuery } from 'h3'
 import { db, schema } from 'hub:db'
 import {
+  CHART_VISIBILITY_BIND_COUNT,
   publicChartCondition,
   publicCourseCondition,
   publicPlayerCondition,
 } from '../../../services/moderation/visibility'
+import { D1_BIND_LIMIT, inChunks } from '../../../utils/d1'
+
+const STATS_CHUNK_SIZE = D1_BIND_LIMIT - CHART_VISIBILITY_BIND_COUNT
 
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
@@ -42,9 +46,11 @@ export default defineEventHandler(async (event) => {
   const total = Number(countRows[0]?.total ?? 0)
   const playerIds = profiles.map((profile) => profile.id)
 
-  const bestScoreRows =
-    playerIds.length > 0
-      ? await db
+  const [bestScoreRows, bestCourseRows] = await Promise.all([
+    inChunks(
+      playerIds,
+      (ids) =>
+        db
           .select({
             player_id: schema.bestScores.playerId,
             best_score_count: sql<number>`count(*)`,
@@ -53,16 +59,17 @@ export default defineEventHandler(async (event) => {
           .from(schema.bestScores)
           .where(
             and(
-              inArray(schema.bestScores.playerId, playerIds),
+              inArray(schema.bestScores.playerId, ids),
               publicChartCondition(schema.bestScores.chartSha256),
             ),
           )
-          .groupBy(schema.bestScores.playerId)
-      : []
-
-  const bestCourseRows =
-    playerIds.length > 0
-      ? await db
+          .groupBy(schema.bestScores.playerId),
+      STATS_CHUNK_SIZE,
+    ),
+    inChunks(
+      playerIds,
+      (ids) =>
+        db
           .select({
             player_id: schema.bestCourseScores.playerId,
             best_course_score_count: sql<number>`count(*)`,
@@ -73,12 +80,14 @@ export default defineEventHandler(async (event) => {
           .from(schema.bestCourseScores)
           .where(
             and(
-              inArray(schema.bestCourseScores.playerId, playerIds),
+              inArray(schema.bestCourseScores.playerId, ids),
               publicCourseCondition(schema.bestCourseScores.courseHash),
             ),
           )
-          .groupBy(schema.bestCourseScores.playerId)
-      : []
+          .groupBy(schema.bestCourseScores.playerId),
+      STATS_CHUNK_SIZE,
+    ),
+  ])
 
   const bestScoreMap = new Map(bestScoreRows.map((row) => [row.player_id, row]))
   const bestCourseMap = new Map(bestCourseRows.map((row) => [row.player_id, row]))

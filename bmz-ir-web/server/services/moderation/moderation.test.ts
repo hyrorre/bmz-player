@@ -11,7 +11,16 @@ import type { IrScoreSubmission } from '../../../shared/types/ir'
 
 // 実際の migration を適用した in-memory SQLite で、認証・送信・公開読み取り・管理操作を通して確認する。
 const client = createClient({ url: 'file::memory:' })
-const db = drizzle(client, { schema })
+const db = drizzle(client, {
+  schema,
+  logger: {
+    logQuery(query, params) {
+      if (params.length > 100) {
+        throw new RangeError(`D1 bind limit exceeded (${params.length}): ${query}`)
+      }
+    },
+  },
+})
 // 本番の D1 の batch は、bind できるクエリビルダーしか受け付けない。libsql は `db.run(sql)` の
 // raw query も batch に載せられてしまうため、テストでも D1 と同じ制約を課す。
 const libsqlBatch = db.batch.bind(db)
@@ -1380,6 +1389,93 @@ function coursePayload(charts: string[], key: string, exScore = 100) {
 }
 
 describe('rankings, courses, and aggregates', () => {
+  test.each([99, 100])(
+    'player pages with limit=%i keep both statistics within D1 limits',
+    async (limit) => {
+      const ids = Array.from({ length: 102 }, (_, i) => `page-${i}`)
+      for (const [i, id] of [...ids, 'page-banned'].entries()) {
+        await db
+          .insert(schema.users)
+          .values({ id, email: `${id}@example.invalid`, passwordHash: 'test' })
+        await db.insert(schema.profiles).values({
+          id,
+          displayName: id,
+          updatedAt: new Date(Date.UTC(2026, 0, 1) - i * 1000),
+        })
+      }
+      await db
+        .update(schema.profiles)
+        .set({ updatedAt: new Date('2026-02-01') })
+        .where(eq(schema.profiles.id, 'page-banned'))
+      await setUserStatus('page-banned', 'banned')
+
+      const blocked = 'c'.repeat(64)
+      const publicCourse = computeCourseHash([CHART_A], {})
+      for (const [i, id] of ids.slice(98, 100).entries()) {
+        for (const sha256 of [CHART_A, CHART_B, blocked]) {
+          expect(
+            (await submitScore({ id }, submission({ sha256, key: sha256 }), [], 10)).accepted,
+          ).toBeTrue()
+        }
+        for (const charts of [[CHART_A], [CHART_A, CHART_B], [CHART_A, blocked]]) {
+          await submitCourseScore({ id }, coursePayload(charts, computeCourseHash(charts, {})))
+        }
+        await db
+          .update(schema.bestScores)
+          .set({ serverReceivedAt: new Date('2026-01-02') })
+          .where(
+            and(eq(schema.bestScores.playerId, id), eq(schema.bestScores.chartSha256, CHART_A)),
+          )
+        await db
+          .update(schema.bestCourseScores)
+          .set({ serverReceivedAt: new Date(Date.UTC(2026, 0, 3 + i)) })
+          .where(
+            and(
+              eq(schema.bestCourseScores.playerId, id),
+              eq(schema.bestCourseScores.courseHash, publicCourse),
+            ),
+          )
+      }
+      await setChartStatus(CHART_B, 'hidden')
+      await setChartStatus(blocked, 'blocked')
+
+      const page = await playersIndexHandler(
+        event({ path: `/api/v1/players?q=page-&limit=${limit}` }),
+      )
+      const scored = ids.slice(98, limit).reverse()
+      expect(page.players.map((player: { id: string }) => player.id)).toEqual([
+        ...scored,
+        ...ids.slice(0, 98),
+      ])
+      expect(page.pagination).toEqual({ limit, offset: 0, total: 102, has_more: true })
+      for (const [i, id] of ids.slice(98, limit).entries()) {
+        expect(page.players.find((player: { id: string }) => player.id === id)).toMatchObject({
+          best_score_count: 1,
+          best_course_score_count: 1,
+          last_score_at: new Date(Date.UTC(2026, 0, 3 + i)).toISOString(),
+        })
+      }
+      expect(page.players.at(-1)).toMatchObject({
+        best_score_count: 0,
+        best_course_score_count: 0,
+        last_score_at: null,
+      })
+
+      const tail = await playersIndexHandler(
+        event({ path: `/api/v1/players?q=page-&limit=${limit}&offset=${limit}` }),
+      )
+      expect(tail.players.map((player: { id: string }) => player.id)).toEqual(ids.slice(limit))
+      expect(tail.pagination).toEqual({ limit, offset: limit, total: 102, has_more: false })
+      const empty = await playersIndexHandler(
+        event({ path: '/api/v1/players?limit=100&q=no-match' }),
+      )
+      expect(empty).toEqual({
+        players: [],
+        pagination: { limit: 100, offset: 0, total: 0, has_more: false },
+      })
+    },
+  )
+
   test('banned players are excluded before ranking, paging, totals, and clear rate', async () => {
     await submitScore({ id: 'alice' }, submission({ exScore: 300 }), [], 10)
     await submitScore({ id: 'bob' }, submission({ exScore: 200, clear: 'failed' }), [], 10)

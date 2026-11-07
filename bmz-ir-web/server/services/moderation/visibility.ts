@@ -18,6 +18,8 @@ const nonPublicChartStatuses = sql.join(
   NON_PUBLIC_CHART_STATUSES.map((status) => sql`${status}`),
   sql`, `,
 )
+// Both publicChartCondition and publicCourseCondition bind this list once.
+export const CHART_VISIBILITY_BIND_COUNT = NON_PUBLIC_CHART_STATUSES.length
 
 /** プレイヤーが BAN されていないこと。submit_suspended は公開を維持する。 */
 export function publicPlayerCondition(playerId: AnySQLiteColumn | SQL): SQL {
