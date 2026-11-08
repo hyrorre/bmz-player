@@ -40,3 +40,10 @@
 - 移動中に時間を変更した場合は、その時点の表示倍率から新しい時間でつなぎ直します。0msに変更すると、同じ目標倍率のまま即座に移動を完了します。
 - 時間変更による位置の連続性・0msへの切り替えと、既存workerで0ms / 1000msへ切り替わる経路を回帰テストに追加しました。
 - 最終差分のfmt、check、all-targets Clippyと全テストが成功しました（2963 passed、57 ignored、別の起動テスト2件もignored）。ログは `.local/hispeed-live-all-tests.log` です。今回の即時反映に関する実ウィンドウの手動操作とmacOS / Linuxは未確認です。
+
+## 2026-11-08追記: easeOutCubicへの変更
+
+- HS変更時の表示倍率の補間を、線形からeaseOutCubic（`1 - (1 - t)^3`）へ変更しました。既定200ms、0〜1000msの範囲、設定の即時反映は維持します。
+- 再操作と時間変更は現在の表示倍率からつなぎ直し、0msは即座に完了します。
+- 1/4・1/2・3/4時点の倍率、再操作の連続性、時間の変更、0msの境界を既存テストで確認しました。通常ノート・LN・地雷・小節線・判定領域のprojectionテストもcubicの期待値に更新しました。
+- fmt、check、all-targets Clippy、全テストが成功しました（2963 passed、57 ignored、別の起動テスト2件もignored）。ログは `.local/hispeed-cubic-tests.log` です。今回の実プレイの手動操作とmacOS / Linuxは未確認です。

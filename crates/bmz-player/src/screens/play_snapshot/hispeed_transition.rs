@@ -25,7 +25,8 @@ impl HispeedTransition {
             return self.target;
         }
         let progress = (elapsed.as_secs_f64() / self.duration.as_secs_f64()) as f32;
-        self.from + (self.target - self.from) * progress
+        let eased = 1.0 - (1.0 - progress).powi(3);
+        self.from + (self.target - self.from) * eased
     }
 
     pub(crate) fn retarget(&mut self, target: f32, now: Instant, duration: Duration) {
@@ -44,20 +45,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn linear_motion_retargets_without_a_position_jump() {
+    fn ease_out_cubic_retargets_without_a_position_jump() {
         let start = Instant::now();
         let duration = Duration::from_millis(500);
         let mut transition = HispeedTransition::new(1.0);
         transition.retarget(3.0, start, duration);
-        for (ms, expected) in [(0, 1.0), (125, 1.5), (250, 2.0), (500, 3.0), (1000, 3.0)] {
+        for (ms, expected) in
+            [(0, 1.0), (125, 2.15625), (250, 2.75), (375, 2.96875), (500, 3.0), (1000, 3.0)]
+        {
             assert_eq!(transition.value_at(start + Duration::from_millis(ms)), expected);
         }
         let midway = start + Duration::from_millis(250);
         transition.retarget(1.0, midway, duration);
-        assert_eq!(transition.value_at(midway), 2.0);
+        assert_eq!(transition.value_at(midway), 2.75);
         // Unchanged observations must not restart the segment.
         transition.retarget(1.0, midway + duration / 2, duration);
-        assert_eq!(transition.value_at(midway + duration / 2), 1.5);
+        assert_eq!(transition.value_at(midway + duration / 2), 1.21875);
         assert_eq!(transition.value_at(midway + duration), 1.0);
     }
 
@@ -68,8 +71,8 @@ mod tests {
         transition.retarget(3.0, start, Duration::from_millis(500));
         let changed_at = start + Duration::from_millis(125);
         transition.retarget(3.0, changed_at, Duration::from_millis(1000));
-        assert_eq!(transition.value_at(changed_at), 1.5);
-        assert_eq!(transition.value_at(changed_at + Duration::from_millis(500)), 2.25);
+        assert_eq!(transition.value_at(changed_at), 2.15625);
+        assert_eq!(transition.value_at(changed_at + Duration::from_millis(500)), 2.8945313);
         assert_eq!(transition.value_at(changed_at + Duration::from_millis(1000)), 3.0);
         transition.retarget(3.0, changed_at + Duration::from_millis(500), Duration::ZERO);
         assert_eq!(transition.value_at(changed_at + Duration::from_millis(500)), 3.0);

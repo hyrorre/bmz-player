@@ -157,18 +157,28 @@ fn mixed_chart() -> PlayableChart {
 }
 
 #[test]
-fn hispeed_motion_projects_every_object_linearly_across_publications_and_stalls() {
+fn hispeed_motion_projects_every_object_with_cubic_easing_across_publications_and_stalls() {
     use std::time::Duration;
 
     let mut session = session(mixed_chart());
     session.assist.judge_area = true;
     let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
     let start = Instant::now();
-    for duration_ms in [0, 500, 1000] {
+    for duration_ms in [0, 200, 500, 1000] {
         let mut transition = HispeedTransition::new(1.0);
         transition.retarget(2.0, start, Duration::from_millis(duration_ms));
         let mut pool = PlayfieldProjection::pool(&session, &cache);
-        for (index, elapsed_ms) in [0, 125, 250, 500, 1000, 2000].into_iter().enumerate() {
+        for (index, (elapsed_ms, eased)) in [
+            (0, 0.0),
+            (duration_ms / 4, 0.578125),
+            (duration_ms / 2, 0.875),
+            (duration_ms * 3 / 4, 0.984375),
+            (duration_ms, 1.0),
+            (duration_ms * 2, 1.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
             // A new producer buffer must carry the original segment. Simulate
             // both normal publications and a gap longer than the full motion.
             session.hispeed = 2.0;
@@ -183,12 +193,7 @@ fn hispeed_motion_projects_every_object_linearly_across_publications_and_stalls(
                 &mut clock,
                 start + Duration::from_millis(elapsed_ms),
             );
-            let progress = if duration_ms == 0 {
-                1.0
-            } else {
-                (elapsed_ms as f32 / duration_ms as f32).min(1.0)
-            };
-            session.hispeed = 1.0 + progress;
+            session.hispeed = if duration_ms == 0 { 2.0 } else { 1.0 + eased };
             let mut expected = build_render_snapshot_with_target_and_bga_frames_cached(
                 &session,
                 TimeUs(0),

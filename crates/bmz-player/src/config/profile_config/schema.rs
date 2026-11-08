@@ -1053,7 +1053,7 @@ impl JudgeAlgorithmConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LaneViewConfig {
-    /// Real-time linear movement duration after a hispeed change.
+    /// Real-time ease-out movement duration after a hispeed change.
     #[serde(default = "default_hispeed_transition_ms")]
     pub hispeed_transition_ms: u32,
     #[serde(rename = "classic_hispeed", alias = "hispeed")]
