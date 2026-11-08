@@ -904,6 +904,10 @@ Luaの`main_state.timer(id)`はシーン基準の開始時刻（マイクロ秒�
 `main_state.timer_off_value`を使います。timer callbackのnilはbeatorajaと同じく開始時刻0、
 例外・非有限値・命令数上限超過はOFFとして扱い、失敗の診断はcallbackごとに1回出します。
 
+ターンテーブルの回転offset（1P: 1、2P: 2）はPlay画面の経過時間で更新します。
+READY中も回転を続け、譜面時刻0をまたいでも回転角をリセットしません。
+スクラッチ入力による累積回転量はgameplay側の確定値を加え、通常の回転速度は再生速度に依存しません。
+
 Play中のボム・KEYON・判定・PLAY等のtimerは譜面時刻、`main_state.time()`は画面の経過時間で
 数えるため、両者から逆算した開始時刻はフレームごとに揺れます。beatorajaは1回の起動につき
 同じ開始時刻を返し、ModernChicのプレイ状況詳細モードや攻撃演出は開始時刻の変化で打鍵・判定を

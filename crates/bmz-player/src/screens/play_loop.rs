@@ -377,10 +377,11 @@ fn flush_keysound_volumes_commands(
 
 pub fn consume_running_play_snapshot(
     running: &mut RunningPlaySession,
+    play_elapsed_time: TimeUs,
 ) -> Result<FrameOutput<RenderSnapshot>> {
     let mut frame = running
         .gameplay
-        .poll()
+        .poll_with_play_elapsed(play_elapsed_time)
         .ok_or_else(|| anyhow!("gameplay runtime has no published frame"))?;
     apply_running_play_target_to_snapshot(&mut frame.render_snapshot, running);
     Ok(frame)
@@ -430,21 +431,22 @@ pub fn refresh_play_ending_snapshot(
     running: &mut RunningPlaySession,
     timers: PlayEndingSkinTimers,
 ) -> RenderSnapshot {
-    let mut snapshot = if let Some(frame) = running.gameplay.poll() {
-        frame.render_snapshot
-    } else {
-        let session = running.gameplay.prepared_session().expect("prepared or running session");
-        build_render_snapshot_with_target_and_bga_frames_cached(
-            session,
-            session.audio_clock.now(),
-            &session.recent_judgements,
-            running.best_ex_score,
-            running.best_ghost.as_deref(),
-            running.target_ex_score,
-            &running.bga_frames,
-            &running.render_snapshot_cache,
-        )
-    };
+    let mut snapshot =
+        if let Some(frame) = running.gameplay.poll_with_play_elapsed(timers.play_elapsed_time) {
+            frame.render_snapshot
+        } else {
+            let session = running.gameplay.prepared_session().expect("prepared or running session");
+            build_render_snapshot_with_target_and_bga_frames_cached(
+                session,
+                session.audio_clock.now(),
+                &session.recent_judgements,
+                running.best_ex_score,
+                running.best_ghost.as_deref(),
+                running.target_ex_score,
+                &running.bga_frames,
+                &running.render_snapshot_cache,
+            )
+        };
     snapshot.play_elapsed_time = timers.play_elapsed_time;
     snapshot.ready_elapsed_time = timers.ready_elapsed_time;
     snapshot.backbmp_background = timers.backbmp_background;

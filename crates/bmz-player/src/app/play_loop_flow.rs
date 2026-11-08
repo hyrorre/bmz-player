@@ -57,7 +57,8 @@ impl WinitApp {
             return;
         };
 
-        let advance_outcome = consume_running_play_snapshot(&mut active_play.running);
+        let advance_outcome =
+            consume_running_play_snapshot(&mut active_play.running, play_elapsed_time);
         match advance_outcome {
             Ok(frame)
                 if !matches!(
@@ -87,7 +88,6 @@ impl WinitApp {
                 );
                 crate::animated_bga::apply_channel_textures(&mut snapshot, &channel_textures);
                 self.apply_profile_fast_slow_filter(&mut snapshot);
-                snapshot.play_elapsed_time = play_elapsed_time;
                 snapshot.ready_elapsed_time = ready_elapsed_time;
                 snapshot.seamless_play_entry = seamless_play_entry;
                 snapshot.stagefile_background = stagefile_background;
@@ -110,7 +110,6 @@ impl WinitApp {
                 {
                     let failed = frame.state == bmz_gameplay::session::PlayState::Failed;
                     let mut snapshot = frame.render_snapshot;
-                    snapshot.play_elapsed_time = play_elapsed_time;
                     snapshot.ready_elapsed_time = ready_elapsed_time;
                     snapshot.seamless_play_entry = seamless_play_entry;
                     snapshot.stagefile_background = stagefile_background;
@@ -189,7 +188,6 @@ impl WinitApp {
                 };
                 let hispeed = Some(active_play.running.session.display_hispeed);
                 let mut snapshot = frame.render_snapshot;
-                snapshot.play_elapsed_time = play_elapsed_time;
                 snapshot.ready_elapsed_time = ready_elapsed_time;
                 snapshot.seamless_play_entry = seamless_play_entry;
                 snapshot.stagefile_background = stagefile_background;

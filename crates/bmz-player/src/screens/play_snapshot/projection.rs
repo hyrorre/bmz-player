@@ -71,6 +71,7 @@ pub(crate) struct PlayfieldProjection {
     duration_lane_cover: f32,
     playback_rate_percent: u16,
     chart_miss_text: ChartMissTextClock,
+    lane_scratch_angle_delta_ms: [i64; LANE_COUNT],
 }
 
 impl PlayfieldProjection {
@@ -99,6 +100,7 @@ impl PlayfieldProjection {
                 duration_lane_cover: 0.0,
                 playback_rate_percent: session.audio_clock.playback_rate_percent(),
                 chart_miss_text: ChartMissTextClock::from_session(session),
+                lane_scratch_angle_delta_ms: session.lane_scratch_angle_delta_ms,
             };
             projection.update(session, projection.published_time);
             Arc::new(projection)
@@ -129,6 +131,23 @@ impl PlayfieldProjection {
         };
         self.playback_rate_percent = session.audio_clock.playback_rate_percent();
         self.chart_miss_text = ChartMissTextClock::from_session(session);
+        self.lane_scratch_angle_delta_ms = session.lane_scratch_angle_delta_ms;
+    }
+
+    /// Turntables use the Play scene clock, including the negative chart-time READY countdown.
+    /// Keep the producer's input phase; only the idle rotation advances at render time.
+    pub(crate) fn apply_play_elapsed_time(
+        &self,
+        snapshot: &mut RenderSnapshot,
+        play_elapsed_time: TimeUs,
+    ) {
+        snapshot.play_elapsed_time = play_elapsed_time;
+        set_scratch_angle_offsets(
+            &mut snapshot.skin_offsets,
+            self.chart.metadata.key_mode,
+            play_elapsed_time,
+            &self.lane_scratch_angle_delta_ms,
+        );
     }
 
     pub(crate) fn set_hispeed_transition(&mut self, transition: HispeedTransition) {

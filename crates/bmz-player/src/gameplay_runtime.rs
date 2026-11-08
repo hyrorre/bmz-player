@@ -244,6 +244,18 @@ impl GameplayClient {
         self.final_notes_processed.load(Ordering::Acquire)
     }
 
+    /// Project visual motion at the consumer's Play scene time, independent of chart time.
+    pub fn poll_with_play_elapsed(
+        &mut self,
+        play_elapsed_time: TimeUs,
+    ) -> Option<FrameOutput<RenderSnapshot>> {
+        let mut frame = self.poll()?;
+        self.projection
+            .as_ref()?
+            .apply_play_elapsed_time(&mut frame.render_snapshot, play_elapsed_time);
+        Some(frame)
+    }
+
     pub fn poll(&mut self) -> Option<FrameOutput<RenderSnapshot>> {
         let worker = self.worker.as_ref()?;
         worker.snapshot_requested.store(true, Ordering::Release);

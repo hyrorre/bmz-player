@@ -214,21 +214,10 @@ pub fn refresh_pending_play_input_visuals(
         lane_keyoff_started_at[lane_index]
             .map(|started_at| skin_timer_elapsed_ms(input_elapsed, started_at))
     });
-    let active_lanes = key_mode.active_lanes();
-    if active_lanes.contains(&Lane::Scratch) {
-        set_scratch_angle_offset(
-            &mut snapshot.skin_offsets,
-            SCRATCH_ANGLE_OFFSET_1P,
-            input_elapsed,
-            lane_scratch_angle_delta_ms[Lane::Scratch.index()],
-        );
-    }
-    if active_lanes.contains(&Lane::Scratch2) {
-        set_scratch_angle_offset(
-            &mut snapshot.skin_offsets,
-            SCRATCH_ANGLE_OFFSET_2P,
-            input_elapsed,
-            lane_scratch_angle_delta_ms[Lane::Scratch2.index()],
-        );
-    }
+    set_scratch_angle_offsets(
+        &mut snapshot.skin_offsets,
+        key_mode,
+        input_elapsed,
+        &lane_scratch_angle_delta_ms,
+    );
 }

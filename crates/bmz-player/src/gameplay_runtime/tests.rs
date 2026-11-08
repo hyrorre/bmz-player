@@ -484,6 +484,88 @@ fn autoplay_and_replay_are_invariant_to_render_stalls() {
 }
 
 #[test]
+fn renderer_turntables_follow_scene_time_through_ready_and_chart_start() {
+    use bmz_gameplay::session::PlaySkinOffset;
+    use bmz_render::skin_offset::SkinOffsetValue;
+
+    for key_mode in [KeyMode::K7, KeyMode::K14] {
+        for rate in [50, 100, 200] {
+            let mut session = prepared(SharedInputBackend::default());
+            Arc::make_mut(&mut session.chart).metadata.key_mode = key_mode;
+            session.audio_clock.chart_zero_time_us = -1_000_000;
+            session.audio_clock.set_playback_rate_percent(rate);
+            session.lane_scratch_angle_delta_ms[Lane::Scratch.index()] = 120;
+            session.lane_scratch_angle_delta_ms[Lane::Scratch2.index()] = -60;
+            for id in [1, 2, 42] {
+                session.skin_offsets.push(PlaySkinOffset {
+                    id,
+                    x: 1,
+                    y: 2,
+                    w: 3,
+                    h: 4,
+                    r: 5,
+                    a: -6,
+                });
+            }
+            let audio = AudioEngineHandle::new(AudioEngine::new(1_000_000));
+            let config = config(&session, Arc::new(RuntimeProbe::default()));
+            let mut client = GameplayClient::new(session);
+            client.start(audio, config).unwrap();
+            let slot = client.worker.as_ref().unwrap().latest.clone();
+            // Reuse one publication across READY -> chart start, including a
+            // stalled exchange. Idle rotation must still advance every render.
+            let guard = slot.lock().unwrap();
+            let chart_start_us = 1_000_000 * 100 / u64::from(rate);
+            for output_us in
+                [0, 6_000, chart_start_us - 6_000, chart_start_us, chart_start_us + 6_000]
+            {
+                client.session.audio_clock.current_frame.store(output_us, Ordering::Release);
+                let scene_us = 6_000_000 + output_us as i64;
+                let snapshot =
+                    client.poll_with_play_elapsed(TimeUs(scene_us)).unwrap().render_snapshot;
+                assert_eq!(
+                    snapshot.time,
+                    TimeUs(-1_000_000 + output_us as i64 * i64::from(rate) / 100)
+                );
+                assert_eq!(snapshot.play_elapsed_time, TimeUs(scene_us));
+                for (id, input_phase_ms) in [(1, 120), (2, -60)] {
+                    if id == 2 && key_mode == KeyMode::K7 {
+                        assert_eq!(snapshot.skin_offsets.get(id).unwrap().r, 5);
+                        continue;
+                    }
+                    let expected_angle =
+                        ((2_160 - scene_us / 1_000 + input_phase_ms).rem_euclid(2_160) / 6) as i32;
+                    assert_eq!(
+                        snapshot.skin_offsets.get(id),
+                        Some(SkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: expected_angle, a: -6 }),
+                        "mode={key_mode:?}, rate={rate}, output_us={output_us}, id={id}"
+                    );
+                }
+                assert_eq!(snapshot.skin_offsets.get(42).unwrap().r, 5);
+                // Re-evaluating the same paused scene time must not accumulate rotation.
+                let paused =
+                    client.poll_with_play_elapsed(TimeUs(scene_us)).unwrap().render_snapshot;
+                assert_eq!(paused.skin_offsets, snapshot.skin_offsets);
+            }
+            drop(guard);
+            // New producer state must replace the scratch phase while the
+            // scene-time rotation continues from the same frame.
+            assert!(client.edit(|session| {
+                session.lane_scratch_angle_delta_ms[Lane::Scratch.index()] = 0;
+            }));
+            let scene_us = 6_000_000 + chart_start_us as i64 + 6_000;
+            let idle_angle = ((2_160 - scene_us / 1_000).rem_euclid(2_160) / 6) as i32;
+            wait_until(|| {
+                let snapshot =
+                    client.poll_with_play_elapsed(TimeUs(scene_us)).unwrap().render_snapshot;
+                snapshot.skin_offsets.get(1).unwrap().r == idle_angle
+            });
+            client.shutdown();
+        }
+    }
+}
+
+#[test]
 fn renderer_projects_cached_publication_when_exchange_is_unavailable() {
     for fps in [120, 240] {
         let mut session = prepared(SharedInputBackend::default());
