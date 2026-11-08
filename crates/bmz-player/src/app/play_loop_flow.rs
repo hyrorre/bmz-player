@@ -1152,6 +1152,9 @@ impl WinitApp {
             fadeout_elapsed_ms: ending.fadeout_started_at.map(elapsed_since_ms),
         };
 
+        // A cancelled preload can still be showing its placeholder, before a
+        // GameSession exists. Keep its input timers and turntable phase moving too.
+        self.refresh_pending_play_visual_snapshot(play_elapsed_time);
         let Some(active_play) = &mut self.play.active_play else {
             let Some(snapshot) = &mut self.play.last_play_snapshot else {
                 return;

@@ -36,6 +36,43 @@ impl AudioScheduler for TestAudio {
 }
 
 #[test]
+fn prepared_exit_advances_scene_time_turntable_and_preserves_input_timer_identity() {
+    let profile = ProfileConfig::new_default("default", "Default", 1);
+    let mut session =
+        build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+    session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(1_000_999));
+    session.lane_keyoff_started_at[Lane::Key2.index()] = Some(TimeUs(1_050_999));
+    session.lane_scratch_angle_delta_ms[Lane::Scratch.index()] = 120;
+    let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+    let frames = [1_100_999, 1_200_999].map(|scene_us| {
+        refresh_play_ending_snapshot_with_session_cached(
+            &mut session,
+            None,
+            None,
+            None,
+            &BgaFrameCatalog::new(),
+            PlayEndingSkinTimers {
+                play_elapsed_time: TimeUs(scene_us),
+                ready_elapsed_time: None,
+                backbmp_background: false,
+                failed_elapsed_ms: None,
+                music_end_elapsed_ms: None,
+                fadeout_elapsed_ms: Some(0),
+            },
+            &cache,
+        )
+    });
+    for (index, frame) in frames.iter().enumerate() {
+        assert_eq!(frame.keyon_ms[Lane::Key1.index()], Some(100 + index as i32 * 100));
+        assert_eq!(frame.keyoff_ms[Lane::Key2.index()], Some(50 + index as i32 * 100));
+        assert_eq!(frame.keyon_started_at[Lane::Key1.index()], Some(TimeUs(1_000_999)));
+        assert_eq!(frame.keyoff_started_at[Lane::Key2.index()], Some(TimeUs(1_050_999)));
+    }
+    assert_eq!(frames[0].skin_offsets.get(1).unwrap().r, 196);
+    assert_eq!(frames[1].skin_offsets.get(1).unwrap().r, 180);
+}
+
+#[test]
 fn advance_play_screen_returns_snapshot() {
     let profile = ProfileConfig::new_default("default", "Default", 1);
     let mut session =

@@ -170,6 +170,13 @@ consumerは取得したAudioClockの現在時刻で、ノーツ・Mine・LN端�
 STOP、SCROLL/SPEED、CONSTANT、note retention、PMS見逃し表示の計算は準備画面と共通です。
 consumerの投影はgameplayのadvance、入力判定、audio enqueueを呼ばず、交換lockの外で行います。
 
+KEYON / KEYOFF・HOLD・HCN・ゲージ増加 / 最大・FULLCOMBOの演出は、publicationへ保持した
+開始時刻からconsumerの譜面時刻で経過時間を求め直します。相手側のゲージ・FULLCOMBOも同様です。
+RHYTHM・4分拍・ENDOFNOTEは現在の譜面位置から再計算し、同じsnapshotを再利用しても進めます。
+押下 / 解放の識別には元の開始時刻を使い、画面時計と譜面時計の差や再生速度、ms丸めによる
+開始時刻の揺れで新しい入力と判断しません。準備中は画面時計を使い、開始前のキャンセルでも
+終了演出へ経過時間と入力状態を引き継ぎます。
+
 PMS見逃しノーツの落下計算は、譜面準備時に作る`MissedNoteFallCache`を共有します。
 BPMごとの累積落下量（STOP中は一定）と各ノーツのSTOP終了時刻を保持し、
 現在時刻と落下開始時刻の累積値の差で位置を求めます。判定幅は現在のwindowから適用します。

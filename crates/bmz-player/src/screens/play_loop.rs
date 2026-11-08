@@ -10,10 +10,10 @@ use bmz_audio::queue::{AudioScheduler, ScheduledSoundQueue};
 #[cfg(test)]
 use bmz_core::ids::SoundId;
 use bmz_core::time::TimeUs;
-use bmz_gameplay::session::{FrameOutput, GameSession, SessionFrame};
 #[cfg(test)]
+use bmz_gameplay::session::advance_session_frame;
 use bmz_gameplay::session::{
-    PlayState, advance_session_frame, apply_auto_key_release, compute_frame_times,
+    FrameOutput, GameSession, PlayState, SessionFrame, apply_auto_key_release, compute_frame_times,
     update_recent_inputs, update_recent_judgements,
 };
 use bmz_render::snapshot::RenderSnapshot;
@@ -435,17 +435,17 @@ pub fn refresh_play_ending_snapshot(
         if let Some(frame) = running.gameplay.poll_with_play_elapsed(timers.play_elapsed_time) {
             frame.render_snapshot
         } else {
-            let session = running.gameplay.prepared_session().expect("prepared or running session");
-            build_render_snapshot_with_target_and_bga_frames_cached(
-                session,
-                session.audio_clock.now(),
-                &session.recent_judgements,
-                running.best_ex_score,
-                running.best_ghost.as_deref(),
-                running.target_ex_score,
-                &running.bga_frames,
-                &running.render_snapshot_cache,
-            )
+            running.gameplay.configure_prepared(|session| {
+                refresh_play_ending_snapshot_with_session_cached(
+                    session,
+                    running.best_ex_score,
+                    running.best_ghost.as_deref(),
+                    running.target_ex_score,
+                    &running.bga_frames,
+                    timers,
+                    &running.render_snapshot_cache,
+                )
+            })
         };
     snapshot.play_elapsed_time = timers.play_elapsed_time;
     snapshot.ready_elapsed_time = timers.ready_elapsed_time;
@@ -489,7 +489,6 @@ pub fn refresh_play_ending_snapshot_with_session(
     )
 }
 
-#[cfg(test)]
 pub fn refresh_play_ending_snapshot_with_session_cached(
     session: &mut GameSession,
     best_ex_score: Option<u32>,
@@ -520,7 +519,15 @@ pub fn refresh_play_ending_snapshot_with_session_cached(
     snapshot.failed_elapsed_ms = timers.failed_elapsed_ms;
     snapshot.music_end_elapsed_ms = timers.music_end_elapsed_ms;
     snapshot.fadeout_elapsed_ms = timers.fadeout_elapsed_ms;
-    crate::screens::play_snapshot::refresh_play_skin_visuals(&mut snapshot, session);
+    if session.state == PlayState::Ready && !session.audio_clock.running {
+        crate::screens::play_snapshot::refresh_play_skin_visuals_with_input_elapsed(
+            &mut snapshot,
+            session,
+            timers.play_elapsed_time,
+        );
+    } else {
+        crate::screens::play_snapshot::refresh_play_skin_visuals(&mut snapshot, session);
+    }
     snapshot
 }
 

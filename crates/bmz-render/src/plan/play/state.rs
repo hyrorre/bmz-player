@@ -92,6 +92,8 @@ pub(in crate::plan) fn build_play_skin_state(
         // keyon/keyoff は session 側で追跡済みの開始時刻から算出される。
         keyon_ms: snapshot.keyon_ms,
         keyoff_ms: snapshot.keyoff_ms,
+        keyon_started_us: snapshot.keyon_started_at.map(|start| start.map(|start| start.0)),
+        keyoff_started_us: snapshot.keyoff_started_at.map(|start| start.map(|start| start.0)),
         hold_ms: snapshot.hold_ms,
         hcn_active_ms: snapshot.hcn_active_ms,
         hcn_damage_ms: snapshot.hcn_damage_ms,

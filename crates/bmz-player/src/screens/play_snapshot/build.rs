@@ -503,6 +503,8 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         visible_long_notes: Vec::new(),
         keyon_ms: lane_keyon_ms(session, chart_now, play_elapsed_time),
         keyoff_ms: lane_keyoff_ms(session, chart_now, play_elapsed_time),
+        keyon_started_at: session.lane_keyon_started_at,
+        keyoff_started_at: session.lane_keyoff_started_at,
         show_ln_tail_cap: session.show_ln_tail_cap,
         // beatoraja の TIMER_HCN_ACTIVE / TIMER_HCN_DAMAGE: HCN passing 中のみアクティブ。
         hcn_active_ms: std::array::from_fn(|lane_index| {

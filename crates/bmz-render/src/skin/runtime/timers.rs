@@ -14,8 +14,10 @@ pub struct DynamicTimerRuntime {
     logical_input_starts: [Option<i32>; SKIN_BMZ_INPUT_COUNT],
     e1_e2_press_started_at_ms: Option<i32>,
     e1_e2_release_started_at_ms: Option<i32>,
-    keybeam_keyon_starts: [Option<i32>; LANE_COUNT],
-    keybeam_keyoff_starts: [Option<i32>; LANE_COUNT],
+    keybeam_keyon_starts: [Option<i64>; LANE_COUNT],
+    keybeam_keyoff_starts: [Option<i64>; LANE_COUNT],
+    keybeam_keyon_elapsed: [Option<i32>; LANE_COUNT],
+    keybeam_keyoff_elapsed: [Option<i32>; LANE_COUNT],
     keybeam_suppressed: [bool; LANE_COUNT],
     keybeam_fade_allowed: [bool; LANE_COUNT],
     key_logger: KeyLoggerRuntime,
@@ -133,6 +135,8 @@ impl Default for DynamicTimerRuntime {
             e1_e2_release_started_at_ms: None,
             keybeam_keyon_starts: [None; LANE_COUNT],
             keybeam_keyoff_starts: [None; LANE_COUNT],
+            keybeam_keyon_elapsed: [None; LANE_COUNT],
+            keybeam_keyoff_elapsed: [None; LANE_COUNT],
             keybeam_suppressed: [false; LANE_COUNT],
             keybeam_fade_allowed: [false; LANE_COUNT],
             key_logger: KeyLoggerRuntime::default(),
@@ -201,7 +205,7 @@ impl DynamicTimerRuntime {
             self.e1_e2_press_started_at_ms.map(|start| now_ms.saturating_sub(start));
         state.e1_e2_release_ms =
             self.e1_e2_release_started_at_ms.map(|start| now_ms.saturating_sub(start));
-        self.advance_keybeam(state, now_ms);
+        self.advance_keybeam(state);
         self.key_logger.write_state(state);
         self.judge_lane.write_state(state);
         state.keylogger_exclude_cool = !document.graph.iter().any(|graph| {
@@ -307,12 +311,14 @@ impl DynamicTimerRuntime {
         self.judge_lane.ingest(judgements, key_mode, region_count, now_us);
     }
 
-    fn advance_keybeam(&mut self, state: &mut SkinDrawState, now_ms: i32) {
+    fn advance_keybeam(&mut self, state: &mut SkinDrawState) {
         for lane in 0..LANE_COUNT {
-            let keyon_start = state.keyon_ms[lane].map(|elapsed| now_ms.saturating_sub(elapsed));
-            let keyoff_start = state.keyoff_ms[lane].map(|elapsed| now_ms.saturating_sub(elapsed));
-
-            if keyon_start.is_some() && keyon_start != self.keybeam_keyon_starts[lane] {
+            if keybeam_timer_changed(
+                state.keyon_ms[lane],
+                state.keyon_started_us[lane],
+                self.keybeam_keyon_elapsed[lane],
+                self.keybeam_keyon_starts[lane],
+            ) {
                 self.keybeam_suppressed[lane] = false;
                 self.keybeam_fade_allowed[lane] = false;
             }
@@ -322,16 +328,40 @@ impl DynamicTimerRuntime {
 
             state.keybeam_hold_active[lane] =
                 state.keyon_ms[lane].is_some() && !self.keybeam_suppressed[lane];
-            if keyoff_start.is_some() && keyoff_start != self.keybeam_keyoff_starts[lane] {
+            if keybeam_timer_changed(
+                state.keyoff_ms[lane],
+                state.keyoff_started_us[lane],
+                self.keybeam_keyoff_elapsed[lane],
+                self.keybeam_keyoff_starts[lane],
+            ) {
                 self.keybeam_fade_allowed[lane] = !self.keybeam_suppressed[lane];
                 self.keybeam_suppressed[lane] = false;
             }
             state.keybeam_fade_active[lane] =
-                keyoff_start.is_some() && self.keybeam_fade_allowed[lane];
-            self.keybeam_keyon_starts[lane] = keyon_start;
-            self.keybeam_keyoff_starts[lane] = keyoff_start;
+                state.keyoff_ms[lane].is_some() && self.keybeam_fade_allowed[lane];
+            self.keybeam_keyon_starts[lane] = state.keyon_started_us[lane];
+            self.keybeam_keyoff_starts[lane] = state.keyoff_started_us[lane];
+            self.keybeam_keyon_elapsed[lane] = state.keyon_ms[lane];
+            self.keybeam_keyoff_elapsed[lane] = state.keyoff_ms[lane];
         }
     }
+}
+
+fn keybeam_timer_changed(
+    elapsed: Option<i32>,
+    started_us: Option<i64>,
+    previous_elapsed: Option<i32>,
+    previous_started_us: Option<i64>,
+) -> bool {
+    elapsed.is_some_and(|elapsed| {
+        previous_elapsed.is_none()
+            || match started_us {
+                Some(started_us) => Some(started_us) != previous_started_us,
+                // Standalone draw states may omit identities. An unchanged elapsed
+                // value is a cached frame, not another input at the current scene time.
+                None => previous_elapsed.is_some_and(|previous| elapsed < previous),
+            }
+    })
 }
 
 impl JudgeLaneRuntime {

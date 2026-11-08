@@ -484,6 +484,46 @@ fn autoplay_and_replay_are_invariant_to_render_stalls() {
 }
 
 #[test]
+fn cached_publication_recomputes_skin_timers_at_the_consumers_chart_time() {
+    for rate in [50, 100, 200] {
+        let mut session = prepared(SharedInputBackend::default());
+        session.audio_clock.set_playback_rate_percent(rate);
+        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(-1_000_999));
+        session.lane_keyoff_started_at[Lane::Key2.index()] = Some(TimeUs(-1_000_999));
+        session.full_combo_started_at = Some(TimeUs(-500_999));
+        let audio = AudioEngineHandle::new(AudioEngine::new(1_000_000));
+        let config = config(&session, Arc::new(RuntimeProbe::default()));
+        let mut client = GameplayClient::new(session);
+        client.start(audio, config).unwrap();
+        let slot = client.worker.as_ref().unwrap().latest.clone();
+        let guard = slot.lock().unwrap();
+        for output_us in [0, 4_000, 20_000, 200_000] {
+            client.session.audio_clock.current_frame.store(output_us, Ordering::Release);
+            let chart_us = output_us as i64 * i64::from(rate) / 100;
+            let snapshot = client
+                .poll_with_play_elapsed(TimeUs(6_000_000 + output_us as i64))
+                .unwrap()
+                .render_snapshot;
+            assert_eq!(snapshot.time, TimeUs(chart_us));
+            assert_eq!(
+                snapshot.keyon_ms[Lane::Key1.index()],
+                Some(((chart_us + 1_000_999) / 1_000) as i32)
+            );
+            assert_eq!(
+                snapshot.keyoff_ms[Lane::Key2.index()],
+                snapshot.keyon_ms[Lane::Key1.index()]
+            );
+            assert_eq!(snapshot.keyon_started_at[Lane::Key1.index()], Some(TimeUs(-1_000_999)));
+            assert_eq!(snapshot.full_combo_elapsed_ms, Some(((chart_us + 500_999) / 1_000) as i32));
+            assert_eq!(snapshot.rhythm_timer_elapsed_ms, Some((chart_us * 2 / 1_000) as i32));
+            assert_eq!(snapshot.quarter_note_elapsed_ms, Some((chart_us / 1_000) as i32));
+        }
+        drop(guard);
+        client.shutdown();
+    }
+}
+
+#[test]
 fn renderer_turntables_follow_scene_time_through_ready_and_chart_start() {
     use bmz_gameplay::session::PlaySkinOffset;
     use bmz_render::skin_offset::SkinOffsetValue;

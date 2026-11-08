@@ -72,6 +72,7 @@ pub(crate) struct PlayfieldProjection {
     playback_rate_percent: u16,
     chart_miss_text: ChartMissTextClock,
     lane_scratch_angle_delta_ms: [i64; LANE_COUNT],
+    skin_timers: PlaySkinTimers,
 }
 
 impl PlayfieldProjection {
@@ -101,6 +102,7 @@ impl PlayfieldProjection {
                 playback_rate_percent: session.audio_clock.playback_rate_percent(),
                 chart_miss_text: ChartMissTextClock::from_session(session),
                 lane_scratch_angle_delta_ms: session.lane_scratch_angle_delta_ms,
+                skin_timers: PlaySkinTimers::from_session(session),
             };
             projection.update(session, projection.published_time);
             Arc::new(projection)
@@ -132,6 +134,7 @@ impl PlayfieldProjection {
         self.playback_rate_percent = session.audio_clock.playback_rate_percent();
         self.chart_miss_text = ChartMissTextClock::from_session(session);
         self.lane_scratch_angle_delta_ms = session.lane_scratch_angle_delta_ms;
+        self.skin_timers = PlaySkinTimers::from_session(session);
     }
 
     /// Turntables use the Play scene clock, including the negative chart-time READY countdown.
@@ -142,6 +145,7 @@ impl PlayfieldProjection {
         play_elapsed_time: TimeUs,
     ) {
         snapshot.play_elapsed_time = play_elapsed_time;
+        self.skin_timers.apply(snapshot);
         set_scratch_angle_offsets(
             &mut snapshot.skin_offsets,
             self.chart.metadata.key_mode,
@@ -174,6 +178,13 @@ impl PlayfieldProjection {
             clock.advance(now.max(self.published_time), self.visual_offset_us);
         snapshot.time = chart_now;
         snapshot.play_elapsed_time = TimeUs(chart_now.0.max(0));
+        self.skin_timers.apply(snapshot);
+        refresh_chart_skin_timers(
+            snapshot,
+            &self.timing_map,
+            &self.chart.bar_lines,
+            self.cache.end_of_note_time,
+        );
         let view = PlayfieldView {
             chart: &self.chart,
             timing_map: &self.timing_map,

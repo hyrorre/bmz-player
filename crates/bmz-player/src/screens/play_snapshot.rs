@@ -46,6 +46,7 @@ mod missed_notes;
 mod projection;
 mod scroll;
 mod state;
+mod timers;
 mod visuals;
 pub(crate) use hispeed_transition::HispeedTransition;
 pub(crate) use projection::{PlayfieldProjection, ProjectionClock};
@@ -89,6 +90,7 @@ use chart_text::*;
 use display::*;
 use scroll::*;
 use state::*;
+use timers::*;
 use visuals::*;
 
 #[cfg(test)]

@@ -53,6 +53,85 @@ fn assert_playfield_eq(actual: &RenderSnapshot, expected: &RenderSnapshot) {
 }
 
 #[test]
+fn cached_projection_recomputes_all_skin_timers_across_ready_beats_and_event_boundaries() {
+    let mut session = session(mixed_chart());
+    session.audio_clock.pause_at(TimeUs(-1_000_000));
+    session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(-1_000_999));
+    session.lane_keyoff_started_at[Lane::Key2.index()] = Some(TimeUs(-500_999));
+    session.full_combo_started_at = Some(TimeUs(150_999));
+    session.gauge_increase_started_at = Some(TimeUs(-200_999));
+    session.gauge_max_started_at = Some(TimeUs(50_999));
+    session.opponent.score = Some(session.score.clone());
+    session.opponent.gauge = Some(session.gauge.clone());
+    session.opponent.full_combo_started_at = Some(TimeUs(200_999));
+    session.opponent.gauge_increase_started_at = Some(TimeUs(30_999));
+    session.opponent.gauge_max_started_at = Some(TimeUs(250_999));
+    let long = &session.chart.long_notes[0];
+    session.judge.lanes[long.lane.index()].active_long = Some(ActiveLongNote {
+        pair_index: 0,
+        mode: LongNoteMode::Ln,
+        start_note_id: long.start_note_id,
+        start_judge: Judge::PGreat,
+        start_delta: TimeUs(0),
+        end: LongNoteEndRef {
+            end_note_id: long.end_note_id,
+            end_tick: long.end_tick,
+            end_time: long.end_time,
+        },
+        started_at: long.start_time,
+        scratch_direction: None,
+        pending_release: None,
+    });
+    for (lane, inclease) in [(Lane::Key4, false), (Lane::Key5, true)] {
+        session.lane_hcn_timer[lane.index()] =
+            Some(HcnLaneTimer { inclease, since: TimeUs(500_999), passing_count_us: 0 });
+    }
+    let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+    let mut pool = PlayfieldProjection::pool(&session, &cache);
+    let source = base(&session, TimeUs(-1_000_000), &cache);
+    let mut clock = ProjectionClock::default();
+    for now in [-500_000, -1, 0, 4_000, 150_998, 150_999, 200_999, 500_999, 1_000_000, 2_500_000] {
+        let mut actual = source.clone();
+        pool[0].project(&mut actual, TimeUs(now), &mut clock);
+        let expected = base(&session, TimeUs(now), &cache);
+        assert_skin_timers_eq(&actual, &expected);
+    }
+    // A later publication must replace and deactivate origins, not leave old
+    // elapsed values running after the source state has switched off.
+    session.lane_keyon_started_at.fill(None);
+    session.lane_keyoff_started_at.fill(None);
+    session.lane_hcn_timer.fill(None);
+    session.judge.lanes[Lane::Key3.index()].active_long = None;
+    session.full_combo_started_at = None;
+    session.gauge_increase_started_at = None;
+    session.gauge_max_started_at = None;
+    session.opponent.full_combo_started_at = None;
+    session.opponent.gauge_increase_started_at = None;
+    session.opponent.gauge_max_started_at = None;
+    Arc::get_mut(&mut pool[1]).unwrap().update(&session, TimeUs(2_500_000));
+    let mut actual = base(&session, TimeUs(2_500_000), &cache);
+    pool[1].project(&mut actual, TimeUs(3_000_000), &mut clock);
+    assert_skin_timers_eq(&actual, &base(&session, TimeUs(3_000_000), &cache));
+}
+
+fn assert_skin_timers_eq(actual: &RenderSnapshot, expected: &RenderSnapshot) {
+    assert_eq!(actual.keyon_ms, expected.keyon_ms);
+    assert_eq!(actual.keyoff_ms, expected.keyoff_ms);
+    assert_eq!(actual.keyon_started_at, expected.keyon_started_at);
+    assert_eq!(actual.keyoff_started_at, expected.keyoff_started_at);
+    assert_eq!(actual.hold_ms, expected.hold_ms);
+    assert_eq!(actual.hcn_active_ms, expected.hcn_active_ms);
+    assert_eq!(actual.hcn_damage_ms, expected.hcn_damage_ms);
+    assert_eq!(actual.full_combo_elapsed_ms, expected.full_combo_elapsed_ms);
+    assert_eq!(actual.gauge_increase_elapsed_ms, expected.gauge_increase_elapsed_ms);
+    assert_eq!(actual.gauge_max_elapsed_ms, expected.gauge_max_elapsed_ms);
+    assert_eq!(actual.rhythm_timer_elapsed_ms, expected.rhythm_timer_elapsed_ms);
+    assert_eq!(actual.quarter_note_elapsed_ms, expected.quarter_note_elapsed_ms);
+    assert_eq!(actual.end_of_note_elapsed_ms, expected.end_of_note_elapsed_ms);
+    assert_eq!(actual.opponent, expected.opponent);
+}
+
+#[test]
 fn motion_tracks_render_time_for_all_publication_phases_and_stalls() {
     let session = session(chart());
     let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
