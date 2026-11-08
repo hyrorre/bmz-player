@@ -6,6 +6,16 @@ pub(in crate::app) enum SelectRowClickAction {
     ExitFolder,
 }
 
+/// Clicked rows may wrap around the end of the circular list.
+pub(in crate::app) fn select_row_scroll_rows(current: usize, next: usize, len: usize) -> i32 {
+    if len == 0 {
+        return 0;
+    }
+    let forward = (next as i64 - current as i64).rem_euclid(len as i64);
+    let backward = forward - len as i64;
+    if forward <= -backward { forward as i32 } else { backward as i32 }
+}
+
 pub(in crate::app) fn select_row_click_action(
     row_index: u32,
     button: MouseButton,

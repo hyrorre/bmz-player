@@ -424,8 +424,7 @@ impl WinitApp {
 
     pub(super) fn handle_select_row_click(&mut self, row_index: u32, button: MouseButton) {
         if self.select.ir_battle.active {
-            let len =
-                self.select.select_ir.battle_entries_for(self.select.ir_battle.source_sha256).len();
+            let len = self.select_battle_choices().len();
             match select_row_click_action(
                 row_index,
                 button,
@@ -434,9 +433,12 @@ impl WinitApp {
                 false,
             ) {
                 Some(SelectRowClickAction::Select(next)) => {
-                    self.select.ir_battle.cursor = next;
-                    self.restart_select_bar_timer_without_scroll(Instant::now());
-                    self.play_system_sound(crate::system_sound::SoundType::Scratch);
+                    let rows = select_row_scroll_rows(self.select.ir_battle.cursor, next, len);
+                    self.move_selection_with_scroll(
+                        SelectMove::Next,
+                        rows,
+                        self.select_scroll_duration_low(),
+                    );
                 }
                 Some(SelectRowClickAction::EnterOrPlay) => {
                     self.start_selected_battle();
@@ -461,9 +463,14 @@ impl WinitApp {
                     _ => None,
                 });
             if let Some((profile_entry, app_entry)) = selected_setting {
+                let rows = select_row_scroll_rows(
+                    self.select.selected_index,
+                    row_index as usize,
+                    self.select.select_items.len(),
+                );
                 self.select.selected_index = row_index as usize;
                 self.reset_selected_replay_slot();
-                self.restart_select_bar_timer_without_scroll(Instant::now());
+                self.restart_select_bar_timer_with_scroll(rows, self.select_scroll_duration_low());
                 if let Some(entry_id) = profile_entry {
                     self.begin_settings_edit(entry_id);
                 } else if let Some(entry_id) = app_entry {
@@ -480,17 +487,87 @@ impl WinitApp {
             self.select.settings_edit.is_some(),
         ) {
             Some(SelectRowClickAction::Select(next)) => {
-                self.select.selection_generation = self.select.selection_generation.wrapping_add(1);
-                self.select.selected_index = next;
-                self.sync_selected_play_mode();
-                self.reset_selected_replay_slot();
-                self.restart_select_bar_timer_without_scroll(Instant::now());
-                self.play_system_sound(crate::system_sound::SoundType::Scratch);
+                let rows = select_row_scroll_rows(
+                    self.select.selected_index,
+                    next,
+                    self.select.select_items.len(),
+                );
+                self.move_selection_with_scroll(
+                    SelectMove::Next,
+                    rows,
+                    self.select_scroll_duration_low(),
+                );
             }
             Some(SelectRowClickAction::EnterOrPlay) => self.enter_or_play_selected(),
             Some(SelectRowClickAction::CancelSettingsEdit) => self.cancel_settings_edit(),
             Some(SelectRowClickAction::ExitFolder) => self.exit_folder(),
             None => {}
         }
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::*;
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+
+    #[test]
+    #[ignore = "creates an isolated Winit event loop; run alone with --ignored"]
+    fn row_click_animates_the_same_scroll_as_keyboard_movement() {
+        let event_loop =
+            EventLoop::<AppUserEvent>::with_user_event().with_any_thread(true).build().unwrap();
+        let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+        let mut boot = data.boot();
+        boot.app_config.input.gamepad_enabled = false;
+        boot.app_config.select.scroll_duration_low_ms = 1000;
+        let (maintenance_tx, _) = tokio::sync::watch::channel(false);
+        let mut app = WinitApp::new(
+            boot,
+            AppOptions { viewer_play: true, ..Default::default() },
+            Instant::now(),
+            None,
+            None,
+            Arc::new(AtomicBool::new(false)),
+            event_loop.create_proxy(),
+            LogBuffer::default(),
+            maintenance_tx,
+            None,
+        )
+        .unwrap();
+        app.viewer_mode = false;
+        app.select.select_items = (0..5)
+            .map(|index| SelectItem::Folder {
+                path: format!("folder-{index}"),
+                name: format!("Folder {index}"),
+                kind: bmz_render::scene::SelectRowKind::Folder,
+                summary: None,
+            })
+            .collect();
+        app.select.folder_stack.clear();
+        for (current, next, rows) in [(2, 3, 1), (2, 0, -2), (4, 0, 1), (0, 4, -1)] {
+            app.select.selected_index = current;
+            app.select.select_bar_scroll.reset();
+            let generation = app.select.selection_generation;
+            app.handle_select_row_click(next, MouseButton::Left);
+            assert_eq!(app.select.selected_index, next as usize);
+            assert_eq!(app.select.selection_generation, generation + 1);
+            let start = app.select.select_bar_started_at;
+            let scroll = &app.select.select_bar_scroll;
+            assert_eq!(scroll.remaining_at(start), f64::from(rows));
+            let midpoint = scroll.remaining_at(start + Duration::from_millis(500));
+            assert_eq!(midpoint.signum(), f64::from(rows).signum());
+            assert!(midpoint.abs() > 0.0 && midpoint.abs() < f64::from(rows).abs());
+            assert_eq!(scroll.remaining_at(start + Duration::from_millis(1000)), 0.0);
+        }
+        // The battle list includes seven built-in choices even without IR rows.
+        app.select.ir_battle.active = true;
+        app.select.ir_battle.cursor = 0;
+        app.select.select_bar_scroll.reset();
+        app.handle_select_row_click(6, MouseButton::Left);
+        assert_eq!(app.select.ir_battle.cursor, 6);
+        assert_eq!(
+            app.select.select_bar_scroll.remaining_at(app.select.select_bar_started_at),
+            -1.0,
+        );
     }
 }

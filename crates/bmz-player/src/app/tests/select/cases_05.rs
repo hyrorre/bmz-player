@@ -48,6 +48,16 @@ fn select_move_scroll_rows_matches_row_movement() {
 }
 
 #[test]
+fn clicked_rows_scroll_across_the_near_side_of_the_list() {
+    assert_eq!(select_row_scroll_rows(0, 0, 0), 0);
+    assert_eq!(select_row_scroll_rows(2, 3, 5), 1);
+    assert_eq!(select_row_scroll_rows(2, 0, 5), -2);
+    assert_eq!(select_row_scroll_rows(4, 0, 5), 1);
+    assert_eq!(select_row_scroll_rows(0, 4, 5), -1);
+    assert_eq!(select_row_scroll_rows(2, 2, 5), 0);
+}
+
+#[test]
 fn select_skin_event_state_cycles_supported_mode_filters() {
     assert_eq!(SelectModeFilter::All.next(), SelectModeFilter::K7);
     assert_eq!(SelectModeFilter::All.previous(), SelectModeFilter::K8);
