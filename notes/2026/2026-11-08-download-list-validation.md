@@ -64,3 +64,43 @@ GPU等を必要としてignoreされるテストや、同梱外の素材がな�
 
 実サービスからのダウンロード、実アプリのウィンドウ操作、Windows / macOSでの実行は未実施です。
 報告にある最小再現コードの再実行も行わず、今回は実際の一覧UIを通る自動テストで検証します。
+
+## 2026-11-08 レビュー後の追加修正: 登録スレッドの作成失敗
+
+周辺経路のレビューで、`app/background_jobs/song_scan.rs`が登録用スレッドを
+`spawn(...).expect("failed to spawn song scan thread")`で開始していることを確認しました。
+ダウンロード後の登録もこの経路を通るため、OSのリソース不足等でスレッドを作成できないと
+呼び出し元がpanicします。元のmainにも存在し、Validatingの集計とは別の条件付き不具合です。
+報告者がこの条件に該当したかは未確認です。
+
+レビュー時には、子プロセスだけに`RLIMIT_NPROC=0`を設定し、同じ`spawn/expect`の最小コードが
+終了コード101でpanicすることを確認しました。実アプリを起動した再現ではありません。
+
+追加修正では、スキャン開始を既存の`SongScanRuntime`の小さなメソッドへまとめ、
+スレッド作成エラーを通常の登録エラーとして返します。登録キューから取り出し済みの対象タスクを
+`finish_scan`で失敗にし、原因をエラー欄へ記録して進捗表示を解除します。
+起動に成功した場合だけ`pending`を保持し、呼び出し元は既存のスキャン失敗通知を表示します。
+待機中の別スキャン、対象外のダウンロード、保存済みのファイルは維持します。
+登録対象なしと判定した失敗にはしないため、保存済みの取得物がある場合の再試行は既存の再スキャン経路を使います。
+
+新しい2件の回帰テストでは、OS全体の制限を変更せず、実際に利用する開始処理へ
+`WouldBlock`エラーを返すスレッド作成関数を渡します。通信・実アーカイブ・GPU・実ウィンドウは不要です。
+
+```bash
+cargo test -p bmz-player --locked --lib app::background_jobs::song_scan::tests -- --nocapture
+```
+
+`expect`を残して開始処理を抽出した段階では、正常なエラー処理を期待する2件とも
+`failed to spawn song scan thread`でpanicしました。エラー処理を修正した後、同じ2件が成功しました。
+複数の登録タスクの失敗化・終了時刻・エラー原因、進捗とpendingの解除、待機キューの保持、
+対象外タスクへの非干渉、手動再試行、失敗後の次のスレッド起動と結果受信を確認します。
+ダウンロードを伴わないライブラリスキャンの開始失敗も確認します。
+生ログは`/tmp/bmz-scan-spawn-before.log`と`/tmp/bmz-scan-spawn-after.log`に保存しています。
+
+追加修正後に`cargo fmt --check`、`cargo check -p bmz-player --locked`、
+`cargo clippy -p bmz-player --all-targets --locked -- -D warnings`が成功しました。
+`LANGUAGE=ja cargo test -p bmz-player --locked`は2,990件成功、失敗0件、42件ignoreで、
+他のテストターゲットとdoc-testも成功しました。元の一覧UIテスト5件と、保存済み書庫の
+再スキャン・削除後の再取得を確認する既存テストも成功しています。
+ログは`/tmp/bmz-scan-spawn-{fmt,check,clippy,test}.log`に保存しています。
+実サービス・実アプリの手動操作・実アプリでのOSリソース不足・Windows / macOSの確認は未実施です。
