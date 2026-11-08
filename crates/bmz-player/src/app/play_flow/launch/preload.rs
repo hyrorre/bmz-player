@@ -646,8 +646,7 @@ impl WinitApp {
         prepared: PreparedInputPlaySession,
     ) -> Result<StartedInputPlaySession> {
         let runtime = self.audio.audio_runtime.as_ref().context("audio output is not available")?;
-        let schedule_ahead = self.boot.app_config.audio.schedule_ahead;
-        open_prepared_winit_play_session(&self.boot.score_db, runtime, prepared, schedule_ahead)
+        open_prepared_winit_play_session(&self.boot.score_db, runtime, prepared)
     }
 
     pub(super) fn play_output_sample_rate(&self) -> u32 {

@@ -38,8 +38,6 @@ pub(super) fn build_audio_video_settings_sections(
                 ui.label(tr!(text, "settings-audio-stream-actual", "value" => format!("{} / {} / {} Hz", info.actual_host, info.actual_device, info.actual_rate)));
             }
             let available_audio_backends = crate::audio::available_audio_backends();
-            ui.checkbox(&mut config.audio.schedule_ahead, tr!(text, "settings-audio-schedule-ahead"))
-                .on_hover_text(tr!(text, "settings-audio-schedule-ahead-help"));
             if !available_audio_backends.contains(&config.audio.backend) {
                 ui.label(tr!(text, "settings-audio-backend-unbuilt"));
             }

@@ -1,16 +1,13 @@
 use super::*;
 
 #[test]
-fn audio_scheduling_is_app_wide_defaults_on_and_preserves_explicit_off() {
-    assert!(AppConfig::default().audio.schedule_ahead);
-    let mut config = AppConfig::default();
-    config.audio.schedule_ahead = false;
-    let serialized = toml::to_string(&config).unwrap();
-    let restored: AppConfig = toml::from_str(&serialized).unwrap();
-    assert!(!restored.audio.schedule_ahead);
-    let legacy = serialized.replace("schedule_ahead = false\n", "");
+fn legacy_audio_schedule_ahead_is_ignored_and_removed_on_save() {
+    let serialized = toml::to_string(&AppConfig::default()).unwrap();
+    assert!(!serialized.contains("schedule_ahead"));
+    let legacy = serialized.replace("[audio]\n", "[audio]\nschedule_ahead = false\n");
+    assert_ne!(legacy, serialized);
     let restored: AppConfig = toml::from_str(&legacy).unwrap();
-    assert!(restored.audio.schedule_ahead);
+    assert_eq!(toml::to_string(&restored).unwrap(), serialized);
 }
 
 #[test]

@@ -85,9 +85,6 @@ pub struct ScanConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(from = "AudioConfigWire")]
 pub struct AudioConfig {
-    /// System-clock deadlines are queued ahead when enabled; otherwise sounds
-    /// are requested when their chart time is reached. Shared by all profiles.
-    pub schedule_ahead: bool,
     pub backend: AudioBackend,
     /// OS の通常共有出力、Windows の IAudioClient3 低遅延共有出力、または WASAPI 排他出力。
     #[serde(default)]
@@ -111,8 +108,6 @@ pub struct AudioConfig {
 /// `exclusive_mode` は output mode 導入前の設定との読み込み互換にだけ使用する。
 #[derive(Deserialize)]
 struct AudioConfigWire {
-    #[serde(default = "default_audio_schedule_ahead")]
-    schedule_ahead: bool,
     backend: AudioBackend,
     #[serde(default)]
     output_mode: Option<AudioOutputMode>,
@@ -135,7 +130,6 @@ impl From<AudioConfigWire> for AudioConfig {
             if value.exclusive_mode { AudioOutputMode::Exclusive } else { AudioOutputMode::Shared }
         });
         Self {
-            schedule_ahead: value.schedule_ahead,
             backend: value.backend,
             output_mode,
             output_device: value.output_device,
@@ -147,10 +141,6 @@ impl From<AudioConfigWire> for AudioConfig {
             output_channel_pair: value.output_channel_pair,
         }
     }
-}
-
-fn default_audio_schedule_ahead() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -799,7 +789,6 @@ impl Default for AppConfig {
                 rescan_missing_files: true,
             },
             audio: AudioConfig {
-                schedule_ahead: true,
                 backend: AudioBackend::Auto,
                 output_mode: AudioOutputMode::Shared,
                 output_device: String::new(),

@@ -382,8 +382,7 @@ fn settings_folder(path: &str, name: String) -> SelectItem {
 }
 
 fn audio_items(app_config: &AppConfig) -> Vec<SelectItem> {
-    let mut entries =
-        vec![AppSettingsEntryId::AudioBackend, AppSettingsEntryId::AudioScheduleAhead];
+    let mut entries = vec![AppSettingsEntryId::AudioBackend];
     if app_config.audio.backend == AudioBackend::Wasapi {
         entries.push(AppSettingsEntryId::AudioOutputMode);
     }

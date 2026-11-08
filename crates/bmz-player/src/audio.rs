@@ -109,9 +109,6 @@ pub struct AppAudioOutput {
     pub engine: AudioEngineHandle,
     runtime: AudioRuntime,
     source: CpalCommandedOutputSource,
-    /// Taken from the saved settings when the play opens. It does not concern
-    /// the device, so changing it must not require reopening the stream.
-    schedule_ahead: bool,
 }
 
 #[derive(Clone)]
@@ -189,9 +186,7 @@ impl AppAudioOutput {
     }
 
     pub fn clock(&self) -> AudioClock {
-        let mut clock = self.source.clock();
-        clock.schedule_ahead = self.schedule_ahead;
-        clock
+        self.source.clock()
     }
 
     pub fn set_playback_rate_percent(&mut self, rate: u16) {
@@ -463,14 +458,10 @@ impl AudioRuntime {
     }
 }
 
-pub fn open_app_audio_output(
-    runtime: &AudioRuntime,
-    engine: AudioEngine,
-    schedule_ahead: bool,
-) -> AppAudioOutput {
+pub fn open_app_audio_output(runtime: &AudioRuntime, engine: AudioEngine) -> AppAudioOutput {
     let engine = AudioEngineHandle::new(engine);
     let source = runtime.add_commanded_source(engine.clone(), CpalOutputSourceKind::Play);
-    AppAudioOutput { engine, runtime: runtime.clone(), source, schedule_ahead }
+    AppAudioOutput { engine, runtime: runtime.clone(), source }
 }
 
 /// アプリ全体で常時 ON のシステム SE / BGM 出力。
@@ -524,7 +515,6 @@ pub fn open_prepared_play_audio(
     runtime: &AudioRuntime,
     prepared: PreparedPlaySession,
     score_key: ScoreKey,
-    schedule_ahead: bool,
 ) -> RunningPlaySession {
     let bgm_sample_duration_us = prepared
         .session
@@ -545,7 +535,7 @@ pub fn open_prepared_play_audio(
             Some((event.sound, duration_us))
         })
         .collect();
-    let mut audio = open_app_audio_output(runtime, prepared.audio, schedule_ahead);
+    let mut audio = open_app_audio_output(runtime, prepared.audio);
     audio.set_playback_rate_percent(prepared.playback_rate_percent);
     let mut session = prepared.session;
     session.audio_clock = audio.clock();

@@ -418,8 +418,7 @@ pub fn start_running_play_session_for_chart_with_audio_runtime_and_input_backend
         input_backend,
     )?;
     let score_key = prepared.score_key;
-    let schedule_ahead = app_config.audio.schedule_ahead;
-    let mut running = open_prepared_play_audio(runtime, prepared, score_key, schedule_ahead);
+    let mut running = open_prepared_play_audio(runtime, prepared, score_key);
     // 表示値とFIRST_PLAY判定にはscore保存可否にかかわらず既存履歴が必要。
     let best = score_db.best_scores_for_charts(&[score_key]).ok().and_then(|mut rows| rows.pop());
     running.best_ex_score = best.as_ref().map(|best| best.ex_score);
@@ -485,11 +484,9 @@ pub fn open_prepared_winit_play_session(
     score_db: &ScoreDatabase,
     runtime: &AudioRuntime,
     prepared: PreparedInputPlaySession,
-    schedule_ahead: bool,
 ) -> Result<StartedInputPlaySession> {
     let score_key = prepared.prepared.score_key;
-    let mut running =
-        open_prepared_play_audio(runtime, prepared.prepared, score_key, schedule_ahead);
+    let mut running = open_prepared_play_audio(runtime, prepared.prepared, score_key);
     // 表示値とFIRST_PLAY判定にはscore保存可否にかかわらず既存履歴が必要。
     let best = score_db.best_scores_for_charts(&[score_key]).ok().and_then(|mut rows| rows.pop());
     running.best_ex_score = best.as_ref().map(|best| best.ex_score);

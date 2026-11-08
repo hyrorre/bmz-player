@@ -1018,8 +1018,6 @@ settings-downloads-keep-archive = Register HTTP archives without extracting
 settings-downloads-keep-archive-help = Save and play ZIP / RAR / 7z / tar.gz / LZH archives directly. Applies to newly queued downloads. IPFS downloads are extracted.
 downloads-state-validating = Checking archive
 
-settings-audio-schedule-ahead = Schedule audio ahead
-settings-audio-schedule-ahead-help = ON: Schedule BGM and automatic keysounds ahead using the system clock. OFF: Request playback when each event is due. Keysounds triggered by input always play immediately. Shared by all profiles; takes effect from the next play.
 
 skin-external-allow = Allow external skin
 skin-external-revoke = Revoke external skin access
