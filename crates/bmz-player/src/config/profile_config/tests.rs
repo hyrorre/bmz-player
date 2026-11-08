@@ -3,12 +3,12 @@ use super::*;
 #[test]
 fn hispeed_transition_defaults_for_old_profiles_and_preserves_zero() {
     let mut profile = ProfileConfig::new_default("default", "Player", 0);
-    assert_eq!(profile.lane.hispeed_transition_ms, 200);
+    assert_eq!(profile.lane.hispeed_transition_ms, 150);
     let mut value = toml::Value::try_from(&profile).unwrap();
     value.get_mut("lane").unwrap().as_table_mut().unwrap().remove("hispeed_transition_ms");
     let decoded: ProfileConfig = value.try_into().unwrap();
-    assert_eq!(decoded.lane.hispeed_transition_ms, 200);
-    for duration in [0, 200, 500, 1000] {
+    assert_eq!(decoded.lane.hispeed_transition_ms, 150);
+    for duration in [0, 150, 200, 500, 1000] {
         profile.lane.hispeed_transition_ms = duration;
         let mut decoded: ProfileConfig =
             toml::from_str(&toml::to_string(&profile).unwrap()).unwrap();

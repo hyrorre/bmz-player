@@ -1101,7 +1101,7 @@ impl LaneViewConfig {
 }
 
 pub const fn default_hispeed_transition_ms() -> u32 {
-    200
+    150
 }
 
 /// Per-key-mode values corresponding to beatoraja/LR2orajaED `PlayConfig`.
