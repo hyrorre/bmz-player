@@ -134,5 +134,11 @@ pub(in crate::ui::profile_panel) fn build_profile_display_section(
                 )
                 .text(tr!(text, "profile-display-constant-fade")),
             );
+            ui.add(
+                egui::Slider::new(&mut profile.lane.hispeed_transition_ms, 0..=1000)
+                    .suffix(" ms")
+                    .text(tr!(text, "profile-display-hispeed-transition")),
+            )
+            .on_hover_text(tr!(text, "profile-display-hispeed-transition-help"));
         });
 }

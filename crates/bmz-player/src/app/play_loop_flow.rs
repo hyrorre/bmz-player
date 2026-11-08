@@ -484,7 +484,10 @@ impl WinitApp {
         let effects = self.gameplay_sound_output();
         self.sync_input_capture_target();
         if let Some(active_play) = &mut self.play.active_play
-            && let Err(error) = active_play.running.start_gameplay_runtime(effects)
+            && let Err(error) = active_play.running.start_gameplay_runtime(
+                effects,
+                self.boot.profile_config.lane.hispeed_transition_ms,
+            )
         {
             tracing::error!(%error, "failed to start gameplay runtime");
             self.abort_pending_play_start();

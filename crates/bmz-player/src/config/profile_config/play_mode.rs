@@ -65,6 +65,7 @@ impl ProfileConfig {
     /// supported key mode, then restores the K7 editable mirror.
     pub fn normalize_play_mode_configs(&mut self) {
         let cli = self.clear_cli_play();
+        self.lane.hispeed_transition_ms = self.lane.hispeed_transition_ms.min(1000);
         self.lane.normal_hispeed_level =
             crate::config::play::normalize_normal_hispeed_level(self.lane.normal_hispeed_level);
         self.lane.constant_fade_ms = self.lane.constant_fade_ms.clamp(

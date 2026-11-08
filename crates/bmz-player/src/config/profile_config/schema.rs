@@ -1053,6 +1053,9 @@ impl JudgeAlgorithmConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LaneViewConfig {
+    /// Real-time linear movement duration after a hispeed change.
+    #[serde(default = "default_hispeed_transition_ms")]
+    pub hispeed_transition_ms: u32,
     #[serde(rename = "classic_hispeed", alias = "hispeed")]
     pub hispeed: f32,
     #[serde(default = "default_base_hispeed")]
@@ -1095,6 +1098,10 @@ impl LaneViewConfig {
     pub fn set_hispeed_config(&mut self, preset: HispeedConfigPreset) {
         (self.base_hispeed, self.floating_policy) = preset.parts();
     }
+}
+
+pub const fn default_hispeed_transition_ms() -> u32 {
+    500
 }
 
 /// Per-key-mode values corresponding to beatoraja/LR2orajaED `PlayConfig`.

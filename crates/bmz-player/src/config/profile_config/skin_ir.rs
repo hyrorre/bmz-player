@@ -601,6 +601,7 @@ impl ProfileConfig {
                 fast_slow_display_scope: FastSlowDisplayScope::Auto,
             },
             lane: LaneViewConfig {
+                hispeed_transition_ms: default_hispeed_transition_ms(),
                 hispeed: 2.0,
                 base_hispeed: default_base_hispeed(),
                 floating_policy: default_floating_policy(),

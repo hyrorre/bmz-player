@@ -4,6 +4,7 @@ use super::*;
 use bmz_core::ids::NoteId;
 use bmz_gameplay::judge::model::{JudgeWindows, LaneJudgeState};
 use bmz_gameplay::session::HcnLaneTimer;
+use std::time::Instant;
 
 pub(super) struct PlayfieldJudgeView<'a> {
     pub lanes: &'a [LaneJudgeState; LANE_COUNT],
@@ -58,6 +59,7 @@ pub(crate) struct PlayfieldProjection {
     window_set: JudgeWindows,
     lane_hcn_timer: [Option<HcnLaneTimer>; LANE_COUNT],
     hispeed: f32,
+    hispeed_transition: Option<HispeedTransition>,
     lift: f32,
     note_retention: bool,
     missed_note_fall: bool,
@@ -85,6 +87,7 @@ impl PlayfieldProjection {
                 window_set: session.judge.window_set,
                 lane_hcn_timer: session.lane_hcn_timer,
                 hispeed: session.hispeed,
+                hispeed_transition: None,
                 lift: session.lift,
                 note_retention: session.note_retention,
                 missed_note_fall: session.missed_note_fall,
@@ -110,6 +113,7 @@ impl PlayfieldProjection {
         self.window_set = session.judge.window_set;
         self.lane_hcn_timer = session.lane_hcn_timer;
         self.hispeed = session.hispeed;
+        self.hispeed_transition = None;
         self.lift = session.lift;
         self.note_retention = session.note_retention;
         self.missed_note_fall = session.missed_note_fall;
@@ -127,11 +131,25 @@ impl PlayfieldProjection {
         self.chart_miss_text = ChartMissTextClock::from_session(session);
     }
 
+    pub(crate) fn set_hispeed_transition(&mut self, transition: HispeedTransition) {
+        self.hispeed_transition = Some(transition);
+    }
+
     pub(crate) fn project(
         &self,
         snapshot: &mut RenderSnapshot,
         now: TimeUs,
         clock: &mut ProjectionClock,
+    ) {
+        self.project_at(snapshot, now, clock, Instant::now());
+    }
+
+    fn project_at(
+        &self,
+        snapshot: &mut RenderSnapshot,
+        now: TimeUs,
+        clock: &mut ProjectionClock,
+        rendered_at: Instant,
     ) {
         let (chart_now, lane_now) =
             clock.advance(now.max(self.published_time), self.visual_offset_us);
@@ -146,7 +164,9 @@ impl PlayfieldProjection {
                 window_set: self.window_set,
             },
             lane_hcn_timer: &self.lane_hcn_timer,
-            hispeed: self.hispeed,
+            hispeed: self
+                .hispeed_transition
+                .map_or(self.hispeed, |transition| transition.value_at(rendered_at)),
             lift: self.lift,
             note_retention: self.note_retention,
             missed_note_fall: self.missed_note_fall,

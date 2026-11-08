@@ -13,7 +13,8 @@ use crate::screens::{
     play_finish::FinishSessionSnapshot,
     play_session::AppliedArrange,
     play_snapshot::{
-        BgaFrameCatalog, PlayRenderSnapshotCache, PlayfieldProjection, ProjectionClock,
+        BgaFrameCatalog, HispeedTransition, PlayRenderSnapshotCache, PlayfieldProjection,
+        ProjectionClock,
     },
     result_model::{PlayJudgeGraphTracker, ResultGraphCollector},
 };
@@ -36,6 +37,7 @@ pub struct RuntimeRenderConfig {
     #[cfg(test)]
     pub probe: Option<Arc<tests::RuntimeProbe>>,
     pub effects: Option<crate::system_sound_manager::GameplaySoundOutput>,
+    pub hispeed_transition_ms: u32,
     pub best_ex_score: Option<u32>,
     pub best_ghost: Option<Vec<u8>>,
     pub target_ex_score: Option<u32>,
@@ -356,6 +358,9 @@ fn run(
     let mut terminal_result = false;
     let mut last_time = TimeUs(i64::MIN);
     let mut last_publication = Instant::now() - Duration::from_secs(1);
+    let mut hispeed_transition = HispeedTransition::new(runtime.session.hispeed);
+    let hispeed_transition_duration =
+        Duration::from_millis(u64::from(config.hispeed_transition_ms.min(1000)));
     runtime.session.input_system.backend.set_waker(Some(thread::current()));
     while !stop.load(Ordering::Acquire) {
         let iteration_started = Instant::now();
@@ -372,6 +377,11 @@ fn run(
             break;
         }
         let mut frame = runtime.advance(&audio);
+        hispeed_transition.retarget(
+            runtime.session.hispeed,
+            Instant::now(),
+            hispeed_transition_duration,
+        );
         final_notes_processed
             .store(runtime.session.judge.is_exhausted(&runtime.session.chart), Ordering::Release);
         if let Some(effects) = &config.effects {
@@ -453,9 +463,9 @@ fn run(
             thread::park_timeout(SAFETY_WAKE.saturating_sub(iteration_started.elapsed()));
             continue;
         };
-        Arc::get_mut(projection)
-            .expect("unobserved projection")
-            .update(&runtime.session, last_time);
+        let projection_state = Arc::get_mut(projection).expect("unobserved projection");
+        projection_state.update(&runtime.session, last_time);
+        projection_state.set_hispeed_transition(hispeed_transition);
         let mut frame = crate::screens::play_loop::frame_output_from_session_frame_cached(
             &runtime.session,
             frame,

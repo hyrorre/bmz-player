@@ -212,6 +212,7 @@ fn config(session: &GameSession, probe: Arc<RuntimeProbe>) -> RuntimeRenderConfi
     RuntimeRenderConfig {
         probe: Some(probe),
         effects: None,
+        hispeed_transition_ms: 500,
         best_ex_score: None,
         best_ghost: None,
         target_ex_score: None,

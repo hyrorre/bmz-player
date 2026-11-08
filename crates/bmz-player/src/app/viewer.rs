@@ -325,7 +325,10 @@ impl WinitApp {
                 &mut active.running.video_bga_decoders,
             );
             let carryover_count = active.running.start_viewer_seek(target, self.viewer_paused)?;
-            active.running.start_gameplay_runtime(effects)?;
+            active.running.start_gameplay_runtime(
+                effects,
+                self.boot.profile_config.lane.hispeed_transition_ms,
+            )?;
             let feedback = viewer_seek_feedback(&active.running.session.chart, target);
             (carryover_count, feedback)
         };

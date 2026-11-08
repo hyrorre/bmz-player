@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn hispeed_transition_defaults_for_old_profiles_and_preserves_zero() {
+    let mut profile = ProfileConfig::new_default("default", "Player", 0);
+    assert_eq!(profile.lane.hispeed_transition_ms, 500);
+    let mut value = toml::Value::try_from(&profile).unwrap();
+    value.get_mut("lane").unwrap().as_table_mut().unwrap().remove("hispeed_transition_ms");
+    let decoded: ProfileConfig = value.try_into().unwrap();
+    assert_eq!(decoded.lane.hispeed_transition_ms, 500);
+    for duration in [0, 500, 1000] {
+        profile.lane.hispeed_transition_ms = duration;
+        let mut decoded: ProfileConfig =
+            toml::from_str(&toml::to_string(&profile).unwrap()).unwrap();
+        decoded.normalize_play_mode_configs();
+        decoded.activate_play_mode(KeyMode::K9);
+        assert_eq!(decoded.lane.hispeed_transition_ms, duration);
+    }
+    profile.lane.hispeed_transition_ms = u32::MAX;
+    profile.normalize_play_mode_configs();
+    assert_eq!(profile.lane.hispeed_transition_ms, 1000);
+}
+
+#[test]
 fn lr2_new_title_hours_default_for_old_profiles_and_roundtrip_disabled() {
     let mut profile = ProfileConfig::new_default("default", "Player", 0);
     assert_eq!(profile.select.new_title_hours, 24);

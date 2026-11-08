@@ -280,6 +280,7 @@ impl RunningPlaySession {
     pub fn start_gameplay_runtime(
         &mut self,
         effects: Option<crate::system_sound_manager::GameplaySoundOutput>,
+        hispeed_transition_ms: u32,
     ) -> Result<()> {
         // Asset identity belongs to the immutable timeline. Texture readiness
         // and decoded video dimensions remain renderer-owned and may arrive later.
@@ -297,6 +298,7 @@ impl RunningPlaySession {
             #[cfg(test)]
             probe: None,
             effects,
+            hispeed_transition_ms,
             best_ex_score: self.best_ex_score,
             best_ghost: self.best_ghost.clone(),
             target_ex_score: self.target_ex_score,
