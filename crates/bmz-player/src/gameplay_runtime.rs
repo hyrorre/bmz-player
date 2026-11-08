@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     mpsc,
 };
 use std::thread::{self, JoinHandle};
@@ -76,6 +76,7 @@ struct Worker {
     stop: Arc<AtomicBool>,
     snapshot_requested: Arc<AtomicBool>,
     event_ack: Arc<AtomicU64>,
+    hispeed_transition_ms: Arc<AtomicU32>,
     thread: JoinHandle<()>,
 }
 
@@ -151,6 +152,17 @@ impl GameplayClient {
         }
     }
 
+    /// Latest render-only setting wins even when the session command queue is full.
+    pub fn set_hispeed_transition_ms(&self, duration_ms: u32) {
+        let duration_ms = duration_ms.min(1000);
+        if let Some(worker) = &self.worker
+            && worker.hispeed_transition_ms.swap(duration_ms, Ordering::Relaxed) != duration_ms
+        {
+            worker.snapshot_requested.store(true, Ordering::Release);
+            worker.thread.thread().unpark();
+        }
+    }
+
     pub fn start(&mut self, audio: AudioEngineHandle, config: RuntimeRenderConfig) -> Result<()> {
         if self.worker.is_some() {
             return Ok(());
@@ -190,6 +202,9 @@ impl GameplayClient {
         let event_ack = Arc::new(AtomicU64::new(0));
         let worker_ack = event_ack.clone();
         let worker_final_notes_processed = self.final_notes_processed.clone();
+        let hispeed_transition_ms =
+            Arc::new(AtomicU32::new(config.hispeed_transition_ms.min(1000)));
+        let worker_hispeed_transition_ms = hispeed_transition_ms.clone();
         let thread =
             thread::Builder::new().name(format!("bmz-gameplay-{generation}")).spawn(move || {
                 run(
@@ -204,12 +219,20 @@ impl GameplayClient {
                         snapshot_requested: request,
                         event_ack: worker_ack,
                         final_notes_processed: worker_final_notes_processed,
+                        hispeed_transition_ms: worker_hispeed_transition_ms,
                     },
                     projection_pool,
                 )
             })?;
-        self.worker =
-            Some(Worker { commands, latest, stop, snapshot_requested, event_ack, thread });
+        self.worker = Some(Worker {
+            commands,
+            latest,
+            stop,
+            snapshot_requested,
+            event_ack,
+            hispeed_transition_ms,
+            thread,
+        });
         tracing::info!(
             generation,
             "gameplay runtime: dedicated thread; audio scheduling: gameplay runtime"
@@ -328,6 +351,7 @@ struct WorkerSignals {
     snapshot_requested: Arc<AtomicBool>,
     event_ack: Arc<AtomicU64>,
     final_notes_processed: Arc<AtomicBool>,
+    hispeed_transition_ms: Arc<AtomicU32>,
 }
 
 fn run(
@@ -340,7 +364,13 @@ fn run(
     signals: WorkerSignals,
     mut projection_pool: [Arc<PlayfieldProjection>; 3],
 ) {
-    let WorkerSignals { stop, snapshot_requested, event_ack, final_notes_processed } = signals;
+    let WorkerSignals {
+        stop,
+        snapshot_requested,
+        event_ack,
+        final_notes_processed,
+        hispeed_transition_ms,
+    } = signals;
     let audio = audio.for_play(stop.clone());
     if let Some(effects) = &mut config.effects {
         effects.bind_play(stop.clone());
@@ -359,8 +389,6 @@ fn run(
     let mut last_time = TimeUs(i64::MIN);
     let mut last_publication = Instant::now() - Duration::from_secs(1);
     let mut hispeed_transition = HispeedTransition::new(runtime.session.hispeed);
-    let hispeed_transition_duration =
-        Duration::from_millis(u64::from(config.hispeed_transition_ms.min(1000)));
     runtime.session.input_system.backend.set_waker(Some(thread::current()));
     while !stop.load(Ordering::Acquire) {
         let iteration_started = Instant::now();
@@ -380,7 +408,7 @@ fn run(
         hispeed_transition.retarget(
             runtime.session.hispeed,
             Instant::now(),
-            hispeed_transition_duration,
+            Duration::from_millis(u64::from(hispeed_transition_ms.load(Ordering::Relaxed))),
         );
         final_notes_processed
             .store(runtime.session.judge.is_exhausted(&runtime.session.chart), Ordering::Release);

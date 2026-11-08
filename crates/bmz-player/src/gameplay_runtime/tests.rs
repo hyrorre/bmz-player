@@ -245,6 +245,54 @@ fn run_with_render_stall(stall_ms: u64) -> (String, u64) {
 }
 
 #[test]
+fn hispeed_animation_duration_changes_reach_the_running_worker_without_restart() {
+    let mut session = prepared(SharedInputBackend::default());
+    session.hispeed = 1.0;
+    let audio = AudioEngineHandle::new(AudioEngine::new(1_000_000));
+    let render_config = config(&session, Arc::new(RuntimeProbe::default()));
+    let mut client = GameplayClient::new(session);
+    client.start(audio, render_config).unwrap();
+    let generation = client.generation;
+    // Sampling before the edits keeps a nonzero-duration transition at its
+    // starting position, regardless of wall-clock delays in this test.
+    let sampled_at = Instant::now();
+    assert!(client.edit(|session| session.hispeed = 2.0));
+    wait_until(|| {
+        client.poll();
+        client.session.hispeed == 2.0
+    });
+    client.set_hispeed_transition_ms(0);
+    wait_until(|| {
+        let Some(mut frame) = client.poll() else { return false };
+        client.projection.as_ref().unwrap().project_at(
+            &mut frame.render_snapshot,
+            TimeUs(0),
+            &mut ProjectionClock::default(),
+            sampled_at,
+        );
+        (frame.render_snapshot.visible_notes[Lane::Key1.index()][0].y - 0.1).abs() < 1e-6
+    });
+    // Enabling animation again must also reach this same worker.
+    let sampled_at = Instant::now();
+    client.set_hispeed_transition_ms(1000);
+    assert!(client.edit(|session| session.hispeed = 3.0));
+    wait_until(|| {
+        client.poll();
+        client.session.hispeed == 3.0
+    });
+    let mut frame = client.latest_frame.as_ref().unwrap().as_ref().clone();
+    client.projection.as_ref().unwrap().project_at(
+        &mut frame.render_snapshot,
+        TimeUs(0),
+        &mut ProjectionClock::default(),
+        sampled_at,
+    );
+    assert!((frame.render_snapshot.visible_notes[Lane::Key1.index()][0].y - 0.1).abs() < 1e-6);
+    assert_eq!(client.generation, generation);
+    client.shutdown();
+}
+
+#[test]
 fn runtime_publishes_target_id_and_resolved_name_from_the_first_frame() {
     let session = prepared(SharedInputBackend::default());
     let audio = AudioEngineHandle::new(AudioEngine::new(1_000_000));

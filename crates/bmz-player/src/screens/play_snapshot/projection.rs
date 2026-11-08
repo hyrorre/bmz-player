@@ -144,7 +144,7 @@ impl PlayfieldProjection {
         self.project_at(snapshot, now, clock, Instant::now());
     }
 
-    fn project_at(
+    pub(crate) fn project_at(
         &self,
         snapshot: &mut RenderSnapshot,
         now: TimeUs,

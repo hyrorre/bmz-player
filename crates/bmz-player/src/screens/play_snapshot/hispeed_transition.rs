@@ -29,7 +29,7 @@ impl HispeedTransition {
     }
 
     pub(crate) fn retarget(&mut self, target: f32, now: Instant, duration: Duration) {
-        if target == self.target {
+        if target == self.target && duration == self.duration {
             return;
         }
         self.from = self.value_at(now);
@@ -59,6 +59,20 @@ mod tests {
         transition.retarget(1.0, midway + duration / 2, duration);
         assert_eq!(transition.value_at(midway + duration / 2), 1.5);
         assert_eq!(transition.value_at(midway + duration), 1.0);
+    }
+
+    #[test]
+    fn changing_duration_retimes_the_current_motion_and_zero_finishes_immediately() {
+        let start = Instant::now();
+        let mut transition = HispeedTransition::new(1.0);
+        transition.retarget(3.0, start, Duration::from_millis(500));
+        let changed_at = start + Duration::from_millis(125);
+        transition.retarget(3.0, changed_at, Duration::from_millis(1000));
+        assert_eq!(transition.value_at(changed_at), 1.5);
+        assert_eq!(transition.value_at(changed_at + Duration::from_millis(500)), 2.25);
+        assert_eq!(transition.value_at(changed_at + Duration::from_millis(1000)), 3.0);
+        transition.retarget(3.0, changed_at + Duration::from_millis(500), Duration::ZERO);
+        assert_eq!(transition.value_at(changed_at + Duration::from_millis(500)), 3.0);
     }
 
     #[test]
