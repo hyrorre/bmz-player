@@ -37,6 +37,9 @@ pub(super) struct SelectListLoader {
     active: Option<SelectListWorker>,
     queued: Option<Box<SelectListRequest>>,
     requested_action: Option<SelectListAction>,
+    /// A refresh that arrived or was interrupted outside Select. Every return
+    /// path re-issues it, including Decide cancel which does not reload itself.
+    deferred: Option<SelectListAction>,
 }
 
 impl SelectListLoader {
@@ -67,6 +70,33 @@ impl SelectListLoader {
             self.queued = None;
             self.requested_action = None;
         }
+    }
+
+    /// Keep only the refresh intent. A folder navigation requested against the
+    /// old list is meaningless after leaving Select.
+    pub(super) fn defer(&mut self, action: SelectListAction) {
+        let action = match action {
+            SelectListAction::Enter(_) | SelectListAction::Exit => SelectListAction::Refresh,
+            action => action,
+        };
+        // RefreshDownloads also keeps the mode filter; never weaken it to Refresh.
+        if !matches!(self.deferred, Some(SelectListAction::RefreshDownloads)) {
+            self.deferred = Some(action);
+        }
+    }
+
+    /// Invalidate the in-flight load and remember it for the next Select frame.
+    pub(super) fn suspend(&mut self) {
+        if self.loading()
+            && let Some(action) = self.requested_action.clone()
+        {
+            self.cancel();
+            self.defer(action);
+        }
+    }
+
+    pub(super) fn take_deferred(&mut self) -> Option<SelectListAction> {
+        self.deferred.take()
     }
 
     pub(super) fn poll(&mut self) -> Option<Completion> {
@@ -288,6 +318,25 @@ mod tests {
         assert!(matches!(action, SelectListAction::Enter(_)));
         assert!(result.unwrap().prepared.is_none(), "empty entry keeps the current view");
         assert!(!loader.loading());
+    }
+
+    #[test]
+    fn list_refresh_left_outside_select_is_reissued_as_refresh() {
+        let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+        let boot = data.boot();
+        let mut loader = SelectListLoader::default();
+        let (_tx, rx) = mpsc::channel();
+        loader.active = Some(SelectListWorker::Query(0, rx));
+        loader.request(request(&boot, SelectListAction::RefreshDownloads));
+        loader.suspend();
+        assert!(!loader.loading(), "suspended work is invalidated");
+        loader.defer(SelectListAction::Enter("bmz-table:".into()));
+        assert!(matches!(loader.take_deferred(), Some(SelectListAction::RefreshDownloads)));
+        loader.defer(SelectListAction::Exit);
+        assert!(matches!(loader.take_deferred(), Some(SelectListAction::Refresh)));
+        assert!(loader.take_deferred().is_none());
+        loader.suspend();
+        assert!(loader.take_deferred().is_none(), "idle loader defers nothing");
     }
 
     #[test]

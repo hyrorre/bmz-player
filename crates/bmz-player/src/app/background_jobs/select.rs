@@ -24,6 +24,10 @@ impl WinitApp {
     }
 
     pub(in crate::app) fn change_select_list(&mut self, action: SelectListAction) -> bool {
+        if !self.select_list_load_allowed() {
+            self.select.list_loader.defer(action);
+            return true;
+        }
         self.select.list_loader.request(super::super::select_list_loader::SelectListRequest {
             action,
             app_config: self.boot.app_config.clone(),
@@ -46,9 +50,15 @@ impl WinitApp {
         true // Accepted; navigation feedback is emitted only after successful installation.
     }
 
+    fn select_list_load_allowed(&self) -> bool {
+        self.view_state() == AppViewState::Select && self.jobs.profile_change.is_none()
+    }
+
     pub(in crate::app) fn poll_select_list(&mut self) {
-        if self.view_state() != AppViewState::Select || self.jobs.profile_change.is_some() {
-            self.select.list_loader.cancel();
+        if !self.select_list_load_allowed() {
+            self.select.list_loader.suspend();
+        } else if let Some(action) = self.select.list_loader.take_deferred() {
+            self.change_select_list(action);
         }
         if let Some((action, result)) = self.select.list_loader.poll() {
             self.apply_loaded_select_list(action, result);
