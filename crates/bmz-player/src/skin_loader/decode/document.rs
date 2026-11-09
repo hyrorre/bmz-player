@@ -422,7 +422,14 @@ pub(in crate::skin_loader) fn load_skin_document_uncached_with_path_context(
     let validated_path = context.policy().resolve(skin_path)?;
     let skin_path = validated_path.as_path();
     let (mut document, lua_runtime, mut resolved_files, dependencies) =
-        if is_lua_skin_path(skin_path) {
+        if bmz_skin::is_qwilight_play_skin_path(skin_path) {
+            anyhow::ensure!(kind == SkinKind::Play, "Qwilight skins support Play only");
+            let loaded = bmz_skin::load_qwilight_play_skin(context, options, runtime_state)?;
+            for warning in loaded.warnings {
+                tracing::warn!(path = %skin_path.display(), warning = %warning.message, "Qwilight skin compatibility");
+            }
+            (loaded.document, None, loaded.files, loaded.dependencies)
+        } else if is_lua_skin_path(skin_path) {
             // Lua スキンはオプション選択 (名前 -> 選択肢名) とファイル選択
             // (filepath 定義名 -> 相対パス) をそのまま渡す。
             let virtual_io_files = lua_virtual_io_files(runtime_state);
@@ -540,7 +547,10 @@ pub(in crate::skin_loader) fn default_property_item(
 }
 
 pub fn is_decodable_skin_path(path: &Path) -> bool {
-    is_json_skin_path(path) || is_lua_skin_path(path) || is_lr2_skin_path(path)
+    is_json_skin_path(path)
+        || is_lua_skin_path(path)
+        || is_lr2_skin_path(path)
+        || bmz_skin::is_qwilight_play_skin_path(path)
 }
 
 pub fn is_json_skin_path(path: &Path) -> bool {

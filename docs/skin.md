@@ -3,8 +3,40 @@
 BMZはbeatoraja JSON / Lua skinの互換を基本にします。既存beatoraja skin typeは
 そのまま扱い、BMZ独自のkey modeだけ拡張skin typeを予約します。
 
-JSON / Lua / LR2 skinの対応範囲と残課題は[skin-compatibility.md](skin-compatibility.md)を参照してください。
+JSON / Lua / LR2 / Qwilight skinの対応範囲と残課題は[skin-compatibility.md](skin-compatibility.md)を参照してください。
 この文書ではIDや各機能の動作契約を管理します。
+
+## Qwilightのプレイスキン
+
+試験対応として、`.yaml` / `.yml`を入口に同じパッケージのLuaとZIPを読み込みます。
+`@`で始まるテーマは対象外です。対象は4K / 5K / 6K / 7K / 8K / 9K / 10K / 14KのPlayで、
+Select・Decide・Result・G-BATTLE専用表示には対応しません。スキン一覧には各Play枠へ登録します。
+
+元のYAML・Lua・ZIPを揃えて`skins`配下へ置き、一覧を更新して選択してください。
+外部のインストール先を直接指定する場合は、通常の[外部スキンの許可](#スキンのファイル参照と外部スキンの許可)を使います。
+スキンのファイルは変更・展開しません。音声やテーマ素材の再配布も行いません。
+
+- YAMLの`format`・`frame`・`lambda`・`point`を読み、`configure-0`〜`15`を既存のスキンオプションへ表示します。
+  選択変更とキー数変更では配置を再計算します。カタログ走査ではLuaを実行しません。
+- Luaは配置・素材名の計算だけに使用します。`configures`、キー数、`P1Length` / `P1BuiltLength` / `P2BuiltLength` / `Wall` / `Contents`等を供給します。
+  Qwilight側の位置・サイズ調整値は既定値（差分0）です。ファイル・OS・module APIを公開せず、既存のLua命令数・メモリ制限を適用します。
+- lane map、DPの展開、floating / slashの横配置、通常ノーツ・LN・地雷、レーン背景・判定線・キー押下素材、ボム、判定画像、基本装飾、BGA領域、タイトル・アーティスト・ジャンル、整数HUD・ゲージをBMZの描画へ変換します。
+  LNは上下キャップの高さ・位置と胴体の重なりを個別に保持します。保持中のヘッド表示は`maintainLongNoteFrontEdge`に従います。
+- スコア・コンボ・判定回数・ゲージはBMZの値です。スコア欄はEXスコアです。
+  判定画像の文字や固定ラベルは元の素材のままであり、Qwilightの判定・採点ルールを再現しません。
+
+現段階では小数付きHUD（達成率・HS等）、残り時間・進捗、FAST/SLOW・判定グラフ、カバー画像、
+オンライン・音声可視化・ポーズUI・専用SE、文字色・font指定、特殊合成とイベント駆動paintPropertyは未対応です。
+キー背景・ボタンは通常素材と押下終端素材を切り替え、押下・解放の途中アニメーションは省略します。
+判定・コンボの拡大や反復、LNボムの途中ループ、Qwilight固有の失敗状態、素材prefixのフレーム依存分岐も完全互換ではありません。
+ゲージ素材は`HP 2`（なければ`HP 0`）を使い、種類別の素材切り替えや上下左右すべての充填方向は未対応です。
+オプション全組合せ・浮遊レーンの重なり順・原作との画素一致は保証しません。
+
+内部ではZIPの仮想パスを`archive.zip!skin/entry`として扱い、曲アーカイブの`!/`名前空間と分けます。
+アーカイブ実体を許可rootで確認し、entryの親移動・絶対パスを拒否します。
+YAML / Luaは各2 MiB、ZIPは32,768 entry・各64 MiBまでです。
+分割画像は`sourceFrames`へ変換し、最大256枚、各系列の入力RGBA合計とatlasをそれぞれ128 MiB以内に制限します。
+`note.qwilightGeometry`は変換専用のLN配置情報で、既存JSON / Lua / LR2のLN配置には影響しません。
 
 ## JSONのinclude展開
 

@@ -29,6 +29,16 @@ notice are preserved in [THIRD-PARTY-NOTICES.txt](../THIRD-PARTY-NOTICES.txt).
 No third-party skin archives are included; the small test archive is generated
 specifically for BMZ's tests.
 
+## Qwilight play skins
+
+The Qwilight play-skin adapter uses `serde_yaml_ng` (MIT) and the
+existing `zip` reader. It independently implements the skin file contract and
+does not include Qwilight program source or third-party skin assets. Users supply
+their own skin packages; tests generate their own minimal images and archives.
+Installed-package compatibility tests are ignored by default and do not redistribute
+their inputs. Preserve the generated dependency notices for `serde_yaml_ng` and
+`unsafe-libyaml` when packaging releases.
+
 ## Song archive readers
 
 ZIP, RAR, 7z, tar.gz and LZH song playback uses Rust library decoders. Releases do not require

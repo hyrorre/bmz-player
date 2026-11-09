@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn qwilight_catalog_registers_only_play_slots_without_running_lua() {
+    let temp = tempfile::tempdir().unwrap();
+    let yaml = "format: {title: Qwilight fixture}\nframe: {}\nlambda: {}\npoint: {}";
+    std::fs::write(temp.path().join("play.yaml"), yaml).unwrap();
+    std::fs::write(temp.path().join("@theme.yaml"), yaml).unwrap();
+    std::fs::write(temp.path().join("play.lua"), "while true do end").unwrap();
+    let mut catalog = SkinCatalog::default();
+    scan_skin_catalog_dir(
+        temp.path(),
+        temp.path(),
+        &[temp.path().to_path_buf()],
+        SkinCandidateOrigin::User,
+        &mut catalog,
+    );
+    for candidates in [
+        &catalog.play4,
+        &catalog.play5,
+        &catalog.play6,
+        &catalog.play7,
+        &catalog.play8,
+        &catalog.play9,
+        &catalog.play10,
+        &catalog.play14,
+    ] {
+        assert_eq!(candidates.len(), 1);
+    }
+    assert!(catalog.select.is_empty());
+    assert!(catalog.result.is_empty());
+}
+
+#[test]
 fn invalid_continue_fallback_does_not_abort_result_skin_decode() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("skins");

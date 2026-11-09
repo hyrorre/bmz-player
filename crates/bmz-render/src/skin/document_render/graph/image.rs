@@ -187,8 +187,8 @@ macro_rules! skin_document_render_graph_image_methods {
             let base_uv = TextureRegion {
                 x: graph.x as f32 / source_w,
                 y: graph.y as f32 / source_h,
-                width: graph.w as f32 / source_w,
-                height: graph.h as f32 / source_h,
+                width: if graph.w == -1 { 1.0 } else { graph.w as f32 / source_w },
+                height: if graph.h == -1 { 1.0 } else { graph.h as f32 / source_h },
             };
             let dst = normalize_skin_frame_rect(frame, self.w, self.h);
             let (rect, uv) = if graph.angle == 1 {

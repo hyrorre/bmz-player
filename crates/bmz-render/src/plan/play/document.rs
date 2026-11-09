@@ -76,12 +76,15 @@ fn push_document_long_notes(
         }
 
         let note_height = notes.note_height(body.lane).unwrap_or(NOTE_HEIGHT);
-        if let Some(rect) = notes.note_rect(body.lane, body.head_y, note_height)
+        if notes.show_front_cap(body.lane, body.body_state.is_processing())
+            && let Some(rect) = notes.note_rect(body.lane, body.head_y, note_height)
             && let Some(item) = notes.cap_item(body.lane, rect, body.mode, false)
         {
             append_document_item(commands, skin, skin_state, item);
         }
-        if (body.mode != LongNoteMode::Ln || snapshot.show_ln_tail_cap)
+        if (body.mode != LongNoteMode::Ln
+            || snapshot.show_ln_tail_cap
+            || notes.has_independent_tail_cap(body.lane))
             && body.tail_y < 1.0
             && let Some(rect) = notes.note_rect(body.lane, body.tail_y, note_height)
             && let Some(item) = notes.cap_item(body.lane, rect, body.mode, true)

@@ -12,7 +12,11 @@ mod lua;
 mod lua_keys;
 mod path_context;
 mod pm_chara;
+mod qwilight;
 mod random_file;
+pub use qwilight::{
+    is_qwilight_play_skin_path, load_qwilight_play_header, load_qwilight_play_skin,
+};
 
 pub use lua_keys::{
     LUA_KEYBOARD_WORDS, LuaKeyboardState, gdx_keycode_for_bmz_key, gdx_keycode_from_name,

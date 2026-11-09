@@ -1,6 +1,43 @@
 use super::*;
 
 #[test]
+fn qwilight_long_note_geometry_overlaps_body_and_keeps_independent_animated_caps() {
+    let document: SkinDocument=serde_json::from_value(serde_json::json!({
+        "w":100,"h":100,
+        "image":[{"id":"n","src":"1","w":20,"h":10,"divx":2,"cycle":100,"timer":41}],
+        "note":{"note":["n"],"lnstart":["n"],"lnend":["n"],"lnbody":["n"],"size":[10],
+            "dst":[{"x":10,"y":20,"w":10,"h":80}],
+            "qwilightGeometry":[{"frontHeight":20,"frontOffset":-10,"tailHeight":30,"tailOffset":-15,"frontBodyExtension":3,"tailBodyExtension":4,"maintainFront":false}]}
+    })).unwrap();
+    let skin = SkinContext::from_manifest_and_document(
+        default_skin_manifest(),
+        document,
+        mock_source("1", 20.0, 10.0).into_values(),
+    );
+    let state = SkinDrawState { play_timer_ms: Some(50), ..Default::default() };
+    let notes = skin.prepare_note_layout(KeyMode::K7, &state);
+    let lane = Lane::Key1;
+    let head = notes.note_rect(lane, 0.0, 0.1).unwrap();
+    let tail = notes.note_rect(lane, 0.5, 0.1).unwrap();
+    let body = notes.body_rect(lane, 0.0, 0.5).unwrap();
+    assert!(approx_eq(body.y, 0.36));
+    assert!(approx_eq(body.height, 0.47));
+    for (rect, end, y, h) in [(head, false, 0.7, 0.2), (tail, true, 0.25, 0.3)] {
+        let SkinRenderItem::Image { rect, uv, .. } =
+            notes.cap_item(lane, rect, LongNoteMode::Ln, end).unwrap()
+        else {
+            panic!("cap")
+        };
+        assert!(approx_eq(rect.y, y));
+        assert!(approx_eq(rect.height, h));
+        assert!(approx_eq(uv.x, 0.5));
+    }
+    assert!(!notes.show_front_cap(lane, true));
+    assert!(notes.show_front_cap(lane, false));
+    assert!(notes.has_independent_tail_cap(lane));
+}
+
+#[test]
 fn lr2_horizontal_scroll_aligns_notes_long_bodies_lines_and_lift() {
     let document: SkinDocument = serde_json::from_value(serde_json::json!({
         "w":1000,"h":500,

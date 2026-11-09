@@ -119,6 +119,7 @@ impl SkinPathContext {
     /// Resolve a static image/font, including legacy DXA virtual folders.
     /// Lua modules and ordinary file APIs continue to require physical files.
     pub fn resolve_asset(&self, requested: &str) -> Result<PathBuf> {
+        crate::zip_assets::split_path(Path::new(requested))?;
         let candidates = self.candidate_paths(requested)?;
         let mut failure = None;
         for candidate in candidates {
@@ -137,6 +138,7 @@ impl SkinPathContext {
     /// Optional assets may be absent, but their existing parents must still be
     /// authorized. Broken links, root escapes and malformed archives are errors.
     pub fn resolve_optional_asset(&self, requested: &str) -> Result<Option<PathBuf>> {
+        crate::zip_assets::split_path(Path::new(requested))?;
         for candidate in self.candidate_paths(requested)? {
             let mut allowed = |backing: &Path| {
                 canonicalize_skin_path(backing)

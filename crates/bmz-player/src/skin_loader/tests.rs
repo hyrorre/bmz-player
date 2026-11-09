@@ -81,6 +81,8 @@ mod path_boundaries;
 mod paths;
 #[path = "tests/pm_chara.rs"]
 mod pm_chara;
+#[path = "tests/qwilight.rs"]
+mod qwilight;
 #[path = "tests/select_mode_index.rs"]
 mod select_mode_index;
 #[path = "tests/starseeker_result.rs"]

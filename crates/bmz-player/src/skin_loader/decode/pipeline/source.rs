@@ -47,6 +47,30 @@ fn collect_source_tasks(
         .iter()
         .enumerate()
         .filter_map(|(index, source)| {
+            if let Some(frames) = document.source_frames.get(&source.id) {
+                let context = path_context?;
+                if frames.paths.is_empty() || frames.paths.len() > 256 || frames.columns == 0 {
+                    tracing::warn!(source_id = %source.id, "invalid skin frame sequence");
+                    return None;
+                }
+                let paths = frames
+                    .paths
+                    .iter()
+                    .map(|path| context.resolve_asset(path))
+                    .collect::<Result<Vec<_>>>();
+                return match paths {
+                    Ok(paths) => Some(SourceDecodeTask::Frames {
+                        index,
+                        source_id: source.id.clone(),
+                        paths,
+                        columns: frames.columns,
+                    }),
+                    Err(error) => {
+                        tracing::warn!(source_id = %source.id, %error, "invalid skin frame asset");
+                        None
+                    }
+                };
+            }
             if let Some(asset) = lr2_builtin_source_asset(&source.path) {
                 return Some(SourceDecodeTask::Builtin {
                     index,
@@ -96,6 +120,25 @@ fn decode_source_task(
     texture_cache: Option<&SharedSkinGpuTextureCache>,
 ) -> Option<DecodedSourceResult> {
     match task {
+        SourceDecodeTask::Frames { index, source_id, paths, columns } => {
+            let path = paths.first()?.clone();
+            match load_frame_sequence(&paths, columns) {
+                Ok(asset) => Some(asset_source_result(
+                    index,
+                    source_id,
+                    path,
+                    asset,
+                    None,
+                    false,
+                    SourceCacheStatus::Uncacheable,
+                    TextureCacheStatus::Uncacheable,
+                )),
+                Err(error) => {
+                    tracing::warn!(%source_id, %error, "failed to assemble skin frames");
+                    None
+                }
+            }
+        }
         SourceDecodeTask::Builtin { index, source_id, path, asset } => {
             let size = SkinImageSize { width: asset.width as f32, height: asset.height as f32 };
             Some(DecodedSourceResult {
@@ -127,6 +170,45 @@ fn decode_source_task(
             decode_video_source(index, source_id, path, source_cache, texture_cache)
         }
     }
+}
+
+/// Frame sequences keep their specified grid, so numbers and animation indices
+/// refer to the same cells on every GPU. Inputs and output have explicit limits.
+fn load_frame_sequence(paths: &[PathBuf], columns: u32) -> Result<RgbaImageAsset> {
+    anyhow::ensure!(
+        !paths.is_empty() && paths.len() <= 256 && columns > 0 && columns as usize <= paths.len(),
+        "invalid skin frame grid"
+    );
+    let mut images = Vec::new();
+    let mut bytes = 0usize;
+    for path in paths {
+        let image = bmz_render::assets::load_static_rgba_image_with_color_key(path, None)?;
+        bytes = bytes.saturating_add(image.pixels.len());
+        anyhow::ensure!(bytes <= 128 * 1024 * 1024, "skin frame input exceeds memory budget");
+        images.push(image);
+    }
+    let cell_w = images.iter().map(|image| image.width).max().unwrap();
+    let cell_h = images.iter().map(|image| image.height).max().unwrap();
+    let rows = (images.len() as u32).div_ceil(columns);
+    let width = cell_w.checked_mul(columns).context("skin frame width overflow")?;
+    let height = cell_h.checked_mul(rows).context("skin frame height overflow")?;
+    let byte_count = u64::from(width) * u64::from(height) * 4;
+    anyhow::ensure!(
+        width <= 16384 && height <= 16384 && byte_count <= 128 * 1024 * 1024,
+        "skin frame atlas exceeds size limit"
+    );
+    let mut pixels = vec![0; byte_count as usize];
+    for (i, image) in images.iter().enumerate() {
+        let x = (i as u32 % columns) * cell_w;
+        let y = (i as u32 / columns) * cell_h;
+        for row in 0..image.height {
+            let from = (row * image.width * 4) as usize;
+            let to = ((y + row) * width * 4 + x * 4) as usize;
+            let len = (image.width * 4) as usize;
+            pixels[to..to + len].copy_from_slice(&image.pixels[from..from + len]);
+        }
+    }
+    Ok(RgbaImageAsset { width, height, pixels })
 }
 
 fn decode_file_source(

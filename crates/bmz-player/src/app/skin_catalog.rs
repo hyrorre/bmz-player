@@ -110,7 +110,22 @@ pub(super) fn scan_skin_catalog_dir(
         })
         .collect();
     for (skin_type, candidate) in candidates.into_iter().flatten() {
-        push_skin_candidate(catalog, skin_type, candidate);
+        if bmz_skin::is_qwilight_play_skin_path(Path::new(&candidate.path)) {
+            for mode in [
+                0,
+                1,
+                2,
+                3,
+                4,
+                BMZ_SKIN_TYPE_PLAY_4KEYS,
+                BMZ_SKIN_TYPE_PLAY_6KEYS,
+                BMZ_SKIN_TYPE_PLAY_8KEYS,
+            ] {
+                push_skin_candidate(catalog, mode, candidate.clone());
+            }
+        } else {
+            push_skin_candidate(catalog, skin_type, candidate);
+        }
     }
 }
 
@@ -154,6 +169,9 @@ pub(super) fn skin_defs_from_path(
 }
 
 pub(super) fn is_skin_candidate_file(path: &Path) -> bool {
+    if bmz_skin::is_qwilight_play_skin_path(path) {
+        return true;
+    }
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "json" | "luaskin" | "lr2skin"))
@@ -185,7 +203,9 @@ pub(super) fn read_skin_header_document_with_context(
     path_context: &bmz_skin::SkinPathContext,
 ) -> Result<SkinDocument> {
     let path = path_context.entry_file();
-    if path
+    if bmz_skin::is_qwilight_play_skin_path(path) {
+        bmz_skin::load_qwilight_play_header(path_context)
+    } else if path
         .extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("luaskin") || ext.eq_ignore_ascii_case("lua"))

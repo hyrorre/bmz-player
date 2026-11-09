@@ -10,6 +10,12 @@ BMZ固有のIDや詳細な動作契約は[skin.md](skin.md)、互換修正の方
 
 ## 対応済みの主な範囲
 
+Qwilightのプレイスキンは試験対応です（2026-11-10）。YAML / Lua / ZIPを読み、通常ノーツ・LN・基本HUD・装飾を描画します。
+10種類×8キー数の定義・素材パス検証と、Default / CR_DXの7K、CR_simpleの14KのGPUオフスクリーン描画を確認しています。
+テーマ、選曲・リザルト、専用SEや一部HUD・特殊演出は対象外です。
+[仕様と制限](skin.md#qwilightのプレイスキン)、[実素材テスト](../crates/bmz-player/src/skin_loader/tests/qwilight.rs)、
+[実装記録](../notes/2026/2026-11-10-qwilight-play-skins.md)を参照してください。
+
 Resultのお気に入りは、単曲・コース曲間で`act = 89 / 90`とimage/index `ref = 89 / 90`に対応します。
 スキンにボタンがなくても選曲と共通のF8 / F9割り当てで操作できます。2状態・コース最終での制限は
 [仕様](skin.md#resultのお気に入り)、[入力・保存の回帰テスト](../crates/bmz-player/src/app/tests/result_favorites.rs)を参照してください。

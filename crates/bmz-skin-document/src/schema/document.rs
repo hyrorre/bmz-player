@@ -71,6 +71,9 @@ pub struct SkinDocument {
     pub offset: Vec<SkinOffsetDef>,
     #[serde(default)]
     pub source: Vec<SkinSourceDef>,
+    /// Image sequences assembled by format adapters, keyed by source ID.
+    #[serde(default, rename = "sourceFrames")]
+    pub source_frames: HashMap<String, SkinSourceFramesDef>,
     #[serde(default)]
     pub font: Vec<SkinFontDef>,
     #[serde(default, rename = "lr2SystemFonts")]
@@ -351,6 +354,12 @@ pub struct SkinSourceDef {
     pub id: String,
     #[serde(default)]
     pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinSourceFramesDef {
+    pub paths: Vec<String>,
+    pub columns: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
