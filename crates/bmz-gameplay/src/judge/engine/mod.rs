@@ -14,6 +14,9 @@ use super::model::{
 };
 use crate::rule::RuleMode;
 
+mod chart_index;
+use chart_index::ChartIndex;
+
 const BSS_REVERSE_PRESS_SUPPRESSION_US: i64 = 30_000;
 
 fn press_window(window_set: JudgeWindows, scratch: bool) -> JudgeWindow {
@@ -43,6 +46,7 @@ pub struct JudgeEngine {
     scratch_lane_mask: [bool; LANE_COUNT],
     bad_attempted_notes: HashSet<NoteId>,
     bad_judge_vanish: bool,
+    chart_index: Option<std::sync::Arc<ChartIndex>>,
 }
 
 impl JudgeEngine {
@@ -90,6 +94,7 @@ impl JudgeEngine {
             scratch_lane_mask,
             bad_attempted_notes: HashSet::new(),
             bad_judge_vanish: bad_judge_vanish_for_keymode_and_rule_mode(key_mode, rule_mode),
+            chart_index: None,
         }
     }
 
@@ -419,7 +424,7 @@ impl JudgeEngine {
                 debug_assert!(false, "normal candidate must have note id");
                 return JudgeOutcome { mine_hits, ..Default::default() };
             };
-            let Some(note) = chart.note_by_id(note_id) else {
+            let Some(note) = self.note_by_id(chart, note_id) else {
                 debug_assert!(false, "candidate note {note_id:?} must exist in chart");
                 return JudgeOutcome { mine_hits, ..Default::default() };
             };

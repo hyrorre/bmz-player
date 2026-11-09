@@ -123,7 +123,10 @@ pub(super) fn select_press_candidate(
     let scan_fast_us = windows.bad_fast_us.max(windows.empty_poor_fast_us);
     let scan_slow_us = windows.bad_slow_us.max(windows.empty_poor_slow_us);
 
-    for note in chart.notes_for_lane(lane) {
+    let notes = chart.notes_for_lane(lane);
+    let earliest = input_time.0.saturating_sub(scan_slow_us);
+    let start = notes.partition_point(|note| note.time.0 < earliest);
+    for note in &notes[start..] {
         if note.time.0 - input_time.0 > scan_fast_us {
             break;
         }
@@ -255,8 +258,10 @@ pub(super) fn lr2oraja_multi_bad_candidates(
     judged_notes: &HashMap<NoteId, Judge>,
 ) -> Vec<MultiBadCandidate> {
     let selected_dmtime = -selected_candidate.delta.0;
-    let mut candidates = chart
-        .notes_for_lane(lane)
+    let notes = chart.notes_for_lane(lane);
+    let earliest = input_time.0.saturating_sub(windows.bad_slow_us);
+    let start = notes.partition_point(|note| note.time.0 < earliest);
+    let mut candidates = notes[start..]
         .iter()
         .take_while(|note| note.time.0 - input_time.0 <= windows.bad_fast_us)
         .filter(|note| {
@@ -361,12 +366,18 @@ pub(super) fn detect_mine_hit(
     window_us: i64,
     lane_state: &LaneJudgeState,
 ) -> Option<MineHitEvent> {
-    chart
-        .notes_for_lane(lane)
+    if window_us < 0 {
+        return None;
+    }
+    let notes = chart.notes_for_lane(lane);
+    let earliest = input_time.0.saturating_sub(window_us);
+    let latest = input_time.0.saturating_add(window_us);
+    let start = notes.partition_point(|note| note.time.0 < earliest);
+    notes[start..]
         .iter()
+        .take_while(|note| note.time.0 <= latest)
         .filter(|note| note.kind == NoteKind::Mine)
-        .filter(|note| Some(note.time) != lane_state.last_mine_hit_time)
-        .find(|note| (input_time.0 - note.time.0).abs() <= window_us)
+        .find(|note| Some(note.time) != lane_state.last_mine_hit_time)
         .map(|note| MineHitEvent {
             note_id: note.id,
             lane,

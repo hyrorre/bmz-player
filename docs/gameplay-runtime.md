@@ -43,6 +43,10 @@ region・scheduler・判定状態は引き継ぎません。cacheはプロセス
 
 ## 入力と時計
 
+ロード時に変換済み譜面のノートID・HCN区間索引と判定map容量を準備します。
+入力候補とMineは時刻窓から調べ、HCNは現在時刻を含み得る区間だけ更新します。
+別の譜面に差し替わった場合は索引を使わず、通常の探索へ戻ります。
+
 - Windowsキーボードは入力専用スレッドのmessage-only windowでRaw Inputを受け取ります。
   message取得時に既存`monotonic_timestamp_ns()`でtimestampを確定します。
   foreground windowを入力スレッドでも確認します。キーのrepeat / releaseとscancodeは

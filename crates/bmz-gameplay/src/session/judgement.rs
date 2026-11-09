@@ -69,8 +69,8 @@ pub(super) fn apply_judge_outcome_with_display_time(
     }
     outcome.keysounds.retain(|keysound| {
         session
-            .chart
-            .note_by_id(keysound.note_id)
+            .judge
+            .note_by_id(&session.chart, keysound.note_id)
             .is_none_or(|note| !session.display_only_lane_mask[note.lane.index()])
     });
     let mut events = Vec::with_capacity(outcome.events.len());

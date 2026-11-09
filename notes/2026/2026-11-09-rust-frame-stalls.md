@@ -155,9 +155,41 @@ fmt、check、all-targets Clippy、bmz-player全テスト2995 passed / 65 ignore
 初回の単純なclone_fromは事前確保容量を失う回帰で検出され、同容量時だけ使う方式へ修正した。
 SCROLL境界、ゼロ/負/非有限倍率、BGA同時刻・消去・Poor開始/終了を追加検証した。
 
+## 6. 判定候補・ノートID・HCN
+
+releaseの`profile_gameplay_searches`。各10回warm-up後1,000回。1レーンのTap列後半へ
+同じ入力を繰り返し、ID検索と、1区間だけが現在時刻を含むLN/HCN列の更新を測る。
+全入力・全判定規則を代表するものではなく、判定結果の互換は既存回帰で別に確認する。
+
+| 50,000件 | 修正前 中央値 / p95 | 修正後 中央値 / p95 |
+|---|---:|---:|
+| 入力処理 | 87.7 / 102.3 us | 0.2 / 0.2 us |
+| ノートID検索 | 42.4 / 48.7 us | 計時分解能未満 / 0.1 us |
+| 通常LNのHCN状態更新 | 91.9 / 100.1 us | 計時分解能未満 / 0.1 us |
+| HCN状態更新 | 91.9 / 105.2 us | 0.1 / 0.1 us |
+
+入力候補・LR2orajaの複数BAD・Mineを時刻の下限から調べる。ノートIDとHCN区間はロード時に
+索引を作り、live判定mapも必要容量を予約する。対戦相手も同様。HCNの重複区間は元の順序を保つ。
+索引は対象Arcを所有し、別譜面やArc::make_mut後は元の探索へ戻るため、古い索引を適用しない。
+
+## 7. 文字レイアウトキャッシュ
+
+releaseの`profile_layout_cache_overflow`。同梱テストフォントで4,096種類を組んだ後、
+100項目を再使用してから新規1項目と同じ100項目を描く。1回warm-up後10回。
+満杯時の全消去を古い1/4の退避に変え、同frameで描いたglyphのatlas行保護は維持する。
+
+| 満杯フレーム | 修正前 | 修正後 |
+|---|---:|---:|
+| 100項目のcache miss | 100 | 0 |
+| CPU 中央値 / 最大 | 579.9 / 665.7 us | 182.0 / 198.9 us |
+
+文字色・装飾の互換とatlas shelf recyclingは維持する。GPU転送・実スキン・全体FPSの値ではない。
+
+6・7の検証: fmt、workspace check、all-targets Clippy、workspace全テストが成功。
+主対象はgameplay 265 passed、render 1014 passed / 23 ignored、player 2995 passed / 65 ignored。
+索引の譜面差し替え・HCN重複/順序/個別mode、cacheの同一キー置換・同frame上限も追加確認した。
+
 ## 続く確認対象
 
-6. 判定候補・キー音ID・HCNの探索。
-7. 文字レイアウトキャッシュとatlas。
 9. 非表示動画の保持。
 10. 音声・動画資源の後片付け。

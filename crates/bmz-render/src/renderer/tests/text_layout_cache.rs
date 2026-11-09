@@ -133,3 +133,100 @@ fn far_away_origin_is_drawn_but_not_cached() {
         assert_same_layout(&normal, &fresh(font, NORMAL, decorated));
     }
 }
+
+#[test]
+#[ignore = "release CPU text cache probe; run alone with --ignored --nocapture"]
+fn profile_layout_cache_overflow() {
+    assert!(!std::hint::black_box(cfg!(debug_assertions)), "run with --release");
+    let face = latin();
+    let labels: Vec<_> = (0..TEXT_LAYOUT_CACHE_MAX_ENTRIES).map(|i| format!("AA {i}")).collect();
+    let hot = &labels[..100];
+    let draw_label = |atlas: &mut TextAtlasCache, text: &str| {
+        let mut builder = CachedTextFrameBuilder::new(atlas);
+        builder.push_text(
+            &NORMAL,
+            text,
+            text_style(None),
+            single_font_set("skin:cache", &face),
+            SURFACE,
+        );
+        std::hint::black_box(builder.quads.len());
+    };
+    let mut samples = Vec::new();
+    for iteration in 0..11 {
+        let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+        for label in &labels {
+            atlas.begin_frame();
+            draw_label(&mut atlas, label);
+        }
+        assert_eq!(atlas.layouts.len(), TEXT_LAYOUT_CACHE_MAX_ENTRIES);
+        atlas.begin_frame();
+        for label in hot {
+            draw_label(&mut atlas, label);
+        }
+        atlas.begin_frame();
+        let start = std::time::Instant::now();
+        draw_label(&mut atlas, "AA overflow");
+        let misses = hot
+            .iter()
+            .filter(|label| {
+                let key = text_layout_key(
+                    TextGlyphKind::Vector,
+                    "skin:cache",
+                    label,
+                    &text_style(None),
+                    SURFACE,
+                    false,
+                )
+                .unwrap();
+                atlas.cached_layout(&key).is_none()
+            })
+            .count();
+        for label in hot {
+            draw_label(&mut atlas, label);
+        }
+        let elapsed = start.elapsed().as_secs_f64() * 1e6;
+        if iteration > 0 {
+            samples.push(elapsed);
+        }
+        if iteration == 10 {
+            eprintln!("layout overflow hot_misses={misses}/100");
+        }
+    }
+    samples.sort_by(f64::total_cmp);
+    eprintln!("layout overflow median_us={:.3} max_us={:.3}", samples[5], samples[9]);
+}
+
+#[test]
+fn layout_capacity_evicts_old_entries_without_losing_recent_or_growing() {
+    let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+    let key = |i| {
+        text_layout_key(
+            TextGlyphKind::Vector,
+            "test",
+            &format!("{i}"),
+            &text_style(None),
+            SURFACE,
+            false,
+        )
+        .unwrap()
+    };
+    for i in 0..TEXT_LAYOUT_CACHE_MAX_ENTRIES {
+        atlas.begin_frame();
+        atlas.insert_layout(key(i), Vec::new());
+    }
+    atlas.begin_frame();
+    assert!(atlas.cached_layout(&key(0)).is_some());
+    // Replacing a key at capacity must not evict anything.
+    atlas.insert_layout(key(0), Vec::new());
+    assert_eq!(atlas.layouts.len(), TEXT_LAYOUT_CACHE_MAX_ENTRIES);
+    atlas.insert_layout(key(TEXT_LAYOUT_CACHE_MAX_ENTRIES), Vec::new());
+    assert_eq!(atlas.layouts.len(), TEXT_LAYOUT_CACHE_MAX_ENTRIES * 3 / 4 + 1);
+    assert!(atlas.cached_layout(&key(0)).is_some());
+    assert!(atlas.cached_layout(&key(1)).is_none());
+    // Equal frame ages still enforce the bound (e.g. a very large single frame).
+    for i in TEXT_LAYOUT_CACHE_MAX_ENTRIES + 1..TEXT_LAYOUT_CACHE_MAX_ENTRIES * 3 {
+        atlas.insert_layout(key(i), Vec::new());
+        assert!(atlas.layouts.len() <= TEXT_LAYOUT_CACHE_MAX_ENTRIES);
+    }
+}

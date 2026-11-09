@@ -1,6 +1,58 @@
 use super::*;
 
 #[test]
+fn chart_index_preserves_hcn_overlap_order_and_falls_back_after_chart_replacement() {
+    let mut chart = chart_with_long_start(TimeUs(0), TimeUs(1000));
+    chart.metadata.long_note_mode = LongNoteMode::Hcn;
+    let mut second = chart.long_notes[0].clone();
+    second.start_time = TimeUs(100);
+    second.end_time = TimeUs(200);
+    second.start_note_id = NoteId(3);
+    chart.long_notes.push(second);
+    let chart = std::sync::Arc::new(chart);
+    let judge = JudgeEngine::new(windows()).with_chart_index(chart.clone());
+    let passing = |now| {
+        judge
+            .hcn_pairs_at(&chart, TimeUs(now))
+            .filter(|pair| pair.start_time.0 <= now && now < pair.end_time.0)
+            .map(|pair| pair.start_note_id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(passing(99), vec![NoteId(1)]);
+    assert_eq!(passing(100), vec![NoteId(1), NoteId(3)]);
+    assert_eq!(passing(200), vec![NoteId(1)]);
+    assert!(passing(1000).is_empty());
+    for note in chart.lane_notes.iter().flatten() {
+        assert_eq!(judge.note_by_id(&chart, note.id).unwrap().time, note.time);
+    }
+    let mut replaced = (*chart).clone();
+    replaced.lane_notes[Lane::Key1.index()][0].id = NoteId(9999);
+    assert!(judge.note_by_id(&replaced, NoteId(9999)).is_some());
+    assert!(judge.note_by_id(&chart, NoteId(9999)).is_none());
+}
+
+#[test]
+fn indexed_hcn_handles_unsorted_pairs_and_per_pair_mode_override() {
+    let mut chart = chart_with_long_start(TimeUs(500), TimeUs(1000));
+    chart.metadata.long_note_mode = LongNoteMode::Hcn;
+    let mut earlier = chart.long_notes[0].clone();
+    earlier.start_time = TimeUs(0);
+    earlier.end_time = TimeUs(200);
+    earlier.start_note_id = NoteId(3);
+    chart.long_notes.push(earlier.clone());
+    earlier.mode = Some(LongNoteMode::Ln);
+    chart.long_notes.push(earlier);
+    let chart = std::sync::Arc::new(chart);
+    let judge = JudgeEngine::new(windows()).with_chart_index(chart.clone());
+    let passing: Vec<_> = judge
+        .hcn_pairs_at(&chart, TimeUs(100))
+        .filter(|pair| pair.start_time <= TimeUs(100) && TimeUs(100) < pair.end_time)
+        .map(|pair| pair.start_note_id)
+        .collect();
+    assert_eq!(passing, vec![NoteId(3)]);
+}
+
+#[test]
 fn normal_window_consumes_note() {
     let chart = chart_with_tap(TimeUs(1_000_000));
     let mut engine = JudgeEngine::new(windows());
