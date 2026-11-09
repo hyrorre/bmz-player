@@ -140,7 +140,10 @@ pub fn update_video_bga_frames(
     trim_video_decoders(video_bga_decoders, &active_video_assets, chart);
 }
 
-const WARM_VIDEO_DECODERS: usize = 2;
+/// Inactive video decoders kept for re-display and quick retry. Covers charts
+/// that switch among about ten videos per play without reopening; the cap bounds
+/// idle decode threads and queued RGBA frames for charts with dozens of videos.
+const WARM_VIDEO_DECODERS: usize = 10;
 
 fn most_recent_warm_assets(mut inactive: Vec<(BgaAssetId, std::time::Instant)>) -> Vec<BgaAssetId> {
     inactive.sort_unstable_by_key(|(id, used)| (std::cmp::Reverse(*used), id.0));
@@ -321,14 +324,14 @@ pub type VideoBgaDecoderMap = HashMap<BgaAssetId, ActiveVideoBgaDecoder>;
 mod tests {
     use super::*;
     #[test]
-    fn only_two_most_recent_inactive_videos_stay_warm() {
+    fn only_most_recent_inactive_videos_stay_warm() {
         let now = std::time::Instant::now();
         let warm = most_recent_warm_assets(
             (0..32)
                 .map(|i| (BgaAssetId(i), now + std::time::Duration::from_millis(i as u64)))
                 .collect(),
         );
-        assert_eq!(warm, vec![BgaAssetId(31), BgaAssetId(30)]);
+        assert_eq!(warm, (22..32).rev().map(BgaAssetId).collect::<Vec<_>>());
     }
     #[test]
     fn immutable_bga_selection_resolves_late_video_upload_and_preserves_tint() {

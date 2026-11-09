@@ -234,7 +234,8 @@ audio callbackから退避したsourceは、出力streamごとのworkerが回収
 window threadの通知はtry_lockだけで、空のqueueではworkerを起こしません。
 描画停止中も20ms周期で回収し、stream停止後の残りもworkerで解放します。
 
-BGA動画は表示中の各channelに加え、最後に使った非表示2本だけdecoderを保持します。
+BGA動画は表示中の各channelに加え、最後に使った非表示10本までdecoderを保持します。
+1プレイで十数本以上を切り替える譜面だけ、古いものから閉じます。
 退避した動画を再表示するときはそのイベント時刻へseekして開き直します。
 channel方式は先読みqueue満杯・EOFでparkし、frame取得・restart・停止で起こします。
 skin動画のclock方式は従来の短い待機上限を保ち、停止通知で早く復帰できます。

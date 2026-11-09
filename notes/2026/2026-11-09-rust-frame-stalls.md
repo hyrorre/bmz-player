@@ -280,3 +280,14 @@ Result 5frame描画、`status="success"`、`dropped_file_lines=0`を確認した
 実ライブラリの巨大フォルダ・DB競合・NASを代表しない。
 config保存、Luaからのファイル読み取り、GPU upload/acquire/present、OS schedulingや
 他プロセスによる負荷は、この個別CPU比較だけでは原因から除外できない。
+
+## 2026-11-09 追記: レビュー後の修正
+
+- channel方式の動画decoderは、受信queueのdrain後に起こすよう変更した（`25f0d811`）。
+- 難易度表の保存と曲scanは、どちらもlibrary.dbへ別接続で長い書き込みを行うため直列化した（`b5b2e3d7`）。
+  rusqliteは接続時に5秒のbusy timeoutを設定するため、競合は即失敗ではなく待機になる。
+- 非表示のBGA動画decoderの保持数を2本から10本へ変更した。ローカルlibrary.db（BGAあり約11万譜面）で
+  BGAチャンネルが参照する動画を数えると、3本以上は24曲・184譜面だった。#RANDOMを
+  2000回シミュレートした1プレイあたりの本数は、多くが11本以下だった。12本以上はりりりくろ！！
+  （Re:Barthで23〜32本）、Taken The First Step、一期一会、Stellar Blueに限られる。
+  7z/rar書庫内の2,640譜面は未解析。10本は、この分布での開き直しと待機decoderのメモリの折衷である。
