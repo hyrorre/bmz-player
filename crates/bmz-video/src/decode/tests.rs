@@ -375,6 +375,32 @@ fn decoder_with_channel(
 }
 
 #[test]
+fn poll_frame_wakes_a_decoder_parked_on_a_full_channel_after_draining() {
+    let (sender, mut decoder) = decoder_with_channel([]);
+    for pts_us in [10, 20, 30, 40] {
+        sender.try_send(queued_frame(0, pts_us)).unwrap();
+    }
+    let stop_decode = Arc::new(AtomicBool::new(false));
+    let restart_decode = Arc::new(AtomicBool::new(false));
+    let (sent_tx, sent_rx) = std::sync::mpsc::channel();
+    decoder.decode_thread = Some(std::thread::spawn(move || {
+        let end = send_decoded_frame(&sender, frame(50), 0, &stop_decode, &restart_decode);
+        let _ = sent_tx.send(end.unwrap());
+    }));
+    // Let the producer find the channel full and park.
+    std::thread::sleep(Duration::from_millis(20));
+    assert!(sent_rx.try_recv().is_err());
+
+    assert_eq!(decoder.poll_frame(25).unwrap().pts_us, 20);
+    // No further poll: the drain itself must have woken the producer.
+    assert_eq!(
+        sent_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+        ChannelDecodePassEnd::Eof,
+        "frame sent into the freed slot"
+    );
+}
+
+#[test]
 fn offline_selection_waits_for_a_future_frame_instead_of_reusing_stale_data() {
     let (sender, mut decoder) = decoder_with_channel([]);
     let producer = std::thread::spawn(move || {

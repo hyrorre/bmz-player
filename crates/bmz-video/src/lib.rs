@@ -362,9 +362,9 @@ impl VideoBgaDecoder {
     /// チャンネルをdrainして `video_offset_us` 以下の最新フレームを返す。
     pub fn poll_frame(&mut self, video_offset_us: i64) -> Option<&DecodedFrame> {
         self.playback_target_us.store(video_offset_us, Ordering::Release);
-        self.wake_decoder();
 
         if self.follow_playback_time {
+            self.wake_decoder();
             return self.poll_clocked_frame();
         }
 
@@ -404,6 +404,10 @@ impl VideoBgaDecoder {
                 }
             }
         }
+
+        // Wake after draining: a decoder parked on a full channel must see the
+        // freed slots now, not at the next frame's poll.
+        self.wake_decoder();
 
         if let Some(frame) = latest_due {
             self.current = Some(frame);
