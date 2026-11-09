@@ -153,8 +153,14 @@ impl WinitApp {
         );
     }
 
+    /// Starting a table store must wait for the previous store and for a song
+    /// scan; both hold library.db write transactions on their own connections.
+    fn table_store_blocked(&self) -> bool {
+        self.jobs.table_fetch.pending_store.is_some() || self.jobs.song_scan.pending.is_some()
+    }
+
     pub(in crate::app) fn poll_pending_rian_table_fetch(&mut self) {
-        if self.jobs.table_fetch.pending_store.is_some() {
+        if self.table_store_blocked() {
             return;
         }
         let Some(rx) = self.jobs.table_fetch.pending_rian.take() else {
@@ -248,7 +254,7 @@ impl WinitApp {
         // Serialize old-account removal after an already admitted commit. In
         // particular, switching profiles must not let an old worker recreate
         // its rows after cleanup. The UI never waits for the worker here.
-        if self.jobs.table_fetch.pending_store.is_some() {
+        if self.table_store_blocked() {
             return;
         }
         if !self.select_maintenance_allowed() {
@@ -349,7 +355,7 @@ impl WinitApp {
     }
 
     pub(in crate::app) fn poll_pending_table_fetch(&mut self) {
-        if self.jobs.table_fetch.pending_store.is_some() {
+        if self.table_store_blocked() {
             return;
         }
         let Some(rx) = self.jobs.table_fetch.pending.take() else {

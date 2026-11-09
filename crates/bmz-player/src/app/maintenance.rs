@@ -89,7 +89,10 @@ impl WinitApp {
     }
 
     pub(super) fn start_queued_song_scan_if_idle(&mut self) {
-        if !self.select_maintenance_allowed() {
+        // Scan and table store are both long library.db writers on their own
+        // connections. Serialize them so neither waits on the other's write lock
+        // and fails after rusqlite's 5 s busy timeout.
+        if !self.select_maintenance_allowed() || self.jobs.table_fetch.pending_store.is_some() {
             return;
         }
         if let Some(request) = self.jobs.song_scan.take_ready(Instant::now()) {
