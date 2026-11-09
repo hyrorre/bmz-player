@@ -42,7 +42,7 @@ pub enum InternalResolutionMode {
 }
 
 /// Surfaceへ実際に適用されたpresent設定。要求modeがGPU/OSで利用できない場合、
-/// `effective_mode`はfallback後の値になる。
+/// `effective_mode`はfallback後の値になる。復旧待ち中は最後に適用できた値を返す。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SurfacePresentationStatus {
     pub requested_mode: WgpuPresentMode,

@@ -324,6 +324,13 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // Windows' move/resize modal loop delivers redraws without
+                // about_to_wait. Keep the same bounded recovery active there.
+                self.update_surface_recovery();
+                if self.shutdown_requested.load(Ordering::SeqCst) {
+                    event_loop.exit();
+                    return;
+                }
                 let limit_start = Instant::now();
                 if !self.begin_scheduled_frame(event_loop) {
                     return;
@@ -633,6 +640,12 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.update_surface_recovery();
+        if self.shutdown_requested.load(Ordering::SeqCst) {
+            tracing::info!("shutdown requested; exiting cleanly");
+            event_loop.exit();
+            return;
+        }
         self.update_event_loop_probe_context();
         if std::mem::take(&mut self.ui.device_events_reconfigure_pending) {
             self.configure_device_events(event_loop);
@@ -659,11 +672,6 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 );
             }
         }
-        if self.shutdown_requested.load(Ordering::SeqCst) {
-            tracing::info!("shutdown requested; exiting cleanly");
-            event_loop.exit();
-            return;
-        }
         self.schedule_next_frame(event_loop);
     }
 
@@ -673,6 +681,28 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
 }
 
 impl WinitApp {
+    fn update_surface_recovery(&mut self) {
+        if self.renderer.surface_drawing_suspended()
+            && let Some(window) = &self.window
+        {
+            let size = window.inner_size();
+            self.renderer.update_surface_physical_size(SurfaceSize {
+                width: size.width,
+                height: size.height,
+            });
+        }
+        if self.renderer.retry_surface_configuration(Instant::now()) {
+            self.refresh_skin_screen_size();
+            self.update_search_ime_cursor_area();
+            self.frame.request_immediate_frame();
+        }
+        if let Some(error) = self.renderer.take_surface_failure() {
+            tracing::error!(%error, physical_size = ?self.window.as_ref().map(|window| window.inner_size()), "surface recovery failed; requesting orderly shutdown");
+            self.surface_error = Some(error);
+            self.shutdown_requested.store(true, Ordering::SeqCst);
+        }
+    }
+
     fn update_event_loop_probe_context(&mut self) {
         if self.event_loop_probe.is_none() {
             return;

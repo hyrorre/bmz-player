@@ -130,6 +130,7 @@ pub enum RenderSurfaceStatus {
     Rendered,
     SkippedNoSurface,
     SkippedZeroSize,
+    Recovering,
     Reconfigured,
     TimedOut,
 }

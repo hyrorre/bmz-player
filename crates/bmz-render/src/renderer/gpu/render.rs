@@ -11,14 +11,47 @@ impl WgpuRenderer {
         screenshot_request: Option<&ScreenshotRequest>,
         pre_present_notify: impl FnOnce(),
     ) -> Result<(RenderSurfaceStatus, GpuRenderTimings)> {
+        if self.check_device_loss()? {
+            // Terminal: there will be no resumed frame on this device. Do not
+            // upload egui deltas to a device already known to be lost.
+            return Ok((RenderSurfaceStatus::Recovering, GpuRenderTimings::default()));
+        }
+        // TexturesDelta is an ordered stream, independent of presentation.
+        // Apply sets before any early return, and frees after rendering OR skipping.
+        if let Some(frame) = egui {
+            self.egui.update_textures(&self.device, &self.queue, frame);
+        }
+        let result = self.render_plan_inner(
+            plan,
+            canvas_policy,
+            internal_resolution_mode,
+            font_sets,
+            egui,
+            screenshot_request,
+            pre_present_notify,
+        );
+        if let Some(frame) = egui {
+            self.egui.free_textures(frame);
+        }
+        result
+    }
+
+    fn render_plan_inner(
+        &mut self,
+        plan: &DrawPlan,
+        canvas_policy: CanvasRenderPolicy,
+        internal_resolution_mode: InternalResolutionMode,
+        font_sets: &SkinFontSets,
+        egui: Option<&EguiFrame>,
+        screenshot_request: Option<&ScreenshotRequest>,
+        pre_present_notify: impl FnOnce(),
+    ) -> Result<(RenderSurfaceStatus, GpuRenderTimings)> {
         let draw_start = Instant::now();
         let mut timings = GpuRenderTimings::default();
         self.poll_screenshot_work();
-        // egui のテクスチャ更新は、描画をスキップするフレームでも必ず適用する。
-        // TexturesDelta は累積ストリームのため、取りこぼすと後続フレームの
-        // 部分更新が未確保テクスチャを参照して panic する。
-        if let Some(frame) = egui {
-            self.egui.update_textures(&self.device, &self.queue, frame);
+        if let Some(status) = self.surface_blocked_status() {
+            timings.draw_us = draw_start.elapsed().as_micros();
+            return Ok((status, timings));
         }
 
         let surface_size = SurfaceSize { width: self.config.width, height: self.config.height };
@@ -87,17 +120,39 @@ impl WgpuRenderer {
 
         let submit_start = Instant::now();
         let surface_start = Instant::now();
-        let output = if let Some(surface) = &self.surface {
-            Some(match surface.get_current_texture() {
+        if self.check_device_loss()? {
+            return Ok((RenderSurfaceStatus::Recovering, timings));
+        }
+        #[cfg(test)]
+        if let Some(test) = &mut self.surface_test {
+            test.acquire_calls += 1;
+        }
+        let acquired = self.acquire_surface_texture();
+        let output = if let Some(acquired) = acquired {
+            Some(match acquired {
+                // Suboptimal still owns a valid image. Present it normally; do
+                // not configure while this image or its texture/view is alive.
+                // Resized/Outdated reconfiguration runs only after this call
+                // returns and all acquired-image references have been dropped.
                 wgpu::CurrentSurfaceTexture::Success(output)
                 | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
-                wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
-                    self.configure_surface()?;
+                status @ (wgpu::CurrentSurfaceTexture::Lost
+                | wgpu::CurrentSurfaceTexture::Outdated) => {
+                    self.invalidate_surface(
+                        if matches!(status, wgpu::CurrentSurfaceTexture::Lost) {
+                            SurfaceConfigureReason::Lost
+                        } else {
+                            SurfaceConfigureReason::Outdated
+                        },
+                    );
                     timings.surface_us = surface_start.elapsed().as_micros();
                     timings.submit_us = submit_start.elapsed().as_micros();
                     timings.draw_us = draw_start.elapsed().as_micros();
                     self.geometry_scratch = geometry;
-                    return Ok((RenderSurfaceStatus::Reconfigured, timings));
+                    return Ok((
+                        self.surface_blocked_status().unwrap_or(RenderSurfaceStatus::Reconfigured),
+                        timings,
+                    ));
                 }
                 wgpu::CurrentSurfaceTexture::Timeout => {
                     timings.surface_us = surface_start.elapsed().as_micros();
@@ -254,18 +309,21 @@ impl WgpuRenderer {
         let command_buffer = encoder.finish();
         timings.encode_us = encode_start.elapsed().as_micros();
         let queue_start = Instant::now();
+        if self.check_device_loss()? {
+            return Ok((RenderSurfaceStatus::Recovering, timings));
+        }
         self.queue.submit(egui_staging.into_iter().chain(std::iter::once(command_buffer)));
         self.texture_uploads.submitted();
         timings.queue_us = queue_start.elapsed().as_micros();
         if let Some((request, capture)) = screenshot {
             self.enqueue_screenshot_readback(request, capture);
         }
-        if let Some(frame) = egui {
-            self.egui.free_textures(frame);
-        }
         self.image_bind_group_scratch = image_bind_groups;
         self.geometry_scratch = geometry;
         let present_start = Instant::now();
+        if self.check_device_loss()? {
+            return Ok((RenderSurfaceStatus::Recovering, timings));
+        }
         if let Some(output) = output {
             pre_present_notify();
             output.present();
@@ -274,5 +332,14 @@ impl WgpuRenderer {
         timings.submit_us = submit_start.elapsed().as_micros();
         timings.draw_us = draw_start.elapsed().as_micros();
         Ok((RenderSurfaceStatus::Rendered, timings))
+    }
+
+    fn acquire_surface_texture(&mut self) -> Option<wgpu::CurrentSurfaceTexture> {
+        #[cfg(test)]
+        if let Some(status) = self.surface_test.as_mut().and_then(|test| test.acquire_result.take())
+        {
+            return Some(status);
+        }
+        self.surface.as_ref().map(wgpu::Surface::get_current_texture)
     }
 }

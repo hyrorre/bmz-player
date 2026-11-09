@@ -42,11 +42,6 @@ impl Renderer {
     where
         T: Into<wgpu::SurfaceTarget<'static>> + Clone,
     {
-        if !size.is_drawable() {
-            self.gpu = None;
-            return Ok(());
-        }
-
         let mut gpu = WgpuRenderer::new_with_fallbacks(
             window,
             size,
@@ -141,6 +136,7 @@ impl Renderer {
         let Some(gpu) = self.gpu.take() else {
             return;
         };
+        gpu.device_loss.begin_shutdown();
         gpu.wait_idle_before_drop();
     }
 
@@ -646,11 +642,39 @@ impl Renderer {
         let Some(gpu) = &mut self.gpu else {
             return Ok(());
         };
-        if !size.is_drawable() {
-            return Ok(());
-        }
-
         gpu.resize(size)
+    }
+
+    /// Retry only when due. Call from the event loop before building the next
+    /// scene, so skin screen-size updates use the successfully applied size.
+    pub fn retry_surface_configuration(&mut self, now: Instant) -> bool {
+        self.gpu.as_mut().is_some_and(|gpu| gpu.retry_surface(now))
+    }
+
+    /// Refresh the physical window dimensions before retrying, including when
+    /// Outdated arrives before winit has delivered the corresponding Resized.
+    pub fn update_surface_physical_size(&mut self, size: SurfaceSize) {
+        if let Some(recovery) = self.gpu.as_mut().and_then(|gpu| gpu.surface_recovery.as_mut()) {
+            recovery.refresh_physical_size(size);
+        }
+    }
+
+    pub fn surface_retry_deadline(&self) -> Option<Instant> {
+        self.gpu.as_ref()?.surface_recovery.as_ref()?.retry_deadline()
+    }
+
+    /// Offscreen output is not subject to window recovery or minimization.
+    pub fn surface_drawing_suspended(&self) -> bool {
+        self.gpu
+            .as_ref()
+            .is_some_and(|gpu| gpu.device_loss.is_lost() || gpu.surface_blocked_status().is_some())
+    }
+
+    /// Report a terminal failure once; keep acquisition disabled after reporting.
+    pub fn take_surface_failure(&mut self) -> Option<String> {
+        let gpu = self.gpu.as_mut()?;
+        let _ = gpu.check_device_loss();
+        gpu.surface_recovery.as_mut()?.take_failure()
     }
 
     /// Final output dimensions, independent of skin coordinates and internal scaling.
@@ -741,26 +765,26 @@ impl Renderer {
     }
 
     pub fn set_present_mode(&mut self, present_mode: WgpuPresentMode) -> Result<()> {
-        if self.present_mode == present_mode {
-            return Ok(());
-        }
         self.present_mode = present_mode;
         if let Some(gpu) = &mut self.gpu {
-            gpu.configure_presentation(present_mode, self.frame_latency_mode)?;
-            tracing::info!(requested = ?present_mode, "present mode updated");
+            gpu.configure_presentation(
+                present_mode,
+                self.frame_latency_mode,
+                SurfaceConfigureReason::PresentMode,
+            );
         }
         Ok(())
     }
 
     pub fn set_frame_latency_mode(&mut self, mode: WgpuFrameLatencyMode) -> Result<()> {
-        if self.frame_latency_mode == mode {
-            return Ok(());
-        }
         self.frame_latency_mode = mode;
         if let Some(gpu) = &mut self.gpu {
-            gpu.configure_presentation(self.present_mode, mode)?;
+            gpu.configure_presentation(
+                self.present_mode,
+                mode,
+                SurfaceConfigureReason::FrameLatency,
+            );
         }
-        tracing::info!(?mode, "frame latency mode updated");
         Ok(())
     }
 
@@ -777,6 +801,10 @@ impl Renderer {
 
     pub fn surface_presentation_status(&self) -> Option<SurfacePresentationStatus> {
         let gpu = self.gpu.as_ref()?;
+        if !gpu.surface_size().is_drawable() {
+            // An initially zero-sized window has no successful configuration yet.
+            return None;
+        }
         Some(SurfacePresentationStatus {
             requested_mode: self.present_mode,
             effective_mode: wgpu_present_mode_label(gpu.config.present_mode),
@@ -827,14 +855,14 @@ impl Renderer {
         &mut self,
         notify: impl FnOnce(),
     ) -> Result<RenderSurfaceStatus> {
-        let egui = self.pending_egui.take();
-        let screenshot = self.pending_screenshot.take();
         let Some(gpu) = &mut self.gpu else {
             return Ok(RenderSurfaceStatus::SkippedNoSurface);
         };
         let Some(plan) = &self.last_plan else {
             return Ok(RenderSurfaceStatus::SkippedNoSurface);
         };
+        let egui = self.pending_egui.take();
+        let screenshot = self.pending_screenshot.take();
 
         let (status, gpu_timings) = gpu.render_plan(
             plan,

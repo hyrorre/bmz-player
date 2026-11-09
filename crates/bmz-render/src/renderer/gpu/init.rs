@@ -104,6 +104,11 @@ impl WgpuRenderer {
             trace: wgpu::Trace::Off,
         }))
         .context("failed to request wgpu device")?;
+        let device_loss = std::sync::Arc::new(DeviceLoss::default());
+        let callback_state = std::sync::Arc::clone(&device_loss);
+        device.set_device_lost_callback(move |reason, message| {
+            callback_state.notify(reason, message)
+        });
         let present_modes = surface
             .as_ref()
             .map(|s| s.get_capabilities(&adapter).present_modes)
@@ -129,15 +134,19 @@ impl WgpuRenderer {
         // それと合わせるため sRGB サフィックスを除去して non-sRGB サーフェスとして使う。
         config.format = config.format.remove_srgb_suffix();
         configure_surface_settings(&mut config, present_mode, frame_latency_mode, &present_modes);
-        if let Some(surface) = &surface {
+        if let Some(surface) = &surface
+            && size.is_drawable()
+        {
             configure_surface_checked(surface, &device, &config, &adapter_info)
                 .context("initial surface configuration failed")?;
         }
+        anyhow::ensure!(!device_loss.is_lost(), "device lost during initial surface configuration");
         anyhow::ensure!(
-            size.width > 0
-                && size.height > 0
-                && size.width <= adapter_limits.max_texture_dimension_2d
-                && size.height <= adapter_limits.max_texture_dimension_2d,
+            surface.is_some()
+                || (size.width > 0
+                    && size.height > 0
+                    && size.width <= adapter_limits.max_texture_dimension_2d
+                    && size.height <= adapter_limits.max_texture_dimension_2d),
             "unsupported export dimensions"
         );
         let export_target = surface.is_none().then(|| {
@@ -221,9 +230,13 @@ impl WgpuRenderer {
         let max_texture_dimension_2d = device.limits().max_texture_dimension_2d;
         Ok(Self {
             device,
+            device_loss,
             queue,
             adapter_info,
+            surface_recovery: surface.as_ref().map(|_| SurfaceRecovery::new(&config)),
             config,
+            #[cfg(test)]
+            surface_test: None,
             present_modes,
             rect_pipeline,
             rect_buffer: None,

@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-09 | [Surface再設定失敗後のクラッシュ経路](2026/2026-11-09-surface-reconfiguration-recovery.md) |
 | 2026-11-08 | [スレッド分離後のスキンtimer更新とLN残光](2026/2026-11-08-play-skin-timer-projection.md) |
 | 2026-11-08 | [READY中のターンテーブル回転停止](2026/2026-11-08-ready-turntable-rotation.md) |
 | 2026-11-08 | [音声予約の固定と選曲・HS変更時の移動](2026/2026-11-08-play-display-and-select-motion.md) |

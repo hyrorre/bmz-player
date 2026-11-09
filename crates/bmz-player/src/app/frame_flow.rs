@@ -80,6 +80,11 @@ impl WinitApp {
     }
 
     pub(super) fn current_frame_limit(&self) -> u32 {
+        // Keep CPU-side app/egui updates alive while presentation is suspended,
+        // including Unlimited FPS and Wayland with no presentation callback.
+        if self.renderer.surface_drawing_suspended() {
+            return 30;
+        }
         if self.ui.focused {
             self.boot.app_config.video.target_fps
         } else {
@@ -119,7 +124,11 @@ impl WinitApp {
         match self.frame.begin_scheduled_frame(now, pacing_state) {
             FrameSchedule::Start => true,
             FrameSchedule::WaitUntil(deadline) => {
-                match pacing_state.wait_plan(now, deadline, cfg!(windows)) {
+                match pacing_state.wait_plan(
+                    now,
+                    deadline,
+                    cfg!(windows) && !self.renderer.surface_drawing_suspended(),
+                ) {
                     frame_runtime::FrameWait::SleepUntil(wake) => {
                         event_loop.set_control_flow(ControlFlow::WaitUntil(wake));
                         false
@@ -145,8 +154,16 @@ impl WinitApp {
     pub(super) fn schedule_next_frame(&self, event_loop: &ActiveEventLoop) {
         let now = Instant::now();
         let fps = self.current_frame_limit();
-        if let Some(deadline) = self.frame.next_deadline(now, fps) {
-            match self.current_frame_pacing_state().wait_plan(now, deadline, cfg!(windows)) {
+        let deadline = earlier_frame_deadline(
+            self.frame.next_deadline(now, fps),
+            self.renderer.surface_retry_deadline(),
+        );
+        if let Some(deadline) = deadline.filter(|deadline| *deadline > now) {
+            match self.current_frame_pacing_state().wait_plan(
+                now,
+                deadline,
+                cfg!(windows) && !self.renderer.surface_drawing_suspended(),
+            ) {
                 frame_runtime::FrameWait::SleepUntil(wake) => {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(wake));
                 }
@@ -857,6 +874,10 @@ impl WinitApp {
             return;
         }
 
+        if !self.frame.last_frame_rendered {
+            return;
+        }
+
         if let Some(exit_after_result_frames) = self.smoke.smoke_exit_after_result_frames
             && self.result.finished_play.is_some()
         {
@@ -1083,6 +1104,11 @@ fn should_arm_select_scene_timers(
     select_view && !timer_armed && render_status == Some(RenderSurfaceStatus::Rendered)
 }
 
+fn earlier_frame_deadline(frame: Option<Instant>, retry: Option<Instant>) -> Option<Instant> {
+    // None means the CPU frame is already due; do not delay it until a retry.
+    frame.map(|deadline| retry.map_or(deadline, |retry| deadline.min(retry)))
+}
+
 fn frame_idle_control_flow(fps: u32, wayland_frame_callbacks: bool) -> ControlFlow {
     if fps == 0 && !wayland_frame_callbacks {
         ControlFlow::Poll
@@ -1100,6 +1126,17 @@ mod select_scene_timer_tests {
     };
 
     #[test]
+    fn surface_retry_wakes_without_resize_and_does_not_delay_cpu_frames() {
+        let now = std::time::Instant::now();
+        let retry = now + std::time::Duration::from_millis(250);
+        let frame = now + std::time::Duration::from_secs(1);
+        assert_eq!(super::earlier_frame_deadline(Some(frame), Some(retry)), Some(retry));
+        assert_eq!(super::earlier_frame_deadline(Some(retry), Some(frame)), Some(retry));
+        assert_eq!(super::earlier_frame_deadline(None, Some(retry)), None);
+        assert_eq!(super::earlier_frame_deadline(Some(frame), None), Some(frame));
+    }
+
+    #[test]
     fn unlimited_wayland_frames_wait_for_the_compositor_without_spinning() {
         assert_eq!(frame_idle_control_flow(0, true), ControlFlow::Wait);
         assert_eq!(frame_idle_control_flow(0, false), ControlFlow::Poll);
@@ -1109,6 +1146,11 @@ mod select_scene_timer_tests {
 
     #[test]
     fn select_timer_arms_only_after_first_rendered_surface() {
+        assert!(!should_arm_select_scene_timers(
+            true,
+            false,
+            Some(RenderSurfaceStatus::Recovering)
+        ));
         assert!(!should_arm_select_scene_timers(
             true,
             false,
