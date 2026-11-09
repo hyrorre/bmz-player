@@ -227,7 +227,50 @@ admission上限、HCNを含む既存音声回帰を検証する。fmt、workspac
 workspace全テストは成功（player 2996 passed / 66 ignored、audio 189 passed / 4 ignored、
 video 42 passed / 2 ignored）。EOF後の繰り返しrestartも実FFmpegの一時Y4Mで追加し、
 videoのClippyと全テスト43 passed / 2 ignoredを確認した。
-実ウィンドウsmokeは続けて実施する。
+
+## 最終確認
+
+Rustの最終コミットは`968000e3371ec49af2c0b11452fa32da4132c714`。
+共有変更時のworkspace check / all-targets Clippy / 全テストが成功した後、
+追加したvideo回帰は同crate全テスト、SCROLL境界はplayer全テストで再確認した。
+fmtとreleaseアプリのbuildも成功した。ignoredの性能プローブとoffscreen GPU回帰は、
+上記に記載した対象を明示的に実行したもので、全ignoredテストを実行したわけではない。
+
+Windowsの実ウィンドウでも、独立したデータ領域で以下を確認した。
+全プロセスが終了コード0で終了し、SelectとResultの1280×720画像を目視確認した。
+
+| 起動条件 | 確認結果 |
+|---|---|
+| Select、描画60frame後終了 | 既定スキンで一覧描画、`select.png`保存 |
+| 同梱サンプル自動演奏、Result 5frame後終了 | Select→Decide→Play→Resultの遷移、正常終了 |
+| 合成Result、描画120frame後終了 | 既定スキンのスコア・判定内訳描画、`result.png`保存 |
+
+共通設定は`--window-mode windowed --window-size 1280x720`。
+`BMZ_RESOURCE_DIR`はrepoの`data`、`BMZ_DATA_DIR`は
+`.local/performance/rust-frame-stalls/window-smoke-1`を指定し、
+`BMZ_CACHE_DIR` / `BMZ_LOGS_DIR`の上書きを外した。通常のDB・設定は使用していない。
+呼び出し側は各120秒の制限を設けたが、timeoutは発生していない。
+
+```powershell
+cargo run --release -p bmz-player --locked -- --window-mode windowed --window-size 1280x720 --smoke-exit-after-frames 60 --smoke-screenshot .local/performance/rust-frame-stalls/select.png
+cargo run --release -p bmz-player --locked -- --window-mode windowed --window-size 1280x720 --boot-play-sample --autoplay-on-start --smoke-exit-after-result-frames 5
+cargo run --release -p bmz-player --locked -- --window-mode windowed --window-size 1280x720 --boot-result-sample --smoke-exit-after-frames 120 --smoke-screenshot .local/performance/rust-frame-stalls/result.png
+```
+
+初回は継承された`RUST_LOG=warn`で警告・エラーログなし。
+遷移とbackendの証拠を残すため、自動演奏を`RUST_LOG=info`で1回追加した。
+NVIDIA GeForce RTX 5090 / DX12 / Fifoでsurface描画し、WASAPIはRME Babyface Proを
+48kHz / 2ch / 480frameで開いた。ログ上のSelect・Decide・Play・Result到達と
+Result 5frame描画、`status="success"`、`dropped_file_lines=0`を確認した。
+この試行にもWARN / ERRORはない。別途、バックグラウンドのスキンcatalog走査中に
+外部mz-selectのLuaから`m-select error: nil`というINFOのprintが1件出ている。
+これは既定スキンの実描画確認と区別し、外部スキンの全互換を確認済みとはしない。
+
+生ログと画像は`.local/performance/rust-frame-stalls/`に保存した。
+`stage910-tests.log`、`scroll-precision-tests.log`、`scroll-precision-profile.log`、
+`window-autoplay-info.log`などを参照。実ウィンドウsmokeは動作確認であり、
+表示FPS・frame timeの修正前後比較ではない。音声出力の初期化とサンプル進行は
+確認したが、聴感・物理出力時刻・手動演奏・コントローラ・macOS / Linuxは未検証。
 
 ## 残る同期処理と検証範囲
 
