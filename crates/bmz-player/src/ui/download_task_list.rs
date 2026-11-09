@@ -21,19 +21,40 @@ struct DownloadCounts {
     cancelled: usize,
 }
 
-impl DownloadCounts {
-    fn record(&mut self, state: DownloadState) {
-        // Keep this exhaustive so new states must be classified before the UI compiles.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DownloadBucket {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl DownloadBucket {
+    fn from_state(state: DownloadState) -> Self {
+        // Counts and filters share this exhaustive classification.
         match state {
-            DownloadState::Queued => self.queued += 1,
+            DownloadState::Queued => Self::Queued,
             DownloadState::Resolving
             | DownloadState::Downloading
             | DownloadState::Validating
             | DownloadState::Extracting
-            | DownloadState::Scanning => self.running += 1,
-            DownloadState::Completed => self.completed += 1,
-            DownloadState::Failed => self.failed += 1,
-            DownloadState::Cancelled => self.cancelled += 1,
+            | DownloadState::Scanning => Self::Running,
+            DownloadState::Completed => Self::Completed,
+            DownloadState::Failed => Self::Failed,
+            DownloadState::Cancelled => Self::Cancelled,
+        }
+    }
+}
+
+impl DownloadCounts {
+    fn record(&mut self, bucket: DownloadBucket) {
+        match bucket {
+            DownloadBucket::Queued => self.queued += 1,
+            DownloadBucket::Running => self.running += 1,
+            DownloadBucket::Completed => self.completed += 1,
+            DownloadBucket::Failed => self.failed += 1,
+            DownloadBucket::Cancelled => self.cancelled += 1,
         }
     }
 
@@ -65,21 +86,14 @@ pub(super) fn build_task_list(
         view.counts = DownloadCounts::default();
         view.indices.clear();
         for (index, task) in manager.tasks().iter().enumerate() {
-            let state = task.state();
-            view.counts.record(state);
+            let bucket = DownloadBucket::from_state(task.state());
+            view.counts.record(bucket);
             let included = match view.filter {
-                1 => matches!(
-                    state,
-                    DownloadState::Resolving
-                        | DownloadState::Downloading
-                        | DownloadState::Validating
-                        | DownloadState::Extracting
-                        | DownloadState::Scanning
-                ),
-                2 => state == DownloadState::Queued,
-                3 => state == DownloadState::Completed,
-                4 => state == DownloadState::Failed,
-                5 => state == DownloadState::Cancelled,
+                1 => bucket == DownloadBucket::Running,
+                2 => bucket == DownloadBucket::Queued,
+                3 => bucket == DownloadBucket::Completed,
+                4 => bucket == DownloadBucket::Failed,
+                5 => bucket == DownloadBucket::Cancelled,
                 _ => true,
             };
             if included {
