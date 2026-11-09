@@ -80,10 +80,17 @@ impl WinitApp {
     }
 
     pub(super) fn current_frame_limit(&self) -> u32 {
-        if self.ui.focused {
+        let frame_limit = if self.ui.focused {
             self.boot.app_config.video.target_fps
         } else {
             self.boot.app_config.video.frame_limit_in_background
+        };
+        // Keep CPU/egui updates alive without raising a lower user limit,
+        // including when a zero-size surface has suspended presentation.
+        if self.renderer.surface_drawing_suspended() {
+            suspended_frame_limit(frame_limit, self.boot.app_config.video.frame_limit_in_background)
+        } else {
+            frame_limit
         }
     }
 
@@ -119,7 +126,11 @@ impl WinitApp {
         match self.frame.begin_scheduled_frame(now, pacing_state) {
             FrameSchedule::Start => true,
             FrameSchedule::WaitUntil(deadline) => {
-                match pacing_state.wait_plan(now, deadline, cfg!(windows)) {
+                match pacing_state.wait_plan(
+                    now,
+                    deadline,
+                    cfg!(windows) && !self.renderer.surface_drawing_suspended(),
+                ) {
                     frame_runtime::FrameWait::SleepUntil(wake) => {
                         event_loop.set_control_flow(ControlFlow::WaitUntil(wake));
                         false
@@ -145,8 +156,16 @@ impl WinitApp {
     pub(super) fn schedule_next_frame(&self, event_loop: &ActiveEventLoop) {
         let now = Instant::now();
         let fps = self.current_frame_limit();
-        if let Some(deadline) = self.frame.next_deadline(now, fps) {
-            match self.current_frame_pacing_state().wait_plan(now, deadline, cfg!(windows)) {
+        let deadline = earlier_frame_deadline(
+            self.frame.next_deadline(now, fps),
+            self.renderer.surface_retry_deadline(),
+        );
+        if let Some(deadline) = deadline.filter(|deadline| *deadline > now) {
+            match self.current_frame_pacing_state().wait_plan(
+                now,
+                deadline,
+                cfg!(windows) && !self.renderer.surface_drawing_suspended(),
+            ) {
                 frame_runtime::FrameWait::SleepUntil(wake) => {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(wake));
                 }
@@ -857,6 +876,10 @@ impl WinitApp {
             return;
         }
 
+        if !self.frame.last_frame_rendered {
+            return;
+        }
+
         if let Some(exit_after_result_frames) = self.smoke.smoke_exit_after_result_frames
             && self.result.finished_play.is_some()
         {
@@ -1083,6 +1106,16 @@ fn should_arm_select_scene_timers(
     select_view && !timer_armed && render_status == Some(RenderSurfaceStatus::Rendered)
 }
 
+fn suspended_frame_limit(frame_limit: u32, background_limit: u32) -> u32 {
+    // Zero means unlimited. Still wake for CPU updates without busy polling.
+    [frame_limit, background_limit].into_iter().filter(|&limit| limit != 0).fold(30, u32::min)
+}
+
+fn earlier_frame_deadline(frame: Option<Instant>, retry: Option<Instant>) -> Option<Instant> {
+    // None means the CPU frame is already due; do not delay it until a retry.
+    frame.map(|deadline| retry.map_or(deadline, |retry| deadline.min(retry)))
+}
+
 fn frame_idle_control_flow(fps: u32, wayland_frame_callbacks: bool) -> ControlFlow {
     if fps == 0 && !wayland_frame_callbacks {
         ControlFlow::Poll
@@ -1097,7 +1130,28 @@ fn frame_idle_control_flow(fps: u32, wayland_frame_callbacks: bool) -> ControlFl
 mod select_scene_timer_tests {
     use super::{
         ControlFlow, RenderSurfaceStatus, frame_idle_control_flow, should_arm_select_scene_timers,
+        suspended_frame_limit,
     };
+
+    #[test]
+    fn suspended_frames_preserve_lower_limits_and_bound_unlimited_updates() {
+        for (frame_limit, background_limit, expected) in
+            [(240, 60, 30), (1, 1, 1), (240, 10, 10), (10, 60, 10), (0, 10, 10), (0, 0, 30)]
+        {
+            assert_eq!(suspended_frame_limit(frame_limit, background_limit), expected);
+        }
+    }
+
+    #[test]
+    fn surface_retry_wakes_without_resize_and_does_not_delay_cpu_frames() {
+        let now = std::time::Instant::now();
+        let retry = now + std::time::Duration::from_millis(250);
+        let frame = now + std::time::Duration::from_secs(1);
+        assert_eq!(super::earlier_frame_deadline(Some(frame), Some(retry)), Some(retry));
+        assert_eq!(super::earlier_frame_deadline(Some(retry), Some(frame)), Some(retry));
+        assert_eq!(super::earlier_frame_deadline(None, Some(retry)), None);
+        assert_eq!(super::earlier_frame_deadline(Some(frame), None), Some(frame));
+    }
 
     #[test]
     fn unlimited_wayland_frames_wait_for_the_compositor_without_spinning() {
@@ -1109,6 +1163,11 @@ mod select_scene_timer_tests {
 
     #[test]
     fn select_timer_arms_only_after_first_rendered_surface() {
+        assert!(!should_arm_select_scene_timers(
+            true,
+            false,
+            Some(RenderSurfaceStatus::Recovering)
+        ));
         assert!(!should_arm_select_scene_timers(
             true,
             false,

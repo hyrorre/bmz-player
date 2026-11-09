@@ -2,20 +2,122 @@ use super::*;
 
 impl WgpuRenderer {
     pub(in crate::renderer) fn resize(&mut self, size: SurfaceSize) -> Result<()> {
-        if !size.is_drawable() {
-            return Ok(());
-        }
-
         anyhow::ensure!(
-            self.export_target.is_none() || self.surface_size() == size,
+            self.surface_recovery.is_some() || !size.is_drawable() || self.surface_size() == size,
             "offscreen target dimensions are fixed; attach a new target to resize"
         );
 
-        self.config.width = size.width;
-        self.config.height = size.height;
-        self.clear_internal_scene_target();
-        self.clear_offscreen_rect_batches();
-        self.configure_surface()
+        if let Some(recovery) = &mut self.surface_recovery {
+            let mut desired = recovery.desired.clone();
+            desired.width = size.width;
+            desired.height = size.height;
+            recovery.request(desired, SurfaceConfigureReason::Resize);
+            self.retry_surface(Instant::now());
+        }
+        Ok(())
+    }
+
+    pub(in crate::renderer) fn surface_blocked_status(&self) -> Option<RenderSurfaceStatus> {
+        self.surface_recovery.as_ref().and_then(SurfaceRecovery::blocked_status)
+    }
+
+    pub(in crate::renderer) fn invalidate_surface(&mut self, reason: SurfaceConfigureReason) {
+        if let Some(recovery) = &mut self.surface_recovery {
+            if reason == SurfaceConfigureReason::Lost {
+                recovery.fail(
+                    reason,
+                    &self.config,
+                    &self.adapter_info,
+                    "surface lost; a new Surface is required",
+                );
+            } else {
+                recovery.request(recovery.desired.clone(), reason);
+                // Outdated must return to the window owner to sample the current
+                // physical size. Never configure with the stored extent here.
+            }
+        }
+    }
+
+    pub(in crate::renderer) fn check_device_loss(&mut self) -> Result<bool> {
+        if !self.device_loss.is_lost() {
+            return Ok(false);
+        }
+        if let Some(recovery) = &mut self.surface_recovery {
+            if let Some(message) = self.device_loss.take_message() {
+                recovery.fail(
+                    SurfaceConfigureReason::DeviceLost,
+                    &self.config,
+                    &self.adapter_info,
+                    &message,
+                );
+            }
+            Ok(true)
+        } else {
+            anyhow::bail!(
+                "offscreen GPU device lost: {}",
+                self.device_loss.take_message().unwrap_or_default()
+            )
+        }
+    }
+
+    pub(in crate::renderer) fn retry_surface(&mut self, now: Instant) -> bool {
+        if self.check_device_loss().unwrap_or(true) {
+            return false;
+        }
+        let Some(recovery) = &mut self.surface_recovery else { return false };
+        let applied = recovery.retry(&mut self.config, &self.adapter_info, now, |desired| {
+            #[cfg(test)]
+            if let Some(test) = &mut self.surface_test {
+                test.configure_calls += 1;
+                if test.failures_remaining > 0 {
+                    test.failures_remaining -= 1;
+                    anyhow::bail!("injected surface configure failure");
+                }
+                if test.lose_device_during_configure {
+                    self.device_loss.notify(
+                        wgpu::DeviceLostReason::Unknown,
+                        "injected loss with empty error scopes".into(),
+                    );
+                }
+            }
+            if let Some(surface) = &self.surface {
+                configure_surface_checked(surface, &self.device, desired, &self.adapter_info)?;
+            }
+            anyhow::ensure!(!self.device_loss.is_lost(), "device lost during surface configure");
+            Ok(())
+        });
+        if self.check_device_loss().unwrap_or(true) {
+            return false;
+        }
+        if applied {
+            self.clear_internal_scene_target();
+            self.clear_offscreen_rect_batches();
+        }
+        applied
+    }
+
+    pub(in crate::renderer) fn configure_presentation(
+        &mut self,
+        present_mode: WgpuPresentMode,
+        frame_latency_mode: WgpuFrameLatencyMode,
+        reason: SurfaceConfigureReason,
+    ) {
+        let Some(recovery) = &mut self.surface_recovery else { return };
+        let was_available = recovery.blocked_status().is_none();
+        let mut desired = recovery.desired.clone();
+        configure_surface_settings(
+            &mut desired,
+            present_mode,
+            frame_latency_mode,
+            &self.present_modes,
+        );
+        recovery.request(desired, reason);
+        // While recovering, let the event-loop retry publish the latest size to
+        // skin loaders before the next scene. A setter must not silently apply a
+        // previously failed resize without that notification.
+        if was_available {
+            self.retry_surface(Instant::now());
+        }
     }
 
     pub(in crate::renderer) fn surface_size(&self) -> SurfaceSize {

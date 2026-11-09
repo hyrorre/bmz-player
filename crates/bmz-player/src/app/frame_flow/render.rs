@@ -188,6 +188,7 @@ fn log_render_status(render_status: Result<RenderSurfaceStatus>) {
     match render_status {
         Ok(RenderSurfaceStatus::Rendered)
         | Ok(RenderSurfaceStatus::SkippedNoSurface)
+        | Ok(RenderSurfaceStatus::Recovering)
         | Ok(RenderSurfaceStatus::SkippedZeroSize) => {}
         Ok(RenderSurfaceStatus::Reconfigured) => {
             tracing::debug!("renderer surface reconfigured");

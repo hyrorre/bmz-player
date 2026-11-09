@@ -170,6 +170,12 @@ cargo run -p bmz-player --release -- --boot-play-sample --autoplay-on-start --sm
 ```
 
 `--smoke-exit-after-play-frames`はPlay sceneの描画フレームだけを数えます。
+`--smoke-exit-after-frames`と`--smoke-exit-after-result-frames`も、対象の描画が成功したときだけ
+件数を進めます。Surface復旧待ち・0サイズ・画像取得失敗などのスキップは含めません。
+最小化などで描画不能な状態が続くと指定件数に達しないため、無人実行には呼び出し側で
+プロセスのタイムアウトを設けてください。`--smoke-exit-on-result`は描画件数によらず
+プレイ終了時に終了します。Surface復旧の打ち切り・SurfaceLost・DeviceLostによる終了では、
+smoke指定時はモーダルダイアログを省略し、ログとエラー終了で失敗を通知します。
 FPS等の比較には同じ譜面・設定・バックエンド・計測条件が必要です。smoke成功だけでは性能を判断しません。
 リプレイ確認は、対象profile・譜面に保存済みのslotがある場合に
 `--boot-replay 1 --smoke-exit-on-result`を使います。

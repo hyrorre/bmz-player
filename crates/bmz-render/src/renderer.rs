@@ -79,8 +79,12 @@ use ambient::{
 };
 mod backend_config;
 mod canvas;
+mod device_loss;
 mod state;
 mod surface;
+mod surface_recovery;
+use device_loss::DeviceLoss;
+use surface_recovery::{SurfaceConfigureReason, SurfaceRecovery};
 
 #[cfg(test)]
 use backend_config::auto_wgpu_backends;

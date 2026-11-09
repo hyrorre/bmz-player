@@ -18,6 +18,11 @@ pub struct EguiPainter {
 }
 
 impl EguiPainter {
+    #[cfg(test)]
+    pub(crate) fn texture_for_test(&self, id: egui::TextureId) -> Option<&wgpu::Texture> {
+        self.renderer.texture(&id)?.texture.as_ref()
+    }
+
     pub fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
         let renderer = EguiWgpuRenderer::new(device, surface_format, RendererOptions::default());
         Self { renderer }

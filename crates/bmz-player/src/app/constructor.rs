@@ -273,6 +273,7 @@ impl WinitApp {
         // too little of Windows' main-thread stack for synchronous skin decoding.
         let mut app = Box::new(Self {
             startup_error: None,
+            surface_error: None,
             boot,
             window: None,
             first_frame_startup_completed: false,

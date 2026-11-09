@@ -559,6 +559,9 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
 
     let (maintenance_select_tx, _) = tokio::sync::watch::channel(false);
 
+    // Smoke counters/options can be consumed during the run. Preserve the
+    // initial notification policy so unattended runs never wait on a dialog.
+    let show_surface_dialog = show_surface_error_dialog(&options);
     let mut app = WinitApp::new(
         boot,
         options,
@@ -575,6 +578,7 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
     tracing::info!("starting winit event loop");
     let result = event_loop.run_app(app.as_mut()).context("winit event loop failed");
     let startup_error = app.startup_error.take();
+    let surface_error = app.surface_error.take();
     if let Some(obs) = app.integrations.obs_controller.take() {
         // The game loop has ended; yield asynchronously while MAIN_END drains.
         obs.shutdown().await;
@@ -582,6 +586,17 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
     drop(app);
     drop(viewer_cleanup);
     result?;
+    if let Some(error) = surface_error {
+        // The surface cannot display an egui toast. Show the native dialog after
+        // the event loop and normal shutdown have released gameplay/audio/GPU.
+        return report_surface_failure(error, show_surface_dialog, |error| {
+            rfd::MessageDialog::new()
+                .set_title("BMZ Player — rendering error")
+                .set_description(format!("The window surface could not be restored. BMZ Player has closed.\nPlease include the session log when reporting this error.\n\n{error}"))
+                .set_level(rfd::MessageLevel::Error)
+                .show();
+        });
+    }
     if let Some(error) = startup_error {
         bail!("{error}");
     }
@@ -785,6 +800,7 @@ fn spawn_ir_sync_worker(
 
 struct WinitApp {
     startup_error: Option<String>,
+    surface_error: Option<String>,
     boot: BootstrappedApp,
     window: Option<Arc<Window>>,
     first_frame_startup_completed: bool,
