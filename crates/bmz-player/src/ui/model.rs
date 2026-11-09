@@ -418,6 +418,7 @@ pub struct SongScanRequest {
 
 /// egui の状態管理とフレーム構築を担うレイヤ。
 pub struct EguiLayer {
+    pub(super) scene_loading: bool,
     pub(super) ctx: egui::Context,
     pub(super) state: egui_winit::State,
     /// egui の未指定テキストで最優先する地域別 CJK coverage。

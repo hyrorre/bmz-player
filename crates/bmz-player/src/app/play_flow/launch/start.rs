@@ -28,7 +28,7 @@ impl WinitApp {
             options.session_mode,
             play_skin_runtime_state,
         );
-        self.ensure_skin_ready(SkinKind::Play);
+        self.request_scene_skin(SkinKind::Play);
     }
 
     /// 既に開始済みの preload を維持したまま Play シーンへ入場する。
@@ -52,7 +52,7 @@ impl WinitApp {
     ) {
         self.normalize_key_mode_conversion_options(chart_id, &mut options);
         self.resolve_play_target_from_cache(chart_id, &mut options);
-        self.ensure_skin_ready(SkinKind::Decide);
+        self.request_scene_skin(SkinKind::Decide);
         self.prepare_play_skin_for_scene(chart_id, &options);
         if self.play.play_media_cache.as_ref().is_some_and(|cache| cache.chart_id != chart_id) {
             self.play.play_media_cache = None;
@@ -87,7 +87,7 @@ impl WinitApp {
         };
         self.normalize_key_mode_conversion_options(chart_id, &mut options);
         self.resolve_play_target_from_cache(chart_id, &mut options);
-        self.ensure_skin_ready(SkinKind::Decide);
+        self.request_scene_skin(SkinKind::Decide);
         // Decide preload を通らない direct boot / replay / retry も新しい
         // Play scene entry として必ずロード時Randomを再評価する。
         self.skin.last_play_skin_signature = None;
@@ -247,6 +247,9 @@ impl WinitApp {
         mut snapshot: RenderSnapshot,
         presentation: PlayEntryPresentation,
     ) {
+        if !self.scene_skin_entry_waiting(SkinKind::Play) {
+            self.skin.skin_pipeline.lr2_assets.previous_scene = Some(SkinKind::Play);
+        }
         self.normalize_key_mode_conversion_options(chart_id, &mut options);
         self.resolve_play_target_from_cache(chart_id, &mut options);
         if let Some(score_key) = self.play_skin_score_key_for_chart_id(chart_id, &options) {

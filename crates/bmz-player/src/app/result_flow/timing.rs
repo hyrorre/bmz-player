@@ -89,7 +89,8 @@ impl WinitApp {
     }
 
     pub(super) fn result_input_ready(&self) -> bool {
-        self.result.result_scene_started_at.elapsed() >= self.result_input_duration()
+        !self.scene_skin_entry_waiting(SkinKind::Result)
+            && self.result.result_scene_started_at.elapsed() >= self.result_input_duration()
     }
 
     pub(super) fn result_input_duration(&self) -> Duration {

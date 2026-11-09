@@ -2,6 +2,21 @@ use super::*;
 
 impl WinitApp {
     pub(in crate::app) fn render_current_scene(&mut self) -> Option<SceneFrameProfileSample> {
+        if self.scene_skin_entry_loading() {
+            self.sync_select_maintenance_gate();
+            // Keep the last scene image and draw egui's animated loading indicator.
+            // Do not run the old skin's callbacks against the next scene's state.
+            let notify = self.uses_wayland_frame_callbacks();
+            let window = self.window.as_deref();
+            let status = self.renderer.render_last_plan_with_pre_present_notify(|| {
+                if notify && let Some(window) = window {
+                    window.pre_present_notify();
+                }
+            });
+            self.frame.record_surface_status(Instant::now(), status.as_ref().ok().copied());
+            log_render_status(status);
+            return None;
+        }
         let select_view = matches!(self.view_state(), AppViewState::Select);
         let decide_view = matches!(self.view_state(), AppViewState::Decide);
         let play_view = matches!(self.view_state(), AppViewState::Play);

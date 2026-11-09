@@ -216,6 +216,9 @@ impl WinitApp {
     /// スキップ時は timer=2 の実アニメーション終端と最終フレーム保持を過ぎたら
     /// 保留していた遷移を実行する。毎フレーム描画前に呼ぶ。
     pub(super) fn advance_result_exit(&mut self) {
+        if self.scene_skin_entry_waiting(SkinKind::Result) {
+            return;
+        }
         if self.result.finished_play.is_some()
             && self.result.result_exit.is_none()
             && let Some(auto_exit_duration) = self.result_auto_exit_duration()

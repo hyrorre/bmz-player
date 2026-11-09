@@ -316,6 +316,8 @@ pub(super) struct SmokeRuntime {
 }
 
 pub(super) struct SkinRuntimeState {
+    /// Scene entry waits are polled between frames; they never block the window thread.
+    pub(super) scene_entry_waits: HashSet<SkinKind>,
     pub(super) lua_runtime_mode: bmz_skin::LuaSkinRuntimeMode,
     pub(super) skin_catalog: SkinCatalogState,
     pub(super) skin_defs_cache: BTreeMap<(String, bool), SceneSkinDefs>,

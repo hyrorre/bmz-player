@@ -307,6 +307,8 @@ mod select_same_folder;
 mod select_search;
 mod select_support;
 mod skin_catalog;
+#[path = "app/skin_flow/entry.rs"]
+mod skin_flow_entry;
 #[path = "app/skin_flow/profile.rs"]
 mod skin_flow_profile;
 #[path = "app/skin_flow/reload.rs"]

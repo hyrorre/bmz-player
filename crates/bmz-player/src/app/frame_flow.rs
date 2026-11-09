@@ -186,7 +186,9 @@ impl WinitApp {
     /// `render_current_scene` の前に呼ぶこと。
     pub(super) fn run_egui_frame(&mut self) {
         let profile_change_available = self.profile_change_allowed();
+        let scene_loading = self.scene_skin_entry_loading();
         if let Some(egui) = self.ui.egui.as_mut() {
+            egui.set_scene_loading(scene_loading);
             egui.set_profile_change_available(profile_change_available);
         }
         let Some(window) = self.window.clone() else {
@@ -867,6 +869,9 @@ impl WinitApp {
     }
 
     pub(super) fn handle_smoke_exit_after_redraw(&mut self, event_loop: &ActiveEventLoop) {
+        if self.scene_skin_entry_loading() {
+            return;
+        }
         if self.smoke.smoke_exit_on_result && self.result.finished_play.is_some() {
             self.smoke.smoke_exit_on_result = false;
             tracing::info!("smoke result reached; leaving event loop");

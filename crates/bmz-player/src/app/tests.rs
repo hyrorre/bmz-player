@@ -243,6 +243,8 @@ mod course_sources;
 mod course_transitions;
 #[path = "tests/decide_difficulty.rs"]
 mod decide_difficulty;
+#[path = "tests/frame_stalls.rs"]
+mod frame_stalls;
 #[path = "tests/play.rs"]
 mod play;
 #[path = "tests/play_chart_length.rs"]

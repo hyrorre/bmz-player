@@ -479,6 +479,7 @@ impl WinitApp {
                 first_present_logged: false,
             },
             skin: SkinRuntimeState {
+                scene_entry_waits: HashSet::new(),
                 lua_runtime_mode: options.lua_skin_runtime_mode,
                 skin_catalog,
                 skin_defs_cache: BTreeMap::new(),

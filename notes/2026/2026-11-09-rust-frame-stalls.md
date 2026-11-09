@@ -46,9 +46,38 @@ cargo test -p bmz-player --release --lib profile_select_archive_cache_keys --loc
 異常終了したが、通常権限で再実行して通過した。新しい回帰は要求の集約、世代破棄、
 周期的な再確認、実ファイル更新後の画像・生成試聴キー一致を確認する。
 
+## 2. スキン完了待ちと画面遷移
+
+完了通知を10 / 50 / 200ms遅らせる合成プローブを、通常権限のreleaseで実行した。
+修正前の`ensure_skin_ready`呼び出し時間は10.658 / 50.447 / 200.413msで、
+decodeがworker上でも、呼び出し元は通知まで停止することを確認した。
+実スキンのdecode所要時間を測った値ではない。
+
+```powershell
+cargo test -p bmz-player --release --lib profile_skin_entry_wait --locked -- --ignored --nocapture
+```
+
+対話中の画面遷移は完了をフレーム間で確認し、タイマー・READY・Result入力解禁を
+準備完了後に開始する。待機中は直前の描画プランとeguiの読み込み表示を描画する。
+起動時にSelectを最初のフレームから表示する同期ゲートは維持する。
+詳細は[frame pacing](../../docs/frame-pacing.md)を参照。
+
+同じ遅延の修正後の要求時間は0.008 / 0.001 / 0.001ms。通知待ちを計測区間外へ
+移した値であり、スキンの総ロード時間が短縮したという意味ではない。
+
+fmt、対象crateのcheck、all-targets Clippyを確認。通常権限の全テストは
+2986 passed / 59 ignored / 0 failed（別途startup_stackは2 ignored）。
+単独のoffscreen GPU回帰は、Playの譜面情報・世代・再利用、およびコースの終了・
+キャンセル・失敗リトライを確認。遅延注入プローブでは旧世代破棄、Decideの
+キャンセル、Resultの入力と自動退出、準備後のタイマー再開始も確認した。
+
+既存のPlay GPUテストは素材を許可された`data/skins`配下に移した。
+コーステストはフレームループの代わりにスキン完了を明示的に待ってから操作する。
+途中のWindows linker失敗は実行中テストexeへの上書き競合で、終了後の単独実行で通過。
+実ウィンドウの手動操作・実機音声・コントローラは未確認。
+
 ## 続く確認対象
 
-2. スキン完了待ちと画面遷移。
 3. 難易度表保存・選曲DBアクセス。
 4. SCROLLの可視候補抽出。
 5. 描画用判定状態の公開。

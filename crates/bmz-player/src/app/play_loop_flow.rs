@@ -339,6 +339,9 @@ impl WinitApp {
     }
 
     pub(super) fn maybe_start_ready_phase(&mut self) {
+        if self.scene_skin_entry_loading() {
+            return;
+        }
         if self.play.active_play.as_ref().is_some_and(|play| play.running.gameplay.is_running()) {
             return;
         }
