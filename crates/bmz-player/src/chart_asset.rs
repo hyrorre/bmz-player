@@ -19,7 +19,7 @@ pub fn canonical_chart_path(path: &Path) -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
-/// File information is cheap enough for Select; hashing and extraction stay in workers.
+/// Synchronous source validation for workers. Select keeps an asynchronously refreshed stamp.
 pub(crate) fn archive_asset_stamp(folder: &str) -> Option<String> {
     let locator = crate::chart_source::ChartLocator::parse(Path::new(folder)).ok()?;
     locator
@@ -28,7 +28,11 @@ pub(crate) fn archive_asset_stamp(folder: &str) -> Option<String> {
 }
 
 pub(crate) fn asset_cache_key(folder: &str, file: &str) -> String {
-    match archive_asset_stamp(folder) {
+    asset_cache_key_with_stamp(folder, file, archive_asset_stamp(folder).as_deref())
+}
+
+pub(crate) fn asset_cache_key_with_stamp(folder: &str, file: &str, stamp: Option<&str>) -> String {
+    match stamp {
         Some(stamp) => format!(
             "archive-asset|{}",
             serde_json::to_string(&(folder, file, stamp)).expect("string tuple")
