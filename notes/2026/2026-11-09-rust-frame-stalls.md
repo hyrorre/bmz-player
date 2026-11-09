@@ -189,7 +189,43 @@ releaseの`profile_layout_cache_overflow`。同梱テストフォントで4,096�
 主対象はgameplay 265 passed、render 1014 passed / 23 ignored、player 2995 passed / 65 ignored。
 索引の譜面差し替え・HCN重複/順序/個別mode、cacheの同一キー置換・同frame上限も追加確認した。
 
-## 続く確認対象
+## 9・10. 動画保持・待機、音声/動画の破棄
 
-9. 非表示動画の保持。
-10. 音声・動画資源の後片付け。
+音声は実デバイスなしで、1MiBのPCM配列64 / 256個を最後に所有するsourceを破棄する。
+1回warm-up後5回。修正前はwindow相当の呼び出し元で64MiBが中央値2.372ms、
+256MiBが9.559ms（最大9.831ms）を要した。修正後は別workerの完了を計測区間外で待つ。
+PCM解放の総コストが消えるわけではない。
+最終版の通知中央値は64MiBで0.1us、256MiBでは計時分解能未満、両条件の最大は0.1us。
+この区間にはworkerでの解放を含まず、先にworkerが回収済みなら空queueの確認だけになる。
+
+動画はjoin対象が10 / 50 / 200ms遅れて終了する合成プローブを使う。
+修正前Dropは10.628 / 50.530 / 200.289ms、退避後の呼び出し元は0.011 / 0.003 / 0.005ms。
+これはFFmpegの実ファイル終了時間を測った値ではない。
+
+実FFmpegのqueueプローブでは一時的な640×360 Y4Mを32本開き、frame 0を受け取って
+100ms待機後、200msの待機ループ回数を測る。ポーリング時は4,232回、park後は0回。
+選択中+queue内のRGBA合計は32本で168.75MiB、同条件2本で10.55MiB。
+native codec内部と送信待ちframe、GPU textureのmemoryは含めない。
+実アプリでは表示中の最大4 channelと非表示2本を保持し、削除は退避workerで行う。
+32→2本の値は保持数を変えた同一decoderプローブで、実画面のprocess working set比較ではない。
+
+```powershell
+cargo test -p bmz-audio --release --lib profile_retired_pcm_destruction --locked -- --ignored --nocapture
+cargo test -p bmz-video --release --lib profile_video_ --locked -- --ignored --nocapture --test-threads=1
+```
+
+停止・restart・EOF・full queueの復帰、終了待ち中の非ブロッキングDrop、退避中も数える
+admission上限、HCNを含む既存音声回帰を検証する。fmt、workspace check、all-targets Clippy、
+workspace全テストは成功（player 2996 passed / 66 ignored、audio 189 passed / 4 ignored、
+video 42 passed / 2 ignored）。EOF後の繰り返しrestartも実FFmpegの一時Y4Mで追加し、
+videoのClippyと全テスト43 passed / 2 ignoredを確認した。
+実ウィンドウsmokeは続けて実施する。
+
+## 残る同期処理と検証範囲
+
+選択譜面の未cache問い合わせもreleaseで計測した（1譜面/フォルダ、履歴なし、1,000回）。
+同一フォルダ中央値58.7us / p95 74.5us、クリア履歴3.3 / 3.4us、replay slot 11.5 / 11.7us。
+この条件では大きな停止を観測せず、初回問い合わせの同期経路は維持する。
+実ライブラリの巨大フォルダ・DB競合・NASを代表しない。
+config保存、Luaからのファイル読み取り、GPU upload/acquire/present、OS schedulingや
+他プロセスによる負荷は、この個別CPU比較だけでは原因から除外できない。

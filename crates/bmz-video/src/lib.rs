@@ -9,6 +9,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 
+mod retirement;
+
 const CLOCKED_FRAME_PUBLISH_LEAD_US: i64 = 8_000;
 const CLOCKED_FRAME_CATCH_UP_TOLERANCE_US: i64 = 8_000;
 const CLOCKED_FRAME_WAIT_MAX_SLEEP_US: i64 = 4_000;
@@ -74,6 +76,7 @@ pub struct VideoBgaDecoder {
     /// Channel-mode: current pass reached EOF without disconnecting the receiver.
     pass_finished: Arc<AtomicBool>,
     decode_thread: Option<std::thread::JoinHandle<()>>,
+    retirement: Option<retirement::Retirement>,
 }
 
 struct QueuedDecodedFrame {
@@ -180,6 +183,7 @@ impl VideoBgaDecoder {
 
     fn open_inner(path: &Path, follow_playback_time: bool) -> Result<Self> {
         bmz_ffmpeg::ensure_init().map_err(|e| anyhow::anyhow!(e))?;
+        let retirement = Some(retirement::Retirement::new()?);
 
         let path_buf = path.to_path_buf();
         let stop_decode = Arc::new(AtomicBool::new(false));
@@ -225,6 +229,7 @@ impl VideoBgaDecoder {
                 restart_decode,
                 pass_finished,
                 decode_thread: Some(decode_thread),
+                retirement,
             });
         }
 
@@ -264,6 +269,7 @@ impl VideoBgaDecoder {
             restart_decode,
             pass_finished,
             decode_thread: Some(decode_thread),
+            retirement,
         })
     }
 
@@ -302,6 +308,7 @@ impl VideoBgaDecoder {
                 state.finished = false;
             }
             self.restart_decode.store(true, Ordering::Release);
+            self.wake_decoder();
             return;
         }
 
@@ -309,6 +316,13 @@ impl VideoBgaDecoder {
             while receiver.try_recv().is_ok() {}
         }
         self.restart_decode.store(true, Ordering::Release);
+        self.wake_decoder();
+    }
+
+    fn wake_decoder(&self) {
+        if let Some(handle) = &self.decode_thread {
+            handle.thread().unpark();
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -323,6 +337,7 @@ impl VideoBgaDecoder {
             self.current = self.pending.pop_front();
         }
         while self.pending.is_empty() && !self.finished {
+            self.wake_decoder();
             let receiver = self.receiver.as_ref().expect("channel decoder");
             match receiver.recv_timeout(Duration::from_millis(20)) {
                 Ok(queued)
@@ -347,6 +362,7 @@ impl VideoBgaDecoder {
     /// チャンネルをdrainして `video_offset_us` 以下の最新フレームを返す。
     pub fn poll_frame(&mut self, video_offset_us: i64) -> Option<&DecodedFrame> {
         self.playback_target_us.store(video_offset_us, Ordering::Release);
+        self.wake_decoder();
 
         if self.follow_playback_time {
             return self.poll_clocked_frame();
@@ -427,10 +443,12 @@ impl VideoBgaDecoder {
 impl Drop for VideoBgaDecoder {
     fn drop(&mut self) {
         self.stop_decode.store(true, Ordering::Release);
-        // channel モードは receiver を先に落とし、sync_channel の send block を
-        // エラーで解いてから join する。clocked モードは stop_decode を数 ms
-        // 間隔で確認するため、どちらも join はすぐ返る。join しないままだと
-        // 譜面切り替えのたびに ffmpeg リソースを持った detached thread が残る。
+        self.wake_decoder();
+        if let Some(retirement) = self.retirement.take() {
+            retirement.retire(self);
+            return;
+        }
+        // Test-only synthetic decoders do not need admission/retirement.
         drop(self.receiver.take());
         if let Some(handle) = self.decode_thread.take()
             && handle.join().is_err()

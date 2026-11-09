@@ -13,6 +13,7 @@ pub struct ActiveVideoBgaDecoder {
     pub event_start_time: TimeUs,
     pub decoder: VideoBgaDecoder,
     pub last_pts: Option<i64>,
+    last_used: std::time::Instant,
 }
 
 /// Resolve an immutable BGA timeline selection against renderer-owned assets.
@@ -96,7 +97,11 @@ pub fn update_video_bga_frames(
     chart_now: TimeUs,
 ) {
     if !running.session.bga_enabled || !running.session.chart.metadata.has_bga {
-        // Keep warm decoders across BGA-disabled stretches so quick retry can reuse them.
+        trim_video_decoders(
+            &mut running.video_bga_decoders,
+            &HashSet::new(),
+            &running.gameplay.session.chart,
+        );
         return;
     }
 
@@ -132,15 +137,36 @@ pub fn update_video_bga_frames(
         );
     }
 
-    // Drop only decoders that are no longer part of this chart's video assets.
-    // Inactive-but-still-chart videos stay warm for reuse / quick retry (beatoraja style).
-    video_bga_decoders.retain(|asset_id, _| {
-        active_video_assets.contains(asset_id)
-            || chart
-                .bga_assets
-                .iter()
-                .any(|asset| asset.id == *asset_id && asset.kind == BgaAssetKind::Video)
-    });
+    trim_video_decoders(video_bga_decoders, &active_video_assets, chart);
+}
+
+const WARM_VIDEO_DECODERS: usize = 2;
+
+fn most_recent_warm_assets(mut inactive: Vec<(BgaAssetId, std::time::Instant)>) -> Vec<BgaAssetId> {
+    inactive.sort_unstable_by_key(|(id, used)| (std::cmp::Reverse(*used), id.0));
+    inactive.truncate(WARM_VIDEO_DECODERS);
+    inactive.into_iter().map(|(id, _)| id).collect()
+}
+
+fn trim_video_decoders(
+    decoders: &mut VideoBgaDecoderMap,
+    active: &HashSet<BgaAssetId>,
+    chart: &bmz_chart::model::PlayableChart,
+) {
+    let warm = most_recent_warm_assets(
+        decoders
+            .iter()
+            .filter_map(|(&id, decoder)| {
+                (!active.contains(&id)
+                    && chart
+                        .bga_assets
+                        .iter()
+                        .any(|asset| asset.id == id && asset.kind == BgaAssetKind::Video))
+                .then_some((id, decoder.last_used))
+            })
+            .collect(),
+    );
+    decoders.retain(|id, _| active.contains(id) || warm.contains(id));
 }
 
 fn update_single_video(
@@ -173,8 +199,12 @@ fn update_single_video(
             } else {
                 match open_video_decoder_at(path, video_offset_us) {
                     Ok(decoder) => {
-                        *active =
-                            ActiveVideoBgaDecoder { event_start_time, decoder, last_pts: None };
+                        *active = ActiveVideoBgaDecoder {
+                            event_start_time,
+                            decoder,
+                            last_pts: None,
+                            last_used: std::time::Instant::now(),
+                        };
                         tracing::info!(
                             asset_id = asset_id.0,
                             path = %path.display(),
@@ -198,7 +228,12 @@ fn update_single_video(
                 Ok(decoder) => {
                     video_bga_decoders.insert(
                         asset_id,
-                        ActiveVideoBgaDecoder { event_start_time, decoder, last_pts: None },
+                        ActiveVideoBgaDecoder {
+                            event_start_time,
+                            decoder,
+                            last_pts: None,
+                            last_used: std::time::Instant::now(),
+                        },
                     );
                     tracing::info!(
                         asset_id = asset_id.0,
@@ -216,6 +251,7 @@ fn update_single_video(
     }
 
     let active = video_bga_decoders.get_mut(&asset_id).unwrap();
+    active.last_used = std::time::Instant::now();
     if let Some(frame) = active.decoder.poll_frame(video_offset_us)
         && active.last_pts != Some(frame.pts_us)
     {
@@ -284,6 +320,16 @@ pub type VideoBgaDecoderMap = HashMap<BgaAssetId, ActiveVideoBgaDecoder>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_two_most_recent_inactive_videos_stay_warm() {
+        let now = std::time::Instant::now();
+        let warm = most_recent_warm_assets(
+            (0..32)
+                .map(|i| (BgaAssetId(i), now + std::time::Duration::from_millis(i as u64)))
+                .collect(),
+        );
+        assert_eq!(warm, vec![BgaAssetId(31), BgaAssetId(30)]);
+    }
     #[test]
     fn immutable_bga_selection_resolves_late_video_upload_and_preserves_tint() {
         let mut selected = display_video_bga_frame(BgaAssetId(7), 1, 1);

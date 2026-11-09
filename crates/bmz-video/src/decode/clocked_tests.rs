@@ -63,6 +63,20 @@ fn clocked_decoder_holds_final_picture_until_the_next_full_loop() {
 
 struct ThreeFrameMovie(PathBuf);
 
+#[test]
+fn channel_decoder_wakes_from_eof_for_repeated_restart() {
+    let fixture = ThreeFrameMovie::new();
+    let mut decoder = VideoBgaDecoder::open(&fixture.0).unwrap();
+    let first = decoder.frame_at_blocking(0).unwrap().unwrap().rgba.clone();
+    for _ in 0..3 {
+        let last = decoder.frame_at_blocking(1_000_000).unwrap().unwrap().rgba.clone();
+        assert_ne!(last, first);
+        assert!(decoder.is_finished());
+        decoder.restart();
+        assert_eq!(decoder.frame_at_blocking(0).unwrap().unwrap().rgba, first);
+    }
+}
+
 impl ThreeFrameMovie {
     fn new() -> Self {
         let stamp =
@@ -81,7 +95,17 @@ impl ThreeFrameMovie {
 
 impl Drop for ThreeFrameMovie {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match std::fs::remove_file(&self.0) {
+                Ok(()) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                Err(error) => {
+                    assert!(std::time::Instant::now() < deadline, "{}: {error}", self.0.display());
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        }
     }
 }
 

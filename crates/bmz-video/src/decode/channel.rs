@@ -1,5 +1,14 @@
 use super::*;
 
+#[cfg(test)]
+pub(crate) static CHANNEL_WAIT_COUNT: AtomicU64 = AtomicU64::new(0);
+
+fn wait_for_channel_progress() {
+    #[cfg(test)]
+    CHANNEL_WAIT_COUNT.fetch_add(1, Ordering::Relaxed);
+    std::thread::park();
+}
+
 pub(crate) fn decode_video_restartable(
     path: &Path,
     sender: SyncSender<QueuedDecodedFrame>,
@@ -76,7 +85,7 @@ pub(crate) fn decode_video_restartable(
                     if restart_decode.swap(false, Ordering::AcqRel) {
                         break;
                     }
-                    std::thread::sleep(Duration::from_millis(5));
+                    wait_for_channel_progress();
                 }
                 if stop_decode.load(Ordering::Acquire) {
                     return Ok(());
@@ -253,7 +262,7 @@ pub(crate) fn send_decoded_frame(
             Ok(()) => return Ok(ChannelDecodePassEnd::Eof),
             Err(TrySendError::Full(returned)) => {
                 queued = returned;
-                std::thread::sleep(Duration::from_millis(1));
+                wait_for_channel_progress();
             }
             Err(TrySendError::Disconnected(_)) => return Ok(ChannelDecodePassEnd::Stop),
         }

@@ -1,6 +1,59 @@
 //! Isolated app probes; no user's profile, database, or audio device is used.
 use super::*;
 
+#[test]
+#[ignore = "release selected-chart DB probe; run alone with --ignored --nocapture"]
+fn profile_selected_chart_queries() -> anyhow::Result<()> {
+    anyhow::ensure!(!cfg!(debug_assertions), "run with --release");
+    let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+    let (boot, path, _) = super::boot_chart::registered_charts(&data);
+    let folder = path.parent().unwrap().to_string_lossy();
+    let chart = boot.library_db.list_charts_in_folder(&folder)?.remove(0);
+    let play = &boot.profile_config.play;
+    let key = ScoreKey::new(
+        chart.sha256,
+        crate::ln_policy::score_ln_policy(play.ln_mode_policy, chart.ln_profile),
+    )
+    .with_rule_mode(play.rule_mode);
+    for name in ["same_folder", "clear_history", "replay_slots"] {
+        let mut samples = Vec::new();
+        for iteration in 0..1010 {
+            let start = Instant::now();
+            match name {
+                "same_folder" => {
+                    std::hint::black_box(crate::screens::select_model::same_folder_difficulties(
+                        &boot.library_db,
+                        &boot.score_db,
+                        &folder,
+                        play.ln_mode_policy,
+                        play.rule_mode,
+                    )?);
+                }
+                "clear_history" => {
+                    std::hint::black_box(crate::screens::select_model::lr2_clear_option_history(
+                        &boot.score_db,
+                        &chart,
+                        play.ln_mode_policy,
+                        play.rule_mode,
+                    )?);
+                }
+                _ => {
+                    std::hint::black_box(boot.score_db.replay_slots_for_chart(key)?);
+                }
+            }
+            if iteration >= 10 {
+                samples.push(start.elapsed().as_secs_f64() * 1e6);
+            }
+        }
+        samples.sort_by(f64::total_cmp);
+        eprintln!(
+            "select query={name} median_us={:.3} p95_us={:.3} max_us={:.3}",
+            samples[500], samples[950], samples[999]
+        );
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
 #[test]
 #[ignore = "isolated Winit event loop; run alone with --release --ignored --nocapture"]
