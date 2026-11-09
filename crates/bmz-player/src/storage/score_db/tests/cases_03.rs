@@ -64,6 +64,8 @@ fn score_migration_assigns_idempotency_keys_to_existing_histories() {
     let conn = Connection::open(&path).unwrap();
     conn.execute_batch(
         "DROP TABLE score_history_ir_identity;
+         DROP INDEX idx_score_history_device_best;
+         ALTER TABLE score_history DROP COLUMN normal_best_eligible;
          ALTER TABLE score_history DROP COLUMN source_min_bp;
          PRAGMA user_version = 31;",
     )

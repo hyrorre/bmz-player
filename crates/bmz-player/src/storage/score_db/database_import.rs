@@ -93,6 +93,12 @@ impl ScoreDatabase {
         )?;
         insert_score_history(&tx, record, previous_best.as_ref())?;
         let history_id = tx.last_insert_rowid();
+        if mode != ScoreInsertMode::Full {
+            tx.execute(
+                "UPDATE score_history SET normal_best_eligible = 0 WHERE id = ?1",
+                [history_id],
+            )?;
+        }
         insert_score_history_ir_identity(&tx, history_id)?;
         if aggregate {
             mark_score_history_aggregate(&tx, history_id)?;

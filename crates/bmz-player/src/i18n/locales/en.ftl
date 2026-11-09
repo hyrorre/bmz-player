@@ -1,4 +1,15 @@
 settings-ui-heading = UI
+profile-ir-api-key = API key
+ir-bokutachi-ineligible = Ineligible (chart verification)
+ir-queue-filter-completed = Completed (registered / no new score)
+ir-queue-registered = Registered
+profile-ir-validate-key = Validate and save key
+profile-ir-bokutachi-help = Connect with an API key granting submit_score. New singles only: 7K/14K with LR2oraja, 9K with beatoraja, LN only. PMS uses the input device saved with the play (Tachi's Controller division assumes an arcade-size controller). Rankings, rivals, battle data downloads, courses, past score uploads and replays are unsupported.
+ir-bokutachi-no-change = No new score confirmed (duplicates or other reasons)
+ir-bokutachi-pending = Awaiting registration confirmation
+ir-bokutachi-no-ranking = Ranking downloads are not supported.
+profile-ir-delete-key = Delete API key
+profile-ir-check-key = Check connection
 settings-language-label = Language
 settings-theme-label = Theme
 settings-show-fps = Show FPS

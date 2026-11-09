@@ -26,6 +26,7 @@ pub(in crate::ui::profile_panel) fn build_profile_ir_section(
                 .ir
                 .providers
                 .iter()
+                .filter(|provider| !crate::ir::bokutachi::is_config(provider))
                 .filter_map(|provider| {
                     crate::ir::provider_key::configured_provider_key(provider).map(|provider_key| {
                         (
@@ -120,13 +121,14 @@ pub(in crate::ui::profile_panel) fn build_profile_ir_section(
                     let endpoint_editable =
                         index >= BUILTIN_IR_PROVIDER_COUNT && !logged_in && !ir_login.busy;
                     match index {
-                        0..=2 => {
+                        0..=3 => {
                             ui.horizontal(|ui| {
                                 ui.label(tr!(text, "profile-ir-provider-kind"));
                                 ui.label(match index {
                                     0 => tr!(text, "profile-ir-provider-bmz"),
                                     1 => tr!(text, "profile-ir-provider-rian"),
-                                    _ => tr!(text, "profile-ir-provider-bms-ir"),
+                                    2 => tr!(text, "profile-ir-provider-bms-ir"),
+                                    _ => "Bokutachi".to_string(),
                                 });
                             });
                             ui.horizontal(|ui| {
@@ -182,6 +184,10 @@ pub(in crate::ui::profile_panel) fn build_profile_ir_section(
                         provider.base_url.clone(),
                     );
                     let is_bms_ir = crate::ir::bms_ir::is_bms_ir_config(provider);
+                    let is_bokutachi = crate::ir::bokutachi::is_config(provider);
+                    if is_bokutachi {
+                        ui.small(tr!(text, "profile-ir-bokutachi-help"));
+                    }
                     let is_rian = crate::ir::rian_ir::is_rian_ir_config(provider);
                     if index >= BUILTIN_IR_PROVIDER_COUNT {
                         let provider_key_text = provider_key
@@ -205,7 +211,51 @@ pub(in crate::ui::profile_panel) fn build_profile_ir_section(
                             "profile-ir-logged-in",
                             "display_name" => display_name,
                         ));
-                        if ui.button(tr!(text, "profile-ir-logout")).clicked() {
+                        if is_bokutachi
+                            && ui
+                                .add_enabled(
+                                    !ir_login.busy,
+                                    egui::Button::new(tr!(text, "profile-ir-check-key")),
+                                )
+                                .clicked()
+                        {
+                            let loaded = crate::ir::credentials::load_credentials(
+                                profile_root,
+                                provider_key.as_deref().unwrap_or_default(),
+                                &provider.base_url,
+                            );
+                            match loaded {
+                                Ok(Some(credentials)) => {
+                                    ir_login.provider_form_mut(index).api_key =
+                                        credentials.access_token;
+                                    ir_login.start_login(
+                                        index,
+                                        profile_root.to_path_buf(),
+                                        provider.provider.clone(),
+                                        provider.base_url.clone(),
+                                    );
+                                }
+                                error => {
+                                    ir_login.message = Some(IrProviderUiMessage {
+                                        provider_index: Some(index),
+                                        target: row_target.clone(),
+                                        ok: false,
+                                        text: error
+                                            .err()
+                                            .map(|e| e.to_string())
+                                            .unwrap_or_else(|| tr!(text, "profile-ir-api-key")),
+                                    });
+                                }
+                            }
+                        }
+                        if ui
+                            .button(if is_bokutachi {
+                                tr!(text, "profile-ir-delete-key")
+                            } else {
+                                tr!(text, "profile-ir-logout")
+                            })
+                            .clicked()
+                        {
                             let result = provider_key
                                 .as_deref()
                                 .map(|provider_key| {
@@ -245,26 +295,41 @@ pub(in crate::ui::profile_panel) fn build_profile_ir_section(
                         }
                     } else {
                         let form = ir_login.provider_form_mut(index);
-                        ui.horizontal(|ui| {
-                            ui.label(if is_rian || is_bms_ir {
-                                tr!(text, "profile-ir-login-id")
-                            } else {
-                                tr!(text, "profile-ir-email")
+                        if is_bokutachi {
+                            ui.horizontal(|ui| {
+                                ui.label(tr!(text, "profile-ir-api-key"));
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut form.api_key).password(true),
+                                );
                             });
-                            ui.text_edit_singleline(&mut form.email);
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label(if is_bms_ir {
-                                tr!(text, "profile-ir-game-token")
-                            } else {
-                                tr!(text, "profile-ir-password")
+                        } else {
+                            ui.horizontal(|ui| {
+                                ui.label(if is_rian || is_bms_ir {
+                                    tr!(text, "profile-ir-login-id")
+                                } else {
+                                    tr!(text, "profile-ir-email")
+                                });
+                                ui.text_edit_singleline(&mut form.email);
                             });
-                            ui.add(egui::TextEdit::singleline(&mut form.password).password(true));
-                        });
+                            ui.horizontal(|ui| {
+                                ui.label(if is_bms_ir {
+                                    tr!(text, "profile-ir-game-token")
+                                } else {
+                                    tr!(text, "profile-ir-password")
+                                });
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut form.password).password(true),
+                                );
+                            });
+                        }
                         if is_bms_ir {
                             ui.small(tr!(text, "profile-ir-bms-ir-help"));
                         }
-                        let credentials_ready = !form.email.is_empty() && !form.password.is_empty();
+                        let credentials_ready = if is_bokutachi {
+                            !form.api_key.trim().is_empty()
+                        } else {
+                            !form.email.is_empty() && !form.password.is_empty()
+                        };
                         let can_login = !ir_login.busy
                             && normalized_ir_base_url(&provider.base_url).is_some()
                             && credentials_ready;
@@ -272,7 +337,11 @@ pub(in crate::ui::profile_panel) fn build_profile_ir_section(
                             if ui
                                 .add_enabled(
                                     can_login,
-                                    egui::Button::new(tr!(text, "profile-ir-login")),
+                                    egui::Button::new(if is_bokutachi {
+                                        tr!(text, "profile-ir-validate-key")
+                                    } else {
+                                        tr!(text, "profile-ir-login")
+                                    }),
                                 )
                                 .clicked()
                             {
@@ -294,7 +363,7 @@ pub(in crate::ui::profile_panel) fn build_profile_ir_section(
                     }
                     if let Some(message) = &ir_login.message
                         && message.matches(index, &provider.provider, &provider.base_url)
-                        && (!logged_in || !message.ok)
+                        && (is_bokutachi || !logged_in || !message.ok)
                     {
                         let color = if message.ok {
                             egui::Color32::LIGHT_GREEN
@@ -315,6 +384,7 @@ pub(in crate::ui::profile_panel) fn build_profile_ir_section(
                                 && !provider.base_url.is_empty()
                                 && provider_key.is_some()
                                 && !is_rian
+                                && !is_bokutachi
                                 && !is_bms_ir;
                             if ui
                                 .add_enabled(

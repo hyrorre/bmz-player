@@ -654,7 +654,7 @@ fn ir_provider_normalization_moves_builtins_first_and_preserves_accounts_and_cus
     };
 
     assert!(ir.normalize_builtin_providers());
-    assert_eq!(ir.providers.len(), 5);
+    assert_eq!(ir.providers.len(), 6);
     assert_eq!(ir.providers[0].provider, "bmz");
     assert_eq!(ir.providers[0].base_url, "https://bmz-player.hyrorre.workers.dev/");
     assert_eq!(ir.providers[0].provider_key, "bmz-account");
@@ -672,8 +672,9 @@ fn ir_provider_normalization_moves_builtins_first_and_preserves_accounts_and_cus
     assert_eq!(ir.providers[2].account_display_name, "1234");
     assert!(ir.providers[2].enabled);
     assert_eq!(ir.providers[2].role, IrProviderRoleConfig::Primary);
-    assert_eq!(ir.providers[3], custom);
-    assert_eq!(ir.providers[4], duplicate);
+    assert_eq!(ir.providers[3], IrProviderConfig::bokutachi());
+    assert_eq!(ir.providers[4], custom);
+    assert_eq!(ir.providers[5], duplicate);
     assert!(!ir.normalize_builtin_providers());
 }
 
@@ -691,6 +692,7 @@ fn ir_provider_normalization_adds_missing_builtins_before_custom_entries() {
             IrProviderConfig::bmz_ir(),
             IrProviderConfig::rian_ir(),
             IrProviderConfig::bms_ir(),
+            IrProviderConfig::bokutachi(),
             custom,
         ]
     );

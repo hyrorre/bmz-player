@@ -547,6 +547,9 @@ impl WinitApp {
             finished.double_option,
             finished.rule_mode,
         );
+        if let Some(state) = self.result.result_ir.as_mut() {
+            state.local_submission_notice = finished.summary.ir_last_error.clone();
+        }
     }
 
     /// オートプレイ・リプレイ再生のリザルトで、選曲キャッシュのランキングを表示する。

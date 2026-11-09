@@ -75,6 +75,9 @@ pub(super) fn primary_ir_page_url(
     provider: &crate::config::profile_config::IrProviderConfig,
     identity: &PrimaryIrPageIdentity,
 ) -> Result<String> {
+    if crate::ir::bokutachi::is_config(provider) {
+        return crate::ir::credentials::credential_origin(&provider.base_url);
+    }
     match identity {
         PrimaryIrPageIdentity::Chart { md5, sha256 } => {
             if crate::ir::bms_ir::is_bms_ir_config(provider) {

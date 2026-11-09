@@ -2,6 +2,7 @@
 
 BMZ公式IRのAPIと、BMZ Player側のIRクライアントの現在の仕様をまとめた文書です。
 rianIRとの互換は[rianIR互換プロバイダー](rian-ir.md)、アシスト・特殊モードを含むスコアの保存・送信条件は[スコア保存・アシスト・IR送信条件](score-persistence.md)を参照してください。
+Bokutachiへの新規7K／14K／9K単曲送信は[Bokutachi](bokutachi.md)を参照してください。APIキーで接続する送信専用プロバイダーです。
 設計時の案・未決事項・実装タスクの経緯は[BMZ IRの設計記録](../notes/2026/2026-06-04-bmz-ir-design.md)にあります。
 
 ## 概要
@@ -25,7 +26,7 @@ AUTOのfallbackをundefined部分へ適用した結果が単一種別なら`rule
 既存のアシスト等の送信可否条件は変わりません。現行サーバーは新Forceと旧Autoの両方を受理します。
 
 これは新規投稿の区分変更です。過去のAuto投稿と旧クライアントからの投稿は旧区分に残ります。
-過去IRランキングのAuto→Force一括統合、Bokutachi対応、本番DB変更・デプロイは対象外です。
+過去IRランキングのAuto→Force一括統合、本番DB変更・デプロイは対象外です。
 
 既存outboxのgameplay本文、idempotency/submission key、送信済みsnapshot、remote score ID対応、
 既存replayのバイト列・hash・pathは保持します。旧outboxの再送は保存済み本文を使い、

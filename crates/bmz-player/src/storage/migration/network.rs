@@ -219,4 +219,17 @@ pub const NETWORK_MIGRATIONS: &[Migration] = &[
                  ), '');",
         ],
     },
+    Migration {
+        version: 7,
+        statements: &[
+            "CREATE TABLE bokutachi_imports (
+                job_id INTEGER PRIMARY KEY REFERENCES ir_score_jobs(id) ON DELETE CASCADE,
+                progress_json TEXT NOT NULL
+            );",
+            "CREATE TABLE bokutachi_rate_limits (
+                origin TEXT PRIMARY KEY,
+                next_post_at INTEGER NOT NULL
+            );",
+        ],
+    },
 ];

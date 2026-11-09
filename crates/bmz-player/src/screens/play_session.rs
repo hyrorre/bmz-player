@@ -245,6 +245,9 @@ pub struct BattleOpponentOptions {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppliedArrange {
+    /// Original file mode captured before any conversion or battle expansion.
+    /// Runtime provenance only; this is not added to existing replay formats.
+    pub source_key_mode: Option<KeyMode>,
     pub arrange: ArrangeOption,
     pub arrange_2p: ArrangeOption,
     pub double_option: DoubleOption,

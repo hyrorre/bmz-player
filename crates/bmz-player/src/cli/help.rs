@@ -120,6 +120,7 @@ Commands:
 
   ir login --email <EMAIL> [--password PASS] [--base-url URL]
   ir login --provider bms-ir --id <BMS_IR_ID> [--password GAME_TOKEN]
+  ir login --provider bokutachi  (prompts for an API key with submit_score permission)
   ir logout [--provider KEY]
   ir status
   ir ranking <SHA256> [--ln-policy P] [--scope S] [--limit N]

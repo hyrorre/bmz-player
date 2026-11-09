@@ -354,7 +354,7 @@ pub struct IrConfig {
     pub prefetch_rival_ranking_on_score_submit: bool,
 }
 
-pub const BUILTIN_IR_PROVIDER_COUNT: usize = 3;
+pub const BUILTIN_IR_PROVIDER_COUNT: usize = 4;
 
 pub(super) fn default_true() -> bool {
     true
@@ -369,6 +369,7 @@ impl Default for IrConfig {
                 IrProviderConfig::bmz_ir(),
                 IrProviderConfig::rian_ir(),
                 IrProviderConfig::bms_ir(),
+                IrProviderConfig::bokutachi(),
             ],
             prefetch_global_ranking_on_score_submit: true,
             prefetch_rival_ranking_on_score_submit: true,
@@ -377,7 +378,7 @@ impl Default for IrConfig {
 }
 
 impl IrConfig {
-    /// 先頭3枠を公式 BMZ IR / rianIR / BMS-IR に固定し、既存のカスタム provider を後続へ保つ。
+    /// 組み込み4枠を先頭へ集め、既存のカスタムproviderを後続へ保つ。
     pub fn normalize_builtin_providers(&mut self) -> bool {
         let previous = self.providers.clone();
         let mut remaining = std::mem::take(&mut self.providers);
@@ -397,10 +398,19 @@ impl IrConfig {
         bms_ir.provider = crate::ir::bms_ir::BMS_IR_PROVIDER.to_string();
         bms_ir.base_url = crate::ir::bms_ir::BMS_IR_DEFAULT_BASE_URL.to_string();
 
+        let mut bokutachi = take_matching_provider(&mut remaining, |p| {
+            crate::ir::bokutachi::is_config(p)
+                && normalized_ir_base_url(&p.base_url)
+                    == normalized_ir_base_url(crate::ir::bokutachi::DEFAULT_BASE_URL)
+        })
+        .unwrap_or_else(IrProviderConfig::bokutachi);
+        bokutachi.provider = crate::ir::bokutachi::PROVIDER.to_string();
+        bokutachi.role = IrProviderRoleConfig::SubmitOnly;
         self.providers = Vec::with_capacity(remaining.len() + BUILTIN_IR_PROVIDER_COUNT);
         self.providers.push(bmz);
         self.providers.push(rian);
         self.providers.push(bms_ir);
+        self.providers.push(bokutachi);
         self.providers.extend(remaining);
         self.providers != previous
     }
@@ -462,6 +472,10 @@ impl IrProviderConfig {
         Self::new(crate::ir::bmz_official::BMZ_IR_PROVIDER, "")
     }
 
+    pub fn bokutachi() -> Self {
+        Self::new(crate::ir::bokutachi::PROVIDER, crate::ir::bokutachi::DEFAULT_BASE_URL)
+    }
+
     fn new(provider: &str, base_url: &str) -> Self {
         Self {
             provider: provider.to_string(),
@@ -502,7 +516,8 @@ fn provider_migration_priority(provider: &IrProviderConfig) -> (bool, bool, i64)
 }
 
 fn is_bmz_ir_builtin(provider: &IrProviderConfig) -> bool {
-    !crate::ir::rian_ir::is_rian_ir_config(provider)
+    !crate::ir::bokutachi::is_config(provider)
+        && !crate::ir::rian_ir::is_rian_ir_config(provider)
         && !crate::ir::bms_ir::is_bms_ir_config(provider)
         && normalized_ir_base_url(&provider.base_url)
             == normalized_ir_base_url(crate::ir::bmz_official::BMZ_IR_DEFAULT_BASE_URL)

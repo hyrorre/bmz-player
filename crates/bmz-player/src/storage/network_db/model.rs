@@ -30,6 +30,8 @@ impl IrJobKind {
 impl IrScoreJobStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::NoChange => "no_change",
+            Self::Ineligible => "ineligible",
             Self::Pending => "pending",
             Self::Sending => "sending",
             Self::Succeeded => "succeeded",
@@ -61,7 +63,7 @@ impl IrJobRetryFilter {
             Self::RespectBackoff => {
                 "status IN ('pending', 'failed') AND next_attempt_at <= ?1".to_string()
             }
-            Self::IgnoreBackoff => "status IN ('pending', 'failed')".to_string(),
+            Self::IgnoreBackoff => "status IN ('pending', 'failed', 'ineligible')".to_string(),
             Self::FailedBefore(since) => {
                 format!("status = 'pending' OR (status = 'failed' AND updated_at < {since})")
             }
@@ -123,7 +125,7 @@ pub struct IrScoreJobListFilter<'a> {
     pub account_id: Option<&'a str>,
     /// 空なら全kind。
     pub kinds: &'a [IrJobKind],
-    /// 空なら `succeeded` 以外（キューに残っているもの）。
+    /// 空なら `succeeded` / `no_change` 以外（キューに残っているもの）。
     pub statuses: &'a [IrScoreJobStatus],
     pub limit: u32,
     pub offset: u32,

@@ -144,6 +144,14 @@ With an IR account, your scores are registered in an online ranking where you ca
 After you log in, your scores are submitted automatically.
 BMZ Player also supports rianIR and BMS-IR, and you can log in to them on the same page.
 
+For Bokutachi, enter an API key with `submit_score` permission and select “Validate and save key”. Use “Check connection” to validate it again or “Delete API key” to remove it.
+
+Bokutachi supports new normal singles: 7K/14K with LR2oraja and 9K with beatoraja, saved with LN-only scoring. AUTO(LN) is eligible when it produces that saved scoring mode. Key conversions, original RANDOM/SWITCH branches, courses and past score uploads are excluded. RANDOM lane arrangements are allowed. A display-only 7K G-BATTLE is eligible when your scoring lanes can be verified.
+
+PMS uses the input device division saved with the play: Controller or Keyboard. Tachi's Controller division assumes an arcade-size controller; BMZ does not measure its physical size. UPDATE SCORE compares past local results from the same device division.
+
+Unregistered charts or scoring note-count mismatches stop submission with a reason. Accepted imports await registration confirmation, which resumes after restarting. “No new score confirmed” is a final outcome and does not prove a duplicate. Select Bokutachi in the send queue and use the Completed filter to see final outcomes. Ranking, rival and battle-data downloads and replay uploads are unsupported.
+
 ### Uploading and downloading past scores
 
 Settings → **IR** → "Bulk score operations" offers two actions.
@@ -156,7 +164,7 @@ Pressing a button opens a confirmation window. For the upload, it shows how many
 - With many scores, it can take from a few minutes to well over half an hour. Progress is shown on the same page, and the work continues even if you close the settings window.
 - Press "Cancel" to stop at any time. Running it again continues where it stopped.
 - You cannot switch profiles while it is running.
-- Bulk operations work only for your Primary IR. Uploading local scores is available for BMZ IR only, and downloading works with every IR except rianIR. The buttons are disabled when you are not logged in.
+- Bulk operations work only for your Primary IR. Uploading local scores is available for BMZ IR only, and downloading is available for BMZ IR and BMS-IR. The buttons are disabled when you are not logged in.
 
 You are notified when it finishes.
 

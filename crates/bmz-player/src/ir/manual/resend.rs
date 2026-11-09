@@ -52,7 +52,7 @@ pub async fn resend_job(
         IrSyncThrottle::none(),
     )
     .await?;
-    let claimed = report.submitted.saturating_add(report.failed) > 0;
+    let claimed = report.processed > 0;
     Ok(IrManualResendReport {
         targeted: 1,
         submitted: report.submitted,

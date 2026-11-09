@@ -1,4 +1,15 @@
 settings-ui-heading = UI
+profile-ir-api-key = API 金鑰
+ir-bokutachi-ineligible = 不符合條件（譜面核對）
+ir-queue-filter-completed = 已完成（登錄成功／無新增成績）
+ir-queue-registered = 登錄成功
+profile-ir-validate-key = 驗證並儲存金鑰
+profile-ir-bokutachi-help = 使用具有 submit_score 權限的 API 金鑰連線。僅傳送新單曲成績：7K／14K 使用 LR2oraja，9K 使用 beatoraja，均僅限 LN。PMS 使用成績儲存時的輸入裝置分類（Tachi Controller 部門以街機尺寸控制器為前提）。不支援排行榜、勁敵、對戰資料下載、組曲、歷史成績批次上傳或回放上傳。
+ir-bokutachi-no-change = 未確認新增成績（重複等原因）
+ir-bokutachi-pending = 等待登錄確認
+ir-bokutachi-no-ranking = 不支援取得排行榜。
+profile-ir-delete-key = 刪除 API 金鑰
+profile-ir-check-key = 檢查連線
 settings-language-label = 語言
 settings-theme-label = 主題
 settings-show-fps = 顯示 FPS

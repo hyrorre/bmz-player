@@ -161,6 +161,7 @@ impl ResultIrTarget {
 impl ResultIrTaskQuery {
     fn supports_scope(&self, scope: IrRankingScope) -> bool {
         self.target.supports_scope(scope)
+            && !crate::ir::bokutachi::is_provider(&self.provider)
             && (!crate::ir::rian_ir::is_rian_ir_provider(&self.provider)
                 || scope == IrRankingScope::Global)
     }
@@ -193,6 +194,7 @@ enum ResultIrSource {
 }
 
 pub struct ResultIrState {
+    pub local_submission_notice: Option<String>,
     pub submit: IrSubmitState,
     pub provider_submissions: Vec<ResultIrProviderSubmission>,
     pub global: RankingLoadState,
@@ -304,11 +306,26 @@ impl ResultIrState {
                         provider_state.state = state.clone();
                     }
                     if provider == self.query.provider {
+                        if self.submit == state {
+                            continue;
+                        }
                         // 譜面の非公開・ブロックで拒否された場合、ランキングは取得できない。
                         // スキンには取得失敗ではなく制限中 (LR2 IRstatus 605) として渡す。
                         self.chart_restricted = restricted_chart;
                         self.submit = state;
-                        self.update_submit_timer(submitted, failed, self.submit_message_is_error());
+                        if crate::ir::bokutachi::is_provider(&provider)
+                            && submitted == 0
+                            && failed == 0
+                        {
+                            self.ir_connect_success_at = None;
+                            self.ir_connect_fail_at = None;
+                        } else {
+                            self.update_submit_timer(
+                                submitted,
+                                failed,
+                                self.submit_message_is_error(),
+                            );
+                        }
                     }
                 }
                 ResultIrEvent::Ranking { provider, scope, result } => {
@@ -345,6 +362,9 @@ impl ResultIrState {
     }
 
     fn submit_message_is_error(&self) -> bool {
+        if crate::ir::bokutachi::is_provider(&self.query.provider) {
+            return false;
+        }
         matches!(&self.submit, IrSubmitState::Done { submitted: 0, failed: 0, message: Some(_) })
     }
 
@@ -416,6 +436,9 @@ impl ResultIrState {
             bmz_render::skin::ResultIrScopeBinding::Global => ResultRankingTab::Global,
             bmz_render::skin::ResultIrScopeBinding::Active => self.active_tab,
         };
+        if !self.supports_tab(tab) {
+            return self.with_connect_timers(ResultIrSnapshot::default(), tab);
+        }
         let snapshot = match self.state_for_tab(tab) {
             RankingLoadState::NotRequested | RankingLoadState::Loading => {
                 ResultIrSnapshot { state: SkinIrState::Loading, ..Default::default() }
@@ -740,6 +763,7 @@ mod tests {
         let (sender, receiver) = channel::<ResultIrEvent>();
         let event_sender = sender.clone();
         let mut state = ResultIrState {
+            local_submission_notice: None,
             submit: IrSubmitState::Sending,
             provider_submissions: vec![
                 ResultIrProviderSubmission {
@@ -1027,6 +1051,7 @@ mod tests {
             },
         };
         let report = IrSyncReport {
+            processed: 1,
             submitted: 1,
             failed: 0,
             messages: Vec::new(),

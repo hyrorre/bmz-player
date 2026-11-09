@@ -107,6 +107,7 @@ impl WinitApp {
             .filter(|provider| {
                 provider.enabled
                     && !provider.base_url.is_empty()
+                    && !crate::ir::bokutachi::is_config(provider)
                     && (!crate::ir::rian_ir::is_rian_ir_config(provider)
                         || crate::ir::rian_ir::course_submission_supported(
                             self.boot.profile_config.play.ln_mode_policy,

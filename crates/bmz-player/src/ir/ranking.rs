@@ -34,6 +34,9 @@ pub(crate) async fn fetch_course_ranking(
     base_url: &str,
     target: &CourseRankingTarget,
 ) -> anyhow::Result<IrCourseRankingResult> {
+    if crate::ir::bokutachi::is_provider(provider) {
+        return Err(crate::ir::bokutachi::unsupported());
+    }
     let now = now_unix_seconds();
     if crate::ir::rian_ir::is_rian_ir_provider(provider) {
         let credentials =
@@ -103,6 +106,9 @@ pub(crate) async fn fetch_ranking_with_limit(
     scope: IrRankingScope,
     limit: u32,
 ) -> anyhow::Result<IrRankingResult> {
+    if crate::ir::bokutachi::is_provider(&query.provider) {
+        return Err(crate::ir::bokutachi::unsupported());
+    }
     let now = now_unix_seconds();
     if crate::ir::rian_ir::is_rian_ir_provider(&query.provider) {
         let credentials =

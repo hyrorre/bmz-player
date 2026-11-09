@@ -1,4 +1,15 @@
 settings-ui-heading = UI
+profile-ir-api-key = APIキー
+ir-bokutachi-ineligible = 対象外（譜面照合）
+ir-queue-filter-completed = 完了（登録成功・新規追加なし）
+ir-queue-registered = 登録成功
+profile-ir-validate-key = キーを検証して保存
+profile-ir-bokutachi-help = submit_score権限のあるAPIキーで接続します。新規単曲のみ：7K／14KはLR2oraja、9Kはbeatoraja、LNのみ。PMSは保存時の入力機器区分へ送信します（TachiのController部門はACサイズを前提）。ランキング・ライバル・対戦データ取得・コース・過去スコア一括送信・リプレイ送信は未対応です。
+ir-bokutachi-no-change = 新規追加なし（重複等）
+ir-bokutachi-pending = 登録確認待ち
+ir-bokutachi-no-ranking = ランキング取得には対応していません。
+profile-ir-delete-key = APIキーを削除
+profile-ir-check-key = 接続を再確認
 settings-language-label = 言語
 settings-theme-label = テーマ
 settings-show-fps = FPS 表示

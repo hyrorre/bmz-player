@@ -29,6 +29,10 @@ pub(super) fn build_result_ir_panel(
 }
 
 fn build_result_ir_content(ui: &mut egui::Ui, state: &mut ResultIrState, text: Localizer) {
+    if let Some(notice) = &state.local_submission_notice {
+        ui.small(notice);
+        ui.separator();
+    }
     for submission in &state.provider_submissions {
         ui.horizontal(|ui| {
             ui.strong(&submission.display_name);
@@ -66,8 +70,22 @@ fn build_result_ir_content(ui: &mut egui::Ui, state: &mut ResultIrState, text: L
                             "submitted" => *submitted
                         ),
                     );
+                } else if let Some(message) = message {
+                    if crate::ir::bokutachi::is_provider(&submission.provider_key) {
+                        ui.label(if message.contains("no new score") {
+                            tr!(text, "ir-bokutachi-no-change")
+                        } else if message.starts_with("Bokutachi: ineligible") {
+                            tr!(text, "ir-bokutachi-ineligible")
+                        } else {
+                            tr!(text, "ir-bokutachi-pending")
+                        });
+                    }
+                    ui.small(message);
                 } else {
                     ui.label(tr!(text, "result-ir-nothing-to-submit"));
+                }
+                if *submitted > 0 && *failed == 0 && let Some(message) = message {
+                    ui.small(message);
                 }
             }
         }
@@ -75,6 +93,10 @@ fn build_result_ir_content(ui: &mut egui::Ui, state: &mut ResultIrState, text: L
     }
 
     ui.separator();
+    if !state.supports_tab(ResultRankingTab::Global) {
+        ui.label(tr!(text, "ir-bokutachi-no-ranking"));
+        return;
+    }
     let mut selected_tab = None;
     ui.horizontal(|ui| {
         let global = state.active_tab == ResultRankingTab::Global;

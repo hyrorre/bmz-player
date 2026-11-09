@@ -4,7 +4,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use bmz_chart::model::PlayableChart;
 use bmz_core::clear::ClearType;
 use bmz_core::ids::NoteId;
@@ -248,6 +248,7 @@ pub struct FinishSessionSnapshot {
     replay_events: Vec<ReplayEvent>,
     replay_playback: bool,
     replay_lane_mask: bool,
+    bokutachi_scoring_scope: Option<crate::ir::bokutachi::ScoringScope>,
     rule_mode: bmz_gameplay::rule::RuleMode,
     note_judge_window: bmz_gameplay::judge::model::JudgeWindow,
     gauge_carry: Vec<GaugeCarryValue>,
@@ -342,6 +343,29 @@ impl FinishSessionSnapshot {
                 )),
                 has_bga: Some(session.chart.metadata.has_bga),
                 has_random_sequence: Some(session.chart.metadata.has_bms_random),
+            },
+            bokutachi_scoring_scope: {
+                use crate::ir::bokutachi::ScoringScope;
+                let mask = session.display_only_lane_mask;
+                let notes_match =
+                    bmz_gameplay::score::scored_note_count_excluding_lanes(&session.chart, &mask)
+                        == session.scored_total_notes;
+                if !notes_match {
+                    None
+                } else if mask.iter().all(|v| !v)
+                    && session.chart.metadata.key_mode == session.primary_key_mode
+                {
+                    Some(ScoringScope::Native)
+                } else if session.primary_key_mode == KeyMode::K7
+                    && applied_arrange.source_key_mode == Some(KeyMode::K7)
+                    && session.chart.metadata.key_mode == KeyMode::K14
+                    && mask == crate::screens::play_session::second_player_lane_mask()
+                    && session.replay_lane_mask.is_none_or(|replay_mask| replay_mask == mask)
+                {
+                    Some(ScoringScope::DisplayBattle7k)
+                } else {
+                    None
+                }
             },
             result: play_result_from_session(session),
             primary_key_mode: session.primary_key_mode,
@@ -570,6 +594,7 @@ fn finish_session_snapshot_result(
         let mut ir_result = result.clone();
         ir_result.clear_type = summary_clear_type;
         enqueue_ir_jobs(
+            score_db,
             network_db,
             ir_config,
             EnqueueIrJobsRequest {
@@ -644,6 +669,7 @@ struct EnqueueIrJobsRequest<'a> {
 }
 
 fn enqueue_ir_jobs(
+    score_db: &ScoreDatabase,
     network_db: &mut NetworkDatabase,
     ir_config: &IrConfig,
     request: EnqueueIrJobsRequest<'_>,
@@ -670,12 +696,16 @@ fn enqueue_ir_jobs(
         .iter()
         .filter(|provider| {
             provider.enabled
-                && should_send_ir_score(
-                    provider.send_policy,
-                    result,
-                    snapshot.manually_stopped,
-                    previous_best,
-                )
+                && ((crate::ir::bokutachi::is_config(provider)
+                    && snapshot.primary_key_mode == KeyMode::K9
+                    && provider.send_policy
+                        == crate::config::profile_config::IrSendPolicyConfig::UpdateScore)
+                    || should_send_ir_score(
+                        provider.send_policy,
+                        result,
+                        snapshot.manually_stopped,
+                        previous_best,
+                    ))
                 && (!crate::ir::rian_ir::is_rian_ir_config(provider)
                     || crate::ir::rian_ir::score_submission_supported(
                         score_key.ln_policy,
@@ -743,6 +773,71 @@ fn enqueue_ir_jobs(
         return;
     };
     for provider in enabled {
+        let bokutachi_payload = if crate::ir::bokutachi::is_config(provider) {
+            let prepared = (|| -> anyhow::Result<String> {
+                use crate::ir::bokutachi::{Game, PlayContext};
+                anyhow::ensure!(
+                    finish_mode == FinishResultMode::Normal,
+                    "Bokutachi: course stages are not supported"
+                );
+                let ctx = PlayContext {
+                    version: 1,
+                    origin: crate::ir::credentials::credential_origin(&provider.base_url)?,
+                    new_normal_single: true,
+                    normal_score_and_effective_assist_passed: snapshot
+                        .assist
+                        .score_update_enabled(),
+                    source_key_mode: applied_arrange
+                        .source_key_mode
+                        .context("Bokutachi: original chart mode is unavailable")?,
+                    primary_key_mode: snapshot.primary_key_mode,
+                    conversion: applied_arrange.key_mode_conversion,
+                    scoring_scope: snapshot
+                        .bokutachi_scoring_scope
+                        .context("Bokutachi: cannot verify the player's scoring lanes")?,
+                    game: Game::for_play(
+                        snapshot.primary_key_mode,
+                        snapshot.rule_mode.as_str(),
+                        stored.device_type.as_str(),
+                    )?,
+                };
+                let mut dedicated = payload.clone();
+                dedicated.play_options.insert("bokutachi".into(), serde_json::to_value(ctx)?);
+                crate::ir::bokutachi::context(&dedicated)?;
+                serde_json::to_string(&dedicated).map_err(Into::into)
+            })();
+            match prepared {
+                Ok(json) => {
+                    if snapshot.primary_key_mode == KeyMode::K9
+                        && provider.send_policy
+                            == crate::config::profile_config::IrSendPolicyConfig::UpdateScore
+                    {
+                        match score_db.improves_device_best(
+                            score_key,
+                            stored.device_type,
+                            stored.score_history_id,
+                            result,
+                        ) {
+                            Ok(true) => {}
+                            Ok(false) => continue,
+                            Err(error) => {
+                                summary.ir_last_error = Some(format!(
+                                    "Bokutachi: could not compare previous scores: {error}"
+                                ));
+                                continue;
+                            }
+                        }
+                    }
+                    Some(json)
+                }
+                Err(error) => {
+                    summary.ir_last_error = Some(error.to_string());
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
         if crate::ir::rian_ir::is_rian_ir_config(provider)
             && !crate::ir::rian_ir::score_duration_plausible(
                 result.clear_type.as_str(),
@@ -774,7 +869,7 @@ fn enqueue_ir_jobs(
             local_score_id: stored.score_history_id,
             chart_sha256: result.chart_sha256,
             ln_policy: score_key.ln_policy,
-            payload_json: payload_json.clone(),
+            payload_json: bokutachi_payload.unwrap_or_else(|| payload_json.clone()),
             now: played_at,
         }) {
             Ok(_) => summary.ir_queued_jobs += 1,

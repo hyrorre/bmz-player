@@ -29,6 +29,7 @@ pub(super) struct IrManualUi {
     confirm: Option<IrConfirm>,
     queue_status: IrQueueStatusFilter,
     queue_page: u32,
+    queue_provider: String,
     /// 直近に発行した一覧要求。同じ条件を毎フレーム発行しないための照合用。
     queue_requested: Option<IrQueueQuery>,
 }
@@ -40,6 +41,7 @@ impl IrManualUi {
             confirm: None,
             queue_status: IrQueueStatusFilter::default(),
             queue_page: 0,
+            queue_provider: String::new(),
             queue_requested: None,
         }
     }
@@ -49,6 +51,7 @@ impl IrManualUi {
         self.confirm = None;
         self.queue_status = IrQueueStatusFilter::default();
         self.queue_page = 0;
+        self.queue_provider.clear();
         self.queue_requested = None;
     }
 
@@ -69,6 +72,10 @@ struct IrBulkTarget {
 
 fn primary_target(ir: &IrConfig) -> Option<IrBulkTarget> {
     let provider = crate::ir::provider_key::primary_provider_config(ir)?;
+    target_for_provider(provider)
+}
+
+fn target_for_provider(provider: &IrProviderConfig) -> Option<IrBulkTarget> {
     let provider_key = crate::ir::provider_key::configured_provider_key(provider)?.to_string();
     let account_id = provider.account_id.trim().to_string();
     if account_id.is_empty() {
@@ -76,14 +83,25 @@ fn primary_target(ir: &IrConfig) -> Option<IrBulkTarget> {
     }
     let is_rian = crate::ir::rian_ir::is_rian_ir_config(provider);
     let is_bms_ir = crate::ir::bms_ir::is_bms_ir_config(provider);
+    let is_bokutachi = crate::ir::bokutachi::is_config(provider);
     Some(IrBulkTarget {
         label: provider_key.clone(),
         provider_key,
         account_id,
         // ローカルスコアの一括送信はBMZ IRのみ。スコア取得はrianIRに無い。
-        can_upload: !is_rian && !is_bms_ir,
-        can_download: !is_rian,
+        can_upload: !is_rian && !is_bms_ir && !is_bokutachi,
+        can_download: !is_rian && !is_bokutachi,
     })
+}
+
+// The outbox is independent of the ranking primary, including SubmitOnly IRs.
+fn queue_target(ir: &IrConfig, selected: &str) -> Option<IrBulkTarget> {
+    ir.providers
+        .iter()
+        .find(|p| crate::ir::provider_key::configured_provider_key(p) == Some(selected))
+        .and_then(target_for_provider)
+        .or_else(|| primary_target(ir))
+        .or_else(|| ir.providers.iter().find_map(target_for_provider))
 }
 
 fn format_duration_short(duration: Duration) -> String {
@@ -238,7 +256,10 @@ pub(super) fn build_ir_confirm_modal(
         return;
     };
     let snapshot = ir_manual.handle.snapshot();
-    let Some(target) = primary_target(ir) else {
+    let Some(target) = (match confirm {
+        IrConfirm::ResendFailed => queue_target(ir, &ir_manual.queue_provider),
+        _ => primary_target(ir),
+    }) else {
         ir_manual.confirm = None;
         return;
     };
@@ -343,6 +364,8 @@ fn status_filter_label(filter: IrQueueStatusFilter, text: Localizer) -> String {
         IrQueueStatusFilter::Pending => tr!(text, "ir-queue-filter-pending"),
         IrQueueStatusFilter::Sending => tr!(text, "ir-queue-filter-sending"),
         IrQueueStatusFilter::Unfinished => tr!(text, "ir-queue-filter-unfinished"),
+        IrQueueStatusFilter::Completed => tr!(text, "ir-queue-filter-completed"),
+        IrQueueStatusFilter::Ineligible => tr!(text, "ir-bokutachi-ineligible"),
     }
 }
 
@@ -360,6 +383,9 @@ fn job_status_label(status: &str, text: Localizer) -> String {
         "failed" => tr!(text, "ir-queue-filter-failed"),
         "pending" => tr!(text, "ir-queue-filter-pending"),
         "sending" => tr!(text, "ir-queue-filter-sending"),
+        "no_change" => tr!(text, "ir-bokutachi-no-change"),
+        "succeeded" => tr!(text, "ir-queue-registered"),
+        "ineligible" => tr!(text, "ir-bokutachi-ineligible"),
         other => other.to_string(),
     }
 }
@@ -381,13 +407,35 @@ pub(super) fn build_ir_queue_section(
     ir_manual: &mut IrManualUi,
     text: Localizer,
 ) {
-    let Some(target) = primary_target(ir) else {
+    let Some(target) = queue_target(ir, &ir_manual.queue_provider) else {
         ir_manual.queue_hidden();
         return;
     };
     SettingsSection::new(SettingsPage::Ir, tr!(text, "ir-queue-title"))
         .id_salt("settings_ir_queue")
-        .show(ui, |ui| build_ir_queue(ui, target, ir_manual, text));
+        .show(ui, |ui| {
+            let previous = target.provider_key.clone();
+            ir_manual.queue_provider = previous.clone();
+            egui::ComboBox::from_id_salt("ir_queue_provider").selected_text(&target.label).show_ui(
+                ui,
+                |ui| {
+                    for candidate in ir.providers.iter().filter_map(target_for_provider) {
+                        ui.selectable_value(
+                            &mut ir_manual.queue_provider,
+                            candidate.provider_key,
+                            candidate.label,
+                        );
+                    }
+                },
+            );
+            if ir_manual.queue_provider != previous {
+                ir_manual.queue_page = 0;
+                ir_manual.queue_requested = None;
+            }
+            if let Some(target) = queue_target(ir, &ir_manual.queue_provider) {
+                build_ir_queue(ui, target, ir_manual, text);
+            }
+        });
 }
 
 fn build_ir_queue(
@@ -409,7 +457,7 @@ fn build_ir_queue(
         ir_manual.queue_requested = Some(desired.clone());
     }
     let view = match &snapshot.queue {
-        IrQueueState::Ready(view) => Some(view),
+        IrQueueState::Ready(view) if view.query == desired => Some(view),
         _ => None,
     };
     ui.horizontal_wrapped(|ui| {
@@ -423,6 +471,8 @@ fn build_ir_queue(
                     IrQueueStatusFilter::Pending,
                     IrQueueStatusFilter::Sending,
                     IrQueueStatusFilter::Unfinished,
+                    IrQueueStatusFilter::Completed,
+                    IrQueueStatusFilter::Ineligible,
                 ] {
                     ui.selectable_value(&mut status, option, status_filter_label(option, text));
                 }
@@ -465,6 +515,10 @@ fn build_ir_queue(
                 tr!(text, "ir-queue-load-failed", "error" => error.clone()),
             );
         }
+        IrQueueState::Ready(view) if view.query != desired => {
+            ui.spinner();
+            ui.ctx().request_repaint_after(REPAINT_INTERVAL);
+        }
         IrQueueState::Ready(view) => {
             if view.rows.is_empty() {
                 ui.label(tr!(text, "ir-queue-empty"));
@@ -493,11 +547,20 @@ fn build_ir_queue(
                             hash_to_hex(&job.chart_sha256).chars().take(12).collect()
                         });
                         ui.label(truncate_chars(&chart, 36)).on_hover_text(chart);
-                        ui.label(job_status_label(&job.status, text));
+                        ui.label(
+                            if crate::ir::bokutachi::is_provider(&job.provider)
+                                && job.status == "pending"
+                                && job.last_error.contains("accepted")
+                            {
+                                tr!(text, "ir-bokutachi-pending")
+                            } else {
+                                job_status_label(&job.status, text)
+                            },
+                        );
                         ui.label(job.attempt_count.to_string());
                         // 恒久拒否されたjobは自動再試行しないため、再試行時刻を出さない。
                         ui.label(
-                            if job.status == "failed"
+                            if matches!(job.status.as_str(), "failed" | "pending")
                                 && job.next_attempt_at
                                     < crate::storage::network_db::IR_JOB_NO_AUTO_RETRY_AT
                             {
@@ -513,7 +576,7 @@ fn build_ir_queue(
                             ui.label(truncate_chars(error, 48)).on_hover_text(error);
                         }
                         ui.label(format_optional_timestamp(Some(job.updated_at)));
-                        if job.status == "failed"
+                        if matches!(job.status.as_str(), "failed" | "ineligible")
                             && ui
                                 .add_enabled(!busy, egui::Button::new(tr!(text, "ir-queue-resend")))
                                 .clicked()
@@ -578,6 +641,23 @@ mod tests {
             providers: vec![provider],
             ..IrConfig::default()
         }
+    }
+
+    #[test]
+    fn bokutachi_outbox_is_selectable_without_a_ranking_primary() {
+        let mut config = logged_in(IrProviderConfig::bokutachi(), "bokutachi");
+        assert!(primary_target(&config).is_none());
+        let target = queue_target(&config, "").unwrap();
+        assert_eq!(target.provider_key, "bokutachi");
+        assert!(!target.can_upload && !target.can_download);
+        let mut bmz = IrProviderConfig::bmz_ir();
+        bmz.provider_key = "bmz-official".into();
+        bmz.enabled = true;
+        bmz.account_id = "bmz-account".into();
+        config.providers.push(bmz);
+        config.primary_provider = "bmz-official".into();
+        assert_eq!(queue_target(&config, "bokutachi").unwrap().provider_key, "bokutachi");
+        assert_eq!(primary_target(&config).unwrap().provider_key, "bmz-official");
     }
 
     #[test]

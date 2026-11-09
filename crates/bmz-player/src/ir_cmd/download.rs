@@ -80,7 +80,13 @@ fn ensure_download_report_success(report: &IrScoreDownloadReport) -> Result<()> 
 }
 
 pub(super) fn primary_provider(profile: &ProfileConfig) -> Result<&IrProviderConfig> {
-    selected_provider(profile, None)
+    let provider = selected_provider(profile, None)?;
+    anyhow::ensure!(
+        !crate::ir::bokutachi::is_config(provider),
+        "{}",
+        crate::ir::bokutachi::unsupported()
+    );
+    Ok(provider)
 }
 
 pub(super) fn selected_provider<'a>(
