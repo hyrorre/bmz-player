@@ -202,3 +202,7 @@ mod cases_05;
 mod input_offset;
 #[path = "tests/missed_notes.rs"]
 mod missed_notes;
+#[path = "tests/performance.rs"]
+mod performance;
+#[path = "tests/scroll_bounds.rs"]
+mod scroll_bounds;

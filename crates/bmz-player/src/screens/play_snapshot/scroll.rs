@@ -30,12 +30,20 @@ impl<'a> ScrollContext<'a> {
     }
 
     pub(super) fn simple_tick_upper_bound(&self, cursor_tick: f64) -> Option<f64> {
-        if !self.scroll_integral.is_empty() || self.speed <= 0.0 {
+        if !self.speed.is_finite()
+            || self.speed <= 0.0
+            || !self.hispeed.is_finite()
+            || self.hispeed <= 0.0
+        {
             return None;
         }
-        let hispeed = self.hispeed.max(crate::config::play::HISPEED_MIN) as f64;
+        let hispeed = self.hispeed as f64;
         let visible = self.visible_lane_fraction.max(f32::EPSILON) as f64;
-        Some(cursor_tick + self.lookahead_ticks * visible / (hispeed * self.speed) + f64::EPSILON)
+        // progress_from_delta rounds to f32 before multiplying by HS. Keep a
+        // conservative margin so a note rounded onto the upper edge survives.
+        let distance = self.lookahead_ticks * visible / (hispeed * self.speed)
+            * (1.0 + 4.0 * f64::from(f32::EPSILON));
+        self.scroll_integral.tick_after_distance(cursor_tick, distance)
     }
 
     /// ノートの正規化進捗（0.0=判定ライン, 1.0=画面上端）。判定ラインより手前 (delta<0)
@@ -86,8 +94,8 @@ pub(super) fn visible_lane_notes(
 }
 
 /// Simple scroll では tick と画面上の順序が一致するため、二分探索で可視範囲へ
-/// 絞れる。SPEED はレーン全体へ一律に掛かるので、正なら絞り込める。SCROLL 使用時と
-/// SPEED が 0 以下のときは単調性を仮定できないので、既存どおり全候補を返して
+/// 絞れる。SCROLL・SPEED が有限の正数なら積分の逆変換でも絞り込める。
+/// 0 以下や非有限値があるときは単調性を仮定せず、既存どおり全候補を返して
 /// 表示互換を優先する。
 pub(super) fn visible_bar_lines(
     bar_lines: &[BarLine],

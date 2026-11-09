@@ -197,6 +197,10 @@ PMS/retention、LN/CN/HCN状態、表示offsetの変更とclock resetを検証�
 
 ## 回帰テスト
 
+SCROLLがすべて有限の正倍率なら、区間積分の逆変換でノーツ・LN・小節線等の可視候補を
+絞ります。0・逆向き・非有限倍率では全候補を評価します。判定履歴の公開は同容量の
+HashMapを再ハッシュせずコピーし、BGA選択は描画と動画更新で同じ種類別の時系列cacheを使います。
+
 `cargo test -p bmz-player frame_runtime`で次を検証します。
 
 - 120/240FPSの待機区間と短時間待機の上限

@@ -58,12 +58,11 @@ pub struct ActiveBgaChannel {
 pub fn active_bga_channels(
     session: &crate::gameplay_runtime::PlaySessionObservation,
     chart_now: TimeUs,
+    cache: &crate::screens::play_snapshot::PlayRenderSnapshotCache,
 ) -> Vec<ActiveBgaChannel> {
-    let chart = &session.chart;
     let mut channels = Vec::with_capacity(4);
     for kind in [BgaEventKind::Base, BgaEventKind::Layer, BgaEventKind::Layer2] {
-        if let Some(event) =
-            chart.bga_events.iter().rev().find(|e| e.time <= chart_now && e.kind == kind)
+        if let Some(event) = cache.bga_event_at(kind, chart_now)
             && let Some(asset_id) = event.asset
         {
             channels.push(ActiveBgaChannel { kind, asset_id, origin: event.time });
@@ -77,11 +76,7 @@ pub fn active_bga_channels(
                 && chart_now.0 >= j.time.0
                 && chart_now.0 < j.time.0 + poor_duration_us
         })
-        && let Some(event) = chart
-            .bga_events
-            .iter()
-            .rev()
-            .find(|e| e.time <= judgement.time && e.kind == BgaEventKind::Poor)
+        && let Some(event) = cache.bga_event_at(BgaEventKind::Poor, judgement.time)
         && let Some(asset_id) = event.asset
     {
         channels.push(ActiveBgaChannel {
@@ -105,13 +100,19 @@ pub fn update_video_bga_frames(
         return;
     }
 
-    let RunningPlaySession { gameplay, video_bga_decoders, failed_video_bga, bga_frames, .. } =
-        running;
+    let RunningPlaySession {
+        gameplay,
+        video_bga_decoders,
+        failed_video_bga,
+        bga_frames,
+        render_snapshot_cache,
+        ..
+    } = running;
     let session = &gameplay.session;
     let chart = &session.chart;
     let mut active_video_assets = HashSet::new();
 
-    for channel in active_bga_channels(session, chart_now) {
+    for channel in active_bga_channels(session, chart_now, render_snapshot_cache) {
         let Some(asset) = chart.bga_assets.iter().find(|a| a.id == channel.asset_id) else {
             continue;
         };
