@@ -32,7 +32,6 @@ mod database_import;
 mod database_query;
 mod database_replay;
 mod database_stats;
-mod ln_compatibility;
 mod reconcile;
 mod rows;
 mod write;

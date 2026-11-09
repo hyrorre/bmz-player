@@ -28,13 +28,10 @@ impl ScoreDatabase {
         rule_mode: RuleMode,
         slot: u8,
     ) -> Result<Option<CourseReplaySlotSource>> {
-        let policy = self
-            .course_replay_slot(course_hash, ln_policy, rule_mode, slot)?
-            .map_or(ln_policy, |record| record.ln_policy);
         super::super::course_score_db::course_replay_slot_source(
             &self.conn,
             course_hash,
-            policy,
+            ln_policy,
             rule_mode,
             slot,
         )
@@ -46,7 +43,6 @@ impl ScoreDatabase {
         ln_policy: LnScorePolicy,
         rule_mode: RuleMode,
     ) -> Result<Option<CourseBestScore>> {
-        self.initialize_ln_compatibility(None)?;
         super::super::course_score_db::best_course_score(
             &self.conn,
             course_hash,
@@ -61,7 +57,6 @@ impl ScoreDatabase {
         ln_policy: LnScorePolicy,
         rule_mode: RuleMode,
     ) -> Result<Option<bmz_core::clear::ClearType>> {
-        self.initialize_ln_compatibility(None)?;
         super::super::course_score_db::best_course_clear(
             &self.conn,
             course_hash,
@@ -94,7 +89,6 @@ impl ScoreDatabase {
         ln_policy: LnScorePolicy,
         rule_mode: RuleMode,
     ) -> Result<Option<i64>> {
-        self.initialize_ln_compatibility(None)?;
         super::super::course_score_db::latest_course_score_id(
             &self.conn,
             course_hash,
@@ -111,7 +105,6 @@ impl ScoreDatabase {
         limit: u32,
         offset: u32,
     ) -> Result<Vec<CourseScoreEntry>> {
-        self.initialize_ln_compatibility(None)?;
         super::super::course_score_db::list_recent_course_scores(
             &self.conn,
             course_hash,
@@ -154,22 +147,10 @@ impl ScoreDatabase {
         rule_mode: RuleMode,
         slot: u8,
     ) -> Result<Option<CourseReplaySlotRecord>> {
-        if let Some(record) = super::super::course_score_db::course_replay_slot(
-            &self.conn,
-            course_hash,
-            ln_policy,
-            rule_mode,
-            slot,
-        )? {
-            return Ok(Some(record));
-        }
-        let Some(legacy) = self.legacy_course_policy(course_hash, ln_policy)? else {
-            return Ok(None);
-        };
         super::super::course_score_db::course_replay_slot(
             &self.conn,
             course_hash,
-            legacy,
+            ln_policy,
             rule_mode,
             slot,
         )
@@ -181,26 +162,12 @@ impl ScoreDatabase {
         ln_policy: LnScorePolicy,
         rule_mode: RuleMode,
     ) -> Result<[Option<CourseReplaySlotRecord>; 4]> {
-        let mut slots = super::super::course_score_db::course_replay_slots_for_course(
+        super::super::course_score_db::course_replay_slots_for_course(
             &self.conn,
             course_hash,
             ln_policy,
             rule_mode,
-        )?;
-        if let Some(legacy) = self.legacy_course_policy(course_hash, ln_policy)? {
-            let old = super::super::course_score_db::course_replay_slots_for_course(
-                &self.conn,
-                course_hash,
-                legacy,
-                rule_mode,
-            )?;
-            for (slot, old) in slots.iter_mut().zip(old) {
-                if slot.is_none() {
-                    *slot = old;
-                }
-            }
-        }
-        Ok(slots)
+        )
     }
 
     pub fn course_replay_slot_presence(
@@ -209,24 +176,12 @@ impl ScoreDatabase {
         ln_policy: LnScorePolicy,
         rule_mode: RuleMode,
     ) -> Result<[bool; 4]> {
-        let mut present = super::super::course_score_db::course_replay_slot_presence(
+        super::super::course_score_db::course_replay_slot_presence(
             &self.conn,
             course_hash,
             ln_policy,
             rule_mode,
-        )?;
-        if let Some(legacy) = self.legacy_course_policy(course_hash, ln_policy)? {
-            let old = super::super::course_score_db::course_replay_slot_presence(
-                &self.conn,
-                course_hash,
-                legacy,
-                rule_mode,
-            )?;
-            for (slot, old) in present.iter_mut().zip(old) {
-                *slot |= old;
-            }
-        }
-        Ok(present)
+        )
     }
 
     pub fn achieved_trophy_names_for_definition(
@@ -236,7 +191,6 @@ impl ScoreDatabase {
         rule_mode: RuleMode,
         trophies: &[bmz_core::course::CourseTrophy],
     ) -> Result<Vec<String>> {
-        self.initialize_ln_compatibility(None)?;
         super::super::course_score_db::achieved_trophy_names_for_definition(
             &self.conn,
             course_hash,
@@ -253,7 +207,6 @@ impl ScoreDatabase {
         rule_mode: RuleMode,
         trophy_name: &str,
     ) -> Result<Option<CourseBestScore>> {
-        self.initialize_ln_compatibility(None)?;
         super::super::course_score_db::best_course_score_for_trophy(
             &self.conn,
             course_hash,

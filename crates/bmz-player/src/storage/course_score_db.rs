@@ -341,23 +341,23 @@ pub(super) fn best_course_score(
                 cs.gauge_value, cs.max_combo, cs.bp,
                 COALESCE((SELECT SUM(sh.cb) FROM score_history sh WHERE sh.course_score_id = cs.id), 0),
                 cs.course_failed, cs.course_clear,
-                (SELECT COUNT(*) FROM course_scores_compatible count_cs
+                (SELECT COUNT(*) FROM course_scores count_cs
                     WHERE count_cs.course_hash = cs.course_hash
                       AND count_cs.ln_policy = cs.ln_policy
                       AND count_cs.rule_mode = cs.rule_mode
                       AND count_cs.replay_only = 0),
-                (SELECT COUNT(*) FROM course_scores_compatible clear_cs
+                (SELECT COUNT(*) FROM course_scores clear_cs
                     WHERE clear_cs.course_hash = cs.course_hash
                       AND clear_cs.ln_policy = cs.ln_policy
                       AND clear_cs.rule_mode = cs.rule_mode
                       AND clear_cs.replay_only = 0
                       AND clear_cs.clear_type NOT IN ('', 'NoPlay', 'Failed')),
                 cs.played_at,
-                (SELECT MAX(last_cs.played_at) FROM course_scores_compatible last_cs
+                (SELECT MAX(last_cs.played_at) FROM course_scores last_cs
                  WHERE last_cs.course_hash = cs.course_hash AND last_cs.ln_policy = cs.ln_policy
                    AND last_cs.rule_mode = cs.rule_mode AND last_cs.replay_only = 0
                    AND last_cs.played_at > 0)
-         FROM course_scores_compatible cs
+         FROM course_scores cs
          WHERE cs.course_hash = ?1 AND cs.ln_policy = ?2 AND cs.rule_mode = ?3
            AND cs.replay_only = 0
          ORDER BY cs.ex_score DESC,
@@ -397,7 +397,7 @@ pub(super) fn best_course_clear(
     let value: Option<String> = conn
         .query_row(
             "SELECT clear_type
-             FROM course_scores_compatible
+             FROM course_scores
              WHERE course_hash = ?1 AND ln_policy = ?2 AND rule_mode = ?3
                AND replay_only = 0
              ORDER BY CASE clear_type
@@ -455,7 +455,7 @@ pub(super) fn achieved_trophy_names_for_definition(
 ) -> Result<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT ex_score, max_ex_score, bp
-         FROM course_scores_compatible
+         FROM course_scores
          WHERE course_hash = ?1
            AND ln_policy = ?2
            AND rule_mode = ?3
@@ -503,23 +503,23 @@ pub(super) fn best_course_score_for_trophy(
                 cs.gauge_type, cs.gauge_value, cs.max_combo, cs.bp,
                 COALESCE((SELECT SUM(sh.cb) FROM score_history sh WHERE sh.course_score_id = cs.id), 0),
                 cs.course_failed, cs.course_clear,
-                (SELECT COUNT(*) FROM course_scores_compatible count_cs
+                (SELECT COUNT(*) FROM course_scores count_cs
                     WHERE count_cs.course_hash = cs.course_hash
                       AND count_cs.ln_policy = cs.ln_policy
                       AND count_cs.rule_mode = cs.rule_mode
                       AND count_cs.replay_only = 0),
-                (SELECT COUNT(*) FROM course_scores_compatible clear_cs
+                (SELECT COUNT(*) FROM course_scores clear_cs
                     WHERE clear_cs.course_hash = cs.course_hash
                       AND clear_cs.ln_policy = cs.ln_policy
                       AND clear_cs.rule_mode = cs.rule_mode
                       AND clear_cs.replay_only = 0
                       AND clear_cs.clear_type NOT IN ('', 'NoPlay', 'Failed')),
                 cs.played_at,
-                (SELECT MAX(last_cs.played_at) FROM course_scores_compatible last_cs
+                (SELECT MAX(last_cs.played_at) FROM course_scores last_cs
                  WHERE last_cs.course_hash = cs.course_hash AND last_cs.ln_policy = cs.ln_policy
                    AND last_cs.rule_mode = cs.rule_mode AND last_cs.replay_only = 0
                    AND last_cs.played_at > 0)
-         FROM course_scores_compatible cs
+         FROM course_scores cs
          JOIN course_trophy_achievements cta
              ON cta.course_score_id = cs.id
          WHERE cs.course_hash = ?1 AND cs.ln_policy = ?2 AND cs.rule_mode = ?3
@@ -607,7 +607,7 @@ pub(super) fn list_recent_course_scores(
         "SELECT id, course_hash, ln_policy, rule_mode, source, course_key, title, kind, constraints_json,
                 chart_sha256s_json, ex_score, max_ex_score, clear_type, gauge_type,
                 gauge_value, max_combo, bp, course_failed, course_clear, played_at
-         FROM course_scores_compatible
+         FROM course_scores
          WHERE course_hash = ?1 AND ln_policy = ?2 AND rule_mode = ?3
            AND replay_only = 0
          ORDER BY played_at DESC, id DESC
@@ -703,7 +703,7 @@ pub(super) fn latest_course_score_id(
     rule_mode: RuleMode,
 ) -> Result<Option<i64>> {
     conn.query_row(
-        "SELECT id FROM course_scores_compatible
+        "SELECT id FROM course_scores
          WHERE course_hash = ?1 AND ln_policy = ?2 AND rule_mode = ?3
            AND replay_only = 0
          ORDER BY played_at DESC, id DESC

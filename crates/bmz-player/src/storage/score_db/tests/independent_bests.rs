@@ -5,7 +5,7 @@ fn database_before_repair() -> ScoreDatabase {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, &SCORE_MIGRATIONS[..32]).unwrap();
-    ScoreDatabase::from_connection(conn)
+    ScoreDatabase { conn }
 }
 
 fn database() -> ScoreDatabase {

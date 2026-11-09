@@ -185,46 +185,6 @@ beatorajaはlamp、EX score、average judge、min BP、max comboをそれぞれ�
 BP / CB / comboだけが改善した場合の代表判定内訳・ghost・option/seedはBMZと一致しません。
 またBMZはaverage judgeをbest項目として保存せず、代わりにCBを保持します。
 
-### 単一実効LN型の旧キー互換参照
-
-AUTOのfallback適用後に全LNの実効型が揃う場合、新規プレイはcanonicalな`Force*`へ一度だけ保存します。
-今回追加する旧キー参照は、undefined + defined単一種別が一致する場合の
-`AutoLn` / `ForceLn`、`AutoCn` / `ForceCn`、`AutoHcn` / `ForceHcn`の3組だけです。
-全譜面でAutoとForceを同値にはしません。正規化の詳細は[ln.md](ln.md)を参照します。
-
-根拠は同一SHA-256の現行`CHART_IMPORT_VERSION`のlibrary解析情報です。優先される解析情報が
-一致し、同一SHAの読み取り可能な譜面コピーを検証でき、`has_bms_random`がfalseの場合だけ
-接続内の一時ビューで旧キーを参照します。古い解析、未所持・読取不可、矛盾する解析、
-過去の選択分岐を確定できない`#RANDOM`は統合しません。記録は元のキーと内容を保持します。
-これらは全policyの履歴に残り、canonical側のBESTやslotには推測で加えません。
-解析更新後は再スキャン／profile再読込で根拠を更新できます。
-
-BESTのEX最大・BP最小・CB最小・コンボ最大・最高ランプを独立に合成します。代表履歴の
-判定内訳・ghost・replay path等は、実際の履歴のEX/BP/CB/コンボで選び、独立BESTの値を
-タイブレークへ流用しません。等値はcanonical側を優先します。代表履歴欠損時は同EXの
-未知のタイブレークを推測せず、その代表情報を保持します。clear-onlyの中立BP/CBは除外し、
-ランプ・回数・日時は保持します。`source_min_bp`由来の独立BPも保持します。
-物理BEST行を上書きしたり全履歴から置き換えたりしないため、履歴に無い既存情報も残ります。
-
-回数は各保存行の回数を足し、履歴は元のIDを一度だけ読みます。更新日時は新旧両方の
-通常履歴・clear-only日時の最大です。リザルトの旧BEST snapshotと更新比較、MYBEST ghost、
-clear-option履歴、選曲BEST・ランプ・回数にも同じビューを使います。
-新規保存はcanonical側だけを更新し、旧記録より悪いだけのプレイを初BEST扱いしません。
-
-replay slotは、同じ番号がcanonical側にあればそれを優先し、無い番号だけ確認済みの旧キーへ
-fallbackします。返すslot行は保存時のpolicyを保持するため、既存のhash・policy・DOUBLE検証を
-そのまま使います。旧行・旧ファイル・内容・hash・pathは変更も削除もしません。
-
-コースは保存済み全stageのSHA列が一致し、全stageに上記の信頼できる情報がある場合に
-元profileを集約します。旧AUTO行の保存constraintがfallbackと整合することも要求します。
-BEST・ランプ・回数・最終日時・履歴・トロフィーは同じattempt集合を参照し、数値代表は
-既存のcourse attempt選択規則に従います。コースslotもcanonical優先、旧slot fallbackです。
-履歴IDからの読み取りは保存時のpolicyを維持します。
-
-外部DB再インポートの重複照合には、確認済み旧policyも加えます。それ以外の由来・判定内訳・
-配置などの条件は維持します。旧履歴への`source_min_bp`等の補完は元の行に行い、履歴・
-プレイ回数を増やしません。IR履歴・outbox・送信済みsnapshotや識別キーは書き換えません。
-
 ### 既存ユーザーの数値ベスト修復
 
 修正版の初回起動時、score DB migration v33が保存済み`score_history`から最小BP・

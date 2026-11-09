@@ -5,7 +5,7 @@ fn database(version: usize) -> ScoreDatabase {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, &SCORE_MIGRATIONS[..version]).unwrap();
-    ScoreDatabase::from_connection(conn)
+    ScoreDatabase { conn }
 }
 
 fn play(ex: u32, bp: u32) -> ScoreRecord {

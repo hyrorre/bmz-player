@@ -7,7 +7,6 @@ impl ScoreDatabase {
         &self,
         keys: &[ScoreKey],
     ) -> Result<HashMap<ScoreKey, i64>> {
-        self.initialize_ln_compatibility(None)?;
         let mut found = HashMap::new();
         let mut seen = HashSet::new();
         let keys: Vec<_> = keys.iter().copied().filter(|key| seen.insert(*key)).collect();
@@ -17,13 +16,13 @@ impl ScoreDatabase {
             let sql = format!(
                 "WITH requested(chart_sha256, ln_policy, double_option, rule_mode) AS (VALUES {placeholders})
                  SELECT r.chart_sha256, r.ln_policy, r.double_option, r.rule_mode,
-                    MAX(COALESCE((SELECT MAX(h.played_at) FROM score_history_compatible h
+                    MAX(COALESCE((SELECT MAX(h.played_at) FROM score_history h
                         WHERE h.chart_sha256 = r.chart_sha256 AND h.ln_policy = r.ln_policy
                           AND h.double_option = r.double_option
                           AND CASE h.rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
                               WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END = r.rule_mode
                           AND h.autoplay = 0), 0), COALESCE(u.played_at, 0))
-                 FROM requested r LEFT JOIN score_unrecorded_plays_compatible u
+                 FROM requested r LEFT JOIN score_unrecorded_plays u
                  ON u.chart_sha256 = r.chart_sha256 AND u.ln_policy = r.ln_policy
                     AND u.double_option = r.double_option AND u.rule_mode = r.rule_mode"
             );
@@ -41,10 +40,7 @@ impl ScoreDatabase {
             for row in rows {
                 let (key, date) = row?;
                 if date > 0 {
-                    found
-                        .entry(key)
-                        .and_modify(|current: &mut i64| *current = (*current).max(date))
-                        .or_insert(date);
+                    found.insert(key, date);
                 }
             }
         }
@@ -52,10 +48,9 @@ impl ScoreDatabase {
     }
 
     pub fn best_ex_score(&self, key: ScoreKey) -> Result<Option<u32>> {
-        self.initialize_ln_compatibility(None)?;
         self.conn
             .query_row(
-                "SELECT ex_score FROM score_best_compatible
+                "SELECT ex_score FROM score_best
                  WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3
                    AND rule_mode = ?4",
                 params![
@@ -73,9 +68,8 @@ impl ScoreDatabase {
     /// Clear type, gauge type, arrange and assist mask of every non-autoplay clear
     /// of `key`, for LR2's clear-option history (select option 118..145).
     pub fn clear_option_history(&self, key: ScoreKey) -> Result<Vec<ClearOptionHistoryRow>> {
-        self.initialize_ln_compatibility(None)?;
         let mut stmt = self.conn.prepare_cached(
-            "SELECT clear_type, gauge_type, arrange, assist_mask FROM score_history_compatible
+            "SELECT clear_type, gauge_type, arrange, assist_mask FROM score_history
              WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3
                AND CASE rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
                    WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END = ?4
@@ -101,11 +95,10 @@ impl ScoreDatabase {
     }
 
     pub fn best_ghost(&self, key: ScoreKey, total_notes: u32) -> Result<Option<Vec<u8>>> {
-        self.initialize_ln_compatibility(None)?;
         let Some(ghost) = self
             .conn
             .query_row(
-                "SELECT ghost FROM score_best_compatible
+                "SELECT ghost FROM score_best
                  WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3
                    AND rule_mode = ?4",
                 params![
@@ -127,7 +120,6 @@ impl ScoreDatabase {
     }
 
     pub fn best_scores_for_charts(&self, keys: &[ScoreKey]) -> Result<Vec<BestScoreSummary>> {
-        self.initialize_ln_compatibility(None)?;
         let mut seen = HashSet::with_capacity(keys.len());
         let unique_keys = keys.iter().copied().filter(|key| seen.insert(*key)).collect::<Vec<_>>();
         let mut found = HashMap::with_capacity(unique_keys.len());
@@ -168,7 +160,7 @@ impl ScoreDatabase {
                     h.arrange,
                     h.arrange_2p,
                     h.applied_double_option
-                FROM score_best_compatible b
+                FROM score_best b
                 LEFT JOIN score_history h ON h.id = b.best_score_history_id
                 WHERE (b.chart_sha256, b.ln_policy, b.double_option, b.rule_mode)
                     IN ({placeholders})"

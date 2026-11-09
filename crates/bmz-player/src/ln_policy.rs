@@ -358,18 +358,6 @@ pub fn score_ln_policy(setting: LnPolicySetting, profile: ChartLnProfile) -> LnS
     }
 }
 
-/// Only the three equivalences introduced by uniform AUTO normalization.
-/// Callers must separately establish that this is the original, trustworthy
-/// source profile for every attempt sharing the key (in particular, no RANDOM).
-pub(crate) fn uniform_auto_legacy_policy(
-    policy: LnScorePolicy,
-    profile: ChartLnProfile,
-) -> Option<LnScorePolicy> {
-    let mode = profile.single_defined_mode()?;
-    (profile.has_undefined_ln && policy == LnScorePolicy::force(mode))
-        .then_some(LnScorePolicy::auto(mode))
-}
-
 /// Resolve the score policy used by a course chart.
 ///
 /// BMZ's FORCE settings have the highest priority and convert every long note,

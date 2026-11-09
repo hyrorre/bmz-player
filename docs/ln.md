@@ -171,9 +171,9 @@ AUTOを先にFORCEへ正規化してからconstraintを適用することはあ�
 通常リプレイファイルは`score_history`が個別pathを持つため、ファイル名衝突は起きにくいです。
 replay slotは同じchart SHA256 / slot番号を複数policyで使うため、新規保存時のslot replayファイル名に`ln_policy`を含めます。
 
-今回の3ケースの旧Auto区分は、同値性を確認できる場合だけ互換参照します。
-旧行・ファイルは移動・削除しません。BEST合成、確認根拠、slot衝突規則は
-[スコア保存仕様](score-persistence.md#単一実効ln型の旧キー互換参照)を参照してください。
+今回の3ケースの既存ローカル記録（旧`Auto*`区分）は移行も互換参照もしません。
+対象の譜面はほとんど無いため、旧記録は旧区分のまま残し、新規プレイは`Force*`側に保存します。
+旧区分のBEST・replay slotは新区分の選曲表示やリザルト比較には現れません。
 
 ## 外部スコアDBの取り込み（LR2 / beatoraja / LR2oraja）
 

@@ -4,7 +4,7 @@ use bmz_render::snapshot::SkinBestScoreOptions;
 fn database() -> ScoreDatabase {
     let mut conn = Connection::open_in_memory().unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    ScoreDatabase::from_connection(conn)
+    ScoreDatabase { conn }
 }
 
 #[test]

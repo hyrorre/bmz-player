@@ -13,25 +13,19 @@ AUTO(HCN)の3ケースを対応するForceへまとめます。実効pair型の�
 上書きしません。単曲、preload、選曲、外部取り込み、新規IRは共通の`score_ln_policy`を使います。
 コースは元profile集約→constraint fallback→正規化の既存の順序を維持します。
 
-## ローカル互換
+## 既存ローカル記録
 
-`score_db/ln_compatibility.rs`に接続内だけの根拠と参照ビューを置きます。物理行は維持し、
-新規保存はcanonical側だけです。解析版が現行で、同一SHAの読めるコピーが検証でき、優先解析が
-矛盾せず、RANDOMが無い場合だけ3組の旧キーを参照します。必要な旧記録のSHAだけを検証します。
-通常の`data/profiles/<id>/score.db`は対応する`data/library.db`を読み取り専用で参照します。
-外部スコア・replay取り込みとスキャン後、過去IR履歴の取り込み完了時には、そのlibrary接続で根拠を更新します。
+当初は`score_db/ln_compatibility.rs`で旧`Auto*`キーを接続内の一時ビューから互換参照する実装を
+入れていましたが、レビューで外しました（2026-11-09）。理由は次のとおりです。
 
-BESTの独立極値と、実際の代表履歴の辞書順比較を分離します。source minbp、clear-only、
-履歴欠損の既存情報を維持します。更新比較の旧snapshotも合成BESTを使います。
-回数は物理行ごとの保存回数、履歴は元IDを一度だけ参照します。新旧slotの衝突はcanonical優先、
-空slotだけ旧キーへfallbackし、返す行は保存policyを保持して既存replay検証を使います。
+- 対象はundefined + defined単一種別の混合譜面だけで、該当譜面はほとんど無い。
+- `score_best_compatible`がwindow関数を含むため、`(chart_sha256, ln_policy, …) IN (…)`の
+  行値条件ではSQLiteが絞り込みをビュー内へ持ち込めず、全譜面のBEST取得が`score_best`全行の
+  集約になった。SQLite 3.45、約3.3万行で200キーあたり約1ms→約370ms（1キーでも約365ms）。
+- 選曲フォルダ集計workerなど別接続の根拠が再スキャン後に更新されず、`ScoreDatabase::open`ごとに
+  譜面ファイルのハッシュ確認が走るなど、維持コストも大きかった。
 
-コースは全stageの根拠、保存SHA列の一致、旧AUTOとconstraintの整合も要求します。
-成績・ランプ・履歴・回数・最終日時・トロフィーは同じattempt集合を参照し、既存courseの
-代表attempt選択を維持します。IDからの履歴読み出しは保存policyのままです。
-
-詳細と制約は[保存仕様](../../docs/score-persistence.md#単一実効ln型の旧キー互換参照)に記載します。
-古い解析、未所持、読めない／変わったファイル、RANDOMなどは推測統合しません。
+そのため旧記録は旧区分のまま残し、移行も互換参照もしません。新規プレイは`Force*`側に保存します。
 
 ## IRの境界
 
@@ -45,8 +39,6 @@ replayの内容・hash・pathも維持します。Bokutachi、本番DB変更、�
 
 - Rust: fmt、bmz-playerのcheck / all-targets Clippy / test。
 - 固定96組、変更3組、再正規化、pair型・採点対象数・最大EX、constraint順序とコース復元。
-- 旧／新／両方のBEST、独立極値と代表履歴、clear-only／履歴欠損、slot衝突、replayバイト列とhash。
-- source minbp補完の再取り込み、古い解析／RANDOM／欠損ファイルの拒否、コース根拠とslot。
 - 新規IR payloadのsource flagsとeffective mode、旧outbox再送時の本文・key保持。
 - Web: 対象Prettier、vue-tsc、IR全テスト。
 
@@ -56,20 +48,15 @@ Linuxの作業用環境にRustとビルドヘッダーを導入し、固定ス�
 初回の英語既定localeでは、変更外の既存4テストが日本語の説明文／設定値を期待して失敗しました。
 これらのコードは変更せず、全体検証は`LANG=ja_JP.UTF-8 LC_ALL=ja_JP.UTF-8 LANGUAGE=ja`で
 前提を揃えます。素材未初期化による既存テストの失敗は、固定submodule取得後に再検証します。
-空DBを開いた後でテーブルを作るexport fixtureと、列を変更するmigration fixtureも維持するため、
-互換ビューの列展開はSQLiteへ遅延させます。列リストを接続開始時に固定しません。
-必要なテーブルが揃うまではビューを作らず、migration後の初回参照でも初期化できます。
 
-最終結果:
+最終結果（互換レイヤー削除後に再検証、2026-11-09）:
 
 - `cargo fmt --check`: 成功。
-- `cargo check -p bmz-player --locked`: 成功。
 - `cargo clippy -p bmz-player --all-targets --locked -- -D warnings`: 成功。
 - 日本語localeで`cargo test -p bmz-player --locked --no-fail-fast -- --test-threads=4`:
-  2,994成功、失敗0、42 ignore。上記の初期化・migration経路の失敗も修正後に通過しました。
-- 全体通過後のIR取り込み完了時の根拠更新フックは、check / Clippyと
-  `cargo test -p bmz-player --locked --lib ir:: -- --test-threads=4`（200成功）で再検証しました。
-- 対象3ファイルのPrettier、`bunx vue-tsc --noEmit`、`bun run test:ir`（218成功、失敗0）: 成功。
+  2,987成功、失敗1、42 ignore。失敗は`scan_song_roots_skips_unreadable_subdirectory_and_keeps_accessible_files`
+  だけで、root権限で実行したため0o000のディレクトリも読めてしまう環境依存の失敗です（今回の変更とは無関係）。
+- 対象3ファイルのPrettier、`bunx vue-tsc --noEmit`、`bun run test:ir`（218成功、失敗0）: 成功（Web側は削除前から変更なし）。
 
 ignoreされたGPU・実機・benchmark等は実行していません。音声・入力の手動プレイ、本番IR送信も
 未実施です。固定3スキン以外の任意の外部素材を使う早期return型のテストは互換確認済みとは扱いません。

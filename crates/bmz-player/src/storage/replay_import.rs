@@ -158,7 +158,6 @@ pub fn import_beatoraja_replays_with_progress(
     mut on_progress: impl FnMut(ReplayImportProgress),
     is_cancelled: impl Fn() -> bool,
 ) -> Result<ReplayImportReport> {
-    score_db.refresh_ln_compatibility(library_db)?;
     let started = Instant::now();
     let (replay_paths, player_root) = discover_replay_paths(&request.source)?;
     let (h_random_threshold_ms, threshold_warning) =

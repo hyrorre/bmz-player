@@ -26,7 +26,6 @@ AUTOのfallbackをundefined部分へ適用した結果が単一種別なら`rule
 
 これは新規投稿の区分変更です。過去のAuto投稿と旧クライアントからの投稿は旧区分に残ります。
 過去IRランキングのAuto→Force一括統合、Bokutachi対応、本番DB変更・デプロイは対象外です。
-ローカル互換参照によって、過去のIR区分まで同値として扱うことはありません。
 
 既存outboxのgameplay本文、idempotency/submission key、送信済みsnapshot、remote score ID対応、
 既存replayのバイト列・hash・pathは保持します。旧outboxの再送は保存済み本文を使い、

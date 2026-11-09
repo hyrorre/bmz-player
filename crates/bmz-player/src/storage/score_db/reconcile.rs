@@ -45,7 +45,7 @@ fn source_score_history_candidates(
          FROM score_history
          WHERE source_kind = ?1
            AND chart_sha256 = ?2
-           AND ln_policy IN (?3, (SELECT old_policy FROM ln_chart_aliases WHERE sha = ?2 AND canonical = ?3))
+           AND ln_policy = ?3
            AND double_option = ?4
            AND clear_type = ?5
            AND gauge_type = ?6

@@ -453,7 +453,6 @@ fn import_beatoraja_scores_with_device_type(
     imported_at: i64,
     device_type: InputDeviceKind,
 ) -> Result<ScoreImportReport> {
-    score_db.refresh_ln_compatibility(library_db)?;
     let table = if table_exists(source, "score")? {
         "score"
     } else if table_exists(source, "scoredatalog")? {
