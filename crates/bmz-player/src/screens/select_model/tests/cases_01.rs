@@ -999,3 +999,44 @@ fn lr2_clear_option_history_folds_stored_clears() {
     // GROOVE + NORMAL, HARD (EX-HARD) + MIRROR, EASY gauge, assist; the failed play is ignored.
     assert_eq!(bits, 0x1 | 0x100 | 0x2 | 0x200 | 0x8 | 0x100_0000);
 }
+
+#[test]
+fn favorite_song_folders_match_per_record_lookup_without_changing_revision() {
+    use crate::storage::collection_db::FavoriteHints;
+    let (mut library_db, _) = open_in_memory_dbs();
+    let mut collection_db = open_in_memory_collection_db();
+    let shared = chart("Shared favorite");
+    let single = chart("Single favorite");
+    let missing = chart("Missing favorite");
+    let unhinted = chart("Missing without hint");
+    for path in ["/pack-a/song/shared.bms", "/pack-b/song/shared.bms"] {
+        library_db.upsert_chart_import(&record_for_chart(path, &shared)).unwrap();
+    }
+    library_db.upsert_chart_import(&record_for_chart("/pack-c/one/single.bms", &single)).unwrap();
+    for (song, folder) in [
+        (&shared, "/pack-a/song"),
+        (&single, "/pack-c/one"),
+        (&missing, r"D:\old\missing"),
+        (&unhinted, ""),
+    ] {
+        let hints = FavoriteHints::new("", "", folder);
+        collection_db.upsert_favorite_song(song.identity.file_sha256, &hints, 1).unwrap();
+    }
+    let revision =
+        || library_db.conn().query_row("SELECT total_changes()", [], |row| row.get::<_, i64>(0));
+    let before = revision().unwrap();
+    let batched = favorites::favorite_song_folder_set(&library_db, &collection_db).unwrap();
+    assert_eq!(revision().unwrap(), before, "lookup must not invalidate collection caches");
+    let mut expected = HashSet::new();
+    for record in collection_db.favorite_song_records().unwrap() {
+        expected.extend(favorites::resolved_favorite_song_folders(&library_db, &record).unwrap());
+    }
+    assert_eq!(batched, expected);
+    assert_eq!(
+        batched,
+        ["/pack-a/song", "/pack-b/song", "/pack-c/one", "D:/old/missing"]
+            .map(str::to_owned)
+            .into_iter()
+            .collect()
+    );
+}
