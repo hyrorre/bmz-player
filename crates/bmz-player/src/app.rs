@@ -559,6 +559,9 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
 
     let (maintenance_select_tx, _) = tokio::sync::watch::channel(false);
 
+    // Smoke counters/options can be consumed during the run. Preserve the
+    // initial notification policy so unattended runs never wait on a dialog.
+    let show_surface_dialog = show_surface_error_dialog(&options);
     let mut app = WinitApp::new(
         boot,
         options,
@@ -586,12 +589,13 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
     if let Some(error) = surface_error {
         // The surface cannot display an egui toast. Show the native dialog after
         // the event loop and normal shutdown have released gameplay/audio/GPU.
-        rfd::MessageDialog::new()
-            .set_title("BMZ Player — rendering error")
-            .set_description(format!("The window surface could not be restored. BMZ Player has closed.\nPlease include the session log when reporting this error.\n\n{error}"))
-            .set_level(rfd::MessageLevel::Error)
-            .show();
-        bail!("{error}");
+        return report_surface_failure(error, show_surface_dialog, |error| {
+            rfd::MessageDialog::new()
+                .set_title("BMZ Player — rendering error")
+                .set_description(format!("The window surface could not be restored. BMZ Player has closed.\nPlease include the session log when reporting this error.\n\n{error}"))
+                .set_level(rfd::MessageLevel::Error)
+                .show();
+        });
     }
     if let Some(error) = startup_error {
         bail!("{error}");

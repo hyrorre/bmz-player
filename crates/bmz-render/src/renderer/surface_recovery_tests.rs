@@ -250,6 +250,37 @@ fn retries_are_spaced_bounded_and_terminal_failure_is_reported_once() {
 }
 
 #[test]
+#[ignore = "requires a GPU; validates screenshot retention and readback across skipped frames"]
+fn screenshot_survives_recovery_zero_size_and_outdated_frames() {
+    let mut renderer = renderer();
+    let output = tempfile::tempdir().unwrap();
+    let path = output.path().join("recovered.png");
+    renderer.request_screenshot(&path);
+    renderer.resize_surface(SurfaceSize { width: 32, height: 32 }).unwrap();
+    let deadline = renderer.surface_retry_deadline().unwrap();
+    assert_eq!(renderer.render_last_plan().unwrap(), RenderSurfaceStatus::Recovering);
+    assert!(renderer.has_pending_screenshot(), "recovery must retain the capture request");
+    renderer.resize_surface(SurfaceSize { width: 0, height: 32 }).unwrap();
+    assert_eq!(renderer.render_last_plan().unwrap(), RenderSurfaceStatus::SkippedZeroSize);
+    assert!(renderer.has_pending_screenshot());
+    assert!(!path.exists());
+
+    renderer.resize_surface(SurfaceSize { width: 32, height: 32 }).unwrap();
+    assert!(renderer.retry_surface_configuration(deadline));
+    renderer.gpu.as_mut().unwrap().surface_test.as_mut().unwrap().acquire_result =
+        Some(wgpu::CurrentSurfaceTexture::Outdated);
+    assert_eq!(renderer.render_last_plan().unwrap(), RenderSurfaceStatus::Recovering);
+    assert!(renderer.has_pending_screenshot());
+    renderer.update_surface_physical_size(SurfaceSize { width: 24, height: 16 });
+    assert!(renderer.retry_surface_configuration(deadline));
+    assert_eq!(renderer.render_last_plan().unwrap(), RenderSurfaceStatus::Rendered);
+    assert!(!renderer.has_pending_screenshot());
+    renderer.flush_pending_screenshots().unwrap();
+    let screenshot = image::open(&path).unwrap();
+    assert_eq!((screenshot.width(), screenshot.height()), (24, 16));
+}
+
+#[test]
 #[ignore = "requires a GPU; checks actual egui texture contents across skipped frames"]
 fn egui_full_partial_and_free_survive_suspended_frames() {
     let mut renderer = renderer();

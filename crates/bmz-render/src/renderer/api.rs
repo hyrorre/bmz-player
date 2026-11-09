@@ -862,7 +862,6 @@ impl Renderer {
             return Ok(RenderSurfaceStatus::SkippedNoSurface);
         };
         let egui = self.pending_egui.take();
-        let screenshot = self.pending_screenshot.take();
 
         let (status, gpu_timings) = gpu.render_plan(
             plan,
@@ -870,9 +869,14 @@ impl Renderer {
             self.internal_resolution_mode,
             &self.font_sets,
             egui.as_ref(),
-            screenshot.as_ref(),
+            self.pending_screenshot.as_ref(),
             notify,
         )?;
+        // A skipped frame has no image to capture. Keep the request until a
+        // successful frame has queued the readback, including after recovery.
+        if status == RenderSurfaceStatus::Rendered {
+            self.pending_screenshot = None;
+        }
         self.last_frame_timings = Some(RenderFrameTimings {
             draw_us: gpu_timings.draw_us,
             text_us: gpu_timings.text_us,

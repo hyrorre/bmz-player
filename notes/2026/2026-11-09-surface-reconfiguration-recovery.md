@@ -52,9 +52,11 @@ Device／Surface全体の再生成や、ドライバ内部のネイティブ例�
 最大5回（初回＋4回）の待機は約1秒。0サイズ中は予算を消費しない。
 上限では一度だけ終了要求を出し、既存のexiting処理で保存・音声・GPUを解放した後、
 ネイティブダイアログと既存のcommand error経路で知らせる。
+後述のレビュー対応で、smoke指定時はダイアログを省略するよう変更した。
 
 eguiの差分は描画関数の外側でset → 描画またはスキップ → freeの順に処理する。
-CPU側の更新とSurfaceへの描画は分離し、復旧中も30FPSでアプリ更新を継続する。
+CPU側の更新とSurfaceへの描画は分離し、復旧中も最大30FPSでアプリ更新を継続する。
+レビュー対応後は、より低い通常／バックグラウンドFPS上限を維持する。
 
 ## 回帰テスト
 
@@ -129,3 +131,36 @@ incremental cacheのhard link失敗によるcopy fallback警告も出たが、�
 `injection-vulkan.log`、`dx12-final-stderr.log`、`dx12-startup-stderr.log`、
 `vulkan-final-stderr.log`へ保存した。報告者のGPU・backend・ログおよび最初の失敗原因は
 引き続き未確認であり、報告環境の原因確定・再現確認が完了したとは扱わない。
+
+## PR #85のレビュー対応
+
+- 復旧待ちと0サイズ時のCPUフレーム上限を、30FPS・通常の上限・バックグラウンド上限の
+  最小値に変更。0（Unlimited）は比較から除外し、上限を両方指定しなくても30FPSで待機する。
+  1／10FPSの設定を引き上げない。再設定期限はCPUフレーム期限と独立しており、
+  低いFPSでも250msの再試行間隔を維持する。描画保留中の短時間spin抑止は維持した。
+- 起動時のsmoke指定から通知方針を保存し、Surface復旧打ち切り／Lost後はモーダル通知を省略して
+  エラーを返す。通常起動のネイティブ通知と、両モードでの既存の終了・ログ処理は維持する。
+  実際の終了通知関数に通知先を注入し、全smokeオプションで通知なし・エラー返却、
+  通常起動で一度だけ通知・エラー返却となることをテストする。
+- スクリーンショット要求を描画成功まで保持する。新しいGPU回帰テストはレビュー対応前の
+  コードで「復旧待ち後も要求が残る」のassertionに失敗した。修正後はconfigure失敗 →
+  0サイズ → Outdatedを経ても要求を保持し、最新の24×16の描画成功後にPNG保存を確認した。
+- smoke件数は元の要件どおり描画成功時だけ進める。描画不能が続くケースは呼び出し側の
+  プロセスタイムアウトが必要であることを`docs/development.md`へ明記した。
+  `--smoke-exit-on-result`は描画件数によらず終了する。
+
+レビュー対応の生ログは同じ検証ディレクトリの`review-*.log`へ保存する。
+スクリーンショット回帰の修正前失敗は`review-screenshot-red.log`、修正後のGPUテストは
+`review-injection-dx12.log`と`review-injection-vulkan.log`（各11 passed）。
+
+レビュー修正後の`cargo fmt --check`、workspace全体のcheck／all-targets Clippy／test、
+`cargo build -p bmz-player --locked`はすべて成功。bmz-playerは2983 passed / 57 ignored、
+bmz-renderは1013 passed / 22 ignoredで、追加したGPUテストは上記の別実行で検証した。
+今回のworkspace testでは失敗はなく、incremental cacheのcopy fallback警告は引き続き発生した。
+
+同じWindows実機・独立した検証データで、修正後のdebug実行ファイルを`--renderer dx12`／
+`--renderer vulkan`・Windowed 800×600・3フレームsmoke・スクリーンショット指定で実行した。
+両backendとも3フレーム描画、PNG保存、exit code 0を確認。
+ログは`review-smoke-{dx12,vulkan}-stderr.log`。今回のレビュー対応後には最大化等の手動操作を
+繰り返しておらず、その操作結果は上記の初回実装時の実機確認を参照する。
+実機での元のドライバエラー、故障時ダイアログの実表示は引き続き未確認。
