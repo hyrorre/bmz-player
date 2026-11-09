@@ -800,6 +800,7 @@ update-retry = 再試行
 update-kind-windows-portable = 現在のportableフォルダ内で更新します。
 update-kind-macos-automatic = アプリ全体を更新して再起動します。
 toast-library-scan-failed = ライブラリ再スキャンに失敗しました: { $error }
+toast-library-scan-deferred = スキャンの開始を保留しました。{ $seconds }秒後に再試行します: { $error }
 toast-chart-unavailable = 譜面を利用できません: { $error }
 score-import-summary = 読込 { $scanned }、一致 { $matched }、取込 { $imported }、補正 { $corrected }、スキップ { $skipped }、失敗 { $failed }
 score-import-reason-missing = 未所持

@@ -801,6 +801,7 @@ update-retry = 重試
 update-kind-windows-portable = 在目前的可攜版資料夾中更新。
 update-kind-macos-automatic = 更新整個應用程式並重新啟動。
 toast-library-scan-failed = 曲庫掃描失敗：{ $error }
+toast-library-scan-deferred = 掃描已暫緩，將在 { $seconds } 秒後重試：{ $error }
 toast-chart-unavailable = 譜面無法使用：{ $error }
 score-import-summary = 讀取 { $scanned }，符合 { $matched }，匯入 { $imported }，修正 { $corrected }，略過 { $skipped }，失敗 { $failed }
 score-import-reason-missing = 未擁有譜面

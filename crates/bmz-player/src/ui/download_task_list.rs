@@ -5,11 +5,62 @@ use crate::song_download::{ChartDownloadManager, DownloadState};
 pub(super) struct DownloadListUi {
     filter: usize,
     indices: Vec<usize>,
-    counts: [usize; 8],
+    counts: DownloadCounts,
     refreshed: Option<std::time::Instant>,
     task_count: usize,
     batch_count: usize,
     pub(super) batch_results: Vec<(usize, (usize, usize, usize))>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct DownloadCounts {
+    queued: usize,
+    running: usize,
+    completed: usize,
+    failed: usize,
+    cancelled: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DownloadBucket {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl DownloadBucket {
+    fn from_state(state: DownloadState) -> Self {
+        // Counts and filters share this exhaustive classification.
+        match state {
+            DownloadState::Queued => Self::Queued,
+            DownloadState::Resolving
+            | DownloadState::Downloading
+            | DownloadState::Validating
+            | DownloadState::Extracting
+            | DownloadState::Scanning => Self::Running,
+            DownloadState::Completed => Self::Completed,
+            DownloadState::Failed => Self::Failed,
+            DownloadState::Cancelled => Self::Cancelled,
+        }
+    }
+}
+
+impl DownloadCounts {
+    fn record(&mut self, bucket: DownloadBucket) {
+        match bucket {
+            DownloadBucket::Queued => self.queued += 1,
+            DownloadBucket::Running => self.running += 1,
+            DownloadBucket::Completed => self.completed += 1,
+            DownloadBucket::Failed => self.failed += 1,
+            DownloadBucket::Cancelled => self.cancelled += 1,
+        }
+    }
+
+    fn finished(&self) -> usize {
+        self.completed + self.failed + self.cancelled
+    }
 }
 
 const FILTERS: [&str; 6] = [
@@ -32,24 +83,17 @@ pub(super) fn build_task_list(
         || view.batch_count != manager.batches.len()
         || view.refreshed.is_none_or(|at| at.elapsed() >= std::time::Duration::from_millis(150));
     if refresh {
-        view.counts.fill(0);
+        view.counts = DownloadCounts::default();
         view.indices.clear();
         for (index, task) in manager.tasks().iter().enumerate() {
-            let state = task.state();
-            view.counts[state as usize] += 1;
+            let bucket = DownloadBucket::from_state(task.state());
+            view.counts.record(bucket);
             let included = match view.filter {
-                1 => matches!(
-                    state,
-                    DownloadState::Resolving
-                        | DownloadState::Downloading
-                        | DownloadState::Validating
-                        | DownloadState::Extracting
-                        | DownloadState::Scanning
-                ),
-                2 => state == DownloadState::Queued,
-                3 => state == DownloadState::Completed,
-                4 => state == DownloadState::Failed,
-                5 => state == DownloadState::Cancelled,
+                1 => bucket == DownloadBucket::Running,
+                2 => bucket == DownloadBucket::Queued,
+                3 => bucket == DownloadBucket::Completed,
+                4 => bucket == DownloadBucket::Failed,
+                5 => bucket == DownloadBucket::Cancelled,
                 _ => true,
             };
             if included {
@@ -72,9 +116,9 @@ pub(super) fn build_task_list(
             .collect();
     }
     ui.separator();
-    let finished = view.counts[5] + view.counts[6] + view.counts[7];
+    let finished = view.counts.finished();
     let total = manager.tasks().len();
-    ui.label(tr!(text, "downloads-summary", "total" => total as i64, "completed" => view.counts[5] as i64, "failed" => view.counts[6] as i64, "cancelled" => view.counts[7] as i64));
+    ui.label(tr!(text, "downloads-summary", "total" => total as i64, "completed" => view.counts.completed as i64, "failed" => view.counts.failed as i64, "cancelled" => view.counts.cancelled as i64));
     if total > 0 {
         ui.add(egui::ProgressBar::new(finished as f32 / total as f32).text(tr!(text, "downloads-overall-progress", "finished" => finished as i64, "total" => total as i64)));
     }
@@ -86,7 +130,7 @@ pub(super) fn build_task_list(
         }
         if ui
             .add_enabled(
-                view.counts[0] > 0,
+                view.counts.queued > 0,
                 egui::Button::new(tr!(text, "downloads-cancel-queued")),
             )
             .clicked()
@@ -210,7 +254,158 @@ fn state_label(state: DownloadState, text: Localizer) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::song_download::{ChartDownloadIdentity, ChartDownloadRequest, MissingChartAction};
+    use crate::song_download::{
+        ChartDownloadIdentity, ChartDownloadRequest, DownloadTaskId, MissingChartAction,
+    };
+
+    fn submit_task(manager: &mut ChartDownloadManager, state: DownloadState) -> DownloadTaskId {
+        let request_id = manager.tasks().len() as u64;
+        let (id, merged) = manager.submit(ChartDownloadRequest {
+            keep_archive: true,
+            request_id,
+            identity: ChartDownloadIdentity::default(),
+            title: format!("Chart {request_id}"),
+            download_root: PathBuf::new(),
+            action: MissingChartAction::Http {
+                api_url: format!("https://download.test/{request_id}.zip"),
+                md5: String::new(),
+                sha256: String::new(),
+            },
+        });
+        assert!(!merged);
+        // Do not poll the manager: these UI tests need no worker, network or archive.
+        manager.task(id).unwrap().control.set_state(state);
+        id
+    }
+
+    fn draw_list(
+        ctx: &egui::Context,
+        manager: &ChartDownloadManager,
+        view: &mut DownloadListUi,
+    ) -> egui::FullOutput {
+        let mut commands = Vec::new();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            ..Default::default()
+        };
+        let output = ctx.run_ui(input, |ui| {
+            build_task_list(ui, manager, view, &mut commands, Localizer::new(AppLocale::En))
+        });
+        assert!(commands.is_empty());
+        output
+    }
+
+    #[test]
+    fn validating_task_renders_in_download_list() {
+        let mut manager = ChartDownloadManager::default();
+        submit_task(&mut manager, DownloadState::Validating);
+        let ctx = egui::Context::default();
+        let mut view = DownloadListUi::default();
+        let output = draw_list(&ctx, &manager, &mut view);
+
+        assert_eq!(view.indices, [0]);
+        assert!(output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("Checking archive"))
+        }));
+    }
+
+    #[test]
+    fn all_download_states_are_counted_for_every_filter() {
+        let mut manager = ChartDownloadManager::default();
+        for state in [
+            DownloadState::Queued,
+            DownloadState::Resolving,
+            DownloadState::Downloading,
+            DownloadState::Extracting,
+            DownloadState::Scanning,
+            DownloadState::Completed,
+            DownloadState::Failed,
+            DownloadState::Cancelled,
+            DownloadState::Validating,
+        ] {
+            submit_task(&mut manager, state);
+        }
+        let ctx = egui::Context::default();
+        let mut view = DownloadListUi::default();
+        let expected_counts =
+            DownloadCounts { queued: 1, running: 5, completed: 1, failed: 1, cancelled: 1 };
+        let expected_indices: [&[usize]; 6] = [
+            &[0, 1, 2, 3, 4, 5, 6, 7, 8], // All
+            &[1, 2, 3, 4, 8],             // Running, including Validating
+            &[0],                         // Queued
+            &[5],                         // Completed
+            &[6],                         // Failed
+            &[7],                         // Cancelled
+        ];
+        for (filter, indices) in expected_indices.iter().enumerate() {
+            view.filter = filter;
+            view.refreshed = None;
+            draw_list(&ctx, &manager, &mut view);
+
+            assert_eq!(view.task_count, 9);
+            assert_eq!(view.counts, expected_counts, "filter {filter}");
+            assert_eq!(view.counts.finished(), 3);
+            assert_eq!(view.indices, *indices, "filter {filter}");
+        }
+    }
+
+    #[test]
+    fn download_state_transitions_refresh_counts_and_visible_tasks() {
+        let mut manager = ChartDownloadManager::default();
+        let id = submit_task(&mut manager, DownloadState::Downloading);
+        let ctx = egui::Context::default();
+        let mut view = DownloadListUi::default();
+
+        for state in [
+            DownloadState::Downloading,
+            DownloadState::Validating,
+            DownloadState::Scanning,
+            DownloadState::Completed,
+        ] {
+            manager.task(id).unwrap().control.set_state(state);
+            let completed = usize::from(state == DownloadState::Completed);
+            let running = 1 - completed;
+            let expected_counts =
+                DownloadCounts { running, completed, ..DownloadCounts::default() };
+            for (filter, visible) in [(0, true), (1, running > 0), (3, completed > 0)] {
+                view.filter = filter;
+                // Use the UI's invalidation mechanism instead of sleeping for 150ms.
+                view.refreshed = None;
+                draw_list(&ctx, &manager, &mut view);
+
+                assert_eq!(view.task_count, 1);
+                assert_eq!(view.counts, expected_counts, "state {state:?}, filter {filter}");
+                assert_eq!(view.counts.finished(), completed);
+                let indices: &[usize] = if visible { &[0] } else { &[] };
+                assert_eq!(view.indices, indices, "state {state:?}, filter {filter}");
+            }
+        }
+    }
+
+    #[test]
+    fn adding_a_task_refreshes_the_cached_download_list() {
+        let mut manager = ChartDownloadManager::default();
+        submit_task(&mut manager, DownloadState::Completed);
+        let ctx = egui::Context::default();
+        let mut view = DownloadListUi { filter: 1, ..Default::default() };
+        draw_list(&ctx, &manager, &mut view);
+        assert_eq!(view.task_count, 1);
+        assert_eq!(view.counts.completed, 1);
+        assert!(view.indices.is_empty());
+
+        submit_task(&mut manager, DownloadState::Validating);
+        // Keep the time cache fresh: task count changes must trigger the recount.
+        view.refreshed = Some(std::time::Instant::now());
+        draw_list(&ctx, &manager, &mut view);
+
+        assert_eq!(view.task_count, 2);
+        assert_eq!(view.counts, DownloadCounts { running: 1, completed: 1, ..Default::default() });
+        assert_eq!(view.counts.finished(), 1);
+        assert_eq!(view.indices, [1]);
+    }
 
     #[test]
     fn large_download_list_is_virtualized_and_hidden_panel_does_no_list_work() {
