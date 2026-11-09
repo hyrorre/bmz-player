@@ -240,6 +240,11 @@ cargo test -p bmz-player --release --lib --locked screens::play_session::archive
 
 IR Webの環境・DB・検証コマンドは[ir.md](ir.md)の「開発環境と実装の入口」を参照します。
 
+LN保存区分の変更では、`cargo test -p bmz-player --locked ln_policy`で16 profile × 6設定の
+固定期待値・pair実効型・採点対象数・コース復元を確認します。保存済みoutbox本文の保持は
+`resend_legacy_auto_outbox_retains_gameplay_and_idempotency_key`、サーバーの新旧policy受理は
+`bun run test:ir`に含まれます。
+
 Luaの画面寸法helperを変更した場合は、ロード・cache・非同期世代の回帰に加え、
 GPUを使う次のテストで全sceneとoffscreen出力の物理寸法を確認します。
 

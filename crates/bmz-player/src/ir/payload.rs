@@ -372,32 +372,78 @@ mod tests {
             autoplay: false,
         };
 
-        let payload = build_score_submission(
-            &chart,
-            &result,
-            IrSubmissionContext {
-                played_at: 100,
-                play_duration_ms: Some(123_456),
-                chart_length_ms: Some(125_000),
-                ln_policy: LnScorePolicy::ForceLn,
-                source_ln_profile: ChartLnProfile { has_defined_cn: true, ..Default::default() },
-                gauge_option: "normal".to_string(),
-                device_type: InputDeviceKind::Controller,
-                idempotency_key: "score_local_1".to_string(),
-                arrange: ArrangeOption::Random,
-                arrange_2p: ArrangeOption::Mirror,
-                double_option: DoubleOptionScoreBucket::Battle,
-                applied_double_option: DoubleOption::Battle,
-                arrange_seed: Some(42),
-                random_seed: Some(42),
-                seed_scheme: "beatoraja_24bit_v1".to_string(),
-                bms_random_choices: vec![2, 1],
-                bms_switch_choices: vec![2_000_000_000_000],
-                rule_mode: "Beatoraja".to_string(),
-                course_stage: false,
-                replay_hash: Some("ab".repeat(32)),
-            },
-        );
+        let context = IrSubmissionContext {
+            played_at: 100,
+            play_duration_ms: Some(123_456),
+            chart_length_ms: Some(125_000),
+            ln_policy: LnScorePolicy::ForceLn,
+            source_ln_profile: ChartLnProfile { has_defined_cn: true, ..Default::default() },
+            gauge_option: "normal".to_string(),
+            device_type: InputDeviceKind::Controller,
+            idempotency_key: "score_local_1".to_string(),
+            arrange: ArrangeOption::Random,
+            arrange_2p: ArrangeOption::Mirror,
+            double_option: DoubleOptionScoreBucket::Battle,
+            applied_double_option: DoubleOption::Battle,
+            arrange_seed: Some(42),
+            random_seed: Some(42),
+            seed_scheme: "beatoraja_24bit_v1".to_string(),
+            bms_random_choices: vec![2, 1],
+            bms_switch_choices: vec![2_000_000_000_000],
+            rule_mode: "Beatoraja".to_string(),
+            course_stage: false,
+            replay_hash: Some("ab".repeat(32)),
+        };
+        let payload = build_score_submission(&chart, &result, context.clone());
+        for (profile, setting, force, mode) in [
+            (
+                ChartLnProfile {
+                    has_undefined_ln: true,
+                    has_defined_ln: true,
+                    ..Default::default()
+                },
+                crate::ln_policy::LnPolicySetting::AutoLn,
+                LnScorePolicy::ForceLn,
+                IrEffectiveLnMode::Ln,
+            ),
+            (
+                ChartLnProfile {
+                    has_undefined_ln: true,
+                    has_defined_cn: true,
+                    ..Default::default()
+                },
+                crate::ln_policy::LnPolicySetting::AutoCn,
+                LnScorePolicy::ForceCn,
+                IrEffectiveLnMode::Cn,
+            ),
+            (
+                ChartLnProfile {
+                    has_undefined_ln: true,
+                    has_defined_hcn: true,
+                    ..Default::default()
+                },
+                crate::ln_policy::LnPolicySetting::AutoHcn,
+                LnScorePolicy::ForceHcn,
+                IrEffectiveLnMode::Hcn,
+            ),
+        ] {
+            let policy = crate::ln_policy::score_ln_policy(setting, profile);
+            let normalized = build_score_submission(
+                &chart,
+                &result,
+                IrSubmissionContext {
+                    source_ln_profile: profile,
+                    ln_policy: policy,
+                    ..context.clone()
+                },
+            );
+            assert_eq!(normalized.rule.ln_policy, force);
+            assert_eq!(normalized.rule.effective_ln_mode, mode);
+            assert!(normalized.chart.ln_profile.has_undefined_ln);
+            assert_eq!(normalized.chart.ln_profile.has_defined_ln, profile.has_defined_ln);
+            assert_eq!(normalized.chart.ln_profile.has_defined_cn, profile.has_defined_cn);
+            assert_eq!(normalized.chart.ln_profile.has_defined_hcn, profile.has_defined_hcn);
+        }
 
         assert_eq!(payload.result.min_bp, 6);
         assert_eq!(payload.result.min_cb, 3);
