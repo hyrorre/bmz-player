@@ -60,12 +60,20 @@ pub struct PlayContext {
     pub version: u32,
     pub origin: String,
     pub new_normal_single: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub course_stage: Option<CourseStageContext>,
     pub normal_score_and_effective_assist_passed: bool,
     pub source_key_mode: KeyMode,
     pub primary_key_mode: KeyMode,
     pub conversion: KeyModeConversionConfig,
     pub scoring_scope: ScoringScope,
     pub game: Game,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CourseStageContext {
+    pub source_clear: bmz_core::clear::ClearType,
+    pub completed: bool,
 }
 
 pub(crate) fn context(payload: &IrScoreSubmission) -> Result<PlayContext> {
@@ -77,10 +85,10 @@ pub(crate) fn context(payload: &IrScoreSubmission) -> Result<PlayContext> {
             .clone(),
     )
     .context("Bokutachi: invalid saved play context")?;
-    ensure!(context.version == 1, "Bokutachi: unsupported play context version");
+    ensure!(matches!(context.version, 1 | 2), "Bokutachi: unsupported play context version");
     ensure!(
-        context.new_normal_single && context.normal_score_and_effective_assist_passed,
-        "Bokutachi: only new, normally scored single plays without effective assists are supported"
+        context.normal_score_and_effective_assist_passed,
+        "Bokutachi: a normally scored play without effective assists is required"
     );
     ensure!(
         context.conversion == KeyModeConversionConfig::Off
@@ -100,13 +108,33 @@ pub(crate) fn context(payload: &IrScoreSubmission) -> Result<PlayContext> {
         !payload.chart.features.random,
         "Bokutachi: charts with original RANDOM/SWITCH branches are not supported"
     );
-    ensure!(
-        payload
-            .play_options
-            .get("course_stage")
-            .is_none_or(|v| v == &serde_json::Value::Bool(false)),
-        "Bokutachi: course stages are not supported"
-    );
+    let stage_flag = payload.play_options.get("course_stage");
+    match &context.course_stage {
+        Some(stage) => {
+            ensure!(
+                context.version == 2
+                    && !context.new_normal_single
+                    && stage_flag == Some(&serde_json::Value::Bool(true)),
+                "Bokutachi: inconsistent course stage provenance"
+            );
+            ensure!(
+                stage.source_clear != bmz_core::clear::ClearType::NoPlay
+                    && payload.result.notes > 0,
+                "Bokutachi: no valid played course stage result"
+            );
+            ensure!(
+                payload.result.clear
+                    == crate::storage::play_result::course_stage_clear_type(stage.source_clear)
+                        .as_str(),
+                "Bokutachi: course stage lamp differs from its saved result"
+            );
+        }
+        None => ensure!(
+            context.new_normal_single
+                && stage_flag.is_none_or(|v| v == &serde_json::Value::Bool(false)),
+            "Bokutachi: missing saved play provenance"
+        ),
+    }
     ensure!(
         option(payload, "source_kind")? == "local",
         "Bokutachi: past score uploads are not supported"
@@ -265,7 +293,12 @@ pub(crate) fn convert(payload: &IrScoreSubmission, chart: ChartMatch) -> Result<
         scores: [Score {
             chart,
             score: r.ex_score,
-            lamp: lamp(&r.clear)?.into(),
+            lamp: if ctx.course_stage.is_some() && r.clear == "NoPlay" {
+                "NO PLAY"
+            } else {
+                lamp(&r.clear)?
+            }
+            .into(),
             time_achieved,
             judgements: Judgements {
                 pgreat: (!ctx.game.is_pms()).then_some(top),

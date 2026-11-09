@@ -35,6 +35,7 @@ use crate::storage::score_db::{ScoreDatabase, ScoreKey};
 
 #[derive(Debug, Clone)]
 pub struct FinishedPlaySession {
+    pub bokutachi_dan_stage: Option<crate::ir::bokutachi::dan::StageEvidence>,
     pub result: PlayResult,
     pub stored: StoredPlayResult,
     pub summary: ResultSummary,
@@ -69,6 +70,7 @@ pub trait FinishSessionSource {
         &self,
         profile: ChartLnProfile,
         arrange: &AppliedArrange,
+        settled_at: Option<TimeUs>,
     ) -> Result<FinishSessionSnapshot>;
     fn ensure_result_ready(&self, settled_at: Option<TimeUs>) -> Result<()>;
     fn result_graph(
@@ -87,8 +89,9 @@ impl FinishSessionSource for GameSession {
         &self,
         profile: ChartLnProfile,
         arrange: &AppliedArrange,
+        settled_at: Option<TimeUs>,
     ) -> Result<FinishSessionSnapshot> {
-        Ok(FinishSessionSnapshot::from_session(self, profile, arrange))
+        Ok(FinishSessionSnapshot::from_session(self, profile, arrange, settled_at))
     }
     fn ensure_result_ready(&self, settled_at: Option<TimeUs>) -> Result<()> {
         ensure_storable_session(
@@ -116,13 +119,14 @@ impl FinishSessionSource for crate::gameplay_runtime::GameplayClient {
         &self,
         profile: ChartLnProfile,
         arrange: &AppliedArrange,
+        settled_at: Option<TimeUs>,
     ) -> Result<FinishSessionSnapshot> {
         if let Some(result) = &self.result {
             return Ok(result.snapshot.clone());
         }
         self.prepared_session()
             .ok_or_else(|| anyhow::anyhow!("gameplay result is pending"))?
-            .capture_result(profile, arrange)
+            .capture_result(profile, arrange, settled_at)
     }
     fn ensure_result_ready(&self, settled_at: Option<TimeUs>) -> Result<()> {
         if self.result.is_some() {
@@ -241,6 +245,7 @@ pub struct FinishSessionResultRequest<'a> {
 
 #[derive(Debug, Clone)]
 pub struct FinishSessionSnapshot {
+    completed: bool,
     chart: Arc<PlayableChart>,
     skin_attempt: bmz_render::snapshot::SkinAttemptState,
     result: PlayResult,
@@ -267,6 +272,7 @@ impl FinishSessionSnapshot {
         session: &GameSession,
         source_ln_profile: ChartLnProfile,
         applied_arrange: &AppliedArrange,
+        settled_at: Option<TimeUs>,
     ) -> Self {
         let source_key_mode = match applied_arrange.key_mode_conversion {
             KeyModeConversionConfig::SpToDp => match session.chart.metadata.key_mode {
@@ -305,6 +311,12 @@ impl FinishSessionSnapshot {
             Arc::clone(&session.chart)
         };
         Self {
+            completed: !session.manually_stopped
+                && (session.state == PlayState::Finished
+                    || (session.state == PlayState::Playing
+                        && settled_at.is_some_and(|at| {
+                            bmz_gameplay::session::result_is_settled(session, at)
+                        }))),
             chart,
             skin_attempt: bmz_render::snapshot::SkinAttemptState {
                 best_score_options: None,
@@ -431,11 +443,12 @@ fn finish_session_result_when(
         practice_mode,
         finish_mode,
     } = request;
-    session.ensure_result_ready(match readiness {
+    let settled_at = match readiness {
         FinishSessionReadiness::Terminal => None,
         FinishSessionReadiness::SettledAt(at) => Some(at),
-    })?;
-    let snapshot = session.capture_result(source_ln_profile, applied_arrange)?;
+    };
+    session.ensure_result_ready(settled_at)?;
+    let snapshot = session.capture_result(source_ln_profile, applied_arrange, settled_at)?;
     finish_session_snapshot_result(
         score_db,
         network_db,
@@ -615,6 +628,33 @@ fn finish_session_snapshot_result(
     }
 
     Ok(FinishedPlaySession {
+        bokutachi_dan_stage: (finish_mode == FinishResultMode::CourseStage).then(|| {
+            crate::ir::bokutachi::dan::StageEvidence {
+                chart_md5: crate::storage::common::hash_to_hex(&snapshot.chart.identity.file_md5),
+                chart_sha256: crate::storage::common::hash_to_hex(&result.chart_sha256),
+                score_history_id: stored.score_history_id,
+                played_at: stored.played_at,
+                source_key_mode: applied_arrange.source_key_mode,
+                primary_key_mode: snapshot.primary_key_mode,
+                conversion: applied_arrange.key_mode_conversion,
+                native_scoring: snapshot.bokutachi_scoring_scope
+                    == Some(crate::ir::bokutachi::ScoringScope::Native),
+                ln_policy: score_key.ln_policy,
+                rule_mode: snapshot.rule_mode,
+                gauge: result.gauge_type,
+                clear: result.clear_type,
+                gauge_value: result.gauge_value,
+                gauge_carry: snapshot.gauge_carry.iter().map(|g| (g.gauge_type, g.value)).collect(),
+                completed: snapshot.completed,
+                normal_score: score_data_changed
+                    && snapshot.assist.score_update_enabled()
+                    && stored.score_history_id > 0,
+                has_bms_random: snapshot.chart.metadata.has_bms_random,
+                arrange: applied_arrange.arrange,
+                arrange_2p: applied_arrange.arrange_2p,
+                double_option: applied_arrange.double_option,
+            }
+        }),
         result,
         stored,
         summary,
@@ -700,12 +740,24 @@ fn enqueue_ir_jobs(
                     && snapshot.primary_key_mode == KeyMode::K9
                     && provider.send_policy
                         == crate::config::profile_config::IrSendPolicyConfig::UpdateScore)
-                    || should_send_ir_score(
-                        provider.send_policy,
-                        result,
-                        snapshot.manually_stopped,
-                        previous_best,
-                    ))
+                    || if crate::ir::bokutachi::is_config(provider)
+                        && finish_mode == FinishResultMode::CourseStage
+                    {
+                        should_send_bokutachi_stage(
+                            provider.send_policy,
+                            &snapshot.result,
+                            result.clear_type,
+                            snapshot.completed,
+                            previous_best,
+                        )
+                    } else {
+                        should_send_ir_score(
+                            provider.send_policy,
+                            result,
+                            snapshot.manually_stopped,
+                            previous_best,
+                        )
+                    })
                 && (!crate::ir::rian_ir::is_rian_ir_config(provider)
                     || crate::ir::rian_ir::score_submission_supported(
                         score_key.ln_policy,
@@ -775,15 +827,17 @@ fn enqueue_ir_jobs(
     for provider in enabled {
         let bokutachi_payload = if crate::ir::bokutachi::is_config(provider) {
             let prepared = (|| -> anyhow::Result<String> {
-                use crate::ir::bokutachi::{Game, PlayContext};
-                anyhow::ensure!(
-                    finish_mode == FinishResultMode::Normal,
-                    "Bokutachi: course stages are not supported"
-                );
+                use crate::ir::bokutachi::{CourseStageContext, Game, PlayContext};
                 let ctx = PlayContext {
-                    version: 1,
+                    version: 2,
                     origin: crate::ir::credentials::credential_origin(&provider.base_url)?,
-                    new_normal_single: true,
+                    new_normal_single: finish_mode == FinishResultMode::Normal,
+                    course_stage: (finish_mode == FinishResultMode::CourseStage).then_some(
+                        CourseStageContext {
+                            source_clear: snapshot.result.clear_type,
+                            completed: snapshot.completed,
+                        },
+                    ),
                     normal_score_and_effective_assist_passed: snapshot
                         .assist
                         .score_update_enabled(),
@@ -802,6 +856,10 @@ fn enqueue_ir_jobs(
                     )?,
                 };
                 let mut dedicated = payload.clone();
+                // The stage lamp is intentionally NO PLAY; BP/CB still come
+                // from the real result, including unprocessed notes on failure.
+                dedicated.result.min_bp = snapshot.result.record_bp();
+                dedicated.result.min_cb = snapshot.result.record_cb();
                 dedicated.play_options.insert("bokutachi".into(), serde_json::to_value(ctx)?);
                 crate::ir::bokutachi::context(&dedicated)?;
                 serde_json::to_string(&dedicated).map_err(Into::into)
@@ -812,11 +870,12 @@ fn enqueue_ir_jobs(
                         && provider.send_policy
                             == crate::config::profile_config::IrSendPolicyConfig::UpdateScore
                     {
-                        match score_db.improves_device_best(
+                        match score_db.improves_device_best_with_lamp(
                             score_key,
                             stored.device_type,
                             stored.score_history_id,
-                            result,
+                            &snapshot.result,
+                            result.clear_type,
                         ) {
                             Ok(true) => {}
                             Ok(false) => continue,
@@ -914,6 +973,28 @@ fn should_send_ir_score(
                 || result.record_bp() < best.bp
                 || result.record_cb() < best.cb
         }
+    }
+}
+
+fn should_send_bokutachi_stage(
+    policy: crate::config::profile_config::IrSendPolicyConfig,
+    result: &PlayResult,
+    stage_lamp: ClearType,
+    completed: bool,
+    previous_best: Option<&crate::storage::score_db::BestScoreSummary>,
+) -> bool {
+    use crate::config::profile_config::IrSendPolicyConfig;
+    match policy {
+        IrSendPolicyConfig::Always => true,
+        IrSendPolicyConfig::CompleteSong => completed && result.gauge_value > 0.0,
+        IrSendPolicyConfig::UpdateScore => previous_best.is_none_or(|best| {
+            result.score.ex_score() > best.ex_score
+                || i32::from(stage_lamp as u8)
+                    > clear_type_from_name(&best.clear_type).map_or(0, |v| v as i32)
+                || result.score.max_combo > best.max_combo
+                || result.record_bp() < best.bp
+                || result.record_cb() < best.cb
+        }),
     }
 }
 
@@ -1067,9 +1148,11 @@ pub fn spawn_settled_session_result(
         profile_paths: request.profile_paths.clone(),
         replay_config: request.replay_config.clone(),
         ir_config: request.ir_config.clone(),
-        snapshot: request
-            .session
-            .capture_result(request.source_ln_profile, request.applied_arrange)?,
+        snapshot: request.session.capture_result(
+            request.source_ln_profile,
+            request.applied_arrange,
+            Some(settled_at),
+        )?,
         played_at: request.played_at,
         applied_arrange: request.applied_arrange.clone(),
         source_ln_profile: request.source_ln_profile,

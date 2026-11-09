@@ -358,6 +358,12 @@ BMZのコースIRはproviderの単曲`send_policy`を参照せず、course defin
 `CompleteSong` / `UpdateScore`分岐が実質無効で、`updateCourseScore`とreleaseのみで
 送信可否が決まるため、この点は一致します。
 
+Bokutachiのコース各曲は単曲の送信方針に従い、原則NO PLAY、フルコンボ系だけFULL COMBOとして送ります。
+COMPLETE SONGはその曲の実際の完奏状態を使います。9Kは各曲に保存された入力機器別に送信・BEST比較します。
+Bokutachiのコース全体は合計スコアを登録せず、適格なBMS 7K／14K・4曲クリアだけ段位更新を行います。
+この段位更新には単曲・コース合計のBEST更新や各曲送信の成功を要求しません。
+条件・段位APIの配置制限・未対応範囲は[Bokutachi](bokutachi.md)を参照してください。
+
 保存構造は異なります。beatorajaはcourse best行をclear-only更新するのに対し、BMZは
 assist courseも数値0のattempt行として残し、best scoreとbest lampを別クエリで
 選びます。表示上のbest数値を汚さないことはテストで固定しています。

@@ -2,7 +2,7 @@
 
 BMZ公式IRのAPIと、BMZ Player側のIRクライアントの現在の仕様をまとめた文書です。
 rianIRとの互換は[rianIR互換プロバイダー](rian-ir.md)、アシスト・特殊モードを含むスコアの保存・送信条件は[スコア保存・アシスト・IR送信条件](score-persistence.md)を参照してください。
-Bokutachiへの新規7K／14K／9K単曲送信は[Bokutachi](bokutachi.md)を参照してください。APIキーで接続する送信専用プロバイダーです。
+Bokutachiへの新規7K／14K／9K単曲・コース各曲の送信と、BMS 7K／14Kの段位更新は[Bokutachi](bokutachi.md)を参照してください。APIキーで接続する送信専用プロバイダーです。
 設計時の案・未決事項・実装タスクの経緯は[BMZ IRの設計記録](../notes/2026/2026-06-04-bmz-ir-design.md)にあります。
 
 ## 概要

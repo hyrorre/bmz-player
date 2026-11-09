@@ -24,7 +24,7 @@ Features
 - score database migration from LR2 / beatoraja
 - auto-adjust (自動判定調整)
 - normalizing volume per-chart (譜面ごとの自動音量調整)
-- internet ranking ([BMZ IR](https://bmz-player.hyrorre.workers.dev/) / [rianIR](https://rianir.link/) / [BMS-IR](https://bms-ir.org/) / [Bokutachi single-score submission](docs/bokutachi.md))
+- internet ranking ([BMZ IR](https://bmz-player.hyrorre.workers.dev/) / [rianIR](https://rianir.link/) / [BMS-IR](https://bms-ir.org/) / [Bokutachi score and class submission](docs/bokutachi.md))
 - selectable rule-mode (beatoraja / LR2oraja / DX MODE)
 - advanced selectable ln-mode (AUTO(LN) / AUTO(CN) / AUTO(HCN) / FORCE(LN) / FORCE(CN) / FORCE(HCN))
 - on-demand preview generation

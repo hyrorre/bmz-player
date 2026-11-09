@@ -3,12 +3,24 @@ use super::*;
 impl ScoreDatabase {
     /// Only Bokutachi PMS UpdateScore uses this partition. Local BEST and all
     /// other IRs retain their existing ScoreKey and independent best metrics.
+    #[cfg(test)]
     pub(crate) fn improves_device_best(
         &self,
         key: ScoreKey,
         device: InputDeviceKind,
         before_id: i64,
         result: &PlayResult,
+    ) -> Result<bool> {
+        self.improves_device_best_with_lamp(key, device, before_id, result, result.clear_type)
+    }
+
+    pub(crate) fn improves_device_best_with_lamp(
+        &self,
+        key: ScoreKey,
+        device: InputDeviceKind,
+        before_id: i64,
+        result: &PlayResult,
+        clear_type: bmz_core::clear::ClearType,
     ) -> Result<bool> {
         let (ex, lamp, combo, bp, cb): (
             Option<u32>,
@@ -36,7 +48,7 @@ impl ScoreDatabase {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )?;
         Ok(ex.is_none_or(|ex| result.score.ex_score() > ex)
-            || lamp.is_some_and(|lamp| result.clear_type as i32 > lamp)
+            || lamp.is_some_and(|lamp| clear_type as i32 > lamp)
             || combo.is_some_and(|combo| result.score.max_combo > combo)
             || bp.is_some_and(|bp| result.record_bp() < bp)
             || cb.is_some_and(|cb| result.record_cb() < cb))

@@ -304,6 +304,7 @@ pub(super) fn debug_boot_finished_play_session() -> FinishedPlaySession {
         rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
         assist: Default::default(),
         score_data_changed: false,
+        bokutachi_dan_stage: None,
     }
 }
 

@@ -146,7 +146,13 @@ BMZ Player also supports rianIR and BMS-IR, and you can log in to them on the sa
 
 For Bokutachi, enter an API key with `submit_score` permission and select “Validate and save key”. Use “Check connection” to validate it again or “Delete API key” to remove it.
 
-Bokutachi supports new normal singles: 7K/14K with LR2oraja and 9K with beatoraja, saved with LN-only scoring. AUTO(LN) is eligible when it produces that saved scoring mode. Key conversions, original RANDOM/SWITCH branches, courses and past score uploads are excluded. RANDOM lane arrangements are allowed. A display-only 7K G-BATTLE is eligible when your scoring lanes can be verified.
+Bokutachi supports new normal singles and course stages: 7K/14K with LR2oraja and 9K with beatoraja, saved with LN-only scoring. AUTO(LN) is eligible when it produces that saved scoring mode. Key conversions, original RANDOM/SWITCH branches and past-history uploads are excluded. RANDOM lane arrangements are allowed. A display-only 7K G-BATTLE is eligible when your scoring lanes can be verified.
+
+Each course stage submits its own single-chart result. Lamps are NO PLAY except full-combo results, which use FULL COMBO. COMPLETE SONG uses that stage's actual completion; UPDATE SCORE compares its individual metrics, using the same saved input-device division for PMS. A later failure does not cancel earlier submissions. Stages of unregistered, three-chart or five-chart courses can also qualify.
+
+Eligible registered four-chart BMS 7K/14K courses update your class after a complete LN-only, LR2oraja dan-gauge clear. The course must permit IR submission. Class updates are independent of stage submissions and single-chart or course-total personal bests. The current API excludes 14K 2P MIRROR, both-side MIRROR, FLIP and arrangements that differ between stages. CN/HCN and non-LR2 gauge constraints are also excluded.
+
+Class results distinguish updated, unchanged, not updated, ineligible and failed. Retries after restarting retain the original chart order and conditions. 9K supports stage scores only. Arbitrary course totals, personal bests and rankings are not registered.
 
 PMS uses the input device division saved with the play: Controller or Keyboard. Tachi's Controller division assumes an arcade-size controller; BMZ does not measure its physical size. UPDATE SCORE compares past local results from the same device division.
 

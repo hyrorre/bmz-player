@@ -34,12 +34,50 @@ fn build_result_ir_content(ui: &mut egui::Ui, state: &mut ResultIrState, text: L
         ui.separator();
     }
     for submission in &state.provider_submissions {
+        let dan = state.is_course()
+            && crate::ir::bokutachi::is_provider(&submission.provider_key);
         ui.horizontal(|ui| {
             ui.strong(&submission.display_name);
+            if dan {
+                ui.small(text.text("ir-bokutachi-dan"));
+            }
             if submission.primary {
                 ui.small(tr!(text, "result-ir-primary"));
             }
         });
+        if dan {
+            match &submission.state {
+                IrSubmitState::Sending => {
+                    ui.spinner();
+                    ui.label(text.text("ir-bokutachi-dan-pending"));
+                }
+                IrSubmitState::Done { submitted, failed, message } => {
+                    if let Some(message) = message {
+                        let status = if *failed > 0 {
+                            "failed"
+                        } else if *submitted > 0 {
+                            "succeeded"
+                        } else if message.starts_with("Bokutachi: ineligible") {
+                            "ineligible"
+                        } else if message.contains("class update completed")
+                            || message.contains("server did not accept")
+                        {
+                            "no_change"
+                        } else {
+                            "pending"
+                        };
+                        ui.label(crate::ui::ir_manual_ui::bokutachi_dan_status(
+                            status, message, text,
+                        ));
+                        ui.small(message);
+                    } else {
+                        ui.label(text.text("result-ir-nothing-to-submit"));
+                    }
+                }
+            }
+            ui.add_space(4.0);
+            continue;
+        }
         match &submission.state {
             IrSubmitState::Sending => {
                 ui.horizontal(|ui| {

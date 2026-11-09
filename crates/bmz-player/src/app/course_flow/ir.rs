@@ -1,6 +1,7 @@
 use super::*;
 
 pub(super) struct EnqueueIrCourseJobRequest<'a> {
+    pub(super) bokutachi_dan: &'a anyhow::Result<crate::ir::bokutachi::dan::DanPlay>,
     pub(super) course_id: i64,
     pub(super) course_score_id: i64,
     pub(super) course_result: &'a crate::screens::course_session::CourseResultSummary,
@@ -88,6 +89,7 @@ impl WinitApp {
     /// コーススコアの IR 送信ジョブを enqueue する。IR 未設定 / 定義未解決なら no-op。
     pub(super) fn enqueue_ir_course_job(&mut self, request: EnqueueIrCourseJobRequest<'_>) {
         let EnqueueIrCourseJobRequest {
+            bokutachi_dan,
             course_id,
             course_score_id,
             course_result,
@@ -98,6 +100,46 @@ impl WinitApp {
             arrange,
             random_seed,
         } = request;
+        // Independent of every single-score policy and of other providers'
+        // generic course payloads. Use the captured attempt, not a library reread.
+        for provider in
+            self.boot.profile_config.ir.providers.iter().filter(|p| {
+                p.enabled && !p.base_url.is_empty() && crate::ir::bokutachi::is_config(p)
+            })
+        {
+            let outcome = (|| -> anyhow::Result<()> {
+                let provider_key = crate::ir::provider_key::configured_provider_key(provider)
+                    .context("Bokutachi dan: missing configured provider key")?;
+                let payload = crate::ir::bokutachi::dan::DanJob::new(
+                    provider,
+                    course_score_id,
+                    bokutachi_dan,
+                )?;
+                let job_id = self.boot.network_db.enqueue_ir_score_job(
+                    &crate::storage::network_db::NewIrScoreJob {
+                        provider: provider_key.to_string(),
+                        account_id: provider.account_id.clone(),
+                        kind: crate::storage::network_db::IrJobKind::Course,
+                        local_score_id: course_score_id,
+                        chart_sha256: course_result
+                            .entry_summaries
+                            .first()
+                            .and_then(|s| s.chart_sha256)
+                            .unwrap_or([0; 32]),
+                        ln_policy: course_result.ln_policy,
+                        payload_json: serde_json::to_string(&payload)?,
+                        now: played_at,
+                    },
+                )?;
+                if let Some(reason) = payload.ineligible_reason() {
+                    self.boot.network_db.reject_bokutachi_chart(job_id, played_at, reason)?;
+                }
+                Ok(())
+            })();
+            if let Err(error) = outcome {
+                tracing::warn!(%error, course_score_id, "failed to enqueue Bokutachi class update");
+            }
+        }
         let enabled: Vec<_> = self
             .boot
             .profile_config

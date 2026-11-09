@@ -90,6 +90,17 @@ impl BokutachiClient {
         key: Option<&str>,
         expected: Option<StatusCode>,
     ) -> Result<T> {
+        let response: Envelope<T> = self.response(request, key, expected).await?;
+        ensure!(response.success, "Bokutachi: API did not report success");
+        Ok(response.body)
+    }
+
+    async fn response<T: DeserializeOwned>(
+        &self,
+        request: RequestBuilder,
+        key: Option<&str>,
+        expected: Option<StatusCode>,
+    ) -> Result<T> {
         let response = request.send().await?;
         let status = response.status();
         let retry = crate::ir::http_error::retry_after_header(&response)
@@ -114,10 +125,27 @@ impl BokutachiClient {
             ));
         }
         ensure!(expected.is_none_or(|s| s == status), "Bokutachi: unexpected HTTP success status");
-        let response: Envelope<T> =
-            serde_json::from_str(&body).context("Bokutachi: invalid API response")?;
-        ensure!(response.success, "Bokutachi: API did not report success");
-        Ok(response.body)
+        serde_json::from_str(&body).context("Bokutachi: invalid API response")
+    }
+
+    pub(crate) async fn submit_dan(
+        &self,
+        key: &str,
+        request: &super::dan::DanRequest,
+    ) -> Result<super::dan::DanOutcome> {
+        let response = self
+            .response(
+                self.http
+                    .post(format!("{}/ir/beatoraja/submit-course", self.origin))
+                    .bearer_auth(key)
+                    // Protocol compatibility version, not a claim to be beatoraja/LR2oraja.
+                    .header("X-TachiIR-Version", "v4")
+                    .json(request),
+                Some(key),
+                Some(StatusCode::OK),
+            )
+            .await?;
+        super::dan::parse_response(response)
     }
 
     pub async fn validate_key(&self, key: &str) -> Result<IrAuthTokens> {

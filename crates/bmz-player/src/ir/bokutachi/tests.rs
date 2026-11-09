@@ -18,6 +18,7 @@ fn payload(game: Game) -> IrScoreSubmission {
         version: 1,
         origin: DEFAULT_BASE_URL.into(),
         new_normal_single: true,
+        course_stage: None,
         normal_score_and_effective_assist_passed: true,
         source_key_mode: mode,
         primary_key_mode: mode,
@@ -52,6 +53,63 @@ fn change_context(p: &mut IrScoreSubmission, f: impl FnOnce(&mut PlayContext)) {
     let mut c: PlayContext = serde_json::from_value(p.play_options["bokutachi"].clone()).unwrap();
     f(&mut c);
     p.play_options.insert("bokutachi".into(), serde_json::to_value(c).unwrap());
+}
+
+#[test]
+fn course_stage_lamps_require_saved_provenance_and_preserve_single_metrics() {
+    use bmz_core::clear::ClearType;
+    for game in [Game::Bms7k, Game::Bms14k, Game::PmsController, Game::PmsKeyboard] {
+        for source_clear in [
+            ClearType::Failed,
+            ClearType::Normal,
+            ClearType::Hard,
+            ClearType::FullCombo,
+            ClearType::Perfect,
+            ClearType::Max,
+        ] {
+            let mut p = payload(game);
+            p.result.clear =
+                crate::storage::play_result::course_stage_clear_type(source_clear).as_str().into();
+            p.play_options.insert("course_stage".into(), json!(true));
+            change_context(&mut p, |c| {
+                c.version = 2;
+                c.new_normal_single = false;
+                c.course_stage = Some(CourseStageContext {
+                    source_clear,
+                    completed: source_clear != ClearType::Failed,
+                });
+            });
+            let wire = serde_json::to_value(convert(&p, matcher(game, &p)).unwrap()).unwrap();
+            let score = &wire["scores"][0];
+            assert_eq!(
+                score["lamp"],
+                if source_clear as u8 >= ClearType::FullCombo as u8 {
+                    "FULL COMBO"
+                } else {
+                    "NO PLAY"
+                }
+            );
+            assert_eq!(score["score"], 44);
+            assert_eq!(score["optional"]["bp"], 123);
+            assert_eq!(score["optional"]["maxCombo"], 10);
+            assert_eq!(wire["meta"]["game"], game.as_str());
+            assert_eq!(score["judgements"][if game.is_pms() { "cool" } else { "pgreat" }], 11);
+            assert_eq!(context(&p).unwrap().game, game);
+            let frozen = serde_json::to_string(&p).unwrap();
+            let again: IrScoreSubmission = serde_json::from_str(&frozen).unwrap();
+            assert_eq!(
+                wire,
+                serde_json::to_value(convert(&again, matcher(game, &again)).unwrap()).unwrap()
+            );
+            change_context(&mut p, |c| {
+                c.course_stage.as_mut().unwrap().source_clear = ClearType::NoPlay
+            });
+            assert!(convert(&p, matcher(game, &p)).is_err());
+        }
+        let mut normal = payload(game);
+        normal.result.clear = "NoPlay".into();
+        assert!(convert(&normal, matcher(game, &normal)).is_err());
+    }
 }
 
 #[test]
@@ -275,15 +333,15 @@ fn completed_imports_have_four_outcomes_and_strict_identity() {
     }
 }
 
-struct Reply {
-    path: &'static str,
-    status: u16,
-    body: Value,
-    auth: bool,
-    retry: Option<&'static str>,
+pub(super) struct Reply {
+    pub(super) path: &'static str,
+    pub(super) status: u16,
+    pub(super) body: Value,
+    pub(super) auth: bool,
+    pub(super) retry: Option<&'static str>,
 }
 
-async fn server(replies: Vec<Reply>) -> (String, tokio::task::JoinHandle<Vec<Value>>) {
+pub(super) async fn server(replies: Vec<Reply>) -> (String, tokio::task::JoinHandle<Vec<Value>>) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -317,6 +375,9 @@ async fn server(replies: Vec<Reply>) -> (String, tokio::task::JoinHandle<Vec<Val
                         assert_eq!(headers.contains("authorization: bearer test-key"), reply.auth);
                         assert!(!headers.contains("x-user-intent"));
                         assert!(!headers.contains("idempotency-key"));
+                        if reply.path == "POST /ir/beatoraja/submit-course" {
+                            assert!(headers.contains("x-tachiir-version: v4"));
+                        }
                         bodies.push(if length > 0 {
                             serde_json::from_slice(&bytes[end + 4..end + 4 + length]).unwrap()
                         } else {
@@ -362,7 +423,7 @@ async fn run(
 }
 use std::path::Path;
 
-fn setup(root: &Path, origin: &str, game: Game) -> (NetworkDatabase, IrConfig, String) {
+pub(super) fn setup(root: &Path, origin: &str, game: Game) -> (NetworkDatabase, IrConfig, String) {
     let path = root.join("network.db");
     crate::storage::migration::migrate_network_db(&path).unwrap();
     let mut db = NetworkDatabase::open(&path).unwrap();
@@ -689,7 +750,14 @@ async fn another_accounts_key_cannot_submit_old_jobs_and_unsupported_jobs_never_
         assert_eq!(run(&mut db, root.path(), &config, 101, true).await.failed, 1);
         let message: String =
             db.conn().query_row("SELECT last_error FROM ir_score_jobs", [], |r| r.get(0)).unwrap();
-        assert!(message.contains("not supported"), "{message}");
+        assert!(
+            message.contains(if kind == IrJobKind::Course {
+                "missing or invalid saved course evidence"
+            } else {
+                "not supported"
+            }),
+            "{message}"
+        );
     }
     assert!(db.enqueue_ir_score_attestation_jobs(PROVIDER, "42", 100).is_err());
     assert!(

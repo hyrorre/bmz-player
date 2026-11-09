@@ -85,6 +85,9 @@ async fn step(
     now: i64,
     report: &mut IrSyncReport,
 ) -> Result<()> {
+    if job.kind == IrJobKind::Course {
+        return super::dan::step(db, root, provider, job, now, report).await;
+    }
     ensure!(job.kind == IrJobKind::Score, "{}", super::unsupported());
     let payload: IrScoreSubmission =
         serde_json::from_str(&job.payload_json).context("Bokutachi: invalid stored play")?;

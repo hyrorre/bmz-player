@@ -390,6 +390,17 @@ fn job_status_label(status: &str, text: Localizer) -> String {
     }
 }
 
+pub(super) fn bokutachi_dan_status(status: &str, message: &str, text: Localizer) -> String {
+    text.text(match status {
+        "succeeded" => "ir-bokutachi-dan-updated",
+        "no_change" if message.contains("server did not accept") => "ir-bokutachi-dan-not-cleared",
+        "no_change" => "ir-bokutachi-dan-unchanged",
+        "ineligible" => "ir-bokutachi-ineligible",
+        "failed" => "ir-bokutachi-dan-failed",
+        _ => "ir-bokutachi-dan-pending",
+    })
+}
+
 fn truncate_chars(value: &str, max: usize) -> String {
     let single_line = value.replace(['\r', '\n'], " ");
     if single_line.chars().count() <= max {
@@ -542,21 +553,27 @@ fn build_ir_queue(
                     ui.end_row();
                     for row in &view.rows {
                         let job = &row.job;
-                        ui.label(job_kind_label(job.kind, text));
+                        let dan = job.kind == IrJobKind::Course
+                            && crate::ir::bokutachi::is_provider(&job.provider);
+                        ui.label(if dan {
+                            text.text("ir-bokutachi-dan")
+                        } else {
+                            job_kind_label(job.kind, text)
+                        });
                         let chart = row.title.clone().unwrap_or_else(|| {
                             hash_to_hex(&job.chart_sha256).chars().take(12).collect()
                         });
                         ui.label(truncate_chars(&chart, 36)).on_hover_text(chart);
-                        ui.label(
-                            if crate::ir::bokutachi::is_provider(&job.provider)
-                                && job.status == "pending"
-                                && job.last_error.contains("accepted")
-                            {
-                                tr!(text, "ir-bokutachi-pending")
-                            } else {
-                                job_status_label(&job.status, text)
-                            },
-                        );
+                        ui.label(if dan {
+                            bokutachi_dan_status(&job.status, &job.last_error, text)
+                        } else if crate::ir::bokutachi::is_provider(&job.provider)
+                            && job.status == "pending"
+                            && job.last_error.contains("accepted")
+                        {
+                            tr!(text, "ir-bokutachi-pending")
+                        } else {
+                            job_status_label(&job.status, text)
+                        });
                         ui.label(job.attempt_count.to_string());
                         // 恒久拒否されたjobは自動再試行しないため、再試行時刻を出さない。
                         ui.label(
