@@ -291,3 +291,31 @@ config保存、Luaからのファイル読み取り、GPU upload/acquire/present
   2000回シミュレートした1プレイあたりの本数は、多くが11本以下だった。12本以上はりりりくろ！！
   （Re:Barthで23〜32本）、Taken The First Step、一期一会、Stellar Blueに限られる。
   7z/rar書庫内の2,640譜面は未解析。10本は、この分布での開き直しと待機decoderのメモリの折衷である。
+
+## 2026-11-09 追記: お気に入りフラグの読み込みコスト
+
+一覧の読み込みはworkerが毎回新しいread-only接続を開く。`SelectCollectionCache`の更新判定
+（`total_changes()` / `data_version`）は接続ごとの値なので、読み込みをまたいだcacheは使えない。
+app側に残っていた未使用のcacheフィールドは削除した。
+
+ローカルlibrary.db（約12.6万譜面）のbackupと合成collection.dbで、1,000行の一覧へ
+お気に入りフラグを付ける時間を測った。release、各10回warm-up後100回。
+お気に入りは譜面と曲を同数登録した。
+
+```powershell
+$env:BMZ_PROBE_LIBRARY_DB = "$PWD/.local/performance/collection-cache/library.db"
+cargo test -p bmz-player --release --lib profile_collection_flags_per_list_load --locked -- --ignored --nocapture
+```
+
+| お気に入り数 | 毎回読み直し 中央値 / p95 / 最大 | cache再利用 中央値 |
+|---:|---:|---:|
+| 0 | 0.074 / 0.107 / 0.163 ms | 0.025 ms |
+| 10 | 0.471 / 0.563 / 0.700 ms | 0.053 ms |
+| 100 | 3.626 / 4.177 / 4.617 ms | 0.055 ms |
+| 1,000 | 37.889 / 41.180 / 42.528 ms | 0.065 ms |
+
+お気に入り1件あたり約38usで、件数に比例する。お気に入り曲ごとにlibrary.dbへ
+1回ずつ問い合わせる`favorite_song_folder_set`が主因と見られる（内訳は未計測）。
+処理はworker上なのでwindow threadは止まらないが、一覧の切り替えまでの時間に加わる。
+ローカルprofileのお気に入りは譜面7件・曲11件で、0.5ms程度に相当する。
+単一環境・単一回の計測で、NASや巨大フォルダは代表しない。

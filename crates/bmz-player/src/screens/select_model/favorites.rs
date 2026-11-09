@@ -282,3 +282,6 @@ pub(super) fn favorite_song_folder_set(
     }
     Ok(folders)
 }
+
+#[cfg(test)]
+mod profile;

@@ -310,7 +310,6 @@ impl WinitApp {
                 select_distribution_cache: RefCell::new(HashMap::new()),
                 lr2_select_cache: Box::default(),
                 lr2_skin_settings: Box::default(),
-                collection_cache,
                 virtual_folders,
                 select_distributions: RefCell::new(Default::default()),
                 difficulty_tables,

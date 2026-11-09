@@ -428,7 +428,6 @@ impl WinitApp {
         self.select.selection_generation = self.select.selection_generation.wrapping_add(1);
         self.jobs.download_selections.clear();
         self.select.select_items.clear();
-        self.select.collection_cache.invalidate();
         self.select.selected_replay_slot = None;
         *self.select.replay_slot_cache.borrow_mut() = None;
         self.select.score_refresh = Default::default();
