@@ -648,21 +648,47 @@ fn skin_video_sources_need_runtime_state_only_for_active_gated_sources() {
     assert!(skin_video_sources_need_runtime_state(&[gated_source]));
 }
 
+/// Dropped decoders close their file on the retirement worker, so Windows can
+/// refuse the delete for a moment after the source is gone.
+struct TempVideo(PathBuf);
+
+impl Drop for TempVideo {
+    fn drop(&mut self) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match std::fs::remove_file(&self.0) {
+                Ok(()) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                Err(error) => {
+                    if Instant::now() >= deadline {
+                        // Never panic again while a failed assertion unwinds.
+                        assert!(std::thread::panicking(), "{}: {error}", self.0.display());
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(1));
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn skin_video_hidden_frames_keep_playback_time_without_uploading_or_reopening() {
     // A small, self-contained 2-second video; no external skin or ffmpeg CLI required.
     let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    let path =
-        std::env::temp_dir().join(format!("bmz-skin-video-{}-{unique}.y4m", std::process::id()));
+    // Declared before the source, so it is removed after the decoder is dropped.
+    let file = TempVideo(
+        std::env::temp_dir().join(format!("bmz-skin-video-{}-{unique}.y4m", std::process::id())),
+    );
     let mut video = b"YUV4MPEG2 W2 H2 F10:1 Ip A1:1 C420jpeg\n".to_vec();
     for luma in 16..36 {
         video.extend_from_slice(b"FRAME\n");
         video.extend_from_slice(&[luma, luma, luma, luma, 128, 128]);
     }
-    std::fs::write(&path, video).unwrap();
+    std::fs::write(&file.0, video).unwrap();
     let mut source = ActiveSkinVideoSource {
         texture: SkinTextureId(800),
-        path: path.clone(),
+        path: file.0.clone(),
         decoder: None,
         last_pts: None,
         loop_start_us: 0,
@@ -741,8 +767,6 @@ fn skin_video_hidden_frames_keep_playback_time_without_uploading_or_reopening() 
     assert_eq!(source.loop_start_us, start_us);
     assert_eq!(profile.opened, 1);
     assert!(profile.uploaded_frames > first_upload_count);
-    drop(source);
-    std::fs::remove_file(path).unwrap();
 }
 
 #[test]

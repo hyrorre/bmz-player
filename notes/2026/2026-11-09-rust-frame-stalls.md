@@ -404,3 +404,29 @@ ignoredのリトライ・コース遷移、Playの譜面長、詳細オプショ
 workerで完了し、両ファイルが更新され、一時ファイルが残らないことを確認した。
 新しい設定の既定値で難易度表の取得も走った（27件中3件はHTTPエラー）。
 生ログは`.local/performance/config-save/`に保存した。
+
+## 2026-11-10 追記: 動画削除テストの安定化
+
+`skin_video_hidden_frames_keep_playback_time_without_uploading_or_reopening`は、
+最後に一時Y4Mを`remove_file(...).unwrap()`で削除していた。`f8fbbd2e`以降、動画decoderの
+Dropは退避workerへ渡すだけで、FFmpegがファイルを閉じるのはdecode threadの終了後になる。
+Windowsでは開いているファイルを削除できず、負荷が高いと`Os { code: 32 }`
+（別のプロセスが使用中）で失敗した。bmz-videoの`ThreeFrameMovie`は同じコミットで
+削除の再試行に変えていたが、bmz-player側のこのテストは直していなかった。
+
+一時ファイルの削除をDropで行うguardに移し、削除できるまで最大5秒再試行する。
+guardはsourceより先に宣言し、decoderの破棄後に削除されるようにする。
+期限を過ぎたら失敗させるが、既にassertionで失敗している場合は二重panicにしない。
+
+同じテストのdebugビルドを、24プロセス同時に8回、計192回実行して比較した。
+
+| 版 | 失敗 |
+|---|---:|
+| 変更前 | 128 / 192（すべて削除の`Os { code: 32 }`） |
+| 変更後 | 0 / 192 |
+
+変更前の失敗で`%TEMP%`に残った`bmz-skin-video-*.y4m`143件は削除した。
+比較の集計は`.local/performance/skin-video-test/`に保存した。
+
+fmt、all-targets Clippy（`-D warnings`）を確認した。bmz-playerの全テストを3回続けて実行し、
+3回とも3001 passed / 0 failed / 69 ignoredだった。
