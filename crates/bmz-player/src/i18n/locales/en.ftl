@@ -805,6 +805,7 @@ update-retry = Retry
 update-kind-windows-portable = Updates this portable folder in place.
 update-kind-macos-automatic = Updates the app bundle and restarts BMZ Player.
 toast-library-scan-failed = Library scan failed: { $error }
+toast-library-scan-deferred = Scan start postponed. Retrying in { $seconds } seconds: { $error }
 toast-chart-unavailable = Chart unavailable: { $error }
 score-import-summary = scanned { $scanned }, matched { $matched }, imported { $imported }, corrected { $corrected }, skipped { $skipped }, failed { $failed }
 score-import-reason-missing = Missing chart

@@ -800,6 +800,49 @@ mod tests {
     }
 
     #[test]
+    fn scan_start_failure_keeps_saved_artifacts_for_manual_retry() {
+        for keep_archive in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let saved = root.path().join(if keep_archive { "saved.zip" } else { "saved" });
+            let chart = if keep_archive { saved.clone() } else { saved.join("chart.bms") };
+            std::fs::create_dir_all(chart.parent().unwrap()).unwrap();
+            std::fs::write(&chart, b"saved bytes").unwrap();
+            let mut manager = ChartDownloadManager::default();
+            let mut request = request(root.path(), "https://test.invalid/{md5}", 1);
+            request.keep_archive = keep_archive;
+            let (id, _) = manager.submit(request);
+            // Supply the completed transfer through the same channel consumed by poll().
+            let (tx, rx) = mpsc::channel();
+            tx.send(Ok(finished_result(&manager.tasks[0], &saved))).unwrap();
+            manager.tasks[0].worker = Some(rx);
+            manager.tasks[0].control.set_state(DownloadState::Scanning);
+            manager.queues[0].clear();
+            manager.active.push(0);
+            manager.poll(1);
+            assert_eq!(manager.take_scan_requests().len(), 1);
+
+            manager.finish_scan(id, &[], Some("failed to spawn song scan thread: thread limit"));
+            assert_eq!(manager.task(id).unwrap().state(), DownloadState::Failed);
+            manager.retry(id);
+            let task = manager.task(id).unwrap();
+            assert_eq!(task.state(), DownloadState::Scanning);
+            assert!(task.error.is_none());
+            assert!(task.finished_at.is_none());
+            assert!(!task.registration_missing);
+            let requests = manager.take_scan_requests();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].0, id);
+            assert_eq!(requests[0].1.scan_path, saved);
+            assert!(manager.queues.iter().all(|queue| queue.is_empty()));
+            assert_eq!(std::fs::read(&chart).unwrap(), b"saved bytes");
+
+            let identity = manager.task(id).unwrap().requests[0].identity.clone();
+            manager.finish_scan(id, &[identity], None);
+            assert_eq!(manager.task(id).unwrap().state(), DownloadState::Completed);
+        }
+    }
+
+    #[test]
     fn transfers_finishing_after_a_cancel_are_still_registered() {
         let root = tempfile::tempdir().unwrap();
         let scan_path = root.path().join("songs/http/chart");

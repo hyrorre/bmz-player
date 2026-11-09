@@ -42,6 +42,8 @@
 | 2026-11-08 | [スレッド分離後のスキンtimer更新とLN残光](2026/2026-11-08-play-skin-timer-projection.md) |
 | 2026-11-08 | [READY中のターンテーブル回転停止](2026/2026-11-08-ready-turntable-rotation.md) |
 | 2026-11-08 | [音声予約の固定と選曲・HS変更時の移動](2026/2026-11-08-play-display-and-select-motion.md) |
+| 2026-11-08 | [AUTOの単一実効LN型をForce保存区分へ正規化](2026/2026-11-08-uniform-auto-ln-policy.md) |
+| 2026-11-08 | [書庫確認中のダウンロード一覧のpanic](2026/2026-11-08-download-list-validation.md) |
 | 2026-11-07 | [EXTRA NOTEの配置改善（#61）](2026/2026-11-07-extra-note-placement.md) |
 | 2026-11-07 | [G-BATTLEで相手の判定が自分の判定表示へ混ざる問題](2026/2026-11-07-battle-judge-regions.md) |
 | 2026-11-07 | [Codex Securityの優先度中の指摘への対応](2026/2026-11-07-medium-security-fixes.md) |

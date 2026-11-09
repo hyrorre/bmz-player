@@ -34,6 +34,29 @@ function submission(): IrScoreSubmission {
 }
 
 describe('score submission consistency', () => {
+  test('accepts uniform AUTO normalized to FORCE and continues accepting old AUTO buckets', () => {
+    for (const [auto, force, mode, flag] of [
+      ['AutoLn', 'ForceLn', 'ln', 'has_defined_ln'],
+      ['AutoCn', 'ForceCn', 'cn', 'has_defined_cn'],
+      ['AutoHcn', 'ForceHcn', 'hcn', 'has_defined_hcn'],
+    ] as const) {
+      for (const policy of [auto, force]) {
+        const payload = submission()
+        payload.chart.ln_profile = {
+          has_undefined_ln: true,
+          has_defined_ln: false,
+          has_defined_cn: false,
+          has_defined_hcn: false,
+          [flag]: true,
+        }
+        payload.rule.ln_policy = policy
+        payload.rule.effective_ln_mode = mode
+        expect(validateScoreSubmission(payload)).toBe(payload)
+        expect(payload.chart.ln_profile.has_undefined_ln).toBe(true)
+      }
+    }
+  })
+
   test('accepts LR2 backfill whose POOR includes empty POOR, keeping other bounds', () => {
     const payload = submission()
     Object.assign(payload.result, { notes: 128, pass_notes: 128, ex_score: 222, max_combo: 64 })
