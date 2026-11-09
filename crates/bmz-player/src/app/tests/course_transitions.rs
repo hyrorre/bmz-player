@@ -277,6 +277,11 @@ fn course_retirement_and_retry_preserve_results_and_cancel_pending_launches() {
                 app.poll_play_preload();
                 app.finish_play_ending();
                 let scene = app.current_scene_kind();
+                app.ensure_skin_ready(if scene == AppSceneKind::Result {
+                    SkinKind::Result
+                } else {
+                    SkinKind::Select
+                });
                 app.update_window_title_for_scene(scene);
                 assert!(app.play.active_course.is_none());
                 assert!(app.play.pending_play_start.is_none());
@@ -314,6 +319,7 @@ fn course_retirement_and_retry_preserve_results_and_cancel_pending_launches() {
         ResultExitAction::HeldCourseLanes,
         ResultExitAction::Leave,
     ] {
+        app.ensure_skin_ready(SkinKind::Result);
         app.input.track_control(&ControlInputEvent::keyboard_parts(
             PhysicalKey::Code(KeyCode::KeyC),
             ElementState::Pressed,
@@ -372,6 +378,7 @@ fn course_retirement_and_retry_preserve_results_and_cancel_pending_launches() {
                 app.integrations.last_scene_kind = Some(previous);
                 let mut processor = result_sound_processor(&mut app, variant);
                 app.finish_active_course();
+                app.ensure_skin_ready(SkinKind::Result);
                 app.update_window_title_for_scene(AppSceneKind::Result);
                 assert_result_pcm(&mut processor, 0, completed < 3, variant);
                 app.update_window_title_for_scene(AppSceneKind::Result);

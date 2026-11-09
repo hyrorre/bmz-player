@@ -173,7 +173,7 @@ impl WinitApp {
         self.start_play_preload(chart_id, options.clone());
         self.reload_decide_skin_for_chart(&snapshot);
         // Play スキンは裏で decode+upload を進めるが、Decide 入場では待たない。
-        // 実際の Play 入場で `ensure_skin_ready` が保険として残る。
+        // Play 入場時も完了をフレーム間で確認し、READY の開始を待機する。
         let play_skin_key_mode = chart_metadata
             .as_ref()
             .and_then(|chart| KeyMode::from_str_opt(&chart.mode))
@@ -212,13 +212,13 @@ impl WinitApp {
             play_skin_runtime_state,
         );
         // All workers now run while STAGEFILE/BACKBMP are prepared. Keep the
-        // initial Play snapshot stable and wait for Decide before scene entry.
+        // initial Play snapshot stable while the Decide skin finishes asynchronously.
         if let Some(chart) = &chart_metadata {
             self.prepare_play_meta_image_textures_from_chart(chart);
         } else {
             self.prepare_play_meta_image_textures(chart_id);
         }
-        self.ensure_skin_ready(SkinKind::Decide);
+        self.request_scene_skin(SkinKind::Decide);
         tracing::info!(
             chart_id,
             presentation_prepare_ms = preparation_started_at.elapsed().as_millis(),

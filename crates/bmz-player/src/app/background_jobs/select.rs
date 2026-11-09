@@ -24,43 +24,67 @@ impl WinitApp {
     }
 
     pub(in crate::app) fn change_select_list(&mut self, action: SelectListAction) -> bool {
+        if !self.select_list_load_allowed() {
+            self.select.list_loader.defer(action);
+            return true;
+        }
+        self.select.list_loader.request(super::super::select_list_loader::SelectListRequest {
+            action,
+            app_config: self.boot.app_config.clone(),
+            profile_config: self.boot.profile_config.clone(),
+            library_path: self.boot.app_paths.library_db.clone(),
+            profile_paths: self.boot.profile_paths.clone(),
+            folder_stack: self.select.folder_stack.clone(),
+            selected_index_stack: self.select.selected_index_stack.clone(),
+            selected_index: self.select.selected_index,
+            selected_key: self
+                .select
+                .select_items
+                .get(self.select.selected_index)
+                .map(select_item_key),
+            history: self.select.search.history().iter().cloned().collect(),
+            mode: self.select.select_mode_filter,
+            difficulty: self.select.select_difficulty_filter,
+            sort: self.select.select_sort,
+        });
+        true // Accepted; navigation feedback is emitted only after successful installation.
+    }
+
+    fn select_list_load_allowed(&self) -> bool {
+        self.view_state() == AppViewState::Select && self.jobs.profile_change.is_none()
+    }
+
+    pub(in crate::app) fn poll_select_list(&mut self) {
+        if !self.select_list_load_allowed() {
+            self.select.list_loader.suspend();
+        } else if let Some(action) = self.select.list_loader.take_deferred() {
+            self.change_select_list(action);
+        }
+        if let Some((action, result)) = self.select.list_loader.poll() {
+            self.apply_loaded_select_list(action, result);
+        }
+    }
+
+    fn apply_loaded_select_list(
+        &mut self,
+        action: SelectListAction,
+        result: Result<super::super::select_list_loader::LoadedSelectList>,
+    ) {
         let started_at = Instant::now();
-        let virtual_folders = crate::screens::select_model::VirtualFolderCatalog::load(
-            &self.boot.profile_paths.root_dir,
-        )
-        .map_err(|error| format!("{error:#}"));
-        let history: Vec<String> = self.select.search.history().iter().cloned().collect();
-        let previous_selected_key =
-            self.select.select_items.get(self.select.selected_index).map(select_item_key);
-        let prepared = prepare_select_list(
-            &action,
-            &self.select.folder_stack,
-            &self.select.selected_index_stack,
-            self.select.selected_index,
-            previous_selected_key,
-            |stack| {
-                let (mut items, mut mode) = load_items_for_stack(
-                    SelectListContext {
-                        boot: &self.boot,
-                        collections: &mut self.select.collection_cache,
-                        virtual_folders: &virtual_folders,
-                    },
-                    stack,
-                    &history,
-                    self.select.select_mode_filter,
-                    self.select.select_difficulty_filter,
-                    self.select.select_sort,
-                )?;
-                if matches!(action, SelectListAction::RefreshDownloads) {
-                    mode = self.select.select_mode_filter;
-                    apply_select_mode_filter(&mut items, mode);
-                }
-                Ok((items, mode))
-            },
-        );
-        let prepared = match prepared {
-            Ok(Some(prepared)) => prepared,
-            Ok(None) => {
+        let loaded = match result {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                tracing::error!(%error, ?action, "failed to load select list");
+                self.show_left_overlay_toast(
+                    Localizer::new(self.boot.profile_config.ui.locale())
+                        .text("toast-select-folder-load-failed"),
+                );
+                return;
+            }
+        };
+        let mut prepared = match loaded.prepared {
+            Some(prepared) => prepared,
+            None => {
                 if let SelectListAction::Enter(path) = &action {
                     let text = Localizer::new(self.boot.profile_config.ui.locale());
                     if parse_search_query(path).is_some() && self.select.search.is_active() {
@@ -69,18 +93,18 @@ impl WinitApp {
                         self.show_left_overlay_toast(text.text("toast-select-folder-empty"));
                     }
                 }
-                return false;
-            }
-            Err(error) => {
-                tracing::error!(%error, ?action, "failed to load select list");
-                self.show_left_overlay_toast(
-                    Localizer::new(self.boot.profile_config.ui.locale())
-                        .text("toast-select-folder-load-failed"),
-                );
-                return false;
+                return;
             }
         };
         let folder_changed = self.select.folder_stack != prepared.folder_stack;
+        if !folder_changed
+            && matches!(action, SelectListAction::Refresh | SelectListAction::RefreshDownloads)
+        {
+            // The cursor can move while the query runs. Preserve that newer selection.
+            prepared.selected_index = self.select.selected_index;
+            prepared.selected_key =
+                self.select.select_items.get(self.select.selected_index).map(select_item_key);
+        }
         if !matches!(action, SelectListAction::Refresh | SelectListAction::RefreshDownloads) {
             self.select.selection_generation = self.select.selection_generation.wrapping_add(1);
         }
@@ -89,8 +113,13 @@ impl WinitApp {
         {
             self.set_search_mode(false);
         }
+        if let SelectListAction::Enter(path) = &action
+            && let Some(query) = parse_search_query(path)
+        {
+            self.select.search.record_successful_query(query.to_owned());
+        }
         self.select.folder_stack = prepared.folder_stack;
-        self.select.virtual_folders = virtual_folders;
+        self.select.virtual_folders = loaded.virtual_folders;
         self.select.selected_index_stack = prepared.selected_index_stack;
         self.select.selected_index = prepared.selected_index;
         // Song scans and table/course updates all converge here. Keep the editor
@@ -104,52 +133,9 @@ impl WinitApp {
         // 表示状態と永続化用 profile config を実際に適用したモードへ揃える。
         self.select.select_mode_filter = prepared.mode_filter;
         self.boot.profile_config.select.mode_filter = prepared.mode_filter.as_str().to_string();
-        self.select.select_items = prepared.items;
+        let old_items = std::mem::replace(&mut self.select.select_items, prepared.items);
+        self.select.list_loader.retire(old_items);
         *self.select.lr2_select_cache.borrow_mut() = Default::default();
-        // Table levels already resolve sources before score/analysis enrichment.
-        let table_level = matches!(
-            self.select.folder_stack.last().and_then(|path| parse_table_path(path)),
-            Some(TablePath::Level { .. })
-        );
-        let charts: Vec<_> = self
-            .select
-            .select_items
-            .iter()
-            .filter_map(|item| match item {
-                SelectItem::Chart(row) if !table_level => row.chart.as_ref(),
-                _ => None,
-            })
-            .collect();
-        let sources =
-            self.boot.library_db.registered_chart_sources(&charts).unwrap_or_else(|error| {
-                tracing::warn!(%error, "failed to resolve select chart sources");
-                HashMap::new()
-            });
-        let replacement_ids: Vec<_> = sources
-            .iter()
-            .filter_map(|(id, source)| {
-                (*id != source.chart.chart_id).then_some(source.chart.chart_id)
-            })
-            .collect();
-        let analyses = self
-            .boot
-            .library_db
-            .chart_analysis_summaries_by_chart_ids(&replacement_ids)
-            .unwrap_or_default();
-        for item in &mut self.select.select_items {
-            if let SelectItem::Chart(row) = item
-                && let Some(chart) = &row.chart
-            {
-                match sources.get(&chart.chart_id) {
-                    Some(source) if source.chart.chart_id != chart.chart_id => {
-                        row.has_document = source.chart.has_document;
-                        row.chart_analysis = analyses.get(&source.chart.chart_id).cloned();
-                        row.chart = Some(source.chart.clone());
-                    }
-                    _ => {}
-                }
-            }
-        }
         if self.select.folder_stack.last().and_then(|path| parse_search_query(path)).is_some() {
             let count = self
                 .select
@@ -185,10 +171,18 @@ impl WinitApp {
                     .text("toast-select-folder-empty-returned"),
             );
         }
+        match action {
+            SelectListAction::Enter(_) => {
+                self.play_system_sound(crate::system_sound::SoundType::FolderOpen)
+            }
+            SelectListAction::Exit => {
+                self.play_system_sound(crate::system_sound::SoundType::FolderClose)
+            }
+            _ => {}
+        }
         tracing::debug!(target: "bmz_player::select_profile",
             elapsed_us = started_at.elapsed().as_micros(),
             items = self.select.select_items.len(), "select list loaded");
-        true
     }
 
     pub(in crate::app) fn invalidate_select_folder_summaries(&mut self) {

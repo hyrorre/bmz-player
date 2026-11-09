@@ -133,7 +133,7 @@ impl WinitApp {
     /// wildcardのRandom指定はこのdecode要求を単位として再抽選される。
     pub(super) fn reload_skin_for_scene_entry(&mut self, kind: SkinKind) {
         self.reload_skin_for_scene_entry_with_chart(kind, None);
-        self.ensure_skin_ready(kind);
+        self.request_scene_skin(kind);
     }
 
     /// Decide進入時の再decodeへ、表示するsnapshotの選択譜面の値を渡す。

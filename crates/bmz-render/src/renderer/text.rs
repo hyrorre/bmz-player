@@ -689,8 +689,25 @@ impl TextLayoutCache {
     }
 
     fn insert(&mut self, key: TextLayoutKey, quads: Vec<TextQuad>, frame: u64) {
-        if self.entries.len() >= TEXT_LAYOUT_CACHE_MAX_ENTRIES {
-            self.entries.clear();
+        if self.entries.len() >= TEXT_LAYOUT_CACHE_MAX_ENTRIES && !self.entries.contains_key(&key) {
+            // Free a batch of old layouts, retaining the current working set.
+            // One scan per batch avoids both a full-cache miss burst and an
+            // O(capacity) oldest-entry search on every subsequent insertion.
+            let keep = TEXT_LAYOUT_CACHE_MAX_ENTRIES * 3 / 4;
+            let remove = self.entries.len() - keep;
+            let mut frames: Vec<_> =
+                self.entries.values().map(|entry| entry.last_used_frame).collect();
+            let cutoff = *frames.select_nth_unstable(remove - 1).1;
+            self.entries.retain(|_, entry| entry.last_used_frame >= cutoff);
+            let mut remaining = self.entries.len().saturating_sub(keep);
+            self.entries.retain(|_, entry| {
+                if remaining > 0 && entry.last_used_frame == cutoff {
+                    remaining -= 1;
+                    false
+                } else {
+                    true
+                }
+            });
         }
         self.entries.insert(key, CachedTextLayout { quads, last_used_frame: frame });
     }
@@ -902,8 +919,11 @@ impl TextAtlasCache {
     }
 
     pub(super) fn insert_layout(&mut self, key: TextLayoutKey, quads: Vec<TextQuad>) {
-        if self.layouts.entries.len() >= TEXT_LAYOUT_CACHE_MAX_ENTRIES {
-            // レイアウト上限で参照情報も消える前に、最近使ったグリフへ参照日を引き継ぐ。
+        if self.layouts.entries.len() >= TEXT_LAYOUT_CACHE_MAX_ENTRIES
+            && !self.layouts.entries.contains_key(&key)
+        {
+            // 部分退避で消えるlayoutが同一frame内で既に描かれていても、GPUへ渡す
+            // quadが参照するglyphの行はrecycleしない。
             let recent = self.recent_origins();
             for glyph in self.glyphs.values_mut() {
                 if recent.contains(&glyph.atlas_origin) {

@@ -587,7 +587,7 @@ fn play_chart_length_app_decode_reuse_and_generation_binding() {
         "next",
         "#TITLE Next\n#BPM 120\n#WAV01 absent.wav\n#00118:01\n#06011:01\n",
     );
-    let path = skin_file(&data.paths.data_dir).to_string_lossy().into_owned();
+    let path = skin_file(&data.paths.data_dir.join("skins")).to_string_lossy().into_owned();
     boot.profile_config.skin.play5 = path.clone();
     boot.profile_config.skin.play7 = path;
     let (maintenance_tx, _) = tokio::sync::watch::channel(false);
@@ -634,6 +634,7 @@ fn play_chart_length_app_decode_reuse_and_generation_binding() {
     assert!(app.skin.skin_pipeline.generation(SkinKind::Play) > generation);
     app.start_play_preload(next, Default::default());
     app.prepare_play_skin_for_scene(next, &Default::default());
+    app.ensure_skin_ready(SkinKind::Play);
     assert_eq!(app.renderer.play_skin_document().unwrap().text[0].constant_text, "2:0");
     app.enter_play_scene(next, Default::default(), app.decide_snapshot_for_chart(next));
     assert_eq!(app.play.last_play_snapshot.as_ref().unwrap().skin_chart_length_ms, Some(120_000));
@@ -644,6 +645,7 @@ fn play_chart_length_app_decode_reuse_and_generation_binding() {
         Some(pending.rx.recv_timeout(Duration::from_secs(15)).unwrap().result.unwrap());
     app.skin.last_play_skin_signature = None;
     app.prepare_play_skin_for_scene(next, &Default::default());
+    app.ensure_skin_ready(SkinKind::Play);
     assert_eq!(app.renderer.play_skin_document().unwrap().text[0].constant_text, "2:0");
     app.invalidate_play_preload();
 }

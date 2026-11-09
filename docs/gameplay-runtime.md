@@ -43,6 +43,10 @@ region・scheduler・判定状態は引き継ぎません。cacheはプロセス
 
 ## 入力と時計
 
+ロード時に変換済み譜面のノートID・HCN区間索引と判定map容量を準備します。
+入力候補とMineは時刻窓から調べ、HCNは現在時刻を含み得る区間だけ更新します。
+別の譜面に差し替わった場合は索引を使わず、通常の探索へ戻ります。
+
 - Windowsキーボードは入力専用スレッドのmessage-only windowでRaw Inputを受け取ります。
   message取得時に既存`monotonic_timestamp_ns()`でtimestampを確定します。
   foreground windowを入力スレッドでも確認します。キーのrepeat / releaseとscancodeは
@@ -222,6 +226,24 @@ enqueue時とcallbackの適用時に検査します。旧workerの遅い送信�
 workerはスコア確定時・終端遷移時にimmutable `FinishSessionSnapshot`とgraphを発行します。
 通常play、course、replay、abort、結果画面への遷移はこの結果からstorage / IRの保存・送信経路を呼びます。
 UIは終了要求を送った直後の古い観測値を保存せず、workerの確定結果を待ちます。
+
+### 音声・動画資源の後片付け
+
+audio callbackから退避したsourceは、出力streamごとのworkerが回収します。
+事前確保したbufferを短いlock内で交換し、大きなPCM bankの解放はlock外で行います。
+window threadの通知はtry_lockだけで、空のqueueではworkerを起こしません。
+描画停止中も20ms周期で回収し、stream停止後の残りもworkerで解放します。
+
+BGA動画は表示中の各channelに加え、最後に使った非表示10本までdecoderを保持します。
+1プレイで十数本以上を切り替える譜面だけ、古いものから閉じます。
+退避した動画を再表示するときはそのイベント時刻へseekして開き直します。
+channel方式は先読みqueue満杯・EOFでparkし、frame取得・restart・停止で起こします。
+skin動画のclock方式は従来の短い待機上限を保ち、停止通知で早く復帰できます。
+
+動画のDropは停止を要求し、FFmpeg workerのjoinとRGBA解放を共通の退避workerへ渡します。
+ファイルが閉じるのはこの処理完了時です。プロセス内のdecoderは退避待ちを含め64本までで、
+上限到達時は新規openをエラーにします。native I/Oが停止してもthreadやframeが無制限に
+蓄積しないための上限です。退避worker自体が異常終了した場合だけ同期cleanupへ戻ります。
 
 ### 途中FAILED時の譜面音声
 

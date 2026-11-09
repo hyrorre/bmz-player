@@ -721,6 +721,7 @@ fn open(config: CpalOutputConfig, stream_id: u64) -> Result<CpalSharedOutput> {
     let current_frame = Arc::new(AtomicU64::new(0));
     let output_commands = Arc::new(Mutex::new(VecDeque::new()));
     let retired_sources = Arc::new(Mutex::new(Vec::with_capacity(OUTPUT_COMMAND_QUEUE_CAPACITY)));
+    let source_reaper = SourceReaper::new(retired_sources.clone())?;
     let diagnostics = Arc::new(CpalOutputDiagnosticsCounters::default());
     let watch = Arc::new(WatchState {
         invalid: AtomicBool::new(false),
@@ -852,7 +853,7 @@ fn open(config: CpalOutputConfig, stream_id: u64) -> Result<CpalSharedOutput> {
             sample_rate,
             current_frame,
             output_commands,
-            retired_sources,
+            source_reaper,
             diagnostics,
             next_source_id: AtomicU64::new(1),
         }),

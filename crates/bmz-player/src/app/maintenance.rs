@@ -59,8 +59,11 @@ impl WinitApp {
         // cache世代を切り替える。
         self.reconcile_rian_table_identity();
 
+        self.poll_pending_table_store();
+
         // 完了済み結果を先に反映する。channelはSelect外ではpollしないため、
-        // workerがPlay中に完了してもDB保存・select model再構築はここまで遅延される。
+        // workerがPlay中に完了しても新しい保存・一覧要求はここまで遅延される。
+        // 既にSelect中に開始したtransactionはworker上で完了する。
         self.poll_pending_table_fetch();
         self.poll_pending_rian_table_fetch();
         self.poll_pending_chart_download();
@@ -86,7 +89,10 @@ impl WinitApp {
     }
 
     pub(super) fn start_queued_song_scan_if_idle(&mut self) {
-        if !self.select_maintenance_allowed() {
+        // Scan and table store are both long library.db writers on their own
+        // connections. Serialize them so neither waits on the other's write lock
+        // and fails after rusqlite's 5 s busy timeout.
+        if !self.select_maintenance_allowed() || self.jobs.table_fetch.pending_store.is_some() {
             return;
         }
         if let Some(request) = self.jobs.song_scan.take_ready(Instant::now()) {

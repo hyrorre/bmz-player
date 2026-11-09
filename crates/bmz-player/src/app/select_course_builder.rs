@@ -179,6 +179,7 @@ impl WinitApp {
             return false;
         };
         self.set_search_mode(false);
+        self.select.list_loader.cancel();
         self.select.folder_stack = state.return_folder_stack;
         self.select.selected_index_stack = state.return_selected_index_stack;
         self.select.selected_index = state.return_selected_index;

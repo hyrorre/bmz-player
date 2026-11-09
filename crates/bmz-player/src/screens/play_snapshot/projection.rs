@@ -110,9 +110,15 @@ impl PlayfieldProjection {
     }
 
     pub(crate) fn update(&mut self, session: &GameSession, time: TimeUs) {
-        self.judged_notes.clear();
-        self.judged_notes
-            .extend(session.judge.judged_notes.iter().map(|(&id, &judge)| (id, judge)));
+        if self.judged_notes.capacity() == session.judge.judged_notes.capacity() {
+            // Equal-sized tables can copy buckets without rehashing. Retain the
+            // preallocated pool capacity while the producer's map is growing.
+            self.judged_notes.clone_from(&session.judge.judged_notes);
+        } else {
+            self.judged_notes.clear();
+            self.judged_notes
+                .extend(session.judge.judged_notes.iter().map(|(&id, &judge)| (id, judge)));
+        }
         self.lanes = session.judge.lanes;
         self.window_set = session.judge.window_set;
         self.lane_hcn_timer = session.lane_hcn_timer;

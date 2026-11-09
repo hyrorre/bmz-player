@@ -400,7 +400,7 @@ fn advance_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
             display
                 .judgement
                 .note_id
-                .and_then(|note_id| session.chart.note_by_id(note_id))
+                .and_then(|note_id| session.judge.note_by_id(&session.chart, note_id))
                 .map_or(display.judgement.lane, |note| note.lane)
         } else {
             display.judgement.lane

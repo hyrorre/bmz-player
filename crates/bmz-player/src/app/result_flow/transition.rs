@@ -6,6 +6,9 @@ impl WinitApp {
     /// timer=2 の実アニメーションが終わって最終フレームを保持したら、
     /// `advance_result_exit` が実際の遷移 (選曲へ戻る / リトライ) を実行する。
     pub(super) fn begin_result_exit(&mut self, action: ResultExitAction) {
+        if self.scene_skin_entry_waiting(SkinKind::Result) {
+            return;
+        }
         if self.result.result_exit.is_some() || self.result.finished_play.is_none() {
             return;
         }
@@ -112,6 +115,18 @@ impl WinitApp {
     }
 
     pub(super) fn advance_decide_transition(&mut self) {
+        if self.scene_skin_entry_waiting(SkinKind::Decide) {
+            self.cancel_decide_if_exit_hold_elapsed();
+            if self.play.pending_decide.as_ref().is_some_and(|decide| decide.cancel) {
+                self.play.pending_decide = None;
+                self.invalidate_play_preload();
+                self.clear_active_course_state();
+                self.select.autoplay_folder = None;
+                self.reload_skin_for_scene_entry(SkinKind::Select);
+                self.restart_select_scene_timers();
+            }
+            return;
+        }
         let Some(fadeout_started) =
             self.play.pending_decide.as_ref().map(|decide| decide.fadeout_started_at.is_some())
         else {

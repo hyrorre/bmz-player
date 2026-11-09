@@ -30,7 +30,7 @@ pub(super) struct SelectRuntimeState {
     /// 選曲リストをブラウズしながら課題曲を積む LR2-style course creation state。
     pub(super) course_builder: Option<SelectCourseBuilderState>,
     pub(super) select_items: Vec<SelectItem>,
-    pub(super) collection_cache: crate::screens::select_model::SelectCollectionCache,
+    pub(super) list_loader: Box<super::select_list_loader::SelectListLoader>,
     pub(super) virtual_folders: Result<crate::screens::select_model::VirtualFolderCatalog, String>,
     pub(super) replay_slot_cache: RefCell<Option<(crate::storage::score_db::ScoreKey, [bool; 4])>>,
     pub(super) select_distribution_cache: RefCell<HashMap<i64, CachedSelectChartDistribution>>,
@@ -316,6 +316,8 @@ pub(super) struct SmokeRuntime {
 }
 
 pub(super) struct SkinRuntimeState {
+    /// Scene entry waits are polled between frames; they never block the window thread.
+    pub(super) scene_entry_waits: HashSet<SkinKind>,
     pub(super) lua_runtime_mode: bmz_skin::LuaSkinRuntimeMode,
     pub(super) skin_catalog: SkinCatalogState,
     pub(super) skin_defs_cache: BTreeMap<(String, bool), SceneSkinDefs>,

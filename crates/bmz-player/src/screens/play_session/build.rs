@@ -503,7 +503,8 @@ pub fn build_game_session_with_input_backend(
                     rule_mode,
                     judge_algorithm_from_config(profile.judge.judge_algorithm),
                     key_mode,
-                ),
+                )
+                .with_chart_index(chart.clone()),
                 gauge: GaugeState::new_with_property_and_rule_mode_and_keymode(
                     gauge_type,
                     gauge_total,
@@ -553,7 +554,8 @@ pub fn build_game_session_with_input_backend(
         rule_mode,
         judge_algorithm_from_config(profile.judge.judge_algorithm),
         primary_key_mode,
-    );
+    )
+    .with_chart_index(chart.clone());
     if let Some(projection) = &replay_lane_projection {
         judge.set_scratch_lane_mask(projection.playback_scratch_lane_mask);
     }

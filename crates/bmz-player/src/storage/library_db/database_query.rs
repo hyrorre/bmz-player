@@ -16,6 +16,35 @@ impl LibraryDatabase {
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Folder paths of every chart row for each SHA-256, in one query.
+    ///
+    /// Binds the hashes as JSON instead of filling a temp table: temp writes
+    /// advance `total_changes()`, which collection-flag caches use as a revision.
+    pub fn folder_paths_by_sha256(
+        &self,
+        sha256s: &[[u8; 32]],
+    ) -> Result<HashMap<[u8; 32], Vec<String>>> {
+        if sha256s.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let hashes = serde_json::to_string(
+            &sha256s.iter().map(|sha256| hash_to_hex(sha256)).collect::<Vec<_>>(),
+        )?;
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT sha256, folder_path FROM charts
+             WHERE sha256 IN (SELECT value FROM json_each(?1))
+             ORDER BY folder_path COLLATE NOCASE",
+        )?;
+        let rows = stmt
+            .query_map([hashes], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+        let mut folders: HashMap<[u8; 32], Vec<String>> = HashMap::new();
+        for row in rows {
+            let (sha256, folder) = row?;
+            folders.entry(hex_to_hash::<32>(&sha256)?).or_default().push(folder);
+        }
+        Ok(folders)
+    }
+
     pub fn chart_sha256_by_md5(&self, md5: [u8; 16]) -> Result<Option<[u8; 32]>> {
         let result: Option<String> = self
             .conn

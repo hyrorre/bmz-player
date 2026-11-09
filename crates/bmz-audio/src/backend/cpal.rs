@@ -23,6 +23,8 @@ mod device;
 #[cfg(all(target_os = "macos", feature = "experimental-coreaudio-ioproc"))]
 mod ioproc;
 mod source;
+mod source_reaper;
+use source_reaper::SourceReaper;
 
 use callback::*;
 pub use device::{is_host_supported, list_output_device_names};
@@ -106,7 +108,7 @@ struct CpalSharedOutputInner {
     sample_rate: u32,
     current_frame: Arc<AtomicU64>,
     output_commands: SharedOutputCommands,
-    retired_sources: RetiredOutputSources,
+    source_reaper: SourceReaper,
     diagnostics: Arc<CpalOutputDiagnosticsCounters>,
     next_source_id: AtomicU64,
 }
@@ -137,6 +139,9 @@ pub struct CpalCommandedOutputSource {
 
 #[derive(Debug, Error)]
 pub enum CpalBackendError {
+    #[error("failed to start audio source retirement worker")]
+    RetirementThread(#[source] std::io::Error),
+
     #[error("no default output device is available")]
     MissingDefaultOutputDevice,
 
@@ -445,6 +450,54 @@ mod tests {
 
     fn test_retired_sources(capacity: usize) -> RetiredOutputSources {
         Arc::new(Mutex::new(Vec::with_capacity(capacity)))
+    }
+
+    #[test]
+    #[ignore = "release PCM retirement probe; run alone with --ignored --nocapture"]
+    fn profile_retired_pcm_destruction() {
+        assert!(!std::hint::black_box(cfg!(debug_assertions)), "run with --release");
+        for mib in [64, 256] {
+            let mut samples = Vec::new();
+            for iteration in 0..6 {
+                let mut engine = AudioEngine::new(48_000);
+                for id in 0..mib {
+                    engine.insert_sample(
+                        bmz_core::ids::SoundId(id),
+                        crate::sample::DecodedSample {
+                            channels: 2,
+                            sample_rate: 48_000,
+                            frames: vec![0.25; 1024 * 1024 / 4],
+                        },
+                    );
+                }
+                let retired = test_retired_sources(OUTPUT_COMMAND_QUEUE_CAPACITY);
+                let engine = Arc::new(Mutex::new(engine));
+                let weak = Arc::downgrade(&engine);
+                let reaper = SourceReaper::new(retired.clone()).unwrap();
+                retired.lock().unwrap().push(RenderAudioSource {
+                    id: 1,
+                    kind: CpalOutputSourceKind::Play,
+                    active: false,
+                    engine: RenderAudioEngine::Legacy(engine),
+                });
+                let start = std::time::Instant::now();
+                reaper.wake();
+                if iteration > 0 {
+                    samples.push(start.elapsed().as_secs_f64() * 1e3);
+                }
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                while weak.upgrade().is_some() {
+                    assert!(std::time::Instant::now() < deadline);
+                    std::thread::yield_now();
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            eprintln!(
+                "pcm retire mib={mib} notify_median_us={:.3} notify_max_us={:.3}",
+                samples[2] * 1000.0,
+                samples[4] * 1000.0
+            );
+        }
     }
 
     #[test]

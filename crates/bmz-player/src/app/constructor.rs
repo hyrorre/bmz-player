@@ -64,7 +64,7 @@ impl WinitApp {
         } else {
             load_items_for_stack(
                 SelectListContext {
-                    boot: &boot,
+                    boot: (&boot).into(),
                     collections: &mut collection_cache,
                     virtual_folders: &virtual_folders,
                 },
@@ -298,6 +298,7 @@ impl WinitApp {
             viewer_paused_play_elapsed: None,
             skip_result: options.skip_result,
             select: SelectRuntimeState {
+                list_loader: Default::default(),
                 autoplay_folder: None,
                 select_ir: crate::screens::select_ir::SelectIrRanking::default(),
                 ir_battle: crate::app::select_ir_battle::SelectIrBattleRuntime::default(),
@@ -309,7 +310,6 @@ impl WinitApp {
                 select_distribution_cache: RefCell::new(HashMap::new()),
                 lr2_select_cache: Box::default(),
                 lr2_skin_settings: Box::default(),
-                collection_cache,
                 virtual_folders,
                 select_distributions: RefCell::new(Default::default()),
                 difficulty_tables,
@@ -479,6 +479,7 @@ impl WinitApp {
                 first_present_logged: false,
             },
             skin: SkinRuntimeState {
+                scene_entry_waits: HashSet::new(),
                 lua_runtime_mode: options.lua_skin_runtime_mode,
                 skin_catalog,
                 skin_defs_cache: BTreeMap::new(),

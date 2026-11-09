@@ -276,9 +276,22 @@ pub(super) fn favorite_song_folder_set(
     library_db: &LibraryDatabase,
     collection_db: &CollectionDatabase,
 ) -> Result<HashSet<String>> {
+    // Same result as resolved_favorite_song_folders per record, with one library query.
+    let records = collection_db.favorite_song_records()?;
+    let hashes: Vec<_> = records.iter().map(|record| record.representative_sha256).collect();
+    let resolved = library_db.folder_paths_by_sha256(&hashes)?;
     let mut folders = HashSet::new();
-    for record in collection_db.favorite_song_records()? {
-        folders.extend(resolved_favorite_song_folders(library_db, &record)?);
+    for record in records {
+        match resolved.get(&record.representative_sha256) {
+            Some(paths) => folders.extend(paths.iter().cloned()),
+            None if !record.origin_folder_hint.is_empty() => {
+                folders.insert(record.origin_folder_hint.replace('\\', "/"));
+            }
+            None => {}
+        }
     }
     Ok(folders)
 }
+
+#[cfg(test)]
+mod profile;

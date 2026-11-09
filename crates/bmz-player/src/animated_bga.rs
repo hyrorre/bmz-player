@@ -218,8 +218,9 @@ pub fn update_animated_bga_frames(
     {
         return Vec::new();
     }
-    let RunningPlaySession { gameplay, animated_bga, .. } = running;
-    let channels = prioritized(active_bga_channels(&gameplay.session, chart_now));
+    let RunningPlaySession { gameplay, animated_bga, render_snapshot_cache, .. } = running;
+    let channels =
+        prioritized(active_bga_channels(&gameplay.session, chart_now, render_snapshot_cache));
     let mut released = Vec::new();
     let separate = animated_bga.update(
         &channels,

@@ -79,7 +79,103 @@ fn decoder_with_pending(pending: impl IntoIterator<Item = i64>) -> VideoBgaDecod
         restart_decode: Arc::new(AtomicBool::new(false)),
         pass_finished: Arc::new(AtomicBool::new(false)),
         decode_thread: None,
+        retirement: None,
     }
+}
+
+#[test]
+#[ignore = "release teardown probe; run alone with --ignored --nocapture"]
+fn profile_video_decoder_drop_wait() {
+    assert!(!std::hint::black_box(cfg!(debug_assertions)), "run with --release");
+    for delay_ms in [10, 50, 200] {
+        let mut decoder = decoder_with_pending([]);
+        decoder.retirement = Some(retirement::Retirement::new().unwrap());
+        let (tx, rx) = std::sync::mpsc::channel();
+        decoder.decode_thread = Some(std::thread::spawn(move || {
+            tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(delay_ms));
+        }));
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let start = std::time::Instant::now();
+        drop(decoder);
+        eprintln!(
+            "video worker_delay_ms={delay_ms} drop_ms={:.3}",
+            start.elapsed().as_secs_f64() * 1e3
+        );
+        // Avoid overlapping the next sample after asynchronous retirement is introduced.
+        std::thread::sleep(Duration::from_millis(delay_ms + 10));
+    }
+}
+
+#[test]
+#[ignore = "release video queue probe; run alone with --ignored --nocapture"]
+fn profile_video_idle_queues() {
+    assert!(!std::hint::black_box(cfg!(debug_assertions)), "run with --release");
+    let stamp =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let path = std::env::temp_dir().join(format!("bmz-idle-{}-{stamp}.y4m", std::process::id()));
+    let mut bytes = b"YUV4MPEG2 W640 H360 F30:1 Ip A1:1 C420jpeg\n".to_vec();
+    for _ in 0..12 {
+        bytes.extend_from_slice(b"FRAME\n");
+        bytes.resize(bytes.len() + 640 * 360 * 3 / 2, 128);
+    }
+    std::fs::write(&path, bytes).unwrap();
+    for count in [2, 32] {
+        let mut decoders: Vec<_> =
+            (0..count).map(|_| VideoBgaDecoder::open(&path).unwrap()).collect();
+        for decoder in &mut decoders {
+            decoder.frame_at_blocking(0).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        let before = CHANNEL_WAIT_COUNT.load(Ordering::Relaxed);
+        std::thread::sleep(Duration::from_millis(200));
+        let waits = CHANNEL_WAIT_COUNT.load(Ordering::Relaxed) - before;
+        for decoder in &decoders {
+            decoder.stop_decode.store(true, Ordering::Release);
+        }
+        let mut retained = 0usize;
+        for decoder in &mut decoders {
+            if let Some(handle) = decoder.decode_thread.take() {
+                handle.thread().unpark();
+                handle.join().unwrap();
+            }
+            retained += decoder
+                .pending
+                .iter()
+                .chain(decoder.current.iter())
+                .map(|frame| frame.rgba.len())
+                .sum::<usize>();
+            retained += decoder
+                .receiver
+                .as_ref()
+                .unwrap()
+                .try_iter()
+                .map(|frame| frame.frame.rgba.len())
+                .sum::<usize>();
+        }
+        eprintln!(
+            "video inactive_decoders={count} wait_entries_200ms={waits} queued_and_selected_mib={:.2}",
+            retained as f64 / (1024.0 * 1024.0)
+        );
+        drop(decoders);
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn video_retirement_does_not_wait_for_a_blocked_native_worker() {
+    let mut decoder = decoder_with_pending([100]);
+    decoder.retirement = Some(retirement::Retirement::new().unwrap());
+    let (release, blocked) = std::sync::mpsc::channel();
+    let (done, completed) = std::sync::mpsc::channel();
+    decoder.decode_thread = Some(std::thread::spawn(move || {
+        let _ = blocked.recv_timeout(Duration::from_secs(5));
+        let _ = done.send(());
+    }));
+    drop(decoder);
+    assert!(matches!(completed.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
+    release.send(()).unwrap();
+    completed.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
 #[test]
@@ -178,7 +274,7 @@ fn channel_send_stops_while_queue_is_full() {
 
     std::thread::sleep(Duration::from_millis(5));
     stop_decode.store(true, Ordering::Release);
-
+    handle.thread().unpark();
     assert_eq!(handle.join().unwrap(), ChannelDecodePassEnd::Stop);
 }
 
@@ -197,7 +293,7 @@ fn channel_send_restarts_while_queue_is_full() {
 
     std::thread::sleep(Duration::from_millis(5));
     restart_decode.store(true, Ordering::Release);
-
+    handle.thread().unpark();
     assert_eq!(handle.join().unwrap(), ChannelDecodePassEnd::Restart);
 }
 
@@ -273,8 +369,35 @@ fn decoder_with_channel(
         restart_decode: Arc::new(AtomicBool::new(false)),
         pass_finished: Arc::new(AtomicBool::new(false)),
         decode_thread: None,
+        retirement: None,
     };
     (sender, decoder)
+}
+
+#[test]
+fn poll_frame_wakes_a_decoder_parked_on_a_full_channel_after_draining() {
+    let (sender, mut decoder) = decoder_with_channel([]);
+    for pts_us in [10, 20, 30, 40] {
+        sender.try_send(queued_frame(0, pts_us)).unwrap();
+    }
+    let stop_decode = Arc::new(AtomicBool::new(false));
+    let restart_decode = Arc::new(AtomicBool::new(false));
+    let (sent_tx, sent_rx) = std::sync::mpsc::channel();
+    decoder.decode_thread = Some(std::thread::spawn(move || {
+        let end = send_decoded_frame(&sender, frame(50), 0, &stop_decode, &restart_decode);
+        let _ = sent_tx.send(end.unwrap());
+    }));
+    // Let the producer find the channel full and park.
+    std::thread::sleep(Duration::from_millis(20));
+    assert!(sent_rx.try_recv().is_err());
+
+    assert_eq!(decoder.poll_frame(25).unwrap().pts_us, 20);
+    // No further poll: the drain itself must have woken the producer.
+    assert_eq!(
+        sent_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+        ChannelDecodePassEnd::Eof,
+        "frame sent into the freed slot"
+    );
 }
 
 #[test]
@@ -425,6 +548,7 @@ fn poll_frame_updates_playback_target_for_clocked_decoder() {
         restart_decode: Arc::new(AtomicBool::new(false)),
         pass_finished: Arc::new(AtomicBool::new(false)),
         decode_thread: None,
+        retirement: None,
     };
 
     assert!(decoder.poll_frame(123_456).is_none());
@@ -450,6 +574,7 @@ fn clocked_poll_accepts_received_frame_without_pts_gate() {
         restart_decode: Arc::new(AtomicBool::new(false)),
         pass_finished: Arc::new(AtomicBool::new(false)),
         decode_thread: None,
+        retirement: None,
     };
     publish_clocked_frame(&frames, frame(50_000)).unwrap();
 

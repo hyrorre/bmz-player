@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(in crate::app) enum SelectListAction {
     Enter(String),
     Refresh,

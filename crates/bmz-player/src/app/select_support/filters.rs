@@ -208,6 +208,8 @@ pub(in crate::app) fn restored_select_index(
         .and_then(|key| match key {
             // Missing table entries acquire a ChartId after a download. Keep
             // ChartId for local duplicates, but bridge this transition by hash.
+            SelectItemKey::ChartSha256(hash) if matches!(items.get(previous_index), Some(SelectItem::Chart(row)) if row.score_sha256() == Some(*hash)) => Some(previous_index),
+            SelectItemKey::ChartMd5(hash) if matches!(items.get(previous_index), Some(SelectItem::Chart(row)) if row.score_md5() == Some(*hash)) => Some(previous_index),
             SelectItemKey::ChartSha256(hash) => items.iter().enumerate()
                 .filter(|(_, item)| matches!(item, SelectItem::Chart(row) if row.score_sha256() == Some(*hash)))
                 .min_by_key(|(index, _)| index.abs_diff(previous_index)).map(|(index, _)| index),

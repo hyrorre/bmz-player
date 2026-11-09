@@ -363,6 +363,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 // otherwise reload latency includes the frame limiter wait.
                 let drain_start = Instant::now();
                 let skin_drain_stats = self.drain_pending_skins();
+                self.poll_scene_skin_entries();
                 let drain_us = instant_elapsed_us_u64(drain_start);
                 let input_start = Instant::now();
                 self.sync_input_capture_target();
@@ -407,6 +408,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 self.poll_play_preload();
                 self.refresh_play_target_from_source();
                 self.poll_select_maintenance();
+                self.poll_select_list();
                 self.poll_select_ir_battle_replay();
                 self.poll_select_battle_preview();
                 let background_us = instant_elapsed_us_u64(background_start);

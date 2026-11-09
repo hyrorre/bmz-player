@@ -117,6 +117,10 @@ impl WinitApp {
         // background計算を始める。preloaded sessionをactiveへmoveする前に行う。
         self.poll_course_metrics();
 
+        if self.scene_skin_entry_loading() {
+            return;
+        }
+
         // 2) Play 入場が確定 (pending_play_start) しており、バッファに preload があれば install。
         if self
             .play

@@ -162,7 +162,8 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
         },
         judge: JudgeEngine::new(JudgeWindow::symmetric(
             16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000,
-        )),
+        ))
+        .with_chart_index(chart.clone()),
         base_judge_window: JudgeWindow::symmetric(
             16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000,
         ),
@@ -355,5 +356,7 @@ mod chart_miss_text;
 mod judgement_display_time;
 #[path = "tests/optional_play_behaviors.rs"]
 mod optional_play_behaviors;
+#[path = "tests/performance.rs"]
+mod performance;
 #[path = "tests/replay_speed.rs"]
 mod replay_speed;

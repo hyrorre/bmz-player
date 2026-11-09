@@ -300,6 +300,7 @@ mod select_folder_summary;
 mod select_ir_battle;
 mod select_ir_battle_preview;
 mod select_key_bindings;
+mod select_list_loader;
 mod select_lr2_skin_settings;
 #[path = "app/select_random_mix.rs"]
 mod select_random_mix;
@@ -307,6 +308,8 @@ mod select_same_folder;
 mod select_search;
 mod select_support;
 mod skin_catalog;
+#[path = "app/skin_flow/entry.rs"]
+mod skin_flow_entry;
 #[path = "app/skin_flow/profile.rs"]
 mod skin_flow_profile;
 #[path = "app/skin_flow/reload.rs"]
@@ -403,8 +406,9 @@ use skin_pipeline::{
 use skin_video::*;
 use skin_workers::*;
 use table_fetch_runtime::{
-    RianTableFetchOutcome, RianTableFetchWorkerResult, TableFetchProgress, TableFetchRuntime,
-    TableFetchWorkerEvent, startup_difficulty_table_fetch_urls_for_boot,
+    PendingTableStore, RianTableFetchOutcome, RianTableFetchWorkerResult, TableFetchProgress,
+    TableFetchRuntime, TableFetchWorkerEvent, TableStoreCompletion,
+    startup_difficulty_table_fetch_urls_for_boot,
 };
 
 #[cfg(test)]
