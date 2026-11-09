@@ -86,11 +86,11 @@ impl WinitApp {
     }
 
     pub(super) fn start_queued_song_scan_if_idle(&mut self) {
-        if self.jobs.song_scan.pending.is_some() {
+        if !self.select_maintenance_allowed() {
             return;
         }
-        if let Some((roots, force, label, scope)) = self.jobs.song_scan.queued.pop_front() {
-            self.spawn_song_scan_with_scope(roots, force, label, scope);
+        if let Some(request) = self.jobs.song_scan.take_ready(Instant::now()) {
+            self.start_song_scan(request);
         }
     }
 
