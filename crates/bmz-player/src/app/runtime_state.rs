@@ -399,6 +399,7 @@ pub(super) struct QueuedSongScan {
     pub(super) force: bool,
     pub(super) label: String,
     pub(super) scope: SongScanScope,
+    pub(super) start_failures: u8,
 }
 
 #[derive(Default)]
@@ -407,7 +408,7 @@ pub(super) struct SongScanRuntime {
     /// Select外の要求とworker起動待ちをFIFOで保持する。
     pub(super) queued: VecDeque<QueuedSongScan>,
     pub(super) progress: Option<ScanProgress>,
-    /// Cleared only after a worker starts, also marking a continuous startup failure.
+    /// Survives a request reaching its attempt limit; cleared only after a worker starts.
     pub(super) retry_at: Option<Instant>,
 }
 

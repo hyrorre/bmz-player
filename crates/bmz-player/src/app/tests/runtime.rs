@@ -18,6 +18,7 @@ fn download_scan_coalescing_tracks_running_and_queued_directories() {
         force: true,
         label: "other scan".into(),
         scope: SongScanScope::Paths,
+        start_failures: 0,
     });
     assert!(scans.has_download_scan_for(Path::new("other")));
     scans.queued.push_back(QueuedSongScan {
@@ -25,12 +26,14 @@ fn download_scan_coalescing_tracks_running_and_queued_directories() {
         force: true,
         label: "disabled scan".into(),
         scope: SongScanScope::Paths,
+        start_failures: 0,
     });
     scans.queued.push_back(QueuedSongScan {
         roots: vec![PathEntry { path: "shallow".into(), enabled: true, recursive: false }],
         force: true,
         label: "shallow scan".into(),
         scope: SongScanScope::Paths,
+        start_failures: 0,
     });
     assert!(!scans.has_download_scan_for(Path::new("disabled")));
     assert!(!scans.has_download_scan_for(Path::new("shallow")));
