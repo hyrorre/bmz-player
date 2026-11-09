@@ -1,25 +1,35 @@
 use super::*;
 
+const SONG_SCAN_START_RETRY_DELAY: Duration = Duration::from_secs(5);
+
+enum SongScanStart {
+    Started,
+    Deferred { error: anyhow::Error, notify: bool },
+}
+
 impl SongScanRuntime {
     fn start_worker(
         &mut self,
         pending: PendingSongScan,
-        downloads: &mut crate::song_download::ChartDownloadManager,
+        request: QueuedSongScan,
+        registrations: &mut Vec<(u64, crate::song_download::ChartDownloadResult)>,
+        now: Instant,
         spawn: impl FnOnce() -> std::io::Result<thread::JoinHandle<()>>,
-    ) -> Result<()> {
-        self.progress = Some(ScanProgress::default());
+    ) -> SongScanStart {
         if let Err(error) = spawn().context("failed to spawn song scan thread") {
-            // These registrations have already left the queue. Without a worker,
-            // finish them here so they do not remain stuck in Scanning.
-            let message = format!("{error:#}");
-            for id in &pending.download_ids {
-                downloads.finish_scan(*id, &[], Some(&message));
-            }
+            let notify = self.retry_at.is_none();
+            self.retry_at = Some(now + SONG_SCAN_START_RETRY_DELAY);
+            self.queued.push_front(request);
             self.progress = None;
-            return Err(error);
+            return SongScanStart::Deferred { error, notify };
         }
+        // Keep registrations available for retry (and late arrivals) until a worker owns them.
+        let ids: HashSet<_> = pending.download_ids.iter().copied().collect();
+        registrations.retain(|(id, _)| !ids.contains(id));
+        self.retry_at = None;
+        self.progress = Some(ScanProgress::default());
         self.pending = Some(pending);
-        Ok(())
+        SongScanStart::Started
     }
 }
 
@@ -74,20 +84,17 @@ impl WinitApp {
 
     pub(in crate::app) fn spawn_song_scan_with_scope(
         &mut self,
-        mut roots: Vec<PathEntry>,
+        roots: Vec<PathEntry>,
         force: bool,
         label: String,
         scope: SongScanScope,
     ) {
-        if !self.select_maintenance_allowed() || self.jobs.song_scan.pending.is_some() {
-            self.jobs.song_scan.queued.push_back((roots, force, label.clone(), scope));
-            tracing::debug!(
-                %label,
-                queued = self.jobs.song_scan.queued.len(),
-                "queued song scan until Select maintenance is available"
-            );
-            return;
-        }
+        self.jobs.song_scan.queued.push_back(QueuedSongScan { roots, force, label, scope });
+        self.start_queued_song_scan_if_idle();
+    }
+
+    pub(in crate::app) fn start_song_scan(&mut self, request: QueuedSongScan) {
+        let QueuedSongScan { mut roots, force, label, scope } = request.clone();
         let library_roots = if scope == SongScanScope::Library {
             // A full sync is authoritative only after the settings were saved.
             if let Err(error) =
@@ -110,17 +117,17 @@ impl WinitApp {
         let (tx, rx) = mpsc::channel();
         let progress = Arc::new(AtomicU64::new(pack_scan_progress(ScanProgress::default())));
         let worker_progress = Arc::clone(&progress);
-        let mut downloads = Vec::new();
-        self.jobs.download_registrations.retain(|(id, result)| {
-            if roots.iter().any(|root| {
-                root.enabled && root.recursive && Path::new(&root.path) == result.scan_path
-            }) {
-                downloads.push((*id, result.clone()));
-                false
-            } else {
-                true
-            }
-        });
+        let downloads: Vec<_> = self
+            .jobs
+            .download_registrations
+            .iter()
+            .filter(|(_, result)| {
+                roots.iter().any(|root| {
+                    root.enabled && root.recursive && Path::new(&root.path) == result.scan_path
+                })
+            })
+            .cloned()
+            .collect();
         let download_ids = downloads.iter().map(|(id, _)| *id).collect();
         let download_dirs = downloads.iter().map(|(_, result)| result.scan_path.clone()).collect();
         // Publish roots only after the FIFO admits this scan, never while an
@@ -132,8 +139,12 @@ impl WinitApp {
         }
         let pending =
             PendingSongScan { finished: rx, progress, library_roots, download_ids, download_dirs };
-        let started =
-            self.jobs.song_scan.start_worker(pending, &mut self.jobs.chart_downloads, || {
+        let started = self.jobs.song_scan.start_worker(
+            pending,
+            request,
+            &mut self.jobs.download_registrations,
+            Instant::now(),
+            || {
                 thread::Builder::new().name("song-scan".to_string()).spawn(move || {
                     let result = (|| -> Result<SongScanResult> {
                         migrate_library_db(&library_db_path)?;
@@ -160,12 +171,22 @@ impl WinitApp {
                     })();
                     let _ = tx.send(result);
                 })
-            });
-        if let Err(error) = started {
-            self.song_scan_error(&error);
-            return;
+            },
+        );
+        match started {
+            SongScanStart::Started => tracing::info!(%label, force, "started song scan"),
+            SongScanStart::Deferred { error, notify: true } => {
+                tracing::warn!(%error, "song scan startup deferred");
+                let mut args = FluentArgs::new();
+                args.set("seconds", SONG_SCAN_START_RETRY_DELAY.as_secs() as i64);
+                args.set("error", format!("{error:#}"));
+                self.show_left_overlay_toast(
+                    Localizer::new(self.boot.profile_config.ui.locale())
+                        .format("toast-library-scan-deferred", &args),
+                );
+            }
+            SongScanStart::Deferred { notify: false, .. } => {}
         }
-        tracing::info!(%label, force, "started song scan");
     }
 
     pub(in crate::app) fn poll_pending_song_scan(&mut self) {
@@ -317,15 +338,15 @@ impl WinitApp {
 mod tests {
     use super::*;
     use crate::song_download::{
-        ChartDownloadIdentity, ChartDownloadManager, ChartDownloadRequest, DownloadState,
-        MissingChartAction,
+        ChartDownloadIdentity, ChartDownloadManager, ChartDownloadRequest, ChartDownloadResult,
+        ChartDownloadSource, DownloadState, MissingChartAction,
     };
 
     fn submit(manager: &mut ChartDownloadManager, state: DownloadState) -> u64 {
         let request_id = manager.tasks().len() as u64;
         let (id, merged) = manager.submit(ChartDownloadRequest {
             request_id,
-            identity: ChartDownloadIdentity::default(),
+            identity: ChartDownloadIdentity { sha256: Some([request_id as u8; 32]), md5: None },
             title: format!("Chart {request_id}"),
             download_root: PathBuf::new(),
             keep_archive: true,
@@ -355,49 +376,69 @@ mod tests {
         Err(std::io::Error::new(std::io::ErrorKind::WouldBlock, "thread limit reached"))
     }
 
-    #[test]
-    fn spawn_failure_fails_downloads_and_allows_retry_and_next_scan() {
-        let mut downloads = ChartDownloadManager::default();
-        let ids = [
-            submit(&mut downloads, DownloadState::Scanning),
-            submit(&mut downloads, DownloadState::Scanning),
-        ];
-        let unrelated = submit(&mut downloads, DownloadState::Queued);
-        let mut scan = SongScanRuntime::default();
-        scan.queued.push_back((Vec::new(), true, "next scan".into(), SongScanScope::Paths));
+    fn request(label: &str, path: &Path) -> QueuedSongScan {
+        QueuedSongScan {
+            roots: vec![PathEntry {
+                path: path.to_string_lossy().into_owned(),
+                enabled: true,
+                recursive: true,
+            }],
+            force: true,
+            label: label.into(),
+            scope: SongScanScope::Paths,
+        }
+    }
 
-        let error =
-            scan.start_worker(pending(ids.to_vec()), &mut downloads, fail_to_spawn).unwrap_err();
+    fn registration(
+        manager: &ChartDownloadManager,
+        id: u64,
+        path: &Path,
+    ) -> (u64, ChartDownloadResult) {
+        (
+            id,
+            ChartDownloadResult {
+                archive_cache_key: None,
+                archive_sha256: None,
+                request_id: id,
+                identity: manager.task(id).unwrap().requests[0].identity.clone(),
+                source: ChartDownloadSource::Http,
+                root_dir: path.parent().unwrap().into(),
+                scan_path: path.into(),
+            },
+        )
+    }
+
+    fn assert_deferred(outcome: SongScanStart, should_notify: bool) {
+        let SongScanStart::Deferred { error, notify } = outcome else {
+            panic!("scan should be deferred");
+        };
+        assert_eq!(notify, should_notify);
         let message = format!("{error:#}");
         assert!(message.contains("failed to spawn song scan thread"));
         assert!(message.contains("thread limit reached"));
-        assert!(scan.pending.is_none());
-        assert!(scan.progress.is_none());
-        assert_eq!(scan.queued.len(), 1);
-        assert_eq!(scan.queued[0].2, "next scan");
-        assert_eq!(downloads.task(unrelated).unwrap().state(), DownloadState::Queued);
-        for id in ids {
-            let task = downloads.task(id).unwrap();
-            assert_eq!(task.state(), DownloadState::Failed);
-            assert_eq!(task.error.as_deref(), Some(message.as_str()));
-            assert!(task.finished_at.is_some());
-            // A spawn error is a registration error, not a missing-chart result.
-            assert!(!task.registration_missing);
-            downloads.retry(id);
-            assert_eq!(downloads.task(id).unwrap().state(), DownloadState::Queued);
-            assert!(downloads.task(id).unwrap().error.is_none());
-        }
+    }
 
+    fn start_successfully(
+        scan: &mut SongScanRuntime,
+        request: QueuedSongScan,
+        ids: Vec<u64>,
+        registrations: &mut Vec<(u64, ChartDownloadResult)>,
+        now: Instant,
+    ) {
         let (tx, rx) = mpsc::channel();
-        let next = PendingSongScan { finished: rx, ..pending(Vec::new()) };
-        scan.start_worker(next, &mut downloads, || {
-            thread::Builder::new().spawn(move || {
-                tx.send(Ok(SongScanResult { report: ScanReport::default(), downloaded: vec![] }))
+        let pending = PendingSongScan { finished: rx, ..pending(ids) };
+        assert!(matches!(
+            scan.start_worker(pending, request, registrations, now, || {
+                thread::Builder::new().spawn(move || {
+                    tx.send(Ok(SongScanResult {
+                        report: ScanReport::default(),
+                        downloaded: vec![],
+                    }))
                     .unwrap();
-            })
-        })
-        .unwrap();
-        assert!(scan.progress.is_some());
+                })
+            }),
+            SongScanStart::Started
+        ));
         scan.pending
             .as_ref()
             .unwrap()
@@ -405,16 +446,132 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .unwrap()
             .unwrap();
+        assert!(scan.progress.is_some());
+        assert!(scan.retry_at.is_none());
     }
 
     #[test]
-    fn spawn_failure_without_downloads_clears_scan_progress() {
-        let mut scan = SongScanRuntime::default();
+    fn spawn_failure_preserves_downloads_until_scanning_can_resume() {
+        let root = tempfile::tempdir().unwrap();
+        let saved = root.path().join("saved.zip");
+        let other_path = root.path().join("other.zip");
+        std::fs::write(&saved, b"saved archive bytes").unwrap();
         let mut downloads = ChartDownloadManager::default();
-        let scan_request = PendingSongScan { library_roots: Some(Vec::new()), ..pending(vec![]) };
-        assert!(scan.start_worker(scan_request, &mut downloads, fail_to_spawn).is_err());
+        let mut ids = vec![
+            submit(&mut downloads, DownloadState::Scanning),
+            submit(&mut downloads, DownloadState::Scanning),
+        ];
+        let unrelated = submit(&mut downloads, DownloadState::Scanning);
+        let mut registrations: Vec<_> =
+            ids.iter().map(|id| registration(&downloads, *id, &saved)).collect();
+        registrations.push(registration(&downloads, unrelated, &other_path));
+        let mut scan = SongScanRuntime::default();
+        scan.queued.push_back(request("first", &saved));
+        scan.queued.push_back(request("second", &other_path));
+        let now = Instant::now();
+        let first = scan.take_ready(now).unwrap();
+
+        assert_deferred(
+            scan.start_worker(pending(ids.clone()), first, &mut registrations, now, fail_to_spawn),
+            true,
+        );
         assert!(scan.pending.is_none());
         assert!(scan.progress.is_none());
-        assert!(downloads.tasks().is_empty());
+        assert_eq!(registrations.len(), 3);
+        assert!(scan.has_download_scan_for(&saved));
+        assert!(scan.has_download_scan_for(&other_path));
+        for id in ids.iter().chain([&unrelated]) {
+            let task = downloads.task(*id).unwrap();
+            assert_eq!(task.state(), DownloadState::Scanning);
+            assert!(task.error.is_none());
+            assert!(task.finished_at.is_none());
+            assert!(!task.registration_missing);
+        }
+
+        // New requests join the same FIFO; another chart in the saved archive can join its scan.
+        scan.queued.push_back(request("third", &root.path().join("third.zip")));
+        let late = submit(&mut downloads, DownloadState::Scanning);
+        ids.push(late);
+        registrations.push(registration(&downloads, late, &saved));
+        for millis in [0, 16, 100, 1_000, 4_999] {
+            assert!(scan.take_ready(now + Duration::from_millis(millis)).is_none());
+            assert_eq!(
+                scan.queued.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(),
+                ["first", "second", "third"]
+            );
+            assert_eq!(registrations.len(), 4);
+        }
+
+        let ready_at = now + SONG_SCAN_START_RETRY_DELAY;
+        let first = scan.take_ready(ready_at).unwrap();
+        assert_eq!(first.label, "first");
+        start_successfully(&mut scan, first, ids.clone(), &mut registrations, ready_at);
+        assert_eq!(scan.pending.as_ref().unwrap().download_ids, ids);
+        assert_eq!(registrations.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [unrelated]);
+        assert!(scan.take_ready(ready_at + Duration::from_secs(10)).is_none());
+        for id in ids {
+            let identity = downloads.task(id).unwrap().requests[0].identity.clone();
+            downloads.finish_scan(id, &[identity], None);
+            assert_eq!(downloads.task(id).unwrap().state(), DownloadState::Completed);
+        }
+        assert_eq!(downloads.task(unrelated).unwrap().state(), DownloadState::Scanning);
+        assert_eq!(std::fs::read(&saved).unwrap(), b"saved archive bytes");
+        // Applying a worker result releases the next queued scan, without another delay.
+        scan.pending = None;
+        scan.progress = None;
+        assert_eq!(scan.take_ready(ready_at).unwrap().label, "second");
+        assert_eq!(scan.take_ready(ready_at).unwrap().label, "third");
+        assert!(scan.take_ready(ready_at).is_none());
+    }
+
+    #[test]
+    fn repeated_spawn_failures_hold_library_scan_and_notify_once_until_recovery() {
+        let mut scan = SongScanRuntime::default();
+        let mut registrations = Vec::new();
+        scan.queued.push_back(QueuedSongScan {
+            scope: SongScanScope::Library,
+            ..request("library", Path::new("library"))
+        });
+        scan.queued.push_back(request("next", Path::new("next")));
+        let now = Instant::now();
+        for attempt in 0..3 {
+            let at = now + SONG_SCAN_START_RETRY_DELAY * attempt;
+            let request = scan.take_ready(at).unwrap();
+            assert_eq!(request.label, "library");
+            assert_eq!(request.scope, SongScanScope::Library);
+            assert!(request.force);
+            assert_eq!(request.roots[0].path, "library");
+            let pending = PendingSongScan { library_roots: Some(Vec::new()), ..pending(vec![]) };
+            assert_deferred(
+                scan.start_worker(pending, request, &mut registrations, at, fail_to_spawn),
+                attempt == 0,
+            );
+            assert!(scan.pending.is_none());
+            assert!(scan.progress.is_none());
+            assert!(
+                scan.take_ready(at + SONG_SCAN_START_RETRY_DELAY - Duration::from_nanos(1))
+                    .is_none()
+            );
+            assert_eq!(scan.queued.len(), 2);
+            assert!(registrations.is_empty());
+        }
+        let recovered_at = now + SONG_SCAN_START_RETRY_DELAY * 3;
+        let request = scan.take_ready(recovered_at).unwrap();
+        start_successfully(&mut scan, request, vec![], &mut registrations, recovered_at);
+        scan.pending = None;
+        scan.progress = None;
+        let next = scan.take_ready(recovered_at).unwrap();
+        assert_eq!(next.label, "next");
+        // A new failure after recovery starts a new notification period.
+        assert_deferred(
+            scan.start_worker(
+                pending(vec![]),
+                next,
+                &mut registrations,
+                recovered_at,
+                fail_to_spawn,
+            ),
+            true,
+        );
     }
 }

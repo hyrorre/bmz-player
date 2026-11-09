@@ -393,21 +393,39 @@ pub(super) struct UiRuntimeState {
     pub(super) cursor_visible: bool,
 }
 
+#[derive(Clone)]
+pub(super) struct QueuedSongScan {
+    pub(super) roots: Vec<PathEntry>,
+    pub(super) force: bool,
+    pub(super) label: String,
+    pub(super) scope: SongScanScope,
+}
+
 #[derive(Default)]
 pub(super) struct SongScanRuntime {
     pub(super) pending: Option<PendingSongScan>,
-    /// Select外で要求されたscanを、次のSelectまでFIFOで保持する。
-    pub(super) queued: VecDeque<(Vec<PathEntry>, bool, String, SongScanScope)>,
+    /// Select外の要求とworker起動待ちをFIFOで保持する。
+    pub(super) queued: VecDeque<QueuedSongScan>,
     pub(super) progress: Option<ScanProgress>,
+    /// Cleared only after a worker starts, also marking a continuous startup failure.
+    pub(super) retry_at: Option<Instant>,
 }
 
 impl SongScanRuntime {
+    pub(super) fn take_ready(&mut self, now: Instant) -> Option<QueuedSongScan> {
+        if self.pending.is_some() || self.retry_at.is_some_and(|at| now < at) {
+            return None;
+        }
+        self.queued.pop_front()
+    }
+
     pub(super) fn has_download_scan_for(&self, dir: &Path) -> bool {
         self.pending
             .as_ref()
             .is_some_and(|pending| pending.download_dirs.iter().any(|path| path == dir))
-            || self.queued.iter().any(|(roots, _, _, _)| {
-                roots
+            || self.queued.iter().any(|request| {
+                request
+                    .roots
                     .iter()
                     .any(|root| root.enabled && root.recursive && Path::new(&root.path) == dir)
             })
