@@ -30,6 +30,7 @@ pub(super) struct SelectRuntimeState {
     /// 選曲リストをブラウズしながら課題曲を積む LR2-style course creation state。
     pub(super) course_builder: Option<SelectCourseBuilderState>,
     pub(super) select_items: Vec<SelectItem>,
+    pub(super) list_loader: Box<super::select_list_loader::SelectListLoader>,
     pub(super) collection_cache: crate::screens::select_model::SelectCollectionCache,
     pub(super) virtual_folders: Result<crate::screens::select_model::VirtualFolderCatalog, String>,
     pub(super) replay_slot_cache: RefCell<Option<(crate::storage::score_db::ScoreKey, [bool; 4])>>,

@@ -76,9 +76,55 @@ fmt、対象crateのcheck、all-targets Clippyを確認。通常権限の全テ�
 途中のWindows linker失敗は実行中テストexeへの上書き競合で、終了後の単独実行で通過。
 実ウィンドウの手動操作・実機音声・コントローラは未確認。
 
+## 3. 難易度表保存・選曲DBアクセス
+
+ネットワークを使わず、一時DBへ未所持譜面だけの合成表を保存する。
+各サイズで1回warm-up後、同じ表の置換とレベル一覧生成を5回測定した。
+
+```powershell
+cargo test -p bmz-player --release --lib profile_table_database_work --locked -- --ignored --nocapture
+cargo test -p bmz-player --release --lib profile_table_store_dispatch --locked -- --ignored --nocapture
+cargo test -p bmz-player --release --lib profile_select_list_dispatch_and_install --locked -- --ignored --nocapture
+```
+
+| 件数 | 修正前保存 中央値 / 最大 | 修正前一覧生成 中央値 / 最大 |
+|---|---:|---:|
+| 1,000 | 5.528 / 5.626 ms | 2.586 / 2.667 ms |
+| 10,000 | 57.442 / 65.306 ms | 24.087 / 24.489 ms |
+| 50,000 | 313.810 / 390.958 ms | 119.386 / 138.545 ms |
+
+表保存は同時1件のworkerへ移し、INSERT文を行ごとにprepareし直さないようにする。
+Select外では新しい保存を開始せず、既に開始したtransactionはworkerで完了させる。
+旧アカウントの削除は保存完了後に直列化する。ダウンロード結果の待機channelは2件に制限する。
+
+一覧準備は別のread-only接続で行う。1 worker・最新1要求に集約し、画面遷移や
+プロフィール変更で旧世代を無効化する。refreshがフォルダ移動要求を取り消さないようにし、
+選曲カーソル・検索成功履歴・空フォルダ・失敗時の扱いを維持する。
+
+失敗した同一フォルダ情報・クリア履歴の問い合わせは1秒待って再試行する。
+INSERT文再利用後の保存中央値は、1,000 / 10,000 / 50,000件で
+2.545 / 30.285 / 164.927ms。workerへの保存要求は0.027 / 0.034 / 0.036ms。
+一覧生成そのものは約116ms（50,000件）残るが、window threadから外れる。
+
+| 件数 | 一覧要求 中央値 / 最大 | 完了一覧適用 中央値 / 最大 |
+|---|---:|---:|
+| 1,000 | 0.012 / 0.020 ms | 0.101 / 0.138 ms |
+| 10,000 | 0.013 / 0.028 ms | 0.088 / 0.125 ms |
+| 50,000 | 0.014 / 0.017 ms | 0.120 / 0.127 ms |
+
+適用時の古い一覧破棄も同じ1-worker枠へ移し、選択位置が同じ場合の全件hash検索を省いた。
+破棄中に次の要求を受けた場合、query開始は次のpollになる。上表の要求時間にはその
+後続pollのthread作成は含まない。単一回の5試行比較で、実ライブラリ・NAS・全体FPSは対象外。
+同一フォルダ・クリア履歴・replay slotの初回問い合わせは依然同期である。
+
+fmt、対象crateのcheck、all-targets Clippyを確認。通常権限の全テストは
+2992 passed / 65 ignored / 0 failed（別途startup_stackは2 ignored）。
+追加回帰は要求集約、世代破棄、worker失敗、保存完了通知とcommit順、失敗cache期限。
+releaseの一覧プローブでは読み込み中のカーソル移動、空フォルダ、旧アカウントの
+保存完了後の削除も確認した。実ウィンドウ操作は未確認。
+
 ## 続く確認対象
 
-3. 難易度表保存・選曲DBアクセス。
 4. SCROLLの可視候補抽出。
 5. 描画用判定状態の公開。
 6. 判定候補・キー音ID・HCNの探索。

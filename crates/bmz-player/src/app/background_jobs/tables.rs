@@ -80,6 +80,13 @@ impl WinitApp {
         let Some(identity) = self.jobs.table_fetch.rian_identity.clone() else {
             return;
         };
+        if RianTableIdentity::from_ir_config(&self.boot.profile_config.ir).as_ref()
+            != Some(&identity)
+        {
+            self.jobs.table_fetch.rian_refresh_queued = true;
+            self.jobs.table_fetch.rian_refresh_manual |= manual;
+            return;
+        }
         if self.jobs.table_fetch.pending_rian.is_some() {
             tracing::debug!("rianIR table fetch already in progress");
             return;
@@ -147,6 +154,9 @@ impl WinitApp {
     }
 
     pub(in crate::app) fn poll_pending_rian_table_fetch(&mut self) {
+        if self.jobs.table_fetch.pending_store.is_some() {
+            return;
+        }
         let Some(rx) = self.jobs.table_fetch.pending_rian.take() else {
             return;
         };
@@ -179,29 +189,12 @@ impl WinitApp {
         let provider_name = result.identity.display_name();
         match result.result {
             RianTableFetchOutcome::Completed(Ok(tables)) => {
-                match crate::ir::table::store_account_tables(
-                    &mut self.boot.library_db,
-                    &result.identity,
-                    &tables,
-                ) {
-                    Ok((table_count, entry_count)) => {
-                        tracing::info!(
-                            tables = table_count,
-                            entries = entry_count,
-                            "rianIR table fetch complete"
-                        );
-                        self.refresh_difficulty_tables_and_select();
-                        self.show_left_overlay_toast(format!(
-                            "{provider_name} TABLE: {table_count} tables, {entry_count} entries"
-                        ));
-                    }
-                    Err(error) => {
-                        tracing::error!(%error, "failed to store rianIR tables");
-                        self.show_left_overlay_toast(format!(
-                            "{provider_name} TABLE: cache update failed"
-                        ));
-                    }
-                }
+                self.jobs.table_fetch.pending_store = Some(PendingTableStore::account(
+                    self.boot.app_paths.library_db.clone(),
+                    result.generation,
+                    result.identity,
+                    tables,
+                ));
             }
             RianTableFetchOutcome::Completed(Err(error)) => {
                 // stale-while-revalidate: 既存キャッシュは消さず、そのまま選曲に残す。
@@ -252,6 +245,12 @@ impl WinitApp {
         if next == self.jobs.table_fetch.rian_identity {
             return;
         }
+        // Serialize old-account removal after an already admitted commit. In
+        // particular, switching profiles must not let an old worker recreate
+        // its rows after cleanup. The UI never waits for the worker here.
+        if self.jobs.table_fetch.pending_store.is_some() {
+            return;
+        }
         if !self.select_maintenance_allowed() {
             self.jobs.table_fetch.rian_refresh_queued = true;
             return;
@@ -267,23 +266,12 @@ impl WinitApp {
         self.jobs.table_fetch.rian_refresh_manual = false;
 
         if let Some(previous) = &previous {
-            match self
-                .boot
-                .library_db
-                .delete_difficulty_tables_by_source_prefix(previous.source_prefix())
-            {
-                Ok(removed) => tracing::info!(
-                    removed,
-                    "removed rianIR account table cache after identity change"
-                ),
-                Err(error) => tracing::warn!(%error, "failed to remove old rianIR table cache"),
-            }
-            if let Err(error) =
-                self.boot.library_db.delete_table_courses_by_source_prefix(previous.source_prefix())
-            {
-                tracing::warn!(%error, "failed to remove old rianIR course cache");
-            }
+            self.jobs.table_fetch.pending_store = Some(PendingTableStore::cleanup(
+                self.boot.app_paths.library_db.clone(),
+                previous.clone(),
+            ));
             if self.select.folder_stack.iter().any(|path| path.contains(previous.source_prefix())) {
+                self.select.list_loader.cancel();
                 self.select.folder_stack.clear();
                 self.select.selected_index_stack.clear();
                 self.select.selected_index = 0;
@@ -322,7 +310,8 @@ impl WinitApp {
             );
             return;
         }
-        let (tx, rx) = mpsc::channel();
+        // A slow disk must not accumulate every downloaded table in RAM.
+        let (tx, rx) = mpsc::sync_channel(2);
         let fetch_urls = urls.clone();
         let progress_tx = tx.clone();
         let event_proxy = self.event_proxy.clone();
@@ -360,57 +349,30 @@ impl WinitApp {
     }
 
     pub(in crate::app) fn poll_pending_table_fetch(&mut self) {
+        if self.jobs.table_fetch.pending_store.is_some() {
+            return;
+        }
         let Some(rx) = self.jobs.table_fetch.pending.take() else {
             return;
         };
         let mut keep_pending = true;
-        loop {
+        for _ in 0..16 {
             match rx.try_recv() {
                 Ok(TableFetchWorkerEvent::Downloaded(downloaded)) => {
                     let outcome = match downloaded {
                         crate::table_cmd::TableFetchDownloadOutcome::Succeeded(table) => {
-                            match crate::table_cmd::store_fetched_table(
-                                &mut self.boot.library_db,
-                                &table,
-                            ) {
-                                Ok(success) => TableFetchOutcome::Succeeded(success),
-                                Err(error) => {
-                                    TableFetchOutcome::Failed(crate::table_cmd::TableFetchFailure {
-                                        url: table.source_url,
-                                        error: format!(
-                                            "failed to store difficulty table: {error:#}"
-                                        ),
-                                    })
-                                }
-                            }
+                            self.jobs.table_fetch.pending_store =
+                                Some(PendingTableStore::ordinary(
+                                    self.boot.app_paths.library_db.clone(),
+                                    table,
+                                ));
+                            break;
                         }
                         crate::table_cmd::TableFetchDownloadOutcome::Failed(failure) => {
                             TableFetchOutcome::Failed(failure)
                         }
                     };
-                    if let Some(progress) = &mut self.jobs.table_fetch.progress {
-                        progress.completed =
-                            progress.completed.saturating_add(1).min(progress.total);
-                        match &outcome {
-                            TableFetchOutcome::Succeeded(_) => progress.succeeded += 1,
-                            TableFetchOutcome::Failed(_) => progress.failed += 1,
-                        }
-                        progress.outcomes.push(outcome.clone());
-                    }
-                    match &outcome {
-                        TableFetchOutcome::Succeeded(success) => tracing::info!(
-                            url = %success.url,
-                            name = %success.name,
-                            entries = success.entries,
-                            courses = success.courses,
-                            "difficulty table fetched"
-                        ),
-                        TableFetchOutcome::Failed(failure) => tracing::warn!(
-                            url = %failure.url,
-                            error = %failure.error,
-                            "failed to fetch difficulty table"
-                        ),
-                    }
+                    self.record_table_fetch_outcome(outcome);
                 }
                 Ok(TableFetchWorkerEvent::Finished(Ok(batch))) => {
                     keep_pending = false;
@@ -478,6 +440,70 @@ impl WinitApp {
         }
         let queued = std::mem::take(&mut self.jobs.table_fetch.queued_urls);
         self.spawn_table_fetches(queued, "queued table fetch".to_string());
+    }
+
+    pub(in crate::app) fn poll_pending_table_store(&mut self) {
+        let Some(pending) = self.jobs.table_fetch.pending_store.take() else {
+            return;
+        };
+        let Some(completed) = pending.poll() else {
+            self.jobs.table_fetch.pending_store = Some(pending);
+            return;
+        };
+        match completed {
+            TableStoreCompletion::Ordinary(outcome) => self.record_table_fetch_outcome(outcome),
+            TableStoreCompletion::Account { generation, identity, result } => {
+                if generation != self.jobs.table_fetch.rian_generation
+                    || RianTableIdentity::from_ir_config(&self.boot.profile_config.ir).as_ref()
+                        != Some(&identity)
+                {
+                    // Reconciliation removes the old account on the next frame,
+                    // after this worker has finished writing.
+                    return;
+                }
+                let provider_name = identity.display_name();
+                match result {
+                    Ok((table_count, entry_count)) => {
+                        self.refresh_difficulty_tables_and_select();
+                        self.show_left_overlay_toast(format!(
+                            "{provider_name} TABLE: {table_count} tables, {entry_count} entries"
+                        ));
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "failed to store account tables");
+                        self.show_left_overlay_toast(format!(
+                            "{provider_name} TABLE: cache update failed"
+                        ));
+                    }
+                }
+            }
+            TableStoreCompletion::Cleanup(result) => {
+                if let Err(error) = result {
+                    tracing::warn!(%error, "failed to remove old account table cache");
+                }
+                self.refresh_difficulty_tables_and_select();
+            }
+        }
+    }
+
+    fn record_table_fetch_outcome(&mut self, outcome: TableFetchOutcome) {
+        if let Some(progress) = &mut self.jobs.table_fetch.progress {
+            progress.completed = progress.completed.saturating_add(1).min(progress.total);
+            match &outcome {
+                TableFetchOutcome::Succeeded(_) => progress.succeeded += 1,
+                TableFetchOutcome::Failed(_) => progress.failed += 1,
+            }
+            progress.outcomes.push(outcome.clone());
+        }
+        match &outcome {
+            TableFetchOutcome::Succeeded(success) => tracing::info!(
+                url = %success.url, name = %success.name, entries = success.entries,
+                courses = success.courses, "difficulty table fetched"
+            ),
+            TableFetchOutcome::Failed(failure) => tracing::warn!(
+                url = %failure.url, error = %failure.error, "failed to fetch difficulty table"
+            ),
+        }
     }
 
     pub(in crate::app) fn finish_table_fetch(&mut self, report: TableFetchReport) {

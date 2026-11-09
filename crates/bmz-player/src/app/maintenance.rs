@@ -59,8 +59,11 @@ impl WinitApp {
         // cache世代を切り替える。
         self.reconcile_rian_table_identity();
 
+        self.poll_pending_table_store();
+
         // 完了済み結果を先に反映する。channelはSelect外ではpollしないため、
-        // workerがPlay中に完了してもDB保存・select model再構築はここまで遅延される。
+        // workerがPlay中に完了しても新しい保存・一覧要求はここまで遅延される。
+        // 既にSelect中に開始したtransactionはworker上で完了する。
         self.poll_pending_table_fetch();
         self.poll_pending_rian_table_fetch();
         self.poll_pending_chart_download();

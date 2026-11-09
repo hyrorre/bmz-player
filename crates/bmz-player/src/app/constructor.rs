@@ -64,7 +64,7 @@ impl WinitApp {
         } else {
             load_items_for_stack(
                 SelectListContext {
-                    boot: &boot,
+                    boot: (&boot).into(),
                     collections: &mut collection_cache,
                     virtual_folders: &virtual_folders,
                 },
@@ -298,6 +298,7 @@ impl WinitApp {
             viewer_paused_play_elapsed: None,
             skip_result: options.skip_result,
             select: SelectRuntimeState {
+                list_loader: Default::default(),
                 autoplay_folder: None,
                 select_ir: crate::screens::select_ir::SelectIrRanking::default(),
                 ir_battle: crate::app::select_ir_battle::SelectIrBattleRuntime::default(),

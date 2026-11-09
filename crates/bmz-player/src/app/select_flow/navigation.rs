@@ -655,12 +655,7 @@ impl WinitApp {
     }
 
     fn enter_select_folder(&mut self, path: String) -> bool {
-        if !self.change_select_list(SelectListAction::Enter(path)) {
-            return false;
-        }
-        self.play_system_sound(crate::system_sound::SoundType::FolderOpen);
-        tracing::info!(folder = ?self.select.folder_stack.last(), "entered folder");
-        true
+        self.change_select_list(SelectListAction::Enter(path))
     }
 
     pub(super) fn acquire_missing_chart(&mut self, row: &SelectChartRow) {
@@ -1035,11 +1030,7 @@ impl WinitApp {
         if query.is_empty() {
             return;
         }
-        if !self.enter_select_folder(format!("{SEARCH_PATH_PREFIX}{query}")) {
-            return;
-        }
-        self.select.search.record_successful_query(query.clone());
-        tracing::info!(%query, "entered search result folder");
+        self.enter_select_folder(format!("{SEARCH_PATH_PREFIX}{query}"));
     }
 
     pub(super) fn exit_folder(&mut self) {
@@ -1050,10 +1041,7 @@ impl WinitApp {
             self.cancel_settings_edit();
         }
         if !self.select.folder_stack.is_empty() {
-            if self.change_select_list(SelectListAction::Exit) {
-                self.play_system_sound(crate::system_sound::SoundType::FolderClose);
-                tracing::info!(depth = self.select.folder_stack.len(), "exited folder");
-            }
+            self.change_select_list(SelectListAction::Exit);
         } else if self.select.course_builder.is_some() {
             self.cancel_select_course_builder();
         }

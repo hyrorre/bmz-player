@@ -408,6 +408,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 self.poll_play_preload();
                 self.refresh_play_target_from_source();
                 self.poll_select_maintenance();
+                self.poll_select_list();
                 self.poll_select_ir_battle_replay();
                 self.poll_select_battle_preview();
                 let background_us = instant_elapsed_us_u64(background_start);

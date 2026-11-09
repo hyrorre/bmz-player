@@ -88,26 +88,26 @@ pub(super) fn upsert_difficulty_table_in_transaction(
 
     conn.execute("DELETE FROM difficulty_table_entries WHERE table_id = ?1", params![table_id])?;
 
-    for entry in &table.entries {
-        conn.execute(
-            "INSERT INTO difficulty_table_entries
+    let mut insert = conn.prepare(
+        "INSERT INTO difficulty_table_entries
              (table_id, level, md5, sha256, title, artist, comment,
               url, append_url, ipfs, append_ipfs)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![
-                table_id,
-                entry.level,
-                entry.md5,
-                entry.sha256,
-                entry.title,
-                entry.artist,
-                entry.comment,
-                entry.url,
-                entry.append_url,
-                entry.ipfs,
-                entry.append_ipfs,
-            ],
-        )?;
+    )?;
+    for entry in &table.entries {
+        insert.execute(params![
+            table_id,
+            entry.level,
+            entry.md5,
+            entry.sha256,
+            entry.title,
+            entry.artist,
+            entry.comment,
+            entry.url,
+            entry.append_url,
+            entry.ipfs,
+            entry.append_ipfs,
+        ])?;
     }
 
     Ok(table_id)
