@@ -2,6 +2,7 @@ use super::*;
 
 impl ScoreDatabase {
     pub fn replay_slots_for_charts(&self, keys: &[ScoreKey]) -> Result<Vec<ReplaySlotSummary>> {
+        self.initialize_ln_compatibility(None)?;
         let mut seen = HashSet::with_capacity(keys.len());
         let unique_keys = keys.iter().copied().filter(|key| seen.insert(*key)).collect::<Vec<_>>();
         let mut found: HashMap<ScoreKey, [bool; 4]> = HashMap::with_capacity(unique_keys.len());
@@ -11,7 +12,7 @@ impl ScoreDatabase {
                 std::iter::repeat_n("(?, ?, ?, ?)", chunk.len()).collect::<Vec<_>>().join(", ");
             let sql = format!(
                 "SELECT chart_sha256, ln_policy, double_option, rule_mode, slot
-                 FROM replay_slots
+                 FROM replay_slots_compatible
                  WHERE (chart_sha256, ln_policy, double_option, rule_mode)
                     IN ({placeholders})"
             );
@@ -51,12 +52,14 @@ impl ScoreDatabase {
     }
 
     pub fn replay_slot(&self, key: ScoreKey, slot: u8) -> Result<Option<ReplaySlotRecord>> {
+        self.initialize_ln_compatibility(None)?;
         self.conn
             .query_row(
-                "SELECT chart_sha256, ln_policy, double_option, rule_mode, slot, rule, replay_path, played_at, ex_score, bp, cb, max_combo, clear_rank, source_kind, source_path, source_fingerprint
-                 FROM replay_slots
+                "SELECT chart_sha256, stored_ln_policy, double_option, rule_mode, slot, rule, replay_path, played_at, ex_score, bp, cb, max_combo, clear_rank, source_kind, source_path, source_fingerprint
+                 FROM replay_slots_compatible
                  WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3
-                   AND rule_mode = ?4 AND slot = ?5",
+                   AND rule_mode = ?4 AND slot = ?5
+                 ORDER BY stored_ln_policy = ln_policy DESC LIMIT 1",
                 params![
                     hash_to_hex(&key.chart_sha256),
                     key.ln_policy.as_str(),
@@ -71,11 +74,12 @@ impl ScoreDatabase {
     }
 
     pub fn replay_slots_for_chart(&self, key: ScoreKey) -> Result<[Option<ReplaySlotRecord>; 4]> {
+        self.initialize_ln_compatibility(None)?;
         let mut stmt = self.conn.prepare(
-            "SELECT chart_sha256, ln_policy, double_option, rule_mode, slot, rule, replay_path, played_at, ex_score, bp, cb, max_combo, clear_rank, source_kind, source_path, source_fingerprint
-             FROM replay_slots
+            "SELECT chart_sha256, stored_ln_policy, double_option, rule_mode, slot, rule, replay_path, played_at, ex_score, bp, cb, max_combo, clear_rank, source_kind, source_path, source_fingerprint
+             FROM replay_slots_compatible
              WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3
-               AND rule_mode = ?4",
+               AND rule_mode = ?4 ORDER BY stored_ln_policy = ln_policy ASC",
         )?;
         let rows = stmt
             .query_map(

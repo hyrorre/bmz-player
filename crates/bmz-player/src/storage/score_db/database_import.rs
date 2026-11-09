@@ -32,19 +32,25 @@ impl ScoreDatabase {
     }
 
     pub fn open_read_only(path: &Path) -> Result<Self> {
-        Ok(Self {
+        let db = Self {
             conn: Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?,
-        })
+        };
+        db.initialize_ln_compatibility(Some(path))?;
+        Ok(db)
     }
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
         configure_connection(&conn)?;
-        Ok(Self { conn })
+        let db = Self { conn };
+        db.initialize_ln_compatibility(Some(path))?;
+        Ok(db)
     }
 
     #[cfg(test)]
     pub(crate) fn from_connection(conn: Connection) -> Self {
-        Self { conn }
+        let db = Self { conn };
+        db.initialize_ln_compatibility(None).unwrap();
+        db
     }
 
     pub fn conn(&self) -> &Connection {
@@ -78,6 +84,7 @@ impl ScoreDatabase {
         mode: ScoreInsertMode,
         aggregate: bool,
     ) -> Result<i64> {
+        self.initialize_ln_compatibility(None)?;
         if aggregate {
             ensure_beatoraja_aggregate_source(record)?;
         }
@@ -110,6 +117,7 @@ impl ScoreDatabase {
     /// score history と数値ベストは更新せず、曲別のプレイ回数・クリア回数・
     /// クリアランプ、および profile 全体のプレイヤー統計を更新する。
     pub fn update_score_clear_only(&mut self, record: &ScoreRecord) -> Result<()> {
+        self.initialize_ln_compatibility(None)?;
         let tx = self.conn.transaction()?;
         upsert_score_best_clear_only(&tx, record)?;
         if !record.autoplay && record.played_at > 0 {
@@ -138,6 +146,7 @@ impl ScoreDatabase {
     /// LR2 does not retain a per-score timestamp, and re-importing a source
     /// database must not create duplicates merely because the import time changed.
     pub fn has_same_score_from_source(&self, record: &ScoreRecord) -> Result<bool> {
+        self.initialize_ln_compatibility(None)?;
         Ok(source_score_history_match(&self.conn, record)?
             .is_some_and(|existing| existing.device_type == record.device_type))
     }
@@ -170,6 +179,7 @@ impl ScoreDatabase {
         record: &ScoreRecord,
         aggregate: bool,
     ) -> Result<ImportedScoreReconciliation> {
+        self.initialize_ln_compatibility(None)?;
         if record.source_kind == ScoreSourceKind::Local {
             return Ok(ImportedScoreReconciliation::Missing);
         }
@@ -222,12 +232,13 @@ impl ScoreDatabase {
             // source DB reports a worse value or no value at all.
             tx.execute(
                 "UPDATE score_best SET bp = MIN(bp, ?1)
-                 WHERE chart_sha256 = ?2 AND ln_policy = ?3
+                 WHERE chart_sha256 = ?2 AND ln_policy = (
+                    SELECT ln_policy FROM score_history WHERE id = ?3)
                    AND double_option = ?4 AND rule_mode = ?5",
                 params![
                     source_min_bp,
                     hash_to_hex(&record.chart_sha256),
-                    record.ln_policy.as_str(),
+                    existing.history_id,
                     record.double_option.as_str(),
                     record_rule_mode(record).as_str(),
                 ],
@@ -374,6 +385,7 @@ impl ScoreDatabase {
         record: &ScoreRecord,
         source: &ScoreHistorySourceRecord,
     ) -> Result<ScoreSourceInsertOutcome> {
+        self.initialize_ln_compatibility(None)?;
         if let Some(history_id) = self.score_history_id_for_source(&source.key)? {
             return Ok(ScoreSourceInsertOutcome::Duplicate { history_id });
         }

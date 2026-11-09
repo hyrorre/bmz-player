@@ -66,7 +66,10 @@ score policyはprofile policyとchart LN profileから決めます。
 | defined CNのみ | `ForceCn` | `ForceCn` | `ForceCn` | `ForceLn` | `ForceCn` | `ForceHcn` |
 | defined HCNのみ | `ForceHcn` | `ForceHcn` | `ForceHcn` | `ForceLn` | `ForceCn` | `ForceHcn` |
 | defined LN/CN/HCN混在 | `AutoLn` | `AutoLn` | `AutoLn` | `ForceLn` | `ForceCn` | `ForceHcn` |
-| undefined + defined混在 | `AutoLn` | `AutoCn` | `AutoHcn` | `ForceLn` | `ForceCn` | `ForceHcn` |
+| undefined + defined LNのみ | `ForceLn` | `AutoCn` | `AutoHcn` | `ForceLn` | `ForceCn` | `ForceHcn` |
+| undefined + defined CNのみ | `AutoLn` | `ForceCn` | `AutoHcn` | `ForceLn` | `ForceCn` | `ForceHcn` |
+| undefined + defined HCNのみ | `AutoLn` | `AutoCn` | `ForceHcn` | `ForceLn` | `ForceCn` | `ForceHcn` |
+| undefined + 複数のdefined種別 | `AutoLn` | `AutoCn` | `AutoHcn` | `ForceLn` | `ForceCn` | `ForceHcn` |
 
 補足:
 
@@ -74,7 +77,13 @@ score policyはprofile policyとchart LN profileから決めます。
 - undefined LNのみの譜面では、実際にはユーザー設定の種別しか降らないため`auto_*`も`force_*`に寄せて保存します。
 - defined単一種別のみの譜面では、`auto_*`は譜面定義に寄せて`Force*`として保存します。
 - defined種別が混在する譜面では、beatoraja互換の固定挙動に寄せず、譜面の混在を表す`AutoLn`として保存します。
-- undefinedとdefinedが混在する譜面では、undefined部分の解釈がprofileに依存するため`AutoLn` / `AutoCn` / `AutoHcn`を区別して保存します。
+- AUTOはdefined種別を維持し、undefined部分にだけfallbackを適用します。その結果が単一種別なら、その`Force*`へ正規化します。複数種別が残りundefinedもある場合は、fallbackに応じた`AutoLn` / `AutoCn` / `AutoHcn`を保存します。
+
+これは保存区分の正規化仕様の拡張です。従来から変わるのは、undefined + defined LNのみの
+AUTO(LN)、undefined + defined CNのみのAUTO(CN)、undefined + defined HCNのみの
+AUTO(HCN)の3ケースだけです。profile.tomlの希望設定、元譜面のflags・型別件数は変更しません。
+各pairの実効型、判定、ゲージ、採点対象数、最大EXは元のAUTOと同じです。
+CNとHCNの混在は、採点対象数が同じでもゲージが異なるため`ForceHcn`にまとめません。
 
 ## 実際に使うLN種別（effective LN mode）
 
@@ -150,12 +159,21 @@ undefined LN fallbackを反映してから、同じ`score_ln_policy`規則で正
 `LnScorePolicy`を保存します。したがって、全譜面にLNが無いコースは設定にかかわらず
 `ForceLn`、単一のdefined種別だけを含むコースのAUTOはその`Force*`、defined
 種別が混在するコースのAUTOは`AutoLn`になります。undefinedとdefinedが混在する
-場合だけfallbackに応じた`AutoLn` / `AutoCn` / `AutoHcn`を区別します。
+場合は、fallback適用後に単一種別へ揃えば`Force*`、複数種別が残ればfallbackに応じた
+`AutoLn` / `AutoCn` / `AutoHcn`を区別します。ユーザーの明示FORCEはconstraintより優先します。
+AUTOを先にFORCEへ正規化してからconstraintを適用することはありません。
+例えばundefinedのみのstage + defined CNのみのstageでは、AUTO(LN) + constraint CNは
+`ForceCn`です。defined HCNのstageならCNとHCNが残るため`AutoCn`です。
+保存policyを`as_setting()`で復元しても各stageの実効型を維持します。
 既存のコーススコアは設定値を一意に復元できないため、migrationでは
 `ForceLn` bucketへ移します。
 
 通常リプレイファイルは`score_history`が個別pathを持つため、ファイル名衝突は起きにくいです。
 replay slotは同じchart SHA256 / slot番号を複数policyで使うため、新規保存時のslot replayファイル名に`ln_policy`を含めます。
+
+今回の3ケースの旧Auto区分は、同値性を確認できる場合だけ互換参照します。
+旧行・ファイルは移動・削除しません。BEST合成、確認根拠、slot衝突規則は
+[スコア保存仕様](score-persistence.md#単一実効ln型の旧キー互換参照)を参照してください。
 
 ## 外部スコアDBの取り込み（LR2 / beatoraja / LR2oraja）
 

@@ -4,7 +4,7 @@ fn database() -> ScoreDatabase {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    ScoreDatabase { conn }
+    ScoreDatabase::from_connection(conn)
 }
 
 #[test]
@@ -100,7 +100,7 @@ fn last_play_batches_score_keys_and_ignores_autoplay_and_invalid_dates() {
 fn last_play_migration_recovers_history_and_clear_only_first_date() {
     let mut conn = Connection::open_in_memory().unwrap();
     run_migrations(&mut conn, &SCORE_MIGRATIONS[..30]).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
     let mut regular = record(20, ClearType::Normal);
     regular.played_at = 100;
     // Seed this pre-v31 database through its old write boundary. The current

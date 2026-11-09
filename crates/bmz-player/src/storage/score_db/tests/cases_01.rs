@@ -5,7 +5,7 @@ fn insert_score_persists_enum_strings_and_empty_values() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut record = record(20, ClearType::Normal);
     record.gauge_type = None;
@@ -84,7 +84,7 @@ fn same_score_from_source_ignores_time_but_keeps_score_context_distinct() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut imported = record(20, ClearType::Normal);
     imported.source_kind = ScoreSourceKind::Beatoraja;
@@ -125,7 +125,7 @@ fn imported_score_reconciliation_updates_history_and_its_best_device() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut imported = record(20, ClearType::Normal);
     imported.source_kind = ScoreSourceKind::Beatoraja;
@@ -168,7 +168,7 @@ fn imported_score_reconciliation_backfills_missing_best_ghost() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut imported = record(20, ClearType::Normal);
     imported.source_kind = ScoreSourceKind::Beatoraja;
@@ -203,7 +203,7 @@ fn imported_score_reconciliation_prefers_matching_best_history_for_ghost_backfil
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut imported = record(20, ClearType::Normal);
     imported.source_kind = ScoreSourceKind::Beatoraja;
@@ -228,7 +228,7 @@ fn imported_score_reconciliation_does_not_backfill_another_best_history() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut imported = record(20, ClearType::Normal);
     imported.source_kind = ScoreSourceKind::Beatoraja;
@@ -255,7 +255,7 @@ fn imported_score_reconciliation_does_not_change_local_best_device() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut imported = record(20, ClearType::Normal);
     imported.source_kind = ScoreSourceKind::Beatoraja;
@@ -286,7 +286,7 @@ fn legacy_beatoraja_cleanup_removes_matching_local_history_and_rebuilds_aggregat
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut legacy = record(20, ClearType::Normal);
     legacy.playtime_seconds = 10;
@@ -350,7 +350,7 @@ fn same_source_duplicate_history_ids_match_the_cleanup_fingerprint() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut first = record(20, ClearType::Normal);
     first.random_seed = Some(1234);
@@ -370,7 +370,7 @@ fn best_score_keeps_higher_ex_score() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     db.insert_score(&record(20, ClearType::Normal)).unwrap();
     db.insert_score(&record(10, ClearType::Hard)).unwrap();
@@ -384,7 +384,7 @@ fn score_best_updates_clear_lamp_independently_from_ex_score() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     db.insert_score(&record(40, ClearType::Normal)).unwrap();
     let mut hard = record(20, ClearType::Hard);
@@ -404,7 +404,7 @@ fn score_best_does_not_downgrade_clear_lamp_on_higher_ex_score() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut hard = record(20, ClearType::Hard);
     hard.gauge_type = Some(GaugeType::Hard);
@@ -427,7 +427,7 @@ fn score_best_updates_only_max_combo_when_lower_ex_score_improves_combo() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut initial = record(40, ClearType::Normal);
     initial.score.judges.fast_bad = 3;
@@ -456,7 +456,7 @@ fn score_best_updates_only_bp_when_lower_ex_score_improves_bp() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut initial = record(40, ClearType::Normal);
     initial.score.judges.fast_bad = 3;
@@ -484,7 +484,7 @@ fn score_best_updates_only_cb_when_lower_ex_score_improves_cb() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut initial = record(40, ClearType::Normal);
     initial.score.judges.fast_bad = 4;
@@ -512,7 +512,7 @@ fn score_best_is_separate_per_double_option() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     db.insert_score(&record(20, ClearType::Normal)).unwrap();
     let mut battle = record(60, ClearType::Hard);
@@ -542,7 +542,7 @@ fn score_best_is_separate_per_rule_mode() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut beatoraja = record(20, ClearType::Normal);
     beatoraja.rule_mode = RuleMode::Beatoraja.as_str().to_string();
@@ -571,7 +571,7 @@ fn best_score_tiebreaks_by_lower_bp_then_lower_cb() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut high_bp = record(20, ClearType::Normal);
     high_bp.score.judges.fast_bad = 3;
@@ -623,7 +623,7 @@ fn score_best_counts_every_play_but_only_clear_results() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     db.insert_score(&record(20, ClearType::Normal)).unwrap();
     let mut failed = record(10, ClearType::Failed);

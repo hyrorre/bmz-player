@@ -340,18 +340,34 @@ pub fn score_ln_policy(setting: LnPolicySetting, profile: ChartLnProfile) -> LnS
         return LnScorePolicy::force(setting.mode());
     }
 
-    if profile.has_undefined_ln && !profile.has_any_defined_ln() {
-        return LnScorePolicy::force(setting.mode());
-    }
-
-    if !profile.has_undefined_ln {
-        if let Some(mode) = profile.single_defined_mode() {
-            return LnScorePolicy::force(mode);
+    let mut effective = profile;
+    if profile.has_undefined_ln {
+        match setting.mode() {
+            LongNoteMode::Ln => effective.has_defined_ln = true,
+            LongNoteMode::Cn => effective.has_defined_cn = true,
+            LongNoteMode::Hcn => effective.has_defined_hcn = true,
         }
-        return LnScorePolicy::AutoLn;
     }
+    if let Some(mode) = effective.single_defined_mode() {
+        return LnScorePolicy::force(mode);
+    }
+    if profile.has_undefined_ln {
+        LnScorePolicy::auto(setting.mode())
+    } else {
+        LnScorePolicy::AutoLn
+    }
+}
 
-    LnScorePolicy::auto(setting.mode())
+/// Only the three equivalences introduced by uniform AUTO normalization.
+/// Callers must separately establish that this is the original, trustworthy
+/// source profile for every attempt sharing the key (in particular, no RANDOM).
+pub(crate) fn uniform_auto_legacy_policy(
+    policy: LnScorePolicy,
+    profile: ChartLnProfile,
+) -> Option<LnScorePolicy> {
+    let mode = profile.single_defined_mode()?;
+    (profile.has_undefined_ln && policy == LnScorePolicy::force(mode))
+        .then_some(LnScorePolicy::auto(mode))
 }
 
 /// Resolve the score policy used by a course chart.
@@ -525,7 +541,7 @@ mod tests {
         assert_eq!(score_ln_policy(LnPolicySetting::AutoCn, DEFINED_MIXED), LnScorePolicy::AutoLn);
         assert_eq!(
             score_ln_policy(LnPolicySetting::AutoCn, UNDEFINED_AND_DEFINED),
-            LnScorePolicy::AutoCn
+            LnScorePolicy::ForceCn
         );
         assert_eq!(
             score_ln_policy(LnPolicySetting::AutoHcn, UNDEFINED_AND_DEFINED),
@@ -557,7 +573,7 @@ mod tests {
                 Some(LongNoteMode::Cn),
                 UNDEFINED_AND_DEFINED,
             ),
-            LnScorePolicy::AutoCn
+            LnScorePolicy::ForceCn
         );
         assert_eq!(
             course_score_ln_policy(
@@ -630,7 +646,7 @@ mod tests {
                 Some(LongNoteMode::Cn),
                 [UNDEFINED_ONLY, DEFINED_CN_ONLY],
             ),
-            LnScorePolicy::AutoCn,
+            LnScorePolicy::ForceCn,
         );
         assert_eq!(
             course_score_ln_policy_for_profiles(
@@ -639,6 +655,135 @@ mod tests {
                 [DEFINED_LN_ONLY],
             ),
             LnScorePolicy::ForceHcn,
+        );
+    }
+
+    #[test]
+    fn all_profiles_and_settings_match_fixed_specification_and_preserve_play() {
+        use LnScorePolicy::{
+            AutoCn as AC, AutoHcn as AH, AutoLn as AL, ForceCn as FC, ForceHcn as FH, ForceLn as FL,
+        };
+        // Bits: undefined, LN, CN, HCN. Columns: AUTO(LN/CN/HCN), FORCE(LN/CN/HCN).
+        const EXPECTED: [[LnScorePolicy; 6]; 16] = [
+            [FL, FL, FL, FL, FL, FL],
+            [FL, FC, FH, FL, FC, FH],
+            [FL, FL, FL, FL, FC, FH],
+            [FL, AC, AH, FL, FC, FH],
+            [FC, FC, FC, FL, FC, FH],
+            [AL, FC, AH, FL, FC, FH],
+            [AL, AL, AL, FL, FC, FH],
+            [AL, AC, AH, FL, FC, FH],
+            [FH, FH, FH, FL, FC, FH],
+            [AL, AC, FH, FL, FC, FH],
+            [AL, AL, AL, FL, FC, FH],
+            [AL, AC, AH, FL, FC, FH],
+            [AL, AL, AL, FL, FC, FH],
+            [AL, AC, AH, FL, FC, FH],
+            [AL, AL, AL, FL, FC, FH],
+            [AL, AC, AH, FL, FC, FH],
+        ];
+        let mut previous = EXPECTED;
+        previous[3][0] = AL;
+        previous[5][1] = AC;
+        previous[9][2] = AH;
+        let mut changed = Vec::new();
+        for (bits, expected) in EXPECTED.iter().enumerate() {
+            let modes: Vec<_> =
+                [None, Some(LongNoteMode::Ln), Some(LongNoteMode::Cn), Some(LongNoteMode::Hcn)]
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(bit, mode)| (bits & (1 << bit) != 0).then_some(mode))
+                    .collect();
+            let chart = chart_with_long_modes(&modes);
+            let profile = ChartLnProfile::from_chart(&chart);
+            for (column, setting) in LnPolicySetting::ORDER.into_iter().enumerate() {
+                let policy = score_ln_policy(setting, profile);
+                assert_eq!(policy, expected[column], "profile {bits}, {setting:?}");
+                assert_eq!(score_ln_policy(policy.as_setting(), profile), policy);
+                if policy != previous[bits][column] {
+                    changed.push((bits, column));
+                }
+                // Apply the original setting literally, independently of normalization.
+                let before: Vec<_> = modes
+                    .iter()
+                    .map(|mode| {
+                        if setting.is_force() {
+                            setting.mode()
+                        } else {
+                            mode.unwrap_or(setting.mode())
+                        }
+                    })
+                    .collect();
+                let mut after = chart.clone();
+                apply_score_ln_policy_to_chart(policy, &mut after);
+                let actual: Vec<_> = after
+                    .long_notes
+                    .iter()
+                    .map(|pair| pair.mode.unwrap_or(after.metadata.long_note_mode))
+                    .collect();
+                assert_eq!(actual, before, "effective pairs: profile {bits}, {setting:?}");
+                let notes = chart.total_notes
+                    + before.iter().filter(|mode| **mode != LongNoteMode::Ln).count() as u32;
+                assert_eq!(expected_scored_note_count_for_policy(&chart, policy), notes);
+                assert_eq!(expected_scored_note_count_for_policy(&after, policy) * 2, notes * 2);
+            }
+        }
+        assert_eq!(changed, [(3, 0), (5, 1), (9, 2)]);
+        // CN and HCN score equally, but their gauge behavior must stay distinct.
+        assert_eq!(EXPECTED[9][1], AC);
+        assert_eq!(EXPECTED[12][0], AL);
+    }
+
+    #[test]
+    fn uniform_course_replay_keeps_every_stage_mode_and_target_count() {
+        for mode in [LongNoteMode::Ln, LongNoteMode::Cn, LongNoteMode::Hcn] {
+            let charts = [chart_with_long_modes(&[None]), chart_with_long_modes(&[Some(mode)])];
+            let policy = course_score_ln_policy_for_profiles(
+                LnPolicySetting::AutoLn,
+                Some(mode),
+                charts.iter().map(ChartLnProfile::from_chart),
+            );
+            assert_eq!(policy, LnScorePolicy::force(mode));
+            for chart in charts {
+                let mut original = chart.clone();
+                let mut replay = chart;
+                apply_score_ln_policy_to_chart(
+                    course_score_ln_policy(
+                        LnPolicySetting::AutoLn,
+                        Some(mode),
+                        ChartLnProfile::from_chart(&original),
+                    ),
+                    &mut original,
+                );
+                apply_score_ln_policy_to_chart(
+                    course_score_ln_policy(
+                        policy.as_setting(),
+                        Some(mode),
+                        ChartLnProfile::from_chart(&replay),
+                    ),
+                    &mut replay,
+                );
+                let effective = |chart: &PlayableChart| {
+                    chart
+                        .long_notes
+                        .iter()
+                        .map(|p| p.mode.unwrap_or(chart.metadata.long_note_mode))
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(effective(&original), effective(&replay));
+                assert_eq!(
+                    expected_scored_note_count_for_policy(&original, policy),
+                    expected_scored_note_count_for_policy(&replay, policy)
+                );
+            }
+        }
+        assert_eq!(
+            course_score_ln_policy_for_profiles(
+                LnPolicySetting::AutoLn,
+                Some(LongNoteMode::Cn),
+                [UNDEFINED_ONLY, DEFINED_HCN_ONLY]
+            ),
+            LnScorePolicy::AutoCn
         );
     }
 

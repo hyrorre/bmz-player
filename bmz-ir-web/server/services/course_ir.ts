@@ -56,7 +56,7 @@ export interface CourseScoreSubmission {
   }
   rule: {
     gauge: string
-    /** LnPolicySetting 値 (コースは譜面ごとに解決が変わるため設定値)。 */
+    /** 元profile集約とconstraint適用後のLnScorePolicy。過去のAuto値も受理する。 */
     ln_policy: string
     rule_mode: IrRuleMode
     scoring: 'bms_ex_score_v1'

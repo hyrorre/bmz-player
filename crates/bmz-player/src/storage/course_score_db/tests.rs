@@ -32,6 +32,8 @@ fn open_conn() -> Connection {
     let mut conn = Connection::open_in_memory().unwrap();
     super::super::common::configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+    conn.execute_batch("CREATE TEMP VIEW course_scores_compatible AS SELECT * FROM course_scores;")
+        .unwrap();
     conn
 }
 

@@ -5,7 +5,7 @@ fn cleanup_preserves_assisted_and_course_aggregates() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
     let baseline = record(20, ClearType::NoPlay);
     let removed = db.insert_score(&baseline).unwrap();
     let remaining = db.insert_score(&baseline).unwrap();
@@ -54,7 +54,7 @@ fn score_best_keeps_independent_bp_cb_and_max_combo_records() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut best_score = record(20, ClearType::Normal);
     best_score.score.max_combo = 30;
@@ -82,7 +82,7 @@ fn clear_only_updates_lamp_counts_and_player_stats_without_numeric_score_or_hist
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut baseline = record(20, ClearType::NoPlay);
     baseline.played_at = 10;
@@ -138,7 +138,7 @@ fn clear_only_update_creates_neutral_best_row() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let assisted = record(200, ClearType::AssistEasy);
     db.update_score_clear_only(&assisted).unwrap();
@@ -159,7 +159,7 @@ fn failed_score_counts_unprocessed_notes_for_bp_and_cb_records() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut failed = record(0, ClearType::Failed);
     failed.total_notes = 100;
@@ -180,7 +180,7 @@ fn score_best_is_separate_per_ln_policy() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut ln = record(20, ClearType::Normal);
     ln.ln_policy = LnScorePolicy::ForceLn;
@@ -199,7 +199,7 @@ fn player_info_is_created_and_display_name_updates() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let info = db.player_info().unwrap();
     assert_eq!(info.player_uuid.len(), 32);
@@ -218,7 +218,7 @@ fn player_stats_accumulates_profile_wide_scores() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut first = record(20, ClearType::Normal);
     first.played_at = 10;
@@ -252,7 +252,7 @@ fn daily_player_stats_aggregates_only_local_history_inside_range() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut played = record(0, ClearType::Normal);
     played.played_at = 110;
@@ -363,7 +363,7 @@ fn player_stats_migration_backfills_existing_history() {
     .unwrap();
 
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let db = ScoreDatabase { conn };
+    let db = ScoreDatabase::from_connection(conn);
 
     let stats = db.player_stats().unwrap();
     assert_eq!(stats.play_count, 2);
@@ -434,7 +434,7 @@ fn score_history_records_previous_best_snapshot() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut first = record(20, ClearType::Normal);
     first.played_at = 10;
@@ -465,7 +465,7 @@ fn chart_update_times_separates_lamp_and_ex_score_improvements() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut first = record(20, ClearType::Normal);
     first.played_at = 10;
@@ -488,7 +488,7 @@ fn score_history_previous_best_is_separate_per_ln_policy() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut ln = record(20, ClearType::Normal);
     ln.ln_policy = LnScorePolicy::ForceLn;
@@ -528,7 +528,7 @@ fn insert_score_persists_best_ghost_for_current_best() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     db.insert_score(&record(20, ClearType::Normal)).unwrap();
     db.insert_score(&record(10, ClearType::Hard)).unwrap();
@@ -544,7 +544,7 @@ fn class_gauge_types_round_trip_via_score_history_and_best() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let cases = [
         ([10u8; 32], GaugeType::Class, "Class"),
@@ -598,7 +598,7 @@ fn best_scores_for_charts_returns_existing_scores() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
     let mut first = record(20, ClearType::Normal);
     first.chart_sha256 = [1; 32];
     first.replay_path = "replay/one.bzr".to_string();
@@ -623,7 +623,7 @@ fn replay_slots_for_charts_reports_slot_presence_from_new_table() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
     db.upsert_replay_slot(&sample_slot(0, 10)).unwrap();
     db.upsert_replay_slot(&sample_slot(2, 30)).unwrap();
 

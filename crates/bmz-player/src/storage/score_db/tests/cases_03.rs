@@ -85,7 +85,7 @@ fn select_score_lookups_batch_more_keys_than_one_sqlite_variable_chunk() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
 
     let mut first = record(20, ClearType::Normal);
     first.chart_sha256 = [1; 32];
@@ -128,7 +128,7 @@ fn upsert_replay_slot_overwrites_same_slot() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
     db.upsert_replay_slot(&sample_slot(0, 10)).unwrap();
     let mut updated = sample_slot(0, 99);
     updated.replay_path = "replay/updated.toml".to_string();
@@ -144,7 +144,7 @@ fn replay_slots_for_chart_returns_all_four_slots() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
     db.upsert_replay_slot(&sample_slot(0, 10)).unwrap();
     db.upsert_replay_slot(&sample_slot(3, 30)).unwrap();
 
@@ -161,7 +161,7 @@ fn replay_slots_are_separate_per_ln_policy() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
     let mut ln = sample_slot(0, 10);
     ln.ln_policy = LnScorePolicy::ForceLn;
     let mut cn = sample_slot(0, 99);
@@ -182,7 +182,7 @@ fn replay_slots_are_separate_per_rule_mode() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut db = ScoreDatabase { conn };
+    let mut db = ScoreDatabase::from_connection(conn);
     let mut beatoraja = sample_slot(0, 10);
     beatoraja.rule_mode = RuleMode::Beatoraja;
     let mut dx = sample_slot(0, 99);

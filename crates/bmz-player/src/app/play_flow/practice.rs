@@ -219,8 +219,16 @@ impl WinitApp {
                 anyhow::bail!("battle replay chart hash does not match selected chart");
             }
             if !replay.ln_policy.is_empty()
-                && crate::ln_policy::LnScorePolicy::from_str_opt(&replay.ln_policy)
-                    != Some(ln_policy)
+                && !crate::ln_policy::LnScorePolicy::from_str_opt(&replay.ln_policy)
+                    .map(|stored| {
+                        self.boot.score_db.replay_ln_policy_matches(
+                            chart.identity.file_sha256,
+                            ln_policy,
+                            stored,
+                        )
+                    })
+                    .transpose()?
+                    .unwrap_or(false)
             {
                 anyhow::bail!("battle replay long note policy does not match selected chart");
             }

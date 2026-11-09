@@ -222,6 +222,11 @@ impl WinitApp {
                 }
                 self.jobs.song_scan.progress = None;
                 self.select.select_assets.invalidate_library();
+                if let Err(error) =
+                    self.boot.score_db.refresh_ln_compatibility(&self.boot.library_db)
+                {
+                    tracing::warn!(%error, "failed to refresh LN score compatibility");
+                }
                 self.invalidate_select_folder_summaries();
                 if pending.download_ids.is_empty() {
                     self.reload_select_items();

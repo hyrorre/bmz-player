@@ -633,6 +633,48 @@ async fn resend_failed_jobs_only_targets_failed_jobs_and_can_be_cancelled() {
     assert_eq!((report.targeted, report.failed, report.cancelled), (3, 3, false));
 }
 
+#[tokio::test]
+async fn resend_legacy_auto_outbox_retains_gameplay_and_idempotency_key() {
+    let root = tempfile::tempdir().unwrap();
+    let score_path = root.path().join("score.db");
+    migrate_score_db(&score_path).unwrap();
+    let config = IrConfig::default();
+    let ctx = IrSyncContext {
+        score_db: &score_path,
+        profile_root: root.path(),
+        logs_dir: root.path(),
+        ir_config: &config,
+    };
+    let mut db = open_network_db();
+    let original = r#"{"rule":{"ln_policy":"AutoCn","effective_ln_mode":"cn"},"idempotency_key":"legacy-auto-cn","result":{"ex_score":100}}"#;
+    let id = db
+        .enqueue_ir_score_job(&NewIrScoreJob {
+            provider: "unconfigured".into(),
+            account_id: "account-1".into(),
+            kind: IrJobKind::Score,
+            local_score_id: 1,
+            chart_sha256: [7; 32],
+            ln_policy: LnScorePolicy::AutoCn,
+            payload_json: original.into(),
+            now: 1,
+        })
+        .unwrap();
+    let snapshot =
+        |db: &NetworkDatabase| {
+            db.conn().query_row(
+        "SELECT payload_json, submission_key, ln_policy FROM ir_score_jobs WHERE id = ?1", [id],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))).unwrap()
+        };
+    let before = snapshot(&db);
+    db.mark_ir_score_job_failed(id, 1, "offline", None).unwrap();
+    let report =
+        resend_job(&ctx, &mut db, "unconfigured", "account-1", IrJobKind::Score, 1).await.unwrap();
+    assert_eq!(report.failed, 1);
+    assert_eq!(snapshot(&db), before);
+    assert_eq!(before.0, original);
+    assert_eq!(before.2, "AutoCn");
+}
+
 impl UploadFixture {
     fn sign_in(&self) {
         crate::ir::credentials::save_credentials(

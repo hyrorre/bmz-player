@@ -50,8 +50,10 @@ pub(super) fn previous_best_snapshot(
 ) -> Result<Option<PreviousBestSnapshot>> {
     conn.query_row(
         "SELECT clear_type, ex_score, max_combo, bp, cb
-         FROM score_best
-         WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3
+         FROM score_best_compatible
+         WHERE chart_sha256 = ?1 AND ln_policy = COALESCE(
+            (SELECT canonical FROM ln_chart_aliases WHERE sha = ?1 AND old_policy = ?2), ?2)
+           AND double_option = ?3
            AND rule_mode = ?4",
         params![
             hash_to_hex(&key.chart_sha256),

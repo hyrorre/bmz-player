@@ -16,6 +16,23 @@ rianIRとの互換は[rianIR互換プロバイダー](rian-ir.md)、アシスト
 - LN / CN / HCNの区別は[LN / CN / HCNの扱い](ln.md)の`LnScorePolicy`に従います。
 - 改ざん検出（evidence）は、提出内容が後から変わっていないことを示すための仕組みです。改造したクライアントによる不正を防ぐものではありません。
 
+## 単一実効LN型の正規化と過去投稿
+
+新規単曲・コースの投稿とランキング取得には、[LN正規化規則](ln.md)の`LnScorePolicy`を使います。
+AUTOのfallbackをundefined部分へ適用した結果が単一種別なら`rule.ln_policy`は対応する
+`Force*`です。`rule.effective_ln_mode`は実際のプレイ種別、単曲の`chart.ln_profile`は
+変換前の元譜面の情報を維持します。コースは元profile集約、constraint fallback、正規化の順です。
+既存のアシスト等の送信可否条件は変わりません。現行サーバーは新Forceと旧Autoの両方を受理します。
+
+これは新規投稿の区分変更です。過去のAuto投稿と旧クライアントからの投稿は旧区分に残ります。
+過去IRランキングのAuto→Force一括統合、Bokutachi対応、本番DB変更・デプロイは対象外です。
+ローカル互換参照によって、過去のIR区分まで同値として扱うことはありません。
+
+既存outboxのgameplay本文、idempotency/submission key、送信済みsnapshot、remote score ID対応、
+既存replayのバイト列・hash・pathは保持します。旧outboxの再送は保存済み本文を使い、
+必要な署名付与だけ既存送信処理に従います。local backfillも保存時のpolicyを維持し、
+同じidempotency keyの投稿内容を新しい正規化値へ書き換えません。
+
 ## API一覧
 
 認証が必要なAPIは、Webのcookie sessionか、BMZ Player向けのbearer access tokenで呼び出します。

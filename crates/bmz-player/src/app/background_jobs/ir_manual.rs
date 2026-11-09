@@ -20,6 +20,11 @@ impl WinitApp {
         }
         if let Some(outcome) = self.jobs.ir_manual.take_notice() {
             if outcome.imported_scores_need_refresh() {
+                if let Err(error) =
+                    self.boot.score_db.refresh_ln_compatibility(&self.boot.library_db)
+                {
+                    tracing::warn!(%error, "failed to refresh imported LN score compatibility");
+                }
                 self.refresh_player_stats_snapshot();
                 self.invalidate_select_folder_summaries();
                 self.reload_select_items();
