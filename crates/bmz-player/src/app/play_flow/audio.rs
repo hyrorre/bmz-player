@@ -533,9 +533,7 @@ impl WinitApp {
                     return false;
                 };
                 self.boot.app_config.audio = previous_config.clone();
-                if let Err(save_error) =
-                    save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config)
-                {
+                if let Err(save_error) = self.save_app_config_now() {
                     tracing::error!(%save_error, "failed to restore previous audio settings on disk");
                 }
                 match AudioRuntime::open(&previous_config).and_then(|runtime| {

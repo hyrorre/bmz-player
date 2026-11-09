@@ -168,9 +168,7 @@ impl WinitApp {
     ) -> bool {
         let previous_updated_at = self.boot.profile_config.updated_at;
         self.boot.profile_config.updated_at = now_unix_seconds();
-        if let Err(error) =
-            save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
-        {
+        if let Err(error) = self.save_profile_config_now() {
             tracing::error!(%error, ?session.target, "failed to save key config");
             session.cancel(&mut self.boot.profile_config);
             self.boot.profile_config.updated_at = previous_updated_at;

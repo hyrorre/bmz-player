@@ -131,6 +131,7 @@ impl WinitApp {
     }
 
     pub(super) fn reset_skin_config_from_disk(&mut self) {
+        self.jobs.config_saver.flush();
         match load_profile_config(&self.boot.profile_paths.profile_toml) {
             Ok(profile) => {
                 replace_skin_config_from_loaded_profile(&mut self.boot.profile_config, profile);

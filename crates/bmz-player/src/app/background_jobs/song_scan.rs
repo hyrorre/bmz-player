@@ -120,9 +120,7 @@ impl WinitApp {
         let QueuedSongScan { mut roots, force, label, scope, .. } = request.clone();
         let library_roots = if scope == SongScanScope::Library {
             // A full sync is authoritative only after the settings were saved.
-            if let Err(error) =
-                save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config)
-                    .and_then(|()| self.publish_song_scope())
+            if let Err(error) = self.save_app_config_now().and_then(|()| self.publish_song_scope())
             {
                 self.song_scan_error(&error);
                 return;
@@ -229,6 +227,8 @@ impl WinitApp {
                         &self.boot.app_config,
                         &self.boot.app_paths,
                     );
+                    // Read back what queued saves have written, not an older file.
+                    self.jobs.config_saver.flush();
                     let cleanup = (|| -> Result<usize> {
                         let saved =
                             crate::config::load::load_app_config(&self.boot.app_paths.config_toml)?;

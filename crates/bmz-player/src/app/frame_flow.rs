@@ -712,7 +712,7 @@ impl WinitApp {
 
         let apply_obs_config = output.obs_enabled_changed;
         if output.save_app_config {
-            let result = save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config);
+            let result = self.save_app_config_now();
             if let Some(egui) = self.ui.egui.as_mut() {
                 egui.settings_save_finished(
                     true,
@@ -763,10 +763,7 @@ impl WinitApp {
             self.cancel_beatoraja_replay_import();
         }
         if output.save_profile_config {
-            let result = save_profile_config(
-                &self.boot.profile_paths.profile_toml,
-                &self.boot.profile_config,
-            );
+            let result = self.save_profile_config_now();
             if let Some(egui) = self.ui.egui.as_mut() {
                 egui.settings_save_finished(
                     false,
@@ -1058,7 +1055,7 @@ impl WinitApp {
         key_mode: KeyMode,
         hispeed: Option<f32>,
         reason: &'static str,
-    ) -> bool {
+    ) {
         self.boot.profile_config.activate_play_mode(key_mode);
         let (hispeed, lane_state) = lane_state_for_profile_save(
             active_course_speed_locked(self.play.active_course.as_ref()),
@@ -1075,15 +1072,7 @@ impl WinitApp {
             now_unix_seconds(),
         );
         self.boot.profile_config.sync_active_play_mode();
-        if let Err(error) =
-            save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
-        {
-            tracing::error!(%error, reason, "failed to save profile play options");
-            false
-        } else {
-            tracing::info!(reason, "saved profile play options");
-            true
-        }
+        self.queue_profile_config_save(reason);
     }
 
     pub(super) fn save_configs_for_exit(&mut self, hispeed: Option<f32>, reason: &'static str) {
@@ -1091,17 +1080,14 @@ impl WinitApp {
             return;
         }
         self.save_configs_after_play(hispeed, reason);
+        self.jobs.config_saver.flush();
         self.integrations.exit_configs_saved = true;
     }
 
+    /// Queued: play end and quick retry must not wait for TOML serialization.
     pub(super) fn save_configs_after_play(&mut self, hispeed: Option<f32>, reason: &'static str) {
         self.save_current_play_options(hispeed, reason);
-        if let Err(error) = save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config)
-        {
-            tracing::error!(%error, reason, "failed to save app config");
-        } else {
-            tracing::info!(reason, "saved app config");
-        }
+        self.queue_app_config_save(reason);
     }
 }
 

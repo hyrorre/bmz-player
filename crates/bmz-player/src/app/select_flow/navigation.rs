@@ -881,10 +881,7 @@ impl WinitApp {
             }
             self.jobs.download_registrations.push((id, result));
         }
-        if changed
-            && let Err(error) =
-                save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config)
-        {
+        if changed && let Err(error) = self.save_app_config_now() {
             tracing::error!(%error, "failed to save downloaded song roots");
             self.show_left_overlay_toast(
                 Localizer::new(self.boot.profile_config.ui.locale())

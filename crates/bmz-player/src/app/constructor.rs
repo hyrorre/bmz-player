@@ -429,6 +429,7 @@ impl WinitApp {
                 result_ir_scroll: ResultIrScrollRuntime::default(),
             },
             jobs: AppJobs {
+                config_saver: config_saver::ConfigSaver::new(),
                 profile_change: None,
                 ir_sync: None,
                 ir_manual: ir_manual_handle,

@@ -752,6 +752,7 @@ impl WinitApp {
         self.jobs.ir_manual.shutdown(std::time::Duration::from_secs(3));
         self.flush_pending_screenshots("app exit");
         self.save_configs_for_exit(self.active_hispeed(), "game exit");
+        self.jobs.config_saver.shutdown();
         self.wait_for_pending_play_result_on_exit();
         // Queue screenshot/replay retention decisions before closing the OBS worker.
         if let Some(obs) = &self.integrations.obs_controller {

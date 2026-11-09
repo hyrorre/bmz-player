@@ -257,6 +257,7 @@ pub(super) struct ResultIrScrollRuntime {
 }
 
 pub(super) struct AppJobs {
+    pub(super) config_saver: config_saver::ConfigSaver,
     pub(super) profile_change: Option<profile_switch::PendingProfileChange>,
     pub(super) ir_sync: Option<IrSyncWorker>,
     /// 設定画面から起動する手動IR操作（一括送信・取得・キュー再送）。

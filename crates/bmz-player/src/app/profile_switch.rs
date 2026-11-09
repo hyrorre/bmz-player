@@ -206,11 +206,7 @@ impl WinitApp {
             return;
         }
         // debounce中の編集も旧profileへ保存する。CLIの一時上書きは既存save APIが除く。
-        let saved =
-            save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
-                .and_then(|_| {
-                    save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config)
-                });
+        let saved = self.save_profile_config_now().and_then(|_| self.save_app_config_now());
         if let Err(error) = saved {
             self.finish_profile_change(&action, Err(error));
             return;

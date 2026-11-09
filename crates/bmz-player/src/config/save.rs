@@ -62,6 +62,9 @@ fn atomic_write(path: &Path, content: &str) -> Result<()> {
 }
 
 #[cfg(test)]
+mod profile;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::app_config::PathEntry;

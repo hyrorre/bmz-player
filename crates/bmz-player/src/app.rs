@@ -201,6 +201,7 @@ mod app_support;
 mod background_jobs;
 mod bga_runtime;
 mod chart_assets;
+mod config_saver;
 #[path = "app/course_editor.rs"]
 mod course_editor;
 #[path = "app/course_flow/advance.rs"]

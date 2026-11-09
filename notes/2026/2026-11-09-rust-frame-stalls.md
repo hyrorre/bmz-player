@@ -337,3 +337,70 @@ collection cacheが毎回無効になるためである。結果は曲ごとの�
 | 1,000 | 37.889 / 41.180 / 42.528 ms | 8.135 / 9.164 / 9.581 ms |
 
 単一環境・各1回の比較。1,000件の残り約8msの内訳は未計測。
+
+## 2026-11-10 追記: 設定保存のworker化
+
+プレイ終了・クイックリトライ・詳細オプションを閉じたとき、window threadが
+`profile.toml`と`config.toml`を同期保存していた。profileは全体を複製してTOML化し、
+一時ファイルへの書き込みと`sync_all`の後にrenameする。ローカルの`profile.toml`は291KBで、
+76%がスキン設定の履歴`skin.history`（152スキン分）だった。履歴に件数の上限はない。
+
+ローカルのprofile / app configのコピーを`.local/performance/config-save/`に置き、
+一時ディレクトリへ保存して測った。release、各10回warm-up後100回、中央値 / p95 / 最大。
+
+```powershell
+$env:BMZ_PROBE_CONFIG_DIR = "$PWD/.local/performance/config-save"
+cargo test -p bmz-player --release --lib profile_config_save_stages --locked -- --ignored --nocapture
+cargo test -p bmz-player --release --lib profile_queued_config_save --locked -- --ignored --nocapture
+```
+
+| 処理 | 中央値 / p95 / 最大 |
+|---|---:|
+| profile 複製 | 0.686 / 1.067 / 1.406 ms |
+| profile TOML化 | 6.576 / 7.088 / 7.614 ms |
+| profile 書き込み + fsync + rename | 1.283 / 1.664 / 2.120 ms |
+| profile 保存全体 | 7.630 / 8.764 / 9.289 ms |
+| app 保存全体 | 1.198 / 1.448 / 1.689 ms |
+| プレイ終了時（profile + app） | 8.728 / 9.978 / 12.658 ms |
+
+TOML化が大半を占めるため、書き込みだけでなくTOML化もworkerへ移した。
+アプリ実行中の保存はすべて1本のworkerが受け付け順に行い、同じファイルの未処理の保存は最新1件にまとめる。
+同じ一時ファイル名へ並行して書かないよう、結果を必要とする呼び出しもworker経由で完了を待つ。
+仕様は[frame pacing](../../docs/frame-pacing.md)の「設定の保存」を参照。
+
+呼び出し側の時間（プレイ終了時のprofile + app、各2回の中央値 / p95 / 最大）。
+保存を待たない方式では、各試行の前にworkerが空になるまで待ち、プレイ終了時と同じ状態から測った。
+
+| 方式 | 1回目 | 2回目 |
+|---|---:|---:|
+| 変更前の直接保存 | 8.837 / 9.962 / 10.526 ms | 9.097 / 16.999 / 22.248 ms |
+| 変更後・待たない | 0.525 / 0.703 / 1.219 ms | 0.521 / 0.654 / 1.039 ms |
+| 変更後・完了を待つ | 9.468 / 11.127 / 12.169 ms | 9.278 / 11.147 / 11.389 ms |
+
+残る約0.5msはprofileとapp configの複製である。直接保存のp95・最大は試行間で大きく変わり、
+fsyncのばらつきと見られる（原因は未確認）。完了を待つ方式は直接保存より中央値で約0.5ms長い。
+複製と受け渡しの分で、設定画面の保存、キー設定、ライバル切り替え、プロフィール切り替えなどに残る。
+詳細オプションを閉じたときの保存は失敗しても再試行の印を残さず、ログに記録する。
+profileは常に全体を保存するので、次の保存で同じ内容が書かれる。
+`skin.history`の件数制限は仕様変更になるため行っていない。
+HDD・NASでの書き込み時間と、実ウィンドウでのframe time比較は未計測。
+
+検証: fmt、check、all-targets Clippy（`-D warnings`）。新しい回帰テストで次を確認した。
+
+- 同じファイルへの連続保存のまとめ
+- 完了を待つ保存より前に受け付けた保存の書き込み
+- 書き込み失敗の通知
+- worker停止後に呼び出し側で保存すること
+
+bmz-playerの全テストは3000 passed / 1 failed / 69 ignored。失敗は
+`skin_video_hidden_frames_keep_playback_time_without_uploading_or_reopening`の末尾の
+一時動画削除で、単独では3回とも通過した。動画decoderを退避workerで閉じる前に
+Windowsでファイルを消そうとする既存テストの不安定さで、設定保存とは別の経路である。
+ignoredのリトライ・コース遷移、Playの譜面長、詳細オプションのapp回帰も単独で通過した。
+
+実ウィンドウ（独立したデータ領域、release）ではOSの既定音声出力が無く、自動演奏はPlayを
+開始できずSelectへ戻った。プレイ終了時の保存は実ウィンドウでは未確認である。
+ウィンドウを閉じる要求で終了させ、`game exit`のprofile / app保存が終了準備より前に
+workerで完了し、両ファイルが更新され、一時ファイルが残らないことを確認した。
+新しい設定の既定値で難易度表の取得も走った（27件中3件はHTTPエラー）。
+生ログは`.local/performance/config-save/`に保存した。

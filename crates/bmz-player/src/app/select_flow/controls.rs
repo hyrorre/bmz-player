@@ -332,8 +332,7 @@ impl WinitApp {
         let entry_id = session.entry_id();
         let before = ProfileSettingsSnapshot::capture(&self.boot.profile_config);
         self.boot.profile_config.updated_at = now_unix_seconds();
-        match save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
-        {
+        match self.save_profile_config_now() {
             Ok(()) => {
                 self.apply_profile_settings_changes(&before, Some(entry_id));
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
@@ -350,7 +349,7 @@ impl WinitApp {
 
     fn commit_app_settings_edit(&mut self, session: AppSettingsEditSession) {
         let entry_id = session.entry_id;
-        match save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config) {
+        match self.save_app_config_now() {
             Ok(()) => {
                 if !entry_id.is_audio() {
                     let window = self.window.clone();
@@ -370,8 +369,7 @@ impl WinitApp {
     }
 
     pub(super) fn apply_select_audio_settings(&mut self) {
-        if let Err(error) = save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config)
-        {
+        if let Err(error) = self.save_app_config_now() {
             tracing::error!(%error, "failed to save audio settings before apply");
             let text = Localizer::new(self.boot.profile_config.ui.locale());
             self.show_left_overlay_toast(text.text("settings-audio-apply-failed"));

@@ -472,11 +472,9 @@ impl WinitApp {
         }
         // Existing save merges current E1/GAS state and syncs the active mode.
         // Pass the E2 edit target explicitly even after the panel has closed.
-        self.select.detail_options.dirty = !self.save_play_options_for_mode(
-            self.detail_options_mode(),
-            None,
-            "detail options closed",
-        );
+        // The queued write is logged on failure; every later save rewrites it.
+        self.save_play_options_for_mode(self.detail_options_mode(), None, "detail options closed");
+        self.select.detail_options.dirty = false;
     }
 
     fn detail_options_snapshot(
