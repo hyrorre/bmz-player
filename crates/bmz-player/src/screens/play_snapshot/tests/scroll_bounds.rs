@@ -56,3 +56,11 @@ fn non_forward_scroll_and_speed_keep_unrestricted_candidates() {
         assert!(context.simple_tick_upper_bound(0.0).is_none());
     }
 }
+
+#[test]
+fn large_scroll_history_keeps_notes_whose_distance_rounds_to_zero() {
+    let cache = ScrollIntegralCache::from_segments([(0.0, 1e100), (100.0, 1e-100)]);
+    assert_eq!(cache.delta(200.0, 10_000.0), 0.0);
+    let bound = cache.tick_after_distance(200.0, 768.0).unwrap_or(f64::INFINITY);
+    assert!(bound >= 10_000.0);
+}

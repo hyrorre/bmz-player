@@ -195,10 +195,17 @@ impl ScrollIntegralCache {
     /// Invert only a finite, strictly increasing scroll timeline. Zero/reverse
     /// segments keep the unrestricted path, including when they are far away.
     pub(super) fn tick_after_distance(&self, from: f64, distance: f64) -> Option<f64> {
-        if !self.strictly_forward {
+        if !self.strictly_forward || !from.is_finite() || !distance.is_finite() || distance <= 0.0 {
             return None;
         }
-        let target = self.primitive(from) + distance;
+        let origin = self.primitive(from);
+        // A huge earlier SCROLL can dwarf the visible distance. Preserve notes
+        // whose primitive difference rounds to zero, instead of inverting an
+        // origin + distance that rounded back to origin and culling them.
+        let target = origin + distance + origin.abs() * (4.0 * f64::EPSILON);
+        if !target.is_finite() {
+            return None;
+        }
         let tick = self
             .integral_at_event
             .partition_point(|&value| value <= target)

@@ -155,6 +155,14 @@ fmt、check、all-targets Clippy、bmz-player全テスト2995 passed / 65 ignore
 初回の単純なclone_fromは事前確保容量を失う回帰で検出され、同容量時だけ使う方式へ修正した。
 SCROLL境界、ゼロ/負/非有限倍率、BGA同時刻・消去・Poor開始/終了を追加検証した。
 
+最終確認で、先行する極端なSCROLLの累積値に可視距離を足すと、f64丸めにより
+同じ値に戻る境界も補強した。逆変換に累積値に応じた余白を加え、非有限値は
+全候補走査へ戻す。`1e100`から`1e-100`へ変化する回帰例で、表示距離が0へ
+丸められる未来ノーツを候補から落とさないことを確認した。追加後のfmt、check、
+all-targets Clippyとbmz-player全テストは成功（2997 passed / 66 ignored）。
+同じreleaseプローブを単独で再実行し、1万ノーツ10%地点は中央値2.3us / p95 2.6us、
+5万ノーツ10%地点は2.5 / 2.5us、90%地点は2.4 / 2.5usだった。
+
 ## 6. 判定候補・ノートID・HCN
 
 releaseの`profile_gameplay_searches`。各10回warm-up後1,000回。1レーンのTap列後半へ
