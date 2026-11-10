@@ -16,6 +16,19 @@ const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 const FILETIME_TICKS_PER_SECOND: u64 = 10_000_000;
 const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Everything found nothing below the root: the root is empty or not indexed. Native
+/// discovery takes over quietly, without reporting Everything as unavailable.
+#[derive(Debug)]
+pub(super) struct NoIndexedFiles;
+
+impl std::fmt::Display for NoIndexedFiles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Everything returned no matching files")
+    }
+}
+
+impl std::error::Error for NoIndexedFiles {}
+
 pub(super) fn discover_chart_files_everything(
     root: &Path,
     recursive: bool,
@@ -33,7 +46,10 @@ pub(super) fn discover_chart_files_everything(
     let absolute_root = std::path::absolute(root)
         .with_context(|| format!("failed to make song root absolute: {}", root.display()))?;
     let query = everything_query(&absolute_root)?;
-    let client = EverythingClient::new().context("Everything IPC window is unavailable")?;
+    // The background service alone does not answer searches; the Everything app must
+    // be running in this session. Instances named like 1.5 alpha's "1.5a" are not found.
+    let client = EverythingClient::new()
+        .context("Everything is not running (the Everything service alone cannot search)")?;
     if !client.is_db_loaded() {
         bail!("Everything database is not loaded");
     }
@@ -65,7 +81,7 @@ pub(super) fn discover_chart_files_everything(
     // An empty result can also mean that the configured root is not indexed.
     // Native discovery is cheap for a genuinely empty root and is the safe fallback.
     if results.is_empty() {
-        bail!("Everything returned no matching files");
+        return Err(NoIndexedFiles.into());
     }
 
     let mut chart_entries = Vec::new();
@@ -172,6 +188,7 @@ pub(super) fn discover_chart_files_everything(
         issues,
         root_readable: true,
         backend: ScanDiscoveryBackend::Everything,
+        fallback_reason: None,
     })
 }
 

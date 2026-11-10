@@ -22,6 +22,9 @@ pub(super) struct ChartDiscovery {
     pub(super) complete: bool,
     pub(super) root_readable: bool,
     pub(super) backend: ScanDiscoveryBackend,
+    /// For [`ScanDiscoveryBackend::NativeFallback`], why Everything was not used, when
+    /// worth telling the player.
+    pub(super) fallback_reason: Option<String>,
 }
 
 pub fn discover_chart_files(
@@ -78,6 +81,8 @@ pub(super) fn discover_chart_files_with_progress(
                 let mut discovery =
                     discover_chart_files_native(root, recursive, scan, on_discovered);
                 discovery.backend = ScanDiscoveryBackend::NativeFallback;
+                discovery.fallback_reason = (!error.is::<super::everything::NoIndexedFiles>())
+                    .then(|| format!("{error:#}"));
                 return discovery;
             }
         }
@@ -91,6 +96,8 @@ pub(super) fn discover_chart_files_with_progress(
         );
         let mut discovery = discover_chart_files_native(root, recursive, scan, on_discovered);
         discovery.backend = ScanDiscoveryBackend::NativeFallback;
+        discovery.fallback_reason =
+            Some("Everything song discovery is only available on Windows".to_string());
         return discovery;
     }
 

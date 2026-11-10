@@ -296,6 +296,16 @@ impl WinitApp {
                     );
                 }
                 self.jobs.song_scan.progress = None;
+                // Falling back silently made the Everything setting look ineffective.
+                if let Some(reason) = &report.summary.everything_fallback_reason {
+                    let mut args = FluentArgs::new();
+                    args.set("count", i64::from(report.summary.everything_fallback_roots));
+                    args.set("reason", reason.clone());
+                    self.show_left_overlay_toast(
+                        Localizer::new(self.boot.profile_config.ui.locale())
+                            .format("toast-everything-fallback", &args),
+                    );
+                }
                 self.select.select_assets.invalidate_library();
                 self.invalidate_select_folder_summaries();
                 if pending.download_ids.is_empty() {

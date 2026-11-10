@@ -284,6 +284,9 @@ fn load_songs(
         "Discovery backends: everything={} native={} fallback={}",
         s.everything_discovery_roots, s.native_discovery_roots, s.everything_fallback_roots
     );
+    if let Some(reason) = &s.everything_fallback_reason {
+        println!("  Everything unavailable: {reason}");
+    }
 
     for issue in &report.discovery_issues {
         println!(

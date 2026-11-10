@@ -21,6 +21,9 @@ pub struct ScanSummary {
     pub native_discovery_roots: u32,
     pub everything_discovery_roots: u32,
     pub everything_fallback_roots: u32,
+    /// Why the first root that could not use Everything fell back, unless it only had
+    /// no indexed files (an empty root is not an Everything problem worth reporting).
+    pub everything_fallback_reason: Option<String>,
     pub files_seen: u32,
     pub discovery_skipped: u32,
     pub imported: u32,
@@ -558,6 +561,15 @@ mod tests {
         assert_eq!(report.summary.everything_discovery_roots, 0);
         assert_eq!(report.summary.native_discovery_roots, 1);
         assert_eq!(report.summary.everything_fallback_roots, 1);
+        assert!(
+            report
+                .summary
+                .everything_fallback_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("follow_symlinks")),
+            "{:?}",
+            report.summary.everything_fallback_reason
+        );
         assert_eq!(report.summary.files_seen, 0);
 
         std::fs::remove_dir_all(root).unwrap();

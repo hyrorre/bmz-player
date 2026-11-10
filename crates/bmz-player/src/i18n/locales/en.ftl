@@ -269,7 +269,7 @@ settings-scan-title = Scan
 settings-scan-follow-symlinks = Follow symbolic links
 settings-scan-skip-hidden = Skip hidden files and folders
 settings-scan-use-everything = Use Everything for song discovery (Windows)
-settings-scan-use-everything-help = Requires Everything 1.5 or later. BMZ automatically falls back to native discovery if unavailable.
+settings-scan-use-everything-help = Requires Everything 1.5 or later to be running (the Everything service alone is not enough). If it is unavailable, BMZ falls back to native discovery and shows why.
 settings-scan-on-startup = Rescan automatically at startup
 settings-select-title = Song Select
 settings-select-scroll-initial = Initial scroll delay (ms)
@@ -808,6 +808,10 @@ update-kind-windows-portable = Updates this portable folder in place.
 update-kind-macos-automatic = Updates the app bundle and restarts BMZ Player.
 toast-library-scan-failed = Library scan failed: { $error }
 toast-library-scan-deferred = Scan start postponed. Retrying in { $seconds } seconds: { $error }
+toast-everything-fallback = { $count ->
+    [one] Everything was unavailable, so 1 song folder was searched without it: { $reason }
+   *[other] Everything was unavailable, so { $count } song folders were searched without it: { $reason }
+  }
 toast-chart-unavailable = Chart unavailable: { $error }
 score-import-summary = scanned { $scanned }, matched { $matched }, imported { $imported }, corrected { $corrected }, skipped { $skipped }, failed { $failed }
 score-import-reason-missing = Missing chart

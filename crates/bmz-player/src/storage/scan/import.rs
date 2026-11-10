@@ -90,6 +90,9 @@ pub fn scan_song_roots_with_progress(
                     report.summary.native_discovery_roots.saturating_add(1);
                 report.summary.everything_fallback_roots =
                     report.summary.everything_fallback_roots.saturating_add(1);
+                if report.summary.everything_fallback_reason.is_none() {
+                    report.summary.everything_fallback_reason = discovery.fallback_reason.clone();
+                }
             }
         }
         let root_files = usize_to_u32(discovery.entries.len());
