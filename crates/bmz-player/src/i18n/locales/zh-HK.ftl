@@ -268,7 +268,6 @@ settings-library-reparse-all = 重新解析全部譜面
 settings-library-reparse-all-help = 「重新掃描曲庫」只會讀取新增或修改過的譜面。「重新解析全部譜面」亦會重新讀取未修改的譜面，因此需時較長。
 settings-scan-title = 掃描
 settings-scan-follow-symlinks = 跟隨符號連結
-settings-scan-skip-hidden = 略過隱藏檔案及資料夾
 settings-scan-use-everything = 使用 Everything 搜尋歌曲（Windows）
 settings-scan-use-everything-help = 需要執行 Everything 1.5 或以上版本（只有服務無法使用）。無法使用時會自動改用原生搜尋，並顯示原因。
 settings-scan-on-startup = 啟動時自動重新掃描

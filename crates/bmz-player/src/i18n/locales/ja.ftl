@@ -267,7 +267,6 @@ settings-library-reparse-all = すべての譜面を再解析
 settings-library-reparse-all-help = 「ライブラリを再スキャン」は追加・変更された譜面だけを読み込みます。「すべての譜面を再解析」は変更のない譜面も読み込み直すため、時間がかかります。
 settings-scan-title = スキャン
 settings-scan-follow-symlinks = シンボリックリンクを辿る
-settings-scan-skip-hidden = 隠しファイル / フォルダをスキップ
 settings-scan-use-everything = 曲探索に Everything を使用 (Windows)
 settings-scan-use-everything-help = Everything 1.5 以降を起動しておく必要があります（サービスだけでは使えません）。利用できない場合は通常の探索へ自動的に切り替え、理由を通知します。
 settings-scan-on-startup = 起動時に自動再スキャン

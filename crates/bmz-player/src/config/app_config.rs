@@ -73,7 +73,8 @@ pub fn normalize_song_root_paths(roots: &mut Vec<PathEntry>) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanConfig {
     pub follow_symlinks: bool,
-    pub skip_hidden: bool,
+    // `skip_hidden` was removed: like beatoraja, scans no longer consult hidden
+    // attributes. An old config's key is ignored when loading and dropped on save.
     /// Windows の Everything インデックスを曲ファイル探索に使用する。
     /// 利用できない場合は通常のファイルシステム探索へフォールバックする。
     #[serde(default)]
@@ -783,7 +784,6 @@ impl Default for AppConfig {
             songs: SongPathsConfig { roots: Vec::new() },
             scan: ScanConfig {
                 follow_symlinks: true,
-                skip_hidden: true,
                 use_everything: false,
                 auto_rescan_on_startup: false,
                 rescan_missing_files: true,

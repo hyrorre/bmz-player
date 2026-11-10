@@ -267,7 +267,6 @@ settings-library-reparse-all = 모든 채보 다시 분석
 settings-library-reparse-all-help = '라이브러리 다시 스캔'은 추가되거나 바뀐 채보만 읽어 들입니다. '모든 채보 다시 분석'은 바뀌지 않은 채보도 다시 읽어 들이므로 시간이 걸립니다.
 settings-scan-title = 스캔
 settings-scan-follow-symlinks = 심볼릭 링크 따라가기
-settings-scan-skip-hidden = 숨김 파일 및 폴더 건너뛰기
 settings-scan-use-everything = 곡 검색에 Everything 사용(Windows)
 settings-scan-use-everything-help = Everything 1.5 이상이 실행 중이어야 합니다(서비스만으로는 사용할 수 없습니다). 사용할 수 없으면 기본 검색으로 자동 전환하고 이유를 알려 줍니다.
 settings-scan-on-startup = 시작할 때 자동으로 다시 스캔

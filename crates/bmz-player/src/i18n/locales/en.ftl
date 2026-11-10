@@ -267,7 +267,6 @@ settings-library-reparse-all = Re-parse all charts
 settings-library-reparse-all-help = Rescan library reads only added or changed charts. Re-parse all charts also reloads unchanged charts, so it takes longer.
 settings-scan-title = Scan
 settings-scan-follow-symlinks = Follow symbolic links
-settings-scan-skip-hidden = Skip hidden files and folders
 settings-scan-use-everything = Use Everything for song discovery (Windows)
 settings-scan-use-everything-help = Requires Everything 1.5 or later to be running (the Everything service alone is not enough). If it is unavailable, BMZ falls back to native discovery and shows why.
 settings-scan-on-startup = Rescan automatically at startup

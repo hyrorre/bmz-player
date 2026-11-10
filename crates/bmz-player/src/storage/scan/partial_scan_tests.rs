@@ -15,7 +15,6 @@ use crate::storage::migration::{LIBRARY_MIGRATIONS, run_migrations};
 fn config() -> ScanConfig {
     ScanConfig {
         follow_symlinks: true,
-        skip_hidden: true,
         use_everything: false,
         auto_rescan_on_startup: false,
         rescan_missing_files: true,
@@ -486,9 +485,9 @@ fn unreadable_partial_scan_target_keeps_registrations() {
     assert_eq!(registered(&db, &bms), ["INSANE2/song_A/a.bms"]);
 }
 
-#[cfg(unix)]
+/// Dot-named charts are ordinary charts: discovered, kept while present, and pruned.
 #[test]
-fn partial_scan_keeps_existing_hidden_charts() {
+fn partial_scan_treats_dot_named_charts_like_others() {
     let base = temp();
     let bms = base.path().join("BMS");
     let insane2 = bms.join("INSANE2");
@@ -496,17 +495,13 @@ fn partial_scan_keeps_existing_hidden_charts() {
     chart(&insane2.join(".gone.bms"), "Hidden gone");
     write_zip(&insane2.join("pack.zip"), &[(".hidden/z.bms", &chart_text("Hidden zip"))]);
     let mut db = db();
-    let mut visible = config();
-    visible.skip_hidden = false;
-    let root = entry(&bms, true);
-    db.set_configured_song_roots(std::slice::from_ref(&root)).unwrap();
-    scan_song_roots(&mut db, std::slice::from_ref(&root), &visible, 1, false).unwrap();
+    configure_and_scan(&mut db, &[entry(&bms, true)]);
     assert_eq!(count(&db, "SELECT COUNT(*) FROM chart_files"), 3);
 
     std::fs::remove_file(insane2.join(".gone.bms")).unwrap();
     let report = partial_scan(&mut db, entry(&insane2, true), 2);
 
-    assert_eq!(report.summary.files_seen, 0);
+    assert_eq!(report.summary.files_seen, 2);
     assert_eq!(report.summary.removed_files, 1);
     assert_eq!(
         registered(&db, &bms),
@@ -608,7 +603,6 @@ fn enclosing_root_spellings_do_not_block_pruning() {
             &PruneRequest {
                 root: Path::new(r"\\?\C:\bmz-issue69-missing\BMS\INSANE2"),
                 recursive: true,
-                skip_hidden: true,
                 omission_proves_absence: true,
                 discovered_any: &discovered,
                 protected_roots: &protected_roots,
@@ -658,7 +652,6 @@ fn enclosing_unc_root_does_not_block_pruning() {
             &PruneRequest {
                 root: Path::new(r"\\?\UNC\bmz-issue69\share\BMS\INSANE2"),
                 recursive: true,
-                skip_hidden: true,
                 omission_proves_absence: true,
                 discovered_any: &discovered,
                 protected_roots: &protected_roots,

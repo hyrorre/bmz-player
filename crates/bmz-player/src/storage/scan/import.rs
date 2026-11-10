@@ -506,7 +506,6 @@ pub fn scan_song_roots_with_progress(
             let request = crate::storage::library_db::PruneRequest {
                 root: &root_path,
                 recursive,
-                skip_hidden: scan.skip_hidden,
                 // Everything results may lag and do not establish absence from scope.
                 omission_proves_absence: backend != ScanDiscoveryBackend::Everything,
                 discovered_any: &discovered_any,

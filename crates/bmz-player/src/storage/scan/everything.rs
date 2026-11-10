@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -7,8 +7,7 @@ use everything_ipc::wm::{EverythingClient, FileInfo, RequestFlags};
 
 use super::discovery::{
     ChartDiscovery, ChartFileEntry, DiscoveredArchive, discover_archive_charts, is_chart_file_name,
-    is_document_file_name, is_excluded_name, is_hidden_metadata, record_discovery_issue,
-    usize_to_u32,
+    is_document_file_name, is_excluded_name, record_discovery_issue, usize_to_u32,
 };
 use super::{ScanConfig, ScanDiscoveryBackend, ScanDiscoveryOperation};
 
@@ -89,7 +88,6 @@ pub(super) fn discover_chart_files_everything(
     let mut issues = Vec::new();
     let mut complete = true;
     let mut document_folders = HashSet::new();
-    let mut hidden_cache = HashMap::new();
     for item in results.iter() {
         let parent = item
             .get_str(RequestFlags::Path)
@@ -111,11 +109,6 @@ pub(super) fn discover_chart_files_everything(
         {
             continue;
         }
-        if scan.skip_hidden
-            && has_hidden_component(&absolute_root, &relative_path, &mut hidden_cache)?
-        {
-            continue;
-        }
 
         let output_path =
             if root.is_absolute() { absolute_path } else { root.join(&relative_path) };
@@ -128,7 +121,7 @@ pub(super) fn discover_chart_files_everything(
         if crate::chart_source::is_archive_file(&output_path) {
             // Like native discovery, one unreadable archive is an issue, not a reason to
             // abandon the whole root and fall back to a much slower directory walk.
-            match discover_archive_charts(&output_path, scan.skip_hidden) {
+            match discover_archive_charts(&output_path) {
                 Ok((entries, generation)) => {
                     chart_entries.extend(entries);
                     archives.push(DiscoveredArchive { path: output_path, generation });
@@ -227,33 +220,6 @@ fn path_relative_to_root(path: &Path, root: &Path) -> Option<PathBuf> {
         return None;
     }
     Some(PathBuf::from(suffix.trim_start_matches('\\')))
-}
-
-pub(super) fn has_hidden_component(
-    root: &Path,
-    path: &Path,
-    cache: &mut HashMap<PathBuf, bool>,
-) -> Result<bool> {
-    let mut current = root.to_path_buf();
-    for component in path.components() {
-        if let Component::Normal(name) = component {
-            current.push(name);
-            let hidden = if let Some(hidden) = cache.get(&current) {
-                *hidden
-            } else {
-                let metadata = std::fs::symlink_metadata(&current).with_context(|| {
-                    format!("failed to inspect attributes: {}", current.display())
-                })?;
-                let hidden = is_hidden_metadata(&metadata);
-                cache.insert(current.clone(), hidden);
-                hidden
-            };
-            if hidden {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
 }
 
 fn filetime_to_unix_seconds(filetime: u64) -> i64 {

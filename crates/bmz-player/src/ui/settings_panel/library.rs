@@ -189,7 +189,6 @@ pub(super) fn build_library_settings_sections(
                 &mut config.scan.follow_symlinks,
                 tr!(text, "settings-scan-follow-symlinks"),
             );
-            ui.checkbox(&mut config.scan.skip_hidden, tr!(text, "settings-scan-skip-hidden"));
             #[cfg(windows)]
             {
                 ui.checkbox(

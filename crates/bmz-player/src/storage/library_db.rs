@@ -248,7 +248,6 @@ struct IndexedChartPath {
 pub(crate) struct PruneRequest<'a> {
     pub(crate) root: &'a Path,
     pub(crate) recursive: bool,
-    pub(crate) skip_hidden: bool,
     /// Whether the discovery listed everything in the root's scope, so that a
     /// registration it lacks is gone or outside the scope. Everything may lag.
     pub(crate) omission_proves_absence: bool,

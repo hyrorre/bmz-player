@@ -24,7 +24,7 @@ impl LibraryDatabase {
     /// chart deleted after its discovery is removed by the next scan, not by a second
     /// stat of every chart here. For the rest, a complete native discovery
     /// (`omission_proves_absence`) shows that the registration is gone or outside the
-    /// scope, such as an unchosen link alias; hidden entries and other root scopes can
+    /// scope, such as an unchosen link alias or an excluded name; other root scopes can
     /// still retain it. Otherwise (an index such as Everything may lag) only the file
     /// system or a decoded archive index decides, and only `Ok(false)` proves absence.
     pub(crate) fn prune_missing_chart_files(
@@ -72,58 +72,12 @@ impl LibraryDatabase {
                 // An offline, disabled, or unscanned root cannot prove absence.
                 continue;
             }
-            // The enclosing root's own scan may have chosen a different alias, or
-            // kept a hidden chart, so only the file system or a decoded archive
-            // index may remove its registrations, never the omission alone.
+            // The enclosing root's own scan may have chosen a different alias, so
+            // only the file system or a decoded archive index may remove its
+            // registrations, never the omission alone.
             let enclosed =
                 !exact_archive && enclosing_roots.iter().any(|other| other.contains_key(key));
             if request.omission_proves_absence && !enclosed {
-                // The hidden setting only restricts new discovery. Keep existing
-                // hidden files, as before this scan optimization.
-                if request.skip_hidden
-                    && let Ok(locator) = &locator
-                {
-                    let container = locator.container_path();
-                    match container.try_exists() {
-                        Err(_) => continue,
-                        Ok(true) => {
-                            if crate::storage::scan::hidden_path_in_root(
-                                Path::new(&root_path),
-                                container,
-                            ) != Some(false)
-                            {
-                                continue;
-                            }
-                            if let crate::chart_source::ChartLocator::Archive { entry, .. } =
-                                locator
-                            {
-                                let hidden = !cfg!(windows)
-                                    && entry.split('/').any(|part| part.starts_with('.'));
-                                if hidden {
-                                    let current = crate::song_archive::inspect(
-                                        container,
-                                        &Default::default(),
-                                    )
-                                    .ok();
-                                    let generation: Option<String> = self.conn.query_row(
-                                            "SELECT generation FROM song_archive_scans WHERE path = ?1",
-                                            [library_path_key(container)], |row| row.get(0),
-                                        ).ok();
-                                    if current.as_ref().is_none_or(|index| {
-                                        generation.as_deref()
-                                            != Some(index.generation.fingerprint.as_str())
-                                            || index.entries.iter().any(|item| {
-                                                !item.is_directory && item.name == *entry
-                                            })
-                                    }) {
-                                        continue;
-                                    }
-                                }
-                            }
-                        }
-                        Ok(false) => {}
-                    }
-                }
                 missing.push(*id);
                 continue;
             }
