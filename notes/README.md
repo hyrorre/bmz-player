@@ -39,7 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
-| 2026-11-10 | [Qwilightプレイスキンの試験対応](2026/2026-11-10-qwilight-play-skins.md) |
+| 2026-11-10 | [Qwilightプレイスキンの試験対応とカスタマイズ](2026/2026-11-10-qwilight-play-skins.md) |
 | 2026-11-09 | [Rust実行経路の停止・負荷候補の計測と修正](2026/2026-11-09-rust-frame-stalls.md) |
 | 2026-11-09 | [Surface再設定失敗後のクラッシュ経路](2026/2026-11-09-surface-reconfiguration-recovery.md) |
 | 2026-11-08 | [スレッド分離後のスキンtimer更新とLN残光](2026/2026-11-08-play-skin-timer-projection.md) |

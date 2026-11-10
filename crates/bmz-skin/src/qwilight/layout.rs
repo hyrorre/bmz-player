@@ -15,6 +15,9 @@ pub(super) struct Layout {
     pub width: f64,
     pub height: f64,
     pub judge_y: f64,
+    /// Left edge and width of the 1P lanes (Qwilight `mainPosition` / `P1BuiltLength`).
+    pub main_x: f64,
+    pub p1_width: f64,
     pub dp_offset: Option<f64>,
     pub lanes: Vec<Lane>, // beatoraja note order, scratch last in each region
 }
@@ -161,6 +164,8 @@ impl Layout {
             width,
             height,
             judge_y,
+            main_x,
+            p1_width: p1,
             dp_offset: (scratches == 2).then_some(p1 + gap),
             lanes: order.into_iter().map(|i| physical[i].clone()).collect(),
         })

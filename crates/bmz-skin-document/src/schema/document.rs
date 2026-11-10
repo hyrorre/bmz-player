@@ -65,6 +65,10 @@ pub struct SkinDocument {
     pub category: Vec<SkinCategoryDef>,
     #[serde(default)]
     pub property: Vec<SkinPropertyDef>,
+    /// BMZ extension: display text by UI locale code, keyed by property name.
+    /// Saved selections keep using the language-independent names.
+    #[serde(default, rename = "propertyLabels")]
+    pub property_labels: HashMap<String, SkinPropertyLabels>,
     #[serde(default)]
     pub filepath: Vec<SkinFilepathDef>,
     #[serde(default)]
@@ -310,6 +314,16 @@ pub struct SkinPropertyItemDef {
     pub name: String,
     #[serde(default)]
     pub op: i32,
+}
+
+/// Locale code (`ja`, `en`, ...) to display text for one property and its items.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct SkinPropertyLabels {
+    #[serde(default)]
+    pub name: HashMap<String, String>,
+    /// Item name to its localized display text.
+    #[serde(default)]
+    pub items: HashMap<String, HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

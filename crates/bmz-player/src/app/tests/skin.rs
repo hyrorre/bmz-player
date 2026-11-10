@@ -31,6 +31,139 @@ fn qwilight_catalog_registers_only_play_slots_without_running_lua() {
     assert!(catalog.result.is_empty());
 }
 
+/// A Qwilight skin declaring two adjustments, with an option hidden by another.
+fn write_qwilight_customize_fixture(dir: &Path) -> PathBuf {
+    use std::io::Write;
+    std::fs::create_dir_all(dir).unwrap();
+    let path = dir.join("skin.yaml");
+    std::fs::write(&path, "format: {zip: skin}\nframe: {}\nlambda:\n  setMainPosition: true\n  setJudgmentMainPosition: true\n  configure-comment-0: Colors\n  configure-0: Hide, Show\n  configure-comment-1: Color\n  configure-comment-1-1042: 색\n  configure-1: Red, Blue\n  configure-1-1042: 빨강, 파랑\n  configure-available-1: Toggle()\n  drawing1: 1, 2, 3, 4, 5, 10\n  pipeline: 7\npoint:\n  mainPosition: Main()\n  noteLength: 20\n  judgmentMainPosition: Judge()\n").unwrap();
+    std::fs::write(
+        dir.join("skin.lua"),
+        "function Main() return 10 + mainPosition end\nfunction Judge() return judgmentMainPosition - 100 end\nfunction Toggle() return configures[1] == 1 end",
+    )
+    .unwrap();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([255; 4]))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(dir.join("skin.zip")).unwrap());
+    zip.start_file("Note/N 1 0 0.png", zip::write::SimpleFileOptions::default()).unwrap();
+    zip.write_all(png.get_ref()).unwrap();
+    zip.finish().unwrap();
+    path
+}
+
+#[test]
+fn qwilight_saved_adjustments_reload_and_move_layout_for_each_key_mode() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("skins");
+    let path = write_qwilight_customize_fixture(&root.join("Q"));
+    let offset = |name: &str, x, y| SkinOffsetConfig {
+        name: Some(name.into()),
+        id: 0,
+        x,
+        y,
+        ..Default::default()
+    };
+    let mut skin = SkinConfig {
+        play7: path.to_string_lossy().into_owned(),
+        play14: path.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    skin.play7_offsets = vec![
+        offset("Qwilight lane position", 40, 0),
+        // Up by 50 in BMZ: Qwilight's judgment line value is -50.
+        offset("Qwilight judgment line position", 0, 50),
+    ];
+    // Saved per key mode, as Qwilight keeps the lane position per input mode.
+    skin.play14_offsets = vec![offset("Qwilight lane position", -5, 0)];
+    let saved: SkinConfig = toml::from_str(&toml::to_string(&skin).unwrap()).unwrap();
+    let state_for = |mode: i32, offsets: &[SkinOffsetConfig]| {
+        let mut state = bmz_skin::LuaLoadRuntimeState {
+            number_values: BTreeMap::from([(bmz_render::skin::SKIN_REF_BMZ_KEY_MODE, mode)]),
+            ..Default::default()
+        };
+        apply_skin_offsets_to_lua_runtime_state(&mut state, offsets);
+        state
+    };
+    let defaults = state_for(7, &[]);
+    let adjusted = state_for(7, &saved.play7_offsets);
+    let signature = |state| {
+        play_skin_signature(
+            KeyMode::K7,
+            SessionMode::Normal,
+            &saved.play7,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            state,
+            0,
+        )
+    };
+    assert_ne!(signature(&defaults), signature(&adjusted), "an offset edit re-decodes Play");
+    let lane_area = |state: &bmz_skin::LuaLoadRuntimeState| {
+        let decoded =
+            crate::skin_loader::decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+                pinned_sources: None,
+                skin_path: &path,
+                kind: SkinKind::Play,
+                options: &BTreeMap::new(),
+                files: &BTreeMap::new(),
+                runtime_state: state,
+                library_roots: std::slice::from_ref(&root),
+                document_cache: None,
+                source_cache: None,
+                texture_cache: None,
+                font_cache: None,
+                installed_fonts: None,
+            })
+            .unwrap();
+        let note = decoded.document.note.unwrap();
+        // beatoraja note order puts the 1P scratch after the seven keys (7K and 14K).
+        let bmz_render::skin::SkinDstEntry::Frame(frame) = &note.dst[7] else {
+            panic!("scratch frame")
+        };
+        (frame.x.unwrap(), frame.h.unwrap())
+    };
+    assert_eq!(lane_area(&defaults), (10, 500));
+    assert_eq!(lane_area(&adjusted), (50, 450));
+    assert_eq!(lane_area(&state_for(14, &saved.play14_offsets)), (5, 500));
+}
+
+#[test]
+fn qwilight_settings_defs_follow_slot_options_and_keep_only_effective_offsets() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = write_qwilight_customize_fixture(&temp.path().join("skins/Q"));
+    let paths = crate::paths::AppPaths::from_dirs(
+        temp.path().to_path_buf(),
+        temp.path().to_path_buf(),
+        temp.path().join("cache"),
+        temp.path().join("logs"),
+    );
+    let path = path.to_string_lossy();
+    let defs = |options: Option<&BTreeMap<String, String>>| {
+        skin_defs_from_path(&paths, &SkinConfig::default(), &path, true, options)
+    };
+    let names = |defs: &SceneSkinDefs| {
+        defs.property.iter().map(|property| property.name.clone()).collect::<Vec<_>>()
+    };
+    let hidden = BTreeMap::from([("Colors".to_string(), "Hide".to_string())]);
+    let shown = BTreeMap::from([("Colors".to_string(), "Show".to_string())]);
+    assert_eq!(names(&defs(Some(&hidden))), ["Colors", "Lane cover image"]);
+    let visible = defs(Some(&shown));
+    assert_eq!(names(&visible), ["Colors", "Color", "Lane cover image"]);
+    // The catalog header lists every option without running Lua.
+    assert_eq!(names(&defs(None)), ["Colors", "Color", "Lane cover image"]);
+    assert!(visible.qwilight);
+    assert_eq!(visible.property_label("Color", crate::i18n::AppLocale::Ko), "색");
+    assert_eq!(visible.property_label("Color", crate::i18n::AppLocale::Ja), "Color");
+    assert_eq!(visible.item_label("Color", "Blue", crate::i18n::AppLocale::Ko), "파랑");
+    assert_eq!(visible.item_label("Color", "Blue", crate::i18n::AppLocale::ZhCn), "Blue");
+    let offsets: Vec<_> = visible.offset.iter().map(|offset| offset.id).collect();
+    // Declared Qwilight adjustments plus All / Notes / Judge offset. Judge Detail
+    // and Bar Line offset have no converted element, so they are not shown.
+    assert_eq!(offsets, [1001, 1005, 10, 30, 32]);
+}
+
 #[test]
 fn invalid_continue_fallback_does_not_abort_result_skin_decode() {
     let temp = tempfile::tempdir().unwrap();

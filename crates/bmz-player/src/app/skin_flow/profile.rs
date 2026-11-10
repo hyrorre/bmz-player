@@ -119,13 +119,39 @@ impl WinitApp {
         self.boot.profile_config.sync_active_play_mode();
     }
 
-    pub(super) fn skin_defs_for_path(&mut self, path: &str, play: bool) -> SceneSkinDefs {
-        let key = (path.trim().to_string(), play);
+    /// Qwilight definitions depend on the slot's options (`configure-available-*`),
+    /// so they are cached per selection. Every Play slot may use the same path with
+    /// its own options, so old selections are dropped only past that many entries.
+    pub(super) fn skin_defs_for_path(
+        &mut self,
+        path: &str,
+        play: bool,
+        options: &BTreeMap<String, String>,
+    ) -> SceneSkinDefs {
+        let path = path.trim().to_string();
+        let options = (play && bmz_skin::is_qwilight_play_skin_path(Path::new(&path)))
+            .then(|| options.clone());
+        let key = (path, play, options);
         if let Some(defs) = self.skin.skin_defs_cache.get(&key) {
             return defs.clone();
         }
-        let defs =
-            skin_defs_from_path(&self.boot.app_paths, &self.boot.profile_config.skin, &key.0, play);
+        let defs = skin_defs_from_path(
+            &self.boot.app_paths,
+            &self.boot.profile_config.skin,
+            &key.0,
+            play,
+            key.2.as_ref(),
+        );
+        const SELECTIONS_PER_PATH: usize = 16;
+        let same_path = |cached: &(String, bool, Option<BTreeMap<String, String>>)| {
+            cached.2.is_some() && cached.0 == key.0 && cached.1 == key.1
+        };
+        if key.2.is_some()
+            && self.skin.skin_defs_cache.keys().filter(|cached| same_path(cached)).count()
+                >= SELECTIONS_PER_PATH
+        {
+            self.skin.skin_defs_cache.retain(|cached, _| !same_path(cached));
+        }
         self.skin.skin_defs_cache.insert(key, defs.clone());
         defs
     }

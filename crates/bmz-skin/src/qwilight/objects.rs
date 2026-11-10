@@ -1,4 +1,15 @@
-use super::{layout::Layout, resources::Resources, *};
+use super::{customize::LaneCoverChoice, layout::Layout, resources::Resources, *};
+
+/// beatoraja's common play offsets that BMZ shows for every play skin.
+const OFFSET_NOTES: i32 = 30;
+const OFFSET_JUDGE: i32 = 32;
+/// Qwilight `PaintPipelineID` values used for implicit ordering.
+const PIPELINE_NOTE: i32 = 7;
+const PIPELINE_JUDGMENT_PAINT: i32 = 15;
+const PIPELINE_HIT_NOTE_PAINT: i32 = 45;
+const PIPELINE_VEIL: i32 = 50;
+/// BMZ SUDDEN+ slider (beatoraja SLIDER_LANECOVER), moving downward.
+const SLIDER_LANE_COVER: i32 = 4;
 
 pub(super) struct Builder {
     pub document: Json,
@@ -6,12 +17,21 @@ pub(super) struct Builder {
     eval: Evaluator,
     layout: Layout,
     resources: Resources,
+    context: SkinPathContext,
+    lane_cover: LaneCoverChoice,
     destinations: BTreeMap<i32, Vec<Json>>,
     source_ids: BTreeMap<(Vec<String>, usize), String>,
 }
 impl Builder {
-    pub fn new(eval: Evaluator, layout: Layout, resources: Resources) -> Result<Self> {
-        let mut document = eval.definition.header();
+    pub fn new(
+        eval: Evaluator,
+        layout: Layout,
+        resources: Resources,
+        context: &SkinPathContext,
+        lane_cover: LaneCoverChoice,
+    ) -> Result<Self> {
+        let lane_covers = customize::lane_cover_names(context);
+        let mut document = eval.definition.header(&eval.available, &lane_covers);
         document["w"] = json!(layout.width.round() as u32);
         document["h"] = json!(layout.height.round() as u32);
         document["type"] = json!(layout.skin_type);
@@ -21,6 +41,8 @@ impl Builder {
             eval,
             layout,
             resources,
+            context: context.clone(),
+            lane_cover,
             destinations: BTreeMap::new(),
             source_ids: BTreeMap::new(),
         })
@@ -38,7 +60,7 @@ impl Builder {
         rect: Json,
         timer: Option<i32>,
         duration: Option<i32>,
-    ) {
+    ) -> &mut Json {
         let mut frames = vec![rect.clone()];
         let mut d = json!({"id":id,"filter":1,"dst":frames});
         if let Some(timer) = timer {
@@ -51,7 +73,9 @@ impl Builder {
             d["dst"] = json!(frames);
             d["loop"] = json!(-1);
         }
-        self.destinations.entry(pipeline).or_default().push(d);
+        let destinations = self.destinations.entry(pipeline).or_default();
+        destinations.push(d);
+        destinations.last_mut().expect("destination was just pushed")
     }
     fn frames(&self, name: &str) -> Result<(usize, i32)> {
         let n = self.eval.number("frame", &format!("{name}-frame"), 1.0)? as usize;
@@ -110,6 +134,7 @@ impl Builder {
         self.decorations()?;
         self.judgments()?;
         self.hud()?;
+        self.lane_cover()?;
         let pipeline = self
             .eval
             .list("lambda", "pipeline")?
@@ -117,15 +142,20 @@ impl Builder {
             .map(|v| v.parse::<i32>().context("invalid Qwilight pipeline"))
             .collect::<Result<Vec<_>>>()?;
         let mut destinations = Vec::new();
-        // The BGA and bomb layers are implicit in older Qwilight skins.
+        // The BGA, bomb and veil layers are implicit in older Qwilight skins.
         if !pipeline.contains(&0) {
             destinations.extend(self.destinations.remove(&0).unwrap_or_default());
         }
-        let implicit_hits = !pipeline.contains(&45);
+        let implicit_hits = !pipeline.contains(&PIPELINE_HIT_NOTE_PAINT);
+        let implicit_veil = !pipeline.contains(&PIPELINE_VEIL);
         for id in pipeline {
             destinations.extend(self.destinations.remove(&id).unwrap_or_default());
-            if implicit_hits && id == 15 {
-                destinations.extend(self.destinations.remove(&45).unwrap_or_default());
+            if implicit_hits && id == PIPELINE_JUDGMENT_PAINT {
+                destinations
+                    .extend(self.destinations.remove(&PIPELINE_HIT_NOTE_PAINT).unwrap_or_default());
+            }
+            if implicit_veil && id == PIPELINE_NOTE {
+                destinations.extend(self.destinations.remove(&PIPELINE_VEIL).unwrap_or_default());
             }
         }
         self.document["destination"] = json!(destinations);
@@ -196,7 +226,7 @@ impl Builder {
             }));
         }
         self.document["note"] = note;
-        self.destinations.insert(7, vec![json!({"id":"notes"})]);
+        self.destinations.insert(PIPELINE_NOTE, vec![json!({"id":"notes","offset":OFFSET_NOTES})]);
         Ok(())
     }
     fn lane_images(&mut self) -> Result<()> {
@@ -395,7 +425,8 @@ impl Builder {
             );
             let mut last = self.rect(x, y, w, h);
             last["time"] = json!(cycle);
-            images.push(json!({"id":id,"loop":-1,"filter":1,"dst":[self.rect(x,y,w,h),last]}));
+            images.push(json!({"id":id,"loop":-1,"filter":1,"offset":OFFSET_JUDGE,
+                "dst":[self.rect(x,y,w,h),last]}));
         }
         self.push(
             "judge",
@@ -493,13 +524,12 @@ impl Builder {
                     _ => "alt-unused",
                 };
                 for dx in self.alt_offsets(alt, if name == "band" { 2 } else { 0 })? {
-                    self.destination(
-                        pipeline,
-                        &id,
-                        self.rect(x + dx, y, width, height),
-                        None,
-                        None,
-                    );
+                    let rect = self.rect(x + dx, y, width, height);
+                    let destination = self.destination(pipeline, &id, rect, None, None);
+                    // beatoraja's Judge offset moves the combo with the judgment.
+                    if name == "band" {
+                        destination["offset"] = json!(OFFSET_JUDGE);
+                    }
                 }
             }
         }
@@ -531,6 +561,73 @@ impl Builder {
             }
         }
         Ok(())
+    }
+
+    /// Qwilight's veil: the lane cover drawn over the 1P (and 2P) lanes with the
+    /// lane width and the image's aspect ratio, its bottom edge at the cover
+    /// height. BMZ moves it with SUDDEN+ instead of Qwilight's own cover height.
+    fn lane_cover(&mut self) -> Result<()> {
+        let path = match self.lane_cover.user_image(&self.context, &mut self.warnings) {
+            Some(path) => Some(path),
+            None => self.skin_lane_cover()?,
+        };
+        let Some(path) = path else { return Ok(()) };
+        let size = bmz_skin_assets::read(Path::new(&path))
+            .ok()
+            .and_then(|bytes| customize::image_size(&bytes));
+        let Some((image_w, image_h)) = size else {
+            self.warnings.push(format!("unreadable Qwilight lane cover image: {path}"));
+            return Ok(());
+        };
+        let width = self.layout.p1_width;
+        let height = width * f64::from(image_h) / f64::from(image_w);
+        if width <= 0.0 || height <= 0.0 {
+            return Ok(());
+        }
+        let src = self.source(vec![path], 1);
+        self.push(
+            "slider",
+            json!({"id":"qw-lane-cover","src":src,"x":0,"y":0,"w":image_w,"h":image_h,
+                "angle":2,"range":self.layout.judge_y.round() as i32,
+                "type":SLIDER_LANE_COVER,"changeable":false}),
+        );
+        let offsets = match self.layout.dp_offset {
+            Some(distance) => vec![0.0, distance],
+            None => vec![0.0],
+        };
+        for dx in offsets {
+            let rect = self.rect(self.layout.main_x + dx, -height, width, height);
+            self.destination(PIPELINE_VEIL, "qw-lane-cover", rect, None, None);
+        }
+        Ok(())
+    }
+
+    /// `_GetVeil()` names a file in `Drawing/`, or lists several as `[a, b]`;
+    /// Qwilight then picks one for each play.
+    fn skin_lane_cover(&mut self) -> Result<Option<String>> {
+        let names = self.eval.prefix("_GetVeil", &[], "Veil")?;
+        let names = names.trim();
+        let names: Vec<&str> = match names.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            Some(list) => list.split(',').map(str::trim).collect(),
+            None => vec![names],
+        };
+        let paths: Vec<String> = names
+            .iter()
+            .filter(|name| !name.is_empty())
+            .filter_map(|name| {
+                let stem = if customize::is_qwilight_lane_cover_image_path(Path::new(name)) {
+                    name.rsplit_once('.').map_or(*name, |(stem, _)| stem)
+                } else {
+                    name
+                };
+                self.resources.path(&format!("Drawing/{stem}"))
+            })
+            .collect();
+        if paths.is_empty() {
+            return Ok(None);
+        }
+        let index = crate::random_file::random_file_index(paths.len())?;
+        Ok(paths.into_iter().nth(index))
     }
 
     fn fractional_hud(&mut self) -> Result<()> {

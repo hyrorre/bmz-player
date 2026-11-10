@@ -1,25 +1,37 @@
 //! Qwilight play-skin adapter. Independently implements the YAML/Lua asset contract;
 //! no Qwilight application source or third-party skin assets are included.
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail, ensure};
 use bmz_skin_document::{SKIN_REF_BMZ_KEY_MODE, SkinDocument};
-use mlua::{ChunkMode, Function, Lua, MultiValue, Value};
+use mlua::{ChunkMode, Function, Lua, MultiValue, Table, Value};
 use serde_json::{Value as Json, json};
 use serde_yaml_ng::Value as Yaml;
 
 use crate::{
-    LoadedSkinDocument, LuaLoadRuntimeState, SkinLoadDependencies, SkinLoadWarning, SkinPathContext,
+    LoadedSkinDocument, LuaLoadRuntimeState, LuaSkinOffsetValue, SkinLoadDependencies,
+    SkinLoadWarning, SkinPathContext,
 };
 
+mod customize;
 mod layout;
 mod objects;
 mod resources;
 mod syntax;
 #[cfg(test)]
 mod tests;
+
+pub use customize::{
+    QWILIGHT_LANE_COVER_DIR, QWILIGHT_LANE_COVER_PROPERTY, is_qwilight_lane_cover_image_path,
+};
+
+/// Qwilight reads `configure-0` to `configure-15`.
+const CONFIGURE_COUNT: usize = 16;
+/// BMZ UI locale code and Qwilight LCID. Qwilight uses 1033 for every other language.
+const LOCALES: [(&str, &str); 3] = [("ja", "1041"), ("ko", "1042"), ("en", "1033")];
 
 pub fn is_qwilight_play_skin_path(path: &Path) -> bool {
     path.extension()
@@ -53,23 +65,63 @@ impl Definition {
             _ => None,
         }
     }
+    /// `setMainPosition` and similar capability flags; Qwilight defaults them to false.
+    fn flag(&self, key: &str) -> bool {
+        self.text("lambda", key).is_some_and(|v| v.trim().eq_ignore_ascii_case("true"))
+    }
+    /// The saved option key. It stays language independent, as before localized labels.
     fn property_name(&self, i: usize) -> String {
         self.text("lambda", &format!("configure-comment-{i}-1041"))
             .or_else(|| self.text("lambda", &format!("configure-comment-{i}")))
             .unwrap_or_else(|| format!("Qwilight configure {i}"))
     }
-    fn choices(&self, i: usize) -> Vec<String> {
-        self.text("lambda", &format!("configure-{i}"))
-            .map(|s| s.split(',').map(|s| s.trim().to_string()).collect())
-            .unwrap_or_default()
+    fn split(text: &str) -> Vec<String> {
+        text.split(',').map(|s| s.trim().to_string()).collect()
     }
-    fn header(&self) -> Json {
-        let properties: Vec<_> = (0..16)
+    /// The language-independent choices that BMZ saves and passes to Lua by index.
+    fn choices(&self, i: usize) -> Vec<String> {
+        self.text("lambda", &format!("configure-{i}")).map(|s| Self::split(&s)).unwrap_or_default()
+    }
+    /// Display text from `configure-comment-{i}-{LCID}` and `configure-{i}-{LCID}`.
+    /// A localized list only labels the choices when it has the same length.
+    fn property_labels(&self, i: usize) -> Json {
+        let choices = self.choices(i);
+        let mut name = serde_json::Map::new();
+        let mut items: BTreeMap<String, serde_json::Map<String, Json>> = BTreeMap::new();
+        for (locale, lcid) in LOCALES {
+            let comment = self.text("lambda", &format!("configure-comment-{i}-{lcid}"));
+            let comment = if locale == "en" {
+                comment.or_else(|| self.text("lambda", &format!("configure-comment-{i}")))
+            } else {
+                comment
+            };
+            if let Some(comment) = comment {
+                name.insert(locale.into(), json!(comment));
+            }
+            let Some(localized) = self.text("lambda", &format!("configure-{i}-{lcid}")) else {
+                continue;
+            };
+            let localized = Self::split(&localized);
+            if localized.len() != choices.len() {
+                continue;
+            }
+            for (choice, label) in choices.iter().zip(localized) {
+                items.entry(choice.clone()).or_default().insert(locale.into(), json!(label));
+            }
+        }
+        json!({"name": name, "items": items})
+    }
+    /// `available[i]` hides an option whose `configure-available-{i}` is false.
+    fn header(&self, available: &[bool; CONFIGURE_COUNT], lane_covers: &[String]) -> Json {
+        let mut labels = serde_json::Map::new();
+        let mut properties: Vec<_> = (0..CONFIGURE_COUNT)
             .filter_map(|i| {
                 let choices = self.choices(i);
-                (!choices.is_empty()).then(|| {
+                (!choices.is_empty() && available[i]).then(|| {
+                    let name = self.property_name(i);
+                    labels.insert(name.clone(), self.property_labels(i));
                     json!({
-                        "name": self.property_name(i), "def": choices[0],
+                        "name": name, "def": choices[0],
                         "item": choices.iter().take(128).enumerate().map(|(j, name)| json!({
                             "name": name, "op": 30000 + i * 128 + j
                         })).collect::<Vec<_>>()
@@ -77,16 +129,33 @@ impl Definition {
                 })
             })
             .collect();
+        properties.push(customize::lane_cover_property(lane_covers));
         json!({"type": 0,
             "name": self.text("format", "title-1041").or_else(|| self.text("format", "title")).unwrap_or_else(|| "Qwilight play skin".into()),
-            "property": properties, "source": [], "image": [], "destination": [],
+            "property": properties, "propertyLabels": labels,
+            "offset": customize::adjustment_defs(self),
+            "source": [], "image": [], "destination": [], "slider": [],
             "value": [], "text": [], "panel": [], "judge": [], "graph": [], "sourceFrames": {}
         })
     }
 }
 
+/// Catalog header: lists every option without running the skin's Lua.
 pub fn load_qwilight_play_header(context: &SkinPathContext) -> Result<SkinDocument> {
-    Ok(serde_json::from_value(Definition::read(context)?.header())?)
+    let definition = Definition::read(context)?;
+    let lane_covers = customize::lane_cover_names(context);
+    Ok(serde_json::from_value(definition.header(&[true; CONFIGURE_COUNT], &lane_covers))?)
+}
+
+/// Settings header: runs the skin's Lua with the slot's options so that
+/// `configure-available-*` hides options exactly as Qwilight's settings window.
+pub fn load_qwilight_play_header_with_options(
+    context: &SkinPathContext,
+    options: &BTreeMap<String, String>,
+) -> Result<SkinDocument> {
+    let eval = Evaluator::new(Definition::read(context)?, context, options, &BTreeMap::new())?;
+    let lane_covers = customize::lane_cover_names(context);
+    Ok(serde_json::from_value(eval.definition.header(&eval.available, &lane_covers))?)
 }
 
 pub fn load_qwilight_play_skin(
@@ -97,10 +166,11 @@ pub fn load_qwilight_play_skin(
     let definition = Definition::read(context)?;
     let mode = *state.number_values.get(&SKIN_REF_BMZ_KEY_MODE).unwrap_or(&7);
     ensure!([4, 5, 6, 7, 8, 9, 10, 14].contains(&mode), "unsupported Qwilight key mode {mode}");
-    let mut eval = Evaluator::new(definition, context, options)?;
+    let mut eval = Evaluator::new(definition, context, options, &state.offset_values)?;
     let layout = layout::Layout::build(&mut eval, mode)?;
     let resources = resources::Resources::new(context, &eval)?;
-    let mut builder = objects::Builder::new(eval, layout, resources)?;
+    let lane_cover = customize::LaneCoverChoice::from_options(options);
+    let mut builder = objects::Builder::new(eval, layout, resources, context, lane_cover)?;
     builder.build()?;
     let document =
         serde_json::from_value(builder.document).context("invalid converted Qwilight play skin")?;
@@ -116,39 +186,34 @@ pub fn load_qwilight_play_skin(
 struct Evaluator {
     definition: Definition,
     lua: Lua,
+    /// Selections as saved. Qwilight loads lambda/format values and materials with them.
+    load_configures: Table,
+    /// Hidden options read as their first choice, as Qwilight's per-play layout.
+    play_configures: Table,
+    play_phase: Cell<bool>,
+    available: [bool; CONFIGURE_COUNT],
 }
 impl Evaluator {
     fn new(
         definition: Definition,
         context: &SkinPathContext,
         options: &BTreeMap<String, String>,
+        offsets: &BTreeMap<String, LuaSkinOffsetValue>,
     ) -> Result<Self> {
         let lua = crate::lua::new_layout_lua()?;
-        let choices = lua.create_table()?;
-        for i in 0..16 {
-            let items = definition.choices(i);
-            let selected = options.get(&definition.property_name(i));
-            choices.set(
-                i + 1,
-                selected.and_then(|value| items.iter().position(|item| item == value)).unwrap_or(0),
-            )?;
-        }
-        lua.globals().set("configures", choices)?;
-        for name in [
-            "mainPosition",
-            "noteLength",
-            "noteHeight",
-            "bandPosition",
-            "judgmentPaintPosition",
-            "judgmentVisualizerPosition",
-            "hitNotePaintArea",
-            "judgmentMainPositionV3",
-            "inputMapping",
-        ] {
-            lua.globals().set(name, 0)?;
-        }
-        lua.globals().set("judgmentMainPosition", 600)?;
-        lua.globals().set("judgmentMainPositionV2", 1)?;
+        let selected: Vec<usize> = (0..CONFIGURE_COUNT)
+            .map(|i| {
+                let items = definition.choices(i);
+                options
+                    .get(&definition.property_name(i))
+                    .and_then(|value| items.iter().position(|item| item == value))
+                    .unwrap_or(0)
+            })
+            .collect();
+        let load_configures = lua.create_sequence_from(selected.iter().copied())?;
+        lua.globals().set("configures", load_configures.clone())?;
+        customize::set_adjustment_globals(&lua, &definition, offsets)?;
+        lua.globals().set("inputMapping", 0)?;
         lua.globals().set("judgmentStage", 100)?;
         let stem = context.entry_file().file_stem().context("skin has no name")?.to_string_lossy();
         let name = definition.text("format", "lua").unwrap_or_else(|| stem.into_owned());
@@ -162,7 +227,58 @@ impl Evaluator {
             let source = syntax::normalize_lua(&fs::read_to_string(&path)?);
             lua.load(source).set_name(path.to_string_lossy()).set_mode(ChunkMode::Text).exec()?;
         }
-        Ok(Self { definition, lua })
+        let mut eval = Self {
+            definition,
+            lua,
+            play_configures: load_configures.clone(),
+            load_configures,
+            play_phase: Cell::new(false),
+            available: [true; CONFIGURE_COUNT],
+        };
+        for i in 0..CONFIGURE_COUNT {
+            eval.available[i] = eval.configure_available(i);
+        }
+        let play: Vec<usize> = selected
+            .iter()
+            .enumerate()
+            .map(|(i, &value)| if eval.available[i] { value } else { 0 })
+            .collect();
+        eval.play_configures = eval.lua.create_sequence_from(play)?;
+        Ok(eval)
+    }
+    /// Anything but `true` hides the option. A Lua error stops Qwilight from
+    /// loading the skin; BMZ keeps that option visible so it can be changed back.
+    fn configure_available(&self, i: usize) -> bool {
+        let Some(text) = self.definition.text("lambda", &format!("configure-available-{i}")) else {
+            return true;
+        };
+        self.use_phase(false);
+        match self.evaluate(&text) {
+            Ok(Value::Boolean(value)) => value,
+            Ok(Value::String(value)) => {
+                value.to_str().is_ok_and(|v| v.trim().eq_ignore_ascii_case("true"))
+            }
+            Ok(_) => false,
+            Err(error) => {
+                tracing::warn!(%error, configure = i, "Qwilight configure-available failed");
+                true
+            }
+        }
+    }
+    /// Lambda/format values and material names are read when Qwilight loads the
+    /// skin, while point/frame and `alt-*` values are evaluated for each play.
+    fn use_phase(&self, play: bool) {
+        if self.play_phase.replace(play) != play {
+            let table = if play { &self.play_configures } else { &self.load_configures };
+            let _ = self.lua.globals().set("configures", table.clone());
+        }
+    }
+    fn section_phase(&self, section: &str, key: &str) {
+        self.use_phase(match section {
+            "point" | "frame" => true,
+            "lambda" => key.starts_with("alt-"),
+            _ => false,
+        });
     }
     fn evaluate(&self, text: &str) -> Result<Value> {
         let text = text.trim();
@@ -199,6 +315,7 @@ impl Evaluator {
         Ok(Value::String(self.lua.create_string(text)?))
     }
     fn number(&self, section: &str, key: &str, default: f64) -> Result<f64> {
+        self.section_phase(section, key);
         match self.definition.text(section, key) {
             Some(value) => self.numeric(&value),
             None => Ok(default),
@@ -218,6 +335,7 @@ impl Evaluator {
         Ok(value)
     }
     fn list(&self, section: &str, key: &str) -> Result<Vec<String>> {
+        self.section_phase(section, key);
         let Some(text) = self.definition.text(section, key) else {
             return Ok(Vec::new());
         };
@@ -264,6 +382,7 @@ impl Evaluator {
         last.map_or(Ok(default), |value| self.numeric(value))
     }
     fn prefix(&self, name: &str, arguments: &[usize], default: &str) -> Result<String> {
+        self.use_phase(false);
         let value: Value = self.lua.globals().get(name)?;
         if let Value::Function(function) = value {
             let args = self.lua.create_sequence_from(arguments.iter().copied())?;

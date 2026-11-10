@@ -15,7 +15,9 @@ mod pm_chara;
 mod qwilight;
 mod random_file;
 pub use qwilight::{
-    is_qwilight_play_skin_path, load_qwilight_play_header, load_qwilight_play_skin,
+    QWILIGHT_LANE_COVER_DIR, QWILIGHT_LANE_COVER_PROPERTY, is_qwilight_lane_cover_image_path,
+    is_qwilight_play_skin_path, load_qwilight_play_header, load_qwilight_play_header_with_options,
+    load_qwilight_play_skin,
 };
 
 pub use lua_keys::{

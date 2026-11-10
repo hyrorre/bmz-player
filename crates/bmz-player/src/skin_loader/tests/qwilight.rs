@@ -259,6 +259,304 @@ point:
     }
 }
 
+fn png_bytes(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(width, height, image::Rgba(color))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    png.into_inner()
+}
+
+fn decode_qwilight(
+    path: &Path,
+    root: &Path,
+    mode: i32,
+    options: BTreeMap<String, String>,
+) -> DecodedSkin {
+    decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+        pinned_sources: None,
+        skin_path: path,
+        kind: SkinKind::Play,
+        options: &options,
+        files: &BTreeMap::new(),
+        runtime_state: &LuaLoadRuntimeState {
+            number_values: BTreeMap::from([(bmz_render::skin::SKIN_REF_BMZ_KEY_MODE, mode)]),
+            ..Default::default()
+        },
+        library_roots: &[root.to_path_buf()],
+        document_cache: None,
+        source_cache: None,
+        texture_cache: None,
+        font_cache: None,
+        installed_fonts: None,
+    })
+    .unwrap()
+}
+
+#[test]
+fn qwilight_lane_cover_follows_sudden_with_skin_or_added_images() {
+    use std::io::Write;
+    let root = unique_test_dir("qwilight-lane-cover");
+    let skin = root.join("Skin");
+    fs::create_dir_all(&skin).unwrap();
+    let path = skin.join("skin.yaml");
+    // No VeilDrawing (50) in the pipeline: Qwilight draws the veil right after the notes.
+    fs::write(&path, "format: {zip: skin}\nframe: {}\nlambda:\n  drawing1: 1, 2, 3, 4, 5, 10\n  pipeline: 7, 15, 9\npoint:\n  mainPosition: 100\n  noteLength: 20\n  noteHeight: 12\n  judgmentMainPosition: 500\n  p2Position: 30\n  binLength: 10\n  binHeight: 20\n  bandPosition0: 300\n  bandPosition1: 40\n").unwrap();
+    // Without `_GetVeil`, Qwilight looks for `Drawing/Veil`; skins name their own file.
+    fs::write(skin.join("skin.lua"), "function _GetVeil() return 'Veil 0' end").unwrap();
+    let mut zip = zip::ZipWriter::new(fs::File::create(skin.join("skin.zip")).unwrap());
+    let mut entries = vec![("Note/N 1 0 0.png".to_string(), png_bytes(2, 2, [255; 4]))];
+    entries.push(("Drawing/Veil 0.png".into(), png_bytes(4, 8, [0, 255, 0, 255])));
+    entries.extend((0..10).map(|i| (format!("Bin/{i}.png"), png_bytes(2, 2, [255; 4]))));
+    entries.extend((0..6).map(|i| (format!("Paint/J {i} 0.png"), png_bytes(2, 2, [255; 4]))));
+    for (name, bytes) in entries {
+        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(&bytes).unwrap();
+    }
+    zip.finish().unwrap();
+    let added = root.join(bmz_skin::QWILIGHT_LANE_COVER_DIR);
+    fs::create_dir_all(&added).unwrap();
+    fs::write(added.join("mine.png"), png_bytes(8, 8, [255, 0, 0, 255])).unwrap();
+
+    let cover = |options: BTreeMap<String, String>, mode| {
+        let decoded = decode_qwilight(&path, &root, mode, options);
+        let document = decoded.document.clone();
+        let slider = document.slider.iter().find(|s| s.id == "qw-lane-cover").unwrap().clone();
+        let source = document
+            .source
+            .iter()
+            .find(|s| s.id == slider.src)
+            .unwrap_or_else(|| panic!("{} not in {:?}", slider.src, document.source))
+            .path
+            .clone();
+        (decoded, slider, source)
+    };
+    let property = bmz_skin::QWILIGHT_LANE_COVER_PROPERTY.to_string();
+    for (selected, expected, aspect) in [
+        (None, "Drawing/Veil 0.png", 2.0),
+        (Some("mine.png"), "mine.png", 1.0),
+        // A removed image falls back to the skin's own lane cover.
+        (Some("missing.png"), "Drawing/Veil 0.png", 2.0),
+    ] {
+        let options: BTreeMap<_, _> =
+            selected.map(|name| (property.clone(), name.to_string())).into_iter().collect();
+        let (decoded, slider, source) = cover(options, 7);
+        assert!(source.replace('\\', "/").ends_with(expected), "{selected:?}: {source}");
+        assert_eq!((slider.slider_type, slider.angle, slider.range), (4, 2, 500));
+        let document = &decoded.document;
+        let ids: Vec<_> = document
+            .destination
+            .iter()
+            .filter_map(|entry| match entry {
+                DestinationListEntry::Single(d) => Some(d.id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let notes = ids.iter().position(|id| *id == "notes").unwrap();
+        assert_eq!(ids[notes + 1], "qw-lane-cover", "lane cover follows the notes");
+        let DestinationListEntry::Single(destination) = document
+            .destination
+            .iter()
+            .find(
+                |entry| matches!(entry, DestinationListEntry::Single(d) if d.id == "qw-lane-cover"),
+            )
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        // 1P width is 8 lanes x 20 px; the image keeps its aspect and starts above the canvas.
+        let bmz_render::skin::SkinDstEntry::Frame(frame) = &destination.dst[0] else {
+            panic!("lane cover frame")
+        };
+        let height = (160.0 * aspect) as i32;
+        assert_eq!(
+            (frame.x, frame.y, frame.w, frame.h),
+            (Some(100), Some(720), Some(160), Some(height))
+        );
+        let sources: std::collections::HashMap<_, _> = decoded
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source_id.clone(),
+                    SkinDocumentTexture {
+                        source_id: source.source_id.clone(),
+                        texture: source.texture,
+                        source_size: source.size,
+                    },
+                )
+            })
+            .collect();
+        let texture = sources[&slider.src].texture;
+        let mut view = document.clone();
+        view.destination.retain(
+            |entry| matches!(entry, DestinationListEntry::Single(d) if d.id == "qw-lane-cover"),
+        );
+        let drawn = |lane_cover| {
+            let state = SkinDrawState { lane_cover, ..Default::default() };
+            view.static_render_items(&sources, &state, &SkinTextState::default())
+                .into_iter()
+                .filter_map(|item| match item {
+                    SkinRenderItem::Image { texture: t, rect, .. } if t == texture => Some(rect),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(drawn(0.0).is_empty(), "SUDDEN+ off hides the lane cover");
+        let rect = drawn(0.5)[0];
+        // The bottom edge sits halfway down the 500 px lane (top-down canvas coordinates).
+        assert!(((rect.y + rect.height) * 720.0 - 250.0).abs() < 0.5, "{rect:?}");
+        assert!((rect.width * 1280.0 - 160.0).abs() < 0.5);
+    }
+    let (decoded, _, _) = cover(BTreeMap::from([(property.clone(), "mine.png".into())]), 14);
+    let sides = decoded
+        .document
+        .destination
+        .iter()
+        .filter(|entry| matches!(entry, DestinationListEntry::Single(d) if d.id == "qw-lane-cover"))
+        .count();
+    assert_eq!(sides, 2, "DP draws the lane cover on both sides");
+
+    // beatoraja's Notes / Judge offsets are attached to the converted elements.
+    let decoded = decode_qwilight(&path, &root, 7, BTreeMap::new());
+    let document = &decoded.document;
+    let offset_of = |id: &str| {
+        document.destination.iter().find_map(|entry| match entry {
+            DestinationListEntry::Single(d) if d.id == id => Some(d.offset),
+            _ => None,
+        })
+    };
+    assert_eq!(offset_of("notes"), Some(30));
+    assert_eq!(offset_of("qw-number-band"), Some(32));
+    assert!(document.judge[0].images.iter().all(|image| image.offset == 32));
+    assert_eq!(
+        document.property.last().unwrap().item.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(),
+        ["Skin", "Random", "mine.png"]
+    );
+}
+
+/// Offscreen GPU preview of an installed Qwilight skin with BMZ play values.
+#[allow(clippy::too_many_arguments)]
+fn render_installed_qwilight(
+    root: &Path,
+    library_roots: &[PathBuf],
+    name: &str,
+    mode: KeyMode,
+    number: i32,
+    options: &BTreeMap<String, String>,
+    offsets: &BTreeMap<String, bmz_skin::LuaSkinOffsetValue>,
+    lane_cover: f32,
+) -> Vec<u8> {
+    let path = root.join(name).join(format!("{name}.yaml"));
+    let state = LuaLoadRuntimeState {
+        number_values: BTreeMap::from([(bmz_render::skin::SKIN_REF_BMZ_KEY_MODE, number)]),
+        offset_values: offsets.clone(),
+        ..Default::default()
+    };
+    let decoded = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+        pinned_sources: None,
+        skin_path: &path,
+        kind: SkinKind::Play,
+        options,
+        files: &BTreeMap::new(),
+        runtime_state: &state,
+        library_roots,
+        document_cache: None,
+        source_cache: None,
+        texture_cache: None,
+        font_cache: None,
+        installed_fonts: None,
+    })
+    .unwrap();
+    let missing: Vec<_> = decoded
+        .document
+        .source
+        .iter()
+        .filter(|s| !decoded.sources.iter().any(|loaded| loaded.source_id == s.id))
+        .map(|s| s.path.as_str())
+        .collect();
+    assert!(missing.is_empty(), "{name} missing sources: {missing:?}");
+    eprintln!("{name}: decoded {} source atlases", decoded.sources.len());
+    let mut renderer = Renderer::default();
+    renderer.set_default_font_search_paths(vec![test_app_paths().resource_dir.join("fonts")]);
+    renderer
+        .attach_offscreen(bmz_render::renderer::SurfaceSize { width: 1280, height: 720 })
+        .unwrap();
+    install_decoded_skin(&mut renderer, decoded, SkinManifest::default()).unwrap();
+    let now = TimeUs(10_000_000);
+    let mut snapshot = RenderSnapshot {
+        time: now,
+        play_elapsed_time: now,
+        ready_elapsed_time: Some(now),
+        resources_loaded: true,
+        key_mode: mode,
+        now_bpm: 150.0,
+        hispeed: 2.3,
+        ex_score: 1234,
+        combo: 123,
+        max_combo: 345,
+        total_notes: 1000,
+        past_notes: 700,
+        gauge: 70.0,
+        gauge_max: 100.0,
+        lane_cover,
+        title: "Qwilight play skin / BMZ preview".into(),
+        artist: "Compatibility test".into(),
+        recent_judgements: vec![DisplayJudgement {
+            lane: Lane::Key4,
+            judge: Judge::Great,
+            side: None,
+            text: "GREAT".into(),
+            combo: 123,
+            delta_us: 0,
+            time: TimeUs(now.0 - 100_000),
+            is_miss: false,
+            timing_ms_suppressed: false,
+        }],
+        visible_long_notes: vec![VisibleLongNote {
+            lane: Lane::Key2,
+            mode: bmz_chart::model::LongNoteMode::Ln,
+            head_y: 0.2,
+            tail_y: 0.75,
+            alpha: 1.0,
+            body_state: LongBodyState::Inactive,
+        }],
+        ..Default::default()
+    };
+    snapshot.keyon_ms[Lane::Key4.index()] = Some(100);
+    for (i, &lane) in mode.active_lanes().iter().enumerate() {
+        snapshot.visible_notes[lane.index()].push(VisibleNote {
+            lane,
+            time: now,
+            y: 0.15 + (i % 6) as f32 * 0.11,
+            alpha: 1.0,
+            kind: NoteVisualKind::Tap,
+            processed_judge: None,
+            pms_miss_fall: None,
+        });
+    }
+    renderer.render_scene(AppSceneSnapshot::Play(snapshot)).unwrap();
+    let rgba = renderer.read_offscreen_rgba().unwrap();
+    assert!(
+        rgba.as_chunks::<4>().0.iter().filter(|p| p[0] > 30 || p[1] > 30 || p[2] > 30).count()
+            > 10000,
+        "empty preview"
+    );
+    rgba
+}
+
+fn save_preview(output: &Path, file: &str, rgba: &[u8]) {
+    image::save_buffer(output.join(file), rgba, 1280, 720, image::ColorType::Rgba8).unwrap();
+}
+
+/// Pixels that differ, within `x0..x1` and `y0..y1` of a 1280x720 frame.
+fn changed_pixels(a: &[u8], b: &[u8], (x0, x1): (usize, usize), (y0, y1): (usize, usize)) -> usize {
+    (y0..y1)
+        .flat_map(|y| (x0..x1).map(move |x| (y * 1280 + x) * 4))
+        .filter(|&i| a[i..i + 3].iter().zip(&b[i..i + 3]).any(|(p, q)| p.abs_diff(*q) > 24))
+        .count()
+}
+
 #[test]
 #[ignore = "requires installed Qwilight skins and GPU; set BMZ_QWILIGHT_SKIN_ROOT and BMZ_QWILIGHT_PREVIEW_DIR"]
 fn qwilight_installed_play_skins_gpu() {
@@ -269,109 +567,73 @@ fn qwilight_installed_play_skins_gpu() {
         std::env::var_os("BMZ_QWILIGHT_PREVIEW_DIR").expect("set BMZ_QWILIGHT_PREVIEW_DIR"),
     );
     fs::create_dir_all(&output).unwrap();
+    let roots = [root.clone()];
+    let (none, unadjusted) = (BTreeMap::new(), BTreeMap::new());
     for (name, mode, number) in
         [("Default", KeyMode::K7, 7), ("CR_DX", KeyMode::K7, 7), ("CR_simple", KeyMode::K14, 14)]
     {
-        let path = root.join(name).join(format!("{name}.yaml"));
-        let state = LuaLoadRuntimeState {
-            number_values: BTreeMap::from([(bmz_render::skin::SKIN_REF_BMZ_KEY_MODE, number)]),
-            ..Default::default()
+        let rgba =
+            render_installed_qwilight(&root, &roots, name, mode, number, &none, &unadjusted, 0.0);
+        save_preview(&output, &format!("{name}-{number}k.png"), &rgba);
+    }
+}
+
+/// Non-default Qwilight adjustments, SUDDEN+ with the skin's and an added
+/// lane cover, rendered offscreen. The added image is copied to a temporary
+/// library root; the installed Qwilight folder is not modified.
+#[test]
+#[ignore = "requires installed Qwilight skins and GPU; set BMZ_QWILIGHT_SKIN_ROOT and BMZ_QWILIGHT_PREVIEW_DIR"]
+fn qwilight_installed_customization_gpu() {
+    let root = PathBuf::from(
+        std::env::var_os("BMZ_QWILIGHT_SKIN_ROOT").expect("set BMZ_QWILIGHT_SKIN_ROOT"),
+    );
+    let output = PathBuf::from(
+        std::env::var_os("BMZ_QWILIGHT_PREVIEW_DIR").expect("set BMZ_QWILIGHT_PREVIEW_DIR"),
+    );
+    fs::create_dir_all(&output).unwrap();
+    let added = tempfile::tempdir().unwrap();
+    let cover_dir = added.path().join(bmz_skin::QWILIGHT_LANE_COVER_DIR);
+    fs::create_dir_all(&cover_dir).unwrap();
+    // CR_DX's loose Cover_DX.png equals its built-in veil, so use another skin's cover.
+    fs::copy(root.join("CR_natural/Cover_Red.png"), cover_dir.join("Cover_Red.png")).unwrap();
+    let roots = [root.clone(), added.path().to_path_buf()];
+    let (none, unadjusted) = (BTreeMap::new(), BTreeMap::new());
+    let value = |x, y, w, h| bmz_skin::LuaSkinOffsetValue { x, y, w, h, r: 0, a: 0 };
+    let adjusted = BTreeMap::from([
+        ("Qwilight lane position".to_string(), value(120, 0, 0, 0)),
+        ("Qwilight note width".to_string(), value(0, 0, 8, 0)),
+        ("Qwilight judgment line position".to_string(), value(0, 80, 0, 0)),
+        ("Qwilight combo position".to_string(), value(0, 60, 0, 0)),
+    ]);
+    let user_cover = BTreeMap::from([(
+        bmz_skin::QWILIGHT_LANE_COVER_PROPERTY.to_string(),
+        "Cover_Red.png".to_string(),
+    )]);
+    for (name, mode, number) in [("CR_DX", KeyMode::K7, 7), ("Default", KeyMode::K14, 14)] {
+        let render = |options, offsets, cover| {
+            render_installed_qwilight(&root, &roots, name, mode, number, options, offsets, cover)
         };
-        let decoded = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
-            pinned_sources: None,
-            skin_path: &path,
-            kind: SkinKind::Play,
-            options: &BTreeMap::new(),
-            files: &BTreeMap::new(),
-            runtime_state: &state,
-            library_roots: std::slice::from_ref(&root),
-            document_cache: None,
-            source_cache: None,
-            texture_cache: None,
-            font_cache: None,
-            installed_fonts: None,
-        })
-        .unwrap();
-        let missing: Vec<_> = decoded
-            .document
-            .source
-            .iter()
-            .filter(|s| !decoded.sources.iter().any(|loaded| loaded.source_id == s.id))
-            .map(|s| s.path.as_str())
-            .collect();
-        assert!(missing.is_empty(), "{name} missing sources: {missing:?}");
-        eprintln!("{name}: decoded {} source atlases", decoded.sources.len());
-        let mut renderer = Renderer::default();
-        renderer.set_default_font_search_paths(vec![test_app_paths().resource_dir.join("fonts")]);
-        renderer
-            .attach_offscreen(bmz_render::renderer::SurfaceSize { width: 1280, height: 720 })
-            .unwrap();
-        install_decoded_skin(&mut renderer, decoded, SkinManifest::default()).unwrap();
-        let now = TimeUs(10_000_000);
-        let mut snapshot = RenderSnapshot {
-            time: now,
-            play_elapsed_time: now,
-            ready_elapsed_time: Some(now),
-            resources_loaded: true,
-            key_mode: mode,
-            now_bpm: 150.0,
-            hispeed: 2.3,
-            ex_score: 1234,
-            combo: 123,
-            max_combo: 345,
-            total_notes: 1000,
-            past_notes: 700,
-            gauge: 70.0,
-            gauge_max: 100.0,
-            title: "Qwilight play skin / BMZ preview".into(),
-            artist: "Compatibility test".into(),
-            recent_judgements: vec![DisplayJudgement {
-                lane: Lane::Key4,
-                judge: Judge::Great,
-                side: None,
-                text: "GREAT".into(),
-                combo: 123,
-                delta_us: 0,
-                time: TimeUs(now.0 - 100_000),
-                is_miss: false,
-                timing_ms_suppressed: false,
-            }],
-            visible_long_notes: vec![VisibleLongNote {
-                lane: Lane::Key2,
-                mode: bmz_chart::model::LongNoteMode::Ln,
-                head_y: 0.2,
-                tail_y: 0.75,
-                alpha: 1.0,
-                body_state: LongBodyState::Inactive,
-            }],
-            ..Default::default()
-        };
-        snapshot.keyon_ms[Lane::Key4.index()] = Some(100);
-        for (i, &lane) in mode.active_lanes().iter().enumerate() {
-            snapshot.visible_notes[lane.index()].push(VisibleNote {
-                lane,
-                time: now,
-                y: 0.15 + (i % 6) as f32 * 0.11,
-                alpha: 1.0,
-                kind: NoteVisualKind::Tap,
-                processed_judge: None,
-                pms_miss_fall: None,
-            });
+        let base = render(&none, &unadjusted, 0.0);
+        let moved = render(&none, &adjusted, 0.0);
+        let covered = render(&none, &unadjusted, 0.4);
+        let user = render(&user_cover, &unadjusted, 0.4);
+        for (suffix, rgba) in
+            [("base", &base), ("adjusted", &moved), ("sudden", &covered), ("added-cover", &user)]
+        {
+            save_preview(&output, &format!("{name}-{number}k-{suffix}.png"), rgba);
         }
-        renderer.render_scene(AppSceneSnapshot::Play(snapshot)).unwrap();
-        let rgba = renderer.read_offscreen_rgba().unwrap();
-        assert!(
-            rgba.as_chunks::<4>().0.iter().filter(|p| p[0] > 30 || p[1] > 30 || p[2] > 30).count()
-                > 10000,
-            "empty preview"
+        let moved_pixels = changed_pixels(&base, &moved, (0, 1280), (0, 720));
+        // SUDDEN+ 0.4 covers the upper part of the lanes only.
+        let upper = changed_pixels(&base, &covered, (0, 1280), (0, 150));
+        let lower = changed_pixels(&base, &covered, (0, 1280), (500, 720));
+        let skin_vs_added = changed_pixels(&covered, &user, (0, 1280), (0, 150));
+        eprintln!(
+            "{name} {number}K: adjusted {moved_pixels}, cover upper {upper} / lower {lower}, \
+             added vs skin cover {skin_vs_added}"
         );
-        image::save_buffer(
-            output.join(format!("{name}-{number}k.png")),
-            &rgba,
-            1280,
-            720,
-            image::ColorType::Rgba8,
-        )
-        .unwrap();
+        assert!(moved_pixels > 10_000, "{name}: adjustments must move the play area");
+        assert!(upper > 5_000, "{name}: SUDDEN+ must draw the lane cover");
+        assert!(lower < upper / 10, "{name}: the lane cover must stay above its edge");
+        assert!(skin_vs_added > 5_000, "{name}: the added image must replace the skin's");
     }
 }

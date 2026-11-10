@@ -147,21 +147,41 @@ fn collect_skin_candidate_files(
     }
 }
 
+/// `options` are the slot's selections. Qwilight play skins evaluate their
+/// `configure-available-*` with them; other formats list a static header.
 pub(super) fn skin_defs_from_path(
     app_paths: &crate::paths::AppPaths,
     skin: &SkinConfig,
     path: &str,
     play: bool,
+    options: Option<&BTreeMap<String, String>>,
 ) -> SceneSkinDefs {
     let trimmed = path.trim();
+    let qwilight = play && bmz_skin::is_qwilight_play_skin_path(Path::new(trimmed));
     let document = (!trimmed.is_empty())
         .then(|| app_paths.resolve_path_ref(trimmed).ok())
         .flatten()
         .and_then(|path| {
             let context = app_paths.skin_path_context(skin, &path).ok()?;
-            read_skin_header_document_with_context(&context).ok()
+            match options.filter(|_| qwilight) {
+                Some(options) => {
+                    bmz_skin::load_qwilight_play_header_with_options(&context, options)
+                        .inspect_err(|error| {
+                            tracing::warn!(
+                                path = %path.display(),
+                                error = %format!("{error:#}"),
+                                "Qwilight skin options could not be evaluated"
+                            );
+                        })
+                        .or_else(|_| bmz_skin::load_qwilight_play_header(&context))
+                        .ok()
+                }
+                None => read_skin_header_document_with_context(&context).ok(),
+            }
         });
-    if play {
+    if qwilight {
+        SceneSkinDefs::from_qwilight_play_document(document.as_ref())
+    } else if play {
         SceneSkinDefs::from_play_document(document.as_ref())
     } else {
         SceneSkinDefs::from_document(document.as_ref())

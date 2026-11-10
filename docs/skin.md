@@ -18,8 +18,9 @@ Select・Decide・Result・G-BATTLE専用表示には対応しません。スキ
 
 - YAMLの`format`・`frame`・`lambda`・`point`を読み、`configure-0`〜`15`を既存のスキンオプションへ表示します。
   選択変更とキー数変更では配置を再計算します。カタログ走査ではLuaを実行しません。
-- Luaは配置・素材名の計算だけに使用します。`configures`、キー数、`P1Length` / `P1BuiltLength` / `P2BuiltLength` / `Wall` / `Contents`等を供給します。
-  Qwilight側の位置・サイズ調整値は既定値（差分0）です。ファイル・OS・module APIを公開せず、既存のLua命令数・メモリ制限を適用します。
+  条件付き表示・言語別の表示名・位置の調整・レーンカバーは[Qwilightのカスタマイズ](#qwilightのカスタマイズ)を参照してください。
+- Luaは配置・素材名の計算だけに使用します。`configures`、キー数、`P1Length` / `P1BuiltLength` / `P2BuiltLength` / `Wall` / `Contents`、
+  位置・サイズの調整値等を供給します。ファイル・OS・module APIを公開せず、既存のLua命令数・メモリ制限を適用します。
 - lane map、DPの展開、floating / slashの横配置、通常ノーツ・LN・地雷、レーン背景・判定線・キー押下素材、ボム、判定画像、基本装飾、BGA領域、タイトル・アーティスト・ジャンル、整数HUD・ゲージをBMZの描画へ変換します。
   LNは上下キャップの高さ・位置と胴体の重なりを個別に保持します。保持中のヘッド表示は`maintainLongNoteFrontEdge`に従います。
 - スコア・コンボ・判定回数・ゲージはBMZの値です。スコア欄はEXスコアです。
@@ -31,7 +32,7 @@ Select・Decide・Result・G-BATTLE専用表示には対応しません。スキ
   HSは0.01単位へ四捨五入し、EXスコアレートは既存参照と同じく小数点以下3桁目以降を切り捨てます。
   数字・小数点・単位は元の素材を使い、桁数変化、左・中央・右寄せ、DPの`alt-multiplier` / `alt-point`に追従します。
 
-現段階ではその他の小数付きHUD（再生倍率等）、残り時間・進捗、FAST/SLOW・判定グラフ、カバー画像、
+現段階ではその他の小数付きHUD（再生倍率等）、残り時間・進捗、FAST/SLOW・判定グラフ、
 オンライン・音声可視化・ポーズUI・専用SE、文字色・font指定、特殊合成とイベント駆動paintPropertyは未対応です。
 キー背景・ボタンは通常素材と押下終端素材を切り替え、押下・解放の途中アニメーションは省略します。
 判定・コンボの拡大や反復、LNボムの途中ループ、Qwilight固有の失敗状態、素材prefixのフレーム依存分岐も完全互換ではありません。
@@ -43,6 +44,63 @@ Select・Decide・Result・G-BATTLE専用表示には対応しません。スキ
 YAML / Luaは各2 MiB、ZIPは32,768 entry・各64 MiBまでです。
 分割画像は`sourceFrames`へ変換し、最大256枚、各系列の入力RGBA合計とatlasをそれぞれ128 MiB以内に制限します。
 `note.qwilightGeometry`は変換専用のLN配置情報で、既存JSON / Lua / LR2のLN配置には影響しません。
+
+### Qwilightのカスタマイズ
+
+Qwilight本体の設定画面にある項目のうち、プレイスキンの配置に関わるものを既存のスキン設定へ対応させます。
+保存先・履歴・再読み込みは他のスキンと共通で、変更すると表示中のPlayスキンを読み込み直します。
+
+**オプションの表示名と条件付き表示**
+
+- 保存する項目名は`configure-comment-{i}-1041`、なければ`configure-comment-{i}`、なければ`Qwilight configure {i}`です。
+  保存する選択肢は`configure-{i}`の名前で、BMZのUI言語を切り替えても変わりません。
+- 表示名は`configure-comment-{i}-{LCID}`と`configure-{i}-{LCID}`から選びます。日本語は1041、韓国語は1042、
+  英語と中国語は1033（なければ言語指定なし）です。選択肢の対応は順番で取るため、個数が違う言語別リストは使いません。
+- 設定画面では、スロットのオプションでLuaを実行して`configure-available-{i}`を評価し、`true`以外の項目を隠します。
+  隠れた項目の保存値は残ります。Qwilightと同じく、`lambda`・`format`の値と素材名（`_Get*`）は保存値で、
+  `point`・`frame`・`alt-*`の値は隠れた項目を先頭の選択肢として計算します。
+  式がLuaエラーになる場合は、保存値を戻せるよう項目を表示したままにします（Qwilightでは読み込み自体が失敗します）。
+
+`SkinDocument.propertyLabels`はこの表示名のためのBMZ拡張です。項目名をキーに、`name`と`items`へUI言語コード（`ja` / `ko` / `en`等）ごとの文字列を持ちます。
+設定画面は表示言語の[フォールバック](i18n.md#フォールバック)順に探し、なければ保存名を表示します。
+
+**位置・サイズの調整**
+
+スキンが`lambda`で`true`にした調整だけを「位置・サイズ」へ追加します。値はQwilightの設定と同じLuaのグローバル変数へ渡し、
+宣言していない調整は0です。Qwilightのスライダーと同じく各値を±1000 pxへ制限します。
+
+| スキンのフラグ | BMZの項目名（ID） | 値 | Luaの変数 |
+|---|---|---|---|
+| `setMainPosition` | Qwilight lane position（1001） | x | `mainPosition` |
+| `setNoteLength` | Qwilight note width（1002） | w | `noteLength` |
+| `setNoteHeight` | Qwilight note height（1003） | h | `noteHeight` |
+| `setHitNotePaintArea` | Qwilight hit effect size（1004） | w | `hitNotePaintArea` |
+| `setJudgmentMainPosition` | Qwilight judgment line position（1005） | y | `judgmentMainPosition` = 600 − y、`judgmentMainPositionV2` = 1 − y / 600、`judgmentMainPositionV3` = −y |
+| `setBandPosition` | Qwilight combo position（1006） | y | `bandPosition` = −y |
+| `setJudgmentPaintPosition` | Qwilight judgment position（1007） | y | `judgmentPaintPosition` = −y |
+| `setJudgmentVisualizerPosition` | Qwilight judgment visualizer position（1008） | y | `judgmentVisualizerPosition` = −y |
+
+- BMZのyは他のオフセットと同じく正の値で上へ動きます。Qwilight本体の値とは符号が逆です。
+- 値はPlay枠ごとに保存します。Qwilightでキー数別に保存するレーン位置・ノーツ幅・高さ・ボム範囲に加え、
+  Qwilightでは全キー数共通の判定線・コンボ・判定・判定ビジュアライザーの位置も、BMZではキー数ごとの値です。
+- IDはbeatorajaの描画時offsetの範囲外で、描画中の要素へ直接は適用しません。
+
+共通の位置・サイズの項目は、変換後の要素があるものだけを表示します。
+「All offset(%)」は画面全体、「Notes offset」（30）はノーツ、「Judge offset」（32）は判定画像とコンボ数（`band`）へ適用します。
+対応する要素を描画しない「Judge Detail offset」と「Bar Line offset」は表示しません。
+
+**レーンカバー（Qwilightのveil）**
+
+- BMZのSUDDEN+でレーンの上側を隠すときに描画します。カバーの下端がSUDDEN+の位置になり、1Pのレーン幅に合わせて縦横比を保ちます。
+  DPでは2P側にも同じ画像を描きます。SUDDEN+を使わないときは描画しません。
+  描画順は`pipeline`の50（VeilDrawing）で、ない場合はノーツ（7）の直後です。
+- Qwilightのカバー高さ・終了時に下ろす設定・プレイ中の開閉は再現せず、BMZのSUDDEN+の量と操作を使います。
+- 画像はBMZが追加するオプション「Lane cover image」で選びます。既定の「Skin」はスキンの`_GetVeil()`（既定は`Veil`）が返す
+  ZIP内`Drawing/`の画像です。`[a, b]`の形で複数ある場合は読み込みごとに1枚を選びます。該当する画像がなければ描画しません。
+- 設定画面の「レーンカバー画像を追加」で選んだ画像は、`<data>/skins/qwilight-veil/`へコピーし、すべてのQwilightスキンで共有します。
+  png / jpg / jpeg / bmp / webpの32 MiBまでで、同名の別画像は`名前 (2).png`のように保存します。
+  オプションには「Random」（追加画像から読み込みごとに1枚）と各画像のファイル名が加わります。
+  選んだ画像を削除・移動した場合は、スキンの画像に戻ります。「選択中の追加画像を削除」はBMZのコピーだけを削除します。
 
 ## JSONのinclude展開
 

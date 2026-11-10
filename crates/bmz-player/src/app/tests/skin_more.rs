@@ -378,14 +378,15 @@ fn settings_headers_load_without_renderer_and_keep_play_offsets_scoped() {
     // No renderer installation is required. Play and common slots can share a
     // path without sharing the play-only offset definitions.
     let common =
-        skin_defs_from_path(&paths, &SkinConfig::default(), &path.to_string_lossy(), false);
-    let play = skin_defs_from_path(&paths, &SkinConfig::default(), &path.to_string_lossy(), true);
+        skin_defs_from_path(&paths, &SkinConfig::default(), &path.to_string_lossy(), false, None);
+    let play =
+        skin_defs_from_path(&paths, &SkinConfig::default(), &path.to_string_lossy(), true, None);
     assert_eq!(common.property[0].name, "Layout");
     assert_eq!(common.property[0].item.len(), 2);
     assert!(common.offset.is_empty());
     assert!(play.offset.iter().any(|offset| offset.id == 10));
     assert_eq!(
-        skin_defs_from_path(&paths, &SkinConfig::default(), &path.to_string_lossy(), false)
+        skin_defs_from_path(&paths, &SkinConfig::default(), &path.to_string_lossy(), false, None)
             .property[0]
             .name,
         "Layout"
@@ -408,8 +409,13 @@ fn play_skin_defs_load_from_configured_path_without_renderer_install() {
         repo.join("data/cache"),
         repo.join("data/logs"),
     );
-    let defs =
-        skin_defs_from_path(&app_paths, &SkinConfig::default(), &path.to_string_lossy(), true);
+    let defs = skin_defs_from_path(
+        &app_paths,
+        &SkinConfig::default(),
+        &path.to_string_lossy(),
+        true,
+        None,
+    );
 
     assert!(!defs.property.is_empty());
     assert!(!defs.filepath.is_empty());
