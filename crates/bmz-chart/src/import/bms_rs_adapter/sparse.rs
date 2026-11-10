@@ -1,68 +1,75 @@
 use super::*;
 
-pub(super) fn extract_sparse_bms_message_lines(
-    text: &str,
-    warnings: &mut Vec<ImportWarning>,
-) -> (String, Vec<SparseBmsMessage>) {
-    let mut rewritten = String::with_capacity(text.len());
-    let mut sparse_messages = Vec::new();
-
-    for (line_index, line) in text.lines().enumerate() {
-        let line_number = line_index + 1;
-        if let Some(message) =
-            extract_sparse_bms_message_line(line, line_number, sparse_messages.len())
-        {
-            warnings.push(ImportWarning::ParserDiagnostic {
-                code: "SparseBmsMessage".to_string(),
-                message: format!(
-                    "line {} #{}{} has {} slots and {} non-zero objects; importing sparsely",
-                    message.line_number,
-                    message.measure,
-                    message.channel,
-                    message.object_count,
-                    message.objects.len()
-                ),
-            });
-            rewritten.push('#');
-            rewritten.push_str(SPARSE_BMS_MARKER_HEADER);
-            rewritten.push(' ');
-            rewritten.push_str(&message.id.to_string());
-            sparse_messages.push(message);
-        } else {
-            rewritten.push_str(line);
-        }
-        rewritten.push('\n');
-    }
-
-    (rewritten, sparse_messages)
+/// The parts of a `#mmmCC:payload` line: everything before the first `:` is the head,
+/// whose last two bytes are the channel. Heads shorter than five bytes or not ASCII are
+/// not object messages.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ObjectMessageLine<'a> {
+    measure: &'a str,
+    pub(super) channel: &'a str,
+    payload: &'a str,
 }
 
-pub(super) fn extract_sparse_bms_message_line(
-    line: &str,
-    line_number: usize,
-    sparse_id: usize,
-) -> Option<SparseBmsMessage> {
-    let trimmed = line.trim();
-    let body = trimmed.strip_prefix('#')?;
-    let colon = body.find(':')?;
-    let head = &body[..colon];
-    if head.len() < 5 || !head.is_ascii() {
-        return None;
+impl<'a> ObjectMessageLine<'a> {
+    pub(super) fn parse(line: &'a str) -> Option<Self> {
+        let body = line.trim().strip_prefix('#')?;
+        let colon = body.find(':')?;
+        let head = &body[..colon];
+        if head.len() < 5 || !head.is_ascii() {
+            return None;
+        }
+        Some(Self {
+            measure: &head[..head.len() - 2],
+            channel: &head[head.len() - 2..],
+            payload: body[colon + 1..].trim(),
+        })
     }
-    let measure_text = &head[..head.len() - 2];
-    let channel = &head[head.len() - 2..];
-    if channel.eq_ignore_ascii_case("02") {
-        return None;
+
+    /// The measure, slot count and non-`00` objects. Lines with an odd payload length
+    /// or no slots are not object messages.
+    pub(super) fn objects(&self) -> Option<(u64, u64, Vec<SparseBmsObject>)> {
+        if !self.payload.len().is_multiple_of(2) {
+            return None;
+        }
+        let object_count = self.payload.len() / 2;
+        if object_count == 0 {
+            return None;
+        }
+        let measure = self.measure.parse::<u64>().ok()?;
+        Some((measure, object_count as u64, non_zero_objects(self.payload)?))
     }
-    let payload = body[colon + 1..].trim();
-    if payload.len() % 2 != 0 {
-        return None;
+
+    /// A message with more slots than bms-rs should expand one by one, which BMZ
+    /// injects after parsing instead. Channel 02 (measure length) is never sparse.
+    pub(super) fn sparse_message(
+        &self,
+        line_number: usize,
+        sparse_id: usize,
+    ) -> Option<SparseBmsMessage> {
+        if self.channel.eq_ignore_ascii_case("02") {
+            return None;
+        }
+        if !self.payload.len().is_multiple_of(2) {
+            return None;
+        }
+        let object_count = self.payload.len() / 2;
+        if object_count <= SPARSE_BMS_MESSAGE_OBJECT_THRESHOLD {
+            return None;
+        }
+        let measure = self.measure.parse::<u64>().ok()?;
+        Some(SparseBmsMessage {
+            id: sparse_id,
+            line_number,
+            measure,
+            channel: self.channel.to_ascii_uppercase(),
+            object_count: object_count as u64,
+            objects: non_zero_objects(self.payload)?,
+        })
     }
-    let object_count = payload.len() / 2;
-    if object_count <= SPARSE_BMS_MESSAGE_OBJECT_THRESHOLD {
-        return None;
-    }
-    let measure = measure_text.parse::<u64>().ok()?;
+}
+
+/// The non-`00` two-byte objects of a payload, or `None` when one is not UTF-8.
+fn non_zero_objects(payload: &str) -> Option<Vec<SparseBmsObject>> {
     let mut objects = Vec::new();
     for (index, chunk) in payload.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         if chunk != b"00" {
@@ -70,64 +77,41 @@ pub(super) fn extract_sparse_bms_message_line(
             objects.push(SparseBmsObject { index: index as u64, id });
         }
     }
-    Some(SparseBmsMessage {
-        id: sparse_id,
-        line_number,
-        measure,
-        channel: channel.to_ascii_uppercase(),
-        object_count: object_count as u64,
-        objects,
-    })
+    Some(objects)
 }
 
-pub(super) fn extract_bga_message_lines(text: &str) -> Vec<BgaMessage> {
-    text.lines()
-        .enumerate()
-        .filter_map(|(line_index, line)| extract_bga_message_line(line, line_index + 1))
-        .collect()
+/// Writes the `#BMZSPARSE` marker line that stands for sparse message `sparse_id`.
+pub(super) fn push_sparse_marker(text: &mut String, sparse_id: usize) {
+    use std::fmt::Write as _;
+
+    let _ = write!(text, "#{SPARSE_BMS_MARKER_HEADER} {sparse_id}");
 }
 
-pub(super) fn extract_bga_message_line(line: &str, line_number: usize) -> Option<BgaMessage> {
-    let (channel, measure, object_count, objects) = extract_object_message_line(line)?;
-    let kind = bga_kind_from_channel(channel)?;
-    Some(BgaMessage { line_number, measure, kind, object_count, objects })
-}
-
-/// Splits `#mmmCC:payload` into its channel, measure, slot count and non-`00` objects.
-/// Lines with an odd payload length or no slots are not object messages.
-pub(super) fn extract_object_message_line(
-    line: &str,
-) -> Option<(&str, u64, u64, Vec<SparseBmsObject>)> {
-    let trimmed = line.trim();
-    let body = trimmed.strip_prefix('#')?;
-    let colon = body.find(':')?;
-    let head = &body[..colon];
-    if head.len() < 5 || !head.is_ascii() {
-        return None;
+pub(super) fn sparse_message_warning(message: &SparseBmsMessage) -> ImportWarning {
+    ImportWarning::ParserDiagnostic {
+        code: "SparseBmsMessage".to_string(),
+        message: format!(
+            "line {} #{}{} has {} slots and {} non-zero objects; importing sparsely",
+            message.line_number,
+            message.measure,
+            message.channel,
+            message.object_count,
+            message.objects.len()
+        ),
     }
-    let measure_text = &head[..head.len() - 2];
-    let channel = &head[head.len() - 2..];
-    let payload = body[colon + 1..].trim();
-    if payload.len() % 2 != 0 {
-        return None;
-    }
-    let object_count = payload.len() / 2;
-    if object_count == 0 {
-        return None;
-    }
-    let measure = measure_text.parse::<u64>().ok()?;
-    let mut objects = Vec::new();
-    for (index, chunk) in payload.as_bytes().as_chunks::<2>().0.iter().enumerate() {
-        if chunk != b"00" {
-            let id = std::str::from_utf8(chunk).ok()?.to_string();
-            objects.push(SparseBmsObject { index: index as u64, id });
-        }
-    }
-    Some((channel, measure, object_count as u64, objects))
 }
 
 pub(super) fn bga_kind_from_channel(channel: &str) -> Option<IntermediateBgaKind> {
-    match read_channel(&channel.to_ascii_uppercase())? {
+    // Object message channels are two ASCII bytes; uppercase them without allocating.
+    let upper = match channel.as_bytes() {
+        [first, second] => [first.to_ascii_uppercase(), second.to_ascii_uppercase()],
+        _ => return bga_kind_from_upper_channel(&channel.to_ascii_uppercase()),
+    };
+    bga_kind_from_upper_channel(std::str::from_utf8(&upper).ok()?)
+}
+
+fn bga_kind_from_upper_channel(channel: &str) -> Option<IntermediateBgaKind> {
+    match read_channel(channel)? {
         Channel::BgaBase => Some(IntermediateBgaKind::Base),
         Channel::BgaPoor => Some(IntermediateBgaKind::Poor),
         Channel::BgaLayer => Some(IntermediateBgaKind::Layer),
@@ -380,11 +364,6 @@ pub(super) fn pms_bme_upper_channel(channel: [u8; 2]) -> bool {
 /// Standard PMS uses P2 channels 22-25 for keys 6-9. When a chart also
 /// contains BME-type P1 channels 16-19, beatoraja ignores those conflicting
 /// objects instead of adding them to the standard layout.
-pub(super) fn strip_pms_bme_upper_channels(source: &str) -> String {
-    source
-        .split_inclusive('\n')
-        .filter(|line| {
-            message_channel_bytes(line).is_none_or(|channel| !pms_bme_upper_channel(channel))
-        })
-        .collect()
+pub(super) fn is_pms_bme_upper_channel_line(line: &str) -> bool {
+    message_channel_bytes(line).is_some_and(pms_bme_upper_channel)
 }

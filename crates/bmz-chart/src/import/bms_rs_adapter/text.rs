@@ -35,38 +35,39 @@ pub(super) struct SourceTexts {
     messages: Vec<TextMessage>,
 }
 
-pub(super) fn extract_source_texts(text: &str) -> SourceTexts {
-    let mut source = SourceTexts::default();
-    for line in text.lines() {
-        if let Some((id, value, legacy)) = text_definition_line(line) {
-            source.definitions.push(TextDefinitionLine {
-                id: id.to_string(),
-                value: value.into(),
-                legacy,
-            });
-            continue;
-        }
-        let Some((channel, measure, object_count, objects)) = extract_object_message_line(line)
-        else {
-            continue;
+impl SourceTexts {
+    /// Records `line` if it is a text definition, and returns whether it was.
+    pub(super) fn push_definition_line(&mut self, line: &str) -> bool {
+        let Some((id, value, legacy)) = text_definition_line(line) else {
+            return false;
         };
-        if channel == "99" {
-            source.messages.push(TextMessage { measure, object_count, objects });
+        self.definitions.push(TextDefinitionLine {
+            id: id.to_string(),
+            value: value.into(),
+            legacy,
+        });
+        true
+    }
+
+    /// Records a channel #99 message line that is not a text definition.
+    pub(super) fn push_message(&mut self, message: &ObjectMessageLine<'_>) {
+        if let Some((measure, object_count, objects)) = message.objects() {
+            self.messages.push(TextMessage { measure, object_count, objects });
         }
     }
-    source
 }
 
 /// `#TEXTxx value` / `#SONGxx value` and whether it is `#SONGxx`.
 /// One pair of enclosing double quotes is removed.
 fn text_definition_line(line: &str) -> Option<(&str, &str, bool)> {
     let body = line.trim().strip_prefix('#')?.trim_start();
-    let (name, value) = body.split_once(char::is_whitespace).unwrap_or((body, ""));
-    let prefix = name.get(..4)?;
+    // Check the command before looking for the end of the name in long channel lines.
+    let prefix = body.get(..4)?;
     let legacy = prefix.eq_ignore_ascii_case("SONG");
     if !(legacy || prefix.eq_ignore_ascii_case("TEXT")) {
         return None;
     }
+    let (name, value) = body.split_once(char::is_whitespace).unwrap_or((body, ""));
     let id = &name[4..];
     (id.len() == 2 && id.bytes().all(|byte| byte.is_ascii_alphanumeric()))
         .then(|| (id, unquote_text(value.trim()), legacy))
