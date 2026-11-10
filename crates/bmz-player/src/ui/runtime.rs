@@ -312,6 +312,7 @@ impl EguiLayer {
         let mut reset_skin_config = false;
         let mut skin_reload_request = SkinReloadRequest::default();
         let mut trigger_song_rescan = false;
+        let mut trigger_full_song_rescan = false;
         let mut song_scan_requests = Vec::new();
         let mut table_fetch_urls = Vec::new();
         let mut score_import_request = None;
@@ -509,6 +510,7 @@ impl EguiLayer {
                         save_profile_config |= settings_actions.save_profile;
                         check_for_update |= settings_actions.check_update;
                         trigger_song_rescan |= settings_actions.rescan;
+                        trigger_full_song_rescan |= settings_actions.full_rescan;
                         song_scan_requests.extend(settings_actions.song_scan_requests);
                         table_fetch_urls.extend(settings_actions.table_fetch_urls);
                         apply_audio_output |= settings_actions.apply_audio;
@@ -574,6 +576,7 @@ impl EguiLayer {
             reset_skin_config,
             skin_reload_request,
             trigger_song_rescan,
+            trigger_full_song_rescan,
             song_scan_requests,
             table_fetch_urls,
             score_import_request,

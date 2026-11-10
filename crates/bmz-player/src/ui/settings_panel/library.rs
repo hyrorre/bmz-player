@@ -3,6 +3,7 @@ use super::*;
 pub(super) struct LibrarySettingsActions<'a> {
     pub(super) save_clicked: &'a mut bool,
     pub(super) rescan_clicked: &'a mut bool,
+    pub(super) full_rescan_clicked: &'a mut bool,
     pub(super) song_scan_requests: &'a mut Vec<SongScanRequest>,
     pub(super) table_fetch_urls: &'a mut Vec<String>,
     pub(super) score_import_request: &'a mut Option<ScoreImportRequest>,
@@ -21,6 +22,7 @@ pub(super) fn build_library_settings_sections(
     let LibrarySettingsActions {
         save_clicked,
         rescan_clicked,
+        full_rescan_clicked,
         song_scan_requests,
         table_fetch_urls,
         score_import_request,
@@ -66,7 +68,7 @@ pub(super) fn build_library_settings_sections(
                                         {
                                             song_scan_requests.push(SongScanRequest {
                                                 roots: vec![root.clone()],
-                                                force: true,
+                                                force: false,
                                                 label: "egui song reload".to_string(),
                                             });
                                         }
@@ -167,10 +169,16 @@ pub(super) fn build_library_settings_sections(
             if !state.add_root_error.is_empty() {
                 ui.colored_label(egui::Color32::RED, state.add_root_error.as_str());
             }
-            if ui.button(tr!(text, "settings-library-rescan")).clicked() {
-                *rescan_clicked = true;
-            }
+            ui.horizontal_wrapped(|ui| {
+                if ui.button(tr!(text, "settings-library-rescan")).clicked() {
+                    *rescan_clicked = true;
+                }
+                if ui.button(tr!(text, "settings-library-reparse-all")).clicked() {
+                    *full_rescan_clicked = true;
+                }
+            });
             ui.label(tr!(text, "settings-song-scan-help"));
+            ui.small(tr!(text, "settings-library-reparse-all-help"));
         });
 
     SettingsSection::new(SettingsPage::Library, tr!(text, "settings-scan-title"))

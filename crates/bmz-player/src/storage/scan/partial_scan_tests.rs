@@ -188,8 +188,8 @@ fn partial_scan_below_configured_root_prunes_deleted_charts() {
     assert_consistent(&db);
 }
 
-/// Issue #69 as F5 runs it: `reload_from_select_context` scans the folder with
-/// `force`, so every remaining chart is imported again alongside the pruning.
+/// Issue #69 as a full re-parse of one folder: with `force`, every remaining chart is
+/// imported again alongside the pruning. (F5 now runs the same scan without `force`.)
 #[test]
 fn forced_partial_scan_below_configured_root_prunes_deleted_charts() {
     let base = temp();

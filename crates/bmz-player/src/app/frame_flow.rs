@@ -750,8 +750,8 @@ impl WinitApp {
         for request in output.song_scan_requests {
             self.spawn_song_scan_request(request);
         }
-        if output.trigger_song_rescan {
-            self.load_songs_and_reload();
+        if output.trigger_song_rescan || output.trigger_full_song_rescan {
+            self.load_songs_and_reload(output.trigger_full_song_rescan);
         }
         if let Some(request) = output.score_import_request {
             self.import_external_scores(request);

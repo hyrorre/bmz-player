@@ -80,7 +80,8 @@ impl WinitApp {
         }
         if let Some(path) = song_scan_path_from_context(&self.select.folder_stack, selected) {
             let roots = vec![PathEntry { path, enabled: true, recursive: true }];
-            self.spawn_song_scan(roots, true, "select song reload".to_string());
+            // Like beatoraja's folder update, unchanged charts are skipped.
+            self.spawn_song_scan(roots, false, "select song reload".to_string());
             return;
         }
         tracing::debug!("select reload: no applicable target in current context");

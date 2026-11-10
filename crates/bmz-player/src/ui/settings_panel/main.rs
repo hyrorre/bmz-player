@@ -15,6 +15,7 @@ pub(in crate::ui) fn build_settings_panel(
     let mut obs_enabled_changed = false;
     let mut save_profile = false;
     let mut rescan_clicked = false;
+    let mut full_rescan_clicked = false;
     let mut check_update_clicked = false;
     let mut song_scan_requests = Vec::new();
     let mut table_fetch_urls = Vec::new();
@@ -41,6 +42,7 @@ pub(in crate::ui) fn build_settings_panel(
             LibrarySettingsActions {
                 save_clicked: &mut save_clicked,
                 rescan_clicked: &mut rescan_clicked,
+                full_rescan_clicked: &mut full_rescan_clicked,
                 song_scan_requests: &mut song_scan_requests,
                 table_fetch_urls: &mut table_fetch_urls,
                 score_import_request: &mut score_import_request,
@@ -78,6 +80,7 @@ pub(in crate::ui) fn build_settings_panel(
         save_profile,
         check_update: check_update_clicked,
         rescan: rescan_clicked,
+        full_rescan: full_rescan_clicked,
         song_scan_requests,
         table_fetch_urls,
         score_import_request,
