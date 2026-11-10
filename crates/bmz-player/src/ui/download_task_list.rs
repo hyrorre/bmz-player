@@ -265,7 +265,7 @@ mod tests {
             request_id,
             identity: ChartDownloadIdentity::default(),
             title: format!("Chart {request_id}"),
-            download_root: PathBuf::new(),
+            save_dir: PathBuf::new(),
             action: MissingChartAction::Http {
                 api_url: format!("https://download.test/{request_id}.zip"),
                 md5: String::new(),
@@ -416,7 +416,7 @@ mod tests {
                 request_id: id,
                 identity: ChartDownloadIdentity::default(),
                 title: format!("Chart {id}"),
-                download_root: PathBuf::new(),
+                save_dir: PathBuf::new(),
                 action: MissingChartAction::Unavailable,
             });
         }

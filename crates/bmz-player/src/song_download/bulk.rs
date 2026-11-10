@@ -50,17 +50,17 @@ pub fn prepare_bulk_download(
     db: &LibraryDatabase,
     config: &ChartDownloadsConfig,
     scope: BulkDownloadScope,
-    download_root: &Path,
+    data_dir: &Path,
 ) -> Result<BulkDownloadPlan> {
     let rows = db.registered_table_entries_at_level(&scope.source_url, scope.level.as_deref())?;
-    Ok(plan_rows(rows, config, scope, download_root))
+    Ok(plan_rows(rows, config, scope, data_dir))
 }
 
 fn plan_rows(
     rows: Vec<TableEntryListItem>,
     config: &ChartDownloadsConfig,
     scope: BulkDownloadScope,
-    download_root: &Path,
+    data_dir: &Path,
 ) -> BulkDownloadPlan {
     let mut counts = BulkDownloadCounts { total: rows.len(), ..Default::default() };
     let mut requests = Vec::new();
@@ -105,13 +105,14 @@ fn plan_rows(
             counts.merged += 1;
             continue;
         }
+        let save_dir = super::save_dir_for_action(config, &action, data_dir);
         requests.push(ChartDownloadRequest {
             keep_archive: config.http_keep_archive,
             request_id: 0,
             identity,
             action,
             title: row.title,
-            download_root: download_root.into(),
+            save_dir,
         });
     }
     BulkDownloadPlan { scope, counts, requests }
@@ -254,10 +255,15 @@ mod tests {
         let config = ChartDownloadsConfig {
             http_enabled: true,
             http_api_url: "https://api.test/{md5}".into(),
+            http_save_dir: "bulk http".into(),
             ..Default::default()
         };
         let scope = BulkDownloadScope { source_url: "https://table.test".into(), level: None };
         let all = prepare_bulk_download(&db, &config, scope.clone(), root.path()).unwrap();
+        // HTTPの要求は、HTTP用に指定したフォルダの直下へ保存する。
+        assert!(
+            all.requests.iter().all(|request| request.save_dir == root.path().join("bulk http"))
+        );
         assert_eq!(
             (
                 all.counts.total,

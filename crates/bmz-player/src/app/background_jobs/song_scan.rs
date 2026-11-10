@@ -390,7 +390,7 @@ mod tests {
             request_id,
             identity: ChartDownloadIdentity { sha256: Some([request_id as u8; 32]), md5: None },
             title: format!("Chart {request_id}"),
-            download_root: PathBuf::new(),
+            save_dir: PathBuf::new(),
             keep_archive: true,
             action: MissingChartAction::Http {
                 api_url: format!("https://download.test/{request_id}.zip"),

@@ -787,18 +787,21 @@ impl WinitApp {
                     if matches!(action, MissingChartAction::Ipfs { .. }) { "IPFS" } else { "HTTP" }
                 })
                 .unwrap_or("HTTP");
-        let download_root =
-            self.boot.app_config.downloads.download_root(&self.boot.app_paths.data_dir);
         for (action, title, identity) in downloads {
             self.jobs.download_request_id += 1;
             let request_id = self.jobs.download_request_id;
+            let save_dir = crate::song_download::save_dir_for_action(
+                &self.boot.app_config.downloads,
+                &action,
+                &self.boot.app_paths.data_dir,
+            );
             let request = ChartDownloadRequest {
                 keep_archive: self.boot.app_config.downloads.http_keep_archive,
                 request_id,
                 identity: identity.clone(),
                 action,
                 title,
-                download_root: download_root.clone(),
+                save_dir,
             };
             let (task_id, _) = self.jobs.chart_downloads.submit(request);
             if single {
