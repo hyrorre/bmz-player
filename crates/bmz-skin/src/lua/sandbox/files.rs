@@ -30,6 +30,8 @@ struct LuaFileLayer {
     files: BTreeMap<PathBuf, Option<Vec<u8>>>,
     directories: BTreeSet<PathBuf>,
     bytes: usize,
+    /// Bumped by every change, so a store tells whether it changed since a load.
+    revision: u64,
 }
 
 impl LuaFileLayer {
@@ -59,6 +61,7 @@ impl LuaFileLayer {
         // encoded key bytes charged above, including for short tombstones.
         self.files.insert(key.into_boxed_path().into_path_buf(), file);
         self.bytes = bytes;
+        self.revision += 1;
         Ok(())
     }
 
@@ -70,6 +73,7 @@ impl LuaFileLayer {
         self.check(&key, bytes, self.files.len() + self.directories.len() + 1)?;
         self.directories.insert(key.into_boxed_path().into_path_buf());
         self.bytes = bytes;
+        self.revision += 1;
         Ok(())
     }
 
@@ -92,6 +96,9 @@ impl LuaFileLayer {
             }
         }
         self.check(Path::new(""), bytes, entries)?;
+        if !self.files.is_empty() || !self.directories.is_empty() {
+            target.revision += 1;
+        }
         target.files.append(&mut self.files);
         target.directories.append(&mut self.directories);
         target.bytes = bytes;
@@ -115,6 +122,13 @@ impl PartialEq for LuaSkinFileStore {
 
 impl Eq for LuaSkinFileStore {}
 
+impl LuaSkinFileStore {
+    /// Changes whenever a load commits files or a runtime callback writes one.
+    pub fn revision(&self) -> u64 {
+        self.0.lock().map_or(u64::MAX, |store| store.revision)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LuaFilePhase {
     /// The skin's `main`: writes are staged for the session.
@@ -132,6 +146,10 @@ pub(super) struct LuaFileOverlay {
     phase: LuaFilePhase,
     staged: LuaFileLayer,
     scratch: LuaFileLayer,
+    /// Store revision when this VM started reading it.
+    seen_revision: Option<u64>,
+    /// Store revisions just before and after this load committed its writes.
+    committed_revisions: Option<(u64, u64)>,
 }
 
 impl Default for LuaFileOverlay {
@@ -143,11 +161,20 @@ impl Default for LuaFileOverlay {
 impl LuaFileOverlay {
     pub(super) fn new(store: Option<LuaSkinFileStore>) -> Self {
         Self {
+            seen_revision: store.as_ref().map(LuaSkinFileStore::revision),
             store,
             phase: LuaFilePhase::Load,
             staged: LuaFileLayer::default(),
             scratch: LuaFileLayer::default(),
+            committed_revisions: None,
         }
+    }
+
+    /// How the session store moved across this committed load.
+    pub(super) fn store_span(&self) -> Option<crate::LuaFileStoreSpan> {
+        let seen = self.seen_revision?;
+        let (committed_from, left) = self.committed_revisions?;
+        Some(crate::LuaFileStoreSpan { seen, committed_from, left })
     }
 
     /// Writes reach other loads, so a cached document would skip them.
@@ -261,6 +288,7 @@ impl LuaFileOverlay {
         let Ok(mut store) = store.0.lock() else {
             return;
         };
+        let committed_from = store.revision;
         if self.staged.merge_into(&mut store).is_err() {
             tracing::warn!(
                 limit = LUA_FILE_STORE_MAX_BYTES,
@@ -268,6 +296,7 @@ impl LuaFileOverlay {
             );
             self.staged = LuaFileLayer::default();
         }
+        self.committed_revisions = Some((committed_from, store.revision));
     }
 
     /// The runtime VM's clean `main` finished; its writes repeat the document

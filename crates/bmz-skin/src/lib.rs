@@ -85,6 +85,26 @@ pub struct SkinLoadDependencies {
     /// access outside the skin root.
     pub virtual_io_files: BTreeMap<String, Option<String>>,
     pub opaque: bool,
+    /// Session file store revisions around a Lua load that used the store.
+    pub file_store_span: Option<LuaFileStoreSpan>,
+}
+
+/// Session file store revisions around one Lua load: `seen` when it started
+/// reading, `committed_from` just before it committed its own writes, and
+/// `left` right after.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LuaFileStoreSpan {
+    pub seen: u64,
+    pub committed_from: u64,
+    pub left: u64,
+}
+
+impl LuaFileStoreSpan {
+    /// True while the load read the files the store holds at `current`: no other
+    /// VM wrote during the load, and nothing wrote after its own commit.
+    pub fn unchanged_at(&self, current: u64) -> bool {
+        self.seen == self.committed_from && self.left == current
+    }
 }
 
 impl SkinLoadDependencies {

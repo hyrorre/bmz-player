@@ -39,7 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
-| 2026-11-10 | [Resultスキンをスコア確定時に先読みする](2026/2026-11-10-result-skin-prewarm.md) |
+| 2026-11-10 | [Result・Selectスキンの先読み](2026/2026-11-10-result-skin-prewarm.md) |
 | 2026-11-10 | [譜面取得の保存先をIPFS / HTTPで別々に指定する](2026/2026-11-10-download-save-dirs.md) |
 | 2026-11-10 | [再スキャンで書庫を開き直さないための譜面一覧の保持](2026/2026-11-10-archive-listing-cache.md) |
 | 2026-11-10 | [曲更新がbeatorajaより遅い問題の調査と改善](2026/2026-11-10-song-update-performance.md) |

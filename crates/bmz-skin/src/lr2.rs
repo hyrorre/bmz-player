@@ -543,6 +543,7 @@ fn load_header_with_context(
         loaded_files: BTreeMap::new(),
         virtual_io_files: BTreeMap::new(),
         opaque: false,
+        file_store_span: None,
     };
     Ok(LoadedHeader { header, dependencies })
 }

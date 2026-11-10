@@ -311,6 +311,8 @@ mod select_support;
 mod skin_catalog;
 #[path = "app/skin_flow/entry.rs"]
 mod skin_flow_entry;
+#[path = "app/skin_flow/prewarm.rs"]
+mod skin_flow_prewarm;
 #[path = "app/skin_flow/profile.rs"]
 mod skin_flow_profile;
 #[path = "app/skin_flow/reload.rs"]
@@ -340,6 +342,7 @@ use play_preload::PlayPreloadSource;
 use play_preload_state::*;
 use play_transition_state::*;
 use runtime_state::*;
+use skin_flow_prewarm::PrewarmedSceneSkin;
 use skin_runtime_types::*;
 use update_prompt::*;
 
