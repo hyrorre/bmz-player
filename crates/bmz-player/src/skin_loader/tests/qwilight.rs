@@ -73,6 +73,193 @@ fn qwilight_zip_frames_decode_without_song_registry_and_options_change_layout() 
 }
 
 #[test]
+fn qwilight_judges_and_fractional_hud_use_bmz_values_with_aligned_digits() {
+    use std::io::{Cursor, Write};
+    for align in 0..=2 {
+        let root = unique_test_dir("qwilight-numeric-hud");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("skin.yaml");
+        fs::write(
+            &path,
+            format!(
+                r#"
+format: {{zip: skin}}
+frame: {{}}
+lambda:
+  drawing1: 1, 2, 3, 4, 5, 10
+  pipeline: 7, 12, 14, 15, 39, 40
+  alt-multiplier: 2
+  alt-point: 2
+point:
+  noteLength: 20
+  noteHeight: 12
+  judgmentMainPosition: 500
+  p2Position: 30
+  binLength: 10
+  binHeight: 20
+  stopPointDrawingLength: 4
+  multiplierSystem: {align}
+  multiplierPosition0: 200
+  multiplierPosition1: 20
+  multiplierUnitDrawingLength: 8
+  pointSystem: {align}
+  pointPosition0: 200
+  pointPosition1: 80
+  pointUnitDrawingLength: 8
+"#
+            ),
+        )
+        .unwrap();
+        let mut png = Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 255, 255, 255]))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let mut names = vec!["Note/N 1 0 0.png".to_string()];
+        names.extend((0..10).map(|i| format!("Bin/{i}.png")));
+        names.extend((0..6).map(|i| format!("Paint/J {i} 0.png")));
+        // Specific HS glyphs and generic percentage glyphs exercise both paths.
+        names.extend(["Bin/M ..png", "Bin/MW.png", "Bin/..png", "Bin/%.png"].map(str::to_string));
+        let mut zip = zip::ZipWriter::new(fs::File::create(root.join("skin.zip")).unwrap());
+        for name in names {
+            zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(png.get_ref()).unwrap();
+        }
+        zip.finish().unwrap();
+        let decoded = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+            pinned_sources: None,
+            skin_path: &path,
+            kind: SkinKind::Play,
+            options: &BTreeMap::new(),
+            files: &BTreeMap::new(),
+            runtime_state: &LuaLoadRuntimeState {
+                number_values: BTreeMap::from([(bmz_render::skin::SKIN_REF_BMZ_KEY_MODE, 14)]),
+                ..Default::default()
+            },
+            library_roots: &[root.to_path_buf()],
+            document_cache: None,
+            source_cache: None,
+            texture_cache: None,
+            font_cache: None,
+            installed_fonts: None,
+        })
+        .unwrap();
+        let document = &decoded.document;
+        for (index, qw) in [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 0)] {
+            let image =
+                document.image.iter().find(|v| v.id == format!("qw-judge-{index}")).unwrap();
+            let source = document.source.iter().find(|v| v.id == image.src).unwrap();
+            assert!(source.path.ends_with(&format!("Paint/J {qw} 0.png")));
+        }
+        for (name, reference) in [("lowerJudgmentValue", 114), ("lowestJudgmentValue", 420)] {
+            assert_eq!(
+                document.value.iter().find(|v| v.id == format!("qw-number-{name}")).unwrap().ref_id,
+                reference
+            );
+        }
+        let sources = decoded
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source_id.clone(),
+                    SkinDocumentTexture {
+                        source_id: source.source_id.clone(),
+                        texture: source.texture,
+                        source_size: source.size,
+                    },
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        for (hs, displayed_hs, score, past, hs_text, rate_text) in [
+            (0.05, None, 0, 0, "0.05", "100.00"),
+            (2.299_999_5, None, 7, 100, "2.30", "3.50"),
+            (9.999, None, 1999, 1000, "10.00", "99.95"),
+            (1.0, Some(12.34), 2000, 1000, "12.34", "100.00"),
+            (20.0, None, 101, 300, "20.00", "16.83"),
+        ] {
+            let state = SkinDrawState {
+                hispeed: hs,
+                hispeed_display: displayed_hs,
+                ex_score: score,
+                past_notes: past,
+                total_notes: 2000,
+                ..Default::default()
+            };
+            for (name, expected, suffix) in
+                [("multiplier", hs_text, false), ("point", rate_text, true)]
+            {
+                let id = format!("qw-number-{name}");
+                let mut view = document.clone();
+                view.destination.retain(|entry| matches!(entry, DestinationListEntry::Single(d) if d.id.starts_with(&id)));
+                let items = view.static_render_items(&sources, &state, &SkinTextState::default());
+                let digits_texture =
+                    sources[&view.value.iter().find(|v| v.id == id).unwrap().src].texture;
+                let digits: Vec<_> = items
+                    .iter()
+                    .filter_map(|item| match item {
+                        SkinRenderItem::Image { texture, rect, uv, .. }
+                            if *texture == digits_texture =>
+                        {
+                            Some((rect, (uv.x * 10.0).round() as u8))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let expected_digits: Vec<_> =
+                    expected.bytes().filter(|c| *c != b'.').map(|c| c - b'0').collect();
+                assert_eq!(
+                    digits.iter().map(|(_, d)| *d).collect::<Vec<_>>(),
+                    expected_digits.repeat(2),
+                    "{name} {expected}"
+                );
+                let int_digits = expected.find('.').unwrap();
+                let number_width = (expected_digits.len() * 10 + 4) as f32;
+                let aligned_width = number_width + if suffix { 8.0 } else { 0.0 };
+                let left = 200.0
+                    - match align {
+                        1 => aligned_width / 2.0,
+                        2 => aligned_width,
+                        _ => 0.0,
+                    };
+                for (i, (rect, _)) in digits.iter().enumerate() {
+                    let column = i % expected_digits.len();
+                    let side = i / expected_digits.len();
+                    let x = left
+                        + side as f32 * 190.0
+                        + column as f32 * 10.0
+                        + if column >= int_digits { 4.0 } else { 0.0 };
+                    assert!(
+                        (rect.x * 1280.0 - x).abs() < 0.01,
+                        "{name} {expected} align={align} column={column}"
+                    );
+                }
+                for (part, position) in [
+                    ("dot", left + int_digits as f32 * 10.0),
+                    ("unit", if suffix { left + number_width } else { left - 8.0 }),
+                ] {
+                    let texture = sources
+                        [&view.image.iter().find(|v| v.id == format!("{id}-{part}")).unwrap().src]
+                        .texture;
+                    let positions: Vec<_> = items
+                        .iter()
+                        .filter_map(|item| match item {
+                            SkinRenderItem::Image { texture: t, rect, .. } if *t == texture => {
+                                Some(rect.x * 1280.0)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(positions.len(), 2);
+                    for (actual, expected) in positions.iter().zip([position, position + 190.0]) {
+                        assert!((actual - expected).abs() < 0.01, "{name} {part}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires installed Qwilight skins and GPU; set BMZ_QWILIGHT_SKIN_ROOT and BMZ_QWILIGHT_PREVIEW_DIR"]
 fn qwilight_installed_play_skins_gpu() {
     let root = PathBuf::from(
@@ -128,6 +315,7 @@ fn qwilight_installed_play_skins_gpu() {
             resources_loaded: true,
             key_mode: mode,
             now_bpm: 150.0,
+            hispeed: 2.3,
             ex_score: 1234,
             combo: 123,
             max_combo: 345,

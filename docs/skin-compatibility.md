@@ -11,6 +11,7 @@ BMZ固有のIDや詳細な動作契約は[skin.md](skin.md)、互換修正の方
 ## 対応済みの主な範囲
 
 Qwilightのプレイスキンは試験対応です（2026-11-10）。YAML / Lua / ZIPを読み、通常ノーツ・LN・基本HUD・装飾を描画します。
+HS・達成率はBMZの表示HSとプレイ中EXスコアレートを小数点以下2桁で表示します。判定画像・回数欄ではBMZのPOORをPOOR、空POORをfailedへ割り当てます。
 10種類×8キー数の定義・素材パス検証と、Default / CR_DXの7K、CR_simpleの14KのGPUオフスクリーン描画を確認しています。
 テーマ、選曲・リザルト、専用SEや一部HUD・特殊演出は対象外です。
 [仕様と制限](skin.md#qwilightのプレイスキン)、[実素材テスト](../crates/bmz-player/src/skin_loader/tests/qwilight.rs)、

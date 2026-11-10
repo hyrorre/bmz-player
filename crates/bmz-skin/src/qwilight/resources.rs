@@ -16,14 +16,11 @@ impl Resources {
             if path.extension().and_then(|s| s.to_str()).is_some_and(|ext| {
                 ["png", "jpg", "jpeg", "bmp", "webp"].contains(&ext.to_ascii_lowercase().as_str())
             }) {
-                names
-                    .entry(
-                        path.with_extension("")
-                            .to_string_lossy()
-                            .replace('\\', "/")
-                            .to_ascii_lowercase(),
-                    )
-                    .or_insert(name);
+                // A stem such as `.` is a material name, not a filesystem
+                // component. Path::with_extension changes `Bin/..png` to
+                // `Bin/..`, losing the common decimal-point material.
+                let stem = name.rsplit_once('.').expect("image extension checked").0;
+                names.entry(stem.replace('\\', "/").to_ascii_lowercase()).or_insert(name);
             }
         }
         Ok(Self { archive: archive.to_string_lossy().to_string(), names })

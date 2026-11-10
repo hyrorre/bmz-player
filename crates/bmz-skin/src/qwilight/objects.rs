@@ -384,7 +384,7 @@ impl Builder {
             x -= w;
         }
         let mut images = Vec::new();
-        for (bmz, qw) in [0, 1, 2, 3, 5, 4, 0].into_iter().enumerate() {
+        for (bmz, qw) in [0, 1, 2, 3, 4, 5, 0].into_iter().enumerate() {
             let prefix = self.eval.prefix("_GetJudgmentPaint", &[qw, 0], "J")?;
             let id = format!("qw-judge-{bmz}");
             self.image(
@@ -453,7 +453,7 @@ impl Builder {
                 "binLowerJudgmentValue",
                 "_GetLowerJudgmentValueBin",
                 "J 4",
-                420,
+                114,
                 5,
             ),
             (
@@ -462,7 +462,7 @@ impl Builder {
                 "binLowestJudgmentValue",
                 "_GetLowestJudgmentValueBin",
                 "J 5",
-                114,
+                420,
                 5,
             ),
         ] {
@@ -503,6 +503,7 @@ impl Builder {
                 }
             }
         }
+        self.fractional_hud()?;
         for (pipeline, name, reference) in
             [(47, "title", 10), (48, "artist", 14), (51, "genre", 13)]
         {
@@ -527,6 +528,105 @@ impl Builder {
             self.push("graph",json!({"id":"qw-gauge","src":src,"w":-1,"h":-1,"angle":if self.point("hitPointsSystem",0.0)? as i32==0{1}else{0},"type":107,"isRefNum":true,"min":0,"max":100}));
             for dx in self.alt_offsets("alt-hit-points", 2)? {
                 self.destination(6, "qw-gauge", self.rect(x + dx, y, w, h), None, None);
+            }
+        }
+        Ok(())
+    }
+
+    fn fractional_hud(&mut self) -> Result<()> {
+        // Reuse BMZ's displayed HS and current EX-rate refs. Three conditional
+        // layouts cover the integer widths without introducing a runtime VM or
+        // a new renderer contract. BMZ HS is at most 20; EX rate is at most 100.
+        for (pipeline, name, bin, prefix, whole_ref, fraction_ref, unit, fallback_unit) in [
+            (14, "multiplier", "binMultiplier", "M", 310, 311, "MW", "X"),
+            (12, "point", "binPoint", "P", 102, 103, "P %", "%"),
+        ] {
+            let width = self.point(&format!("{bin}Length"), self.point("binLength", 0.0)?)?.round();
+            let height =
+                self.point(&format!("{bin}Height"), self.point("binHeight", 0.0)?)?.round();
+            if width <= 0.0 || height <= 0.0 {
+                continue;
+            }
+            let id = format!("qw-number-{name}");
+            let prefix_fn = if name == "point" { "_GetPointBin" } else { "_GetMultiplierBin" };
+            if !self.digits(&id, prefix_fn, prefix, whole_ref, 3)? {
+                continue;
+            }
+            let whole = self.document["value"].as_array_mut().unwrap().last_mut().unwrap();
+            whole["align"] = json!(1);
+            let mut fraction = whole.clone();
+            let fraction_id = format!("{id}-fraction");
+            fraction["id"] = json!(fraction_id);
+            fraction["ref"] = json!(fraction_ref);
+            fraction["digit"] = json!(2);
+            fraction["padding"] = json!(1);
+            self.push("value", fraction);
+
+            let dot_id = format!("{id}-dot");
+            let dot = self
+                .resources
+                .path(&format!("Bin/{prefix} ."))
+                .or_else(|| self.resources.path("Bin/."));
+            let has_dot = self.image(&dot_id, dot.into_iter().collect(), 0, None);
+            let unit_id = format!("{id}-unit");
+            let unit = self
+                .resources
+                .path(&format!("Bin/{unit}"))
+                .or_else(|| self.resources.path(&format!("Bin/{fallback_unit}")));
+            let has_unit = self.image(&unit_id, unit.into_iter().collect(), 0, None);
+            let dot_width = self
+                .point(
+                    &format!("{name}StopPointDrawingLength"),
+                    self.point("stopPointDrawingLength", width)?,
+                )?
+                .round()
+                .max(0.0);
+            let unit_width =
+                self.point(&format!("{name}UnitDrawingLength"), width)?.round().max(0.0);
+            let x = self.point(&format!("{name}Position0"), 0.0)?;
+            let y = self.point(&format!("{name}Position1"), 0.0)?;
+            let align = self.point(&format!("{name}System"), 0.0)? as i32;
+            let offsets = self.alt_offsets(&format!("alt-{name}"), 2)?;
+            let suffix = name == "point";
+            for digits in 1..=3 {
+                let lower = if digits == 1 { 0 } else { 10_i32.pow(digits - 1) };
+                let condition = if digits == 3 {
+                    format!("number({whole_ref}) >= {lower}")
+                } else {
+                    format!(
+                        "number({whole_ref}) >= {lower} and number({whole_ref}) < {}",
+                        10_i32.pow(digits)
+                    )
+                };
+                let number_width = (f64::from(digits) + 2.0) * width + dot_width;
+                // Qwilight aligns percentage with its suffix, but HS aligns
+                // just the number and places the unit to its left.
+                let total_width = number_width + if suffix { unit_width } else { 0.0 };
+                let left = x - match align {
+                    1 => total_width / 2.0,
+                    2 => total_width,
+                    _ => 0.0,
+                };
+                for dx in &offsets {
+                    let left = left + dx;
+                    for (part, px, w, visible) in [
+                        (&id, left, width, true),
+                        (&dot_id, left + f64::from(digits) * width, dot_width, has_dot),
+                        (&fraction_id, left + f64::from(digits) * width + dot_width, width, true),
+                        (
+                            &unit_id,
+                            if suffix { left + number_width } else { left - unit_width },
+                            unit_width,
+                            has_unit,
+                        ),
+                    ] {
+                        if visible && w > 0.0 {
+                            let destination = json!({"id":part,"filter":1,"draw":condition,
+                                "dst":[self.rect(px,y,w,height)]});
+                            self.destinations.entry(pipeline).or_default().push(destination);
+                        }
+                    }
+                }
             }
         }
         Ok(())
