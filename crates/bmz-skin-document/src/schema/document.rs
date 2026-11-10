@@ -586,7 +586,7 @@ pub struct SkinTextDef {
     pub prefix: String,
     #[serde(default)]
     pub suffix: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_skin_bool_or_string")]
     pub wrapping: bool,
     #[serde(default)]
     pub overflow: i32,

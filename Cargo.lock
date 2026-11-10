@@ -815,6 +815,7 @@ dependencies = [
  "anyhow",
  "bmz-core",
  "bmz-skin-assets",
+ "encoding_rs",
  "serde",
  "serde_json",
  "tempfile",

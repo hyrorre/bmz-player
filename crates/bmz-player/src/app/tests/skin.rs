@@ -520,6 +520,36 @@ fn skin_catalog_rejects_json_without_explicit_skin_type() {
 }
 
 #[test]
+fn skin_catalog_lists_bundled_decide_json_skins() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let skin_root = repo_root.join("data/skins");
+
+    let default_path = skin_root.join("default/decide.json");
+    let (skin_type, candidate) =
+        load_skin_candidate(&skin_root, &default_path, SkinCandidateOrigin::Bundled)
+            .expect("load default decide candidate");
+    assert_eq!(skin_type, 6);
+    assert_eq!(candidate.path, "resource:skins/default/decide.json");
+
+    // Luxez-Flat's decide.json is CP932, uses `//` comments, omits commas and writes
+    // `"wrapping": "false"` like beatoraja/libGDX accepts (issue #87).
+    let luxez_path = skin_root.join("Luxez-Flat/decide/decide.json");
+    if !luxez_path.is_file() {
+        return;
+    }
+    let (skin_type, candidate) =
+        load_skin_candidate(&skin_root, &luxez_path, SkinCandidateOrigin::Bundled)
+            .expect("load Luxez-Flat decide candidate");
+    assert_eq!(skin_type, 6);
+    assert_eq!(candidate.path, "resource:skins/Luxez-Flat/decide/decide.json");
+    assert!(!candidate.name.trim().is_empty(), "candidate name should not be empty");
+
+    let document = SkinDocument::load_beatoraja_json(&luxez_path).expect("load Luxez-Flat decide");
+    assert_eq!(document.skin_type, 6);
+    assert!(document.text.iter().any(|text| text.id == "title" && !text.wrapping));
+}
+
+#[test]
 fn skin_catalog_loads_litone11_result_headers_when_available() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let skin_root = repo_root.join("data/skins");
