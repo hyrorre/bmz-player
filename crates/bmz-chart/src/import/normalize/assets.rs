@@ -4,8 +4,9 @@ pub(super) fn build_sound_table(
     source_path: &Path,
     intermediate: &IntermediateChart,
     warnings: &mut Vec<ImportWarning>,
-    check_resource_existence: bool,
+    lookup: AssetLookup,
 ) -> SoundTable {
+    let check_resource_existence = lookup == AssetLookup::Resolve { warn_missing: true };
     let mut by_wav_key = HashMap::new();
     let mut assets = Vec::new();
     let mut resource_exists_by_path = HashMap::new();
@@ -33,7 +34,7 @@ pub(super) fn build_bga_table(
     source_path: &Path,
     intermediate: &IntermediateChart,
     warnings: &mut Vec<ImportWarning>,
-    check_resource_existence: bool,
+    lookup: AssetLookup,
 ) -> BgaTable {
     let mut by_bmp_key = HashMap::new();
     let mut assets = Vec::new();
@@ -46,9 +47,16 @@ pub(super) fn build_bga_table(
         let id = BgaAssetId(assets.len() as u32);
         let unresolved =
             if bmp.path.is_absolute() { bmp.path.clone() } else { base_dir.join(&bmp.path) };
-        let path = crate::bga_asset::resolve_bga_asset_path(base_dir, &bmp.path)
-            .unwrap_or_else(|| unresolved.clone());
-        if check_resource_existence && !bmz_song_resource::file_exists(&path) {
+        let path = match lookup {
+            AssetLookup::Resolve { .. } => {
+                crate::bga_asset::resolve_bga_asset_path(base_dir, &bmp.path)
+                    .unwrap_or_else(|| unresolved.clone())
+            }
+            AssetLookup::Declared => unresolved.clone(),
+        };
+        if lookup == (AssetLookup::Resolve { warn_missing: true })
+            && !bmz_song_resource::file_exists(&path)
+        {
             warnings.push(ImportWarning::MissingBmpFile { path: path.clone() });
         }
         by_bmp_key.insert(bmp.key, id);

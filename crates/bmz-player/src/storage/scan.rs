@@ -7,7 +7,7 @@ use std::time::{Instant, UNIX_EPOCH};
 use anyhow::Result;
 use bmz_chart::import::ImportResult;
 use bmz_chart::import::error::ImportError;
-use bmz_chart::import::import_bms_chart;
+use bmz_chart::import::{AssetLookup, BmsRandomSource, import_chart_with_assets};
 use rayon::prelude::*;
 
 use crate::config::app_config::{PathEntry, ScanConfig};

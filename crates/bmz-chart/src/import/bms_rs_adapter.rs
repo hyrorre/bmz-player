@@ -484,3 +484,7 @@ pub(crate) fn detect_pms_variant(source: &str) -> (PmsKeyLayout, bool) {
 #[cfg(test)]
 #[path = "bms_rs_adapter/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "bms_rs_adapter/import_bench.rs"]
+mod import_bench;

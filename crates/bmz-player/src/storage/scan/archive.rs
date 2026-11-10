@@ -1,7 +1,7 @@
 use super::*;
 use crate::chart_source::{ChartLocator, archive_preview_file};
 use crate::song_archive::{self, ArchiveControl};
-use bmz_chart::import::{BmsRandomSource, import_chart_bytes_with_random_source};
+use bmz_chart::import::{AssetLookup, BmsRandomSource, import_chart_bytes_with_assets};
 use rusqlite::OptionalExtension;
 
 /// A failed decoder/CRC must roll back the whole container, including earlier members.
@@ -77,7 +77,12 @@ pub(super) fn import_archive(
             return Ok(());
         }
         let parsed = catch_unwind(AssertUnwindSafe(|| {
-            import_chart_bytes_with_random_source(&path, bytes, BmsRandomSource::Seed(None), false)
+            import_chart_bytes_with_assets(
+                &path,
+                bytes,
+                BmsRandomSource::Seed(None),
+                AssetLookup::Declared,
+            )
         }));
         let result = parsed.unwrap_or_else(|_| {
             Err(ImportError::Parse {

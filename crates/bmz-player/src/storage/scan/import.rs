@@ -529,7 +529,11 @@ pub(super) fn failed_import_version(error: &ImportError) -> i64 {
 }
 
 pub(super) fn import_bms_chart_catching_unwind(path: &Path) -> Result<ImportResult, ImportError> {
-    match catch_unwind(AssertUnwindSafe(|| import_bms_chart(path, None, false))) {
+    // The library stores metadata and analysis only; resolving every BGA file on disk
+    // cost several lookups per #BMP line (about 95 ms for a chart with 234 of them).
+    let import =
+        || import_chart_with_assets(path, BmsRandomSource::Seed(None), AssetLookup::Declared);
+    match catch_unwind(AssertUnwindSafe(import)) {
         Ok(result) => result.map(|mut result| {
             result.chart.metadata.preview_file = crate::chart_asset::normalize_preview_file(
                 path,
