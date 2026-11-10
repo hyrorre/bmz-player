@@ -258,49 +258,40 @@ pub fn normalize_json_skin_integer_value(value: JsonValue) -> JsonValue {
 /// スカラー期待の整数キー (`op` / `offsets` / `time` 以外) では配列を
 /// アンラップしてスカラーへ畳み込む点。`offset` は定義の配列にも使うため、
 /// オブジェクトや配列を含む場合は1件でも配列を維持する。
-pub fn normalize_lua_json_skin_integer_numbers(value: JsonValue) -> JsonValue {
-    normalize_lua_json_skin_integer_numbers_for_key(None, value)
+pub fn normalize_lua_json_skin_integer_numbers(mut value: JsonValue) -> JsonValue {
+    // In place: rebuilding every map of a large document costs more than the rounding.
+    normalize_lua_json_skin_integer_numbers_for_key(None, &mut value);
+    value
 }
 
-fn normalize_lua_json_skin_integer_numbers_for_key(
-    key: Option<&str>,
-    value: JsonValue,
-) -> JsonValue {
+fn normalize_lua_json_skin_integer_numbers_for_key(key: Option<&str>, value: &mut JsonValue) {
     match value {
-        JsonValue::Array(mut values)
+        JsonValue::Array(values)
             if is_json_skin_scalar_integer_key(key)
                 && values.len() == 1
                 && !matches!(values[0], JsonValue::Object(_) | JsonValue::Array(_)) =>
         {
-            normalize_lua_json_skin_integer_value(values.remove(0))
+            let mut scalar = values.remove(0);
+            normalize_lua_json_skin_integer_value(&mut scalar);
+            *value = scalar;
         }
-        JsonValue::Array(values) => JsonValue::Array(
-            values
-                .into_iter()
-                .map(|value| {
-                    if is_json_skin_integer_key(key) {
-                        normalize_lua_json_skin_integer_value(value)
-                    } else {
-                        normalize_lua_json_skin_integer_numbers_for_key(key, value)
-                    }
-                })
-                .collect(),
-        ),
-        JsonValue::Object(map) => JsonValue::Object(
-            map.into_iter()
-                .map(|(key, value)| {
-                    let value = normalize_lua_json_skin_integer_numbers_for_key(Some(&key), value);
-                    (key, value)
-                })
-                .collect::<JsonMap<_, _>>(),
-        ),
-        JsonValue::Number(number) if is_json_skin_integer_key(key) => {
-            json_number_to_rounded_i64(&number)
-                .and_then(serde_json::Number::from_i128)
-                .map(JsonValue::Number)
-                .unwrap_or(JsonValue::Number(number))
+        JsonValue::Array(values) => {
+            let integer_key = is_json_skin_integer_key(key);
+            for value in values {
+                if integer_key {
+                    normalize_lua_json_skin_integer_value(value);
+                } else {
+                    normalize_lua_json_skin_integer_numbers_for_key(key, value);
+                }
+            }
         }
-        value => value,
+        JsonValue::Object(map) => {
+            for (key, value) in map.iter_mut() {
+                normalize_lua_json_skin_integer_numbers_for_key(Some(key), value);
+            }
+        }
+        JsonValue::Number(number) if is_json_skin_integer_key(key) => round_json_integer(number),
+        _ => {}
     }
 }
 
@@ -308,24 +299,26 @@ fn is_json_skin_scalar_integer_key(key: Option<&str>) -> bool {
     is_json_skin_integer_key(key) && !matches!(key, Some("op" | "offsets" | "time"))
 }
 
-fn normalize_lua_json_skin_integer_value(value: JsonValue) -> JsonValue {
+fn normalize_lua_json_skin_integer_value(value: &mut JsonValue) {
     match value {
-        JsonValue::Number(number) => json_number_to_rounded_i64(&number)
-            .and_then(serde_json::Number::from_i128)
-            .map(JsonValue::Number)
-            .unwrap_or(JsonValue::Number(number)),
-        JsonValue::Array(values) => JsonValue::Array(
-            values.into_iter().map(normalize_lua_json_skin_integer_value).collect(),
-        ),
-        JsonValue::Object(map) => JsonValue::Object(
-            map.into_iter()
-                .map(|(key, value)| {
-                    let value = normalize_lua_json_skin_integer_numbers_for_key(Some(&key), value);
-                    (key, value)
-                })
-                .collect::<JsonMap<_, _>>(),
-        ),
-        value => value,
+        JsonValue::Number(number) => round_json_integer(number),
+        JsonValue::Array(values) => {
+            values.iter_mut().for_each(normalize_lua_json_skin_integer_value)
+        }
+        JsonValue::Object(map) => {
+            for (key, value) in map.iter_mut() {
+                normalize_lua_json_skin_integer_numbers_for_key(Some(key), value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn round_json_integer(number: &mut serde_json::Number) {
+    if let Some(rounded) =
+        json_number_to_rounded_i64(number).and_then(serde_json::Number::from_i128)
+    {
+        *number = rounded;
     }
 }
 

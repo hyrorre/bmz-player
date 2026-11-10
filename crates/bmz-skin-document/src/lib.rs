@@ -335,6 +335,12 @@ impl SkinDocument {
         })
     }
 
+    /// Decodes a skin value without tracking field paths. Callers that report errors
+    /// decode a failed value again with `serde_path_to_error` to name the field.
+    pub fn from_json_value(value: &JsonValue) -> serde_json::Result<Self> {
+        Self::deserialize(value)
+    }
+
     pub fn load_beatoraja_json(path: &Path) -> Result<Self> {
         Self::load_beatoraja_json_with_context(
             &bmz_skin_assets::SkinPathContext::for_entry(path)?,
