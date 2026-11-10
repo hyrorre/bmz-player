@@ -186,11 +186,7 @@ impl WinitApp {
     /// `render_current_scene` の前に呼ぶこと。
     pub(super) fn run_egui_frame(&mut self) {
         let profile_change_available = self.profile_change_allowed();
-        let scene_loading = self.scene_skin_entry_loading()
-            || (self.current_scene_kind() == AppSceneKind::Select
-                && self.select.list_loader.loading());
         if let Some(egui) = self.ui.egui.as_mut() {
-            egui.set_scene_loading(scene_loading);
             egui.set_profile_change_available(profile_change_available);
         }
         let Some(window) = self.window.clone() else {
