@@ -9,7 +9,7 @@ use rusqlite::Connection;
 
 use super::*;
 use crate::storage::common::configure_connection;
-use crate::storage::library_db::{LibraryDatabase, library_path_key};
+use crate::storage::library_db::{LibraryDatabase, PruneRequest, library_path_key};
 use crate::storage::migration::{LIBRARY_MIGRATIONS, run_migrations};
 
 fn config() -> ScanConfig {
@@ -601,14 +601,18 @@ fn enclosing_root_spellings_do_not_block_pruning() {
     protected_roots.push(protect(r"C:\bmz-issue69-missing\BMS\INSANE2\protected", true));
     let discovered = HashSet::new();
 
+    let mut index = db.chart_path_index().unwrap();
     let removed = db
         .prune_missing_chart_files(
-            Path::new(r"\\?\C:\bmz-issue69-missing\BMS\INSANE2"),
-            true,
-            true,
-            Some(&discovered),
-            &discovered,
-            &protected_roots,
+            &mut index,
+            &PruneRequest {
+                root: Path::new(r"\\?\C:\bmz-issue69-missing\BMS\INSANE2"),
+                recursive: true,
+                skip_hidden: true,
+                omission_proves_absence: true,
+                discovered_any: &discovered,
+                protected_roots: &protected_roots,
+            },
         )
         .unwrap();
 
@@ -647,14 +651,18 @@ fn enclosing_unc_root_does_not_block_pruning() {
         [PathEntry { path: r"\\bmz-issue69\share\BMS".into(), enabled: true, recursive: true }];
     let discovered = HashSet::new();
 
+    let mut index = db.chart_path_index().unwrap();
     let removed = db
         .prune_missing_chart_files(
-            Path::new(r"\\?\UNC\bmz-issue69\share\BMS\INSANE2"),
-            true,
-            true,
-            Some(&discovered),
-            &discovered,
-            &protected_roots,
+            &mut index,
+            &PruneRequest {
+                root: Path::new(r"\\?\UNC\bmz-issue69\share\BMS\INSANE2"),
+                recursive: true,
+                skip_hidden: true,
+                omission_proves_absence: true,
+                discovered_any: &discovered,
+                protected_roots: &protected_roots,
+            },
         )
         .unwrap();
 

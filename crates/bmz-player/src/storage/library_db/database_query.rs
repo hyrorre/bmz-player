@@ -180,8 +180,11 @@ impl LibraryDatabase {
 
         let tx = self.conn.transaction()?;
         {
-            let mut stmt =
-                tx.prepare_cached("UPDATE charts SET has_document = ?1 WHERE folder_path = ?2")?;
+            // Unchanged rows are not rewritten, so a rescan adds nothing to the WAL.
+            let mut stmt = tx.prepare_cached(
+                "UPDATE charts SET has_document = ?1
+                 WHERE folder_path = ?2 AND has_document IS NOT ?1",
+            )?;
             for (folder, has_document) in folder_flags {
                 stmt.execute(params![has_document, to_folder_key(&path_to_string(folder))])?;
             }

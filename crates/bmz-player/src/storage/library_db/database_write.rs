@@ -1,37 +1,42 @@
 use super::*;
 
 impl LibraryDatabase {
+    /// Every registered chart path with its [`scope_key`], loaded once per scan so that
+    /// pruning many roots neither re-reads nor re-normalizes the whole table per root.
+    pub(crate) fn chart_path_index(&self) -> Result<ChartPathIndex> {
+        let mut stmt = self.conn.prepare("SELECT id, path FROM chart_files")?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
+            .map(|row| {
+                row.map(|(id, path)| {
+                    let key = scope_key(&path);
+                    IndexedChartPath { id, path, key }
+                })
+            })
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(ChartPathIndex { rows })
+    }
+
     /// Only remove confirmed missing files within a successfully scanned scope.
     /// Do not infer deletion from timestamps: unchanged imports keep old timestamps.
     ///
-    /// With `discovered`, the [`library_path_key`]s of a complete native discovery,
-    /// that set helps define the scope: a registration it lacks may be an unchosen
-    /// alias or already gone. Hidden entries and other root scopes can still retain it.
-    /// Registrations it holds are confirmed again here, right before the commit,
-    /// so a chart deleted after discovery is removed as well. Only `Ok(false)` from the
-    /// file system proves absence; an access error keeps the row. Without `discovered`
-    /// (an index such as Everything may lag), only that check decides.
-    pub fn prune_missing_chart_files(
+    /// A registration that any root of this scan discovered is present and kept. A
+    /// chart deleted after its discovery is removed by the next scan, not by a second
+    /// stat of every chart here. For the rest, a complete native discovery
+    /// (`omission_proves_absence`) shows that the registration is gone or outside the
+    /// scope, such as an unchosen link alias; hidden entries and other root scopes can
+    /// still retain it. Otherwise (an index such as Everything may lag) only the file
+    /// system or a decoded archive index decides, and only `Ok(false)` proves absence.
+    pub(crate) fn prune_missing_chart_files(
         &mut self,
-        root: &Path,
-        recursive: bool,
-        skip_hidden: bool,
-        discovered: Option<&std::collections::HashSet<String>>,
-        discovered_any: &std::collections::HashSet<String>,
-        protected_roots: &[crate::config::app_config::PathEntry],
+        index: &mut ChartPathIndex,
+        request: &PruneRequest<'_>,
     ) -> Result<usize> {
         use rayon::prelude::*;
 
-        let root = crate::config::app_config::PathEntry {
-            path: library_path_key(root),
-            enabled: true,
-            recursive,
-        };
-        let candidates = {
-            let mut stmt = self.conn.prepare("SELECT id, path FROM chart_files")?;
-            stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
-                .collect::<rusqlite::Result<Vec<_>>>()?
-        };
+        let root_path = library_path_key(request.root);
+        let root = RootScope::new(&root_path, request.recursive);
+        let root_key = scope_key(&root_path);
         let mut missing = Vec::new();
         let mut files_to_check = Vec::new();
         // Only a successfully decoded generation may prove that an entry vanished.
@@ -45,63 +50,52 @@ impl LibraryDatabase {
         // Any other scope (an offline, disabled, unscanned or nested root) can.
         let mut enclosing_roots = Vec::new();
         let mut other_roots = Vec::new();
-        for other in protected_roots {
-            let other_key = library_path_key(Path::new(&other.path));
-            #[cfg(windows)]
-            let same_root = root.path.eq_ignore_ascii_case(&other_key);
-            #[cfg(not(windows))]
-            let same_root = root.path == other_key;
-            if same_root {
+        for other in request.protected_roots {
+            let other = RootScope::of(other);
+            if other.is_root_key(&root_key) {
                 continue;
             }
-            if song_root_contains_file(other, &root.path) {
+            if other.contains_key(&root_key) {
                 enclosing_roots.push(other);
             } else {
                 other_roots.push(other);
             }
         }
-        for (id, path) in candidates {
-            if !song_root_contains_file(&root, &path) {
+        for IndexedChartPath { id, path, key } in &index.rows {
+            if !root.contains_key(key) || request.discovered_any.contains(path) {
                 continue;
             }
-            let omitted = discovered.is_some_and(|discovered| !discovered.contains(&path));
-            let exact_archive = matches!(
-                crate::chart_source::ChartLocator::parse(Path::new(&path)),
-                Ok(crate::chart_source::ChartLocator::Archive { container, .. })
-                if if cfg!(windows) { library_path_key(&container).eq_ignore_ascii_case(&root.path) }
-                    else { library_path_key(&container) == root.path }
-            );
-            if !exact_archive
-                && other_roots.iter().any(|other| song_root_contains_file(other, &path))
-            {
+            let locator = crate::chart_source::ChartLocator::parse(Path::new(path));
+            let exact_archive = root.is_root_key(key)
+                && matches!(locator, Ok(crate::chart_source::ChartLocator::Archive { .. }));
+            if !exact_archive && other_roots.iter().any(|other| other.contains_key(key)) {
                 // An offline, disabled, or unscanned root cannot prove absence.
                 continue;
             }
             // The enclosing root's own scan may have chosen a different alias, or
             // kept a hidden chart, so only the file system or a decoded archive
             // index may remove its registrations, never the omission alone.
-            let enclosed = !exact_archive
-                && enclosing_roots.iter().any(|other| song_root_contains_file(other, &path));
-            let unconfirmed = omitted && !discovered_any.contains(&path);
-            if unconfirmed && !enclosed {
+            let enclosed =
+                !exact_archive && enclosing_roots.iter().any(|other| other.contains_key(key));
+            if request.omission_proves_absence && !enclosed {
                 // The hidden setting only restricts new discovery. Keep existing
                 // hidden files, as before this scan optimization.
-                if skip_hidden
-                    && let Ok(locator) = crate::chart_source::ChartLocator::parse(Path::new(&path))
+                if request.skip_hidden
+                    && let Ok(locator) = &locator
                 {
                     let container = locator.container_path();
                     match container.try_exists() {
                         Err(_) => continue,
                         Ok(true) => {
                             if crate::storage::scan::hidden_path_in_root(
-                                Path::new(&root.path),
+                                Path::new(&root_path),
                                 container,
                             ) != Some(false)
                             {
                                 continue;
                             }
                             if let crate::chart_source::ChartLocator::Archive { entry, .. } =
-                                &locator
+                                locator
                             {
                                 let hidden = !cfg!(windows)
                                     && entry.split('/').any(|part| part.starts_with('.'));
@@ -130,30 +124,25 @@ impl LibraryDatabase {
                         Ok(false) => {}
                     }
                 }
-                missing.push(id);
+                missing.push(*id);
                 continue;
             }
-            match crate::chart_source::ChartLocator::parse(Path::new(&path)) {
+            match locator {
                 Ok(crate::chart_source::ChartLocator::File(file)) => {
-                    files_to_check.push((id, file))
+                    files_to_check.push((*id, file))
                 }
                 Ok(crate::chart_source::ChartLocator::Archive { container, entry }) => {
                     let gone = *containers_gone
                         .entry(container.clone())
                         .or_insert_with(|| matches!(container.try_exists(), Ok(false)));
-                    // A complete discovery already decoded this archive's index,
-                    // except for entries it omitted inside an enclosing root.
                     let vanished = gone
-                        || ((discovered.is_none() || unconfirmed)
-                            && archive_entries
-                                .entry(container.clone())
-                                .or_insert_with(|| {
-                                    let index = crate::song_archive::inspect(
-                                        &container,
-                                        &Default::default(),
-                                    )
-                                    .ok()?;
-                                    let generation: String = self
+                        || archive_entries
+                            .entry(container.clone())
+                            .or_insert_with(|| {
+                                let index =
+                                    crate::song_archive::inspect(&container, &Default::default())
+                                        .ok()?;
+                                let generation: String = self
                                     .conn
                                     .query_row(
                                         "SELECT generation FROM song_archive_scans WHERE path = ?1",
@@ -161,25 +150,25 @@ impl LibraryDatabase {
                                         |row| row.get(0),
                                     )
                                     .ok()?;
-                                    (generation == index.generation.fingerprint).then(|| {
-                                        index
-                                            .entries
-                                            .into_iter()
-                                            .filter(|entry| !entry.is_directory)
-                                            .map(|entry| entry.name)
-                                            .collect()
-                                    })
+                                (generation == index.generation.fingerprint).then(|| {
+                                    index
+                                        .entries
+                                        .into_iter()
+                                        .filter(|entry| !entry.is_directory)
+                                        .map(|entry| entry.name)
+                                        .collect()
                                 })
-                                .as_ref()
-                                .is_some_and(|entries| !entries.contains(&entry)));
+                            })
+                            .as_ref()
+                            .is_some_and(|entries| !entries.contains(&entry));
                     if vanished {
-                        missing.push(id);
+                        missing.push(*id);
                     }
                 }
                 Err(_) => {}
             }
         }
-        // One stat per registered chart, in parallel for slow or remote volumes.
+        // One stat per undiscovered registration, in parallel for slow or remote volumes.
         missing.extend(
             files_to_check
                 .par_iter()
@@ -194,6 +183,8 @@ impl LibraryDatabase {
         inherit_first_seen_at(&tx, &missing)?;
         delete_chart_files(&tx, &missing)?;
         tx.commit()?;
+        let removed: std::collections::HashSet<i64> = missing.iter().copied().collect();
+        index.rows.retain(|row| !removed.contains(&row.id));
         Ok(missing.len())
     }
 

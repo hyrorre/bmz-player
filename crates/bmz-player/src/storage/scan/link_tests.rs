@@ -312,8 +312,10 @@ fn inaccessible_link_target_keeps_existing_registrations() {
     assert_eq!(registered(&db, &root), ["a.bms", "b.bms", "ext/e.bms"]);
 }
 
+/// Discovery is the evidence of presence: a chart deleted after it was discovered is
+/// not stat-ed again in the same scan, and the next scan removes it.
 #[test]
-fn chart_deleted_after_discovery_is_pruned() {
+fn chart_deleted_after_discovery_is_pruned_by_the_next_scan() {
     let base = temp();
     let root = base.path().join("root");
     chart(&root.join("a.bms"), "A");
@@ -343,6 +345,10 @@ fn chart_deleted_after_discovery_is_pruned() {
 
     assert!(deleted);
     assert_eq!(report.summary.files_seen, 3);
+    // new.bms vanished before its import, so only the unchanged b.bms stays for now.
+    assert_eq!(registered(&db, &root), ["a.bms", "b.bms"]);
+    let next = scan_song_roots(&mut db, &roots(&root, true), &config(true), 3, false).unwrap();
+    assert_eq!(next.summary.removed_files, 1);
     assert_eq!(registered(&db, &root), ["a.bms"]);
 }
 

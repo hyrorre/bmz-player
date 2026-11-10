@@ -16,9 +16,16 @@ pub(super) fn import_archive(
     expected: &song_archive::ArchiveGeneration,
 ) -> Result<ScanReport> {
     let control = ArchiveControl::default();
-    let index = song_archive::inspect(container, &control)?;
-    anyhow::ensure!(index.generation == *expected, "archive changed after discovery");
-    if let Some(record) = song_archive::generation_record(container) {
+    // Discovery already listed the archive. Its metadata stamp still mapping to the same
+    // generation shows it is unchanged without reading the index again (the index cache
+    // holds only a few archives); an unknown stamp falls back to inspecting it.
+    let record = song_archive::generation_record(container);
+    let current = match &record {
+        Some(record) => record.generation.clone(),
+        None => song_archive::inspect(container, &control)?.generation,
+    };
+    anyhow::ensure!(current == *expected, "archive changed after discovery");
+    if let Some(record) = record.or_else(|| song_archive::generation_record(container)) {
         db.store_archive_generation(&record)?;
     }
     let archive_key = crate::storage::library_db::library_path_key(container);
@@ -46,12 +53,15 @@ pub(super) fn import_archive(
     if !force
         && registered
         && previous.as_ref().is_some_and(|(generation, version)| {
-            generation == &index.generation.fingerprint && *version == CHART_IMPORT_VERSION
+            generation == &current.fingerprint && *version == CHART_IMPORT_VERSION
         })
     {
         report.summary.skipped = usize_to_u32(entries.len());
         return Ok(report);
     }
+    // Importing needs the entry list for preview lookup; it also rechecks the generation.
+    let index = song_archive::inspect(container, &control)?;
+    anyhow::ensure!(index.generation == *expected, "archive changed after discovery");
     let modified_at = std::fs::metadata(container)?
         .modified()?
         .duration_since(UNIX_EPOCH)

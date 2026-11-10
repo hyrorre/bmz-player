@@ -349,6 +349,16 @@ pub fn scan_song_roots_with_progress(
                                 report.summary.imported += 1;
                                 report.summary.warnings += warnings_written as u32;
                             }
+                            // Deleted after discovery: nothing failed. An earlier
+                            // registration stays until the next scan finds it gone.
+                            Err(ImportError::Io { source, .. })
+                                if source.kind() == io::ErrorKind::NotFound =>
+                            {
+                                tracing::debug!(
+                                    path = %p.path.display(),
+                                    "chart disappeared before import"
+                                );
+                            }
                             Err(error) => {
                                 let message = error.to_string();
                                 LibraryDatabase::write_failed_chart(
@@ -421,7 +431,6 @@ pub fn scan_song_roots_with_progress(
                 root.root_id,
                 root.recursive,
                 root.backend,
-                entries.iter().map(|entry| library_path_key(&entry.path)).collect::<HashSet<_>>(),
                 root.archives,
             ));
         } else {
@@ -439,11 +448,18 @@ pub fn scan_song_roots_with_progress(
 
     let prune_start = Instant::now();
     let mut validated = Vec::new();
-    for (root_path, root_id, recursive, backend, discovered, archives) in pending_prune {
+    for (root_path, root_id, recursive, backend, archives) in pending_prune {
         let mut valid = true;
         for archive in &archives {
-            match crate::song_archive::inspect(&archive.path, &Default::default()) {
-                Ok(index) if index.generation == archive.generation => {}
+            // An unchanged metadata stamp keeps the discovered generation; only an
+            // unknown stamp needs the index (and possibly a hash) again.
+            let current = match crate::song_archive::generation_record(&archive.path) {
+                Some(record) => Ok(record.generation),
+                None => crate::song_archive::inspect(&archive.path, &Default::default())
+                    .map(|index| index.generation),
+            };
+            match current {
+                Ok(generation) if generation == archive.generation => {}
                 Err(_) if matches!(archive.path.try_exists(), Ok(false)) => {}
                 _ => {
                     valid = false;
@@ -471,20 +487,23 @@ pub fn scan_song_roots_with_progress(
             });
             continue;
         }
-        validated.push((root_path, root_id, recursive, backend, discovered));
+        validated.push((root_path, root_id, recursive, backend));
     }
-    for (root_path, root_id, recursive, backend, discovered) in validated {
-        // Everything results may lag and do not establish absence from scope.
-        let discovered = (backend != ScanDiscoveryBackend::Everything).then_some(&discovered);
-        report.summary.removed_files += db.prune_missing_chart_files(
-            &root_path,
-            recursive,
-            scan.skip_hidden,
-            discovered,
-            &discovered_any,
-            &protected_roots,
-        )?;
-        db.update_root_scanned_at(root_id, scanned_at)?;
+    if !validated.is_empty() {
+        let mut index = db.chart_path_index()?;
+        for (root_path, root_id, recursive, backend) in validated {
+            let request = crate::storage::library_db::PruneRequest {
+                root: &root_path,
+                recursive,
+                skip_hidden: scan.skip_hidden,
+                // Everything results may lag and do not establish absence from scope.
+                omission_proves_absence: backend != ScanDiscoveryBackend::Everything,
+                discovered_any: &discovered_any,
+                protected_roots: &protected_roots,
+            };
+            report.summary.removed_files += db.prune_missing_chart_files(&mut index, &request)?;
+            db.update_root_scanned_at(root_id, scanned_at)?;
+        }
     }
 
     report.timing.prune_ms = prune_start.elapsed().as_millis();

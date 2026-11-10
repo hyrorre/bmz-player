@@ -30,7 +30,7 @@ mod scope;
 mod sources;
 
 pub(crate) use scope::configured_song_roots;
-pub(crate) use scope::song_root_contains_file;
+pub(crate) use scope::{RootScope, scope_key};
 pub use sources::ChartSource;
 pub(crate) use sources::{available_chart_id_for_hash, prime_archive_generations};
 
@@ -230,6 +230,31 @@ pub struct ChartFileFingerprint {
     pub file_size: u64,
     pub modified_at: i64,
     pub import_version: i64,
+}
+
+/// Registered chart paths for pruning, from [`LibraryDatabase::chart_path_index`].
+/// Pruning removes the rows it deletes, so one index serves every root of a scan.
+pub(crate) struct ChartPathIndex {
+    rows: Vec<IndexedChartPath>,
+}
+
+struct IndexedChartPath {
+    id: i64,
+    path: String,
+    key: String,
+}
+
+/// One root's pruning after its discovery completed.
+pub(crate) struct PruneRequest<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) recursive: bool,
+    pub(crate) skip_hidden: bool,
+    /// Whether the discovery listed everything in the root's scope, so that a
+    /// registration it lacks is gone or outside the scope. Everything may lag.
+    pub(crate) omission_proves_absence: bool,
+    /// [`library_path_key`]s that any root of this scan discovered.
+    pub(crate) discovered_any: &'a std::collections::HashSet<String>,
+    pub(crate) protected_roots: &'a [crate::config::app_config::PathEntry],
 }
 
 #[cfg(test)]
