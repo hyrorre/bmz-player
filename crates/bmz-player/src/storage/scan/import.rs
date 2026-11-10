@@ -278,37 +278,46 @@ pub fn scan_song_roots_with_progress(
             "skip check complete"
         );
 
-        // Phase 3+4: バッチごとに並列パースし、1トランザクションでまとめて書き込む。
-        // パースは別スレッドで次のバッチへ進み、SQLiteへの書き込みと重ねる。
-        // 容量0のチャネルで受け渡すため、メモリ上のバッチは書き込み中とパース中の
-        // 高々2つ。書き込みが遅ければパース側は受け取りを待つ。書き込みが失敗すると
+        // Phase 3+4: 譜面ごとに並列パースし、結果をIMPORT_BATCH_SIZE件ずつ1トランザクションで
+        // 書き込む。パースは別スレッドのrayonで進み、SQLiteへの書き込みと重なる。重い譜面が
+        // あっても他のスレッドは次の譜面へ進む（バッチ全件の完了を待たない）。チャネルの容量は
+        // IMPORT_BATCH_SIZEなので、メモリ上の解析結果は書き込み中のバッチ、チャネル内、
+        // 解析中のものに限られる。書き込みが遅ければパース側は送信で待つ。書き込みが失敗すると
         // 受信側が破棄され、パース側の送信が失敗して終了してから scope が戻る。
         let mut last_log = std::time::Instant::now();
         let log_interval = std::time::Duration::from_secs(2);
-        let (parsed_tx, parsed_rx) = std::sync::mpsc::sync_channel(0);
-        std::thread::scope(|scope| -> Result<()> {
+        let (parsed_tx, parsed_rx) = std::sync::mpsc::sync_channel::<ParsedFile>(IMPORT_BATCH_SIZE);
+        let parse_ms = std::thread::scope(|scope| -> Result<u128> {
             let to_import = &to_import;
-            scope.spawn(move || {
-                for chunk in to_import.chunks(IMPORT_BATCH_SIZE) {
-                    let parse_start = std::time::Instant::now();
-                    let parsed: Vec<ParsedFile> = chunk
-                        .par_iter()
-                        .map(|todo| ParsedFile {
-                            path: todo.path.clone(),
-                            file_size: todo.file_size,
-                            modified_at: todo.modified_at,
-                            result: import_bms_chart_catching_unwind(&todo.path),
-                        })
-                        .collect();
-                    // A closed receiver means the writer failed; stop parsing.
-                    if parsed_tx.send((parsed, parse_start.elapsed().as_millis())).is_err() {
-                        break;
+            let parser = scope.spawn(move || {
+                let parse_start = std::time::Instant::now();
+                // A closed receiver means the writer failed; stop parsing.
+                let _ = to_import.par_iter().try_for_each_with(parsed_tx, |tx, todo| {
+                    tx.send(ParsedFile {
+                        path: todo.path.clone(),
+                        file_size: todo.file_size,
+                        modified_at: todo.modified_at,
+                        result: import_bms_chart_catching_unwind(&todo.path),
+                    })
+                    .map_err(drop)
+                });
+                parse_start.elapsed().as_millis()
+            });
+            // Owned here, so an early return drops it and stops the parser.
+            let parsed_rx = parsed_rx;
+            let mut batch_done = 0_usize;
+            for batch_idx in 0.. {
+                let Ok(first) = parsed_rx.recv() else {
+                    break;
+                };
+                let mut parsed = Vec::with_capacity(IMPORT_BATCH_SIZE);
+                parsed.push(first);
+                while parsed.len() < IMPORT_BATCH_SIZE {
+                    match parsed_rx.recv() {
+                        Ok(file) => parsed.push(file),
+                        Err(_) => break,
                     }
                 }
-            });
-
-            for (batch_idx, (parsed, parse_ms)) in parsed_rx.into_iter().enumerate() {
-                let batch_done = batch_idx * IMPORT_BATCH_SIZE;
                 let now = std::time::Instant::now();
                 if now.duration_since(last_log) >= log_interval || batch_idx == 0 {
                     last_log = now;
@@ -321,7 +330,6 @@ pub fn scan_song_roots_with_progress(
                         "importing"
                     );
                 }
-                report.timing.parse_ms += parse_ms;
 
                 // 1トランザクションでバッチ書き込み
                 let write_start = std::time::Instant::now();
@@ -384,18 +392,18 @@ pub fn scan_song_roots_with_progress(
                 tracing::info!(
                     batch = batch_idx,
                     files = parsed.len(),
-                    parse_ms,
                     write_ms,
                     root = %root_path.display(),
                     "batch timing"
                 );
+                batch_done += parsed.len();
                 progress_done =
                     progress_done.saturating_add(usize_to_u32(parsed.len())).min(files_total);
                 on_progress(ScanProgress { done: progress_done, total: files_total });
             }
-            Ok(())
+            parser.join().map_err(|_| anyhow::anyhow!("chart parser thread panicked"))
         })?;
-
+        report.timing.parse_ms += parse_ms;
         // Discovery already enumerated every song directory. Persist the shared
         // folder flag even when every chart was skipped as unchanged.
         folder_document_flags.retain(|(folder, _)| {
