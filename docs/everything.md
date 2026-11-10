@@ -36,3 +36,4 @@ cargo run -p bmz-player -- songs load --no-everything
 ## 計測記録
 
 条件と実測値は[2026-08-17の作業記録](../notes/2026/2026-08-17-everything-performance.md)を参照してください。
+隠しファイル判定の削除後とフォールバックの調査は[2026-11-10の作業記録](../notes/2026/2026-11-10-song-update-performance.md)を参照してください。
