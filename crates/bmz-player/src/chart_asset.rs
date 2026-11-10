@@ -275,7 +275,9 @@ fn find_preview_prefix_audio_file(folder: &Path) -> Option<PathBuf> {
     for entry in std::fs::read_dir(folder).ok()? {
         let entry = entry.ok()?;
         let path = entry.path();
-        if !path.is_file() || !is_preview_audio_file(&path) {
+        // Match the name before any stat: a song folder holds hundreds of key sounds,
+        // and this runs for every chart without a usable #PREVIEW during a scan.
+        if !is_preview_audio_file(&path) || !path.is_file() {
             continue;
         }
         candidates.push(path);
