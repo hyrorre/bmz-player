@@ -8,12 +8,94 @@ use bmz_skin_assets::SkinPathContext;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 pub fn load_json_value(path: &Path) -> Result<JsonValue> {
-    let text = std::fs::read_to_string(path)
+    let bytes = std::fs::read(path)
         .with_context(|| format!("failed to read skin json: {}", path.display()))?;
+    parse_json_skin_text(&decode_json_skin_bytes(&bytes))
+        .with_context(|| format!("failed to parse skin json: {}", path.display()))
+}
+
+/// Parses beatoraja JSON skin text after the lenient preprocessing that libGDX's
+/// `JsonReader` accepts: comments, missing commas between values, and trailing commas.
+pub fn parse_json_skin_text(text: &str) -> Result<JsonValue> {
+    let text = strip_json_comments(text)?;
     let text = strip_json_trailing_commas(&text);
     let text = insert_missing_commas_between_json_values(&text);
-    serde_json::from_str(&text)
-        .with_context(|| format!("failed to parse skin json: {}", path.display()))
+    Ok(serde_json::from_str(&text)?)
+}
+
+/// Decodes skin JSON bytes as UTF-8 (with an optional BOM), falling back to
+/// Shift_JIS (CP932). beatoraja reads JSON skins with `FileReader`, whose
+/// platform-default charset is MS932 on Japanese Windows, so CP932 skins exist.
+pub fn decode_json_skin_bytes(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    match std::str::from_utf8(bytes) {
+        Ok(text) => std::borrow::Cow::Borrowed(text),
+        Err(_) => encoding_rs::SHIFT_JIS.decode_without_bom_handling(bytes).0,
+    }
+}
+
+/// Removes `// ...` line comments and `/* ... */` block comments outside strings.
+///
+/// A line comment keeps its terminating newline, and a block comment becomes a
+/// space plus the newlines it contained, so token boundaries and line numbers in
+/// later parse errors stay intact. An unterminated block comment is an error.
+pub fn strip_json_comments(input: &str) -> Result<String> {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while let Some(ch) = chars.next() {
+        if in_string {
+            output.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            in_string = true;
+            output.push(ch);
+            continue;
+        }
+        if ch != '/' {
+            output.push(ch);
+            continue;
+        }
+        match chars.peek() {
+            Some('/') => {
+                while let Some(next) = chars.peek() {
+                    if matches!(next, '\n' | '\r') {
+                        break;
+                    }
+                    chars.next();
+                }
+            }
+            Some('*') => {
+                chars.next();
+                output.push(' ');
+                let mut closed = false;
+                while let Some(next) = chars.next() {
+                    if next == '*' && chars.peek() == Some(&'/') {
+                        chars.next();
+                        closed = true;
+                        break;
+                    }
+                    if matches!(next, '\n' | '\r') {
+                        output.push(next);
+                    }
+                }
+                anyhow::ensure!(closed, "unterminated block comment in skin json");
+            }
+            _ => output.push(ch),
+        }
+    }
+
+    Ok(output)
 }
 
 pub fn strip_json_trailing_commas(input: &str) -> String {
