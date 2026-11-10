@@ -621,6 +621,55 @@ mod tests {
     }
 
     #[test]
+    fn scan_song_roots_skips_unchanged_failed_files_until_file_or_importer_changes() {
+        let root = make_temp_dir("scan-skip-failed");
+        let path = root.join("24key.bmson");
+        let unsupported = r#"{"version":"1.0.0","info":{"title":"Unsupported","artist":"T",
+            "genre":"T","level":1,"init_bpm":120,"resolution":240,"mode_hint":"keyboard-24k"},
+            "sound_channels":[]}"#;
+        write_file(&path, unsupported);
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let roots = vec![PathEntry {
+            path: root.to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        }];
+
+        let first = scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_060, false).unwrap();
+        assert_eq!((first.summary.failed, first.summary.skipped), (1, 0));
+        let second =
+            scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_061, false).unwrap();
+        assert_eq!((second.summary.failed, second.summary.skipped), (0, 1));
+
+        // A failure recorded by an older importer is retried.
+        db.conn()
+            .execute(
+                "UPDATE chart_files SET failed_import_version = ?1",
+                [CHART_IMPORT_VERSION - 1],
+            )
+            .unwrap();
+        let retried =
+            scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_062, false).unwrap();
+        assert_eq!((retried.summary.failed, retried.summary.skipped), (1, 0));
+
+        // A changed file is parsed again and can succeed.
+        write_file(&path, &unsupported.replace("keyboard-24k", "beat-7k"));
+        let fixed = scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_063, false).unwrap();
+        assert_eq!((fixed.summary.imported, fixed.summary.failed), (1, 0));
+        let status: String = db
+            .conn()
+            .query_row("SELECT parse_status FROM chart_files", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(status, "Parsed");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn scan_song_roots_skips_unchanged_imported_files() {
         let root = make_temp_dir("scan-skip");
         let path = root.join("song.bms");

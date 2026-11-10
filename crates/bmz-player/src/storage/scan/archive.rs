@@ -34,8 +34,9 @@ pub(super) fn import_archive(
         .iter()
         .map(|entry| crate::storage::library_db::library_path_key(&entry.path))
         .collect::<std::collections::HashSet<_>>();
-    // Failed charts have no linked chart (import_version 0). They are recorded for this
-    // generation, so an unchanged archive is not decoded again just to fail once more.
+    // Failed charts report their failed_import_version (0 for older rows). They are
+    // recorded for this generation, so an unchanged archive is not decoded again just to
+    // fail once more.
     let registered = entries.iter().all(|entry| {
         fingerprints.get(&crate::storage::library_db::library_path_key(&entry.path)).is_some_and(
             |fingerprint| matches!(fingerprint.import_version, 0 | CHART_IMPORT_VERSION),
@@ -108,6 +109,7 @@ pub(super) fn import_archive(
                     modified_at,
                     scanned_at,
                     &message,
+                    super::import::failed_import_version(&error),
                 )?;
                 report.summary.failed += 1;
                 report.failures.push(ScanFailure { path, message });

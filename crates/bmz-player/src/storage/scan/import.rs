@@ -359,6 +359,7 @@ pub fn scan_song_roots_with_progress(
                                     p.modified_at,
                                     scanned_at,
                                     &message,
+                                    failed_import_version(error),
                                 )?;
                                 report.summary.failed += 1;
                                 report.failures.push(ScanFailure { path: p.path.clone(), message });
@@ -490,6 +491,12 @@ pub fn scan_song_roots_with_progress(
     on_progress(ScanProgress { done: files_total, total: files_total });
     report.timing.total_ms = total_start.elapsed().as_millis();
     Ok(report)
+}
+
+/// The importer version to record for a failure. Bytes that failed to parse fail the
+/// same way until the file or `CHART_IMPORT_VERSION` changes; a read error is retried.
+pub(super) fn failed_import_version(error: &ImportError) -> i64 {
+    if matches!(error, ImportError::Io { .. }) { 0 } else { CHART_IMPORT_VERSION }
 }
 
 pub(super) fn import_bms_chart_catching_unwind(path: &Path) -> Result<ImportResult, ImportError> {
