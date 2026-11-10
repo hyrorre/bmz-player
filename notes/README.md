@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-10 | [再スキャンで書庫を開き直さないための譜面一覧の保持](2026/2026-11-10-archive-listing-cache.md) |
 | 2026-11-10 | [曲更新がbeatorajaより遅い問題の調査と改善](2026/2026-11-10-song-update-performance.md) |
 | 2026-11-09 | [Rust実行経路の停止・負荷候補の計測と修正](2026/2026-11-09-rust-frame-stalls.md) |
 | 2026-11-09 | [Surface再設定失敗後のクラッシュ経路](2026/2026-11-09-surface-reconfiguration-recovery.md) |

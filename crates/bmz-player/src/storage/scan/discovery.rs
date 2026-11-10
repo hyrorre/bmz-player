@@ -553,31 +553,31 @@ pub(super) fn unresolvable_link_reason(error: &io::Error) -> Option<&'static str
 pub(super) fn discover_archive_charts(
     path: &Path,
 ) -> Result<(Vec<ChartFileEntry>, crate::song_archive::ArchiveGeneration)> {
-    let index = crate::song_archive::inspect(path, &Default::default())?;
-    let modified_at = std::fs::metadata(path)?
-        .modified()
-        .ok()
+    // A listing, not the full index: the index cache holds only a few archives, so a
+    // repeated scan in one process would otherwise open every archive again.
+    let listing = crate::song_archive::chart_listing(path, &Default::default())?;
+    let modified_at = listing
+        .modified
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
         .map_or(0, |time| time.as_secs() as i64);
-    let entries = index
-        .entries
+    let entries = listing
+        .charts
         .iter()
-        .filter(|entry| {
-            entry.is_chart()
-                && !entry.name.split('/').any(|part| is_excluded_name(std::ffi::OsStr::new(part)))
+        .filter(|chart| {
+            !chart.name.split('/').any(|part| is_excluded_name(std::ffi::OsStr::new(part)))
         })
-        .map(|entry| ChartFileEntry {
+        .map(|chart| ChartFileEntry {
             path: crate::chart_source::ChartLocator::Archive {
                 container: path.to_path_buf(),
-                entry: entry.name.clone(),
+                entry: chart.name.clone(),
             }
             .to_path_buf(),
-            file_size: entry.size,
+            file_size: chart.size,
             modified_at,
-            has_document: crate::chart_source::archive_folder_has_document(&index, &entry.name),
+            has_document: chart.has_document,
         })
         .collect();
-    Ok((entries, index.generation))
+    Ok((entries, listing.generation.clone()))
 }
 
 pub(super) fn record_discovery_issue(

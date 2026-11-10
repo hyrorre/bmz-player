@@ -161,6 +161,12 @@ impl ArchiveEntry {
                     .any(|candidate| ext.eq_ignore_ascii_case(candidate))
             })
     }
+
+    /// A `.txt` file, which marks its folder as having a song document.
+    pub fn is_document(&self) -> bool {
+        !self.is_directory
+            && Path::new(&self.name).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("txt"))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -170,6 +176,46 @@ pub struct ArchiveIndex {
     /// Reading one entry decodes the entries before it (tar.gz and solid RAR / 7z).
     /// ZIP, LZH and non-solid RAR read any entry directly.
     pub solid: bool,
+}
+
+/// What a library scan needs from an archive: its generation and its charts, without
+/// the sounds, images and other members that the full [`ArchiveIndex`] lists.
+#[derive(Debug)]
+pub struct ChartListing {
+    pub generation: ArchiveGeneration,
+    /// The archive's modification time when its index was read.
+    pub modified: Option<SystemTime>,
+    pub charts: Vec<ListedChart>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ListedChart {
+    pub name: String,
+    pub size: u64,
+    /// The chart's folder in the archive holds a `.txt` document.
+    pub has_document: bool,
+}
+
+impl ChartListing {
+    fn new(index: &ArchiveIndex, stamp: &ArchiveStamp) -> Self {
+        let documents: std::collections::HashSet<_> = index
+            .entries
+            .iter()
+            .filter(|entry| entry.is_document())
+            .map(|entry| Path::new(&entry.name).parent())
+            .collect();
+        let charts = index
+            .entries
+            .iter()
+            .filter(|entry| entry.is_chart())
+            .map(|entry| ListedChart {
+                name: entry.name.clone(),
+                size: entry.size,
+                has_document: documents.contains(&Path::new(&entry.name).parent()),
+            })
+            .collect();
+        Self { generation: index.generation.clone(), modified: stamp.modified, charts }
+    }
 }
 
 #[derive(Debug)]
@@ -210,12 +256,37 @@ pub fn inspect(path: &Path, control: &ArchiveControl) -> Result<ArchiveIndex> {
     control.check()?;
     let path = std::fs::canonicalize(path)?;
     let current = metadata_stamp(&path)?;
+    Ok(inspect_canonical(path, current, control)?.1)
+}
+
+/// The index of a canonical `path` whose stamp is `current`, with the stamp it was read at.
+fn inspect_canonical(
+    path: PathBuf,
+    current: ArchiveStamp,
+    control: &ArchiveControl,
+) -> Result<(ArchiveStamp, ArchiveIndex)> {
     if let Some(index) = cache::cached_index(&path, &current, &control.limits) {
-        return Ok(index);
+        return Ok((current, index));
     }
     let opened = Opened::new(&path, control)?;
-    cache::remember_index(path, opened.stamp, control.limits.clone(), opened.index.clone());
-    Ok(opened.index)
+    cache::remember_index(path, opened.stamp.clone(), control.limits.clone(), opened.index.clone());
+    Ok((opened.stamp, opened.index))
+}
+
+/// The charts of an archive, for library scans. [`inspect`] keeps only a few full
+/// indexes, but a listing is kept for every archive of a large library, by the same
+/// path and metadata stamp, so a repeated scan opens only archives whose stamp changed.
+pub fn chart_listing(path: &Path, control: &ArchiveControl) -> Result<Arc<ChartListing>> {
+    control.check()?;
+    let path = std::fs::canonicalize(path)?;
+    let current = metadata_stamp(&path)?;
+    if let Some(listing) = cache::cached_listing(&path, &current, &control.limits) {
+        return Ok(listing);
+    }
+    let (stamp, index) = inspect_canonical(path.clone(), current, control)?;
+    let listing = Arc::new(ChartListing::new(&index, &stamp));
+    cache::remember_listing(path, stamp, control.limits.clone(), listing.clone());
+    Ok(listing)
 }
 
 pub fn detect_format(path: &Path) -> Result<bmz_song_resource::ArchiveFormat> {
@@ -377,9 +448,17 @@ pub(super) struct Opened {
     stamp: ArchiveStamp,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Archives opened on this thread, so a test can tell a cache hit from a re-read.
+    static OPENED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl Opened {
     fn new(path: &Path, control: &ArchiveControl) -> Result<Self> {
         control.check()?;
+        #[cfg(test)]
+        OPENED.set(OPENED.get() + 1);
         let canonical = std::fs::canonicalize(path)?;
         let mut file = CheckedFile { file: std::fs::File::open(path)?, control: control.clone() };
         let before = stamp(&file.file.metadata()?)?;

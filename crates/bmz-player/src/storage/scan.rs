@@ -125,6 +125,8 @@ pub struct ScanProgress {
 
 mod archive;
 mod discovery;
+#[cfg(test)]
+mod discovery_bench;
 #[cfg(windows)]
 mod everything;
 mod import;

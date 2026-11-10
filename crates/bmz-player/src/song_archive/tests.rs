@@ -547,3 +547,49 @@ fn unchanged_stamp_reuses_remembered_generation_and_rewrite_rehashes() {
     assert_ne!(rewritten, hashed);
     assert_eq!(generation_record(&path).unwrap().generation, rewritten);
 }
+
+#[test]
+fn chart_listings_outlast_the_index_cache_until_the_stamp_changes() {
+    let temp = Temp::new();
+    // More archives than the full index cache keeps, as a library scan lists them.
+    let paths: Vec<_> = (0..40)
+        .map(|i| {
+            let path = temp.path(&format!("pack{i}.zip"));
+            zip(
+                &path,
+                &[
+                    (b"song/chart.bms", b"#TITLE song", 0o100644),
+                    (b"song/readme.TXT", b"readme", 0o100644),
+                    (b"other/chart.bme", b"#TITLE other", 0o100644),
+                    (b"other/kick.wav", b"WAVE", 0o100644),
+                ],
+            );
+            path
+        })
+        .collect();
+    let control = ArchiveControl::default();
+    let opened = OPENED.get();
+    let first: Vec<_> = paths.iter().map(|path| chart_listing(path, &control).unwrap()).collect();
+    assert_eq!(OPENED.get() - opened, paths.len());
+    assert_eq!(
+        first[0].charts,
+        [
+            ListedChart { name: "song/chart.bms".into(), size: 11, has_document: true },
+            ListedChart { name: "other/chart.bme".into(), size: 12, has_document: false },
+        ]
+    );
+    for (path, listed) in paths.iter().zip(&first) {
+        assert!(Arc::ptr_eq(&chart_listing(path, &control).unwrap(), listed));
+    }
+    assert_eq!(OPENED.get() - opened, paths.len(), "unchanged archives are not opened again");
+
+    // A rewrite changes the stamp, so that archive alone is read again.
+    zip(&paths[0], &[(b"chart.bms", b"#TITLE new", 0o100644)]);
+    let rewritten = chart_listing(&paths[0], &control).unwrap();
+    assert_eq!(OPENED.get() - opened, paths.len() + 1);
+    assert_ne!(rewritten.generation, first[0].generation);
+    assert_eq!(
+        rewritten.charts,
+        [ListedChart { name: "chart.bms".into(), size: 10, has_document: false }]
+    );
+}
