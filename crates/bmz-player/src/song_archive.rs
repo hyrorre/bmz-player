@@ -178,6 +178,30 @@ pub struct ArchiveChart {
     pub generation: ArchiveGeneration,
 }
 
+/// The archive uses a format or feature this player never reads: encryption, split
+/// volumes, self-extracting stubs, or unimplemented methods. Unlike a damaged or
+/// changing archive, reading it again cannot succeed until the file itself changes.
+#[derive(Debug)]
+pub struct UnsupportedArchive(pub String);
+
+impl std::fmt::Display for UnsupportedArchive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for UnsupportedArchive {}
+
+pub(crate) fn unsupported(reason: impl Into<String>) -> anyhow::Error {
+    UnsupportedArchive(reason.into()).into()
+}
+
+/// Whether `error` comes from [`UnsupportedArchive`] rather than an I/O, damage, or
+/// resource-limit failure that may not repeat.
+pub fn is_unsupported(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| cause.is::<UnsupportedArchive>())
+}
+
 pub fn is_archive(path: &Path) -> bool {
     bmz_song_resource::ArchiveFormat::from_path(path).is_some()
 }

@@ -7,7 +7,8 @@ use everything_ipc::wm::{EverythingClient, FileInfo, RequestFlags};
 
 use super::discovery::{
     ChartDiscovery, ChartFileEntry, DiscoveredArchive, discover_archive_charts, is_chart_file_name,
-    is_document_file_name, is_hidden_metadata, record_discovery_issue, usize_to_u32,
+    is_document_file_name, is_excluded_name, is_hidden_metadata, record_discovery_issue,
+    usize_to_u32,
 };
 use super::{ScanConfig, ScanDiscoveryBackend, ScanDiscoveryOperation};
 
@@ -70,6 +71,7 @@ pub(super) fn discover_chart_files_everything(
     let mut chart_entries = Vec::new();
     let mut archives = Vec::new();
     let mut issues = Vec::new();
+    let mut complete = true;
     let mut document_folders = HashSet::new();
     let mut hidden_cache = HashMap::new();
     for item in results.iter() {
@@ -84,6 +86,12 @@ pub(super) fn discover_chart_files_everything(
             continue;
         };
         if !recursive && relative_path.parent().is_some_and(|parent| !parent.as_os_str().is_empty())
+        {
+            continue;
+        }
+        if relative_path
+            .components()
+            .any(|component| matches!(component, Component::Normal(name) if is_excluded_name(name)))
         {
             continue;
         }
@@ -109,13 +117,16 @@ pub(super) fn discover_chart_files_everything(
                     chart_entries.extend(entries);
                     archives.push(DiscoveredArchive { path: output_path, generation });
                 }
-                Err(error) => record_discovery_issue(
-                    &mut issues,
-                    root,
-                    &output_path,
-                    ScanDiscoveryOperation::ReadArchive,
-                    std::io::Error::other(format!("{error:#}")),
-                ),
+                Err(error) => {
+                    complete &= crate::song_archive::is_unsupported(&error);
+                    record_discovery_issue(
+                        &mut issues,
+                        root,
+                        &output_path,
+                        ScanDiscoveryOperation::ReadArchive,
+                        std::io::Error::other(format!("{error:#}")),
+                    );
+                }
             }
             continue;
         }
@@ -157,7 +168,7 @@ pub(super) fn discover_chart_files_everything(
     Ok(ChartDiscovery {
         entries: chart_entries,
         archives,
-        complete: issues.is_empty(),
+        complete,
         issues,
         root_readable: true,
         backend: ScanDiscoveryBackend::Everything,

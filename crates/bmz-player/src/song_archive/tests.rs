@@ -366,7 +366,23 @@ fn sevenz_rejects_traversal_links_and_encrypted_content() {
         )
         .unwrap();
     writer.finish().unwrap();
-    assert!(inspect(&bad, &ArchiveControl::default()).is_err());
+    let error = inspect(&bad, &ArchiveControl::default()).unwrap_err();
+    assert!(is_unsupported(&error), "{error:#}");
+}
+
+#[test]
+fn damaged_archives_are_not_reported_as_unsupported() {
+    let temp = Temp::new();
+    let truncated = temp.path("truncated.zip");
+    std::fs::write(&truncated, b"PK\x03").unwrap();
+    assert!(!is_unsupported(&inspect(&truncated, &ArchiveControl::default()).unwrap_err()));
+    let damaged = temp.path("damaged.zip");
+    std::fs::write(&damaged, b"PK\x03\x04 not really a zip archive").unwrap();
+    assert!(!is_unsupported(&inspect(&damaged, &ArchiveControl::default()).unwrap_err()));
+    // Unknown bytes may be a damaged archive as well as a self-extracting one.
+    let unknown = temp.path("unknown.zip");
+    std::fs::write(&unknown, b"MZ\x90\x00 executable stub or damage").unwrap();
+    assert!(!is_unsupported(&inspect(&unknown, &ArchiveControl::default()).unwrap_err()));
 }
 
 #[test]

@@ -156,6 +156,11 @@ fn folder(input: &mut Input<'_>, dictionaries: &mut u64, limits: &ArchiveLimits)
                 );
                 0
             }
+            [6, 0xf1, 7, 1] => {
+                return Err(crate::song_archive::unsupported(
+                    "encrypted song archives are unsupported",
+                ));
+            }
             _ => anyhow::bail!("unsupported 7z encoded header coder: {method:x?}"),
         };
         *dictionaries =

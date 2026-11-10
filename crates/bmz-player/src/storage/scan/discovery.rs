@@ -285,7 +285,7 @@ impl DiscoveryWalk<'_> {
                         entries
                     }
                     Err(error) => {
-                        discovery.complete = false;
+                        discovery.complete &= crate::song_archive::is_unsupported(&error);
                         record_discovery_issue(
                             &mut discovery.issues,
                             self.root,
@@ -350,7 +350,7 @@ impl DiscoveryWalk<'_> {
                 }
             };
             let file_name = entry.file_name();
-            if self.skip_hidden && is_hidden_name(&file_name) {
+            if is_excluded_name(&file_name) || (self.skip_hidden && is_hidden_name(&file_name)) {
                 continue;
             }
             let path = entry.path();
@@ -455,7 +455,9 @@ impl DiscoveryWalk<'_> {
                         listing.entries.extend(entries);
                     }
                     Err(error) => {
-                        listing.complete = false;
+                        // An encrypted or otherwise unsupported archive yields no charts
+                        // on any scan, so it must not block pruning the rest of the root.
+                        listing.complete &= crate::song_archive::is_unsupported(&error);
                         record_discovery_issue(
                             &mut listing.issues,
                             root,
@@ -578,9 +580,8 @@ pub(super) fn discover_archive_charts(
         .filter(|entry| {
             entry.is_chart()
                 && !entry.name.split('/').any(|part| {
-                    part == "__MACOSX"
-                        || part.starts_with("._")
-                        || (skip_hidden && is_hidden_name(std::ffi::OsStr::new(part)))
+                    let part = std::ffi::OsStr::new(part);
+                    is_excluded_name(part) || (skip_hidden && is_hidden_name(part))
                 })
         })
         .map(|entry| ChartFileEntry {
@@ -654,6 +655,14 @@ pub(super) fn is_chart_file_name(name: &std::ffi::OsStr) -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+/// Names that never hold charts, excluded on every platform and regardless of the
+/// hidden setting: macOS AppleDouble metadata (`._*`) and archive tool folders
+/// (`__MACOSX`). Their contents look like charts or archives by extension only.
+pub(crate) fn is_excluded_name(name: &std::ffi::OsStr) -> bool {
+    let name = name.to_string_lossy();
+    name.starts_with("._") || name == "__MACOSX"
 }
 
 pub(super) fn is_hidden_name(name: &std::ffi::OsStr) -> bool {

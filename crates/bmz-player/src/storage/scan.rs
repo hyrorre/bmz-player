@@ -163,6 +163,60 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_archive_is_reported_without_blocking_root_pruning() {
+        let root = make_temp_dir("scan-encrypted-archive");
+        std::fs::create_dir_all(root.join("song")).unwrap();
+        write_file(&root.join("song/a.bms"), "#TITLE A\n#BPM 120\n#00011:01\n");
+        write_file(&root.join("song/b.bms"), "#TITLE B\n#BPM 120\n#00011:01\n");
+        let mut writer = sevenz_rust2::ArchiveWriter::create(root.join("secret.7z")).unwrap();
+        writer.set_content_methods(vec![
+            sevenz_rust2::encoder_options::AesEncoderOptions::new("secret".into()).into(),
+            sevenz_rust2::EncoderMethod::LZMA2.into(),
+        ]);
+        writer
+            .push_archive_entry(
+                sevenz_rust2::ArchiveEntry::new_file("secret.bms"),
+                Some(std::io::Cursor::new(b"#TITLE Secret\n")),
+            )
+            .unwrap();
+        writer.finish().unwrap();
+        // AppleDouble metadata copied from macOS is neither a chart nor a damaged archive.
+        let apple_double = b"\x00\x05\x16\x07\x00\x02\x00\x00 resource fork";
+        std::fs::write(root.join("song/._a.bms"), apple_double).unwrap();
+        std::fs::write(root.join("._pack.zip"), apple_double).unwrap();
+        std::fs::create_dir_all(root.join("__MACOSX/song")).unwrap();
+        write_file(&root.join("__MACOSX/song/a.bms"), "#TITLE A\n#BPM 120\n#00011:01\n");
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let roots = vec![PathEntry {
+            path: root.to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        }];
+
+        let first = scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_070, false).unwrap();
+        assert_eq!(first.summary.files_seen, 2);
+        assert_eq!(first.summary.imported, 2);
+        assert_eq!(first.discovery_issues.len(), 1);
+        assert_eq!(first.discovery_issues[0].operation, ScanDiscoveryOperation::ReadArchive);
+        let last_scan_at: Option<i64> =
+            db.conn().query_row("SELECT last_scan_at FROM roots", [], |row| row.get(0)).unwrap();
+        assert_eq!(last_scan_at, Some(1_700_000_070));
+
+        std::fs::remove_file(root.join("song/b.bms")).unwrap();
+        let second =
+            scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_071, false).unwrap();
+        assert_eq!(second.discovery_issues.len(), 1);
+        assert_eq!(second.summary.removed_files, 1);
+        assert_eq!(db.list_charts(10, 0).unwrap().len(), 1);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn rescan_prunes_deleted_duplicate_and_preserves_unchanged_copy() {
         let root = make_temp_dir("scan-deleted-duplicate");
         let old = root.join("old");
