@@ -62,6 +62,16 @@ impl WinitApp {
                     stats.max_upload_wait_us = stats
                         .max_upload_wait_us
                         .max(instant_elapsed_us_u64(result.upload_finished_at));
+                    // Only the load prewarmed at score finalization waits; every other
+                    // Result load is awaited by a Result entry and installs at once.
+                    if result.kind == SkinKind::Result
+                        && self.skin.result_skin_prewarm == Some(result.generation)
+                        && self.current_scene_kind() == AppSceneKind::Play
+                    {
+                        self.discard_deferred_result_upload();
+                        self.skin.deferred_result_upload = Some(Box::new(result));
+                        continue;
+                    }
                     if self.apply_uploaded_skin(result) {
                         stats.applied_count += 1;
                     }
@@ -135,6 +145,73 @@ impl WinitApp {
     }
 
     pub(super) fn ensure_result_skin_ready_for_entry(&mut self, slot: ResultSkinSlot) {
+        let prewarm = self.skin.result_skin_prewarm.take();
+        if slot == ResultSkinSlot::Normal
+            && result_skin_prewarm_reusable(
+                prewarm,
+                self.skin.skin_pipeline.generation(SkinKind::Result),
+                self.skin.last_result_skin_signature.is_some(),
+            )
+        {
+            tracing::info!("result skin entry reuses the decode started at score finalization");
+            if let Some(upload) = self.skin.deferred_result_upload.take() {
+                self.apply_uploaded_skin(*upload);
+            }
+            self.refresh_result_favorites();
+            self.request_scene_skin(SkinKind::Result);
+            if !self.scene_skin_entry_waiting(SkinKind::Result) {
+                self.finish_result_skin_entry();
+            }
+            return;
+        }
+        self.discard_deferred_result_upload();
+        self.begin_result_skin_load_for_entry(slot);
+        self.ensure_result_skin_ready(slot);
+    }
+
+    /// Drops a Result upload held back during Play. Its pending flag is cleared only
+    /// while it is still the latest generation, so a newer load keeps waiting.
+    pub(super) fn discard_deferred_result_upload(&mut self) {
+        if let Some(upload) = self.skin.deferred_result_upload.take() {
+            self.skin.skin_pipeline.finish_upload(SkinKind::Result, upload.generation);
+        }
+    }
+
+    /// Starts the Result skin decode as soon as the score is final, so the Play
+    /// ending covers it. Course plays keep loading at Result entry because their
+    /// slot and course state are only settled when the stage advances.
+    pub(super) fn prewarm_result_skin_for_finished_play(&mut self, finished: &FinishedPlaySession) {
+        // Viewer and --skip-result plays never show a Result scene.
+        if self.viewer_mode || self.skip_result || self.play.active_course.is_some() {
+            return;
+        }
+        // The settled save and the Finished frame both deliver the same result.
+        if result_skin_prewarm_reusable(
+            self.skin.result_skin_prewarm,
+            self.skin.skin_pipeline.generation(SkinKind::Result),
+            self.skin.last_result_skin_signature.is_some(),
+        ) {
+            return;
+        }
+        // The Result inputs read `finished_play`; publish it only while building the
+        // request so Play keeps seeing no finished result until the scene changes.
+        let previous = self.result.finished_play.replace(finished.clone());
+        self.begin_result_skin_load_for_entry(ResultSkinSlot::Normal);
+        self.refresh_result_favorites();
+        self.spawn_result_skin_decode_for(ResultSkinSlot::Normal);
+        self.result.finished_play = previous;
+        self.skin.result_skin_prewarm = self
+            .skin
+            .last_result_skin_signature
+            .is_some()
+            .then(|| self.skin.skin_pipeline.generation(SkinKind::Result));
+        tracing::info!(
+            prewarmed = self.skin.result_skin_prewarm.is_some(),
+            "result skin decode started at score finalization"
+        );
+    }
+
+    fn begin_result_skin_load_for_entry(&mut self, slot: ResultSkinSlot) {
         self.skin.skin_pipeline.begin_lr2_result_entry(
             slot == ResultSkinSlot::Course,
             self.result.finished_play.is_some() || self.result.finished_course.is_some(),
@@ -145,7 +222,6 @@ impl WinitApp {
         self.skin.skin_pipeline.result_source_selections.clear();
         self.skin.skin_pipeline.result_random_file_selections.clear();
         self.skin.last_result_skin_signature = None;
-        self.ensure_result_skin_ready(slot);
     }
 
     /// An LR2 Result inherits CONTINUE assets from the Play skin. When the attempt was
@@ -799,6 +875,16 @@ impl WinitApp {
     }
 }
 
+/// A prewarmed Result load is the one to show only while it is still the latest
+/// Result generation and no skin setting change has dropped its signature.
+fn result_skin_prewarm_reusable(
+    prewarm: Option<u64>,
+    current_generation: u64,
+    signature_present: bool,
+) -> bool {
+    signature_present && prewarm == Some(current_generation)
+}
+
 fn should_defer_initial_skin_uploads(
     select_view: bool,
     first_frame_startup_completed: bool,
@@ -854,6 +940,14 @@ fn lr2_resolved_assets(
 #[cfg(test)]
 mod deferred_upload_tests {
     use super::*;
+
+    #[test]
+    fn result_skin_prewarm_is_reused_only_for_the_latest_generation() {
+        assert!(result_skin_prewarm_reusable(Some(4), 4, true));
+        assert!(!result_skin_prewarm_reusable(Some(4), 5, true));
+        assert!(!result_skin_prewarm_reusable(Some(4), 4, false));
+        assert!(!result_skin_prewarm_reusable(None, 4, true));
+    }
 
     #[test]
     fn lr2_continue_assets_capture_resolved_paths_instead_of_wildcards() {

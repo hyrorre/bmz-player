@@ -275,6 +275,8 @@ impl WinitApp {
         // 同じ chart hash の前回スコアを次の Result で表示し得るため、Play へ
         // 入る時点で直ちに手放す（バックグラウンド送信自体は継続する）。
         self.result.result_ir = None;
+        self.skin.result_skin_prewarm = None;
+        self.discard_deferred_result_upload();
         self.clear_result_ir_scroll_input();
         self.play.play_ending = None;
         self.result.result_exit = None;

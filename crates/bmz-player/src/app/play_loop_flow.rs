@@ -206,6 +206,7 @@ impl WinitApp {
                         self.prepare_terminal_course_finish(chart_id, finished);
                     }
                     self.start_result_ir_for_finished_play(finished);
+                    self.prewarm_result_skin_for_finished_play(finished);
                 }
                 self.notify_obs_play_ended();
                 let now = Instant::now();
@@ -335,6 +336,7 @@ impl WinitApp {
             self.prepare_terminal_course_finish(chart_id, &finished);
         }
         self.start_result_ir_for_finished_play(&finished);
+        self.prewarm_result_skin_for_finished_play(&finished);
         tracing::info!(elapsed_ms, "background play result save completed");
     }
 

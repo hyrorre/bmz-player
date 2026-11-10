@@ -334,6 +334,12 @@ pub(super) struct SkinRuntimeState {
     /// 直近 install をリクエストした Result context の用途と設定 fingerprint。
     /// Renderer の Result context は 1 本だけなので、通常/コース最終結果で差し替える。
     pub(super) last_result_skin_signature: Option<ResultSkinSignature>,
+    /// Result generation decoded ahead of entry once the play's score was final.
+    /// Entry reuses it while no other Result load or skin setting change replaced it.
+    pub(super) result_skin_prewarm: Option<u64>,
+    /// Result upload finished during Play. Installing it costs a few milliseconds on
+    /// the window thread, so it waits for the Result entry instead of a Play frame.
+    pub(super) deferred_result_upload: Option<Box<PendingUploadResult>>,
 }
 
 pub(super) struct AppAudioRuntimeState {

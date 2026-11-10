@@ -491,6 +491,8 @@ impl WinitApp {
                 pending_skin_render_probe: None,
                 last_play_skin_signature: None,
                 last_result_skin_signature: initial_result_skin_signature,
+                result_skin_prewarm: None,
+                deferred_result_upload: None,
             },
             audio: AppAudioRuntimeState {
                 pending_audio_apply: false,

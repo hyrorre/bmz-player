@@ -1544,3 +1544,77 @@ fn rank_se_is_used_only_after_result_bgms_and_never_downgrades_rank() {
         SoundType::ResultBgmClear
     );
 }
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "creates an isolated Winit event loop; run alone"]
+fn result_entry_reuses_skin_decode_started_at_score_finalization() {
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    let event_loop =
+        EventLoop::<AppUserEvent>::with_user_event().with_any_thread(true).build().unwrap();
+    let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+    let mut boot = data.boot();
+    boot.app_config.input.gamepad_enabled = false;
+    let (maintenance_tx, _) = tokio::sync::watch::channel(false);
+    let mut app = WinitApp::new(
+        boot,
+        AppOptions { viewer_play: true, ..Default::default() },
+        Instant::now(),
+        None,
+        None,
+        Arc::new(AtomicBool::new(false)),
+        event_loop.create_proxy(),
+        LogBuffer::default(),
+        maintenance_tx,
+        None,
+    )
+    .unwrap();
+    app.viewer_mode = false;
+    app.viewer_waiting = false;
+    let finished = debug_boot_finished_play_session();
+
+    // Finalization queues the load without publishing the result to Play.
+    app.prewarm_result_skin_for_finished_play(&finished);
+    assert!(app.result.finished_play.is_none());
+    let prewarmed = app.skin.skin_pipeline.generation(SkinKind::Result);
+    assert_eq!(app.skin.result_skin_prewarm, Some(prewarmed));
+    // The Finished frame delivers the result already saved at settlement.
+    app.prewarm_result_skin_for_finished_play(&finished);
+    assert_eq!(app.skin.skin_pipeline.generation(SkinKind::Result), prewarmed);
+    // The upload held back during Play installs at entry, so Result does not wait.
+    let now = Instant::now();
+    app.skin.deferred_result_upload = Some(Box::new(PendingUploadResult {
+        generation: prewarmed,
+        path: "prewarmed-result.json".into(),
+        kind: SkinKind::Result,
+        queued_at: now,
+        decode_started_at: now,
+        decode_finished_at: now,
+        upload_started_at: now,
+        upload_finished_at: now,
+        uploaded: Err(anyhow::anyhow!("injected completion")),
+    }));
+    app.result.finished_play = Some(finished.clone());
+    app.ensure_result_skin_ready_for_entry(ResultSkinSlot::Normal);
+    assert_eq!(app.skin.skin_pipeline.generation(SkinKind::Result), prewarmed);
+    assert!(app.skin.result_skin_prewarm.is_none());
+    assert!(app.skin.deferred_result_upload.is_none());
+    assert!(!app.scene_skin_entry_waiting(SkinKind::Result));
+
+    // A skin setting change during the ending drops the prewarmed load.
+    app.result.finished_play = None;
+    app.prewarm_result_skin_for_finished_play(&finished);
+    let prewarmed = app.skin.skin_pipeline.generation(SkinKind::Result);
+    app.skin.last_result_skin_signature = None;
+    app.result.finished_play = Some(finished.clone());
+    app.ensure_result_skin_ready_for_entry(ResultSkinSlot::Normal);
+    assert!(app.skin.skin_pipeline.generation(SkinKind::Result) > prewarmed);
+
+    // Viewer plays never show Result, so nothing is queued for them.
+    app.result.finished_play = None;
+    app.viewer_mode = true;
+    let before = app.skin.skin_pipeline.generation(SkinKind::Result);
+    app.prewarm_result_skin_for_finished_play(&finished);
+    assert_eq!(app.skin.skin_pipeline.generation(SkinKind::Result), before);
+    assert!(app.skin.result_skin_prewarm.is_none());
+}
