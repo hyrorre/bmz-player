@@ -107,6 +107,11 @@ pub struct ScanTiming {
     pub skip_check_ms: u128,
     pub parse_ms: u128,
     pub write_ms: u128,
+    /// Archive listing checks and imports, including their own parsing.
+    pub archive_ms: u128,
+    pub folder_flags_ms: u128,
+    /// Post-import archive revalidation, pruning, and root timestamp updates.
+    pub prune_ms: u128,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

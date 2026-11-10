@@ -229,6 +229,7 @@ pub fn scan_song_roots_with_progress(
         progress_done = progress_done.saturating_add(unchanged_count).min(files_total);
         on_progress(ScanProgress { done: progress_done, total: files_total });
 
+        let archive_start = Instant::now();
         let mut failed_archives = std::collections::HashSet::new();
         for (container, (generation, archive_entries)) in archives {
             let count = usize_to_u32(archive_entries.len());
@@ -266,6 +267,7 @@ pub fn scan_song_roots_with_progress(
             on_progress(ScanProgress { done: progress_done, total: files_total });
         }
 
+        report.timing.archive_ms += archive_start.elapsed().as_millis();
         let new_total = to_import.len();
         tracing::info!(
             new_files = new_total,
@@ -390,7 +392,9 @@ pub fn scan_song_roots_with_progress(
                 Ok(crate::chart_source::ChartLocator::Archive { container, .. })
                 if failed_archives.contains(&container))
         });
+        let folder_flags_start = Instant::now();
         db.update_folder_document_flags(&folder_document_flags)?;
+        report.timing.folder_flags_ms += folder_flags_start.elapsed().as_millis();
 
         tracing::info!(
             root_num = root.root_num,
@@ -432,6 +436,7 @@ pub fn scan_song_roots_with_progress(
         }
     }
 
+    let prune_start = Instant::now();
     let mut validated = Vec::new();
     for (root_path, root_id, recursive, backend, discovered, archives) in pending_prune {
         let mut valid = true;
@@ -481,6 +486,7 @@ pub fn scan_song_roots_with_progress(
         db.update_root_scanned_at(root_id, scanned_at)?;
     }
 
+    report.timing.prune_ms = prune_start.elapsed().as_millis();
     on_progress(ScanProgress { done: files_total, total: files_total });
     report.timing.total_ms = total_start.elapsed().as_millis();
     Ok(report)

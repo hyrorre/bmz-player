@@ -267,6 +267,9 @@ impl WinitApp {
                         skip_check_ms = report.timing.skip_check_ms,
                         parse_ms = report.timing.parse_ms,
                         write_ms = report.timing.write_ms,
+                        archive_ms = report.timing.archive_ms,
+                        folder_flags_ms = report.timing.folder_flags_ms,
+                        prune_ms = report.timing.prune_ms,
                         "song scan complete"
                     );
                 } else {
@@ -285,6 +288,9 @@ impl WinitApp {
                         skip_check_ms = report.timing.skip_check_ms,
                         parse_ms = report.timing.parse_ms,
                         write_ms = report.timing.write_ms,
+                        archive_ms = report.timing.archive_ms,
+                        folder_flags_ms = report.timing.folder_flags_ms,
+                        prune_ms = report.timing.prune_ms,
                         "song scan complete with skipped paths"
                     );
                 }
