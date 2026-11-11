@@ -78,6 +78,11 @@ pub trait FinishSessionSource {
 }
 
 impl FinishSessionSource for GameSession {
+    /// The worker path records the end point in the gameplay owner. A directly
+    /// owned session records the same end point from the state it captures.
+    fn capture_graph(&self, collector: &ResultGraphCollector) -> ResultGraphCollector {
+        collector.captured_for_session(self)
+    }
     fn capture_result(
         &self,
         profile: ChartLnProfile,
@@ -101,7 +106,11 @@ impl FinishSessionSource for GameSession {
 
 impl FinishSessionSource for crate::gameplay_runtime::GameplayClient {
     fn capture_graph(&self, collector: &ResultGraphCollector) -> ResultGraphCollector {
-        self.result.as_ref().map_or_else(|| collector.clone(), |result| result.graph.clone())
+        if let Some(result) = &self.result {
+            return result.graph.clone();
+        }
+        self.prepared_session()
+            .map_or_else(|| collector.clone(), |session| collector.captured_for_session(session))
     }
     fn capture_result(
         &self,

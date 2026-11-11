@@ -255,6 +255,7 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
         pending_mine_hits: Vec::new(),
         state: PlayState::Ready,
         manually_stopped: false,
+        scoring_closed_at: None,
         last_hcn_gauge_at: None,
     }
 }
@@ -360,3 +361,5 @@ mod optional_play_behaviors;
 mod performance;
 #[path = "tests/replay_speed.rs"]
 mod replay_speed;
+#[path = "tests/result_settlement.rs"]
+mod result_settlement;

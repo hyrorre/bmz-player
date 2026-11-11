@@ -1,0 +1,298 @@
+//! 採点の自然確定と、確定後に結果が変わらないことの回帰テスト。
+use std::sync::Mutex;
+
+use super::*;
+use crate::input::backend::{
+    DeviceId, DeviceInputEvent, DeviceTimestamp, InputBackend, PhysicalControl,
+};
+use crate::input::binding::{BindingEntry, LaneBinding};
+use crate::judge::window::dx_judge_windows;
+
+/// テストから後で入力を足せる backend。時刻は取得した更新の譜面時刻になる。
+#[derive(Clone, Default)]
+struct SharedBackend(Arc<Mutex<Vec<DeviceInputEvent>>>);
+
+impl SharedBackend {
+    fn press(&self) {
+        self.push(InputKind::Press);
+    }
+
+    fn release(&self) {
+        self.push(InputKind::Release);
+    }
+
+    fn push(&self, kind: InputKind) {
+        self.0.lock().unwrap().push(DeviceInputEvent {
+            device: DeviceId(1),
+            control: PhysicalControl::KeyboardKey("Z".to_string()),
+            kind,
+            timestamp: DeviceTimestamp::Unknown,
+            bounce_policy: Default::default(),
+        });
+    }
+}
+
+impl InputBackend for SharedBackend {
+    fn drain_events(&mut self) -> Vec<DeviceInputEvent> {
+        std::mem::take(&mut *self.0.lock().unwrap())
+    }
+}
+
+fn tap_chart(time: TimeUs) -> PlayableChart {
+    let mut chart = chart_with_keysound();
+    chart.lane_notes[Lane::Key1.index()][0].time = time;
+    chart.end_time = time;
+    chart.metadata.key_mode = KeyMode::K7;
+    chart
+}
+
+/// DX 7KEY・等速の人間プレー。`W` は DX NOTE の BAD / 空POOR SLOW 側 200ms。
+fn dx_human_session(chart: PlayableChart, input_offset_us: i64) -> (GameSession, SharedBackend) {
+    let mut session = session_with_autoplay(chart);
+    let windows = dx_judge_windows();
+    session.rule_mode = RuleMode::Dx;
+    session.primary_key_mode = KeyMode::K7;
+    session.base_judge_windows = windows;
+    session.base_judge_window = windows.note;
+    session.judge = JudgeEngine::new_with_window_set(windows, RuleMode::Dx)
+        .with_chart_index(Arc::clone(&session.chart));
+    session.autoplay = None;
+    session.offsets.input_offset_us = input_offset_us;
+    let backend = SharedBackend::default();
+    session.input_system = InputSystem {
+        backend: Box::new(backend.clone()),
+        translator: Box::new(DefaultInputTranslator {
+            binding: LaneBinding {
+                entries: vec![BindingEntry {
+                    device: None,
+                    control: PhysicalControl::KeyboardKey("Z".to_string()),
+                    lane: Lane::Key1,
+                    scratch_direction: None,
+                }],
+            },
+        }),
+        bounce_filter: Default::default(),
+    };
+    (session, backend)
+}
+
+fn advance_at(session: &mut GameSession, audio: &mut TestAudio, now: i64) -> SessionFrame {
+    session.audio_clock.pause_at(TimeUs(now));
+    advance_session_frame(session, audio)
+}
+
+fn empty_poor_count(session: &GameSession) -> u32 {
+    session.score.judges.fast_empty_poor + session.score.judges.slow_empty_poor
+}
+
+#[test]
+fn dx_negative_input_offset_scores_late_empty_poor_before_settling() {
+    let end = 1_000_000;
+    let (mut session, keys) = dx_human_session(tap_chart(TimeUs(end)), -20_000);
+    let mut audio = TestAudio::default();
+    assert_eq!(session.judge.window_set.result_settle_margin_us(), 200_000);
+
+    // 取得時刻 E+20ms の押鍵は -20ms 補正で E ちょうどの PGREAT。
+    keys.press();
+    advance_at(&mut session, &mut audio, end + 20_000);
+    keys.release();
+    advance_at(&mut session, &mut audio, end + 30_000);
+    assert!(session.judge.is_exhausted(&session.chart));
+    assert_eq!(session.score.judges.slow_pgreat + session.score.judges.fast_pgreat, 1);
+
+    // E+W は過ぎたが、取得時刻 E+W+20ms までは補正後に判定窓へ入り得る。
+    advance_at(&mut session, &mut audio, end + 205_000);
+    assert_eq!(session.scoring_closed_at, None);
+    assert!(!result_is_settled(&session, TimeUs(end + 205_000)));
+
+    // 最終ノーツから +210ms の押鍵は判定上 +190ms の空POORになる。
+    keys.press();
+    let frame = advance_at(&mut session, &mut audio, end + 210_000);
+    assert_eq!(empty_poor_count(&session), 1);
+    assert!(
+        frame.judgements.iter().any(|event| {
+            event.judge == Judge::EmptyPoor && event.time == TimeUs(end + 190_000)
+        })
+    );
+    assert_eq!(session.scoring_closed_at, None);
+
+    // 境界 E+W-O では、同時刻に取得した入力がまだ境界上の空POORになり得る。
+    advance_at(&mut session, &mut audio, end + 220_000);
+    assert_eq!(session.scoring_closed_at, None);
+    advance_at(&mut session, &mut audio, end + 220_001);
+    assert_eq!(session.scoring_closed_at, Some(TimeUs(end + 220_001)));
+    assert_eq!(session.state, PlayState::Playing);
+}
+
+#[test]
+fn full_replay_settles_only_after_the_processed_tick_passes_the_window() {
+    // E=1100.5ms, W=200ms。audio_now=1300.6ms では 1300ms tick までしか処理していない。
+    let end = 1_100_500;
+    let (mut session, _keys) = dx_human_session(tap_chart(TimeUs(end)), -20_000);
+    let event = |kind, time| bmz_core::replay::ReplayEvent {
+        lane: Lane::Key1,
+        kind,
+        time: TimeUs(time),
+        device_kind: InputDeviceKind::Keyboard,
+        scratch_direction: None,
+    };
+    session.replay_player = Some(ReplayPlayer {
+        events: vec![
+            event(InputKind::Press, end),
+            event(InputKind::Release, end + 10_000),
+            // 未処理のまま残る、記録時刻 1300.4ms の有効な空POOR入力。
+            event(InputKind::Press, 1_300_400),
+        ],
+        ..Default::default()
+    });
+    let mut audio = TestAudio::default();
+
+    advance_at(&mut session, &mut audio, 1_300_600);
+    assert!(session.judge.is_exhausted(&session.chart));
+    assert_eq!(session.replay_player.as_ref().unwrap().scored_until(), Some(TimeUs(1_300_000)));
+    assert_eq!(empty_poor_count(&session), 0);
+    // 外側の時計は E+W を超えているが、処理済み tick はまだ超えていない。
+    assert_eq!(session.scoring_closed_at, None);
+
+    advance_at(&mut session, &mut audio, 1_301_000);
+    assert_eq!(empty_poor_count(&session), 1);
+    // 記録済み入力に現在の -20ms を再適用しないため、負オフセット分は待たない。
+    assert_eq!(session.scoring_closed_at, Some(TimeUs(1_301_000)));
+}
+
+#[test]
+fn settled_scoring_ignores_old_inputs_offset_changes_and_late_stop_requests() {
+    let (mut session, keys) = dx_human_session(tap_chart(TimeUs(0)), 0);
+    let mut audio = TestAudio::default();
+    keys.press();
+    advance_at(&mut session, &mut audio, 0);
+    keys.release();
+    advance_at(&mut session, &mut audio, 10_000);
+    advance_at(&mut session, &mut audio, 200_001);
+    assert_eq!(session.scoring_closed_at, Some(TimeUs(200_001)));
+
+    let score = session.score.clone();
+    let gauge = session.gauge.clone();
+    let judgements = session.result_judgements.clone();
+    let recorded = session.replay_recorder.events.clone();
+    let carry = session.gauge.carry_values();
+    let combo = (session.display_combo(), session.display_max_combo());
+
+    // 確定後のオフセット変更で、取得時刻 250ms の入力が判定上 150ms の空POOR相当になる。
+    session.offsets.input_offset_us = -100_000;
+    audio.scheduled.clear();
+    keys.press();
+    let frame = advance_at(&mut session, &mut audio, 250_000);
+    assert!(frame.judgements.is_empty());
+    // 採点とは分けて、キービーム・skin入力・fallbackキー音は従来どおり進める。
+    assert!(session.lane_keyon_started_at[Lane::Key1.index()].is_some());
+    assert!(session.recent_inputs.iter().any(|input| input.source == InputSource::Human));
+    assert!(frame.skin_events.iter().any(|event| matches!(
+        event.kind,
+        SkinRuntimeEventKind::Input(InputEvent { kind: InputKind::Press, .. })
+    )));
+    assert!(audio.scheduled.iter().any(|sound| sound.sound_id == SoundId(7)));
+    assert!(result_is_settled(&session, TimeUs(250_000)));
+
+    // 古い観測から送られた手動中断は、所有スレッドで再確認して無視する。
+    assert!(!session.request_manual_stop());
+    assert_eq!(session.state, PlayState::Playing);
+    assert!(!session.manually_stopped);
+
+    // 従来の5秒待機による Finished 遷移でも、確定時刻と採点結果を変えない。
+    advance_at(&mut session, &mut audio, SESSION_END_MARGIN_US + 1);
+    assert_eq!(session.state, PlayState::Finished);
+    assert_eq!(session.scoring_closed_at, Some(TimeUs(200_001)));
+    assert_eq!(format!("{:?}", session.score), format!("{score:?}"));
+    assert_eq!(session.gauge.carry_values(), carry);
+    assert_eq!(session.gauge.current().value, gauge.current().value);
+    assert_eq!(session.result_judgements, judgements);
+    assert_eq!(session.replay_recorder.events, recorded);
+    assert_eq!((session.display_combo(), session.display_max_combo()), combo);
+}
+
+#[test]
+fn stop_boundaries_close_scoring_without_waiting_for_the_natural_window() {
+    // 手動中断はノーツが残る間だけ受け付け、その停止境界で確定する。
+    let (mut session, _keys) = dx_human_session(tap_chart(TimeUs(1_000_000)), -20_000);
+    let mut audio = TestAudio::default();
+    advance_at(&mut session, &mut audio, 300_000);
+    assert!(session.request_manual_stop());
+    advance_at(&mut session, &mut audio, 310_000);
+    assert_eq!(session.state, PlayState::Failed);
+    assert!(session.manually_stopped);
+    assert_eq!(session.scoring_closed_at, Some(TimeUs(310_000)));
+    // 遅れて届いた退出要求は、途中FAILEDを完走へ再分類しない。
+    assert!(!session.request_finish());
+    assert_eq!(session.state, PlayState::Failed);
+
+    // 全ノーツ処理後の明示的な退出は、自然確定の判定窓を待たずにその境界で確定する。
+    let (mut session, keys) = dx_human_session(tap_chart(TimeUs(0)), 0);
+    keys.press();
+    advance_at(&mut session, &mut audio, 0);
+    advance_at(&mut session, &mut audio, 50_000);
+    assert!(session.judge.is_exhausted(&session.chart));
+    assert_eq!(session.scoring_closed_at, None);
+    assert!(session.request_finish());
+    advance_at(&mut session, &mut audio, 60_000);
+    assert_eq!(session.state, PlayState::Finished);
+    assert_eq!(session.scoring_closed_at, Some(TimeUs(60_000)));
+}
+
+#[test]
+fn full_autoplay_does_not_wait_for_the_human_input_offset() {
+    let mut session = session_with_autoplay(tap_chart(TimeUs(0)));
+    session.offsets.input_offset_us = -50_000;
+    let mut audio = TestAudio::default();
+    advance_at(&mut session, &mut audio, 0);
+    assert!(session.judge.is_exhausted(&session.chart));
+    advance_at(&mut session, &mut audio, 200_001);
+    assert_eq!(session.scoring_closed_at, Some(TimeUs(200_001)));
+
+    // 部分オートでは、人間が担当するレーンの負オフセット分を待つ。
+    let mut session = session_with_autoplay(tap_chart(TimeUs(0)));
+    session.autoplay = Some(AutoplayController::for_lanes(&[Lane::Key1]));
+    session.offsets.input_offset_us = -50_000;
+    advance_at(&mut session, &mut audio, 0);
+    advance_at(&mut session, &mut audio, 200_001);
+    assert_eq!(session.scoring_closed_at, None);
+    advance_at(&mut session, &mut audio, 250_001);
+    assert_eq!(session.scoring_closed_at, Some(TimeUs(250_001)));
+}
+
+#[test]
+fn completed_failed_lamp_settles_naturally_but_a_mid_play_drop_stops_at_once() {
+    // A normal completion below the border is FAILED as a lamp, not as a stop.
+    let (mut session, _keys) = dx_human_session(tap_chart(TimeUs(0)), 0);
+    let mut audio = TestAudio::default();
+    advance_at(&mut session, &mut audio, 0);
+    advance_at(&mut session, &mut audio, 200_001);
+    assert!(session.judge.is_exhausted(&session.chart));
+    assert_eq!(session.scoring_closed_at, Some(TimeUs(200_001)));
+    assert_eq!(session.state, PlayState::Playing);
+    advance_at(&mut session, &mut audio, SESSION_END_MARGIN_US + 1);
+    assert_eq!(session.state, PlayState::Finished);
+    let result = crate::result::PlayResult::from_states(
+        &session.chart,
+        &session.score,
+        &session.gauge,
+        session.state,
+        false,
+    );
+    assert_eq!(result.clear_type, bmz_core::clear::ClearType::Failed);
+
+    // A HARD gauge reaching zero stops at that update, before E + W.
+    let (mut session, _keys) = dx_human_session(tap_chart(TimeUs(0)), 0);
+    session.gauge = GaugeState::new(bmz_core::clear::GaugeType::Hard, 160.0, 1);
+    let selected = session.gauge.selected;
+    for gauge in &mut session.gauge.gauges {
+        if gauge.definition.gauge_type == selected {
+            gauge.value = 1.0;
+        }
+    }
+    advance_at(&mut session, &mut audio, 0);
+    advance_at(&mut session, &mut audio, 200_001);
+    assert_eq!(session.state, PlayState::Failed);
+    assert!(!session.manually_stopped);
+    assert!(session.scoring_closed_at.is_some_and(|at| at <= TimeUs(200_001)));
+}

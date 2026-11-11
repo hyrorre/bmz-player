@@ -790,9 +790,10 @@ impl WinitApp {
                 return false;
             }
             tracing::info!(reason, "stopping active play");
+            // The observation can be one gameplay wake old. The owner re-checks
+            // the request so a settled result is never reclassified as FAILED.
             active_play.running.gameplay.edit(|session| {
-                session.state = bmz_gameplay::session::PlayState::Failed;
-                session.manually_stopped = true;
+                session.request_manual_stop();
             });
             true
         };

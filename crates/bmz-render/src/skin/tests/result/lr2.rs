@@ -828,3 +828,51 @@ fn select_key_filter_labels_follow_lr2_wording() {
         assert_eq!(select_mode_label(mode), label);
     }
 }
+
+#[test]
+fn result_gauge_numbers_use_each_gauge_end_point_with_existing_rounding() {
+    use crate::snapshot::ResultGaugeGraphPoint;
+    use bmz_core::clear::GaugeType;
+    let point = |time_ms, value, gauge_type: GaugeType| ResultGaugeGraphPoint {
+        time_ms,
+        value,
+        max: 100.0,
+        border: if gauge_type == GaugeType::Easy { 60.0 } else { 80.0 },
+        gauge_type: gauge_type as i32,
+        course_section_start: false,
+    };
+    let crate::scene::AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene()
+    else {
+        panic!("expected result snapshot");
+    };
+    // The 1000ms periodic samples predate the final misses. The settled end
+    // point at 1230ms is the value the result was captured with.
+    let graph = crate::snapshot::ResultGraphSnapshot {
+        gauge_points: vec![
+            point(1_000, 93.0, GaugeType::Easy),
+            point(1_000, 88.0, GaugeType::Normal),
+            point(1_230, 79.5, GaugeType::Easy),
+            point(1_230, 71.0, GaugeType::Normal),
+        ],
+        ..Default::default()
+    };
+    snapshot.graph = std::sync::Arc::new(graph);
+    snapshot.gauge_value = 79.5;
+    snapshot.gauge_type = GaugeType::Easy as i32;
+    let lr2 = |id: i32, state: &SkinDrawState| skin_state_number(LR2_NUMBER_BASE + id, state);
+
+    snapshot.result_gauge_graph_type = GaugeType::Easy as i32;
+    let easy = crate::plan::result_skin_draw_state(&snapshot, 0);
+    assert_eq!((easy.gauge, easy.gauge_border), (79.5, 60.0));
+    // beatoraja JSON / Lua floor the value; LR2 keeps its 2% steps.
+    assert_eq!(skin_state_number(107, &easy), Some(79));
+    assert_eq!(crate::skin::lua_main_state_number(107, &easy), 79);
+    assert_eq!(lr2(107, &easy), Some(78));
+
+    // Switching the Result gauge shows that gauge's own settled value.
+    snapshot.result_gauge_graph_type = GaugeType::Normal as i32;
+    let normal = crate::plan::result_skin_draw_state(&snapshot, 0);
+    assert_eq!((normal.gauge, normal.gauge_border), (71.0, 80.0));
+    assert_eq!(skin_state_number(107, &normal), Some(71));
+    assert_eq!(lr2(107, &normal), Some(70));
+}

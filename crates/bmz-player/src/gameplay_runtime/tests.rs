@@ -13,6 +13,7 @@ use bmz_gameplay::input::{backend::*, binding::*, translator::*};
 use std::sync::atomic::AtomicI64;
 
 mod failure_audio;
+mod result_settlement;
 
 #[derive(Default)]
 pub struct RuntimeProbe {
@@ -177,9 +178,13 @@ fn events(tick: i64) -> Vec<DeviceInputEvent> {
 }
 
 fn prepared(input: SharedInputBackend) -> GameSession {
+    prepared_with_chart(input, chart())
+}
+
+fn prepared_with_chart(input: SharedInputBackend, chart: Arc<PlayableChart>) -> GameSession {
     let profile = crate::config::profile_config::ProfileConfig::new_default("test", "Test", 1);
     let mut session = build_game_session_with_input_backend(
-        chart(),
+        chart,
         &profile,
         PlaySessionOptions { arrange_seed: Some(12345), ..Default::default() },
         Box::new(input),
