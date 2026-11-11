@@ -80,6 +80,12 @@ pub struct ProfileInputConfig {
     /// 0 はフィルタ無効。
     #[serde(default = "default_controller_release_bounce_ms")]
     pub controller_release_bounce_ms: u32,
+    /// プレイ中の E2 hold + 鍵盤による緑数字の増減を、鍵盤の HS 方向と逆にするか。
+    ///
+    /// OFF は beatoraja 0.8.9 (白鍵で緑数字を下げる)、ON は 0.8.7 以前 (白鍵で上げる) と同じ向き。
+    /// E2 + 皿、E1 + 鍵盤の HS 操作には影響しない。
+    #[serde(default)]
+    pub invert_e2_key_green_number: bool,
 }
 
 pub const RELEASE_BOUNCE_MS_MAX: u32 = 20;

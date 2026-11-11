@@ -822,6 +822,24 @@ define_settings! {
         },
         format: |profile| format!("{} ms", profile.lane.constant_fade_ms),
     }
+    HispeedTransitionMs(u32) {
+        value: [field lane.hispeed_transition_ms],
+        adjust: |profile, delta| adjust_u32(
+            &mut profile.lane.hispeed_transition_ms,
+            delta,
+            0,
+            HISPEED_TRANSITION_MS_MAX,
+        ),
+        format: |profile| format!("{} ms", profile.lane.hispeed_transition_ms),
+    }
+    InvertE2KeyGreenNumber(bool) {
+        value: [field input.invert_e2_key_green_number],
+        adjust: |profile, _delta| {
+            profile.input.invert_e2_key_green_number = !profile.input.invert_e2_key_green_number;
+            true
+        },
+        format: |profile| format_bool_on_off(profile.input.invert_e2_key_green_number),
+    }
     SelectInputMode(SelectInputModeConfig) {
         value: [field input.select_input_mode],
         adjust: |profile, delta| {

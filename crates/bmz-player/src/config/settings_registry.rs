@@ -7,8 +7,8 @@ use super::profile_config::{
     BgaModeConfig, BottomShiftableGaugeConfig, CLASSIC_HISPEED_STEP_MIN, CLASSIC_HISPEED_STEP_UNIT,
     DifficultyTableLevelDisplay, DoubleOptionConfig, FLOATING_HISPEED_STEP_MIN,
     FLOATING_HISPEED_STEP_UNIT, FastSlowDisplayScope, GaugeAutoShiftConfig, GaugeTypeConfig,
-    HISPEED_STEP_MAX, HispeedConfigPreset, HispeedDirectionConfig, HsFixConfig,
-    JudgeAlgorithmConfig, KeyModeConversionConfig, LaneConfig, ProfileConfig,
+    HISPEED_STEP_MAX, HISPEED_TRANSITION_MS_MAX, HispeedConfigPreset, HispeedDirectionConfig,
+    HsFixConfig, JudgeAlgorithmConfig, KeyModeConversionConfig, LaneConfig, ProfileConfig,
     RELEASE_BOUNCE_MS_MAX, RandomOptionConfig, ReplaySlotRule, SRandomCorrectionConfig,
     SelectInputModeConfig, SevenToNinePattern, SevenToNineRuleMode, SevenToNineType,
     TargetOptionConfig, normalize_classic_hispeed_step, normalize_floating_hispeed_step,
@@ -119,6 +119,8 @@ impl SettingsEntryId {
         Self::Hidden,
         Self::Constant,
         Self::ConstantFadeMs,
+        Self::HispeedTransitionMs,
+        Self::InvertE2KeyGreenNumber,
     ];
 
     pub const fn visible_for_hispeed_config(self, preset: HispeedConfigPreset) -> bool {
@@ -280,6 +282,8 @@ impl SettingsEntryId {
             Self::NoteDisplayDurationMs => "DURATION",
             Self::Constant => "CONSTANT",
             Self::ConstantFadeMs => "CONSTANT FADE",
+            Self::HispeedTransitionMs => "HS ANIMATION",
+            Self::InvertE2KeyGreenNumber => "E2+KEY GREEN INVERT",
             Self::SelectInputMode => "SELECT INPUT DEVICE",
             Self::AnalogScratch1P => "1P ANALOG SCRATCH",
             Self::AnalogScratchSensitivity1P => "1P ANALOG SENS",
@@ -415,6 +419,8 @@ impl SettingsEntryId {
             Self::NoteDisplayDurationMs => "settings-entry-description-note-display-duration",
             Self::Constant => "settings-entry-description-constant",
             Self::ConstantFadeMs => "settings-entry-description-constant-fade",
+            Self::HispeedTransitionMs => "settings-entry-description-hispeed-transition",
+            Self::InvertE2KeyGreenNumber => "settings-entry-description-invert-e2-key-green-number",
             Self::SelectInputMode => "settings-entry-description-select-input-mode",
             Self::AnalogScratch1P | Self::AnalogScratch2P => {
                 "settings-entry-description-analog-scratch"
@@ -684,6 +690,37 @@ mod tests {
         assert_eq!(profile.play.seven_to_nine_type, SevenToNineType::NoMashing);
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::SevenToNineRuleMode, 1));
         assert_eq!(profile.play.seven_to_nine_rule_mode, SevenToNineRuleMode::Keys9);
+    }
+
+    #[test]
+    fn display_entries_end_with_hs_animation_and_e2_key_green_inversion() {
+        let display = SettingsEntryId::DISPLAY_ENTRIES;
+        assert_eq!(
+            &display[display.len() - 3..],
+            &[
+                SettingsEntryId::ConstantFadeMs,
+                SettingsEntryId::HispeedTransitionMs,
+                SettingsEntryId::InvertE2KeyGreenNumber,
+            ]
+        );
+
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        let step = settings_adjust_step(SettingsEntryId::HispeedTransitionMs);
+        assert_eq!(step, 10);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::HispeedTransitionMs), "150 ms");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::HispeedTransitionMs, step));
+        assert_eq!(profile.lane.hispeed_transition_ms, 160);
+        profile.lane.hispeed_transition_ms = HISPEED_TRANSITION_MS_MAX;
+        assert!(!adjust_settings_value(&mut profile, SettingsEntryId::HispeedTransitionMs, step));
+        profile.lane.hispeed_transition_ms = 0;
+        assert!(!adjust_settings_value(&mut profile, SettingsEntryId::HispeedTransitionMs, -step));
+
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::InvertE2KeyGreenNumber), "OFF");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::InvertE2KeyGreenNumber, 1));
+        assert!(profile.input.invert_e2_key_green_number);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::InvertE2KeyGreenNumber), "ON");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::InvertE2KeyGreenNumber, -1));
+        assert!(!profile.input.invert_e2_key_green_number);
     }
 
     #[test]

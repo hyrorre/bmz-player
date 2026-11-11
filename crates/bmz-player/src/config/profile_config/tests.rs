@@ -1281,6 +1281,21 @@ fn lane_cover_key_settings_default_for_old_profiles() {
 }
 
 #[test]
+fn e2_key_green_number_inversion_defaults_off_and_roundtrips() {
+    let mut profile = ProfileConfig::new_default("default", "Player", 0);
+    assert!(!profile.input.invert_e2_key_green_number);
+    let mut value = toml::Value::try_from(&profile).unwrap();
+    let input = value.get_mut("input").unwrap().as_table_mut().unwrap();
+    assert!(input.remove("invert_e2_key_green_number").is_some());
+    let decoded: ProfileConfig = value.try_into().unwrap();
+    assert!(!decoded.input.invert_e2_key_green_number);
+
+    profile.input.invert_e2_key_green_number = true;
+    let decoded: ProfileConfig = toml::from_str(&toml::to_string(&profile).unwrap()).unwrap();
+    assert!(decoded.input.invert_e2_key_green_number);
+}
+
+#[test]
 fn play_start_fills_only_enabled_zero_lane_covers() {
     let mut profile = ProfileConfig::new_default("default", "Player", 0);
     profile.play.lane_effect = LaneEffectConfig::Sudden;

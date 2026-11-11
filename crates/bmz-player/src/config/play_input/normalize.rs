@@ -202,6 +202,7 @@ pub fn default_profile_input() -> ProfileInputConfig {
         lane_cover_wheel_step: crate::config::profile_config::default_lane_cover_wheel_step(),
         keyboard_release_bounce_ms: 0,
         controller_release_bounce_ms: 0,
+        invert_e2_key_green_number: false,
     }
 }
 

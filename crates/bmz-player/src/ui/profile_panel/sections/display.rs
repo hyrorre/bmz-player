@@ -135,10 +135,18 @@ pub(in crate::ui::profile_panel) fn build_profile_display_section(
                 .text(tr!(text, "profile-display-constant-fade")),
             );
             ui.add(
-                egui::Slider::new(&mut profile.lane.hispeed_transition_ms, 0..=1000)
-                    .suffix(" ms")
-                    .text(tr!(text, "profile-display-hispeed-transition")),
+                egui::Slider::new(
+                    &mut profile.lane.hispeed_transition_ms,
+                    0..=crate::config::profile_config::HISPEED_TRANSITION_MS_MAX,
+                )
+                .suffix(" ms")
+                .text(tr!(text, "profile-display-hispeed-transition")),
             )
             .on_hover_text(tr!(text, "profile-display-hispeed-transition-help"));
+            ui.checkbox(
+                &mut profile.input.invert_e2_key_green_number,
+                tr!(text, "profile-display-invert-e2-key-green-number"),
+            )
+            .on_hover_text(tr!(text, "profile-display-invert-e2-key-green-number-help"));
         });
 }

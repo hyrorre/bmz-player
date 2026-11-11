@@ -158,3 +158,23 @@ fn nine_key_cover_shortcuts_preserve_other_modes_and_nine_key_hispeed_buttons() 
         }
     }
 }
+
+#[test]
+fn inverted_e2_green_number_keeps_nine_key_cover_buttons() {
+    let mut input = remapped_input();
+    let play_input = play_option_input_for(&input, KeyMode::K9);
+    let option = |input: &ProfileInputConfig, control: &str| {
+        play_option_control_for_input(
+            W_KEYBOARD_DEVICE_ID,
+            &PhysicalControl::KeyboardKey(control.into()),
+            false,
+            true,
+            Some(&play_input),
+            input,
+        )
+    };
+    let before = [option(&input, "H"), option(&input, "J")];
+    assert!(before.iter().all(|option| matches!(option, Some(PlayOptionControl::LaneCoverKey(_)))));
+    input.invert_e2_key_green_number = true;
+    assert_eq!([option(&input, "H"), option(&input, "J")], before);
+}

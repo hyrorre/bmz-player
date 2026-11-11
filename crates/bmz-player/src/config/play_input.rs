@@ -68,6 +68,7 @@ mod tests {
             lane_cover_wheel_step: crate::config::profile_config::default_lane_cover_wheel_step(),
             keyboard_release_bounce_ms: 0,
             controller_release_bounce_ms: 0,
+            invert_e2_key_green_number: false,
         }
     }
 
@@ -112,6 +113,7 @@ mod tests {
             lane_cover_wheel_step: crate::config::profile_config::default_lane_cover_wheel_step(),
             keyboard_release_bounce_ms: 0,
             controller_release_bounce_ms: 0,
+            invert_e2_key_green_number: false,
         };
         let bindings = resolve_play_bindings(&input, KeyMode::K10).unwrap();
         assert!(bindings.iter().any(|e| e.lane == Some(LaneConfig::Key8)));
@@ -298,6 +300,7 @@ mod tests {
             lane_cover_wheel_step: crate::config::profile_config::default_lane_cover_wheel_step(),
             keyboard_release_bounce_ms: 0,
             controller_release_bounce_ms: 0,
+            invert_e2_key_green_number: false,
         };
         assert_eq!(
             validate_play_inherit_config(&input),
