@@ -128,12 +128,28 @@ impl WinitApp {
             self.leave_result();
             return;
         };
-        let Some(&chart_id) = session.chart_ids.get(session.next_index) else {
+        // 削除・移動などで開けない譜面は飛ばす。開けないまま始めると、リザルトを
+        // 抜ける処理を通らずに選曲画面へ戻ってしまう。
+        let mut next = None;
+        while let Some(&chart_id) = session.chart_ids.get(session.next_index) {
+            session.next_index += 1;
+            match self.boot.library_db.verified_chart_source(chart_id) {
+                Ok(_) => {
+                    next = Some(chart_id);
+                    break;
+                }
+                Err(error) => tracing::warn!(
+                    chart_id,
+                    error = %format_error_chain(&error),
+                    "skipping unavailable chart in folder autoplay"
+                ),
+            }
+        }
+        let Some(chart_id) = next else {
             self.select.autoplay_folder = None;
             self.leave_result();
             return;
         };
-        session.next_index += 1;
         self.result.finished_play = None;
         self.result.result_exit = None;
         self.result.result_key5_held = false;

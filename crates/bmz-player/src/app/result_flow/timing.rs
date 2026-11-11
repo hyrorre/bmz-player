@@ -103,8 +103,8 @@ impl WinitApp {
             self.is_course_intermediate_result(),
             self.course_intermediate_auto_advance_enabled(),
         );
-        if duration.is_none() && self.autoplay_folder_has_next() {
-            Some(FALLBACK_RESULT_SCENE_DURATION)
+        if self.autoplay_folder_has_next() && !self.is_course_intermediate_result() {
+            Some(autoplay_folder_result_exit_duration(duration))
         } else {
             duration
         }
