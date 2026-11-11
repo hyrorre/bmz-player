@@ -230,3 +230,40 @@ fn settled_runtime_result_records_final_gauges_and_stays_fixed_until_finished() 
     assert_eq!(refinished.summary.graph, finished.summary.graph);
     driver.client.shutdown();
 }
+
+#[test]
+fn practice_stop_after_the_last_note_still_publishes_the_round_result() {
+    // The UI can still observe notes left while the worker has just processed
+    // the last one. Practice pauses the clock right after its stop request, so
+    // the owner must end the round instead of leaving it Playing with no result.
+    let input = SharedInputBackend::default();
+    let session = single_note_session(input.clone());
+    let probe = Arc::new(RuntimeProbe::default());
+    let audio = AudioEngineHandle::new(AudioEngine::new(1_000_000));
+    let render_config = config(&session, probe.clone());
+    let mut client = GameplayClient::new(session);
+    client.start(audio, render_config).unwrap();
+    let mut driver = Driver { client, input, probe };
+
+    let end_ms = END_US / 1_000;
+    driver.advance(END_US, vec![key(InputKind::Press, end_ms)]);
+    driver.advance(END_US + 10_000, vec![key(InputKind::Release, end_ms + 10)]);
+    assert!(driver.client.result.is_none());
+
+    let stopped_at = TimeUs(END_US + 20_000);
+    assert!(driver.client.edit(move |session| {
+        assert!(session.judge.is_exhausted(&session.chart));
+        session.request_practice_round_end();
+        session.audio_clock.pause_at(stopped_at);
+    }));
+    let result = driver.published_result();
+    assert_eq!(result.settled_at, stopped_at);
+    wait_until(|| {
+        driver.client.poll();
+        driver.client.session.state == PlayState::Finished
+    });
+    let graph = crate::screens::result_model::ResultGraphCollector::default()
+        .snapshot_for_source(&driver.client);
+    assert!(!graph.gauge_points.is_empty());
+    driver.client.shutdown();
+}

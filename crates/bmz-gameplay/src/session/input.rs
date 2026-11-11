@@ -230,7 +230,10 @@ pub fn present_inputs_after_scoring_closed(session: &mut GameSession, audio_now:
 
 fn present_unscored_input(session: &mut GameSession, input: InputEvent) {
     push_skin_runtime_event(session, SkinRuntimeEventKind::Input(input));
-    if input.kind != InputKind::Press || hcn_passing_at(session, input.lane, input.time) {
+    if input.kind != InputKind::Press
+        || session.judge.consume_scratch_press_suppression(input)
+        || hcn_passing_at(session, input.lane, input.time)
+    {
         return;
     }
     let Some(note_id) = fallback_keysound_note_id(session, input.lane, input.time) else {

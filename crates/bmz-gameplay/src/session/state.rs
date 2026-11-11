@@ -345,6 +345,15 @@ impl GameSession {
         true
     }
 
+    /// Practice の中断要求。ノーツが残る間は手動中断し、所有スレッドで既に全ノーツを
+    /// 処理していた場合は明示的な退出として完走扱いで終える。
+    ///
+    /// Practice は要求の直後に時計を止めて終了演出へ進むため、要求を拒否して
+    /// `Playing` のまま残すと自然確定へ進めず、そのラウンドの結果を取得できない。
+    pub fn request_practice_round_end(&mut self) -> bool {
+        self.request_manual_stop() || self.request_finish()
+    }
+
     /// 全ノーツ処理後の明示的な退出要求。`Playing` の間だけ `Finished` にし、
     /// 途中 FAILED などの確定済みの終了理由を上書きしない。
     pub fn request_finish(&mut self) -> bool {

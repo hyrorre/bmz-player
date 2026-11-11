@@ -296,3 +296,127 @@ fn completed_failed_lamp_settles_naturally_but_a_mid_play_drop_stops_at_once() {
     assert!(!session.manually_stopped);
     assert!(session.scoring_closed_at.is_some_and(|at| at <= TimeUs(200_001)));
 }
+
+/// 音声付きの通常スクラッチ Tap(0ms) と、終端 `E` のスクラッチ CN(BSS) を持つ DX 7KEY 譜面。
+fn bss_end_chart(end: TimeUs) -> PlayableChart {
+    let mut chart = tap_chart(TimeUs(0));
+    let mut tap = chart.lane_notes[Lane::Key1.index()].remove(0);
+    tap.lane = Lane::Scratch;
+    let start = TimeUs(end.0 - 500_000);
+    let long_note = |id, kind, time, tick| NoteEvent {
+        id: NoteId(id),
+        lane: Lane::Scratch,
+        kind,
+        tick: ChartTick(tick),
+        time,
+        sound: None,
+        layered_sounds: Vec::new(),
+        damage: None,
+    };
+    chart.lane_notes[Lane::Scratch.index()] = vec![
+        tap,
+        long_note(2, NoteKind::LongStart, start, 96),
+        long_note(3, NoteKind::LongEnd, end, 192),
+    ];
+    chart.long_notes.push(bmz_chart::model::LongNotePair {
+        lane: Lane::Scratch,
+        style: bmz_chart::model::LongNoteStyle::ChannelPair,
+        mode: Some(LongNoteMode::Cn),
+        start_note_id: NoteId(2),
+        end_note_id: NoteId(3),
+        start_tick: ChartTick(96),
+        end_tick: ChartTick(192),
+        start_time: start,
+        end_time: end,
+        sound: None,
+    });
+    chart.total_notes = 2;
+    chart.end_time = end;
+    chart
+}
+
+fn push_scratch(keys: &SharedBackend, control: &str, kind: InputKind) {
+    keys.0.lock().unwrap().push(DeviceInputEvent {
+        device: DeviceId(1),
+        control: PhysicalControl::KeyboardKey(control.to_string()),
+        kind,
+        timestamp: DeviceTimestamp::Unknown,
+        bounce_policy: Default::default(),
+    });
+}
+
+#[test]
+fn bss_reverse_press_stays_silent_after_the_release_settles_scoring() {
+    let end = 1_000_000;
+    let (mut session, keys) = dx_human_session(bss_end_chart(TimeUs(end)), 0);
+    session.input_system.translator = Box::new(DefaultInputTranslator {
+        binding: LaneBinding {
+            entries: [("Up", ScratchDirection::Up), ("Down", ScratchDirection::Down)]
+                .into_iter()
+                .map(|(control, direction)| BindingEntry {
+                    device: None,
+                    control: PhysicalControl::KeyboardKey(control.to_string()),
+                    lane: Lane::Scratch,
+                    scratch_direction: Some(direction),
+                })
+                .collect(),
+        },
+    });
+    let mut audio = TestAudio::default();
+    assert_eq!(session.judge.window_set.result_settle_margin_us(), 200_000);
+
+    advance_at(&mut session, &mut audio, 0);
+    push_scratch(&keys, "Down", InputKind::Press);
+    advance_at(&mut session, &mut audio, end - 500_000);
+    // E+190ms: 始端と同方向の Release で BSS 終端を判定し、逆方向 Press の抑止を設定する。
+    push_scratch(&keys, "Down", InputKind::Release);
+    let frame = advance_at(&mut session, &mut audio, end + 190_000);
+    assert!(frame.judgements.iter().any(|event| event.note_id == Some(NoteId(3))));
+    assert!(session.judge.lanes[Lane::Scratch.index()].scratch_press_suppression.is_some());
+    // E+201ms: 最大SLOW窓 200ms を超えて採点を閉じる。
+    advance_at(&mut session, &mut audio, end + 201_000);
+    assert_eq!(session.scoring_closed_at, Some(TimeUs(end + 201_000)));
+
+    // E+205ms: 抑止対象の逆方向 Press は、確定後も先行 Tap の fallback キー音を鳴らさない。
+    audio.scheduled.clear();
+    push_scratch(&keys, "Up", InputKind::Press);
+    let frame = advance_at(&mut session, &mut audio, end + 205_000);
+    assert!(frame.judgements.is_empty());
+    assert!(audio.scheduled.is_empty());
+    assert!(frame.skin_events.iter().any(|event| matches!(
+        event.kind,
+        SkinRuntimeEventKind::Input(InputEvent { kind: InputKind::Press, .. })
+    )));
+
+    // 抑止は一度きりで、次の Press は従来どおり fallback キー音を鳴らす。
+    push_scratch(&keys, "Up", InputKind::Release);
+    advance_at(&mut session, &mut audio, end + 230_000);
+    push_scratch(&keys, "Up", InputKind::Press);
+    advance_at(&mut session, &mut audio, end + 240_000);
+    assert!(audio.scheduled.iter().any(|sound| sound.sound_id == SoundId(7)));
+}
+
+#[test]
+fn practice_round_end_finishes_a_run_whose_notes_were_all_processed() {
+    // 全ノーツ処理後・自然確定前に届いた Practice の中断要求は、完走として終える。
+    let (mut session, keys) = dx_human_session(tap_chart(TimeUs(0)), 0);
+    let mut audio = TestAudio::default();
+    keys.press();
+    advance_at(&mut session, &mut audio, 0);
+    advance_at(&mut session, &mut audio, 50_000);
+    assert!(session.judge.is_exhausted(&session.chart));
+    assert_eq!(session.scoring_closed_at, None);
+    assert!(!session.request_manual_stop());
+    assert!(session.request_practice_round_end());
+    assert_eq!(session.state, PlayState::Finished);
+    assert!(!session.manually_stopped);
+    // Practice は直後に時計を止めるため、更新を経ずに停止境界で結果を取得できる。
+    assert_eq!(session.result_settled_at(), Some(TimeUs(50_000)));
+
+    // ノーツが残る間は従来どおり途中中断になる。
+    let (mut session, _keys) = dx_human_session(tap_chart(TimeUs(1_000_000)), 0);
+    advance_at(&mut session, &mut audio, 300_000);
+    assert!(session.request_practice_round_end());
+    assert_eq!(session.state, PlayState::Failed);
+    assert!(session.manually_stopped);
+}

@@ -73,6 +73,10 @@
 - gameplay workerは確定時に一度だけ結果を取得し、同じ状態から全ゲージの終端点を履歴へ記録する。
   `Finished`遷移では採点結果を再取得せず、退出時のプレー時間だけ更新する。
 - `GameSession::request_manual_stop` / `request_finish`で、終了要求の可否を所有スレッドで再確認する。
+  Practiceは`request_practice_round_end`を使い、拒否された中断を明示的な退出として終える
+  （PRレビューの指摘。拒否したまま時計を止めると`Playing`に残り、ラウンドの結果を取得できなかった）。
+- BSSの逆方向Press抑止を`JudgeEngine::consume_scratch_press_suppression`へ切り出し、確定後の
+  入力経路でも消費する（PRレビューの指摘。確定後に余分なfallbackキー音が鳴っていた）。
 - `ResultGraphCollector::record_terminal_gauges`は同時刻の末尾点を更新し、時刻順を保つ。
   途中FAILEDの0埋めは終端点より後の定期サンプル位置から始める。
 - `GameSession`を直接使う保存経路（同期・非同期）も、同じ確定時刻と終端点を使う。
@@ -84,11 +88,14 @@
 - `bmz-gameplay` `session::tests::result_settlement`: DX 7KEY・O=-20msの+210ms押鍵（判定+190ms空POOR）、
   `E=1100.5ms`のフルリプレイで1300ms tick時点では確定しないこと、確定後の古い入力・オフセット変更・
   手動中断要求・`Finished`遷移で結果が変わらないこと、キー表示・キー音が続くこと、
-  停止境界での確定、フルオート / 部分オートの待機、完走FAILEDと途中FAILEDの区別。
+  停止境界での確定、フルオート / 部分オートの待機、完走FAILEDと途中FAILEDの区別、
+  BSS終端のRelease(E+190ms)→確定(E+201ms)→逆方向Press(E+205ms)が無音であること、
+  全ノーツ処理後のPractice中断が完走として終わること。
 - `bmz-gameplay` `replay::tests`: tick一覧の作成では処理済みにならないこと。
 - `bmz-player` `gameplay_runtime::tests::result_settlement`: 実際のgameplay worker・保存経路で、
   1000msサンプル後の空POORによる低下が全ゲージの終端点に入り、確定値と一致すること。
   確定後の入力・オフセット変更・5秒待機後の`Finished`で採点結果と履歴が変わらないこと。
+  最終ノーツ処理直後のPractice中断で時計を止めても、ラウンドの結果が公開されること。
 - `bmz-player` `screens::play_finish::tests`: `GameSession`を直接使う同期・非同期保存の終端点。
 - `bmz-player` `screens::result_model::tests`: 93→79.5、逆方向の回復、同時刻の更新、0埋めの時刻順。
 - `bmz-player` `app::result_runtime::tests`: コース連結後の時刻順と曲境界マーカー。
