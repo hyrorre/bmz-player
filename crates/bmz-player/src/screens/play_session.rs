@@ -55,7 +55,7 @@ use crate::config::profile_config::LaneEffectConfig;
 use crate::config::profile_config::{
     AssistOptionConfig, BaseHispeedConfig, BgaExpandConfig, BgaModeConfig, FloatingPolicyConfig,
     JudgeAlgorithmConfig, KeyModeConversionConfig, PlayModeConfig, ProfileConfig,
-    SevenToNinePattern, SevenToNineRuleMode, SevenToNineType,
+    SRandomCorrectionConfig, SevenToNinePattern, SevenToNineRuleMode, SevenToNineType,
 };
 use crate::input::gamepad::GamepadSlotMap;
 use crate::ln_policy::{
@@ -76,19 +76,34 @@ use crate::storage::score_db::ScoreKey;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SRandomScheme {
+    /// beatoraja `SRAN_THRESHOLD`: repeats of 40 ms or less are avoided.
     Legacy40MsV1,
     #[default]
     Lm120HzV1,
+    /// LR2: no interval threshold; only simultaneous notes and held long notes
+    /// keep a lane busy.
+    NoThresholdV1,
 }
 
 impl SRandomScheme {
     pub const LEGACY_40MS_V1: &'static str = "legacy_40ms_v1";
     pub const LM_120HZ_V1: &'static str = "lm_120hz_v1";
+    pub const NO_THRESHOLD_V1: &'static str = "no_threshold_v1";
 
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Legacy40MsV1 => Self::LEGACY_40MS_V1,
             Self::Lm120HzV1 => Self::LM_120HZ_V1,
+            Self::NoThresholdV1 => Self::NO_THRESHOLD_V1,
+        }
+    }
+
+    /// Scheme recorded by a fresh play for the profile's S-RANDOM correction.
+    pub const fn from_correction(correction: SRandomCorrectionConfig) -> Self {
+        match correction {
+            SRandomCorrectionConfig::Lr2 => Self::NoThresholdV1,
+            SRandomCorrectionConfig::Beatoraja => Self::Legacy40MsV1,
+            SRandomCorrectionConfig::Lm120Hz => Self::Lm120HzV1,
         }
     }
 
@@ -96,6 +111,7 @@ impl SRandomScheme {
         match value {
             Self::LEGACY_40MS_V1 => Ok(Self::Legacy40MsV1),
             Self::LM_120HZ_V1 => Ok(Self::Lm120HzV1),
+            Self::NO_THRESHOLD_V1 => Ok(Self::NoThresholdV1),
             _ => bail!("unsupported S-RANDOM scheme: {value}"),
         }
     }

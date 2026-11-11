@@ -574,6 +574,7 @@ impl ProfileConfig {
                 bottom_shiftable_gauge: BottomShiftableGaugeConfig::AssistEasy,
                 random: RandomOptionConfig::Off,
                 random2: RandomOptionConfig::Off,
+                s_random_correction: SRandomCorrectionConfig::default(),
                 double_option: DoubleOptionConfig::Off,
                 hs_fix: HsFixConfig::Off,
                 target: TargetOptionConfig::None,

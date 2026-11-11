@@ -130,6 +130,7 @@ fn play_defaults_uses_default_misslayer_duration_for_old_profiles() {
     assert_eq!(play.seven_to_nine_pattern, SevenToNinePattern::Sc9Key1To7);
     assert_eq!(play.seven_to_nine_type, SevenToNineType::Fixed);
     assert_eq!(play.seven_to_nine_rule_mode, SevenToNineRuleMode::Keys7);
+    assert_eq!(play.s_random_correction, SRandomCorrectionConfig::Lm120Hz);
     assert!(!play.seven_to_six);
     assert_eq!(play.bga, BgaModeConfig::On);
     assert_eq!(play.bga_expand, BgaExpandConfig::KeepAspect);
@@ -1304,4 +1305,17 @@ fn play_start_fills_only_enabled_zero_lane_covers() {
     profile.lane.lift_enabled = true;
     assert!(profile.fill_zero_lane_cover_amounts());
     assert_eq!(profile.lane.lift, DEFAULT_LANE_COVER_AMOUNT);
+}
+
+#[test]
+fn s_random_correction_roundtrips_each_choice() {
+    for correction in SRandomCorrectionConfig::VALUES {
+        let mut profile = ProfileConfig::new_default("default", "Player", 0);
+        profile.play.s_random_correction = correction;
+        let encoded = toml::to_string(&profile).unwrap();
+        let decoded: ProfileConfig = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.play.s_random_correction, correction);
+    }
+    let profile = ProfileConfig::new_default("default", "Player", 0);
+    assert!(toml::to_string(&profile).unwrap().contains("s_random_correction = \"Lm120Hz\""));
 }

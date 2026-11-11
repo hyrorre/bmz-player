@@ -280,6 +280,9 @@ impl WinitApp {
             gauge_auto_shift: self.select.gauge_auto_shift_option,
             bottom_shiftable_gauge: self.select.bottom_shiftable_gauge_option,
             arrange: ArrangeOption::Normal,
+            s_random_scheme: crate::screens::play_session::SRandomScheme::from_correction(
+                self.boot.profile_config.play.s_random_correction,
+            ),
             h_random_threshold_ms: Some(
                 crate::screens::play_session::DEFAULT_H_RANDOM_THRESHOLD_MS,
             ),
@@ -526,6 +529,9 @@ impl WinitApp {
             gauge_auto_shift: self.select.gauge_auto_shift_option,
             bottom_shiftable_gauge: self.select.bottom_shiftable_gauge_option,
             arrange: ArrangeOption::Normal,
+            s_random_scheme: crate::screens::play_session::SRandomScheme::from_correction(
+                self.boot.profile_config.play.s_random_correction,
+            ),
             h_random_threshold_ms: Some(
                 crate::screens::play_session::DEFAULT_H_RANDOM_THRESHOLD_MS,
             ),

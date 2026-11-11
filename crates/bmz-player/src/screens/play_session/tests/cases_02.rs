@@ -405,6 +405,123 @@ fn h_random_without_recorded_threshold_keeps_the_legacy_100ms_guard() {
     assert!(repeated);
 }
 
+/// Single notes every 10ms on Key1, so every lane could repeat within 40ms.
+fn s_random_single_note_stream() -> PlayableChart {
+    let mut chart = chart();
+    chart.metadata.key_mode = KeyMode::K7;
+    for step in 0..60 {
+        chart.lane_notes[Lane::Key1.index()].push(note(
+            step + 1,
+            Lane::Key1,
+            1_000_000 + i64::from(step) * 10_000,
+        ));
+    }
+    chart
+}
+
+fn s_random_shortest_gap(scheme: SRandomScheme, seed: i64) -> i64 {
+    let mut chart = s_random_single_note_stream();
+    let applied = apply_arrange_pair(
+        &mut chart,
+        ArrangeOption::SRandom,
+        ArrangeOption::Normal,
+        Some(seed),
+        None,
+        false,
+        scheme,
+        None,
+        None,
+        None,
+    );
+    assert_eq!(applied.s_random_scheme, scheme);
+    assert_eq!(chart.lane_notes.iter().flatten().count(), 60);
+    shortest_same_lane_gap_us(&chart)
+}
+
+#[test]
+fn s_random_beatoraja_scheme_avoids_repeats_within_40ms() {
+    for seed in 0..32 {
+        let gap = s_random_shortest_gap(SRandomScheme::Legacy40MsV1, seed);
+        assert!(gap > 40_000, "seed {seed} produced a {gap}us repeat");
+    }
+}
+
+#[test]
+fn s_random_lr2_scheme_has_no_interval_correction() {
+    // Without a threshold a lane used 10ms earlier stays a candidate.
+    assert!(
+        (0..32).any(|seed| s_random_shortest_gap(SRandomScheme::NoThresholdV1, seed) == 10_000)
+    );
+}
+
+#[test]
+fn s_random_lr2_scheme_still_keeps_simultaneous_notes_and_held_lns_apart() {
+    for seed in 0..32 {
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K7;
+        let mut start = note(1, Lane::Key1, 1_000_000);
+        start.kind = NoteKind::LongStart;
+        let mut end = note(2, Lane::Key1, 1_500_000);
+        end.kind = NoteKind::LongEnd;
+        chart.lane_notes[Lane::Key1.index()].extend([start, end]);
+        chart.long_notes.push(LongNotePair {
+            lane: Lane::Key1,
+            style: bmz_chart::model::LongNoteStyle::ChannelPair,
+            mode: Some(LongNoteMode::Ln),
+            sound: None,
+            start_note_id: NoteId(1),
+            end_note_id: NoteId(2),
+            start_tick: bmz_core::time::ChartTick(1_000),
+            end_tick: bmz_core::time::ChartTick(1_500),
+            start_time: TimeUs(1_000_000),
+            end_time: TimeUs(1_500_000),
+        });
+        let mut id = 2;
+        for step in 0..10 {
+            let time = 1_010_000 + step * 10_000;
+            for lane in [Lane::Key2, Lane::Key3] {
+                id += 1;
+                chart.lane_notes[lane.index()].push(note(id, lane, time));
+            }
+        }
+        apply_arrange_pair(
+            &mut chart,
+            ArrangeOption::SRandom,
+            ArrangeOption::Normal,
+            Some(seed),
+            None,
+            false,
+            SRandomScheme::NoThresholdV1,
+            None,
+            None,
+            None,
+        );
+        let ln_lane = chart.lane_notes.iter().flatten().find(|n| n.id == NoteId(1)).unwrap().lane;
+        let mut seen = HashSet::new();
+        for note in chart.lane_notes.iter().flatten() {
+            assert!(seen.insert((note.lane, note.time)), "seed {seed} stacked {note:?}");
+            if note.kind == NoteKind::Tap {
+                assert_ne!(note.lane, ln_lane, "seed {seed} placed a note inside the held LN");
+            }
+        }
+    }
+}
+
+#[test]
+fn s_random_correction_maps_to_persistent_schemes() {
+    use crate::config::profile_config::SRandomCorrectionConfig;
+    for (correction, scheme, persistent) in [
+        (SRandomCorrectionConfig::Lr2, SRandomScheme::NoThresholdV1, "no_threshold_v1"),
+        (SRandomCorrectionConfig::Beatoraja, SRandomScheme::Legacy40MsV1, "legacy_40ms_v1"),
+        (SRandomCorrectionConfig::Lm120Hz, SRandomScheme::Lm120HzV1, "lm_120hz_v1"),
+    ] {
+        assert_eq!(SRandomScheme::from_correction(correction), scheme);
+        assert_eq!(scheme.as_str(), persistent);
+        assert_eq!(SRandomScheme::from_persistent_str(persistent).unwrap(), scheme);
+    }
+    assert_eq!(SRandomCorrectionConfig::default(), SRandomCorrectionConfig::Lm120Hz);
+}
+
 #[test]
 fn fresh_play_options_record_the_beatoraja_h_random_default() {
     assert_eq!(

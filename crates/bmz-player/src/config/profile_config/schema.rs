@@ -221,6 +221,10 @@ pub struct PlayDefaultsConfig {
     pub random: RandomOptionConfig,
     #[serde(default)]
     pub random2: RandomOptionConfig,
+    /// Jack correction applied by S-RANDOM / S-RANDOM-EX on fresh plays.
+    /// Replays keep the scheme they were recorded with.
+    #[serde(default)]
+    pub s_random_correction: SRandomCorrectionConfig,
     #[serde(default)]
     pub double_option: DoubleOptionConfig,
     #[serde(default)]
@@ -396,6 +400,31 @@ impl TryFrom<u8> for SevenToNinePattern {
 impl From<SevenToNinePattern> for u8 {
     fn from(value: SevenToNinePattern) -> Self {
         value.value()
+    }
+}
+
+/// How S-RANDOM avoids same-lane repeats on fresh plays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SRandomCorrectionConfig {
+    /// LR2: no interval threshold. Only simultaneous notes and held long
+    /// notes keep a lane busy.
+    Lr2,
+    /// beatoraja `SRAN_THRESHOLD`: avoid repeats of 40 ms or less.
+    Beatoraja,
+    /// BMZ LM-approximation 120 Hz logical-frame correction.
+    #[default]
+    Lm120Hz,
+}
+
+impl SRandomCorrectionConfig {
+    pub const VALUES: [Self; 3] = [Self::Lr2, Self::Beatoraja, Self::Lm120Hz];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Lr2 => "OFF (LR2)",
+            Self::Beatoraja => "40MS (BEATORAJA)",
+            Self::Lm120Hz => "LM 120HZ",
+        }
     }
 }
 

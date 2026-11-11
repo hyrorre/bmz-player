@@ -912,6 +912,9 @@ pub(crate) fn offline_play_options(
         seven_to_nine_pattern: profile.play.seven_to_nine_pattern,
         seven_to_nine_type: profile.play.seven_to_nine_type,
         seven_to_nine_rule_mode: profile.play.seven_to_nine_rule_mode,
+        s_random_scheme: crate::screens::play_session::SRandomScheme::from_correction(
+            profile.play.s_random_correction,
+        ),
         assist: profile.play.assist,
         ln_policy_setting: profile.play.ln_mode_policy,
         rule_mode: profile.play.rule_mode,
