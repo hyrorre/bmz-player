@@ -533,3 +533,99 @@ pub(super) fn result_main_bpm(summary: &ResultSummary) -> f32 {
         .map(|segment| segment.bpm)
         .unwrap_or(summary.main_bpm)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bmz_core::time::TimeUs;
+    use bmz_gameplay::gauge::GaugeState;
+
+    /// One stage's graph as the gameplay owner saves it: 500ms samples plus the
+    /// settled end point of every gauge.
+    fn stage_summary(
+        samples: &[(i64, f32)],
+        settled_at_us: i64,
+        settled: f32,
+        seconds: usize,
+    ) -> ResultSummary {
+        let gauge_at = |value: f32| {
+            let mut gauge = GaugeState::new(GaugeType::Normal, 160.0, 100);
+            for gauge in &mut gauge.gauges {
+                gauge.value = value;
+            }
+            gauge
+        };
+        let mut collector = crate::screens::result_model::ResultGraphCollector::default();
+        for (time_us, value) in samples {
+            let gauge = gauge_at(*value);
+            collector.record_frame(&bmz_gameplay::session::FrameOutput {
+                render_snapshot: bmz_render::snapshot::RenderSnapshot {
+                    play_elapsed_time: TimeUs(*time_us),
+                    gauge_graph_points: gauge
+                        .gauges
+                        .iter()
+                        .map(|gauge| bmz_render::snapshot::ResultGaugeGraphPoint {
+                            time_ms: 0,
+                            value: gauge.value,
+                            max: gauge.definition.max,
+                            border: gauge.definition.border,
+                            gauge_type: gauge.definition.gauge_type as i32,
+                            course_section_start: false,
+                        })
+                        .collect(),
+                    ..Default::default()
+                },
+                judgements: Vec::new(),
+                mine_hits: Vec::new(),
+                keysound_volumes: Vec::new(),
+                skin_events: Vec::new(),
+                state: bmz_gameplay::session::PlayState::Playing,
+            });
+        }
+        collector.record_terminal_gauges(&gauge_at(settled), TimeUs(settled_at_us));
+        let mut graph = collector.snapshot();
+        graph.judge_graph_density = vec![1; seconds];
+        ResultSummary { graph: Arc::new(graph), ..debug_boot_result_summary() }
+    }
+
+    #[test]
+    fn course_graph_keeps_each_stage_end_point_in_time_order_with_section_markers() {
+        let entries = [
+            stage_summary(&[(0, 50.0), (500_000, 60.0)], 730_000, 55.0, 1),
+            stage_summary(&[(0, 55.0), (500_000, 70.0)], 610_000, 64.5, 1),
+        ];
+
+        let graph = aggregate_course_result_graph(&entries);
+
+        let normal: Vec<_> = graph
+            .gauge_points
+            .iter()
+            .filter(|point| point.gauge_type == GaugeType::Normal as i32)
+            .map(|point| (point.time_ms, point.value, point.course_section_start))
+            .collect();
+        assert_eq!(
+            normal,
+            vec![
+                (0, 50.0, false),
+                (500, 60.0, false),
+                (730, 55.0, false),
+                (1_000, 55.0, true),
+                (1_500, 70.0, false),
+                (1_610, 64.5, false),
+            ]
+        );
+        let times: Vec<_> = graph.gauge_points.iter().map(|point| point.time_ms).collect();
+        assert!(times.windows(2).all(|pair| pair[0] <= pair[1]));
+        // Each switchable gauge starts the second stage with exactly one marker.
+        let gauge_types = entries[0].graph.gauge_points.iter().map(|point| point.gauge_type);
+        for gauge_type in gauge_types.collect::<std::collections::HashSet<_>>() {
+            let markers = graph
+                .gauge_points
+                .iter()
+                .filter(|point| point.gauge_type == gauge_type && point.course_section_start)
+                .map(|point| point.time_ms)
+                .collect::<Vec<_>>();
+            assert_eq!(markers, vec![1_000]);
+        }
+    }
+}

@@ -790,9 +790,18 @@ impl WinitApp {
                 return false;
             }
             tracing::info!(reason, "stopping active play");
-            active_play.running.gameplay.edit(|session| {
-                session.state = bmz_gameplay::session::PlayState::Failed;
-                session.manually_stopped = true;
+            // The observation can be one gameplay wake old. The owner re-checks
+            // the request so a settled result is never reclassified as FAILED.
+            // Practice pauses the clock and ends the round right after this, so a
+            // refused stop there becomes an explicit finish instead of staying
+            // Playing with no reachable result.
+            let practice = practice_phase == Some(PracticePhase::Playing);
+            active_play.running.gameplay.edit(move |session| {
+                if practice {
+                    session.request_practice_round_end();
+                } else {
+                    session.request_manual_stop();
+                }
             });
             true
         };

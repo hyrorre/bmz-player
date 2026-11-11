@@ -344,14 +344,23 @@ impl JudgeEngine {
         })
     }
 
+    /// A release-judged BSS still produces the reverse Press used by physical scratch
+    /// controllers. Consumes only that first matching edge, and disarms the one-shot
+    /// suppression on any other Press of the lane, exactly as the scored path does.
+    ///
+    /// The unscored path after the result settles uses this too, so the reverse edge
+    /// stays silent instead of falling through to a fallback keysound.
+    pub fn consume_scratch_press_suppression(&mut self, input: InputEvent) -> bool {
+        self.lanes[input.lane.index()].scratch_press_suppression.take().is_some_and(|suppression| {
+            input.time.0 >= suppression.started_at.0
+                && input.time.0 <= suppression.expires_at.0
+                && input.scratch_direction == Some(suppression.direction)
+        })
+    }
+
     fn process_press(&mut self, chart: &PlayableChart, input: InputEvent) -> JudgeOutcome {
-        // A release-judged BSS still produces the reverse Press used by physical scratch
-        // controllers. Consume only that first matching edge before it can reach a note or Mine.
-        if let Some(suppression) = self.lanes[input.lane.index()].scratch_press_suppression.take()
-            && input.time.0 >= suppression.started_at.0
-            && input.time.0 <= suppression.expires_at.0
-            && input.scratch_direction == Some(suppression.direction)
-        {
+        // Consume the BSS reverse edge before it can reach a note or Mine.
+        if self.consume_scratch_press_suppression(input) {
             return JudgeOutcome { consumed_input: true, ..Default::default() };
         }
 

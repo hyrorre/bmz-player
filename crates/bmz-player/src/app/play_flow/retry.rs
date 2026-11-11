@@ -297,10 +297,9 @@ impl WinitApp {
             Some(FinalNotesControlAction::ReturnToPractice) => {
                 let now = Instant::now();
                 if let Some(active_play) = &mut self.play.active_play {
-                    active_play
-                        .running
-                        .gameplay
-                        .edit(|session| session.state = bmz_gameplay::session::PlayState::Finished);
+                    active_play.running.gameplay.edit(|session| {
+                        session.request_finish();
+                    });
                     if let Err(error) = active_play.running.pause_audio() {
                         tracing::warn!(%error, "failed to stop practice audio on requested finish");
                     }
@@ -319,11 +318,11 @@ impl WinitApp {
 
         // The worker publishes the terminal result before the ordinary play
         // transition persists it. Never save an observation from before this command.
+        // An already settled result stays as captured; only Playing may finish here.
         self.play.active_play.as_mut().is_some_and(|active| {
-            active
-                .running
-                .gameplay
-                .edit(|session| session.state = bmz_gameplay::session::PlayState::Finished)
+            active.running.gameplay.edit(|session| {
+                session.request_finish();
+            })
         })
     }
 

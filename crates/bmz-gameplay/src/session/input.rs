@@ -144,7 +144,8 @@ pub fn apply_auto_key_release(session: &mut GameSession, audio_now: TimeUs) {
     }
 }
 
-pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
+/// 人間が操作するレーンの入力を取得し、キービーム・キー状態へ反映する。
+fn collect_player_lane_inputs(session: &mut GameSession) -> Vec<InputEvent> {
     let ctx = InputTimingContext {
         audio_clock: &session.audio_clock,
         offsets: session.offsets,
@@ -159,6 +160,11 @@ pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
     }
     update_recent_inputs(session, &inputs, session.audio_clock.now());
     update_lane_key_states(session, &inputs);
+    inputs
+}
+
+pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
+    let inputs = collect_player_lane_inputs(session);
     let mut judgements = Vec::new();
     for input in inputs {
         if !session.display_only_lane_mask[input.lane.index()] {
@@ -176,6 +182,74 @@ pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
         judgements.extend(events);
     }
     judgements
+}
+
+/// 採点を閉じた後の入力を、判定・リプレイ記録・ゲージへ渡さずに表示とキー音へ反映する。
+///
+/// 自然確定後の入力は判定窓の外にあるため、通常の処理でも対象ノーツを持たない。
+/// その場合と同じく、キービーム・skin入力イベント・押鍵時のfallbackキー音だけを扱う。
+pub fn present_inputs_after_scoring_closed(session: &mut GameSession, audio_now: TimeUs) {
+    let full_replay = session.replay_player.is_some() && session.replay_lane_mask.is_none();
+    if full_replay {
+        drain_human_inputs(session);
+    } else if session.autoplay.as_ref().is_some_and(AutoplayController::is_full) {
+        discard_human_inputs(session);
+    } else {
+        let inputs = collect_player_lane_inputs(session);
+        for input in inputs {
+            present_unscored_input(session, input);
+        }
+    }
+
+    if let Some(mut inputs) =
+        session.replay_player.as_mut().map(|player| player.poll_until(audio_now))
+    {
+        if let Some(replay_lane_mask) = &session.replay_lane_mask {
+            inputs.retain(|input| replay_lane_mask[input.lane.index()]);
+        }
+        let inputs = inputs
+            .into_iter()
+            .map(|input| project_replay_input(session, input))
+            .collect::<Vec<_>>();
+        update_lane_key_states(session, &inputs);
+        for input in inputs {
+            present_unscored_input(session, input);
+        }
+    }
+
+    let chart = &session.chart;
+    if let Some(inputs) = session.autoplay.as_mut().map(|auto| auto.poll_until(chart, audio_now)) {
+        update_recent_inputs(session, &inputs, session.audio_clock.now());
+        update_lane_key_states(session, &inputs);
+        for input in inputs {
+            present_unscored_input(session, input);
+        }
+        apply_auto_key_release(session, audio_now);
+    }
+}
+
+fn present_unscored_input(session: &mut GameSession, input: InputEvent) {
+    push_skin_runtime_event(session, SkinRuntimeEventKind::Input(input));
+    if input.kind != InputKind::Press
+        || session.judge.consume_scratch_press_suppression(input)
+        || hcn_passing_at(session, input.lane, input.time)
+    {
+        return;
+    }
+    let Some(note_id) = fallback_keysound_note_id(session, input.lane, input.time) else {
+        return;
+    };
+    let display_only = session
+        .judge
+        .note_by_id(&session.chart, note_id)
+        .is_some_and(|note| session.display_only_lane_mask[note.lane.index()]);
+    if !display_only {
+        session.pending_keysounds.push(KeySoundEvent {
+            note_id,
+            time: input.time,
+            trigger: KeySoundTrigger::Fallback,
+        });
+    }
 }
 
 /// リプレイ再生中は人間入力を判定に渡さない。視覚エフェクト用に recent_inputs だけ更新する。

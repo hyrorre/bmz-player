@@ -453,22 +453,35 @@ fn run(
             probe.record(&runtime.session, &audio);
         }
         let terminal = matches!(runtime.session.state, PlayState::Finished | PlayState::Failed);
-        if (result.is_none()
-            && bmz_gameplay::session::result_is_settled(&runtime.session, last_time))
-            || (terminal && !terminal_result)
+        let play_duration_ms =
+            (runtime.session.audio_clock.elapsed_since(TimeUs(0)).0.max(0) / 1000) as u64;
+        if result.is_none()
+            && let Some(settled_at) = runtime.session.result_settled_at()
         {
+            // The session closed scoring after this update's last input batch.
+            // Score, lamp, every gauge, combo, judgements, replay and course carry
+            // all come from this one state, and the gauge history gets the same
+            // values as its end point instead of waiting for the next 500ms sample.
+            let mut result_graph = graph.clone();
+            result_graph.record_terminal_gauges(&runtime.session.gauge, settled_at);
             result = Some(Arc::new(RuntimeResult {
                 snapshot: FinishSessionSnapshot::from_session(
                     &runtime.session,
                     config.source_ln_profile,
                     &config.applied_arrange,
                 ),
-                graph: graph.clone(),
-                settled_at: last_time,
-                play_duration_ms: (runtime.session.audio_clock.elapsed_since(TimeUs(0)).0.max(0)
-                    / 1000) as u64,
+                graph: result_graph,
+                settled_at,
+                play_duration_ms,
             }));
             terminal_result = terminal;
+        } else if terminal && !terminal_result {
+            // A later Finished keeps the settled scoring. Only the exit-time play
+            // duration keeps its existing meaning of the actual terminal instant.
+            if let Some(settled) = &result {
+                result = Some(Arc::new(RuntimeResult { play_duration_ms, ..(**settled).clone() }));
+            }
+            terminal_result = true;
         }
         for event in frame.skin_events.drain(..) {
             if history.len() == PRESENTATION_HISTORY_CAPACITY {
