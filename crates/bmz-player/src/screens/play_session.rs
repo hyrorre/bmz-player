@@ -160,8 +160,9 @@ pub struct PlaySessionOptions {
     pub s_random_scheme: SRandomScheme,
     /// Optional 2P S-RANDOM generation for mixed ghost/replay arrangements.
     pub s_random_scheme_2p: Option<SRandomScheme>,
-    /// beatoraja H-RANDOM/ALL-SCR key-lane threshold recovered for a replay.
-    /// None keeps BMZ's historical 100 ms behavior.
+    /// H-RANDOM/ALL-SCR key-lane threshold. Fresh plays record
+    /// [`DEFAULT_H_RANDOM_THRESHOLD_MS`]; `None` only comes from replays made
+    /// before the value was recorded and keeps BMZ's historical 100 ms H-RANDOM.
     pub h_random_threshold_ms: Option<u32>,
     /// Independent seed used only while selecting BMS `#RANDOM` branches.
     pub bms_random_seed: Option<u64>,
@@ -429,7 +430,7 @@ impl Default for PlaySessionOptions {
             legacy_arrange_seed: false,
             s_random_scheme: SRandomScheme::default(),
             s_random_scheme_2p: None,
-            h_random_threshold_ms: None,
+            h_random_threshold_ms: Some(DEFAULT_H_RANDOM_THRESHOLD_MS),
             bms_random_seed: None,
             bms_random_choices: None,
             bms_switch_choices: None,
@@ -447,6 +448,15 @@ impl Default for PlaySessionOptions {
         }
     }
 }
+
+/// beatoraja's default `hranThresholdBPM = 120` expressed as
+/// `ceil(15000 / BPM)` milliseconds. Fresh plays record this value so H-RANDOM,
+/// ALL-SCR, 7K to 6K and 7K to 9K share one jack-avoidance threshold.
+pub const DEFAULT_H_RANDOM_THRESHOLD_MS: u32 = 125;
+
+/// H-RANDOM/ALL-SCR threshold for replays without a recorded value. Older BMZ
+/// releases used 100 ms there, so the arrange must keep it to reproduce them.
+pub(crate) const LEGACY_H_RANDOM_THRESHOLD_MS: u32 = 100;
 
 #[path = "play_session/arrange/algorithm.rs"]
 mod arrange_algorithm;

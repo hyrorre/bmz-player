@@ -1,7 +1,6 @@
 use super::*;
 use std::collections::{HashMap, HashSet};
 
-const JACK_GUARD_US: i64 = 100_000;
 const RNG_DOMAIN: i64 = 0x0037_4b36;
 const DESTINATION_LANES: [Lane; 6] =
     [Lane::Key1, Lane::Key2, Lane::Key3, Lane::Key4, Lane::Key5, Lane::Key6];
@@ -35,12 +34,19 @@ pub fn normalize_arrange_for_seven_to_six(arrange: ArrangeOption) -> ArrangeOpti
 ///
 /// Key1/2/3/5/6/7 are fixed to destination Key1..6. Scratch and source Key4
 /// are placed into free lanes while avoiding press notes at intervals of
-/// 100ms or less. A movable object that cannot be placed becomes BGM. Only
-/// invisible notes originating from Scratch/Key4 are discarded entirely.
-pub fn apply_seven_to_six(chart: &mut PlayableChart, seed: i64, legacy_seed: bool) -> bool {
+/// `jack_threshold_ms` or less (the H-RANDOM threshold). A movable object that
+/// cannot be placed becomes BGM. Only invisible notes originating from
+/// Scratch/Key4 are discarded entirely.
+pub fn apply_seven_to_six(
+    chart: &mut PlayableChart,
+    seed: i64,
+    legacy_seed: bool,
+    jack_threshold_ms: u32,
+) -> bool {
     if chart.metadata.key_mode != KeyMode::K7 {
         return false;
     }
+    let jack_guard_us = u64::from(jack_threshold_ms).saturating_mul(1_000);
 
     let mut destination_notes: [Vec<NoteEvent>; LANE_COUNT] = std::array::from_fn(|_| Vec::new());
     let mut movable_by_id = HashMap::new();
@@ -96,7 +102,8 @@ pub fn apply_seven_to_six(chart: &mut PlayableChart, seed: i64, legacy_seed: boo
             .position(|unit| unit.start_time() != time)
             .map_or(movable_units.len(), |offset| index + offset);
         let group = &movable_units[index..end];
-        let assignments = best_assignments(group, &destination_notes, &destination_long_notes);
+        let assignments =
+            best_assignments(group, &destination_notes, &destination_long_notes, jack_guard_us);
         let selected = &assignments[rng.next_usize(assignments.len())];
         for (unit, destination) in group.iter().zip(selected) {
             if let Some(destination) = destination {
@@ -155,11 +162,13 @@ fn best_assignments(
     units: &[MovableUnit],
     notes: &[Vec<NoteEvent>; LANE_COUNT],
     long_notes: &[LongNotePair],
+    jack_guard_us: u64,
 ) -> Vec<Vec<Option<Lane>>> {
     fn visit(
         units: &[MovableUnit],
         notes: &[Vec<NoteEvent>; LANE_COUNT],
         long_notes: &[LongNotePair],
+        jack_guard_us: u64,
         index: usize,
         used: &mut HashSet<Lane>,
         current: &mut Vec<Option<Lane>>,
@@ -178,17 +187,29 @@ fn best_assignments(
             return;
         }
         for lane in DESTINATION_LANES {
-            if used.contains(&lane) || !can_place(&units[index], lane, notes, long_notes) {
+            if used.contains(&lane)
+                || !can_place(&units[index], lane, notes, long_notes, jack_guard_us)
+            {
                 continue;
             }
             used.insert(lane);
             current.push(Some(lane));
-            visit(units, notes, long_notes, index + 1, used, current, best_count, best);
+            visit(
+                units,
+                notes,
+                long_notes,
+                jack_guard_us,
+                index + 1,
+                used,
+                current,
+                best_count,
+                best,
+            );
             current.pop();
             used.remove(&lane);
         }
         current.push(None);
-        visit(units, notes, long_notes, index + 1, used, current, best_count, best);
+        visit(units, notes, long_notes, jack_guard_us, index + 1, used, current, best_count, best);
         current.pop();
     }
 
@@ -198,6 +219,7 @@ fn best_assignments(
         units,
         notes,
         long_notes,
+        jack_guard_us,
         0,
         &mut HashSet::new(),
         &mut Vec::new(),
@@ -212,6 +234,7 @@ fn can_place(
     lane: Lane,
     notes: &[Vec<NoteEvent>; LANE_COUNT],
     long_notes: &[LongNotePair],
+    jack_guard_us: u64,
 ) -> bool {
     let lane_notes = &notes[lane.index()];
     let start = unit.start_time().0;
@@ -230,9 +253,9 @@ fn can_place(
         return false;
     }
     if unit.jack_times().any(|unit_time| {
-        lane_notes.iter().any(|note| {
-            jack_relevant(note) && note.time.0.abs_diff(unit_time.0) <= JACK_GUARD_US as u64
-        })
+        lane_notes
+            .iter()
+            .any(|note| jack_relevant(note) && note.time.0.abs_diff(unit_time.0) <= jack_guard_us)
     }) {
         return false;
     }
@@ -317,7 +340,7 @@ mod tests {
         push(&mut chart, note(4, Lane::Key4, NoteKind::Invisible, 40_000));
         push(&mut chart, note(5, Lane::Key4, NoteKind::Tap, 50_000));
 
-        assert!(apply_seven_to_six(&mut chart, 42, false));
+        assert!(apply_seven_to_six(&mut chart, 42, false, DEFAULT_H_RANDOM_THRESHOLD_MS));
 
         assert_eq!(chart.metadata.key_mode, KeyMode::K6);
         assert_eq!(chart.metadata.total, Some(180.0));
@@ -343,7 +366,7 @@ mod tests {
         movable.layered_sounds.push(SoundId(8));
         push(&mut chart, movable);
 
-        apply_seven_to_six(&mut chart, 7, false);
+        apply_seven_to_six(&mut chart, 7, false, 100);
 
         assert!(!chart.lane_notes.iter().flatten().any(|note| note.id == NoteId(7)));
         assert_eq!(
@@ -353,6 +376,45 @@ mod tests {
         assert_eq!(chart.total_notes, 6);
     }
 
+    /// Key1 at 0 and Key2..Key6 at `time_us`, plus a movable Scratch note at
+    /// `time_us`: the only free destination is Key1, `time_us` after its note.
+    fn single_free_lane_chart(time_us: i64) -> PlayableChart {
+        let mut chart = chart();
+        push(&mut chart, note(1, Lane::Key1, NoteKind::Tap, 0));
+        for (id, lane) in
+            [(2, Lane::Key2), (3, Lane::Key3), (4, Lane::Key5), (5, Lane::Key6), (6, Lane::Key7)]
+        {
+            push(&mut chart, note(id, lane, NoteKind::Tap, time_us));
+        }
+        push(&mut chart, note(7, Lane::Scratch, NoteKind::Tap, time_us));
+        chart
+    }
+
+    fn movable_placed(chart: &PlayableChart) -> bool {
+        chart.lane_notes.iter().flatten().any(|note| note.id == NoteId(7))
+    }
+
+    #[test]
+    fn jack_guard_follows_the_h_random_threshold() {
+        // 120ms is outside the historical 100ms guard but inside the 125ms
+        // H-RANDOM default, so only the latter refuses to stack it on Key1.
+        let mut legacy = single_free_lane_chart(120_000);
+        apply_seven_to_six(&mut legacy, 7, false, 100);
+        assert!(movable_placed(&legacy));
+
+        let mut default = single_free_lane_chart(120_000);
+        apply_seven_to_six(&mut default, 7, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
+        assert!(!movable_placed(&default));
+
+        // The threshold itself is still guarded; one microsecond beyond is free.
+        let mut boundary = single_free_lane_chart(125_000);
+        apply_seven_to_six(&mut boundary, 7, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
+        assert!(!movable_placed(&boundary));
+        let mut beyond = single_free_lane_chart(125_001);
+        apply_seven_to_six(&mut beyond, 7, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
+        assert!(movable_placed(&beyond));
+    }
+
     #[test]
     fn simultaneous_scratch_and_key4_use_distinct_lanes_deterministically() {
         let mut first = chart();
@@ -360,8 +422,8 @@ mod tests {
         push(&mut first, note(2, Lane::Key4, NoteKind::Tap, 1_000_000));
         let mut second = first.clone();
 
-        apply_seven_to_six(&mut first, 1234, false);
-        apply_seven_to_six(&mut second, 1234, false);
+        apply_seven_to_six(&mut first, 1234, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
+        apply_seven_to_six(&mut second, 1234, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
 
         let lanes = |chart: &PlayableChart| {
             let mut result = chart
@@ -382,7 +444,7 @@ mod tests {
         for arrange in [ArrangeOption::SRandom, ArrangeOption::Spiral] {
             let mut chart = chart();
             push(&mut chart, note(1, Lane::Scratch, NoteKind::Tap, 1_000_000));
-            apply_seven_to_six(&mut chart, 1, false);
+            apply_seven_to_six(&mut chart, 1, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
             let applied = apply_arrange(&mut chart, arrange, Some(2), None);
             assert_eq!(applied.arrange, arrange);
             assert_eq!(chart.metadata.key_mode, KeyMode::K6);

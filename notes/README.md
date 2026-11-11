@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-11 | [H-RANDOMの閾値を125msへそろえる](2026/2026-11-11-h-random-threshold.md) |
 | 2026-11-11 | [Luaスキンのdocument変換の高速化](2026/2026-11-11-lua-skin-document-conversion.md) |
 | 2026-11-10 | [Result・Selectスキンの先読み](2026/2026-11-10-result-skin-prewarm.md) |
 | 2026-11-10 | [譜面取得の保存先をIPFS / HTTPで別々に指定する](2026/2026-11-10-download-save-dirs.md) |

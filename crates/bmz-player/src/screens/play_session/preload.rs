@@ -587,6 +587,7 @@ fn transform_chart_import(
             &mut chart,
             arrange_seed.expect("7K to 6K seed"),
             options.legacy_arrange_seed,
+            options.h_random_threshold_ms.unwrap_or(DEFAULT_H_RANDOM_THRESHOLD_MS),
         );
     } else if sp_to_dp {
         apply_sp_to_dp(&mut chart);
@@ -647,7 +648,7 @@ fn transform_chart_import(
             &mut chart,
             options.seven_to_nine_pattern,
             options.seven_to_nine_type,
-            options.h_random_threshold_ms.unwrap_or(125),
+            options.h_random_threshold_ms.unwrap_or(DEFAULT_H_RANDOM_THRESHOLD_MS),
         );
     }
     if !extra_before_battle {

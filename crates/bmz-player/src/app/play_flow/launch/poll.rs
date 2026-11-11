@@ -408,6 +408,9 @@ impl WinitApp {
             seven_to_nine_pattern: self.boot.profile_config.play.seven_to_nine_pattern,
             seven_to_nine_type: self.boot.profile_config.play.seven_to_nine_type,
             seven_to_nine_rule_mode: self.boot.profile_config.play.seven_to_nine_rule_mode,
+            h_random_threshold_ms: Some(
+                crate::screens::play_session::DEFAULT_H_RANDOM_THRESHOLD_MS,
+            ),
             ..Default::default()
         }
     }

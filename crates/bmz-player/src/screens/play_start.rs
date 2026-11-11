@@ -102,7 +102,11 @@ impl BattleTargetPlayback {
                     legacy_arrange_seed: false,
                     s_random_scheme: SRandomScheme::default(),
                     s_random_scheme_2p: None,
-                    h_random_threshold_ms: None,
+                    // Seed-only IR targets carry no threshold. Rebuild them with
+                    // the same default a fresh BMZ or beatoraja play would use.
+                    h_random_threshold_ms: Some(
+                        crate::screens::play_session::DEFAULT_H_RANDOM_THRESHOLD_MS,
+                    ),
                 }
             }
         }

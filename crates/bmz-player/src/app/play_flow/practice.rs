@@ -280,6 +280,9 @@ impl WinitApp {
             gauge_auto_shift: self.select.gauge_auto_shift_option,
             bottom_shiftable_gauge: self.select.bottom_shiftable_gauge_option,
             arrange: ArrangeOption::Normal,
+            h_random_threshold_ms: Some(
+                crate::screens::play_session::DEFAULT_H_RANDOM_THRESHOLD_MS,
+            ),
             battle_target,
             ..Default::default()
         };
@@ -523,6 +526,9 @@ impl WinitApp {
             gauge_auto_shift: self.select.gauge_auto_shift_option,
             bottom_shiftable_gauge: self.select.bottom_shiftable_gauge_option,
             arrange: ArrangeOption::Normal,
+            h_random_threshold_ms: Some(
+                crate::screens::play_session::DEFAULT_H_RANDOM_THRESHOLD_MS,
+            ),
             battle_target,
             ..Default::default()
         };

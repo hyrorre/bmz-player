@@ -7,6 +7,8 @@ fn enter_result(app: &mut WinitApp, chart_id: i64) {
     app.result.finished_play = Some(debug_boot_finished_play_session());
     app.result.finished_play.as_mut().unwrap().applied_arrange.seed = Some(42);
     app.result.finished_play.as_mut().unwrap().applied_arrange.arrange = ArrangeOption::Random;
+    // A replay recorded before thresholds were stored: SAME must keep it.
+    app.result.finished_play.as_mut().unwrap().applied_arrange.h_random_threshold_ms = None;
     app.play.last_started_chart_id = Some(chart_id);
     app.result.result_exit = None;
     app.result.result_key5_held = false;
@@ -142,6 +144,12 @@ fn result_retry_uses_holds_at_exit_after_taps_skips_and_physical_resets() {
         };
         if mode == ResultRetryMode::SameArrange {
             assert_eq!(retry_options.arrange_seed, Some(42));
+            assert_eq!(retry_options.h_random_threshold_ms, None);
+        } else {
+            assert_eq!(
+                retry_options.h_random_threshold_ms,
+                Some(crate::screens::play_session::DEFAULT_H_RANDOM_THRESHOLD_MS)
+            );
         }
         let preload_generation = app.play.play_preload_generation;
         app.result.result_exit.as_mut().unwrap().started_at =

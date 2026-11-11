@@ -71,6 +71,7 @@ pub(super) fn normal_applied_arrange(
     seed: i64,
     legacy_seed: bool,
     s_random_scheme: SRandomScheme,
+    h_random_threshold_ms: Option<u32>,
 ) -> AppliedArrange {
     AppliedArrange {
         arrange: ArrangeOption::Normal,
@@ -81,7 +82,7 @@ pub(super) fn normal_applied_arrange(
         legacy_seed,
         s_random_scheme,
         s_random_scheme_2p: None,
-        h_random_threshold_ms: None,
+        h_random_threshold_ms,
         bms_random_choices: Vec::new(),
         bms_switch_choices: Vec::new(),
         pattern: None,
@@ -113,7 +114,12 @@ pub(super) fn apply_arrange_internal(
     let key_mode = chart.metadata.key_mode;
     let used_seed = seed.unwrap_or_else(generate_arrange_seed);
     if arrange_requires_scratch(arrange) && !key_mode_has_scratch(key_mode) {
-        return normal_applied_arrange(used_seed, legacy_seed, s_random_scheme);
+        return normal_applied_arrange(
+            used_seed,
+            legacy_seed,
+            s_random_scheme,
+            h_random_threshold_ms,
+        );
     }
 
     if let Some(perm) = pattern {
@@ -140,7 +146,9 @@ pub(super) fn apply_arrange_internal(
     }
 
     match arrange {
-        ArrangeOption::Normal => normal_applied_arrange(used_seed, legacy_seed, s_random_scheme),
+        ArrangeOption::Normal => {
+            normal_applied_arrange(used_seed, legacy_seed, s_random_scheme, h_random_threshold_ms)
+        }
         ArrangeOption::Mirror => {
             let perm = mirror_permutation(key_mode);
             apply_lane_permutation(chart, &perm);

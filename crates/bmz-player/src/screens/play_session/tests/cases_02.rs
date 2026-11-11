@@ -328,6 +328,92 @@ fn note_arrange_keeps_no_scratch_modes_inside_active_lanes() {
     }
 }
 
+/// 3-note chords every 110ms: inside the 125ms H-RANDOM default, but outside
+/// the 100ms value older BMZ releases used without a recorded threshold.
+fn h_random_chord_stream() -> PlayableChart {
+    let mut chart = chart();
+    chart.metadata.key_mode = KeyMode::K7;
+    let mut id = 0;
+    for step in 0..40 {
+        let time = 1_000_000 + step * 110_000;
+        for lane in [Lane::Key1, Lane::Key2, Lane::Key3] {
+            id += 1;
+            chart.lane_notes[lane.index()].push(note(id, lane, time));
+        }
+    }
+    chart
+}
+
+fn shortest_same_lane_gap_us(chart: &PlayableChart) -> i64 {
+    let mut times: [Vec<i64>; LANE_COUNT] = std::array::from_fn(|_| Vec::new());
+    for note in chart.lane_notes.iter().flatten() {
+        times[note.lane.index()].push(note.time.0);
+    }
+    times
+        .iter_mut()
+        .flat_map(|lane| {
+            lane.sort_unstable();
+            lane.windows(2).map(|pair| pair[1] - pair[0]).collect::<Vec<_>>()
+        })
+        .min()
+        .unwrap_or(i64::MAX)
+}
+
+#[test]
+fn h_random_avoids_same_lane_repeats_within_the_threshold() {
+    for seed in 0..64 {
+        let mut chart = h_random_chord_stream();
+        let applied = apply_arrange_pair(
+            &mut chart,
+            ArrangeOption::HRandom,
+            ArrangeOption::Normal,
+            Some(seed),
+            None,
+            false,
+            SRandomScheme::Lm120HzV1,
+            None,
+            Some(DEFAULT_H_RANDOM_THRESHOLD_MS),
+            None,
+        );
+        assert_eq!(applied.h_random_threshold_ms, Some(DEFAULT_H_RANDOM_THRESHOLD_MS));
+        assert_eq!(chart.lane_notes.iter().flatten().count(), 120);
+        let gap = shortest_same_lane_gap_us(&chart);
+        assert!(gap > 125_000, "seed {seed} produced a {gap}us repeat");
+    }
+}
+
+#[test]
+fn h_random_without_recorded_threshold_keeps_the_legacy_100ms_guard() {
+    // Replays saved before the threshold was recorded must still unfold with
+    // 100ms, which allows the 110ms repeats the 125ms default forbids.
+    let repeated = (0..64).any(|seed| {
+        let mut chart = h_random_chord_stream();
+        apply_arrange_pair(
+            &mut chart,
+            ArrangeOption::HRandom,
+            ArrangeOption::Normal,
+            Some(seed),
+            None,
+            false,
+            SRandomScheme::Lm120HzV1,
+            None,
+            None,
+            None,
+        );
+        shortest_same_lane_gap_us(&chart) == 110_000
+    });
+    assert!(repeated);
+}
+
+#[test]
+fn fresh_play_options_record_the_beatoraja_h_random_default() {
+    assert_eq!(
+        PlaySessionOptions::default().h_random_threshold_ms,
+        Some(DEFAULT_H_RANDOM_THRESHOLD_MS)
+    );
+    assert_eq!(DEFAULT_H_RANDOM_THRESHOLD_MS, 15_000_u32.div_ceil(120));
+}
+
 #[test]
 fn splitmix64_matches_known_seed_zero_outputs() {
     let mut rng = SplitMix64::new(0);

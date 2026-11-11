@@ -26,7 +26,8 @@ use super::score_db::{
     ScoreKey, ScoreSourceKind,
 };
 
-const DEFAULT_BEATORAJA_H_RANDOM_THRESHOLD_MS: u32 = 125;
+const DEFAULT_BEATORAJA_H_RANDOM_THRESHOLD_MS: u32 =
+    crate::screens::play_session::DEFAULT_H_RANDOM_THRESHOLD_MS;
 const REPLAY_IMPORT_DB_BATCH_SIZE: usize = 256;
 
 #[derive(Debug, Clone)]

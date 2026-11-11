@@ -180,9 +180,9 @@ impl NoteArrangeGroup {
         let threshold = match arrange {
             ArrangeOption::SRandom => TimeUs(40_000),
             ArrangeOption::SRandomEx => TimeUs(40_000),
-            ArrangeOption::HRandom | ArrangeOption::AllScratch => {
-                TimeUs(i64::from(h_random_threshold_ms.unwrap_or(100)) * 1_000)
-            }
+            ArrangeOption::HRandom | ArrangeOption::AllScratch => TimeUs(
+                i64::from(h_random_threshold_ms.unwrap_or(LEGACY_H_RANDOM_THRESHOLD_MS)) * 1_000,
+            ),
             _ => TimeUs(40_000),
         };
         map.extend(self.time_based_shuffle(notes, time, threshold, rng, changeable, assignable));
