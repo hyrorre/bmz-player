@@ -1133,6 +1133,9 @@ pub const fn default_hispeed_transition_ms() -> u32 {
     150
 }
 
+/// HS変更時のアニメーション時間の上限。
+pub const HISPEED_TRANSITION_MS_MAX: u32 = 1000;
+
 /// Per-key-mode values corresponding to beatoraja/LR2orajaED `PlayConfig`.
 /// Global input latency and adjustment step sizes remain outside this type.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

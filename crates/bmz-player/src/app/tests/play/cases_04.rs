@@ -132,6 +132,59 @@ fn play_option_control_maps_e2_to_mode_specific_green_number_direction() {
 }
 
 #[test]
+fn play_option_control_inverts_only_e2_key_green_number_when_enabled() {
+    let mut input = crate::config::play_input::default_profile_input();
+    input.invert_e2_key_green_number = true;
+    let keys = SelectKeyBindings::from_profile(&input);
+    let play_input = play_option_input_for(&input, KeyMode::K7);
+    let option = |control: &str, e1: bool, e2: bool| {
+        keyboard_play_option(control, e1, e2, &keys, &play_input, &input)
+    };
+
+    // beatoraja 0.8.7 以前と同じく、7K の白鍵で緑数字を上げ、黒鍵で下げる。
+    assert_eq!(
+        option("Z", false, true),
+        Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+    );
+    assert_eq!(
+        option("S", false, true),
+        Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
+    );
+    // E1 + 鍵盤の HS と、E2 + 皿の緑数字は反転しない。
+    assert_eq!(option("Z", true, false), Some(PlayOptionControl::Hispeed(HispeedChange::Down)));
+    assert_eq!(option("S", true, false), Some(PlayOptionControl::Hispeed(HispeedChange::Up)));
+    assert_eq!(
+        option("LShift", false, true),
+        Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+    );
+    assert_eq!(
+        option("LControl", false, true),
+        Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
+    );
+}
+
+#[test]
+fn inverted_e2_green_number_follows_the_eight_key_direction_override() {
+    let mut input = crate::config::play_input::default_profile_input();
+    let keys = SelectKeyBindings::from_profile(&input);
+    let play_input = play_option_input_for(&input, KeyMode::K8);
+    assert!(crate::config::play_input::set_eight_key_hispeed_direction(
+        &mut input,
+        LaneConfig::Key1,
+        HispeedDirectionConfig::Down,
+    ));
+    assert_eq!(
+        keyboard_play_option("Z", false, true, &keys, &play_input, &input),
+        Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
+    );
+    input.invert_e2_key_green_number = true;
+    assert_eq!(
+        keyboard_play_option("Z", false, true, &keys, &play_input, &input),
+        Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+    );
+}
+
+#[test]
 fn play_option_control_applies_eight_key_default_and_override() {
     let mut input = crate::config::play_input::default_profile_input();
     let keys = SelectKeyBindings::from_profile(&input);

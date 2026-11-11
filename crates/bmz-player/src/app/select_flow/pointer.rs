@@ -463,14 +463,22 @@ impl WinitApp {
                     _ => None,
                 });
             if let Some((profile_entry, app_entry)) = selected_setting {
-                let rows = select_row_scroll_rows(
-                    self.select.selected_index,
-                    row_index as usize,
-                    self.select.select_items.len(),
-                );
-                self.select.selected_index = row_index as usize;
-                self.reset_selected_replay_slot();
-                self.restart_select_bar_timer_with_scroll(rows, self.select_scroll_duration_low());
+                // 曲・フォルダの行と同じく、未選択の行はカーソルを移すだけにし、
+                // 選択中の行をクリックしたときだけ編集を始める。
+                if row_index as usize != self.select.selected_index {
+                    let rows = select_row_scroll_rows(
+                        self.select.selected_index,
+                        row_index as usize,
+                        self.select.select_items.len(),
+                    );
+                    self.select.selected_index = row_index as usize;
+                    self.reset_selected_replay_slot();
+                    self.restart_select_bar_timer_with_scroll(
+                        rows,
+                        self.select_scroll_duration_low(),
+                    );
+                    return;
+                }
                 if let Some(entry_id) = profile_entry {
                     self.begin_settings_edit(entry_id);
                 } else if let Some(entry_id) = app_entry {
@@ -569,5 +577,34 @@ mod tests {
             app.select.select_bar_scroll.remaining_at(app.select.select_bar_started_at),
             -1.0,
         );
+
+        // In the settings folder an unselected row only moves the cursor; the
+        // selected row starts editing.
+        app.select.ir_battle.active = false;
+        app.select.folder_stack =
+            vec![format!("{}/display", crate::screens::settings_model::CONFIG_ROOT_PATH)];
+        app.select.select_items = [
+            crate::config::settings_registry::SettingsEntryId::Sudden,
+            crate::config::settings_registry::SettingsEntryId::Lift,
+            crate::config::settings_registry::SettingsEntryId::ConstantFadeMs,
+        ]
+        .into_iter()
+        .map(|entry_id| {
+            SelectItem::Config(crate::screens::settings_model::ConfigSelectRow { entry_id })
+        })
+        .collect();
+        app.select.selected_index = 0;
+        app.select.settings_edit = None;
+        app.select.select_bar_scroll.reset();
+        app.handle_select_row_click(2, MouseButton::Left);
+        assert_eq!(app.select.selected_index, 2);
+        assert!(app.select.settings_edit.is_none());
+        assert_eq!(
+            app.select.select_bar_scroll.remaining_at(app.select.select_bar_started_at),
+            -1.0,
+        );
+        app.handle_select_row_click(2, MouseButton::Left);
+        assert_eq!(app.select.selected_index, 2);
+        assert!(app.select.settings_edit.is_some());
     }
 }

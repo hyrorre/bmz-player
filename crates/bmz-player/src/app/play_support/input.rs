@@ -51,20 +51,20 @@ pub(in crate::app) fn play_option_control_for_input(
         play_input.key_mode,
         resolved.lane,
     ) {
-        return match (e1_held, direction) {
-            (true, HispeedDirectionConfig::Down) => {
-                Some(PlayOptionControl::Hispeed(HispeedChange::Down))
-            }
-            (true, HispeedDirectionConfig::Up) => {
-                Some(PlayOptionControl::Hispeed(HispeedChange::Up))
-            }
-            (false, HispeedDirectionConfig::Down) => {
-                Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
-            }
-            (false, HispeedDirectionConfig::Up) => {
-                Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
-            }
-        };
+        if e1_held {
+            return Some(PlayOptionControl::Hispeed(match direction {
+                HispeedDirectionConfig::Down => HispeedChange::Down,
+                HispeedDirectionConfig::Up => HispeedChange::Up,
+            }));
+        }
+        // beatoraja 0.8.9 は E1 と同じ向き、0.8.7 以前は逆向き。設定で後者を選べる。
+        let lowers =
+            (direction == HispeedDirectionConfig::Down) != profile_input.invert_e2_key_green_number;
+        return Some(PlayOptionControl::GreenNumber(if lowers {
+            GreenNumberChange::Down
+        } else {
+            GreenNumberChange::Up
+        }));
     }
 
     let control_name = physical_control_name(control);

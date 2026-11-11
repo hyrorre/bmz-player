@@ -931,6 +931,8 @@ mod tests {
             SettingsEntryId::Hidden,
             SettingsEntryId::Constant,
             SettingsEntryId::ConstantFadeMs,
+            SettingsEntryId::HispeedTransitionMs,
+            SettingsEntryId::InvertE2KeyGreenNumber,
         ];
         let cases = [
             (

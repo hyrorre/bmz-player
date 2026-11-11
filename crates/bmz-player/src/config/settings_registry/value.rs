@@ -8,6 +8,7 @@ pub fn settings_adjust_step(id: SettingsEntryId) -> i32 {
         SettingsEntryId::TargetGreenNumber => 10,
         SettingsEntryId::NoteDisplayDurationMs => 10,
         SettingsEntryId::ConstantFadeMs => 10,
+        SettingsEntryId::HispeedTransitionMs => 10,
         SettingsEntryId::MisslayerDurationMs => 50,
         SettingsEntryId::AnalogScratchThreshold1P | SettingsEntryId::AnalogScratchThreshold2P => 10,
         SettingsEntryId::RandomMixMaxBpm | SettingsEntryId::RandomMixMinBpm => 10,
