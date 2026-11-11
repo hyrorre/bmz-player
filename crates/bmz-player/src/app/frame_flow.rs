@@ -525,7 +525,12 @@ impl WinitApp {
             return;
         };
         if finished.stored.score_history_id <= 0 {
-            if finished.result.autoplay || finished.replay_playback {
+            if super::result_support::cached_result_ir_applies(
+                finished.result.autoplay,
+                finished.replay_playback,
+                self.select.autoplay_folder.is_some(),
+                self.viewer_mode || crate::cli::latency_validation_enabled(),
+            ) {
                 self.start_cached_result_ir();
             }
             return;
@@ -547,12 +552,9 @@ impl WinitApp {
     /// オートプレイ・リプレイ再生のリザルトで、選曲キャッシュのランキングを表示する。
     ///
     /// beatoraja と同じく送信はせず、選曲で取得したランキングを使い回す。キャッシュに
-    /// 無い場合は1回だけ取得して選曲キャッシュへ入れる。フォルダ連続オートプレイと
-    /// コース中は曲ごとの取得を増やさないよう、キャッシュにある場合だけ表示する。
+    /// 無い場合は1回だけ取得して選曲キャッシュへ入れる。コース中の単曲リザルトも同じ。
+    /// 対象の判定は [`super::result_support::cached_result_ir_applies`]。
     fn start_cached_result_ir(&mut self) {
-        if self.viewer_mode || crate::cli::latency_validation_enabled() {
-            return;
-        }
         let Some(finished) = &self.result.finished_play else {
             return;
         };
@@ -565,33 +567,28 @@ impl WinitApp {
             finished.double_option,
             finished.rule_mode,
         );
-        let Some(state) = state else {
+        let Some(mut state) = state else {
             return;
         };
-        let lookup = self.cached_result_ir_lookup();
-        if matches!(lookup, crate::screens::select_ir::SelectIrResultLookup::Missing) {
-            // 表示するランキングが無い。IR 未接続と同じ表示にし、次フレームも引き直す。
-            return;
+        if let Some(lookup) = self.cached_result_ir_lookup() {
+            state.apply_select_cache(lookup);
         }
-        let mut state = state;
-        state.apply_select_cache(lookup);
         self.result.result_ir = Some(state);
     }
 
     fn update_cached_result_ir(&mut self) {
-        let lookup = self.cached_result_ir_lookup();
+        let Some(lookup) = self.cached_result_ir_lookup() else {
+            return;
+        };
         if let Some(state) = &mut self.result.result_ir {
             state.apply_select_cache(lookup);
         }
     }
 
-    fn cached_result_ir_lookup(&mut self) -> crate::screens::select_ir::SelectIrResultLookup {
-        use crate::screens::select_ir::SelectIrResultLookup;
-        let Some(finished) = &self.result.finished_play else {
-            return SelectIrResultLookup::Missing;
-        };
-        let fetch_if_missing =
-            self.select.autoplay_folder.is_none() && self.play.active_course.is_none();
+    fn cached_result_ir_lookup(
+        &mut self,
+    ) -> Option<crate::screens::select_ir::SelectIrResultLookup> {
+        let finished = self.result.finished_play.as_ref()?;
         let context = select_ir_cache_context(
             self.boot.profile_config.play.ln_mode_policy,
             finished.ln_policy,
@@ -604,7 +601,7 @@ impl WinitApp {
             finished.rule_mode,
             finished.result.chart_sha256,
         );
-        let lookup = self.select.select_ir.result_chart_ranking(
+        Some(self.select.select_ir.result_chart_ranking(
             &self.boot.profile_config.ir,
             &self.boot.profile_paths.root_dir,
             &context,
@@ -612,12 +609,7 @@ impl WinitApp {
             double_option,
             rule_mode,
             sha256,
-            fetch_if_missing,
-        );
-        if !fetch_if_missing && matches!(lookup, SelectIrResultLookup::Unavailable) {
-            return SelectIrResultLookup::Missing;
-        }
-        lookup
+        ))
     }
 
     fn poll_result_ir_into_select_cache(&mut self) {

@@ -189,8 +189,6 @@ pub enum SelectIrResultLookup {
     Loading,
     /// 選曲キャッシュ側の取得が失敗している。
     Failed,
-    /// キャッシュに無く、取得もしない。
-    Missing,
     /// IR 未設定、または選曲キャッシュの条件が今回のプレイと異なる。
     Unavailable,
 }
@@ -954,7 +952,7 @@ mod tests {
         let mut select_ir = SelectIrRanking::default();
         let sha = [7u8; 32];
         let (_temp, root) = missing_profile_root("result-lookup");
-        let lookup = |select_ir: &mut SelectIrRanking, context: &str, fetch: bool| {
+        let lookup = |select_ir: &mut SelectIrRanking, context: &str| {
             select_ir.result_chart_ranking(
                 &ir_config(true),
                 &root,
@@ -963,18 +961,15 @@ mod tests {
                 DoubleOptionScoreBucket::Off,
                 RuleMode::Beatoraja,
                 sha,
-                fetch,
             )
         };
 
         select_ir.context = "ctx".to_string();
-        assert!(matches!(lookup(&mut select_ir, "ctx", false), SelectIrResultLookup::Missing));
-        assert!(select_ir.in_flight.is_none());
 
         // 選曲で始めた取得がプレイ中に完了していても、Result で取り込める。
         let requested_at = Instant::now();
         select_ir.in_flight = Some(("ctx".to_string(), sha, requested_at));
-        assert!(matches!(lookup(&mut select_ir, "ctx", true), SelectIrResultLookup::Loading));
+        assert!(matches!(lookup(&mut select_ir, "ctx"), SelectIrResultLookup::Loading));
         select_ir
             .sender
             .send((
@@ -988,7 +983,7 @@ mod tests {
                 )),
             ))
             .unwrap();
-        match lookup(&mut select_ir, "ctx", true) {
+        match lookup(&mut select_ir, "ctx") {
             SelectIrResultLookup::Loaded(rankings) => {
                 assert_eq!(rankings.global.self_rank, Some(2));
                 assert_eq!(rankings.self_and_rivals.unwrap().self_rank, Some(1));
@@ -998,7 +993,7 @@ mod tests {
         assert!(select_ir.in_flight.is_none());
 
         // リプレイの条件が選曲と異なる場合は、選曲キャッシュを捨てない。
-        assert!(matches!(lookup(&mut select_ir, "other", true), SelectIrResultLookup::Unavailable));
+        assert!(matches!(lookup(&mut select_ir, "other"), SelectIrResultLookup::Unavailable));
         assert_eq!(select_ir.context, "ctx");
         assert!(select_ir.cache.contains_key(&sha));
         assert!(select_ir.in_flight.is_none());
@@ -1009,7 +1004,7 @@ mod tests {
             ..Default::default()
         };
         failed.sender.send(("ctx".to_string(), sha, requested_at, Err("offline".into()))).unwrap();
-        assert!(matches!(lookup(&mut failed, "ctx", true), SelectIrResultLookup::Failed));
+        assert!(matches!(lookup(&mut failed, "ctx"), SelectIrResultLookup::Failed));
         assert!(failed.in_flight.is_none());
 
         let mut offline = SelectIrRanking { context: "ctx".to_string(), ..Default::default() };
@@ -1022,7 +1017,6 @@ mod tests {
                 DoubleOptionScoreBucket::Off,
                 RuleMode::Beatoraja,
                 sha,
-                true,
             ),
             SelectIrResultLookup::Unavailable
         ));
@@ -1044,7 +1038,6 @@ mod tests {
                 DoubleOptionScoreBucket::Off,
                 RuleMode::Beatoraja,
                 sha,
-                true,
             )
         };
 

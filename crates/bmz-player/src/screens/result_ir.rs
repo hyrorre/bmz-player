@@ -242,9 +242,6 @@ impl ResultIrState {
             SelectIrResultLookup::Failed => {
                 self.global = RankingLoadState::Failed("select IR ranking fetch failed".into());
             }
-            SelectIrResultLookup::Missing => {
-                self.global = RankingLoadState::Failed("no cached IR ranking".into());
-            }
             SelectIrResultLookup::Unavailable => self.request_scope(IrRankingScope::Global),
         }
         self.source = ResultIrSource::SelectCache { resolved: true };

@@ -134,8 +134,8 @@ impl SelectIrRanking {
     /// オートプレイ・リプレイ再生のリザルト用に、選曲キャッシュのランキングを引く。
     ///
     /// beatoraja と同じく、選曲で取得したランキングを使い回す。キャッシュに無く
-    /// 取得中でもなければ、選曲のカーソル待ちを経ずに1回だけ取得を始める
-    /// (`fetch_if_missing`)。結果は選曲キャッシュに入るため、選曲へ戻っても取り直さない。
+    /// 取得中でもなければ、選曲のカーソル待ちを経ずに1回だけ取得を始める。
+    /// 結果は選曲キャッシュに入るため、選曲へ戻っても取り直さない。
     /// `context` が選曲キャッシュの条件と異なる場合は、キャッシュを捨てずに
     /// [`SelectIrResultLookup::Unavailable`] を返す。
     #[allow(clippy::too_many_arguments)]
@@ -148,7 +148,6 @@ impl SelectIrRanking {
         double_option: DoubleOptionScoreBucket,
         rule_mode: RuleMode,
         sha256: [u8; 32],
-        fetch_if_missing: bool,
     ) -> SelectIrResultLookup {
         self.drain_chart_fetches();
         if self.context != context {
@@ -168,9 +167,6 @@ impl SelectIrRanking {
         }
         if self.in_flight.as_ref().is_some_and(|(_, in_flight_sha, _)| *in_flight_sha == sha256) {
             return SelectIrResultLookup::Loading;
-        }
-        if !fetch_if_missing {
-            return SelectIrResultLookup::Missing;
         }
         // 別譜面の取得中は、終わってから始める (取得枠は1つ)。
         if self.in_flight.is_none() {
