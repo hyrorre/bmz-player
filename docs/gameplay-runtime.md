@@ -227,6 +227,48 @@ workerはスコア確定時・終端遷移時にimmutable `FinishSessionSnapshot
 通常play、course、replay、abort、結果画面への遷移はこの結果からstorage / IRの保存・送信経路を呼びます。
 UIは終了要求を送った直後の古い観測値を保存せず、workerの確定結果を待ちます。
 
+### 採点の確定とResultのゲージ履歴
+
+採点は1プレイにつき一度だけ閉じます。`advance_session_frame`がその更新で取得した入力・
+見逃し・地雷・LN/CN/HCNの処理を終えた後に`GameSession.scoring_closed_at`を設定し、
+所有スレッドは同じ状態からスコア、クリア種別、全ゲージ、コンボ、判定詳細、記録用リプレイ、
+コース引継ぎ値を取得します。確定時刻は以下のどちらかです。
+
+- 通常完走（ゲージ不足のFAILEDランプを含む）は、`natural_result_settled`が真になった更新。
+  全ノーツが判定済み（`judge.is_exhausted()`）で、`E = chart.end_time`、
+  `W = window_set.result_settle_margin_us()`（ルール・キー種別・ランク・再生速度を反映した実効窓）、
+  `O = offsets.input_offset_us`について次を満たした時点です。
+  - 人間入力が採点対象に残る場合（部分オート・部分リプレイを含む）: `audio_now > E + W + max(0, -O)`。
+    取得時刻にOを加えた判定時刻が`E + W`以下なら空POOR等になり得るためです。
+  - フルリプレイ: 実際に処理を終えた1ms tick（`ReplayPlayer::scored_until`）が`E + W`を超えたとき。
+    記録済み入力に現在のOを再適用しないため、負オフセット分は待ちません。
+  - フルオート: `audio_now > E + W`。
+  - 独立した対戦相手がいる場合は、その判定も同じ条件で終わっていること。
+  判定窓の境界（`delta == W`）は受け付けるため比較は厳密な`>`です。
+- 途中FAILED（HARD等のゲージ枯渇）・手動中断・全ノーツ処理後の明示的な退出は、
+  `Finished` / `Failed`へ入った停止境界の更新。自然確定の判定窓は待ちません。
+
+確定後の入力はスコア・ゲージ・判定詳細・記録用リプレイへ渡さず、キービーム、skin入力イベント、
+押鍵時のfallbackキー音だけを進めます。確定後に古いタイムスタンプの入力が届いた場合や、
+プレー中にオフセットを変更した場合も確定済みの結果は変わりません。任意の入力遅配を待つ固定の待機は
+設けていません。BGM・自動キー音、音声末尾、BGA、スキンtimer、オプション操作は採点と独立して続き、
+Play画面の退出は従来どおり5秒の余白・BGMスケジューリング完了・`wait_all_notes_result`に従います。
+
+手動中断（`request_manual_stop`）と全ノーツ処理後の退出（`request_finish`）は、UIの観測が古い場合に備えて
+gameplayの所有スレッドで再確認します。全ノーツ処理後・確定後の中断要求は無視し、
+途中FAILEDの後に届いた退出要求で`Finished`へ書き換えません。
+
+Resultのゲージ履歴は500ms周期の定期記録に加え、結果を確定した譜面時刻に全ゲージの
+`value / max / border / gauge_type`を終端点として一度だけ記録します。同じゲージ・同じ時刻の
+定期点があれば最新値へ更新し、時刻順を保ちます。LR2 / beatoraja JSON / LuaのResultは
+選択ゲージの履歴末尾を表示値として使うため、確定結果と表示が一致します。表示の丸め
+（LR2の2%刻み、beatorajaの切り捨て）は従来どおりです。`Finished`への遷移では結果を取り直さず、
+退出時のプレー時間だけを終端時点の値に更新します。`PlayState::Failed`の0埋めは終端点より後の
+定期サンプル位置から始まり、停止時の実値の後にゲージが戻ることはありません。
+gameplay workerを使わず`GameSession`を直接保存する経路（同期・非同期の保存）も、
+同じ確定時刻と終端点を使います。経緯と検証は
+[作業記録](../notes/2026/2026-11-11-result-gauge-settlement.md)を参照してください。
+
 ### 音声・動画資源の後片付け
 
 audio callbackから退避したsourceは、出力streamごとのworkerが回収します。
