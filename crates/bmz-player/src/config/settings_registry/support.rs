@@ -300,6 +300,13 @@ pub(super) fn cycle_seven_to_nine_pattern(
     cycle_in_slice(&SevenToNinePattern::VALUES, current, forward)
 }
 
+pub(super) fn cycle_s_random_correction(
+    current: SRandomCorrectionConfig,
+    forward: bool,
+) -> SRandomCorrectionConfig {
+    cycle_in_slice(&SRandomCorrectionConfig::VALUES, current, forward)
+}
+
 pub(super) fn cycle_seven_to_nine_type(current: SevenToNineType, forward: bool) -> SevenToNineType {
     cycle_in_slice(&SevenToNineType::VALUES, current, forward)
 }

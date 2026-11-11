@@ -104,21 +104,6 @@ pub(in crate::ui::profile_panel) fn build_profile_play_section(
                         ui.selectable_value(&mut profile.play.random2, value, label);
                     }
                 });
-            egui::ComboBox::new(
-                "profile_s_random_correction",
-                tr!(text, "profile-play-s-random-correction"),
-            )
-            .selected_text(profile.play.s_random_correction.label())
-            .show_ui(ui, |ui| {
-                for value in SRandomCorrectionConfig::VALUES {
-                    ui.selectable_value(
-                        &mut profile.play.s_random_correction,
-                        value,
-                        value.label(),
-                    );
-                }
-            });
-            ui.label(tr!(text, "profile-play-s-random-correction-help"));
             egui::ComboBox::new("profile_dp_option", tr!(text, "profile-play-dp-option"))
                 .selected_text(double_option_label(profile.play.double_option))
                 .show_ui(ui, |ui| {
@@ -201,6 +186,20 @@ pub(in crate::ui::profile_panel) fn build_profile_play_section(
                 });
             profile.play.session_mode = Some(session_mode);
             profile.play.auto_play = session_mode.primary_autoplay();
+            egui::ComboBox::new(
+                "profile_s_random_correction",
+                tr!(text, "profile-play-s-random-correction"),
+            )
+            .selected_text(profile.play.s_random_correction.label())
+            .show_ui(ui, |ui| {
+                for value in SRandomCorrectionConfig::VALUES {
+                    ui.selectable_value(
+                        &mut profile.play.s_random_correction,
+                        value,
+                        value.label(),
+                    );
+                }
+            });
             let previous_conversion = profile.play.key_mode_conversion;
             egui::ComboBox::new(
                 "profile_key_mode_conversion",

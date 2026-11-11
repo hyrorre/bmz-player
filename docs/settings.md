@@ -213,7 +213,7 @@ LN・地雷や前後のノーツとの衝突、同時押しと局所密度を検
 
 ### S-RANDOMの補正
 
-「BMZ メニュー → プレイ」の「S-RANDOM 補正」で、S-RANDOM / S-RANDOM-EXが同じレーンへの連続を避ける方法を選べます。
+「BMZ メニュー → プレイ」の「S-RANDOM 補正」、または「選曲画面の 設定 → PLAY」の`S-RANDOM CORRECTION`で、S-RANDOM / S-RANDOM-EXが同じレーンへの連続を避ける方法を選べます。どちらもSESSION MODEとKEY CONVERSIONの間にあります。
 プロファイルごとに`play.s_random_correction`へ保存し、既定はLM 120HZです。
 
 | 選択肢 | 動作 |

@@ -9,9 +9,9 @@ use super::profile_config::{
     FLOATING_HISPEED_STEP_UNIT, FastSlowDisplayScope, GaugeAutoShiftConfig, GaugeTypeConfig,
     HISPEED_STEP_MAX, HispeedConfigPreset, HispeedDirectionConfig, HsFixConfig,
     JudgeAlgorithmConfig, KeyModeConversionConfig, LaneConfig, ProfileConfig,
-    RELEASE_BOUNCE_MS_MAX, RandomOptionConfig, ReplaySlotRule, SelectInputModeConfig,
-    SevenToNinePattern, SevenToNineRuleMode, SevenToNineType, TargetOptionConfig,
-    normalize_classic_hispeed_step, normalize_floating_hispeed_step,
+    RELEASE_BOUNCE_MS_MAX, RandomOptionConfig, ReplaySlotRule, SRandomCorrectionConfig,
+    SelectInputModeConfig, SevenToNinePattern, SevenToNineRuleMode, SevenToNineType,
+    TargetOptionConfig, normalize_classic_hispeed_step, normalize_floating_hispeed_step,
 };
 use bmz_core::lane::KeyMode;
 use bmz_gameplay::rule::RuleMode;
@@ -57,6 +57,7 @@ impl SettingsEntryId {
         Self::BgaMode,
         Self::BgaExpand,
         Self::SessionMode,
+        Self::SRandomCorrection,
         Self::KeyModeConversion,
         Self::MisslayerDurationMs,
         Self::WaitAllNotesResult,
@@ -229,6 +230,7 @@ impl SettingsEntryId {
             Self::BgaMode => "BGA",
             Self::BgaExpand => "BGA FIT",
             Self::SessionMode => "SESSION MODE",
+            Self::SRandomCorrection => "S-RANDOM CORRECTION",
             Self::KeyModeConversion => "KEY CONVERSION",
             Self::SevenToNinePattern => "7K TO 9K PATTERN",
             Self::SevenToNineType => "7K TO 9K TYPE",
@@ -361,6 +363,7 @@ impl SettingsEntryId {
             Self::BgaMode => "settings-entry-description-bga-mode",
             Self::BgaExpand => "settings-entry-description-bga-expand",
             Self::SessionMode => "settings-entry-description-session-mode",
+            Self::SRandomCorrection => "settings-entry-description-s-random-correction",
             Self::KeyModeConversion => "settings-entry-description-key-mode-conversion",
             Self::SevenToNinePattern => "settings-entry-description-seven-to-nine-pattern",
             Self::SevenToNineType => "settings-entry-description-seven-to-nine-type",
@@ -681,6 +684,25 @@ mod tests {
         assert_eq!(profile.play.seven_to_nine_type, SevenToNineType::NoMashing);
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::SevenToNineRuleMode, 1));
         assert_eq!(profile.play.seven_to_nine_rule_mode, SevenToNineRuleMode::Keys9);
+    }
+
+    #[test]
+    fn s_random_correction_sits_between_session_mode_and_key_conversion_and_cycles() {
+        let play = SettingsEntryId::PLAY_ENTRIES;
+        let index = play.iter().position(|&entry| entry == SettingsEntryId::SRandomCorrection);
+        let index = index.expect("S-RANDOM correction is a play entry");
+        assert_eq!(play[index - 1], SettingsEntryId::SessionMode);
+        assert_eq!(play[index + 1], SettingsEntryId::KeyModeConversion);
+
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::SRandomCorrection), "LM 120HZ");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::SRandomCorrection, 1));
+        assert_eq!(profile.play.s_random_correction, SRandomCorrectionConfig::Lr2);
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::SRandomCorrection, 1));
+        assert_eq!(profile.play.s_random_correction, SRandomCorrectionConfig::Beatoraja);
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::SRandomCorrection, -1));
+        assert_eq!(profile.play.s_random_correction, SRandomCorrectionConfig::Lr2);
+        assert!(SettingsEntryId::SRandomCorrection.is_play_setting());
     }
 
     #[test]

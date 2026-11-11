@@ -324,6 +324,15 @@ define_settings! {
             .as_str()
             .to_string(),
     }
+    SRandomCorrection(SRandomCorrectionConfig) {
+        value: [field play.s_random_correction],
+        adjust: |profile, delta| {
+            cycle_enum(delta, profile.play.s_random_correction, cycle_s_random_correction)
+                .map(|next| profile.play.s_random_correction = next)
+                .is_some()
+        },
+        format: |profile| profile.play.s_random_correction.label().to_string(),
+    }
     KeyModeConversion((KeyModeConversionConfig, DoubleOptionConfig)) {
         value: [access |profile| (profile.play.key_mode_conversion, profile.play.double_option), |profile, value| { profile.play.key_mode_conversion = value.0; profile.play.double_option = value.1; }],
         adjust: |profile, delta| {
