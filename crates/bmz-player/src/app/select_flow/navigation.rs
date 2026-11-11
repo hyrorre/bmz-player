@@ -477,42 +477,38 @@ impl WinitApp {
             return;
         }
         let text = Localizer::new(self.boot.profile_config.ui.locale());
-        let Some((path, kind)) =
-            self.select.select_items.get(self.select.selected_index).and_then(|item| match item {
-                SelectItem::Folder { path, kind, .. } => Some((path.clone(), *kind)),
-                _ => None,
-            })
-        else {
-            return;
-        };
-        if kind != bmz_render::scene::SelectRowKind::Folder {
-            self.show_left_overlay_toast(text.text("toast-folder-autoplay-only-normal-folder"));
-            return;
-        }
-        // 選曲画面でこのフォルダから辿れる譜面だけを流す。
-        let folder_paths = match reachable_chart_folders(&self.boot.library_db, &path) {
-            Ok(folder_paths) => folder_paths,
-            Err(error) => {
-                tracing::warn!(folder = %path, %error, "failed to list autoplay folder charts");
-                vec![path.clone()]
+        let items = &self.select.select_items;
+        let selected_index = self.select.selected_index;
+        let source: Vec<&SelectItem> = match items.get(selected_index) {
+            // フォルダ行: そのフォルダから選曲画面で辿れる譜面を流す。
+            Some(item @ SelectItem::Folder { kind, .. })
+                if autoplay_folder_row_supported(*kind) =>
+            {
+                vec![item]
             }
+            Some(SelectItem::Folder { .. }) => {
+                self.show_left_overlay_toast(text.text("toast-folder-autoplay-only-normal-folder"));
+                return;
+            }
+            // フォルダ内の譜面行: 今開いている一覧を、選択中の譜面から表示順に一巡する。
+            Some(SelectItem::Chart(_)) => {
+                items[selected_index..].iter().chain(&items[..selected_index]).collect()
+            }
+            _ => return,
         };
-        let folder_refs: Vec<&str> = folder_paths.iter().map(String::as_str).collect();
-        let charts = match self.boot.library_db.list_charts_in_folders(&folder_refs) {
-            Ok(charts) => charts,
+        let path = self.select.folder_stack.last().cloned().unwrap_or_default();
+        let chart_ids = match autoplay_folder_chart_ids(
+            &SelectListSource::from(&self.boot),
+            &self.select.virtual_folders,
+            source,
+        ) {
+            Ok(chart_ids) => chart_ids,
             Err(error) => {
                 tracing::warn!(folder = %path, %error, "failed to list autoplay folder charts");
                 self.show_left_overlay_toast(text.text("toast-folder-autoplay-charts-load-failed"));
                 return;
             }
         };
-        let mut chart_ids = Vec::with_capacity(charts.len());
-        let mut seen = HashSet::new();
-        for chart in charts {
-            if seen.insert(chart.chart_id) {
-                chart_ids.push(chart.chart_id);
-            }
-        }
         let Some(&first_chart_id) = chart_ids.first() else {
             self.show_left_overlay_toast(text.text("toast-folder-autoplay-empty"));
             return;
