@@ -98,6 +98,127 @@ impl SelectIrRanking {
             self.context = context.to_string();
             self.clear();
         }
+        self.drain_chart_fetches();
+
+        let Some(provider) = enabled_provider(ir_config) else {
+            return;
+        };
+        let Some(sha256) = selected else {
+            self.pending = None;
+            return;
+        };
+        if self.cache.get(&sha256).is_some_and(|entry| entry.battle_entries_loaded)
+            || self.in_flight.as_ref().is_some_and(|(_, in_flight_sha, _)| *in_flight_sha == sha256)
+        {
+            self.pending = None;
+            return;
+        }
+        match self.pending {
+            Some((pending_sha, since)) if pending_sha == sha256 => {
+                if since.elapsed() >= FETCH_DEBOUNCE && self.in_flight.is_none() {
+                    self.pending = None;
+                    self.start_chart_fetch(
+                        provider,
+                        profile_root,
+                        ln_policy,
+                        double_option,
+                        rule_mode,
+                        sha256,
+                    );
+                }
+            }
+            _ => self.pending = Some((sha256, Instant::now())),
+        }
+    }
+
+    /// オートプレイ・リプレイ再生のリザルト用に、選曲キャッシュのランキングを引く。
+    ///
+    /// beatoraja と同じく、選曲で取得したランキングを使い回す。キャッシュに無く
+    /// 取得中でもなければ、選曲のカーソル待ちを経ずに1回だけ取得を始める
+    /// (`fetch_if_missing`)。結果は選曲キャッシュに入るため、選曲へ戻っても取り直さない。
+    /// `context` が選曲キャッシュの条件と異なる場合は、キャッシュを捨てずに
+    /// [`SelectIrResultLookup::Unavailable`] を返す。
+    #[allow(clippy::too_many_arguments)]
+    pub fn result_chart_ranking(
+        &mut self,
+        ir_config: &IrConfig,
+        profile_root: &Path,
+        context: &str,
+        ln_policy: LnScorePolicy,
+        double_option: DoubleOptionScoreBucket,
+        rule_mode: RuleMode,
+        sha256: [u8; 32],
+        fetch_if_missing: bool,
+    ) -> SelectIrResultLookup {
+        self.drain_chart_fetches();
+        if self.context != context {
+            return SelectIrResultLookup::Unavailable;
+        }
+        let Some(provider) = enabled_provider(ir_config) else {
+            return SelectIrResultLookup::Unavailable;
+        };
+        if let Some(entry) = self.cache.get(&sha256) {
+            return match &entry.global_ranking {
+                Some(global) => SelectIrResultLookup::Loaded(Box::new(SelectIrResultRankings {
+                    global: global.clone(),
+                    self_and_rivals: entry.self_and_rivals_ranking.clone(),
+                })),
+                None => SelectIrResultLookup::Failed,
+            };
+        }
+        if self.in_flight.as_ref().is_some_and(|(_, in_flight_sha, _)| *in_flight_sha == sha256) {
+            return SelectIrResultLookup::Loading;
+        }
+        if !fetch_if_missing {
+            return SelectIrResultLookup::Missing;
+        }
+        // 別譜面の取得中は、終わってから始める (取得枠は1つ)。
+        if self.in_flight.is_none() {
+            if self.pending.is_some_and(|(pending_sha, _)| pending_sha == sha256) {
+                self.pending = None;
+            }
+            self.start_chart_fetch(
+                provider,
+                profile_root,
+                ln_policy,
+                double_option,
+                rule_mode,
+                sha256,
+            );
+        }
+        SelectIrResultLookup::Loading
+    }
+
+    fn start_chart_fetch(
+        &mut self,
+        provider: (String, String),
+        profile_root: &Path,
+        ln_policy: LnScorePolicy,
+        double_option: DoubleOptionScoreBucket,
+        rule_mode: RuleMode,
+        sha256: [u8; 32],
+    ) {
+        let requested_at = Instant::now();
+        self.in_flight = Some((self.context.clone(), sha256, requested_at));
+        spawn_fetch(
+            ResultIrQuery {
+                profile_root: profile_root.to_path_buf(),
+                provider: provider.0,
+                base_url: provider.1,
+                chart_sha256_hex: hash_to_hex(&sha256),
+                ln_policy,
+                double_option,
+                rule_mode,
+            },
+            self.context.clone(),
+            sha256,
+            requested_at,
+            self.sender.clone(),
+        );
+    }
+
+    /// 完了した譜面ランキングの取得結果をキャッシュへ取り込む。
+    fn drain_chart_fetches(&mut self) {
         while let Ok((result_context, sha256, requested_at, result)) = self.receiver.try_recv() {
             if self.in_flight.as_ref().is_some_and(
                 |(context, in_flight_sha, in_flight_requested_at)| {
@@ -168,45 +289,6 @@ impl SelectIrRanking {
                 }
             };
             self.insert_entry(sha256, entry);
-        }
-
-        let Some(provider) = enabled_provider(ir_config) else {
-            return;
-        };
-        let Some(sha256) = selected else {
-            self.pending = None;
-            return;
-        };
-        if self.cache.get(&sha256).is_some_and(|entry| entry.battle_entries_loaded)
-            || self.in_flight.as_ref().is_some_and(|(_, in_flight_sha, _)| *in_flight_sha == sha256)
-        {
-            self.pending = None;
-            return;
-        }
-        match self.pending {
-            Some((pending_sha, since)) if pending_sha == sha256 => {
-                if since.elapsed() >= FETCH_DEBOUNCE && self.in_flight.is_none() {
-                    self.pending = None;
-                    let requested_at = Instant::now();
-                    self.in_flight = Some((self.context.clone(), sha256, requested_at));
-                    spawn_fetch(
-                        ResultIrQuery {
-                            profile_root: profile_root.to_path_buf(),
-                            provider: provider.0,
-                            base_url: provider.1,
-                            chart_sha256_hex: hash_to_hex(&sha256),
-                            ln_policy,
-                            double_option,
-                            rule_mode,
-                        },
-                        self.context.clone(),
-                        sha256,
-                        requested_at,
-                        self.sender.clone(),
-                    );
-                }
-            }
-            _ => self.pending = Some((sha256, Instant::now())),
         }
     }
 

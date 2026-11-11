@@ -35,6 +35,58 @@ pub fn spawn_result_ir_task(
     )
 }
 
+/// オートプレイ・リプレイ再生のリザルト用 state を作る。IR 未設定なら `None`。
+///
+/// 送信は行わず、IR 接続 timer も進めない。Global ranking は
+/// [`ResultIrState::apply_select_cache`] で選曲キャッシュから反映する。
+pub fn cached_result_ir_state(
+    profile_root: PathBuf,
+    ir_config: &IrConfig,
+    chart_sha256_hex: String,
+    ln_policy: LnScorePolicy,
+    double_option: DoubleOptionScoreBucket,
+    rule_mode: RuleMode,
+) -> Option<ResultIrState> {
+    let provider = crate::ir::provider_key::primary_provider_config(ir_config)?;
+    let provider_key = crate::ir::provider_key::configured_provider_key(provider)?;
+    let (sender, receiver) = channel();
+    Some(ResultIrState {
+        submit: IrSubmitState::Done { submitted: 0, failed: 0, message: None },
+        provider_submissions: Vec::new(),
+        global: RankingLoadState::Loading,
+        self_and_rivals: RankingLoadState::NotRequested,
+        active_tab: ResultRankingTab::Global,
+        chart_restricted: false,
+        ir_connect_begin_at: None,
+        ir_connect_success_at: None,
+        ir_connect_fail_at: None,
+        provider_name: bmz_render::scene::ResultIrRankingName::from_display_name(
+            crate::ir::provider_key::configured_provider_display_name(provider)?,
+        ),
+        user_name: bmz_render::scene::ResultIrRankingName::from_display_name(
+            &provider.account_display_name,
+        ),
+        global_skin_scroll_offset: 0,
+        self_and_rivals_skin_scroll_offset: 0,
+        source: ResultIrSource::SelectCache { resolved: false },
+        query: ResultIrTaskQuery {
+            profile_root,
+            provider: provider_key.to_string(),
+            account_id: provider.account_id.clone(),
+            base_url: provider.base_url.clone(),
+            target: ResultIrTarget::Chart {
+                local_score_id: 0,
+                chart_sha256_hex,
+                ln_policy,
+                double_option,
+                rule_mode,
+            },
+        },
+        sender,
+        receiver,
+    })
+}
+
 pub fn spawn_course_result_ir_task(
     profile_root: PathBuf,
     score_db_path: PathBuf,
@@ -128,6 +180,7 @@ pub(super) fn spawn_result_ir_task_for_target(
         ),
         global_skin_scroll_offset: 0,
         self_and_rivals_skin_scroll_offset: 0,
+        source: ResultIrSource::Submission,
         query: query.clone(),
         sender: sender.clone(),
         receiver,
