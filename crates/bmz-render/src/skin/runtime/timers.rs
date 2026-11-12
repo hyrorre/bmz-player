@@ -295,7 +295,6 @@ impl DynamicTimerRuntime {
         key_mode: KeyMode,
         now_us: i64,
     ) {
-        self.qwilight.ingest(events, now_us);
         self.key_logger.ingest(
             events,
             key_mode,
@@ -313,6 +312,7 @@ impl DynamicTimerRuntime {
         now_us: i64,
     ) {
         self.judge_lane.ingest(judgements, key_mode, region_count, now_us);
+        self.qwilight.ingest(judgements, now_us);
     }
 
     fn advance_keybeam(&mut self, state: &mut SkinDrawState) {

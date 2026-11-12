@@ -80,6 +80,8 @@ Select・Decide・Result・G-BATTLE専用表示には対応しません。スキ
   判定内訳は空POORを含み、帯とゲージは各定義の4方向の充填・画像切り取りを使います。
 - `autoMain`はBMZのAUTOPLAY、`autoInput`は自動処理するレーンを表示します。
   `mainJudgmentMeter`は各レーンのFAST/SLOWに対応する正負のフレームから0へ戻る画像です。見逃し・空POORを除いた実判定の符号を使います。
+  表示開始の条件はBMZのFAST/SLOWモードに従い、AutoではPGREATを除外し、閾値モードではPGREATの誤差が閾値以上のときに表示します。GREAT／GOOD／BADは閾値にかかわらず表示します。
+  表示対象外の判定では直前の演出を解除・再開せず、元の開始時刻からスキンのフレーム数・FPSに従って0へ戻ります。
 - キー背景とキー画像は`loopingMain` / `loopingInput`の0〜3に従い、押下・解放でフレームを進めたり戻したりします。
   判定線とmode 1のゲージ画像・装飾は拍に連動します。コンボは`band-frame` / FPSの逆再生と`enlargeBand`を使います。
   LNボムは`hit-long-note-loop-frame`ごとに再開し、コンボのLN中の再拡大は`last-enlarged-band-loop-frame`に従います。

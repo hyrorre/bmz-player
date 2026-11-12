@@ -174,6 +174,106 @@ fn qwilight_signed_lane_frames_fit_gpu_limits_even_with_a_prime_frame_count() {
 }
 
 #[test]
+fn qwilight_lane_timing_follows_fast_slow_mode_and_threshold_in_play_and_replay() {
+    use crate::config::profile_config::FastSlowDisplayScope::{Auto, ThresholdMs};
+    use crate::screens::play_snapshot::apply_fast_slow_display_filter;
+    use bmz_core::judge::TimingSide;
+    use bmz_gameplay::judge::model::JudgementEvent;
+    use bmz_gameplay::session::{SkinRuntimeEvent, SkinRuntimeEventKind};
+
+    let (_root, mut decoded) = expanded_fixture();
+    let meter = decoded.document.image.iter().find(|image| image.id == "qw-lane-timing-0").unwrap();
+    assert_eq!(meter.qwilight_animation.as_ref().unwrap().lane, 1);
+    let texture =
+        decoded.sources.iter().find(|source| source.source_id == meter.src).unwrap().texture;
+    let (columns, rows) = (meter.divx, meter.divy);
+    decoded.document.destination.retain(
+        |entry| matches!(entry, DestinationListEntry::Single(d) if d.id == "qw-lane-timing-0"),
+    );
+    let mut renderer = Renderer::default();
+    install_decoded_skin(&mut renderer, decoded, SkinManifest::default()).unwrap();
+    // Frames 0 / 50 / 100 are FAST / neutral / SLOW in this signed atlas.
+    let cases = [
+        (Auto, 0, Judge::PGreat, -20_000, 50),
+        (Auto, 5, Judge::PGreat, 20_000, 50),
+        (ThresholdMs, 5, Judge::PGreat, -4_999, 50),
+        (ThresholdMs, 5, Judge::PGreat, 4_999, 50),
+        (ThresholdMs, 5, Judge::PGreat, -5_000, 0),
+        (ThresholdMs, 5, Judge::PGreat, 5_000, 100),
+        (ThresholdMs, 5, Judge::PGreat, -5_001, 0),
+        (ThresholdMs, 5, Judge::PGreat, 5_001, 100),
+        (ThresholdMs, 0, Judge::PGreat, -1, 0),
+        (ThresholdMs, 0, Judge::PGreat, 1, 100),
+        (ThresholdMs, 0, Judge::PGreat, 0, 50),
+        (Auto, 5, Judge::Great, -1_000, 0),
+        (Auto, 5, Judge::Good, 1_000, 100),
+        (Auto, 5, Judge::Bad, -1_000, 0),
+        (ThresholdMs, 5, Judge::Great, 1_000, 100),
+        (ThresholdMs, 5, Judge::Good, -1_000, 0),
+        (ThresholdMs, 5, Judge::Bad, 1_000, 100),
+        (ThresholdMs, 0, Judge::Poor, -10_000, 50),
+        (ThresholdMs, 0, Judge::EmptyPoor, 10_000, 50),
+    ];
+    for replay_playback in [false, true] {
+        for (scope, threshold, judge, delta_us, frame) in cases {
+            // Each case begins a new attempt, with no preceding lane effect.
+            renderer.prepare_scene(AppSceneSnapshot::Play(RenderSnapshot::default()));
+            let time = TimeUs(1_000_000);
+            let side = if delta_us < 0 { TimingSide::Fast } else { TimingSide::Slow };
+            let mut snapshot = RenderSnapshot {
+                time,
+                play_elapsed_time: time,
+                key_mode: KeyMode::K6,
+                replay_playback,
+                recent_judgements: vec![DisplayJudgement {
+                    lane: Lane::Key1,
+                    judge,
+                    side: Some(side),
+                    delta_us,
+                    time,
+                    text: String::new(),
+                    combo: 1,
+                    is_miss: judge == Judge::Poor,
+                    timing_ms_suppressed: false,
+                }],
+                // Raw events must not bypass the display filter.
+                skin_events: vec![SkinRuntimeEvent {
+                    sequence: 1,
+                    kind: SkinRuntimeEventKind::Judgement(JudgementEvent {
+                        note_id: None,
+                        lane: Lane::Key1,
+                        judge,
+                        side,
+                        delta: TimeUs(delta_us),
+                        time,
+                        affects_score: true,
+                    }),
+                }],
+                ..Default::default()
+            };
+            apply_fast_slow_display_filter(&mut snapshot, threshold, scope);
+            renderer.prepare_scene(AppSceneSnapshot::Play(snapshot));
+            let uv = renderer
+                .last_plan()
+                .unwrap()
+                .commands
+                .iter()
+                .find_map(|command| match command {
+                    DrawCommand::Image { texture: id, uv, .. } if id.0 == texture.0 => Some(*uv),
+                    _ => None,
+                })
+                .expect("lane timing image");
+            let actual_frame = (uv.y * rows as f32).round() as i32 * columns
+                + (uv.x * columns as f32).round() as i32;
+            assert_eq!(
+                actual_frame, frame,
+                "{scope:?} {threshold}ms {judge:?} {delta_us}us replay={replay_playback}"
+            );
+        }
+    }
+}
+
+#[test]
 fn qwilight_completion_uses_sparse_lossless_frames_and_bmz_outcomes() {
     let (_root, decoded) = expanded_fixture();
     assert_eq!(decoded.document.deferred_sources.len(), 6);

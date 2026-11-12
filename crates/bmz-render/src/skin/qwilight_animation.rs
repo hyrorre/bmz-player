@@ -64,27 +64,26 @@ fn lane_index(timer_index: usize) -> usize {
 pub(super) struct KeyAnimationRuntime {
     frames: HashMap<String, (f64, bool, i32)>,
     lane_timing: [Option<(i64, i8)>; LANE_COUNT],
-    sequence: Option<u64>,
     now_us: Option<i64>,
 }
 impl KeyAnimationRuntime {
-    pub(super) fn ingest(&mut self, events: &[SkinRuntimeEvent], now_us: i64) {
+    pub(super) fn ingest(&mut self, judgements: &[crate::snapshot::DisplayJudgement], now_us: i64) {
         if self.now_us.is_some_and(|previous| now_us < previous) {
             *self = Self::default();
         }
         self.now_us = Some(now_us);
-        for event in events {
-            if self.sequence.is_some_and(|sequence| event.sequence <= sequence) {
+        for judgement in judgements {
+            // The app has already applied FAST/SLOW Auto/threshold settings to `side`.
+            // Hidden judgements leave the previous effect and its start time untouched.
+            if judgement.side.is_none() || matches!(judgement.judge, Judge::Poor | Judge::EmptyPoor)
+            {
                 continue;
             }
-            self.sequence = Some(event.sequence);
-            if let SkinRuntimeEventKind::Judgement(judgement) = &event.kind
-                && judgement.affects_score
-                && !matches!(judgement.judge, Judge::Poor | Judge::EmptyPoor)
-            {
-                self.lane_timing[judgement.lane.index()] =
-                    Some((judgement.time.0, judgement.delta.0.signum() as i8));
+            let timing = &mut self.lane_timing[judgement.lane.index()];
+            if timing.is_some_and(|(previous, _)| judgement.time.0 < previous) {
+                continue;
             }
+            *timing = Some((judgement.time.0, judgement.delta_us.signum() as i8));
         }
     }
     pub(super) fn advance(&mut self, document: &SkinDocument, state: &mut SkinDrawState, now: i32) {
@@ -345,18 +344,17 @@ mod tests {
         let document: SkinDocument = serde_json::from_str("{}").unwrap();
         let mut runtime = KeyAnimationRuntime::default();
         let mut state = SkinDrawState::default();
-        for (sequence, delta, expected) in [(1, -1000, 0), (2, 1000, 6), (3, 0, 3)] {
-            let event = SkinRuntimeEvent {
-                sequence,
-                kind: SkinRuntimeEventKind::Judgement(bmz_gameplay::judge::model::JudgementEvent {
-                    note_id: None,
-                    lane: Lane::Key1,
-                    judge: Judge::PGreat,
-                    side: TimingSide::Fast,
-                    delta: TimeUs(delta),
-                    time: TimeUs(1_000_000),
-                    affects_score: true,
-                }),
+        for (delta, expected) in [(-1000, 0), (1000, 6), (0, 3)] {
+            let event = crate::snapshot::DisplayJudgement {
+                lane: Lane::Key1,
+                judge: Judge::PGreat,
+                side: Some(TimingSide::Fast),
+                delta_us: delta,
+                time: TimeUs(1_000_000),
+                text: String::new(),
+                combo: 1,
+                is_miss: false,
+                timing_ms_suppressed: false,
             };
             runtime.ingest(&[event], 1_000_000);
             runtime.advance(&document, &mut state, 1000);
@@ -367,6 +365,83 @@ mod tests {
             runtime.ingest(&[], 0);
             runtime.advance(&document, &mut state, 0);
             assert!(state.qwilight_lane_timing.iter().all(Option::is_none));
+        }
+    }
+
+    #[test]
+    fn qwilight_lane_timing_keeps_filtered_hits_from_interrupting_or_extending_previous_effect() {
+        use crate::snapshot::DisplayJudgement;
+        use bmz_core::time::TimeUs;
+        let hit = DisplayJudgement {
+            lane: Lane::Key1,
+            judge: Judge::Great,
+            side: Some(TimingSide::Fast),
+            delta_us: -10_000,
+            time: TimeUs(1_000_000),
+            text: String::new(),
+            combo: 1,
+            is_miss: false,
+            timing_ms_suppressed: false,
+        };
+        let document: SkinDocument = serde_json::from_str("{}").unwrap();
+        let image: SkinImageDef =
+            serde_json::from_value(serde_json::json!({"id":"meter","src":"0"})).unwrap();
+        let animation = SkinQwilightAnimation {
+            mode: "laneTiming".into(),
+            count: 4,
+            fps: 10,
+            lane: 1,
+            ..Default::default()
+        };
+        let mut state = SkinDrawState::default();
+        for timing_ms_suppressed in [false, true] {
+            let mut runtime = KeyAnimationRuntime::default();
+            let other = DisplayJudgement { lane: Lane::Key8, ..hit.clone() };
+            runtime.ingest(&[hit.clone(), other.clone()], 1_000_000);
+            runtime.advance(&document, &mut state, 1000);
+            assert_eq!(state.qwilight_lane_timing[Lane::Key1.index()], Some((0, -1)));
+            let hidden = DisplayJudgement {
+                judge: Judge::PGreat,
+                side: None,
+                time: TimeUs(1_100_000),
+                timing_ms_suppressed,
+                ..hit.clone()
+            };
+            runtime.ingest(&[hit.clone(), other, hidden.clone()], 1_100_000);
+            runtime.advance(&document, &mut state, 1100);
+            assert_eq!(state.qwilight_lane_timing[Lane::Key1.index()], Some((100, -1)));
+            assert_eq!(state.qwilight_lane_timing[Lane::Key8.index()], Some((100, -1)));
+            assert_eq!(image_frame(&image, &animation, Some(&state), 0), 1);
+
+            // Hidden hits and miss/empty-poor events do not restart the animation either.
+            runtime.ingest(
+                &[
+                    hit.clone(),
+                    hidden,
+                    DisplayJudgement { judge: Judge::Poor, time: TimeUs(1_200_000), ..hit.clone() },
+                    DisplayJudgement {
+                        judge: Judge::EmptyPoor,
+                        time: TimeUs(1_200_000),
+                        ..hit.clone()
+                    },
+                ],
+                1_300_000,
+            );
+            runtime.advance(&document, &mut state, 1300);
+            assert_eq!(state.qwilight_lane_timing[Lane::Key1.index()], Some((300, -1)));
+            assert_eq!(image_frame(&image, &animation, Some(&state), 0), 3);
+
+            let slow = DisplayJudgement {
+                side: Some(TimingSide::Slow),
+                delta_us: 10_000,
+                time: TimeUs(1_400_000),
+                ..hit.clone()
+            };
+            runtime.ingest(&[slow], 1_400_000);
+            runtime.ingest(std::slice::from_ref(&hit), 1_500_000);
+            runtime.advance(&document, &mut state, 1500);
+            assert_eq!(state.qwilight_lane_timing[Lane::Key1.index()], Some((100, 1)));
+            assert_eq!(state.qwilight_lane_timing[Lane::Key8.index()], Some((500, -1)));
         }
     }
 }

@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-13 | [Qwilightのレーン別FAST/SLOWと表示フィルター](2026/2026-11-13-qwilight-lane-timing-filter.md) |
 | 2026-11-13 | [Qwilightの終了演出とプレイ表示の補完](2026/2026-11-13-qwilight-play-completion.md) |
 | 2026-11-13 | [Qwilight CR_minimalの表示欠落とLIFT連動](2026/2026-11-13-qwilight-play-visuals.md) |
 | 2026-11-13 | [Qwilightの情報表示とビジュアライザー](2026/2026-11-13-qwilight-play-information.md) |
