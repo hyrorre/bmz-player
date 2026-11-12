@@ -13,6 +13,8 @@ pub(super) struct DetailOptionsState {
     pub value_latched: bool,
     pub blocked_controls: std::collections::HashSet<InputSource>,
     pub dirty: bool,
+    /// Last FREQ change from LR2 slider 26 that is not saved yet.
+    pub freq_slider_changed_at: Option<Instant>,
     pub closing: Option<DetailOptionsClosingSnapshot>,
     repeat_value: Option<(InputSource, i32, Instant)>,
     scroll: SelectBarScroll,
@@ -385,7 +387,39 @@ impl WinitApp {
     pub(super) fn set_freq_from_lr2_pitch_slider(&mut self, progress: f32) -> bool {
         let item = DetailOptionDef::for_setting(SettingsEntryId::Freq).expect("FREQ catalog entry");
         let semitones = bmz_render::skin::lr2_pitch_slider_semitones(progress);
-        self.apply_detail_setting(item, DetailValueEdit::Number(i64::from(semitones)))
+        let changed =
+            self.apply_detail_setting(item, DetailValueEdit::Number(i64::from(semitones)));
+        if changed {
+            // LR2 select skins have no detail panel close to flush this edit.
+            self.select.detail_options.freq_slider_changed_at = Some(Instant::now());
+        }
+        changed
+    }
+
+    /// Saves an LR2 slider 26 FREQ change once the drag ends or the slider has
+    /// been idle for [`LR2_FREQ_SLIDER_SAVE_IDLE`], instead of on every drag frame.
+    pub(super) fn flush_lr2_freq_slider_save(&mut self) {
+        let in_select = self.current_scene_kind() == AppSceneKind::Select;
+        if !lr2_freq_slider_save_due(
+            self.select.detail_options.freq_slider_changed_at,
+            self.select.select_slider_dragging_type == Some(26),
+            in_select,
+            Instant::now(),
+        ) {
+            return;
+        }
+        if !in_select {
+            // The profile already holds the new FREQ. The select-side option save
+            // would switch the active play mode, so write the profile as it is.
+            self.select.detail_options.freq_slider_changed_at = None;
+            self.queue_profile_config_save("lr2 freq slider");
+            return;
+        }
+        if self.detail_options_active() {
+            // The open panel keeps its deferred save; closing it saves this edit too.
+            return;
+        }
+        self.save_detail_options_if_dirty();
     }
 
     fn apply_detail_setting(&mut self, item: DetailOptionDef, edit: DetailValueEdit) -> bool {
@@ -434,6 +468,7 @@ impl WinitApp {
     }
 
     pub(super) fn save_detail_options_if_dirty(&mut self) {
+        self.select.detail_options.freq_slider_changed_at = None;
         if !self.select.detail_options.dirty {
             return;
         }
@@ -565,6 +600,26 @@ fn detail_nine_key_input(lane: Lane) -> Option<DetailInput> {
     }
 }
 
+/// Idle time after the last LR2 slider 26 change before it is saved while the
+/// pointer is still held on the slider.
+pub(super) const LR2_FREQ_SLIDER_SAVE_IDLE: Duration = Duration::from_millis(500);
+
+/// Whether a pending LR2 slider 26 FREQ change should be saved now: the drag
+/// ended, Select was left, or the slider has been idle long enough.
+pub(super) fn lr2_freq_slider_save_due(
+    changed_at: Option<Instant>,
+    dragging_freq_slider: bool,
+    in_select: bool,
+    now: Instant,
+) -> bool {
+    let Some(changed_at) = changed_at else {
+        return false;
+    };
+    !dragging_freq_slider
+        || !in_select
+        || now.saturating_duration_since(changed_at) >= LR2_FREQ_SLIDER_SAVE_IDLE
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -597,6 +652,39 @@ mod tests {
 
     fn both_slots() -> GamepadSlotMap {
         GamepadSlotMap::from_slot_ids([Some(0), Some(1)])
+    }
+
+    #[test]
+    fn lr2_freq_slider_saves_on_drag_end_select_exit_or_idle_but_not_per_drag_frame() {
+        let t = Instant::now();
+        let ms = Duration::from_millis;
+        // Nothing pending: never saves.
+        assert!(!lr2_freq_slider_save_due(None, false, true, t));
+        assert!(!lr2_freq_slider_save_due(None, true, false, t + ms(1_000)));
+        // Drag frames keep moving the change time, so a continuous drag waits.
+        let mut changed_at = t;
+        for frame in 1..=30 {
+            let now = t + ms(frame * 16);
+            assert!(!lr2_freq_slider_save_due(Some(changed_at), true, true, now), "{frame}");
+            changed_at = now;
+        }
+        // Releasing the pointer saves on the next update.
+        assert!(lr2_freq_slider_save_due(Some(changed_at), false, true, changed_at));
+        // Holding the handle still saves once the idle interval passes.
+        assert!(!lr2_freq_slider_save_due(
+            Some(changed_at),
+            true,
+            true,
+            changed_at + LR2_FREQ_SLIDER_SAVE_IDLE - ms(1),
+        ));
+        assert!(lr2_freq_slider_save_due(
+            Some(changed_at),
+            true,
+            true,
+            changed_at + LR2_FREQ_SLIDER_SAVE_IDLE,
+        ));
+        // Leaving Select during the drag saves immediately.
+        assert!(lr2_freq_slider_save_due(Some(changed_at), true, false, changed_at));
     }
 
     #[test]
