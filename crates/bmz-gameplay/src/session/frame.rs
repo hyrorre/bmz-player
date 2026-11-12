@@ -12,12 +12,12 @@ pub fn sync_judge_windows(session: &mut GameSession, now: TimeUs) {
         session.rule_mode,
         session.primary_key_mode,
     );
-    // Replay timestamps already use chart time; viewing speed must not change scoring.
-    let windows = if session.replay_player.is_some() {
-        windows
+    let rate = if session.replay_player.is_some() {
+        session.replay_judge_rate_percent
     } else {
-        scale_judge_windows_for_playback_rate(windows, session.audio_clock.playback_rate_percent())
+        session.audio_clock.playback_rate_percent()
     };
+    let windows = scale_judge_windows_for_playback_rate(windows, rate);
     session.judge.set_window_set(windows);
 }
 
@@ -380,11 +380,12 @@ fn advance_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
         opponent.rule_mode,
         opponent.key_mode,
     );
-    let windows = if opponent.replay_player.is_some() {
-        windows
+    let rate = if opponent.replay_player.is_some() {
+        opponent.replay_judge_rate_percent
     } else {
-        scale_judge_windows_for_playback_rate(windows, playback_rate_percent)
+        playback_rate_percent
     };
+    let windows = scale_judge_windows_for_playback_rate(windows, rate);
     opponent.judge.set_window_set(windows);
 
     let inputs = if let Some(replay) = &mut opponent.replay_player {

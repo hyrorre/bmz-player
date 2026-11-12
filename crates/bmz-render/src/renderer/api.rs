@@ -859,6 +859,14 @@ impl Renderer {
             return Ok(RenderSurfaceStatus::SkippedNoSurface);
         };
         let Some(plan) = &self.last_plan else {
+            // Viewer can spend several frames loading its first skin. Texture
+            // deltas still form an ordered stream before a draw plan exists.
+            if !gpu.check_device_loss()?
+                && let Some(frame) = self.pending_egui.take()
+            {
+                gpu.egui.update_textures(&gpu.device, &gpu.queue, &frame);
+                gpu.egui.free_textures(&frame);
+            }
             return Ok(RenderSurfaceStatus::SkippedNoSurface);
         };
         let egui = self.pending_egui.take();

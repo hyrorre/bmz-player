@@ -339,3 +339,59 @@ fn egui_full_partial_and_free_survive_suspended_frames() {
     renderer.resize_surface(SurfaceSize { width: 32, height: 32 }).unwrap();
     assert_eq!(renderer.render_last_plan().unwrap(), RenderSurfaceStatus::Rendered);
 }
+
+#[test]
+#[ignore = "requires a GPU; reproduces Viewer menu updates before the first draw plan"]
+fn egui_full_partial_and_free_survive_initial_skin_loading() {
+    let mut renderer = renderer();
+    let plan = renderer.last_plan.take().unwrap();
+    let id = egui::TextureId::Managed(7);
+    for delta in [
+        egui::epaint::ImageDelta::full(
+            egui::ColorImage::filled([2, 2], egui::Color32::RED),
+            egui::TextureOptions::NEAREST,
+        ),
+        egui::epaint::ImageDelta::partial(
+            [1, 0],
+            egui::ColorImage::filled([1, 1], egui::Color32::GREEN),
+            egui::TextureOptions::NEAREST,
+        ),
+    ] {
+        renderer.set_egui_frame(EguiFrame {
+            primitives: vec![],
+            pixels_per_point: 1.0,
+            textures_delta: egui::TexturesDelta { set: vec![(id, delta)], free: vec![] },
+        });
+        assert_eq!(renderer.render_last_plan().unwrap(), RenderSurfaceStatus::SkippedNoSurface);
+        assert!(renderer.pending_egui.is_none());
+    }
+    renderer.last_plan = Some(plan);
+    let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(64.0, 64.0));
+    let mut mesh = egui::Mesh::with_texture(id);
+    mesh.add_rect_with_uv(
+        rect,
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        egui::Color32::WHITE,
+    );
+    renderer.set_egui_frame(EguiFrame {
+        primitives: vec![egui::ClippedPrimitive {
+            clip_rect: rect,
+            primitive: egui::epaint::Primitive::Mesh(mesh),
+        }],
+        pixels_per_point: 1.0,
+        textures_delta: Default::default(),
+    });
+    assert_eq!(renderer.render_last_plan().unwrap(), RenderSurfaceStatus::Rendered);
+    let pixels = renderer.read_offscreen_rgba().unwrap();
+    let pixel = |x: usize, y: usize| &pixels[(y * 64 + x) * 4..(y * 64 + x + 1) * 4];
+    assert_eq!(pixel(8, 8), &[255, 0, 0, 255]);
+    assert_eq!(pixel(48, 8), &[0, 255, 0, 255]);
+    renderer.last_plan = None;
+    renderer.set_egui_frame(EguiFrame {
+        primitives: vec![],
+        pixels_per_point: 1.0,
+        textures_delta: egui::TexturesDelta { set: vec![], free: vec![id] },
+    });
+    renderer.render_last_plan().unwrap();
+    assert!(renderer.gpu.as_ref().unwrap().egui.texture_for_test(id).is_none());
+}

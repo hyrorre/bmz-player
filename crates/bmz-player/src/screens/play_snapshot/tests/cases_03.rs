@@ -191,6 +191,7 @@ fn build_render_snapshot_reports_independent_opponent_skin_timers() {
             session_mode: SessionMode::GBattle,
             battle_opponent: Some(BattleOpponentOptions {
                 replay_player: None,
+                replay_judge_rate_percent: 100,
                 gauge: None,
                 arrange: ArrangeOption::Normal,
                 arrange_2p: ArrangeOption::Normal,

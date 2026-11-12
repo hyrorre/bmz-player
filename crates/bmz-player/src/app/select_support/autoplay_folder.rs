@@ -8,7 +8,13 @@ const AUTOPLAY_FOLDER_MAX_DEPTH: usize = 16;
 ///
 /// 曲フォルダに加え、難易度表・検索・仮想フォルダなど、選曲画面で開くと譜面が並ぶ
 /// フォルダを対象にする。コース・コマンド・設定などの行は対象外。
-pub(in crate::app) fn autoplay_folder_row_supported(kind: SelectRowKind) -> bool {
+pub(in crate::app) fn autoplay_folder_row_supported(item: &SelectItem) -> bool {
+    let SelectItem::Folder { path, kind, .. } = item else {
+        return false;
+    };
+    if path.starts_with(crate::screens::select_model::VIRTUAL_FOLDER_PATH_PREFIX) {
+        return true;
+    }
     matches!(
         kind,
         SelectRowKind::Folder
@@ -60,7 +66,7 @@ impl AutoplayFolderCollector<'_, '_> {
                         self.push_chart(chart.chart_id);
                     }
                 }
-                SelectItem::Folder { path, kind, .. } if autoplay_folder_row_supported(*kind) => {
+                SelectItem::Folder { path, kind, .. } if autoplay_folder_row_supported(item) => {
                     self.collect_folder(path, *kind, depth)?;
                 }
                 _ => {}

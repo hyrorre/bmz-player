@@ -90,8 +90,7 @@ fn table_folder_autoplay_walks_every_level_once_per_chart() {
                 if path.contains(SOURCE_URL))
         })
         .expect("table folder row");
-    let SelectItem::Folder { kind, .. } = table else { unreachable!() };
-    assert!(autoplay_folder_row_supported(*kind));
+    assert!(autoplay_folder_row_supported(table));
 
     let chart_ids = autoplay_folder_chart_ids(&source, &catalog, [table]).unwrap();
 
@@ -163,7 +162,13 @@ fn autoplay_folder_skips_rows_without_charts_to_walk() {
         SelectRowKind::SettingsRoot,
         SelectRowKind::SettingsFolder,
     ] {
-        assert!(!autoplay_folder_row_supported(kind), "{kind:?}");
+        let item = SelectItem::Folder {
+            path: "bmz-command:test".into(),
+            name: "test".into(),
+            kind,
+            summary: None,
+        };
+        assert!(!autoplay_folder_row_supported(&item), "{kind:?}");
     }
     for kind in [
         SelectRowKind::Folder,
@@ -171,6 +176,87 @@ fn autoplay_folder_skips_rows_without_charts_to_walk() {
         SelectRowKind::SearchFolder,
         SelectRowKind::Container,
     ] {
-        assert!(autoplay_folder_row_supported(kind), "{kind:?}");
+        let item =
+            SelectItem::Folder { path: "/songs".into(), name: "test".into(), kind, summary: None };
+        assert!(autoplay_folder_row_supported(&item), "{kind:?}");
     }
+}
+
+#[test]
+fn builtin_virtual_folder_autoplay_walks_queries_new_songs_and_clear_types() {
+    use crate::storage::score_db::{ScoreRecord, ScoreSourceKind};
+    use bmz_core::clear::{ClearType, GaugeType};
+    let data = ProfileTestDir::new();
+    let mut boot = data.boot();
+    let (chart_id, _) = register(&mut boot, "virtual-song");
+    boot.app_config.songs.roots = vec![PathEntry {
+        path: boot.app_paths.data_dir.to_string_lossy().into_owned(),
+        enabled: true,
+        recursive: true,
+    }];
+    let sha = boot.library_db.chart_sha256_by_chart_id(chart_id).unwrap().unwrap();
+    boot.score_db
+        .insert_score(&ScoreRecord {
+            chart_sha256: sha,
+            ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
+            double_option: Default::default(),
+            applied_double_option: Default::default(),
+            played_at: 1,
+            clear_type: ClearType::Normal,
+            gauge_type: Some(GaugeType::Normal),
+            gauge_value: Some(80.0),
+            total_notes: 1,
+            playtime_seconds: 0,
+            score: Default::default(),
+            count_unprocessed_notes: false,
+            random_seed: None,
+            seed_scheme: String::new(),
+            arrange: "Normal".into(),
+            arrange_2p: "Normal".into(),
+            gauge_option: String::new(),
+            rule_mode: String::new(),
+            assist_mask: 0,
+            autoplay: false,
+            device_type: Default::default(),
+            replay_path: String::new(),
+            source_kind: ScoreSourceKind::Local,
+            source_min_bp: None,
+        })
+        .unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+        as i64;
+    boot.library_db.conn().execute("UPDATE chart_files SET first_seen_at = ?1", [now]).unwrap();
+    let source = SelectListSource::from(&boot);
+    let catalog = virtual_folders(&boot);
+    let root = build_select_items_for_stack(&source, &catalog, &[], &[]).unwrap();
+    for (path, kind) in [
+        ("bmz-filter:my-best", SelectRowKind::Command),
+        ("bmz-filter:new", SelectRowKind::NewSongFolder),
+        ("bmz-filter:clear-type", SelectRowKind::Container),
+    ] {
+        let item = root
+            .iter()
+            .find(|item| {
+                matches!(item,
+            SelectItem::Folder { path: actual, kind: actual_kind, .. }
+                if actual == path && *actual_kind == kind)
+            })
+            .expect(path);
+        assert!(autoplay_folder_row_supported(item));
+        assert_eq!(
+            autoplay_folder_chart_ids(&source, &catalog, [item]).unwrap(),
+            vec![chart_id],
+            "{path}"
+        );
+    }
+    let new_items =
+        build_select_items_for_stack(&source, &catalog, &["bmz-filter:new".into()], &[]).unwrap();
+    let today = new_items
+        .iter()
+        .find(|item| {
+            matches!(item,
+        SelectItem::Folder { path, .. } if path == "bmz-filter:new/day-0")
+        })
+        .unwrap();
+    assert_eq!(autoplay_folder_chart_ids(&source, &catalog, [today]).unwrap(), vec![chart_id]);
 }
