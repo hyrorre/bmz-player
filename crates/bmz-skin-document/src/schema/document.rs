@@ -86,6 +86,9 @@ pub struct SkinDocument {
     /// Image sequences assembled by format adapters, keyed by source ID.
     #[serde(default, rename = "sourceFrames")]
     pub source_frames: HashMap<String, SkinSourceFramesDef>,
+    /// Format-adapter frames kept compressed on the CPU and uploaded on demand.
+    #[serde(default, rename = "deferredSources")]
+    pub deferred_sources: Vec<String>,
     #[serde(default)]
     pub font: Vec<SkinFontDef>,
     #[serde(default, rename = "lr2SystemFonts")]
@@ -387,6 +390,33 @@ pub struct SkinSourceFramesDef {
     pub columns: u32,
 }
 
+/// Qwilight animation timing; sources may repeat to hold sparse frames.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+pub struct SkinQwilightAnimation {
+    #[serde(default)]
+    pub sources: Vec<String>,
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub count: usize,
+    #[serde(default)]
+    pub fps: u32,
+    #[serde(default, rename = "cycleMs")]
+    pub cycle_ms: i32,
+    #[serde(default)]
+    pub lane: usize,
+    #[serde(default)]
+    pub looping: i32,
+    #[serde(default, rename = "loopFrame")]
+    pub loop_frame: usize,
+    #[serde(default)]
+    pub enlarge: i32,
+    #[serde(default)]
+    pub system: i32,
+    #[serde(default)]
+    pub index: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SkinFontDef {
     #[serde(default, deserialize_with = "deserialize_skin_id")]
@@ -456,6 +486,8 @@ where
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SkinImageDef {
+    #[serde(default, rename = "qwilightAnimation")]
+    pub qwilight_animation: Option<SkinQwilightAnimation>,
     /// LR2 buttons select a flat cell, independent of atlas orientation.
     #[serde(default, rename = "lr2Button")]
     pub lr2_button: bool,
@@ -521,6 +553,8 @@ pub struct SkinImageSetDef {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 pub struct SkinValueDef {
+    #[serde(default, rename = "qwilightAnimation")]
+    pub qwilight_animation: Option<SkinQwilightAnimation>,
     /// LR2 CSV numbers use consecutive 10/11/24-cell frames rather than rows.
     #[serde(default, rename = "lr2Number")]
     pub lr2_number: bool,

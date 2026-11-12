@@ -655,6 +655,7 @@ impl WinitApp {
         };
         for source in prepared {
             let PreparedSource {
+                deferred,
                 source_id,
                 path,
                 texture,
@@ -664,6 +665,9 @@ impl WinitApp {
                 cache_key,
                 texture_lease: _texture_lease,
             } = source;
+            if let Some(deferred) = deferred {
+                self.renderer.upsert_deferred_image(TextureId(texture.0), deferred);
+            }
             let reused_video = if is_video {
                 ActiveSkinVideoSource::take_matching(&mut previous_videos, &path)
             } else {
@@ -882,6 +886,7 @@ mod deferred_upload_tests {
         }))
         .unwrap();
         let sources = [crate::skin_loader::PreparedSource {
+            deferred: None,
             texture_lease: None,
             source_id: "0".into(),
             path: image.clone(),
@@ -915,6 +920,7 @@ mod deferred_upload_tests {
         }))
         .unwrap();
         let sources = [crate::skin_loader::PreparedSource {
+            deferred: None,
             texture_lease: None,
             source_id: "0".into(),
             path: "data/skins/play/frame/selected.png".into(),

@@ -1,4 +1,6 @@
 use super::*;
+#[path = "qwilight_additions.rs"]
+mod additions;
 
 fn fixture() -> (tempfile::TempDir, DecodedSkin) {
     use std::io::Write;
@@ -69,7 +71,7 @@ point:
         "Drawing/P 1 0.png",
         "Drawing/P 1 1.png",
         "Drawing/P 2.png",
-        "Drawing/HP 2 0.png",
+        "Drawing/HP 1 0.png",
         "Bin/JM +.png",
         "Bin/JM -.png",
         "Bin/Millis.png",
@@ -408,7 +410,7 @@ fn qwilight_background_defaults_once_animation_and_gauge_are_visible() {
     assert_eq!(items(&decoded, "qw-paint-1-1", &state).len(), 1, "mode 2 holds its final frame");
     for gauge in [0.0, 20.0, 80.0, 100.0] {
         state.gauge = gauge;
-        let gauge_items = items(&decoded, "qw-gauge", &state);
+        let gauge_items = items(&decoded, "qw-hitPoints-", &state);
         if gauge == 0.0 {
             assert!(gauge_items.is_empty());
             continue;

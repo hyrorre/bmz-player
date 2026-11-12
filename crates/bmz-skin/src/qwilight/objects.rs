@@ -1,5 +1,8 @@
 use super::{customize::LaneCoverChoice, layout::Layout, resources::Resources, *};
 
+mod colors;
+mod completion;
+mod extras;
 mod hud;
 mod information;
 
@@ -39,6 +42,7 @@ impl Builder {
         document["w"] = json!(layout.width.round() as u32);
         document["h"] = json!(layout.height.round() as u32);
         document["type"] = json!(layout.skin_type);
+        document["deferredSources"] = json!([]);
         Ok(Self {
             document,
             warnings: Vec::new(),
@@ -100,14 +104,20 @@ impl Builder {
         self.source_ids.insert((paths, columns), id.clone());
         id
     }
-    fn image(&mut self, id: &str, paths: Vec<String>, cycle: i32, timer: Option<i32>) -> bool {
+    fn image(&mut self, id: &str, mut paths: Vec<String>, cycle: i32, timer: Option<i32>) -> bool {
         if paths.is_empty() {
             return false;
         }
         let n = paths.len();
-        let cols = (1..=n).filter(|v| n.is_multiple_of(*v) && v * v <= n).max().unwrap_or(1);
+        // Prime frame counts must not force tall effects into a single column.
+        // Preserve logical timing when the final atlas row has unused cells.
+        let cols = (n as f64).sqrt().ceil() as usize;
+        let rows = n.div_ceil(cols);
+        paths.resize(cols * rows, paths.last().unwrap().clone());
         let src = self.source(paths, cols);
-        self.push("image",json!({"id":id,"src":src,"w":-1,"h":-1,"divx":cols,"divy":n/cols,"cycle":cycle,"timer":timer}));
+        let animation =
+            (cols * rows != n).then(|| json!({"mode":"loop","count":n,"cycleMs":cycle}));
+        self.push("image",json!({"id":id,"src":src,"w":-1,"h":-1,"divx":cols,"divy":rows,"cycle":cycle,"timer":timer,"qwilightAnimation":animation}));
         true
     }
     fn point(&self, name: &str, default: f64) -> Result<f64> {
@@ -139,6 +149,8 @@ impl Builder {
         self.judgments()?;
         self.hud()?;
         self.information()?;
+        self.extras()?;
+        self.completion()?;
         self.lane_cover()?;
         self.destinations.retain(|id, _| !self.eval.hidden_pipelines.contains(id));
         let pipeline = self
@@ -164,6 +176,7 @@ impl Builder {
                 destinations.extend(self.destinations.remove(&PIPELINE_VEIL).unwrap_or_default());
             }
         }
+        destinations.extend(self.destinations.remove(&62).unwrap_or_default());
         self.document["destination"] = json!(destinations);
         self.warnings.push("Qwilight play compatibility is experimental; online UI and pause-menu assets are not implemented. Scoring and judgments follow the selected BMZ rules.".into());
         Ok(())
@@ -181,30 +194,34 @@ impl Builder {
                 ("mine", 9, 0),
                 ("hidden", 4, 0),
             ] {
-                let prefix =
-                    self.eval.prefix("_GetNote", &[lane.material, 0, kind, status], "N")?;
-                let stem = format!("Note/{prefix} {}", lane.material);
-                let mut paths = if (1..=3).contains(&kind) {
-                    self.resources.sequence(&stem, count, &format!(" {kind} {status}"))
-                } else {
-                    Vec::new()
-                };
-                if paths.is_empty() && status > 0 {
-                    paths = self.resources.sequence(&stem, count, &format!(" {kind} 0"));
-                }
-                if paths.is_empty() {
-                    paths = self.resources.sequence(&stem, count, &format!(" {kind}"));
-                }
-                if paths.is_empty() {
-                    paths = self.resources.sequence(
-                        &format!("Note/{prefix} 0"),
-                        count,
-                        &format!(" {kind}"),
-                    );
-                }
-                if paths.is_empty() && (1..=3).contains(&kind) {
-                    paths = self.resources.sequence(&stem, count, " 0");
-                }
+                let paths = self.resources.animated(count, |frame| {
+                    let prefix =
+                        self.eval.prefix("_GetNote", &[lane.material, frame, kind, status], "N")?;
+                    let stem = format!("Note/{prefix} {}", lane.material);
+                    let path = if (1..=3).contains(&kind) {
+                        self.resources
+                            .frame(&stem, frame, &format!(" {kind} {status}"))
+                            .or_else(|| self.resources.frame(&stem, frame, &format!(" {kind} 0")))
+                    } else {
+                        None
+                    };
+                    Ok(path
+                        .or_else(|| self.resources.frame(&stem, frame, &format!(" {kind}")))
+                        .or_else(|| {
+                            self.resources.frame(
+                                &format!("Note/{prefix} 0"),
+                                frame,
+                                &format!(" {kind}"),
+                            )
+                        })
+                        .or_else(|| {
+                            if (1..=3).contains(&kind) {
+                                self.resources.frame(&stem, frame, " 0")
+                            } else {
+                                None
+                            }
+                        }))
+                })?;
                 ensure!(
                     !paths.is_empty() || field != "note",
                     "missing Qwilight note image for lane {}",
@@ -252,18 +269,23 @@ impl Builder {
                 (8, "Input", "_GetInput", "I", "input", "inputPosition1", "inputHeight", None),
             ] {
                 let (count, cycle) = self.frames(frame)?;
-                let prefix = self.eval.prefix(prefix_fn, &[lane.material, 0], prefix)?;
-                let mut paths = self.resources.sequence(
-                    &format!("{folder}/{prefix} {}", lane.material),
-                    count + usize::from(pipeline != 31),
-                    "",
-                );
-                let active = if pipeline != 31 { paths.last().cloned() } else { None };
-                if pipeline != 31 {
-                    paths.truncate(1);
-                }
+                let paths = self.resources.animated(count + 1, |frame| {
+                    let prefix = self.eval.prefix(prefix_fn, &[lane.material, frame], prefix)?;
+                    Ok(self.resources.frame(
+                        &format!("{folder}/{prefix} {}", lane.material),
+                        frame,
+                        "",
+                    ))
+                })?;
                 let id = format!("qw-lane-{pipeline}-{i}");
                 if self.image(&id, paths, cycle, timer) {
+                    let fps = self.eval.number("frame", &format!("{frame}-framerate"), 60.0)?;
+                    let looping = self.eval.number(
+                        "lambda",
+                        if pipeline == 3 { "loopingMain" } else { "loopingInput" },
+                        0.0,
+                    )?;
+                    self.document["image"].as_array_mut().unwrap().last_mut().unwrap()["qwilightAnimation"] = json!({"mode":if pipeline==31 {"beat"} else {"key"},"count":count+1,"fps":fps as u32,"lane":lane.timer_index,"looping":looping as i32});
                     let y = self.eval.lane_value(
                         position,
                         lane.drawing,
@@ -285,15 +307,6 @@ impl Builder {
                     if matches!(pipeline, 8 | 31) {
                         dest["offset"] = json!(OFFSET_LIFT);
                     }
-                    if let Some(active) = active {
-                        let id = format!("{id}-pressed");
-                        let timer = Some(100 + lane.timer_index);
-                        self.image(&id, vec![active], 0, timer);
-                        let dest = self.destination(pipeline, &id, rect, timer, None);
-                        if pipeline == 8 {
-                            dest["offset"] = json!(OFFSET_LIFT);
-                        }
-                    }
                 }
             }
             for (long, prefix_fn, default, frame, timer) in [
@@ -301,17 +314,23 @@ impl Builder {
                 (true, "_GetHitLongNotePaint", "L", "hit-long-note", 70 + lane.timer_index),
             ] {
                 let (count, cycle) = self.frames(frame)?;
-                let prefix = self.eval.prefix(prefix_fn, &[lane.material, 0], default)?;
-                let mut paths = self.resources.sequence(
-                    &format!("Paint/{prefix} {}", lane.material),
-                    count,
-                    "",
-                );
-                if paths.is_empty() {
-                    paths = self.resources.sequence(&format!("Paint/{prefix}"), count, "");
-                }
+                let paths = self.resources.animated(count, |frame| {
+                    let prefix = self.eval.prefix(prefix_fn, &[lane.material, frame], default)?;
+                    Ok(self
+                        .resources
+                        .frame(&format!("Paint/{prefix} {}", lane.material), frame, "")
+                        .or_else(|| self.resources.frame(&format!("Paint/{prefix}"), frame, "")))
+                })?;
                 let id = format!("qw-hit-{long}-{i}");
                 if self.image(&id, paths, cycle, Some(timer)) {
+                    if long {
+                        let loop_frame = self
+                            .eval
+                            .number("frame", "hit-long-note-loop-frame", count as f64)?
+                            .max(1.0);
+                        let fps = self.eval.number("frame", "hit-long-note-framerate", 60.0)?;
+                        self.document["image"].as_array_mut().unwrap().last_mut().unwrap()["qwilightAnimation"] = json!({"mode":"long","count":count,"fps":fps as u32,"loopFrame":loop_frame as usize,"lane":lane.timer_index});
+                    }
                     let key = if long { "hitLongNotePaint" } else { "hitNotePaint" };
                     let dx = self.eval.lane_value(&format!("{key}Position0"), lane.drawing, 0.0)?;
                     let dy = self.eval.lane_value(&format!("{key}Position1"), lane.drawing, 0.0)?;
@@ -356,18 +375,24 @@ impl Builder {
                 continue;
             }
             let mode = v[7] as i32;
+            let composite =
+                values.get(9).map(|value| self.eval.numeric(value)).transpose()?.unwrap_or(0.0)
+                    as i32;
+            ensure!((0..=12).contains(&composite), "invalid Qwilight composition mode");
             if !(0..=2).contains(&mode) {
                 self.warnings
                     .push(format!("Qwilight paintProperty{index} mode {mode} is not implemented"));
                 continue;
             }
-            let prefix = self.eval.prefix("_GetPaintProperty", &[index, 0], "P")?;
-            let count = (v[5] as usize).max(1);
+            let count = (v[5] as usize).max(1) + usize::from(mode == 1);
             ensure!(count <= 256, "too many paintProperty frames");
-            let paths = self.resources.sequence(&format!("Drawing/{prefix} {index}"), count, "");
+            let paths = self.resources.animated(count, |frame| {
+                let prefix = self.eval.prefix("_GetPaintProperty", &[index, frame], "P")?;
+                Ok(self.resources.frame(&format!("Drawing/{prefix} {index}"), frame, ""))
+            })?;
             let id = format!("qw-paint-{index}");
             let cycle = (count as f64 * 1000.0 / v[6].max(1.0)).round() as i32;
-            // Mode 0 loops, mode 1 rests on frame zero until an input event,
+            // Mode 0 loops, mode 1 decays to frame zero after each beat,
             // mode 2 plays once and holds its final frame (often a static frame).
             let variants = if mode == 2 {
                 paths
@@ -389,12 +414,15 @@ impl Builder {
                     })
                     .collect::<Vec<_>>()
             } else {
-                let paths = if mode == 1 { paths.into_iter().take(1).collect() } else { paths };
                 vec![(id, paths, cycle, String::new())]
             };
             for (id, paths, cycle, draw) in variants {
                 if !self.image(&id, paths, cycle, Some(41)) {
                     continue;
+                }
+                if mode == 1 {
+                    self.document["image"].as_array_mut().unwrap().last_mut().unwrap()["qwilightAnimation"] =
+                        json!({"mode":"beat","count":count,"fps":v[6].max(1.0) as u32});
                 }
                 let offsets = match (self.layout.dp_offset, v[4] as i32) {
                     (Some(dx), 1) => vec![dx],
@@ -412,6 +440,7 @@ impl Builder {
                         None,
                     );
                     destination["draw"] = json!(draw);
+                    destination["blend"] = json!(100 + composite);
                     // Decorations anchored on the judgement line (including
                     // older skins' two-pixel line without a pipeline hint)
                     // follow the line, as do explicit JudgmentMain decorations.
@@ -450,18 +479,33 @@ impl Builder {
         ref_id: i32,
         digits: i32,
     ) -> Result<bool> {
-        let prefix = self.eval.prefix(prefix_fn, &[], default)?;
-        let paths = (0..10)
-            .map(|i| {
-                self.resources
-                    .path(&format!("Bin/{prefix} {i}"))
-                    .or_else(|| self.resources.path(&format!("Bin/{prefix} {i} 0")))
-                    .or_else(|| self.resources.path(&format!("Bin/{i}")))
-            })
-            .collect::<Option<Vec<_>>>();
-        let Some(paths) = paths else { return Ok(false) };
+        let (count, cycle) = if ref_id == 104 { self.frames("band")? } else { (1, 0) };
+        let mut paths = Vec::new();
+        let mut previous: Vec<Option<String>> = vec![None; 10];
+        for frame in 0..count {
+            for (digit, previous) in previous.iter_mut().enumerate() {
+                let prefix = self.eval.prefix(prefix_fn, &[digit, frame], default)?;
+                let path = self
+                    .resources
+                    .path(&format!("Bin/{prefix} {digit} {frame}"))
+                    .or_else(|| previous.clone())
+                    .or_else(|| self.resources.path(&format!("Bin/{prefix} {digit}")))
+                    .or_else(|| self.resources.path(&format!("Bin/{digit}")));
+                let Some(path) = path else { return Ok(false) };
+                *previous = Some(path.clone());
+                paths.push(path);
+            }
+        }
         let src = self.source(paths, 10);
-        self.push("value",json!({"id":id,"src":src,"w":-1,"h":-1,"divx":10,"digit":digits,"ref":ref_id,"align":2,"padding":0}));
+        let mut value = json!({"id":id,"src":src,"w":-1,"h":-1,"divx":10,"divy":count,"digit":digits,"ref":ref_id,"align":2,"padding":0});
+        if ref_id == 104 {
+            value["timer"] = json!(46);
+            value["cycle"] = json!(cycle);
+            let loop_ms = self.eval.number("frame", "last-enlarged-band-loop-frame", 0.0)? * 1000.0
+                / self.eval.number("frame", "hit-long-note-framerate", 60.0)?.max(1.0);
+            value["qwilightAnimation"] = json!({"mode":"reverse","count":count,"fps":self.eval.number("frame","band-framerate",60.0)? as u32,"enlarge":self.point("enlargeBand",0.0)?.round() as i32,"looping":loop_ms.round() as i32});
+        }
+        self.push("value", value);
         Ok(true)
     }
     fn judgments(&mut self) -> Result<()> {
@@ -481,14 +525,12 @@ impl Builder {
             ensure!((0.0..=1000.0).contains(&repeats), "invalid Qwilight judgment repeat count");
             let fps = self.eval.number("frame", "judgment-paint-framerate", 60.0)?;
             let duration = (count as f64 * 1000.0 * repeats / fps).round() as i32;
-            let prefix = self.eval.prefix("_GetJudgmentPaint", &[qw, 0], "J")?;
             let id = format!("qw-judge-{bmz}");
-            self.image(
-                &id,
-                self.resources.sequence(&format!("Paint/{prefix} {qw}"), count, ""),
-                cycle,
-                None,
-            );
+            let paths = self.resources.animated(count, |frame| {
+                let prefix = self.eval.prefix("_GetJudgmentPaint", &[qw, frame], "J")?;
+                Ok(self.resources.frame(&format!("Paint/{prefix} {qw}"), frame, ""))
+            })?;
+            self.image(&id, paths, cycle, None);
             let mut last = self.rect(x, y, w, h);
             last["time"] = json!(duration);
             images.push(json!({"id":id,"loop":-1,"filter":1,"offsets":[OFFSET_LIFT,OFFSET_JUDGE],
@@ -606,20 +648,6 @@ impl Builder {
         }
         self.fractional_hud()?;
         self.judgment_meter()?;
-        let [x, y, w, h] = self.area("hitPoints")?;
-        if let Some(path) = self
-            .resources
-            .path("Drawing/HP 2 0")
-            .or_else(|| self.resources.path("Drawing/HP 2"))
-            .or_else(|| self.resources.path("Drawing/HP 0 0"))
-            .or_else(|| self.resources.path("Drawing/HP 0"))
-        {
-            let src = self.source(vec![path], 1);
-            self.push("graph",json!({"id":"qw-gauge","src":src,"w":-1,"h":-1,"angle":if self.point("hitPointsSystem",0.0)? as i32==0{1}else{0},"type":107,"isRefNum":true,"min":0,"max":100}));
-            for dx in self.alt_offsets("alt-hit-points", 2)? {
-                self.destination(6, "qw-gauge", self.rect(x + dx, y, w, h), None, None);
-            }
-        }
         Ok(())
     }
 
@@ -697,6 +725,16 @@ impl Builder {
         for (pipeline, name, bin, prefix, whole_ref, fraction_ref, unit, fallback_unit) in [
             (14, "multiplier", "binMultiplier", "M", 310, 311, "MW", "X"),
             (12, "point", "binPoint", "P", 102, 103, "P %", "%"),
+            (
+                33,
+                "audioMultiplier",
+                "binAudioMultiplier",
+                "A",
+                bmz_skin_document::SKIN_REF_BMZ_PLAYBACK_INTEGER,
+                bmz_skin_document::SKIN_REF_BMZ_PLAYBACK_FRACTION,
+                "AW",
+                "X",
+            ),
             (
                 56,
                 "judgmentVSVisualizer",

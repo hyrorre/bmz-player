@@ -261,6 +261,9 @@ pub const SKIN_REF_BMZ_JUDGMENT_RATIO_INTEGER: i32 = 19_260;
 pub const SKIN_REF_BMZ_JUDGMENT_RATIO_FRACTION: i32 = 19_261;
 /// Full chart duration in minutes, without beatoraja 1163's modulo 60.
 pub const SKIN_REF_BMZ_CHART_TOTAL_MINUTES: i32 = 19_262;
+/// Current BMZ FREQ playback multiplier, integer and hundredths.
+pub const SKIN_REF_BMZ_PLAYBACK_INTEGER: i32 = 19_263;
+pub const SKIN_REF_BMZ_PLAYBACK_FRACTION: i32 = 19_264;
 /// DETAIL OPTIONS v1. Number/text/option are independent namespaces.
 pub const SKIN_REF_DETAIL_OPTIONS_BASE: i32 = 19_300;
 pub const SKIN_REF_DETAIL_OPTIONS_LAST: i32 = 19_312;

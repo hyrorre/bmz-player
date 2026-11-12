@@ -152,19 +152,25 @@ fn qwilight_settings_defs_follow_slot_options_and_keep_only_effective_offsets() 
     };
     let hidden = BTreeMap::from([("Colors".to_string(), "Hide".to_string())]);
     let shown = BTreeMap::from([("Colors".to_string(), "Show".to_string())]);
-    assert_eq!(names(&defs(Some(&hidden))), ["Colors", "Lane cover image"]);
+    assert_eq!(
+        names(&defs(Some(&hidden))),
+        ["Colors", "Qwilight time display", "Lane cover image"]
+    );
     let visible = defs(Some(&shown));
     assert_eq!(
         visible.property.iter().filter(|p| p.name.starts_with("Qwilight show ")).count(),
-        26
+        34
     );
     assert_eq!(
         visible.property_label("Qwilight show Spectrum", crate::i18n::AppLocale::Ja),
         "表示: スペクトラムアナライザ"
     );
-    assert_eq!(names(&visible), ["Colors", "Color", "Lane cover image"]);
+    assert_eq!(names(&visible), ["Colors", "Color", "Qwilight time display", "Lane cover image"]);
     // The catalog header lists every option without running Lua.
-    assert_eq!(names(&defs(None)), ["Colors", "Color", "Lane cover image"]);
+    assert_eq!(
+        names(&defs(None)),
+        ["Colors", "Color", "Qwilight time display", "Lane cover image"]
+    );
     assert!(visible.qwilight);
     assert_eq!(visible.property_label("Color", crate::i18n::AppLocale::Ko), "색");
     assert_eq!(visible.property_label("Color", crate::i18n::AppLocale::Ja), "Color");

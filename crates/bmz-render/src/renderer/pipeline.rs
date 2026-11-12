@@ -219,7 +219,15 @@ pub(super) fn create_image_pipeline(
         | BlendMode::Add
         | BlendMode::Subtract
         | BlendMode::Multiply
-        | BlendMode::Premultiplied => IMAGE_SHADER,
+        | BlendMode::Premultiplied
+        | BlendMode::Composite(_) => IMAGE_SHADER,
+    };
+    let composite_shader;
+    let shader_source = if matches!(blend_mode, BlendMode::Composite(_)) {
+        composite_shader=shader_source.replace("return textureSample(image_texture, image_sampler, input.uv) * input.tint;", "let color = textureSample(image_texture, image_sampler, input.uv) * input.tint; return vec4<f32>(color.rgb * color.a, color.a);");
+        composite_shader.as_str()
+    } else {
+        shader_source
     };
     let label = match blend_mode {
         BlendMode::Normal => "bmz-render image pipeline",
@@ -228,6 +236,7 @@ pub(super) fn create_image_pipeline(
         BlendMode::Multiply => "bmz-render multiply image pipeline",
         BlendMode::Premultiplied => "bmz-render premultiplied image pipeline",
         BlendMode::LayerMask => "bmz-render layer-mask image pipeline",
+        BlendMode::Composite(_) => "bmz-render composite image pipeline",
     };
     create_image_quad_pipeline(
         device,
@@ -258,7 +267,7 @@ pub(super) fn create_image_quad_pipeline(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
     bind_group_layout: &wgpu::BindGroupLayout,
-    shader_source: &'static str,
+    shader_source: &str,
     label: &'static str,
     blend: Option<wgpu::BlendState>,
 ) -> wgpu::RenderPipeline {
@@ -331,6 +340,38 @@ pub(super) fn create_image_quad_pipeline(
 
 pub(super) fn image_blend_state(blend_mode: BlendMode) -> wgpu::BlendState {
     match blend_mode {
+        BlendMode::Composite(mode) => {
+            use wgpu::BlendFactor::*;
+            let (src_factor, dst_factor) = match mode {
+                1 => (OneMinusDstAlpha, One),
+                2 => (DstAlpha, Zero),
+                3 => (Zero, SrcAlpha),
+                4 => (OneMinusDstAlpha, Zero),
+                5 => (Zero, OneMinusSrcAlpha),
+                6 => (DstAlpha, OneMinusSrcAlpha),
+                7 => (OneMinusDstAlpha, SrcAlpha),
+                8 => (OneMinusDstAlpha, OneMinusSrcAlpha),
+                9 => (One, One),
+                10 | 11 => (One, Zero),
+                12 => (OneMinusDst, OneMinusSrcAlpha),
+                _ => (One, OneMinusSrcAlpha),
+            };
+            let color = wgpu::BlendComponent {
+                src_factor,
+                dst_factor,
+                operation: wgpu::BlendOperation::Add,
+            };
+            let alpha = if mode == 12 {
+                wgpu::BlendComponent {
+                    src_factor: Zero,
+                    dst_factor: One,
+                    operation: wgpu::BlendOperation::Add,
+                }
+            } else {
+                color
+            };
+            wgpu::BlendState { color, alpha }
+        }
         BlendMode::Normal | BlendMode::LayerMask => wgpu::BlendState::ALPHA_BLENDING,
         BlendMode::Subtract => wgpu::BlendState {
             color: wgpu::BlendComponent {

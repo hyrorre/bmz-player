@@ -19,6 +19,7 @@ pub struct SceneTiming {
     pub countdown_us: i64,
     pub finishmargin_us: i64,
     pub close_us: i64,
+    pub completion_us: i64,
 }
 impl SceneTiming {
     pub fn from_document(d: &bmz_render::skin::SkinDocument) -> Self {
@@ -29,6 +30,7 @@ impl SceneTiming {
             countdown_us: i64::from(d.playstart.max(0)) * 1000,
             finishmargin_us: i64::from(d.finishmargin.max(0)) * 1000,
             close_us: i64::from(d.close.max(0)) * 1000,
+            completion_us: 0,
         }
     }
 
@@ -254,9 +256,14 @@ impl Simulation {
                 self.skin_audio.trigger_timer(3, self.system_bgm_volume(), self.system_volume());
             } else {
                 let snapshot = self.snapshot(scene_us, &BgaFrameCatalog::new());
-                let remaining = snapshot
-                    .full_combo_elapsed_ms
-                    .map_or(0, |elapsed| (self.fc_duration_us - i64::from(elapsed) * 1000).max(0));
+                let remaining = snapshot.full_combo_elapsed_ms.map_or(
+                    if snapshot.gauge >= snapshot.gauge_border {
+                        self.timing.completion_us
+                    } else {
+                        0
+                    },
+                    |elapsed| (self.fc_duration_us - i64::from(elapsed) * 1000).max(0),
+                );
                 self.fadeout_us = Some(scene_us + self.timing.finishmargin_us.max(remaining));
                 self.exit_us = self.fadeout_us.map(|start| start + self.fadeout_duration_us);
             }

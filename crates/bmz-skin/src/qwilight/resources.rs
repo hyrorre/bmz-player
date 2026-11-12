@@ -30,21 +30,47 @@ impl Resources {
             .get(&name.to_ascii_lowercase())
             .map(|name| format!("{}!skin/{name}", self.archive))
     }
-    pub fn sequence(&self, stem: &str, frames: usize, suffix: &str) -> Vec<String> {
-        let mut last = self
-            .path(&format!("{stem} 0{suffix}"))
-            // Only decorations/effects have a frame-less spelling. For notes,
-            // dropping the frame makes `kind state` look like `frame kind`.
-            .or_else(|| if suffix.is_empty() { self.path(stem) } else { None });
-        let mut result = Vec::new();
-        for i in 0..frames {
-            if let Some(path) = self.path(&format!("{stem} {i}{suffix}")) {
+    pub fn frame(&self, stem: &str, frame: usize, suffix: &str) -> Option<String> {
+        self.path(&format!("{stem} {frame}{suffix}"))
+            .or_else(|| if frame == 0 && suffix.is_empty() { self.path(stem) } else { None })
+    }
+    /// Resolve callback names for each frame, holding sparse frames without
+    /// shifting their time index. Leading gaps remain transparent.
+    pub fn animated(
+        &self,
+        frames: usize,
+        mut lookup: impl FnMut(usize) -> Result<Option<String>>,
+    ) -> Result<Vec<String>> {
+        let mut last = None;
+        let mut result = Vec::with_capacity(frames);
+        let mut found = false;
+        for frame in 0..frames {
+            if let Some(path) = lookup(frame)? {
                 last = Some(path);
+                found = true;
             }
-            if let Some(path) = &last {
-                result.push(path.clone());
-            }
+            result.push(last.clone().unwrap_or_else(|| "bmz://lr2/empty".into()));
         }
-        result
+        Ok(if found { result } else { Vec::new() })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn qwilight_sparse_frames_keep_time_indices_and_hold_previous_images() {
+        let resources = Resources { archive: String::new(), names: BTreeMap::new() };
+        let frames = resources
+            .animated(5, |frame| {
+                Ok(match frame {
+                    1 => Some("first".into()),
+                    3 => Some("next".into()),
+                    _ => None,
+                })
+            })
+            .unwrap();
+        assert_eq!(frames, ["bmz://lr2/empty", "first", "first", "next", "next"]);
+        assert!(resources.animated(5, |_| Ok(None)).unwrap().is_empty());
     }
 }

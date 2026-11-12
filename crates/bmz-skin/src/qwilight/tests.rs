@@ -29,6 +29,24 @@ fn global(eval: &Evaluator, name: &str) -> f64 {
 }
 
 #[test]
+fn qwilight_perfect_inherits_full_combo_definitions_but_keeps_explicit_overrides() {
+    let yaml = "format: {}\nframe: {band!-frame: 300, band!-framerate: 60, yell!-framerate: 30}\nlambda: {alt-band!: 1}\npoint: {band!System: 2, band!Position0: X(), band!Position1: 120, band!Length: 300, band!Height: 240, yell!Height: 200}";
+    let (_root, eval) = evaluator(yaml, "function X() return 42 end", BTreeMap::new());
+    for (section, key, expected) in [
+        ("frame", "yell!-frame", 300.0),
+        ("frame", "yell!-framerate", 30.0),
+        ("point", "yell!System", 2.0),
+        ("point", "yell!Position0", 42.0),
+        ("point", "yell!Position1", 120.0),
+        ("point", "yell!Length", 300.0),
+        ("point", "yell!Height", 200.0),
+        ("lambda", "alt-yell!", 1.0),
+    ] {
+        assert_eq!(eval.number(section, key, 0.0).unwrap(), expected, "{key}");
+    }
+}
+
+#[test]
 fn qwilight_adjustments_follow_set_flags_and_reach_lua_in_qwilight_direction() {
     let yaml = "format: {}\nframe: {}\nlambda:\n  setMainPosition: true\n  setNoteLength: false\n  setJudgmentMainPosition: true\n  setBandPosition: True\npoint: {}\n";
     let offset = |x, y, w| LuaSkinOffsetValue { x, y, w, ..Default::default() };

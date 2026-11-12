@@ -130,6 +130,9 @@ pub struct SkinDrawState {
     pub bomb_ms: [Option<i32>; LANE_COUNT],
     /// 各レーンのkeyon(押下中ビーム)タイマー経過ms。Noneなら非アクティブ。
     pub keyon_ms: [Option<i32>; LANE_COUNT],
+    pub qwilight_key_frames: HashMap<String, usize>,
+    /// Raw judged delta sign and age per physical lane, independent of keylogger filters.
+    pub qwilight_lane_timing: [Option<(i32, i8)>; LANE_COUNT],
     /// 各レーンのkeyoff(離した直後の演出)タイマー経過ms。Noneなら非アクティブ。
     /// beatoraja の TIMER_KEYOFF_1P_KEY1..7 (121..127) / SCRATCH (120) に対応。
     pub keyoff_ms: [Option<i32>; LANE_COUNT],
@@ -612,6 +615,8 @@ impl Default for SkinDrawState {
             end_of_note_ms: None,
             bomb_ms: [None; LANE_COUNT],
             keyon_ms: [None; LANE_COUNT],
+            qwilight_key_frames: HashMap::new(),
+            qwilight_lane_timing: [None; LANE_COUNT],
             keyoff_ms: [None; LANE_COUNT],
             keyon_started_us: [None; LANE_COUNT],
             keyoff_started_us: [None; LANE_COUNT],

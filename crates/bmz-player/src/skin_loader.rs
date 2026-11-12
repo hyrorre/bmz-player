@@ -272,6 +272,7 @@ pub enum DecodedFontData {
 }
 
 pub struct DecodedSource {
+    pub deferred: Option<Arc<bmz_render::assets::deferred::DeferredImage>>,
     pub source_id: String,
     pub path: PathBuf,
     pub texture: SkinTextureId,

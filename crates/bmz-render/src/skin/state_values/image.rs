@@ -140,6 +140,11 @@ fn skin_image_texture_region_with_elapsed(
             0
         };
         row * divx + col
+    } else if let Some(animation) =
+        image.qwilight_animation.as_ref().filter(|a| a.sources.is_empty())
+    {
+        crate::skin::qwilight_animation::image_frame(image, animation, state, elapsed_ms)
+            .min(frame_count as usize - 1) as i32
     } else if image.cycle > 0 && frame_count > 1 {
         skin_source_image_animation_frame_index(i64::from(frame_count), image.cycle, elapsed_ms)
             as i32

@@ -107,6 +107,7 @@ use state::{
 };
 #[cfg(test)]
 use surface::resolve_maximum_frame_latency;
+mod deferred;
 #[cfg(test)]
 use surface::resolve_wgpu_present_mode;
 use surface::{configure_surface_checked, configure_surface_settings, wgpu_present_mode_label};

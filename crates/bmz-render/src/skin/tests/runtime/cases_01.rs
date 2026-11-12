@@ -973,6 +973,7 @@ fn display_signed_number_digits_uses_sign_cell_and_row_offset() {
     );
 
     let score_diff_value = SkinValueDef {
+        qwilight_animation: None,
         lr2_number: false,
         id: "score_diff_mybest".to_string(),
         src: "num".to_string(),

@@ -195,6 +195,15 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
         116 | 156 => Some(score_rate_parts(state.ex_score, state.total_notes).1 as i64),
         104 => Some(state.combo as i64),
         107 => Some(state.gauge.floor() as i64),
+        SKIN_REF_BMZ_PLAYBACK_INTEGER | SKIN_REF_BMZ_PLAYBACK_FRACTION => {
+            let hundredths =
+                (2_f64.powf(f64::from(state.freq_semitones) / 12.0) * 100.0).round() as i64;
+            Some(if ref_id == SKIN_REF_BMZ_PLAYBACK_INTEGER {
+                hundredths / 100
+            } else {
+                hundredths % 100
+            })
+        }
         SKIN_REF_BMZ_LR2_GAUGE_2P => state.opponent_gauge.map(|gauge| gauge.floor() as i64),
         SKIN_REF_BMZ_LR2_HISPEED => Some(displayed_hispeed_hundredths(state)),
         407 => Some(gauge_after_dot(state.gauge) as i64),

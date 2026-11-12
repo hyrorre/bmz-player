@@ -265,6 +265,10 @@ pub fn decode_beatoraja_skin_request(
     };
     for decoded in &decoded_pairs {
         stats.decoded_source_count += 1;
+        if let Some(deferred) = &decoded.deferred {
+            stats.decoded_source_bytes =
+                stats.decoded_source_bytes.saturating_add(deferred.stored_bytes());
+        }
         if let Some(asset) = &decoded.asset {
             stats.decoded_source_bytes =
                 stats.decoded_source_bytes.saturating_add(asset.pixels.len());
@@ -334,6 +338,7 @@ pub fn decode_beatoraja_skin_request(
                 texture
             });
             DecodedSource {
+                deferred: decoded.deferred,
                 source_id: decoded.source_id,
                 path: decoded.path,
                 texture,

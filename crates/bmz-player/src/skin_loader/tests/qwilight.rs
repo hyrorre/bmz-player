@@ -58,9 +58,9 @@ fn qwilight_zip_frames_decode_without_song_registry_and_options_change_layout() 
             );
         }
         let asset = source.asset.as_ref().unwrap();
-        assert_eq!((asset.width, asset.height), (2, 4));
+        assert_eq!((asset.width, asset.height), (4, 2));
         assert_eq!(&asset.pixels[..4], &[255, 0, 0, 255]);
-        assert_eq!(&asset.pixels[16..20], &[0, 0, 255, 255]);
+        assert_eq!(&asset.pixels[8..12], &[0, 0, 255, 255]);
         let note = decoded.document.note.as_ref().unwrap();
         let bmz_render::skin::SkinDstEntry::Frame(key) = &note.dst[0] else { panic!("key") };
         let bmz_render::skin::SkinDstEntry::Frame(scratch) = &note.dst[7] else {

@@ -1240,6 +1240,7 @@ fn src_zero_with_explicit_crop_keeps_pixel_rect() {
 #[test]
 fn image_negative_crop_size_uses_remaining_source_extent() {
     let image = SkinImageDef {
+        qwilight_animation: None,
         lr2_button: false,
         lr2_panel: None,
         lr2_clip: false,

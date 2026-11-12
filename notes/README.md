@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-13 | [Qwilightの終了演出とプレイ表示の補完](2026/2026-11-13-qwilight-play-completion.md) |
 | 2026-11-13 | [Qwilight CR_minimalの表示欠落とLIFT連動](2026/2026-11-13-qwilight-play-visuals.md) |
 | 2026-11-13 | [Qwilightの情報表示とビジュアライザー](2026/2026-11-13-qwilight-play-information.md) |
 | 2026-11-13 | [Qwilightの打鍵タイミングと画面フェード](2026/2026-11-13-qwilight-timing-and-fades.md) |

@@ -227,6 +227,7 @@ fn skin_value_evaluates_default_chart_total_count_expr() {
 #[test]
 fn skin_image_act_uses_event_index_for_button_frame_row() {
     let image = SkinImageDef {
+        qwilight_animation: None,
         lr2_button: false,
         lr2_panel: None,
         lr2_clip: false,

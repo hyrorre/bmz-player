@@ -68,17 +68,12 @@ impl Builder {
         let (frames, cycle) = self.frames("level")?;
         let [x, y, w, h] = self.area("level")?;
         for difficulty in 0..6 {
-            let prefix = self.eval.prefix("_GetLevel", &[difficulty, 0], "L")?;
+            let paths = self.resources.animated(frames, |frame| {
+                let prefix = self.eval.prefix("_GetLevel", &[difficulty, frame], "L")?;
+                Ok(self.resources.frame(&format!("Level/{prefix} {difficulty}"), frame, ""))
+            })?;
             let id = format!("qw-level-{difficulty}");
-            if w > 0.0
-                && h > 0.0
-                && self.image(
-                    &id,
-                    self.resources.sequence(&format!("Level/{prefix} {difficulty}"), frames, ""),
-                    cycle,
-                    None,
-                )
-            {
+            if w > 0.0 && h > 0.0 && self.image(&id, paths, cycle, None) {
                 for dx in self.alt_offsets("alt-level", 0)? {
                     self.destination(60, &id, self.rect(x + dx, y, w, h), None, None)["op"] =
                         json!([150 + difficulty]);
@@ -155,8 +150,8 @@ impl Builder {
             return Ok(());
         }
         for (name, reference, digits, padding) in [
-            ("minutes", 161, 4, 0),
-            ("seconds", 162, 2, 1),
+            ("minutes", if self.eval.remaining_time { 163 } else { 161 }, 4, 0),
+            ("seconds", if self.eval.remaining_time { 164 } else { 162 }, 2, 1),
             ("total-minutes", bmz_skin_document::SKIN_REF_BMZ_CHART_TOTAL_MINUTES, 4, 0),
             ("total-seconds", 1164, 2, 1),
         ] {
@@ -194,7 +189,7 @@ impl Builder {
                 };
                 let condition = format!(
                     "{} and {}",
-                    range(161, m),
+                    range(if self.eval.remaining_time { 163 } else { 161 }, m),
                     range(bmz_skin_document::SKIN_REF_BMZ_CHART_TOTAL_MINUTES, total)
                 );
                 let width = (m + total + 4) as f64 * w + 2.0 * colon + slash;
@@ -231,6 +226,11 @@ impl Builder {
 }
 
 fn paint_color(value: &str) -> [u8; 4] {
+    if let Some(color) =
+        super::colors::named_color(&value.trim().to_ascii_lowercase().replace("grey", "gray"))
+    {
+        return color;
+    }
     let rgb = match value.to_ascii_lowercase().as_str() {
         "black" => 0x000000,
         "gray" | "grey" => 0x808080,

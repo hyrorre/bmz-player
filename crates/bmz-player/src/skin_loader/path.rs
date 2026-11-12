@@ -260,6 +260,9 @@ pub(super) fn required_skin_source_ids(document: &SkinDocument) -> HashSet<&str>
     for image in &document.image {
         if destination_ids.contains(image.id.as_str()) {
             required.insert(image.src.as_str());
+            if let Some(animation) = &image.qwilight_animation {
+                required.extend(animation.sources.iter().map(String::as_str));
+            }
         }
     }
     for imageset in &document.imageset {

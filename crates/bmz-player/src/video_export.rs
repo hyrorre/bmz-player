@@ -136,6 +136,10 @@ pub fn run(options: VideoExportOptions, paths: &AppPaths, profile_id: Option<&st
         "interval": "play_skin_entry_through_exit", "sample_rate": 48000,
         "physical_input_offset_us": 0,
     });
+    let timing = simulation::SceneTiming {
+        completion_us: i64::from(renderer.play_skin_timer_animation_duration_ms(908)) * 1000,
+        ..timing
+    };
     let mut simulation = simulation::Simulation::new(
         prepared,
         timing,

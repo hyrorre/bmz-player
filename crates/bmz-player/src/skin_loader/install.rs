@@ -28,6 +28,7 @@ pub(super) enum FontCacheStatus {
 
 /// GPU アップロード済みの 1 ソース。upload worker が `DecodedSource` から生成する。
 pub struct PreparedSource {
+    pub deferred: Option<Arc<bmz_render::assets::deferred::DeferredImage>>,
     pub texture_lease: Option<Arc<()>>,
     pub source_id: String,
     pub path: PathBuf,
@@ -522,6 +523,7 @@ pub fn upload_decoded_skin_with_texture_cache(
         .filter_map(|source| {
             upload_stats.source_count += 1;
             let DecodedSource {
+                deferred,
                 source_id,
                 path,
                 texture,
@@ -553,11 +555,21 @@ pub fn upload_decoded_skin_with_texture_cache(
                 None => (asset, size),
             };
             let Some(asset) = asset else {
-                upload_stats.texture_cache_hits += 1;
+                let (texture, texture_lease) = if deferred.is_some() {
+                    texture_cache.and_then(|cache| cache.lock().ok().map(|mut cache| {
+                        let texture=cache.allocate_texture_id(kind);
+                        let lease=cache.lease_texture(texture);
+                        (texture,Some(lease))
+                    })).unwrap_or((texture,texture_lease))
+                } else {
+                    upload_stats.texture_cache_hits += 1;
+                    (texture,texture_lease)
+                };
                 if is_video {
                     upload_stats.video_texture_cache_hits += 1;
                 }
                 return Some(PreparedSource {
+                    deferred,
                     texture_lease,
                     source_id,
                     path,
@@ -587,6 +599,7 @@ pub fn upload_decoded_skin_with_texture_cache(
                             upload_stats.video_texture_cache_hits += 1;
                         }
                         return Some(PreparedSource {
+                            deferred: None,
                             texture_lease: Some(cached.lease),
                             source_id,
                             path,
@@ -640,6 +653,7 @@ pub fn upload_decoded_skin_with_texture_cache(
                     upload_stats.uploaded_video_source_bytes.saturating_add(asset.pixels.len());
             }
             Some(PreparedSource {
+                deferred: None,
                 texture_lease,
                 source_id,
                 path,
@@ -747,6 +761,7 @@ pub fn install_decoded_source(
     source: DecodedSource,
 ) -> Option<SkinDocumentTexture> {
     let DecodedSource {
+        deferred,
         source_id,
         path,
         texture,
@@ -757,6 +772,10 @@ pub fn install_decoded_source(
         is_video: _,
         texture_lease: _texture_lease,
     } = source;
+    if let Some(deferred) = deferred {
+        renderer.upsert_deferred_image(TextureId(texture.0), deferred);
+        return Some(SkinDocumentTexture { source_id, texture, source_size: size });
+    }
     if let Some(animation) = animation {
         return match renderer.upsert_skin_sprite_sheet(TextureId(texture.0), animation) {
             Ok(source_size) => Some(SkinDocumentTexture { source_id, texture, source_size }),

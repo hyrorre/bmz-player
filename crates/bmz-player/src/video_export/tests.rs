@@ -104,6 +104,7 @@ impl Fixture {
                 countdown_us: 200_000,
                 finishmargin_us: 100_000,
                 close_us: 200_000,
+                completion_us: 0,
             }
             .with_presentation(loading_us, ready_us),
             300,

@@ -28,9 +28,19 @@ const GROUPS: &[(&str, &str, &[i32])] = &[
     ("Bomb", "ノーツ処理のエフェクト", &[45]),
     ("Judgment line", "判定ライン", &[31]),
     ("Max combo", "最大コンボ", &[41]),
+    ("Completion", "フルコン・クリア演出", &[62]),
+    ("Gauge percent", "ゲージのパーセント", &[34]),
+    ("Playback speed", "再生倍率", &[33]),
+    ("Target difference", "目標スコアとの差", &[46]),
+    ("Judgment ratio bar", "判定内訳の帯", &[30]),
+    ("Auto play", "オートプレイ表示", &[4, 53]),
+    ("Progress", "進行状況", &[28, 58]),
+    ("Lane timing", "レーン別 FAST/SLOW", &[57]),
 ];
 
 pub(super) fn properties(properties: &mut Vec<Json>, labels: &mut serde_json::Map<String, Json>) {
+    properties.push(json!({"name":"Qwilight time display","def":"Elapsed","item":[{"name":"Elapsed","op":32500},{"name":"Remaining","op":32501}]}));
+    labels.insert("Qwilight time display".into(),json!({"name":{"ja":"時間の表示"},"items":{"Elapsed":{"ja":"経過時間"},"Remaining":{"ja":"残り時間"}}}));
     for (index, (key, label, _)) in GROUPS.iter().enumerate() {
         let name = format!("Qwilight show {key}");
         properties.push(json!({"name":name,"def":"On","item":[

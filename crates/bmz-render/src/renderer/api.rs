@@ -14,6 +14,7 @@ impl Renderer {
             gpu.upsert_rgba_texture(texture.id, texture.width, texture.height, &texture.rgba)?;
         }
         self.gpu = Some(gpu);
+        self.deferred_resident.clear();
         self.install_pending_sprite_sheets();
         Ok(())
     }
@@ -59,6 +60,7 @@ impl Renderer {
             }
         }
         self.gpu = Some(gpu);
+        self.deferred_resident.clear();
         self.install_pending_sprite_sheets();
         Ok(())
     }
@@ -77,6 +79,7 @@ impl Renderer {
         animation: std::sync::Arc<crate::assets::AnimatedImage>,
     ) -> Result<SkinImageSize> {
         let Some(limit) = self.max_texture_dimension_2d() else {
+            self.forget_deferred_image(id);
             self.pending_textures.retain(|texture| texture.id != id);
             self.pending_sprite_sheets.retain(|sheet| sheet.id != id);
             let (width, height) =
@@ -132,6 +135,7 @@ impl Renderer {
     /// Drop GPU resources that depend on the window surface while the app still
     /// owns the native window.
     pub fn detach_surface(&mut self) {
+        self.deferred_resident.clear();
         self.pending_egui = None;
         let Some(gpu) = self.gpu.take() else {
             return;
@@ -154,6 +158,7 @@ impl Renderer {
             self.pending_sprite_sheets.retain(|sheet| sheet.id != id);
             self.pending_textures.push(PendingTexture { id, width, height, rgba });
         }
+        self.forget_deferred_image(id);
         Ok(())
     }
 
@@ -171,6 +176,7 @@ impl Renderer {
             self.pending_sprite_sheets.retain(|sheet| sheet.id != id);
             self.pending_textures.push(PendingTexture { id, width, height, rgba: rgba.to_vec() });
         }
+        self.forget_deferred_image(id);
         Ok(())
     }
 
@@ -194,6 +200,7 @@ impl Renderer {
         if let Some(gpu) = &mut self.gpu {
             gpu.image_textures.insert(id, prepared);
             gpu.image_bind_group_cache.retain(|(texture_id, _), _| *texture_id != id);
+            self.forget_deferred_image(id);
         } else {
             tracing::warn!(
                 texture_id = id.0,
@@ -224,6 +231,7 @@ impl Renderer {
             gpu.image_textures.remove(&id);
             gpu.image_bind_group_cache.retain(|(texture, _), _| *texture != id);
         }
+        self.forget_deferred_image(id);
     }
 
     pub fn load_png_texture(&mut self, id: TextureId, path: &std::path::Path) -> Result<()> {
@@ -855,6 +863,7 @@ impl Renderer {
         &mut self,
         notify: impl FnOnce(),
     ) -> Result<RenderSurfaceStatus> {
+        self.prepare_deferred_images()?;
         let Some(gpu) = &mut self.gpu else {
             return Ok(RenderSurfaceStatus::SkippedNoSurface);
         };

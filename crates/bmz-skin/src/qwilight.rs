@@ -63,7 +63,17 @@ impl Definition {
             Yaml::String(v) => Some(v.clone()),
             Yaml::Number(v) => Some(v.to_string()),
             Yaml::Bool(v) => Some(v.to_string()),
-            _ => None,
+            // Perfect inherits the full-combo layout/timing when omitted.
+            _ => match (section, key) {
+                ("frame", "yell!-frame" | "yell!-framerate")
+                | (
+                    "point",
+                    "yell!System" | "yell!Position0" | "yell!Position1" | "yell!Length"
+                    | "yell!Height",
+                ) => self.text(section, &key.replacen("yell!", "band!", 1)),
+                ("lambda", "alt-yell!") => self.text(section, "alt-band!"),
+                _ => None,
+            },
         }
     }
     /// `setMainPosition` and similar capability flags; Qwilight defaults them to false.
@@ -200,6 +210,7 @@ struct Evaluator {
     play_phase: Cell<bool>,
     available: [bool; CONFIGURE_COUNT],
     hidden_pipelines: Vec<i32>,
+    remaining_time: bool,
 }
 impl Evaluator {
     fn new(
@@ -243,6 +254,9 @@ impl Evaluator {
             play_phase: Cell::new(false),
             available: [true; CONFIGURE_COUNT],
             hidden_pipelines: visibility::hidden(options),
+            remaining_time: options
+                .get("Qwilight time display")
+                .is_some_and(|value| value == "Remaining"),
         };
         for i in 0..CONFIGURE_COUNT {
             eval.available[i] = eval.configure_available(i);
@@ -391,6 +405,13 @@ impl Evaluator {
         last.map_or(Ok(default), |value| self.numeric(value))
     }
     fn prefix(&self, name: &str, arguments: &[usize], default: &str) -> Result<String> {
+        self.signed_prefix(
+            name,
+            &arguments.iter().map(|value| *value as i64).collect::<Vec<_>>(),
+            default,
+        )
+    }
+    fn signed_prefix(&self, name: &str, arguments: &[i64], default: &str) -> Result<String> {
         self.use_phase(false);
         let value: Value = self.lua.globals().get(name)?;
         if let Value::Function(function) = value {
