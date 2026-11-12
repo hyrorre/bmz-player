@@ -228,7 +228,9 @@ option `94_000+ID`、否定は符号を維持）です。意味が一致する�
 | number | 70 / 73 | Select / Decide | 選択中の曲の自己ベストのLR2式スコア / レート（%） |
 | number | 210..219 | Select / Decide | IRのFAILED / EASY / CLEAR / HARD / FULLCOMBOの人数と率です。ASSIST系はEASY、EX-HARDはHARD、PERFECT / MAXはFULLCOMBOへ畳む |
 | number | 212 / 214 / 216 | Result / Course Result | 拡張LR2のFAST / SLOW / コンボブレイク数（Playの210 / 212 / 214と同じ扱い） |
-| number | 50..56 / 60..66 | 全画面 | EQ / FX / PITCHです。BMZに設定が無いため非表示（beatorajaの54 / 55はDPオプション / HS-FIX） |
+| number | 50..56 / 60..65 | 全画面 | EQ / FXです。BMZに設定が無いため非表示（beatorajaの54 / 55はDPオプション / HS-FIX） |
+| number | 66 | 全画面 | LR2のピッチ量です。プロフィールのFREQ（半音、-12..+12、0はOFF）を表示します。LR2のPITCH OFF/ON・PITCH TYPEはBMZに無く、値0がOFFに当たります |
+| slider | 26 | 全画面（変更はSelect） | LR2のピッチ量です。移動範囲の始点が-12、終点が+12で、つまみの位置を最も近い半音へ丸めてFREQへ書き込みます。範囲外へは動きません。書き込みはSelectの詳細設定のFREQ行と同じ処理（プレイ準備の破棄等）を通ります |
 | number | 290 / 291 | 全画面 | 最高 / 最低BPM（90 / 91と同じ） |
 | text | 190..199 | Select / Decide | ランダムコースの設定です。BMZに該当が無いため空文字 |
 | text | 60..65 / 70 / 74 / 76 / 80 / 84..85 | Select / Decide | BMZで変更できる設定の現在値（キーフィルター、ソート、難易度、RANDOM 1P / 2P、ゲージ、FLIP、HS-FIX、BGA、自動調整、レーン効果）です。text 84 / 85は同じ共通設定を表示します。文言はBMZの表記（例: NORMAL / HARD / HAZARD、H-RANDOM / ALL-SCR、SCORE、AUTO）を使います。キーフィルターはBMZ全体でLR2と同じ`ALL KEYS` / `7KEYS`等の表記にそろえています。変更できない設定（GHOST、SCORE GRAPH、BGA SIZE、画面設定、REPLAY等）は空文字 |
@@ -257,7 +259,7 @@ bargraph 140..145（判定率）はSelectでは選択中のスコアを譜面の
 結果は選曲一覧の再読み込み（プレイ後のスコア更新を含む）まで保持します。
 
 ライバルのIR順位（number 292 / 293）等は、
-必要な値の供給が無いため未対応です。EQ / FX / PITCH、パネル2..7、スキン設定・コース作成・ヘルプの埋め込み、
+必要な値の供給が無いため未対応です。EQ / FX、PITCH OFF/ON・PITCH TYPE、パネル2..7、スキン設定・コース作成・ヘルプの埋め込み、
 `README` / `MOUSECURSOR`、IRランキング一覧の`BAR_RANK`はBMZに同じ機能が無いため対応しません。
 
 ## LR2のSelect / Result
@@ -398,7 +400,7 @@ option 62..66（このまま取れる最高ランプ）は、AUTO SCRATCHをD-BA
 10..12はLR2と同じくクリック位置に関係なく次へ進めます。
 現在値がLR2の候補にないBMZ独自値（EX-HARD、R-RANDOM、START BPM等）の場合、
 次へは候補の先頭、前へは末尾へ移ります。BMZ独自値はbuttonから選ばず、BMZ設定画面で変更します。
-7..8のパネル、FX/EQ/PITCH、2P側のゲージ・HS、
+7..8のパネル、FX/EQ、PITCH OFF/ON・PITCH TYPE（ピッチ量はslider 26で変更します）、2P側のゲージ・HS、
 SCOREGRAPH・GHOST(70/71)、BGA SIZE(73)、既定ターゲット率(76)、
 システム設定(80..83)、favorite tag(90)等、BMZに同じ意味の設定が無いbuttonは何もしません。
 LR2スキンのoption panelを使うときは、BMZ独自の画面下部オプション表示を重ねません。

@@ -348,6 +348,9 @@ impl WinitApp {
             17 => self.set_skin_volume(bmz_render::skin::SkinVolumeChannel::System, hit.value),
             18 => self.set_skin_volume(bmz_render::skin::SkinVolumeChannel::Key, hit.value),
             19 => self.set_skin_volume(bmz_render::skin::SkinVolumeChannel::Bgm, hit.value),
+            26 => {
+                self.set_freq_from_lr2_pitch_slider(hit.value);
+            }
             _ => {
                 tracing::debug!(slider_type = hit.slider_type, "unsupported select skin slider");
             }

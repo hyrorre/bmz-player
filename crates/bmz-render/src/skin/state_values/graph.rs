@@ -226,6 +226,22 @@ pub(super) fn skin_slider_progress(slider: &SkinSliderDef, state: &SkinDrawState
     skin_slider_progress_by_type(slider.slider_type, state)
 }
 
+/// LR2 `pitch_amount` range in semitones, shared by number 66 and slider 26.
+const LR2_PITCH_AMOUNT_MAX: i8 = 12;
+
+/// Slider 26 position for a pitch amount: -12 at the start, +12 at the end of the travel.
+pub fn lr2_pitch_slider_progress(semitones: i8) -> f32 {
+    let max = LR2_PITCH_AMOUNT_MAX;
+    f32::from(semitones.clamp(-max, max) + max) / f32::from(max * 2)
+}
+
+/// Pitch amount at a slider 26 position, rounded to the nearest semitone.
+pub fn lr2_pitch_slider_semitones(progress: f32) -> i8 {
+    let max = LR2_PITCH_AMOUNT_MAX;
+    let steps = (progress.clamp(0.0, 1.0) * f32::from(max * 2)).round() as i8;
+    steps - max
+}
+
 pub(super) fn skin_slider_progress_by_type(slider_type: i32, state: &SkinDrawState) -> Option<f32> {
     match slider_type {
         1 => Some(state.select_scroll_progress.clamp(0.0, 1.0)),
@@ -240,6 +256,8 @@ pub(super) fn skin_slider_progress_by_type(slider_type: i32, state: &SkinDrawSta
         17 => Some(state.select_master_volume.clamp(0.0, 1.0)),
         18 => Some(state.select_key_volume.clamp(0.0, 1.0)),
         19 => Some(state.select_bgm_volume.clamp(0.0, 1.0)),
+        // LR2 pitch slider: FREQ -12..=12 semitones over the travel.
+        26 => Some(lr2_pitch_slider_progress(state.freq_semitones)),
         _ => None,
     }
 }

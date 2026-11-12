@@ -479,7 +479,8 @@ macro_rules! skin_document_render_select_interaction_methods {
         ) -> Option<SkinSliderHit> {
             let writer = slider.event.unwrap_or(slider.slider_type);
             if !slider.changeable
-                || !(matches!(writer, 1 | 7 | 8 | 17..=19) || lua_act_callback_id(writer).is_some())
+                || !(matches!(writer, 1 | 7 | 8 | 17..=19 | 26)
+                    || lua_act_callback_id(writer).is_some())
             {
                 return None;
             }

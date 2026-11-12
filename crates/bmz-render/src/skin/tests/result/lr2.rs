@@ -462,6 +462,31 @@ fn lr2_select_numbers_follow_lr2_definitions() {
 }
 
 #[test]
+fn lr2_pitch_amount_number_and_slider_follow_profile_freq() {
+    let lr2 = |id: i32, state: &SkinDrawState| skin_state_number(LR2_NUMBER_BASE + id, state);
+    let cases = [(-12, 0.0), (-1, 11.0 / 24.0), (0, 0.5), (3, 15.0 / 24.0), (12, 1.0)];
+    for (freq, progress) in cases {
+        let state = SkinDrawState { freq_semitones: freq, ..Default::default() };
+        assert_eq!(lr2(66, &state), Some(i64::from(freq)), "FREQ {freq}");
+        let slider = skin_slider_progress_by_type(26, &state).unwrap();
+        assert!((slider - progress).abs() < 1e-6, "FREQ {freq}: {slider}");
+        assert_eq!(lr2_pitch_slider_semitones(slider), freq);
+    }
+    // EQ / FX stay hidden whatever FREQ is.
+    let state = SkinDrawState { freq_semitones: 5, ..Default::default() };
+    for id in (50..=56).chain(60..=65) {
+        assert_eq!(lr2(id, &state), None, "number {id}");
+    }
+    // The handle rounds to the nearest semitone and stops at -12 / +12.
+    assert_eq!(lr2_pitch_slider_semitones(0.51), 0);
+    assert_eq!(lr2_pitch_slider_semitones(0.53), 1);
+    assert_eq!(lr2_pitch_slider_semitones(-1.0), -12);
+    assert_eq!(lr2_pitch_slider_semitones(2.0), 12);
+    assert_eq!(lr2_pitch_slider_progress(13), 1.0);
+    assert_eq!(lr2_pitch_slider_progress(-13), 0.0);
+}
+
+#[test]
 fn lr2_select_panel_option_and_selected_score_rate_graphs() {
     let mut state = SkinDrawState {
         select_screen: true,

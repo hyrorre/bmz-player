@@ -31,7 +31,8 @@ fn lr2_select_buttons_cycle_lr2_values_without_opening_settings() {
         assert_eq!(lr2_select_button_action(button), action, "button {button}");
     }
     // LR2 options without an identical BMZ setting are ignored instead of opening BMZ UI.
-    for button in [7, 8, 18, 20, 29, 33, 41, 58, 70, 71, 73, 76, 80, 83, 90] {
+    // PITCH on/off (32) and type (33) stay unsupported; the amount is slider 26.
+    for button in [7, 8, 18, 20, 29, 32, 33, 41, 58, 70, 71, 73, 76, 80, 83, 90] {
         assert_eq!(lr2_select_button_action(button), Unsupported, "button {button}");
     }
 }

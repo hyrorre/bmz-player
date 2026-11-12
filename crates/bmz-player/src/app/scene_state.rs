@@ -309,6 +309,7 @@ impl WinitApp {
         let mix = &self.boot.profile_config.audio_mix;
         skin_input.audio_volumes = [mix.master_volume, mix.key_volume, mix.bgm_volume]
             .map(crate::config::play::volume_unit_to_f32);
+        skin_input.freq_semitones = self.boot.profile_config.play.freq_semitones;
         apply_skin_logical_input_to_scene(&mut scene, skin_input);
         self.apply_operating_time_to_scene(&mut scene);
         self.apply_skin_runtime_info_to_scene(&mut scene);
