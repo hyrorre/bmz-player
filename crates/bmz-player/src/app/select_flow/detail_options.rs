@@ -11,10 +11,10 @@ use std::sync::Arc;
 pub(super) struct DetailOptionsState {
     pub cursor: usize,
     pub value_latched: bool,
-    pub blocked_controls: std::collections::HashSet<(DeviceId, String)>,
+    pub blocked_controls: std::collections::HashSet<InputSource>,
     pub dirty: bool,
     pub closing: Option<DetailOptionsClosingSnapshot>,
-    repeat_value: Option<(DeviceId, String, i32, Instant)>,
+    repeat_value: Option<(InputSource, i32, Instant)>,
     scroll: SelectBarScroll,
     cache: RefCell<Option<(DetailOptionsCacheKey, Arc<DetailOptionsSnapshot>)>>,
 }
@@ -46,7 +46,7 @@ impl DetailOptionsState {
         if !held {
             self.repeat_value = None;
         }
-        let (_, _, direction, next) = self.repeat_value.as_mut()?;
+        let (_, direction, next) = self.repeat_value.as_mut()?;
         if now < *next {
             return None;
         }
@@ -237,115 +237,72 @@ impl WinitApp {
         self.select.detail_options.closing = None;
         self.select.detail_options.scroll.reset();
         self.select.detail_options.value_latched = self.detail_value_keys_held();
+        // 開いた時点で押していた入力元は、離すまで詳細パネルへ流さない。
         self.select.detail_options.blocked_controls = self
             .input
-            .pressed_control_sources()
-            .filter(|(_, control)| self.select.select_keys.e_action_for_control(control).is_none())
-            .cloned()
+            .pressed_sources()
+            .filter(|(device, control)| {
+                self.resolve_scene_source(*device, control).e_action().is_none()
+            })
+            .map(|(device, control)| InputSource { device, control: control.clone() })
             .collect();
         self.clear_select_hold();
         self.reset_select_analog_scroll();
         self.select.select_slider_dragging_type = None;
     }
 
-    pub(super) fn detail_options_blocks_held_input(&mut self, event: &ControlInputEvent) -> bool {
-        let Some(control) = event.name.as_ref() else {
+    pub(super) fn detail_options_blocks_held_input(&mut self, input: &ResolvedInput) -> bool {
+        let Some(source) = input.source() else {
             return false;
         };
-        let source = (event.device, control.clone());
-        if !event.pressed {
-            self.select.detail_options.blocked_controls.remove(&source);
+        if !input.pressed() {
+            self.select.detail_options.blocked_controls.remove(source);
             if !self.detail_value_keys_held() {
                 self.select.detail_options.value_latched = false;
             }
             false
         } else {
             matches!(self.view_state(), AppViewState::Select)
-                && self.select.detail_options.blocked_controls.contains(&source)
+                && self.select.detail_options.blocked_controls.contains(source)
         }
     }
 
-    fn detail_input(&self, device: DeviceId, control: &str) -> Option<DetailInput> {
-        if self.select.select_keys.e_action_for_control(control).is_some() {
-            return None;
-        }
-        let nine_key = self.detail_options_nine_key();
-        let keyboard = device == W_KEYBOARD_DEVICE_ID;
-        let gamepad_lane = || {
-            let config = self.play_session_app_config();
-            let slots = crate::input::gamepad::GamepadSlotMap::from_runtime_or_legacy(
-                config.input.gamepad_slot_runtime_device_ids,
-                config.input.gamepad_slot_gilrs_ids,
-            );
-            detail_gamepad_lane(&self.boot.profile_config.input, slots, device, control, nine_key)
-        };
-        if nine_key {
-            let lane = if keyboard {
-                self.select.select_keys.nine_key_lane(control)
-            } else {
-                gamepad_lane()
-            };
-            // A 9K lane key keeps priority over UI arrows bound to the same
-            // control, even when the lane has no detail-panel role.
-            if let Some(lane) = lane {
-                return detail_nine_key_input(lane);
-            }
-        } else {
-            let direction = if keyboard {
-                self.select.select_keys.detail_value_direction(control)
-            } else {
-                gamepad_lane().and_then(detail_lane_direction)
-            };
-            if let Some(direction) = direction {
-                return Some(DetailInput::Value(direction));
-            }
-        }
-        if self.select.select_keys.is_select_scratch_up(control) {
-            return Some(DetailInput::Move(-1));
-        }
-        if self.select.select_keys.is_select_scratch_down(control) {
-            return Some(DetailInput::Move(1));
-        }
-        if device == W_KEYBOARD_DEVICE_ID {
-            detail_arrow_input(control, CATALOG[self.select.detail_options.cursor].kind)
-        } else {
-            None
-        }
+    fn detail_input(&self, control: &ResolvedControl) -> Option<DetailInput> {
+        detail_input_for_control(control, CATALOG[self.select.detail_options.cursor].kind)
     }
 
     fn detail_value_keys_held(&self) -> bool {
-        self.input.pressed_control_sources().any(|(device, control)| {
-            matches!(self.detail_input(*device, control), Some(DetailInput::Value(_)))
-        })
+        self.pressed_scene_controls()
+            .any(|control| matches!(self.detail_input(&control), Some(DetailInput::Value(_))))
     }
 
     /// Physical holds have already been tracked before this route. Consume the
     /// entire E2 input surface, including unbound shortcuts, to isolate the list.
-    pub(super) fn route_detail_options_input(&mut self, event: &ControlInputEvent) -> bool {
+    pub(super) fn route_detail_options_input(&mut self, input: &ResolvedInput) -> bool {
         if !self.detail_options_active() {
             return false;
         }
-        let Some(control) = event.name.as_deref() else {
+        let Some(source) = input.source() else {
             return true;
         };
-        if self.select.select_keys.e_action_for_control(control).is_some() {
+        if input.scene().e_action().is_some() {
             return false;
         }
-        let action = self.detail_input(event.device, control).filter(|action| {
-            !matches!(action, DetailInput::Move(_)) || !event.synthesized_analog_axis
+        let action = self.detail_input(input.scene()).filter(|action| {
+            !matches!(action, DetailInput::Move(_)) || !input.synthesized_analog_axis()
         });
         let held = self.detail_value_keys_held();
-        if !event.pressed
+        if !input.pressed()
             && self
                 .select
                 .detail_options
                 .repeat_value
                 .as_ref()
-                .is_some_and(|(device, name, _, _)| *device == event.device && name == control)
+                .is_some_and(|(repeat_source, _, _)| repeat_source == source)
         {
             self.select.detail_options.repeat_value = None;
         }
-        match self.select.detail_options.input_edge(action, event.pressed, event.repeat, held) {
+        match self.select.detail_options.input_edge(action, input.pressed(), input.repeat(), held) {
             Some(DetailInput::Move(direction)) => self.move_detail_options(direction),
             Some(DetailInput::Value(direction)) => {
                 self.change_detail_options_value(direction);
@@ -354,8 +311,7 @@ impl WinitApp {
                     bmz_render::scene::detail_options::DetailValueKind::Number { .. }
                 ) {
                     self.select.detail_options.repeat_value = Some((
-                        event.device,
-                        control.into(),
+                        source.clone(),
                         direction,
                         Instant::now() + Duration::from_millis(400),
                     ));
@@ -371,11 +327,10 @@ impl WinitApp {
             self.select.detail_options.repeat_value = None;
             return;
         }
-        let held = self.select.detail_options.repeat_value.as_ref().is_some_and(
-            |(device, control, _, _)| {
-                self.input.pressed_control_sources().any(|(d, c)| d == device && c == control)
-            },
-        );
+        let held =
+            self.select.detail_options.repeat_value.as_ref().is_some_and(|(source, _, _)| {
+                self.input.source_held(source.device, &source.control)
+            });
         if let Some(direction) = self.select.detail_options.repeat_step(Instant::now(), held) {
             self.change_detail_options_value(direction);
         }
@@ -546,36 +501,44 @@ fn detail_edit_mode(
     source.map(|mode| effective_play_key_mode(mode, conversion)).unwrap_or(KeyMode::K7)
 }
 
-fn detail_arrow_input(control: &str, kind: DetailValueKind) -> Option<DetailInput> {
-    // Choices follow their vertical layout; numbers increase upwards.
-    let up = if matches!(kind, DetailValueKind::Number { .. }) { 1 } else { -1 };
-    match control {
-        "ArrowLeft" => Some(DetailInput::Move(-1)),
-        "ArrowRight" => Some(DetailInput::Move(1)),
-        "ArrowUp" => Some(DetailInput::Value(up)),
-        "ArrowDown" => Some(DetailInput::Value(-up)),
-        _ => None,
+/// 詳細パネルの操作。E1〜E4 は対象外。
+///
+/// - 9K: レーンの割り当てを、同じ入力に割り当てた選曲の矢印操作より優先する。
+/// - 7K / 14K: 各側の奇数鍵で値を増やし、偶数鍵で減らす。
+/// - スクラッチで項目を移動し、キーボード既定の矢印は←→で項目、↑↓で値を変える。
+fn detail_input_for_control(
+    control: &ResolvedControl,
+    kind: DetailValueKind,
+) -> Option<DetailInput> {
+    if control.e_action().is_some() {
+        return None;
     }
+    if control.is_nine_key() {
+        if let Some(lane) = control.nine_key_lane() {
+            return detail_nine_key_input(lane);
+        }
+    } else if let Some(direction) = control.detail_value_direction() {
+        return Some(DetailInput::Value(direction));
+    }
+    if control.is_scratch_up() {
+        return Some(DetailInput::Move(-1));
+    }
+    if control.is_scratch_down() {
+        return Some(DetailInput::Move(1));
+    }
+    detail_arrow_input(control.standard()?, kind)
 }
 
-fn detail_gamepad_lane(
-    input: &ProfileInputConfig,
-    slots: crate::input::gamepad::GamepadSlotMap,
-    device: DeviceId,
-    control: &str,
-    nine_key: bool,
-) -> Option<Lane> {
-    if !nine_key && let Some(lane) = select_option_lane_for_gamepad(input, slots, device, control) {
-        return Some(lane);
+fn detail_arrow_input(key: StandardKey, kind: DetailValueKind) -> Option<DetailInput> {
+    // Choices follow their vertical layout; numbers increase upwards.
+    let up = if matches!(kind, DetailValueKind::Number { .. }) { 1 } else { -1 };
+    match key {
+        StandardKey::ArrowLeft => Some(DetailInput::Move(-1)),
+        StandardKey::ArrowRight => Some(DetailInput::Move(1)),
+        StandardKey::ArrowUp => Some(DetailInput::Value(up)),
+        StandardKey::ArrowDown => Some(DetailInput::Value(-up)),
+        _ => None,
     }
-    // Match normal select options: retain explicit DP/device assignments, then
-    // accept the independent 7K bindings. Resolve the fallback with its device too.
-    crate::config::play::lane_binding_for_chart_with_slots(
-        input,
-        if nine_key { KeyMode::K9 } else { KeyMode::K7 },
-        slots,
-    )
-    .resolve(device, &PhysicalControl::GamepadButton(control.to_string()))
 }
 
 /// 9K: KEY3 / KEY7 select the previous / next item, KEY4 / KEY6 step the value
@@ -590,42 +553,45 @@ fn detail_nine_key_input(lane: Lane) -> Option<DetailInput> {
     }
 }
 
-/// 7K / 14K: odd keys step up and even keys step down, counted per side.
-fn detail_lane_direction(lane: Lane) -> Option<i32> {
-    let index = match lane {
-        Lane::Key1 => 0,
-        Lane::Key2 => 1,
-        Lane::Key3 => 2,
-        Lane::Key4 => 3,
-        Lane::Key5 => 4,
-        Lane::Key6 => 5,
-        Lane::Key7 => 6,
-        Lane::Key8 => 7,
-        Lane::Key9 => 8,
-        Lane::Key10 => 9,
-        Lane::Key11 => 10,
-        Lane::Key12 => 11,
-        Lane::Key13 => 12,
-        Lane::Key14 => 13,
-        _ => return None,
-    };
-    Some(if index % 7 % 2 == 0 { 1 } else { -1 })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::gamepad::GamepadSlotMap;
+    use bmz_gameplay::input::backend::PhysicalControl;
+
+    fn keyboard_source(name: &str) -> InputSource {
+        InputSource {
+            device: W_KEYBOARD_DEVICE_ID,
+            control: PhysicalControl::KeyboardKey(name.into()),
+        }
+    }
+
+    fn kb(keys: &SceneInputResolver, name: &str) -> ResolvedControl {
+        keys.resolve_control(
+            W_KEYBOARD_DEVICE_ID,
+            &PhysicalControl::KeyboardKey(name.into()),
+            GamepadSlotMap::default(),
+        )
+    }
+
+    fn pad(
+        keys: &SceneInputResolver,
+        slots: GamepadSlotMap,
+        device: DeviceId,
+        name: &str,
+    ) -> ResolvedControl {
+        keys.resolve_control(device, &PhysicalControl::GamepadButton(name.into()), slots)
+    }
+
+    fn both_slots() -> GamepadSlotMap {
+        GamepadSlotMap::from_slot_ids([Some(0), Some(1)])
+    }
 
     #[test]
     fn numeric_repeat_has_delay_cadence_no_catchup_and_stops_on_move_or_release() {
         let t = Instant::now();
         let mut state = DetailOptionsState {
-            repeat_value: Some((
-                W_KEYBOARD_DEVICE_ID,
-                "KeyZ".into(),
-                1,
-                t + Duration::from_millis(400),
-            )),
+            repeat_value: Some((keyboard_source("KeyZ"), 1, t + Duration::from_millis(400))),
             ..Default::default()
         };
         assert_eq!(state.repeat_step(t + Duration::from_millis(399), true), None);
@@ -635,7 +601,7 @@ mod tests {
         assert_eq!(state.repeat_step(t + Duration::from_secs(2), true), None);
         state.move_cursor(1, t, Duration::ZERO);
         assert_eq!(state.repeat_step(t + Duration::from_secs(3), true), None);
-        state.repeat_value = Some((W_KEYBOARD_DEVICE_ID, "KeyZ".into(), -1, t));
+        state.repeat_value = Some((keyboard_source("KeyZ"), -1, t));
         assert_eq!(state.repeat_step(t, false), None);
         assert_eq!(state.repeat_step(t + Duration::from_secs(3), true), None);
     }
@@ -644,22 +610,21 @@ mod tests {
     fn legacy_assist_keyboard_and_gamepad_keep_fixed_seven_key_events() {
         use crate::config::profile_config::LaneConfig;
         let profile = ProfileConfig::new_default("test", "Test", 0);
-        let keys = SelectKeyBindings::from_profile(&profile.input);
+        let keys = SceneInputResolver::from_profile(&profile.input);
         let bindings =
             crate::config::play_input::resolve_play_bindings(&profile.input, KeyMode::K7).unwrap();
-        for (key, lane, event_id) in [
-            (LaneConfig::Key1, Lane::Key1, 301),
-            (LaneConfig::Key2, Lane::Key2, 302),
-            (LaneConfig::Key3, Lane::Key3, 303),
-            (LaneConfig::Key4, Lane::Key4, 304),
-            (LaneConfig::Key5, Lane::Key5, 305),
-            (LaneConfig::Key6, Lane::Key6, 306),
-            (LaneConfig::Key7, Lane::Key7, 307),
+        for (key, event_id) in [
+            (LaneConfig::Key1, 301),
+            (LaneConfig::Key2, 302),
+            (LaneConfig::Key3, 303),
+            (LaneConfig::Key4, 304),
+            (LaneConfig::Key5, 305),
+            (LaneConfig::Key6, 306),
+            (LaneConfig::Key7, 307),
         ] {
             let binding =
                 bindings.iter().find(|b| b.device == "keyboard" && b.lane == Some(key)).unwrap();
-            assert_eq!(keys.legacy_assist_event(&binding.control), Some(event_id));
-            assert_eq!(legacy_assist_event_for_lane(lane), Some(event_id));
+            assert_eq!(kb(&keys, &binding.control).legacy_assist_event(), Some(event_id));
             let mut assist = profile.play.assist;
             assert!(assist.toggle_beatoraja_button(event_id));
             let mut flags = [false; 7];
@@ -670,41 +635,41 @@ mod tests {
         }
         // Scratch/arrows never become a detail carousel in the legacy panel.
         for control in ["ScratchUp", "ScratchDown", "ArrowLeft", "ArrowRight"] {
-            assert_eq!(keys.legacy_assist_event(control), None);
+            assert_eq!(kb(&keys, control).legacy_assist_event(), None);
         }
-        assert_eq!(legacy_assist_event_for_lane(Lane::Scratch), None);
-        assert_eq!(legacy_assist_event_for_lane(Lane::Key8), None);
-        let slots = crate::input::gamepad::GamepadSlotMap::from_slot_ids([Some(0), Some(1)]);
-        assert_eq!(
-            select_option_lane_for_gamepad(&profile.input, slots, DeviceId(16), "Button1")
-                .and_then(legacy_assist_event_for_lane),
-            Some(301)
-        );
+        // 各側の KEY1 は、その側の 14K/7K 設定で解決してから KEY1 として扱う。
+        for device in [DeviceId(16), DeviceId(17)] {
+            assert_eq!(
+                pad(&keys, both_slots(), device, "Button1").legacy_assist_event(),
+                Some(301)
+            );
+        }
+        assert_eq!(pad(&keys, both_slots(), DeviceId(16), "Axis1+").legacy_assist_event(), None);
     }
 
     #[test]
     fn detail_arrows_follow_column_and_choice_axes() {
         for (key, action) in [
-            ("ArrowLeft", DetailInput::Move(-1)),
-            ("ArrowRight", DetailInput::Move(1)),
-            ("ArrowUp", DetailInput::Value(-1)),
-            ("ArrowDown", DetailInput::Value(1)),
+            (StandardKey::ArrowLeft, DetailInput::Move(-1)),
+            (StandardKey::ArrowRight, DetailInput::Move(1)),
+            (StandardKey::ArrowUp, DetailInput::Value(-1)),
+            (StandardKey::ArrowDown, DetailInput::Value(1)),
         ] {
             for kind in [DetailValueKind::Bool, DetailValueKind::Enum] {
                 assert_eq!(detail_arrow_input(key, kind), Some(action));
             }
         }
-        assert_eq!(detail_arrow_input("Enter", DetailValueKind::Enum), None);
+        assert_eq!(detail_arrow_input(StandardKey::Enter, DetailValueKind::Enum), None);
     }
 
     #[test]
     fn detail_numeric_up_and_odd_keys_increase_down_and_even_keys_decrease() {
         let mut profile = ProfileConfig::new_default("test", "Test", 0);
-        let bindings = SelectKeyBindings::from_profile(&profile.input);
+        let bindings = SceneInputResolver::from_profile(&profile.input);
         for item in
             CATALOG.iter().filter(|item| matches!(item.kind, DetailValueKind::Number { .. }))
         {
-            for (control, direction) in [("ArrowUp", 1), ("ArrowDown", -1)] {
+            for (control, direction) in [(StandardKey::ArrowUp, 1), (StandardKey::ArrowDown, -1)] {
                 assert_eq!(
                     detail_arrow_input(control, item.kind),
                     Some(DetailInput::Value(direction))
@@ -713,17 +678,21 @@ mod tests {
                 assert!(item.adjust(&mut profile, Some(KeyMode::K7), direction));
                 assert_eq!(item.value(&profile), before + i64::from(direction));
             }
-            for (key, lane, direction) in [
-                ("Z", Lane::Key1, 1),
-                ("S", Lane::Key2, -1),
-                ("Z", Lane::Key8, 1),
-                ("S", Lane::Key9, -1),
-            ] {
-                assert_eq!(bindings.detail_value_direction(key), Some(direction));
-                assert_eq!(detail_lane_direction(lane), Some(direction));
+            for (key, direction) in [("Z", 1), ("S", -1), ("M", 1), ("K", -1)] {
+                assert_eq!(
+                    detail_input_for_control(&kb(&bindings, key), item.kind),
+                    Some(DetailInput::Value(direction)),
+                    "{key}"
+                );
             }
-            assert_eq!(detail_arrow_input("ArrowLeft", item.kind), Some(DetailInput::Move(-1)));
-            assert_eq!(detail_arrow_input("ArrowRight", item.kind), Some(DetailInput::Move(1)));
+            assert_eq!(
+                detail_arrow_input(StandardKey::ArrowLeft, item.kind),
+                Some(DetailInput::Move(-1))
+            );
+            assert_eq!(
+                detail_arrow_input(StandardKey::ArrowRight, item.kind),
+                Some(DetailInput::Move(1))
+            );
         }
     }
 
@@ -1007,7 +976,8 @@ mod tests {
         assert!(app.detail_options_closing_snapshot().is_some());
         app.reset_select_analog_scroll();
         let ticks = app.boot.profile_config.input.analog_ticks_per_scroll.max(1) as i32;
-        app.accumulate_select_analog_ticks("Axis1", -ticks);
+        let tick = app.resolve_gamepad_axis_tick(DeviceId(16), "Axis1", -ticks);
+        app.accumulate_select_analog_ticks(tick.scene_scroll);
         assert_eq!(app.select.select_analog_scroll_buffer, ticks);
         let cursor = app.select.detail_options.cursor;
         app.route_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -1.0));
@@ -1060,19 +1030,26 @@ mod tests {
 
     #[test]
     fn detail_key_parity_is_local_to_each_player_side() {
-        for (left, right, direction) in [
-            (Lane::Key1, Lane::Key8, 1),
-            (Lane::Key2, Lane::Key9, -1),
-            (Lane::Key3, Lane::Key10, 1),
-            (Lane::Key4, Lane::Key11, -1),
-            (Lane::Key5, Lane::Key12, 1),
-            (Lane::Key6, Lane::Key13, -1),
-            (Lane::Key7, Lane::Key14, 1),
+        let keys =
+            SceneInputResolver::from_profile(&ProfileConfig::new_default("test", "Test", 0).input);
+        for (button, direction) in [
+            ("Button1", 1),
+            ("Button2", -1),
+            ("Button3", 1),
+            ("Button4", -1),
+            ("Button5", 1),
+            ("Button6", -1),
+            ("Button7", 1),
         ] {
-            assert_eq!(detail_lane_direction(left), Some(direction));
-            assert_eq!(detail_lane_direction(right), Some(direction));
+            for device in [DeviceId(16), DeviceId(17)] {
+                assert_eq!(
+                    pad(&keys, both_slots(), device, button).detail_value_direction(),
+                    Some(direction),
+                    "{device:?} {button}"
+                );
+            }
         }
-        assert_eq!(detail_lane_direction(Lane::Scratch), None);
+        assert_eq!(pad(&keys, both_slots(), DeviceId(16), "Axis1+").detail_value_direction(), None);
     }
 
     #[test]
@@ -1080,7 +1057,7 @@ mod tests {
         let mut profile = ProfileConfig::new_default("test", "Test", 0);
         profile.input.select_input_mode =
             crate::config::profile_config::SelectInputModeConfig::Key9;
-        let bindings = SelectKeyBindings::from_profile(&profile.input);
+        let bindings = SceneInputResolver::from_profile(&profile.input);
         for (key, lane, input) in [
             ("Z", Lane::Key1, None),
             ("S", Lane::Key2, None),
@@ -1092,14 +1069,19 @@ mod tests {
             ("G", Lane::Key8, None),
             ("B", Lane::Key9, None),
         ] {
-            assert_eq!(bindings.nine_key_lane(key), Some(lane));
+            assert_eq!(kb(&bindings, key).nine_key_lane(), Some(lane));
             assert_eq!(detail_nine_key_input(lane), input);
+            assert_eq!(
+                detail_input_for_control(&kb(&bindings, key), DetailValueKind::Bool),
+                input,
+                "{key}"
+            );
         }
-        assert_eq!(bindings.nine_key_lane("ArrowUp"), None);
+        assert_eq!(kb(&bindings, "ArrowUp").nine_key_lane(), None);
         assert_eq!(detail_nine_key_input(Lane::Scratch), None);
         let keys_7k =
-            SelectKeyBindings::from_profile(&ProfileConfig::new_default("test", "Test", 0).input);
-        assert_eq!(keys_7k.nine_key_lane("Z"), None);
+            SceneInputResolver::from_profile(&ProfileConfig::new_default("test", "Test", 0).input);
+        assert_eq!(kb(&keys_7k, "Z").nine_key_lane(), None);
     }
 
     #[test]
@@ -1139,35 +1121,34 @@ mod tests {
                 PlayModeInputConfig { bindings, ..Default::default() },
             );
         }
-        let slots = crate::input::gamepad::GamepadSlotMap::from_slot_ids([Some(0), Some(1)]);
-        let keys = SelectKeyBindings::from_profile(&profile.input);
-        assert_eq!(keys.ui_lane_for_control("Button13"), Some(Lane::Key3));
+        let slots = both_slots();
+        let keys = SceneInputResolver::from_profile(&profile.input);
         for (device, expected) in [(DeviceId(16), Lane::Key3), (DeviceId(17), Lane::Key10)] {
-            let lane = detail_gamepad_lane(&profile.input, slots, device, "Button13", false);
-            assert_eq!(lane, Some(expected));
-            assert_eq!(lane.and_then(detail_lane_direction), Some(1));
+            let control = pad(&keys, slots, device, "Button13");
+            assert_eq!(control.select_lane().map(|lane| lane.lane), Some(expected));
+            assert_eq!(control.detail_value_direction(), Some(1));
         }
-        let lane = detail_gamepad_lane(&profile.input, slots, DeviceId(16), "Button13", true);
-        assert_eq!(lane, Some(Lane::Key8));
-        assert_eq!(lane.and_then(detail_nine_key_input), None);
-        assert_eq!(
-            detail_gamepad_lane(&profile.input, slots, DeviceId(18), "Button13", false),
-            None
-        );
-        assert_eq!(
-            detail_gamepad_lane(&profile.input, slots, DeviceId(17), "Button13", true),
-            None
-        );
+        // 未割り当て機器は他側の番号付き binding を候補にしない。
+        assert_eq!(pad(&keys, slots, DeviceId(18), "Button13").select_lane(), None);
+
+        profile.input.select_input_mode =
+            crate::config::profile_config::SelectInputModeConfig::Key9;
+        let keys = SceneInputResolver::from_profile(&profile.input);
+        let control = pad(&keys, slots, DeviceId(16), "Button13");
+        assert_eq!(control.nine_key_lane(), Some(Lane::Key8));
+        assert_eq!(detail_input_for_control(&control, DetailValueKind::Bool), None);
+        // 9K の KEY8/9 は 2P 側ではない。2P 機器には 9K の binding が無い。
+        assert_eq!(pad(&keys, slots, DeviceId(17), "Button13").nine_key_lane(), None);
     }
 
     #[test]
     fn detail_gamepad_slots_preserve_local_parity() {
         let p = ProfileConfig::new_default("test", "Test", 0);
-        let slots = crate::input::gamepad::GamepadSlotMap::from_slot_ids([Some(0), Some(1)]);
+        let keys = SceneInputResolver::from_profile(&p.input);
         for (device, expected) in [(DeviceId(16), Lane::Key1), (DeviceId(17), Lane::Key8)] {
-            let lane = detail_gamepad_lane(&p.input, slots, device, "Button1", false).unwrap();
-            assert_eq!(lane, expected);
-            assert_eq!(detail_lane_direction(lane), Some(1));
+            let control = pad(&keys, both_slots(), device, "Button1");
+            assert_eq!(control.option_lane(), Some(expected));
+            assert_eq!(control.detail_value_direction(), Some(1));
         }
     }
 
@@ -1185,16 +1166,17 @@ mod tests {
             KeyMode::K9.play_map_key().into(),
             PlayModeInputConfig { bindings, ..Default::default() },
         );
-        let slots = crate::input::gamepad::GamepadSlotMap::from_slot_ids([Some(0), Some(1)]);
         // 7K/14K select input keeps the 14K layout, where Button1 is KEY1.
+        let keys = SceneInputResolver::from_profile(&profile.input);
         assert_eq!(
-            select_option_lane_for_gamepad(&profile.input, slots, DeviceId(16), "Button1"),
+            pad(&keys, both_slots(), DeviceId(16), "Button1").option_lane(),
             Some(Lane::Key1)
         );
         profile.input.select_input_mode =
             crate::config::profile_config::SelectInputModeConfig::Key9;
+        let keys = SceneInputResolver::from_profile(&profile.input);
         assert_eq!(
-            select_option_lane_for_gamepad(&profile.input, slots, DeviceId(16), "Button1"),
+            pad(&keys, both_slots(), DeviceId(16), "Button1").nine_key_lane(),
             Some(Lane::Key5)
         );
     }

@@ -155,6 +155,11 @@ pub fn restore_action_group_defaults(
 ) {
     let defaults = crate::config::profile_config::default_ui_bindings();
     for &action in actions_for_group(group) {
+        // 1P / 2P の個別設定は既定値が無いので、個別設定を消して共通設定の継承へ戻す。
+        if is_side_specific_gamepad_device(slot.device()) {
+            remove_action_exact_device_bindings(input, action, slot.device());
+            continue;
+        }
         let default_control = defaults.iter().find_map(|entry| {
             if entry.action != Some(action) || !device_matches(&entry.device, slot.device()) {
                 return None;

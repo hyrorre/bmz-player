@@ -42,6 +42,25 @@ pub const KEY_BINDING_SLOTS: &[KeyBindingSlot] = &[
     KeyBindingSlot::Controller,
 ];
 
+/// 共通操作 (E1〜E4) のスロット。コントローラーは共通設定に加えて 1P / 2P の個別設定を持つ。
+pub const COMMON_KEY_BINDING_SLOTS: &[KeyBindingSlot] = &[
+    KeyBindingSlot::KeyboardPrimary,
+    KeyBindingSlot::KeyboardSecondary,
+    KeyBindingSlot::Controller,
+    KeyBindingSlot::Controller1P,
+    KeyBindingSlot::Controller2P,
+];
+
+/// キーコンフィグのグループで編集できるスロット。
+pub fn binding_slots_for_group(group: KeyBindingGroup) -> &'static [KeyBindingSlot] {
+    match group {
+        KeyBindingGroup::Common => COMMON_KEY_BINDING_SLOTS,
+        KeyBindingGroup::Select | KeyBindingGroup::Play | KeyBindingGroup::Result => {
+            KEY_BINDING_SLOTS
+        }
+    }
+}
+
 impl KeyBindingSlot {
     pub fn suffix(self) -> &'static str {
         match self {
@@ -260,6 +279,9 @@ pub fn key_binding_targets_for_group(
     group: KeyBindingGroup,
     slot: KeyBindingSlot,
 ) -> Vec<KeyBindingTarget> {
+    if !binding_slots_for_group(group).contains(&slot) {
+        return Vec::new();
+    }
     let actions = match group {
         KeyBindingGroup::Common => COMMON_ACTIONS,
         KeyBindingGroup::Select => SELECT_ACTIONS,
@@ -649,10 +671,18 @@ fn format_action_binding(input: &ProfileInputConfig, target: KeyBindingTarget) -
         }
         KeyBindingSlot::Controller
         | KeyBindingSlot::Controller1P
-        | KeyBindingSlot::Controller2P => {
-            let controls = action_controls_for_slot(input, action, slot);
-            if controls.is_empty() { "(none)".to_string() } else { controls.join(" / ") }
-        }
+        | KeyBindingSlot::Controller2P => match action_controller_binding(input, action, slot) {
+            ActionControllerBinding::Explicit(controls) if !controls.is_empty() => {
+                controls.join(" / ")
+            }
+            ActionControllerBinding::Explicit(_) | ActionControllerBinding::Unassigned => {
+                "(none)".to_string()
+            }
+            ActionControllerBinding::Inherit(common) if common.is_empty() => {
+                "(COMMON: none)".to_string()
+            }
+            ActionControllerBinding::Inherit(common) => format!("(COMMON: {})", common.join(" / ")),
+        },
     }
 }
 
@@ -665,6 +695,7 @@ mod write;
 
 pub use api::*;
 use read::*;
+pub use read::{ActionControllerBinding, action_controller_binding};
 use write::*;
 
 #[cfg(test)]

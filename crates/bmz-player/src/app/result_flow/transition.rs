@@ -52,32 +52,17 @@ impl WinitApp {
         self.play_result_close_sound_with_fade_out(fade_out_frames);
     }
 
-    pub(super) fn request_result_exit_skip_for_key(
-        &mut self,
-        physical_key: PhysicalKey,
-        state: ElementState,
-        repeat: bool,
-    ) -> bool {
-        if result_exit_skip_key(physical_key, state, repeat) {
+    /// 終了アニメーションのスキップ。Enter / Escape と、各側の KEY1 / KEY3 / KEY5 / KEY7。
+    pub(super) fn request_result_exit_skip_for_control(&mut self, input: &ResolvedInput) -> bool {
+        if !input.pressed() || input.repeat() {
+            return false;
+        }
+        let control = input.scene();
+        let skip_key = matches!(control.standard(), Some(StandardKey::Enter | StandardKey::Escape));
+        if skip_key || control.ui_lane().is_some_and(lane_skips_result_exit) {
             return self.request_result_exit_skip();
         }
         false
-    }
-
-    pub(super) fn request_result_exit_skip_for_control(
-        &mut self,
-        control: &PhysicalControl,
-        pressed: bool,
-        repeat: bool,
-    ) -> bool {
-        if pressed && !repeat && self.result_exit_skip_control(control) {
-            return self.request_result_exit_skip();
-        }
-        false
-    }
-
-    pub(super) fn result_exit_skip_control(&self, control: &PhysicalControl) -> bool {
-        self.result_lane_for_control(control).is_some_and(lane_skips_result_exit)
     }
 
     pub(super) fn request_result_exit_skip(&mut self) -> bool {
@@ -191,27 +176,17 @@ impl WinitApp {
         !self.skin.skin_pipeline.is_pending(SkinKind::Play)
     }
 
-    pub(super) fn update_decide_cancel_control_state(
-        &mut self,
-        control: &str,
-        pressed: bool,
-    ) -> bool {
-        let mut handled = false;
-        if self.select.select_keys.is_start(control) {
-            self.play.decide_e1_held = pressed;
-            handled = true;
-        }
-        if self.select.select_keys.is_e2_action(control) {
-            self.play.play_e2_held = pressed;
-            handled = true;
-        }
-        if self.select.select_keys.is_e3_action(control) {
-            self.play.play_e3_held = pressed;
-            handled = true;
-        }
-        if !handled {
+    /// Decide の E1+E2+E3 キャンセル。保持状態は押下中の入力元から集約した値を使い、
+    /// 片側の E1 を離しても他の入力元の E1 が押されていれば保持を続ける。
+    pub(super) fn update_decide_cancel_control_state(&mut self, input: &ResolvedInput) -> bool {
+        let control = input.scene();
+        if input.repeat() || !(control.is_start() || control.is_e2() || control.is_e3()) {
             return false;
         }
+        let pressed = input.pressed();
+        self.play.decide_e1_held = self.input.start_held;
+        self.play.play_e2_held = self.input.select_held;
+        self.play.play_e3_held = self.input.select_e_action_holds.contains(&InputActionConfig::E3);
         update_play_exit_hold_started_at(
             &mut self.play.play_exit_hold_started_at,
             self.play.decide_e1_held,

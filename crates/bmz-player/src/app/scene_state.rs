@@ -302,9 +302,9 @@ impl WinitApp {
                 })
             }
         };
-        let mut skin_input = skin_logical_input_snapshot_from_pressed_controls(
-            &self.input.pressed_controls,
-            &self.select.select_keys,
+        let mut skin_input = skin_logical_input_snapshot_from_resolved(
+            self.pressed_scene_controls(),
+            self.input.pressed_keyboard_keys(),
         );
         let mix = &self.boot.profile_config.audio_mix;
         skin_input.audio_volumes = [mix.master_volume, mix.key_volume, mix.bgm_volume]

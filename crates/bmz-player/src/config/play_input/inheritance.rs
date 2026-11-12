@@ -113,7 +113,7 @@ pub fn lane_binding_for_key_mode_with_slots(
                     return None;
                 }
                 Some(BindingEntry {
-                    device: binding_device_from_config(&entry.device, slots),
+                    device: binding_device_from_config(&entry.device, slots)?,
                     control: control_from_config(&entry.device, &entry.control),
                     lane: lane_value,
                     scratch_direction: scratch_direction_from_binding(lane, &entry),
@@ -152,7 +152,7 @@ pub fn lane_binding_for_play_option_scratch_with_slots(
             .filter_map(|entry| {
                 let lane = entry.lane?;
                 Some(BindingEntry {
-                    device: binding_device_from_config(&entry.device, slots),
+                    device: binding_device_from_config(&entry.device, slots)?,
                     control: control_from_config(&entry.device, &entry.control),
                     lane: lane_from_config(lane),
                     scratch_direction: scratch_direction_from_binding(lane, &entry),

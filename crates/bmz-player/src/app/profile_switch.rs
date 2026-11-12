@@ -438,7 +438,7 @@ impl WinitApp {
         );
         self.select.select_sort =
             SelectSort::from_str_or_default(&self.boot.profile_config.select.sort);
-        self.select.select_keys = SelectKeyBindings::from_profile(&self.boot.profile_config.input);
+        self.select.select_keys = SceneInputResolver::from_profile(&self.boot.profile_config.input);
         self.reload_select_items();
         self.sync_selected_play_mode();
         self.sync_select_play_options_from_profile();

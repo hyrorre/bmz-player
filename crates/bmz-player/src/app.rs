@@ -63,7 +63,6 @@ use crate::config::app_config::{
 use crate::config::app_settings_registry::{AppSettingsChoices, AppSettingsEntryId};
 use crate::config::key_config::{
     KeyBindingSlot, KeyBindingTarget, apply_play_binding, clear_play_binding,
-    is_scratch_down_control, is_scratch_up_control,
 };
 use crate::config::load::load_profile_config;
 use crate::config::play::{
@@ -139,8 +138,7 @@ use crate::screens::select_model::{
     table_folder_items_for_active_sources, table_level_folder_items, table_source_url_from_context,
 };
 use crate::screens::settings_edit::{
-    AppSettingsEditSession, SelectSettingsEditSession, SettingsBindings, SettingsEditSession,
-    adjust_settings_draft,
+    AppSettingsEditSession, SelectSettingsEditSession, SettingsEditSession, adjust_settings_draft,
 };
 use crate::screens::settings_model::{
     CONFIG_KEYS_PATH, in_settings_stack, settings_breadcrumb_for_locale,
@@ -220,6 +218,7 @@ mod download_flow;
 mod event_loop_probe;
 mod frame_flow;
 mod frame_runtime;
+mod input_resolve;
 mod input_runtime;
 mod integration_support;
 mod integrations;
@@ -346,10 +345,10 @@ use skin_flow_prewarm::PrewarmedSceneSkin;
 use skin_runtime_types::*;
 use update_prompt::*;
 
-use select_key_bindings::{
-    SelectKeyBindings, play_analog_lane_cover_delta, select_analog_scroll_delta,
-    take_analog_scroll_steps, update_analog_scroll_buffer,
+use input_resolve::{
+    InputSource, PlayerSide, ResolvedControl, ResolvedInput, SceneInputResolver, StandardKey,
 };
+use select_key_bindings::{take_analog_scroll_steps, update_analog_scroll_buffer};
 
 #[cfg(test)]
 use crate::config::profile_config::{LaneConfig, SelectInputModeConfig};

@@ -4,13 +4,12 @@ impl WinitApp {
     pub(super) fn consume_captured_gamepad_events(&mut self) {
         let should_log_raw_input = self.should_log_gamepad_key_config_raw_input();
         let configs = gamepad_scratch_configs(&self.boot.profile_config.input);
-        let slots =
-            resolve_gamepad_runtime_slots(&self.boot.app_config.input, self.gamepad.as_ref());
-        let Some(gamepad) = &mut self.gamepad else { return };
-        gamepad.set_analog_config(
-            configs,
-            crate::input::gamepad::GamepadSlotMap::from_device_ids(slots),
+        let slots = crate::input::gamepad::GamepadSlotMap::from_device_ids(
+            resolve_gamepad_runtime_slots(&self.boot.app_config.input, self.gamepad.as_ref()),
         );
+        self.update_gamepad_slot_assignment(slots);
+        let Some(gamepad) = &mut self.gamepad else { return };
+        gamepad.set_analog_config(configs, slots);
         let backend_name = gamepad.name();
         let output = gamepad.poll();
         if self.jobs.profile_change.is_some() {
@@ -72,6 +71,23 @@ impl WinitApp {
         }
     }
 
+    /// 論理スロットの割り当てが変わったら、押下中の入力を新しい割り当てで解決し直す。
+    pub(super) fn update_gamepad_slot_assignment(
+        &mut self,
+        slots: crate::input::gamepad::GamepadSlotMap,
+    ) {
+        if self.input.gamepad_slots == slots {
+            return;
+        }
+        self.input.gamepad_slots = slots;
+        // 旧割り当てで始めた長押しは、新しい割り当てへ Release だけを送らないよう破棄する。
+        self.clear_select_hold();
+        self.reset_select_analog_scroll();
+        self.reset_play_analog_scroll();
+        self.sync_select_holds_from_pressed_controls();
+        self.reconcile_select_option_session();
+    }
+
     pub(super) fn route_gamepad_button_event(
         &mut self,
         event: &crate::input::gamepad::GamepadButtonEvent,
@@ -84,14 +100,24 @@ impl WinitApp {
         // holdは物理状態を正とする。2回押しなどの単発操作はこの後のフィルターを通す。
         self.sync_select_holds_from_pressed_controls();
         self.sync_play_control_holds_from_pressed_controls();
-        if self.detail_options_blocks_held_input(&control_event) {
+        let input = self.resolve_control_event(control_event);
+        if self.detail_options_blocks_held_input(&input) {
             return;
         }
         if self.viewer_waiting {
             self.sync_viewer_wait_exit_holds();
             return;
         }
+        // キーコンフィグの入力待ちは解決前の生の名前を使い、通常操作へ流さない。
         if self.capture_egui_key_config_gamepad(&event.name, event.pressed) {
+            return;
+        }
+        if in_settings_stack(&self.select.folder_stack)
+            && self.select.key_config_edit.as_ref().is_some_and(|session| session.listening)
+        {
+            if event.pressed {
+                self.apply_key_config_gamepad(&event.name);
+            }
             return;
         }
         if matches!(self.view_state(), AppViewState::Select)
@@ -108,25 +134,25 @@ impl WinitApp {
             device_event.bounce_policy = InputBouncePolicy::Bypass;
         }
         let device_event = self.filter_app_input_bounce(device_event);
-        if self.route_select_option_session_event(&control_event, device_event.is_some()) {
+        if self.route_select_option_session_event(&input, device_event.is_some()) {
             return;
         }
-        let Some(device_event) = device_event else { return };
-        if self.route_detail_options_input(&control_event) {
+        if device_event.is_none() {
+            return;
+        }
+        if self.route_detail_options_input(&input) {
             return;
         }
         if self.detail_options_enabled() && self.select.select_option_panel == 1 {
-            if event.pressed {
-                let changed = if let Some(cycle) =
-                    target_cycle_from_control(&event.name, &self.select.select_keys)
-                {
-                    if event.synthesized_analog_axis {
+            if input.pressed() {
+                let changed = if let Some(cycle) = target_cycle_from_input(input.scene()) {
+                    if input.synthesized_analog_axis() {
                         return;
                     }
                     self.apply_target_option_cycle(cycle);
                     true
                 } else {
-                    self.apply_gamepad_play_option_control(event.device_id, &event.name)
+                    self.apply_play_option_input(input.scene())
                 };
                 if changed {
                     self.play_system_sound(crate::system_sound::SoundType::OptionChange);
@@ -134,17 +160,11 @@ impl WinitApp {
             }
             return;
         }
-        let practice_config = self
-            .play
-            .practice_session
-            .as_ref()
-            .is_some_and(|practice| practice.phase == PracticePhase::Config);
-        let _ = (practice_config, device_event); // Gameplay input was delivered by InputCapture.
-
+        // Gameplay input was delivered by InputCapture.
         if self.viewer_waiting {
             return;
         }
-        self.route_gamepad_button(&control_event);
+        self.route_gamepad_button(&input);
     }
 
     fn resync_gamepad_pressed_controls(
@@ -186,13 +206,15 @@ impl WinitApp {
         {
             return;
         }
-        if self.apply_play_analog_option_ticks(axis, ticks) {
+        // tick ごとにデバイスと方向を解決してから合算する。
+        let tick = self.resolve_gamepad_axis_tick(device, axis, ticks);
+        if self.apply_play_analog_option_ticks(tick.play_scroll) {
             return;
         }
-        if self.accumulate_result_ir_analog_ticks(axis, ticks) {
+        if self.accumulate_result_ir_analog_ticks(tick.scene_scroll) {
             return;
         }
-        self.accumulate_select_analog_ticks(axis, ticks);
+        self.accumulate_select_analog_ticks(tick.scene_scroll);
     }
 
     pub(super) fn apply_practice_analog_cursor_ticks(
@@ -245,9 +267,9 @@ impl WinitApp {
         true
     }
 
-    pub(super) fn apply_play_analog_option_ticks(&mut self, axis: &str, ticks: i32) -> bool {
-        let Some(delta) = play_analog_lane_cover_delta(axis, ticks, &self.select.select_keys)
-        else {
+    /// プレイ中の E1/E2 + アナログSCR。現在のプレイ用 SCR 設定で解決した寄与を受け取る。
+    pub(super) fn apply_play_analog_option_ticks(&mut self, play_scroll: Option<i32>) -> bool {
+        let Some(delta) = play_scroll else {
             return false;
         };
         let mode = match (self.play.play_e1_held, self.play.play_e2_held) {
@@ -309,7 +331,7 @@ impl WinitApp {
     }
 
     /// 選曲画面のアナログスクラッチ tick を蓄積する。回転量比例スクロール用。
-    pub(super) fn accumulate_select_analog_ticks(&mut self, axis: &str, ticks: i32) {
+    pub(super) fn accumulate_select_analog_ticks(&mut self, scene_scroll: Option<i32>) {
         if !matches!(self.view_state(), AppViewState::Select)
             || self.play.active_play.is_some()
             || self.play.pending_decide.is_some()
@@ -320,7 +342,7 @@ impl WinitApp {
         {
             return;
         }
-        let Some(delta) = select_analog_scroll_delta(axis, ticks, &self.select.select_keys) else {
+        let Some(delta) = scene_scroll else {
             return;
         };
         let now = Instant::now();
@@ -356,11 +378,11 @@ impl WinitApp {
         self.play.play_analog_last_tick_at = None;
     }
 
-    pub(super) fn accumulate_result_ir_analog_ticks(&mut self, axis: &str, ticks: i32) -> bool {
+    pub(super) fn accumulate_result_ir_analog_ticks(&mut self, scene_scroll: Option<i32>) -> bool {
         if !matches!(self.view_state(), AppViewState::Result) {
             return false;
         }
-        let Some(delta) = select_analog_scroll_delta(axis, ticks, &self.select.select_keys) else {
+        let Some(delta) = scene_scroll else {
             return false;
         };
         if !self.result_ir_scroll_interactive() {
@@ -462,58 +484,52 @@ impl WinitApp {
         }
     }
 
-    pub(super) fn route_gamepad_button(&mut self, control_event: &ControlInputEvent) {
-        let device = control_event.device;
-        let button = control_event.name.as_deref().expect("gamepad control always has a name");
-        let pressed = control_event.pressed;
-        let synthesized_analog_axis = control_event.synthesized_analog_axis;
-        let physical_control =
-            control_event.physical.as_ref().expect("gamepad control always has a physical value");
+    pub(super) fn route_gamepad_button(&mut self, input: &ResolvedInput) {
+        let pressed = input.pressed();
+        let synthesized_analog_axis = input.synthesized_analog_axis();
         let has_play_control_context =
             self.play.active_play.is_some() || self.play.pending_play_start.is_some();
+        let control = *input.scene();
         if pressed
             && self.select.key_config_edit.is_none()
-            && self.select.select_keys.is_screenshot(button)
+            && control.has_shortcut(InputActionConfig::Screenshot)
         {
             self.request_manual_screenshot();
             return;
         }
-        if self.route_practice_gamepad_control(device, button, pressed, synthesized_analog_axis) {
+        if self.route_practice_gamepad_control(input) {
             return;
         }
         if should_route_quick_retry_input(pressed, false, self.play.play_ending.is_some())
-            && self.handle_quick_retry_control(button)
+            && self.handle_quick_retry_control(input)
         {
             return;
         }
-        if pressed && self.begin_play_fadeout_after_final_notes_control(button) {
+        if pressed && self.begin_play_fadeout_after_final_notes_control(input) {
             return;
         }
         if self.play.play_ending.is_some() {
             return;
         }
-        let play_e1_control = has_play_control_context
-            && self.update_play_e1_control_state(device, physical_control, pressed);
-        if has_play_control_context
-            && self.update_play_exit_control_state(device, physical_control, pressed)
-        {
+        let play_e1_control = has_play_control_context && self.update_play_e1_control_state(input);
+        if has_play_control_context && self.update_play_exit_control_state(input) {
             return;
         }
-        let play_option_control = pressed.then(|| {
-            play_option_control_for_input(
-                device,
-                physical_control,
-                self.play.play_e1_held,
-                self.play.play_e2_held,
-                self.play.play_option_input.as_ref(),
-                &self.boot.profile_config.input,
-            )
-        });
-        let play_option_control = play_option_control.flatten();
+        let play_option_control = pressed
+            .then(|| {
+                play_option_control_for_input(
+                    input,
+                    self.play.play_e1_held,
+                    self.play.play_e2_held,
+                    self.play.play_option_input.as_ref(),
+                    &self.boot.profile_config.input,
+                )
+            })
+            .flatten();
         let play_option_lane_action = play_option_control
             .and_then(|action| lane_action_from_option(action, synthesized_analog_axis));
         if has_play_control_context {
-            self.update_lane_cover_key_hold(control_event, false);
+            self.update_lane_cover_key_hold(input, false);
         }
         if pressed {
             let lane_cover_changing =
@@ -529,25 +545,17 @@ impl WinitApp {
         if !pressed {
             if matches!(self.view_state(), AppViewState::Select)
                 && self.select.select_option_panel == 0
-                && self.select.select_keys.is_ir_battle_hold(button)
-                && self.finish_select_ir_battle_hold(button)
+                && let Some(source) = input.source()
+                && self.finish_select_ir_battle_hold(source)
             {
                 return;
             }
-            if in_settings_stack(&self.select.folder_stack) {
-                self.clear_select_hold_control(button);
-                return;
+            if let Some(source) = input.source() {
+                self.clear_select_hold_control(source);
             }
-            self.update_select_e_action_hold(button, false);
-            if self.select.select_keys.is_start(button) {
-                self.set_start_held(false);
-            } else if self.select.select_keys.is_e2_action(button) {
-                self.set_select_held(false);
-            }
+            // E1/E2 の押下状態は入力元ごとの押下集合から集約済み。
             return;
         }
-
-        self.update_select_e_action_hold(button, true);
 
         // プレイ中: Start / E1 の2回連続押しでレーンカバー表示切替。
         // プレイ入力自体は push_shared_event で処理済み。
@@ -559,10 +567,10 @@ impl WinitApp {
         }
 
         if self.play.pending_decide.is_some() {
-            if self.update_decide_cancel_control_state(button, pressed) {
+            if self.update_decide_cancel_control_state(input) {
                 return;
             }
-            if let Some(action) = scene_decide_action(control_event, &self.select.select_keys) {
+            if let Some(action) = scene_decide_action(input) {
                 self.begin_decide_fadeout(matches!(action, DecideAction::Cancel));
             }
             return;
@@ -584,20 +592,14 @@ impl WinitApp {
         // コース曲間の中間リザルト: リトライ無効、次の曲へ進むだけ。
         // retry を持つ単曲リザルト分岐より先に評価する。
         if self.is_course_intermediate_result() {
-            let control = PhysicalControl::GamepadButton(button.to_string());
-            if self.request_result_exit_skip_for_control(&control, pressed, false) {
+            if self.request_result_exit_skip_for_control(input) {
                 return;
             }
             if self.result.result_exit.is_none() {
-                if self.handle_course_intermediate_control(
-                    &control,
-                    pressed,
-                    false,
-                    synthesized_analog_axis,
-                ) {
+                if self.handle_course_intermediate_control(input) {
                     return;
                 }
-                if self.result_input_ready() && scene_result_action(control_event).is_some() {
+                if self.result_input_ready() && scene_result_action(input).is_some() {
                     self.begin_result_exit(self.course_intermediate_exit_action());
                 }
             }
@@ -606,19 +608,18 @@ impl WinitApp {
 
         // リザルト画面
         if self.result.finished_play.is_some() && self.result.finished_course.is_none() {
-            let control = PhysicalControl::GamepadButton(button.to_string());
             // フェードアウト中でも Key5/Key7 の押下状態は追跡する。
-            self.track_result_lane_hold(&control, pressed);
-            if self.request_result_exit_skip_for_control(&control, pressed, false) {
+            self.sync_result_lane_holds_from_pressed_controls();
+            if self.request_result_exit_skip_for_control(input) {
                 return;
             }
             // 終了アニメーション中 (result_exit=Some) は held 追跡のみ行う。
             if self.result.result_exit.is_none() {
-                if self.handle_result_control(&control, pressed, false, synthesized_analog_axis) {
+                if self.handle_result_control(input) {
                     return;
                 }
                 if self.result_input_ready()
-                    && let Some(action) = scene_result_action(control_event)
+                    && let Some(action) = scene_result_action(input)
                 {
                     self.apply_result_action(action, false);
                 }
@@ -629,22 +630,16 @@ impl WinitApp {
         // コース（段位）リザルト: Key5/Key7 はフェードアウト後の hold 状態で
         // retry arrange を決める。コントローラーに固定の操作はなく、鍵盤の割り当てだけで判定する。
         if self.result.finished_course.is_some() {
-            let control = PhysicalControl::GamepadButton(button.to_string());
-            self.track_result_lane_hold(&control, pressed);
-            if self.request_result_exit_skip_for_control(&control, pressed, false) {
+            self.sync_result_lane_holds_from_pressed_controls();
+            if self.request_result_exit_skip_for_control(input) {
                 return;
             }
             if self.result.result_exit.is_none() {
-                if self.handle_course_result_control(
-                    &control,
-                    pressed,
-                    false,
-                    synthesized_analog_axis,
-                ) {
+                if self.handle_course_result_control(input) {
                     return;
                 }
                 if self.result_input_ready()
-                    && let Some(action) = scene_result_action(control_event)
+                    && let Some(action) = scene_result_action(input)
                 {
                     self.apply_result_action(action, true);
                 }
@@ -653,71 +648,48 @@ impl WinitApp {
         }
 
         if in_settings_stack(&self.select.folder_stack) {
-            if self.select.key_config_edit.as_ref().is_some_and(|session| session.listening) {
-                if pressed {
-                    self.apply_key_config_gamepad(button);
-                }
-                return;
-            }
-            if pressed {
-                let _ = self.route_settings_control(button, synthesized_analog_axis);
-            }
+            let _ = self.route_settings_control(input);
             return;
         }
 
         if self.select.select_option_panel == 0
-            && self.select.select_keys.is_ir_battle_hold(button)
-            && self.begin_select_ir_battle_hold(
-                button,
-                scene_select_action(control_event, &self.select.select_keys),
-            )
+            && control.is_ir_battle_hold()
+            && let Some(source) = input.source()
+            && self.begin_select_ir_battle_hold(source.clone(), scene_select_action(input))
         {
             return;
         }
 
         if self.select.select_option_panel == 0
             && self.select_ir_scope_toggle_is_e3()
-            && self.is_select_ir_scope_toggle_control(button)
+            && control.is_e3()
             && self.toggle_select_ir_scope()
         {
             return;
         }
 
         if should_toggle_select_gauge_auto_shift(
-            button,
+            &control,
             self.input.start_held,
             self.input.select_held,
-            &self.select.select_keys,
         ) {
             self.toggle_gauge_auto_shift();
             self.play_system_sound(crate::system_sound::SoundType::OptionChange);
-            if self.select.select_keys.is_e2_action(button) {
-                self.set_select_held(true);
-            }
             return;
         }
 
         if should_toggle_select_judge_auto_adjust(
-            button,
+            &control,
             self.input.start_held,
             self.input.select_held,
-            &self.select.select_keys,
         ) {
             self.toggle_visual_offset_auto_adjust();
             self.play_system_sound(crate::system_sound::SoundType::OptionChange);
-            if self.select.select_keys.is_e2_action(button) {
-                self.set_select_held(true);
-            }
             return;
         }
 
-        if self.select.select_keys.is_start(button) {
-            self.set_start_held(true);
-            return;
-        }
-
-        if self.select.select_keys.is_e2_action(button) {
-            self.set_select_held(true);
+        if control.is_start() || control.is_e2() {
+            // パネルの開閉は押下集合から集約した E1/E2 の状態で決める。
             return;
         }
 
@@ -727,7 +699,7 @@ impl WinitApp {
                 return;
             }
             if self.select.select_option_panel == 1
-                && let Some(cycle) = target_cycle_from_control(button, &self.select.select_keys)
+                && let Some(cycle) = target_cycle_from_input(&control)
             {
                 if synthesized_analog_axis {
                     return;
@@ -737,12 +709,12 @@ impl WinitApp {
                 return;
             }
             let option_changed = match self.select.select_option_panel {
-                1 => self.apply_gamepad_play_option_control(device, button),
+                1 => self.apply_play_option_input(&control),
                 2 => {
-                    self.apply_gamepad_legacy_assist_control(device, button);
+                    self.apply_legacy_assist_input(&control);
                     return;
                 }
-                3 => self.apply_detail_option_control(button),
+                3 => self.apply_detail_option_control(&control),
                 _ => false,
             };
             if option_changed {
@@ -752,9 +724,9 @@ impl WinitApp {
         }
 
         if matches!(self.view_state(), AppViewState::Select)
-            && let Some(action) = scene_select_action(control_event, &self.select.select_keys)
+            && let Some(action) = scene_select_action(input)
         {
-            self.apply_select_action(action, Some(button));
+            self.apply_select_action(action, input.source());
         }
     }
 }

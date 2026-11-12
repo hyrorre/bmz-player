@@ -227,31 +227,47 @@ fn course_retirement_and_retry_preserve_results_and_cancel_pending_launches() {
                     0 => assert!(app.stop_play_like_escape("test Escape")),
                     1 | 3 => {
                         let key = if gesture == 1 { "Q" } else { "R" };
-                        app.update_play_e1_control_state(
-                            W_KEYBOARD_DEVICE_ID,
-                            &PhysicalControl::KeyboardKey(key.into()),
-                            true,
-                        );
-                        app.update_play_exit_control_state(
-                            W_KEYBOARD_DEVICE_ID,
-                            &PhysicalControl::KeyboardKey("W".into()),
-                            true,
-                        );
+                        {
+                            let input = app.test_device_input(
+                                W_KEYBOARD_DEVICE_ID,
+                                &PhysicalControl::KeyboardKey(key.into()),
+                                true,
+                                false,
+                            );
+                            app.update_play_e1_control_state(&input)
+                        };
+                        {
+                            let input = app.test_device_input(
+                                W_KEYBOARD_DEVICE_ID,
+                                &PhysicalControl::KeyboardKey("W".into()),
+                                true,
+                                false,
+                            );
+                            app.update_play_exit_control_state(&input)
+                        };
                         app.play.play_exit_hold_started_at =
                             Some(Instant::now() - Duration::from_secs(60));
                         assert!(app.stop_play_if_exit_hold_elapsed());
                     }
                     _ => {
-                        app.update_play_exit_control_state(
-                            W_KEYBOARD_DEVICE_ID,
-                            &PhysicalControl::KeyboardKey("W".into()),
-                            true,
-                        );
-                        assert!(app.update_play_exit_control_state(
-                            W_KEYBOARD_DEVICE_ID,
-                            &PhysicalControl::KeyboardKey("E".into()),
-                            true,
-                        ));
+                        {
+                            let input = app.test_device_input(
+                                W_KEYBOARD_DEVICE_ID,
+                                &PhysicalControl::KeyboardKey("W".into()),
+                                true,
+                                false,
+                            );
+                            app.update_play_exit_control_state(&input)
+                        };
+                        assert!({
+                            let input = app.test_device_input(
+                                W_KEYBOARD_DEVICE_ID,
+                                &PhysicalControl::KeyboardKey("E".into()),
+                                true,
+                                false,
+                            );
+                            app.update_play_exit_control_state(&input)
+                        });
                     }
                 }
                 let ending = app.play.play_ending.as_ref().unwrap();
@@ -265,7 +281,11 @@ fn course_retirement_and_retry_preserve_results_and_cancel_pending_launches() {
                 );
                 assert!(ending.fadeout_started_at.is_some());
                 assert!(app.stop_play_like_escape("repeated retire"));
-                assert!(!app.handle_quick_retry_control("Q"));
+                assert!(!{
+                    let input =
+                        app.test_input(&PhysicalControl::KeyboardKey("Q".into()), true, false);
+                    app.handle_quick_retry_control(&input)
+                });
                 assert!(
                     tx.send(PlayPreloadResult {
                         generation,

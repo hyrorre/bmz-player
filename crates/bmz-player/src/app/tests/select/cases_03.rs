@@ -21,9 +21,18 @@ fn take_analog_scroll_steps_keeps_remainder() {
 #[test]
 fn select_modifier_keys_are_handled_before_folder_back() {
     let keys = default_select_keys();
-    assert!(!is_select_modifier_key(PhysicalKey::Code(KeyCode::ArrowLeft), &keys));
-    assert!(is_select_modifier_key(PhysicalKey::Code(KeyCode::KeyW), &keys));
-    assert!(!is_select_modifier_key(PhysicalKey::Code(KeyCode::KeyS), &keys));
+    assert!(!{
+        let control = resolve_key(&keys, KeyCode::ArrowLeft);
+        control.is_start() || control.is_e2()
+    });
+    assert!({
+        let control = resolve_key(&keys, KeyCode::KeyW);
+        control.is_start() || control.is_e2()
+    });
+    assert!(!{
+        let control = resolve_key(&keys, KeyCode::KeyS);
+        control.is_start() || control.is_e2()
+    });
     assert_eq!(
         select_action(PhysicalKey::Code(KeyCode::ArrowLeft), ElementState::Pressed, false, &keys),
         Some(SelectAction::ExitFolder)
@@ -41,50 +50,54 @@ fn select_modifier_keys_are_handled_before_folder_back() {
 #[test]
 fn select_start_key_uses_profile_start_binding() {
     let keys = default_select_keys();
-    assert!(is_select_start_key(PhysicalKey::Code(KeyCode::KeyQ), &keys));
-    assert!(!is_select_start_key(PhysicalKey::Code(KeyCode::KeyW), &keys));
-    assert!(!is_select_start_key(PhysicalKey::Code(KeyCode::KeyS), &keys));
+    assert!(resolve_key(&keys, KeyCode::KeyQ).is_start());
+    assert!(!resolve_key(&keys, KeyCode::KeyW).is_start());
+    assert!(!resolve_key(&keys, KeyCode::KeyS).is_start());
 }
 
 #[test]
 fn select_key_bindings_map_e1_plus_key7_to_autoplay_option() {
     let keys = default_select_keys();
 
-    assert!(keys.is_start("Q"));
-    assert!(keys.is_ui_key7("V"));
-    assert!(keys.is_enter("V"));
+    assert!(resolve_named(&keys, "Q").is_start());
+    assert!(resolve_named(&keys, "V").is_ui_key(7));
+    assert!(resolve_named(&keys, "V").is_enter());
 }
 
 #[test]
 fn select_key_bindings_include_e3_action() {
     let keys = default_select_keys();
 
-    assert!(keys.is_e3_action("E"));
+    assert!(resolve_named(&keys, "E").is_e3());
 }
 
 #[test]
 fn select_key_bindings_expose_key2_for_gas_toggle() {
     let keys = default_select_keys();
 
-    assert!(keys.is_start("Q"));
-    assert!(keys.is_back("W"));
-    assert!(keys.is_back("S"));
-    assert!(keys.is_back("D"));
-    assert!(keys.is_back("F"));
-    assert!(keys.is_key2("S"));
+    assert!(resolve_named(&keys, "Q").is_start());
+    assert!(resolve_named(&keys, "W").is_back());
+    assert!(resolve_named(&keys, "S").is_back());
+    assert!(resolve_named(&keys, "D").is_back());
+    assert!(resolve_named(&keys, "F").is_back());
+    assert!(resolve_named(&keys, "S").select_lane().map(|lane| lane.lane) == Some(Lane::Key2));
 }
 
 #[test]
 fn select_key_bindings_expose_2p_keys_for_random2() {
     let keys = default_select_keys();
 
-    assert!(keys.is_key8("M"));
-    assert!(keys.is_key9("K"));
-    assert!(keys.is_key10("Comma"));
-    assert!(keys.is_key11("L"));
-    assert!(keys.is_key12("Period"));
-    assert!(keys.is_key13("Semicolon"));
-    assert!(keys.is_key14("Slash"));
+    assert!(resolve_named(&keys, "M").select_lane().map(|lane| lane.lane) == Some(Lane::Key8));
+    assert!(resolve_named(&keys, "K").select_lane().map(|lane| lane.lane) == Some(Lane::Key9));
+    assert!(resolve_named(&keys, "Comma").select_lane().map(|lane| lane.lane) == Some(Lane::Key10));
+    assert!(resolve_named(&keys, "L").select_lane().map(|lane| lane.lane) == Some(Lane::Key11));
+    assert!(
+        resolve_named(&keys, "Period").select_lane().map(|lane| lane.lane) == Some(Lane::Key12)
+    );
+    assert!(
+        resolve_named(&keys, "Semicolon").select_lane().map(|lane| lane.lane) == Some(Lane::Key13)
+    );
+    assert!(resolve_named(&keys, "Slash").select_lane().map(|lane| lane.lane) == Some(Lane::Key14));
 }
 
 #[test]
@@ -92,42 +105,48 @@ fn select_key_bindings_treat_2p_keys_as_ui_equivalents() {
     let keys = select_keys_with_full_2p_bindings();
 
     for control in ["M", "Comma", "Period", "Slash", "P2K7"] {
-        assert!(keys.is_enter(control), "{control} should decide like odd 1P keys");
+        assert!(
+            resolve_named(&keys, control).is_enter(),
+            "{control} should decide like odd 1P keys"
+        );
     }
     for control in ["K", "L", "Semicolon", "P2K6"] {
-        assert!(keys.is_back(control), "{control} should go back like even 1P keys");
+        assert!(
+            resolve_named(&keys, control).is_back(),
+            "{control} should go back like even 1P keys"
+        );
     }
-    assert_eq!(keys.ui_lane_for_control("M"), Some(Lane::Key1));
-    assert_eq!(keys.ui_lane_for_control("K"), Some(Lane::Key2));
-    assert_eq!(keys.ui_lane_for_control("Comma"), Some(Lane::Key3));
-    assert_eq!(keys.ui_lane_for_control("L"), Some(Lane::Key4));
-    assert_eq!(keys.ui_lane_for_control("Period"), Some(Lane::Key5));
-    assert_eq!(keys.ui_lane_for_control("Semicolon"), Some(Lane::Key6));
-    assert_eq!(keys.ui_lane_for_control("Slash"), Some(Lane::Key7));
-    assert_eq!(keys.ui_lane_for_control("P2K6"), Some(Lane::Key6));
-    assert_eq!(keys.ui_lane_for_control("P2K7"), Some(Lane::Key7));
+    assert_eq!(resolve_named(&keys, "M").ui_lane(), Some(Lane::Key1));
+    assert_eq!(resolve_named(&keys, "K").ui_lane(), Some(Lane::Key2));
+    assert_eq!(resolve_named(&keys, "Comma").ui_lane(), Some(Lane::Key3));
+    assert_eq!(resolve_named(&keys, "L").ui_lane(), Some(Lane::Key4));
+    assert_eq!(resolve_named(&keys, "Period").ui_lane(), Some(Lane::Key5));
+    assert_eq!(resolve_named(&keys, "Semicolon").ui_lane(), Some(Lane::Key6));
+    assert_eq!(resolve_named(&keys, "Slash").ui_lane(), Some(Lane::Key7));
+    assert_eq!(resolve_named(&keys, "P2K6").ui_lane(), Some(Lane::Key6));
+    assert_eq!(resolve_named(&keys, "P2K7").ui_lane(), Some(Lane::Key7));
 }
 
 #[test]
 fn select_gauge_auto_shift_toggle_requires_start_then_key2() {
     let keys = default_select_keys();
 
-    assert!(should_toggle_select_gauge_auto_shift("S", true, true, &keys));
-    assert!(should_toggle_select_gauge_auto_shift("K", true, true, &keys));
-    assert!(!should_toggle_select_gauge_auto_shift("Q", false, true, &keys));
-    assert!(!should_toggle_select_gauge_auto_shift("Q", true, true, &keys));
-    assert!(!should_toggle_select_gauge_auto_shift("W", true, false, &keys));
+    assert!(should_toggle_select_gauge_auto_shift(&resolve_named(&keys, "S"), true, true));
+    assert!(should_toggle_select_gauge_auto_shift(&resolve_named(&keys, "K"), true, true));
+    assert!(!should_toggle_select_gauge_auto_shift(&resolve_named(&keys, "Q"), false, true));
+    assert!(!should_toggle_select_gauge_auto_shift(&resolve_named(&keys, "Q"), true, true));
+    assert!(!should_toggle_select_gauge_auto_shift(&resolve_named(&keys, "W"), true, false));
 }
 
 #[test]
 fn select_judge_auto_adjust_toggle_requires_start_then_key3() {
     let keys = default_select_keys();
 
-    assert!(should_toggle_select_judge_auto_adjust("X", true, true, &keys));
-    assert!(should_toggle_select_judge_auto_adjust("Comma", true, true, &keys));
-    assert!(!should_toggle_select_judge_auto_adjust("X", false, true, &keys));
-    assert!(!should_toggle_select_judge_auto_adjust("S", true, true, &keys));
-    assert!(!should_toggle_select_judge_auto_adjust("W", true, false, &keys));
+    assert!(should_toggle_select_judge_auto_adjust(&resolve_named(&keys, "X"), true, true));
+    assert!(should_toggle_select_judge_auto_adjust(&resolve_named(&keys, "Comma"), true, true));
+    assert!(!should_toggle_select_judge_auto_adjust(&resolve_named(&keys, "X"), false, true));
+    assert!(!should_toggle_select_judge_auto_adjust(&resolve_named(&keys, "S"), true, true));
+    assert!(!should_toggle_select_judge_auto_adjust(&resolve_named(&keys, "W"), true, false));
 }
 
 #[test]
@@ -295,7 +314,7 @@ fn result_panel_direct_selection_matches_tab_availability() {
 fn play_option_control_uses_chart_mode_instead_of_select_input_mode() {
     let input = crate::config::play_input::default_profile_input();
     assert_eq!(input.select_input_mode, SelectInputModeConfig::Key7Key14);
-    let keys = SelectKeyBindings::from_profile(&input);
+    let keys = SceneInputResolver::from_profile(&input);
     let play_input = play_option_input_for(&input, KeyMode::K9);
 
     assert_eq!(

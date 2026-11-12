@@ -39,7 +39,7 @@ fn active_lane_state_keeps_green_number_captured_when_switching_to_fhs() {
 #[test]
 fn play_option_control_maps_seven_key_lane_and_scratch_targets() {
     let input = crate::config::play_input::default_profile_input();
-    let keys = SelectKeyBindings::from_profile(&input);
+    let keys = SceneInputResolver::from_profile(&input);
     let play_input = play_option_input_for(&input, KeyMode::K7);
 
     assert_eq!(
@@ -75,7 +75,7 @@ fn play_option_control_maps_seven_key_lane_and_scratch_targets() {
 #[test]
 fn play_option_control_maps_scratch_for_scratchless_key_modes() {
     let input = crate::config::play_input::default_profile_input();
-    let keys = SelectKeyBindings::from_profile(&input);
+    let keys = SceneInputResolver::from_profile(&input);
 
     for key_mode in [KeyMode::K4, KeyMode::K6, KeyMode::K8, KeyMode::K9] {
         let play_input = play_option_input_for(&input, key_mode);
@@ -109,7 +109,7 @@ fn play_option_control_maps_scratch_for_scratchless_key_modes() {
 #[test]
 fn play_option_control_maps_e2_to_mode_specific_green_number_direction() {
     let input = crate::config::play_input::default_profile_input();
-    let keys = SelectKeyBindings::from_profile(&input);
+    let keys = SceneInputResolver::from_profile(&input);
     let play_input = play_option_input_for(&input, KeyMode::K7);
 
     assert_eq!(
@@ -135,7 +135,7 @@ fn play_option_control_maps_e2_to_mode_specific_green_number_direction() {
 fn play_option_control_inverts_only_e2_key_green_number_when_enabled() {
     let mut input = crate::config::play_input::default_profile_input();
     input.invert_e2_key_green_number = true;
-    let keys = SelectKeyBindings::from_profile(&input);
+    let keys = SceneInputResolver::from_profile(&input);
     let play_input = play_option_input_for(&input, KeyMode::K7);
     let option = |control: &str, e1: bool, e2: bool| {
         keyboard_play_option(control, e1, e2, &keys, &play_input, &input)
@@ -166,7 +166,7 @@ fn play_option_control_inverts_only_e2_key_green_number_when_enabled() {
 #[test]
 fn inverted_e2_green_number_follows_the_eight_key_direction_override() {
     let mut input = crate::config::play_input::default_profile_input();
-    let keys = SelectKeyBindings::from_profile(&input);
+    let keys = SceneInputResolver::from_profile(&input);
     let play_input = play_option_input_for(&input, KeyMode::K8);
     assert!(crate::config::play_input::set_eight_key_hispeed_direction(
         &mut input,
@@ -187,7 +187,7 @@ fn inverted_e2_green_number_follows_the_eight_key_direction_override() {
 #[test]
 fn play_option_control_applies_eight_key_default_and_override() {
     let mut input = crate::config::play_input::default_profile_input();
-    let keys = SelectKeyBindings::from_profile(&input);
+    let keys = SceneInputResolver::from_profile(&input);
     let play_input = play_option_input_for(&input, KeyMode::K8);
 
     assert_eq!(
@@ -240,25 +240,11 @@ fn play_option_control_distinguishes_two_player_gamepads() {
     let control = PhysicalControl::GamepadButton("Button1".to_string());
 
     assert_eq!(
-        play_option_control_for_input(
-            DeviceId(11),
-            &control,
-            true,
-            false,
-            Some(&play_input),
-            &input,
-        ),
+        play_option_for(DeviceId(11), &control, true, false, Some(&play_input), &input,),
         Some(PlayOptionControl::Hispeed(HispeedChange::Down))
     );
     assert_eq!(
-        play_option_control_for_input(
-            DeviceId(22),
-            &control,
-            true,
-            false,
-            Some(&play_input),
-            &input,
-        ),
+        play_option_for(DeviceId(22), &control, true, false, Some(&play_input), &input,),
         Some(PlayOptionControl::Hispeed(HispeedChange::Up))
     );
 }
@@ -381,18 +367,11 @@ fn play_option_control_prioritizes_two_player_lane_over_other_devices_e2_button(
     let control = PhysicalControl::GamepadButton("Button10".to_string());
 
     assert_eq!(
-        play_option_control_for_input(
-            DeviceId(11),
-            &control,
-            true,
-            true,
-            Some(&play_input),
-            &input,
-        ),
+        play_option_for(DeviceId(11), &control, true, true, Some(&play_input), &input,),
         Some(PlayOptionControl::ToggleHispeedMode)
     );
     assert_eq!(
-        play_option_control_for_input(
+        play_option_for(
             DeviceId(11),
             &PhysicalControl::GamepadButton("Button9".to_string()),
             true,
@@ -403,25 +382,11 @@ fn play_option_control_prioritizes_two_player_lane_over_other_devices_e2_button(
         Some(PlayOptionControl::ToggleHispeedMode)
     );
     assert_eq!(
-        play_option_control_for_input(
-            DeviceId(22),
-            &control,
-            true,
-            false,
-            Some(&play_input),
-            &input,
-        ),
+        play_option_for(DeviceId(22), &control, true, false, Some(&play_input), &input,),
         Some(PlayOptionControl::Hispeed(HispeedChange::Up))
     );
     assert_eq!(
-        play_option_control_for_input(
-            DeviceId(22),
-            &control,
-            false,
-            true,
-            Some(&play_input),
-            &input,
-        ),
+        play_option_for(DeviceId(22), &control, false, true, Some(&play_input), &input,),
         Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
     );
 

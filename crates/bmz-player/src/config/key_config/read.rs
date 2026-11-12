@@ -245,20 +245,77 @@ pub(super) fn remove_lane_device_bindings(
     bindings.retain(|entry| !(device_matches(&entry.device, device) && entry.lane == Some(lane)));
 }
 
+/// そのスロットのデバイスに直接書かれた割り当て。1P / 2P は共通設定を含めない。
+/// 明示的な未割り当ての marker (`control = ""`) は含めない。
 pub(super) fn action_controls_for_slot(
     input: &ProfileInputConfig,
     action: InputActionConfig,
     slot: KeyBindingSlot,
 ) -> Vec<String> {
+    let device = slot.device();
     input
         .ui
         .bindings
         .iter()
         .filter(|entry| {
-            device_matches(&entry.device, slot.device()) && entry.action == Some(action)
+            entry.device.eq_ignore_ascii_case(device)
+                && entry.action == Some(action)
+                && !entry.control.is_empty()
         })
         .map(|entry| entry.control.clone())
         .collect()
+}
+
+/// コントローラー側のアクション割り当て状態。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActionControllerBinding {
+    /// 共通設定 (`gamepad`) を継承する。
+    Inherit(Vec<String>),
+    /// このスロットで割り当てたボタン。
+    Explicit(Vec<String>),
+    /// このスロットで明示的に割り当てを外した。
+    Unassigned,
+}
+
+/// 1P / 2P のコントローラー割り当てを、継承・明示割り当て・明示的な未割り当てに分けて読む。
+pub fn action_controller_binding(
+    input: &ProfileInputConfig,
+    action: InputActionConfig,
+    slot: KeyBindingSlot,
+) -> ActionControllerBinding {
+    let common = action_controls_for_slot(input, action, KeyBindingSlot::Controller);
+    if slot == KeyBindingSlot::Controller {
+        return ActionControllerBinding::Explicit(common);
+    }
+    let device = slot.device();
+    let has_override = input
+        .ui
+        .bindings
+        .iter()
+        .any(|entry| entry.device.eq_ignore_ascii_case(device) && entry.action == Some(action));
+    if !has_override {
+        return ActionControllerBinding::Inherit(common);
+    }
+    let controls = action_controls_for_slot(input, action, slot);
+    if controls.is_empty() {
+        ActionControllerBinding::Unassigned
+    } else {
+        ActionControllerBinding::Explicit(controls)
+    }
+}
+
+pub(super) fn remove_action_exact_device_bindings(
+    input: &mut ProfileInputConfig,
+    action: InputActionConfig,
+    device: &str,
+) {
+    input.ui.bindings.retain(|entry| {
+        !(entry.device.eq_ignore_ascii_case(device) && entry.action == Some(action))
+    });
+}
+
+pub(super) fn is_side_specific_gamepad_device(device: &str) -> bool {
+    crate::config::play_input::gamepad_player_index(device).is_some()
 }
 
 pub(super) fn remove_action_device_bindings(

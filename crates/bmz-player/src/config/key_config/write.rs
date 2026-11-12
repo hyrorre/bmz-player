@@ -25,16 +25,25 @@ pub(super) fn write_action_keyboard_bindings(
     }
 }
 
+/// コントローラー側の E1〜E4 などを、指定したデバイス (`gamepad` / `gamepad1` / `gamepad2`)
+/// の entry だけ書き換える。他のデバイスの entry は残す。
+///
+/// `controls` が空のとき、共通設定 (`gamepad`) は割り当てなしになる。1P / 2P の個別設定では
+/// `control = ""` の entry を1件書き、共通設定を継承しない「明示的な未割り当て」を表す。
 pub(super) fn write_action_gamepad_bindings(
     input: &mut ProfileInputConfig,
     action: InputActionConfig,
+    device: &str,
     controls: &[String],
 ) {
-    remove_action_device_bindings(input, action, "gamepad");
+    remove_action_exact_device_bindings(input, action, device);
+    let controls: Vec<&String> = controls.iter().filter(|control| !control.is_empty()).collect();
+    if controls.is_empty() && is_side_specific_gamepad_device(device) {
+        input.ui.bindings.push(action_binding_for_device(device, "", action, None));
+        return;
+    }
     for control in controls {
-        if !control.is_empty() {
-            input.ui.bindings.push(action_binding_for_device("gamepad", control, action, None));
-        }
+        input.ui.bindings.push(action_binding_for_device(device, control, action, None));
     }
 }
 
@@ -61,27 +70,28 @@ pub(super) fn apply_action_binding(
     control: &str,
 ) {
     let keyboard = read_action_keyboard_slots(input, action);
-    let primary = keyboard.primary;
-    let secondary = keyboard.secondary;
-    let gamepad = action_controls_for_slot(input, action, KeyBindingSlot::Controller);
-
-    remove_action_device_bindings(input, action, "keyboard");
-    remove_action_device_bindings(input, action, "gamepad");
-
     match slot {
         KeyBindingSlot::KeyboardPrimary => {
-            write_action_keyboard_bindings(input, action, Some(control), secondary.as_deref());
-            write_action_gamepad_bindings(input, action, &gamepad);
+            write_action_keyboard_bindings(
+                input,
+                action,
+                Some(control),
+                keyboard.secondary.as_deref(),
+            );
         }
         KeyBindingSlot::KeyboardSecondary => {
-            write_action_keyboard_bindings(input, action, primary.as_deref(), Some(control));
-            write_action_gamepad_bindings(input, action, &gamepad);
+            write_action_keyboard_bindings(
+                input,
+                action,
+                keyboard.primary.as_deref(),
+                Some(control),
+            );
         }
+        // 共通・1P・2P は互いの entry を消さず、編集した側だけを書き換える。
         KeyBindingSlot::Controller
         | KeyBindingSlot::Controller1P
         | KeyBindingSlot::Controller2P => {
-            write_action_keyboard_bindings(input, action, primary.as_deref(), secondary.as_deref());
-            write_action_gamepad_bindings(input, action, &[control.to_string()]);
+            write_action_gamepad_bindings(input, action, slot.device(), &[control.to_string()]);
         }
     }
 }
@@ -92,27 +102,18 @@ pub(super) fn clear_action_binding(
     slot: KeyBindingSlot,
 ) {
     let keyboard = read_action_keyboard_slots(input, action);
-    let primary = keyboard.primary;
-    let secondary = keyboard.secondary;
-    let gamepad = action_controls_for_slot(input, action, KeyBindingSlot::Controller);
-
-    remove_action_device_bindings(input, action, "keyboard");
-    remove_action_device_bindings(input, action, "gamepad");
-
     match slot {
         KeyBindingSlot::KeyboardPrimary => {
-            write_action_keyboard_bindings(input, action, None, secondary.as_deref());
-            write_action_gamepad_bindings(input, action, &gamepad);
+            write_action_keyboard_bindings(input, action, None, keyboard.secondary.as_deref());
         }
         KeyBindingSlot::KeyboardSecondary => {
-            write_action_keyboard_bindings(input, action, primary.as_deref(), None);
-            write_action_gamepad_bindings(input, action, &gamepad);
+            write_action_keyboard_bindings(input, action, keyboard.primary.as_deref(), None);
         }
+        // 1P / 2P は明示的な未割り当てとして保存し、共通設定へ戻さない。
         KeyBindingSlot::Controller
         | KeyBindingSlot::Controller1P
         | KeyBindingSlot::Controller2P => {
-            write_action_keyboard_bindings(input, action, primary.as_deref(), secondary.as_deref());
-            write_action_gamepad_bindings(input, action, &[]);
+            write_action_gamepad_bindings(input, action, slot.device(), &[]);
         }
     }
 }

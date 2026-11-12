@@ -115,7 +115,7 @@ impl WinitApp {
         let double_option = double_option_from_profile(boot.profile_config.play.double_option);
         let hs_fix_option = hs_fix_option_from_profile(boot.profile_config.play.hs_fix);
         let target_option = target_option_from_profile(boot.profile_config.play.target);
-        let select_keys = SelectKeyBindings::from_profile(&boot.profile_config.input);
+        let select_keys = SceneInputResolver::from_profile(&boot.profile_config.input);
         let mut renderer = Box::new(Renderer::default());
         renderer.set_default_font_search_paths(vec![boot.app_paths.bundled_noto_cjk_font_root()]);
         renderer.set_default_font_coverage(boot.profile_config.ui.locale().font_coverage());
@@ -279,7 +279,9 @@ impl WinitApp {
             first_frame_startup_completed: false,
             shutdown_requested,
             renderer,
-            input: AppInputRuntime::default(),
+            input: AppInputRuntime::with_gamepad_slots(
+                crate::input::gamepad::GamepadSlotMap::from_device_ids(gamepad_slots),
+            ),
             raw_input_bridge,
             gamepad,
             event_loop_probe: if options.latency_event_loop_probe {

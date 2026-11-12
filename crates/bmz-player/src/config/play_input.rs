@@ -22,7 +22,7 @@ mod inheritance;
 mod normalize;
 
 pub use defaults::*;
-pub use device::{gamepad_player_index, is_gamepad_device};
+pub use device::{control_from_config, gamepad_player_index, is_gamepad_device};
 pub use inheritance::*;
 pub use normalize::*;
 
@@ -331,7 +331,17 @@ mod tests {
             },
         );
 
-        let binding = lane_binding_for_key_mode(&input, KeyMode::K14).unwrap();
+        // 未割り当てのスロットは既定IDへ補完せず、binding を作らない。
+        let unassigned = lane_binding_for_key_mode(&input, KeyMode::K14).unwrap();
+        for device in [DeviceId(16), DeviceId(17)] {
+            assert_eq!(
+                unassigned.resolve(device, &PhysicalControl::GamepadButton("Button1".into())),
+                None
+            );
+        }
+
+        let slots = GamepadSlotMap::from_slot_ids([Some(0), Some(1)]);
+        let binding = lane_binding_for_key_mode_with_slots(&input, KeyMode::K14, slots).unwrap();
 
         assert_eq!(
             binding.resolve(DeviceId(16), &PhysicalControl::GamepadButton("Button1".into())),
@@ -377,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn numbered_gamepads_above_two_remain_device_specific() {
+    fn numbered_gamepads_above_two_stay_unresolved_without_a_slot() {
         let mut input = sample_7k_input();
         input.play.insert(
             "14k".to_string(),
@@ -392,10 +402,13 @@ mod tests {
             },
         );
 
-        let binding = lane_binding_for_key_mode(&input, KeyMode::K14).unwrap();
+        // 割り当て手段のない3台目以降も、backend の番号から実機を推測しない。
+        let slots = GamepadSlotMap::from_slot_ids([Some(0), Some(1)]);
+        let binding = lane_binding_for_key_mode_with_slots(&input, KeyMode::K14, slots).unwrap();
         let control = PhysicalControl::GamepadButton("Button1".into());
-        assert_eq!(binding.resolve(DeviceId(18), &control), Some(Lane::Key1));
-        assert_eq!(binding.resolve(DeviceId(16), &control), None);
+        for device in [DeviceId(16), DeviceId(17), DeviceId(18)] {
+            assert_eq!(binding.resolve(device, &control), None);
+        }
     }
 
     #[test]

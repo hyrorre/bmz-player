@@ -56,7 +56,7 @@ fn session_mode_skin_clicks_update_profile_like_keyboard_without_starting_play()
     };
     for initial in SessionMode::VALUES {
         app.set_session_mode(initial);
-        assert!(app.apply_play_option_control("V"));
+        assert!(app.test_apply_keyboard_option("V"));
         let keyboard_state = profile_state(&app);
         app.set_session_mode(initial);
         app.execute_select_skin_event(SKIN_EVENT_SELECT_SESSION_MODE, 1);

@@ -858,20 +858,19 @@ impl WinitApp {
     /// ↑↓と9KのE1/E2 + KEY8/9で長押し状態を開始し、同じ入力の解放で終える。
     pub(super) fn update_lane_cover_key_hold(
         &mut self,
-        event: &ControlInputEvent,
+        input: &ResolvedInput,
         applied_press: bool,
     ) {
-        if event.repeat {
+        if input.repeat() {
             return;
         }
-        let Some(physical) = event.physical.as_ref() else {
+        let (Some(device), Some(physical)) = (input.device(), input.physical()) else {
             return;
         };
-        let control = (event.device, physical.clone());
-        if event.pressed {
+        let control = (device, physical.clone());
+        if input.pressed() {
             let option = play_option_control_for_input(
-                event.device,
-                physical,
+                input,
                 self.play.play_e1_held,
                 self.play.play_e2_held,
                 self.play.play_option_input.as_ref(),
@@ -880,9 +879,7 @@ impl WinitApp {
             let (direction, requires_modifier) =
                 if let Some(PlayOptionControl::LaneCoverKey(units)) = option {
                     (units.signum(), true)
-                } else if let Some((_, direction)) =
-                    keyboard_lane_cover_direction(event, &self.boot.profile_config.input)
-                {
+                } else if let Some(direction) = keyboard_lane_cover_direction(input) {
                     (direction, false)
                 } else {
                     return;
@@ -1026,12 +1023,11 @@ impl WinitApp {
         }
     }
 
-    pub(super) fn update_play_e1_control_state(
-        &mut self,
-        device: DeviceId,
-        control: &PhysicalControl,
-        pressed: bool,
-    ) -> bool {
+    pub(super) fn update_play_e1_control_state(&mut self, input: &ResolvedInput) -> bool {
+        let (Some(device), Some(control)) = (input.device(), input.physical()) else {
+            return false;
+        };
+        let pressed = input.pressed();
         let Some(pressed) = self.play.play_option_input.as_ref().and_then(|input| {
             play_e1_held_after_input(
                 &self.input.pressed_play_inputs,
@@ -1083,12 +1079,11 @@ impl WinitApp {
         self.apply_play_lane_action(PlayLaneAction::ToggleLaneCoverVisibility)
     }
 
-    pub(super) fn update_play_exit_control_state(
-        &mut self,
-        device: DeviceId,
-        control: &PhysicalControl,
-        pressed: bool,
-    ) -> bool {
+    pub(super) fn update_play_exit_control_state(&mut self, input: &ResolvedInput) -> bool {
+        let (Some(device), Some(control)) = (input.device(), input.physical()) else {
+            return false;
+        };
+        let pressed = input.pressed();
         let was_ready_blocked =
             play_ready_blocked_by_control_holds(self.play.play_e1_held, self.play.play_e2_held);
         let (is_e2, is_e3) = self

@@ -403,8 +403,11 @@ fn replay_slot_digits_accept_top_row_and_numpad() {
         (KeyCode::Digit3, KeyCode::Numpad3, 2),
         (KeyCode::Digit4, KeyCode::Numpad4, 3),
     ] {
-        assert_eq!(digit_to_replay_slot(PhysicalKey::Code(normal)), Some(expected));
-        assert_eq!(digit_to_replay_slot(PhysicalKey::Code(numpad)), Some(expected));
+        let keys = default_select_keys();
+        for code in [normal, numpad] {
+            let control = physical_key_to_control(PhysicalKey::Code(code)).unwrap();
+            assert_eq!(digit_to_replay_slot(&resolve_physical(&keys, &control)), Some(expected));
+        }
     }
 }
 
@@ -1107,19 +1110,6 @@ fn result_action_rejects_releases_repeats_and_other_keys() {
 }
 
 #[test]
-fn result_exit_skip_key_accepts_enter_and_escape_only_on_pressed() {
-    assert!(result_exit_skip_key(PhysicalKey::Code(KeyCode::Enter), ElementState::Pressed, false));
-    assert!(result_exit_skip_key(PhysicalKey::Code(KeyCode::Escape), ElementState::Pressed, false));
-    assert!(!result_exit_skip_key(
-        PhysicalKey::Code(KeyCode::Enter),
-        ElementState::Released,
-        false
-    ));
-    assert!(!result_exit_skip_key(PhysicalKey::Code(KeyCode::Escape), ElementState::Pressed, true));
-    assert!(!result_exit_skip_key(PhysicalKey::Code(KeyCode::Space), ElementState::Pressed, false));
-}
-
-#[test]
 fn result_exit_skip_waits_for_animation_and_holds_final_frame_once() {
     let animation_duration = Duration::from_millis(1_000);
     let fadeout = Duration::from_millis(3_000);
@@ -1269,17 +1259,14 @@ fn result_panel_toggle_requires_supported_skin_and_ir() {
 #[test]
 fn result_panel_arrow_keys_match_luxe_flat_direction() {
     assert_eq!(
-        result_panel_for_control(&PhysicalControl::KeyboardKey("ArrowLeft".to_string())),
+        result_panel_for_control(&resolve_named(&default_select_keys(), "ArrowLeft")),
         Some(2)
     );
     assert_eq!(
-        result_panel_for_control(&PhysicalControl::KeyboardKey("ArrowRight".to_string())),
+        result_panel_for_control(&resolve_named(&default_select_keys(), "ArrowRight")),
         Some(1)
     );
-    assert_eq!(
-        result_panel_for_control(&PhysicalControl::KeyboardKey("ArrowUp".to_string())),
-        None
-    );
+    assert_eq!(result_panel_for_control(&resolve_named(&default_select_keys(), "ArrowUp")), None);
 }
 
 #[test]
@@ -1345,13 +1332,13 @@ fn result_ir_scroll_supports_panel_and_always_visible_skins() {
 #[test]
 fn result_ir_scroll_controls_match_select_navigation() {
     let keys = default_select_keys();
-    assert_eq!(result_ir_scroll_rows_for_control("ArrowUp", &keys), Some(-1));
-    assert_eq!(result_ir_scroll_rows_for_control("ArrowDown", &keys), Some(1));
-    assert_eq!(result_ir_scroll_rows_for_control("DPadUp", &keys), None);
-    assert_eq!(result_ir_scroll_rows_for_control("DPadDown", &keys), None);
-    assert_eq!(result_ir_scroll_rows_for_control("Axis1+", &keys), Some(-1));
-    assert_eq!(result_ir_scroll_rows_for_control("Axis1-", &keys), Some(1));
-    assert_eq!(result_ir_scroll_rows_for_control("Button1", &keys), None);
+    assert_eq!(result_ir_scroll_rows_for_control(&resolve_named(&keys, "ArrowUp")), Some(-1));
+    assert_eq!(result_ir_scroll_rows_for_control(&resolve_named(&keys, "ArrowDown")), Some(1));
+    assert_eq!(result_ir_scroll_rows_for_control(&resolve_named(&keys, "DPadUp")), None);
+    assert_eq!(result_ir_scroll_rows_for_control(&resolve_named(&keys, "DPadDown")), None);
+    assert_eq!(result_ir_scroll_rows_for_control(&resolve_named(&keys, "Axis1+")), Some(-1));
+    assert_eq!(result_ir_scroll_rows_for_control(&resolve_named(&keys, "Axis1-")), Some(1));
+    assert_eq!(result_ir_scroll_rows_for_control(&resolve_named(&keys, "Button1")), None);
 }
 
 #[test]

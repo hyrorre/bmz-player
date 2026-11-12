@@ -117,9 +117,9 @@ fn practice_gamepad_test_input(key_mode: KeyMode) -> PlayOptionInput {
             lane,
             scratch_direction,
         };
-    PlayOptionInput {
+    PlayOptionInput::from_bindings_for_test(
         key_mode,
-        binding: LaneBinding {
+        LaneBinding {
             entries: vec![
                 entry("Button1", Lane::Key1, None),
                 entry("Button2", Lane::Key2, None),
@@ -129,9 +129,8 @@ fn practice_gamepad_test_input(key_mode: KeyMode) -> PlayOptionInput {
                 entry("Axis1-", Lane::Scratch, Some(ScratchDirection::Up)),
             ],
         },
-        scratch_binding: LaneBinding { entries: Vec::new() },
-        action_bindings: Vec::new(),
-    }
+        LaneBinding { entries: Vec::new() },
+    )
 }
 
 #[test]
@@ -177,9 +176,9 @@ fn practice_gamepad_scratch_moves_cursor_without_double_counting_analog_press() 
 
 #[test]
 fn practice_gamepad_dp_normalizes_second_player_key_parity() {
-    let input = PlayOptionInput {
-        key_mode: KeyMode::K14,
-        binding: LaneBinding {
+    let input = PlayOptionInput::from_bindings_for_test(
+        KeyMode::K14,
+        LaneBinding {
             entries: vec![
                 bmz_gameplay::input::binding::BindingEntry {
                     device: Some(DeviceId(17)),
@@ -195,9 +194,8 @@ fn practice_gamepad_dp_normalizes_second_player_key_parity() {
                 },
             ],
         },
-        scratch_binding: LaneBinding { entries: Vec::new() },
-        action_bindings: Vec::new(),
-    };
+        LaneBinding { entries: Vec::new() },
+    );
 
     assert_eq!(
         practice_gamepad_action(

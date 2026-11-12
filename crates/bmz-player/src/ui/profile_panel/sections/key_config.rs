@@ -50,6 +50,14 @@ pub(in crate::ui::profile_panel) fn build_profile_key_config_section(
                 }
             });
 
+            let slots = match section.key_config.section {
+                EguiKeyConfigSection::Common => crate::config::key_config::COMMON_KEY_BINDING_SLOTS,
+                _ => crate::config::key_config::KEY_BINDING_SLOTS,
+            };
+            // 1P / 2P の個別スロットは共通操作だけにある。他の区分へ移ったら共通コントローラーへ戻す。
+            if !slots.contains(&section.key_config.slot) {
+                section.key_config.slot = crate::config::key_config::KeyBindingSlot::Controller;
+            }
             let previous_slot = section.key_config.slot;
             egui::ComboBox::new(
                 "profile_key_config_slot",
@@ -57,7 +65,7 @@ pub(in crate::ui::profile_panel) fn build_profile_key_config_section(
             )
             .selected_text(section.key_config.slot.suffix())
             .show_ui(ui, |ui| {
-                for &slot in crate::config::key_config::KEY_BINDING_SLOTS {
+                for &slot in slots {
                     ui.selectable_value(&mut section.key_config.slot, slot, slot.suffix());
                 }
             });

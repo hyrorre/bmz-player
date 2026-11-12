@@ -442,19 +442,17 @@ fn hsfix_base_bpm_from_snapshot(snapshot: &RenderSnapshot, hs_fix: HsFixOption) 
     }
 }
 
+/// プレイ中の補助操作 (E1/E2 + 鍵盤・SCR、Start2回押し等) の入力 resolver。
+///
+/// 現在のプレイセッションの設定対象モード (`play_config_key_mode`) と、開始時に解決した
+/// コントローラー割り当てで構築する。選曲用の設定は参照しない。
 #[derive(Debug, Clone)]
 pub(super) struct PlayOptionInput {
     pub(super) key_mode: KeyMode,
     pub(super) binding: LaneBinding,
     pub(super) scratch_binding: LaneBinding,
-    pub(super) action_bindings: Vec<PlayActionBinding>,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct PlayActionBinding {
-    pub(super) device: Option<DeviceId>,
-    pub(super) control: PhysicalControl,
-    pub(super) action: InputActionConfig,
+    actions: super::input_resolve::ActionTable,
+    gamepad_slots: crate::input::gamepad::GamepadSlotMap,
 }
 
 impl PlayOptionInput {
@@ -471,51 +469,25 @@ impl PlayOptionInput {
                 gamepad_slots,
             )
             .unwrap_or_else(|_| LaneBinding { entries: Vec::new() });
-        let mut action_bindings: Vec<_> = profile_input
-            .ui
-            .bindings
-            .iter()
-            .filter_map(|entry| {
-                let action = entry.action?;
-                let (device, control) = match entry.device.trim().to_ascii_lowercase().as_str() {
-                    "keyboard" => (
-                        Some(W_KEYBOARD_DEVICE_ID),
-                        PhysicalControl::KeyboardKey(entry.control.clone()),
-                    ),
-                    "hid" => (None, PhysicalControl::HidButton(entry.control.parse::<u32>().ok()?)),
-                    "gamepad" => (None, PhysicalControl::GamepadButton(entry.control.clone())),
-                    device => {
-                        let player = crate::config::play_input::gamepad_player_index(device)?;
-                        (
-                            gamepad_slots.device_id_for_player(player),
-                            PhysicalControl::GamepadButton(entry.control.clone()),
-                        )
-                    }
-                };
-                Some(PlayActionBinding { device, control, action })
-            })
-            .collect();
-        if let Some(legacy_start) = profile_input.start_key.as_ref()
-            && !action_bindings.iter().any(|entry| {
-                entry.device == Some(W_KEYBOARD_DEVICE_ID)
-                    && entry.control == PhysicalControl::KeyboardKey(legacy_start.clone())
-                    && entry.action == InputActionConfig::E1
-            })
-        {
-            action_bindings.push(PlayActionBinding {
-                device: Some(W_KEYBOARD_DEVICE_ID),
-                control: PhysicalControl::KeyboardKey(legacy_start.clone()),
-                action: InputActionConfig::E1,
-            });
+        let actions = super::input_resolve::ActionTable::from_config(profile_input);
+        Self { key_mode, binding, scratch_binding, actions, gamepad_slots }
+    }
+
+    /// テスト用: binding を直接与える。E1〜E4 は既定 profile の設定を使う。
+    #[cfg(test)]
+    pub(super) fn from_bindings_for_test(
+        key_mode: KeyMode,
+        binding: LaneBinding,
+        scratch_binding: LaneBinding,
+    ) -> Self {
+        let profile_input = crate::config::play_input::default_profile_input();
+        Self {
+            key_mode,
+            binding,
+            scratch_binding,
+            actions: super::input_resolve::ActionTable::from_config(&profile_input),
+            gamepad_slots: Default::default(),
         }
-        if !action_bindings.iter().any(|entry| entry.action == InputActionConfig::E1) {
-            action_bindings.push(PlayActionBinding {
-                device: Some(W_KEYBOARD_DEVICE_ID),
-                control: PhysicalControl::KeyboardKey("Q".to_string()),
-                action: InputActionConfig::E1,
-            });
-        }
-        Self { key_mode, binding, scratch_binding, action_bindings }
     }
 
     pub(super) fn resolve_entry(
@@ -532,31 +504,41 @@ impl PlayOptionInput {
         self.resolve_entry(device, control).is_some()
     }
 
+    fn slot(
+        &self,
+        device: DeviceId,
+        control: &PhysicalControl,
+    ) -> Option<super::input_resolve::PlayerSide> {
+        super::input_resolve::controller_slot(device, control, self.gamepad_slots)
+    }
+
+    /// E1〜E4 等の action か。コントローラーは入力元のスロットで個別設定・共通設定を選ぶ。
     pub(super) fn is_action(
         &self,
         device: DeviceId,
         control: &PhysicalControl,
         action: InputActionConfig,
     ) -> bool {
-        let has_device_specific_binding = self
-            .action_bindings
-            .iter()
-            .any(|entry| entry.device == Some(device) && entry.control == *control);
-        self.action_bindings.iter().any(|entry| {
-            entry.control == *control
-                && play_action_matches(entry.action, action)
-                && if has_device_specific_binding {
-                    entry.device == Some(device)
-                } else {
-                    entry.device.is_none()
-                }
-        })
+        let slot = self.slot(device, control);
+        self.actions.has_action(control, slot, action)
+            || (action == InputActionConfig::E1
+                && self.actions.has_action(control, slot, InputActionConfig::E4))
     }
-}
 
-/// プレイ画面ではE4をE1と同じ操作として扱う。
-pub(super) fn play_action_matches(bound: InputActionConfig, query: InputActionConfig) -> bool {
-    bound == query || (query == InputActionConfig::E1 && bound == InputActionConfig::E4)
+    /// 共通 resolver 用の解決結果。レーンは現在のプレイモードのものを返す。
+    pub(super) fn resolve_control(
+        &self,
+        device: DeviceId,
+        control: &PhysicalControl,
+    ) -> super::input_resolve::ResolvedControl {
+        super::input_resolve::ResolvedControl::for_play(
+            self.slot(device, control),
+            self.key_mode,
+            self.resolve_entry(device, control),
+            &self.actions,
+            control,
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
