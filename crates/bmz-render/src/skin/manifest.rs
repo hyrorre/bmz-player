@@ -117,15 +117,19 @@ impl SkinManifest {
             .collect()
     }
 
-    pub fn with_texture_source_sizes(mut self, base_dir: &Path) -> Self {
+    pub fn with_texture_source_sizes(self, base_dir: &Path) -> Self {
         let sizes = self.texture_source_sizes(base_dir);
-        fill_image_source_size(&mut self.play.note, &sizes);
-        fill_image_source_size(&mut self.play.receptor, &sizes);
-        fill_image_source_size(&mut self.play.judge_line, &sizes);
-        fill_image_source_size(&mut self.play.gauge_frame, &sizes);
-        fill_image_source_size(&mut self.play.gauge_fill, &sizes);
-        fill_image_source_size(&mut self.play.combo_panel, &sizes);
-        fill_image_source_size(&mut self.play.combo_panel_inactive, &sizes);
+        self.with_source_sizes(&sizes)
+    }
+
+    fn with_source_sizes(mut self, sizes: &HashMap<u32, SkinImageSize>) -> Self {
+        fill_image_source_size(&mut self.play.note, sizes);
+        fill_image_source_size(&mut self.play.receptor, sizes);
+        fill_image_source_size(&mut self.play.judge_line, sizes);
+        fill_image_source_size(&mut self.play.gauge_frame, sizes);
+        fill_image_source_size(&mut self.play.gauge_fill, sizes);
+        fill_image_source_size(&mut self.play.combo_panel, sizes);
+        fill_image_source_size(&mut self.play.combo_panel_inactive, sizes);
         self
     }
 
@@ -236,16 +240,30 @@ pub(super) fn skin_texture_manifest(id: u32, path: &str) -> SkinTextureManifest 
 }
 
 pub fn default_skin_manifest() -> SkinManifest {
-    static DEFAULT_SKIN_MANIFEST: OnceLock<SkinManifest> = OnceLock::new();
-    DEFAULT_SKIN_MANIFEST
-        .get_or_init(|| default_skin_manifest_for_root(&default_skin_root()))
-        .clone()
+    // Initial render state must not probe assets (including a build machine's paths).
+    // Keep pixel borders and UV sampling identical even before a skin is loaded.
+    // The bundled asset dimensions are checked against the PNGs in tests.
+    let sizes = [
+        (1, 32.0, 8.0),
+        (4, 32.0, 10.0),
+        (7, 32.0, 8.0),
+        (8, 12.0, 48.0),
+        (9, 8.0, 48.0),
+        (10, 48.0, 16.0),
+        (11, 48.0, 16.0),
+    ]
+    .into_iter()
+    .map(|(id, width, height)| (id, SkinImageSize { width, height }))
+    .collect();
+    SkinManifest::bundled_default().with_source_sizes(&sizes)
 }
 
+/// Explicit asset loading from the caller's resolved runtime root; never cached across roots.
 pub fn default_skin_manifest_for_root(default_root: &Path) -> SkinManifest {
     SkinManifest::bundled_default().with_texture_source_sizes(default_root)
 }
 
+#[cfg(test)]
 pub(super) fn default_skin_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/default")
 }
