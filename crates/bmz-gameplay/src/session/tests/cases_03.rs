@@ -120,6 +120,7 @@ fn viewer_seek_prefills_independent_battle_opponent() {
         score: ScoreState::default(),
         gauge: GaugeState::new(bmz_core::clear::GaugeType::Normal, 160.0, 1),
         replay_player: None,
+        replay_judge_rate_percent: 100,
         autoplay: Some(AutoplayController::default()),
         display_uses_primary_arrangement: true,
         publish_display_judgements: true,

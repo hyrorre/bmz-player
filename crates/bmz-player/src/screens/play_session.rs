@@ -224,6 +224,7 @@ pub struct PlaySessionOptions {
 #[derive(Debug, Clone)]
 pub struct BattleOpponentOptions {
     pub replay_player: Option<ReplayPlayer>,
+    pub replay_judge_rate_percent: u16,
     pub gauge: Option<GaugeType>,
     pub arrange: ArrangeOption,
     pub arrange_2p: ArrangeOption,

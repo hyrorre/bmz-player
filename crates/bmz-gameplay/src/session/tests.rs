@@ -179,6 +179,7 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
         gauge: GaugeState::new(bmz_core::clear::GaugeType::Normal, 160.0, chart.total_notes),
         replay_recorder: ReplayRecorder::default(),
         replay_player: None,
+        replay_judge_rate_percent: 100,
         replay_lane_projection: None,
         replay_lane_mask: None,
         display_only_lane_mask: [false; LANE_COUNT],

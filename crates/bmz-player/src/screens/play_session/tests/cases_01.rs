@@ -97,6 +97,7 @@ fn g_battle_keeps_primary_input_offset_auto_adjust_enabled() {
             session_mode: SessionMode::GBattle,
             battle_opponent: Some(BattleOpponentOptions {
                 replay_player: None,
+                replay_judge_rate_percent: 100,
                 gauge: None,
                 arrange: ArrangeOption::Normal,
                 arrange_2p: ArrangeOption::Normal,
@@ -148,6 +149,7 @@ fn battle_target_uses_battle_presentation_while_session_mode_stays_normal() {
             session_mode: SessionMode::Normal,
             battle_opponent: Some(BattleOpponentOptions {
                 replay_player: Some(ReplayPlayer::default()),
+                replay_judge_rate_percent: 100,
                 gauge: None,
                 arrange: ArrangeOption::Normal,
                 arrange_2p: ArrangeOption::Normal,

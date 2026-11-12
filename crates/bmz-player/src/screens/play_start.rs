@@ -280,6 +280,12 @@ pub fn play_session_options_from_start(
         };
         BattleOpponentOptions {
             replay_player,
+            replay_judge_rate_percent: match &target.playback {
+                BattleTargetPlayback::Replay(replay) => {
+                    freq_playback_rate_percent(replay.recorded_freq_semitones())
+                }
+                BattleTargetPlayback::Seed { .. } => 100,
+            },
             gauge: target.gauge,
             arrange: arrangement.arrange,
             arrange_2p: arrangement.arrange_2p,
@@ -824,7 +830,8 @@ mod tests {
     fn play_session_options_carry_battle_legacy_seed_scheme() {
         let replay =
             ReplayFile::new([1; 32], 1, None, ArrangeOption::Random, Some(42), None, Vec::new())
-                .with_seed_scheme(crate::storage::replay::SEED_SCHEME_LEGACY_SHARED_V3);
+                .with_seed_scheme(crate::storage::replay::SEED_SCHEME_LEGACY_SHARED_V3)
+                .with_freq_semitones(12);
         let target = BattleTarget {
             provider: "local".to_string(),
             score_id: "1".to_string(),
@@ -841,7 +848,9 @@ mod tests {
             PlayStartOptions { battle_target: Some(target), ..Default::default() },
         );
 
-        assert!(options.battle_opponent.expect("battle opponent").legacy_arrange_seed);
+        let opponent = options.battle_opponent.expect("battle opponent");
+        assert!(opponent.legacy_arrange_seed);
+        assert_eq!(opponent.replay_judge_rate_percent, 200);
     }
 
     #[test]

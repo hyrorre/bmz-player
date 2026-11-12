@@ -182,6 +182,8 @@ pub struct GameSession {
     pub gauge: GaugeState,
     pub replay_recorder: ReplayRecorder,
     pub replay_player: Option<ReplayPlayer>,
+    /// Recorded chart-time judgement scale, independent of viewing speed.
+    pub replay_judge_rate_percent: u16,
     /// Optional source-mode replay normalization used by presentation-only
     /// key-mode conversions such as score-eligible 7K-to-9K.
     pub replay_lane_projection: Option<ReplayLaneProjection>,
@@ -377,6 +379,8 @@ pub struct BattleOpponentSession {
     pub score: ScoreState,
     pub gauge: GaugeState,
     pub replay_player: Option<ReplayPlayer>,
+    /// The opponent replay's recorded rate, independent of the primary clock.
+    pub replay_judge_rate_percent: u16,
     /// Full autoplay fallback used when the provider has no input replay.
     pub autoplay: Option<AutoplayController>,
     /// G-BATTLE presents the opponent on the primary player's final lane

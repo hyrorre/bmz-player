@@ -477,6 +477,11 @@ pub fn build_game_session_with_input_backend(
             let key_mode = chart.metadata.key_mode;
             let scored_total_notes = scored_note_count(&chart);
             let base_judge_windows = judge_windows_for_keymode_and_rule_mode(key_mode, rule_mode);
+            let judge_rate = if opponent.replay_player.is_some() {
+                opponent.replay_judge_rate_percent
+            } else {
+                options.playback_rate_percent
+            };
             let gauge_type = opponent.gauge.unwrap_or(gauge_type);
             let gauge_total = gauge_total_for_chart_and_rule_mode(
                 chart.metadata.total,
@@ -498,7 +503,7 @@ pub fn build_game_session_with_input_backend(
                             rule_mode,
                             key_mode,
                         ),
-                        options.playback_rate_percent,
+                        judge_rate,
                     ),
                     rule_mode,
                     judge_algorithm_from_config(profile.judge.judge_algorithm),
@@ -521,6 +526,7 @@ pub fn build_game_session_with_input_backend(
                 score: ScoreState::for_rule_mode(key_mode, rule_mode),
                 autoplay: opponent.replay_player.is_none().then(AutoplayController::default),
                 replay_player: opponent.replay_player,
+                replay_judge_rate_percent: opponent.replay_judge_rate_percent,
                 display_uses_primary_arrangement: session_mode == SessionMode::GBattle,
                 publish_display_judgements: session_mode.uses_battle_skin(),
                 gauge_increase_started_at: None,
@@ -588,6 +594,7 @@ pub fn build_game_session_with_input_backend(
         course_max_combo: initial_course_combo,
         replay_recorder: ReplayRecorder::default(),
         replay_player,
+        replay_judge_rate_percent: options.playback_rate_percent,
         replay_lane_projection,
         replay_lane_mask,
         display_only_lane_mask,
