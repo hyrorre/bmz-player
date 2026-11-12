@@ -575,6 +575,7 @@ impl ProfileConfig {
                 random: RandomOptionConfig::Off,
                 random2: RandomOptionConfig::Off,
                 s_random_correction: SRandomCorrectionConfig::default(),
+                freq_semitones: 0,
                 double_option: DoubleOptionConfig::Off,
                 hs_fix: HsFixConfig::Off,
                 target: TargetOptionConfig::None,

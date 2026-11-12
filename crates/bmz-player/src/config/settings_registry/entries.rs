@@ -347,6 +347,18 @@ define_settings! {
         },
         format: |profile| profile.play.key_mode_conversion.as_str().to_string(),
     }
+    Freq(i8) {
+        value: [field play.freq_semitones],
+        adjust: |profile, delta| {
+            let before = profile.play.freq_semitones;
+            let next = i32::from(before)
+                .saturating_add(delta)
+                .clamp(i32::from(FREQ_SEMITONES_MIN), i32::from(FREQ_SEMITONES_MAX));
+            profile.play.freq_semitones = next as i8;
+            profile.play.freq_semitones != before
+        },
+        format: |profile| format_freq(profile.play.freq_semitones),
+    }
     SevenToNinePattern(SevenToNinePattern) {
         value: [field play.seven_to_nine_pattern],
         adjust: |profile, delta| {

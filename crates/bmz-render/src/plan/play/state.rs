@@ -51,6 +51,7 @@ pub(in crate::plan) fn build_play_skin_state(
         select_master_volume: snapshot.skin_input.audio_volumes[0],
         select_key_volume: snapshot.skin_input.audio_volumes[1],
         select_bgm_volume: snapshot.skin_input.audio_volumes[2],
+        freq_semitones: snapshot.skin_input.freq_semitones,
         select_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
         select_arrange_2p_index: crate::skin::select_arrange_index(&snapshot.arrange_2p),
         select_target_index: crate::skin::play_target_image_index(&snapshot.target),

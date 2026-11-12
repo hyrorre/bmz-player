@@ -232,10 +232,19 @@ pub(in crate::app) fn play_e1_held_after_input(
     )
 }
 
+#[cfg(test)]
 pub(in crate::app) fn autoplay_replay_playback_rate_from_pressed_inputs(
     pressed_inputs: &HashSet<(DeviceId, PhysicalControl)>,
     play_input: Option<&PlayOptionInput>,
 ) -> u16 {
+    held_autoplay_replay_playback_rate(pressed_inputs, play_input).unwrap_or(100)
+}
+
+/// Rate of the held speed key, or `None` to return to the session's own rate.
+pub(in crate::app) fn held_autoplay_replay_playback_rate(
+    pressed_inputs: &HashSet<(DeviceId, PhysicalControl)>,
+    play_input: Option<&PlayOptionInput>,
+) -> Option<u16> {
     const SPEED_KEYS: [(&str, u16); 8] = [
         ("1", 25),
         ("Numpad1", 25),
@@ -246,15 +255,12 @@ pub(in crate::app) fn autoplay_replay_playback_rate_from_pressed_inputs(
         ("4", 300),
         ("Numpad4", 300),
     ];
-    SPEED_KEYS
-        .into_iter()
-        .find_map(|(control, rate)| {
-            let control = PhysicalControl::KeyboardKey(control.to_string());
-            (pressed_inputs.contains(&(W_KEYBOARD_DEVICE_ID, control.clone()))
-                && !play_input.is_some_and(|input| play_input_claims_control(input, &control)))
-            .then_some(rate)
-        })
-        .unwrap_or(100)
+    SPEED_KEYS.into_iter().find_map(|(control, rate)| {
+        let control = PhysicalControl::KeyboardKey(control.to_string());
+        (pressed_inputs.contains(&(W_KEYBOARD_DEVICE_ID, control.clone()))
+            && !play_input.is_some_and(|input| play_input_claims_control(input, &control)))
+        .then_some(rate)
+    })
 }
 
 fn play_input_claims_control(input: &PlayOptionInput, control: &PhysicalControl) -> bool {

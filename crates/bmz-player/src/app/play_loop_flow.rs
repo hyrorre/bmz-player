@@ -956,7 +956,7 @@ impl WinitApp {
     }
 
     pub(super) fn sync_autoplay_replay_playback_rate(&mut self) {
-        let rate = autoplay_replay_playback_rate_from_pressed_inputs(
+        let held_rate = held_autoplay_replay_playback_rate(
             &self.input.pressed_play_inputs,
             self.play.play_option_input.as_ref(),
         );
@@ -968,6 +968,11 @@ impl WinitApp {
         {
             return;
         }
+        // Releasing the speed keys returns to the FREQ the session started at.
+        let session_rate = crate::config::play::freq_playback_rate_percent(
+            active_play.running.applied_arrange.freq_semitones,
+        );
+        let rate = held_rate.unwrap_or(session_rate);
         // The READY hold runs at 1x; the requested rate applies once it ends.
         if let Some((_, requested_rate)) = &mut self.play.presentation.rate_restore {
             *requested_rate = rate;

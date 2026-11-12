@@ -204,6 +204,7 @@ pub(super) fn build_result_skin_draw_state(
         select_master_volume: snapshot.skin_input.audio_volumes[0],
         select_key_volume: snapshot.skin_input.audio_volumes[1],
         select_bgm_volume: snapshot.skin_input.audio_volumes[2],
+        freq_semitones: snapshot.skin_input.freq_semitones,
         skin_offsets: snapshot.skin_offsets,
         skin_attempt: snapshot.skin_attempt,
         select_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),

@@ -217,6 +217,9 @@ pub(super) struct ResultRuntimeState {
     pub(super) result_ir: Option<crate::screens::result_ir::ResultIrState>,
     /// 直近に開始したプレイのsession mode。Play / Resultの常時表示に使う。
     pub(super) last_play_session_mode: SessionMode,
+    /// 直近に開始したプレイのFREQ。course Resultのように `finished_play` が
+    /// 無い場面でも、実際の再生速度をskinへ渡すために保持する。
+    pub(super) last_play_freq_semitones: i8,
     pub(super) result_scene_started_at: Instant,
     pub(super) lr2_result_progress: bmz_render::skin::Lr2ResultProgress,
     pub(super) lr2_result_epoch: Option<Instant>,

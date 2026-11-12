@@ -93,6 +93,8 @@ impl WinitApp {
         options.session_mode = viewer_session_mode(battle);
         options.autoplay = true;
         options.score_save_disabled = true;
+        // The Viewer previews the chart at its own rate, independent of FREQ.
+        crate::screens::play_start::apply_freq_option(&mut options, 0);
         options.bms_random_seed = Some(bms_random_seed);
         if !self.prepare_session_mode_or_show_error(imported.chart_id, &mut options) {
             self.viewer_waiting = true;
@@ -295,6 +297,7 @@ impl WinitApp {
         };
         let target = viewer_seek_target(&chart, current_time, seek);
         let mut options = self.active_play_retry_options(ResultRetryMode::SameArrange);
+        options.freq_semitones = 0;
         options.playback_rate_percent = playback_rate_percent;
         let mut session_options =
             play_session_options_from_start(&self.play_session_app_config(), options);

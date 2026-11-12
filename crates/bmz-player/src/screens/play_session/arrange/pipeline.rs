@@ -90,6 +90,7 @@ pub(super) fn normal_applied_arrange(
         seven_to_nine_pattern: SevenToNinePattern::default(),
         seven_to_nine_type: SevenToNineType::default(),
         seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+        freq_semitones: 0,
     }
 }
 
@@ -142,6 +143,7 @@ pub(super) fn apply_arrange_internal(
             seven_to_nine_pattern: SevenToNinePattern::default(),
             seven_to_nine_type: SevenToNineType::default(),
             seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+            freq_semitones: 0,
         };
     }
 
@@ -169,6 +171,7 @@ pub(super) fn apply_arrange_internal(
                 seven_to_nine_pattern: SevenToNinePattern::default(),
                 seven_to_nine_type: SevenToNineType::default(),
                 seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+                freq_semitones: 0,
             }
         }
         ArrangeOption::Random => {
@@ -191,6 +194,7 @@ pub(super) fn apply_arrange_internal(
                 seven_to_nine_pattern: SevenToNinePattern::default(),
                 seven_to_nine_type: SevenToNineType::default(),
                 seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+                freq_semitones: 0,
             }
         }
         ArrangeOption::RRandom => {
@@ -213,6 +217,7 @@ pub(super) fn apply_arrange_internal(
                 seven_to_nine_pattern: SevenToNinePattern::default(),
                 seven_to_nine_type: SevenToNineType::default(),
                 seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+                freq_semitones: 0,
             }
         }
         ArrangeOption::RandomEx => {
@@ -235,6 +240,7 @@ pub(super) fn apply_arrange_internal(
                 seven_to_nine_pattern: SevenToNinePattern::default(),
                 seven_to_nine_type: SevenToNineType::default(),
                 seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+                freq_semitones: 0,
             }
         }
         ArrangeOption::FRandom | ArrangeOption::MFRandom => {
@@ -257,6 +263,7 @@ pub(super) fn apply_arrange_internal(
                 seven_to_nine_pattern: SevenToNinePattern::default(),
                 seven_to_nine_type: SevenToNineType::default(),
                 seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+                freq_semitones: 0,
             }
         }
         ArrangeOption::SRandom
@@ -289,6 +296,7 @@ pub(super) fn apply_arrange_internal(
                 seven_to_nine_pattern: SevenToNinePattern::default(),
                 seven_to_nine_type: SevenToNineType::default(),
                 seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+                freq_semitones: 0,
             }
         }
     }
@@ -357,6 +365,7 @@ pub fn apply_arrange_pair(
             seven_to_nine_pattern: SevenToNinePattern::default(),
             seven_to_nine_type: SevenToNineType::default(),
             seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+            freq_semitones: 0,
         };
     }
 
@@ -405,6 +414,7 @@ pub fn apply_arrange_pair(
         seven_to_nine_pattern: SevenToNinePattern::default(),
         seven_to_nine_type: SevenToNineType::default(),
         seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+        freq_semitones: 0,
     }
 }
 

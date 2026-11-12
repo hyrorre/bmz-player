@@ -629,6 +629,7 @@ macro_rules! skin_document_render_select_render_methods {
                 select_master_volume: snapshot.master_volume,
                 select_key_volume: snapshot.key_volume,
                 select_bgm_volume: snapshot.bgm_volume,
+                freq_semitones: snapshot.skin_input.freq_semitones,
                 select_has_banner: snapshot.banner_image,
                 select_has_document: selected_row.is_some_and(|row| row.has_document),
                 chart_has_long_notes: selected_chart_has_long_notes,

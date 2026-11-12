@@ -8,6 +8,12 @@ pub(super) fn format_hispeed_direction(value: HispeedDirectionConfig) -> String 
     .to_string()
 }
 
+/// FREQ の半音値と再生速度。0 は `0 (100%)`、正の値は `+` を付ける。
+pub(super) fn format_freq(semitones: i8) -> String {
+    let percent = freq_playback_rate_percent(semitones);
+    if semitones == 0 { format!("0 ({percent}%)") } else { format!("{semitones:+} ({percent}%)") }
+}
+
 pub(super) fn adjust_u32(value: &mut u32, delta: i32, min: u32, max: u32) -> bool {
     let before = *value;
     let next = (*value as i32).saturating_add(delta).clamp(min as i32, max as i32) as u32;

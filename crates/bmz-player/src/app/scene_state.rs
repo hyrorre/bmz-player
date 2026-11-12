@@ -309,12 +309,45 @@ impl WinitApp {
         let mix = &self.boot.profile_config.audio_mix;
         skin_input.audio_volumes = [mix.master_volume, mix.key_volume, mix.bgm_volume]
             .map(crate::config::play::volume_unit_to_f32);
+        skin_input.freq_semitones = scene_freq_semitones(
+            self.current_scene_kind(),
+            self.boot.profile_config.play.freq_semitones,
+            self.session_freq_semitones(),
+            self.result.last_play_freq_semitones,
+        );
         apply_skin_logical_input_to_scene(&mut scene, skin_input);
         self.apply_operating_time_to_scene(&mut scene);
         self.apply_skin_runtime_info_to_scene(&mut scene);
         let overlay = self.build_overlay_snapshot();
         self.apply_overlay_to_scene(&mut scene, overlay);
         scene
+    }
+
+    /// Decide / Play / Result の対象セッションが実際に使うFREQ。
+    /// 段位の0固定やreplayの記録値は開始optionsへ反映済みなので、それを優先する。
+    pub(super) fn session_freq_semitones(&self) -> Option<i8> {
+        match self.current_scene_kind() {
+            AppSceneKind::Select => None,
+            AppSceneKind::Decide => {
+                self.play.pending_decide.as_ref().map(|decide| decide.options.freq_semitones)
+            }
+            AppSceneKind::Play => self
+                .play
+                .active_play
+                .as_ref()
+                .map(|active| active.running.applied_arrange.freq_semitones)
+                .or_else(|| {
+                    self.play
+                        .pending_play_start
+                        .as_ref()
+                        .map(|pending| pending.options.freq_semitones)
+                }),
+            AppSceneKind::Result => self
+                .result
+                .finished_play
+                .as_ref()
+                .map(|finished| finished.applied_arrange.freq_semitones),
+        }
     }
 
     pub(super) fn operating_time_ms(&self) -> i32 {
@@ -568,6 +601,21 @@ pub(super) const fn viewer_uses_play_scene(
     has_play_snapshot: bool,
 ) -> bool {
     viewer_mode && (viewer_waiting || shutdown_requested) && has_play_snapshot
+}
+
+/// skinへ渡すFREQ (LR2 number 66)。Selectは次に使うprofile値を示し、
+/// それ以外はセッションの値、無ければ直近に開始したプレイの値を使う。
+pub(super) const fn scene_freq_semitones(
+    scene: AppSceneKind,
+    profile_semitones: i8,
+    session_semitones: Option<i8>,
+    last_play_semitones: i8,
+) -> i8 {
+    match (scene, session_semitones) {
+        (AppSceneKind::Select, _) => profile_semitones,
+        (_, Some(semitones)) => semitones,
+        (_, None) => last_play_semitones,
+    }
 }
 
 pub(super) const fn playback_overlay_suffix(

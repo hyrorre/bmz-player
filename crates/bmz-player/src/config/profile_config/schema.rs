@@ -225,6 +225,10 @@ pub struct PlayDefaultsConfig {
     /// Replays keep the scheme they were recorded with.
     #[serde(default)]
     pub s_random_correction: SRandomCorrectionConfig,
+    /// LR2 FREQ in semitones (`FREQ_SEMITONES_MIN..=FREQ_SEMITONES_MAX`).
+    /// Negative values disable score persistence; DAN courses force 0.
+    #[serde(default)]
+    pub freq_semitones: i8,
     #[serde(default)]
     pub double_option: DoubleOptionConfig,
     #[serde(default)]
