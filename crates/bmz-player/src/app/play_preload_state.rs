@@ -75,10 +75,36 @@ impl PlayMediaCache {
             chart_id,
             prepared_chart,
             chart_normalization_gain: running.session.audio_mix.chart_normalization_gain,
-            bga_frames: running.bga_frames.clone(),
+            bga_frames: reusable_bga_frames(&running.bga_frames),
             bga_animations: running.animated_bga.catalog.clone(),
             bga_assets: running.session.chart.bga_assets.clone(),
             video_bga_decoders: std::mem::take(&mut running.video_bga_decoders),
         }
+    }
+}
+
+fn reusable_bga_frames(frames: &BgaFrameCatalog) -> BgaFrameCatalog {
+    frames.iter().filter(|(_, frame)| !frame.is_video).map(|(&id, &frame)| (id, frame)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::screens::play_snapshot::{display_bga_frame, display_video_bga_frame};
+    use bmz_chart::model::BgaAssetId;
+
+    #[test]
+    fn retry_reuses_images_without_exposing_the_previous_video_frame() {
+        let image_id = BgaAssetId(1);
+        let video_id = BgaAssetId(2);
+        let frames = BgaFrameCatalog::from([
+            (image_id, display_bga_frame(image_id, 64, 64)),
+            (video_id, display_video_bga_frame(video_id, 512, 512)),
+        ]);
+
+        let reused = reusable_bga_frames(&frames);
+
+        assert!(reused.contains_key(&image_id));
+        assert!(!reused.contains_key(&video_id));
     }
 }
