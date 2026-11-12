@@ -199,6 +199,20 @@ fn choose_beatoraja_video_stream_falls_back_to_best_when_no_valid_retry_exists()
 }
 
 #[test]
+fn only_vc1_packet_submission_permission_errors_are_skipped() {
+    use ffmpeg_next::{Error, codec::Id};
+
+    let eperm = Error::Other { errno: ffmpeg_next::error::EPERM };
+    assert!(is_skippable_video_packet_error(Id::VC1, eperm));
+    assert!(!is_skippable_video_packet_error(Id::WMV2, eperm));
+    assert!(!is_skippable_video_packet_error(Id::VC1, Error::InvalidData));
+    assert!(!is_skippable_video_packet_error(
+        Id::VC1,
+        Error::Other { errno: ffmpeg_next::error::ENOMEM },
+    ));
+}
+
+#[test]
 fn restart_rewinds_channel_decoder_to_first_frame() {
     let path = repo_root().join("data/songs/bga-compat/movie.webm");
     let mut decoder = VideoBgaDecoder::open(&path).expect("fixture movie must open");

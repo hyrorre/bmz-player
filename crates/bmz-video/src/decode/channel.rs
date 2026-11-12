@@ -105,7 +105,7 @@ pub(crate) fn decode_video_restartable(
             &stop_decode,
             &channel,
             &playback_target_us,
-            ChannelDecodePassStart { generation, direct_seeked },
+            ChannelDecodePassStart { generation, direct_seeked, path },
         )?;
 
         match pass_end {
@@ -131,10 +131,10 @@ pub(crate) fn decode_video_channel_pass(
     stop_decode: &AtomicBool,
     channel: &ChannelDecodeState,
     playback_target_us: &AtomicI64,
-    start: ChannelDecodePassStart,
+    start: ChannelDecodePassStart<'_>,
 ) -> Result<ChannelDecodePassEnd> {
-    let generation = start.generation;
-    let timestamp_origin_raw = if start.direct_seeked {
+    let ChannelDecodePassStart { generation, direct_seeked, path } = start;
+    let timestamp_origin_raw = if direct_seeked {
         // When stream start_time is unavailable, raw timestamps in seeked packets are still
         // absolute on the stream timeline. Using zero avoids rebasing the keyframe to video 0.
         selected.start_time_raw.or(Some(0))
@@ -145,9 +145,11 @@ pub(crate) fn decode_video_channel_pass(
     let mut catch_up = ChannelFrameCatchUp {
         // A direct seek lands on an earlier keyframe. Do not publish it as the target frame;
         // decode forward and keep only the final frame at/before the requested position.
-        published_any: start.direct_seeked,
+        published_any: direct_seeked,
         last_skipped: None,
     };
+    let codec = selected.codec_params.id();
+    let mut warned_about_skipped_packet = false;
 
     for (stream, packet) in ictx.packets() {
         if stop_decode.load(Ordering::Acquire) {
@@ -160,7 +162,21 @@ pub(crate) fn decode_video_channel_pass(
             continue;
         }
 
-        decoder.send_packet(&packet)?;
+        if let Err(error) = decoder.send_packet(&packet) {
+            if !is_skippable_video_packet_error(codec, error) {
+                return Err(error.into());
+            }
+            if !warned_about_skipped_packet {
+                tracing::warn!(
+                    path = %path.display(),
+                    packet_dts = ?packet.dts(),
+                    %error,
+                    "skipping VC-1 video packet after a decoder error"
+                );
+                warned_about_skipped_packet = true;
+            }
+            continue;
+        }
         loop {
             match decoder.receive_frame(decoded) {
                 Ok(()) => {}
@@ -246,6 +262,16 @@ pub(crate) fn decode_video_channel_pass(
         stop_decode,
         channel,
     )
+}
+
+pub(crate) fn is_skippable_video_packet_error(
+    codec: ffmpeg_next::codec::Id,
+    error: ffmpeg_next::Error,
+) -> bool {
+    // The VC-1 decoder can return -1 for a packet and still decode subsequent packets.
+    // At send_packet this appears as EPERM, after the demuxer already read the packet.
+    codec == ffmpeg_next::codec::Id::VC1
+        && error == (ffmpeg_next::Error::Other { errno: ffmpeg_next::error::EPERM })
 }
 
 pub(crate) fn publish_last_skipped_channel_frame(

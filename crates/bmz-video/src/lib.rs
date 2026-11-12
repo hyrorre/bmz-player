@@ -500,9 +500,10 @@ enum ChannelDecodePassEnd {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct ChannelDecodePassStart {
+struct ChannelDecodePassStart<'a> {
     generation: u64,
     direct_seeked: bool,
+    path: &'a Path,
 }
 
 struct ChannelFrameCatchUp<T> {
