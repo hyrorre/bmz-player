@@ -97,17 +97,26 @@ impl Layout {
         let p1 = extent(half);
         let all = extent(count);
         for (name, width) in [("P1Length", p1), ("P1BuiltLength", p1), ("P2BuiltLength", all)] {
-            globals.set(name, eval.lua.create_function(move |_, scale: f64| Ok(width * scale))?)?;
+            // Qwilight installs builtins before the skin's Lua. Keep overrides
+            // such as CR_minimal's P1Length(), which adds its frame border.
+            if !globals.contains_key(name)? {
+                globals
+                    .set(name, eval.lua.create_function(move |_, scale: f64| Ok(width * scale))?)?;
+            }
         }
         let main_x = eval.number("point", "mainPosition", 0.0)?;
-        globals.set(
-            "Wall",
-            eval.lua.create_function(move |_, offset: f64| Ok(main_x + p1 + offset))?,
-        )?;
-        globals.set(
-            "Contents",
-            eval.lua.create_function(move |_, scale: f64| Ok(main_x + p1 * scale))?,
-        )?;
+        if !globals.contains_key("Wall")? {
+            globals.set(
+                "Wall",
+                eval.lua.create_function(move |_, offset: f64| Ok(main_x + p1 + offset))?,
+            )?;
+        }
+        if !globals.contains_key("Contents")? {
+            globals.set(
+                "Contents",
+                eval.lua.create_function(move |_, scale: f64| Ok(main_x + p1 * scale))?,
+            )?;
+        }
         let gap = if scratches == 2 { eval.number("point", "p2Position", 0.0)? } else { 0.0 };
         let mut physical = Vec::new();
         for (i, (&drawing, &width)) in drawings.iter().zip(&drawing_widths).enumerate() {

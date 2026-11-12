@@ -16,6 +16,10 @@ HS・達成率はBMZの表示HSとプレイ中EXスコアレートを小数点�
 カスタマイズは、`set*`で宣言された位置・サイズの調整、`configure-available-*`の条件付き表示、言語別の表示名、
 SUDDEN+で描くレーンカバー（スキン同梱・追加画像）に対応します（2026-11-10）。
 10種類×8キー数で調整値を変えた読み込みと、CR_DXの7K・Defaultの14KのGPU描画を確認しています。
+FAST/SLOW回数・判定誤差ms・PGREAT対その他判定の比率（RATE）、省略形/mode 2の背景、
+左右の枠、フレーム番号付きのゲージ素材、判定画像の反復回数に対応しました（2026-11-13）。
+判定線位置のスキン調整は削除し、BMZのLIFTへ統合しました。
+検証条件は[CR_minimalの表示修正](../notes/2026/2026-11-13-qwilight-play-visuals.md)を参照してください。
 テーマ、選曲・リザルト、専用SEや一部HUD・特殊演出、Qwilight独自のカバー高さ・開閉操作は対象外です。
 [仕様と制限](skin.md#qwilightのプレイスキン)、[実素材テスト](../crates/bmz-player/src/skin_loader/tests/qwilight.rs)、
 [実装記録](../notes/2026/2026-11-10-qwilight-play-skins.md)を参照してください。

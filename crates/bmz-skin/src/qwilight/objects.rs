@@ -1,6 +1,9 @@
 use super::{customize::LaneCoverChoice, layout::Layout, resources::Resources, *};
 
+mod hud;
+
 /// beatoraja's common play offsets that BMZ shows for every play skin.
+const OFFSET_LIFT: i32 = 3;
 const OFFSET_NOTES: i32 = 30;
 const OFFSET_JUDGE: i32 = 32;
 /// Qwilight `PaintPipelineID` values used for implicit ordering.
@@ -275,12 +278,18 @@ impl Builder {
                         0.0
                     };
                     let rect = self.rect(lane.x + dx - extra / 2.0, y, lane.width + extra, h);
-                    self.destination(pipeline, &id, rect.clone(), timer, None);
+                    let dest = self.destination(pipeline, &id, rect.clone(), timer, None);
+                    if matches!(pipeline, 8 | 31) {
+                        dest["offset"] = json!(OFFSET_LIFT);
+                    }
                     if let Some(active) = active {
                         let id = format!("{id}-pressed");
                         let timer = Some(100 + lane.timer_index);
                         self.image(&id, vec![active], 0, timer);
-                        self.destination(pipeline, &id, rect, timer, None);
+                        let dest = self.destination(pipeline, &id, rect, timer, None);
+                        if pipeline == 8 {
+                            dest["offset"] = json!(OFFSET_LIFT);
+                        }
                     }
                 }
             }
@@ -313,7 +322,7 @@ impl Builder {
                         self.rect(lane.x + lane.width / 2.0 + dx, self.layout.judge_y + dy, w, h),
                         Some(timer),
                         (!long).then_some(cycle),
-                    );
+                    )["offset"] = json!(OFFSET_LIFT);
                 }
             }
         }
@@ -327,16 +336,19 @@ impl Builder {
         }
         for index in 0..256 {
             let values = self.eval.list("point", &format!("paintProperty{index}"))?;
-            if values.len() < 8 {
+            if values.len() < 5 {
                 continue;
             }
-            let v =
+            let mut v =
                 values.iter().take(8).map(|v| self.eval.numeric(v)).collect::<Result<Vec<_>>>()?;
+            for default in [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0].iter().skip(v.len()) {
+                v.push(*default);
+            }
             if v[2] == 0.0 || v[3] == 0.0 {
                 continue;
             }
             let mode = v[7] as i32;
-            if mode != 0 && mode != 1 {
+            if !(0..=2).contains(&mode) {
                 self.warnings
                     .push(format!("Qwilight paintProperty{index} mode {mode} is not implemented"));
                 continue;
@@ -347,31 +359,71 @@ impl Builder {
             let paths = self.resources.sequence(&format!("Drawing/{prefix} {index}"), count, "");
             let id = format!("qw-paint-{index}");
             let cycle = (count as f64 * 1000.0 / v[6].max(1.0)).round() as i32;
-            if self.image(&id, paths, cycle, None) {
+            // Mode 0 loops, mode 1 rests on frame zero until an input event,
+            // mode 2 plays once and holds its final frame (often a static frame).
+            let variants = if mode == 2 {
+                paths
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, path)| {
+                        let start = (i as f64 * 1000.0 / v[6].max(1.0)).round() as i32;
+                        let end = ((i + 1) as f64 * 1000.0 / v[6].max(1.0)).round() as i32;
+                        let draw = if count == 1 {
+                            String::new()
+                        } else if i == 0 {
+                            format!("timer(41) < {end}")
+                        } else if i + 1 == count {
+                            format!("timer(41) >= {start}")
+                        } else {
+                            format!("timer(41) >= {start} and timer(41) < {end}")
+                        };
+                        (format!("{id}-{i}"), vec![path], 0, draw)
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                let paths = if mode == 1 { paths.into_iter().take(1).collect() } else { paths };
+                vec![(id, paths, cycle, String::new())]
+            };
+            for (id, paths, cycle, draw) in variants {
+                if !self.image(&id, paths, cycle, Some(41)) {
+                    continue;
+                }
                 let offsets = match (self.layout.dp_offset, v[4] as i32) {
                     (Some(dx), 1) => vec![dx],
                     (Some(dx), 2) => vec![0.0, dx],
                     _ => vec![0.0],
                 };
                 for dx in offsets {
-                    self.destination(
+                    let follows_line = values.get(8).is_some_and(|v| v.trim() == "31")
+                        || (v[1] - self.layout.judge_y).abs() < f64::EPSILON;
+                    let destination = self.destination(
                         100 + index as i32,
                         &id,
                         self.rect(v[0] + dx, v[1], v[2], v[3]),
                         None,
                         None,
                     );
+                    destination["draw"] = json!(draw);
+                    // Decorations anchored on the judgement line (including
+                    // older skins' two-pixel line without a pipeline hint)
+                    // follow the line, as do explicit JudgmentMain decorations.
+                    if follows_line {
+                        destination["offset"] = json!(OFFSET_LIFT);
+                    }
                 }
             }
         }
         for side in 0..2 {
-            let name = format!("wall{side}");
-            let [x, y, w, h] = self.area(&name)?;
-            let prefix = self.eval.prefix("_GetWall", &[side], "W")?;
+            let name = format!("mainWall{side}");
+            let y = self.point(&format!("{name}Position1"), 0.0)?;
+            let w = self.point(&format!("{name}Length"), 0.0)?;
+            let h = self.point(&format!("{name}Height"), 0.0)?;
+            let x = self.layout.main_x + if side == 0 { -w } else { self.layout.p1_width };
+            let prefix = self.eval.prefix("_GetWall", &[side, 0], "W")?;
             let id = format!("qw-wall-{side}");
             if self.image(
                 &id,
-                self.resources.path(&format!("Drawing/{prefix} {side}")).into_iter().collect(),
+                self.resources.path(&format!("Main/{prefix} {side}")).into_iter().collect(),
                 0,
                 None,
             ) {
@@ -415,6 +467,12 @@ impl Builder {
         }
         let mut images = Vec::new();
         for (bmz, qw) in [0, 1, 2, 3, 4, 5, 0].into_iter().enumerate() {
+            let category = ["highest", "higher", "high", "low", "lower", "lowest"][qw];
+            let repeats =
+                self.eval.number("frame", &format!("{category}-judgment-paint-frame-loop"), 1.0)?;
+            ensure!((0.0..=1000.0).contains(&repeats), "invalid Qwilight judgment repeat count");
+            let fps = self.eval.number("frame", "judgment-paint-framerate", 60.0)?;
+            let duration = (count as f64 * 1000.0 * repeats / fps).round() as i32;
             let prefix = self.eval.prefix("_GetJudgmentPaint", &[qw, 0], "J")?;
             let id = format!("qw-judge-{bmz}");
             self.image(
@@ -424,8 +482,8 @@ impl Builder {
                 None,
             );
             let mut last = self.rect(x, y, w, h);
-            last["time"] = json!(cycle);
-            images.push(json!({"id":id,"loop":-1,"filter":1,"offset":OFFSET_JUDGE,
+            last["time"] = json!(duration);
+            images.push(json!({"id":id,"loop":-1,"filter":1,"offsets":[OFFSET_LIFT,OFFSET_JUDGE],
                 "dst":[self.rect(x,y,w,h),last]}));
         }
         self.push(
@@ -442,6 +500,8 @@ impl Builder {
             (11, "stand", "binStand", "_GetStandBin", "S", 71, 6),
             (13, "bpm", "binBPM", "_GetBPMBin", "B", 160, 4),
             (41, "highestBand", "binHighestBand", "_GetHighestBandBin", "HC", 105, 5),
+            (54, "earlyValue", "binEarlyValue", "", "E", 423, 6),
+            (55, "lateValue", "binLateValue", "", "L", 424, 6),
             (
                 35,
                 "highestJudgmentValue",
@@ -521,6 +581,8 @@ impl Builder {
                 let alt = match name {
                     "band" => "alt-band",
                     "highestBand" => "alt-highest-band",
+                    "earlyValue" => "alt-early-value",
+                    "lateValue" => "alt-late-value",
                     _ => "alt-unused",
                 };
                 for dx in self.alt_offsets(alt, if name == "band" { 2 } else { 0 })? {
@@ -528,12 +590,14 @@ impl Builder {
                     let destination = self.destination(pipeline, &id, rect, None, None);
                     // beatoraja's Judge offset moves the combo with the judgment.
                     if name == "band" {
-                        destination["offset"] = json!(OFFSET_JUDGE);
+                        destination["offsets"] = json!([OFFSET_LIFT, OFFSET_JUDGE]);
+                        destination["draw"] = json!("number(104) > 0");
                     }
                 }
             }
         }
         self.fractional_hud()?;
+        self.judgment_meter()?;
         for (pipeline, name, reference) in
             [(47, "title", 10), (48, "artist", 14), (51, "genre", 13)]
         {
@@ -551,8 +615,12 @@ impl Builder {
             }
         }
         let [x, y, w, h] = self.area("hitPoints")?;
-        if let Some(path) =
-            self.resources.path("Drawing/HP 2").or_else(|| self.resources.path("Drawing/HP 0"))
+        if let Some(path) = self
+            .resources
+            .path("Drawing/HP 2 0")
+            .or_else(|| self.resources.path("Drawing/HP 2"))
+            .or_else(|| self.resources.path("Drawing/HP 0 0"))
+            .or_else(|| self.resources.path("Drawing/HP 0"))
         {
             let src = self.source(vec![path], 1);
             self.push("graph",json!({"id":"qw-gauge","src":src,"w":-1,"h":-1,"angle":if self.point("hitPointsSystem",0.0)? as i32==0{1}else{0},"type":107,"isRefNum":true,"min":0,"max":100}));
@@ -631,12 +699,22 @@ impl Builder {
     }
 
     fn fractional_hud(&mut self) -> Result<()> {
-        // Reuse BMZ's displayed HS and current EX-rate refs. Three conditional
-        // layouts cover the integer widths without introducing a runtime VM or
-        // a new renderer contract. BMZ HS is at most 20; EX rate is at most 100.
+        // Conditional layouts cover integer widths without a runtime VM.
+        // HS and EX rate need up to three digits; the judgment ratio can grow
+        // with the count of PGREATs and uses a separate infinity destination.
         for (pipeline, name, bin, prefix, whole_ref, fraction_ref, unit, fallback_unit) in [
             (14, "multiplier", "binMultiplier", "M", 310, 311, "MW", "X"),
             (12, "point", "binPoint", "P", 102, 103, "P %", "%"),
+            (
+                56,
+                "judgmentVSVisualizer",
+                "binJudgmentVSVisualizer",
+                "HH",
+                bmz_skin_document::SKIN_REF_BMZ_JUDGMENT_RATIO_INTEGER,
+                bmz_skin_document::SKIN_REF_BMZ_JUDGMENT_RATIO_FRACTION,
+                "",
+                "",
+            ),
         ] {
             let width = self.point(&format!("{bin}Length"), self.point("binLength", 0.0)?)?.round();
             let height =
@@ -645,8 +723,13 @@ impl Builder {
                 continue;
             }
             let id = format!("qw-number-{name}");
-            let prefix_fn = if name == "point" { "_GetPointBin" } else { "_GetMultiplierBin" };
-            if !self.digits(&id, prefix_fn, prefix, whole_ref, 3)? {
+            let prefix_fn = match name {
+                "point" => "_GetPointBin",
+                "multiplier" => "_GetMultiplierBin",
+                _ => "",
+            };
+            let max_digits = if name == "judgmentVSVisualizer" { 10 } else { 3 };
+            if !self.digits(&id, prefix_fn, prefix, whole_ref, max_digits)? {
                 continue;
             }
             let whole = self.document["value"].as_array_mut().unwrap().last_mut().unwrap();
@@ -666,11 +749,11 @@ impl Builder {
                 .or_else(|| self.resources.path("Bin/."));
             let has_dot = self.image(&dot_id, dot.into_iter().collect(), 0, None);
             let unit_id = format!("{id}-unit");
-            let unit = self
+            let unit_path = self
                 .resources
                 .path(&format!("Bin/{unit}"))
                 .or_else(|| self.resources.path(&format!("Bin/{fallback_unit}")));
-            let has_unit = self.image(&unit_id, unit.into_iter().collect(), 0, None);
+            let has_unit = self.image(&unit_id, unit_path.into_iter().collect(), 0, None);
             let dot_width = self
                 .point(
                     &format!("{name}StopPointDrawingLength"),
@@ -678,21 +761,29 @@ impl Builder {
                 )?
                 .round()
                 .max(0.0);
-            let unit_width =
-                self.point(&format!("{name}UnitDrawingLength"), width)?.round().max(0.0);
+            let unit_width = if unit.is_empty() {
+                0.0
+            } else {
+                self.point(&format!("{name}UnitDrawingLength"), width)?.round().max(0.0)
+            };
             let x = self.point(&format!("{name}Position0"), 0.0)?;
             let y = self.point(&format!("{name}Position1"), 0.0)?;
             let align = self.point(&format!("{name}System"), 0.0)? as i32;
-            let offsets = self.alt_offsets(&format!("alt-{name}"), 2)?;
+            let alt = if name == "judgmentVSVisualizer" {
+                "alt-judgment-vs-visualizer".into()
+            } else {
+                format!("alt-{name}")
+            };
+            let offsets = self.alt_offsets(&alt, 2)?;
             let suffix = name == "point";
-            for digits in 1..=3 {
-                let lower = if digits == 1 { 0 } else { 10_i32.pow(digits - 1) };
-                let condition = if digits == 3 {
+            for digits in 1..=max_digits as u32 {
+                let lower = if digits == 1 { 0 } else { 10_i64.pow(digits - 1) };
+                let condition = if digits == max_digits as u32 {
                     format!("number({whole_ref}) >= {lower}")
                 } else {
                     format!(
                         "number({whole_ref}) >= {lower} and number({whole_ref}) < {}",
-                        10_i32.pow(digits)
+                        10_i64.pow(digits)
                     )
                 };
                 let number_width = (f64::from(digits) + 2.0) * width + dot_width;
@@ -723,6 +814,33 @@ impl Builder {
                             self.destinations.entry(pipeline).or_default().push(destination);
                         }
                     }
+                }
+            }
+            if name == "judgmentVSVisualizer" {
+                let id = format!("{id}-infinity");
+                let path = self
+                    .resources
+                    .path("Bin/HH Infinity")
+                    .or_else(|| self.resources.path("Bin/Infinity"));
+                let infinity_width =
+                    self.point("judgmentVSVisualizerInfinityDrawingLength", width * 2.0)?;
+                if !self.image(&id, path.into_iter().collect(), 0, None) {
+                    self.push("text", json!({"id":id,"constantText":"∞","size":height as i32}));
+                }
+                for dx in offsets {
+                    let x = x + dx
+                        - match align {
+                            1 => infinity_width / 2.0,
+                            2 => infinity_width,
+                            _ => 0.0,
+                        };
+                    self.destination(
+                        pipeline,
+                        &id,
+                        self.rect(x, y, infinity_width, height),
+                        None,
+                        None,
+                    )["draw"] = json!(format!("number({whole_ref}) < 0"));
                 }
             }
         }

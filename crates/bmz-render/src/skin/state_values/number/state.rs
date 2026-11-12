@@ -173,6 +173,24 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
         89 => judge_rate_int(state.judge_counts.poor, state.total_notes),
         102 => Some(current_score_rate_parts(state).0 as i64),
         103 => Some(current_score_rate_parts(state).1 as i64),
+        SKIN_REF_BMZ_JUDGMENT_RATIO_INTEGER | SKIN_REF_BMZ_JUDGMENT_RATIO_FRACTION => {
+            let counts = state.judge_counts;
+            let others = u64::from(counts.great)
+                + u64::from(counts.good)
+                + u64::from(counts.bad)
+                + u64::from(counts.poor)
+                + u64::from(counts.empty_poor);
+            let hundredths = match (u64::from(counts.pgreat) * 100).checked_div(others) {
+                Some(value) => value as i64,
+                None if counts.pgreat > 0 => -100,
+                None => 0,
+            };
+            Some(if ref_id == SKIN_REF_BMZ_JUDGMENT_RATIO_INTEGER {
+                hundredths / 100
+            } else {
+                hundredths % 100
+            })
+        }
         115 | 155 => Some(score_rate_parts(state.ex_score, state.total_notes).0 as i64),
         116 | 156 => Some(score_rate_parts(state.ex_score, state.total_notes).1 as i64),
         104 => Some(state.combo as i64),

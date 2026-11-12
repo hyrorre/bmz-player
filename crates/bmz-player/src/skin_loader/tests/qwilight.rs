@@ -5,6 +5,9 @@ use bmz_render::snapshot::{
     DisplayJudgement, LongBodyState, NoteVisualKind, RenderSnapshot, VisibleLongNote, VisibleNote,
 };
 
+#[path = "qwilight_visuals.rs"]
+mod visual_regressions;
+
 #[test]
 fn qwilight_zip_frames_decode_without_song_registry_and_options_change_layout() {
     use std::io::{Cursor, Write};
@@ -422,13 +425,19 @@ fn qwilight_lane_cover_follows_sudden_with_skin_or_added_images() {
     let document = &decoded.document;
     let offset_of = |id: &str| {
         document.destination.iter().find_map(|entry| match entry {
-            DestinationListEntry::Single(d) if d.id == id => Some(d.offset),
+            DestinationListEntry::Single(d) if d.id == id => Some(
+                d.offsets
+                    .iter()
+                    .copied()
+                    .chain((d.offset != 0).then_some(d.offset))
+                    .collect::<Vec<_>>(),
+            ),
             _ => None,
         })
     };
-    assert_eq!(offset_of("notes"), Some(30));
-    assert_eq!(offset_of("qw-number-band"), Some(32));
-    assert!(document.judge[0].images.iter().all(|image| image.offset == 32));
+    assert_eq!(offset_of("notes"), Some(vec![30]));
+    assert_eq!(offset_of("qw-number-band"), Some(vec![3, 32]));
+    assert!(document.judge[0].images.iter().all(|image| image.offsets == [3, 32]));
     assert_eq!(
         document.property.last().unwrap().item.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(),
         ["Skin", "Random", "mine.png"]
@@ -447,6 +456,30 @@ fn render_installed_qwilight(
     offsets: &BTreeMap<String, bmz_skin::LuaSkinOffsetValue>,
     lane_cover: f32,
 ) -> Vec<u8> {
+    let (mut renderer, snapshot) = prepare_installed_qwilight(
+        root,
+        library_roots,
+        name,
+        mode,
+        number,
+        options,
+        offsets,
+        lane_cover,
+    );
+    render_qwilight_snapshot(&mut renderer, snapshot)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_installed_qwilight(
+    root: &Path,
+    library_roots: &[PathBuf],
+    name: &str,
+    mode: KeyMode,
+    number: i32,
+    options: &BTreeMap<String, String>,
+    offsets: &BTreeMap<String, bmz_skin::LuaSkinOffsetValue>,
+    lane_cover: f32,
+) -> (Renderer, RenderSnapshot) {
     let path = root.join(name).join(format!("{name}.yaml"));
     let state = LuaLoadRuntimeState {
         number_values: BTreeMap::from([(bmz_render::skin::SKIN_REF_BMZ_KEY_MODE, number)]),
@@ -535,6 +568,10 @@ fn render_installed_qwilight(
             pms_miss_fall: None,
         });
     }
+    (renderer, snapshot)
+}
+
+fn render_qwilight_snapshot(renderer: &mut Renderer, snapshot: RenderSnapshot) -> Vec<u8> {
     renderer.render_scene(AppSceneSnapshot::Play(snapshot)).unwrap();
     let rgba = renderer.read_offscreen_rgba().unwrap();
     assert!(
@@ -602,7 +639,6 @@ fn qwilight_installed_customization_gpu() {
     let adjusted = BTreeMap::from([
         ("Qwilight lane position".to_string(), value(120, 0, 0, 0)),
         ("Qwilight note width".to_string(), value(0, 0, 8, 0)),
-        ("Qwilight judgment line position".to_string(), value(0, 80, 0, 0)),
         ("Qwilight combo position".to_string(), value(0, 60, 0, 0)),
     ]);
     let user_cover = BTreeMap::from([(

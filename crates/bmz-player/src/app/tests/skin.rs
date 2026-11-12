@@ -72,7 +72,7 @@ fn qwilight_saved_adjustments_reload_and_move_layout_for_each_key_mode() {
     };
     skin.play7_offsets = vec![
         offset("Qwilight lane position", 40, 0),
-        // Up by 50 in BMZ: Qwilight's judgment line value is -50.
+        // Legacy saved line adjustment is ignored; the live BMZ LIFT now owns it.
         offset("Qwilight judgment line position", 0, 50),
     ];
     // Saved per key mode, as Qwilight keeps the lane position per input mode.
@@ -125,7 +125,7 @@ fn qwilight_saved_adjustments_reload_and_move_layout_for_each_key_mode() {
         (frame.x.unwrap(), frame.h.unwrap())
     };
     assert_eq!(lane_area(&defaults), (10, 500));
-    assert_eq!(lane_area(&adjusted), (50, 450));
+    assert_eq!(lane_area(&adjusted), (50, 500));
     assert_eq!(lane_area(&state_for(14, &saved.play14_offsets)), (5, 500));
 }
 
@@ -161,7 +161,7 @@ fn qwilight_settings_defs_follow_slot_options_and_keep_only_effective_offsets() 
     let offsets: Vec<_> = visible.offset.iter().map(|offset| offset.id).collect();
     // Declared Qwilight adjustments plus All / Notes / Judge offset. Judge Detail
     // and Bar Line offset have no converted element, so they are not shown.
-    assert_eq!(offsets, [1001, 1005, 10, 30, 32]);
+    assert_eq!(offsets, [1001, 10, 30, 32]);
 }
 
 #[test]

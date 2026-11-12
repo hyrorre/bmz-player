@@ -40,7 +40,7 @@ struct Adjustment {
 
 /// IDs are outside beatoraja's runtime offset range, so only the load-time
 /// Lua globals use them.
-const ADJUSTMENTS: [Adjustment; 8] = [
+const ADJUSTMENTS: [Adjustment; 7] = [
     Adjustment {
         flag: "setMainPosition",
         name: "Qwilight lane position",
@@ -68,13 +68,6 @@ const ADJUSTMENTS: [Adjustment; 8] = [
         id: 1004,
         global: "hitNotePaintArea",
         axis: Axis::W,
-    },
-    Adjustment {
-        flag: "setJudgmentMainPosition",
-        name: "Qwilight judgment line position",
-        id: 1005,
-        global: "judgmentMainPosition",
-        axis: Axis::Y,
     },
     Adjustment {
         flag: "setBandPosition",
@@ -124,6 +117,11 @@ pub(super) fn set_adjustment_globals(
     offsets: &BTreeMap<String, LuaSkinOffsetValue>,
 ) -> Result<()> {
     let globals = lua.globals();
+    // The judgement line is moved by BMZ's live LIFT offset. Ignore the old
+    // saved skin adjustment, including when a profile still contains it.
+    globals.set("judgmentMainPosition", 600.0)?;
+    globals.set("judgmentMainPositionV2", 1.0)?;
+    globals.set("judgmentMainPositionV3", 0.0)?;
     for adjustment in &ADJUSTMENTS {
         let value = definition
             .flag(adjustment.flag)
@@ -136,13 +134,7 @@ pub(super) fn set_adjustment_globals(
                 Axis::H => offset.h,
             });
         let value = f64::from(value.clamp(-1000, 1000));
-        if adjustment.global == "judgmentMainPosition" {
-            globals.set("judgmentMainPosition", 600.0 + value)?;
-            globals.set("judgmentMainPositionV2", 1.0 + value / 600.0)?;
-            globals.set("judgmentMainPositionV3", value)?;
-        } else {
-            globals.set(adjustment.global, value)?;
-        }
+        globals.set(adjustment.global, value)?;
     }
     Ok(())
 }

@@ -42,10 +42,10 @@ fn qwilight_adjustments_follow_set_flags_and_reach_lua_in_qwilight_direction() {
     // Undeclared adjustments read 0 even when a value is saved under the same name.
     assert_eq!(global(&eval, "mainPosition"), 1000.0);
     assert_eq!(global(&eval, "noteLength"), 0.0);
-    // BMZ's y moves up; Qwilight's judgment line and combo move down for positive values.
-    assert_eq!(global(&eval, "judgmentMainPosition"), 640.0);
-    assert!((global(&eval, "judgmentMainPositionV2") - (1.0 + 40.0 / 600.0)).abs() < 1e-9);
-    assert_eq!(global(&eval, "judgmentMainPositionV3"), 40.0);
+    // The removed skin line adjustment is ignored; BMZ LIFT moves it at draw time.
+    assert_eq!(global(&eval, "judgmentMainPosition"), 600.0);
+    assert_eq!(global(&eval, "judgmentMainPositionV2"), 1.0);
+    assert_eq!(global(&eval, "judgmentMainPositionV3"), 0.0);
     assert_eq!(global(&eval, "bandPosition"), -25.0);
     assert_eq!(global(&eval, "hitNotePaintArea"), 0.0);
 
@@ -57,7 +57,6 @@ fn qwilight_adjustments_follow_set_flags_and_reach_lua_in_qwilight_direction() {
         declared,
         [
             ("Qwilight lane position", 1001, true, false, false),
-            ("Qwilight judgment line position", 1005, false, true, false),
             ("Qwilight combo position", 1006, false, true, false),
         ]
     );
@@ -152,6 +151,21 @@ fn qwilight_layout_remaps_scratches_and_expands_dp_with_configured_widths() {
 }
 
 #[test]
+fn qwilight_skin_functions_can_override_layout_builtins() {
+    let (_root, mut eval) = evaluator(
+        "format: {}\nframe: {}\nlambda: {}\npoint:\n  noteLength: 20\n",
+        "function P1Length() return P1BuiltLength(1.0) + 4 end\nfunction Wall() return 7 end\nfunction Contents() return 9 end",
+        BTreeMap::new(),
+    );
+    layout::Layout::build(&mut eval, 6).unwrap();
+    assert_eq!(eval.numeric("P1BuiltLength(1.0)").unwrap(), 120.0);
+    assert_eq!(eval.numeric("P1Length()").unwrap(), 124.0);
+    assert_eq!(eval.numeric("P2BuiltLength(0.5)").unwrap(), 60.0);
+    assert_eq!(eval.numeric("Wall()").unwrap(), 7.0);
+    assert_eq!(eval.numeric("Contents()").unwrap(), 9.0);
+}
+
+#[test]
 fn qwilight_lua_keyword_spacing_preserves_strings_and_comments() {
     let source =
         "if 3then return '3then', [=[4then]=] end -- 9then\n--[==[5then]==]\nlocal a3then = 0x3def";
@@ -234,11 +248,13 @@ fn installed_qwilight_play_skins() {
                 state.offset_values = adjusted.clone();
                 let moved = load_qwilight_play_skin(&context, &BTreeMap::new(), &state)
                     .unwrap_or_else(|e| panic!("{} {mode}K adjusted: {e:#}", path.display()));
-                if !adjusted.is_empty() {
+                if header.offset.iter().any(|o| matches!(o.id, 1001 | 1002)) {
                     let area =
                         |document: &SkinDocument| match &document.note.as_ref().unwrap().dst[0] {
-                            bmz_skin_document::SkinDstEntry::Frame(frame) => (frame.x, frame.h),
-                            _ => (None, None),
+                            bmz_skin_document::SkinDstEntry::Frame(frame) => {
+                                (frame.x, frame.y, frame.w, frame.h)
+                            }
+                            _ => (None, None, None, None),
                         };
                     assert_ne!(
                         area(&loaded.document),
