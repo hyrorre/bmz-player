@@ -79,6 +79,8 @@ mod mz_detail_options;
 mod path_boundaries;
 #[path = "tests/paths.rs"]
 mod paths;
+#[path = "tests/play_layer_order.rs"]
+mod play_layer_order;
 #[path = "tests/pm_chara.rs"]
 mod pm_chara;
 #[path = "tests/qwilight.rs"]

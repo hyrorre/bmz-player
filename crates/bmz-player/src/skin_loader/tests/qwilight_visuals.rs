@@ -110,6 +110,36 @@ fn sources(decoded: &DecodedSkin) -> std::collections::HashMap<String, SkinDocum
         .collect()
 }
 
+#[test]
+fn qwilight_judge_line_decoration_follows_pipeline_order() {
+    let (root, _) = fixture();
+    let path = root.path().join("skin.yaml");
+    let yaml = fs::read_to_string(&path).unwrap();
+    for (pipeline, after_notes) in [("31, 102, 7", false), ("31, 7, 102", true)] {
+        fs::write(
+            &path,
+            yaml.replace("100, 101, 102, 2, 3, 8, 31, 7, 6, 54, 55, 56, 15, 9, 10", pipeline),
+        )
+        .unwrap();
+        let decoded = decode_qwilight(&path, root.path(), 6, BTreeMap::new());
+        let image = decoded.document.image.iter().find(|i| i.id == "qw-paint-2").unwrap();
+        let textures = sources(&decoded);
+        let texture = textures[&image.src].texture;
+        let (behind, front, _) = decoded.document.static_render_items_split(
+            &textures,
+            &SkinDrawState::default(),
+            &SkinTextState::default(),
+        );
+        let contains_line = |items: &[SkinRenderItem]| {
+            items.iter().any(
+                |item| matches!(item, SkinRenderItem::Image { texture: t, .. } if *t == texture),
+            )
+        };
+        assert_eq!(contains_line(&behind), !after_notes, "pipeline {pipeline}");
+        assert_eq!(contains_line(&front), after_notes, "pipeline {pipeline}");
+    }
+}
+
 fn items(decoded: &DecodedSkin, prefix: &str, state: &SkinDrawState) -> Vec<SkinRenderItem> {
     let mut document = decoded.document.clone();
     document.destination.retain(

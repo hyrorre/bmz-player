@@ -335,20 +335,6 @@ macro_rules! skin_document_render_core_static_methods {
                         None
                     };
                     if let Some(items) = cached_items.as_deref().or(owned_items.as_deref()) {
-                        let after_notes_marker = after_notes_marker
-                            || self.destination_looks_like_pre_notes_judge_line(
-                                destination,
-                                &images,
-                                enabled_options,
-                                state,
-                                planning
-                                    .as_ref()
-                                    .and_then(|planning| {
-                                        planning.destinations.get(index + 1).copied()
-                                    })
-                                    .and_then(|destination| destination.resolve(self))
-                                    .or_else(|| destinations.get(index + 1).copied()),
-                            );
                         let target = destination_render_layer(
                             destination.timer,
                             after_notes_marker,
