@@ -1020,6 +1020,37 @@ fn skin_video_source_gating_respects_conditional_destination_if_ops() {
     assert!(!skin_video_source_runtime_visible(&disabled_source, &aaa_state));
 }
 
+/// 押下中の入力名を、キーボードは keyboard、それ以外は未割り当てのコントローラーとして解決する。
+fn skin_snapshot(pressed: &HashSet<String>, keys: &SceneInputResolver) -> SkinLogicalInputSnapshot {
+    let controls: Vec<_> = pressed
+        .iter()
+        .map(|name| {
+            if name.starts_with("Button") {
+                PhysicalControl::GamepadButton(name.clone())
+            } else {
+                PhysicalControl::KeyboardKey(name.clone())
+            }
+        })
+        .collect();
+    let keyboard: Vec<String> = controls
+        .iter()
+        .filter_map(|control| match control {
+            PhysicalControl::KeyboardKey(name) => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    skin_logical_input_snapshot_from_resolved(
+        controls.iter().map(|control| {
+            let device = match control {
+                PhysicalControl::KeyboardKey(_) => W_KEYBOARD_DEVICE_ID,
+                _ => DeviceId(16),
+            };
+            keys.resolve_control(device, control, Default::default())
+        }),
+        keyboard,
+    )
+}
+
 #[test]
 fn skin_logical_inputs_include_all_e_actions_and_ui_directions() {
     let keys = default_select_keys();
@@ -1034,17 +1065,14 @@ fn skin_logical_inputs_include_all_e_actions_and_ui_directions() {
         "ArrowDown".to_string(),
     ]);
 
-    assert_eq!(
-        skin_logical_input_snapshot_from_pressed_controls(&pressed, &keys).held,
-        [true; bmz_render::skin::SKIN_BMZ_INPUT_COUNT]
-    );
+    assert_eq!(skin_snapshot(&pressed, &keys).held, [true; bmz_render::skin::SKIN_BMZ_INPUT_COUNT]);
 }
 
 #[test]
 fn skin_input_exposes_held_keyboard_keys_for_lua_key_pressed() {
     let keys = default_select_keys();
     let pressed = HashSet::from(["Q".to_string(), "Escape".to_string(), "Button3".to_string()]);
-    let keyboard = skin_logical_input_snapshot_from_pressed_controls(&pressed, &keys).keyboard;
+    let keyboard = skin_snapshot(&pressed, &keys).keyboard;
     for (code, held) in [(45, true), (131, true), (29, false)] {
         assert_eq!(bmz_skin::lua_keyboard_pressed(&keyboard, code), held, "{code}");
     }

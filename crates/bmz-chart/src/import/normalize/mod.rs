@@ -18,6 +18,7 @@ use crate::timing::{
     build_timing_map_with_tick_scale,
 };
 
+use super::AssetLookup;
 use super::error::{ImportError, ImportWarning};
 use super::intermediate::{
     IntermediateBgaKind, IntermediateChart, IntermediateLayeredSound, IntermediateMetadata,
@@ -107,12 +108,14 @@ mod events;
 mod finalize;
 mod notes;
 mod pipeline;
+#[cfg(test)]
+mod stage_bench;
 
 use assets::*;
 use events::*;
 use finalize::*;
 use notes::*;
-pub use pipeline::normalize_chart;
+pub use pipeline::{normalize_chart, normalize_chart_with_assets};
 
 #[cfg(test)]
 mod tests {

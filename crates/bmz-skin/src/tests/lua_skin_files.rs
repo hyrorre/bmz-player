@@ -273,3 +273,31 @@ fn skin_io_reads_numbers_from_written_files() {
     .unwrap();
     assert_eq!(load(&path, None).unwrap().document.name, "2026-11-02|integer42|-150.0|nil");
 }
+
+#[test]
+fn load_store_span_tells_whether_other_writes_reached_the_store() {
+    let root = skin_dir();
+    let path = root.join("log.luaskin");
+    fs::write(&path, LOG_SKIN).unwrap();
+    let store = LuaSkinFileStore::default();
+
+    // The load's own commit does not make its read files stale.
+    let mut loaded = load(&path, Some(&store)).unwrap();
+    let span = loaded.dependencies.file_store_span.unwrap();
+    assert!(span.unchanged_at(store.revision()));
+
+    // A runtime callback writing afterwards does.
+    let image = loaded.document.image.iter().find(|image| image.id == "btn").unwrap();
+    let act = lua_act_callback_id(image.act.unwrap()).unwrap();
+    let runtime = loaded.lua_runtime.as_mut().unwrap();
+    assert!(runtime.execute_act(act, 1, 0, &TestLuaMainState::default()));
+    assert!(!span.unchanged_at(store.revision()));
+
+    // So does another load committing while this one keeps its old span.
+    let first = load(&path, Some(&store)).unwrap().dependencies.file_store_span.unwrap();
+    load(&path, Some(&store)).unwrap();
+    assert!(!first.unchanged_at(store.revision()));
+
+    // Loads without a session store report no span.
+    assert!(load(&path, None).unwrap().dependencies.file_store_span.is_none());
+}

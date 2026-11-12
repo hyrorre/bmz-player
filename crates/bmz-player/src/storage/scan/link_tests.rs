@@ -12,7 +12,6 @@ use crate::storage::migration::{LIBRARY_MIGRATIONS, run_migrations};
 fn config(follow_symlinks: bool) -> ScanConfig {
     ScanConfig {
         follow_symlinks,
-        skip_hidden: true,
         use_everything: false,
         auto_rescan_on_startup: false,
         rescan_missing_files: true,
@@ -312,8 +311,10 @@ fn inaccessible_link_target_keeps_existing_registrations() {
     assert_eq!(registered(&db, &root), ["a.bms", "b.bms", "ext/e.bms"]);
 }
 
+/// Discovery is the evidence of presence: a chart deleted after it was discovered is
+/// not stat-ed again in the same scan, and the next scan removes it.
 #[test]
-fn chart_deleted_after_discovery_is_pruned() {
+fn chart_deleted_after_discovery_is_pruned_by_the_next_scan() {
     let base = temp();
     let root = base.path().join("root");
     chart(&root.join("a.bms"), "A");
@@ -343,6 +344,10 @@ fn chart_deleted_after_discovery_is_pruned() {
 
     assert!(deleted);
     assert_eq!(report.summary.files_seen, 3);
+    // new.bms vanished before its import, so only the unchanged b.bms stays for now.
+    assert_eq!(registered(&db, &root), ["a.bms", "b.bms"]);
+    let next = scan_song_roots(&mut db, &roots(&root, true), &config(true), 3, false).unwrap();
+    assert_eq!(next.summary.removed_files, 1);
     assert_eq!(registered(&db, &root), ["a.bms"]);
 }
 
@@ -541,21 +546,16 @@ fn unavailable_overlapping_root_preserves_its_registrations() {
     assert!(registered(&db, &root).is_empty());
 }
 
-#[cfg(any(unix, windows))]
+/// Like beatoraja, hidden files and folders are scanned: hidden attributes on Windows
+/// and dot names elsewhere. Only the fixed names of `is_excluded_name` are skipped.
 #[test]
-fn hidden_setting_preserves_existing_files_but_removes_missing_files() {
+fn hidden_charts_are_scanned_and_pruned_like_other_charts() {
     let base = temp();
     let root = base.path().join("root");
-    #[cfg(windows)]
-    let (folder, file) = (root.join("hidden-folder"), root.join("hidden.bms"));
-    #[cfg(not(windows))]
-    let (folder, file) = (root.join(".hidden-folder"), root.join(".hidden.bms"));
+    let folder = root.join(".hidden-folder");
+    let file = root.join(".hidden.bms");
     chart(&folder.join("song.bms"), "Inside");
     chart(&file, "Hidden");
-    let mut cfg = config(true);
-    cfg.skip_hidden = false;
-    let mut db = db();
-    scan_song_roots(&mut db, &roots(&root, true), &cfg, 1, false).unwrap();
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
@@ -565,35 +565,54 @@ fn hidden_setting_preserves_existing_files_but_removes_missing_files() {
             assert_ne!(unsafe { SetFileAttributesW(wide.as_ptr(), FILE_ATTRIBUTE_HIDDEN) }, 0);
         }
     }
-    cfg.skip_hidden = true;
-    let report = scan_song_roots(&mut db, &roots(&root, true), &cfg, 2, false).unwrap();
-    assert_eq!(report.summary.files_seen, 0);
-    assert_eq!(count(&db, "chart_files"), 2);
+    let pack = root.join("pack.zip");
+    write_zip(&pack, &[(".hidden/song.bms", "#TITLE Hidden zip\n#BPM 120\n#00011:01\n")]);
+    let mut db = db();
+    let report = scan_song_roots(&mut db, &roots(&root, true), &config(true), 1, false).unwrap();
+    assert_eq!(report.summary.files_seen, 3);
+    assert_eq!(count(&db, "chart_files"), 3);
+
     std::fs::remove_file(folder.join("song.bms")).unwrap();
     std::fs::remove_file(&file).unwrap();
-    scan_song_roots(&mut db, &roots(&root, true), &cfg, 3, false).unwrap();
+    write_zip(&pack, &[]);
+    let report = scan_song_roots(&mut db, &roots(&root, true), &config(true), 2, false).unwrap();
+    assert_eq!(report.summary.removed_files, 3);
     assert_eq!(count(&db, "chart_files"), 0);
 }
 
-#[cfg(unix)]
+/// Trash and system folders of a drive root, and macOS metadata, are never scanned:
+/// trash keeps deleted charts under their extension, and an unreadable system folder
+/// would keep the root from being pruned. A registration under such a name is removed.
 #[test]
-fn hidden_archive_entry_is_retained_only_while_it_exists() {
+fn trash_system_and_appledouble_names_are_excluded() {
     let base = temp();
     let root = base.path().join("root");
-    std::fs::create_dir_all(&root).unwrap();
-    let pack = root.join("pack.zip");
-    let text = "#TITLE Hidden\n#BPM 120\n#00011:01\n";
-    write_zip(&pack, &[(".hidden/song.bms", text)]);
-    let mut cfg = config(true);
-    cfg.skip_hidden = false;
+    chart(&root.join("song/a.bms"), "Song");
+    for excluded in [
+        "$RECYCLE.BIN/S-1-5-21/$R0AB12C.bms",
+        "$Recycle.Bin/S-1-5-21/$R0AB12D.bms",
+        "System Volume Information/x.bms",
+        ".Trashes/501/y.bms",
+        ".Trash/z.bms",
+        ".Trash-1000/files/w.bms",
+        "__MACOSX/song/._a.bms",
+        "song/._b.bms",
+    ] {
+        chart(&root.join(excluded), "Excluded");
+    }
     let mut db = db();
-    scan_song_roots(&mut db, &roots(&root, true), &cfg, 1, false).unwrap();
-    cfg.skip_hidden = true;
-    scan_song_roots(&mut db, &roots(&root, true), &cfg, 2, false).unwrap();
-    assert_eq!(count(&db, "chart_files"), 1);
-    write_zip(&pack, &[]);
-    scan_song_roots(&mut db, &roots(&root, true), &cfg, 3, false).unwrap();
-    assert_eq!(count(&db, "chart_files"), 0);
+    let report = scan_song_roots(&mut db, &roots(&root, true), &config(true), 1, false).unwrap();
+    assert_eq!(report.summary.files_seen, 1);
+    assert!(report.discovery_issues.is_empty());
+    assert_eq!(registered(&db, &root), ["song/a.bms"]);
+
+    // An older registration under an excluded name disappears on the next scan.
+    db.conn()
+        .execute("UPDATE chart_files SET path = ?1", [library_path_key(&root.join("song/._b.bms"))])
+        .unwrap();
+    let report = scan_song_roots(&mut db, &roots(&root, true), &config(true), 2, false).unwrap();
+    assert_eq!(report.summary.removed_files, 1);
+    assert_eq!(registered(&db, &root), ["song/a.bms"]);
 }
 
 #[test]

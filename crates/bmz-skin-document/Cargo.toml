@@ -9,6 +9,7 @@ authors.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+encoding_rs.workspace = true
 
 bmz-core = { path = "../bmz-core" }
 bmz-skin-assets = { path = "../bmz-skin-assets" }

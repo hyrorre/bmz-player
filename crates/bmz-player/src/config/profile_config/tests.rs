@@ -130,6 +130,7 @@ fn play_defaults_uses_default_misslayer_duration_for_old_profiles() {
     assert_eq!(play.seven_to_nine_pattern, SevenToNinePattern::Sc9Key1To7);
     assert_eq!(play.seven_to_nine_type, SevenToNineType::Fixed);
     assert_eq!(play.seven_to_nine_rule_mode, SevenToNineRuleMode::Keys7);
+    assert_eq!(play.s_random_correction, SRandomCorrectionConfig::Lm120Hz);
     assert!(!play.seven_to_six);
     assert_eq!(play.bga, BgaModeConfig::On);
     assert_eq!(play.bga_expand, BgaExpandConfig::KeepAspect);
@@ -1280,6 +1281,21 @@ fn lane_cover_key_settings_default_for_old_profiles() {
 }
 
 #[test]
+fn e2_key_green_number_inversion_defaults_off_and_roundtrips() {
+    let mut profile = ProfileConfig::new_default("default", "Player", 0);
+    assert!(!profile.input.invert_e2_key_green_number);
+    let mut value = toml::Value::try_from(&profile).unwrap();
+    let input = value.get_mut("input").unwrap().as_table_mut().unwrap();
+    assert!(input.remove("invert_e2_key_green_number").is_some());
+    let decoded: ProfileConfig = value.try_into().unwrap();
+    assert!(!decoded.input.invert_e2_key_green_number);
+
+    profile.input.invert_e2_key_green_number = true;
+    let decoded: ProfileConfig = toml::from_str(&toml::to_string(&profile).unwrap()).unwrap();
+    assert!(decoded.input.invert_e2_key_green_number);
+}
+
+#[test]
 fn play_start_fills_only_enabled_zero_lane_covers() {
     let mut profile = ProfileConfig::new_default("default", "Player", 0);
     profile.play.lane_effect = LaneEffectConfig::Sudden;
@@ -1304,4 +1320,17 @@ fn play_start_fills_only_enabled_zero_lane_covers() {
     profile.lane.lift_enabled = true;
     assert!(profile.fill_zero_lane_cover_amounts());
     assert_eq!(profile.lane.lift, DEFAULT_LANE_COVER_AMOUNT);
+}
+
+#[test]
+fn s_random_correction_roundtrips_each_choice() {
+    for correction in SRandomCorrectionConfig::VALUES {
+        let mut profile = ProfileConfig::new_default("default", "Player", 0);
+        profile.play.s_random_correction = correction;
+        let encoded = toml::to_string(&profile).unwrap();
+        let decoded: ProfileConfig = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.play.s_random_correction, correction);
+    }
+    let profile = ProfileConfig::new_default("default", "Player", 0);
+    assert!(toml::to_string(&profile).unwrap().contains("s_random_correction = \"Lm120Hz\""));
 }

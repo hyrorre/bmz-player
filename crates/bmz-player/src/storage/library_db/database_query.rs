@@ -180,8 +180,11 @@ impl LibraryDatabase {
 
         let tx = self.conn.transaction()?;
         {
-            let mut stmt =
-                tx.prepare_cached("UPDATE charts SET has_document = ?1 WHERE folder_path = ?2")?;
+            // Unchanged rows are not rewritten, so a rescan adds nothing to the WAL.
+            let mut stmt = tx.prepare_cached(
+                "UPDATE charts SET has_document = ?1
+                 WHERE folder_path = ?2 AND has_document IS NOT ?1",
+            )?;
             for (folder, has_document) in folder_flags {
                 stmt.execute(params![has_document, to_folder_key(&path_to_string(folder))])?;
             }
@@ -191,6 +194,9 @@ impl LibraryDatabase {
     }
 
     /// トランザクションを管理せずに失敗チャートを記録する。戻り値は `chart_file_id`。
+    /// `failed_import_version` is the importer that failed on these exact bytes, or 0 to
+    /// retry on the next scan (read errors may be transient).
+    #[allow(clippy::too_many_arguments)]
     pub fn write_failed_chart(
         conn: &Connection,
         root_id: Option<i64>,
@@ -199,23 +205,32 @@ impl LibraryDatabase {
         modified_at: i64,
         scanned_at: i64,
         message: &str,
+        failed_import_version: i64,
     ) -> Result<i64> {
         let chart_file_id: i64 = conn
             .prepare_cached(
                 "INSERT INTO chart_files (
                 root_id, path, file_size, modified_at, md5, sha256, scanned_at,
-                first_seen_at, parse_status
-            ) VALUES (?1, ?2, ?3, ?4, '', '', ?5, ?5, 'Failed')
+                first_seen_at, parse_status, failed_import_version
+            ) VALUES (?1, ?2, ?3, ?4, '', '', ?5, ?5, 'Failed', ?6)
             ON CONFLICT(path) DO UPDATE SET
                 root_id = excluded.root_id,
                 file_size = excluded.file_size,
                 modified_at = excluded.modified_at,
                 scanned_at = excluded.scanned_at,
-                parse_status = excluded.parse_status
+                parse_status = excluded.parse_status,
+                failed_import_version = excluded.failed_import_version
             RETURNING id",
             )?
             .query_row(
-                params![root_id, path_key(file_path), file_size as i64, modified_at, scanned_at],
+                params![
+                    root_id,
+                    path_key(file_path),
+                    file_size as i64,
+                    modified_at,
+                    scanned_at,
+                    failed_import_version
+                ],
                 |row| row.get(0),
             )?;
         let previous_chart_id: Option<i64> = conn
@@ -265,6 +280,7 @@ impl LibraryDatabase {
             modified_at,
             scanned_at,
             message,
+            0,
         )?;
         tx.commit()?;
         Ok(chart_file_id)
@@ -725,7 +741,10 @@ impl LibraryDatabase {
     pub fn chart_file_fingerprint(&self, path: &Path) -> Result<Option<ChartFileFingerprint>> {
         self.conn
             .query_row(
-                "SELECT chart_files.file_size, chart_files.modified_at, COALESCE(charts.import_version, 0)
+                "SELECT chart_files.file_size, chart_files.modified_at,
+                    CASE WHEN chart_files.parse_status = 'Failed'
+                        THEN chart_files.failed_import_version
+                        ELSE COALESCE(charts.import_version, 0) END
                 FROM chart_files
                 LEFT JOIN chart_file_links
                     ON chart_file_links.chart_file_id = chart_files.id
@@ -752,7 +771,9 @@ impl LibraryDatabase {
         root_id: i64,
     ) -> Result<HashMap<String, ChartFileFingerprint>> {
         let mut stmt = self.conn.prepare(
-            "SELECT cf.path, cf.file_size, cf.modified_at, COALESCE(c.import_version, 0)
+            "SELECT cf.path, cf.file_size, cf.modified_at,
+                CASE WHEN cf.parse_status = 'Failed' THEN cf.failed_import_version
+                    ELSE COALESCE(c.import_version, 0) END
             FROM chart_files cf
             LEFT JOIN chart_file_links cfl ON cfl.chart_file_id = cf.id
             LEFT JOIN charts c ON c.id = cfl.chart_id

@@ -46,12 +46,12 @@ fn select_arrange_lane_preserves_nine_key_input_layout_and_option_controls() {
         }
     }
     let keys = select_keys_9k();
-    assert!(keys.is_key1("Z"));
-    assert!(keys.is_key2("S"));
-    assert_eq!(target_cycle_from_control("G", &keys), Some(TargetCycle::Previous));
-    assert_eq!(target_cycle_from_control("B", &keys), Some(TargetCycle::Next));
-    assert_eq!(keys.ui_lane_for_control("G"), None);
-    assert_eq!(keys.ui_lane_for_control("B"), None);
+    assert!(resolve_named(&keys, "Z").select_lane().map(|lane| lane.lane) == Some(Lane::Key1));
+    assert!(resolve_named(&keys, "S").select_lane().map(|lane| lane.lane) == Some(Lane::Key2));
+    assert_eq!(target_cycle_from_input(&resolve_named(&keys, "G")), Some(TargetCycle::Previous));
+    assert_eq!(target_cycle_from_input(&resolve_named(&keys, "B")), Some(TargetCycle::Next));
+    assert_eq!(resolve_named(&keys, "G").ui_lane(), None);
+    assert_eq!(resolve_named(&keys, "B").ui_lane(), None);
 }
 
 #[cfg(target_os = "windows")]
@@ -247,9 +247,9 @@ fn select_arrange_controls_follow_sp_dp_transitions_from_either_side() {
                             "Button1"
                         };
                         if keyboard {
-                            app.apply_play_option_control(control);
+                            app.test_apply_keyboard_option(control);
                         } else {
-                            app.apply_gamepad_play_option_control(
+                            app.test_apply_gamepad_option(
                                 if right { right_device } else { left_device },
                                 control,
                             );
@@ -316,6 +316,7 @@ fn select_arrange_controls_follow_sp_dp_transitions_from_either_side() {
         "14k".into(),
         crate::config::profile_config::PlayModeInputConfig { bindings, ..Default::default() },
     );
+    app.test_apply_input_config();
     for (index, conversion) in [
         (5, KeyModeConversionConfig::Off),
         (2, KeyModeConversionConfig::Off),
@@ -331,7 +332,7 @@ fn select_arrange_controls_follow_sp_dp_transitions_from_either_side() {
         app.boot.profile_config.play.key_mode_conversion = conversion;
         app.select.arrange_option = ArrangeOption::Normal;
         app.select.arrange_option_2p = ArrangeOption::Normal;
-        app.apply_gamepad_play_option_control(left_device, "Button24");
+        app.test_apply_gamepad_option(left_device, "Button24");
         assert_eq!(
             (app.select.arrange_option, app.select.arrange_option_2p),
             if index == 1 {
@@ -364,7 +365,7 @@ fn select_arrange_controls_follow_sp_dp_transitions_from_either_side() {
         "9k".into(),
         crate::config::profile_config::PlayModeInputConfig { bindings, ..Default::default() },
     );
-    app.select.select_keys = SelectKeyBindings::from_profile(&app.boot.profile_config.input);
+    app.select.select_keys = SceneInputResolver::from_profile(&app.boot.profile_config.input);
     for lr2 in [false, true] {
         let document = serde_json::from_value(serde_json::json!({
             "type": 5, "w": 100, "h": 100, "lr2": lr2,
@@ -390,9 +391,9 @@ fn select_arrange_controls_follow_sp_dp_transitions_from_either_side() {
                     (false, true) => "Button22",
                 };
                 if keyboard {
-                    app.apply_play_option_control(control);
+                    app.test_apply_keyboard_option(control);
                 } else {
-                    app.apply_gamepad_play_option_control(left_device, control);
+                    app.test_apply_gamepad_option(left_device, control);
                 }
                 let expected =
                     if lr2 || !previous { ArrangeOption::Mirror } else { ArrangeOption::Normal };
@@ -406,9 +407,23 @@ fn select_arrange_controls_follow_sp_dp_transitions_from_either_side() {
         app.select.select_option_panel = 1;
         app.select.target_option = TargetOption::RankAa;
         let arrangements = (app.select.arrange_option, app.select.arrange_option_2p);
-        app.route_gamepad_button(&ControlInputEvent::gamepad(left_device, "Button28", true));
+        {
+            let input = app.resolve_control_event(ControlInputEvent::gamepad(
+                left_device,
+                "Button28",
+                true,
+            ));
+            app.route_gamepad_button(&input);
+        }
         assert_eq!(app.select.target_option, TargetOption::RankAa.cycle_prev());
-        app.route_gamepad_button(&ControlInputEvent::gamepad(left_device, "Button29", true));
+        {
+            let input = app.resolve_control_event(ControlInputEvent::gamepad(
+                left_device,
+                "Button29",
+                true,
+            ));
+            app.route_gamepad_button(&input);
+        }
         assert_eq!(app.select.target_option, TargetOption::RankAa);
         assert_eq!((app.select.arrange_option, app.select.arrange_option_2p), arrangements);
     }

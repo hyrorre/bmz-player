@@ -375,12 +375,18 @@ impl WinitApp {
     }
 
     pub(super) fn play_start_options(&self) -> PlayStartOptions {
+        self.play_start_options_with_freq(self.boot.profile_config.play.freq_semitones)
+    }
+
+    /// Fresh play options at an explicit FREQ. Course starts pass the course-
+    /// adjusted FREQ so a DAN course never inherits the save-disabling flag.
+    pub(super) fn play_start_options_with_freq(&self, freq_semitones: i8) -> PlayStartOptions {
         // beatoraja assigns a 24-bit seed even to NORMAL/MIRROR. Generate both
         // sides here so preload, retry, replay and IR all observe one stable pair.
         let option_seeds = crate::random_option_seed::RandomOptionSeeds::fresh(true);
         let random_trainer_seed = self.select.random_trainer.arrange_seed(option_seeds.p1);
         let seed = self.boot.profile_config.cli_seed();
-        PlayStartOptions {
+        let mut options = PlayStartOptions {
             score_save_disabled: self.boot.profile_config.cli_auto_scratch(),
             session_mode: self.select.session_mode,
             autoplay: self.select.session_mode.primary_autoplay(),
@@ -408,8 +414,16 @@ impl WinitApp {
             seven_to_nine_pattern: self.boot.profile_config.play.seven_to_nine_pattern,
             seven_to_nine_type: self.boot.profile_config.play.seven_to_nine_type,
             seven_to_nine_rule_mode: self.boot.profile_config.play.seven_to_nine_rule_mode,
+            s_random_scheme: crate::screens::play_session::SRandomScheme::from_correction(
+                self.boot.profile_config.play.s_random_correction,
+            ),
+            h_random_threshold_ms: Some(
+                crate::screens::play_session::DEFAULT_H_RANDOM_THRESHOLD_MS,
+            ),
             ..Default::default()
-        }
+        };
+        crate::screens::play_start::apply_freq_option(&mut options, freq_semitones);
+        options
     }
 
     pub(super) fn refresh_play_target_from_source(&mut self) {

@@ -19,28 +19,44 @@ impl ReplayRecorder {
     }
 }
 
+/// Full replay scores on a fixed 1ms chart-time cadence.
+pub const REPLAY_SCORING_STEP_US: i64 = 1_000;
+
 #[derive(Debug, Clone, Default)]
 pub struct ReplayPlayer {
     pub events: Vec<ReplayEvent>,
     pub next_index: usize,
-    /// Runtime-only chart-time cursor; never serialized into the replay file.
+    /// Runtime-only chart-time cursor of the next tick to process; never
+    /// serialized into the replay file.
     pub next_scoring_time: Option<TimeUs>,
 }
 
 impl ReplayPlayer {
     /// Use a fixed chart-time cadence for replay misses and HCN integration, so
     /// batching inputs into different audio/render frames cannot change scoring.
-    pub(crate) fn scoring_times_until(&mut self, now: TimeUs) -> Vec<TimeUs> {
-        const STEP_US: i64 = 1_000;
+    ///
+    /// Listing the due ticks does not move the cursor. Each tick is marked by
+    /// [`Self::complete_scoring_tick`] only after its processing has finished,
+    /// so an interrupted batch never reports unprocessed ticks as scored.
+    pub(crate) fn scoring_times_until(&self, now: TimeUs) -> Vec<TimeUs> {
         // READY does not score before chart zero, including negative recorded inputs.
         let mut time = self.next_scoring_time.unwrap_or(TimeUs(0));
         let mut times = Vec::new();
         while time <= now {
             times.push(time);
-            time = TimeUs(time.0.saturating_add(STEP_US));
+            time = TimeUs(time.0.saturating_add(REPLAY_SCORING_STEP_US));
         }
-        self.next_scoring_time = Some(time);
         times
+    }
+
+    pub(crate) fn complete_scoring_tick(&mut self, time: TimeUs) {
+        self.next_scoring_time = Some(TimeUs(time.0.saturating_add(REPLAY_SCORING_STEP_US)));
+    }
+
+    /// The last chart-time tick whose replay inputs, misses and HCN updates
+    /// have all been applied. `None` until the first tick completes.
+    pub fn scored_until(&self) -> Option<TimeUs> {
+        self.next_scoring_time.map(|next| TimeUs(next.0.saturating_sub(REPLAY_SCORING_STEP_US)))
     }
 
     pub fn poll_until(&mut self, now: TimeUs) -> Vec<InputEvent> {
@@ -78,14 +94,31 @@ mod tests {
     #[test]
     fn scoring_cursor_does_not_repeat_ticks_and_resumes_after_seek() {
         let mut replay = ReplayPlayer::default();
-        assert_eq!(
-            replay.scoring_times_until(TimeUs(2_500)),
-            vec![TimeUs(0), TimeUs(1_000), TimeUs(2_000)]
-        );
+        let due = replay.scoring_times_until(TimeUs(2_500));
+        assert_eq!(due, vec![TimeUs(0), TimeUs(1_000), TimeUs(2_000)]);
+        for time in due {
+            replay.complete_scoring_tick(time);
+        }
         assert!(replay.scoring_times_until(TimeUs(2_999)).is_empty());
         assert_eq!(replay.scoring_times_until(TimeUs(4_000)), vec![TimeUs(3_000), TimeUs(4_000)]);
         replay.skip_before(TimeUs(10_000));
         assert_eq!(replay.scoring_times_until(TimeUs(10_000)), vec![TimeUs(10_000)]);
+    }
+
+    #[test]
+    fn scored_until_reports_only_completed_ticks() {
+        let mut replay = ReplayPlayer::default();
+        assert_eq!(replay.scored_until(), None);
+        let due = replay.scoring_times_until(TimeUs(1_300_600));
+        assert_eq!(due.last(), Some(&TimeUs(1_300_000)));
+        // Listing a batch does not count as processing it.
+        assert_eq!(replay.scored_until(), None);
+        replay.complete_scoring_tick(TimeUs(0));
+        assert_eq!(replay.scored_until(), Some(TimeUs(0)));
+        replay.complete_scoring_tick(TimeUs(1_300_000));
+        assert_eq!(replay.scored_until(), Some(TimeUs(1_300_000)));
+        assert_eq!(replay.scoring_times_until(TimeUs(1_300_600)), Vec::<TimeUs>::new());
+        assert_eq!(replay.scoring_times_until(TimeUs(1_301_000)), vec![TimeUs(1_301_000)]);
     }
 
     #[test]

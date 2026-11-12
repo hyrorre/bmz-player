@@ -413,6 +413,7 @@ impl WinitApp {
         self.result.result_ir = None;
         self.result.result_skin_audio = None;
         self.result.last_play_session_mode = SessionMode::Normal;
+        self.result.last_play_freq_semitones = 0;
         self.select.autoplay_folder = None;
         self.select.random_trainer = RandomTrainerState::default();
         self.select.select_ir = Default::default();
@@ -438,7 +439,7 @@ impl WinitApp {
         );
         self.select.select_sort =
             SelectSort::from_str_or_default(&self.boot.profile_config.select.sort);
-        self.select.select_keys = SelectKeyBindings::from_profile(&self.boot.profile_config.input);
+        self.select.select_keys = SceneInputResolver::from_profile(&self.boot.profile_config.input);
         self.reload_select_items();
         self.sync_selected_play_mode();
         self.sync_select_play_options_from_profile();

@@ -364,13 +364,16 @@ pub(super) fn execute_lua_skin(
     // callback documents out of the document cache preserves registry/VM IDs.
     dependencies.opaque |= needs_runtime;
     // Only a completed load changes the files later loads read back.
-    main_state_probe
-        .lock()
-        .map_err(|_| anyhow!("main_state probe lock poisoned"))?
-        .file_overlay
-        .lock()
-        .map_err(|_| anyhow!("Lua skin file overlay lock poisoned"))?
-        .commit();
+    {
+        let probe =
+            main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
+        let mut overlay = probe
+            .file_overlay
+            .lock()
+            .map_err(|_| anyhow!("Lua skin file overlay lock poisoned"))?;
+        overlay.commit();
+        dependencies.file_store_span = overlay.store_span();
+    }
     Ok(ExecutedLuaSkin {
         value: json,
         warnings,

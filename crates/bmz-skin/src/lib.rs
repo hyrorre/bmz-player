@@ -91,6 +91,26 @@ pub struct SkinLoadDependencies {
     /// access outside the skin root.
     pub virtual_io_files: BTreeMap<String, Option<String>>,
     pub opaque: bool,
+    /// Session file store revisions around a Lua load that used the store.
+    pub file_store_span: Option<LuaFileStoreSpan>,
+}
+
+/// Session file store revisions around one Lua load: `seen` when it started
+/// reading, `committed_from` just before it committed its own writes, and
+/// `left` right after.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LuaFileStoreSpan {
+    pub seen: u64,
+    pub committed_from: u64,
+    pub left: u64,
+}
+
+impl LuaFileStoreSpan {
+    /// True while the load read the files the store holds at `current`: no other
+    /// VM wrote during the load, and nothing wrote after its own commit.
+    pub fn unchanged_at(&self, current: u64) -> bool {
+        self.seen == self.committed_from && self.left == current
+    }
 }
 
 impl SkinLoadDependencies {
@@ -354,10 +374,9 @@ pub fn load_lua_skin_with_path_context(
         virtual_io_files,
     )?;
     let value = normalize_lua_skin_document(loaded.value);
-    let mut document: SkinDocument =
-        serde_path_to_error::deserialize(value).with_context(|| {
-            format!("failed to parse lua skin as document: {}", path_context.entry_file().display())
-        })?;
+    let mut document = decode_skin_document_value(value, || {
+        format!("failed to parse lua skin as document: {}", path_context.entry_file().display())
+    })?;
     document.internal_enabled_options = loaded.internal_enabled_options;
     Ok(LoadedSkinDocument {
         document,
@@ -414,8 +433,9 @@ fn decode_lr2_skin_value(path: &Path, loaded: LoadedLuaSkinValue) -> Result<Load
     let value = bmz_skin_document::normalize_lua_json_skin_integer_numbers(loaded.value);
     tracing::debug!(path = %path.display(), "lr2 skin integer normalization complete");
     tracing::debug!(path = %path.display(), "lr2 skin document deserialization begin");
-    let mut document: SkinDocument = serde_path_to_error::deserialize(value)
-        .with_context(|| format!("failed to parse lr2 csv skin as document: {}", path.display()))?;
+    let mut document = decode_skin_document_value(value, || {
+        format!("failed to parse lr2 csv skin as document: {}", path.display())
+    })?;
     tracing::debug!(path = %path.display(), "lr2 skin document deserialization complete");
     document.internal_enabled_options = loaded.internal_enabled_options;
     Ok(LoadedSkinDocument {
@@ -482,6 +502,18 @@ pub fn load_lua_skin_header_value_with_path_context(
     let mut loaded = lua::load_lua_skin_header_value_with_path_context(path_context)?;
     loaded.value = normalize_lua_skin_document(loaded.value);
     Ok(loaded)
+}
+
+/// Tracking the field path slows decoding a large document by about a fifth, so it
+/// runs only to describe a document that failed the plain decode.
+fn decode_skin_document_value(
+    value: JsonValue,
+    describe: impl FnOnce() -> String,
+) -> Result<SkinDocument> {
+    match SkinDocument::from_json_value(&value) {
+        Ok(document) => Ok(document),
+        Err(_) => serde_path_to_error::deserialize(value).with_context(describe),
+    }
 }
 
 fn normalize_lua_skin_document(value: JsonValue) -> JsonValue {

@@ -364,3 +364,89 @@ fn font_fallback_accepts_beatoraja_string_and_object_forms() {
     assert!(fallback(2).is_empty());
     assert!(fallback(3).is_empty());
 }
+
+#[test]
+fn json_skin_text_accepts_comments_missing_and_trailing_commas_and_string_bools() {
+    // Mirrors the beatoraja Luxez-Flat decide.json style: line comments after values,
+    // commented-out entries, block comments, omitted commas, trailing commas and
+    // `"wrapping": "false"`.
+    let text = r#"{
+        "type": 6, /* decide */
+        "name": "Fixture // not a comment /* nor this */",
+        "escape": "quote \" // still string \\",
+        "text": [
+            {"id":"genre", "wrapping":"false"}// trailing note 1/30(s)
+            //{"id":"disabled", "wrapping":true}
+            {"id":"title", "wrapping":"TRUE"}
+            {"id":"artist", "wrapping":true},
+            {"id":"plain"},
+        ],
+        "destination": [
+            {"id":"title", "dst":[
+                {"time":0, "x":0}//32
+                {"time":100/*inline*/}
+            ]}
+        ]
+    }"#;
+    let value = parse_json_skin_text(text).unwrap();
+    assert_eq!(value["name"], "Fixture // not a comment /* nor this */");
+    assert_eq!(value["escape"], "quote \" // still string \\");
+    assert_eq!(value["destination"][0]["dst"].as_array().unwrap().len(), 2);
+
+    let document: SkinDocument = serde_json::from_value(value).unwrap();
+    assert_eq!(document.skin_type, 6);
+    let wrapping =
+        document.text.iter().map(|text| (text.id.as_str(), text.wrapping)).collect::<Vec<_>>();
+    assert_eq!(wrapping, [("genre", false), ("title", true), ("artist", true), ("plain", false)]);
+}
+
+#[test]
+fn json_skin_comment_stripping_keeps_line_breaks_and_token_boundaries() {
+    assert_eq!(strip_json_comments("[1/*a\nb*/2]").unwrap(), "[1 \n2]");
+    assert_eq!(strip_json_comments("[1,// c\r\n2]").unwrap(), "[1,\r\n2]");
+    assert_eq!(strip_json_comments(r#""a/*b*/c//d""#).unwrap(), r#""a/*b*/c//d""#);
+    assert_eq!(strip_json_comments(r#"["\\"//x"#).unwrap(), r#"["\\""#);
+    // The comment becomes a separator, so `1` and `2` never merge into `12`.
+    assert_eq!(strip_json_comments("[1/**/2]").unwrap(), "[1 2]");
+    assert_eq!(parse_json_skin_text("[{}/**/{}]").unwrap(), serde_json::json!([{}, {}]));
+    assert_eq!(parse_json_skin_text("[1 /* x */ ]").unwrap(), serde_json::json!([1]));
+}
+
+#[test]
+fn json_skin_text_rejects_unterminated_block_comments_and_bad_bools() {
+    let error = parse_json_skin_text(r#"{"type": 6 /* open"#).unwrap_err();
+    assert!(error.to_string().contains("unterminated block comment"), "{error:#}");
+    assert!(parse_json_skin_text(r#"{"type": 6 /* x *"#).is_err());
+    // A lone slash is left to the JSON parser, which rejects it.
+    assert!(parse_json_skin_text(r#"{"type": 6 / 2}"#).is_err());
+
+    for wrapping in [r#""yes""#, r#""""#, "1", "null"] {
+        let text = format!(r#"{{"text":[{{"id":"t","wrapping":{wrapping}}}]}}"#);
+        assert!(serde_json::from_str::<SkinDocument>(&text).is_err(), "wrapping: {wrapping}");
+    }
+}
+
+#[test]
+fn json_skin_bytes_decode_utf8_bom_and_shift_jis() {
+    assert_eq!(decode_json_skin_bytes(b"\xEF\xBB\xBF{\"name\":\"a\"}"), "{\"name\":\"a\"}");
+    let (sjis, _, unmappable) = encoding_rs::SHIFT_JIS.encode(r#"{"name":"背景画像"}"#);
+    assert!(!unmappable);
+    assert!(std::str::from_utf8(&sjis).is_err());
+    assert_eq!(decode_json_skin_bytes(&sjis), r#"{"name":"背景画像"}"#);
+    assert_eq!(decode_json_skin_bytes("{\"name\":\"背景\"}".as_bytes()), "{\"name\":\"背景\"}");
+}
+
+#[test]
+fn json_skin_file_load_handles_shift_jis_comments_and_string_bools() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let path = root.path().join("decide.json");
+    let (bytes, _, _) = encoding_rs::SHIFT_JIS.encode(
+        "{\n\t\"type\":6, \"name\":\"決定\",\n\t\"text\":[{\"id\":\"t\",\"wrapping\":\"false\"}]// 注釈\n}",
+    );
+    std::fs::write(&path, bytes)?;
+    let document = SkinDocument::load_typed_beatoraja_json(&path)?.expect("typed document");
+    assert_eq!(document.skin_type, 6);
+    assert_eq!(document.name, "決定");
+    assert!(!document.text[0].wrapping);
+    Ok(())
+}

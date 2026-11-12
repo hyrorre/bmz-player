@@ -26,7 +26,7 @@ fn retry_audio_reload_preserves_bgm_and_keysound_asset_mapping() {
             chart_length_ms: 123_456,
             render_snapshot_cache:
                 crate::screens::play_snapshot::PlayRenderSnapshotCache::from_chart(&chart),
-            applied_arrange: normal_applied_arrange(0, false, SRandomScheme::Lm120HzV1),
+            applied_arrange: normal_applied_arrange(0, false, SRandomScheme::Lm120HzV1, None),
             score_key,
             assist_runtime: Default::default(),
             opponent_chart: None,

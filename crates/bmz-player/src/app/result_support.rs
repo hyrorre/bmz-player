@@ -21,22 +21,38 @@ pub(super) fn result_skin_click_action(event_id: i32) -> Option<ResultSkinClickA
 }
 
 /// Result IR の相対スクロール量を返す。末尾方向を正とする。
-pub(super) fn result_ir_scroll_rows_for_control(
-    control: &str,
-    bindings: &SelectKeyBindings,
-) -> Option<i32> {
-    match control {
-        "ArrowUp" => Some(-1),
-        "ArrowDown" => Some(1),
-        _ if bindings.is_select_scratch_down(control) => Some(1),
-        _ if bindings.is_select_scratch_up(control) => Some(-1),
-        _ => None,
+pub(super) fn result_ir_scroll_rows_for_control(control: &ResolvedControl) -> Option<i32> {
+    match control.standard() {
+        Some(StandardKey::ArrowUp) => return Some(-1),
+        Some(StandardKey::ArrowDown) => return Some(1),
+        _ => {}
+    }
+    if control.is_scratch_down() {
+        Some(1)
+    } else if control.is_scratch_up() {
+        Some(-1)
+    } else {
+        None
     }
 }
 
 /// コース曲間の中間リザルトかどうか。active_course を保持したまま finished_play
 /// だけが立ち、finished_course はまだ無い状態を指す。中間リザルトでは retry を
 /// 無効化し、次の曲へ進むだけにする (beatoraja MusicResult のコース分岐相当)。
+/// 保存しないプレイのリザルトで、選曲キャッシュの IR ランキングを表示するか。
+///
+/// オートプレイとリプレイ再生が対象で、コース中の単曲リザルトも含む。
+/// フォルダ連続オートプレイは曲ごとの通信を増やさないよう対象外にする。
+/// プラクティスや保存しない変換のプレイ、Viewer・latency 検証も対象外。
+pub(super) fn cached_result_ir_applies(
+    autoplay: bool,
+    replay_playback: bool,
+    autoplay_folder_active: bool,
+    viewer_or_validation: bool,
+) -> bool {
+    (autoplay || replay_playback) && !autoplay_folder_active && !viewer_or_validation
+}
+
 pub(super) fn is_course_intermediate_result(
     active_course: bool,
     finished_course: bool,

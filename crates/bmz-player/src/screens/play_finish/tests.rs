@@ -440,6 +440,7 @@ fn finish_session_result_returns_summary() {
         seven_to_nine_pattern: Default::default(),
         seven_to_nine_type: Default::default(),
         seven_to_nine_rule_mode: Default::default(),
+        freq_semitones: 3,
     };
 
     let finished = finish_session_result(
@@ -473,6 +474,11 @@ fn finish_session_result_returns_summary() {
     assert_eq!(finished.summary.note_judge_window, Some(windows.note));
     assert_eq!(finished.summary.saved_replay_slots, [true, true, true, false]);
     assert_eq!(finished.summary.replay_slots, [true, true, true, false]);
+    let recorded =
+        crate::storage::replay::load_replay(&paths.root_dir.join(&finished.stored.replay_path))
+            .unwrap();
+    assert_eq!(recorded.freq_semitones, Some(3));
+    assert_eq!(recorded.recorded_freq_semitones(), 3);
 
     // First play creates a best, but Result still refers to the absent pre-save best.
     assert_eq!(finished.summary.skin_attempt.best_score_options, None);
@@ -1167,6 +1173,97 @@ fn spawned_settled_session_result_persists_on_background_worker() {
 }
 
 #[test]
+fn directly_owned_session_saves_its_settled_gauge_end_points() {
+    let root = make_temp_dir("direct-settled-gauges");
+    let paths = ProfilePaths {
+        root_dir: root.clone(),
+        profile_toml: root.join("profile.toml"),
+        collection_db: root.join("collection.db"),
+        score_db: root.join("score.db"),
+        network_db: root.join("network.db"),
+        replay_dir: root.join("replay"),
+    };
+    crate::storage::migration::migrate_score_db(&paths.score_db).unwrap();
+    crate::storage::migration::migrate_network_db(&paths.network_db).unwrap();
+    let replay_config = ReplayConfig {
+        auto_save: true,
+        compress: false,
+        slot_rules: crate::config::profile_config::default_slot_rules(),
+    };
+    let mut session = session();
+    session.state = PlayState::Ready;
+    session.autoplay = Some(bmz_gameplay::autoplay::AutoplayController::default());
+    let mut audio = bmz_audio::queue::ScheduledSoundQueue::new();
+    session.audio_clock.pause_at(TimeUs(0));
+    bmz_gameplay::session::advance_session_frame(&mut session, &mut audio);
+    let settled_at =
+        TimeUs(session.chart.end_time.0 + session.judge.window_set.result_settle_margin_us() + 1);
+    session.audio_clock.pause_at(settled_at);
+    bmz_gameplay::session::advance_session_frame(&mut session, &mut audio);
+    // The GameSession itself closed scoring; no gameplay worker is involved.
+    assert_eq!(session.scoring_closed_at, Some(settled_at));
+    assert_eq!(session.state, PlayState::Playing);
+    let expected: Vec<_> = session
+        .gauge
+        .gauges
+        .iter()
+        .map(|gauge| {
+            ((settled_at.0 / 1_000) as i32, gauge.definition.gauge_type as i32, gauge.value)
+        })
+        .collect();
+    let end_points = |graph: &bmz_render::snapshot::ResultGraphSnapshot| {
+        graph
+            .gauge_points
+            .iter()
+            .map(|point| (point.time_ms, point.gauge_type, point.value))
+            .collect::<Vec<_>>()
+    };
+
+    // Synchronous Finished path: the caller builds the graph from the same session.
+    let collector = crate::screens::result_model::ResultGraphCollector::default();
+    assert_eq!(end_points(&collector.snapshot_for_source(&session)), expected);
+
+    // Asynchronous settled save path.
+    let pending = spawn_settled_session_result(
+        FinishSessionResultOnceRequest {
+            profile_paths: &paths,
+            replay_config: &replay_config,
+            ir_config: &crate::config::profile_config::IrConfig::default(),
+            session: &session,
+            source_ln_profile: ChartLnProfile::from_chart(&session.chart),
+            chart_length_ms: None,
+            play_duration_ms: None,
+            played_at: 1_700_000_113,
+            applied_arrange: &AppliedArrange::default(),
+            target_ex_score: None,
+            target_name: "",
+            target: Default::default(),
+            score_key: score_key(&session),
+            practice_mode: false,
+            finish_mode: FinishResultMode::Normal,
+        },
+        settled_at,
+        collector,
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let finished = loop {
+        if let Some(finished) = pending.try_recv().unwrap() {
+            break finished;
+        }
+        assert!(Instant::now() < deadline, "background result save timed out");
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    assert_eq!(end_points(&finished.summary.graph), expected);
+    assert_eq!(
+        finished.gauge_carry.iter().map(|carry| carry.value).collect::<Vec<_>>(),
+        expected.iter().map(|(_, _, value)| *value).collect::<Vec<_>>()
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn finish_snapshot_preserves_the_started_session_mode() {
     let mut session = session();
     session.session_mode_index = 1;
@@ -1372,6 +1469,7 @@ fn session() -> GameSession {
         pending_mine_hits: Vec::new(),
         state: PlayState::Finished,
         manually_stopped: false,
+        scoring_closed_at: None,
         last_hcn_gauge_at: None,
     }
 }

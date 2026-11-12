@@ -177,12 +177,16 @@ impl NoteArrangeGroup {
             self.assign_all_scratch(notes, time, rng, &mut changeable, &mut assignable, &mut map);
         }
 
+        let s_random_threshold = match s_random_scheme {
+            // beatoraja S_RANDOM_NO_THRESHOLD / LR2: any later note may repeat.
+            SRandomScheme::NoThresholdV1 => TimeUs(0),
+            SRandomScheme::Legacy40MsV1 | SRandomScheme::Lm120HzV1 => TimeUs(40_000),
+        };
         let threshold = match arrange {
-            ArrangeOption::SRandom => TimeUs(40_000),
-            ArrangeOption::SRandomEx => TimeUs(40_000),
-            ArrangeOption::HRandom | ArrangeOption::AllScratch => {
-                TimeUs(i64::from(h_random_threshold_ms.unwrap_or(100)) * 1_000)
-            }
+            ArrangeOption::SRandom | ArrangeOption::SRandomEx => s_random_threshold,
+            ArrangeOption::HRandom | ArrangeOption::AllScratch => TimeUs(
+                i64::from(h_random_threshold_ms.unwrap_or(LEGACY_H_RANDOM_THRESHOLD_MS)) * 1_000,
+            ),
             _ => TimeUs(40_000),
         };
         map.extend(self.time_based_shuffle(notes, time, threshold, rng, changeable, assignable));

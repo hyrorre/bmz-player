@@ -29,14 +29,14 @@ impl AppPaths {
             let real = bmz_skin_assets::canonicalize_skin_path(path)?;
             anyhow::ensure!(
                 normalize_library_path(&real.to_string_lossy()) == grant.entry,
-                "external skin link target changed; select and authorize the skin again: {}",
+                "external skin link target changed; update its skin.external_access grant in profile.toml: {}",
                 path.display()
             );
             roots.extend(grant.roots.iter().map(PathBuf::from));
             return bmz_skin::SkinPathContext::new(&real, roots);
         }
         bmz_skin::SkinPathContext::new(path, roots)
-            .context("skin access denied; use Allow external skin in Skin settings, or add an explicit per-entry external_access grant to profile.toml")
+            .context("skin access denied; place the skin in a skin library or add an explicit per-entry skin.external_access grant to profile.toml")
     }
 
     /// No header read or Lua evaluation occurs during authorization.

@@ -167,7 +167,17 @@ fn luxe_detail_options_uses_existing_artwork_and_fonts_with_complete_labels() {
                     &row.status,
                 ] {
                     for c in label.chars().filter(|c| !c.is_whitespace()) {
-                        assert!(font.glyphs.contains_key(&c), "missing glyph {c} in {label}");
+                        // Match the bitmap glyph substitution used by the renderer.
+                        let equivalent = match c {
+                            '\u{301c}' => Some('\u{ff5e}'),
+                            '\u{ff5e}' => Some('\u{301c}'),
+                            _ => None,
+                        };
+                        assert!(
+                            font.glyphs.contains_key(&c)
+                                || equivalent.is_some_and(|ch| font.glyphs.contains_key(&ch)),
+                            "missing glyph {c} in {label}"
+                        );
                     }
                 }
             }

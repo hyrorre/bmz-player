@@ -107,7 +107,7 @@ impl WinitApp {
         }
     }
 
-    pub(super) fn start_select_hold_move(&mut self, select_move: SelectMove, control: String) {
+    pub(super) fn start_select_hold_move(&mut self, select_move: SelectMove, control: InputSource) {
         self.select.select_hold_move = Some(select_move);
         self.select.select_hold_started_at = Some(Instant::now());
         self.select.select_hold_last_trigger_at = Some(Instant::now());
@@ -117,16 +117,14 @@ impl WinitApp {
     /// 長押し移動は物理状態を正とし、開始した入力が離されていれば止める。
     /// ゲームパッドの release 経路や bounce filter で release を受け取れなくても止まる。
     pub(super) fn release_select_hold_without_pressed_control(&mut self) {
-        if select_hold_control_released(
-            self.select.select_hold_control.as_deref(),
-            &self.input.pressed_controls,
-        ) {
+        if select_hold_control_released(self.select.select_hold_control.as_ref(), &self.input) {
             self.clear_select_hold();
         }
     }
 
-    pub(super) fn clear_select_hold_control(&mut self, control: &str) {
-        if self.select.select_hold_control.as_deref() == Some(control) {
+    /// 長押し移動を始めた入力元の Release だけで止める。同名の別機器の Release では止めない。
+    pub(super) fn clear_select_hold_control(&mut self, source: &InputSource) {
+        if self.select.select_hold_control.as_ref() == Some(source) {
             self.clear_select_hold();
         }
     }
@@ -209,12 +207,11 @@ impl WinitApp {
     pub(super) fn handle_select_open_folder_action(&mut self) {
         let e1_held = self.input.select_e_action_holds.contains(&InputActionConfig::E1);
         let e2_held = self.input.select_e_action_holds.contains(&InputActionConfig::E2);
-        let ctrl_held = self.input.pressed_controls.iter().any(|control| {
-            matches!(control.as_str(), "LControl" | "RControl" | "ControlLeft" | "ControlRight")
-        });
-        let shift_held = self.input.pressed_controls.iter().any(|control| {
-            matches!(control.as_str(), "LShift" | "RShift" | "ShiftLeft" | "ShiftRight")
-        });
+        // 修飾キーはキーボード既定操作。コントローラーの同名ボタンは含めない。
+        let held =
+            |key| self.pressed_scene_controls().any(|control| control.standard() == Some(key));
+        let ctrl_held = held(StandardKey::LControl) || held(StandardKey::RControl);
+        let shift_held = held(StandardKey::LShift) || held(StandardKey::RShift);
 
         if e1_held {
             self.copy_selected_hash(false);
@@ -477,42 +474,38 @@ impl WinitApp {
             return;
         }
         let text = Localizer::new(self.boot.profile_config.ui.locale());
-        let Some((path, kind)) =
-            self.select.select_items.get(self.select.selected_index).and_then(|item| match item {
-                SelectItem::Folder { path, kind, .. } => Some((path.clone(), *kind)),
-                _ => None,
-            })
-        else {
-            return;
-        };
-        if kind != bmz_render::scene::SelectRowKind::Folder {
-            self.show_left_overlay_toast(text.text("toast-folder-autoplay-only-normal-folder"));
-            return;
-        }
-        // 選曲画面でこのフォルダから辿れる譜面だけを流す。
-        let folder_paths = match reachable_chart_folders(&self.boot.library_db, &path) {
-            Ok(folder_paths) => folder_paths,
-            Err(error) => {
-                tracing::warn!(folder = %path, %error, "failed to list autoplay folder charts");
-                vec![path.clone()]
+        let items = &self.select.select_items;
+        let selected_index = self.select.selected_index;
+        let source: Vec<&SelectItem> = match items.get(selected_index) {
+            // フォルダ行: そのフォルダから選曲画面で辿れる譜面を流す。
+            Some(item @ SelectItem::Folder { kind, .. })
+                if autoplay_folder_row_supported(*kind) =>
+            {
+                vec![item]
             }
+            Some(SelectItem::Folder { .. }) => {
+                self.show_left_overlay_toast(text.text("toast-folder-autoplay-only-normal-folder"));
+                return;
+            }
+            // フォルダ内の譜面行: 今開いている一覧を、選択中の譜面から表示順に一巡する。
+            Some(SelectItem::Chart(_)) => {
+                items[selected_index..].iter().chain(&items[..selected_index]).collect()
+            }
+            _ => return,
         };
-        let folder_refs: Vec<&str> = folder_paths.iter().map(String::as_str).collect();
-        let charts = match self.boot.library_db.list_charts_in_folders(&folder_refs) {
-            Ok(charts) => charts,
+        let path = self.select.folder_stack.last().cloned().unwrap_or_default();
+        let chart_ids = match autoplay_folder_chart_ids(
+            &SelectListSource::from(&self.boot),
+            &self.select.virtual_folders,
+            source,
+        ) {
+            Ok(chart_ids) => chart_ids,
             Err(error) => {
                 tracing::warn!(folder = %path, %error, "failed to list autoplay folder charts");
                 self.show_left_overlay_toast(text.text("toast-folder-autoplay-charts-load-failed"));
                 return;
             }
         };
-        let mut chart_ids = Vec::with_capacity(charts.len());
-        let mut seen = HashSet::new();
-        for chart in charts {
-            if seen.insert(chart.chart_id) {
-                chart_ids.push(chart.chart_id);
-            }
-        }
         let Some(&first_chart_id) = chart_ids.first() else {
             self.show_left_overlay_toast(text.text("toast-folder-autoplay-empty"));
             return;
@@ -787,18 +780,21 @@ impl WinitApp {
                     if matches!(action, MissingChartAction::Ipfs { .. }) { "IPFS" } else { "HTTP" }
                 })
                 .unwrap_or("HTTP");
-        let download_root =
-            self.boot.app_config.downloads.download_root(&self.boot.app_paths.data_dir);
         for (action, title, identity) in downloads {
             self.jobs.download_request_id += 1;
             let request_id = self.jobs.download_request_id;
+            let save_dir = crate::song_download::save_dir_for_action(
+                &self.boot.app_config.downloads,
+                &action,
+                &self.boot.app_paths.data_dir,
+            );
             let request = ChartDownloadRequest {
                 keep_archive: self.boot.app_config.downloads.http_keep_archive,
                 request_id,
                 identity: identity.clone(),
                 action,
                 title,
-                download_root: download_root.clone(),
+                save_dir,
             };
             let (task_id, _) = self.jobs.chart_downloads.submit(request);
             if single {

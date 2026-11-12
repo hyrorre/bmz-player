@@ -136,6 +136,18 @@ BATTLEはBMZでは`Off` / `Battle` / `BattleAutoScratch`のscore bucketを分離
 BATTLE専用ランキングを持たないためclient側で除外します。BMS-IRは`Battle`と
 `BattleAutoScratch`を互いに分離したnative rankingとして保存し、通常bucketへ混ぜません。
 
+### H-RANDOMの閾値
+
+H-RANDOM / ALL-SCRの鍵盤は、同じレーンの直前ノーツから閾値以内の間隔にならないよう配置します。
+閾値はbeatorajaの既定`hranThresholdBPM = 120`を`ceil(15000 / BPM)`で換算した125msです。
+境界と等しい間隔も避けます。7K→6K変換のスクラッチ・KEY4の移動先と、
+7K→9K変換のスクラッチ振り分けも同じ閾値を使います。
+
+新しいプレイは閾値をreplayへ記録します。閾値の記録が無い過去のreplayでは、
+当時の配置を再現するため、H-RANDOM / ALL-SCRは100ms、7K→9Kは125msのまま扱います。
+beatorajaのreplay取込は`config_player.json`の`hranThresholdBPM`から閾値を求め、
+見つからなければ125msを記録します。
+
 ## Key mode 変換
 
 BMZは`SpToDp`と`SevenToSix`を`score_save_disabled`とし、ランプ・回数を含めて

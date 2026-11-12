@@ -228,13 +228,10 @@ pub(crate) fn is_archive_file(path: &Path) -> bool {
 
 pub(crate) fn archive_folder_has_document(index: &song_archive::ArchiveIndex, entry: &str) -> bool {
     let folder = Path::new(entry).parent();
-    index.entries.iter().any(|candidate| {
-        !candidate.is_directory
-            && Path::new(&candidate.name).parent() == folder
-            && Path::new(&candidate.name)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("txt"))
-    })
+    index
+        .entries
+        .iter()
+        .any(|candidate| candidate.is_document() && Path::new(&candidate.name).parent() == folder)
 }
 
 pub(crate) fn archive_preview_file(

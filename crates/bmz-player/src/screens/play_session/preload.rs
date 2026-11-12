@@ -587,6 +587,7 @@ fn transform_chart_import(
             &mut chart,
             arrange_seed.expect("7K to 6K seed"),
             options.legacy_arrange_seed,
+            options.h_random_threshold_ms.unwrap_or(DEFAULT_H_RANDOM_THRESHOLD_MS),
         );
     } else if sp_to_dp {
         apply_sp_to_dp(&mut chart);
@@ -647,7 +648,7 @@ fn transform_chart_import(
             &mut chart,
             options.seven_to_nine_pattern,
             options.seven_to_nine_type,
-            options.h_random_threshold_ms.unwrap_or(125),
+            options.h_random_threshold_ms.unwrap_or(DEFAULT_H_RANDOM_THRESHOLD_MS),
         );
     }
     if !extra_before_battle {
@@ -675,6 +676,7 @@ fn transform_chart_import(
     applied_arrange.seven_to_nine_pattern = options.seven_to_nine_pattern;
     applied_arrange.seven_to_nine_type = options.seven_to_nine_type;
     applied_arrange.seven_to_nine_rule_mode = options.seven_to_nine_rule_mode;
+    applied_arrange.freq_semitones = options.freq_semitones;
     let conversion_persistence_disabled = applied_arrange.score_persistence_disabled();
 
     Ok(TransformedPlayChart {
@@ -903,6 +905,9 @@ pub fn build_prepared_play_session_from_preloaded(
     let practice_mode = options.session_mode.is_practice();
     let score_save_disabled = options.score_save_disabled;
     let playback_rate_percent = options.playback_rate_percent;
+    // A cached retry chart keeps its arrangement but plays at this start's FREQ.
+    let mut applied_arrange = preloaded.applied_arrange;
+    applied_arrange.freq_semitones = options.freq_semitones;
     options.opponent_chart = preloaded.opponent_chart;
     let session =
         build_game_session_with_input_backend(preloaded.chart, profile, options, input_backend);
@@ -928,7 +933,7 @@ pub fn build_prepared_play_session_from_preloaded(
         audio: preloaded.audio,
         sample_report: preloaded.sample_report,
         render_snapshot_cache: preloaded.render_snapshot_cache,
-        applied_arrange: preloaded.applied_arrange,
+        applied_arrange,
         score_key: preloaded.score_key,
         target_option,
         target_name,

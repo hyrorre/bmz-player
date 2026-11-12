@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -7,13 +7,26 @@ use everything_ipc::wm::{EverythingClient, FileInfo, RequestFlags};
 
 use super::discovery::{
     ChartDiscovery, ChartFileEntry, DiscoveredArchive, discover_archive_charts, is_chart_file_name,
-    is_document_file_name, is_hidden_metadata, record_discovery_issue, usize_to_u32,
+    is_document_file_name, is_excluded_name, record_discovery_issue, usize_to_u32,
 };
 use super::{ScanConfig, ScanDiscoveryBackend, ScanDiscoveryOperation};
 
 const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 const FILETIME_TICKS_PER_SECOND: u64 = 10_000_000;
 const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Everything found nothing below the root: the root is empty or not indexed. Native
+/// discovery takes over quietly, without reporting Everything as unavailable.
+#[derive(Debug)]
+pub(super) struct NoIndexedFiles;
+
+impl std::fmt::Display for NoIndexedFiles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Everything returned no matching files")
+    }
+}
+
+impl std::error::Error for NoIndexedFiles {}
 
 pub(super) fn discover_chart_files_everything(
     root: &Path,
@@ -32,7 +45,10 @@ pub(super) fn discover_chart_files_everything(
     let absolute_root = std::path::absolute(root)
         .with_context(|| format!("failed to make song root absolute: {}", root.display()))?;
     let query = everything_query(&absolute_root)?;
-    let client = EverythingClient::new().context("Everything IPC window is unavailable")?;
+    // The background service alone does not answer searches; the Everything app must
+    // be running in this session. Instances named like 1.5 alpha's "1.5a" are not found.
+    let client = EverythingClient::new()
+        .context("Everything is not running (the Everything service alone cannot search)")?;
     if !client.is_db_loaded() {
         bail!("Everything database is not loaded");
     }
@@ -64,14 +80,14 @@ pub(super) fn discover_chart_files_everything(
     // An empty result can also mean that the configured root is not indexed.
     // Native discovery is cheap for a genuinely empty root and is the safe fallback.
     if results.is_empty() {
-        bail!("Everything returned no matching files");
+        return Err(NoIndexedFiles.into());
     }
 
     let mut chart_entries = Vec::new();
     let mut archives = Vec::new();
     let mut issues = Vec::new();
+    let mut complete = true;
     let mut document_folders = HashSet::new();
-    let mut hidden_cache = HashMap::new();
     for item in results.iter() {
         let parent = item
             .get_str(RequestFlags::Path)
@@ -87,8 +103,9 @@ pub(super) fn discover_chart_files_everything(
         {
             continue;
         }
-        if scan.skip_hidden
-            && has_hidden_component(&absolute_root, &relative_path, &mut hidden_cache)?
+        if relative_path
+            .components()
+            .any(|component| matches!(component, Component::Normal(name) if is_excluded_name(name)))
         {
             continue;
         }
@@ -104,18 +121,21 @@ pub(super) fn discover_chart_files_everything(
         if crate::chart_source::is_archive_file(&output_path) {
             // Like native discovery, one unreadable archive is an issue, not a reason to
             // abandon the whole root and fall back to a much slower directory walk.
-            match discover_archive_charts(&output_path, scan.skip_hidden) {
+            match discover_archive_charts(&output_path) {
                 Ok((entries, generation)) => {
                     chart_entries.extend(entries);
                     archives.push(DiscoveredArchive { path: output_path, generation });
                 }
-                Err(error) => record_discovery_issue(
-                    &mut issues,
-                    root,
-                    &output_path,
-                    ScanDiscoveryOperation::ReadArchive,
-                    std::io::Error::other(format!("{error:#}")),
-                ),
+                Err(error) => {
+                    complete &= crate::song_archive::is_unsupported(&error);
+                    record_discovery_issue(
+                        &mut issues,
+                        root,
+                        &output_path,
+                        ScanDiscoveryOperation::ReadArchive,
+                        std::io::Error::other(format!("{error:#}")),
+                    );
+                }
             }
             continue;
         }
@@ -157,10 +177,11 @@ pub(super) fn discover_chart_files_everything(
     Ok(ChartDiscovery {
         entries: chart_entries,
         archives,
-        complete: issues.is_empty(),
+        complete,
         issues,
         root_readable: true,
         backend: ScanDiscoveryBackend::Everything,
+        fallback_reason: None,
     })
 }
 
@@ -199,33 +220,6 @@ fn path_relative_to_root(path: &Path, root: &Path) -> Option<PathBuf> {
         return None;
     }
     Some(PathBuf::from(suffix.trim_start_matches('\\')))
-}
-
-pub(super) fn has_hidden_component(
-    root: &Path,
-    path: &Path,
-    cache: &mut HashMap<PathBuf, bool>,
-) -> Result<bool> {
-    let mut current = root.to_path_buf();
-    for component in path.components() {
-        if let Component::Normal(name) = component {
-            current.push(name);
-            let hidden = if let Some(hidden) = cache.get(&current) {
-                *hidden
-            } else {
-                let metadata = std::fs::symlink_metadata(&current).with_context(|| {
-                    format!("failed to inspect attributes: {}", current.display())
-                })?;
-                let hidden = is_hidden_metadata(&metadata);
-                cache.insert(current.clone(), hidden);
-                hidden
-            };
-            if hidden {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
 }
 
 fn filetime_to_unix_seconds(filetime: u64) -> i64 {

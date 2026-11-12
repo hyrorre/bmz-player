@@ -242,12 +242,14 @@ fn load_songs(
     println!("{verb} {} root(s) with {discovery} discovery...", roots.len());
     let mut report = scan_songs(&mut library_db, &roots, &scan_config, now, force)
         .with_context(|| format!("failed to scan song roots (force={force})"))?;
+    let scope_start = std::time::Instant::now();
     if target.is_none() {
         report.summary.removed_files +=
             library_db.reconcile_configured_song_roots(&library_roots)?;
     } else {
         library_db.register_partial_song_roots(&roots)?;
     }
+    let scope_ms = scope_start.elapsed().as_millis();
 
     let s = &report.summary;
     println!("Removed {} obsolete file registration(s)", s.removed_files);
@@ -266,13 +268,25 @@ fn load_songs(
 
     let t = &report.timing;
     println!(
-        "Timing: total={}ms discovery={}ms fingerprint={}ms skip={}ms parse={}ms write={}ms",
-        t.total_ms, t.discovery_ms, t.fingerprint_ms, t.skip_check_ms, t.parse_ms, t.write_ms
+        "Timing: total={}ms discovery={}ms fingerprint={}ms skip={}ms parse={}ms write={}ms \
+         archive={}ms folder_flags={}ms prune={}ms scope={scope_ms}ms",
+        t.total_ms,
+        t.discovery_ms,
+        t.fingerprint_ms,
+        t.skip_check_ms,
+        t.parse_ms,
+        t.write_ms,
+        t.archive_ms,
+        t.folder_flags_ms,
+        t.prune_ms
     );
     println!(
         "Discovery backends: everything={} native={} fallback={}",
         s.everything_discovery_roots, s.native_discovery_roots, s.everything_fallback_roots
     );
+    if let Some(reason) = &s.everything_fallback_reason {
+        println!("  Everything unavailable: {reason}");
+    }
 
     for issue in &report.discovery_issues {
         println!(

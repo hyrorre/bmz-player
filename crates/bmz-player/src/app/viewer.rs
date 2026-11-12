@@ -93,6 +93,8 @@ impl WinitApp {
         options.session_mode = viewer_session_mode(battle);
         options.autoplay = true;
         options.score_save_disabled = true;
+        // The Viewer previews the chart at its own rate, independent of FREQ.
+        crate::screens::play_start::apply_freq_option(&mut options, 0);
         options.bms_random_seed = Some(bms_random_seed);
         if !self.prepare_session_mode_or_show_error(imported.chart_id, &mut options) {
             self.viewer_waiting = true;
@@ -121,8 +123,8 @@ impl WinitApp {
             return false;
         }
 
-        let shift = self.viewer_modifier_held(["LShift", "RShift"]);
-        let control = self.viewer_modifier_held(["LControl", "RControl"]);
+        let shift = self.viewer_modifier_held([StandardKey::LShift, StandardKey::RShift]);
+        let control = self.viewer_modifier_held([StandardKey::LControl, StandardKey::RControl]);
         let seek = viewer_keyboard_seek(event.physical_key, shift, control);
         if let Some(seek) = seek {
             if let Err(error) = self.seek_active_viewer(seek) {
@@ -172,8 +174,8 @@ impl WinitApp {
             return false;
         }
 
-        let shift = self.viewer_modifier_held(["LShift", "RShift"]);
-        let control = self.viewer_modifier_held(["LControl", "RControl"]);
+        let shift = self.viewer_modifier_held([StandardKey::LShift, StandardKey::RShift]);
+        let control = self.viewer_modifier_held([StandardKey::LControl, StandardKey::RControl]);
         if let Some(seek) = viewer_keyboard_seek(event.physical_key, shift, control) {
             if let Err(error) = self.seek_active_viewer(seek) {
                 tracing::warn!(%error, ?seek, "viewer waiting seek failed");
@@ -220,8 +222,8 @@ impl WinitApp {
         let Some(direction) = viewer_wheel_direction(delta) else {
             return true;
         };
-        let shift = self.viewer_modifier_held(["LShift", "RShift"]);
-        let control = self.viewer_modifier_held(["LControl", "RControl"]);
+        let shift = self.viewer_modifier_held([StandardKey::LShift, StandardKey::RShift]);
+        let control = self.viewer_modifier_held([StandardKey::LControl, StandardKey::RControl]);
         let seek = if control {
             ViewerSeek::SnappedSeconds(i64::from(direction) * VIEWER_SNAPPED_SEEK_US)
         } else if shift {
@@ -263,8 +265,10 @@ impl WinitApp {
         true
     }
 
-    fn viewer_modifier_held<const N: usize>(&self, names: [&str; N]) -> bool {
-        names.into_iter().any(|name| self.input.pressed_controls.contains(name))
+    fn viewer_modifier_held<const N: usize>(&self, keys: [StandardKey; N]) -> bool {
+        // Viewer の修飾キーは resolver が持つキーボード既定操作。
+        self.pressed_scene_controls()
+            .any(|control| control.standard().is_some_and(|key| keys.contains(&key)))
     }
 
     fn seek_active_viewer(&mut self, seek: ViewerSeek) -> Result<()> {
@@ -293,6 +297,7 @@ impl WinitApp {
         };
         let target = viewer_seek_target(&chart, current_time, seek);
         let mut options = self.active_play_retry_options(ResultRetryMode::SameArrange);
+        options.freq_semitones = 0;
         options.playback_rate_percent = playback_rate_percent;
         let mut session_options =
             play_session_options_from_start(&self.play_session_app_config(), options);

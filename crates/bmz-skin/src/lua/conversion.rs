@@ -66,8 +66,9 @@ pub(super) fn lua_value_to_json(
             }
         },
         Value::String(value) => {
-            table_budget.consume_string(&value, path)?;
-            JsonValue::String(value.to_string_lossy())
+            let bytes = value.as_bytes().to_vec();
+            table_budget.consume_string_bytes(&bytes, path)?;
+            JsonValue::String(lossy_utf8_string(bytes))
         }
         Value::Table(table) => lua_table_to_json(
             lua,
@@ -117,10 +118,11 @@ pub(super) fn peaceful_gauge_lead_glow_id(id: &str) -> Option<(&str, bool)> {
     ))
 }
 
-pub(super) fn is_peaceful_gauge_lead_glow_destination(entries: &[(Value, Value)]) -> bool {
-    let Some(Value::Table(dst)) = entries.iter().find_map(|(key, value)| {
-        matches!(key, Value::String(key) if key.as_bytes() == b"dst").then_some(value)
-    }) else {
+pub(super) fn is_peaceful_gauge_lead_glow_destination(entries: &[LuaTableEntry]) -> bool {
+    let Some(Value::Table(dst)) = entries
+        .iter()
+        .find_map(|entry| (entry.string_key() == Some(b"dst".as_slice())).then_some(&entry.value))
+    else {
         return false;
     };
     let frames =
@@ -146,24 +148,62 @@ pub(super) fn is_peaceful_gauge_lead_glow_destination(entries: &[(Value, Value)]
     })
 }
 
-/// Integer keys by value, then other numbers, then strings by bytes.
-fn compare_lua_keys(left: &Value, right: &Value) -> std::cmp::Ordering {
-    fn rank(key: &Value) -> u8 {
+/// A table key read from the VM once, so sorting and naming it need no further
+/// Lua calls (each one takes the VM lock).
+pub(in crate::lua) enum LuaTableKey {
+    Integer(i64),
+    Number(f64),
+    String(Vec<u8>),
+    Other(Value),
+}
+
+impl LuaTableKey {
+    fn from_value(key: Value) -> Self {
         match key {
-            Value::Integer(_) => 0,
-            Value::Number(_) => 1,
-            Value::String(_) => 2,
-            _ => 3,
+            Value::Integer(key) => Self::Integer(key),
+            Value::Number(key) => Self::Number(key),
+            Value::String(key) => Self::String(key.as_bytes().to_vec()),
+            key => Self::Other(key),
         }
     }
-    match (left, right) {
-        (Value::Integer(left), Value::Integer(right)) => left.cmp(right),
-        (Value::Number(left), Value::Number(right)) => left.total_cmp(right),
-        (Value::String(left), Value::String(right)) => {
-            left.as_bytes()[..].cmp(&right.as_bytes()[..])
+
+    /// Integer keys by value, then other numbers, then strings by bytes.
+    fn compare(&self, other: &Self) -> std::cmp::Ordering {
+        fn rank(key: &LuaTableKey) -> u8 {
+            match key {
+                LuaTableKey::Integer(_) => 0,
+                LuaTableKey::Number(_) => 1,
+                LuaTableKey::String(_) => 2,
+                LuaTableKey::Other(_) => 3,
+            }
         }
-        _ => rank(left).cmp(&rank(right)),
+        match (self, other) {
+            (Self::Integer(left), Self::Integer(right)) => left.cmp(right),
+            (Self::Number(left), Self::Number(right)) => left.total_cmp(right),
+            (Self::String(left), Self::String(right)) => left.cmp(right),
+            _ => rank(self).cmp(&rank(other)),
+        }
     }
+}
+
+pub(in crate::lua) struct LuaTableEntry {
+    pub(in crate::lua) key: LuaTableKey,
+    pub(in crate::lua) value: Value,
+}
+
+impl LuaTableEntry {
+    pub(in crate::lua) fn string_key(&self) -> Option<&[u8]> {
+        match &self.key {
+            LuaTableKey::String(key) => Some(key),
+            _ => None,
+        }
+    }
+}
+
+/// The same text as `mlua::String::to_string_lossy`, without copying valid UTF-8.
+fn lossy_utf8_string(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes)
+        .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned())
 }
 
 pub(super) fn lua_table_to_json(
@@ -179,12 +219,13 @@ pub(super) fn lua_table_to_json(
     let mut entries = Vec::new();
     for pair in table.pairs::<Value, Value>() {
         table_budget.consume(1, path)?;
-        entries.push(pair?);
+        let (key, value) = pair?;
+        entries.push(LuaTableEntry { key: LuaTableKey::from_value(key), value });
     }
     // `pairs` order follows a per-VM hash seed. Inference calls skin functions
     // while converting, and those calls can write globals that later probes
     // read, so convert fields in a fixed order. It also keeps callback IDs stable.
-    entries.sort_by(|(left, _), (right, _)| compare_lua_keys(left, right));
+    entries.sort_by(|left, right| left.key.compare(&right.key));
 
     if entries.is_empty() {
         return Ok(JsonValue::Array(Vec::new()));
@@ -192,12 +233,12 @@ pub(super) fn lua_table_to_json(
 
     let mut integer_keys = Vec::new();
     let mut has_non_integer_key = false;
-    for (key, value) in &entries {
-        if matches!(value, Value::Nil) {
+    for entry in &entries {
+        if matches!(entry.value, Value::Nil) {
             continue;
         }
-        match key {
-            Value::Integer(index) if *index > 0 => integer_keys.push(*index),
+        match entry.key {
+            LuaTableKey::Integer(index) if index > 0 => integer_keys.push(index),
             _ => has_non_integer_key = true,
         }
     }
@@ -207,11 +248,11 @@ pub(super) fn lua_table_to_json(
 
     if is_array {
         let mut values = Vec::new();
-        entries.sort_by_key(|(key, _)| match key {
-            Value::Integer(index) => *index,
+        entries.sort_by_key(|entry| match entry.key {
+            LuaTableKey::Integer(index) => index,
             _ => i64::MAX,
         });
-        for (index, (_, value)) in entries.into_iter().enumerate() {
+        for (index, LuaTableEntry { value, .. }) in entries.into_iter().enumerate() {
             // LuaSkinLoader's DestinationOption serializer ignores non-scalar
             // entries (a nested table is not an OR group). In particular, do
             // not let SocialSkin's legacy nested options reject the document.
@@ -239,11 +280,16 @@ pub(super) fn lua_table_to_json(
     }
     let function_metadata = ObjectFunctionMetadata::from_entries(&entries, path, main_state_probe);
     let mut object = JsonMap::new();
-    for (key, value) in entries {
-        if let Value::String(key) = &key {
-            table_budget.consume_string(key, path)?;
-        }
-        let key = lua_key_to_json_key(key, path, warnings)?;
+    for LuaTableEntry { key, value } in entries {
+        let key = match key {
+            LuaTableKey::String(key) => {
+                table_budget.consume_string_bytes(&key, path)?;
+                lossy_utf8_string(key)
+            }
+            LuaTableKey::Integer(key) => key.to_string(),
+            LuaTableKey::Number(key) => key.to_string(),
+            LuaTableKey::Other(key) => lua_key_to_json_key(key, path, warnings)?,
+        };
         if matches!(value, Value::Nil) {
             continue;
         }

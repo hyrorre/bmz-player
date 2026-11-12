@@ -55,7 +55,7 @@ use crate::config::profile_config::LaneEffectConfig;
 use crate::config::profile_config::{
     AssistOptionConfig, BaseHispeedConfig, BgaExpandConfig, BgaModeConfig, FloatingPolicyConfig,
     JudgeAlgorithmConfig, KeyModeConversionConfig, PlayModeConfig, ProfileConfig,
-    SevenToNinePattern, SevenToNineRuleMode, SevenToNineType,
+    SRandomCorrectionConfig, SevenToNinePattern, SevenToNineRuleMode, SevenToNineType,
 };
 use crate::input::gamepad::GamepadSlotMap;
 use crate::ln_policy::{
@@ -76,19 +76,34 @@ use crate::storage::score_db::ScoreKey;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SRandomScheme {
+    /// beatoraja `SRAN_THRESHOLD`: repeats of 40 ms or less are avoided.
     Legacy40MsV1,
     #[default]
     Lm120HzV1,
+    /// LR2: no interval threshold; only simultaneous notes and held long notes
+    /// keep a lane busy.
+    NoThresholdV1,
 }
 
 impl SRandomScheme {
     pub const LEGACY_40MS_V1: &'static str = "legacy_40ms_v1";
     pub const LM_120HZ_V1: &'static str = "lm_120hz_v1";
+    pub const NO_THRESHOLD_V1: &'static str = "no_threshold_v1";
 
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Legacy40MsV1 => Self::LEGACY_40MS_V1,
             Self::Lm120HzV1 => Self::LM_120HZ_V1,
+            Self::NoThresholdV1 => Self::NO_THRESHOLD_V1,
+        }
+    }
+
+    /// Scheme recorded by a fresh play for the profile's S-RANDOM correction.
+    pub const fn from_correction(correction: SRandomCorrectionConfig) -> Self {
+        match correction {
+            SRandomCorrectionConfig::Lr2 => Self::NoThresholdV1,
+            SRandomCorrectionConfig::Beatoraja => Self::Legacy40MsV1,
+            SRandomCorrectionConfig::Lm120Hz => Self::Lm120HzV1,
         }
     }
 
@@ -96,6 +111,7 @@ impl SRandomScheme {
         match value {
             Self::LEGACY_40MS_V1 => Ok(Self::Legacy40MsV1),
             Self::LM_120HZ_V1 => Ok(Self::Lm120HzV1),
+            Self::NO_THRESHOLD_V1 => Ok(Self::NoThresholdV1),
             _ => bail!("unsupported S-RANDOM scheme: {value}"),
         }
     }
@@ -122,9 +138,14 @@ pub struct PlaySessionOptions {
     /// Explicitly disables score/lamp/replay/IR persistence without presenting
     /// the session as practice or autoplay.
     pub score_save_disabled: bool,
-    /// Fixed chart/audio rate for this session. Restricted to non-scoring modes
-    /// by the app flow and clamped by `bmz-audio` to 50..=200.
+    /// Fixed chart/audio rate for this session, clamped by `bmz-audio`.
+    /// Fresh plays derive it from LR2 FREQ (50..=200). FREQ below 0 disables
+    /// persistence, FREQ above 0 stays score eligible; Practice and Viewer set
+    /// their own rate and never save.
     pub playback_rate_percent: u16,
+    /// LR2 FREQ semitones behind `playback_rate_percent`. 0 for Practice,
+    /// Viewer and replays recorded before FREQ existed.
+    pub freq_semitones: i8,
     pub assist: AssistOptionConfig,
     /// 譜面変換時に確定した実効 assist。preload 後に内部で設定する。
     pub assist_runtime: AssistRuntime,
@@ -160,8 +181,9 @@ pub struct PlaySessionOptions {
     pub s_random_scheme: SRandomScheme,
     /// Optional 2P S-RANDOM generation for mixed ghost/replay arrangements.
     pub s_random_scheme_2p: Option<SRandomScheme>,
-    /// beatoraja H-RANDOM/ALL-SCR key-lane threshold recovered for a replay.
-    /// None keeps BMZ's historical 100 ms behavior.
+    /// H-RANDOM/ALL-SCR key-lane threshold. Fresh plays record
+    /// [`DEFAULT_H_RANDOM_THRESHOLD_MS`]; `None` only comes from replays made
+    /// before the value was recorded and keeps BMZ's historical 100 ms H-RANDOM.
     pub h_random_threshold_ms: Option<u32>,
     /// Independent seed used only while selecting BMS `#RANDOM` branches.
     pub bms_random_seed: Option<u64>,
@@ -246,6 +268,8 @@ pub struct AppliedArrange {
     pub seven_to_nine_pattern: SevenToNinePattern,
     pub seven_to_nine_type: SevenToNineType,
     pub seven_to_nine_rule_mode: SevenToNineRuleMode,
+    /// LR2 FREQ the session actually played at. Recorded into replays.
+    pub freq_semitones: i8,
 }
 
 impl AppliedArrange {
@@ -406,6 +430,7 @@ impl Default for PlaySessionOptions {
             seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
             score_save_disabled: false,
             playback_rate_percent: 100,
+            freq_semitones: 0,
             assist: AssistOptionConfig::default(),
             assist_runtime: AssistRuntime::default(),
             replay_player: None,
@@ -429,7 +454,7 @@ impl Default for PlaySessionOptions {
             legacy_arrange_seed: false,
             s_random_scheme: SRandomScheme::default(),
             s_random_scheme_2p: None,
-            h_random_threshold_ms: None,
+            h_random_threshold_ms: Some(DEFAULT_H_RANDOM_THRESHOLD_MS),
             bms_random_seed: None,
             bms_random_choices: None,
             bms_switch_choices: None,
@@ -447,6 +472,15 @@ impl Default for PlaySessionOptions {
         }
     }
 }
+
+/// beatoraja's default `hranThresholdBPM = 120` expressed as
+/// `ceil(15000 / BPM)` milliseconds. Fresh plays record this value so H-RANDOM,
+/// ALL-SCR, 7K to 6K and 7K to 9K share one jack-avoidance threshold.
+pub const DEFAULT_H_RANDOM_THRESHOLD_MS: u32 = 125;
+
+/// H-RANDOM/ALL-SCR threshold for replays without a recorded value. Older BMZ
+/// releases used 100 ms there, so the arrange must keep it to reproduce them.
+pub(crate) const LEGACY_H_RANDOM_THRESHOLD_MS: u32 = 100;
 
 #[path = "play_session/arrange/algorithm.rs"]
 mod arrange_algorithm;

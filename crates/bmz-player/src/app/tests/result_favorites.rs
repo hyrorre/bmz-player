@@ -5,10 +5,16 @@ use crate::bootstrap::profile_tests::ProfileTestDir;
 fn result_favorites_share_select_bindings_and_common_action_priority() {
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
     let keyboard = |name: &str| PhysicalControl::KeyboardKey(name.into());
-    let keys = SelectKeyBindings::from_profile(&profile.input);
-    assert_eq!(result_favorite_kind(&keyboard("F8"), &keys), Some(ResultFavoriteKind::Song));
-    assert_eq!(result_favorite_kind(&keyboard("F9"), &keys), Some(ResultFavoriteKind::Chart));
-    assert_eq!(result_favorite_kind(&keyboard("R"), &keys), None);
+    let keys = SceneInputResolver::from_profile(&profile.input);
+    assert_eq!(
+        result_favorite_kind(&resolve_physical(&keys, &keyboard("F8"))),
+        Some(ResultFavoriteKind::Song)
+    );
+    assert_eq!(
+        result_favorite_kind(&resolve_physical(&keys, &keyboard("F9"))),
+        Some(ResultFavoriteKind::Chart)
+    );
+    assert_eq!(result_favorite_kind(&resolve_physical(&keys, &keyboard("R"))), None);
     for entry in &mut profile.input.ui.bindings {
         if entry.action == Some(InputActionConfig::SelectFavoriteSong) {
             entry.control = "F6".into();
@@ -18,11 +24,17 @@ fn result_favorites_share_select_bindings_and_common_action_priority() {
             entry.control = "Button20".into();
         }
     }
-    let keys = SelectKeyBindings::from_profile(&profile.input);
-    assert_eq!(result_favorite_kind(&keyboard("F8"), &keys), None);
-    assert_eq!(result_favorite_kind(&keyboard("F6"), &keys), Some(ResultFavoriteKind::Song));
+    let keys = SceneInputResolver::from_profile(&profile.input);
+    assert_eq!(result_favorite_kind(&resolve_physical(&keys, &keyboard("F8"))), None);
     assert_eq!(
-        result_favorite_kind(&PhysicalControl::GamepadButton("Button20".into()), &keys),
+        result_favorite_kind(&resolve_physical(&keys, &keyboard("F6"))),
+        Some(ResultFavoriteKind::Song)
+    );
+    assert_eq!(
+        result_favorite_kind(&resolve_physical(
+            &keys,
+            &PhysicalControl::GamepadButton("Button20".into())
+        )),
         Some(ResultFavoriteKind::Chart)
     );
     for entry in &mut profile.input.ui.bindings {
@@ -30,8 +42,8 @@ fn result_favorites_share_select_bindings_and_common_action_priority() {
             entry.control = "F6".into();
         }
     }
-    let keys = SelectKeyBindings::from_profile(&profile.input);
-    assert_eq!(result_favorite_kind(&keyboard("F6"), &keys), None);
+    let keys = SceneInputResolver::from_profile(&profile.input);
+    assert_eq!(result_favorite_kind(&resolve_physical(&keys, &keyboard("F6"))), None);
 }
 
 #[test]
@@ -166,14 +178,26 @@ fn result_favorites_route_keys_skin_events_and_course_boundaries_without_skin_bu
     assert!(!app.result.result_favorite_chart);
     let song = PhysicalControl::KeyboardKey("F8".into());
     let chart = PhysicalControl::KeyboardKey("F9".into());
-    assert!(app.handle_result_control(&song, true, false, false));
-    assert!(app.handle_result_control(&chart, true, false, false));
+    assert!({
+        let input = app.test_input(&song, true, false);
+        app.handle_result_control(&input)
+    });
+    assert!({
+        let input = app.test_input(&chart, true, false);
+        app.handle_result_control(&input)
+    });
     assert!(app.result.result_favorite_song);
     assert!(app.result.result_favorite_chart);
     assert!(app.result.result_exit.is_none());
     for (pressed, repeat) in [(false, false), (true, true)] {
-        assert!(app.handle_result_control(&song, pressed, repeat, false));
-        assert!(app.handle_result_control(&chart, pressed, repeat, false));
+        assert!({
+            let input = app.test_input(&song, pressed, repeat);
+            app.handle_result_control(&input)
+        });
+        assert!({
+            let input = app.test_input(&chart, pressed, repeat);
+            app.handle_result_control(&input)
+        });
     }
     app.refresh_result_favorites();
     assert!(app.result.result_favorite_song && app.result.result_favorite_chart);
@@ -184,14 +208,23 @@ fn result_favorites_route_keys_skin_events_and_course_boundaries_without_skin_bu
     app.execute_result_skin_event(89);
     app.execute_result_skin_event(90);
     assert!(!app.result.result_favorite_song && !app.result.result_favorite_chart);
-    assert!(app.handle_course_intermediate_control(&song, true, false, false));
-    assert!(app.handle_course_intermediate_control(&chart, true, false, false));
+    assert!({
+        let input = app.test_input(&song, true, false);
+        app.handle_course_intermediate_control(&input)
+    });
+    assert!({
+        let input = app.test_input(&chart, true, false);
+        app.handle_course_intermediate_control(&input)
+    });
     assert!(app.result.result_exit.is_none(), "favorites must not advance the course");
     assert!(app.result.result_favorite_song && app.result.result_favorite_chart);
 
     app.result.result_scene_started_at = Instant::now();
     assert!(!app.result_input_ready());
-    app.handle_result_control(&song, true, false, false);
+    {
+        let input = app.test_input(&song, true, false);
+        app.handle_result_control(&input)
+    };
     app.execute_result_skin_event(90);
     assert!(app.result.result_favorite_song && app.result.result_favorite_chart);
     app.result.result_scene_started_at = Instant::now() - Duration::from_secs(60);
@@ -201,7 +234,10 @@ fn result_favorites_route_keys_skin_events_and_course_boundaries_without_skin_bu
         skip_requested: false,
         skip_final_frame_held: false,
     });
-    app.handle_result_control(&song, true, false, false);
+    {
+        let input = app.test_input(&song, true, false);
+        app.handle_result_control(&input)
+    };
     app.execute_result_skin_event(90);
     assert!(app.result.result_favorite_song && app.result.result_favorite_chart);
     app.result.result_exit = None;
@@ -240,8 +276,14 @@ fn result_favorites_route_keys_skin_events_and_course_boundaries_without_skin_bu
     });
     app.refresh_result_favorites();
     assert!(!app.result.result_favorite_song && !app.result.result_favorite_chart);
-    app.handle_course_result_control(&song, true, false, false);
-    app.handle_course_result_control(&chart, true, false, false);
+    {
+        let input = app.test_input(&song, true, false);
+        app.handle_course_result_control(&input)
+    };
+    {
+        let input = app.test_input(&chart, true, false);
+        app.handle_course_result_control(&input)
+    };
     app.execute_result_skin_event(89);
     app.execute_result_skin_event(90);
     assert!(app.boot.collection_db.is_favorite_chart(sha).unwrap());

@@ -94,9 +94,12 @@ pub(in crate::app) fn log_gamepad_key_config_raw_event(
 #[cfg(test)]
 pub(in crate::app) fn select_control_action(
     control: &str,
-    bindings: &SelectKeyBindings,
+    bindings: &SceneInputResolver,
 ) -> Option<SelectAction> {
-    scene_select_action(&ControlInputEvent::gamepad(DeviceId(1), control, true), bindings)
+    scene_select_action(&super::input_resolve::resolve_scene_for_test(
+        bindings,
+        ControlInputEvent::gamepad(DeviceId(1), control, true),
+    ))
 }
 
 #[cfg(test)]
@@ -104,9 +107,12 @@ pub(in crate::app) fn select_action(
     physical_key: PhysicalKey,
     state: ElementState,
     repeat: bool,
-    bindings: &SelectKeyBindings,
+    bindings: &SceneInputResolver,
 ) -> Option<SelectAction> {
-    scene_select_action(&ControlInputEvent::keyboard_parts(physical_key, state, repeat), bindings)
+    scene_select_action(&super::input_resolve::resolve_scene_for_test(
+        bindings,
+        ControlInputEvent::keyboard_parts(physical_key, state, repeat),
+    ))
 }
 
 pub(in crate::app) fn select_wheel_move(delta: MouseScrollDelta) -> Option<SelectMove> {

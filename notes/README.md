@@ -39,6 +39,20 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-13 | [Luxez-Flatの詳細オプションで波ダッシュの字形を検査する](2026/2026-11-13-luxez-detail-option-glyphs.md) |
+| 2026-11-12 | [F1で開くリザルトIRランキングのスクロール](2026/2026-11-12-result-ir-scroll.md) |
+| 2026-11-12 | [スキン設定の選択欄](2026/2026-11-12-skin-settings-layout.md) |
+| 2026-11-12 | [Implexroughの動画BGAが途中で止まる問題（#91）](2026/2026-11-12-implexrough-bga-decode.md) |
+| 2026-11-12 | [クイックリトライ時の動画BGA（#90）](2026/2026-11-12-bga-quick-retry.md) |
+| 2026-11-11 | [1P / 2Pで異なるキーコンフィグの入力解決](2026/2026-11-11-input-resolution-pipeline.md) |
+| 2026-11-11 | [プレー終了時とResultのゲージ値不一致](2026/2026-11-11-result-gauge-settlement.md) |
+| 2026-11-11 | [E2+鍵盤による緑数字の操作の向き](2026/2026-11-11-e2-key-green-number-direction.md) |
+| 2026-11-11 | [H-RANDOMの閾値を125msへそろえる](2026/2026-11-11-h-random-threshold.md) |
+| 2026-11-11 | [Luaスキンのdocument変換の高速化](2026/2026-11-11-lua-skin-document-conversion.md) |
+| 2026-11-10 | [Result・Selectスキンの先読み](2026/2026-11-10-result-skin-prewarm.md) |
+| 2026-11-10 | [譜面取得の保存先をIPFS / HTTPで別々に指定する](2026/2026-11-10-download-save-dirs.md) |
+| 2026-11-10 | [再スキャンで書庫を開き直さないための譜面一覧の保持](2026/2026-11-10-archive-listing-cache.md) |
+| 2026-11-10 | [曲更新がbeatorajaより遅い問題の調査と改善](2026/2026-11-10-song-update-performance.md) |
 | 2026-11-10 | [Qwilightプレイスキンの試験対応とカスタマイズ](2026/2026-11-10-qwilight-play-skins.md) |
 | 2026-11-09 | [Rust実行経路の停止・負荷候補の計測と修正](2026/2026-11-09-rust-frame-stalls.md) |
 | 2026-11-09 | [Surface再設定失敗後のクラッシュ経路](2026/2026-11-09-surface-reconfiguration-recovery.md) |

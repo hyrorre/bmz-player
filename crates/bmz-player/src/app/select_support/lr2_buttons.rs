@@ -59,9 +59,9 @@ pub(in crate::app) fn lr2_select_button_action(button: i32) -> Lr2SelectButtonAc
         170..=185 => SkinTarget(button),
         190 => SkinChange,
         220..=229 => SkinItem((button - 220) as usize),
-        // Panels 7..8, FX/EQ/PITCH, 2P gauge/HS, score graph, ghost, BGA size,
-        // default target rate, system and favorite tag buttons have no identical
-        // BMZ setting.
+        // Panels 7..8, FX/EQ, PITCH on/off and type, 2P gauge/HS, score graph, ghost,
+        // BGA size, default target rate, system and favorite tag buttons have no
+        // identical BMZ setting. The pitch amount (FREQ) is slider 26.
         _ => Unsupported,
     }
 }

@@ -4,18 +4,13 @@ pub(in crate::app) fn result_action(
     state: ElementState,
     repeat: bool,
 ) -> Option<ResultAction> {
-    scene_result_action(&ControlInputEvent::keyboard_parts(physical_key, state, repeat))
-}
-
-pub(in crate::app) fn result_exit_skip_key(
-    physical_key: PhysicalKey,
-    state: ElementState,
-    repeat: bool,
-) -> bool {
-    if state != ElementState::Pressed || repeat {
-        return false;
-    }
-    matches!(physical_key, PhysicalKey::Code(KeyCode::Enter | KeyCode::Escape))
+    let bindings = SceneInputResolver::from_profile(
+        &crate::config::profile_config::ProfileConfig::new_default("test", "Test", 0).input,
+    );
+    scene_result_action(&super::input_resolve::resolve_scene_for_test(
+        &bindings,
+        ControlInputEvent::keyboard_parts(physical_key, state, repeat),
+    ))
 }
 
 pub(in crate::app) fn result_exit_transition_ready(
@@ -32,9 +27,17 @@ pub(in crate::app) fn result_exit_transition_ready(
 #[cfg(test)]
 pub(in crate::app) fn decide_control_action(
     control: &str,
-    bindings: &SelectKeyBindings,
+    bindings: &SceneInputResolver,
 ) -> Option<DecideAction> {
-    scene_decide_action(&ControlInputEvent::gamepad(DeviceId(1), control, true), bindings)
+    let event = if control.starts_with("Button") || control.starts_with("Axis") {
+        ControlInputEvent::gamepad(DeviceId(1), control, true)
+    } else {
+        ControlInputEvent {
+            physical: Some(PhysicalControl::KeyboardKey(control.into())),
+            ..ControlInputEvent::gamepad(W_KEYBOARD_DEVICE_ID, control, true)
+        }
+    };
+    scene_decide_action(&super::input_resolve::resolve_scene_for_test(bindings, event))
 }
 
 pub(in crate::app) fn decide_cancel_chord_pressed(
@@ -104,6 +107,7 @@ pub(in crate::app) fn preloaded_matches_start(
         && preloaded.session_options.seven_to_nine_type == options.seven_to_nine_type
         && preloaded.session_options.seven_to_nine_rule_mode == options.seven_to_nine_rule_mode
         && preloaded.session_options.score_save_disabled == options.score_save_disabled
+        && preloaded.session_options.freq_semitones == options.freq_semitones
         && preloaded.session_options.arrange == options.arrange
         && preloaded.session_options.arrange_2p == options.arrange_2p
         && preloaded.session_options.double_option == options.double_option

@@ -115,7 +115,7 @@ impl WinitApp {
         let double_option = double_option_from_profile(boot.profile_config.play.double_option);
         let hs_fix_option = hs_fix_option_from_profile(boot.profile_config.play.hs_fix);
         let target_option = target_option_from_profile(boot.profile_config.play.target);
-        let select_keys = SelectKeyBindings::from_profile(&boot.profile_config.input);
+        let select_keys = SceneInputResolver::from_profile(&boot.profile_config.input);
         let mut renderer = Box::new(Renderer::default());
         renderer.set_default_font_search_paths(vec![boot.app_paths.bundled_noto_cjk_font_root()]);
         renderer.set_default_font_coverage(boot.profile_config.ui.locale().font_coverage());
@@ -279,7 +279,9 @@ impl WinitApp {
             first_frame_startup_completed: false,
             shutdown_requested,
             renderer,
-            input: AppInputRuntime::default(),
+            input: AppInputRuntime::with_gamepad_slots(
+                crate::input::gamepad::GamepadSlotMap::from_device_ids(gamepad_slots),
+            ),
             raw_input_bridge,
             gamepad,
             event_loop_probe: if options.latency_event_loop_probe {
@@ -417,6 +419,7 @@ impl WinitApp {
                 result_favorite_song: false,
                 result_ir: None,
                 last_play_session_mode: SessionMode::Normal,
+                last_play_freq_semitones: 0,
                 result_scene_started_at: now,
                 lr2_result_progress: Default::default(),
                 lr2_result_epoch: None,
@@ -491,6 +494,8 @@ impl WinitApp {
                 pending_skin_render_probe: None,
                 last_play_skin_signature: None,
                 last_result_skin_signature: initial_result_skin_signature,
+                result_skin_prewarm: None,
+                select_skin_prewarm: None,
             },
             audio: AppAudioRuntimeState {
                 pending_audio_apply: false,

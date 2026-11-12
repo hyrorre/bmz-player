@@ -467,9 +467,13 @@ mod tests {
     }
 
     #[test]
-    fn players_above_two_keep_their_numbered_device_mapping() {
+    fn unassigned_and_out_of_range_players_stay_unresolved() {
         let slots = GamepadSlotMap::default();
-        assert_eq!(slots.device_id_for_player(3), Some(DeviceId(18)));
+        assert_eq!(slots.device_id_for_player(1), None);
+        assert_eq!(slots.device_id_for_player(3), None);
+        let slots = GamepadSlotMap::from_device_ids([None, Some(DeviceId(16))]);
+        assert_eq!(slots.device_id_for_player(1), None);
+        assert_eq!(slots.player_for_device(DeviceId(16)), Some(2));
     }
 
     #[test]

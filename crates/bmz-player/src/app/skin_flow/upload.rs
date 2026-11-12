@@ -62,6 +62,9 @@ impl WinitApp {
                     stats.max_upload_wait_us = stats
                         .max_upload_wait_us
                         .max(instant_elapsed_us_u64(result.upload_finished_at));
+                    let Some(result) = self.hold_prewarmed_upload(result) else {
+                        continue;
+                    };
                     if self.apply_uploaded_skin(result) {
                         stats.applied_count += 1;
                     }
@@ -132,9 +135,19 @@ impl WinitApp {
             .unwrap_or(0);
         self.clear_result_ir_scroll_input();
         self.skin.skin_pipeline.lr2_assets.previous_scene = Some(SkinKind::Result);
+        self.prewarm_select_skin_for_result_exit();
     }
 
     pub(super) fn ensure_result_skin_ready_for_entry(&mut self, slot: ResultSkinSlot) {
+        if slot == ResultSkinSlot::Normal && self.enter_result_with_prewarmed_skin() {
+            return;
+        }
+        self.discard_skin_prewarm(SkinKind::Result);
+        self.begin_result_skin_load_for_entry(slot);
+        self.ensure_result_skin_ready(slot);
+    }
+
+    pub(super) fn begin_result_skin_load_for_entry(&mut self, slot: ResultSkinSlot) {
         self.skin.skin_pipeline.begin_lr2_result_entry(
             slot == ResultSkinSlot::Course,
             self.result.finished_play.is_some() || self.result.finished_course.is_some(),
@@ -145,7 +158,6 @@ impl WinitApp {
         self.skin.skin_pipeline.result_source_selections.clear();
         self.skin.skin_pipeline.result_random_file_selections.clear();
         self.skin.last_result_skin_signature = None;
-        self.ensure_result_skin_ready(slot);
     }
 
     /// An LR2 Result inherits CONTINUE assets from the Play skin. When the attempt was

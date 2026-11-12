@@ -183,8 +183,10 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 if self.select.key_config_edit.is_none()
                     && event.state == ElementState::Pressed
                     && !event.repeat
-                    && physical_key_name(event.physical_key)
-                        .is_some_and(|control| self.select.select_keys.is_screenshot(&control))
+                    && self
+                        .resolve_control_event(ControlInputEvent::keyboard(&event))
+                        .scene()
+                        .has_shortcut(InputActionConfig::Screenshot)
                 {
                     self.request_manual_screenshot();
                     return;
@@ -396,6 +398,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     self.advance_select_ir_battle_hold();
                     self.advance_select_analog_scroll();
                     self.advance_detail_value_repeat();
+                    self.flush_lr2_freq_slider_save();
                 }
                 self.advance_result_ir_scroll_hold();
                 self.advance_result_ir_analog_scroll();

@@ -65,6 +65,7 @@ use crate::model::{JudgeRankKind, JudgeRankSpec, LongNoteMode};
 mod compat;
 mod metadata;
 mod objects;
+mod prepare;
 mod random;
 mod sparse;
 mod text;
@@ -73,6 +74,7 @@ mod timing;
 use compat::*;
 use metadata::*;
 use objects::*;
+use prepare::*;
 use random::*;
 use sparse::*;
 use text::*;
@@ -243,29 +245,18 @@ fn import_with_layout<T: KeyLayoutMapper>(
 ) -> Result<IntermediateChart, ImportError> {
     let identity = compute_chart_identity(bytes);
     let raw_text = decode_bms_text(bytes, warnings);
-    let has_bms_random = source_text_has_bms_random(&raw_text);
-    let layout_text = if layout == ChartKeyLayout::pms(PmsKeyLayout::Standard) {
-        strip_pms_bme_upper_channels(&raw_text)
-    } else {
-        raw_text.clone()
-    };
-    let compatible_text = normalize_beatoraja_separators(&layout_text);
-    let text = apply_beatoraja_random_control(
-        &compatible_text,
+    let source = prepare_bms_source(
+        &raw_text,
+        layout == ChartKeyLayout::pms(PmsKeyLayout::Standard),
         random_source,
         bms_random_choices,
         bms_switch_choices,
         warnings,
     );
-    let metadata_text = strip_empty_metadata_commands(&text);
-    let lnobj_parse_text = strip_lnobj_commands(&metadata_text);
-    let bga_messages = extract_bga_message_lines(&lnobj_parse_text);
-    let source_texts = extract_source_texts(&lnobj_parse_text);
-    let (parse_text, sparse_messages) =
-        extract_sparse_bms_message_lines(&lnobj_parse_text, warnings);
+    drop(raw_text);
 
     let BmsOutput { bms, warnings: bms_warnings } = parse_bms::<T, _, _, _>(
-        &parse_text,
+        &source.parse_text,
         default_config_with_rng(JavaRandom::new(random_source_seed(random_source) as i64))
             .key_mapper::<T>(),
     );
@@ -278,18 +269,16 @@ fn import_with_layout<T: KeyLayoutMapper>(
         path: source_path.to_path_buf(),
         message: format!("{err:?}"),
     })?;
-    inject_sparse_bms_messages::<T>(&mut bms, &sparse_messages, warnings);
-    let mut extra_objects = bga_messages_to_intermediate_objects(
-        &bga_messages,
-        bms_uses_base62_obj_ids(&bms),
-        warnings,
-    );
+    inject_sparse_bms_messages::<T>(&mut bms, &source.sparse_messages, warnings);
+    let base62_obj_ids = bms_uses_base62_obj_ids(&bms);
+    let mut extra_objects =
+        bga_messages_to_intermediate_objects(&source.bga_messages, base62_obj_ids, warnings);
     // bms-rs stores BGA changes in a single map keyed only by time, so simultaneous
     // Base/Poor/Layer changes overwrite each other. Use the source-derived events instead.
     bms.bmp.bga_changes.clear();
     // Text events have the same limitation; bms-rs also drops the rest of a #99 message
     // after an undefined object.
-    let source_texts = source_text_objects(&source_texts, bms_uses_base62_obj_ids(&bms), warnings);
+    let source_texts = source_text_objects(&source.source_texts, base62_obj_ids, warnings);
     extra_objects.extend(source_texts.objects);
     bms.text.text_events.clear();
 
@@ -300,12 +289,10 @@ fn import_with_layout<T: KeyLayoutMapper>(
         warnings,
     )?;
     restore_default_poor_bga(&mut intermediate, bms.bmp.poor_bmp.as_deref());
-    intermediate.lnobj_wav_key =
-        extract_lnobj_wav_key(&text, bms_uses_base62_obj_ids(&bms), warnings);
-    let bms_headers = extract_bms_headers_from_text(&raw_text);
-    intermediate.metadata.has_bms_random = has_bms_random;
+    intermediate.lnobj_wav_key = lnobj_wav_key(&source.lnobj_lines, base62_obj_ids, warnings);
+    let bms_headers = source.bms_headers;
+    intermediate.metadata.has_bms_random = source.has_bms_random;
     intermediate.metadata.miss_text = source_texts.miss_text;
-    intermediate.metadata.bms_headers = bms_headers.clone();
     apply_raw_judge_rank_headers(&mut intermediate, &bms_headers);
     intermediate.metadata.source_url = bms
         .metadata
@@ -315,6 +302,7 @@ fn import_with_layout<T: KeyLayoutMapper>(
         .or_else(|| bms_headers.get("URL").cloned())
         .unwrap_or_default();
     intermediate.metadata.append_url = append_url_from_headers(&bms_headers);
+    intermediate.metadata.bms_headers = bms_headers;
     intermediate.identity = identity;
     Ok(intermediate)
 }
@@ -484,3 +472,7 @@ pub(crate) fn detect_pms_variant(source: &str) -> (PmsKeyLayout, bool) {
 #[cfg(test)]
 #[path = "bms_rs_adapter/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "bms_rs_adapter/import_bench.rs"]
+mod import_bench;

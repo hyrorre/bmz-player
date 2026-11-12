@@ -59,25 +59,70 @@ mod tests {
         assert_eq!(restored, config);
     }
     #[test]
-    fn download_root_defaults_to_data_songs_and_resolves_relative_paths() {
+    fn save_dirs_default_to_data_songs_subfolders_and_resolve_relative_paths() {
         use crate::config::app_config::ChartDownloadsConfig;
         let data_dir = std::path::Path::new("bmz-data");
-        let mut config: ChartDownloadsConfig = toml::from_str("http_enabled = true\n").unwrap();
-        assert!(config.save_dir.is_empty());
-        assert_eq!(config.download_root(data_dir), data_dir.join("songs"));
-        config.save_dir = "  ".into();
-        assert_eq!(config.download_root(data_dir), data_dir.join("songs"));
-        config.save_dir = "downloads/bms".into();
-        assert_eq!(config.download_root(data_dir), data_dir.join("downloads/bms"));
+        let mut config: ChartDownloadsConfig = toml::from_str(
+            "http_enabled = true
+",
+        )
+        .unwrap();
+        assert!(config.ipfs_save_dir.is_empty() && config.http_save_dir.is_empty());
+        assert_eq!(config.ipfs_save_path(data_dir), data_dir.join("songs/ipfs"));
+        assert_eq!(config.http_save_path(data_dir), data_dir.join("songs/http"));
+        config.ipfs_save_dir = "  ".into();
+        assert_eq!(config.ipfs_save_path(data_dir), data_dir.join("songs/ipfs"));
+        // 指定したフォルダをそのまま使い、方式別のサブフォルダを付けない。
+        config.ipfs_save_dir = "downloads/bms-ipfs".into();
+        assert_eq!(config.ipfs_save_path(data_dir), data_dir.join("downloads/bms-ipfs"));
+        assert_eq!(config.http_save_path(data_dir), data_dir.join("songs/http"));
         // 空白を含むフォルダ名は、前後の空白も含めてそのまま使う。
-        config.save_dir = " My BMS ".into();
-        assert_eq!(config.download_root(data_dir), data_dir.join(" My BMS "));
+        config.http_save_dir = " My BMS ".into();
+        assert_eq!(config.http_save_path(data_dir), data_dir.join(" My BMS "));
         let absolute = std::env::temp_dir().join("bmz downloads ");
-        config.save_dir = absolute.to_string_lossy().into_owned();
-        assert_eq!(config.download_root(data_dir), absolute);
+        config.http_save_dir = absolute.to_string_lossy().into_owned();
+        assert_eq!(config.http_save_path(data_dir), absolute);
         let restored: ChartDownloadsConfig =
             toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
         assert_eq!(restored, config);
+    }
+
+    #[test]
+    fn legacy_save_dir_migrates_to_per_source_folders() {
+        use crate::config::app_config::ChartDownloadsConfig;
+        let data_dir = std::path::Path::new("bmz-data");
+        let mut config: ChartDownloadsConfig = toml::from_str(
+            "save_dir = \"My BMS\"
+",
+        )
+        .unwrap();
+        config.migrate_legacy_save_dir();
+        assert!(config.legacy_save_dir.is_empty());
+        assert_eq!(config.ipfs_save_path(data_dir), data_dir.join("My BMS").join("ipfs"));
+        assert_eq!(config.http_save_path(data_dir), data_dir.join("My BMS").join("http"));
+        let saved = toml::to_string(&config).unwrap();
+        assert!(!saved.contains("save_dir = \"My BMS\""), "{saved}");
+        let mut restored: ChartDownloadsConfig = toml::from_str(&saved).unwrap();
+        restored.migrate_legacy_save_dir();
+        assert_eq!(restored, config);
+
+        // 方式別の値が既にあれば旧値で上書きしない。空白だけの旧値は未設定として扱う。
+        let mut config: ChartDownloadsConfig = toml::from_str(
+            "save_dir = \"old\"
+http_save_dir = \"new-http\"
+",
+        )
+        .unwrap();
+        config.migrate_legacy_save_dir();
+        assert_eq!(config.http_save_dir, "new-http");
+        assert_eq!(config.ipfs_save_path(data_dir), data_dir.join("old").join("ipfs"));
+        let mut config: ChartDownloadsConfig = toml::from_str(
+            "save_dir = \"  \"
+",
+        )
+        .unwrap();
+        config.migrate_legacy_save_dir();
+        assert!(config.ipfs_save_dir.is_empty() && config.http_save_dir.is_empty());
     }
 
     #[test]

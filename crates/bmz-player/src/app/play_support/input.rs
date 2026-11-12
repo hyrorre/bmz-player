@@ -13,19 +13,19 @@ pub(in crate::app) fn hispeed_action(
     }
 }
 
+/// プレイ中の E1 / E2 + 鍵盤・スクラッチ操作。現在のプレイセッションの設定対象モードで
+/// 解決したレーンだけを使い、選曲側の設定へは戻らない。
 pub(in crate::app) fn play_option_control_for_input(
-    device: DeviceId,
-    control: &PhysicalControl,
+    input: &ResolvedInput,
     e1_held: bool,
     e2_held: bool,
     play_input: Option<&PlayOptionInput>,
     profile_input: &ProfileInputConfig,
 ) -> Option<PlayOptionControl> {
     let play_input = play_input?;
-    let resolved = play_input.resolve_entry(device, control);
-    if resolved.is_none()
-        && ((e1_held && play_input.is_action(device, control, InputActionConfig::E2))
-            || (e2_held && play_input.is_action(device, control, InputActionConfig::E1)))
+    let control = input.play()?;
+    let resolved = control.lane();
+    if resolved.is_none() && ((e1_held && control.is_e2()) || (e2_held && control.is_play_start()))
     {
         return Some(PlayOptionControl::ToggleHispeedMode);
     }
@@ -51,35 +51,23 @@ pub(in crate::app) fn play_option_control_for_input(
         play_input.key_mode,
         resolved.lane,
     ) {
-        return match (e1_held, direction) {
-            (true, HispeedDirectionConfig::Down) => {
-                Some(PlayOptionControl::Hispeed(HispeedChange::Down))
-            }
-            (true, HispeedDirectionConfig::Up) => {
-                Some(PlayOptionControl::Hispeed(HispeedChange::Up))
-            }
-            (false, HispeedDirectionConfig::Down) => {
-                Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
-            }
-            (false, HispeedDirectionConfig::Up) => {
-                Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
-            }
-        };
+        if e1_held {
+            return Some(PlayOptionControl::Hispeed(match direction {
+                HispeedDirectionConfig::Down => HispeedChange::Down,
+                HispeedDirectionConfig::Up => HispeedChange::Up,
+            }));
+        }
+        // beatoraja 0.8.9 は E1 と同じ向き、0.8.7 以前は逆向き。設定で後者を選べる。
+        let lowers =
+            (direction == HispeedDirectionConfig::Down) != profile_input.invert_e2_key_green_number;
+        return Some(PlayOptionControl::GreenNumber(if lowers {
+            GreenNumberChange::Down
+        } else {
+            GreenNumberChange::Up
+        }));
     }
 
-    let control_name = physical_control_name(control);
-    let scratch_direction = resolved.scratch_direction.or_else(|| {
-        control_name.and_then(|control| {
-            if is_scratch_up_control(control) {
-                Some(ScratchDirection::Up)
-            } else if is_scratch_down_control(control) {
-                Some(ScratchDirection::Down)
-            } else {
-                None
-            }
-        })
-    })?;
-    match (e1_held, scratch_direction) {
+    match (e1_held, resolved.scratch?) {
         (true, ScratchDirection::Up) => Some(PlayOptionControl::LaneCover(LaneCoverChange::Up)),
         (true, ScratchDirection::Down) => Some(PlayOptionControl::LaneCover(LaneCoverChange::Down)),
         (false, ScratchDirection::Up) => {
@@ -145,29 +133,19 @@ pub(in crate::app) fn egui_blocks_window_keyboard_route(
     practice_overlay || egui_consumed
 }
 
-pub(in crate::app) fn visual_offset_delta_control(
-    control: &str,
-    bindings: &SelectKeyBindings,
-) -> Option<i32> {
-    if bindings.is_ui_key5(control) {
-        Some(-1)
-    } else if bindings.is_ui_key7(control) {
-        Some(1)
-    } else {
-        None
+pub(in crate::app) fn visual_offset_delta_control(control: &ResolvedControl) -> Option<i32> {
+    match control.ui_key()? {
+        5 => Some(-1),
+        7 => Some(1),
+        _ => None,
     }
 }
 
-pub(in crate::app) fn green_number_delta_control(
-    control: &str,
-    bindings: &SelectKeyBindings,
-) -> Option<i32> {
-    if bindings.is_ui_key4(control) {
-        Some(-1)
-    } else if bindings.is_ui_key6(control) {
-        Some(1)
-    } else {
-        None
+pub(in crate::app) fn green_number_delta_control(control: &ResolvedControl) -> Option<i32> {
+    match control.ui_key()? {
+        4 => Some(-1),
+        6 => Some(1),
+        _ => None,
     }
 }
 

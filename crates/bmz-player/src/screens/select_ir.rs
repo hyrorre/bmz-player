@@ -173,6 +173,26 @@ pub enum SelectIrRankingScope {
     SelfAndRivals,
 }
 
+/// 選曲キャッシュから Result へ渡すランキング。
+#[derive(Debug, Clone)]
+pub struct SelectIrResultRankings {
+    pub global: ResultIrRanking,
+    pub self_and_rivals: Option<ResultIrRanking>,
+}
+
+/// [`SelectIrRanking::result_chart_ranking`] の結果。
+#[derive(Debug, Clone)]
+pub enum SelectIrResultLookup {
+    /// 選曲キャッシュに Global ranking がある。
+    Loaded(Box<SelectIrResultRankings>),
+    /// 選曲キャッシュ側で取得中。
+    Loading,
+    /// 選曲キャッシュ側の取得が失敗している。
+    Failed,
+    /// IR 未設定、または選曲キャッシュの条件が今回のプレイと異なる。
+    Unavailable,
+}
+
 #[derive(Debug, Clone)]
 struct CachedCourseIr {
     ir: ResultIrSnapshot,
@@ -925,6 +945,118 @@ mod tests {
 
         select_ir.update_rival(Some(other_base_url), &root);
         assert!(select_ir.rival_pending.is_some());
+    }
+
+    #[test]
+    fn result_lookup_reuses_select_cache_without_clearing_other_contexts() {
+        let mut select_ir = SelectIrRanking::default();
+        let sha = [7u8; 32];
+        let (_temp, root) = missing_profile_root("result-lookup");
+        let lookup = |select_ir: &mut SelectIrRanking, context: &str| {
+            select_ir.result_chart_ranking(
+                &ir_config(true),
+                &root,
+                context,
+                LnScorePolicy::ForceLn,
+                DoubleOptionScoreBucket::Off,
+                RuleMode::Beatoraja,
+                sha,
+            )
+        };
+
+        select_ir.context = "ctx".to_string();
+
+        // 選曲で始めた取得がプレイ中に完了していても、Result で取り込める。
+        let requested_at = Instant::now();
+        select_ir.in_flight = Some(("ctx".to_string(), sha, requested_at));
+        assert!(matches!(lookup(&mut select_ir, "ctx"), SelectIrResultLookup::Loading));
+        select_ir
+            .sender
+            .send((
+                "ctx".to_string(),
+                sha,
+                requested_at,
+                Ok((
+                    raw_global_ranking(sha, 2, 1500, 4),
+                    Some(raw_self_and_rivals_ranking(sha, 1, 1500, 2)),
+                    None,
+                )),
+            ))
+            .unwrap();
+        match lookup(&mut select_ir, "ctx") {
+            SelectIrResultLookup::Loaded(rankings) => {
+                assert_eq!(rankings.global.self_rank, Some(2));
+                assert_eq!(rankings.self_and_rivals.unwrap().self_rank, Some(1));
+            }
+            other => panic!("expected cached ranking, got {other:?}"),
+        }
+        assert!(select_ir.in_flight.is_none());
+
+        // リプレイの条件が選曲と異なる場合は、選曲キャッシュを捨てない。
+        assert!(matches!(lookup(&mut select_ir, "other"), SelectIrResultLookup::Unavailable));
+        assert_eq!(select_ir.context, "ctx");
+        assert!(select_ir.cache.contains_key(&sha));
+        assert!(select_ir.in_flight.is_none());
+
+        let mut failed = SelectIrRanking {
+            context: "ctx".to_string(),
+            in_flight: Some(("ctx".to_string(), sha, requested_at)),
+            ..Default::default()
+        };
+        failed.sender.send(("ctx".to_string(), sha, requested_at, Err("offline".into()))).unwrap();
+        assert!(matches!(lookup(&mut failed, "ctx"), SelectIrResultLookup::Failed));
+        assert!(failed.in_flight.is_none());
+
+        let mut offline = SelectIrRanking { context: "ctx".to_string(), ..Default::default() };
+        assert!(matches!(
+            offline.result_chart_ranking(
+                &ir_config(false),
+                &root,
+                "ctx",
+                LnScorePolicy::ForceLn,
+                DoubleOptionScoreBucket::Off,
+                RuleMode::Beatoraja,
+                sha,
+            ),
+            SelectIrResultLookup::Unavailable
+        ));
+    }
+
+    #[tokio::test]
+    async fn result_lookup_fetches_a_missing_ranking_once_into_the_select_cache() {
+        let mut select_ir = SelectIrRanking::default();
+        let sha = [7u8; 32];
+        let other_sha = [8u8; 32];
+        let (_temp, root) = missing_profile_root("result-fetch");
+        select_ir.context = "ctx".to_string();
+        let lookup = |select_ir: &mut SelectIrRanking| {
+            select_ir.result_chart_ranking(
+                &ir_config(true),
+                &root,
+                "ctx",
+                LnScorePolicy::ForceLn,
+                DoubleOptionScoreBucket::Off,
+                RuleMode::Beatoraja,
+                sha,
+            )
+        };
+
+        // 別譜面の取得中は、その完了まで始めない。
+        let other_requested_at = Instant::now();
+        select_ir.in_flight = Some(("ctx".to_string(), other_sha, other_requested_at));
+        assert!(matches!(lookup(&mut select_ir), SelectIrResultLookup::Loading));
+        assert_eq!(select_ir.in_flight.as_ref().unwrap().1, other_sha);
+        select_ir.in_flight = None;
+
+        select_ir.pending = Some((sha, Instant::now()));
+        assert!(matches!(lookup(&mut select_ir), SelectIrResultLookup::Loading));
+        let (context, in_flight_sha, requested_at) = select_ir.in_flight.clone().unwrap();
+        assert_eq!((context.as_str(), in_flight_sha), ("ctx", sha));
+        assert!(select_ir.pending.is_none());
+
+        // 取得中は次のフレームでも取り直さない。
+        assert!(matches!(lookup(&mut select_ir), SelectIrResultLookup::Loading));
+        assert_eq!(select_ir.in_flight.as_ref().unwrap().2, requested_at);
     }
 
     #[test]

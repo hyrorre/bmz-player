@@ -9,13 +9,12 @@ use rusqlite::Connection;
 
 use super::*;
 use crate::storage::common::configure_connection;
-use crate::storage::library_db::{LibraryDatabase, library_path_key};
+use crate::storage::library_db::{LibraryDatabase, PruneRequest, library_path_key};
 use crate::storage::migration::{LIBRARY_MIGRATIONS, run_migrations};
 
 fn config() -> ScanConfig {
     ScanConfig {
         follow_symlinks: true,
-        skip_hidden: true,
         use_everything: false,
         auto_rescan_on_startup: false,
         rescan_missing_files: true,
@@ -188,8 +187,8 @@ fn partial_scan_below_configured_root_prunes_deleted_charts() {
     assert_consistent(&db);
 }
 
-/// Issue #69 as F5 runs it: `reload_from_select_context` scans the folder with
-/// `force`, so every remaining chart is imported again alongside the pruning.
+/// Issue #69 as a full re-parse of one folder: with `force`, every remaining chart is
+/// imported again alongside the pruning. (F5 now runs the same scan without `force`.)
 #[test]
 fn forced_partial_scan_below_configured_root_prunes_deleted_charts() {
     let base = temp();
@@ -486,9 +485,9 @@ fn unreadable_partial_scan_target_keeps_registrations() {
     assert_eq!(registered(&db, &bms), ["INSANE2/song_A/a.bms"]);
 }
 
-#[cfg(unix)]
+/// Dot-named charts are ordinary charts: discovered, kept while present, and pruned.
 #[test]
-fn partial_scan_keeps_existing_hidden_charts() {
+fn partial_scan_treats_dot_named_charts_like_others() {
     let base = temp();
     let bms = base.path().join("BMS");
     let insane2 = bms.join("INSANE2");
@@ -496,17 +495,13 @@ fn partial_scan_keeps_existing_hidden_charts() {
     chart(&insane2.join(".gone.bms"), "Hidden gone");
     write_zip(&insane2.join("pack.zip"), &[(".hidden/z.bms", &chart_text("Hidden zip"))]);
     let mut db = db();
-    let mut visible = config();
-    visible.skip_hidden = false;
-    let root = entry(&bms, true);
-    db.set_configured_song_roots(std::slice::from_ref(&root)).unwrap();
-    scan_song_roots(&mut db, std::slice::from_ref(&root), &visible, 1, false).unwrap();
+    configure_and_scan(&mut db, &[entry(&bms, true)]);
     assert_eq!(count(&db, "SELECT COUNT(*) FROM chart_files"), 3);
 
     std::fs::remove_file(insane2.join(".gone.bms")).unwrap();
     let report = partial_scan(&mut db, entry(&insane2, true), 2);
 
-    assert_eq!(report.summary.files_seen, 0);
+    assert_eq!(report.summary.files_seen, 2);
     assert_eq!(report.summary.removed_files, 1);
     assert_eq!(
         registered(&db, &bms),
@@ -601,14 +596,17 @@ fn enclosing_root_spellings_do_not_block_pruning() {
     protected_roots.push(protect(r"C:\bmz-issue69-missing\BMS\INSANE2\protected", true));
     let discovered = HashSet::new();
 
+    let mut index = db.chart_path_index().unwrap();
     let removed = db
         .prune_missing_chart_files(
-            Path::new(r"\\?\C:\bmz-issue69-missing\BMS\INSANE2"),
-            true,
-            true,
-            Some(&discovered),
-            &discovered,
-            &protected_roots,
+            &mut index,
+            &PruneRequest {
+                root: Path::new(r"\\?\C:\bmz-issue69-missing\BMS\INSANE2"),
+                recursive: true,
+                omission_proves_absence: true,
+                discovered_any: &discovered,
+                protected_roots: &protected_roots,
+            },
         )
         .unwrap();
 
@@ -647,14 +645,17 @@ fn enclosing_unc_root_does_not_block_pruning() {
         [PathEntry { path: r"\\bmz-issue69\share\BMS".into(), enabled: true, recursive: true }];
     let discovered = HashSet::new();
 
+    let mut index = db.chart_path_index().unwrap();
     let removed = db
         .prune_missing_chart_files(
-            Path::new(r"\\?\UNC\bmz-issue69\share\BMS\INSANE2"),
-            true,
-            true,
-            Some(&discovered),
-            &discovered,
-            &protected_roots,
+            &mut index,
+            &PruneRequest {
+                root: Path::new(r"\\?\UNC\bmz-issue69\share\BMS\INSANE2"),
+                recursive: true,
+                omission_proves_absence: true,
+                discovered_any: &discovered,
+                protected_roots: &protected_roots,
+            },
         )
         .unwrap();
 

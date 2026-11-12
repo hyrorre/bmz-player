@@ -2,6 +2,10 @@ use crate::config::profile_config::{InputActionConfig, ProfileInputConfig};
 use bmz_gameplay::input::backend::{DeviceId, PhysicalControl};
 
 use super::LANE_COVER_STEP;
+use super::input_resolve::ResolvedInput;
+#[cfg(test)]
+use super::input_resolve::SceneInputResolver;
+#[cfg(test)]
 use super::input_runtime::ControlInputEvent;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -234,37 +238,25 @@ pub(super) fn lane_cover_wheel_step_units(input: &ProfileInputConfig, fine: bool
     }
 }
 
-/// キーボード入力がレーンカバー操作キーなら、そのcontrol名と向き (+1 / -1) を返す。
+/// キーボード入力がレーンカバー操作キーなら、その向き (+1 / -1) を返す。
 /// 押下・解放のどちらにも使う。
-pub(super) fn keyboard_lane_cover_direction(
-    event: &ControlInputEvent,
-    input: &ProfileInputConfig,
-) -> Option<(String, i32)> {
-    let PhysicalControl::KeyboardKey(control) = event.physical.as_ref()? else {
-        return None;
-    };
-    let direction = match keyboard_shortcut_action(control, input)? {
-        InputActionConfig::PlayLaneCoverUp => 1,
-        InputActionConfig::PlayLaneCoverDown => -1,
-        _ => return None,
-    };
-    Some((control.clone(), direction))
+pub(super) fn keyboard_lane_cover_direction(input: &ResolvedInput) -> Option<i32> {
+    match keyboard_shortcut_action(input)? {
+        InputActionConfig::PlayLaneCoverUp => Some(1),
+        InputActionConfig::PlayLaneCoverDown => Some(-1),
+        _ => None,
+    }
 }
 
-fn keyboard_shortcut_action(
-    control: &str,
-    input: &ProfileInputConfig,
-) -> Option<InputActionConfig> {
-    // 設定ファイル内の行順に依存させず、プレイ操作の固定順で同一キーを
-    // 解決する。共通 E1〜E4 は呼び出し側で先に判定されるため、ここでは
-    // プレイ用ショートカット同士の決定順だけを定義する。
-    crate::config::profile_config::PLAY_KEYBOARD_SHORTCUT_ACTIONS.iter().copied().find(|action| {
-        input.ui.bindings.iter().any(|entry| {
-            entry.device == "keyboard"
-                && entry.action == Some(*action)
-                && keyboard_controls_match(&entry.control, control)
-        })
-    })
+/// 設定ファイル内の行順に依存させず、プレイ操作の固定順で同一キーを解決する。
+/// 共通 E1〜E4 は呼び出し側で先に判定されるため、ここではプレイ用ショートカット同士の
+/// 決定順だけを定義する。キーボード以外の入力は対象にしない。
+fn keyboard_shortcut_action(input: &ResolvedInput) -> Option<InputActionConfig> {
+    if !input.is_keyboard() {
+        return None;
+    }
+    let control = input.play().unwrap_or(input.scene());
+    control.shortcuts().first_in(crate::config::profile_config::PLAY_KEYBOARD_SHORTCUT_ACTIONS)
 }
 
 #[cfg(test)]
@@ -272,70 +264,60 @@ pub(super) fn keyboard_lane_action(
     event: &ControlInputEvent,
     input: &ProfileInputConfig,
 ) -> Option<PlayLaneAction> {
-    keyboard_lane_action_with_fine(event, input, false)
+    keyboard_lane_action_for_event(event, input, false)
+}
+
+/// テスト用: profile から resolver を作り、キーボードイベントを解決してから判定する。
+#[cfg(test)]
+pub(super) fn keyboard_lane_action_for_event(
+    event: &ControlInputEvent,
+    input: &ProfileInputConfig,
+    fine_lane_cover: bool,
+) -> Option<PlayLaneAction> {
+    let resolver = SceneInputResolver::from_profile(input);
+    let event = ControlInputEvent {
+        device: event.device,
+        physical: event.physical.clone(),
+        pressed: event.pressed,
+        repeat: event.repeat,
+        timestamp: event.timestamp,
+        synthesized_analog_axis: event.synthesized_analog_axis,
+    };
+    let resolved = super::input_resolve::resolve_input(
+        &resolver,
+        None,
+        crate::input::gamepad::GamepadSlotMap::default(),
+        event,
+    );
+    keyboard_lane_action_with_fine(&resolved, input, fine_lane_cover)
 }
 
 /// `fine_lane_cover` はE2 hold中の微調整。レーンカバー操作はOSのキーリピートを
 /// 無視し、長押しは [`LaneCoverKeyHold`] で扱う。
 pub(super) fn keyboard_lane_action_with_fine(
-    event: &ControlInputEvent,
+    event: &ResolvedInput,
     input: &ProfileInputConfig,
     fine_lane_cover: bool,
 ) -> Option<PlayLaneAction> {
-    if !event.pressed {
+    if !event.pressed() {
         return None;
     }
-    let PhysicalControl::KeyboardKey(control) = event.physical.as_ref()? else {
-        return None;
-    };
     let lane_cover_step =
         lane_cover_units_to_delta(lane_cover_press_step_units(input, fine_lane_cover));
-    match keyboard_shortcut_action(control, input)? {
+    match keyboard_shortcut_action(event)? {
         InputActionConfig::PlayHispeedDown => Some(PlayLaneAction::Hispeed(HispeedChange::Down)),
         InputActionConfig::PlayHispeedUp => Some(PlayLaneAction::Hispeed(HispeedChange::Up)),
         InputActionConfig::PlayLaneCoverUp => {
-            (!event.repeat).then_some(PlayLaneAction::LaneCoverDelta(lane_cover_step))
+            (!event.repeat()).then_some(PlayLaneAction::LaneCoverDelta(lane_cover_step))
         }
         InputActionConfig::PlayLaneCoverDown => {
-            (!event.repeat).then_some(PlayLaneAction::LaneCoverDelta(-lane_cover_step))
+            (!event.repeat()).then_some(PlayLaneAction::LaneCoverDelta(-lane_cover_step))
         }
         InputActionConfig::PlayVisualOffsetUp => Some(PlayLaneAction::VisualOffsetDelta(1)),
         InputActionConfig::PlayVisualOffsetDown => Some(PlayLaneAction::VisualOffsetDelta(-1)),
         InputActionConfig::PlayVisualOffsetAutoAdjust => {
-            (!event.repeat).then_some(PlayLaneAction::ToggleVisualOffsetAutoAdjust)
+            (!event.repeat()).then_some(PlayLaneAction::ToggleVisualOffsetAutoAdjust)
         }
-        _ => None,
-    }
-}
-
-fn keyboard_controls_match(configured: &str, pressed: &str) -> bool {
-    configured == pressed
-        || numeric_keypad_alias(configured) == Some(pressed)
-        || numeric_keypad_alias(pressed) == Some(configured)
-}
-
-fn numeric_keypad_alias(control: &str) -> Option<&'static str> {
-    match control {
-        "0" => Some("Numpad0"),
-        "1" => Some("Numpad1"),
-        "2" => Some("Numpad2"),
-        "3" => Some("Numpad3"),
-        "4" => Some("Numpad4"),
-        "5" => Some("Numpad5"),
-        "6" => Some("Numpad6"),
-        "7" => Some("Numpad7"),
-        "8" => Some("Numpad8"),
-        "9" => Some("Numpad9"),
-        "Numpad0" => Some("0"),
-        "Numpad1" => Some("1"),
-        "Numpad2" => Some("2"),
-        "Numpad3" => Some("3"),
-        "Numpad4" => Some("4"),
-        "Numpad5" => Some("5"),
-        "Numpad6" => Some("6"),
-        "Numpad7" => Some("7"),
-        "Numpad8" => Some("8"),
-        "Numpad9" => Some("9"),
         _ => None,
     }
 }
@@ -390,7 +372,7 @@ mod tests {
             Some(PlayLaneAction::LaneCoverDelta(lane_cover_units_to_delta(10)))
         );
         assert_eq!(
-            keyboard_lane_action_with_fine(&keyboard(KeyCode::ArrowDown, false), &input, true),
+            keyboard_lane_action_for_event(&keyboard(KeyCode::ArrowDown, false), &input, true),
             Some(PlayLaneAction::LaneCoverDelta(-lane_cover_units_to_delta(1)))
         );
         // 長押しはOSのキーリピートではなくLaneCoverKeyHoldで扱う。

@@ -80,6 +80,7 @@ impl WinitApp {
             options.legacy_arrange_seed = applied.legacy_seed;
             options.s_random_scheme = applied.s_random_scheme;
             options.s_random_scheme_2p = applied.s_random_scheme_2p;
+            options.h_random_threshold_ms = applied.h_random_threshold_ms;
             options.bms_random_choices = Some(applied.bms_random_choices.clone());
             options.bms_switch_choices = Some(applied.bms_switch_choices.clone());
             options.arrange_pattern = applied.pattern.clone();
@@ -124,6 +125,7 @@ impl WinitApp {
                     options.legacy_arrange_seed = applied.legacy_seed;
                     options.s_random_scheme = applied.s_random_scheme;
                     options.s_random_scheme_2p = applied.s_random_scheme_2p;
+                    options.h_random_threshold_ms = applied.h_random_threshold_ms;
                     options.bms_random_choices = Some(applied.bms_random_choices.clone());
                     options.bms_switch_choices = Some(applied.bms_switch_choices.clone());
                     options.arrange_pattern = applied.pattern.clone();
@@ -234,7 +236,7 @@ impl WinitApp {
         self.spawn_play_preload(chart_id, session_options, source);
     }
 
-    pub(super) fn handle_quick_retry_control(&mut self, control: &str) -> bool {
+    pub(super) fn handle_quick_retry_control(&mut self, input: &ResolvedInput) -> bool {
         let Some(ending) = &self.play.play_ending else {
             return false;
         };
@@ -245,9 +247,11 @@ impl WinitApp {
         {
             return false;
         }
-        let mode = if self.select.select_keys.is_play_start(control) {
+        // 現在のプレイセッションの設定対象モードで解決した意味を使う。
+        let control = input.play().unwrap_or(input.scene());
+        let mode = if control.is_play_start() {
             Some(ResultRetryMode::DifferentArrange)
-        } else if self.select.select_keys.is_e2_action(control) {
+        } else if control.is_e2() {
             Some(ResultRetryMode::SameArrange)
         } else {
             None
@@ -259,8 +263,11 @@ impl WinitApp {
         true
     }
 
-    pub(super) fn begin_play_fadeout_after_final_notes_control(&mut self, control: &str) -> bool {
-        if !play_fadeout_after_final_notes_control(control, &self.select.select_keys) {
+    pub(super) fn begin_play_fadeout_after_final_notes_control(
+        &mut self,
+        input: &ResolvedInput,
+    ) -> bool {
+        if !play_fadeout_after_final_notes_control(input) {
             return false;
         }
         if let Some(ending) = &mut self.play.play_ending {
@@ -270,7 +277,7 @@ impl WinitApp {
             if ending.fadeout_started_at.is_none() {
                 ending.fadeout_started_at = Some(Instant::now());
                 self.update_play_ending_snapshot();
-                tracing::info!(control, "started pending play fadeout");
+                tracing::info!(source = ?input.source(), "started pending play fadeout");
             }
             return true;
         }
@@ -279,8 +286,7 @@ impl WinitApp {
             return false;
         };
         let should_begin = should_begin_play_fadeout_after_final_notes(
-            control,
-            &self.select.select_keys,
+            input,
             self.play.play_ready_sound_started_at.is_some(),
             self.play.play_ending.is_some(),
             active_play.running.session.state,
@@ -295,10 +301,9 @@ impl WinitApp {
             Some(FinalNotesControlAction::ReturnToPractice) => {
                 let now = Instant::now();
                 if let Some(active_play) = &mut self.play.active_play {
-                    active_play
-                        .running
-                        .gameplay
-                        .edit(|session| session.state = bmz_gameplay::session::PlayState::Finished);
+                    active_play.running.gameplay.edit(|session| {
+                        session.request_finish();
+                    });
                     if let Err(error) = active_play.running.pause_audio() {
                         tracing::warn!(%error, "failed to stop practice audio on requested finish");
                     }
@@ -308,7 +313,7 @@ impl WinitApp {
                 self.notify_obs_play_ended();
                 self.play.play_ending = Some(practice_requested_finish_ending(now));
                 self.update_play_ending_snapshot();
-                tracing::info!(control, "started practice fadeout after final notes");
+                tracing::info!(source = ?input.source(), "started practice fadeout after final notes");
                 return true;
             }
             Some(FinalNotesControlAction::BeginResultFadeout) => {}
@@ -317,11 +322,11 @@ impl WinitApp {
 
         // The worker publishes the terminal result before the ordinary play
         // transition persists it. Never save an observation from before this command.
+        // An already settled result stays as captured; only Playing may finish here.
         self.play.active_play.as_mut().is_some_and(|active| {
-            active
-                .running
-                .gameplay
-                .edit(|session| session.state = bmz_gameplay::session::PlayState::Finished)
+            active.running.gameplay.edit(|session| {
+                session.request_finish();
+            })
         })
     }
 

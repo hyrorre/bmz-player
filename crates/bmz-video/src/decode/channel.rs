@@ -9,31 +9,67 @@ fn wait_for_channel_progress() {
     std::thread::park();
 }
 
+pub(crate) struct ChannelDecodeState {
+    restart_target_us: Mutex<i64>,
+    generation: AtomicU64,
+    finished_generation: AtomicU64,
+}
+
+impl Default for ChannelDecodeState {
+    fn default() -> Self {
+        Self {
+            restart_target_us: Mutex::new(0),
+            generation: AtomicU64::new(0),
+            finished_generation: AtomicU64::new(u64::MAX),
+        }
+    }
+}
+
+impl ChannelDecodeState {
+    pub(crate) fn restart_at(&self, target_us: i64) {
+        let mut restart_target_us = self.restart_target_us.lock().unwrap();
+        *restart_target_us = target_us;
+        self.generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(crate) fn restart_position(&self) -> (u64, i64) {
+        let restart_target_us = self.restart_target_us.lock().unwrap();
+        (self.generation(), *restart_target_us)
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn mark_finished(&self, generation: u64) {
+        self.finished_generation.store(generation, Ordering::Release);
+    }
+
+    pub(crate) fn finished(&self) -> bool {
+        self.finished_generation.load(Ordering::Acquire) == self.generation()
+    }
+}
+
 pub(crate) fn decode_video_restartable(
     path: &Path,
     sender: SyncSender<QueuedDecodedFrame>,
     stop_decode: Arc<AtomicBool>,
-    restart_decode: Arc<AtomicBool>,
-    pass_finished: Arc<AtomicBool>,
+    channel: Arc<ChannelDecodeState>,
     playback_target_us: Arc<AtomicI64>,
-    decode_generation: Arc<AtomicU64>,
 ) -> Result<()> {
     let mut ictx = crate::open_input(path)?;
     let mut selected = select_video_stream(&ictx)?;
     let mut decoder = open_video_decoder(&selected)?;
     let mut scaler = None;
     let mut decoded = ffmpeg_next::frame::Video::empty();
-    let mut first_pass = true;
-
     loop {
         if stop_decode.load(Ordering::Acquire) {
             return Ok(());
         }
 
-        let restart_was_requested = restart_decode.swap(false, Ordering::AcqRel);
-        let target_us = playback_target_us.load(Ordering::Acquire).max(0);
+        let (generation, target_us) = channel.restart_position();
         let mut direct_seeked = false;
-        if !first_pass || restart_was_requested {
+        if generation != 0 {
             if target_us > 0 {
                 match seek_video_decoder(&mut ictx, &mut decoder, &selected, target_us) {
                     Ok(()) => {
@@ -59,10 +95,6 @@ pub(crate) fn decode_video_restartable(
                 rewind_video_decoder(&mut ictx, &mut decoder)?;
             }
         }
-        first_pass = false;
-        pass_finished.store(false, Ordering::Release);
-        let generation = decode_generation.load(Ordering::Acquire);
-
         let pass_end = decode_video_channel_pass(
             &mut ictx,
             &mut decoder,
@@ -71,24 +103,18 @@ pub(crate) fn decode_video_restartable(
             &mut decoded,
             &sender,
             &stop_decode,
-            &restart_decode,
+            &channel,
             &playback_target_us,
-            ChannelDecodePassStart { generation, direct_seeked },
+            ChannelDecodePassStart { generation, direct_seeked, path },
         )?;
 
         match pass_end {
             ChannelDecodePassEnd::Stop => return Ok(()),
             ChannelDecodePassEnd::Restart => continue,
             ChannelDecodePassEnd::Eof => {
-                pass_finished.store(true, Ordering::Release);
-                while !stop_decode.load(Ordering::Acquire) {
-                    if restart_decode.swap(false, Ordering::AcqRel) {
-                        break;
-                    }
+                channel.mark_finished(generation);
+                while !stop_decode.load(Ordering::Acquire) && channel.generation() == generation {
                     wait_for_channel_progress();
-                }
-                if stop_decode.load(Ordering::Acquire) {
-                    return Ok(());
                 }
             }
         }
@@ -103,12 +129,12 @@ pub(crate) fn decode_video_channel_pass(
     decoded: &mut ffmpeg_next::frame::Video,
     sender: &SyncSender<QueuedDecodedFrame>,
     stop_decode: &AtomicBool,
-    restart_decode: &AtomicBool,
+    channel: &ChannelDecodeState,
     playback_target_us: &AtomicI64,
-    start: ChannelDecodePassStart,
+    start: ChannelDecodePassStart<'_>,
 ) -> Result<ChannelDecodePassEnd> {
-    let generation = start.generation;
-    let timestamp_origin_raw = if start.direct_seeked {
+    let ChannelDecodePassStart { generation, direct_seeked, path } = start;
+    let timestamp_origin_raw = if direct_seeked {
         // When stream start_time is unavailable, raw timestamps in seeked packets are still
         // absolute on the stream timeline. Using zero avoids rebasing the keyframe to video 0.
         selected.start_time_raw.or(Some(0))
@@ -119,22 +145,38 @@ pub(crate) fn decode_video_channel_pass(
     let mut catch_up = ChannelFrameCatchUp {
         // A direct seek lands on an earlier keyframe. Do not publish it as the target frame;
         // decode forward and keep only the final frame at/before the requested position.
-        published_any: start.direct_seeked,
+        published_any: direct_seeked,
         last_skipped: None,
     };
+    let codec = selected.codec_params.id();
+    let mut warned_about_skipped_packet = false;
 
     for (stream, packet) in ictx.packets() {
         if stop_decode.load(Ordering::Acquire) {
             return Ok(ChannelDecodePassEnd::Stop);
         }
-        if restart_decode.load(Ordering::Acquire) {
+        if channel.generation() != generation {
             return Ok(ChannelDecodePassEnd::Restart);
         }
         if stream.index() != selected.index {
             continue;
         }
 
-        decoder.send_packet(&packet)?;
+        if let Err(error) = decoder.send_packet(&packet) {
+            if !is_skippable_video_packet_error(codec, error) {
+                return Err(error.into());
+            }
+            if !warned_about_skipped_packet {
+                tracing::warn!(
+                    path = %path.display(),
+                    packet_dts = ?packet.dts(),
+                    %error,
+                    "skipping VC-1 video packet after a decoder error"
+                );
+                warned_about_skipped_packet = true;
+            }
+            continue;
+        }
         loop {
             match decoder.receive_frame(decoded) {
                 Ok(()) => {}
@@ -146,7 +188,7 @@ pub(crate) fn decode_video_channel_pass(
                         sender,
                         generation,
                         stop_decode,
-                        restart_decode,
+                        channel,
                     );
                 }
                 Err(e) => return Err(e.into()),
@@ -155,7 +197,7 @@ pub(crate) fn decode_video_channel_pass(
             if stop_decode.load(Ordering::Acquire) {
                 return Ok(ChannelDecodePassEnd::Stop);
             }
-            if restart_decode.load(Ordering::Acquire) {
+            if channel.generation() != generation {
                 return Ok(ChannelDecodePassEnd::Restart);
             }
 
@@ -170,7 +212,7 @@ pub(crate) fn decode_video_channel_pass(
                 continue;
             }
             let frame = rgba_frame_from_video_with_scaler(decoded, pts_us, scaler, None)?;
-            match send_decoded_frame(sender, frame, generation, stop_decode, restart_decode)? {
+            match send_decoded_frame(sender, frame, generation, stop_decode, channel)? {
                 ChannelDecodePassEnd::Stop => return Ok(ChannelDecodePassEnd::Stop),
                 ChannelDecodePassEnd::Restart => return Ok(ChannelDecodePassEnd::Restart),
                 ChannelDecodePassEnd::Eof => catch_up.record_published(),
@@ -190,7 +232,7 @@ pub(crate) fn decode_video_channel_pass(
         if stop_decode.load(Ordering::Acquire) {
             return Ok(ChannelDecodePassEnd::Stop);
         }
-        if restart_decode.load(Ordering::Acquire) {
+        if channel.generation() != generation {
             return Ok(ChannelDecodePassEnd::Restart);
         }
 
@@ -205,7 +247,7 @@ pub(crate) fn decode_video_channel_pass(
             continue;
         }
         let frame = rgba_frame_from_video_with_scaler(decoded, pts_us, scaler, None)?;
-        match send_decoded_frame(sender, frame, generation, stop_decode, restart_decode)? {
+        match send_decoded_frame(sender, frame, generation, stop_decode, channel)? {
             ChannelDecodePassEnd::Stop => return Ok(ChannelDecodePassEnd::Stop),
             ChannelDecodePassEnd::Restart => return Ok(ChannelDecodePassEnd::Restart),
             ChannelDecodePassEnd::Eof => catch_up.record_published(),
@@ -218,8 +260,18 @@ pub(crate) fn decode_video_channel_pass(
         sender,
         generation,
         stop_decode,
-        restart_decode,
+        channel,
     )
+}
+
+pub(crate) fn is_skippable_video_packet_error(
+    codec: ffmpeg_next::codec::Id,
+    error: ffmpeg_next::Error,
+) -> bool {
+    // The VC-1 decoder can return -1 for a packet and still decode subsequent packets.
+    // At send_packet this appears as EPERM, after the demuxer already read the packet.
+    codec == ffmpeg_next::codec::Id::VC1
+        && error == (ffmpeg_next::Error::Other { errno: ffmpeg_next::error::EPERM })
 }
 
 pub(crate) fn publish_last_skipped_channel_frame(
@@ -228,19 +280,19 @@ pub(crate) fn publish_last_skipped_channel_frame(
     sender: &SyncSender<QueuedDecodedFrame>,
     generation: u64,
     stop_decode: &AtomicBool,
-    restart_decode: &AtomicBool,
+    channel: &ChannelDecodeState,
 ) -> Result<ChannelDecodePassEnd> {
     if stop_decode.load(Ordering::Acquire) {
         return Ok(ChannelDecodePassEnd::Stop);
     }
-    if restart_decode.load(Ordering::Acquire) {
+    if channel.generation() != generation {
         return Ok(ChannelDecodePassEnd::Restart);
     }
     let Some((decoded, pts_us)) = catch_up.take_last_skipped() else {
         return Ok(ChannelDecodePassEnd::Eof);
     };
     let frame = rgba_frame_from_video_with_scaler(&decoded, pts_us, scaler, None)?;
-    send_decoded_frame(sender, frame, generation, stop_decode, restart_decode)
+    send_decoded_frame(sender, frame, generation, stop_decode, channel)
 }
 
 pub(crate) fn send_decoded_frame(
@@ -248,14 +300,14 @@ pub(crate) fn send_decoded_frame(
     frame: DecodedFrame,
     generation: u64,
     stop_decode: &AtomicBool,
-    restart_decode: &AtomicBool,
+    channel: &ChannelDecodeState,
 ) -> Result<ChannelDecodePassEnd> {
     let mut queued = QueuedDecodedFrame { generation, frame };
     loop {
         if stop_decode.load(Ordering::Acquire) {
             return Ok(ChannelDecodePassEnd::Stop);
         }
-        if restart_decode.load(Ordering::Acquire) {
+        if channel.generation() != generation {
             return Ok(ChannelDecodePassEnd::Restart);
         }
         match sender.try_send(queued) {

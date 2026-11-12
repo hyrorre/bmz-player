@@ -197,11 +197,14 @@ impl WinitApp {
             .invalidate(&mut self.select.select_distribution_cache.borrow_mut());
     }
 
-    pub(in crate::app) fn load_songs_and_reload(&mut self) {
+    /// Synchronize every configured root. Unless `reparse_all`, unchanged charts are
+    /// skipped like beatoraja's library update; the full re-parse is a separate action.
+    pub(in crate::app) fn load_songs_and_reload(&mut self, reparse_all: bool) {
+        let label = if reparse_all { "library re-parse" } else { "library rescan" };
         self.spawn_song_scan_with_scope(
             Vec::new(),
-            true,
-            "library rescan".to_string(),
+            reparse_all,
+            label.to_string(),
             SongScanScope::Library,
         );
     }

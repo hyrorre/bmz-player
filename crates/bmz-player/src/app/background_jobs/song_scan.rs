@@ -80,7 +80,8 @@ impl WinitApp {
         }
         if let Some(path) = song_scan_path_from_context(&self.select.folder_stack, selected) {
             let roots = vec![PathEntry { path, enabled: true, recursive: true }];
-            self.spawn_song_scan(roots, true, "select song reload".to_string());
+            // Like beatoraja's folder update, unchanged charts are skipped.
+            self.spawn_song_scan(roots, false, "select song reload".to_string());
             return;
         }
         tracing::debug!("select reload: no applicable target in current context");
@@ -267,6 +268,9 @@ impl WinitApp {
                         skip_check_ms = report.timing.skip_check_ms,
                         parse_ms = report.timing.parse_ms,
                         write_ms = report.timing.write_ms,
+                        archive_ms = report.timing.archive_ms,
+                        folder_flags_ms = report.timing.folder_flags_ms,
+                        prune_ms = report.timing.prune_ms,
                         "song scan complete"
                     );
                 } else {
@@ -285,10 +289,23 @@ impl WinitApp {
                         skip_check_ms = report.timing.skip_check_ms,
                         parse_ms = report.timing.parse_ms,
                         write_ms = report.timing.write_ms,
+                        archive_ms = report.timing.archive_ms,
+                        folder_flags_ms = report.timing.folder_flags_ms,
+                        prune_ms = report.timing.prune_ms,
                         "song scan complete with skipped paths"
                     );
                 }
                 self.jobs.song_scan.progress = None;
+                // Falling back silently made the Everything setting look ineffective.
+                if let Some(reason) = &report.summary.everything_fallback_reason {
+                    let mut args = FluentArgs::new();
+                    args.set("count", i64::from(report.summary.everything_fallback_roots));
+                    args.set("reason", reason.clone());
+                    self.show_left_overlay_toast(
+                        Localizer::new(self.boot.profile_config.ui.locale())
+                            .format("toast-everything-fallback", &args),
+                    );
+                }
                 self.select.select_assets.invalidate_library();
                 self.invalidate_select_folder_summaries();
                 if pending.download_ids.is_empty() {
@@ -373,7 +390,7 @@ mod tests {
             request_id,
             identity: ChartDownloadIdentity { sha256: Some([request_id as u8; 32]), md5: None },
             title: format!("Chart {request_id}"),
-            download_root: PathBuf::new(),
+            save_dir: PathBuf::new(),
             keep_archive: true,
             action: MissingChartAction::Http {
                 api_url: format!("https://download.test/{request_id}.zip"),

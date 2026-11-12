@@ -659,6 +659,7 @@ pub fn build_game_session_with_input_backend(
         session_mode_index: crate::skin_extension::session_mode_index(session_mode) as u8,
         state: PlayState::Ready,
         manually_stopped: false,
+        scoring_closed_at: None,
         last_hcn_gauge_at: None,
     }
 }

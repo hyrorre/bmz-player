@@ -2,7 +2,7 @@ use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) struct TransferKey {
-    download_root: PathBuf,
+    save_dir: PathBuf,
     keep_archive: bool,
     api_url: String,
     target: TransferTarget,
@@ -40,7 +40,7 @@ pub(super) fn transfer_keys(request: &ChartDownloadRequest) -> Vec<TransferKey> 
     targets
         .into_iter()
         .map(|target| TransferKey {
-            download_root: request.download_root.clone(),
+            save_dir: request.save_dir.clone(),
             keep_archive: request.keeps_archive(),
             api_url: api_url.clone(),
             target,

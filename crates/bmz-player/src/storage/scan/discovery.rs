@@ -22,6 +22,9 @@ pub(super) struct ChartDiscovery {
     pub(super) complete: bool,
     pub(super) root_readable: bool,
     pub(super) backend: ScanDiscoveryBackend,
+    /// For [`ScanDiscoveryBackend::NativeFallback`], why Everything was not used, when
+    /// worth telling the player.
+    pub(super) fallback_reason: Option<String>,
 }
 
 pub fn discover_chart_files(
@@ -41,7 +44,7 @@ pub(super) fn discover_chart_files_with_progress(
     // Explicit archive targets bypass directory walkers and Everything queries.
     if crate::chart_source::is_archive_file(root) && !root.is_dir() {
         let mut discovery = ChartDiscovery::default();
-        match discover_archive_charts(root, scan.skip_hidden) {
+        match discover_archive_charts(root) {
             Ok((entries, generation)) => {
                 on_discovered(usize_to_u32(entries.len()));
                 discovery.entries = entries;
@@ -78,6 +81,8 @@ pub(super) fn discover_chart_files_with_progress(
                 let mut discovery =
                     discover_chart_files_native(root, recursive, scan, on_discovered);
                 discovery.backend = ScanDiscoveryBackend::NativeFallback;
+                discovery.fallback_reason = (!error.is::<super::everything::NoIndexedFiles>())
+                    .then(|| format!("{error:#}"));
                 return discovery;
             }
         }
@@ -91,6 +96,8 @@ pub(super) fn discover_chart_files_with_progress(
         );
         let mut discovery = discover_chart_files_native(root, recursive, scan, on_discovered);
         discovery.backend = ScanDiscoveryBackend::NativeFallback;
+        discovery.fallback_reason =
+            Some("Everything song discovery is only available on Windows".to_string());
         return discovery;
     }
 
@@ -141,7 +148,6 @@ fn discover_chart_files_native(
     let mut walk = DiscoveryWalk {
         root,
         recursive,
-        skip_hidden: scan.skip_hidden,
         follow_links: root_canonical.is_some(),
         trees: root_canonical.iter().cloned().collect(),
         root_canonical: root_canonical.clone(),
@@ -184,7 +190,6 @@ fn discover_chart_files_native(
 struct DiscoveryWalk<'a> {
     root: &'a Path,
     recursive: bool,
-    skip_hidden: bool,
     follow_links: bool,
     root_canonical: Option<PathBuf>,
     /// Canonical paths of the root and every adopted link target.
@@ -277,7 +282,7 @@ impl DiscoveryWalk<'_> {
                 continue;
             }
             let entries = if file.archive {
-                match discover_archive_charts(&file.link, self.skip_hidden) {
+                match discover_archive_charts(&file.link) {
                     Ok((entries, generation)) => {
                         discovery
                             .archives
@@ -285,7 +290,7 @@ impl DiscoveryWalk<'_> {
                         entries
                     }
                     Err(error) => {
-                        discovery.complete = false;
+                        discovery.complete &= crate::song_archive::is_unsupported(&error);
                         record_discovery_issue(
                             &mut discovery.issues,
                             self.root,
@@ -350,29 +355,10 @@ impl DiscoveryWalk<'_> {
                 }
             };
             let file_name = entry.file_name();
-            if self.skip_hidden && is_hidden_name(&file_name) {
+            if is_excluded_name(&file_name) {
                 continue;
             }
             let path = entry.path();
-            // Windows/macOS hidden attributes belong to the directory entry itself;
-            // do not follow a link before deciding whether to skip it.
-            if self.skip_hidden && cfg!(any(windows, target_os = "macos")) {
-                match entry.metadata() {
-                    Ok(metadata) if is_hidden_metadata(&metadata) => continue,
-                    Ok(_) => {}
-                    Err(error) => {
-                        listing.complete = false;
-                        record_discovery_issue(
-                            &mut listing.issues,
-                            root,
-                            &path,
-                            ScanDiscoveryOperation::ReadMetadata,
-                            error,
-                        );
-                        continue;
-                    }
-                }
-            }
             let file_type = match entry.file_type() {
                 Ok(file_type) => file_type,
                 Err(error) => {
@@ -449,13 +435,15 @@ impl DiscoveryWalk<'_> {
                 if let Some(parent) = &unit.canonical {
                     listing.regular_files.push(parent.join(&file_name));
                 }
-                match discover_archive_charts(&path, self.skip_hidden) {
+                match discover_archive_charts(&path) {
                     Ok((entries, generation)) => {
                         listing.archives.push(DiscoveredArchive { path: path.clone(), generation });
                         listing.entries.extend(entries);
                     }
                     Err(error) => {
-                        listing.complete = false;
+                        // An encrypted or otherwise unsupported archive yields no charts
+                        // on any scan, so it must not block pruning the rest of the root.
+                        listing.complete &= crate::song_archive::is_unsupported(&error);
                         record_discovery_issue(
                             &mut listing.issues,
                             root,
@@ -564,37 +552,32 @@ pub(super) fn unresolvable_link_reason(error: &io::Error) -> Option<&'static str
 }
 pub(super) fn discover_archive_charts(
     path: &Path,
-    skip_hidden: bool,
 ) -> Result<(Vec<ChartFileEntry>, crate::song_archive::ArchiveGeneration)> {
-    let index = crate::song_archive::inspect(path, &Default::default())?;
-    let modified_at = std::fs::metadata(path)?
-        .modified()
-        .ok()
+    // A listing, not the full index: the index cache holds only a few archives, so a
+    // repeated scan in one process would otherwise open every archive again.
+    let listing = crate::song_archive::chart_listing(path, &Default::default())?;
+    let modified_at = listing
+        .modified
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
         .map_or(0, |time| time.as_secs() as i64);
-    let entries = index
-        .entries
+    let entries = listing
+        .charts
         .iter()
-        .filter(|entry| {
-            entry.is_chart()
-                && !entry.name.split('/').any(|part| {
-                    part == "__MACOSX"
-                        || part.starts_with("._")
-                        || (skip_hidden && is_hidden_name(std::ffi::OsStr::new(part)))
-                })
+        .filter(|chart| {
+            !chart.name.split('/').any(|part| is_excluded_name(std::ffi::OsStr::new(part)))
         })
-        .map(|entry| ChartFileEntry {
+        .map(|chart| ChartFileEntry {
             path: crate::chart_source::ChartLocator::Archive {
                 container: path.to_path_buf(),
-                entry: entry.name.clone(),
+                entry: chart.name.clone(),
             }
             .to_path_buf(),
-            file_size: entry.size,
+            file_size: chart.size,
             modified_at,
-            has_document: crate::chart_source::archive_folder_has_document(&index, &entry.name),
+            has_document: chart.has_document,
         })
         .collect();
-    Ok((entries, index.generation))
+    Ok((entries, listing.generation.clone()))
 }
 
 pub(super) fn record_discovery_issue(
@@ -656,63 +639,19 @@ pub(super) fn is_chart_file_name(name: &std::ffi::OsStr) -> bool {
         .unwrap_or(false)
 }
 
-pub(super) fn is_hidden_name(name: &std::ffi::OsStr) -> bool {
-    #[cfg(windows)]
-    {
-        let _ = name;
-        false
-    }
-    #[cfg(not(windows))]
-    name.to_str().map(|name| name.starts_with('.')).unwrap_or(false)
-}
-
-pub(super) fn is_hidden_metadata(metadata: &std::fs::Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
-        metadata.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0
-    }
-    #[cfg(target_os = "macos")]
-    {
-        use std::os::macos::fs::MetadataExt;
-        metadata.st_flags() & libc::UF_HIDDEN != 0
-    }
-    #[cfg(not(any(windows, target_os = "macos")))]
-    {
-        let _ = metadata;
-        false
-    }
-}
-
-/// Check the entry and ancestors below the root without following links.
-/// An inaccessible component is unknown and must not justify pruning.
-pub(crate) fn hidden_path_in_root(root: &Path, path: &Path) -> Option<bool> {
-    let key = |path: &Path| {
-        let key = crate::paths::normalize_library_path(&path.to_string_lossy());
-        #[cfg(windows)]
-        let key = key.to_lowercase();
-        key.trim_end_matches('/').to_string()
-    };
-    let root_key = key(root);
-    let mut current = path.to_path_buf();
-    loop {
-        if key(&current) == root_key {
-            return Some(false);
-        }
-        if is_hidden_name(current.file_name()?) {
-            return Some(true);
-        }
-        if cfg!(any(windows, target_os = "macos")) {
-            match std::fs::symlink_metadata(&current) {
-                Ok(metadata) if is_hidden_metadata(&metadata) => return Some(true),
-                Ok(_) => {}
-                Err(error) if error.kind() == io::ErrorKind::NotFound => return Some(false),
-                Err(_) => return None,
-            }
-        }
-        if !current.pop() {
-            return None;
-        }
-    }
+/// Names that never hold charts, excluded on every platform by name alone, without
+/// reading attributes: macOS AppleDouble metadata (`._*`), archive tool folders
+/// (`__MACOSX`), and the trash and system folders of a drive used as a song root
+/// (`$RECYCLE.BIN`, `System Volume Information`, `.Trashes`, `.Trash`, `.Trash-<uid>`).
+/// Trash keeps deleted charts under their own extension, and the system folders deny
+/// access, which would stop the root from ever being pruned.
+pub(crate) fn is_excluded_name(name: &std::ffi::OsStr) -> bool {
+    let name = name.to_string_lossy();
+    name.starts_with("._")
+        || name == "__MACOSX"
+        || name.eq_ignore_ascii_case("$RECYCLE.BIN")
+        || name.eq_ignore_ascii_case("System Volume Information")
+        || name == ".Trashes"
+        || name == ".Trash"
+        || name.starts_with(".Trash-")
 }

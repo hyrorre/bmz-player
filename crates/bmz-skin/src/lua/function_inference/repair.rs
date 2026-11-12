@@ -183,12 +183,14 @@ pub(in crate::lua) fn parse_keylogger_chattering_destination_id(id: &str) -> Opt
     (1..=9).contains(&lane).then_some(lane)
 }
 
-pub(in crate::lua) fn lua_object_id(entries: &[(Value, Value)]) -> Option<String> {
-    entries.iter().find_map(|(key, value)| {
-        if !matches!(key, Value::String(key) if key.to_string_lossy() == "id") {
+pub(in crate::lua) fn lua_object_id(
+    entries: &[crate::lua::conversion::LuaTableEntry],
+) -> Option<String> {
+    entries.iter().find_map(|entry| {
+        if entry.string_key() != Some(b"id".as_slice()) {
             return None;
         }
-        match value {
+        match &entry.value {
             Value::String(value) => Some(value.to_string_lossy()),
             Value::Integer(value) => Some(value.to_string()),
             Value::Number(value) if value.is_finite() => Some(value.to_string()),

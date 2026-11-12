@@ -198,7 +198,7 @@ mod tests {
         run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 36);
+        assert_eq!(version, 37);
 
         let mut stmt = conn.prepare("PRAGMA table_info(charts)").unwrap();
         let columns = stmt
@@ -462,7 +462,7 @@ mod tests {
             conn.query_row("SELECT headers_json FROM charts", [], |row| row.get(0)).unwrap();
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(headers_json, "{}");
-        assert_eq!(version, 36);
+        assert_eq!(version, 37);
     }
 
     #[test]
@@ -529,7 +529,7 @@ mod tests {
             .unwrap();
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(chart_ids, vec![Some(10), Some(20), None, Some(99)]);
-        assert_eq!(version, 36);
+        assert_eq!(version, 37);
     }
 
     #[test]

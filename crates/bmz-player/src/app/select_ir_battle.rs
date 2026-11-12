@@ -14,7 +14,7 @@ pub(super) struct SelectIrBattleRuntime {
     pub(super) source_chart_id: Option<i64>,
     pub(super) source_sha256: Option<[u8; 32]>,
     pub(super) hold_started_at: Option<Instant>,
-    pub(super) hold_control: Option<String>,
+    pub(super) hold_control: Option<InputSource>,
     pub(super) hold_short_action: Option<SelectAction>,
     pub(super) generation: u64,
     pub(super) loading: bool,
@@ -99,7 +99,7 @@ impl WinitApp {
     /// the song list for the ranking, matching LR2's interaction.
     pub(super) fn begin_select_ir_battle_hold(
         &mut self,
-        control: &str,
+        control: InputSource,
         short_action: Option<SelectAction>,
     ) -> bool {
         if !self.select_ir_battle_is_available() {
@@ -114,13 +114,13 @@ impl WinitApp {
         self.select.ir_battle.source_chart_id = Some(chart_id);
         self.select.ir_battle.source_sha256 = Some(sha256);
         self.select.ir_battle.hold_started_at = Some(Instant::now());
-        self.select.ir_battle.hold_control = Some(control.to_string());
+        self.select.ir_battle.hold_control = Some(control);
         self.select.ir_battle.hold_short_action = short_action;
         true
     }
 
-    pub(super) fn finish_select_ir_battle_hold(&mut self, control: &str) -> bool {
-        if self.select.ir_battle.hold_control.as_deref() != Some(control) {
+    pub(super) fn finish_select_ir_battle_hold(&mut self, control: &InputSource) -> bool {
+        if self.select.ir_battle.hold_control.as_ref() != Some(control) {
             return false;
         }
         let held_long_enough = self

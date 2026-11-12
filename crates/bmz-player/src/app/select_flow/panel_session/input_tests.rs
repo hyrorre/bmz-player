@@ -6,7 +6,7 @@ fn timestamp(ms: u64) -> DeviceTimestamp {
     DeviceTimestamp::MonotonicNs(u128::from(ms) * 1_000_000)
 }
 
-fn bindings() -> SelectKeyBindings {
+fn bindings() -> SceneInputResolver {
     let mut profile = crate::config::play_input::default_profile_input();
     for (action, control) in
         [(InputActionConfig::E1, "Button9"), (InputActionConfig::E2, "Button10")]
@@ -17,13 +17,13 @@ fn bindings() -> SelectKeyBindings {
         binding.control = control.into();
         profile.ui.bindings.push(binding);
     }
-    SelectKeyBindings::from_profile(&profile)
+    SceneInputResolver::from_profile(&profile)
 }
 
 struct PanelInput {
     input: AppInputRuntime,
     session: OptionPanelSession,
-    keys: SelectKeyBindings,
+    keys: SceneInputResolver,
     bounce: InputBounceConfig,
 }
 
@@ -42,7 +42,17 @@ impl PanelInput {
 
     fn route(&mut self, event: ControlInputEvent, available: bool) -> bool {
         self.input.track_control(&event);
-        reconcile_select_holds_from_pressed_controls(&mut self.input, &self.keys);
+        let slots =
+            crate::input::gamepad::GamepadSlotMap::from_device_ids([Some(DeviceId(2)), None]);
+        let (start, select, _) = crate::app::select_hold_state_from_resolved(
+            self.input
+                .pressed_sources()
+                .map(|(device, control)| self.keys.resolve_control(device, control, slots)),
+        );
+        self.input.start_held = start;
+        self.input.select_held = select;
+        let resolved =
+            crate::app::input_resolve::resolve_input(&self.keys, None, slots, event.clone());
         let accepted = self
             .input
             .accept_app_event(
@@ -57,8 +67,7 @@ impl PanelInput {
             )
             .is_some();
         self.session.route_event(
-            &event,
-            &self.keys,
+            &resolved,
             available,
             (self.input.start_held, self.input.select_held),
             self.bounce,

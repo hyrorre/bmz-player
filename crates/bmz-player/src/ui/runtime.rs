@@ -31,7 +31,6 @@ impl EguiLayer {
             None,
         );
         Self {
-            scene_loading: false,
             ctx,
             state,
             font_coverage,
@@ -110,10 +109,6 @@ impl EguiLayer {
     /// profile側からFPS表示設定が変更されたとき、eguiのcheckbox状態も揃える。
     pub fn set_show_fps(&mut self, show_fps: bool) {
         self.show_fps = show_fps;
-    }
-
-    pub fn set_scene_loading(&mut self, loading: bool) {
-        self.scene_loading = loading;
     }
 
     pub fn set_score_import_status(&mut self, status: String, error: bool) {
@@ -247,11 +242,7 @@ impl EguiLayer {
         }
         self.update_dialog_active = false;
         let raw_input = self.state.take_egui_input(window);
-        let full_output = self.ctx.run_ui(raw_input, |ui| {
-            if self.scene_loading {
-                draw_scene_loading(ui.ctx());
-            }
-        });
+        let full_output = self.ctx.run_ui(raw_input, |_| {});
         self.state.handle_platform_output(window, full_output.platform_output);
         let primitives = self.ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
         EguiFrame {
@@ -312,6 +303,7 @@ impl EguiLayer {
         let mut reset_skin_config = false;
         let mut skin_reload_request = SkinReloadRequest::default();
         let mut trigger_song_rescan = false;
+        let mut trigger_full_song_rescan = false;
         let mut song_scan_requests = Vec::new();
         let mut table_fetch_urls = Vec::new();
         let mut score_import_request = None;
@@ -332,9 +324,6 @@ impl EguiLayer {
             update_dialog.is_some() && (info.scene == "Select" || *visible_flag);
         self.update_dialog_active = update_dialog_allowed;
         let full_output = ctx.run_ui(raw_input, |ui| {
-            if self.scene_loading {
-                draw_scene_loading(ui.ctx());
-            }
             if crate::cli::latency_validation_enabled() {
                 egui::Area::new(egui::Id::new("latency_test_banner"))
                     .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 8.0))
@@ -509,6 +498,7 @@ impl EguiLayer {
                         save_profile_config |= settings_actions.save_profile;
                         check_for_update |= settings_actions.check_update;
                         trigger_song_rescan |= settings_actions.rescan;
+                        trigger_full_song_rescan |= settings_actions.full_rescan;
                         song_scan_requests.extend(settings_actions.song_scan_requests);
                         table_fetch_urls.extend(settings_actions.table_fetch_urls);
                         apply_audio_output |= settings_actions.apply_audio;
@@ -574,6 +564,7 @@ impl EguiLayer {
             reset_skin_config,
             skin_reload_request,
             trigger_song_rescan,
+            trigger_full_song_rescan,
             song_scan_requests,
             table_fetch_urls,
             score_import_request,
@@ -588,17 +579,6 @@ impl EguiLayer {
             select_course_builder_action,
         }
     }
-}
-
-fn draw_scene_loading(ctx: &egui::Context) {
-    egui::Area::new(egui::Id::new("scene-loading"))
-        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-        .interactable(false)
-        .show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.spinner();
-            });
-        });
 }
 
 pub(super) fn egui_consumed_game_input(

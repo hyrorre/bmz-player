@@ -62,13 +62,6 @@ pub enum ChartDownloadSource {
 }
 
 impl ChartDownloadSource {
-    pub fn directory_name(self) -> &'static str {
-        match self {
-            Self::Ipfs => "ipfs",
-            Self::Http => "http",
-        }
-    }
-
     pub fn display_name(self) -> &'static str {
         match self {
             Self::Ipfs => "IPFS",
@@ -85,6 +78,18 @@ pub enum MissingChartAction {
     Unavailable,
 }
 
+/// 取得方法に応じた保存先フォルダを返す。指定したフォルダの直下に取得物を置く。
+pub fn save_dir_for_action(
+    config: &ChartDownloadsConfig,
+    action: &MissingChartAction,
+    data_dir: &Path,
+) -> PathBuf {
+    match action {
+        MissingChartAction::Ipfs { .. } => config.ipfs_save_path(data_dir),
+        _ => config.http_save_path(data_dir),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ChartDownloadRequest {
     pub keep_archive: bool,
@@ -92,7 +97,7 @@ pub struct ChartDownloadRequest {
     pub identity: ChartDownloadIdentity,
     pub action: MissingChartAction,
     pub title: String,
-    pub download_root: PathBuf,
+    pub save_dir: PathBuf,
 }
 
 impl ChartDownloadRequest {
@@ -320,7 +325,7 @@ async fn download_chart_inner(
             bail!("ダウンロード以外の取得方法が指定されました")
         }
     };
-    let root_dir = request.download_root.join(source.directory_name());
+    let root_dir = request.save_dir.clone();
     std::fs::create_dir_all(&root_dir)
         .with_context(|| format!("保存先を作成できませんでした: {}", root_dir.display()))?;
 
@@ -403,12 +408,8 @@ async fn download_chart_inner(
             normalize_ipfs_arg(cids.first().expect("IPFS action has at least one CID"))?
         }
         MissingChartAction::Http { api_url, md5, sha256 } => {
-            let scope = format!(
-                "{}\n{}\n{}",
-                request.download_root.display(),
-                api_url,
-                request.keeps_archive()
-            );
+            let scope =
+                format!("{}\n{}\n{}", request.save_dir.display(), api_url, request.keeps_archive());
             let api_url = expand_http_api_url(api_url, md5, sha256)?;
             let response = network
                 .request(&client, reqwest::Method::GET, api_url)
@@ -923,7 +924,7 @@ mod tests {
             ipfs_api_url: "http://127.0.0.1:5001".to_string(),
             http_enabled: true,
             http_api_url: "https://example.com/{md5}".to_string(),
-            save_dir: String::new(),
+            ..Default::default()
         };
 
         assert!(matches!(
@@ -942,7 +943,7 @@ mod tests {
             ipfs_api_url: "http://127.0.0.1:5001".to_string(),
             http_enabled: true,
             http_api_url: "https://example.com/{md5}".to_string(),
-            save_dir: String::new(),
+            ..Default::default()
         };
         let mut metadata = metadata();
         metadata.ipfs.clear();
@@ -1117,7 +1118,7 @@ mod tests {
                 identity: ChartDownloadIdentity::default(),
                 action: MissingChartAction::Unavailable,
                 title: title.to_string(),
-                download_root: PathBuf::new(),
+                save_dir: PathBuf::new(),
             })
             .collect();
 

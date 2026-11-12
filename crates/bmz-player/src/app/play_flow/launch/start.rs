@@ -270,11 +270,14 @@ impl WinitApp {
         // Decide / retry / direct boot のどの経路でも、Play 入場後の常時表示が
         // pending state の破棄に左右されないよう、ここで今回の mode を記録する。
         self.result.last_play_session_mode = options.session_mode;
+        self.result.last_play_freq_semitones = options.freq_semitones;
         self.play.last_battle_target = options.battle_target.clone();
         // リザルトの非同期 IR state は今回の試行だけを表す。retry 中にも残すと
         // 同じ chart hash の前回スコアを次の Result で表示し得るため、Play へ
         // 入る時点で直ちに手放す（バックグラウンド送信自体は継続する）。
         self.result.result_ir = None;
+        self.discard_skin_prewarm(SkinKind::Result);
+        self.discard_skin_prewarm(SkinKind::Select);
         self.clear_result_ir_scroll_input();
         self.play.play_ending = None;
         self.result.result_exit = None;
@@ -340,6 +343,11 @@ impl WinitApp {
         let mut session_options =
             play_session_options_from_start(&self.play_session_app_config(), options.clone());
         session_options.play_config_key_mode = Some(play_config_key_mode);
+        // ノーツ入力は preload したセッションの割り当てで動くので、E1〜E4 や補助操作も
+        // 同じ割り当てに揃える。
+        if let Some(slots) = self.play_preload_gamepad_slots(chart_id) {
+            session_options.gamepad_slots = slots;
+        }
         // CLIの一時上書き中とコースのNoSpeed制約中は、profileの量を書き換えない。
         if self.boot.profile_config.cli_play.is_none()
             && session_options.speed_constraint != bmz_core::course::CourseSpeedConstraint::NoSpeed
