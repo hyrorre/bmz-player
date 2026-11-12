@@ -3,7 +3,7 @@ use crate::app::play_flow_practice::{
     PracticeGamepadAction, apply_session_mode_start_policy, practice_analog_cursor_delta,
     practice_gamepad_action,
 };
-use crate::app::scene_state::playback_overlay_suffix;
+use crate::app::scene_state::{playback_overlay_suffix, scene_freq_semitones};
 
 #[test]
 fn viewer_seek_skips_only_the_ready_presentation() {
@@ -227,6 +227,45 @@ fn playback_overlay_suffix_exposes_each_non_normal_session_mode() {
         Some("AUTO BATTLE")
     );
     assert_eq!(playback_overlay_suffix(SessionMode::GBattle, false, false), Some("G-BATTLE"));
+}
+
+#[test]
+fn scene_freq_follows_the_session_outside_select() {
+    use crate::screens::play_start::{
+        PlayStartOptions, apply_freq_option, apply_queued_replay, course_freq_semitones,
+    };
+    use crate::storage::replay::{QueuedCourseReplay, ReplayFile};
+    use bmz_core::course::CourseKind;
+
+    let profile = 5;
+    // Select shows the FREQ the next play will start from.
+    assert_eq!(scene_freq_semitones(AppSceneKind::Select, profile, None, -1), profile);
+    assert_eq!(scene_freq_semitones(AppSceneKind::Select, profile, Some(0), -1), profile);
+
+    // A DAN course start bakes in FREQ 0 regardless of the profile.
+    let mut dan = PlayStartOptions::default();
+    apply_freq_option(&mut dan, course_freq_semitones(CourseKind::Dan, profile));
+    for scene in [AppSceneKind::Decide, AppSceneKind::Play, AppSceneKind::Result] {
+        assert_eq!(scene_freq_semitones(scene, profile, Some(dan.freq_semitones), profile), 0);
+    }
+
+    // A replay plays back at its recorded FREQ, not the profile's.
+    let replay = ReplayFile::new([1; 32], 1, None, ArrangeOption::Normal, None, None, Vec::new())
+        .with_freq_semitones(-3);
+    let queued = QueuedCourseReplay { position: 0, chart_id: 1, chart_sha256: [1; 32], replay };
+    let mut replay_options = PlayStartOptions::default();
+    apply_freq_option(&mut replay_options, profile);
+    apply_queued_replay(&mut replay_options, &queued).unwrap();
+    for scene in [AppSceneKind::Decide, AppSceneKind::Play, AppSceneKind::Result] {
+        assert_eq!(
+            scene_freq_semitones(scene, profile, Some(replay_options.freq_semitones), profile),
+            -3
+        );
+    }
+
+    // A course Result without `finished_play` keeps the last started play's FREQ.
+    assert_eq!(scene_freq_semitones(AppSceneKind::Result, profile, None, 0), 0);
+    assert_eq!(scene_freq_semitones(AppSceneKind::Play, profile, None, -3), -3);
 }
 
 #[test]

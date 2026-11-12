@@ -229,8 +229,8 @@ option `94_000+ID`、否定は符号を維持）です。意味が一致する�
 | number | 210..219 | Select / Decide | IRのFAILED / EASY / CLEAR / HARD / FULLCOMBOの人数と率です。ASSIST系はEASY、EX-HARDはHARD、PERFECT / MAXはFULLCOMBOへ畳む |
 | number | 212 / 214 / 216 | Result / Course Result | 拡張LR2のFAST / SLOW / コンボブレイク数（Playの210 / 212 / 214と同じ扱い） |
 | number | 50..56 / 60..65 | 全画面 | EQ / FXです。BMZに設定が無いため非表示（beatorajaの54 / 55はDPオプション / HS-FIX） |
-| number | 66 | 全画面 | LR2のピッチ量です。プロフィールのFREQ（半音、-12..+12、0はOFF）を表示します。LR2のPITCH OFF/ON・PITCH TYPEはBMZに無く、値0がOFFに当たります |
-| slider | 26 | 全画面（変更はSelect） | LR2のピッチ量です。移動範囲の始点が-12、終点が+12で、つまみの位置を最も近い半音へ丸めてFREQへ書き込みます。範囲外へは動きません。書き込みはSelectの詳細設定のFREQ行と同じ処理（プレイ準備の破棄等）を通ります |
+| number | 66 | 全画面 | LR2のピッチ量です。FREQ（半音、-12..+12、0はOFF）を表示します。Selectはプロフィールの値、Decide・Play・Resultはそのプレイで実際に使う値（段位コースの0、リプレイの記録値）です。LR2のPITCH OFF/ON・PITCH TYPEはBMZに無く、値0がOFFに当たります |
+| slider | 26 | 全画面（変更はSelect） | LR2のピッチ量です。移動範囲の始点が-12、終点が+12で、つまみの位置を最も近い半音へ丸めてFREQへ書き込みます。範囲外へは動きません。書き込みはSelectの詳細設定のFREQ行と同じ処理（プレイ準備の破棄等）を通ります。プロフィールへの保存はドラッグの終了時、つまみを止めて0.5秒後、Selectを離れたときのいずれか早い時点で行い、ドラッグ中の毎フレームには保存しません |
 | number | 290 / 291 | 全画面 | 最高 / 最低BPM（90 / 91と同じ） |
 | text | 190..199 | Select / Decide | ランダムコースの設定です。BMZに該当が無いため空文字 |
 | text | 60..65 / 70 / 74 / 76 / 80 / 84..85 | Select / Decide | BMZで変更できる設定の現在値（キーフィルター、ソート、難易度、RANDOM 1P / 2P、ゲージ、FLIP、HS-FIX、BGA、自動調整、レーン効果）です。text 84 / 85は同じ共通設定を表示します。文言はBMZの表記（例: NORMAL / HARD / HAZARD、H-RANDOM / ALL-SCR、SCORE、AUTO）を使います。キーフィルターはBMZ全体でLR2と同じ`ALL KEYS` / `7KEYS`等の表記にそろえています。変更できない設定（GHOST、SCORE GRAPH、BGA SIZE、画面設定、REPLAY等）は空文字 |

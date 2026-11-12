@@ -419,6 +419,7 @@ impl WinitApp {
                 result_favorite_song: false,
                 result_ir: None,
                 last_play_session_mode: SessionMode::Normal,
+                last_play_freq_semitones: 0,
                 result_scene_started_at: now,
                 lr2_result_progress: Default::default(),
                 lr2_result_epoch: None,

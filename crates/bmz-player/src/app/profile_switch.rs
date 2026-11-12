@@ -413,6 +413,7 @@ impl WinitApp {
         self.result.result_ir = None;
         self.result.result_skin_audio = None;
         self.result.last_play_session_mode = SessionMode::Normal;
+        self.result.last_play_freq_semitones = 0;
         self.select.autoplay_folder = None;
         self.select.random_trainer = RandomTrainerState::default();
         self.select.select_ir = Default::default();
