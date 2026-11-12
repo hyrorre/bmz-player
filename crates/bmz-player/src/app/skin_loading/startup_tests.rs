@@ -24,6 +24,7 @@ fn initial_select_is_queued_before_surface_and_not_installed_synchronously() {
         true,
         bmz_skin::LuaSkinRuntimeMode::default(),
         false,
+        Instant::now(),
     );
     assert!(pending_select);
     assert!(renderer.select_skin_document().is_none());

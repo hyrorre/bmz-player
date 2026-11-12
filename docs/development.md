@@ -159,6 +159,8 @@ DB migration / storage / scanの検証でコピー先が更新されても、元
 
 ## 起動とsmoke
 
+初回描画までの段階別INFOログと既存集計の読み方は[起動診断](startup-diagnostics.md)を参照してください。
+
 ```bash
 cargo run -p bmz-player
 cargo run -p bmz-player -- --help

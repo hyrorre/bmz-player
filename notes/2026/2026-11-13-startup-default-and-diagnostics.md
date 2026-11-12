@@ -43,3 +43,87 @@ app側正規ロードを確認する。時間しきい値は使わない。
 （select_snapshot_rowsの10件、およびsettings edit復元の1件）。
 依存準備途中のFFmpeg / PipeWire bindgenのヘッダー不足は、ヘッダーを準備した再実行で解消した。
 生ログはこの作業環境の `/tmp/bmz-stage1-*.log` に置き、Git管理には含めない。
+
+## 第2段階
+
+段階名と読み方は[起動診断](../../docs/startup-diagnostics.md)に整理した。
+`WinitApp::new()` の先頭から `before_catalog_ms` までの各処理をINFOの開始・完了で囲み、
+初期選曲リスト内の難易度表フォルダ・お気に入り・その他DB / 整形も分けた。
+共通の `Instant` からの累積時間と各段階の実時間を記録する。
+エラーは呼び出し側が `?` や既存フォールバックを適用する前に観測する。
+親段階が中断した場合も成功とは記録しない。設定解析エラーのTOML本文は認証情報を含み得るため、
+診断には位置だけを記録し、元のエラーは従来どおり呼び出し側へ返す。
+
+通常の `load_items_for_stack()` / worker用の一覧生成は計測情報なしで呼び、
+起動時だけ明示的な入口から計測情報を渡す。プロセス共通の計測状態は作らない。
+bootstrap・イベントループ準備、constructor後半、window / GPU / egui・Select待ち・初回presentも接続し、
+既存集計の名前と意味を維持した。非同期化やスキンローダー全体の仕様変更は行っていない。
+
+`startup environment` は取得済みのAppPathsと `current_exe()` の結果を使い1回出力する。
+ログのためのcanonicalize、再帰探索、アセット再読み込みは追加しない。
+loggerの設定方法と明示的なログレベルの優先順位は変更しない。
+
+第2段階の `cargo check -p bmz-player --locked`、all-targets Clippy（`-D warnings`）、fmtが成功。
+診断の5件（INFOでの順序・時間フィールド、エラー連鎖と中断、設定本文の省略、起動限定、伝播前の失敗）、
+初期skin処理5件、選曲一覧worker 4件、難易度表fetch runtime 5件（1件無視）、
+日本語ロケールの選曲flow 161件が成功した。
+
+releaseで生成されたbmz-renderのrlibにリンクした単独プローブも実行した。
+`std::hint::black_box` を通して引数なしmanifest、SkinContext、Rendererを順番に生成・破棄し、
+各区間の前後にstdoutマーカーを書いた。`strace -qq -f -e trace=%file,write` で、
+3区間ともファイル関連システムコールが0件であることを確認した。
+プロセス開始時の動的リンカー等のアクセスは区間より前にあり、結果に混同していない。
+プローブと生ログは `/tmp/bmz-default-probe.rs`、`/tmp/bmz-default-probe.strace` にある。
+
+初回I/Oの回帰テストは新規プロセス内で単独実行するよう強化し、第1コミットに含めた。
+他の並列テストによるOnceLockの事前初期化に隠されることを防ぐ。
+対象テストとbmz-renderのall-targets Clippyも再確認して成功した。
+
+最終状態の `LANG=ja_JP.UTF-8 LANGUAGE=ja LC_ALL=ja_JP.UTF-8 cargo test -p bmz-player --locked --no-fail-fast`
+はlibで3122件成功・0件失敗・53件無視。他target / doc-testも成功した。
+
+## release実行確認
+
+`cargo build -p bmz-player --release --locked` が成功した。
+両段階のproduction変更を含む作業ツリーからビルドした（ビルド識別はcommit前のdirty状態）。
+Linux Xvfb 1280x720 / Mesa lavapipe Vulkanで、実行ファイル、default / mz-select、フォント、
+サンプル曲を `/tmp/bmz-startup-smoke-20261113` へコピーし、空のcwdから起動した。
+resource / data / cache / logsもこの検証ディレクトリ配下を明示した。
+音声デバイスはなく、既存フォールバックで音声なしで続行した。
+
+起動時scan・gamepad・更新確認・27個の難易度表sourceを無効化した検証専用設定を用意した。
+予備起動後、同じ設定・DBスナップショットを毎回復元してdefaultで3回起動した。
+`--renderer vulkan --smoke-exit-after-frames 30 --smoke-screenshot ...` で正常終了・PNG保存・
+初回presentを確認した。OS / GPUキャッシュのcold状態は統制しておらず、修正前後の速度比較ではない。
+
+| スキン / 回 | before_catalog_ms | skins_ms | after_skins_ms | constructor_total_ms | startup_to_first_present_ms |
+|---|---:|---:|---:|---:|---:|
+| default 1 | 14 | 1 | 1 | 18 | 2497 |
+| default 2 | 50 | 3 | 7 | 62 | 1482 |
+| default 3 | 10 | 1 | 3 | 17 | 1395 |
+| mz-select | 6 | 1 | 4 | 12 | 4475 |
+
+`renderer_default` の記録値は全て0ms（ミリ秒の表示単位未満）だった。
+I/Oなしの根拠はこの数値ではなく、回帰テスト・コード経路・straceである。
+4回ともINFOだけで42段階のbeginと終了が全て対応し、環境ログは1回だけだった。
+同梱PNGロード、初回Select install、初回present、30フレーム描画を確認し、PNGも確認した。
+このLinux条件の時間はsurface生成、egui / font初期化、初回描画に現れた。
+例えばmz-selectの待ちは `initial_select_skin_ready=1776ms` として記録された。
+
+Windows報告環境、全カスタムスキンの手動・実機比較、音声・入力機器を伴うPlay確認は未実施。
+素材不在で早期returnする検査や無視したGPUテストまで実機確認済みとは扱わない。
+約60秒のWindows問題の解消とは断定しない。
+報告者には同条件で再計測し、`startup environment` から `first surface frame presented` まで、
+まず `before_catalog_ms` 内の各phaseと未完了の最後のbegin、続いてwindow / surface / Select待ち /
+初回描画を見るよう依頼する。
+
+検証スクリプトは `/tmp/bmz-startup-smoke.py`、ログとPNGは `/tmp/bmz-startup-smoke-20261113/`、
+集計は `/tmp/bmz-startup-smoke-summary.log` にある。この作業環境だけの素材でありGit管理しない。
+
+## 2026-11-13 PRレビュー反映
+
+`select_root_virtual_folders` の完了が `catalog.root_items()` より前に記録される指摘を修正した。
+一覧生成を `Result::map` 内で行ってから `phase.result()` に渡し、文字列・Vecの構築を
+当該段階の計測に含める。既存のエラー処理と一覧の追加順序は維持する。
+検証はfmt、bmz-playerのcheck / all-targets Clippy（`-D warnings`）、
+`startup_diagnostics`（5件）と `virtual_folder`（10件）の関連テストが全て成功した。
