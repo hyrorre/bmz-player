@@ -277,6 +277,67 @@ fn qwilight_timing_and_spectrum_follow_the_current_state() {
 }
 
 #[test]
+fn qwilight_timing_coordinates_use_fixed_milliseconds_in_every_direction() {
+    use bmz_gameplay::judge::model::JudgeWindow;
+    let (_root, mut decoded) = information_fixture();
+    for system in 0..4 {
+        let visualizer = decoded
+            .document
+            .qwilight_visualizer
+            .iter_mut()
+            .find(|v| v.id == "qw-judgmentVisualizer")
+            .unwrap();
+        visualizer.system = system;
+        visualizer.line_width = 1;
+        visualizer.line_height = 1;
+        for (fast, slow, offset) in
+            [(220_000, 280_000, 0), (280_000, 220_000, -80), (50_000, 50_000, 100)]
+        {
+            let state = SkinDrawState {
+                note_judge_window: Some(JudgeWindow {
+                    bad_fast_us: fast,
+                    bad_slow_us: slow,
+                    ..JudgeWindow::symmetric(10_000, 30_000, 40_000, 50_000, 500_000, 500_000, 0)
+                }),
+                judge_timing_offset_ms: offset,
+                qwilight_timing: [-500.0, -250.0, -125.0, 0.0, 125.0, 250.0, 500.0]
+                    .map(|ms| (ms, 0, 0))
+                    .into(),
+                ..Default::default()
+            };
+            let feedback = items(&decoded, "qw-judgmentVisualizer", &state);
+            assert_eq!(feedback.len(), 7);
+            for (item, expected) in feedback.iter().zip([0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0]) {
+                let SkinRenderItem::Rect { rect, .. } = item else {
+                    panic!("expected timing mark")
+                };
+                let actual = if system < 2 {
+                    (rect.y * 720.0 - 470.0) / 13.0
+                } else {
+                    (rect.x * 1280.0 - 450.0) / 359.0
+                };
+                let expected = if matches!(system, 0 | 2) { 1.0 - expected } else { expected };
+                assert!(
+                    (actual - expected).abs() < 0.00001,
+                    "system={system} window={fast}/{slow} offset={offset}: {actual} != {expected}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn qwilight_play_only_import_waits_for_the_entry_fade() {
+    let (_root, decoded) = fixture();
+    assert_eq!(decoded.document.bmz_play_fadein, 500);
+    assert_eq!(decoded.document.bmz_play_fadeout, 500);
+    assert_eq!(decoded.document.loadstart, 500);
+    assert_eq!(decoded.document.loadend, 0);
+    assert_eq!(decoded.document.fadeout, 500);
+    assert_eq!(decoded.document.close, 500);
+}
+
+#[test]
 fn qwilight_counters_ratio_and_timing_use_bmz_values() {
     let (_root, decoded) = fixture();
     for (label, filename) in [("fast", "Bin/JM -.png"), ("slow", "Bin/JM +.png")] {
@@ -458,6 +519,54 @@ fn qwilight_cr_minimal_feedback_gpu() {
         changed_pixels(&held, &expired, (460, 640), (350, 400)) > 1000,
         "YELL must remain after 800 ms and disappear after 4 seconds"
     );
+}
+
+#[test]
+#[ignore = "requires CR_minimal and GPU; set BMZ_QWILIGHT_SKIN_ROOT and BMZ_QWILIGHT_PREVIEW_DIR"]
+fn qwilight_cr_minimal_fades_gpu() {
+    let root = PathBuf::from(std::env::var_os("BMZ_QWILIGHT_SKIN_ROOT").expect("set skin root"));
+    let output =
+        PathBuf::from(std::env::var_os("BMZ_QWILIGHT_PREVIEW_DIR").expect("set preview dir"));
+    fs::create_dir_all(&output).unwrap();
+    let (mut renderer, mut snapshot) = prepare_installed_qwilight(
+        &root,
+        std::slice::from_ref(&root),
+        "CR_minimal",
+        KeyMode::K6,
+        6,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        0.0,
+    );
+    let mut render = |snapshot: RenderSnapshot, name: &str| {
+        renderer.render_scene(AppSceneSnapshot::Play(snapshot)).unwrap();
+        let rgba = renderer.read_offscreen_rgba().unwrap();
+        save_preview(&output, name, &rgba);
+        rgba.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| u64::from(p[0]) + u64::from(p[1]) + u64::from(p[2]))
+            .sum::<u64>()
+    };
+    snapshot.play_elapsed_time = TimeUs(0);
+    assert_eq!(render(snapshot.clone(), "CR_minimal-fade-entry-0ms.png"), 0);
+    snapshot.play_elapsed_time = TimeUs(250_000);
+    let half = render(snapshot.clone(), "CR_minimal-fade-entry-250ms.png");
+    snapshot.play_elapsed_time = TimeUs(500_000);
+    let clear = render(snapshot.clone(), "CR_minimal-fade-entry-500ms.png");
+    assert!(half > 0 && clear > half);
+    snapshot.fadeout_elapsed_ms = Some(500);
+    assert_eq!(render(snapshot.clone(), "CR_minimal-fade-exit-500ms.png"), 0);
+    snapshot.fadeout_elapsed_ms = None;
+    snapshot.failed_elapsed_ms = Some(250);
+    let failed_half = render(snapshot.clone(), "CR_minimal-fade-failed-250ms.png");
+    assert!(failed_half > 0 && failed_half < clear);
+    snapshot.failed_elapsed_ms = Some(500);
+    assert_eq!(render(snapshot.clone(), "CR_minimal-fade-failed-500ms.png"), 0);
+    snapshot.failed_elapsed_ms = None;
+    snapshot.play_elapsed_time = TimeUs(0);
+    snapshot.seamless_play_entry = true;
+    assert!(render(snapshot, "CR_minimal-fade-seamless.png") > half);
 }
 
 #[test]

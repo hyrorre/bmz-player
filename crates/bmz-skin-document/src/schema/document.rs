@@ -31,6 +31,14 @@ pub struct SkinDocument {
     /// Opt in to a read-only 300 ms E2 exit snapshot, animated with timer 32.
     #[serde(default, rename = "bmzDetailOptionsClose")]
     pub bmz_detail_options_close: bool,
+    /// BMZ play extension: screen-space black-to-clear entry fade in milliseconds.
+    /// Scene elapsed time is used; seamless retries skip the fade.
+    #[serde(default, rename = "bmzPlayFadein")]
+    pub bmz_play_fadein: i32,
+    /// Screen-space exit fade when the skin has no timer 2/3 animation.
+    /// The host still uses `fadeout` / `close` for the transition wait.
+    #[serde(default, rename = "bmzPlayFadeout")]
+    pub bmz_play_fadeout: i32,
     /// BMZ play extension: preview window for upcoming BPM changes.
     #[serde(default, rename = "bmzBpmChangePreview")]
     pub bmz_bpm_change_preview: Option<SkinBpmChangePreviewDef>,

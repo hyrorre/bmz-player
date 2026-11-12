@@ -133,6 +133,10 @@ impl Definition {
         visibility::properties(&mut properties, &mut labels);
         properties.push(customize::lane_cover_property(lane_covers));
         json!({"type": 0,
+            // Qwilight's transitions belong to the separate @theme. Use BMZ's
+            // default fade for play-only imports; don't start notes under black.
+            "bmzPlayFadein": 500, "bmzPlayFadeout": 500,
+            "loadstart": 500, "fadeout": 500, "close": 500,
             "name": self.text("format", "title-1041").or_else(|| self.text("format", "title")).unwrap_or_else(|| "Qwilight play skin".into()),
             "property": properties, "propertyLabels": labels,
             "offset": customize::adjustment_defs(self),

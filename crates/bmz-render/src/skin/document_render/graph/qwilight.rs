@@ -41,16 +41,15 @@ pub(in crate::skin::document_render) fn qwilight_visualizer_items(
             }
         }
         QwilightVisualizerKind::Timing => {
-            let areas = timing_judge_areas(state);
-            let low = areas[3].late_ms.min(-1.0);
-            let high = areas[3].early_ms.max(1.0);
             let w = (visualizer.line_width.max(1) as f32 / frame.w.abs().max(1) as f32).min(1.0);
             let h = (visualizer.line_height.max(1) as f32 / frame.h.abs().max(1) as f32).min(1.0);
             for &(ms, age, judge) in &state.qwilight_timing {
                 if !(0..800).contains(&age) || !ms.is_finite() {
                     continue;
                 }
-                let position = ((ms - low) / (high - low)).clamp(0.0, 1.0);
+                // Fixed -250..+250 ms scale, independent of judgment windows
+                // and visual offsets. Equal +/- deltas travel equal distances.
+                let position = (0.5 + ms / 500.0).clamp(0.0, 1.0);
                 let (x, y) = match visualizer.system {
                     0 => (0.0, (1.0 - position) * (1.0 - h)),
                     1 => (0.0, position * (1.0 - h)),
