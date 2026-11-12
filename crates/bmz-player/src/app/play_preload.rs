@@ -14,6 +14,7 @@ impl PendingPlayPreload {
         source: PlayPreloadSource,
     ) -> Self {
         let input = SharedInputBackend::default();
+        let gamepad_slots = session_options.gamepad_slots;
         let audio_progress = Arc::new(AtomicU32::new(0));
         let prepared_chart = Arc::new(OnceLock::new());
         let skin_chart_state = PlaySkinChartState::default();
@@ -54,7 +55,16 @@ impl PendingPlayPreload {
                 let _ = tx.send(PlayPreloadResult { generation, chart_id, result });
             })
             .expect("failed to spawn play preload thread");
-        Self { generation, chart_id, input, audio_progress, prepared_chart, skin_chart_state, rx }
+        Self {
+            generation,
+            chart_id,
+            gamepad_slots,
+            input,
+            audio_progress,
+            prepared_chart,
+            skin_chart_state,
+            rx,
+        }
     }
 }
 

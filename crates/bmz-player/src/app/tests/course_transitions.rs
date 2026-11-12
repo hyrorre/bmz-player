@@ -216,6 +216,7 @@ fn course_retirement_and_retry_preserve_results_and_cancel_pending_launches() {
                 app.play.pending_play_preload = Some(PendingPlayPreload {
                     generation,
                     chart_id,
+                    gamepad_slots: Default::default(),
                     input: Default::default(),
                     audio_progress: Arc::new(AtomicU32::new(0)),
                     prepared_chart: Arc::new(OnceLock::new()),

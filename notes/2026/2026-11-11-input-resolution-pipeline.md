@@ -42,13 +42,41 @@
 - 表の各行は`BindingDevice`（Keyboard / AnyController / ControllerSlot(1P|2P)）を持つ。行は、入力元のスロットと一致する場合だけ候補にする。同じ物理入力に側専用の行と共通の行があれば、側専用の行を優先する。
 - 7K / 14Kの選曲入力では、機器ごとに次の順で表を調べる（決定カードで確認済み）。
   - キーボード: 7K → 14Kの2P側（7Kに同じキーがあれば7Kを優先する）
-  - 1Pのコントローラー: 7K → 14K
-  - 2Pのコントローラー: 14K → 7K
+  - 1Pのコントローラー: レーンごとに7K → 14Kの1P側
+  - 2Pのコントローラー: レーンごとに14Kの2P側 → 7K
   - 割り当てのないコントローラー: 7K → 14K。共通の`gamepad`行だけが一致する
-- 7Kへのフォールバックは、同じイベント・同じ機器で行う。もう一方の側の同名ボタンは候補にしない。
+- 1P / 2Pのコントローラーは、`SceneInputResolver`の構築時に側ごとの実効レーン表（`effective_controller_lanes`）を作り、その表で物理入力を探す。ボタン名で7K / 14Kの表を順に探すことはしない。
+  - 各側のSCR・KEY1〜KEY7ごとに、先に調べる設定のレーン状態（`LaneState`）を見る。その側の行（`gamepad1` / `gamepad2`）を先に、なければ`gamepad`の行を見る。
+  - 明示的な割り当て（`Explicit`）ならそれだけ、明示的な未割り当て（`Unassigned`、`control = ""`の行）なら何も使わない。設定がない（`Inherit`）ときだけ、同じ側でもう一方の設定の同じレーンを使う。
+  - 14Kで、もう一方の側のレーンにこの側の機器を割り当てた行は、優先度を下げて表に加える（1台でDPを遊ぶ構成）。
+  - 表の中では、優先度（その側の設定 → フォールバック → 他側のレーン）、側専用の行、表の順で選ぶ。
+- 解決の規則は譜面カーソルの7K / 14Kに依存しない。SP / DPやBATTLEの配置オプションの変更先は、`select_arrange_option_lane`で譜面のモードから別に決める。
 - 2PのKey8〜14は`ResolvedLane::side_key`で各側の1〜7へ写像し、`side`を保持する。9KのKEY8 / KEY9は2P側にしない。
 - プレイ中は、開始時の設定対象モード（BATTLE、SP / DP変換を含む）とスロットで作った`PlayOptionInput`で解決する。
 - アナログtickは`resolve_axis_tick`で、`AxisN+` / `AxisN-`のボタンとしてtickごとに機器と方向を解決してから合計する。割り当てのない軸は`None`。アナログ由来の押下（`synthesized_analog_axis`）は選曲移動に使わず、デジタル化した軸の押下は通常のボタンとして1回だけ移動する。
+
+## レーンの明示的な未割り当て
+
+- コントローラーのレーンを「解除」すると、`write_lane_gamepad_bindings_for_device` / `write_scratch_gamepad_bindings_for_device`が`control = ""`の行（marker）を書く。スクラッチは上下どちらも外れたときにレーン単位で書く。
+- marker のある状態でもう一度「解除」すると marker を消して「設定なし」に戻す。「デフォルトに戻す」で既定の割り当てがないレーンも「設定なし」に戻す。
+- `resolve_play_bindings`は marker を除いて返す。プレイの`LaneBinding`、競合検出、表示用の読み取りは marker を割り当てとして扱わない。marker を残す`resolve_play_bindings_with_markers`は、設定の書き換えと`LaneTable`（選曲入力のフォールバック判定）だけが使う。
+- 表示は`format_play_binding`が、「設定なし」のレーンに選曲入力で継承する割り当てを`(SELECT 7K: Button1)` / `(SELECT 14K 1P: Button1)`の形で出す。
+
+## 設定フォルダの操作
+
+- `ResolvedControl::settings_input()`は、E2に戻る・キャンセルの意味を持たせない。
+- 7K / 14Kは`select_lane()`（E1〜E4に割り当てた入力はレーンとして扱わない）で決定・戻るを決める。E2と奇数鍵を同じボタンにしても決定にならない。
+- 9Kは従来どおりレーンの意味を優先する（鍵盤とE2が重なれば鍵盤）。
+- 通常の選曲の`is_back()`（E2でフォルダを閉じる）、E2オプション、E1+E2、プレイ中のE2は変えていない。
+
+## プレイ中の1P / 2Pの割り当て
+
+- 入力の解決に使う割り当ては`WinitApp::input_slots`（`session_input_slots`）で決める。進行中のプレー（`pending_play_start` / `active_play` / `practice_session`のいずれか）があれば`PlayOptionInput`の開始時の割り当て、なければ実行時の割り当て。
+- `resolve_control_event`、押下中の入力元の再解決、アナログtick、アナログ皿の側ごとの設定（`set_analog_config`）はすべて`input_slots`を使う。ノーツ入力の`LaneBinding`と`PlayOptionInput`も同じ割り当てで作る。
+- プレー開始時は、preload したセッションの割り当て（`play_preload_gamepad_slots`）を`PlayOptionInput`にも使う。preload の後に割り当てが変わっても、ノーツ入力とE1〜E4などが食い違わない。
+- 進行中のプレーで次のセッションを作るとき（Practiceの次のラウンド、クイックリトライ）は、`play_session_app_config`が開始時の割り当てを引き継ぐ。
+- プレー中に`update_gamepad_slot_assignment`が呼ばれても、プレー側の状態（アナログの蓄積）は変えない。実行時の割り当ては更新し、選曲に戻ったあとの操作と次のプレーに使う。
+- 切断した機器の押下は、backend の Release と押下スナップショットの同期で消える。開始時の割り当てにない機器は、そのプレーではどの側でもない（共通の`gamepad`行だけが一致する）。
 
 ## E1〜E4の1P / 2P個別設定
 
@@ -87,5 +115,11 @@
 
 `app/input_resolve/tests.rs`に、OSのbackendなしで`ControlInputEvent` → 押下集合 → `resolve_input` → 操作までを通すテストを置いた（`Pipeline`）。
 1P / 2Pのボタン番号の一致・不一致、KEY1 / KEY2・KEY1 / KEY3の入れ替え、物理的なコントローラーの入れ替え、7Kと14KのSCRが別の軸、同じ軸で逆向き、デジタル / アナログ由来の押下、E1〜E4の共通・個別・未割り当て・保存と再読み込み、他側の鍵盤と同じ番号のEボタン、同時押しと片側の解放、片側だけ接続・未割り当て、設定変更・切断・フォーカス喪失、キーボード7K優先、9K、を扱う。
+
+レビュー対応で次を追加した。
+
+- 設定フォルダ: 既定・左右別のE2、E2と奇数鍵（キーボード・1P・14Kの2P）の重なり、9Kの鍵盤優先。`tests/select/settings_controls.rs`（Windows専用）で、閲覧・値編集・キーコンフィグの入力待ちをWinitAppで通す。
+- レーンのフォールバック: 同じ番号・別の番号、14Kの2Pの明示設定・明示解除・継承、7Kの1Pの明示解除・継承、片側だけ編集、保存と再読み込み、「デフォルトに戻す」、割り当てのない機器。
+- プレー中の割り当て: 入れ替え、入れ替えをまたぐPress / Release、片側の切断・別機器の接続・再接続、選曲に戻ったあとの新しい割り当て。WinitAppでは読み込み中の入れ替えと、次のセッションへ引き継ぐ割り当てを確認する。
 
 WinitAppを作るテストはWindows専用で`#[ignore]`のため、新しいテストはWinitAppを作らない形にした。

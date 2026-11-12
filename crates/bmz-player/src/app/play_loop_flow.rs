@@ -536,6 +536,28 @@ impl WinitApp {
         self.refresh_pending_play_visual_snapshot(play_elapsed_time);
     }
 
+    /// preload 済み・preload 中のセッションが使う 1P / 2P の割り当て。
+    pub(super) fn play_preload_gamepad_slots(
+        &self,
+        chart_id: i64,
+    ) -> Option<crate::input::gamepad::GamepadSlotMap> {
+        self.play
+            .preloaded_play_session
+            .as_ref()
+            .filter(|preloaded| preloaded.chart_id == chart_id)
+            .map(|preloaded| preloaded.session_options.gamepad_slots)
+            .or_else(|| {
+                self.play
+                    .pending_play_preload
+                    .as_ref()
+                    .filter(|pending| {
+                        pending.chart_id == chart_id
+                            && pending.generation == self.play.play_preload_generation
+                    })
+                    .map(|pending| pending.gamepad_slots)
+            })
+    }
+
     pub(super) fn play_preload_prepared_chart(&self, chart_id: i64) -> Option<PreparedPlayChart> {
         self.play
             .preloaded_play_session

@@ -186,6 +186,7 @@ pub(super) fn write_scratch_gamepad_bindings_for_device(
             !(entry.device.eq_ignore_ascii_case("gamepad") && entry.lane == Some(lane))
         });
     }
+    let mut written = false;
     for (control, direction) in [
         (slots.up.as_deref(), ScratchDirectionConfig::Up),
         (slots.down.as_deref(), ScratchDirectionConfig::Down),
@@ -194,7 +195,11 @@ pub(super) fn write_scratch_gamepad_bindings_for_device(
             let mut entry = gamepad_play_binding_for_device(device, control, lane);
             entry.scratch = Some(direction);
             bindings.push(entry);
+            written = true;
         }
+    }
+    if !written {
+        bindings.push(gamepad_play_binding_for_device(device, "", lane));
     }
 }
 
@@ -210,10 +215,15 @@ pub(super) fn write_lane_gamepad_bindings_for_device(
             !(entry.device.eq_ignore_ascii_case("gamepad") && entry.lane == Some(lane))
         });
     }
-    for control in controls {
-        if !control.is_empty() {
-            bindings.push(gamepad_play_binding_for_device(device, control, lane));
-        }
+    let mut written = false;
+    for control in controls.iter().filter(|control| !control.is_empty()) {
+        bindings.push(gamepad_play_binding_for_device(device, control, lane));
+        written = true;
+    }
+    if !written {
+        // コントローラーのレーンを外したときは、`control = ""` の marker で
+        // 「明示的な未割り当て」を残す。選曲入力の 7K / 14K 間のフォールバックを止める。
+        bindings.push(gamepad_play_binding_for_device(device, "", lane));
     }
 }
 

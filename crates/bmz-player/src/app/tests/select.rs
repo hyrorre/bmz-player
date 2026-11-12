@@ -18,3 +18,6 @@ mod lr2_buttons;
 mod navigation;
 #[path = "select/session_mode.rs"]
 mod session_mode;
+#[cfg(target_os = "windows")]
+#[path = "select/settings_controls.rs"]
+mod settings_controls;

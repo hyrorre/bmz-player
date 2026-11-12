@@ -17,7 +17,7 @@ pub fn apply_play_binding(
         return Ok(());
     }
 
-    let mut bindings = resolve_play_bindings(input, key_mode)?;
+    let mut bindings = resolve_play_bindings_with_markers(input, key_mode)?;
     match target {
         KeyBindingTarget::Key { lane, slot } => {
             let keyboard = read_lane_keyboard_slots(&bindings, lane);
@@ -97,7 +97,16 @@ pub fn clear_play_binding(
         return Ok(());
     }
 
-    let mut bindings = resolve_play_bindings(input, key_mode)?;
+    let mut bindings = resolve_play_bindings_with_markers(input, key_mode)?;
+
+    // 明示的に未割り当てのコントローラーのレーンをもう一度外すと、marker を消して
+    // 「設定なし (継承)」へ戻す。
+    if target.slot().is_controller()
+        && has_lane_unassigned_marker(&bindings, lane, target.slot().device())
+    {
+        remove_lane_unassigned_marker(&mut bindings, lane, target.slot().device());
+        return persist_bindings(input, key_mode, bindings);
+    }
 
     match target {
         KeyBindingTarget::Key { lane, slot } => {
@@ -198,7 +207,19 @@ pub fn restore_key_mode_defaults(
         let default_control = default_control_for_target(&defaults, target);
         match default_control {
             Some(control) => apply_play_binding(input, key_mode, target, &control)?,
-            None => clear_play_binding(input, key_mode, target)?,
+            None => {
+                clear_play_binding(input, key_mode, target)?;
+                // 既定値に割り当てが無いコントローラーのレーンは、明示的な未割り当てではなく
+                // 「設定なし (継承)」へ戻す。
+                if target.slot().is_controller() {
+                    let lane = lane_for_target(target);
+                    let mut bindings = resolve_play_bindings_with_markers(input, key_mode)?;
+                    if has_lane_unassigned_marker(&bindings, lane, target.slot().device()) {
+                        remove_lane_unassigned_marker(&mut bindings, lane, target.slot().device());
+                        persist_bindings(input, key_mode, bindings)?;
+                    }
+                }
+            }
         }
     }
     Ok(())

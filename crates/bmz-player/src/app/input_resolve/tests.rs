@@ -112,10 +112,21 @@ impl Pipeline {
         self.scene = SceneInputResolver::from_profile(&self.input);
     }
 
+    /// プレー終了。選曲へ戻る。
+    fn end_play(&mut self) {
+        self.play = None;
+    }
+
+    /// app と同じく、進行中のプレーは開始時の割り当て、それ以外は実行時の割り当て。
+    fn input_slots(&self) -> GamepadSlotMap {
+        session_input_slots(self.play.as_ref(), self.slots)
+    }
+
     /// backend からの1イベント。押下集合を更新してから解決する (app と同じ順)。
     fn event(&mut self, event: ControlInputEvent) -> ResolvedInput {
         self.runtime.track_control(&event);
-        resolve_input(&self.scene, self.play.as_ref(), self.slots, event)
+        let slots = self.input_slots();
+        resolve_input(&self.scene, self.play.as_ref(), slots, event)
     }
 
     fn press(&mut self, event: ControlInputEvent) -> ResolvedControl {
@@ -123,15 +134,14 @@ impl Pipeline {
     }
 
     fn axis(&self, device: DeviceId, axis: &str, ticks: i32) -> ResolvedAxisTick {
-        resolve_axis_tick(&self.scene, self.play.as_ref(), self.slots, device, axis, ticks)
+        resolve_axis_tick(&self.scene, self.play.as_ref(), self.input_slots(), device, axis, ticks)
     }
 
     /// 押下中の入力元をそれぞれ解決して集約した E1 / E2 / E1〜E4。
     fn holds(&self) -> (bool, bool, Vec<InputActionConfig>) {
-        let pressed = self
-            .runtime
-            .pressed_sources()
-            .map(|(device, control)| self.scene.resolve_control(device, control, self.slots));
+        let pressed = self.runtime.pressed_sources().map(|(device, control)| {
+            self.scene.resolve_control(device, control, self.input_slots())
+        });
         let (e1, e2, actions) = crate::app::select_hold_state_from_resolved(pressed);
         let mut actions: Vec<_> = actions.into_iter().collect();
         actions.sort_by_key(|action| format!("{action:?}"));
@@ -251,10 +261,11 @@ fn different_button_numbers_per_side_never_fall_back_to_the_other_side() {
     );
     // 1P は同じ番号の 2P 設定を候補にしない。
     assert_eq!(pipeline.press(pad(LEFT, "Button21", true)).ui_key(), None);
-    // 2P の Button1 は 14K で見つからなければ同じ入力元の 7K 設定で解決する (側は 2P のまま)。
+    // 14K の 2P KEY1 を明示したので、7K の KEY1 (Button1) は 2P KEY1 として使わない。
     let right_button1 = pipeline.press(pad(RIGHT, "Button1", true));
-    assert_eq!(right_button1.ui_key(), Some(1));
-    assert_eq!(right_button1.arrange_input(), Some((PlayerSide::P2, true)));
+    assert_eq!(right_button1.ui_key(), None);
+    assert_eq!(right_button1.arrange_input(), None);
+    assert!(!right_button1.is_enter());
 }
 
 #[test]
@@ -379,8 +390,8 @@ fn seven_and_fourteen_key_scratch_on_different_axes() {
     // 1P の Axis2 はどこにも割り当てていないので何もしない。
     assert_eq!(pipeline.axis(LEFT, "Axis2", 4).scene_scroll, None);
     assert_eq!(pipeline.axis(LEFT, "Axis1", 1).scene_scroll, Some(-1));
-    // 2P の Axis1 は 14K から外れても、同じ入力元の 7K 共通設定で解決する。
-    assert_eq!(pipeline.axis(RIGHT, "Axis1", 1).scene_scroll, Some(-1));
+    // 14K の 2P SCR を明示したので、7K の SCR (Axis1) は 2P では使わない。
+    assert_eq!(pipeline.axis(RIGHT, "Axis1", 1).scene_scroll, None);
 }
 
 #[test]
@@ -594,7 +605,7 @@ fn e_button_sharing_a_number_with_the_other_sides_key_stays_on_its_side() {
     let right = pipeline.press(pad(RIGHT, "Button1", true));
     assert!(right.is_e2());
     assert_eq!(right.ui_key(), None, "E-action を選曲レーンより優先する");
-    assert!(right.settings_input().back);
+    assert_eq!(right.settings_input(), SettingsInput::default(), "E2 は設定画面で何もしない");
 }
 
 #[test]
@@ -791,4 +802,412 @@ fn nine_key_settings_lanes_win_over_e2() {
     );
     assert!(control.settings_input().back);
     assert!(!control.settings_input().confirm);
+}
+
+// ---------------------------------------------------------------------------
+// 設定フォルダの操作 (E2 に戻る・キャンセルを持たせない)
+// ---------------------------------------------------------------------------
+
+fn settings(control: &ResolvedControl) -> SettingsInput {
+    control.settings_input()
+}
+
+#[test]
+fn settings_folder_e2_has_no_meaning_and_even_keys_go_back() {
+    let mut pipeline = Pipeline::new(profile().input, both_slots());
+    for device in [LEFT, RIGHT] {
+        // 既定の E2 (Button10) は設定フォルダで何もしない。
+        assert_eq!(
+            settings(&pipeline.press(pad(device, "Button10", true))),
+            SettingsInput::default()
+        );
+        let even = settings(&pipeline.press(pad(device, "Button2", true)));
+        assert!(even.back && !even.confirm, "{device:?}");
+        let odd = settings(&pipeline.press(pad(device, "Button1", true)));
+        assert!(odd.confirm && !odd.back, "{device:?}");
+    }
+    // キーボードの E2 (既定 W) も同じ。Escape / 左矢印は戻る。
+    assert_eq!(settings(&pipeline.press(key(KeyCode::KeyW, true))), SettingsInput::default());
+    assert!(settings(&pipeline.press(key(KeyCode::Escape, true))).back);
+    assert!(settings(&pipeline.press(key(KeyCode::ArrowLeft, true))).back);
+    assert!(settings(&pipeline.press(key(KeyCode::KeyS, true))).back);
+}
+
+#[test]
+fn settings_folder_e2_on_an_odd_key_does_not_confirm() {
+    let mut profile = profile();
+    // 1P の E2 を、7K KEY1 と同じ Button1 にする。2P は共通の E2 (Button10) のまま。
+    set_action(&mut profile.input, InputActionConfig::E2, KeyBindingSlot::Controller1P, "Button1");
+    // キーボードの E2 を 7K KEY3 (X) にする。
+    set_action(&mut profile.input, InputActionConfig::E2, KeyBindingSlot::KeyboardPrimary, "X");
+    let mut pipeline = Pipeline::new(profile.input, both_slots());
+
+    let left = pipeline.press(pad(LEFT, "Button1", true));
+    assert!(left.is_e2());
+    assert_eq!(settings(&left), SettingsInput::default(), "E アクションを鍵盤より優先する");
+    // 2P の Button1 は 2P KEY1 のまま決定。
+    let right = pipeline.press(pad(RIGHT, "Button1", true));
+    assert!(!right.is_e2());
+    assert!(settings(&right).confirm);
+    // 1P の Button10 は 1P の個別設定で E2 ではなくなったが、鍵盤でもない。
+    assert_eq!(settings(&pipeline.press(pad(LEFT, "Button10", true))), SettingsInput::default());
+    assert_eq!(settings(&pipeline.press(pad(RIGHT, "Button10", true))), SettingsInput::default());
+
+    let x = pipeline.press(key(KeyCode::KeyX, true));
+    assert!(x.is_e2());
+    assert_eq!(settings(&x), SettingsInput::default());
+}
+
+#[test]
+fn settings_folder_14k_2p_e2_on_2p_key_does_not_confirm_or_go_back() {
+    let mut profile = profile();
+    // 14K の 2P KEY2 を Button12 にし、2P の E2 も Button12 にする。
+    set_key(
+        &mut profile.input,
+        KeyMode::K14,
+        LaneConfig::Key9,
+        KeyBindingSlot::Controller2P,
+        "Button12",
+    );
+    set_action(&mut profile.input, InputActionConfig::E2, KeyBindingSlot::Controller2P, "Button12");
+    let mut pipeline = Pipeline::new(profile.input, both_slots());
+    assert_eq!(settings(&pipeline.press(pad(RIGHT, "Button12", true))), SettingsInput::default());
+    assert_eq!(settings(&pipeline.press(pad(LEFT, "Button12", true))), SettingsInput::default());
+}
+
+#[test]
+fn nine_key_settings_keep_lane_priority_over_e2() {
+    let mut profile = profile();
+    profile.input.select_input_mode = SelectInputModeConfig::Key9;
+    // 9K の KEY5 (C) を E2 にしても、9K では鍵盤の意味 (決定) を優先する。
+    set_action(&mut profile.input, InputActionConfig::E2, KeyBindingSlot::KeyboardPrimary, "C");
+    let mut pipeline = Pipeline::new(profile.input, both_slots());
+    let c = pipeline.press(key(KeyCode::KeyC, true));
+    assert!(settings(&c).confirm && !settings(&c).back);
+    // E2 だけに割り当てたキー (既定の W は外れたので Q 以外の E2 はない) は何もしない。
+    assert_eq!(settings(&pipeline.press(key(KeyCode::KeyW, true))), SettingsInput::default());
+    assert!(settings(&pipeline.press(key(KeyCode::KeyX, true))).back, "9K KEY3 は戻る");
+}
+
+// ---------------------------------------------------------------------------
+// 7K / 14K 間のレーン単位のフォールバック
+// ---------------------------------------------------------------------------
+
+fn clear_key(
+    input: &mut ProfileInputConfig,
+    mode: KeyMode,
+    lane: LaneConfig,
+    slot: KeyBindingSlot,
+) {
+    clear_play_binding(input, mode, KeyBindingTarget::Key { lane, slot }).unwrap();
+}
+
+fn key_label(
+    profile: &ProfileConfig,
+    mode: KeyMode,
+    lane: LaneConfig,
+    slot: KeyBindingSlot,
+) -> String {
+    format_play_binding(profile, mode, KeyBindingTarget::Key { lane, slot })
+}
+
+/// 14K の 2P 側のレーン設定を消して「設定なし (継承)」にする (旧profileの状態)。
+fn remove_14k_2p_lane(input: &mut ProfileInputConfig, lane: LaneConfig) {
+    let mut bindings =
+        crate::config::play_input::resolve_play_bindings_with_markers(input, KeyMode::K14).unwrap();
+    bindings.retain(|entry| {
+        !(entry.lane == Some(lane) && crate::config::play_input::is_gamepad_device(&entry.device))
+    });
+    let config = input.play.entry(KeyMode::K14.play_map_key().to_string()).or_default();
+    config.inherit = None;
+    config.bindings = bindings;
+}
+
+#[test]
+fn same_button_numbers_resolve_each_side_from_its_own_mode() {
+    let mut pipeline = Pipeline::new(profile().input, both_slots());
+    for (device, side) in [(LEFT, PlayerSide::P1), (RIGHT, PlayerSide::P2)] {
+        for (button, key) in [("Button1", 1), ("Button4", 4), ("Button7", 7)] {
+            let control = pipeline.press(pad(device, button, true));
+            assert_eq!(control.ui_key(), Some(key), "{device:?} {button}");
+            assert_eq!(control.select_lane().map(|lane| lane.side), Some(side));
+        }
+    }
+    assert_eq!(
+        pipeline.press(pad(RIGHT, "Button1", true)).select_lane().map(|lane| lane.mode),
+        Some(KeyMode::K14)
+    );
+    assert_eq!(
+        pipeline.press(pad(LEFT, "Button1", true)).select_lane().map(|lane| lane.mode),
+        Some(KeyMode::K7)
+    );
+}
+
+#[test]
+fn explicit_14k_2p_lane_disables_the_7k_lane_for_2p() {
+    let mut profile = profile();
+    set_key(
+        &mut profile.input,
+        KeyMode::K14,
+        LaneConfig::Key8,
+        KeyBindingSlot::Controller2P,
+        "Button21",
+    );
+    let mut pipeline = Pipeline::new(profile.input, both_slots());
+    assert_eq!(pipeline.press(pad(RIGHT, "Button21", true)).ui_key(), Some(1));
+    assert_eq!(pipeline.press(pad(RIGHT, "Button1", true)).ui_key(), None);
+    // 他のレーンは 14K の 2P 設定のまま。1P は変わらない。
+    assert_eq!(pipeline.press(pad(RIGHT, "Button2", true)).ui_key(), Some(2));
+    assert_eq!(pipeline.press(pad(LEFT, "Button1", true)).ui_key(), Some(1));
+    assert_eq!(pipeline.press(pad(LEFT, "Button21", true)).ui_key(), None);
+}
+
+#[test]
+fn inherited_14k_2p_lane_falls_back_to_the_same_devices_7k_lane() {
+    let mut profile = profile();
+    remove_14k_2p_lane(&mut profile.input, LaneConfig::Key8);
+    remove_14k_2p_lane(&mut profile.input, LaneConfig::Scratch2);
+    // 7K の KEY1 を別の番号にすると、2P KEY1 も 7K のレーン設定に従う。
+    set_key(
+        &mut profile.input,
+        KeyMode::K7,
+        LaneConfig::Key1,
+        KeyBindingSlot::Controller,
+        "Button15",
+    );
+    assert_eq!(
+        key_label(&profile, KeyMode::K14, LaneConfig::Key8, KeyBindingSlot::Controller2P),
+        "(SELECT 7K: Button15)"
+    );
+    let mut pipeline = Pipeline::new(profile.input, both_slots());
+    let right = pipeline.press(pad(RIGHT, "Button15", true));
+    assert_eq!(right.ui_key(), Some(1));
+    assert_eq!(right.arrange_input(), Some((PlayerSide::P2, true)));
+    assert_eq!(right.select_lane().map(|lane| lane.mode), Some(KeyMode::K7));
+    // 7K の KEY1 から外した Button1 は、2P KEY1 にもならない。
+    assert_eq!(pipeline.press(pad(RIGHT, "Button1", true)).ui_key(), None);
+    // 2P の SCR も 7K の SCR (Axis1) を継承する。
+    assert_eq!(pipeline.axis(RIGHT, "Axis1", 1).scene_scroll, Some(-1));
+    // 1P は 7K の設定で解決する。
+    assert_eq!(pipeline.press(pad(LEFT, "Button15", true)).ui_key(), Some(1));
+}
+
+#[test]
+fn explicitly_unassigned_lane_does_not_fall_back_and_clearing_again_inherits() {
+    let mut profile = profile();
+    clear_key(&mut profile.input, KeyMode::K14, LaneConfig::Key8, KeyBindingSlot::Controller2P);
+    assert_eq!(
+        key_label(&profile, KeyMode::K14, LaneConfig::Key8, KeyBindingSlot::Controller2P),
+        "(none)"
+    );
+    let mut pipeline = Pipeline::new(profile.input.clone(), both_slots());
+    assert_eq!(pipeline.press(pad(RIGHT, "Button1", true)).ui_key(), None, "7K へ戻らない");
+    assert_eq!(pipeline.press(pad(LEFT, "Button1", true)).ui_key(), Some(1));
+
+    // もう一度外すと「設定なし」へ戻り、同じ 2P 機器の 7K KEY1 を使う。
+    clear_key(&mut profile.input, KeyMode::K14, LaneConfig::Key8, KeyBindingSlot::Controller2P);
+    assert_eq!(
+        key_label(&profile, KeyMode::K14, LaneConfig::Key8, KeyBindingSlot::Controller2P),
+        "(SELECT 7K: Button1)"
+    );
+    pipeline.reload_config(profile.input.clone());
+    let right = pipeline.press(pad(RIGHT, "Button1", true));
+    assert_eq!(right.ui_key(), Some(1));
+    assert_eq!(right.select_lane().map(|lane| lane.side), Some(PlayerSide::P2));
+}
+
+#[test]
+fn seven_key_lane_for_1p_is_preferred_and_unassigned_stops_the_14k_fallback() {
+    let mut profile = profile();
+    // 14K の 1P KEY1 を Button21 にしても、1P は 7K の KEY1 (Button1) を優先する。
+    set_key(
+        &mut profile.input,
+        KeyMode::K14,
+        LaneConfig::Key1,
+        KeyBindingSlot::Controller1P,
+        "Button21",
+    );
+    let mut pipeline = Pipeline::new(profile.input.clone(), both_slots());
+    assert_eq!(pipeline.press(pad(LEFT, "Button1", true)).ui_key(), Some(1));
+    assert_eq!(pipeline.press(pad(LEFT, "Button21", true)).ui_key(), None);
+
+    // 7K の KEY1 を明示的に外すと、14K へもフォールバックしない。
+    clear_key(&mut profile.input, KeyMode::K7, LaneConfig::Key1, KeyBindingSlot::Controller);
+    pipeline.reload_config(profile.input.clone());
+    assert_eq!(pipeline.press(pad(LEFT, "Button1", true)).ui_key(), None);
+    assert_eq!(pipeline.press(pad(LEFT, "Button21", true)).ui_key(), None);
+    // 2P は 14K の 2P KEY1 (Button1) のまま。
+    assert_eq!(pipeline.press(pad(RIGHT, "Button1", true)).ui_key(), Some(1));
+
+    // もう一度外して「設定なし」にすると、14K の 1P KEY1 を使う。
+    clear_key(&mut profile.input, KeyMode::K7, LaneConfig::Key1, KeyBindingSlot::Controller);
+    assert_eq!(
+        key_label(&profile, KeyMode::K7, LaneConfig::Key1, KeyBindingSlot::Controller),
+        "(SELECT 14K 1P: Button21)"
+    );
+    pipeline.reload_config(profile.input);
+    let left = pipeline.press(pad(LEFT, "Button21", true));
+    assert_eq!(left.ui_key(), Some(1));
+    assert_eq!(left.select_lane().map(|lane| lane.side), Some(PlayerSide::P1));
+}
+
+#[test]
+fn lane_markers_survive_save_and_reload_and_stay_out_of_play_bindings() {
+    let mut profile = profile();
+    clear_key(&mut profile.input, KeyMode::K14, LaneConfig::Key8, KeyBindingSlot::Controller2P);
+    remove_14k_2p_lane(&mut profile.input, LaneConfig::Key9);
+    let saved = toml::to_string(&profile).unwrap();
+    let mut loaded: ProfileConfig = toml::from_str(&saved).unwrap();
+    crate::config::play_input::normalize_profile_input(&mut loaded.input);
+    let mut pipeline = Pipeline::new(loaded.input.clone(), both_slots());
+    // KEY1 は明示的な未割り当て、KEY2 は継承 (7K の Button2)。
+    assert_eq!(pipeline.press(pad(RIGHT, "Button1", true)).ui_key(), None);
+    assert_eq!(pipeline.press(pad(RIGHT, "Button2", true)).ui_key(), Some(2));
+    // プレイと競合検出は marker を割り当てとして扱わない。
+    let binding = crate::config::play::lane_binding_for_chart_with_slots(
+        &loaded.input,
+        KeyMode::K14,
+        both_slots(),
+    );
+    assert!(
+        crate::config::play_input::resolve_play_bindings(&loaded.input, KeyMode::K14)
+            .unwrap()
+            .iter()
+            .all(|entry| !entry.control.is_empty())
+    );
+    pipeline.play =
+        Some(crate::app::PlayOptionInput::new(KeyMode::K14, binding, &loaded.input, both_slots()));
+    let play = pipeline.event(pad(RIGHT, "Button1", true));
+    assert_eq!(play.play().and_then(ResolvedControl::ui_key), None);
+}
+
+#[test]
+fn restoring_14k_2p_defaults_makes_the_lanes_explicit_again() {
+    let mut profile = profile();
+    clear_key(&mut profile.input, KeyMode::K14, LaneConfig::Key8, KeyBindingSlot::Controller2P);
+    crate::config::key_config::restore_key_mode_defaults(
+        &mut profile.input,
+        KeyMode::K14,
+        KeyBindingSlot::Controller,
+    )
+    .unwrap();
+    assert_eq!(
+        key_label(&profile, KeyMode::K14, LaneConfig::Key8, KeyBindingSlot::Controller2P),
+        "Button1"
+    );
+    let mut pipeline = Pipeline::new(profile.input, both_slots());
+    assert_eq!(pipeline.press(pad(RIGHT, "Button1", true)).ui_key(), Some(1));
+}
+
+#[test]
+fn unassigned_controller_keeps_common_7k_then_14k_rule() {
+    let mut profile = profile();
+    clear_key(&mut profile.input, KeyMode::K14, LaneConfig::Key8, KeyBindingSlot::Controller2P);
+    let mut pipeline =
+        Pipeline::new(profile.input, GamepadSlotMap::from_device_ids([Some(LEFT), Some(RIGHT)]));
+    let spare = pipeline.press(pad(SPARE, "Button1", true));
+    assert_eq!(spare.slot, None);
+    assert_eq!(spare.ui_key(), Some(1));
+    assert_eq!(spare.select_lane().map(|lane| lane.mode), Some(KeyMode::K7));
+}
+
+// ---------------------------------------------------------------------------
+// プレー中の 1P / 2P 割り当ての変更 (開始時のスナップショットで解決する)
+// ---------------------------------------------------------------------------
+
+/// 14K で 2P の KEY1 を 1P と別の番号にした profile。側ごとの解決の違いが見える。
+fn split_14k_profile() -> ProfileInputConfig {
+    let mut profile = profile();
+    set_key(
+        &mut profile.input,
+        KeyMode::K14,
+        LaneConfig::Key8,
+        KeyBindingSlot::Controller2P,
+        "Button21",
+    );
+    set_action(&mut profile.input, InputActionConfig::E1, KeyBindingSlot::Controller2P, "Button22");
+    profile.input
+}
+
+fn note_lane(pipeline: &Pipeline, device: DeviceId, button: &str) -> Option<Lane> {
+    pipeline
+        .play
+        .as_ref()
+        .unwrap()
+        .resolve_entry(device, &PhysicalControl::GamepadButton(button.into()))
+        .map(|entry| entry.lane)
+}
+
+#[test]
+fn swapping_controllers_mid_play_keeps_the_play_start_assignment() {
+    let mut pipeline = Pipeline::new(split_14k_profile(), both_slots());
+    pipeline.start_play(KeyMode::K14);
+    // プレー中に左右を入れ替えた。
+    pipeline.slots = GamepadSlotMap::from_device_ids([Some(RIGHT), Some(LEFT)]);
+
+    let right = pipeline.event(pad(RIGHT, "Button21", true));
+    assert_eq!(right.scene().slot, Some(PlayerSide::P2), "選曲側の意味も開始時の割り当て");
+    assert_eq!(right.play().and_then(|play| play.slot), Some(PlayerSide::P2));
+    assert_eq!(note_lane(&pipeline, RIGHT, "Button21"), Some(Lane::Key8));
+    assert_eq!(note_lane(&pipeline, LEFT, "Button1"), Some(Lane::Key1));
+    // E1 の個別設定も開始時の側で解決する。
+    assert!(pipeline.event(pad(RIGHT, "Button22", true)).play().unwrap().is_play_start());
+    assert!(!pipeline.event(pad(LEFT, "Button22", true)).play().unwrap().is_play_start());
+
+    // 選曲へ戻ると、次の操作とプレーには更新後の割り当てを使う。
+    pipeline.end_play();
+    assert_eq!(pipeline.press(pad(RIGHT, "Button1", true)).slot, Some(PlayerSide::P1));
+    assert_eq!(pipeline.press(pad(LEFT, "Button21", true)).ui_key(), Some(1));
+    pipeline.start_play(KeyMode::K14);
+    assert_eq!(note_lane(&pipeline, LEFT, "Button21"), Some(Lane::Key8));
+    assert_eq!(note_lane(&pipeline, RIGHT, "Button1"), Some(Lane::Key1));
+}
+
+#[test]
+fn press_and_release_across_a_mid_play_swap_resolve_to_the_same_lane() {
+    let mut pipeline = Pipeline::new(split_14k_profile(), both_slots());
+    pipeline.start_play(KeyMode::K14);
+    let press = pipeline.event(pad(RIGHT, "Button22", true));
+    assert!(press.play().unwrap().is_play_start());
+    assert!(pipeline.holds().0);
+    pipeline.slots = GamepadSlotMap::from_device_ids([Some(RIGHT), Some(LEFT)]);
+    // 入替え後も押したままの 2P の E1 は 2P の E1 のまま。
+    assert!(pipeline.holds().0);
+    let release = pipeline.event(pad(RIGHT, "Button22", false));
+    assert_eq!(release.source(), press.source());
+    assert!(release.play().unwrap().is_play_start());
+    assert!(!pipeline.holds().0);
+}
+
+#[test]
+fn one_side_disconnect_and_reconnect_mid_play() {
+    let mut pipeline = Pipeline::new(split_14k_profile(), both_slots());
+    pipeline.start_play(KeyMode::K14);
+    pipeline.event(pad(RIGHT, "Button22", true));
+    pipeline.event(pad(LEFT, "Button9", true));
+
+    // 2P が切断された。backend の押下スナップショットから消え、実行時の割り当ても空く。
+    pipeline.slots = GamepadSlotMap::from_device_ids([Some(LEFT), None]);
+    pipeline.runtime.replace_gamepad_pressed_controls(&[GamepadPressedButton {
+        name: "Button9".into(),
+        device_id: LEFT,
+    }]);
+    let (e1, _, actions) = pipeline.holds();
+    assert!(e1, "1P の E1 は残る");
+    assert_eq!(actions, vec![InputActionConfig::E1]);
+    pipeline.event(pad(LEFT, "Button9", false));
+    assert!(!pipeline.holds().0, "切断した 2P の押下は残らない");
+
+    // 切断中に別のコントローラーが 2P として認識されても、このプレーでは 2P にしない。
+    pipeline.slots = GamepadSlotMap::from_device_ids([Some(LEFT), Some(SPARE)]);
+    let spare = pipeline.event(pad(SPARE, "Button21", true));
+    assert_eq!(spare.scene().slot, None);
+    assert_eq!(spare.play().and_then(|play| play.slot), None);
+    assert_eq!(note_lane(&pipeline, SPARE, "Button21"), None);
+    pipeline.event(pad(SPARE, "Button21", false));
+
+    // 元の 2P が戻ると、開始時と同じく 2P で解決する。
+    pipeline.slots = both_slots();
+    assert_eq!(pipeline.event(pad(RIGHT, "Button21", true)).scene().slot, Some(PlayerSide::P2));
+    assert_eq!(note_lane(&pipeline, RIGHT, "Button21"), Some(Lane::Key8));
 }

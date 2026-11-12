@@ -504,6 +504,11 @@ impl PlayOptionInput {
         self.resolve_entry(device, control).is_some()
     }
 
+    /// プレイ開始時の 1P / 2P の割り当て。
+    pub(super) fn gamepad_slots(&self) -> crate::input::gamepad::GamepadSlotMap {
+        self.gamepad_slots
+    }
+
     fn slot(
         &self,
         device: DeviceId,

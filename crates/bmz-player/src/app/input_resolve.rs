@@ -18,7 +18,9 @@ use bmz_core::lane::{KeyMode, Lane};
 use bmz_gameplay::input::backend::{DeviceId, DeviceTimestamp, PhysicalControl};
 
 use super::input_runtime::ControlInputEvent;
-use crate::config::play_input::{control_from_config, gamepad_player_index, resolve_play_bindings};
+use crate::config::play_input::{
+    control_from_config, gamepad_player_index, resolve_play_bindings_with_markers,
+};
 use crate::config::profile_config::{
     BindingConfigEntry, InputActionConfig, LaneConfig, ProfileInputConfig, ScratchDirectionConfig,
     SelectInputModeConfig,
@@ -546,9 +548,11 @@ impl ResolvedControl {
     /// 設定画面の操作。
     ///
     /// - キーボード既定: Enter / Space / → で決定、← / Esc で戻る、↑ で増加、↓ で減少。
-    /// - 7K/14K: 各側の奇数鍵で決定、偶数鍵と E2 で戻る、Scratch Down で増加、Up で減少。
+    /// - 7K/14K: 各側の奇数鍵で決定、偶数鍵で戻る、Scratch Down で増加、Up で減少。
+    ///   選曲と同じく E1〜E4 を鍵盤より優先し、E アクションに割り当てた入力は鍵盤として扱わない。
     /// - 9K: KEY5 / KEY7 で決定、KEY3 で戻る、KEY6 で増加、KEY4 で減少。9K のレーンに
-    ///   割り当てた入力はレーンの意味を優先し、E2 として扱わない。
+    ///   割り当てた入力はレーンの意味を優先する。
+    /// - E2 に戻る・キャンセルの意味は持たせない。
     pub(super) fn settings_input(&self) -> SettingsInput {
         let mut input = SettingsInput::default();
         match self.standard {
@@ -566,13 +570,11 @@ impl ResolvedControl {
                 Some(Lane::Key4) => input.decrease = true,
                 Some(Lane::Key5 | Lane::Key7) => input.confirm = true,
                 Some(Lane::Key6) => input.increase = true,
-                Some(_) => {}
-                None => input.back |= self.is_e2(),
+                _ => {}
             }
             return input;
         }
-        input.back |= self.is_e2();
-        if let Some(lane) = self.lane {
+        if let Some(lane) = self.select_lane() {
             match lane.side_key() {
                 Some(key) if key % 2 == 1 => input.confirm = true,
                 Some(_) => input.back = true,
@@ -613,30 +615,66 @@ pub(super) struct LaneEntry {
 #[derive(Debug, Clone, Default)]
 pub(super) struct LaneTable {
     entries: Vec<LaneEntry>,
+    /// 明示的に未割り当てにしたレーン (`control = ""` の marker)。
+    cleared: Vec<(BindingDevice, Lane)>,
+}
+
+/// コントローラーの1レーン分の設定状態。
+enum LaneState<'a> {
+    /// そのレーンへ割り当てたボタン。
+    Explicit(Vec<&'a LaneEntry>),
+    /// 明示的に未割り当て。別の設定対象モードへフォールバックしない。
+    Unassigned,
+    /// 設定がない。別の設定対象モードの同じレーンを継承する。
+    Inherit,
 }
 
 impl LaneTable {
     pub(super) fn from_config(input: &ProfileInputConfig, mode: KeyMode) -> Self {
-        let entries = resolve_play_bindings(input, mode).unwrap_or_default();
+        let entries = resolve_play_bindings_with_markers(input, mode).unwrap_or_default();
         Self::from_entries(&entries)
     }
 
     pub(super) fn from_entries(entries: &[BindingConfigEntry]) -> Self {
-        let entries = entries
-            .iter()
-            .filter(|entry| !entry.control.is_empty())
-            .filter_map(|entry| {
-                let lane = entry.lane?;
-                Some(LaneEntry {
-                    device: BindingDevice::from_config(&entry.device)?,
-                    control: control_from_config(&entry.device, &entry.control),
-                    lane: crate::config::play::lane_from_config(lane),
-                    scratch: play_scratch_direction(lane, entry),
-                    scene_scratch: scene_scratch_direction(lane, entry),
-                })
-            })
-            .collect();
-        Self { entries }
+        let mut table = Self::default();
+        for entry in entries {
+            let Some(lane) = entry.lane else { continue };
+            let Some(device) = BindingDevice::from_config(&entry.device) else { continue };
+            let lane_value = crate::config::play::lane_from_config(lane);
+            if entry.control.is_empty() {
+                table.cleared.push((device, lane_value));
+                continue;
+            }
+            table.entries.push(LaneEntry {
+                device,
+                control: control_from_config(&entry.device, &entry.control),
+                lane: lane_value,
+                scratch: play_scratch_direction(lane, entry),
+                scene_scratch: scene_scratch_direction(lane, entry),
+            });
+        }
+        table
+    }
+
+    /// あるレーンの、コントローラーの側 `side` から見た設定状態。
+    ///
+    /// その側の番号付き設定 (`gamepad1` / `gamepad2`) を先に見て、無ければ共通設定
+    /// (`gamepad`) を見る。どちらにも割り当て・marker が無ければ継承。
+    fn lane_state(&self, lane: Lane, side: PlayerSide) -> LaneState<'_> {
+        for device in [BindingDevice::ControllerSlot(side), BindingDevice::AnyController] {
+            let entries: Vec<&LaneEntry> = self
+                .entries
+                .iter()
+                .filter(|entry| entry.device == device && entry.lane == lane)
+                .collect();
+            if !entries.is_empty() {
+                return LaneState::Explicit(entries);
+            }
+            if self.cleared.contains(&(device, lane)) {
+                return LaneState::Unassigned;
+            }
+        }
+        LaneState::Inherit
     }
 
     /// 入力元のスロット専用 binding を優先し、無ければ共通 binding を使う。
@@ -950,13 +988,103 @@ fn keyboard_aliases(device: BindingDevice, control: &str) -> Vec<String> {
     controls
 }
 
+/// 各側の SCR / KEY1〜7 と、7K / 14K 設定でのレーン (7K, 14K 1P 側, 14K 2P 側)。
+const SIDE_LANE_UNITS: [(Lane, Lane, Lane); 8] = [
+    (Lane::Scratch, Lane::Scratch, Lane::Scratch2),
+    (Lane::Key1, Lane::Key1, Lane::Key8),
+    (Lane::Key2, Lane::Key2, Lane::Key9),
+    (Lane::Key3, Lane::Key3, Lane::Key10),
+    (Lane::Key4, Lane::Key4, Lane::Key11),
+    (Lane::Key5, Lane::Key5, Lane::Key12),
+    (Lane::Key6, Lane::Key6, Lane::Key13),
+    (Lane::Key7, Lane::Key7, Lane::Key14),
+];
+
+/// 1P / 2P のコントローラーの実効レーン表の1件。
+#[derive(Debug, Clone)]
+struct EffectiveLane {
+    entry: LaneEntry,
+    resolved: ResolvedLane,
+    /// 小さいほど優先。0: その側の優先設定、1: フォールバック、2: 他側レーンへの明示設定。
+    tier: u8,
+}
+
+/// 1P / 2P のコントローラーの実効レーン表。
+///
+/// 各側の SCR / KEY1〜7 ごとに、先に優先する設定対象モードのレーン設定を調べる。
+/// 明示的な割り当てならそれだけを使い、明示的な未割り当てなら何も使わず、
+/// 設定が無いときだけもう一方の設定対象モードの同じレーンを使う。
+fn effective_controller_lanes(
+    seven: &LaneTable,
+    fourteen: &LaneTable,
+    side: PlayerSide,
+) -> Vec<EffectiveLane> {
+    let mut lanes = Vec::new();
+    let mut push = |entries: Vec<&LaneEntry>, mode: KeyMode, tier: u8| {
+        for entry in entries {
+            let entry_side = if mode == KeyMode::K7 { side } else { lane_side(entry.lane) };
+            lanes.push(EffectiveLane {
+                entry: entry.clone(),
+                resolved: resolved_lane(entry, mode, entry_side),
+                tier,
+            });
+        }
+    };
+    for (lane_7k, lane_14k_1p, lane_14k_2p) in SIDE_LANE_UNITS {
+        let ((first, first_mode, first_lane), (second, second_mode, second_lane)) = match side {
+            PlayerSide::P1 => {
+                ((seven, KeyMode::K7, lane_7k), (fourteen, KeyMode::K14, lane_14k_1p))
+            }
+            PlayerSide::P2 => {
+                ((fourteen, KeyMode::K14, lane_14k_2p), (seven, KeyMode::K7, lane_7k))
+            }
+        };
+        match first.lane_state(first_lane, side) {
+            LaneState::Explicit(entries) => push(entries, first_mode, 0),
+            LaneState::Unassigned => {}
+            LaneState::Inherit => {
+                if let LaneState::Explicit(entries) = second.lane_state(second_lane, side) {
+                    push(entries, second_mode, 1);
+                }
+            }
+        }
+    }
+    // 14K で他側のレーンへこの側の機器を明示したもの (1台で DP を遊ぶ構成など)。
+    let other_side_entries: Vec<&LaneEntry> = fourteen
+        .entries
+        .iter()
+        .filter(|entry| {
+            lane_side(entry.lane) != side
+                && matches!(
+                    entry.device,
+                    BindingDevice::AnyController | BindingDevice::ControllerSlot(_)
+                )
+                && entry.device.matches(&entry.control, Some(side))
+        })
+        .collect();
+    push(other_side_entries, KeyMode::K14, 2);
+    lanes
+}
+
+/// 実効レーン表から物理入力を探す。優先度、番号付き設定、表の順で選ぶ。
+fn find_effective_lane(lanes: &[EffectiveLane], control: &PhysicalControl) -> Option<ResolvedLane> {
+    lanes
+        .iter()
+        .filter(|lane| lane.entry.control == *control)
+        .min_by_key(|lane| (lane.tier, !lane.entry.device.is_slot_specific()))
+        .map(|lane| lane.resolved)
+}
+
 /// 選曲・決定・リザルト・設定画面の入力 resolver。
 ///
-/// 7K/14K 選曲入力では次の優先順位でレーンを解決する。
+/// 7K/14K 選曲入力では次の規則でレーンを解決する。譜面カーソルの 7K / 14K には依存しない。
 ///
 /// - キーボード: 7K → 14K の2P側 (7K のキーと同じキーは除外)。
-/// - 1P のコントローラー: 7K → 14K の `gamepad1` / 共通設定。
-/// - 2P のコントローラー: 14K の `gamepad2` / 共通設定 → 7K。
+/// - 1P のコントローラー: 各レーンを 7K の設定で決め、7K にそのレーンの設定が無いときだけ
+///   14K の 1P 側の同じレーンを使う。
+/// - 2P のコントローラー: 各レーンを 14K の 2P 側の設定で決め、14K にそのレーンの設定が
+///   無いときだけ 7K の同じレーンを使う。
+/// - 明示的に未割り当てにしたレーン (`control = ""`) はフォールバックしない。
 /// - 未割り当てのコントローラー: 7K → 14K の共通設定。
 ///
 /// いずれも同じ入力元から届いた同じイベントだけで解決し、他側の番号付き binding は
@@ -965,6 +1093,8 @@ pub(super) struct SceneInputResolver {
     nine_key: bool,
     primary: LaneTable,
     double: LaneTable,
+    /// 7K/14K 選曲入力での 1P / 2P コントローラーの実効レーン表。
+    controller_lanes: [Vec<EffectiveLane>; 2],
     actions: ActionTable,
     key_hint: String,
     option_hint: String,
@@ -984,7 +1114,13 @@ impl SceneInputResolver {
         };
         let (key_hint, option_hint) =
             if nine_key { hints_9k(&primary, &actions) } else { hints_7k(&primary, &actions) };
-        Self { nine_key, primary, double, actions, key_hint, option_hint }
+        let controller_lanes = if nine_key {
+            Default::default()
+        } else {
+            [PlayerSide::P1, PlayerSide::P2]
+                .map(|side| effective_controller_lanes(&primary, &double, side))
+        };
+        Self { nine_key, primary, double, controller_lanes, actions, key_hint, option_hint }
     }
 
     pub(super) fn key_hint(&self) -> &str {
@@ -1042,8 +1178,8 @@ impl SceneInputResolver {
                 .map(|entry| resolved_lane(entry, KeyMode::K14, lane_side(entry.lane))),
         };
         match (control, slot) {
-            (PhysicalControl::GamepadButton(_), Some(PlayerSide::P2)) => {
-                from_14k().or_else(from_7k)
+            (PhysicalControl::GamepadButton(_), Some(side)) => {
+                find_effective_lane(&self.controller_lanes[side.slot_index()], control)
             }
             _ => from_7k().or_else(from_14k),
         }
@@ -1291,6 +1427,18 @@ pub(super) fn resolve_input(
     }
 }
 
+/// 入力の解決に使う 1P / 2P の割り当て。
+///
+/// 進行中のプレー (`play_session`) があれば、その開始時の割り当てを使う。プレー中の
+/// 再接続・入替えで実行時の割り当てが変わっても、ノーツ入力・E1〜E4・補助操作・選曲側の
+/// 意味をすべて同じ割り当てで解決する。プレーが無ければ実行時の割り当てを使う。
+pub(super) fn session_input_slots(
+    play_session: Option<&super::PlayOptionInput>,
+    runtime: GamepadSlotMap,
+) -> GamepadSlotMap {
+    play_session.map_or(runtime, super::PlayOptionInput::gamepad_slots)
+}
+
 /// アナログ tick の解決結果。合算前に各 tick のデバイス・方向を解決する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ResolvedAxisTick {
@@ -1333,12 +1481,32 @@ pub(super) fn resolve_axis_tick(
 }
 
 impl super::WinitApp {
+    /// 進行中のプレーの入力設定。
+    ///
+    /// 読み込み中・プレー中・終了演出・Practice の間は `Some`。選曲・決定・リザルトでは `None`。
+    fn play_session_input(&self) -> Option<&super::PlayOptionInput> {
+        let in_progress = self.play.pending_play_start.is_some()
+            || self.play.active_play.is_some()
+            || self.play.practice_session.is_some();
+        in_progress.then_some(self.play.play_option_input.as_ref()).flatten()
+    }
+
+    /// 進行中のプレーの開始時の 1P / 2P の割り当て。
+    pub(super) fn play_session_gamepad_slots(&self) -> Option<GamepadSlotMap> {
+        self.play_session_input().map(super::PlayOptionInput::gamepad_slots)
+    }
+
+    /// 入力の解決に使う 1P / 2P の割り当て。[`session_input_slots`] を参照。
+    pub(super) fn input_slots(&self) -> GamepadSlotMap {
+        session_input_slots(self.play_session_input(), self.input.gamepad_slots)
+    }
+
     /// 現在の画面・プレイセッション・機器割り当てで物理入力を解決する。
     pub(super) fn resolve_control_event(&self, event: ControlInputEvent) -> ResolvedInput {
         resolve_input(
             &self.select.select_keys,
             self.play.play_option_input.as_ref(),
-            self.input.gamepad_slots,
+            self.input_slots(),
             event,
         )
     }
@@ -1349,7 +1517,7 @@ impl super::WinitApp {
         device: DeviceId,
         control: &PhysicalControl,
     ) -> ResolvedControl {
-        self.select.select_keys.resolve_control(device, control, self.input.gamepad_slots)
+        self.select.select_keys.resolve_control(device, control, self.input_slots())
     }
 
     /// 押下中のすべての入力元の解決結果。
@@ -1369,7 +1537,7 @@ impl super::WinitApp {
         resolve_axis_tick(
             &self.select.select_keys,
             self.play.play_option_input.as_ref(),
-            self.input.gamepad_slots,
+            self.input_slots(),
             device,
             axis,
             ticks,

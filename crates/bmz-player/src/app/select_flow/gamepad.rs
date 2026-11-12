@@ -8,8 +8,10 @@ impl WinitApp {
             resolve_gamepad_runtime_slots(&self.boot.app_config.input, self.gamepad.as_ref()),
         );
         self.update_gamepad_slot_assignment(slots);
+        // アナログ皿の側ごとの設定も、進行中のプレーは開始時の割り当てで扱う。
+        let analog_slots = self.input_slots();
         let Some(gamepad) = &mut self.gamepad else { return };
-        gamepad.set_analog_config(configs, slots);
+        gamepad.set_analog_config(configs, analog_slots);
         let backend_name = gamepad.name();
         let output = gamepad.poll();
         if self.jobs.profile_change.is_some() {
@@ -83,9 +85,12 @@ impl WinitApp {
         // 旧割り当てで始めた長押しは、新しい割り当てへ Release だけを送らないよう破棄する。
         self.clear_select_hold();
         self.reset_select_analog_scroll();
-        self.reset_play_analog_scroll();
         self.sync_select_holds_from_pressed_controls();
         self.reconcile_select_option_session();
+        // 進行中のプレーは開始時の割り当てのまま続ける。プレー側の状態は変えない。
+        if self.play_session_gamepad_slots().is_none() {
+            self.reset_play_analog_scroll();
+        }
     }
 
     pub(super) fn route_gamepad_button_event(
