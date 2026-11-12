@@ -39,6 +39,7 @@ enum DetailInput {
 enum DetailValueEdit {
     Step(i32),
     Choice(usize),
+    Number(i64),
 }
 
 impl DetailOptionsState {
@@ -379,6 +380,14 @@ impl WinitApp {
         self.apply_detail_setting(item, DetailValueEdit::Step(direction))
     }
 
+    /// LR2 slider 26 (`pitch_amount`): sets FREQ to the handle's semitone through the
+    /// detail panel's FREQ row, so saving and preload invalidation match it.
+    pub(super) fn set_freq_from_lr2_pitch_slider(&mut self, progress: f32) -> bool {
+        let item = DetailOptionDef::for_setting(SettingsEntryId::Freq).expect("FREQ catalog entry");
+        let semitones = bmz_render::skin::lr2_pitch_slider_semitones(progress);
+        self.apply_detail_setting(item, DetailValueEdit::Number(i64::from(semitones)))
+    }
+
     fn apply_detail_setting(&mut self, item: DetailOptionDef, edit: DetailValueEdit) -> bool {
         let mode = Some(self.detail_options_mode());
         if item.effects == DetailEffects::GaugeMode {
@@ -391,6 +400,9 @@ impl WinitApp {
             }
             DetailValueEdit::Choice(index) => {
                 item.select_choice(&mut self.boot.profile_config, mode, index)
+            }
+            DetailValueEdit::Number(value) => {
+                item.set_number(&mut self.boot.profile_config, mode, value)
             }
         };
         if !changed {

@@ -2,6 +2,7 @@
 use bmz_core::lane::KeyMode;
 use bmz_render::scene::detail_options::{DetailOptionChoice, DetailOptionRow, DetailValueKind};
 
+use crate::config::play::{FREQ_SEMITONES_MAX, FREQ_SEMITONES_MIN};
 use crate::config::profile_config::*;
 use crate::config::settings_registry::{
     SettingsEntryId, adjust_settings_value, format_settings_value,
@@ -76,10 +77,11 @@ const fn number(
     key: &'static str,
     category: i64,
     setting: SettingsEntryId,
+    mode_scoped: bool,
     min: i64,
     max: i64,
 ) -> DetailOptionDef {
-    let mut def = item(id, key, category, setting, true, 0);
+    let mut def = item(id, key, category, setting, mode_scoped, 0);
     def.kind = DetailValueKind::Number { min, max, step: 1 };
     def.choices = 0;
     def
@@ -95,13 +97,13 @@ const LANE_COVER_CHOICES: [&str; 8] =
 /// The separate SUDDEN+ / HIDDEN+ / LIFT items (101..103) are retired in favour of 104.
 pub const CATALOG: &[DetailOptionDef] = &[
     item(701, "judge-auto", 7, SettingsEntryId::VisualOffsetAutoAdjust, false, 0),
-    number(702, "visual-offset", 7, SettingsEntryId::VisualOffsetMs, -500, 500),
+    number(702, "visual-offset", 7, SettingsEntryId::VisualOffsetMs, true, -500, 500),
     item(703, "judge-algorithm", 7, SettingsEntryId::JudgeAlgorithm, false, 3),
     item(LANE_COVER_ID, "lane-cover", 1, SettingsEntryId::SuddenEnabled, true, 8),
     item(301, "hs-auto", 1, SettingsEntryId::HispeedAutoAdjust, true, 0),
     item(302, "hs-config", 1, SettingsEntryId::HispeedMode, true, 6),
     item(303, "constant", 1, SettingsEntryId::Constant, true, 0),
-    number(304, "green-number", 1, SettingsEntryId::TargetGreenNumber, 1, 6000),
+    number(304, "green-number", 1, SettingsEntryId::TargetGreenNumber, true, 1, 6000),
     item(201, "gas-bottom", 2, SettingsEntryId::BottomShiftableGauge, false, 3),
     item(202, "gas-mode", 2, SettingsEntryId::GaugeAutoShift, false, 5),
     item(401, "ln-mode", 4, SettingsEntryId::LnModePolicy, false, 6),
@@ -113,6 +115,15 @@ pub const CATALOG: &[DetailOptionDef] = &[
     item(505, "judge-area", 5, SettingsEntryId::AssistJudgeArea, false, 0),
     item(506, "mark-note", 5, SettingsEntryId::AssistMarkNote, false, 0),
     item(507, "bpm-guide", 5, SettingsEntryId::AssistBpmGuide, false, 0),
+    number(
+        508,
+        "freq",
+        5,
+        SettingsEntryId::Freq,
+        false,
+        FREQ_SEMITONES_MIN as i64,
+        FREQ_SEMITONES_MAX as i64,
+    ),
 ];
 
 /// Pure stepping contract also used by future numeric rows. Unknown enum values
@@ -216,6 +227,7 @@ impl DetailOptionDef {
             AssistJudgeArea => i64::from(p.play.assist.judge_area),
             AssistMarkNote => i64::from(p.play.assist.mark_note),
             AssistBpmGuide => i64::from(p.play.assist.bpm_guide),
+            Freq => i64::from(p.play.freq_semitones),
             _ => unreachable!("catalog entry needs a value reader"),
         }
     }
@@ -230,6 +242,21 @@ impl DetailOptionDef {
         let current = self.value(p);
         let next = stepped_value(self.kind, current, self.choices, direction);
         self.set_value(p, next, direction)
+    }
+
+    /// Sets a numeric row to `value`, clamped to its range, through the same registry
+    /// mutation as stepping. Choice rows are not changed.
+    pub fn set_number(self, p: &mut ProfileConfig, mode: Option<KeyMode>, value: i64) -> bool {
+        let DetailValueKind::Number { min, max, .. } = self.kind else {
+            return false;
+        };
+        if self.mode_scoped && mode.is_none() {
+            return false;
+        }
+        if self.mode_scoped {
+            p.activate_play_mode(mode.expect("checked mode"));
+        }
+        self.set_value(p, value.clamp(min, max), 1)
     }
 
     pub fn select_choice(self, p: &mut ProfileConfig, mode: Option<KeyMode>, index: usize) -> bool {
@@ -745,6 +772,68 @@ mod tests {
             let row = def(702).row(&p, context, &Localizer::new(AppLocale::En));
             assert_eq!(row.value_label, label);
         }
+    }
+
+    #[test]
+    fn freq_is_a_profile_common_assist_number_with_semitones_and_rate() {
+        let item = DetailOptionDef::for_setting(SettingsEntryId::Freq).unwrap();
+        assert_eq!((item.id, item.key, item.category), (508, "freq", 5));
+        assert_eq!(CATALOG.last().unwrap().id, item.id);
+        assert!(!item.mode_scoped);
+        assert_eq!(item.effects, DetailEffects::Assist);
+        assert_eq!(item.kind, DetailValueKind::Number { min: -12, max: 12, step: 1 });
+        let mut p = profile();
+        let k7 = p.play_mode_config(KeyMode::K7);
+        let text = Localizer::new(AppLocale::En);
+        let context = DetailContext {
+            mode: None,
+            gas: GaugeAutoShiftConfig::Off,
+            practice: false,
+            course: false,
+        };
+        for (direction, semitones, label) in
+            [(1, 1, "+1 (106%)"), (-1, 0, "0 (100%)"), (-1, -1, "-1 (94%)")]
+        {
+            assert!(item.adjust(&mut p, None, direction));
+            assert_eq!(p.play.freq_semitones, semitones);
+            let row = item.row(&p, context, &text);
+            assert!(row.editable && row.effective);
+            assert_eq!(
+                (row.scope, row.value, row.value_index, row.value_label.as_str()),
+                (0, i64::from(semitones), -1, label)
+            );
+        }
+        for (bound, direction, label) in [(-12, -1, "-12 (50%)"), (12, 1, "+12 (200%)")] {
+            p.play.freq_semitones = bound;
+            assert!(!item.adjust(&mut p, None, direction));
+            assert_eq!(item.row(&p, context, &text).value_label, label);
+        }
+        assert_eq!(p.play_mode_config(KeyMode::K7), k7);
+        let loaded: ProfileConfig = toml::from_str(&toml::to_string(&p).unwrap()).unwrap();
+        assert_eq!(item.value(&loaded), 12);
+    }
+
+    #[test]
+    fn freq_set_from_lr2_pitch_slider_moves_by_semitone_and_clamps() {
+        let item = DetailOptionDef::for_setting(SettingsEntryId::Freq).unwrap();
+        let mut p = profile();
+        // Each slider cell is one semitone; writes use the same registry mutation as stepping.
+        for (progress, semitones) in
+            [(13.0 / 24.0, 1), (12.0 / 24.0, 0), (11.0 / 24.0, -1), (0.0, -12), (1.0, 12)]
+        {
+            let target = bmz_render::skin::lr2_pitch_slider_semitones(progress);
+            assert!(item.set_number(&mut p, None, i64::from(target)), "{progress}");
+            assert_eq!(p.play.freq_semitones, semitones);
+        }
+        // Values past either end stop at -12 / +12.
+        assert!(!item.set_number(&mut p, None, 13));
+        assert_eq!(p.play.freq_semitones, 12);
+        assert!(item.set_number(&mut p, None, -40));
+        assert_eq!(p.play.freq_semitones, -12);
+        assert!(!item.set_number(&mut p, None, -12));
+        // Choice rows are not set as numbers.
+        let gauge = DetailOptionDef::for_setting(SettingsEntryId::BottomShiftableGauge).unwrap();
+        assert!(!gauge.set_number(&mut p, None, 1));
     }
 
     #[test]
