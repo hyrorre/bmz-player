@@ -116,6 +116,9 @@ impl Fixture {
         .unwrap()
     }
     fn save_replay(&mut self) {
+        self.save_replay_at_freq(0);
+    }
+    fn save_replay_at_freq(&mut self, freq: i8) {
         use crate::storage::{
             migration::{SCORE_MIGRATIONS, run_migrations},
             replay::ReplayFile,
@@ -178,7 +181,8 @@ impl Fixture {
             arrange.seed_2p,
             arrange.bms_random_choices.clone(),
             arrange.bms_switch_choices.clone(),
-        );
+        )
+        .with_freq_semitones(freq);
         let replay_root = self.root.join("profiles/default/replay");
         fs::create_dir_all(&replay_root).unwrap();
         crate::storage::replay::save_replay(&replay_root.join("fixture.json"), &file).unwrap();
@@ -384,6 +388,77 @@ fn presentation_timing_keeps_chart_frozen_until_normal_countdown() {
     let expected =
         bmz_gameplay::score::scored_note_count(&simulation.prepared.play.session.chart) * 2;
     assert_eq!(simulation.prepared.play.session.score.ex_score(), expected);
+}
+
+#[test]
+fn saved_freq_replay_scales_chart_duration_audio_speed_and_pitch() {
+    let mut fixture = Fixture::new();
+    fs::write(
+        &fixture.options.chart,
+        "#TITLE FREQ fixture\n#BPM 120\n#WAV01 click.wav\n#00111:01\n",
+    )
+    .unwrap();
+    // A 100ms, 1kHz tone makes rate and pitch observable in the actual mixed PCM.
+    let samples: Vec<i16> = (0..4800)
+        .map(|frame| ((f64::from(frame) * std::f64::consts::TAU / 48.0).sin() * 16000.0) as i16)
+        .collect();
+    let mut wav = Vec::new();
+    wav.extend(b"RIFF");
+    wav.extend((36 + samples.len() as u32 * 2).to_le_bytes());
+    wav.extend(b"WAVEfmt ");
+    wav.extend(16_u32.to_le_bytes());
+    wav.extend(1_u16.to_le_bytes());
+    wav.extend(1_u16.to_le_bytes());
+    wav.extend(48000_u32.to_le_bytes());
+    wav.extend(96000_u32.to_le_bytes());
+    wav.extend(2_u16.to_le_bytes());
+    wav.extend(16_u16.to_le_bytes());
+    wav.extend(b"data");
+    wav.extend((samples.len() as u32 * 2).to_le_bytes());
+    for sample in samples {
+        wav.extend(sample.to_le_bytes());
+    }
+    fs::write(fixture.root.join("click.wav"), wav).unwrap();
+    let mut durations = Vec::new();
+    for (freq, rate, period, tone_frames) in [(0, 100, 48, 4800), (12, 200, 24, 2400)] {
+        // Prepare both from a real saved slot; profile defaults stay at FREQ 0.
+        fixture.options.replay_slot = None;
+        fixture.options.seed = Some(42);
+        fixture.save_replay_at_freq(freq);
+        let mut simulation = fixture.simulation();
+        assert_eq!(simulation.prepared.play.applied_arrange.freq_semitones, freq);
+        assert_eq!(simulation.prepared.play.session.audio_clock.playback_rate_percent(), rate);
+        assert_eq!(simulation.prepared.play.session.replay_judge_rate_percent, rate);
+        let mut pcm = Vec::new();
+        simulation
+            .advance_to(48_000 * 12, |block| {
+                pcm.extend_from_slice(block);
+                Ok(())
+            })
+            .unwrap();
+        let start = 19200 + 96000 * 100 / usize::from(rate);
+        let tone: Vec<_> = pcm[start * 2..(start + tone_frames + 48) * 2]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|frame| frame[0])
+            .collect();
+        let crossings: Vec<_> = tone
+            .windows(2)
+            .enumerate()
+            .filter_map(|(i, pair)| (pair[0] <= 0.0 && pair[1] > 0.0).then_some(i))
+            .collect();
+        assert!(crossings.len() >= 95, "tone must be present at its rate-scaled start");
+        assert!(crossings.windows(2).all(|pair| (pair[1] - pair[0]).abs_diff(period) <= 1));
+        assert!(tone[tone_frames..].iter().all(|value| value.abs() < 0.0001));
+        assert_eq!(simulation.prepared.play.session.score.ex_score(), 2);
+        let at_one_second = simulation.snapshot(1_400_000, &Default::default());
+        // The snapshot must use the same chart clock as judgement/audio.
+        let expected = TimeUs(1_000_000 * i64::from(rate) / 100);
+        assert_eq!(at_one_second.time, expected);
+        durations.push(simulation.exit_us.unwrap() - 400_000 - 400_000);
+    }
+    assert!((durations[0] - durations[1] * 2).abs() <= 1000);
 }
 
 #[test]

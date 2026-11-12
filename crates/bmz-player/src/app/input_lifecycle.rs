@@ -338,6 +338,10 @@ impl WinitApp {
             return;
         }
 
+        let startup =
+            (!self.first_frame_startup_completed).then_some(self.smoke.startup_started_at);
+        let window_phase = StartupPhase::optional(startup, "window_setup");
+        let phase = StartupPhase::optional(startup, "window_attributes_and_monitors");
         let video = &self.boot.app_config.video;
         if self.boot.app_config.cli_window_baseline.as_ref().is_some_and(|s| s.0.monitor.is_some())
             && !video.monitor_name.is_empty()
@@ -347,6 +351,7 @@ impl WinitApp {
         {
             self.startup_error =
                 Some(format!("monitor not found: {}; use monitors list", video.monitor_name));
+            let _ = phase.result(Err::<(), _>(self.startup_error.as_deref().unwrap()));
             event_loop.exit();
             return;
         }
@@ -365,8 +370,12 @@ impl WinitApp {
         {
             attributes = attributes.with_position(monitor.position());
         }
-        match event_loop.create_window(attributes) {
+        phase.complete();
+        let phase = StartupPhase::optional(startup, "winit_create_window");
+        match phase.result(event_loop.create_window(attributes)) {
             Ok(window) => {
+                let phase =
+                    StartupPhase::optional(startup, "window_native_and_renderer_configuration");
                 crate::latency_environment::log(&window);
                 let window = Arc::new(window);
                 #[cfg(windows)]
@@ -389,9 +398,11 @@ impl WinitApp {
                 }
                 let backend = config_renderer_backend(self.boot.app_config.video.renderer.clone());
                 self.renderer.set_backend(backend);
+                phase.complete();
                 let mut fallback_attempted = false;
                 loop {
-                    match self.renderer.attach_surface(Arc::clone(&window), size) {
+                    let phase = StartupPhase::optional(startup, "renderer_attach_surface");
+                    match phase.result(self.renderer.attach_surface(Arc::clone(&window), size)) {
                         Ok(()) => {
                             if fallback_attempted {
                                 tracing::info!(
@@ -477,6 +488,7 @@ impl WinitApp {
                     height = size.height,
                     "window and renderer surface ready"
                 );
+                let phase = StartupPhase::optional(startup, "window_input_and_egui");
                 // Decide / Result の decode 結果は、Select の開始演出が終わるまで
                 // skin_decode_rx に保持する。遷移側が先に必要とした場合は
                 // ensure_skin_ready() が upload worker を即時起動する。
@@ -511,18 +523,22 @@ impl WinitApp {
                 ));
                 self.window = Some(window);
                 self.refresh_skin_screen_size();
+                phase.complete();
                 // Decode overlaps native/GPU/font initialization. Complete the
                 // selected skin before presenting anything, including screen-size
                 // dependency retries handled by the ordinary upload pipeline.
                 if !self.first_frame_startup_completed && !self.viewer_mode {
+                    let phase = StartupPhase::optional(startup, "initial_select_skin_ready");
                     let started = Instant::now();
                     self.ensure_skin_ready(SkinKind::Select);
+                    phase.complete();
                     tracing::info!(
                         wait_ms = started.elapsed().as_millis(),
                         select_installed = self.renderer.select_skin_document().is_some(),
                         "startup select skin ready before first frame"
                     );
                 }
+                window_phase.complete();
             }
             Err(error) => {
                 tracing::error!(%error, "failed to create window");

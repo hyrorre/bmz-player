@@ -18,6 +18,7 @@ pub(super) fn load_initial_skin_textures(
     load_frontend_skins: bool,
     lua_runtime_mode: bmz_skin::LuaSkinRuntimeMode,
     experimental_detail_options: bool,
+    startup_started_at: Instant,
 ) -> (Option<SkinManifest>, HashMap<SkinKind, Vec<ActiveSkinVideoSource>>, bool, bool, bool) {
     tracing::info!("startup initial skin texture load begin");
     // Frontend payload decoding overlaps window/surface initialization. The
@@ -132,16 +133,18 @@ pub(super) fn load_initial_skin_textures(
 
     let default_skin_started_at = Instant::now();
     tracing::info!("startup default skin manifest load begin");
-    let default_manifest = match load_default_skin_into_renderer_from_paths(renderer, app_paths) {
-        Ok(manifest) => Some(manifest),
-        Err(error) => {
-            tracing::warn!(
-                error = %format_error_chain(&error),
-                "failed to load default skin; using fallback drawing"
-            );
-            None
-        }
-    };
+    let phase = StartupPhase::begin(startup_started_at, "default_skin_assets_load");
+    let default_manifest =
+        match phase.result(load_default_skin_into_renderer_from_paths(renderer, app_paths)) {
+            Ok(manifest) => Some(manifest),
+            Err(error) => {
+                tracing::warn!(
+                    error = %format_error_chain(&error),
+                    "failed to load default skin; using fallback drawing"
+                );
+                None
+            }
+        };
     tracing::info!(
         load_ms = default_skin_started_at.elapsed().as_millis(),
         loaded = default_manifest.is_some(),

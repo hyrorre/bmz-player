@@ -29,7 +29,9 @@ impl PrewarmedSceneSkin {
                     .load_dependencies
                     .file_store_span
                     .is_none_or(|span| span.unchanged_at(file_store_revision)),
-                Err(_) => true,
+                // A failed decode has no dependency span. Retry at entry so
+                // callbacks that completed shared files can repair the load.
+                Err(_) => false,
             })
     }
 }
@@ -250,5 +252,15 @@ mod tests {
         let raced = bmz_skin::LuaFileStoreSpan { seen: 5, committed_from: 6, left: 7 };
         prewarm.upload = Some(upload(3, Some(raced)));
         assert!(!prewarm.ready_for_entry(3, 7), "another VM wrote while it loaded");
+    }
+
+    #[test]
+    fn failed_prewarm_always_retries_at_entry_even_after_a_callback_writes() {
+        let mut prewarm = PrewarmedSceneSkin::new(3, None);
+        let mut failed = upload(3, None);
+        failed.uploaded = Err(anyhow::anyhow!("shared history was temporarily empty"));
+        prewarm.upload = Some(failed);
+        assert!(!prewarm.ready_for_entry(3, 5));
+        assert!(!prewarm.ready_for_entry(3, 6));
     }
 }

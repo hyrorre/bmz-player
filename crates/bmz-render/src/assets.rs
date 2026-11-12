@@ -41,7 +41,15 @@ impl RgbaImageAsset {
 }
 
 pub fn load_png_rgba(path: &Path) -> Result<RgbaImageAsset> {
+    #[cfg(test)]
+    PNG_LOAD_ATTEMPTS.with(|count| count.set(count.get() + 1));
     load_image_rgba(path)
+}
+
+// Thread-local so parallel image tests cannot affect the default-state regression test.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static PNG_LOAD_ATTEMPTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 pub fn load_static_rgba_image(path: &Path) -> Result<RgbaImageAsset> {

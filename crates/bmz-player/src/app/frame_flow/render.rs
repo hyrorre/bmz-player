@@ -105,6 +105,9 @@ impl WinitApp {
                 startup_to_first_present_ms = self.smoke.startup_started_at.elapsed().as_millis(),
                 "first surface frame presented"
             );
+            if let Some(phase) = self.smoke.first_present_phase.take() {
+                phase.complete();
+            }
         }
         self.arm_select_scene_timers_after_render(select_view, surface_status);
         self.log_pending_skin_render_probe(

@@ -255,6 +255,42 @@ fn build_game_session_scales_judge_windows_to_keep_practice_wall_time_fixed() {
 }
 
 #[test]
+fn build_freq_replay_keeps_recorded_windows_after_viewing_speed_changes() {
+    let profile = ProfileConfig::new_default("default", "Default", 1);
+    for rate in [25, 100, 200, 300] {
+        let mut source = chart();
+        source.metadata.key_mode = KeyMode::K7;
+        source.lane_notes[Lane::Key1.index()].push(note(1, Lane::Key1, 1_000_000));
+        source.total_notes = 1;
+        let mut session = build_game_session(
+            Arc::new(source),
+            &profile,
+            PlaySessionOptions {
+                playback_rate_percent: 200,
+                freq_semitones: 12,
+                replay_player: Some(ReplayPlayer {
+                    events: vec![bmz_core::replay::ReplayEvent {
+                        lane: Lane::Key1,
+                        kind: InputKind::Press,
+                        time: TimeUs(1_030_000),
+                        device_kind: Default::default(),
+                        scratch_direction: None,
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        assert_eq!(session.replay_judge_rate_percent, 200);
+        session.audio_clock.set_playback_rate_percent(rate);
+        bmz_gameplay::session::sync_judge_windows(&mut session, TimeUs(1_030_000));
+        let events = bmz_gameplay::session::process_replay_inputs(&mut session, TimeUs(1_030_000));
+        assert_eq!(events[0].judge, bmz_core::judge::Judge::PGreat);
+        assert_eq!(session.score.ex_score(), 2);
+    }
+}
+
+#[test]
 fn practice_gauge_inherits_profile_auto_shift_mode() {
     use crate::config::profile_config::{
         BottomShiftableGaugeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
@@ -859,6 +895,7 @@ fn normal_session_battle_target_preloads_an_expanded_opponent_chart() {
         session_mode: SessionMode::Normal,
         battle_opponent: Some(BattleOpponentOptions {
             replay_player: Some(ReplayPlayer::default()),
+            replay_judge_rate_percent: 100,
             gauge: None,
             arrange: ArrangeOption::Normal,
             arrange_2p: ArrangeOption::Normal,
@@ -969,6 +1006,7 @@ fn g_battle_target_replay_judges_its_chart_but_displays_primary_arrangement() {
         arrange: ArrangeOption::Mirror,
         battle_opponent: Some(BattleOpponentOptions {
             replay_player: Some(ReplayPlayer::default()),
+            replay_judge_rate_percent: 100,
             gauge: None,
             arrange: ArrangeOption::Normal,
             arrange_2p: ArrangeOption::Normal,

@@ -196,6 +196,8 @@ use bmz_render::skin::{
 };
 
 mod app_support;
+mod startup_diagnostics;
+use startup_diagnostics::StartupPhase;
 mod background_jobs;
 mod bga_runtime;
 mod chart_assets;
@@ -481,94 +483,122 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
     profile_id: Option<&str>,
 ) -> Result<()> {
     let startup_started_at = Instant::now();
-    let (mut boot, viewer_cleanup) = if options.viewer_play {
-        let path = options
-            .boot_play_path
-            .as_deref()
-            .map(Path::new)
-            .context("viewer play requires a chart path")?;
-        let bms_random_seed = options
-            .play_overrides
-            .seed
-            .unwrap_or_else(crate::random_option_seed::fresh_bms_random_seed);
-        let viewer = bootstrap::bootstrap_viewer_with_paths(
-            app_paths,
-            path,
-            options.start_measure.unwrap_or(0),
-            bms_random_seed,
-            profile_id,
-        )?;
-        options.boot_play_path = Some(viewer.chart_path.to_string_lossy().into_owned());
-        options.boot_start_time_us = Some(viewer.start_time.0);
-        options.boot_bms_random_seed = Some(bms_random_seed);
-        tracing::info!(
-            chart_id = viewer.chart_id,
-            path = %viewer.chart_path.display(),
-            start_time_us = viewer.start_time.0,
-            "prepared transient viewer chart"
-        );
-        (viewer.app, Some(viewer.cleanup))
-    } else {
-        (bootstrap::bootstrap_with_paths_profile(app_paths, profile_id)?, None)
-    };
-    prepare_boot_chart_options(&mut boot, &mut options)?;
-    boot.app_config.set_cli_window(options.window_overrides.clone())?;
-    if options.boot_play_path.as_ref().is_some_and(|p| {
-        !Path::new(p).is_file()
-            && !crate::chart_source::ChartLocator::parse(Path::new(p))
-                .is_ok_and(|locator| locator.is_archive())
-    }) {
-        options.play_overrides = Default::default();
-    }
-    boot.profile_config.set_cli_play(options.play_overrides.clone());
+    let phase = StartupPhase::begin(startup_started_at, "startup_environment");
+    startup_diagnostics::log_environment(&app_paths);
+    phase.complete();
+    let phase = StartupPhase::begin(startup_started_at, "bootstrap_and_boot_options");
+    let (boot, viewer_cleanup) = phase.result_with_error(
+        (|| -> Result<_> {
+            let (mut boot, viewer_cleanup) = if options.viewer_play {
+                let path = options
+                    .boot_play_path
+                    .as_deref()
+                    .map(Path::new)
+                    .context("viewer play requires a chart path")?;
+                let bms_random_seed = options
+                    .play_overrides
+                    .seed
+                    .unwrap_or_else(crate::random_option_seed::fresh_bms_random_seed);
+                let viewer = bootstrap::bootstrap_viewer_with_paths(
+                    app_paths,
+                    path,
+                    options.start_measure.unwrap_or(0),
+                    bms_random_seed,
+                    profile_id,
+                )?;
+                options.boot_play_path = Some(viewer.chart_path.to_string_lossy().into_owned());
+                options.boot_start_time_us = Some(viewer.start_time.0);
+                options.boot_bms_random_seed = Some(bms_random_seed);
+                tracing::info!(
+                    chart_id = viewer.chart_id,
+                    path = %viewer.chart_path.display(),
+                    start_time_us = viewer.start_time.0,
+                    "prepared transient viewer chart"
+                );
+                (viewer.app, Some(viewer.cleanup))
+            } else {
+                (bootstrap::bootstrap_with_paths_profile(app_paths, profile_id)?, None)
+            };
+            prepare_boot_chart_options(&mut boot, &mut options)?;
+            boot.app_config.set_cli_window(options.window_overrides.clone())?;
+            if options.boot_play_path.as_ref().is_some_and(|p| {
+                !Path::new(p).is_file()
+                    && !crate::chart_source::ChartLocator::parse(Path::new(p))
+                        .is_ok_and(|locator| locator.is_archive())
+            }) {
+                options.play_overrides = Default::default();
+            }
+            boot.profile_config.set_cli_play(options.play_overrides.clone());
+            Ok((boot, viewer_cleanup))
+        })(),
+        startup_diagnostics::bootstrap_error_for_log,
+    )?;
     tracing::info!(
         startup_elapsed_ms = startup_started_at.elapsed().as_millis(),
         "application bootstrap complete"
     );
 
-    // Raw Input へ実行中に切り替えられるよう、Windows message hook は起動時から
-    // 常設する。デバイス usage の登録は RawInputBackend の attach 時まで行わない。
-    let raw_input_bridge = cfg!(windows).then(crate::input::rawinput::RawInputBridge::new);
-    let mut event_loop_builder = EventLoop::<AppUserEvent>::with_user_event();
-    #[cfg(windows)]
-    if let Some(bridge) = raw_input_bridge.clone() {
-        use winit::platform::windows::EventLoopBuilderExtWindows;
+    let phase = StartupPhase::begin(startup_started_at, "event_loop_setup");
+    let (
+        raw_input_bridge,
+        event_loop,
+        event_proxy,
+        shutdown_requested,
+        maintenance_select_tx,
+        show_surface_dialog,
+    ) = phase.result((|| -> Result<_> {
+        // Raw Input へ実行中に切り替えられるよう、Windows message hook は起動時から
+        // 常設する。デバイス usage の登録は RawInputBackend の attach 時まで行わない。
+        let raw_input_bridge = cfg!(windows).then(crate::input::rawinput::RawInputBridge::new);
+        let mut event_loop_builder = EventLoop::<AppUserEvent>::with_user_event();
+        #[cfg(windows)]
+        if let Some(bridge) = raw_input_bridge.clone() {
+            use winit::platform::windows::EventLoopBuilderExtWindows;
 
-        event_loop_builder.with_msg_hook(move |message| {
-            bridge.handle_message(message);
-            false
-        });
-    }
-    let event_loop = event_loop_builder.build().context("failed to create event loop")?;
-    // 描画間隔は `FramePacer` の deadline を `WaitUntil` へ渡して制御する。
-    // event loop thread 自体を sleep させず、フレーム待機中も入力イベントを処理する。
-    event_loop.set_control_flow(ControlFlow::Wait);
-    let event_proxy = event_loop.create_proxy();
-    if options.viewer_play {
-        let viewer_event_proxy = event_proxy.clone();
-        crate::viewer_ipc::start_listener(move |command| {
-            let _ = viewer_event_proxy.send_event(AppUserEvent::ViewerCommand(command));
-        })?;
-    }
-
-    // Ctrl-C(SIGINT)で event loop を正常終了させ、cpal/ASIO ストリームの Drop を
-    // 走らせる。捕捉しないと既定ハンドラがプロセスを即殺し、ASIO の停止処理が走らず
-    // ドライバがノイズを流し続ける。
-    let shutdown_requested = Arc::new(AtomicBool::new(false));
-    {
-        let shutdown_requested = Arc::clone(&shutdown_requested);
-        if let Err(error) =
-            ctrlc::set_handler(move || shutdown_requested.store(true, Ordering::SeqCst))
-        {
-            tracing::warn!(%error, "failed to install Ctrl-C handler");
+            event_loop_builder.with_msg_hook(move |message| {
+                bridge.handle_message(message);
+                false
+            });
         }
-    }
+        let event_loop = event_loop_builder.build().context("failed to create event loop")?;
+        // 描画間隔は `FramePacer` の deadline を `WaitUntil` へ渡して制御する。
+        // event loop thread 自体を sleep させず、フレーム待機中も入力イベントを処理する。
+        event_loop.set_control_flow(ControlFlow::Wait);
+        let event_proxy = event_loop.create_proxy();
+        if options.viewer_play {
+            let viewer_event_proxy = event_proxy.clone();
+            crate::viewer_ipc::start_listener(move |command| {
+                let _ = viewer_event_proxy.send_event(AppUserEvent::ViewerCommand(command));
+            })?;
+        }
 
-    let (maintenance_select_tx, _) = tokio::sync::watch::channel(false);
+        // Ctrl-C(SIGINT)で event loop を正常終了させ、cpal/ASIO ストリームの Drop を
+        // 走らせる。捕捉しないと既定ハンドラがプロセスを即殺し、ASIO の停止処理が走らず
+        // ドライバがノイズを流し続ける。
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
+        {
+            let shutdown_requested = Arc::clone(&shutdown_requested);
+            if let Err(error) =
+                ctrlc::set_handler(move || shutdown_requested.store(true, Ordering::SeqCst))
+            {
+                tracing::warn!(%error, "failed to install Ctrl-C handler");
+            }
+        }
 
-    // Smoke counters/options can be consumed during the run. Preserve the
-    // initial notification policy so unattended runs never wait on a dialog.
-    let show_surface_dialog = show_surface_error_dialog(&options);
+        let (maintenance_select_tx, _) = tokio::sync::watch::channel(false);
+
+        // Smoke counters/options can be consumed during the run. Preserve the
+        // initial notification policy so unattended runs never wait on a dialog.
+        let show_surface_dialog = show_surface_error_dialog(&options);
+        Ok((
+            raw_input_bridge,
+            event_loop,
+            event_proxy,
+            shutdown_requested,
+            maintenance_select_tx,
+            show_surface_dialog,
+        ))
+    })())?;
     let mut app = WinitApp::new(
         boot,
         options,
@@ -581,8 +611,13 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
         maintenance_select_tx,
         raw_input_bridge,
     )?;
+    let phase = StartupPhase::begin(startup_started_at, "event_loop_handoff");
     app.restart_profile_ir_sync();
-    tracing::info!("starting winit event loop");
+    phase.complete();
+    tracing::info!(
+        startup_elapsed_ms = startup_started_at.elapsed().as_millis(),
+        "starting winit event loop"
+    );
     let result = event_loop.run_app(app.as_mut()).context("winit event loop failed");
     let startup_error = app.startup_error.take();
     let surface_error = app.surface_error.take();

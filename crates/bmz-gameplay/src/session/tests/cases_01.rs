@@ -74,6 +74,7 @@ fn independent_battle_opponent_replay_advances_without_taking_primary_lanes() {
         rule_mode: RuleMode::Beatoraja,
         score: ScoreState::default(),
         gauge: GaugeState::new(bmz_core::clear::GaugeType::Normal, 160.0, 1),
+        replay_judge_rate_percent: 100,
         replay_player: Some(ReplayPlayer {
             events: vec![bmz_core::replay::ReplayEvent {
                 lane: Lane::Key1,
@@ -153,6 +154,7 @@ fn independent_battle_opponent_without_replay_uses_autoplay() {
         score: ScoreState::default(),
         gauge: GaugeState::new(bmz_core::clear::GaugeType::Normal, 160.0, 100),
         replay_player: None,
+        replay_judge_rate_percent: 100,
         autoplay: Some(AutoplayController::default()),
         display_uses_primary_arrangement: true,
         publish_display_judgements: true,
@@ -204,6 +206,7 @@ fn independent_battle_opponent_applies_hcn_hold_and_release_ticks() {
             score: ScoreState::default(),
             gauge: session.gauge.clone(),
             autoplay: (!release).then(AutoplayController::default),
+            replay_judge_rate_percent: 100,
             replay_player: release.then(|| ReplayPlayer {
                 events: [(InputKind::Press, 0), (InputKind::Release, 100_000)]
                     .into_iter()

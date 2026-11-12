@@ -478,9 +478,7 @@ impl WinitApp {
         let selected_index = self.select.selected_index;
         let source: Vec<&SelectItem> = match items.get(selected_index) {
             // フォルダ行: そのフォルダから選曲画面で辿れる譜面を流す。
-            Some(item @ SelectItem::Folder { kind, .. })
-                if autoplay_folder_row_supported(*kind) =>
-            {
+            Some(item @ SelectItem::Folder { .. }) if autoplay_folder_row_supported(item) => {
                 vec![item]
             }
             Some(SelectItem::Folder { .. }) => {

@@ -45,6 +45,7 @@
 | 2026-11-13 | [Qwilight CR_minimalの表示欠落とLIFT連動](2026/2026-11-13-qwilight-play-visuals.md) |
 | 2026-11-13 | [Qwilightの情報表示とビジュアライザー](2026/2026-11-13-qwilight-play-information.md) |
 | 2026-11-13 | [Qwilightの打鍵タイミングと画面フェード](2026/2026-11-13-qwilight-timing-and-fades.md) |
+| 2026-11-13 | [デフォルト描画状態の暗黙アセット探索と起動診断](2026/2026-11-13-startup-default-and-diagnostics.md) |
 | 2026-11-13 | [Luxez-Flatの詳細オプションで波ダッシュの字形を検査する](2026/2026-11-13-luxez-detail-option-glyphs.md) |
 | 2026-11-12 | [F1で開くリザルトIRランキングのスクロール](2026/2026-11-12-result-ir-scroll.md) |
 | 2026-11-12 | [スキン設定の選択欄](2026/2026-11-12-skin-settings-layout.md) |

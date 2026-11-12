@@ -1393,6 +1393,7 @@ fn session() -> GameSession {
         ),
         replay_recorder: ReplayRecorder::default(),
         replay_player: None,
+        replay_judge_rate_percent: 100,
         replay_lane_projection: None,
         replay_lane_mask: None,
         display_only_lane_mask: [false; bmz_core::lane::LANE_COUNT],
