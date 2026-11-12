@@ -317,6 +317,7 @@ pub(super) struct SmokeRuntime {
     pub(super) app_started_at: Instant,
     pub(super) startup_started_at: Instant,
     pub(super) first_present_logged: bool,
+    pub(super) first_present_phase: Option<StartupPhase>,
 }
 
 pub(super) struct SkinRuntimeState {

@@ -12,7 +12,10 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
         match cause {
             StartCause::Init => {
-                tracing::info!("winit app init");
+                tracing::info!(
+                    startup_elapsed_ms = self.smoke.startup_started_at.elapsed().as_millis(),
+                    "winit app init"
+                );
                 self.ensure_window(event_loop);
             }
             StartCause::ResumeTimeReached { start, requested_resume } => {
@@ -336,6 +339,12 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 let limit_start = Instant::now();
                 if !self.begin_scheduled_frame(event_loop) {
                     return;
+                }
+                if !self.smoke.first_present_logged && self.smoke.first_present_phase.is_none() {
+                    self.smoke.first_present_phase = Some(StartupPhase::begin(
+                        self.smoke.startup_started_at,
+                        "first_surface_frame",
+                    ));
                 }
                 // 通常起動は最初の Select 描画後に direct boot するが、Viewer は
                 // 初回 surface frame から Play を描く。system sound を待たず、

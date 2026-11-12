@@ -59,42 +59,96 @@ pub(in crate::app) fn load_items_for_stack(
     difficulty_filter: SelectDifficultyFilter,
     sort: SelectSort,
 ) -> Result<(Vec<SelectItem>, SelectModeFilter)> {
+    load_items_for_stack_with_startup(
+        context,
+        stack,
+        search_history,
+        mode_filter,
+        difficulty_filter,
+        sort,
+        None,
+    )
+}
+
+pub(in crate::app) fn load_items_for_stack_at_startup(
+    context: SelectListContext<'_>,
+    stack: &[String],
+    search_history: &[String],
+    mode_filter: SelectModeFilter,
+    difficulty_filter: SelectDifficultyFilter,
+    sort: SelectSort,
+    startup: Instant,
+) -> Result<(Vec<SelectItem>, SelectModeFilter)> {
+    load_items_for_stack_with_startup(
+        context,
+        stack,
+        search_history,
+        mode_filter,
+        difficulty_filter,
+        sort,
+        Some(startup),
+    )
+}
+
+fn load_items_for_stack_with_startup(
+    context: SelectListContext<'_>,
+    stack: &[String],
+    search_history: &[String],
+    mode_filter: SelectModeFilter,
+    difficulty_filter: SelectDifficultyFilter,
+    sort: SelectSort,
+    startup: Option<Instant>,
+) -> Result<(Vec<SelectItem>, SelectModeFilter)> {
     let boot = context.boot;
-    let mut items =
-        build_select_items_for_stack(&boot, context.virtual_folders, stack, search_history)?;
-    let collection_cache = context.collections;
-    let chart_ids = items
-        .iter()
-        .filter_map(|item| match item {
-            SelectItem::Chart(row) => row.chart.as_ref().map(|chart| chart.chart_id),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let first_seen = boot.library_db.chart_first_seen_at_by_chart_ids(&chart_ids)?;
-    for item in &mut items {
-        if let SelectItem::Chart(row) = item {
-            row.lr2_added_at =
-                row.chart.as_ref().and_then(|chart| first_seen.get(&chart.chart_id).copied());
+    let phase = StartupPhase::optional(startup, "select_list_build");
+    let mut items = phase.result(build_select_items_for_stack_with_startup(
+        &boot,
+        context.virtual_folders,
+        stack,
+        search_history,
+        startup,
+    ))?;
+    let phase = StartupPhase::optional(startup, "select_list_db_and_formatting");
+    let result = (|| {
+        let collection_cache = context.collections;
+        let chart_ids = items
+            .iter()
+            .filter_map(|item| match item {
+                SelectItem::Chart(row) => row.chart.as_ref().map(|chart| chart.chart_id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let first_seen = boot.library_db.chart_first_seen_at_by_chart_ids(&chart_ids)?;
+        for item in &mut items {
+            if let SelectItem::Chart(row) = item {
+                row.lr2_added_at =
+                    row.chart.as_ref().and_then(|chart| first_seen.get(&chart.chart_id).copied());
+            }
         }
-    }
-    let ordered_course_contents = stack.last().and_then(|path| parse_course_contents_path(path));
-    if ordered_course_contents.is_some() {
-        if let Err(error) = collection_cache.apply(boot.library_db, boot.collection_db, &mut items)
+        let ordered_course_contents =
+            stack.last().and_then(|path| parse_course_contents_path(path));
+        if ordered_course_contents.is_some() {
+            if let Err(error) = StartupPhase::optional(startup, "select_list_collection_flags")
+                .result(collection_cache.apply(boot.library_db, boot.collection_db, &mut items))
+            {
+                tracing::error!(%error, "failed to apply collection flags to course contents");
+            }
+            return Ok((items, mode_filter));
+        }
+        let resolved = resolve_non_empty_mode_filter(&items, mode_filter);
+        apply_select_mode_filter(&mut items, resolved);
+        apply_select_difficulty_filter(&mut items, difficulty_filter);
+        apply_select_sort(&mut items, sort);
+        if let Err(error) = StartupPhase::optional(startup, "select_list_collection_flags")
+            .result(collection_cache.apply(boot.library_db, boot.collection_db, &mut items))
         {
-            tracing::error!(%error, "failed to apply collection flags to course contents");
+            tracing::error!(%error, "failed to apply collection flags to select items");
         }
-        return Ok((items, mode_filter));
-    }
-    let resolved = resolve_non_empty_mode_filter(&items, mode_filter);
-    apply_select_mode_filter(&mut items, resolved);
-    apply_select_difficulty_filter(&mut items, difficulty_filter);
-    apply_select_sort(&mut items, sort);
-    if let Err(error) = collection_cache.apply(boot.library_db, boot.collection_db, &mut items) {
-        tracing::error!(%error, "failed to apply collection flags to select items");
-    }
-    let random_items = random_select_items_from_items(&items, &boot.profile_config.select);
-    items.splice(0..0, random_items);
-    Ok((items, resolved))
+        let random_items = random_select_items_from_items(&items, &boot.profile_config.select);
+        items.splice(0..0, random_items);
+        Ok((items, resolved))
+    })();
+    phase.result(result)
 }
 
 pub(in crate::app) fn build_select_items_for_stack(
@@ -103,14 +157,28 @@ pub(in crate::app) fn build_select_items_for_stack(
     stack: &[String],
     search_history: &[String],
 ) -> Result<Vec<SelectItem>> {
+    build_select_items_for_stack_with_startup(boot, virtual_folders, stack, search_history, None)
+}
+
+fn build_select_items_for_stack_with_startup(
+    boot: &SelectListSource<'_>,
+    virtual_folders: &Result<crate::screens::select_model::VirtualFolderCatalog, String>,
+    stack: &[String],
+    search_history: &[String],
+    startup: Option<Instant>,
+) -> Result<Vec<SelectItem>> {
+    let phase = StartupPhase::optional(startup, "select_list_sources");
     let active_song_roots = enabled_root_paths(boot.app_config);
     let mut active_table_sources = table_source_order(boot.app_config);
     if let Some(identity) = RianTableIdentity::from_ir_config(&boot.profile_config.ir) {
-        match active_rian_table_source_urls(boot.library_db, &identity) {
+        match StartupPhase::optional(startup, "select_list_cached_ir_sources")
+            .result(active_rian_table_source_urls(boot.library_db, &identity))
+        {
             Ok(sources) => active_table_sources.extend(sources),
             Err(error) => tracing::warn!(%error, "failed to load cached rianIR table sources"),
         }
     }
+    phase.complete();
     Ok(match stack.last() {
         Some(path) if path.starts_with(crate::screens::settings_model::CONFIG_ROOT_PATH) => {
             crate::screens::settings_model::load_settings_items_for_config(
@@ -249,27 +317,32 @@ pub(in crate::app) fn build_select_items_for_stack(
             Some(&active_table_sources),
         )?,
         None => {
+            let phase = StartupPhase::optional(startup, "select_root_base_items");
             // ルートには曲フォルダに続けて、コースフォルダ・各難易度表フォルダを並べる。
             // COURSE は選曲画面からの新規作成入口も兼ねるため、保存済みコースがなくても表示する。
             let mut items = root_folder_items(&active_song_roots);
             items.push(course_root_item());
-            match table_folder_items_for_active_sources(
+            phase.complete();
+            let phase = StartupPhase::optional(startup, "select_root_difficulty_table_folders");
+            match phase.result(table_folder_items_for_active_sources(
                 boot.library_db,
                 &active_table_sources,
                 Some(&active_table_sources),
-            ) {
+            )) {
                 Ok(tables) => items.extend(tables),
                 Err(error) => {
                     tracing::error!(%error, "failed to load difficulty table folders");
                 }
             }
-            match virtual_folders {
-                Ok(catalog) => items.extend(catalog.root_items()),
+            let phase = StartupPhase::optional(startup, "select_root_virtual_folders");
+            match phase.result(virtual_folders.as_ref().map(|catalog| catalog.root_items())) {
+                Ok(folders) => items.extend(folders),
                 Err(error) => {
                     tracing::error!(%error, "failed to load virtual-folder catalog");
                 }
             }
-            match favorite_root_items(boot.collection_db) {
+            let phase = StartupPhase::optional(startup, "select_root_favorite_folders");
+            match phase.result(favorite_root_items(boot.collection_db)) {
                 Ok(favorites) if !favorites.is_empty() => {
                     let after_best = items
                         .iter()
@@ -283,6 +356,7 @@ pub(in crate::app) fn build_select_items_for_stack(
                 Ok(_) => {}
                 Err(error) => tracing::error!(%error, "failed to check favorite root"),
             }
+            let phase = StartupPhase::optional(startup, "select_root_settings_and_history");
             items.push(settings_root_item_for_locale(boot.profile_config.ui.locale()));
             if !search_history.is_empty() {
                 items.extend(search_history_folder_items_for_locale(
@@ -290,6 +364,7 @@ pub(in crate::app) fn build_select_items_for_stack(
                     boot.profile_config.ui.locale(),
                 ));
             }
+            phase.complete();
             items
         }
     })
