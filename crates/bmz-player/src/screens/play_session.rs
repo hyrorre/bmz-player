@@ -138,9 +138,14 @@ pub struct PlaySessionOptions {
     /// Explicitly disables score/lamp/replay/IR persistence without presenting
     /// the session as practice or autoplay.
     pub score_save_disabled: bool,
-    /// Fixed chart/audio rate for this session. Restricted to non-scoring modes
-    /// by the app flow and clamped by `bmz-audio` to 50..=200.
+    /// Fixed chart/audio rate for this session, clamped by `bmz-audio`.
+    /// Fresh plays derive it from LR2 FREQ (50..=200). FREQ below 0 disables
+    /// persistence, FREQ above 0 stays score eligible; Practice and Viewer set
+    /// their own rate and never save.
     pub playback_rate_percent: u16,
+    /// LR2 FREQ semitones behind `playback_rate_percent`. 0 for Practice,
+    /// Viewer and replays recorded before FREQ existed.
+    pub freq_semitones: i8,
     pub assist: AssistOptionConfig,
     /// 譜面変換時に確定した実効 assist。preload 後に内部で設定する。
     pub assist_runtime: AssistRuntime,
@@ -263,6 +268,8 @@ pub struct AppliedArrange {
     pub seven_to_nine_pattern: SevenToNinePattern,
     pub seven_to_nine_type: SevenToNineType,
     pub seven_to_nine_rule_mode: SevenToNineRuleMode,
+    /// LR2 FREQ the session actually played at. Recorded into replays.
+    pub freq_semitones: i8,
 }
 
 impl AppliedArrange {
@@ -423,6 +430,7 @@ impl Default for PlaySessionOptions {
             seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
             score_save_disabled: false,
             playback_rate_percent: 100,
+            freq_semitones: 0,
             assist: AssistOptionConfig::default(),
             assist_runtime: AssistRuntime::default(),
             replay_player: None,

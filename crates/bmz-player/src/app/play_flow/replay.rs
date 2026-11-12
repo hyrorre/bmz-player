@@ -132,6 +132,7 @@ impl WinitApp {
             next_index: 0,
             next_scoring_time: None,
         };
+        let freq_semitones = replay_file.recorded_freq_semitones();
         let options = PlayStartOptions {
             read_archive_assets: true,
             session_mode: SessionMode::Normal,
@@ -141,7 +142,8 @@ impl WinitApp {
             seven_to_nine_type: self.boot.profile_config.play.seven_to_nine_type,
             seven_to_nine_rule_mode: self.boot.profile_config.play.seven_to_nine_rule_mode,
             score_save_disabled: false,
-            playback_rate_percent: 100,
+            playback_rate_percent: crate::config::play::freq_playback_rate_percent(freq_semitones),
+            freq_semitones,
             assist: Default::default(),
             replay_player: Some(player),
             battle_target: None,
@@ -258,6 +260,7 @@ impl WinitApp {
             next_index: 0,
             next_scoring_time: None,
         };
+        let freq_semitones = replay_file.recorded_freq_semitones();
         let options = PlayStartOptions {
             read_archive_assets: true,
             session_mode: SessionMode::Normal,
@@ -267,7 +270,8 @@ impl WinitApp {
             seven_to_nine_type: self.boot.profile_config.play.seven_to_nine_type,
             seven_to_nine_rule_mode: self.boot.profile_config.play.seven_to_nine_rule_mode,
             score_save_disabled: false,
-            playback_rate_percent: 100,
+            playback_rate_percent: crate::config::play::freq_playback_rate_percent(freq_semitones),
+            freq_semitones,
             assist: Default::default(),
             replay_player: Some(player),
             battle_target: None,

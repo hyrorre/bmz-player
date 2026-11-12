@@ -1,6 +1,6 @@
 use super::play::{
-    CONSTANT_FADE_MAX_MS, CONSTANT_FADE_MIN_MS, TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN,
-    quantize_hispeed,
+    CONSTANT_FADE_MAX_MS, CONSTANT_FADE_MIN_MS, FREQ_SEMITONES_MAX, FREQ_SEMITONES_MIN,
+    TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN, freq_playback_rate_percent, quantize_hispeed,
 };
 use super::profile_config::{
     AssistLongNoteMode, AssistMineMode, AssistOptionConfig, AssistScrollMode, BgaExpandConfig,
@@ -59,6 +59,7 @@ impl SettingsEntryId {
         Self::SessionMode,
         Self::SRandomCorrection,
         Self::KeyModeConversion,
+        Self::Freq,
         Self::MisslayerDurationMs,
         Self::WaitAllNotesResult,
         Self::HideMisslayerOnGood,
@@ -234,6 +235,7 @@ impl SettingsEntryId {
             Self::SessionMode => "SESSION MODE",
             Self::SRandomCorrection => "S-RANDOM CORRECTION",
             Self::KeyModeConversion => "KEY CONVERSION",
+            Self::Freq => "FREQ",
             Self::SevenToNinePattern => "7K TO 9K PATTERN",
             Self::SevenToNineType => "7K TO 9K TYPE",
             Self::SevenToNineRuleMode => "7K TO 9K RULE",
@@ -369,6 +371,7 @@ impl SettingsEntryId {
             Self::SessionMode => "settings-entry-description-session-mode",
             Self::SRandomCorrection => "settings-entry-description-s-random-correction",
             Self::KeyModeConversion => "settings-entry-description-key-mode-conversion",
+            Self::Freq => "settings-entry-description-freq",
             Self::SevenToNinePattern => "settings-entry-description-seven-to-nine-pattern",
             Self::SevenToNineType => "settings-entry-description-seven-to-nine-type",
             Self::SevenToNineRuleMode => "settings-entry-description-seven-to-nine-rule-mode",
@@ -740,6 +743,33 @@ mod tests {
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::SRandomCorrection, -1));
         assert_eq!(profile.play.s_random_correction, SRandomCorrectionConfig::Lr2);
         assert!(SettingsEntryId::SRandomCorrection.is_play_setting());
+    }
+
+    #[test]
+    fn freq_follows_key_conversion_and_steps_semitones_within_one_octave() {
+        let play = SettingsEntryId::PLAY_ENTRIES;
+        let index = play.iter().position(|&entry| entry == SettingsEntryId::Freq);
+        let index = index.expect("FREQ is a play entry");
+        assert_eq!(play[index - 1], SettingsEntryId::KeyModeConversion);
+        assert!(SettingsEntryId::Freq.is_play_setting());
+        assert_eq!(SettingsEntryId::Freq.label(), "FREQ");
+        assert_eq!(settings_adjust_step(SettingsEntryId::Freq), 1);
+
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        assert_eq!(profile.play.freq_semitones, 0);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::Freq), "0 (100%)");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::Freq, 3));
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::Freq), "+3 (119%)");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::Freq, 20));
+        assert_eq!(profile.play.freq_semitones, 12);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::Freq), "+12 (200%)");
+        assert!(!adjust_settings_value(&mut profile, SettingsEntryId::Freq, 1));
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::Freq, -30));
+        assert_eq!(profile.play.freq_semitones, -12);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::Freq), "-12 (50%)");
+        assert!(!adjust_settings_value(&mut profile, SettingsEntryId::Freq, -1));
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::Freq, 1));
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::Freq), "-11 (53%)");
     }
 
     #[test]

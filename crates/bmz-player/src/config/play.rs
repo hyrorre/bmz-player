@@ -144,6 +144,20 @@ pub fn adjust_green_number_by_duration_ms(green_number: u32, delta_ms: i32) -> u
     }
 }
 
+pub const FREQ_SEMITONES_MIN: i8 = -12;
+pub const FREQ_SEMITONES_MAX: i8 = 12;
+
+pub fn clamp_freq_semitones(semitones: i8) -> i8 {
+    semitones.clamp(FREQ_SEMITONES_MIN, FREQ_SEMITONES_MAX)
+}
+
+/// LR2 FREQ の半音値を再生速度へ変換する。`round(100 * 2^(n/12))` で、
+/// -12 は 50%、+12 は 200%。
+pub fn freq_playback_rate_percent(semitones: i8) -> u16 {
+    let semitones = clamp_freq_semitones(semitones);
+    (100.0 * 2f64.powf(f64::from(semitones) / 12.0)).round() as u16
+}
+
 pub fn play_offsets_from_profile(profile: &ProfileConfig) -> PlayOffsets {
     play_offsets_from_profile_for_mode(profile, profile.active_play_mode)
 }
@@ -488,5 +502,41 @@ mod tests {
                 && entry.control == PhysicalControl::GamepadButton("Axis1-".to_string())
                 && entry.scratch_direction == Some(bmz_core::input::ScratchDirection::Down)
         }));
+    }
+
+    #[test]
+    fn freq_semitones_convert_to_rounded_equal_temperament_rates() {
+        let expected: [(i8, u16); 25] = [
+            (-12, 50),
+            (-11, 53),
+            (-10, 56),
+            (-9, 59),
+            (-8, 63),
+            (-7, 67),
+            (-6, 71),
+            (-5, 75),
+            (-4, 79),
+            (-3, 84),
+            (-2, 89),
+            (-1, 94),
+            (0, 100),
+            (1, 106),
+            (2, 112),
+            (3, 119),
+            (4, 126),
+            (5, 133),
+            (6, 141),
+            (7, 150),
+            (8, 159),
+            (9, 168),
+            (10, 178),
+            (11, 189),
+            (12, 200),
+        ];
+        for (semitones, percent) in expected {
+            assert_eq!(freq_playback_rate_percent(semitones), percent, "{semitones}");
+        }
+        assert_eq!(freq_playback_rate_percent(-13), 50);
+        assert_eq!(freq_playback_rate_percent(13), 200);
     }
 }

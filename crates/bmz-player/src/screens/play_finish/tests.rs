@@ -440,6 +440,7 @@ fn finish_session_result_returns_summary() {
         seven_to_nine_pattern: Default::default(),
         seven_to_nine_type: Default::default(),
         seven_to_nine_rule_mode: Default::default(),
+        freq_semitones: 3,
     };
 
     let finished = finish_session_result(
@@ -473,6 +474,11 @@ fn finish_session_result_returns_summary() {
     assert_eq!(finished.summary.note_judge_window, Some(windows.note));
     assert_eq!(finished.summary.saved_replay_slots, [true, true, true, false]);
     assert_eq!(finished.summary.replay_slots, [true, true, true, false]);
+    let recorded =
+        crate::storage::replay::load_replay(&paths.root_dir.join(&finished.stored.replay_path))
+            .unwrap();
+    assert_eq!(recorded.freq_semitones, Some(3));
+    assert_eq!(recorded.recorded_freq_semitones(), 3);
 
     // First play creates a best, but Result still refers to the absent pre-save best.
     assert_eq!(finished.summary.skin_attempt.best_score_options, None);
