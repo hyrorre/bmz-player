@@ -1,6 +1,80 @@
 use super::*;
 
 #[test]
+fn default_render_state_does_not_attempt_asset_loading() {
+    // Run alone in a fresh process: an accidentally restored OnceLock must not
+    // hide first-use I/O merely because another parallel test warmed it already.
+    const COLD_PROBE: &str = "BMZ_TEST_DEFAULT_STATE_COLD_PROBE";
+    if std::env::var_os(COLD_PROBE).is_none() {
+        let module = module_path!().split_once("::").unwrap().1;
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!("{module}::default_render_state_does_not_attempt_asset_loading"),
+                "--nocapture",
+            ])
+            .env(COLD_PROBE, "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "cold default-state probe failed");
+        return;
+    }
+    let before = crate::assets::PNG_LOAD_ATTEMPTS.get();
+    for _ in 0..2 {
+        let manifest = default_skin_manifest();
+        let context = SkinContext::default();
+        let _renderer = crate::renderer::Renderer::default();
+        assert_eq!(context.manifest().play, manifest.play);
+        assert!(manifest.play_gauge_frame_image().source_size.is_some());
+    }
+    assert_eq!(crate::assets::PNG_LOAD_ATTEMPTS.get(), before);
+}
+
+#[test]
+fn initial_source_sizes_match_bundled_pngs_and_explicit_loading() {
+    let initial = default_skin_manifest();
+    let root = default_skin_root(); // Intentional test-only reference to checkout assets.
+    let loaded = default_skin_manifest_for_root(&root);
+    assert_eq!(initial.play, loaded.play);
+    let sizes: HashMap<_, _> = initial
+        .resolve_textures(&root)
+        .into_iter()
+        .map(|texture| {
+            let asset = load_png_rgba(&texture.path).unwrap();
+            (texture.id.0, SkinImageSize { width: asset.width as f32, height: asset.height as f32 })
+        })
+        .collect();
+    for image in [
+        initial.play_note_image(),
+        initial.play_receptor_image(),
+        initial.play_judge_line_image(),
+        initial.play_gauge_frame_image(),
+        initial.play_gauge_fill_image(),
+        initial.play_combo_panel_image(true),
+        initial.play_combo_panel_image(false),
+    ] {
+        assert_eq!(image.source_size, sizes.get(&image.texture).copied());
+        for variant in [image.key_even_texture, image.scratch_texture].into_iter().flatten() {
+            assert_eq!(image.source_size, sizes.get(&variant).copied());
+        }
+    }
+}
+
+#[test]
+fn explicit_default_manifest_sizes_are_specific_to_each_runtime_root() {
+    let roots: Vec<_> = (0..2).map(|_| tempfile::tempdir().unwrap()).collect();
+    for (root, width) in roots.iter().zip([64, 96]) {
+        image::RgbaImage::new(width, 20).save(root.path().join("note.png")).unwrap();
+        let manifest = default_skin_manifest_for_root(root.path());
+        assert_eq!(
+            manifest.play_note_image().source_size,
+            Some(SkinImageSize { width: width as f32, height: 20.0 })
+        );
+    }
+    assert_eq!(default_skin_manifest().play_note_image().source_size.unwrap().width, 32.0);
+}
+
+#[test]
 fn bundled_default_skin_manifest_defines_play_lane_images() {
     let manifest = default_skin_manifest();
     let note = manifest.play_note_image();

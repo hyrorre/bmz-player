@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn bundled_textures_load_from_resolved_runtime_resource_dir() {
+    let runtime = unique_test_dir("bmz-default-runtime-root");
+    let resource_dir = runtime.join("resources");
+    let root = resource_dir.join("skins/default");
+    fs::create_dir_all(&root).unwrap();
+    let bundled = bmz_render::skin::default_skin_manifest();
+    for texture in bundled.resolve_textures(&test_app_paths().default_skin_root()) {
+        fs::copy(&texture.path, root.join(texture.path.file_name().unwrap())).unwrap();
+    }
+    let paths = AppPaths::from_dirs(
+        resource_dir,
+        runtime.join("data"),
+        runtime.join("cache"),
+        runtime.join("logs"),
+    );
+    let mut renderer = Renderer::default();
+    let loaded = load_default_skin_into_renderer_from_paths(&mut renderer, &paths).unwrap();
+    assert_eq!(loaded, bundled);
+}
+
+#[test]
 fn default_skin_root_contains_json_documents() {
     let root = default_skin_root();
     for file_name in ["select.json", "decide.json", "result.json", "play7.json"] {
