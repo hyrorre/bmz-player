@@ -122,63 +122,56 @@ pub(in crate::app) fn update_select_exit_hold(
     }
 }
 
-pub(in crate::app) fn select_hold_state_from_pressed_controls(
-    pressed_controls: &HashSet<String>,
-    bindings: &SelectKeyBindings,
+/// 押下中の入力元をそれぞれ解決した結果から、E1〜E4 の保持状態を集計する。
+/// 片側の E1 を離しても、他の入力元の E1 が押されていれば保持を続ける。
+pub(in crate::app) fn select_hold_state_from_resolved(
+    pressed: impl IntoIterator<Item = ResolvedControl>,
 ) -> (bool, bool, HashSet<InputActionConfig>) {
-    let start_held = pressed_controls.iter().any(|control| bindings.is_start(control));
-    let select_held = pressed_controls.iter().any(|control| bindings.is_e2_action(control));
-    let e_action_holds = pressed_controls
-        .iter()
-        .filter_map(|control| bindings.e_action_for_control(control))
-        .collect();
+    let mut start_held = false;
+    let mut select_held = false;
+    let mut e_action_holds = HashSet::new();
+    for control in pressed {
+        start_held |= control.is_start();
+        select_held |= control.is_e2();
+        if let Some(action) = control.e_action() {
+            e_action_holds.insert(action);
+        }
+    }
     (start_held, select_held, e_action_holds)
 }
 
-/// 長押し移動を始めた入力が、どのデバイスでも押されていなければ true。
+/// 長押し移動を始めた入力元が押されていなければ true。
 pub(in crate::app) fn select_hold_control_released(
-    hold_control: Option<&str>,
-    pressed_controls: &HashSet<String>,
+    hold_control: Option<&InputSource>,
+    input: &AppInputRuntime,
 ) -> bool {
-    hold_control.is_some_and(|control| !pressed_controls.contains(control))
+    hold_control.is_some_and(|source| !input.source_held(source.device, &source.control))
 }
 
-pub(in crate::app) fn reconcile_select_holds_from_pressed_controls(
-    input: &mut AppInputRuntime,
-    bindings: &SelectKeyBindings,
-) {
-    let (start_held, select_held, e_action_holds) =
-        select_hold_state_from_pressed_controls(&input.pressed_controls, bindings);
-    input.select_e_action_holds = e_action_holds;
-    input.start_held = start_held;
-    input.select_held = select_held;
-}
-
-pub(in crate::app) fn skin_logical_input_snapshot_from_pressed_controls(
-    pressed_controls: &HashSet<String>,
-    bindings: &SelectKeyBindings,
+pub(in crate::app) fn skin_logical_input_snapshot_from_resolved(
+    pressed: impl IntoIterator<Item = ResolvedControl>,
+    keyboard_keys: impl IntoIterator<Item = impl AsRef<str>>,
 ) -> SkinLogicalInputSnapshot {
     let mut held = [false; bmz_render::skin::SKIN_BMZ_INPUT_COUNT];
-    for control in pressed_controls {
-        held[0] |= bindings.is_start(control);
-        held[1] |= bindings.is_e2_action(control);
-        match bindings.e_action_for_control(control) {
+    for control in pressed {
+        match control.e_action() {
             Some(InputActionConfig::E1) => held[0] = true,
             Some(InputActionConfig::E2) => held[1] = true,
             Some(InputActionConfig::E3) => held[2] = true,
             Some(InputActionConfig::E4) => held[3] = true,
             _ => {}
         }
-        match control.as_str() {
-            "ArrowLeft" => held[4] = true,
-            "ArrowRight" => held[5] = true,
-            "ArrowUp" => held[6] = true,
-            "ArrowDown" => held[7] = true,
+        match control.standard() {
+            Some(StandardKey::ArrowLeft) => held[4] = true,
+            Some(StandardKey::ArrowRight) => held[5] = true,
+            Some(StandardKey::ArrowUp) => held[6] = true,
+            Some(StandardKey::ArrowDown) => held[7] = true,
             _ => {}
         }
     }
-    // Controller buttons have no libGDX keycode and are left out.
-    let keyboard = bmz_skin::lua_keyboard_state(pressed_controls.iter().map(String::as_str));
+    // スキンの libGDX キー状態はキーボードだけを対象にする。
+    let keys: Vec<String> = keyboard_keys.into_iter().map(|key| key.as_ref().to_string()).collect();
+    let keyboard = bmz_skin::lua_keyboard_state(keys.iter().map(String::as_str));
     SkinLogicalInputSnapshot { held, keyboard, ..Default::default() }
 }
 
@@ -337,8 +330,7 @@ pub(in crate::app) const fn play_exit_chord_pressed(e2_held: bool, e3_held: bool
 }
 
 pub(in crate::app) fn should_begin_play_fadeout_after_final_notes(
-    control: &str,
-    bindings: &SelectKeyBindings,
+    input: &ResolvedInput,
     ready_started: bool,
     play_ending_active: bool,
     play_state: bmz_gameplay::session::PlayState,
@@ -348,7 +340,7 @@ pub(in crate::app) fn should_begin_play_fadeout_after_final_notes(
         && !play_ending_active
         && play_state == bmz_gameplay::session::PlayState::Playing
         && final_notes_processed
-        && play_fadeout_after_final_notes_control(control, bindings)
+        && play_fadeout_after_final_notes_control(input)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -377,42 +369,24 @@ pub(in crate::app) fn should_play_retire_sound_for_failed_transition(
         && current == bmz_gameplay::session::PlayState::Failed
 }
 
-pub(in crate::app) fn play_fadeout_after_final_notes_control(
-    control: &str,
-    bindings: &SelectKeyBindings,
-) -> bool {
-    bindings.is_play_start(control) || bindings.is_e2_action(control) || control == "Escape"
-}
-
-pub(in crate::app) fn is_select_start_key(
-    physical_key: PhysicalKey,
-    bindings: &SelectKeyBindings,
-) -> bool {
-    physical_key_name(physical_key).is_some_and(|control| bindings.is_start(&control))
-}
-
-pub(in crate::app) fn is_select_modifier_key(
-    physical_key: PhysicalKey,
-    bindings: &SelectKeyBindings,
-) -> bool {
-    physical_key_name(physical_key).is_some_and(|control| bindings.is_e2_action(&control))
+pub(in crate::app) fn play_fadeout_after_final_notes_control(input: &ResolvedInput) -> bool {
+    let control = input.play().unwrap_or(input.scene());
+    control.is_play_start() || control.is_e2() || control.standard() == Some(StandardKey::Escape)
 }
 
 pub(in crate::app) fn should_toggle_select_gauge_auto_shift(
-    control: &str,
+    control: &ResolvedControl,
     start_held: bool,
     select_held: bool,
-    bindings: &SelectKeyBindings,
 ) -> bool {
-    start_held && (select_held || bindings.is_e2_action(control)) && bindings.is_ui_key2(control)
+    start_held && (select_held || control.is_e2()) && control.is_ui_key(2)
 }
 
 pub(in crate::app) fn should_toggle_select_judge_auto_adjust(
-    control: &str,
+    control: &ResolvedControl,
     start_held: bool,
     select_held: bool,
-    bindings: &SelectKeyBindings,
 ) -> bool {
-    start_held && (select_held || bindings.is_e2_action(control)) && bindings.is_ui_key3(control)
+    start_held && (select_held || control.is_e2()) && control.is_ui_key(3)
 }
 use super::*;

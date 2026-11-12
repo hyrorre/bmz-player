@@ -236,7 +236,7 @@ impl WinitApp {
         self.spawn_play_preload(chart_id, session_options, source);
     }
 
-    pub(super) fn handle_quick_retry_control(&mut self, control: &str) -> bool {
+    pub(super) fn handle_quick_retry_control(&mut self, input: &ResolvedInput) -> bool {
         let Some(ending) = &self.play.play_ending else {
             return false;
         };
@@ -247,9 +247,11 @@ impl WinitApp {
         {
             return false;
         }
-        let mode = if self.select.select_keys.is_play_start(control) {
+        // 現在のプレイセッションの設定対象モードで解決した意味を使う。
+        let control = input.play().unwrap_or(input.scene());
+        let mode = if control.is_play_start() {
             Some(ResultRetryMode::DifferentArrange)
-        } else if self.select.select_keys.is_e2_action(control) {
+        } else if control.is_e2() {
             Some(ResultRetryMode::SameArrange)
         } else {
             None
@@ -261,8 +263,11 @@ impl WinitApp {
         true
     }
 
-    pub(super) fn begin_play_fadeout_after_final_notes_control(&mut self, control: &str) -> bool {
-        if !play_fadeout_after_final_notes_control(control, &self.select.select_keys) {
+    pub(super) fn begin_play_fadeout_after_final_notes_control(
+        &mut self,
+        input: &ResolvedInput,
+    ) -> bool {
+        if !play_fadeout_after_final_notes_control(input) {
             return false;
         }
         if let Some(ending) = &mut self.play.play_ending {
@@ -272,7 +277,7 @@ impl WinitApp {
             if ending.fadeout_started_at.is_none() {
                 ending.fadeout_started_at = Some(Instant::now());
                 self.update_play_ending_snapshot();
-                tracing::info!(control, "started pending play fadeout");
+                tracing::info!(source = ?input.source(), "started pending play fadeout");
             }
             return true;
         }
@@ -281,8 +286,7 @@ impl WinitApp {
             return false;
         };
         let should_begin = should_begin_play_fadeout_after_final_notes(
-            control,
-            &self.select.select_keys,
+            input,
             self.play.play_ready_sound_started_at.is_some(),
             self.play.play_ending.is_some(),
             active_play.running.session.state,
@@ -309,7 +313,7 @@ impl WinitApp {
                 self.notify_obs_play_ended();
                 self.play.play_ending = Some(practice_requested_finish_ending(now));
                 self.update_play_ending_snapshot();
-                tracing::info!(control, "started practice fadeout after final notes");
+                tracing::info!(source = ?input.source(), "started practice fadeout after final notes");
                 return true;
             }
             Some(FinalNotesControlAction::BeginResultFadeout) => {}

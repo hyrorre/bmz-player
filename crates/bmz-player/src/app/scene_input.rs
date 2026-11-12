@@ -1,7 +1,5 @@
-use bmz_gameplay::input::backend::PhysicalControl;
-
-use super::input_runtime::ControlInputEvent;
-use super::select_key_bindings::SelectKeyBindings;
+use super::input_resolve::{ResolvedControl, ResolvedInput, StandardKey};
+use crate::config::profile_config::InputActionConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SelectAction {
@@ -51,192 +49,146 @@ pub(super) enum DecideAction {
     Cancel,
 }
 
-pub(super) fn select_action(
-    event: &ControlInputEvent,
-    bindings: &SelectKeyBindings,
-) -> Option<SelectAction> {
-    if !event.pressed || event.repeat || event.uses_analog_scroll(bindings) {
+/// 選曲画面の単発操作。解決済み入力だけから決める。
+pub(super) fn select_action(event: &ResolvedInput) -> Option<SelectAction> {
+    if !event.pressed() || event.repeat() || event.uses_analog_scroll() {
         return None;
     }
-    let control = event.name.as_deref()?;
-
-    match event.physical.as_ref()? {
-        PhysicalControl::KeyboardKey(_) => keyboard_select_action(control, bindings),
-        PhysicalControl::GamepadButton(_) => gamepad_select_action(control, bindings),
-        PhysicalControl::HidButton(_) => None,
-    }
-}
-
-fn keyboard_select_action(control: &str, bindings: &SelectKeyBindings) -> Option<SelectAction> {
-    if let Some(action) = configurable_select_shortcut_action(control, bindings) {
-        return Some(action);
-    }
-    let fixed = match control {
-        "Enter" | "Space" | "ArrowRight" => Some(SelectAction::EnterOrPlay),
-        "ArrowLeft" => Some(SelectAction::ExitFolder),
-        "ArrowUp" => Some(SelectAction::Move(SelectMove::Previous)),
-        "ArrowDown" => Some(SelectAction::Move(SelectMove::Next)),
-        "PageUp" => Some(SelectAction::Move(SelectMove::PagePrevious)),
-        "PageDown" => Some(SelectAction::Move(SelectMove::PageNext)),
-        "Home" => Some(SelectAction::Move(SelectMove::First)),
-        "End" => Some(SelectAction::Move(SelectMove::Last)),
-        _ => None,
-    };
-    if fixed.is_some() {
-        return fixed;
-    }
-
-    if bindings.is_enter(control) {
-        Some(SelectAction::EnterOrPlay)
-    } else if bindings.is_back(control) {
-        Some(SelectAction::ExitFolder)
-    } else if bindings.is_favorite_song(control) {
-        Some(SelectAction::FavoriteSong)
-    } else if bindings.is_favorite_chart(control) {
-        Some(SelectAction::FavoriteChart)
-    } else if bindings.is_same_folder(control) {
-        Some(SelectAction::SameFolder)
-    } else if bindings.is_mode_filter(control) {
-        Some(SelectAction::ModeFilter)
-    } else if bindings.is_sort(control) {
-        Some(SelectAction::Sort)
-    } else if bindings.is_ln_mode(control) {
-        Some(SelectAction::LnMode)
-    } else if bindings.is_difficulty_filter(control) {
-        Some(SelectAction::DifficultyFilter)
-    } else if bindings.is_replay_cycle(control) {
-        Some(SelectAction::ReplayCycle)
-    } else if bindings.is_replay_play(control) {
-        Some(SelectAction::ReplayPlay)
-    } else if bindings.is_select_scratch_down(control) {
-        Some(SelectAction::Move(SelectMove::Next))
-    } else if bindings.is_select_scratch_up(control) {
-        Some(SelectAction::Move(SelectMove::Previous))
-    } else if bindings.is_select_previous(control) {
-        if bindings.is_select_next(control) {
-            Some(SelectAction::Move(SelectMove::Next))
-        } else {
-            Some(SelectAction::Move(SelectMove::Previous))
-        }
-    } else if bindings.is_select_next(control) {
-        Some(SelectAction::Move(SelectMove::Next))
-    } else {
-        select_jump_action(control, bindings)
-    }
-}
-
-fn select_jump_action(control: &str, bindings: &SelectKeyBindings) -> Option<SelectAction> {
-    if bindings.is_select_jump_previous(control) {
-        Some(SelectAction::Move(SelectMove::JumpPrevious))
-    } else if bindings.is_select_jump_next(control) {
-        Some(SelectAction::Move(SelectMove::JumpNext))
+    let control = event.scene();
+    if event.is_keyboard() {
+        keyboard_select_action(control)
+    } else if event.is_controller() {
+        controller_select_action(control)
     } else {
         None
     }
 }
 
-fn gamepad_select_action(control: &str, bindings: &SelectKeyBindings) -> Option<SelectAction> {
-    // Controller buttons have no fixed meaning; everything follows the key config.
-    if let Some(action) = configurable_select_shortcut_action(control, bindings) {
+fn keyboard_select_action(control: &ResolvedControl) -> Option<SelectAction> {
+    if let Some(action) = configurable_select_shortcut_action(control) {
         return Some(action);
     }
-
-    if bindings.is_select_scratch_up(control) {
-        if bindings.is_select_scratch_down(control) {
-            Some(SelectAction::Move(SelectMove::Next))
-        } else {
-            Some(SelectAction::Move(SelectMove::Previous))
+    let standard = match control.standard() {
+        Some(StandardKey::Enter | StandardKey::Space | StandardKey::ArrowRight) => {
+            Some(SelectAction::EnterOrPlay)
         }
-    } else if bindings.is_select_scratch_down(control) {
-        Some(SelectAction::Move(SelectMove::Next))
-    } else if bindings.is_enter(control) {
+        Some(StandardKey::ArrowLeft) => Some(SelectAction::ExitFolder),
+        Some(StandardKey::ArrowUp) => Some(SelectAction::Move(SelectMove::Previous)),
+        Some(StandardKey::ArrowDown) => Some(SelectAction::Move(SelectMove::Next)),
+        Some(StandardKey::PageUp) => Some(SelectAction::Move(SelectMove::PagePrevious)),
+        Some(StandardKey::PageDown) => Some(SelectAction::Move(SelectMove::PageNext)),
+        Some(StandardKey::Home) => Some(SelectAction::Move(SelectMove::First)),
+        Some(StandardKey::End) => Some(SelectAction::Move(SelectMove::Last)),
+        _ => None,
+    };
+    if standard.is_some() {
+        return standard;
+    }
+    if control.is_enter() {
         Some(SelectAction::EnterOrPlay)
-    } else if bindings.is_back(control) {
+    } else if control.is_back() {
         Some(SelectAction::ExitFolder)
-    } else if bindings.is_favorite_song(control) {
-        Some(SelectAction::FavoriteSong)
-    } else if bindings.is_favorite_chart(control) {
-        Some(SelectAction::FavoriteChart)
-    } else if bindings.is_same_folder(control) {
-        Some(SelectAction::SameFolder)
-    } else if bindings.is_mode_filter(control) {
-        Some(SelectAction::ModeFilter)
-    } else if bindings.is_sort(control) {
-        Some(SelectAction::Sort)
-    } else if bindings.is_ln_mode(control) {
-        Some(SelectAction::LnMode)
-    } else if bindings.is_difficulty_filter(control) {
-        Some(SelectAction::DifficultyFilter)
-    } else if bindings.is_replay_cycle(control) {
-        Some(SelectAction::ReplayCycle)
-    } else if bindings.is_replay_play(control) {
-        Some(SelectAction::ReplayPlay)
-    } else if bindings.is_select_previous(control) {
-        Some(SelectAction::Move(SelectMove::Previous))
-    } else if bindings.is_select_next(control) {
-        Some(SelectAction::Move(SelectMove::Next))
+    } else if let Some(action) = select_list_shortcut_action(control) {
+        Some(action)
     } else {
-        select_jump_action(control, bindings)
+        select_move_action(control)
+    }
+}
+
+fn controller_select_action(control: &ResolvedControl) -> Option<SelectAction> {
+    // コントローラーのボタンに固定の意味はなく、すべてキーコンフィグに従う。
+    if let Some(action) = configurable_select_shortcut_action(control) {
+        return Some(action);
+    }
+    if control.is_scratch_down() {
+        Some(SelectAction::Move(SelectMove::Next))
+    } else if control.is_scratch_up() {
+        Some(SelectAction::Move(SelectMove::Previous))
+    } else if control.is_enter() {
+        Some(SelectAction::EnterOrPlay)
+    } else if control.is_back() {
+        Some(SelectAction::ExitFolder)
+    } else if let Some(action) = select_list_shortcut_action(control) {
+        Some(action)
+    } else {
+        select_move_action(control)
+    }
+}
+
+fn select_list_shortcut_action(control: &ResolvedControl) -> Option<SelectAction> {
+    const ORDER: &[(InputActionConfig, SelectAction)] = &[
+        (InputActionConfig::SelectFavoriteSong, SelectAction::FavoriteSong),
+        (InputActionConfig::SelectFavoriteChart, SelectAction::FavoriteChart),
+        (InputActionConfig::SelectSameFolder, SelectAction::SameFolder),
+        (InputActionConfig::SelectModeFilter, SelectAction::ModeFilter),
+        (InputActionConfig::SelectSort, SelectAction::Sort),
+        (InputActionConfig::SelectLnMode, SelectAction::LnMode),
+        (InputActionConfig::SelectDifficultyFilter, SelectAction::DifficultyFilter),
+        (InputActionConfig::SelectReplayCycle, SelectAction::ReplayCycle),
+        (InputActionConfig::SelectReplayPlay, SelectAction::ReplayPlay),
+    ];
+    ORDER.iter().find_map(|(config, action)| control.has_shortcut(*config).then_some(*action))
+}
+
+fn select_move_action(control: &ResolvedControl) -> Option<SelectAction> {
+    if control.is_scratch_down() {
+        return Some(SelectAction::Move(SelectMove::Next));
+    }
+    if control.is_scratch_up() {
+        return Some(SelectAction::Move(SelectMove::Previous));
+    }
+    match control.nine_key_move() {
+        Some(-1) => return Some(SelectAction::Move(SelectMove::Previous)),
+        Some(_) => return Some(SelectAction::Move(SelectMove::Next)),
+        None => {}
+    }
+    match control.nine_key_jump()? {
+        -1 => Some(SelectAction::Move(SelectMove::JumpPrevious)),
+        _ => Some(SelectAction::Move(SelectMove::JumpNext)),
     }
 }
 
 pub(super) fn configurable_select_shortcut_action(
-    control: &str,
-    bindings: &SelectKeyBindings,
+    control: &ResolvedControl,
 ) -> Option<SelectAction> {
-    if bindings.is_open_folder(control) {
-        Some(SelectAction::OpenFolder)
-    } else if bindings.is_reload(control) {
-        Some(SelectAction::Reload)
-    } else if bindings.is_autoplay_folder(control) {
-        Some(SelectAction::AutoplayFolder)
-    } else if bindings.is_open_ir(control) {
-        Some(SelectAction::OpenPrimaryIr)
-    } else if bindings.is_open_key_config(control) {
-        Some(SelectAction::OpenKeyConfig)
-    } else if bindings.is_rival_cycle(control) {
-        Some(SelectAction::CycleRival)
-    } else if bindings.is_open_documents(control) {
-        Some(SelectAction::OpenDocuments)
-    } else {
-        None
-    }
+    const ORDER: &[(InputActionConfig, SelectAction)] = &[
+        (InputActionConfig::SelectOpenFolder, SelectAction::OpenFolder),
+        (InputActionConfig::SelectReload, SelectAction::Reload),
+        (InputActionConfig::SelectAutoplayFolder, SelectAction::AutoplayFolder),
+        (InputActionConfig::SelectOpenIr, SelectAction::OpenPrimaryIr),
+        (InputActionConfig::SelectOpenKeyConfig, SelectAction::OpenKeyConfig),
+        (InputActionConfig::SelectRivalCycle, SelectAction::CycleRival),
+        (InputActionConfig::SelectOpenDocuments, SelectAction::OpenDocuments),
+    ];
+    ORDER.iter().find_map(|(config, action)| control.has_shortcut(*config).then_some(*action))
 }
 
-pub(super) fn decide_action(
-    event: &ControlInputEvent,
-    bindings: &SelectKeyBindings,
-) -> Option<DecideAction> {
-    if !event.pressed || event.repeat {
+pub(super) fn decide_action(event: &ResolvedInput) -> Option<DecideAction> {
+    if !event.pressed() || event.repeat() {
         return None;
     }
-    let control = event.name.as_deref()?;
-    match event.physical.as_ref()? {
-        PhysicalControl::KeyboardKey(_) => match control {
-            "Enter" | "Space" => Some(DecideAction::Confirm),
-            "Escape" => Some(DecideAction::Cancel),
-            _ => bindings.is_enter(control).then_some(DecideAction::Confirm),
-        },
-        PhysicalControl::GamepadButton(_) => {
-            bindings.is_enter(control).then_some(DecideAction::Confirm)
+    let control = event.scene();
+    if event.is_keyboard() {
+        match control.standard() {
+            Some(StandardKey::Enter | StandardKey::Space) => return Some(DecideAction::Confirm),
+            Some(StandardKey::Escape) => return Some(DecideAction::Cancel),
+            _ => {}
         }
-        PhysicalControl::HidButton(_) => None,
-    }
-}
-
-pub(super) fn result_action(event: &ControlInputEvent) -> Option<ResultAction> {
-    if !event.pressed || event.repeat {
+    } else if !event.is_controller() {
         return None;
     }
-    let control = event.name.as_deref()?;
-    match event.physical.as_ref()? {
-        PhysicalControl::KeyboardKey(_) => match control {
-            "R" => Some(ResultAction::Retry),
-            "Enter" | "Escape" => Some(ResultAction::Leave),
-            _ => None,
-        },
+    control.is_enter().then_some(DecideAction::Confirm)
+}
+
+pub(super) fn result_action(event: &ResolvedInput) -> Option<ResultAction> {
+    if !event.pressed() || event.repeat() || !event.is_keyboard() {
         // Controllers leave or retry through their lane bindings only.
-        PhysicalControl::GamepadButton(_) | PhysicalControl::HidButton(_) => None,
+        return None;
+    }
+    match event.scene().standard()? {
+        StandardKey::Retry => Some(ResultAction::Retry),
+        StandardKey::Enter | StandardKey::Escape => Some(ResultAction::Leave),
+        _ => None,
     }
 }
 
@@ -247,7 +199,12 @@ mod tests {
     use winit::keyboard::{KeyCode, PhysicalKey};
 
     use super::*;
+    use crate::app::input_resolve::{
+        SceneInputResolver, resolve_axis_tick, resolve_scene_for_test,
+    };
+    use crate::app::input_runtime::ControlInputEvent;
     use crate::config::profile_config::ProfileConfig;
+    use crate::input::gamepad::GamepadSlotMap;
 
     fn keyboard(code: KeyCode) -> ControlInputEvent {
         ControlInputEvent::keyboard_parts(PhysicalKey::Code(code), ElementState::Pressed, false)
@@ -257,18 +214,28 @@ mod tests {
         ControlInputEvent::gamepad(DeviceId(1), control, true)
     }
 
-    fn bindings() -> SelectKeyBindings {
-        SelectKeyBindings::from_profile(&ProfileConfig::new_default("default", "Default", 1).input)
+    fn bindings() -> SceneInputResolver {
+        SceneInputResolver::from_profile(&ProfileConfig::new_default("default", "Default", 1).input)
+    }
+
+    fn select(event: ControlInputEvent, keys: &SceneInputResolver) -> Option<SelectAction> {
+        select_action(&resolve_scene_for_test(keys, event))
+    }
+
+    fn decide(event: ControlInputEvent, keys: &SceneInputResolver) -> Option<DecideAction> {
+        decide_action(&resolve_scene_for_test(keys, event))
+    }
+
+    fn result(event: ControlInputEvent) -> Option<ResultAction> {
+        result_action(&resolve_scene_for_test(&bindings(), event))
     }
 
     #[test]
     fn analog_scratch_moves_once_from_ticks_and_digital_axes_keep_button_navigation() {
         use crate::app::input_runtime::AppInputRuntime;
-        use crate::app::select_key_bindings::{
-            select_analog_scroll_delta, take_analog_scroll_steps,
-        };
+        use crate::app::select_key_bindings::take_analog_scroll_steps;
         use crate::input::gamepad::GamepadButtonEvent;
-        use bmz_gameplay::input::backend::DeviceTimestamp;
+        use bmz_gameplay::input::backend::{DeviceTimestamp, PhysicalControl};
 
         for axis in ["Axis1", "GCAxisLeftX", "FutureBackendAxis"] {
             let mut profile = ProfileConfig::new_default("test", "Test", 0);
@@ -281,37 +248,44 @@ mod tests {
                     binding.control = format!("{axis}{suffix}");
                 }
             }
-            let keys = SelectKeyBindings::from_profile(&profile.input);
+            let keys = SceneInputResolver::from_profile(&profile.input);
+            let device = DeviceId(16);
             let mut button = GamepadButtonEvent {
                 name: format!("{axis}+"),
-                device_id: DeviceId(16),
+                device_id: device,
                 pressed: true,
                 timestamp: DeviceTimestamp::MonotonicNs(1),
                 synthesized_analog_axis: true,
             };
+            let control = PhysicalControl::GamepadButton(button.name.clone());
             let event = ControlInputEvent::gamepad_button(&button);
             let mut runtime = AppInputRuntime::default();
             runtime.track_control(&event);
-            assert!(runtime.pressed_controls.contains(&button.name));
-            assert_eq!(select_action(&event, &keys), None, "{axis}: no extra button step");
+            assert!(runtime.source_held(device, &control));
+            assert_eq!(select(event, &keys), None, "{axis}: no extra button step");
 
-            let mut buffer = select_analog_scroll_delta(axis, 2, &keys).unwrap();
+            let tick = |ticks| {
+                resolve_axis_tick(&keys, None, GamepadSlotMap::default(), device, axis, ticks)
+                    .scene_scroll
+                    .unwrap()
+            };
+            let mut buffer = tick(2);
             assert_eq!(take_analog_scroll_steps(&mut buffer, 3), 0);
-            buffer += select_analog_scroll_delta(axis, 1, &keys).unwrap();
+            buffer += tick(1);
             assert_eq!(take_analog_scroll_steps(&mut buffer, 3), -1);
             assert_eq!(buffer, 0);
 
             button.pressed = false;
             let release = ControlInputEvent::gamepad_button(&button);
             runtime.track_control(&release);
-            assert!(!runtime.pressed_controls.contains(&button.name));
-            assert_eq!(select_action(&release, &keys), None);
+            assert!(!runtime.source_held(device, &control));
+            assert_eq!(select(release, &keys), None);
 
             // Analog scratch OFF emits endpoint buttons without any axis ticks.
             button.pressed = true;
             button.synthesized_analog_axis = false;
             assert_eq!(
-                select_action(&ControlInputEvent::gamepad_button(&button), &keys),
+                select(ControlInputEvent::gamepad_button(&button), &keys),
                 Some(SelectAction::Move(SelectMove::Previous)),
                 "{axis}: digital axis must remain usable"
             );
@@ -323,18 +297,15 @@ mod tests {
         let bindings = bindings();
 
         assert_eq!(
-            select_action(&keyboard(KeyCode::ArrowUp), &bindings),
+            select(keyboard(KeyCode::ArrowUp), &bindings),
             Some(SelectAction::Move(SelectMove::Previous))
         );
         // No backend names a controller button like this; it has no fixed meaning.
-        assert_eq!(select_action(&gamepad("DPadUp"), &bindings), None);
-        assert_eq!(
-            select_action(&keyboard(KeyCode::Enter), &bindings),
-            Some(SelectAction::EnterOrPlay)
-        );
+        assert_eq!(select(gamepad("DPadUp"), &bindings), None);
+        assert_eq!(select(keyboard(KeyCode::Enter), &bindings), Some(SelectAction::EnterOrPlay));
         // Button1 confirms through its default KEY1 binding, not a fixed button name.
-        assert_eq!(select_action(&gamepad("Button1"), &bindings), Some(SelectAction::EnterOrPlay));
-        assert_eq!(select_action(&gamepad("ArrowUp"), &bindings), None);
+        assert_eq!(select(gamepad("Button1"), &bindings), Some(SelectAction::EnterOrPlay));
+        assert_eq!(select(gamepad("ArrowUp"), &bindings), None);
     }
 
     #[test]
@@ -343,28 +314,25 @@ mod tests {
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
         profile.input.select_input_mode =
             crate::config::profile_config::SelectInputModeConfig::Key9;
-        let keys = SelectKeyBindings::from_profile(&profile.input);
+        let keys = SceneInputResolver::from_profile(&profile.input);
 
-        assert_eq!(select_action(&gamepad("Button1"), &keys), None);
-        assert_eq!(decide_action(&gamepad("Button1"), &keys), None);
-        assert_eq!(result_action(&gamepad("Button1")), None);
+        assert_eq!(select(gamepad("Button1"), &keys), None);
+        assert_eq!(decide(gamepad("Button1"), &keys), None);
+        assert_eq!(result(gamepad("Button1")), None);
     }
 
     #[test]
     fn decide_and_result_actions_normalize_keyboard_and_gamepad_controls() {
         let bindings = bindings();
 
-        assert_eq!(
-            decide_action(&keyboard(KeyCode::Enter), &bindings),
-            Some(DecideAction::Confirm)
-        );
-        assert_eq!(decide_action(&gamepad("Button1"), &bindings), Some(DecideAction::Confirm));
-        assert_eq!(result_action(&keyboard(KeyCode::KeyR)), Some(ResultAction::Retry));
-        assert_eq!(result_action(&gamepad("Start")), None);
-        assert_eq!(result_action(&keyboard(KeyCode::Escape)), Some(ResultAction::Leave));
-        assert_eq!(result_action(&gamepad("Select")), None);
-        assert_eq!(result_action(&gamepad("Button2")), None);
-        assert_eq!(decide_action(&gamepad("Escape"), &bindings), None);
-        assert_eq!(result_action(&gamepad("R")), None);
+        assert_eq!(decide(keyboard(KeyCode::Enter), &bindings), Some(DecideAction::Confirm));
+        assert_eq!(decide(gamepad("Button1"), &bindings), Some(DecideAction::Confirm));
+        assert_eq!(result(keyboard(KeyCode::KeyR)), Some(ResultAction::Retry));
+        assert_eq!(result(gamepad("Start")), None);
+        assert_eq!(result(keyboard(KeyCode::Escape)), Some(ResultAction::Leave));
+        assert_eq!(result(gamepad("Select")), None);
+        assert_eq!(result(gamepad("Button2")), None);
+        assert_eq!(decide(gamepad("Escape"), &bindings), None);
+        assert_eq!(result(gamepad("R")), None);
     }
 }

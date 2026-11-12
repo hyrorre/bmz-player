@@ -121,8 +121,8 @@ impl WinitApp {
             return false;
         }
 
-        let shift = self.viewer_modifier_held(["LShift", "RShift"]);
-        let control = self.viewer_modifier_held(["LControl", "RControl"]);
+        let shift = self.viewer_modifier_held([StandardKey::LShift, StandardKey::RShift]);
+        let control = self.viewer_modifier_held([StandardKey::LControl, StandardKey::RControl]);
         let seek = viewer_keyboard_seek(event.physical_key, shift, control);
         if let Some(seek) = seek {
             if let Err(error) = self.seek_active_viewer(seek) {
@@ -172,8 +172,8 @@ impl WinitApp {
             return false;
         }
 
-        let shift = self.viewer_modifier_held(["LShift", "RShift"]);
-        let control = self.viewer_modifier_held(["LControl", "RControl"]);
+        let shift = self.viewer_modifier_held([StandardKey::LShift, StandardKey::RShift]);
+        let control = self.viewer_modifier_held([StandardKey::LControl, StandardKey::RControl]);
         if let Some(seek) = viewer_keyboard_seek(event.physical_key, shift, control) {
             if let Err(error) = self.seek_active_viewer(seek) {
                 tracing::warn!(%error, ?seek, "viewer waiting seek failed");
@@ -220,8 +220,8 @@ impl WinitApp {
         let Some(direction) = viewer_wheel_direction(delta) else {
             return true;
         };
-        let shift = self.viewer_modifier_held(["LShift", "RShift"]);
-        let control = self.viewer_modifier_held(["LControl", "RControl"]);
+        let shift = self.viewer_modifier_held([StandardKey::LShift, StandardKey::RShift]);
+        let control = self.viewer_modifier_held([StandardKey::LControl, StandardKey::RControl]);
         let seek = if control {
             ViewerSeek::SnappedSeconds(i64::from(direction) * VIEWER_SNAPPED_SEEK_US)
         } else if shift {
@@ -263,8 +263,10 @@ impl WinitApp {
         true
     }
 
-    fn viewer_modifier_held<const N: usize>(&self, names: [&str; N]) -> bool {
-        names.into_iter().any(|name| self.input.pressed_controls.contains(name))
+    fn viewer_modifier_held<const N: usize>(&self, keys: [StandardKey; N]) -> bool {
+        // Viewer の修飾キーは resolver が持つキーボード既定操作。
+        self.pressed_scene_controls()
+            .any(|control| control.standard().is_some_and(|key| keys.contains(&key)))
     }
 
     fn seek_active_viewer(&mut self, seek: ViewerSeek) -> Result<()> {

@@ -107,7 +107,7 @@ impl WinitApp {
         }
     }
 
-    pub(super) fn start_select_hold_move(&mut self, select_move: SelectMove, control: String) {
+    pub(super) fn start_select_hold_move(&mut self, select_move: SelectMove, control: InputSource) {
         self.select.select_hold_move = Some(select_move);
         self.select.select_hold_started_at = Some(Instant::now());
         self.select.select_hold_last_trigger_at = Some(Instant::now());
@@ -117,16 +117,14 @@ impl WinitApp {
     /// 長押し移動は物理状態を正とし、開始した入力が離されていれば止める。
     /// ゲームパッドの release 経路や bounce filter で release を受け取れなくても止まる。
     pub(super) fn release_select_hold_without_pressed_control(&mut self) {
-        if select_hold_control_released(
-            self.select.select_hold_control.as_deref(),
-            &self.input.pressed_controls,
-        ) {
+        if select_hold_control_released(self.select.select_hold_control.as_ref(), &self.input) {
             self.clear_select_hold();
         }
     }
 
-    pub(super) fn clear_select_hold_control(&mut self, control: &str) {
-        if self.select.select_hold_control.as_deref() == Some(control) {
+    /// 長押し移動を始めた入力元の Release だけで止める。同名の別機器の Release では止めない。
+    pub(super) fn clear_select_hold_control(&mut self, source: &InputSource) {
+        if self.select.select_hold_control.as_ref() == Some(source) {
             self.clear_select_hold();
         }
     }
@@ -209,12 +207,11 @@ impl WinitApp {
     pub(super) fn handle_select_open_folder_action(&mut self) {
         let e1_held = self.input.select_e_action_holds.contains(&InputActionConfig::E1);
         let e2_held = self.input.select_e_action_holds.contains(&InputActionConfig::E2);
-        let ctrl_held = self.input.pressed_controls.iter().any(|control| {
-            matches!(control.as_str(), "LControl" | "RControl" | "ControlLeft" | "ControlRight")
-        });
-        let shift_held = self.input.pressed_controls.iter().any(|control| {
-            matches!(control.as_str(), "LShift" | "RShift" | "ShiftLeft" | "ShiftRight")
-        });
+        // 修飾キーはキーボード既定操作。コントローラーの同名ボタンは含めない。
+        let held =
+            |key| self.pressed_scene_controls().any(|control| control.standard() == Some(key));
+        let ctrl_held = held(StandardKey::LControl) || held(StandardKey::RControl);
+        let shift_held = held(StandardKey::LShift) || held(StandardKey::RShift);
 
         if e1_held {
             self.copy_selected_hash(false);

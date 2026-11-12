@@ -38,8 +38,7 @@ impl OptionPanelSession {
 
     fn route_event(
         &mut self,
-        event: &ControlInputEvent,
-        keys: &SelectKeyBindings,
+        event: &ResolvedInput,
         available: bool,
         holds: (bool, bool),
         bounce: InputBounceConfig,
@@ -49,18 +48,18 @@ impl OptionPanelSession {
             self.cancel(holds.0, holds.1);
             return false;
         }
-        let Some(control) = event.name.as_deref() else { return false };
-        if !keys.is_start(control) && !keys.is_e2_action(control) {
+        let control = event.scene();
+        if !control.is_start() && !control.is_e2() {
             return false;
         }
-        if !event.repeat {
-            let is_start = keys.is_start(control);
+        if !event.repeat() {
+            let is_start = control.is_start();
             let e1 = if is_start { holds.0 } else { self.e1 };
             let e2 = if accepted { holds.1 } else { self.e2 };
             if is_start || accepted {
                 let threshold_us =
-                    event.physical.as_ref().map_or(0, |physical| bounce.threshold_for(physical));
-                self.edge(e1, e2, event.timestamp, Duration::from_micros(threshold_us));
+                    event.physical().map_or(0, |physical| bounce.threshold_for(physical));
+                self.edge(e1, e2, event.timestamp(), Duration::from_micros(threshold_us));
             }
         }
         true
@@ -157,7 +156,7 @@ impl OptionPanelSession {
 impl WinitApp {
     pub(super) fn route_select_option_session_event(
         &mut self,
-        event: &ControlInputEvent,
+        event: &ResolvedInput,
         accepted: bool,
     ) -> bool {
         if !self.detail_options_enabled() || !matches!(self.view_state(), AppViewState::Select) {
@@ -166,7 +165,6 @@ impl WinitApp {
         let available = self.detail_options_available();
         let consumed = self.select.option_session.route_event(
             event,
-            &self.select.select_keys,
             available,
             (self.input.start_held, self.input.select_held),
             input_bounce_config_from_profile(&self.boot.profile_config.input),
@@ -219,7 +217,7 @@ mod tests {
     #[test]
     fn lr2_mouse_panel_survives_keyboard_and_gamepad_option_edges_without_restarting_timer() {
         let keys =
-            SelectKeyBindings::from_profile(&crate::config::play_input::default_profile_input());
+            SceneInputResolver::from_profile(&crate::config::play_input::default_profile_input());
         let mut input = AppInputRuntime::default();
         let mut session = OptionPanelSession::default();
         let now = Instant::now();
@@ -249,8 +247,11 @@ mod tests {
                 ControlInputEvent::gamepad(DeviceId(16), "Button2", pressed),
             ] {
                 input.track_control(&event);
-                let (e1, e2, _) =
-                    select_hold_state_from_pressed_controls(&input.pressed_controls, &keys);
+                let (e1, e2, _) = crate::app::select_hold_state_from_resolved(
+                    input.pressed_sources().map(|(device, control)| {
+                        keys.resolve_control(device, control, Default::default())
+                    }),
+                );
                 assert_eq!((e1, e2), (false, false));
                 let next = session.lr2_panel_for_holds(e1, e2);
                 assert!(!transition_select_option_panel(
@@ -342,7 +343,7 @@ mod tests {
                 let later = base + SELECT_EXIT_HOLD_DURATION;
                 assert!(!select_exit_hold_due(
                     &mut exit_hold,
-                    panel == 0 && input.pressed_controls.contains("Escape"),
+                    panel == 0 && input.keyboard_key_held("Escape"),
                     later
                 ));
                 assert!(transition_select_option_panel(
@@ -396,7 +397,7 @@ mod tests {
     #[test]
     fn unavailable_panel_passes_modifier_keys_to_search_and_key_config() {
         let keys =
-            SelectKeyBindings::from_profile(&crate::config::play_input::default_profile_input());
+            SceneInputResolver::from_profile(&crate::config::play_input::default_profile_input());
         let mut session = OptionPanelSession::default();
         session.edge(true, false, timestamp(0), Duration::ZERO);
         session.edge(false, false, timestamp(0), Duration::ZERO);
@@ -411,8 +412,7 @@ mod tests {
                 let event =
                     ControlInputEvent::keyboard_parts(PhysicalKey::Code(code), state, repeat);
                 assert!(!session.route_event(
-                    &event,
-                    &keys,
+                    &crate::app::input_resolve::resolve_scene_for_test(&keys, event),
                     false,
                     holds,
                     Default::default(),
@@ -428,8 +428,7 @@ mod tests {
             false,
         );
         assert!(session.route_event(
-            &release,
-            &keys,
+            &crate::app::input_resolve::resolve_scene_for_test(&keys, release),
             true,
             (false, false),
             Default::default(),
@@ -441,7 +440,13 @@ mod tests {
             ElementState::Pressed,
             false,
         );
-        assert!(session.route_event(&press, &keys, true, (true, false), Default::default(), true));
+        assert!(session.route_event(
+            &crate::app::input_resolve::resolve_scene_for_test(&keys, press),
+            true,
+            (true, false),
+            Default::default(),
+            true
+        ));
         assert_eq!(session.panel, 1, "fresh E1 must work again outside the modal");
     }
 

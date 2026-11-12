@@ -21,16 +21,18 @@ pub(super) fn result_skin_click_action(event_id: i32) -> Option<ResultSkinClickA
 }
 
 /// Result IR の相対スクロール量を返す。末尾方向を正とする。
-pub(super) fn result_ir_scroll_rows_for_control(
-    control: &str,
-    bindings: &SelectKeyBindings,
-) -> Option<i32> {
-    match control {
-        "ArrowUp" => Some(-1),
-        "ArrowDown" => Some(1),
-        _ if bindings.is_select_scratch_down(control) => Some(1),
-        _ if bindings.is_select_scratch_up(control) => Some(-1),
-        _ => None,
+pub(super) fn result_ir_scroll_rows_for_control(control: &ResolvedControl) -> Option<i32> {
+    match control.standard() {
+        Some(StandardKey::ArrowUp) => return Some(-1),
+        Some(StandardKey::ArrowDown) => return Some(1),
+        _ => {}
+    }
+    if control.is_scratch_down() {
+        Some(1)
+    } else if control.is_scratch_up() {
+        Some(-1)
+    } else {
+        None
     }
 }
 

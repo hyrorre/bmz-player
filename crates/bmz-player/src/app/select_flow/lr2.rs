@@ -174,28 +174,4 @@ impl WinitApp {
         self.execute_lr2_select_button(button, direction);
         true
     }
-
-    pub(super) fn apply_lr2_option_control(&mut self, control: &str) -> bool {
-        let keys = &self.select.select_keys;
-        let candidates = [
-            (keys.is_key1(control), Lane::Key1),
-            (keys.is_key2(control), Lane::Key2),
-            (keys.is_key3(control), Lane::Key3),
-            (keys.is_key4(control), Lane::Key4),
-            (keys.is_key5(control), Lane::Key5),
-            (keys.is_key6(control), Lane::Key6),
-            (keys.is_key7(control), Lane::Key7),
-            (keys.is_key8(control), Lane::Key8),
-            (keys.is_key9(control), Lane::Key9),
-            (keys.is_key10(control), Lane::Key10),
-            (keys.is_key11(control), Lane::Key11),
-            (keys.is_key12(control), Lane::Key12),
-            (keys.is_key13(control), Lane::Key13),
-            (keys.is_key14(control), Lane::Key14),
-        ];
-        candidates
-            .into_iter()
-            .find(|(matches, _)| *matches)
-            .is_some_and(|(_, lane)| self.apply_lr2_option_lane(lane))
-    }
 }

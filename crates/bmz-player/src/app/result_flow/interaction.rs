@@ -16,23 +16,14 @@ impl ResultControlKind {
 }
 
 impl WinitApp {
-    /// Key5/Key7 の現在の押下状態を記録する。フェードアウト中も含めて
-    /// 常に呼び、終了アニメーション終了時に retry arrange を決める。
-    pub(super) fn track_result_lane_hold(&mut self, control: &PhysicalControl, pressed: bool) {
-        match self.result_lane_for_control(control) {
-            Some(Lane::Key5) => self.result.result_key5_held = pressed,
-            Some(Lane::Key7) => self.result.result_key7_held = pressed,
-            _ => {}
-        }
-    }
-
     /// 退出直前の物理入力を参照する。複数の割り当て、focus loss、入力再同期でも
     /// 最後に届いた単一イベントの状態をリトライ判定へ持ち越さない。
+    /// 押下中の入力元をそれぞれ現在の設定で解決し、どれか1つが Key5 / Key7 なら保持中とする。
     pub(super) fn sync_result_lane_holds_from_pressed_controls(&mut self) {
         let mut key5_held = false;
         let mut key7_held = false;
-        for (_, control) in &self.input.pressed_play_inputs {
-            match self.result_lane_for_control(control) {
+        for control in self.pressed_scene_controls() {
+            match control.ui_lane() {
                 Some(Lane::Key5) => key5_held = true,
                 Some(Lane::Key7) => key7_held = true,
                 _ => {}
@@ -42,58 +33,29 @@ impl WinitApp {
         self.result.result_key7_held = key7_held;
     }
 
-    pub(super) fn handle_result_control(
-        &mut self,
-        control: &PhysicalControl,
-        pressed: bool,
-        repeat: bool,
-        synthesized_analog_axis: bool,
-    ) -> bool {
-        self.handle_result_control_for(
-            ResultControlKind::Chart,
-            control,
-            pressed,
-            repeat,
-            synthesized_analog_axis,
-        )
+    pub(super) fn handle_result_control(&mut self, input: &ResolvedInput) -> bool {
+        self.handle_result_control_for(ResultControlKind::Chart, input)
     }
 
-    pub(super) fn handle_course_result_control(
-        &mut self,
-        control: &PhysicalControl,
-        pressed: bool,
-        repeat: bool,
-        synthesized_analog_axis: bool,
-    ) -> bool {
-        self.handle_result_control_for(
-            ResultControlKind::Course,
-            control,
-            pressed,
-            repeat,
-            synthesized_analog_axis,
-        )
+    pub(super) fn handle_course_result_control(&mut self, input: &ResolvedInput) -> bool {
+        self.handle_result_control_for(ResultControlKind::Course, input)
     }
 
     fn handle_result_control_for(
         &mut self,
         kind: ResultControlKind,
-        control: &PhysicalControl,
-        pressed: bool,
-        repeat: bool,
-        synthesized_analog_axis: bool,
+        input: &ResolvedInput,
     ) -> bool {
-        if self.handle_result_favorite_control(control, pressed, repeat) {
+        let pressed = input.pressed();
+        let repeat = input.repeat();
+        let control = *input.scene();
+        if self.handle_result_favorite_control(input) {
             return true;
         }
-        if self.handle_result_open_ir_control(
-            control,
-            pressed,
-            repeat,
-            matches!(kind, ResultControlKind::Course),
-        ) {
+        if self.handle_result_open_ir_control(input, matches!(kind, ResultControlKind::Course)) {
             return true;
         }
-        if self.handle_result_ir_scroll_control(control, pressed, repeat, synthesized_analog_axis) {
+        if self.handle_result_ir_scroll_control(input) {
             return true;
         }
         if pressed
@@ -101,7 +63,7 @@ impl WinitApp {
             && self.result_input_ready()
             && self.result.result_panel == 1
             && self.result_ir_scope_toggle_is_e1()
-            && self.is_result_ir_scope_toggle_control(control)
+            && control.is_start()
             && self.toggle_result_ir_scope()
         {
             return true;
@@ -109,19 +71,19 @@ impl WinitApp {
         if pressed
             && !repeat
             && self.result_input_ready()
-            && self.select_result_panel_for_control(control)
+            && result_panel_for_control(&control).is_some_and(|panel| self.set_result_panel(panel))
         {
             return true;
         }
         if pressed
             && !repeat
             && self.result_input_ready()
-            && self.is_result_panel_toggle_control(control)
+            && control.is_e2()
             && self.toggle_result_panel()
         {
             return true;
         }
-        let Some(lane) = self.result_lane_for_control(control) else {
+        let Some(lane) = control.ui_lane() else {
             return false;
         };
         match lane {
@@ -146,18 +108,14 @@ impl WinitApp {
 
     pub(super) fn handle_result_open_ir_control(
         &mut self,
-        control: &PhysicalControl,
-        pressed: bool,
-        repeat: bool,
+        input: &ResolvedInput,
         course_result: bool,
     ) -> bool {
-        let Some(control_name) = physical_control_name(control) else {
-            return false;
-        };
-        if !self.select.select_keys.is_open_ir(control_name) {
+        let control = input.scene();
+        if !control.has_shortcut(InputActionConfig::SelectOpenIr) {
             return false;
         }
-        if !pressed || repeat || !self.result_input_ready() {
+        if !input.pressed() || input.repeat() || !self.result_input_ready() {
             return true;
         }
         let identity = if course_result {
@@ -179,23 +137,16 @@ impl WinitApp {
         true
     }
 
-    pub(super) fn handle_result_ir_scroll_control(
-        &mut self,
-        control: &PhysicalControl,
-        pressed: bool,
-        repeat: bool,
-        synthesized_analog_axis: bool,
-    ) -> bool {
-        let Some(control_name) = physical_control_name(control) else {
+    pub(super) fn handle_result_ir_scroll_control(&mut self, input: &ResolvedInput) -> bool {
+        let Some(rows) = result_ir_scroll_rows_for_control(input.scene()) else {
             return false;
         };
-        let Some(rows) = result_ir_scroll_rows_for_control(control_name, &self.select.select_keys)
-        else {
+        let Some(source) = input.source() else {
             return false;
         };
 
-        if !pressed {
-            self.clear_result_ir_scroll_hold_control(control_name);
+        if !input.pressed() {
+            self.clear_result_ir_scroll_hold_control(source);
             return self.result_ir_scroll_interactive();
         }
         if !self.result_ir_scroll_interactive() {
@@ -204,12 +155,12 @@ impl WinitApp {
         }
 
         // アナログ軸の合成 Press は tick 比例スクロールと重複させない。
-        if synthesized_analog_axis || repeat {
+        if input.synthesized_analog_axis() || input.repeat() {
             return true;
         }
 
         if self.scroll_result_ir_rows(rows) {
-            self.start_result_ir_scroll_hold(rows, control_name);
+            self.start_result_ir_scroll_hold(rows, source.clone());
         }
         true
     }
@@ -240,13 +191,13 @@ impl WinitApp {
         changed
     }
 
-    pub(super) fn start_result_ir_scroll_hold(&mut self, rows: i32, control: &str) {
+    pub(super) fn start_result_ir_scroll_hold(&mut self, rows: i32, control: InputSource) {
         let now = Instant::now();
         let scroll = &mut self.result.result_ir_scroll;
         scroll.hold_rows = rows;
         scroll.hold_started_at = Some(now);
         scroll.hold_last_trigger_at = Some(now);
-        scroll.hold_control = Some(control.to_string());
+        scroll.hold_control = Some(control);
     }
 
     pub(super) fn advance_result_ir_scroll_hold(&mut self) {
@@ -270,8 +221,8 @@ impl WinitApp {
         self.scroll_result_ir_rows(rows);
     }
 
-    pub(super) fn clear_result_ir_scroll_hold_control(&mut self, control: &str) {
-        if self.result.result_ir_scroll.hold_control.as_deref() == Some(control) {
+    pub(super) fn clear_result_ir_scroll_hold_control(&mut self, control: &InputSource) {
+        if self.result.result_ir_scroll.hold_control.as_ref() == Some(control) {
             self.clear_result_ir_scroll_hold();
         }
     }
@@ -415,26 +366,6 @@ impl WinitApp {
         }
     }
 
-    pub(super) fn result_lane_for_control(&self, control: &PhysicalControl) -> Option<Lane> {
-        if let Some(control_name) = physical_control_name(control)
-            && let Some(lane) = self.select.select_keys.ui_lane_for_control(control_name)
-        {
-            return Some(lane);
-        }
-        let key_mode = self.result.finished_play.as_ref()?.summary.key_mode;
-        crate::config::play::lane_binding_for_chart(&self.boot.profile_config.input, key_mode)
-            .resolve(DeviceId(0), control)
-    }
-
-    pub(super) fn is_result_panel_toggle_control(&self, control: &PhysicalControl) -> bool {
-        physical_control_name(control)
-            .is_some_and(|control| self.select.select_keys.is_e2_action(control))
-    }
-
-    pub(super) fn select_result_panel_for_control(&mut self, control: &PhysicalControl) -> bool {
-        result_panel_for_control(control).is_some_and(|panel| self.set_result_panel(panel))
-    }
-
     pub(super) fn toggle_result_panel(&mut self) -> bool {
         let Some(document) = self.renderer.result_skin_document() else {
             return false;
@@ -520,13 +451,6 @@ impl WinitApp {
         })
     }
 
-    pub(super) fn is_result_ir_scope_toggle_control(&self, control: &PhysicalControl) -> bool {
-        physical_control_name(control).is_some_and(|name| {
-            self.select.select_keys.is_start(name)
-                || self.select.select_keys.e_action_for_control(name) == Some(InputActionConfig::E1)
-        })
-    }
-
     /// `selectIrScopeBinding=active` を宣言したスキンだけが Select IR scope を切り替える。
     /// 既存スキンの standard IR ref は常に global のままにする。
     pub(super) fn select_select_ir_scope(
@@ -573,10 +497,6 @@ impl WinitApp {
             document.select_ir_scope_binding == bmz_render::skin::IrScopeBinding::Active
                 && document.select_ir_scope_toggle == bmz_render::skin::SelectIrScopeToggle::E3Press
         })
-    }
-
-    pub(super) fn is_select_ir_scope_toggle_control(&self, control: &str) -> bool {
-        self.select.select_keys.e_action_for_control(control) == Some(InputActionConfig::E3)
     }
 
     pub(super) fn cycle_result_gauge_graph_type(&mut self) {

@@ -53,7 +53,7 @@ fn control_event(app: &mut WinitApp, control: PhysicalControl, pressed: bool) {
         _ => unreachable!(),
     };
     app.input.track_control(&event);
-    app.track_result_lane_hold(&control, pressed);
+    app.sync_result_lane_holds_from_pressed_controls();
 }
 
 #[test]
@@ -93,7 +93,10 @@ fn result_retry_uses_holds_at_exit_after_taps_skips_and_physical_resets() {
     ] {
         enter_result(&mut app, chart_id);
         control_event(&mut app, control.clone(), true);
-        assert!(app.handle_result_control(&control, true, false, false));
+        assert!({
+            let input = app.test_input(&control, true, false);
+            app.handle_result_control(&input)
+        });
         assert_eq!(app.result.result_exit.as_ref().unwrap().action, ResultExitAction::HeldLanes);
         app.advance_result_exit();
         assert!(app.result.finished_play.is_some(), "press must wait for the fadeout");
@@ -108,7 +111,10 @@ fn result_retry_uses_holds_at_exit_after_taps_skips_and_physical_resets() {
         enter_result(&mut app, chart_id);
         app.apply_result_action(ResultAction::Leave, false);
         control_event(&mut app, control.clone(), true);
-        assert!(app.request_result_exit_skip_for_control(&control, true, false));
+        assert!({
+            let input = app.test_input(&control, true, false);
+            app.request_result_exit_skip_for_control(&input)
+        });
         let exit = app.result.result_exit.as_mut().unwrap();
         assert!(exit.skip_requested, "Key5/7 must skip like Key1/3");
         exit.started_at = Instant::now() - Duration::from_secs(60);

@@ -28,6 +28,7 @@ fn remapped_input() -> ProfileInputConfig {
 fn nine_key_cover_buttons_match_cursor_keys_with_normal_and_fine_steps() {
     let input = remapped_input();
     let play_input = play_option_input_for(&input, KeyMode::K9);
+    let keys = SceneInputResolver::from_profile(&input);
     for (device, controls) in [
         (
             W_KEYBOARD_DEVICE_ID,
@@ -44,8 +45,7 @@ fn nine_key_cover_buttons_match_cursor_keys_with_normal_and_fine_steps() {
         for (control, cursor) in controls.into_iter().zip([KeyCode::ArrowUp, KeyCode::ArrowDown]) {
             for fine in [false, true] {
                 let option = play_option_control_for_input(
-                    device,
-                    &control,
+                    &resolved_play_press(&keys, &play_input, device, &control),
                     !fine,
                     fine,
                     Some(&play_input),
@@ -59,15 +59,14 @@ fn nine_key_cover_buttons_match_cursor_keys_with_normal_and_fine_steps() {
                 );
                 assert_eq!(
                     lane_action_from_option(option, false),
-                    keyboard_lane_action_with_fine(&cursor, &input, fine),
+                    crate::app::play_control::keyboard_lane_action_for_event(&cursor, &input, fine),
                     "{device:?} {control:?} fine={fine}",
                 );
             }
             for held in [false, true] {
                 assert_eq!(
                     play_option_control_for_input(
-                        device,
-                        &control,
+                        &resolved_play_press(&keys, &play_input, device, &control),
                         held,
                         held,
                         Some(&play_input),
@@ -124,7 +123,7 @@ fn nine_key_cover_shortcuts_preserve_other_modes_and_nine_key_hispeed_buttons() 
         let control =
             play_input.binding.entries.iter().find(|entry| entry.lane == Lane::Key8).unwrap();
         assert!(matches!(
-            play_option_control_for_input(
+            play_option_for(
                 control.device.unwrap_or(W_KEYBOARD_DEVICE_ID),
                 &control.control,
                 true,
@@ -138,7 +137,7 @@ fn nine_key_cover_shortcuts_preserve_other_modes_and_nine_key_hispeed_buttons() 
     let play_input = play_option_input_for(&input, KeyMode::K9);
     for (control, down) in [("Z", true), ("S", false), ("V", true)] {
         for fine in [false, true] {
-            let change = play_option_control_for_input(
+            let change = play_option_for(
                 W_KEYBOARD_DEVICE_ID,
                 &PhysicalControl::KeyboardKey(control.into()),
                 !fine,
@@ -164,7 +163,7 @@ fn inverted_e2_green_number_keeps_nine_key_cover_buttons() {
     let mut input = remapped_input();
     let play_input = play_option_input_for(&input, KeyMode::K9);
     let option = |input: &ProfileInputConfig, control: &str| {
-        play_option_control_for_input(
+        play_option_for(
             W_KEYBOARD_DEVICE_ID,
             &PhysicalControl::KeyboardKey(control.into()),
             false,

@@ -342,6 +342,11 @@ impl WinitApp {
         let mut session_options =
             play_session_options_from_start(&self.play_session_app_config(), options.clone());
         session_options.play_config_key_mode = Some(play_config_key_mode);
+        // ノーツ入力は preload したセッションの割り当てで動くので、E1〜E4 や補助操作も
+        // 同じ割り当てに揃える。
+        if let Some(slots) = self.play_preload_gamepad_slots(chart_id) {
+            session_options.gamepad_slots = slots;
+        }
         // CLIの一時上書き中とコースのNoSpeed制約中は、profileの量を書き換えない。
         if self.boot.profile_config.cli_play.is_none()
             && session_options.speed_constraint != bmz_core::course::CourseSpeedConstraint::NoSpeed

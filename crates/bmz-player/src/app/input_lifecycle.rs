@@ -118,8 +118,11 @@ impl WinitApp {
             self.route_play_device_input(event);
         }
         for key in released {
-            if let Some(control) = physical_key_name(key) {
-                self.clear_select_hold_control(&control);
+            if let Some(control) = crate::input::winit::physical_key_to_control(key) {
+                self.clear_select_hold_control(&InputSource {
+                    device: crate::input::winit::W_KEYBOARD_DEVICE_ID,
+                    control,
+                });
             }
         }
         self.sync_select_holds_from_pressed_controls();

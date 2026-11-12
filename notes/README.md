@@ -41,6 +41,7 @@
 |---|---|
 | 2026-11-12 | [Implexroughの動画BGAが途中で止まる問題（#91）](2026/2026-11-12-implexrough-bga-decode.md) |
 | 2026-11-12 | [クイックリトライ時の動画BGA（#90）](2026/2026-11-12-bga-quick-retry.md) |
+| 2026-11-11 | [1P / 2Pで異なるキーコンフィグの入力解決](2026/2026-11-11-input-resolution-pipeline.md) |
 | 2026-11-11 | [プレー終了時とResultのゲージ値不一致](2026/2026-11-11-result-gauge-settlement.md) |
 | 2026-11-11 | [E2+鍵盤による緑数字の操作の向き](2026/2026-11-11-e2-key-green-number-direction.md) |
 | 2026-11-11 | [H-RANDOMの閾値を125msへそろえる](2026/2026-11-11-h-random-threshold.md) |

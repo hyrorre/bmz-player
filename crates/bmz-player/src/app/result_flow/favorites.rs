@@ -6,18 +6,14 @@ pub(super) enum ResultFavoriteKind {
     Chart,
 }
 
-pub(super) fn result_favorite_kind(
-    control: &PhysicalControl,
-    bindings: &SelectKeyBindings,
-) -> Option<ResultFavoriteKind> {
-    let name = physical_control_name(control)?;
+pub(super) fn result_favorite_kind(control: &ResolvedControl) -> Option<ResultFavoriteKind> {
     // Common E actions retain their priority over scene-specific shortcuts.
-    if bindings.e_action_for_control(name).is_some() {
+    if control.e_action().is_some() {
         return None;
     }
-    if bindings.is_favorite_song(name) {
+    if control.has_shortcut(InputActionConfig::SelectFavoriteSong) {
         Some(ResultFavoriteKind::Song)
-    } else if bindings.is_favorite_chart(name) {
+    } else if control.has_shortcut(InputActionConfig::SelectFavoriteChart) {
         Some(ResultFavoriteKind::Chart)
     } else {
         None
@@ -42,16 +38,11 @@ pub(super) fn result_favorite_hints(
 }
 
 impl WinitApp {
-    pub(super) fn handle_result_favorite_control(
-        &mut self,
-        control: &PhysicalControl,
-        pressed: bool,
-        repeat: bool,
-    ) -> bool {
-        let Some(kind) = result_favorite_kind(control, &self.select.select_keys) else {
+    pub(super) fn handle_result_favorite_control(&mut self, input: &ResolvedInput) -> bool {
+        let Some(kind) = result_favorite_kind(input.scene()) else {
             return false;
         };
-        if pressed && !repeat {
+        if input.pressed() && !input.repeat() {
             self.toggle_result_favorite(kind);
         }
         true

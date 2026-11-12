@@ -175,8 +175,10 @@ impl WinitApp {
             return false;
         }
 
-        self.select.select_keys = SelectKeyBindings::from_profile(&self.boot.profile_config.input);
+        self.select.select_keys = SceneInputResolver::from_profile(&self.boot.profile_config.input);
+        // 押したままの入力元も新しい設定で解決し直し、E1〜E4 の保持状態を揃える。
         self.clear_select_hold();
+        self.sync_select_holds_from_pressed_controls();
         self.invalidate_play_preload();
         self.play.play_media_cache = None;
         self.suppress_select_analog_until_idle();

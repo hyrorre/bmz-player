@@ -404,19 +404,20 @@ pub(super) fn should_route_settings_key_event(
     state == ElementState::Pressed && (settings_editing || !repeat)
 }
 
-pub(super) fn settings_browse_move_control(
-    control: &str,
-    bindings: &SettingsBindings,
-    select_bindings: &SelectKeyBindings,
-) -> Option<SelectMove> {
-    match control {
-        "ArrowUp" | "ScratchUp" => Some(SelectMove::Previous),
-        "ArrowDown" | "ScratchDown" => Some(SelectMove::Next),
-        _ if select_bindings.is_select_scratch_up(control) => Some(SelectMove::Previous),
-        _ if select_bindings.is_select_scratch_down(control) => Some(SelectMove::Next),
-        _ if bindings.is_increase(control) => Some(SelectMove::Next),
-        _ if bindings.is_decrease(control) => Some(SelectMove::Previous),
-        _ => None,
+/// 設定一覧の上下移動。↑ / Scratch Up で前、↓ / Scratch Down で次。
+pub(super) fn settings_browse_move_control(control: &ResolvedControl) -> Option<SelectMove> {
+    match control.standard() {
+        Some(StandardKey::ArrowUp) => return Some(SelectMove::Previous),
+        Some(StandardKey::ArrowDown) => return Some(SelectMove::Next),
+        _ => {}
+    }
+    let settings = control.settings_input();
+    if control.is_scratch_up() || (!control.is_scratch_down() && settings.decrease) {
+        Some(SelectMove::Previous)
+    } else if control.is_scratch_down() || settings.increase {
+        Some(SelectMove::Next)
+    } else {
+        None
     }
 }
 

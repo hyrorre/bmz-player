@@ -72,13 +72,8 @@ pub(super) fn apply_session_mode_start_policy(options: &mut PlayStartOptions) {
 }
 
 impl WinitApp {
-    pub(super) fn route_practice_gamepad_control(
-        &mut self,
-        device: DeviceId,
-        button: &str,
-        pressed: bool,
-        synthesized_analog_axis: bool,
-    ) -> bool {
+    pub(super) fn route_practice_gamepad_control(&mut self, input: &ResolvedInput) -> bool {
+        let pressed = input.pressed();
         let is_config = self
             .play
             .practice_session
@@ -101,11 +96,13 @@ impl WinitApp {
             return true;
         }
 
-        let control = PhysicalControl::GamepadButton(button.to_string());
+        let (Some(device), Some(control)) = (input.device(), input.physical()) else {
+            return true;
+        };
         let action = practice_gamepad_action(
             device,
-            &control,
-            synthesized_analog_axis,
+            control,
+            input.synthesized_analog_axis(),
             self.play.play_option_input.as_ref(),
         );
 

@@ -553,13 +553,28 @@ fn practice_config_play_exit_uses_the_same_leave_path_as_escape() {
 
 #[test]
 fn play_analog_lane_cover_delta_maps_scratch_bindings() {
-    let gamepad_keys =
-        SelectKeyBindings::from_profile(&ProfileConfig::new_default("default", "Default", 1).input);
+    let gamepad_keys = SceneInputResolver::from_profile(
+        &ProfileConfig::new_default("default", "Default", 1).input,
+    );
 
-    assert_eq!(play_analog_lane_cover_delta("Axis1", 4, &gamepad_keys), Some(-4));
-    assert_eq!(play_analog_lane_cover_delta("Axis1", -4, &gamepad_keys), Some(4));
-    assert_eq!(play_analog_lane_cover_delta("Axis2", -4, &gamepad_keys), None);
-    assert_eq!(play_analog_lane_cover_delta("Axis1", 0, &gamepad_keys), None);
+    let input = ProfileConfig::new_default("default", "Default", 1).input;
+    let play_input = play_option_input_for(&input, KeyMode::K7);
+    // プレイ用 SCR 設定で tick ごとに方向を解決する (Scratch Down を正とする)。
+    let delta = |axis: &str, ticks: i32| {
+        input_resolve::resolve_axis_tick(
+            &gamepad_keys,
+            Some(&play_input),
+            crate::input::gamepad::GamepadSlotMap::default(),
+            DeviceId(16),
+            axis,
+            ticks,
+        )
+        .play_scroll
+    };
+    assert_eq!(delta("Axis1", 4), Some(-4));
+    assert_eq!(delta("Axis1", -4), Some(4));
+    assert_eq!(delta("Axis2", -4), None);
+    assert_eq!(delta("Axis1", 0), None);
 }
 
 #[test]
@@ -638,7 +653,7 @@ fn play_control_hold_state_treats_e4_as_e1() {
 #[test]
 fn play_option_control_toggles_floating_with_e4_and_e2() {
     let input = crate::config::play_input::default_profile_input();
-    let keys = SelectKeyBindings::from_profile(&input);
+    let keys = SceneInputResolver::from_profile(&input);
     let play_input = play_option_input_for(&input, KeyMode::K7);
 
     // E2 hold中にE4、E4 hold中にE2のどちらでも切替。

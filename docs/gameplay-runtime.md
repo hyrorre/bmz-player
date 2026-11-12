@@ -59,6 +59,11 @@ region・scheduler・判定状態は引き継ぎません。cacheはプロセス
   scratch停止は同じqueueの1ms timerで確認します。履歴の軸処理は入力サンプル時刻で進めます。
 - Gameplayに送る入力と、メニュー・キー設定用のUIコピーは別キューにします。
   UIのコピーが滞留してもgameplayの配送には影響しません。
+- window/event-loopスレッドのUIコピーは、`ControlInputEvent`から`input_resolve::resolve_input`だけを通して
+  機器・スロット・設定対象モードを解決し、解決済みの`ResolvedInput`から操作を決めます。
+  進行中のプレー（読み込み中・プラクティスを含む）では、UIコピーもノーツ入力と同じく開始時の1P / 2Pの割り当てで解決します。
+  解決の規則と、入力名を直接見る残りの箇所は[操作方法](controls.md#1p--2pの入力の解決)と
+  [作業記録](../notes/2026/2026-11-11-input-resolution-pipeline.md)を参照してください。
 - macOS / Linuxのゲームパッドも独立取得します。macOSキーボードは`macos-iohid` featureで有効化したIOHID専用run loop、
   またはmacOS 11以降のGCKeyboard専用dispatch queueで独立取得できます。
   winitを選んだ場合とLinuxではwindow/event-loop停止中のキーボード取得遅延が残ります。

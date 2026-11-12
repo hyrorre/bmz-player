@@ -3,7 +3,7 @@ use bmz_core::lane::KeyMode;
 use super::play::{lane_from_config, lane_to_config};
 use super::play_input::{
     default_play_bindings, gamepad_play_binding_for_device, is_gamepad_device, play_binding,
-    resolve_play_bindings, scratch_play_binding,
+    resolve_play_bindings, resolve_play_bindings_with_markers, scratch_play_binding,
 };
 use super::profile_config::{
     BindingConfigEntry, InputActionConfig, KeyboardBindingSlotConfig, LaneConfig,
@@ -41,6 +41,25 @@ pub const KEY_BINDING_SLOTS: &[KeyBindingSlot] = &[
     KeyBindingSlot::KeyboardSecondary,
     KeyBindingSlot::Controller,
 ];
+
+/// 共通操作 (E1〜E4) のスロット。コントローラーは共通設定に加えて 1P / 2P の個別設定を持つ。
+pub const COMMON_KEY_BINDING_SLOTS: &[KeyBindingSlot] = &[
+    KeyBindingSlot::KeyboardPrimary,
+    KeyBindingSlot::KeyboardSecondary,
+    KeyBindingSlot::Controller,
+    KeyBindingSlot::Controller1P,
+    KeyBindingSlot::Controller2P,
+];
+
+/// キーコンフィグのグループで編集できるスロット。
+pub fn binding_slots_for_group(group: KeyBindingGroup) -> &'static [KeyBindingSlot] {
+    match group {
+        KeyBindingGroup::Common => COMMON_KEY_BINDING_SLOTS,
+        KeyBindingGroup::Select | KeyBindingGroup::Play | KeyBindingGroup::Result => {
+            KEY_BINDING_SLOTS
+        }
+    }
+}
 
 impl KeyBindingSlot {
     pub fn suffix(self) -> &'static str {
@@ -260,6 +279,9 @@ pub fn key_binding_targets_for_group(
     group: KeyBindingGroup,
     slot: KeyBindingSlot,
 ) -> Vec<KeyBindingTarget> {
+    if !binding_slots_for_group(group).contains(&slot) {
+        return Vec::new();
+    }
     let actions = match group {
         KeyBindingGroup::Common => COMMON_ACTIONS,
         KeyBindingGroup::Select => SELECT_ACTIONS,
@@ -593,8 +615,98 @@ pub fn format_play_binding(
 ) -> String {
     match target {
         KeyBindingTarget::Action { .. } => format_action_binding(&profile.input, target),
-        _ => format_target_control(&resolved_play_bindings(&profile.input, key_mode), target),
+        _ => {
+            let bindings = resolved_play_bindings(&profile.input, key_mode);
+            if target.slot().is_controller() {
+                let lane = write::lane_for_target(target);
+                let with_markers = resolve_play_bindings_with_markers(&profile.input, key_mode)
+                    .unwrap_or_else(|_| default_play_bindings(key_mode));
+                if lane_controller_binding_in(&with_markers, lane, target.slot().device())
+                    == LaneControllerBinding::Inherit
+                    && let Some(label) = format_select_fallback(&profile.input, key_mode, target)
+                {
+                    return label;
+                }
+            }
+            format_target_control(&bindings, target)
+        }
     }
+}
+
+/// 設定のないコントローラーのレーンが、7K/14K 選曲入力で継承する割り当ての表示。
+///
+/// - 14K の 2P 側: 同じ 2P 機器の 7K のレーン設定。
+/// - 7K の共通コントローラー: 1P 機器の 14K の 1P 側レーン設定。
+fn format_select_fallback(
+    input: &ProfileInputConfig,
+    key_mode: KeyMode,
+    target: KeyBindingTarget,
+) -> Option<String> {
+    let (fallback_mode, fallback_target, label) = match (key_mode, target) {
+        (KeyMode::K14, KeyBindingTarget::Key { lane, slot: KeyBindingSlot::Controller2P }) => (
+            KeyMode::K7,
+            KeyBindingTarget::Key {
+                lane: player2_lane_to_7k(lane)?,
+                slot: KeyBindingSlot::Controller2P,
+            },
+            "SELECT 7K",
+        ),
+        (
+            KeyMode::K14,
+            KeyBindingTarget::Scratch { lane, direction, slot: KeyBindingSlot::Controller2P },
+        ) => (
+            KeyMode::K7,
+            KeyBindingTarget::Scratch {
+                lane: player2_lane_to_7k(lane)?,
+                direction,
+                slot: KeyBindingSlot::Controller2P,
+            },
+            "SELECT 7K",
+        ),
+        (KeyMode::K7, KeyBindingTarget::Key { lane, slot: KeyBindingSlot::Controller }) => (
+            KeyMode::K14,
+            KeyBindingTarget::Key { lane, slot: KeyBindingSlot::Controller1P },
+            "SELECT 14K 1P",
+        ),
+        (
+            KeyMode::K7,
+            KeyBindingTarget::Scratch { lane, direction, slot: KeyBindingSlot::Controller },
+        ) => (
+            KeyMode::K14,
+            KeyBindingTarget::Scratch { lane, direction, slot: KeyBindingSlot::Controller1P },
+            "SELECT 14K 1P",
+        ),
+        _ => return None,
+    };
+    let fallback = resolve_play_bindings_with_markers(input, fallback_mode).ok()?;
+    let fallback_lane = write::lane_for_target(fallback_target);
+    let value =
+        match lane_controller_binding_in(&fallback, fallback_lane, fallback_target.slot().device())
+        {
+            LaneControllerBinding::Explicit(_) => format_target_control(
+                &resolved_play_bindings(input, fallback_mode),
+                fallback_target,
+            ),
+            LaneControllerBinding::Inherit | LaneControllerBinding::Unassigned => {
+                "none".to_string()
+            }
+        };
+    Some(format!("({label}: {value})"))
+}
+
+/// 14K の 2P 側レーンを、7K の同じ番号のレーンへ写像する。
+fn player2_lane_to_7k(lane: LaneConfig) -> Option<LaneConfig> {
+    Some(match lane {
+        LaneConfig::Scratch2 => LaneConfig::Scratch,
+        LaneConfig::Key8 => LaneConfig::Key1,
+        LaneConfig::Key9 => LaneConfig::Key2,
+        LaneConfig::Key10 => LaneConfig::Key3,
+        LaneConfig::Key11 => LaneConfig::Key4,
+        LaneConfig::Key12 => LaneConfig::Key5,
+        LaneConfig::Key13 => LaneConfig::Key6,
+        LaneConfig::Key14 => LaneConfig::Key7,
+        _ => return None,
+    })
 }
 
 fn resolved_play_bindings(
@@ -649,10 +761,18 @@ fn format_action_binding(input: &ProfileInputConfig, target: KeyBindingTarget) -
         }
         KeyBindingSlot::Controller
         | KeyBindingSlot::Controller1P
-        | KeyBindingSlot::Controller2P => {
-            let controls = action_controls_for_slot(input, action, slot);
-            if controls.is_empty() { "(none)".to_string() } else { controls.join(" / ") }
-        }
+        | KeyBindingSlot::Controller2P => match action_controller_binding(input, action, slot) {
+            ActionControllerBinding::Explicit(controls) if !controls.is_empty() => {
+                controls.join(" / ")
+            }
+            ActionControllerBinding::Explicit(_) | ActionControllerBinding::Unassigned => {
+                "(none)".to_string()
+            }
+            ActionControllerBinding::Inherit(common) if common.is_empty() => {
+                "(COMMON: none)".to_string()
+            }
+            ActionControllerBinding::Inherit(common) => format!("(COMMON: {})", common.join(" / ")),
+        },
     }
 }
 
@@ -665,6 +785,7 @@ mod write;
 
 pub use api::*;
 use read::*;
+pub use read::{ActionControllerBinding, LaneControllerBinding, action_controller_binding};
 use write::*;
 
 #[cfg(test)]

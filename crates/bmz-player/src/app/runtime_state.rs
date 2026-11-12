@@ -65,12 +65,12 @@ pub(super) struct SelectRuntimeState {
     /// Currently selected replay slot for the highlighted chart or course.
     pub(super) selected_replay_slot: Option<u8>,
     pub(super) select_sort: SelectSort,
-    pub(super) select_keys: SelectKeyBindings,
+    pub(super) select_keys: SceneInputResolver,
     pub(super) select_bar_scroll: SelectBarScroll,
     pub(super) select_hold_move: Option<SelectMove>,
     pub(super) select_hold_started_at: Option<Instant>,
     pub(super) select_hold_last_trigger_at: Option<Instant>,
-    pub(super) select_hold_control: Option<String>,
+    pub(super) select_hold_control: Option<InputSource>,
     pub(super) select_analog_scroll_buffer: i32,
     pub(super) select_analog_last_tick_at: Option<Instant>,
     /// キーコンフィグ確定/キャンセル直後、スクラッチが止まるまでアナログスクロールを抑止する。
@@ -251,7 +251,7 @@ pub(super) struct ResultIrScrollRuntime {
     pub(super) hold_rows: i32,
     pub(super) hold_started_at: Option<Instant>,
     pub(super) hold_last_trigger_at: Option<Instant>,
-    pub(super) hold_control: Option<String>,
+    pub(super) hold_control: Option<InputSource>,
     pub(super) analog_buffer: i32,
     pub(super) analog_last_tick_at: Option<Instant>,
 }

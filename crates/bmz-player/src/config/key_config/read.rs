@@ -193,10 +193,9 @@ pub(super) fn read_scratch_gamepad_slots_for_device(
 
     // 明示の direction タグを最優先する。コントロール名 (+/-) からの推測は
     // 旧 entry 向けのフォールバックで、軸極性が逆のデバイスでは当てにならない。
-    for entry in bindings
-        .iter()
-        .filter(|e| device_matches_for_read(&e.device, device) && e.lane == Some(lane))
-    {
+    for entry in bindings.iter().filter(|e| {
+        device_matches_for_read(&e.device, device) && e.lane == Some(lane) && !e.control.is_empty()
+    }) {
         let control = entry.control.clone();
         match entry.scratch {
             Some(ScratchDirectionConfig::Up) => slots.up = Some(control),
@@ -232,9 +231,88 @@ pub(super) fn gamepad_controls_for_lane_device(
 ) -> Vec<String> {
     bindings
         .iter()
-        .filter(|entry| device_matches_for_read(&entry.device, device) && entry.lane == Some(lane))
+        .filter(|entry| {
+            device_matches_for_read(&entry.device, device)
+                && entry.lane == Some(lane)
+                && !entry.control.is_empty()
+        })
         .map(|entry| entry.control.clone())
         .collect()
+}
+
+/// コントローラーの1レーン分の割り当て状態。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LaneControllerBinding {
+    /// 設定がない。選曲入力では別の設定対象モードの同じレーンを継承する。
+    Inherit,
+    /// このレーンに割り当てたボタン。
+    Explicit(Vec<String>),
+    /// 明示的に割り当てを外した (`control = ""` の marker)。継承しない。
+    Unassigned,
+}
+
+/// レーンのコントローラー割り当てを、継承・明示割り当て・明示的な未割り当てに分けて読む。
+///
+/// 1P / 2P (`gamepad1` / `gamepad2`) はその側の設定を先に見て、無ければ共通設定
+/// (`gamepad`) を見る。`bindings` は marker を含む
+/// [`crate::config::play_input::resolve_play_bindings_with_markers`] の結果を渡す。
+pub(super) fn lane_controller_binding_in(
+    bindings: &[BindingConfigEntry],
+    lane: LaneConfig,
+    device: &str,
+) -> LaneControllerBinding {
+    let mut devices = vec![device];
+    if device != "gamepad" {
+        devices.push("gamepad");
+    }
+    for device in devices {
+        let entries: Vec<&BindingConfigEntry> = bindings
+            .iter()
+            .filter(|entry| {
+                entry.device.eq_ignore_ascii_case(device)
+                    && entry.lane == Some(lane)
+                    && entry.action.is_none()
+            })
+            .collect();
+        let controls: Vec<String> = entries
+            .iter()
+            .filter(|entry| !entry.control.is_empty())
+            .map(|entry| entry.control.clone())
+            .collect();
+        if !controls.is_empty() {
+            return LaneControllerBinding::Explicit(controls);
+        }
+        if !entries.is_empty() {
+            return LaneControllerBinding::Unassigned;
+        }
+    }
+    LaneControllerBinding::Inherit
+}
+
+/// そのデバイスに直接書いた明示的な未割り当ての marker を消す。
+pub(super) fn remove_lane_unassigned_marker(
+    bindings: &mut Vec<BindingConfigEntry>,
+    lane: LaneConfig,
+    device: &str,
+) {
+    bindings.retain(|entry| {
+        !(entry.device.eq_ignore_ascii_case(device)
+            && entry.lane == Some(lane)
+            && entry.control.is_empty())
+    });
+}
+
+/// そのデバイスに直接書いた明示的な未割り当ての marker があるか。
+pub(super) fn has_lane_unassigned_marker(
+    bindings: &[BindingConfigEntry],
+    lane: LaneConfig,
+    device: &str,
+) -> bool {
+    bindings.iter().any(|entry| {
+        entry.device.eq_ignore_ascii_case(device)
+            && entry.lane == Some(lane)
+            && entry.control.is_empty()
+    })
 }
 
 pub(super) fn remove_lane_device_bindings(
@@ -245,20 +323,77 @@ pub(super) fn remove_lane_device_bindings(
     bindings.retain(|entry| !(device_matches(&entry.device, device) && entry.lane == Some(lane)));
 }
 
+/// そのスロットのデバイスに直接書かれた割り当て。1P / 2P は共通設定を含めない。
+/// 明示的な未割り当ての marker (`control = ""`) は含めない。
 pub(super) fn action_controls_for_slot(
     input: &ProfileInputConfig,
     action: InputActionConfig,
     slot: KeyBindingSlot,
 ) -> Vec<String> {
+    let device = slot.device();
     input
         .ui
         .bindings
         .iter()
         .filter(|entry| {
-            device_matches(&entry.device, slot.device()) && entry.action == Some(action)
+            entry.device.eq_ignore_ascii_case(device)
+                && entry.action == Some(action)
+                && !entry.control.is_empty()
         })
         .map(|entry| entry.control.clone())
         .collect()
+}
+
+/// コントローラー側のアクション割り当て状態。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActionControllerBinding {
+    /// 共通設定 (`gamepad`) を継承する。
+    Inherit(Vec<String>),
+    /// このスロットで割り当てたボタン。
+    Explicit(Vec<String>),
+    /// このスロットで明示的に割り当てを外した。
+    Unassigned,
+}
+
+/// 1P / 2P のコントローラー割り当てを、継承・明示割り当て・明示的な未割り当てに分けて読む。
+pub fn action_controller_binding(
+    input: &ProfileInputConfig,
+    action: InputActionConfig,
+    slot: KeyBindingSlot,
+) -> ActionControllerBinding {
+    let common = action_controls_for_slot(input, action, KeyBindingSlot::Controller);
+    if slot == KeyBindingSlot::Controller {
+        return ActionControllerBinding::Explicit(common);
+    }
+    let device = slot.device();
+    let has_override = input
+        .ui
+        .bindings
+        .iter()
+        .any(|entry| entry.device.eq_ignore_ascii_case(device) && entry.action == Some(action));
+    if !has_override {
+        return ActionControllerBinding::Inherit(common);
+    }
+    let controls = action_controls_for_slot(input, action, slot);
+    if controls.is_empty() {
+        ActionControllerBinding::Unassigned
+    } else {
+        ActionControllerBinding::Explicit(controls)
+    }
+}
+
+pub(super) fn remove_action_exact_device_bindings(
+    input: &mut ProfileInputConfig,
+    action: InputActionConfig,
+    device: &str,
+) {
+    input.ui.bindings.retain(|entry| {
+        !(entry.device.eq_ignore_ascii_case(device) && entry.action == Some(action))
+    });
+}
+
+pub(super) fn is_side_specific_gamepad_device(device: &str) -> bool {
+    crate::config::play_input::gamepad_player_index(device).is_some()
 }
 
 pub(super) fn remove_action_device_bindings(

@@ -660,9 +660,13 @@ impl WinitApp {
     pub(super) fn play_session_app_config(&self) -> AppConfig {
         let mut app_config = self.boot.app_config.clone();
         app_config.audio.sample_rate = self.play_output_sample_rate();
-        app_config.input.gamepad_slot_runtime_device_ids =
-            resolve_gamepad_runtime_slots(&app_config.input, self.gamepad.as_ref())
-                .map(|id| id.map(|id| id.0));
+        // 進行中のプレー (Practice の次のラウンド、クイックリトライを含む) は、開始時の
+        // 割り当てを引き継ぐ。選曲へ戻ったあとの次のプレーから現在の割り当てを使う。
+        let slots =
+            self.play_session_gamepad_slots().map(|slots| slots.slot_device_ids).unwrap_or_else(
+                || resolve_gamepad_runtime_slots(&app_config.input, self.gamepad.as_ref()),
+            );
+        app_config.input.gamepad_slot_runtime_device_ids = slots.map(|id| id.map(|id| id.0));
         app_config
     }
 

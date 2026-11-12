@@ -9,9 +9,9 @@ fn select_control_action_does_not_hardcode_button2_as_back() {
             entry.lane = Some(LaneConfig::Key3);
         }
     }
-    let keys = SelectKeyBindings::from_profile(&input);
+    let keys = SceneInputResolver::from_profile(&input);
 
-    assert!(keys.is_enter("Button2"));
+    assert!(resolve_named(&keys, "Button2").is_enter());
     assert_eq!(select_control_action("Button2", &keys), Some(SelectAction::EnterOrPlay));
     assert_eq!(select_control_action("Button1", &keys), Some(SelectAction::EnterOrPlay));
 }
@@ -53,11 +53,11 @@ fn key9_select_input_maps_configured_lane_keys() {
         select_action(PhysicalKey::Code(KeyCode::KeyG), ElementState::Pressed, false, &keys),
         None
     );
-    assert!(keys.is_ir_battle_hold("G"));
-    assert!(!keys.is_ir_battle_hold("D"));
+    assert!(resolve_named(&keys, "G").is_ir_battle_hold());
+    assert!(!resolve_named(&keys, "D").is_ir_battle_hold());
     // E1 hold: KEY8 / KEY9 cycle TARGET backward / forward like beatoraja POPN_9K.
-    assert_eq!(target_cycle_from_control("G", &keys), Some(TargetCycle::Previous));
-    assert_eq!(target_cycle_from_control("B", &keys), Some(TargetCycle::Next));
+    assert_eq!(target_cycle_from_input(&resolve_named(&keys, "G")), Some(TargetCycle::Previous));
+    assert_eq!(target_cycle_from_input(&resolve_named(&keys, "B")), Some(TargetCycle::Next));
 }
 
 #[test]
@@ -65,15 +65,15 @@ fn key9_select_input_keeps_key8_and_key9_out_of_2p_option_keys() {
     let keys = select_keys_9k();
 
     // E1+E2: KEY8 / KEY9 must not alias the 14K 2P KEY1 / KEY2 (BGA / GAUGE AUTO SHIFT).
-    assert!(keys.is_ui_key1("Z"));
-    assert!(!keys.is_ui_key1("G"));
-    assert!(keys.is_ui_key2("S"));
-    assert!(!keys.is_ui_key2("B"));
-    assert_eq!(keys.ui_lane_for_control("G"), None);
-    assert_eq!(keys.ui_lane_for_control("B"), None);
+    assert!(resolve_named(&keys, "Z").is_ui_key(1));
+    assert!(!resolve_named(&keys, "G").is_ui_key(1));
+    assert!(resolve_named(&keys, "S").is_ui_key(2));
+    assert!(!resolve_named(&keys, "B").is_ui_key(2));
+    assert_eq!(resolve_named(&keys, "G").ui_lane(), None);
+    assert_eq!(resolve_named(&keys, "B").ui_lane(), None);
 
     let keys_7k = default_select_keys();
-    assert!(keys_7k.is_ir_battle_hold("D"));
+    assert!(resolve_named(&keys_7k, "D").is_ir_battle_hold());
 }
 
 #[test]
@@ -97,7 +97,7 @@ fn key9_select_input_moves_with_controller_lane_buttons() {
         scratch: None,
     })
     .collect();
-    let keys = SelectKeyBindings::from_profile(&input);
+    let keys = SceneInputResolver::from_profile(&input);
 
     assert_eq!(
         select_control_action("Button24", &keys),
@@ -247,7 +247,10 @@ fn select_option_panel_open_sound_occurs_once_when_returning_with_e1_held() {
     // Result exit reconciles physical holds before Select's scene-entry reset.
     // The state-only reconciliation must not open the panel or play its sound.
     let mut panel = 0;
-    reconcile_select_holds_from_pressed_controls(&mut input, &keys);
+    let (start, select, actions) = hold_state(&input, &keys);
+    input.start_held = start;
+    input.select_held = select;
+    input.select_e_action_holds = actions;
     assert!(input.start_held, "E1 should remain held across Result exit");
     assert!(input.select_e_action_holds.contains(&InputActionConfig::E1));
     assert_eq!(panel, 0, "hold reconciliation must not transition the panel");
@@ -343,7 +346,7 @@ fn shift_detail_panel_survives_other_keys_and_closes_after_reconciliation() {
             }
         }
     }
-    let keys = SelectKeyBindings::from_profile(&profile.input);
+    let keys = SceneInputResolver::from_profile(&profile.input);
     let mut runtime = AppInputRuntime::default();
     for (key, repeat) in
         [(KeyCode::ShiftLeft, false), (KeyCode::ShiftRight, true), (KeyCode::KeyD, false)]
@@ -355,8 +358,7 @@ fn shift_detail_panel_survives_other_keys_and_closes_after_reconciliation() {
         ));
     }
     let panel = |runtime: &AppInputRuntime| {
-        let (start, select, _) =
-            select_hold_state_from_pressed_controls(&runtime.pressed_controls, &keys);
+        let (start, select, _) = hold_state(runtime, &keys);
         select_option_panel_for_holds(start, select)
     };
     assert_eq!(panel(&runtime), 3);
@@ -409,8 +411,7 @@ fn select_hold_state_rebuilds_from_pressed_controls() {
     let keys = default_select_keys();
     let pressed = HashSet::from(["Q".to_string(), "W".to_string()]);
 
-    let (start_held, select_held, e_action_holds) =
-        select_hold_state_from_pressed_controls(&pressed, &keys);
+    let (start_held, select_held, e_action_holds) = hold_state_named(&pressed, &keys);
 
     assert!(start_held);
     assert!(select_held);
@@ -418,8 +419,7 @@ fn select_hold_state_rebuilds_from_pressed_controls() {
     assert!(e_action_holds.contains(&InputActionConfig::E2));
 
     let pressed = HashSet::from(["W".to_string()]);
-    let (start_held, select_held, e_action_holds) =
-        select_hold_state_from_pressed_controls(&pressed, &keys);
+    let (start_held, select_held, e_action_holds) = hold_state_named(&pressed, &keys);
 
     assert!(!start_held);
     assert!(select_held);
@@ -429,25 +429,36 @@ fn select_hold_state_rebuilds_from_pressed_controls() {
 
 #[test]
 fn select_hold_move_follows_the_physical_control_across_devices() {
+    use crate::app::input_resolve::InputSource;
     let mut input = AppInputRuntime::default();
-    assert!(!select_hold_control_released(None, &input.pressed_controls));
+    assert!(!select_hold_control_released(None, &input));
 
-    // 9KEYS コントローラーの KEY4 (前へ) を2台で押し、1台ずつ離す。
+    // 9KEYS コントローラーの KEY4 (前へ) を2台で押す。ホールドは押下した入力元に紐づき、
+    // 同名ボタンを押している別機器があっても、その入力元が離れた時点で止まる。
+    let first = InputSource {
+        device: DeviceId(2),
+        control: PhysicalControl::GamepadButton("Button24".into()),
+    };
     input.track_control(&ControlInputEvent::gamepad(DeviceId(2), "Button24", true));
     input.track_control(&ControlInputEvent::gamepad(DeviceId(3), "Button24", true));
-    assert!(!select_hold_control_released(Some("Button24"), &input.pressed_controls));
-    input.track_control(&ControlInputEvent::gamepad(DeviceId(2), "Button24", false));
-    assert!(!select_hold_control_released(Some("Button24"), &input.pressed_controls));
+    assert!(!select_hold_control_released(Some(&first), &input));
     input.track_control(&ControlInputEvent::gamepad(DeviceId(3), "Button24", false));
-    assert!(select_hold_control_released(Some("Button24"), &input.pressed_controls));
+    assert!(!select_hold_control_released(Some(&first), &input), "other device release");
+    input.track_control(&ControlInputEvent::gamepad(DeviceId(3), "Button24", true));
+    input.track_control(&ControlInputEvent::gamepad(DeviceId(2), "Button24", false));
+    assert!(select_hold_control_released(Some(&first), &input), "own release");
 
-    // キーボードも同じ入力名で追跡する。
+    // キーボードも入力元で追跡する。
+    let arrow = InputSource {
+        device: W_KEYBOARD_DEVICE_ID,
+        control: PhysicalControl::KeyboardKey("ArrowDown".into()),
+    };
     input.track_control(&ControlInputEvent::keyboard_parts(
         PhysicalKey::Code(KeyCode::ArrowDown),
         ElementState::Pressed,
         false,
     ));
-    assert!(!select_hold_control_released(Some("ArrowDown"), &input.pressed_controls));
+    assert!(!select_hold_control_released(Some(&arrow), &input));
 }
 
 #[cfg(target_os = "windows")]
@@ -487,7 +498,7 @@ fn key9_gamepad_release_stops_select_hold_move() {
     )
     .unwrap();
     app.viewer_mode = false;
-    app.select.select_keys = SelectKeyBindings::from_profile(&app.boot.profile_config.input);
+    app.select.select_keys = SceneInputResolver::from_profile(&app.boot.profile_config.input);
     let button = |pressed| crate::input::gamepad::GamepadButtonEvent {
         name: "Button24".into(),
         device_id: DeviceId(2),
@@ -512,14 +523,26 @@ fn key9_gamepad_release_stops_select_hold_move() {
 
 #[test]
 fn select_analog_scroll_delta_maps_scratch_bindings() {
-    let gamepad_keys =
-        SelectKeyBindings::from_profile(&ProfileConfig::new_default("default", "Default", 1).input);
+    let gamepad_keys = SceneInputResolver::from_profile(
+        &ProfileConfig::new_default("default", "Default", 1).input,
+    );
+    let delta = |axis: &str, ticks: i32| {
+        input_resolve::resolve_axis_tick(
+            &gamepad_keys,
+            None,
+            test_slots(),
+            DeviceId(16),
+            axis,
+            ticks,
+        )
+        .scene_scroll
+    };
     // Axis1+ = scratch up (Previous = 負), Axis1- = scratch down (Next = 正)
-    assert_eq!(select_analog_scroll_delta("Axis1", 4, &gamepad_keys), Some(-4));
-    assert_eq!(select_analog_scroll_delta("Axis1", -4, &gamepad_keys), Some(4));
-    assert_eq!(select_analog_scroll_delta("Axis2", -4, &gamepad_keys), None);
-    assert_eq!(select_analog_scroll_delta("Axis1", 0, &gamepad_keys), None);
-    assert_eq!(select_analog_scroll_delta("Axis3", 4, &gamepad_keys), None);
+    assert_eq!(delta("Axis1", 4), Some(-4));
+    assert_eq!(delta("Axis1", -4), Some(4));
+    assert_eq!(delta("Axis2", -4), None);
+    assert_eq!(delta("Axis1", 0), None);
+    assert_eq!(delta("Axis3", 4), None);
 }
 
 #[test]

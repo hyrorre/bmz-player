@@ -3,6 +3,8 @@ use super::*;
 pub(super) struct PendingPlayPreload {
     pub(super) generation: u64,
     pub(super) chart_id: i64,
+    /// preload したセッションのノーツ入力が使う 1P / 2P の割り当て。
+    pub(super) gamepad_slots: crate::input::gamepad::GamepadSlotMap,
     pub(super) input: SharedInputBackend,
     pub(super) audio_progress: Arc<AtomicU32>,
     pub(super) prepared_chart: Arc<OnceLock<PreparedPlayChart>>,
