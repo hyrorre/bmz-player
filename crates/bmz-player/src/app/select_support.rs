@@ -1,5 +1,6 @@
 use super::*;
 
+mod autoplay_folder;
 mod filters;
 mod input;
 mod items;
@@ -10,6 +11,7 @@ mod options;
 mod scroll;
 mod snapshot;
 
+pub(super) use autoplay_folder::*;
 pub(super) use filters::*;
 pub(super) use input::*;
 pub(super) use items::*;

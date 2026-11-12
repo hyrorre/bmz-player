@@ -419,6 +419,8 @@ impl WinitApp {
     }
 }
 
+#[path = "tests/autoplay_folder.rs"]
+mod autoplay_folder;
 #[path = "tests/boot_chart.rs"]
 mod boot_chart;
 #[path = "tests/course.rs"]

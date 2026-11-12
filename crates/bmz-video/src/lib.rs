@@ -69,12 +69,9 @@ pub struct VideoBgaDecoder {
     current: Option<DecodedFrame>,
     finished: bool,
     playback_target_us: Arc<AtomicI64>,
-    decode_generation: Arc<AtomicU64>,
+    channel_decode: Arc<ChannelDecodeState>,
     stop_decode: Arc<AtomicBool>,
-    /// Channel-mode: decode thread seeks to start and begins a new pass.
-    restart_decode: Arc<AtomicBool>,
-    /// Channel-mode: current pass reached EOF without disconnecting the receiver.
-    pass_finished: Arc<AtomicBool>,
+    restart_clocked_decode: Arc<AtomicBool>,
     decode_thread: Option<std::thread::JoinHandle<()>>,
     retirement: Option<retirement::Retirement>,
 }
@@ -187,15 +184,14 @@ impl VideoBgaDecoder {
 
         let path_buf = path.to_path_buf();
         let stop_decode = Arc::new(AtomicBool::new(false));
-        let restart_decode = Arc::new(AtomicBool::new(false));
-        let pass_finished = Arc::new(AtomicBool::new(false));
+        let restart_clocked_decode = Arc::new(AtomicBool::new(false));
         let playback_target_us = Arc::new(AtomicI64::new(0));
-        let decode_generation = Arc::new(AtomicU64::new(0));
+        let channel_decode = Arc::new(ChannelDecodeState::default());
         if follow_playback_time {
             let clocked_frames = Arc::new(Mutex::new(ClockedFrameState::default()));
             let thread_playback_target_us = Arc::clone(&playback_target_us);
             let thread_stop_decode = Arc::clone(&stop_decode);
-            let thread_restart_decode = Arc::clone(&restart_decode);
+            let thread_restart_decode = Arc::clone(&restart_clocked_decode);
             let thread_clocked_frames = Arc::clone(&clocked_frames);
             let path = path_buf.clone();
 
@@ -224,10 +220,9 @@ impl VideoBgaDecoder {
                 current: None,
                 finished: false,
                 playback_target_us,
-                decode_generation,
+                channel_decode,
                 stop_decode,
-                restart_decode,
-                pass_finished,
+                restart_clocked_decode,
                 decode_thread: Some(decode_thread),
                 retirement,
             });
@@ -235,10 +230,8 @@ impl VideoBgaDecoder {
 
         let (sender, receiver) = sync_channel(4);
         let thread_stop_decode = Arc::clone(&stop_decode);
-        let thread_restart_decode = Arc::clone(&restart_decode);
-        let thread_pass_finished = Arc::clone(&pass_finished);
         let thread_playback_target_us = Arc::clone(&playback_target_us);
-        let thread_decode_generation = Arc::clone(&decode_generation);
+        let thread_channel_decode = Arc::clone(&channel_decode);
         let path = path_buf.clone();
         let decode_thread =
             std::thread::Builder::new().name("bmz-video-decode".to_string()).spawn(move || {
@@ -246,10 +239,8 @@ impl VideoBgaDecoder {
                     &path,
                     sender,
                     thread_stop_decode,
-                    thread_restart_decode,
-                    thread_pass_finished,
+                    thread_channel_decode,
                     thread_playback_target_us,
-                    thread_decode_generation,
                 ) {
                     tracing::warn!(path = %path.display(), error = %e, "video decode thread error");
                 }
@@ -264,10 +255,9 @@ impl VideoBgaDecoder {
             current: None,
             finished: false,
             playback_target_us,
-            decode_generation,
+            channel_decode,
             stop_decode,
-            restart_decode,
-            pass_finished,
+            restart_clocked_decode,
             decode_thread: Some(decode_thread),
             retirement,
         })
@@ -287,15 +277,9 @@ impl VideoBgaDecoder {
     /// rewind-and-rebase behavior because it is used by looping skin movie sources.
     pub fn restart_at(&mut self, video_offset_us: i64) {
         let video_offset_us = video_offset_us.max(0);
-        if !self.follow_playback_time {
-            // receiver drain と worker の blocked send は並行するため、古い pass の frame が
-            // drain 直後に 1 枚だけ到着し得る。generation を先に進めて poll 側で捨てる。
-            self.decode_generation.fetch_add(1, Ordering::AcqRel);
-        }
         self.pending.clear();
         self.current = None;
         self.finished = false;
-        self.pass_finished.store(false, Ordering::Release);
         self.playback_target_us.store(video_offset_us, Ordering::Release);
 
         if self.follow_playback_time {
@@ -307,7 +291,7 @@ impl VideoBgaDecoder {
                 }
                 state.finished = false;
             }
-            self.restart_decode.store(true, Ordering::Release);
+            self.restart_clocked_decode.store(true, Ordering::Release);
             self.wake_decoder();
             return;
         }
@@ -315,7 +299,9 @@ impl VideoBgaDecoder {
         if let Some(receiver) = self.receiver.as_ref() {
             while receiver.try_recv().is_ok() {}
         }
-        self.restart_decode.store(true, Ordering::Release);
+        // A blocked sender can still publish an old frame after the drain.
+        // Its generation lets the receiver discard it after the restart.
+        self.channel_decode.restart_at(video_offset_us);
         self.wake_decoder();
     }
 
@@ -340,14 +326,13 @@ impl VideoBgaDecoder {
             self.wake_decoder();
             let receiver = self.receiver.as_ref().expect("channel decoder");
             match receiver.recv_timeout(Duration::from_millis(20)) {
-                Ok(queued)
-                    if queued.generation != self.decode_generation.load(Ordering::Acquire) => {}
+                Ok(queued) if queued.generation != self.channel_decode.generation() => {}
                 Ok(queued) if queued.frame.pts_us <= video_offset_us => {
                     self.current = Some(queued.frame)
                 }
                 Ok(queued) => self.pending.push_back(queued.frame),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if self.pass_finished.load(Ordering::Acquire) {
+                    if self.channel_decode.finished() {
                         self.finished = true;
                     }
                 }
@@ -385,7 +370,7 @@ impl VideoBgaDecoder {
         // 留める。ここで全件を pending へ移すと sync_channel(4) の backpressure が
         // 実質解除され、高解像度動画の RGBA frame を動画末尾まで先読みしてしまう。
         if self.pending.is_empty() {
-            let decode_generation = self.decode_generation.load(Ordering::Acquire);
+            let decode_generation = self.channel_decode.generation();
             loop {
                 match receiver.try_recv() {
                     Ok(queued) if queued.generation != decode_generation => continue,
@@ -413,7 +398,7 @@ impl VideoBgaDecoder {
             self.current = Some(frame);
         }
 
-        if self.pass_finished.load(Ordering::Acquire) && self.pending.is_empty() {
+        if self.channel_decode.finished() && self.pending.is_empty() {
             self.finished = true;
         }
 
@@ -515,9 +500,10 @@ enum ChannelDecodePassEnd {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct ChannelDecodePassStart {
+struct ChannelDecodePassStart<'a> {
     generation: u64,
     direct_seeked: bool,
+    path: &'a Path,
 }
 
 struct ChannelFrameCatchUp<T> {

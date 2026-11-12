@@ -42,9 +42,16 @@ pub fn resolve_snapshot_textures(
     }
 }
 
-/// Sentinel so a reused decoder is treated as needing a fresh event binding (and
-/// `restart`) on the first activation after install / quick retry.
+/// A reused decoder must bind to the first event of the new playback position.
 pub const REUSED_VIDEO_EVENT_START: TimeUs = TimeUs(i64::MIN);
+
+// A normal event can first be observed a few frames late. Decode from the start
+// in that case: some demuxers can seek to a keyframe after a near-zero target.
+const MIN_DIRECT_SEEK_OFFSET_US: i64 = 250_000;
+
+fn video_seek_offset_us(video_offset_us: i64) -> i64 {
+    if video_offset_us < MIN_DIRECT_SEEK_OFFSET_US { 0 } else { video_offset_us }
+}
 
 /// BGA asset on screen and the chart time its playback started.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,9 +201,8 @@ fn update_single_video(
 
     if needs_new {
         if let Some(active) = video_bga_decoders.get_mut(&asset_id) {
-            // Same path reuse: seek directly to the current event offset instead of reopening.
             if active.decoder.path() == path {
-                active.decoder.restart_at(video_offset_us);
+                active.decoder.restart_at(video_seek_offset_us(video_offset_us));
                 active.event_start_time = event_start_time;
                 active.last_pts = None;
             } else {
@@ -270,8 +276,9 @@ fn open_video_decoder_at(
     video_offset_us: i64,
 ) -> anyhow::Result<VideoBgaDecoder> {
     let mut decoder = VideoBgaDecoder::open(path)?;
-    if video_offset_us > 0 {
-        decoder.restart_at(video_offset_us);
+    let seek_offset_us = video_seek_offset_us(video_offset_us);
+    if seek_offset_us > 0 {
+        decoder.restart_at(seek_offset_us);
     }
     Ok(decoder)
 }
@@ -300,29 +307,31 @@ fn upload_video_bga_frame(
     }
 }
 
-/// Prepare reused video decoders for a new play session (seek to start, clear PTS).
+/// Rebind reused decoders on first activation after a retry or Viewer seek.
 pub fn prepare_reused_video_decoders(decoders: &mut VideoBgaDecoderMap) {
     for active in decoders.values_mut() {
-        active.decoder.restart();
         active.event_start_time = REUSED_VIDEO_EVENT_START;
         active.last_pts = None;
     }
 }
 
-/// Mark reused decoders for Viewer seek without first rewinding them to zero.
-/// The first active BGA update supplies the exact event-relative target to `restart_at`.
-pub fn prepare_reused_video_decoders_for_seek(decoders: &mut VideoBgaDecoderMap) {
-    for active in decoders.values_mut() {
-        active.event_start_time = REUSED_VIDEO_EVENT_START;
-        active.last_pts = None;
-    }
-}
+pub use prepare_reused_video_decoders as prepare_reused_video_decoders_for_seek;
 
 pub type VideoBgaDecoderMap = HashMap<BgaAssetId, ActiveVideoBgaDecoder>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn early_bga_activation_decodes_from_the_start() {
+        assert_eq!(video_seek_offset_us(0), 0);
+        assert_eq!(video_seek_offset_us(30_000), 0);
+        assert_eq!(video_seek_offset_us(MIN_DIRECT_SEEK_OFFSET_US - 1), 0);
+        assert_eq!(video_seek_offset_us(MIN_DIRECT_SEEK_OFFSET_US), MIN_DIRECT_SEEK_OFFSET_US);
+        assert_eq!(video_seek_offset_us(10_000_000), 10_000_000);
+    }
+
     #[test]
     fn only_most_recent_inactive_videos_stay_warm() {
         let now = std::time::Instant::now();

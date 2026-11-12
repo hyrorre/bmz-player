@@ -181,6 +181,17 @@ struct ResultIrSubmissionTarget {
     account_id: String,
 }
 
+/// Result IR state の取得元。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResultIrSource {
+    /// 通常プレイ: 今回分を送信してからランキングを取得する。
+    Submission,
+    /// オートプレイ・リプレイ再生: 送信せず、選曲キャッシュのランキングを表示する。
+    /// `resolved` は Global ranking の取得元が確定した (キャッシュから反映した、
+    /// または自前の取得を始めた) こと。
+    SelectCache { resolved: bool },
+}
+
 pub struct ResultIrState {
     pub submit: IrSubmitState,
     pub provider_submissions: Vec<ResultIrProviderSubmission>,
@@ -196,12 +207,62 @@ pub struct ResultIrState {
     user_name: bmz_render::scene::ResultIrRankingName,
     global_skin_scroll_offset: usize,
     self_and_rivals_skin_scroll_offset: usize,
+    source: ResultIrSource,
     query: ResultIrTaskQuery,
     sender: Sender<ResultIrEvent>,
     receiver: Receiver<ResultIrEvent>,
 }
 
 impl ResultIrState {
+    /// 選曲キャッシュの反映を待っているか。
+    pub fn awaiting_select_cache(&self) -> bool {
+        self.source == ResultIrSource::SelectCache { resolved: false }
+    }
+
+    /// 選曲キャッシュの参照結果を Global ranking へ反映する。
+    ///
+    /// キャッシュの条件が今回のプレイと異なる (`Unavailable`) 場合は、選曲キャッシュを
+    /// 汚さないよう、この Result だけの取得を1回行う。
+    pub fn apply_select_cache(&mut self, lookup: crate::screens::select_ir::SelectIrResultLookup) {
+        use crate::screens::select_ir::SelectIrResultLookup;
+        if !self.awaiting_select_cache() {
+            return;
+        }
+        match lookup {
+            SelectIrResultLookup::Loading => return,
+            SelectIrResultLookup::Loaded(rankings) => {
+                let rankings = *rankings;
+                self.store_ranking(IrRankingScope::Global, rankings.global);
+                if let Some(ranking) = rankings.self_and_rivals
+                    && self.query.supports_scope(IrRankingScope::SelfAndRivals)
+                {
+                    self.store_ranking(IrRankingScope::SelfAndRivals, ranking);
+                }
+            }
+            SelectIrResultLookup::Failed => {
+                self.global = RankingLoadState::Failed("select IR ranking fetch failed".into());
+            }
+            SelectIrResultLookup::Unavailable => self.request_scope(IrRankingScope::Global),
+        }
+        self.source = ResultIrSource::SelectCache { resolved: true };
+    }
+
+    fn store_ranking(&mut self, scope: IrRankingScope, ranking: ResultIrRanking) {
+        let Some(slot) = self.scope_slot(scope) else {
+            return;
+        };
+        let initialize_position = !matches!(slot, RankingLoadState::Loaded(_));
+        let offset = initial_skin_scroll_offset(&ranking);
+        *slot = RankingLoadState::Loaded(ranking);
+        if initialize_position {
+            match scope {
+                IrRankingScope::Global => self.global_skin_scroll_offset = offset,
+                IrRankingScope::SelfAndRivals => self.self_and_rivals_skin_scroll_offset = offset,
+                _ => {}
+            }
+        }
+    }
+
     /// この state が指定された単曲リザルトのために作られたものかを返す。
     ///
     /// 同じ譜面をクイックリトライしても chart hash は変わらないため、保存された
@@ -261,26 +322,15 @@ impl ResultIrState {
                     }
                     match result {
                         Ok(ranking) => {
-                            if let Some(loaded) = self.loaded_chart_ranking(&ranking) {
+                            // 選曲キャッシュ由来の Result は、自前で取得した ranking を
+                            // 選曲キャッシュへ書き戻さない (条件の異なる取得で汚さず、
+                            // 選曲復帰時の再取得も起こさない)。
+                            if self.source == ResultIrSource::Submission
+                                && let Some(loaded) = self.loaded_chart_ranking(&ranking)
+                            {
                                 loaded_chart_rankings.push(loaded);
                             }
-                            if let Some(slot) = self.scope_slot(scope) {
-                                let initialize_position =
-                                    !matches!(slot, RankingLoadState::Loaded(_));
-                                let offset = initial_skin_scroll_offset(&ranking);
-                                *slot = RankingLoadState::Loaded(ranking);
-                                if initialize_position {
-                                    match scope {
-                                        IrRankingScope::Global => {
-                                            self.global_skin_scroll_offset = offset;
-                                        }
-                                        IrRankingScope::SelfAndRivals => {
-                                            self.self_and_rivals_skin_scroll_offset = offset;
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
+                            self.store_ranking(scope, ranking);
                         }
                         Err(error) => {
                             if let Some(slot) = self.scope_slot(scope) {
@@ -495,7 +545,7 @@ pub(crate) use snapshot::{
     chart_ranking_to_result_ir_ranking, course_ranking_to_result_ir_ranking,
     result_ir_ranking_to_skin_snapshot, result_ir_ranking_to_skin_snapshot_at,
 };
-pub use task::{spawn_course_result_ir_task, spawn_result_ir_task};
+pub use task::{cached_result_ir_state, spawn_course_result_ir_task, spawn_result_ir_task};
 
 use crate::ir::ranking::fetch_ranking;
 #[cfg(test)]
@@ -720,6 +770,7 @@ mod tests {
             user_name: bmz_render::scene::ResultIrRankingName::default(),
             global_skin_scroll_offset: 3,
             self_and_rivals_skin_scroll_offset: 1,
+            source: super::ResultIrSource::Submission,
             query: ResultIrTaskQuery {
                 profile_root: PathBuf::new(),
                 provider: "bmz-official".to_string(),
@@ -848,6 +899,116 @@ mod tests {
         send_rejection("ACCOUNT_SUSPENDED");
         state.poll();
         assert_eq!(state.skin_snapshot().state, bmz_render::scene::ResultIrState::Failed);
+    }
+
+    fn cached_state() -> ResultIrState {
+        use crate::config::profile_config::{
+            IrConfig, IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig,
+        };
+        let ir_config = IrConfig {
+            primary_provider: "bmz-official".to_string(),
+            providers: vec![IrProviderConfig {
+                provider: "bmz-official".to_string(),
+                provider_key: "bmz-official".to_string(),
+                base_url: "http://localhost:0".to_string(),
+                enabled: true,
+                account_display_name: "Player".to_string(),
+                account_id: "account-1".to_string(),
+                send_policy: IrSendPolicyConfig::default(),
+                role: IrProviderRoleConfig::default(),
+                last_login_at: None,
+                last_success_at: None,
+            }],
+            ..IrConfig::default()
+        };
+        super::cached_result_ir_state(
+            PathBuf::new(),
+            &ir_config,
+            "chart".to_string(),
+            LnScorePolicy::AutoLn,
+            DoubleOptionScoreBucket::Off,
+            RuleMode::Beatoraja,
+        )
+        .unwrap()
+    }
+
+    fn ranking_with_rank(scope: IrRankingScope, rank: u32, count: u32) -> ResultIrRanking {
+        ResultIrRanking {
+            scope,
+            entries: (1..=count)
+                .map(|rank| ResultIrRankingEntry {
+                    rank,
+                    player_name: format!("player-{rank}"),
+                    ex_score: 1000 - rank,
+                    clear: "Normal".to_string(),
+                    bp: 0,
+                    max_combo: 0,
+                })
+                .collect(),
+            clear_rate: None,
+            clear_counts: None,
+            self_rank: Some(rank),
+            previous_rank: None,
+            total: Some(count),
+        }
+    }
+
+    #[test]
+    fn cached_result_shows_select_ranking_without_submitting() {
+        use crate::screens::select_ir::SelectIrResultLookup;
+        let mut state = cached_state();
+        assert!(state.awaiting_select_cache());
+        assert!(state.provider_submissions.is_empty());
+        let snapshot = state.skin_snapshot();
+        assert_eq!(snapshot.state, bmz_render::scene::ResultIrState::Loading);
+        assert_eq!(snapshot.connect_begin_ms, None);
+
+        // 選曲側の取得中は待ち続ける。
+        state.apply_select_cache(SelectIrResultLookup::Loading);
+        assert!(state.awaiting_select_cache());
+
+        state.apply_select_cache(SelectIrResultLookup::Loaded(Box::new(
+            crate::screens::select_ir::SelectIrResultRankings {
+                global: ranking_with_rank(IrRankingScope::Global, 20, 30),
+                self_and_rivals: Some(ranking_with_rank(IrRankingScope::SelfAndRivals, 2, 3)),
+            },
+        )));
+        assert!(!state.awaiting_select_cache());
+        let snapshot = state.skin_snapshot();
+        assert_eq!(snapshot.state, bmz_render::scene::ResultIrState::Loaded);
+        assert_eq!(snapshot.rank, Some(20));
+        // 通常のリザルトと同じく、自分の順位が見える位置から表示する。
+        assert_eq!(snapshot.scroll_offset, 15);
+        assert_eq!(
+            (snapshot.connect_begin_ms, snapshot.connect_success_ms, snapshot.connect_fail_ms),
+            (None, None, None)
+        );
+        assert!(matches!(state.self_and_rivals, RankingLoadState::Loaded(_)));
+
+        // 確定後に届いた参照結果では上書きしない。
+        state.apply_select_cache(SelectIrResultLookup::Failed);
+        assert!(matches!(state.global, RankingLoadState::Loaded(_)));
+
+        let mut failed = cached_state();
+        failed.apply_select_cache(SelectIrResultLookup::Failed);
+        assert_eq!(failed.skin_snapshot().state, bmz_render::scene::ResultIrState::Failed);
+    }
+
+    #[test]
+    fn cached_result_does_not_write_its_own_fetch_back_to_select_cache() {
+        let mut state = cached_state();
+        state.source = super::ResultIrSource::SelectCache { resolved: true };
+        state
+            .sender
+            .send(ResultIrEvent::Ranking {
+                provider: "bmz-official".to_string(),
+                scope: IrRankingScope::Global,
+                result: Ok(ranking_with_rank(IrRankingScope::Global, 1, 3)),
+            })
+            .unwrap();
+
+        assert!(state.poll().is_empty());
+        assert!(matches!(state.global, RankingLoadState::Loaded(_)));
     }
 
     #[test]

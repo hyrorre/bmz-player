@@ -1640,3 +1640,32 @@ fn result_and_select_entries_reuse_skin_decodes_started_ahead() {
     assert_eq!(app.skin.skin_pipeline.generation(SkinKind::Result), before);
     assert!(app.skin.result_skin_prewarm.is_none());
 }
+
+#[test]
+fn cached_result_ir_covers_unsaved_autoplay_and_replay_except_folder_autoplay() {
+    use crate::app::result_support::cached_result_ir_applies;
+    // オートプレイ・リプレイ再生 (コース中の単曲リザルトを含む)。
+    assert!(cached_result_ir_applies(true, false, false, false));
+    assert!(cached_result_ir_applies(false, true, false, false));
+    // フォルダ連続オートプレイは IR を扱わない。
+    assert!(!cached_result_ir_applies(true, false, true, false));
+    // プラクティス・保存しない変換・Viewer / latency 検証は対象外。
+    assert!(!cached_result_ir_applies(false, false, false, false));
+    assert!(!cached_result_ir_applies(true, false, false, true));
+}
+
+#[test]
+fn folder_autoplay_result_does_not_wait_for_hour_long_skin_scene() {
+    // mz-select / Luxez-Flat などのリザルトスキンは入力待ちのため scene に1時間を宣言する。
+    let document: SkinDocument =
+        serde_json::from_str(r#"{ "type": 7, "scene": 3600000 }"#).unwrap();
+    let skin = result_auto_exit_duration_for_document(Some(&document), false, false);
+    assert_eq!(skin, Some(Duration::from_secs(3600)));
+    assert_eq!(autoplay_folder_result_exit_duration(skin), FALLBACK_RESULT_SCENE_DURATION);
+    // 短い scene はスキンの時間のまま、scene 0 はフォールバック時間で次の曲へ進む。
+    assert_eq!(
+        autoplay_folder_result_exit_duration(Some(Duration::from_secs(3))),
+        Duration::from_secs(3)
+    );
+    assert_eq!(autoplay_folder_result_exit_duration(None), FALLBACK_RESULT_SCENE_DURATION);
+}

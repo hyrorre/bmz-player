@@ -55,6 +55,16 @@ pub(super) fn result_auto_exit_duration_for_document(
     }
 }
 
+/// フォルダ内 Autoplay で次の曲があるときのリザルト自動退出時間。
+///
+/// 多くのリザルトスキンは入力を待つため `scene` に1時間などの長い時間を宣言する。
+/// その時間に従うと次の曲へ進まないため、フォールバック時間を上限にする。
+pub(super) fn autoplay_folder_result_exit_duration(skin_duration: Option<Duration>) -> Duration {
+    skin_duration.map_or(FALLBACK_RESULT_SCENE_DURATION, |duration| {
+        duration.min(FALLBACK_RESULT_SCENE_DURATION)
+    })
+}
+
 pub(super) fn decide_fadeout_scene_elapsed(
     fadeout_started_elapsed: Duration,
     fadeout_elapsed: Duration,
