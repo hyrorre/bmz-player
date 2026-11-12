@@ -60,7 +60,7 @@ Skins you used with beatoraja work in BMZ Player as they are.
 1. Open Settings → **Skins** and press **Open additional skins folder**.
 2. Copy the skin folder from beatoraja's `skin` folder.
    If the skin uses fonts or images from another folder, copy those as well.
-3. Press **Refresh skin list**, then choose the skin for each screen in **Target**.
+3. Press **Refresh skin list**, then choose a screen on the left and a skin on the right.
 
 Skin options are not carried over. Set them again as needed.
 

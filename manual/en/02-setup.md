@@ -123,7 +123,7 @@ These skins are bundled with BMZ Player:
 - **Rm-skin**: play screens from 4 keys to 9 buttons
 - **Luxe Flat**: song select, decide, and result screens
 
-To change skins, open Settings → **Skins**, choose a screen in **Target** (such as Song Select or the 7K play screen), and pick a skin.
+Open Settings → **Skins**. Choose a screen (such as Song Select or 7K play) in the left dropdown, then pick a skin in the right dropdown.
 Each skin's own options can be changed on the same page.
 
 ### Add other skins

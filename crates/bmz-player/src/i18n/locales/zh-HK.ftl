@@ -790,12 +790,10 @@ settings-save-all-help = 一併儲存其他頁面的變更。
 settings-unsaved = 有尚未儲存的變更
 settings-saved = 已儲存
 settings-save-failed = 儲存失敗（移入游標查看詳情）
-skin-target = 目標畫面
 skin-target-common = 共用畫面
 skin-target-play = 一般遊玩
 skin-target-battle = 對戰
 skin-target-result = 結果畫面
-skin-selected = 使用的外觀
 skin-search = 搜尋設定項目
 skin-section = 顯示內容
 skin-section-offsets = 位置與大小
@@ -1029,8 +1027,3 @@ settings-obs-command-incomplete = 請輸入場景名稱，並在需要時輸入�
 settings-downloads-keep-archive = 不解壓縮，直接登錄 HTTP 下載的壓縮檔
 settings-downloads-keep-archive-help = 直接儲存並播放 ZIP / RAR / 7z / tar.gz / LZH 壓縮檔。對新加入佇列的下載生效。IPFS 下載會解壓縮。
 downloads-state-validating = 正在檢查壓縮檔
-
-
-skin-external-allow = 允許此外部介面主題
-skin-external-revoke = 撤銷外部介面主題權限
-skin-external-allow-help = 允許此介面主題讀取其實際所在的資料夾。可在設定檔中加入共用資源資料夾。

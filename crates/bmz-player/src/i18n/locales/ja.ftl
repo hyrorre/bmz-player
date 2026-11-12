@@ -789,12 +789,10 @@ settings-save-all-help = 他のページの変更もまとめて保存します�
 settings-unsaved = 未保存の変更があります
 settings-saved = 保存済み
 settings-save-failed = 保存に失敗しました（詳細はマウスを重ねて確認）
-skin-target = 対象画面
 skin-target-common = 共通画面
 skin-target-play = 通常プレイ
 skin-target-battle = バトル
 skin-target-result = 結果画面
-skin-selected = 使用するスキン
 skin-search = 設定項目を検索
 skin-section = 表示内容
 skin-section-offsets = 位置・サイズ
@@ -1028,8 +1026,3 @@ settings-obs-command-incomplete = シーン名と、必要な場合はソース�
 settings-downloads-keep-archive = HTTPで取得した書庫を展開せず登録する
 settings-downloads-keep-archive-help = ZIP / RAR / 7z / tar.gz / LZHをそのまま保存して再生します。次にキューへ追加する取得から反映します。IPFSは展開します。
 downloads-state-validating = 書庫を確認中
-
-
-skin-external-allow = この外部スキンを許可
-skin-external-revoke = 外部スキンの許可を解除
-skin-external-allow-help = 選択したスキンと、その実体があるフォルダー内の参照を許可します。共有資源の範囲はプロファイル設定で追加できます。

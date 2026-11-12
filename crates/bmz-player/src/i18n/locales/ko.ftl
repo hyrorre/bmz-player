@@ -789,12 +789,10 @@ settings-save-all-help = 다른 페이지의 변경도 저장합니다.
 settings-unsaved = 저장하지 않은 변경이 있습니다
 settings-saved = 저장됨
 settings-save-failed = 저장 실패 (마우스를 올려 상세 확인)
-skin-target = 대상 화면
 skin-target-common = 공통 화면
 skin-target-play = 일반 플레이
 skin-target-battle = 배틀
 skin-target-result = 결과 화면
-skin-selected = 사용할 스킨
 skin-search = 설정 검색
 skin-section = 표시 내용
 skin-section-offsets = 위치 · 크기
@@ -1028,8 +1026,3 @@ settings-obs-command-incomplete = 장면 이름과 필요한 경우 소스 이�
 settings-downloads-keep-archive = HTTP로 받은 압축 파일을 풀지 않고 등록
 settings-downloads-keep-archive-help = ZIP / RAR / 7z / tar.gz / LZH 파일을 그대로 저장하고 재생합니다. 새로 대기열에 추가하는 다운로드부터 적용합니다. IPFS 다운로드는 압축을 풉니다.
 downloads-state-validating = 압축 파일 확인 중
-
-
-skin-external-allow = 외부 스킨 허용
-skin-external-revoke = 외부 스킨 권한 해제
-skin-external-allow-help = 선택한 스킨과 실제 파일이 있는 폴더의 읽기를 허용합니다. 공유 폴더는 프로필 설정에서 추가할 수 있습니다.

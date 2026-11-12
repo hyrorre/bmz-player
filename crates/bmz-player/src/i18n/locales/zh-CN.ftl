@@ -789,12 +789,10 @@ settings-save-all-help = 同时保存其他页面的更改。
 settings-unsaved = 有未保存的更改
 settings-saved = 已保存
 settings-save-failed = 保存失败（悬停查看详情）
-skin-target = 目标画面
 skin-target-common = 通用画面
 skin-target-play = 普通游玩
 skin-target-battle = 对战
 skin-target-result = 结果画面
-skin-selected = 使用的皮肤
 skin-search = 搜索设置项
 skin-section = 显示内容
 skin-section-offsets = 位置与大小
@@ -1028,8 +1026,3 @@ settings-obs-command-incomplete = 请输入场景名称，并在需要时输入�
 settings-downloads-keep-archive = 不解压，直接注册 HTTP 下载的压缩包
 settings-downloads-keep-archive-help = 直接保存并播放 ZIP / RAR / 7z / tar.gz / LZH 压缩包。对新加入队列的下载生效。IPFS 下载仍会解压。
 downloads-state-validating = 正在检查压缩包
-
-
-skin-external-allow = 允许此外部皮肤
-skin-external-revoke = 撤销外部皮肤权限
-skin-external-allow-help = 允许此皮肤读取其实际所在的文件夹。可在配置文件中添加共享资源文件夹。
